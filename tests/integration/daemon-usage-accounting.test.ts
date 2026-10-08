@@ -1,3 +1,4 @@
+import { runTurnExecutionMutation } from "@multiremi/store/turn-execution-records.js";
 import { afterEach, describe, expect, it, spyOn } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -101,7 +102,7 @@ describe("daemon consumption reports over the real server protocol", () => {
       onDaemonProtocol: value => { layer = value; } });
     let dropped = false, starts = 0, providerCalls = 0;
     let replySpy: ReturnType<typeof spyOn> | undefined;
-    const reassign = () => database!.run("UPDATE multiremi_tasks SET runtime_id=?,status='dispatched',attempt=attempt+1 WHERE id=?", [replacement.id, task.id]);
+    const reassign = () => runTurnExecutionMutation(database!, "UPDATE multiremi_turn_execution_records SET runtime_id=?,status='dispatched',attempt=attempt+1 WHERE id=?", [replacement.id, task.id]);
     daemon = new TestMultiremiDaemon({ sshMeshManager: disabledSshMeshRuntime(),
       serverUrl: `http://127.0.0.1:${server.port}`, token: token.token, daemonId: `authority-${fault}`, runtimeName: "original",
       provider: "claude", workspaceId: "local", once: true, daemonPort: 0, taskDrainTimeoutMs: 5000, outboxBackoffMs: [5],

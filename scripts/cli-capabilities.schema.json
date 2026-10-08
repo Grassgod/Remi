@@ -3,7 +3,7 @@
   "$id": "https://remi.local/schemas/cli-capabilities.schema.json",
   "title": "Remi CLI capabilities manifest",
   "type": "object",
-  "required": ["schema_version", "generated_from", "max_planned_routes", "domains", "commands", "aliases", "routes"],
+  "required": ["schema_version", "generated_from", "max_planned_routes", "domains", "commands", "aliases", "retired", "routes"],
   "properties": {
     "schema_version": { "const": 1 },
     "generated_from": { "const": "scripts/api-routes.golden.json" },
@@ -11,10 +11,16 @@
     "domains": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
     "commands": { "type": "object", "additionalProperties": { "$ref": "#/$defs/command" } },
     "aliases": { "type": "object", "additionalProperties": { "$ref": "#/$defs/alias" } },
+    "retired": { "type": "object", "additionalProperties": { "$ref": "#/$defs/retired" } },
     "routes": { "type": "object", "additionalProperties": { "$ref": "#/$defs/route" } }
   },
   "additionalProperties": false,
   "$defs": {
+    "retired": {
+      "type": "object", "required": ["command", "replacement"],
+      "properties": { "command": { "type": "string", "minLength": 1 }, "replacement": { "type": "string", "minLength": 1 } },
+      "additionalProperties": false
+    },
     "command": {
       "type": "object",
       "required": ["command", "aliases", "auth", "capability", "mutation", "output", "hidden", "migration_status"],
@@ -69,7 +75,8 @@
                 "pure_ui",
                 "stripe_internal_callback",
                 "platform_updater_internal",
-                "public_bootstrap_asset"
+                "public_bootstrap_asset",
+                "retired_route"
               ]
             },
             "reason": { "type": "string", "minLength": 1 }

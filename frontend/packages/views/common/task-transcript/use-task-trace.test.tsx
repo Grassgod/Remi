@@ -20,9 +20,9 @@ it("discovers the head then fetches only a bounded recent page", async () => {
   getTaskTrace.mockResolvedValueOnce(page([event(1)], 1000))
     .mockResolvedValueOnce(page(Array.from({ length: 200 }, (_, index) => event(801 + index)), 1000));
   const { wrapper, client } = setup();
-  const view = renderHook(() => useTaskTraceState("task", true, true), { wrapper });
+  const view = renderHook(() => useTaskTraceState("task", true, true, "turn"), { wrapper });
   await waitFor(() => expect(view.result.current.events).toHaveLength(200));
-  expect(getTaskTrace.mock.calls).toEqual([["task", 0, 1], ["task", 800, 200]]);
+  expect(getTaskTrace.mock.calls).toEqual([["task", 0, 1, "turn"], ["task", 800, 200, "turn"]]);
   await act(async () => consumer.callbacks.onFrames?.([{ seq: 1001, kind: "trace", payload: event(1001) }]));
   await waitFor(() => expect(view.result.current.events[0]!.seq).toBe(802));
   expect(view.result.current.events).toHaveLength(200);

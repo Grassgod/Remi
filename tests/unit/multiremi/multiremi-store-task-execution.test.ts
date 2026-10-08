@@ -1,3 +1,4 @@
+import { runTurnExecutionMutation } from "@multiremi/store/turn-execution-records.js";
 // What happens while a claimed task runs: ACP message ingress, completion
 // side effects (issue comments, realtime events), per-agent/per-runtime capacity,
 // and the runtime ownership + lifecycle analytics that gate claiming.
@@ -91,7 +92,7 @@ describe("Multiremi store — task message ingress, completion, and capacity", (
     });
 
     const first = store.appendTaskMessages(task.id, messages);
-    db!.run("UPDATE multiremi_tasks SET updated_at = ? WHERE id = ?", ["2000-01-01T00:00:00.000Z", task.id]);
+    runTurnExecutionMutation(db!, "UPDATE multiremi_turn_execution_records SET updated_at = ? WHERE id = ?", ["2000-01-01T00:00:00.000Z", task.id]);
     expect(store.appendTaskMessages(task.id, messages)).toEqual([]);
     expect(store.listTaskMessages(task.id)).toEqual(first);
     expect(store.getTask(task.id)?.updatedAt).toBe("2000-01-01T00:00:00.000Z");
@@ -141,25 +142,27 @@ describe("Multiremi store — task message ingress, completion, and capacity", (
 
   it("posts the agent's final reply as an issue comment on completion", async () => {
     const store = createStore();
+    store.ensureLocalWorkspace();
     const runtime = store.registerRuntime({ id: "rt_reply_comment", name: "reply comment", provider: "claude", workspaceId: "local" });
     const agent = store.createAgent({ name: "Reply Bot", provider: "claude", runtimeId: runtime.id });
 
-    // Plain issue task: reply lands as a top-level agent comment.
+    // Direct work also has a request message; the final reply threads under it.
     const issue = store.createIssue({ title: "总结项目", workspaceId: "local" });
     const task = store.createTask({ agentId: agent.id, issueId: issue.id, workspaceId: "local", prompt: "总结项目" });
     expect(store.claimTask(runtime.id)?.id).toBe(task.id);
     store.startTask(task.id);
     store.completeTask(task.id, { output: "Remi 是一个 AI 消息路由器。" });
     const comments = store.listIssueComments(issue.id);
-    expect(comments).toHaveLength(1);
-    expect(comments[0]).toMatchObject({
+    expect(comments).toHaveLength(2);
+    expect(comments[0]).toMatchObject({ authorType: "member", body: "总结项目", taskId: null });
+    expect(comments[1]).toMatchObject({
       authorType: "agent",
       authorId: agent.id,
       body: "Remi 是一个 AI 消息路由器。",
-      parentId: null,
+      parentId: task.triggerCommentId,
     });
     // The reply carries its run so the chat stream can open that transcript.
-    expect(comments[0]).toMatchObject({ taskId: task.id, task_id: task.id });
+    expect(comments[1]).toMatchObject({ taskId: task.id, task_id: task.id });
     // A human comment has no run attached.
     expect(store.createIssueComment(issue.id, { authorType: "member", authorId: "local", body: "谢谢" }).taskId).toBeNull();
 
@@ -181,7 +184,7 @@ describe("Multiremi store — task message ingress, completion, and capacity", (
     // stream reads it to offer that run's transcript.
     const app = createMultiremiApp({ store });
     const timeline = await (await app.request(`/api/issues/${issue.id}/timeline`)).json();
-    const agentEntry = timeline.find((entry: { id: string }) => entry.id === comments[0]!.id);
+    const agentEntry = timeline.find((entry: { id: string }) => entry.id === comments[1]!.id);
     expect(agentEntry).toMatchObject({ actor_type: "agent", task_id: task.id });
 
     // Placeholder / empty outputs post nothing.
@@ -218,7 +221,7 @@ describe("Multiremi store — task message ingress, completion, and capacity", (
     const store = createStore();
     const runtime = store.registerRuntime({ id: "rt_ws_events", name: "ws events", provider: "claude", workspaceId: "local" });
     const agent = store.createAgent({ name: "Event Bot", provider: "claude", runtimeId: runtime.id });
-    const issue = store.createIssue({ title: "实时推送", workspaceId: "local" });
+    const issue = store.createIssue({ title: "实时推送", workspaceId: "local", assigneeType: "agent", assigneeId: agent.id });
     const task = store.createTask({ agentId: agent.id, issueId: issue.id, workspaceId: "local", prompt: "回答" });
     expect(store.claimTask(runtime.id)?.id).toBe(task.id);
     store.startTask(task.id);
@@ -318,8 +321,11 @@ describe("Multiremi store — task message ingress, completion, and capacity", (
     expect(store.claimTask(runtime.id)).toBeNull();
 
     store.completeTask(firstA.id, { output: "done" });
-    expect(store.getIssue(issueA.id)?.status).toBe("todo");
-    expect(store.claimTask(runtime.id)?.id).toBe(secondA.id);
+    expect(secondA.id).toBe(firstA.id);
+    expect(store.getIssue(issueA.id)?.status).toBe("in_review");
+    expect(store.claimTask(runtime.id)).toBeNull();
+    const followUp = store.createTask({ agentId: agent.id, issueId: issueA.id, prompt: "A3" });
+    expect(store.claimTask(runtime.id)?.id).toBe(followUp.id);
 
     const cappedAgent = store.createAgent({ name: "Capped", provider: "codex", maxConcurrentTasks: 1 });
     const cappedFirst = store.createTask({ agentId: cappedAgent.id, prompt: "one" });
@@ -338,7 +344,7 @@ describe("Multiremi store — task message ingress, completion, and capacity", (
 
     expect(store.claimTask(runtime.id)?.id).toBe(task.id);
     const stale = new Date(Date.now() - 2 * 60 * 1000).toISOString();
-    db!.run("UPDATE multiremi_tasks SET dispatched_at = ?, updated_at = ? WHERE id = ?", [stale, stale, task.id]);
+    runTurnExecutionMutation(db!, "UPDATE multiremi_turn_execution_records SET dispatched_at = ?, updated_at = ? WHERE id = ?", [stale, stale, task.id]);
 
     const reclaimed = store.claimTask(runtime.id);
     expect(reclaimed?.id).toBe(task.id);
@@ -353,7 +359,7 @@ describe("Multiremi store — task message ingress, completion, and capacity", (
 
     expect(store.claimTask(runtime.id)?.id).toBe(task.id);
     const stale = new Date(Date.now() - 2 * 60 * 1000).toISOString();
-    db!.run("UPDATE multiremi_tasks SET dispatched_at = ?, updated_at = ? WHERE id = ?", [stale, stale, task.id]);
+    runTurnExecutionMutation(db!, "UPDATE multiremi_turn_execution_records SET dispatched_at = ?, updated_at = ? WHERE id = ?", [stale, stale, task.id]);
 
     const renewed = store.renewTaskDispatchLease(task.id);
     expect(renewed.status).toBe("dispatched");
@@ -382,7 +388,8 @@ describe("Multiremi store — task message ingress, completion, and capacity", (
     expect(running.waitReason).toBeNull();
     expect(() => store.startTask(first.id)).toThrow("Task not found or not dispatched");
     store.completeTask(first.id, { output: "done" });
-    expect(store.claimTask(runtime.id)?.id).toBe(second.id);
+    expect(second.id).toBe(first.id);
+    expect(store.claimTask(runtime.id)).toBeNull();
   });
 
   it("honors runtime max concurrency and derives stale liveness", () => {

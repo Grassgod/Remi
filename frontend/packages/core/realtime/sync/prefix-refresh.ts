@@ -239,7 +239,10 @@ export function createPrefixRefresh({ qc, authStore }: SyncContext): {
 // Event types handled by specific handlers below -- skip generic refresh
 const SPECIFIC_EVENTS = new Set([
   "workspace:updated",
-  "issue:updated", "issue:created", "issue:deleted", "issue_labels:changed", "issue_metadata:changed", "inbox:new",
+  "issue:updated", "issue:created", "issue:deleted", "issue_labels:changed", "issue_metadata:changed",
+  // Both item and index-only new signals are consumed by createInboxHandlers.
+  // read/batch-read continue through the debounced inbox prefix below.
+  "inbox:new",
   "decision:created", "decision:updated",
   "comment:created", "comment:updated", "comment:deleted",
   "comment:resolved", "comment:unresolved",

@@ -22,7 +22,7 @@ pendingTurnBackendTests("D1 inbox transaction depth", fixture => {
         };
       }) as typeof db.transaction;
       db.run = (sql, params) => {
-        if (/INSERT\s+INTO\s+multiremi_tasks/i.test(sql)) {
+        if (/INSERT\s+INTO\s+multiremi_turn_attempts/i.test(sql)) {
           expect(db.inTransaction).toBe(true);
           expect(depth).toBe(1);
           writes++;
@@ -38,7 +38,7 @@ pendingTurnBackendTests("D1 inbox transaction depth", fixture => {
       const comments = store.listIssueComments(flow.targetIssueId).filter(comment => comment.authorType === "system");
       expect(comments).toHaveLength(1);
       const entry = store.getConversationLogEntryById(comments[0]!.id)!;
-      expect(entry.metadata.envelope).toBeDefined();
+      expect(store.getMessage(entry.id)).toMatchObject({sender_type:'platform',to_agent_id:flow.agentId,wake_applied:'now'});
       expect(inboxWakeSeq(db, tasks[0]!.id)).toBe(entry.seq);
     });
   }

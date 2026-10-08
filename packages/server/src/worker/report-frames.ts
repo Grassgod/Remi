@@ -5,7 +5,8 @@ export function outboxRecordFrame(record: MultiremiOutboxRecord): DaemonOutbound
   const runtimeId = record.taskId.startsWith("rt:") ? record.taskId.slice(3) : record.payload.runtime_id;
   const type = record.kind.includes(".") ? record.kind : `task.${record.kind}`;
   const payload = { ...record.payload };
-  if (!record.taskId.startsWith("rt:")) payload.task_id = record.taskId;
+  if (record.kind === "turn.complete") payload.attempt_id = record.taskId;
+  else if (!record.taskId.startsWith("rt:")) payload.task_id = record.taskId;
   if (record.kind === "session_pin" || record.kind === "complete" || record.kind === "fail") {
     if ("sessionId" in payload) { payload.session_id = payload.sessionId; delete payload.sessionId; }
     if ("workDir" in payload) { payload.work_dir = payload.workDir; delete payload.workDir; }

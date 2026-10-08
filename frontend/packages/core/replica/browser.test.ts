@@ -5,6 +5,34 @@ import { replicaLockName } from "./channel";
 const replicas: BrowserReplica[] = [];
 afterEach(() => { for (const replica of replicas.splice(0)) replica.dispose(); });
 
+test.each(["shared", "no-opfs", "no-locks"])("%s consumes minimal hidden seqs without backfill or display rows", async mode => {
+  const reads: unknown[] = [];
+  const replica = await openBrowserReplica({
+    userId: "user", workspaceId: "ws", tabId: "tab", subscribe: () => {}, unsubscribe: () => {},
+    readRange: async (_id, range) => { reads.push(range); return []; },
+    env: { hasOpfs: mode !== "no-opfs", broadcastChannel: class { onmessage = null; postMessage() {} close() {} } as never,
+      locks: mode === "no-locks" ? {} as never : { request: (_name: string, _options: unknown, callback: () => Promise<void>) => callback() } as never },
+  });
+  replicas.push(replica);
+  for (let n = 0; n < 8; n++) await Promise.resolve();
+  replica.open("session");
+  replica.ack("session", { stream: "log", id: "session", first_seq: 1, head_seq: 3, log_version: 1, gap: null });
+  const shown = { seq: 1, kind: "entry" as const, payload: { session_id: "session", seq: 1, revision: 1, body_md: "visible" } };
+  const hidden = [2, 3].map(seq => ({ seq, kind: "entry" as const, payload: {
+    session_id: "session", seq, revision: 1, visibility: "hidden",
+  } }));
+  replica.frames("session", [shown, ...hidden]);
+  for (let n = 0; n < 24; n++) await Promise.resolve();
+  expect(replica.port.getSnapshot("session")).toMatchObject({ head: 3, fresh: true, entries: [{ seq: 1 }] });
+  replica.frames("session", [...hidden, { seq: 1, kind: "entry", payload: {
+    session_id: "session", seq: 1, revision: 1, visibility: "hidden",
+  } }]);
+  replica.frames("session", [shown]);
+  for (let n = 0; n < 24; n++) await Promise.resolve();
+  expect(reads).toEqual([]);
+  expect(replica.port.getSnapshot("session")).toMatchObject({ head: 3, fresh: true, entries: [] });
+});
+
 test("storage and degraded reflect the delayed Worker ready result", async () => {
   let deliver: ((event: MessageEvent) => void) | undefined;
   const replica = await openBrowserReplica({

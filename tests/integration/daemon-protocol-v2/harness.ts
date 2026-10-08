@@ -17,6 +17,7 @@ import type { DaemonProtocolSocketLike } from "@multiremi/worker/daemon-protocol
 import { DAEMON_MIN_CLI_VERSION } from "@multiremi/contracts/daemon-protocol.js";
 import type { PeerChannel } from "../../../packages/server/src/api/peer/peer-channel.js";
 import type { LiveHub } from "@multiremi/api/hub/live-hub.js";
+import { openIntegrationDatabase, type IntegrationDatabase } from "../../helpers/integration-database.js";
 
 export interface LedgerEntry {
   sessionId: string;
@@ -62,9 +63,14 @@ export async function waitFor(predicate: () => boolean, label: string, timeoutMs
 /** Empty-load scaffold: real daemon, Bun API, SQLite and an inert ACP provider. */
 export class DaemonProtocolHarness {
   readonly root = mkdtempSync(join(tmpdir(), "mul418-protocol-"));
-  readonly db = openSqliteDatabase(join(this.root, "server.db"));
-  // Commit the fresh fixture schema once; business writes remain separate real transactions.
-  readonly store = this.db.transaction(() => new MultiremiStore(this.db))();
+  readonly db: import("@multiremi/store/db/postgres.js").SqlDatabase;
+  // Unified cutover owns its outer transaction; business writes stay separate.
+  readonly store: MultiremiStore;
+  get databaseSource(): string { return this.database?.url ?? join(this.root, "server.db"); }
+  constructor(private readonly database?: IntegrationDatabase) {
+    this.db = database?.db ?? openSqliteDatabase(join(this.root, "server.db")) as unknown as import("@multiremi/store/db/postgres.js").SqlDatabase;
+    this.store = new MultiremiStore(this.db);
+  }
   readonly clock = new ManualDaemonProtocolClock();
   readonly sockets: InjectedSocket[] = [];
   readonly sessions: DaemonProtocolSession[] = [];
@@ -82,6 +88,7 @@ export class DaemonProtocolHarness {
   private readonly clientExchanges = new Set<Promise<unknown>>();
   private disposed = false;
   private runError: unknown;
+  private readonly readyProviders = new Set<string>();
   private createDaemons!: () => MultiremiDaemon[];
   private apiRole: "all" | "runtime" = "all";
   private peerChannel: PeerChannel | null = null;
@@ -93,6 +100,7 @@ export class DaemonProtocolHarness {
   get url() { return `http://127.0.0.1:${this.server.port}`; }
 
   static async create(options: {
+    database?: "sqlite";
     providers?: string[];
     runtimeId?: string;
     daemonOptions?: Pick<MultiremiDaemonOptions,
@@ -113,7 +121,8 @@ export class DaemonProtocolHarness {
     onReady?: (daemon: MultiremiDaemon, harness: DaemonProtocolHarness) => void;
     onRoundCard?: (taskId: string) => void;
   } = {}): Promise<DaemonProtocolHarness> {
-    const h = new DaemonProtocolHarness();
+    const h = new DaemonProtocolHarness(process.env.MULTIREMI_TEST_POSTGRES_URL && options.database !== "sqlite"
+      ? await openIntegrationDatabase() : undefined);
     try {
       h.store.ensureLocalWorkspace();
       const daemonId = options.omitDaemonId ? "protocol-fixture-device" : "dmn_fixture";
@@ -140,7 +149,12 @@ export class DaemonProtocolHarness {
           pluginCacheRoot: join(h.root, "plugins"), outboxPath: join(h.root, `${provider}-outbox.db`),
           outboxBackoffMs: options.outboxBackoffMs,
           gcEnabled: false, pollIntervalMs: 25, claimIdleMaxMs: 30_000,
-          onReadyChange: ready => { if (ready) options.onReady?.(h.daemons.find(daemon => (daemon as any).options.provider === provider)!, h); },
+          onReadyChange: ready => {
+            if (ready) {
+              h.readyProviders.add(provider);
+              options.onReady?.(h.daemons.find(daemon => (daemon as any).options.provider === provider)!, h);
+            }
+          },
           providerFactory: options.providerFactory ?? (() => ({
             async *sendStream() { yield { sessionUpdate: "agent_message_chunk", content: [{ type: "text", text: "fixture" }] } as any; },
             getLastResponse: () => ({ text: "fixture", sessionId: "fixture-session", usage: [], toolCalls: [] } as any),
@@ -188,7 +202,7 @@ export class DaemonProtocolHarness {
         this.layer = layer;
         // Observe persisted business fields after successful handlers, not ingress or ACK receipt.
         const handlers = (layer as any).eventHandlers as Map<string, DaemonProtocolRpcHandler>;
-        for (const type of ["task.start", "task.progress", "task.usage", "task.complete"]) {
+        for (const type of ["task.start", "task.progress", "task.usage", "turn.complete"]) {
           const handle = handlers.get(type)!;
           const state = (id: string) => {
             const started = performance.now();
@@ -198,7 +212,7 @@ export class DaemonProtocolHarness {
               progress: [task.progressSummary, task.progressStep, task.progressTotal] } : null;
           };
           layer.registerEventHandler(type, async (frame, session) => {
-            const partition = String(frame.payload.task_id ?? "");
+            const partition = String(frame.payload.attempt_id ?? frame.payload.task_id ?? "");
             const before = state(partition);
             const reply = await handle(frame, session);
             if ((reply as { ok?: unknown } | null)?.ok === true && !isDeepStrictEqual(before, state(partition))) {
@@ -216,7 +230,7 @@ export class DaemonProtocolHarness {
           session.handleMessage = message => {
             const frame = JSON.parse(daemonFrameText(message));
             // Record at the server ingress, not when the client attempts a write.
-            this.ledger.push({ sessionId: session.sessionId, partition: frame.p?.task_id ?? (frame.rt ? `rt:${frame.rt}` : "daemon"), seq: frame.seq ?? null, type: frame.t, frame });
+            this.ledger.push({ sessionId: session.sessionId, partition: frame.p?.attempt_id ?? frame.p?.task_id ?? (frame.rt ? `rt:${frame.rt}` : "daemon"), seq: frame.seq ?? null, type: frame.t, frame });
             const run = handle(message);
             this.serverWork.add(run);
             void run.finally(() => this.serverWork.delete(run));
@@ -230,6 +244,7 @@ export class DaemonProtocolHarness {
 
   async startDaemon(options: string | { waitForSocket?: boolean } = "connected"): Promise<void> {
     this.runError = null;
+    this.readyProviders.clear();
     this.runs = this.daemons.map(daemon => daemon.start());
     for (const run of this.runs) void run.catch(error => { this.runError = error; });
     const waitForSocket = typeof options === "string" || options.waitForSocket !== false;
@@ -237,6 +252,13 @@ export class DaemonProtocolHarness {
     await waitFor(() => (waitForSocket ? this.client.connectionState() === expectedState
       : this.daemons.every(daemon => (daemon as any).supervisorReady())) || !!this.runError, "daemon startup");
     if (this.runError) throw this.runError;
+    if (waitForSocket && expectedState === "connected") {
+      await waitFor(() => this.readyProviders.size === this.daemons.length && this.serverWork.size === 0
+        && this.daemons.every(daemon => this.ledger.some(entry => entry.type === "runtime.ready"
+          && entry.frame.rt === (daemon as any).options.runtimeId))
+        || !!this.runError, "daemon readiness and initial runtime recovery");
+      if (this.runError) throw this.runError;
+    }
   }
 
   private trackExchange<T>(run: Promise<T>): Promise<T> {
@@ -329,7 +351,8 @@ export class DaemonProtocolHarness {
           this.server?.stop(true);
         } finally {
           this.teardownSteps.push("close Store");
-          this.db.close();
+          if (this.database) await this.database.close();
+          else this.db.close();
           rmSync(this.root, { recursive: true, force: true });
         }
       }

@@ -3,8 +3,10 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { describe, expect, it, vi } from "vitest";
 import type { TraceEvent } from "@multiremi/contracts/trace";
 import type { Attachment, ChatMessage, ChatPendingTask } from "@multiremi/core/types";
-import { MemorySessionReplica, type SessionLogEntry } from "@multiremi/core/replica";
+import { SessionLogEntrySchema } from "@multiremi/core/api/schemas/session-log";
+import { MemorySessionReplica, openBrowserReplica, type SessionLogEntry } from "@multiremi/core/replica";
 import { setApiInstance } from "@multiremi/core/api";
+import type { OptimisticChatRow } from "../lib/optimistic-log";
 import { useTraceStreamSubscription } from "@multiremi/core/realtime";
 
 const { copiedText } = vi.hoisted(() => ({ copiedText: vi.fn().mockResolvedValue(true) }));
@@ -16,6 +18,8 @@ vi.mock("@multiremi/core/realtime", async (importOriginal) => ({
 }));
 
 vi.mock("../../i18n", () => ({ useT: () => ({ t: () => "" }) }));
+vi.mock("@multiremi/core/hooks", () => ({ useWorkspaceId: () => "ws-1" }));
+vi.mock("@multiremi/core/workspace/hooks", () => ({ useActorName: () => ({ getActorName: (_type: string, id: string) => id }) }));
 
 vi.mock("@multiremi/core/paths", async importOriginal => {
   const actual = await importOriginal<typeof import("@multiremi/core/paths")>();
@@ -181,6 +185,86 @@ function renderList(
 }
 
 describe("ChatMessageList measurement contract", () => {
+  it("removes a canonical body on a real fields.deleted_at frame and keeps it absent after reconnect and reload", async () => {
+    const client = new QueryClient();
+    const message = SessionLogEntrySchema.parse({ session_id: "cs-1", seq: 1, id: "msg-delete",
+      revision: 1, kind: "message", sender_type: "member", sender_id: "user", message_kind: "request",
+      body_md: "N2 deleted body", body_html: null, render_version: null });
+    const subscribe = vi.fn();
+    const replica = await openBrowserReplica({ userId: "user", workspaceId: "ws-1", tabId: "n2",
+      subscribe, unsubscribe: vi.fn(), readRange: async () => [message],
+      env: { hasOpfs: false, locks: {} as never } });
+    replica.open("cs-1");
+    replica.ack("cs-1", { stream: "log", id: "cs-1", first_seq: 1, head_seq: 1, log_version: 1, gap: null });
+    replica.frames("cs-1", [{ seq: 1, kind: "entry", payload: message }]);
+    const content = () => <QueryClientProvider client={client}>
+      <ChatMessageList sessionId="cs-1" replica={replica.port} optimisticRows={[]}
+        pendingTask={null} availability={undefined} />
+    </QueryClientProvider>;
+    const view = render(content());
+    try {
+      expect(view.container).toHaveTextContent("N2 deleted body");
+      act(() => replica.frames("cs-1", [{ seq: 1, kind: "patch", payload: { session_id: "cs-1",
+        target_seq: 1, revision: 2, fields: { deleted_at: "2026-10-06T00:00:00Z" } } }]));
+      expect(view.container).not.toHaveTextContent("N2 deleted body");
+      act(() => {
+        replica.resubscribe("cs-1");
+        replica.frames("cs-1", [1, 2].map(revision => ({ seq: 1, kind: "entry", payload: { ...message, revision } })));
+      });
+      await act(() => replica.loadWindow("cs-1", { from: 1, to: 1 }));
+      expect(view.container).not.toHaveTextContent("N2 deleted body");
+      expect(replica.port.getSnapshot("cs-1").entries).toEqual([]);
+      view.unmount();
+      const refreshed = render(content());
+      expect(refreshed.container).not.toHaveTextContent("N2 deleted body");
+      refreshed.unmount();
+    } finally { view.unmount(); replica.dispose(); client.clear(); }
+  });
+
+  it("hides canonical tombstones supplied by a refreshed log window", () => {
+    const client = new QueryClient();
+    const deleted = SessionLogEntrySchema.parse({ session_id: "cs-1", seq: 1, id: "msg-deleted-window",
+      revision: 2, kind: "message", sender_type: "member", sender_id: "user", message_kind: "request",
+      body_md: "Deleted window body", body_html: null, render_version: null, deleted_at: "2026-10-06T00:00:00Z" });
+    const replica = new MemorySessionReplica({ "cs-1": { entries: [deleted] } });
+    const view = render(<QueryClientProvider client={client}>
+      <ChatMessageList sessionId="cs-1" replica={replica} optimisticRows={[]} pendingTask={null} availability={undefined} />
+    </QueryClientProvider>);
+    expect(view.container).not.toHaveTextContent("Deleted window body");
+    expect(view.container.querySelectorAll('[data-perf-item="message"]')).toHaveLength(0);
+    view.unmount(); client.clear();
+  });
+
+  it("shows canonical envelope messages, replaces edited bodies, removes deleted sends and survives reload", () => {
+    const client = new QueryClient();
+    const entry = (seq: number, body: string) => SessionLogEntrySchema.parse({ session_id: "cs-1", seq,
+      id: `message-${seq}`, revision: 1, kind: "message", sender_type: "member", sender_id: "user",
+      message_kind: "request", dedupe_key: `send-${seq}`, body_md: body, body_html: null,
+      render_version: null, metadata: { envelope: { kind: "notification" } } });
+    const first = entry(1, "BEFORE");
+    const second = entry(2, "DELETE_ME");
+    const replica = new MemorySessionReplica({ "cs-1": { entries: [first, second] } });
+    const locals: OptimisticChatRow[] = [first, second].map(row => ({ clientId: row.dedupe_key!,
+      sessionId: "cs-1", content: row.body_md, localSeq: row.seq, createdAt: "2026-10-05",
+      status: "sent", confirmedAt: 100 }));
+    const content = (optimisticRows: OptimisticChatRow[]) => <QueryClientProvider client={client}>
+      <ChatMessageList sessionId="cs-1" replica={replica} optimisticRows={optimisticRows}
+        pendingTask={null} availability={undefined} />
+    </QueryClientProvider>;
+    const view = render(content(locals));
+    expect(view.container).toHaveTextContent("BEFORE");
+    expect(view.container).toHaveTextContent("DELETE_ME");
+    act(() => replica.setWindow("cs-1", [{ ...first, revision: 2, body_md: "AFTER 中文 🧪" }], { head: 4 }));
+    expect(view.container).toHaveTextContent("AFTER 中文 🧪");
+    expect(view.container).not.toHaveTextContent(/BEFORE|DELETE_ME/);
+    expect(view.container.querySelectorAll('[data-perf-item="message"]')).toHaveLength(1);
+    view.unmount();
+    const reloaded = render(content([]));
+    expect(reloaded.container).toHaveTextContent("AFTER 中文 🧪");
+    expect(reloaded.container).not.toHaveTextContent(/BEFORE|DELETE_ME/);
+    reloaded.unmount(); client.clear();
+  });
+
   it("filters internal messages and future log kinds out of the row list", () => {
     const client = new QueryClient();
     const entries = ["message", "follow_frozen", "system", "result_published"].map((kind, index) => ({
@@ -267,8 +351,8 @@ describe("ChatMessageList with mid-run agent attachments", () => {
     fireEvent.click(view.container.querySelector(".lucide-copy")!.closest("button")!);
     await waitFor(() => expect(copiedText).toHaveBeenCalledWith(complete));
     fireEvent.click(view.container.querySelector<HTMLButtonElement>("[data-chat-trace]")!);
-    await waitFor(() => expect(getTask).toHaveBeenCalledWith(TASK_ID));
-    await waitFor(() => expect(getTaskTrace).toHaveBeenCalledWith(TASK_ID, 0, 200));
+    await waitFor(() => expect(getTask).toHaveBeenCalledWith(TASK_ID, undefined));
+    await waitFor(() => expect(getTaskTrace).toHaveBeenCalledWith(TASK_ID, 0, 200, undefined));
     view.unmount();
   });
 
@@ -328,5 +412,22 @@ describe("ChatMessageList with mid-run agent attachments", () => {
     expect(screen.getByText("Progress update")).toBeInTheDocument();
     expect(screen.queryByText(TIMELINE_TEXT)).toBeNull();
     expect(screen.getByText("Task completed.")).toBeInTheDocument();
+  });
+});
+
+describe("canonical turn projection", () => {
+  it("renders a persisted reply once and leaves attempts and historical trace lazy", () => {
+    const getTaskTrace = vi.fn(); const getTurn = vi.fn();
+    setApiInstance({ getTaskTrace, getTurn } as never);
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const entries = [
+      { session_id: "cs-1", seq: 1, id: "turn_1", revision: 1, kind: "turn", task_id: "attempt_1", body_md: "", body_html: null, render_version: null,
+        metadata: { turn_id: "turn_1", status: "completed", final_entry_id: "msg_reply", final_reply_md: "Canonical answer" } },
+      { session_id: "cs-1", seq: 2, id: "msg_reply", revision: 1, kind: "message", sender_type: "agent", message_kind: "reply", task_id: "turn_1", body_md: "Canonical answer", body_html: null, render_version: null, metadata: {} },
+    ].map(row => SessionLogEntrySchema.parse(row));
+    const view = render(<QueryClientProvider client={client}><ChatMessageList sessionId="cs-1" replica={new MemorySessionReplica({ "cs-1": { entries } })} optimisticRows={[]} pendingTask={null} availability={undefined} /></QueryClientProvider>);
+    expect(screen.getAllByText("Canonical answer")).toHaveLength(1);
+    expect(getTaskTrace).not.toHaveBeenCalled(); expect(getTurn).not.toHaveBeenCalled();
+    view.unmount(); client.clear();
   });
 });

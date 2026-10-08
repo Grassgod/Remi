@@ -15,6 +15,8 @@ import {
   collaborationCommandSpecs,
 } from "../../../apps/remi/cli/commands/collaboration.js";
 import { runMultiremi } from "../../../apps/remi/cli/multiremi.js";
+import { dispatch } from "../../../apps/remi/cli/index.js";
+import { unifiedCommandSpecs } from "../../../apps/remi/cli/commands/unified.js";
 
 const root = resolve(import.meta.dir, "../../..");
 const realFetch = globalThis.fetch;
@@ -100,7 +102,7 @@ describe("native collaboration CLI contracts", () => {
           }, [], createCommitEventQueue()))();
           const legacy = store.appendConversationLog({ sessionId: session.id, kind: "message",
             authorType: "member", authorId: "local", bodyMd: "Before recipient metadata" });
-          const app = createMultiremiApp({ store });
+          const app = createMultiremiApp({ store, authToken: "test-token" });
           useCliEnv();
           const get = specById("session.log.get");
           globalThis.fetch = capabilityFetch(get.id, (request) => {
@@ -131,7 +133,7 @@ describe("native collaboration CLI contracts", () => {
           }, [], createCommitEventQueue()))();
           expect(await delivered(session.id, cursorOnly.entry.seq)).toBe(false);
           store.getOrCreateSessionAgentLane(session.id, agent.id, "");
-          db.run("UPDATE multiremi_session_agent_lanes SET cursor_seq = ? WHERE session_id = ? AND agent_id = ? AND execution_scope = ?",
+          db.run("UPDATE multiremi_session_lanes SET cursor_seq = ? WHERE session_id = ? AND reader_type='agent' AND reader_id = ? AND execution_scope = ?",
             [cursorOnly.entry.seq, session.id, agent.id, ""]);
           expect(await delivered(session.id, cursorOnly.entry.seq)).toBe(true);
 
@@ -141,8 +143,8 @@ describe("native collaboration CLI contracts", () => {
             body: "Not covered by recipient", source: {},
           }, [], createCommitEventQueue()))();
           expect(await delivered(session.id, uncovered.entry.seq)).toBe(false);
-          store.appendConversationLog({ sessionId: session.id, kind: "turn", authorType: "agent", authorId: other.id,
-            metadata: { inbox: { delivered_to_seq: uncovered.entry.seq } } });
+          store.recordSessionAgentRangeRead(session.id, other.id,
+            { seq: 1, offset: 0 }, { seq: uncovered.entry.seq + 1, offset: 0 });
           expect(await delivered(session.id, uncovered.entry.seq)).toBe(false);
 
           expect(store.claimTask(runtime.id)?.id).toBe(chatDelivery.task?.id);
@@ -157,8 +159,8 @@ describe("native collaboration CLI contracts", () => {
     );
 
     for (const { author, expected, label } of [
-      { author: "other", expected: false, label: "explicit foreign author cannot deliver recipient task receipt" },
-      { author: "mirror", expected: true, label: "null author mirrored turn uses recipient task receipt" },
+      { author: "other", expected: false, label: "foreign reader cannot deliver recipient receipt" },
+      { author: "mirror", expected: true, label: "recipient range reader supplies the receipt" },
     ] as const) {
       it.skipIf(backend === "pg" && !conversationLogPgAdminUrl)(
         `${backend}: session log get ${label}`, async () => {
@@ -174,7 +176,7 @@ describe("native collaboration CLI contracts", () => {
               to: { role: "issue_owner", issueId: issue.id }, kind: "report", wake: "inbox_only",
               body: "Receipt attribution probe", source: {},
             }, [], createCommitEventQueue()))();
-            const app = createMultiremiApp({ store });
+            const app = createMultiremiApp({ store, authToken: "test-token" });
             useCliEnv();
             const get = specById("session.log.get");
             globalThis.fetch = capabilityFetch(get.id, (request) => {
@@ -189,12 +191,10 @@ describe("native collaboration CLI contracts", () => {
               return JSON.parse(result.stdout).delivered as boolean;
             };
             expect(await delivered()).toBe(false);
-            const turn = store.appendConversationLog({ sessionId: session.id, kind: "turn",
-              authorType: author === "other" ? "agent" : "system",
-              authorId: author === "other" ? other.id : null, taskId: task.id,
-              metadata: { inbox: { delivered_to_seq: delivery.entry.seq } },
-            });
-            expect(turn.seq).toBeGreaterThan(delivery.entry.seq);
+            const reader = author === "other" ? other : recipient;
+            const receipt = store.recordSessionAgentRangeRead(session.id, reader.id,
+              { seq: 1, offset: 0 }, { seq: delivery.entry.seq + 1, offset: 0 });
+            expect(receipt.seq).toBe(delivery.entry.seq);
             expect(await delivered()).toBe(expected);
           });
         }, 30_000,
@@ -391,71 +391,53 @@ describe("native collaboration CLI contracts", () => {
       expect(sent).toEqual({ content });
     } finally { await rm(dir, { recursive: true, force: true }); }
   });
-  it("runs the five decision commands through the real issue routes", async () => {
+  it("requests and answers a decision through the real canonical message routes", async () => {
     useCliEnv();
     const database = openSqliteDatabase(":memory:");
     try {
       const store = new MultiremiStore(database);
       store.ensureLocalWorkspace();
-      const agent = store.createAgent({ name: "Decision CLI owner", provider: "codex" });
-      const parent = store.createIssue({ title: "CLI parent", assigneeType: "agent", assigneeId: agent.id });
+      const parent = store.createIssue({ title: "CLI parent", assigneeType: "member", assigneeId: "mem_local_local" });
       const child = store.createIssue({ title: "CLI child", parentIssueId: parent.id });
+      const childSession = store.getOrCreateDefaultIssueSession(child.id);
+      const parentSession = store.getOrCreateDefaultIssueSession(parent.id);
       const app = createMultiremiApp({ store, authToken: "test-token" });
       globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
         const request = input instanceof Request ? input : new Request(input, init);
         if (new URL(request.url).pathname === "/api/cli/capabilities") {
-          return Response.json({ commands: ["request", "list", "answer", "escalate", "withdraw"].map((name) => ({
-            id: `issue.decision.${name}`, allowed: true,
+          return Response.json({ commands: ["send", "list", "get", "resolve"].map((name) => ({
+            id: `message.${name}`, allowed: true,
           })) });
         }
         return app.request(request);
       }) as typeof fetch;
       const run = async (name: string, args: string[]) => {
-        const spec = specById(`issue.decision.${name}`);
+        const spec = unifiedCommandSpecs().find(spec => spec.id === `message.${name}`)!;
         const output = await capture(() => registryFor([spec]).execute([...spec.path, ...args, "--output", "json"]));
         return JSON.parse(output.stdout);
       };
-      const first = await run("request", [child.key, "--kind", "merge", "--title", "Ship it"]);
-      expect(first.decision.status).toBe("pending");
-      const listed = await run("list", [parent.key]);
-      expect(listed.owner_and_answered.pending[0].id).toBe(first.decision.id);
-      const answered = await run("answer", [parent.key, first.decision.id, "--text", "Approved", "--reason", "Reviewed"]);
-      expect(answered.decision.status).toBe("answered");
-      const second = await run("request", [child.key, "--kind", "question", "--title", "Scope?"]);
-      const escalated = await run("escalate", [parent.key, second.decision.id]);
-      expect(escalated.decision.status).toBe("escalated");
-      const third = await run("request", [child.key, "--kind", "criteria", "--title", "Legacy criteria"]);
-      const withdrawn = await run("withdraw", [parent.key, third.decision.id]);
-      expect(withdrawn.decision.status).toBe("withdrawn");
+      const first = await run("send", [childSession.id, "--to", "parent_owner", "--kind", "decision", "--content", "Ship it", "--option", "yes", "--option", "no"]);
+      expect(first.message.message_kind).toBe("decision");
+      expect(first.message.metadata.decision_record.status).toBe("pending");
+      const listed = await run("list", [parentSession.id, "--kind", "decision"]);
+      expect(listed.messages.map((message: { id: string }) => message.id)).toContain(first.message.id);
+      const answered = await run("send", [parentSession.id, "--reply-to", first.message.id, "--content", "Approved", "--option", "yes"]);
+      expect(answered.message.reply_to_id).toBe(first.message.id);
+      const settled = await run("get", [first.message.id]);
+      expect(settled.message.metadata.decision_record.status).toBe("answered");
     } finally {
       database.close();
     }
   });
 
-  it("executes all five issue decision commands against their API routes", async () => {
+  it("rejects all five retired issue decision commands before HTTP", async () => {
     useCliEnv();
-    const cases = [
-      ["issue.decision.request", ["MUL-410", "--kind", "merge", "--title", "Merge?", "--body", "CI green", "--option", "yes", "--option", "no"], "POST", "/api/issues/MUL-410/decisions"],
-      ["issue.decision.list", ["MUL-400"], "GET", "/api/issues/MUL-400/decisions"],
-      ["issue.decision.answer", ["MUL-400", "dcs_1", "--text", "yes", "--reason", "Reviewed", "--overturn", "Recheck QA"], "POST", "/api/issues/MUL-400/decisions/dcs_1/answer"],
-      ["issue.decision.escalate", ["MUL-400", "dcs_1"], "POST", "/api/issues/MUL-400/decisions/dcs_1/escalate"],
-      ["issue.decision.withdraw", ["MUL-400", "dcs_1"], "POST", "/api/issues/MUL-400/decisions/dcs_1/withdraw"],
-    ] as const;
-    for (const [id, args, method, path] of cases) {
-      const spec = specById(id);
-      globalThis.fetch = capabilityFetch(id, async (request) => {
-        expect(request.method).toBe(method);
-        expect(new URL(request.url).pathname).toBe(path);
-        if (id === "issue.decision.request") {
-          expect(await request.json()).toEqual({ kind: "merge", title: "Merge?", body: "CI green", options: ["yes", "no"] });
-        }
-        if (id === "issue.decision.answer") {
-          expect(await request.json()).toEqual({ answer: "yes", reason: "Reviewed", overturn: "Recheck QA" });
-        }
-        return Response.json(id === "issue.decision.list" ? { waiting_on_human: [], owner_and_answered: { pending: [], answered: [] }, count: 0 } : { decision: { id: "dcs_1" } });
-      });
-      await capture(() => registryFor([spec]).execute([...spec.path, ...args, "--output", "json"]));
+    let requests = 0;
+    globalThis.fetch = (async () => { requests++; throw new Error("Retired command sent HTTP"); }) as unknown as typeof fetch;
+    for (const name of ["request", "list", "answer", "escalate", "withdraw"]) {
+      await expect(capture(() => dispatch(["issue", "decision", name, "MUL-400"]))).rejects.toThrow("已移除");
     }
+    expect(requests).toBe(0);
   });
 
   it("forwards project and directory work locations through real Chat and quick-create commands", async () => {
@@ -773,9 +755,9 @@ describe("native collaboration CLI contracts", () => {
     expect(JSON.parse(jsonl.stdout)).toEqual(task);
   });
 
-  it.each(["wait_reason", "waitReason"] as const)("shows complete issue run wait reasons from %s", async (reasonField) => {
+  it.each(["wait_reason", "waitReason"] as const)("shows complete canonical attempt wait reasons from %s", async (reasonField) => {
     useCliEnv();
-    const spec = specById("issue.task-runs");
+    const spec = unifiedCommandSpecs().find(spec => spec.id === "turn.get")!;
     const waitReason = "等待模型能力恢复（任务创建已达 15 分钟）：3 个候选 Runtime 均无法执行 claude-opus-5-with-an-extra-long-model-name（thinking: high）";
     const tasks = [
       { id: "tsk_queued", status: "queued", [reasonField]: waitReason },
@@ -785,18 +767,14 @@ describe("native collaboration CLI contracts", () => {
     ];
     globalThis.fetch = capabilityFetch(spec.id, (request) => {
       expect(request.method).toBe("GET");
-      expect(new URL(request.url).pathname).toBe("/api/issues/iss_1/task-runs");
-      return Response.json(tasks);
+      expect(new URL(request.url).pathname).toBe("/api/turns/turn_1");
+      expect(new URL(request.url).searchParams.get("attempts")).toBe("true");
+      return Response.json({ id: "turn_1", attempts: tasks });
     });
 
-    const table = await capture(() => registryFor([spec]).execute(["issue", "runs", "iss_1"]));
-    expect(table.stdout).toContain("WAIT REASON");
-    expect(table.stdout.split("\n").find((line) => line.startsWith("tsk_queued"))).toContain(waitReason);
-    expect(table.stdout.split("\n").find((line) => line.startsWith("tsk_human"))).toContain("Need approval");
-    expect(table.stdout.split("\n").find((line) => line.startsWith("tsk_dir"))).toContain("/tmp/workspace");
-    expect(table.stdout.split("\n").find((line) => line.startsWith("tsk_done"))).toMatch(/running\s+(?:-\s+){4}-$/);
-    const json = await capture(() => registryFor([spec]).execute(["issue", "runs", "iss_1", "--output", "json"]));
-    expect(JSON.parse(json.stdout)).toEqual(tasks);
+    const json = await capture(() => registryFor([spec]).execute(["turn", "get", "turn_1", "--attempts", "--output", "json"]));
+    expect(JSON.parse(json.stdout)).toEqual({ id: "turn_1", attempts: tasks });
+    expect(json.stdout).toContain(waitReason);
   });
 
   it("preserves other waiting states and cleared reasons in task tables", async () => {
@@ -883,15 +861,12 @@ describe("native collaboration CLI contracts", () => {
   it("injects canonical daemon prompt paths while preserving legacy issue dispatch", () => {
     const daemonSource = readFileSync(resolve(root, "packages/daemon/src/agent-runtime/prompts/ephemeral.ts"), "utf8");
     const canonicalPromptPaths = [
-      "comment list",
-      "comment add",
+      "message list",
+      "message send",
       "session result publish",
       "session list",
-      "session task list",
-      "session task create",
-      "task get",
-      "task steer",
-      "task steer list",
+      "turn list",
+      "turn get",
     ];
     for (const path of canonicalPromptPaths) {
       expect(daemonSource, path).toContain(`remi ${path}`);

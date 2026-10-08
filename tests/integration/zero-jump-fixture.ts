@@ -10,12 +10,11 @@
  *  - a long issue with 250 comments carrying ~20 code blocks, 5 images, replies
  *    and activity, spread over 3 sessions (one of them the default);
  *  - one running task with messages, so the agent stream row renders;
- *  - one inbox row whose `details.comment_id` points at the long issue's 40th
- *    comment, which is what the deep-link round follows.
+ *  - the long issue's 40th message addressed to the reader, which is what the
+ *    inbox deep-link round follows.
  *
  * Everything is written through the store API except where the store has no
- * path for the state a daemon would have produced (a running task, an inbox
- * row). Those two are noted at their call sites.
+ * path for the running state a daemon would have produced.
  */
 import type { MultiremiStore } from "@multiremi/store.js";
 
@@ -78,13 +77,14 @@ export interface ZeroJumpFixture {
  * row reads; there is no store method that performs a dispatch, and calling the
  * real scheduler would need a runtime this fixture must not have.
  */
-function markTaskRunning(store: MultiremiStore, taskId: string): void {
+export function markTaskRunning(store: MultiremiStore, taskId: string): void {
   const startedAt = new Date().toISOString();
   const db = (store as unknown as { db: { run: (sql: string, params: unknown[]) => void } }).db;
   db.run(
-    "UPDATE multiremi_tasks SET status = 'running', dispatched_at = ?, started_at = ?, updated_at = ? WHERE id = ?",
+    "UPDATE multiremi_turn_attempts SET status = 'running', accepted_at = ?, started_at = ?, updated_at = ? WHERE id = ?",
     [startedAt, startedAt, startedAt, taskId],
   );
+  db.run("UPDATE multiremi_turns SET status = 'running', started_at = ? WHERE current_attempt_id = ?", [startedAt, taskId]);
 }
 
 /** A 1x1 PNG, so the image rows render a real attachment without a remote fetch. */
@@ -145,8 +145,11 @@ export async function seedZeroJumpFixture(store: MultiremiStore): Promise<ZeroJu
       body: `F398 comment ${index + 1}.`,
     });
   }
-  const f398Agent = store.createAgent({ id: "agt_zerojump_f398", name: "F398 unbound agent", provider: "codex" });
   for (let index = 0; index < FIXTURE.f398QueuedTasks; index += 1) {
+    // A single agent/session lane coalesces requests into one pending turn.
+    const f398Agent = store.createAgent({
+      id: `agt_zerojump_f398_${index}`, name: `F398 unbound agent ${index + 1}`, provider: "codex",
+    });
     store.createTask({ id: `tsk_zerojump_f398_${index}`, agentId: f398Agent.id, issueId: f398Issue.id,
       prompt: `F398 dispatch ${index + 1}\n\n${f398Description}` });
   }
@@ -393,7 +396,11 @@ export async function seedZeroJumpFixture(store: MultiremiStore): Promise<ZeroJu
     // parent's session, so the rotating sessions cannot share one parent.
     const parentId = index % 7 === 0 ? latestRootId[sessionSlot] : null;
     parts.push(filler("body", index, index % 11 === 0 ? 40 : 6));
-    const comment = store.createIssueComment(longIssue.id, {
+    const comment = index === FIXTURE.deepLinkCommentIndex ? store.sendMessage({
+      session_id: sessionId, sender: { type: "member", id: member.id },
+      to: { type: "member", ref: member.id }, message_kind: "reply", wake_requested: "inbox_only",
+      body_md: parts.join("\n\n"), ...(parentId ? { reply_to_id: parentId } : {}),
+    }).message : store.createIssueComment(longIssue.id, {
       issueSessionId: sessionId,
       authorType: "member",
       authorId: user.id,
@@ -466,34 +473,7 @@ export async function seedZeroJumpFixture(store: MultiremiStore): Promise<ZeroJu
     status: "completed",
   })));
 
-  // `comment_mention` is the notification type that actually carries a comment
-  // deep link: it routes to `inbox_action`, so the inbox resolves the row to
-  // `?issue=`. A `comment_created` row would route through the issue status and,
-  // on an in-progress issue, become workbench-only — no row and no deep link.
-  //
-  // Written as SQL because `createInboxItem` lives on the store context that the
-  // mention/subscription flows use, not on the facade a fixture holds; the column
-  // list is the same one `IssuesRepo.triggerCommentMentions` fills.
-  const inboxItemId = "inb_zerojump_deeplink";
-  const inboxDb = (store as unknown as { db: { run: (sql: string, params: unknown[]) => void } }).db;
-  inboxDb.run(
-    `INSERT INTO multiremi_inbox_items (
-      id, workspace_id, issue_id, member_id, recipient_type, recipient_id, severity,
-      actor_type, actor_id, type, title, body, details, read, archived, created_at
-    ) VALUES (?, ?, ?, ?, 'member', ?, 'info', 'member', ?, 'comment_mention', ?, ?, ?, 0, 0, ?)`,
-    [
-      inboxItemId,
-      workspace.id,
-      longIssue.id,
-      member.id,
-      member.id,
-      user.id,
-      `${longIssue.key}: mentioned you`,
-      "points at the 40th comment of the long issue",
-      JSON.stringify({ comment_id: deepLinkCommentId, issue_session_id: deepLinkCommentSessionId }),
-      new Date().toISOString(),
-    ],
-  );
+  const inboxItemId = deepLinkCommentId;
 
   return {
     workspaceId: workspace.id,

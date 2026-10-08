@@ -18,20 +18,12 @@ export function acquireDaemonOutbox(protocol: DaemonProtocolClient, options: Mul
   if (!entry) {
     const outbox = new MultiremiTaskReportOutbox({ ...options,
       canSend: () => protocol.connectionState() === "connected" && !protocol.uplinkPaused(),
-      prepareDelivery: record => {
-        // v1 terminal rows predate trace pointers, but their preceding messages
-        // have already been migrated locally in the same partition.
-        if (!record.terminal || record.payload.trace) return record;
-        const trace = daemonTraceTransport(protocol);
-        if (typeof record.payload.runtime_id === "string") trace.track(record.taskId, record.payload.runtime_id);
-        return { ...record, payload: { ...record.payload, ...trace.completion(record.taskId) } };
-      },
       deliver: async record => {
         if (record.kind === "messages") return options.deliver(record);
         const reply = await protocol.event(outboxRecordFrame(record) as ReturnType<typeof outboxRecordFrame> & { seq: number });
         if (record.terminal) {
           const trace = daemonTraceTransport(protocol);
-          if (trace.store.head(record.taskId)) trace.close(record.taskId, record.kind === "complete" ? "completed" : "failed");
+          if (trace.store.head(record.taskId)) trace.close(record.taskId, record.kind === "turn.complete" ? "completed" : "failed");
         }
         return reply;
       },
@@ -61,18 +53,18 @@ export function daemonReportTransport(protocol: DaemonProtocolClient, runtime: (
   return {
     async report(type, partition, payload, wait = false) {
       const runtimeId = runtime();
-      const terminal = type === "task.complete" || type === "task.fail";
+      const terminal = type === "turn.complete" || type === "task.fail";
       const p = { ...payload, runtime_id: payload.runtime_id ?? runtimeId,
         ...(terminal ? trace?.completion(partition) : {}) };
       const kind = (type.startsWith("task.") ? type.slice(5) : type) as MultiremiOutboxKind;
       if (wait) {
         const reply = await outbox().enqueueAndWait(partition, kind, p,
           typeof wait === "object" ? wait.timeoutMs : waitTimeoutMs, waitSignal?.());
-        if (terminal) trace?.close(partition, type === "task.complete" ? "completed" : "failed");
+        if (terminal) trace?.close(partition, type === "turn.complete" ? "completed" : "failed");
         return reply;
       }
       outbox().enqueue(partition, kind, p);
-      if (terminal) trace?.close(partition, type === "task.complete" ? "completed" : "failed");
+      if (terminal) trace?.close(partition, type === "turn.complete" ? "completed" : "failed");
       return { ok: true };
     },
     rpc: (type, payload) => protocol.rpc(type, payload, runtime() ?? undefined),

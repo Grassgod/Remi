@@ -14,8 +14,11 @@ import type { FeishuChannelHandle } from "../../../apps/remi/cli/agent.js";
 import { FeishuTaskPresentation } from "@connectors/feishu/task-presentation.js";
 import { nativeHarness, taskEvent, completed } from "../connectors/feishu-native-harness.js";
 
+import { unifiedModelBackendTests } from "./unified-model-test-backends.js";
+import { assertQuestionCardToken } from "@multiremi/store/question-card-token.js";
+
 const pgAdminUrl = process.env.MULTIREMI_TEST_POSTGRES_URL;
-const tables = { fr: "multiremi_task_human_requests", fd: "multiremi_issue_decisions" } as const;
+const tables = { fr: "multiremi_message_question_records", fd: "multiremi_message_decision_records" } as const;
 const fixtureSecret = "mul487-test-fixture-not-a-real-secret";
 let sequence = 0;
 
@@ -97,8 +100,7 @@ for (const backend of ["SQLite", "Postgres"] as const) {
       const token = action(delivery).t as string;
       const access = await store.createAccessToken({ name: daemonId, type: "daemon", workspaceId, daemonId });
       const api = createMultiremiApp({ store, authToken: "MASTER" });
-      const path = lane === "fr" ? `/api/daemon/tasks/${task.id}/human-requests/${request.id}/respond`
-        : `/api/daemon/issues/${issue.id}/decisions/${request.id}/answer`;
+      const path = `/api/daemon/messages/${request.id}/answer`;
       const respond = (suppliedToken: unknown = token, operator: unknown = recipient) => api.request(path, {
         method: "POST", headers: { Authorization: `Bearer ${access.token}`, "content-type": "application/json" },
         body: JSON.stringify({ token: suppliedToken, operator_open_id: operator,
@@ -246,13 +248,10 @@ for (const backend of ["SQLite", "Postgres"] as const) {
         const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: request => f.api.fetch(request) });
         const client = new MultiremiDaemonClient(server.url.origin, f.access.token);
         const stop = registerQuestionCardClient("cli_mul487_restart", {
-          getRequest: async (taskId, requestId) => {
-            const request = store.getTaskHumanRequest(requestId);
-            return request?.taskId === taskId ? request : null;
-          },
-          respond: (taskId, requestId, response, credential) => client.respondTaskHumanRequest(taskId, requestId, response, credential),
-          getDecision: (issueId, requestId) => client.getFeishuIssueDecision(issueId, requestId),
-          answer: (issueId, requestId, answer, credential) => client.answerFeishuIssueDecision(issueId, requestId, { answer, ...credential }),
+          getRequest: requestId => client.getMessageHumanRequest(requestId),
+          respond: (requestId, response, credential) => client.respondTaskHumanRequest(requestId, response, credential),
+          getDecision: requestId => client.getFeishuIssueDecision(requestId),
+          answer: (requestId, answer, credential) => client.answerFeishuIssueDecision(requestId, { answer, ...credential }),
         });
         try {
           const marker = lane === "fd" ? decisionInteractionMarker(f.issue.id, f.request.id) : interactionMarker(f.task.id, f.request.id);
@@ -285,7 +284,7 @@ for (const backend of ["SQLite", "Postgres"] as const) {
           expect((await f.respond(replacement)).status).toBe(403);
           const publicRows = [
             db.query("SELECT * FROM multiremi_issue_activity WHERE issue_id = ?").all(f.issue.id),
-            db.query("SELECT * FROM multiremi_issue_comments WHERE issue_id = ?").all(f.issue.id),
+            db.query("SELECT * FROM multiremi_issue_message_records WHERE issue_id = ?").all(f.issue.id),
             activity.mock.calls, comment.mock.calls, ...logs.map(log => log.mock.calls),
           ];
           for (const token of [f.token, replacement]) expect(JSON.stringify(publicRows).includes(token)).toBe(false);
@@ -295,7 +294,7 @@ for (const backend of ["SQLite", "Postgres"] as const) {
 
     it("fr: native stream issuance and retarget rotate tokens and bind the new person", async () => {
       const f = await setup("fr");
-      const path = `/api/daemon/tasks/${f.task.id}/human-requests/${f.request.id}/card`;
+      const path = `/api/daemon/messages/${f.request.id}/card`;
       const mint = (recipient: string) => f.api.request(path, { method: "POST",
         headers: { Authorization: `Bearer ${f.access.token}`, "content-type": "application/json" },
         body: JSON.stringify({ recipient_open_id: recipient }) });
@@ -304,6 +303,8 @@ for (const backend of ["SQLite", "Postgres"] as const) {
       const nativeToken = questionCardAction((await native.json()).card)!.t as string;
       expect(nativeToken === f.token).toBe(false);
       const changedRecipient = "ou_new_addressee";
+      const changedUser = store.getOrCreateUser({ externalId: changedRecipient, name: "New addressee" });
+      store.createWorkspaceMember({ workspaceId: f.workspaceId, userId: changedUser.id, name: "New addressee", role: "member" });
       const retargeted = await mint(changedRecipient);
       expect(retargeted.status).toBe(200);
       const newToken = questionCardAction((await retargeted.json()).card)!.t as string;
@@ -326,10 +327,10 @@ for (const backend of ["SQLite", "Postgres"] as const) {
         revision: 1, externalSessionKey: `oc_native_${f.n}`, externalMessageId: `om_native_${f.n}`,
         chatId: `oc_native_${f.n}`, chatType: "p2p", text: "Question", deliveryMode: "native_cot_v1",
       });
-      db.run("UPDATE multiremi_tasks SET runtime_id = ? WHERE id = ?", [executorId, submitted.taskId]);
+      db.run("UPDATE multiremi_turn_attempts SET runtime_id = ? WHERE id = ?", [executorId, submitted.taskId]);
       const request = store.createTaskHumanRequest({ taskId: submitted.taskId, kind: "question",
         payload: { questions: [{ question: "Continue?", options: [{ label: "Yes" }] }] } });
-      const path = `/api/daemon/tasks/${submitted.taskId}/human-requests/${request.id}`;
+      const path = `/api/daemon/messages/${request.id}`;
       const cardInput = JSON.stringify({ recipient_open_id: f.recipient });
       const headers = { Authorization: `Bearer ${f.access.token}`, "content-type": "application/json" };
       const minted = await f.api.request(`${path}/card`, { method: "POST", headers, body: cardInput });
@@ -339,18 +340,18 @@ for (const backend of ["SQLite", "Postgres"] as const) {
       const other = await store.createAccessToken({ name: "Not the bot host", type: "daemon", workspaceId: f.workspaceId,
         daemonId: `daemon_other_${f.n}` });
       const answer = JSON.stringify({ token: credential!.t, operator_open_id: f.recipient, response: { answers: { "Continue?": "Yes" } } });
-      for (const [suffix, body] of [["card", cardInput], ["respond", answer]]) {
+      for (const [suffix, body] of [["card", cardInput], ["answer", answer]]) {
         expect((await f.api.request(`${path}/${suffix}`, { method: "POST",
           headers: { ...headers, Authorization: `Bearer ${other.token}` }, body })).status).toBe(403);
       }
       const privateChat = store.createChatSession({ agentId: f.task.agentId, workspaceId: f.workspaceId, creatorId: f.user.id });
       const privateTask = store.createTask({ agentId: f.task.agentId, workspaceId: f.workspaceId, chatSessionId: privateChat.id, prompt: "Private" });
-      db.run("UPDATE multiremi_tasks SET runtime_id = ? WHERE id = ?", [executorId, privateTask.id]);
+      db.run("UPDATE multiremi_turn_attempts SET runtime_id = ? WHERE id = ?", [executorId, privateTask.id]);
       const privateRequest = store.createTaskHumanRequest({ taskId: privateTask.id, kind: "question", payload: {} });
-      expect((await f.api.request(`/api/daemon/tasks/${privateTask.id}/human-requests/${privateRequest.id}/card`, {
+      expect((await f.api.request(`/api/daemon/messages/${privateRequest.id}/card`, {
         method: "POST", headers, body: cardInput,
       })).status).toBe(403);
-      expect((await f.api.request(`${path}/respond`, { method: "POST", headers, body: answer })).status).toBe(200);
+      expect((await f.api.request(`${path}/answer`, { method: "POST", headers, body: answer })).status).toBe(200);
     });
 
     it("fr: native send retries mint a new credential and delivery key without persisting plaintext in checkpoints", async () => {
@@ -410,7 +411,7 @@ for (const backend of ["SQLite", "Postgres"] as const) {
         const stop = registerQuestionCardClient("cli_mul487_checker", {
           getRequest: async () => null, respond: async () => { throw new Error("not a task card"); },
           getDecision: async () => store.getIssueDecision(f.issue.id, f.request.id),
-          answer: async (_issueId, _requestId, answer, credential) => store.answerIssueDecision(f.issue.id, f.request.id,
+          answer: async (_requestId, answer, credential) => store.answerIssueDecision(f.issue.id, f.request.id,
             { answer, reason: "", overturn: "" }, { type: "member", id: f.member.id, taskId: null }, { cardCredential: credential }),
         });
         try {
@@ -447,48 +448,52 @@ for (const backend of ["SQLite", "Postgres"] as const) {
 
     it("fr and fd: member web answers still work without a card credential", async () => {
       const fr = await setup("fr");
-      const frResponse = await fr.api.request(`/api/multiremi/tasks/${fr.task.id}/human-requests/${fr.request.id}/respond`, {
-        method: "POST", headers: { Authorization: "Bearer MASTER", "content-type": "application/json" },
-        body: JSON.stringify({ response: { answers: { "Continue?": "No" } } }),
+      const frToken = await store.createAccessToken({ name: "Member answer", type: "pat", workspaceId: fr.workspaceId, userId: fr.user.id });
+      const frResponse = await fr.api.request(`/api/sessions/${store.getMessage(fr.request.id)!.session_id}/messages`, {
+        method: "POST", headers: { Authorization: `Bearer ${frToken.token}`, "content-type": "application/json" },
+        body: JSON.stringify({ reply_to_id: fr.request.id, body_md: "No", response: { answers: { "Continue?": "No" } } }),
       });
       expect(frResponse.status).toBe(200);
       const fd = await setup("fd");
       const memberToken = await store.createAccessToken({ name: "Member answer", type: "pat", workspaceId: fd.workspaceId, userId: fd.user.id });
-      const fdResponse = await fd.api.request(`/api/issues/${fd.issue.id}/decisions/${fd.request.id}/answer`, {
+      const fdResponse = await fd.api.request(`/api/sessions/${store.getMessage(fd.request.id)!.session_id}/messages`, {
         method: "POST", headers: { Authorization: `Bearer ${memberToken.token}`, "content-type": "application/json" },
-        body: JSON.stringify({ answer: "No" }),
+        body: JSON.stringify({ reply_to_id: fd.request.id, body_md: "No" }),
       });
       expect(fdResponse.status).toBe(200);
       expect(fd.row().status).toBe("answered");
       expect(fd.row().token_consumed_at).toBeNull();
     });
 
-    it("migration: upgrades existing rows twice with nullable credential columns and partial indexes", async () => {
-      const fr = await setup("fr");
-      const fd = await setup("fd");
-      for (const table of Object.values(tables)) {
-        db.exec(`DROP INDEX idx_${table}_token_hash`);
-        for (const column of ["token_hash", "token_recipient", "token_consumed_at"]) db.exec(`ALTER TABLE ${table} DROP COLUMN ${column}`);
-      }
-      db.run("DELETE FROM multiremi_schema_migrations WHERE id = ?", ["20260929_human_request_tokens"]);
-      store = new MultiremiStore(db);
-      store = new MultiremiStore(db);
-      for (const f of [fr, fd]) {
-        const current = f.row();
-        expect(current.status).toBe(f.lane === "fr" ? "pending" : "escalated");
-        expect(current.token_hash).toBeNull();
-        expect(current.token_recipient).toBeNull();
-        expect(current.token_consumed_at).toBeNull();
-        const index = backend === "SQLite"
-          ? db.query("SELECT sql AS definition FROM sqlite_master WHERE type = 'index' AND name = ?").get(`idx_${tables[f.lane]}_token_hash`)
-          : db.query("SELECT indexdef AS definition FROM pg_indexes WHERE indexname = ?").get(`idx_${tables[f.lane]}_token_hash`);
-        expect(String(index?.definition).toLowerCase()).toContain("token_hash is not null");
-        const refused = await f.respond();
-        expect(refused.status).toBe(403);
-        expect(await refused.json()).toMatchObject({ code: "token_invalid" });
-      }
-      expect(Number(db.query("SELECT COUNT(*) AS n FROM multiremi_schema_migrations WHERE id = ?")
-        .get("20260929_human_request_tokens").n)).toBe(1);
-    });
+
   });
 }
+
+// A pre-unified snapshot must enter the historical migration path. Removing columns
+// from an already unified database cannot exercise that path after S1.
+unifiedModelBackendTests("MUL-506 historical question credentials", fixture => {
+  it("migration: upgrades existing rows twice with nullable credential columns and partial indexes", () => {
+    const {db,store:legacy}=fixture();
+    const agent=legacy.createAgent({name:"historical questions",provider:"codex"});
+    const issue=legacy.createIssue({title:"credential migration",assigneeType:"agent",assigneeId:agent.id});
+    const task=legacy.createTask({agentId:agent.id,issueId:issue.id,prompt:"historical input"});
+    const at="2026-10-01T00:00:00.000Z";
+    db.run("INSERT INTO multiremi_task_human_requests(id,task_id,kind,payload,status,created_at) VALUES(?,?,'question','{}','pending',?)",["hrq_historical",task.id,at]);
+    db.run("INSERT INTO multiremi_issue_decisions(id,workspace_id,issue_id,source_issue_id,source_task_id,kind,title,body,options,status,created_by_agent_id,created_at,updated_at) VALUES(?,'local',?,?,?,'other','Historical?','','[]','escalated',?,?,?)",["dcs_historical",issue.id,issue.id,task.id,agent.id,at,at]);
+    for(const table of ["multiremi_task_human_requests","multiremi_issue_decisions"]){
+      db.exec(`DROP INDEX idx_${table}_token_hash`);
+      for(const column of ["token_hash","token_recipient","token_consumed_at"])db.exec(`ALTER TABLE ${table} DROP COLUMN ${column}`);
+    }
+    db.run("DELETE FROM multiremi_schema_migrations WHERE id=?",["20260929_human_request_tokens"]);
+    new MultiremiStore(db);new MultiremiStore(db);
+    for(const [id,status] of [["hrq_historical","pending"],["dcs_historical","escalated"]]){
+      const current=db.query("SELECT card_token_hash AS token_hash,card_token_recipient AS token_recipient,card_token_consumed_at AS token_consumed_at FROM multiremi_conversation_log WHERE id=?").get(id)!;
+      expect(current).toEqual({token_hash:null,token_recipient:null,token_consumed_at:null});
+      expect(()=>assertQuestionCardToken({...current,status} as any,{token:"old-unbound-card",operatorOpenId:"ou_historical"},status as any)).toThrow();
+    }
+    const index=backendIndex(db,"idx_message_card_token");
+    expect(String(index?.definition).toLowerCase()).toContain("card_token_hash is not null");
+    expect(Number(db.query("SELECT COUNT(*) AS n FROM multiremi_schema_migrations WHERE id=?").get("20260929_human_request_tokens").n)).toBe(1);
+  });
+});
+function backendIndex(db:SqlDatabase,name:string){return db.dialect==='sqlite'?db.query("SELECT sql AS definition FROM sqlite_master WHERE type='index' AND name=?").get(name):db.query("SELECT indexdef AS definition FROM pg_indexes WHERE indexname=?").get(name);}

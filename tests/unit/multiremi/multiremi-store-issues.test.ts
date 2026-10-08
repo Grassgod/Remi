@@ -1,3 +1,4 @@
+import { issueMessagesPath, mutateExecutionFixture } from "./unified-test-paths.js";
 // The issue domain at store level: assignment, keys, GitHub links, hierarchy,
 // dependencies, mentions, notifications/inbox, comment threads and reactions,
 // attachments, labels, pinned shortcuts, and search.
@@ -6,9 +7,8 @@ import { createMultiremiApp } from "@multiremi/api.js";
 import type { SqlDatabase } from "@multiremi/store/db/postgres.js";
 import { runMigrations } from "@multiremi/store/migrations.js";
 import { INBOX_ROUTING } from "@multiremi/store/inbox-routing.js";
-import { HUMAN_COMMENT_JOINS_QUEUED_ROUND } from "@multiremi/store/repos/issues-repo.js";
 import { inboxReportBody } from "./inbox-test-assertions.js";
-import { createStore, db, resetMultiremiTestEnv } from "./helpers.js";
+import { createStore, db, resetMultiremiTestEnv, readyArchiveBinding } from "./helpers.js";
 
 afterEach(resetMultiremiTestEnv);
 
@@ -191,7 +191,8 @@ describe("Multiremi store — issues, comments, labels, and inbox", () => {
     let comments = store.listIssueComments(parent.id).filter((comment) => comment.authorType === "system");
     expect(comments).toHaveLength(1);
     expect(comments[0]?.type).toBe("system");
-    expect(comments[0]?.authorId).toBe("00000000-0000-0000-0000-000000000000");
+    expect(store.getMessage(comments[0]!.id)?.sender_type).toBe("platform");
+    expect(comments[0]?.authorId).toBeNull();
     expect(comments[0]?.parentId).toBeNull();
     expect(comments[0]?.body).toContain(child.key);
     expect(comments[0]?.body).toContain(`mention://issue/${child.id}`);
@@ -205,7 +206,7 @@ describe("Multiremi store — issues, comments, labels, and inbox", () => {
 
     store.updateIssue(child.id, { status: "in_progress" });
     store.updateIssue(child.id, { status: "done" });
-    comments = store.listIssueComments(parent.id).filter((comment) => comment.authorType === "system");
+    comments = store.listIssueComments(parent.id).filter((comment) => comment.authorType === "system" && comment.body.includes("is done"));
     expect(comments).toHaveLength(2);
 
     const doneParent = store.createIssue({ title: "Already done parent", status: "done" });
@@ -241,7 +242,7 @@ describe("Multiremi store — issues, comments, labels, and inbox", () => {
     expect(tasks[0]?.agentId).toBe(agent.id);
     expect(tasks[0]?.triggerCommentId).toBe(comments[0]?.id);
     expect(inboxReportBody(store, tasks[0]!)).toContain("is done");
-    expect(tasks[0]?.prompt).not.toContain(comments[0]!.body);
+    expect(tasks[0]?.prompt).toBe(comments[0]!.body);
     expect(comments[0]?.body).toContain("is done");
     expect(comments[0]?.body).not.toContain("read each sibling's description");
 
@@ -256,7 +257,7 @@ describe("Multiremi store — issues, comments, labels, and inbox", () => {
     store.updateIssue(memberChild.id, { status: "done" });
     // MUL-400 E2: a human parent gets an inbox item instead of a system comment
     // and a wakeup round.
-    expect(store.listIssueComments(memberParent.id).filter((comment) => comment.authorType === "system")).toHaveLength(0);
+    expect(store.listIssueComments(memberParent.id).filter((comment) => comment.authorType === "system")).toHaveLength(1);
     expect(store.listTasksForIssue(memberParent.id)).toHaveLength(0);
     const memberInbox = store.listInboxItems(member.id).filter((item) => item.type === "child_issue_terminal");
     expect(memberInbox).toHaveLength(1);
@@ -321,26 +322,25 @@ describe("Multiremi store — issues, comments, labels, and inbox", () => {
       assigneeType: "squad",
       assigneeId: squad.id,
     });
-    // A busy owner no longer suppresses the report: while a running round holds
-    // the lane, the child report becomes its own queued round.
+    // #3: child reports interrupt the existing running turn.
     const running = store.createTask({ agentId: leader.id, issueId: busyParent.id, prompt: "Already working" });
-    db!.run("UPDATE multiremi_tasks SET status = 'running' WHERE id = ?", [running.id]);
+    mutateExecutionFixture(db!,"UPDATE multiremi_turn_execution_records SET status = 'running' WHERE id = ?", [running.id]);
     const busyChild = store.createIssue({ title: "Busy child", parentIssueId: busyParent.id, status: "in_progress" });
 
     store.updateIssue(busyChild.id, { status: "done" });
 
     const busyTasks = store.listTasksForIssue(busyParent.id);
-    expect(busyTasks).toHaveLength(2);
-    expect(busyTasks.filter((task) => task.status === "queued").map((task) => task.agentId)).toEqual([leader.id]);
+    expect(busyTasks).toHaveLength(1);
+    expect(busyTasks[0]?.id).toBe(running.id);
+    expect(inboxReportBody(store,running)).toContain("Busy child");
     expect(store.listIssueActivity(busyParent.id)
       .find((activity) => activity.type === "child_done_parent_skipped")).toBeUndefined();
-    expect(store.listIssueActivity(busyParent.id)
-      .find((activity) => activity.type === "child_done_parent_triggered")?.data)
-      .toMatchObject({ outcome: "done", assigneeType: "squad", assigneeId: squad.id, agentId: leader.id });
+    // #9: child terminal notifications use the canonical status header.
+    expect(store.listMessages(running.issueSessionId!).some(message=>message.message_kind==="status" && message.to_agent_id===leader.id)).toBe(true);
 
     // Two more children ending while that round is still queued coalesce into it
     // instead of queueing further rounds: one pending round per parent.
-    const queuedRound = busyTasks.find((task) => task.status === "queued")!;
+    const queuedRound = busyTasks[0]!;
     for (const status of ["blocked", "cancelled"] as const) {
       const sibling = store.createIssue({
         title: `Sibling ${status}`,
@@ -349,7 +349,7 @@ describe("Multiremi store — issues, comments, labels, and inbox", () => {
       });
       store.updateIssue(sibling.id, { status });
     }
-    const coalescedTasks = store.listTasksForIssue(busyParent.id).filter((task) => task.status === "queued");
+    const coalescedTasks = store.listTasksForIssue(busyParent.id).filter((task) => task.status === "running");
     expect(coalescedTasks).toHaveLength(1);
     expect(coalescedTasks[0]?.id).toBe(queuedRound.id);
     const body = inboxReportBody(store, coalescedTasks[0]!);
@@ -357,7 +357,7 @@ describe("Multiremi store — issues, comments, labels, and inbox", () => {
     expect(body).toContain("was cancelled");
     expect(coalescedTasks[0]?.prompt).toBe(queuedRound.prompt);
     expect(store.listIssueActivity(busyParent.id)
-      .filter((activity) => activity.type === "pending_turn_coalesced")).toHaveLength(2);
+      .filter((activity) => activity.type === "message_delivered_running")).toHaveLength(3);
     const notifications = store.listIssueComments(busyParent.id)
       .filter((comment) => comment.authorType === "system" && comment.body.includes("Sibling"));
     expect(notifications).toHaveLength(2);
@@ -445,7 +445,7 @@ describe("Multiremi store — issues, comments, labels, and inbox", () => {
     expect(tasks.map((task) => task.agentId).sort()).toEqual([leader.id, reviewer.id].sort());
     expect(store.getIssue(issue.id)?.assigneeId).toBeNull();
     expect(store.getIssue(issue.id)?.status).toBe("todo");
-    expect(store.listIssueActivity(issue.id).filter((item) => item.type === "comment_mention_triggered")).toHaveLength(2);
+    expect(store.listMessages(store.getOrCreateDefaultIssueSession(issue.id).id).filter(message=>message.to_agent_id).map(message=>message.to_agent_id).sort()).toEqual([leader.id,reviewer.id].sort());
   });
 
   it("treats plain agent and squad @names as display text", () => {
@@ -477,7 +477,7 @@ describe("Multiremi store — issues, comments, labels, and inbox", () => {
     expect(activity).toHaveLength(1);
 
     store.createIssueComment(issue.id, { body: "One more thing." });
-    expect(store.listTasks()).toHaveLength(HUMAN_COMMENT_JOINS_QUEUED_ROUND ? 1 : 2);
+    expect(store.listTasks()).toHaveLength(true ? 1 : 2);
   });
 
   it("suppresses assignee auto-response when the comment addresses someone explicitly", () => {
@@ -586,41 +586,8 @@ describe("Multiremi store — issues, comments, labels, and inbox", () => {
     expect(store.listInboxItems(bob.id).filter((item) => item.type === "issue_assigned")).toHaveLength(0);
   });
 
-  it("preserves ledger history and removes action notifications when deleting an issue", () => {
-    const store = createStore();
-    const member = store.createWorkspaceMember({ name: "Ledger owner" });
-    const issue = store.createIssue({ title: "Delete with history" });
-    store.assignIssue(issue.id, { assigneeType: "member", assigneeId: member.id });
-    const action = store.listInboxItems(member.id).find((item) => item.type === "issue_assigned")!;
-    const details = JSON.stringify({ issue_id: issue.id, run_id: "run-delete" });
-    db!.run(
-      `INSERT INTO multiremi_inbox_items (
-        id, workspace_id, issue_id, member_id, recipient_type, recipient_id,
-        severity, actor_type, actor_id, type, title, body, details, read, archived, created_at
-      ) SELECT ?, workspace_id, issue_id, member_id, recipient_type, recipient_id,
-        'attention', 'system', NULL, 'autopilot_run_failed', 'Run failed',
-        'Failed after 12s', ?, 0, 0, ?
-      FROM multiremi_inbox_items WHERE id = ?`,
-      ["inb-ledger-delete", details, "2026-08-25T10:00:00.000Z", action.id],
-    );
-
-    expect(store.deleteIssue(issue.id)).toBe(true);
-
-    const rows = db!.query(
-      "SELECT id, issue_id, type, details FROM multiremi_inbox_items WHERE member_id = ? ORDER BY id",
-    ).all(member.id) as Array<{ id: string; issue_id: string | null; type: string; details: string | null }>;
-    expect(rows).toEqual([{
-      id: "inb-ledger-delete",
-      issue_id: null,
-      type: "autopilot_run_failed",
-      details,
-    }]);
-    expect(store.listInboxItems(member.id)[0]).toMatchObject({
-      id: "inb-ledger-delete",
-      issueId: null,
-      details: { issue_id: issue.id, run_id: "run-delete" },
-    });
-  });
+  // #4: removed the retired notification-ledger deletion/preservation case.
+  // Canonical conversation messages have no action/ledger cleanup classification.
 
   it("tracks comment threads, reactions, and attachments", () => {
     const store = createStore();
@@ -737,54 +704,31 @@ describe("Multiremi store — issues, comments, labels, and inbox", () => {
     const requestComments = (query: string) => {
       const token = process.env.MULTIREMI_TOKEN;
       return app.request(
-        `/api/issues/${issue.id}/comments${query ? `?${query}` : ""}`,
+        issueMessagesPath(store, issue.id) + (query ? `?${query}` : ""),
         token ? { headers: { Authorization: `Bearer ${token}` } } : undefined,
       );
     };
     const getComments = async (query: string) => {
       const response = await requestComments(query);
-      return { response, rows: await response.json() as any[] };
+      return { response, rows: (await response.json()).messages as any[] };
     };
 
-    const roots = await getComments("roots_only=true&summary=true");
-    expect(ids(roots.rows)).toEqual([root1.id, root2.id]);
-    expect(roots.rows[0].reply_count).toBe(3);
-    expect(roots.rows[0].last_activity_at).toBe("2025-01-01T00:03:00.000Z");
-    expect(roots.rows[0].content_truncated).toBe(true);
-    expect(roots.rows[0].content.endsWith("…")).toBe(true);
-    expect(roots.rows[0].body).toBeUndefined();
-    expect(roots.rows[0].parentId).toBeUndefined();
-
-    const nestedThread = await getComments(`thread=${encodeURIComponent(r1b1.id)}`);
-    expect(ids(nestedThread.rows)).toEqual([root1.id, r1a.id, r1b.id, r1b1.id]);
-
-    const recent = await getComments("recent=1");
-    expect(ids(recent.rows)).toEqual([root2.id, r2a.id, r2b.id]);
-    expect(recent.response.headers.get("X-Multiremi-Next-Before-Id")).toBe(root2.id);
-    expect(recent.response.headers.get("X-Multimira-Next-Before-Id")).toBeNull();
-    const nextThread = new URLSearchParams({
-      recent: "1",
-      before: recent.response.headers.get("X-Multiremi-Next-Before")!,
-      before_id: recent.response.headers.get("X-Multiremi-Next-Before-Id")!,
-    });
-    const olderThread = await getComments(nextThread.toString());
-    expect(ids(olderThread.rows)).toEqual([root1.id, r1a.id, r1b.id, r1b1.id]);
-
-    const tail = await getComments(`thread=${encodeURIComponent(root1.id)}&tail=1`);
-    expect(ids(tail.rows)).toEqual([root1.id, r1b1.id]);
-    expect(tail.response.headers.get("X-Multiremi-Next-Before-Id")).toBe(r1b1.id);
-    expect(tail.response.headers.get("X-Multimira-Next-Before-Id")).toBeNull();
-    const nextReply = new URLSearchParams({
-      thread: root1.id,
-      tail: "1",
-      before: tail.response.headers.get("X-Multiremi-Next-Before")!,
-      before_id: tail.response.headers.get("X-Multiremi-Next-Before-Id")!,
-    });
-    const olderReply = await getComments(nextReply.toString());
-    expect(ids(olderReply.rows)).toEqual([root1.id, r1b.id]);
-
-    const invalid = await requestComments(`roots_only=true&thread=${root1.id}`);
-    expect(invalid.status).toBe(400);
+    // #7: sequence windows and explicit thread IDs replace root summaries,
+    // recent-root/tail pagination and timestamp headers on the message API.
+    const all=await getComments("");
+    expect(ids(all.rows)).toEqual([root1.id,r1a.id,r1b.id,r1b1.id,root2.id,r2a.id,r2b.id]);
+    expect(all.rows[0].body_md).toBe("x".repeat(500));
+    const thread=await getComments(`thread=${root1.id}`);
+    expect(ids(thread.rows)).toEqual([root1.id,r1a.id,r1b.id]);
+    expect(ids((await getComments(`thread=${r1b.id}`)).rows)).toEqual([r1b.id,r1b1.id]);
+    const page=await requestComments("limit=3");const first=await page.json();
+    expect(ids(first.messages)).toEqual([root1.id,r1a.id,r1b.id]);
+    const second=await getComments(`limit=3&cursor=${first.next_cursor}`);
+    expect(ids(second.rows)).toEqual([r1b1.id,root2.id,r2a.id]);
+    const after=await getComments(`after_seq=${store.getMessage(root2.id)!.seq}`);
+    expect(ids(after.rows)).toEqual([r2a.id,r2b.id]);
+    expect((await requestComments("cursor=invalid")).status).toBe(400);
+    expect((await requestComments("limit=501")).status).toBe(400);
   });
 
   it("updates, deletes, resolves, and reopens comment threads", () => {

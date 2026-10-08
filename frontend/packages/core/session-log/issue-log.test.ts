@@ -104,6 +104,50 @@ describe("activity sidecar", () => {
 afterEach(() => { vi.unstubAllGlobals(); mocks.read.mockReset(); mocks.locate.mockReset(); });
 
 describe("Issue log presentation over C7", () => {
+  it("removes C7-deleted rows from the presentation and keeps them removed during HTTP backfill", async () => {
+    const seed = { ...windowOf([row(1), row(2)]), head_seq: 2, has_more_before: false };
+    const replica = new IssueLogReplica("s", { sessionId: "s", head: row(0, "head"), window: seed });
+    const visible: number[][] = [];
+    replica.subscribe("s", () => visible.push(replica.getSnapshot("s").entries.map(entry => entry.seq)));
+    const cleanup = await replica.connect({ userId: "u", workspaceId: "w", subscribe: vi.fn(), unsubscribe: vi.fn(), env: { hasOpfs: false } });
+    try {
+      expect(visible.every(seqs => seqs.includes(1) && seqs.includes(2))).toBe(true);
+      await replica.hydratedFrames("s", [{ seq: 2, kind: "patch", payload: {
+        session_id: "s", target_seq: 2, revision: 3, fields: { deleted_at: "2026-10-06T00:00:00Z" },
+      } }]);
+      expect(replica.getSnapshot("s").entries.map(entry => entry.seq)).toEqual([0, 1]);
+      mocks.read.mockResolvedValue(seed);
+      await replica.refreshTailPreservingWindow();
+      expect(replica.getSnapshot("s").entries.map(entry => entry.seq)).toEqual([0, 1]);
+    } finally { cleanup(); }
+  });
+
+  it("forwards a hidden marker and the deletion patch when an entry is absent from hydration", async () => {
+    mocks.read.mockResolvedValue(windowOf([]));
+    const replica = new IssueLogReplica("s");
+    const delivered = vi.spyOn(replica, "frames").mockImplementation(() => {});
+    const deletion = { seq: 1, kind: "patch" as const, payload: {
+      session_id: "s", target_seq: 1, revision: 3, fields: { deleted_at: "2026-10-06T00:00:00Z" },
+    } };
+    await replica.hydratedFrames("s", [{ seq: 1, kind: "entry", payload: row(1) }, deletion]);
+    expect(delivered).toHaveBeenCalledWith("s", [
+      { seq: 1, kind: "entry", payload: { session_id: "s", seq: 1, revision: 1, visibility: "hidden" } }, deletion,
+    ]);
+  });
+
+  it("preserves hydration request failures and resumes the next deletion batch", async () => {
+    const error = new ApiError("server unavailable", 503, "Unavailable");
+    mocks.read.mockRejectedValue(error);
+    const replica = new IssueLogReplica("s");
+    const delivered = vi.spyOn(replica, "frames").mockImplementation(() => {});
+    await expect(replica.hydratedFrames("s", [{ seq: 1, kind: "entry", payload: row(1) }])).rejects.toBe(error);
+    const deletion = { seq: 1, kind: "patch" as const, payload: {
+      session_id: "s", target_seq: 1, revision: 3, fields: { deleted_at: "2026-10-06T00:00:00Z" },
+    } };
+    await replica.hydratedFrames("s", [deletion]);
+    expect(delivered).toHaveBeenCalledWith("s", [deletion]);
+  });
+
   it("imports SSR rows into C7 without a second network read or losing display fields", async () => {
     const replica = new IssueLogReplica("s", { sessionId: "s", head: row(0, "head"), window: windowOf() });
     const cleanup = await replica.connect({ userId: "u", workspaceId: "w", subscribe: vi.fn(), unsubscribe: vi.fn(), env: { hasOpfs: false } });

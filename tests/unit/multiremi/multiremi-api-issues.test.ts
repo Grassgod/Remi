@@ -1,3 +1,4 @@
+import { mutateExecutionFixture } from "./unified-test-paths.js";
 // Issues as first-class records plus the compatibility list/grouped/batch,
 // quick-create, hierarchy/planning, dependency, assignment, metadata and label routes.
 import { afterEach, describe, expect, it } from "bun:test";
@@ -19,8 +20,9 @@ describe("Multiremi API — issue endpoints", () => {
       const agent = store.createAgent({ name: "Unassign worker", provider: "codex" });
       const issue = store.createIssue({ title: "Unassign target", assigneeType: "agent", assigneeId: agent.id });
       const tasks = ["running", "awaiting_human", "queued", "completed"].map((status) => {
-        const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: status });
-        db!.run("UPDATE multiremi_tasks SET status = ? WHERE id = ?", [status, task.id]);
+        const session = store.createIssueSession(issue.id, { title: status });
+        const task = store.createTask({ agentId: agent.id, issueId: issue.id, issueSessionId: session.id, prompt: status });
+        mutateExecutionFixture(db!, "UPDATE multiremi_turn_execution_records SET status = ? WHERE id = ?", [status, task.id]);
         return task;
       });
       const authTask = store.createTask({ agentId: agent.id, prompt: "Caller outside target issue" });

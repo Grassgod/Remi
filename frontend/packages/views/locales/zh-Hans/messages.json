@@ -1,0 +1,72 @@
+{
+  "recipient": "收件人：{{name}}",
+  "no_recipient": "对话",
+  "roles": {
+    "leader": "组长",
+    "parent_owner": "父单负责人",
+    "delegator": "委派人",
+    "issue_owner": "本单负责人",
+    "relay": "转述人"
+  },
+  "kinds": {
+    "request": "请求",
+    "reply": "回复",
+    "report": "汇报",
+    "decision": "决定",
+    "status": "状态",
+    "final": "结论"
+  },
+  "wakes": {
+    "now": "立即唤醒",
+    "next_turn": "下一轮",
+    "inbox_only": "仅收件箱"
+  },
+  "read_to_here": "读到此处 #{{seq}}",
+  "read_cursor": "已读到 #{{seq}}",
+  "load_failed": "消息加载失败",
+  "attempts": "尝试列表",
+  "retry": "重试本轮",
+  "retry_cold": "新会话重试",
+  "retry_failed": "本轮重试失败",
+  "queue": "未读消息",
+  "decision_reply": "回复",
+  "resolved": "已解决",
+  "wake_reasons": {
+    "human_sender": "由人请求唤醒",
+    "platform_to_owner": "平台消息发给负责人",
+    "agent_dispatch": "云友调度",
+    "member_to_delegator": "回复委派人",
+    "to_leader": "消息发给组长",
+    "to_parent_owner": "消息发给父单负责人",
+    "agent_pair_not_privileged": "这对云友需等下一轮",
+    "pair_round_trip_limit": "云友往返次数达到上限",
+    "self": "发给自己不唤醒",
+    "recipient_unavailable": "收件人暂不可用",
+    "no_recipient": "没有要唤醒的收件人",
+    "requested_next_turn": "请求在下一轮处理",
+    "requested_inbox_only": "请求仅放入收件箱",
+    "migration": "迁移的消息",
+    "dependencies_unmet": "等待依赖满足",
+    "source_side_session": "仅写入来源对话",
+    "no_issue_target": "没有可执行的单据目标"
+  },
+  "statuses": {
+    "pending": "待执行",
+    "offered": "已提供",
+    "accepted": "已接受",
+    "running": "执行中",
+    "waiting_local_directory": "等待本地目录",
+    "awaiting_human": "等待回复",
+    "completed": "已完成",
+    "failed": "失败",
+    "cancelled": "已取消",
+    "lost": "已丢失"
+  },
+  "current_attempt": "当前尝试",
+  "attempt_logs": "查看尝试日志",
+  "no_attempts": "暂无尝试",
+  "load_more": "加载更多",
+  "retry_load": "重新加载",
+  "consumed_draft": "消息已被读到或删除。草稿保留在这里，可以复制后重新发送。",
+  "consumed_message": "消息已被 agent 读取，无法再编辑或删除。"
+}

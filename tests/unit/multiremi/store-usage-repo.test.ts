@@ -1,3 +1,4 @@
+import { runTurnExecutionMutation } from "@multiremi/store/turn-execution-records.js";
 // Sibling test for packages/server/src/store/repos/usage-repo.ts.
 // Drives the carved-out repo directly over its StoreContext (not through the
 // MultiremiStore facade) so a broken delegation cannot mask a broken move.
@@ -99,9 +100,9 @@ describe("UsageRepo", () => {
       reportedTotalTokens: null, contextTokens: null, contextWindow: null, costAmount: null, costCurrency: null, occurredAt,
     }));
     store!.reportTaskUsageSnapshot(task.id, { version: 2, runId: "first-attempt", revision: 1, complete: true, units });
-    db!.run("UPDATE multiremi_tasks SET runtime_id=? WHERE id=?", [second.id, task.id]);
+    runTurnExecutionMutation(db!, "UPDATE multiremi_turn_execution_records SET runtime_id=? WHERE id=?", [second.id, task.id]);
     db!.run("UPDATE multiremi_issues SET project_id=? WHERE id=?", [otherProject.id, issue.id]);
-    db!.run("UPDATE multiremi_tasks SET status='dispatched' WHERE id=?", [task.id]);
+    runTurnExecutionMutation(db!, "UPDATE multiremi_turn_execution_records SET status='dispatched' WHERE id=?", [task.id]);
     store!.startTask(task.id, "second-attempt", second.id);
     store!.completeTask(task.id, { output: "done" });
     const daily = repo.listUsageDaily({ workspaceId: "local", runtimeId: first.id, projectId: project.id, days: 0, tz: "Asia/Shanghai" });

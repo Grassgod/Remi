@@ -18,7 +18,8 @@ for (const backend of ["sqlite", "pg"] as const) {
           store.registerRuntime({ id: runtimeId, name: "Trace owner", provider: "codex", daemonId: "dmn_default_trace" });
           store.heartbeatRuntime(runtimeId, {});
           const agent = store.createAgent({ name: "Trace owner", provider: "codex", runtimeId });
-          const task = store.createTask({ agentId: agent.id, prompt: "Default trace" });
+          const issue = store.createIssue({ title: "Default trace" });
+          const task = store.createSessionTask(store.getOrCreateDefaultIssueSession(issue.id).id, { agentId: agent.id, prompt: "Default trace" });
           expect(store.claimTask(runtimeId)?.id).toBe(task.id); store.startTask(task.id);
           let layer!: DaemonProtocolLayer;
           // No reader, sink or Hub injection: exercise production assembly.
@@ -55,7 +56,7 @@ for (const backend of ["sqlite", "pg"] as const) {
               p: { task_id: task.id, events, closed: false } }));
             await waitFor(() => frames.some(frame => frame.re === "append"), "trace append");
             expect(frames.find(frame => frame.re === "append")!.p).toEqual({ ok: true, hub_head: 1 });
-            const http = await fetch(`http://127.0.0.1:${server.port}/api/tasks/${task.id}/trace`);
+            const http = await fetch(`http://127.0.0.1:${server.port}/api/turns/${store.getTurnForAttempt(task.id)!.id}/trace`);
             expect(http.status).toBe(200);
             expect(await http.json()).toMatchObject({ events: [events[0]], head: 1, closed: false });
             await waitFor(() => browserFrames.some(frame => frame.type === "stream.data"), "default browser trace event");
@@ -76,7 +77,7 @@ for (const backend of ["sqlite", "pg"] as const) {
             expect(delivered).toEqual(events); expect(subscription.closed).toBe(true);
             await waitFor(() => frames.some(frame => frame.t === "trace.push" && frame.p.closed), "protocol trace closed");
             expect(frames.filter(frame => frame.t === "trace.push").flatMap(frame => frame.p.events)).toEqual(events);
-            expect(await (await fetch(`http://127.0.0.1:${server.port}/api/tasks/${task.id}/trace`)).json())
+            expect(await (await fetch(`http://127.0.0.1:${server.port}/api/turns/${store.getTurnForAttempt(task.id)!.id}/trace`)).json())
               .toMatchObject({ head: 2, closed: true });
           } finally { unsubscribe(); browser?.close(); daemon.close(); server.stop(true); }
         });

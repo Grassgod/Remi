@@ -53,7 +53,7 @@ function TaskTraceDialogView({
     setLoading(true);
     setError(false);
     try {
-      const page = await api.getTaskTrace(task.id, afterSeq, TRACE_PAGE_SIZE);
+      const page = await api.getTaskTrace(task.id, afterSeq, TRACE_PAGE_SIZE, task.turn_id);
       if (!mounted.current) return;
       if (page.state === "ok" && !page.eof && page.next_after_seq <= afterSeq) {
         throw new Error("Trace cursor did not advance");
@@ -71,7 +71,7 @@ function TaskTraceDialogView({
       reading.current = false;
       if (mounted.current) setLoading(false);
     }
-  }, [task.id]);
+  }, [task.id, task.turn_id]);
 
   useEffect(() => {
     mounted.current = true;

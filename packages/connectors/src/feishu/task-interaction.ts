@@ -15,10 +15,10 @@ import type { AskUserQuestion } from "./permission-ui.js";
 type Card = Record<string, unknown>;
 export interface QuestionCardCredential { token: string; operatorOpenId: string }
 export interface QuestionCardClient {
-  getRequest(taskId: string, requestId: string): Promise<MultiremiTaskHumanRequest | null>;
-  respond(taskId: string, requestId: string, response: Record<string, unknown>, credential: QuestionCardCredential): Promise<MultiremiTaskHumanRequest>;
-  getDecision(issueId: string, decisionId: string): Promise<MultiremiIssueDecision | null>;
-  answer(issueId: string, decisionId: string, answer: string, credential: QuestionCardCredential): Promise<MultiremiIssueDecision>;
+  getRequest(messageId: string): Promise<MultiremiTaskHumanRequest | null>;
+  respond(messageId: string, response: Record<string, unknown>, credential: QuestionCardCredential): Promise<MultiremiTaskHumanRequest>;
+  getDecision(messageId: string): Promise<MultiremiIssueDecision | null>;
+  answer(messageId: string, answer: string, credential: QuestionCardCredential): Promise<MultiremiIssueDecision>;
 }
 const clients = new Map<string, QuestionCardClient>();
 export function registerQuestionCardClient(appId: string, client: QuestionCardClient): () => void {
@@ -87,7 +87,7 @@ export function parseQuestionAnswers(questions: AskUserQuestion[], form: Record<
     const selected = q.options.filter((_, oi) => checked(form[`q${qi}_option${oi}`])).map(o => o.label);
     if (!q.multiSelect && selected.length > 1) throw new Error(`问题 ${qi + 1} 只能选择一项`);
     const custom = answerText(form[`q${qi}_custom`]);
-    if (custom.length > 500) throw new Error(`问题 ${qi + 1} 的自定义回答过长`);
+    if (custom.length > 1000) throw new Error(`问题 ${qi + 1} 的自定义回答过长`);
     if (!selected.length && !custom) throw new Error(`请回答问题 ${qi + 1}`);
     answers[q.question] = [selected.join("、"), custom ? `自定义回答：${custom}` : ""].filter(Boolean).join("\n");
   });
@@ -204,16 +204,16 @@ export async function handleIssueDecisionInteractionEvent(appId: string, raw: un
   const client = clients.get(appId);
   const credential = { token: typeof value.t === "string" ? value.t : "", operatorOpenId: String(object(event.operator).open_id ?? "") };
   const toast = (content: string, type = "error") => ({ toast: { type, content } });
-  if (!credential.token || typeof value.r !== "string") return toast(issueDecisionFailureToast({ code: "token_invalid" }));
+  if (!credential.token || typeof value.message_id !== "string") return toast(issueDecisionFailureToast({ code: "token_invalid" }));
   if (!client) return toast("本次没有提交：卡片正在恢复，或这个决定已经处理。请稍后重试，或到网页端查看。", "info");
   let decision: MultiremiIssueDecision | null = null;
   try {
-    decision = await client.getDecision(String(value.issue_id ?? ""), value.r);
+    decision = await client.getDecision(value.message_id);
   } catch (error) {
     return toast(issueDecisionFailureToast(error));
   }
   if (!decision) return toast("本次没有提交：卡片正在恢复，或这个决定已经处理。请稍后重试，或到网页端查看。", "info");
-  if (decision.id !== value.r) return toast(issueDecisionFailureToast({ code: "token_invalid" }));
+  if (decision.id !== value.message_id) return toast(issueDecisionFailureToast({ code: "token_invalid" }));
   if (decision.status !== "escalated") return {
     ...toast(issueDecisionFailureToast({ code: "token_consumed" }), "info"),
     card: { type: "raw", data: buildIssueDecisionCard(decision,
@@ -252,7 +252,7 @@ export async function handleIssueDecisionInteractionEvent(appId: string, raw: un
   }
   const answer = option && custom ? `${option}\n自定义回答：${custom}` : option ?? custom;
   try {
-    const settled = await client.answer(decision.issueId, value.r, answer, credential);
+    const settled = await client.answer(value.message_id, answer, credential);
     if (settled.status === "answered") {
       return { ...toast("已提交", "success"),
         card: { type: "raw", data: buildIssueDecisionCard(settled,
@@ -267,7 +267,7 @@ export async function handleIssueDecisionInteractionEvent(appId: string, raw: un
   } catch (error) {
     if (object(error).code === "token_consumed") {
       try {
-        const latest = await client.getDecision(decision.issueId, value.r);
+        const latest = await client.getDecision(value.message_id);
         if (latest && latest.status !== "escalated") return {
           ...toast(issueDecisionFailureToast(error), "info"),
           card: { type: "raw", data: buildIssueDecisionCard(latest,
@@ -288,18 +288,18 @@ export async function handleTaskInteractionEvent(appId: string, raw: unknown): P
   const client = clients.get(appId);
   const credential = { token: typeof value.t === "string" ? value.t : "", operatorOpenId: String(object(event.operator).open_id ?? "") };
   const toast = (content: string, type = "error") => ({ toast: { type, content } });
-  if (!credential.token || typeof value.r !== "string") return toast("卡片已更新，请在最新卡片上回答");
+  if (!credential.token || typeof value.message_id !== "string") return toast("卡片已更新，请在最新卡片上回答");
   if (!client) return toast("请求已处理，或正在恢复，请稍后重试", "info");
   // A decision card re-reads the request so an answer given on the web while
   // the card was on screen is reflected instead of being overwritten.
   let request: MultiremiTaskHumanRequest | null;
   try {
-    request = await client.getRequest(String(value.task_id ?? ""), value.r);
+    request = await client.getRequest(value.message_id);
   } catch {
     return toast("提交未确认，请稍后重试");
   }
   if (!request) return toast("请求已处理，或正在恢复，请稍后重试", "info");
-  if (request.id !== value.r) return toast("卡片已更新，请在最新卡片上回答");
+  if (request.id !== value.message_id) return toast("卡片已更新，请在最新卡片上回答");
   if (request.status !== "pending") return {
     ...toast("请求已结束", "info"),
     card: { type: "raw", data: buildTaskInteractionCard(request,
@@ -321,7 +321,7 @@ export async function handleTaskInteractionEvent(appId: string, raw: unknown): P
       response = { option_id: options[index]!.optionId };
     }
     // Canonical server compare-and-set happens before acknowledging success.
-    const submitting = client.respond(request.taskId, value.r, response, credential)
+    const submitting = client.respond(value.message_id, response, credential)
       .then(result => {
         if (entry) {
           entry.settled = result;

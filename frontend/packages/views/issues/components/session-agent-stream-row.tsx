@@ -89,6 +89,7 @@ function AgentStreamRow({ task }: { task: AgentTask }) {
   const agentName = task.agent_id ? getActorName("agent", task.agent_id) : t(($) => $.agent_live.fallback_name);
 
 
+
   useEffect(() => {
     if (ended) return;
     // `dispatched_at` is also the daemon's renewable claim lease, so it moves

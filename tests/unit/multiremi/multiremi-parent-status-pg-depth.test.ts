@@ -1,3 +1,7 @@
+import { resolveMigrationReportDirectory } from "@multiremi/store/migration-report-directory.js";
+import { issueMessagesPath, requestMessageBody } from "./unified-test-paths.js";
+import { runTurnExecutionMutation } from '@multiremi/store/turn-execution-records.js';
+import type { SqlDatabase as UnifiedFixtureDatabase } from '@multiremi/store/db/postgres.js';
 /**
  * MUL-400 S1 on real PostgreSQL: the same transaction-depth ceiling the SQLite
  * suite asserts, plus the two cases that only a second connection can produce —
@@ -126,7 +130,7 @@ function transactionDepthCounter(database: PostgresSyncDatabase): DepthCounter {
   const execute = target.execute.bind(database);
   target.execute = (sql, params) => {
     const command = sql.trim().toUpperCase();
-    if (/INSERT\s+INTO\s+MULTIREMI_TASKS\b/.test(command)) {
+    if (/INSERT\s+INTO\s+MULTIREMI_TURN_ATTEMPTS\b/.test(command)) {
       counter.taskInserts.push({ sql: command, invocationDepth: depth, callbackDepth, inTransaction: database.inTransaction });
     }
     if (/^(BEGIN|COMMIT|ROLLBACK|SAVEPOINT|RELEASE|START TRANSACTION|END|ABORT)\b/.test(command)) {
@@ -243,9 +247,9 @@ describe.skipIf(!pgAvailable)("MUL-400 S1 on PostgreSQL", () => {
     const task = store.createSessionTask(session.id, { agentId: agent, prompt: "Claim stale lane" });
     store.getOrCreateSessionAgentLane(session.id, agent);
     db.run(
-      `UPDATE multiremi_session_agent_lanes SET provider_session_id = 'expired',
-       provider = 'claude', runtime_id = ?, cursor_seq = 1,
-       execution_fingerprint = 'expired' WHERE session_id = ? AND agent_id = ?`,
+      `UPDATE multiremi_session_lanes SET provider_session_id = 'expired',
+       provider = 'claude', runtime_id = ?, provider_cursor_seq = 1,
+       execution_fingerprint = 'expired' WHERE session_id = ? AND reader_type = 'agent' AND reader_id = ?`,
       [runtime, session.id, agent],
     );
     return { issue, task, runtime };
@@ -284,7 +288,7 @@ describe.skipIf(!pgAvailable)("MUL-400 S1 on PostgreSQL", () => {
       const reader = new PostgresSyncDatabase(pgDatabaseUrl(TEST_DB));
       try {
         const rows = reader.query("SELECT id FROM multiremi_issue_activity WHERE issue_id = ? AND type = 'session_agent_lane_reset'").all(issue.id);
-        const selected = reader.query("SELECT status FROM multiremi_tasks WHERE id = ?").get(task.id) as { status: string };
+        const selected = reader.query("SELECT status FROM multiremi_turn_execution_records WHERE id = ?").get(task.id) as { status: string };
         observedBeforeRollback = rows.length === 0 && selected.status === "queued";
       } finally {
         reader.close();
@@ -358,7 +362,7 @@ describe.skipIf(!pgAvailable)("MUL-400 S1 on PostgreSQL", () => {
         try {
           const rows = reader.query("SELECT id FROM multiremi_issue_activity WHERE issue_id = ? AND type = ?").all(issue.id, action);
           const task = taskId
-            ? reader.query("SELECT status FROM multiremi_tasks WHERE id = ?").get(taskId) as { status: string }
+            ? reader.query("SELECT status FROM multiremi_turn_execution_records WHERE id = ?").get(taskId) as { status: string }
             : null;
           invisibleBeforeRollback = rows.length === 0 && (!task || task.status === "queued");
         } finally {
@@ -389,7 +393,7 @@ describe.skipIf(!pgAvailable)("MUL-400 S1 on PostgreSQL", () => {
       assigneeId: agent,
     });
     const running = store.createTask({ agentId: agent, issueId: parent.id, prompt: "current round" });
-    db.run("UPDATE multiremi_tasks SET status = 'running' WHERE id = ?", [running.id]);
+    runTurnExecutionMutation(db as unknown as UnifiedFixtureDatabase,"UPDATE multiremi_turn_execution_records SET status = 'running' WHERE id = ?", [running.id]);
     const child = store.createIssue({
       title: "PG busy child",
       workspaceId,
@@ -400,12 +404,13 @@ describe.skipIf(!pgAvailable)("MUL-400 S1 on PostgreSQL", () => {
     counter.reset();
     store.updateIssue(child.id, { status: "done" });
     expect(counter.max).toBe(1);
-    expect(counter.taskInserts).toHaveLength(1);
-    expect(counter.taskInserts[0]).toMatchObject({ invocationDepth: 1, callbackDepth: 1, inTransaction: true });
-    const queued = store.listTasksForIssue(parent.id).filter((task) => task.status === "queued");
-    expect(queued).toHaveLength(1);
-    expect(store.listIssueComments(parent.id).filter(comment => comment.authorType === "system")[0]!.body)
-      .toContain("is done");
+    // #3: a running Turn receives the status message without allocating another Attempt.
+    expect(counter.taskInserts).toHaveLength(0);
+    expect(store.listTasksForIssue(parent.id).map(task=>task.id)).toEqual([running.id]);
+    const reports=store.listMessages(running.issueSessionId!).filter(message=>message.metadata.child_status==="done");
+    expect(reports).toHaveLength(1);expect(reports[0]).toMatchObject({to_agent_id:agent,wake_applied:"now"});
+    expect(reports[0]!.body_md).toContain("is done");
+
   });
 
   it("keeps updateIssue(child -> done) at depth 1 on Postgres (owner free: fresh round)", () => {
@@ -650,17 +655,17 @@ describe.skipIf(!pgAvailable)("MUL-400 S1 on PostgreSQL", () => {
       name: "PG member", type: "pat", workspaceId, userId: "local",
     })).token;
 
-    const forgedByAgent = await app.request(`/api/issues/${parent.id}/comments`, {
+    const forgedByAgent = await app.request(issueMessagesPath(store, parent.id), {
       method: "POST",
       headers: { Authorization: `Bearer ${otherToken}`, "Content-Type": "application/json" },
-      body: JSON.stringify({
+      body: JSON.stringify(requestMessageBody(store, {
         body: "PG forged summary", author_type: "agent", author_id: agent,
         authorType: "agent", authorId: agent,
-      }),
+      }, { type: "role", ref: "issue_owner" })),
     });
-    expect(forgedByAgent.status).toBe(201);
+    expect(forgedByAgent.status).toBe(200);
     const agentComment = await forgedByAgent.json();
-    expect(store.getIssueComment(agentComment.id)?.authorId).toBe(other.id);
+    expect(store.getIssueComment(agentComment.message.id)?.authorId).toBe(other.id);
 
     const done = () => app.request(`/api/issues/${parent.id}`, {
       method: "PATCH",
@@ -669,23 +674,23 @@ describe.skipIf(!pgAvailable)("MUL-400 S1 on PostgreSQL", () => {
     });
     expect((await done()).status).toBe(409);
     // A member PAT forging the same identity stores a member comment instead.
-    const forgedByMember = await app.request(`/api/issues/${parent.id}/comments`, {
+    const forgedByMember = await app.request(issueMessagesPath(store, parent.id), {
       method: "POST",
       headers: { Authorization: `Bearer ${memberToken}`, "Content-Type": "application/json" },
-      body: JSON.stringify({
+      body: JSON.stringify(requestMessageBody(store, {
         body: "PG member forged summary", author_type: "agent", author_id: agent,
         authorType: "agent", authorId: agent,
-      }),
+      }, { type: "role", ref: "issue_owner" })),
     });
-    expect(forgedByMember.status).toBe(201);
+    expect(forgedByMember.status).toBe(200);
     const memberComment = await forgedByMember.json();
-    expect(store.getIssueComment(memberComment.id)).toMatchObject({ authorType: "member" });
+    expect(store.getIssueComment(memberComment.message.id)).toMatchObject({ authorType: "member" });
     expect((await done()).status).toBe(409);
     // The authorized agent's own comment satisfies (b).
-    await app.request(`/api/issues/${parent.id}/comments`, {
+    await app.request(issueMessagesPath(store, parent.id), {
       method: "POST",
       headers: { Authorization: `Bearer ${ownerToken}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ body: "PG owner summary" }),
+      body: JSON.stringify(requestMessageBody(store, { body: "PG owner summary" }, { type: "role", ref: "issue_owner" })),
     });
     expect((await done()).status).toBe(200);
   });
@@ -864,8 +869,8 @@ describe.skipIf(!pgAvailable)("MUL-400 S1 on PostgreSQL", () => {
       expect(otherStore.getTask(task.id)?.status).toBe("failed");
       expect(otherStore.getIssue(child.id)?.status).toBe("blocked");
       expect(otherStore.listTasksForIssue(parent.id)).toHaveLength(1);
-      expect(otherStore.listIssueComments(parent.id).filter((comment) => comment.authorType === "system"))
-        .toHaveLength(1);
+      expect(otherStore.listIssueComments(parent.id).filter(comment=>
+        otherStore.getMessage(comment.id)?.metadata.child_status==="blocked")).toHaveLength(1); // #9: lifecycle reports also include creation/start transitions.
     } finally {
       other.close();
     }
@@ -1084,7 +1089,7 @@ describe.skipIf(!pgAvailable)("MUL-400 S1 on PostgreSQL", () => {
         });
         if (busy) {
           const task = store.createTask({ agentId: agent, issueId: parent.id, prompt: "current round" });
-          db.run("UPDATE multiremi_tasks SET status = 'running' WHERE id = ?", [task.id]);
+          runTurnExecutionMutation(db as unknown as UnifiedFixtureDatabase,"UPDATE multiremi_turn_execution_records SET status = 'running' WHERE id = ?", [task.id]);
         }
         const child = store.createIssue({ title: "PG terminal child", workspaceId, parentIssueId: parent.id, status: "in_progress" });
         check(`updateIssue ${status}, busy=${busy}`, () => { store.updateIssue(child.id, { status }); });
@@ -1186,7 +1191,7 @@ describe.skipIf(!pgAvailable)("MUL-400 S1 on PostgreSQL", () => {
       assigneeId: agent,
     });
     const running = store.createTask({ agentId: agent, issueId: parent.id, prompt: "current round" });
-    db.run("UPDATE multiremi_tasks SET status = 'running' WHERE id = ?", [running.id]);
+    runTurnExecutionMutation(db as unknown as UnifiedFixtureDatabase,"UPDATE multiremi_turn_execution_records SET status = 'running' WHERE id = ?", [running.id]);
     const first = store.createIssue({
       title: "PG coalesce child A",
       workspaceId,
@@ -1204,7 +1209,7 @@ describe.skipIf(!pgAvailable)("MUL-400 S1 on PostgreSQL", () => {
     // reports really do contend for the workspace lock.
     const worker = new Worker(new URL("./fixtures/postgres-child-ending-worker.ts", import.meta.url).href);
     const ready = waitForWorkerPhase(worker, "ready");
-    worker.postMessage({ type: "init", databaseUrl: pgDatabaseUrl(TEST_DB) });
+    worker.postMessage({ type: "init", databaseUrl: pgDatabaseUrl(TEST_DB), migrationReportDir: resolveMigrationReportDirectory() });
     await ready;
     const finished = waitForWorkerPhase(worker, "completed", 60_000);
     worker.postMessage({ type: "end", childIssueId: second.id, status: "done" });
@@ -1214,12 +1219,18 @@ describe.skipIf(!pgAvailable)("MUL-400 S1 on PostgreSQL", () => {
     await finished;
     worker.terminate();
 
-    const queued = store.listTasksForIssue(parent.id).filter((task) => task.status === "queued");
-    expect(queued).toHaveLength(1);
-    const comments = store.listIssueComments(parent.id).filter((comment) => comment.authorType === "system");
+    // #3/#9: both terminal reports interrupt the running Turn; its end rings one successor.
+    expect(store.listTasksForIssue(parent.id).map(task=>task.id)).toEqual([running.id]);
+    const childIds = new Set([first.id, second.id]);
+    const comments = store.listIssueComments(parent.id).filter(comment =>
+      childIds.has(String((store.getMessage(comment.id)?.metadata.message_source as { issueId?: string } | undefined)?.issueId)));
     expect(comments).toHaveLength(2);
     expect(comments.map(comment => comment.body).join("\n")).toContain("is blocked");
     expect(comments.map(comment => comment.body).join("\n")).toContain("is done");
-    expect(comments.every(comment => store.getConversationLogEntryById(comment.id)!.metadata.envelope)).toBe(true);
+    store.completeTask(running.id,{output:"Interrupted round finished"});
+    expect(store.listTasksForIssue(parent.id).filter(task=>task.status==="queued")).toHaveLength(1);
+    for (const comment of comments) expect(store.getMessage(comment.id)).toMatchObject({
+      message_kind: "status", to_agent_id: agent, metadata: { delivery_turn_id: running.turn_id },
+    });
   }, 90_000);
 });

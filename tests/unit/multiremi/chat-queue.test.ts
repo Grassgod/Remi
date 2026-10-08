@@ -1,7 +1,9 @@
+import { pendingTurnBackendTests } from "./pending-turn-test-backends.js";
+import { requestMessageBody, mutateExecutionFixture } from "./unified-test-paths.js";
 import { afterEach, describe, expect, it } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { MultiremiStore } from "@multiremi/store.js";
-import { createStore, db, resetMultiremiTestEnv } from "./helpers.js";
+import { createLocalStore as createStore, db, resetMultiremiTestEnv } from "./helpers.js";
 
 afterEach(resetMultiremiTestEnv);
 
@@ -16,35 +18,20 @@ function setup() {
 const jsonHeaders = { "Content-Type": "application/json" };
 
 describe("Chat queues", () => {
-  it("claims same-millisecond inputs FIFO and refreshes provider affinity after the preceding turn", () => {
-    const { store, agent, runtime, chat } = setup();
-    const otherRuntime = store.registerRuntime({ name: "Other runtime", provider: "codex", maxConcurrency: 4 });
-    const first = store.sendChatMessage(chat.id, { content: "first input" });
-    const second = store.sendChatMessage(chat.id, { content: "later input" });
-    const third = store.sendChatMessage(chat.id, { content: "third input" });
-    db!.run("UPDATE multiremi_tasks SET created_at = ? WHERE chat_session_id = ?", [first.task.createdAt, chat.id]);
-    expect(first.queued).toBe(false);
-    expect(second.queued).toBe(true);
-    expect(store.getPendingChatTask(chat.id)?.id).toBe(first.task.id);
-    expect(store.listQueuedChatTasks(chat.id).map((entry) => entry.task_id)).toEqual([second.task.id, third.task.id]);
-    const projection = JSON.stringify(store.buildTaskSessionProjection(first.task.id));
-    expect(projection).not.toContain("later input");
-    expect(projection).not.toContain("third input");
-    expect(store.claimTask(runtime.id)?.id).toBe(first.task.id);
-    expect(store.claimTask(runtime.id)).toBeNull();
-    expect(store.claimTask(otherRuntime.id)).toBeNull();
-    store.startTask(first.task.id);
-    store.completeTask(first.task.id, { output: "first answer", sessionId: "first-provider-session", workDir: "/tmp/first-chat" });
-    expect(store.claimTask(otherRuntime.id)).toBeNull();
-    const claimed = store.claimTask(runtime.id)!;
-    expect(claimed.id).toBe(second.task.id);
-    expect(claimed.sessionId).toBe("first-provider-session");
-    expect(claimed.workDir).toBe("/tmp/first-chat");
-    expect(store.buildTaskSessionProjection(claimed.id)?.mode).toBe("delta");
-    expect(JSON.stringify(store.buildTaskSessionProjection(claimed.id))).not.toContain("third input");
-    store.startTask(second.task.id);
-    store.completeTask(second.task.id, { output: "second answer", sessionId: "second-provider-session" });
-    expect(store.claimTask(runtime.id)?.sessionId).toBe("second-provider-session");
+  it("merges same-millisecond pending inputs in message order and resumes the next round", () => {
+    const {store,agent,runtime,chat}=setup();
+    const first=store.sendChatMessage(chat.id,{content:"first input"});
+    const second=store.sendChatMessage(chat.id,{content:"later input"});
+    const third=store.sendChatMessage(chat.id,{content:"third input"});
+    expect(second.task.id).toBe(first.task.id); expect(third.task.id).toBe(first.task.id);
+    expect(store.listChatMessages(chat.id).map(message=>message.body)).toEqual(["first input","later input","third input"]);
+    expect(store.listConversationLogEntries(chat.id).filter(entry=>entry.kind==="turn")).toHaveLength(1);
+    expect(store.claimTask(runtime.id)?.id).toBe(first.task.id); expect(store.claimTask(runtime.id)).toBeNull();
+    store.buildTaskSessionProjection(first.task.id);store.startTask(first.task.id);
+    store.completeTask(first.task.id,{output:"first answer",sessionId:"first-provider-session",workDir:"/tmp/first-chat"});
+    const next=store.sendChatMessage(chat.id,{content:"next round"});
+    const claimed=store.claimTask(runtime.id)!;
+    expect(claimed.id).toBe(next.task.id);expect(claimed.sessionId).toBe("first-provider-session");expect(claimed.workDir).toBe("/tmp/first-chat");
     expect(store.getAgent(agent.id)?.maxConcurrentTasks).toBe(4);
   });
 
@@ -58,14 +45,15 @@ describe("Chat queues", () => {
     store.claimTask(runtime.id);
     store.startTask(next.task.id);
     const queued = store.sendChatMessage(chat.id, { content: "after retry" });
-    db!.run("UPDATE multiremi_tasks SET execution_fingerprint = NULL WHERE id = ?", [next.task.id]);
+    mutateExecutionFixture(db!, "UPDATE multiremi_turn_execution_records SET execution_fingerprint = NULL WHERE id = ?", [next.task.id]);
     store.failTask(next.task.id, { error: "context overflow", failureReason: "agent_error.context_overflow", sessionId: "unsafe-session" });
-    const retry = store.listTasks().find((task) => task.parentTaskId === next.task.id)!;
+    const retry = store.getTask(store.getTurnForAttempt(next.task.id)!.current_attempt_id!)!;
     expect(retry).toBeDefined();
     expect(retry.executionFingerprint).toBeNull();
     expect(retry.sessionId).toBeNull();
     expect(store.getPendingChatTask(chat.id)?.id).toBe(retry.id);
-    expect(store.listQueuedChatTasks(chat.id).map((task) => task.task_id)).toEqual([queued.task.id]);
+    expect(queued.task.id).toBe(next.task.id);
+    expect(store.listQueuedChatTasks(chat.id)).toEqual([]);
     const claimed = store.claimTask(runtime.id)!;
     expect(claimed.id).toBe(retry.id);
     expect(claimed.sessionId).toBeNull();
@@ -73,51 +61,9 @@ describe("Chat queues", () => {
     expect(store.buildTaskSessionProjection(claimed.id)?.mode).toBe("bootstrap");
   });
 
-  it("interrupts a pending retry when prioritizing the next user input", () => {
-    const { store, runtime, chat } = setup();
-    const first = store.sendChatMessage(chat.id, { content: "original" });
-    store.claimTask(runtime.id);
-    store.startTask(first.task.id);
-    const followUp = store.sendChatMessage(chat.id, { content: "urgent" });
-    store.failTask(first.task.id, { error: "context overflow", failureReason: "agent_error.context_overflow" });
-    const retry = store.listTasks().find((task) => task.parentTaskId === first.task.id)!;
-    expect(store.getPendingChatTask(chat.id)?.id).toBe(retry.id);
-    expect(store.prioritizeQueuedChatTask(chat.id, followUp.task.id)).toEqual({ task_id: followUp.task.id, active_task_id: retry.id });
-    expect(store.getTask(retry.id)?.status).toBe("cancelled");
-    expect(store.getTask(retry.id)?.prompt).toBe("original");
-    expect(store.listChatMessages(chat.id).find((message) => message.id === first.message.id)?.body).toBe("original");
-    expect(store.listQueuedChatTasks(chat.id)).toEqual([]);
-    expect(store.claimTask(runtime.id)?.id).toBe(followUp.task.id);
-  });
-
-  it("edits pending input atomically, cancels removed inputs, and prioritizes on the server", () => {
-    const { store, runtime, chat } = setup();
-    const first = store.sendChatMessage(chat.id, { content: "first" });
-    const second = store.sendChatMessage(chat.id, { content: "second" });
-    const third = store.sendChatMessage(chat.id, { content: "third" });
-    expect(store.claimTask(runtime.id)?.id).toBe(first.task.id);
-    store.startTask(first.task.id);
-    store.appendTaskMessages(first.task.id, [{ type: "text", content: "Partial output" }]);
-    const edited = store.updateQueuedChatTask(chat.id, second.task.id, "  revised second  ");
-    expect(edited).toMatchObject({ task_id: second.task.id, content: "revised second", attachment_ids: [] });
-    expect(store.getTask(second.task.id)?.prompt).toBe("revised second");
-    expect(store.listChatMessages(chat.id).find((entry) => entry.id === second.message.id)?.body).toBe("revised second");
-    expect(() => store.updateQueuedChatTask(chat.id, first.task.id, "cannot change running")).toThrow("no longer queued");
-    const events: string[] = [];
-    store.onTaskEvent(({ type, task }) => { if (type === "task:cancelled") events.push(task.id); });
-    expect(store.prioritizeQueuedChatTask(chat.id, third.task.id)).toEqual({ task_id: third.task.id, active_task_id: first.task.id });
-    expect(store.getTask(first.task.id)?.status).toBe("cancelled");
-    expect(store.listTaskMessages(first.task.id)[0]?.content).toBe("Partial output");
-    expect(events).toEqual([first.task.id]);
-    expect(store.getPendingChatTask(chat.id)?.id).toBe(third.task.id);
-    expect(store.listPendingChatTasks().map((task) => task.id)).toEqual([third.task.id]);
-    store.removeQueuedChatTasks(chat.id, second.task.id);
-    expect(store.getTask(second.task.id)?.status).toBe("cancelled");
-    expect(store.getTask(second.task.id)?.prompt).toBe("revised second");
-    expect(store.listChatMessages(chat.id).some((entry) => entry.id === second.message.id)).toBe(false);
-    expect(store.claimTask(runtime.id)?.id).toBe(third.task.id);
-    expect(store.listQueuedChatTasks(chat.id)).toEqual([]);
-  });
+  // #3: per-input task priority/edit/delete operations retired with merged turns.
+  // Canonical message ownership, edits, deletion and resend FIFO are covered
+  // below on SQLite and PostgreSQL through the public message API.
 
   it("preserves explicit runtime and session input on tasks created outside Chat messages", () => {
     const { store, agent, runtime, chat } = setup();
@@ -161,7 +107,7 @@ describe("Chat queues", () => {
     expect(store.getTask(second.task.id)?.status).toBe("cancelled");
     expect(store.claimTask(runtime.id)).toBeNull();
     const app = createMultiremiApp({ store });
-    const rejected = await app.request(`/api/chat/sessions/${chat.id}/messages`, { method: "POST", headers: jsonHeaders, body: JSON.stringify({ content: "no" }) });
+    const rejected = await app.request(`/api/sessions/${chat.id}/messages`, { method: "POST", headers: jsonHeaders, body: JSON.stringify(requestMessageBody(store, { content: "no" }, { type: "agent", ref: store.getChatSession(chat.id)!.agentId })) });
     expect(rejected.status).toBe(409);
     const archived = await app.request("/api/chat/sessions?status=archived");
     expect((await archived.json()).map((entry: any) => entry.id)).toEqual([chat.id]);
@@ -274,58 +220,13 @@ describe("Chat queues", () => {
       });
     });
     expect(store.deleteChatSession(chat.id)).toBe(true);
-    expect(observed).toEqual([
-      { deleted: true, statuses: ["cancelled", "cancelled"] },
-      { deleted: true, statuses: ["cancelled", "cancelled"] },
-    ]);
+    expect(second.task.id).toBe(first.task.id);
+    expect(observed).toEqual([{deleted:true,statuses:["cancelled","cancelled"]}]);
     expect(store.getTask(second.task.id)?.chatSessionId).toBe(chat.id);
     expect(store.claimTask(runtime.id)).toBeNull();
     expect(() => store.sendChatMessage(chat.id, { content: "late" })).toThrow("Chat session not found");
   });
 
-  it("enforces queue ownership, stale-state conflicts, and the public response shapes", async () => {
-    const { store, agent } = setup();
-    store.createWorkspaceMember({ workspaceId: "local", userId: "alice", name: "Alice", role: "member" });
-    store.createWorkspaceMember({ workspaceId: "local", userId: "bob", name: "Bob", role: "admin" });
-    const alice = await store.createAccessToken({ name: "Alice", type: "pat", userId: "alice", workspaceId: "local" });
-    const bob = await store.createAccessToken({ name: "Bob", type: "pat", userId: "bob", workspaceId: "local" });
-    const chat = store.createChatSession({ agentId: agent.id, creatorId: "alice" });
-    const app = createMultiremiApp({ store, authToken: "root-secret" });
-    const headers = { ...jsonHeaders, Authorization: `Bearer ${alice.token}` };
-    const send = async (content: string) => {
-      const response = await app.request(`/api/chat/sessions/${chat.id}/messages`, { method: "POST", headers, body: JSON.stringify({ content }) });
-      expect(response.status).toBe(201);
-      return response.json();
-    };
-    const first = await send("first");
-    const second = await send("second");
-    expect(first).toMatchObject({ queued: false, supports_queue: true });
-    expect(second).toMatchObject({ queued: true, supports_queue: true });
-    const pending = await app.request(`/api/chat/sessions/${chat.id}/pending-task`, { headers });
-    expect(await pending.json()).toMatchObject({ task_id: first.task_id, supports_queue: true, queued_tasks: [{ task_id: second.task_id, content: "second", attachment_ids: [] }] });
-    for (const method of ["PATCH", "DELETE", "POST"]) {
-      const suffix = method === "POST" ? "/prioritize" : "";
-      const denied = await app.request(`/api/chat/sessions/${chat.id}/queue/${second.task_id}${suffix}`, {
-        method, headers: { ...jsonHeaders, Authorization: `Bearer ${bob.token}` }, ...(method === "PATCH" ? { body: JSON.stringify({ content: "not yours" }) } : {}),
-      });
-      expect(denied.status).toBe(403);
-    }
-    const foreign = store.createChatSession({ agentId: agent.id, creatorId: "alice" });
-    const foreignTask = store.sendChatMessage(foreign.id, { content: "foreign" });
-    const rejected = await app.request(`/api/chat/sessions/${chat.id}/queue/${foreignTask.task.id}`, { method: "DELETE", headers });
-    expect(rejected.status).toBe(409);
-    const edit = await app.request(`/api/chat/sessions/${chat.id}/queue/${second.task_id}`, { method: "PATCH", headers, body: JSON.stringify({ content: "edited" }) });
-    expect(await edit.json()).toMatchObject({ task_id: second.task_id, content: "edited", attachment_ids: [] });
-    const prioritized = await app.request(`/api/chat/sessions/${chat.id}/queue/${second.task_id}/prioritize`, { method: "POST", headers });
-    expect(await prioritized.json()).toEqual({ task_id: second.task_id, active_task_id: null });
-    const cleared = await app.request(`/api/chat/sessions/${chat.id}/queue`, { method: "DELETE", headers });
-    expect(cleared.status).toBe(204);
-    expect(store.getTask(first.task_id)?.status).toBe("cancelled");
-    const stale = await app.request(`/api/chat/sessions/${chat.id}/queue/${first.task_id}`, { method: "DELETE", headers });
-    expect(stale.status).toBe(409);
-    const invalid = await app.request(`/api/chat/sessions/${chat.id}`, { method: "PATCH", headers, body: JSON.stringify({ pinned: "yes" }) });
-    expect(invalid.status).toBe(400);
-  });
 
   it("keeps same-millisecond messages and previews in insertion order after retiring the page route", async () => {
     const { store, runtime, chat } = setup();
@@ -334,9 +235,9 @@ describe("Chat queues", () => {
     store.startTask(first.task.id);
     store.completeTask(first.task.id, { output: "answer", sessionId: "ordered-session" });
     const answer = store.listChatMessages(chat.id)[1]!;
-    db!.run("UPDATE multiremi_chat_messages SET id = ? WHERE id = ?", ["msg_z_first", first.message.id]);
-    db!.run("UPDATE multiremi_chat_messages SET id = ? WHERE id = ?", ["msg_a_answer", answer.id]);
-    db!.run("UPDATE multiremi_chat_messages SET created_at = ? WHERE chat_session_id = ?", [first.message.createdAt, chat.id]);
+    db!.run("UPDATE multiremi_conversation_log SET id = ? WHERE id = ?", ["msg_z_first", first.message.id]);
+    db!.run("UPDATE multiremi_conversation_log SET id = ? WHERE id = ?", ["msg_a_answer", answer.id]);
+    db!.run("UPDATE multiremi_conversation_log SET created_at = ? WHERE session_id = ?", [first.message.createdAt, chat.id]);
     expect(store.listChatMessages(chat.id).map((message) => message.body)).toEqual(["first", "answer"]);
     expect(store.getChatSession(chat.id)?.lastMessage?.content).toBe("answer");
     const app = createMultiremiApp({ store });
@@ -344,21 +245,15 @@ describe("Chat queues", () => {
     expect((await app.request(`/api/chat/sessions/${chat.id}/messages/page?limit=1`)).status).toBe(404);
   });
 
-  it("migrates legacy Chat order once and continues the sequence after reopening", () => {
-    const { chat } = setup();
-    db!.run("INSERT INTO multiremi_chat_messages (id, chat_session_id, role, body, created_at) VALUES (?, ?, 'user', 'legacy user', ?)", ["msg_z_legacy", chat.id, "2026-01-01T00:00:00.000Z"]);
-    db!.run("INSERT INTO multiremi_chat_messages (id, chat_session_id, role, body, created_at) VALUES (?, ?, 'assistant', 'legacy answer', ?)", ["msg_a_legacy", chat.id, "2026-01-01T00:00:00.001Z"]);
-    db!.run("DELETE FROM multiremi_schema_migrations WHERE id = '20260905_chat_message_sequence'");
-    db!.run("DROP INDEX idx_multiremi_chat_messages_session_sequence");
-    db!.run("ALTER TABLE multiremi_chat_messages DROP COLUMN sequence");
-    db!.run("ALTER TABLE multiremi_chat_sessions DROP COLUMN message_sequence");
-    const migrated = new MultiremiStore(db!);
-    expect(migrated.listChatMessages(chat.id).map((message) => message.body)).toEqual(["legacy user", "legacy answer"]);
-    expect(migrated.getChatSession(chat.id)?.lastMessage?.content).toBe("legacy answer");
-    migrated.sendChatMessage(chat.id, { content: "new input" });
-    expect(db!.query("SELECT sequence FROM multiremi_chat_messages WHERE chat_session_id = ? ORDER BY sequence").all(chat.id)).toEqual([{ sequence: 1 }, { sequence: 2 }, { sequence: 3 }]);
-    const reopened = new MultiremiStore(db!);
-    expect(reopened.listChatMessages(chat.id).map((message) => message.body)).toEqual(["legacy user", "legacy answer", "new input"]);
+  it("continues canonical Chat sequence after reopening", () => {
+    const {store,agent,chat}=setup();
+    for(const [role,body] of [["user","legacy user"],["assistant","legacy answer"]] as const) store.sendMessage({session_id:chat.id,sender:role==="assistant"?{type:"agent",id:agent.id}:{type:"member",id:"mem_local_local"},to:{type:"none"},body_md:body,message_kind:role==="assistant"?"reply":"request",wake_requested:"inbox_only"});
+    const migrated=new MultiremiStore(db!);
+    expect(migrated.listChatMessages(chat.id).map(message=>message.body)).toEqual(["legacy user","legacy answer"]);
+    migrated.sendChatMessage(chat.id,{content:"new input"});
+    const rows=db!.query("SELECT seq FROM multiremi_conversation_log WHERE session_id=? AND kind='message' ORDER BY seq").all(chat.id) as {seq:number}[];
+    expect(rows.map(row=>row.seq)).toEqual([1,2,3]);
+    expect(new MultiremiStore(db!).listChatMessages(chat.id).map(message=>message.body)).toEqual(["legacy user","legacy answer","new input"]);
   });
 
   it("uses workspace headers for Chat requests and preserves explicit workspace precedence", async () => {
@@ -374,8 +269,8 @@ describe("Chat queues", () => {
     const list = await app.request("/api/chat/sessions", { headers });
     expect((await list.json()).map((entry: any) => entry.id)).toEqual([chat.id]);
     const sent = store.sendChatMessage(chat.id, { content: "design" });
-    const pending = await app.request("/api/chat/pending-tasks", { headers });
-    expect((await pending.json()).tasks.map((entry: any) => entry.task_id)).toEqual([sent.task.id]);
+    const pending = await app.request("/api/turns?status=pending", { headers });
+    expect((await pending.json()).turns.map((entry: any) => entry.id)).toEqual([store.getTurnForAttempt(sent.task.id)!.id]);
     const unknown = await app.request("/api/chat/sessions", { headers: { "X-Workspace-Slug": "missing" } });
     expect(unknown.status).toBe(404);
     const conflicting = await app.request("/api/chat/sessions?workspace_id=local", { headers });
@@ -384,4 +279,83 @@ describe("Chat queues", () => {
     const byId = await app.request("/api/chat/sessions", { headers: { "X-Workspace-ID": workspace.id } });
     expect((await byId.json()).map((entry: any) => entry.id)).toEqual([chat.id]);
   });
+});
+
+pendingTurnBackendTests("Chat queue unified API", fixture => {
+  it("preserves an explicit initial provider session and then follows the completed Chat lane", () => {
+    const { store } = fixture();
+    const agent = store.createAgent({ name: "Initial session", provider: "codex", visibility: "workspace" });
+    const runtime = store.registerRuntime({ name: "Initial runtime", provider: "codex" });
+    const chat = store.createChatSession({ agentId: agent.id });
+    const first = store.createTask({ agentId: agent.id, chatSessionId: chat.id, prompt: "restore explicit input",
+      runtimeId: runtime.id, sessionId: "explicit-session", workDir: "/tmp/explicit" });
+    const claimed = store.claimTask(runtime.id)!;
+    expect(claimed.id).toBe(first.id);
+    expect(claimed.runtimeId).toBe(runtime.id);
+    expect(claimed.sessionId).toBe("explicit-session");
+    expect(claimed.workDir).toBe("/tmp/explicit");
+    store.buildTaskSessionProjection(first.id);
+    store.startTask(first.id);
+    store.completeTask(first.id, { output: "restored", sessionId: "completed-session", workDir: "/tmp/completed" });
+    const next = store.sendChatMessage(chat.id, { body: "continue" });
+    const resumed = store.claimTask(runtime.id)!;
+    expect(resumed.id).toBe(next.task.id);
+    expect(resumed.sessionId).toBe("completed-session");
+    expect(resumed.workDir).toBe("/tmp/completed");
+  });
+
+  it("enforces message ownership, unread conflicts and delete/resend FIFO through the public API", async () => {
+    const { store } = fixture();
+    const agent = store.createAgent({ name: "Queue API", provider: "codex", visibility: "workspace" });
+    store.ensureLocalWorkspace();
+    store.createWorkspaceMember({ workspaceId: "local", userId: "alice", name: "Alice", role: "member" });
+    store.createWorkspaceMember({ workspaceId: "local", userId: "bob", name: "Bob", role: "admin" });
+    const alice = await store.createAccessToken({ name: "Alice", type: "pat", userId: "alice", workspaceId: "local" });
+    const bob = await store.createAccessToken({ name: "Bob", type: "pat", userId: "bob", workspaceId: "local" });
+    const chat = store.createChatSession({ agentId: agent.id, creatorId: "alice" });
+    const app = createMultiremiApp({ store, authToken: "root-secret" });
+    const headers = { ...jsonHeaders, Authorization: `Bearer ${alice.token}` };
+    const send = async (body_md: string, extra = {}) => {
+      const response = await app.request(`/api/sessions/${chat.id}/messages`, { method: "POST", headers,
+        body: JSON.stringify({ body_md, to: { type: "agent", ref: agent.id }, ...extra }) });
+      expect(response.status, await response.clone().text()).toBe(200);
+      return response.json();
+    };
+    const first = await send("first"), second = await send("second");
+    expect(first.message).toMatchObject({ body_md: "first", to_agent_id: agent.id, message_kind: "request" });
+    expect(second.message).toMatchObject({ body_md: "second", to_agent_id: agent.id });
+    const unread = await app.request(`/api/sessions/${chat.id}/messages?unread_by=${agent.id}`, { headers });
+    expect((await unread.json()).messages.map((m: any) => m.id)).toEqual([first.message.id, second.message.id]);
+    for (const method of ["PATCH", "DELETE"]) {
+      const denied = await app.request(`/api/messages/${second.message.id}`, {
+        method, headers: { ...jsonHeaders, Authorization: `Bearer ${bob.token}` },
+        ...(method === "PATCH" ? { body: JSON.stringify({ body_md: "not yours" }) } : {}),
+      });
+      expect(denied.status).toBe(403);
+    }
+    const foreign = store.createChatSession({ agentId: agent.id, creatorId: "alice" });
+    const foreignMessage = store.sendChatMessage(foreign.id, { content: "foreign" }).message;
+    const rejected = await app.request(`/api/sessions/${chat.id}/messages`, { method: "POST", headers,
+      body: JSON.stringify({ body_md: "wrong conversation", reply_to_id: foreignMessage.id }) });
+    expect(rejected.status).toBe(400);
+    expect(store.getMessage(foreignMessage.id)?.deleted_at).toBeNull();
+    const edit = await app.request(`/api/messages/${second.message.id}`, { method: "PATCH", headers,
+      body: JSON.stringify({ body_md: "edited" }) });
+    expect(edit.status).toBe(200);
+    expect((await edit.json()).message).toMatchObject({ id: second.message.id, body_md: "edited", attachments: [] });
+    const removed = await app.request(`/api/messages/${second.message.id}`, { method: "DELETE", headers });
+    expect(removed.status).toBe(200);
+    const resent = await send("edited");
+    expect(resent.message.id).not.toBe(second.message.id);
+    expect(resent.message.seq).toBeGreaterThan(second.message.seq);
+    const remaining = await app.request(`/api/sessions/${chat.id}/messages?unread_by=${agent.id}`, { headers });
+    expect((await remaining.json()).messages.map((m: any) => m.id)).toEqual([first.message.id, resent.message.id]);
+    store.recordSessionAgentInlineRead(chat.id, agent.id, [first.message.seq], first.message.seq);
+    const stale = await app.request(`/api/messages/${first.message.id}`, { method: "DELETE", headers });
+    expect(stale.status).toBe(409);
+    expect(store.getMessage(first.message.id)?.deleted_at).toBeNull();
+    const invalid = await app.request(`/api/chat/sessions/${chat.id}`, { method: "PATCH", headers, body: JSON.stringify({ pinned: "yes" }) });
+    expect(invalid.status).toBe(400);
+  });
+
 });

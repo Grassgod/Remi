@@ -109,7 +109,7 @@ pendingTurnBackendTests("pending turn concurrency", (fixture, backend) => {
         await tx`UPDATE multiremi_workspaces SET updated_at = updated_at WHERE id = ${agent.workspaceId}`;
         for (const [i, child] of children.entries()) {
           child.stdin.write(JSON.stringify({ lane: { kind: "issue", agentId: agent.id, issueSessionId: session.id, executionScope: "" },
-            wake: { seq: 10 + i * 10, reason } }));
+            wake: { seq: entry.seq, reason } }));
           child.stdin.end();
         }
         await waitFor(async () => {
@@ -125,13 +125,13 @@ pendingTurnBackendTests("pending turn concurrency", (fixture, backend) => {
       expect(returned.map(result => result.action).sort()).toEqual(["coalesced", "created"]);
       expect(returned[0].taskId).toBe(returned[1].taskId);
       expect(returned.map(result => result.depth)).toEqual([1, 1]);
-      const rows = f.db.query("SELECT wake_seq FROM multiremi_tasks WHERE issue_session_id = ? AND agent_id = ? AND status = 'queued'")
+      const rows = f.db.query("SELECT wake_seq FROM multiremi_turn_execution_records WHERE issue_session_id = ? AND agent_id = ? AND status = 'queued'")
         .all(session.id, agent.id);
       expect(rows).toHaveLength(1);
-      expect(Number(rows[0]!.wake_seq)).toBe(20);
+      expect(Number(rows[0]!.wake_seq)).toBe(entry.seq);
       if (reason === "re_ring") {
-        expect(f.db.query("SELECT data FROM multiremi_issue_activity WHERE issue_id = ? AND type = 'pending_turn_coalesced'").all(issue.id)
-          .map(row => JSON.parse(String(row.data)))).toContainEqual(expect.objectContaining({ reason: "re_ring" }));
+        expect(f.db.query("SELECT data FROM multiremi_issue_activity WHERE issue_id = ? AND type = 'turn_merged'").all(issue.id)
+          .map(row => JSON.parse(String(row.data)))).toContainEqual(expect.objectContaining({ seq:entry.seq }));
       }
     } finally {
       for (const child of children) if (child.exitCode === null) child.kill();

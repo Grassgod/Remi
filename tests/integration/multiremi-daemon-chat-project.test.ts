@@ -56,6 +56,7 @@ describe("Project-bound Chat daemon startup", () => {
       const db = openSqliteDatabase(":memory:");
       databases.push(db);
       const store = new MultiremiStore(db);
+    store.ensureLocalWorkspace();
       store.ensureLocalWorkspace();
       const repoUrl = "https://example.test/catalog-only-repo.git";
       store.updateWorkspace("local", {
@@ -159,6 +160,7 @@ describe("Project-bound Chat daemon startup", () => {
     const db = openSqliteDatabase(":memory:");
     databases.push(db);
     const store = new MultiremiStore(db);
+    store.ensureLocalWorkspace();
     store.ensureLocalWorkspace();
     const repoUrl = "https://example.test/explicit-chat-repo.git";
     const catalogOnlyUrl = "https://example.test/catalog-only.git";
@@ -283,6 +285,7 @@ describe("Project-bound Chat daemon startup", () => {
         const db = openSqliteDatabase(":memory:");
         databases.push(db);
         const store = new MultiremiStore(db);
+    store.ensureLocalWorkspace();
         store.ensureLocalWorkspace();
         const repoUrl = "https://example.test/preserved-chat-repo.git";
         store.updateWorkspace("local", {
@@ -411,6 +414,7 @@ describe("Project-bound Chat local-directory assignment changes", () => {
     databases.push(db);
     const store = new MultiremiStore(db);
     store.ensureLocalWorkspace();
+    store.ensureLocalWorkspace();
     store.updateWorkspace("local", { settings: { github_enabled: false }, repos: [] });
     const workspacesRoot = join(root, "workspaces");
     const directoryA = join(root, "user-directory-a");
@@ -534,6 +538,7 @@ describe("Project-bound Chat local-directory assignment changes", () => {
         const db = openSqliteDatabase(":memory:");
         databases.push(db);
         const store = new MultiremiStore(db);
+    store.ensureLocalWorkspace();
         store.ensureLocalWorkspace();
         store.updateWorkspace("local", { settings: { github_enabled: false }, repos: [] });
         const workspacesRoot = join(root, "workspaces");
@@ -646,6 +651,7 @@ describe("Daemon-only inherited Chat path rejection", () => {
       const db = openSqliteDatabase(":memory:");
       databases.push(db);
       const store = new MultiremiStore(db);
+    store.ensureLocalWorkspace();
       store.ensureLocalWorkspace();
       store.updateWorkspace("local", { settings: { github_enabled: false }, repos: [] });
       const workspacesRoot = join(root, "workspaces");
@@ -698,13 +704,13 @@ describe("Daemon-only inherited Chat path rejection", () => {
               async *sendStream(message, sendOptions) {
                 seen.push({ cwd: options.cwd!, sessionId: sendOptions?.sessionId ?? null, prompt: message });
                 if (run === 2) {
-                  const range = message.match(/remi session log get (\S+) --from (\d+) --to (\d+)/)!;
+                  const range = message.match(/remi message list (\S+) --from (\d+) --to (\d+)/)!;
                   expect(range[1]).toBe(chat.id); expect(range[2]).toBe("0");
                   expect(message).not.toContain("你上次读到");
                   expect(store.getSessionAgentReadProgress(chat.id, agent.id)).toEqual({ seq: 0, offset: 0 });
                   const running = store.listTasks().find(task => task.chatSessionId === chat.id && task.status === "running")!;
                   const access = await store.createTaskAccessToken(running, "local");
-                  const response = await fetch(`http://127.0.0.1:${server.port}/api/sessions/${chat.id}/log/entry?from=${range[2]}&to=${range[3]}`,
+                  const response = await fetch(`http://127.0.0.1:${server.port}/api/sessions/${chat.id}/messages?from=${range[2]}&to=${range[3]}`,
                     { headers: { Authorization: `Bearer ${access.token}` } });
                   expect(response.status).toBe(200);
                   const page = await response.json() as any;
@@ -766,7 +772,7 @@ describe("Daemon-only inherited Chat path rejection", () => {
         expect(seen).toHaveLength(3);
         expect(seen[2]).toMatchObject({ cwd: chatPath, sessionId: "safe-recovered-provider" });
         expect(seen[2]!.prompt).toStartWith("# Delta Prompt");
-        expect(seen[2]!.prompt).toContain(`remi session log get ${chat.id} --from ${recoveredReadSeq} --to`);
+        expect(seen[2]!.prompt).toContain(`remi message list ${chat.id} --from ${recoveredReadSeq} --to`);
         expect(directoryContents(userPath)).toEqual(userBefore);
         expect(JSON.parse(readFileSync(join(userPath, ".multiremi", "gc.json"), "utf8")).local_directory).toBe(true);
         expect(existsSync(join(userPath, "wiki"))).toBe(false);

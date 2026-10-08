@@ -392,16 +392,13 @@ describe("bootstrap and delta task prompts", () => {
     expect(prompt).toContain("## Squad Instructions");
     expect(prompt).toContain("Open a draft PR early and summarize only after the current round is complete.");
     expect(prompt).toContain("Reviewer (agent: agt_reviewer) - reviewer - Owns security reviews");
-    expect(prompt).toContain("`[@Reviewer](mention://agent/agt_reviewer)`");
+    expect(prompt).toContain("--to agt_reviewer --kind request --wake now --content-stdin");
     expect(prompt).toContain("independent workstreams");
-    // A rich mention continues the teammate's existing lane; independent work
-    // is what needs the explicit task-create path.
-    expect(prompt).toContain("A rich mention to a teammate you have already delegated to continues that teammate's lane");
-    expect(prompt).toContain("queues behind that work instead of running beside it");
-    expect(prompt).toContain("remi task continue <previous-delegated-task-id>");
-    expect(prompt).toContain("remi task create --agent <agent-id> --issue <issue-id> --prompt");
-    expect(prompt).toContain(`remi comment add ${issue.id} --content-stdin`);
-    expect(prompt).toContain("cat <<'MULTIREMI_COMMENT'");
+    expect(prompt).toContain("Read the target's inbox and turns before sending to avoid duplicate work");
+    expect(prompt).toContain("Running turns receive an interruption; otherwise the inbox schedules the next turn");
+    expect(prompt).toContain("Select the correct Session before sending a request");
+    expect(prompt).toContain(`remi message send ${task.issueSessionId}`);
+    expect(prompt).toContain("cat <<'MULTIREMI_MESSAGE'");
     // Delegation happens via comments inside this issue; the squad block must
     // never teach issue creation (the follow-up-issue guidance lives elsewhere).
     const squadSection = prompt.slice(prompt.indexOf("## Squad Coordination"), prompt.indexOf("## Agent Instructions"));

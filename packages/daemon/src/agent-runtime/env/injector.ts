@@ -49,7 +49,8 @@ export function buildTaskEnv(task: AgentTask, opts: BuildTaskEnvOptions): Record
     MULTIREMI_DAEMON_PORT: String(opts.daemonPort),
     MULTIREMI_WORKSPACE_ID: task.workspaceId,
     MULTIREMI_AGENT_NAME: agent?.name ?? "",
-    MULTIREMI_TASK_ID: task.id,
+    MULTIREMI_TURN_ID: task.turn_id ?? "",
+    MULTIREMI_ATTEMPT_ID: task.attempt_id ?? task.id,
     ...(task.runtimeWorkspaceId ? { MULTIREMI_RUNTIME_WORKSPACE_ID: task.runtimeWorkspaceId } : {}),
     ...(task.project?.id ? { MULTIREMI_PROJECT_ID: task.project.id } : {}),
     ...((task.issueId ?? task.issue_id) ? { MULTIREMI_ISSUE_ID: String(task.issueId ?? task.issue_id) } : {}),
@@ -72,12 +73,14 @@ export function buildTaskEnv(task: AgentTask, opts: BuildTaskEnvOptions): Record
     serverUrl: opts.serverUrl,
     token: taskAuthToken,
     workspaceId: task.workspaceId,
-    taskId: task.id,
+    turnId: task.turn_id,
+    attemptId: task.attempt_id ?? task.id,
     repositoryUrls: task.repos.map((repo) => repo.url),
   });
   // AcpProvider merges this overlay on top of the daemon process environment.
   // Keep an explicit tombstone so an inherited daemon token cannot reappear.
   if (!taskAuthToken) brokerEnv.MULTIREMI_TOKEN = "";
+  delete brokerEnv.MULTIREMI_TASK_ID;
   if (agent?.provider === "codex" && isSideConversation(task)) {
     preserveSideCodexInstructions(brokerEnv);
   }

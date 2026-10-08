@@ -5,16 +5,16 @@ import type { AgentTask } from "@multiremi/core/types/agent";
 import { renderWithI18n } from "../../test/i18n";
 import { TaskTraceDialog } from "./task-trace-dialog";
 
-const { getTaskTrace, getTaskPrompt, handlers, subscriptionEnabled } = vi.hoisted(() => ({
+const { getTaskTrace, getTurnInput, handlers, subscriptionEnabled } = vi.hoisted(() => ({
   getTaskTrace: vi.fn(),
-  getTaskPrompt: vi.fn(),
+  getTurnInput: vi.fn(),
   handlers: { current: null as null | Record<string, (...args: never[]) => void> },
   subscriptionEnabled: vi.fn(),
 }));
 
 vi.mock("@multiremi/core/api", async (importOriginal) => ({
   ...await importOriginal<typeof import("@multiremi/core/api")>(),
-  api: { getTaskTrace, getTaskPrompt, getAgent: vi.fn(), listRuntimes: vi.fn() },
+  api: { getTaskTrace, getTurnInput, getAgent: vi.fn(), listRuntimes: vi.fn() },
 }));
 
 vi.mock("@multiremi/core/realtime", () => ({
@@ -25,7 +25,7 @@ vi.mock("@multiremi/core/realtime", () => ({
 }));
 
 const task = {
-  id: "task-trace-1", agent_id: "", runtime_id: "", issue_id: "issue-1",
+  id: "task-trace-1", turn_id: "turn_1", agent_id: "", runtime_id: "", issue_id: "issue-1",
   status: "running", priority: 0, dispatched_at: null, started_at: null,
   completed_at: null, result: null, error: null, created_at: "2026-08-08T00:00:00Z",
 } as AgentTask;
@@ -47,7 +47,7 @@ function renderTrace(overrides: Partial<AgentTask> = {}) {
 
 beforeEach(() => {
   getTaskTrace.mockReset();
-  getTaskPrompt.mockReset();
+  getTurnInput.mockReset();
   subscriptionEnabled.mockReset();
   handlers.current = null;
   HTMLElement.prototype.scrollTo = vi.fn();
@@ -78,9 +78,9 @@ describe("task trace dialog", () => {
     await screen.findByText("1 tool call");
     await act(async () => handlers.current?.onFrames?.([{ seq: 400, kind: "trace", payload: event(400) }] as never));
     fireEvent.click(screen.getByRole("button", { name: "Load more events" }));
-    await waitFor(() => expect(getTaskTrace).toHaveBeenCalledWith(task.id, 1, 200));
+    await waitFor(() => expect(getTaskTrace).toHaveBeenCalledWith(task.id, 1, 200, "turn_1"));
     fireEvent.click(await screen.findByRole("button", { name: "Back to beginning" }));
-    await waitFor(() => expect(getTaskTrace).toHaveBeenLastCalledWith(task.id, 0, 200));
+    await waitFor(() => expect(getTaskTrace).toHaveBeenLastCalledWith(task.id, 0, 200, "turn_1"));
     expect(screen.queryByText("Final answer")).toBeNull();
   });
 
@@ -148,7 +148,7 @@ describe("task trace dialog", () => {
     expect(getTaskTrace).toHaveBeenCalledTimes(1);
     expect(screen.queryByText("Final answer")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Load more events" }));
-    await waitFor(() => expect(getTaskTrace).toHaveBeenCalledWith(task.id, 2, 200));
+    await waitFor(() => expect(getTaskTrace).toHaveBeenCalledWith(task.id, 2, 200, "turn_1"));
     expect(screen.getAllByText("Hello world")).toHaveLength(2);
 
     await act(async () => {
@@ -190,7 +190,7 @@ describe("task trace dialog", () => {
 
   it("passes assignment fallback through to the Input Prompt view on 404", async () => {
     getTaskTrace.mockResolvedValue(page({ state: "not_found", source: null }));
-    getTaskPrompt.mockRejectedValue(Object.assign(new Error("prompt not recorded"), { status: 404 }));
+    getTurnInput.mockRejectedValue(Object.assign(new Error("prompt not recorded"), { status: 404 }));
     renderWithI18n(<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
       <TaskTraceDialog task={{ ...task, status: "queued" }} agentName="Agent" onOpenChange={() => {}} initialView="prompt" promptFallback={<p>Assignment from the turn</p>} />
     </QueryClientProvider>);
@@ -208,7 +208,7 @@ describe("task trace dialog", () => {
     await screen.findByText("2 tool calls");
     expect(getTaskTrace).toHaveBeenCalledTimes(1);
     fireEvent.click(screen.getByRole("button", { name: "Load more events" }));
-    await waitFor(() => expect(getTaskTrace).toHaveBeenCalledWith(task.id, 2, 200));
+    await waitFor(() => expect(getTaskTrace).toHaveBeenCalledWith(task.id, 2, 200, "turn_1"));
     expect(await screen.findByText("3 tool calls")).toBeInTheDocument();
     await act(async () => {
       handlers.current?.onFrames?.([
@@ -218,7 +218,7 @@ describe("task trace dialog", () => {
     });
     expect(screen.getByText("4 tool calls")).toBeInTheDocument();
     await act(async () => { handlers.current?.onGap?.({ from: 5, to: 5 } as never); });
-    await waitFor(() => expect(getTaskTrace).toHaveBeenCalledWith(task.id, 3, 200));
+    await waitFor(() => expect(getTaskTrace).toHaveBeenCalledWith(task.id, 3, 200, "turn_1"));
     expect(await screen.findByText("5 tool calls")).toBeInTheDocument();
   });
 

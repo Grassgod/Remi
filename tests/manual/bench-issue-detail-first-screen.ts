@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { issueMessagesPath } from "../unit/multiremi/unified-test-paths.js";
 /**
  * MUL-385: Issue detail first-screen route harness.
  *
@@ -438,7 +439,7 @@ async function main(): Promise<void> {
       path: `/api/issues/${fixture.issueId}/timeline?issue_session_id=%40default&limit=40`,
       headers,
     },
-    { label: "comments (baseline only)", path: `/api/issues/${fixture.issueId}/comments`, headers },
+    { label: "comments (baseline only)", path: issueMessagesPath(store, fixture.issueId), headers },
   ];
 
   const results: CaseResult[] = [];

@@ -1,3 +1,4 @@
+import { issueMessagesPath, mutateExecutionFixture } from "./unified-test-paths.js";
 import { afterAll, beforeAll, describe, expect, it, spyOn } from "bun:test";
 import type { Database } from "bun:sqlite";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -103,6 +104,8 @@ for (const backend of ["SQLite", "PostgreSQL"] as const) {
       const task = store.createTask({ agentId: agent.id, issueId: child.id, workspaceId: source, prompt: "Child work" });
       const taskToken = (await store.createTaskAccessToken(task, store.getWorkspaceMember(auth.sourceMember)!.userId!)).token;
       db.run("UPDATE multiremi_issues SET workspace_id = ? WHERE id = ?", [target, parent.id]);
+      db.run("UPDATE multiremi_issue_sessions SET workspace_id=? WHERE issue_id=?",[target,parent.id]);
+      db.run("UPDATE multiremi_conversation_heads SET workspace_id=? WHERE session_id IN (SELECT id FROM multiremi_issue_sessions WHERE issue_id=?)",[target,parent.id]);
       return { source, target, auth, parent, child, agent, task, taskToken };
     }
 
@@ -155,7 +158,7 @@ for (const backend of ["SQLite", "PostgreSQL"] as const) {
     async function completedTask(issueId: string, workspaceId: string) {
       const agent = store.createAgent({ name: "Completed worker", provider: "codex", workspaceId });
       const task = store.createTask({ issueId, agentId: agent.id, workspaceId, prompt: "Completed work" });
-      db.run("UPDATE multiremi_tasks SET status = 'completed' WHERE id = ?", [task.id]);
+      mutateExecutionFixture(db, "UPDATE multiremi_turn_execution_records SET status = 'completed' WHERE id = ?", [task.id]);
       store.updateIssue(issueId, { status: "done" });
       return task;
     }
@@ -184,7 +187,7 @@ for (const backend of ["SQLite", "PostgreSQL"] as const) {
 
       function moveLog(issueId: string) {
         const session = store.getOrCreateDefaultIssueSession(issueId);
-        return store.listConversationLogEntries(session.id).filter(row => row.kind === "system"
+        return store.listConversationLogEntries(session.id).filter(row => row.kind === "message"
           && row.metadata.type === "workspace_move_cleared");
       }
 
@@ -211,10 +214,10 @@ for (const backend of ["SQLite", "PostgreSQL"] as const) {
           }
           const log = moveLog(f.issue.id);
           expect(log).toHaveLength(4);
-          expect(log.map(row => row.metadata)).toEqual(rows.map(row => ({ type: "workspace_move_cleared",
+          expect(log.map(row => row.metadata)).toEqual(rows.map(row => ({ type: "workspace_move_cleared", execution_scope:"",
             ...(row.data as { field: string; name: string; assignee_type?: string }) })));
           for (const row of log) {
-            expect(row).toMatchObject({ kind: "system", author_type: "system", task_id: null, parent_id: null });
+            expect(row).toMatchObject({ kind: "message", sender_type: "platform", task_id: null, reply_to_id: null });
             for (const privateValue of [f.owner.id, f.project.id, f.source, ...f.labels.map(label => label.id), "#123456"])
               expect(JSON.stringify(row.metadata)).not.toContain(privateValue);
           }
@@ -234,7 +237,7 @@ for (const backend of ["SQLite", "PostgreSQL"] as const) {
         store.updateIssue(issue.id, { workspaceId: target });
         const log = moveLog(issue.id);
         expect(log).toHaveLength(names.length);
-        expect(log.map(row => row.metadata)).toEqual(expect.arrayContaining(names.map(name => ({ type: "workspace_move_cleared", field: "label", name }))));
+        expect(log.map(row => row.metadata)).toEqual(expect.arrayContaining(names.map(name => ({ type: "workspace_move_cleared", execution_scope:"", field: "label", name }))));
         for (const row of log) {
           expect(row.body_md).not.toContain("mention://");
           expect(row.body_md).not.toContain("https://");
@@ -445,9 +448,9 @@ for (const backend of ["SQLite", "PostgreSQL"] as const) {
           // The moving actor can read its v2 Log through membership in both workspaces.
           const log = await read(f.auth, f.auth.both, `/api/sessions/${session.id}/log`);
           const systemRows = log.entries.filter((row: { kind: string; metadata: { type?: string } }) =>
-            row.kind === "system" && row.metadata.type === "workspace_move_cleared");
+            row.kind === "message" && row.metadata.type === "workspace_move_cleared");
           expect(systemRows).toHaveLength(4);
-          expect(systemRows.map((row: { metadata: unknown }) => row.metadata)).toEqual(moveLog(f.issue.id).map(row => row.metadata));
+          expect(systemRows.map((row: { metadata: unknown }) => row.metadata)).toEqual(moveLog(f.issue.id).map(row => ({...row.metadata,attachments:[],reactions:[]})));
           const newActivities = timeline.filter((row: { action?: string }) => row.action === "workspace_move_cleared");
           expect(newActivities).toHaveLength(4);
           for (const privateValue of [f.owner.id, f.project.id, f.source, ...f.labels.map(label => label.id), "#123456",
@@ -496,6 +499,31 @@ for (const backend of ["SQLite", "PostgreSQL"] as const) {
         // residual source member ID, reported separately without changing it.
         const subscribers = await read(f.auth, f.auth.targetOnly, `/api/issues/${f.issue.id}/subscribers`);
         expect(subscribers.some((row: { user_id: string }) => row.user_id === f.auth.sourceMember)).toBe(true);
+      });
+
+      it(`${direction}: moved Issue status notifications use the target orphan inbox without creating or moving a Session`, async () => {
+        const f = await moveFixture("member");
+        const oldSession = store.getOrCreateDefaultIssueSession(f.issue.id);
+        store.addIssueSubscriber(f.issue.id, f.auth.sourceMember);
+        const sourceInbox = store.listInboxItems(f.auth.sourceMember);
+        store.updateIssue(f.issue.id, { workspaceId: f.target });
+        store.addIssueSubscriber(f.issue.id, f.auth.targetMember);
+        const prerequisite = store.createIssue({ title: "Target prerequisite", workspaceId: f.target, status: "todo" });
+        store.createIssueDependency(f.issue.id, { dependsOnIssueId: prerequisite.id, type: "blocked_by" });
+        store.updateIssue(f.issue.id, { status: "backlog" });
+        const sourceLog = store.listConversationLogEntries(oldSession.id);
+        const targetBefore = store.listInboxItems(f.auth.targetMember).length;
+
+        expect(() => store.updateIssue(prerequisite.id, { status: "done" })).not.toThrow();
+        const notifications = store.listInboxItems(f.auth.targetMember);
+        expect(notifications).toHaveLength(targetBefore + 1);
+        const notification = notifications.find(item => item.type === "dependency_satisfied")!;
+        expect(store.getMessage(notification.id)).toMatchObject({ session_id: `auto_orphan_inbox_${f.target}`,
+          message_kind: "status", to_member_id: f.auth.targetMember });
+        expect(store.getIssueSession(oldSession.id)?.workspaceId).toBe(f.source);
+        expect(store.listIssueSessions(f.issue.id, true).map(session => session.id)).toEqual([oldSession.id]);
+        expect(store.listConversationLogEntries(oldSession.id)).toEqual(sourceLog);
+        expect(store.listInboxItems(f.auth.sourceMember)).toEqual(sourceInbox);
       });
 
       it(`${direction}: MUL-480 real CLI batch-update moves a leaf with inherited fields`, async () => {
@@ -669,7 +697,7 @@ for (const backend of ["SQLite", "PostgreSQL"] as const) {
         const task = store.createTask({ issueId: issue.id, issueSessionId: session.id,
           agentId: agent.id, workspaceId: target, prompt: "Use target machine" });
         const now = Date.now();
-        db.run("UPDATE multiremi_tasks SET created_at = ? WHERE id = ?", [new Date(now - 200_000).toISOString(), task.id]);
+        mutateExecutionFixture(db, "UPDATE multiremi_turn_execution_records SET created_at = ? WHERE id = ?", [new Date(now - 200_000).toISOString(), task.id]);
         store.refreshQueuedCapabilityWaitReasons(now);
         expect(store.getTask(task.id)?.waitReason).toBeNull();
         expect(store.claimTask(targetRuntime.id)?.id).toBe(task.id);
@@ -965,10 +993,14 @@ for (const backend of ["SQLite", "PostgreSQL"] as const) {
       it(`${direction}: R1 legacy foreign children, dependencies and human requests are absent over HTTP`, async () => {
         const { source, target, auth, parent, child, task } = await legacyTree(reverse);
         db.run("UPDATE multiremi_issues SET workspace_id = ? WHERE id = ?", [source, parent.id]);
+        db.run("UPDATE multiremi_issue_sessions SET workspace_id=? WHERE issue_id=?",[source,parent.id]);
+        db.run("UPDATE multiremi_conversation_heads SET workspace_id=? WHERE session_id IN (SELECT id FROM multiremi_issue_sessions WHERE issue_id=?)",[source,parent.id]);
         const oldDecision = store.createIssueDecision(child.id, { kind: "question", title: "PRIVATE old decision" }, {
           type: "member", id: auth.sourceMember, taskId: null,
         });
         db.run("UPDATE multiremi_issues SET workspace_id = ? WHERE id = ?", [target, parent.id]);
+      db.run("UPDATE multiremi_issue_sessions SET workspace_id=? WHERE issue_id=?",[target,parent.id]);
+      db.run("UPDATE multiremi_conversation_heads SET workspace_id=? WHERE session_id IN (SELECT id FROM multiremi_issue_sessions WHERE issue_id=?)",[target,parent.id]);
         store.createTaskHumanRequest({ taskId: task.id, kind: "question", payload: { message: "PRIVATE child question" } });
         const peer = store.createIssue({ title: "PRIVATE prerequisite", workspaceId: source });
         db.run(`INSERT INTO multiremi_issue_dependencies (id, workspace_id, issue_id, depends_on_issue_id, type, created_at)
@@ -988,8 +1020,8 @@ for (const backend of ["SQLite", "PostgreSQL"] as const) {
           const multi = await read(auth, auth.targetOnly, `${prefix}/children?parent_ids=${parent.id}`);
           expect(JSON.stringify(multi)).not.toContain(child.title);
         }
-        const decisions = await read(auth, auth.targetOnly, `/api/issues/${parent.id}/decisions`);
-        expect(decisions.waiting_on_human).toEqual([]);
+        const decisions = await read(auth, auth.targetOnly, issueMessagesPath(store, parent.id) + "?message_kind=decision");
+        expect(decisions.messages).toEqual([]);
         expect(store.getIssueDecision(parent.id, oldDecision.id)).toBeNull();
         expect(store.countPendingIssueDecisions(parent.id)).toBe(0);
         expect((await read(auth, auth.targetOnly, `/api/issues/${parent.id}`)).pending_decision_count).toBe(0);
@@ -1022,16 +1054,15 @@ for (const backend of ["SQLite", "PostgreSQL"] as const) {
       });
 
       it(`${direction}: R3 a task decision with a legacy foreign parent escalates on its own source issue`, async () => {
-        const { source, target, auth, parent, child, taskToken } = await legacyTree(reverse);
+        const { source, target, auth, parent, child, agent, task } = await legacyTree(reverse);
         const events: string[] = [];
         const stop = store.onWorkspaceEvent((event) => { if (event.workspaceId === target) events.push(event.type); });
         try {
-          const response = await auth.request(taskToken, `/api/issues/${child.id}/decisions`, "POST", {
+          const decision = store.createIssueDecision(child.id, {
             kind: "question", title: "PRIVATE source decision", body: "PRIVATE body",
-          });
-          expect(response.status, await response.clone().text()).toBe(201);
-          expect((await response.json()).decision).toMatchObject({ workspaceId: source, issueId: child.id, status: "escalated" });
-          expect((await read(auth, auth.targetOnly, `/api/issues/${parent.id}/decisions`)).waiting_on_human).toEqual([]);
+          }, { type: "agent", id: agent.id, taskId: task.id });
+          expect(decision).toMatchObject({ workspaceId: source, issueId: child.id, status: "escalated" });
+          expect((await read(auth, auth.targetOnly, issueMessagesPath(store, parent.id) + "?message_kind=decision")).messages).toEqual([]);
           expect(store.listTasksForIssue(parent.id)).toEqual([]);
           expect(store.listInboxItems(auth.targetMember, target)).toEqual([]);
           expect(events).toEqual([]);
@@ -1083,7 +1114,7 @@ for (const backend of ["SQLite", "PostgreSQL"] as const) {
         expect(store.listInboxItems(auth.sourceMember, source)).toHaveLength(1);
         for (const path of [`/api/issues/${child.id}`, `/api/multiremi/issues/${child.id}`,
           `/api/issues?workspace_id=${source}`, `/api/multiremi/issues?workspace_id=${source}`,
-          `/api/inbox?workspace_id=${source}`, `/api/multiremi/inbox?workspace_id=${source}`]) {
+          `/api/inbox?workspace_id=${source}`, "/api/inbox"+`?workspace_id=${source}`]) {
           const body = await read(auth, auth.sourceOnly, path);
           expect(JSON.stringify(body)).not.toContain(parent.title);
           expect(JSON.stringify(body)).not.toContain(parent.key);

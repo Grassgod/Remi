@@ -16,12 +16,13 @@ runtime、请求 ID、核对结论及脱敏错误，不记录 token、凭据、�
 
 ## 切换前核对
 
-1. 带头大哥在 `v2-integration` 合入 main 时，把 `DAEMON_MIN_CLI_VERSION` 从占位的
-   `"0.2.83"` 改为第一个真正携带 v2 的 release tag。本段保持占位值，不把 v0.2.83 当成已发布 v2。
+1. 统一模型集成分支合入 main 前，发布负责人按[统一模型切换手册第 1 步](unified-model-cutover.md#切换顺序)
+   核对暂定候选号 `0.2.87` 并按实际发版同步首个统一模型正式版号。
+   替换文件、命令与定向测试以该步骤为准；`0.2.85`、`0.2.86` 不能接入新协议。
    只读核对：`rg -n 'DAEMON_MIN_CLI_VERSION' packages/contracts/src/daemon-protocol.ts`、
    `gh release view <目标-tag> --json tagName,publishedAt,assets`、
-   `gh run list --workflow release-build-check.yml --commit <目标-main-SHA> --json status,conclusion,headSha`。
-   通过条件：最低版本、目标 tag、release 资产和目标 SHA 一致，目标提交的完整 build check 成功。
+   发布门禁由发布负责人按集成时有效的规则核对；本轮修改不等待 CI、不打 tag、不发版。
+   通过条件：最低版本、目标 tag、release 资产和目标 SHA 一致，发布负责人确认有效发布门禁。
 2. `remi runtime list --json`、`remi daemon list --json`、`remi platform status --json`。
    通过条件：切换当天重新确认 4 个物理 daemon、8 个 runtime（不以文档名单替代实际清单），
    两个 provider 的归属和最新心跳正确，平台无冲突操作。将这 8 个 runtime ID 记在 MUL-401。

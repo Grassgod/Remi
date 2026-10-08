@@ -46,3 +46,5 @@ The existing run list shows target kind/name and queued/running/completed/failed
 Use `remi autopilot run list <autopilot> --limit 100 --offset 0 --output json` to page through runs. Responses include `schedule_target` and `schedule_batch_id`.
 
 The platform must be upgraded for new schedule configuration and durable queue processing. Existing daemon protocol fields carry the project/Wiki context and prompt; no new daemon release is required for this feature alone. No production automation is changed automatically by the migration.
+
+run-now 经统一发送入口往 `auto_*` 对话写 timer request 消息；run 账本引用 turn，重试仅新增 attempt。Issue 模式 request 落在 Issue 对话，自动化对话用 status 指向它。控制与证据用 `remi turn get <turn> --attempts`。

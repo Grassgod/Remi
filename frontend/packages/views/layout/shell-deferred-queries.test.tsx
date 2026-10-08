@@ -46,13 +46,15 @@ const listMyInvitations = vi.hoisted(() => vi.fn(async () => []));
 const listPins = vi.hoisted(() => vi.fn(async () => []));
 const getIssue = vi.hoisted(() => vi.fn(async () => ({ id: "iss_guard_pin", title: "Cached pin", status: "todo" })));
 const getProject = vi.hoisted(() => vi.fn(async () => ({ id: "prj_guard_pin", title: "Cached project", icon: null })));
-const getInboxSummary = vi.hoisted(() => vi.fn(async () => ({ unread: 0, attention: 0 })));
+const listInboxPage = vi.hoisted(() => vi.fn(async () => ({ items: [], unread_count: 0, attention_count: 0, next_cursor: null })));
 const getLatestCliVersion = vi.hoisted(() => vi.fn(async () => "1.0.0"));
 const listIssues = vi.hoisted(() => vi.fn(async () => ({ issues: [], total: 0 })));
 const listChatSessions = vi.hoisted(() => vi.fn(async () => []));
 const listPendingChatTasks = vi.hoisted(() => vi.fn(async () => ({ tasks: [] })).mockName("listPendingChatTasks"));
 const getTaskTrace = vi.hoisted(() => vi.fn(async () => ({ events: [], eof: true, state: "ok", next_after_seq: 0 })).mockName("getTaskTrace"));
-const listTaskHumanRequests = vi.hoisted(() => vi.fn(async () => []).mockName("listTaskHumanRequests"));
+const listDecisionMessages = vi.hoisted(() => vi.fn(async () => ({ messages: [], next_cursor: null })).mockName("listDecisionMessages"));
+const listMessages = vi.hoisted(() => vi.fn(async (_sessionId: string, options: { message_kind?: string }) =>
+  options.message_kind === "decision" ? listDecisionMessages() : { messages: [], next_cursor: null }));
 const listChatMessagesPage = vi.hoisted(() => vi.fn(async () => ({ messages: [], has_more: false, next_cursor: null })));
 const getSessionLog = vi.hoisted(() => vi.fn(async (_sessionId: string, _params: { anchor?: number }) => ({ entries: [] as SessionLogRow[], head_seq: 0, log_version: 1, has_more_before: false, has_more_after: false })));
 const subscribeStream = vi.hoisted(() => vi.fn(() => ({ unsubscribe: vi.fn() })));
@@ -141,8 +143,8 @@ beforeEach(() => {
   navigation.pathname = "/acme/issues";
   for (const spy of [
     listAgents, listSquads, getAgentTaskSnapshot, listRuntimes, listMyInvitations,
-    listPins, getInboxSummary, getLatestCliVersion, listIssues, listChatSessions,
-    listPendingChatTasks, listWorkspaces, getTaskTrace, listTaskHumanRequests,
+    listPins, listInboxPage, getLatestCliVersion, listIssues, listChatSessions,
+    listPendingChatTasks, listWorkspaces, getTaskTrace, listMessages, listDecisionMessages,
     listChatMessagesPage, getSessionLog, subscribeStream, getPendingChatTask, getIssue, getProject,
   ]) spy.mockClear();
   getSessionLog.mockImplementation(async (sessionId: string, params: { anchor?: number }) => {
@@ -162,13 +164,13 @@ beforeEach(() => {
     listPins,
     getIssue,
     getProject,
-    getInboxSummary,
+    listInboxPage,
     getLatestCliVersion,
     listIssues,
     listChatSessions,
     listPendingChatTasks,
     getTaskTrace,
-    listTaskHumanRequests,
+    listMessages,
     listChatMessagesPage,
     getSessionLog,
     getPendingChatTask,
@@ -334,14 +336,14 @@ describe("complete shell observer guard (MUL-472 R1)", () => {
     await waitFor(() => expect(listWorkspaces).toHaveBeenCalled());
     expect(startedKeys).toEqual([]);
     for (const request of [listAgents, listSquads, getAgentTaskSnapshot, listMyInvitations,
-      listPins, getInboxSummary, getLatestCliVersion, listIssues, listChatSessions, listPendingChatTasks]) {
+      listPins, listInboxPage, getLatestCliVersion, listIssues, listChatSessions, listPendingChatTasks]) {
       expect(request).not.toHaveBeenCalled();
     }
     act(() => { markRouteContentReady(navigation.pathname); });
     await act(async () => { flushIdle(); });
     await waitFor(() => {
       for (const request of [listAgents, listSquads, getAgentTaskSnapshot, listMyInvitations,
-        listPins, getInboxSummary, getLatestCliVersion, listIssues, listChatSessions, listPendingChatTasks]) {
+        listPins, listInboxPage, getLatestCliVersion, listIssues, listChatSessions, listPendingChatTasks]) {
         expect(request).toHaveBeenCalledTimes(1);
       }
     });
@@ -366,7 +368,7 @@ describe("complete shell observer guard (MUL-472 R1)", () => {
       [workspaceKeys.members("ws-1"), []], [projectKeys.list("ws-1"), { projects: [] }],
       [agentTaskSnapshotKeys.list("ws-1"), []], [pinKeys.list("ws-1", "user-1"), pins],
       [workspaceKeys.myInvitations(), []], [runtimeKeys.latestVersion(), "1.0.0"],
-      [inboxKeys.summary("ws-1"), { unread: 0, attention: 0 }],
+      [inboxKeys.summary("ws-1"), { items: [], unread_count: 0, attention_count: 0, next_cursor: null }],
       [workbenchKeys.pendingCount("ws-1"), { issues: [], total: 0 }],
       [issueKeys.childProgress("ws-1"), {}],
       [issueKeys.detail("ws-1", "iss_guard_pin"), { id: "iss_guard_pin", title: "Cached pin", status: "todo" }],
@@ -374,7 +376,7 @@ describe("complete shell observer guard (MUL-472 R1)", () => {
       [chatKeys.sessions("ws-1"), [{ id: sessionId, agent_id: "agt_guard", status: "active", title: "Cached chat" }]],
       [chatKeys.pendingTasks("ws-1"), { tasks: [] }],
       [chatKeys.pendingTask(sessionId), { task_id: taskId, status: "running" }],
-      [["task-trace", taskId], []], [chatKeys.humanRequests(taskId), []],
+      [["task-trace", taskId], []], [[...chatKeys.humanRequests(taskId), sessionId], []],
     ];
     for (const [key, data] of cached) client.setQueryData(key, data);
     act(() => { useChatStore.getState().setActiveSession(sessionId); });
@@ -401,7 +403,7 @@ describe("complete shell observer guard (MUL-472 R1)", () => {
       });
       expect(startedKeys).toEqual([]);
       expect(getTaskTrace).not.toHaveBeenCalled();
-      expect(listTaskHumanRequests).not.toHaveBeenCalled();
+      expect(listDecisionMessages).not.toHaveBeenCalled();
       expect(getIssue).not.toHaveBeenCalled();
       expect(getProject).not.toHaveBeenCalled();
       act(() => { markRouteContentReady(navigation.pathname); });
@@ -413,7 +415,7 @@ describe("complete shell observer guard (MUL-472 R1)", () => {
       });
       // The message/form observers need an open window even after the shell gate.
       expect(getTaskTrace).not.toHaveBeenCalled();
-      expect(listTaskHumanRequests).not.toHaveBeenCalled();
+      expect(listDecisionMessages).not.toHaveBeenCalled();
       expect(getSessionLog).not.toHaveBeenCalled();
       expect(subscribeStream).not.toHaveBeenCalled();
       for (const queryKey of [workspaceKeys.members("ws-1"), projectKeys.list("ws-1")]) {
@@ -421,7 +423,8 @@ describe("complete shell observer guard (MUL-472 R1)", () => {
       }
       act(() => { useChatStore.getState().setOpen(true); });
       await waitFor(() => {
-        expect(listTaskHumanRequests).toHaveBeenCalledTimes(1);
+        expect(listDecisionMessages).toHaveBeenCalledTimes(1);
+        expect(listMessages).toHaveBeenCalledWith(sessionId, { message_kind: "decision", cursor: undefined });
         expect(subscribeStream).toHaveBeenCalledTimes(1);
         expect(getPendingChatTask).toHaveBeenCalledTimes(1);
         for (const queryKey of [workspaceKeys.members("ws-1"), projectKeys.list("ws-1")]) {

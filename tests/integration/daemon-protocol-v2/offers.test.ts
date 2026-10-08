@@ -16,7 +16,7 @@ describe("A-3 real task offers", () => {
       const task = h.store.createTask({ agentId: agent.id, prompt: "no-op" });
       await waitFor(() => h.store.getTask(task.id)?.status === "completed", "offered task completion");
       expect(claim).not.toHaveBeenCalled();
-      expect(h.sockets.flatMap(socket => socket.frames).filter(frame => frame.t === "task.offer" && frame.p.id === task.id)).toHaveLength(1);
+      expect(h.sockets.flatMap(socket => socket.frames).filter(frame => frame.t === "task.offer" && frame.p.attempt_id === task.id)).toHaveLength(1);
       expect(h.ledger.filter(entry => entry.type === "res" && entry.frame.p.ok === true)).toHaveLength(1);
       expect(h.store.getTask(task.id)).toMatchObject({ result: "fixture" });
       expect(h.store.getTask(task.id)?.offeredAt).toBeString();
@@ -37,7 +37,7 @@ describe("A-3 real task offers", () => {
         else await h.restartServer();
         const task = h.store.createTask({ agentId: agent.id, prompt: `no-op ${round}` });
         await waitFor(() => h.store.getTask(task.id)?.status === "completed", `${fault} task ${round}`, 5_000);
-        const offers = h.sockets.flatMap(socket => socket.frames).filter(frame => frame.t === "task.offer" && frame.p.id === task.id);
+        const offers = h.sockets.flatMap(socket => socket.frames).filter(frame => frame.t === "task.offer" && frame.p.attempt_id === task.id);
         expect(offers).toHaveLength(1);
         const offer = offers[0]!;
         const replies = h.ledger.filter(entry => entry.type === "res" && entry.frame.re === String(offer.seq)

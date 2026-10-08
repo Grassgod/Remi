@@ -7,11 +7,11 @@ import { api, TraceEventSchema, mergeTraceWindow, TRACE_LIVE_WINDOW_SIZE, TRACE_
 import { useTraceStreamSubscription } from "@multiremi/core/realtime";
 
 /** Bounded recent activity for live cards; complete execution is read in the dialog. */
-export function useTaskTrace(taskId: string | null | undefined, enabled = true, live = false): TraceEvent[] {
-  return useTaskTraceState(taskId, enabled, live).events;
+export function useTaskTrace(taskId: string | null | undefined, enabled = true, live = false, turnId?: string): TraceEvent[] {
+  return useTaskTraceState(taskId, enabled, live, turnId).events;
 }
 
-export function useTaskTraceState(taskId: string | null | undefined, enabled = true, live = false): {
+export function useTaskTraceState(taskId: string | null | undefined, enabled = true, live = false, turnId?: string): {
   events: TraceEvent[]; closed: boolean; error: boolean;
 } {
   const qc = useQueryClient();
@@ -26,9 +26,9 @@ export function useTaskTraceState(taskId: string | null | undefined, enabled = t
     staleTime: Infinity,
     queryFn: async () => {
       if (!taskId) return [];
-      const head = await api.getTaskTrace(taskId, 0, 1);
+      const head = await api.getTaskTrace(taskId, 0, 1, turnId);
       const page = head.state === "ok" && head.head > 1
-        ? await api.getTaskTrace(taskId, Math.max(0, head.head - TRACE_LIVE_WINDOW_SIZE), TRACE_LIVE_WINDOW_SIZE)
+        ? await api.getTaskTrace(taskId, Math.max(0, head.head - TRACE_LIVE_WINDOW_SIZE), TRACE_LIVE_WINDOW_SIZE, turnId)
         : head;
       if (page.closed && currentTask.current === taskId) setTerminal({ taskId, closed: true, error: false });
       return mergeTraceWindow(page.events, qc.getQueryData<TraceEvent[]>(key) ?? [], TRACE_LIVE_WINDOW_SIZE, TRACE_LIVE_WINDOW_BYTES);

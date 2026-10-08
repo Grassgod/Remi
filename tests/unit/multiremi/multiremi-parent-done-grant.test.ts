@@ -1,6 +1,9 @@
+import { issueMessagesPath, requestMessageBody } from "./unified-test-paths.js";
+import { runTurnExecutionMutation } from '@multiremi/store/turn-execution-records.js';
+import type { SqlDatabase as UnifiedFixtureDatabase } from '@multiremi/store/db/postgres.js';
 import { afterEach, describe, expect, it } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
-import { createStore, db, resetMultiremiTestEnv } from "./helpers.js";
+import { createLocalStore as createStore, db, resetMultiremiTestEnv } from "./helpers.js";
 
 afterEach(resetMultiremiTestEnv);
 
@@ -78,7 +81,7 @@ describe("MUL-457 parent done grant", () => {
     const { taskToken, memberToken } = await tokens(store, owner.id);
     store.grantParentDone(parent.id, "local");
     store.createIssueComment(parent.id, { body: "Earlier summary", authorType: "agent", authorId: owner.id });
-    db!.run("UPDATE multiremi_issue_comments SET created_at = '2020-01-01T00:00:00.000Z' WHERE issue_id = ?", [parent.id]);
+    db!.run("UPDATE multiremi_conversation_log SET created_at = '2020-01-01T00:00:00.000Z' WHERE session_id = ?", [store.getOrCreateDefaultIssueSession(parent.id).id]);
     store.updateIssue(child.id, { status: "done" });
     store.createIssueComment(parent.id, { body: "Other agent summary", authorType: "agent", authorId: other.id });
     store.createIssueComment(parent.id, { body: "Member summary", authorType: "member", authorId: "local" });
@@ -93,10 +96,10 @@ describe("MUL-457 parent done grant", () => {
       reason: "final_summary_missing",
       data: { lastChildClosedAt: expect.any(String) },
     });
-    const comment = await app.request(`/api/issues/${parent.id}/comments`, {
-      method: "POST", headers: auth(taskToken), body: JSON.stringify({ body: "All child work is complete." }),
+    const comment = await app.request(issueMessagesPath(store, parent.id), {
+      method: "POST", headers: auth(taskToken), body: JSON.stringify(requestMessageBody(store, { body: "All child work is complete." }, { type: "role", ref: "issue_owner" })),
     });
-    expect(comment.status).toBe(201);
+    expect(comment.status).toBe(200);
     const accepted = await done();
     expect(accepted.status).toBe(200);
     expect(activities(store, parent.id, "issue_updated").length).toBeGreaterThan(0);
@@ -127,26 +130,28 @@ describe("MUL-457 parent done grant", () => {
 
   it("keeps a forged comment from satisfying A1 for the authorized agent", async () => {
     const { store, owner, other, parent, child, app } = setup();
+    // Give this fixture's canonical member the literal id used by its identity assertions.
+    db!.run("UPDATE multiremi_workspace_members SET id='local' WHERE id='mem_local_local'");
     const { taskToken, memberToken } = await tokens(store, owner.id);
     const otherTaskToken = (await tokens(store, other.id)).taskToken;
     store.grantParentDone(parent.id, "local");
     store.updateIssue(child.id, { status: "done" });
 
     // 1. Another agent posts with its own task token but claims the owner's id.
-    const forgedByAgent = await app.request(`/api/issues/${parent.id}/comments`, {
+    const forgedByAgent = await app.request(issueMessagesPath(store, parent.id), {
       method: "POST",
       headers: auth(otherTaskToken),
-      body: JSON.stringify({
+      body: JSON.stringify(requestMessageBody(store, {
         body: "Forged summary",
         author_type: "agent",
         author_id: owner.id,
         authorType: "agent",
         authorId: owner.id,
-      }),
+      }, { type: "role", ref: "issue_owner" })),
     });
-    expect(forgedByAgent.status).toBe(201);
+    expect(forgedByAgent.status).toBe(200);
     const agentComment = await forgedByAgent.json();
-    const storedAgentComment = store.getIssueComment(agentComment.id ?? agentComment.comment?.id);
+    const storedAgentComment = store.getIssueComment(agentComment.message.id);
     expect(storedAgentComment).toMatchObject({ authorType: "agent", authorId: other.id });
     const afterAgentForgery = await app.request(`/api/issues/${parent.id}`, {
       method: "PATCH", headers: auth(taskToken), body: JSON.stringify({ status: "done" }),
@@ -156,20 +161,20 @@ describe("MUL-457 parent done grant", () => {
 
     // 2. A member PAT posts with the same forged identity; the stored author is
     //    the member, so (b) still does not hold for the agent.
-    const forgedByMember = await app.request(`/api/issues/${parent.id}/comments`, {
+    const forgedByMember = await app.request(issueMessagesPath(store, parent.id), {
       method: "POST",
       headers: auth(memberToken),
-      body: JSON.stringify({
+      body: JSON.stringify(requestMessageBody(store, {
         body: "Member forged summary",
         author_type: "agent",
         author_id: owner.id,
         authorType: "agent",
         authorId: owner.id,
-      }),
+      }, { type: "role", ref: "issue_owner" })),
     });
-    expect(forgedByMember.status).toBe(201);
+    expect(forgedByMember.status).toBe(200);
     const memberComment = await forgedByMember.json();
-    const storedMemberComment = store.getIssueComment(memberComment.id ?? memberComment.comment?.id);
+    const storedMemberComment = store.getIssueComment(memberComment.message.id);
     expect(storedMemberComment).toMatchObject({ authorType: "member", authorId: "local" });
     const afterMemberForgery = await app.request(`/api/issues/${parent.id}`, {
       method: "PATCH", headers: auth(taskToken), body: JSON.stringify({ status: "done" }),
@@ -178,10 +183,10 @@ describe("MUL-457 parent done grant", () => {
     expect((await afterMemberForgery.json()).code).toBe("final_summary_missing");
 
     // 3. The authorized agent's own comment does satisfy (b).
-    const own = await app.request(`/api/issues/${parent.id}/comments`, {
-      method: "POST", headers: auth(taskToken), body: JSON.stringify({ body: "Owner summary" }),
+    const own = await app.request(issueMessagesPath(store, parent.id), {
+      method: "POST", headers: auth(taskToken), body: JSON.stringify(requestMessageBody(store, { body: "Owner summary" }, { type: "role", ref: "issue_owner" })),
     });
-    expect(own.status).toBe(201);
+    expect(own.status).toBe(200);
     const accepted = await app.request(`/api/issues/${parent.id}`, {
       method: "PATCH", headers: auth(taskToken), body: JSON.stringify({ status: "done" }),
     });
@@ -273,10 +278,13 @@ describe("MUL-457 parent done grant", () => {
     store.grantParentDone(parent.id, "local");
     store.updateIssue(child.id, { status: "done" });
     const finished = store.createTask({ agentId: owner.id, issueId: parent.id, prompt: "Final report" });
-    db!.run(
-      "UPDATE multiremi_tasks SET status = 'completed', result = ?, completed_at = ? WHERE id = ?",
+    (store as any).ctx.db.transaction(() => {
+      (store as any).ctx.lockWorkspaceRuntimeLifecycle("local");
+      runTurnExecutionMutation((store as any).ctx.db as UnifiedFixtureDatabase,
+      "UPDATE multiremi_turn_execution_records SET status = 'completed', result = ?, completed_at = ? WHERE id = ?",
       [JSON.stringify({ output: "All children delivered" }), new Date(Date.now() + 1_000).toISOString(), finished.id],
-    );
+      );
+    })();
     const otherParent = store.createIssue({ title: "Other parent", status: "in_progress", assigneeType: "agent", assigneeId: other.id });
     const otherChild = store.createIssue({ title: "Other child", status: "in_progress", parentIssueId: otherParent.id });
     store.updateIssue(otherChild.id, { status: "cancelled" });

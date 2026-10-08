@@ -149,9 +149,7 @@ export interface AgentRestoredPayload {
   agent: Agent;
 }
 
-export interface InboxNewPayload {
-  item: InboxItem;
-}
+export type InboxNewPayload = { item: InboxItem; index_only?: false } | { index_only: true; item?: never };
 
 export interface InboxReadPayload {
   item_id: string;

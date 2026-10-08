@@ -32,7 +32,7 @@ describe("Multiremi API — JIT Git credentials", () => {
     });
     const parent = store.getOrCreateDefaultIssueSession(issue.id);
     store.getOrCreateSessionAgentLane(parent.id, agent.id);
-    db!.run("UPDATE multiremi_session_agent_lanes SET runtime_id = ? WHERE session_id = ? AND agent_id = ?",
+    db!.run("UPDATE multiremi_session_lanes SET runtime_id = ? WHERE session_id = ? AND reader_type = 'agent' AND reader_id = ?",
       [runtime.id, parent.id, agent.id]);
     const side = store.createIssueSession(issue.id, { parentSessionId: parent.id, withCode: true });
     const task = store.createSessionTask(side.id, { agentId: agent.id, prompt: "Read the repository" });

@@ -8,7 +8,7 @@ import { InMemoryDaemonTraceReader } from "@multiremi/api/trace/daemon-trace-rea
 import { isTraceFileEvent } from "@multiremi/contracts/trace-file.js";
 import { TRACE_READ_MAX_BYTES } from "@multiremi/trace/trace-reader.js";
 import { CommandRegistry } from "../../../apps/remi/cli/core/index.js";
-import { collaborationCommandSpecs } from "../../../apps/remi/cli/commands/collaboration.js";
+import { unifiedCommandSpecs } from "../../../apps/remi/cli/commands/unified.js";
 import { oversizedTraceCases, TRACE_BUDGET_FIXTURE_TS, TRACE_SANITIZED_EVENT_MAX_BYTES, traceFiniteEventBytes } from "../multiremi/trace-budget-fixtures.js";
 
 const realFetch = globalThis.fetch;
@@ -29,7 +29,7 @@ const cases = [
   { name: "normal, oversized, normal events", input: { type: "text", content: "\u0001".repeat(180_000) }, surrounded: true },
 ];
 for (const { name, input, surrounded } of cases) {
-  it(`task.trace.read returns ${name} byte-for-byte and pages to eof through real HTTP`, async () => {
+  it(`turn.trace.read returns ${name} byte-for-byte and pages to eof through real HTTP`, async () => {
     process.env.MULTIREMI_SERVER_URL = "https://cli.example.test";
     process.env.MULTIREMI_WORKSPACE_ID = "local";
     process.env.MULTIREMI_TOKEN = "test-token";
@@ -59,19 +59,19 @@ for (const { name, input, surrounded } of cases) {
       globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
         const request = url instanceof Request ? url : new Request(url, init);
         if (new URL(request.url).pathname === "/api/cli/capabilities") {
-          return Response.json({ commands: [{ id: "task.trace.read", allowed: true }] });
+          return Response.json({ commands: [{ id: "turn.trace.read", allowed: true }] });
         }
         const response = await app.request(request);
         bodies.push(Buffer.byteLength(await response.clone().text()));
         return response;
       }) as typeof fetch;
       const registry = new CommandRegistry();
-      registry.register(collaborationCommandSpecs().find((spec) => spec.id === "task.trace.read")!);
+      registry.register(unifiedCommandSpecs().find((spec) => spec.id === "turn.trace.read")!);
       const read = async (afterSeq: number) => {
         const lines: string[] = [];
         console.log = (...parts: unknown[]) => { lines.push(parts.map(String).join(" ")); };
         try {
-          await registry.execute(["task", "trace", "read", task.id, "--after", String(afterSeq), "--output", "json"]);
+          await registry.execute(["turn", "trace", "read", store.getTurnForAttempt(task.id)!.id, "--after", String(afterSeq), "--output", "json"]);
         } finally {
           console.log = realLog;
         }

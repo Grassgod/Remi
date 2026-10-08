@@ -1,3 +1,4 @@
+import { readOfferedTurnInput, turnCompletion } from "../../fixtures/turn-report.js";
 import { afterEach, describe, expect, it, spyOn } from "bun:test";
 import { DaemonProtocolHarness, waitFor } from "./harness.js";
 import { daemonTraceService } from "@multiremi/api/daemon-protocol/trace-handlers.js";
@@ -23,6 +24,7 @@ function task(h: DaemonProtocolHarness) {
   const agent = h.store.createAgent({ name: "Trace fixture", provider: "claude" });
   const task = h.store.createTask({ agentId: agent.id, prompt: "trace" });
   expect(h.store.claimTask(rt(h))?.id).toBe(task.id);
+  readOfferedTurnInput(h.store, task.id);
   return task;
 }
 function snapshot(h: DaemonProtocolHarness, id: string) {
@@ -122,12 +124,13 @@ describe("memory trace over the real protocol", () => {
         const agent = h.store.createAgent({ name: providers[i]!, provider: providers[i]! });
         const t = h.store.createTask({ agentId: agent.id, prompt: "legacy" });
         expect(h.store.claimTask(runtimes[i]!)?.id).toBe(t.id);
+        readOfferedTurnInput(h.store, t.id);
         h.store.startTask(t.id); tasks.push(t.id);
         const old = new MultiremiTaskReportOutbox({ path: join(h.root, `${providers[i]}-outbox.db`),
           canSend: () => false, deliver: async () => {} });
         try {
           old.enqueue(t.id, "messages", { messages: [{ seq: 42, type: "text", content: providers[i] }] });
-          old.enqueue(t.id, "complete", { output: providers[i] });
+          old.enqueue(t.id, "turn.complete", turnCompletion(h.store, t.id, providers[i], {  }));
         } finally { await old.close(); }
       }
     } });
@@ -167,9 +170,7 @@ describe("memory trace over the real protocol", () => {
     });
     const transport = trace(h);
     const completion = transport.completion(t.id);
-    await h.client.event({ t: "task.complete", seq: 999_001, rt: rt(h), p: {
-      task_id: t.id, output: "answer", ...completion, trace: { ...completion.trace, head: 2, event_count: 2 },
-    } });
+    await h.client.event({ t: "turn.complete", seq: 999_001, rt: rt(h), p: turnCompletion(h.store, t.id, "answer", { ...completion, trace: { ...completion.trace, head: 2, event_count: 2 } }) });
     expect(snapshot(h, t.id).closed).toBe(false);
     transport.append(t.id, rt(h), [{ type: "text", content: "answer" }, { type: "usage" }]);
     transport.close(t.id, "completed");
@@ -181,9 +182,7 @@ describe("memory trace over the real protocol", () => {
 
     const empty = task(h); h.store.startTask(empty.id);
     transport.track(empty.id, rt(h));
-    await h.client.event({ t: "task.complete", seq: 999_002, rt: rt(h), p: {
-      task_id: empty.id, output: "empty", ...transport.completion(empty.id),
-    } });
+    await h.client.event({ t: "turn.complete", seq: 999_002, rt: rt(h), p: turnCompletion(h.store, empty.id, "empty", { ...transport.completion(empty.id) }) });
     transport.close(empty.id, "completed");
     expect(snapshot(h, empty.id)).toMatchObject({ head: 0, closed: true });
     expect(await daemonTraceService(h.layer).reader.read({ runtimeId: rt(h), taskId: empty.id }))

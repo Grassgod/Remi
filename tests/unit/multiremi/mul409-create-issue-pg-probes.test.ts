@@ -371,9 +371,9 @@ describe.skipIf(!pgAvailable)("MUL-409: in-transaction issue creation on Postgre
     const task = store.createSessionTask(session.id, { agentId: agent.id, prompt: "Probe lane reset" });
     // Make the lane look stale so the claim path resets it and writes the audit row.
     db.run(
-      `UPDATE multiremi_session_agent_lanes SET provider_session_id = 'expired', provider = 'claude',
+      `UPDATE multiremi_session_lanes SET provider_session_id = 'expired', provider = 'claude',
        runtime_id = ?, cursor_seq = 1, execution_fingerprint = 'expired'
-       WHERE session_id = ? AND agent_id = ?`,
+       WHERE session_id = ? AND reader_id = ?`,
       [runtimeId, session.id, agent.id],
     );
 

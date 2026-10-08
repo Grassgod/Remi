@@ -87,7 +87,7 @@ export function useTaskSessionInput(store: MultiremiStore, task: MultiremiTaskWi
   for (const entry of entries) {
     if (!triggers.size && entry.kind === "turn" && entry.task_id === task.id) triggers.add(entry.seq);
   }
-  const readSeq = store.getSessionAgentReadProgress(projection.session_id, task.agentId).seq;
+  const readSeq = store.getSessionAgentReadProgress(projection.session_id, task.agentId, task.id).seq;
   const coldStart = projection.mode === "bootstrap";
   projection.jsonl = taskSessionInput({ sessionId: projection.session_id, agentId: task.agentId,
     fromSeq: coldStart ? 0 : Math.min(readSeq, projection.to_seq),
@@ -106,7 +106,7 @@ export function useTaskSessionInput(store: MultiremiStore, task: MultiremiTaskWi
   const bound = response.bound_issue_log;
   if (bound?.session_id) {
     bound.content_jsonl = taskSessionInput({ sessionId: bound.session_id, agentId: task.agentId,
-      fromSeq: Math.min(store.getSessionAgentReadProgress(bound.session_id, task.agentId).seq, bound.to_seq), toSeq: bound.to_seq,
+      fromSeq: Math.min(store.getSessionAgentReadProgress(bound.session_id, task.agentId, task.id).seq, bound.to_seq), toSeq: bound.to_seq,
       entries: store.listConversationLogEntries(bound.session_id, { toSeq: bound.to_seq }),
       triggerSeqs: new Set() });
   }

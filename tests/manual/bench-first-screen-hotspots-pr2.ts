@@ -13,7 +13,7 @@ const percentile = (values: number[], fraction: number) => [...values].sort((a, 
 try {
   const results = [];
   for (const [label, path, extra] of [
-    ["inbox summary", "/api/inbox/summary?timezone_offset=480", {}],
+    ["inbox summary", "/api/inbox?timezone_offset=480", {}],
     ["attachment cold", `/api/attachments/${harness.attachmentId}/content`, {}],
     ["attachment conditional", `/api/attachments/${harness.attachmentId}/content`, { "If-None-Match": `"${harness.attachmentId}"` }],
     ["runtimes", "/api/runtimes", {}],

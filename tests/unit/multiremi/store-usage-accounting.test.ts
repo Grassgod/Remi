@@ -1,3 +1,4 @@
+import { runTurnExecutionMutation } from "@multiremi/store/turn-execution-records.js";
 import { afterEach, describe, expect, it, spyOn } from "bun:test";
 import { createHash } from "node:crypto";
 import type { SetUsagePriceInput, TaskUsageSnapshot, TaskUsageUnit, UsageMetrics } from "@multiremi/contracts/usage-accounting.js";
@@ -5,6 +6,7 @@ import { migrateLegacyUsage, validateUsageSnapshot, writeUsageSnapshot } from "@
 import { createLocalStore, db, resetMultiremiTestEnv } from "./helpers.js";
 import { MultiremiStore } from "@multiremi/store.js";
 import { assertRequestChargeIdentity, assertUsageIdentityBoundaries } from "./usage-accounting-boundary-cases.js";
+import { createReplacementAttemptWithinTransaction } from "@multiremi/store/turn-attempts.js";
 
 afterEach(resetMultiremiTestEnv);
 
@@ -33,6 +35,35 @@ const price = (overrides: Partial<SetUsagePriceInput> = {}): SetUsagePriceInput 
 });
 
 describe("normalized task consumption", () => {
+  it("keeps retry consumption on attempts while counting and rendering one turn", () => {
+    const { store, runtime, task } = fixture();
+    const attempt = db!.query("SELECT turn_id FROM multiremi_turn_attempts WHERE id=?").get(task.id) as { turn_id: string };
+    const turnId = attempt.turn_id;
+    store.reportTaskUsageSnapshot(task.id, snapshot([unit()]));
+    const nextRuntime = store.registerRuntime({ name: "retry-owner", provider: "claude", workspaceId: "local" });
+    const retry = db!.transaction(() => createReplacementAttemptWithinTransaction(db!, turnId, {
+      previousStatus: "failed", reason: "resume unsafe", cold: true,
+    }))();
+    runTurnExecutionMutation(db!, "UPDATE multiremi_turn_execution_records SET runtime_id=?,status='running',started_at=? WHERE id=?",
+      [nextRuntime.id, "2026-10-01T04:00:00.000Z", retry.attempt_id]);
+    store.reportTaskUsageSnapshot(retry.attempt_id, snapshot([unit({ inputTokens: 20, outputTokens: 3 })]));
+    store.completeTask(retry.attempt_id, { output: "recovered" });
+    const report = store.getUsageReport({ workspaceId: "local", days: null });
+    expect(report.summary).toMatchObject({ actual_total_tokens: 35, task_count: 1,
+      status_counts: { completed: 1, failed: 0, cancelled: 0, active: 0, queued: 0 } });
+    expect(store.getUsageReport({ workspaceId: "local", days: null, runtimeId: runtime.id }).summary.actual_total_tokens).toBe(12);
+    expect(store.getUsageReport({ workspaceId: "local", days: null, runtimeId: nextRuntime.id }).summary.actual_total_tokens).toBe(23);
+    expect(store.getRuntime(runtime.id)).toMatchObject({ taskCount: 1, failedTaskCount: 0, inputTokens: 10 });
+    expect(store.getRuntime(nextRuntime.id)).toMatchObject({ taskCount: 1, completedTaskCount: 1, inputTokens: 20 });
+    expect(store.getTask(task.id)?.usage[0]?.totalTokens).toBe(12);
+    expect(store.getTask(retry.attempt_id)?.usage[0]?.totalTokens).toBe(23);
+    expect(store.listUsageByAgent({ workspaceId: "local", days: 0 })).toMatchObject([{ totalTokens: 35, taskCount: 1 }]);
+    expect(store.listRuntimeDaily({ workspaceId: "local", days: 0 })).toMatchObject([{ taskCount: 1, failedCount: 0 }]);
+    expect(store.getConversationLogEntryById(turnId)?.metadata.usage).toMatchObject([{ inputTokens: 30, outputTokens: 5, totalTokens: 35 }]);
+    expect(db!.query("SELECT name FROM sqlite_master WHERE name='multiremi_tasks'").get()).toBeNull();
+    expect(db!.query("PRAGMA foreign_key_list(multiremi_usage_runs)").all()).toContainEqual(expect.objectContaining({ table: "multiremi_turn_attempts", from: "task_id" }));
+  });
+
   it("preserves reported floating-point amounts when transporting aggregate rows", () => {
     const { store, task } = fixture();
     store.reportTaskUsageSnapshot(task.id, snapshot([unit({ costAmount: Math.PI, costCurrency: "USD", costSource: "provider_reported" })]));
@@ -122,7 +153,7 @@ describe("normalized task consumption", () => {
   });
   it("labels historical aggregate dates as task attribution rather than fabricating request times", () => {
     const { store, task } = fixture();
-    db!.run("UPDATE multiremi_tasks SET status='completed',started_at='2026-10-01T23:30:00Z',completed_at='2026-10-02T00:30:00Z',usage=? WHERE id=?", [JSON.stringify([{ provider: "claude", model: "old", inputTokens: 100, outputTokens: 2 }]), task.id]);
+    runTurnExecutionMutation(db!, "UPDATE multiremi_turn_execution_records SET status='completed',started_at='2026-10-01T23:30:00Z',completed_at='2026-10-02T00:30:00Z',usage=? WHERE id=?", [JSON.stringify([{ provider: "claude", model: "old", inputTokens: 100, outputTokens: 2 }]), task.id]);
     migrateLegacyUsage(db!);
     store.reportTaskUsageSnapshot(task.id, snapshot([unit({ inputTokens: 5, outputTokens: 0, reportedTotalTokens: 5, occurredAt: "2026-10-01T23:40:00Z", timeProvenance: "provider_timestamp" })]));
     const report = store.getUsageReport({ workspaceId: "local", days: null });
@@ -163,7 +194,7 @@ describe("normalized task consumption", () => {
   it("limits model lifecycle metrics to the same lifecycle window as summary", () => {
     const { store, task } = fixture();
     store.reportTaskUsageSnapshot(task.id, snapshot([unit()]));
-    db!.run("UPDATE multiremi_tasks SET status='completed',started_at='2026-10-01T00:00:00Z',completed_at='2026-10-02T00:00:00Z' WHERE id=?", [task.id]);
+    runTurnExecutionMutation(db!, "UPDATE multiremi_turn_execution_records SET status='completed',started_at='2026-10-01T00:00:00Z',completed_at='2026-10-02T00:00:00Z' WHERE id=?", [task.id]);
     const report = store.getUsageReport({ workspaceId: "local", since: "2026-10-01T00:00:00Z", until: "2026-10-02T00:00:00Z" });
     expect(report.summary.status_counts.completed).toBe(0);
     expect(report.by_model[0]?.status_counts.completed).toBe(0);
@@ -176,7 +207,7 @@ describe("normalized task consumption", () => {
     store.setUsagePrice("local", price());
     store.reportTaskUsageSnapshot(task.id, snapshot([unit()]));
     const other = store.registerRuntime({ name: "empty retry", provider: "claude", workspaceId: "local" });
-    db!.run("UPDATE multiremi_tasks SET runtime_id=? WHERE id=?", [other.id, task.id]);
+    runTurnExecutionMutation(db!, "UPDATE multiremi_turn_execution_records SET runtime_id=? WHERE id=?", [other.id, task.id]);
     store.reportTaskUsageSnapshot(task.id, snapshot([], { runId: "empty-on-other-runtime" }));
     expect(store.getUsageReport({ workspaceId: "local", days: null }).summary).toMatchObject({ unknown_task_count: 1, complete: false });
     expect(store.getUsageReport({ workspaceId: "local", days: null, runtimeId: runtime.id }).summary).toMatchObject({ actual_total_tokens: 12, unknown_task_count: 0, complete: true });
@@ -203,7 +234,7 @@ describe("normalized task consumption", () => {
     writeUsageSnapshot(db!, task.id, snapshot([unit()], { runId: "historical" }), { historical: true });
     expect(db!.query("SELECT runtime_id,runtime_provenance FROM multiremi_usage_units WHERE task_id=?").get(task.id)).toMatchObject({ runtime_id: runtime.id, runtime_provenance: "trace_owner" });
     expect(store.getUsageReport({ workspaceId: "local", days: null, runtimeId: runtime.id }).summary.actual_total_tokens).toBe(12);
-    db!.run("UPDATE multiremi_tasks SET attempt=2 WHERE id=?", [task.id]);
+    runTurnExecutionMutation(db!, "UPDATE multiremi_turn_execution_records SET attempt=2 WHERE id=?", [task.id]);
     writeUsageSnapshot(db!, task.id, snapshot([unit()], { runId: "ambiguous-history" }), { historical: true });
     expect(db!.query("SELECT runtime_id,runtime_provenance FROM multiremi_usage_units WHERE task_id=? AND run_id=?").get(task.id, "ambiguous-history")).toMatchObject({ runtime_id: null, runtime_provenance: "unknown" });
   });
@@ -221,9 +252,9 @@ describe("normalized task consumption", () => {
     const firstProject = store.createProject({ title: "First project", workspaceId: "local" });
     const secondProject = store.createProject({ title: "Second project", workspaceId: "local" });
     const issue = store.createIssue({ title: "Execution project", projectId: firstProject.id, workspaceId: "local" });
-    db!.run("UPDATE multiremi_tasks SET issue_id=? WHERE id=?", [issue.id, task.id]);
+    runTurnExecutionMutation(db!, "UPDATE multiremi_turn_execution_records SET issue_id=? WHERE id=?", [issue.id, task.id]);
     store.reportTaskUsageSnapshot(task.id, snapshot([unit({ inputTokens: 10, outputTokens: 0 })]));
-    db!.run("UPDATE multiremi_tasks SET runtime_id=? WHERE id=?", [secondRuntime.id, task.id]);
+    runTurnExecutionMutation(db!, "UPDATE multiremi_turn_execution_records SET runtime_id=? WHERE id=?", [secondRuntime.id, task.id]);
     db!.run("UPDATE multiremi_issues SET project_id=? WHERE id=?", [secondProject.id, issue.id]);
     store.reportTaskUsageSnapshot(task.id, snapshot([unit({ inputTokens: 20, outputTokens: 0 })], { runId: "attempt2" }));
     store.reportTaskUsageSnapshot(task.id, snapshot([unit({ unitId: "late", inputTokens: 5, outputTokens: 0 })], { revision: 0 }));

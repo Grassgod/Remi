@@ -92,14 +92,18 @@ describe("read window subscription and hydration", () => {
     expect(reads.get).not.toHaveBeenCalled(); expect(delivered).not.toHaveBeenCalled();
   });
 
-  it("rejects a missing hydration row, then lets the next batch recover", async () => {
+  it("settles a deleted hydration row without its body, then hydrates the next batch", async () => {
     const replica = new IssueLogReplica("s");
     reads.get.mockResolvedValueOnce(windowOf([])).mockResolvedValueOnce(windowOf([row(10)]));
     const delivered = vi.spyOn(replica, "frames").mockImplementation(() => {});
-    await expect(replica.hydratedFrames("s", [frame(10)])).rejects.toThrow("unavailable");
-    expect(delivered).not.toHaveBeenCalled();
+    await replica.hydratedFrames("s", [frame(10)]);
+    expect(delivered).toHaveBeenCalledExactlyOnceWith("s", [{ ...frame(10), payload: {
+      session_id: "s", seq: 10, revision: 1, visibility: "hidden",
+    } }]);
+    delivered.mockClear();
     await replica.hydratedFrames("s", [frame(10)]);
     expect(delivered).toHaveBeenCalledOnce();
+    expect(delivered.mock.calls[0]?.[1][0]?.payload).toEqual(row(10));
   });
 
   it.each(["disconnect", "reset"])("discards an in-flight hydration result after %s", async action => {

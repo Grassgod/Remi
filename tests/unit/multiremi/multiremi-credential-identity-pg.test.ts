@@ -1,3 +1,4 @@
+import { requestMessageBody, sentTask } from "./unified-test-paths.js";
 /**
  * MUL-448 QA round 1 follow-up (B1-B4) on real PostgreSQL.
  *
@@ -113,7 +114,7 @@ describe.skipIf(!pgAvailable)("MUL-448 credential identity on PostgreSQL", () =>
   // Ruling (u), cmt_9z7t6hwo3xuh; Senior III, cmt_u7m8e7yitmai: /events uses turn.
   function assignmentEvents(sessionId: string, taskId: string) {
     return store.listSessionEvents(sessionId)
-      .filter((event) => event.kind === "turn" && event.taskId === taskId);
+      .filter((event) => event.id === taskId);
   }
 
   it("B1: a member's forged X-Agent-ID loses to the credential", async () => {
@@ -122,17 +123,17 @@ describe.skipIf(!pgAvailable)("MUL-448 credential identity on PostgreSQL", () =>
 
     const issue = store.createIssue({ title: "MUL448 R2 PG B1", workspaceId: fixture.workspaceId });
     const session = store.createIssueSession(issue.id, { title: "PG B1 session" });
-    const sessionTasksPath = "/api/issues/" + issue.id + "/sessions/" + session.id + "/tasks";
+    const sessionTasksPath = `/api/sessions/${session.id}/messages`;
     const taskResponse = await fixture.app.request(sessionTasksPath, {
       method: "POST", headers: forged,
-      body: JSON.stringify({ agent_id: fixture.agentId, prompt: "PG session task" }),
+      body: JSON.stringify(requestMessageBody(store, { agent_id: fixture.agentId, prompt: "PG session task" })),
     });
-    expect(taskResponse.status).toBe(201);
-    const taskId = ((await taskResponse.json()) as any).id as string;
+    expect(taskResponse.status).toBe(200);
+    const taskId = (await taskResponse.json()).message.id;
     const assigned = assignmentEvents(session.id, taskId);
     expect(assigned).toHaveLength(1);
     expect(assigned[0]!.authorType).toBe("member");
-    expect(assigned[0]!.authorId).toBe(fixture.ownerId);
+    expect(store.getWorkspaceMember(assigned[0]!.authorId!)?.userId).toBe(fixture.ownerId);
 
     const sessionsPath = "/api/issues/" + issue.id + "/sessions";
     const sessionResponse = await fixture.app.request(sessionsPath, {
@@ -172,10 +173,13 @@ describe.skipIf(!pgAvailable)("MUL-448 credential identity on PostgreSQL", () =>
     };
     const tokenResponse = await fixture.app.request(sessionTasksPath, {
       method: "POST", headers: tokenHeaders,
-      body: JSON.stringify({ agent_id: fixture.agentId, prompt: "PG token session task" }),
+      body: JSON.stringify(requestMessageBody(store, { agent_id: fixture.agentId, prompt: "PG token session task" })),
     });
-    expect(tokenResponse.status).toBe(201);
-    const tokenTaskId = ((await tokenResponse.json()) as any).id as string;
+    expect(tokenResponse.status).toBe(200);
+    const tokenResult = await tokenResponse.json();
+    expect(tokenResult.wake_applied).toBe("inbox_only");
+    expect(tokenResult.wake_reason).toBe("self");
+    const tokenTaskId = tokenResult.message.id;
     const tokenAssigned = assignmentEvents(session.id, tokenTaskId);
     expect(tokenAssigned).toHaveLength(1);
     expect(tokenAssigned[0]!.authorType).toBe("agent");
@@ -272,15 +276,15 @@ describe.skipIf(!pgAvailable)("MUL-448 credential identity on PostgreSQL", () =>
     const issue = store.createIssue({ title: "MUL448 R2 PG anon", workspaceId: fixture.workspaceId });
     const session = store.createIssueSession(issue.id, { title: "PG anon session" });
     const response = await open.request(
-      "/api/issues/" + issue.id + "/sessions/" + session.id + "/tasks",
+      `/api/sessions/${session.id}/messages`,
       {
         method: "POST",
         headers: { "Content-Type": "application/json", "X-Agent-ID": fixture.otherAgentId },
-        body: JSON.stringify({ agent_id: fixture.agentId, prompt: "PG anon session task" }),
+        body: JSON.stringify(requestMessageBody(store, { agent_id: fixture.agentId, prompt: "PG anon session task" })),
       },
     );
-    expect(response.status).toBe(201);
-    const taskId = ((await response.json()) as any).id as string;
+    expect(response.status).toBe(200);
+    const taskId = (await response.json()).message.id;
     const assigned = assignmentEvents(session.id, taskId);
     expect(assigned).toHaveLength(1);
     expect(assigned[0]!.authorType).toBe("agent");

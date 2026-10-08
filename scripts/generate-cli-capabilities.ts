@@ -3,6 +3,7 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { cliCommandInventory } from "../apps/remi/cli/index.js";
+import { RETIRED_CLI_ROUTES } from "../packages/server/src/api/retired-cli-routes.js";
 import {
   cliCoverageReport,
   cliRuntimeCapabilities,
@@ -22,7 +23,7 @@ const DOMAINS = [
   "context", "workspace", "member", "invite", "token",
   "project", "repo", "knowledge", "memory", "wiki",
   "issue", "comment", "session", "share", "label", "attachment",
-  "chat", "task",
+  "chat", "task", "message", "turn",
   "agent", "squad", "skill", "plugin",
   "runtime", "daemon", "autopilot", "scm", "messaging", "feishu",
   "inbox", "notification", "pin", "dashboard", "platform", "billing", "lark",
@@ -92,6 +93,9 @@ function main(): void {
     max_planned_routes: MAX_PLANNED_ROUTES,
     domains: DOMAINS,
     commands,
+    retired: Object.fromEntries(inventory.filter((entry) => entry.retired).map((entry) => [
+      `remi ${entry.path.join(" ")}`, { command: entry.id, replacement: entry.retired!.replacement },
+    ])),
     aliases: {
       ...Object.fromEntries(inventory.flatMap((entry) => entry.aliases
         .filter((alias) => alias.deprecatedSince)
@@ -123,7 +127,25 @@ function main(): void {
   console.log(`CLI capabilities: ${report.mapped} mapped / ${report.exempt} exempt / ${report.missing} missing (${report.total} routes)`);
 }
 
-function classifyRoute(route: string): CliManifestRoute {
+export function classifyRoute(route: string): CliManifestRoute {
+  if (/^GET \/api\/sessions\/:sessionId\/log(?:\/entry|\/locate)?$/.test(route)) return {
+    cli_exempt: true, category: "pure_ui", reason: "Read-only SSR and replica display wire (head, turn cards, window and location); CLI reads use message.list/get.",
+  };
+  if (RETIRED_CLI_ROUTES[route]) return {
+    cli_exempt: true, category: "retired_route", reason: `已移除：改用 ${RETIRED_CLI_ROUTES[route]}`,
+  };
+  if (route === "GET /api/inbox") return { command: "inbox" };
+  if (route === "GET /api/sessions/:sessionId/messages") return { command: "message.list" };
+  const unified: Record<string, string> = {
+    "POST /api/sessions/:sessionId/messages": "message.send",
+    "GET /api/messages/:id": "message.get", "PATCH /api/messages/:id": "message.edit",
+    "DELETE /api/messages/:id": "message.delete", "POST /api/messages/:id/resolve": "message.resolve",
+    "POST /api/messages/:id/reactions": "message.react", "POST /api/inbox/read": "inbox.read",
+    "GET /api/turns": "turn.list", "GET /api/turns/:id": "turn.get",
+    "POST /api/turns/:id/cancel": "turn.cancel", "POST /api/turns/:id/wrap-up": "turn.wrap-up",
+    "POST /api/turns/:id/retry": "turn.retry", "GET /api/turns/:id/trace": "turn.trace.read",
+  };
+  if (unified[route]) return { command: unified[route]! };
   const mapped = mappedResourceCommand(route);
   if (mapped) return { command: mapped };
   const exempt = exemptRoute(route);
@@ -184,9 +206,6 @@ function mappedResourceCommand(route: string): string | null {
     "GET /api/multiremi/issues/grouped": "issue.grouped",
     "GET /api/issues/search": "issue.search",
     "GET /api/multiremi/issues/search": "issue.search",
-    "GET /api/sessions/:sessionId/log": "session.log.window",
-    "GET /api/sessions/:sessionId/log/entry": "session.log.get",
-    "GET /api/sessions/:sessionId/log/locate": "session.log.locate",
     "GET /api/issues/children": "issue.children",
     "GET /api/multiremi/issues/children": "issue.children",
     "GET /api/issues/child-progress": "issue.child-progress",
@@ -848,4 +867,4 @@ function normalizeAction(value: string): string {
   return value.replace(/[^a-zA-Z0-9]+/g, "_").replace(/^_+|_+$/g, "") || "update";
 }
 
-main();
+if (import.meta.main) main();

@@ -2,6 +2,8 @@
 
 ## Status
 
+被 ADR 0013 修订：消息、收件箱与轮的当前模型取代旧命令和任务入口；下文保留决策史实。
+
 Accepted (MUL-400 E3, child issue MUL-409). Ships with the S2 PR, stacked on
 S1 (`docs/adr/0003-parent-status-derived-from-children.md`).
 

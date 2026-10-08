@@ -1,3 +1,14 @@
+import { ensureTurnListIndexes } from './turn-list-indexes.js';
+import { openSqliteDatabase } from './db/sqlite.js';
+import { widenAttemptCounters,separateLaneProviderProgress } from './inbox/attempt-counters.js';
+import { migrateAttemptInput } from './inbox/attempt-input.js';
+import { createMemberInboxReadProjection } from './inbox/member-records.js';
+import { runUnifiedModelMigration, unifiedModelPreflight, UnifiedModelPreflightError, collectUnifiedBeforeReport, writeUnifiedModelReport } from "./unified-model-migration.js";
+import { UNIFIED_LANE_SWEEP_INDEX, UNIFIED_MODEL_MIGRATION } from "./unified-model-schema.js";
+import { prepareMigrationReportDirectory, resolveMigrationReportDirectory } from "./migration-report-directory.js";
+import { foldDecisionRecords } from './inbox/decision-migration.js';
+import { createDecisionReadProjections } from "./inbox/decision-records.js";
+import { foldAgentReadState } from "./inbox/lane-migration.js";
 import { CHAT_ISSUE_DECOUPLED_FINGERPRINT, chatTaskRetryParentSql } from "@multiremi/store/helpers.js";
 import { ensureUsageAccountingSchema } from "@multiremi/store/usage-accounting.js";
 import { syncRuntimeExecutionGroups } from "@multiremi/store/execution-groups.js";
@@ -59,13 +70,49 @@ const CONVERSATION_LOG_MIGRATION = "20260927_conversation_log";
 const DEFAULT_OWNER_OPEN_ID = "ou_e6b7ffc662b392317275b817295c0b44";
 
 export function runMigrations(db: SqlDatabase, options: { dialect?: SqlDatabaseDialect } = {}): void {
+  const reportDir = resolveMigrationReportDirectory();
+  // Refuse an unwritable report directory before creating the SQLite lock file.
+  prepareMigrationReportDirectory(reportDir);
   // MUL-405: the lock spans the entire run, so a second process either waits for
   // a finished migration or proceeds exactly as before (SQLite, where the lock
   // is a no-op). It releases on throw as well as on return, so a failed
   // migration cannot strand it.
-  advisoryLock(db, MIGRATION_ADVISORY_LOCK_KEY, () =>
-    runMigrationsForDialect(db, resolveSqlDialect(db, options.dialect)));
+  const migrate = () => advisoryLock(db, MIGRATION_ADVISORY_LOCK_KEY, () => {
+    // The directory may have become unwritable while waiting for the lock.
+    prepareMigrationReportDirectory(reportDir);
+    const tables=existingTableNames(db);
+    if(tables.has("multiremi_users"))backfillOwnerExternalId(db);
+    if (tables.has("multiremi_feishu_bot_configs")) {
+      addColumnIfMissing(db, "multiremi_feishu_bot_configs", "sender_access_policy TEXT NOT NULL DEFAULT 'agent'");
+    }
+    if(tables.has('multiremi_schema_migrations') && db.query('SELECT id FROM multiremi_schema_migrations WHERE id=?').get(UNIFIED_MODEL_MIGRATION)){runUnifiedModelMigration(db,{reportDir:process.env.MULTIREMI_MIGRATION_REPORT_DIR});separateLaneProviderProgress(db);foldAgentReadState(db);createMemberInboxReadProjection(db);foldDecisionRecords(db);createDecisionReadProjections(db);migrateAttemptInput(db);widenAttemptCounters(db);ensureTurnListIndexes(db);db.exec(UNIFIED_LANE_SWEEP_INDEX);ensureUsageAccountingSchema(db);return;}
+    // Inspect the existing snapshot before bootstrap migrations can touch it.
+    const checks=unifiedModelPreflight(db);
+    if(checks.some(c=>!c.ok)){
+      writeUnifiedModelReport(reportDir,'before',collectUnifiedBeforeReport(db));
+      throw new UnifiedModelPreflightError(checks);
+    }
+    runMigrationsForDialect(db,resolveSqlDialect(db,options.dialect));
+    runUnifiedModelMigration(db,{reportDir:process.env.MULTIREMI_MIGRATION_REPORT_DIR});
+    separateLaneProviderProgress(db);foldAgentReadState(db);createMemberInboxReadProjection(db);foldDecisionRecords(db);createDecisionReadProjections(db);migrateAttemptInput(db);widenAttemptCounters(db);ensureTurnListIndexes(db);ensureUsageAccountingSchema(db);
+  });
+  // SQLite schema rebuilds toggle foreign_keys outside their transactions.
+  // Hold a separate SQLite writer lock across that entire sequence so another
+  // startup cannot inspect a half-migrated schema. SQLite releases it on exit.
+  const filename = (db as SqlDatabase & { filename?: string }).filename;
+  if (resolveSqlDialect(db, options.dialect) !== 'sqlite' || !filename || filename === ':memory:') return migrate();
+  const lock = openSqliteDatabase(`${filename}.migration-lock`, { create: true });
+  try {
+    lock.exec('PRAGMA busy_timeout=30000; BEGIN IMMEDIATE');
+    migrate();
+  } finally {
+    if (lock.inTransaction) lock.exec('ROLLBACK');
+    lock.close();
+  }
 }
+
+/** Historical schema bootstrap used by offline migration fixtures, never a runtime read path. */
+export function bootstrapPreUnifiedSchema(db:SqlDatabase):void { runMigrationsForDialect(db,resolveSqlDialect(db,db.dialect)); }
 
 /**
  * The migration body. The dialect is resolved once, up front, from declared
@@ -3502,7 +3549,6 @@ function runMigrationsForDialect(db: SqlDatabase, dialect: SqlDatabaseDialect): 
     addColumnIfMissing(db, "multiremi_conversation_heads", "agent_read_state TEXT");
   });
   ensureIssueNumberUniqueness(db, legacyGithubTables);
-  ensureUsageAccountingSchema(db);
 }
 
 /**

@@ -7,7 +7,7 @@ import {
   onIssueLabelsChanged,
   onIssueMetadataChanged,
 } from "../../issues/ws-updaters";
-import { onInboxIssueStatusChanged, onInboxIssueDeleted } from "../../inbox/ws-updaters";
+import { onInboxIssueStatusChanged, onInboxIssueDeleted, onInboxInvalidate } from "../../inbox/ws-updaters";
 import type {
   IssueUpdatedPayload,
   IssueCreatedPayload,
@@ -33,6 +33,7 @@ export function createIssueHandlers({ qc }: SyncContext): SyncModule {
     if (!wsId) return;
     qc.invalidateQueries({ queryKey: issueKeys.detail(wsId, issueId) });
     qc.invalidateQueries({ queryKey: issueKeys.decisions(wsId, issueId) });
+    onInboxInvalidate(qc, wsId);
   };
 
   return {

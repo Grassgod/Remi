@@ -1,3 +1,4 @@
+import { readOfferedTurnInput, turnCompletion } from "../fixtures/turn-report.js";
 import { expect, it } from "bun:test";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
@@ -46,6 +47,7 @@ it("presents continuous CoT through a real local daemon/API disconnect and resum
     const agent = h.store.createAgent({ name: "MUL-447 local fixture", provider: "claude" });
     const task = h.store.createTask({ agentId: agent.id, prompt: "Synthetic CoT subscription fixture" });
     expect(h.store.claimTask(runtimeId)?.id).toBe(task.id);
+    readOfferedTurnInput(h.store, task.id);
     h.store.startTask(task.id);
     // This manually claimed fixture must be advertised as active on reconnect.
     activeTaskIds.push(task.id);
@@ -84,9 +86,7 @@ it("presents continuous CoT through a real local daemon/API disconnect and resum
     const subscriptions = h.ledger.filter(entry => entry.type === "trace.subscribe");
     expect(subscriptions.map(entry => entry.frame.p.from_seq)).toEqual([2, 4]);
     expect(received.map(event => event.seq)).toEqual([3, 4, 5, 6, 7]);
-    await h.client.event({ t: "task.complete", seq: 999_447, rt: runtimeId, p: {
-      task_id: task.id, output: "Synthetic fixture complete", ...transport.completion(task.id),
-    } });
+    await h.client.event({ t: "turn.complete", seq: 999_447, rt: runtimeId, p: turnCompletion(h.store, task.id, "Synthetic fixture complete", { ...transport.completion(task.id) }) });
     transport.close(task.id, "completed");
     expect(await rendering).toEqual({ messageId: "om_existing" });
     expect(sender.checkpoint).toMatchObject({ throughSeq: 7, cot: { status: "finished" } });

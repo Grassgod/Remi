@@ -1,3 +1,4 @@
+import { DAEMON_MIN_CLI_VERSION } from "@multiremi/contracts/daemon-protocol.js";
 /**
  * MUL-417 — the connection layer's rules against the real store.
  *
@@ -95,7 +96,7 @@ async function runHello(
     p: {
       protocol: 2,
       daemon_id: hello.daemonId,
-      cli_version: "0.2.83",
+      cli_version: DAEMON_MIN_CLI_VERSION,
       launched_by: null,
       runtimes: hello.runtimeIds.map((runtimeId) => ({
         runtime_id: runtimeId,
@@ -341,7 +342,7 @@ describe("MUL-417 daemon protocol layer — per-runtime authorization", () => {
     await session.handleMessage(JSON.stringify({
       v: 2, t: "hello", ts: 1,
       p: {
-        protocol: 2, daemon_id: "dmn_a", cli_version: "0.2.83", launched_by: null,
+        protocol: 2, daemon_id: "dmn_a", cli_version: DAEMON_MIN_CLI_VERSION, launched_by: null,
         runtimes: [{ runtime_id: "rt_own", provider: "codex", max_concurrency: 1, active_task_ids: [] }],
         caps: [],
       },
@@ -457,7 +458,7 @@ describe("MUL-417 daemon protocol layer — handshake excludes a runtime without
     await session.handleMessage(JSON.stringify({
       v: 2, t: "hello", ts: 1,
       p: {
-        protocol: 2, daemon_id: "dmn_a", cli_version: "0.2.83", launched_by: null,
+        protocol: 2, daemon_id: "dmn_a", cli_version: DAEMON_MIN_CLI_VERSION, launched_by: null,
         runtimes: [
           { runtime_id: "rt_ok", provider: "codex", max_concurrency: 1, active_task_ids: [] },
           { runtime_id: "rt_missing", provider: "codex", max_concurrency: 1, active_task_ids: [] },
@@ -537,7 +538,7 @@ describe("MUL-417 daemon protocol layer — handshake excludes a runtime without
     await session.handleMessage(JSON.stringify({
       v: 2, t: "hello", ts: 1,
       p: {
-        protocol: 2, daemon_id: "dmn_a", cli_version: "0.2.83", launched_by: null,
+        protocol: 2, daemon_id: "dmn_a", cli_version: DAEMON_MIN_CLI_VERSION, launched_by: null,
         runtimes: [{ runtime_id: "rt_b", provider: "codex", max_concurrency: 1, active_task_ids: [] }],
         caps: [],
       },
@@ -649,7 +650,7 @@ describe("MUL-417 daemon protocol layer — one gone runtime must not close the 
     await session.handleMessage(JSON.stringify({
       v: 2, t: "hello", ts: 1,
       p: {
-        protocol: 2, daemon_id: "dmn_a", cli_version: "0.2.83", launched_by: null,
+        protocol: 2, daemon_id: "dmn_a", cli_version: DAEMON_MIN_CLI_VERSION, launched_by: null,
         runtimes: [
           { runtime_id: "rt_keep", provider: "codex", max_concurrency: 1, active_task_ids: [] },
           { runtime_id: "rt_drop", provider: "codex", max_concurrency: 1, active_task_ids: [] },
@@ -709,7 +710,7 @@ describe("MUL-417 daemon protocol layer — one gone runtime must not close the 
     await session.handleMessage(JSON.stringify({
       v: 2, t: "hello", ts: 1,
       p: {
-        protocol: 2, daemon_id: "dmn_a", cli_version: "0.2.83", launched_by: null,
+        protocol: 2, daemon_id: "dmn_a", cli_version: DAEMON_MIN_CLI_VERSION, launched_by: null,
         runtimes: [{ runtime_id: "rt_one", provider: "codex", max_concurrency: 1, active_task_ids: [] }],
         caps: [],
       },

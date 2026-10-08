@@ -19,7 +19,7 @@ import {
   rewriteInboxReadState,
   STUBBED_WRITES,
   stubbedReadResponseBody,
-  stubbedWriteItemId,
+  type StubbedReadState,
 } from "./stub-writes";
 
 export const TOKEN_ENV = "MULTIREMI_QA_WEB_TOKEN";
@@ -71,7 +71,8 @@ export interface ApiCollectors {
    */
   stubbedWrites: StubbedWrite[];
   /** Item ids this context has stubbed a mark-read for. */
-  stubbedItemIds: Set<string>;
+  stubbedReadState: StubbedReadState;
+  stubbedReadRequests: Set<string>;
   /**
    * Snapshot of the inbox bodies this context served, so a stubbed POST can answer
    * with the item the server would have returned. Keyed by item id.
@@ -89,7 +90,7 @@ export interface ApiCollectors {
   inboxTarget: Record<string, unknown> | null;
   /** True once a first-page response had to have the target added. */
   inboxInjected: boolean;
-  /** GET `/api/inbox/page` responses served before the first stubbed write. */
+  /** GET `/api/inbox` responses served before the first stubbed write. */
   inboxPageRequestsBeforeStub: number;
   /** Stubbed-write counters seen at the moment the first stub was fulfilled. */
   inboxPageRequestsAtFirstStub: number | null;
@@ -245,7 +246,8 @@ export function attachCollectors(
     responses: new Map(),
     blockedWrites: [],
     stubbedWrites: [],
-    stubbedItemIds: new Set(),
+    stubbedReadState: { cursors: new Map(), all: false },
+    stubbedReadRequests: new Set(),
     inboxItemSnapshot: new Map(),
     knownIds,
     webClientVersion: null,
@@ -263,11 +265,7 @@ export function attachCollectors(
       await continueWithStubbedReadState(route, method, url, collectors);
       return;
     }
-    // The allow-list is explicit and one entry long; anything else is aborted, so
-    // production still never receives a write. See `lib/stub-writes.ts` for why
-    // `POST /api/inbox/:id/read` is fulfilled rather than stopped: aborting it puts
-    // the inbox into a retry loop that delays the URL commit past the assertion
-    // window (measured on 209, MUL-384 `cmt_cxrxocj4vp3q`).
+    // Cursor writes are fulfilled in this browser; every other write is aborted.
     if (isStubbedWrite(method, url)) {
       const safePath = sanitizePath(url, "", collectors.knownIds);
       const existing = collectors.stubbedWrites.find(
@@ -280,12 +278,14 @@ export function attachCollectors(
       }
       if (existing) existing.attempts += 1;
       else collectors.stubbedWrites.push({ round, page: label, method, path: safePath, attempts: 1 });
-      const itemId = stubbedWriteItemId(url);
-      if (itemId) collectors.stubbedItemIds.add(itemId);
-      await route.fulfill({
-        status: 200,
-        json: stubbedReadResponseBody(itemId ?? "", collectors.inboxItemSnapshot),
-      });
+      try {
+        const input = route.request().postDataJSON();
+        const response = stubbedReadResponseBody(input, collectors.inboxItemSnapshot, collectors.stubbedReadState);
+        collectors.stubbedReadRequests.add(JSON.stringify(input));
+        await route.fulfill({ status: 200, json: response });
+      } catch {
+        await route.fulfill({ status: 400, json: { error: "Invalid cursor read" } });
+      }
       return;
     }
     const safePath = sanitizePath(url, "", collectors.knownIds);
@@ -346,7 +346,7 @@ async function continueWithStubbedReadState(
   // fixed cost identical in each deeplink round. Every other scenario keeps the
   // old behaviour (forward until a stub exists).
   const wantsInjection = collectors.inboxTarget !== null && isInboxRead;
-  if (!isInboxRead || (!wantsInjection && collectors.stubbedItemIds.size === 0)) {
+  if (!isInboxRead || (!wantsInjection && !collectors.stubbedReadState.all && collectors.stubbedReadState.cursors.size === 0)) {
     await route.continue();
     return;
   }
@@ -374,13 +374,13 @@ async function continueWithStubbedReadState(
       }
       await route.fulfill({
         response,
-        json: rewriteInboxReadState(injected, collectors.stubbedItemIds),
+        json: rewriteInboxReadState(injected, collectors.stubbedReadState),
       });
       return;
     }
     await route.fulfill({
       response,
-      json: rewriteInboxReadState(body, collectors.stubbedItemIds),
+      json: rewriteInboxReadState(body, collectors.stubbedReadState),
     });
   } catch {
     // The rewrite must never turn a readable API into a failed one; an unreadable
@@ -389,10 +389,10 @@ async function continueWithStubbedReadState(
   }
 }
 
-/** True for `GET /api/inbox/page` — the request the injection counts. */
+/** True for `GET /api/inbox` — the request the injection counts. */
 function isInboxPageRequest(method: string, rawUrl: string): boolean {
   const upper = method.toUpperCase();
-  return (upper === "GET" || upper === "HEAD") && pathnameWithoutQuery(rawUrl) === "/api/inbox/page";
+  return (upper === "GET" || upper === "HEAD") && pathnameWithoutQuery(rawUrl) === "/api/inbox";
 }
 
 /**
@@ -672,7 +672,7 @@ export async function ambientProbe(baseUrl: string, samples = 7): Promise<{
 
 /**
  * Proves the abort guard itself works: a deliberate POST to
- * `/api/inbox/unread-count` must be blocked. Without this, a silently broken
+ * `/api/messages/__guard__/resolve` must be blocked. Without this, a silently broken
  * guard looks identical to "the page never wrote anything".
  */
 export async function verifyWriteGuard(
@@ -680,7 +680,7 @@ export async function verifyWriteGuard(
   token: string,
   baseUrl: string,
 ): Promise<{ blocked: boolean; target: string; detail: string; allowedWrites: string[] }> {
-  const target = "/api/inbox/unread-count";
+  const target = "/api/messages/__guard__/resolve";
   const context = await mktContext(browser, token);
   const page = await context.newPage();
   let blocked = false;

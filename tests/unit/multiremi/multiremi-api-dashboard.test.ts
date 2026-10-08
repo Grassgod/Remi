@@ -1,3 +1,5 @@
+import { runTurnExecutionMutation } from "@multiremi/store/turn-execution-records.js";
+import { mutateExecutionFixture } from "./unified-test-paths.js";
 import { reportFrame } from "../../fixtures/report-session.js";
 // Compatibility dashboard endpoints project canonical facts in snake_case.
 // The unified Web dashboard reads /api/usage/report; these checks retain the
@@ -11,7 +13,7 @@ afterEach(resetMultiremiTestEnv);
 
 describe("Multiremi API — dashboard JSON endpoints", () => {
   function setFixtureTimestamps(taskId: string, iso: string): void {
-    db!.run("UPDATE multiremi_tasks SET status='completed',created_at=?,updated_at=?,dispatched_at=?,started_at=?,completed_at=? WHERE id=?",
+    runTurnExecutionMutation(db!, "UPDATE multiremi_turn_execution_records SET status='completed',created_at=?,updated_at=?,dispatched_at=?,started_at=?,completed_at=? WHERE id=?",
       [iso, iso, iso, iso, iso, taskId]);
     db!.run("UPDATE multiremi_usage_units SET occurred_at=? WHERE task_id=?", [iso, taskId]);
   }
@@ -263,8 +265,7 @@ describe("Multiremi API — dashboard JSON endpoints", () => {
     const seeded = seedRuntimeWithUsage(store, { runtimeId: "rt_window" });
     // Lifecycle changes cannot move consumption; each timeline has its own window.
     const stale = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
-    db!.run(
-      "UPDATE multiremi_tasks SET status='completed',created_at=?,updated_at=?,dispatched_at=?,started_at=?,completed_at=? WHERE id=?",
+    runTurnExecutionMutation(db!, "UPDATE multiremi_turn_execution_records SET status='completed',created_at=?,updated_at=?,dispatched_at=?,started_at=?,completed_at=? WHERE id=?",
       [stale, stale, stale, stale, stale, seeded.taskId],
     );
     expect(await (await app.request("/api/dashboard/usage/daily?workspace_id=local&days=7")).json()).toHaveLength(1);

@@ -67,7 +67,7 @@ function seedGroups(db: SqlDatabase): void {
     });
     if (rowCount) insertSyntheticMessages(db, id, rows(id, rowCount));
   };
-  for (const chat of ["chs_r1", "chs_r2"]) {
+  for (const chat of ["chat_r1", "chat_r2"]) {
     insertSyntheticChat(db, { id: chat, agentId: "agt_r", createdAt: T0 });
     for (let i = 0; i < 7; i++) task(`tsk_${chat}_${i}`, { chatSessionId: chat }, i === 6 ? 0 : i + 1);
   }
@@ -261,7 +261,7 @@ for (const backend of backends) {
     try {
       seedGroups(opened.db);
       // chat 24, task 213, issue_without_archive 151, issue_with_archive 142.
-      addCandidates(opened.db, "tsk_more_chat", 10, { chatSessionId: "chs_r1" });
+      addCandidates(opened.db, "tsk_more_chat", 10, { chatSessionId: "chat_r1" });
       addCandidates(opened.db, "tsk_more_one", 203);
       addCandidates(opened.db, "tsk_more_no_archive", 136, { issueId: "iss_r2" });
       addCandidates(opened.db, "tsk_more_archive", 138, { issueId: "iss_arch" });

@@ -1,3 +1,4 @@
+import { readOfferedTurnInput, turnCompletion, completionResponse } from "../../fixtures/turn-report.js";
 // MUL-74: outbox delivery is at-least-once, so every daemon report endpoint
 // must tolerate replays. Terminal replays must not re-trigger side effects
 // (issue comments, activities, follow-up tasks); message/usage replays must
@@ -15,28 +16,28 @@ describe("daemon report replay idempotency", () => {
   it("does not duplicate comments, activities, or follow-up tasks on complete/fail replays", async () => {
     const store = createStore();
     const app = createMultiremiApp({ store, authToken: "master-secret" });
-    const runtime = store.registerRuntime({ id: "rt_replay", name: "replay", provider: "claude", workspaceId: "local" });
+    const runtime = store.registerRuntime({ id: "rt_replay", daemonId: "fixture-reports", name: "replay", provider: "claude", workspaceId: "local" });
     const agent = store.createAgent({ name: "Replay Bot", provider: "claude", runtimeId: runtime.id });
     const issue = store.createIssue({ title: "Replay", workspaceId: "local" });
     const task = store.createTask({ agentId: agent.id, issueId: issue.id, workspaceId: "local", prompt: "x" });
     expect(store.claimTask(runtime.id)?.id).toBe(task.id);
+    readOfferedTurnInput(store, task.id);
     store.startTask(task.id);
 
-    const complete = () => reportFrame(store, "task.complete", {
-      task_id: task.id, output: "最终结论:一切正常。", session_id: "sess-1", work_dir: "/tmp/w",
-    });
+    const complete = () => reportFrame(store, "turn.complete", turnCompletion(store, task.id, "最终结论:一切正常。", { session_id: "sess-1", work_dir: "/tmp/w" }));
     const first = await complete();
-    expect(first).toEqual({ ok: true });
+    expect(first).toMatchObject({ ok: true });
+    expect(first).toEqual(completionResponse(store, task.id));
     expect(store.getTask(task.id)?.status).toBe("completed");
     const commentsAfterFirst = store.listIssueComments(issue.id).length;
     const activitiesAfterFirst = store.listIssueActivity(issue.id).filter((a) => a.type === "task_completed").length;
     const tasksAfterFirst = store.listTasks().length;
-    expect(commentsAfterFirst).toBe(1);
+    expect(commentsAfterFirst).toBe(2);
     expect(activitiesAfterFirst).toBe(1);
 
     // Replay the exact same terminal event (outbox retry after a lost ack).
     const second = await complete();
-    expect(second).toEqual({ ok: true });
+    expect(second).toEqual(first);
     expect(store.getTask(task.id)?.status).toBe("completed");
     expect(store.listIssueComments(issue.id).length).toBe(commentsAfterFirst);
     expect(store.listIssueActivity(issue.id).filter((a) => a.type === "task_completed").length).toBe(activitiesAfterFirst);

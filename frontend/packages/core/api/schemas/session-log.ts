@@ -11,6 +11,15 @@ export const SessionLogEntrySchema = z.object({
   resolved_by_type: z.string().nullable().default(null), resolved_by_id: z.string().nullable().default(null),
   metadata: z.record(z.string(), z.unknown()).default({}),
   created_at: z.string().default(""), updated_at: z.string().default(""),
+  sender_type: z.string().nullish(), sender_id: z.string().nullable().optional(),
+  to_type: z.string().nullish(), to_ref: z.string().nullable().optional(),
+  to_agent_id: z.string().nullable().optional(), to_member_id: z.string().nullable().optional(),
+  message_kind: z.string().nullish(), wake_applied: z.string().nullish(), wake_reason: z.string().nullish(),
+  reply_to_id: z.string().nullable().optional(), dedupe_key: z.string().nullish(),
+  options: z.preprocess(value => {
+    if (typeof value !== "string") return value;
+    try { return JSON.parse(value); } catch { return value; }
+  }, z.array(z.object({ label: z.string(), value: z.string(), description: z.string().optional() })).nullable().optional()),
   deleted_at: z.string().nullable().default(null),
 });
 export const IssueActivityEntrySchema = z.object({

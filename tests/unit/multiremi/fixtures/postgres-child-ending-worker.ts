@@ -8,7 +8,7 @@ import { PostgresSyncDatabase } from "@multiremi/store/db/postgres.js";
 import { MultiremiStore } from "@multiremi/store.js";
 
 type WorkerInput =
-  | { type: "init"; databaseUrl: string }
+  | { type: "init"; databaseUrl: string; migrationReportDir: string }
   | { type: "end"; childIssueId: string; status: string };
 
 let db: PostgresSyncDatabase | null = null;
@@ -17,6 +17,7 @@ let store: MultiremiStore | null = null;
 self.onmessage = (message: MessageEvent<WorkerInput>) => {
   try {
     if (message.data.type === "init") {
+      process.env.MULTIREMI_MIGRATION_REPORT_DIR = message.data.migrationReportDir;
       db = new PostgresSyncDatabase(message.data.databaseUrl);
       store = new MultiremiStore(db);
       self.postMessage({ phase: "ready" });

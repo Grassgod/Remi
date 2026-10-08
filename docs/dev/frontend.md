@@ -32,11 +32,25 @@ summary: Remi Web 控制台的包职责、认证与工作区接线、查询和�
 4. [工作区 layout](../../frontend/apps/web/app/%5BworkspaceSlug%5D/layout.tsx)从 URL slug 解析工作区，再调用 `setCurrentWorkspace(slug, id)`；它同时控制认证、加载和无访问权页面。当前不强制经过旧 onboarding 向导。
 5. [workspace-storage.ts](../../frontend/packages/core/platform/workspace-storage.ts)维护 slug/id 对及持久化命名空间，通知 WS 和 store 重载。请求头由 [HttpClient](../../frontend/packages/core/api/http.ts)读取当前 slug 生成。
 
+相对时间的首轮 SSR 与浏览器接管使用 RootLayout 传入的同一时间快照，由 [HydrationTimeProvider](../../frontend/packages/views/i18n/hydration-time.tsx) 提供。共享 `useTimeAgo` 在每个流式子树完成接管后使用浏览器当前时间；跨分钟、小时或天边界不会因首帧文本不一致重建日志和重新读取图片。
+
 API 代理目标由 [resolveRemoteApiUrl](../../frontend/apps/web/config/runtime-urls.ts)解析；[next.config.ts](../../frontend/apps/web/next.config.ts)配置 `/api`、`/ws` 等代理路径。改连接配置时同时核对服务端代理目标和浏览器侧 `WebProviders`，不要只改其中一端。
 
-Issue 详情页由 [server-log.ts](../../frontend/apps/web/features/issues/server-log.ts)在 800ms 预算内用 httpOnly cookie 读取详情、会话、最后 30 条日志、seq 0 和任务列表，注入同一棵 React 查询缓存；失败时只输出外壳，由 Bearer 客户端补齐。`?comment=<id>` 先经 `/log/locate` 找到所属会话与 seq，再取前后各 15 条的锚点窗口。任务列表同时供底部运行条和上方 `AgentLiveCard` 的首帧使用；运行卡片按实际内容占高：有 SSR/查询任务缓存时直接首绘，缓存缺失时首个 active-task 读取也作为揭示的布局门禁，结束（含失败）后才显示日志；后续 reconcile、订阅者和本地目录资源仍在揭示后处理，底部运行条在揭示后挂载并作为运行场景实际终点。尺寸已固定的图片不阻塞揭示；日志无尺寸图片由 SSR 和客户端统一预留 240px 固定框，晚到与失败都不改变行高，详见 ADR 0008。浏览器仍使用 Bearer 请求，不开启 cookieAuth；[IssueLogReplica](../../frontend/packages/core/session-log/issue-log.ts)把 SSR 窗口导入本地副本后继续订阅日志流，深链窗口两端按需分页，回到最新时换回尾部窗口。`body_html` 只消费服务端预渲染结果，缺失时由原客户端 Markdown 路径降级。
+Issue 详情页由 [server-log.ts](../../frontend/apps/web/features/issues/server-log.ts)在 800ms 预算内用 httpOnly cookie 读取详情、会话、最后 30 条日志、seq 0 和 `/api/turns?issue=...` 轮列表，注入同一棵 React 查询缓存；失败时只输出外壳，由 Bearer 客户端补齐。`?comment=<id>` 先经 `/log/locate` 找到所属会话与 seq，再取前后各 15 条的锚点窗口。轮列表同时供底部运行条和上方 `AgentLiveCard` 的首帧使用；运行卡片按实际内容占高：有 SSR/查询缓存时直接首绘，缓存缺失时首个轮状态读取也作为揭示的布局门禁，结束（含失败）后才显示日志；后续 reconcile、订阅者和本地目录资源仍在揭示后处理，底部运行条在揭示后挂载并作为运行场景实际终点。尺寸已固定的图片不阻塞揭示；日志无尺寸图片由 SSR 和客户端统一预留 240px 固定框，晚到与失败都不改变行高，详见 ADR 0008。浏览器仍使用 Bearer 请求，不开启 cookieAuth；[IssueLogReplica](../../frontend/packages/core/session-log/issue-log.ts)把 SSR 窗口导入本地副本后继续订阅日志流，深链窗口两端按需分页，回到最新时换回尾部窗口。`body_html` 只消费服务端预渲染结果，缺失时由原客户端 Markdown 路径降级。
 
 Issue 的说明与评论区之间保留横向分隔，评论使用独立边框卡片。`AgentLiveCard` 通过 `SessionLogList.afterRow` 放在说明行之后、与其他日志行同级，吸顶范围覆盖整个评论滚动内容；不能再把它嵌入单个日志行或固定高度的 `overflow-y-auto` 占位。没有活动任务时不留空盒子；多任务展开按内容占高，列表最多占半个视口并可滚动。旧会话或旧请求的迟到结果不会改变当前访问的显示门禁。缓存缺失时以一次首个状态读取替代永久的 128px 预留，不用提高揭示预算或放宽可见跳动门禁。日志头移出的控件及评论新内边距使用 `issue-cards-v2` 行高缓存版本，避免复用旧的 128px 占位或平铺行尺寸。真实几何回归在 [zero-jump-check.ts](../../tests/integration/zero-jump-check.ts) 的 `detail-layout` 场景覆盖桌面、手机、滚动吸顶及展开，`detail-running-empty-cache` 覆盖晚到状态与首屏锚点。
+
+## 统一消息与轮展示
+
+对话消息头使用 [MessageHeader](../../frontend/packages/views/common/message-header.tsx) 显示收件人/角色、message_kind 与实际 wake_applied，wake_reason 用作提示；未知显示枚举保留原字符串。Issue 与 Chat 优先识别 canonical 消息头，保留的 metadata.envelope 不会把正常消息变成系统详情。Chat 乐观发送以 canonical dedupe_key 匹配日志行；日志确认后只显示服务端正文，编辑替换正文，删除或隐藏不会复活本地草稿。Issue 与 Chat 的轮行消费服务端从 multiremi_turns 投影的卡片，卡片不自行制造工作轮或用户消息。
+
+Chat 列表和详情的未读数来自创建者对应的 workspace member lane：只计 cursor_seq 之后、发给该成员且 shown/未删除的消息。自动已读经统一 inbox/read 推进同一游标，随后刷新会话列表保持已读；新消息到达后才再次标读。
+
+[TurnControls](../../frontend/packages/views/common/turn-controls.tsx) 展开时才读取 attempts，查看日志时传选中 attempt_id；历史日志与当前尝试独立。失败/取消轮可以暖重试或冷重试，服务端返回同一 turn.id 和新的 current_attempt_id。输入弹窗按需读取 turn input 的完整 `(from_seq,to_seq]` 消息与 legacy_prompt，不在首屏逐行展开。
+
+Chat 队列读取发给当前 agent、位于实际 cursor_seq 之后的消息；编辑/删除使用 message ID，不提供 prioritize。删除帧的 `fields.deleted_at` 会立即移除副本显示行并保留 revision 水位；IssueLogReplica 以 C7 快照决定行是否存在，只为仍在快照中的行保留已补齐的显示字段，避免旧窗口合并回已删正文。HTTP/SSR 窗口导入完成后才应用完整快照，避免 seq 0 和正文分批写入时丢失首屏行；live entry 的成功回读若已找不到该行，则传递最小隐藏标记，保留同批其他帧，网络与接口失败仍上报错误。重连重放或刷新回填的旧行不能恢复正文，主消息区也过滤带 `deleted_at` 的 canonical 消息。409 消费冲突会刷新队列并保留草稿供复制。消息附件发送后固定，编辑正文不会静默重绑附件；只有原发送人显示编辑/删除入口。回归见 [ChatWindow 日志链路集成测试](../../frontend/packages/views/chat/components/chat-window-log.integration.test.tsx)和 [IssueLogReplica 测试](../../frontend/packages/core/session-log/issue-log.test.ts)。
+
+决定面板按需查各 Issue 对话的 decision 消息；选项提交 value，答复携带原 decision 的 reply_to_id 和它的 session_id。权限/提问表单发送结构化 response，不走退役的 task/issue 答复端点。回答与记录通过 canonical reply 消息展示；表单失败保留输入，解决不自动标读。
 
 评论与会话日志的 [EntryHtml](../../frontend/packages/views/common/session-log/entry-html.tsx) 会把服务端 `div[data-type="fileCard"]` 增强成统一附件卡片。静态 [entry-html.css](../../frontend/packages/views/common/session-log/entry-html.css) 在首屏给每个槽位预留固定 40px（32px 卡片加上下各 4px 间距），普通和紧凑密度共用；图片与 HTML 文件也保持卡片外观，预览在弹窗中打开。附件记录通过 `attachments` 传入 provider，预览与下载按附件 ID 走现有链路；没有记录时使用 URL 模式，不合法 href 只显示文件名。
 
@@ -65,10 +79,12 @@ WSClient → useRealtimeSync → sync/<领域>.ts
 | 任务列表 UI | [issues-page.tsx](../../frontend/packages/views/issues/components/issues-page.tsx) 的 `IssuesPage`，以及同目录 `board-view.tsx`、`list-view.tsx`、`swimlane-view.tsx` |
 | 任务详情与执行会话 | [issue-detail.tsx](../../frontend/packages/views/issues/components/issue-detail.tsx)、[issue-detail-main.tsx](../../frontend/packages/views/issues/components/issue-detail-main.tsx)、[session-mutations.ts](../../frontend/packages/core/issues/session-mutations.ts) |
 | 工作台待输入 / 待验收 / 失败恢复 | [issues/workbench.ts](../../frontend/packages/core/issues/workbench.ts) 的 `workbenchIssuesOptions`、`partitionReviewIssues`；[workbench-page.tsx](../../frontend/packages/views/workbench/components/workbench-page.tsx) |
-| 收件箱的分页、摘要与展示分组 | [inbox/queries.ts](../../frontend/packages/core/inbox/queries.ts) 的 `inboxPageOptions` / `inboxSummaryOptions`、[inbox/grouping.ts](../../frontend/packages/core/inbox/grouping.ts)、[inbox-page.tsx](../../frontend/packages/views/inbox/components/inbox-page.tsx) |
+| 收件箱的游标分页、未读计数与阅读位置 | [inbox/queries.ts](../../frontend/packages/core/inbox/queries.ts) 的 `inboxPageOptions` / `inboxSummaryOptions`、[inbox-page.tsx](../../frontend/packages/views/inbox/components/inbox-page.tsx) |
 | Issue 飞书话题设置 | [issue-topic-section.tsx](../../frontend/packages/views/settings/components/issue-topic-section.tsx)、[feishu-bot/queries.ts](../../frontend/packages/core/feishu-bot/queries.ts)、[workspaces router](../../packages/server/src/api/routers/workspaces.ts) 的 `/api/workspaces/:id/issue-topics` |
 | 平铺会话日志（切片、行高缓存、副本端口） | [session-log-list.tsx](../../frontend/packages/views/common/session-log/session-log-list.tsx)、[entry-html.tsx](../../frontend/packages/views/common/session-log/entry-html.tsx)、[use-row-heights.ts](../../frontend/packages/views/common/session-log/use-row-heights.ts)、[core/replica/port.ts](../../frontend/packages/core/replica/port.ts) |
 | 执行过程弹窗 | [task-trace-dialog.tsx](../../frontend/packages/views/common/task-transcript/task-trace-dialog.tsx)、[build-timeline.ts](../../frontend/packages/views/common/task-transcript/build-timeline.ts)、[agent-transcript-dialog.tsx](../../frontend/packages/views/common/task-transcript/agent-transcript-dialog.tsx)；点击后从 task trace API 分页读取，运行中由 trace socket 续传 |
+
+收件箱的 `inbox:new {index_only:true}` 由专用 handler 刷新；read/batch-read 由通用 prefix 合批刷新，二者均使同工作区的 inbox 和 message-detail 缓存失效。决定事件同样刷新详情，所以已读深链和读后仍停留详情会跟随外部答复重取。Chat 消息提交成功后，补充 turn 读取失败仍保留消息成功结果，由 pending 轮查询补齐状态。
 
 响应解析由各端点负责，目前并非所有历史方法都已调用 schema helper；新增或修改消费逻辑遵循前端规则。[createQueryClient](../../frontend/packages/core/query-client.ts)默认使用 `staleTime: Infinity`，列表是否更新依赖 mutation、WS 和重连处理，排查陈旧数据时应先核对这些路径。
 
@@ -86,7 +102,7 @@ Issue 顶部提示只使用详情响应的 `pending_decision_count` 和 `blocked
 
 Issue 的 seq 0 是标题与描述的例外：[IssueLogHead](../../frontend/packages/views/issues/components/issue-log-head.tsx) 用详情标题渲染只读标题，按同一 head 行的 `metadata.title` 精确移除一次 Markdown 前缀，避免改标题时混用版本。描述交给 `ReadonlyContent`，复用已有附件查询缓存并启用普通代码块复制；冷缓存只在下载点击时加载附件列表，按 URL 找到 ID 后调用已有下载入口刷新签名，首屏不请求附件列表。编辑和保存都只包含描述，不消费带标题的 `body_html`。服务端与 agent 的日志契约不变。
 
-收件箱页面使用 `useInfiniteQuery` 按游标每次读取 50 条；侧栏关注数与页内未读数来自独立的 `/api/inbox/summary`，摘要查询 `staleTime` 为 30 秒，不需要加载完整列表。筛选、日期分组、成功自动运行及同父单通知的折叠应用于已加载页；父单元数据由服务端投影提供，但只投影通知所属工作区内仍存在的父单，组内失败、卡住、待决定通知优先。父单分组头不提供整组归档，展开后逐条归档；行内操作始终保留固定宽度，悬停只改变可见性。链接指向尚未加载的通知时，页面继续加载后续页，读取失败不能当作通知不存在。读/归档 mutation 和 WS 更新同时维护旧列表缓存与分页缓存，并刷新摘要；具体分组和计数契约见[收件箱边界](../inbox-workbench-boundary.md)。
+收件箱使用 `GET /api/inbox` 的统一消息，每页 50 条，续页只使用服务端 opaque cursor。页内未读数与侧栏关注数分别来自响应的 `unread_count`、`attention_count`，覆盖所有可见对话；摘要读取同一端点的 limit=1，不拼合加载页计算。选择消息不会自动标读；「读到这里」以 session_id/to_seq 推进当前人的读游标，「全部已读」只发一次 `{all:true}`。没有逐条归档或归档批处理。深链接通过 message ID 读取详情，读游标写入失败保留原状态；查询键按工作区隔离，写入完成只刷新发起工作区。WS inbox 索引信号和可见会话日志帧触发缓存失效，前台 10 秒轮询提供恢复路径。
 
 集成设置中的 Issue 话题表单维护工作区 `settings.issueTopics`，与 concierge bot 配置分开：成员可读，owner/admin 可保存启用状态、目标群和项目范围。API 的 `project_ids: null` 表示不限制项目；UI 开启项目限制时要求至少选择一项，服务端仍校验项目归属。保存后失效当前工作区的 `feishu-bot` 查询树；端点经过 schema 解析。验证入口为[表单测试](../../frontend/packages/views/settings/components/issue-topic-section.test.tsx)和[端点测试](../../frontend/packages/core/api/endpoints/feishu-bot.test.ts)。
 
@@ -105,6 +121,8 @@ Issue 活动区默认显示普通评论、固定单行的派活、字段动态�
 `/log/locate` 返回 404 时，已删除或不存在的评论深链回退到该会话尾部；未指定会话时，所有会话均返回 404 才回退到默认会话。回退窗口与缺失目标状态一起就绪，渲染前取消锚点、高亮和临时系统细节，首个可见帧沿用普通浏览的贴底状态。SSR 用 `missingCommentId` 标记尾部 seed；旧 SSR seed 的目标不在窗口时，客户端重新定位后按同一规则回退。网络错误、5xx 和尾部读取失败仍保留错误态与重试。验证入口为 [日志窗口回归](../../frontend/packages/core/session-log/issue-log.test.ts)、上述 Issue 深链回归与 [SSR 读取回归](../../frontend/apps/web/features/issues/server-log.test.ts)。
 
 ## 实时更新与性能定位
+
+Chat 的消息姓名查询等待首屏就绪，并在窗口隐藏时停用成员、agent 和 squad 观察者；执行弹窗的姓名仅在打开时查询。`useActorName({ enabled: false })` 仍读取缓存供显示，缓存失效不会发起请求。首屏测试以消息收件箱和 decision 消息为数据源，不再模拟已退役的通知摘要或任务提问接口。附件发送使用统一消息接口；空附件列表省略 `attachment_ids`。
 
 Dashboard、Runtime 用量详情和列表费用共同读取[统一用量 report](../usage-accounting.md)，接线在 [usage/queries.ts](../../frontend/packages/core/usage/queries.ts)、[严格响应 schema](../../frontend/packages/core/api/schemas/usage-accounting.ts) 和[纯展示投影](../../frontend/packages/core/usage/view-model.ts)。[Dashboard](../../frontend/packages/views/dashboard/components/dashboard-page.tsx) 保留紧凑项目图标筛选、日/周分段、四 KPI、趋势切换及头像悬浮排序横条；[Runtime 用量区](../../frontend/packages/views/runtimes/components/usage-section.tsx) 保留三 KPI、费用环比、费用/Token 趋势、独立 26 周热力图、Agent/模型费用榜及默认折叠的日×模型明细。全部历史、365 天、刷新、四种 CSV 和服务端价格管理放在 More 菜单；宽表和热力图只在自身容器横向滚动。
 
@@ -129,7 +147,7 @@ Runtime 详情的 Codex / Claude Code 连接页通过 [provider-profile.ts](../.
 
 页面句柄显式 open/close，每个 tab 对同一 session 只声明一次兴趣；leader 按 tab 去重，最后一个 close 才退订。新 leader 宣告接管后，各存活页面重新声明，cursor 来自数据库的连续 head。dispose 终止 Worker 并结束 Web Lock 回调，使下一页可以接管。
 
-副本 schema v3 包含 `revision_watermarks`，Memory 也保存同样的 `(session_id, seq) → revision` 水位。删除或隐藏只移除展示行，不移除水位；流帧和 HTTP 窗口都拒绝不高于水位的 revision，交接重开后仍有效。水位随删除行数增长，不按 coverage 回收；session/log_version 重置、身份切换和整库清除同时删除水位。旧版缓存无法还原已丢失的删除 revision，因此按既有 schema_upgrade 路径清库并重新同步。
+副本 schema v3 包含 `revision_watermarks`，Memory 也保存同样的 `(session_id, seq) → revision` 水位。删除或隐藏只移除展示行，不移除水位；浏览器 log 出口的最小隐藏标记只带 session_id、seq、revision 和 visibility，同 revision 也移除已缓存正文，仍记录 coverage 并推进连续 head，不生成展示卡片或重复补洞。流帧和 HTTP 窗口都拒绝不高于水位的 revision，交接重开后仍有效。水位随删除行数增长，不按 coverage 回收；session/log_version 重置、身份切换和整库清除同时删除水位。旧版缓存无法还原已丢失的删除 revision，因此按既有 schema_upgrade 路径清库并重新同步。
 
 Worker 请求带 session 生命周期令牌和清库代次，窗口查询带唯一请求 ID。close、dispose、clear 使旧请求失效；清库从任意页转给 leader，删除全部表内容及旧 meta，并广播 cleared。仍挂载页面的引用计数保持连续，清后新数据可以重建副本；logout 的授权和 socket 退出由调用方处理。ack 的新鲜度传到所有页面，版本改变从重置后的 cursor 同步；逐洞补读等 Worker 写入确认后再响应。原夹具及 [QA 回归](../../tests/integration/replica-fixture/qa-run.ts)使用 C0 mock socket 和真实浏览器资源；离线场景在服务端订阅数为零之后追加数据。
 

@@ -742,14 +742,7 @@ describe("Multiremi notification channels", () => {
     const owner = current.listWorkspaceMembers("local")[0]!;
     // A task token carries userId=local, which resolves to the owner's membership.
     // Both endpoints have to refuse to treat that as "this agent is that member".
-    const taskToken = await current.createAccessToken({
-      name: "Notification reader",
-      type: "task",
-      workspaceId: "local",
-      userId: "local",
-      taskId: "tsk_notification_read",
-      agentId: "agt_notification_read",
-    });
+    const taskToken = await current.createTaskAccessToken(current.createTask({ agentId: current.createAgent({ name: "Task credential fixture", provider: "codex" }).id, prompt: "authorization fixture" }), "local");
     createChannel(current, { eventTypes: ["*"], memberId: owner.id, chatId: "oc_private_group", name: "Private" });
     createChannel(current, { eventTypes: ["*"], name: "Shared" });
     createAssignedIssue(current, "Task token visibility", owner);
@@ -812,14 +805,7 @@ describe("Multiremi notification channels", () => {
 
   it("hard-denies task credentials from configuring an outbound target", async () => {
     const current = createTestStore(capturingSender([]));
-    const taskToken = await current.createAccessToken({
-      name: "Notification task",
-      type: "task",
-      workspaceId: "local",
-      userId: "local",
-      taskId: "tsk_notification_config",
-      agentId: "agt_notification_config",
-    });
+    const taskToken = await current.createTaskAccessToken(current.createTask({ agentId: current.createAgent({ name: "Task credential fixture", provider: "codex" }).id, prompt: "authorization fixture" }), "local");
     const app = createMultiremiApp({ store: current, authToken: "root-secret" });
 
     const response = await app.request("/api/multiremi/notification-channels", {

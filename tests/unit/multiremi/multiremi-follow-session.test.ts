@@ -1,5 +1,10 @@
+import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
+import { MultiremiStore } from "@multiremi/store.js";
+import { historicalWriters } from "./unified-model-test-backends.js";
+import { runTurnExecutionMutation } from '@multiremi/store/turn-execution-records.js';
+import type { SqlDatabase as UnifiedFixtureDatabase } from '@multiremi/store/db/postgres.js';
 import { afterEach, describe, expect, it } from "bun:test";
-import { runMigrations } from "@multiremi/store/migrations.js";
+import { runMigrations, bootstrapPreUnifiedSchema } from "@multiremi/store/migrations.js";
 import { resolveProjectionTokenBudget } from "@multiremi/store/session-projection-budget.js";
 import { createStore, db, resetMultiremiTestEnv } from "./helpers.js";
 
@@ -50,34 +55,44 @@ function finishTurn(f: ReturnType<typeof fixture>, taskId: string, providerSessi
 
 describe("follow Session context", () => {
   it("migrates follow checkpoints and costs with defaults and preserves recorded values on rerun", () => {
-    const f = fixture();
-    const task = f.store.createSessionTask(f.side.id, { agentId: f.agent.id, prompt: "Existing task before migration" });
-    db!.exec("ALTER TABLE multiremi_session_agent_lanes DROP COLUMN parent_cursor_seq");
-    db!.exec("ALTER TABLE multiremi_issue_sessions DROP COLUMN inherited_tokens_total");
-    db!.exec("ALTER TABLE multiremi_issue_sessions DROP COLUMN follow_frozen_seq");
-    db!.exec("ALTER TABLE multiremi_tasks DROP COLUMN inherited_projection_from_seq");
-    runMigrations(db!);
-    expect(db!.query("PRAGMA table_info(multiremi_session_agent_lanes)").all()).toContainEqual(
+    const legacyDb = openSqliteDatabase(":memory:");
+    bootstrapPreUnifiedSchema(legacyDb);
+    const historical = historicalWriters(legacyDb);
+    const agent = historical.createAgent({ name: "Historical follower", provider: "claude" });
+    const issue = historical.createIssue({ title: "Historical follow" });
+    const parent = historical.getOrCreateDefaultIssueSession(issue.id);
+    const side = { id: "ises_historical_follow" };
+    legacyDb.run("INSERT INTO multiremi_issue_sessions(id,workspace_id,issue_id,parent_session_id,inherit_mode,created_at,updated_at) VALUES(?,'local',?,?,'follow','2026-10-01','2026-10-01')", [side.id,issue.id,parent.id]);
+    const f = { agent,side,store:historical };
+    const task = historical.createTask({agentId:agent.id,issueId:issue.id,issueSessionId:side.id,prompt:"Existing task before migration"});
+    legacyDb.exec("ALTER TABLE multiremi_session_agent_lanes DROP COLUMN parent_cursor_seq");
+    legacyDb.exec("ALTER TABLE multiremi_issue_sessions DROP COLUMN inherited_tokens_total");
+    legacyDb.exec("ALTER TABLE multiremi_issue_sessions DROP COLUMN follow_frozen_seq");
+    legacyDb.exec("ALTER TABLE multiremi_tasks DROP COLUMN inherited_projection_from_seq");
+    runMigrations(legacyDb);
+    const migrated = new MultiremiStore(legacyDb);
+    expect(legacyDb.query("PRAGMA table_info(multiremi_session_lanes)").all()).toContainEqual(
       expect.objectContaining({ name: "parent_cursor_seq", type: "INTEGER", notnull: 1, dflt_value: "0" }),
     );
-    expect(db!.query("PRAGMA table_info(multiremi_issue_sessions)").all()).toEqual(expect.arrayContaining([
+    expect(legacyDb.query("PRAGMA table_info(multiremi_issue_sessions)").all()).toEqual(expect.arrayContaining([
       expect.objectContaining({ name: "inherited_tokens_total", type: "INTEGER", notnull: 1, dflt_value: "0" }),
       expect.objectContaining({ name: "follow_frozen_seq", type: "INTEGER", notnull: 0, dflt_value: null }),
     ]));
-    expect(db!.query("PRAGMA table_info(multiremi_tasks)").all()).toContainEqual(
+    expect(legacyDb.query("PRAGMA table_info(multiremi_turn_attempts)").all()).toContainEqual(
       expect.objectContaining({ name: "inherited_projection_from_seq", type: "INTEGER", notnull: 0, dflt_value: null }),
     );
-    expect(f.store.getSessionAgentLane(f.side.id, f.agent.id)).toMatchObject({ parentCursorSeq: 0, parent_cursor_seq: 0 });
-    expect(f.store.getSessionInheritedContext(f.side.id)).toMatchObject({ inherited_tokens_total: 0, follow_frozen_seq: null, follow_frozen: false });
-    expect(db!.query("SELECT inherited_projection_from_seq FROM multiremi_tasks WHERE id = ?").get(task.id)).toEqual({ inherited_projection_from_seq: null });
+    expect(migrated.getSessionAgentLane(f.side.id, f.agent.id)).toMatchObject({ parentCursorSeq: 0, parent_cursor_seq: 0 });
+    expect(migrated.getSessionInheritedContext(f.side.id)).toMatchObject({ inherited_tokens_total: 0, follow_frozen_seq: null, follow_frozen: false });
+    expect(legacyDb.query("SELECT inherited_projection_from_seq FROM multiremi_turn_execution_records WHERE id = ?").get(task.id)).toEqual({ inherited_projection_from_seq: null });
 
-    db!.run("UPDATE multiremi_issue_sessions SET inherited_tokens_total = 23, follow_frozen_seq = 1 WHERE id = ?", [f.side.id]);
-    db!.run("UPDATE multiremi_tasks SET inherited_projection_from_seq = 1 WHERE id = ?", [task.id]);
-    db!.run("UPDATE multiremi_session_agent_lanes SET parent_cursor_seq = 1 WHERE session_id = ? AND agent_id = ?", [f.side.id, f.agent.id]);
-    runMigrations(db!);
-    expect(f.store.getSessionInheritedContext(f.side.id)).toMatchObject({ inherited_tokens_total: 23, follow_frozen_seq: 1, follow_frozen: true });
-    expect(db!.query("SELECT inherited_projection_from_seq FROM multiremi_tasks WHERE id = ?").get(task.id)).toEqual({ inherited_projection_from_seq: 1 });
-    expect(f.store.getSessionAgentLane(f.side.id, f.agent.id)).toMatchObject({ parentCursorSeq: 1, parent_cursor_seq: 1 });
+    legacyDb.run("UPDATE multiremi_issue_sessions SET inherited_tokens_total = 23, follow_frozen_seq = 1 WHERE id = ?", [f.side.id]);
+    runTurnExecutionMutation(legacyDb as unknown as UnifiedFixtureDatabase, "UPDATE multiremi_turn_execution_records SET inherited_projection_from_seq = 1 WHERE id = ?", [task.id]);
+    legacyDb.run("UPDATE multiremi_session_lanes SET parent_cursor_seq = 1 WHERE session_id = ? AND reader_id = ?", [f.side.id, f.agent.id]);
+    runMigrations(legacyDb);
+    expect(migrated.getSessionInheritedContext(f.side.id)).toMatchObject({ inherited_tokens_total: 23, follow_frozen_seq: 1, follow_frozen: true });
+    expect(legacyDb.query("SELECT inherited_projection_from_seq FROM multiremi_turn_execution_records WHERE id = ?").get(task.id)).toEqual({ inherited_projection_from_seq: 1 });
+    expect(migrated.getSessionAgentLane(f.side.id, f.agent.id)).toMatchObject({ parentCursorSeq: 1, parent_cursor_seq: 1 });
+    legacyDb.close();
   });
 
   it("keeps the fork point fixed while following new parent events and forcing discussion mode", () => {
@@ -264,12 +279,15 @@ describe("follow Session context", () => {
     f.store.appendSessionEvent(f.parent.id, { authorType: "member", body: "Still pending without a committed inherited upper bound" });
     const missingBound = startTurn(f);
     expect(missingBound.inherited).toMatchObject({ fromSeq: 2, toSeq: 3 });
-    db!.run("UPDATE multiremi_tasks SET inherited_projection_to_seq = NULL WHERE id = ?", [missingBound.task.id]);
+    runTurnExecutionMutation(db! as unknown as UnifiedFixtureDatabase, "UPDATE multiremi_turn_execution_records SET inherited_projection_to_seq = NULL WHERE id = ?", [missingBound.task.id]);
     expect(f.store.getTask(missingBound.task.id)?.inheritedProjectionToSeq).toBeNull();
     expect(finishTurn(f, missingBound.task.id).status).toBe("completed");
     expect(f.store.getSessionAgentLane(f.side.id, f.agent.id)).toMatchObject({
-      parentCursorSeq: 2, lastTaskId: missingBound.task.id, cursorSeq: missingBound.projection.toSeq,
+      parentCursorSeq: 2, lastTaskId: missingBound.task.id, cursorSeq: 0,
     });
+    const lane = db!.query("SELECT provider_cursor_seq FROM multiremi_session_lanes WHERE session_id=? AND reader_id=?")
+      .get(f.side.id, f.agent.id) as { provider_cursor_seq: number } | null;
+    expect(lane?.provider_cursor_seq).toBe(missingBound.projection.toSeq);
     expect(startTurn(f).inherited).toMatchObject({ fromSeq: 2, toSeq: 3 });
   });
 
@@ -279,7 +297,7 @@ describe("follow Session context", () => {
     finishTurn(f, first.task.id);
     f.store.appendSessionEvent(f.parent.id, { authorType: "member", body: "New context for old provider" });
     const late = startTurn(f);
-    db!.run("UPDATE multiremi_session_agent_lanes SET provider_session_id = ? WHERE session_id = ? AND agent_id = ?", [
+    db!.run("UPDATE multiremi_session_lanes SET provider_session_id = ? WHERE session_id = ? AND reader_id = ?", [
       "replacement_provider", f.side.id, f.agent.id,
     ]);
     finishTurn(f, late.task.id);

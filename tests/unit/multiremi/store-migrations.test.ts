@@ -6,7 +6,7 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import type { Database } from "bun:sqlite";
 import { openSqliteDatabase, deserializeSqliteDatabase, markSqliteDialect } from "@multiremi/store/db/sqlite.js";
-import { resolveSqlDialect, runMigrations } from "@multiremi/store/migrations.js";
+import { resolveSqlDialect, runMigrations, bootstrapPreUnifiedSchema } from "@multiremi/store/migrations.js";
 import type { SqlDatabase } from "@multiremi/store/db/postgres.js";
 
 import {
@@ -22,7 +22,7 @@ function freshDb(): Database {
 }
 
 function migrate(database: Database): void {
-  runMigrations(database as unknown as SqlDatabase);
+  bootstrapPreUnifiedSchema(database as unknown as SqlDatabase);
 }
 
 function tableNames(database: Database): string[] {
@@ -1598,9 +1598,9 @@ describe("store migrations", () => {
       seedLegacyChatWakeFixture(database);
     seedWakeInvariantMatrix(database);
     seedLegacyProactiveRetryMatrix(database);
-    const tokens = await mintLegacyWakeTokens(database);
+    const tokens = await mintLegacyWakeTokens(database, false);
       assertLegacyChatWakeRollback(database);
-    await assertLegacyWakeTokens(database, tokens, true);
+    await assertLegacyWakeTokens(database, tokens, true, false);
       migrate(database);
       assertLegacyChatWakeSettlement(database);
       migrate(database);
@@ -1656,7 +1656,7 @@ describe("store migrations", () => {
         expect(database.query("SELECT enabled FROM multiremi_notification_channels WHERE id = ?").get(`nch_agent_chat_${chatId}`))
           .toEqual(entry.preserve ? { enabled: 0 } : null);
       }
-      await assertLegacyWakeTokens(database, tokens);
+      await assertLegacyWakeTokens(database, tokens, false, false);
     assertLegacyProactiveRetryMatrix(database);
     assertWakeInvariantMatrix(database);
     assertCancelledLegacyWakesCannotRun(database);
@@ -1777,7 +1777,7 @@ describe("store migrations", () => {
         return typeof value === "function" ? value.bind(target) : value;
       },
     });
-    expect(() => runMigrations(wrapped)).toThrow("changed Chat or dependent row counts");
+    expect(() => bootstrapPreUnifiedSchema(wrapped)).toThrow("changed Chat or dependent row counts");
     expect(columnNames(database, "multiremi_chat_sessions")).toContain("issue_id");
     expect(database.query("SELECT COUNT(*) AS count FROM multiremi_chat_messages").get()).toEqual({ count: 12 });
     expect(database.query("SELECT COUNT(*) AS count FROM multiremi_feishu_bot_issue_link_audit").get()).toEqual({ count: 0 });
@@ -2773,7 +2773,7 @@ describe("MUL-407 human-request push table rebuild", () => {
 
     // `runMigrations` takes the `SqlDatabase` surface, which is exactly what the
     // proxy above pretends to be (`migrate()` is the `Database`-typed helper).
-    runMigrations(counted);
+    bootstrapPreUnifiedSchema(counted);
 
     // The bootstrap schema block is one big `CREATE TABLE IF NOT EXISTS`
     // statement that names every table, so the interesting statements are the

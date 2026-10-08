@@ -67,7 +67,7 @@ import {
   type ZeroJumpViolation,
 } from "../../frontend/scripts/perf/lib/zero-jump-verdict";
 import { measureLogRender, type RenderMeasurement } from "../../frontend/scripts/perf/lib/render-measurement";
-import { seedZeroJumpFixture, type ZeroJumpFixture } from "./zero-jump-fixture";
+import { markTaskRunning, seedZeroJumpFixture, type ZeroJumpFixture } from "./zero-jump-fixture";
 import { seedImageCases, installImageBarrier, imageObservationFailure, type ImageCase, type ImageObservation } from "./zero-jump-image-cases";
 import { computeInFlightWaves, preRevealWaveFailure } from "./zero-jump-waves";
 
@@ -248,18 +248,18 @@ function buildScenarios(fixture: ZeroJumpFixture, options: Options, imageCases: 
     ...detail("detail-running", fixture.runningIssueId),
     ...(layoutIssueId ? detail("detail-layout", layoutIssueId, { layoutCheck: true }).filter(row => row.mode === "cold") : []),
     ...(options.only.includes("detail-running-empty-cache") ? detail("detail-running-empty-cache", fixture.runningIssueId, { taskCacheEmpty: true }).filter(row => row.mode === "cold") : []),
-    // The deep link is the shape a notification produces, and its cold round
+    // The deep link selects a canonical inbox message, and its cold round
     // *is* the deep link: the URL has to be the inbox one, because that is where
-    // the comment highlight and the target anchor come from. Navigating to
-    // `/issues/:id` instead would measure the ordinary detail page and the
-    // `target-comment` anchor would never exist.
+    // the selected message and its target anchor come from. Navigating to
+    // `/issues/:id` instead would measure the ordinary detail page and
+    // the message anchor would never exist.
     ...detail("detail-deeplink", fixture.longIssueId, {
-      path: `/inbox?issue=${encodeURIComponent(fixture.longIssueId)}&session=${encodeURIComponent(fixture.longDefaultSessionId)}`,
+      path: `/inbox?item=${encodeURIComponent(fixture.inboxItemId)}`,
       entry: "inbox",
       clickIssueId: null,
       inboxItemId: fixture.inboxItemId,
       targetCommentId: fixture.deepLinkCommentId,
-      expectIssueId: fixture.longIssueId,
+      expectIssueId: null,
     }),
     // Its own key on purpose: a sidebar restored from localStorage after the
     // first frame is a different mechanism from the detail page's own reveal, so
@@ -308,6 +308,7 @@ interface RoundResult extends RenderMeasurement {
   waveGate: "blocking" | "record-only";
   attachmentReads: Record<string, number>;
   settled: boolean;
+  hubAckType: "auth_ack" | "stream.ack";
   hubAckSeen: boolean;
   revealDispatchMs: number | null;
   fetchPhases: Array<{ path: string; t: number; state: string | null; fresh: string | null }>;
@@ -488,13 +489,15 @@ async function runRound(input: {
   // actually shows.
   const profile: PerfProfileConfig = profileFor({
     mode: "contract",
-    shape: "issue-detail",
+    shape: scenario.entry === "inbox" ? "inbox" : "issue-detail",
     targetCommentId: scenario.targetCommentId,
     requireAgentStream: scenario.key.startsWith("detail-running"),
   });
   const targetUrl = `${webOrigin}/${slug}${scenario.path}`;
   const result: RoundResult = {
     requests: [], preRevealOptional: [], preRevealWaves: null, preRevealWaveRows: [], preRevealWaveChain: [], waveGate: scenario.mode === "warm" && !(["detail-running", "detail-deeplink"].includes(scenario.key)) ? "blocking" : "record-only", attachmentReads: {}, settled: false, hubAckSeen: false, revealDispatchMs: null, fetchPhases: [],
+    // Inbox message detail uses HTTP + workspace events, without a log stream.
+    hubAckType: scenario.entry === "inbox" ? "auth_ack" : "stream.ack",
     renderMs: null, renderSource: "unobserved", renderReason: "not measured", windowResponseEndMs: null,
     logSingleRowReads: 0,
     logRequests: [],
@@ -634,7 +637,7 @@ async function runRound(input: {
   page.on("websocket", socket => socket.on("framereceived", ({ payload }) => {
     if (!["/ws", "/api/realtime/ws"].includes(new URL(socket.url()).pathname)) return;
     lastHubChange = performance.now();
-    try { const frame = JSON.parse(String(payload)); if (frame.type === "stream.ack") result.hubAckSeen = true; } catch {}
+    try { const frame = JSON.parse(String(payload)); if (frame.type === result.hubAckType) result.hubAckSeen = true; } catch {}
   }));
   const seedReads: Promise<void>[] = [];
   page.on("response", response => {
@@ -869,12 +872,11 @@ async function clickEntryRow(page: Page, scenario: Scenario, slug: string): Prom
         // warm round measures the detail page rather than a chunk fetch.
         await page.waitForTimeout(150);
         await row.click({ timeout: 5_000 });
-        // The click only counts once the app has selected the intended issue:
-        // the inbox commits its selection inside `startTransition`, so the URL
-        // updates a tick after the click. Without this the round could measure
-        // whatever page it happened to be on.
+        // Start measurement only after the URL selects the intended message or issue.
         const expected = scenario.expectIssueId;
-        if (expected) {
+        if (isInbox) {
+          await page.waitForURL(url => url.searchParams.get("item") === scenario.inboxItemId, { timeout: ENTRY_TIMEOUT_MS });
+        } else if (expected) {
           await page.waitForURL((url) => url.href.includes(expected), { timeout: ENTRY_TIMEOUT_MS });
         } else if (scenario.entry === "issues-list") {
           await page.waitForURL(
@@ -927,16 +929,17 @@ async function main(): Promise<void> {
     const issue = store.createIssue({ title: "Issue layout regression", description: "Description above the activity divider.", status: "in_progress" });
     layoutIssueId = issue.id;
     const session = store.getOrCreateDefaultIssueSession(issue.id, fixture.userId);
-    const task = store.getTask(fixture.runningTaskId)!;
     for (let index = 0; index < 18; index++) store.createIssueComment(issue.id, {
       issueSessionId: session.id, authorType: "member", authorId: fixture.userId,
       body: `Layout regression comment ${index + 1}\n\n${"Synthetic content for scrolling. ".repeat(15)}`,
     });
     for (let index = 0; index < 3; index++) {
-      const created = store.createTask({ agentId: task.agentId, issueId: issue.id,
+      // Distinct lanes preserve the multi-task fixture under pending-turn coalescing.
+      const agent = store.createAgent({ name: `Layout agent ${index + 1}`, provider: "codex",
+        workspaceId: fixture.workspaceId, ownerId: fixture.userId, visibility: "workspace" });
+      const created = store.createTask({ agentId: agent.id, issueId: issue.id,
         issueSessionId: session.id, prompt: `Layout fixture ${index + 1}` });
-      // Same isolated fixture technique as markTaskRunning; no real daemon is connected.
-      if (index === 0) database.run("UPDATE multiremi_tasks SET status='running', started_at=? WHERE id=?", [new Date().toISOString(), created.id]);
+      if (index === 0) markTaskRunning(store, created.id);
     }
   }
   const minted = await store.createAccessToken({

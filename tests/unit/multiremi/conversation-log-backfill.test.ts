@@ -1,11 +1,11 @@
 import { describe, expect, it } from "bun:test";
 import { backfillConversationLogWithinTransaction, CONVERSATION_LOG_BACKFILL_MIGRATION, ConversationBackfillMismatch,
   canonicalConversationJson, reconcileConversationLog } from "@multiremi/store/conversation-log-backfill.js";
-import { runMigrations } from "@multiremi/store/migrations.js";
+import { bootstrapPreUnifiedSchema as runMigrations } from "@multiremi/store/migrations.js";
 import { MultiremiStore } from "@multiremi/store.js";
 import { conversationLogProjectionEvents } from "@multiremi/store/conversation-log-projection.js";
 import { sessionEventCompatibilityResponse } from "@multiremi/api/wire/issues.js";
-import { conversationLogPgAdminUrl as pgAdminUrl, withConversationLogStore as withStore } from "./fixtures/conversation-log-store.js";
+import { conversationLogPgAdminUrl as pgAdminUrl, withHistoricalConversationStore as withStore } from "./fixtures/conversation-log-store.js";
 import { bindFeishuTopicFixture } from "./feishu-topic-fixture.js";
 import { prepareConversationBackfillFixture } from "./fixtures/conversation-log-backfill.js";
 import { PostgresSyncDatabase, type SqlDatabase } from "@multiremi/store/db/postgres.js";
@@ -75,7 +75,7 @@ describe("MUL-427 B7: conversation backfill and reconciliation", () => {
           const before = legacyRows();
           db.exec("DELETE FROM multiremi_conversation_log; DELETE FROM multiremi_conversation_heads");
           db.run("DELETE FROM multiremi_schema_migrations WHERE id = ?", [CONVERSATION_LOG_BACKFILL_MIGRATION]);
-          new MultiremiStore(db);
+          runMigrations(db);
           expect(db.query("SELECT id FROM multiremi_schema_migrations WHERE id = ?").get(CONVERSATION_LOG_BACKFILL_MIGRATION)).not.toBeNull();
           // Startup can append a missing legacy comment mirror; it must retain
           // every original session, event and comment without rewriting it.
@@ -83,7 +83,7 @@ describe("MUL-427 B7: conversation backfill and reconciliation", () => {
           for (const table of preservedTables) expect(afterStartup[table]).toEqual(expect.arrayContaining(before[table]));
           const counts = { orphanSessionsSkipped: shape === "deleted Issue session" ? 1 : 0,
             chatOwnedTopicTasks: shape === "deleted Issue session" ? 0 : 1,
-            chatOwnedTopicIssueEvents: shape === "topic lifecycle events" ? 2 : 0,
+            chatOwnedTopicIssueEvents: shape === "topic lifecycle events" ? 2 : shape === "topic Issue comments" ? 1 : 0,
             chatOwnedTopicIssueLogRows: shape === "deleted Issue session" ? 0 : 2 };
           const reconciliation = readOnlyConversationReconciliation(db);
           expect(reconciliation).toMatchObject({ mismatches: [], counts });
@@ -121,7 +121,8 @@ describe("MUL-427 B7: conversation backfill and reconciliation", () => {
         db.run("DELETE FROM multiremi_schema_migrations WHERE id = ?", [CONVERSATION_LOG_BACKFILL_MIGRATION]);
         expect(db.query("SELECT issue_session_id FROM multiremi_issue_comments WHERE id = 'cmt_old_null'").get().issue_session_id).toBeNull();
         expect(db.query("SELECT issue_session_id FROM multiremi_tasks WHERE id = 'tsk_old_issue'").get().issue_session_id).toBeNull();
-        const migrated = new MultiremiStore(db);
+        runMigrations(db);
+        const migrated = store;
         const session = migrated.listIssueSessions(issue.id)[0]!;
         expect(migrated.getIssueComment("cmt_old_null")?.issueSessionId).toBe(session.id);
         expect(migrated.getTask("tsk_old_issue")?.issueSessionId).toBe(session.id);
@@ -138,7 +139,7 @@ describe("MUL-427 B7: conversation backfill and reconciliation", () => {
         };
         assertTopicOwnership();
         const rows = db.query("SELECT * FROM multiremi_conversation_log ORDER BY session_id, seq").all();
-        new MultiremiStore(db);
+        runMigrations(db);
         assertTopicOwnership();
         expect(db.query("SELECT * FROM multiremi_conversation_log ORDER BY session_id, seq").all()).toEqual(rows);
         expect(migrated.listSessionEvents(session.id)).toHaveLength(1);

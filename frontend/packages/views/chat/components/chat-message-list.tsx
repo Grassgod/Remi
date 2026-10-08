@@ -1,5 +1,9 @@
 "use client";
 
+import { MessageHeader } from "../../common/message-header";
+import { useActorName } from "@multiremi/core/workspace/hooks";
+import { useAfterFirstScreen } from "@multiremi/core/platform/use-after-first-screen";
+import { TurnControls } from "../../common/turn-controls";
 import { useCallback, useLayoutEffect, useRef, useSyncExternalStore, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api, TRACE_LIVE_WINDOW_SIZE } from "@multiremi/core/api";
@@ -18,6 +22,7 @@ import {
 } from "@multiremi/ui/components/ui/tooltip";
 import { ChevronRight, ChevronDown, Brain, AlertCircle, AlertTriangle, Copy, LoaderCircle, Check, ScrollText } from "lucide-react";
 import { AttachmentSchema } from "@multiremi/core/api/schemas";
+import type { SessionLogRow } from "@multiremi/core/api/schemas/session-log";
 import type { SessionLogEntry, SessionReplicaPort } from "@multiremi/core/replica";
 import { Markdown } from "@multiremi/views/common/markdown";
 import { SessionLogList } from "../../common/session-log/session-log-list";
@@ -67,6 +72,10 @@ export function ChatMessageList({
   initialPositioned = false,
 }: ChatMessageListProps) {
   const { t } = useT("chat");
+  const namesReady = useAfterFirstScreen();
+  const { getActorName } = useActorName({ enabled: visible && namesReady });
+  const { t: tm } = useT("messages");
+  const statuses = tm($ => $.statuses, { returnObjects: true }) as Record<string, string>;
   const { t: traceT } = useT("agents");
   const scrollRoot = useRef<HTMLElement | null>(null);
   const prependAnchor = useRef<{ id: string; top: number } | null>(null);
@@ -105,9 +114,12 @@ export function ChatMessageList({
   }, [onLoadOlderMessages, visible]);
   const transformEntries = useCallback((entries: readonly SessionLogEntry[]) =>
     mergeOptimisticChatRows(entries.filter(entry => {
-      const row = entry as SessionLogEntry & { author_type?: string; metadata?: Record<string, unknown> };
-      if (row.seq === 0 || metadataRecord(row.metadata).envelope) return false;
-      return row.kind === "turn" ? !isInboxTurn(row.body_md) : row.kind === "message" && row.author_type === "member";
+      const row = entry as SessionLogEntry & { author_type?: string; sender_type?: string; message_kind?: string; deleted_at?: string | null; metadata?: Record<string, unknown> };
+      if (row.seq === 0 || row.deleted_at) return false;
+      if (row.kind === "message" && (row.message_kind || row.sender_type)) return true;
+      if (metadataRecord(row.metadata).envelope) return false;
+      if (row.kind === "message" && row.author_type === "system" && !row.sender_type) return false;
+      return row.kind === "turn" ? !isInboxTurn(row.body_md) : row.kind === "message";
     }), optimisticRows), [optimisticRows]);
   const entryKey = useCallback((entry: SessionLogEntry) => clientIdOf(entry) ?? entry.id, []);
   const pendingTaskId = pendingTask?.task_id ?? null;
@@ -117,7 +129,7 @@ export function ChatMessageList({
       && !isNonterminalTurn(row.metadata);
   });
   const showLiveTimeline = !!pendingTaskId && !pendingAlreadyPersisted;
-  const liveTrace = useTaskTraceState(pendingTaskId, visible && showLiveTimeline, true);
+  const liveTrace = useTaskTraceState(pendingTaskId, visible && showLiveTimeline, true, pendingTask?.turn_id);
   const liveTaskEvents = liveTrace.events;
   const liveTimeline: ChatTimelineItem[] = toChatTimeline(liveTaskEvents);
   const hasLive = showLiveTimeline && liveTimeline.length > 0;
@@ -137,14 +149,16 @@ export function ChatMessageList({
     </div>}
     renderEntry={({ entry }) => {
       const row = entry as SessionLogEntry & {
-        author_type?: string; task_id?: string | null; created_at?: string;
+        author_type?: string; sender_type?: string; task_id?: string | null; created_at?: string;
+        to_type?: SessionLogRow["to_type"]; to_ref?: SessionLogRow["to_ref"]; to_agent_id?: SessionLogRow["to_agent_id"]; to_member_id?: SessionLogRow["to_member_id"];
+        message_kind?: SessionLogRow["message_kind"]; wake_applied?: SessionLogRow["wake_applied"]; wake_reason?: SessionLogRow["wake_reason"];
         metadata?: Record<string, unknown>;
       };
-      const isUser = row.kind === "message" && row.author_type === "member";
+      const isUser = row.kind === "message" && (row.sender_type ?? row.author_type) === "member";
       const message: ChatMessage = {
         id: row.id, chat_session_id: sessionId, role: isUser ? "user" : "assistant",
         content: isUser ? row.body_md : String(row.metadata?.final_reply_md ?? row.body_md),
-        task_id: row.task_id ?? null, created_at: row.created_at ?? "",
+        task_id: row.kind === "turn" ? row.task_id ?? null : null, turn_id: typeof row.metadata?.turn_id === "string" ? row.metadata.turn_id : undefined, created_at: row.created_at ?? "",
         failure_reason: typeof row.metadata?.failure_reason === "string" ? row.metadata.failure_reason : null,
           elapsed_ms: typeof row.metadata?.elapsed_ms === "number" ? row.metadata.elapsed_ms : null,
           attachments: AttachmentSchema.array().safeParse(row.metadata?.attachments).data as ChatMessage["attachments"],
@@ -153,8 +167,11 @@ export function ChatMessageList({
       const local = optimisticRows.find((item) => item.clientId === clientId);
       const isPush = row.kind === "turn" && isNonterminalTurn(row.metadata);
       return <div className="py-2">
-        <MessageBubble message={message} isPending={!!pendingTaskId && row.task_id === pendingTaskId}
-          isPush={isPush} visible={visible} />
+        {row.kind === "message" && <MessageHeader message={row} getActorName={getActorName} />}
+        {row.kind === "turn" && row.metadata?.final_entry_id ? <div className="text-xs text-muted-foreground">{statuses[String(row.metadata.status)] ?? String(row.metadata.status ?? "")}</div>
+          : <MessageBubble message={message} isPending={!!pendingTaskId && row.task_id === pendingTaskId}
+            isPush={isPush} visible={visible} />}
+        {row.kind === "turn" && <TurnControls turnId={typeof row.metadata?.turn_id === "string" ? row.metadata.turn_id : row.id} />}
         {isUser && local && <div className="flex justify-end"><SendStatus status={local.status}
           onRetry={() => onRetrySend?.(local.clientId)} /></div>}
       </div>;
@@ -169,6 +186,7 @@ export function ChatMessageList({
 }
 
 function isNonterminalTurn(metadata?: Record<string, unknown>): boolean {
+  if (typeof metadata?.status === "string") return !["completed", "failed", "cancelled"].includes(metadata.status);
   return metadata?.elapsed_ms == null && metadata?.failure_reason == null;
 }
 
@@ -241,7 +259,7 @@ function AssistantMessage({
         timeline={timeline}
         elapsedMs={message.elapsed_ms}
       />
-        {message.task_id && !isPush && <ChatTraceButton taskId={message.task_id} visible={visible} />}
+        {message.task_id && !isPush && <ChatTraceButton taskId={message.task_id} turnId={message.turn_id} visible={visible} />}
       </div>
     );
   }
@@ -261,19 +279,20 @@ function AssistantMessage({
         timeline={timeline}
         isPending={isPending}
       />
-      {message.task_id && !isPush && <ChatTraceButton taskId={message.task_id} visible={visible} />}
+      {message.task_id && !isPush && <ChatTraceButton taskId={message.task_id} turnId={message.turn_id} visible={visible} />}
     </div>
   );
 }
 
 /** Task detail and trace are requested only after the reader opens execution. */
-function ChatTraceButton({ taskId, visible }: { taskId: string; visible: boolean }) {
+function ChatTraceButton({ taskId, turnId, visible }: { taskId: string; turnId?: string; visible: boolean }) {
   const { t } = useT("agents");
   const [open, setOpen] = useState(false);
+  const { getActorName } = useActorName({ enabled: visible && open });
   const { data: task, isFetching, isError, refetch } = useQuery({
     queryKey: ["task-detail", taskId],
     enabled: visible && open,
-    queryFn: () => api.getTask(taskId),
+    queryFn: () => api.getTask(taskId, turnId),
   });
   return <>
     <button type="button" disabled={!visible || isFetching} onClick={() => {
@@ -283,7 +302,7 @@ function ChatTraceButton({ taskId, visible }: { taskId: string; visible: boolean
       {isFetching ? <LoaderCircle className="size-3 animate-spin" /> : <ScrollText className="size-3" />}
       {isError ? t(($) => $.transcript.trace_retry) : t(($) => $.transcript.view_finished)}
     </button>
-    {open && visible && task && <TaskTraceDialog task={task} agentName={task.agent_name ?? ""} onOpenChange={setOpen} />}
+    {open && visible && task && <TaskTraceDialog task={task} agentName={getActorName("agent", task.agent_id)} onOpenChange={setOpen} />}
     {isError && <span role="alert" className="text-xs text-destructive">{t(($) => $.transcript.trace_failed)}</span>}
   </>;
 }

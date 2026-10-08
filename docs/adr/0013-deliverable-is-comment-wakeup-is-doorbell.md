@@ -2,6 +2,8 @@
 
 ## Status
 
+Amended by [ADR 0016](0016-unified-message-inbox-and-turn.md) (MUL-493): the `agent_read_state` read progress moves into the session lane cursor.
+
 Accepted for MUL-498. The latest user decision replaces inbox directories and
 inline unread history with triggering messages and one complete unread-range
 read. Text is truncated before dispatch. The latest review permits one exception:

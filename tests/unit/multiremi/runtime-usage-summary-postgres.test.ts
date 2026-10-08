@@ -8,6 +8,7 @@ import { parseTaskUsageEntries } from "@multiremi/store/helpers.js";
 import { PostgresSyncDatabase } from "@multiremi/store/db/postgres.js";
 import type { SqlDatabase, SqlStatement } from "@multiremi/store/db/postgres.js";
 import type { MultiremiRuntime } from "@multiremi/contracts/types.js";
+import { runTurnExecutionMutation } from "@multiremi/store/turn-execution-records.js";
 
 const PG_ADMIN_URL = process.env.MULTIREMI_TEST_POSTGRES_URL
   ?? "postgres://multimira:multimira@localhost:5432/postgres";
@@ -151,12 +152,12 @@ function seed(store: MultiremiStore, db: SqlDatabase) {
   const insert = (runtimeId: string, status: string, usage: string) => {
     index += 1;
     const createdAt = new Date(Date.UTC(2026, 8, 24) + index * 1000).toISOString();
-    db.run(
-      `INSERT INTO multiremi_tasks
+    runTurnExecutionMutation(db,
+      `INSERT INTO multiremi_turn_execution_records
          (id, task_kind, agent_id, workspace_id, status, priority, prompt, attempt, max_attempts, holds_workspace,
-          created_at, updated_at, runtime_id, usage)
-       VALUES (?, 'direct', ?, 'local', ?, 0, ?, 1, 3, 1, ?, ?, ?, ?)`,
-      [`tsk_mul366_${index}`, agent.id, status, `usage fixture ${index}`, createdAt, createdAt, runtimeId, usage],
+          created_at, updated_at, runtime_id, usage, execution_scope)
+       VALUES (?, 'direct', ?, 'local', ?, 0, ?, 1, 3, 1, ?, ?, ?, ?, ?)`,
+      [`tsk_mul366_${index}`, agent.id, status, `usage fixture ${index}`, createdAt, createdAt, runtimeId, usage, `usage:${index}`],
     );
     canonical(db, `tsk_mul366_${index}`, usage, createdAt);
   };
@@ -200,13 +201,15 @@ describe.skipIf(!pgAvailable)("Runtime usage summary on PostgreSQL (MUL-366)", (
     await admin.end();
   });
 
-  const LEGACY_SCAN = "SELECT id, status, usage FROM multiremi_tasks";
+  const LEGACY_SCAN = "SELECT id, status, usage FROM multiremi_turn_execution_records";
   type Runtimes = ReturnType<typeof seed>;
 
   /** Applies the same raw write to both backends. */
   function mutate(sql: string, params: (runtimes: Runtimes) => string[]) {
-    pg.run(sql, params(pgRuntimes));
-    sqlite.run(sql, params(sqliteRuntimes));
+    for (const [db, runtimes] of [[pg, pgRuntimes], [sqlite, sqliteRuntimes]] as const) {
+      if (!sql.includes("multiremi_turn_execution_records")) db.run(sql, params(runtimes));
+      else runTurnExecutionMutation(db, sql, params(runtimes));
+    }
   }
 
   function expectBackendsAgree(...keys: Array<keyof Runtimes>) {
@@ -253,15 +256,15 @@ describe.skipIf(!pgAvailable)("Runtime usage summary on PostgreSQL (MUL-366)", (
     expect(pg.statements.filter(sql => sql.includes("WITH selected AS")).length).toBe(1);
     expect(pg.statements.some(sql => /json_agg|settled_usage|open_usage/.test(sql))).toBe(false);
     // Legacy audit text cannot change normal statistics.
-    mutate("UPDATE multiremi_tasks SET usage=? WHERE id=?", () => ['[{"inputTokens":999999}]', "tsk_mul366_1"]);
+    mutate("UPDATE multiremi_turn_execution_records SET usage=? WHERE id=?", () => ['[{"inputTokens":999999}]', "tsk_mul366_1"]);
     expect(usageSummary(pgStore.getRuntime(pgRuntimes.runtimeA))).toEqual(EXPECTED_RUNTIME_A);
     mutate("UPDATE multiremi_usage_units SET input_tokens=? WHERE task_id=?", () => ["5000", "tsk_mul366_1"]);
     expectBackendsAgree("runtimeA");
     expect(usageSummary(pgStore.getRuntime(pgRuntimes.runtimeA)).inputTokens).toBe(EXPECTED_RUNTIME_A.inputTokens - 1200 + 5000);
-    mutate("UPDATE multiremi_tasks SET status='completed' WHERE id=?", () => ["tsk_mul366_4"]);
+    mutate("UPDATE multiremi_turn_execution_records SET status='completed' WHERE id=?", () => ["tsk_mul366_4"]);
     expectBackendsAgree("runtimeA");
     expect(usageSummary(pgStore.getRuntime(pgRuntimes.runtimeA)).activeTaskCount).toBe(3);
-    mutate("DELETE FROM multiremi_tasks WHERE id=?", () => ["tsk_mul366_2"]);
+    mutate("DELETE FROM multiremi_turn_attempts WHERE id=?", () => ["tsk_mul366_2"]);
     expectBackendsAgree("runtimeA");
     expect(usageSummary(pgStore.getRuntime(pgRuntimes.runtimeA)).taskCount).toBe(10);
   });
@@ -269,7 +272,7 @@ describe.skipIf(!pgAvailable)("Runtime usage summary on PostgreSQL (MUL-366)", (
   it("keeps old consumption on its original runtime after reassignment", () => {
     const beforeA = usageSummary(pgStore.getRuntime(pgRuntimes.runtimeA));
     const beforeB = usageSummary(pgStore.getRuntime(pgRuntimes.runtimeB));
-    mutate("UPDATE multiremi_tasks SET runtime_id=? WHERE id=?", runtimes => [runtimes.runtimeB, "tsk_mul366_1"]);
+    mutate("UPDATE multiremi_turn_execution_records SET runtime_id=? WHERE id=?", runtimes => [runtimes.runtimeB, "tsk_mul366_1"]);
     expectBackendsAgree("runtimeA", "runtimeB");
     expect(usageSummary(pgStore.getRuntime(pgRuntimes.runtimeA)).inputTokens).toBe(beforeA.inputTokens);
     expect(usageSummary(pgStore.getRuntime(pgRuntimes.runtimeB)).inputTokens).toBe(beforeB.inputTokens);

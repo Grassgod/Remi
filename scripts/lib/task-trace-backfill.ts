@@ -907,7 +907,7 @@ export function loadTraceBackfillTasks(db: SqlDatabase): Map<string, TraceBackfi
               c.id AS chat_row_id, c.workspace_id AS chat_workspace_id,
               tt.location AS trace_location, tt.archive_id AS trace_archive_id, tt.source AS trace_source,
               tt.event_count AS trace_event_count, tt.head_seq AS trace_head_seq
-       FROM multiremi_tasks t
+       FROM multiremi_turn_execution_records t
        LEFT JOIN multiremi_runtimes r ON r.id = t.runtime_id
        LEFT JOIN multiremi_agents a ON a.id = t.agent_id
        LEFT JOIN multiremi_issues i ON i.id = t.issue_id

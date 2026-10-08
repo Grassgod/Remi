@@ -1,5 +1,4 @@
 import type {
-  AnswerIssueDecisionInput,
   CreateIssueRequest,
   GroupedIssuesResponse,
   Issue,
@@ -11,8 +10,6 @@ import type {
   ListIssuesResponse,
   ListIssueStatusPagesParams,
   IssueStatusPagesResponse,
-  MultiremiIssueDecision,
-  MultiremiIssueDecisionList,
   MultiremiIssueParentDoneGrant,
   SearchIssuesResponse,
   SearchProjectsResponse,
@@ -30,8 +27,6 @@ import {
   EMPTY_GROUPED_ISSUES_RESPONSE,
   EMPTY_LIST_ISSUES_RESPONSE,
   GroupedIssuesResponseSchema,
-  IssueDecisionListSchema,
-  IssueDecisionMutationResponseSchema,
   IssueDetailSchema,
   IssueSchema,
   IssueParentDoneGrantMutationResponseSchema,
@@ -201,29 +196,6 @@ export class IssuesEndpoints {
     return parseStrictResponse<Issue>(raw, IssueDetailSchema, {
       endpoint: "GET /api/issues/:id",
     });
-  }
-
-  async listIssueDecisions(id: string): Promise<MultiremiIssueDecisionList> {
-    const raw = await this.http.fetch<unknown>(`/api/issues/${id}/decisions`);
-    return parseStrictResponse<MultiremiIssueDecisionList>(raw, IssueDecisionListSchema, {
-      endpoint: "GET /api/issues/:id/decisions",
-    });
-  }
-
-  async answerIssueDecision(
-    id: string,
-    decisionId: string,
-    input: AnswerIssueDecisionInput,
-  ): Promise<MultiremiIssueDecision> {
-    const raw = await this.http.fetch<unknown>(
-      `/api/issues/${id}/decisions/${decisionId}/answer`,
-      { method: "POST", body: JSON.stringify(input) },
-    );
-    return parseStrictResponse<{ decision: MultiremiIssueDecision }>(
-      raw,
-      IssueDecisionMutationResponseSchema,
-      { endpoint: "POST /api/issues/:id/decisions/:decisionId/answer" },
-    ).decision;
   }
 
   async grantParentDone(id: string): Promise<MultiremiIssueParentDoneGrant> {

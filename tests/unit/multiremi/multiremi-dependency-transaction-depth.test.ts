@@ -38,7 +38,7 @@ describe("MUL-400 E3 — automatic start stays one transaction (SQLite)", () => 
       };
     }) as typeof database.transaction;
     database.run = (sql, params) => {
-      if (/INSERT\s+INTO\s+multiremi_tasks/i.test(sql)) inserts.push({ depth, inTransaction: database.inTransaction });
+      if (/INSERT\s+INTO\s+multiremi_turn_attempts/i.test(sql)) inserts.push({ depth, inTransaction: database.inTransaction });
       return run(sql, params);
     };
     try { triggerInboxFlow(store, flow); }

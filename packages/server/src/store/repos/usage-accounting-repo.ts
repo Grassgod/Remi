@@ -130,20 +130,20 @@ export class UsageAccountingRepo {
     const lifeFilters: string[] = [], lifeParams = [...timeParams];
     if (input.runtimeId) { lifeFilters.push("t.runtime_id=?"); lifeParams.push(input.runtimeId); }
     if (input.projectId) { lifeFilters.push("t.lifecycle_project_id=?"); lifeParams.push(input.projectId); }
-    const lifePredicate = [timePredicate.replaceAll(factTime, "t.occurred_at"), ...lifeFilters].join(" AND ");
+    const lifePredicate = ["t.id=t.current_attempt_id", timePredicate.replaceAll(factTime, "t.occurred_at"), ...lifeFilters].join(" AND ");
     const runFilters: string[] = [], runParams: unknown[] = [];
     if (input.runtimeId) { runFilters.push("rs.runtime_id=?"); runParams.push(input.runtimeId); }
     if (input.projectId) { runFilters.push("rs.project_id=?"); runParams.push(input.projectId); }
     const relevantRun = (alias: string) => runFilters.length ? ` AND EXISTS(SELECT 1 FROM multiremi_usage_run_scopes rs WHERE rs.task_id=${alias}.task_id AND rs.run_id=${alias}.run_id AND ${runFilters.join(" AND ")})` : "";
-    const tasksSql = `SELECT t.id,t.agent_id,t.runtime_id,t.status,t.started_at,t.dispatched_at,t.created_at,${lifecycleProject} AS lifecycle_project_id,
+    const tasksSql = `SELECT t.id,t.turn_id,work.current_attempt_id,t.agent_id,t.runtime_id,t.status,work.started_at,t.dispatched_at,work.created_at,${lifecycleProject} AS lifecycle_project_id,
       COALESCE(t.completed_at,t.failed_at,t.cancelled_at,t.updated_at) AS ended_at,
       CASE WHEN t.status='completed' THEN COALESCE(t.completed_at,t.updated_at,t.created_at)
         WHEN t.status='failed' THEN COALESCE(t.failed_at,t.completed_at,t.updated_at,t.created_at)
         WHEN t.status='cancelled' THEN COALESCE(t.cancelled_at,t.completed_at,t.updated_at,t.created_at)
         ELSE '${asOf}' END AS occurred_at
-      FROM multiremi_tasks t LEFT JOIN multiremi_usage_task_scopes r ON r.task_id=t.id
+      FROM multiremi_turn_execution_records t JOIN multiremi_turns work ON work.id=t.turn_id LEFT JOIN multiremi_usage_task_scopes r ON r.task_id=t.id
       LEFT JOIN multiremi_issues i ON i.id=t.issue_id LEFT JOIN multiremi_chat_sessions c ON c.id=t.chat_session_id
-      LEFT JOIN multiremi_autopilot_runs a ON a.id=(SELECT ar.id FROM multiremi_autopilot_runs ar WHERE ar.task_id=t.id ORDER BY ar.created_at DESC LIMIT 1)
+      LEFT JOIN multiremi_autopilot_runs a ON a.id=(SELECT ar.id FROM multiremi_autopilot_runs ar WHERE ar.turn_id=t.turn_id ORDER BY ar.created_at DESC LIMIT 1)
       WHERE ${where.join(" AND ")}`;
     return this.ctx.db.transaction(() => {
       if (this.ctx.db.dialect === "postgres") {
@@ -213,7 +213,7 @@ export class UsageAccountingRepo {
         JOIN charge_dimensions d ON d.task_id=v.task_id AND d.run_id=v.run_id AND d.unit_id=v.unit_id
         GROUP BY l.task_id,l.run_id,l.covered_unit_id
       ), unit_facts AS (
-        SELECT t.id AS task_id,COALESCE(u.agent_id,t.agent_id) AS agent_id,CASE WHEN u.task_id IS NULL THEN t.runtime_id ELSE u.runtime_id END AS runtime_id,t.status,${dateExpr} AS date,
+        SELECT t.turn_id AS task_id,COALESCE(u.agent_id,t.agent_id) AS agent_id,CASE WHEN u.task_id IS NULL THEN t.runtime_id ELSE u.runtime_id END AS runtime_id,t.status,${dateExpr} AS date,
           CASE WHEN ${lifePredicate} THEN 1 ELSE 0 END AS lifecycle_in_window,
           COALESCE(${seconds},0) AS seconds,COALESCE(u.provider,'unknown') AS provider,
           CASE WHEN v.unit_id IS NULL THEN u.model WHEN d.model_groups=1 THEN d.model ELSE NULL END AS model,

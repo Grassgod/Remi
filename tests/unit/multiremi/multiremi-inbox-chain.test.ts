@@ -1,3 +1,5 @@
+import { runTurnExecutionMutation } from '@multiremi/store/turn-execution-records.js';
+import type { SqlDatabase as UnifiedFixtureDatabase } from '@multiremi/store/db/postgres.js';
 import { expect, it } from "bun:test";
 import { createCommitEventQueue, type StoreContext } from "@multiremi/store/context.js";
 import { pendingTurnBackendTests } from "./pending-turn-test-backends.js";
@@ -27,14 +29,14 @@ pendingTurnBackendTests("D1 inbox integrated chains", fixture => {
     triggerInboxFlow(f.store, f.flow);
     const tasks = f.store.listTasksForIssue(f.flow.targetIssueId).filter(task => task.status === "queued");
     expect(tasks.map(task => task.id)).toEqual([human.id]);
-    expect(tasks[0]!.wakeSource).toBeNull();
+    expect(tasks[0]!.wakeSource).toBe("human_sender");
     expect(tasks[0]!.prompt).toBe(human.prompt);
     const comments = f.store.listIssueComments(f.flow.targetIssueId).filter(comment => comment.authorType === "system");
     expect(comments).toHaveLength(1);
     const entry = f.store.getConversationLogEntryById(comments[0]!.id)!;
-    expect(entry.metadata.envelope).toMatchObject({ kind: "report", outcome: "done", wake: "now" });
+    expect(f.store.getMessage(entry.id)).toMatchObject({ message_kind: "status", wake_applied: "now" });
     expect(inboxWakeSeq(f.db, tasks[0]!.id)).toBe(entry.seq);
-    expect(f.store.listIssueActivity(f.flow.targetIssueId).filter(row => row.type === "pending_turn_coalesced")).toHaveLength(1);
+    expect(f.store.listIssueActivity(f.flow.targetIssueId).filter(row => row.type === "turn_merged")).toHaveLength(1);
   });
 
   it("T4: E3 readiness leaves an idle or running recipient without a new queued turn", () => {
@@ -46,7 +48,7 @@ pendingTurnBackendTests("D1 inbox integrated chains", fixture => {
     f.store.updateIssue(prerequisite.id, { status: "done" });
     expect(f.store.listTasksForIssue(f.flow.targetIssueId).filter(task => task.status === "queued")).toEqual([]);
     const running = f.store.createTask({ agentId: f.flow.agentId, issueId: f.flow.targetIssueId, prompt: "Already running" });
-    f.db.run("UPDATE multiremi_tasks SET status = 'running' WHERE id = ?", [running.id]);
+    runTurnExecutionMutation(f.db as unknown as UnifiedFixtureDatabase, "UPDATE multiremi_turn_execution_records SET status = 'running' WHERE id = ?", [running.id]);
     const another = f.store.createIssue({ title: "Next readiness prerequisite", status: "in_progress" });
     f.store.createIssue({ title: "Next readiness dependent", status: "backlog", blockedBy: [another.id],
       parentIssueId: f.flow.targetIssueId, assigneeType: "member", assigneeId: member.id });
@@ -55,13 +57,15 @@ pendingTurnBackendTests("D1 inbox integrated chains", fixture => {
     const entries = f.store.listIssueComments(f.flow.targetIssueId).filter(comment => comment.authorType === "system")
       .map(comment => f.store.getConversationLogEntryById(comment.id)!);
     expect(entries).toHaveLength(2);
-    expect(entries.every(entry => entry.metadata.envelope?.wake === "next_turn")).toBe(true);
+    expect(entries.every(entry => f.store.getMessage(entry.id)?.wake_applied === "next_turn")).toBe(true);
   });
 
-  it("T4: E3 next_turn coalesces queued work beside a running turn", () => {
+  it("T4: E3 next_turn coalesces queued work while another scope is running", () => {
     const f = setup();
     const running = f.store.createTask({ agentId: f.flow.agentId, issueId: f.flow.targetIssueId, prompt: "Running" });
-    f.db.run("UPDATE multiremi_tasks SET status = 'running' WHERE id = ?", [running.id]);
+    runTurnExecutionMutation(f.db as unknown as UnifiedFixtureDatabase, "UPDATE multiremi_turn_execution_records SET status = 'running' WHERE id = ?", [running.id]);
+    // The running turn occupies an independent scope; the readiness lane is pending.
+    f.db.run('UPDATE multiremi_turns SET execution_scope=? WHERE current_attempt_id=?',['independent',running.id]);
     const queued = f.store.createTask({ agentId: f.flow.agentId, issueId: f.flow.targetIssueId, prompt: "Queued human request" });
     const member = f.store.findWorkspaceMemberForUser("local", "local")!;
     const prerequisite = f.store.createIssue({ title: "Ready beside running", status: "in_progress" });
@@ -70,13 +74,13 @@ pendingTurnBackendTests("D1 inbox integrated chains", fixture => {
     f.store.updateIssue(prerequisite.id, { status: "done" });
     const comment = f.store.listIssueComments(f.flow.targetIssueId).find(row => row.authorType === "system")!;
     const entry = f.store.getConversationLogEntryById(comment.id)!;
-    expect(entry.metadata.envelope?.wake).toBe("next_turn");
+    expect(f.store.getMessage(entry.id)?.wake_applied).toBe("next_turn");
     expect(inboxWakeSeq(f.db, queued.id)).toBe(entry.seq);
     expect(f.store.listTasksForIssue(f.flow.targetIssueId).filter(task => task.status === "queued").map(task => task.id))
       .toEqual([queued.id]);
     expect(f.store.getTask(queued.id)!.prompt).toBe("Queued human request");
     expect(f.store.getTask(running.id)!.status).toBe("running");
-    expect(f.store.listIssueActivity(f.flow.targetIssueId).filter(row => row.type === "pending_turn_coalesced")).toHaveLength(1);
+    expect(f.store.listIssueActivity(f.flow.targetIssueId).filter(row => row.type === "turn_merged")).toHaveLength(1);
   });
 
   it("T5: Chat envelope delivery creates, coalesces, steers and deduplicates on the startup schema", () => {
@@ -87,7 +91,7 @@ pendingTurnBackendTests("D1 inbox integrated chains", fixture => {
     const second = f.send(chat.id);
     expect(second.action).toBe("coalesced");
     expect(second.task!.id).toBe(first.task!.id);
-    f.db.run("UPDATE multiremi_tasks SET status = 'running' WHERE id = ?", [first.task!.id]);
+    runTurnExecutionMutation(f.db as unknown as UnifiedFixtureDatabase, "UPDATE multiremi_turn_execution_records SET status = 'running' WHERE id = ?", [first.task!.id]);
     const steered = f.send(chat.id, "now", "steer-once");
     expect(steered.action).toBe("steered");
     expect(steered.task!.id).toBe(first.task!.id);
@@ -96,23 +100,23 @@ pendingTurnBackendTests("D1 inbox integrated chains", fixture => {
     expect(duplicate.deduplicated).toBe(true);
     expect(duplicate.entry.id).toBe(steered.entry.id);
     expect(f.db.query("SELECT head_seq FROM multiremi_conversation_heads WHERE session_id = ?").get(chat.id)).toEqual(head);
-    const messages = f.store.listTaskSteerMessages(first.task!.id);
-    expect(messages.map(message => ({ kind: message.kind, authorType: message.authorType, content: message.content })))
-      .toEqual([{ kind: "steer", authorType: "system", content: steered.entry.body_md }]);
-    expect(f.db.query("SELECT id FROM multiremi_tasks WHERE chat_session_id = ? AND status = 'queued'").all(chat.id)).toEqual([]);
+    expect(f.store.getMessage(steered.entry.id)).toMatchObject({body_md:steered.entry.body_md,to_agent_id:f.flow.agentId,wake_applied:"now"});
+    expect(Number(f.db.query("SELECT COUNT(*) AS n FROM multiremi_system_events WHERE event='message_delivered_running' AND payload LIKE ?").get(`%${steered.entry.id}%`)?.n)).toBe(1);
+    expect(f.db.query("SELECT id FROM multiremi_turn_execution_records WHERE chat_session_id = ? AND status = 'queued'").all(chat.id)).toEqual([]);
   });
 
   it("T5: transport mismatch creates a separate bound Chat turn and never steers private work", () => {
     const f = setup();
     const chat = f.store.createChatSession({ agentId: f.flow.agentId });
     const privateTask = f.store.sendChatMessage(chat.id, { content: "Private user message" }).task;
-    f.db.run("UPDATE multiremi_tasks SET status = 'running' WHERE id = ?", [privateTask.id]);
+    runTurnExecutionMutation(f.db as unknown as UnifiedFixtureDatabase, "UPDATE multiremi_turn_execution_records SET status = 'running' WHERE id = ?", [privateTask.id]);
+    const bound=f.store.createChatSession({agentId:f.flow.agentId});
     const at = "2026-09-29T00:00:00.000Z";
     f.db.run(`INSERT INTO multiremi_feishu_bot_chat_bindings
       (id, workspace_id, app_id, agent_id, external_session_key, chat_session_id, issue_id, created_at, updated_at)
       VALUES ('chain_transport', 'local', 'test', ?, 'chain_transport', ?, ?, ?, ?)`,
-      [f.flow.agentId, chat.id, f.flow.targetIssueId, at, at]);
-    const delivery = f.send(chat.id);
+      [f.flow.agentId, bound.id, f.flow.targetIssueId, at, at]);
+    const delivery = f.send(bound.id);
     expect(delivery.action).toBe("created");
     expect(delivery.task!.issueId).toBe(f.flow.targetIssueId);
     expect(delivery.task!.id).not.toBe(privateTask.id);

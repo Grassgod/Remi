@@ -26,7 +26,7 @@ import { daemonReportTransport } from "@multiremi/worker/report-transport.js";
 import { deliverFeishuOutbound } from "@multiremi/worker/feishu-outbound.js";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { DAEMON_PROTOCOL_MIN } from "@multiremi/contracts/daemon-protocol.js";
-import { createLocalStore, db, resetMultiremiTestEnv, useUploadDir } from "./helpers.js";
+import { createLocalStore, db, resetMultiremiTestEnv, useUploadDir } from "./feishu-host-store-fixture.js";
 import { deriveStatus } from "@multiremi/store/repos/feishu-bot-repo.js";
 import { questionCardAction } from "@shared/feishu-task-card.js";
 import { degradeMarkdownImages } from "@shared/feishu-markdown-images.js";
@@ -288,7 +288,7 @@ describe("Feishu bot control-plane delivery", () => {
     });
     expect(await send("feishu.outbound_result", payload)).toEqual({ ok: true });
     const before = db!.query("SELECT * FROM multiremi_feishu_bot_outbound_deliveries WHERE id = ?").get(delivery.id);
-    const activities = db!.query("SELECT COUNT(*) AS n FROM multiremi_issue_activity").get();
+    const activities = db!.query("SELECT CAST(COUNT(*) AS INTEGER) AS n FROM multiremi_issue_activity").get();
     const received: string[] = [];
     const box = new MultiremiTaskReportOutbox({ path: ":memory:", deliver: async row => {
       const frame = outboxRecordFrame(row);
@@ -303,7 +303,7 @@ describe("Feishu bot control-plane delivery", () => {
       expect(received).toEqual(["feishu.outbound_result", "runtime.model_list_result"]);
       expect(box.stats()).toMatchObject({ pending: 0, blocked: 0 });
       expect(db!.query("SELECT * FROM multiremi_feishu_bot_outbound_deliveries WHERE id = ?").get(delivery.id)).toEqual(before);
-      expect(db!.query("SELECT COUNT(*) AS n FROM multiremi_issue_activity").get()).toEqual(activities);
+      expect(db!.query("SELECT CAST(COUNT(*) AS INTEGER) AS n FROM multiremi_issue_activity").get()).toEqual(activities);
       expect(test.store.getTask(submitted.taskId!)).not.toBeNull();
     } finally { await box.close(); }
   });
@@ -462,9 +462,13 @@ describe("Feishu bot control-plane delivery", () => {
     expect(await reportFrame(test.store, "trace.append", { task_id: submitted.taskId, closed: false,
       events: [{ seq: 2, ts: "2026-09-28T00:00:01Z", type: "text", content: "foreign write" }] },
       { runtimeId: "rt_a", headers: daemonHeaders(test.tokens.rt_a!), authToken: "MASTER" })).toMatchObject({ ok: false, code: "authority_revoked" });
+    const user = test.store.getOrCreateUser({ externalId: "cross-provider-user", feishuUnionId: "on_cross_provider", name: "Recipient" });
+    test.store.createWorkspaceMember({ workspaceId: "local", userId: user.id, name: "Recipient", role: "member" });
+    db!.run(`INSERT INTO multiremi_feishu_bot_senders (id, workspace_id, app_id, open_id, union_id, display_name, allowed, first_seen_at, last_seen_at)
+      VALUES ('fbs_cross', 'local', 'cli_a1b2c3d4e5f6g7h8', 'ou_cross_provider_recipient', 'on_cross_provider', 'Recipient', 1, '2026-10-05', '2026-10-05')`);
     const question = test.store.createTaskHumanRequest({ taskId: submitted.taskId, kind: "question",
       payload: { questions: [{ question: "Continue?", options: [{ label: "yes" }] }] } });
-    const cardPath = `${taskPath}/human-requests/${question.id}/card`;
+    const cardPath = `/api/daemon/messages/${question.id}/card`;
     const cardInput = JSON.stringify({ recipient_open_id: "ou_cross_provider_recipient" });
     expect((await test.app.request(cardPath, { method: "POST", headers: daemonHeaders(test.tokens.rt_b!),
       body: cardInput })).status).toBe(403);
@@ -473,12 +477,12 @@ describe("Feishu bot control-plane delivery", () => {
     expect(card.status).toBe(200);
     const credential = questionCardAction((await card.json() as any).card);
     expect(typeof credential?.t).toBe("string");
-    const answer = await test.app.request(`${taskPath}/human-requests/${question.id}/respond`, {
+    const answer = await test.app.request(`/api/daemon/messages/${question.id}/answer`, {
       method: "POST", headers: daemonHeaders(test.tokens.rt_a!),
-      body: JSON.stringify({ response: { answer: "yes" }, token: credential!.t, operator_open_id: "ou_cross_provider_recipient" }),
+      body: JSON.stringify({ response: { answers: { "Continue?": "yes" } }, token: credential!.t, operator_open_id: "ou_cross_provider_recipient" }),
     });
     expect(answer.status).toBe(200);
-    expect(test.store.getTaskHumanRequest(question.id)?.response).toEqual({ answer: "yes" });
+    expect(test.store.getTaskHumanRequest(question.id)?.response).toEqual({ answers: { "Continue?": "yes" } });
     for (const endpoint of ["start", "messages", "progress", "complete", "fail"]) {
       expect((await test.app.request(`${taskPath}/${endpoint}`, {
         method: "POST", headers: daemonHeaders(test.tokens.rt_a!), body: "{}",
@@ -518,35 +522,44 @@ describe("Feishu bot control-plane delivery", () => {
     const privateChat = test.store.createChatSession({ agentId: test.agentId, creatorId: "local" });
     const unbound = test.store.createTask({ agentId: test.agentId, chatSessionId: privateChat.id, prompt: "private" });
     // Same executing daemon as the bound Task, so only the missing binding can refuse it.
-    db!.run("UPDATE multiremi_tasks SET runtime_id = ? WHERE id = ?", ["rt_claude", unbound.id]);
+    db!.run("UPDATE multiremi_turn_attempts SET runtime_id = ? WHERE id = ?", ["rt_claude", unbound.id]);
     const question = test.store.createTaskHumanRequest({ taskId: submitted.taskId, kind: "question",
       payload: { question: "Continue?" } });
     const privateQuestion = test.store.createTaskHumanRequest({ taskId: unbound.id, kind: "question",
       payload: { question: "Private?" } });
-    const read = (runtimeId: string, taskId: string, requestId: string, token: string) =>
-      requestRuntimeRpc(test.store, runtimeId, "human_request.get", { task_id: taskId, request_id: requestId }, token, "MASTER");
+    db!.run("UPDATE multiremi_turns SET status='running' WHERE current_attempt_id=?", [unbound.id]);
+    const boundTurnId = test.store.getTurnForAttempt(submitted.taskId)!.id;
+    const privateTurnId = test.store.getTurnForAttempt(unbound.id)!.id;
+    const readCard = (messageId: string, token: string) => test.app.request(`/api/daemon/messages/${messageId}`,
+      { headers: daemonHeaders(token) });
+    const readTurn = (turnId: string, attemptId: string, messageId: string) =>
+      requestRuntimeRpc(test.store, "rt_claude", "turn.decision.get", {
+        turn_id: turnId, attempt_id: attemptId, message_id: messageId,
+      }, executor.token, "MASTER");
 
-    const hosted = await read("rt_a", submitted.taskId, question.id, test.tokens.rt_a!);
-    expect(hosted).toMatchObject({ ok: true, request: { id: question.id, taskId: submitted.taskId, status: "pending" } });
-    expect(await read("rt_claude", submitted.taskId, question.id, executor.token)).toMatchObject({ ok: true });
-    expect(await read("rt_claude", unbound.id, privateQuestion.id, executor.token)).toMatchObject({ ok: true });
-    // Not the bot host.
-    expect(await read("rt_b", submitted.taskId, question.id, test.tokens.rt_b!)).toMatchObject({ ok: false, code: "authority_revoked", http_status: 403 });
-    // Not a Chat bound to the bot.
-    expect(await read("rt_a", unbound.id, privateQuestion.id, test.tokens.rt_a!)).toMatchObject({ ok: false, code: "authority_revoked", http_status: 403 });
-    // Access to one bound Task does not reach another Task's request.
-    expect(await read("rt_a", submitted.taskId, privateQuestion.id, test.tokens.rt_a!)).toMatchObject({ ok: false, code: "task_not_found", http_status: 404 });
-    const create = (runtimeId: string, token: string) => requestRuntimeRpc(test.store, runtimeId, "human_request.create", {
-      task_id: submitted.taskId, request_id: crypto.randomUUID(), kind: "question", payload: { question: "Another?" },
+    const hosted = await readCard(question.id, test.tokens.rt_a!);
+    expect(hosted.status).toBe(200);
+    expect(await hosted.json()).toMatchObject({ message: { id: question.id },
+      request: { id: question.id, taskId: submitted.taskId, status: "pending" } });
+    expect(await readTurn(boundTurnId, submitted.taskId, question.id)).toMatchObject({ ok: true, message: { id: question.id } });
+    expect(await readTurn(privateTurnId, unbound.id, privateQuestion.id)).toMatchObject({ ok: true, message: { id: privateQuestion.id } });
+    // The card transport remains limited to the configured host and bound Chat.
+    expect((await readCard(question.id, test.tokens.rt_b!)).status).toBe(403);
+    expect((await readCard(privateQuestion.id, test.tokens.rt_a!)).status).toBe(403);
+    // Even the executing daemon cannot read another turn's decision through this turn.
+    expect(await readTurn(boundTurnId, submitted.taskId, privateQuestion.id)).toMatchObject({ ok: false, code: "invalid_report" });
+    const create = (runtimeId: string, token: string) => requestRuntimeRpc(test.store, runtimeId, "turn.decision", {
+      turn_id: boundTurnId, attempt_id: submitted.taskId, dedupe_key: "another-question", body_md: "Another?",
+      options: [], metadata: { kind: "question" },
     }, token, "MASTER");
-    const expire = (runtimeId: string, token: string) => requestRuntimeRpc(test.store, runtimeId, "human_request.expire", {
-      task_id: submitted.taskId, request_id: question.id, status: "cancelled",
+    const expire = (runtimeId: string, token: string) => requestRuntimeRpc(test.store, runtimeId, "turn.decision.expire", {
+      turn_id: boundTurnId, attempt_id: submitted.taskId, message_id: question.id, status: "cancelled",
     }, token, "MASTER");
-    expect(await create("rt_a", test.tokens.rt_a!)).toMatchObject({ ok: false, code: "authority_revoked" });
-    expect(await expire("rt_a", test.tokens.rt_a!)).toMatchObject({ ok: false, code: "authority_revoked" });
+    expect(await create("rt_a", test.tokens.rt_a!)).toMatchObject({ ok: false, code: "stale_attempt" });
+    expect(await expire("rt_a", test.tokens.rt_a!)).toMatchObject({ ok: false, code: "stale_attempt" });
     expect(test.store.getTaskHumanRequest(question.id)?.status).toBe("pending");
-    expect(await create("rt_claude", executor.token)).toMatchObject({ ok: true, request: { taskId: submitted.taskId, kind: "question" } });
-    expect(await expire("rt_claude", executor.token)).toMatchObject({ ok: true, request: { id: question.id, status: "cancelled" } });
+    expect(await create("rt_claude", executor.token)).toMatchObject({ ok: true, message: { task_id: boundTurnId, message_kind: "decision" } });
+    expect(await expire("rt_claude", executor.token)).toMatchObject({ ok: true, message: { id: question.id, resolved_at: expect.any(String) } });
     expect(test.store.getTaskHumanRequest(question.id)?.status).toBe("cancelled");
   });
 
@@ -559,7 +572,7 @@ describe("Feishu bot control-plane delivery", () => {
     const submitted = test.store.submitFeishuBotMessage("local", "rt_a", input);
     expect(submitted.deliveryQueued).toBe(true);
     expect(test.store.submitFeishuBotMessage("local", "rt_a", input)).toMatchObject({ duplicate: true, taskId: submitted.taskId });
-    expect(db!.query("SELECT count(*) AS n FROM multiremi_feishu_bot_outbound_deliveries WHERE task_id = ?").get(submitted.taskId)).toEqual({ n: 1 });
+    expect(db!.query("SELECT CAST(COUNT(*) AS INTEGER) AS n FROM multiremi_feishu_bot_outbound_deliveries WHERE task_id = ?").get(submitted.taskId)).toEqual({ n: 1 });
     expect(test.store.claimFeishuBotOutbound("local", "rt_a", undefined, true, false, true)).toBeNull();
     // An already bundled delivery stays bundled when it resumes through v2.
     db!.run("UPDATE multiremi_feishu_bot_outbound_deliveries SET delivery_mode = 'legacy' WHERE task_id = ?", [submitted.taskId]);

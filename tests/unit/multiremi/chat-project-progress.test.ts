@@ -1,3 +1,4 @@
+import { turnApiPath } from "./unified-test-paths.js";
 import { afterEach, describe, expect, it } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { notifyBrowserTaskEvent } from "@multiremi/api/realtime.js";
@@ -31,9 +32,9 @@ describe("Project Chat startup progress", () => {
     } });
     expect(unrelatedFrames).toEqual([]);
     const app = createMultiremiApp({ store });
-    const response = await app.request(`/api/chat/sessions/${chat.id}/pending-task`);
+    const response = await app.request(turnApiPath(store, task.id, "?attempts=true"));
     expect(response.status).toBe(200);
-    expect(await response.json()).toMatchObject({ task_id: task.id, progress_summary: "正在准备项目仓库…" });
+    expect((await response.json()).attempts.at(-1)).toMatchObject({ id: task.id, progress_summary: "正在准备项目仓库…" });
   });
 
   it("keeps pure Chat and Issue topic progress behavior unchanged", async () => {
@@ -52,7 +53,7 @@ describe("Project Chat startup progress", () => {
       expect(store.reportProgress(task.id, "Original startup line", 1, 3).progressSummary).toBe("Original startup line");
       expect(events).toEqual([]);
       unsubscribe();
-      const response = await app.request(`/api/chat/sessions/${chat.id}/pending-task`);
+      const response = await app.request(turnApiPath(store, task.id, "?attempts=true"));
       expect(response.status).toBe(200);
       expect(await response.json()).not.toHaveProperty("progress_summary");
     }

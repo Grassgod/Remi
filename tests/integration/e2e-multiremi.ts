@@ -89,11 +89,11 @@ async function main() {
       `status=${rootRes.status} len=${html.length}`);
 
     const loadEndpoints = [
-      "/api/multiremi/agents", "/api/multiremi/issues", "/api/multiremi/tasks",
+      "/api/multiremi/agents", "/api/multiremi/issues", "/api/turns",
       "/api/multiremi/runtimes", "/api/multiremi/members", "/api/multiremi/projects",
       "/api/multiremi/squads", "/api/multiremi/autopilots", "/api/multiremi/skills",
       "/api/multiremi/tokens", "/api/multiremi/notification-preferences",
-      "/api/multiremi/chats", "/api/multiremi/inbox",
+      "/api/multiremi/chats", "/api/inbox",
       "/api/multiremi/labels", "/api/multiremi/pins", "/api/dashboard/usage/daily",
       "/api/dashboard/usage/by-agent", "/api/dashboard/runtime/daily",
     ];

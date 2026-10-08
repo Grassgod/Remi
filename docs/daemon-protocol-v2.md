@@ -184,23 +184,34 @@ head 续传与事件 seq 幂等，不来自外层 `seq`；下行 `trace.push` �
 **daemon → server**（进本地 outbox，见 §2）：
 
 `task.start`、`task.prompt`、`task.session_pin`、`task.progress`、`task.usage`、`task.workspace`、
-`task.complete`、`task.fail`、`runtime.update_result`、`runtime.command_result`、
+`turn.complete`、`task.fail`、`runtime.update_result`、`runtime.command_result`、
 `runtime.model_list_result`、`runtime.local_skills_result`、`runtime.directory_scan_result`、
 `runtime.local_skill_import_result`、`runtime.bot_menu_result`、`feishu.outbound_result`、`plugin.state`、
 `runtime.archive_sessions_result`（`rt:` 分区）。
 `trace.append` 不属于可靠事件清单：它是按 trace head 续传的 RPC，**不进 outbox**，见 §5。
+`task.complete` 只为拒绝旧 outbox 残留保留解析，返回 `report_shape_retired`，不执行完成写入。
 
 **server → daemon**（由 DB 状态重推导，无服务端队列，见 §2.3）：
 
-`task.offer`、`task.cancelled`、`task.steer`、`task.human_request.settled`、`runtime.update`、
+`task.offer`、`task.cancelled`、`turn.message`、`turn.wrap_up`、`runtime.update`、
 `runtime.command`、`runtime.model_list`、`runtime.local_skills`、`runtime.directory_scan`、
 `runtime.local_skill_import`、`runtime.bot_menu`、`runtime.profile`、`feishu.outbound`、
 `feishu.directive`、`ssh_mesh.reconcile`、`platform.drain`、`plugin.desired_revision`、`workspace.settings`、
 `runtime.archive_sessions`、`trace.push`（订阅内保序，可暂停）。
 
+`task.offer` 不再携带 `id`/`prompt`，而是 `turn_id`、`attempt_id`、`input_from_seq`、
+`input_to_seq` 和区间 `(input_from_seq, input_to_seq]` 的 `input_messages`。
+统一 offer 的消息正文由 Current Request 渲染一次；同 ID 不再重复渲染为 Chat Message 或旧 Session projection 的 Triggering Message。
+trace、usage、附件、Session Archive 与 outbox 分区仍以 attempt id（原 `tsk_` id）关联。
+`turn.message` 携带同一对 ID、投影消息正文和该消息关联的 `attachments`；附件由当前 attempt
+凭证下载到其工作目录，再注入 provider。`turn.wrap_up` 携带同一对 ID 与 `requested_at`，
+后者是控制帧，不推进消息游标。elicitation 和 `kind=permission` 都使用 `turn.decision`：
+S2 同事务创建 decision 消息并将轮置为 `awaiting_human`，通过 `reply_to_id` 匹配答复。
+权限选项保留原 option ID、名称、种类和工具上下文；没有旧 `human_request.*` 兼容通道。
+
 ### 1.5 RPC 清单
 
-**daemon → server**：`concierge.status_report`、`steer.consume`、`human_request.create`、`human_request.get`、`human_request.expire`、`plugin.desired`、
+**daemon → server**：`concierge.status_report`、`turn.input`、`turn.decision`、`turn.decision.get`、`turn.decision.expire`、`plugin.desired`、
 `trace.append`、`trace.head`、`trace.subscribe`、`trace.unsubscribe`、`trace.fetch`、`gc.check_issue`、
 `gc.check_chat_session`、`gc.check_autopilot_run`、`gc.check_task`、`gc.workspace_cleaned`。
 
@@ -212,14 +223,13 @@ RPC 应答的 `t` 固定为 `res`，`p` 为 `{ "ok": true, ... }` 或
 `concierge.status_report` 使用原 `concierge.status` 的无凭据载荷，成功应答表示控制面已持久化状态。
 daemon 每次状态变化立即上报，并在心跳确认后独立于配置下发定期补报；超时或断线保留本地
 connector，下一次心跳重试当前状态。服务端在同一条连接里对不变的 `feishu.directive` 只下发
-一次，不能把它当作周期性状态上报的触发器。部署时仍应先升级支持新 RPC 的 API，再升级 daemon，
-以避免回退窗口只有尽力而为保证。
+一次，不能把它当作周期性状态上报的触发器。部署时仍应先升级支持新 RPC 的 API，再升级 daemon。
 
-`human_request.get` 是只读 RPC，请求 `p:{task_id,request_id}`，成功应答 `p:{ok:true,request}`，
-其中 `request` 与原 GET 的 HTTP 200 载荷相同。执行端、绑定 Chat 的 bot host、Issue concierge
-沿用同一任务身份判定；跨 workspace 和未绑定读者拒绝。任务或请求不存在回 `task_not_found`，
-无权限回 `authority_revoked`，均不重试；失败应答另带 `http_status`、`http_code`，供 daemon
-还原原 GET 的业务异常。断线和超时作为请求失败抛给调用方。
+`turn.decision.get` 按 `p:{turn_id,attempt_id,message_id}` 读取 decision 消息及答复；
+创建、读取、过期都交给 S2 的 `DaemonTurnBridge.rpc`，写入时校验 runtime / 当前 attempt / turn。
+答复超时或取消走 `turn.decision.expire`；若答复先于过期提交，以返回的 reply 消息为准。
+服务端启动时默认取 `Store.getDaemonTurnBridge()`，将同一适配器接入 offer 输入、
+下行快照、decision/input RPC 与原子完成；绑定无效的尝试由 Store 拒绝，不访问旧请求表。
 
 `gc.check_*` 与 `gc.workspace_cleaned` 是 A-5 从周期性 HTTP 平移过来的维护扫描（原 15 分钟一轮、
 每天约 13 次/分钟的 `gc-check` 请求）。它们不是等活轮询，但留在 HTTP 上「轮询降到 0」在 nginx
@@ -251,7 +261,7 @@ offer 与派活 5 个、trace 与传输 6 个、服务端故障 1 个（`server_
 | 401 / 403 / 410 | `authority_revoked` |
 | 其他确定性 4xx | `invalid_report` |
 | `start` 对已经运行、等待人工或已终态任务的幂等重放 | `start_replayed` |
-| 409 `steer_pending` | `steer_pending` |
+| 409 `turn_input_pending` | `turn_input_pending` |
 
 close code。协议**只显式列出四个终态码**，其余一律默认重连：
 
@@ -334,7 +344,7 @@ A-2 用它进入 `upgrade_wait`（§7.3）而不是单纯停止重连。另外�
 `ok:false` 且 `retryable:false` → 该分区（task 或 runtime）进入 blocked，与今天
 `isPermanentDeliveryError` 的语义一致。
 例外是 `task_not_found`：daemon 清掉整个分区并记 warn，任务已被删除，重放没有意义；
-`steer_pending` 也不进入 blocked，daemon 删除这一行，将结果交回正在等待的执行端。
+`turn_input_pending` 也不进入 blocked，daemon 删除这一行，将结果交回正在等待的执行端。
 没有执行端等待时（重启重放或等待超时），改报 `task.fail`，原因 `runtime_recovery`，
 说明完成时有未注入的 steer，执行端已不在，并记 warn。
 尾帧例外：`task.progress(final:true)`（展示摘要）和 runAgent `finally` 的 `task.workspace`
@@ -355,10 +365,10 @@ A-2 用它进入 `upgrade_wait`（§7.3）而不是单纯停止重连。另外�
 
 | 帧 | 重连后从哪里重新推导 |
 |---|---|
-| `task.offer` | `multiremi_tasks` 中 queued / dispatched 的行 |
-| `task.steer` | 未消费的 steer 行 |
+| `task.offer` | `multiremi_turns` 的 pending 轮及 `multiremi_turn_attempts` 中 offered / accepted 的当前尝试 |
+| `turn.message` | 当前 turn 未确认的 now 消息 |
+| `turn.wrap_up` | 当前 turn 的 `wrap_up_requested_at` |
 | `task.cancelled` | 任务已终态而 daemon 仍在跑 |
-| `task.human_request.settled` | 已结束的 human request 状态（`responded`、`timeout`、`cancelled`） |
 | `runtime.*` 各类待办 | 各自请求表 |
 | `platform.drain` | 平台维护状态行 |
 | `plugin.desired_revision` | `desiredRevision` |
@@ -368,20 +378,16 @@ daemon 按实体 id 去重（`activeTaskIds`、`runtimeModelListRequests`、stee
 补齐 update / command / skills 的同类集合即可）。服务端对每条下行可靠帧记发送时刻，15 s 未 ack
 即关连接（4000），由重连后的快照重推兜底。
 
-`task.human_request.settled` 的载荷固定为 `{task_id, request}`，`pending` 不发。
-服务端从已提交的请求状态推导快照，同时发给任务执行 runtime 和该 workspace 的飞书 bot host
-`config.runtimeId`；两者相同只发一次。bot host 候选来自当前应用绑定下已送达的决策卡
-（终态卡片补丁尚未报告 `sent`），或近 24 小时已结束的 Chat 绑定请求；任一终态补丁
-报告 `sent`、Chat 请求超过 24 小时后退出相应候选来源。按结束时间取最近 1024 条，
-避免重连推送无限历史。已发出的 Issue 决策卡有持久补丁出站队列，补丁重试不受上述
-时间窗限制。Chat 卡只有近 24 小时、最新 1024 条请求的有界恢复窗口：bot host 离线超过
-24 小时，或候选被挤出 1024 条后，卡片可能停在待处理。这是已知限制，持久恢复链路留待后续单。
-`human_request.get` 只能按已知请求 ID 读取，不提供窗口外候选发现。每个候选还须通过该 RPC
-对应的飞书任务权限校验；其他 runtime
-和 workspace 不接收。
-写入进程通过 workspace 事件跨进程唤醒持有 socket 的 runtime 进程；断线重连重新推快照，
-不新增帧或持久 seq。bot host 端最多缓存 1024 条已结束请求：释放执行任务时仍主动清理，
-长期不释放的外部任务按最早收到的顺序淘汰，避免内存随历史卡片无限增长。
+decision 的答复通过 `turn.message` 投递，携带 `reply_to_id`。daemon 按 decision 消息 ID
+匹配等待中的 question 或 permission 回调，再调用一次 `turn.decision.get` 读取原始完整 reply，
+不解析提示词投影中的 unread_range 前缀或折叠正文。选项 value 和 answers 对象按原问题字段转换。
+ACP 表单的 `fieldKey` 与问题文本都可用作 answers 键；卡片的 JSON option value 按问题字段和选项 label 校验，重复选项、未知字段及冲突答案拒绝，不产生答复。
+连续输入确认时推进游标；同一答复不重复注入。若投影范围还有未读取的普通消息或折叠正文，
+范围读取提示继续进入输入队列，读完并消费前不能越过确认屏障。断线重连由 S2 的消息快照重推。
+daemon 已创建的 decision 在 RPC 应答中取得消息 ID 与 seq，同答复一起按 seq 排序确认，
+仍须等待更早的插话消费完成；权限题目不作为已有最终回复复用。
+旧 `task.human_request.settled` 已退役；旧 bot request hooks 显式返回 `report_shape_retired`，
+其卡片与答复调用方由 S4 改接 decision 消息后再集成，不提供旧表兼容读写。
 
 **trace 流：** 见 §5。
 
@@ -391,7 +397,7 @@ daemon 按实体 id 去重（`activeTaskIds`、`runtimeModelListRequests`、stee
 |---|---|---|---|
 | daemon 重启 | outbox 行仍在，启动后按 id 续发；服务端幂等吸收重复 | 重连后快照重推，实体 id 去重 | 从 `welcome.trace_heads` 续传；文件是唯一来源 |
 | 服务端重启 | daemon 收到 close，走 1 s→30 s 抖动退避；窗口内未 `res` 的帧不删行，重连后重发 | 服务端无状态可丢，从 DB 重推导 | head 归零，daemon 回放尾部，Hub 记 `first_seq` |
-| 任务进行中断线 | 同上；`task.complete` 是其 task 分区最后一条改变状态的帧；只允许 §2.1 两种展示/工作区尾帧排在其后 | 断线期间新 steer / 取消留在 DB，重连后推 | 同上 |
+| 任务进行中断线 | 同上；`turn.complete` 是其 task 分区最后一条改变状态的帧；只允许 §2.1 两种展示/工作区尾帧排在其后 | 断线期间新 steer / 取消留在 DB，重连后推 | 同上 |
 
 判定口径：每一帧在服务端**至少到达一次、至多生效一次**，用 `(分区键, seq)` 对账。重复到达允许，
 必须被幂等吸收。
@@ -411,8 +417,8 @@ daemon 按实体 id 去重（`activeTaskIds`、`runtimeModelListRequests`、stee
 | `task.start` | task id + 可选 `usage_run_id` | 同 Runtime 的真实 sent offer 可以从网络回队恢复并原子绑定 run；已有 run 或已运行/等待人工/终态返回 `start_replayed`，`execution_authorized` 决定现代 daemon 是否可启动 provider |
 | `task.progress` | task id | 覆盖写；终态的 `final:true` 尾帧相同内容即 ok，不重复写 |
 | `task.session_pin` / `task.workspace` | task id | 覆盖写；终态的 workspace 尾帧相同内容即 ok，不重复写 |
-| `task.usage` | task id + run id + unit id/revision | 规范化标量单位幂等更新；旧客户端 provider/model 上报仅在入口转换，统计统一读新表 |
-| `task.complete` / `task.fail` | task id | 已终态即 ok |
+| `task.usage` | attempt id + run id + unit id/revision | 规范化标量单位幂等更新；旧客户端 provider/model 上报仅在入口转换，统计统一读新表 |
+| `turn.complete` / `task.fail` | attempt id | 已终态即 ok |
 | `runtime.*_result` | request id | 状态机 pending→running→completed/failed 只能前进 |
 | `feishu.outbound_result` | delivery id + claim_token | 租约已不是当前的即 ok（不写库，记 warn），应答带 `lease_lost:true`，在等结果的发送方据此停止；相同终态和没有推进的 streaming 检查点也吸收，不带 `lease_lost`。`prepared` 成功应答带 `mention_open_id`（open_id 或 null） |
 | `plugin.state` | request id | 同上 |
@@ -421,7 +427,7 @@ daemon 按实体 id 去重（`activeTaskIds`、`runtimeModelListRequests`、stee
 | `trace.append` | `(task_id, trace_seq)` | Hub 丢弃 `≤ head` |
 
 任务状态回报在工作区生命周期锁内复核 task / Runtime / workspace / daemon 归属和成员权限。
-`task.start`、`task.complete`、`task.fail` 的 `ok:true` 只表示状态已提交，或当前任务已经处于允许吸收重放的状态。
+`task.start`、`turn.complete`、`task.fail` 的 `ok:true` 只表示状态已提交，或当前尝试已经处于允许吸收重放的状态。
 任务曾实际发送给当前 Runtime、因未收到接单确认而重新入队时，保留的 `offered_at` 允许该 Runtime 的
 可靠 start 或终态回报恢复原执行；不需要等待下一次 offer，所以升级 drain 暂停派发时也能收口。
 只有 Runtime 偏好、尚未真正发送过 offer 的 queued 任务没有这项恢复资格；缺少证据或状态暂不允许时
@@ -452,7 +458,7 @@ daemon 收到 offer：有空位且未暂停 → `res{ok:true}` 即 accept，随�
 （start 仍是独立可靠帧，因为 workspace 准备可能先进入 `wait_local_directory`）；否则
 `res{ok:false, code}`，code 取 `capacity` / `claims_paused` / `draining` /
 `binary_skill_files_unsupported`。
-daemon 停止时立即取消尚未获授权的 start 等待；在发送 start 前、获 ACK 后、异步摘要配置与工作区准备后以及首次 provider 调用前复查停止信号，停止后不再新启动 provider。尚未进入 provider 的启动被停机取消时，关闭可选摘要器而不发起终态摘要请求，释放其用量完成范围，保留 durable fail 与已接受 run。已进入 provider 的执行仍使用原任务信号并按原有规则排空，包含辅助摘要及其迟到用量，不因取消启动等待而中断。服务端已提交 start 但 ACK 丢失时，停机仅取消本地等待，已绑定的 run 与未确认的 outbox start 记录保留用于重放。
+daemon 停止时立即取消尚未获授权的 start 等待；在发送 start 前、获 ACK 后、异步摘要配置与工作区准备后以及首次 provider 调用前复查停止信号，停止后不再新启动 provider。尚未进入 provider 的启动被停机取消时，关闭可选摘要器而不发起终态摘要请求，释放其用量完成范围，保留 durable fail 与已接受 run。已进入 provider 的执行仍使用原任务信号并按原有规则排空，包含辅助摘要及其迟到用量，不因取消启动等待而中断。服务端已提交 start 但 ACK 丢失时，停机仅取消本地等待，已绑定的 run 与未确认的 outbox start 记录保留用于重放。启动授权等待使用 `requestTimeoutMs`；`taskDrainTimeoutMs` 只限定执行结束后的报告排空，不压缩启动授权时间。
 
 reject、30 s 未应答、或未确认 offer 的连接断开 → 服务端把任务 `dispatched→queued`，并对该 runtime 冷却 30 s
 （内存态）。仅 `capacity` 拒绝可提前结束冷却：daemon 释放本地任务槽位后立即补发已有的
@@ -464,8 +470,10 @@ reject、30 s 未应答、或未确认 offer 的连接断开 → 服务端把任
 接收结果不明的网络回队清除本次 `accepted_at`，但保留实际发送成功时记录的 `offered_at`；明确拒收则清除
 offer/accept 证据，恢复普通可编辑的排队任务。迟到的可靠执行回报因此能够
 证明自己属于已经派发的任务；初次排队只有 Runtime 绑定不等于已派发。新的 offer 仍覆盖这两个时间字段。
-已有发送证据的网络回队任务保留原输入，不能通过排队编辑覆盖它。Issue 的新信封留在收件箱，旧任务终态后
-通过 re-ring 创建新 task ID；Chat 的新系统信封走已有 steer 与完成屏障。尚未发送的普通排队任务仍可编辑和合并。
+已有发送证据的网络回队 attempt 保留原输入，不能通过排队编辑覆盖它。当前 runtime/daemon 仍拥有该 attempt 时，
+允许 `turn.input` 确认已送达的消息，即使 start 写入丢失；没有发送证据的 pending attempt 仍拒绝。
+Issue 和 Chat 的新 now 消息续接同一轮，恢复 start 后通过 `turn.message` 下发并受完成屏障保护；
+尚未下发的未读消息在终态后补铃。尚未发送的普通 pending 轮仍可编辑消息和合并。
 工作位置、引擎/所有者、Runtime 归属改变或行政重新入池时清除旧 offer/accept 证据；已冻结
 任务按现有规则取消的路径仍保持取消，不通过迟到回报恢复。客户端对重复 task ID 的 offer 继续只确认、不重跑。
 
@@ -531,7 +539,7 @@ SSH 配置 revision 时，才广播 `daemon:ssh_mesh_changed` 重新下发整个
 
 `claimTask` 在生命周期锁前读取轻量 Runtime，锁后读取派活所需的模型、执行组和协议状态，
 不会附带历史用量聚合。CLI 排空检查、重试时点、任务下发的宿主所有者信息和飞书卡片能力判断
-同样只读取必要字段；
+同样只读取必要字段；统一模型的 `DaemonTurnBridge` 授权也只读取 Runtime 身份字段。
 用户侧 Runtime 列表/详情的统计口径不变。成本回归必须统计心跳到下行、派活全部结束的
 完整链路，并计入 `WITH` 聚合；多 Runtime 用例见
 [daemon-heartbeat-fanout-cost.test.ts](../tests/unit/multiremi/daemon-heartbeat-fanout-cost.test.ts)。
@@ -586,20 +594,19 @@ Concierge 出站依赖下行推送与重试定时器，不要求为投递缩短�
 
 | 今天 | v2 |
 |---|---|
-| heartbeat ack 捎带 `pending_update` / `pending_command` / `pending_model_list` / `pending_local_skills` / `pending_directory_scan` / `pending_bot_menu` / `pending_feishu_outbound` | 创建即推对应下行帧；`task.complete` 等结果走上行可靠帧 |
+| heartbeat ack 捎带 `pending_update` / `pending_command` / `pending_model_list` / `pending_local_skills` / `pending_directory_scan` / `pending_bot_menu` / `pending_feishu_outbound` | 创建即推对应下行帧；`turn.complete` 等结果走上行可靠帧 |
 | `GET agent-plugins/desired` 30 s 兜底 | v2 服务端推 `plugin.desired_revision`，daemon 用 rpc `plugin.desired` 拉快照；30 s 兜底取消。v1 的 GET 暂作升级桥，供旧进程完成启动并进入升级心跳，非 v2 稳态轮询。桥路由不接受客户端写入；读取时与 RPC 一样先 reconcile desired 状态，有漂移时可能更新业务状态，稳态无漂移时不改 desired 业务状态（既有工作区锁行更新仍会发生） |
 | desired 的 10 分钟强制刷新（ADR 0001 的「revision 定义漏字段」防御） | 保留，改为 WS rpc；不算轮询 |
-| `GET tasks/:id/steer` 2.5 s | 创建即推 `task.steer`，daemon 用 rpc `steer.consume` 标记消费 |
+| `GET tasks/:id/steer` 2.5 s | 创建即推 `turn.message`，daemon 用 rpc `turn.input` 标记消费 |
 | `GET tasks/:id/status` 2.5 s（取消与 `waiting_local_directory`） | `task.cancelled` 推送；`watchTaskState` 的 2.5 s 定时器删除。飞书 bot 的独立任务状态轮询仍按需使用此 GET，见下方条件 HTTP 清单 |
-| `GET tasks/:id/human-requests/:rid` 2 s | `task.human_request.settled` 推送；读取走 `human_request.get`，创建 / 过期走 rpc |
+| 人工提问 / 权限请求等待 | 创建、读取、过期走 `turn.decision*` RPC；答复走 `turn.message`，以 `reply_to_id` 匹配 |
 | `GET .../gc-check` ×4 与 `workspace/cleaned` | rpc（见 §1.5） |
 | 归档：退役流程要 daemon 打包会话 | 下行 `runtime.archive_sessions` + 上行 `runtime.archive_sessions_result`（见 §4.1）；**不**复用 `pending_command` |
 
 条件 HTTP 清单：`GET /api/daemon/tasks/:taskId/status` 仅在飞书 bot 轮询任务时出现，
 不是 daemon 空闲稳态轮询。15 分钟空闲窗口的 HTTP 请求数仍为 0；飞书任务活跃时
 该 GET 允许按其任务轮询节奏发出。将这条读取迁至 WS 留待单独处理。
-`POST /api/daemon/tasks/:taskId/human-requests/:requestId/card` 仅在飞书任务流需要
-为指定收件人展示交互卡片时调用，不走定时器；v2 保留此条件 HTTP 请求。
+旧 human-request 卡片 HTTP 调用已从 daemon 消费端移除；卡片生成和答复路由由 S4 改接 decision 消息。
 
 ### 4.1 归档为什么不用 `pending_command`
 
@@ -688,7 +695,7 @@ seq 连续是 Hub「丢弃 `≤ head` 的事件」这条规则成立的前提，
 
 **连续性断言只针对新写的实时 trace。**回填出来的历史 trace 保留原来的稀疏 seq，
 不能断言连续，也**不能断言 `head = event_count`**（A11）；对账历史成员要用 `event_count`。
-这是 `head` 与 `event_count` 在 `task.complete.trace` 里分成两个字段的原因。
+这是 `head` 与 `event_count` 在 `turn.complete.trace` 里分成两个字段的原因。
 
 `closed` 是 trace 唯一的终态信号（裁决 3），出现在 `TraceStore.head()`、reader 结果、
 `trace.read` / `trace.fetch` 的应答、`trace.push` 与 Hub 订阅上。**不存在 `trace.end` 事件**，
@@ -754,7 +761,7 @@ B 的 `unreachable` 对应其余三种错误。
 
 ### 5.4b 完成帧的轮次卡字段
 
-`task.complete` 与 `task.fail` 在现有载荷上加三项（裁决 5）：
+`turn.complete` 与 `task.fail` 在现有载荷上加三项（裁决 5）：
 
 ```ts
 trace: {
@@ -768,13 +775,14 @@ model: { provider: string; model: string } | null;                // 最后一�
 
 - `type_histogram` 按 `(type, tool)` 分桶，`tool` 只在 `tool_use` / `tool_result` 上非空（A11）；
   organizer 今天就是这么算的（`api/helpers/organizer.ts:52-58`），只按 type 会让它丢掉工具维度。
-- `final_reply_md` 与 `deriveFinalReply(events)` 使用相同规则，见 §5.4c；它不替代任务 `output`。
-  轮次卡最终正文仍使用任务上报结果，详见 [ADR 0006](adr/0006-conversation-log-and-daemon-owned-traces.md)。
-- `output` 字段保持原样：它是全部顶层 text 的拼接（`worker/daemon.ts:4416`），不随本改动变化。
+- daemon 的 `final_reply_md` 与 `deriveFinalReply(events)` 使用相同规则，见 §5.4c。
+  统一完成入口以 `reply.body_md` 为最终正文，trace 摘要不覆盖消息；卡片仅保留回复引用。
+  摘要字段缺失或畸形时，终态照常生效并打日志，不去读 trace 补算。
+- `turn.complete` 的回复在 `reply: {body_md, message_kind}` 中，载荷另带 `turn_id`、`attempt_id`、`input_to_seq`；不再上报旧 `output`。卡片的最终回复以 `reply.body_md` 为准。
 - `head` 与 `event_count` 分开：新写的 trace 两者相等，**回填的历史 trace 是稀疏的**，
   `head ≠ event_count`（A11）。
 
-HTTP 兼容入口 `POST /api/daemon/tasks/:taskId/complete|fail` 接受可选的同形 `trace` 块。
+历史 HTTP 入口 `POST /api/daemon/tasks/:taskId/complete|fail` 已退役；以下描述其 trace 迁移口径。
 B5 只读取其中的 `event_count`：非负安全整数才有效，非法值按未提供处理并记一条 warn。
 只有明确的 `event_count === 0` 才把热指针写成 `none`；缺失或正数保留 daemon 指针，
 不通过旧消息表推断空 trace。旧的空任务因此可能暂时返回 `unreachable` 或 `not_found`，
@@ -835,8 +843,8 @@ B 方案里的 `GET /api/daemon/tasks/:id/trace` 改用 `trace.fetch`，不新�
 - A（本单）**只删写路径**：daemon 不再产 `messages` outbox 记录，服务端删
   `POST /api/daemon/tasks/:id/messages` 与 `appendTaskMessages` 的 daemon 入口。
 - B（MUL-402）负责删表与指针路由；C（MUL-403）负责前端与飞书 CoT 改订阅 Hub。
-- A 一行不动 `multiremi_task_messages` 的读者（`routers/tasks.ts:385/433`、
-  `helpers/organizer.ts:53`、`routers/issue-shares.ts:166/173`、飞书 CoT）。
+- 当前生产读者从 trace 指针读取，旧 task 路由不注册。`multiremi_task_messages` 仅用于
+  历史 trace 回填、用量取证及旧 reader fixtures；`appendTaskMessages` 不是 daemon 写入入口。
 - 三者在 `v2-integration` 合流 PR 里同时存在，缺一不合。
 
 ## 6. 反向 RPC `trace.read`
@@ -893,7 +901,7 @@ daemon → hello   { protocol: 2, daemon_id, cli_version, launched_by,
                                   supports_skill_directory, supports_bot_menu,
                                   agent_plugin_protocol, feishu_concierge_protocol,
                                   feishu_decision_card, feishu_issue_decision_card } }],
-                   caps: ["offer", "steer.push", "trace.read", "trace.subscribe"] }
+                   caps: ["offer", "turn.message", "trace.read", "trace.subscribe"] }
 server → welcome { protocol: 2, server_version, min_cli_version, session_id,
                    hb_interval_ms: 15000,
                    limits: { frame_bytes, window_frames, window_bytes },
@@ -906,8 +914,10 @@ server → reject  { code: "daemon_protocol_upgrade_required", min_protocol: 2,
 `hb` 更新。上述能力缺失均按 false/0 处理，不能沿用数据库里的旧值。`feishu_concierge_protocol`
 达到服务端支持版本时同时表示 `supportsFeishuBotConfig`。
 
-服务端在 `hello` 时按 `protocol` 与 `cli_version` 双重判定。`caps` 是加法位：新增帧不升主版本，
-删帧或改语义才升。
+服务端在 `hello` 时按 `protocol` 与 `cli_version` 双重判定。载荷级语义变化随发布用
+`min_cli_version` 把关，协议号只在传输与帧封装变化时升；统一消息/轮载荷仍使用协议 2。
+新 daemon 收到旧服务端的 `welcome.min_cli_version` 时进入 `upgrade_wait`，停止领轮。
+旧形状的 `task.complete` 返回 `report_shape_retired`（`retryable: false`），outbox 隔离该分区。
 
 ### 7.2 v1 被拒后怎么升级
 
@@ -962,11 +972,13 @@ daemon protocol rejected by server (min X, self Y); waiting for pending_update, 
 
 `launched_by = desktop` 的 daemon 会拒绝 CLI 更新（现有逻辑），fleet 里目前没有这种情况。
 
-### 7.4b `DAEMON_MIN_CLI_VERSION` 是占位值
+### 7.4b `DAEMON_MIN_CLI_VERSION` 与载荷发布版本
 
-代码里的 `"0.2.83"` 是**占位**，不是既成事实：它必须等于第一个真正携带协议 v2 的 release tag。
-由带头大哥在 `v2-integration` 合入 main 时钉死。已验证的行为只有「不可读的版本视为更旧、
-必须升级」（有用例锁住）。
+当前 `DAEMON_MIN_CLI_VERSION` 为首个包含统一模型的正式版本 `0.2.89`。
+package 版本与依赖快照同步为 `0.2.89`，PPE 新 daemon 不需要伪造 label 即可接入；
+已发布的 `0.2.88` 使用旧协议，与 `0.2.85`、`0.2.86`、`0.2.87` 一并被拒绝。这次修改不打 tag、不发布。
+发布前，发布负责人核对 `v0.2.89` tag、package 版本、依赖快照、Release 资产和目标 main SHA；
+操作见[统一模型切换清单](deploy/unified-model-cutover.md)。门槛不表示 fleet 已升级。
 
 ### 7.5 升级失败的提示
 

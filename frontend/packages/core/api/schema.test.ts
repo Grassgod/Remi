@@ -171,12 +171,11 @@ describe("ApiClient schema fallback", () => {
     });
   });
 
-  describe("listComments", () => {
-    it("returns [] when the response is not an array", async () => {
+  describe("listMessages", () => {
+    it("rejects a malformed message page so the caller can show a recoverable error", async () => {
       stubFetchJson({ wrong: "shape" });
       const client = new ApiClient("https://api.example.test");
-      const comments = await client.listComments("issue-1");
-      expect(comments).toEqual([]);
+      await expect(client.listMessages("session-1")).rejects.toThrow("/api/sessions/session-1/messages");
     });
   });
 

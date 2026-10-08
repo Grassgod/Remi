@@ -1,3 +1,4 @@
+import { runTurnExecutionMutation } from "@multiremi/store/turn-execution-records.js";
 import { getExecutionGroup, runtimeExecutionGroupId } from "@multiremi/store/execution-groups.js";
 // Agents + skills domain, extracted verbatim from MultiremiStore (facade delegates here).
 // `listActiveAgentsByRuntime` lives here (rather than in RuntimesRepo) because it hydrates agent
@@ -281,7 +282,7 @@ export class AgentsSkillsRepo {
     // its new workspace.
     if (opts.workspaceChanged) {
       const active = this.ctx.db
-        .query("SELECT id FROM multiremi_tasks WHERE agent_id = ? AND status IN ('queued', 'dispatched', 'waiting_local_directory')")
+        .query("SELECT id FROM multiremi_turn_execution_records WHERE agent_id = ? AND status IN ('queued', 'dispatched', 'waiting_local_directory')")
         .all(agent.id) as Row[];
       for (const row of active) this.ctx.tasks().cancelTask(String(row.id));
       return;
@@ -292,7 +293,7 @@ export class AgentsSkillsRepo {
       // target using the Agent's now-mutated executable/config. Cancel work
       // that has not started; an explicit rerun will resolve current settings.
       const frozen = this.ctx.db.query(
-        `SELECT id FROM multiremi_tasks
+        `SELECT id FROM multiremi_turn_execution_records
          WHERE agent_id = ?
            AND execution_fingerprint IS NOT NULL
            AND status IN ('queued', 'dispatched', 'waiting_local_directory')`,
@@ -304,7 +305,7 @@ export class AgentsSkillsRepo {
     // runtime stamp, and that session is also void after an engine/owner change.
     const rows = this.ctx.db
       .query(
-        "SELECT * FROM multiremi_tasks WHERE agent_id = ? AND status = 'queued' AND (runtime_id IS NOT NULL OR session_id IS NOT NULL)",
+        "SELECT * FROM multiremi_turn_execution_records WHERE agent_id = ? AND status = 'queued' AND (runtime_id IS NOT NULL OR session_id IS NOT NULL)",
       )
       .all(agent.id) as Row[];
     for (const row of rows) {
@@ -316,14 +317,12 @@ export class AgentsSkillsRepo {
         // while keeping work_dir (the directory itself is unchanged).
         const rt = this.ctx.runtimes().getRuntimeByDaemonAndProvider(daemonId, agent.provider);
         const newRuntimeId = rt ? rt.id : daemonRuntimeId(daemonId, agent.provider);
-        this.ctx.db.run(
-          "UPDATE multiremi_tasks SET runtime_id = ?, session_id = NULL, offered_at = NULL, accepted_at = NULL, updated_at = ? WHERE id = ?",
+        runTurnExecutionMutation(this.ctx.db, "UPDATE multiremi_turn_execution_records SET runtime_id = ?, session_id = NULL, offered_at = NULL, accepted_at = NULL, updated_at = ? WHERE id = ?",
           [newRuntimeId, now, String(row.id)],
         );
       } else {
         // Session/other pin: the old session is void — re-pool it.
-        this.ctx.db.run(
-          "UPDATE multiremi_tasks SET runtime_id = NULL, session_id = NULL, work_dir = NULL, offered_at = NULL, accepted_at = NULL, updated_at = ? WHERE id = ?",
+        runTurnExecutionMutation(this.ctx.db, "UPDATE multiremi_turn_execution_records SET runtime_id = NULL, session_id = NULL, work_dir = NULL, offered_at = NULL, accepted_at = NULL, updated_at = ? WHERE id = ?",
           [now, String(row.id)],
         );
       }

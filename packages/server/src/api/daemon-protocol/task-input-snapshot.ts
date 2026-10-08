@@ -1,8 +1,9 @@
 import type { MultiremiStore } from "@multiremi/store/store.js";
 import type { DaemonDownlinkEntity } from "./downlinks.js";
+import type { DaemonTurnBridge } from "./turn-bridge.js";
 
 export function taskInputSnapshot(store: MultiremiStore, runtimeId: string, daemonId: string, activeTaskIds: ReadonlySet<string>,
-  forget: (taskId: string) => void): DaemonDownlinkEntity[] {
+  forget: (taskId: string) => void, turns: DaemonTurnBridge = store.getDaemonTurnBridge()): DaemonDownlinkEntity[] {
   const ids = new Set(activeTaskIds);
   for (const task of store.listTaskRefs({ runtimeId,
     statuses: ["dispatched", "running", "waiting_local_directory", "awaiting_human"] })) ids.add(task.id);
@@ -16,21 +17,19 @@ export function taskInputSnapshot(store: MultiremiStore, runtimeId: string, daem
         payload: { task_id: id, status: task.status }, claimed: () => forget(id), discard: () => forget(id) });
       continue;
     }
-    for (const steer of store.listPendingTaskSteerMessages(id)) entities.push({
-      key: `steer:${steer.id}`, type: "task.steer", payload: { task_id: id, steer },
-      discard: () => { store.consumeTaskSteerMessages(id, [steer.id]); },
-    });
-    for (const request of store.listTaskHumanRequests(id)) {
-      if (request.status === "pending") continue;
-      entities.push({ key: `human:${request.id}`, type: "task.human_request.settled", payload: { task_id: id, request } });
-    }
   }
-  if (host?.daemonId === daemonId && host.workspaceId) {
-    for (const candidate of store.listFeishuBotSettledHumanRequestCandidates(host.workspaceId, runtimeId, daemonId)) {
-      const request = candidate.request!;
-      entities.push({ key: `human:${request.id}`, type: "task.human_request.settled",
-        payload: { task_id: candidate.taskId, request } });
-    }
+  if (host) {
+    const snapshot = turns.snapshot({ runtimeId, daemonId, workspaceId: host.workspaceId ?? "local" }, ids);
+    const messageIds=snapshot.messages.map(input=>input.message.id);
+    const attachments = store.listAttachmentsForComments(messageIds);
+    const chatAttachments=store.listAttachmentsForChatMessages(messageIds);
+    for (const input of snapshot.messages) entities.push({
+      key: `turn.message:${input.attempt_id}:${input.message.id}`, type: "turn.message",
+      payload: { ...input, attachments: [...(attachments.get(input.message.id) ?? []),...(chatAttachments.get(input.message.id) ?? [])] },
+    });
+    for (const control of snapshot.wrapUps) entities.push({
+      key: `turn.wrap_up:${control.attempt_id}:${control.requested_at}`, type: "turn.wrap_up", payload: { ...control },
+    });
   }
   return entities;
 }

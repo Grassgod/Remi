@@ -2,7 +2,8 @@
 import { constants } from "node:fs";
 import { lstat, open } from "node:fs/promises";
 import { isAbsolute, relative, resolve, sep } from "node:path";
-import { parseSessionArchiveIndex, type SessionArchiveIndex } from "../packages/contracts/src/session-archive.js";
+import { parseSessionArchiveIndex, readTraceMemberWindow, splitTraceMemberLines, type SessionArchiveIndex } from "../packages/contracts/src/session-archive.js";
+import { checkTraceFileLines, type TraceFileHeader } from "../packages/contracts/src/trace-file.js";
 import type { TaskUsageSnapshot, TaskUsageUnit } from "../packages/contracts/src/usage-accounting.js";
 import { readZipCentralDirectory, readZipMember, readZipMemberBody } from "../packages/shared/src/zip/reader.js";
 import { meterIntervalsOverlap, unitActualTotal } from "../packages/acp/src/usage-collector.js";
@@ -13,7 +14,7 @@ import { ensureUsageAccountingSchema, legacyUsageSnapshot } from "../packages/se
 import { assignHistoricalUnit, parseNativeUsageEvidence, parseRawUsageEvidence, mergeNativeUsageEvidence, reconcileNativeSourceEvidence, type HistoricalTaskBoundary, type CompletedNativeTurn, type NativeSourceScope } from "./usage-evidence.js";
 import { readLegacyUsageMembers } from "./legacy-usage-archive.js";
 import { nextUsageRevision, readPlanUsageRevisionStates, usageRevisionStateSha256 } from "./usage-reconciliation-revisions.js";
-import { buildModernUsageRepairs, type ModernUsageRepair, type NativeRunScope, type readModernRepairState } from "./modern-usage-repair.js";
+import { assertUsageReconciliationSchema, buildModernUsageRepairs, type ModernUsageRepair, type NativeRunScope, type readModernRepairState } from "./modern-usage-repair.js";
 
 interface Task extends HistoricalTaskBoundary { workspace_id: string; agent_id: string; issue_id: string | null; chat_session_id: string | null; usage: string; has_live_usage: boolean; status: string; }
 interface Archive { id: string; relative_path: string; subject_kind: string; subject_id: string; format: string; }
@@ -110,7 +111,7 @@ export async function buildReconcileUsagePlan(sql: Bun.SQL, options: { archiveRo
   ] };
   // Ownership resolution must see every competing task, even --task-id.
   const tasks = await sql.unsafe<Task[]>(`SELECT t.id,t.workspace_id,t.agent_id,t.provider,t.status,t.session_id,t.issue_session_id,t.issue_id,t.chat_session_id,t.started_at,t.completed_at,t.failed_at,t.cancelled_at,t.usage,
-    EXISTS(SELECT 1 FROM multiremi_usage_runs r WHERE r.task_id=t.id AND r.run_id NOT IN ('legacy','historical-evidence-v2')) AS has_live_usage FROM multiremi_tasks t`);
+    EXISTS(SELECT 1 FROM multiremi_usage_runs r WHERE r.task_id=t.id AND r.run_id NOT IN ('legacy','historical-evidence-v2')) AS has_live_usage FROM multiremi_turn_execution_records t`);
   const terminal = (task: Task) => ["completed", "failed", "cancelled"].includes(task.status);
   const selected = (task: Task) => !task.has_live_usage && terminal(task) && (!options.taskId || task.id === options.taskId);
   plan.excludedTasks = tasks.filter(task => (!options.taskId || task.id === options.taskId) && !selected(task))
@@ -118,39 +119,48 @@ export async function buildReconcileUsagePlan(sql: Bun.SQL, options: { archiveRo
   plan.counts.tasks = tasks.filter(selected).length;
   const byTask = new Map(tasks.map(t => [t.id, { task: t, raw: new Map<string, TaskUsageUnit>(), native: new Map<string, TaskUsageUnit>(), completedTurns: [] as CompletedNativeTurn[], sourceScopes: [] as NativeSourceScope[], context: null as TaskUsageUnit | null, ambiguousRawEvents: 0 }]));
   const lastSignature = new Map<string, string>();
+  const seenRawEvents = new Set<string>();
+  const ingestRaw = (row: { task_id: string; seq: number; created_at: string; meta: unknown }, evidenceRef: string) => {
+    // A backfilled trace carries the original attempt/seq. Reading both copies
+    // does not create another observation, even without provider request IDs.
+    const key = JSON.stringify([row.task_id, Number(row.seq)]);
+    if (seenRawEvents.has(key)) { plan.counts.replayed++; return; }
+    seenRawEvents.add(key);
+    plan.counts.rawEvents++;
+    const target = byTask.get(row.task_id);
+    if (!target?.task.provider) return;
+    const evidence = parseRawUsageEvidence({ provider: target.task.provider, meta: row.meta,
+      evidenceRef, occurredAt: row.created_at });
+    plan.counts.rejected += evidence.rejected;
+    for (const unit of evidence.units) {
+      if (unit.source === "context_snapshot") {
+        if (!target.context || unit.contextTokens! > target.context.contextTokens!) target.context = unit;
+        continue;
+      }
+      const signature = JSON.stringify([unit.provider, unit.model, unit.inputTokens, unit.outputTokens, unit.cacheReadTokens, unit.cacheWriteTokens, unit.reportedTotalTokens]);
+      if (lastSignature.get(row.task_id) === signature && !evidence.stableRequestIdentity) {
+        plan.counts.ambiguousRawEvents++; target.ambiguousRawEvents++;
+      }
+      lastSignature.set(row.task_id, signature);
+      const old = target.raw.get(unit.unitId);
+      if (old) {
+        for (const field of ["inputTokens", "outputTokens", "cacheReadTokens", "cacheWriteTokens", "actualUnsplitTokens", "reportedTotalTokens"] as const) {
+          if (old[field] !== null) unit[field] = Math.max(old[field]!, unit[field] ?? 0);
+        }
+        unit.occurredAt = old.occurredAt;
+      }
+      target.raw.set(unit.unitId, unit);
+    }
+  };
+  // Historical read-only source retained by trace backfill. Unified executions
+  // write daemon traces; their archived usage is read below, never into this table.
   let afterTask = "", afterSeq = -1;
   for (;;) {
     const rows = await sql.unsafe<Array<{ task_id: string; seq: number; created_at: string; meta: string }>>(
       `SELECT task_id,seq,created_at,meta FROM multiremi_task_messages WHERE type=$1 AND (task_id,seq)>($2,$3)
        ORDER BY task_id,seq LIMIT 1000`, ["usage", afterTask, afterSeq]);
     if (!rows.length) break;
-    for (const row of rows) {
-      plan.counts.rawEvents++;
-      const target = byTask.get(row.task_id);
-      if (!target?.task.provider) continue;
-      const evidence = parseRawUsageEvidence({ provider: target.task.provider, meta: row.meta,
-        evidenceRef: `task-message:${row.task_id}:${row.seq}`, occurredAt: row.created_at });
-      plan.counts.rejected += evidence.rejected;
-      for (const unit of evidence.units) {
-        if (unit.source === "context_snapshot") {
-          if (!target.context || unit.contextTokens! > target.context.contextTokens!) target.context = unit;
-          continue;
-        }
-        const signature = JSON.stringify([unit.provider, unit.model, unit.inputTokens, unit.outputTokens, unit.cacheReadTokens, unit.cacheWriteTokens, unit.reportedTotalTokens]);
-        if (lastSignature.get(row.task_id) === signature && !evidence.stableRequestIdentity) {
-          plan.counts.ambiguousRawEvents++; target.ambiguousRawEvents++;
-        }
-        lastSignature.set(row.task_id, signature);
-        const old = target.raw.get(unit.unitId);
-        if (old) {
-          for (const key of ["inputTokens", "outputTokens", "cacheReadTokens", "cacheWriteTokens", "actualUnsplitTokens", "reportedTotalTokens"] as const) {
-            if (old[key] !== null) unit[key] = Math.max(old[key]!, unit[key] ?? 0);
-          }
-          unit.occurredAt = old.occurredAt;
-        }
-        target.raw.set(unit.unitId, unit);
-      }
-    }
+    for (const row of rows) ingestRaw(row, `task-message:${row.task_id}:${row.seq}`);
     const last = rows.at(-1)!;
     afterTask = last.task_id; afterSeq = Number(last.seq);
     if (plan.counts.rawEvents % 10_000 === 0) options.onProgress?.(`Read ${plan.counts.rawEvents} raw usage events`);
@@ -217,11 +227,35 @@ export async function buildReconcileUsagePlan(sql: Bun.SQL, options: { archiveRo
         opened = await archiveIndex(options.archiveRoot, archive);
         plan.counts.bytesRead += opened.bytesRead;
         for (const member of opened.index.members) {
-          if (member.kind !== "provider" || !member.path.endsWith(".jsonl")) continue;
+          if (!["provider", "trace"].includes(member.kind) || !member.path.endsWith(".jsonl")) continue;
           if (member.uncompressed_size > 128 * 1024 * 1024) { plan.counts.archiveReadFailures++; continue; }
           const read = await readZipMemberBody(opened.handle, { dataOffset: member.data_offset,
             compressedSize: member.compressed_size, uncompressedSize: member.uncompressed_size, sha256: member.sha256 });
-          plan.counts.bytesRead += read.bytesRead; plan.counts.nativeMembers++;
+          plan.counts.bytesRead += read.bytesRead;
+          if (member.kind === "trace") {
+            const target = candidates.find(task => task.id === member.task_id);
+            if (!target) { plan.counts.rejected++; continue; }
+            const lines = splitTraceMemberLines(read.bytes);
+            // Match the trace writer's product-session subject, not the native
+            // provider session or an automation's conversation ID.
+            const traceSessionId = target.issue_session_id ?? target.chat_session_id ?? (target.issue_id ? `legacy-${target.issue_id}` : target.id);
+            const checked = checkTraceFileLines(lines, { taskId: target.id, sessionId: traceSessionId,
+              incompleteTail: read.bytes.length > 0 && read.bytes.at(-1) !== 10 });
+            if (!checked.ok) { plan.counts.rejected++; continue; }
+            const header = JSON.parse(lines[0]!) as TraceFileHeader;
+            if (header.agent_id !== target.agent_id || header.provider !== target.provider) {
+              plan.counts.rejected++; continue;
+            }
+            const window = readTraceMemberWindow(read.bytes, 0, Number.MAX_SAFE_INTEGER);
+            if (window.head !== member.head || window.events.length !== member.event_count || window.closed !== member.closed
+              || window.duplicateSeqSkipped) { plan.counts.rejected++; continue; }
+            for (const event of window.events) if (event.type === "usage") {
+              ingestRaw({ task_id: target.id, seq: event.seq, created_at: String(event.ts ?? ""), meta: event.meta },
+                `archive:${archive.id}:${member.path}:${member.sha256}:seq=${event.seq}`);
+            }
+            continue;
+          }
+          plan.counts.nativeMembers++;
           const body = read.bytes.toString();
           ingest(member.path, body, `archive:${archive.id}:${member.path}:${member.sha256}`);
         }
@@ -252,7 +286,7 @@ export async function buildReconcileUsagePlan(sql: Bun.SQL, options: { archiveRo
   // telemetry are excluded from the requested historical application cohort.
   const liveClaims = await sql.unsafe<Array<{ workspace_id: string; task_id: string; unit_id: string; provider: string; connection_id: string | null; provider_session_id: string; provider_request_id: string | null; provider_observation_id: string | null; identity_kind: TaskUsageUnit["identityKind"]; meter_evidence: string | null }>>(`
     SELECT t.workspace_id,u.task_id,u.unit_id,u.provider,u.connection_id,u.provider_session_id,u.provider_request_id,u.provider_observation_id,u.identity_kind,u.meter_evidence
-    FROM multiremi_usage_units u JOIN multiremi_tasks t ON t.id=u.task_id
+    FROM multiremi_usage_units u JOIN multiremi_turn_execution_records t ON t.id=u.task_id
     WHERE u.run_id NOT IN ('legacy','historical-evidence-v2') AND u.provider_session_id IS NOT NULL AND (u.provider_request_id IS NOT NULL OR u.provider_observation_id IS NOT NULL)
       AND u.source IN ('provider_request','provider_turn')`);
   const vector = (values: number[]) => ({ inputTokens: values[0]!, outputTokens: values[1]!, cacheReadTokens: values[2]!, cacheWriteTokens: values[3]!, totalTokens: values[4]! });
@@ -264,7 +298,7 @@ export async function buildReconcileUsagePlan(sql: Bun.SQL, options: { archiveRo
       ...(meter ? { meterEvidence: { epochId: meter.epochId, before: vector(meter.before), after: vector(meter.after) } } : {}) } as TaskUsageUnit);
   }
   const conflictingClaims = await sql.unsafe<Array<{ workspace_id: string; task_id: string; unit_json: string }>>(`
-    SELECT t.workspace_id,c.task_id,c.unit_json FROM multiremi_usage_identity_conflicts c JOIN multiremi_tasks t ON t.id=c.task_id`);
+    SELECT t.workspace_id,c.task_id,c.unit_json FROM multiremi_usage_identity_conflicts c JOIN multiremi_turn_execution_records t ON t.id=c.task_id`);
   for (const row of conflictingClaims) {
     try { claim(row.workspace_id, row.task_id, JSON.parse(row.unit_json) as TaskUsageUnit); }
     catch { plan.counts.rejected++; }
@@ -322,7 +356,7 @@ export async function buildReconcileUsagePlan(sql: Bun.SQL, options: { archiveRo
       continue;
     }
     const [taskRows, units, runs, receipts, coverage, scopes] = await Promise.all([
-      sql.unsafe("SELECT id,workspace_id,provider,status,session_id,usage,started_at,completed_at,failed_at,cancelled_at FROM multiremi_tasks WHERE id=$1", [taskId]),
+      sql.unsafe("SELECT id,turn_id,attempt,workspace_id,provider,status,session_id,usage,started_at,completed_at,failed_at,cancelled_at FROM multiremi_turn_execution_records WHERE id=$1", [taskId]),
       sql.unsafe("SELECT * FROM multiremi_usage_units WHERE task_id=$1 ORDER BY run_id,unit_id", [taskId]),
       sql.unsafe("SELECT * FROM multiremi_usage_runs WHERE task_id=$1 ORDER BY run_id", [taskId]),
       sql.unsafe("SELECT * FROM multiremi_usage_unit_receipts WHERE task_id=$1 ORDER BY run_id,unit_id", [taskId]),
@@ -356,6 +390,7 @@ export async function mainReconcileTaskUsage(): Promise<void> {
     const plan = await Bun.file((applyPlan ?? verifyPlan)!).json() as ReconcileUsagePlan;
     const db = new PostgresSyncDatabase(databaseUrl);
     try {
+      assertUsageReconciliationSchema(db);
       if (applyPlan) ensureUsageAccountingSchema(db);
       const result = applyPlan ? applyUsageReconciliation(db, plan, progress => process.stderr.write(`${JSON.stringify(progress)}\n`)) : null;
       process.stdout.write(`${JSON.stringify({ applied: result, verified: verifyUsageReconciliation(db, plan) }, null, 2)}\n`);

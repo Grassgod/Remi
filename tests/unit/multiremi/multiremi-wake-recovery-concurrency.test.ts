@@ -1,3 +1,5 @@
+import { runTurnExecutionMutation } from '@multiremi/store/turn-execution-records.js';
+import type { SqlDatabase as UnifiedFixtureDatabase } from '@multiremi/store/db/postgres.js';
 import { expect, it } from "bun:test";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -64,7 +66,8 @@ pendingTurnBackendTests("MUL-492 wake recovery concurrency", (fixture, backend) 
     const session = f.store.getOrCreateDefaultIssueSession(issue.id);
     const delivery = f.transaction(() => f.store.sendEnvelopeWithinTransaction({ to: { role: "agent", agentId: agent.id,
       issueSessionId: session.id }, kind: "report", wake: "now", body: "Lost wake", source: {} }, [], createCommitEventQueue()))[0]!;
-    f.db.run("UPDATE multiremi_tasks SET status = 'cancelled' WHERE id = ?", [delivery.task!.id]);
+    runTurnExecutionMutation(f.db as unknown as UnifiedFixtureDatabase, "UPDATE multiremi_turn_execution_records SET status = 'cancelled' WHERE id = ?", [delivery.task!.id]);
+    f.db.run('UPDATE multiremi_turns SET trigger_message_id=NULL WHERE current_attempt_id=?',[delivery.task!.id]);
     const before = f.store.listTasksForIssue(issue.id).length;
     await race(f, "sweep", { now: Date.now() + 61_000 }, tx => tx`UPDATE multiremi_workspaces SET updated_at = updated_at WHERE id = ${agent.workspaceId}`);
     const tasks = f.store.listTasksForIssue(issue.id);

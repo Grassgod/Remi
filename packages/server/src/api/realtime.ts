@@ -13,6 +13,7 @@ import {
   taskRealtimePayload,
 } from "./wire/index.js";
 import type { MultiremiStore } from "@multiremi/store/store.js";
+import { canUserViewTaskMessages } from "./helpers/auth-guards.js";
 import type {
   MultiremiAccessToken,
   MultiremiTask,
@@ -76,7 +77,14 @@ export function notifyBrowserTaskEvent(
       { human: frame, restricted: frame }, undefined, task.workspaceId);
     return;
   }
-  notifyBrowserWorkspaceClients(workspaceRegistry, task.workspaceId, frame);
+  const clients = workspaceRegistry.get(task.workspaceId);
+  if (!clients) return;
+  for (const client of [...clients]) {
+    if (client.data.kind !== "browser" || !client.data.authenticated
+      || !canUserViewTaskMessages(store, client.data.userId, task)) continue;
+    try { client.sendText(frame); }
+    catch { unregisterBrowserWebSocketClient(workspaceRegistry, client); try { client.close(); } catch {} }
+  }
 }
 
 /**

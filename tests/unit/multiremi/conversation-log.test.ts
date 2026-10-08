@@ -1,7 +1,9 @@
+import { requestMessageBody } from "./unified-test-paths.js";
 import { afterEach, describe, expect, it } from "bun:test";
 import type { ConversationLogEntry, ConversationLogPatch } from "@multiremi/contracts/conversation-log";
 import { createMultiremiApp } from "@multiremi/api.js";
-import { createStore, db, resetMultiremiTestEnv } from "./helpers.js";
+import { createLocalStore as createStore, db, resetMultiremiTestEnv } from "./helpers.js";
+import { pendingTurnBackendTests } from "./pending-turn-test-backends.js";
 
 afterEach(resetMultiremiTestEnv);
 
@@ -32,9 +34,9 @@ describe("conversation log (MUL-426)", () => {
     const issue = store.createIssue({ title: "Locate visibility", workspaceId: "local" });
     const comment = store.createIssueComment(issue.id, { body: "remove me" });
     const sessionId = comment.issueSessionId!;
-    store.updateIssueComment(comment.id, { body: "edited" });
+    store.editMessage(comment.id, { body_md: "edited" });
     const hidden = store.listConversationLogEntries(sessionId).find((entry) => entry.kind === "message_edited")!;
-    store.deleteIssueComment(comment.id);
+    store.deleteMessage(comment.id);
     const app = createMultiremiApp({ store });
     const bodies = [];
     for (const id of [hidden.id, comment.id, "clog_missing"]) {
@@ -57,7 +59,7 @@ describe("conversation log (MUL-426)", () => {
     const original = store.getConversationLogEntryById(comment.id)!;
     store.resolveIssueComment(comment.id, { actorType: "member", actorId: "local" });
     store.unresolveIssueComment(comment.id);
-    const patches = emitted.filter((entry): entry is ConversationLogPatch => "target_seq" in entry);
+    const patches = emitted.filter((entry): entry is ConversationLogPatch => "target_seq" in entry && (entry.fields.resolved_at !== undefined));
     expect(patches.map((patch) => patch.revision)).toEqual([original.revision + 1, original.revision + 2]);
     expect(patches[0]!.fields).toMatchObject({
       resolved_at: expect.any(String), resolved_by_type: "member", resolved_by_id: "local",
@@ -118,12 +120,15 @@ describe("conversation log (MUL-426)", () => {
 
   it("rolls back a log append together with its allocated seq", () => {
     const store = createStore();
+    const issue = store.createIssue({title:"Rollback",workspaceId:"local"});
+    const session = store.getOrCreateDefaultIssueSession(issue.id);
+    const before = store.getConversationLogHead(session.id);
     expect(() => db!.transaction(() => {
-      store.appendConversationLogWithinTransaction({ sessionId: "ises_rollback", kind: "message", authorType: "system", bodyMd: "discard" });
+      store.appendConversationLogWithinTransaction({ sessionId: session.id, kind: "message", authorType: "system", bodyMd: "discard" });
       throw new Error("rollback");
     })()).toThrow("rollback");
-    expect(store.getConversationLogHead("ises_rollback")).toBeNull();
-    expect(store.listConversationLogEntries("ises_rollback")).toEqual([]);
+    expect(store.getConversationLogHead(session.id)).toEqual(before);
+    expect(store.listConversationLogEntries(session.id)).toEqual([]);
   });
 
   it("rolls back a comment when its log mirror fails", () => {
@@ -158,9 +163,12 @@ describe("conversation log (MUL-426)", () => {
     expect((await located.json()).seq).toBe(body.entries[0].seq);
     expect((await app.request(`/api/sessions/${session.id}/log?before=100&after=1`)).status).toBe(400);
     expect((await app.request(`/api/sessions/${session.id}/log/locate`)).status).toBe(400);
+    const expanded = await app.request(`/api/sessions/${session.id}/log/entry?seq=${body.entries[0].seq}`);
+    expect(expanded.status).toBe(200); expect((await expanded.json()).id).toBe(body.entries[0].id);
+    expect((await app.request(`/api/sessions/${session.id}/log/entry`)).status).toBe(400);
   });
 
-  it("syncs Issue and Chat heads and keeps a supplied chat client_id", async () => {
+  it("syncs Issue and Chat heads and keeps the canonical chat dedupe key", async () => {
     const store = createStore();
     const issue = store.createIssue({ title: "Initial issue", description: "Initial body", workspaceId: "local" });
     const first = store.getOrCreateDefaultIssueSession(issue.id);
@@ -186,13 +194,13 @@ describe("conversation log (MUL-426)", () => {
     store.updateChatSession(chat.id, { title: "Renamed chat" });
     expect(store.getConversationLogEntry(chat.id, 0)).toMatchObject({ body_md: "Renamed chat", revision: 2 });
     const app = createMultiremiApp({ store });
-    const response = await app.request(`/api/chat/sessions/${chat.id}/messages`, {
+    const response = await app.request(`/api/sessions/${chat.id}/messages`, {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ content: "hello", client_id: "client-42" }),
+      body: JSON.stringify(requestMessageBody(store, { body_md: "hello", dedupe_key: "client-42" }, { type: "agent", ref: store.getChatSession(chat.id)!.agentId })),
     });
-    expect(response.status).toBe(201);
+    expect(response.status).toBe(200);
     const body = await response.json();
-    expect(store.getConversationLogEntryById(body.message_id)?.metadata.client_id).toBe("client-42");
+    expect(store.getMessage(body.message.id)?.dedupe_key).toBe("client-42");
   });
 
   it("hydrates Chat user, push and final attachments from current message links", async () => {
@@ -205,14 +213,12 @@ describe("conversation log (MUL-426)", () => {
     });
     const userFile = attachment("user.txt");
     const sent = store.sendChatMessage(chat.id, { content: "user upload", attachmentIds: [userFile.id] });
-    const push = store.appendChatMessageWithinTransaction({
-      chatSessionId: chat.id, taskId: sent.task.id, role: "assistant", body: "push upload",
-    });
+    const push = store.sendMessage({session_id:chat.id,sender:{type:"agent",id:agent.id},source_turn_id:store.getTurnForAttempt(sent.task.id)!.id,to:{type:"none"},message_kind:"report",wake_requested:"inbox_only",body_md:"push upload",metadata:{elapsed_ms:null}}).message;
     const pushFile = attachment("push.txt");
     store.linkAttachmentsToChatMessage(chat.id, push.id, [pushFile.id]);
-    const final = store.appendChatMessageWithinTransaction({
+    const final = db!.transaction(() => store.appendChatMessageWithinTransaction({
       chatSessionId: chat.id, taskId: sent.task.id, role: "assistant", body: "final reply", elapsedMs: 10,
-    });
+    }))();
     const finalFile = attachment("final.txt");
     store.linkAttachmentsToChatMessage(chat.id, final.id, [finalFile.id]);
 
@@ -237,26 +243,46 @@ describe("conversation log (MUL-426)", () => {
     expect((await updated.json()).entries[0].metadata.attachments).toEqual([]);
   });
 
-  it("retains an unbackfilled legacy row while new reads use the session log", async () => {
+  it("reads historical Chat rows from the canonical log after cutover", async () => {
     const store = createStore();
-    const agent = store.createAgent({ name: "History agent", provider: "codex", visibility: "workspace" });
-    const chat = store.createChatSession({ agentId: agent.id, title: "History" });
-    const createdAt = "2026-01-01T00:00:00.000Z";
-    db!.run(
-      `INSERT INTO multiremi_chat_messages (id, chat_session_id, role, body, sequence, created_at)
-       VALUES (?, ?, 'system', 'old message', 1, ?)`,
-      ["msg_old_history", chat.id, createdAt],
-    );
-    db!.run("UPDATE multiremi_chat_sessions SET message_sequence = 1 WHERE id = ?", [chat.id]);
-    const sent = store.sendChatMessage(chat.id, { content: "new message" });
-    expect(store.getConversationLogEntryById(sent.message.id)?.seq).toBe(2);
-
-    const app = createMultiremiApp({ store });
+    const agent = store.createAgent({name:"History agent",provider:"codex",visibility:"workspace"});
+    const chat = store.createChatSession({agentId:agent.id,title:"History"});
+    const historical = db!.transaction(() => store.appendChatMessageWithinTransaction({chatSessionId:chat.id,role:"system",body:"old message",createdAt:"2026-01-01T00:00:00.000Z"}))();
+    const sent = store.sendChatMessage(chat.id,{content:"new message"});
+    expect(store.getConversationLogEntryById(historical.id)?.seq).toBe(1);
+    expect(store.getConversationLogEntryById(sent.message.id)?.seq).toBeGreaterThan(1);
+    const app = createMultiremiApp({store});
     const window = await (await app.request(`/api/sessions/${chat.id}/log?before=10`)).json();
-    expect(window.entries.filter((entry: { kind: string }) => entry.kind === "message")
-      .map((entry: { body_md: string }) => entry.body_md)).toEqual(["new message"]);
-    expect(store.listChatMessagesFromLog(chat.id).map(message => message.body)).toEqual(["old message", "new message"]);
-    expect((await app.request(`/api/chat/sessions/${chat.id}/messages`)).status).toBe(404);
+    expect(window.entries.filter((entry:{kind:string})=>entry.kind==="message").map((entry:{body_md:string})=>entry.body_md)).toEqual(["old message","new message"]);
+    expect(store.listChatMessagesFromLog(chat.id).map(message=>message.body)).toEqual(["old message","new message"]);
+    expect((await app.request(`/api/sessions/${chat.id}/messages`)).status).toBe(200);
     expect((await app.request(`/api/chat/sessions/${chat.id}/messages/page?limit=1`)).status).toBe(404);
+  });
+});
+
+pendingTurnBackendTests("read-only display log", fixture => {
+  for (const kind of ["Issue", "Chat"] as const) it(`${kind}: task capability display reads leave every agent lane field unchanged`, async () => {
+    const { store, db } = fixture();
+    const agent = store.createAgent({ name: "Display reader", provider: "codex", visibility: "workspace" });
+    const issue = kind === "Issue" ? store.createIssue({ title: "Display Issue", assigneeType: "agent", assigneeId: agent.id }) : null;
+    const sessionId = issue ? store.getOrCreateDefaultIssueSession(issue.id).id : store.createChatSession({ agentId: agent.id, creatorId: "local" }).id;
+    const sent = store.sendMessage({ session_id: sessionId, sender: { type: "member", id: "mem_local_local" }, to: { type: "agent", ref: agent.id }, message_kind: "request", body_md: "Display input", wake_requested: "now" });
+    const turn = store.getTurn(sent.turn_id!)!;
+    const token = await store.createAccessToken({ type: "task", name: "Display reader", taskId: turn.current_attempt_id!, agentId: agent.id, userId: "local", workspaceId: "local" });
+    const app = createMultiremiApp({ store, authToken: "display-master" }), headers = { Authorization: `Bearer ${token.token}` };
+    const lanes = () => db.query("SELECT * FROM multiremi_session_lanes WHERE session_id=? ORDER BY reader_type,reader_id,execution_scope").all(sessionId);
+    const before = lanes(), path = `/api/sessions/${sessionId}/log`;
+    for (const suffix of ["", `/locate?id=${sent.message.id}`, `/entry?id=${sent.message.id}`, `/entry?seq=${sent.message.seq}`]) {
+      const response = await app.request(path + suffix, { headers }); expect(response.status, suffix).toBe(200);
+      expect(lanes()).toEqual(before);
+    }
+    const card = await app.request(`${path}/entry?seq=${turn.seq}`, { headers });
+    expect(card.status).toBe(kind === "Issue" ? 200 : 404); expect(lanes()).toEqual(before);
+    for (const query of ["from=0", `to=${sent.message.seq}`, `from=0&to=${sent.message.seq}`]) {
+      const response = await app.request(`${path}?${query}`, { headers }); expect(response.status).toBe(400);
+      expect((await response.json()).error).toContain("remi message list"); expect(lanes()).toEqual(before);
+    }
+    const range = await app.request(`/api/sessions/${sessionId}/messages?from=0&to=${sent.message.seq}`, { headers });
+    expect(range.status).toBe(200); expect(store.getSessionAgentReadProgress(sessionId, agent.id).seq).toBe(sent.message.seq);
   });
 });

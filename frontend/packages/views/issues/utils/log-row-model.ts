@@ -9,7 +9,8 @@ export function buildLogRowModel(entries: readonly SessionLogEntry[]) {
   const parentsWithReplies = new Set<string>();
   for (const row of rows) {
     byId.set(row.id, row);
-    if (row.parent_id) parentsWithReplies.add(row.parent_id);
+    const parentId = row.reply_to_id ?? row.parent_id;
+    if (parentId) parentsWithReplies.add(parentId);
   }
   return { rows, byId, parentsWithReplies };
 }

@@ -24,7 +24,7 @@ describe("platform prompt template preview", () => {
     expect(preview.bootstrap).toContain("{{issue_description}}");
     expect(preview.bootstrap).toContain("## Issue Metadata");
     expect(preview.bootstrap).toContain("## Triggering Comment");
-    expect(preview.bootstrap).toContain("--parent {{trigger_comment_id}}");
+    expect(preview.bootstrap).toContain("--reply-to {{trigger_comment_id}}");
     expect(preview.bootstrap).toContain("## Repository Availability Warnings");
     expect(preview.bootstrap).toContain("## Project Context");
     expect(preview.bootstrap).toContain("## Project Instructions\n{{project_instructions}}");

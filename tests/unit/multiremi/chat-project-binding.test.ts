@@ -1,3 +1,4 @@
+import { mutateExecutionFixture } from "./unified-test-paths.js";
 import { afterEach, describe, expect, it } from "bun:test";
 import { ChatValidationError } from "@multiremi/store/repos/chat-repo.js";
 import { createMultiremiApp } from "@multiremi/api.js";
@@ -62,7 +63,7 @@ describe("Chat Project binding", () => {
     for (const status of ["queued", "dispatched", "running", "waiting_local_directory", "awaiting_human"]) {
       const chat = store.createChatSession({ agentId: agent.id, projectId: project.id });
       const task = store.sendChatMessage(chat.id, { body: "Working" }).task;
-      db!.run("UPDATE multiremi_tasks SET status = ? WHERE id = ?", [status, task.id]);
+      mutateExecutionFixture(db!, "UPDATE multiremi_turn_execution_records SET status = ? WHERE id = ?", [status, task.id]);
       expect(store.updateChatSession(chat.id, { title: "Rename", pinned: true })).toMatchObject({
         title: "Rename", pinned: true, projectId: project.id,
       });
@@ -106,6 +107,7 @@ describe("Chat Project binding", () => {
     expect(task.runtimeId).toBe(directory.id);
     expect(store.claimTask(other.id)).toBeNull();
     expect(store.claimTask(directory.id)?.id).toBe(task.id);
+    store.buildTaskSessionProjection(task.id);
     store.startTask(task.id);
     store.failTask(task.id, { error: "Stale session", failureReason: "agent_error.stale_session", sessionId: "unsafe" });
     const retry = store.listTasks().find((row) => row.parentTaskId === task.id)!;
@@ -171,6 +173,7 @@ describe("Chat Project binding", () => {
         }
       }
       expect(store.claimTask(available.id)).toMatchObject({ id: task.id, project: null, repos: [] });
+      store.buildTaskSessionProjection(task.id);
       store.startTask(task.id);
       store.completeTask(task.id, { output: "Chat continues" });
       const next = store.sendChatMessage(chat.id, { body: "Still usable" }).task;
@@ -196,6 +199,7 @@ describe("Chat Project binding", () => {
         const chat = store.createChatSession({ agentId: agent.id, projectId: project.id });
         const first = store.sendChatMessage(chat.id, { body: "Work with the Project" }).task;
         expect(store.claimTask(previous.id)?.id).toBe(first.id);
+        store.buildTaskSessionProjection(first.id);
         store.startTask(first.id);
         const previousWorkDir = source === "local_directory" ? "/abs/user-project" : `/old-platform/workspaces/chats/${chat.id}`;
         store.completeTask(first.id, { output: "Project work", sessionId: "project-provider-session", workDir: previousWorkDir });
@@ -212,6 +216,7 @@ describe("Chat Project binding", () => {
         const fallback = store.claimTask(available.id);
         expect(fallback).toMatchObject({ id: second.id, project: null, sessionId: null, workDir: null, repos: [] });
         expect(fallback?.projectResources).toEqual([]);
+        store.buildTaskSessionProjection(second.id);
         store.startTask(second.id);
         const managedWorkDir = `/chat-pool/workspaces/chats/${chat.id}`;
         store.completeTask(second.id, { output: "Pure Chat", sessionId: "pure-provider-session", workDir: managedWorkDir });
@@ -233,10 +238,12 @@ describe("Chat Project binding", () => {
     const chat = store.createChatSession({ agentId: agent.id, projectId: project.id });
     const first = store.sendChatMessage(chat.id, { body: "First" }).task;
     store.claimTask(runtime.id);
+    store.buildTaskSessionProjection(first.id);
     store.startTask(first.id);
     store.completeTask(first.id, { output: "First", sessionId: "legacy-project-session", workDir: "/abs/user-project" });
     const second = store.sendChatMessage(chat.id, { body: "Still working" }).task;
     const retained = store.claimTask(runtime.id)!;
+    store.buildTaskSessionProjection(second.id);
     store.startTask(second.id);
     db!.run("UPDATE multiremi_chat_sessions SET session_id = NULL, session_execution_fingerprint = NULL WHERE id = ?", [chat.id]);
     store.archiveProject(project.id);
@@ -262,6 +269,7 @@ describe("Chat Project binding", () => {
     const chat = store.createChatSession({ agentId: agent.id, projectId: project.id });
     const first = store.sendChatMessage(chat.id, { body: "First" }).task;
     store.claimTask(previous.id);
+    store.buildTaskSessionProjection(first.id);
     store.startTask(first.id);
     store.completeTask(first.id, { output: "First", sessionId: "old-session", workDir: "/abs/user-project" });
     const second = store.sendChatMessage(chat.id, { body: "Queued" }).task;
@@ -273,7 +281,7 @@ describe("Chat Project binding", () => {
     expect(store.claimTask(replacement.id)).toBeNull();
     expect(store.getTask(second.id)).toMatchObject({ status: "dispatched", runtimeId: previous.id,
       executionFingerprint: retained.executionFingerprint, sessionId: "old-session", workDir: "/abs/user-project" });
-    db!.run("UPDATE multiremi_tasks SET dispatched_at = ? WHERE id = ?", ["2000-01-01T00:00:00.000Z", second.id]);
+    mutateExecutionFixture(db!, "UPDATE multiremi_turn_execution_records SET dispatched_at = ? WHERE id = ?", ["2000-01-01T00:00:00.000Z", second.id]);
     const fallback = store.claimTask(replacement.id)!;
     expect(fallback).toMatchObject({ id: second.id, sessionId: null, workDir: null, project: null });
     expect(fallback.executionFingerprint).not.toBe(retained.executionFingerprint);
@@ -300,6 +308,7 @@ describe("Chat Project binding", () => {
       const chat = store.createChatSession({ agentId: agent.id, projectId: project.id });
       const first = store.sendChatMessage(chat.id, { body: "First" }).task;
       const frozen = store.claimTask(previous.id)!;
+      store.buildTaskSessionProjection(first.id);
       store.startTask(first.id);
       store.failTask(first.id, { error: "Temporary outage", failureReason: "runtime_offline", sessionId: "old-session", workDir: "/abs/old" });
       const retry = store.listTasks().find((candidate) => candidate.parentTaskId === first.id)!;
@@ -349,7 +358,7 @@ describe("Chat Project binding", () => {
         }
         const pending = store.sendChatMessage(chat.id, { body: "Pending" }).task;
         for (const status of ["queued", "dispatched", "running", "waiting_local_directory", "awaiting_human"]) {
-          db!.run("UPDATE multiremi_tasks SET status = ? WHERE id = ?", [status, pending.id]);
+          mutateExecutionFixture(db!, "UPDATE multiremi_turn_execution_records SET status = ? WHERE id = ?", [status, pending.id]);
           expect((await update({ project_id: null })).status).toBe(400);
           expect((await update({ title: "Rename", pinned: true })).status).toBe(200);
         }

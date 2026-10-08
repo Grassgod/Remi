@@ -22,6 +22,8 @@ export class IssueLogReplica extends ReplicaView {
   private targetCommentId: string | null = null;
   private knownWindows: Array<{ range: HubSeqRange; entries: SessionLogRow[] }> = [];
   private frameQueue: Promise<void> = Promise.resolve();
+  private importingWindows = 0;
+  private syncBrowser: (() => void) | null = null;
   private windowRead: Promise<void> | null = null;
   private generation = 0;
   private logVersion: number | null = null;
@@ -220,7 +222,7 @@ export class IssueLogReplica extends ReplicaView {
     const update = () => {
       const snapshot = browser.port.getSnapshot(this.sessionId);
       const visible = this.getSnapshot(this.sessionId);
-      if (!snapshot.ready) return;
+      if (!snapshot.ready || this.importingWindows > 0) return;
       const current = snapshot.entries.map(e => SessionLogEntrySchema.safeParse(e))
         .filter(p => p.success).map(p => p.data!);
       // C7 may contain raw Hub entries from an earlier tab or version. The
@@ -241,7 +243,11 @@ export class IssueLogReplica extends ReplicaView {
       }
       const held = current.find(e => e.seq === 0);
       if (held && held.revision >= (this.headRow?.revision ?? 0)) this.headRow = held;
-      const rows = mergeRows(visible.entries.map(e => SessionLogEntrySchema.parse(e)), displayable);
+      // C7 owns row existence. Keep hydrated display fields only for rows it
+      // still holds; a union with the old window would resurrect deletions.
+      const heldSeqs = new Set(current.map(entry => entry.seq));
+      const rows = mergeRows(visible.entries.filter(entry => heldSeqs.has(entry.seq))
+        .map(entry => SessionLogEntrySchema.parse(entry)), displayable);
       const newerHead = (snapshot.head ?? -1) > (visible.head ?? -1);
       this.setWindow(this.sessionId, this.displayRows(rows), {
         head: Math.max(visible.head ?? 0, snapshot.head ?? 0),
@@ -249,10 +255,16 @@ export class IssueLogReplica extends ReplicaView {
       });
     };
     const off = browser.port.subscribe(this.sessionId, update);
-    browser.open(this.sessionId);
-    update();
-    if (this.window) await this.persist(this.window);
-    return () => { off(); browser.close(this.sessionId); browser.dispose(); if (this.browser === browser) this.browser = null; };
+    this.syncBrowser = update;
+    this.importingWindows++;
+    try {
+      browser.open(this.sessionId);
+      if (this.window) await this.persist(this.window);
+    } finally {
+      this.importingWindows--;
+      if (this.browser === browser) update();
+    }
+    return () => { off(); browser.close(this.sessionId); browser.dispose(); if (this.browser === browser) { this.browser = null; this.syncBrowser = null; } };
   }
 
   frames(...args: Parameters<BrowserReplica["frames"]>): void { this.browser?.frames(...args); }
@@ -290,8 +302,8 @@ export class IssueLogReplica extends ReplicaView {
         for (const frame of missing.filter(frame => frame.seq >= first && frame.seq <= last)) {
           const payload = frame.payload as Record<string, unknown>;
           const row = window.entries.find(row => row.session_id === sessionId && row.seq === frame.seq && row.id === payload.id);
-          if (!row || row.revision < Number(payload.revision ?? 0)) throw new Error(`Log entry ${frame.seq} was unavailable for hydration`);
-          entries.set(frame.seq, row);
+          if (row && row.revision < Number(payload.revision ?? 0)) throw new Error(`Log entry ${frame.seq} was unavailable for hydration`);
+          if (row) entries.set(frame.seq, row);
         }
         this.knownWindows.push({ range: { from: first, to: last }, entries: window.entries });
         this.knownWindows = this.knownWindows.slice(-32);
@@ -301,7 +313,12 @@ export class IssueLogReplica extends ReplicaView {
         if (frame.kind !== "entry" || !frame.payload || typeof frame.payload !== "object") return frame;
         const payload = frame.payload as Record<string, unknown>;
         if (payload.kind !== "message" && payload.kind !== "turn") return frame;
-        return { ...frame, payload: entries.get(frame.seq)! };
+        const entry = entries.get(frame.seq);
+        // A successful read can omit a row deleted/hidden since this frame was
+        // emitted. Settle its seq without retaining a body or dropping patches.
+        if (!entry) return { ...frame, payload: { session_id: sessionId, seq: frame.seq,
+          revision: payload.revision, visibility: "hidden" } };
+        return { ...frame, payload: entry };
       });
       if (!this.disconnected && generation === this.generation) this.frames(sessionId, hydrated);
     });
@@ -317,7 +334,7 @@ export class IssueLogReplica extends ReplicaView {
     }
     this.browser?.ack(...args);
   }
-  disconnect(): void { this.generation += 1; this.disconnected = true; this.browser?.dispose(); this.browser = null; }
+  disconnect(): void { this.generation += 1; this.disconnected = true; this.browser?.dispose(); this.browser = null; this.syncBrowser = null; }
 
   override readRowHeight(sessionId: string, seq: number, key: string): number | null {
     return this.browser?.port.readRowHeight(sessionId, seq, key) ?? super.readRowHeight(sessionId, seq, key);
@@ -331,12 +348,20 @@ export class IssueLogReplica extends ReplicaView {
     const browser = this.browser;
     const generation = this.generation;
     if (!browser || !window.entries.length || window.log_version !== this.logVersion) return;
-    if (this.headRow) {
-      this.knownWindows.push({ range: { from: 0, to: 0 }, entries: [this.headRow] });
-      await browser.loadWindow(this.sessionId, { from: 0, to: 0 });
+    // Head and body import separately; publish C7's authoritative membership
+    // after both writes so a partial import cannot erase the HTTP/SSR seed.
+    this.importingWindows++;
+    try {
+      if (this.headRow) {
+        this.knownWindows.push({ range: { from: 0, to: 0 }, entries: [this.headRow] });
+        await browser.loadWindow(this.sessionId, { from: 0, to: 0 });
+      }
+      if (this.disconnected || generation !== this.generation) return;
+      await browser.loadWindow(this.sessionId, { from: window.entries[0]!.seq, to: window.entries.at(-1)!.seq });
+    } finally {
+      this.importingWindows--;
+      if (this.browser === browser) this.syncBrowser?.();
     }
-    if (this.disconnected || generation !== this.generation) return;
-    await browser.loadWindow(this.sessionId, { from: window.entries[0]!.seq, to: window.entries.at(-1)!.seq });
   }
 
   private async readRange(sessionId: string, range: HubSeqRange): Promise<SessionLogEntry[]> {

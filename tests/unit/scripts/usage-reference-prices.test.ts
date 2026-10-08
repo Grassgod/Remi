@@ -187,7 +187,7 @@ describe("pinned public gateway reference prices", () => {
     const pg = new PostgresSyncDatabase(url);
     let child: ReturnType<typeof Bun.spawn> | undefined;
     try {
-      pg.exec("CREATE TABLE multiremi_workspaces(id TEXT PRIMARY KEY,updated_at TEXT); CREATE TABLE multiremi_tasks(id TEXT PRIMARY KEY); CREATE TABLE multiremi_schema_migrations(id TEXT PRIMARY KEY,applied_at TEXT)");
+      pg.exec("CREATE TABLE multiremi_workspaces(id TEXT PRIMARY KEY,updated_at TEXT); CREATE TABLE multiremi_turn_execution_records(id TEXT PRIMARY KEY); CREATE TABLE multiremi_schema_migrations(id TEXT PRIMARY KEY,applied_at TEXT)");
       pg.run("INSERT INTO multiremi_workspaces(id,updated_at) VALUES('local',?)", [from]);
       ensureUsageAccountingSchema(pg);
       const p = plan(undefined, { target: ownTarget });
@@ -228,10 +228,10 @@ describe("pinned public gateway reference prices", () => {
     let own: PostgresSyncDatabase | undefined;
     try {
       own = new PostgresSyncDatabase(url);
-      own.exec("CREATE TABLE multiremi_workspaces(id TEXT PRIMARY KEY,updated_at TEXT); CREATE TABLE multiremi_tasks(id TEXT PRIMARY KEY); CREATE TABLE multiremi_schema_migrations(id TEXT PRIMARY KEY,applied_at TEXT)");
+      own.exec("CREATE TABLE multiremi_workspaces(id TEXT PRIMARY KEY,updated_at TEXT); CREATE TABLE multiremi_turn_execution_records(id TEXT PRIMARY KEY); CREATE TABLE multiremi_schema_migrations(id TEXT PRIMARY KEY,applied_at TEXT)");
       own.run("INSERT INTO multiremi_workspaces(id,updated_at) VALUES('local',?)", [from]);
       ensureUsageAccountingSchema(own);
-      own.exec("INSERT INTO multiremi_tasks(id) VALUES('dummy'); INSERT INTO multiremi_usage_runs(task_id,run_id,revision,complete) VALUES('dummy','test',1,1)");
+      own.exec("INSERT INTO multiremi_turn_execution_records(id) VALUES('dummy'); INSERT INTO multiremi_usage_runs(task_id,run_id,revision,complete) VALUES('dummy','test',1,1)");
       own.run(`INSERT INTO multiremi_usage_units(task_id,run_id,unit_id,revision,workspace_id,agent_id,provider,model,model_source,connection_id,scope,source,accuracy,occurred_at)
         VALUES('dummy','test','request',1,'local','dummy','claude','deepseek-chat','provider_reported','test-gateway','request','provider_request','exact',?)`, [from]);
       const routes = join(dir, "routes.json"), output = join(dir, "plan.json");

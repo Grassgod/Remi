@@ -210,10 +210,8 @@ describe("Feishu outbound kind leases", () => {
     const taskId = f.inbound("retrylineage").taskId;
     const initial = claim(f);
     for (const row of initial) expect(report(f, row, "sent")).toBe(true);
-    const task = f.store.getTask(taskId)!;
-    const retry = f.store.createTask({ agentId: f.agent.id, workspaceId: "local", chatSessionId: task.chatSessionId, prompt: "Retry" });
-    f.store.retargetFeishuRoundPushTaskWithinTransaction(taskId, retry.id);
-    f.store.completeTask(taskId, { output: "Original run ends" });
+    f.store.failTask(taskId, { error: "Timeout", failureReason: "timeout" });
+    const retry = f.store.listTasks().find(task => task.parentTaskId === taskId)!;
     expect(f.store.claimTask(f.runtimeId)?.id).toBe(retry.id);
     f.store.startTask(retry.id);
     const retryCot = claim(f).find(row => row.kind === "cot")!;

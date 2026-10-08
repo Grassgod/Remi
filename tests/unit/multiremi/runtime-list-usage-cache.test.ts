@@ -1,11 +1,23 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { MultiremiStore } from "@multiremi/store.js";
 import { writeUsageSnapshot } from "@multiremi/store/usage-accounting.js";
-import type { SqlDatabase } from "@multiremi/store/db/postgres.js";
 import { parseTaskUsageEntries } from "@multiremi/store/helpers.js";
 import { PostgresSyncDatabase } from "@multiremi/store/db/postgres.js";
 import { readProcessDbCounters } from "../../../packages/server/src/observability/request-metrics.js";
 import { openHotspotDatabase } from "../../fixtures/multiremi/first-screen-hotspots-database.js";
+import type { SqlDatabase } from "@multiremi/store/db/postgres.js";
+import { runTurnExecutionMutation } from "@multiremi/store/turn-execution-records.js";
+
+function seedUsageAttempt(db: SqlDatabase, id: string, agentId: string, runtimeId: string, status: string, usage: string | null) {
+  const stamp = "2026-10-05T00:00:00Z";
+  const turnId = `turn_${id}`;
+  db.run(`INSERT INTO multiremi_turns (id, session_id, seq, workspace_id, agent_id, status, current_attempt_id, created_at)
+    VALUES (?, ?, 1, 'local', ?, ?, ?, ?)`, turnId, `chat_${id}`, agentId,
+    status === "queued" ? "pending" : ["completed", "failed", "cancelled", "awaiting_human"].includes(status) ? status : "running", id, stamp);
+  db.run(`INSERT INTO multiremi_turn_attempts (id, turn_id, attempt_no, runtime_id, status, usage, created_at, updated_at)
+    VALUES (?, ?, 1, ?, ?, ?, ?, ?)`, id, turnId, runtimeId,
+    status === "queued" ? "offered" : status === "dispatched" ? "accepted" : status === "awaiting_human" ? "running" : status, usage, stamp, stamp);
+}
 
 const fields = ["taskCount", "activeTaskCount", "completedTaskCount", "failedTaskCount", "inputTokens", "outputTokens", "cacheReadTokens", "cacheWriteTokens"] as const;
 // The schema rejects SQL NULL in usage; JSON null remains part of the persisted golden.
@@ -29,8 +41,8 @@ function persist(db: SqlDatabase, id: string, raw: string) {
   })) });
 }
 function expectedSummary(db: SqlDatabase, runtimeId: string) {
-  const rows = db.query("SELECT id,status FROM multiremi_tasks WHERE runtime_id=?").all(runtimeId) as Array<{ id: string; status: string }>;
-  const units = db.query("SELECT u.task_id,u.input_tokens,u.output_tokens,u.cache_read_tokens,u.cache_write_tokens FROM multiremi_usage_units u JOIN multiremi_tasks t ON t.id=u.task_id WHERE u.runtime_id=?").all(runtimeId) as Array<Record<string, unknown>>;
+  const rows = db.query("SELECT id,status FROM multiremi_turn_execution_records WHERE runtime_id=?").all(runtimeId) as Array<{ id: string; status: string }>;
+  const units = db.query("SELECT u.task_id,u.input_tokens,u.output_tokens,u.cache_read_tokens,u.cache_write_tokens FROM multiremi_usage_units u JOIN multiremi_turn_execution_records t ON t.id=u.task_id WHERE u.runtime_id=?").all(runtimeId) as Array<Record<string, unknown>>;
   const expected = { taskCount: new Set([...rows.map(row => row.id), ...units.map(row => String(row.task_id))]).size,
     activeTaskCount: rows.filter(row => ["dispatched","running","waiting_local_directory","awaiting_human"].includes(row.status)).length,
     completedTaskCount: rows.filter(row => row.status==='completed').length, failedTaskCount: rows.filter(row => row.status==='failed').length,
@@ -52,13 +64,14 @@ test("runtime list/detail uses canonical facts across repeated reads, revisions,
     let sequence = 0;
     const insert = (runtimeId: string, status: string, usage: string | null) => {
       const id = `tsk_list_usage_${sequence++}`;
-      db.run(`INSERT INTO multiremi_tasks (id, workspace_id, agent_id, runtime_id, status, prompt, usage, created_at, updated_at)
-        VALUES (?, 'local', ?, ?, ?, 'golden', ?, '2026-10-05T00:00:00Z', '2026-10-05T00:00:00Z')`, id, agent.id, runtimeId, status, usage);
+      seedUsageAttempt(db, id, agent.id, runtimeId, status, usage);
       persist(db, id, usage ?? "[]");
       return id;
     };
-    for (const status of statuses) for (const usage of usages) insert("rt_usage_a", status, usage);
-    insert("rt_usage_b", "completed", '[{"inputTokens":19}]');
+    db.transaction(() => {
+      for (const status of statuses) for (const usage of usages) insert("rt_usage_a", status, usage);
+      insert("rt_usage_b", "completed", '[{"inputTokens":19}]');
+    })();
     const compare = () => {
       const runtimes = store.listRuntimesForWorkspace("local");
       for (const runtime of runtimes) {
@@ -70,22 +83,22 @@ test("runtime list/detail uses canonical facts across repeated reads, revisions,
     compare(); compare();
     const changed = insert("rt_usage_a", "completed", '[{"inputTokens":13}]');
     compare();
-    db.run("UPDATE multiremi_tasks SET usage = ?, status = 'running' WHERE id = ?", '[{"inputTokens":23}]', changed);
+    runTurnExecutionMutation(db, "UPDATE multiremi_turn_execution_records SET usage = ?, status = 'running' WHERE id = ?", '[{"inputTokens":23}]', changed);
     persist(db, changed, '[{"inputTokens":23}]');
     compare();
-    db.run("UPDATE multiremi_tasks SET status = 'completed', runtime_id = 'rt_usage_b' WHERE id = ?", changed);
+    runTurnExecutionMutation(db, "UPDATE multiremi_turn_execution_records SET status = 'completed', runtime_id = 'rt_usage_b' WHERE id = ?", changed);
     compare();
     db.transaction(() => {
-      db.run("UPDATE multiremi_tasks SET usage = ? WHERE id = ?", '[{"inputTokens":31}]', changed); persist(db, changed, '[ {"inputTokens":31} ]'); compare();
-      db.run("UPDATE multiremi_tasks SET usage = ? WHERE id = ?", '[{"inputTokens":41}]', changed); persist(db, changed, '[ {"inputTokens":41} ]'); compare();
+      runTurnExecutionMutation(db, "UPDATE multiremi_turn_execution_records SET usage = ? WHERE id = ?", '[{"inputTokens":31}]', changed); persist(db, changed, '[ {"inputTokens":31} ]'); compare();
+      runTurnExecutionMutation(db, "UPDATE multiremi_turn_execution_records SET usage = ? WHERE id = ?", '[{"inputTokens":41}]', changed); persist(db, changed, '[ {"inputTokens":41} ]'); compare();
     })();
     compare();
     expect(() => db.transaction(() => {
-      db.run("UPDATE multiremi_tasks SET usage = ? WHERE id = ?", '[{"inputTokens":99}]', changed); persist(db, changed, '[ {"inputTokens":99} ]'); compare();
+      runTurnExecutionMutation(db, "UPDATE multiremi_turn_execution_records SET usage = ? WHERE id = ?", '[{"inputTokens":99}]', changed); persist(db, changed, '[ {"inputTokens":99} ]'); compare();
       throw new Error("rollback");
     })()).toThrow("rollback");
     compare();
-    db.run("DELETE FROM multiremi_tasks WHERE id = ?", changed); compare();
+    db.run("DELETE FROM multiremi_turn_attempts WHERE id = ?", changed); compare();
   } finally { await database.dispose(); }
 });
 
@@ -118,10 +131,7 @@ describe("runtime list open-usage fixture", () => {
     const agent = store.createAgent({ name: "open usage golden", provider: "codex" });
     for (let i = 0; i < 10; i++) store.registerRuntime({ id: `rt_open_${i}`, name: `open ${i}`, provider: "codex", maxConcurrency: 32 });
     db.transaction(() => {
-      for (let i = 0; i < 200; i++) { db.run(`INSERT INTO multiremi_tasks
-        (id, workspace_id, agent_id, runtime_id, status, prompt, usage, created_at, updated_at)
-        VALUES (?, 'local', ?, ?, 'running', 'golden', ?, '2026-10-05T00:00:00Z', '2026-10-05T00:00:00Z')`,
-        `tsk_open_${i}`, agent.id, `rt_open_${i % 10}`, JSON.stringify([{ inputTokens: 1234, output_tokens: 567,
+      for (let i = 0; i < 200; i++) { seedUsageAttempt(db, `tsk_open_${i}`, agent.id, `rt_open_${i % 10}`, "running", JSON.stringify([{ inputTokens: 1234, output_tokens: 567,
           cacheReadTokens: 89, cache_write_tokens: 10, model: "m".repeat(300) }]));
         persist(db, `tsk_open_${i}`, JSON.stringify([{ inputTokens: 1234, outputTokens: 567, cacheReadTokens: 89, cacheWriteTokens: 10 }]));
       }
@@ -139,19 +149,19 @@ describe("runtime list open-usage fixture", () => {
     compare(); // cold read
     if (db instanceof PostgresSyncDatabase) expect(compare()).toBeLessThanOrEqual(50000);
     else compare();
-    db.run("UPDATE multiremi_tasks SET usage = ? WHERE id = 'tsk_open_0'", usages[6]); persist(db, "tsk_open_0", usages[6]!); compare();
-    db.run("UPDATE multiremi_tasks SET status = 'completed' WHERE id = 'tsk_open_1'"); compare();
-    db.run("UPDATE multiremi_tasks SET runtime_id = 'rt_open_9' WHERE id = 'tsk_open_2'"); compare();
+    runTurnExecutionMutation(db, "UPDATE multiremi_turn_execution_records SET usage = ? WHERE id = 'tsk_open_0'", usages[6]); persist(db, "tsk_open_0", usages[6]!); compare();
+    runTurnExecutionMutation(db, "UPDATE multiremi_turn_execution_records SET status = 'completed' WHERE id = 'tsk_open_1'"); compare();
+    runTurnExecutionMutation(db, "UPDATE multiremi_turn_execution_records SET runtime_id = 'rt_open_9' WHERE id = 'tsk_open_2'"); compare();
     db.transaction(() => {
-      db.run("UPDATE multiremi_tasks SET usage = ? WHERE id = 'tsk_open_3'", usages[7]); persist(db, "tsk_open_3", usages[7]!); compare();
-      db.run("UPDATE multiremi_tasks SET usage = ? WHERE id = 'tsk_open_3'", usages[8]); persist(db, "tsk_open_3", usages[8]!); compare();
+      runTurnExecutionMutation(db, "UPDATE multiremi_turn_execution_records SET usage = ? WHERE id = 'tsk_open_3'", usages[7]); persist(db, "tsk_open_3", usages[7]!); compare();
+      runTurnExecutionMutation(db, "UPDATE multiremi_turn_execution_records SET usage = ? WHERE id = 'tsk_open_3'", usages[8]); persist(db, "tsk_open_3", usages[8]!); compare();
     })(); compare();
     expect(() => db.transaction(() => {
-      db.run("UPDATE multiremi_tasks SET usage = ? WHERE id = 'tsk_open_4'", '[{"inputTokens":99999}]'); persist(db, "tsk_open_4", '[ {"inputTokens":99999} ]'); compare();
+      runTurnExecutionMutation(db, "UPDATE multiremi_turn_execution_records SET usage = ? WHERE id = 'tsk_open_4'", '[{"inputTokens":99999}]'); persist(db, "tsk_open_4", '[ {"inputTokens":99999} ]'); compare();
       throw new Error("open rollback");
     })()).toThrow("open rollback"); compare();
-    db.run("DELETE FROM multiremi_tasks WHERE id = 'tsk_open_5'"); compare();
-    db.run("DELETE FROM multiremi_tasks WHERE runtime_id = 'rt_open_6'"); compare();
+    db.run("DELETE FROM multiremi_turn_attempts WHERE id = 'tsk_open_5'"); compare();
+    db.run("DELETE FROM multiremi_turn_attempts WHERE runtime_id = 'rt_open_6'"); compare();
     if (db instanceof PostgresSyncDatabase) expect(compare()).toBeLessThanOrEqual(50000);
   });
 });
@@ -164,7 +174,7 @@ test("native telemetry rejects unsafe counts and scalar totals preserve large sa
     store.registerRuntime({ id: "rt_large_usage", name: "large", provider: "codex" });
     for (const [index,inputTokens] of [[0,1],[1,2 ** 52],[2,1]] as const) {
       const id = `tsk_large_usage_${index}`;
-      db.run("INSERT INTO multiremi_tasks(id,workspace_id,agent_id,runtime_id,status,prompt,created_at,updated_at) VALUES(?,'local',?,'rt_large_usage','completed','large','2026-10-05T00:00:00Z','2026-10-05T00:00:00Z')", id, agent.id);
+      seedUsageAttempt(db, id, agent.id, "rt_large_usage", "completed", "[]");
       persist(db, id, JSON.stringify([{ inputTokens }]));
     }
     expect(store.listRuntimesForWorkspace("local")[0]?.inputTokens).toBe(2 ** 52 + 2);

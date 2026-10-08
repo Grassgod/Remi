@@ -10,8 +10,11 @@ import { prepareTaskOffer } from "@multiremi/api/daemon-protocol/task-offers.js"
 import { ProjectKnowledgeService } from "@multiremi/project-knowledge/service.js";
 import type { OpenVikingClientContract } from "@multiremi/project-knowledge/types.js";
 import { RepositoryWikiService } from "@multiremi/repository-wiki/service.js";
-import { createLocalStore, resetMultiremiTestEnv } from "./helpers.js";
+import { resetMultiremiTestEnv } from "./helpers.js";
+import { pendingTurnBackendTests } from "./pending-turn-test-backends.js";
 
+pendingTurnBackendTests('MUL-508 task offer input', backendFixture => {
+const createLocalStore = () => backendFixture().store;
 afterEach(resetMultiremiTestEnv);
 
 function fixture() {
@@ -40,7 +43,10 @@ test("50 unread entries and huge Wiki offer only trigger messages and the unread
   expect(jsonl).not.toContain("UNREAD_");
   expect(jsonl).not.toContain("inbox_toc");
   expect(jsonl).toContain("还有");
-  expect(jsonl).toContain(`remi session log get ${f.session.id} --from 0 --to`);
+  expect(jsonl).toContain(`remi message list ${f.session.id} --from 0 --to`);
+  const triggering = jsonl.split("\n").map(line => JSON.parse(line)).find(entry => entry.type === "triggering_message");
+  expect(triggering.expand).toBe(`remi message list ${f.session.id} --from ${triggering.seq - 1} --to ${triggering.seq}`);
+  expect(triggering.expand_hint).toContain(triggering.expand);
   expect(response.trigger_comment_content).toBeUndefined();
   expect(fitted.report.steps[0]).toBe("knowledge");
   expect(taskOfferBytes(response, f.runtime.id)).toBeLessThan(512 * 1024);
@@ -119,7 +125,7 @@ test("cold start includes Issue title and description and reads the complete ran
   expect(range).toMatchObject({ type: "unread_range", from_seq: 0, to_seq: f.store.getConversationLogHead(f.session.id)!.headSeq });
   const prompt = buildTaskPrompt(normalizeDaemonClaimTask(response)!);
   expect(prompt).toContain("COLD_START_TITLE"); expect(prompt).toContain("COLD_START_DESCRIPTION");
-  expect(prompt).toContain(`remi session log get ${f.session.id} --from 0 --to ${range.to_seq}`);
+  expect(prompt).toContain(`remi message list ${f.session.id} --from 0 --to ${range.to_seq}`);
   expect(prompt).not.toContain("你上次读到");
   expect(prompt).not.toContain("FIRST_UNREAD");
 });
@@ -131,25 +137,41 @@ test("a long prompt without an explicit trigger points to its task instead of re
   expect(response.prompt).not.toContain("--from 0");
 });
 
-test("Chat input includes only this task's user trigger without a duplicate chat_message body", () => {
+test("coalesced Chat input includes all triggering messages once without a duplicate chat_message body", () => {
   const f = fixture(); const chat = f.store.createChatSession({ agentId: f.agent.id });
   const first = f.store.sendChatMessage(chat.id, { body: "FIRST_CHAT_TRIGGER" });
   const second = f.store.sendChatMessage(chat.id, { body: "SECOND_CHAT_TRIGGER" });
-  expect(second.task.id).not.toBe(first.task.id);
+  expect(second.task.id).toBe(first.task.id);
   const claimed = f.store.claimTask(f.runtime.id)!;
+  f.store.startTask(claimed.id);
   const response = daemonTaskClaimResponse(f.store, claimed, f.store.getTaskTriggerMetadata(claimed));
   useTaskSessionInput(f.store, claimed, response);
   const prompt = buildTaskPrompt(normalizeDaemonClaimTask(response)!);
-  expect(prompt).toContain("FIRST_CHAT_TRIGGER"); expect(prompt).not.toContain("SECOND_CHAT_TRIGGER");
+  expect(prompt).toContain("FIRST_CHAT_TRIGGER"); expect(prompt).toContain("SECOND_CHAT_TRIGGER");
   expect(response.chat_message).toBeUndefined();
   expect(prompt.match(/FIRST_CHAT_TRIGGER/g)).toHaveLength(1);
+  expect(prompt.match(/SECOND_CHAT_TRIGGER/g)).toHaveLength(1);
 });
 
 test("range reads every page, rejoins long Unicode bodies, and excludes own history", async () => {
   const f = fixture();
   const body = "😀中文".repeat(30_000);
   const long = f.store.createIssueComment(f.issue.id, { authorType: "member", authorId: "local", body });
-  for (let index = 0; index < 120; index++) f.store.createIssueComment(f.issue.id, { authorType: "member", authorId: "local", body: `entry ${index}` });
+  // Keep a real canonical message as the template; the extra rows exercise
+  // pagination, so prepare them in one batch instead of 120 domain writes.
+  const { db, transaction } = backendFixture();
+  const first = f.store.createIssueComment(f.issue.id, { authorType: "member", authorId: "local", body: "entry 0" });
+  const template = db.query("SELECT * FROM multiremi_conversation_log WHERE id=?").get(first.id)!;
+  const columns = Object.keys(template);
+  const rows = Array.from({ length: 119 }, (_, index) => {
+    const row = { ...template, id: `range_entry_${index + 1}`, seq: Number(template.seq) + index + 1, body_md: `entry ${index + 1}` };
+    return columns.map(column => row[column]);
+  });
+  transaction(() => {
+    db.run(`INSERT INTO multiremi_conversation_log (${columns.join(",")}) VALUES ${rows.map(() => `(${columns.map(() => "?").join(",")})`).join(",")}`, rows.flat());
+    db.run("UPDATE multiremi_conversation_heads SET head_seq=?,log_version=log_version+? WHERE session_id=?",
+      [Number(template.seq) + rows.length, rows.length, f.session.id]);
+  });
   const own = f.store.createIssueComment(f.issue.id, { authorType: "agent", authorId: f.agent.id, body: "OWN_HISTORY" });
   const to = f.store.getConversationLogHead(f.session.id)!.headSeq;
   let cursor: string | null = null;
@@ -167,9 +189,11 @@ test("range reads every page, rejoins long Unicode bodies, and excludes own hist
   expect(bodies.size).toBe(121);
   expect(bodies.has(own.id)).toBe(false);
   const app = createMultiremiApp({ store: f.store });
-  expect((await app.request(`/api/sessions/${f.session.id}/log/entry?from=0&to=${to}`)).status).toBe(200);
-  for (const query of ["from=0", "from=2&to=1", "from=0&to=4&seq=1", "from=0&to=4&cursor=bad"]) {
-    expect((await app.request(`/api/sessions/${f.session.id}/log/entry?${query}`)).status).toBe(400);
+  expect((await app.request(`/api/sessions/${f.session.id}/messages?from=0&to=${to}`)).status).toBe(200);
+  for (const query of ["from=0", "from=2&to=1", "from=-1&to=4", "from=0&to=9007199254740992",
+    "from=0&to=4&seq=1", "from=0&to=4&cursor=bad", "from=0&to=4&cursor=null",
+    ...["unread_by", "thread", "message_kind", "after_seq", "limit", "query"].map(key => `from=0&to=4&${key}=1`)]) {
+    expect((await app.request(`/api/sessions/${f.session.id}/messages?${query}`)).status).toBe(400);
   }
 });
 
@@ -183,7 +207,7 @@ test("task-token range reads are recorded without including bodies or credential
   const app = createMultiremiApp({ store: f.store });
   const info = spyOn(log, "info").mockImplementation(() => {});
   try {
-    const response = await app.request(`/api/sessions/${f.session.id}/log/entry?from=0&to=${f.store.getConversationLogHead(f.session.id)!.headSeq}`,
+    const response = await app.request(`/api/sessions/${f.session.id}/messages?from=0&to=${f.store.getConversationLogHead(f.session.id)!.headSeq}`,
       { headers: { Authorization: `Bearer ${credential.token}` } });
     expect(response.status).toBe(200);
     const data = await response.json() as any;
@@ -195,10 +219,10 @@ test("task-token range reads are recorded without including bodies or credential
     expect(JSON.stringify(info.mock.calls)).not.toContain(credential.token);
     expect(JSON.stringify(info.mock.calls)).not.toContain(peer.body);
     info.mockImplementation(() => { throw new Error("telemetry unavailable"); });
-    expect((await app.request(`/api/sessions/${f.session.id}/log/entry?from=0&to=1`,
+    expect((await app.request(`/api/sessions/${f.session.id}/messages?from=0&to=1`,
       { headers: { Authorization: `Bearer ${credential.token}` } })).status).toBe(200);
     const other = f.store.createChatSession({ agentId: f.agent.id, creatorId: "other_user" });
-    expect((await app.request(`/api/sessions/${other.id}/log/entry?from=0&to=1`,
+    expect((await app.request(`/api/sessions/${other.id}/messages?from=0&to=1`,
       { headers: { Authorization: `Bearer ${credential.token}` } })).status).toBe(403);
   } finally { info.mockRestore(); }
 });
@@ -241,4 +265,5 @@ for (const mode of ["sql", "openviking"] as const) test(`Wiki offers read metada
     expect(response.status).toBe(200);
     expect((await response.json() as any).doc.body).toBe(body);
   }
+});
 });

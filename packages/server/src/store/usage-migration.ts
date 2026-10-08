@@ -70,7 +70,7 @@ function startupMigration(db: SqlDatabase, options: UsageStartupMigrationOptions
       const finish = db.transaction(() => {
         // Close the last source/check/marker race. No history writes happen in
         // this short fence; all per-task migration transactions are committed.
-        if (db.dialect === "postgres") db.exec("LOCK TABLE multiremi_tasks, multiremi_usage_runs IN SHARE MODE");
+        if (db.dialect === "postgres") db.exec("LOCK TABLE multiremi_turns, multiremi_turn_attempts, multiremi_usage_runs IN SHARE MODE");
         if (hasPendingLegacyUsage(db)) { cursor = undefined; return false; }
         if (performance.now() >= deadline) throw new Error("Usage startup migration timed out; committed checkpoints will resume on restart");
         for (const marker of [USAGE_CUTOVER_MARKER, USAGE_STARTUP_CUTOVER_MARKER]) {

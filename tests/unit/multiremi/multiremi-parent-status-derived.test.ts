@@ -9,7 +9,6 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { createStore, db, resetMultiremiTestEnv } from "./helpers.js";
-import { inboxReportBody } from "./inbox-test-assertions.js";
 
 afterEach(resetMultiremiTestEnv);
 
@@ -28,6 +27,12 @@ function runTask(store: Store, runtimeId: string, taskId: string) {
   while (claimed && claimed.id !== taskId) claimed = store.claimTask(runtimeId);
   if (!claimed) throw new Error(`Could not claim task ${taskId}`);
   return store.startTask(taskId);
+}
+
+function childStatusMessages(store: Store, parentId: string, childId?: string) {
+  const session = store.getOrCreateDefaultIssueSession(parentId);
+  return store.listMessages(session.id).filter(message => message.message_kind === "status" && message.to_ref === "parent_owner"
+    && (!childId || message.metadata.child_issue_id === childId));
 }
 
 function catchError(fn: () => unknown): Error & { code?: string; details?: { openChildren?: number } } {
@@ -891,11 +896,13 @@ describe("MUL-400 hook ordering — the notification cannot roll back a status c
     store.ensureLocalWorkspace();
     const runtime = store.registerRuntime({ id: "rt_hook_fail", name: "Worker", provider: "claude" });
     const agent = store.createAgent({ name: "Hook victim", provider: "claude", runtimeId: runtime.id });
+    const parentRuntime = store.registerRuntime({ name: "Parent notifications", provider: "claude" });
+    const parentAgent = store.createAgent({ name: "Parent notifier", provider: "claude", runtimeId: parentRuntime.id });
     const parent = store.createIssue({
       title: "Hook parent",
       status: "in_progress",
       assigneeType: "agent",
-      assigneeId: agent.id,
+      assigneeId: parentAgent.id,
     });
     const child = store.createIssue({
       title: "Hook child",
@@ -944,11 +951,13 @@ describe("MUL-400 hook ordering — the notification cannot roll back a status c
     store.ensureLocalWorkspace();
     const runtime = store.registerRuntime({ id: "rt_hook_ok", name: "Worker", provider: "claude" });
     const agent = store.createAgent({ name: "Hook owner", provider: "claude", runtimeId: runtime.id });
+    const parentRuntime = store.registerRuntime({ name: "Parent notifications", provider: "claude" });
+    const parentAgent = store.createAgent({ name: "Parent notifier", provider: "claude", runtimeId: parentRuntime.id });
     const parent = store.createIssue({
       title: "Ordered parent",
       status: "in_progress",
       assigneeType: "agent",
-      assigneeId: agent.id,
+      assigneeId: parentAgent.id,
     });
     const child = store.createIssue({
       title: "Ordered child",
@@ -965,14 +974,17 @@ describe("MUL-400 hook ordering — the notification cannot roll back a status c
     store.failTask(task.id, { error: "boom" });
 
     expect(store.getIssue(child.id)?.status).toBe("blocked");
-    // Post-commit: the parent's comment and its queued round both exist.
-    const comments = store.listIssueComments(parent.id).filter((comment) => comment.authorType === "system");
-    expect(comments).toHaveLength(1);
-    expect(comments[0]?.body).toContain("failed");
+    const messages = childStatusMessages(store, parent.id, child.id);
+    expect(messages).toHaveLength(3);
+    expect(messages.map(message => message.metadata.child_status)).toEqual(["todo", "in_progress", "blocked"]);
+    expect(messages.at(-1)?.body_md).toContain("failed");
+    expect(messages.at(-1)?.metadata.outcome).toBe("failed");
     const rounds = store.listTasksForIssue(parent.id);
     expect(rounds).toHaveLength(1);
-    expect(inboxReportBody(store, rounds[0]!)).toContain("failed");
-    expect(store.getConversationLogEntryById(comments[0]!.id)!.metadata.envelope?.outcome).toBe("failed");
+    expect(rounds[0]?.status).toBe("queued");
+    expect(messages.every(message => message.to_agent_id === parentAgent.id)).toBeTrue();
+    const offered = store.getDaemonTurnBridge().offerInput(store.getTaskWithAgent(rounds[0]!.id)!);
+    expect(offered.input_messages.some(message => message.id === messages.at(-1)!.id)).toBeTrue();
   });
 });
 
@@ -989,6 +1001,8 @@ describe("MUL-400 E2 — child endings notify the parent owner", () => {
       assigneeId: agent.id,
     });
 
+    const childRuntime = store.registerRuntime({ name: "Child worker", provider: "claude" });
+    const childAgent = store.createAgent({ name: "Child owner", provider: "claude", runtimeId: childRuntime.id });
     const cases: Array<{ outcome: string; issueId: string; apply: () => void }> = [];
     // The task-failure ending runs first: the parent wakeup round it queues would
     // otherwise be the natural target of `runTask`'s claim loop.
@@ -997,14 +1011,14 @@ describe("MUL-400 E2 — child endings notify the parent owner", () => {
       parentIssueId: parent.id,
       status: "in_progress",
       assigneeType: "agent",
-      assigneeId: agent.id,
+      assigneeId: childAgent.id,
     });
     cases.push({
       outcome: "failed",
       issueId: failingChild.id,
       apply: () => {
-        const task = store.createTask({ agentId: agent.id, issueId: failingChild.id, prompt: "explode" });
-        runTask(store, runtime.id, task.id);
+        const task = store.createTask({ agentId: childAgent.id, issueId: failingChild.id, prompt: "explode" });
+        runTask(store, childRuntime.id, task.id);
         store.failTask(task.id, { error: "boom" });
       },
     });
@@ -1018,27 +1032,27 @@ describe("MUL-400 E2 — child endings notify the parent owner", () => {
     }
 
     for (const testCase of cases) {
-      const before = store.listIssueComments(parent.id).filter((comment) => comment.authorType === "system").length;
+      const before = childStatusMessages(store, parent.id).length;
       testCase.apply();
-      const comments = store.listIssueComments(parent.id).filter((comment) => comment.authorType === "system");
-      expect(comments.length, testCase.outcome).toBe(before + 1);
-      const latest = comments.at(-1)!;
-      expect(latest.body, testCase.outcome).toContain(`mention://agent/${agent.id}`);
-
-      const notification = store.getConversationLogEntryById(latest.id)!.metadata.envelope;
-      expect(notification, testCase.outcome).toMatchObject({ outcome: testCase.outcome === "done" ? "done" : testCase.outcome });
+      const messages = childStatusMessages(store, parent.id);
+      expect(messages.length, testCase.outcome).toBe(before + (testCase.outcome === "failed" ? 3 : 1));
+      const latest = messages.at(-1)!;
+      expect(latest.to_agent_id, testCase.outcome).toBe(agent.id);
+      expect(latest.body_md, testCase.outcome).toContain(`mention://agent/${agent.id}`);
+      expect(latest.metadata.outcome, testCase.outcome).toBe(testCase.outcome);
     }
 
-    // Four reports, one pending round: the owner wakes once for the batch.
+    // todo/running/blocked from the failed child, plus three manual endings.
     const parentTasks = store.listTasksForIssue(parent.id);
     expect(parentTasks).toHaveLength(1);
     expect(parentTasks[0]).toMatchObject({ agentId: agent.id, status: "queued" });
-    expect(activityOf(store, parent.id, "child_done_parent_triggered")).toHaveLength(1);
-    expect(activityOf(store, parent.id, "pending_turn_coalesced")).toHaveLength(3);
-    const reports = store.listIssueComments(parent.id).filter(comment => comment.authorType === "system");
-    expect(reports).toHaveLength(4);
-    expect(inboxReportBody(store, parentTasks[0]!)).toContain("failed");
-    expect(parentTasks[0]?.prompt).not.toContain("failed");
+    expect(activityOf(store, parent.id, "turn_created")).toHaveLength(1);
+    expect(activityOf(store, parent.id, "turn_merged")).toHaveLength(5);
+    const reports = childStatusMessages(store, parent.id);
+    expect(reports).toHaveLength(6);
+    expect(reports.some(message => message.body_md.includes("failed"))).toBeTrue();
+    expect(parentTasks[0]?.prompt).toBe(reports[0]!.body_md);
+    expect(store.getIssue(parent.id)?.status).toBe("in_progress");
   });
 
   it("files a child_issue_terminal inbox item for a member owner with the right severity", () => {
@@ -1075,9 +1089,10 @@ describe("MUL-400 E2 — child endings notify the parent owner", () => {
     expect(store.markInboxItemRead(items[0]!.id).issue_parent_key).toBe(parent.key);
     expect(store.archiveInboxItem(items[1]!.id).issue_parent_title).toBe(parent.title);
 
-    // A human owner never gets a wakeup round or a parent system comment.
+    // A member receives status messages in a member lane, without an agent round.
     expect(store.listTasksForIssue(parent.id)).toHaveLength(0);
-    expect(store.listIssueComments(parent.id).filter((comment) => comment.authorType === "system")).toHaveLength(0);
+    expect(childStatusMessages(store, parent.id)).toHaveLength(3);
+    expect(childStatusMessages(store, parent.id).every(message => message.to_member_id === member.id)).toBeTrue();
   });
 
   it("reports a failed child to a member owner as a warning", () => {
@@ -1107,9 +1122,12 @@ describe("MUL-400 E2 — child endings notify the parent owner", () => {
     // The failure blocks the child; the human owner must see it as a warning.
     expect(store.getIssue(child.id)?.status).toBe("blocked");
     const items = store.listInboxItems(member.id).filter((item) => item.type === "child_issue_terminal");
-    expect(items).toHaveLength(1);
-    expect(items[0]?.severity).toBe("warning");
-    expect(items[0]?.details).toMatchObject({ outcome: "failed", childIssueId: child.id });
+    expect(items).toHaveLength(3);
+    const failed = items.find(item => (item.details as any)?.outcome === "failed");
+    expect(failed?.severity).toBe("warning");
+    expect(failed?.details).toMatchObject({ outcome: "failed", childIssueId: child.id });
+    expect(childStatusMessages(store, parent.id, child.id).map(message => message.metadata.child_status))
+      .toEqual(["todo", "in_progress", "blocked"]);
   });
 
   it("reports done, failed and cancelled children of an unowned parent to subscribers", () => {
@@ -1163,8 +1181,8 @@ describe("MUL-400 E2 — child endings notify the parent owner", () => {
       const childId = testCase.run(parent.id);
 
       // A system comment plus a skip record, and the subscriber hears about it.
-      const comments = store.listIssueComments(parent.id).filter((comment) => comment.authorType === "system");
-      expect(comments, testCase.outcome).toHaveLength(1);
+      const comments = childStatusMessages(store, parent.id);
+      expect(comments, testCase.outcome).toHaveLength(testCase.outcome === "failed" ? 3 : 1);
       expect(activityOf(store, parent.id, "child_done_parent_skipped")[0]?.data, testCase.outcome)
         .toMatchObject({ reason: "no_assignee", outcome: testCase.outcome });
       const item = store.listInboxItems(watcher.id)
@@ -1179,7 +1197,8 @@ describe("MUL-400 E2 — child endings notify the parent owner", () => {
   it("coalesces several child endings into one queued round while the owner is busy", () => {
     const store = createStore();
     store.ensureLocalWorkspace();
-    const leader = store.createAgent({ name: "Busy leader", provider: "claude" });
+    const runtime = store.registerRuntime({ name: "Busy runtime", provider: "claude" });
+    const leader = store.createAgent({ name: "Busy leader", provider: "claude", runtimeId: runtime.id });
     const squad = store.createSquad({ name: "Busy squad", leaderId: leader.id });
     const parent = store.createIssue({
       title: "Busy parent",
@@ -1188,7 +1207,7 @@ describe("MUL-400 E2 — child endings notify the parent owner", () => {
       assigneeId: squad.id,
     });
     const running = store.createTask({ agentId: leader.id, issueId: parent.id, prompt: "current round" });
-    db!.run("UPDATE multiremi_tasks SET status = 'running' WHERE id = ?", [running.id]);
+    runTask(store, runtime.id, running.id);
 
     const children = ["done", "failed", "blocked", "cancelled"].map((status) =>
       store.createIssue({ title: `Ending ${status}`, parentIssueId: parent.id, status: "in_progress" })
@@ -1196,27 +1215,29 @@ describe("MUL-400 E2 — child endings notify the parent owner", () => {
     const [doneChild, blockedChild] = [children[0]!, children[2]!];
     store.updateIssue(doneChild.id, { status: "done" });
 
-    const queuedAfterFirst = store.listTasksForIssue(parent.id).filter((task) => task.status === "queued");
-    expect(queuedAfterFirst).toHaveLength(1);
-    expect(activityOf(store, parent.id, "child_done_parent_triggered")).toHaveLength(1);
-    // The retired skip reason must never appear again.
+    expect(store.listTasksForIssue(parent.id).filter(task => task.status === "queued")).toHaveLength(0);
+    expect(store.getTask(running.id)?.status).toBe("running");
+    expect(activityOf(store, parent.id, "message_delivered_running")).toHaveLength(1);
     expect(activityOf(store, parent.id, "child_done_parent_skipped")).toHaveLength(0);
 
     for (const child of [children[1]!, blockedChild, children[3]!]) {
       store.updateIssue(child.id, { status: "blocked" });
     }
 
-    const queued = store.listTasksForIssue(parent.id).filter((task) => task.status === "queued");
-    expect(queued).toHaveLength(1);
-    expect(queued[0]?.id).toBe(queuedAfterFirst[0]?.id);
-    expect(queued[0]?.prompt).toBe(queuedAfterFirst[0]!.prompt);
-    expect(inboxReportBody(store, queued[0]!)).toContain("is blocked");
-    expect(activityOf(store, parent.id, "pending_turn_coalesced")).toHaveLength(3);
-
-    // Every report still reached the parent as its own notification comment.
-    const notifications = store.listIssueComments(parent.id).filter(comment =>
-      store.getConversationLogEntryById(comment.id)?.metadata.envelope?.outcome !== undefined);
+    expect(store.listTasksForIssue(parent.id).filter(task => task.status === "queued")).toHaveLength(0);
+    expect(activityOf(store, parent.id, "message_delivered_running")).toHaveLength(4);
+    const notifications = childStatusMessages(store, parent.id);
     expect(notifications).toHaveLength(4);
+    expect(notifications.every(message => message.to_agent_id === leader.id && message.wake_applied === "now")).toBeTrue();
+    expect(notifications.some(message => message.body_md.includes("is blocked"))).toBeTrue();
+    // Unacknowledged running input must become exactly one successor turn.
+    store.completeTask(running.id, { output: "Current round finished." });
+    const queued = store.listTasksForIssue(parent.id).filter(task => task.status === "queued");
+    expect(queued).toHaveLength(1);
+    expect(store.claimTask(runtime.id)?.id).toBe(queued[0]!.id);
+    const offered = store.getDaemonTurnBridge().offerInput(store.getTaskWithAgent(queued[0]!.id)!);
+    expect(offered.input_messages.filter(message => message.message_kind === "status")).toHaveLength(4);
+
   });
 
   it("keeps the no-assignee comment and skip record, and reaches subscribers", () => {
@@ -1229,7 +1250,7 @@ describe("MUL-400 E2 — child endings notify the parent owner", () => {
 
     store.updateIssue(child.id, { status: "blocked" });
 
-    expect(store.listIssueComments(parent.id).filter((comment) => comment.authorType === "system")).toHaveLength(1);
+    expect(childStatusMessages(store, parent.id)).toHaveLength(1);
     expect(activityOf(store, parent.id, "child_done_parent_skipped")[0]?.data).toMatchObject({
       reason: "no_assignee",
       outcome: "blocked",

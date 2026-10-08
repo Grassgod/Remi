@@ -16,7 +16,7 @@ export async function mainMigrateUsageAccounting(): Promise<void> {
   if (!execute) {
     const sql = new Bun.SQL(databaseUrl, { max: 1 });
     try {
-      const rows = await sql.unsafe("SELECT count(*) AS tasks FROM multiremi_tasks");
+      const rows = await sql.unsafe("SELECT count(*) AS tasks FROM multiremi_turn_execution_records");
       process.stdout.write(`${JSON.stringify({ mode: "read-only", tasks: Number(rows[0]?.tasks ?? 0), batchSize,
         next: "API startup performs required scalar cutover automatically. Optional preparation: review a backup and rerun with --execute; startup still rechecks source versions. Native/raw recovery uses reconcile-task-usage.ts." })}\n`);
     } finally { await sql.end(); }

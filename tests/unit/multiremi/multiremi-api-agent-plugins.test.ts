@@ -1,3 +1,4 @@
+import { requestMessageBody, taskRequestPath, sentTask } from "./unified-test-paths.js";
 import { reportFrame } from "../../fixtures/report-session.js";
 import { afterEach, describe, expect, it } from "bun:test";
 import { receiveTaskOffer } from "../../fixtures/task-offer.js";
@@ -7,7 +8,7 @@ import { createHash } from "node:crypto";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { MultiremiDaemonClient } from "@multiremi/client.js";
 import type { ResolveAgentPluginGitSourceInput } from "@multiremi/agent-plugins/git-import.js";
-import { createStore, mockFetch, resetMultiremiTestEnv, signTestJwt } from "./helpers.js";
+import { createLocalStore as createStore, mockFetch, resetMultiremiTestEnv, signTestJwt } from "./helpers.js";
 
 afterEach(resetMultiremiTestEnv);
 
@@ -955,10 +956,10 @@ describe("Multiremi API — agent plugins", () => {
     });
     const app = createMultiremiApp({ store });
 
-    const response = await app.request("/api/multiremi/tasks", {
+    const response = await app.request(taskRequestPath(store, {issueId:store.createIssue({title:"Dispatch fixture",workspaceId:"local"}).id}), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
+      body: JSON.stringify(requestMessageBody(store, {
         agentId: agent.id,
         prompt: "bypass the required Plugin",
         provider: "claude",
@@ -977,11 +978,11 @@ describe("Multiremi API — agent plugins", () => {
           config: {},
           connectionId: null,
         }],
-      }),
+      })),
     });
 
-    expect(response.status).toBe(201);
-    expect((await response.json()).task).toMatchObject({
+    expect(response.status).toBe(200);
+    expect(sentTask(store, (await response.json()))).toMatchObject({
       pluginSnapshot: [],
       executionFingerprint: null,
       assignmentSourceEventId: null,
@@ -1022,9 +1023,9 @@ describe("Multiremi API — agent plugins", () => {
     const claimed = normalizeDaemonClaimTask((await receiveTaskOffer(store, runtime.id))!);
 
     expect(claimed).toMatchObject({
-      id: task.id,
-      executionFingerprint: expect.stringMatching(/^[0-9a-f]{64}$/),
-      pluginSnapshot: [{
+      attempt_id: task.id,
+      execution_fingerprint: expect.stringMatching(/^[0-9a-f]{64}$/),
+      plugin_snapshot: [{
         bindingId: binding.id,
         pluginId: plugin.id,
         versionId: plugin.activeVersionId,

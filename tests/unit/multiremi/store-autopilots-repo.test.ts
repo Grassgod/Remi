@@ -8,7 +8,7 @@ import { MultiremiStore } from "@multiremi/store.js";
 import { StoreContext } from "@multiremi/store/context.js";
 import { AnalyticsRepo } from "@multiremi/store/repos/analytics-repo.js";
 import { AutopilotsRepo } from "@multiremi/store/repos/autopilots-repo.js";
-import { PostgresSyncDatabase, type SqlDatabase } from "@multiremi/store/db/postgres.js";
+import { PostgresSyncDatabase } from "@multiremi/store/db/postgres.js";
 
 let db: Database | null = null;
 let store: MultiremiStore | null = null;
@@ -17,11 +17,11 @@ function createRepo(): AutopilotsRepo {
   db = openSqliteDatabase(":memory:");
   // The store owns migrations and is the lazy cross-domain host the context resolves.
   store = new MultiremiStore(db);
-  return directRepo(db, store);
+  return directRepo(store);
 }
 
-function directRepo(database: SqlDatabase, host: MultiremiStore): AutopilotsRepo {
-  const ctx = new StoreContext(database, () => host);
+function directRepo(host: MultiremiStore): AutopilotsRepo {
+  const ctx = (host as unknown as { ctx: StoreContext }).ctx;
   // The analytics recorders are not on the public facade, so they are registered on the context.
   ctx.registerAnalytics(new AnalyticsRepo(ctx));
   return new AutopilotsRepo(ctx);
@@ -56,7 +56,7 @@ async function withRepo(
     try {
       const host = new MultiremiStore(database);
       host.ensureLocalWorkspace();
-      run(directRepo(database, host), host);
+      run(directRepo(host), host);
     } finally {
       database.close();
     }
@@ -74,7 +74,7 @@ async function withRepo(
     database = new PostgresSyncDatabase(url.toString());
     const host = new MultiremiStore(database);
     host.ensureLocalWorkspace();
-    run(directRepo(database, host), host);
+    run(directRepo(host), host);
   } finally {
     database?.close();
     await admin.unsafe(`DROP DATABASE IF EXISTS ${name} WITH (FORCE)`);

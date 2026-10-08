@@ -11,6 +11,7 @@ import { join } from "node:path";
 import { deflateRawSync } from "node:zlib";
 import { SESSION_ARCHIVE_FORMAT_V1 } from "../../packages/contracts/src/session-archive.js";
 import type { SqlDatabase } from "../../packages/server/src/store/db/postgres.js";
+import { runTurnExecutionMutation } from "../../packages/server/src/store/turn-execution-records.js";
 import { TRACE_TRUNCATION_MARKER } from "../../packages/shared/src/trace-sanitize.js";
 import { randomInt, sampleWithoutReplacement, seededRandom, type RandomSource } from "./seeded-random.js";
 
@@ -86,11 +87,11 @@ export function insertSyntheticChat(db: SqlDatabase, input: { id: string; agentI
 
 export function insertSyntheticTask(db: SqlDatabase, task: SyntheticTask): void {
   const ended = task.endedAt ?? null;
-  db.run(
-    `INSERT INTO multiremi_tasks (
+  runTurnExecutionMutation(db,
+    `INSERT INTO multiremi_turn_execution_records (
        id, workspace_id, agent_id, runtime_id, issue_id, issue_session_id, chat_session_id, status, provider,
-       prompt, created_at, updated_at, dispatched_at, started_at, completed_at, failed_at, cancelled_at
-     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       prompt, created_at, updated_at, dispatched_at, started_at, execution_scope
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     task.id,
     task.workspaceId ?? SYNTHETIC_WORKSPACE_ID,
     task.agentId,
@@ -105,10 +106,9 @@ export function insertSyntheticTask(db: SqlDatabase, task: SyntheticTask): void 
     ended ?? task.createdAt,
     task.startedAt ?? null,
     task.startedAt ?? null,
-    task.status === "completed" ? ended : null,
-    task.status === "failed" ? ended : null,
-    task.status === "cancelled" ? ended : null,
+    `synthetic:${task.id}`,
   );
+  if (ended) db.run("UPDATE multiremi_turn_attempts SET ended_at = ? WHERE id = ?", [ended, task.id]);
 }
 
 export function insertSyntheticMessages(db: SqlDatabase, taskId: string, messages: readonly SyntheticMessage[]): void {
@@ -658,7 +658,7 @@ function generateCorpus(db: SqlDatabase, params: SyntheticCorpusParams): Synthet
       let subject: { issueId?: string; chatSessionId?: string } = {};
       let size = 1;
       if (group === "chat") {
-        const id = `chs_syn_${String(++chatCounter).padStart(5, "0")}`;
+        const id = `chat_syn_${String(++chatCounter).padStart(5, "0")}`;
         insertSyntheticChat(db, { id, agentId: agents[randomInt(random, agents.length)]!, createdAt: subjectCreated });
         subject = { chatSessionId: id };
         size = subjectSize(params.tasksPerChat, Math.max(1, left));
@@ -1229,7 +1229,7 @@ function generateTiered(db: SqlDatabase, params: TieredCorpusParams, pools: Trac
       let subject: { issueId?: string; chatSessionId?: string } = {};
       let size = 1;
       if (group === "chat") {
-        const id = `chs_syn_${String(++chatCounter).padStart(5, "0")}`;
+        const id = `chat_syn_${String(++chatCounter).padStart(5, "0")}`;
         insertSyntheticChat(db, { id, agentId: agents[randomInt(random, agents.length)]!, createdAt: subjectCreated });
         subject = { chatSessionId: id };
         size = subjectSize(defaults.tasksPerChat, left);

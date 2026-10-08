@@ -244,6 +244,16 @@ data-service networks; it never creates, replaces, or deletes data containers.
    their owner. SSH Mesh rejects a root-owned service home. Bind the host
    account's `.ssh` directory with `REMI_SSH_HOME_DIR` and set its login name in
    `REMI_SSH_USER`.
+   Startup migration reports default to `$HOME/reports/migrations`, or
+   `/srv/multiremi/reports/migrations` in both production Compose topologies
+   (`api` and `api-runtime`). This is inside the persistent `REMI_HOME_DIR`
+   bind mount, outside the image's `/app` working directory. Ensure the home
+   and any existing report directory belong to `REMI_RUNTIME_UID:GID`; startup
+   checks directory creation, file write and rename before schema changes.
+   A custom `MULTIREMI_MIGRATION_REPORT_DIR` belongs in the operator-owned
+   `api.env`, must be on a writable persistent mount, and must be used for
+   reconciliation too. The updater-owned `application.env` only supplies
+   Compose interpolation and does not inject this variable into the API.
 4. Start on the staging ports (`16120` and `13000`) with
    `REMI_BACKGROUND_JOBS=0` and `REMI_SSH_MESH_CONTROL_PLANE=0`. Verify API,
    Web, login, database-backed counts, OpenViking readiness, attachments, and

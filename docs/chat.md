@@ -74,23 +74,29 @@ Project 资源列表变化或项目不可用时，已有工作副本保留。
 
 ## 消息与执行队列
 
-每次发送创建独立任务。消息、任务和附件绑定在同一事务中保存；运行中的会话可继续接收后续消息。
-同一会话的任务串行执行，后续任务在领取时取得最新可续接的 provider 会话，而非沿用入队时的旧指针。
-当前轮的上下文投影排除尚未处理的后续输入。
+消息写入对话日志。正在运行的轮收到定向的 now 消息会插话；pending 轮合并后续消息，领取时读取连续输入范围。同一 lane 只有一个 pending 轮。
 
-队列支持编辑文本、移除、清空和立即处理。立即处理将选中消息排到下一位，并取消当前运行；服务端负责这两个动作。
-系统唤醒任务的 `wake_source` 非空，不属于可编辑、置顶或移除的用户消息队列，也不会在队列中显示为用户输入。转述信封在已有排队任务上搭车，运行中则事务内 steer；`next_turn` 只搭车或 steer，不新建任务。
-已经进入执行的消息不能按排队消息修改，状态冲突返回 409。取消保留已有 task transcript；它不等于撤销已执行的工具操作。
+队列是未读消息，按 seq 顺序读取。未读消息可编辑或删除，已进入轮输入的消息修改返回 409；编辑和删除留下日志标记。收尾用 turn wrap-up，取消用 turn cancel，重试在同一轮新增 attempt。取消不撤销已执行的工具操作。
 输入框在发送失败时保留草稿，删除失败时保持会话选择。
 
-聊天记录与 provider 会话是两层状态。正常续接复用既有运行上下文；无法续接时，Remi 使用有预算的聊天历史投影，
+聊天记录与 provider 会话是两层状态。正常续接复用既有运行上下文，输入范围从当前 agent lane 的实际读游标开始，
+包含尚未读取的请求和编辑后的 next_turn 正文，过滤已删除消息；无法续接时，Remi 使用有预算的聊天历史投影，
 截断会被标识。不能据此承诺每轮携带完整历史或底层工具的全部工作记忆。
+
+内部恢复入口可为尚无已完成谱系的首轮显式提供 Runtime、provider session 与工作目录；领取时保留这些初始值，后续用户轮使用已完成的 Chat 谱系。飞书 transport 的亲和性仍按其绑定刷新。
+
+只读飞书 Issue 话题保留所属 Project 的仓库展示目录，自动 checkout 仍使用独立的显式仓库清单。
+
+自动终态回复发给 Chat 创建者的工作区成员，成功结果和最终失败均进入该成员的收件箱。
+Chat 列表的未读计数使用同一 member lane；读到较早消息保留最终回复未读，读到回复后清零。
 
 ## 权限与实时更新
 
 直接聊天仅创建者可读写，另需满足工作区成员与云友访问条件。其他工作区成员及管理员不能读取别人的私聊。
-会话日志的 `log/entry`（范围与单条）、`log/locate` 和 `log` 窗口允许任务凭据读取自身绑定的 Chat，
-前提是任务、凭据与 Chat 的工作区一致；飞书个人机器人 Chat 同样适用。其他请求沿用创建者访问规则。
+消息范围读取 `messages?from&to`、单条展开 `log/entry`、定位 `log/locate` 和 `log` 窗口允许任务凭据读取自身绑定的 Chat，
+前提是任务、凭据与 Chat 的工作区一致；飞书个人机器人 Chat 同样适用。任务凭据访问同工作区其他 Chat 返回 403，
+即使目标创建者是凭据中的用户或 Runtime owner，也不回退到创建者权限。未绑定且不存在的会话同样返回 403；
+已删除的绑定 Chat 与跨工作区 Chat 返回 404。人类 PAT/JWT 仍沿用创建者访问规则。
 范围读取按凭据中的 agent 记录实际已读进度，定位、窗口和单条展开不推进该进度。
 消息、附件、task transcript 和实时订阅各自保留对应权限检查，不能只依赖页面隐藏。
 任务详情与控制接口、云友任务列表同样检查私聊权限；Issue 分享不包含 Chat 的输入与执行记录。
@@ -109,16 +115,16 @@ remi chat create --agent <id>
 remi chat create --agent <id> --project <project-id>
 remi chat create --agent <id> --runtime-workspace <runtime-workspace-id>
 remi chat update <chat> --title <title>
-remi chat message create <chat> --content-file <path>
+remi message send <chat> --to <agent> --content-file <path>
 remi chat pin <chat>
 remi chat unpin <chat>
 remi chat archive <chat>
 remi chat restore <chat>
-remi chat queue list <chat>
-remi chat queue update <chat> <task> --content-file <path>
-remi chat queue remove <chat> <task>
-remi chat queue clear <chat>
-remi chat queue prioritize <chat> <task>
+remi message list <chat> --unread-by <agent>
+remi message edit <message> --content-file <path>
+remi message delete <message> --yes
+remi inbox read <chat>
+remi turn list --chat <chat>
 ```
 
 接口实现见 [Chat 路由](../packages/server/src/api/routers/chat.ts)、
@@ -127,3 +133,6 @@ remi chat queue prioritize <chat> <task>
 [Chat 视图](../frontend/packages/views/chat) 与 [core/chat](../frontend/packages/core/chat)。
 验证方法遵循[测试指南](../TESTING.md)；`bun run smoke:chat` 启动隔离浏览器测试。
 单元测试、浏览器冒烟和真实 provider 执行分别报告结果。
+`tests/integration/daemon-protocol-v2/chat-unread-consumption.test.ts` 使用隔离的真实 daemon、API、SQLite、
+ACP 子进程与 CLI 范围读取，回归连续 warm 输入和 next_turn 编辑/删除的消息 ID、正文哈希、读取次数与持久回执。
+该测试使用测试 provider，不调用真实模型，也不代替 PPE 或浏览器验收。

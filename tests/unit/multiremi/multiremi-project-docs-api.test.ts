@@ -622,7 +622,7 @@ describe("Bun Multiremi project docs API", () => {
 
     // The daemon client keeps backward-compatible parsing for old servers, but
     // new claims do not transport a bulk knowledge index or document bodies.
-    store.completeTask(claimed.id, { output: "done" });
+    store.completeTask(claimed.attempt_id, { output: "done" });
     store.createTask({ agentId: agent.id, issueId: issue.id, workspaceId: "local", prompt: "go again" });
     mockFetch((url, init) => {
       const parsed = new URL(url);

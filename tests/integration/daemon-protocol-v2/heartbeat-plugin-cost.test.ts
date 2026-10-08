@@ -1,6 +1,6 @@
 import { afterEach, expect, it, spyOn } from "bun:test";
 import { randomBytes } from "node:crypto";
-import type { Database } from "bun:sqlite";
+import type { SqlDatabase } from "@multiremi/store/db/postgres.js";
 import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { DAEMON_HEARTBEAT_INTERVAL_MS, type DaemonHeartbeatPayload } from "@multiremi/contracts/daemon-protocol.js";
@@ -23,7 +23,7 @@ function runtimeId(h: DaemonProtocolHarness): string {
   return h.ledger.find(entry => entry.type === "hello")!.frame.p.runtimes[0].runtime_id;
 }
 
-async function countSql(database: Database, action: () => Promise<void> | void) {
+async function countSql(database: SqlDatabase, action: () => Promise<void> | void) {
   const statements: string[] = [];
   const query = database.query.bind(database);
   const run = database.run.bind(database) as (sql: string, ...args: unknown[]) => unknown;

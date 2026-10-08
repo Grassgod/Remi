@@ -60,12 +60,13 @@ IssuesRepo.prototype.finalSummaryAfterLastChild = function (id, options) {
 };
 
 self.onmessage = (event: MessageEvent<
-  | { type: "init"; dialect: "sqlite" | "postgres"; location: string; applicationName: string }
+  | { type: "init"; dialect: "sqlite" | "postgres"; location: string; migrationReportDir: string; applicationName: string }
   | { type: "close" }
   | RaceOperation
 >) => {
   const input = event.data;
   if (input.type === "init") {
+    process.env.MULTIREMI_MIGRATION_REPORT_DIR=input.migrationReportDir;
     if (input.dialect === "postgres") {
       const url = new URL(input.location);
       url.searchParams.set("application_name", input.applicationName);

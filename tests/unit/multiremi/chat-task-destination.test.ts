@@ -1,3 +1,4 @@
+import { mutateExecutionFixture } from "./unified-test-paths.js";
 import { afterEach, describe, expect, it } from "bun:test";
 import { daemonTaskClaimResponse } from "@multiremi/api/wire/tasks.js";
 import { createLocalStore, db, resetMultiremiTestEnv } from "./helpers.js";
@@ -27,7 +28,9 @@ function setup(kind: "round" | "human" | "user" = "round") {
       VALUES ('push_destination', 'local', ?, ?, 'source_destination', 'request_destination', ?, ?, ?)`,
     [bindingId, first.id, task.id, task.createdAt, task.createdAt]);
   }
-  return { store, runtime, agent, first, second, chat, task, bindingId, kind };
+  const messages = store.listChatMessages(chat.id);
+  expect(messages.map((message) => message.body)).toEqual([task.prompt]);
+  return { store, runtime, agent, first, second, chat, task, bindingId, kind, messages };
 }
 
 type Fixture = ReturnType<typeof setup>;
@@ -51,7 +54,7 @@ describe("Chat task destination invariant", () => {
         expect(() => daemonTaskClaimResponse(f.store, hydrated)).toThrow("destination no longer matches");
         expect(f.store.claimTask(f.runtime.id)).toBeNull();
         expect(f.store.getTask(f.task.id)?.status).toBe("cancelled");
-        expect(f.store.listChatMessages(f.chat.id)).toHaveLength(0);
+        expect(f.store.listChatMessages(f.chat.id)).toEqual(f.messages);
         expect(f.store.getChatSession(f.chat.id)?.sessionId).toBeNull();
       });
       for (const terminal of ["complete", "fail"] as const) {
@@ -64,7 +67,7 @@ describe("Chat task destination invariant", () => {
             ? f.store.completeTask(f.task.id, { output: "OLD_ISSUE_REPLY", sessionId: "old_issue_lineage" })
             : f.store.failTask(f.task.id, { error: "OLD_ISSUE_ERROR", sessionId: "old_issue_lineage" }))
             .toThrow("destination no longer matches");
-          expect(f.store.listChatMessages(f.chat.id)).toHaveLength(0);
+          expect(f.store.listChatMessages(f.chat.id)).toEqual(f.messages);
           expect(f.store.getChatSession(f.chat.id)?.sessionId).toBeNull();
           expect(f.store.getTask(f.task.id)?.result).toBeNull();
         });
@@ -74,7 +77,7 @@ describe("Chat task destination invariant", () => {
       const f = setup(kind);
       expect(f.store.claimTask(f.runtime.id)?.id).toBe(f.task.id);
       drifts["A to B"](f);
-      db!.run("UPDATE multiremi_tasks SET dispatched_at = '2000-01-01T00:00:00.000Z' WHERE id = ?", [f.task.id]);
+      mutateExecutionFixture(db!, "UPDATE multiremi_turn_execution_records SET dispatched_at = '2000-01-01T00:00:00.000Z' WHERE id = ?", [f.task.id]);
       expect(f.store.claimTask(f.runtime.id)).toBeNull();
       expect(f.store.getTask(f.task.id)?.status).toBe("cancelled");
     });
@@ -107,11 +110,11 @@ describe("Chat task destination invariant", () => {
     const f = setup(kind);
     const cached = f.store.claimTask(f.runtime.id)!;
     expect(cached.issueId).toBe(f.first.id);
-    db!.run("UPDATE multiremi_tasks SET issue_id = ? WHERE id = ?", [f.second.id, f.task.id]);
+    mutateExecutionFixture(db!, "UPDATE multiremi_turn_execution_records SET issue_id = ? WHERE id = ?", [f.second.id, f.task.id]);
     expect(f.store.getTask(f.task.id)?.issueId).toBe(f.second.id);
     expect(() => f.store.getTaskChatExecutionKind(cached)).toThrow("destination no longer matches");
     expect(() => daemonTaskClaimResponse(f.store, cached)).toThrow("destination no longer matches");
-    expect(f.store.listChatMessages(f.chat.id)).toHaveLength(0);
+    expect(f.store.listChatMessages(f.chat.id)).toEqual(f.messages);
   });
 
   it("runs a historical detached ordinary user turn cold without Issue context", () => {
@@ -160,13 +163,13 @@ describe("Chat task destination invariant", () => {
     f.store.failTask(firstRetry.id, { error: "second timeout", failureReason: "timeout" });
     const secondRetry = f.store.listTasks().find((task) => task.parentTaskId === firstRetry.id)!;
     expect(db!.query("SELECT id FROM multiremi_feishu_bot_human_request_pushes WHERE wake_task_id = ?").get(secondRetry.id)).toBeNull();
-    db!.run("UPDATE multiremi_tasks SET prompt = 'Edited generated notification' WHERE id = ?", [secondRetry.id]);
+    mutateExecutionFixture(db!, "UPDATE multiremi_turn_execution_records SET prompt = 'Edited generated notification' WHERE id = ?", [secondRetry.id]);
     const cached = f.store.getTaskWithAgent(secondRetry.id)!;
     drifts["NULL binding Issue"](f);
     expect(() => daemonTaskClaimResponse(f.store, cached)).toThrow("destination no longer matches");
     expect(f.store.claimTask(f.runtime.id)).toBeNull();
     expect(f.store.getTask(secondRetry.id)?.status).toBe("cancelled");
-    expect(f.store.listChatMessages(f.chat.id)).toHaveLength(0);
+    expect(f.store.listChatMessages(f.chat.id)).toEqual(f.messages);
   });
 
   it("does not treat an explicit user continuation of a notification as its automatic retry", () => {
@@ -184,7 +187,7 @@ describe("Chat task destination invariant", () => {
   it("rejects a cached task snapshot after the live task was deleted", () => {
     const f = setup("human");
     const cached = f.store.getTaskWithAgent(f.task.id)!;
-    db!.run("DELETE FROM multiremi_tasks WHERE id = ?", [f.task.id]);
+    db!.run("DELETE FROM multiremi_turn_attempts WHERE id = ?", [f.task.id]);
     expect(() => daemonTaskClaimResponse(f.store, cached)).toThrow("destination no longer matches");
   });
 

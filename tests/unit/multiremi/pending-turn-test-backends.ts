@@ -2,7 +2,6 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe } from "bun:test";
 import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { PostgresSyncDatabase, type SqlDatabase } from "@multiremi/store/db/postgres.js";
 import { MultiremiStore } from "@multiremi/store.js";
-import { preparePendingTurnConstraintsWithinTransaction } from "@multiremi/store/pending-turns.js";
 
 export interface PendingTurnTestFixture {
   db: SqlDatabase;
@@ -14,7 +13,10 @@ export interface PendingTurnTestFixture {
 
 export function installPendingTurnTestConstraints(fixture: PendingTurnTestFixture): void {
   fixture.transaction(() => {
-    preparePendingTurnConstraintsWithinTransaction(fixture.db);
+    // Runtime fixtures use normalized Turns. Historical collapse is tested on
+    // bootstrapPreUnifiedSchema by multiremi-pending-turn-migration.test.ts.
+    fixture.db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_multiremi_turns_pending_lane
+      ON multiremi_turns(session_id, agent_id, execution_scope) WHERE status = 'pending'`);
   });
 }
 

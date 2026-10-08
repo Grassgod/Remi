@@ -46,13 +46,13 @@ describe.skipIf(!adminUrl)("A-3 task offers on real PostgreSQL", () => {
   it("migrates both timestamp columns and holds accepted dispatches until disconnect", async () => {
     const h = fixture();
     try {
-      const columns = db.query("PRAGMA table_info(multiremi_tasks)").all().map(row => row.name);
+      const columns = db.query("PRAGMA table_info(multiremi_turn_attempts)").all().map(row => row.name);
       expect(columns).toContain("offered_at"); expect(columns).toContain("accepted_at");
       const task = h.task(); await h.hello();
       const offer = h.frames.find(frame => frame.t === "task.offer")!;
       await h.send("res", { ok: true }, { re: String(offer.seq), ack: offer.seq });
       expect(store.getTask(task.id)?.offeredAt).toBeString(); expect(store.getTask(task.id)?.acceptedAt).toBeString();
-      db.run("UPDATE multiremi_tasks SET dispatched_at = '2000-01-01T00:00:00.000Z' WHERE id = ?", [task.id]);
+      db.run("UPDATE multiremi_turn_attempts SET accepted_at = '2000-01-01T00:00:00.000Z' WHERE id = ?", [task.id]);
       expect(store.claimTask(h.id)).toBeNull();
       h.session.handleSocketClose();
       expect(store.claimTask(h.id)?.id).toBe(task.id);

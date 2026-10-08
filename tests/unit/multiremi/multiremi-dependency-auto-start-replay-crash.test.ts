@@ -5,6 +5,7 @@ import { join } from "node:path";
 import type { MultiremiIssue, MultiremiSystemEvent } from "@multiremi/contracts/types.js";
 import { PostgresSyncDatabase, type SqlDatabase } from "@multiremi/store/db/postgres.js";
 import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
+import { resolveMigrationReportDirectory } from "@multiremi/store/migration-report-directory.js";
 import { MultiremiStore } from "@multiremi/store.js";
 
 const PG_ADMIN_URL = process.env.MULTIREMI_TEST_POSTGRES_URL
@@ -104,7 +105,7 @@ for (const dialect of ["sqlite", "postgres"] as const) {
     ) {
       const probe = Bun.spawn([
         process.execPath, "run", PROBE, database, prerequisite.id, dependent.id, mode,
-        replayAt?.toISOString() ?? "", ...(resumeFile ? [resumeFile] : []),
+        replayAt?.toISOString() ?? "", resumeFile ?? "", resolveMigrationReportDirectory(),
       ], { stdout: "pipe", stderr: "pipe", stdin: "ignore" });
       probes.push(probe);
       return probe;

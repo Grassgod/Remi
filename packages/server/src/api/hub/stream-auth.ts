@@ -4,8 +4,9 @@
  *
  * Two stream kinds, two rules:
  *
- * - `log:<session_id>` — the session decides. A chat session is creator-only; an
- *   issue session is visible to the workspace it belongs to. This is the same
+ * - `log:<session_id>` — the session decides. A chat requires its creator's
+ *   active membership and access to its agent; Issue and auto conversations
+ *   belong to their workspace. This is the same
  *   boundary the transcript routes draw (`denyCurrentUserWorkspaceAccess` plus
  *   `canUserViewTaskMessages`, `api/helpers/auth-guards.ts`), expressed here as
  *   one query per subscription instead of a hydrated store read, because C4's
@@ -35,6 +36,7 @@ import type { MultiremiStore } from "@multiremi/store/store.js";
 import { createReadPool, type ReadPool } from "@multiremi/store/db/read-pool.js";
 import { isPostgresConfigured } from "@multiremi/store/db/postgres.js";
 import type { ApiRole } from "@multiremi/config/api-role.js";
+import { canUserViewTaskMessageFacts, canUserAccessChatSessionFacts, canUserAccessAgentByUserId } from "../helpers/auth-guards.js";
 
 /** The codes a refused `stream.subscribe` can carry (see the C0 contract). */
 export type StreamSubscribeDenialCode = "invalid_payload" | "forbidden" | "wrong_endpoint" | "unavailable";
@@ -57,11 +59,12 @@ export interface StreamAuthSubject {
  * Postgres path stays at one statement.
  */
 export interface LogStreamAuthFacts {
-  kind: "chat" | "issue";
+  kind: "chat" | "issue" | "auto";
   workspaceId: string;
   /** The chat session's creator; `null` for an issue session. */
   creatorId: string | null;
   requesterIsMember: boolean;
+  requesterCanAccessAgent?: boolean;
 }
 
 /** What a `trace:` subscription needs to know about its task. */
@@ -93,8 +96,8 @@ export interface StreamAuthReader {
 }
 
 /**
- * `log:` — a chat session is creator-only; an issue session is a workspace
- * resource, so any member of that workspace may read it.
+ * `log:` uses the HTTP Chat decision; Issue and auto conversations are workspace
+ * resources, so any active member of that workspace may read them.
  *
  * The `userId == null` case is the administrative identity the rest of the
  * server treats as local owner (`buildRequestAuth`); it keeps access, or an
@@ -108,10 +111,10 @@ export function decideLogSubscription(
 ): StreamSubscribeAuthorization {
   if (!facts) return { ok: false, code: "forbidden" };
   if (facts.workspaceId !== subject.workspaceId) return { ok: false, code: "forbidden" };
-  if (subject.userId == null) return { ok: true };
   if (facts.kind === "chat") {
-    return facts.creatorId === subject.userId ? { ok: true } : { ok: false, code: "forbidden" };
+    return canUserAccessChatSessionFacts(subject.userId, facts) ? { ok: true } : { ok: false, code: "forbidden" };
   }
+  if (subject.userId == null) return { ok: true };
   return facts.requesterIsMember ? { ok: true } : { ok: false, code: "forbidden" };
 }
 
@@ -131,14 +134,7 @@ export function decideTraceSubscription(
 ): StreamSubscribeAuthorization {
   if (!facts) return { ok: false, code: "forbidden" };
   if (facts.workspaceId !== subject.workspaceId) return { ok: false, code: "forbidden" };
-  if (subject.userId == null) return { ok: true };
-  if (facts.chatSessionId) {
-    return facts.chatCreatorId === subject.userId ? { ok: true } : { ok: false, code: "forbidden" };
-  }
-  if (!facts.agentId) return { ok: true };
-  if (facts.agentVisibility !== "private") return { ok: true };
-  if (facts.agentOwnerId && facts.agentOwnerId === subject.userId) return { ok: true };
-  return facts.requesterIsWorkspaceAdmin ? { ok: true } : { ok: false, code: "forbidden" };
+  return canUserViewTaskMessageFacts(subject.userId, facts) ? { ok: true } : { ok: false, code: "forbidden" };
 }
 
 /**
@@ -146,31 +142,49 @@ export function decideTraceSubscription(
  * sqlite dialect the store uses (the pool translates it before it reaches the
  * server).
  *
- * A conversation log lives in exactly one of the two session tables, so this is
- * a `UNION ALL` of two projections rather than a join: either arm returns a row
- * or the id names no session. Membership is a subquery per arm, which keeps the
- * whole decision at one statement.
+ * Issue, Chat, autopilot and orphan inbox conversations are projected in one
+ * statement. The request CTE lets the auto arms reuse the Chat bindings; each
+ * arm includes active membership and Chat also includes agent access.
  *
  * Parameters, in order: `[userId, sessionId, userId, sessionId]`.
  */
-export const LOG_STREAM_FACTS_SQL = `SELECT 'chat' AS kind, s.workspace_id AS workspace_id, s.creator_id AS creator_id,
+export const LOG_STREAM_FACTS_SQL = `WITH request AS (SELECT ? AS user_id, ? AS session_id)
+SELECT 'chat' AS kind, s.workspace_id AS workspace_id, s.creator_id AS creator_id,
        (SELECT count(*) FROM multiremi_workspace_members m
-         WHERE m.workspace_id = s.workspace_id AND m.user_id = ? AND m.archived_at IS NULL) AS is_member
-  FROM multiremi_chat_sessions s WHERE s.id = ?
+         WHERE m.workspace_id = s.workspace_id AND m.user_id = r.user_id AND m.archived_at IS NULL) AS is_member,
+       CASE WHEN a.id IS NOT NULL AND a.workspace_id=s.workspace_id AND (a.visibility<>'private'
+         OR a.owner_id=COALESCE(r.user_id,'local') OR r.user_id IS NULL
+         OR EXISTS (SELECT 1 FROM multiremi_workspace_members m WHERE m.workspace_id=s.workspace_id
+           AND m.user_id=r.user_id AND m.archived_at IS NULL AND m.role IN ('owner','admin')))
+         THEN 1 ELSE 0 END AS can_access_agent
+  FROM multiremi_chat_sessions s JOIN request r ON s.id=r.session_id
+  LEFT JOIN multiremi_agents a ON a.id=s.agent_id
 UNION ALL
 SELECT 'issue' AS kind, s.workspace_id AS workspace_id, NULL AS creator_id,
        (SELECT count(*) FROM multiremi_workspace_members m
-         WHERE m.workspace_id = s.workspace_id AND m.user_id = ? AND m.archived_at IS NULL) AS is_member
-  FROM multiremi_issue_sessions s WHERE s.id = ?`;
+         WHERE m.workspace_id = s.workspace_id AND m.user_id = ? AND m.archived_at IS NULL) AS is_member,
+       NULL AS can_access_agent
+  FROM multiremi_issue_sessions s WHERE s.id = ?
+UNION ALL
+SELECT 'auto' AS kind, a.workspace_id, NULL AS creator_id,
+       (SELECT count(*) FROM multiremi_workspace_members m WHERE m.workspace_id=a.workspace_id
+         AND m.user_id=r.user_id AND m.archived_at IS NULL) AS is_member, NULL AS can_access_agent
+  FROM multiremi_autopilots a JOIN request r ON r.session_id='auto_' || a.id
+UNION ALL
+SELECT 'auto' AS kind, w.id AS workspace_id, NULL AS creator_id,
+       (SELECT count(*) FROM multiremi_workspace_members m WHERE m.workspace_id=w.id
+         AND m.user_id=r.user_id AND m.archived_at IS NULL) AS is_member, NULL AS can_access_agent
+  FROM multiremi_workspaces w JOIN request r ON r.session_id='auto_orphan_inbox_' || w.id
+  JOIN multiremi_conversation_heads h ON h.session_id=r.session_id`;
 
 /**
  * The one statement a `trace:` subscription costs in Postgres.
  *
  * The task decides chat-ness, the chat session supplies the creator, and the
- * agent supplies the privacy rule. An archived agent is left out of the join so
- * its task reads as unrestricted, which is what the store-backed guard sees.
+ * agent supplies the privacy rule, including archived agents: archiving does
+ * not make their private history public.
  *
- * Parameters, in order: `[userId, userId, taskId]`.
+ * Parameters, in order: `[userId, taskId]`.
  */
 export const TRACE_STREAM_FACTS_SQL = `SELECT t.workspace_id AS workspace_id, t.chat_session_id AS chat_session_id,
        c.creator_id AS chat_creator_id, t.agent_id AS agent_id,
@@ -178,9 +192,9 @@ export const TRACE_STREAM_FACTS_SQL = `SELECT t.workspace_id AS workspace_id, t.
        (SELECT count(*) FROM multiremi_workspace_members m
          WHERE m.workspace_id = t.workspace_id AND m.user_id = ? AND m.archived_at IS NULL
            AND m.role IN ('owner', 'admin')) AS is_admin
-  FROM multiremi_tasks t
+  FROM multiremi_turn_execution_records t
   LEFT JOIN multiremi_chat_sessions c ON c.id = t.chat_session_id
-  LEFT JOIN multiremi_agents a ON a.id = t.agent_id AND a.archived_at IS NULL
+  LEFT JOIN multiremi_agents a ON a.id = t.agent_id
  WHERE t.id = ?`;
 
 interface LogFactsRow {
@@ -188,6 +202,7 @@ interface LogFactsRow {
   workspace_id?: unknown;
   creator_id?: unknown;
   is_member?: unknown;
+  can_access_agent?: unknown;
 }
 
 interface TraceFactsRow {
@@ -213,13 +228,14 @@ export function logFactsFromRow(row: LogFactsRow | null): LogStreamAuthFacts | n
   if (!row) return null;
   const workspaceId = text(row.workspace_id);
   if (!workspaceId) return null;
-  const kind = row.kind === "chat" ? "chat" : row.kind === "issue" ? "issue" : null;
+  const kind = row.kind === "chat" ? "chat" : row.kind === "issue" ? "issue" : row.kind === "auto" ? "auto" : null;
   if (!kind) return null;
   return {
     kind,
     workspaceId,
     creatorId: kind === "chat" ? text(row.creator_id) : null,
     requesterIsMember: flag(row.is_member),
+    ...(kind === "chat" ? { requesterCanAccessAgent: flag(row.can_access_agent) } : {}),
   };
 }
 
@@ -317,6 +333,7 @@ export function createSqliteStreamAuthReader(store: MultiremiStore): StreamAuthR
         const chatSession = store.getChatSession(sessionId);
         if (chatSession) {
           const workspaceId = chatSession.workspaceId;
+          const agent = store.getAgent(chatSession.agentId);
           return {
             ok: true,
             facts: {
@@ -324,11 +341,19 @@ export function createSqliteStreamAuthReader(store: MultiremiStore): StreamAuthR
               workspaceId,
               creatorId: chatSession.creatorId ?? null,
               requesterIsMember: isMember(subject.userId, workspaceId),
+              requesterCanAccessAgent: !!agent && agent.workspaceId === workspaceId && canUserAccessAgentByUserId(store, subject.userId, agent),
             },
           };
         }
         const issueSession = store.getIssueSession(sessionId);
-        if (!issueSession) return { ok: true, facts: null };
+        if (!issueSession) {
+          const workspaceId = sessionId.startsWith("auto_orphan_inbox_")
+            ? sessionId.slice("auto_orphan_inbox_".length)
+            : sessionId.startsWith("auto_") ? store.getAutopilot(sessionId.slice(5))?.workspaceId : null;
+          if (!workspaceId || sessionId.startsWith("auto_orphan_inbox_")
+            && (!store.getWorkspace(workspaceId) || !store.getConversationLogHead(sessionId))) return { ok: true, facts: null };
+          return { ok: true, facts: { kind: "auto", workspaceId, creatorId: null, requesterIsMember: isMember(subject.userId, workspaceId) } };
+        }
         return {
           ok: true,
           facts: {

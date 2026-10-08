@@ -1,3 +1,4 @@
+import { runTurnExecutionMutation } from "@multiremi/store/turn-execution-records.js";
 import { expect } from "bun:test";
 import type { MultiremiStore } from "@multiremi/store.js";
 import type { SqlDatabase } from "@multiremi/store/db/postgres.js";
@@ -9,7 +10,7 @@ export function assertLegacyHistoryBoundary(store: MultiremiStore, db: SqlDataba
   runId = "historical-evidence-v2"): void {
   const old = runId === "historical-evidence-v2" ? [{ provider: "claude", model: "configured-opus", totalTokens: 70, inputTokens: 0, outputTokens: 0 }] : [];
   const original = JSON.stringify(old);
-  db.run("UPDATE multiremi_tasks SET status='completed',completed_at='2026-10-01T01:00:00Z',usage=? WHERE id=?", [original, taskId]);
+  runTurnExecutionMutation(db, "UPDATE multiremi_turn_execution_records SET status='completed',completed_at='2026-10-01T01:00:00Z',usage=? WHERE id=?", [original, taskId]);
   migrateLegacyUsage(db);
   store.reportTaskUsageSnapshot(taskId, { version: 2, runId, revision: 1, complete: false,
     units: [actualUnit({ unitId: "native", provider: "claude", model: "opus", scope: "request", source: "provider_request",
@@ -23,10 +24,10 @@ export function assertLegacyHistoryBoundary(store: MultiremiStore, db: SqlDataba
   expect(total()).toBe(12);
   // Same obsolete snapshot is acknowledged without changing receipts or time.
   expect(store.reportTaskUsage(taskId, old).id).toBe(taskId);
-  const currentJson = db.query("SELECT usage FROM multiremi_tasks WHERE id=?").get(taskId).usage;
+  const currentJson = db.query("SELECT usage FROM multiremi_turn_execution_records WHERE id=?").get(taskId).usage;
   expect(currentJson).toBe(original);
   expect(() => store.reportTaskUsage(taskId, [{ provider: "claude", model: "configured-opus", inputTokens: 20, outputTokens: 0 }])).toThrow(UsageValidationError);
-  expect(db.query("SELECT usage FROM multiremi_tasks WHERE id=?").get(taskId).usage).toBe(original);
+  expect(db.query("SELECT usage FROM multiremi_turn_execution_records WHERE id=?").get(taskId).usage).toBe(original);
   expect(total()).toBe(12);
   expect(db.query("SELECT * FROM multiremi_usage_units WHERE task_id=? ORDER BY run_id,unit_id").all(taskId)).toEqual(before);
   expect(db.query("SELECT * FROM multiremi_usage_unit_receipts WHERE task_id=? ORDER BY run_id,unit_id").all(taskId)).toEqual(receipts);
@@ -34,7 +35,7 @@ export function assertLegacyHistoryBoundary(store: MultiremiStore, db: SqlDataba
   const changed = JSON.stringify([{ provider: "claude", model: "configured-opus", inputTokens: 20, outputTokens: 0 }]);
   ensureUsageAccountingStartup(db);
   expect(db.query("SELECT id FROM multiremi_schema_migrations WHERE id=?").get(USAGE_STARTUP_CUTOVER_MARKER)).not.toBeNull();
-  db.run("UPDATE multiremi_tasks SET usage=? WHERE id=?", [changed, taskId]);
+  runTurnExecutionMutation(db, "UPDATE multiremi_turn_execution_records SET usage=? WHERE id=?", [changed, taskId]);
   // Real startup must invalidate an already-ready marker after an old-image
   // rollback, before it can open listeners or run background jobs.
   expect(() => ensureUsageAccountingStartup(db)).toThrow("Legacy usage changed after native accounting");
@@ -48,9 +49,9 @@ export function assertLegacyHistoryBoundary(store: MultiremiStore, db: SqlDataba
   expect(() => ensureUsageAccountingStartup(db)).toThrow(UsageValidationError);
   expect(db.query("SELECT * FROM multiremi_usage_units WHERE task_id=? ORDER BY run_id,unit_id").all(taskId)).toEqual(before);
   expect(total()).toBe(12);
-  expect(db.query("SELECT usage FROM multiremi_tasks WHERE id=?").get(taskId).usage).toBe(changed);
+  expect(db.query("SELECT usage FROM multiremi_turn_execution_records WHERE id=?").get(taskId).usage).toBe(changed);
   // Explicit fixture restoration is not an automatic repair; retain drift audit.
-  db.run("UPDATE multiremi_tasks SET usage=? WHERE id=?", [original, taskId]);
+  runTurnExecutionMutation(db, "UPDATE multiremi_turn_execution_records SET usage=? WHERE id=?", [original, taskId]);
   ensureUsageAccountingStartup(db);
   expect(hasPendingLegacyUsage(db)).toBe(false);
 }
@@ -63,7 +64,7 @@ export function assertRejectedAuditWithLegacyRun(store: MultiremiStore, db: SqlD
   const task = store.createTask({ agentId: agent.id, prompt: "synthetic legacy ingress", workspaceId: "local" });
   const old = [{ provider: "claude", model: "configured", totalTokens: 70, inputTokens: 0, outputTokens: 0 }];
   store.reportTaskUsage(task.id, old);
-  const original = db.query("SELECT usage FROM multiremi_tasks WHERE id=?").get(task.id).usage;
+  const original = db.query("SELECT usage FROM multiremi_turn_execution_records WHERE id=?").get(task.id).usage;
   expect(db.query("SELECT task_id FROM multiremi_usage_legacy_sources WHERE task_id=?").get(task.id)).toBeNull();
   expect(db.query("SELECT task_id FROM multiremi_usage_legacy_audit WHERE task_id=?").get(task.id)).toBeNull();
   expect(store.claimTask(runtime.id)?.id).toBe(task.id);
@@ -76,7 +77,7 @@ export function assertRejectedAuditWithLegacyRun(store: MultiremiStore, db: SqlD
   const changed = JSON.stringify([{ provider: "claude", model: "configured", inputTokens: 20, outputTokens: 0 }]);
   const facts = db.query("SELECT * FROM multiremi_usage_units WHERE task_id=? ORDER BY run_id,unit_id").all(task.id);
   const receipts = db.query("SELECT * FROM multiremi_usage_unit_receipts WHERE task_id=? ORDER BY run_id,unit_id").all(task.id);
-  db.run("UPDATE multiremi_tasks SET usage=? WHERE id=?", [changed, task.id]);
+  runTurnExecutionMutation(db, "UPDATE multiremi_turn_execution_records SET usage=? WHERE id=?", [changed, task.id]);
   expect(() => store.reportTaskUsage(task.id, JSON.parse(changed))).toThrow(UsageValidationError);
   for (let restart = 0; restart < 2; restart++) {
     expect(() => ensureUsageAccountingStartup(db)).toThrow(UsageValidationError);
@@ -90,7 +91,7 @@ export function assertRejectedAuditWithLegacyRun(store: MultiremiStore, db: SqlD
   }
   // Explicitly restore the fixture's accepted ingress snapshot. Its canonical
   // total-only facts prove equivalence, even though the first audit was rejected.
-  db.run("UPDATE multiremi_tasks SET usage=? WHERE id=?", [original, task.id]);
+  runTurnExecutionMutation(db, "UPDATE multiremi_turn_execution_records SET usage=? WHERE id=?", [original, task.id]);
   ensureUsageAccountingStartup(db);
   expect(hasPendingLegacyUsage(db)).toBe(false);
   expect(db.query("SELECT source_usage FROM multiremi_usage_legacy_sources WHERE task_id=?").get(task.id)).toEqual({ source_usage: original });
@@ -138,14 +139,14 @@ export async function assertRecordedV2RetryChain(store: MultiremiStore, db: SqlD
 
 export function assertNonconsumingHistoryBoundary(store: MultiremiStore, db: SqlDatabase, taskId: string,
   kind: "empty_modern" | "empty_history" | "context_history"): void {
-  db.run("UPDATE multiremi_tasks SET status='completed',completed_at='2026-10-01T01:00:00Z',usage=? WHERE id=?",
+  runTurnExecutionMutation(db, "UPDATE multiremi_turn_execution_records SET status='completed',completed_at='2026-10-01T01:00:00Z',usage=? WHERE id=?",
     [JSON.stringify([{ provider: "claude", totalTokens: 70 }]), taskId]);
   migrateLegacyUsage(db);
   store.reportTaskUsageSnapshot(taskId, { version: 2, runId: kind === "empty_modern" ? "start-only" : "historical-evidence-v2", revision: 1, complete: false,
     units: kind === "context_history" ? [{ ...actualUnit({ unitId: "context", provider: "claude", scope: "turn", source: "context_snapshot", accuracy: "unknown" }),
       contextTokens: 80000 }] : [] });
   // First test source refresh, then a deprecated report update at a higher floor.
-  db.run("UPDATE multiremi_tasks SET usage=? WHERE id=?", [JSON.stringify([{ provider: "claude", inputTokens: 20, outputTokens: 0 }]), taskId]);
+  runTurnExecutionMutation(db, "UPDATE multiremi_turn_execution_records SET usage=? WHERE id=?", [JSON.stringify([{ provider: "claude", inputTokens: 20, outputTokens: 0 }]), taskId]);
   expect(migrateLegacyUsage(db).complete).toBe(true);
   expect(hasPendingLegacyUsage(db)).toBe(false);
   store.reportTaskUsage(taskId, [{ provider: "claude", model: "unknown", inputTokens: 30, outputTokens: 0 }]);

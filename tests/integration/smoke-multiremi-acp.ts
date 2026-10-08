@@ -305,14 +305,14 @@ async function answerPendingQuestion(options: {
   const question = questions?.[0]?.question?.question;
   if (!question) throw new Error("Question request did not contain a renderable question");
   const response = await fetch(
-    `${options.baseUrl}/api/tasks/${options.taskId}/human-requests/${request.id}/respond`,
+    `${options.baseUrl}/api/sessions/${options.store.getMessage(request.id)!.session_id}/messages`,
     {
       method: "POST",
       headers: {
         Authorization: `Bearer ${options.authToken}`,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ response: { answers: { [question]: options.answer } } }),
+      body: JSON.stringify({ message_kind: "reply", reply_to_id: request.id, body_md: options.answer, response: { answers: { [question]: options.answer } } }),
     },
   );
   if (!response.ok) {

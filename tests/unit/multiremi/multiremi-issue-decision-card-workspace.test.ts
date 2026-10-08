@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
+import { decodeDecisionCardBody, questionCardAction } from "@shared/feishu-task-card.js";
 import type { Database } from "bun:sqlite";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { MultiremiStore } from "@multiremi/store.js";
@@ -8,8 +9,9 @@ import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 
 const pgUrl = process.env.MULTIREMI_TEST_POSTGRES_URL;
 const sideEffectTables = [
-  "multiremi_issue_decisions", "multiremi_issue_activity", "multiremi_inbox_items",
-  "multiremi_feishu_bot_outbound_deliveries", "multiremi_tasks", "multiremi_session_events",
+  "multiremi_conversation_log", "multiremi_issue_activity", "multiremi_turn_execution_records",
+  "multiremi_message_decision_records", "multiremi_session_lanes",
+  "multiremi_feishu_bot_outbound_deliveries", "multiremi_turns", "multiremi_turn_attempts",
 ] as const;
 
 for (const backend of ["SQLite", "PostgreSQL"] as const) {
@@ -96,7 +98,7 @@ for (const backend of ["SQLite", "PostgreSQL"] as const) {
       const other = store.createIssue({ workspaceId, title: `Other ${tag}` });
       const daemon = await store.createAccessToken({ workspaceId, daemonId, type: "daemon", name: "Card host" });
       const app = createMultiremiApp({ store, authToken: "mul476-card-root" });
-      const path = `/api/daemon/issues/${parent.id}/decisions/${decision.id}`;
+      const path = `/api/daemon/messages/${decision.id}`;
       const headers = { Authorization: `Bearer ${daemon.token}`, "Content-Type": "application/json" };
       return { workspaceId, foreignId, runtimeId, daemonId, member, parent, child, other, decision,
         deliveryId: delivery.id, bindingId: delivery.binding_id, app, path, headers, openId, pat: pat.token };
@@ -107,8 +109,19 @@ for (const backend of ["SQLite", "PostgreSQL"] as const) {
       (db as unknown as SqlDatabase).transaction(fn)();
     }
 
+    function patchDecision(id: string, fields: Record<string, unknown>) {
+      const message = store.getMessage(id)!;
+      db.run("UPDATE multiremi_conversation_log SET metadata = ?, resolved_at = ?, revision = revision + 1 WHERE id = ?",
+        [JSON.stringify({ ...message.metadata, decision_record: { ...message.metadata.decision_record as object, ...fields } }),
+          fields.status === "answered" || fields.status === "withdrawn" ? new Date().toISOString() : null, id]);
+    }
+
+    function moveDecisionWorkspace(f: Fixture) {
+      db.run("UPDATE multiremi_issue_sessions SET workspace_id = ? WHERE id = ?", [f.foreignId, store.getMessage(f.decision.id)!.session_id]);
+    }
+
     function snapshot() {
-      return sideEffectTables.map(table => db.query(`SELECT * FROM ${table} ORDER BY id`).all());
+      return sideEffectTables.map(table => db.query(`SELECT * FROM ${table} ORDER BY ${table==='multiremi_session_lanes'?'session_id,reader_type,reader_id,execution_scope':'id'}`).all());
     }
 
     function send(f: Fixture) {
@@ -168,7 +181,7 @@ for (const backend of ["SQLite", "PostgreSQL"] as const) {
         db.run("UPDATE multiremi_feishu_bot_chat_bindings SET issue_id = ? WHERE id = ?", [f.other.id, f.bindingId]);
       },
       "decision, source and target moved away together": f => {
-        db.run("UPDATE multiremi_issue_decisions SET workspace_id = ? WHERE id = ?", [f.foreignId, f.decision.id]);
+        moveDecisionWorkspace(f);
         db.run("UPDATE multiremi_issues SET workspace_id = ? WHERE id IN (?, ?)", [f.foreignId, f.parent.id, f.child.id]);
       },
     };
@@ -182,7 +195,7 @@ for (const backend of ["SQLite", "PostgreSQL"] as const) {
           const f = await fixture(reverse);
           send(f);
           move(f);
-          db.run("UPDATE multiremi_issue_decisions SET status = ? WHERE id = ?", [status, f.decision.id]);
+          patchDecision(f.decision.id, { status });
           const before = snapshot();
           const events: unknown[] = [];
           const stops = [
@@ -193,11 +206,30 @@ for (const backend of ["SQLite", "PostgreSQL"] as const) {
             expect(store.getIssueDecisionAnywhere(f.decision.id)).toBeNull();
             expect(store.getFeishuIssueDecisionCardContext(f.workspaceId, f.decision.id)).toBeNull();
             expect(await transport(f, f.path)).toEqual([404, 404]);
-            const memberRead = await f.app.request(`/api/issues/${f.parent.id}/decisions`, {
+            const sessionId = store.getMessage(f.decision.id)!.session_id;
+            const memberRead = await f.app.request(`/api/sessions/${sessionId}/messages?message_kind=decision`, {
               headers: { Authorization: `Bearer ${f.pat}` },
             });
-            expect(memberRead.status).toBe(endpoint === "target" ? 404 : 200);
+            // B4 A: Session workspace grants access; decision rows retain their relationship filter.
+            expect(memberRead.status).toBe(200);
             expect(await memberRead.text()).not.toContain(f.decision.title);
+            const memberHeaders = { Authorization: `Bearer ${f.pat}` };
+            expect((await f.app.request(`/api/messages/${f.decision.id}`, { headers: memberHeaders })).status).toBe(404);
+            const logPath = `/api/sessions/${sessionId}/log`;
+            const log = await f.app.request(logPath, { headers: memberHeaders });
+            expect(log.status).toBe(200);
+            expect(await log.text()).not.toContain(f.decision.title);
+            expect((await f.app.request(`${logPath}/entry?id=${f.decision.id}`, { headers: memberHeaders })).status).toBe(404);
+            if (endpoint === "target") {
+              const foreignUser = store.getOrCreateUser({ externalId: `foreign_${sessionId}`, name: "W2-only member" });
+              store.createWorkspaceMember({ workspaceId: f.foreignId, userId: foreignUser.id, name: foreignUser.name, role: "member" });
+              const foreignPat = await store.createAccessToken({ workspaceId: f.foreignId, userId: foreignUser.id, name: "W2-only member", type: "pat" });
+              const foreignRead = await f.app.request(`/api/sessions/${sessionId}/messages?message_kind=decision`, {
+                headers: { Authorization: `Bearer ${foreignPat.token}` },
+              });
+              expect(foreignRead.status).toBe(404);
+              expect(await foreignRead.text()).not.toContain(f.decision.title);
+            }
             expect(snapshot()).toEqual(before);
             expect(events).toEqual([]);
           } finally { for (const stop of stops) stop(); }
@@ -210,14 +242,14 @@ for (const backend of ["SQLite", "PostgreSQL"] as const) {
           const events = createCommitEventQueue();
           // A terminal row whose sent card is still in the outbox, so the
           // stored status cannot mask the patch guard.
-          db.run("UPDATE multiremi_issue_decisions SET status = 'answered' WHERE id = ?", [f.decision.id]);
+          patchDecision(f.decision.id, { status: "answered" });
           const before = snapshot();
           inTransaction(() => store.enqueueIssueDecisionCardPatchWithinTransaction({ ...f.decision, status: "answered" }, events));
           expect(snapshot()).toEqual(before);
           expect(events).toEqual(createCommitEventQueue());
           // Escalated again and without the old outbox's idempotency record, so
           // neither can mask the prepare guard.
-          db.run("UPDATE multiremi_issue_decisions SET status = 'escalated' WHERE id = ?", [f.decision.id]);
+          patchDecision(f.decision.id, { status: "escalated" });
           db.run("DELETE FROM multiremi_feishu_bot_outbound_deliveries WHERE decision_id = ?", [f.decision.id]);
           const empty = snapshot();
           inTransaction(() => store.prepareIssueDecisionCardWithinTransaction(f.parent, f.decision, events));
@@ -262,7 +294,7 @@ for (const backend of ["SQLite", "PostgreSQL"] as const) {
           move(f);
           expect(store.listFeishuIssueDecisionCards(f.workspaceId, f.runtimeId)).toEqual([]);
           expect(store.claimFeishuBotOutbound(f.workspaceId, f.runtimeId)).toBeNull();
-          expect(db.query("SELECT reminder_sent_at FROM multiremi_issue_decisions WHERE id = ?").get(f.decision.id))
+          expect(db.query("SELECT reminder_sent_at FROM multiremi_message_decision_records WHERE id = ?").get(f.decision.id))
             .toEqual({ reminder_sent_at: null });
           expect(laneRows(f, "decision_reminder")).toEqual([]);
         });
@@ -286,7 +318,7 @@ for (const backend of ["SQLite", "PostgreSQL"] as const) {
       it(`${direction}: a decision row with a stale workspace is hidden`, async () => {
         const f = await fixture(reverse);
         send(f);
-        db.run("UPDATE multiremi_issue_decisions SET workspace_id = ? WHERE id = ?", [f.foreignId, f.decision.id]);
+        moveDecisionWorkspace(f);
         expect(store.getIssueDecisionAnywhere(f.decision.id)).toBeNull();
         expect(store.getFeishuIssueDecisionCardContext(f.workspaceId, f.decision.id)).toBeNull();
         expect(store.listFeishuIssueDecisionCards(f.workspaceId, f.runtimeId)).toEqual([]);
@@ -298,7 +330,7 @@ for (const backend of ["SQLite", "PostgreSQL"] as const) {
         send(f);
         db.run("UPDATE multiremi_feishu_bot_outbound_deliveries SET workspace_id = ? WHERE id = ?", [f.foreignId, f.deliveryId]);
         expect(store.claimFeishuBotOutbound(f.workspaceId, f.runtimeId)).toBeNull();
-        expect(db.query("SELECT reminder_sent_at FROM multiremi_issue_decisions WHERE id = ?").get(f.decision.id))
+        expect(db.query("SELECT reminder_sent_at FROM multiremi_message_decision_records WHERE id = ?").get(f.decision.id))
           .toEqual({ reminder_sent_at: null });
         const result = store.answerIssueDecision(f.parent.id, f.decision.id, { answer: "yes", reason: "ok" },
           { type: "member", id: f.member.id, taskId: null });
@@ -309,14 +341,26 @@ for (const backend of ["SQLite", "PostgreSQL"] as const) {
       it(`${direction}: an intact sent card is recovered, answerable, reminded and patched`, async () => {
         // The positive twin of the tamper cases below: same fixture, same calls.
         const f = await fixture(reverse);
-        send(f);
+        const sent = send(f);
         expect(store.listFeishuIssueDecisionCards(f.workspaceId, f.runtimeId)).toHaveLength(1);
         expect(store.getFeishuIssueDecisionCardContext(f.workspaceId, f.decision.id)?.decision.id).toBe(f.decision.id);
-        expect(store.claimFeishuBotOutbound(f.workspaceId, f.runtimeId)?.kind).toBe("decision_reminder");
+        const reminder = store.claimFeishuBotOutbound(f.workspaceId, f.runtimeId)!;
+        expect(reminder.kind).toBe("decision_reminder");
+        expect(reminder.targetMessageId).toBe(`om_${sent.id}`);
         expect(laneRows(f, "decision_reminder")).toHaveLength(1);
-        db.run("UPDATE multiremi_issue_decisions SET status = 'answered' WHERE id = ?", [f.decision.id]);
-        inTransaction(() => store.enqueueIssueDecisionCardPatchWithinTransaction(f.decision, createCommitEventQueue()));
+        const credential = questionCardAction(decodeDecisionCardBody(reminder.body)!.card)!;
+        const answer = () => f.app.request(`${f.path}/answer`, { method: "POST", headers: f.headers,
+          body: JSON.stringify({ answer: "yes", token: credential.t, operator_open_id: f.openId }) });
+        expect((await answer()).status).toBe(200);
+        expect(store.getMessage(f.decision.id)!.resolved_at).toBeTruthy();
         expect(laneRows(f, "decision_card_patch")).toHaveLength(1);
+        const before = snapshot();
+        expect((await answer()).status).toBe(403);
+        expect(snapshot()).toEqual(before);
+        const replies = store.listMessages(store.getMessage(f.decision.id)!.session_id, { limit: 1000 }).filter(message => message.reply_to_id === f.decision.id);
+        expect(replies).toHaveLength(1);
+        moveIssue(f, "source");
+        expect((await f.app.request(`/api/messages/${replies[0]!.id}`, { headers: { Authorization: `Bearer ${f.pat}` } })).status).toBe(404);
       });
 
       it.each(Object.keys(tampers))(`${direction}: a sent card whose %s is not recovered, answerable, reminded or patched`, async name => {
@@ -327,7 +371,7 @@ for (const backend of ["SQLite", "PostgreSQL"] as const) {
         expect(store.getFeishuIssueDecisionCardContext(f.workspaceId, f.decision.id)).toBeNull();
         expect(store.claimFeishuBotOutbound(f.workspaceId, f.runtimeId)).toBeNull();
         expect(laneRows(f, "decision_reminder")).toEqual([]);
-        db.run("UPDATE multiremi_issue_decisions SET status = 'answered' WHERE id = ?", [f.decision.id]);
+        patchDecision(f.decision.id, { status: "answered" });
         inTransaction(() => store.enqueueIssueDecisionCardPatchWithinTransaction(f.decision, createCommitEventQueue()));
         expect(laneRows(f, "decision_card_patch")).toEqual([]);
       });
@@ -361,7 +405,7 @@ for (const backend of ["SQLite", "PostgreSQL"] as const) {
         expect(snapshot()).toEqual(before);
       });
 
-      it(`${direction}: the card transport keeps the 403 for anything but this workspace's decision on that Issue`, async () => {
+      it(`${direction}: the message card transport hides decisions outside the host workspace`, async () => {
         const f = await fixture(reverse);
         send(f);
         const foreignDaemon = await store.createAccessToken({
@@ -370,21 +414,18 @@ for (const backend of ["SQLite", "PostgreSQL"] as const) {
         const foreignHeaders = { Authorization: `Bearer ${foreignDaemon.token}`, "Content-Type": "application/json" };
         // The source left: a daemon of the workspace it went to never had this card.
         moveIssue(f, "source");
-        expect(await transport(f, f.path, foreignHeaders)).toEqual([403, 403]);
+        expect(await transport(f, f.path, foreignHeaders)).toEqual([404, 404]);
         expect(await transport(f, f.path)).toEqual([404, 404]);
         // The target left too: only the decision this workspace recorded on it is hidden as 404.
         moveIssue(f, "target");
         expect(await transport(f, f.path)).toEqual([404, 404]);
-        // Only the two card verbs get the 404; any other request on that Issue keeps the 403.
-        for (const [method, suffix] of [["GET", "/history"], ["POST", "/withdraw"], ["PUT", ""]] as const) {
-          const other = await f.app.request(`${f.path}${suffix}`, {
-            method, headers: f.headers, body: method === "GET" ? undefined : "{}",
-          });
-          expect([method, suffix, other.status]).toEqual([method, suffix, 403]);
-        }
-        expect(await transport(f, `/api/daemon/issues/${f.parent.id}/decisions/dec_missing`)).toEqual([403, 403]);
+        // Canonical message routes hide foreign resources before reads or writes.
+        // The retired Issue-scoped history/withdraw/PUT paths no longer belong to card transport.
+        expect(await transport(f, "/api/daemon/messages/msg_missing")).toEqual([404, 404]);
         const stranger = store.createIssue({ workspaceId: f.foreignId, title: "Stranger" });
-        expect(await transport(f, `/api/daemon/issues/${stranger.id}/decisions/${f.decision.id}`)).toEqual([403, 403]);
+        const foreignDecision = store.createIssueDecision(stranger.id, { kind: "production_change", title: "Foreign private decision" },
+          { type: "member", id: store.listWorkspaceMembers(f.foreignId)[0]!.id, taskId: null });
+        expect(await transport(f, `/api/daemon/messages/${foreignDecision.id}`)).toEqual([404, 404]);
       });
     }
   });

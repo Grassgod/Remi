@@ -32,7 +32,9 @@ export function createConversationLogFillReader(store: MultiremiStore, readPool:
         const rows = postgres
           ? (await postgres.query<Record<string, unknown>>(
             CONVERSATION_LOG_RANGE_PAGE_SQL, [sessionId, cursor, toSeq, limit],
-          )).map(toConversationLogEntry)
+          )).map(raw=>raw.kind==='turn'
+            ? store.getConversationLogEntryById(String(raw.id))!
+            : toConversationLogEntry(raw))
           : store.listConversationLogRangePage(sessionId, cursor, toSeq, limit);
         for (const row of rows) frames.push({ seq: row.seq, kind: "entry", payload: row });
         if (rows.length < limit) break;

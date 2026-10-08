@@ -5,7 +5,7 @@ import { markRequestReadCacheLockTaken } from "../packages/server/src/store/requ
 import type { ReconcileUsagePlan } from "./reconcile-task-usage.js";
 import { unitActualTotal } from "../packages/acp/src/usage-collector.js";
 import { readUsageRevisionState, usageRevisionStateSha256 } from "./usage-reconciliation-revisions.js";
-import { applyModernUsageRepairs, verifyModernUsageRepairs } from "./modern-usage-repair.js";
+import { assertUsageReconciliationSchema, applyModernUsageRepairs, verifyModernUsageRepairs } from "./modern-usage-repair.js";
 
 export const usagePlanChecksum = (plan: ReconcileUsagePlan) => createHash("sha256").update(JSON.stringify(plan)).digest("hex");
 const coverageCommitment = (unit: ReconcileUsagePlan["tasks"][number]["snapshot"]["units"][number]) => ({
@@ -24,6 +24,7 @@ const meterJson = (unit: ReconcileUsagePlan["tasks"][number]["snapshot"]["units"
 export function applyUsageReconciliation(db: SqlDatabase, plan: ReconcileUsagePlan,
   onProgress?: (progress: { processed: number; applied: number; resumed: number }) => void): { applied: number; resumed: number; checksum: string } {
   if (plan.version !== 2 || plan.mode !== "read-only" || !Array.isArray(plan.tasks)) throw new Error("Invalid reconciliation plan");
+  assertUsageReconciliationSchema(db);
   const checksum = usagePlanChecksum(plan);
   const seen = new Set<string>();
   for (const item of plan.tasks) {
@@ -52,29 +53,29 @@ export function applyUsageReconciliation(db: SqlDatabase, plan: ReconcileUsagePl
   db.exec(`CREATE TABLE IF NOT EXISTS multiremi_usage_reconciliation_audit (
     task_id TEXT NOT NULL, plan_checksum TEXT NOT NULL, original_units TEXT NOT NULL, original_runs TEXT NOT NULL,
     legacy_usage_sha256 TEXT NOT NULL, applied_at TEXT NOT NULL, recovered_actual_tokens BIGINT NOT NULL,
-    PRIMARY KEY(task_id,plan_checksum), FOREIGN KEY(task_id) REFERENCES multiremi_tasks(id) ON DELETE CASCADE
+    PRIMARY KEY(task_id,plan_checksum), FOREIGN KEY(task_id) REFERENCES multiremi_turn_attempts(id) ON DELETE CASCADE
   )`);
   db.exec(`CREATE TABLE IF NOT EXISTS multiremi_usage_reconciliation_evidence (
     task_id TEXT NOT NULL, plan_checksum TEXT NOT NULL, units_json TEXT NOT NULL,
-    PRIMARY KEY(task_id,plan_checksum), FOREIGN KEY(task_id) REFERENCES multiremi_tasks(id) ON DELETE CASCADE
+    PRIMARY KEY(task_id,plan_checksum), FOREIGN KEY(task_id) REFERENCES multiremi_turn_attempts(id) ON DELETE CASCADE
   )`);
   db.exec(`CREATE TABLE IF NOT EXISTS multiremi_usage_reconciliation_attribution (
     task_id TEXT NOT NULL, plan_checksum TEXT NOT NULL, evidence_json TEXT NOT NULL,
-    PRIMARY KEY(task_id,plan_checksum), FOREIGN KEY(task_id) REFERENCES multiremi_tasks(id) ON DELETE CASCADE
+    PRIMARY KEY(task_id,plan_checksum), FOREIGN KEY(task_id) REFERENCES multiremi_turn_attempts(id) ON DELETE CASCADE
   )`);
   let applied = 0, resumed = 0, processed = 0;
   for (const item of plan.tasks) {
     const changed = db.transaction(() => {
       const prior = db.query("SELECT task_id FROM multiremi_usage_reconciliation_audit WHERE task_id=? AND plan_checksum=?").get(item.taskId, checksum);
       if (prior) return false;
-      const initial = db.query("SELECT workspace_id FROM multiremi_tasks WHERE id=?").get(item.taskId) as { workspace_id: string } | null;
+      const initial = db.query("SELECT workspace_id FROM multiremi_turn_execution_records WHERE id=?").get(item.taskId) as { workspace_id: string } | null;
       if (!initial) throw new Error(`Reconciliation task missing: ${item.taskId}`);
       db.run("UPDATE multiremi_workspaces SET updated_at=updated_at WHERE id=?", [initial.workspace_id]);
       markRequestReadCacheLockTaken();
       const countedUnits = item.legacyKnownTokens > 0 ? item.snapshot.units.filter(unit => unitActualTotal(unit) === 0) : item.snapshot.units;
       lockUsageIdentities(db, initial.workspace_id, countedUnits);
       const task = db.query(`SELECT workspace_id,usage,status,COALESCE(completed_at,failed_at,cancelled_at,started_at,dispatched_at,updated_at,created_at) AS occurred_at
-        FROM multiremi_tasks WHERE id=?${db.dialect === "postgres" ? " FOR UPDATE" : ""}`).get(item.taskId) as { workspace_id: string; usage: string | null; status: string; occurred_at: string } | null;
+        FROM multiremi_turn_execution_records WHERE id=?${db.dialect === "postgres" ? " FOR UPDATE" : ""}`).get(item.taskId) as { workspace_id: string; usage: string | null; status: string; occurred_at: string } | null;
       if (!task) throw new Error(`Reconciliation task missing: ${item.taskId}`);
       if (task.workspace_id !== initial.workspace_id) throw new Error(`Historical workspace changed: ${item.taskId}`);
       const current = createHash("sha256").update(task.usage ?? "").digest("hex");

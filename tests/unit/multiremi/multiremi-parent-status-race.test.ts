@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { PostgresSyncDatabase, type SqlDatabase } from "@multiremi/store/db/postgres.js";
 import { StoreContext } from "@multiremi/store/context.js";
 import { IssuesRepo } from "@multiremi/store/repos/issues-repo.js";
+import { resolveMigrationReportDirectory } from "@multiremi/store/migration-report-directory.js";
 import { MultiremiStore } from "@multiremi/store.js";
 import type { ChildMutation, RaceOperation, RaceResult } from "./fixtures/parent-status-race-worker.js";
 
@@ -82,8 +83,8 @@ for (const dialect of ["sqlite", "postgres"] as const) {
       }).id;
       parentWorker = new Worker(new URL("./fixtures/parent-status-race-worker.ts", import.meta.url).href);
       childWorker = new Worker(new URL("./fixtures/parent-status-race-worker.ts", import.meta.url).href);
-      await message(parentWorker, { type: "init", dialect, location, applicationName: `mul471-parent-${process.pid}` }, "ready");
-      await message(childWorker, { type: "init", dialect, location, applicationName: `mul471-child-${process.pid}` }, "ready");
+      await message(parentWorker, { type: "init", dialect, location, migrationReportDir: resolveMigrationReportDirectory(), applicationName: `mul471-parent-${process.pid}` }, "ready");
+      await message(childWorker, { type: "init", dialect, location, migrationReportDir: resolveMigrationReportDirectory(), applicationName: `mul471-child-${process.pid}` }, "ready");
     }, 60_000);
 
     afterAll(async () => {

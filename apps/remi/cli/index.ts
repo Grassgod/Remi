@@ -19,11 +19,13 @@ import { repoCommandSpecs } from "./commands/repo.js";
 import { tokenCommandSpecs } from "./commands/token.js";
 import { workspaceCommandSpecs } from "./commands/workspace.js";
 import { runtimePrepareCommandSpec } from "./commands/runtime-prepare.js";
+import { RETIRED_CLI_COMMANDS, assertNotRetired, replaceRetiredSpecs, retiredSpec } from "./core/retired-commands.js";
+import { unifiedCommandSpecs } from "./commands/unified.js";
 
 const commandRegistry = new CommandRegistry();
 commandRegistry.register(contextCommandSpec());
 commandRegistry.register(runtimePrepareCommandSpec());
-for (const spec of [
+for (const spec of replaceRetiredSpecs([
   ...workspaceCommandSpecs(),
   ...memberCommandSpecs(),
   ...inviteCommandSpecs(),
@@ -34,7 +36,11 @@ for (const spec of [
   ...collaborationCommandSpecs(),
   ...agentExtensionCommandSpecs(),
   ...operationsCommandSpecs(),
-]) commandRegistry.register(spec);
+])) commandRegistry.register(spec);
+for (const spec of unifiedCommandSpecs()) commandRegistry.register(spec);
+for (const [path, replacement] of Object.entries(RETIRED_CLI_COMMANDS)) {
+  commandRegistry.register(retiredSpec(path.split(" "), replacement));
+}
 
 // Lazy-load commands to avoid importing heavy modules when not needed
 function register(
@@ -179,6 +185,7 @@ function normalizeCommandId(value: string): string {
 }
 
 export async function dispatch(args: string[]): Promise<void> {
+  assertNotRetired(args);
   const cmd = args[0] ?? "help";
   const cmdArgs = args.slice(1);
 

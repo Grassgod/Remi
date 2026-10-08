@@ -1,3 +1,4 @@
+import { runTurnExecutionMutation } from "@multiremi/store/turn-execution-records.js";
 import { createLogger } from "@shared/logger.js";
 import { DAEMON_MIN_CLI_VERSION, DAEMON_PROTOCOL_VERSION, meetsDaemonMinCliVersion } from "@multiremi/contracts/daemon-protocol.js";
 import type { RuntimeProtocolStatus } from "@multiremi/contracts/runtime-protocol";
@@ -652,6 +653,7 @@ export class RuntimesRepo {
     }));
   }
 
+
   updateRuntime(id: string, input: UpdateRuntimeInput): MultiremiRuntime {
     return this.withRuntimeLifecycleLock(id, (current) => {
       const ownerId = resolveOptionalStringField(input, "ownerId", "owner_id", current.ownerId);
@@ -793,18 +795,18 @@ export class RuntimesRepo {
       [now, id],
     );
     this.ctx.db.run(
-      `UPDATE multiremi_session_agent_lanes
+      `UPDATE multiremi_session_lanes
        SET provider_session_id = NULL,
            runtime_id = NULL,
            provider = NULL,
            execution_fingerprint = NULL,
            work_dir = NULL,
-           cursor_seq = 0,
+           provider_cursor_seq = 0,
            parent_cursor_seq = 0,
            generation = generation + 1,
-           last_task_id = NULL,
+           last_attempt_id = NULL,
            updated_at = ?
-       WHERE runtime_id = ?`,
+       WHERE reader_type = 'agent' AND runtime_id = ?`,
       [now, id],
     );
     this.ctx.db.run(
@@ -842,7 +844,7 @@ export class RuntimesRepo {
     stillEligible?: (agent: MultiremiAgent) => boolean,
   ): void {
     const rows = this.ctx.db
-      .query("SELECT * FROM multiremi_tasks WHERE runtime_id = ? AND status = 'queued'")
+      .query("SELECT * FROM multiremi_turn_execution_records WHERE runtime_id = ? AND status = 'queued'")
       .all(runtimeId) as Row[];
     const now = nowIso();
     for (const row of rows) {
@@ -860,16 +862,14 @@ export class RuntimesRepo {
           const rt = this.getRuntimeByDaemonAndProvider(daemonId, agent.provider);
           const targetId = rt ? rt.id : daemonRuntimeId(daemonId, agent.provider);
           if (targetId !== runtimeId) {
-            this.ctx.db.run(
-              "UPDATE multiremi_tasks SET runtime_id = ?, session_id = NULL, offered_at = NULL, accepted_at = NULL, updated_at = ? WHERE id = ?",
+            runTurnExecutionMutation(this.ctx.db, "UPDATE multiremi_turn_execution_records SET runtime_id = ?, session_id = NULL, offered_at = NULL, accepted_at = NULL, updated_at = ? WHERE id = ?",
               [targetId, now, String(row.id)],
             );
           }
         }
         continue;
       }
-      this.ctx.db.run(
-        "UPDATE multiremi_tasks SET runtime_id = NULL, session_id = NULL, work_dir = NULL, offered_at = NULL, accepted_at = NULL, updated_at = ? WHERE id = ?",
+      runTurnExecutionMutation(this.ctx.db, "UPDATE multiremi_turn_execution_records SET runtime_id = NULL, session_id = NULL, work_dir = NULL, offered_at = NULL, accepted_at = NULL, updated_at = ? WHERE id = ?",
         [now, String(row.id)],
       );
     }
@@ -1059,7 +1059,7 @@ export class RuntimesRepo {
 
   private hasUnrepoolableQueuedTasksForRuntime(runtimeId: string): boolean {
     const rows = this.ctx.db.query(
-      "SELECT * FROM multiremi_tasks WHERE runtime_id = ? AND status = 'queued'",
+      "SELECT * FROM multiremi_turn_execution_records WHERE runtime_id = ? AND status = 'queued'",
     ).all(runtimeId) as Row[];
     for (const row of rows) {
       const daemonId = this.ctx.localDirectoryDaemonForTask(row);
@@ -1191,8 +1191,7 @@ export class RuntimesRepo {
         ), updated_at = ? WHERE runtime_id = ?`,
         [newRuntimeId, newRuntimeId, now, oldRuntimeId],
       ).changes;
-      const tasks = this.ctx.db.run(
-        `UPDATE multiremi_tasks SET runtime_id = ?,
+      const tasks = runTurnExecutionMutation(this.ctx.db, `UPDATE multiremi_turn_execution_records SET runtime_id = ?,
           offered_at = CASE WHEN status IN ('completed', 'failed', 'cancelled') THEN offered_at ELSE NULL END,
           accepted_at = CASE WHEN status IN ('completed', 'failed', 'cancelled') THEN accepted_at ELSE NULL END,
           updated_at = ? WHERE runtime_id = ?`,
@@ -1206,7 +1205,7 @@ export class RuntimesRepo {
         [newRuntimeId, now, oldRuntimeId],
       );
       this.ctx.db.run(
-        "UPDATE multiremi_session_agent_lanes SET runtime_id = ?, updated_at = ? WHERE runtime_id = ?",
+        "UPDATE multiremi_session_lanes SET runtime_id = ?, updated_at = ? WHERE reader_type = 'agent' AND runtime_id = ?",
         [newRuntimeId, now, oldRuntimeId],
       );
       this.ctx.db.run(
@@ -2451,7 +2450,7 @@ export class RuntimesRepo {
     if (!runtimeIds.length) return false;
     const dispatchedCutoff = new Date(Date.now() - RUNTIME_UPDATE_RECENT_DISPATCH_MS).toISOString();
     const row = this.ctx.db.query(
-      `SELECT id FROM multiremi_tasks
+      `SELECT id FROM multiremi_turn_execution_records
        WHERE runtime_id IN (${runtimeIds.map(() => "?").join(", ")})
          AND (
            status IN ('running', 'waiting_local_directory', 'awaiting_human')
@@ -2550,16 +2549,16 @@ export class RuntimesRepo {
   /** One coherent scalar read on both databases; telemetry never invalidates task-row caches. */
   private runtimeUsageSummaries(selection: string, params: string[]): Map<string, RuntimeUsageSummary> {
     const rows = this.ctx.db.query(`WITH selected AS (${selection}), owners AS (
-      SELECT t.runtime_id,t.id AS task_id FROM multiremi_tasks t WHERE t.runtime_id IN (SELECT id FROM selected)
-      UNION SELECT u.runtime_id,u.task_id FROM multiremi_usage_units u JOIN multiremi_tasks t ON t.id=u.task_id WHERE u.runtime_id IN (SELECT id FROM selected)
+      SELECT t.runtime_id,t.turn_id AS task_id FROM multiremi_turn_execution_records t WHERE t.runtime_id IN (SELECT id FROM selected)
+      UNION SELECT u.runtime_id,t.turn_id AS task_id FROM multiremi_usage_units u JOIN multiremi_turn_execution_records t ON t.id=u.task_id WHERE u.runtime_id IN (SELECT id FROM selected)
     ), counts AS (SELECT runtime_id,COUNT(*) AS task_count FROM owners GROUP BY runtime_id), lifecycle AS (
       SELECT runtime_id,SUM(CASE WHEN status IN (${IN_FLIGHT_TASK_STATUSES.map(() => '?').join(',')}) THEN 1 ELSE 0 END) AS active_task_count,
       SUM(CASE WHEN status='completed' THEN 1 ELSE 0 END) AS completed_task_count,
       SUM(CASE WHEN status='failed' THEN 1 ELSE 0 END) AS failed_task_count
-      FROM multiremi_tasks WHERE runtime_id IN (SELECT id FROM selected) GROUP BY runtime_id
+      FROM multiremi_turn_execution_records t WHERE t.id=(SELECT current_attempt_id FROM multiremi_turns WHERE id=t.turn_id) AND runtime_id IN (SELECT id FROM selected) GROUP BY runtime_id
     ), tokens AS (SELECT u.runtime_id,SUM(COALESCE(u.input_tokens,0)) AS input_tokens,SUM(COALESCE(u.output_tokens,0)) AS output_tokens,
       SUM(COALESCE(u.cache_read_tokens,0)) AS cache_read_tokens,SUM(COALESCE(u.cache_write_tokens,0)) AS cache_write_tokens
-      FROM multiremi_usage_units u JOIN multiremi_tasks t ON t.id=u.task_id WHERE u.runtime_id IN (SELECT id FROM selected) GROUP BY u.runtime_id)
+      FROM multiremi_usage_units u JOIN multiremi_turn_execution_records t ON t.id=u.task_id WHERE u.runtime_id IN (SELECT id FROM selected) GROUP BY u.runtime_id)
     SELECT selected.id,counts.task_count,lifecycle.active_task_count,lifecycle.completed_task_count,lifecycle.failed_task_count,
       tokens.input_tokens,tokens.output_tokens,tokens.cache_read_tokens,tokens.cache_write_tokens
     FROM selected LEFT JOIN counts ON counts.runtime_id=selected.id LEFT JOIN lifecycle ON lifecycle.runtime_id=selected.id
@@ -2583,6 +2582,7 @@ type RuntimeUsageSummary = Pick<MultiremiRuntime,
   "cacheReadTokens" |
   "cacheWriteTokens"
 >;
+
 
 function normalizeAgentPluginProtocol(value: unknown): number {
   const protocol = Number(value);

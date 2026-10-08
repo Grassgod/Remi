@@ -2,6 +2,9 @@ import { reportFrame } from "../../fixtures/report-session.js";
 import { afterEach, describe, expect, it } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { MultiremiStore } from "@multiremi/store.js";
+import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
+import { bootstrapPreUnifiedSchema } from "@multiremi/store/migrations.js";
+import { historicalWriters } from "./unified-model-test-backends.js";
 import { createStore, db, resetMultiremiTestEnv } from "./helpers.js";
 import { receiveRuntimeInputs } from "../../fixtures/runtime-downlinks.js";
 
@@ -245,15 +248,21 @@ describe("Runtime skill directories", () => {
   });
 
   it("upgrades existing request tables while retaining queued legacy requests", () => {
-    const { store, runtime } = fixture();
-    const scan = store.createRuntimeLocalSkillListRequest(runtime.id);
-    const imported = store.createRuntimeLocalSkillImportRequest(runtime.id, { skillKey: "legacy" });
-    db!.run("ALTER TABLE multiremi_runtime_local_skill_list_requests DROP COLUMN root");
-    db!.run("ALTER TABLE multiremi_runtime_local_skill_list_requests DROP COLUMN warnings");
-    db!.run("ALTER TABLE multiremi_runtime_local_skill_import_requests DROP COLUMN root");
-    const upgraded = new MultiremiStore(db!);
+    const legacy = openSqliteDatabase(":memory:");
+    try {
+    bootstrapPreUnifiedSchema(legacy);
+    historicalWriters(legacy);
+    const at = new Date().toISOString(), runtime = { id: "rt_legacy_skills" }, scan = { id: "scan_legacy" }, imported = { id: "import_legacy" };
+    legacy.run("INSERT INTO multiremi_runtimes(id,name,provider,created_at,updated_at) VALUES(?,'Legacy','codex',?,?)", [runtime.id,at,at]);
+    legacy.run("ALTER TABLE multiremi_runtime_local_skill_list_requests DROP COLUMN root");
+    legacy.run("ALTER TABLE multiremi_runtime_local_skill_list_requests DROP COLUMN warnings");
+    legacy.run("ALTER TABLE multiremi_runtime_local_skill_import_requests DROP COLUMN root");
+    legacy.run("INSERT INTO multiremi_runtime_local_skill_list_requests(id,runtime_id,created_at,updated_at) VALUES(?,?,?,?)", [scan.id,runtime.id,at,at]);
+    legacy.run("INSERT INTO multiremi_runtime_local_skill_import_requests(id,runtime_id,skill_key,created_at,updated_at) VALUES(?,?,'legacy',?,?)", [imported.id,runtime.id,at,at]);
+    const upgraded = new MultiremiStore(legacy);
     expect(upgraded.getRuntimeLocalSkillListRequest(runtime.id, scan.id)?.status).toBe("pending");
     expect(upgraded.getRuntimeLocalSkillImportRequest(runtime.id, imported.id)?.status).toBe("pending");
     expect(upgraded.createRuntimeLocalSkillListRequest(runtime.id, { root: "/after/upgrade" }).root).toBe("/after/upgrade");
+    } finally { legacy.close(); }
   });
 });

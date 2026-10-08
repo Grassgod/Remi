@@ -97,6 +97,7 @@ import {
   shellQuote,
 } from "./multiremi/service.js";
 import { showHelp } from "./multiremi/help.js";
+import { assertNotRetired } from "./core/retired-commands.js";
 import { prepareDaemonEnvironment } from "./multiremi/environment.js";
 import { repo } from "./multiremi/commands/repo.js";
 import { attachment } from "./multiremi/commands/attachment.js";
@@ -135,6 +136,7 @@ const DEFAULT_SHUTDOWN_TIMEOUT_MS = 30_000;
 const SUPERVISOR_INSTANCE_ENV = "MULTIREMI_SUPERVISOR_INSTANCE_ID";
 
 export async function runMultiremi(args: string[], runOptions: RunMultiremiOptions = {}): Promise<void> {
+  assertNotRetired(args);
   const parsed = parseArgs(args);
   setLogLevel(String(parsed.options.logLevel ?? parsed.options["log-level"] ?? process.env.REMI_LOG_LEVEL ?? "INFO"));
   const programName = runOptions.programName ?? "remi multiremi";
@@ -650,10 +652,10 @@ export function controlPlaneConciergeHost(deps: {
       const { config, agent } = assignment;
       stopQuestionCardClient?.();
       stopQuestionCardClient = registerQuestionCardClient(config.app_id, {
-        getRequest: (taskId, requestId) => daemon.getFeishuBotHumanRequest(taskId, requestId),
-        respond: (taskId, requestId, response, credential) => daemon.respondFeishuBotHumanRequest(taskId, requestId, response, credential),
-        getDecision: (issueId, decisionId) => daemon.getFeishuIssueDecision(issueId, decisionId),
-        answer: (issueId, decisionId, answer, credential) => daemon.answerFeishuIssueDecision(issueId, decisionId, { answer, ...credential }),
+        getRequest: messageId => daemon.getMessageHumanRequest(messageId),
+        respond: (messageId, response, credential) => daemon.respondFeishuBotHumanRequest(messageId, response, credential),
+        getDecision: messageId => daemon.getFeishuIssueDecision(messageId),
+        answer: (messageId, answer, credential) => daemon.answerFeishuIssueDecision(messageId, { answer, ...credential }),
       });
       displayName = agent.name;
       const handle = await boot(
@@ -704,6 +706,7 @@ export function controlPlaneConciergeHost(deps: {
     async sendOutbound(delivery, options) {
       const handle = deps.current();
       if (!handle) throw new Error("Feishu concierge channel is not running");
+      if (delivery.kind === "decision_card_patch") return patchDecisionMessageCard(handle, delivery, deps.daemon());
       if (delivery.kind === "receipt") return sendReceiptLane(handle, delivery, options);
       if (delivery.kind === "result_card") return sendResultCardLane(handle, delivery, options, deps.daemon());
       if (delivery.kind === "interaction_card") return sendInteractionCardLane(handle, delivery, options, deps.daemon(), displayName);
@@ -763,8 +766,8 @@ export function controlPlaneConciergeHost(deps: {
             taskId, displayName, sessionId: null, signal: options.signal,
             isHumanRequestPending: requestId => daemon.isFeishuBotHumanRequestPending(taskId, requestId),
             getHumanRequest: requestId => daemon.getFeishuBotHumanRequest(taskId, requestId),
-            prepareHumanRequestCard: (requestId, openId) => daemon.prepareTaskHumanRequestCard(taskId, requestId, openId),
-            respondHumanRequest: (requestId, response, credential) => daemon.respondFeishuBotHumanRequest(taskId, requestId, response, credential),
+            prepareHumanRequestCard: (requestId, openId) => daemon.prepareTaskHumanRequestCard(requestId, openId),
+            respondHumanRequest: (requestId, response, credential) => daemon.respondFeishuBotHumanRequest(requestId, response, credential),
           }, {
             ...(delivery.kind === "cot" ? { lane: "cot" as const } : {}),
             replyToMessageId: delivery.replyToMessageId ?? undefined,
@@ -877,7 +880,7 @@ export async function sendInteractionCardLane(handle: FeishuChannelHandle, deliv
   const agentName = cardInput.agentName ?? displayName;
   const sessionId = (await daemon.getFeishuBotTaskSnapshot(taskId)).sessionId ?? cardInput.sessionId;
   if (!recipientOpenId) throw new FeishuDeliveryError("Interaction recipient is unavailable", false);
-  const card = delivery.resumeMessageId ? null : await daemon.prepareTaskHumanRequestCard(taskId, requestId, recipientOpenId);
+  const card = delivery.resumeMessageId ? null : await daemon.prepareTaskHumanRequestCard(requestId, recipientOpenId);
   const messageId = delivery.resumeMessageId ?? (await handle.sendProactiveCard({ chatId: delivery.chatId,
     replyToMessageId: delivery.replyToMessageId ?? undefined,
     card: card!,
@@ -917,6 +920,26 @@ export async function sendInteractionCardLane(handle: FeishuChannelHandle, deliv
  * In the latter two the host reports the reason with the send, so the control
  * plane skips both the terminal patch and the reminder's @.
  */
+/** Read the canonical decision identity before updating its exact transport message. */
+export async function patchDecisionMessageCard(
+  handle: FeishuChannelHandle,
+  delivery: MultiremiFeishuBotOutboundDelivery,
+  daemon?: MultiremiDaemon,
+): Promise<{ messageId: string }> {
+  const envelope = decodeDecisionCardBody(delivery.body);
+  const messageId = envelope?.message_id;
+  const target = delivery.targetMessageId;
+  if (!envelope) throw new FeishuDeliveryError("Decision card patch body is not a card envelope", false);
+  if (!messageId) throw new FeishuDeliveryError("Decision card patch names no unified message_id", false);
+  if (!target) throw new FeishuDeliveryError("Decision card patch names no transport target", false);
+  if (!daemon) throw new FeishuDeliveryError("Decision message transport is unavailable", true);
+  const { message } = await daemon.getFeishuDecisionMessage(messageId);
+  if (message.id !== messageId || message.message_kind !== "decision" || !message.resolved_at && !message.deleted_at)
+    throw new FeishuDeliveryError("Decision message has not settled", false);
+  await handle.updateProactiveCard(target, envelope.card);
+  return { messageId: target };
+}
+
 export async function sendDecisionLane(
   handle: FeishuChannelHandle,
   delivery: MultiremiFeishuBotOutboundDelivery,
@@ -924,17 +947,7 @@ export async function sendDecisionLane(
   daemon?: MultiremiDaemon,
 ): Promise<{ messageId: string }> {
   const envelope = decodeDecisionCardBody(delivery.body);
-  if (delivery.kind === "decision_card_patch") {
-    const target = delivery.targetMessageId ?? delivery.replyToMessageId;
-    if (!target) throw new FeishuDeliveryError("Decision card patch has no target message", false);
-    // Refuse a body we cannot read rather than PATCHing an empty card over the
-    // live one; the row stays put for a build that understands it.
-    if (!envelope) throw new FeishuDeliveryError("Decision card patch body is not a card envelope", false);
-    await handle.updateProactiveCard(target, envelope.card);
-    // A patch produces no message of its own; the outbox only needs a stable
-    // acknowledgement, and the target id is exactly that.
-    return { messageId: target };
-  }
+  if (delivery.kind === "decision_card_patch") return patchDecisionMessageCard(handle, delivery, daemon);
   if (delivery.kind === "decision_reminder") {
     if (envelope && delivery.targetMessageId) await handle.updateProactiveCard(delivery.targetMessageId, envelope.card);
     const body = envelope?.fallback_text ?? delivery.body;
@@ -1013,20 +1026,11 @@ export async function sendIssueDecisionLane(
   options?: FeishuOutboundOptions,
   daemon?: MultiremiDaemon,
 ): Promise<{ messageId: string }> {
+  if (delivery.kind === "decision_card_patch") return patchDecisionMessageCard(handle, delivery, daemon);
   const issueId = delivery.decisionIssueId;
   const decisionId = delivery.decisionId;
   if (!issueId || !decisionId) throw new FeishuDeliveryError("Decision delivery names no decision", false);
   const envelope = decodeDecisionCardBody(delivery.body);
-  if (delivery.kind === "decision_card_patch") {
-    const target = delivery.targetMessageId ?? delivery.replyToMessageId;
-    if (!target) throw new FeishuDeliveryError("Decision card patch has no target message", false);
-    // The control plane writes the terminal card into the patch row, so the
-    // host sends exactly the state that was committed with the answer — same
-    // contract as a human-request patch.
-    if (!envelope) throw new FeishuDeliveryError("Decision card patch body is not a card envelope", false);
-    await handle.updateProactiveCard(target, envelope.card);
-    return { messageId: target };
-  }
   if (delivery.kind === "decision_reminder") {
     if (envelope && delivery.targetMessageId) await handle.updateProactiveCard(delivery.targetMessageId, envelope.card);
     const body = envelope?.fallback_text ?? delivery.body;
@@ -1285,9 +1289,9 @@ export function createFeishuTaskHandler(
       displayName: submitted.agentName,
       sessionId: null,
       getHumanRequest: requestId => daemon.getFeishuBotHumanRequest(submitted.taskId, requestId),
-      prepareHumanRequestCard: (requestId, openId) => daemon.prepareTaskHumanRequestCard(submitted.taskId, requestId, openId),
+      prepareHumanRequestCard: (requestId, openId) => daemon.prepareTaskHumanRequestCard(requestId, openId),
       respondHumanRequest: (requestId, response, credential) =>
-        daemon.respondFeishuBotHumanRequest(submitted.taskId, requestId, response, credential),
+        daemon.respondFeishuBotHumanRequest(requestId, response, credential),
     });
   };
 }

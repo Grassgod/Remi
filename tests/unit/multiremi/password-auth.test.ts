@@ -53,7 +53,9 @@ describe("password accounts", () => {
     const user = store.getOrCreateUser({ email: "other@example.test" });
     const pat = await store.createAccessToken({ name: "test PAT", userId: user.id });
     const daemon = await store.createAccessToken({ name: "test daemon", type: "daemon" });
-    const task = await store.createAccessToken({ name: "test task", type: "task", taskId: "test-task", agentId: "test-agent" });
+    const agent = store.createAgent({ name: "Credential fixture", provider: "codex" });
+    const attempt = store.createTask({ agentId: agent.id, prompt: "credential boundary" });
+    const task = await store.createTaskAccessToken(attempt, "local");
     const jwt = signTestJwt({ sub: "local", exp: Date.now() / 1000 + 60 }, process.env.JWT_SECRET);
     const input = { email: "tester@localhost", password: password() };
     expect((await post(app, "/api/auth/password-accounts", input)).status).toBe(401);

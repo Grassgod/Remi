@@ -154,6 +154,7 @@ export class UnsupportedAcpEffortError extends Error {
 
 const IDLE_TIMEOUT_MS = 10 * 60 * 1000;
 const CLEANUP_INTERVAL_MS = 60 * 1000;
+const PROMPT_CANCEL_SETTLE_MS = 5_000;
 const DEFAULT_PERMISSION_MODE_BY_AGENT: Record<string, string | null> = {
   claude: "bypassPermissions",
   // codex advertises read-only/agent/agent-full-access, so the literal id is
@@ -686,7 +687,7 @@ export class AcpProvider implements Provider {
     };
 
     const promptStartMs = Date.now();
-    const promptSettled = entry.client
+    const promptCompletion = entry.client
       .prompt(entry.acpSessionId, message, buildMediaContent(options?.media))
       .then((result: PromptResult) => {
         promptDone = true;
@@ -717,19 +718,26 @@ export class AcpProvider implements Provider {
         if (promptDone) break;
 
         if (options?.signal?.aborted) {
-          // A dead process makes cancel a no-op; the abort must still win.
+          // cancel is only a notification. Keep this stream and its update
+          // handler alive until the original prompt settles; the daemon may
+          // then send its steering prompt on the same session without overlap.
           await entry.client.cancel(entry.acpSessionId).catch(() => {});
-          // Cancel ACK and prompt settlement are separate messages. Preserve
-          // trailing usage emitted before settlement, without waiting forever
-          // for a dead/hung bridge.
-          let settleTimer: ReturnType<typeof setTimeout> | undefined;
+          let timer: ReturnType<typeof setTimeout> | null = null;
           try {
-            await Promise.race([promptSettled, new Promise<void>(resolve => {
-              settleTimer = setTimeout(resolve, 1000);
-            })]);
-          } finally {
-            if (settleTimer) clearTimeout(settleTimer);
-          }
+            const settled = await Promise.race([
+              promptCompletion.then(() => true),
+              new Promise<false>(resolve => { timer = setTimeout(() => resolve(false), PROMPT_CANCEL_SETTLE_MS); }),
+            ]);
+            if (!settled) {
+              // An unresponsive bridge cannot retain an in-flight prompt or
+              // block task shutdown. Stop it before allowing session reuse.
+              await entry.client.stop();
+              await promptCompletion;
+              this._lastResponse ??= buildAgentResponse(entry, { stopReason: "cancelled" }, this._adapter.promptUsageSettleScope, turnFailure(),
+                this._adapter.agentType, requestedModel(), requestedModelSource());
+            }
+          } finally { if (timer) clearTimeout(timer); }
+          // ACP permits final tool/content updates before the cancelled reply.
           while (eventQueue.length) yield eventQueue.shift()!;
           throw new Error("Cancelled");
         }

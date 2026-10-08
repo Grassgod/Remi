@@ -711,26 +711,26 @@ describe("MultiremiTaskReportOutbox", () => {
     const delivered: string[] = [];
     let steerPending = true;
     const outbox = track(new MultiremiTaskReportOutbox({ path: ":memory:", deliver: async record => {
-      if (record.kind === "complete" && steerPending) throw new DaemonProtocolRpcError("steer_pending", false);
+      if (record.kind === "turn.complete" && steerPending) throw new DaemonProtocolRpcError("turn_input_pending", false);
       delivered.push(record.kind);
     } }));
-    const completion = outbox.enqueueAndWait("task", "complete", { output: "before steer" });
+    const completion = outbox.enqueueAndWait("task", "turn.complete", { output: "before steer" });
     outbox.enqueue("task", "progress", { summary: "steer turn" });
-    await expect(completion).rejects.toMatchObject({ code: "steer_pending", retryable: false });
+    await expect(completion).rejects.toMatchObject({ code: "turn_input_pending", retryable: false });
     await outbox.waitForTaskDrain("task");
     steerPending = false;
-    await outbox.enqueueAndWait("task", "complete", { output: "after steer" });
-    expect(delivered).toEqual(["progress", "complete"]);
+    await outbox.enqueueAndWait("task", "turn.complete", { output: "after steer" });
+    expect(delivered).toEqual(["progress", "turn.complete"]);
     expect(outbox.stats()).toMatchObject({ pending: 0, blocked: 0 });
   });
 
   it("turns a replayed steer conflict into runtime_recovery failure without blocking", async () => {
     const delivered: MultiremiOutboxRecord[] = [];
     const outbox = track(new MultiremiTaskReportOutbox({ path: ":memory:", deliver: async record => {
-      if (record.kind === "complete") throw new DaemonProtocolRpcError("steer_pending", false);
+      if (record.kind === "turn.complete") throw new DaemonProtocolRpcError("turn_input_pending", false);
       delivered.push(record);
     } }));
-    outbox.enqueue("task", "complete", { runtime_id: "runtime", output: "old" });
+    outbox.enqueue("task", "turn.complete", { runtime_id: "runtime", output: "old" });
     outbox.enqueue("task", "progress", { summary: "next" });
     await outbox.waitForTaskDrain("task");
     expect(delivered.map(record => record.kind)).toEqual(["progress", "fail"]);
@@ -742,10 +742,10 @@ describe("MultiremiTaskReportOutbox", () => {
     const gate = deferred<void>();
     const delivered: string[] = [];
     const outbox = track(new MultiremiTaskReportOutbox({ path: ":memory:", deliver: async record => {
-      if (record.kind === "complete") { await gate.promise; throw new DaemonProtocolRpcError("steer_pending", false); }
+      if (record.kind === "turn.complete") { await gate.promise; throw new DaemonProtocolRpcError("turn_input_pending", false); }
       delivered.push(record.kind);
     } }));
-    expect(await outbox.enqueueAndWait("task", "complete", {}, 5)).toEqual({ ok: true, queued: true });
+    expect(await outbox.enqueueAndWait("task", "turn.complete", {}, 5)).toEqual({ ok: true, queued: true });
     expect(outbox.stats().pendingTerminal).toBe(1);
     gate.resolve();
     await outbox.waitForTaskDrain("task");

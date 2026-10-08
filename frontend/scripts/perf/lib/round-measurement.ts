@@ -318,13 +318,13 @@ export interface RoundDriverState {
   blockedWrites: number;
   /** Writes the allow-list fulfilled inside the browser (see lib/stub-writes). */
   stubbedWrites: number;
-  /** Milliseconds from the click to the URL committing `?issue=`; null when N/A. */
+  /** Milliseconds from the click to the URL committing `?item=`; null when N/A. */
   urlCommitMs: number | null;
   /** Text of the row the warm click targeted, for post-hoc attribution. */
   clickedRowText: string | null;
   /** True when the browser's first page had to have the target injected. */
   inboxInjected: boolean;
-  /** GET `/api/inbox/page` responses served before the first stubbed write. */
+  /** GET `/api/inbox` responses served before the first stubbed write. */
   inboxPageRequestsBeforeStub: number | null;
   timelineRequests: number;
   targetIndexFromLatest: number | null;

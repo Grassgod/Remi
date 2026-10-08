@@ -1,6 +1,7 @@
+import { turnApiPath, mutateExecutionFixture } from "./unified-test-paths.js";
 import { afterEach, describe, expect, it } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
-import { createStore, db, resetMultiremiTestEnv } from "./helpers.js";
+import { createLocalStore as createStore, db, resetMultiremiTestEnv } from "./helpers.js";
 
 /**
  * MUL-357: `GET /api/multiremi/tasks` paginates with `limit` / `offset`.
@@ -62,12 +63,11 @@ async function page(
   query: string,
   token: Record<string, string>,
 ) {
-  const response = await app.request(`/api/multiremi/tasks${query}`, { headers: token });
+  const response = await app.request(`/api/turns${query}`, { headers: token });
   expect(response.status, query).toBe(200);
   return await response.json() as {
-    tasks: Array<Record<string, unknown> & { id: string }>;
-    has_more: boolean;
-    next_offset: number | null;
+    turns: Array<Record<string, unknown> & { id: string }>;
+    next_cursor: string | null;
     limit: number;
     offset: number;
   };
@@ -80,21 +80,21 @@ describe("Task list pagination", () => {
     expect(hidden).toHaveLength(2);
 
     const first = await page(app, "?limit=5", reader);
-    expect(first.tasks).toHaveLength(5);
-    for (const task of first.tasks) {
+    expect(first.turns).toHaveLength(5);
+    for (const task of first.turns) {
       expect(visible).toContain(task.id);
       expect(hidden).not.toContain(task.id);
     }
-    expect(first.has_more).toBe(true);
-    expect(first.next_offset).toBe(5);
+    expect((first.next_cursor !== null)).toBe(true);
+    expect(first.next_cursor).toBeString();
 
-    const second = await page(app, "?limit=5&offset=5", reader);
-    expect(second.tasks).toHaveLength(3);
-    expect(second.has_more).toBe(false);
-    expect(second.next_offset).toBeNull();
-    for (const task of second.tasks) expect(hidden).not.toContain(task.id);
+    const second = await page(app, `?limit=5&cursor=${encodeURIComponent(first.next_cursor!)}`, reader);
+    expect(second.turns).toHaveLength(3);
+    expect((second.next_cursor !== null)).toBe(false);
+    expect(second.next_cursor).toBeNull();
+    for (const task of second.turns) expect(hidden).not.toContain(task.id);
 
-    const returned = [...first.tasks, ...second.tasks].map((task) => task.id);
+    const returned = [...first.turns, ...second.turns].map((task) => task.id);
     expect(new Set(returned).size).toBe(returned.length);
     expect([...returned].sort()).toEqual([...visible].sort());
   });
@@ -103,39 +103,40 @@ describe("Task list pagination", () => {
     // The cursor is the full `(created_at, id)` sort key; a created_at-only
     // cursor would drop or duplicate rows in this fixture.
     // The root token is the no-identity admin path, so every task is visible here.
-    const { app, entries, root } = await fixture(10, 100);
+    const { store, app, entries, root } = await fixture(10, 0);
     const all = entries.map((entry) => entry.id);
-    db!.run("UPDATE multiremi_tasks SET created_at = '2026-09-21T00:00:00.000Z'");
+    db!.run("UPDATE multiremi_turns SET created_at = '2026-09-21T00:00:00.000Z'");
     const collected: string[] = [];
-    let offset = 0;
+    let cursor: string | null = null;
     for (let request = 0; request < 6; request += 1) {
-      const body = await page(app, `?limit=3&offset=${offset}`, root);
-      collected.push(...body.tasks.map((task) => task.id));
-      if (!body.has_more) break;
-      offset = body.next_offset!;
+      const body = await page(app, `?limit=3${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`, root);
+      collected.push(...body.turns.map((task) => task.id));
+      if (!(body.next_cursor !== null)) break;
+      cursor = body.next_cursor;
     }
     expect(collected).toHaveLength(10);
     expect(new Set(collected).size).toBe(10);
     expect([...collected].sort()).toEqual([...all].sort());
   });
 
-  it("caps limit and falls back to the default for absent or invalid values", async () => {
-    const { app, root } = await fixture(12, 100);
-    expect((await page(app, "?limit=9999", root)).limit).toBe(500);
-    expect((await page(app, "", root)).limit).toBe(100);
-    for (const query of ["?limit=0", "?limit=-3", "?limit=abc", "?limit="]) {
-      expect((await page(app, query, root)).limit, query).toBe(100);
-    }
-    // A fractional limit is floored by the shared optional-int parser.
-    expect((await page(app, "?limit=2.9", root)).tasks).toHaveLength(2);
-  });
+  it("accepts the canonical maximum and rejects malformed pagination inputs", async () => {
+    const {app,root}=await fixture(520,0);
+    const capped=await page(app,'?limit=500',root);
+    expect(capped.turns).toHaveLength(500);expect(capped.next_cursor).toBeString();
+    expect((await page(app,'',root)).turns).toHaveLength(100);
+    for(const query of ['?limit=9999','?limit=invalid','?limit=-1','?limit=1.5','?cursor=invalid'])
+      expect((await app.request(`/api/turns${query}`,{headers:root})).status).toBe(400);
+  },15000);
 
   it("returns an empty page and no next offset past the end of the authorized set", async () => {
     const { app, reader, visible } = await fixture(10, 5);
-    const body = await page(app, "?limit=5&offset=100", reader);
-    expect(body.tasks).toEqual([]);
-    expect(body.has_more).toBe(false);
-    expect(body.next_offset).toBeNull();
+    const first=await page(app,"?limit=500",reader);
+    const last=first.turns.at(-1)!;
+    const cursor=Buffer.from(JSON.stringify({created_at:last.created_at,id:last.id})).toString("base64url");
+    const body = await page(app, `?limit=5&cursor=${cursor}`, reader);
+    expect(body.turns).toEqual([]);
+    expect((body.next_cursor !== null)).toBe(false);
+    expect(body.next_cursor).toBeNull();
     expect(visible.length).toBeGreaterThan(0);
   });
 
@@ -145,9 +146,9 @@ describe("Task list pagination", () => {
     const { app, reader, hidden } = await fixture(20, 1);
     expect(hidden).toHaveLength(20);
     const body = await page(app, "?limit=5", reader);
-    expect(body.tasks).toEqual([]);
-    expect(body.has_more).toBe(false);
-    expect(body.next_offset).toBeNull();
+    expect(body.turns).toEqual([]);
+    expect((body.next_cursor !== null)).toBe(false);
+    expect(body.next_cursor).toBeNull();
   });
 
   it("returns exactly the rule-allowed tasks when paging through the whole list", async () => {
@@ -202,23 +203,22 @@ describe("Task list pagination", () => {
       ["bob", bob.token, expectedForBob],
     ] as const) {
       const collected: string[] = [];
-      let offset = 0;
+      let cursor: string | null = null;
       let rounds = 0;
       for (;;) {
-        const response = await app.request(`/api/multiremi/tasks?limit=2&offset=${offset}`, {
+        const response = await app.request("/api/turns"+`?limit=2${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`, {
           headers: headers(token),
         });
         expect(response.status, identity).toBe(200);
         const body = await response.json() as {
-          tasks: Array<{ id: string }>;
-          has_more: boolean;
-          next_offset: number | null;
-        };
-        collected.push(...body.tasks.map((task) => task.id));
+          turns: Array<{ id: string }>;
+          next_cursor: string | null;
+              };
+        collected.push(...body.turns.map((task) => task.id));
         rounds += 1;
-        if (!body.has_more) break;
-        expect(body.next_offset).toBe(offset + body.tasks.length);
-        offset = body.next_offset!;
+        if (!(body.next_cursor !== null)) break;
+        expect(body.next_cursor).toBeString();
+        cursor = body.next_cursor;
         expect(rounds, identity).toBeLessThan(20);
       }
       expect(rounds, identity).toBeGreaterThan(1);
@@ -261,8 +261,7 @@ describe("Task list pagination", () => {
         workspaceId: invisible ? "ws_other" : "local",
       });
       // Strictly decreasing created_at, so insertion index === scan position.
-      db!.run("UPDATE multiremi_tasks SET created_at = ?, updated_at = ? WHERE id = ?", [
-        new Date(Date.UTC(2026, 8, 21) - position * 60_000).toISOString(),
+      db!.run("UPDATE multiremi_turns SET created_at = ? WHERE id = ?", [
         new Date(Date.UTC(2026, 8, 21) - position * 60_000).toISOString(),
         task.id,
       ]);
@@ -271,23 +270,22 @@ describe("Task list pagination", () => {
     }
 
     const collected: string[] = [];
-    let offset = 0;
+    let cursor: string | null = null;
     for (let page = 0; page < 10; page += 1) {
       // 500 is the server cap: the whole (398-row) visible set fits one page,
       // so the walk still has to cross all three chunks to fill it.
-      const response = await app.request(`/api/multiremi/tasks?limit=500&offset=${offset}`, {
+      const response = await app.request(`/api/turns?limit=500${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`, {
         headers: headers(reader.token),
       });
       expect(response.status).toBe(200);
       const body = await response.json() as {
-        tasks: Array<{ id: string }>;
-        has_more: boolean;
-        next_offset: number | null;
-      };
-      collected.push(...body.tasks.map((task) => task.id));
-      if (!body.has_more) break;
-      expect(body.next_offset).toBe(offset + body.tasks.length);
-      offset = body.next_offset!;
+        turns: Array<{ id: string }>;
+        next_cursor: string | null;
+          };
+      collected.push(...body.turns.map((task) => task.id));
+      if (!(body.next_cursor !== null)) break;
+      expect(body.next_cursor).toBeString();
+      cursor = body.next_cursor;
     }
 
     expect(new Set([...collected].filter((id) => hidden.includes(id)))).toEqual(new Set());
@@ -310,33 +308,33 @@ describe("Task list pagination", () => {
     // The two-phase fetch must not reorder, duplicate or drop rows: the page
     // order is `created_at DESC, id DESC` and hydration reads by id, which does
     // not preserve that order on its own.
-    const { app, store, root } = await fixture(12, 100);
+    const { app, store, root } = await fixture(12, 0);
     const reference = store.listTasks().map((task) => task.id);
     const collected: string[] = [];
-    let offset = 0;
+    let cursor: string | null = null;
     for (let page = 0; page < 8; page += 1) {
-      const response = await app.request(`/api/multiremi/tasks?limit=3&offset=${offset}`, { headers: root });
+      const response = await app.request("/api/turns"+`?limit=3${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`, { headers: root });
       expect(response.status).toBe(200);
       const body = await response.json() as {
-        tasks: Array<{ id: string; createdAt: string }>;
-        has_more: boolean;
-        next_offset: number | null;
-      };
-      collected.push(...body.tasks.map((task) => task.id));
+        turns: Array<{ id: string; created_at: string }>;
+        next_cursor: string | null;
+          };
+      collected.push(...body.turns.map((task) => task.id));
       // Within one page the rows come back in the same order the scan produced.
-      const createdAts = body.tasks.map((task) => task.createdAt);
+      const createdAts = body.turns.map((task) => task.created_at);
       expect([...createdAts].sort().reverse()).toEqual(createdAts);
-      if (!body.has_more) break;
-      offset = body.next_offset!;
+      if (!(body.next_cursor !== null)) break;
+      cursor = body.next_cursor;
     }
     expect(new Set(collected).size).toBe(collected.length);
     expect(collected).toEqual(reference);
   });
 
   it("omits heavy fields from list entries while the detail route keeps them", async () => {
-    const { app, entries, root } = await fixture(3, 100);
+    const { store, app, entries, root } = await fixture(3, 0);
     const list = await page(app, "?limit=3", root);
-    const entryKeys = Object.keys(list.tasks[0]!);
+    expect(list.turns[0]).toBeDefined();
+    const entryKeys = Object.keys(list.turns[0]!);
     for (const field of [
       "result",
       "prompt",
@@ -349,15 +347,15 @@ describe("Task list pagination", () => {
       expect(entryKeys, field).not.toContain(field);
     }
     // Identity and status fields the CLI table renders must survive the trim.
-    for (const field of ["id", "agentId", "status", "workspaceId", "createdAt", "waitReason"]) {
+    for (const field of ["id", "agent_id", "status", "workspace_id", "created_at", "current_attempt_id"]) {
       expect(entryKeys, field).toContain(field);
     }
 
-    const detailResponse = await app.request(`/api/multiremi/tasks/${entries[0]!.id}`, { headers: root });
+    const detailResponse = await app.request(turnApiPath(store, entries[0]!.id,"?input=true&attempts=true"), { headers: root });
     expect(detailResponse.status).toBe(200);
-    const detail = (await detailResponse.json()) as { task: Record<string, unknown> };
-    for (const field of ["prompt", "result", "usage", "pluginSnapshot", "executionFingerprint"]) {
-      expect(Object.keys(detail.task), field).toContain(field);
-    }
+    const detail=await detailResponse.json();
+    expect(detail.input.messages[0].body_md).toBe('Task 0');
+    for(const field of ['usage','plugin_snapshot','execution_fingerprint'])expect(Object.keys(detail.attempts[0]),field).toContain(field);
+
   });
 });

@@ -6,9 +6,31 @@ import { DaemonTaskOffers } from "@multiremi/api/daemon-protocol/task-offers.js"
 import { DaemonProtocolLayer } from "@multiremi/api/daemon-protocol/index.js";
 import { DAEMON_MIN_CLI_VERSION } from "@multiremi/contracts/daemon-protocol.js";
 import { log } from "@multiremi/api/helpers/common.js";
+import { MultiremiStore } from "@multiremi/store.js";
 import { createLocalStore, db, resetMultiremiTestEnv } from "./helpers.js";
 
 afterEach(resetMultiremiTestEnv);
+
+function providerProgress(sessionId: string, agentId: string) {
+  return db!.query(`SELECT provider_session_id,provider_cursor_seq FROM multiremi_session_lanes
+    WHERE session_id=? AND reader_type='agent' AND reader_id=? AND execution_scope=''`).get(sessionId, agentId) as {
+      provider_session_id: string | null; provider_cursor_seq: number;
+    };
+}
+
+function upgradeLegacyCheckpoint(sessionId: string, agentId: string, seq: number) {
+  // Snapshot before S2: the lane holds the inline provider checkpoint, and
+  // this reader has never initialized ADR 0013's separate read state.
+  db!.run("UPDATE multiremi_session_lanes SET cursor_seq=? WHERE session_id=? AND reader_id=?", [seq, sessionId, agentId]);
+  db!.run("UPDATE multiremi_conversation_heads SET agent_read_state = NULL WHERE session_id = ?", [sessionId]);
+  db!.run("DELETE FROM multiremi_schema_migrations WHERE id IN (?,?)",
+    ["20261005_fold_agent_read_state", "20261005_separate_lane_provider_progress"]);
+  db!.exec("ALTER TABLE multiremi_session_lanes DROP COLUMN provider_cursor_seq");
+  db!.exec("ALTER TABLE multiremi_session_lanes DROP COLUMN cursor_offset");
+  db!.exec("ALTER TABLE multiremi_turns DROP COLUMN trigger_message_id");
+  new MultiremiStore(db!);
+  new MultiremiStore(db!);
+}
 
 function fixture() {
   const store = createLocalStore();
@@ -36,13 +58,13 @@ test("first upgraded Issue wakeup initializes once from its legacy checkpoint; a
   f.store.createIssueComment(f.issue.id, { authorType: "member", authorId: "local", body: "LEGACY_HISTORY".repeat(1_000) });
   const legacy = f.claim();
   f.finish(legacy.task.id);
-  db!.run("UPDATE multiremi_conversation_heads SET agent_read_state = NULL WHERE session_id = ?", [f.session.id]);
+  upgradeLegacyCheckpoint(f.session.id, f.agent.id, legacy.range.to_seq);
   f.store.createIssueComment(f.issue.id, { authorType: "member", authorId: "local", body: "NEW_UNREAD" });
   const upgraded = f.claim();
   expect(upgraded.range.from_seq).toBe(legacy.range.to_seq);
   expect(f.store.getSessionAgentReadProgress(f.session.id, f.agent.id)).toEqual({ seq: legacy.range.to_seq, offset: 0 });
   f.finish(upgraded.task.id);
-  expect(f.store.getSessionAgentLane(f.session.id, f.agent.id)!.cursorSeq).toBeGreaterThan(legacy.range.to_seq);
+  expect(providerProgress(f.session.id, f.agent.id).provider_cursor_seq).toBeGreaterThan(legacy.range.to_seq);
   expect(f.store.getSessionAgentReadProgress(f.session.id, f.agent.id).seq).toBe(legacy.range.to_seq);
   const newcomer = f.store.createAgent({ name: "New reader", provider: "claude", runtimeId: f.runtime.id });
   f.store.createTask({ agentId: newcomer.id, issueId: f.issue.id, prompt: "first visit" });
@@ -67,7 +89,7 @@ test("first upgraded Chat wakeup retains its completed legacy projection without
   f.store.sendChatMessage(chat.id, { body: "LEGACY_CHAT" });
   const legacy = claim();
   f.finish(legacy.task.id);
-  db!.run("UPDATE multiremi_conversation_heads SET agent_read_state = NULL WHERE session_id = ?", [chat.id]);
+  upgradeLegacyCheckpoint(chat.id, f.agent.id, legacy.range.to_seq);
   f.store.sendChatMessage(chat.id, { body: "NEW_CHAT_UNREAD" });
   const upgraded = claim();
   expect(upgraded.range.from_seq).toBe(legacy.range.to_seq);
@@ -86,7 +108,7 @@ for (const read of ["none", "partial", "all"] as const) test(`warm resume keeps 
   if (read !== "none") do {
     const params = new URLSearchParams({ from: "0", to: String(initial.range.to_seq) });
     if (cursor) params.set("cursor", cursor);
-    const response = await app.request(`/api/sessions/${f.session.id}/log/entry?${params}`,
+    const response = await app.request(`/api/sessions/${f.session.id}/messages?${params}`,
       { headers: { Authorization: `Bearer ${credential.token}` } });
     expect(response.status).toBe(200);
     cursor = ((await response.json()) as any).next_cursor;
@@ -101,8 +123,8 @@ for (const read of ["none", "partial", "all"] as const) test(`warm resume keeps 
   }
   if (read === "all") expect(progress).toEqual({ seq: initial.range.to_seq, offset: 0 });
   f.finish(initial.task.id);
-  expect(f.store.getSessionAgentLane(f.session.id, f.agent.id)).toMatchObject({
-    providerSessionId: "provider-reader", cursorSeq: initial.range.to_seq,
+  expect(providerProgress(f.session.id, f.agent.id)).toMatchObject({
+    provider_session_id: "provider-reader", provider_cursor_seq: initial.range.to_seq,
   });
   expect(f.store.getSessionAgentReadProgress(f.session.id, f.agent.id)).toEqual(progress);
   f.store.createIssueComment(f.issue.id, { authorType: "member", authorId: "local", body: "NEW_UNREAD" });
@@ -125,7 +147,7 @@ test("out-of-order pages cannot acknowledge unread gaps; partial pages persist a
   const page = async (cursor?: string, to = initial.range.to_seq) => {
     const params = new URLSearchParams({ from: "0", to: String(to) });
     if (cursor) params.set("cursor", cursor);
-    const response = await app.request(`/api/sessions/${f.session.id}/log/entry?${params}`,
+    const response = await app.request(`/api/sessions/${f.session.id}/messages?${params}`,
       { headers: { Authorization: `Bearer ${credential.token}` } });
     expect(response.status).toBe(200);
     return await response.json() as any;
@@ -235,7 +257,7 @@ for (const accepted of [false, true]) test(`a recovery bootstrap resets old read
       const credential = await f.store.createTaskAccessToken(claimed, "local");
       const oldSeq = f.store.locateConversationLogEntry(f.session.id, old.id)!.seq;
       const app = createMultiremiApp({ store: f.store });
-      const read = await app.request(`/api/sessions/${f.session.id}/log/entry?from=0&to=${oldSeq}`,
+      const read = await app.request(`/api/sessions/${f.session.id}/messages?from=0&to=${oldSeq}`,
         { headers: { Authorization: `Bearer ${credential.token}` } });
       expect(read.status).toBe(200);
       expect((await read.json() as any).entries[0].body_md).toBe("OLD_CONTEXT");
@@ -257,7 +279,7 @@ test("Chat range reads use the same persistent high-water independent of provide
   const credential = await f.store.createTaskAccessToken(claimed, "local");
   const to = f.store.getConversationLogHead(chat.id)!.headSeq;
   const app = createMultiremiApp({ store: f.store });
-  const response = await app.request(`/api/sessions/${chat.id}/log/entry?from=0&to=${to}`,
+  const response = await app.request(`/api/sessions/${chat.id}/messages?from=0&to=${to}`,
     { headers: { Authorization: `Bearer ${credential.token}` } });
   expect(response.status).toBe(200);
   expect(f.store.getSessionAgentReadProgress(chat.id, f.agent.id)).toEqual({ seq: to, offset: 0 });

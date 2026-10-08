@@ -30,9 +30,9 @@ const originalRun = db.run.bind(db);
 db.run = (sql, params) => {
   const normalized = sql.replace(/\s+/g, " ").trim().toUpperCase();
   const turn = fixture.scenario === "human"
-    ? normalized.startsWith("UPDATE MULTIREMI_TASKS SET UPDATED_AT =")
-      && normalized.includes("WAKE_SEQ") && Array.isArray(params) && params.includes(fixture.seededTaskId)
-    : /^INSERT INTO MULTIREMI_TASKS[ (]/.test(normalized);
+    ? normalized.startsWith("UPDATE MULTIREMI_TURNS SET WAKE_SEQ=")
+      && normalized.includes("WAKE_SEQ") && Array.isArray(params) && params.includes(store.getTurnForAttempt(fixture.seededTaskId!)!.id)
+    : /^INSERT INTO MULTIREMI_TURN_ATTEMPTS[ (]/.test(normalized);
   if (turn && phase === "before-turn") {
     if (!db.inTransaction) throw new Error("Before-turn probe is outside the state transaction");
     stop();

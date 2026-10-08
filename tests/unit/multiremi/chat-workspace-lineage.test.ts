@@ -1,3 +1,4 @@
+import { mutateExecutionFixture } from "./unified-test-paths.js";
 import { afterEach, describe, expect, it } from "bun:test";
 import { daemonTaskClaimResponse } from "@multiremi/api/wire/tasks.js";
 import { createLocalStore as createStore, db, resetMultiremiTestEnv } from "./helpers.js";
@@ -201,11 +202,11 @@ describe("Chat selects one ordered local directory", () => {
       const f = multipleDirectoryFixture();
       const next = f.store.sendChatMessage(f.chat.id, { body: "Continue" }).task;
       f.store.claimTask(f.previous.id);
-      db!.run("UPDATE multiremi_tasks SET work_dir = ?, runtime_id = ? WHERE id = ?", [
+      mutateExecutionFixture(db!, "UPDATE multiremi_turn_execution_records SET work_dir = ?, runtime_id = ? WHERE id = ?", [
         "/abs/directory-b", f.replacement.id, next.id,
       ]);
       if (lineage === "legacy") {
-        db!.run("UPDATE multiremi_tasks SET execution_fingerprint = ? WHERE id = ?", ["legacy-plugin-hash", next.id]);
+        mutateExecutionFixture(db!, "UPDATE multiremi_turn_execution_records SET execution_fingerprint = ? WHERE id = ?", ["legacy-plugin-hash", next.id]);
       }
       const hydrated = f.store.getTaskWithAgent(next.id)!;
       expect(hydrated).toMatchObject({ sessionId: null, workDir: null });
@@ -293,10 +294,10 @@ describe("Chat workspace assignment lineage", () => {
       const next = f.store.sendChatMessage(f.chat.id, { body: "Dispatch" }).task;
       const retained = f.store.claimTask(f.previous.id)!;
       if (lineage === "legacy") {
-        db!.run("UPDATE multiremi_tasks SET execution_fingerprint = ? WHERE id = ?", ["legacy-plugin-hash", next.id]);
+        mutateExecutionFixture(db!, "UPDATE multiremi_turn_execution_records SET execution_fingerprint = ? WHERE id = ?", ["legacy-plugin-hash", next.id]);
         mutate(f, "path");
       } else {
-        db!.run("UPDATE multiremi_tasks SET work_dir = ? WHERE id = ?", ["/abs/unassigned-directory", next.id]);
+        mutateExecutionFixture(db!, "UPDATE multiremi_turn_execution_records SET work_dir = ? WHERE id = ?", ["/abs/unassigned-directory", next.id]);
       }
       const hydrated = f.store.getTaskWithAgent(next.id)!;
       expect(hydrated).toMatchObject({ sessionId: null, workDir: null });
@@ -355,7 +356,7 @@ describe("Chat workspace assignment lineage", () => {
       const next = f.store.sendChatMessage(f.chat.id, { body: "Dispatch" }).task;
       const retained = f.store.claimTask(f.previous.id)!;
       mutate(f, change);
-      db!.run("UPDATE multiremi_tasks SET dispatched_at = ? WHERE id = ?", ["2000-01-01T00:00:00.000Z", next.id]);
+      mutateExecutionFixture(db!, "UPDATE multiremi_turn_execution_records SET dispatched_at = ? WHERE id = ?", ["2000-01-01T00:00:00.000Z", next.id]);
       const reclaimed = f.store.claimTask(f.replacement.id)!;
       expect(reclaimed).toMatchObject({ id: next.id, sessionId: null, workDir: null });
       expect(reclaimed.executionFingerprint).not.toBe(retained.executionFingerprint);

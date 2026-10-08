@@ -130,7 +130,11 @@ describe("agent assignment rederives reopened child parents", () => {
           let attempts = 0;
           // Same deterministic post-discovery fault injection as the Issue
           // retry tests. The actual locked re-read must detect the missing id.
-          const moveParent = () => run("UPDATE multiremi_issues SET workspace_id = 'local', issue_number = 10000 WHERE id = ?", [parent.id]);
+          const moveParent = () => {
+            run("UPDATE multiremi_issues SET workspace_id = 'local', issue_number = 10000 WHERE id = ?", [parent.id]);
+            run("UPDATE multiremi_issue_sessions SET workspace_id='local' WHERE issue_id=?",[parent.id]);
+            run("UPDATE multiremi_conversation_heads SET workspace_id='local' WHERE session_id IN (SELECT id FROM multiremi_issue_sessions WHERE issue_id=?)",[parent.id]);
+          };
           const runSpy = spyOn(db, "run").mockImplementation((sql, params) => {
             if (sql === "UPDATE multiremi_issues SET id = id WHERE id = ?") {
               if (!moved) {

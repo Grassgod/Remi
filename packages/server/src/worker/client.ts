@@ -22,7 +22,6 @@ import type {
   MultiremiRuntimeModel,
   MultiremiRuntimeLocalSkillSummary,
   MultiremiSkillFile,
-  MultiremiTaskHumanRequest,
   MultiremiTaskStatus,
   MultiremiTaskSteerMessage,
   MultiremiTaskWithAgent,
@@ -41,6 +40,7 @@ import type {
   MultiremiFeishuBotDaemonPayload,
   MultiremiFeishuBotOutboundDelivery,
   MultiremiTaskMessage,
+  MultiremiTaskHumanRequest,
   FeishuBotTaskSnapshot,
   FeishuBotCancelResult,
   FeishuBotSessionSnapshot,
@@ -660,9 +660,9 @@ export class MultiremiDaemonClient {
     });
   }
 
-  getFeishuIssueDecision(issueId: string, decisionId: string): Promise<MultiremiIssueDecision | null> {
+  getFeishuIssueDecision(decisionId: string): Promise<MultiremiIssueDecision | null> {
     return this.get<{ decision?: MultiremiIssueDecision | null }>(
-      `/api/daemon/issues/${encodeURIComponent(issueId)}/decisions/${encodeURIComponent(decisionId)}`,
+      `/api/daemon/messages/${encodeURIComponent(decisionId)}`,
     ).then(resp => resp.decision ?? null);
   }
 
@@ -672,12 +672,11 @@ export class MultiremiDaemonClient {
    * anyone it cannot resolve, so a request body can never name its own answerer.
    */
   answerFeishuIssueDecision(
-    issueId: string,
     decisionId: string,
     input: { answer: string; operatorOpenId: string; token?: string },
   ): Promise<MultiremiIssueDecision> {
     return this.post<{ decision: MultiremiIssueDecision }>(
-      `/api/daemon/issues/${encodeURIComponent(issueId)}/decisions/${encodeURIComponent(decisionId)}/answer`,
+      `/api/daemon/messages/${encodeURIComponent(decisionId)}/answer`,
       { answer: input.answer, operator_open_id: input.operatorOpenId, token: input.token },
     ).then(resp => resp.decision);
   }
@@ -1114,21 +1113,29 @@ export class MultiremiDaemonClient {
   }
 
   async respondTaskHumanRequest(
-    taskId: string,
     requestId: string,
     response: Record<string, unknown>,
     credential?: { token: string; operatorOpenId: string },
   ): Promise<MultiremiTaskHumanRequest> {
     const result = await this.post<{ request: MultiremiTaskHumanRequest }>(
-      `/api/daemon/tasks/${encodeURIComponent(taskId)}/human-requests/${encodeURIComponent(requestId)}/respond`,
+      `/api/daemon/messages/${encodeURIComponent(requestId)}/answer`,
       { response, token: credential?.token, operator_open_id: credential?.operatorOpenId },
     );
     return result.request;
   }
 
-  prepareTaskHumanRequestCard(taskId: string, requestId: string, recipientOpenId: string): Promise<Record<string, unknown>> {
+  getFeishuDecisionMessage(messageId: string): Promise<{ message: { id: string; message_kind: string; resolved_at: string | null; deleted_at: string | null } }> {
+    return this.get(`/api/daemon/messages/${encodeURIComponent(messageId)}`);
+  }
+
+  getMessageHumanRequest(messageId: string): Promise<MultiremiTaskHumanRequest | null> {
+    return this.get<{ request?: MultiremiTaskHumanRequest | null }>(`/api/daemon/messages/${encodeURIComponent(messageId)}`)
+      .then(result => result.request ?? null);
+  }
+
+  prepareTaskHumanRequestCard(requestId: string, recipientOpenId: string): Promise<Record<string, unknown>> {
     return this.post<{ card: Record<string, unknown> }>(
-      `/api/daemon/tasks/${encodeURIComponent(taskId)}/human-requests/${encodeURIComponent(requestId)}/card`,
+      `/api/daemon/messages/${encodeURIComponent(requestId)}/card`,
       { recipient_open_id: recipientOpenId },
     ).then(result => result.card);
   }
@@ -1170,9 +1177,11 @@ export class MultiremiDaemonClient {
     });
   }
 
-  async completeTask(taskId: string, output: string, sessionId?: string | null, workDir?: string | null): Promise<void> {
-    await this.report("task.complete", taskId, {
-      output,
+  async completeTurn(input: { turn_id: string; attempt_id: string; input_to_seq: number }, output: string,
+    sessionId?: string | null, workDir?: string | null): Promise<void> {
+    await this.report("turn.complete", input.attempt_id, {
+      ...input,
+      reply: { body_md: output, message_kind: "final" },
       session_id: sessionId ?? undefined,
       work_dir: workDir ?? undefined,
     }, true);

@@ -37,7 +37,7 @@ function bed(cliVersion = "0.2.82") {
 }
 
 describe("HTTP daemon protocol upgrade channel (real SQLite)", () => {
-  it.each(["0.2.82", "unreadable", ""])("automatically requests the server CLI version for %s", async version => {
+  it.each(["0.2.82", "0.2.84", "0.2.85", "0.2.86", "unreadable", ""])("automatically requests the server CLI version for %s", async version => {
     const b = bed(version);
     const ack = await b.heartbeat();
     expect(ack.pending_update).toMatchObject({ id: expect.any(String), scope: "cli", target_version: multiremiVersion });
@@ -45,7 +45,7 @@ describe("HTTP daemon protocol upgrade channel (real SQLite)", () => {
     expect(b.rows()[0]).toMatchObject({ scope: "cli", target_version: multiremiVersion });
   });
 
-  it.each([DAEMON_MIN_CLI_VERSION, "0.2.84", "v1.0.0"])("does not queue an upgrade at or above the minimum (%s)", async version => {
+  it.each([DAEMON_MIN_CLI_VERSION, "v1.0.0"])("does not queue an upgrade at or above the minimum (%s)", async version => {
     const b = bed(version);
     expect((await b.heartbeat()).pending_update).toBeUndefined();
     expect(b.rows()).toEqual([]);
@@ -115,7 +115,7 @@ describe("HTTP daemon protocol upgrade channel (real SQLite)", () => {
   });
 
   it("the UI-role server reads negotiated and failed protocol states from the runtime-role server's database", async () => {
-    const h = await DaemonProtocolHarness.create({ apiRole: "runtime" });
+    const h = await DaemonProtocolHarness.create({ apiRole: "runtime", database: "sqlite" });
     cleanups.push(() => h.dispose());
     // The UI owns an independent Store/SQLite connection, with no shared session registry.
     const uiDb = openSqliteDatabase(`${h.root}/server.db`);

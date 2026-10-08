@@ -22,6 +22,7 @@ import {
   type DaemonSessionArchiveRequestResult,
 } from "@multiremi/worker/daemon-session-archive-requests.js";
 import { traceBackfillBackends, type OpenedStore } from "./trace-backfill-backends.js";
+import { unifiedModelBackendTests } from "./unified-model-test-backends.js";
 
 const TIMEOUT = 60_000;
 const backends = await traceBackfillBackends("archivereq");
@@ -127,27 +128,29 @@ async function connectDaemon(store: MultiremiStore, runtimeId: string) {
   };
 }
 
-for (const backend of backends) {
-  describe.skipIf(!backend.available)(`session archive request state machine (${backend.name})`, () => {
+unifiedModelBackendTests("session archive request migration", fixture => {
     it("upgrades an old store without the request table twice and preserves a pending request", async () => {
-      await withWorld(backend, async (world) => {
-        const db = world.opened.db;
+        const { db } = fixture();
         db.exec("DROP TABLE multiremi_session_archive_requests");
         const upgraded = new MultiremiStore(db);
-        const columns = () => backend.name === "sqlite"
+        const columns = () => db.dialect !== "postgres"
           ? (db.query("PRAGMA table_info(multiremi_session_archive_requests)").all() as Array<{ name: string }>).map(row => row.name)
           : (db.query(`SELECT column_name FROM information_schema.columns
               WHERE table_schema = current_schema() AND table_name = 'multiremi_session_archive_requests'
               ORDER BY ordinal_position`).all() as Array<{ column_name: string }>).map(row => row.column_name);
         const expected = ["id", "runtime_id", "subject_kind", "subject_id", "status", "created_by", "created_at", "updated_at"];
         expect(columns()).toEqual(expected);
-        const [request] = upgraded.requestSessionArchives(world.runtimeId, [ISSUE], "usr_admin");
+        const runtime = upgraded.registerRuntime({ name: "Archive daemon", provider: "claude", workspaceId: "local" });
+        const [request] = upgraded.requestSessionArchives(runtime.id, [ISSUE], "usr_admin");
         expect(request?.status).toBe("pending");
         const reopened = new MultiremiStore(db);
         expect(columns()).toEqual(expected);
-        expect(reopened.getSessionArchiveRequest(world.runtimeId, request!.id)).toEqual(request!);
-      });
+        expect(reopened.getSessionArchiveRequest(runtime.id, request!.id)).toEqual(request!);
     }, TIMEOUT);
+});
+
+for (const backend of backends) {
+  describe.skipIf(!backend.available)(`session archive request state machine (${backend.name})`, () => {
 
     it("moves pending → sent → acked → completed, forward only", async () => {
       await withWorld(backend, async (world) => {

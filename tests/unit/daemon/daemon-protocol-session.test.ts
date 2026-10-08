@@ -20,6 +20,7 @@
 import { describe, expect, it } from "bun:test";
 import {
   DAEMON_ACK_TIMEOUT_MS,
+  DAEMON_MIN_CLI_VERSION,
   DAEMON_FRAME_MAX_BYTES,
   DAEMON_TRACE_FRAME_MAX_BYTES,
   DAEMON_PROTOCOL_CLOSE_CODES,
@@ -87,7 +88,7 @@ function helloPayload(patch: Record<string, unknown> = {}): Record<string, unkno
   return {
     protocol: 2,
     daemon_id: "dmn_test",
-    cli_version: "0.2.83",
+    cli_version: DAEMON_MIN_CLI_VERSION,
     launched_by: null,
     runtimes: [{ runtime_id: "rt_one", provider: "codex", max_concurrency: 2, active_task_ids: [] }],
     caps: [],
@@ -166,7 +167,7 @@ describe("MUL-417 daemon protocol session — handshake", () => {
       t: "welcome",
       p: {
         protocol: 2,
-        min_cli_version: "0.2.83",
+        min_cli_version: DAEMON_MIN_CLI_VERSION,
         session_id: "dws_test",
         hb_interval_ms: 15000,
         limits: { frame_bytes: 1048576, window_frames: 64, window_bytes: 1048576 },
@@ -200,7 +201,7 @@ describe("MUL-417 daemon protocol session — handshake", () => {
     expect(reject.p).toMatchObject({
       code: "daemon_protocol_upgrade_required",
       min_protocol: 2,
-      min_cli_version: "0.2.83",
+      min_cli_version: DAEMON_MIN_CLI_VERSION,
     });
     expect(h.socket.closed).toEqual([{
       code: DAEMON_PROTOCOL_CLOSE_CODES.protocol_upgrade_required,
@@ -210,21 +211,31 @@ describe("MUL-417 daemon protocol session — handshake", () => {
     expect(h.session.isHandshakeComplete).toBe(false);
   });
 
-  it("rejects a CLI below the minimum with reject and close 4426", async () => {
+  it.each(["0.2.82", "0.2.85", "0.2.86", "0.2.87", "0.2.88"])("rejects CLI %s below the minimum with reject and close 4426", async (version) => {
     const h = harness();
     await h.session.handleMessage(JSON.stringify({
       v: 2,
       t: "hello",
       ts: 1,
-      p: helloPayload({ cli_version: "0.2.82" }),
+      p: helloPayload({ cli_version: version }),
     }));
 
     expect(h.socket.lastOfType("reject")!.p).toMatchObject({
       code: "daemon_cli_upgrade_required",
-      min_cli_version: "0.2.83",
+      min_cli_version: DAEMON_MIN_CLI_VERSION,
     });
     expect(h.socket.closed[0]!.code).toBe(DAEMON_PROTOCOL_CLOSE_CODES.protocol_upgrade_required);
     expect(h.registry.size).toBe(0);
+  });
+
+  it("admits the candidate package version without a forged CLI label", async () => {
+    const { default: candidate } = await import("../../../package.json");
+    const h = harness();
+    await h.session.handleMessage(JSON.stringify({ v: 2, t: "hello", ts: 1,
+      p: helloPayload({ cli_version: candidate.version }) }));
+    expect(h.socket.lastOfType("reject")).toBeNull();
+    expect(h.socket.lastOfType("welcome")).not.toBeNull();
+    expect(h.session.isHandshakeComplete).toBe(true);
   });
 
   it("treats an unparseable CLI version as too old, so it must upgrade", async () => {

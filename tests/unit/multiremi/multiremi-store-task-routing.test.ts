@@ -1,12 +1,17 @@
+import { runTurnExecutionMutation } from "@multiremi/store/turn-execution-records.js";
 // Store-level task scheduling: which runtime may claim which task.
 // Covers provider/agent-binding routing, private-runtime visibility, cross-workspace
 // guards, re-pooling on runtime changes, and the execution-engine session snapshots.
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "bun:test";
+import type { Database } from "bun:sqlite";
 import { MultiremiStore } from "@multiremi/store/store.js";
 import { PostgresSyncDatabase, type SqlDatabase } from "@multiremi/store/db/postgres.js";
-import { createStore, createLocalStore, db, readyArchiveBinding, resetMultiremiTestEnv } from "./helpers.js";
+import { createLocalStore as createStore, createLocalStore, db, readyArchiveBinding, resetMultiremiTestEnv } from "./helpers.js";
 import { prepareFeishuIssueTopic } from "../../fixtures/multiremi-feishu-topic.js";
 import { MUL449_CLAIM_SQL_GOLDEN } from "../../fixtures/mul449-claim-sql-golden.js";
+import { bootstrapPreUnifiedSchema } from "@multiremi/store/migrations.js";
+import { deserializeSqliteDatabase, openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
+import { historicalWriters } from "./unified-model-test-backends.js";
 
 afterEach(resetMultiremiTestEnv);
 
@@ -363,10 +368,7 @@ describe("Multiremi store — task claim, routing, and workspace scoping", () =>
             // The allowed cells must also satisfy the JS eligibility recheck
             // that guards dispatch recovery, not just the SQL claim predicate:
             // a stale dispatch on the same machine is handed back, never pooled.
-            db!.run(
-              "UPDATE multiremi_tasks SET status = 'dispatched', dispatched_at = ? WHERE id = ?",
-              ["2000-01-01T00:00:00.000Z", task.id],
-            );
+            runTurnExecutionMutation(db!, "UPDATE multiremi_turn_execution_records SET status = 'dispatched', dispatched_at = ? WHERE id = ?", ["2000-01-01T00:00:00.000Z", task.id]);
             expect(store.claimTask(runtime.runtime.id)?.id).toBe(task.id);
             store.startTask(task.id);
             store.completeTask(task.id, { output: "done" });
@@ -375,10 +377,7 @@ describe("Multiremi store — task claim, routing, and workspace scoping", () =>
             // The dispatch-recovery recheck must agree with the claim predicate:
             // a stale dispatch on the same rejected runtime re-pools instead of
             // being handed back.
-            db!.run(
-              "UPDATE multiremi_tasks SET status = 'dispatched', runtime_id = ?, dispatched_at = ? WHERE id = ?",
-              [runtime.runtime.id, "2000-01-01T00:00:00.000Z", task.id],
-            );
+            runTurnExecutionMutation(db!, "UPDATE multiremi_turn_execution_records SET status = 'dispatched', runtime_id = ?, dispatched_at = ? WHERE id = ?", [runtime.runtime.id, "2000-01-01T00:00:00.000Z", task.id]);
             expect(store.claimTask(runtime.runtime.id)).toBeNull();
             expect(store.getTask(task.id)).toMatchObject({ status: "queued", runtimeId: null });
             store.cancelTask(task.id);
@@ -600,7 +599,7 @@ describe("Multiremi store — task claim, routing, and workspace scoping", () =>
       agentId: agent.id, issueId: issue.id, issueSessionId: session.id, prompt: "second",
     });
     const now = Date.now();
-    db!.run("UPDATE multiremi_tasks SET created_at = ? WHERE id = ?", [new Date(now - 200_000).toISOString(), second.id]);
+    runTurnExecutionMutation(db!, "UPDATE multiremi_turn_execution_records SET created_at = ? WHERE id = ?", [new Date(now - 200_000).toISOString(), second.id]);
     expect(store.refreshQueuedCapabilityWaitReasons(now).updated).toBe(1);
     // The wait belongs to the workspace machine B; naming the stale pin A
     // would send the reader to the wrong device.
@@ -632,7 +631,7 @@ describe("Multiremi store — task claim, routing, and workspace scoping", () =>
       agentId: agent.id, issueId: issue.id, issueSessionId: session.id, prompt: "second",
     });
     const now = Date.now();
-    db!.run("UPDATE multiremi_tasks SET created_at = ? WHERE id = ?", [new Date(now - 200_000).toISOString(), second.id]);
+    runTurnExecutionMutation(db!, "UPDATE multiremi_turn_execution_records SET created_at = ? WHERE id = ?", [new Date(now - 200_000).toISOString(), second.id]);
     expect(store.refreshQueuedCapabilityWaitReasons(now)).toEqual({ updated: 0, alerted: 0 });
     expect(store.getTask(second.id)?.waitReason).toBeNull();
     expect(store.claimTask(a.id)).toBeNull();
@@ -663,7 +662,7 @@ describe("Multiremi store — task claim, routing, and workspace scoping", () =>
       runtimeId: a.id, sessionId: "sess_wsconf_cleaned",
     });
     const now = Date.now();
-    db!.run("UPDATE multiremi_tasks SET created_at = ? WHERE id = ?", [new Date(now - 200_000).toISOString(), second.id]);
+    runTurnExecutionMutation(db!, "UPDATE multiremi_turn_execution_records SET created_at = ? WHERE id = ?", [new Date(now - 200_000).toISOString(), second.id]);
     expect(store.refreshQueuedCapabilityWaitReasons(now)).toEqual({ updated: 0, alerted: 0 });
     expect(store.getTask(second.id)?.waitReason).toBeNull();
     expect(store.claimTask(a.id)?.id).toBe(second.id);
@@ -752,7 +751,7 @@ describe("Multiremi store — task claim, routing, and workspace scoping", () =>
     // Both machines satisfy the binding, so the observer must stay silent and
     // the workspace machine must win the claim.
     const now = Date.now();
-    db!.run("UPDATE multiremi_tasks SET created_at = ? WHERE id = ?", [new Date(now - 200_000).toISOString(), second.id]);
+    runTurnExecutionMutation(db!, "UPDATE multiremi_turn_execution_records SET created_at = ? WHERE id = ?", [new Date(now - 200_000).toISOString(), second.id]);
     expect(store.refreshQueuedCapabilityWaitReasons(now)).toEqual({ updated: 0, alerted: 0 });
     expect(store.getTask(second.id)?.waitReason).toBeNull();
     expect(store.claimTask(a.id)).toBeNull();
@@ -782,10 +781,11 @@ describe("Multiremi store — task claim, routing, and workspace scoping", () =>
     } finally {
       (db as unknown as { query: (sql: string) => unknown }).query = original;
     }
-    const claim = queries.find((sql) => sql.startsWith("UPDATE multiremi_tasks")
-      && sql.includes("status = 'dispatched'") && sql.includes("SELECT t.id"));
+    const claim = queries.find((sql) => sql.startsWith("SELECT id,turn_id,")
+      && sql.includes("FROM multiremi_turn_execution_records WHERE id = (\n         SELECT t.id"));
     expect(claim).toBeDefined();
-    expect(claim).toBe(MUL449_CLAIM_SQL_GOLDEN);
+    expect(claim!.slice(claim!.indexOf("WHERE id = (")))
+      .toBe(MUL449_CLAIM_SQL_GOLDEN.slice(MUL449_CLAIM_SQL_GOLDEN.indexOf("WHERE id = (")).replace(/ RETURNING \*$/, ""));
   });
 
   // The invariant: the observer's verdict per Runtime is the claim's own
@@ -826,7 +826,7 @@ describe("Multiremi store — task claim, routing, and workspace scoping", () =>
     expect(claimable).toEqual([]);
     for (const verdict of verdicts) expect(store.claimTask(verdict.runtimeId)).toBeNull();
     const now = Date.now();
-    db!.run("UPDATE multiremi_tasks SET created_at = ? WHERE id = ?", [new Date(now - 200_000).toISOString(), task.id]);
+    runTurnExecutionMutation(db!, "UPDATE multiremi_turn_execution_records SET created_at = ? WHERE id = ?", [new Date(now - 200_000).toISOString(), task.id]);
     expect(store.refreshQueuedCapabilityWaitReasons(now).updated).toBe(1);
     const reason = store.getTask(task.id)!.waitReason!;
     expect(reason).toContain("等待任务落点：");
@@ -852,7 +852,7 @@ describe("Multiremi store — task claim, routing, and workspace scoping", () =>
       .map((verdict) => verdict.runtimeId)).toContain(sibling.id);
 
     const now = Date.now();
-    db!.run("UPDATE multiremi_tasks SET created_at = ? WHERE id = ?", [new Date(now - 200_000).toISOString(), task.id]);
+    runTurnExecutionMutation(db!, "UPDATE multiremi_turn_execution_records SET created_at = ? WHERE id = ?", [new Date(now - 200_000).toISOString(), task.id]);
     expect(store.refreshQueuedCapabilityWaitReasons(now)).toEqual({ updated: 0, alerted: 0 });
     expect(store.getTask(task.id)?.waitReason).toBeNull();
     expect(store.claimTask(sibling.id)?.id).toBe(task.id);
@@ -873,24 +873,29 @@ describe("Multiremi store — task claim, routing, and workspace scoping", () =>
     let cellDatabase: string | null = null;
     let sequence = 0;
     const template = `mul449_matrix_${process.pid}_${Math.floor(Math.random() * 1e6)}`;
+    let sqliteTemplate: Uint8Array;
 
     beforeAll(() => {
-      if (dialect !== "postgres") return;
+      if (dialect === "sqlite") {
+        createLocalStore();
+        sqliteTemplate = db!.serialize();
+        return;
+      }
       admin = new PostgresSyncDatabase(process.env.MULTIREMI_TEST_POSTGRES_URL!);
       admin.exec(`CREATE DATABASE ${template}`);
       const url = new URL(process.env.MULTIREMI_TEST_POSTGRES_URL!);
       url.pathname = `/${template}`;
-      const db = new PostgresSyncDatabase(url.toString());
+      const templateDb = new PostgresSyncDatabase(url.toString());
       try {
-        new MultiremiStore(db).ensureLocalWorkspace();
+        new MultiremiStore(templateDb).ensureLocalWorkspace();
       } finally {
-        db.close();
+        templateDb.close();
       }
     });
 
     afterAll(() => {
-      if (dialect !== "postgres" || !admin) return;
       matrixDb?.close();
+      if (dialect !== "postgres" || !admin) return;
       try {
         if (cellDatabase) admin.exec(`DROP DATABASE ${cellDatabase} WITH (FORCE)`);
         admin.exec(`DROP DATABASE ${template} WITH (FORCE)`);
@@ -902,9 +907,8 @@ describe("Multiremi store — task claim, routing, and workspace scoping", () =>
     function createCellStore(): MultiremiStore {
       matrixDb?.close();
       if (dialect === "sqlite") {
-        const store = createLocalStore();
-        matrixDb = db!;
-        return store;
+        matrixDb = deserializeSqliteDatabase(sqliteTemplate) as unknown as SqlDatabase;
+        return new MultiremiStore(matrixDb);
       }
       if (cellDatabase) admin.exec(`DROP DATABASE ${cellDatabase} WITH (FORCE)`);
       cellDatabase = `${template}_${++sequence}`;
@@ -1029,9 +1033,9 @@ describe("Multiremi store — task claim, routing, and workspace scoping", () =>
           const parent = store.createIssueSession(issue.id, { title: "Main", holdsWorkspace: true });
           store.getOrCreateSessionAgentLane(parent.id, agent.id);
           matrixDb.run(
-            `UPDATE multiremi_session_agent_lanes SET runtime_id = ?, provider = 'codex',
+            `UPDATE multiremi_session_lanes SET runtime_id = ?, provider = 'codex',
                provider_session_id = 'sess_matrix_code', updated_at = ?
-             WHERE session_id = ? AND agent_id = ?`,
+             WHERE session_id = ? AND reader_id = ?`,
             [codex.id, "2026-01-01T00:00:00.000Z", parent.id, agent.id],
           );
           sessionId = store.createIssueSession(issue.id, {
@@ -1069,19 +1073,16 @@ describe("Multiremi store — task claim, routing, and workspace scoping", () =>
         } else if (shape === "runtime-workspace-archived-on-M") {
           matrixDb.run("UPDATE multiremi_runtime_workspaces SET archived_at = ? WHERE id = ?", [new Date().toISOString(), workspace.id]);
         }
-        matrixDb.run("UPDATE multiremi_tasks SET runtime_workspace_id = ? WHERE id = ?", [workspace.id, taskId]);
+        runTurnExecutionMutation(matrixDb, "UPDATE multiremi_turn_execution_records SET runtime_workspace_id = ? WHERE id = ?", [workspace.id, taskId]);
       } else if (shape === "frozen-retry-on-M") {
-        matrixDb.run(
-          `UPDATE multiremi_tasks SET runtime_id = ?, attempt = 2, execution_fingerprint = 'matrix-fp' WHERE id = ?`,
-          [codex.id, taskId],
-        );
+        runTurnExecutionMutation(matrixDb, `UPDATE multiremi_turn_execution_records SET runtime_id = ?, attempt = 2, execution_fingerprint = 'matrix-fp' WHERE id = ?`, [codex.id, taskId]);
       }
       if (pin === "task-pinned-M-legacy") {
-        matrixDb.run("UPDATE multiremi_tasks SET runtime_id = ? WHERE id = ?", [legacy.id, taskId]);
+        runTurnExecutionMutation(matrixDb, "UPDATE multiremi_turn_execution_records SET runtime_id = ? WHERE id = ?", [legacy.id, taskId]);
       } else if (pin === "agent-bound-M-legacy-unpinned") {
         // Isolate the Agent constraint from the task pin. With U's workspace,
         // removing agentBinding must now change (c) into the daemon fallback.
-        matrixDb.run("UPDATE multiremi_tasks SET runtime_id = NULL WHERE id = ?", [taskId]);
+        runTurnExecutionMutation(matrixDb, "UPDATE multiremi_turn_execution_records SET runtime_id = NULL WHERE id = ?", [taskId]);
       }
       return {
         store, codexId: codex.id, claudeId: claude.id, legacyId: legacy.id,
@@ -1219,7 +1220,7 @@ describe("Multiremi store — task claim, routing, and workspace scoping", () =>
               // Observe while still queued: claiming first would clear a wrong
               // wait reason and hide disagreement with an allowed routing state.
               const now = Date.now();
-              matrixDb.run("UPDATE multiremi_tasks SET created_at = ? WHERE id = ?", [
+              runTurnExecutionMutation(matrixDb, "UPDATE multiremi_turn_execution_records SET created_at = ? WHERE id = ?", [
                 new Date(now - 200_000).toISOString(), fixture.taskId,
               ]);
               fixture.store.refreshQueuedCapabilityWaitReasons(now);
@@ -1350,8 +1351,8 @@ describe("Multiremi store — task claim, routing, and workspace scoping", () =>
     const p2Issue = store.createIssue({ title: "P2 issue", projectId: p2.id, workspaceId: "local" });
     const p2Session = store.createIssueSession(p2Issue.id, { title: "Discussion", holdsWorkspace: false });
     db!.run(
-      `INSERT INTO multiremi_session_agent_lanes
-         (session_id, agent_id, execution_scope, provider_session_id, runtime_id, provider, generation, status, created_at, updated_at)
+      `INSERT INTO multiremi_session_lanes
+         (session_id, reader_id, execution_scope, provider_session_id, runtime_id, provider, generation, status, created_at, updated_at)
        VALUES (?, ?, '', 'sess_from_mbp', ?, 'codex', 1, 'active', ?, ?)`,
       [p2Session.id, agent.id, personal.id, "2026-01-01T00:00:00.000Z", "2026-01-01T00:00:00.000Z"],
     );
@@ -1414,10 +1415,10 @@ describe("Multiremi store — task claim, routing, and workspace scoping", () =>
     const session = store.createIssueSession(issue.id, { title: "Discussion", holdsWorkspace: false });
     const task = store.createTask({ agentId: agent.id, issueId: issue.id, issueSessionId: session.id, prompt: "resume" });
     // Simulate a historical lane and queued task left on B after the binding moved.
-    db!.run("UPDATE multiremi_tasks SET runtime_id = ?, session_id = ? WHERE id = ?", [b.id, "sess_stale", task.id]);
+    runTurnExecutionMutation(db!, "UPDATE multiremi_turn_execution_records SET runtime_id = ?, session_id = ? WHERE id = ?", [b.id, "sess_stale", task.id]);
     db!.run(
-      `UPDATE multiremi_session_agent_lanes SET runtime_id = ?, provider_session_id = ?
-       WHERE session_id = ? AND agent_id = ?`,
+      `UPDATE multiremi_session_lanes SET runtime_id = ?, provider_session_id = ?
+       WHERE session_id = ? AND reader_id = ?`,
       [b.id, "sess_stale", session.id, agent.id],
     );
     expect(store.claimTask(b.id)).toBeNull();
@@ -1528,7 +1529,7 @@ describe("Multiremi store — task claim, routing, and workspace scoping", () =>
     const holdingTask = store.createTask({
       agentId: agent.id, issueId: issue.id, issueSessionId: holding.id, prompt: "work",
     });
-    db!.run("UPDATE multiremi_tasks SET runtime_id = ? WHERE id IN (?, ?)", [a.id, discussionTask.id, holdingTask.id]);
+    runTurnExecutionMutation(db!, "UPDATE multiremi_turn_execution_records SET runtime_id = ? WHERE id IN (?, ?)", [a.id, discussionTask.id, holdingTask.id]);
 
     // The base re-pool path reads the same helper: the discussion turn must be
     // released, while the workspace-holding turn keeps its directory pin.
@@ -1555,7 +1556,7 @@ describe("Multiremi store — task claim, routing, and workspace scoping", () =>
       agentId: agent.id, issueId: issue.id, issueSessionId: session.id, prompt: "hold",
     });
     expect(store.claimTask(devbox.id)?.id).toBe(task.id);
-    db!.run("UPDATE multiremi_tasks SET status = 'queued', runtime_id = ? WHERE id = ?", [devbox.id, task.id]);
+    runTurnExecutionMutation(db!, "UPDATE multiremi_turn_execution_records SET status = 'queued', runtime_id = ? WHERE id = ?", [devbox.id, task.id]);
 
     store.deleteProjectDevice(project.id, "dev-ws-a");
     store.createProjectDevice(project.id, { daemonId: "dev-ws-b" });
@@ -1610,8 +1611,8 @@ describe("Multiremi store — task claim, routing, and workspace scoping", () =>
     const issue = store.createIssue({ title: "No project", workspaceId: "local" });
     const session = store.createIssueSession(issue.id, { title: "Discussion", holdsWorkspace: false });
     db!.run(
-      `INSERT INTO multiremi_session_agent_lanes
-         (session_id, agent_id, execution_scope, provider_session_id, runtime_id, provider, generation, status, created_at, updated_at)
+      `INSERT INTO multiremi_session_lanes
+         (session_id, reader_id, execution_scope, provider_session_id, runtime_id, provider, generation, status, created_at, updated_at)
        VALUES (?, ?, '', 'sess_projectless', ?, 'codex', 1, 'active', ?, ?)`,
       [session.id, agent.id, personal.id, "2026-01-01T00:00:00.000Z", "2026-01-01T00:00:00.000Z"],
     );
@@ -1721,7 +1722,7 @@ describe("Multiremi store — task claim, routing, and workspace scoping", () =>
 
     expect(store.claimTask(devbox.id)?.id).toBe(task.id);
     store.createProjectDevice(project.id, { daemonId: "device-stale-personal" });
-    db!.run("UPDATE multiremi_tasks SET dispatched_at = ? WHERE id = ?", ["2000-01-01T00:00:00.000Z", task.id]);
+    runTurnExecutionMutation(db!, "UPDATE multiremi_turn_execution_records SET dispatched_at = ? WHERE id = ?", ["2000-01-01T00:00:00.000Z", task.id]);
 
     expect(store.claimTask(devbox.id)).toBeNull();
     expect(store.getTask(task.id)).toMatchObject({ status: "queued", runtimeId: null });
@@ -1751,7 +1752,7 @@ describe("Multiremi store — task claim, routing, and workspace scoping", () =>
 
     expect(store.claimTask(personal.id)?.id).toBe(task.id);
     store.updateDaemonDedicated("local", "device-stale-dedicated", true, "local");
-    db!.run("UPDATE multiremi_tasks SET dispatched_at = ? WHERE id = ?", ["2000-01-01T00:00:00.000Z", task.id]);
+    runTurnExecutionMutation(db!, "UPDATE multiremi_turn_execution_records SET dispatched_at = ? WHERE id = ?", ["2000-01-01T00:00:00.000Z", task.id]);
 
     expect(store.claimTask(personal.id)).toBeNull();
     expect(store.getTask(task.id)).toMatchObject({ status: "queued", runtimeId: null });
@@ -1982,7 +1983,7 @@ describe("Multiremi store — task claim, routing, and workspace scoping", () =>
     expect(completed.status).toBe("completed");
     expect(completed.result).toBe("done");
     expect(completed.sessionId).toBe("sess_1");
-    const rawResult = db!.query("SELECT result FROM multiremi_tasks WHERE id = ?").get(codexTask.id) as { result: string };
+    const rawResult = db!.query("SELECT result FROM multiremi_turn_execution_records WHERE id = ?").get(codexTask.id) as { result: string };
     expect(JSON.parse(rawResult.result)).toEqual({
       pr_url: "",
       output: "done",
@@ -1992,9 +1993,15 @@ describe("Multiremi store — task claim, routing, and workspace scoping", () =>
     expect(store.listTaskMessages(codexTask.id)).toHaveLength(2);
     expect(store.getTask(codexTask.id)?.usage[0].inputTokens).toBe(10);
 
-    const legacyTask = store.createTask({ agentId: agent.id, prompt: "legacy result row" });
-    db!.run("UPDATE multiremi_tasks SET status = 'completed', result = ? WHERE id = ?", ["legacy done", legacyTask.id]);
-    expect(store.getTask(legacyTask.id)?.result).toBe("legacy done");
+    const legacy = openSqliteDatabase(":memory:");
+    try {
+      bootstrapPreUnifiedSchema(legacy);
+      const h = historicalWriters(legacy);
+      const legacyAgent = h.createAgent({ name: "Historical", provider: "codex" });
+      const legacyTask = h.createTask({ agentId: legacyAgent.id, prompt: "legacy result row" });
+      legacy.run("UPDATE multiremi_tasks SET status = 'completed', result = ? WHERE id = ?", ["legacy done", legacyTask.id]);
+      expect(new MultiremiStore(legacy).getTask(legacyTask.id)?.result).toBe("legacy done");
+    } finally { legacy.close(); }
   });
 
   it("routes tasks to an agent-bound runtime before falling back to provider matching", () => {
@@ -2412,7 +2419,7 @@ describe("Multiremi store — task claim, routing, and workspace scoping", () =>
     expect(store.claimTask(codex.id)?.id).toBe(task.id);
     store.startTask(task.id);
     // Simulate a pre-snapshot in-flight task (rolling upgrade): clear provider.
-    db!.run("UPDATE multiremi_tasks SET provider = NULL WHERE id = ?", [task.id]);
+    runTurnExecutionMutation(db!, "UPDATE multiremi_turn_execution_records SET provider = NULL WHERE id = ?", [task.id]);
     store.failTask(task.id, { error: "offline", failureReason: "runtime_offline" });
     const retry = store.listTasks().find((t) => t.parentTaskId === task.id)!;
     // Unknown execution engine → can't prove resume-safety → fresh re-pool.
@@ -2465,7 +2472,7 @@ describe("Multiremi store — task claim, routing, and workspace scoping", () =>
     const issueSession = store.getOrCreateDefaultIssueSession(issue.id);
     store.getOrCreateSessionAgentLane(issueSession.id, agent.id);
     db!.run(
-      "UPDATE multiremi_session_agent_lanes SET runtime_id = ? WHERE session_id = ? AND agent_id = ?",
+      "UPDATE multiremi_session_lanes SET runtime_id = ? WHERE session_id = ? AND reader_id = ?",
       [oldRuntime.id, issueSession.id, agent.id],
     );
     store.reportIssueWorkspace({

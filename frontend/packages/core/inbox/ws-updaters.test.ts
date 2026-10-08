@@ -1,81 +1,23 @@
-import { describe, it, expect } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { QueryClient } from "@tanstack/react-query";
-import { onInboxIssueDeleted, onInboxIssueStatusChanged } from "./ws-updaters";
 import { inboxKeys } from "./queries";
-import type { InboxItem } from "../types";
-
-const wsId = "ws-1";
-
-function makeItem(
-  id: string,
-  issueId: string | null,
-  overrides: Partial<InboxItem> = {},
-): InboxItem {
-  return {
-    id,
-    workspace_id: wsId,
-    recipient_type: "member",
-    recipient_id: "user-1",
-    actor_type: null,
-    actor_id: null,
-    type: "mentioned",
-    severity: "info",
-    issue_id: issueId,
-    title: `item ${id}`,
-    body: null,
-    issue_status: null,
-    read: false,
-    archived: false,
-    created_at: "2025-01-01T00:00:00Z",
-    details: null,
-    ...overrides,
-  };
-}
-
-describe("onInboxIssueDeleted", () => {
-  it("detaches ledger history and removes actions for the deleted issue", () => {
+import { onInboxInvalidate, onInboxIssueDeleted, onInboxIssueStatusChanged } from "./ws-updaters";
+describe("inbox refresh", () => {
+  it("invalidates cursor pages and global counts together without mutating another workspace", () => {
     const qc = new QueryClient();
-    const items = [
-      makeItem("i1", "issue-a", {
-        type: "autopilot_run_failed",
-        issue_status: "done",
-      }),
-      makeItem("i2", "issue-a", { type: "comment_mention" }),
-      makeItem("i3", "issue-b"),
-      makeItem("i4", null),
-    ];
-    qc.setQueryData<InboxItem[]>(inboxKeys.list(wsId), items);
-
-    onInboxIssueDeleted(qc, wsId, "issue-a");
-
-    const after = qc.getQueryData<InboxItem[]>(inboxKeys.list(wsId));
-    expect(after?.map((i) => i.id)).toEqual(["i1", "i3", "i4"]);
-    expect(after?.find((i) => i.id === "i1")).toMatchObject({
-      issue_id: null,
-      issue_status: null,
-    });
+    qc.setQueryData(inboxKeys.pages("ws-1"), { pages: [{ items: [], next_cursor: "opaque" }] });
+    qc.setQueryData(inboxKeys.summary("ws-1"), { unread_count: 7 });
+    qc.setQueryData(inboxKeys.summary("ws-2"), { unread_count: 3 });
+    const invalidate = vi.spyOn(qc, "invalidateQueries");
+    onInboxInvalidate(qc, "ws-1");
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: inboxKeys.all("ws-1") });
+    expect(qc.getQueryState(inboxKeys.summary("ws-1"))?.isInvalidated).toBe(true);
+    expect(qc.getQueryState(inboxKeys.summary("ws-2"))?.isInvalidated).toBe(false);
   });
-
-  it("is a no-op when the inbox cache is empty", () => {
-    const qc = new QueryClient();
-    expect(() => onInboxIssueDeleted(qc, wsId, "issue-a")).not.toThrow();
-    expect(qc.getQueryData<InboxItem[]>(inboxKeys.list(wsId))).toBeUndefined();
-  });
-});
-
-describe("onInboxIssueStatusChanged", () => {
-  it("updates issue_status only for items referencing the issue", () => {
-    const qc = new QueryClient();
-    const items = [
-      makeItem("i1", "issue-a", { issue_status: "todo" }),
-      makeItem("i2", "issue-b", { issue_status: "todo" }),
-    ];
-    qc.setQueryData<InboxItem[]>(inboxKeys.list(wsId), items);
-
-    onInboxIssueStatusChanged(qc, wsId, "issue-a", "done");
-
-    const after = qc.getQueryData<InboxItem[]>(inboxKeys.list(wsId));
-    expect(after?.find((i) => i.id === "i1")?.issue_status).toBe("done");
-    expect(after?.find((i) => i.id === "i2")?.issue_status).toBe("todo");
+  it("refreshes authoritative visibility after an issue status change or deletion", () => {
+    const qc = new QueryClient(); const invalidate = vi.spyOn(qc, "invalidateQueries");
+    onInboxIssueStatusChanged(qc, "ws-1", "iss-1", "done");
+    onInboxIssueDeleted(qc, "ws-1", "iss-1");
+    expect(invalidate.mock.calls.filter(([filter]) => filter?.queryKey?.[0] === "inbox")).toHaveLength(2);
   });
 });

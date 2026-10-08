@@ -22,7 +22,7 @@ export const AGENT_COMMENTED_EQUIVALENCE_CASES = [
 
 describe("MUL-427 ruling (e): agentCommentedSince query equivalence", () => {
   for (const backend of ["sqlite", "pg"] as const) {
-    it.skipIf(backend === "pg" && !pgAdminUrl)(`${backend}: all legacy predicates have identical log results`, async () => {
+    it.skipIf(backend === "pg" && !pgAdminUrl)(`${backend}: canonical comment predicates retain author, turn, visibility and time boundaries`, async () => {
       await withStore(backend, (store, db) => {
         const reader = (store as unknown as { tasks: {
           agentCommentedSince(issueId: string, agentId: string, since: string | null, taskId: string): boolean;
@@ -34,7 +34,7 @@ describe("MUL-427 ruling (e): agentCommentedSince query equivalence", () => {
         for (const [name, expected] of AGENT_COMMENTED_EQUIVALENCE_CASES) {
           const issue = store.createIssue({ title: name, workspaceId: "local" });
           const session = store.getOrCreateDefaultIssueSession(issue.id);
-          let taskId = "tsk_comment_matrix";
+          let taskId = store.createSessionTask(session.id,{agentId:agent.id,prompt:"Matrix input"}).id;
           const sourceIssue = name === "different issue"
             ? store.createIssue({ title: "Other issue", workspaceId: "local" }) : issue;
           const sourceSession = name === "same issue side session"
@@ -54,17 +54,20 @@ describe("MUL-427 ruling (e): agentCommentedSince query equivalence", () => {
           } else if (name.includes("system comment")) {
             commentId = store.createTaskFailureSystemComment(issue.id, session.id, taskId, "System reply").id;
             if (name === "agent-authored system comment") {
-              db.run("UPDATE multiremi_issue_comments SET author_type = 'agent', author_id = ? WHERE id = ?", [agent.id, commentId]);
-              db.run("UPDATE multiremi_conversation_log SET author_type = 'agent', author_id = ? WHERE id = ?", [agent.id, commentId]);
+
+              db.run("UPDATE multiremi_conversation_log SET sender_type = 'agent', sender_id = ? WHERE id = ?", [agent.id, commentId]);
             }
           } else {
             const comment = store.createIssueComment(sourceIssue.id, {
               issueSessionId: sourceSession.id, body: name,
-              taskId: name === "different task" ? "tsk_other_matrix" : taskId,
+              taskId: ["different task","different agent"].includes(name) ? store.createSessionTask(sourceSession.id,{agentId:otherAgent.id,prompt:"Other matrix turn"}).id : taskId,
               authorType: name === "ordinary member comment" ? "member" : "agent",
-              authorId: name === "different agent" ? otherAgent.id : agent.id,
+              authorId: name === "ordinary member comment" ? "mem_local_local" : ["different agent","different task"].includes(name) ? otherAgent.id : agent.id,
             });
             commentId = comment.id;
+            // Exercise defensive predicates on historical mismatched source/author rows.
+            if(name==="different agent")db.run("UPDATE multiremi_conversation_log SET task_id=? WHERE id=?",[taskId,comment.id]);
+            if(name==="different task")db.run("UPDATE multiremi_conversation_log SET sender_id=? WHERE id=?",[agent.id,comment.id]);
             if (name === "edited comment") store.updateIssueComment(comment.id, { body: "Edited current body" });
             if (name === "deleted comment") store.deleteIssueComment(comment.id);
             if (name === "deleted comment with residual task id") {
@@ -77,17 +80,12 @@ describe("MUL-427 ruling (e): agentCommentedSince query equivalence", () => {
           if (commentId) {
             const createdAt = name === "before since" || name.startsWith("null since")
               ? "2026-01-01T00:00:00.000Z" : sinceBoundary;
-            db.run("UPDATE multiremi_issue_comments SET created_at = ? WHERE id = ?", [createdAt, commentId]);
+
             db.run("UPDATE multiremi_conversation_log SET created_at = ? WHERE id = ?", [createdAt, commentId]);
           }
           const since = name.startsWith("null since") ? null : sinceBoundary;
-          const base = `SELECT 1 AS present FROM multiremi_issue_comments
-            WHERE issue_id = ? AND author_type = 'agent' AND author_id = ? AND type = 'comment' AND task_id = ?`;
-          const oldResult = Boolean(since === null
-            ? db.query(`${base} LIMIT 1`).get(issue.id, agent.id, taskId)
-            : db.query(`${base} AND created_at >= ? LIMIT 1`).get(issue.id, agent.id, taskId, since));
-          const newResult = reader.agentCommentedSince(issue.id, agent.id, since, taskId);
-          expect({ name, oldResult, newResult }).toEqual({ name, oldResult: expected, newResult: expected });
+          expect({name,result:reader.agentCommentedSince(issue.id,agent.id,since,taskId)}).toEqual({name,result:expected});
+          for(const queued of store.listTasksForIssue(issue.id).filter(task=>task.status==="queued"))store.cancelTask(queued.id);
         }
       });
     }, 60_000);
@@ -105,7 +103,7 @@ describe("MUL-427 ruling (e): agentCommentedSince query equivalence", () => {
           taskId: task.id, body: "Already posted this round" });
         expect(store.getConversationLogEntryById(comment.id)?.task_id).toBe(task.id);
         const matches = db.query(`SELECT COUNT(*) AS n FROM multiremi_conversation_log
-          WHERE session_id = ? AND author_id = ? AND task_id = ? AND kind = 'message' AND deleted_at IS NULL`)
+          WHERE session_id = ? AND sender_id = ? AND task_id = ? AND kind = 'message' AND deleted_at IS NULL`)
           .get(session.id, agent.id, task.id) as { n: number };
         expect(Number(matches.n)).toBe(1);
         // Perturb the old source so completion proves the new query is used.
@@ -131,7 +129,7 @@ describe("MUL-427 ruling (e): agentCommentedSince query equivalence", () => {
         // A tombstone keeps task_id NULL from ruling (e); restore it so only deleted_at excludes the row.
         db.run("UPDATE multiremi_conversation_log SET task_id = ? WHERE id = ?", [task.id, comment.id]);
         expect(Number(db.query(`SELECT COUNT(*) AS n FROM multiremi_conversation_log
-          WHERE session_id = ? AND author_id = ? AND task_id = ? AND kind = 'message' AND deleted_at IS NULL`)
+          WHERE session_id = ? AND sender_id = ? AND task_id = ? AND kind = 'message' AND deleted_at IS NULL`)
           .get(session.id, agent.id, task.id)!.n)).toBe(0);
         store.completeTask(task.id, { output: "The automatic reply is still required" });
         const replies = store.listIssueComments(issue.id).filter((candidate) => candidate.authorId === agent.id);

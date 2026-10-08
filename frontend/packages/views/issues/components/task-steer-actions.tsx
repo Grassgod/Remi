@@ -3,6 +3,7 @@
 import { useId, useState } from "react";
 import { FastForward, Loader2, MessageSquarePlus } from "lucide-react";
 import { api } from "@multiremi/core/api";
+import { createSafeId } from "@multiremi/core/utils";
 import type { AgentTask } from "@multiremi/core/types";
 import { Button } from "@multiremi/ui/components/ui/button";
 import {
@@ -32,7 +33,7 @@ const TERMINAL_TASK_STATUSES = new Set<AgentTask["status"]>([
 ]);
 
 interface TaskSteerActionsProps {
-  task: Pick<AgentTask, "id" | "status">;
+  task: Pick<AgentTask, "id" | "status"> & Partial<Pick<AgentTask, "turn_id" | "issue_session_id" | "agent_id">>;
   showLabels?: boolean;
 }
 
@@ -43,10 +44,12 @@ export function TaskSteerActions({ task, showLabels = false }: TaskSteerActionsP
   const [content, setContent] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const fieldId = useId();
+  const [commandId, setCommandId] = useState("");
 
-  if (TERMINAL_TASK_STATUSES.has(task.status)) return null;
+  if (TERMINAL_TASK_STATUSES.has(task.status) || !task.turn_id || !task.issue_session_id || !task.agent_id) return null;
 
   const openDialog = (nextMode: TaskSteerMode) => {
+    setCommandId(createSafeId());
     setMode(nextMode);
     setContent("");
     setOpen(true);
@@ -58,12 +61,11 @@ export function TaskSteerActions({ task, showLabels = false }: TaskSteerActionsP
 
     setSubmitting(true);
     try {
-      await api.steerTask(
-        task.id,
-        mode === "force_answer"
-          ? { force_answer: true, ...(trimmed ? { content: trimmed } : {}) }
-          : { content: trimmed },
-      );
+      if (trimmed) await api.sendMessage(task.issue_session_id!, {
+        body_md: trimmed, message_kind: "request", to: { type: "agent", ref: task.agent_id! },
+        wake_requested: "now", dedupe_key: commandId,
+      });
+      if (mode === "force_answer") await api.controlTurn(task.turn_id!, "wrap-up");
       toast.success(
         mode === "force_answer"
           ? t(($) => $.task_steer.force_answer_sent)

@@ -153,28 +153,16 @@ export function useToggleCommentReaction(issueId: string, issueSessionId?: strin
       existing,
     }: ToggleCommentReactionVars) => {
       if (existing) {
-        await api.removeReaction(commentId, emoji);
-        return null;
+        return api.removeReaction(commentId, emoji);
       }
       return api.addReaction(commentId, emoji);
     },
-    onSuccess: (reaction, { commentId, existing }) => {
+    onSuccess: (reactions, { commentId }) => {
       qc.setQueryData<IssueTimelineData>(
         issueKeys.timeline(issueId, issueSessionId),
         (old) => mapTimelineEntries(old, (entry) => {
           if (entry.id !== commentId) return entry;
-          if (!reaction) {
-            return {
-              ...entry,
-              reactions: (entry.reactions ?? []).filter(
-                (candidate) => candidate.id !== existing?.id,
-              ),
-            };
-          }
-          if ((entry.reactions ?? []).some((candidate) => candidate.id === reaction.id)) {
-            return entry;
-          }
-          return { ...entry, reactions: [...(entry.reactions ?? []), reaction] };
+          return { ...entry, reactions };
         }),
       );
     },

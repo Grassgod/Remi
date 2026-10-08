@@ -22,7 +22,7 @@ import {
   PRODUCTION_TRACE_SHAPE,
   SYNTHETIC_CORPUS_DEFAULTS,
   type SyntheticCorpusParams,
-} from "../../../scripts/lib/task-trace-synthetic.js";
+} from "./trace-backfill-fixtures.js";
 import { traceBackfillBackends, type OpenedStore } from "./trace-backfill-backends.js";
 
 const TIMEOUT = 180_000;
@@ -46,7 +46,7 @@ function scalar(db: SqlDatabase, sql: string, ...values: unknown[]): number {
 
 function oldTableDigest(db: SqlDatabase): string {
   const hash = createHash("sha256");
-  for (const table of ["multiremi_tasks", "multiremi_task_messages", "multiremi_issues", "multiremi_chat_sessions"]) {
+  for (const table of ["multiremi_turns", "multiremi_turn_attempts", "multiremi_task_messages", "multiremi_issues", "multiremi_chat_sessions"]) {
     hash.update(JSON.stringify(db.query(`SELECT * FROM ${table} ORDER BY id`).all()));
   }
   return hash.digest("hex");

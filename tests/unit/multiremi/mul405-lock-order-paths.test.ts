@@ -487,13 +487,13 @@ describe("MUL-405 per-path lock order", () => {
     expect(outboundStatus(recorder, receipt.id)).toBe("failed");
   });
 
-  it("claimOutbound without an exhausted receipt: D only", () => {
+  it("claimOutbound without an exhausted receipt: W -> D", () => {
     const { store, recorder, runtimeId, receipt } = splitReceiptFixture();
     recorder.run("UPDATE multiremi_feishu_bot_outbound_deliveries SET status = 'pending', available_at = ? WHERE id = ?",
       new Date(Date.now() - 1_000).toISOString(), receipt.id);
     clear(recorder);
     store.claimFeishuBotOutbound("local", runtimeId, new Date(), true, true, true, true);
-    assertFrames("claimOutbound ordinary delivery", recorder, [["D"]]);
+    assertFrames("claimOutbound ordinary delivery", recorder, [["W", "D"]]);
   });
 
   it("reportOutbound terminal receipt: W -> N -> D in one transaction", () => {

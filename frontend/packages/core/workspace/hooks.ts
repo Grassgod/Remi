@@ -20,17 +20,18 @@ export function useActorName(
    * Row labels defer agent/squad lookups. Assignee board columns opt in
    * immediately because their headings depend on those names.
    */
-  options: { squadsEnabled?: boolean; agentsEnabled?: boolean } = {},
+  options: { enabled?: boolean; squadsEnabled?: boolean; agentsEnabled?: boolean } = {},
 ) {
   const wsId = useWorkspaceId();
   const gateOpen = useAfterFirstScreen();
   const squadsEnabled = options.squadsEnabled ?? gateOpen;
-  const { data: members = NO_MEMBERS } = useQuery(memberListOptions(wsId));
+  const enabled = options.enabled ?? true;
+  const { data: members = NO_MEMBERS } = useQuery({ ...memberListOptions(wsId), enabled });
   const { data: agents = NO_AGENTS } = useQuery(agentListOptions(wsId, {
-    enabled: options.agentsEnabled ?? gateOpen,
+    enabled: enabled && (options.agentsEnabled ?? gateOpen),
   }));
   const { data: squads = NO_SQUADS } = useQuery(
-    squadListOptions(wsId, { enabled: squadsEnabled }),
+    squadListOptions(wsId, { enabled: enabled && squadsEnabled }),
   );
 
   const getMemberName = useCallback((memberId: string) => {

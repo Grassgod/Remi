@@ -87,13 +87,15 @@ describe("MUL-436 shared server Hub wiring", () => {
       await subscribe(trace, "trace", task.id);
       const row = nextWebSocketMessage(log);
       const event = nextWebSocketMessage(trace);
-      hub.onEntry(session.id, { session_id: session.id, seq: 1, revision: 1, kind: "message", visibility: "shown", ...{ body_md: "original" } });
+      const entry = store.getConversationLogEntry(session.id, 1)!;
+      hub.onEntry(session.id, entry);
       hub.append(task.id, [{ seq: 1, ts: "2026-09-28T00:00:00.000Z", type: "text", content: "trace" }]);
       expect(await row).toMatchObject({ type: "stream.data", payload: { stream: "log", id: session.id, frames: [{ seq: 1, kind: "entry" }] } });
       expect(await event).toMatchObject({ type: "stream.data", payload: { stream: "trace", id: task.id, frames: [{ seq: 1 }] } });
       const edit = nextWebSocketMessage(log);
-      hub.onEntry(session.id, { session_id: session.id, target_seq: 1, revision: 2, fields: { body_md: "edited" } });
-      expect(await edit).toMatchObject({ type: "stream.data", payload: { frames: [{ seq: 1, kind: "patch", payload: { revision: 2, fields: { body_md: "edited" } } }] } });
+      const revision = entry.revision + 1;
+      hub.onEntry(session.id, { session_id: session.id, target_seq: 1, revision, fields: { body_md: "edited" } });
+      expect(await edit).toMatchObject({ type: "stream.data", payload: { frames: [{ seq: 1, kind: "patch", payload: { revision, fields: { body_md: "edited" } } }] } });
       const health = await (await fetch(`http://127.0.0.1:${server.port}/health`)).json() as Record<string, any>;
       expect(health.role).toBe("all");
       expect(health.hub).toEqual(hub.snapshot());

@@ -21,11 +21,11 @@ function plan(sql: string, params: string[] = []): string {
   return rows.map((row) => row.detail).join("; ");
 }
 
-describe("Task list pagination indexes", () => {
+describe("Turn list pagination indexes", () => {
   it("creates the created_at and status+created_at indexes and records the migration", () => {
     createStore();
-    expect(indexSql("idx_multiremi_tasks_created_at")).toContain("created_at DESC, id DESC");
-    expect(indexSql("idx_multiremi_tasks_status_created")).toContain("status, created_at DESC, id DESC");
+    expect(indexSql("idx_multiremi_turns_workspace_created")).toContain("workspace_id, created_at DESC, id DESC");
+    expect(indexSql("idx_multiremi_turns_workspace_status_created")).toContain("workspace_id, status, created_at DESC, id DESC");
     const applied = db!.query(
       "SELECT id FROM multiremi_schema_migrations WHERE id = '20260921_task_list_pagination_indexes'",
     ).all();
@@ -34,10 +34,10 @@ describe("Task list pagination indexes", () => {
 
   it("plans the unfiltered page and the status-filtered page through those indexes", () => {
     createStore();
-    const page = "SELECT * FROM multiremi_tasks WHERE 1 = 1%s ORDER BY created_at DESC, id DESC LIMIT 200";
-    expect(plan(page.replace("%s", "")))
-      .toContain("idx_multiremi_tasks_created_at");
-    expect(plan(page.replace("%s", " AND status = ?"), ["completed"]))
-      .toContain("idx_multiremi_tasks_status_created");
+    const page = "SELECT * FROM multiremi_turns WHERE workspace_id = ?%s ORDER BY created_at DESC, id DESC LIMIT 200";
+    expect(plan(page.replace("%s", ""), ["local"]))
+      .toContain("idx_multiremi_turns_workspace_created");
+    expect(plan(page.replace("%s", " AND status = ?"), ["local", "completed"]))
+      .toContain("idx_multiremi_turns_workspace_status_created");
   });
 });

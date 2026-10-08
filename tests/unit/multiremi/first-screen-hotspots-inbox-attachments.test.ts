@@ -1,15 +1,12 @@
-// MUL-473 (S9-2, PR2): guards for `GET /api/inbox/summary` and
+// MUL-473 (S9-2, PR2): guards for canonical `GET /api/inbox` counts and
 // `GET /api/attachments/:id/content`.
 //
 // Both routes were hotspots for the same reason the PR1 routes were: work
 // proportional to the number of rows, not to the answer.
 //
-//   1. `/api/inbox/summary` walked every unarchived inbox row across the bridge
-//      and de-duplicated/counted in JavaScript. It is now one aggregate plus a
-//      read of the successful-run payloads. The golden below is compared
-//      against a verbatim copy of the pre-change implementation running on the
-//      same fixture, so attention rules and the autopilot date-group merge are
-//      asserted against the old code, not against a restatement of the new one.
+//   1. Canonical inbox counts aggregate the unread message log independently
+//      of the paginated payload. Retired notification timezone folds do not
+//      participate in unread or attention counts.
 //   2. `/api/attachments/:id/content` re-sent the whole file on every request
 //      with `Cache-Control: no-store`. It now streams with an `ETag` and an
 //      immutable cache directive, and answers `304` when the client already has
@@ -22,6 +19,7 @@ import { dirname, join } from "node:path";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { INBOX_LEDGER_TYPES } from "@multiremi/contracts";
 import type { SqlDatabase, SqlStatement } from "@multiremi/store/db/postgres.js";
+import { readProcessDbCounters } from "@multiremi/observability/request-metrics.js";
 import { MultiremiStore } from "@multiremi/store.js";
 import { nullableString } from "@multiremi/store/helpers.js";
 import { openHotspotDatabase } from "../../fixtures/multiremi/first-screen-hotspots-database.js";
@@ -72,7 +70,7 @@ function countingDatabase(raw: SqlDatabase, probe: Probe): SqlDatabase {
   const record = (sql: string, rows: unknown[]): void => {
     probe.statements += 1;
     probe.rows += rows.length;
-    if (rows.length) probe.bytes += JSON.stringify({ rows, count: rows.length }).length;
+    probe.bytes += Buffer.byteLength(JSON.stringify({ rows, count: rows.length }), "utf8");
     const key = sql.replace(/\s+/g, " ").trim();
     probe.bySql.set(key, (probe.bySql.get(key) ?? 0) + 1);
   };
@@ -116,77 +114,6 @@ function countingDatabase(raw: SqlDatabase, probe: Probe): SqlDatabase {
       return typeof value === "function" ? value.bind(source) : value;
     },
   });
-}
-
-/**
- * Verbatim pre-MUL-473 `getInboxSummary` (parent commit `593ff2ba`), kept in the
- * test so the comparison is against the old rules rather than a restatement of
- * the new SQL. The `dateGroup` helper is copied from the same commit.
- */
-function legacyDateGroup(createdAt: string, now: Date, timezoneOffsetMinutes: number): string {
-  const localTimestamp = (value: Date) => value.getTime() - timezoneOffsetMinutes * 60_000;
-  const shiftedNow = new Date(localTimestamp(now));
-  const startToday = Date.UTC(shiftedNow.getUTCFullYear(), shiftedNow.getUTCMonth(), shiftedNow.getUTCDate());
-  const startYesterday = startToday - 86_400_000;
-  const daySinceMonday = (shiftedNow.getUTCDay() + 6) % 7;
-  const startWeek = startToday - daySinceMonday * 86_400_000;
-  const timestamp = localTimestamp(new Date(createdAt));
-  if (timestamp >= startToday) return "today";
-  if (timestamp >= startYesterday) return "yesterday";
-  if (timestamp >= startWeek) return "this_week";
-  return "earlier";
-}
-
-function legacyInboxSummary(
-  db: SqlDatabase,
-  memberId: string,
-  timezoneOffsetMinutes: number,
-  workspaceId?: string,
-): { unread: number; attention: number } {
-  const workspaceFilter = workspaceId === undefined ? "" : " AND workspace_id = ?";
-  const params = workspaceId === undefined ? [memberId] : [memberId, workspaceId];
-  const rows = db.query(
-    `SELECT id, issue_id, type, severity, read, created_at,
-            CASE WHEN type = 'autopilot_run_completed' THEN details ELSE NULL END AS details
-     FROM multiremi_inbox_items
-     WHERE member_id = ?${workspaceFilter} AND archived = 0
-     ORDER BY created_at DESC, id DESC`,
-  ).all(...(params as never[])) as Array<Record<string, unknown>>;
-  const visible: Array<Record<string, unknown>> = [];
-  const selectionKeys = new Set<string>();
-  for (const row of rows) {
-    const issueId = nullableString(row.issue_id);
-    const type = String(row.type);
-    const key = (INBOX_LEDGER_TYPES as readonly string[]).includes(type) || !issueId
-      ? `item:${row.id}`
-      : `issue:${issueId}`;
-    if (selectionKeys.has(key)) continue;
-    selectionKeys.add(key);
-    visible.push(row);
-  }
-  const attention = visible.filter((row) =>
-    Number(row.read ?? 0) === 0
-    && (row.severity === "attention" || row.severity === "action_required")).length;
-  const now = new Date();
-  const mergedSuccessfulRuns = new Map<string, { unread: boolean }>();
-  let unread = 0;
-  for (const row of visible) {
-    const isUnread = Number(row.read ?? 0) === 0;
-    const details = row.type === "autopilot_run_completed" && typeof row.details === "string"
-      ? JSON.parse(row.details) as Record<string, unknown> | null
-      : null;
-    const autopilotId = typeof details?.autopilot_id === "string" ? details.autopilot_id : null;
-    if (!autopilotId) {
-      if (isUnread) unread += 1;
-      continue;
-    }
-    const mergeKey = `${legacyDateGroup(String(row.created_at), now, timezoneOffsetMinutes)}:${autopilotId}`;
-    const merged = mergedSuccessfulRuns.get(mergeKey);
-    if (merged) merged.unread ||= isUnread;
-    else mergedSuccessfulRuns.set(mergeKey, { unread: isUnread });
-  }
-  unread += [...mergedSuccessfulRuns.values()].filter((entry) => entry.unread).length;
-  return { unread, attention };
 }
 
 interface Harness {
@@ -234,234 +161,66 @@ async function getInboxSummary(
   timezoneOffset: number,
 ): Promise<{ body: { unread: number; attention: number }; statements: number; bytes: number }> {
   harness.probe.reset();
-  const response = await harness.app.request(`/api/inbox/summary?timezone_offset=${timezoneOffset}`, {
+  const beforeBytes = readProcessDbCounters().dbBytes;
+  const response = await harness.app.request("/api/inbox"+`?timezone_offset=${timezoneOffset}`, {
     headers: harness.headers,
   });
   const text = await response.text();
   const statements = harness.probe.statements;
-  const bytes = harness.probe.bytes;
+  // PG counts the actual bridge frames, including empty replies and command metadata.
+  const bytes = harness.db.dialect === "postgres"
+    ? readProcessDbCounters().dbBytes - beforeBytes
+    : harness.probe.bytes;
+  expect(bytes).toBeGreaterThan(0);
   if (response.status !== 200) throw new Error(`inbox summary: HTTP ${response.status} ${text.slice(0, 300)}`);
-  return { body: JSON.parse(text) as { unread: number; attention: number }, statements, bytes };
+  const page = JSON.parse(text) as { unread_count: number; attention_count: number };
+  return { body: { unread: page.unread_count, attention: page.attention_count }, statements, bytes };
 }
 
 describe("MUL-473 inbox summary", () => {
-  it("MUL-395: preserves millisecond date/week boundaries, JSON edge shapes and identity isolation", async () => {
-    const harness = await createHarness({ sessions: 1, agents: 1, inboxRows: 0 });
-    const RealDate = Date;
-    const now = Date.UTC(2026, 9, 5, 0, 0, 0, 500); // Monday immediately after midnight.
-    class FixedDate extends RealDate {
-      constructor(...args: unknown[]) { if (args.length) super(...(args as [string])); else super(now); }
-      static now() { return now; }
-    }
-    globalThis.Date = FixedDate as DateConstructor;
-    try {
-      const insert = harness.db.query(`INSERT INTO multiremi_inbox_items
-        (id, workspace_id, member_id, recipient_type, recipient_id, type, title, body, details, read, archived, created_at)
-        VALUES (?, ?, ?, 'member', ?, 'autopilot_run_completed', 'run', '', ?, ?, ?, ?)`);
-      for (const offset of [0, -480, 300, -840, 840]) {
-        harness.db.run("DELETE FROM multiremi_inbox_items");
-        const shifted = new RealDate(now - offset * 60_000);
-        const today = RealDate.UTC(shifted.getUTCFullYear(), shifted.getUTCMonth(), shifted.getUTCDate()) + offset * 60_000;
-        const monday = today - ((shifted.getUTCDay() + 6) % 7) * 86_400_000;
-        const times = [today - 1, today, today + 1, today - 86_400_000 - 1, today - 86_400_000,
-          monday - 1, monday, monday + 1, monday - 8 * 86_400_000];
-        const details = ['null', '[]', '42', '"scalar"', '{}', '{"autopilot_id":null}', '{"autopilot_id":false}',
-          '{"autopilot_id":""}', '{"autopilot_id":"a"}', '{"autopilot_id":"a","autopilot_id":"b"}',
-          JSON.stringify({ autopilot_id: "quote\"\\\n" })];
-        let index = 0;
-        for (const time of times) for (const detail of details) for (const read of [0, 1]) {
-          insert.run(`inb_boundary_${index++}`, harness.fixture.workspaceId, harness.fixture.readerMemberId,
-            harness.fixture.readerMemberId, detail, read, 0, new RealDate(time).toISOString());
-        }
-        const expected = legacyInboxSummary(harness.db, harness.fixture.readerMemberId, offset, harness.fixture.workspaceId);
-        expect((await getInboxSummary(harness, offset)).body).toEqual(expected);
-        insert.run("inb_archived", harness.fixture.workspaceId, harness.fixture.readerMemberId, harness.fixture.readerMemberId, '{}', 0, 1, new RealDate(today).toISOString());
-        insert.run("inb_other_member", harness.fixture.workspaceId, "other_member", "other_member", '{}', 0, 0, new RealDate(today).toISOString());
-        insert.run("inb_other_workspace", "other_workspace", harness.fixture.readerMemberId, harness.fixture.readerMemberId, '{}', 0, 0, new RealDate(today).toISOString());
-        expect((await getInboxSummary(harness, offset)).body).toEqual(expected);
-        // Invalid JSON has the same no-autopilot behavior as {}. The frozen
-        // legacy witness predates JSON tolerance, so compare valid counterparts.
-        insert.run("inb_invalid", harness.fixture.workspaceId, harness.fixture.readerMemberId, harness.fixture.readerMemberId, '{}', 0, 0, new RealDate(today).toISOString());
-        const withStandalone = legacyInboxSummary(harness.db, harness.fixture.readerMemberId, offset, harness.fixture.workspaceId);
-        for (const invalid of [null, "", "invalid json"]) {
-          harness.db.run("UPDATE multiremi_inbox_items SET details = ? WHERE id = 'inb_invalid'", [invalid]);
-          expect((await getInboxSummary(harness, offset)).body).toEqual(withStandalone);
-        }
-      }
-    } finally { globalThis.Date = RealDate; }
-  }, 20000);
+  it("counts canonical messages independently of the retired timezone folds", async () => {
+    const harness=await createHarness();
+    const expected={unread:harness.fixture.counts.inboxUnread,attention:harness.fixture.counts.inboxAttention};
+    expect((await getInboxSummary(harness,0)).body).toEqual(expected);
+    expect(expected.unread).toBe(300);expect(expected.attention).toBe(120);
+    // Resolving work removes attention, while reading removes the message.
+    const session=harness.store.getOrCreateDefaultIssueSession(harness.fixture.issueIds[0]!).id;
+    harness.store.resolveMessage('msg_hotspot_1',{type:'member',id:harness.fixture.readerMemberId});
+    expect((await getInboxSummary(harness,0)).body).toEqual({unread:300,attention:119});
+    const read=await harness.app.request('/api/inbox/read',{method:'POST',headers:{...harness.headers,'Content-Type':'application/json'},body:JSON.stringify({session_id:session})});
+    expect(read.status).toBe(200);
+    expect((await getInboxSummary(harness,0)).body).toEqual({unread:0,attention:0});
+  },20000);
 
-  it("MUL-395 B1: tolerates all JSON escapes without changing merge keys or bridge bytes", async () => {
-    const harness = await createHarness({ sessions: 1, agents: 1, inboxRows: 0 });
-    const insert = harness.db.query(`INSERT INTO multiremi_inbox_items
-      (id, workspace_id, member_id, recipient_type, recipient_id, type, title, body, details, read, archived, created_at)
-      VALUES (?, ?, ?, 'member', ?, 'autopilot_run_completed', 'run', '', ?, 0, 0, ?)`);
-    const details = [
-      '{"autopilot_id":"valid","filler":"\\u0000"}',
-      '{"autopilot_id":"valid","filler":"\\ud800"}',
-      '{"autopilot_id":"valid","filler":{"nested":["\\udfff","\\u0000"]}}',
-      '{"\\u0061utopilot\\u005fid":"v\\u0061lid"}',
-      '{"autopilot_id":"wrong","autopilot_id":"valid"}',
-      '{"autopilot_id":"valid","autopilot_id":null}',
-      '{"autopilot_id":"valid","autopilot_id":42}',
-      '{"nested":{"autopilot_id":"wrong"},"autopilot_id":"valid"}',
-      '{"\\ud800":"bad key","autopilot_id":"valid"}',
-      '{"autopilot_id":"valid","autopilot_id":{"nested":"value"}}',
-      '{"autopilot_id":"valid","autopilot_id":["value"]}',
-      '{"autopilot_id":"a\\u0000b"}', '{"autopilot_id":"a\\ud800b"}',
-      '{"autopilot_id":"a\\ud800b"}', '{"autopilot_id":"a\\udc00b"}',
-      '{"autopilot_id":"\\ud83d\\ude00"}', JSON.stringify({ autopilot_id: "😀" }),
-      JSON.stringify({ autopilot_id: '\\u0000' }),
-      JSON.stringify({ autopilot_id: 'quote" slash/ backslash\\ tab\t\n\r\b\f' }),
-      '{"autopilot_id":""}', '{}', 'null', '[]', '42', '"scalar"',
-    ];
-    // Equivalent escapes must merge, including surrogate pairs and strings
-    // whose UTF-16 units cannot be represented in PostgreSQL text.
-    for (let index = 0; index < 32; index += 1) {
-      const id = String.fromCharCode(index * 2047, 0xd800 + index, 0xdc00 + index) + '\\u0000';
-      details.push(JSON.stringify({ autopilot_id: id, filler: '\u0000' }));
-      const escaped = [...Array(id.length)].map((_, n) => '\\u' + id.charCodeAt(n).toString(16).padStart(4, '0')).join('');
-      details.push('{"autopilot_id":"' + escaped + '","filler":"\\ud800"}');
-    }
-    const createdAt = new Date().toISOString();
-    for (const [index, detail] of details.entries()) insert.run(`inb_b1_${index}`, harness.fixture.workspaceId,
-      harness.fixture.readerMemberId, harness.fixture.readerMemberId, detail, createdAt);
-    const expected = legacyInboxSummary(harness.db, harness.fixture.readerMemberId, 0, harness.fixture.workspaceId);
-    expect((await getInboxSummary(harness, 0)).body).toEqual(expected);
-    // Invalid JSON and missing keys are standalone runs, as in H0 parseJson.
-    for (const [index, detail] of [null, '', 'invalid json', '{"autopilot_id":'].entries()) {
-      insert.run(`inb_b1_invalid_${index}`, harness.fixture.workspaceId, harness.fixture.readerMemberId,
-        harness.fixture.readerMemberId, detail, createdAt);
-    }
-    const invalidExpected = { ...expected, unread: expected.unread + 4 };
-    const before = await getInboxSummary(harness, 0);
-    expect(before.body).toEqual(invalidExpected);
-    // Grow only an unrelated field on every valid row, including the bad escapes.
-    for (const [index, detail] of details.entries()) {
-      const parsed = JSON.parse(detail);
-      if (parsed && !Array.isArray(parsed) && typeof parsed === 'object') {
-        parsed.large = 'x'.repeat(16 * 1024);
-        harness.db.run('UPDATE multiremi_inbox_items SET details = ? WHERE id = ?', [JSON.stringify(parsed), `inb_b1_${index}`]);
-      }
-    }
-    const after = await getInboxSummary(harness, 0);
-    expect(after.body).toEqual(invalidExpected);
-    expect(after.bytes).toBe(before.bytes);
-    expect(after.bytes).toBeLessThanOrEqual(50_000);
-  }, 20_000);
-
-  it("MUL-395: 5000 run payloads never cross the summary bridge", async () => {
-    const harness = await createHarness({ sessions: 1, agents: 1, inboxRows: 0 });
-    const insert = harness.db.query(`INSERT INTO multiremi_inbox_items
-      (id, workspace_id, member_id, recipient_type, recipient_id, type, title, body, details, read, archived, created_at)
-      VALUES (?, ?, ?, 'member', ?, 'autopilot_run_completed', 'run', '', ?, ?, 0, ?)`);
-    const shapes = [null, {}, { autopilot_id: "" }, { autopilot_id: 42 }, { autopilot_id: "a" }, { autopilot_id: "b" }];
-    harness.db.transaction(() => {
-      for (let i = 0; i < 5000; i++) insert.run(`inb_s96_${i}`, harness.fixture.workspaceId,
-        harness.fixture.readerMemberId, harness.fixture.readerMemberId,
-        JSON.stringify({ ...shapes[i % shapes.length], transcript: "x".repeat(2048) }),
-        i % 3 === 0 ? 1 : 0, new Date(Date.now() - (i % 14) * 86_400_000).toISOString());
-    })();
-    for (const offset of [0, -480, 300, 840]) {
-      const expected = legacyInboxSummary(harness.db, harness.fixture.readerMemberId, offset, harness.fixture.workspaceId);
-      const actual = await getInboxSummary(harness, offset);
-      expect(actual.body).toEqual(expected);
-      expect(actual.bytes).toBeLessThanOrEqual(50_000);
-      expect([...harness.probe.bySql.keys()].some((sql) => /SELECT read, created_at, details/.test(sql))).toBe(false);
-    }
-    const valid = (await getInboxSummary(harness, 0)).body;
-    harness.db.run("UPDATE multiremi_inbox_items SET details = 'invalid json' WHERE id = 'inb_s96_1'");
-    expect((await getInboxSummary(harness, 0)).body).toEqual(valid);
-    harness.db.run("UPDATE multiremi_inbox_items SET details = '{}' WHERE id = 'inb_s96_1'");
-    harness.db.run("UPDATE multiremi_inbox_items SET details = ? WHERE id = ?", ['{"autopilot_id":"a","autopilot_id":"b"}', 'inb_s96_1']);
-    expect((await getInboxSummary(harness, 0)).body).toEqual(
-      legacyInboxSummary(harness.db, harness.fixture.readerMemberId, 0, harness.fixture.workspaceId));
-  }, 20000);
-
-  it("matches the pre-change implementation on the same fixture, across timezones", async () => {
-    const harness = await createHarness();
-    for (const timezoneOffset of [0, 480, -300, 840]) {
-      const expected = legacyInboxSummary(harness.db, harness.fixture.readerMemberId, timezoneOffset, harness.fixture.workspaceId);
-      const actual = await getInboxSummary(harness, timezoneOffset);
-      expect(actual.body).toEqual(expected);
-      // The fixture's own declared counts are the third witness.
-      expect(actual.body.attention).toBeGreaterThan(0);
-      expect(actual.body.unread).toBeGreaterThan(0);
-    }
-  }, 20000);
-
-  it("matches the pre-change implementation on a random mix of inbox shapes", async () => {
-    let state = 0x473b_ee;
-    const random = (): number => {
-      state ^= state << 13;
-      state ^= state >>> 17;
-      state ^= state << 5;
-      state |= 0;
-      return (state >>> 8) & 0xffff;
-    };
-    const types = [
-      "autopilot_run_completed",
-      "autopilot_run_failed",
-      "autopilot_paused",
-      "issue_assigned",
-      "issue_comment",
-      "comment_mention",
-      "feishu_ingest_connection_alert",
-    ];
-    const severities = ["info", "attention", "action_required"];
-    const harness = await createHarness({ sessions: 1, agents: 1, issues: 4, inboxRows: 0 });
-    const { fixture } = harness;
-    const base = Date.UTC(2026, 8, 20, 12, 0, 0);
-    harness.db.run("DELETE FROM multiremi_inbox_items");
-    for (let index = 0; index < 180; index += 1) {
-      const createdAt = new Date(base - (random() % 20) * 86_400_000 - (random() % 5) * 3_600_000).toISOString();
-      const type = types[random() % types.length]!;
-      const details = random() % 4 === 0 ? null : JSON.stringify({ autopilot_id: `atp_${random() % 3}` });
-      harness.db.run(
-        `INSERT INTO multiremi_inbox_items (
-           id, workspace_id, issue_id, member_id, recipient_type, recipient_id,
-           severity, actor_type, actor_id, type, title, body, details, read, archived, created_at
-         ) VALUES (?, ?, ?, ?, 'member', ?, ?, 'system', NULL, ?, 't', 'b', ?, ?, 0, ?)`,
-        [
-          `inb_random_${index}`,
-          fixture.workspaceId,
-          random() % 9 === 0 ? null : fixture.issueIds[random() % fixture.issueIds.length]!,
-          fixture.readerMemberId,
-          fixture.readerMemberId,
-          severities[random() % 3]!,
-          type,
-          details,
-          random() % 3 === 0 ? 1 : 0,
-          createdAt,
-        ] as never[],
-      );
-    }
-    for (const timezoneOffset of [0, 480, 840]) {
-      expect((await getInboxSummary(harness, timezoneOffset)).body)
-        .toEqual(legacyInboxSummary(harness.db, fixture.readerMemberId, timezoneOffset, fixture.workspaceId));
-    }
-    // Archived rows must not be counted (the old query filtered them too).
-    harness.db.run("UPDATE multiremi_inbox_items SET archived = 1");
-    expect((await getInboxSummary(harness, 0)).body).toEqual({ unread: 0, attention: 0 });
-  }, 20000);
-
-  it("keeps the bridge payload proportional to the completed runs, not to the inbox", async () => {
+  it("bounds canonical inbox hydration at every scale", async () => {
+    const harness = await createHarness({ sessions: 1, agents: 1, inboxRows: 900 });
+    // Each scale measures the first authenticated request, including its
+    // last-used stamp, just as the former independent fixtures did.
+    const credentials = await Promise.all([50, 300, 900].map(inboxRows => harness.store.createAccessToken({
+      name: `Inbox scale ${inboxRows}`, type: "pat", userId: harness.fixture.readerUserId,
+      workspaceId: harness.fixture.workspaceId, purpose: "session",
+    })));
+    const session = harness.store.getOrCreateDefaultIssueSession(harness.fixture.issueIds[0]!).id;
+    const firstSeq = Number((harness.db.query(`SELECT MIN(seq) AS seq FROM multiremi_conversation_log
+      WHERE session_id=? AND to_member_id=?`).get(session, harness.fixture.readerMemberId) as { seq: number | string }).seq);
     const measurements: Array<{ inboxRows: number; statements: number; bytes: number }> = [];
+    // Vary the visible population in one fixture; database bootstrap is not
+    // part of the measured route's query or bridge-byte budget.
     for (const inboxRows of [50, 300, 900]) {
-      const harness = await createHarness({ sessions: 1, agents: 1, inboxRows });
+      harness.headers.Authorization = `Bearer ${credentials[measurements.length]!.token}`;
+      harness.db.run(`UPDATE multiremi_conversation_log SET visibility=CASE WHEN seq<? THEN 'shown' ELSE 'hidden' END
+        WHERE session_id=? AND to_member_id=?`, firstSeq + inboxRows, session, harness.fixture.readerMemberId);
       const summary = await getInboxSummary(harness, 0);
       expect(summary.body).toEqual(
-        legacyInboxSummary(harness.db, harness.fixture.readerMemberId, 0, harness.fixture.workspaceId),
+        {unread:inboxRows,attention:inboxRows / 5 * 2},
       );
       measurements.push({ inboxRows, statements: summary.statements, bytes: summary.bytes });
     }
-    // Auth (token read + `last_used_at` + membership), the aggregate, and the
-    // completed-run payload read: a constant that never sees the row count.
+    // Auth, inbox aggregates, and one payload page stay within a constant
+    // statement budget regardless of the unread population.
     for (const point of measurements) expect(point.statements).toBeLessThanOrEqual(8);
     expect(measurements[0]!.statements).toBe(measurements[2]!.statements);
-    // One fifth of the fixture's rows are successful runs, so dbb grows with
-    // those rows alone; the pre-change route moved every row. The issue's budget
-    // is dbb < 100 KB, which the whole fixture must stay under.
+    // The payload page caps bridge bytes while counts cover the full population.
     for (const point of measurements) expect(point.bytes).toBeLessThan(100 * 1024);
     const perRow = measurements.map((point) => point.bytes / point.inboxRows);
     expect(perRow[2]!).toBeLessThan(perRow[0]! * 2);

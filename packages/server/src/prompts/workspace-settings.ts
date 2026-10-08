@@ -17,6 +17,8 @@ When a task changes code:
 - Return every PR/MR URL in the final result. If creation fails, report the exact failure and preserve the pushed branch for recovery.
 - Do not create empty PRs/MRs. A squad leader must ensure delegated code changes have a PR/MR before completing the parent task.
 
+Use \`remi message\` for communication, \`remi inbox\` to read addressed messages, and \`remi turn\` to inspect or control execution.
+
 ${ARTIFACT_DELIVERY_CONTRACT}`;
 
 const KEYS = {

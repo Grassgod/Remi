@@ -603,7 +603,7 @@ export class SessionArchivesRepo {
                   archive_runtime.daemon_id AS archive_daemon_id,
                   task_runtime.id AS task_runtime_exists,
                   archive_runtime.id AS archive_runtime_exists
-           FROM multiremi_tasks task
+           FROM multiremi_turn_execution_records task
            LEFT JOIN multiremi_runtimes task_runtime ON task_runtime.id = task.runtime_id
            LEFT JOIN multiremi_runtimes archive_runtime ON archive_runtime.id = ?
            WHERE task.id = ?`,
@@ -678,7 +678,7 @@ export class SessionArchivesRepo {
       ) throw new TraceBackfillSubjectError(`Issue ${input.subjectId} is not an active Issue of this workspace`);
       return;
     }
-    const table = input.subjectKind === "chat" ? "multiremi_chat_sessions" : "multiremi_tasks";
+    const table = input.subjectKind === "chat" ? "multiremi_chat_sessions" : "multiremi_turn_execution_records";
     const row = this.ctx.db.query(`SELECT workspace_id FROM ${table} WHERE id = ?`)
       .get(input.subjectId) as Row | null;
     if (!row || String(row.workspace_id ?? "local") !== input.workspaceId) {
@@ -694,7 +694,7 @@ export class SessionArchivesRepo {
   private assertTraceBackfillTask(input: TraceBackfillCommitInput, taskId: string): void {
     const task = this.ctx.db.query(
       `SELECT task.workspace_id, task.issue_id, task.chat_session_id, chat.id AS chat_exists
-       FROM multiremi_tasks task
+       FROM multiremi_turn_execution_records task
        LEFT JOIN multiremi_chat_sessions chat ON chat.id = task.chat_session_id
        WHERE task.id = ?`,
     ).get(taskId) as Row | null;
@@ -1023,7 +1023,7 @@ export class SessionArchivesRepo {
         && String(session.session_runtime_id ?? "") === input.runtimeId;
     }
     const task = this.ctx.db.query(
-      "SELECT workspace_id, runtime_id FROM multiremi_tasks WHERE id = ?",
+      "SELECT workspace_id, runtime_id FROM multiremi_turn_execution_records WHERE id = ?",
     ).get(input.subjectId) as Row | null;
     if (!task) return false;
     return String(task.workspace_id ?? "local") === input.workspaceId

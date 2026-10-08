@@ -739,11 +739,8 @@ export const DB_REPLY_TRANSITION_EXCEPTIONS: ReadonlySet<string> = new Set([
   "POST /api/chat/sessions/:sessionId/read", // chat.ts:223; large-column caller.
   "POST /api/comments/:id/reactions", // comments.ts:98; large-column caller.
   "POST /api/comments/:id/resolve", // comments.ts:78; large-column caller.
-  "GET /api/daemon/issues/:issueId/decisions/:decisionId", // daemon.ts:567; decision access reads issue description/metadata.
-  "POST /api/daemon/issues/:issueId/decisions/:decisionId/answer", // daemon.ts:588; decision access and writeback read issue description/metadata.
   "POST /api/daemon/issues/:issueId/workspace/cleaned", // daemon.ts:1358; large-column caller.
   "POST /api/daemon/scm/git-credentials", // daemon.ts:159; large-column caller.
-  "POST /api/daemon/tasks/:taskId/human-requests/:requestId/respond", // daemon.ts:1078; large-column caller.
   "POST /api/daemon/tasks/:taskId/steer/consume", // daemon.ts:1339; large-column caller.
   "POST /api/issues", // issues.ts:791; large-column caller.
   "POST /api/issues/:id/comments", // issues.ts:1851; large-column caller.

@@ -1,8 +1,9 @@
+import { issueMessagesPath, requestMessageBody, taskRequestPath } from "./unified-test-paths.js";
 /** MUL-458: credential-verified human actions force-start waiting issues. */
 import { afterEach, describe, expect, it, spyOn } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
 import type { MultiremiStore } from "@multiremi/store.js";
-import { HUMAN_COMMENT_JOINS_QUEUED_ROUND, IssuesRepo } from "@multiremi/store/repos/issues-repo.js";
+import { IssuesRepo } from "@multiremi/store/repos/issues-repo.js";
 import { createLocalStore, resetMultiremiTestEnv, signTestJwt } from "./helpers.js";
 
 afterEach(resetMultiremiTestEnv);
@@ -12,6 +13,7 @@ interface HumanFixture {
   app: ReturnType<typeof createMultiremiApp>;
   headers: Record<string, string>;
   memberUserId: string;
+  memberId: string;
   agentId: string;
   prerequisiteId: string;
   issueId: string;
@@ -23,7 +25,7 @@ async function humanFixture(kind: "jwt" | "pat", suffix: string): Promise<HumanF
     email: `mul458-${kind}-${suffix}@example.test`,
     name: `MUL-458 ${kind} ${suffix}`,
   });
-  store.createWorkspaceMember({ workspaceId: "local", userId: user.id, name: user.name, role: "member" });
+  const member = store.createWorkspaceMember({ workspaceId: "local", userId: user.id, name: user.name, role: "member" });
   const runtime = store.registerRuntime({
     id: `rt_mul458_${kind}_${suffix}`,
     name: `MUL-458 ${kind} ${suffix}`,
@@ -57,6 +59,7 @@ async function humanFixture(kind: "jwt" | "pat", suffix: string): Promise<HumanF
     app: createMultiremiApp({ store, authToken: "mul458-root" }),
     headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
     memberUserId: user.id,
+    memberId: member.id,
     agentId: agent.id,
     prerequisiteId: prerequisite.id,
     issueId: issue.id,
@@ -70,18 +73,18 @@ function forceActivities(store: MultiremiStore, issueId: string) {
 describe("MUL-458 human dependency force (SQLite)", () => {
   it.each(["jwt", "pat"] as const)("force-starts a waiting issue from a %s member comment", async (kind) => {
     const fixture = await humanFixture(kind, `comment-${kind}`);
-    const response = await fixture.app.request(`/api/issues/${fixture.issueId}/comments`, {
+    const response = await fixture.app.request(issueMessagesPath(fixture.store, fixture.issueId), {
       method: "POST",
       headers: fixture.headers,
-      body: JSON.stringify({ body: "Please start despite the prerequisite." }),
+      body: JSON.stringify(requestMessageBody(fixture.store, { body: "Please start despite the prerequisite." }, { type: "role", ref: "issue_owner" })),
     });
-    expect(response.status).toBe(201);
-    const comment = await response.json() as { id: string; author_type: string; author_id: string };
-    expect(comment).toMatchObject({ author_type: "member", author_id: fixture.memberUserId });
+    expect(response.status).toBe(200);
+    const { message: comment } = await response.json();
+    expect(comment).toMatchObject({ sender_type: "member", sender_id: fixture.memberId });
 
     const tasks = fixture.store.listTasksForIssue(fixture.issueId);
     expect(tasks).toHaveLength(1);
-    expect(tasks[0]!.triggerCommentId).toBe(comment.id);
+    expect(fixture.store.getTurnForAttempt(tasks[0]!.id)?.trigger_message_id).toBe(comment.id);
     expect(tasks[0]!.prompt).toContain("unfinished prerequisites");
     expect(fixture.store.getIssue(fixture.issueId)?.status).toBe("todo");
     const activities = forceActivities(fixture.store, fixture.issueId);
@@ -99,12 +102,12 @@ describe("MUL-458 human dependency force (SQLite)", () => {
   it("dispatches only the mentioned non-owner and records assignee_dispatched=false", async () => {
     const fixture = await humanFixture("pat", "mention-non-owner");
     const mentioned = fixture.store.createAgent({ name: "Mentioned specialist", provider: "claude", visibility: "workspace" });
-    const response = await fixture.app.request(`/api/issues/${fixture.issueId}/comments`, {
+    const response = await fixture.app.request(issueMessagesPath(fixture.store, fixture.issueId), {
       method: "POST",
       headers: fixture.headers,
-      body: JSON.stringify({ body: `[@${mentioned.name}](mention://agent/${mentioned.id}) please inspect` }),
+      body: JSON.stringify(requestMessageBody(fixture.store, { body: `[@${mentioned.name}](mention://agent/${mentioned.id}) please inspect` }, { type: "role", ref: "issue_owner" })),
     });
-    expect(response.status).toBe(201);
+    expect(response.status).toBe(200);
     const tasks = fixture.store.listTasksForIssue(fixture.issueId);
     expect(tasks).toHaveLength(1);
     expect(tasks[0]!.agentId).toBe(mentioned.id);
@@ -119,11 +122,11 @@ describe("MUL-458 human dependency force (SQLite)", () => {
 
   it("dispatches owner and squad mentions to the effective assignee", async () => {
     const owner = await humanFixture("pat", "mention-owner");
-    expect((await owner.app.request(`/api/issues/${owner.issueId}/comments`, {
+    expect((await owner.app.request(issueMessagesPath(owner.store, owner.issueId), {
       method: "POST",
       headers: owner.headers,
-      body: JSON.stringify({ body: `[@Owner](mention://agent/${owner.agentId}) please start` }),
-    })).status).toBe(201);
+      body: JSON.stringify(requestMessageBody(owner.store, { body: `[@Owner](mention://agent/${owner.agentId}) please start` }, { type: "role", ref: "issue_owner" })),
+    })).status).toBe(200);
     expect(owner.store.listTasksForIssue(owner.issueId)).toHaveLength(1);
     expect(owner.store.listTasksForIssue(owner.issueId)[0]!.agentId).toBe(owner.agentId);
     expect(forceActivities(owner.store, owner.issueId)[0]!.data).toMatchObject({
@@ -136,11 +139,11 @@ describe("MUL-458 human dependency force (SQLite)", () => {
     const leader = squadCase.store.createAgent({ name: "Mention squad leader", provider: "claude", visibility: "workspace" });
     const squad = squadCase.store.createSquad({ name: "Mention squad", leaderId: leader.id });
     squadCase.store.assignIssue(squadCase.issueId, { assigneeType: "squad", assigneeId: squad.id });
-    expect((await squadCase.app.request(`/api/issues/${squadCase.issueId}/comments`, {
+    expect((await squadCase.app.request(issueMessagesPath(squadCase.store, squadCase.issueId), {
       method: "POST",
       headers: squadCase.headers,
-      body: JSON.stringify({ body: `[@${squad.name}](mention://squad/${squad.id}) please start` }),
-    })).status).toBe(201);
+      body: JSON.stringify(requestMessageBody(squadCase.store, { body: `[@${squad.name}](mention://squad/${squad.id}) please start` }, { type: "role", ref: "issue_owner" })),
+    })).status).toBe(200);
     expect(squadCase.store.listTasksForIssue(squadCase.issueId)).toHaveLength(1);
     expect(squadCase.store.listTasksForIssue(squadCase.issueId)[0]!.agentId).toBe(leader.id);
     expect(forceActivities(squadCase.store, squadCase.issueId)[0]!.data).toMatchObject({
@@ -153,12 +156,12 @@ describe("MUL-458 human dependency force (SQLite)", () => {
   it("force-starts a waiting issue from a member rerun and honors its agent override", async () => {
     const fixture = await humanFixture("jwt", "rerun");
     const override = fixture.store.createAgent({ name: "Rerun override", provider: "claude", visibility: "workspace" });
-    const response = await fixture.app.request(`/api/issues/${fixture.issueId}/rerun`, {
+    const response = await fixture.app.request(issueMessagesPath(fixture.store, fixture.issueId), {
       method: "POST",
       headers: fixture.headers,
-      body: JSON.stringify({ agent_id: override.id }),
+      body: JSON.stringify(requestMessageBody(fixture.store, { agent_id: override.id, body_md: "Continue Issue work" }, { type: "role", ref: "issue_owner" })),
     });
-    expect(response.status).toBe(202);
+    expect(response.status).toBe(200);
     const tasks = fixture.store.listTasksForIssue(fixture.issueId);
     expect(tasks).toHaveLength(1);
     expect(tasks[0]!.agentId).toBe(override.id);
@@ -167,7 +170,7 @@ describe("MUL-458 human dependency force (SQLite)", () => {
       actorId: fixture.memberUserId,
     });
     expect(forceActivities(fixture.store, fixture.issueId)[0]!.data).toMatchObject({
-      source: "rerun",
+      source: "comment",
       agentId: override.id,
       assigneeDispatched: false,
     });
@@ -197,89 +200,91 @@ describe("MUL-458 human dependency force (SQLite)", () => {
     const { token } = await fixture.store.createTaskAccessToken(sourceTask, fixture.memberUserId);
     const taskHeaders = { Authorization: `Bearer ${token}`, "Content-Type": "application/json" };
 
-    const spoofedComment = await fixture.app.request(`/api/issues/${sourceIssue.id}/comments`, {
+    const spoofedComment = await fixture.app.request(issueMessagesPath(fixture.store, sourceIssue.id), {
       method: "POST",
       headers: taskHeaders,
-      body: JSON.stringify({ body: "Agent comment", author_type: "member", author_id: fixture.memberUserId }),
+      body: JSON.stringify(requestMessageBody(fixture.store, { body: "Agent comment", author_type: "member", author_id: fixture.memberUserId }, { type: "role", ref: "issue_owner" })),
     });
-    expect(spoofedComment.status).toBe(201);
-    const persisted = await spoofedComment.json() as { id: string };
-    expect(fixture.store.getIssueComment(persisted.id)).toMatchObject({
-      authorType: "agent",
-      authorId: leader.id,
-      taskId: sourceTask.id,
-    });
+    expect(spoofedComment.status).toBe(200);
+    const { message: persisted } = await spoofedComment.json();
+    expect(persisted).toMatchObject({sender_type:"agent",sender_id:leader.id,task_id:sourceTask.id,wake_applied:"inbox_only",wake_reason:"self"});
 
-    const mention = await fixture.app.request(`/api/issues/${sourceIssue.id}/comments`, {
+    const mention = await fixture.app.request(issueMessagesPath(fixture.store, sourceIssue.id), {
       method: "POST",
       headers: taskHeaders,
-      body: JSON.stringify({ body: `[@${teammate.name}](mention://agent/${teammate.id}) help` }),
+      body: JSON.stringify(requestMessageBody(fixture.store, { body: `[@${teammate.name}](mention://agent/${teammate.id}) help` }, { type: "role", ref: "issue_owner" })),
     });
-    expect(mention.status).toBe(201);
-    const mentionId = ((await mention.json()) as { id: string }).id;
-    expect(fixture.store.listIssueActivity(sourceIssue.id)
-      .find((entry) => entry.type === "comment_mention_skipped" && (entry.data as any)?.commentId === mentionId)?.data)
-      .toMatchObject({ reason: "dependencies_unmet", agentId: teammate.id });
+    expect(mention.status).toBe(200);
+    expect(await mention.json()).toMatchObject({wake_applied:"next_turn",wake_reason:"dependencies_unmet",message:{to_agent_id:teammate.id}});
 
-    const rerun = await fixture.app.request(`/api/issues/${sourceIssue.id}/rerun`, {
+    const rerun = await fixture.app.request(issueMessagesPath(fixture.store, sourceIssue.id), {
       method: "POST",
       headers: taskHeaders,
-      body: JSON.stringify({ agent_id: fixture.agentId, dependencyForce: { source: "rerun", actorMemberId: fixture.memberUserId } }),
+      body: JSON.stringify(requestMessageBody(fixture.store, { body_md:"Agent rerun request",agent_id: fixture.agentId, dependencyForce: { source: "rerun", actorMemberId: fixture.memberUserId } }, { type: "role", ref: "issue_owner" })),
     });
-    expect(rerun.status).toBe(409);
-    expect(await rerun.json()).toMatchObject({ code: "dependencies_unmet" });
+    expect(rerun.status).toBe(200);
+    expect(await rerun.json()).toMatchObject({ wake_applied:"next_turn",wake_reason:"dependencies_unmet" });
 
-    const taskCreate = await fixture.app.request("/api/multiremi/tasks", {
+    const taskCreate = await fixture.app.request(taskRequestPath(fixture.store, { issueId: sourceIssue.id }), {
       method: "POST",
       headers: taskHeaders,
-      body: JSON.stringify({
+      body: JSON.stringify(requestMessageBody(fixture.store, {
         agentId: teammate.id,
         issueId: sourceIssue.id,
         prompt: "Spoof task create",
         dependencyForce: { source: "comment", actorMemberId: fixture.memberUserId },
-      }),
+      })),
     });
-    expect(taskCreate.status).toBe(409);
-    expect(await taskCreate.json()).toMatchObject({ code: "dependencies_unmet" });
+    expect(taskCreate.status).toBe(200);
+    expect(await taskCreate.json()).toMatchObject({ wake_applied:"next_turn",wake_reason:"dependencies_unmet" });
     expect(fixture.store.listTasksForIssue(sourceIssue.id)).toHaveLength(1);
     expect(forceActivities(fixture.store, sourceIssue.id)).toHaveLength(0);
     expect(fixture.store.getIssue(sourceIssue.id)?.status).toBe("backlog");
   });
 
   it.each(["dependencyForce", "dependency_force"] as const)(
-    "strips a public %s marker before the task funnel",
+    "#2-C2: force-starts a member request but strips its public %s marker",
     async (spelling) => {
       const fixture = await humanFixture("pat", `strip-${spelling}`);
-      const response = await fixture.app.request("/api/multiremi/tasks", {
+      const response = await fixture.app.request(taskRequestPath(fixture.store, { issueId: fixture.issueId }), {
         method: "POST",
         headers: fixture.headers,
-        body: JSON.stringify({
+        body: JSON.stringify(requestMessageBody(fixture.store, {
           agentId: fixture.agentId,
           issueId: fixture.issueId,
           prompt: "Forged force marker",
-          [spelling]: { source: "comment", actorMemberId: fixture.memberUserId },
-        }),
+          [spelling]: { source: "rerun", actorMemberId: "forged-member" },
+        })),
       });
-      expect(response.status).toBe(409);
-      expect(await response.json()).toMatchObject({ code: "dependencies_unmet" });
-      expect(fixture.store.listTasksForIssue(fixture.issueId)).toHaveLength(0);
-      expect(forceActivities(fixture.store, fixture.issueId)).toHaveLength(0);
+      expect(response.status).toBe(200);
+      const result = await response.json();
+      expect(result).toMatchObject({ wake_applied: "now", wake_reason: "human_sender" });
+      const tasks = fixture.store.listTasksForIssue(fixture.issueId);
+      expect(tasks).toHaveLength(1);
+      expect(fixture.store.getTurnForAttempt(tasks[0]!.id)?.id).toBe(result.turn_id);
+      expect(fixture.store.getIssue(fixture.issueId)?.status).toBe("todo");
+      expect(forceActivities(fixture.store, fixture.issueId)).toHaveLength(1);
+      expect(forceActivities(fixture.store, fixture.issueId)[0]).toMatchObject({ actorType: "member", actorId: fixture.memberUserId });
+      expect(forceActivities(fixture.store, fixture.issueId)[0]!.data).toMatchObject({
+        source: "comment", agentId: fixture.agentId, taskId: tasks[0]!.id,
+        assigneeDispatched: true, unmet: [{ dependsOnIssueId: fixture.prerequisiteId }],
+      });
     },
   );
 
   it("follows Q-B for three consecutive member comments while writing only one force record", async () => {
     const fixture = await humanFixture("pat", "three-comments");
     for (const body of ["first", "second", "third"]) {
-      const response = await fixture.app.request(`/api/issues/${fixture.issueId}/comments`, {
+      const response = await fixture.app.request(issueMessagesPath(fixture.store, fixture.issueId), {
         method: "POST",
         headers: fixture.headers,
-        body: JSON.stringify({ body }),
+        body: JSON.stringify(requestMessageBody(fixture.store, { body }, { type: "role", ref: "issue_owner" })),
       });
-      expect(response.status).toBe(201);
+      expect(response.status).toBe(200);
     }
-    expect(fixture.store.listTasksForIssue(fixture.issueId)).toHaveLength(HUMAN_COMMENT_JOINS_QUEUED_ROUND ? 1 : 3);
-    expect(fixture.store.listIssueActivity(fixture.issueId).filter(activity => activity.type === "pending_turn_coalesced"))
-      .toHaveLength(HUMAN_COMMENT_JOINS_QUEUED_ROUND ? 2 : 0);
+    expect(fixture.store.listTasksForIssue(fixture.issueId)).toHaveLength(1);
+    expect(fixture.store.listIssueActivity(fixture.issueId).filter(activity => activity.type === "turn_merged"))
+      .toHaveLength(2);
     expect(forceActivities(fixture.store, fixture.issueId)).toHaveLength(1);
     expect(fixture.store.getIssue(fixture.issueId)?.status).toBe("todo");
   });
@@ -295,12 +300,12 @@ describe("MUL-458 human dependency force (SQLite)", () => {
       assigneeType: "agent",
       assigneeId: fixture.agentId,
     });
-    const response = await fixture.app.request(`/api/issues/${child.id}/comments`, {
+    const response = await fixture.app.request(issueMessagesPath(fixture.store, child.id), {
       method: "POST",
       headers: fixture.headers,
-      body: JSON.stringify({ body: "Start the child now" }),
+      body: JSON.stringify(requestMessageBody(fixture.store, { body: "Start the child now" }, { type: "role", ref: "issue_owner" })),
     });
-    expect(response.status).toBe(201);
+    expect(response.status).toBe(200);
     expect(fixture.store.getIssue(child.id)?.status).toBe("todo");
     expect(fixture.store.getIssue(parent.id)?.status).toBe("in_progress");
     expect(fixture.store.listIssueActivity(parent.id).some((entry) => entry.type === "parent_status_derived")).toBe(true);
@@ -311,12 +316,12 @@ describe("MUL-458 human dependency force (SQLite)", () => {
     const previous = process.env.MULTIREMI_DEPENDENCY_GATE;
     process.env.MULTIREMI_DEPENDENCY_GATE = "0";
     try {
-      const response = await fixture.app.request(`/api/issues/${fixture.issueId}/comments`, {
+      const response = await fixture.app.request(issueMessagesPath(fixture.store, fixture.issueId), {
         method: "POST",
         headers: fixture.headers,
-        body: JSON.stringify({ body: "Gate disabled" }),
+        body: JSON.stringify(requestMessageBody(fixture.store, { body: "Gate disabled" }, { type: "role", ref: "issue_owner" })),
       });
-      expect(response.status).toBe(201);
+      expect(response.status).toBe(200);
       expect(fixture.store.listTasksForIssue(fixture.issueId)).toHaveLength(1);
       expect(forceActivities(fixture.store, fixture.issueId)).toHaveLength(0);
     } finally {
@@ -330,13 +335,13 @@ describe("MUL-458 human dependency force (SQLite)", () => {
     const injected = spyOn(IssuesRepo.prototype, "recordDependencyForceStarted")
       .mockImplementation(() => { throw new Error("injected force audit failure"); });
     try {
-      const response = await fixture.app.request(`/api/issues/${fixture.issueId}/comments`, {
+      const response = await fixture.app.request(issueMessagesPath(fixture.store, fixture.issueId), {
         method: "POST",
         headers: fixture.headers,
-        body: JSON.stringify({ body: "This comment remains durable" }),
+        body: JSON.stringify(requestMessageBody(fixture.store, { body: "This comment remains durable" }, { type: "role", ref: "issue_owner" })),
       });
       expect(response.status).toBe(400);
-      expect(fixture.store.listIssueComments(fixture.issueId).some((comment) => comment.body === "This comment remains durable")).toBe(true);
+      expect(fixture.store.listIssueComments(fixture.issueId).some((comment) => comment.body === "This comment remains durable")).toBe(false);
       expect(fixture.store.getIssue(fixture.issueId)?.status).toBe("backlog");
       expect(fixture.store.listTasksForIssue(fixture.issueId)).toHaveLength(0);
       expect(forceActivities(fixture.store, fixture.issueId)).toHaveLength(0);

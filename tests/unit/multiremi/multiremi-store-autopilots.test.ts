@@ -105,14 +105,19 @@ describe("Multiremi store — autopilots, schedules, and webhooks", () => {
 
     const comment = store.createIssueComment(run.issueId!, { body: "Looks important" });
     expect(comment.body).toBe("Looks important");
-    expect(store.listIssueActivity(run.issueId!)).toHaveLength(2);
+    expect(store.listIssueActivity(run.issueId!).map(entry => entry.type)).toEqual([
+      "issue_created", "turn_created", "comment_created",
+    ]);
 
     store.updateIssue(run.issueId!, { status: "in_progress" });
     expect(store.claimTask(runtime.id)?.id).toBe(run.taskId!);
     store.startTask(run.taskId!);
     store.completeTask(run.taskId!, { output: "fixed" });
 
-    expect(store.getIssue(run.issueId!)?.status).toBe("in_review");
+    // §3.4 uses the Issue owner's last turn; an unassigned Issue has no owner terminal to derive from.
+    expect(store.getIssue(run.issueId!)?.assigneeId).toBeNull();
+    expect(store.getTurn(run.taskId!)?.status).toBe("completed");
+    expect(store.getIssue(run.issueId!)?.status).toBe("in_progress");
     expect(store.getProject(project.id)?.doneCount).toBe(0);
     expect(store.listAutopilotRuns(autopilot.id)[0]?.status).toBe("completed");
     // Completion appends task_completed, then the agent-reply comment_created.
@@ -230,7 +235,8 @@ describe("Multiremi store — autopilots, schedules, and webhooks", () => {
       },
     });
 
-    const inboxEvents = events.filter((event) => event.type === "inbox:new");
+    const inboxEvents = events.filter((event) => event.type === "inbox:new"
+      && ["autopilot_run_completed", "autopilot_run_failed"].includes((event.payload.item as { type?: string } | undefined)?.type ?? ""));
     expect(inboxEvents).toHaveLength(2);
   });
 
@@ -252,7 +258,8 @@ describe("Multiremi store — autopilots, schedules, and webhooks", () => {
     const claim = await taskOfferResponse(store, runtime.id);
     expect(claim.status).toBe(200);
     const body = await claim.json();
-    expect(body.task.id).toBe(run.taskId);
+    expect(body.task.attempt_id).toBe(run.taskId);
+    expect(body.task.turn_id).toBe(store.getTurnForAttempt(run.taskId!)!.id);
     expect(body.task.autopilot_run_id).toBe(run.id);
     expect(body.task.autopilotRunId).toBeUndefined();
   });
@@ -468,21 +475,29 @@ describe("Multiremi store — autopilots, schedules, and webhooks", () => {
     let seq = 0;
     const insertRun = (autopilotId: string, status: "completed" | "failed" | "skipped", createdAt: Date) => {
       const at = createdAt.toISOString();
-      db!.run(
-        `INSERT INTO multiremi_autopilot_runs (
-          id, autopilot_id, source, status, issue_id, task_id, triggered_at,
-          completed_at, failure_reason, payload, result, created_at
-        ) VALUES (?, ?, 'schedule', ?, NULL, NULL, ?, ?, ?, NULL, NULL, ?)`,
-        [
-          `run_failure_monitor_${++seq}`,
-          autopilotId,
-          status,
-          at,
-          at,
-          status === "failed" ? "agent_error" : status === "skipped" ? "No runnable agent" : null,
-          at,
-        ],
-      );
+      const runId = `run_failure_monitor_${++seq}`;
+      const turnId = `tsk_failure_monitor_${seq}`;
+      const sessionId = (db!.query("SELECT session_id FROM multiremi_autopilots WHERE id = ?").get(autopilotId)! as { session_id: string }).session_id;
+      if (status !== "skipped") {
+        const logSeq = Number((db!.query(`UPDATE multiremi_conversation_heads
+          SET head_seq = head_seq + 1, log_version = log_version + 1 WHERE session_id = ? RETURNING head_seq`)
+          .get(sessionId) as { head_seq: number }).head_seq);
+        db!.run(`INSERT INTO multiremi_turns
+          (id, session_id, seq, agent_id, workspace_id, status, current_attempt_id, created_at, ended_at)
+          VALUES (?, ?, ?, ?, 'local', ?, ?, ?, ?)`, [turnId, sessionId, logSeq, agent.id, status, turnId, at, at]);
+        db!.run(`INSERT INTO multiremi_turn_attempts
+          (id, turn_id, attempt_no, status, created_at, updated_at, ended_at)
+          VALUES (?, ?, 1, ?, ?, ?, ?)`, [turnId, turnId, status, at, at, at]);
+        db!.run(`INSERT INTO multiremi_conversation_log
+          (session_id, seq, id, kind, visibility, sender_type, sender_id, task_id, created_at, updated_at)
+          VALUES (?, ?, ?, 'turn', 'shown', 'agent', ?, ?, ?, ?)`,
+          [sessionId, logSeq, turnId, agent.id, turnId, at, at]);
+      }
+      db!.run(`INSERT INTO multiremi_autopilot_runs
+        (id, autopilot_id, source, turn_id, triggered_at, completed_at, failure_reason, created_at)
+        VALUES (?, ?, 'schedule', ?, ?, ?, ?, ?)`,
+        [runId, autopilotId, status === "skipped" ? null : turnId, at, at,
+          status === "failed" ? "agent_error" : status === "skipped" ? "No runnable agent" : null, at]);
     };
     const recent = new Date(now.getTime() - 60 * 60 * 1000);
     const old = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
@@ -516,7 +531,8 @@ describe("Multiremi store — autopilots, schedules, and webhooks", () => {
     expect(updateEvents.map((event) => (event.payload.autopilot as { id: string }).id)).toEqual([offender.id, skippedDiluted.id]);
     expect(updateEvents.every((event) => event.actorType === "system")).toBe(true);
     expect(updateEvents.every((event) => event.payload.reason === "auto_paused_high_failure_rate")).toBe(true);
-    const inboxEvents = events.filter((event) => event.type === "inbox:new");
+    const inboxEvents = events.filter((event) => event.type === "inbox:new"
+      && (event.payload.item as { type?: string } | undefined)?.type === "autopilot_paused");
     expect(inboxEvents).toHaveLength(2);
     expect(inboxEvents.map((event) => (event.payload.item as { memberId: string }).memberId).sort()).toEqual([creator.id, owner.id].sort());
 

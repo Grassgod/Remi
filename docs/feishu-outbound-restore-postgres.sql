@@ -1,3 +1,5 @@
+-- Restores only outbound delivery lanes. The unified message/turn model stays in place.
+-- task_id is a turn attempt ID. This is not a rollback to the retired task tables.
 -- Replace __C5_STAMP__ with a unique UTC YYYYMMDDHHMMSS value before running.
 BEGIN;
 DO $c5$

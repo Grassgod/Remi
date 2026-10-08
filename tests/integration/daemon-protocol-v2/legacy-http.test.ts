@@ -10,6 +10,11 @@ import { openRuntimeDownlinks, requestRuntimeRpc } from "../../fixtures/runtime-
 import { waitFor } from "./harness.js";
 
 const upgradeRequired = { code: "daemon_protocol_upgrade_required", min_version: DAEMON_PROTOCOL_MIN };
+const removedBy493 = [
+  "GET /api/daemon/issues/:issueId/decisions/:decisionId",
+  "POST /api/daemon/issues/:issueId/decisions/:decisionId/answer",
+  "POST /api/daemon/tasks/:taskId/human-requests/:requestId/respond",
+];
 
 const removedBy421 = [
   "GET /api/daemon/runtimes/:runtimeId/tasks/pending",
@@ -43,7 +48,8 @@ const removedBy421 = [
 it("keeps the retired method + path table equal to v1 minus live routes", () => {
   const retired = RETIRED_DAEMON_HTTP_ROUTES.map(({ method, path }) => `${method} ${path}`);
   expect(retired).toHaveLength(new Set(retired).size);
-  expect(retired.toSorted()).toEqual(baseline.routes.filter(route => !liveRoutes.has(route)).toSorted());
+  expect(retired.toSorted()).toEqual(removedBy421.toSorted());
+  expect([...retired, ...removedBy493].toSorted()).toEqual(baseline.routes.filter(route => !liveRoutes.has(route)).toSorted());
 });
 
 it.each(["empty", "nonempty"] as const)("keeps reconciled v1 desired state unchanged at the same write cost as plugin.desired RPC (%s)", async scenario => {
@@ -241,8 +247,10 @@ it.each(["all", "runtime"] as const)("automatically rejects removed snapshot rou
       const path = pattern!.replace(/:runtimeId\b/g, runtime.id).replace(/:taskId\b/g, task.id)
         .replace(/:issueId\b/g, issue.id).replace(/:[A-Za-z_][A-Za-z_0-9]*/g, "legacy-fixture");
       const response = await fetch(`http://127.0.0.1:${server.port}${path}`, { method, headers: { Authorization: `Bearer ${authToken}` } });
-      expect(response.status, route).toBe(426);
-      expect(await response.json(), route).toEqual(upgradeRequired);
+      const deleted = removedBy493.includes(route);
+      expect(response.status, route).toBe(deleted ? 404 : 426);
+      if (deleted) expect(await response.text(), route).toBe("404 Not Found");
+      else expect(await response.json(), route).toEqual(upgradeRequired);
     }
     for (const method of ["GET", "POST", "PUT", "PATCH", "DELETE"]) {
       const response = await request(`/api/daemon/runtimes/${runtime.id}/removed-v1-fixture`, method);
@@ -276,11 +284,11 @@ it.each(["all", "runtime"] as const)("automatically rejects removed snapshot rou
     expect(cards.status).toBe(200);
     expect(await cards.json()).toEqual({ cards: [] });
     const decision = await request(`/api/daemon/issues/${issue.id}/decisions/missing-decision`);
-    expect(decision.status).toBe(403);
-    expect(await decision.json()).toEqual({ error: "forbidden for daemon identity", code: "daemon_identity_forbidden" });
+    expect(decision.status).toBe(404);
+    expect(await decision.text()).toBe("404 Not Found");
     const masterDecision = await fetch(`http://127.0.0.1:${server.port}/api/daemon/issues/${issue.id}/decisions/missing-decision`, { headers: { Authorization: `Bearer ${authToken}` } });
     expect(masterDecision.status).toBe(404);
-    expect(await masterDecision.json()).toEqual({ error: "decision not found" });
+    expect(await masterDecision.text()).toBe("404 Not Found");
     const unrelated = await fetch(`http://127.0.0.1:${server.port}/api/not-a-daemon-route`, { headers: { Authorization: `Bearer ${authToken}` } });
     expect(unrelated.status).toBe(apiRole === "runtime" ? 421 : 404);
     await unrelated.text();

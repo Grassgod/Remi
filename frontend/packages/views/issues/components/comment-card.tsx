@@ -1,6 +1,6 @@
 "use client";
 
-import { memo, useCallback, useRef, useState } from "react";
+import { memo, useRef, useState } from "react";
 import { CheckCircle2, Copy, MoreHorizontal, Pencil, Reply, RotateCcw, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@multiremi/ui/components/ui/button";
@@ -33,9 +33,7 @@ import { useQuery } from "@tanstack/react-query";
 import { issueKeys } from "@multiremi/core/issues/queries";
 import { TranscriptButton } from "../../common/task-transcript";
 import { useTimeAgo } from "../../i18n";
-import { ContentEditor, type ContentEditorRef, ReadonlyContent, useFileDropZone, FileDropOverlay, Attachment as AttachmentRenderer, AttachmentDownloadProvider } from "../../editor";
-import { FileUploadButton } from "@multiremi/ui/components/common/file-upload-button";
-import { useFileUpload } from "@multiremi/core/hooks/use-file-upload";
+import { ContentEditor, type ContentEditorRef, ReadonlyContent, Attachment as AttachmentRenderer, AttachmentDownloadProvider } from "../../editor";
 import { api } from "@multiremi/core/api";
 import type { ReplyTarget } from "./comment-input";
 import { quotePreview } from "../utils/quote-preview";
@@ -78,13 +76,7 @@ interface CommentCardProps {
    * delete dialog has to warn that the cascade takes them too. */
   hasReplies?: boolean;
   currentUserId?: string;
-  /**
-   * True when the current user is a workspace owner/admin and can therefore
-   * moderate comments authored by anyone — restoring the admin override that
-   * the backend already grants at `comment.go:507-512`. Computed once in
-   * `issue-detail.tsx` and threaded down so this component doesn't rerun the
-   * rule per row.
-   */
+  /** Retained by the timeline caller; message mutations require the original sender. */
   canModerate?: boolean;
   /**
    * Points the session's single composer at this message. There is no
@@ -202,34 +194,6 @@ export function AttachmentList({
   );
 }
 
-function collectActiveAttachmentIds(
-  content: string,
-  attachments: Attachment[],
-  retainedStandaloneIds?: Set<string> | null,
-): string[] {
-  const ids = new Set<string>();
-  for (const attachment of attachments) {
-    if (content.includes(attachment.url)) ids.add(attachment.id);
-  }
-  for (const id of retainedStandaloneIds ?? []) ids.add(id);
-  return [...ids];
-}
-
-function sameIdSet(a: string[], b: string[]): boolean {
-  if (a.length !== b.length) return false;
-  const set = new Set(a);
-  return b.every((id) => set.has(id));
-}
-
-function initialStandaloneAttachmentIds(entry: TimelineEntry): Set<string> {
-  const content = entry.content ?? "";
-  return new Set(
-    (entry.attachments ?? [])
-      .filter((attachment) => !content.includes(attachment.url))
-      .map((attachment) => attachment.id),
-  );
-}
-
 // ---------------------------------------------------------------------------
 // Shared edit-attachment state hook
 // ---------------------------------------------------------------------------
@@ -240,28 +204,9 @@ function useEditAttachmentState(
   onEdit: (commentId: string, content: string, attachmentIds: string[]) => Promise<void>,
 ) {
   const { t } = useT("issues");
-  const { uploadWithToast } = useFileUpload(api);
   const [editing, setEditing] = useState(false);
   const editorRef = useRef<ContentEditorRef>(null);
   const cancelledRef = useRef(false);
-  const [pendingAttachments, setPendingAttachments] = useState<Attachment[]>([]);
-  const [retainedStandaloneIds, setRetainedStandaloneIds] = useState<Set<string> | null>(null);
-
-  const editorAttachments = pendingAttachments.length > 0
-    ? [...(entry.attachments ?? []), ...pendingAttachments]
-    : entry.attachments;
-
-  const handleUpload = useCallback(async (file: File) => {
-    const result = await uploadWithToast(file, { issueId });
-    if (result) setPendingAttachments((prev) => [...prev, result]);
-    return result;
-  }, [uploadWithToast, issueId]);
-
-  const { isDragOver, dropZoneProps } = useFileDropZone({
-    onDrop: (files) => files.forEach((f) => editorRef.current?.uploadFile(f)),
-    enabled: editing,
-  });
-
   const draftKey = `edit:${issueId}:${entry.id}` as const;
   const getDraft = useCommentDraftStore.getState().getDraft;
   const setDraft = useCommentDraftStore((s) => s.setDraft);
@@ -271,20 +216,15 @@ function useEditAttachmentState(
     ? (getDraft(draftKey) ?? entry.content ?? "")
     : (entry.content ?? "");
 
-  const standaloneEditAttachments = (entry.attachments ?? []).filter((a) =>
-    retainedStandaloneIds?.has(a.id),
-  );
+  const standaloneEditAttachments = (entry.attachments ?? []).filter(attachment => !initialValue.includes(attachment.url));
 
   const resetState = () => {
     setEditing(false);
-    setPendingAttachments([]);
-    setRetainedStandaloneIds(null);
     clearDraft(draftKey);
   };
 
   const startEdit = () => {
     cancelledRef.current = false;
-    setRetainedStandaloneIds(initialStandaloneAttachmentIds(entry));
     setEditing(true);
   };
 
@@ -300,16 +240,7 @@ function useEditAttachmentState(
       ?.replace(/(\n\s*)+$/, "")
       .trim();
     if (!trimmed) return;
-    const activeIds = collectActiveAttachmentIds(
-      trimmed,
-      [...(entry.attachments ?? []), ...pendingAttachments],
-      retainedStandaloneIds,
-    );
-    const attachmentsChanged = !sameIdSet(activeIds, (entry.attachments ?? []).map((a) => a.id));
-    if (trimmed === (entry.content ?? "").trim() && !attachmentsChanged) {
-      resetState();
-      return;
-    }
+    const activeIds = (entry.attachments ?? []).map(attachment => attachment.id);
     try {
       await onEdit(entry.id, trimmed, activeIds);
       resetState();
@@ -325,17 +256,12 @@ function useEditAttachmentState(
   return {
     editing,
     editorRef,
-    editorAttachments,
-    handleUpload,
-    isDragOver,
-    dropZoneProps,
+    editorAttachments: entry.attachments,
     draftKey,
     setDraft,
     clearDraft,
     initialValue,
     standaloneEditAttachments,
-    retainedStandaloneIds,
-    setRetainedStandaloneIds,
     startEdit,
     cancelEdit,
     saveEdit,
@@ -392,7 +318,6 @@ function CommentCardImpl({
   onNavigateToParent,
   hasReplies,
   currentUserId,
-  canModerate = false,
   onStartReply,
   onEdit,
   onDelete,
@@ -412,8 +337,8 @@ function CommentCardImpl({
   const edit = useEditAttachmentState(issueId, entry, onEdit);
 
   const isOwn = entry.actor_type === "member" && entry.actor_id === currentUserId;
-  const canEditEntry = isOwn || (canModerate && entry.actor_type === "member");
-  const canDeleteEntry = isOwn || canModerate;
+  const canEditEntry = isOwn;
+  const canDeleteEntry = isOwn;
   const [confirmDelete, setConfirmDelete] = useState(false);
 
   const authorLabel = getActorName(entry.actor_type, entry.actor_id);
@@ -476,7 +401,6 @@ function CommentCardImpl({
       <div className="pl-8">
         {edit.editing ? (
           <div
-            {...edit.dropZoneProps}
             className="relative"
             onKeyDown={(e) => { if (e.key === "Escape") edit.cancelEdit(); }}
           >
@@ -490,7 +414,6 @@ function CommentCardImpl({
                   else edit.clearDraft(edit.draftKey);
                 }}
                 onSubmit={edit.saveEdit}
-                onUploadFile={edit.handleUpload}
                 debounceMs={100}
                 currentIssueId={issueId}
                 attachments={edit.editorAttachments}
@@ -502,27 +425,14 @@ function CommentCardImpl({
                   <AttachmentList
                     attachments={edit.standaloneEditAttachments}
                     className="max-w-full"
-                    onRemove={(attachmentId) =>
-                      edit.setRetainedStandaloneIds((ids) => {
-                        const next = new Set(ids ?? []);
-                        next.delete(attachmentId);
-                        return next;
-                      })
-                    }
                   />
                 )}
-                <FileUploadButton
-                  size="sm"
-                  multiple
-                  onSelect={(file) => edit.editorRef.current?.uploadFile(file)}
-                />
               </div>
               <div className="flex items-center gap-2">
                 <Button size="sm" variant="ghost" onClick={edit.cancelEdit}>{t(($) => $.comment.cancel_edit)}</Button>
                 <Button size="sm" variant="outline" onClick={edit.saveEdit}>{t(($) => $.comment.save_action)}</Button>
               </div>
             </div>
-            {edit.isDragOver && <FileDropOverlay />}
           </div>
         ) : (
           <>

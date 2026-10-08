@@ -1,0 +1,117 @@
+# 统一模型切换手册
+
+本手册供全部存储、收件箱、daemon、接口与网页改接合入后使用。当前分支已接入存储迁移，尚未进行生产切换。209 操作、切换窗口、发版与删表均由负责人另行授权；本单只在本地 SQLite 与 PostgreSQL 验证脚本。完整 fleet 与 outbox 门禁沿用 [daemon v2 切换清单](daemon-v2-cutover.md)，运行时名单从平台动态获取。
+
+## 切换顺序
+
+1. 统一模型的发布版本定为 `0.2.89`：`package.json`、`DAEMON_MIN_CLI_VERSION` 和依赖快照已同步。已发布的 `0.2.88` 使用旧协议，与 `0.2.85`、`0.2.86`、`0.2.87` 一并被拒绝。PPE 的新 daemon 使用候选产物自身版本即可接入，不需要伪造 version label。本轮不打 tag、不发版、不等待 CI。发布前，发布负责人核对常量、package、依赖快照、`v0.2.89` tag、Release 资产和目标 main SHA；版本门不表示 fleet 已升级。
+
+   若正式版号后续调整，在仓库根目录将以下命令的 `<正式版本，不带 v>` 替换为已批准的版本。脚本只同步协议常量和说明；随后执行依赖准备，将 package 与快照一并刷新。所有改动仍需提交、通过有效发布门禁后才可打 tag。
+
+   ```bash
+   MUL493_RELEASE_VERSION='<正式版本，不带 v>' python3 - <<'PY'
+   import os, re
+   from pathlib import Path
+   version = os.environ['MUL493_RELEASE_VERSION']
+   assert re.fullmatch(r'(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)', version), '需要稳定 SemVer，不带 v'
+   assert tuple(map(int, version.split('.'))) >= (0, 2, 89), '不得重新接纳旧 daemon'
+   edits = {
+       'packages/contracts/src/daemon-protocol.ts': (
+           'export const DAEMON_MIN_CLI_VERSION = "0.2.89";',
+           f'export const DAEMON_MIN_CLI_VERSION = "{version}";'),
+       'docs/daemon-protocol-v2.md': (
+           '当前 `DAEMON_MIN_CLI_VERSION` 为首个包含统一模型的正式版本 `0.2.89`。',
+           f'当前 `DAEMON_MIN_CLI_VERSION` 为首个包含统一模型的正式版本 `{version}`。'),
+   }
+   prepared = []
+   for name, (old, new) in edits.items():
+       path = Path(name)
+       text = path.read_text()
+       assert text.count(old) == 1, f'{name}: 原值已变，请人工核对'
+       prepared.append((path, text.replace(old, new)))
+   for path, text in prepared:
+       path.write_text(text)
+   PY
+   bun run release:prepare --version '<正式版本，不带 v>'
+   ```
+
+   正式号调整后，将常量注释与[协议说明 §7.4b](../daemon-protocol-v2.md#74b-daemon_min_cli_version-与载荷发布版本)中的版本和 tag 核对要求同步更新。CI 的“Require refreshed dependencies for a new release version”要求依赖快照 `preparedFor` 与 package 版本一致；不得仅替换 package 版号。
+
+   测试无需批量换字符串：接入成功的夹具从 `DAEMON_MIN_CLI_VERSION` 导入，旧版拒绝用例保留原版号并覆盖已发布的 `0.2.88`。复核并定向运行以下文件：
+
+   | 文件 | 必须保持的检查 |
+   |---|---|
+   | `tests/unit/daemon/daemon-protocol.test.ts` | 最低版本和更高版本可接入；旧 fleet 版本拒绝 |
+   | `tests/unit/daemon/daemon-protocol-client.test.ts` | reject 后等待升级，不认领任务；welcome 后正常运行 |
+   | `tests/unit/multiremi/runtime-protocol.test.ts` | 版本守卫、升级状态、正式版本接入 |
+   | `tests/unit/multiremi/daemon-task-offers.test.ts` | 使用最低版本的握手及 offer 仍可执行 |
+
+   ```bash
+   bun run test tests/unit/daemon/daemon-protocol.test.ts tests/unit/daemon/daemon-protocol-client.test.ts tests/unit/multiremi/runtime-protocol.test.ts tests/unit/multiremi/daemon-task-offers.test.ts
+   bunx tsc --noEmit
+   npm run docs:test
+   npm run docs:check
+   git diff --check
+   ```
+
+   若正式版号不高于拒绝用例中的旧版号，停止填写并核对发布方案，不放宽断言。发布前核对 `package.json`、正式 tag、Release 资产、常量及目标 main SHA；此处定向检查不替代发布负责人确认的发版门禁。
+2. 历史 trace 回填完成，或停在组边界；进度表不能存在 running 组。备份脱敏副本供 QA 演练，不允许开发 agent 连接生产库。[209 数据副本演练步骤与脚本](../migrations/unified-model-copy-rehearsal.md)已准备；本任务不执行。执行须贺华杰批准，由 Remi-CC 完成，取得行数、Issue 抽样、真实读进度和恢复耗时证据后再申请生产窗口。
+3. Remi-CC 执行数据库与 api-home 备份，保留校验文件和恢复清单。备份脚本需要 Bash、匹配服务端主版本的 pg_dump/pg_restore、tar 和 sha256sum。API 镜像目前没有 pg_dump；由运维选择已具备客户端的 PostgreSQL 工具容器，挂载 api-home 与备份目录，注入已有连接环境变量。不要为执行备份临时修改生产 API 镜像。
+
+   ```bash
+   bash scripts/backup-platform-db.sh --output-dir /backup --api-home /api-home --database-env MULTIREMI_DATABASE_URL
+   ```
+
+   脚本产出 `platform.pgdump`、`api-home.tar.gz`、`restore-list.txt` 与 `SHA256SUMS`。URL 必须来自环境，不放在命令行；失败诊断保存为权限受限文件，不能直接贴到 Issue。恢复时用 pg_restore 先恢复到隔离空库，再校验业务记录与 api-home。
+4. 授权负责人启动 updater drain；核对所有运行任务与 outbox 排空。四项启动预检分别检查 awaiting_human、所属任务未结束（或任务缺失）的未消费 steer、running 回填组、running/dispatched 任务。completed/failed/cancelled 任务的未消费 steer 不阻塞、不消费、不删行，before/after 的 `orphan_steer` 单列数量、ID、终态与正文摘要；迁移追加历史 message，正文可按报告中的 `message_id` 在 `multiremi_conversation_log.body_md` 查到，退休表获批删除后仍保留。必须完成等待人工答复的处理，不能通过删行或改状态绕过门禁。
+5. updater 切换正式镜像，API 启动执行单事务迁移。报告默认写入 `$HOME/reports/migrations`，生产 `compose.application.yml` / `compose.platform.yml` 的 `api` 与 `api-runtime` 均为 `/srv/multiremi/reports/migrations`，位于 `REMI_HOME_DIR:/srv/multiremi` 持久卷内。读取其中的 `20261004_unified_message_turn_lane-before.json` 和 `-after.json`。预检失败时打印具体名称与数量，按旧镜像回滚；事务中途失败时模型改写回滚。`MULTIREMI_MIGRATION_REPORT_DIR` 可覆盖默认目录，运维应写在 `api.env`，不写在 updater 管理的 `application.env`；对账必须使用同一路径。重启不会重新执行旧结构的 DDL。
+
+   切换前由 Remi-CC 检查数据卷归属 `REMI_RUNTIME_UID:GID`，尤其旧报告目录不能是 root 所有。启动会在任何 schema 改写前验证目录创建、文件写入和原子 rename；不满足时明确拒绝，不能靠自动重启修复错误挂载。仓库配置已核对；209 实际挂载与权限本任务未连接核对，需负责人批准后由 Remi-CC 在副本演练及生产窗口确认。
+
+   schema 锁释放后，实际 `serve` 继续执行 `prepareUsageAccountingStartup`，同步 server 入口再执行 `ensureUsageAccountingStartup`，用量 gate 成功才继续启动 HTTP/后台任务。F24 用 v0.2.87/#384 两个标记已就绪的副本，首启与重启分别按 api、api-runtime 角色运行同一数据库顺序，报告全部用量表的稳定内容摘要、原 attempt ID/归属、actual/context/unknown/金额/coverage 和前后 mismatch；有任何内容变化先解释并修复，不能只看 marker 或行数通过。
+
+   F24 的 `copy-startup.json` / `copy-timing.json` 记录 api、api-runtime 各自独立离线进程的首启/重启，含角色、轮次、PID、完整候选 SHA/镜像 digest、毫秒单位及 success/not_ready。父进程从 spawn 前计时，子进程完成 schema migration、prepare/ensure gate 及统一模型/全部用量/checkpoint/实际读进度/Issue/未读通知的必要读回校验后发送 offline ready；`startup_total_ms` 覆盖这段实际路径，ready 后清理/退出另计。role 锁、数据库连接、schema migration、prepare/ensure gate（含锁等待）的步骤和 `database_total_ms` 保留单列；失败不报 ready，保留阶段与已测步骤。仍不启动 HTTP、daemon、飞书或 outbox，`http_ready_measured=false`。未测容器调度/冷启动、Store facade、read pool/Live Hub/peer、后台任务与生产竞争/并发启动，离线 ready 不代表完整生产服务 ready。窗口预算采用最慢副本两角色首启实测 startup_total_ms 之和，并另外预留未测服务初始化与人工核对时间。
+6. 只读运行对账，记录 counts、mismatches、各会话 head 和游标。迁移前报告用于核对 attempt 身份及链分组；日常对账不再要求人的 cursor 等于当前 head。
+
+   ```bash
+   bun run scripts/reconcile-unified-model.ts --postgres-env MULTIREMI_DATABASE_URL --before /srv/multiremi/reports/migrations/20261004_unified_message_turn_lane-before.json --out /srv/multiremi/reports/migrations/unified-model-reconciliation.json
+   ```
+
+   SQLite 副本改用 `--sqlite /path/to/copy.db`。命令不创建 Store，不跑迁移；SQLite 以 readonly 打开，PG 使用 repeatable-read 只读事务。身份与迁移初始数量核对只能在切换后、恢复写入前执行；平台恢复写入后使用不带 `--before` 的日常完整性检查。
+7. 按既有版本门观察 fleet 自动升级，确认待升级为 0、各 Runtime 心跳与协议正常。平台数据提示词先 dry-run，负责人核对后再 execute；该脚本归接口/CLI阶段，不属于数据库启动迁移。
+8. QA 核对消息、收件箱、pending 合并、插话、决定答复、重试、换机与网页卡片；通过后由负责人解除 drain。记录版本、时间、对账报告与每台 Runtime 的证据。
+
+## QA 核对项目
+
+| 场景 | 预期 |
+|---|---|
+| SQLite / 真 PG，空库与历史库 | 启动切换一次完成，再次启动幂等 |
+| task 重试链、显式 continuation | 重试链一轮多尝试；continuation 是另一轮；tsk_ 不变 |
+| 无产品对话的历史执行 | 进入 auto_*，历史输入可追溯 |
+| envelope、system、delegation_report | 消息头为列；系统消息与可见 report 使用 message 行 |
+| 未答复决定 | 追加 decision，保留时间、选项和一次性令牌 |
+| agent lane、人 lane | agent 检查点原样；人 cursor 为迁移后 head，不迁历史通知 |
+| 四项预检 | 各项单独失败均拒绝且不改写模型数据 |
+| 已结束任务的未消费 steer | 不阻塞；原行不变；历史消息正文/ID/摘要保留，重启不重复追加 |
+| #384 用量启动与对账 | 两角色首启/重启都按 schema → prepare → ensure；全部用量表内容、两个标记、attempt 归属与标量证据不变 |
+| F24 启动耗时范围 | 两角色 ready 前数据库步骤含锁等待；HTTP ready 与并发/生产竞争明确未测 |
+| retry、redispatch、recoverOrphans | 只增加尝试；轮数与 Issue 状态不变 |
+| 三张旧对话表 | 新操作不产生 INSERT / UPDATE / DELETE |
+| 删表与备份 | 默认 dry-run；两组独立演练；备份恢复检查成功 |
+
+本地测试结果以本单评论和 PR 为准，不用上述预期自证 QA 验收通过。209 脱敏样本与真实容器备份演练需由 Remi-CC 提供证据。
+
+## 物理删表
+
+新版本运行满 7 天，两组表一次报批，获得贺华杰明确授权后先备份，再执行。脚本默认 dry-run，要求 24 小时内生成、与当前数据库匹配且无 mismatch 的对账报告；执行还要求非空备份文件与两个显式开关。
+
+```bash
+bun run scripts/drop-retired-tables.ts --set mul432 --postgres-env MULTIREMI_DATABASE_URL --report reports/migrations/unified-model-reconciliation.json
+bun run scripts/drop-retired-tables.ts --set mul493 --postgres-env MULTIREMI_DATABASE_URL --report reports/migrations/unified-model-reconciliation.json
+```
+
+第一组为 session_events、issue_comments、chat_messages、task_messages；第二组为 steer、human_requests、issue_decisions、inbox_items、agent_issue_update_state、task_prompts。每组在一个事务内执行，不使用 CASCADE；存活约束会阻止删除。确认批准后，在对应命令追加 `--execute --confirm-drop --backup /backup/platform.pgdump`。两组选项可分开演练，但不意味着分开获得生产授权。
+
+## 回滚
+
+删表前：负责人停止新写入、恢复数据库与 api-home 备份、回旧镜像，再通过已有 Runtime release 通道降级 daemon。切换后新增消息会随恢复旧备份丢失，须在窗口决定中接受。删表后：只能前向修复，不把旧表的缺失当作可以直接回旧镜像的状态。

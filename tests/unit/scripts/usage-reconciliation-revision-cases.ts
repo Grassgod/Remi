@@ -1,3 +1,4 @@
+import { runTurnExecutionMutation } from "@multiremi/store/turn-execution-records.js";
 import { expect } from "bun:test";
 import type { MultiremiStore } from "@multiremi/store.js";
 import type { SqlDatabase } from "@multiremi/store/db/postgres.js";
@@ -7,7 +8,7 @@ import { applyUsageReconciliation, verifyUsageReconciliation } from "../../../sc
 
 export async function assertRecoveryRevisions(store: MultiremiStore, db: SqlDatabase, taskId: string,
   copy?: () => SqlDatabase): Promise<void> {
-  db.run("UPDATE multiremi_tasks SET status='completed',usage=?,provider='claude',completed_at='2026-10-01T01:00:00Z' WHERE id=?",
+  runTurnExecutionMutation(db, "UPDATE multiremi_turn_execution_records SET status='completed',usage=?,provider='claude',completed_at='2026-10-01T01:00:00Z' WHERE id=?",
     [JSON.stringify([{ provider: "claude", totalTokens: 70 }]), taskId]);
   migrateLegacyUsage(db);
   const sql = (handle: SqlDatabase) => ({ unsafe: async (statement: string, args: unknown[] = []) => handle.query(statement.replace(/\$\d+/g, "?")).all(...args) }) as unknown as Bun.SQL;
@@ -59,7 +60,7 @@ export async function assertRecoveryRevisions(store: MultiremiStore, db: SqlData
 }
 
 export async function assertRecreatedLegacyReceipt(store: MultiremiStore, db: SqlDatabase, taskId: string): Promise<void> {
-  db.run("UPDATE multiremi_tasks SET status='completed',provider='claude',usage=?,completed_at='2026-10-01T01:00:00Z' WHERE id=?",
+  runTurnExecutionMutation(db, "UPDATE multiremi_turn_execution_records SET status='completed',provider='claude',usage=?,completed_at='2026-10-01T01:00:00Z' WHERE id=?",
     [JSON.stringify([{ provider: "claude", inputTokens: 100, outputTokens: 2 }]), taskId]);
   migrateLegacyUsage(db);
   const previous = Number(db.query("SELECT revision FROM multiremi_usage_unit_receipts WHERE task_id=? AND run_id='legacy' AND unit_id='legacy:0'").get(taskId).revision);
@@ -76,7 +77,7 @@ export async function assertRecreatedLegacyReceipt(store: MultiremiStore, db: Sq
   expect(applyUsageReconciliation(db, plan)).toMatchObject({ applied: 0, resumed: 1 });
   // The scalar source refresh must also advance above receipts retained by a
   // reviewed reconstruction, rather than reverting to its source version.
-  db.run("UPDATE multiremi_tasks SET usage=? WHERE id=?", [JSON.stringify([{ provider: "claude", inputTokens: 110, outputTokens: 2 }]), taskId]);
+  runTurnExecutionMutation(db, "UPDATE multiremi_turn_execution_records SET usage=? WHERE id=?", [JSON.stringify([{ provider: "claude", inputTokens: 110, outputTokens: 2 }]), taskId]);
   expect(migrateLegacyUsage(db).complete).toBe(true);
   expect(Number(db.query("SELECT revision FROM multiremi_usage_unit_receipts WHERE task_id=? AND run_id='legacy' AND unit_id='legacy:0'").get(taskId).revision)).toBeGreaterThan(plan.tasks[0]!.legacyRevision!);
   expect(Number(db.query("SELECT input_tokens+output_tokens AS actual FROM multiremi_usage_units WHERE task_id=? AND run_id='legacy' AND unit_id='legacy:0'").get(taskId).actual)).toBe(112);

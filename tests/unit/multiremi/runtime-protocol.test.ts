@@ -1,13 +1,27 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { DAEMON_MIN_CLI_VERSION } from "@multiremi/contracts/daemon-protocol.js";
 import { formatRuntimeProtocol, runtimeProtocolSummary } from "@multiremi/contracts/runtime-protocol";
-import { createLocalStore, db, resetMultiremiTestEnv } from "./helpers.js";
-import { runMigrations } from "@multiremi/store/migrations.js";
+import { createLocalStore, resetMultiremiTestEnv } from "./helpers.js";
+import { bootstrapPreUnifiedSchema, runMigrations } from "@multiremi/store/migrations.js";
+import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import type { SqlDatabase } from "@multiremi/store/db/postgres.js";
 
 afterEach(resetMultiremiTestEnv);
 
 describe("database-derived runtime protocol", () => {
+  it.each(["0.2.87", "0.2.88"])("rejects released v%s on v2 and admits the unified-model minimum", cliVersion => {
+    const store = createLocalStore();
+    const runtime = store.registerRuntime({ id: "rt_old_release", name: "Old release", provider: "claude", daemonId: "dmn_old_release",
+      metadata: { cli_version: cliVersion } });
+    store.recordDaemonProtocol(runtime.id, "dmn_old_release", 2, cliVersion);
+    const batchedProtocol = () => store.listRuntimesForWorkspace("local").find(row => row.id === runtime.id)?.protocol;
+    expect(store.getRuntime(runtime.id)?.protocol).toEqual({ version: 2, state: "rejected", min_version: DAEMON_MIN_CLI_VERSION, last_error: null });
+    expect(batchedProtocol()).toEqual(store.getRuntime(runtime.id)?.protocol);
+    store.recordDaemonProtocol(runtime.id, "dmn_old_release", 2, DAEMON_MIN_CLI_VERSION);
+    expect(store.getRuntime(runtime.id)?.protocol).toEqual({ version: 2, state: "ok", min_version: DAEMON_MIN_CLI_VERSION, last_error: null });
+    expect(batchedProtocol()).toEqual(store.getRuntime(runtime.id)?.protocol);
+  });
+
   it("derives all four states and never exposes an ACP/agent failure as a CLI protocol failure", () => {
     const store = createLocalStore();
     const runtime = store.registerRuntime({ id: "rt_protocol", name: "Protocol", provider: "claude", daemonId: "dmn_protocol", metadata: { cli_version: "0.2.82" } });
@@ -68,15 +82,21 @@ describe("database-derived runtime protocol", () => {
   });
 
   it("adds exactly one nullable runtime column idempotently without modifying the update table", () => {
-    createLocalStore();
-    db!.exec("ALTER TABLE multiremi_runtimes DROP COLUMN daemon_protocol_version");
-    const before = db!.query("PRAGMA table_info(multiremi_runtime_update_requests)").all();
-    runMigrations(db! as unknown as SqlDatabase);
-    runMigrations(db! as unknown as SqlDatabase);
-    const column = (db!.query("PRAGMA table_info(multiremi_runtimes)").all() as any[]).filter(row => row.name === "daemon_protocol_version");
-    expect(column).toHaveLength(1);
-    expect(column[0]).toMatchObject({ type: "INTEGER", notnull: 0, dflt_value: null });
-    expect(db!.query("PRAGMA table_info(multiremi_runtime_update_requests)").all()).toEqual(before);
+    const legacyDb = openSqliteDatabase(":memory:");
+    try {
+      // Old DDL runs only before the unified-model migration marker exists.
+      bootstrapPreUnifiedSchema(legacyDb as unknown as SqlDatabase);
+      legacyDb.exec("ALTER TABLE multiremi_runtimes DROP COLUMN daemon_protocol_version");
+      const before = legacyDb.query("PRAGMA table_info(multiremi_runtime_update_requests)").all();
+      runMigrations(legacyDb as unknown as SqlDatabase);
+      runMigrations(legacyDb as unknown as SqlDatabase);
+      const column = (legacyDb.query("PRAGMA table_info(multiremi_runtimes)").all() as any[]).filter(row => row.name === "daemon_protocol_version");
+      expect(column).toHaveLength(1);
+      expect(column[0]).toMatchObject({ type: "INTEGER", notnull: 0, dflt_value: null });
+      expect(legacyDb.query("PRAGMA table_info(multiremi_runtime_update_requests)").all()).toEqual(before);
+    } finally {
+      legacyDb.close();
+    }
   });
 
   it("counts physical machines once with failure precedence and excludes cloud workers", () => {

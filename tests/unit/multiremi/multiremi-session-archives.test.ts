@@ -1835,14 +1835,7 @@ describe("Multiremi session archives", () => {
       workspaceId: "local",
       userId: "archive-human",
     });
-    const task = await store.createAccessToken({
-      name: "archive task",
-      type: "task",
-      workspaceId: "local",
-      userId: "archive-human",
-      taskId: "tsk_archive",
-      agentId: "agt_archive",
-    });
+    const task = await store.createTaskAccessToken(store.createTask({ agentId: store.createAgent({ name: "Task credential fixture", provider: "codex" }).id, prompt: "authorization fixture" }), "local");
     for (const token of [human.token, task.token]) {
       const response = await app.request(`${base}/status`, {
         headers: { Authorization: `Bearer ${token}` },
@@ -2255,7 +2248,7 @@ describe("Multiremi session archives", () => {
     const chatTask = store.createTask({
       agentId: agent.id, workspaceId: "local", chatSessionId: chat.id, prompt: "chat trace",
     });
-    db!.run("UPDATE multiremi_tasks SET runtime_id = ? WHERE id = ?", [runtime.id, chatTask.id]);
+    db!.run("UPDATE multiremi_turn_attempts SET runtime_id = ? WHERE id = ?", [runtime.id, chatTask.id]);
 
     const chatBase = `/api/daemon/runtimes/${runtime.id}/chats/${chat.id}/session-archives`;
     const taskBase = `/api/daemon/runtimes/${runtime.id}/tasks/${task.id}/session-archives`;

@@ -15,7 +15,8 @@ export interface OptimisticChatRow {
 
 export function clientIdOf(entry: SessionLogEntry): string | null {
   const metadata = (entry as SessionLogEntry & { metadata?: Record<string, unknown> }).metadata;
-  return typeof metadata?.client_id === "string" ? metadata.client_id : null;
+  const dedupe = (entry as SessionLogEntry & { dedupe_key?: unknown }).dedupe_key;
+  return typeof dedupe === "string" ? dedupe : typeof metadata?.client_id === "string" ? metadata.client_id : null;
 }
 
 /** Keep the local row's DOM identity when the authoritative entry arrives. */
@@ -39,6 +40,9 @@ export function mergeOptimisticChatRows(
   }
   for (const local of localRows) {
     if (matched.has(local.clientId)) continue;
+    // Once observed in the log, only the authoritative row may supply its body.
+    // Deletes, hidden markers and window changes must not revive the draft.
+    if (local.confirmedAt !== undefined) continue;
     rows.push({
       session_id: local.sessionId,
       seq: local.localSeq,

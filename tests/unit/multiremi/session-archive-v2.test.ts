@@ -1,10 +1,11 @@
+import { mutateExecutionFixture, sentTask } from "./unified-test-paths.js";
 import { afterAll, afterEach, describe, expect, it, spyOn } from "bun:test";
 import type { Database } from "bun:sqlite";
 import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { runMigrations } from "@multiremi/store/migrations.js";
+import { bootstrapPreUnifiedSchema } from "@multiremi/store/migrations.js";
 import type { SqlDatabase } from "@multiremi/store/db/postgres.js";
 import { SessionArchiveReader } from "@multiremi/session-archive/reader.js";
 import { createStore, resetMultiremiTestEnv, db } from "./helpers.js";
@@ -19,7 +20,7 @@ function freshDb(): Database {
 }
 
 function migrate(database: Database): void {
-  runMigrations(database as unknown as SqlDatabase);
+  bootstrapPreUnifiedSchema(database as unknown as SqlDatabase);
 }
 
 const dirs: string[] = [];
@@ -1343,17 +1344,19 @@ describe("Session archive trace member authorization", () => {
       rootPath: `/tmp/${issue.key}`, branchName: `agent/${issue.key}`, status: "ready" });
     const secondSession = store.createIssueSession(issue.id, { title: "Second session" });
     const original = store.createTask({ agentId: leader.id, issueId: issue.id, prompt: "original" });
-    const retry = store.createTask({ agentId: leader.id, issueId: issue.id,
-      parentTaskId: original.id, prompt: "retry" });
+    expect(store.claimTask(owner.id)?.id).toBe(original.id);
+    store.startTask(original.id);
+    store.failTask(original.id, { error: "timeout", failureReason: "timeout" });
+    const retry = store.listTasks().find(task => task.parentTaskId === original.id)!;
     const sibling = store.createTask({ agentId: leader.id, issueId: issue.id,
       issueSessionId: secondSession.id, prompt: "second session" });
     const delegated = store.createTask({ agentId: delegate.id, issueId: issue.id,
       parentTaskId: original.id, delegationId: "dlg_issue_package",
       delegatedByAgentId: leader.id, prompt: "delegated" });
     for (const task of [original, retry, sibling]) {
-      db!.run("UPDATE multiremi_tasks SET runtime_id = ? WHERE id = ?", [owner.id, task.id]);
+      mutateExecutionFixture(db!, "UPDATE multiremi_turn_execution_records SET runtime_id = ? WHERE id = ?", [owner.id, task.id]);
     }
-    db!.run("UPDATE multiremi_tasks SET runtime_id = ? WHERE id = ?", [otherProvider.id, delegated.id]);
+    mutateExecutionFixture(db!, "UPDATE multiremi_turn_execution_records SET runtime_id = ? WHERE id = ?", [otherProvider.id, delegated.id]);
     const tasks = [original, retry, sibling, delegated];
     const fixture = await buildArchiveFixture({ subject: { kind: "issue", id: issue.id },
       members: [original.issueSessionId!, secondSession.id].map((sessionId) => ({
@@ -1386,7 +1389,7 @@ describe("Session archive trace member authorization", () => {
     store.reportIssueWorkspace({ issueId: issue.id, runtimeId: owner.id,
       rootPath: `/tmp/${issue.key}`, branchName: `agent/${issue.key}`, status: "ready" });
     const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "trace" });
-    db!.run("UPDATE multiremi_tasks SET runtime_id = ? WHERE id = ?", [owner.id, task.id]);
+    mutateExecutionFixture(db!, "UPDATE multiremi_turn_execution_records SET runtime_id = ? WHERE id = ?", [owner.id, task.id]);
     const fixture = await buildArchiveFixture({ subject: { kind: "issue", id: issue.id },
       traces: { [task.id]: traceFileBody({ events: 1, taskId: task.id }) } });
     const service = new SessionArchiveService(store, { root, minFreeBytes: 0 });
@@ -1397,7 +1400,7 @@ describe("Session archive trace member authorization", () => {
     await service.upload(owner.id, issue.id, archive.id, claim.uploadAttempt!, new Response(fixture.bytes).body);
     const complete = store.completeSessionArchiveWithTracePointers.bind(store);
     store.completeSessionArchiveWithTracePointers = (...args) => {
-      db!.run("UPDATE multiremi_tasks SET runtime_id = ? WHERE id = ?", [foreign.id, task.id]);
+      mutateExecutionFixture(db!, "UPDATE multiremi_turn_execution_records SET runtime_id = ? WHERE id = ?", [foreign.id, task.id]);
       return complete(...args);
     };
     await expect(service.complete(owner.id, issue.id, archive.id, claim.uploadAttempt!))
@@ -1566,17 +1569,17 @@ describe("Session archive trace member authorization", () => {
       db!.run("UPDATE multiremi_chat_sessions SET session_runtime_id = ? WHERE id IN (?, ?)",
         [owner.id, chat.id, otherChat.id]);
       const good = store.createTask({ agentId: agent.id, workspaceId: "local", chatSessionId: chat.id, prompt: "good" });
-      const victim = mismatch === "missing" ? null : store.createTask({
-        agentId: agent.id, workspaceId: "local",
-        chatSessionId: mismatch === "subject" ? otherChat.id : chat.id, prompt: "victim",
-      });
-      db!.run("UPDATE multiremi_tasks SET runtime_id = ? WHERE id = ?", [owner.id, good.id]);
+      const victim = mismatch === "missing" ? null : sentTask(store, store.sendMessage({
+        session_id: mismatch === "subject" ? otherChat.id : chat.id,
+        sender: { type: "member", id: "mem_local_local" }, to: { type: "agent", ref: agent.id },
+        message_kind: "request", body_md: "victim", wake_requested: "now", execution_scope: "archive-victim",
+      }));
+      mutateExecutionFixture(db!, "UPDATE multiremi_turn_execution_records SET runtime_id = ? WHERE id = ?", [owner.id, good.id]);
       if (victim) {
-        db!.run("UPDATE multiremi_tasks SET runtime_id = ? WHERE id = ?",
-          [mismatch === "runtime" ? other.id : mismatch === "nullDaemon" ? noDaemon.id : owner.id, victim.id]);
+        mutateExecutionFixture(db!, "UPDATE multiremi_turn_execution_records SET runtime_id = ? WHERE id = ?", [mismatch === "runtime" ? other.id : mismatch === "nullDaemon" ? noDaemon.id : owner.id, victim.id]);
         if (mismatch === "workspace") {
           const foreignWorkspace = store.createWorkspace({ name: "Foreign archive workspace", slug: "foreign-archive" });
-          db!.run("UPDATE multiremi_tasks SET workspace_id = ? WHERE id = ?", [foreignWorkspace.id, victim.id]);
+          mutateExecutionFixture(db!, "UPDATE multiremi_turn_execution_records SET workspace_id = ? WHERE id = ?", [foreignWorkspace.id, victim.id]);
         }
         db!.run("INSERT INTO multiremi_task_traces (task_id, location, runtime_id, updated_at) VALUES (?, 'daemon', ?, ?)",
           [victim.id, mismatch === "runtime" ? other.id : mismatch === "nullDaemon" ? noDaemon.id : owner.id,

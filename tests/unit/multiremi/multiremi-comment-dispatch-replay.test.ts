@@ -1,3 +1,5 @@
+import { runTurnExecutionMutation } from '@multiremi/store/turn-execution-records.js';
+import type { SqlDatabase as UnifiedFixtureDatabase } from '@multiremi/store/db/postgres.js';
 import { expect, it } from "bun:test";
 import { createCommitEventQueue, type StoreContext, type CreatedIssueComment, type CommitEventQueue } from "@multiremi/store/context.js";
 import type { IssuesRepo } from "@multiremi/store/repos/issues-repo.js";
@@ -23,10 +25,11 @@ pendingTurnBackendTests("MUL-492 comment intent replay", (fixture, backend) => {
   }
   const intent = (f: ReturnType<typeof setup>, id: string) => f.store.getSystemEvent(id)!;
   const replayActivities = (f: ReturnType<typeof setup>) => f.store.listIssueActivity(f.issue.id).filter(a => a.type === "comment_dispatch_replayed");
-  function reject(f: ReturnType<typeof setup>, table: "multiremi_tasks" | "multiremi_issue_activity", condition = "TRUE"): () => void {
+  function reject(f: ReturnType<typeof setup>, table: "multiremi_turn_attempts" | "multiremi_issue_activity", condition = "TRUE"): () => void {
+    condition=condition.replace(/NEW.agent_id/g,"(SELECT agent_id FROM multiremi_turns WHERE id=NEW.turn_id)");
     if (backend === "PostgreSQL") {
-      f.db.run("CREATE FUNCTION mul492_reject() RETURNS trigger AS $$ BEGIN RAISE EXCEPTION 'injected replay write failure'; END; $$ LANGUAGE plpgsql");
-      f.db.run(`CREATE TRIGGER mul492_reject BEFORE INSERT ON ${table} FOR EACH ROW WHEN (${condition}) EXECUTE FUNCTION mul492_reject()`);
+      f.db.run(`CREATE FUNCTION mul492_reject() RETURNS trigger AS $$ BEGIN IF ${condition} THEN RAISE EXCEPTION 'injected replay write failure'; END IF; RETURN NEW; END; $$ LANGUAGE plpgsql`);
+      f.db.run(`CREATE TRIGGER mul492_reject BEFORE INSERT ON ${table} FOR EACH ROW EXECUTE FUNCTION mul492_reject()`);
       return () => f.db.exec(`DROP TRIGGER mul492_reject ON ${table}; DROP FUNCTION mul492_reject()`);
     }
     f.db.exec(`CREATE TRIGGER mul492_reject BEFORE INSERT ON ${table} FOR EACH ROW WHEN ${condition}
@@ -46,7 +49,7 @@ pendingTurnBackendTests("MUL-492 comment intent replay", (fixture, backend) => {
     const tasks = f.store.listTasksForIssue(f.issue.id);
     expect(tasks).toHaveLength(1);
     expect(tasks[0]).toMatchObject({ agentId: f.agent.id, issueSessionId: f.session.id, execution_scope: "",
-      wakeSource: null, triggerCommentId: created.comment.id, chatSessionId: null });
+      wakeSource: "human_sender", triggerCommentId: created.comment.id, chatSessionId: null });
     expect(f.store.listIssueActivity(f.issue.id).filter(a => a.type === "comment_assignee_triggered")).toHaveLength(1);
     expect(replayActivities(f).map(a => a.data)).toEqual([{ commentId: created.comment.id, eventId: event.id, attempt: 1, taskIds: [tasks[0]!.id] }]);
     expect(intent(f, event.id).status).toBe("processed");
@@ -64,7 +67,7 @@ pendingTurnBackendTests("MUL-492 comment intent replay", (fixture, backend) => {
     const task = f.store.createSessionTask(f.session.id, { agentId: f.agent.id, prompt: "Lead" });
     expect(f.store.claimTask(runtime.id)?.id).toBe(task.id);
     f.store.startTask(task.id);
-    const undo = reject(f, "multiremi_tasks", `NEW.agent_id = '${worker.id}'`);
+    const undo = reject(f, "multiremi_turn_attempts", `NEW.agent_id = '${worker.id}'`);
     const warnings: unknown[][] = [];
     const warn = console.warn;
     console.warn = (...args) => warnings.push(args);
@@ -82,7 +85,7 @@ pendingTurnBackendTests("MUL-492 comment intent replay", (fixture, backend) => {
     f.store.dispatchPendingSystemEvents(new Date(Date.parse(event.availableAt)));
     const target = f.store.listTasksForIssue(f.issue.id).filter(t => t.agentId === worker.id);
     expect(target).toHaveLength(1);
-    expect(target[0]).toMatchObject({ wakeSource: "mention", triggerCommentId: reply.id });
+    expect(target[0]).toMatchObject({ wakeSource: "agent_dispatch", triggerCommentId: reply.id });
     f.store.dispatchPendingSystemEvents(new Date(Date.parse(event.availableAt) + 60_000));
     expect(f.store.listTasksForIssue(f.issue.id).filter(t => t.agentId === worker.id).map(t => t.id)).toEqual([target[0]!.id]);
     expect(replayActivities(f)).toHaveLength(1);
@@ -110,7 +113,7 @@ pendingTurnBackendTests("MUL-492 comment intent replay", (fixture, backend) => {
       const payload = { ...event.payload, lanes: (event.payload.lanes as Record<string, unknown>[]).map(({ triggerSummary, ...lane }) => lane) };
       f.db.run("UPDATE multiremi_system_events SET payload = ? WHERE id = ?", [JSON.stringify(payload), event.id]);
     }
-    if (kind === "delete") f.db.run("UPDATE multiremi_tasks SET trigger_comment_id = NULL WHERE id = ?", [original.id]);
+    if (kind === "delete") runTurnExecutionMutation(f.db as unknown as UnifiedFixtureDatabase, "UPDATE multiremi_turn_execution_records SET trigger_comment_id = NULL WHERE id = ?", [original.id]);
     expect(f.store.getTask(original.id)!.status).toBe("queued");
     if (kind === "delete") expect(f.store.getIssueComment(comment.id)).toBeNull();
     f.store.dispatchPendingSystemEvents(new Date(Date.parse(event.availableAt)));
@@ -119,8 +122,8 @@ pendingTurnBackendTests("MUL-492 comment intent replay", (fixture, backend) => {
     expect(f.store.getTask(original.id)!.status).toBe("cancelled");
     const queued = tasks.filter(t => t.status === "queued");
     expect(queued).toHaveLength(1);
-    expect(queued[0]).toMatchObject({ wakeSource: "re_ring", triggerCommentId: null, chatSessionId: null });
-    expect(Number(f.db.query("SELECT wake_seq FROM multiremi_tasks WHERE id = ?").get(queued[0]!.id)!.wake_seq)).toBe(report.entry.seq);
+    expect(queued[0]).toMatchObject({ wakeSource: "platform_to_owner", triggerCommentId: report.entry.id, chatSessionId: null });
+    expect(Number(f.db.query("SELECT wake_seq FROM multiremi_turn_execution_records WHERE id = ?").get(queued[0]!.id)!.wake_seq)).toBe(report.entry.seq);
     expect(f.store.listIssueActivity(f.issue.id).filter(a => a.type === "re_ring").map(a => a.data))
       .toEqual([expect.objectContaining({ origin: "trigger_comment_changed" })]);
     expect(f.store.getConversationLogEntryById(report.entry.id)!.body_md).toBe("Surviving report");
@@ -147,9 +150,8 @@ pendingTurnBackendTests("MUL-492 comment intent replay", (fixture, backend) => {
           updateIssueCommentWithinTransaction(id: string, input: UpdateIssueCommentInput, events: CommitEventQueue): { dispatchIntentId: string };
           deleteIssueCommentWithinTransaction(id: string, events: CommitEventQueue): { dispatchIntentId: string };
         };
-        const detach = () => f.db.run(`UPDATE multiremi_tasks
-          SET trigger_comment_id = ?, trigger_summary = ?, prompt = ? WHERE id = ?`,
-        [ownership === "another comment" ? other.id : null, ownership === "another comment" ? other.body : null,
+        const detach = () => runTurnExecutionMutation(f.db as unknown as UnifiedFixtureDatabase, `UPDATE multiremi_turn_execution_records
+          SET trigger_comment_id = ?, trigger_summary = ?, prompt = ? WHERE id = ?`, [ownership === "another comment" ? other.id : null, ownership === "another comment" ? other.body : null,
           "Terminal return retained", original.id]);
         let eventId: string;
         if (mode === "normal") {
@@ -272,7 +274,7 @@ pendingTurnBackendTests("MUL-492 comment intent replay", (fixture, backend) => {
     const created = deferred(f);
     const event = intent(f, created.dispatchIntentId!);
     const now = Date.parse(event.availableAt);
-    const undo = reject(f, failure === "task" ? "multiremi_tasks" : "multiremi_issue_activity",
+    const undo = reject(f, failure === "task" ? "multiremi_turn_attempts" : "multiremi_issue_activity",
       failure === "activity" ? "NEW.type = 'comment_dispatch_replayed'" : "TRUE");
     try { f.store.dispatchPendingSystemEvents(new Date(now)); }
     finally { undo(); }
@@ -291,7 +293,7 @@ pendingTurnBackendTests("MUL-492 comment intent replay", (fixture, backend) => {
     const second = deferred(other);
     const event = intent(f, first.dispatchIntentId!);
     let now = Date.parse(event.availableAt);
-    const undo = reject(f, "multiremi_tasks", `NEW.agent_id = '${f.agent.id}'`);
+    const undo = reject(f, "multiremi_turn_attempts", `NEW.agent_id = '${f.agent.id}'`);
     try {
       for (let attempt = 1; attempt <= 8; attempt++) {
         f.store.dispatchPendingSystemEvents(new Date(now));
@@ -312,7 +314,7 @@ pendingTurnBackendTests("MUL-492 comment intent replay", (fixture, backend) => {
     const created = deferred(f, `[@Owner](mention://agent/${f.agent.id}) [@Second](mention://agent/${peer.id}) Work`);
     const event = intent(f, created.dispatchIntentId!);
     const now = Date.parse(event.availableAt);
-    const undo = reject(f, "multiremi_tasks", `NEW.agent_id = '${peer.id}'`);
+    const undo = reject(f, "multiremi_turn_attempts", `NEW.agent_id = '${peer.id}'`);
     try { f.store.dispatchPendingSystemEvents(new Date(now)); }
     finally { undo(); }
     expect(f.store.listTasksForIssue(f.issue.id)).toHaveLength(0);

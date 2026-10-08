@@ -7,6 +7,8 @@ import { ChildIssuesResponseSchema, IssueDetailSchema } from "@multiremi/core/ap
 import { IssueSessionListSchema } from "@multiremi/core/api/schemas/comments";
 import { UserSchema } from "@multiremi/core/api/schemas/users";
 import type { Issue, IssueSession, MemberWithUser, User, Workspace } from "@multiremi/core/types";
+import { TurnsPageSchema } from "@multiremi/core/api/schemas";
+import { turnToTask } from "@multiremi/core/api/turn-task";
 import type { AgentTask } from "@multiremi/core/types/agent";
 
 export const SSR_LOG_TIMEOUT_MS = 800;
@@ -95,10 +97,10 @@ export async function readIssueLogBootstrap(slug: string, issueId: string, selec
     issue.parent_issue_id ? readWithSessionCookie<Issue>({ cookie, slug, signal, path: `/api/issues/${encodeURIComponent(issue.parent_issue_id)}`, schema: IssueDetailSchema }) : null,
     readWithSessionCookie<MemberWithUser[]>({ cookie, slug, signal, path: `/api/workspaces/${encodeURIComponent(issue.workspace_id)}/members`, schema: MemberListSchema }),
     readWithSessionCookie<{ issues: Issue[] }>({ cookie, slug, signal, path: `${prefix}/children`, schema: ChildIssuesResponseSchema }),
-    readWithSessionCookie<AgentTask[]>({ cookie, slug, signal, path: `${prefix}/task-runs`, schema: z.array(z.object({ id: z.string(), issue_id: z.string(), status: z.string() }).loose()) }),
+    readWithSessionCookie<z.infer<typeof TurnsPageSchema>>({ cookie, slug, signal, path: `/api/turns?issue=${encodeURIComponent(issueId)}&limit=100`, schema: TurnsPageSchema }),
   ]);
   return window && headWindow && members && children && tasks
-    ? { issue, parentIssue, sessions, members, children: children.issues, tasks,
+    ? { issue, parentIssue, sessions, members, children: children.issues, tasks: tasks.turns.map(turn => turnToTask(turn)),
         log: { sessionId: session.id, window, head: headWindow.entries.find(e => e.seq === 0) ?? null,
           targetCommentId: targetSeq === undefined ? undefined : commentId,
           missingCommentId: targetSeq === undefined ? commentId : undefined } }

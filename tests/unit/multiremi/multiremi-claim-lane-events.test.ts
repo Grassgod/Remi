@@ -18,9 +18,9 @@ describe("MUL-482 transaction ownership and retry boundaries", () => {
         const session = store.getOrCreateDefaultIssueSession(issue.id);
         const task = store.createSessionTask(session.id, { agentId: agent.id, prompt: "Claim round" });
         store.getOrCreateSessionAgentLane(session.id, agent.id);
-        ctx.db.run(`UPDATE multiremi_session_agent_lanes SET provider_session_id = 'expired',
+        ctx.db.run(`UPDATE multiremi_session_lanes SET provider_session_id = 'expired',
           provider = 'claude', runtime_id = ?, cursor_seq = 1, execution_fingerprint = 'expired'
-          WHERE session_id = ? AND agent_id = ?`, [runtime.id, session.id, agent.id]);
+          WHERE session_id = ? AND reader_id = ?`, [runtime.id, session.id, agent.id]);
         const beforeTask = store.getTask(task.id);
         const beforeLane = store.getSessionAgentLane(session.id, agent.id);
         const beforeActivity = store.listIssueActivity(issue.id);
@@ -225,9 +225,9 @@ describe("stale Issue lane claim events on SQLite", () => {
     const task = store.createSessionTask(session.id, { agentId: agent.id, prompt: "Claim stale lane" });
     store.getOrCreateSessionAgentLane(session.id, agent.id);
     db!.run(
-      `UPDATE multiremi_session_agent_lanes SET provider_session_id = 'expired',
+      `UPDATE multiremi_session_lanes SET provider_session_id = 'expired',
        provider = 'claude', runtime_id = ?, cursor_seq = 1,
-       execution_fingerprint = 'expired' WHERE session_id = ? AND agent_id = ?`,
+       execution_fingerprint = 'expired' WHERE session_id = ? AND reader_id = ?`,
       [runtime.id, session.id, agent.id],
     );
     return { store, runtime, issue, task };

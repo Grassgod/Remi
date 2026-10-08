@@ -1,3 +1,4 @@
+import { runTurnExecutionMutation } from "@multiremi/store/turn-execution-records.js";
 import { createHash } from "node:crypto";
 import type { SessionArchiveRequest, SessionArchiveSubjectKind } from "@multiremi/contracts/trace-file.js";
 import { createId, nowIso } from "@multiremi/ids.js";
@@ -439,7 +440,7 @@ export class DaemonRetirementRepo {
     );
     const activeTasks = this.rowsForRuntimeIds(
       `SELECT id, status, agent_id, runtime_id, issue_id
-       FROM multiremi_tasks
+       FROM multiremi_turn_execution_records
        WHERE runtime_id IN (__RUNTIME_IDS__)
          AND status IN (${BLOCKING_TASK_STATUSES.map(() => "?").join(",")})
        ORDER BY id ASC`,
@@ -448,7 +449,7 @@ export class DaemonRetirementRepo {
     );
     const queuedTasks = this.rowsForRuntimeIds(
       `SELECT id, status, agent_id, runtime_id, issue_id
-       FROM multiremi_tasks
+       FROM multiremi_turn_execution_records
        WHERE runtime_id IN (__RUNTIME_IDS__) AND status = 'queued'
        ORDER BY id ASC`,
       runtimeIds,
@@ -469,7 +470,7 @@ export class DaemonRetirementRepo {
     );
     const sessionLaneRows = this.rowsForRuntimeIds(
       `SELECT session_id, agent_id, runtime_id
-       FROM multiremi_session_agent_lanes
+       FROM multiremi_agent_lane_records
        WHERE runtime_id IN (__RUNTIME_IDS__)
        ORDER BY session_id ASC, agent_id ASC`,
       runtimeIds,
@@ -709,25 +710,24 @@ export class DaemonRetirementRepo {
            WHERE runtime_id IN (${placeholders})`,
           [now, ...runtimeIds],
         ).changes;
-        queuedTasksRequeued = this.ctx.db.run(
-          `UPDATE multiremi_tasks
+        queuedTasksRequeued = runTurnExecutionMutation(this.ctx.db, `UPDATE multiremi_turn_execution_records
            SET runtime_id = NULL, session_id = NULL, work_dir = NULL, offered_at = NULL, accepted_at = NULL, updated_at = ?
            WHERE runtime_id IN (${placeholders}) AND status = 'queued'`,
           [now, ...runtimeIds],
         ).changes;
         sessionLanesReset = this.ctx.db.run(
-          `UPDATE multiremi_session_agent_lanes
+          `UPDATE multiremi_session_lanes
            SET provider_session_id = NULL,
                runtime_id = NULL,
                provider = NULL,
                execution_fingerprint = NULL,
                work_dir = NULL,
-               cursor_seq = 0,
+               provider_cursor_seq = 0,
                parent_cursor_seq = 0,
                generation = generation + 1,
-               last_task_id = NULL,
+               last_attempt_id = NULL,
                updated_at = ?
-           WHERE runtime_id IN (${placeholders})`,
+           WHERE reader_type = 'agent' AND runtime_id IN (${placeholders})`,
           [now, ...runtimeIds],
         ).changes;
         chatSessionsReset = this.ctx.db.run(
@@ -862,7 +862,7 @@ export class DaemonRetirementRepo {
     const rows = this.rowsForRuntimeIds(
       `SELECT trace.task_id, trace.runtime_id, task.issue_id, task.chat_session_id
        FROM multiremi_task_traces trace
-       JOIN multiremi_tasks task ON task.id = trace.task_id
+       JOIN multiremi_turn_execution_records task ON task.id = trace.task_id
        WHERE trace.location = 'daemon' AND trace.runtime_id IN (__RUNTIME_IDS__)
          AND task.status NOT IN (${BLOCKING_TASK_STATUSES.map(() => "?").join(",")})
        ORDER BY trace.runtime_id ASC, trace.task_id ASC`,

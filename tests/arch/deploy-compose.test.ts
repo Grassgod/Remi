@@ -35,6 +35,18 @@ function splitSection(readme: string): string {
 }
 
 describe("application compose stack", () => {
+  test("both production topologies mount the default migration report HOME for each API role", () => {
+    for (const file of ["compose.application.yml", "compose.platform.yml"]) {
+      const stack = parse(readFileSync(resolve(repoRoot, "deploy/docker", file), "utf8"));
+      for (const name of ["api", "api-runtime"]) {
+        const service = stack.services[name];
+        expect(service.environment.HOME).toBe("/srv/multiremi");
+        expect(service.volumes).toContain("${REMI_HOME_DIR:?set REMI_HOME_DIR}:/srv/multiremi");
+      }
+    }
+    expect(apiDockerfile).toContain("WORKDIR /app");
+  });
+
   test("both deployment templates satisfy the updater startup budgets for both API roles", () => {
     expect(DEFAULT_USAGE_MIGRATION_TIMEOUT_MS).toBe(SERVER_USAGE_MIGRATION_TIMEOUT_MS);
     expect(DEFAULT_USAGE_MIGRATION_TIMEOUT_MS).toBe(300_000);

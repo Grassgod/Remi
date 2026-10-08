@@ -10,7 +10,7 @@ import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { MultiremiStore } from "@multiremi/store.js";
 import type { StoreContext } from "@multiremi/store/context.js";
 
-const [databaseUrl, prerequisiteId, dependentId, mode, replayAt, resumeFile] = process.argv.slice(2);
+const [databaseUrl, prerequisiteId, dependentId, mode, replayAt, resumeFile, migrationReportDir] = process.argv.slice(2);
 const MODES = [
   "before-commit", "after-commit", "after-claim-commit", "after-done-commit",
   "replay-before-commit", "replay-after-commit", "replay",
@@ -38,6 +38,7 @@ function holdUntilKilled(): void {
 const db: SqlDatabase = /^postgres(?:ql)?:\/\//.test(databaseUrl)
   ? new PostgresSyncDatabase(databaseUrl)
   : openSqliteDatabase(databaseUrl);
+if(migrationReportDir)process.env.MULTIREMI_MIGRATION_REPORT_DIR=migrationReportDir;
 const store = new MultiremiStore(db);
 const { ctx } = store as unknown as { ctx: StoreContext };
 

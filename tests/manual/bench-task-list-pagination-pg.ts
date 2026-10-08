@@ -255,15 +255,15 @@ async function runScenario(scenario: Scenario, pg: InstanceType<typeof Bun.SQL>)
     for (let sample = 0; sample < WARMUPS + SAMPLES; sample += 1) {
       metered.reset();
       const started = performance.now();
-      const response = await app.request(`/api/multiremi/tasks${testCase.query}`, { headers: testCase.headers });
+      const response = await app.request(`/api/turns${testCase.query}`, { headers: testCase.headers });
       const text = await response.text();
       const elapsed = performance.now() - started;
       if (response.status !== 200) throw new Error(`${testCase.label}: HTTP ${response.status} ${text.slice(0, 300)}`);
       if (sample < WARMUPS) continue;
-      const parsed = JSON.parse(text) as { tasks: unknown[] };
+      const parsed = JSON.parse(text) as { turns: unknown[] };
       durations.push(elapsed);
       responseBytes = text.length;
-      tasksReturned = parsed.tasks.length;
+      tasksReturned = parsed.turns.length;
       sqlStatements = metered.statements;
       sqlMs = Number(metered.sqlMs.toFixed(2));
       serverComputeMs = Number(Math.max(0, elapsed - metered.sqlMs).toFixed(2));

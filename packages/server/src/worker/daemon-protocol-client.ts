@@ -4,6 +4,7 @@ import { request as httpsRequest } from "node:https";
 import {
   DAEMON_ACK_TIMEOUT_MS,
   DAEMON_HEARTBEAT_INTERVAL_MS,
+  DAEMON_MIN_CLI_VERSION,
   DAEMON_PROTOCOL_CLOSE_CODES,
   DAEMON_PROTOCOL_MIN,
   DAEMON_PROTOCOL_VERSION,
@@ -14,6 +15,7 @@ import {
   DAEMON_UPGRADE_PROBE_INTERVAL_MS,
   daemonCloseCodeIsRetryable,
   daemonCloseCodeRequiresUpgrade,
+  compareDaemonCliVersion,
   type DaemonHeartbeatPayload,
   type DaemonHelloPayload,
   type DaemonHelloRuntime,
@@ -148,6 +150,7 @@ export class DaemonProtocolClient {
   private probeInFlight = false;
   private paused = false;
   private serverMin = DAEMON_PROTOCOL_MIN;
+  private serverMinCli: string | null = null;
   private nextProbeAt: number | null = null;
   private upgradeAbort: AbortController | null = null;
   private advertised: Array<{ lane: DaemonProtocolLane; runtimeId: string }> = [];
@@ -361,10 +364,23 @@ export class DaemonProtocolClient {
     if (Buffer.byteLength(text, "utf8") > daemonFrameByteLimit(frame.type, frame.payload)) { this.disconnected(4002); return; }
     if (frame.type === "reject") {
       if (typeof frame.payload.min_protocol === "number") this.serverMin = frame.payload.min_protocol;
+      if (typeof frame.payload.min_cli_version === "string") this.serverMinCli = frame.payload.min_cli_version;
       return;
     }
     if (frame.type === "welcome" && this.state === "connecting") {
       if (frame.payload.protocol !== DAEMON_PROTOCOL_VERSION || !frame.payload.session_id) { this.disconnected(4002); return; }
+      // A v2 envelope alone does not prove the server understands turn payloads.
+      // Production welcomes always advertise the payload release gate.
+      if (typeof frame.payload.min_cli_version === "string") {
+        this.serverMinCli = frame.payload.min_cli_version;
+        if (compareDaemonCliVersion(this.serverMinCli, DAEMON_MIN_CLI_VERSION) < 0) {
+          this.enterUpgradeWait();
+          return;
+        }
+      } else {
+        this.enterUpgradeWait();
+        return;
+      }
       this.attempts = 0;
       if (this.handshakeTimer !== null) this.cancel(this.handshakeTimer);
       this.handshakeTimer = null;
@@ -479,7 +495,7 @@ export class DaemonProtocolClient {
     if (this.state === "upgrade_wait") return;
     this.disconnectSocket();
     this.transition("upgrade_wait");
-    this.options.log?.warn(`daemon protocol rejected by server (min ${this.serverMin}, self ${DAEMON_PROTOCOL_VERSION}); waiting for pending_update, no tasks will be claimed`);
+    this.options.log?.warn(`daemon protocol rejected by server (min ${this.serverMinCli ?? this.serverMin}, self ${this.serverMinCli ? this.options.cliVersion : DAEMON_PROTOCOL_VERSION}); waiting for pending_update, no tasks will be claimed`);
     this.scheduleProbe();
   }
 

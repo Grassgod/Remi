@@ -48,6 +48,8 @@ function scaffold(store: MultiremiStore, opts: { issueKind?: "intake" } = {}) {
   const issue = store.createIssue({
     title: "Ship it",
     workspaceId: "local",
+    assigneeType: "agent",
+    assigneeId: agent.id,
     ...(opts.issueKind ? { issueKind: opts.issueKind } : {}),
   });
   return { runtime, agent, issue };
@@ -115,7 +117,7 @@ describe("Issue status derived from task terminal transitions", () => {
     expect(statusOf(store, issue.id)).toBe("in_review");
   });
 
-  it("prefers in_review when a sibling is blocked on a human", () => {
+  it("keeps running work ahead of a sibling blocked on a human", () => {
     const store = createStore();
     const { runtime, agent, issue } = scaffold(store);
     const asking = createSessionTask(store, agent.id, issue.id, "ask");
@@ -125,8 +127,8 @@ describe("Issue status derived from task terminal transitions", () => {
     runTask(store, runtime.id, working.id);
     store.createTaskHumanRequest({ taskId: asking.id, kind: "question", payload: { text: "which?" } });
 
-    // awaiting_human outranks the running sibling — the human is the blocker.
-    expect(statusOf(store, issue.id)).toBe("in_review");
+    // ADR 0016: running work precedes awaiting_human in Issue derivation.
+    expect(statusOf(store, issue.id)).toBe("in_progress");
 
     store.completeTask(working.id, { output: "done" });
     expect(statusOf(store, issue.id)).toBe("in_review");
@@ -350,7 +352,7 @@ describe("awaiting_human round trip", () => {
     expect(statusOf(store, issue.id)).toBe("in_review");
   });
 
-  it("stays in_review when a sibling task is still blocked on a human", () => {
+  it("returns to in_progress when one sibling resumes while another awaits a human", () => {
     // The resume path used to write in_progress unconditionally, hiding a
     // sibling that was still waiting on the human.
     const store = createStore();
@@ -367,7 +369,7 @@ describe("awaiting_human round trip", () => {
 
     expect(store.getTask(answered.id)?.status).toBe("running");
     expect(store.getTask(stillAsking.id)?.status).toBe("awaiting_human");
-    expect(statusOf(store, issue.id)).toBe("in_review");
+    expect(statusOf(store, issue.id)).toBe("in_progress");
   });
 
   it("resumes the task and the Issue when the request times out", () => {

@@ -36,8 +36,10 @@ describe("ACP usage survives unsuccessful prompts", () => {
     const provider = new AcpProvider({ agentType: "claude" });
     const abort = new AbortController();
     let turn = 0;
+    let settleAbort: (value: any) => void = () => {};
     const client = {
-      typedSessionFailures: true, _options: { onSessionUpdate: (_event: any) => {} }, cancel: async () => {},
+      typedSessionFailures: true, _options: { onSessionUpdate: (_event: any) => {} },
+      cancel: async () => { settleAbort({ stopReason: "cancelled", usage: { totalTokens: 0 } }); },
       prompt: async () => {
         const notify = (update: any) => client._options.onSessionUpdate({ sessionId: "s", update });
         if (turn++ > 0) {
@@ -52,7 +54,7 @@ describe("ACP usage survives unsuccessful prompts", () => {
         if (failure === "throw") throw new Error("network ended mid-prompt");
         if (failure === "abort") {
           abort.abort();
-          return new Promise<any>(() => {});
+          return new Promise<any>(resolve => { settleAbort = resolve; });
         }
         return { stopReason: "cancelled", usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 } };
       },

@@ -30,6 +30,27 @@ async function storageFor(kind: "memory" | "sqlite", filename = ":memory:"): Pro
 }
 
 describe.each(["memory", "sqlite"] as const)("%s revision watermarks", kind => {
+  test("minimal hidden markers settle seqs and revoke a cached row at the same revision", async () => {
+    const storage = await storageFor(kind);
+    try {
+      const engine = new ReplicaEngine(storage);
+      open(engine); engine.ack(sid, ack()); engine.frames(sid, [entry()]);
+      const hidden: HubFrame = { seq: 1, kind: "entry", payload: {
+        session_id: sid, seq: 1, revision: 1, visibility: "hidden",
+      } };
+      expect(engine.frames(sid, [hidden])).toBeNull();
+      expect(engine.readWindow(sid, 1, 1)).toEqual([]);
+      expect(engine.snapshot(sid)).toMatchObject({ head: 1, fresh: true, entries: [] });
+      const reopened = new ReplicaEngine(storage);
+      open(reopened);
+      expect(reopened.frames(sid, [hidden, entry()])).toBeNull();
+      reopened.writeWindow(sid, [row()], { from: 1, to: 1 });
+      expect(reopened.readWindow(sid, 1, 1)).toEqual([]);
+      expect(reopened.covers(sid, 1)).toBe(true);
+      expect(storage.readRevisionWatermarks(sid).get(1)).toBe(1);
+    } finally { storage.close(); }
+  });
+
   test.each(["tombstone", "hidden"] as const)("%s rejects old/equal entries and HTTP rows after engine reopen", async removal => {
     const storage = await storageFor(kind);
     try {
@@ -126,6 +147,31 @@ test.each(["tombstone", "hidden"] as const)("SQLite close/reopen persists %s wat
     reopened.writeWindow(sid, [row(1)], { from: 1, to: 1 });
     expect(reopened.readWindow(sid, 1, 1)).toEqual([]);
     expect(storage.readRevisionWatermarks(sid).get(1)).toBe(5);
+  } finally {
+    storage.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("SQLite close/reopen preserves fields.deleted_at watermarks against WS replay and HTTP backfill", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "replica-nested-delete-"));
+  const filename = join(directory, "replica.sqlite3");
+  let storage = await storageFor("sqlite", filename);
+  try {
+    const first = new ReplicaEngine(storage);
+    open(first); first.ack(sid, ack()); first.frames(sid, [entry()]);
+    first.frames(sid, [{ seq: 1, kind: "patch", payload: { session_id: sid, target_seq: 1,
+      revision: 5, fields: { deleted_at: "2026-10-06T00:00:00Z" } } }]);
+    expect(first.readWindow(sid, 1, 1)).toEqual([]);
+    first.close();
+    storage = await storageFor("sqlite", filename);
+    const reopened = new ReplicaEngine(storage);
+    open(reopened); reopened.ack(sid, ack());
+    reopened.frames(sid, [entry(1), entry(5)]);
+    reopened.writeWindow(sid, [row(1), row(5)], { from: 1, to: 1 });
+    expect(reopened.readWindow(sid, 1, 1)).toEqual([]);
+    expect(storage.readRevisionWatermarks(sid).get(1)).toBe(5);
+    expect(reopened.snapshot(sid)).toMatchObject({ head: 1, fresh: true });
   } finally {
     storage.close();
     rmSync(directory, { recursive: true, force: true });

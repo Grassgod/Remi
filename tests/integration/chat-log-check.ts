@@ -215,8 +215,8 @@ try {
   await floatingPage.waitForFunction(text => [...document.querySelectorAll('[data-perf-scroll="session-log"] [data-perf-item="message"]')]
     .some(row => row.textContent?.includes(text)), "Chat history 40");
   check("visible floating Chat has one log subscription", await waitForActive(1), floatingStreamFrames);
-  const sendToFloatingChat = async (body: string) => fetch(`${upstream}/api/chat/sessions/${chat.id}/messages`, {
-    method: "POST", headers: { ...authHeaders, "Content-Type": "application/json" }, body: JSON.stringify({ body }),
+  const sendToFloatingChat = async (body: string) => fetch(`${upstream}/api/sessions/${chat.id}/messages`, {
+    method: "POST", headers: { ...authHeaders, "Content-Type": "application/json" }, body: JSON.stringify({ body_md: body, to: { type: "agent", ref: chat.agentId } }),
   });
   const appearsOnce = async (body: string) => {
     const appeared = await floatingPage.waitForFunction(text => [...document.querySelectorAll('[data-perf-scroll="session-log"] [data-perf-item="message"]')]
@@ -232,7 +232,7 @@ try {
     const requestsWhileClosed = floatingLogRequests.length;
     const hiddenBody = `Hidden interval message ${cycle}`;
     const hiddenSend = await sendToFloatingChat(hiddenBody);
-    check(`cycle ${cycle}: hidden message uses the real API`, hiddenSend.status === 201, hiddenSend.status);
+    check(`cycle ${cycle}: hidden message uses the real API`, hiddenSend.status === 200, hiddenSend.status);
     const hiddenHead = store.getConversationLogHead(chat.id)?.headSeq;
     await Bun.sleep(100);
     check(`cycle ${cycle}: closed floating Chat keeps its log network idle`, floatingLogRequests.length === requestsWhileClosed,
@@ -250,7 +250,7 @@ try {
     check(`cycle ${cycle}: visible floating Chat has one log subscription`, await waitForActive(1), floatingStreamFrames);
     const liveBody = `Visible interval message ${cycle}`;
     const liveSend = await sendToFloatingChat(liveBody);
-    check(`cycle ${cycle}: visible message uses the real API`, liveSend.status === 201, liveSend.status);
+    check(`cycle ${cycle}: visible message uses the real API`, liveSend.status === 200, liveSend.status);
     check(`cycle ${cycle}: live stream delivers once within 2 seconds`, await appearsOnce(liveBody), floatingStreamFrames);
   }
   await floatingPage.screenshot({ path: join(out, "chat-floating-reopened.png") });

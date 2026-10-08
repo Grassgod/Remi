@@ -4,6 +4,7 @@ import { daemonTaskClaimResponse } from "@multiremi/api/wire/tasks.js";
 import { MultiremiDaemonClient } from "@multiremi/client.js";
 import { bindFeishuTopicFixture } from "./feishu-topic-fixture.js";
 import { createLocalStore, db, resetMultiremiTestEnv } from "./helpers.js";
+import { pendingTurnBackendTests } from "./pending-turn-test-backends.js";
 
 const originalFetch = globalThis.fetch;
 afterEach(() => { globalThis.fetch = originalFetch; resetMultiremiTestEnv(); });
@@ -33,6 +34,25 @@ function forceProjectRef(projectId: string, targetId: string, id: string) {
     VALUES (?, ?, 'local', 'project_ref', ?, 99, ?)`,
   [id, projectId, JSON.stringify({ project_id: targetId }), new Date().toISOString()]);
 }
+
+pendingTurnBackendTests("Read-only topic repository catalog", fixture => {
+  it("keeps Project display repos without opting the topic into automatic checkout", () => {
+    const { store, db } = fixture();
+    store.updateWorkspaceRepositories("local", [{ id: "repo_topic", name: "topic", url: repoUrl("topic"),
+      source: "github", default_branch: "trunk" }]);
+    const project = store.createProject({ title: "Topic project", resources: [githubResource("topic")] });
+    const issue = store.createIssue({ title: "Topic issue", projectId: project.id });
+    const agent = store.createAgent({ name: "Topic reader", provider: "codex" });
+    const chat = store.createChatSession({ agentId: agent.id, projectId: project.id });
+    bindFeishuTopicFixture(store, db, chat.id, issue.id);
+    const created = store.createTask({ agentId: agent.id, issueId: issue.id, chatSessionId: chat.id, prompt: "Read topic" });
+    const task = store.getTaskWithAgent(created.id)!;
+    expect(task.holdsWorkspace).toBe(false);
+    expect(task.repos).toEqual([{ url: repoUrl("topic"), defaultBranch: "trunk" }]);
+    expect(task).not.toHaveProperty("chatAutoCheckoutRepos");
+    expect(daemonTaskClaimResponse(store, task)).not.toHaveProperty("chat_auto_checkout_repos");
+  });
+});
 
 describe("Chat explicit automatic checkout catalog", () => {
   it("collects own and recursive Project repos, deduplicates, and uses workspace branch metadata only", () => {

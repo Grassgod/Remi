@@ -59,30 +59,34 @@ describe("MUL-427 ruling (e): comment task associations", () => {
           expect(line.task_id).toBeNull();
         }
         const matches = db.query(`SELECT COUNT(*) AS n FROM multiremi_conversation_log
-          WHERE session_id = ? AND author_type = 'agent' AND author_id = ? AND task_id = ? AND kind = 'message'`)
+          WHERE session_id = ? AND sender_type = 'agent' AND sender_id = ? AND task_id = ? AND kind = 'message'`)
           .get(session.id, agent.id, task.id) as { n: number };
         expect(Number(matches.n)).toBe(1);
       });
     }, 30_000);
 
-    it.skipIf(backend === "pg" && !pgAdminUrl)(`${backend}: deleting a comment clears the tombstone task and publishes the NULL patch`, async () => {
+    it.skipIf(backend === "pg" && !pgAdminUrl)(`${backend}: deleting a comment preserves its frozen source and publishes only the tombstone patch`, async () => {
       await withStore(backend, (store) => {
         const issue = store.createIssue({ title: "Deleted task association", workspaceId: "local" });
-        const comment = store.createIssueComment(issue.id, { body: "Task-linked comment", taskId: "tsk_deleted" });
+        const agent = store.createAgent({ name: "Comment source", provider: "codex" });
+        const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "Comment source" });
+        const comment = store.createIssueComment(issue.id, { body: "Task-linked comment", taskId: task.id });
         const before = store.getConversationLogEntryById(comment.id)!;
-        expect(before.task_id).toBe("tsk_deleted");
+        expect(before.task_id).toBe(store.getTurnForAttempt(task.id)!.id);
         const patches: ConversationLogPatch[] = [];
         store.setConversationLogListener({ onEntry: (_sessionId, entry) => {
           if ("target_seq" in entry) patches.push(entry);
         } });
         store.deleteIssueComment(comment.id);
         const tombstone = store.getConversationLogEntryById(comment.id)!;
-        expect(tombstone.task_id).toBeNull();
+        expect(tombstone).toMatchObject({ id: before.id, seq: before.seq, task_id: before.task_id });
         expect(tombstone.deleted_at).not.toBeNull();
         expect(tombstone.body_md).toBe("");
         expect(tombstone.metadata.deleted_body).toBe("Task-linked comment");
         expect(tombstone.revision).toBe(before.revision + 1);
-        expect(patches.find((patch) => patch.target_seq === before.seq)?.fields.task_id).toBeNull();
+        const patch = patches.find(candidate => candidate.target_seq === before.seq)!;
+        expect(patch.fields.task_id).toBeUndefined();
+        expect(patch.fields).toMatchObject({ body_md: "", deleted_at: tombstone.deleted_at });
       });
     }, 30_000);
   }

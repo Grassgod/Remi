@@ -65,29 +65,45 @@ it("leaves the entire startup home untouched after daemon and archive tests", as
       writeFileSync(path, contents, { mode: 0o600 });
     }
     const before = homeSnapshot(home);
-    const child = Bun.spawn([process.execPath, "test",
+    const files = [
       "tests/integration/multiremi-daemon-steer.test.ts",
       "tests/integration/multiremi-approval-e2e.test.ts",
       "tests/integration/multiremi-drain-outbox.test.ts",
-    ], {
-      cwd: REPO_ROOT,
-      env: childEnv(home, join(root, "cache")),
-      stdout: "pipe",
-      stderr: "pipe",
-    });
-    const timeout = setTimeout(() => child.kill(), 90_000);
+    ];
+    const children: Bun.Subprocess<"ignore", "pipe", "pipe">[] = [];
+    let budgetExpired = false;
+    const timeout = setTimeout(() => {
+      budgetExpired = true;
+      for (const child of children) if (child.exitCode === null) child.kill();
+    }, 90_000);
     try {
-      const [exitCode, stdout, stderr] = await Promise.all([
-        child.exited,
-        new Response(child.stdout).text(),
-        new Response(child.stderr).text(),
-      ]);
-      if (exitCode !== 0) throw new Error(`Daemon/archive child exited ${exitCode}\n${stdout}\n${stderr}`);
+      const runChild = async (file: string) => {
+        if (budgetExpired) throw new Error("Daemon/archive children exceeded the shared 90s budget");
+        const startedAt = performance.now();
+        const child = Bun.spawn([process.execPath, "test", file], {
+          cwd: REPO_ROOT, env: childEnv(home, join(root, "cache")),
+          stdin: "ignore", stdout: "pipe", stderr: "pipe",
+        });
+        children.push(child);
+        const [exitCode, stdout, stderr] = await Promise.all([
+          child.exited, new Response(child.stdout).text(), new Response(child.stderr).text(),
+        ]);
+        console.info(`[home-isolation] ${file}: ${(performance.now() - startedAt).toFixed(0)}ms, exit=${exitCode}`);
+        return { file, exitCode, stdout, stderr };
+      };
+      // PG fixture setup competes with steer delivery inside its 5s cases.
+      // Give steer its own phase; overlap the longer suites to keep the shared
+      // 90s budget at steer + max(approval, drain), rather than all three added.
+      const results = [await runChild(files[0]!), ...await Promise.all(files.slice(1).map(runChild))];
+      if (budgetExpired) throw new Error("Daemon/archive children exceeded the shared 90s budget");
+      const failures = results.filter(result => result.exitCode !== 0);
+      if (failures.length) throw new Error(failures.map(result =>
+        `${result.file} exited ${result.exitCode}\n${result.stdout}\n${result.stderr}`).join("\n"));
       expect(homeSnapshot(home)).toEqual(before);
     } finally {
       clearTimeout(timeout);
-      if (child.exitCode === null) child.kill();
-      await child.exited;
+      for (const child of children) if (child.exitCode === null) child.kill();
+      await Promise.all(children.map(child => child.exited));
     }
   } finally {
     rmSync(root, { recursive: true, force: true });

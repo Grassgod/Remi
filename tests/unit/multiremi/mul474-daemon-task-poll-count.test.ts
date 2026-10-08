@@ -1,4 +1,6 @@
+import { runTurnExecutionMutation } from "@multiremi/store/turn-execution-records.js";
 import { reportFrame } from "../../fixtures/report-session.js";
+import { readOfferedTurnInput, turnCompletion } from "../../fixtures/turn-report.js";
 // MUL-474 (MUL-383 S8e): the daemon's task-level polls must stay cheap.
 //
 // A running task hits `GET :id/status` and `GET :id/steer` every 2.5 s, and
@@ -27,7 +29,6 @@ import { markSqliteDialect, openSqliteDatabase } from "@multiremi/store/db/sqlit
 import { createMultiremiApp } from "@multiremi/api.js";
 import { taskOfferResponse } from "../../fixtures/task-offer.js";
 import { openRuntimeDownlinks, requestRuntimeRpc } from "../../fixtures/runtime-downlinks.js";
-import { taskInputSnapshot } from "@multiremi/api/daemon-protocol/task-input-snapshot.js";
 import type { SqlDatabase, SqlStatement } from "@multiremi/store/db/postgres.js";
 import { MultiremiStore } from "@multiremi/store.js";
 import {
@@ -149,7 +150,7 @@ async function countRoute(
  *     rather than by the count, because the projection is what changes.
  */
 // The v2 steer snapshot also checks runtime workspace identity and bot-host cards.
-const MAX_STATEMENTS = { status: 6, steer: 7, messages: 9 } as const;
+const MAX_STATEMENTS = { status: 6, messages: 9 } as const;
 
 /** Statements that must never appear on a task-level poll. */
 const FORBIDDEN_SQL = [
@@ -174,17 +175,6 @@ describe("MUL-474 daemon task-level polls", () => {
     expectNoTaskPayloadReads(sql);
   });
 
-  it("bounds the steer push snapshot and never reads the task payload", async () => {
-    const scaffolded = await scaffold();
-    scaffolded.probe.reset();
-    taskInputSnapshot(scaffolded.store, scaffolded.fixture.runtimeId,
-      scaffolded.store.getRuntimeLite(scaffolded.fixture.runtimeId)!.daemonId!,
-      new Set([scaffolded.fixture.taskId]), () => {});
-    const sql = [...scaffolded.probe.statements];
-    expect(sql.length).toBeLessThanOrEqual(MAX_STATEMENTS.steer);
-    expectNoTaskPayloadReads(sql);
-  });
-
   it("bounds trace.append for one event and never reads the task payload", async () => {
     const scaffolded = await scaffold();
     scaffolded.probe.reset();
@@ -201,8 +191,14 @@ describe("MUL-474 daemon task-level polls", () => {
     const scaffolded = await scaffold();
     // The guard reads identity, the handler reads the row, `completeTask` writes
     // and then re-reads the row to build its response.
+    const task = scaffolded.store.getTask(scaffolded.fixture.taskId)!;
+    const turn = scaffolded.store.getTurnForAttempt(task.id)!;
+    scaffolded.store.listConversationLogRangePage(turn.session_id, 0, Number.MAX_SAFE_INTEGER, 100);
+    scaffolded.store.recordSessionAgentRangeRead(turn.session_id, task.agentId, { seq: 1, offset: 0 },
+      { seq: scaffolded.store.getConversationLogHead(turn.session_id)!.headSeq + 1, offset: 0 }, task.id);
+    readOfferedTurnInput(scaffolded.store, task.id);
     scaffolded.probe.reset();
-    const response = await reportFrame(scaffolded.store, "task.complete", { task_id: scaffolded.fixture.taskId, output: "MUL-474 completed" }, { headers: scaffolded.headers, authToken: AUTH_TOKEN });
+    const response = await reportFrame(scaffolded.store, "turn.complete", turnCompletion(scaffolded.store, task.id, "MUL-474 completed"), { headers: scaffolded.headers, authToken: AUTH_TOKEN });
     expect(response.ok).toBe(true);
     const body = scaffolded.store.getTask(scaffolded.fixture.taskId)!;
     // The post-write read must see completion, not a cached running row.
@@ -210,11 +206,11 @@ describe("MUL-474 daemon task-level polls", () => {
     expect(body.result).toBe("MUL-474 completed");
 
     const sql = [...scaffolded.probe.statements];
-    const writeIndex = sql.findIndex((statement) => /^UPDATE\s+multiremi_tasks\s+SET\s+status/i.test(statement));
+    const writeIndex = sql.findIndex((statement) => /^UPDATE\s+multiremi_turn_attempts\s+SET\s+status/i.test(statement));
     expect(writeIndex).toBeGreaterThanOrEqual(0);
     // A read after the write must have reached the database — that is the
     // request-cache invalidation doing its job, not a stale cache hit.
-    expect(sql.slice(writeIndex + 1).some((statement) => /^SELECT \* FROM multiremi_tasks WHERE id = \?$/i.test(statement)))
+    expect(sql.slice(writeIndex + 1).some((statement) => /^SELECT \* FROM multiremi_turn_execution_records WHERE id = \?$/i.test(statement)))
       .toBe(true);
   });
 });
@@ -234,10 +230,7 @@ describe("MUL-474 daemon GET task status golden", () => {
     const fixture = await seedDaemonTaskPollFixture(store, {
       run: (sql, params) => { db.run(sql, params as SQLQueryBindings[]); },
     });
-    db.run(
-      "UPDATE multiremi_tasks SET started_at = ? WHERE id = ?",
-      [golden.fixture.startedAt, fixture.taskId],
-    );
+    runTurnExecutionMutation(db, "UPDATE multiremi_turn_execution_records SET started_at = ? WHERE id = ?", [golden.fixture.startedAt, fixture.taskId]);
     const app = createMultiremiApp({ store, authToken: AUTH_TOKEN });
 
     const response = await app.request(`/api/daemon/tasks/${fixture.taskId}/status`, {
@@ -381,11 +374,11 @@ describe("MUL-474 daemon task authority matrix", () => {
     const connection = await openRuntimeDownlinks(store, fixture.runtimeId,
       { identity: { accessToken: await store.verifyAccessToken(fixture.daemonToken), masterToken: false } });
     try {
-      expect(connection.frames.filter(frame => frame.t === "task.steer").map(frame => frame.p.steer.id)).toEqual([steer.id]);
+      expect(connection.frames.filter(frame => frame.t === "turn.message").map(frame => frame.p.message.id)).toEqual([steer.id]);
     } finally { await connection.close(); }
     const foreignConnection = await openRuntimeDownlinks(store, fixture.runtimeId,
       { identity: { accessToken: await store.verifyAccessToken(fixture.foreignDaemonToken), masterToken: false } });
-    try { expect(foreignConnection.frames.filter(frame => frame.t === "task.steer")).toHaveLength(0); }
+    try { expect(foreignConnection.frames.filter(frame => frame.t === "turn.message")).toHaveLength(0); }
     finally { await foreignConnection.close(); }
 
     // A non-owner daemon keeps the exact refusal it had before the reorder. This
@@ -420,9 +413,9 @@ describe("MUL-474 daemon task authority matrix", () => {
   it("refuses a non-owner on the steer/consume write path too", async () => {
     const { scaffolded } = await authorityScaffold();
     const { store, fixture } = scaffolded;
-    const response = await requestRuntimeRpc(store, fixture.foreignRuntimeId, "steer.consume",
-      { task_id: fixture.taskId, steer_ids: [] }, fixture.foreignDaemonToken, AUTH_TOKEN);
-    expect(response).toMatchObject({ ok: false, code: "authority_revoked" });
+    const response = await requestRuntimeRpc(store, fixture.foreignRuntimeId, "turn.input",
+      { turn_id: store.getTurnForAttempt(fixture.taskId)!.id, attempt_id: fixture.taskId, input_to_seq: 0, message_ids: [] }, fixture.foreignDaemonToken, AUTH_TOKEN);
+    expect(response).toMatchObject({ ok: false, code: "stale_attempt", retryable: false });
   });
 
   it("keeps the Feishu host exception working for a Chat task on another daemon", async () => {
@@ -473,11 +466,12 @@ describe("MUL-474 daemon task authority matrix", () => {
     // Exception holds: the hosting daemon may read the snapshot ...
     expect((await app.request(`${taskPath}/status`, { headers: host })).status).toBe(200);
     // ... but not mutate the run it does not execute.
-    expect((await reportFrame(store, "task.complete", { task_id: submitted.taskId, output: "not mine" }, { headers: { ...host, "content-type": "application/json" }, authToken: "" })).ok).toBe(false);
+    expect((await reportFrame(store, "turn.complete", turnCompletion(store, submitted.taskId!, "not mine"), { headers: { ...host, "content-type": "application/json" }, authToken: "" })).ok).toBe(false);
     // The executing daemon reads and writes it normally.
     const executing = { Authorization: `Bearer ${executor.token}` };
     expect((await app.request(`${taskPath}/status`, { headers: executing })).status).toBe(200);
-    expect((await reportFrame(store, "task.complete", { task_id: submitted.taskId, output: "Mine" }, { headers: { ...executing, "content-type": "application/json" }, authToken: "" })).ok).toBe(true);
+    readOfferedTurnInput(store, submitted.taskId!);
+    expect((await reportFrame(store, "turn.complete", turnCompletion(store, submitted.taskId!, "Mine"), { headers: { ...executing, "content-type": "application/json" }, authToken: "" })).ok).toBe(true);
     // Once the connector is reassigned away, the exception no longer holds.
     store.heartbeatRuntime("rt_mul474_executor", { supportsFeishuBotConfig: true });
     store.upsertFeishuBotConfig("local", {

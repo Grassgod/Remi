@@ -24,6 +24,8 @@ summary: 从可靠采集到规范化事实、SQL 报表、价格版本和可恢�
 
 不可重试的 `invalid_report` 只持久停放该 usage 或 execution payload，并向等待者返回真实拒绝；后续 usage 仍单独接受鉴权与验证。批量 message payload 被拒绝时，其全部参与记录保留为诊断。重启可重新逐帧检查旧版由明确 `invalid_report` RPC 封锁的任务分区，HTTP 身份撤权造成的分区屏障保持生效。
 
+用量表的 `task_id` 是 MUL-493 的执行尝试 ID，外键指向 `multiremi_turn_attempts`；`run_id` 区分该尝试内的 provider 执行，轮身份从尝试的 `turn_id` 获取。启动时先完成轮/尝试模型迁移，再建立用量表，不恢复旧任务表或退休接口。
+
 单位主键是 `(task_id, run_id, unit_id)`。更高 unit revision 替换，同 revision 同内容重放忽略、不同内容拒绝，较低 revision 忽略。整个 snapshot revision 只控制 run 的 complete/revision 元数据：较旧 snapshot 中不同的新单位仍可接受，未包含的单位不会删除。分块终态报告允许同 snapshot revision 的 complete 从 false 单调升级为 true，不允许同 revision 回退。不同 run 中已证明独立的执行消费相加。旧报告边界在任务锁内用上一 revision 加一，不把毫秒时间戳写入 PostgreSQL INTEGER。
 
 `multiremi_usage_unit_receipts` 持久保存单位的最高 revision、规范化不可变字段和 accepted/parked disposition。即使重复事实被撤下或冲突更新仅停放，更旧重放也不能重新插入消费；同 revision 改变事实仍拒绝。经审核的历史修复可以将已由真实请求替代的差额或累计观测标为 `superseded`，保留原事实审计并撤下其规范化计量行；后续更高 revision 的旧 daemon 重放也不能使它再次入账。普通上报不能自行声明退休其他单位。
@@ -64,7 +66,7 @@ Runtime 列表/详情和 task/status/Issue 用量兼容响应同样只从规范�
 
 消费和金额按 unit 的 `occurredAt` 过滤、分日，但时间证据并不总是逐请求时间。`time_provenance` 区分上游时间 `provider_timestamp`、采集时间 `observed_at`、历史任务归属时间 `task_attributed`、未知或混合。旧 task 聚合没有逐请求时间时保留任务结束/已有记录归属日，不拆成虚构的逐日请求；报表返回 `task_attributed_tokens` 与 `task_attributed_task_count`，`time_basis.historical_aggregates=task_attribution_at`，页面显示明显历史归属日提示，CSV 同步保留时间出处。完成、失败、取消任务按各自生命周期时间统计；时间缺失时回退到已有 updated/created 时间，不能据此推断精确结束时刻。`task_daily` 独立承载任务趋势和已结束任务耗时。active、queued 描述当前状态快照，不代表已完成。响应 `time_basis` 声明这些口径。
 
-`summary.task_count` 是当前报告范围内相关 task 的 distinct 数。一个 task 可以跨日、跨模型、跨 Runtime，因此各组 task count 不可加总；状态与耗时也不能由 token 日期推导。actual token 分量、priced/unpriced tokens、同币种已知金额是可对账的加性指标；context peak、task count 和比例不是。每日 token 表中没有消费的生命周期日可以只出现在 `task_daily`。
+`summary.task_count` 是当前报告范围内相关轮的 distinct 数；同轮重试的所有尝试保留消费，但生命周期只计当前尝试，时长从轮开始到最终结束。一个 task 可以跨日、跨模型、跨 Runtime，因此各组 task count 不可加总；状态与耗时也不能由 token 日期推导。actual token 分量、priced/unpriced tokens、同币种已知金额是可对账的加性指标；context peak、task count 和比例不是。每日 token 表中没有消费的生命周期日可以只出现在 `task_daily`。
 
 金额按 `known_cost_by_currency`、公开参考价 `reference_cost_by_currency` 和 SDK 估算 `sdk_estimate_cost_by_currency` 三栏输出，不将参考价与 SDK 估算相加；范围未知的金额仅保留诊断证据，不同货币各自保留，未计价部分不当成零或换汇合并。`priced_tokens`/`unpriced_tokens` 和比例表示 token 数量覆盖，不表示金额覆盖。`complete` 同时检查未知消费、未计价 token 和所选 Runtime/项目范围内的逐 run 完整性；完成但空或仅有 context 的 run 仍是未知消费，不能被同 task 的另一轮已知用量掩盖。零实际消费的 token 覆盖比例为 `null`。模型行的状态与时长同样受生命周期窗口约束。
 
@@ -125,13 +127,17 @@ bun run scripts/reconcile-task-usage.ts --verify-plan=<review-plan.json>
 
 不带 execute 的 legacy migration 只读计数；native/raw 恢复先生成只读计划，再按审核过的计划执行。恢复读取 v2 ZIP 索引和 v1 tar.gz 的有限大小原生成员，按全部竞争任务的时间边界归属，`--task-id` 仅筛选输出。非终态任务不会被修复；已有规范化执行记录的终态任务可以进入 `modernRepairs`，不再一概排除。计划摘要分别列出修复任务、前后已知消费及无法修复的原因。
 
-现代记录修复由 [modern-usage-repair.ts](../scripts/modern-usage-repair.ts)执行，要求任务只有一个已完整上报的执行 run，且任务、原始请求与原生日志的 session 身份一致。Claude 仅使用有明确结束原因的最终请求记录更新同一请求；全部相关请求身份匹配、更新增量恰好解释唯一结算差额时，才将对应 `acp_prompt_unattributed_remainder` 退休。原有进度摘要、上下文和其他调用保留；涉及费用覆盖时同时更新原关联，不把修正后的数字再加一份。
+现代记录修复由 [modern-usage-repair.ts](../scripts/modern-usage-repair.ts)执行，通过 `multiremi_turn_execution_records` 读取轮及尝试，原 task ID 对应尝试 ID。每个待修复尝试必须处于终态、只有一个已完整上报的执行 run，且尝试、原始请求与原生日志的 provider session 身份一致。Claude 仅使用有明确结束原因的最终请求记录更新同一请求；全部相关请求身份匹配、更新增量恰好解释唯一结算差额时，才将对应 `acp_prompt_unattributed_remainder` 退休。原有进度摘要、上下文和其他调用保留；涉及费用覆盖时同时更新原关联，不把修正后的数字再加一份。
+
+原始 usage 事件属于尝试的 daemon trace，不属于对话消息。恢复计划读取 v2 archive 的 trace 成员，校验索引、尝试、对话、Agent、provider 和文件封口事实；同一尝试的 seq 在旧行与回填 trace 中只读取一次。`multiremi_task_messages` 的入口仅保留作历史只读取证，与历史 trace 回填一致；统一模型不向它写入新执行事件。原生日志仍优先于重叠的原始消费，缺少请求身份和覆盖证据时保留 unknown。
 
 Codex 原生日志的 `token_usage_record` 按 thread/session 与 response ID 去重，`compacted.latest_token_usage_record` 是同一请求的副本。普通生成和压缩请求均进入恢复小计。只有同一 turn 的独立请求分量之和等于最终 `turn_token_usage`、存在匹配的 `task_started` 和 `task_complete`，并满足任务和 run 的归属边界，才能替代该 turn 明确始末范围内的旧 unknown 观测。其他轮次或界外的迟到观测继续保留未知，单一 run 不等于只有一个 turn。
 
 跨 archive 合并同一请求时采用完整的更强快照，不将相互矛盾的分量拼成不存在的数字。合并完所有成员后统一处理旧 `token_count` 与新请求的覆盖：完整 turn 内择一计量，不完整或无明确 turn 归属的重叠观察保留为非计量 unknown，不能与请求重复相加，也不能被当成纯上下文而隐藏消费缺口。明确属于更早、只有旧格式的轮次继续保留原计量证据。
 
-现代修复使用原 run 和规范化写入器，维护审计表 `multiremi_usage_modern_repair_audit` 保存原状态及修复后哈希。执行前在事务内复检任务边界、所有 run、单位、receipts、归属和费用覆盖；计划陈旧则拒绝应用。被替代的差额或旧观测必须已有持久 receipt，退休后设置 `superseded`，迟到上报不恢复旧计量。重复应用同一计划不重复记账，verify 核对修复后状态。此过程不会作为服务启动或普通查询的隐式操作。
+现代修复使用原 run 和规范化写入器，维护审计表 `multiremi_usage_modern_repair_audit` 的外键关联尝试，保存原状态及修复后哈希。计划冻结尝试的 `turn_id`，状态哈希包含轮归属和尝试序号；执行前在事务内按审核时的轮归属锁定轮和尝试，再复检尝试边界、所有 run、单位、receipts、归属和费用覆盖。尝试换轮或序号变化会拒绝应用；同轮正常重试、`current_attempt_id` 变化不会使旧终态尝试的计划失效。旧版缺少轮归属的现代修复计划必须重新生成并审核。被替代的差额或旧观测必须已有持久 receipt，退休后设置 `superseded`，迟到上报不恢复旧计量。重复应用同一计划不重复记账，verify 核对修复后状态。此过程不会作为服务启动或普通查询的隐式操作。
+
+CLI 的 apply/verify 入口与修复库的 apply 入口先只读校验统一轮、尝试、执行投影及必要字段，再进行用量 schema 或审计表 DDL。缺少执行投影或未完成统一模型迁移时，返回列明缺项与迁移步骤的拒绝，不创建维护表或改账；先在隔离恢复库用当前服务完成启动迁移，再重新生成并审核计划。新库和已完成真实旧库迁移的统一模型均可使用这条恢复流程。
 
 只有旧聚合而缺少整个执行覆盖证明的 legacy 任务，仍不能用部分原生日志替换其已知消费：请求证据单独保留供审核，不与旧聚合相加。只有旧消费未知时才补入请求 subtotal，coverage 仍为 partial；不能据此宣称全部历史已恢复。旧累计证据的 replay 和无重置证据下降不改变差分基线，total-only 的上下文估计不成为消费。恢复按 task 保存原事实、旧 usage 校验哈希和修订水位；后续计划须保留已有请求身份、已知计数及费用关联，空或较窄扫描不能撤销事实。不可恢复项保留明确原因。旧 `backfill-codex-task-usage.ts` 不再执行 sum-used 写入。计划、日志和 archive 可能包含敏感证据，应放在维护输出目录，避免在公共日志输出正文或凭据。
 

@@ -1,3 +1,4 @@
+import { runTurnExecutionMutation } from "@multiremi/store/turn-execution-records.js";
 /**
  * MUL-336 / MUL-478 — the Agent's default fallback model.
  *
@@ -14,7 +15,7 @@ import { afterEach, describe, expect, it, spyOn } from "bun:test";
 import { daemonTaskClaimResponse, taskCompatibilityResponse } from "@multiremi/api/wire/tasks.js";
 import type { MultiremiRuntimeModel } from "@multiremi/contracts/types.js";
 import { classifyDaemonTaskFailure, TaskFailureReason } from "@multiremi/task-failure.js";
-import { createStore, db, resetMultiremiTestEnv } from "./helpers.js";
+import { createLocalStore as createStore, db, resetMultiremiTestEnv } from "./helpers.js";
 
 afterEach(resetMultiremiTestEnv);
 
@@ -166,7 +167,8 @@ describe("MUL-336 model fallback recovery chain", () => {
     failClaimed(store, runtime.id, first.id, NO_ACCOUNT_ERROR);
     expect(successor(store, first.id)!.executionModel).toBe(FALLBACK);
 
-    const independent = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "Second" });
+    const independentIssue = store.createIssue({ title: "Independent primary-model lane" });
+    const independent = store.createTask({ agentId: agent.id, issueId: independentIssue.id, prompt: "Second" });
     expect(independent.executionModel).toBeNull();
     expect(independent.fallbackSwitched).toBe(false);
     // The queued fallback retry is older, so it is claimed first — and it is the
@@ -187,7 +189,8 @@ describe("MUL-336 model fallback recovery chain", () => {
     // The gateway now only advertises the fallback model: this machine can no
     // longer execute the Agent's primary selection.
     store.updateRuntimeModels(runtime.id, [model(FALLBACK)]);
-    const next = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "Primary only" });
+    const nextIssue = store.createIssue({ title: "Independent capability probe" });
+    const next = store.createTask({ agentId: agent.id, issueId: nextIssue.id, prompt: "Primary only" });
     // The queued retry still runs, because the capability that matters is the
     // one the task will actually execute with (requirement 6) ...
     expect(store.claimTask(runtime.id)?.id).toBe(retry.id);
@@ -294,7 +297,7 @@ describe("MUL-336 model fallback recovery chain", () => {
     const retry = successor(store, task.id)!;
     expect(retry).toMatchObject({ status: "queued", executionModel: FALLBACK, fallbackSwitched: true, attempt: 2 });
     expect(retry.switchReason).toBe(`gateway_resource:${TaskFailureReason.QueuedModelUnavailable};provider_session_reset`);
-    expect(store.getIssue(issue.id)?.status).toBe("in_progress");
+    expect(store.getIssue(issue.id)?.status).toBe("todo");
     store.refreshQueuedCapabilityWaitReasons(created + 15 * 60_000);
     expect(store.listTasks().filter((candidate) => candidate.parentTaskId === task.id)).toHaveLength(1);
     expect(store.claimTask(runtime.id)?.id).toBe(retry.id);
@@ -312,7 +315,7 @@ describe("MUL-336 model fallback recovery chain", () => {
       events.push(`failed:${updated.id}`);
     });
     const repo = (store as any).tasks;
-    const insert = spyOn(repo, "createTaskWithinWorkspaceLock").mockImplementation(() => {
+    const insert = spyOn(repo, "createRetryAttemptWithinWorkspaceLock").mockImplementation(() => {
       throw new Error("retry insert rejected");
     });
     const now = Date.parse(task.createdAt) + 5 * 60_000;
@@ -379,7 +382,7 @@ describe("MUL-336 model fallback recovery chain", () => {
     // Deferred work must not be claimed early — that is the whole point of
     // honouring Retry-After instead of hammering a shared account pool.
     expect(store.claimTask(runtime.id)).toBeNull();
-    db!.run("UPDATE multiremi_tasks SET next_retry_at = ? WHERE id = ?", [
+    runTurnExecutionMutation(db!, "UPDATE multiremi_turn_execution_records SET next_retry_at = ? WHERE id = ?", [
       new Date(Date.now() - 1_000).toISOString(), retry.id,
     ]);
     expect(store.claimTask(runtime.id)?.id).toBe(retry.id);
@@ -542,7 +545,8 @@ describe("MUL-336 model fallback recovery chain", () => {
     const returns = store.listTasksForIssue(issue.id)
       .filter((task) => task.agentId === leader.id && task.delegationId === "dlg_fallback");
     expect(returns).toHaveLength(1);
-    expect(returns[0]!.parentTaskId).toBe(retry.id);
+    expect(returns[0]!.parentTaskId).toBeNull();
+    expect(store.getMessage(returns[0]!.triggerCommentId!)?.task_id).toBe(store.getTurnForAttempt(retry.id)!.id);
   });
 
   it("runs a switched task on the fallback's own level when the Agent configured none", () => {

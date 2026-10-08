@@ -57,13 +57,13 @@ export function ensureUsageAccountingSchema(db: SqlDatabase): void {
   db.exec(`
     CREATE TABLE IF NOT EXISTS multiremi_usage_runs (
       task_id TEXT NOT NULL, run_id TEXT NOT NULL, revision INTEGER NOT NULL, complete INTEGER NOT NULL,
-      PRIMARY KEY(task_id, run_id), FOREIGN KEY(task_id) REFERENCES multiremi_tasks(id) ON DELETE CASCADE
+      PRIMARY KEY(task_id, run_id), FOREIGN KEY(task_id) REFERENCES multiremi_turn_attempts(id) ON DELETE CASCADE
     );
     CREATE TABLE IF NOT EXISTS multiremi_usage_task_scopes (
       task_id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, agent_id TEXT NOT NULL, runtime_id TEXT, project_id TEXT,
       active_run_id TEXT,
       runtime_provenance TEXT NOT NULL DEFAULT 'unknown', project_provenance TEXT NOT NULL DEFAULT 'unknown',
-      FOREIGN KEY(task_id) REFERENCES multiremi_tasks(id) ON DELETE CASCADE
+      FOREIGN KEY(task_id) REFERENCES multiremi_turn_attempts(id) ON DELETE CASCADE
     );
     CREATE TABLE IF NOT EXISTS multiremi_usage_run_scopes (
       task_id TEXT NOT NULL,run_id TEXT NOT NULL,workspace_id TEXT NOT NULL,agent_id TEXT NOT NULL,runtime_id TEXT,project_id TEXT,
@@ -122,7 +122,7 @@ export function ensureUsageAccountingSchema(db: SqlDatabase): void {
     CREATE INDEX IF NOT EXISTS idx_usage_meter_namespace ON multiremi_usage_meter_owners(workspace_id,provider,provider_session_id,epoch_id);
     CREATE TABLE IF NOT EXISTS multiremi_usage_legacy_audit (
       task_id TEXT PRIMARY KEY, original_usage TEXT, migrated_at TEXT NOT NULL,
-      FOREIGN KEY(task_id) REFERENCES multiremi_tasks(id) ON DELETE CASCADE
+      FOREIGN KEY(task_id) REFERENCES multiremi_turn_attempts(id) ON DELETE CASCADE
     );
     CREATE TABLE IF NOT EXISTS multiremi_usage_prices (
       id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, provider TEXT NOT NULL, model TEXT NOT NULL,
@@ -155,7 +155,7 @@ export function ensureUsageAccountingSchema(db: SqlDatabase): void {
   // A fresh database has no legacy facts to backfill. Existing installations
   // remain gated until the resumable scalar backfill has finished. Startup
   // performs that work after releasing the global schema migration lock.
-  if (!db.query("SELECT id FROM multiremi_tasks LIMIT 1").get()) {
+  if (!db.query("SELECT id FROM multiremi_turn_execution_records LIMIT 1").get()) {
     db.run("INSERT INTO multiremi_schema_migrations(id,applied_at) VALUES(?,?) ON CONFLICT(id) DO NOTHING", [USAGE_CUTOVER_MARKER, new Date().toISOString()]);
   }
 }
@@ -334,9 +334,9 @@ export function writeUsageSnapshot(db: SqlDatabase, taskId: string, input: TaskU
   return db.transaction(() => {
     const task = db.query(`SELECT t.id,t.workspace_id,t.agent_id,t.runtime_id,t.runtime_workspace_id,t.status,t.attempt,t.started_at,
       i.project_id AS issue_project_id,c.project_id AS chat_project_id,a.schedule_target,tr.runtime_id AS trace_runtime_id,b.cross_switch
-      FROM multiremi_tasks t LEFT JOIN multiremi_issues i ON i.id=t.issue_id
+      FROM multiremi_turn_execution_records t LEFT JOIN multiremi_issues i ON i.id=t.issue_id
       LEFT JOIN multiremi_chat_sessions c ON c.id=t.chat_session_id
-      LEFT JOIN multiremi_autopilot_runs a ON a.id=(SELECT ar.id FROM multiremi_autopilot_runs ar WHERE ar.task_id=t.id ORDER BY ar.created_at DESC LIMIT 1)
+      LEFT JOIN multiremi_autopilot_runs a ON a.id=(SELECT ar.id FROM multiremi_autopilot_runs ar WHERE ar.turn_id=t.turn_id ORDER BY ar.created_at DESC LIMIT 1)
       LEFT JOIN multiremi_task_traces tr ON tr.task_id=t.id LEFT JOIN multiremi_trace_backfill_tasks b ON b.task_id=t.id WHERE t.id=?`).get(taskId) as Row | null;
     if (!task) throw new Error(`Task not found: ${taskId}`);
     // Identity namespace locks precede all domain writes (W -> N -> D).
@@ -511,11 +511,11 @@ export const USAGE_MIGRATION_LOCK = "multiremi:usage-legacy-migration:v1";
 export function ensureLegacyUsageMigrationSchema(db: SqlDatabase): void {
   advisoryLock(db, USAGE_MIGRATION_LOCK, () => db.exec(`CREATE TABLE IF NOT EXISTS multiremi_usage_legacy_sources (
     task_id TEXT PRIMARY KEY, source_version INTEGER NOT NULL, source_usage TEXT, source_occurred_at TEXT NOT NULL,
-    FOREIGN KEY(task_id) REFERENCES multiremi_tasks(id) ON DELETE CASCADE
+    FOREIGN KEY(task_id) REFERENCES multiremi_turn_attempts(id) ON DELETE CASCADE
   );
   CREATE TABLE IF NOT EXISTS multiremi_usage_legacy_versions (
     task_id TEXT NOT NULL, source_version INTEGER NOT NULL, original_usage TEXT, source_occurred_at TEXT, recorded_at TEXT NOT NULL,
-    PRIMARY KEY(task_id,source_version), FOREIGN KEY(task_id) REFERENCES multiremi_tasks(id) ON DELETE CASCADE
+    PRIMARY KEY(task_id,source_version), FOREIGN KEY(task_id) REFERENCES multiremi_turn_attempts(id) ON DELETE CASCADE
   )`));
 }
 
@@ -523,7 +523,7 @@ const LEGACY_OCCURRED_AT = "COALESCE(t.completed_at,t.failed_at,t.cancelled_at,t
 // A normal retry creates a DISTINCT task, not another execution on this ID.
 // An accepted live v2 parent run establishes where its prior consumption lives.
 // An attempt ordinal without this task/owner evidence cannot establish coverage.
-const LEGACY_RECORDED_RETRY = `EXISTS (SELECT 1 FROM multiremi_tasks parent
+const LEGACY_RECORDED_RETRY = `EXISTS (SELECT 1 FROM multiremi_turn_execution_records parent
   JOIN multiremi_usage_task_scopes parent_scope ON parent_scope.task_id=parent.id
   JOIN multiremi_usage_runs parent_run ON parent_run.task_id=parent.id AND parent_run.run_id=parent_scope.active_run_id
   JOIN multiremi_usage_run_scopes parent_owner ON parent_owner.task_id=parent.id AND parent_owner.run_id=parent_run.run_id
@@ -539,7 +539,7 @@ const LEGACY_SOURCE_EXISTS = `((t.usage IS NOT NULL AND t.usage<>'[]') OR (s.sou
 const LEGACY_PENDING = `${LEGACY_SOURCE_EXISTS} AND (s.task_id IS NULL OR t.usage IS DISTINCT FROM s.source_usage OR ${LEGACY_OCCURRED_AT} IS DISTINCT FROM s.source_occurred_at)`;
 
 export function hasPendingLegacyUsage(db: SqlDatabase): boolean {
-  return Boolean(db.query(`SELECT t.id FROM multiremi_tasks t LEFT JOIN multiremi_usage_legacy_sources s ON s.task_id=t.id WHERE ${LEGACY_PENDING} LIMIT 1`).get());
+  return Boolean(db.query(`SELECT t.id FROM multiremi_turn_execution_records t LEFT JOIN multiremi_usage_legacy_sources s ON s.task_id=t.id WHERE ${LEGACY_PENDING} LIMIT 1`).get());
 }
 
 /** Deprecated aggregates cannot establish independence from reviewed native evidence. */
@@ -579,7 +579,7 @@ export function migrateLegacyUsage(db: SqlDatabase, options: { batchSize?: numbe
 function migrateLegacyUsageBatch(db: SqlDatabase, options: { afterTaskId?: string }, batchSize: number) {
   // Startup uses a keyset pass, avoiding an ever-growing prefix scan per batch.
   const keyset = options.afterTaskId !== undefined;
-  const rows = db.query(`SELECT t.id FROM multiremi_tasks t LEFT JOIN multiremi_usage_legacy_sources s ON s.task_id=t.id
+  const rows = db.query(`SELECT t.id FROM multiremi_turn_execution_records t LEFT JOIN multiremi_usage_legacy_sources s ON s.task_id=t.id
     WHERE ${keyset ? "t.id > ?" : LEGACY_PENDING} ORDER BY t.id LIMIT ?`).all(...(keyset ? [options.afterTaskId, batchSize] : [batchSize])) as Row[];
   let migrated = 0;
   for (const selected of rows) {
@@ -588,7 +588,7 @@ function migrateLegacyUsageBatch(db: SqlDatabase, options: { afterTaskId?: strin
       // Read the current source AFTER taking the task lock, never a stale batch payload.
       const row = db.query(`SELECT t.id,t.usage,t.status,t.attempt,t.dispatched_at,t.started_at,t.completed_at,t.failed_at,t.cancelled_at,
         CASE WHEN ${LEGACY_RECORDED_RETRY} THEN 1 ELSE 0 END AS recorded_retry,${LEGACY_OCCURRED_AT} AS occurred_at
-        FROM multiremi_tasks t WHERE t.id=?${db.dialect === "postgres" ? " FOR UPDATE" : ""}`).get(selected.id) as Row | null;
+        FROM multiremi_turn_execution_records t WHERE t.id=?${db.dialect === "postgres" ? " FOR UPDATE" : ""}`).get(selected.id) as Row | null;
       if (!row) return 0;
       const state = db.query("SELECT * FROM multiremi_usage_legacy_sources WHERE task_id=?").get(row.id) as Row | null;
       const runs = db.query("SELECT run_id,revision FROM multiremi_usage_runs WHERE task_id=?").all(row.id) as Row[];
@@ -660,8 +660,8 @@ function migrateLegacyUsageBatch(db: SqlDatabase, options: { afterTaskId?: strin
   const lastTaskId = rows.length ? String(rows[rows.length - 1]!.id) : options.afterTaskId;
   // Internal keyset passes need only know whether another bounded batch exists;
   // counting the entire tail every batch would make startup quadratic.
-  const remaining = keyset ? (db.query("SELECT id FROM multiremi_tasks WHERE id > ? LIMIT 1").get(lastTaskId) ? 1 : 0)
-    : Number((db.query(`SELECT COUNT(*) AS n FROM multiremi_tasks t LEFT JOIN multiremi_usage_legacy_sources s ON s.task_id=t.id WHERE ${LEGACY_PENDING}`).get() as Row).n);
+  const remaining = keyset ? (db.query("SELECT id FROM multiremi_turn_execution_records WHERE id > ? LIMIT 1").get(lastTaskId) ? 1 : 0)
+    : Number((db.query(`SELECT COUNT(*) AS n FROM multiremi_turn_execution_records t LEFT JOIN multiremi_usage_legacy_sources s ON s.task_id=t.id WHERE ${LEGACY_PENDING}`).get() as Row).n);
   if (remaining === 0) db.run("INSERT INTO multiremi_schema_migrations(id,applied_at) VALUES(?,?) ON CONFLICT(id) DO NOTHING", [USAGE_CUTOVER_MARKER, new Date().toISOString()]);
   return { migrated, remaining, complete: remaining === 0, lastTaskId };
 }

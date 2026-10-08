@@ -12,8 +12,8 @@
 //   2. the query count is bounded — `/sessions` must not grow with session
 //      count, and `/api/issues/:id` must not re-load tasks/children/dependencies.
 import { afterEach, describe, expect, it } from "bun:test";
-import type { Database, SQLQueryBindings } from "bun:sqlite";
-import { markSqliteDialect, openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
+import type { SQLQueryBindings } from "bun:sqlite";
+import { openHotspotDatabase } from "../../fixtures/multiremi/first-screen-hotspots-database.js";
 import { createMultiremiApp } from "@multiremi/api.js";
 import type { SqlDatabase, SqlStatement } from "@multiremi/store/db/postgres.js";
 import { MultiremiStore } from "@multiremi/store.js";
@@ -24,10 +24,10 @@ import {
 } from "../../fixtures/multiremi/issue-detail-first-screen-fixture.js";
 import golden from "../../fixtures/multiremi/issue-detail-first-screen-golden.json";
 
-let databases: Database[] = [];
+let databases: Array<Awaited<ReturnType<typeof openHotspotDatabase>>> = [];
 
-afterEach(() => {
-  for (const database of databases) database.close();
+afterEach(async () => {
+  for (const database of databases) await database.dispose();
   databases = [];
 });
 
@@ -35,7 +35,7 @@ const AUTH_TOKEN = "mul385-first-screen-token";
 const AUTH_HEADERS = { Authorization: `Bearer ${AUTH_TOKEN}` };
 
 /** Bind the fixture's pinned `joined_at` writes without tripping the binder types. */
-function runPinned(db: Database, sql: string, params: unknown[]): void {
+function runPinned(db: SqlDatabase, sql: string, params: unknown[]): void {
   db.run(sql, params as SQLQueryBindings[]);
 }
 
@@ -45,7 +45,7 @@ interface Probe {
   reset(): void;
 }
 
-function countingDatabase(raw: Database, probe: Probe): SqlDatabase {
+function countingDatabase(raw: SqlDatabase, probe: Probe): SqlDatabase {
   const record = (sql: string): void => {
     probe.statements += 1;
     const key = sql.replace(/\s+/g, " ").trim();
@@ -63,7 +63,7 @@ function countingDatabase(raw: Database, probe: Probe): SqlDatabase {
       return typeof value === "function" ? (value as (...args: unknown[]) => unknown).bind(target) : value;
     },
   });
-  return markSqliteDialect<SqlDatabase>({
+  const wrapped: SqlDatabase = {
     get inTransaction() { return raw.inTransaction; },
     query: (sql) => wrap(raw.query(sql) as unknown as SqlStatement, sql),
     prepare: (sql) => wrap(raw.prepare(sql) as unknown as SqlStatement, sql),
@@ -77,12 +77,18 @@ function countingDatabase(raw: Database, probe: Probe): SqlDatabase {
     },
     transaction: (fn) => raw.transaction(fn),
     close: () => raw.close(),
-  });
+  };
+  return new Proxy(raw, {get(target, property) {
+    const source = property in wrapped ? wrapped : target;
+    const value = Reflect.get(source, property);
+    return typeof value === "function" ? value.bind(source) : value;
+  }});
 }
 
-function createCountedStore(): { store: MultiremiStore; db: Database; probe: Probe } {
-  const db = openSqliteDatabase(":memory:");
-  databases.push(db);
+async function createCountedStore(): Promise<{ store: MultiremiStore; db: SqlDatabase; probe: Probe }> {
+  const database = await openHotspotDatabase();
+  databases.push(database);
+  const db = database.db;
   const probe: Probe = {
     statements: 0,
     bySql: new Map(),
@@ -94,9 +100,10 @@ function createCountedStore(): { store: MultiremiStore; db: Database; probe: Pro
   return { store: new MultiremiStore(countingDatabase(db, probe)), db, probe };
 }
 
-function createStore(): { store: MultiremiStore; db: Database } {
-  const db = openSqliteDatabase(":memory:");
-  databases.push(db);
+async function createStore(): Promise<{ store: MultiremiStore; db: SqlDatabase }> {
+  const database = await openHotspotDatabase();
+  databases.push(database);
+  const db = database.db;
   return { store: new MultiremiStore(db), db };
 }
 
@@ -106,7 +113,7 @@ describe("MUL-385 issue detail first-screen response shape", () => {
     // cursors line up and only a genuine shape change can fail this comparison.
     const restoreIds = installDeterministicIds();
     try {
-    const { store, db } = createStore();
+    const { store, db } = await createStore();
     const app = createMultiremiApp({ store, authToken: AUTH_TOKEN });
     const fixture = seedIssueDetailFirstScreenFixture(store, {
       run: (sql, params) => { runPinned(db, sql, params); },
@@ -131,7 +138,7 @@ describe("MUL-385 issue detail first-screen response shape", () => {
   });
 
   it("keeps the timeline's legacy naked-array shape when no page parameter is sent", async () => {
-    const { store, db } = createStore();
+    const { store, db } = await createStore();
     const app = createMultiremiApp({ store, authToken: AUTH_TOKEN });
     const fixture = seedIssueDetailFirstScreenFixture(store, {
       run: (sql, params) => { runPinned(db, sql, params); },
@@ -148,7 +155,7 @@ describe("MUL-385 issue detail first-screen response shape", () => {
 
 describe("MUL-385 issue detail first-screen query counts", () => {
   it("includes unmet keys with one dependency read only while a child is in backlog", async () => {
-    const { store, probe } = createCountedStore();
+    const { store, probe } = await createCountedStore();
     const app = createMultiremiApp({ store, authToken: AUTH_TOKEN });
     const parent = store.createIssue({ title: "Parent", status: "backlog" });
     const prerequisite = store.createIssue({ title: "Prerequisite", status: "in_progress" });
@@ -173,20 +180,29 @@ describe("MUL-385 issue detail first-screen query counts", () => {
   });
 
   it("adds only one aggregate query for the pending decision count", async () => {
-    const { store, db, probe } = createCountedStore();
+    const { store, db, probe } = await createCountedStore();
     const app = createMultiremiApp({ store, authToken: AUTH_TOKEN });
     const fixture = seedIssueDetailFirstScreenFixture(store, {
       run: (sql, params) => { runPinned(db, sql, params); },
     });
 
+    // #4/#7: count real pending message decisions and Human Requests,
+    // rather than probing the retired notification/decision tables.
+    const decision = store.createIssueDecision(fixture.issueId,
+      {kind: "question", title: "Choose the release window"}, {type: "member", id: "mem_local_local", taskId: null});
+    expect(decision.status).toBe("escalated");
+    const task = store.createTask({agentId: "agt_mul385", issueId: fixture.issueId, prompt: "Pending question"});
+    store.createTaskHumanRequest({taskId: task.id, kind: "question", payload: {message: "Pick a date"}});
+
     probe.reset();
     const response = await app.request(`/api/issues/${fixture.issueId}`, { headers: AUTH_HEADERS });
     expect(response.status).toBe(200);
+    expect((await response.json()).pending_decision_count).toBe(2);
 
     // The original four reads remain; S4 adds one aggregate over escalated
     // decisions and pending human requests on this Issue and direct children.
     expect(probe.statements).toBe(5);
-    expect([...probe.bySql.keys()].filter((sql) => sql.includes("multiremi_issue_decisions"))).toHaveLength(1);
+    expect([...probe.bySql.keys()].filter((sql) => sql.includes("multiremi_message_decision_records"))).toHaveLength(1);
     expect([...probe.bySql.keys()].some((sql) => sql.includes("SELECT * FROM multiremi_tasks"))).toBe(false);
     expect([...probe.bySql.keys()].some((sql) => sql.includes("multiremi_issue_dependencies"))).toBe(false);
   });
@@ -194,7 +210,7 @@ describe("MUL-385 issue detail first-screen query counts", () => {
   it("keeps /sessions query count constant as session count grows", async () => {
     const counts: number[] = [];
     for (const sessions of [1, 10]) {
-      const { store, db, probe } = createCountedStore();
+      const { store, db, probe } = await createCountedStore();
       const app = createMultiremiApp({ store, authToken: AUTH_TOKEN });
       const fixture = seedIssueDetailFirstScreenFixture(store, {
         rootComments: 4,
@@ -221,7 +237,7 @@ describe("MUL-385 issue detail first-screen query counts", () => {
   });
 
   it("round-trips every session's participants through the batched lookup", async () => {
-    const { store } = createCountedStore();
+    const { store } = await createCountedStore();
     const fixture = seedIssueDetailFirstScreenFixture(store);
 
     const sessions = store.listIssueSessions(fixture.issueId);

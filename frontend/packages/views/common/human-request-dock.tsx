@@ -18,10 +18,10 @@ import { Markdown } from "./markdown";
 const COLLAPSED_CONTEXT_HEIGHT_PX = 128;
 
 /** Pending permission and AskUserQuestion forms for any in-flight task. */
-export function HumanRequestDock({ taskId, enabled = true }: { taskId: string | null; enabled?: boolean }) {
+export function HumanRequestDock({ taskId, sessionId, turnId, enabled = true }: { taskId: string | null; sessionId?: string; turnId?: string; enabled?: boolean }) {
   const { t } = useT("chat");
   const { data, error, isFetching, refetch } = useQuery({
-    ...humanRequestsOptions(taskId ?? ""),
+    ...humanRequestsOptions(taskId ?? "", sessionId, turnId),
     enabled: enabled && Boolean(taskId),
   });
   if (taskId && error) {
@@ -95,11 +95,12 @@ export function PermissionCard({
             key={option.optionId}
             size="sm"
             variant={option.kind.startsWith("allow") ? "default" : "outline"}
-            disabled={respond.isPending}
+            disabled={respond.isPending || respond.isSuccess}
             onClick={() => respond.mutate(
               {
                 taskId,
                 requestId: request.id,
+                sessionId: request.sessionId,
                 response: { option_id: option.optionId },
               },
               { onSuccess: onResponded },
@@ -234,9 +235,10 @@ export function QuestionCard({
         <div className="mt-2 flex justify-end">
           <Button
             size="sm"
-            disabled={!answered || respond.isPending}
+            disabled={!answered || respond.isPending || respond.isSuccess}
             onClick={() => respond.mutate(
-              { taskId, requestId: request.id, response: { answers: submitAnswers() } },
+              { taskId, requestId: request.id,
+                sessionId: request.sessionId, response: { answers: submitAnswers() } },
               { onSuccess: onResponded },
             )}
           >

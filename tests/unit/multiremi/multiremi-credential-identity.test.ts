@@ -1,3 +1,4 @@
+import { requestMessageBody } from "./unified-test-paths.js";
 /**
  * MUL-448 QA round 1 follow-up (B1-B4): credentialed requests must derive the
  * acting identity and the issue provenance from the credential, while the
@@ -63,7 +64,7 @@ async function fixture(): Promise<Fixture> {
 /** The `turn` events one task wrote into its Issue Session. */
 // Ruling (u), cmt_9z7t6hwo3xuh; Senior III, cmt_u7m8e7yitmai: /events uses turn.
 function assignmentEvents(store: MultiremiStore, sessionId: string, taskId: string) {
-  return store.listSessionEvents(sessionId).filter((event) => event.kind === "turn" && event.taskId === taskId);
+  return store.listSessionEvents(sessionId).filter((event) => event.id === taskId);
 }
 
 describe("MUL-448 B1: X-Agent-ID cannot outrank a member credential", () => {
@@ -74,16 +75,16 @@ describe("MUL-448 B1: X-Agent-ID cannot outrank a member credential", () => {
     const session = store.createIssueSession(issue.id, { title: "B1 session" });
 
     // Session task: the `turn` author is the member, not the header agent.
-    const taskResponse = await app.request(`/api/issues/${issue.id}/sessions/${session.id}/tasks`, {
+    const taskResponse = await app.request(`/api/sessions/${session.id}/messages`, {
       method: "POST", headers: forged,
-      body: JSON.stringify({ agent_id: agentId, prompt: "Member session task" }),
+      body: JSON.stringify(requestMessageBody(store, { agent_id: agentId, prompt: "Member session task" }, { type: "role", ref: "issue_owner" })),
     });
-    expect(taskResponse.status).toBe(201);
-    const taskId = (await taskResponse.json()).id as string;
+    expect(taskResponse.status).toBe(200);
+    const taskId = (await taskResponse.json()).message.id as string;
     const assigned = assignmentEvents(store, session.id, taskId);
     expect(assigned).toHaveLength(1);
     expect(assigned[0]!.authorType).toBe("member");
-    expect(assigned[0]!.authorId).toBe(ownerId);
+    expect(assigned[0]!.authorId).toBe(store.findWorkspaceMemberForUser(ownerId,"local")!.id); // #7: canonical sender_id identifies the credential’s member row.
     expect(assigned[0]!.authorId).not.toBe(otherAgentId);
 
     // Session creation: createdByType/Id come from the credential.
@@ -159,12 +160,12 @@ describe("MUL-448 B1: X-Agent-ID cannot outrank a member credential", () => {
       "X-Agent-ID": otherAgentId,
     };
 
-    const response = await app.request(`/api/issues/${issue.id}/sessions/${session.id}/tasks`, {
+    const response = await app.request(`/api/sessions/${session.id}/messages`, {
       method: "POST", headers: runHeaders,
-      body: JSON.stringify({ agent_id: agentId, prompt: "Token session task" }),
+      body: JSON.stringify(requestMessageBody(store, { agent_id: agentId, prompt: "Token session task" }, { type: "role", ref: "issue_owner" })),
     });
-    expect(response.status).toBe(201);
-    const taskId = (await response.json()).id as string;
+    expect(response.status).toBe(200);
+    const taskId = (await response.json()).message.id as string;
     const assigned = assignmentEvents(store, session.id, taskId);
     expect(assigned).toHaveLength(1);
     expect(assigned[0]!.authorType).toBe("agent");
@@ -365,13 +366,13 @@ describe("MUL-448 anonymous compatibility mode keeps main's behaviour", () => {
       ["master token", master, { "Content-Type": "application/json", Authorization: "Bearer mul448-r2-root-secret" }],
       ["auth disabled", open, { "Content-Type": "application/json" }],
     ] as const) {
-      const response = await app.request(`/api/issues/${issue.id}/sessions/${session.id}/tasks`, {
+      const response = await app.request(`/api/sessions/${session.id}/messages`, {
         method: "POST",
         headers: { ...headers, "X-Agent-ID": otherAgentId },
-        body: JSON.stringify({ agent_id: agentId, prompt: `Anon session task (${label})` }),
+        body: JSON.stringify(requestMessageBody(store, { agent_id: agentId, prompt: `Anon session task (${label})` }, { type: "role", ref: "issue_owner" })),
       });
-      expect(response.status, label).toBe(201);
-      const taskId = (await response.json()).id as string;
+      expect(response.status, label).toBe(200);
+      const taskId = (await response.json()).message.id as string;
       const assigned = assignmentEvents(store, session.id, taskId);
       expect(assigned, label).toHaveLength(1);
       // Historical behaviour: the header is the caller's self-declared identity.

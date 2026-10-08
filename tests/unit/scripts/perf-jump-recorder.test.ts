@@ -76,11 +76,9 @@ import {
   STUBBED_WRITES,
   stubLoopNotTerminated,
   stubbedReadResponseBody,
-  stubbedWriteItemId,
 } from "../../../frontend/scripts/perf/lib/stub-writes";
 import {
   rankDeepLinkCandidates,
-  unreadIdsInRow,
   type InboxCandidateInput,
 } from "../../../frontend/scripts/perf/lib/deeplink-target";
 
@@ -559,37 +557,11 @@ function inboxItem(
 }
 
 describe("inboxDomRowIndex", () => {
-  it("is not the API array index when successful autopilot runs collapse", () => {
-    // Production shape: 50 API records rendered as 8 rows. Several successful
-    // runs of one autopilot occupy one row, so an API index lands elsewhere.
-    const items = [
-      inboxItem("inb_run_1", { type: "autopilot_run_completed", details: { autopilot_id: "auto_1" } }),
-      inboxItem("inb_run_2", { type: "autopilot_run_completed", details: { autopilot_id: "auto_1" } }),
-      inboxItem("inb_run_3", { type: "autopilot_run_completed", details: { autopilot_id: "auto_1" } }),
-      inboxItem("inb_target"),
-    ];
-    // API array index of the target is 3; the rendered row is 1.
-    expect(items.findIndex((item) => item.id === "inb_target")).toBe(3);
-    expect(inboxDomRowIndex(items as never, "inb_target")).toBe(1);
-    // The collapsed run row is addressed by its newest member.
-    expect(inboxDomRowIndex(items as never, "inb_run_1")).toBe(0);
-  });
-
-  it("maps every notification of one issue to that issue's single row", () => {
-    const items = [
-      inboxItem("inb_old", { issueId: "iss_same", createdAt: "2026-09-26T00:00:00.000Z" }),
-      inboxItem("inb_new", { issueId: "iss_same", createdAt: "2026-09-26T01:00:00.000Z" }),
-    ];
-    // `deduplicateInboxItems` keeps only the newest notification per selection
-    // key, so the newest is the rendered row and the older one is not rendered at
-    // all — the probe must therefore pick the newest per issue, which it does.
-    expect(inboxDomRowIndex(items as never, "inb_new")).toBe(0);
-    expect(inboxDomRowIndex(items as never, "inb_old")).toBeNull();
-  });
-
-  it("returns null for an item that is not rendered", () => {
-    const items = [inboxItem("inb_present")];
-    expect(inboxDomRowIndex(items as never, "inb_absent")).toBeNull();
+  it("keeps distinct messages in API order and deduplicates overlapping pages", () => {
+    const items = [{ id: "new" }, { id: "old" }, { id: "new" }, { id: "other" }];
+    expect(inboxDomRowIndex(items, "old")).toBe(1);
+    expect(inboxDomRowIndex(items, "other")).toBe(2);
+    expect(inboxDomRowIndex(items, "absent")).toBeNull();
   });
 });
 
@@ -598,7 +570,7 @@ describe("isEntryFailure", () => {
     // Both mean the measured page was never opened; waiting out the ready budget
     // would report a 20 s timeout for a screen the run never reached.
     expect(isEntryFailure("warm target not found for detail-short")).toBe(true);
-    expect(isEntryFailure("deeplink warm: url issue=iss_other expected iss_wanted")).toBe(true);
+    expect(isEntryFailure("deeplink warm: url item=iss_other expected iss_wanted")).toBe(true);
   });
 
   it("leaves real timing failures alone", () => {
@@ -696,15 +668,7 @@ describe("report rendering", () => {
 
 /** One inbox notification row, as `/api/inbox/page` returns it. */
 function inboxRow(id: string, overrides: Partial<InboxCandidateInput> = {}): InboxCandidateInput {
-  return {
-    id,
-    issue_id: `iss_${id}`,
-    type: "comment_mention",
-    read: false,
-    archived: false,
-    details: { comment_id: `cmt_${id}`, issue_session_id: `ises_${id}` },
-    ...overrides,
-  };
+  return { id, session_id: "session_1", message_kind: "request", ...overrides };
 }
 
 describe("report write-counter columns", () => {
@@ -758,7 +722,7 @@ describe("report write-counter columns", () => {
       apiFirstScreenP50: 5, slowestServerTotalP50: 12,
     },
   };
-  const stubs = [{ page: "deeplink", method: "POST", path: "/api/inbox/:id/read", attempts: 1 }];
+  const stubs = [{ page: "deeplink", method: "POST", path: "/api/inbox/read", attempts: 1 }];
 
   it("reports aborted and stubbed writes in separate columns in MD", () => {
     const md = buildMarkdown({ meta: {}, scenarios: [scenario] as never, blockedWrites: [], stubbedWrites: stubs as never, compare: null });
@@ -786,61 +750,14 @@ describe("report write-counter columns", () => {
 });
 
 describe("rankDeepLinkCandidates", () => {
-  it("prefers an unread row over a read one", () => {
-    // The third review round's ruling: an unread target exercises the auto
-    // mark-read path a user almost always takes, and the allow-list makes it
-    // completable. A read target skips that round trip entirely.
-    const page = [
-      inboxRow("read_first", { read: true }),
-      inboxRow("unread_second", { read: false }),
-    ];
-    const ranked = rankDeepLinkCandidates(page, new Set());
-    expect(ranked[0]!.inboxItemId).toBe("unread_second");
-    expect(ranked[0]!.groupHasUnread).toBe(true);
-    expect(ranked[1]!.groupHasUnread).toBe(false);
+  it("selects canonical messages by ID in API order, without collapsing a conversation", () => {
+    const ranked = rankDeepLinkCandidates([inboxRow("new"), inboxRow("old"), inboxRow("new")], new Set());
+    expect(ranked.map(row => row.inboxItemId)).toEqual(["new", "old"]);
+    expect(ranked[0]).toMatchObject({ commentId: "new", sessionId: "session_1" });
   });
-
-  it("still prefers a quiet issue over a running one, ahead of read state", () => {
-    const page = [
-      inboxRow("running_unread", { read: false, issue_id: "iss_running" }),
-      inboxRow("quiet_read", { read: true, issue_id: "iss_quiet" }),
-    ];
-    const ranked = rankDeepLinkCandidates(page, new Set(["iss_running"]));
-    expect(ranked[0]!.inboxItemId).toBe("quiet_read");
-    expect(ranked[0]!.issueHasRunningTask).toBe(false);
-  });
-
-  it("keeps one candidate per issue, newest first", () => {
-    const page = [
-      inboxRow("newest", { issue_id: "iss_same" }),
-      inboxRow("older", { issue_id: "iss_same" }),
-    ];
-    const ranked = rankDeepLinkCandidates(page, new Set());
-    expect(ranked).toHaveLength(1);
-    expect(ranked[0]!.inboxItemId).toBe("newest");
-  });
-
-  it("treats a row as unread when any notification on it is unread", () => {
-    // `?issue=` renders one row per issue, and the auto mark-read effect marks
-    // every notification on that row, so read state is a property of the issue.
-    const page = [
-      inboxRow("read_item", { issue_id: "iss_mixed", read: true }),
-      inboxRow("unread_item", { issue_id: "iss_mixed", read: false }),
-    ];
-    const ranked = rankDeepLinkCandidates(page, new Set());
-    expect(ranked[0]!.groupHasUnread).toBe(true);
-    expect(unreadIdsInRow(page, "iss_mixed")).toEqual(["unread_item"]);
-  });
-
-  it("rejects ledger rows and rows without a comment or session", () => {
-    const page = [
-      inboxRow("ledger", { type: "autopilot_run_completed" }),
-      inboxRow("no_comment", { details: { issue_session_id: "ises_x" } }),
-      inboxRow("no_session", { details: { comment_id: "cmt_x" } }),
-      inboxRow("good"),
-    ];
-    const ranked = rankDeepLinkCandidates(page, new Set());
-    expect(ranked.map((candidate) => candidate.inboxItemId)).toEqual(["good"]);
+  it("rejects incomplete or deleted messages without guessing issue context", () => {
+    const ranked = rankDeepLinkCandidates([inboxRow("no_session", { session_id: undefined }), inboxRow("deleted", { deleted_at: "now" }), inboxRow("good", { message_kind: "decision" })], new Set());
+    expect(ranked.map(row => row.inboxItemId)).toEqual(["good"]);
   });
 });
 
@@ -869,12 +786,9 @@ describe("injectInboxTarget", () => {
     expect(injected.items).toEqual([other]);
   });
 
-  it("treats the bare-array endpoint like a first page", () => {
-    const injected = injectInboxTarget([other], target, { hasCursor: false }) as unknown[];
-    expect(injected).toHaveLength(2);
-    // Already present: the input is returned untouched.
-    const present = [other, target];
-    expect(injectInboxTarget(present, target, { hasCursor: false })).toBe(present);
+  it("rejects the retired bare-array response shape", () => {
+    const bare = [other];
+    expect(injectInboxTarget(bare, target, { hasCursor: false })).toBe(bare);
   });
 
   it("never mutates the input, because the caller reuses it as the item snapshot", () => {
@@ -895,64 +809,34 @@ describe("injectInboxTarget", () => {
 });
 
 describe("stub-writes allow-list", () => {
-  it("allows exactly the mark-read endpoint and nothing else", () => {
-    expect(isStubbedWrite("POST", "https://host/api/inbox/inb_1/read")).toBe(true);
-    expect(isStubbedWrite("POST", "https://host/api/inbox/inb_1/archive")).toBe(false);
-    expect(isStubbedWrite("POST", "https://host/api/inbox/unread-count")).toBe(false);
-    expect(isStubbedWrite("GET", "https://host/api/inbox/inb_1/read")).toBe(false);
+  it("stubs only cursor reads; retired reads and business writes remain blocked", () => {
+    expect(isStubbedWrite("POST", "https://host/api/inbox/read")).toBe(true);
+    expect(isStubbedWrite("POST", "https://host/api/inbox/msg_1/read")).toBe(false);
+    expect(isStubbedWrite("POST", "https://host/api/messages/msg_1/resolve")).toBe(false);
+    expect(isStubbedWrite("GET", "https://host/api/inbox/read")).toBe(false);
     expect(STUBBED_WRITES).toHaveLength(1);
+    expect(isInboxReadStateEndpoint("GET", "/api/inbox?limit=50")).toBe(true);
+    expect(isInboxReadStateEndpoint("GET", "/api/inbox/page")).toBe(false);
   });
-
-  it("extracts the item id from the allowed path", () => {
-    expect(stubbedWriteItemId("https://host/api/inbox/inb_9/read")).toBe("inb_9");
-    expect(stubbedWriteItemId("https://host/api/inbox/inb_9/archive")).toBeNull();
+  it("simulates a monotonic conversation cursor and preserves messages beyond it", () => {
+    const items = [{ id: "m1", session_id: "s", seq: 5 }, { id: "m2", session_id: "s", seq: 6 }, { id: "m3", session_id: "other", seq: 3 }];
+    const state = { cursors: new Map<string, number>(), all: false };
+    const snapshot = new Map(items.map(item => [item.id, item]));
+    expect(stubbedReadResponseBody({ session_id: "s", to_seq: 5 }, snapshot, state)).toEqual({ session_id: "s", cursor_seq: 5 });
+    expect(stubbedReadResponseBody({ session_id: "s", to_seq: 2 }, snapshot, state)).toEqual({ session_id: "s", cursor_seq: 5 });
+    const body = { items, unread_count: 20, attention_count: 1, next_cursor: "opaque" };
+    const result = rewriteInboxReadState(body, state) as typeof body;
+    expect(result.items.map(item => item.id)).toEqual(["m2", "m3"]);
+    expect(result.next_cursor).toBe("opaque"); expect(items).toHaveLength(3);
+    expect(stubbedReadResponseBody({ all: true }, snapshot, state)).toEqual({ conversations_read: 2 });
+    expect(rewriteInboxReadState(body, state)).toMatchObject({ items: [], unread_count: 0, attention_count: 0 });
   });
-
-  it("rewrites only the inbox read-state endpoints", () => {
-    expect(isInboxReadStateEndpoint("GET", "https://host/api/inbox/page?limit=50")).toBe(true);
-    expect(isInboxReadStateEndpoint("GET", "https://host/api/inbox")).toBe(true);
-    // The badge endpoints are deliberately untouched.
-    expect(isInboxReadStateEndpoint("GET", "https://host/api/inbox/unread-count")).toBe(false);
-    expect(isInboxReadStateEndpoint("GET", "https://host/api/inbox/summary")).toBe(false);
-    expect(isInboxReadStateEndpoint("POST", "https://host/api/inbox/page")).toBe(false);
-  });
-
-  it("marks the stubbed item read without mutating the input", () => {
-    const items = [
-      { id: "inb_1", read: false, title: "a" },
-      { id: "inb_2", read: false, title: "b" },
-    ];
-    const rewritten = rewriteInboxReadState({ items, limit: 50, has_more: false }, new Set(["inb_1"])) as {
-      items: Array<{ id: string; read: boolean }>;
-      limit: number;
-    };
-    expect(rewritten.items[0]!.read).toBe(true);
-    expect(rewritten.items[1]!.read).toBe(false);
-    expect(rewritten.limit).toBe(50);
-    // The original body is the caller's "before" snapshot; it must not change.
-    expect(items[0]!.read).toBe(false);
-  });
-
-  it("handles the bare-array shape and the empty allow set", () => {
-    const bare = [{ id: "inb_1", read: false }];
-    expect((rewriteInboxReadState(bare, new Set(["inb_1"])) as Array<{ read: boolean }>)[0]!.read).toBe(true);
-    // Nothing stubbed yet: the body passes through untouched.
-    expect(rewriteInboxReadState(bare, new Set())).toBe(bare);
-  });
-
-  it("bounds the stub loop at twice the row's unread ids", () => {
-    // One POST per unread id, plus one retry each, is legitimate.
-    expect(stubLoopNotTerminated(2, 1)).toBe(false);
-    expect(stubLoopNotTerminated(3, 1)).toBe(true);
-    expect(stubLoopNotTerminated(0, 0)).toBe(false);
-    expect(stubLoopNotTerminated(1, 0)).toBe(true);
-  });
-
-  it("answers the stubbed POST with the snapshot item marked read", () => {
-    const snapshot = new Map([["inb_1", { id: "inb_1", read: false, title: "a" }]]);
-    expect(stubbedReadResponseBody("inb_1", snapshot)).toEqual({ id: "inb_1", read: true, title: "a" });
-    // Unknown id still answers with legal JSON, because the body is never read.
-    expect(stubbedReadResponseBody("inb_missing", snapshot)).toEqual({ id: "inb_missing", read: true });
+  it("rejects malformed and conflicting writes, preserving the stub state", () => {
+    const state = { cursors: new Map<string, number>(), all: false };
+    expect(() => stubbedReadResponseBody({ all: true, session_id: "s" }, new Map(), state)).toThrow();
+    expect(() => stubbedReadResponseBody({ session_id: "s", to_seq: -1 }, new Map(), state)).toThrow();
+    expect(state.all).toBe(false); expect(state.cursors.size).toBe(0);
+    expect(stubLoopNotTerminated(2, 1)).toBe(false); expect(stubLoopNotTerminated(3, 1)).toBe(true);
   });
 });
 

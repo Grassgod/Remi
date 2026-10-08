@@ -149,7 +149,7 @@ export function buildQuestionElements(marker: string, data: AskUserQuestionData,
     elements.push({
       tag: "input", name: `q${qi}_custom`, input_type: "multiline_text", width: "fill",
       label: { tag: "plain_text", content: data.questions.length > 1 ? `问题 ${qi + 1} · 自定义回答` : "自定义回答" },
-      placeholder: { tag: "plain_text", content: "可以补充要求，也可以只在这里回答" }, max_length: 500, rows: 3,
+      placeholder: { tag: "plain_text", content: "可以补充要求，也可以只在这里回答" }, max_length: 1000, rows: 3,
     });
   });
   elements.push({
@@ -186,6 +186,8 @@ export interface TaskInteractionCardOptions {
  * shape change is a compile error on the writing side.
  */
 export interface DecisionCardBody {
+  /** Unified decision message; distinct from the Feishu transport target. Required for patches. */
+  message_id?: string;
   /** The rendered card for `decision_card` and the terminal card for a patch. */
   card: Record<string, unknown>;
   /** Plain-text twin used when a card cannot be delivered at all. */
@@ -201,7 +203,7 @@ export function questionCardAction(card: Record<string, unknown>): Record<string
     }
     const row = node as Record<string, unknown>;
     const value = object(row.value);
-    if (row.tag === "button" && typeof value.t === "string" && typeof value.r === "string") return value;
+    if (row.tag === "button" && typeof value.t === "string" && typeof value.message_id === "string") return value;
     for (const child of Object.values(row)) { const found = visit(child); if (found) return found; }
     return null;
   };
@@ -234,6 +236,7 @@ export function decodeDecisionCardBody(raw: string): DecisionCardBody | null {
     if (Object.keys(card).length === 0) return null;
     return {
       card: card as Record<string, unknown>,
+      ...(typeof parsed.message_id === "string" && parsed.message_id.trim() ? { message_id: parsed.message_id } : {}),
       ...(typeof parsed.fallback_text === "string" ? { fallback_text: parsed.fallback_text } : {}),
     };
   } catch {
@@ -288,7 +291,7 @@ export function buildTaskInteractionCard(
     elements.push({ tag: "markdown", content: "未能确定处理人，请在 Remi 工作台处理此请求。" });
   } else if (request.kind === "question" && questions) {
     elements.push(buildQuestionElements(marker, questions,
-      options.token ? { t: options.token, r: request.id, task_id: request.taskId } : undefined));
+      options.token ? { t: options.token, message_id: request.id } : undefined));
   } else {
     const title = String(tool.title ?? tool.name ?? "操作审批");
     elements.push({ tag: "markdown", content: `**${escapeCardText(title)}**` });
@@ -307,7 +310,7 @@ export function buildTaskInteractionCard(
           tag: "column_set", flex_mode: "none", columns: choices.map((choice, index) => ({
             tag: "column", width: "weighted", weight: 1, elements: [{
               tag: "button", name: `${marker}_o${index}`, form_action_type: "submit",
-              ...(options.token ? { value: { t: options.token, r: request.id, task_id: request.taskId } } : {}),
+              ...(options.token ? { value: { t: options.token, message_id: request.id } } : {}),
               type: /reject|deny/.test(choice.kind) ? "danger" : "default", width: "fill",
               text: { tag: "plain_text", content: choice.name || choice.optionId },
             }],
@@ -483,7 +486,7 @@ export function buildIssueDecisionCard(
     form.push({
       tag: "button", name: marker, text: { tag: "plain_text", content: "提交" },
       type: "primary_filled", width: "fill", form_action_type: "submit",
-      ...(options.token ? { value: { t: options.token, r: decision.id, issue_id: decision.issueId } } : {}),
+      ...(options.token ? { value: { t: options.token, message_id: decision.id } } : {}),
     });
     elements.push({ tag: "form", name: `form_${marker}`, elements: form });
   }

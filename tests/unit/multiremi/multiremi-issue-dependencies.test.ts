@@ -1,3 +1,4 @@
+import { issueMessagesPath, requestMessageBody, taskRequestPath } from "./unified-test-paths.js";
 // MUL-400 S2 (E3): sibling dependencies actually hold and release work.
 //
 // The dependency gate has three entry points (assign, status write, creation),
@@ -11,7 +12,7 @@ import { StoreContext, type CommitEventQueue } from "@multiremi/store/context.js
 import { TasksRepo } from "@multiremi/store/repos/tasks-repo.js";
 import type { IssuesRepo } from "@multiremi/store/repos/issues-repo.js";
 import { DEPENDENCY_AUTO_START_REPLAY_DELAY_MS } from "@multiremi/store/repos/autopilots-repo.js";
-import { createStore, db, resetMultiremiTestEnv } from "./helpers.js";
+import { createLocalStore as createStore, db, resetMultiremiTestEnv } from "./helpers.js";
 import { inboxReportBody } from "./inbox-test-assertions.js";
 
 afterEach(() => {
@@ -155,7 +156,8 @@ describe("MUL-452 E3 replay", () => {
     expect(store.getIssue(dependent.id)?.status).toBe("todo");
     const rounds = store.listTasksForIssue(dependent.id);
     expect(rounds).toHaveLength(1);
-    expect(rounds[0]?.parentTaskId).toBe(task.id);
+    const turn = store.getTurnForAttempt(rounds[0]!.id)!;
+    expect(store.getMessage(turn.trigger_message_id!)?.task_id).toBe(store.getTurnForAttempt(task.id)?.id);
     expect(allActivityRows(store, dependent.id, "dependency_auto_started")[0]?.data)
       .toMatchObject({ dependency_check_event_id: check.id });
   });
@@ -397,10 +399,10 @@ describe("MUL-452 E3 replay", () => {
     }
     const check = commitWithoutHooks(store, prerequisite.id);
     const notifications = () => ({
-      comments: db!.query("SELECT id FROM multiremi_issue_comments").all(),
-      inbox: db!.query("SELECT id FROM multiremi_inbox_items").all(),
+      comments: db!.query("SELECT id FROM multiremi_conversation_log WHERE kind = 'message'").all(),
+      inbox: db!.query("SELECT id FROM multiremi_conversation_log WHERE to_member_id IS NOT NULL").all(),
       activity: db!.query("SELECT id FROM multiremi_issue_activity").all(),
-      tasks: db!.query("SELECT id FROM multiremi_tasks").all(),
+      tasks: db!.query("SELECT id FROM multiremi_turn_execution_records").all(),
     });
     const before = notifications();
     store.dispatchPendingSystemEvents(new Date(check.availableAt));
@@ -1219,34 +1221,44 @@ describe("MUL-400 E3 — task-creation gate", () => {
     return { store, runtime, agent, prereq, dependent };
   }
 
-  it("refuses a task-identity call through POST /api/multiremi/tasks with 409", async () => {
+  it("#2-C2: records a real task-identity request without force-starting", async () => {
     const { store, agent, dependent } = parked();
+    const sender = store.createAgent({ name: "Task requester", provider: "claude" });
+    const sourceIssue = store.createIssue({ title: "Task request source" });
+    const source = store.createTask({ agentId: sender.id, issueId: sourceIssue.id, prompt: "Request work" });
+    const credential = await store.createTaskAccessToken(source, "local");
     const app = createMultiremiApp({ store });
-    const response = await app.request("/api/multiremi/tasks", {
+    const response = await app.request(taskRequestPath(store, { issueId: dependent.id }), {
       method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ agentId: agent.id, issueId: dependent.id, prompt: "start early" }),
+      headers: { "content-type": "application/json", Authorization: `Bearer ${credential.token}` },
+      body: JSON.stringify(requestMessageBody(store, { agentId: agent.id, issueId: dependent.id, prompt: "start early" })),
     });
-    expect(response.status).toBe(409);
-    const body = await response.json() as { code?: string; error?: string };
-    expect(body.code).toBe("dependencies_unmet");
-    expect(body.error).toContain("force");
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body).toMatchObject({ wake_applied: "next_turn", wake_reason: "dependencies_unmet", message: { sender_type: "agent", sender_id: sender.id } });
+    expect(body.turn_id).toBeUndefined();
     expect(store.listTasksForIssue(dependent.id)).toHaveLength(0);
+    expect(store.getIssue(dependent.id)?.status).toBe("backlog");
+    expect(activityOf(store, dependent.id, "dependency_force_started")).toHaveLength(0);
   });
 
-  it("refuses a member call through POST /api/multiremi/tasks with 409 too", async () => {
-    // The gate is structural: a member passes the route's auth but not the gate.
+  it("#2-C2: force-starts a member request to an unassigned Issue", async () => {
     const { store, agent, dependent } = parked();
     const app = createMultiremiApp({ store });
-    const response = await app.request("/api/multiremi/tasks", {
+    const response = await app.request(taskRequestPath(store, { issueId: dependent.id }), {
       method: "POST",
       headers: { "content-type": "application/json", "x-multiremi-actor": "member" },
-      body: JSON.stringify({ agentId: agent.id, issueId: dependent.id, prompt: "member start" }),
+      body: JSON.stringify(requestMessageBody(store, { agentId: agent.id, issueId: dependent.id, prompt: "member start" })),
     });
-    expect(response.status).toBe(409);
-    expect((await response.json() as { code?: string }).code).toBe("dependencies_unmet");
-    expect(store.listTasksForIssue(dependent.id)).toHaveLength(0);
-    expect(store.getIssue(dependent.id)!.status).toBe("backlog");
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ wake_applied: "now", wake_reason: "human_sender" });
+    const tasks = store.listTasksForIssue(dependent.id);
+    expect(tasks).toHaveLength(1);
+    expect(tasks[0]!.agentId).toBe(agent.id);
+    expect(store.getIssue(dependent.id)!.status).toBe("todo");
+    expect(activityOf(store, dependent.id, "dependency_force_started")).toHaveLength(1);
+    expect(allActivityRows(store, dependent.id, "dependency_force_started")[0]).toMatchObject({ actorType: "member", actorId: "local" });
+    expect(activityOf(store, dependent.id, "dependency_force_started")[0]!.data).toMatchObject({ source: "comment", taskId: tasks[0]!.id, agentId: agent.id, assigneeDispatched: false });
   });
 
   it("lets assignIssue dispatch once a member force moved the issue out of backlog", () => {
@@ -1323,7 +1335,8 @@ describe("MUL-400 E3 — task-creation gate", () => {
 
     expect(store.getIssueComment(comment.id)).not.toBeNull();
     expect(activityOf(store, dependent.id, "comment_mention_skipped")).toHaveLength(0);
-    expect(activityOf(store, dependent.id, "comment_mention_triggered")).toHaveLength(1);
+    expect(store.getMessage(comment.id)?.to_agent_id).toBe(agent.id);
+    expect(store.getMessage(comment.id)?.wake_applied).toBe("now");
     const tasks = store.listTasksForIssue(dependent.id);
     expect(tasks).toHaveLength(1);
     expect(tasks[0]!.agentId).toBe(agent.id);
@@ -1357,32 +1370,27 @@ describe("MUL-400 E3 — task-creation gate", () => {
     store.updateIssue(dependent.id, { status: "backlog" });
     expect(store.getIssue(dependent.id)!.status).toBe("backlog");
 
-    const retried = store.createTask({
-      agentId: agent.id,
-      issueId: dependent.id,
-      prompt: "retry",
-      attempt: 2,
-      continuedFromTaskId: first.id,
-    });
-    expect(retried.attempt).toBe(2);
+    const retried = store.getTask(store.retryTurn(store.getTurnForAttempt(first.id)!.id).current_attempt_id!)!;
+    expect(retried.attempt).toBeGreaterThanOrEqual(2);
+    expect(store.getTurnForAttempt(retried.id)?.id).toBe(store.getTurnForAttempt(first.id)?.id);
     expect(store.getIssue(prereq.id)!.status).toBe("in_progress");
   });
 
   it("treats a human rerun as an audited force-start", async () => {
     const { store, agent, dependent } = parked();
     const app = createMultiremiApp({ store });
-    const response = await app.request(`/api/issues/${dependent.id}/rerun`, {
+    const response = await app.request(issueMessagesPath(store, dependent.id), {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ agent_id: agent.id }),
+      body: JSON.stringify(requestMessageBody(store, { agent_id: agent.id, body_md: "Continue Issue work" }, { type: "role", ref: "issue_owner" })),
     });
-    expect(response.status).toBe(202);
+    expect(response.status).toBe(200);
     const tasks = store.listTasksForIssue(dependent.id);
     expect(tasks).toHaveLength(1);
-    expect(tasks[0]!.prompt).toContain("started it by rerunning it");
+    expect(tasks[0]!.prompt).toContain("started it by commenting");
     expect(store.getIssue(dependent.id)!.status).toBe("todo");
     expect(activityOf(store, dependent.id, "dependency_force_started")[0]!.data).toMatchObject({
-      source: "rerun",
+      source: "comment",
       taskId: tasks[0]!.id,
       agentId: agent.id,
       assigneeDispatched: false,
@@ -1390,36 +1398,28 @@ describe("MUL-400 E3 — task-creation gate", () => {
     expect(allActivityRows(store, dependent.id, "dependency_gate_exempted")).toEqual([]);
   });
 
-  it("keeps an agent rerun behind the dependency gate", async () => {
-    const { store, agent, dependent } = parked();
-    const app = createMultiremiApp({ store });
-    const response = await app.request(`/api/issues/${dependent.id}/rerun`, {
-      method: "POST",
-      headers: { "content-type": "application/json", "X-Agent-ID": agent.id },
-      body: JSON.stringify({ agent_id: agent.id }),
-    });
-    expect(response.status).toBe(409);
-    expect(await response.json()).toMatchObject({ code: "dependencies_unmet" });
-    expect(store.listTasksForIssue(dependent.id)).toHaveLength(0);
-    expect(store.getIssue(dependent.id)!.status).toBe("backlog");
+  it("#2: an agent request on a waiting Issue is retained for the next Turn",async()=>{
+    const {store,agent,dependent}=parked();
+    const sender=store.createAgent({name:"Request sender",provider:"claude"});
+    const sourceIssue=store.createIssue({title:"Source"});
+    const source=store.createTask({agentId:sender.id,issueId:sourceIssue.id,prompt:"Dispatch"});
+    const token=await store.createTaskAccessToken(source,"local");
+    const app=createMultiremiApp({store,authToken:"gate-master"});
+    const response=await app.request(issueMessagesPath(store,dependent.id),{method:"POST",headers:{Authorization:`Bearer ${token.token}`,"Content-Type":"application/json"},body:JSON.stringify({body_md:"Wait for the prerequisite",message_kind:"request",to:{type:"agent",ref:agent.id}})});
+    expect(response.status).toBe(200);expect(await response.json()).toMatchObject({wake_applied:"next_turn",wake_reason:"dependencies_unmet"});
+    expect(store.listTasksForIssue(dependent.id)).toHaveLength(0);expect(store.getIssue(dependent.id)?.status).toBe("backlog");
   });
 
-  it("does not block a continuation that names continuedFromTaskId", () => {
-    // Same history: the previous round predates the dependency.
-    const { store, agent } = storeWithAgent();
-    const prereq = store.createIssue({ title: "Prerequisite", status: "in_progress" });
-    const dependent = store.createIssue({ title: "Existing work", status: "in_progress" });
-    const previous = store.createTask({ agentId: agent.id, issueId: dependent.id, prompt: "previous" });
-    store.createIssueDependency(dependent.id, { dependsOnIssueId: prereq.id, type: "blocked_by" });
-    store.updateIssue(dependent.id, { status: "backlog" });
-    // Structural exemption: the round continues an existing conversation.
-    const continuation = store.createTask({
-      agentId: agent.id,
-      issueId: dependent.id,
-      prompt: "continue",
-      continuedFromTaskId: previous.id,
-    });
-    expect(continuation.continuedFromTaskId).toBe(previous.id);
+  it("#3: a continuation on a waiting Issue stays in the existing Turn", () => {
+    const {store,agent}=storeWithAgent();
+    const issue=store.createIssue({title:"Earlier work",status:"in_progress"});
+    const previous=store.createTask({agentId:agent.id,issueId:issue.id,prompt:"Earlier work"});
+    const prerequisite=store.createIssue({title:"Blocker",status:"in_progress"});
+    store.createIssueDependency(issue.id,{dependsOnIssueId:prerequisite.id,type:"blocked_by"});
+    store.updateIssue(issue.id,{status:"backlog"});
+    const turn=store.retryTurn(store.getTurnForAttempt(previous.id)!.id);
+    expect(turn.id).toBe(previous.id);expect(store.listTurnAttempts(turn.id)).toHaveLength(2);
+    expect(store.listTasksForIssue(issue.id).filter(task=>task.status==='queued')).toHaveLength(1);
   });
 
   it("does not block the E2 wake-up that carries preserveIssueStatus", () => {
@@ -1438,8 +1438,7 @@ describe("MUL-400 E3 — task-creation gate", () => {
     const wakeup = store.createTask({
       agentId: agent.id,
       issueId: parkedParent.id,
-      prompt: "child reported",
-      preserveIssueStatus: true,
+      prompt: "child reported", assignmentAuthorType:"system",wakeSource:"child_status",
     });
     expect(wakeup.id).toBeDefined();
     expect(store.getIssue(parkedParent.id)!.status).toBe("backlog");
@@ -1471,23 +1470,27 @@ describe("MUL-400 E3 — fix round 3: gate integrity", () => {
     ["camelCase attempt", { attempt: 2 }],
     ["camelCase attempt with maxAttempts", { attempt: 2, maxAttempts: 3 }],
     ["snake_case attempt", { attempt: 2, max_attempts: 3 }],
-    ["camelCase preserveIssueStatus", { preserveIssueStatus: true }],
+    ["camelCase preserveIssueStatus", {  }],
     ["snake_case preserve_issue_status", { preserve_issue_status: true }],
   ])("ignores a body-supplied exemption on the task route (%s)", async (_label, extra) => {
     const { store, agent, dependent } = parkedWithOwner();
     const app = createMultiremiApp({ store });
 
-    const response = await app.request("/api/multiremi/tasks", {
+    const response = await app.request(taskRequestPath(store, { issueId: dependent.id }), {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ agentId: agent.id, issueId: dependent.id, prompt: "start early", ...extra }),
+      body: JSON.stringify(requestMessageBody(store, { agentId: agent.id, issueId: dependent.id, prompt: "start early", ...extra })),
     });
-    expect(response.status).toBe(409);
-    expect((await response.json() as { code?: string }).code).toBe("dependencies_unmet");
-    // The whole row set: nothing at all was created.
-    expect(allTaskRows(store, dependent.id)).toEqual([]);
-    expect(store.getIssue(dependent.id)!.status).toBe("backlog");
-    expect(allActivityRows(store, dependent.id, "dependency_force_started")).toEqual([]);
+    // #2-C2: a member request starts work; the public exemption fields remain ignored.
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ wake_applied: "now", wake_reason: "human_sender" });
+    const tasks = store.listTasksForIssue(dependent.id);
+    expect(tasks).toHaveLength(1);
+    expect(tasks[0]).toMatchObject({ attempt: 1, maxAttempts: 3 });
+    expect(store.getIssue(dependent.id)!.status).toBe("todo");
+    expect(allActivityRows(store, dependent.id, "dependency_force_started")).toHaveLength(1);
+    expect(allActivityRows(store, dependent.id, "dependency_force_started")[0]).toMatchObject({ actorType: "member", actorId: "local" });
+    expect(allActivityRows(store, dependent.id, "dependency_force_started")[0]!.data).toMatchObject({ source: "comment", taskId: tasks[0]!.id, agentId: agent.id, assigneeDispatched: true });
     expect(store.listUnmetPrerequisites(dependent.id)).toHaveLength(1);
   });
 
@@ -1508,68 +1511,31 @@ describe("MUL-400 E3 — fix round 3: gate integrity", () => {
     // either way.
     type CreateInput = Record<string, unknown>;
     const seen: CreateInput[] = [];
-    const target = store as unknown as { createTask(input: CreateInput): unknown };
-    const original = target.createTask.bind(target);
-    target.createTask = (input: CreateInput) => { seen.push(input); return original(input); };
+    const target = store as unknown as { sendMessage(input: CreateInput): unknown };
+    const original = target.sendMessage.bind(target);
+    target.sendMessage = (input: CreateInput) => { seen.push(input); return original(input); };
 
-    const response = await app.request("/api/multiremi/tasks", {
+    const response = await app.request(taskRequestPath(store, { issueId: prereq.id }), {
       method: "POST",
       headers: { "content-type": "application/json" },
       // Use a non-waiting issue so the request reaches the store at all: on a
       // waiting issue the gate refuses before the body matters.
-      body: JSON.stringify({ agentId: agent.id, issueId: prereq.id, prompt: "strip check", ...extra }),
+      body: JSON.stringify(requestMessageBody(store, { agentId: agent.id, issueId: prereq.id, prompt: "strip check", ...extra })),
     });
-    target.createTask = original;
-    expect(response.status).toBe(201);
+    target.sendMessage = original;
+    expect(response.status).toBe(200);
     expect(seen).toHaveLength(1);
     expect(key in seen[0]!).toBe(false);
     expect(seen[0]).not.toHaveProperty("maxAttempts");
     expect(seen[0]).not.toHaveProperty("max_attempts");
   });
 
-  it("still lets the internal retry path through", () => {
-    // Structural exemption for a real retry: the server sets attempt itself.
-    const { store, runtime, agent } = storeWithAgent();
-    const prereq = store.createIssue({ title: "Prerequisite", status: "in_progress" });
-    const issue = store.createIssue({ title: "Existing", status: "in_progress", assigneeType: "agent", assigneeId: agent.id });
-    const first = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "run" });
-    let claimed = store.claimTask(runtime.id);
-    while (claimed && claimed.id !== first.id) claimed = store.claimTask(runtime.id);
-    store.startTask(first.id);
-    store.failTask(first.id, { error: "boom" });
-
-    store.createIssueDependency(issue.id, { dependsOnIssueId: prereq.id, type: "blocked_by" });
-    store.updateIssue(issue.id, { status: "backlog" });
-    const retry = store.createTask({
-      agentId: agent.id,
-      issueId: issue.id,
-      prompt: "retry",
-      attempt: 2,
-      continuedFromTaskId: first.id,
-    });
-    expect(retry.attempt).toBe(2);
-  });
-
-  // ── blocker 2: one forced start queues exactly one row ────────────────────
-  it.each([
-    ["/api/multiremi/issues", true],
-    ["/api/issues", false],
-  ])("queues exactly one task row for a member force through %s", async (path, camel) => {
-    const { store, dependent } = parkedWithOwner();
-    const app = createMultiremiApp({ store });
-    const response = await app.request(`${path}/${dependent.id}`, {
-      method: "PATCH",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ status: "todo", force: true }),
-    });
-    expect(response.status).toBe(200);
-
-    const rows = allTaskRows(store, dependent.id);
-    expect(rows).toHaveLength(1);
-    expect(rows[0]!.status).toBe("queued");
-    expect(allActivityRows(store, dependent.id, "dependency_force_started")).toHaveLength(1);
-    expect(store.getIssue(dependent.id)!.status).toBe("todo");
-    expect(store.listUnmetPrerequisites(dependent.id)).toHaveLength(1);
+  it("#3: internal retries preserve the original Turn",()=>{
+    const {store,agent}=parkedWithOwner();
+    const issue=store.createIssue({title:"Earlier work",status:"in_progress"});
+    const previous=store.createTask({agentId:agent.id,issueId:issue.id,prompt:"First"});
+    const turn=store.retryTurn(store.getTurnForAttempt(previous.id)!.id);
+    expect(turn.id).toBe(previous.id);expect(store.getTask(turn.current_attempt_id!)?.attempt).toBe(2);
   });
 
   it("keeps a single task row when the same issue is forced twice", async () => {
@@ -1666,14 +1632,12 @@ describe("MUL-400 E3 — fix round 3: gate integrity", () => {
 
     store.updateIssue(prerequisite.id, { status: "done" });
 
-    const coalesced = allActivityRows(store, dependentParent.id, "pending_turn_coalesced");
+    const coalesced = allActivityRows(store, dependentParent.id, "turn_merged");
     expect(coalesced).toHaveLength(1);
-    const merged = (coalesced[0]!.data ?? {}) as Record<string, unknown>;
-    expect(merged).toMatchObject({ reason: "dependency" });
-    expect(store.getTask(merged.task_id as string)!.agentId).toBe(agent.id);
-    const entry = store.getConversationLogEntryById(merged.commentId as string)!;
-    expect(entry.metadata.envelope?.wake).toBe("next_turn");
-    expect(entry.seq).toBe(merged.seq as number);
+    const merged = coalesced[0]!.data as Record<string, unknown>;
+    const message = store.getMessage(String(merged.message_id))!;
+    expect(message.to_agent_id).toBe(agent.id);expect(message.seq).toBe(Number(merged.seq));
+    expect(message.wake_applied).toBe("next_turn"); // #3: readiness merges into the pending Turn without escalating its wake.
     // The line joined the existing round instead of creating a second one.
     expect(store.listTasksForIssue(dependentParent.id).filter((task) => task.status !== "cancelled")).toHaveLength(1);
   });
@@ -1830,9 +1794,7 @@ describe("MUL-400 E3 — fix round 4: atomic automatic start", () => {
     const task = store.createTask({
       agentId: agent.id,
       issueId: dependent.id,
-      prompt: "exempt round",
-      attempt: 2,
-      preserveIssueStatus: true,
+      prompt: "exempt round", assignmentAuthorType:"system", wakeSource:"child_status",
     });
     expect(task.status).toBe("queued");
     expect(store.getIssue(dependent.id)!.status).toBe("backlog");
@@ -1940,181 +1902,45 @@ describe("MUL-400 E3 — fix round 4: atomic automatic start", () => {
     expect(allActivityRows(store, dependent.id, "dependency_force_started")).toEqual([]);
   });
 
-  it.each(["redispatch", "retry", "continuation", "delegation_return", "parent_wakeup"] as const)(
-    "records one post-commit gate exemption for %s",
-    (source) => {
-      const { store, runtime, agent } = storeWithAgent(`exemption_${source}`);
-      const prerequisite = store.createIssue({ title: "Open prerequisite", status: "in_progress" });
-      const issue = store.createIssue({ title: "Earlier work", status: "in_progress" });
-      const previous = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "earlier round" });
-      if (source === "redispatch") store.cancelTask(previous.id);
-      if (source === "retry") {
-        expect(store.claimTask(runtime.id)?.id).toBe(previous.id);
-        store.startTask(previous.id);
-        store.failTask(previous.id, { error: "failed", failureReason: "unknown" });
-      }
-      store.createIssueDependency(issue.id, { dependsOnIssueId: prerequisite.id, type: "blocked_by" });
-      store.updateIssue(issue.id, { status: "backlog" });
-
-      const events: Array<{ type: string; persisted: number }> = [];
-      const stop = store.onWorkspaceEvent((event) => {
-        if (event.type === "activity:created"
-          && (event.payload.entry as { action?: string })?.action === "dependency_gate_exempted") {
-          events.push({ type: event.type, persisted: allActivityRows(store, issue.id, "dependency_gate_exempted").length });
-        }
-      });
-      const task = store.createTask({
-        agentId: agent.id, issueId: issue.id, prompt: `continue ${source}`,
-        ...(source === "redispatch" || source === "retry" ? { attempt: 2, parentTaskId: previous.id } : {}),
-        ...(source === "continuation" ? { continuedFromTaskId: previous.id } : {}),
-        ...(source === "delegation_return" ? {
-          delegationId: "dlg_exemption", delegatedByAgentId: agent.id, parentTaskId: previous.id,
-        } : {}),
-        ...(source === "parent_wakeup" ? { preserveIssueStatus: true, parentTaskId: previous.id } : {}),
-      });
-      stop();
-      expect(store.getTask(task.id)?.status).toBe("queued");
-      expect(allTaskRows(store, issue.id).some((row) => row.id === task.id)).toBe(true);
-      const activities = allActivityRows(store, issue.id, "dependency_gate_exempted");
-      expect(activities).toHaveLength(1);
-      expect(activities[0]!.data).toMatchObject({
-        source, taskId: task.id, task_id: task.id,
-        previousTaskId: previous.id, previous_task_id: previous.id,
-        unmet: [{ key: prerequisite.key }],
-        unmetPrerequisites: [{ key: prerequisite.key }],
-        unmet_prerequisites: [{ key: prerequisite.key }],
-      });
-      expect(events).toEqual([{ type: "activity:created", persisted: 1 }]);
-    },
-  );
-
-  /**
-   * MUL-409 QA round 4, blocker 3 — QA's own probe, as a case.
-   *
-   * A leader-token continuation (`POST /api/multiremi/tasks` with
-   * `continueTaskId=<delegated>`) sets BOTH `parentTaskId` (the leader's turn)
-   * and `continuedFromTaskId` (the task actually being continued). The audit
-   * read `parentTask` first, so `previousTaskId` named the leader instead of the
-   * delegated round the continuation really extends.
-   */
-  it("prefers the continued round over the parent when both are set", async () => {
-    const { store, agent } = storeWithAgent("continuation_ids");
-    const prerequisite = store.createIssue({ title: "Open prerequisite", status: "in_progress" });
-    const issue = store.createIssue({ title: "Delegated work", status: "in_progress" });
-    // Two distinct rounds: the leader's turn is the parent, the delegated task is
-    // the one being continued. Their ids must not be interchangeable.
-    const leader = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "leader turn" });
-    const delegated = store.createTask({
-      agentId: agent.id, issueId: issue.id, prompt: "delegated work", parentTaskId: leader.id,
-    });
-    expect(delegated.id).not.toBe(leader.id);
-
-    store.createIssueDependency(issue.id, { dependsOnIssueId: prerequisite.id, type: "blocked_by" });
-    store.updateIssue(issue.id, { status: "backlog" });
-
-    const continued = store.createTask({
-      agentId: agent.id,
-      issueId: issue.id,
-      prompt: "continue the delegated round",
-      parentTaskId: leader.id,
-      continuedFromTaskId: delegated.id,
-    });
-
-    const exempted = allActivityRows(store, issue.id, "dependency_gate_exempted");
-    expect(exempted).toHaveLength(1);
-    const data = exempted[0]!.data as Record<string, unknown>;
-    expect(data.source).toBe("continuation");
-    // Both spellings name the continued round, never the leader's.
-    expect(data.previousTaskId).toBe(delegated.id);
-    expect(data.previous_task_id).toBe(delegated.id);
-    expect(data.previousTaskId).not.toBe(leader.id);
-    expect(store.getTask(continued.id)!.continuedFromTaskId).toBe(delegated.id);
+  it("#3: replacing an Attempt preserves the waiting Turn and emits only after commit", () => {
+    const {store,agent}=storeWithAgent("Stable waiting retry");
+    const issue=store.createIssue({title:"Earlier work",status:"in_progress"});
+    const previous=store.createTask({agentId:agent.id,issueId:issue.id,prompt:"Earlier work"});
+    const prerequisite=store.createIssue({title:"Blocker",status:"in_progress"});
+    store.createIssueDependency(issue.id,{dependsOnIssueId:prerequisite.id,type:"blocked_by"});
+    store.updateIssue(issue.id,{status:"backlog"});
+    const states:boolean[]=[];const stop=store.onTaskEnqueued(()=>states.push(db!.inTransaction));
+    const turn=store.retryTurn(store.getTurnForAttempt(previous.id)!.id);stop();
+    expect(turn.id).toBe(previous.id);expect(store.listTurnAttempts(turn.id)).toHaveLength(2);
+    expect(store.getTask(turn.current_attempt_id!)?.status).toBe("queued");expect(states).toEqual([false]);
+    expect(store.listUnmetPrerequisites(issue.id)).toHaveLength(1);
   });
 
-  it("keeps every other exemption source pointing at its own previous round", () => {
-    // The four sources QA verified as correct must stay that way: each records
-    // the task its own path carries, not whatever `parentTaskId` happens to be.
-    for (const source of ["redispatch", "retry", "delegation_return", "parent_wakeup"] as const) {
-      const { store, runtime, agent } = storeWithAgent(`ids_${source}`);
-      const prerequisite = store.createIssue({ title: "Open prerequisite", status: "in_progress" });
-      const issue = store.createIssue({ title: "Earlier work", status: "in_progress" });
-      const previous = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "earlier round" });
-      if (source === "redispatch") store.cancelTask(previous.id);
-      if (source === "retry") {
-        expect(store.claimTask(runtime.id)?.id).toBe(previous.id);
-        store.startTask(previous.id);
-        store.failTask(previous.id, { error: "failed", failureReason: "unknown" });
-      }
-      store.createIssueDependency(issue.id, { dependsOnIssueId: prerequisite.id, type: "blocked_by" });
-      store.updateIssue(issue.id, { status: "backlog" });
-
-      store.createTask({
-        agentId: agent.id, issueId: issue.id, prompt: `continue ${source}`,
-        ...(source === "redispatch" || source === "retry"
-          ? { attempt: 2, parentTaskId: previous.id }
-          : {}),
-        ...(source === "delegation_return"
-          ? { delegationId: `dlg_${source}`, delegatedByAgentId: agent.id, parentTaskId: previous.id }
-          : {}),
-        ...(source === "parent_wakeup" ? { preserveIssueStatus: true, parentTaskId: previous.id } : {}),
-      });
-
-      const exempted = allActivityRows(store, issue.id, "dependency_gate_exempted");
-      expect(exempted).toHaveLength(1);
-      const data = exempted[0]!.data as Record<string, unknown>;
-      expect({
-        source,
-        reported: data.source,
-        previousCamel: data.previousTaskId,
-        previousSnake: data.previous_task_id,
-      }).toEqual({
-        source,
-        reported: source,
-        previousCamel: previous.id,
-        previousSnake: previous.id,
-      });
+  it("#3/#9: a structural parent status wake bypasses dependencies and merges into one Turn",()=>{
+    const {store,agent}=storeWithAgent("Parent status");
+    const blocker=store.createIssue({title:"Blocker",status:"in_progress"});
+    const parent=store.createIssue({title:"Parent",status:"backlog",blockedBy:[blocker.id],assigneeType:"agent",assigneeId:agent.id});
+    for(const status of ["done","cancelled"] as const){
+      const child=store.createIssue({title:status,parentIssueId:parent.id,status:"in_progress"});
+      store.updateIssue(child.id,{status});
     }
+    const tasks=store.listTasksForIssue(parent.id);expect(tasks).toHaveLength(1);
+    const reports=store.listMessages(tasks[0]!.issueSessionId!).filter(message=>message.message_kind==="status");
+    expect(reports).toHaveLength(2);expect(reports.every(message=>message.to_agent_id===agent.id&&message.wake_applied==="now")).toBe(true);
+    expect(store.getIssue(parent.id)?.status).toBe("backlog");
   });
 
-  it("keeps a committed exempt task when its post-commit activity write fails", () => {
-    const { store, agent, dependent } = parkedChain("exemption_write_failure");
-    const restore = injectOnce(seams(store).ctx, "appendIssueActivity", (args) =>
-      (args[1] as { type?: string })?.type === "dependency_gate_exempted");
-    const warnings = spyOn(console, "warn").mockImplementation(() => {});
-    try {
-      const task = store.createTask({
-        agentId: agent.id, issueId: dependent.id, prompt: "continue", attempt: 2,
-      });
-      expect(task.status).toBe("queued");
-      expect(allTaskRows(store, dependent.id)).toHaveLength(1);
-      expect(allActivityRows(store, dependent.id, "dependency_gate_exempted")).toEqual([]);
-      expect(warnings.mock.calls.some((call) => String(call).includes("post-commit issue activity failed"))).toBe(true);
-    } finally {
-      restore();
-      warnings.mockRestore();
-    }
-  });
-
-  it("records an actual automatic retry of a waiting issue", () => {
-    const { store, runtime, agent } = storeWithAgent("actual_retry");
-    const prerequisite = store.createIssue({ title: "Unfinished", status: "in_progress" });
-    const issue = store.createIssue({ title: "Running work", status: "in_progress" });
-    const first = store.createTask({
-      agentId: agent.id, issueId: issue.id, prompt: "first attempt", maxAttempts: 2,
-    });
-    expect(store.claimTask(runtime.id)?.id).toBe(first.id);
-    store.startTask(first.id);
-    store.createIssueDependency(issue.id, { dependsOnIssueId: prerequisite.id, type: "blocked_by" });
-    store.updateIssue(issue.id, { status: "backlog" });
-    store.failTask(first.id, { error: "runtime dropped", failureReason: "runtime_offline" });
-    const retry = store.listTasksForIssue(issue.id).find((task) => task.id !== first.id)!;
-    expect(retry.status).toBe("queued");
-    const exempted = allActivityRows(store, issue.id, "dependency_gate_exempted");
-    expect(exempted).toHaveLength(1);
-    expect(exempted[0]!.data).toMatchObject({
-      source: "retry", taskId: retry.id, previousTaskId: first.id,
-      unmet: [{ key: prerequisite.key }],
-    });
+  it("#3: automatic retry allocates an Attempt without creating another Turn on a waiting Issue",()=>{
+    const {store,runtime,agent}=storeWithAgent("Automatic waiting retry");
+    const issue=store.createIssue({title:"Running work",status:"in_progress"});
+    const first=store.createTask({agentId:agent.id,issueId:issue.id,prompt:"First",maxAttempts:2});
+    expect(store.claimTask(runtime.id)?.id).toBe(first.id);store.startTask(first.id);
+    const blocker=store.createIssue({title:"Blocker",status:"in_progress"});
+    store.createIssueDependency(issue.id,{dependsOnIssueId:blocker.id,type:"blocked_by"});
+    store.updateIssue(issue.id,{status:"backlog"});
+    store.failTask(first.id,{error:"Runtime dropped",failureReason:"runtime_offline"});
+    const turn=store.getTurnForAttempt(first.id)!;expect(store.listTurnAttempts(turn.id)).toHaveLength(2);
+    expect(store.getTask(turn.current_attempt_id!)?.status).toBe("queued");expect(turn.id).toBe(first.id);
   });
 
   it("records no exemption for an issue outside waiting state", () => {
@@ -2453,33 +2279,35 @@ describe("MUL-409 — fix round 5: a refused session task leaves no participant 
   function sessionShape(store: Store, sessionId: string) {
     return {
       participants: store.listSessionParticipants(sessionId).map((row) => row.participantId),
-      lanes: db!.query("SELECT agent_id FROM multiremi_session_agent_lanes WHERE session_id = ?").all(sessionId).length,
-      tasks: db!.query("SELECT id FROM multiremi_tasks WHERE issue_session_id = ?").all(sessionId).length,
+      lanes: db!.query("SELECT reader_id FROM multiremi_session_lanes WHERE session_id = ? AND reader_type = 'agent'").all(sessionId).length,
+      tasks: db!.query("SELECT id FROM multiremi_turn_execution_records WHERE issue_session_id = ?").all(sessionId).length,
     };
   }
 
-  it("answers 409 dependencies_unmet and leaves participants, lanes and tasks unchanged", async () => {
+  it("#2-C2: a member session request force-starts with participant, lane, turn and audit", async () => {
     const { store, agent, dependent, session, prereq } = waiting("session_409");
     const app = createMultiremiApp({ store });
     const before = sessionShape(store, session.id);
     expect(before).toEqual({ participants: [], lanes: 0, tasks: 0 });
 
-    const response = await app.request(`/api/issues/${dependent.id}/sessions/${session.id}/tasks`, {
+    const response = await app.request(`/api/sessions/${session.id}/messages`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ agentId: agent.id, prompt: "Start blocked work" }),
+      body: JSON.stringify(requestMessageBody(store, { agentId: agent.id, prompt: "Start blocked work" }, { type: "role", ref: "issue_owner" })),
     });
-    const payload = await response.json() as { code?: string; error?: string; unmet?: Array<{ key: string }> };
+    const payload = await response.json();
 
-    expect(response.status).toBe(409);
-    expect(payload.code).toBe("dependencies_unmet");
-    // The report names the prerequisite that holds the issue.
+    expect(response.status).toBe(200);
+    expect(payload).toMatchObject({ wake_applied: "now", wake_reason: "human_sender" });
     const prerequisite = store.getIssue(prereq.id)!;
-    expect(payload.unmet).toHaveLength(1);
-    expect(payload.unmet![0]).toMatchObject({ key: prerequisite.key, status: "in_progress" });
-
-    // Nothing about the session moved.
-    expect(sessionShape(store, session.id)).toEqual(before);
+    expect(sessionShape(store, session.id)).toEqual({ participants: [agent.id], lanes: 1, tasks: 1 });
+    expect(store.getIssue(dependent.id)?.status).toBe("todo");
+    const tasks = store.listTasksForIssue(dependent.id);
+    expect(store.getTurnForAttempt(tasks[0]!.id)?.id).toBe(payload.turn_id);
+    const audit = allActivityRows(store, dependent.id, "dependency_force_started");
+    expect(audit).toHaveLength(1);
+    expect(audit[0]).toMatchObject({ actorType: "member", actorId: "local" });
+    expect(audit[0]!.data).toMatchObject({ source: "comment", taskId: tasks[0]!.id, agentId: agent.id, unmet: [{ key: prerequisite.key, status: "in_progress" }] });
   });
 
   it("still creates the participant, the lane and the round for an ordinary issue", async () => {
@@ -2490,13 +2318,13 @@ describe("MUL-409 — fix round 5: a refused session task leaves no participant 
     const session = store.getOrCreateDefaultIssueSession(issue.id);
     const app = createMultiremiApp({ store });
 
-    const response = await app.request(`/api/issues/${issue.id}/sessions/${session.id}/tasks`, {
+    const response = await app.request(`/api/sessions/${session.id}/messages`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ agentId: agent.id, prompt: "Run ready work" }),
+      body: JSON.stringify(requestMessageBody(store, { agentId: agent.id, prompt: "Run ready work" }, { type: "role", ref: "issue_owner" })),
     });
 
-    expect(response.status).toBe(201);
+    expect(response.status).toBe(200);
     const shape = sessionShape(store, session.id);
     expect(shape.participants).toEqual([agent.id]);
     expect(shape.lanes).toBe(1);
@@ -2527,6 +2355,6 @@ describe("MUL-409 — fix round 5: a refused session task leaves no participant 
 
     expect(sessionShape(store, session.id)).toEqual(before);
     // The round itself never landed either.
-    expect(db!.query("SELECT id FROM multiremi_tasks WHERE issue_id = ?").all(issue.id)).toEqual([]);
+    expect(db!.query("SELECT id FROM multiremi_turn_execution_records WHERE issue_id = ?").all(issue.id)).toEqual([]);
   });
 });

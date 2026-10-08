@@ -16,22 +16,13 @@
  */
 
 import type { PerfAnchorSpec, PerfProfileConfig, PerfReadyRule, PerfProfileName } from "./jump-recorder";
-// The inbox page's own row order. Imported rather than re-derived so the probe's
-// idea of "which row to click" cannot drift from the page's grouping.
-import {
-  deduplicateInboxItems,
-  filterInboxItemsBySource,
-  groupInboxItemsByDate,
-} from "../../../packages/core/inbox/grouping";
-import type { InboxItem } from "../../../packages/core/types/inbox";
-
 export type SelectorMode = PerfProfileName;
 export type SelectorModeOption = "auto" | SelectorMode;
 
 /** Which measurement the script is driving: it selects the scroll root and the terminal rule. */
-export type PageShape = "issue-detail" | "chat" | "list";
+export type PageShape = "issue-detail" | "chat" | "list" | "inbox";
 
-export type PerfAnchorName = "latest-comment" | "agent-stream" | "target-comment" | "latest-message";
+export type PerfAnchorName = "latest-comment" | "agent-stream" | "target-comment" | "latest-message" | "target-message";
 
 export type PerfItemType =
   | "comment"
@@ -119,6 +110,7 @@ export function scrollRootSelector(mode: SelectorMode, shape: PageShape): string
   // Keeping *one* root across the tables is what makes their equivalence
   // provable; the list readiness marker (`CONTRACT.listMarker`) is read
   // separately, by `detectContractDom` / the recorder, not as a root.
+  if (shape === "inbox") return "[data-inbox-detail]";
   if (shape === "list") return LEGACY.listRoot;
   if (mode === "legacy") return LEGACY.scrollRoot;
   return shape === "chat" ? CONTRACT.scrollRootChat : CONTRACT.scrollRootIssueDetail;
@@ -180,10 +172,10 @@ export function anchorPlan(options: {
 }): AnchorPlan {
   const { mode, shape } = options;
 
+  if (shape === "inbox") return { specs: [{ name: "target-message", selector: `[data-inbox-message="${cssEscape(options.targetCommentId ?? "")}"]`, pick: "first", visibility: "top-visible" }], rule: { kind: "anchor", anchors: ["target-message"] }, anchorRule: "canonical-inbox-message", anchorName: "target-message" };
   if (shape === "list" && mode === "contract") {
     return { specs: [], rule: { kind: "items" }, anchorRule: "real-list-row", anchorName: "none" };
   }
-
   if (shape === "list" || (shape === "chat" && mode === "legacy")) {
     return { specs: [], rule: { kind: "heading" }, anchorRule: "h1-no-skeleton", anchorName: "none" };
   }
@@ -271,7 +263,7 @@ export function profileFor(options: {
     name: options.mode,
     scrollRoot: scrollRootSelector(options.mode, options.shape),
     ...(fallback ? { scrollRootFallback: fallback } : null),
-    items: options.shape === "list"
+    items: options.shape === "inbox" ? CONTRACT.item("message") : options.shape === "list"
       ? options.mode === "contract" ? `${CONTRACT.listMarker} ${CONTRACT.items}` : ""
       : options.mode === "legacy" ? LEGACY.items : CONTRACT.items,
     skeleton: options.mode === "legacy" ? LEGACY.skeleton : CONTRACT.skeleton,
@@ -307,10 +299,9 @@ export function profilesFor(options: {
  * Returns null when the item is not in the rendered list, which the caller
  * reports as a skip rather than clicking a clamped index.
  */
-export function inboxDomRowIndex(items: InboxItem[], targetItemId: string): number | null {
-  const rows = groupInboxItemsByDate(filterInboxItemsBySource(deduplicateInboxItems(items), "all"))
-    .flatMap((group) => group.entries);
-  const index = rows.findIndex((entry) => entry.items.some((item) => item.id === targetItemId));
+export function inboxDomRowIndex(items: readonly { id?: string }[], targetItemId: string): number | null {
+  const rows = [...new Map(items.map(item => [item.id, item])).values()];
+  const index = rows.findIndex(item => item.id === targetItemId);
   return index >= 0 ? index : null;
 }
 
@@ -327,7 +318,7 @@ export function inboxDomRowIndex(items: InboxItem[], targetItemId: string): numb
  */
 export function isEntryFailure(message: string | undefined): boolean {
   if (!message) return false;
-  return message.startsWith("warm target not found") || message.startsWith("deeplink warm: url issue=");
+  return message.startsWith("warm target not found") || message.startsWith("deeplink warm: url item=");
 }
 
 /** True when the page already carries the MUL-384 DOM contract. */

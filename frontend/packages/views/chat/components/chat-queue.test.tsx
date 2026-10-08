@@ -1,91 +1,77 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { I18nProvider } from "@multiremi/core/i18n/react";
-import enChat from "../../locales/en/chat.json";
-const actions = vi.hoisted(() => ({
-  update: vi.fn(),
-  remove: vi.fn(),
-  clear: vi.fn(),
-  prioritize: vi.fn(),
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { renderWithI18n } from "../../test/i18n";
+import { messageFixture } from "../../test/messages";
+const mock = vi.hoisted(() => ({ listMessages: vi.fn(), editMessage: vi.fn(), deleteMessage: vi.fn() }));
+vi.mock("@multiremi/core/api", async importOriginal => ({
+  ...await importOriginal<typeof import("@multiremi/core/api")>(), api: mock,
 }));
-vi.mock("@multiremi/core/chat/mutations", () => ({
-  useUpdateChatQueuedTask: () => ({
-    mutateAsync: actions.update,
-    isPending: false,
-  }),
-  useRemoveChatQueuedTask: () => ({
-    mutateAsync: actions.remove,
-    isPending: false,
-  }),
-  useClearChatQueue: () => ({ mutateAsync: actions.clear, isPending: false }),
-  usePrioritizeChatQueuedTask: () => ({
-    mutateAsync: actions.prioritize,
-    isPending: false,
-  }),
-}));
+vi.mock("@multiremi/core/auth", () => ({ useAuthStore: (select: (state: unknown) => unknown) => select({ user: { id: "user-1" } }) }));
+vi.mock("@multiremi/core/workspace/queries", () => ({ memberListOptions: () => ({ queryKey: ["members"], queryFn: async () => [{ id: "member-1", user_id: "user-1" }] }) }));
+vi.mock("@multiremi/core/hooks", () => ({ useWorkspaceId: () => "ws-1" }));
 import { ChatQueue } from "./chat-queue";
-const task = {
-  task_id: "task-2",
-  content: "Follow up",
-  attachment_ids: [],
-  created_at: new Date(0).toISOString(),
-};
-function mount() {
-  return render(
-    <I18nProvider locale="en" resources={{ en: { chat: enChat } }}>
-      <ChatQueue sessionId="session-1" tasks={[task]} />
-    </I18nProvider>,
-  );
-}
-describe("ChatQueue", () => {
-  beforeEach(() => {
-    Object.values(actions).forEach((action) =>
-      action.mockReset().mockResolvedValue(undefined),
-    );
+import { ApiError } from "@multiremi/core/api";
+const message = messageFixture({ session_id: "chat_1", sender_type: "member", sender_id: "member-1", body_md: "Follow up" });
+function mount() { return renderWithI18n(<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })}><ChatQueue sessionId="chat_1" agentId="agent_1" /></QueryClientProvider>); }
+beforeEach(() => { vi.clearAllMocks(); mock.listMessages.mockResolvedValue({ messages: [message], next_cursor: null }); mock.editMessage.mockResolvedValue(message); mock.deleteMessage.mockResolvedValue(message); });
+describe("unread Chat messages", () => {
+  it.each(["edit", "delete"])("explains the agent-read conflict after a rejected %s", async action => {
+    const conflict = new ApiError("A consumed message cannot be edited or deleted", 409, "Conflict");
+    (action === "edit" ? mock.editMessage : mock.deleteMessage).mockRejectedValueOnce(conflict);
+    mount(); await screen.findByText("Follow up");
+    if (action === "edit") {
+      fireEvent.click(screen.getByRole("button", { name: "Edit queued message" }));
+      fireEvent.change(screen.getByRole("textbox"), { target: { value: "Keep this draft" } });
+      fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    } else fireEvent.click(screen.getByRole("button", { name: "Remove queued message" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("already been read by the agent");
+    if (action === "edit") expect(screen.getByRole("textbox")).toHaveValue("Keep this draft");
+    else expect(screen.getByText("Follow up")).toBeInTheDocument();
   });
-  it("keeps an edited message available after a failed save", async () => {
-    actions.update.mockRejectedValueOnce(new Error("offline"));
-    mount();
-    fireEvent.click(
-      screen.getByRole("button", { name: "Edit queued message" }),
-    );
-    fireEvent.change(screen.getByRole("textbox"), {
-      target: { value: "Updated instruction" },
-    });
+
+  it("uses the agent unread cursor and has edit/delete without prioritize", async () => {
+    mount(); await screen.findByText("Follow up");
+    expect(mock.listMessages).toHaveBeenCalledWith("chat_1", { unread_by: "agent_1", cursor: undefined, limit: 100 });
+    expect(screen.queryByRole("button", { name: /Run now|Clear queue/ })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Remove queued message" }));
+    await waitFor(() => expect(mock.deleteMessage).toHaveBeenCalledWith("msg_1"));
+  });
+  it("keeps the edited draft after a consumption conflict and allows a retry", async () => {
+    mock.editMessage.mockRejectedValueOnce(new Error("consumed")); mount(); await screen.findByText("Follow up");
+    fireEvent.click(screen.getByRole("button", { name: "Edit queued message" }));
+    fireEvent.change(screen.getByRole("textbox"), { target: { value: "Updated instruction" } });
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
-    await screen.findByRole("alert");
-    expect(screen.getByRole("textbox")).toHaveValue("Updated instruction");
+    await screen.findByRole("alert"); expect(screen.getByRole("textbox")).toHaveValue("Updated instruction");
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() => expect(screen.queryByRole("textbox")).toBeNull());
-    expect(actions.update).toHaveBeenLastCalledWith({
-      sessionId: "session-1",
-      taskId: "task-2",
-      content: "Updated instruction",
-    });
+    expect(mock.editMessage).toHaveBeenLastCalledWith("msg_1", "Updated instruction");
   });
-  it("prioritizes, removes and clears using server queue commands", async () => {
-    mount();
-    fireEvent.click(
-      screen.getByRole("button", { name: "Run now (stops the current run)" }),
-    );
-    await waitFor(() =>
-      expect(actions.prioritize).toHaveBeenCalledWith({
-        sessionId: "session-1",
-        taskId: "task-2",
-      }),
-    );
-    fireEvent.click(
-      screen.getByRole("button", { name: "Remove queued message" }),
-    );
-    await waitFor(() =>
-      expect(actions.remove).toHaveBeenCalledWith({
-        sessionId: "session-1",
-        taskId: "task-2",
-      }),
-    );
-    fireEvent.click(screen.getByRole("button", { name: "Clear queue" }));
-    await waitFor(() =>
-      expect(actions.clear).toHaveBeenCalledWith("session-1"),
-    );
+  it("shows other members' messages but only offers controls on the current member's own message", async () => {
+    mock.listMessages.mockResolvedValue({ messages: [message, messageFixture({ id: "msg_other", sender_type: "member", sender_id: "other-member", body_md: "Other member" })], next_cursor: null });
+    mount(); await screen.findByText("Other member");
+    await waitFor(() => expect(screen.getAllByRole("button", { name: "Edit queued message" })).toHaveLength(1));
+    expect(screen.getAllByRole("button", { name: "Remove queued message" })).toHaveLength(1);
+    fireEvent.click(screen.getByRole("button", { name: "Edit queued message" }));
+    expect(screen.getByRole("textbox")).toHaveValue("Follow up");
+  });
+  it("cancels a local edit without sending a mutation", async () => {
+    mount(); await screen.findByText("Follow up"); fireEvent.click(screen.getByRole("button", { name: "Edit queued message" }));
+    fireEvent.change(screen.getByRole("textbox"), { target: { value: "discard" } });
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(screen.getByText("Follow up")).toBeInTheDocument(); expect(mock.editMessage).not.toHaveBeenCalled();
+  });
+  it("retains the draft when a consumption conflict removes the row on refetch", async () => {
+    mock.editMessage.mockImplementation(async () => {
+      mock.listMessages.mockResolvedValue({ messages: [], next_cursor: null });
+      throw new Error("consumed");
+    });
+    mount(); await screen.findByText("Follow up");
+    fireEvent.click(screen.getByRole("button", { name: "Edit queued message" }));
+    fireEvent.change(screen.getByRole("textbox"), { target: { value: "Keep my draft" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await screen.findByText(/Your draft is kept here/);
+    expect(screen.getByRole("textbox")).toHaveValue("Keep my draft");
+    expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
   });
 });

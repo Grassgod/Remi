@@ -288,7 +288,7 @@ export function AgentLiveCard({ issueId, issueSessionId, onInitialReconcile, rec
           />
         ))}
         {humanRequestTasks.map((task) => (
-          <HumanRequestDock key={task.id} taskId={task.id} />
+          <HumanRequestDock key={task.id} taskId={task.id} sessionId={task.issue_session_id} turnId={task.turn_id} />
         ))}
       </div>
       <TerminateTaskConfirmDialog

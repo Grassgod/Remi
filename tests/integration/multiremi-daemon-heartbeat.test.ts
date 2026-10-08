@@ -7,6 +7,7 @@ import { createMultiremiApp } from "@multiremi/api.js";
 import { TestMultiremiDaemon as MultiremiDaemon } from "../fixtures/daemon-protocol.js";
 import { DaemonProtocolLayer, type DaemonProtocolIdentity } from "@multiremi/api/daemon-protocol/index.js";
 import { registerDaemonReportHandlers } from "@multiremi/api/daemon-protocol/report-handlers.js";
+import { registerTaskInputRpcs } from "@multiremi/api/daemon-protocol/task-input-rpcs.js";
 import type { DaemonProtocolSession } from "@multiremi/api/daemon-protocol/session.js";
 import { ManualDaemonProtocolClock } from "@multiremi/api/daemon-protocol/clock.js";
 import { MultiremiStore } from "@multiremi/store.js";
@@ -49,6 +50,10 @@ async function faultTestBed(fault: Fault, requestTimeoutMs = 250) {
   const wiki = createRepositoryWikiServiceFromEnv(store);
   const offers = new DaemonTaskOffers({ store, layer: protocol, clock,
     prepare: task => prepareTaskOffer(store, task, knowledge, wiki) });
+  const unsubscribeTaskEvents = store.onTaskEvent(({ type, task }) => {
+    if (["task:completed", "task:failed", "task:cancelled"].includes(type)) offers.terminal(task.id, task.runtimeId);
+  });
+  registerTaskInputRpcs(protocol, store, runtimeId => offers.kick(runtimeId));
   const downlinks = new DaemonDownlinks({ layer: protocol, snapshot: (rt, session) => runtimeInputSnapshot(store, rt, session) });
   protocol.registerRpcHandler("plugin.desired", async frame => {
     return { ok: true, ...daemonAgentPluginDesiredResponse(store.getRuntimeAgentPluginDesiredSnapshot(frame.rt!)) };
@@ -168,14 +173,19 @@ async function faultTestBed(fault: Fault, requestTimeoutMs = 250) {
     },
   });
   let agentId: string | null = null;
+  let runtimeId: string | null = null;
   let pushedRevision = 0;
   advancePoll = () => {
     pollingNow += 1_000; daemon.wakeClaim();
-    const runtime = store.listRuntimes()[0];
+    const runtime = runtimeId ? store.getRuntimeLite(runtimeId) : store.listRuntimes()[0];
     if (!runtime || !protocol.registry.sessionForRuntime(runtime.id)) return;
+    runtimeId = runtime.id;
     offers.kick(runtime.id);
-    if (fault === "claim" && !agentId) agentId = store.createAgent({ name: "Network recovery no-op", provider: "claude", runtimeId: runtime.id }).id;
-    if (fault === "claim" && store.listTaskRefs({ runtimeId: runtime.id, statuses: ["queued", "dispatched", "running"] }).length === 0) {
+    if (fault === "retired-body") return;
+    if (!agentId) agentId = store.createAgent({ name: "Network recovery no-op", provider: "claude", runtimeId: runtime.id }).id;
+    // Empty workspaces deliberately avoid claims. Exercise recovery with work
+    // that must be offered, read through turn.input and completed instead.
+    if (store.listTaskRefs({ runtimeId: runtime.id, statuses: ["queued", "dispatched", "running"] }).length === 0) {
       const task = store.createTask({ agentId: agentId!, runtimeId: runtime.id, prompt: "No-op", maxAttempts: 1 });
       offers.enqueued(task);
     }
@@ -206,6 +216,7 @@ async function faultTestBed(fault: Fault, requestTimeoutMs = 250) {
       await protocol.drain();
       server.stop(true);
       protocol.stop();
+      unsubscribeTaskEvents();
       db.close();
       rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
       pollingClock = null;
@@ -230,7 +241,7 @@ describe("daemon heartbeat network recovery", () => {
   it("cleans up a retired daemon on v2 close without waiting for an HTTP authority body", async () => {
     const bed = await faultTestBed("retired-body");
     try {
-      await waitUntil(() => bed.state.claims > 0, "initial healthy polling");
+      await waitUntil(() => bed.state.heartbeats > 0, "initial healthy heartbeat");
       // Block v2 hb before retirement so the terminal close exercises cleanup.
       bed.state.armed = true;
       const plan = bed.store.getDaemonRetirementPlan("local", "heartbeat-test");

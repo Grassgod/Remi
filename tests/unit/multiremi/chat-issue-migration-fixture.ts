@@ -2,13 +2,14 @@ import { expect } from "bun:test";
 import { AccessTokensRepo } from "@multiremi/store/repos/access-tokens-repo.js";
 import { MultiremiStore } from "@multiremi/store.js";
 import type { SqlDatabase } from "@multiremi/store/db/postgres.js";
-import { runMigrations } from "@multiremi/store/migrations.js";
+import { runTurnExecutionMutation } from "@multiremi/store/turn-execution-records.js";
+import { bootstrapPreUnifiedSchema, runMigrations } from "@multiremi/store/migrations.js";
 
 export const CHAT_ISSUE_MIGRATION = "20260916_chat_issue_decoupling";
 
 /** Build both supported legacy schemas after bootstrapping the other store tables. */
-export function seedLegacyChatIssueFixture(db: SqlDatabase, tableForeignKey = false): void {
-  runMigrations(db);
+export function seedLegacyChatIssueFixture(db: SqlDatabase, tableForeignKey = false, migrate = bootstrapPreUnifiedSchema): void {
+  migrate(db);
   if (tableForeignKey) {
     const schema = String(db.query("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'multiremi_chat_sessions'").get().sql);
     db.exec("DROP TABLE multiremi_chat_sessions");
@@ -110,8 +111,8 @@ export function classificationChatId(entry: ClassificationCase): string {
 }
 
 /** Legacy bindings did not persist chat_type, even for explicit p2p threads. */
-export function seedLegacyChatIssueClassificationFixture(db: SqlDatabase, tableForeignKey = false): void {
-  seedLegacyChatIssueFixture(db, tableForeignKey);
+export function seedLegacyChatIssueClassificationFixture(db: SqlDatabase, tableForeignKey = false, migrate = bootstrapPreUnifiedSchema): void {
+  seedLegacyChatIssueFixture(db, tableForeignKey, migrate);
   const now = "2026-09-03T00:00:00.000Z";
   for (const entry of CHAT_ISSUE_CLASSIFICATION_CASES) {
     const chatId = classificationChatId(entry);
@@ -292,6 +293,9 @@ export function assertLegacyChatWakeSettlement(db: SqlDatabase): void {
 /** Exercise worker and callback entry points after the real migration. */
 export function assertCancelledLegacyWakesCannotRun(db: SqlDatabase, store = new MultiremiStore(db)): void {
   const chatId = "chat_classification_p2p_thread_and_key";
+  const canonical = !db.query(db.dialect === 'postgres'
+    ? "SELECT tablename AS name FROM pg_tables WHERE schemaname='public' AND tablename='multiremi_tasks'"
+    : "SELECT name FROM sqlite_master WHERE type='table' AND name='multiremi_tasks'").get();
   const before = store.listChatMessages(chatId);
   for (const name of ["p2p_thread_and_key", "group_without_thread"]) {
   for (const source of ["round", "human"]) {
@@ -300,7 +304,7 @@ export function assertCancelledLegacyWakesCannotRun(db: SqlDatabase, store = new
       const id = `wake_${name}_${source}_${status}`;
       // Simulate a daemon that already consumed steering: cancellation itself
       // must reject completion, independently of the pending-steer guard.
-      db.run("UPDATE multiremi_task_steer_messages SET consumed_at = ? WHERE task_id = ?", [new Date().toISOString(), id]);
+      if(!canonical)db.run("UPDATE multiremi_task_steer_messages SET consumed_at = ? WHERE task_id = ?", [new Date().toISOString(), id]);
       expect(() => store.completeTask(id, { output: "PRIVATE_ISSUE_WAKE_SENTINEL", sessionId: "tainted-provider" }))
         .toThrow("Task not found or terminal");
       expect(() => store.failTask(id, { error: "late wake callback", sessionId: "tainted-provider" }))
@@ -313,8 +317,13 @@ export function assertCancelledLegacyWakesCannotRun(db: SqlDatabase, store = new
   expect(store.getChatSession(chatId)?.sessionId).toBeNull();
   // Finish the unrelated fixtures so the worker is free to claim the new user
   // turn; old cancelled wake tasks still exist with higher priority.
-  db.run("UPDATE multiremi_tasks SET status = 'completed' WHERE status <> 'cancelled'");
-  db.run("UPDATE multiremi_tasks SET priority = 9999 WHERE status = 'cancelled'");
+  if(canonical){
+    runTurnExecutionMutation(db,"UPDATE multiremi_turn_execution_records SET status='completed' WHERE status<>'cancelled'");
+    runTurnExecutionMutation(db,"UPDATE multiremi_turn_execution_records SET priority=9999 WHERE status='cancelled'");
+  } else {
+    db.run("UPDATE multiremi_tasks SET status = 'completed' WHERE status <> 'cancelled'");
+    db.run("UPDATE multiremi_tasks SET priority = 9999 WHERE status = 'cancelled'");
+  }
   const runtime = store.registerRuntime({ name: "Migration callback check", provider: "codex", workspaceId: "local" });
   const next = store.createTask({ agentId: "agt_chat_migration", workspaceId: "local", chatSessionId: chatId,
     prompt: "A new private question", runtimeId: runtime.id });
@@ -322,7 +331,7 @@ export function assertCancelledLegacyWakesCannotRun(db: SqlDatabase, store = new
   expect(store.claimTask(runtime.id)?.id).toBe(next.id);
 }
 
-export function assertLegacyChatWakeRollback(db: SqlDatabase): void {
+export function assertLegacyChatWakeRollback(db: SqlDatabase, migrate = bootstrapPreUnifiedSchema): void {
   const wrapped = new Proxy(db, {
     get(target, property) {
       if (property === "run") return (sql: string, params?: unknown[]) => {
@@ -335,7 +344,7 @@ export function assertLegacyChatWakeRollback(db: SqlDatabase): void {
       return typeof value === "function" ? value.bind(target) : value;
     },
   });
-  expect(() => runMigrations(wrapped)).toThrow("injected after proactive cleanup");
+  expect(() => migrate(wrapped)).toThrow("injected after proactive cleanup");
   expect(db.query("SELECT status FROM multiremi_tasks WHERE id = 'wake_p2p_thread_and_key_human_queued'").get())
     .toEqual({ status: "queued" });
   expect(db.query("SELECT status FROM multiremi_feishu_bot_outbound_deliveries WHERE id = 'out_wake_p2p_thread_and_key_human_queued'").get())
@@ -348,7 +357,7 @@ export function assertLegacyChatWakeRollback(db: SqlDatabase): void {
 
 interface MigrationTokenFixture { token: string; taskId: string; id: string }
 
-export async function mintLegacyWakeTokens(db: SqlDatabase): Promise<MigrationTokenFixture[]> {
+export async function mintLegacyWakeTokens(db: SqlDatabase, verify = true): Promise<MigrationTokenFixture[]> {
   const tokens = new AccessTokensRepo(db);
   const result: MigrationTokenFixture[] = [];
   const tasks = db.query(`SELECT id, agent_id, workspace_id FROM multiremi_tasks
@@ -357,21 +366,21 @@ export async function mintLegacyWakeTokens(db: SqlDatabase): Promise<MigrationTo
     }>;
   for (const task of tasks) {
     const token = await tokens.createTaskAccessToken({ id: task.id, agentId: task.agent_id, workspaceId: task.workspace_id }, "local");
-    expect(await tokens.verifyAccessToken(token.token)).not.toBeNull();
+    if(verify)expect(await tokens.verifyAccessToken(token.token)).not.toBeNull();
     result.push({ token: token.token, taskId: task.id, id: token.id });
   }
   return result;
 }
 
-export async function assertLegacyWakeTokens(db: SqlDatabase, tokens: MigrationTokenFixture[], rolledBack = false): Promise<void> {
+export async function assertLegacyWakeTokens(db: SqlDatabase, tokens: MigrationTokenFixture[], rolledBack = false, verify = true): Promise<void> {
   const repo = new AccessTokensRepo(db);
   for (const token of tokens) {
     const cancelled = db.query("SELECT status FROM multiremi_tasks WHERE id = ?").get(token.taskId).status === "cancelled";
     if (cancelled && !rolledBack) {
-      expect(await repo.verifyAccessToken(token.token)).toBeNull();
+      if(verify)expect(await repo.verifyAccessToken(token.token)).toBeNull();
       expect(Number.isFinite(Date.parse(repo.getAccessToken(token.id)!.revokedAt!))).toBe(true);
     } else {
-      expect(await repo.verifyAccessToken(token.token)).not.toBeNull();
+      if(verify)expect(await repo.verifyAccessToken(token.token)).not.toBeNull();
       expect(repo.getAccessToken(token.id)!.revokedAt).toBeNull();
     }
   }
@@ -558,6 +567,21 @@ export function assertWakeInvariantMatrix(db: SqlDatabase): void {
     expect(db.query("SELECT content FROM multiremi_task_steer_messages WHERE id = ?").get(`mixed_round_A_${status}`))
       .toEqual({ content: "The responsible agent completed a work round for MATRIX-A - notification." });
     expect(db.query("SELECT id FROM multiremi_task_steer_messages WHERE id = ?").get(`mixed_round_B_${status}`)).toBeNull();
+  }
+  // #3: S4 requires an explicitly drained pre-unified snapshot.
+  db.run("UPDATE multiremi_tasks SET status='cancelled', completed_at=? WHERE status IN ('queued','dispatched','running','awaiting_human','waiting_local_directory')", [new Date().toISOString()]);
+  db.run("UPDATE multiremi_task_steer_messages SET consumed_at=? WHERE consumed_at IS NULL", [new Date().toISOString()]);
+  if (db.dialect === "sqlite") {
+    // Negative destination cases intentionally contain dangling foreign keys.
+    // Cutover refuses that snapshot; remove the already-asserted corrupt fixtures
+    // before exercising the valid drained runtime below.
+    expect(() => runMigrations(db)).toThrow("foreign key check failed");
+    let invalid = db.query("PRAGMA foreign_key_check").all();
+    while (invalid.length) {
+      for (const row of invalid) db.run(`DELETE FROM "${row.table}" WHERE rowid=?`, [row.rowid]);
+      invalid = db.query("PRAGMA foreign_key_check").all();
+    }
+    expect(invalid).toEqual([]);
   }
   const store = new MultiremiStore(db);
   const next = store.createTask({ agentId: "agt_chat_migration", workspaceId: "local",

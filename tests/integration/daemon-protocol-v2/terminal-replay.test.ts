@@ -20,7 +20,7 @@ describe("v2 terminal replay after ACK loss", () => {
       const h = await DaemonProtocolHarness.create({ outboxBackoffMs: [5],
         onRoundCard: id => roundCards.push(id),
         beforeSend(frame, socket, harness) {
-          if (frame.t !== "task.complete" || frame.p.task_id !== taskId || droppedAck) return;
+          if (frame.t !== "turn.complete" || frame.p.attempt_id !== taskId || droppedAck) return;
           if (recovery === "daemon process restart") {
             droppedAck = true;
             socket.close(4001);
@@ -39,10 +39,10 @@ describe("v2 terminal replay after ACK loss", () => {
         },
       });
       fixtures.push(h);
-      const completeTask = h.store.completeTaskFromDaemon.bind(h.store);
+      const completeTask = h.store.completeTask.bind(h.store);
       let completionEffects = 0;
       const failTask = spyOn(h.store, "failTask");
-      const complete = spyOn(h.store, "completeTaskFromDaemon").mockImplementation((id, input, authority) => {
+      const complete = spyOn(h.store, "completeTask").mockImplementation((id, input, authority) => {
         const before = h.store.getTask(id)?.status;
         const result = completeTask(id, input, authority);
         if (id === taskId && before !== "completed" && result.status === "completed") completionEffects++;
@@ -60,7 +60,7 @@ describe("v2 terminal replay after ACK loss", () => {
           && h.store.getTask(taskId)?.status === (recovery === "socket reconnect" ? "completed" : "running"),
           "complete persisted in outbox without ACK", 5_000);
         expect(outbox(h).taskIdsWithPendingTerminal(runtimeId)).toContain(taskId);
-        expect(h.ledger.filter(entry => entry.type === "task.complete" && entry.partition === taskId))
+        expect(h.ledger.filter(entry => entry.type === "turn.complete" && entry.partition === taskId))
           .toHaveLength(recovery === "socket reconnect" ? 1 : 0);
         const recoveryCallsBefore = recover.mock.calls.length;
 
@@ -72,12 +72,12 @@ describe("v2 terminal replay after ACK loss", () => {
         expect(h.store.getTask(taskId)).toMatchObject({ status: "completed", result: "fixture", runtimeId });
         expect(completionEffects).toBe(1);
         expect(roundCards.filter(id => id === taskId)).toHaveLength(1);
-        expect(h.effectiveLedger.filter(entry => entry.type === "task.complete" && entry.partition === taskId)).toHaveLength(1);
-        expect(h.ledger.filter(entry => entry.type === "task.complete" && entry.partition === taskId))
+        expect(h.effectiveLedger.filter(entry => entry.type === "turn.complete" && entry.partition === taskId)).toHaveLength(1);
+        expect(h.ledger.filter(entry => entry.type === "turn.complete" && entry.partition === taskId))
           .toHaveLength(recovery === "socket reconnect" ? 2 : 1);
         expect(failTask.mock.calls.filter(([id]) => id === taskId)).toHaveLength(0);
         expect(h.store.getTask(taskId)?.failureReason).not.toBe("runtime_gone");
-        expect(h.received.filter(frame => frame.t === "task.offer" && frame.p.id === taskId)).toHaveLength(1);
+        expect(h.received.filter(frame => frame.t === "task.offer" && frame.p.attempt_id === taskId)).toHaveLength(1);
         expect(recover.mock.calls).toHaveLength(recoveryCallsBefore);
 
         // Once the ACK removes the terminal row, the next ready snapshot omits it.

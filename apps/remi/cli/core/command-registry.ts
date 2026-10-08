@@ -62,6 +62,7 @@ export interface CommandSpec {
   options?: readonly CliOptionSpec[];
   parse?: "strict" | "passthrough";
   source?: CommandSource;
+  retired?: { replacement: string };
   run(invocation: CommandInvocation): Promise<void>;
 }
 
@@ -79,6 +80,7 @@ export interface CommandInventoryEntry {
   positionals: readonly CliPositionalSpec[];
   options: readonly CliOptionSpec[];
   source: CommandSource;
+  retired?: { replacement: string };
 }
 
 interface RegisteredPath {
@@ -262,6 +264,7 @@ export class CommandRegistry {
         conflictsWith: option.conflictsWith ? [...option.conflictsWith] : undefined,
       })),
       source: spec.source ?? { kind: "builtin" },
+      ...(spec.retired ? { retired: { ...spec.retired } } : {}),
     }));
   }
 
@@ -382,6 +385,9 @@ function renderCommandList(entries: readonly CommandInventoryEntry[], parentLeng
 }
 
 function validateCommandSpec(spec: CommandSpec): void {
+  if (spec.retired && (!spec.retired.replacement.trim() || spec.capability || spec.aliases?.length)) {
+    throw new Error(`Invalid retired CLI command: ${spec.id}`);
+  }
   if (!spec.id.trim()) throw new Error("CLI command id is required");
   validatePath(spec.path, `command ${spec.id}`);
   for (const alias of spec.aliases ?? []) validatePath(alias.path, `alias for ${spec.id}`);

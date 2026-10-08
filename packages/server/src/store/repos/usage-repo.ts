@@ -262,21 +262,21 @@ export class UsageRepo {
     }
     const since = usageSince(input.days, input.tz);
     if (since) { clauses.push(options.includeTasksWithoutUsage ? `(${lifeTime})>=?` : "u.occurred_at>=?"); params.push(since); }
-    if (options.includeTasksWithoutUsage) return this.ctx.db.query(`SELECT t.id,t.agent_id,t.runtime_id,t.status,t.completed_at,t.failed_at,t.cancelled_at,t.started_at,t.dispatched_at,t.updated_at,t.created_at,
-      ${lifeTime} AS consumption_at FROM multiremi_tasks t
+    if (options.includeTasksWithoutUsage) return this.ctx.db.query(`SELECT t.turn_id AS id,t.agent_id,t.runtime_id,t.status,t.completed_at,t.failed_at,t.cancelled_at,work.started_at,t.dispatched_at,t.updated_at,work.created_at,
+      ${lifeTime} AS consumption_at FROM multiremi_turn_execution_records t JOIN multiremi_turns work ON work.id=t.turn_id AND work.current_attempt_id=t.id
       LEFT JOIN multiremi_usage_task_scopes r ON r.task_id=t.id LEFT JOIN multiremi_issues i ON i.id=t.issue_id
       LEFT JOIN multiremi_chat_sessions c ON c.id=t.chat_session_id
-      LEFT JOIN multiremi_autopilot_runs a ON a.id=(SELECT ar.id FROM multiremi_autopilot_runs ar WHERE ar.task_id=t.id ORDER BY ar.created_at DESC LIMIT 1)
+      LEFT JOIN multiremi_autopilot_runs a ON a.id=(SELECT ar.id FROM multiremi_autopilot_runs ar WHERE ar.turn_id=t.turn_id ORDER BY ar.created_at DESC LIMIT 1)
       WHERE ${clauses.join(" AND ")}`).all(...params) as Row[];
     // Deprecated wire shapes project canonical consumption, including its frozen
     // owner and actual occurrence time. They never read the legacy JSON column.
     clauses.push("u.source<>'context_snapshot'", "(u.input_tokens IS NOT NULL OR u.output_tokens IS NOT NULL OR u.cache_read_tokens IS NOT NULL OR u.cache_write_tokens IS NOT NULL OR u.actual_unsplit_tokens IS NOT NULL)");
-    const facts = this.ctx.db.query(`SELECT u.task_id AS id,u.agent_id,u.runtime_id,u.occurred_at AS consumption_at,u.provider,COALESCE(u.model,u.requested_model,'unknown') AS model,
+    const facts = this.ctx.db.query(`SELECT t.turn_id AS id,u.agent_id,u.runtime_id,u.occurred_at AS consumption_at,u.provider,COALESCE(u.model,u.requested_model,'unknown') AS model,
       SUM(COALESCE(u.input_tokens,0)) AS input_tokens,SUM(COALESCE(u.output_tokens,0)) AS output_tokens,
       SUM(COALESCE(u.cache_read_tokens,0)) AS cache_read_tokens,SUM(COALESCE(u.cache_write_tokens,0)) AS cache_write_tokens,
       SUM(COALESCE(u.actual_unsplit_tokens,0)) AS unsplit_tokens
-      FROM multiremi_usage_units u JOIN multiremi_tasks t ON t.id=u.task_id WHERE ${clauses.join(" AND ")}
-      GROUP BY u.task_id,u.agent_id,u.runtime_id,u.occurred_at,u.provider,COALESCE(u.model,u.requested_model,'unknown')`).all(...params) as Row[];
+      FROM multiremi_usage_units u JOIN multiremi_turn_execution_records t ON t.id=u.task_id WHERE ${clauses.join(" AND ")}
+      GROUP BY t.turn_id,u.agent_id,u.runtime_id,u.occurred_at,u.provider,COALESCE(u.model,u.requested_model,'unknown')`).all(...params) as Row[];
     return facts.map(row => ({ ...row, usage: [{ provider: row.provider, model: row.model,
       inputTokens: Number(row.input_tokens), outputTokens: Number(row.output_tokens), cacheReadTokens: Number(row.cache_read_tokens), cacheWriteTokens: Number(row.cache_write_tokens),
       totalTokens: Number(row.input_tokens) + Number(row.output_tokens) + Number(row.cache_read_tokens) + Number(row.cache_write_tokens) + Number(row.unsplit_tokens) }] }));

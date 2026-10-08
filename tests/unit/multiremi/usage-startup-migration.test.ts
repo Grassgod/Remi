@@ -1,3 +1,4 @@
+import { runTurnExecutionMutation } from "@multiremi/store/turn-execution-records.js";
 import { afterEach, describe, expect, it } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -15,7 +16,7 @@ function fixture(count = 1) {
   const agent = store.createAgent({ name: "startup-migration", provider: "claude", workspaceId: "local" });
   const tasks = Array.from({ length: count }, () => store.createTask({ agentId: agent.id, prompt: "scalar migration", workspaceId: "local" })).sort((a, b) => a.id.localeCompare(b.id));
   db!.run("DELETE FROM multiremi_schema_migrations WHERE id IN (?,?)", [USAGE_CUTOVER_MARKER, USAGE_STARTUP_CUTOVER_MARKER]);
-  for (const task of tasks) db!.run("UPDATE multiremi_tasks SET usage=?,updated_at=? WHERE id=?", [firstUsage, "2026-10-01T00:00:00.000Z", task.id]);
+  for (const task of tasks) runTurnExecutionMutation(db!, "UPDATE multiremi_turn_execution_records SET usage=?,updated_at=? WHERE id=?", [firstUsage, "2026-10-01T00:00:00.000Z", task.id]);
   return { store, tasks };
 }
 function marker() { return db!.query("SELECT id FROM multiremi_schema_migrations WHERE id=?").get(USAGE_STARTUP_CUTOVER_MARKER); }
@@ -35,7 +36,7 @@ describe("automatic scalar usage cutover", () => {
 
   it("migrates existing scalars without making consumption from a context-like legacy total", async () => {
     const { store, tasks } = fixture(2);
-    db!.run("UPDATE multiremi_tasks SET usage=? WHERE id=?", [JSON.stringify([{ provider: "codex", totalTokens: 9000, inputTokens: 0, outputTokens: 0 }]), tasks[1]!.id]);
+    runTurnExecutionMutation(db!, "UPDATE multiremi_turn_execution_records SET usage=? WHERE id=?", [JSON.stringify([{ provider: "codex", totalTokens: 9000, inputTokens: 0, outputTokens: 0 }]), tasks[1]!.id]);
     await prepareUsageAccountingStartup(db!, { batchSize: 1 });
     expect(store.getUsageReport({ workspaceId: "local", days: null }).summary.actual_total_tokens).toBe(102);
     expect(db!.query("SELECT input_tokens,output_tokens,actual_unsplit_tokens,reported_total_tokens,context_tokens FROM multiremi_usage_units WHERE task_id=?").get(tasks[1]!.id)).toEqual({
@@ -75,7 +76,7 @@ describe("automatic scalar usage cutover", () => {
     expect(migrateLegacyUsage(db!).complete).toBe(true);
     expect(marker()).toBeNull();
     const updated = JSON.stringify([{ provider: "claude", totalTokens: 1234, inputTokens: 200, outputTokens: 4 }]);
-    db!.run("UPDATE multiremi_tasks SET usage=? WHERE id=?", [updated, tasks[0]!.id]);
+    runTurnExecutionMutation(db!, "UPDATE multiremi_turn_execution_records SET usage=? WHERE id=?", [updated, tasks[0]!.id]);
     await prepareUsageAccountingStartup(db!);
     expect(store.getUsageReport({ workspaceId: "local", days: null }).summary.actual_total_tokens).toBe(204);
     expect(db!.query("SELECT original_usage FROM multiremi_usage_legacy_audit").get()).toEqual({ original_usage: firstUsage });
@@ -87,7 +88,7 @@ describe("automatic scalar usage cutover", () => {
   it("upgrades checkpoints from the original preparation implementation", async () => {
     const { tasks } = fixture();
     db!.run("INSERT INTO multiremi_usage_legacy_audit(task_id,original_usage,migrated_at) VALUES(?,?,?)", [tasks[0]!.id, firstUsage, "2026-10-01T00:00:00Z"]);
-    db!.run("UPDATE multiremi_tasks SET usage='[]' WHERE id=?", [tasks[0]!.id]);
+    runTurnExecutionMutation(db!, "UPDATE multiremi_turn_execution_records SET usage='[]' WHERE id=?", [tasks[0]!.id]);
     await prepareUsageAccountingStartup(db!);
     expect(db!.query("SELECT original_usage FROM multiremi_usage_legacy_audit").get()).toEqual({ original_usage: firstUsage });
     expect(db!.query("SELECT original_usage FROM multiremi_usage_legacy_versions ORDER BY source_version").all()).toEqual([{ original_usage: firstUsage }, { original_usage: "[]" }]);
@@ -123,7 +124,7 @@ describe("automatic scalar usage cutover", () => {
     await prepareUsageAccountingStartup(db!, { batchSize: 1, onBatch: () => {
       if (changed) return;
       changed = true;
-      db!.run("UPDATE multiremi_tasks SET usage='[]' WHERE id=?", [tasks[0]!.id]);
+      runTurnExecutionMutation(db!, "UPDATE multiremi_turn_execution_records SET usage='[]' WHERE id=?", [tasks[0]!.id]);
       // Establish the old aggregate before the v2 arrival. An uncheckpointed
       // nonempty aggregate beside consuming native facts requires review.
       migrateLegacyUsage(db!);
@@ -153,7 +154,7 @@ describe("automatic scalar usage cutover", () => {
     expect(marker()).not.toBeNull();
     writeUsageSnapshot(db!, tasks[0]!.id, live("historical-evidence-v2"), { historical: true });
     const before = db!.query("SELECT * FROM multiremi_usage_units ORDER BY run_id").all();
-    db!.run("UPDATE multiremi_tasks SET usage='[]' WHERE id=?", [tasks[0]!.id]);
+    runTurnExecutionMutation(db!, "UPDATE multiremi_turn_execution_records SET usage='[]' WHERE id=?", [tasks[0]!.id]);
     await expect(prepareUsageAccountingStartup(db!)).rejects.toThrow("Legacy usage changed after native accounting");
     expect(db!.query("SELECT * FROM multiremi_usage_units ORDER BY run_id").all()).toEqual(before);
     expect(marker()).toBeNull();
@@ -167,7 +168,7 @@ describe("automatic scalar usage cutover", () => {
       if (key === "query") return (sql: string) => {
         if (!changed && sql.includes("s.task_id IS NULL") && sql.endsWith("LIMIT 1")) {
           changed = true;
-          db!.run("UPDATE multiremi_tasks SET usage=? WHERE id=?", [JSON.stringify([{ provider: "claude", inputTokens: 250 }]), tasks[0]!.id]);
+          runTurnExecutionMutation(db!, "UPDATE multiremi_turn_execution_records SET usage=? WHERE id=?", [JSON.stringify([{ provider: "claude", inputTokens: 250 }]), tasks[0]!.id]);
         }
         return originalQuery(sql);
       };
@@ -198,7 +199,7 @@ describe("automatic scalar usage cutover", () => {
     const originalQuery = db!.query.bind(db!);
     const proxy = new Proxy(db!, { get(target, key) {
       if (key === "query") return (sql: string) => {
-        if (!sql.includes("multiremi_schema_migrations") && !sql.startsWith("SELECT t.id FROM multiremi_tasks")) throw new Error("Ready startup fetched source payloads");
+        if (!sql.includes("multiremi_schema_migrations") && !sql.startsWith("SELECT t.id FROM multiremi_turn_execution_records")) throw new Error("Ready startup fetched source payloads");
         return originalQuery(sql);
       };
       const value = Reflect.get(target, key); return typeof value === "function" ? value.bind(target) : value;
@@ -210,19 +211,19 @@ describe("automatic scalar usage cutover", () => {
   it("ready startup refreshes old-writer changes but does not synthesize legacy runs for v2-only tasks", async () => {
     const { store, tasks } = fixture();
     await prepareUsageAccountingStartup(db!);
-    db!.run("UPDATE multiremi_tasks SET usage=? WHERE id=?", [JSON.stringify([{ provider: "claude", inputTokens: 20, outputTokens: 0 }]), tasks[0]!.id]);
+    runTurnExecutionMutation(db!, "UPDATE multiremi_turn_execution_records SET usage=? WHERE id=?", [JSON.stringify([{ provider: "claude", inputTokens: 20, outputTokens: 0 }]), tasks[0]!.id]);
     await prepareUsageAccountingStartup(db!);
     expect(store.getUsageReport({ workspaceId: "local", days: null }).summary.actual_total_tokens).toBe(20);
     for (const source of ["[]"]) {
       const task = store.createTask({ agentId: tasks[0]!.agentId, prompt: "new protocol", workspaceId: "local" });
-      db!.run("UPDATE multiremi_tasks SET usage=? WHERE id=?", [source, task.id]);
+      runTurnExecutionMutation(db!, "UPDATE multiremi_turn_execution_records SET usage=? WHERE id=?", [source, task.id]);
       writeUsageSnapshot(db!, task.id, live("new-v2-only"));
       const before = store.getUsageReport({ workspaceId: "local", days: null }).summary;
       await prepareUsageAccountingStartup(db!);
       expect(db!.query("SELECT run_id FROM multiremi_usage_runs WHERE task_id=?").all(task.id)).toEqual([{ run_id: "new-v2-only" }]);
       expect(db!.query("SELECT task_id FROM multiremi_usage_legacy_sources WHERE task_id=?").get(task.id)).toBeNull();
       expect(store.getUsageReport({ workspaceId: "local", days: null }).summary).toEqual(before);
-      db!.run("UPDATE multiremi_tasks SET completed_at='2026-10-03T00:00:00Z',status='completed' WHERE id=?", [task.id]);
+      runTurnExecutionMutation(db!, "UPDATE multiremi_turn_execution_records SET completed_at='2026-10-03T00:00:00Z',status='completed' WHERE id=?", [task.id]);
       ensureUsageAccountingStartup(db!);
       expect(db!.query("SELECT run_id FROM multiremi_usage_runs WHERE task_id=?").all(task.id)).toEqual([{ run_id: "new-v2-only" }]);
     }
@@ -236,7 +237,7 @@ describe("automatic scalar usage cutover", () => {
     expect(db!.query("SELECT original_usage FROM multiremi_usage_legacy_audit WHERE task_id=?").get(task.id)).toEqual({ original_usage: "[]" });
     expect(db!.query("SELECT run_id FROM multiremi_usage_runs WHERE task_id=?").all(task.id)).toEqual([]);
     await prepareUsageAccountingStartup(db!);
-    db!.run("UPDATE multiremi_tasks SET status='completed',started_at='2026-10-01T00:00:00Z',completed_at='2026-10-01T01:00:00Z' WHERE id=?", [task.id]);
+    runTurnExecutionMutation(db!, "UPDATE multiremi_turn_execution_records SET status='completed',started_at='2026-10-01T00:00:00Z',completed_at='2026-10-01T01:00:00Z' WHERE id=?", [task.id]);
     const observed = live("first-real-run");
     observed.units[0] = { ...observed.units[0]!, costAmount: 0, costCurrency: "USD", costSource: "provider_reported" };
     writeUsageSnapshot(db!, task.id, observed);
@@ -249,7 +250,7 @@ describe("automatic scalar usage cutover", () => {
     const store = createLocalStore();
     const agent = store.createAgent({ name: "retry", provider: "claude", workspaceId: "local" });
     const task = store.createTask({ agentId: agent.id, prompt: "prior execution unknown", workspaceId: "local" });
-    db!.run("UPDATE multiremi_tasks SET attempt=2 WHERE id=?", [task.id]);
+    runTurnExecutionMutation(db!, "UPDATE multiremi_turn_execution_records SET attempt=2 WHERE id=?", [task.id]);
     await prepareUsageAccountingStartup(db!);
     writeUsageSnapshot(db!, task.id, live("retry-known"));
     await prepareUsageAccountingStartup(db!);
@@ -261,7 +262,7 @@ describe("automatic scalar usage cutover", () => {
     const store = createLocalStore();
     const agent = store.createAgent({ name: "retry before cutover", provider: "claude", workspaceId: "local" });
     const task = store.createTask({ agentId: agent.id, prompt: "missing prior attempt", workspaceId: "local" });
-    db!.run("UPDATE multiremi_tasks SET attempt=2,status='completed',completed_at='2026-10-01T01:00:00Z' WHERE id=?", [task.id]);
+    runTurnExecutionMutation(db!, "UPDATE multiremi_turn_execution_records SET attempt=2,status='completed',completed_at='2026-10-01T01:00:00Z' WHERE id=?", [task.id]);
     const observed = live("modern-retry-before-startup");
     observed.units[0] = { ...observed.units[0]!, costAmount: 0, costCurrency: "USD", costSource: "provider_reported" };
     writeUsageSnapshot(db!, task.id, observed);

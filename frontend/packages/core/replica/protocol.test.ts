@@ -199,6 +199,18 @@ describe("step 3: frames", () => {
     expect(result.missing).toBeNull();
   });
 
+  test.each([true, false])("a nested deletion patch settles its revision with a cached row: %s", cached => {
+    const state: ReplicaState = { ranges: [{ from: 1, to: 1 }], head: 1, logVersion: 7, synced: true };
+    const result = applyFrames({ frames: [{ seq: 1, kind: "patch", payload: {
+      session_id: "sess_1", target_seq: 1, revision: 2, fields: { deleted_at: "2026-10-06T00:00:00Z" },
+    } }], state, entries: new Map(cached ? [[1, entry(1)]] : []) });
+    expect(result.deletes).toEqual([1]);
+    expect(result.upserts).toEqual([]);
+    expect(result.revisionWatermarks.get(1)).toBe(2);
+    expect(result.state).toEqual(state);
+    expect(result.missing).toBeNull();
+  });
+
   test("firstHole walks coverage instead of assuming contiguity", () => {
     expect(firstHole([{ from: 1, to: 5 }, { from: 9, to: 9 }], 5)).toEqual({ from: 6, to: 8 });
     expect(firstHole([{ from: 1, to: 5 }, { from: 6, to: 9 }], 5)).toBeNull();

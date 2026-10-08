@@ -1,3 +1,4 @@
+import { runTurnExecutionMutation } from "@multiremi/store/turn-execution-records.js";
 import { afterEach, describe, expect, it } from "bun:test";
 import { createHash } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -19,7 +20,7 @@ function fixture() {
   const first = store.createTask({ agentId: agent.id, prompt: "first", workspaceId: "local" });
   const second = store.createTask({ agentId: agent.id, prompt: "second", workspaceId: "local" });
   const original = JSON.stringify([{ provider: "claude", model: "configured-opus", inputTokens: 100, outputTokens: 2, totalTokens: 102 }]);
-  db!.run("UPDATE multiremi_tasks SET usage=?,provider='claude',status='completed'", [original]);
+  runTurnExecutionMutation(db!, "UPDATE multiremi_turn_execution_records SET usage=?,provider='claude',status='completed' WHERE workspace_id='local'", [original]);
   migrateLegacyUsage(db!);
   const plan: ReconcileUsagePlan = { version: 2, mode: "read-only", generatedAt: "2026-10-06T00:00:00Z", counts: {
     tasks: 2, rawEvents: 2, archives: 1, nativeMembers: 1, rejected: 0, replayed: 0, ambiguousRawEvents: 0, ambiguousTaskEvents: 0, archiveReadFailures: 0, bytesRead: 100,
@@ -38,7 +39,7 @@ describe("historical reconciliation checkpoints", () => {
       const agent = store.createAgent({ name: "Global request attribution", provider: "claude", workspaceId: "local" });
       const first = store.createTask({ agentId: agent.id, prompt: "first historical owner" });
       const second = store.createTask({ agentId: agent.id, prompt: "second historical owner" });
-      db!.run("UPDATE multiremi_tasks SET provider='claude',status='completed',usage=?", [JSON.stringify([{ provider: "claude", totalTokens: 78048 }])]);
+      runTurnExecutionMutation(db!, "UPDATE multiremi_turn_execution_records SET provider='claude',status='completed',usage=? WHERE workspace_id='local'", [JSON.stringify([{ provider: "claude", totalTokens: 78048 }])]);
       migrateLegacyUsage(db!);
       for (const [index, task] of [first, second].entries()) store.appendTaskMessages(task.id, [{ type: "usage", meta: { _meta: { remiTokenUsage: {
         id: "same-short-request", providerRequestId: "same-short-request", source: "claude_assistant_usage",
@@ -75,7 +76,7 @@ describe("historical reconciliation checkpoints", () => {
     const store = createLocalStore();
     const agent = store.createAgent({ name: "two routes", provider: "claude" });
     const task = store.createTask({ agentId: agent.id, prompt: "two actual upstream routes" });
-    db!.run("UPDATE multiremi_tasks SET provider='claude',status='completed',usage='[]' WHERE id=?", [task.id]);
+    runTurnExecutionMutation(db!, "UPDATE multiremi_turn_execution_records SET provider='claude',status='completed',usage='[]' WHERE id=?", [task.id]);
     migrateLegacyUsage(db!);
     store.appendTaskMessages(task.id, ["known-route-one", "known-route-two"].map(connectionId => ({ type: "usage" as const, meta: { _meta: { remiTokenUsage: {
       id: "same-short-id", providerSessionId: "real-provider-session", connectionId, inputTokens: 10, outputTokens: 2, cachedInputTokens: 0, totalTokens: 12,
@@ -93,7 +94,7 @@ describe("historical reconciliation checkpoints", () => {
     const store = createLocalStore();
     const agent = store.createAgent({ name: "ownership race", provider: "claude" });
     const first = store.createTask({ agentId: agent.id, prompt: "historical" }), second = store.createTask({ agentId: agent.id, prompt: "live" });
-    db!.run("UPDATE multiremi_tasks SET provider='claude',status='completed',usage=?", [JSON.stringify([{ provider: "claude", totalTokens: 78048 }])]);
+    runTurnExecutionMutation(db!, "UPDATE multiremi_turn_execution_records SET provider='claude',status='completed',usage=? WHERE workspace_id='local'", [JSON.stringify([{ provider: "claude", totalTokens: 78048 }])]);
     migrateLegacyUsage(db!);
     store.appendTaskMessages(first.id, [{ type: "usage", meta: { _meta: { remiTokenUsage: { id: "raced-request", providerSessionId: "real-session",
       inputTokens: 10, outputTokens: 2, cachedInputTokens: 0, totalTokens: 12 } } } }]);
@@ -117,7 +118,7 @@ describe("historical reconciliation checkpoints", () => {
     const store = createLocalStore();
     const agent = store.createAgent({ name: "historical meter", provider: "codex" });
     const first = store.createTask({ agentId: agent.id, prompt: "first interval" }), second = store.createTask({ agentId: agent.id, prompt: "overlapping interval" });
-    db!.run("UPDATE multiremi_tasks SET provider='codex',status='completed',usage='[]'");
+    runTurnExecutionMutation(db!, "UPDATE multiremi_turn_execution_records SET provider='codex',status='completed',usage='[]' WHERE workspace_id='local'");
     migrateLegacyUsage(db!);
     const vector = (n: number) => ({ inputTokens: n * 10, outputTokens: n * 2, cacheReadTokens: 0, cacheWriteTokens: 0, totalTokens: n * 12 });
     for (const [index, task] of [first, second].entries()) store.appendTaskMessages(task.id, [{ type: "usage", meta: { _meta: { remiTokenUsage: {
@@ -152,11 +153,11 @@ describe("historical reconciliation checkpoints", () => {
 
   it("stops at a changed task and resumes completed checkpoints after the same plan becomes applicable", () => {
     const { second, original, plan } = fixture();
-    db!.run("UPDATE multiremi_tasks SET usage='changed' WHERE id=?", [second.id]);
+    runTurnExecutionMutation(db!, "UPDATE multiremi_turn_execution_records SET usage='changed' WHERE id=?", [second.id]);
     expect(() => applyUsageReconciliation(db!, plan)).toThrow("Legacy usage changed after plan");
     expect((db!.query("SELECT count(*) AS n FROM multiremi_usage_reconciliation_audit").get() as { n: number }).n).toBe(1);
     expect((db!.query("SELECT count(*) AS n FROM multiremi_usage_runs WHERE run_id='legacy'").get() as { n: number }).n).toBe(2);
-    db!.run("UPDATE multiremi_tasks SET usage=? WHERE id=?", [original, second.id]);
+    runTurnExecutionMutation(db!, "UPDATE multiremi_turn_execution_records SET usage=? WHERE id=?", [original, second.id]);
     expect(applyUsageReconciliation(db!, plan)).toMatchObject({ applied: 1, resumed: 1 });
     expect(verifyUsageReconciliation(db!, plan).preservedLegacyTokens).toBe(204);
   });
@@ -205,8 +206,15 @@ describe("historical reconciliation checkpoints", () => {
   });
 
   it("keeps all shared-session competitors in a --task-id archive scan", async () => {
-    const { first, second } = fixture();
-    db!.run("UPDATE multiremi_tasks SET chat_session_id='shared',started_at='2026-10-01T00:00:00Z',completed_at='2026-10-01T02:00:00Z'");
+    const { store, first, second } = fixture();
+    const chat = store.createChatSession({ agentId: first.agentId, title: "Shared archive" });
+    for (const [index, task] of [first, second].entries()) {
+      const turn = db!.query("SELECT turn_id FROM multiremi_turn_attempts WHERE id=?").get(task.id) as { turn_id: string };
+      db!.run("UPDATE multiremi_conversation_log SET session_id=?,seq=? WHERE id=?", [chat.id, index + 1, turn.turn_id]);
+      db!.run("UPDATE multiremi_turns SET session_id=?,seq=? WHERE id=?", [chat.id, index + 1, turn.turn_id]);
+    }
+    db!.run("UPDATE multiremi_conversation_heads SET head_seq=2 WHERE session_id=?", [chat.id]);
+    runTurnExecutionMutation(db!, "UPDATE multiremi_turn_execution_records SET started_at='2026-10-01T00:00:00Z',completed_at='2026-10-01T02:00:00Z' WHERE workspace_id='local'");
     const root = mkdtempSync(join(tmpdir(), "usage-ownership-test-"));
     try {
       const buffers: Buffer[] = [];
@@ -215,7 +223,7 @@ describe("historical reconciliation checkpoints", () => {
         id: "shared-request", model: "haiku", usage: { input_tokens: 20, output_tokens: 5 },
       } }) + "\n");
       const member = await writer.addBuffer("sessions/root/native.jsonl", body, hash(body.toString()));
-      const index = Buffer.from(JSON.stringify({ format: "multiremi.session-archive.v2", subject: { kind: "chat", id: "shared" }, members: [{
+      const index = Buffer.from(JSON.stringify({ format: "multiremi.session-archive.v2", subject: { kind: "chat", id: chat.id }, members: [{
         path: member.path, kind: "provider", local_header_offset: member.localHeaderOffset, data_offset: member.dataOffset,
         compressed_size: member.compressedSize, uncompressed_size: member.uncompressedSize, sha256: member.sha256,
       }] }));
@@ -223,7 +231,7 @@ describe("historical reconciliation checkpoints", () => {
       await writer.finish();
       await Bun.write(join(root, "shared.zip"), Buffer.concat(buffers));
       const sql = { unsafe: async (statement: string, params: any[] = []) => statement.includes("FROM multiremi_session_archives")
-        ? [{ id: "archive", relative_path: "shared.zip", subject_kind: "chat", subject_id: "shared", format: "multiremi.session-archive.v2" }]
+        ? [{ id: "archive", relative_path: "shared.zip", subject_kind: "chat", subject_id: chat.id, format: "multiremi.session-archive.v2" }]
         : db!.query(statement.replace(/\$\d+/g, "?")).all(...params) } as unknown as Bun.SQL;
       const full = await buildReconcileUsagePlan(sql, { archiveRoot: root });
       const filtered = await buildReconcileUsagePlan(sql, { archiveRoot: root, taskId: first.id });
@@ -232,7 +240,7 @@ describe("historical reconciliation checkpoints", () => {
       expect(filtered.tasks).toHaveLength(1);
       expect(filtered.counts.ambiguousTaskEvents).toBe(1);
       expect(filtered.tasks[0]!.actualTokens).toBe(0);
-      db!.run("UPDATE multiremi_tasks SET started_at='2026-10-01T01:30:00Z' WHERE id=?", [second.id]);
+      runTurnExecutionMutation(db!, "UPDATE multiremi_turn_execution_records SET started_at='2026-10-01T01:30:00Z' WHERE id=?", [second.id]);
       const unambiguous = await buildReconcileUsagePlan(sql, { archiveRoot: root, taskId: first.id });
       expect(unambiguous.tasks[0]).toMatchObject({ source: "native", actualTokens: 25, countedActualTokens: 0, supersedeLegacyRun: false });
       applyUsageReconciliation(db!, unambiguous);
@@ -254,7 +262,7 @@ describe("historical reconciliation checkpoints", () => {
     const store = createLocalStore();
     const agent = store.createAgent({ name: "Unknown historical consumer", provider: "claude", workspaceId: "local" });
     const task = store.createTask({ agentId: agent.id, prompt: "recover", workspaceId: "local" });
-    db!.run("UPDATE multiremi_tasks SET usage=?,provider='claude',status='completed' WHERE id=?",
+    runTurnExecutionMutation(db!, "UPDATE multiremi_turn_execution_records SET usage=?,provider='claude',status='completed' WHERE id=?",
       [JSON.stringify([{ provider: "claude", totalTokens: 78048 }]), task.id]);
     migrateLegacyUsage(db!);
     store.appendTaskMessages(task.id, [{ type: "usage", meta: { _meta: { remiTokenUsage: {
@@ -293,7 +301,7 @@ describe("historical reconciliation checkpoints", () => {
     const store = createLocalStore();
     const agent = store.createAgent({ name: "Expandable recovery", provider: "claude", workspaceId: "local" });
     const task = store.createTask({ agentId: agent.id, prompt: "history", workspaceId: "local" });
-    db!.run("UPDATE multiremi_tasks SET usage=?,provider='claude',status='completed' WHERE id=?",
+    runTurnExecutionMutation(db!, "UPDATE multiremi_turn_execution_records SET usage=?,provider='claude',status='completed' WHERE id=?",
       [JSON.stringify([{ provider: "claude", totalTokens: 78048 }]), task.id]);
     migrateLegacyUsage(db!);
     const append = (id: string, inputTokens: number, outputTokens: number) => store.appendTaskMessages(task.id, [{ type: "usage",
@@ -315,7 +323,7 @@ describe("historical reconciliation checkpoints", () => {
     const store = createLocalStore();
     const agent = store.createAgent({ name: "Historical charge", provider: "claude", workspaceId: "local" });
     const task = store.createTask({ agentId: agent.id, prompt: "history", workspaceId: "local" });
-    db!.run("UPDATE multiremi_tasks SET usage=?,provider='claude',status='completed' WHERE id=?",
+    runTurnExecutionMutation(db!, "UPDATE multiremi_turn_execution_records SET usage=?,provider='claude',status='completed' WHERE id=?",
       [JSON.stringify([{ provider: "claude", totalTokens: 78048 }]), task.id]);
     migrateLegacyUsage(db!);
     store.appendTaskMessages(task.id, [{ type: "usage", meta: { _meta: { remiTokenUsage: {

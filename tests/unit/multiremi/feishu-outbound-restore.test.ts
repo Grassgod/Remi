@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import type { Database } from "bun:sqlite";
 import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runMigrations } from "@multiremi/store/migrations.js";
@@ -30,8 +30,9 @@ function seed(db: SqlDatabase): void {
     (id, workspace_id, app_id, agent_id, external_session_key, chat_session_id, created_at, updated_at)
     VALUES ('binding', 'local', 'app', 'agent', 'thread', 'chat-session', '2026-09-30', '2026-09-30')`);
   for (const taskId of ["legacy-task", "sent-task", "failed-task"]) {
-    db.run(`INSERT INTO multiremi_tasks (id, agent_id, prompt, created_at, updated_at)
-      VALUES (?, 'agent', 'Restore drill', '2026-09-30', '2026-09-30')`, taskId);
+    db.run(`INSERT INTO multiremi_turns (id, session_id, seq, agent_id, status, workspace_id, created_at)
+      VALUES (?, 'chat-session', ?, 'agent', 'completed', 'local', '2026-09-30')`, `turn-${taskId}`, ["legacy-task", "sent-task", "failed-task"].indexOf(taskId)+1);
+    db.run(`INSERT INTO multiremi_turn_attempts (id, turn_id, attempt_no, provider, status, created_at, updated_at) VALUES (?, ?, 1, 'codex', 'completed', '2026-09-30', '2026-09-30')`, taskId, `turn-${taskId}`);
   }
   const values = [
     ["legacy", "legacy-task", null, "", "legacy", "sent", "om_legacy", null],
@@ -93,8 +94,8 @@ function verifyRestored(db: SqlDatabase, before: unknown[]): void {
   expect(() => db.run(`INSERT INTO ${table} (id, workspace_id, binding_id, task_id, chat_id,
     body, available_at, created_at, updated_at) VALUES
     ('duplicate', 'local', 'binding', 'sent-task', 'chat', 'x', 'now', 'now', 'now')`)).toThrow();
-  db.run(`INSERT INTO multiremi_tasks (id, agent_id, prompt, created_at, updated_at)
-    VALUES ('new-task', 'agent', 'Restore drill', '2026-09-30', '2026-09-30')`);
+  db.run(`INSERT INTO multiremi_turns (id, session_id, seq, agent_id, status, workspace_id, created_at) VALUES ('new-turn', 'chat-session', 4, 'agent', 'completed', 'local', '2026-09-30')`);
+  db.run(`INSERT INTO multiremi_turn_attempts (id, turn_id, attempt_no, provider, status, created_at, updated_at) VALUES ('new-task', 'new-turn', 1, 'codex', 'completed', '2026-09-30', '2026-09-30')`);
   for (const taskId of ["new-task", "sent-task"]) {
     db.run(`INSERT INTO ${table} (id, workspace_id, binding_id, task_id, chat_id,
       body, available_at, created_at, updated_at) VALUES
@@ -168,11 +169,14 @@ describe("C5 physical restore on SQLite", () => {
     const directory = mkdtempSync(join(tmpdir(), "m447-c5-sqlite-"));
     const path = join(directory, "restore.sqlite");
     try {
-      const db = openSqliteDatabase(path);
+      // Bootstrap in memory, then give the real CLI the exact serialized DB.
+      // Hundreds of migration fsyncs are unrelated to the restore guard.
+      const db = openSqliteDatabase(":memory:");
       seed(db);
       db.run(`UPDATE ${table} SET status = 'pending' WHERE id = 'sent-receipt'`);
       const before = rows(db);
       const indexes = db.query("SELECT name, tbl_name FROM sqlite_master WHERE type = 'index' ORDER BY name").all();
+      writeFileSync(path, db.serialize());
       db.close();
 
       const result = spawnSync("sqlite3", [path], { input: sql, encoding: "utf8" });

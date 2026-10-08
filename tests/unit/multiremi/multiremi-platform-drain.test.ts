@@ -1,3 +1,4 @@
+import { runTurnExecutionMutation } from "@multiremi/store/turn-execution-records.js";
 // Platform drain (MUL-74): persistent maintenance state, lease TTL recovery,
 // the daemon heartbeat ack directive, the updater drain endpoints, and the
 // operator cancel flow. The invariant under test: the switch gate only opens
@@ -100,7 +101,7 @@ describe("platform maintenance store", () => {
     // task does not block (queued is not in-flight)...
     expect(status).toMatchObject({ onlineDaemons: 1, ackedDaemons: 1, activeTasks: 0, ready: true });
     // ...but once dispatched/running it holds the gate (fail-safe).
-    db!.run("UPDATE multiremi_tasks SET status = 'running' WHERE id = ?", [task.id]);
+    runTurnExecutionMutation(db!, "UPDATE multiremi_turn_execution_records SET status = 'running' WHERE id = ?", [task.id]);
     expect(store.getPlatformDrainStatus()).toMatchObject({ activeTasks: 1, ready: false });
   });
 });

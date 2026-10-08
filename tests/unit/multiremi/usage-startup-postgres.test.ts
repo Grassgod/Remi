@@ -1,3 +1,4 @@
+import { runTurnExecutionMutation } from "@multiremi/store/turn-execution-records.js";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "bun:test";
 import { PostgresSyncDatabase } from "@multiremi/store/db/postgres.js";
 import { MultiremiStore } from "@multiremi/store.js";
@@ -33,7 +34,7 @@ describe.skipIf(!adminUrl)("usage startup on isolated PostgreSQL", () => {
       "multiremi_usage_cost_coverage", "multiremi_usage_units", "multiremi_usage_run_scopes", "multiremi_usage_runs", "multiremi_usage_task_scopes",
       "multiremi_usage_legacy_versions", "multiremi_usage_legacy_sources", "multiremi_usage_legacy_audit",
     ]) db!.run(`DELETE FROM ${table}`);
-    db!.run("DELETE FROM multiremi_tasks");
+    db!.run("DELETE FROM multiremi_turn_attempts");
     db!.run("DELETE FROM multiremi_schema_migrations WHERE id IN (?,?)", [USAGE_CUTOVER_MARKER, USAGE_STARTUP_CUTOVER_MARKER]);
     db!.run("DELETE FROM multiremi_usage_startup_progress");
   });
@@ -50,7 +51,7 @@ describe.skipIf(!adminUrl)("usage startup on isolated PostgreSQL", () => {
     const agent = store.createAgent({ name: "scalar-startup-pg", provider: "codex", workspaceId: "local" });
     return Array.from({ length: count }, () => {
       const task = store.createTask({ agentId: agent.id, prompt: "isolated scalar migration", workspaceId: "local" });
-      db!.run("UPDATE multiremi_tasks SET usage=?,updated_at=? WHERE id=?", [JSON.stringify([{ provider: "codex", inputTokens: 11, outputTokens: 2, totalTokens: 4000 }]), "2026-10-01T00:00:00Z", task.id]);
+      runTurnExecutionMutation(db!, "UPDATE multiremi_turn_execution_records SET usage=?,updated_at=? WHERE id=?", [JSON.stringify([{ provider: "codex", inputTokens: 11, outputTokens: 2, totalTokens: 4000 }]), "2026-10-01T00:00:00Z", task.id]);
       return task;
     });
   }
@@ -77,7 +78,7 @@ describe.skipIf(!adminUrl)("usage startup on isolated PostgreSQL", () => {
     const [task] = tasks(1);
     migrateLegacyUsage(db!);
     expect(ready()).toBeNull();
-    db!.run("UPDATE multiremi_tasks SET usage=? WHERE id=?", [JSON.stringify([{ provider: "codex", inputTokens: 30, outputTokens: 4 }]), task!.id]);
+    runTurnExecutionMutation(db!, "UPDATE multiremi_turn_execution_records SET usage=? WHERE id=?", [JSON.stringify([{ provider: "codex", inputTokens: 30, outputTokens: 4 }]), task!.id]);
     await prepareUsageAccountingStartup(db!);
     expect(store.getUsageReport({ workspaceId: "local", days: null }).summary.actual_total_tokens).toBe(34);
     expect(Number((db!.query("SELECT source_version FROM multiremi_usage_legacy_sources WHERE task_id=?").get(task!.id) as { source_version: number }).source_version)).toBe(2);
@@ -87,17 +88,17 @@ describe.skipIf(!adminUrl)("usage startup on isolated PostgreSQL", () => {
   it("rechecks ready startup after a legacy rollback without creating empty runs for v2 tasks", async () => {
     const task = tasks(1)[0]!;
     await prepareUsageAccountingStartup(db!);
-    db!.run("UPDATE multiremi_tasks SET usage=? WHERE id=?", [JSON.stringify([{ provider: "codex", inputTokens: 30, outputTokens: 4 }]), task.id]);
+    runTurnExecutionMutation(db!, "UPDATE multiremi_turn_execution_records SET usage=? WHERE id=?", [JSON.stringify([{ provider: "codex", inputTokens: 30, outputTokens: 4 }]), task.id]);
     await prepareUsageAccountingStartup(db!);
     expect(store.getUsageReport({ workspaceId: "local", days: null }).summary.actual_total_tokens).toBe(34);
     for (const source of ["[]"]) {
       const next = store.createTask({ agentId: task.agentId, prompt: "v2-only startup", workspaceId: "local" });
-      db!.run("UPDATE multiremi_tasks SET usage=? WHERE id=?", [source, next.id]);
+      runTurnExecutionMutation(db!, "UPDATE multiremi_turn_execution_records SET usage=? WHERE id=?", [source, next.id]);
       writeUsageSnapshot(db!, next.id, { version: 2, runId: "v2-only", revision: 1, complete: true,
         units: [actualUnit({ unitId: "request", provider: "codex", scope: "request", source: "provider_request", inputTokens: 5, outputTokens: 0,
           cacheReadTokens: 0, cacheWriteTokens: 0, totalTokens: 5 })] });
       await prepareUsageAccountingStartup(db!);
-      db!.run("UPDATE multiremi_tasks SET status='completed',completed_at='2026-10-03T00:00:00Z' WHERE id=?", [next.id]);
+      runTurnExecutionMutation(db!, "UPDATE multiremi_turn_execution_records SET status='completed',completed_at='2026-10-03T00:00:00Z' WHERE id=?", [next.id]);
       await prepareUsageAccountingStartup(db!);
       expect(db!.query("SELECT run_id FROM multiremi_usage_runs WHERE task_id=?").all(next.id)).toEqual([{ run_id: "v2-only" }]);
       expect(db!.query("SELECT task_id FROM multiremi_usage_legacy_sources WHERE task_id=?").get(next.id)).toBeNull();
@@ -111,7 +112,7 @@ describe.skipIf(!adminUrl)("usage startup on isolated PostgreSQL", () => {
     await prepareUsageAccountingStartup(db!);
     await prepareUsageAccountingStartup(db!);
     expect(db!.query("SELECT run_id FROM multiremi_usage_runs WHERE task_id=?").all(task.id)).toEqual([]);
-    db!.run("UPDATE multiremi_tasks SET status='completed',started_at='2026-10-01T00:00:00Z',completed_at='2026-10-01T01:00:00Z' WHERE id=?", [task.id]);
+    runTurnExecutionMutation(db!, "UPDATE multiremi_turn_execution_records SET status='completed',started_at='2026-10-01T00:00:00Z',completed_at='2026-10-01T01:00:00Z' WHERE id=?", [task.id]);
     writeUsageSnapshot(db!, task.id, { version: 2, runId: "first-v2", revision: 1, complete: true,
       units: [actualUnit({ unitId: "request", provider: "codex", scope: "request", source: "provider_request", inputTokens: 5, outputTokens: 0,
         cacheReadTokens: 0, cacheWriteTokens: 0, totalTokens: 5, costAmount: 0, costCurrency: "USD", costSource: "provider_reported" })] });
@@ -122,7 +123,7 @@ describe.skipIf(!adminUrl)("usage startup on isolated PostgreSQL", () => {
   it("keeps missing prior-attempt usage when complete modern retry facts precede startup on PostgreSQL", async () => {
     const agent = store.createAgent({ name: "retry before cutover pg", provider: "codex", workspaceId: "local" });
     const task = store.createTask({ agentId: agent.id, prompt: "old attempt unknown", workspaceId: "local" });
-    db!.run("UPDATE multiremi_tasks SET attempt=2,status='completed',completed_at='2026-10-01T01:00:00Z' WHERE id=?", [task.id]);
+    runTurnExecutionMutation(db!, "UPDATE multiremi_turn_execution_records SET attempt=2,status='completed',completed_at='2026-10-01T01:00:00Z' WHERE id=?", [task.id]);
     writeUsageSnapshot(db!, task.id, { version: 2, runId: "modern-retry", revision: 1, complete: true,
       units: [actualUnit({ unitId: "request", provider: "codex", scope: "request", source: "provider_request", inputTokens: 5, outputTokens: 0,
         cacheReadTokens: 0, cacheWriteTokens: 0, totalTokens: 5, costAmount: 0, costCurrency: "USD", costSource: "provider_reported" })] });

@@ -1,5 +1,6 @@
 import type { QueryClient } from "@tanstack/react-query";
-import { onInboxNew } from "../../inbox/ws-updaters";
+import { getCurrentWsId } from "../../platform/workspace-storage";
+import { onInboxNew, onInboxInvalidate } from "../../inbox/ws-updaters";
 import {
   notificationPreferenceOptions,
   notificationPreferenceKeys,
@@ -124,8 +125,13 @@ export function createInboxHandlers({ qc }: SyncContext): SyncModule {
   return {
     handlers: {
       "inbox:new": async (p) => {
-        const { item } = p as InboxNewPayload;
-        if (!item) return;
+        const { item, index_only: indexOnly } = p as InboxNewPayload;
+        if (!item) {
+          // Index signals intentionally contain no private message or source identity.
+          const wsId = getCurrentWsId();
+          if (wsId && indexOnly) onInboxInvalidate(qc, wsId);
+          return;
+        }
         await handleInboxNew(qc, item);
       },
     },

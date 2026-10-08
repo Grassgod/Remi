@@ -164,9 +164,9 @@ describe("RuntimesRepo", () => {
     const issueSession = store!.getOrCreateDefaultIssueSession(issue.id);
     store!.getOrCreateSessionAgentLane(issueSession.id, agent.id);
     db!.run(
-      `UPDATE multiremi_session_agent_lanes
+      `UPDATE multiremi_session_lanes
        SET provider_session_id = ?, runtime_id = ?, provider = ?, work_dir = ?
-       WHERE session_id = ? AND agent_id = ?`,
+       WHERE session_id = ? AND reader_id = ?`,
       ["sess-cleanup", runtime.id, "claude", "/tmp/cleanup", issueSession.id, agent.id],
     );
     repo.createRuntimeModelListRequest(runtime.id);

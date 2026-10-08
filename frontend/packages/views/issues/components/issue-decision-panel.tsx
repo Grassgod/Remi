@@ -1,44 +1,24 @@
 "use client";
-
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ChevronRight, CircleHelp, History, LoaderCircle } from "lucide-react";
+import { ChevronRight, CircleHelp, LoaderCircle } from "lucide-react";
 import { api } from "@multiremi/core/api";
-import type {
-  AnswerIssueDecisionInput,
-  MultiremiIssueDecisionAnswer,
-  MultiremiIssueDecisionEntry,
-} from "@multiremi/core/types";
-import {
-  parseTaskHumanRequest,
-  type TaskHumanRequest,
-} from "@multiremi/core/chat/human-requests";
-import { issueDecisionsOptions, issueKeys } from "@multiremi/core/issues/queries";
+import type { Message } from "@multiremi/core/api/schemas";
+import { parseTaskHumanRequest } from "@multiremi/core/chat/human-requests";
+import { issueKeys, issueDecisionsOptions } from "@multiremi/core/issues/queries";
 import { useWorkspaceId } from "@multiremi/core/hooks";
 import { Button } from "@multiremi/ui/components/ui/button";
 import { Input } from "@multiremi/ui/components/ui/input";
-import {
-  Sheet,
-  SheetContent,
-  SheetDescription,
-  SheetHeader,
-  SheetTitle,
-} from "@multiremi/ui/components/ui/sheet";
-import { Skeleton } from "@multiremi/ui/components/ui/skeleton";
 import { Textarea } from "@multiremi/ui/components/ui/textarea";
-import { cn } from "@multiremi/ui/lib/utils";
+import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@multiremi/ui/components/ui/sheet";
 import { HumanRequestCard } from "../../common/human-request-dock";
+import { MessageHeader } from "../../common/message-header";
 import { Markdown } from "../../common/markdown";
 import { useT } from "../../i18n";
-
 interface IssueDecisionPanelProps {
-  issueId: string;
-  pendingCount: number;
-  showOwnerOnly?: boolean;
-  canAnswer: boolean;
+  issueId: string; pendingCount: number; showOwnerOnly?: boolean; canAnswer: boolean;
   getActorName: (type: string, id: string) => string;
 }
-
 export function IssueDecisionBanner({
   count,
   showOwnerOnly = false,
@@ -68,360 +48,67 @@ export function IssueDecisionBanner({
   );
 }
 
-export function IssueDecisionPanel({
-  issueId,
-  pendingCount,
-  showOwnerOnly = false,
-  canAnswer,
-  getActorName,
-}: IssueDecisionPanelProps) {
+export function IssueDecisionPanel({ issueId, pendingCount, showOwnerOnly = false, canAnswer, getActorName }: IssueDecisionPanelProps) {
   const { t } = useT("issues");
   const wsId = useWorkspaceId();
-  const queryClient = useQueryClient();
   const [open, setOpen] = useState(false);
-  const decisions = useQuery({
-    ...issueDecisionsOptions(wsId, issueId),
-    enabled: open,
-  });
-  const refresh = async () => {
-    await Promise.all([
-      queryClient.invalidateQueries({ queryKey: issueKeys.detail(wsId, issueId) }),
-      queryClient.invalidateQueries({ queryKey: issueKeys.decisions(wsId, issueId) }),
-    ]);
-  };
-  const answerDecision = useMutation({
-    mutationFn: ({ decisionId, input }: { decisionId: string; input: AnswerIssueDecisionInput }) =>
-      api.answerIssueDecision(issueId, decisionId, input),
-    onSuccess: refresh,
-  });
-
-  const ownerEntries = decisions.data
-    ? [...decisions.data.owner_and_answered.pending, ...decisions.data.owner_and_answered.answered]
-    : [];
-
-  return (
-    <>
-      <IssueDecisionBanner
-        count={pendingCount}
-        showOwnerOnly={showOwnerOnly}
-        onOpen={() => setOpen(true)}
-      />
-      <Sheet open={open} onOpenChange={setOpen}>
-        <SheetContent
-          side="right"
-          className="inset-y-2 right-2 h-auto max-h-[calc(100vh-1rem)] w-[calc(100%-1rem)] gap-0 overflow-hidden rounded-md border sm:top-8 sm:bottom-auto sm:h-[610px] sm:w-[440px] sm:max-w-[440px]"
-          data-issue-decision-overlay
-        >
-          <SheetHeader className="shrink-0 border-b pr-12">
-            <SheetTitle>{t(($) => $.detail.decision_overlay_title)}</SheetTitle>
-            <SheetDescription>
-              {t(($) => $.detail.decision_overlay_count, { count: pendingCount })}
-            </SheetDescription>
-          </SheetHeader>
-          <div className="min-h-0 flex-1 overflow-y-auto p-4">
-            {decisions.isPending ? (
-              <DecisionListSkeleton />
-            ) : decisions.isError ? (
-              <div className="flex min-h-28 flex-col items-center justify-center gap-2 text-center">
-                <p role="alert" className="text-sm text-destructive">
-                  {t(($) => $.detail.decision_load_failed)}
-                </p>
-                <Button size="sm" variant="outline" onClick={() => void decisions.refetch()}>
-                  {t(($) => $.detail.decision_retry)}
-                </Button>
-              </div>
-            ) : (
-              <div className="space-y-6">
-                <DecisionSection title={t(($) => $.detail.decision_waiting_section)}>
-                  {(decisions.data?.waiting_on_human ?? []).map((entry) => (
-                    <DecisionEntryCard
-                      key={entry.id}
-                      entry={entry}
-                      canAnswer={canAnswer}
-                      answerPending={answerDecision.isPending && answerDecision.variables?.decisionId === entry.id}
-                      answerError={answerDecision.isError && answerDecision.variables?.decisionId === entry.id
-                        ? answerDecision.error
-                        : null}
-                      onAnswer={(input) => answerDecision.mutateAsync({ decisionId: entry.id, input })}
-                      onHumanResponded={() => void refresh()}
-                      getActorName={getActorName}
-                    />
-                  ))}
-                </DecisionSection>
-
-                {ownerEntries.length > 0 && (
-                  <DecisionSection title={t(($) => $.detail.decision_owner_section)}>
-                    {ownerEntries.map((entry) => (
-                      <DecisionEntryCard
-                        key={entry.id}
-                        entry={entry}
-                        canAnswer={canAnswer}
-                        answerPending={answerDecision.isPending && answerDecision.variables?.decisionId === entry.id}
-                        answerError={answerDecision.isError && answerDecision.variables?.decisionId === entry.id
-                          ? answerDecision.error
-                          : null}
-                        onAnswer={(input) => answerDecision.mutateAsync({ decisionId: entry.id, input })}
-                        onHumanResponded={() => void refresh()}
-                        getActorName={getActorName}
-                      />
-                    ))}
-                  </DecisionSection>
-                )}
-              </div>
-            )}
-          </div>
-        </SheetContent>
-      </Sheet>
-    </>
-  );
-}
-
-function DecisionSection({ title, children }: { title: string; children: React.ReactNode }) {
-  return (
-    <section className="space-y-2.5">
-      <h3 className="text-xs font-semibold text-muted-foreground">{title}</h3>
-      {children}
-    </section>
-  );
-}
-
-function DecisionEntryCard({
-  entry,
-  canAnswer,
-  answerPending,
-  answerError,
-  onAnswer,
-  onHumanResponded,
-  getActorName,
-}: {
-  entry: MultiremiIssueDecisionEntry;
-  canAnswer: boolean;
-  answerPending: boolean;
-  answerError: Error | null;
-  onAnswer: (input: AnswerIssueDecisionInput) => Promise<unknown>;
-  onHumanResponded: () => void;
-  getActorName: (type: string, id: string) => string;
-}) {
-  if (entry.type === "human_request") {
-    const request = humanRequestFromEntry(entry);
-    if (!request) return null;
-    return (
-      <div className="space-y-1.5" data-decision-entry={entry.id}>
-        <div className="truncate text-xs font-medium" title={entry.title}>{entry.title}</div>
-        <HumanRequestCard
-          taskId={request.taskId}
-          request={request}
-          onResponded={onHumanResponded}
-          readOnly={!canAnswer}
-        />
+  const query = useQuery({ ...issueDecisionsOptions(wsId, issueId), enabled: open });
+  return <><IssueDecisionBanner count={pendingCount} showOwnerOnly={showOwnerOnly} onOpen={() => setOpen(true)} />
+    <Sheet open={open} onOpenChange={setOpen}><SheetContent side="right"
+      className="inset-y-2 right-2 h-auto max-h-[calc(100vh-1rem)] w-[calc(100%-1rem)] gap-0 overflow-hidden rounded-md border sm:top-8 sm:bottom-auto sm:h-[610px] sm:w-[440px] sm:max-w-[440px]" data-issue-decision-overlay>
+      <SheetHeader className="shrink-0 border-b pr-12"><SheetTitle>{t($ => $.detail.decision_overlay_title)}</SheetTitle>
+        <SheetDescription>{t($ => $.detail.decision_overlay_count, { count: pendingCount })}</SheetDescription></SheetHeader>
+      <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-4">
+        {query.isPending ? <LoaderCircle className="size-5 animate-spin" /> : query.isError ? <div><p role="alert">{t($ => $.detail.decision_load_failed)}</p>
+          <Button size="sm" variant="outline" onClick={() => void query.refetch()}>{t($ => $.detail.decision_retry)}</Button></div>
+          : query.data?.map(message => <MessageDecisionCard key={message.id} message={message} canAnswer={canAnswer} getActorName={getActorName} />)}
       </div>
-    );
-  }
-  return (
-    <DecisionCard
-      entry={entry}
-      canAnswer={canAnswer}
-      pending={answerPending}
-      error={answerError}
-      onAnswer={onAnswer}
-      getActorName={getActorName}
-    />
-  );
+    </SheetContent></Sheet></>;
 }
 
-function humanRequestFromEntry(entry: MultiremiIssueDecisionEntry): TaskHumanRequest | null {
-  if (!entry.sourceTaskId || (entry.kind !== "permission" && entry.kind !== "question")) return null;
-  return parseTaskHumanRequest({
-    id: entry.id,
-    taskId: entry.sourceTaskId,
-    kind: entry.kind,
-    payload: entry.payload ?? {},
-    status: "pending",
-    response: null,
-    respondedBy: null,
-    createdAt: entry.createdAt,
-    respondedAt: null,
-  });
-}
-
-function DecisionCard({
-  entry,
-  canAnswer,
-  pending,
-  error,
-  onAnswer,
-  getActorName,
-}: {
-  entry: MultiremiIssueDecisionEntry;
-  canAnswer: boolean;
-  pending: boolean;
-  error: Error | null;
-  onAnswer: (input: AnswerIssueDecisionInput) => Promise<unknown>;
-  getActorName: (type: string, id: string) => string;
-}) {
+export function MessageDecisionCard({ message, canAnswer, getActorName }: { message: Message; canAnswer: boolean; getActorName?: (type: string, id: string) => string }) {
   const { t } = useT("issues");
-  const history = entry.history ?? [];
-  return (
-    <article className="rounded-md border bg-background p-3" data-decision-entry={entry.id}>
-      <div className="min-w-0">
-        <h4 className="break-words text-sm font-medium">{entry.title}</h4>
-        {entry.body && (
-          <Markdown
-            mode="minimal"
-            className="mt-1 text-xs text-muted-foreground [&_p]:my-1 [&_p:first-child]:mt-0 [&_p:last-child]:mb-0"
-          >
-            {entry.body}
-          </Markdown>
-        )}
-      </div>
-
-      {history.length > 0 && (
-        <div className="mt-3 space-y-2 border-t pt-2.5">
-          <div className="flex items-center gap-1 text-xs font-medium text-muted-foreground">
-            <History className="size-3.5" />
-            {t(($) => $.detail.decision_history)}
-          </div>
-          {history.map((answer, index) => (
-            <DecisionHistory
-              key={`${answer.answeredAt}:${index}`}
-              answer={answer}
-              getActorName={getActorName}
-            />
-          ))}
-        </div>
-      )}
-
-      {canAnswer && (
-        <DecisionAnswerForm
-          entry={entry}
-          pending={pending}
-          error={error}
-          onAnswer={onAnswer}
-        />
-      )}
-    </article>
-  );
-}
-
-function DecisionHistory({
-  answer,
-  getActorName,
-}: {
-  answer: MultiremiIssueDecisionAnswer;
-  getActorName: (type: string, id: string) => string;
-}) {
-  const { t } = useT("issues");
-  const actor = getActorName(answer.answererType, answer.answererId) || answer.answererId;
-  return (
-    <div className="rounded bg-muted/50 p-2 text-xs">
-      <div className="truncate font-medium" title={actor}>{actor}</div>
-      <div className="mt-1 whitespace-pre-wrap break-words">{answer.answer}</div>
-      {answer.reason && (
-        <div className="mt-1 text-muted-foreground">
-          <span className="font-medium">{t(($) => $.detail.decision_reason)}: </span>
-          {answer.reason}
-        </div>
-      )}
-      {answer.overturn && (
-        <div className="mt-1 text-muted-foreground">
-          <span className="font-medium">{t(($) => $.detail.decision_overturn)}: </span>
-          {answer.overturn}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function DecisionAnswerForm({
-  entry,
-  pending,
-  error,
-  onAnswer,
-}: {
-  entry: MultiremiIssueDecisionEntry;
-  pending: boolean;
-  error: Error | null;
-  onAnswer: (input: AnswerIssueDecisionInput) => Promise<unknown>;
-}) {
-  const { t } = useT("issues");
+  const { t: tm } = useT("messages");
+  const wsId = useWorkspaceId();
+  const qc = useQueryClient();
   const [answer, setAnswer] = useState("");
+  const [selected, setSelected] = useState<string | null>(null);
   const [reason, setReason] = useState("");
-  const submit = async () => {
-    try {
-      await onAnswer({ answer: answer.trim(), reason: reason.trim(), overturn: "" });
-      setAnswer("");
-      setReason("");
-    } catch {
-      // The mutation error is rendered in the reserved message row below.
-    }
-  };
-  const actionLabel = entry.status === "answered"
-    ? t(($) => $.detail.decision_reanswer)
-    : t(($) => $.detail.decision_answer);
-  return (
-    <div className="mt-3 space-y-2 border-t pt-2.5">
-      {entry.options?.length ? (
-        <div className="flex flex-wrap gap-1.5">
-          {entry.options.map((option) => (
-            <Button
-              key={option}
-              type="button"
-              size="sm"
-              variant={answer === option ? "default" : "outline"}
-              aria-pressed={answer === option}
-              className="h-auto max-w-full whitespace-normal break-words text-left"
-              disabled={pending}
-              onClick={() => setAnswer(option)}
-            >
-              {option}
-            </Button>
-          ))}
-        </div>
-      ) : (
-        <Textarea
-          className="min-h-16 resize-none text-sm"
-          value={answer}
-          disabled={pending}
-          placeholder={t(($) => $.detail.decision_answer_placeholder)}
-          onChange={(event) => setAnswer(event.target.value)}
-        />
-      )}
-      <Input
-        value={reason}
-        disabled={pending}
-        placeholder={t(($) => $.detail.decision_reason_placeholder)}
-        onChange={(event) => setReason(event.target.value)}
-      />
-      <div className="flex min-h-8 items-center justify-between gap-2">
-        <span role={error ? "alert" : undefined} className={cn("min-w-0 truncate text-xs text-destructive", !error && "invisible")}>
-          {error?.message ?? t(($) => $.detail.decision_answer_failed)}
-        </span>
-        <Button
-          type="button"
-          size="sm"
-          className="shrink-0"
-          disabled={!answer.trim() || pending}
-          onClick={() => void submit()}
-        >
-          {pending && <LoaderCircle className="size-3.5 animate-spin" />}
-          {actionLabel}
-        </Button>
-      </div>
-    </div>
-  );
-}
-
-function DecisionListSkeleton() {
-  return (
-    <div className="space-y-3" aria-hidden="true">
-      {[0, 1, 2].map((index) => (
-        <div key={index} className="rounded-md border p-3">
-          <Skeleton className="h-4 w-2/3" />
-          <Skeleton className="mt-2 h-3 w-full" />
-          <Skeleton className="mt-1 h-3 w-4/5" />
-          <Skeleton className="mt-3 h-8 w-full" />
-        </div>
-      ))}
-    </div>
-  );
+  const [showReplies, setShowReplies] = useState(false);
+  const refresh = () => { void qc.invalidateQueries({ queryKey: issueKeys.all(wsId) }); void qc.invalidateQueries({ queryKey: ["inbox", wsId] }); };
+  const reply = useMutation({ mutationFn: () => api.sendMessage(message.session_id, {
+    body_md: selected == null ? answer.trim() : message.options?.find(o => o.value === selected)?.label ?? "",
+    message_kind: "reply", reply_to_id: message.id,
+    metadata: selected == null ? undefined : { selected_options: [selected] },
+    response: { reason: reason.trim(), overturn: "", ...(selected == null ? {} : { selected_options: [selected] }) },
+  }), onSettled: refresh });
+  const replies = useQuery({ queryKey: ["decision-replies", wsId, message.id], enabled: showReplies,
+    queryFn: async () => {
+      const messages: Message[] = [];
+      let cursor: string | undefined;
+      do { const page = await api.listMessages(message.session_id, { thread: message.id, cursor }); messages.push(...page.messages); cursor = page.next_cursor ?? undefined; } while (cursor);
+      return messages;
+    } });
+  const record = message.metadata.human_request;
+  const request = record && typeof record === "object" ? parseTaskHumanRequest({ ...record,
+    id: message.id, taskId: message.task_id ?? "", sessionId: message.session_id,
+    createdAt: message.created_at, respondedAt: null, respondedBy: null,
+    response: null, status: message.resolved_at ? "responded" : "pending",
+  }) : null;
+  return <article className="rounded-md border bg-background p-3" data-decision-entry={message.id}>
+    <MessageHeader message={message} getActorName={getActorName} /><Markdown mode="minimal">{message.body_md}</Markdown>
+    {message.resolved_at || reply.isSuccess ? <div className="mt-2 text-xs text-muted-foreground">
+      <Button variant="ghost" size="xs" onClick={() => setShowReplies(v => !v)}>{tm($ => $.resolved)}</Button>
+      {showReplies && (replies.isError ? <p role="alert">{tm($ => $.load_failed)}</p> : replies.data?.filter(m => m.reply_to_id === message.id).map(m => <Markdown key={m.id} mode="minimal">{m.body_md}</Markdown>))}
+    </div> : request ? <HumanRequestCard taskId={request.taskId} request={request} readOnly={!canAnswer} onResponded={refresh} />
+    : canAnswer && <div className="mt-3 space-y-2 border-t pt-2.5">
+      {message.options?.length ? <div className="flex flex-wrap gap-1.5">{message.options.map(option => <Button key={option.value} size="sm"
+        variant={selected === option.value ? "default" : "outline"} aria-pressed={selected === option.value} disabled={reply.isPending}
+        className="h-auto max-w-full whitespace-normal break-words text-left" onClick={() => setSelected(option.value)}>{option.label}</Button>)}</div>
+        : <Textarea value={answer} disabled={reply.isPending} placeholder={t($ => $.detail.decision_answer_placeholder)} onChange={e => setAnswer(e.target.value)} />}
+      <Input value={reason} disabled={reply.isPending} placeholder={t($ => $.detail.decision_reason_placeholder)} onChange={e => setReason(e.target.value)} />
+      {reply.error && <p role="alert" className="text-xs text-destructive">{reply.error.message}</p>}
+      <Button size="sm" disabled={reply.isPending || (selected == null && !answer.trim())} onClick={() => reply.mutate()}>{tm($ => $.decision_reply)}</Button>
+    </div>}
+  </article>;
 }

@@ -20,7 +20,7 @@ it("switching tasks removes the previous task's trace", async () => {
   const view = render(<TaskTraceDialog task={task as never} agentName="Agent" onOpenChange={() => {}} />);
   await waitFor(() => expect(screen.getByTestId("projection")).toHaveTextContent("A trace"));
   view.rerender(<TaskTraceDialog task={{ ...task, id: "b" } as never} agentName="Agent" onOpenChange={() => {}} />);
-  await waitFor(() => expect(getTaskTrace).toHaveBeenCalledWith("b", 0, 200));
+  await waitFor(() => expect(getTaskTrace).toHaveBeenCalledWith("b", 0, 200, undefined));
   expect(screen.getByTestId("projection")).not.toHaveTextContent("A trace");
 });
 

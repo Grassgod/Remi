@@ -1,3 +1,4 @@
+import { requestMessageBody, taskRequestPath, sentTask } from "./unified-test-paths.js";
 import type { Database } from "bun:sqlite";
 import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { describe, expect, it } from "bun:test";
@@ -65,13 +66,13 @@ function fixture(store: MultiremiStore) {
 async function dispatch(store: MultiremiStore, source: MultiremiTask, issue: MultiremiIssue, agentId: string) {
   const app = createMultiremiApp({ store, authToken: "test-root" });
   const token = await store.createTaskAccessToken(source, "local");
-  const response = await app.request("/api/multiremi/tasks", {
+  const response = await app.request(taskRequestPath(store, { issueId: issue.id }), {
     method: "POST",
     headers: { Authorization: `Bearer ${token.token}`, "Content-Type": "application/json" },
-    body: JSON.stringify({ agentId, issueId: issue.id, prompt: "Execute delegated work." }),
+    body: JSON.stringify(requestMessageBody(store, { agentId, issueId: issue.id, prompt: "Execute delegated work." })),
   });
-  expect(response.status).toBe(201);
-  return store.getTask(((await response.json()) as { task: { id: string } }).task.id)!;
+  expect(response.status).toBe(200);
+  return store.getTask(sentTask(store, await response.json()).id)!;
 }
 
 function rawDb(store: MultiremiStore) {
@@ -81,14 +82,14 @@ function rawDb(store: MultiremiStore) {
 /** D1 keeps the log bridge and routes the wake through a deduplicated inbox envelope. */
 function reportEnvelope(store: MultiremiStore, sessionId: string, sourceTaskId: string) {
   const entries = store.listConversationLogEntries(sessionId).filter(entry => {
-    const envelope = entry.metadata.envelope as { kind?: string; source?: { taskId?: string } } | undefined;
-    return envelope?.kind === "report" && envelope.source?.taskId === sourceTaskId;
+    const message = store.getMessage(entry.id);
+    return message?.message_kind === "report" && (message.metadata.message_source as any)?.taskId === sourceTaskId;
   });
   expect(entries).toHaveLength(1);
   return entries[0]!;
 }
 
-it("structural offer failures ring the delegator with byte diagnostics without blocking the child Issue", async () => {
+it("structural offer failures ring the delegator with byte diagnostics and derives the failed owner turn as blocked", async () => {
   await withStore("sqlite", async store => {
     const f = fixture(store);
     const childTask = await dispatch(store, f.leaderTask, f.child, f.worker.id);
@@ -100,9 +101,9 @@ it("structural offer failures ring the delegator with byte diagnostics without b
     expect(envelope.body_md).toContain("Status: failed");
     expect(envelope.body_md).toContain("offer_too_large");
     expect(envelope.body_md).toContain("repos:1200001");
-    expect(envelope.body_md).toContain(`remi task get ${childTask.id}`);
+    expect(envelope.body_md).toContain(`remi turn get ${store.getTurnForAttempt(childTask.id)!.id}`);
     expect(Buffer.byteLength(envelope.body_md)).toBeLessThan(2048);
-    expect(store.getIssue(f.child.id)!.status).not.toBe("blocked");
+    expect(store.getIssue(f.child.id)!.status).toBe("blocked");
   });
 });
 
@@ -140,210 +141,81 @@ for (const backend of ["sqlite", "postgres"] as const) {
           else if (terminal === "failed") store.failTask(childTask.id, { error: "Failure details" });
           else store.cancelTask(childTask.id);
 
-          const reports = store.listSessionEvents(f.leaderSession.id)
-            .filter((event) => event.kind === "delegation_report");
-          expect(reports).toHaveLength(1);
-          const event = reports[0]!;
-          expect(event.taskId).toBe(childTask.id);
-          const mirrored = store.listConversationLogEntries(f.leaderSession.id)
-            .filter((entry) => entry.kind === "delegation_report");
-          expect(mirrored).toHaveLength(1);
-          expect(mirrored[0]).toMatchObject({
-            session_id: event.sessionId,
-            seq: event.seq,
-            id: event.id,
-            task_id: event.taskId,
-            visibility: "hidden",
-            author_type: event.authorType,
-            author_id: event.authorId,
-            body_md: event.body,
-            parent_id: null,
-            created_at: event.createdAt,
-          });
-          expect(store.listConversationLogEntriesByTask(childTask.id)
-            .filter((entry) => entry.kind === "delegation_report").map((entry) => entry.id)).toEqual([event.id]);
-          // The whole payload, keys and values, including an explicit null result.
-          // (`MultiremiSessionEvent.metadata` is `Record<string, unknown>`; main's
-          // `delegation_report` writer always puts a string or an explicit null
-          // here, and the assertions below pin the mirrored value.)
-          expect(mirrored[0]!.metadata).toStrictEqual(event.metadata);
-          expect(mirrored[0]!.metadata).toStrictEqual({
-            source_issue_id: f.child.id,
-            source_issue_key: f.child.key,
-            source_task_id: childTask.id,
-            delegate_agent_id: f.worker.id,
-            terminal_status: terminal,
-            result_comment_id: event.metadata.result_comment_id as string | null,
-            delegation_id: childTask.delegationId,
-          });
-          if (comment) expect(mirrored[0]!.metadata.result_comment_id).toEqual(expect.stringMatching(/^cmt_/));
-          else {
-            expect(Object.hasOwn(mirrored[0]!.metadata, "result_comment_id")).toBe(true);
-            expect(mirrored[0]!.metadata.result_comment_id).toBeNull();
-          }
+          const message = store.getMessage(reportEnvelope(store, f.leaderSession.id, childTask.id).id)!;
+          const event = store.listSessionEvents(f.leaderSession.id).find(row => row.id === message.id)!;
+          const entry = store.listConversationLogEntries(f.leaderSession.id).find(row => row.id === message.id)!;
+          expect(message).toMatchObject({message_kind:"report",sender_type:"platform",to_agent_id:f.leader.id,wake_applied:"now",wake_requested:"now"});
+          expect(entry).toMatchObject({kind:"message",visibility:"shown",session_id:event.sessionId,seq:event.seq,id:event.id,body_md:event.body});
+          const {parent_comment_id, ...eventMetadata} = event.metadata;
+          expect(parent_comment_id).toBeNull();
+          expect(entry.metadata).toStrictEqual(eventMetadata);
+          expect(entry.metadata.message_source).toMatchObject({taskId:childTask.id,issueId:f.child.id});
+          expect(message.body_md).toContain(`Status: ${terminal}`);
+          if(comment)expect((entry.metadata.message_source as any).commentId).toBe(comment.id);
+          expect(store.getTurn(store.getTask(childTask.id)!.delegationReturnTaskId!)?.status).toBe("pending");
           expect(childTask.delegationId).toEqual(expect.any(String));
           expectNoSeqHole(store, f.leaderSession.id);
           expectNoSeqHole(store, childTask.issueSessionId!);
-        }));
+        }), backend === "postgres" ? 20_000 : 5_000);
     }
   });
 }
 
-// --- The delegation drain reads the log, not session_events ------------------
-//
-// MUL-427 moved the drain's three reads (`drainDelegationReturnsWithinWorkspaceLock`:
-// the terminal-report gate, the terminal seq and the bridge's metadata) onto the
-// log. The two tables mirror each other one for one, so only a fixture that
-// rewrites the legacy bridge row alone can tell which table the drain reads
-// (ruling ae). Each case rewrites one thing on that row, leaves the log alone,
-// then cancels the unclaimed return so the drain rebuilds it from history.
-
-type LegacyBridgeRewrite = {
-  read: string;
-  change: string;
-  sql: string;
-  params: (bridge: ConversationLogEntry) => unknown[];
-};
-
-const LEGACY_BRIDGE_REWRITES: LegacyBridgeRewrite[] = [
-  {
-    read: "the bridge's result comment",
-    change: "names another comment",
-    sql: "UPDATE multiremi_session_events SET metadata = ? WHERE session_id = ? AND seq = ?",
-    params: (bridge) => [JSON.stringify({ ...bridge.metadata, result_comment_id: "cmt_legacy_row_only" }),
-      bridge.session_id, bridge.seq],
-  },
-  {
-    read: "the terminal seq",
-    change: "sits at a later seq",
-    sql: "UPDATE multiremi_session_events SET seq = seq + 1000 WHERE session_id = ? AND seq = ?",
-    params: (bridge) => [bridge.session_id, bridge.seq],
-  },
-  {
-    read: "the terminal report",
-    change: "no longer names the source task",
-    sql: "UPDATE multiremi_session_events SET task_id = NULL WHERE session_id = ? AND seq = ?",
-    params: (bridge) => [bridge.session_id, bridge.seq],
-  },
-];
-
-for (const backend of ["sqlite", "postgres"] as const) {
-  describe.skipIf(backend === "postgres" && !pgAdminUrl)(`MUL-427 delegation drain follows the log (${backend})`, () => {
-    for (const rewrite of LEGACY_BRIDGE_REWRITES) {
-      it(`takes ${rewrite.read} from the log when the legacy bridge ${rewrite.change}`,
-        async () => withStore(backend, async (store) => {
-          const f = fixture(store);
-          const childTask = await dispatch(store, f.leaderTask, f.child, f.worker.id);
-          expect(store.claimTask(f.leaderRuntime.id)?.id).toBe(f.leaderTask.id);
-          store.buildTaskSessionProjection(f.leaderTask.id);
-          store.startTask(f.leaderTask.id);
-          store.completeTask(f.leaderTask.id, { output: "Dispatched." });
-          expect(store.claimTask(f.workerRuntime.id)?.id).toBe(childTask.id);
-          store.buildTaskSessionProjection(childTask.id);
-          store.startTask(childTask.id);
-          const result = store.createIssueComment(f.child.id, { authorType: "agent", authorId: f.worker.id,
-            taskId: childTask.id, issueSessionId: childTask.issueSessionId, body: "Result details" });
-          store.completeTask(childTask.id, { output: "Result details" });
-          const firstReturnId = store.getTask(childTask.id)!.delegationReturnTaskId!;
-          expect(firstReturnId).toEqual(expect.any(String));
-          const log = store.listConversationLogEntries(f.leaderSession.id);
-          const bridge = log.find((entry) => entry.kind === "delegation_report" && entry.task_id === childTask.id)!;
-          expect(bridge.metadata.result_comment_id).toBe(result.id);
-
-          expect(rawDb(store).run(rewrite.sql, rewrite.params(bridge)).changes).toBe(1);
-          expect(store.listConversationLogEntries(f.leaderSession.id)).toEqual(log);
-          store.cancelTask(firstReturnId);
-
-          const replacementId = store.getTask(childTask.id)!.delegationReturnTaskId;
-          expect(replacementId).toEqual(expect.any(String));
-          expect(replacementId).not.toBe(firstReturnId);
-          const inbox = reportEnvelope(store, f.leaderSession.id, childTask.id);
-          expect(inbox.metadata.envelope).toMatchObject({ source: { taskId: childTask.id, commentId: result.id } });
-          expect(store.getTask(replacementId!)!.prompt).toBe(`读收件箱\n\n${f.leaderSession.id}:${inbox.seq} (${inbox.id})`);
-          const triggered = store.listIssueActivity(f.parent.id).filter((activity) =>
-            activity.type === "delegation_return_triggered"
-            && (activity.data as Record<string, unknown>).returnTaskId === replacementId);
-          expect(triggered.map((activity) => (activity.data as Record<string, unknown>).requiredEventSeq))
-            .toEqual([inbox.seq]);
-        }));
-    }
-  });
-}
-
-// --- The bridge dedupe reads the log, not session_events ---------------------
-//
-// Before it appends a cross-issue bridge, `ensureDelegationWakeupWithinWorkspaceLock`
-// looks for a `delegation_report` the return session already holds for the
-// source. MUL-427 moved that lookup onto the log as well (ruling am). As with the
-// drain above, each case rewrites the legacy table alone and leaves the log as it is.
-
+// #9: there is one canonical message, so mutating a deleted legacy shadow
+// table is no longer a meaningful test. Pin the same dedupe, replay and cursor
+// guarantees directly on canonical reports and pending turns.
 async function startDelegatedChild(store: MultiremiStore, f: ReturnType<typeof fixture>): Promise<MultiremiTask> {
-  const childTask = await dispatch(store, f.leaderTask, f.child, f.worker.id);
+  const child = await dispatch(store, f.leaderTask, f.child, f.worker.id);
   expect(store.claimTask(f.leaderRuntime.id)?.id).toBe(f.leaderTask.id);
-  store.buildTaskSessionProjection(f.leaderTask.id);
-  store.startTask(f.leaderTask.id);
-  store.completeTask(f.leaderTask.id, { output: "Dispatched." });
-  expect(store.claimTask(f.workerRuntime.id)?.id).toBe(childTask.id);
-  store.buildTaskSessionProjection(childTask.id);
-  store.startTask(childTask.id);
-  return childTask;
+  store.buildTaskSessionProjection(f.leaderTask.id); store.startTask(f.leaderTask.id);
+  store.completeTask(f.leaderTask.id, {output:"Dispatched."});
+  expect(store.claimTask(f.workerRuntime.id)?.id).toBe(child.id);
+  store.buildTaskSessionProjection(child.id); store.startTask(child.id);
+  return child;
 }
-
-for (const backend of ["sqlite", "postgres"] as const) {
-  describe.skipIf(backend === "postgres" && !pgAdminUrl)(`MUL-427 bridge dedupe follows the log (${backend})`, () => {
-    it("reuses the log's bridge when the legacy row no longer names the source",
-      async () => withStore(backend, async (store) => {
-        const f = fixture(store);
-        const childTask = await startDelegatedChild(store, f);
-        store.completeTask(childTask.id, { output: "Result details" });
-        const returnId = store.getTask(childTask.id)!.delegationReturnTaskId!;
-        expect(returnId).toEqual(expect.any(String));
-        const log = store.listConversationLogEntries(f.leaderSession.id);
-        const bridge = log.find((entry) => entry.kind === "delegation_report" && entry.task_id === childTask.id)!;
-
-        expect(rawDb(store).run("UPDATE multiremi_session_events SET task_id = NULL WHERE session_id = ? AND seq = ?",
-          [bridge.session_id, bridge.seq]).changes).toBe(1);
-        expect(store.listConversationLogEntries(f.leaderSession.id)).toEqual(log);
-        const duplicate = store.ensureDelegationWakeup({ sourceTaskId: childTask.id, requiredEventSeq: 1,
-          terminalStatus: "completed", terminalBody: "Result details" });
-
-        expect(duplicate).toMatchObject({ created: false, covered: true });
-        expect(duplicate.task?.id).toBe(returnId);
-        // No second bridge, and the skip is pinned to the log bridge's seq.
-        expect(store.listConversationLogEntries(f.leaderSession.id)).toEqual(log);
-        const skipped = store.listIssueActivity(f.child.id).filter((activity) =>
-          activity.type === "delegation_return_skipped"
-          && (activity.data as Record<string, unknown>).reason === "already_covered");
-        expect(skipped.map((activity) => (activity.data as Record<string, unknown>).requiredEventSeq))
-          .toEqual([bridge.seq]);
-      }));
-
-    it("appends a bridge when only the legacy table names the source",
-      async () => withStore(backend, async (store) => {
-        const f = fixture(store);
-        const childTask = await startDelegatedChild(store, f);
-        const log = store.listConversationLogEntries(f.leaderSession.id);
-        const newest = log.filter((entry) => entry.kind !== "head").at(-1)!;
-        expect(newest.kind).not.toBe("delegation_report");
-
-        expect(rawDb(store).run(
-          "UPDATE multiremi_session_events SET kind = 'delegation_report', task_id = ? WHERE session_id = ? AND seq = ?",
-          [childTask.id, newest.session_id, newest.seq]).changes).toBe(1);
-        expect(store.listConversationLogEntries(f.leaderSession.id)).toEqual(log);
-        store.completeTask(childTask.id, { output: "Result details" });
-
-        const bridges = store.listConversationLogEntries(f.leaderSession.id)
-          .filter((entry) => entry.kind === "delegation_report" && entry.task_id === childTask.id);
-        expect(bridges).toHaveLength(1);
-        expect(bridges[0]!.seq).toBeGreaterThan(newest.seq);
-        const returnId = store.getTask(childTask.id)!.delegationReturnTaskId;
-        expect(returnId).toEqual(expect.any(String));
-        const triggered = store.listIssueActivity(f.parent.id).filter((activity) =>
-          activity.type === "delegation_return_triggered"
-          && (activity.data as Record<string, unknown>).returnTaskId === returnId);
-        expect(triggered.map((activity) => (activity.data as Record<string, unknown>).requiredEventSeq))
-          .toEqual([reportEnvelope(store, f.leaderSession.id, childTask.id).seq]);
-      }));
+for(const backend of ["sqlite","postgres"] as const) {
+  describe.skipIf(backend === "postgres" && !pgAdminUrl)(`Canonical delegation report replay (${backend})`,()=>{
+    for(const terminal of ["completed","failed","cancelled"] as const)it(`replays ${terminal} without another report or wake`,async()=>withStore(backend,async store=>{
+      const f=fixture(store), child=await startDelegatedChild(store,f);
+      if(terminal === "completed")store.completeTask(child.id,{output:"Final details"});
+      else if(terminal === "failed")store.failTask(child.id,{error:"Final failure"});
+      else store.cancelTask(child.id);
+      const report=reportEnvelope(store,f.leaderSession.id,child.id);
+      const before=store.listConversationLogEntries(f.leaderSession.id);
+      const returnId=store.getTask(child.id)!.delegationReturnTaskId!;
+      const repeated=store.ensureDelegationWakeup({sourceTaskId:child.id,requiredEventSeq:report.seq,terminalStatus:terminal,terminalBody:"Final details"});
+      expect(repeated).toMatchObject({created:false,covered:true});
+      expect(store.getTask(child.id)!.delegationReturnTaskId).toBe(returnId);
+      expect(store.listConversationLogEntries(f.leaderSession.id)).toEqual(before);
+      expectNoSeqHole(store,f.leaderSession.id);
+    }), backend === "postgres" ? 20_000 : 5_000);
+    it("a cancelled unclaimed return re-rings the same report with a new attempt",async()=>withStore(backend,async store=>{
+      const f=fixture(store),child=await startDelegatedChild(store,f);
+      store.completeTask(child.id,{output:"Final details"});
+      const report=reportEnvelope(store,f.leaderSession.id,child.id);
+      const returnId=store.getTask(child.id)!.delegationReturnTaskId!;
+      const before=store.getTurn(returnId)!;
+      store.cancelTask(before.current_attempt_id!);
+      const returned=store.getTurn(store.getTask(child.id)!.delegationReturnTaskId!)!;
+      expect(returned.status).toBe("pending");
+      expect(returned.current_attempt_id).not.toBe(before.current_attempt_id);
+      expect(reportEnvelope(store,f.leaderSession.id,child.id).id).toBe(report.id);
+      expectNoSeqHole(store,f.leaderSession.id);
+    }), backend === "postgres" ? 20_000 : 5_000);
+    it("the return's offered input includes the shown canonical report once",async()=>withStore(backend,async store=>{
+      const f=fixture(store),child=await startDelegatedChild(store,f);
+      store.completeTask(child.id,{output:"Final details"});
+      const report=reportEnvelope(store,f.leaderSession.id,child.id);
+      const returnId=store.getTask(child.id)!.delegationReturnTaskId!;
+      const returned=store.getTurn(returnId)!;
+      const first=store.claimTask(f.leaderRuntime.id)!;
+      if(first.id!==returned.current_attempt_id){store.startTask(first.id);store.completeTask(first.id,{output:"Parent status reviewed"});}
+      const offered=first.id===returned.current_attempt_id?first:store.claimTask(f.leaderRuntime.id)!;
+      expect(offered.id).toBe(returned.current_attempt_id!);
+      const projection=store.buildTaskSessionProjection(returned.current_attempt_id!);
+      expect(JSON.stringify(projection)).toContain(report.id);
+      expect(store.listMessages(f.leaderSession.id).filter(row=>row.id===report.id)).toHaveLength(1);
+    }), backend === "postgres" ? 20_000 : 5_000);
   });
 }
 
@@ -478,9 +350,9 @@ describe("MUL-402 session event kinds all reach the conversation log", () => {
     // way in and has to be reviewed here.
     expect(forwarders.sort()).toEqual(["issue-sessions-repo.ts", "store.ts", "store.ts"]);
     // Guards against a scan that silently finds nothing.
-    expect(kinds.get("delegation_report")).toEqual([expect.stringMatching(/^store\/repos\/tasks-repo\.ts:\d+$/)]);
-    expect([...kinds.keys()].sort()).toEqual(expect.arrayContaining(["message", "system", "task_assigned",
-      "task_completed", "task_failed", "task_cancelled", "result_published", "session_created", "task_steer",
+    expect(kinds.has("delegation_report")).toBe(false);
+    expect([...kinds.keys()].sort()).toEqual(expect.arrayContaining(["system", "task_assigned",
+      "task_completed", "task_failed", "task_cancelled", "result_published", "session_created",
       "message_edited", "message_deleted"]));
 
     const unmapped = [...kinds.keys()].filter((kind) => conversationLogKindForSessionEvent(kind) == null).sort();

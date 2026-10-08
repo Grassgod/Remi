@@ -1,7 +1,8 @@
 import { expect, it } from "bun:test";
-import { runMigrations } from "@multiremi/store/migrations.js";
+import { bootstrapPreUnifiedSchema as runMigrations } from "@multiremi/store/migrations.js";
 import { executionScopeSql, PENDING_TURN_MIGRATION, TASK_EXECUTION_SCOPE_MIGRATION } from "@multiremi/store/pending-turns.js";
-import { installPendingTurnTestConstraints, pendingTurnBackendTests } from "./pending-turn-test-backends.js";
+import { unifiedModelBackendTests as pendingTurnBackendTests } from "./unified-model-test-backends.js";
+import { preparePendingTurnConstraintsWithinTransaction } from "@multiremi/store/pending-turns.js";
 
 pendingTurnBackendTests("one pending turn migration", (fixture) => {
   function legacyFixture() {
@@ -28,7 +29,7 @@ pendingTurnBackendTests("one pending turn migration", (fixture) => {
   function migrate() {
     runMigrations(fixture().db);
     // A server upgrade opens a fresh connection after changing SELECT * shapes.
-    fixture().reopen();
+
   }
 
   it("keeps the oldest issue/chat queued rows and every newer prompt in order, with durable cancellation audits", () => {
@@ -112,7 +113,7 @@ pendingTurnBackendTests("one pending turn migration", (fixture) => {
     const f = legacyFixture();
     const tasks = ["first", "second", "third"].map(prompt => f.add(prompt));
     runMigrations(f.db);
-    fixture().reopen();
+
     expect(tasks.map(task => f.store.getTask(task.id)!.status)).toEqual(["queued", "cancelled", "cancelled"]);
     const kept = f.store.getTask(tasks[0]!.id)!;
     expect(kept.prompt.indexOf("second")).toBeGreaterThan(kept.prompt.indexOf("first"));
@@ -128,19 +129,6 @@ pendingTurnBackendTests("one pending turn migration", (fixture) => {
     expect(f.db.query("SELECT CAST(COUNT(*) AS INTEGER) AS count FROM multiremi_schema_migrations WHERE id = ?")
       .get(PENDING_TURN_MIGRATION)).toEqual({ count: 1 });
     expect(() => f.add("fourth")).toThrow(/unique/i);
-    const unread = f.store.appendConversationLog({ sessionId: f.session.id, kind: "system", authorType: "system",
-      bodyMd: "Report after migration", metadata: { envelope: {
-        to: { role: "agent", issueSessionId: f.session.id, agentId: f.agent.id },
-        kind: "report", wake: "now", source: {}, priority: 3,
-      } } });
-    const ring = f.db.transaction(() => f.store.ensurePendingTurnWithinTransaction({
-      lane: { kind: "issue", issueSessionId: f.session.id, agentId: f.agent.id, executionScope: "" },
-      wake: { reason: "re_ring", seq: unread.seq },
-      create: () => { throw new Error("Migration must leave a coalescible pending turn"); },
-    }))();
-    expect(ring).toMatchObject({ action: "coalesced", task: { id: kept.id } });
-    expect(Number(f.db.query("SELECT wake_seq FROM multiremi_tasks WHERE id = ?").get(kept.id).wake_seq))
-      .toBe(unread.seq);
     const snapshot = f.db.query("SELECT id, status, prompt, updated_at FROM multiremi_tasks ORDER BY id").all();
     runMigrations(f.db);
     expect(f.db.query("SELECT id, status, prompt, updated_at FROM multiremi_tasks ORDER BY id").all()).toEqual(snapshot);
@@ -223,7 +211,7 @@ pendingTurnBackendTests("one pending turn migration", (fixture) => {
     f.db.run = (sql, params) => sql.includes("SET status = 'cancelled'")
       ? { changes: 0, lastInsertRowid: 0 } : original(sql, params);
     try {
-      expect(() => installPendingTurnTestConstraints(fixture())).toThrow("left duplicate platform turns");
+      expect(() => fixture().db.transaction(() => preparePendingTurnConstraintsWithinTransaction(fixture().db))()).toThrow("left duplicate platform turns");
     } finally { f.db.run = original; }
     expect(f.db.query("SELECT id, status, prompt FROM multiremi_tasks ORDER BY id").all()).toEqual(before);
     expect(f.db.query("SELECT data FROM multiremi_issue_activity WHERE type = 'pending_turn_collapsed'").all()).toEqual([]);

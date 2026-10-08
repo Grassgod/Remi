@@ -98,7 +98,7 @@ describe("session agent stream row", () => {
     expect(getTaskTrace).not.toHaveBeenCalled();
     fireEvent.click(row.closest("button")!);
 
-    await waitFor(() => expect(getTaskTrace).toHaveBeenCalledWith("tsk_abc123", 0, 200));
+    await waitFor(() => expect(getTaskTrace).toHaveBeenCalledWith("tsk_abc123", 0, 200, undefined));
     expect(await screen.findByText("61 tool calls")).toBeInTheDocument();
   });
 

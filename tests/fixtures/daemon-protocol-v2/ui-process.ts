@@ -1,4 +1,4 @@
-import type { Database } from "bun:sqlite";
+import { PostgresSyncDatabase } from "@multiremi/store/db/postgres.js";
 import { createInterface } from "node:readline";
 import { startMultiremiServer } from "@multiremi/api.js";
 import { MultiremiStore } from "@multiremi/store.js";
@@ -9,8 +9,9 @@ import { createRealtimeFanout } from "../../../packages/server/src/api/realtime-
 const [databasePath, runtimePort, peerSecret] = process.argv.slice(2);
 if (!databasePath || !runtimePort || !peerSecret) throw new Error("ui fixture arguments missing");
 
-const db = openSqliteDatabase(databasePath);
-db.exec("PRAGMA busy_timeout = 5000");
+const db = databasePath.startsWith("postgres:") || databasePath.startsWith("postgresql:")
+  ? new PostgresSyncDatabase(databasePath) : openSqliteDatabase(databasePath);
+if (db.dialect === "sqlite") db.exec("PRAGMA busy_timeout = 5000");
 const store = new MultiremiStore(db);
 const peer = createPeerChannel({
   url: `http://127.0.0.1:${runtimePort}`,
@@ -57,7 +58,7 @@ for await (const line of createInterface({ input: process.stdin })) {
         payload: { message: "Continue?", questions: [{ question: "Continue?", options: [{ label: "Yes" }] }] } });
       reply({ op: command.op, requestId: request.id });
     } else if (command.op === "respond_human_request") {
-      const request = store.respondTaskHumanRequest(command.requestId!, { response: { answer: "Yes" } });
+      const request = store.respondTaskHumanRequest(command.requestId!, { response: { answers: { "Continue?": "Yes" } } });
       reply({ op: command.op, requestId: request?.id });
     } else if (command.op === "expire_human_request") {
       const request = store.expireTaskHumanRequest(command.requestId!, command.status ?? "timeout");

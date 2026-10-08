@@ -80,7 +80,7 @@ export interface ReportRoundSummary extends Partial<RenderMeasurement> {
   blockedWrites: number;
   /** Writes the allow-list fulfilled inside the browser (see lib/stub-writes.ts). */
   stubbedWrites: number;
-  /** Milliseconds from the click to the `?issue=` commit; a correctness check. */
+  /** Milliseconds from the click to the `?item=` commit; a correctness check. */
   urlCommitMs: number | null;
   /** Milliseconds from landing on the entry page to finding the target row. */
   entryReadyMs: number | null;
@@ -90,7 +90,7 @@ export interface ReportRoundSummary extends Partial<RenderMeasurement> {
   entrySettled: boolean | null;
   /** True when the browser's first inbox page had the target injected. */
   inboxInjected: boolean;
-  /** GET `/api/inbox/page` responses served before the first stubbed write. */
+  /** GET `/api/inbox` responses served before the first stubbed write. */
   inboxPageRequestsBeforeStub: number | null;
   /**
    * Text of the row the warm click targeted. The acceptance check is "the clicked
@@ -140,7 +140,7 @@ export interface ReportScenario {
   /** Deep-link bookkeeping: which notification/issue was measured, and where. */
   inboxItemId?: string | null;
   issueHasRunningTask?: boolean;
-  /** Position in the `/api/inbox/page` response, for comparison with the DOM row. */
+  /** Position in the `/api/inbox` response, for comparison with the DOM row. */
   inboxApiIndex?: number | null;
   /** The DOM row the warm click must use, from the page's grouping functions. */
   inboxDomRowIndex?: number | null;
@@ -394,7 +394,7 @@ export function buildMarkdown(report: {
       lines.push(`| ${write.page} | ${write.method} | \`${write.path}\` | ${write.attempts} |`);
     }
     lines.push("");
-    lines.push("> 仅 `POST /api/inbox/:id/read`；响应在浏览器内生成，服务器仍为零写入。");
+    lines.push("> 仅 `POST /api/inbox/read`；响应在浏览器内生成，服务器仍为零写入。");
     lines.push("");
   }
   if (report.compare) {

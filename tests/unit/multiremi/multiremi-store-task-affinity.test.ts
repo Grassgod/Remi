@@ -1,11 +1,11 @@
+import { runTurnExecutionMutation } from "@multiremi/store/turn-execution-records.js";
 // Store-level task placement over time: local_directory pins, resume-safe vs
 // resume-unsafe retries, stale-dispatch recovery, and what happens to an agent's
 // queued tasks when its owner, workspace, or engine changes.
 import { afterEach, describe, expect, it } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { MultiremiStore, daemonRuntimeId } from "@multiremi/store.js";
-import { createStore, db, resetMultiremiTestEnv } from "./helpers.js";
-import { prepareFeishuIssueTopic } from "../../fixtures/multiremi-feishu-topic.js";
+import { createLocalStore as createStore, db, resetMultiremiTestEnv } from "./helpers.js";
 
 afterEach(resetMultiremiTestEnv);
 
@@ -18,15 +18,19 @@ describe("Multiremi store — local_directory affinity, retries, and agent re-ho
     const first = store.sendChatMessage(chat.id, { body: "first" });
     expect(store.claimTask(runtime.id)?.id).toBe(first.task.id);
     store.startTask(first.task.id);
+    const input = store.getDaemonTurnBridge().offerInput(store.getTaskWithAgent(first.task.id)!);
+    expect(store.getDaemonTurnBridge().rpc("turn.input", { ...input, message_ids: input.input_messages.map(m => m.id) },
+      { runtimeId: runtime.id, daemonId: runtime.daemonId!, workspaceId: "local" })).toMatchObject({ ok: true });
     store.completeTask(first.task.id, { output: "answer", sessionId: "sess_projection" });
     return { store, runtime, agent, chat };
   }
 
   it("uses the inherited provider lineage as the Chat delta decision", () => {
-    const { store, chat } = warmChat();
+    const { store, runtime, chat } = warmChat();
     const followUp = store.sendChatMessage(chat.id, { body: "again" }).task;
 
     expect(followUp.sessionId).toBe("sess_projection");
+    expect(store.claimTask(runtime.id)?.id).toBe(followUp.id);
     expect(store.buildTaskSessionProjection(followUp.id)?.mode).toBe("delta");
   });
 
@@ -125,29 +129,26 @@ describe("Multiremi store — local_directory affinity, retries, and agent re-ho
     expect(store.buildTaskSessionProjection(followUp.id)?.mode).toBe("bootstrap");
   });
 
-  it("prefers local_directory affinity over chat session affinity", () => {
+  it("prefers local_directory affinity over an Issue conversation's provider session", () => {
     const store = createStore();
     const dirRuntime = store.registerRuntime({ id: "rt_pref_dir", name: "dir", provider: "codex", daemonId: "daemon-pref-dir" });
     const sessRuntime = store.registerRuntime({ id: "rt_pref_sess", name: "sess", provider: "codex", daemonId: "daemon-pref-sess" });
     const agent = store.createAgent({ name: "Pref", provider: "codex" });
-    // Establish a topic session whose provider session lives on sessRuntime.
     const issue = store.createIssue({ title: "dir", workspaceId: "local" });
-    const session = prepareFeishuIssueTopic(store, { runtimeId: sessRuntime.id, agentId: agent.id, issueId: issue.id });
-    const warmup = store.createTask({ agentId: agent.id, chatSessionId: session.id, issueId: issue.id, prompt: "hi" });
+    const warmup = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "hi" });
     expect(store.claimTask(sessRuntime.id)?.id).toBe(warmup.id);
+    store.buildTaskSessionProjection(warmup.id);
     store.startTask(warmup.id);
     store.completeTask(warmup.id, { output: "ok", sessionId: "sess_pref", workDir: "/tmp/pref" });
-
-    // A follow-up that is ALSO a directory-project issue must go to the
-    // directory machine, not the session machine, and must not inherit the
-    // foreign-machine session.
-    const project = store.createProject({
-      title: "P",
-      workspaceId: "local",
-      resources: [{ resourceType: "local_directory", resourceRef: { local_path: "/abs/p", daemon_id: "daemon-pref-dir" } }],
+    expect(store.getSessionAgentLane(warmup.issueSessionId!, agent.id)).toMatchObject({
+      providerSessionId: "sess_pref", runtimeId: sessRuntime.id,
     });
+
+    const project = store.createProject({ title: "P", workspaceId: "local", resources: [{
+      resourceType: "local_directory", resourceRef: { local_path: "/abs/p", daemon_id: "daemon-pref-dir" },
+    }] });
     store.updateIssue(issue.id, { projectId: project.id });
-    const task = store.createTask({ agentId: agent.id, chatSessionId: session.id, issueId: issue.id, prompt: "work" });
+    const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "work" });
     expect(task.runtimeId).toBe(dirRuntime.id);
     expect(task.sessionId).toBeNull();
     expect(store.claimTask(dirRuntime.id)?.id).toBe(task.id);
@@ -204,7 +205,7 @@ describe("Multiremi store — local_directory affinity, retries, and agent re-ho
     const issue = store.createIssue({ title: "dir", workspaceId: "local", projectId: project.id });
     const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "work" });
     expect(store.claimTask(dirRuntime.id)?.id).toBe(task.id);
-    db!.run("UPDATE multiremi_tasks SET dispatched_at = ? WHERE id = ?", ["2020-01-01T00:00:00.000Z", task.id]);
+    runTurnExecutionMutation(db!, "UPDATE multiremi_turn_execution_records SET dispatched_at = ? WHERE id = ?", ["2020-01-01T00:00:00.000Z", task.id]);
     store.archiveAgent(agent.id);
     // Stale recovery keeps the directory pin (archived_at parks the claim), so
     // a restore lands it back on the directory's machine, not elsewhere.
@@ -220,7 +221,7 @@ describe("Multiremi store — local_directory affinity, retries, and agent re-ho
     const agent = store.createAgent({ name: "Archiving", provider: "codex" });
     const task = store.createTask({ agentId: agent.id, prompt: "work" });
     expect(store.claimTask(runtime.id)?.id).toBe(task.id);
-    db!.run("UPDATE multiremi_tasks SET dispatched_at = ? WHERE id = ?", ["2020-01-01T00:00:00.000Z", task.id]);
+    runTurnExecutionMutation(db!, "UPDATE multiremi_turn_execution_records SET dispatched_at = ? WHERE id = ?", ["2020-01-01T00:00:00.000Z", task.id]);
     store.archiveAgent(agent.id);
     // Stale recovery must mirror the normal claim's archived-agent exclusion.
     expect(store.claimTask(runtime.id)).toBeNull();
@@ -241,7 +242,7 @@ describe("Multiremi store — local_directory affinity, retries, and agent re-ho
     const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "work" });
     expect(task.runtimeId).toBe(dirRuntime.id);
     expect(store.claimTask(dirRuntime.id)?.id).toBe(task.id);
-    db!.run("UPDATE multiremi_tasks SET dispatched_at = ? WHERE id = ?", ["2020-01-01T00:00:00.000Z", task.id]);
+    runTurnExecutionMutation(db!, "UPDATE multiremi_turn_execution_records SET dispatched_at = ? WHERE id = ?", ["2020-01-01T00:00:00.000Z", task.id]);
     // Owner change makes dirRuntime ineligible; stale recovery must re-pin to
     // the directory's daemon (never re-pool onto a machine without the dir).
     store.updateAgent(agent.id, { ownerId: "someone" });
@@ -297,7 +298,7 @@ describe("Multiremi store — local_directory affinity, retries, and agent re-ho
     // provider session: no runtime stamp AND no engine snapshot. Its engine
     // can't be proven to match the agent, so the resume must fail closed rather
     // than let the `!runtimeId` branch treat it as resumable.
-    db!.run("UPDATE multiremi_tasks SET runtime_id = NULL, provider = NULL, session_id = ? WHERE id = ?", ["stale-session", task.id]);
+    runTurnExecutionMutation(db!, "UPDATE multiremi_turn_execution_records SET runtime_id = NULL, provider = NULL, session_id = ? WHERE id = ?", ["stale-session", task.id]);
     store.failTask(task.id, { error: "offline", failureReason: "runtime_offline" });
     const retry = store.listTasks().find((t) => t.parentTaskId === task.id)!;
     expect(retry.runtimeId).toBeNull();
@@ -316,7 +317,7 @@ describe("Multiremi store — local_directory affinity, retries, and agent re-ho
     // lost its runtime pin. We no longer know which machine holds the session,
     // so the retry must NOT stay unpinned-yet-resuming (any pool machine would
     // then resume a foreign machine's session) — it fails closed and re-pools.
-    db!.run("UPDATE multiremi_tasks SET runtime_id = NULL, session_id = ?, work_dir = ? WHERE id = ?", ["orphan-session", "/tmp/orphan", task.id]);
+    runTurnExecutionMutation(db!, "UPDATE multiremi_turn_execution_records SET runtime_id = NULL, session_id = ?, work_dir = ? WHERE id = ?", ["orphan-session", "/tmp/orphan", task.id]);
     store.failTask(task.id, { error: "offline", failureReason: "runtime_offline" });
     const retry = store.listTasks().find((t) => t.parentTaskId === task.id)!;
     expect(retry.runtimeId).toBeNull();
@@ -339,7 +340,7 @@ describe("Multiremi store — local_directory affinity, retries, and agent re-ho
     expect(store.claimTask(dirRuntime.id)?.id).toBe(task.id);
     store.startTask(task.id);
     // The run produced a provider session on the directory machine.
-    db!.run("UPDATE multiremi_tasks SET session_id = ? WHERE id = ?", ["dir-session", task.id]);
+    runTurnExecutionMutation(db!, "UPDATE multiremi_turn_execution_records SET session_id = ? WHERE id = ?", ["dir-session", task.id]);
     store.failTask(task.id, { error: "offline", failureReason: "runtime_offline" });
     const retry = store.listTasks().find((t) => t.parentTaskId === task.id)!;
     // Resume-safe (same machine still eligible, engine matches) → keep the pin
@@ -388,7 +389,7 @@ describe("Multiremi store — local_directory affinity, retries, and agent re-ho
     const task = store.createTask({ agentId: agent.id, prompt: "work" });
     expect(store.claimTask(runtime.id)?.id).toBe(task.id);
     // The dispatch response was lost (never started) and the recovery window passed.
-    db!.run("UPDATE multiremi_tasks SET dispatched_at = ? WHERE id = ?", ["2020-01-01T00:00:00.000Z", task.id]);
+    runTurnExecutionMutation(db!, "UPDATE multiremi_turn_execution_records SET dispatched_at = ? WHERE id = ?", ["2020-01-01T00:00:00.000Z", task.id]);
     // Meanwhile the agent changed owner, so this runtime may no longer run it.
     store.updateAgent(agent.id, { ownerId: "bob" });
     // The stale re-claim must NOT hand the task back to the now-ineligible runtime.

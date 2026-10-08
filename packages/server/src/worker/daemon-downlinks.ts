@@ -1,39 +1,62 @@
-import type { MultiremiTaskHumanRequest, MultiremiTaskSteerMessage, MultiremiTaskStatus } from "@multiremi/contracts/types.js";
+import type { MultiremiTaskSteerMessage, MultiremiTaskStatus } from "@multiremi/contracts/types.js";
 import { DaemonProtocolClient, DaemonProtocolRpcError } from "./daemon-protocol-client.js";
 import type { TaskSteerSource } from "./steer.js";
+import type { DaemonTurnInput } from "@multiremi/contracts/daemon-protocol.js";
+import type { UnifiedMessage } from "@multiremi/contracts/unified-model.js";
+import { TRIGGER_MESSAGE_INLINE_CHARS, unreadRangeHint } from "@multiremi/contracts/session-input.js";
 
 type Terminal = Extract<MultiremiTaskStatus, "completed" | "failed" | "cancelled">;
 const MAX_SETTLED_REQUESTS = 1024;
 
 /** Per-runtime push inbox. The executing task owns cancellation and steer consumption. */
 export class DaemonTaskDownlinks implements TaskSteerSource {
+  private readonly turns = new Map<string, { turnId: string; inputToSeq: number; wrapUpAt: string | null }>();
+  private readonly inputSeqs = new Map<string, number>();
+  private readonly decisions = new Map<string, UnifiedMessage>();
+  private readonly decisionAttempts = new Map<string, string>();
+  private readonly decisionReplies = new Map<string, UnifiedMessage>();
+  private readonly decisionCreates = new Set<string>();
+  private readonly inputReplyTo = new Map<string, string>();
+  private readonly confirmedDecisionInputs = new Map<string, Set<string>>();
+  private readonly decisionRangeHints = new Set<string>();
+  private readonly decisionListeners = new Map<string, Set<(message: UnifiedMessage) => void>>();
   private readonly steers = new Map<string, Map<string, MultiremiTaskSteerMessage>>();
   private readonly steerListeners = new Map<string, Set<(message: MultiremiTaskSteerMessage) => void>>();
-  private readonly settled = new Map<string, MultiremiTaskHumanRequest>();
-  private readonly humanListeners = new Map<string, Set<(request: MultiremiTaskHumanRequest) => void>>();
   private readonly cancelListeners = new Map<string, (status: Terminal) => void>();
   private readonly connectionWaiters = new Set<(error?: Error) => void>();
 
   constructor(private readonly client: DaemonProtocolClient, private readonly runtimeId: () => string | undefined) {
-    client.registerFrameHandler("task.steer", frame => {
+    client.registerFrameHandler("turn.message", frame => {
       if (!frame.rt || frame.rt !== runtimeId()) return;
-      const message = frame.payload.steer as MultiremiTaskSteerMessage | undefined;
-      if (!message?.id || typeof frame.payload.task_id !== "string" || message.taskId !== frame.payload.task_id) return;
-      let messages = this.steers.get(message.taskId);
-      if (!messages) { messages = new Map(); this.steers.set(message.taskId, messages); }
-      if (messages.has(message.id)) return;
-      messages.set(message.id, message);
-      for (const listener of this.steerListeners.get(message.taskId) ?? []) listener(message);
+      const attemptId = frame.payload.attempt_id;
+      if (typeof attemptId !== "string") return;
+      const turn = this.turns.get(attemptId);
+      const message = frame.payload.message as UnifiedMessage | undefined;
+      if (!turn || turn.turnId !== frame.payload.turn_id || !message?.id || message.kind !== "message"
+        || typeof message.body_md !== "string" || !Number.isSafeInteger(message.seq) || message.seq <= turn.inputToSeq) return;
+      if (message.reply_to_id) {
+        this.inputReplyTo.set(`${attemptId}:${message.id}`, message.reply_to_id);
+        this.decisionReplies.set(message.reply_to_id, message);
+        for (const listener of this.decisionListeners.get(message.reply_to_id) ?? []) listener(message);
+        while (this.decisionReplies.size > MAX_SETTLED_REQUESTS) this.decisionReplies.delete(this.decisionReplies.keys().next().value!);
+      }
+      this.inputSeqs.set(`${attemptId}:${message.id}`, message.seq);
+      this.queueInput(attemptId, { id: message.id, taskId: attemptId, kind: "steer", content: message.body_md,
+        authorType: message.sender_type === "member" ? "user" : message.sender_type === "agent" ? "agent" : "system",
+        authorId: message.sender_id, createdAt: message.created_at, consumedAt: null,
+        attachments: Array.isArray(frame.payload.attachments) ? frame.payload.attachments : [] },
+      !(message.reply_to_id && (this.decisionCreates.has(attemptId) || this.decisionAttempts.get(message.reply_to_id) === attemptId)));
     });
-    client.registerFrameHandler("task.human_request.settled", frame => {
-      if (!frame.rt || frame.rt !== runtimeId()) return;
-      const request = frame.payload.request as MultiremiTaskHumanRequest | undefined;
-      if (!request?.id || request.taskId !== frame.payload.task_id || request.status === "pending") return;
-      if (this.settled.has(request.id)) return;
-      this.settled.set(request.id, request);
-      for (const listener of this.humanListeners.get(request.id) ?? []) listener(request);
-      // A bot host receives other runtimes' requests and never calls release(taskId).
-      while (this.settled.size > MAX_SETTLED_REQUESTS) this.settled.delete(this.settled.keys().next().value!);
+    client.registerFrameHandler("turn.wrap_up", frame => {
+      if (frame.rt !== runtimeId() || typeof frame.payload.attempt_id !== "string"
+        || typeof frame.payload.requested_at !== "string") return;
+      const attemptId = frame.payload.attempt_id;
+      const turn = this.turns.get(attemptId);
+      if (!turn || turn.turnId !== frame.payload.turn_id || turn.wrapUpAt === frame.payload.requested_at) return;
+      turn.wrapUpAt = frame.payload.requested_at;
+      this.queueInput(attemptId, { id: `wrap_up:${frame.payload.requested_at}`, taskId: attemptId,
+        kind: "force_answer", content: "", authorType: "system", authorId: null,
+        createdAt: frame.payload.requested_at, consumedAt: null });
     });
     client.registerFrameHandler("task.cancelled", frame => {
       if (frame.rt !== runtimeId() || typeof frame.payload.task_id !== "string") return;
@@ -47,6 +70,32 @@ export class DaemonTaskDownlinks implements TaskSteerSource {
     });
   }
 
+  bindTurn(input: DaemonTurnInput): void {
+    this.turns.set(input.attempt_id, { turnId: input.turn_id, inputToSeq: input.input_to_seq, wrapUpAt: null });
+    // Offer inputs have already reached this provider. A decision receipt must
+    // include them when it advances past the original, still unacknowledged range.
+    const delivered = new Set<string>();
+    for (const message of input.input_messages) {
+      this.inputSeqs.set(`${input.attempt_id}:${message.id}`, message.seq);
+      delivered.add(message.id);
+    }
+    this.confirmedDecisionInputs.set(input.attempt_id, delivered);
+  }
+
+  turnInput(attemptId: string): { turn_id: string; attempt_id: string; input_to_seq: number } {
+    const turn = this.turns.get(attemptId);
+    if (!turn) throw new Error("attempt has no bound turn");
+    return { turn_id: turn.turnId, attempt_id: attemptId, input_to_seq: turn.inputToSeq };
+  }
+
+  private queueInput(attemptId: string, message: MultiremiTaskSteerMessage, notify = true): void {
+    let messages = this.steers.get(attemptId);
+    if (!messages) { messages = new Map(); this.steers.set(attemptId, messages); }
+    if (messages.has(message.id)) return;
+    messages.set(message.id, message);
+    if (notify) for (const listener of this.steerListeners.get(attemptId) ?? []) listener(message);
+  }
+
   connectionChanged(): void {
     const state = this.client.connectionState();
     if (state === "connected") for (const finish of this.connectionWaiters) finish();
@@ -56,7 +105,12 @@ export class DaemonTaskDownlinks implements TaskSteerSource {
   }
 
   pendingTaskSteerMessages(taskId: string): MultiremiTaskSteerMessage[] {
-    return [...(this.steers.get(taskId)?.values() ?? [])];
+    return [...(this.steers.get(taskId)?.values() ?? [])].filter(message => {
+      const replyTo = this.inputReplyTo.get(`${taskId}:${message.id}`);
+      return !replyTo || (!this.decisionCreates.has(taskId) && this.decisionAttempts.get(replyTo) !== taskId);
+    }).sort((a, b) =>
+      (this.inputSeqs.get(`${taskId}:${a.id}`) ?? Number.MAX_SAFE_INTEGER)
+      - (this.inputSeqs.get(`${taskId}:${b.id}`) ?? Number.MAX_SAFE_INTEGER));
   }
 
   subscribeTaskSteerMessages(taskId: string, listener: (message: MultiremiTaskSteerMessage) => void): () => void {
@@ -73,13 +127,123 @@ export class DaemonTaskDownlinks implements TaskSteerSource {
 
   release(taskId: string): void {
     this.steers.delete(taskId);
-    for (const [id, request] of this.settled) if (request.taskId === taskId) this.settled.delete(id);
+    this.turns.delete(taskId);
+    this.decisionCreates.delete(taskId);
+    this.confirmedDecisionInputs.delete(taskId);
+    for (const [id, attemptId] of this.decisionAttempts) {
+      if (attemptId !== taskId) continue;
+      this.decisionAttempts.delete(id); this.decisions.delete(id); this.decisionReplies.delete(id);
+    }
+    for (const key of this.inputSeqs.keys()) if (key.startsWith(`${taskId}:`)) this.inputSeqs.delete(key);
+    for (const key of this.inputReplyTo.keys()) if (key.startsWith(`${taskId}:`)) this.inputReplyTo.delete(key);
   }
 
   async consumeTaskSteerMessages(taskId: string, ids: string[]): Promise<void> {
+    // A callback consumes only its answer. Its projection may also be the only
+    // carrier of the range-read instruction for ordinary unread messages.
+    for (const pending of this.steers.get(taskId)?.values() ?? []) {
+      if (this.decisionRangeHints.has(pending.id) && !ids.includes(pending.id)) throw new Error("unconfirmed turn input gap");
+    }
+    ids = [...new Set([...ids, ...(this.confirmedDecisionInputs.get(taskId) ?? [])])];
     if (!ids.length) return;
-    await this.rpc("steer.consume", { task_id: taskId, steer_ids: ids });
-    for (const id of ids) this.steers.get(taskId)?.delete(id);
+    const input = this.turnInput(taskId);
+    const seqs = ids.map(id => this.inputSeqs.get(`${taskId}:${id}`)).filter((seq): seq is number => seq !== undefined);
+    // Wrap-up is a control, so it never advances the conversation cursor.
+    if (seqs.length) {
+      const to = Math.max(input.input_to_seq, ...seqs);
+      const confirmed = new Set(ids);
+      for (const pending of this.steers.get(taskId)?.values() ?? []) {
+        const seq = this.inputSeqs.get(`${taskId}:${pending.id}`);
+        if (seq !== undefined && seq <= to && !confirmed.has(pending.id)) throw new Error("unconfirmed turn input gap");
+      }
+      const messageIds = ids.filter(id => this.inputSeqs.has(`${taskId}:${id}`))
+        .sort((a, b) => this.inputSeqs.get(`${taskId}:${a}`)! - this.inputSeqs.get(`${taskId}:${b}`)!);
+      await this.rpc("turn.input", { ...input, input_to_seq: to, message_ids: messageIds });
+      const current = this.turns.get(taskId);
+      if (current) current.inputToSeq = Math.max(current.inputToSeq, to);
+    }
+    for (const id of ids) {
+      this.steers.get(taskId)?.delete(id);
+      this.confirmedDecisionInputs.get(taskId)?.delete(id);
+      this.decisionRangeHints.delete(id);
+    }
+  }
+
+  beginDecision(attemptId: string): void { this.decisionCreates.add(attemptId); }
+
+  finishDecision(attemptId: string): void {
+    this.decisionCreates.delete(attemptId);
+    for (const message of this.pendingTaskSteerMessages(attemptId)) {
+      if (this.inputReplyTo.has(`${attemptId}:${message.id}`) || this.decisionRangeHints.has(message.id)) {
+        for (const listener of this.steerListeners.get(attemptId) ?? []) listener(message);
+      }
+    }
+  }
+
+  confirmDecisionReply(attemptId: string, reply: UnifiedMessage): void {
+    if (!reply.reply_to_id || this.decisionAttempts.get(reply.reply_to_id) !== attemptId) throw new Error("foreign decision reply");
+    // The question/permission callback delivers this input to the provider. Confirm it
+    // with the next contiguous receipt, without a second prompt/soft interrupt.
+    this.inputSeqs.set(`${attemptId}:${reply.id}`, reply.seq);
+    let ids = this.confirmedDecisionInputs.get(attemptId);
+    if (!ids) this.confirmedDecisionInputs.set(attemptId, ids = new Set());
+    ids.add(reply.id);
+    const turn = this.turns.get(attemptId)!;
+    const projection = this.steers.get(attemptId)?.get(reply.id)?.content;
+    let hint: Record<string, unknown> | null = null;
+    try {
+      const value = JSON.parse(projection?.split("\n")[0] ?? "null");
+      if (value?.type === "unread_range" && value.session_id === reply.session_id
+        && Number.isSafeInteger(value.to_seq)) hint = value;
+    } catch { /* Expiry races can return an original reply before its WS projection. */ }
+    const to = Math.max(reply.seq, Number(hint?.to_seq ?? reply.seq));
+    const known = [...this.inputSeqs.entries()].filter(([key, seq]) => key.startsWith(`${attemptId}:`)
+      && seq > turn.inputToSeq && seq <= to).map(([, seq]) => seq).sort((a, b) => a - b);
+    let next = turn.inputToSeq + 1;
+    for (const seq of new Set(known)) { if (seq !== next) break; next++; }
+    if (next <= to || reply.body_md.length > TRIGGER_MESSAGE_INLINE_CHARS) {
+      const id = `decision_range:${reply.id}`;
+      this.decisionRangeHints.add(id);
+      this.queueInput(attemptId, { id, taskId: attemptId, kind: "steer",
+        content: JSON.stringify(hint ?? { type: "unread_range", session_id: reply.session_id,
+          from_seq: turn.inputToSeq, to_seq: to,
+          instruction: unreadRangeHint(reply.session_id, turn.inputToSeq, to, to - turn.inputToSeq)
+            .replaceAll("remi session log get", "remi message list") }),
+        authorType: "system", authorId: null, createdAt: reply.created_at, consumedAt: null }, false);
+    }
+  }
+
+  registerDecision(message: UnifiedMessage, attemptId: string): void {
+    this.decisions.set(message.id, message); this.decisionAttempts.set(message.id, attemptId);
+    // The daemon supplied this outgoing decision's body and received its stored
+    // message in the RPC response. Include that known input in the contiguous
+    // receipt for its answer; snapshots only push incoming now messages.
+    const turn = this.turns.get(attemptId);
+    if (message.sender_type === "agent" && turn && message.seq > turn.inputToSeq) {
+      this.inputSeqs.set(`${attemptId}:${message.id}`, message.seq);
+      let ids = this.confirmedDecisionInputs.get(attemptId);
+      if (!ids) this.confirmedDecisionInputs.set(attemptId, ids = new Set());
+      ids.add(message.id);
+    }
+  }
+
+  waitForDecisionReply(messageId: string, signal: AbortSignal, timeoutMs: number): Promise<UnifiedMessage | null> {
+    const reply = this.decisionReplies.get(messageId);
+    if (reply || signal.aborted) return Promise.resolve(reply ?? null);
+    return new Promise(resolve => {
+      const listeners = this.decisionListeners.get(messageId) ?? new Set();
+      this.decisionListeners.set(messageId, listeners);
+      const finish = (message: UnifiedMessage | null) => {
+        clearTimeout(timer); listeners.delete(onReply); signal.removeEventListener("abort", onAbort);
+        if (!listeners.size) this.decisionListeners.delete(messageId);
+        resolve(message);
+      };
+      const onReply = (message: UnifiedMessage) => finish(message);
+      const onAbort = () => finish(null);
+      listeners.add(onReply);
+      const timer = setTimeout(onAbort, Math.max(0, timeoutMs));
+      signal.addEventListener("abort", onAbort, { once: true });
+    });
   }
 
   waitForSteer(taskId: string, timeoutMs: number, signal?: AbortSignal): Promise<MultiremiTaskSteerMessage[]> {
@@ -93,25 +257,6 @@ export class DaemonTaskDownlinks implements TaskSteerSource {
       const unsubscribe = this.subscribeTaskSteerMessages(taskId, finish);
       const timer = setTimeout(finish, Math.max(0, timeoutMs));
       signal?.addEventListener("abort", finish, { once: true });
-    });
-  }
-
-  waitForHumanDecision(requestId: string, signal: AbortSignal, timeoutMs: number): Promise<MultiremiTaskHumanRequest | null> {
-    if (this.settled.has(requestId)) return Promise.resolve(this.settled.get(requestId)!);
-    if (signal.aborted) return Promise.resolve(null);
-    return new Promise(resolve => {
-      const listeners = this.humanListeners.get(requestId) ?? new Set();
-      this.humanListeners.set(requestId, listeners);
-      const finish = (request: MultiremiTaskHumanRequest | null) => {
-        clearTimeout(timer); listeners.delete(onSettled); signal.removeEventListener("abort", onAbort);
-        if (!listeners.size) this.humanListeners.delete(requestId);
-        resolve(request);
-      };
-      const onSettled = (request: MultiremiTaskHumanRequest) => finish(request);
-      const onAbort = () => finish(null);
-      listeners.add(onSettled);
-      const timer = setTimeout(onAbort, Math.max(0, timeoutMs));
-      signal.addEventListener("abort", onAbort, { once: true });
     });
   }
 
