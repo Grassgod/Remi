@@ -8,8 +8,10 @@ import { getMessage, sendMessageWithinTransaction } from './send-message.js';
 import { normalizeHumanResponse } from './human-response.js';
 import { assertQuestionCardToken, type QuestionCardCredential } from '../question-card-token.js';
 import { deriveIssueStatusWithinTransaction } from './issue-status.js';
+import { createHash } from 'node:crypto';
 
 type RouteStep = { handler: QuestionActor; issue_id: string | null; stage: QuestionStage };
+export type ChatQuestionResponsibilityFilter = { transportOnly?: boolean; memberId?: string; agentId?: string };
 interface QuestionRecord {
   version: 1;
   workspace_id: string;
@@ -46,9 +48,19 @@ export class Questions {
   private route(issueId: string | null, sourceAgent: string | null, humanRequired: boolean, sessionId?: string, workspaceId?: string): { steps: RouteStep[]; revision: string | null; reason: string | null } {
     if (!issueId) {
       const chat = sessionId ? this.ctx.chat().getChatSession(sessionId) : null;
-      const member = chat?.creatorId ? this.ctx.workspaces().getWorkspaceMemberByRef(chat.creatorId, chat.workspaceId) : null;
-      return member && !member.archivedAt && (!workspaceId || member.workspaceId === workspaceId) ? { steps: [{ handler: { type: 'member', id: member.id }, issue_id: null, stage: 'human' }], revision: null, reason: null }
-        : { steps: [], revision: null, reason: 'explicit_human_responsibility_required' };
+      const transport = !!chat && this.ctx.feishuBot().isFeishuTransportChatSession(chat.id);
+      const config = chat ? this.ctx.feishuBot().getFeishuBotConfig(chat.workspaceId) : null;
+      const ref = transport ? config?.responsibleMemberId : chat?.creatorId;
+      const member = ref && chat ? this.ctx.workspaces().getWorkspaceMemberByRef(ref, chat.workspaceId) : null;
+      const remi = config?.agentId ? this.ctx.agents().getAgent(config.agentId) : null;
+      const source = sourceAgent ? this.ctx.agents().getAgent(sourceAgent) : null;
+      const revision = createHash('sha256').update(JSON.stringify({ sessionId, workspaceId, chatWorkspace: chat?.workspaceId,
+        transport, ref: ref ?? null, member: member ? [member.id, member.workspaceId, member.archivedAt] : null,
+        source: source ? [source.id, source.workspaceId, source.archivedAt] : null,
+        remi: transport && remi ? [remi.id, remi.workspaceId, remi.archivedAt] : null })).digest('hex');
+      if (!chat || chat.workspaceId !== workspaceId) return { steps: [], revision, reason: 'source_workspace_changed' };
+      return member && !member.archivedAt && member.workspaceId === workspaceId ? { steps: [{ handler: { type: 'member', id: member.id }, issue_id: null, stage: 'human' }], revision, reason: null }
+        : { steps: [], revision, reason: 'explicit_human_responsibility_required' };
     }
     const responsibility = this.ctx.resolveIssueResponsibility(issueId);
     if (workspaceId && responsibility.workspaceId !== workspaceId) return { steps: [], revision: responsibility.revision, reason: 'source_workspace_changed' };
@@ -138,11 +150,15 @@ export class Questions {
     }
     return { type: sender.type, id: sender.id };
   }
-  private current(record: QuestionRecord, actor: QuestionActor, revision: number) {
+  private fresh(message: UnifiedMessage, record: QuestionRecord) {
+    if (this.route(record.source_issue_id, message.sender_id, record.human_required, message.session_id, record.workspace_id).revision !== record.responsibility_revision)
+      throw new QuestionError(409, 'question_responsibility_changed', 'Responsibility changed; explicitly transfer this question before answering');
+  }
+  private current(message: UnifiedMessage, record: QuestionRecord, actor: QuestionActor, revision: number) {
     if (!Number.isSafeInteger(revision) || revision < 1) throw new QuestionError(400, 'question_route_revision_required');
     if (revision !== record.route_revision) throw new QuestionError(409, 'question_route_changed');
     if (!same(record.route[record.route_index]?.handler, actor)) throw new QuestionError(403, 'question_handler_required');
-    if (record.source_issue_id && this.ctx.resolveIssueResponsibility(record.source_issue_id).revision !== record.responsibility_revision) throw new QuestionError(409, 'question_responsibility_changed', 'Responsibility changed; explicitly transfer this question before answering');
+    this.fresh(message, record);
   }
   private save(message: UnifiedMessage, record: QuestionRecord, events: CommitEventQueue) {
     const metadata: Record<string, any> = { ...message.metadata, question: record };
@@ -195,10 +211,11 @@ export class Questions {
     if (!turn || turn.current_attempt_id !== sourceAttemptId) throw new QuestionError(409, 'question_source_attempt_changed');
     const humanRequired = input.metadata?.kind === 'permission' || input.metadata?.requires_human_authorization === true;
     const route = this.route(turn.issue_id, turn.agent_id, humanRequired, input.session_id, turn.workspace_id);
+    const waitId = typeof input.metadata?.wait_id === 'string' && input.metadata.wait_id ? input.metadata.wait_id : undefined;
     const record: QuestionRecord = { version: 1, workspace_id: turn.workspace_id, source_issue_id: turn.issue_id, source_attempt_id: sourceAttemptId,
       responsibility_revision: route.revision, human_required: humanRequired, route: route.steps, route_index: 0, route_revision: 1, route_reason: route.reason,
-      status: 'pending', summary: null, answer: null, answer_revision: 0, history: [], wait: { status: 'waiting', reason: null,
-        wait_id: typeof input.metadata?.wait_id === 'string' ? input.metadata.wait_id : undefined,
+      status: 'pending', summary: null, answer: null, answer_revision: 0, history: [], wait: { status: waitId ? 'waiting' : 'detached', reason: waitId ? null : 'native_wait_unverified',
+        wait_id: waitId,
         runtime_id: this.ctx.tasks().getTask(sourceAttemptId)?.runtimeId ?? undefined } };
     const result = sendMessageWithinTransaction(this.ctx, { ...input, execution_scope: String(turn.execution_scope ?? ''), to: route.steps[0] ? { type: route.steps[0].handler.type, ref: route.steps[0].handler.id } : { type: 'none' },
       wake_requested: 'inbox_only', metadata: { ...input.metadata, question: record } }, events);
@@ -259,7 +276,8 @@ export class Questions {
         if (!input.reason?.trim()) throw new QuestionError(400, 'question_revision_reason_required');
         if (input.expected_answer_revision !== record.answer_revision) throw new QuestionError(409, 'question_answer_revision_changed');
         if (input.expected_route_revision !== record.route_revision) throw new QuestionError(409, 'question_route_changed');
-      } else { this.current(record, actor, input.expected_route_revision); if (record.status !== 'pending') throw new QuestionError(409, 'question_already_settled'); }
+        this.fresh(message, record);
+      } else { this.current(message, record, actor, input.expected_route_revision); if (record.status !== 'pending') throw new QuestionError(409, 'question_already_settled'); }
       if (record.human_required && actor.type !== 'member') throw new QuestionError(403, 'question_human_authorization_required');
       if (credential) assertQuestionCardToken({ token_hash: message.card_token_hash, token_recipient: message.card_token_recipient, token_consumed_at: message.card_token_consumed_at, status: record.status }, credential, 'pending');
       const request = this.ctx.tasks().getTaskHumanRequest(id);
@@ -290,7 +308,7 @@ export class Questions {
   escalate(id: string, input: QuestionMutationInput, sender: SendMessageInput['sender'], sourceTurnId?: string) {
     return this.transaction(events => {
       const { message, record } = this.lock(id), actor = this.actor(record, sender, sourceTurnId);
-      this.current(record, actor, input.expected_route_revision);
+      this.current(message, record, actor, input.expected_route_revision);
       if (actor.type !== 'agent' || record.status !== 'pending' || !input.reason?.trim()) throw new QuestionError(400, 'question_escalation_reason_required');
       record.route_index++; record.route_revision++; record.summary = null;
       record.route_reason = record.route[record.route_index] ? null : 'upper_responsibility_unavailable';
@@ -321,6 +339,7 @@ export class Questions {
       if (input.expected_route_revision !== record.route_revision) throw new QuestionError(409, 'question_route_changed');
       if (!same(record.route[record.route_index]?.handler, actor) && !same(record.route.find(r => r.stage === 'human')?.handler, actor) && !(actor.type === 'agent' && actor.id === message.sender_id)) throw new QuestionError(403, 'question_close_authority_required');
       if (record.status !== 'pending' || !input.reason?.trim()) throw new QuestionError(400, 'question_close_reason_required');
+      this.fresh(message, record);
       const waiting = this.waiting(message, record).status === 'waiting';
       record.status = 'closed'; record.wait = { ...record.wait, status: 'detached', reason: 'explicit_stop' };
       this.event(record, 'close', actor, { reason: input.reason }); this.save(message, record, events);
@@ -339,6 +358,7 @@ export class Questions {
       const bot = this.ctx.feishuBot().getFeishuBotConfig(record.workspace_id);
       if (actor.type !== 'agent' || actor.id !== bot?.agentId || record.route[record.route_index]?.stage !== 'human') throw new QuestionError(403, 'question_present_remi_required');
       if (input.expected_route_revision !== record.route_revision || record.status !== 'pending') throw new QuestionError(409, 'question_route_changed');
+      this.fresh(message, record);
       if (typeof input.summary !== 'string' || !input.summary.trim()) throw new QuestionError(400, 'question_summary_required');
       record.summary = { body_md: input.summary.trim(), agent_id: actor.id, at: nowIso() };
       record.summary_wait_until = null;
@@ -365,6 +385,7 @@ export class Questions {
       const { message, record } = this.lock(id), actor = this.actor(record, sender);
       if (input.expected_route_revision !== record.route_revision) throw new QuestionError(409, 'question_route_changed');
       if (actor.type !== 'member' || !same(record.route.find(r => r.stage === 'human')?.handler, actor)) throw new QuestionError(403, 'question_continuation_human_required');
+      this.fresh(message, record);
       if (record.wait.status === 'continuation_pending' || record.wait.status === 'continuation_consumed') return this.get(id, actor)!;
       record.wait = this.waiting(message, record);
       if (record.status !== 'answered' || !record.answer || record.wait.status !== 'detached' || !message.sender_id) throw new QuestionError(409, 'question_continuation_unavailable');
@@ -452,6 +473,44 @@ export class Questions {
       this.notify(message, record, events); this.save(message, record, events);
     }
   }
+  refreshChatWithinTransaction(workspaceId: string, events: CommitEventQueue, actor?: QuestionActor, reason = 'chat_responsibility_transferred', filter: ChatQuestionResponsibilityFilter = {}) {
+    if (!this.ctx.db.inTransaction) throw new Error('Chat responsibility refresh requires its mutation transaction');
+    this.ctx.lockWorkspaceRuntimeLifecycle(workspaceId);
+    const conditions = ["c.workspace_id=?", "m.message_kind='decision'", 'm.deleted_at IS NULL',
+      `${this.jsonText('m', 'question.source_issue_id')} IS NULL`, `${this.jsonText('m', 'decision_record.source_issue_id')} IS NULL`,
+      `(${this.jsonText('m', 'question.status')}='pending' OR (${this.jsonText('m', 'question.status')}='answered' AND ${this.jsonText('m', 'question.wait.status')}='detached') OR (${this.jsonText('m', 'question.version')} IS NULL AND ${this.jsonText('m', 'human_request.status')}='pending'))`];
+    const params: string[] = [workspaceId];
+    const transport = 'EXISTS(SELECT 1 FROM multiremi_feishu_bot_chat_bindings b WHERE b.chat_session_id=c.id AND b.workspace_id=c.workspace_id)';
+    if (filter.transportOnly) conditions.push(transport);
+    if (filter.memberId) {
+      conditions.push(`((NOT ${transport} AND (c.creator_id=? OR c.creator_id IN (SELECT user_id FROM multiremi_workspace_members WHERE id=?))) OR (${transport} AND cfg.responsible_member_id=?))`);
+      params.push(filter.memberId, filter.memberId, filter.memberId);
+    }
+    if (filter.agentId) { conditions.push(`(m.sender_id=? OR c.agent_id=? OR (${transport} AND cfg.agent_id=?))`); params.push(filter.agentId, filter.agentId, filter.agentId); }
+    const rows = this.ctx.db.query(`SELECT m.id FROM multiremi_chat_sessions c JOIN multiremi_conversation_log m ON m.session_id=c.id
+      LEFT JOIN multiremi_feishu_bot_configs cfg ON cfg.workspace_id=c.workspace_id WHERE ${conditions.join(' AND ')}
+      AND NOT EXISTS(SELECT 1 FROM multiremi_turns t WHERE t.id=m.task_id AND t.issue_id IS NOT NULL)`).all(...params);
+    for (const row of rows) {
+      const loaded = this.read(row.id); if (!loaded || loaded.record.source_issue_id || !this.integrity(loaded.message, loaded.record)) continue;
+      const { message, record } = loaded;
+      const route = this.route(null, message.sender_id, record.human_required, message.session_id, workspaceId);
+      if (route.revision === record.responsibility_revision) continue;
+      const index = this.transferredIndex(record, route.steps);
+      record.route = route.steps; record.route_index = index; record.route_revision++; record.responsibility_revision = route.revision;
+      record.route_reason = route.reason; record.summary = null; record.summary_wait_until = null;
+      this.event(record, 'transfer', actor ?? null, { reason, handler: record.route[index]?.handler ?? null });
+      this.ctx.db.run('UPDATE multiremi_conversation_log SET card_token_hash=NULL,card_token_recipient=NULL,card_token_consumed_at=NULL WHERE id=?', [message.id]);
+      if (record.status === 'pending') this.notify(message, record, events);
+      this.save(message, record, events);
+      if (record.status === 'answered' && record.wait.status === 'detached') {
+        const human = route.steps.find(step => step.stage === 'human')?.handler;
+        if (human) sendMessageWithinTransaction(this.ctx, { session_id: message.session_id, sender: { type: 'platform', id: null }, to: { type: 'member', ref: human.id },
+          message_kind: 'status', wake_requested: 'inbox_only', dedupe_key: `question-recovery-route:${message.id}:${record.route_revision}`,
+          body_md: `问题 ${message.id} 已保存答案，后续执行仍待恢复（${record.wait.reason ?? 'detached'}）。使用 remi message question get ${message.id} 核对；执行条件恢复后可显式 continue。`,
+          metadata: { root_question_id: message.id, question_route_revision: record.route_revision, question_notification: true } }, events);
+      }
+    }
+  }
   consumeWithinTransaction(id: string, turnId: string, attemptId: string, replyId: string, events: CommitEventQueue, waitId?: string) {
     const { message, record } = this.lock(id);
     if (record.wait.wait_id && record.wait.status !== 'continuation_pending' && record.wait.status !== 'continuation_consumed' && record.wait.wait_id !== waitId) throw new QuestionError(409, 'question_wait_binding_changed');
@@ -495,4 +554,7 @@ export class Questions {
 
 export function refreshIssueQuestionsAfterResponsibilityChangeWithinTransaction(ctx: StoreContext, issueId: string, events: CommitEventQueue, actor?: QuestionActor, reason?: string): void {
   new Questions(ctx).refreshWithinTransaction(issueId, events, actor, reason);
+}
+export function refreshChatQuestionsAfterResponsibilityChangeWithinTransaction(ctx: StoreContext, workspaceId: string, events: CommitEventQueue, actor?: QuestionActor, reason?: string, filter?: ChatQuestionResponsibilityFilter): void {
+  new Questions(ctx).refreshChatWithinTransaction(workspaceId, events, actor, reason, filter);
 }

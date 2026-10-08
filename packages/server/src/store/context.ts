@@ -892,6 +892,7 @@ export interface RuntimesSurface {
  * than leave a workspace pointing at something that no longer exists.
  */
 export interface FeishuBotSurface {
+  isFeishuTransportChatSession(chatSessionId: string): boolean;
   enqueueQuestionPresentationWithinTransaction: import('./repos/feishu-bot-repo.js').FeishuBotRepo['enqueueQuestionPresentationWithinTransaction'];
   getFeishuBotConfig: import('./repos/feishu-bot-repo.js').FeishuBotRepo['getConfig'];
   prepareFeishuBotHumanRequestPush: import('./repos/feishu-bot-repo.js').FeishuBotRepo['prepareHumanRequestPush'];
