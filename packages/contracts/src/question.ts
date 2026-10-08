@@ -17,6 +17,7 @@ export interface QuestionHistoryEvent {
   actor: QuestionActor | null;
   route_revision: number;
   reason?: string;
+  overturn?: string | null;
   handler?: QuestionActor | null;
   answer?: QuestionAnswer;
   source_message_id?: string;

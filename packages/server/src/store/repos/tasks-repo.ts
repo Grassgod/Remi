@@ -4485,14 +4485,11 @@ ${placementAfter.sql}
       this.ctx.lockWorkspaceRuntimeLifecycle(task.workspaceId);
       const turn=this.ctx.db.query('SELECT * FROM multiremi_turns WHERE current_attempt_id=?').get(task.id);
       if(!turn)throw new Error('Decision source is not the current attempt');
-      const members=this.ctx.workspaces().listWorkspaceMembers(task.workspaceId);
-      const recipient=members.find(m=>m.role==='owner'&&!m.archivedAt)??members.find(m=>!m.archivedAt);
-      if(!recipient)throw new Error('Decision has no active member recipient');
-      const question = sendMessageWithinTransaction(this.ctx,{id,session_id:turn.session_id,source_turn_id:turn.id,
-        sender:{type:'agent',id:task.agentId},to:{type:'member',ref:recipient.id},message_kind:'decision',wake_requested:'now',
+      const question = new Questions(this.ctx).createWithinTransaction({id,session_id:turn.session_id,source_turn_id:turn.id,
+        sender:{type:'agent',id:task.agentId},to:{type:'none'},message_kind:'decision',wake_requested:'inbox_only',
         body_md:String(input.payload?.title??input.payload?.message??JSON.stringify(input.payload??{})),
-        metadata:{human_request:{kind:input.kind,payload:input.payload??{},status:'pending',expires_at:expiresAt}},
-      },deferredEvents);
+        metadata:{kind:input.kind,human_request:{kind:input.kind,payload:input.payload??{},status:'pending',expires_at:expiresAt}},
+      },task.id,deferredEvents);
       // Keep the advertised lifetime anchored to the persisted creation time.
       this.ctx.db.run('UPDATE multiremi_conversation_log SET created_at=? WHERE id=?',[now,id]);
       const reason = input.kind === "permission" ? "Waiting for permission approval" : "Waiting for a human answer";
@@ -4536,51 +4533,14 @@ ${placementAfter.sql}
     return rows.map(toTaskHumanRequest);
   }
 
-  /** Atomic first-write-wins: returns null when the request is no longer pending. */
-  respondTaskHumanRequest(
-    requestId: string,
-    input: { response: Record<string, unknown>; respondedBy?: string | null; cardCredential?: QuestionCardCredential },
-  ): MultiremiTaskHumanRequest | null {
-    let resumedTask: MultiremiTask | null = null;
-    const childStatusChanges: ChildStatusChangeCollector = [];
-    const deferredEvents = createCommitEventQueue();
-    const write = () => {
-      const now = nowIso();
-      const credential = input.cardCredential;
-      const changed=patchDecisionRecord(this.ctx,requestId,'human_request',{
-        status:'responded',response:input.response??{},responded_by:credential?.operatorOpenId??input.respondedBy??null,responded_at:now,
-      },'pending',credential);
-      const result={changes:changed?1:0};
-      if (result.changes === 0) {
-        if (credential) {
-          assertQuestionCardToken(this.ctx.db.query("SELECT * FROM multiremi_message_question_records WHERE id = ?")
-            .get(requestId) as Row | null, credential, "pending");
-          throw new QuestionCardTokenError("token_invalid");
-        }
-        return null;
-      }
-      const responded = this.getTaskHumanRequest(requestId)!;
-      const decision=this.ctx.inbox().getMessage(requestId)!;
-      const source=this.getTask(responded.taskId)!;
-      const member=this.ctx.workspaces().getWorkspaceMemberByRef(input.respondedBy??'local',source.workspaceId)
-        ??this.ctx.workspaces().listWorkspaceMembers(source.workspaceId).find(m=>m.role==='owner');
-      if(!member)throw new Error('Decision respondent is not a workspace member');
-      resumedTask = this.resumeTaskFromAwaitingHumanWithinTransaction(responded.taskId, childStatusChanges, deferredEvents);
-      if (resumedTask) this.ctx.db.run('UPDATE multiremi_turns SET waiting_on_message_id=NULL WHERE waiting_on_message_id=?',[decision.id]);
-      sendMessageWithinTransaction(this.ctx,{session_id:decision.session_id,sender:{type:'member',id:member.id},
-        to:{type:'agent',ref:source.agentId},message_kind:'reply',wake_requested:'now',reply_to_id:decision.id,
-        body_md:JSON.stringify(input.response??{}),metadata:{human_response:input.response??{}}},deferredEvents);
-      return responded;
-    };
-    const request = this.ctx.db.inTransaction ? write() : this.ctx.db.transaction(write)();
-    const taskToResume = resumedTask;
-    if (taskToResume) afterCommit(this.ctx.db, () => this.ctx.notifyTaskEvent("task:running", taskToResume));
-    afterCommit(this.ctx.db, () => {
-      this.runChildStatusChanges(childStatusChanges);
-      this.ctx.emitCommitEvents(deferredEvents);
-    });
-    // The canonical decision reply publishes its input event after commit.
-    return request;
+  /** Compatibility facade; unified Q remains the only answer authority. */
+  respondTaskHumanRequest(requestId: string, input: { response: Record<string, unknown>; respondedBy?: string | null; cardCredential?: QuestionCardCredential; expectedRouteRevision?: number }): MultiremiTaskHumanRequest | null {
+    const question = new Questions(this.ctx).get(requestId);
+    if (!question) return null;
+    const member = input.respondedBy ? this.ctx.workspaces().getWorkspaceMemberByRef(input.respondedBy, question.workspace_id) : null;
+    if (!member || member.archivedAt || member.workspaceId !== question.workspace_id) throw new Error('Explicit active question respondent required');
+    new Questions(this.ctx).answer(requestId, { expected_route_revision: input.expectedRouteRevision ?? input.cardCredential?.routeRevision!, response: input.response }, { type: 'member', id: member.id }, undefined, input.cardCredential);
+    return this.getTaskHumanRequest(requestId);
   }
 
   /** Worker-initiated terminal transition (timeout, or task aborted while pending). */
@@ -4589,6 +4549,10 @@ ${placementAfter.sql}
     const childStatusChanges: ChildStatusChangeCollector = [];
     const deferredEvents = createCommitEventQueue();
     const request = this.ctx.db.transaction(() => {
+      if (new Questions(this.ctx).get(requestId)) {
+        const changed = new Questions(this.ctx).detachWithinTransaction(requestId, status, deferredEvents);
+        return changed ? this.getTaskHumanRequest(requestId) : null;
+      }
       const result={changes:patchDecisionRecord(this.ctx,requestId,'human_request',{status,responded_at:nowIso()},'pending')?1:0};
       if (result.changes === 0) return null;
       const expired = this.getTaskHumanRequest(requestId)!;

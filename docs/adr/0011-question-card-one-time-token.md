@@ -1,39 +1,32 @@
-# ADR 0011: Question cards are answered with a one-time token bound to the addressee
+# ADR 0011: Question cards use recipient-bound tokens and a responsibility revision
 
-- Status: accepted (MUL-404 range 5, 2026-09-28)
-
-## Context
-
-Task question cards (`fr_`) and Issue decision cards (`fd_`, MUL-412) decide
-who may answer in two places that both rely on session identity: the bot host
-keeps an in-memory registry keyed by `appId:open_message_id` and compares the
-clicker's `open_id` and chat id with the card's recipient, and the server trusts
-the host's `operator_open_id` (decision cards) or a fixed `responded_by =
-"feishu"` (question cards). The registry is lost on host restart and re-built
-from the database; the card action carries a derivable marker, not a secret.
+- Status: accepted
 
 ## Decision
 
-1. Every card delivery mints a random token. The database stores only its hash,
-   the recipient `open_id`, and a consumed timestamp, on
-   `multiremi_task_human_requests` and `multiremi_issue_decisions`. The plaintext
-   travels once, inside the card action `value`.
-2. The server is the only judge. The respond routes require `{token,
-   operator_open_id}` and settle in one conditional `UPDATE` (`status =
-   'pending' AND token_hash = ? AND token_recipient = ? AND token_consumed_at IS
-   NULL`). Failures are `token_invalid`, `token_consumed`, `recipient_mismatch`.
-   Member mapping (`resolveIssueDecisionOperatorMember`) runs after the token
-   check.
-3. Redelivery, retarget, and reminders rotate the token; the previous one is
-   invalid immediately.
-4. The host forwards; it no longer authorises. Its registry is kept only for
-   card patching.
-5. The web respond route (a signed-in member) is unchanged.
+The original conversation decision message owns the Q, its complete history and
+its provider waiting state. Cards and cross-session notifications reference this
+same message through `root_question_id`; they never create another question.
 
-## Consequences
+Every card delivery mints a random token. Only its hash, designated recipient
+`open_id` and consumed timestamp are stored on `multiremi_conversation_log`.
+The plaintext travels once in the action value with `message_id` and
+`route_revision`. It must never appear in activities or logs.
 
-- A card survives host restarts and can be answered only once, only by the
-  person it was addressed to.
-- Tokens must never be logged or echoed into activities or comments.
-- Group-owner-resolved recipients bind the token when the host reports the sent
-  message's `interaction_open_id`.
+The server validates the configured bot transport, resolves the operator to one
+active member of the Q's frozen workspace, then requires the current handler,
+current responsibility facts, expected route revision and unused token. One
+transaction saves the answer, original-session reply and card consumption.
+Redelivery and responsibility transfer rotate credentials; old cards fail closed.
+
+The bot host forwards the action. Its optional in-memory registry only supports
+card patching; native callbacks work after a host restart by rereading the
+persisted original Q. Group owners and workspace owners do not substitute for
+its designated human. Ambiguous identity mapping produces a text reminder with
+its original Q and workbench link.
+
+Remi reads and summarizes the same Q before normal card delivery. Unavailable
+Remi, its own question, or the explicit summary deadline allows original-question
+fallback. Web and card answers use the same server authority. Saved answers and
+actual provider consumption remain separate, including controlled continuation
+after a process exit; see [unified questions](../dev/questions.md).

@@ -461,6 +461,10 @@ export interface DaemonTurnDecisionPayload {
   turn_id: string;
   attempt_id: string;
   dedupe_key: string;
+  /** Stable original-Q id when replaying the native request. */
+  message_id?: string;
+  /** Process-local callback nonce; a new daemon process cannot claim an old wait. */
+  wait_id: string;
   body_md: string;
   options: DecisionOption[];
   metadata: Record<string, unknown>;

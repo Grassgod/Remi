@@ -372,7 +372,6 @@ const MAX_ISSUE_METADATA_KEYS = 50;
 const ISSUE_METADATA_KEY_RE = /^[a-zA-Z_][a-zA-Z0-9_.-]{0,63}$/;
 const COMMENT_HARD_CAP = 2000;
 const COMMENT_SUMMARY_RUNES = 200;
-const DECISION_KINDS = new Set<MultiremiIssueDecisionKind>(["permission", "merge", "production_change", "question", "criteria", "other"]);
 const DECISION_KIND_ORDER: Record<MultiremiIssueDecisionKind, number> = {
   permission: 0, merge: 1, production_change: 2, question: 3, criteria: 4, other: 5,
 };
@@ -380,7 +379,7 @@ const DECISION_KIND_ORDER: Record<MultiremiIssueDecisionKind, number> = {
 const DECISION_ANSWERED_LIMIT = 50;
 
 export class IssueDecisionError extends Error {
-  constructor(readonly status: 400 | 403 | 404 | 409, message: string) { super(message); }
+  constructor(readonly status: 400 | 403 | 404 | 409 | 410, message: string) { super(message); }
 }
 
 /**
@@ -569,20 +568,6 @@ export class IssuesRepo {
     return issue;
   }
 
-  private decisionOwner(issue: MultiremiIssue): MultiremiAgent | null {
-    const id = issue.assigneeType === "agent" ? issue.assigneeId
-      : issue.assigneeType === "squad" && issue.assigneeId
-        ? this.ctx.squads().getSquad(issue.assigneeId)?.leaderId ?? null : null;
-    const agent = id ? this.ctx.agents().getAgent(id) : null;
-    return agent && !agent.archivedAt && agent.workspaceId === issue.workspaceId ? agent : null;
-  }
-
-  private decisionTaskActorAllowed(actor: IssueDecisionActor, issue: MultiremiIssue, owner: MultiremiAgent | null): boolean {
-    if (actor.type !== "agent" || !actor.taskId || !owner || actor.id !== owner.id) return false;
-    const task = this.ctx.tasks().getTask(actor.taskId);
-    return !!task && task.agentId === actor.id && task.issueId === issue.id && task.workspaceId === issue.workspaceId;
-  }
-
   getIssueDecision(issueId: string, decisionId: string): MultiremiIssueDecision | null {
     const row = this.ctx.db.query(
       `SELECT d.* FROM multiremi_message_decision_records d
@@ -688,60 +673,7 @@ export class IssuesRepo {
   }
 
   createIssueDecision(sourceIssueId: string, input: CreateIssueDecisionInput, actor: IssueDecisionActor): MultiremiIssueDecision {
-    const source = this.getIssue(sourceIssueId);
-    if (!source) throw new IssueDecisionError(404, "source issue not found");
-    if (actor.type === "agent") {
-      const task = actor.taskId ? this.ctx.tasks().getTask(actor.taskId) : null;
-      if (!task || task.issueId !== source.id || task.agentId !== actor.id || task.workspaceId !== source.workspaceId) {
-        throw new IssueDecisionError(403, "task does not belong to the source issue");
-      }
-    }
-    const kind = String(input.kind ?? "") as MultiremiIssueDecisionKind;
-    const title = String(input.title ?? "").trim();
-    if (!DECISION_KINDS.has(kind) || !title || title.length > 500) throw new IssueDecisionError(400, "valid kind and title are required");
-    if (input.options != null && (!Array.isArray(input.options) || input.options.some((option) => typeof option !== "string"))) {
-      throw new IssueDecisionError(400, "options must be a list of strings");
-    }
-    const events = createCommitEventQueue();
-    const changes: ChildStatusChangeCollector = [];
-    const created = this.ctx.db.transaction(() => {
-      this.ctx.lockWorkspaceRuntimeLifecycle(source.workspaceId);
-      const currentSource = this.getIssue(source.id)!;
-      const parent = this.sameWorkspaceParent(currentSource);
-      const target = parent ?? currentSource;
-      const owner = parent ? this.decisionOwner(parent) : null;
-      const status = !parent || !owner || kind === "production_change" ? "escalated" : "pending";
-      const id = createId("dcs");
-      const now = nowIso();
-      const session=this.ctx.issueSessions().getOrCreateDefaultIssueSessionWithinTransaction(target.id);
-      const task=actor.type==='agent'&&actor.taskId?this.ctx.tasks().getTask(actor.taskId):null;
-      const turn=task?this.ctx.db.query('SELECT turn_id FROM multiremi_turn_attempts WHERE id=?').get(task.id):null;
-      const audience = this.decisionMemberRecipients(target);
-      const member=audience.length?this.ctx.workspaces().getWorkspaceMember(audience[0]!):null;
-      if(status==='escalated'&&!member)throw new IssueDecisionError(400,'No active member can decide');
-      sendMessageWithinTransaction(this.ctx,{id,session_id:session.id,sender:{type:actor.type,id:actor.id},source_turn_id:turn?.turn_id??null,
-        to:status==='escalated'?{type:'member',ref:member!.id}:{type:'agent',ref:owner!.id},
-        message_kind:'decision',wake_requested:'now',body_md:[title,String(input.body??'')].filter(Boolean).join('\n\n'),
-        options:input.options?.map(value=>({label:value,value}))??null,
-        metadata:{decision_record:{source_issue_id:currentSource.id,source_task_id:task?.id??null,kind,title,body:String(input.body??''),status,owner_agent_id:owner?.id??null,history:[]}},
-      },events);
-      const decision = this.getIssueDecision(target.id, id)!;
-      this.decisionEvent(events, "decision:created", decision);
-      if(status==='escalated'){
-        this.ctx.appendIssueActivity(target.id, {
-          actorType: "system", actorId: SYSTEM_AUTHOR_ID, type: "decision_escalated",
-          body: title, data: { decision_id: id, kind, direct: true },
-        }, events);
-        this.notifyDecisionRequested(target, decision, events);
-        // A3: only the two "a person must decide this" cases get a card. A row
-        // the parent's owner agent answers itself stays in the web workbench.
-        this.ctx.feishuBot().prepareIssueDecisionCardWithinTransaction(target, decision, events);
-      }
-      return decision;
-    })();
-    this.ctx.tasks().runCollectedChildStatusChanges(changes);
-    this.ctx.emitCommitEvents(events);
-    return created;
+    throw Object.assign(new IssueDecisionError(410, "IssueDecision writers are retired; use the original message question API"), { code: "retired_issue_decision" });
   }
 
   answerIssueDecision(
@@ -751,226 +683,17 @@ export class IssuesRepo {
     actor: IssueDecisionActor,
     options: AnswerIssueDecisionOptions = {},
   ): MultiremiIssueDecision {
-    const answer = String(input.answer ?? "").trim();
-    const reason = String(input.reason ?? "").trim();
-    const overturn = String(input.overturn ?? "").trim();
-    if (!answer) throw new IssueDecisionError(400, "answer is required");
-    if (actor.type === "agent" && (!reason || !overturn)) throw new IssueDecisionError(400, "agent answers require reason and overturn instructions");
-    const events = createCommitEventQueue();
-    const changes: ChildStatusChangeCollector = [];
-    const write = () => {
-      const parent = this.getIssue(issueId);
-      if (!parent) throw new IssueDecisionError(404, "decision not found");
-      this.ctx.lockWorkspaceRuntimeLifecycle(parent.workspaceId);
-      const decision = this.getIssueDecision(issueId, decisionId);
-      if (!decision) throw new IssueDecisionError(404, "decision not found");
-      const credential = options.cardCredential;
-      if (credential) {
-        const row = this.ctx.db.query("SELECT * FROM multiremi_message_decision_records WHERE id = ?").get(decisionId) as Row | null;
-        assertQuestionCardToken(row, credential, "escalated");
-        const context = this.ctx.feishuBot().getFeishuIssueDecisionCardContext(parent.workspaceId, decisionId);
-        if (!context || context.recipientOpenId !== credential.operatorOpenId) {
-          throw Object.assign(new IssueDecisionError(403, "please answer from the card addressed to you"), { code: "decision_operator_mismatch" });
-        }
-        const operator = this.ctx.feishuBot().resolveFeishuDecisionOperatorMember(parent.workspaceId, context.appId, credential.operatorOpenId);
-        if (operator.status !== "resolved") {
-          const code = operator.status === "ambiguous" ? "decision_member_ambiguous" : "decision_member_unmapped";
-          throw Object.assign(new IssueDecisionError(403, code), { code });
-        }
-        actor = { type: "member", id: operator.member.id, taskId: null };
-      }
-      const owner = this.decisionOwner(parent);
-      if (actor.type === "agent" && (!this.decisionTaskActorAllowed(actor, parent, owner)
-        || decision.status !== "pending" || decision.kind === "production_change")) {
-        throw new IssueDecisionError(403, "only the parent owner task can answer a pending decision");
-      }
-      if (decision.status === "withdrawn") throw new IssueDecisionError(409, "decision was withdrawn");
-      // A card click is a single-shot interaction: Feishu redelivers callbacks,
-      // a person can double-tap, and the card is still on screen after the web
-      // answered it. Replaying one must not append a second history entry, a
-      // second activity or a second wakeup. A deliberate re-answer from the web
-      // or CLI keeps the documented member-overturns-agent behavior, so the
-      // guard lives on the card path only.
-      if (options.idempotent && decision.status === "answered") return decision;
-      const record: MultiremiIssueDecisionAnswer = {
-        answererType: actor.type, answererId: actor.id, answer, reason,
-        overturn: actor.type === "agent" ? overturn : null, answeredAt: nowIso(),
-      };
-      const result={changes:patchDecisionRecord(this.ctx,decision.id,'decision_record',{
-        status:'answered',answer:record,answered_by_member_id:actor.type==='member'?actor.id:null,
-        answered_at:record.answeredAt,history:[...decision.history,record],
-      },credential?'escalated':undefined,credential)?1:0};
-      if (credential && result.changes === 0) {
-        assertQuestionCardToken(this.ctx.db.query("SELECT * FROM multiremi_message_decision_records WHERE id = ?")
-          .get(decisionId) as Row | null, credential, "escalated");
-        throw new QuestionCardTokenError("token_invalid");
-      }
-      const original=this.ctx.inbox().getMessage(decision.id)!;
-      const sourceTask=decision.sourceTaskId?this.ctx.tasks().getTask(decision.sourceTaskId):null;
-      const answering=actor.type==='agent'&&actor.taskId?this.ctx.db.query('SELECT turn_id FROM multiremi_turn_attempts WHERE id=?').get(actor.taskId):null;
-      sendMessageWithinTransaction(this.ctx,{session_id:original.session_id,sender:{type:actor.type,id:actor.id},
-        source_turn_id:answering?.turn_id??null,to:sourceTask?{type:'agent',ref:sourceTask.agentId}:{type:'none'},
-        message_kind:'reply',wake_requested:'now',reply_to_id:original.id,body_md:answer,metadata:{decision_answer:record}},events);
-      const answered = this.getIssueDecision(issueId, decisionId)!;
-      this.ctx.appendIssueActivity(parent.id, {
-        actorType: actor.type, actorId: actor.id, type: "decision_answered",
-        body: `${decision.title}: ${answer}`,
-        data: { decision_id: decision.id, kind: decision.kind, answer, reason, overturn: record.overturn, answerer_type: actor.type },
-      }, events);
-      this.ctx.appendIssueActivity(decision.sourceIssueId, {
-        actorType: actor.type, actorId: actor.id, type: "decision_received",
-        body: `${decision.title}: ${answer}`,
-        data: { decision_id: decision.id, parent_issue_id: parent.id, answerer_type: actor.type },
-      }, events);
-      const source = this.getIssue(decision.sourceIssueId)!;
-      const body = `Decision ${decision.id} (${decision.kind}) was answered by ${actor.type} ${actor.id}:\n${envelopeSummary(answer)}\nFor subsequent actions cite decision:${decision.id}.`;
-      const sourceOwner = this.decisionOwner(source);
-      if (sourceOwner) this.ctx.inbox().sendEnvelopeWithinTransaction({
-        to: { role: "issue_owner", issueId: source.id }, kind: "reply", wake: "now",
-        dedupeKey: `decision_answer:${decision.id}:${answered.history.length}`, replyTo: decision.id, body,
-        source: { issueId: parent.id, decisionId: decision.id },
-      }, changes, events);
-      if (actor.type === "member" && decision.answer?.answererType === "agent" && owner) {
-        this.ctx.inbox().sendEnvelopeWithinTransaction({
-          to: { role: "issue_owner", issueId: parent.id }, kind: "reply", wake: "now",
-          dedupeKey: `decision_overturn:${decision.id}:${answered.history.length}`, replyTo: decision.id,
-          body: `A member changed your answer to decision ${decision.id} (${decision.kind}):\n${envelopeSummary(answer)}\nSee the decision history on ${parent.key}.`,
-          source: { issueId: source.id, decisionId: decision.id },
-        }, changes, events);
-      }
-      this.decisionEvent(events, "decision:updated", answered);
-      // In-place terminal rewrite. The delivery row is written inside this
-      // transaction so a rollback leaves neither an answer nor a patch, and the
-      // realtime event is queued rather than emitted mid-transaction.
-      this.ctx.feishuBot().enqueueIssueDecisionCardPatchWithinTransaction(answered, events);
-      return answered;
-    };
-    const updated = this.ctx.db.inTransaction ? write() : this.ctx.db.transaction(write)();
-    afterCommit(this.ctx.db, () => {
-      this.ctx.tasks().runCollectedChildStatusChanges(changes);
-      this.ctx.emitCommitEvents(events);
-    });
-    return updated;
+    throw Object.assign(new IssueDecisionError(410, "IssueDecision writers are retired; use the original message question API"), { code: "retired_issue_decision" });
   }
 
   escalateIssueDecision(issueId: string, decisionId: string, actor: IssueDecisionActor): MultiremiIssueDecision {
-    const events = createCommitEventQueue();
-    const updated = this.ctx.db.transaction(() => {
-      const parent = this.getIssue(issueId);
-      if (!parent) throw new IssueDecisionError(404, "decision not found");
-      this.ctx.lockWorkspaceRuntimeLifecycle(parent.workspaceId);
-      const decision = this.getIssueDecision(issueId, decisionId);
-      if (!decision) throw new IssueDecisionError(404, "decision not found");
-      if (actor.type === "agent" && !this.decisionTaskActorAllowed(actor, parent, this.decisionOwner(parent))) {
-        throw new IssueDecisionError(403, "only the parent owner task can escalate");
-      }
-      if (decision.status !== "pending") throw new IssueDecisionError(409, "only pending decisions can be escalated");
-      patchDecisionRecord(this.ctx,decision.id,'decision_record',{status:'escalated'},'pending');
-      const result = this.getIssueDecision(issueId, decisionId)!;
-      this.ctx.appendIssueActivity(parent.id, {
-        actorType: actor.type, actorId: actor.id, type: "decision_escalated",
-        body: decision.title, data: { decision_id: decision.id, kind: decision.kind },
-      }, events);
-      this.notifyDecisionRequested(parent, result, events);
-      this.decisionEvent(events, "decision:updated", result);
-      // S5b: the escalation is what turns a web-only decision into a card.
-      this.ctx.feishuBot().prepareIssueDecisionCardWithinTransaction(parent, result, events);
-      return result;
-    })();
-    this.ctx.emitCommitEvents(events);
-    return updated;
+    throw Object.assign(new IssueDecisionError(410, "IssueDecision writers are retired; use the original message question API"), { code: "retired_issue_decision" });
   }
 
   withdrawIssueDecision(issueId: string, decisionId: string, actor: IssueDecisionActor): MultiremiIssueDecision {
-    const events = createCommitEventQueue();
-    const updated = this.ctx.db.transaction(() => {
-      const issue = this.getIssue(issueId);
-      if (!issue) throw new IssueDecisionError(404, "decision not found");
-      this.ctx.lockWorkspaceRuntimeLifecycle(issue.workspaceId);
-      const decision = this.getIssueDecision(issueId, decisionId);
-      if (!decision) throw new IssueDecisionError(404, "decision not found");
-      if (actor.type === "agent") {
-        const task = actor.taskId ? this.ctx.tasks().getTask(actor.taskId) : null;
-        if (!task || task.issueId !== decision.sourceIssueId || task.agentId !== actor.id || decision.createdByAgentId !== actor.id) {
-          throw new IssueDecisionError(403, "only the requesting agent task can withdraw");
-        }
-      }
-      if (decision.status === "withdrawn") return decision;
-      if (decision.status === "answered") throw new IssueDecisionError(409, "answered decisions cannot be withdrawn");
-      patchDecisionRecord(this.ctx,decision.id,'decision_record',{status:'withdrawn'});
-      const result = this.getIssueDecision(issueId, decisionId)!;
-      this.decisionEvent(events, "decision:updated", result);
-      // A withdrawn decision is a terminal state of its own (E4 has no expiry),
-      // so the card on screen is rewritten rather than left actionable.
-      this.ctx.feishuBot().enqueueIssueDecisionCardPatchWithinTransaction(result, events);
-      return result;
-    })();
-    this.ctx.emitCommitEvents(events);
-    return updated;
+    throw Object.assign(new IssueDecisionError(410, "IssueDecision writers are retired; use the original message question API"), { code: "retired_issue_decision" });
   }
 
-  private decisionEvent(events: CommitEventQueue, type: "decision:created" | "decision:updated", decision: MultiremiIssueDecision): void {
-    events.workspace.push({
-      type, workspaceId: decision.workspaceId, actorType: "system",
-      payload: { issue_id: decision.issueId, decision },
-    });
-  }
-
-  private notifyDecisionRequested(parent: MultiremiIssue, decision: MultiremiIssueDecision, events: CommitEventQueue): void {
-    for (const memberId of this.decisionMemberRecipients(parent)) {
-      if(this.ctx.inbox().getMessage(decision.id)?.to_member_id===memberId)continue;
-      const item = this.ctx.createInboxItem({
-        issueId: parent.id, memberId, type: "decision_requested", severity: "action",
-        title: `${parent.key}: ${decision.title}`, body: decision.body,
-        actorType: "system", details: { decision_id: decision.id, kind: decision.kind },
-      });
-      if (item) events.workspace.push({
-        type: "inbox:new", workspaceId: parent.workspaceId, actorType: "system", payload: { item },
-      });
-    }
-  }
-
-  private decisionMemberRecipients(parent: MultiremiIssue): string[] {
-    const recipients = new Set<string>();
-    // Only members that actually resolve in this workspace count as an
-    // audience: an unresolvable `owner_id`, a member of another workspace or an
-    // archived subscriber must not swallow the escalation.
-    const add = (id: string | null | undefined) => {
-      const member = id ? this.ctx.resolveWorkspaceMemberForNotification(parent.workspaceId, id) : null;
-      if (member && !member.archivedAt) recipients.add(member.id);
-    };
-    if (parent.assigneeType === "member") add(parent.assigneeId);
-    add(this.decisionOwner(parent)?.ownerId);
-    for (const subscriber of this.listIssueSubscribers(parent.id)) {
-      if (subscriber.userType === "member") add(subscriber.userId);
-    }
-    // QA round 1: an escalated decision whose explicit audience resolves to
-    // nobody reached no inbox at all, so it silently left the human queue. Fall
-    // back to the issue creator, then to the workspace owners (a workspace
-    // always keeps at least one owner).
-    if (recipients.size === 0) {
-      for (const memberId of this.decisionFallbackRecipients(parent)) recipients.add(memberId);
-    }
-    return [...recipients];
-  }
-
-  /**
-   * Fallback audience for an escalated decision nobody explicit owns: the
-   * Issue creator when it resolves to a live member of this workspace, else
-   * every workspace owner. Returns at most one group so the first hit wins.
-   */
-  private decisionFallbackRecipients(parent: MultiremiIssue): string[] {
-    const workspaces = this.ctx.workspaces();
-    const createdBy = parent.createdBy;
-    if (createdBy) {
-      // Same resolution as createIssue: an agent or unknown id resolves to null.
-      const creator = workspaces.getWorkspaceMember(createdBy) ?? workspaces.findWorkspaceMemberForUser(createdBy, parent.workspaceId);
-      if (creator && creator.workspaceId === parent.workspaceId && !creator.archivedAt) return [creator.id];
-    }
-    return workspaces.listWorkspaceMembers(parent.workspaceId)
-      .filter((member) => member.role === "owner" && !member.archivedAt)
-      .map((member) => member.id);
-  }
 
   /**
    * Caller owns the transaction (see {@link createIssue}).

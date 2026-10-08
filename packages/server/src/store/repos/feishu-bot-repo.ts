@@ -1286,6 +1286,12 @@ export class FeishuBotRepo {
     if (!sourceTask) return null;
     const question = new Questions(this.ctx).get(request.id);
     if (question && (question.status !== 'pending' || question.stage !== 'human')) return null;
+    const summaryDeadline = typeof request.payload.question_summary_wait_until === 'string' ? Date.parse(request.payload.question_summary_wait_until) : 0;
+    if (question && !question.summary && Date.now() < summaryDeadline) {
+      if (this.replayingOutboundOperation) throw new Error('Question presentation awaits Remi summary or its explicit timeout');
+      this.deferOutboundOperation(sourceTask.workspaceId, request.id, { kind: 'human_request', request });
+      return null;
+    }
     if (!this.canWriteOutbound()) {
       this.deferOutboundOperation(sourceTask.workspaceId, request.id, { kind: "human_request", request });
       return null;
@@ -1634,6 +1640,8 @@ export class FeishuBotRepo {
     if (!request || request.status !== "pending") return null;
     const question = new Questions(this.ctx).get(request.id);
     if (question) {
+      const deadline = typeof request.payload.question_summary_wait_until === 'string' ? Date.parse(request.payload.question_summary_wait_until) : 0;
+      if (!question.summary && Date.now() < deadline) return null;
       const config = this.getConfig(question.workspace_id);
       const operator = recipientOpenId && config ? this.resolveIssueDecisionOperatorMember(question.workspace_id, config.appId, recipientOpenId) : null;
       if (question.stage !== 'human' || operator?.status !== 'resolved' || question.current_handler?.id !== operator.member.id) return null;
@@ -4363,6 +4371,8 @@ export function decisionCardTextBody(input: {
   if (typeof payload.question_summary === 'string' && payload.question_summary.trim()) lines.push('', '**Remi 总结**', payload.question_summary);
   const message = cleanOptionalString(payload.message);
   if (message) lines.push("", message);
+  const context = payload.context as { text?: unknown; truncated?: unknown } | undefined;
+  if (typeof context?.text === 'string' && context.text.trim()) lines.push('', '**原提问上下文**', context.text, ...(context.truncated ? ['（上下文已截断）'] : []));
   const questions = Array.isArray(payload.questions) ? payload.questions : [];
   if (questions.length) {
     lines.push("");

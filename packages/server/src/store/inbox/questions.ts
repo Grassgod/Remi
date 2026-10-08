@@ -23,6 +23,7 @@ interface QuestionRecord {
   route_reason: string | null;
   status: QuestionView['status'];
   summary: QuestionView['summary'];
+  summary_wait_until?: string | null;
   answer: QuestionAnswer | null;
   answer_revision: number;
   history: QuestionHistoryEvent[];
@@ -42,16 +43,17 @@ export class Questions {
     afterCommit(this.ctx.db, () => this.ctx.emitCommitEvents(events));
     return result;
   }
-  private route(issueId: string | null, sourceAgent: string | null, humanRequired: boolean, sessionId?: string): { steps: RouteStep[]; revision: string | null; reason: string | null } {
+  private route(issueId: string | null, sourceAgent: string | null, humanRequired: boolean, sessionId?: string, workspaceId?: string): { steps: RouteStep[]; revision: string | null; reason: string | null } {
     if (!issueId) {
       const chat = sessionId ? this.ctx.chat().getChatSession(sessionId) : null;
       const member = chat?.creatorId ? this.ctx.workspaces().getWorkspaceMemberByRef(chat.creatorId, chat.workspaceId) : null;
-      return member && !member.archivedAt ? { steps: [{ handler: { type: 'member', id: member.id }, issue_id: null, stage: 'human' }], revision: null, reason: null }
+      return member && !member.archivedAt && (!workspaceId || member.workspaceId === workspaceId) ? { steps: [{ handler: { type: 'member', id: member.id }, issue_id: null, stage: 'human' }], revision: null, reason: null }
         : { steps: [], revision: null, reason: 'explicit_human_responsibility_required' };
     }
     const responsibility = this.ctx.resolveIssueResponsibility(issueId);
+    if (workspaceId && responsibility.workspaceId !== workspaceId) return { steps: [], revision: responsibility.revision, reason: 'source_workspace_changed' };
     const reason = responsibility.unresolved.map(x => `${x.issueId}:${x.reason}`).join(',') || null;
-    if (responsibility.unresolved.some(x => ['parent_cycle', 'parent_missing', 'workspace_mismatch', 'issue_missing'].includes(x.reason)))
+    if (responsibility.unresolved.some(x => ['parent_cycle', 'parent_missing', 'workspace_mismatch', 'issue_missing', 'human_missing', 'human_unavailable'].includes(x.reason)))
       return { steps: [], revision: responsibility.revision, reason };
     const steps: RouteStep[] = [];
     const seen = new Set<string>(sourceAgent ? [`agent:${sourceAgent}`] : []);
@@ -71,19 +73,38 @@ export class Questions {
     const stored = message.metadata.question as QuestionRecord | undefined;
     if (stored?.version === 1) return { message, record: stored };
     const old = message.metadata.decision_record as Record<string, any> | undefined;
+    const human = message.metadata.human_request as Record<string, any> | undefined;
     // Historical decisions have no native waiting call. Keep their identity and answers.
-    if (!old) return null;
+    if (!old && !human) return null;
     const session = this.ctx.issueSessions().getIssueSession(message.session_id);
-    if (!session) return null;
-    const route = this.route(String(old.source_issue_id ?? session.issueId), message.sender_id, old.status === 'escalated');
-    const oldAnswers = Array.isArray(old.history) ? old.history : [];
+    const chat = session ? null : this.ctx.chat().getChatSession(message.session_id);
+    if (!session && !chat) return null;
+    const workspaceId = session?.workspaceId ?? chat!.workspaceId;
+    if (human && !old) {
+      const source = message.task_id ? this.ctx.db.query('SELECT * FROM multiremi_turns WHERE id=?').get(message.task_id) : null;
+      const humanRequired = human.kind === 'permission' || message.metadata.requires_human_authorization === true;
+      const route = this.route(source?.issue_id ?? session?.issueId ?? null, message.sender_id, humanRequired, message.session_id, workspaceId);
+      const response = human.response && typeof human.response === 'object' ? human.response : null;
+      const member = human.responded_by ? this.ctx.workspaces().getWorkspaceMemberByRef(String(human.responded_by), workspaceId) : null;
+      const answer: QuestionAnswer | null = response ? { response, body_md: JSON.stringify(response), actor: { type: 'member', id: member?.id ?? String(human.responded_by ?? '') }, at: String(human.responded_at ?? message.created_at), reply_message_id: '' } : null;
+      const closed = human.status === 'cancelled';
+      return { message, record: { version: 1, workspace_id: workspaceId, source_issue_id: source?.issue_id ?? session?.issueId ?? null,
+        source_attempt_id: source?.current_attempt_id ?? null, responsibility_revision: route.revision, human_required: humanRequired,
+        route: route.steps, route_index: 0, route_revision: 1, route_reason: route.reason, status: answer ? 'answered' : closed ? 'closed' : 'pending', summary: null, answer, answer_revision: answer ? 1 : 0,
+        history: answer ? [{ type: 'answer', at: answer.at, actor: answer.actor, route_revision: 1, answer }] : [],
+        wait: { status: answer || closed ? 'none' : 'detached', reason: 'historical_native_wait_unverified' } } };
+    }
+    const legacy = old!;
+    const required = legacy.status === 'escalated' || ['permission', 'merge', 'production_change'].includes(legacy.kind);
+    const route = this.route(String(legacy.source_issue_id ?? session!.issueId), message.sender_id, required, message.session_id, workspaceId);
+    const oldAnswers = Array.isArray(legacy.history) ? legacy.history : [];
     const answer = (value: any): QuestionAnswer => ({ body_md: String(value.text ?? value.answer ?? ''), response: { answer: String(value.text ?? value.answer ?? '') },
-      actor: { type: value.answererType === 'agent' ? 'agent' : 'member', id: String(value.answererId ?? old.answered_by_member_id ?? '') },
-      at: String(value.at ?? value.answeredAt ?? old.answered_at ?? message.created_at), reply_message_id: '' });
-    return { message, record: { version: 1, workspace_id: session.workspaceId, source_issue_id: String(old.source_issue_id ?? session.issueId), source_attempt_id: null,
-      responsibility_revision: route.revision, human_required: old.status === 'escalated', route: route.steps, route_index: 0, route_revision: 1, route_reason: route.reason,
-      status: old.status === 'answered' ? 'answered' : old.status === 'withdrawn' ? 'closed' : 'pending', summary: null,
-      answer: old.answer ? answer(old.answer) : null, answer_revision: oldAnswers.length || (old.answer ? 1 : 0), history: oldAnswers.map((a: any) => ({ type: 'answer', at: answer(a).at, actor: answer(a).actor, route_revision: 1, answer: answer(a) })),
+      actor: { type: value.answererType === 'agent' ? 'agent' : 'member', id: String(value.answererId ?? legacy.answered_by_member_id ?? '') },
+      at: String(value.at ?? value.answeredAt ?? legacy.answered_at ?? message.created_at), reply_message_id: '' });
+    return { message, record: { version: 1, workspace_id: workspaceId, source_issue_id: String(legacy.source_issue_id ?? session!.issueId), source_attempt_id: null,
+      responsibility_revision: route.revision, human_required: required, route: route.steps, route_index: 0, route_revision: 1, route_reason: route.reason,
+      status: legacy.status === 'answered' ? 'answered' : legacy.status === 'withdrawn' ? 'closed' : 'pending', summary: null,
+      answer: legacy.answer ? answer(legacy.answer) : null, answer_revision: oldAnswers.length || (legacy.answer ? 1 : 0), history: oldAnswers.map((a: any) => ({ type: 'answer', at: answer(a).at, actor: answer(a).actor, route_revision: 1, reason: a.reason, overturn: a.overturn, answer: answer(a) })),
       wait: { status: 'none', reason: 'historical_decision_without_native_call' } } };
   }
   private lock(id: string) {
@@ -92,7 +113,12 @@ export class Questions {
     this.ctx.lockWorkspaceRuntimeLifecycle(result.record.workspace_id);
     this.ctx.db.run('UPDATE multiremi_conversation_log SET revision=revision WHERE id=?', [id]);
     result = this.read(id)!;
+    if (!this.integrity(result.message, result.record)) throw new QuestionError(403, 'question_source_workspace_changed');
     return result;
+  }
+  private integrity(message: UnifiedMessage, record: QuestionRecord): boolean {
+    const facts = this.ctx.db.query('SELECT h.workspace_id,i.workspace_id AS source_workspace FROM multiremi_conversation_heads h LEFT JOIN multiremi_issues i ON i.id=? WHERE h.session_id=?').get(record.source_issue_id, message.session_id);
+    return facts?.workspace_id === record.workspace_id && (!record.source_issue_id || facts?.source_workspace === record.workspace_id);
   }
   private waiting(message: UnifiedMessage, record: QuestionRecord): QuestionRecord['wait'] {
     if (record.wait.status !== 'waiting') return record.wait;
@@ -118,10 +144,15 @@ export class Questions {
   }
   private save(message: UnifiedMessage, record: QuestionRecord, events: CommitEventQueue) {
     const metadata: Record<string, any> = { ...message.metadata, question: record };
-    if (metadata.human_request) metadata.human_request = { ...metadata.human_request, status: record.status === 'pending' ? 'pending' : record.status === 'answered' ? 'responded' : 'cancelled',
+    if (metadata.human_request) metadata.human_request = { ...metadata.human_request, expires_at: null, status: record.status === 'pending' ? 'pending' : record.status === 'answered' ? 'responded' : 'cancelled',
       ...(record.answer ? { response: record.answer.response, responded_by: record.answer.actor.id, responded_at: record.answer.at } : {}),
-      payload: { ...metadata.human_request.payload, root_question_id: message.id, route_revision: record.route_revision, question_summary: record.summary?.body_md ?? null } };
-    if (metadata.decision_record) metadata.decision_record = { ...metadata.decision_record, status: record.status === 'pending' ? record.route[record.route_index]?.stage === 'human' ? 'escalated' : 'pending' : record.status === 'answered' ? 'answered' : 'withdrawn' };
+      payload: { ...metadata.human_request.payload, root_question_id: message.id, route_revision: record.route_revision, question_summary: record.summary?.body_md ?? null, question_summary_wait_until: record.summary_wait_until ?? null } };
+    if (metadata.decision_record) {
+      const history = record.history.filter(event => event.answer).map(event => ({ answererType: event.answer!.actor.type, answererId: event.answer!.actor.id,
+        answer: event.answer!.body_md, reason: event.reason ?? '', overturn: event.overturn ?? null, answeredAt: event.answer!.at }));
+      metadata.decision_record = { ...metadata.decision_record, status: record.status === 'pending' ? record.route[record.route_index]?.stage === 'human' ? 'escalated' : 'pending' : record.status === 'answered' ? 'answered' : 'withdrawn',
+        ...(history.length ? { answer: history.at(-1), history } : {}) };
+    }
     this.ctx.conversationLog().updateConversationLogWithinTransaction(message.session_id, message.seq, { fields: { metadata, resolved_at: record.status === 'pending' ? null : nowIso() } });
     events.workspace.push({ type: 'inbox:new', workspaceId: record.workspace_id, actorType: 'system', actorId: null, payload: { index_only: true, root_question_id: message.id } });
     const relatedIssues = new Set([record.source_issue_id, ...record.route.map(r => r.issue_id)]);
@@ -146,11 +177,13 @@ export class Questions {
       const bot = this.ctx.feishuBot().getFeishuBotConfig(record.workspace_id);
       const remi = bot?.agentId ? this.ctx.agents().getAgent(bot.agentId) : null;
       if (remi && !remi.archivedAt && remi.workspaceId === record.workspace_id && remi.id !== message.sender_id) {
+        record.summary_wait_until = new Date(Date.now() + 60_000).toISOString();
         sendMessageWithinTransaction(this.ctx, { session_id: session, sender: { type: 'platform', id: null }, to: { type: 'agent', ref: remi.id }, message_kind: 'request', wake_requested: 'now',
           dedupe_key: `question-present:${message.id}:${record.route_revision}`, metadata: { root_question_id: message.id, question_route_revision: record.route_revision, question_present_request: true },
           body_md: `请读取原问题 ${message.id}（remi message question get ${message.id}），总结背景、原选项与建议，然后用 remi message question present ${message.id} --revision ${record.route_revision} --summary <总结> 呈现同一个问题。指定人类责任人 ${step.handler.id}；不要另建 AUQ，也不要代答批准。` }, events);
-      }
-      // The persistent original card/fallback can be delivered before Remi is available.
+      } else record.summary_wait_until = null;
+      // This intent is durable, but dispatch waits for Remi present or its
+      // explicit deadline; the web always retains the original question.
       const request = this.ctx.tasks().getTaskHumanRequest(message.id);
       if (request) this.ctx.feishuBot().enqueueQuestionPresentationWithinTransaction(message.id);
     }
@@ -159,7 +192,7 @@ export class Questions {
     const turn = input.source_turn_id ? this.ctx.db.query('SELECT * FROM multiremi_turns WHERE id=?').get(input.source_turn_id) : null;
     if (!turn || turn.current_attempt_id !== sourceAttemptId) throw new QuestionError(409, 'question_source_attempt_changed');
     const humanRequired = input.metadata?.kind === 'permission' || input.metadata?.requires_human_authorization === true;
-    const route = this.route(turn.issue_id, turn.agent_id, humanRequired, input.session_id);
+    const route = this.route(turn.issue_id, turn.agent_id, humanRequired, input.session_id, turn.workspace_id);
     const record: QuestionRecord = { version: 1, workspace_id: turn.workspace_id, source_issue_id: turn.issue_id, source_attempt_id: sourceAttemptId,
       responsibility_revision: route.revision, human_required: humanRequired, route: route.steps, route_index: 0, route_revision: 1, route_reason: route.reason,
       status: 'pending', summary: null, answer: null, answer_revision: 0, history: [], wait: { status: 'waiting', reason: null,
@@ -175,25 +208,41 @@ export class Questions {
   }
   get(id: string, actor?: QuestionActor): QuestionView | null {
     const loaded = this.read(id); if (!loaded) return null;
-    const { message, record } = loaded, step = record.route[record.route_index], wait = this.waiting(message, record);
+    const { message, record } = loaded, valid = this.integrity(message, record), step = valid ? record.route[record.route_index] : undefined, wait = this.waiting(message, record);
     const allowed: QuestionView['actions']['allowed'] = [];
     const rootHuman = record.route.find(r => r.stage === 'human')?.handler;
     if (actor && same(step?.handler, actor) && record.status === 'pending') { allowed.push('answer', 'transfer'); if (actor.type === 'agent') allowed.push('escalate'); }
-    if (actor && record.status === 'pending' && (same(step?.handler, actor) || same(rootHuman, actor) || actor.type === 'agent' && actor.id === message.sender_id)) allowed.push('close');
-    if (actor && same(rootHuman, actor) && record.status === 'answered') { allowed.push('revise'); if (wait.status === 'detached' && message.sender_id) allowed.push('continue'); }
-    const bot = this.ctx.feishuBot().getFeishuBotConfig(record.workspace_id);
+    if (valid && actor && record.status === 'pending' && (same(step?.handler, actor) || same(rootHuman, actor) || actor.type === 'agent' && actor.id === message.sender_id)) allowed.push('close');
+    if (valid && actor && same(rootHuman, actor) && record.status === 'answered') { allowed.push('revise'); if (wait.status === 'detached' && message.sender_id) allowed.push('continue'); }
+    const bot = actor?.type === 'agent' ? this.ctx.feishuBot().getFeishuBotConfig(record.workspace_id) : null;
     if (actor?.type === 'agent' && actor.id === bot?.agentId && record.status === 'pending' && step?.stage === 'human') allowed.push('present');
     const humanRequest = message.metadata.human_request as { kind?: string; payload?: { questions?: unknown[]; context?: { text: string; truncated?: boolean } } } | undefined;
     return { id: message.id, kind: humanRequest ? humanRequest.kind === 'permission' ? 'permission' : 'question' : 'decision', session_id: message.session_id, workspace_id: record.workspace_id, source_issue_id: record.source_issue_id,
       source_agent_id: message.sender_type === 'agent' ? message.sender_id : null, source_turn_id: message.task_id, source_attempt_id: record.source_attempt_id,
       original_questions: Array.isArray(humanRequest?.payload?.questions) ? humanRequest.payload.questions : [], original_message: message.body_md, original_context: humanRequest?.payload?.context ?? null, options: message.options,
-      summary: record.summary, current_handler: step?.handler ?? null, stage: step?.stage ?? 'unavailable', route_revision: record.route_revision, route_reason: record.route_reason, status: record.status,
+      summary: record.summary, current_handler: step?.handler ?? null, stage: step?.stage ?? 'unavailable', route_revision: record.route_revision, route_reason: valid ? record.route_reason : 'source_workspace_changed', status: record.status,
       wait_status: wait.status, wait_reason: wait.reason ?? record.route_reason, answer: record.answer, answer_revision: record.answer_revision, history: record.history, actions: { allowed } };
   }
-  list(issueId: string, actor?: QuestionActor): QuestionView[] {
+  private subtreeSql(): string {
+    return 'WITH RECURSIVE subtree(id) AS (SELECT id FROM multiremi_issues WHERE id=? AND workspace_id=? UNION SELECT i.id FROM multiremi_issues i JOIN subtree s ON i.parent_issue_id=s.id WHERE i.workspace_id=?)';
+  }
+  private jsonText(alias: string, path: string): string {
+    return this.ctx.db.dialect === 'postgres' ? `${alias}.metadata::jsonb #>> '{${path.replaceAll('.', ',')}}'` : `json_extract(${alias}.metadata,'$.${path}')`;
+  }
+  list(issueId: string, actor?: QuestionActor, input: { limit?: number; before?: string } = {}): QuestionView[] {
     const issue = this.ctx.issues().getIssue(issueId); if (!issue) return [];
-    const ids = this.ctx.db.query("SELECT m.id FROM multiremi_conversation_log m JOIN multiremi_conversation_heads h ON h.session_id=m.session_id WHERE h.workspace_id=? AND m.message_kind='decision' AND m.deleted_at IS NULL ORDER BY m.created_at,m.id").all(issue.workspaceId);
-    return ids.map(row => this.get(row.id, actor)).filter((q): q is QuestionView => !!q && (q.source_issue_id === issueId || this.read(q.id)!.record.route.some(r => r.issue_id === issueId)));
+    const limit = Math.min(Math.max(input.limit ?? 100, 1), 200);
+    const cursor = input.before ? this.ctx.db.query('SELECT m.created_at,m.id FROM multiremi_conversation_log m JOIN multiremi_conversation_heads h ON h.session_id=m.session_id WHERE m.id=? AND h.workspace_id=?').get(input.before, issue.workspaceId) : null;
+    if (input.before && !cursor) throw new QuestionError(400, 'question_cursor_invalid');
+    const ids = this.ctx.db.query(`${this.subtreeSql()}, sessions AS (SELECT id FROM multiremi_issue_sessions WHERE issue_id IN (SELECT id FROM subtree) AND workspace_id=?),
+      candidates(id) AS (SELECT id FROM multiremi_conversation_log WHERE session_id IN (SELECT id FROM sessions) AND message_kind='decision'
+        UNION SELECT ${this.jsonText('n', 'root_question_id')} FROM multiremi_conversation_log n WHERE n.session_id IN (SELECT id FROM sessions) AND n.deleted_at IS NULL)
+      SELECT m.id FROM candidates c JOIN multiremi_conversation_log m ON m.id=c.id JOIN multiremi_conversation_heads h ON h.session_id=m.session_id
+      WHERE h.workspace_id=? AND m.message_kind='decision' AND m.deleted_at IS NULL
+      AND (CAST(${this.jsonText('m', 'question.version')} AS TEXT)='1' OR ${this.jsonText('m', 'human_request.status')} IS NOT NULL OR ${this.jsonText('m', 'decision_record.status')} IS NOT NULL)
+      ${cursor ? 'AND (m.created_at<? OR (m.created_at=? AND m.id<?))' : ''} ORDER BY m.created_at DESC,m.id DESC LIMIT ?`)
+      .all(issue.id, issue.workspaceId, issue.workspaceId, issue.workspaceId, issue.workspaceId, ...(cursor ? [cursor.created_at,cursor.created_at,cursor.id] : []), limit);
+    return ids.map(row => this.get(row.id, actor)).filter((q): q is QuestionView => !!q);
   }
   answer(id: string, input: QuestionAnswerInput, sender: SendMessageInput['sender'], sourceTurnId?: string, credential?: QuestionCardCredential) {
     return this.transaction(events => {
@@ -247,7 +296,7 @@ export class Questions {
   transfer(id: string, input: QuestionMutationInput, sender: SendMessageInput['sender'], sourceTurnId?: string) {
     return this.transaction(events => {
       const { message, record } = this.lock(id), actor = this.actor(record, sender, sourceTurnId);
-      const newRoute = this.route(record.source_issue_id, message.sender_id, record.human_required, message.session_id);
+      const newRoute = this.route(record.source_issue_id, message.sender_id, record.human_required, message.session_id, record.workspace_id);
       const rootHuman = record.route.find(r => r.stage === 'human')?.handler;
       const newHuman = newRoute.steps.find(r => r.stage === 'human')?.handler;
       if (input.expected_route_revision !== record.route_revision) throw new QuestionError(409, 'question_route_changed');
@@ -286,6 +335,7 @@ export class Questions {
       if (input.expected_route_revision !== record.route_revision || record.status !== 'pending') throw new QuestionError(409, 'question_route_changed');
       if (typeof input.summary !== 'string' || !input.summary.trim()) throw new QuestionError(400, 'question_summary_required');
       record.summary = { body_md: input.summary.trim(), agent_id: actor.id, at: nowIso() };
+      record.summary_wait_until = null;
       this.event(record, 'present', actor); this.save(message, record, events);
       this.ctx.feishuBot().enqueueQuestionPresentationWithinTransaction(id);
       const request = this.ctx.tasks().getTaskHumanRequest(id);
@@ -352,14 +402,18 @@ export class Questions {
   refreshWithinTransaction(issueId: string, events: CommitEventQueue, actor?: QuestionActor, reason = 'issue_responsibility_transferred') {
     const issue = this.ctx.issues().getIssue(issueId); if (!issue) return;
     this.ctx.lockWorkspaceRuntimeLifecycle(issue.workspaceId);
-    const ids = this.ctx.db.query("SELECT m.id FROM multiremi_conversation_log m JOIN multiremi_conversation_heads h ON h.session_id=m.session_id WHERE h.workspace_id=? AND m.message_kind='decision' AND m.resolved_at IS NULL AND m.deleted_at IS NULL").all(issue.workspaceId);
+    const ids = this.ctx.db.query(`${this.subtreeSql()} SELECT m.id FROM multiremi_issue_sessions s JOIN multiremi_conversation_log m ON m.session_id=s.id
+      WHERE s.workspace_id=? AND m.message_kind='decision' AND m.resolved_at IS NULL AND m.deleted_at IS NULL
+        AND (s.issue_id IN (SELECT id FROM subtree) OR ${this.jsonText('m', 'question.source_issue_id')} IN (SELECT id FROM subtree) OR ${this.jsonText('m', 'decision_record.source_issue_id')} IN (SELECT id FROM subtree))`)
+      .all(issueId, issue.workspaceId, issue.workspaceId, issue.workspaceId);
     for (const row of ids) {
       const loaded = this.read(row.id); if (!loaded || loaded.record.status !== 'pending') continue;
       const { message, record } = loaded;
+      if (!this.integrity(message, record)) continue;
       if (!record.source_issue_id) continue;
       const facts = this.ctx.resolveIssueResponsibility(record.source_issue_id);
       if (!facts.chain.some(x => x.issueId === issueId) && !record.route.some(x => x.issue_id === issueId)) continue;
-      const route = this.route(record.source_issue_id, message.sender_id, record.human_required, message.session_id);
+      const route = this.route(record.source_issue_id, message.sender_id, record.human_required, message.session_id, record.workspace_id);
       if (route.revision === record.responsibility_revision) continue;
       const index = this.transferredIndex(record, route.steps);
       record.route = route.steps; record.route_index = index; record.route_revision++; record.responsibility_revision = route.revision; record.route_reason = route.reason; record.summary = null;
@@ -384,7 +438,9 @@ export class Questions {
     return this.transaction(events => {
       const runtime = this.ctx.runtimes().getRuntimeLite(runtimeId); if (!runtime) return;
       this.ctx.lockWorkspaceRuntimeLifecycle(runtime.workspaceId ?? 'local');
-      const rows = this.ctx.db.query("SELECT id FROM multiremi_conversation_log WHERE message_kind='decision' AND deleted_at IS NULL").all();
+      const rows = this.ctx.db.query(`SELECT m.id FROM multiremi_conversation_log m
+        WHERE m.message_kind='decision' AND m.deleted_at IS NULL AND ${this.jsonText('m', 'question.wait.runtime_id')}=?
+        AND ${this.jsonText('m', 'question.wait.status')}='waiting'`).all(runtimeId);
       for (const row of rows) {
         const loaded = this.read(row.id); if (!loaded) continue;
         const { message, record } = loaded;

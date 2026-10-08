@@ -255,6 +255,8 @@ export function buildTaskInteractionCard(
   const marker = interactionMarker(request.taskId, request.id);
   const elements: Card[] = [];
   if (typeof request.payload.question_summary === 'string' && request.payload.question_summary.trim()) elements.push({ tag: 'markdown', content: `**Remi 总结**\n${escapeCardText(request.payload.question_summary)}` });
+  const context = object(request.payload.context);
+  if (typeof context.text === 'string' && context.text.trim()) elements.push({ tag: 'markdown', content: `**原提问上下文**\n${escapeCardText(context.text)}${context.truncated ? '\n（上下文已截断）' : ''}` });
   const actionValue = options.token ? { t: options.token, message_id: request.id,
     ...(typeof request.payload.route_revision === 'number' ? { route_revision: request.payload.route_revision, root_question_id: request.id } : {}) } : undefined;
   const questions = normalizeQuestions(request.payload.questions);

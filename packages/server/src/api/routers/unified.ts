@@ -228,7 +228,12 @@ export function registerUnifiedRoutes(app: Hono, deps: RouterDeps): void {
     const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId); if (denied) return denied;
     const actor = questionActor(c, issue.workspaceId); if (actor instanceof Response) return actor;
     const visible = conversationEntryVisibility(c, store);
-    return c.json({ questions: store.listIssueQuestions(issue.id, actor).filter(q => {
+    const limit = Number(c.req.query('limit') ?? 100), before = c.req.query('before');
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 200 || before !== undefined && (!before || before.length > 256)) return c.json({ error: 'invalid question page' }, 400);
+    let page: ReturnType<typeof store.listIssueQuestions>;
+    try { page = store.listIssueQuestions(issue.id, actor, { limit, before }); }
+    catch (error) { if (error instanceof QuestionError) return c.json({ error: error.message, code: error.code }, error.status); throw error; }
+    return c.json({ nextCursor: page.length === limit ? page.at(-1)!.id : null, questions: page.filter(q => {
       const message = store.getMessage(q.id)!;
       return !(loadConversation(c, store, q.session_id) instanceof Response) && visible(message);
     }) });
@@ -246,6 +251,7 @@ export function registerUnifiedRoutes(app: Hono, deps: RouterDeps): void {
     return action(c, async () => {
       const input = await body(c);
       if (!Number.isSafeInteger(input.expected_route_revision) || input.expected_route_revision < 1) throw new InputError('expected_route_revision is required');
+      for (const key of ['reason', 'body_md', 'summary']) if (input[key] !== undefined && typeof input[key] !== 'string') throw new InputError(`${key} must be a string`);
       const mutation = { expected_route_revision: input.expected_route_revision, reason: input.reason };
       if (operation === 'answer') {
         if (!input.response || typeof input.response !== 'object' || Array.isArray(input.response)) throw new InputError('response is required');

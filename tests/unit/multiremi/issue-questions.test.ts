@@ -3,6 +3,7 @@ import { pendingTurnBackendTests, type PendingTurnTestFixture } from './pending-
 import { StoreContext, createCommitEventQueue } from '@multiremi/store/context.js';
 import { Questions, refreshIssueQuestionsAfterResponsibilityChangeWithinTransaction } from '@multiremi/store/inbox/questions.js';
 import { MultiremiStore } from '@multiremi/store.js';
+import { decodeDecisionCardBody } from '@shared/feishu-task-card.js';
 
 function setup(f: PendingTurnTestFixture, sameOwner = false) {
   const { store, db } = f;
@@ -33,6 +34,109 @@ function setup(f: PendingTurnTestFixture, sameOwner = false) {
 }
 
 pendingTurnBackendTests('one question through the responsibility chain', fixture => {
+  it('waits for Remi summary before same-Q presentation and preserves the original options in degraded text', () => {
+    const h = setup(fixture());
+    const previous = process.env.MULTIREMI_FEISHU_BOT_ENCRYPTION_KEY;
+    process.env.MULTIREMI_FEISHU_BOT_ENCRYPTION_KEY = Buffer.alloc(32, 11).toString('base64');
+    try {
+      const remi = h.store.createAgent({ name: 'Remi', provider: 'codex' });
+      h.store.heartbeatRuntime(h.runtime.id, { supportsFeishuBotConfig: true, supportsDecisionCard: true });
+      const config = h.store.upsertFeishuBotConfig('local', { agentId: remi.id, runtimeId: h.runtime.id, appId: 'cli_question',
+        appSecretOp: 'set', appSecret: 'synthetic-question-test-secret', enabled: true, domain: 'feishu' });
+      h.store.reportFeishuBotRuntimeStatus('local', h.runtime.id, { appliedRevision: config.revision, state: 'online' });
+      h.store.updateWorkspace('local', { settings: { issueTopics: { enabled: true, chatId: 'oc_question' } } });
+      h.store.prepareFeishuIssueTopicWithinTransaction(h.issue);
+      const topic = h.store.claimFeishuBotOutbound('local', h.runtime.id)!;
+      expect(topic).toBeTruthy();
+      h.store.reportFeishuBotOutbound('local', h.runtime.id, topic.id, { claimToken: topic.claimToken, status: 'sent', externalMessageId: 'om_question_topic' });
+      h.store.escalateQuestion(h.q.id, { expected_route_revision: 1, reason: 'Need parent' }, { type: 'agent', id: h.leader.id }, h.agentTurn(h.leader.id));
+      h.store.escalateQuestion(h.q.id, { expected_route_revision: 2, reason: 'Need human' }, { type: 'agent', id: h.parentLeader.id }, h.agentTurn(h.parentLeader.id));
+      const pending = h.store.getTaskHumanRequest(h.q.id)!;
+      expect(pending.expiresAt).toBeNull();
+      expect(Date.parse(String(pending.payload.question_summary_wait_until))).toBeGreaterThan(Date.now());
+      h.store.prepareFeishuBotHumanRequestPush(pending);
+      h.store.pendingFeishuBotOutbound('local', h.runtime.id);
+      expect(h.db.query('SELECT id FROM multiremi_feishu_bot_outbound_deliveries WHERE human_request_id=?').all(h.q.id)).toHaveLength(0);
+      const summary = 'Remi explains the background and recommends A';
+      h.store.presentQuestion(h.q.id, { expected_route_revision: 3, summary }, { type: 'agent', id: remi.id }, h.agentTurn(remi.id));
+      const delivery = h.store.claimFeishuBotOutbound('local', h.runtime.id)!;
+      expect(delivery?.humanRequestId).toBe(h.q.id);
+      expect(delivery.degraded).toBe('unresolved_recipient');
+      expect(delivery.body).toContain(h.q.id);
+      expect(delivery.body).toContain(summary);
+      expect(delivery.body).toContain('Which approach?');
+      expect(h.store.getQuestion(h.q.id)?.original_questions).toEqual(h.q.original_questions);
+      expect(h.store.getMessage(h.q.id)?.card_token_hash).toBeNull();
+      expect(decodeDecisionCardBody(delivery.body)).toBeNull();
+    } finally {
+      if (previous === undefined) delete process.env.MULTIREMI_FEISHU_BOT_ENCRYPTION_KEY;
+      else process.env.MULTIREMI_FEISHU_BOT_ENCRYPTION_KEY = previous;
+    }
+  });
+  it('reads historical AUQ context without writing or inventing a live provider wait', () => {
+    const h = setup(fixture());
+    const metadata = { human_request: { kind: 'question', status: 'pending', payload: {
+      message: 'Original historical question', context: { text: 'Original context', truncated: true },
+      questions: [{ fieldKey: 'place', otherFieldKey: 'other_place', question: { question: 'Where?', options: [{ label: 'Paris' }] } }],
+    } } };
+    const historical = h.store.sendMessage({ session_id: h.q.session_id, sender: { type: 'agent', id: h.worker.id }, source_turn_id: h.turn.id,
+      to: { type: 'none' }, message_kind: 'decision', wake_requested: 'inbox_only', body_md: 'Original historical question', metadata }).message;
+    const before = h.store.getMessage(historical.id)!;
+    const question = h.store.getQuestion(historical.id)!;
+    expect(question).toMatchObject({ kind: 'question', status: 'pending', wait_status: 'detached', wait_reason: 'historical_native_wait_unverified', original_context: metadata.human_request.payload.context });
+    expect(question.original_questions).toEqual(metadata.human_request.payload.questions);
+    expect(h.store.getMessage(historical.id)?.metadata).toEqual(before.metadata);
+    expect(h.store.getMessage(historical.id)?.revision).toBe(before.revision);
+    expect(() => h.store.deleteMessage(historical.id)).toThrow('Original questions and their history are immutable');
+  });
+  it('retires independent IssueDecision writers while preserving historical answer reasons and no fake wait', () => {
+    const h = setup(fixture());
+    const oldAnswer = { answererType: 'agent', answererId: h.parentLeader.id, answer: 'A', reason: 'Original reason', overturn: 'Ask root human', answeredAt: '2026-01-01T00:00:00Z' };
+    const old = h.store.sendMessage({ session_id: h.q.session_id, sender: { type: 'agent', id: h.worker.id }, source_turn_id: h.turn.id,
+      to: { type: 'none' }, message_kind: 'decision', wake_requested: 'inbox_only', body_md: 'Original decision',
+      metadata: { decision_record: { source_issue_id: h.issue.id, kind: 'question', status: 'answered', answer: oldAnswer, history: [oldAnswer] } } }).message;
+    const question = h.store.getQuestion(old.id)!;
+    expect(question).toMatchObject({ wait_status: 'none', status: 'answered', answer: { body_md: 'A', actor: { id: h.parentLeader.id } } });
+    expect(question.history[0]?.reason).toBe('Original reason');
+    expect((h.store.getMessage(old.id)!.metadata.decision_record as any).history[0].overturn).toBe('Ask root human');
+    expect(() => h.store.createIssueDecision(h.issue.id, { kind: 'question', title: 'Second Q' }, { type: 'agent', id: h.worker.id, taskId: h.task.id })).toThrow('IssueDecision writers are retired');
+    expect(() => h.store.answerIssueDecision(h.issue.id, old.id, { answer: 'B', reason: 'Retired' }, { type: 'member', id: 'mem_local_local', taskId: null })).toThrow('IssueDecision writers are retired');
+  });
+  it('bounds SQL pages and responsibility refresh to related Issues', () => {
+    const h = setup(fixture());
+    const unrelated = h.store.createIssue({ title: 'Unrelated', responsibleMemberId: 'mem_local_local' });
+    const otherSession = h.store.getOrCreateDefaultIssueSession(unrelated.id);
+    const unrelatedQ = h.store.sendMessage({ session_id: otherSession.id, sender: { type: 'platform', id: null }, to: { type: 'none' },
+      message_kind: 'decision', wake_requested: 'inbox_only', body_md: 'Must not resolve', metadata: { human_request: { kind: 'question', status: 'pending', payload: { message: 'Must not resolve' } } } }).message;
+    const second = h.store.sendMessage({ session_id: h.q.session_id, sender: { type: 'platform', id: null }, to: { type: 'none' }, message_kind: 'decision',
+      wake_requested: 'inbox_only', body_md: 'Historical local Q', metadata: { human_request: { kind: 'question', status: 'pending', payload: { message: 'Historical local Q' } } } }).message;
+    const withoutQuestion = h.store.sendMessage({ session_id: h.q.session_id, sender: { type: 'platform', id: null }, to: { type: 'none' }, message_kind: 'decision',
+      wake_requested: 'inbox_only', body_md: 'Unrelated decision message without a Question' }).message;
+    h.db.run('UPDATE multiremi_conversation_log SET metadata=? WHERE id=?', [JSON.stringify({}), withoutQuestion.id]);
+    const resolve = h.store.resolveIssueResponsibility.bind(h.store);
+    h.store.resolveIssueResponsibility = id => { if (id === unrelated.id) throw new Error('Unrelated responsibility query'); return resolve(id); };
+    const first = h.store.listIssueQuestions(h.parent.id, undefined, { limit: 1 });
+    const next = h.store.listIssueQuestions(h.parent.id, undefined, { limit: 1, before: first[0]!.id });
+    expect(new Set([...first, ...next].map(q => q.id))).toEqual(new Set([h.q.id, second.id]));
+    expect(h.store.listIssueQuestions(h.parent.id, undefined, { limit: 1, before: next[0]!.id })).toEqual([]);
+    const ctx = new StoreContext(h.db, () => h.store), events = createCommitEventQueue();
+    h.db.transaction(() => refreshIssueQuestionsAfterResponsibilityChangeWithinTransaction(ctx, h.issue.id, events))();
+    expect(h.store.getMessage(unrelatedQ.id)?.metadata.question).toBeUndefined();
+  });
+  it('fails closed for invalid ancestry, missing root human and moved source workspace', () => {
+    const h = setup(fixture());
+    h.db.run('UPDATE multiremi_issues SET responsible_member_id=NULL WHERE id=?', [h.parent.id]);
+    const ctx = new StoreContext(h.db, () => h.store), events = createCommitEventQueue();
+    h.db.transaction(() => refreshIssueQuestionsAfterResponsibilityChangeWithinTransaction(ctx, h.parent.id, events))();
+    expect(h.store.getQuestion(h.q.id)).toMatchObject({ current_handler: null, stage: 'unavailable' });
+    expect(h.store.getQuestion(h.q.id)?.route_reason).toContain('human_missing');
+    const other = h.store.createWorkspace({ name: 'Other', slug: 'question-other' });
+    const agent = h.store.createAgent({ name: 'Foreign actor', provider: 'codex', workspaceId: other.id });
+    expect(() => h.store.answerQuestion(h.q.id, { expected_route_revision: 2, response: { answer: 'A' } }, { type: 'agent', id: agent.id })).toThrow('question_actor_workspace_mismatch');
+    h.db.run('UPDATE multiremi_issues SET workspace_id=? WHERE id=?', [other.id, h.issue.id]);
+    expect(h.store.getQuestion(h.q.id, { type: 'member', id: 'mem_local_local' })).toMatchObject({ current_handler: null, route_reason: 'source_workspace_changed', actions: { allowed: [] } });
+    expect(() => h.store.answerQuestion(h.q.id, { expected_route_revision: 2, response: { answer: 'A' } }, { type: 'member', id: 'mem_local_local' })).toThrow('question_source_workspace_changed');
+  });
   it('worker routes from the Issue, retains original Q and writes the owner answer to its source session', () => {
     const h = setup(fixture());
     expect(h.q).toMatchObject({ current_handler: { type: 'agent', id: h.leader.id }, stage: 'issue_owner', status: 'pending', wait_status: 'waiting' });
