@@ -615,6 +615,7 @@
     "copy_action": "复制",
     "copied_toast": "已复制",
     "transcript_tooltip": "查看执行记录",
+    "transcript_refresh_failed": "任务状态更新失败，已保留加载的执行记录。",
     "edit_action": "编辑",
     "update_failed": "更新评论失败",
     "send_failed": "发送评论失败",

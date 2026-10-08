@@ -1,6 +1,24 @@
 import { queryOptions } from "@tanstack/react-query";
 import { api } from "../api";
 
+// Task IDs are globally unique resources. Reuse the detail cache already used
+// by Chat execution links; a comment's Issue is not the task's ownership scope.
+export const taskDetailKeys = {
+  all: () => ["task-detail"] as const,
+  detail: (taskId: string) => [...taskDetailKeys.all(), taskId] as const,
+};
+
+export function taskDetailOptions(taskId: string, options: { enabled?: boolean } = {}) {
+  return queryOptions({
+    queryKey: taskDetailKeys.detail(taskId),
+    queryFn: () => api.getTask(taskId),
+    enabled: options.enabled ?? true,
+    staleTime: 30_000,
+    retry: false,
+    refetchOnWindowFocus: false,
+  });
+}
+
 export const agentTaskSnapshotKeys = {
   all: (wsId: string) => ["workspaces", wsId, "agent-task-snapshot"] as const,
   list: (wsId: string) => [...agentTaskSnapshotKeys.all(wsId), "list"] as const,

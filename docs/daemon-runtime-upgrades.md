@@ -61,8 +61,69 @@ daemon 由 systemd 托管时，重启交给 `systemctl --user restart --no-block
 
 旧版本只有进程内存中的 trace，新进程不能自动找回；原始 provider 日志也不能可靠重建全部 Remi 事件。
 旧 daemon 停止前，需通过现有 `trace.read` 分页保存仍需保留的记录，或确认对应 Session Archive 已达到 ready 后再交接。
-保存的导出只是人工备份：本 PR 不提供导入命令，也不保证把它自动恢复到新 daemon 的热指针。
-已停止且没有归档/备份的旧内存记录不可恢复，不能把升级后的空或不可达历史解释为本版本恢复成功。
+保存的导出只是人工备份，升级本身不会把它自动恢复到新 daemon 的热指针。
+已停止且没有归档/备份的旧内存记录不能逐事件原样恢复，不能把升级后的空或不可达历史解释为本版本恢复成功。
+
+仍持有 provider 原生 JSONL 时，运维恢复入口
+`SessionArchiveService.ingestNativeTraceRecovery` 可接收经过身份核对和转换的标准 trace 归档。
+它要求算法版本、源文件哈希/行范围、原生 session/turn、任务身份匹配证据、恢复事件种类和遗漏说明，
+并在提交事务中重新锁定、核对 terminal Task 的工作区、Agent、Runtime、provider、两种 Session、时间与原 daemon 指针。
+归档仅含已核对的 trace，按现有 ZIP/hash/index 规则验证后，ready 行与指针一起提交；不会重写任务状态、usage、
+turn 卡统计或旧 `task_messages` 补录的 progress/digest。恢复后的事件数只表示此次实际恢复条数，不能冒充原始流式事件总数。
+
+该入口沿用低优先级的 `trace_backfill` 指针来源，归档 metadata 明确记录
+`recovery_source: native_provider_jsonl`，并非把原生事件序号与旧表序号放在同一轴上比较。
+只允许替换已验证缺失的 daemon 指针，任何已有 archive、lost、活动或身份发生变化的任务均拒绝；
+完全相同的导入再次执行时复用同一归档且数据库零写入。后续真实 daemon 归档仍拥有更高优先级。
+缺失启动确认仅允许一个受限情形：数据库任务已取消、`started_at` 与 `result` 都为 null，但原生日志
+有可独立绑定的执行记录。此时必须携带 `nativeExecutionBinding.kind = cancelled_without_start_ack`，
+准确匹配任务 prompt 哈希与 provider session，至少两个不同源行的结构化任务 ID 证据（其中一个来自
+`remi context`），且该工作区/provider 下仅这一个数据库任务占有该原生 session。提交再次核对
+原生起止时间位于数据库创建到取消之间，恢复事件也必须在证明的原生时间段内。
+仅此缺确认情形下，`dispatched_at` 可能由延迟的派发/重试更新而晚于原生执行，故不用它缩短已经由
+精确 prompt、唯一 session 和直接任务 ID 证据证明的时间段；创建时间仍是不能越过的硬下界。
+文件头可记录证明中的原生开始时间；数据库的取消状态、空开始时间、空 result 和统计保持原样。
+未满足这些证据的取消任务，以及无启动确认的失败/完成任务，仍拒绝导入。普通任务的快照字段与既有恢复
+metadata 哈希规则没有增加字段，以保持已准备和已导入的计划可原样验证、重放。
+入口是本地运维辅助方法，不新增 HTTP 或 `remi` 命令；provider JSONL 的任务匹配和转换验证必须先于调用完成。
+
+离线规划器 [prepare-native-task-trace-recovery.ts](../scripts/prepare-native-task-trace-recovery.ts) 只读受限目录里的
+`recovery-identities.json`（任务/指针快照）、`task-anchors.json`（原派活与结构化 result）、
+`source-snapshots.json`（经哈希验证的原生文件快照清单）和 `recovery-runtimes.json`（已核实的 Runtime→Daemon 对应）。
+原生快照与这些含正文的输入必须保持私有，不能提交到仓库。传入新的 `--output-dir` 与明确的
+`--claude-mapper` 文件路径；规划器记录映射器及恢复代码的 SHA-256，生成标准 JSONL、ZIP、`plans.json` 和不含正文的对账报告。
+只规划 completed 任务：按 provider session、派活时工作目录、精确 prompt、完整 output 及明确 turn/UUID 血缘匹配，
+原生中断续接和压缩必须有显式关联。Claude 会保留并行工具的兄弟分支，不能只读最终祖先链；
+Codex 使用 canonical completed items，避免再播放 response_item 镜像。未知执行记录、错配或无来源的任务保留为 skipped。
+回复与工具内容先按源核验，发布前对可识别的凭证脱敏并记录次数；不得把输入 prompt/context 附件作为执行输出导入。
+执行前再次确认原生快照对应前缀 SHA 未变（允许文件仅追加后续轮次）且目标的标准 trace 确实缺失。
+
+`scripts/import-native-task-traces.ts` 接收私有 manifest，默认只读检查固定任务快照、标准 JSONL、归档和事件摘要。
+脚本直接装配所需 Repo，不构造会自动迁移/补种数据的 `MultiremiStore`；生产只使用环境变量中的
+`MULTIREMI_DATABASE_URL`（Postgres）与 `MULTIREMI_SESSION_ARCHIVE_ROOT`，不会把连接串放进参数或日志。
+
+执行导入必须使用 **API 进程的实际 uid/gid**。API 镜像的 entrypoint 通过 `gosu` 降权，普通
+`docker exec` 不会再次运行 entrypoint，可能仍以 root 执行；此时迁移创建的 0700 目录/0600 归档会让
+root 的读回检查通过，但 API 进程不能读。先核对 API 进程的 `/proc/<pid>/status` 中 `Uid`/`Gid`，
+确认容器 `REMI_RUNTIME_UID/GID` 与实际进程相符，然后用 `docker exec --user <uid>:<gid>` 运行。
+`--execute` 和 `--verify` 都会在读取计划、打开数据库、创建 journal 或临时目录之前，将当前进程的有效 uid/gid 与声明值比较，
+不一致立即拒绝。声明值默认取 `REMI_RUNTIME_UID/GID`；未配置时须同时传 `--service-uid` 和
+`--service-gid`，显式参数也不能覆盖与容器环境不一致的身份。脚本不会自动 chown 或放宽共享归档根权限。
+`--verify` 必须以相同的 API 身份运行，不能以 root 的可读性代替实际服务可读性；默认只读预检不强制身份，仍建议用 API 身份。
+
+```bash
+bun scripts/import-native-task-traces.ts --plan=/private/recovery/plan.json --staging-root=/private/recovery
+# 1001:1001 仅为示例，替换为上一步核对的 API uid/gid；staging/journal 须对该身份可读写。
+docker compose exec --user 1001:1001 api bun scripts/import-native-task-traces.ts --plan=/private/recovery/plan.json --staging-root=/private/recovery --task-id=tsk_example --execute --service-uid=1001 --service-gid=1001 --journal=/private/recovery/journal.jsonl
+docker compose exec --user 1001:1001 api bun scripts/import-native-task-traces.ts --plan=/private/recovery/plan.json --staging-root=/private/recovery --verify --service-uid=1001 --service-gid=1001 --journal=/private/recovery/journal.jsonl
+```
+
+`--task-id` 可重复；所有选中任务先预检，再串行提交，任一步失败即停止。
+每个归档使用临时副本交给导入服务，保留 manifest 引用的原 ZIP；成功后经实际 `TraceReader` 分页到 eof
+核对准确的事件摘要/数量，同时核对任务、turn 卡和旧补录状态未变。owner-only journal 逐条 fsync；
+`--verify` 可用 journal 再核对原状态摘要，且不依赖 provider 原始文件或 staging 文件仍存在。
+如把脚本 bundle 后复制进 API 容器，需将 `packages/server/src/store/db/pg-worker.ts` 单独编译为同目录
+`pg-worker.ts`；同步 Postgres bridge 的 Worker 使用这个相对文件名。容器只需要 Bun 和这两个文件。
 
 新文件头保存 `runtime_id`；缺少该字段的旧文件不猜测热读权限，可继续走已有归档流程。
 一次性任务的后台归档意图也保存在该 Runtime 的 `.runtime` root，上传失败或重启不会授权提前删除源文件；

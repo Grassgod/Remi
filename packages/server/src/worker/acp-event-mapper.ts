@@ -89,9 +89,13 @@ function hasMeaningfulInput(input: Record<string, unknown> | undefined): boolean
  * assigns a distinct seq to every emitted message — reusing one seq for two
  * messages would collide on UNIQUE(task_id, seq).
  */
-export function createEventMapper(adapter: AgentAdapter): (event: ProviderEvent) => TaskMessageInput[] {
+export function createEventMapper(
+  adapter: AgentAdapter,
+  options: { now?: () => number } = {},
+): (event: ProviderEvent) => TaskMessageInput[] {
   const tools = new Map<string, ToolCallState>();
   let synCounter = 0;
+  const now = options.now ?? Date.now;
 
   return (event: ProviderEvent): TaskMessageInput[] => {
     const raw = event as Record<string, any>;
@@ -143,7 +147,7 @@ export function createEventMapper(adapter: AgentAdapter): (event: ProviderEvent)
     }
 
     if (su === "tool_call" || su === "tool_call_update") {
-      return mapToolEvent(raw, su === "tool_call", tools, adapter, () => `syn_${synCounter++}`);
+      return mapToolEvent(raw, su === "tool_call", tools, adapter, () => `syn_${synCounter++}`, now);
     }
 
     return [];
@@ -156,6 +160,7 @@ function mapToolEvent(
   tools: Map<string, ToolCallState>,
   adapter: AgentAdapter,
   synthId: () => string,
+  now: () => number,
 ): TaskMessageInput[] {
   const id: string = typeof raw.toolCallId === "string" && raw.toolCallId ? raw.toolCallId : synthId();
   // The adapter resolves the real tool name and reconstructs input from
@@ -195,7 +200,7 @@ function mapToolEvent(
     kind: raw.kind,
     input,
     status: status ?? "pending",
-    startMs: Date.now(),
+    startMs: now(),
     terminalEmitted: false,
     // Real attribution from the bridge wins for any agent type. The time-window
     // heuristic is the claude-only fallback for bridges that don't send it:
@@ -295,7 +300,7 @@ function mapToolEvent(
       state.lastFingerprint = fingerprint;
       if (isTerminal) state.terminalEmitted = true;
       const resultMeta: Record<string, unknown> = { ...meta };
-      if (isTerminal) resultMeta.duration_ms = Date.now() - state.startMs;
+      if (isTerminal) resultMeta.duration_ms = now() - state.startMs;
       // Results are self-contained snapshots so a bounded tail can reconstruct
       // the call even when its invocation/argument refinements were earlier.
       const mergedInputJson = state.input ? JSON.stringify(state.input) : undefined;

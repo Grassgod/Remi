@@ -1,7 +1,7 @@
 "use client";
 
-import { memo, useCallback, useRef, useState } from "react";
-import { CheckCircle2, Copy, MoreHorizontal, Pencil, Reply, RotateCcw, Trash2 } from "lucide-react";
+import { memo, useCallback, useEffect, useRef, useState } from "react";
+import { CheckCircle2, Copy, LoaderCircle, MoreHorizontal, Pencil, Reply, RotateCcw, ScrollText, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@multiremi/ui/components/ui/button";
 import {
@@ -12,6 +12,7 @@ import {
   DropdownMenuSeparator,
 } from "@multiremi/ui/components/ui/dropdown-menu";
 import { Tooltip, TooltipTrigger, TooltipContent } from "@multiremi/ui/components/ui/tooltip";
+import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@multiremi/ui/components/ui/dialog";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -30,13 +31,13 @@ import { cn } from "@multiremi/ui/lib/utils";
 import { copyText } from "@multiremi/ui/lib/clipboard";
 import { useActorName } from "@multiremi/core/workspace/hooks";
 import { useQuery } from "@tanstack/react-query";
-import { issueKeys } from "@multiremi/core/issues/queries";
-import { TranscriptButton } from "../../common/task-transcript";
+import { taskDetailOptions } from "@multiremi/core/agents/queries";
+import { TaskTraceDialog } from "../../common/task-transcript/task-trace-dialog";
 import { useTimeAgo } from "../../i18n";
 import { ContentEditor, type ContentEditorRef, ReadonlyContent, useFileDropZone, FileDropOverlay, Attachment as AttachmentRenderer, AttachmentDownloadProvider } from "../../editor";
 import { FileUploadButton } from "@multiremi/ui/components/common/file-upload-button";
 import { useFileUpload } from "@multiremi/core/hooks/use-file-upload";
-import { api } from "@multiremi/core/api";
+import { api, ApiError } from "@multiremi/core/api";
 import type { ReplyTarget } from "./comment-input";
 import { quotePreview } from "../utils/quote-preview";
 import type { TimelineEntry, Attachment } from "@multiremi/core/types";
@@ -658,30 +659,66 @@ function CommentCardImpl({
 // every callback is stabilized via useCallback in use-issue-timeline.ts.
 /**
  * Transcript entry for an agent's reply. The comment carries the run that wrote
- * it (`task_id`), and the issue's task list — already cached by the execution
- * log on this page — supplies the task object the dialog needs. A task that is
- * gone (deleted, or not in the list) renders nothing rather than a dead button.
+ * it (`task_id`). A run can post into an Issue from an independent delegation
+ * or Chat, so the Issue's task list is not an authoritative lookup. Fetch that
+ * exact task on click through the normal task-detail ACL and schema boundary.
  */
-export function CommentTranscriptButton({ issueId, entry }: { issueId: string; entry: TimelineEntry }) {
-  const { t } = useT("issues");
+export function CommentTranscriptButton({ entry }: { issueId: string; entry: TimelineEntry }) {
   // Only an agent reply that recorded its run gets an entry point; human and
   // pre-linkage comments fetch nothing at all.
   const taskId = entry.actor_type === "agent" ? entry.task_id ?? null : null;
-  const { data: tasks = [] } = useQuery({
-    queryKey: issueKeys.tasks(issueId),
-    queryFn: () => api.listTasksByIssue(issueId),
-    enabled: Boolean(taskId),
-    staleTime: 30_000,
-  });
-  const task = taskId ? tasks.find((item) => item.id === taskId) : undefined;
-  if (!task) return null;
+  return taskId ? <LinkedCommentTranscriptButton key={taskId} taskId={taskId} /> : null;
+}
+
+function LinkedCommentTranscriptButton({ taskId }: { taskId: string }) {
+  const { t } = useT("issues");
+  const [open, setOpen] = useState(false);
+  const query = useQuery(taskDetailOptions(taskId, { enabled: open }));
+  const label = t(($) => $.comment.transcript_tooltip);
+  const accessFailure = query.isError && query.error instanceof ApiError && [401, 403, 404].includes(query.error.status);
+  const [accessBlocked, setAccessBlocked] = useState(false);
+  useEffect(() => {
+    if (accessFailure) setAccessBlocked(true);
+    else if (query.isSuccess && query.data?.id === taskId) setAccessBlocked(false);
+  }, [accessFailure, query.isSuccess, query.data?.id, taskId]);
+  // Keep an already authorized dialog through transient metadata failures.
+  // A known access denial remains fenced until a successful detail read;
+  // retrying that denial and getting a 500 must not resurrect stale details.
+  const task = !accessFailure && (!accessBlocked || query.isSuccess) && query.data?.id === taskId ? query.data : undefined;
   return (
-    <TranscriptButton
-      task={task}
-      agentName=""
-      title={t(($) => $.comment.transcript_tooltip)}
-      className="h-8 w-8"
-    />
+    <>
+      <Tooltip>
+        <TooltipTrigger
+          render={<button type="button" />}
+          onClick={(event) => { event.preventDefault(); event.stopPropagation(); setOpen(true); }}
+          aria-label={label}
+          className="flex h-8 w-8 items-center justify-center text-muted-foreground hover:text-foreground hover:bg-accent/50 transition-colors"
+        >
+          <ScrollText className="h-3.5 w-3.5" />
+        </TooltipTrigger>
+        <TooltipContent>{label}</TooltipContent>
+      </Tooltip>
+      {open && (task
+        ? <TaskTraceDialog task={task} agentName={task.agent_name ?? ""} onOpenChange={setOpen}
+          headerSlot={query.isError ? <div role="alert" className="flex items-center gap-3 text-sm">
+            <span>{t(($) => $.comment.transcript_refresh_failed)}</span>
+            <Button size="sm" variant="outline" disabled={query.isFetching} onClick={() => void query.refetch()}>{t(($) => $.log_event.task_retry)}</Button>
+          </div> : undefined} />
+        : <Dialog open onOpenChange={setOpen}>
+          <DialogContent className="max-w-md">
+            <DialogTitle>{label}</DialogTitle>
+            {query.isPending || query.isFetching
+              ? <DialogDescription className="flex items-center gap-2">
+                <LoaderCircle className="size-4 animate-spin" aria-hidden />
+                {t(($) => $.log_event.task_loading)}
+              </DialogDescription>
+              : <>
+                <DialogDescription role="alert">{t(($) => $.log_event.task_unavailable)}</DialogDescription>
+                <Button variant="outline" onClick={() => void query.refetch()}>{t(($) => $.log_event.task_retry)}</Button>
+              </>}
+          </DialogContent>
+        </Dialog>)}
+    </>
   );
 }
 

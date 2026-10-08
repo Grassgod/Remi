@@ -393,6 +393,20 @@ export function AgentTranscriptDialog({
           : null;
   const emptyStateSpins = !taskTerminal && ((task.status === "dispatched" && !task.queue_blocker) || (task.status === "running" && isLive));
   const traceUnavailable = traceError || (traceResult !== undefined && traceResult !== null && traceResult.state !== "ok");
+  const traceArchiveReadFailed = traceResult?.state === "unreachable"
+    && (traceResult.source === "archive" || traceResult.reason === "archive_read_failed");
+  const traceRuntimeOffline = traceResult?.state === "unreachable" && !traceArchiveReadFailed
+    && traceResult.reason === "daemon_unreachable";
+  const traceRuntimeLabel = traceResult?.runtime_name?.trim() || traceResult?.runtime_id?.trim();
+  const traceUnreachableLabel = traceArchiveReadFailed
+    ? t(($) => $.transcript.trace_archive_failed)
+    : traceRuntimeOffline
+      ? traceRuntimeLabel
+        ? t(($) => $.transcript.trace_unreachable, { name: traceRuntimeLabel })
+        : t(($) => $.transcript.trace_runtime_offline)
+      : t(($) => $.transcript.trace_unavailable);
+  const traceLastSeen = traceRuntimeOffline && traceResult?.last_seen_at
+    && Number.isFinite(Date.parse(traceResult.last_seen_at)) ? traceResult.last_seen_at : null;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -644,14 +658,14 @@ export function AgentTranscriptDialog({
             <span className="min-w-0 flex-1">
               {traceError ? t(($) => $.transcript.trace_failed) : traceLoading && !traceResult ? t(($) => $.transcript.trace_loading)
                 : traceResult?.state === "unreachable"
-                  ? t(($) => $.transcript.trace_unreachable, { name: traceResult.runtime_name ?? traceResult.runtime_id ?? "" })
+                  ? traceUnreachableLabel
                   : traceResult?.state === "backfilling" ? t(($) => $.transcript.trace_backfilling)
                   : traceResult?.state === "lost" ? t(($) => $.transcript.trace_lost)
                   : traceResult?.state === "not_found" ? t(($) => $.transcript.trace_not_found)
                   : traceResult?.closed ? t(($) => $.transcript.trace_finished, { count: items.length })
                   : t(($) => $.transcript.trace_live)}
-              {traceResult?.state === "unreachable" && traceResult.last_seen_at && (
-                <span className="block">{t(($) => $.transcript.trace_last_seen, { time: new Date(traceResult.last_seen_at).toLocaleString() })}</span>
+              {traceLastSeen && (
+                <span className="block">{t(($) => $.transcript.trace_last_seen, { time: new Date(traceLastSeen).toLocaleString() })}</span>
               )}
               {traceWindowLimit && <span className="block text-[10px]">{t(($) => $.transcript.trace_window, { count: traceWindowLimit })}</span>}
             </span>

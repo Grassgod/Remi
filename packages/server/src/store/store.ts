@@ -121,6 +121,8 @@ import {
   type TraceBackfillCommitInput,
   type TraceBackfillCommitResult,
   type TracePointerCompletionResult,
+  type NativeTraceRecoveryCommitInput,
+  type NativeTraceRecoveryCommitResult,
 } from "@multiremi/store/repos/session-archives-repo.js";
 import {
   TaskTracesRepo,
@@ -1148,6 +1150,14 @@ runMigrations(this.db);
       const turnCards = this.traceBackfillProgress.fillTurnCards(input.turnSummaries);
       return { ...result, turnCards };
     })();
+  }
+
+  getNativeTraceRecoveryTaskSnapshot(taskId: string) {
+    return this.sessionArchives.getNativeTraceRecoveryTaskSnapshot(taskId);
+  }
+
+  commitNativeTraceRecovery(input: NativeTraceRecoveryCommitInput): NativeTraceRecoveryCommitResult {
+    return this.db.transaction(() => this.sessionArchives.commitNativeTraceRecoveryWithinTransaction(input))();
   }
 
   listExecutionGroups(workspaceId: string) { return listExecutionGroups(this.db, workspaceId); }

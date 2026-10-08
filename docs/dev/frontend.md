@@ -74,7 +74,11 @@ WSClient → useRealtimeSync → sync/<领域>.ts
 
 执行过程弹窗打开时读取一页，后续历史由用户继续加载；历史游标独立于 WS 尾部记录，实时帧不能跨过尚未加载的历史。浏览器的历史与实时窗口同时限制记录数和序列化字节数，具体上限集中在 [trace-window.ts](../../frontend/packages/core/api/trace-window.ts)。窗口回收只移除浏览器缓存，可回到历史开头重新分页读取。页面计数明确标示已加载范围，只有序号连续且完整时才从记录提取最终回复；不把某一页文字当作完整回答。切换任务重新创建窗口状态，旧请求不能写入新任务；订阅错误提供重试，`stream.closed` 在最终批次之后结束实时状态。
 
+执行记录不可读时按来源和原因展示：归档读取失败显示历史记录读取错误；只有 `daemon_unreachable` 显示执行机离线，缺少机器名称和 ID 时使用完整的通用文案。超时、繁忙和未知原因显示暂时无法读取，保留重试；最近在线时间仅在已确认离线且时间有效时展示。归档错误不依赖执行机在线信息。验证入口为 [task-trace-dialog.test.tsx](../../frontend/packages/views/common/task-transcript/task-trace-dialog.test.tsx)。
+
 Issue 运行条读取已有任务状态、耗时和 `progress_summary`，详细 trace 在点击后读取；不为显示运行条自动下载历史记录，也不把有限窗口的工具计数标成全任务总数。已结束的 Chat 直接展示会话日志保存的最终答复、附件和失败信息，通过“执行过程”按钮查看 trace；复制正文不依赖 trace 是否在线。Chat 正在展示的执行时间线是单独的实时消费者，使用有限尾部窗口。验证入口为 [build-timeline.test.ts](../../frontend/packages/views/common/task-transcript/build-timeline.test.ts)、[task-trace-dialog.test.tsx](../../frontend/packages/views/common/task-transcript/task-trace-dialog.test.tsx)、[chat-message-list.test.tsx](../../frontend/packages/views/chat/components/chat-message-list.test.tsx) 和 [chat-timeline.test.ts](../../frontend/packages/views/chat/lib/chat-timeline.test.ts)。
+
+Agent 评论的执行过程入口以评论的 `task_id` 为准，点击后通过已有任务详情接口读取，再打开同一个 trace 弹窗；任务不必绑定评论所在 Issue。入口不读取整份 Issue 任务列表，详情随任务生命周期、重连、resync 和工作区切换更新。后台状态刷新遇到临时网络或服务端错误时保留已加载的 trace 并提供重试；权限失效或任务已删除时停止展示缓存详情，评论正文保持可读。详情与 trace 分别沿用服务端权限检查；没有任务关联的旧评论和人类评论不发起任务读取。验证入口为 [comment-transcript-button.test.tsx](../../frontend/packages/views/issues/components/comment-transcript-button.test.tsx)。
 
 任务列表包含按状态分页的缓存结构；详情只需要已有列表中的某个对象时，使用 `findCachedIssue`，避免为查缓存额外挂载完整列表查询。列表、看板、我的单的「显示子单」偏好由各自的 view store 持久化，默认关闭；查询键与请求都包含服务端 `top_level_only` 过滤值，不能在客户端裁掉子单。父单进度从服务端 child-progress buckets 显示。工作台复用查询缓存区分待人工输入与待验收，不能只根据单个任务的完成状态自行推导整个 issue 的展示。
 
