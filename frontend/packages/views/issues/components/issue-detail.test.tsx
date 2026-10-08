@@ -1819,7 +1819,7 @@ describe("IssueDetail (shared)", () => {
 
     // Core rows — always rendered regardless of whether the issue has a value.
     expect(screen.getByText("Status")).toBeInTheDocument();
-    expect(screen.getByText("Assignee")).toBeInTheDocument();
+    expect(screen.getByText("Execution coordinator")).toBeInTheDocument();
     // "Project" appears twice (row label + picker stub), so disambiguate by id.
     expect(screen.getByTestId("project-picker")).toBeInTheDocument();
     // priority="high" + due_date are set in the fixture, so both optional rows show.

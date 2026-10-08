@@ -10,8 +10,19 @@ export class IssueResponsibilityEndpoints {
     return parseStrictResponse<z.infer<typeof IssueResponsibilitySchema>>(await this.http.fetch<unknown>(path), IssueResponsibilitySchema, { endpoint: path });
   }
   async listIssueDeliveries(id: string) {
-    const path = `/api/issues/${encodeURIComponent(id)}/deliveries`;
-    return parseStrictResponse<{ deliveries: z.infer<typeof IssueDeliverySchema>[] }>(await this.http.fetch<unknown>(path), z.object({ deliveries: z.array(IssueDeliverySchema) }), { endpoint: path }).deliveries;
+    const schema = z.object({ deliveries: z.array(IssueDeliverySchema), nextCursor: z.string().nullable().optional() });
+    const deliveries: z.infer<typeof IssueDeliverySchema>[] = [];
+    const seen = new Set<string>();
+    let before: string | undefined;
+    do {
+      const path = `/api/issues/${encodeURIComponent(id)}/deliveries?limit=100${before ? `&before=${encodeURIComponent(before)}` : ""}`;
+      const page = parseStrictResponse<z.infer<typeof schema>>(await this.http.fetch<unknown>(path), schema, { endpoint: path });
+      deliveries.push(...page.deliveries);
+      before = page.nextCursor ?? undefined;
+      if (before && seen.has(before)) throw new ApiContractError(path, "Server repeated a delivery page cursor");
+      if (before) seen.add(before);
+    } while (before);
+    return deliveries;
   }
   async submitIssueDelivery(id: string, body: { summary: string; sessionId?: string; dedupeKey?: string }) {
     const path = `/api/issues/${encodeURIComponent(id)}/deliveries`;

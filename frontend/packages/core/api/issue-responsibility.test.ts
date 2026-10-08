@@ -7,6 +7,18 @@ const question = { id: "q1", session_id: "session", workspace_id: "ws", source_i
   kind: "question", status: "pending", wait_status: "detached", wait_reason: "provider exited", answer: null, history: [], actions: { allowed: ["answer"] } };
 afterEach(() => vi.unstubAllGlobals());
 describe("responsibility API contracts", () => {
+  it("reads older formal delivery pages and rejects a repeating cursor", async () => {
+    const actor = { type: "agent", id: "owner", issueId: "issue", name: "Owner" };
+    const delivery = { id: "recent", issueId: "issue", sourceSessionId: "session", summary: "Evidence", status: "returned", submittedBy: actor, reviewOwner: actor, responsibilityRevision: "v1", responseMessageId: null, responseBody: "Fix", createdAt: "now", respondedAt: "now" };
+    const page = (id: string, nextCursor: string | null) => new Response(JSON.stringify({ deliveries: [{ ...delivery, id }], nextCursor }));
+    const fetch = vi.fn().mockResolvedValueOnce(page("recent", "recent")).mockResolvedValueOnce(page("older", null));
+    vi.stubGlobal("fetch", fetch);
+    const client = new ApiClient("https://api.test");
+    expect((await client.listIssueDeliveries("issue")).map(item => item.id)).toEqual(["recent", "older"]);
+    expect(fetch.mock.calls[1]?.[0]).toBe("https://api.test/api/issues/issue/deliveries?limit=100&before=recent");
+    fetch.mockResolvedValueOnce(page("recent", "recent")).mockResolvedValueOnce(page("older", "recent"));
+    await expect(client.listIssueDeliveries("issue")).rejects.toBeInstanceOf(ApiContractError);
+  });
   it("preserves original payload and detached wait state, including future display enums", () => {
     const value = QuestionViewSchema.parse({ ...question, stage: "future_stage", original_questions: [{ question: { question: "Exact?", options: [] } }] });
     expect(value.original_questions).toEqual([{ question: { question: "Exact?", options: [] } }]);

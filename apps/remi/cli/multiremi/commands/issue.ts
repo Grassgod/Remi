@@ -43,7 +43,7 @@ import {
 import {
   VALID_ISSUE_STATUSES,
   actorBodyFromOptions,
-  addAssigneeBodyFields,
+  addAssigneeBodyFields as addLegacyAssigneeBodyFields,
   addStringBodyField,
   citationRefsOption,
   metadataFilterFromOptions,
@@ -53,6 +53,11 @@ import {
   readOptionalTextBody,
   subscriberBodyFromOptions,
 } from "./fields.js";
+
+function addAssigneeBodyFields(body: Record<string, unknown>, options: CliOptions, idKey: string, typeKey: string, nameKey: string): void {
+  addLegacyAssigneeBodyFields(body, options, idKey, typeKey, nameKey);
+  if (body.assignee_type === "member") throw new Error("Execution assignee must be an Agent or Squad; designate the root human with --responsible-member");
+}
 
 export interface CliIssueComment {
   id: string;
@@ -817,7 +822,7 @@ export async function issueAssign(issueId: string, options: CliOptions): Promise
     body.assignee_type = null;
     body.assignee_id = null;
   } else {
-    if (!hasTarget) throw new Error("provide --to <id|name|email> [--to-type agent|member|squad] or --unassign");
+    if (!hasTarget) throw new Error("provide --to <id|name> [--to-type agent|squad] or --unassign");
     addAssigneeBodyFields(body, options, "to-id", "to-type", "to");
   }
   // MUL-400 E3: to start a parked issue, use `issue update --status todo

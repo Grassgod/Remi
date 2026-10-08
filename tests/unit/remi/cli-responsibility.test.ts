@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { CommandRegistry } from "../../../apps/remi/cli/core/index.js";
 import { responsibilityCommandSpecs } from "../../../apps/remi/cli/commands/responsibility.js";
+import { issueAssign, issueUpdate } from "../../../apps/remi/cli/multiremi/commands/issue.js";
 const specs = responsibilityCommandSpecs();
 const registry = new CommandRegistry();
 for (const command of specs) registry.register(command);
@@ -25,6 +26,18 @@ afterEach(() => {
   for (const name of envNames) { if (envBefore[name] === undefined) delete process.env[name]; else process.env[name] = envBefore[name]; }
 });
 describe("responsibility CLI", () => {
+  it("rejects new human execution assignment while keeping root human configuration independent", async () => {
+    setup();
+    await expect(issueAssign("root", { to: "mem_human" })).rejects.toThrow("Execution assignee must be an Agent or Squad");
+    await expect(issueUpdate("root", { assignee: "human", "assignee-type": "member" })).rejects.toThrow("Execution assignee must be an Agent or Squad");
+    expect(requests).toHaveLength(0);
+  });
+  it("reads an explicit formal delivery history page", async () => {
+    setup(); await registry.execute(["issue", "delivery", "list", "root", "--limit", "20", "--cursor", "older", "--output", "json"]);
+    const request = requests.find(request => new URL(request.url).pathname === "/api/issues/root/deliveries")!;
+    expect(new URL(request.url).searchParams.get("limit")).toBe("20");
+    expect(new URL(request.url).searchParams.get("before")).toBe("older");
+  });
   const cases: Array<{ args: string[]; method: string; path: string; body?: unknown }> = [
     { args: ["issue", "responsibility", "root"], method: "GET", path: "/api/issues/root/responsibility" },
     { args: ["issue", "responsible", "set", "root", "--member", "member"], method: "PATCH", path: "/api/issues/root", body: { responsible_member_id: "member" } },

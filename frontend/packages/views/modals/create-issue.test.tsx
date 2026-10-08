@@ -87,6 +87,7 @@ vi.mock("@multiremi/core/projects/queries", () => ({
         { id: "prj_squad", default_assignee_type: "squad", default_assignee_id: "sqd_ops", archived_at: null },
         { id: "prj_agent", default_assignee_type: "agent", default_assignee_id: "agt_build", archived_at: null },
         { id: "prj_plain", default_assignee_type: null, default_assignee_id: null, archived_at: null },
+        { id: "prj_legacy", default_assignee_type: "member", default_assignee_id: "member-old", archived_at: null },
       ]),
   }),
 }));
@@ -222,8 +223,8 @@ vi.mock("../issues/components", () => ({
       data-assignee-type={assigneeType ?? ""}
       data-assignee-id={assigneeId ?? ""}
     >
-      <button type="button" onClick={() => onUpdate?.({ assignee_type: "member", assignee_id: "user-9" })}>
-        Pick member assignee
+      <button type="button" onClick={() => onUpdate?.({ assignee_type: "agent", assignee_id: "agent-9" })}>
+        Pick Agent assignee
       </button>
     </div>
   ),
@@ -746,6 +747,15 @@ describe("CreateIssueModal", () => {
     expect(mockSetDraft).toHaveBeenCalledWith({ title: "", description: "" });
   });
 
+  it("creates an explicitly unconfigured execution owner instead of inheriting a legacy human default", async () => {
+    const user = userEvent.setup();
+    renderModal(<CreateIssueModal onClose={vi.fn()} data={{ project_id: "prj_legacy" }} />);
+    await waitFor(() => expect(screen.getByTestId("assignee-picker").dataset.assigneeType).toBe(""));
+    fireEvent.change(screen.getByPlaceholderText("Issue title"), { target: { value: "Configure execution later" } });
+    await user.click(screen.getByRole("button", { name: "Create Issue" }));
+    await waitFor(() => expect(mockCreateIssue).toHaveBeenCalledWith(expect.objectContaining({ assignee_type: null, assignee_id: null, responsible_member_id: "member-human" })));
+  });
+
   it("prefills the assignee from the picked project's bound default", async () => {
     const user = userEvent.setup();
     renderModal(<CreateIssueModal onClose={vi.fn()} />);
@@ -797,9 +807,9 @@ describe("CreateIssueModal", () => {
     });
 
     // A manual pick overrides the auto-fill and sticks.
-    await user.click(screen.getByRole("button", { name: "Pick member assignee" }));
-    expect(screen.getByTestId("assignee-picker").dataset.assigneeType).toBe("member");
-    expect(screen.getByTestId("assignee-picker").dataset.assigneeId).toBe("user-9");
+    await user.click(screen.getByRole("button", { name: "Pick Agent assignee" }));
+    expect(screen.getByTestId("assignee-picker").dataset.assigneeType).toBe("agent");
+    expect(screen.getByTestId("assignee-picker").dataset.assigneeId).toBe("agent-9");
 
     fireEvent.change(screen.getByPlaceholderText("Issue title"), {
       target: { value: "Manually assigned" },
@@ -808,8 +818,8 @@ describe("CreateIssueModal", () => {
     await waitFor(() => {
       expect(mockCreateIssue).toHaveBeenCalledWith(expect.objectContaining({
         project_id: "prj_squad",
-        assignee_type: "member",
-        assignee_id: "user-9",
+        assignee_type: "agent",
+        assignee_id: "agent-9",
       }));
     });
   });

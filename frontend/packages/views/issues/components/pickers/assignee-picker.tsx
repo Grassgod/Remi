@@ -2,12 +2,11 @@
 
 import { useMemo, useState } from "react";
 import { Lock, UserMinus } from "lucide-react";
-import type { Agent, IssueAssigneeType, MemberWithUser, UpdateIssueRequest } from "@multiremi/core/types";
+import type { Agent, IssueAssigneeType, UpdateIssueRequest } from "@multiremi/core/types";
 import { useQuery } from "@tanstack/react-query";
 import { useAuthStore } from "@multiremi/core/auth";
 import { canAssignAgentToIssue } from "@multiremi/core/permissions";
 import { useActorName } from "@multiremi/core/workspace/hooks";
-import { findMemberById } from "@multiremi/core/workspace/member-lookup";
 import { useWorkspaceId } from "@multiremi/core/hooks";
 import { memberListOptions, agentListOptions, squadListOptions, assigneeFrequencyOptions } from "@multiremi/core/workspace/queries";
 import { useAfterFirstScreen } from "@multiremi/core/platform/use-after-first-screen";
@@ -22,7 +21,7 @@ import {
 import { useT } from "../../../i18n";
 import { matchesPinyin } from "../../../editor/extensions/pinyin-match";
 
-const DEFAULT_ALLOWED_TYPES: IssueAssigneeType[] = ["member", "agent", "squad"];
+const DEFAULT_ALLOWED_TYPES: IssueAssigneeType[] = ["agent", "squad"];
 
 /**
  * Legacy boolean shape kept around for callers (e.g. `use-issue-actions.ts`)
@@ -83,13 +82,10 @@ export function AssigneePicker({
   );
   const { data: frequency = [] } = useQuery(assigneeFrequencyOptions(wsId));
   const { getActorName } = useActorName();
-  const allowedTypeSet = useMemo(() => new Set(allowedTypes), [allowedTypes]);
+  const allowedTypeSet = useMemo(() => new Set(allowedTypes.filter(type => type === "agent" || type === "squad")), [allowedTypes]);
 
   const currentMember = members.find((m) => m.user_id === user?.id);
   const memberRole = currentMember?.role;
-  const assigneeMember = assigneeType === "member" && assigneeId
-    ? findMemberById(members, assigneeId)
-    : undefined;
 
   // Build a lookup map from frequency data for sorting.
   const freqMap = useMemo(() => {
@@ -101,13 +97,8 @@ export function AssigneePicker({
   }, [frequency]);
 
   const getFreq = (type: string, id: string) => freqMap.get(`${type}:${id}`) ?? 0;
-  const getMemberFreq = (member: MemberWithUser) =>
-    freqMap.get(`member:${member.id}`) ?? freqMap.get(`member:${member.user_id}`) ?? 0;
 
   const query = filter.trim().toLowerCase();
-  const filteredMembers = members
-    .filter((m) => allowedTypeSet.has("member") && (m.name.toLowerCase().includes(query) || matchesPinyin(m.name, query)))
-    .sort((a, b) => getMemberFreq(b) - getMemberFreq(a));
   const filteredAgents = agents
     .filter((a) => allowedTypeSet.has("agent") && !a.archived_at && (a.name.toLowerCase().includes(query) || matchesPinyin(a.name, query)))
     .sort((a, b) => getFreq("agent", b.id) - getFreq("agent", a.id));
@@ -142,6 +133,7 @@ export function AssigneePicker({
           <>
             <ActorAvatar actorType={assigneeType} actorId={assigneeId} size={18} enableHoverCard showStatusDot />
             <span className="truncate">{triggerLabel}</span>
+            {assigneeType === "member" && <span className="text-xs text-amber-700">{t($ => $.responsibility.legacy_execution)}</span>}
           </>
         ) : (
           <span className="text-muted-foreground">{triggerLabel}</span>
@@ -160,28 +152,6 @@ export function AssigneePicker({
           <UserMinus className="h-3.5 w-3.5 text-muted-foreground" />
           <span className="text-muted-foreground">{unassignedText}</span>
         </PickerItem>
-      )}
-
-      {/* Members */}
-      {filteredMembers.length > 0 && (
-        <PickerSection label={t(($) => $.pickers.assignee.members_group)}>
-          {filteredMembers.map((m) => (
-            <PickerItem
-              key={m.id}
-              selected={assigneeMember?.id === m.id}
-              onClick={() => {
-                onUpdate({
-                  assignee_type: "member",
-                  assignee_id: m.id,
-                });
-                setOpen(false);
-              }}
-            >
-              <ActorAvatar actorType="member" actorId={m.id} size={18} />
-              <span className="truncate">{m.name}</span>
-            </PickerItem>
-          ))}
-        </PickerSection>
       )}
 
       {/* Agents */}
@@ -247,8 +217,7 @@ export function AssigneePicker({
         </PickerSection>
       )}
 
-      {filteredMembers.length === 0 &&
-        filteredAgents.length === 0 &&
+      {filteredAgents.length === 0 &&
         filteredSquads.length === 0 &&
         filter && <PickerEmpty />}
     </PropertyPicker>

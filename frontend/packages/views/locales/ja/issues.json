@@ -1,5 +1,7 @@
 {
   "responsibility": {
+    "legacy_execution": "過去のユーザー割り当て · 実行担当の設定が必要",
+    "execution_unconfigured": "実行担当の設定が必要",
     "close": "質問を閉じる",
     "configure": "責任者を設定",
     "authorize": "この納品の承認を担当 Agent に許可",
@@ -353,7 +355,7 @@
     "prop_status": "ステータス",
     "complete_issue_action": "Issue を完了",
     "prop_priority": "優先度",
-    "prop_assignee": "担当者",
+    "prop_assignee": "実行統括",
     "prop_start_date": "開始日",
     "prop_due_date": "期限",
     "prop_project": "プロジェクト",

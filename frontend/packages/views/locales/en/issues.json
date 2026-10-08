@@ -1,5 +1,7 @@
 {
   "responsibility": {
+    "legacy_execution": "Historical human assignment · execution needs configuration",
+    "execution_unconfigured": "Execution owner needs configuration",
     "close": "Close question",
     "configure": "Configure responsible owner",
     "authorize": "Authorize coordinator for this delivery",
@@ -356,7 +358,7 @@
     "prop_status": "Status",
     "complete_issue_action": "Complete issue",
     "prop_priority": "Priority",
-    "prop_assignee": "Assignee",
+    "prop_assignee": "Execution coordinator",
     "prop_start_date": "Start date",
     "prop_due_date": "Due date",
     "prop_project": "Project",

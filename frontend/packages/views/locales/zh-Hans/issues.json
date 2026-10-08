@@ -1,5 +1,7 @@
 {
   "responsibility": {
+    "legacy_execution": "历史成员指派 · 执行归属待配置",
+    "execution_unconfigured": "执行归属待配置",
     "close": "关闭问题并保留历史",
     "configure": "配置责任人",
     "authorize": "授权执行统筹验收此交付",
@@ -354,7 +356,7 @@
     "prop_status": "状态",
     "complete_issue_action": "完成 Issue",
     "prop_priority": "优先级",
-    "prop_assignee": "负责人",
+    "prop_assignee": "本单执行统筹",
     "prop_start_date": "开始日期",
     "prop_due_date": "截止日期",
     "prop_project": "项目",

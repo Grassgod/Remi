@@ -61,6 +61,7 @@ Chat 队列读取发给当前 agent、位于实际 cursor_seq 之后的消息；
 日志中的 HTML 附件预览由 `DeferredContentContext` 延迟到实际揭示后读取，揭示前只显示固定槽位（默认 240px，已有 QueryClient 高度缓存时复用）。成功、错误与重挂载保持槽位高度；日志外的预览保留原高度和错误展示。正文、工具栏、弹窗和独立预览页共用带 workspace slug 与附件 ID 的内容 query key，保留 5 分钟 staleTime、30 分钟 gcTime、无自动重试及既有失效策略。SSR 播种的日志需等定位脚本确认 DOM 已揭示才启动这些可选读取。运行任务卡片使用 128px 可滚动槽位，避免缓存缺任务时后续卡片增高移动日志锚点。
 
 SDK 的直接 AUQ 题项与 ACP 的 `{fieldKey, question}` 题项在展示表单层统一解析，原 Q 的 payload 保持原样；两种形式都支持多题、多选和自由回答。
+执行归属选择器只提供 Agent／Squad，顶层人类使用独立责任字段。历史 member 执行指派保留原身份并明确标为待配置，提供手动迁移入口；新建单不会继承旧 member 项目默认值。正式交付历史沿 `nextCursor` 分页读取，不只展示最近一页。
 
 ## 一次任务读取与更新
 

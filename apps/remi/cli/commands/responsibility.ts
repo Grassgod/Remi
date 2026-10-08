@@ -8,8 +8,8 @@ const content: CliOptionSpec = { name: "summary", type: "string", description: "
 function spec(path: string[], description: string, mutation: "read" | "write", positionals: CommandSpec["positionals"], options: readonly CliOptionSpec[], run: CommandSpec["run"], humanOnly = false): CommandSpec {
   return { id: path.join("."), path, description, capability: path.join("."), auth: humanOnly ? ["human"] : ["human", "task"], mutation, outputs: ["table", "json", "jsonl"], positionals, options: commandOptions(options, ...(mutation === "read" ? [PAGE_OPTIONS] : [])), run };
 }
-async function request(i: CommandInvocation, method: "GET" | "POST" | "PATCH", path: string, body?: unknown, collections: string[] = []) {
-  const result = await (await clientFor(i)).request({ method, path, body });
+async function request(i: CommandInvocation, method: "GET" | "POST" | "PATCH", path: string, body?: unknown, collections: string[] = [], query?: { limit?: number; before?: string }) {
+  const result = await (await clientFor(i)).request({ method, path, body, query });
   renderResource(i, result.data, collections);
 }
 const issuePath = (i: CommandInvocation) => `/api/issues/${encodePath(positional(i, 0, "issue"))}`;
@@ -19,7 +19,11 @@ export function responsibilityCommandSpecs(): CommandSpec[] {
     spec(["issue", "responsibility"], "Resolve execution, parent reviewer and designated root human", "read", [ref("issue")], [], i => request(i, "GET", `${issuePath(i)}/responsibility`)),
     spec(["issue", "responsible", "set"], "Explicitly assign or transfer the root human; retains audit history", "write", [ref("issue")], [{ name: "member", type: "string", required: true, description: "Workspace member ID" }], i => request(i, "PATCH", issuePath(i), { responsible_member_id: stringOption(i, "member") }), true),
     spec(["issue", "question", "list"], "List original questions and routing/answer history", "read", [ref("issue")], [], i => request(i, "GET", `${issuePath(i)}/questions`, undefined, ["questions"])),
-    spec(["issue", "delivery", "list"], "List formal deliveries awaiting or completed review", "read", [ref("issue")], [], i => request(i, "GET", `${issuePath(i)}/deliveries`, undefined, ["deliveries"])),
+    spec(["issue", "delivery", "list"], "List formal deliveries; --cursor uses the response nextCursor", "read", [ref("issue")], [], i => {
+      const limit = integerOption(i, "limit") ?? undefined;
+      if (limit != null && (limit < 1 || limit > 100)) throw new CliError("usage", "delivery list --limit must be between 1 and 100");
+      return request(i, "GET", `${issuePath(i)}/deliveries`, undefined, ["deliveries"], { limit, before: stringOption(i, "cursor") ?? undefined });
+    }),
     spec(["issue", "delivery", "authorize"], "Designated human explicitly authorizes or revokes Agent acceptance of one delivery", "write", [ref("issue"), ref("delivery")], [{ name: "revision", type: "string", required: true, description: "Delivery responsibilityRevision" }, { name: "agent", type: "string", conflictsWith: ["revoke"], description: "Current execution coordinator Agent ID" }, { name: "revoke", type: "boolean", conflictsWith: ["agent"], description: "Revoke this delivery-specific authorization" }], async i => {
       const agentId = stringOption(i, "agent");
       if (!agentId && i.options.revoke !== true) throw new CliError("usage", "delivery authorize requires --agent or --revoke");

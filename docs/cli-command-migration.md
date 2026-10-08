@@ -10,10 +10,13 @@ execution coordinator belongs to the Issue, the direct parent coordinator review
 child results, and the root explicitly designates a human. Create/update accepts
 `--responsible-member <workspace-member-id>`; `remi issue responsible set <root>
 --member <member-id>` explicitly transfers it and preserves ownership audit.
-Children inherit the root human and never persist an independent copy.
+Children inherit the root human and never persist an independent copy. New execution
+assignees use `agent` or `squad`; historical member assignments remain visible as
+needing configuration and are not valid execution coordinators.
 
 `remi issue delivery list|submit <issue>` reads or submits formal delivery evidence;
 submit requires the execution coordinator's identity and `--summary` or JSON input.
+Delivery list takes `--limit 1..100` and `--cursor <nextCursor>` for older pages.
 `remi issue delivery accept|return <issue> <delivery> --revision <responsibilityRevision>`
 reviews that exact delivery (`return` requires `--reason`). The designated human can
 use `remi issue delivery authorize <issue> <delivery> --revision <revision> --agent

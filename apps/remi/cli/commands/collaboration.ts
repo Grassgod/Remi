@@ -74,7 +74,7 @@ const ISSUE_FIELDS: readonly CliOptionSpec[] = [
   { name: "project", type: "string", valueName: "project", description: "Project ID" },
   { name: "parent", type: "string", valueName: "issue", description: "Parent issue" },
   { name: "assignee", type: "string", valueName: "ref", description: "Assignee reference" },
-  { name: "assignee-type", type: "string", valueName: "agent|member|squad", description: "Assignee type" },
+  { name: "assignee-type", type: "string", valueName: "agent|squad", description: "Execution assignee type; root human uses --responsible-member" },
   { name: "start-date", type: "string", valueName: "date", description: "Start date" },
   { name: "due-date", type: "string", valueName: "date", description: "Due date" },
   { name: "attachment", type: "string", valueName: "path", repeatable: true, description: "Attachment file" },
@@ -161,7 +161,7 @@ function issueCompatibilitySpecs(): CommandSpec[] {
     ], ["issue", "update"]),
     legacySpec("issue.assign", ["issue", "assign"], "Assign or unassign an issue", "write", HUMAN_TASK, [refPositional("issue")], [
       { name: "to", type: "string", valueName: "ref", description: "Assignee reference" },
-      { name: "to-type", type: "string", valueName: "type", description: "Assignee type" },
+      { name: "to-type", type: "string", valueName: "agent|squad", description: "Execution assignee type" },
       { name: "unassign", type: "boolean", description: "Clear the assignee and cancel active tasks on this issue" },
     ], ["issue", "assign"]),
     legacySpec("issue.status", ["issue", "status"], "Change issue status", "write", HUMAN_TASK, [refPositional("issue"), refPositional("status")], [

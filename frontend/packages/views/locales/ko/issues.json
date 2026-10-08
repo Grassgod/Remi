@@ -1,5 +1,7 @@
 {
   "responsibility": {
+    "legacy_execution": "이전 사용자 할당 · 실행 담당자 설정 필요",
+    "execution_unconfigured": "실행 담당자 설정 필요",
     "close": "질문 종료",
     "configure": "책임자 설정",
     "authorize": "이 전달에 대한 담당 Agent 승인 허용",
@@ -356,7 +358,7 @@
     "prop_status": "상태",
     "complete_issue_action": "Issue 완료",
     "prop_priority": "우선순위",
-    "prop_assignee": "담당자",
+    "prop_assignee": "실행 담당자",
     "prop_start_date": "시작일",
     "prop_due_date": "마감일",
     "prop_project": "프로젝트",
