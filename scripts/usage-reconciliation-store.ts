@@ -5,6 +5,7 @@ import { markRequestReadCacheLockTaken } from "../packages/server/src/store/requ
 import type { ReconcileUsagePlan } from "./reconcile-task-usage.js";
 import { unitActualTotal } from "../packages/acp/src/usage-collector.js";
 import { readUsageRevisionState, usageRevisionStateSha256 } from "./usage-reconciliation-revisions.js";
+import { applyModernUsageRepairs, verifyModernUsageRepairs } from "./modern-usage-repair.js";
 
 export const usagePlanChecksum = (plan: ReconcileUsagePlan) => createHash("sha256").update(JSON.stringify(plan)).digest("hex");
 const coverageCommitment = (unit: ReconcileUsagePlan["tasks"][number]["snapshot"]["units"][number]) => ({
@@ -42,6 +43,11 @@ export function applyUsageReconciliation(db: SqlDatabase, plan: ReconcileUsagePl
       if (!["missing_request_namespace", "competing_request_owners"].includes(evidence.reason) || !Array.isArray(evidence.competingTaskIds)) throw new Error("Invalid reconciliation attribution evidence");
       validateUsageSnapshot({ ...item.snapshot, units: [evidence.unit] });
     }
+  }
+  for (const repair of plan.modernRepairs ?? []) {
+    if (seen.has(repair.taskId) || !/^[a-f0-9]{64}$/.test(repair.expectedStateSha256)) throw new Error("Invalid or duplicate modern reconciliation task");
+    seen.add(repair.taskId);
+    for (let offset = 0; offset < repair.snapshot.units.length; offset += 500) validateUsageSnapshot({ ...repair.snapshot, units: repair.snapshot.units.slice(offset, offset + 500) });
   }
   db.exec(`CREATE TABLE IF NOT EXISTS multiremi_usage_reconciliation_audit (
     task_id TEXT NOT NULL, plan_checksum TEXT NOT NULL, original_units TEXT NOT NULL, original_runs TEXT NOT NULL,
@@ -146,7 +152,8 @@ export function applyUsageReconciliation(db: SqlDatabase, plan: ReconcileUsagePl
     processed++;
     if (processed % 100 === 0 || processed === plan.tasks.length) onProgress?.({ processed, applied, resumed });
   }
-  return { applied, resumed, checksum };
+  const modern = applyModernUsageRepairs(db, plan.modernRepairs ?? [], checksum);
+  return { applied: applied + modern.applied, resumed: resumed + modern.resumed, checksum };
 }
 
 export function verifyUsageReconciliation(db: SqlDatabase, plan: ReconcileUsagePlan): {
@@ -201,5 +208,11 @@ export function verifyUsageReconciliation(db: SqlDatabase, plan: ReconcileUsageP
     units += Number(result.units); actualTokens += Number(result.actual);
     if (item.unrecoverableReason) unknownTasks++;
   }
-  return { checksum, tasks: plan.tasks.length, units, actualTokens, preservedLegacyTokens, ledgerActualTokens: actualTokens + preservedLegacyTokens, unknownTasks };
+  const modernTasks = verifyModernUsageRepairs(db, plan.modernRepairs ?? [], checksum);
+  for (const repair of plan.modernRepairs ?? []) {
+    units += repair.snapshot.units.length;
+    actualTokens += repair.afterActualTokens;
+    if (repair.snapshot.units.some(unit => unit.accuracy === "unknown" && unit.source !== "context_snapshot")) unknownTasks++;
+  }
+  return { checksum, tasks: plan.tasks.length + modernTasks, units, actualTokens, preservedLegacyTokens, ledgerActualTokens: actualTokens + preservedLegacyTokens, unknownTasks };
 }

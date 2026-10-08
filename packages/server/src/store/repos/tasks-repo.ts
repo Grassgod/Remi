@@ -3091,7 +3091,7 @@ export class TasksRepo {
   }
 
   taskOfferRetryDeadlines(runtimeId: string): Array<{ taskId: string; runtimeId: string | null; at: string }> {
-    const runtime = this.ctx.runtimes().getRuntime(runtimeId);
+    const runtime = this.ctx.runtimes().getRuntimeLite(runtimeId);
     if (!runtime) return [];
     const rows = this.ctx.db.query(`SELECT id, runtime_id, next_retry_at FROM multiremi_turn_execution_records
       WHERE workspace_id = ? AND status = 'queued' AND next_retry_at IS NOT NULL
@@ -3104,7 +3104,7 @@ export class TasksRepo {
     const excludedTargets = new Map<string, { agentId: string; model: string | null; thinkingLevel: string | null }>();
     const ownsTransaction = !this.ctx.db.inTransaction;
     const claimWithinTransaction = (deferredEvents: CommitEventQueue) => {
-      const runtime = this.ctx.runtimes().getRuntime(runtimeId);
+      const runtime = this.ctx.runtimes().getRuntimeLite(runtimeId);
       if (!runtime) throw new Error(`Runtime not found: ${runtimeId}`);
       // Serialize concurrent claims per workspace. Postgres evaluates each
       // statement on its own snapshot, so two runtimes claiming at once could
@@ -3118,7 +3118,7 @@ export class TasksRepo {
       // same workspace lock. Holding it through claim + snapshot prevents a
       // mutable capability change from slipping between dispatch and freeze.
       this.ctx.agentPlugins().lockAgentPluginWorkspace(runtime.workspaceId ?? "local");
-      const lockedRuntime = this.ctx.runtimes().getRuntime(runtimeId);
+      const lockedRuntime = this.ctx.runtimes().getRuntimeForDispatch(runtimeId);
       if (!lockedRuntime || (lockedRuntime.workspaceId ?? "local") !== (runtime.workspaceId ?? "local")) {
         throw new AgentPluginReadinessChangedError("Runtime changed during task claim");
       }

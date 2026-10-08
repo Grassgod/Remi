@@ -10,9 +10,10 @@ import { createHash } from "node:crypto";
 import { PostgresSyncDatabase } from "../packages/server/src/store/db/postgres.js";
 import { applyUsageReconciliation, verifyUsageReconciliation } from "./usage-reconciliation-store.js";
 import { ensureUsageAccountingSchema, legacyUsageSnapshot } from "../packages/server/src/store/usage-accounting.js";
-import { assignHistoricalUnit, parseNativeUsageEvidence, parseRawUsageEvidence, type HistoricalTaskBoundary } from "./usage-evidence.js";
+import { assignHistoricalUnit, parseNativeUsageEvidence, parseRawUsageEvidence, mergeNativeUsageEvidence, reconcileNativeSourceEvidence, type HistoricalTaskBoundary, type CompletedNativeTurn, type NativeSourceScope } from "./usage-evidence.js";
 import { readLegacyUsageMembers } from "./legacy-usage-archive.js";
 import { nextUsageRevision, readPlanUsageRevisionStates, usageRevisionStateSha256 } from "./usage-reconciliation-revisions.js";
+import { buildModernUsageRepairs, type ModernUsageRepair, type NativeRunScope, type readModernRepairState } from "./modern-usage-repair.js";
 
 interface Task extends HistoricalTaskBoundary { workspace_id: string; agent_id: string; issue_id: string | null; chat_session_id: string | null; usage: string; has_live_usage: boolean; status: string; }
 interface Archive { id: string; relative_path: string; subject_kind: string; subject_id: string; format: string; }
@@ -36,6 +37,8 @@ export interface ReconcileUsagePlan {
     attributionEvidence?: Array<{ reason: "missing_request_namespace" | "competing_request_owners"; unit: TaskUsageUnit; competingTaskIds: string[] }> }>;
   limitations: string[];
   excludedTasks?: Array<{ taskId: string; reason: "modern_live_usage" | "nonterminal_task" }>;
+  modernRepairs?: ModernUsageRepair[];
+  modernRepairSkipped?: Array<{ taskId: string; reason: string }>;
 }
 
 export function summarizeReconcileUsagePlan(plan: ReconcileUsagePlan) {
@@ -62,7 +65,11 @@ export function summarizeReconcileUsagePlan(plan: ReconcileUsagePlan) {
     else delta.equal++;
   }
   return { counts: plan.counts, taskManifestCount: plan.tasks.length, excluded, source, coverage, unrecoverable, attribution, delta, evidenceDelta,
-    originalKnownTokens, recoveredKnownSubtotal, countedEvidenceTokens, preservedLegacyTokens, plannedLedgerKnownTokens: countedEvidenceTokens + preservedLegacyTokens };
+    originalKnownTokens, recoveredKnownSubtotal, countedEvidenceTokens, preservedLegacyTokens,
+    modernRepairCount: plan.modernRepairs?.length ?? 0, modernRepairSkipped: plan.modernRepairSkipped ?? [],
+    modernBeforeActualTokens: (plan.modernRepairs ?? []).reduce((sum, repair) => sum + repair.beforeActualTokens, 0),
+    modernAfterActualTokens: (plan.modernRepairs ?? []).reduce((sum, repair) => sum + repair.afterActualTokens, 0),
+    plannedLedgerKnownTokens: countedEvidenceTokens + preservedLegacyTokens + (plan.modernRepairs ?? []).reduce((sum, repair) => sum + repair.afterActualTokens, 0) };
 }
 
 async function archiveIndex(root: string, archive: Archive): Promise<{ handle: Awaited<ReturnType<typeof open>>; index: SessionArchiveIndex; bytesRead: number }> {
@@ -88,7 +95,7 @@ async function archiveIndex(root: string, archive: Archive): Promise<{ handle: A
   } catch (error) { await handle.close(); throw error; }
 }
 
-export async function buildReconcileUsagePlan(sql: Bun.SQL, options: { archiveRoot?: string; taskId?: string; archiveLimit?: number; onProgress?: (message: string) => void } = {}): Promise<ReconcileUsagePlan> {
+export async function buildReconcileUsagePlan(sql: Bun.SQL, options: { archiveRoot?: string; taskId?: string; archiveLimit?: number; nativeRunScopes?: NativeRunScope[]; onProgress?: (message: string) => void } = {}): Promise<ReconcileUsagePlan> {
   const plan: ReconcileUsagePlan = { version: 2, mode: "read-only", generatedAt: new Date().toISOString(), counts: {
     tasks: 0, rawEvents: 0, archives: 0, nativeMembers: 0, rejected: 0, replayed: 0, ambiguousRawEvents: 0, ambiguousTaskEvents: 0, archiveReadFailures: 0, bytesRead: 0,
   }, tasks: [], limitations: [
@@ -98,7 +105,7 @@ export async function buildReconcileUsagePlan(sql: Bun.SQL, options: { archiveRo
     "Native facts take precedence over overlapping raw actual reports for the same task; missing native coverage remains unknown.",
     "Historical connection IDs require explicit event evidence; current configuration never fills them. Configured/current runtime models never become actual models.",
     "Partial native/raw evidence never replaces a known legacy aggregate without proven complete coverage; it is retained separately for reconciliation. Only unknown legacy consumption can gain a request subtotal; no task is claimed completely recovered.",
-    "Modern live and nonterminal tasks are excluded from historical evidence application but retained as competing task ownership boundaries; explicit legacy schema migration still covers every task.",
+    "Nonterminal tasks remain excluded. Modern terminal tasks require a single completed run and an evidenced matching provider session; ambiguous ownership or coverage is skipped. Partial native subtotals retain unproven old unknown observations; only a completed native turn with reconciled request totals proves their retirement.",
     "A request requires real provider session/request identity; Codex cumulative meters require real session, explicit epoch and before/after intervals, never a fabricated turn request ID. Missing namespaces and cross-task competing identities remain non-additive attribution evidence; unknown routes compete with known routes rather than being guessed independent.",
   ] };
   // Ownership resolution must see every competing task, even --task-id.
@@ -109,7 +116,7 @@ export async function buildReconcileUsagePlan(sql: Bun.SQL, options: { archiveRo
   plan.excludedTasks = tasks.filter(task => (!options.taskId || task.id === options.taskId) && !selected(task))
     .map(task => ({ taskId: task.id, reason: task.has_live_usage ? "modern_live_usage" : "nonterminal_task" }));
   plan.counts.tasks = tasks.filter(selected).length;
-  const byTask = new Map(tasks.map(t => [t.id, { task: t, raw: new Map<string, TaskUsageUnit>(), native: new Map<string, TaskUsageUnit>(), context: null as TaskUsageUnit | null, ambiguousRawEvents: 0 }]));
+  const byTask = new Map(tasks.map(t => [t.id, { task: t, raw: new Map<string, TaskUsageUnit>(), native: new Map<string, TaskUsageUnit>(), completedTurns: [] as CompletedNativeTurn[], sourceScopes: [] as NativeSourceScope[], context: null as TaskUsageUnit | null, ambiguousRawEvents: 0 }]));
   const lastSignature = new Map<string, string>();
   let afterTask = "", afterSeq = -1;
   for (;;) {
@@ -160,7 +167,7 @@ export async function buildReconcileUsagePlan(sql: Bun.SQL, options: { archiveRo
       const candidates = tasks.filter(t => archive.subject_kind === "task" ? t.id === archive.subject_id
         : archive.subject_kind === "chat" ? t.chat_session_id === archive.subject_id : t.issue_id === archive.subject_id);
       if (!candidates.length) continue;
-      if (!candidates.some(selected)) continue;
+      if (!candidates.some(task => terminal(task) && (!options.taskId || task.id === options.taskId))) continue;
       if (options.archiveLimit !== undefined && plan.counts.archives >= options.archiveLimit) break;
       plan.counts.archives++;
       const ingest = (path: string, body: string, ref: string) => {
@@ -172,12 +179,24 @@ export async function buildReconcileUsagePlan(sql: Bun.SQL, options: { archiveRo
         const rootSession = segments[1], agentId = segments.find(segment => segment.startsWith("agt_"));
         const scoped = candidates.filter(t => (archive.subject_kind !== "issue" || t.issue_session_id === rootSession)
           && (!agentId || t.agent_id === agentId));
-        for (const unit of evidence.units) {
+        for (const proof of evidence.completedTurns ?? []) {
+          const task = assignHistoricalUnit({ provider, occurredAt: proof.completedAt } as TaskUsageUnit, scoped);
+          if (task) {
+            const target = byTask.get(task.id)!;
+            if (!target.completedTurns.some(old => JSON.stringify(old) === JSON.stringify(proof))) target.completedTurns.push(proof);
+          }
+        }
+        for (const unit of evidence.sourceUnits ?? evidence.units) {
           const task = assignHistoricalUnit(unit, scoped);
           if (!task) { plan.counts.ambiguousTaskEvents++; continue; }
           const target = byTask.get(task.id)!;
-          if (target.native.has(unit.unitId)) { plan.counts.replayed++; continue; }
-          target.native.set(unit.unitId, unit);
+          target.sourceScopes.push(...(evidence.sourceScopes ?? []).filter(scope => scope.unitId === unit.unitId));
+          const old = target.native.get(unit.unitId);
+          if (old) {
+            const merged = mergeNativeUsageEvidence(old, unit);
+            if (JSON.stringify(merged) === JSON.stringify(old)) plan.counts.replayed++;
+            target.native.set(unit.unitId, merged);
+          } else target.native.set(unit.unitId, unit);
         }
       };
       let opened: Awaited<ReturnType<typeof archiveIndex>> | undefined;
@@ -213,6 +232,7 @@ export async function buildReconcileUsagePlan(sql: Bun.SQL, options: { archiveRo
       if (plan.counts.archives % 100 === 0) options.onProgress?.(`Read ${plan.counts.archives} archive indexes and ${plan.counts.nativeMembers} native members`);
     }
   }
+  for (const target of byTask.values()) target.native = new Map(reconcileNativeSourceEvidence([...target.native.values()], target.sourceScopes, target.completedTurns).map(unit => [unit.unitId, unit]));
   const ownership = new Map<string, Array<{ taskId: string; connectionId: string | null; unit: TaskUsageUnit }>>();
   const identity = (workspaceId: string, unit: TaskUsageUnit) => unit.providerSessionId && (unit.providerRequestId || (unit.providerObservationId && unit.meterEvidence))
     ? JSON.stringify([workspaceId, unit.provider, unit.providerSessionId, unit.identityKind ?? "request", unit.meterEvidence ? "meter-stream" : unit.providerRequestId]) : null;
@@ -255,6 +275,12 @@ export async function buildReconcileUsagePlan(sql: Bun.SQL, options: { archiveRo
     const actual: TaskUsageUnit[] = [], diagnostics: TaskUsageUnit[] = [];
     const attributionEvidence: NonNullable<ReconcileUsagePlan["tasks"][number]["attributionEvidence"]> = [];
     for (const unit of evidenceUnits) {
+      if (unit.source === "provider_turn" && unit.accuracy === "unknown" && unitActualTotal(unit) === 0
+        && !unit.providerSessionId && unit.evidenceRef?.endsWith("#overlapping-unscoped-meter")) {
+        diagnostics.push(unit);
+        attributionEvidence.push({ reason: "missing_request_namespace", unit, competingTaskIds: [] });
+        continue;
+      }
       const key = identity(target.task.workspace_id, unit);
       const competitors = key ? (ownership.get(key) ?? []).filter(owner => (owner.connectionId === (unit.connectionId ?? null)
         || owner.connectionId === null || unit.connectionId == null) && (!unit.meterEvidence || (owner.unit.meterEvidence && (
@@ -287,6 +313,35 @@ export async function buildReconcileUsagePlan(sql: Bun.SQL, options: { archiveRo
         : attributionEvidence.length ? "missing_request_namespace" : context ? "context_only_no_request_evidence" : "no_request_evidence",
       attributionEvidence, snapshot: { version: 2, runId: "historical-evidence-v2", revision: nextUsageRevision(revisionState, "historical-evidence-v2"), complete: false, units }, actualTokens });
   }
+  plan.modernRepairs = [];
+  plan.modernRepairSkipped = [];
+  for (const [taskId, target] of byTask) {
+    if (!target.task.has_live_usage || !terminal(target.task) || (options.taskId && taskId !== options.taskId)) continue;
+    if (!target.native.size) {
+      plan.modernRepairSkipped.push({ taskId, reason: "no_unambiguous_native_request_evidence" });
+      continue;
+    }
+    const [taskRows, units, runs, receipts, coverage, scopes] = await Promise.all([
+      sql.unsafe("SELECT id,workspace_id,provider,status,session_id,usage,started_at,completed_at,failed_at,cancelled_at FROM multiremi_tasks WHERE id=$1", [taskId]),
+      sql.unsafe("SELECT * FROM multiremi_usage_units WHERE task_id=$1 ORDER BY run_id,unit_id", [taskId]),
+      sql.unsafe("SELECT * FROM multiremi_usage_runs WHERE task_id=$1 ORDER BY run_id", [taskId]),
+      sql.unsafe("SELECT * FROM multiremi_usage_unit_receipts WHERE task_id=$1 ORDER BY run_id,unit_id", [taskId]),
+      sql.unsafe("SELECT * FROM multiremi_usage_cost_coverage WHERE task_id=$1 ORDER BY run_id,monetary_unit_id,covered_unit_id", [taskId]),
+      sql.unsafe("SELECT * FROM multiremi_usage_run_scopes WHERE task_id=$1 ORDER BY run_id", [taskId]),
+    ]);
+    const state = { task: taskRows[0], units, runs, receipts, coverage, scopes } as ReturnType<typeof readModernRepairState>;
+    const native = [...target.native.values()].filter(unit => {
+      const key = identity(target.task.workspace_id, unit);
+      return key && !(ownership.get(key) ?? []).some(owner => owner.taskId !== taskId);
+    });
+    const repairs = buildModernUsageRepairs(state, native, options.nativeRunScopes ?? [], target.completedTurns);
+    plan.modernRepairs.push(...repairs);
+    if (!repairs.length) plan.modernRepairSkipped.push({ taskId, reason: native.length ? "run_scope_coverage_or_finality_not_proven_or_already_current" : "no_unambiguous_native_request_evidence" });
+  }
+  if (plan.modernRepairs.length) {
+    const repaired = new Set(plan.modernRepairs.map(repair => repair.taskId));
+    plan.excludedTasks = plan.excludedTasks?.filter(task => !repaired.has(task.taskId));
+  }
   return plan;
 }
 
@@ -310,7 +365,7 @@ export async function mainReconcileTaskUsage(): Promise<void> {
   const sql = new Bun.SQL(databaseUrl, { max: 1 });
   try {
     const plan = await sql.begin(async tx => {
-      await tx.unsafe("SET TRANSACTION READ ONLY");
+      await tx.unsafe("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY");
       return buildReconcileUsagePlan(tx, { archiveRoot: arg("archive-root"), taskId: arg("task-id"),
         archiveLimit: arg("archive-limit") ? Number(arg("archive-limit")) : undefined,
         onProgress: message => process.stderr.write(`${message}\n`) });
