@@ -106,7 +106,7 @@ export function useTaskSessionInput(store: MultiremiStore, task: MultiremiTaskWi
   const bound = response.bound_issue_log;
   if (bound?.session_id) {
     bound.content_jsonl = taskSessionInput({ sessionId: bound.session_id, agentId: task.agentId,
-      fromSeq: Math.min(store.getSessionAgentReadProgress(bound.session_id, task.agentId).seq, bound.to_seq), toSeq: bound.to_seq,
+      fromSeq: Math.min(store.getSessionAgentReadProgress(bound.session_id, task.agentId, task.id).seq, bound.to_seq), toSeq: bound.to_seq,
       entries: store.listConversationLogEntries(bound.session_id, { toSeq: bound.to_seq }),
       triggerSeqs: new Set() });
   }

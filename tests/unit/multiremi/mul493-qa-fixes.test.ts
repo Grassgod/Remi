@@ -1,6 +1,12 @@
 import { afterEach, beforeEach, expect, it } from 'bun:test';
 import { createMultiremiApp } from '@multiremi/api.js';
 import { daemonTaskClaimResponse } from '@multiremi/api/wire/tasks.js';
+import { prepareTaskOffer } from '@multiremi/api/daemon-protocol/task-offers.js';
+import { fitTaskOfferToBudget } from '@multiremi/api/daemon-protocol/offer-budget.js';
+import { ProjectKnowledgeService } from '@multiremi/project-knowledge/service.js';
+import { RepositoryWikiService } from '@multiremi/repository-wiki/service.js';
+import { normalizeDaemonClaimTask } from '@multiremi/worker/client.js';
+import { buildTaskPrompt } from '@daemon/agent-runtime/prompts/ephemeral.js';
 import { pendingTurnBackendTests } from './pending-turn-test-backends.js';
 import { bindFeishuTopicFixture } from './feishu-topic-fixture.js';
 
@@ -188,7 +194,27 @@ pendingTurnBackendTests('MUL-493 QA blockers B1-B4', fixture => {
     }
     const progress = (attemptId: string) => f.store.getSessionAgentReadProgress(target.session.id, f.concierge.id, attemptId);
     const receipt = () => f.db.query('SELECT input_read_seq,input_read_offset FROM multiremi_turn_attempts WHERE id=?').get(claimed.id);
+    async function expectOfferedRange(attemptId: string, from: number, to: number, unreadCount: number) {
+      const offered = await prepareTaskOffer(f.store, f.store.getTaskWithAgent(attemptId)!,
+        new ProjectKnowledgeService(f.store, null, 'sql'), new RepositoryWikiService(f.store, null, 'sql'), true);
+      expect(offered).toBeTruthy();
+      expect(offered!.attempt_id).toBe(attemptId);
+      fitTaskOfferToBudget(offered!, scope.runtimeId, undefined, true);
+      const bound = offered!.bound_issue_log as { session_id: string; from_seq: number; to_seq: number; content_jsonl: string };
+      expect(bound).toMatchObject({ session_id: target.session.id, from_seq: from, to_seq: to });
+      const entries = bound.content_jsonl.split('\n').map(line => JSON.parse(line));
+      const instruction = `你上次读到第 ${from} 条，现在最新是第 ${to} 条，中间 ${unreadCount} 条还没读。\n`
+        + `动手前先读完未读的部分，了解上下文：remi message list ${target.session.id} --from ${from} --to ${to}`;
+      expect(entries).toEqual([{
+        type: 'unread_range', session_id: target.session.id, from_seq: from, to_seq: to, unread_count: unreadCount,
+        instruction,
+      }]);
+      const prompt = buildTaskPrompt(normalizeDaemonClaimTask(offered)!);
+      expect(prompt).toContain(bound.content_jsonl);
+      expect(prompt).toContain(`Session ${target.session.id}, seq (${from}, ${to}].`);
+    }
     try {
+      expect(head).toBe(1);
       const before = receipt();
       f.store.recordSessionAgentRangeRead(target.session.id, f.concierge.id, { seq: 1, offset: 0 }, { seq: 1, offset: 32_000 }, claimed.id);
       expect(progress(claimed.id)).toEqual({ seq: 0, offset: 32_000 });
@@ -201,6 +227,7 @@ pendingTurnBackendTests('MUL-493 QA blockers B1-B4', fixture => {
       const turn = f.store.getTurnForAttempt(claimed.id)!;
       const replacement = f.store.retryTurn(turn.id).current_attempt_id!;
       expect(f.store.claimTask(scope.runtimeId)?.id).toBe(replacement);
+      await expectOfferedRange(replacement, head, head, 0);
       f.store.startTask(replacement);
       expect(progress(replacement)).toEqual({ seq: head, offset: 0 });
       expect(() => progress(claimed.id)).toThrow('stale_attempt');
@@ -211,10 +238,19 @@ pendingTurnBackendTests('MUL-493 QA blockers B1-B4', fixture => {
       const next = f.store.claimTask(scope.runtimeId)!;
       expect(next.chatSessionId).toBe(target.chat.id);
       expect(daemonTaskClaimResponse(f.store, next).bound_issue_log).toMatchObject({ from_seq: head });
+      expect(increment.seq).toBe(2);
+      const later = f.store.sendMessage({ session_id: target.session.id, sender: { type: 'member', id: 'mem_local_local' },
+        to: { type: 'none' }, message_kind: 'request', wake_requested: 'inbox_only', body_md: 'After the frozen claim' }).message;
+      expect(later.seq).toBe(3);
+      await expectOfferedRange(next.id, head, increment.seq, 1);
+      expect(f.store.getSessionAgentLane(target.session.id, f.concierge.id, `relay:${target.chat.id}`)?.cursorSeq).toBe(head);
+      expect(f.store.getSessionAgentReadProgress(target.session.id, f.concierge.id)).toEqual({ seq: 0, offset: 0 });
       f.store.startTask(next.id);
-      const range = await read(next.id, head, f.store.getConversationLogHead(target.session.id)!.headSeq);
+      const range = await read(next.id, head, increment.seq);
       expect(range.find(m => m.id === increment.id)?.body_md).toBe('B increment');
       expect(range.some(m => m.id === first.id)).toBe(false);
+      expect(range.some(m => m.id === later.id)).toBe(false);
+      expect(progress(next.id)).toEqual({ seq: increment.seq, offset: 0 });
       expect(f.store.getSessionAgentReadProgress(target.session.id, f.concierge.id)).toEqual({ seq: 0, offset: 0 });
     } finally { server.stop(true); }
   }, 60_000);
