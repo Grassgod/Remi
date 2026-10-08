@@ -3,11 +3,14 @@ import { createHash } from "node:crypto";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { parseArgs } from "node:util";
-import type { SqlDatabase } from "../packages/server/src/store/db/postgres.js";
+import { PostgresSyncDatabase, type SqlDatabase } from "../packages/server/src/store/db/postgres.js";
 import { collectUnifiedBeforeReport, reconcileUnifiedModel, tableExists, unifiedModelPreflight } from "../packages/server/src/store/unified-model-migration.js";
 import { runMigrations } from "../packages/server/src/store/migrations.js";
 import { UNIFIED_MODEL_MIGRATION } from "../packages/server/src/store/unified-model-schema.js";
 import { readOnlyConversationTransaction } from "./reconcile-conversation-log.js";
+import { prepareUsageAccountingStartup, ensureUsageAccountingStartup } from "../packages/server/src/store/usage-migration.js";
+import { locksForRole, startHubRoleGuard } from "../packages/server/src/api/hub/hub-role-guard.js";
+import { collectCopyUsageSnapshot, reconcileCopyUsage, type CopyUsageSnapshot } from "./unified-model-copy-usage.js";
 
 type Row = Record<string, any>;
 function pages(db: SqlDatabase, sql: string, params: unknown[] = []): Row[] {
@@ -82,7 +85,8 @@ export function validateCopyDatabaseUrl(value: string | undefined): string {
 }
 
 /** Exported for local synthetic fixtures; the CLI only opens the isolated PG. */
-export function rehearseUnifiedModelCopy(db: SqlDatabase, reportDir: string): Row {
+export async function rehearseUnifiedModelCopy(db: SqlDatabase, reportDir: string, copyDatabaseUrl?: string): Promise<Row> {
+  if (copyDatabaseUrl) validateCopyDatabaseUrl(copyDatabaseUrl);
   if (db.query("SELECT id FROM multiremi_schema_migrations WHERE id=?").get(UNIFIED_MODEL_MIGRATION)) {
     throw new Error("Copy is already migrated; restore the immutable pre-cutover backup for every run");
   }
@@ -98,6 +102,25 @@ export function rehearseUnifiedModelCopy(db: SqlDatabase, reportDir: string): Ro
     reads: pages(db, "SELECT session_id,agent_read_state FROM multiremi_conversation_heads ORDER BY session_id"),
   }));
   save(reportDir, "copy-baseline.json", original);
+  const usageBefore = readOnlyConversationTransaction(db, () => collectCopyUsageSnapshot(db, "multiremi_tasks"));
+  save(reportDir, "copy-usage-before.json", usageBefore);
+  if (usageBefore.markers.length !== 2) throw new Error("F24 copy must already have both #384 usage cutover markers; take a matching post-startup copy");
+  const usageSnapshots: Record<string, CopyUsageSnapshot> = { before: usageBefore };
+  const usageReconciliation: Record<string, ReturnType<typeof reconcileCopyUsage>> = {};
+  const startup: Row[] = [];
+  const unmeasured = ["HTTP listener and /readyz", "module loading and process/container cold start",
+    "Store facade construction", "read-pool/Live Hub/peer initialization", "background jobs, daemon, Feishu and outbox delivery",
+    "production contention and concurrent api/api-runtime startup (roles run sequentially on the copy)"];
+  const recordStartup = () => save(reportDir, "copy-startup.json", { topology: "api=all with peer configured; api-runtime=runtime",
+    startup, unmeasured, http_ready_measured: false, lock_policy: "single acquisition attempt; no rehearsal retries",
+    timing_scope: "database steps including lock acquisition/wait; evidence IO and cleanup excluded from database_total_ms" });
+  const recordUsage = (name: string) => {
+    const snapshot = readOnlyConversationTransaction(db, () => collectCopyUsageSnapshot(db, "multiremi_turn_attempts"));
+    usageSnapshots[name] = snapshot;
+    usageReconciliation[name] = reconcileCopyUsage(usageBefore, snapshot);
+    save(reportDir, "copy-usage-reconciliation.json", { snapshots: usageSnapshots, stages: usageReconciliation,
+      expectation: "Post-#384 startup copy: all usage table contents, attempt attribution, two markers and scalar evidence remain identical" });
+  };
   const readPositions = new Map<string, { seq: number; offset: number }>();
   for (const head of original.reads) {
     const state = typeof head.agent_read_state === "string" ? JSON.parse(head.agent_read_state) : head.agent_read_state ?? {};
@@ -107,15 +130,45 @@ export function rehearseUnifiedModelCopy(db: SqlDatabase, reportDir: string): Ro
     }
   }
   const previousDir = process.env.MULTIREMI_MIGRATION_REPORT_DIR;
-  let migrationMs: number, restartMs: number;
   try {
     process.env.MULTIREMI_MIGRATION_REPORT_DIR = reportDir;
-    let started = performance.now();
-    runMigrations(db); // Same complete migration entry point as API startup.
-    migrationMs = performance.now() - started;
-    started = performance.now();
-    runMigrations(db);
-    restartMs = performance.now() - started;
+    for (const phase of ["first_start", "restart"]) {
+      for (const role of ["api", "api-runtime"]) {
+        const timing: Row = { phase, role, effective_api_role: role === "api" ? "all" : "runtime",
+          steps_ms: {}, database_total_ms: 0, completed: false,
+          connection_open_measured: Boolean(copyDatabaseUrl), role_lock_measured: Boolean(copyDatabaseUrl) };
+        startup.push(timing);
+        recordStartup();
+        const measure = async <T>(name: string, action: () => T | Promise<T>): Promise<T> => {
+          const started = performance.now();
+          try { return await action(); }
+          finally { timing.steps_ms[name] = performance.now() - started; timing.database_total_ms += timing.steps_ms[name]; }
+        };
+        let guard: Awaited<ReturnType<typeof startHubRoleGuard>> = null;
+        let startupDb = db;
+        try {
+          guard = await measure("role_lock", () => startHubRoleGuard({ databaseUrl: copyDatabaseUrl,
+            locks: locksForRole(timing.effective_api_role, true), timeoutMs: 0,
+            exit: () => { throw new Error(`Copy ${role} role lock acquisition failed`); } }));
+          if (copyDatabaseUrl) startupDb = await measure("database_open", () => new PostgresSyncDatabase(copyDatabaseUrl));
+          await measure("run_migrations", () => runMigrations(startupDb));
+          if (phase === "first_start" && role === "api") recordUsage("after_schema");
+          await measure("prepare_usage", () => prepareUsageAccountingStartup(startupDb));
+          await measure("ensure_usage", () => ensureUsageAccountingStartup(startupDb));
+          timing.completed = true;
+          recordUsage(`${phase}_${role}`);
+        } catch (error) {
+          timing.failed = true;
+          throw error;
+        } finally {
+          try { recordStartup(); }
+          finally {
+            try { if (startupDb !== db) startupDb.close(); }
+            finally { await guard?.close(); }
+          }
+        }
+      }
+    }
   } finally {
     if (previousDir === undefined) delete process.env.MULTIREMI_MIGRATION_REPORT_DIR;
     else process.env.MULTIREMI_MIGRATION_REPORT_DIR = previousDir;
@@ -130,7 +183,8 @@ export function rehearseUnifiedModelCopy(db: SqlDatabase, reportDir: string): Ro
     const report = reconcileUnifiedModel(db, finalBefore);
     const lanes = pages(db, "SELECT * FROM multiremi_session_lanes WHERE reader_type='agent' ORDER BY session_id,reader_id,execution_scope");
     const byKey = new Map(lanes.map(lane => [laneKey(lane), lane]));
-    const mismatches = [...report.mismatches];
+    const mismatches = [...report.mismatches, ...Object.entries(usageReconciliation)
+      .flatMap(([stage, result]) => result.mismatches.map(message => `${stage}: ${message}`))];
     for (const checkpoint of original.checkpoints) {
       const actual = byKey.get(laneKey(checkpoint));
       for (const key of ['parent_cursor_seq', 'wake_hint_seq', 'swept_to_seq', 'provider_session_id', 'work_dir', 'generation']) {
@@ -153,10 +207,13 @@ export function rehearseUnifiedModelCopy(db: SqlDatabase, reportDir: string): Ro
     if (unread) mismatches.push(`historical member notifications replayed: ${unread}`);
     return { ...report, mismatches, table_counts: counts, checkpoint_count: original.checkpoints.length,
       read_position_count: readPositions.size, partial_read_count: [...readPositions.values()].filter(p => p.offset > 0).length,
-      issue_samples: issueSamples(db, issues) };
+      issue_samples: issueSamples(db, issues), usage_reconciliation: usageReconciliation };
   });
   save(reportDir, "copy-reconciliation.json", final);
-  const summary = { migration: UNIFIED_MODEL_MIGRATION, migrationMs, restartMs, counts: final.counts,
+  const summary = { migration: UNIFIED_MODEL_MIGRATION,
+    migrationMs: startup[0]!.steps_ms.run_migrations, restartMs: startup[2]!.steps_ms.run_migrations,
+    startup, unmeasured, http_ready_measured: false, orphan_steer: final.orphan_steer,
+    usage_reconciliation: usageReconciliation, counts: final.counts,
     mismatches: final.mismatches, issue_sample_count: final.issue_samples.length,
     issue_sampling: "manual review required", checkpoint_count: final.checkpoint_count,
     read_position_count: final.read_position_count, partial_read_count: final.partial_read_count };
@@ -172,12 +229,11 @@ if (import.meta.main) {
   } else {
     const url = validateCopyDatabaseUrl(process.env.MUL493_COPY_DATABASE_URL);
     if (!values['report-dir']) throw new Error("--report-dir is required");
-    const { PostgresSyncDatabase } = await import('../packages/server/src/store/db/postgres.js');
     const db = new PostgresSyncDatabase(url);
     try {
       const identity = db.query("SELECT current_database() AS database,current_user AS role").get();
       if (identity?.database !== 'mul493_rehearsal' || identity?.role !== 'mul493_rehearsal') throw new Error("Copy database identity mismatch");
-      console.log(JSON.stringify(rehearseUnifiedModelCopy(db, values['report-dir'])));
+      console.log(JSON.stringify(await rehearseUnifiedModelCopy(db, values['report-dir'], url)));
     } finally { db.close(); }
   }
 }

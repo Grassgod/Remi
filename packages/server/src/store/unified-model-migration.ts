@@ -23,6 +23,13 @@ export interface UnifiedModelReport {
   lane_cursors: Array<{session_id:string;reader_type:string;reader_id:string;execution_scope:string;
     cursor_seq:number;parent_cursor_seq:number;wake_hint_seq:number;swept_to_seq:number}>;
   unread_attention: Array<{ id: string; recipient_id: string; type: string; resource_id: string | null }>;
+  orphan_steer: {
+    count: number;
+    ids: string[];
+    by_task_status: Record<string, number>;
+    entries: Array<{ id: string; task_id: string; task_status: string; content_sha256: string; message_id: string }>;
+    body_location: string;
+  };
   mismatches: string[];
 }
 
@@ -50,7 +57,9 @@ function addColumn(db: SqlDatabase, table: string, definition: string): void {
 export function unifiedModelPreflight(db: SqlDatabase): UnifiedMigrationCheck[] {
   return [
     ["awaiting_human_tasks", "multiremi_tasks", "status = 'awaiting_human'"],
-    ["unconsumed_steer", "multiremi_task_steer_messages", "consumed_at IS NULL"],
+    ["unconsumed_steer", "multiremi_task_steer_messages", `consumed_at IS NULL AND NOT EXISTS
+      (SELECT 1 FROM multiremi_tasks t WHERE t.id=multiremi_task_steer_messages.task_id
+        AND t.status IN ('completed','failed','cancelled'))`],
     ["running_trace_backfill_groups", "multiremi_trace_backfill_progress", "status = 'running'"],
     ["undrained_tasks", "multiremi_tasks", "status IN ('running', 'dispatched')"],
   ].map(([name, table, where]) => {
@@ -60,13 +69,13 @@ export function unifiedModelPreflight(db: SqlDatabase): UnifiedMigrationCheck[] 
 }
 
 /** Page ids and reconstruct text separately so long prompts never overflow the PG bridge. */
-function* rows(db: SqlDatabase, table: string): Generator<Row> {
+function* rows(db: SqlDatabase, table: string, where = "1=1"): Generator<Row> {
   const schema = db.query(`PRAGMA table_info(${table})`).all() as Row[];
   const text = schema.filter(c => String(c.type).toUpperCase().includes("TEXT")).map(c => String(c.name));
   const selected = schema.map(c => text.includes(c.name) ? `SUBSTR(${c.name}, 1, 8192) AS ${c.name}` : c.name);
   let previous = "";
   for (;;) {
-    const page = db.query(`SELECT ${selected.join(", ")} FROM ${table} WHERE id > ? ORDER BY id LIMIT 16`).all(previous) as Row[];
+    const page = db.query(`SELECT ${selected.join(", ")} FROM ${table} WHERE (${where}) AND id > ? ORDER BY id LIMIT 16`).all(previous) as Row[];
     if (!page.length) return;
     for (const row of page) {
       for (const col of text) {
@@ -95,6 +104,32 @@ function json(value: unknown, fallback: any = {}): any {
   try { return JSON.parse(value); } catch { throw new Error("Unified model migration: malformed historical JSON"); }
 }
 function digest(ids: string[]): string { return createHash("sha256").update(JSON.stringify(ids.sort())).digest("hex"); }
+
+const terminalSteerWhere = `consumed_at IS NULL AND EXISTS (SELECT 1 FROM multiremi_tasks t
+  WHERE t.id=multiremi_task_steer_messages.task_id AND t.status IN ('completed','failed','cancelled'))`;
+const steerMessageId = (id: string) => `msg_migrated_steer_${id}`;
+const bodyDigest = (body: string) => createHash("sha256").update(body).digest("hex");
+function orphanSteerReport(db: SqlDatabase, phase: "before" | "after"): UnifiedModelReport["orphan_steer"] {
+  const entries: UnifiedModelReport["orphan_steer"]["entries"] = [];
+  if (phase === "before" && tableExists(db, "multiremi_task_steer_messages")) {
+    for (const steer of rows(db, "multiremi_task_steer_messages", terminalSteerWhere)) {
+      const task = db.query("SELECT status FROM multiremi_tasks WHERE id=?").get(steer.task_id)!;
+      entries.push({ id: steer.id, task_id: steer.task_id, task_status: task.status,
+        content_sha256: bodyDigest(steer.content), message_id: steerMessageId(steer.id) });
+    }
+  } else if (phase === "after") {
+    for (const message of rows(db, "multiremi_conversation_log", "wake_reason='migration_terminal_steer'")) {
+      const metadata = json(message.metadata);
+      entries.push({ id: metadata.migrated_steer_id, task_id: metadata.legacy_task_id,
+        task_status: metadata.legacy_task_status, content_sha256: bodyDigest(message.body_md), message_id: message.id });
+    }
+  }
+  entries.sort((a, b) => a.id.localeCompare(b.id));
+  const byStatus: Record<string, number> = {};
+  for (const entry of entries) byStatus[entry.task_status] = (byStatus[entry.task_status] ?? 0) + 1;
+  return { count: entries.length, ids: entries.map(e => e.id), by_task_status: byStatus, entries,
+    body_location: "multiremi_conversation_log.body_md WHERE id=message_id; session_id/seq identify the historical message. Original multiremi_task_steer_messages.content is retained until separately authorized retirement." };
+}
 
 /** A parent pointer only groups infrastructure retries; explicit continuations remain separate. */
 export function retryChains(tasks: readonly Row[]): Array<Row[]> {
@@ -151,6 +186,7 @@ export function collectUnifiedBeforeReport(db: SqlDatabase): UnifiedModelReport 
     lane_cursors:[...pagedQuery(db,`SELECT session_id,'agent' AS reader_type,agent_id AS reader_id,execution_scope,
       cursor_seq,parent_cursor_seq,wake_hint_seq,swept_to_seq FROM multiremi_session_agent_lanes ORDER BY session_id,agent_id,execution_scope`)] as any,
     unread_attention: unreadAttention.map(r => ({ id: r.id, recipient_id: r.recipient_id, type: r.type, resource_id: r.resource_id })),
+    orphan_steer: orphanSteerReport(db, "before"),
     mismatches: [],
   };
 }
@@ -436,6 +472,26 @@ function migrateDecisions(db: SqlDatabase): void {
       metadata: JSON.stringify({ migrated_decision_id: decision.id, source_issue_id: decision.source_issue_id }) });
   }
 }
+function migrateTerminalSteer(db: SqlDatabase): void {
+  if (!tableExists(db, "multiremi_task_steer_messages")) return;
+  for (const steer of rows(db, "multiremi_task_steer_messages")) {
+    if (steer.consumed_at != null) continue;
+    const attempt = db.query("SELECT turn_id,status FROM multiremi_turn_attempts WHERE id=?").get(steer.task_id);
+    if (!attempt || !["completed", "failed", "cancelled"].includes(attempt.status)) continue;
+    const turn = db.query("SELECT session_id,workspace_id FROM multiremi_turns WHERE id=?").get(attempt.turn_id)!;
+    const member = steer.author_type === "user" && steer.author_id
+      ? db.query("SELECT id FROM multiremi_workspace_members WHERE workspace_id=? AND user_id=?").get(turn.workspace_id, steer.author_id)
+      : null;
+    append(db, turn.session_id, { id: steerMessageId(steer.id), task_id: attempt.turn_id,
+      sender_type: member ? "member" : steer.author_type === "agent" ? "agent" : "platform",
+      sender_id: member?.id ?? (steer.author_type === "agent" ? steer.author_id : null), message_kind: "status", to_type: "none",
+      wake_requested: "inbox_only", wake_applied: "inbox_only", wake_reason: "migration_terminal_steer",
+      body_md: steer.content, created_at: steer.created_at,
+      metadata: JSON.stringify({ migrated_steer_id: steer.id, legacy_task_id: steer.task_id,
+        legacy_task_status: attempt.status, legacy_steer_kind: steer.kind,
+        legacy_author_type: steer.author_type, legacy_author_id: steer.author_id, consumed_at: null }) });
+  }
+}
 function migrateAutopilots(db: SqlDatabase): void {
   addColumn(db, "multiremi_autopilots", "session_id TEXT");
   for (const autopilot of rows(db, "multiremi_autopilots")) {
@@ -504,7 +560,7 @@ export function reconcileUnifiedModel(db: SqlDatabase, before?: UnifiedModelRepo
       LEFT JOIN multiremi_conversation_log l ON l.session_id=h.session_id GROUP BY h.session_id,h.head_seq ORDER BY h.session_id`)] as any,
     lane_cursors:[...pagedQuery(db,`SELECT session_id,reader_type,reader_id,execution_scope,cursor_seq,parent_cursor_seq,
       wake_hint_seq,swept_to_seq FROM multiremi_session_lanes ORDER BY session_id,reader_type,reader_id,execution_scope`)] as any,
-    unread_attention: before?.unread_attention ?? [], mismatches: [],
+    unread_attention: before?.unread_attention ?? [], orphan_steer: orphanSteerReport(db, "after"), mismatches: [],
   };
   const checks = [
     ["orphan_attempts", `SELECT COUNT(*) AS count FROM multiremi_turn_attempts a LEFT JOIN multiremi_turns t ON t.id=a.turn_id WHERE t.id IS NULL`],
@@ -523,6 +579,9 @@ export function reconcileUnifiedModel(db: SqlDatabase, before?: UnifiedModelRepo
     if (n) report.mismatches.push(`${name}: ${n}`);
   }
   if (before) {
+    if (before.orphan_steer && JSON.stringify(before.orphan_steer.entries) !== JSON.stringify(report.orphan_steer.entries)) {
+      report.mismatches.push("terminal unconsumed steer identity/body changed");
+    }
     if (before.counts.tasks !== report.counts.attempts || before.attempt_ids_digest !== report.attempt_ids_digest) report.mismatches.push("attempt identity/count changed");
     if(before.counts.agent_lanes>report.counts.agent_lanes)report.mismatches.push("agent lanes lost");
     if(before.counts.autopilots!==report.counts.autopilots)report.mismatches.push("autopilot count changed");
@@ -574,6 +633,7 @@ export function runUnifiedModelMigration(db: SqlDatabase, options: { reportDir?:
       migrateTurns(db,tasks);
       migrateAutopilots(db);
       migrateDecisions(db);
+      migrateTerminalSteer(db);
       migrateLanes(db);
       migrateConversationReferences(db);
       createTurnExecutionReadProjection(db);
