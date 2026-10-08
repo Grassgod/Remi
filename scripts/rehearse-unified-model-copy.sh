@@ -79,9 +79,9 @@ network='' volume='' pg_container=''
 cleanup() {
   local status=$?
   # IDs are populated only after this invocation successfully created them.
-  if [[ -n "$pg_container" ]] && ! docker_local rm -f "$pg_container" >/dev/null; then echo 'Copy container cleanup failed' >&2; status=1; fi
-  if [[ -n "$volume" ]] && ! docker_local volume rm "$volume" >/dev/null; then echo 'Copy volume cleanup failed' >&2; status=1; fi
-  if [[ -n "$network" ]] && ! docker_local network rm "$network" >/dev/null; then echo 'Copy network cleanup failed' >&2; status=1; fi
+  if [[ -n "$pg_container" ]] && ! docker_local rm -f "$pg_container" >/dev/null; then echo "Copy container cleanup failed: $pg_container; resources: $work_dir/evidence/docker-resources.txt" >&2; status=1; fi
+  if [[ -n "$volume" ]] && ! docker_local volume rm "$volume" >/dev/null; then echo "Copy volume cleanup failed: $volume; resources: $work_dir/evidence/docker-resources.txt" >&2; status=1; fi
+  if [[ -n "$network" ]] && ! docker_local network rm "$network" >/dev/null; then echo "Copy network cleanup failed: $network; resources: $work_dir/evidence/docker-resources.txt" >&2; status=1; fi
   return "$status"
 }
 trap cleanup EXIT
@@ -149,7 +149,8 @@ measure backup-copy-home tar -C "$work_dir/api-home" -czf "$work_dir/evidence/ro
 docker_local exec -i "$pg_container" pg_restore --list /dev/stdin < "$work_dir/evidence/rollback.pgdump" > "$work_dir/evidence/rollback-restore-list.txt"
 (cd "$work_dir/evidence" && sha256sum rollback.pgdump rollback-api-home.tar.gz > ROLLBACK-SHA256SUMS)
 candidate_failed=0
-if ! measure candidate-migration job "$candidate_image" run scripts/rehearse-unified-model-copy.ts --report-dir /evidence/migrations; then candidate_failed=1; fi
+if ! measure candidate-migration job "$candidate_image" run scripts/rehearse-unified-model-copy.ts \
+  --report-dir /evidence/migrations --source-sha "$candidate_sha" --image-digest "${candidate_image##*@}"; then candidate_failed=1; fi
 # Always rehearse restoration before asking for any production cutover approval.
 measure rollback-empty-db pg psql -X -v ON_ERROR_STOP=1 -U mul493_rehearsal -d postgres \
   -c 'DROP DATABASE mul493_rehearsal WITH (FORCE)' -c 'CREATE DATABASE mul493_rehearsal OWNER mul493_rehearsal'

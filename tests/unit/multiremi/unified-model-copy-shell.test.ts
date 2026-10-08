@@ -47,6 +47,7 @@ elif args[0]=='exec':
     if 'psql' in args and 'SHOW server_version_num' in args: print('170005')
     elif 'pg_dump' in args: print('stable fixture schema and data')
     elif 'pg_restore' in args and '--list' in args: print('fixture restore list')
+elif os.environ.get('COPY_CLEANUP_FAIL')=='1' and (args[0]=='rm' or args[:2] in [['volume','rm'],['network','rm']]): sys.exit(1)
 `, { mode: 0o755 });
   const args = [script, "--copy-backup-dir", backup, "--work-dir", join(dir, "new-run"),
     "--pg-image", `postgres@sha256:${digest('c')}`, "--pg-major", "17",
@@ -84,6 +85,8 @@ test.skipIf(process.platform === "win32")("candidate failure still restores and 
   expect(candidate[candidate.indexOf('--user') + 1]).toBe('1000:1000');
   expect(candidate).toContain('ALL');
   expect(candidate).not.toContain('-p');
+  expect(candidate[candidate.indexOf('--source-sha') + 1]).toBe(sha('a'));
+  expect(candidate[candidate.indexOf('--image-digest') + 1]).toBe(`sha256:${digest('a')}`);
   expect(calls.filter(a => a.includes('pg_restore') && a.includes('--exit-on-error')).length).toBe(2);
   expect(calls.filter(a => a.includes('-e')).length).toBe(2); // old startup before + after rollback
   expect(calls.slice(-3)).toEqual([['rm', '-f', 'new-pg-id'], ['volume', 'rm', 'new-volume-name'], ['network', 'rm', 'new-network-id']]);
@@ -91,7 +94,19 @@ test.skipIf(process.platform === "win32")("candidate failure still restores and 
   expect(readFileSync(join(evidence, 'authorization.txt'), 'utf8')).toContain('operator_uid=1000\noperator_gid=1000');
   expect(readFileSync(join(evidence, 'pre-cutover-data.sha256'), 'utf8')).toBe(readFileSync(join(evidence, 'old-restart-data.sha256'), 'utf8'));
   expect(readFileSync(join(evidence, 'durations-ms.tsv'), 'utf8')).toContain('rollback-restore-db');
+  assertCleanupFailure();
 });
+
+function assertCleanupFailure() {
+  const f = fixture();
+  const result = spawnSync("bash", [...f.args, "--execute", "--operator", "Remi-CC", "--approval-ref", "synthetic-approval"], {
+    env: { ...f.env, COPY_CLEANUP_FAIL: "1" }, encoding: "utf8", timeout: 30_000,
+  });
+  expect(result.status, result.stderr).toBe(1);
+  for (const [kind, id] of [["container", "new-pg-id"], ["volume", "new-volume-name"], ["network", "new-network-id"]]) {
+    expect(result.stderr).toContain(`Copy ${kind} cleanup failed: ${id}; resources: ${join(f.dir, 'new-run/evidence/docker-resources.txt')}`);
+  }
+}
 
 test.skipIf(process.platform === "win32")("root operator is refused before Docker or work directory creation even with approval", () => {
   const f = fixture();
