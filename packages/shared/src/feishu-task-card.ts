@@ -254,6 +254,9 @@ export function buildTaskInteractionCard(
 ): Card {
   const marker = interactionMarker(request.taskId, request.id);
   const elements: Card[] = [];
+  if (typeof request.payload.question_summary === 'string' && request.payload.question_summary.trim()) elements.push({ tag: 'markdown', content: `**Remi 总结**\n${escapeCardText(request.payload.question_summary)}` });
+  const actionValue = options.token ? { t: options.token, message_id: request.id,
+    ...(typeof request.payload.route_revision === 'number' ? { route_revision: request.payload.route_revision, root_question_id: request.id } : {}) } : undefined;
   const questions = normalizeQuestions(request.payload.questions);
   const tool = object(request.payload.tool_call);
   const input = object(tool.rawInput ?? tool.raw_input);
@@ -291,7 +294,7 @@ export function buildTaskInteractionCard(
     elements.push({ tag: "markdown", content: "未能确定处理人，请在 Remi 工作台处理此请求。" });
   } else if (request.kind === "question" && questions) {
     elements.push(buildQuestionElements(marker, questions,
-      options.token ? { t: options.token, message_id: request.id } : undefined));
+      actionValue));
   } else {
     const title = String(tool.title ?? tool.name ?? "操作审批");
     elements.push({ tag: "markdown", content: `**${escapeCardText(title)}**` });
@@ -310,7 +313,7 @@ export function buildTaskInteractionCard(
           tag: "column_set", flex_mode: "none", columns: choices.map((choice, index) => ({
             tag: "column", width: "weighted", weight: 1, elements: [{
               tag: "button", name: `${marker}_o${index}`, form_action_type: "submit",
-              ...(options.token ? { value: { t: options.token, message_id: request.id } } : {}),
+              ...(actionValue ? { value: actionValue } : {}),
               type: /reject|deny/.test(choice.kind) ? "danger" : "default", width: "fill",
               text: { tag: "plain_text", content: choice.name || choice.optionId },
             }],

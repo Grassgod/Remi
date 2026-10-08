@@ -5612,6 +5612,14 @@ runMigrations(this.db);
   retryTurn(...args: Parameters<InboxRepo["operations"]["retryTurn"]>) { return this.inbox.operations.retryTurn(...args); }
   issueMessageCardToken(...args: Parameters<InboxRepo["operations"]["issueMessageCardToken"]>) { return this.inbox.operations.issueMessageCardToken(...args); }
   answerMessageDecision(...args: Parameters<InboxRepo["operations"]["answerMessageDecision"]>) { return this.inbox.operations.answerMessageDecision(...args); }
+  getQuestion(...args: Parameters<Questions['get']>) { return new Questions(this.ctx).get(...args); }
+  listIssueQuestions(...args: Parameters<Questions['list']>) { return new Questions(this.ctx).list(...args); }
+  answerQuestion(...args: Parameters<Questions['answer']>) { return new Questions(this.ctx).answer(...args); }
+  escalateQuestion(...args: Parameters<Questions['escalate']>) { return new Questions(this.ctx).escalate(...args); }
+  transferQuestion(...args: Parameters<Questions['transfer']>) { return new Questions(this.ctx).transfer(...args); }
+  presentQuestion(...args: Parameters<Questions['present']>) { return new Questions(this.ctx).present(...args); }
+  enqueueQuestionPresentationWithinTransaction(id: string) { return this.feishuBot.enqueueQuestionPresentationWithinTransaction(id); }
+  continueQuestion(...args: Parameters<Questions['continue']>) { return new Questions(this.ctx).continue(...args); }
   getMessage(...args: Parameters<InboxRepo["getMessage"]>) { return this.inbox.getMessage(...args); }
   getDaemonTurnBridge() {return new DaemonTurnBridge(this.ctx);}
   sendMessage(input:import("@multiremi/contracts/unified-model.js").SendMessageInput, uploads: CreateAttachmentInput[] = [],
@@ -6182,3 +6190,4 @@ runMigrations(this.db);
     return this.tasks.recoverOrphans(runtimeId, activeTaskIds);
   }
 }
+import { Questions } from './inbox/questions.js';

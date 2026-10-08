@@ -14,6 +14,7 @@ import { mintQuestionCardToken,hashQuestionCardToken,type QuestionCardCredential
 import { patchDecisionRecord } from './decision-records.js';
 import { lockLane } from './lane-machine.js';
 import { IssueDecisionError } from '../repos/issues-repo.js';
+import { Questions } from './questions.js';
 
 type InboxQuery = {access?:InboxAccess;limit?:number;cursor?:{created_at:string;id:string};visible?:(sessionId:string)=>boolean;
   visibleMessage?:(message:Pick<UnifiedMessage,'id'|'session_id'|'reply_to_id'|'kind'|'task_id'|'metadata'>)=>boolean};
@@ -297,8 +298,9 @@ export class InboxOperations {
       const token=mintQuestionCardToken();const changed=this.ctx.db.run(`UPDATE multiremi_conversation_log SET card_token_hash=?,card_token_recipient=?,card_token_consumed_at=NULL WHERE id=? AND resolved_at IS NULL AND card_token_consumed_at IS NULL`,[hashQuestionCardToken(token),recipient,id]);
       if(!changed.changes)throw new Error('Decision is settled');return token;});
   }
-  answerMessageDecision(id:string,input:{sender:SendMessageInput['sender'];body_md:string;credential?:QuestionCardCredential;response?:Record<string,unknown>;source_turn_id?:string}) {
+  answerMessageDecision(id:string,input:{sender:SendMessageInput['sender'];body_md:string;credential?:QuestionCardCredential;response?:Record<string,unknown>;source_turn_id?:string;expected_route_revision?:number;revise?:boolean;reason?:string}) {
     return this.transaction(events=>{const message=getMessage(this.ctx,id);if(!message||message.message_kind!=='decision')throw new Error('Decision not found');this.lockMessage(message);
+      if (message.metadata.question) return new Questions(this.ctx).answer(id, { expected_route_revision: input.expected_route_revision!, response: input.response ?? { answer: input.body_md }, body_md: input.body_md, revise: input.revise, reason: input.reason }, input.sender, input.source_turn_id, input.credential);
       const key=message.metadata.human_request?'human_request':'decision_record';
       const record=(message.metadata[key]??{}) as Record<string,unknown>;
       const status=String(record.status??'pending');

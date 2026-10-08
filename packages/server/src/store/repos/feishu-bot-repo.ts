@@ -48,6 +48,7 @@ import { backgroundJobsEnabled, feishuOutboundKindsEnabled } from "@multiremi/co
 import { buildFeishuTaskResult } from "@multiremi/feishu-bot/result-card.js";
 import { isFeishuOpenId, parseOutboundMention } from "@shared/feishu-mention.js";
 import { hashQuestionCardToken } from "@multiremi/store/question-card-token.js";
+import { Questions } from '../inbox/questions.js';
 import type { EnvelopeDelivery } from "./inbox-repo.js";
 import {
   buildCardHeader,
@@ -1283,6 +1284,8 @@ export class FeishuBotRepo {
   prepareHumanRequestPush(request: MultiremiTaskHumanRequest): MultiremiTask | null {
     const sourceTask = this.ctx.tasks().getTask(request.taskId);
     if (!sourceTask) return null;
+    const question = new Questions(this.ctx).get(request.id);
+    if (question && (question.status !== 'pending' || question.stage !== 'human')) return null;
     if (!this.canWriteOutbound()) {
       this.deferOutboundOperation(sourceTask.workspaceId, request.id, { kind: "human_request", request });
       return null;
@@ -1303,12 +1306,15 @@ export class FeishuBotRepo {
     const topics = readWorkspaceIssueTopicsForDelivery(workspace.settings);
     if (!topics.enabled || !topics.chatId) return null;
     const bot = this.statusSnapshot(issue.workspaceId);
-    if (bot.status !== "online" || !bot.config) return null;
+    if (bot.status !== "online" || !bot.config) {
+      if (question && this.replayingOutboundOperation) throw new Error('Question presentation waits for its configured bot');
+      return null;
+    }
     const botConfig = bot.config;
     // Which person may press the button, decided before any delivery exists.
     // `none` and an unusable `person` target are terminal answers: the request
     // degrades to text, and no card is ever built for it.
-    const recipient = resolveDecisionRecipient(topics);
+    const recipient = question ? this.questionRecipient(request.id, botConfig.appId, issue.workspaceId) : resolveDecisionRecipient(topics);
 
     const childStatusChanges: import("./tasks-repo.js").ChildStatusChangeCollector = [];
     const deferredEvents = createCommitEventQueue();
@@ -1321,13 +1327,26 @@ export class FeishuBotRepo {
          ORDER BY b.updated_at DESC, b.created_at DESC, b.id DESC
          LIMIT 1`,
       ).get(issue.workspaceId, issue.id, topics.chatId) as Row | null;
-      if (!binding) return null;
+      if (!binding) {
+        if (question && this.replayingOutboundOperation) throw new Error('Question presentation waits for an Issue topic binding');
+        return null;
+      }
       const bindingId = String(binding.id);
       const existing = this.ctx.db.query(
         `SELECT wake_task_id, delivery_id FROM multiremi_feishu_bot_human_request_pushes
          WHERE binding_id = ? AND request_id = ? LIMIT 1`,
       ).get(bindingId, request.id) as Row | null;
       if (existing) {
+        if (question) {
+          const delivery = existing.delivery_id ? this.ctx.db.query('SELECT unit_key FROM multiremi_feishu_bot_outbound_deliveries WHERE id=?').get(existing.delivery_id) : null;
+          const unitKey = `question:${question.id}:${question.route_revision}:${question.summary?.at ?? 'original'}`;
+          if (delivery?.unit_key !== unitKey) {
+            const deliveryId = this.enqueueDecisionDeliveryWithinTransaction({ issue, sourceTask, request, topics, binding, bindingId,
+              payload: request.payload ?? {}, recipient, cardCapable: this.supportsDecisionCard(issue.workspaceId, botConfig.runtimeId), deferredEvents });
+            this.ctx.db.run('UPDATE multiremi_feishu_bot_human_request_pushes SET delivery_id=?,updated_at=? WHERE binding_id=? AND request_id=?', [deliveryId, nowIso(), bindingId, request.id]);
+          }
+          return null;
+        }
         return existing.wake_task_id == null
           ? null
           : this.ctx.tasks().getTask(String(existing.wake_task_id));
@@ -1364,7 +1383,7 @@ export class FeishuBotRepo {
       // the fleet having upgraded its daemon first. An unaddressable request
       // degrades to text on every host, old or new.
       const cardCapable = this.supportsDecisionCard(issue.workspaceId, botConfig.runtimeId);
-      if (cardCapable || recipient.kind === "degraded") {
+      if (cardCapable || recipient.kind === "degraded" || question) {
         const deliveryId = this.enqueueDecisionDeliveryWithinTransaction({
           issue, sourceTask, request, topics, binding, bindingId, payload, recipient,
           cardCapable, deferredEvents,
@@ -1499,8 +1518,9 @@ export class FeishuBotRepo {
     // here. `group_owner` stays a card: the host holds the bot token, so it is
     // the only side that can find out whether a recipient exists, and it sends
     // the text twin itself when the lookup comes back empty.
-    const degraded = recipient.kind === "degraded" ? recipient.reason : null;
-    const token = this.rotateQuestionCardToken("multiremi_message_question_records", request.id,
+    const question = new Questions(this.ctx).get(request.id);
+    const degraded = recipient.kind === "degraded" ? recipient.reason : question && !input.cardCapable ? 'send_failed' : null;
+    const token = degraded ? undefined : this.rotateQuestionCardToken("multiremi_message_question_records", request.id,
       recipient.kind === "resolved" ? recipient.openId : null);
     let body: string;
     if (degraded) {
@@ -1523,8 +1543,8 @@ export class FeishuBotRepo {
          id, workspace_id, binding_id, task_id, chat_id, thread_id,
          reply_to_message_id, body, status, available_at, created_at, updated_at,
          mention_snapshot, interaction_open_id, kind, human_request_id, human_request_task_id,
-         expires_at, degraded
-       ) VALUES (?, ?, ?, NULL, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, 'decision_card', ?, ?, ?, ?)`,
+         expires_at, degraded, unit_key
+       ) VALUES (?, ?, ?, NULL, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, 'decision_card', ?, ?, ?, ?, ?)`,
       [
         deliveryId,
         issue.workspaceId,
@@ -1544,6 +1564,7 @@ export class FeishuBotRepo {
         sourceTask.id,
         request.expiresAt ?? null,
         degraded,
+        question ? `question:${question.id}:${question.route_revision}:${question.summary?.at ?? 'original'}` : '',
       ],
     );
     // A degrade the control plane already knows about and a degrade the host
@@ -1611,6 +1632,12 @@ export class FeishuBotRepo {
     const requestId = cleanOptionalString(row.human_request_id);
     const request = requestId ? this.ctx.tasks().getTaskHumanRequest(requestId) : null;
     if (!request || request.status !== "pending") return null;
+    const question = new Questions(this.ctx).get(request.id);
+    if (question) {
+      const config = this.getConfig(question.workspace_id);
+      const operator = recipientOpenId && config ? this.resolveIssueDecisionOperatorMember(question.workspace_id, config.appId, recipientOpenId) : null;
+      if (question.stage !== 'human' || operator?.status !== 'resolved' || question.current_handler?.id !== operator.member.id) return null;
+    }
     return buildTaskInteractionCard(request, { header,
       token: this.rotateQuestionCardToken("multiremi_message_question_records", request.id, recipientOpenId),
       ...(recipientOpenId ? { recipientOpenId } : { recipientPending: true }),
@@ -2132,6 +2159,10 @@ export class FeishuBotRepo {
    * original send or the request's own status.
    */
   enqueueDecisionCardPatch(request: MultiremiTaskHumanRequest, nowInput: string | Date = new Date()): void {
+    if (new Questions(this.ctx).get(request.id)?.status === 'pending') {
+      this.enqueueQuestionPresentationWithinTransaction(request.id);
+      return;
+    }
     if (!this.canWriteOutbound()) {
       const task = this.ctx.tasks().getTask(request.taskId);
       if (task) this.deferOutboundOperation(task.workspaceId, request.id, { kind: "decision_patch", request });
@@ -2737,6 +2768,26 @@ export class FeishuBotRepo {
         status = 'pending', claim_token = NULL, leased_until = NULL,
         available_at = excluded.available_at, updated_at = excluded.updated_at`,
       [createId('fop'), workspaceId, operation.kind, unitKey, toJson(operation), now, now, now]);
+  }
+  /** Reliable same-Q presentation intent; drain reads the latest committed route and payload. */
+  enqueueQuestionPresentationWithinTransaction(id: string): void {
+    const request = this.ctx.tasks().getTaskHumanRequest(id);
+    const task = request ? this.ctx.tasks().getTask(request.taskId) : null;
+    if (request && task) this.deferOutboundOperation(task.workspaceId, id, { kind: 'human_request', request });
+  }
+  private questionRecipient(id: string, appId: string, workspaceId: string): DecisionRecipientResolution {
+    const question = new Questions(this.ctx).get(id);
+    const member = question?.current_handler?.type === 'member' ? this.ctx.workspaces().getWorkspaceMember(question.current_handler.id) : null;
+    if (!member || question?.stage !== 'human' || member.archivedAt || member.workspaceId !== workspaceId || !member.userId)
+      return { kind: 'degraded', reason: 'unresolved_recipient', degraded: true };
+    const rows = this.ctx.db.query(`SELECT DISTINCT s.open_id FROM multiremi_feishu_bot_senders s JOIN multiremi_users u ON u.feishu_union_id=s.union_id
+      WHERE s.workspace_id=? AND s.app_id=? AND u.id=?`).all(workspaceId, appId, member.userId);
+    const ids = rows.map(row => String(row.open_id)).filter(isFeishuOpenId).filter(openId => {
+      const operator = this.resolveIssueDecisionOperatorMember(workspaceId, appId, openId);
+      return operator.status === 'resolved' && operator.member.id === member.id;
+    });
+    if (ids.length !== 1) return { kind: 'degraded', reason: 'unresolved_recipient', degraded: true };
+    return { kind: 'resolved', openId: ids[0]!, degraded: false };
   }
 
   private drainOutboundOperations(workspaceId: string, now: Date): void {
@@ -4308,6 +4359,8 @@ export function decisionCardTextBody(input: {
       ? "任务在等你确认一项操作，需要你在 Remi 里点一下。"
       : "任务在等你回答一个问题，需要你在 Remi 里点一下。",
   ];
+  if (typeof payload.root_question_id === 'string') lines.push('', `原问题 Q：${payload.root_question_id}（路由版本 ${payload.route_revision}）。请由当前指定责任人在 Remi 原问题卡中回答。`);
+  if (typeof payload.question_summary === 'string' && payload.question_summary.trim()) lines.push('', '**Remi 总结**', payload.question_summary);
   const message = cleanOptionalString(payload.message);
   if (message) lines.push("", message);
   const questions = Array.isArray(payload.questions) ? payload.questions : [];

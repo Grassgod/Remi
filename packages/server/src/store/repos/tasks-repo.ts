@@ -2,6 +2,7 @@ import { acknowledgeAttemptInput } from '../inbox/attempt-input.js';
 import { assertOfferedInputRead, lockLane,reRingAfterTurnEnd,sweepIdleLanes,acknowledgeInput } from "../inbox/lane-machine.js";
 import { countMessageDelegationPairHops, sendMessageWithinTransaction } from "../inbox/send-message.js";
 import { patchDecisionRecord } from "../inbox/decision-records.js";
+import { Questions } from '../inbox/questions.js';
 import { deriveIssueStatusWithinTransaction } from "../inbox/issue-status.js";
 import { runAutopilotRunMutation } from "@multiremi/store/autopilot-run-records.js";
 import { createReplacementAttemptWithinTransaction } from "@multiremi/store/turn-attempts.js";
@@ -6539,11 +6540,19 @@ ${placementAfter.sql}
   cancelPendingHumanRequestsWithinTransaction(taskId: string, now: string = nowIso()): void {
     const task = this.getTaskIdentity(taskId);
     const pending = this.ctx.db.query(
-      "SELECT id FROM multiremi_message_question_records WHERE task_id = ? AND status = 'pending'",
+      "SELECT id FROM multiremi_message_question_records WHERE task_id = ? AND status IN ('pending','responded')",
     ).all(taskId) as Array<{ id: string }>;
     if (pending.length === 0) return;
-    for(const row of pending)patchDecisionRecord(this.ctx,row.id,'human_request',{status:'cancelled',responded_at:now},'pending');
+    const detachedEvents = createCommitEventQueue();
+    const cancelled: string[] = [];
+    for(const row of pending) {
+      if (new Questions(this.ctx).detachWithinTransaction(row.id, task?.status === 'cancelled' ? 'source_turn_cancelled' : 'provider_exit', detachedEvents)) continue;
+      patchDecisionRecord(this.ctx,row.id,'human_request',{status:'cancelled',responded_at:now},'pending');
+      cancelled.push(row.id);
+    }
+    afterCommit(this.ctx.db, () => this.ctx.emitCommitEvents(detachedEvents));
     for (const { id } of pending) {
+      if (!cancelled.includes(id)) continue;
       const request = this.getTaskHumanRequest(id)!;
       this.ctx.feishuBot().enqueueDecisionCardPatch(request);
       if (task) this.ctx.notifyHumanRequest({ type: "cancelled", request, workspaceId: task.workspaceId });

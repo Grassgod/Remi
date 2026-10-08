@@ -892,6 +892,9 @@ export interface RuntimesSurface {
  * than leave a workspace pointing at something that no longer exists.
  */
 export interface FeishuBotSurface {
+  enqueueQuestionPresentationWithinTransaction: import('./repos/feishu-bot-repo.js').FeishuBotRepo['enqueueQuestionPresentationWithinTransaction'];
+  getFeishuBotConfig: import('./repos/feishu-bot-repo.js').FeishuBotRepo['getConfig'];
+  prepareFeishuBotHumanRequestPush: import('./repos/feishu-bot-repo.js').FeishuBotRepo['prepareHumanRequestPush'];
   enqueueDecisionCardPatch(request: import("@multiremi/contracts/types.js").MultiremiTaskHumanRequest): void;
   getFeishuIssueIdForChatSession(chatSessionId: string): string | null;
   isFeishuBotTaskIssueCreationRestricted(taskId: string): boolean;

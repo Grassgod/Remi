@@ -1303,7 +1303,7 @@ export class MultiremiDaemon {
   respondFeishuBotHumanRequest(
     requestId: string,
     response: Record<string, unknown>,
-    credential?: { token: string; operatorOpenId: string },
+    credential?: { token: string; operatorOpenId: string; routeRevision?: number },
   ): Promise<MultiremiTaskHumanRequest> {
     return this.client.respondTaskHumanRequest(requestId, response, credential);
   }
@@ -4062,7 +4062,10 @@ export class MultiremiDaemon {
               message_id: decision.id, reply_message_id: reply?.id ?? null,
               option_id: chosen?.optionId ?? null, responded_by: reply?.sender_id ?? null,
             });
-          if (reply) this.taskDownlinks.confirmDecisionReply(task.id, reply);
+          if (reply) {
+            await this.taskDownlinks.rpc('turn.decision.consume', { ...this.taskDownlinks.turnInput(task.id), message_id: decision.id, reply_message_id: reply.id });
+            this.taskDownlinks.confirmDecisionReply(task.id, reply);
+          }
           return chosen ? { outcome: "selected", optionId: chosen.optionId } : { outcome: "cancelled" };
         } catch (err) {
           // Conservative deny when the routing infrastructure itself fails.
@@ -4125,7 +4128,10 @@ export class MultiremiDaemon {
           answers ? Object.entries(answers).map(([q, a]) => `${q}: ${a}`).join("; ") : "Question cancelled or timed out",
           { message_id: decision.id, reply_message_id: reply?.id ?? null, answers, responded_by: reply?.sender_id ?? null },
         );
-        if (reply) this.taskDownlinks.confirmDecisionReply(task.id, reply);
+        if (reply) {
+          await this.taskDownlinks.rpc('turn.decision.consume', { ...this.taskDownlinks.turnInput(task.id), message_id: decision.id, reply_message_id: reply.id });
+          this.taskDownlinks.confirmDecisionReply(task.id, reply);
+        }
         if (!answers) return { action: "cancel" };
         return { action: "accept", content: answersToElicitationContent(questions, answers) };
       } catch (err) {

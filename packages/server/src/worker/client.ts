@@ -1115,11 +1115,11 @@ export class MultiremiDaemonClient {
   async respondTaskHumanRequest(
     requestId: string,
     response: Record<string, unknown>,
-    credential?: { token: string; operatorOpenId: string },
+    credential?: { token: string; operatorOpenId: string; routeRevision?: number },
   ): Promise<MultiremiTaskHumanRequest> {
     const result = await this.post<{ request: MultiremiTaskHumanRequest }>(
       `/api/daemon/messages/${encodeURIComponent(requestId)}/answer`,
-      { response, token: credential?.token, operator_open_id: credential?.operatorOpenId },
+      { response, token: credential?.token, operator_open_id: credential?.operatorOpenId, expected_route_revision: credential?.routeRevision },
     );
     return result.request;
   }

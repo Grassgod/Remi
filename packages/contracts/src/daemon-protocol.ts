@@ -127,6 +127,7 @@ export const DAEMON_UPLINK_RPC_FRAMES = [
   "turn.decision",
   "turn.decision.get",
   "turn.decision.expire",
+  "turn.decision.consume",
   "plugin.desired",
   "trace.head",
   "trace.subscribe",

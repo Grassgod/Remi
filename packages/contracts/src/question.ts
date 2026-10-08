@@ -25,6 +25,7 @@ export interface QuestionHistoryEvent {
 /** Projection of one original decision message. Notifications never create a second Q. */
 export interface QuestionView {
   id: string;
+  kind: 'question' | 'permission' | 'decision';
   session_id: string;
   workspace_id: string;
   source_issue_id: string | null;
@@ -42,6 +43,7 @@ export interface QuestionView {
   wait_status: QuestionWaitStatus;
   wait_reason: string | null;
   answer: QuestionAnswer | null;
+  answer_revision: number;
   history: QuestionHistoryEvent[];
   actions: { allowed: QuestionAction[] };
 }
@@ -50,4 +52,5 @@ export interface QuestionAnswerInput extends QuestionMutationInput {
   response: Record<string, unknown>;
   body_md?: string;
   revise?: boolean;
+  expected_answer_revision?: number;
 }
