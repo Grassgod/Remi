@@ -17,8 +17,9 @@ const entry = join(packageDir, "dist", "index.js");
 const bridge = JSON.parse(readFileSync(join(packageDir, "package.json"), "utf8"));
 assert.equal(bridge.name, "@agentclientprotocol/codex-acp");
 assert.equal(bridge.version, BRIDGE_PIN.codex);
-// Validate the published dependency against the release compatibility baseline.
-assert.equal(bridge.dependencies["@openai/codex"], `^${RUNTIME_PIN.codex.version}`);
+// Remi's release bundle deliberately overrides the published SDK range. The
+// executable actually resolved from this bridge must match the prepared pin.
+assert.equal(typeof bridge.dependencies["@openai/codex"], "string");
 const codexEntry = createRequire(entry).resolve("@openai/codex/bin/codex.js");
 const codex = JSON.parse(readFileSync(join(dirname(dirname(codexEntry)), "package.json"), "utf8"));
 assert.equal(codex.version, RUNTIME_PIN.codex.version);
@@ -37,16 +38,64 @@ const tokenCount = patched.match(/function toTokenCount\(usage\) \{[\s\S]*?\n\}/
 const usageMethods = patched.match(/  handleTokenUsageUpdated\(params\) \{[\s\S]*?(?=  handleRateLimitsUpdated\()/)?.[0];
 assert(tokenCount && usageMethods, "Inspect the new bridge's usage conversion layout");
 const handler = new Function(`${tokenCount}\nreturn { sessionState: {}, ${usageMethods.replace(/\n  }\n/g, "\n  },\n")} };`)();
-const rawUsage = { totalTokens: 130, inputTokens: 100, cachedInputTokens: 60, outputTokens: 30, reasoningOutputTokens: 10 };
+const rawUsage = { totalTokens: 130, inputTokens: 100, cachedInputTokens: 60, cacheWriteInputTokens: 0, outputTokens: 30, reasoningOutputTokens: 10 };
 const update = handler.createUsageUpdate({ tokenUsage: { last: rawUsage, total: rawUsage, modelContextWindow: 200_000 } });
 assert.deepEqual(update, {
   sessionUpdate: "usage_update", used: 130, size: 200_000,
   _meta: {
     remiUsagePatch: CODEX_USAGE_PATCH,
-    remiTokenUsage: { ...rawUsage, inputTokens: 40 },
+    remiUsageMode: "request",
   },
 });
-assert.equal(handler.createUsageUpdate({ tokenUsage: { last: rawUsage, total: rawUsage, modelContextWindow: null } }), null);
+assert.equal(handler.createUsageUpdate({ tokenUsage: { last: rawUsage, total: rawUsage, modelContextWindow: null } }).size, 0);
+const eventStart = patched.indexOf("  async createUpdateEvent(notification) {");
+const eventEnd = patched.indexOf("\n  createCodexSessionInfoUpdate(", eventStart);
+assert(eventStart >= 0 && eventEnd > eventStart, "Inspect the new bridge's response notification layout");
+const EventHandler = new Function(`return class { ${patched.slice(eventStart, eventEnd)} }`)();
+const responseHandler = new EventHandler();
+responseHandler.sessionState = { sessionId: "native-thread", currentModelId: "requested-model" };
+const requestUpdate = await responseHandler.createUpdateEvent({ method: "rawResponse/completed", params: {
+  threadId: "native-thread", turnId: "turn", responseId: "response", usage: { ...rawUsage, cacheWriteInputTokens: 20 },
+} });
+assert.deepEqual(requestUpdate._meta.remiTokenUsage, {
+  id: "response", providerSessionId: "native-thread", providerRequestId: "response", turnId: "turn",
+  scope: "request_snapshot", source: "codex_response_usage", accuracy: "exact", model: null,
+  inputTokens: 20, cachedInputTokens: 60, cacheWriteTokens: 20, outputTokens: 30, totalTokens: 130,
+  requestedModel: "requested-model", modelSource: "session_acknowledged",
+});
+// Execute the published child-subscription routing with transcript support off.
+// Only discovered native children may publish usage to this parent envelope.
+const discoverStart = patched.indexOf("  discover(session, event) {");
+const discoverEnd = patched.indexOf("\n  registerInteractiveHandlers(", discoverStart);
+assert(discoverStart >= 0 && discoverEnd > discoverStart, "Inspect native child subscription routing");
+const Subscriptions = new Function(`return class { ${patched.slice(discoverStart, discoverEnd)} }`)();
+const subscriptions = new Subscriptions();
+const nativeHandlers = new Map<string, (event: any) => void>();
+subscriptions.client = { onServerNotification: (thread: string, handler: (event: any) => void) => nativeHandlers.set(thread, handler) };
+subscriptions.registerInteractiveHandlers = () => {};
+const dispatched: any[] = [];
+const subscribed = { children: new Set<string>(), current: { rootSessionId: "native-thread", supportsSubagents: false,
+  dispatch: (event: any) => dispatched.push(event), enqueueInteraction: () => { throw new Error("Usage entered the interaction-only route"); } } };
+subscriptions.discover(subscribed, { method: "item/started", params: { threadId: "native-thread", item: {
+  type: "collabAgentToolCall", tool: "spawnAgent", receiverThreadIds: ["native-child"],
+} } });
+const childCompletion = { method: "rawResponse/completed", params: {
+  threadId: "native-child", turnId: "child-turn", responseId: "child-response", usage: rawUsage,
+} };
+nativeHandlers.get("native-child")!({ ...childCompletion, params: { ...childCompletion.params, threadId: "unrelated-thread" } });
+assert.equal(dispatched.length, 0);
+nativeHandlers.get("native-child")!(childCompletion);
+assert.equal(dispatched.length, 1);
+assert.equal(dispatched[0]._remiUsageRootSessionId, "native-thread");
+const childUsage = await responseHandler.createUpdateEvent(dispatched[0]);
+assert.equal(childUsage._meta.remiTokenUsage.providerSessionId, "native-child");
+assert.equal(childUsage._meta.remiTokenUsage.requestedModel, null);
+assert.equal(childUsage._meta.remiTokenUsage.modelSource, "unknown");
+if (args.includes("--usage-only")) {
+  console.log(JSON.stringify({ bridge: bridge.version, codex: codex.version, cliVersion,
+    usagePatch: CODEX_USAGE_PATCH, usageHook: "passed", sessionNegotiation: "not_run" }));
+  process.exit(0);
+}
 
 // Keep sessions/config out of the user's Codex home; reuse only an auth copy.
 const temp = mkdtempSync(join(tmpdir(), "remi-codex-bridge-"));
@@ -75,8 +124,8 @@ const client = new AcpClient({
       }
     }
     if (update.sessionUpdate === "usage_update") {
-      if (update._meta?.remiUsagePatch !== CODEX_USAGE_PATCH || !update._meta?.remiTokenUsage) invalidUsageUpdates++;
-      usageUpdates++;
+      if (update._meta?.remiUsagePatch !== CODEX_USAGE_PATCH || update._meta?.remiUsageMode !== "request") invalidUsageUpdates++;
+      if (update._meta?.remiTokenUsage) usageUpdates++;
     }
   },
 });

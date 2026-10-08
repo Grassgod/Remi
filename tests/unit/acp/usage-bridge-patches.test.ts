@@ -3,89 +3,108 @@ import { claudeUsagePatch, codexUsagePatch } from "@acp/usage-bridge-patches.js"
 
 // These are the upstream handler boundaries; execute patched JavaScript with
 // protocol notifications, rather than assert that generated text contains fields.
-const codexBoundary = `  async createUpdateEvent(notification) { return null; }
+const codexBoundary = `  async handleNotification(notification) {
+    const update = await this.createUpdateEvent(notification);
+    if (update) await this.session.update(update, "child-rendering-session");
+  }
+  async createUpdateEvent(notification) {
+    switch (notification.method) { case "rawResponse/completed": return null; }
+    return null;
+  }
   createUsageUpdate(params) {}
-  handleRateLimitsUpdated(params) {}`;
+  handleRateLimitsUpdated(params) {}
+  routeChild(childEvent, session) {
+    if (session.current.supportsSubagents) session.current.dispatch(childEvent);
+    else session.current.enqueueInteraction(childEvent);
+  }`;
 const count = (input: number, cache: number, output: number, total: number) => ({
-  inputTokens: input, cachedInputTokens: cache, outputTokens: output,
+  inputTokens: input, cachedInputTokens: cache, cacheWriteInputTokens: 0, outputTokens: output,
   reasoningOutputTokens: output / 2, totalTokens: total,
 });
 
 describe("Codex consumption bridge", () => {
-  it("emits cumulative deltas once across requests, replay, absent context windows and turns", () => {
-    const patched = codexUsagePatch(codexBoundary)!;
-    const handler = new Function(`return class { ${patched} }`)();
-    const instance = new handler();
-    instance.sessionState = { sessionId: "session", currentTurnId: "turn1", totalTokenUsage: count(100, 500, 30, 630) };
-    instance.handleTokenUsageUpdated = (params: any) => Object.assign(instance.sessionState, {
-      totalTokenUsage: params.tokenUsage.total, lastTokenUsage: params.tokenUsage.last,
-      modelContextWindow: params.tokenUsage.modelContextWindow,
+  function actor() {
+    const Handler = new Function(`return class { ${codexUsagePatch(codexBoundary)!} }`)();
+    const instance = new Handler();
+    instance.sessionState = { sessionId: "parent", currentModelId: "requested-model", totalTokenUsage: null };
+    instance.handleTokenUsageUpdated = (p: any) => Object.assign(instance.sessionState, {
+      totalTokenUsage: p.tokenUsage.total, lastTokenUsage: p.tokenUsage.last, modelContextWindow: p.tokenUsage.modelContextWindow,
     });
-    const params = { threadId: "thread", tokenUsage: { last: count(10, 100, 5, 115), total: count(110, 600, 35, 745), modelContextWindow: null } };
-    const first = instance.createUsageUpdate(params);
-    expect(first._meta.remiTokenUsage).toMatchObject({ inputTokens: 10, cachedInputTokens: 100, outputTokens: 5, totalTokens: 115, model: null });
-    expect(first.size).toBe(0);
-    expect(instance.createUsageUpdate(params)).toBeNull();
-    instance.sessionState.currentTurnId = "turn2";
-    const next = instance.createUsageUpdate({ ...params, tokenUsage: { ...params.tokenUsage, total: count(120, 680, 45, 845) } });
-    expect(next._meta.remiTokenUsage).toMatchObject({ totalTokens: 100, inputTokens: 10, cachedInputTokens: 80, outputTokens: 10, turnId: "turn2" });
-    instance.sessionState = { sessionId: "session", currentTurnId: "turn3", totalTokenUsage: null }; // new resumed bridge
-    const resumed = instance.createUsageUpdate(params);
-    expect(resumed._meta.remiTokenUsage).toMatchObject({ totalTokens: 115, accuracy: "partial" });
+    return instance;
+  }
+
+  it("requires the pinned raw response handler and patches idempotently", () => {
+    expect(codexUsagePatch(codexBoundary.replace('case "rawResponse/completed":', 'case "unknown":'))).toBeNull();
+    const patched = codexUsagePatch(codexBoundary)!;
     expect(codexUsagePatch(patched)).toBe(patched);
   });
 
-  it("keeps the baseline across reordered replays, distinct counter epochs and compaction diagnostics", () => {
-    const Handler = new Function(`return class { ${codexUsagePatch(codexBoundary)!} }`)();
-    const instance = new Handler();
-    instance.sessionState = { sessionId: "s", totalTokenUsage: null };
-    instance.handleTokenUsageUpdated = (p: any) => Object.assign(instance.sessionState, { totalTokenUsage: p.tokenUsage.total, lastTokenUsage: p.tokenUsage.last });
-    const notify = (input: number, output: number, total = input + output, threadId = "s") => instance.createUsageUpdate({ threadId, tokenUsage: { total: count(input, 0, output, total), last: count(100, 0, 10, 110) } });
-    const first = notify(100, 10), second = notify(200, 20);
-    expect(notify(100, 10)).toBeNull();
-    const third = notify(300, 30);
-    expect([first, second, third].reduce((sum, event) => sum + event._meta.remiTokenUsage.totalTokens, 0)).toBe(330);
-    const context = notify(0, 0, 78048);
-    expect(context._meta.remiTokenUsage).toBeUndefined();
-    expect(context._meta.remiUncertainUsage.reportedTotalTokens).toBe(78048);
-    expect(notify(400, 40)._meta.remiTokenUsage.totalTokens).toBe(110);
-    expect(notify(10, 1)._meta.remiUncertainUsage.reason).toBe("non_monotonic_cumulative_usage");
-    const reset = notify(10, 1, 11, "new-thread");
-    const reused = notify(100, 10, 110, "new-thread");
-    expect(reset._meta.remiTokenUsage.accuracy).toBe("partial");
-    expect(reused._meta.remiTokenUsage.id).not.toBe(first._meta.remiTokenUsage.id);
+  it("upgrades v5 bundles without leaving the compaction epoch state machine or duplicating request hooks", () => {
+    const old = codexBoundary.replace("  async createUpdateEvent(notification) {", `  async createUpdateEvent(notification) {
+    // Upstream's two explicit successful compaction notifications are reset
+    // evidence. Error/start notifications and display text are not evidence.
+    if (notification.method === "thread/compacted") {
+      const seen = this.sessionState.remiUsageCompactions ??= new Set();
+      if (!seen.has("compact")) {
+        this.sessionState.remiUsageCompactionPending = { epochId: "old" };
+      }
+    }
+`).replace("  createUsageUpdate(params) {}", '  createUsageUpdate(params) { const CODEX_USAGE_PATCH = "codex-usage-v5"; this.sessionState.remiUsageAccounting = {}; }');
+    const patched = codexUsagePatch(old)!;
+    expect(patched).not.toContain("remiUsageCompactionPending");
+    expect(patched).not.toContain("remiUsageCompactions");
+    expect(patched).not.toContain("remiUsageAccounting");
+    expect(patched).not.toContain("codex-usage-v5");
+    expect(patched.match(/const normalize = /g)).toHaveLength(1);
+    expect(codexUsagePatch(patched)).toBe(patched);
   });
 
-  it("does not treat an unseen out-of-order cumulative observation as a reset", () => {
-    const Handler = new Function(`return class { ${codexUsagePatch(codexBoundary)!} }`)();
-    const instance = new Handler();
-    instance.sessionState = { sessionId: "s", totalTokenUsage: null };
-    instance.handleTokenUsageUpdated = (p: any) => Object.assign(instance.sessionState, { totalTokenUsage: p.tokenUsage.total, lastTokenUsage: p.tokenUsage.last });
-    const events = [1, 3, 2, 4].map(n => instance.createUsageUpdate({ threadId: "s",
-      tokenUsage: { total: count(n * 100, 0, n * 10, n * 110), last: count(100, 0, 10, 110) } }));
-    expect(events[2]._meta.remiTokenUsage).toBeUndefined();
-    expect(events[2]._meta.remiUncertainUsage.reason).toBe("non_monotonic_cumulative_usage");
-    expect(events.reduce((sum, event) => sum + (event?._meta.remiTokenUsage?.totalTokens ?? 0), 0)).toBe(440);
-    expect(instance.sessionState.totalTokenUsage.totalTokens).toBe(440);
+  it("records exact upstream requests independently of cumulative counters or epoch", async () => {
+    const instance = actor();
+    const raw = { ...count(244990, 244864, 2645, 247635), cacheWriteInputTokens: 0 };
+    const update = await instance.createUpdateEvent({ method: "rawResponse/completed", params: {
+      threadId: "parent", turnId: "turn", responseId: "compact-response", usage: raw,
+    } });
+    expect(update._meta.remiTokenUsage).toMatchObject({ providerSessionId: "parent",
+      providerRequestId: "compact-response", inputTokens: 126, cachedInputTokens: 244864,
+      outputTokens: 2645, totalTokens: 247635, accuracy: "exact", model: null, requestedModel: "requested-model" });
+    for (const total of [1000, 500, 78048]) {
+      const context = instance.createUsageUpdate({ tokenUsage: { total: count(0, 0, 0, total), last: raw, modelContextWindow: 200000 } });
+      expect(context._meta.remiTokenUsage).toBeUndefined();
+      expect(context._meta.remiUsageMode).toBe("request");
+    }
   });
 
-  it.each(["thread/compacted", "item/completed"])("counts valid consumption after an explicit %s compaction without billing its context estimate", async method => {
-    const Handler = new Function(`return class { ${codexUsagePatch(codexBoundary)!} }`)();
-    const instance = new Handler();
-    instance.sessionState = { sessionId: "s", totalTokenUsage: null };
-    instance.handleTokenUsageUpdated = (p: any) => Object.assign(instance.sessionState, { totalTokenUsage: p.tokenUsage.total, lastTokenUsage: p.tokenUsage.last });
-    const notify = (n: number, total = n * 110) => instance.createUsageUpdate({ threadId: "s",
-      tokenUsage: { total: count(n * 100, 0, n * 10, total), last: count(100, 0, 10, 110) } });
-    const before = notify(3);
-    await instance.createUpdateEvent({ method, params: { threadId: "s", turnId: "turn", item: { id: "compact", type: "contextCompaction" } } });
-    expect(notify(0, 78048)._meta.remiTokenUsage).toBeUndefined();
-    const after = notify(1), next = notify(2);
-    expect(after._meta.remiTokenUsage).toMatchObject({ totalTokens: 110, accuracy: "partial" });
-    expect(next._meta.remiTokenUsage.totalTokens).toBe(110);
-    expect([before, after, next].reduce((sum, event) => sum + event._meta.remiTokenUsage.totalTokens, 0)).toBe(330);
-    expect(after._meta.remiTokenUsage.id).toContain(":epoch:1:");
-    await instance.createUpdateEvent({ method, params: { threadId: "s", turnId: "turn", item: { id: "compact", type: "contextCompaction" } } });
-    expect(notify(1)).toBeNull(); // duplicate successful marker cannot reset again
+  it("reports missing request usage as a gap rather than inventing counters", async () => {
+    const instance = actor();
+    for (const usage of [null, count(10, 11, 2, 12), count(10, 0, 2, 78048)]) {
+      const update = await instance.createUpdateEvent({ method: "rawResponse/completed", params: { threadId: "native", responseId: "missing", usage } });
+      expect(update._meta.remiTokenUsage).toBeUndefined();
+      expect(update._meta.remiMissingRequestUsage).toMatchObject({ providerSessionId: "native", providerRequestId: "missing", accuracy: "unknown" });
+    }
+  });
+
+  it("publishes child request usage on the parent envelope before lifecycle/rendering filters", async () => {
+    const instance = actor();
+    const calls: any[] = [];
+    instance.session = { update: (...args: any[]) => calls.push(args) };
+    const childEvent = { method: "rawResponse/completed", params: {
+      threadId: "child-native", turnId: "child-turn", responseId: "child-response", usage: count(10, 8, 2, 12),
+    } };
+    const pending: Promise<void>[] = [];
+    instance.routeChild(childEvent, { current: { rootSessionId: "parent", supportsSubagents: false,
+      dispatch: (event: any) => pending.push(instance.handleNotification(event)),
+      enqueueInteraction: () => { throw new Error("Usage must bypass interaction-only routing"); },
+    } });
+    await Promise.all(pending);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toHaveLength(1); // No child ACP envelope override.
+    expect(calls[0][0]._meta.remiTokenUsage).toMatchObject({ providerSessionId: "child-native", providerRequestId: "child-response", totalTokens: 12,
+      requestedModel: null, modelSource: "unknown" });
+    await instance.handleNotification({ ...childEvent, params: { ...childEvent.params, threadId: "unrelated-native" } });
+    expect(calls).toHaveLength(1);
+    await instance.handleNotification({ ...childEvent, _remiUsageRootSessionId: "another-parent" });
+    expect(calls).toHaveLength(1);
   });
 });
 
@@ -102,7 +121,7 @@ describe("Claude request consumption bridge", () => {
     await consume.call(receiver, session, message(null, { type: "message_start", message: { id: "main", model: "opus", usage: { input_tokens: 10, cache_read_input_tokens: 80, output_tokens: 0 } } }), params);
     await consume.call(receiver, session, message("tool1", { type: "message_start", message: { id: "child", model: "haiku", usage: { input_tokens: 4, output_tokens: 0 } } }), params);
     await consume.call(receiver, session, message(null, { type: "message_delta", usage: { output_tokens: 12, input_tokens: null } }), params);
-    await consume.call(receiver, session, { type: "assistant", parent_tool_use_id: "tool1", message: { id: "child", model: "haiku", usage: { input_tokens: 4, output_tokens: 2 } } }, params);
+    await consume.call(receiver, session, { type: "assistant", parent_tool_use_id: "tool1", message: { id: "child", model: "haiku", stop_reason: "end_turn", usage: { input_tokens: 4, output_tokens: 2 } } }, params);
     expect(updates).toEqual([
       expect.objectContaining({ id: "main", model: "opus", totalTokens: 90, accuracy: "partial" }),
       expect.objectContaining({ id: "child", model: "haiku", totalTokens: 4, parentToolUseId: "tool1" }),

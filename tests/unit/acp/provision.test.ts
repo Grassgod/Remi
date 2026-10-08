@@ -48,7 +48,8 @@ function writeBridgePackage(home: string, pkg: string, version: string): string 
   return pkgDir;
 }
 
-function writeCodexDist(pkgDir: string, source = `  async createUpdateEvent(notification) { return null; }
+function writeCodexDist(pkgDir: string, source = `  async handleNotification(notification) {}
+  async createUpdateEvent(notification) { switch(notification.method) { case "rawResponse/completed": return null; } }
   createUsageUpdate(params) {
     return {
       sessionUpdate: "usage_update",
@@ -57,6 +58,7 @@ function writeCodexDist(pkgDir: string, source = `  async createUpdateEvent(noti
     };
   }
   handleRateLimitsUpdated(params) {}
+  routeChild(childEvent, session) { if (session.current.supportsSubagents) session.current.dispatch(childEvent); }
 `): string {
   const dist = join(pkgDir, "dist", "index.js");
   mkdirSync(join(pkgDir, "dist"), { recursive: true });
@@ -146,7 +148,7 @@ test("preflight preserves the old Codex launcher until normal daemon startup act
   expect(readlinkSync(launcher)).toBe(dist);
 });
 
-test("codex usage patch is idempotent and carries cumulative consumption separately from context", () => {
+test("codex usage patch is idempotent and carries response consumption separately from context", () => {
   const home = freshHome();
   const pkgDir = writeBridgePackage(home, "@agentclientprotocol/codex-acp", BRIDGE_PIN.codex);
   const dist = writeCodexDist(pkgDir);
@@ -158,7 +160,8 @@ test("codex usage patch is idempotent and carries cumulative consumption separat
   const once = readFileSync(dist, "utf8");
   expect(once).toContain(`const CODEX_USAGE_PATCH = "${CODEX_USAGE_PATCH}";`);
   expect(once).toContain("remiTokenUsage");
-  expect(once).toContain("cumulative: current");
+  expect(once).toContain('notification.method === "rawResponse/completed"');
+  expect(once).toContain('remiUsageMode: "request"');
   expect(patchCodexUsageBridge((message) => logs.push(message), pkgDir)).toBe(true);
   expect(readFileSync(dist, "utf8")).toBe(once);
   expect(once.match(/remiTokenUsage/g)).toHaveLength(1);
