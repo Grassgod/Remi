@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from "bun:test";
 import { actualUnit, requestUnitId, unitActualTotal } from "../../../packages/acp/src/usage-collector.js";
 import { writeUsageSnapshot } from "../../../packages/server/src/store/usage-accounting.js";
 import { runTurnExecutionMutation } from "@multiremi/store/turn-execution-records.js";
+import { createReplacementAttemptWithinTransaction } from "@multiremi/store/turn-attempts.js";
 import { applyModernUsageRepairs, buildModernUsageRepairs, readModernRepairState, storedUsageUnit, verifyModernUsageRepairs } from "../../../scripts/modern-usage-repair.js";
 import { parseNativeUsageEvidence } from "../../../scripts/usage-evidence.js";
 import { createLocalStore, db, resetMultiremiTestEnv } from "../multiremi/helpers.js";
@@ -12,10 +13,45 @@ function fixture(provider = "claude") {
   const agent = store.createAgent({ name: "repair", provider });
   const task = store.createTask({ agentId: agent.id, prompt: "synthetic historical repair" });
   runTurnExecutionMutation(db!, "UPDATE multiremi_turn_execution_records SET status='completed',provider=?,session_id='native-session',started_at='2026-10-01T00:00:00Z',completed_at='2026-10-01T02:00:00Z',usage='[]' WHERE id=?", [provider, task.id]);
-  return { store, task };
+  return { store, task, agent };
 }
 const request = (output: number) => ({ ...actualUnit({ unitId: requestUnitId("response", "native-session"), provider: "claude", providerSessionId: "native-session", providerRequestId: "response", model: "real-model", scope: "request", source: "provider_request", inputTokens: 10, outputTokens: output, cacheReadTokens: 20, cacheWriteTokens: 0, totalTokens: 30 + output }), occurredAt: at });
 describe("reviewed terminal modern usage repairs", () => {
+  it("rejects a reviewed attempt moved to a different turn without changing usage or audit rows", () => {
+    const { task, store, agent } = fixture();
+    writeUsageSnapshot(db!, task.id, { version: 2, runId: "live-run", revision: 1, complete: true, units: [request(1)] }, { historical: true });
+    const repairs = buildModernUsageRepairs(readModernRepairState(db!, task.id), [request(11)], []);
+    expect(repairs).toHaveLength(1);
+    const other = store.createTask({ agentId: agent.id, prompt: "different turn" });
+    const turn = db!.query("SELECT turn_id FROM multiremi_turn_attempts WHERE id=?").get(other.id) as { turn_id: string };
+    db!.run("UPDATE multiremi_turn_attempts SET turn_id=?,attempt_no=2 WHERE id=?", [turn.turn_id, task.id]);
+    const before = readModernRepairState(db!, task.id);
+    expect(() => applyModernUsageRepairs(db!, repairs, "moved-turn")).toThrow("changed after plan");
+    expect(readModernRepairState(db!, task.id)).toEqual(before);
+    expect(db!.query("SELECT * FROM multiremi_usage_modern_repair_audit").all()).toEqual([]);
+  });
+  it("rejects a missing unified execution projection before creating repair audit tables", () => {
+    const { task } = fixture();
+    writeUsageSnapshot(db!, task.id, { version: 2, runId: "live-run", revision: 1, complete: true, units: [request(1)] }, { historical: true });
+    const repairs = buildModernUsageRepairs(readModernRepairState(db!, task.id), [request(11)], []);
+    const before = db!.query("SELECT * FROM multiremi_usage_units").all();
+    db!.exec("DROP VIEW multiremi_turn_execution_records");
+    expect(() => applyModernUsageRepairs(db!, repairs, "missing-projection")).toThrow("Unsupported usage reconciliation schema");
+    expect(db!.query("SELECT name FROM sqlite_master WHERE name='multiremi_usage_modern_repair_audit'").get()).toBeNull();
+    expect(db!.query("SELECT * FROM multiremi_usage_units").all()).toEqual(before);
+  });
+  it("allows a terminal attempt repair after the same turn creates a normal retry", () => {
+    const { task } = fixture();
+    runTurnExecutionMutation(db!, "UPDATE multiremi_turn_execution_records SET status='failed' WHERE id=?", [task.id]);
+    writeUsageSnapshot(db!, task.id, { version: 2, runId: "live-run", revision: 1, complete: true, units: [request(1)] }, { historical: true });
+    const before = readModernRepairState(db!, task.id);
+    const repairs = buildModernUsageRepairs(before, [request(11)], []);
+    const retry = db!.transaction(() => createReplacementAttemptWithinTransaction(db!, before.task.turn_id, { previousStatus: "failed", reason: "retry" }))();
+    expect(retry.attempt_no).toBe(2);
+    expect(readModernRepairState(db!, task.id).task).toEqual(before.task);
+    expect(applyModernUsageRepairs(db!, repairs, "same-turn-retry")).toEqual({ applied: 1, resumed: 0 });
+    expect(verifyModernUsageRepairs(db!, repairs, "same-turn-retry")).toBe(1);
+  });
   it("retains unknown consumption coverage in the report when an old unscoped meter overlaps exact requests", () => {
     const { task, store } = fixture("codex");
     const counts = { input_tokens: 30, cached_input_tokens: 20, output_tokens: 11, total_tokens: 41 };

@@ -14,7 +14,7 @@ import { ensureUsageAccountingSchema, legacyUsageSnapshot } from "../packages/se
 import { assignHistoricalUnit, parseNativeUsageEvidence, parseRawUsageEvidence, mergeNativeUsageEvidence, reconcileNativeSourceEvidence, type HistoricalTaskBoundary, type CompletedNativeTurn, type NativeSourceScope } from "./usage-evidence.js";
 import { readLegacyUsageMembers } from "./legacy-usage-archive.js";
 import { nextUsageRevision, readPlanUsageRevisionStates, usageRevisionStateSha256 } from "./usage-reconciliation-revisions.js";
-import { buildModernUsageRepairs, type ModernUsageRepair, type NativeRunScope, type readModernRepairState } from "./modern-usage-repair.js";
+import { assertUsageReconciliationSchema, buildModernUsageRepairs, type ModernUsageRepair, type NativeRunScope, type readModernRepairState } from "./modern-usage-repair.js";
 
 interface Task extends HistoricalTaskBoundary { workspace_id: string; agent_id: string; issue_id: string | null; chat_session_id: string | null; usage: string; has_live_usage: boolean; status: string; }
 interface Archive { id: string; relative_path: string; subject_kind: string; subject_id: string; format: string; }
@@ -356,7 +356,7 @@ export async function buildReconcileUsagePlan(sql: Bun.SQL, options: { archiveRo
       continue;
     }
     const [taskRows, units, runs, receipts, coverage, scopes] = await Promise.all([
-      sql.unsafe("SELECT id,workspace_id,provider,status,session_id,usage,started_at,completed_at,failed_at,cancelled_at FROM multiremi_turn_execution_records WHERE id=$1", [taskId]),
+      sql.unsafe("SELECT id,turn_id,attempt,workspace_id,provider,status,session_id,usage,started_at,completed_at,failed_at,cancelled_at FROM multiremi_turn_execution_records WHERE id=$1", [taskId]),
       sql.unsafe("SELECT * FROM multiremi_usage_units WHERE task_id=$1 ORDER BY run_id,unit_id", [taskId]),
       sql.unsafe("SELECT * FROM multiremi_usage_runs WHERE task_id=$1 ORDER BY run_id", [taskId]),
       sql.unsafe("SELECT * FROM multiremi_usage_unit_receipts WHERE task_id=$1 ORDER BY run_id,unit_id", [taskId]),
@@ -390,6 +390,7 @@ export async function mainReconcileTaskUsage(): Promise<void> {
     const plan = await Bun.file((applyPlan ?? verifyPlan)!).json() as ReconcileUsagePlan;
     const db = new PostgresSyncDatabase(databaseUrl);
     try {
+      assertUsageReconciliationSchema(db);
       if (applyPlan) ensureUsageAccountingSchema(db);
       const result = applyPlan ? applyUsageReconciliation(db, plan, progress => process.stderr.write(`${JSON.stringify(progress)}\n`)) : null;
       process.stdout.write(`${JSON.stringify({ applied: result, verified: verifyUsageReconciliation(db, plan) }, null, 2)}\n`);

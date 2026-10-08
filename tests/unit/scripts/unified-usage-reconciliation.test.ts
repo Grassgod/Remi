@@ -9,6 +9,7 @@ import { runTurnExecutionMutation } from "@multiremi/store/turn-execution-record
 import { ZipStreamWriter } from "@shared/zip/writer.js";
 import { buildReconcileUsagePlan } from "../../../scripts/reconcile-task-usage.js";
 import { applyUsageReconciliation, verifyUsageReconciliation } from "../../../scripts/usage-reconciliation-store.js";
+import { buildModernUsageRepairs, readModernRepairState } from "../../../scripts/modern-usage-repair.js";
 import { createLocalStore, db, resetMultiremiTestEnv } from "../multiremi/helpers.js";
 
 const at = "2026-10-01T01:00:00.000Z";
@@ -49,6 +50,21 @@ async function archive(taskId: string, kind: "trace" | "provider", rows: unknown
 }
 
 describe("usage evidence on unified attempts", () => {
+  it("rejects a nonempty plan on an unsupported schema before any reconciliation DDL", async () => {
+    const { task } = fixture();
+    const early = { ...actualUnit({ unitId: requestUnitId("response", "native-session"), provider: "claude", providerSessionId: "native-session", providerRequestId: "response", scope: "request", source: "provider_request", inputTokens: 10, outputTokens: 1, cacheReadTokens: 20, cacheWriteTokens: 0 }), occurredAt: at };
+    writeUsageSnapshot(db!, task.id, { version: 2, runId: "live-run", revision: 1, complete: true, units: [early] }, { historical: true });
+    const { root, sql } = await archive(task.id, "provider", []);
+    const plan = await buildReconcileUsagePlan(sql, { archiveRoot: root, taskId: task.id });
+    plan.modernRepairs = buildModernUsageRepairs(readModernRepairState(db!, task.id), [{ ...early, outputTokens: 11, reportedTotalTokens: 41, accuracy: "exact", actualUnsplitTokens: 0 }], []);
+    expect(plan.modernRepairs).toHaveLength(1);
+    const tables = db!.query("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name").all();
+    const units = db!.query("SELECT * FROM multiremi_usage_units").all();
+    db!.exec("DROP VIEW multiremi_turn_execution_records");
+    expect(() => applyUsageReconciliation(db!, plan)).toThrow("Unsupported usage reconciliation schema");
+    expect(db!.query("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name").all()).toEqual(tables);
+    expect(db!.query("SELECT * FROM multiremi_usage_units").all()).toEqual(units);
+  });
   for (const provider of ["claude", "codex"] as const) it(`plans, applies and resumes final ${provider} request repair from a native archive`, async () => {
     const { store, task } = fixture(provider);
     const early = provider === "claude"

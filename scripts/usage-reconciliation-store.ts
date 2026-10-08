@@ -5,7 +5,7 @@ import { markRequestReadCacheLockTaken } from "../packages/server/src/store/requ
 import type { ReconcileUsagePlan } from "./reconcile-task-usage.js";
 import { unitActualTotal } from "../packages/acp/src/usage-collector.js";
 import { readUsageRevisionState, usageRevisionStateSha256 } from "./usage-reconciliation-revisions.js";
-import { applyModernUsageRepairs, verifyModernUsageRepairs } from "./modern-usage-repair.js";
+import { assertUsageReconciliationSchema, applyModernUsageRepairs, verifyModernUsageRepairs } from "./modern-usage-repair.js";
 
 export const usagePlanChecksum = (plan: ReconcileUsagePlan) => createHash("sha256").update(JSON.stringify(plan)).digest("hex");
 const coverageCommitment = (unit: ReconcileUsagePlan["tasks"][number]["snapshot"]["units"][number]) => ({
@@ -24,6 +24,7 @@ const meterJson = (unit: ReconcileUsagePlan["tasks"][number]["snapshot"]["units"
 export function applyUsageReconciliation(db: SqlDatabase, plan: ReconcileUsagePlan,
   onProgress?: (progress: { processed: number; applied: number; resumed: number }) => void): { applied: number; resumed: number; checksum: string } {
   if (plan.version !== 2 || plan.mode !== "read-only" || !Array.isArray(plan.tasks)) throw new Error("Invalid reconciliation plan");
+  assertUsageReconciliationSchema(db);
   const checksum = usagePlanChecksum(plan);
   const seen = new Set<string>();
   for (const item of plan.tasks) {

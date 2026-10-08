@@ -14,7 +14,7 @@ export interface NativeRunScope {
   evidenceRef: string;
 }
 export interface ModernUsageRepair {
-  taskId: string; expectedStateSha256: string; scope: NativeRunScope;
+  taskId: string; expectedTurnId: string; expectedStateSha256: string; scope: NativeRunScope;
   snapshot: TaskUsageSnapshot; beforeActualTokens: number; afterActualTokens: number;
   correctedRequestIds: string[]; retiredRemainderIds: string[];
   nativeEvidence: TaskUsageUnit[]; supersededUnitIds: string[];
@@ -22,6 +22,25 @@ export interface ModernUsageRepair {
 }
 const sha = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 const terminal = (value: string) => ["completed", "failed", "cancelled"].includes(value);
+/** Read-only gate: reconciliation never creates or repairs the unified execution model. */
+export function assertUsageReconciliationSchema(db: SqlDatabase): void {
+  const required: Record<string, string[]> = {
+    multiremi_turns: ["id", "workspace_id", "current_attempt_id"],
+    multiremi_turn_attempts: ["id", "turn_id", "attempt_no", "status"],
+    multiremi_workspaces: ["id", "updated_at"],
+    multiremi_turn_execution_records: ["id", "turn_id", "attempt", "workspace_id", "provider", "status", "session_id", "usage", "started_at", "completed_at", "failed_at", "cancelled_at"],
+  };
+  const missing: string[] = [];
+  for (const [relation, columns] of Object.entries(required)) {
+    const rows = db.dialect === "postgres"
+      ? db.query("SELECT column_name AS name FROM information_schema.columns WHERE table_schema=ANY(current_schemas(false)) AND table_name=?").all(relation)
+      : db.query("SELECT name FROM pragma_table_info(?)").all(relation);
+    const present = new Set(rows.map(row => row.name));
+    if (!present.size) missing.push(relation);
+    else missing.push(...columns.filter(column => !present.has(column)).map(column => `${relation}.${column}`));
+  }
+  if (missing.length) throw new Error(`Unsupported usage reconciliation schema: missing ${missing.join(", ")}. Complete the unified turn/attempt startup migration with the current server on an isolated restored database, then regenerate and review the plan before applying it.`);
+}
 function unresolvedCodexSession(unit: TaskUsageUnit, sessionId: string): boolean {
   if (unit.provider !== "codex" || unit.evidenceRef !== "codex_meter_epoch_unresolved" || unitActualTotal(unit) !== 0) return false;
   const prefix = `request:${sessionId}:epoch:`;
@@ -73,7 +92,7 @@ export function modernRepairState(task: Row, units: Row[], runs: Row[], receipts
 }
 export function readModernRepairState(db: SqlDatabase, taskId: string) {
   return {
-    task: db.query("SELECT id,workspace_id,provider,status,session_id,usage,started_at,completed_at,failed_at,cancelled_at FROM multiremi_turn_execution_records WHERE id=?").get(taskId) as Row,
+    task: db.query("SELECT id,turn_id,attempt,workspace_id,provider,status,session_id,usage,started_at,completed_at,failed_at,cancelled_at FROM multiremi_turn_execution_records WHERE id=?").get(taskId) as Row,
     units: db.query("SELECT * FROM multiremi_usage_units WHERE task_id=? ORDER BY run_id,unit_id").all(taskId) as Row[],
     runs: db.query("SELECT * FROM multiremi_usage_runs WHERE task_id=? ORDER BY run_id").all(taskId) as Row[],
     receipts: db.query("SELECT * FROM multiremi_usage_unit_receipts WHERE task_id=? ORDER BY run_id,unit_id").all(taskId) as Row[],
@@ -175,7 +194,7 @@ export function buildModernUsageRepairs(state: ReturnType<typeof readModernRepai
         coverageExpectedCount: undefined, coverageSha256: undefined };
     }
     const scope = explicit ?? { taskId: state.task.id, runId: run.run_id, providerSessionId: sessionId, evidenceRef: "canonical_request_namespace" };
-    repairs.push({ taskId: state.task.id, expectedStateSha256: modernStateHash(state), scope,
+    repairs.push({ taskId: state.task.id, expectedTurnId: state.task.turn_id, expectedStateSha256: modernStateHash(state), scope,
       snapshot: { version: 2, runId: run.run_id, revision, complete: Number(run.complete) === 1, units: updated },
       beforeActualTokens: units.reduce((sum, unit) => sum + unitActualTotal(unit), 0), afterActualTokens: updated.reduce((sum, unit) => sum + unitActualTotal(unit), 0),
       correctedRequestIds, retiredRemainderIds, supersededUnitIds, nativeEvidence: evidence,
@@ -186,6 +205,7 @@ export function buildModernUsageRepairs(state: ReturnType<typeof readModernRepai
 }
 
 export function applyModernUsageRepairs(db: SqlDatabase, repairs: ModernUsageRepair[], checksum: string): { applied: number; resumed: number } {
+  assertUsageReconciliationSchema(db);
   db.exec(`CREATE TABLE IF NOT EXISTS multiremi_usage_modern_repair_audit(task_id TEXT NOT NULL,plan_checksum TEXT NOT NULL,original_state TEXT NOT NULL,result_state_sha256 TEXT NOT NULL,PRIMARY KEY(task_id,plan_checksum),FOREIGN KEY(task_id) REFERENCES multiremi_turn_attempts(id) ON DELETE CASCADE)`);
   let applied = 0, resumed = 0;
   for (const repair of repairs) {
@@ -196,10 +216,11 @@ export function applyModernUsageRepairs(db: SqlDatabase, repairs: ModernUsageRep
       db.run("UPDATE multiremi_workspaces SET updated_at=updated_at WHERE id=?", [initial.task.workspace_id]);
       markRequestReadCacheLockTaken();
       lockUsageIdentities(db, initial.task.workspace_id, repair.snapshot.units);
-      db.query(`SELECT a.id FROM multiremi_turn_attempts a JOIN multiremi_turns t ON t.id=a.turn_id
-        WHERE a.id=?${db.dialect === "postgres" ? " FOR UPDATE OF t,a" : ""}`).get(repair.taskId);
+      const locked = db.query(`SELECT a.id FROM multiremi_turn_attempts a JOIN multiremi_turns t ON t.id=a.turn_id
+        WHERE a.id=? AND t.id=?${db.dialect === "postgres" ? " FOR UPDATE OF t,a" : ""}`).get(repair.taskId, repair.expectedTurnId ?? null);
+      if (!locked) throw new Error("Modern usage changed after plan: attempt turn ownership changed or plan predates ownership checks; regenerate reviewed plan");
       const state = readModernRepairState(db, repair.taskId);
-      if (!terminal(state.task.status) || modernStateHash(state) !== repair.expectedStateSha256) throw new Error("Modern usage changed after plan; regenerate reviewed plan");
+      if (!state.task || state.task.turn_id !== repair.expectedTurnId || !terminal(state.task.status) || modernStateHash(state) !== repair.expectedStateSha256) throw new Error("Modern usage changed after plan; regenerate reviewed plan");
       if (repair.scope.taskId !== repair.taskId || repair.scope.runId !== repair.snapshot.runId || !repair.scope.evidenceRef || !repair.scope.providerSessionId) throw new Error("Invalid modern repair scope");
       if (!state.runs.some(run => run.run_id === repair.snapshot.runId) || ["legacy", "historical-evidence-v2"].includes(repair.snapshot.runId)) throw new Error("Modern repair requires an existing live run");
       const regenerated = buildModernUsageRepairs(state, repair.nativeEvidence, repair.scope.evidenceRef === "canonical_request_namespace" ? [] : [repair.scope], repair.completedTurns);
