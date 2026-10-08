@@ -30,6 +30,7 @@
     "./workspace/mutations": "./workspace/mutations.ts",
     "./workspace/hooks": "./workspace/hooks.ts",
     "./workspace/avatar-url": "./workspace/avatar-url.ts",
+    "./workspace/member-lookup": "./workspace/member-lookup.ts",
     "./issues": "./issues/index.ts",
     "./issues/queries": "./issues/queries.ts",
     "./issues/workbench": "./issues/workbench.ts",

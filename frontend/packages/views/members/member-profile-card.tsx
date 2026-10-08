@@ -6,6 +6,7 @@ import { useWorkspaceId } from "@multiremi/core";
 import { agentRunCounts30dOptions } from "@multiremi/core/agents";
 import { agentListOptions, memberListOptions } from "@multiremi/core/workspace/queries";
 import { resolvePublicFileUrl } from "@multiremi/core/workspace/avatar-url";
+import { findMemberById } from "@multiremi/core/workspace/member-lookup";
 import { useWorkspacePaths } from "@multiremi/core/paths";
 import { ActorAvatar as ActorAvatarBase } from "@multiremi/ui/components/common/actor-avatar";
 import { Skeleton } from "@multiremi/ui/components/ui/skeleton";
@@ -14,9 +15,7 @@ import { AppLink } from "../navigation";
 import { useT } from "../i18n";
 
 interface MemberProfileCardProps {
-  // The User UUID — matches member.user_id and agent.owner_id. We accept user_id
-  // (not member.id) because every existing call site passes user_id (assignee_id,
-  // commenter_id, owner_id are all User UUIDs in the polymorphic actor model).
+  // Actor references may contain the workspace member ID or the user account ID.
   userId: string;
 }
 
@@ -34,7 +33,7 @@ export function MemberProfileCard({ userId }: MemberProfileCardProps) {
   const { data: agents = [] } = useQuery(agentListOptions(wsId));
   const { data: runCounts = [] } = useQuery(agentRunCounts30dOptions(wsId));
 
-  const member = members.find((m) => m.user_id === userId);
+  const member = findMemberById(members, userId);
 
   if (membersLoading && !member) {
     return (
@@ -66,7 +65,7 @@ export function MemberProfileCard({ userId }: MemberProfileCardProps) {
   // query that powers the Agents-list RUNS column — no extra fetch.
   const runCountById = new Map(runCounts.map((r) => [r.agent_id, r.run_count]));
   const ownedAgents = agents
-    .filter((a) => a.owner_id === userId && !a.archived_at)
+    .filter((a) => a.owner_id === member.user_id && !a.archived_at)
     .sort((a, b) => {
       const ra = runCountById.get(a.id) ?? 0;
       const rb = runCountById.get(b.id) ?? 0;
