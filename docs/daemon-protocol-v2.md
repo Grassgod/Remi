@@ -365,7 +365,7 @@ A-2 用它进入 `upgrade_wait`（§7.3）而不是单纯停止重连。另外�
 
 | 帧 | 重连后从哪里重新推导 |
 |---|---|
-| `task.offer` | `multiremi_tasks` 中 queued / dispatched 的行 |
+| `task.offer` | `multiremi_turns` 的 pending 轮及 `multiremi_turn_attempts` 中 offered / accepted 的当前尝试 |
 | `turn.message` | 当前 turn 未确认的 now 消息 |
 | `turn.wrap_up` | 当前 turn 的 `wrap_up_requested_at` |
 | `task.cancelled` | 任务已终态而 daemon 仍在跑 |
@@ -427,7 +427,7 @@ daemon 已创建的 decision 在 RPC 应答中取得消息 ID 与 seq，同答�
 | `trace.append` | `(task_id, trace_seq)` | Hub 丢弃 `≤ head` |
 
 任务状态回报在工作区生命周期锁内复核 task / Runtime / workspace / daemon 归属和成员权限。
-`task.start`、`task.complete`、`task.fail` 的 `ok:true` 只表示状态已提交，或当前任务已经处于允许吸收重放的状态。
+`task.start`、`turn.complete`、`task.fail` 的 `ok:true` 只表示状态已提交，或当前尝试已经处于允许吸收重放的状态。
 任务曾实际发送给当前 Runtime、因未收到接单确认而重新入队时，保留的 `offered_at` 允许该 Runtime 的
 可靠 start 或终态回报恢复原执行；不需要等待下一次 offer，所以升级 drain 暂停派发时也能收口。
 只有 Runtime 偏好、尚未真正发送过 offer 的 queued 任务没有这项恢复资格；缺少证据或状态暂不允许时
@@ -519,6 +519,33 @@ SSH Mesh 两字段与 v1 HTTP heartbeat 的同名字段同语义；显式协议�
 变化时更新 runtime metadata，不因无变化的心跳重写 metadata。`heartbeatRuntime` 里 7 类待办的
 合并轮询（MUL-389）在 v2 服务端不再由心跳触发。
 
+保活与期望配置变化分开处理：相同 SSH 状态继续刷新报告时间并向浏览器发布
+`daemon:heartbeat`，不会唤醒 daemon 下行或派活。只有端点、主机公钥、启停或轮换改变
+SSH 配置 revision 时，才广播 `daemon:ssh_mesh_changed` 重新下发整个 mesh。
+`concierge.status_report` 始终更新 `reported_at`；仅 applied revision、运行状态、bot 身份或
+错误发生变化时发布带 `runtime_id` 的 `daemon:feishu_changed`。周期性状态恢复与报告重试保留。
+下行与派活的事件范围统一由
+[workspace-wakeups.ts](../packages/server/src/api/daemon-protocol/workspace-wakeups.ts)处理，
+本地事件与 peer 转发事件共用这条路径：
+
+| 事件 | 下行 | 派活 |
+| --- | --- | --- |
+| `daemon:heartbeat`、`activity:created` | 无 | 无 |
+| `daemon:pending_changed`、`daemon:feishu_changed` | 已知 Runtime；无目标时工作区 | 无 |
+| `daemon:ssh_mesh_changed` | 工作区所有 mesh 节点 | 无 |
+| `daemon:task_input` | 工作区下行，覆盖任务宿主与可能位于另一台机器的 bot 接收者 | 无 |
+| `daemon:models_updated`、`daemon:dispatch_conditions_changed`、插件 Runtime 状态/能力 | 已知 Runtime；无目标时工作区 | 相同范围 |
+| 其他业务/配置事件、maintenance | 保留已有下行；有 Runtime 时定向 | 保留派活条件事件的唤醒 |
+
+`claimTask` 在生命周期锁前读取轻量 Runtime，锁后读取派活所需的模型、执行组和协议状态，
+不会附带历史用量聚合。CLI 排空检查、重试时点、任务下发的宿主所有者信息和飞书卡片能力判断
+同样只读取必要字段；统一模型的 `DaemonTurnBridge` 授权也只读取 Runtime 身份字段。
+用户侧 Runtime 列表/详情的统计口径不变。成本回归必须统计心跳到下行、派活全部结束的
+完整链路，并计入 `WITH` 聚合；多 Runtime 用例见
+[daemon-heartbeat-fanout-cost.test.ts](../tests/unit/multiremi/daemon-heartbeat-fanout-cost.test.ts)。
+该回归也验证新任务入队直接推送，以及本地容量释放补发的 `hb` 在拒收冷却到期前重试派发：
+执行数量未变化的报告不唤醒派活，变化时只检查同一 daemon 连接内的 Runtime。
+
 **`hb` 的回复按 runtime 逐条给出，且不关连接。** 服务端用 `res` 回
 `{ runtime_acks: [MultiremiDaemonHeartbeatAck, ...] }`，顺序与 `hello` 报的 runtime 一致，
 结构就是 v1 HTTP 心跳返回的那一个（`contracts/types.ts` 的 `MultiremiDaemonHeartbeatAck`）。
@@ -551,7 +578,8 @@ SSH Mesh 两字段与 v1 HTTP heartbeat 的同名字段同语义；显式协议�
 被 drain 清理掉的 runtime 不在 `runtime_acks` 里出现：那次关停已经直接说过，daemon 不能把
 「运维把它删了」当成「重新注册我」。
 
-008 的 `rt_fkmqtl` 被分配为飞书 concierge，今天心跳 3 s；出站改推送后这个 3 s 节奏不再需要。
+Concierge 出站依赖下行推送与重试定时器，不要求为投递缩短心跳间隔；状态报告的周期性
+刷新独立保留，用于恢复丢失的 online/stopped 报告。
 
 各 `pending_*` 改为**创建即推**：写入口在提交后发布既有实时事件，经 MUL-462 的进程间扇出
 到 runtime 进程，再调用下行泵的统一 `kick(runtimeId)`。v2 连接层不直接订阅 `store.on*`，
@@ -667,7 +695,7 @@ seq 连续是 Hub「丢弃 `≤ head` 的事件」这条规则成立的前提，
 
 **连续性断言只针对新写的实时 trace。**回填出来的历史 trace 保留原来的稀疏 seq，
 不能断言连续，也**不能断言 `head = event_count`**（A11）；对账历史成员要用 `event_count`。
-这是 `head` 与 `event_count` 在 `task.complete.trace` 里分成两个字段的原因。
+这是 `head` 与 `event_count` 在 `turn.complete.trace` 里分成两个字段的原因。
 
 `closed` 是 trace 唯一的终态信号（裁决 3），出现在 `TraceStore.head()`、reader 结果、
 `trace.read` / `trace.fetch` 的应答、`trace.push` 与 Hub 订阅上。**不存在 `trace.end` 事件**，
@@ -815,8 +843,8 @@ B 方案里的 `GET /api/daemon/tasks/:id/trace` 改用 `trace.fetch`，不新�
 - A（本单）**只删写路径**：daemon 不再产 `messages` outbox 记录，服务端删
   `POST /api/daemon/tasks/:id/messages` 与 `appendTaskMessages` 的 daemon 入口。
 - B（MUL-402）负责删表与指针路由；C（MUL-403）负责前端与飞书 CoT 改订阅 Hub。
-- A 一行不动 `multiremi_task_messages` 的读者（`routers/tasks.ts:385/433`、
-  `helpers/organizer.ts:53`、`routers/issue-shares.ts:166/173`、飞书 CoT）。
+- 当前生产读者从 trace 指针读取，旧 task 路由不注册。`multiremi_task_messages` 仅用于
+  历史 trace 回填、用量取证及旧 reader fixtures；`appendTaskMessages` 不是 daemon 写入入口。
 - 三者在 `v2-integration` 合流 PR 里同时存在，缺一不合。
 
 ## 6. 反向 RPC `trace.read`

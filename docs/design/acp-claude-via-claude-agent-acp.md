@@ -66,7 +66,9 @@ remi runtime model list <runtime> --json
 
 ## 验证入口
 
-`claude-usage-v3` 补丁按原生 SDK session ID 与 assistant request ID 收集输入、输出、cache read/write 快照；ACP 会话 ID 不替代原生 session 身份。同请求后续累计输出替换 earlier revision，子 Agent 保留实际 assistant model。服务端按工作区、provider、连接、原生 session/request 规范化归属；跨任务或 run 的竞争证据单独审计，不重复累加消费，缺少原生 session 的历史请求保持未知归属。context occupancy 与消费分开，流式请求数据在失败或取消前即进入 worker durable outbox；turn settle 只补请求明细未覆盖的未知部分，避免重复计量。SDK result 的 `total_cost_usd` 单独保留为 turn 范围的 `sdk_estimate`，包括显式零金额，不当作网关账单。安装与 release candidate 检查同时要求该补丁。回归见 [usage-bridge-patches.test.ts](../../tests/unit/acp/usage-bridge-patches.test.ts)、[usage-request-ownership.test.ts](../../tests/unit/acp/usage-request-ownership.test.ts) 与 [usage-failure.test.ts](../../tests/unit/acp/usage-failure.test.ts)。
+`claude-usage-v4` 补丁按原生 SDK session ID 与 assistant request ID 收集输入、输出、cache read/write 快照；ACP 会话 ID 不替代原生 session 身份。Claude 可以先发出内容块对应的 assistant，再通过 `message_delta` 提供最终用量，因此 assistant 不会提前删除正在采集的请求。最终 usage 与终止事件共同确认完整性；缺少最终计数的失败、取消或单独 `message_stop` 保留 partial。非流式 assistant 也需要明确的结束原因和有效计数。相同请求的累计数字更新原单位，旧块及重放不减少计数、不重复相加；父子调用分别保留自己的请求状态和实际模型。
+
+服务端按工作区、provider、连接、原生 session/request 规范化归属；跨任务或 run 的竞争证据单独审计，不重复累加消费，缺少原生 session 的历史请求保持未知归属。context occupancy 与消费分开，流式请求数据在失败或取消前即进入 worker durable outbox；turn settle 只补请求明细未覆盖的未知部分，避免重复计量。SDK result 的 `total_cost_usd` 单独保留为 turn 范围的 `sdk_estimate`，包括显式零金额，不当作网关账单。安装与 release candidate 检查同时要求该补丁。回归见 [最终用量时序](../../tests/unit/acp/claude-final-usage.test.ts)、[桥接事件](../../tests/unit/acp/usage-bridge-patches.test.ts)、[请求归属](../../tests/unit/acp/usage-request-ownership.test.ts) 与 [失败用量](../../tests/unit/acp/usage-failure.test.ts)。
 
 - [配置、权限、加密版本和任务亲和性](../../tests/unit/multiremi/runtime-claude-profile.test.ts)
 - [注入、旧配置覆盖和密钥不落盘](../../tests/unit/daemon/claude-profile.test.ts)

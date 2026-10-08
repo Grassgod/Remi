@@ -93,10 +93,13 @@ bun run tests/integration/smoke-multiremi-acp.ts --provider=codex --check-only
 
 ```bash
 bun run tests/integration/verify-codex-bridge.ts --package-dir=<bundle>/node_modules/@agentclientprotocol/codex-acp
+bun run tests/integration/verify-codex-bridge.ts --package-dir=<bundle>/node_modules/@agentclientprotocol/codex-acp --usage-only
 ```
 
-检查器核对发布包的依赖声明和实际 CLI 版本，应用 usage 补丁并执行发布包中的 token 转换，随后验证 ACP 初始化、会话创建、model/effort/权限协商和关闭。它从当前 `CODEX_HOME`（默认 `~/.codex`）复制 `auth.json` 到临时 Home，真实会话需要有效登录；不复制本机配置。加 `--prompt` 会调用模型并校验回复及实际 usage 事件。不加该参数时不会发送 prompt，也不能视为真实模型调用通过。
+检查器核对发布包身份及实际解析的 SDK/CLI 固定版本；bundle 可以通过已准备的 override 安装 SDK，npm manifest 的依赖范围不要求等于 override 版本。检查器应用 usage 补丁，并执行实际发布包的请求用量转换和子线程订阅转发；`--usage-only` 到此结束，不读取认证或启动真实会话。默认模式继续验证 ACP 初始化、会话创建、model/effort/权限协商和关闭，从当前 `CODEX_HOME`（默认 `~/.codex`）复制 `auth.json` 到临时 Home，真实会话需要有效登录；不复制本机配置。加 `--prompt` 会调用模型并校验回复及实际 usage 事件。不加该参数时不会发送 prompt，也不能视为真实模型调用通过。
 
-检查器应核对发行快照中的配套 Codex 基线；`codex-usage-v5` 补丁从上游累计消费生成计量区间，保存真实 thread/session、明确 epoch、累计 before/after 与 last 分量。turn ID 不充当请求 ID；服务端按计量区间识别跨任务或 run 的重复和重叠，归属冲突只保留审计与已确认小计，不再次累加。重放或先前未见的下降通知都不改变差分基线。下降本身不能证明计数器重置；同 thread 成功的 `thread/compacted`、`item/completed`（`contextCompaction`）通知与实际 item/turn 标记后有效计数下降，才建立可辨认的新 epoch。新建上游会话证明 initial epoch；恢复、fork 或切换已有 thread 时，若没有原生重置历史，保留用量诊断和未知 epoch，不猜测原会话累计消费。成功压缩后的新 epoch 仅计量有效的最后请求并标记 partial，后续差分正常累计；详细字段全零而 total 非零的压缩估计只保留诊断，不消耗待确认的 epoch 标记。原生 input 包含 cached input，转换时分离缓存；output 已包含 reasoning，不重复相加。`usage_update.used/size` 仅记录上下文峰值，不参与消费累计，settle fallback 同样不把压缩估计视为实际消费。模型实际 SKU 未由上游上报时保持 `model:null`，会话确认的请求模型单列 `requestedModel`。失败、取消和异常退出保留已观察到的用量，worker 在计量事件时写入 durable outbox，并在终态前以有界分块补齐快照。协议回归夹具使用 Node shebang，Windows 可在 WSL 中运行 `acp-session-negotiation.test.ts`；发布包检查器直接通过 Node 启动 bridge，可在原生 Windows 运行。
+检查器核对发行快照中的配套 Codex 基线；`codex-usage-v6` 补丁读取 app-server 的 `rawResponse/completed`，以真实 thread/session 与 response ID 记录每次模型调用。该事件覆盖普通生成和上下文压缩，不需要从旧会话的累计计数猜测本次消费；恢复、fork 和第一条有效请求使用相同规则。turn ID 不充当请求 ID，相同 response 的重放不会另加一份消费。缺失或无效的请求计数保留未知证据，不从最后请求或上下文占用补数。
+
+旧 `thread/tokenUsage/updated` 的 `used/size` 只保留为上下文诊断，不再与逐请求消费相加；Codex 的 PromptResult 最后请求用量也不作为额外消费。缓存和输出的换算由[共用请求计数校验](../../packages/acp/src/codex-request-usage.ts)处理：input 中的缓存分量单列，output 已包含 reasoning，不重复相加。模型实际 SKU 未由上游上报时保持 `model:null`，会话确认的请求模型单列 `requestedModel`。失败、取消和异常退出保留已观察到的用量，worker 在计量事件时写入 durable outbox，并在终态前以有界分块补齐快照。协议回归夹具使用 Node shebang，Windows 可在 WSL 中运行 `acp-session-negotiation.test.ts`；发布包检查器直接通过 Node 启动 bridge，可在原生 Windows 运行。
 
 历史数据使用 [reconcile-task-usage.ts](../../scripts/reconcile-task-usage.ts) 生成只读证据计划；共享 native 会话必须按任务时间边界唯一归属。旧 `backfill-codex-task-usage.ts` 仅保留只读命令别名，不再累加 `used` 或覆写旧任务用量。显式 schema/legacy 迁移入口为 [migrate-usage-accounting.ts](../../scripts/migrate-usage-accounting.ts)，不会在正常 server startup 扫描历史消息。采集失败、replay 和真实 daemon 协议验证入口见 [usage-failure.test.ts](../../tests/unit/acp/usage-failure.test.ts)、[daemon-usage-accounting.test.ts](../../tests/integration/daemon-usage-accounting.test.ts)；这些回归使用 provider fixture，不代表本次调用了付费模型服务。

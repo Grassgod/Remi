@@ -4,7 +4,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runUnifiedModelMigration, reconcileUnifiedModel, retryChains,
-  UnifiedModelPreflightError } from "@multiremi/store/unified-model-migration.js";
+  UnifiedModelPreflightError, unifiedModelPreflight } from "@multiremi/store/unified-model-migration.js";
 import { UNIFIED_MODEL_MIGRATION } from "@multiremi/store/unified-model-schema.js";
 import { dropRetiredTables, RETIRED_TABLE_SETS, RETIRED_COLUMN_SETS } from "../../../scripts/drop-retired-tables.js";
 import { unifiedModelBackendTests } from "./unified-model-test-backends.js";
@@ -17,6 +17,55 @@ function reportDir(): string { const dir=mkdtempSync(join(tmpdir(),"mul505-"));d
 afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir,{recursive:true,force:true}); });
 
 unifiedModelBackendTests("MUL-505 normalized model migration", fixture => {
+  it("blocks unconsumed steer for every unfinished task state and does not exempt a failed attempt's queued retry", () => {
+    const { db, store } = fixture();
+    const agent = store.createAgent({ name: "Active steer", provider: "codex" });
+    const first = store.createTask({ agentId: agent.id, prompt: "failed", status: "failed" });
+    const retry = store.createTask({ agentId: agent.id, prompt: "retry", parentTaskId: first.id, attempt: 2 });
+    db.run("INSERT INTO multiremi_task_steer_messages(id,task_id,content,created_at) VALUES('str_active',?,'pending steer',?)", [retry.id, retry.createdAt]);
+    for (const status of ["queued", "running", "dispatched", "awaiting_human", "waiting_local_directory"]) {
+      db.run("UPDATE multiremi_tasks SET status=? WHERE id=?", [status, retry.id]);
+      expect(unifiedModelPreflight(db).find(c => c.name === "unconsumed_steer")).toEqual({ name: "unconsumed_steer", count: 1, ok: false });
+    }
+  });
+
+  it("preserves terminal unconsumed steer bodies and source rows as non-waking history, including retry attempts", () => {
+    const { db, store } = fixture();
+    const agent = store.createAgent({ name: "Terminal steer", provider: "codex" });
+    const issue = store.createIssue({ title: "History" });
+    const first = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "first", status: "failed" });
+    const retry = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "retry", parentTaskId: first.id, attempt: 2, status: "completed" });
+    const cancelled = store.createTask({ agentId: agent.id, prompt: "cancelled", status: "cancelled" });
+    const bodies = ["long-history-".repeat(2500), "completed history", "cancelled history"];
+    for (const [index, task] of [first, retry, cancelled].entries()) {
+      db.run("INSERT INTO multiremi_task_steer_messages(id,task_id,author_id,content,created_at) VALUES(?,?,'local',?,?)",
+        [`str_terminal_${index}`, task.id, bodies[index], task.createdAt]);
+    }
+    db.run("INSERT INTO multiremi_task_steer_messages(id,task_id,content,created_at,consumed_at) VALUES('str_consumed',?,'consumed',?,?)",
+      [retry.id, retry.createdAt, retry.createdAt]);
+    const source = db.query("SELECT * FROM multiremi_task_steer_messages ORDER BY id").all();
+    const dir = reportDir();
+    const after = runUnifiedModelMigration(db, { reportDir: dir });
+    const before = JSON.parse(readFileSync(join(dir, `${UNIFIED_MODEL_MIGRATION}-before.json`), "utf8"));
+    expect(before.checks.find((c: any) => c.name === "unconsumed_steer").count).toBe(0);
+    expect(after.orphan_steer).toEqual(before.orphan_steer);
+    expect(after.orphan_steer.count).toBe(3);
+    expect(after.orphan_steer.by_task_status).toEqual({ completed: 1, failed: 1, cancelled: 1 });
+    expect(after.mismatches).toEqual([]);
+    expect(db.query("SELECT * FROM multiremi_task_steer_messages ORDER BY id").all()).toEqual(source);
+    for (const [index, entry] of after.orphan_steer.entries.entries()) {
+      const message = db.query("SELECT body_md,task_id,to_type,wake_applied,sender_type,sender_id FROM multiremi_conversation_log WHERE id=?").get(entry.message_id);
+      expect(message.body_md).toBe(bodies[index]);
+      expect(message).toMatchObject({ to_type: "none", wake_applied: "inbox_only", sender_type: "member", sender_id: "mem_local_local" });
+    }
+    expect(db.query("SELECT task_id FROM multiremi_conversation_log WHERE id='msg_migrated_steer_str_terminal_1'").get()?.task_id).toBe(first.id);
+    expect(runUnifiedModelMigration(db, { reportDir: dir }).orphan_steer.count).toBe(3);
+    db.run("UPDATE multiremi_conversation_log SET body_md='lost' WHERE id='msg_migrated_steer_str_terminal_0'");
+    expect(reconcileUnifiedModel(db, before).mismatches).toContain("terminal unconsumed steer identity/body changed");
+    db.exec("DROP TABLE multiremi_task_steer_messages");
+    expect(reconcileUnifiedModel(db).orphan_steer.count).toBe(3);
+  });
+
   it("preserves main usage facts and their cascading attempt foreign keys through cutover", () => {
     const { db, store } = fixture();
     const agent = store.createAgent({ name: "Usage cutover", provider: "claude" });

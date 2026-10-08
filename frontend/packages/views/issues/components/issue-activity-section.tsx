@@ -2,6 +2,8 @@
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { toast } from "sonner";
+import { useQueryClient } from "@tanstack/react-query";
+import { issueKeys } from "@multiremi/core/issues/queries";
 import type { Agent, Attachment, IssueSession, MemberWithUser, TimelineEntry } from "@multiremi/core/types";
 import { useCreateComment, useUpdateComment, useDeleteComment, useResolveComment, useToggleCommentReaction } from "@multiremi/core/issues/comment-mutations";
 import { useIssueLog } from "@multiremi/core/session-log/use-issue-log";
@@ -77,6 +79,7 @@ export function IssueActivitySection({ issueId, issueTitle, projectId, members, 
   log, activeIssueSession, sessionsPending, sessionsFetching, onRetrySessions, highlightCommentId, initialLog, onScrollRoot, onContentReady,
 }: IssueActivitySectionProps) {
   const { t } = useT("issues");
+  const queryClient = useQueryClient();
   const { ready: preferencesReady, showSystemDetails: savedSystemDetails, setShowSystemDetails } = useActivityPreferences(currentUserId);
   const [requestedCommentId, setActiveCommentId] = useState(highlightCommentId ?? null);
   useEffect(() => setActiveCommentId(highlightCommentId ?? null), [highlightCommentId]);
@@ -89,6 +92,18 @@ export function IssueActivitySection({ issueId, issueTitle, projectId, members, 
     .map(row => [row.id, logRowToComment(row)])), [rowModel]);
   const activeCommentId = replica.missingCommentId === requestedCommentId ? null : requestedCommentId;
   const displayVisit = JSON.stringify([issueId, sessionId, currentUserId, activeCommentId]);
+  const taskLayout = useRef({ visit: displayVisit, seeded: queryClient.getQueryData(issueKeys.tasks(issueId)) !== undefined });
+  if (taskLayout.current.visit !== displayVisit) taskLayout.current = {
+    visit: displayVisit, seeded: queryClient.getQueryData(issueKeys.tasks(issueId)) !== undefined,
+  };
+  const [tasksReadyVisit, setTasksReadyVisit] = useState<string | null>(null);
+  const onTasksReady = useCallback(() => {
+    if (taskLayout.current.visit === displayVisit) setTasksReadyVisit(displayVisit);
+  }, [displayVisit]);
+  // With no task seed, the bar's natural height is part of first-paint layout.
+  // Resolve it before reveal instead of leaving an empty fixed-height box.
+  const tasksReady = taskLayout.current.seeded || tasksReadyVisit === displayVisit
+    || !snapshot.entries.some(entry => entry.seq === 0);
   const [manualDetails, setManualDetails] = useState<{ visit: string; value: boolean } | null>(null);
   const temporaryDetails = useRef({ visit: displayVisit, enabled: false });
   if (temporaryDetails.current.visit !== displayVisit) temporaryDetails.current = { visit: displayVisit, enabled: false };
@@ -186,7 +201,9 @@ export function IssueActivitySection({ issueId, issueTitle, projectId, members, 
       const trails = presentation.trailers.get(entry.id) ?? [];
       const signature = trailSignatures.current.signature(`${sessionId}:${entry.id}`, trails, id => groupChoices.current.get(`${sessionId}:${id}`));
       const capSignature = entry.seq === 0 ? `:activity-cap:${Boolean(replica.window?.activities_truncated)}` : "";
-      entry = { ...entry, render_version: `${entry.render_version ?? ""}${signature}${capSignature}` };
+      // Head chrome moved outside its measured row and comments regained their
+      // borders/padding. Never reserve heights captured by the old flat layout.
+      entry = { ...entry, render_version: `${entry.render_version ?? ""}:issue-cards-v2${signature}${capSignature}` };
       if (entry.seq > 0 && (entry.kind !== "message" || isSystemDetail(entry))) return eventLayoutEntry(entry);
       return responseTurns.has(entry.id) ? { ...entry, render_version: `${entry.render_version ?? ""}:issue-response-v1` } : entry;
     });
@@ -275,6 +292,15 @@ export function IssueActivitySection({ issueId, issueTitle, projectId, members, 
     return new Map(rowModel.rows.map(row => [row.id, renderRow(row)]));
   }, [rowModel, commentsById, issueId, issueTitle, currentUserId, currentMemberId, canModerateComments, replica, getActorName, taskAgents, resultsById, onShowKeyResults, responseTurns, resolved.expanded, resolved.toggle, resolved.clear, run, update, remove, resolve, reaction, t]);
   const renderLogEntry = useCallback(({ entry }: { entry: SessionLogEntry }) => renderedRows.get(entry.id), [renderedRows]);
+  const renderTrails = (entry: SessionLogEntry, highlightedId: string | null) => presentation.trailers.get(entry.id)?.map(group => {
+    const choice = groupChoices.current.get(`${sessionId}:${group.id}`)!;
+    return <IssueActivityTrail key={group.id} group={group} expanded={choice.expanded} showOlder={choice.showOlder}
+      truncateOlder={choice.truncateOlder} getActorName={getActorName} onOpenTask={setPromptRow}
+      targetCommentId={activeCommentId} highlightedId={highlightedId}
+      taskAgents={taskAgents} results={resultsById} onShowKeyResults={onShowKeyResults}
+      onToggle={() => { choice.expanded = !choice.expanded; setGroupVersion(version => version + 1); }}
+      onShowOlder={() => { choice.showOlder = true; setGroupVersion(version => version + 1); }} />;
+  });
   if (!sessionId) return sessionsPending ? <TimelineSkeleton /> : <TimelineUnavailable onRetry={onRetrySessions} retrying={sessionsFetching} />;
   if (error && !snapshot.ready) return <TimelineUnavailable onRetry={refresh} retrying={false} />;
   return <><SessionLogList key={`${sessionId}:${activeCommentId ?? "tail"}`} sessionId={sessionId} replica={replica}
@@ -284,16 +310,19 @@ export function IssueActivitySection({ issueId, issueTitle, projectId, members, 
     anchor={activeCommentId ? { kind: "element", id: `comment-${activeCommentId}` } : { kind: "bottom" }}
     onReturnToLatest={activeCommentId ? () => void returnLatest() : undefined}
     initialPositioned={initialLog?.sessionId === sessionId && (initialLog.targetCommentId ?? null) === activeCommentId}
-    initialDisplayReady={displayReady}
+    initialDisplayReady={displayReady && tasksReady}
+    contentReady={tasksReady}
     onScrollRoot={setScrollRoot}
-    afterEntry={(entry, { highlightedId }) => <>{entry.seq === 0 && <>
+    afterEntry={(entry, { highlightedId }) => entry.seq === 0 ? null : renderTrails(entry, highlightedId)}
+    afterRow={(entry, { highlightedId }) => entry.seq === 0 ? <>
       {replica.window?.has_more_before && <button type="button" data-log-earlier disabled={paging} className="mt-3 h-8 text-xs text-muted-foreground hover:text-foreground" onClick={() => void earlier()}>
         {replica.window.before_visible_count === undefined
           ? t($ => $.activity.expand_earlier, { count: 30 })
           : t($ => $.activity.remaining_earlier, { count: replica.window.before_visible_count })}
       </button>}
-      <div className="mt-4 flex h-8 items-center justify-between gap-2">
-        <h2 className="min-w-0 truncate text-base font-semibold">{t($ => $.detail.activity_section)}</h2>
+      <hr className="my-6 border-border" data-issue-activity-divider />
+      <div className="mt-4 flex min-h-8 flex-wrap items-center justify-between gap-2">
+        <h2 className="min-w-0 basis-full truncate text-base font-semibold sm:basis-auto">{t($ => $.detail.activity_section)}</h2>
         <div className="ml-auto flex shrink-0 items-center gap-2 text-xs text-muted-foreground">
           <span>{t($ => $.log_event.show_system_details)}</span>
           <Switch size="sm" checked={showSystemDetails} onCheckedChange={toggleSystemDetails} aria-label={t($ => $.log_event.show_system_details)} />
@@ -301,21 +330,11 @@ export function IssueActivitySection({ issueId, issueTitle, projectId, members, 
         <div className="h-6 min-w-16">{revealed && <IssueSubscribersControl issueId={issueId} currentUserId={currentUserId} members={members} agents={agents} />}</div>
       </div>
       <LocalDirectoryHint projectId={projectId} enabled={revealed} reserveSlot />
-      <div className="h-32 min-h-20 overflow-y-auto" data-agent-card-slot>
-        <AgentLiveCard key={`${issueId}:${sessionId}`} issueId={issueId} issueSessionId={sessionId}
-          reconcileEnabled={revealed} />
-      </div>
+      <AgentLiveCard key={`${issueId}:${sessionId}`} issueId={issueId} issueSessionId={sessionId}
+        onInitialReconcile={onTasksReady} reconcileEnabled={revealed || !taskLayout.current.seeded} />
       {replica.window?.activities_truncated && <div className="flex h-8 items-center text-xs text-muted-foreground">{t($ => $.activity.recent_limit)}</div>}
-    </>}
-    {presentation.trailers.get(entry.id)?.map(group => {
-      const choice = groupChoices.current.get(`${sessionId}:${group.id}`)!;
-      return <IssueActivityTrail key={group.id} group={group} expanded={choice.expanded} showOlder={choice.showOlder}
-        truncateOlder={choice.truncateOlder} getActorName={getActorName} onOpenTask={setPromptRow}
-        targetCommentId={activeCommentId} highlightedId={highlightedId}
-        taskAgents={taskAgents} results={resultsById} onShowKeyResults={onShowKeyResults}
-        onToggle={() => { choice.expanded = !choice.expanded; setGroupVersion(version => version + 1); }}
-        onShowOlder={() => { choice.showOlder = true; setGroupVersion(version => version + 1); }} />;
-    })}</>}
+      {renderTrails(entry, highlightedId)}
+    </> : null}
     renderEntry={renderLogEntry}
     footer={<>
       {activeCommentId && <div className="flex h-8 items-center gap-4 text-xs">

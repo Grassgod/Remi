@@ -496,6 +496,12 @@ export class RuntimesRepo {
     return row ? withRuntimeLiveness(this.hydrateRuntime(toRuntime(row))) : null;
   }
 
+  /** Dispatch needs current capabilities and group/protocol state, without historical accounting. */
+  getRuntimeForDispatch(id: string): MultiremiRuntime | null {
+    const row = this.readRuntimeRow(id);
+    return row ? withRuntimeLiveness(this.hydrateRuntime(toRuntime(row), false)) : null;
+  }
+
   /**
    * The Runtime row on its own: no usage scan, execution groups or model catalog.
    *
@@ -1333,7 +1339,7 @@ export class RuntimesRepo {
   }
 
   private publishRuntimeModelsUpdated(runtimeId: string): void {
-    const runtime = this.getRuntime(runtimeId);
+    const runtime = this.getRuntimeLite(runtimeId);
     if (!runtime?.workspaceId) return;
     this.ctx.emitWorkspaceEvent({
       type: "daemon:models_updated", workspaceId: runtime.workspaceId,
@@ -1505,7 +1511,7 @@ export class RuntimesRepo {
 
   /** Whether Task dispatch must pause while this physical daemon drains/upgrades. */
   hasCliUpdateDrainForRuntime(runtimeId: string): boolean {
-    const runtime = this.getRuntime(runtimeId);
+    const runtime = this.getRuntimeLite(runtimeId);
     if (!runtime) return false;
     const runtimeIds = this.runtimeIdsForDaemon(runtime);
     if (!runtimeIds.length) return false;
@@ -2390,8 +2396,8 @@ export class RuntimesRepo {
     return runtimes.find((runtime) => runtime.status === "online") ?? runtimes[0] ?? null;
   }
 
-  private hydrateRuntime(runtime: MultiremiRuntime): MultiremiRuntime {
-    const stats = this.runtimeUsageSummary(runtime.id);
+  private hydrateRuntime(runtime: MultiremiRuntime, includeUsage = true): MultiremiRuntime {
+    const stats = includeUsage ? this.runtimeUsageSummary(runtime.id) : {};
     return {
       ...runtime,
       ...stats,

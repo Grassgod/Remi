@@ -87,7 +87,7 @@ export function parseQuestionAnswers(questions: AskUserQuestion[], form: Record<
     const selected = q.options.filter((_, oi) => checked(form[`q${qi}_option${oi}`])).map(o => o.label);
     if (!q.multiSelect && selected.length > 1) throw new Error(`问题 ${qi + 1} 只能选择一项`);
     const custom = answerText(form[`q${qi}_custom`]);
-    if (custom.length > 500) throw new Error(`问题 ${qi + 1} 的自定义回答过长`);
+    if (custom.length > 1000) throw new Error(`问题 ${qi + 1} 的自定义回答过长`);
     if (!selected.length && !custom) throw new Error(`请回答问题 ${qi + 1}`);
     answers[q.question] = [selected.join("、"), custom ? `自定义回答：${custom}` : ""].filter(Boolean).join("\n");
   });

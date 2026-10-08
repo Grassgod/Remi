@@ -44,7 +44,7 @@ export class DaemonTurnBridge {
   private authorized(turnId:string,attemptId:string,scope:DaemonTurnScope,terminal=false,sentInput=false):any {
     this.ctx.lockWorkspaceRuntimeLifecycle(scope.workspaceId);
     const row=this.ctx.db.query('SELECT t.*,a.runtime_id,a.status AS attempt_status,a.offered_at,a.projection_to_seq AS offered_to FROM multiremi_turns t JOIN multiremi_turn_attempts a ON a.turn_id=t.id WHERE t.id=? AND a.id=?').get(turnId,attemptId);
-    const runtime=this.ctx.runtimes().getRuntime(scope.runtimeId);
+    const runtime=this.ctx.runtimes().getRuntimeLite(scope.runtimeId);
     if(!row||row.current_attempt_id!==attemptId||row.workspace_id!==scope.workspaceId||row.runtime_id!==scope.runtimeId||runtime?.daemonId!==scope.daemonId
       ||!terminal&&!['running','awaiting_human'].includes(row.status)
         &&!(sentInput&&row.status==='pending'&&row.offered_at&&['offered','accepted'].includes(row.attempt_status)))throw new Error('stale_attempt');

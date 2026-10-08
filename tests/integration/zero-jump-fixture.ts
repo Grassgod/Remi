@@ -77,7 +77,7 @@ export interface ZeroJumpFixture {
  * row reads; there is no store method that performs a dispatch, and calling the
  * real scheduler would need a runtime this fixture must not have.
  */
-function markTaskRunning(store: MultiremiStore, taskId: string): void {
+export function markTaskRunning(store: MultiremiStore, taskId: string): void {
   const startedAt = new Date().toISOString();
   const db = (store as unknown as { db: { run: (sql: string, params: unknown[]) => void } }).db;
   db.run(

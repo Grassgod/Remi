@@ -134,13 +134,13 @@ function fireEvent(event: string, payload: unknown) {
   for (const h of handlers) h(payload);
 }
 
-function renderCard(issueId = "issue-1", issueSessionId?: string, seededTasks?: AgentTask[], reconcileEnabled = true) {
+function renderCard(issueId = "issue-1", issueSessionId?: string, seededTasks?: AgentTask[], reconcileEnabled = true, onInitialReconcile?: () => void) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   if (seededTasks) qc.setQueryData(issueKeys.tasks(issueId), seededTasks);
   const view = render(
     <QueryClientProvider client={qc}>
       <I18nProvider locale="en" resources={TEST_RESOURCES}>
-        <AgentLiveCard issueId={issueId} issueSessionId={issueSessionId} reconcileEnabled={reconcileEnabled} />
+        <AgentLiveCard issueId={issueId} issueSessionId={issueSessionId} reconcileEnabled={reconcileEnabled} onInitialReconcile={onInitialReconcile} />
       </I18nProvider>
     </QueryClientProvider>,
   );
@@ -253,6 +253,20 @@ describe("AgentLiveCard reconcile race", () => {
     // The banner must NOT come back.
     expect(screen.queryByText(/is working/)).toBeNull();
     expect(mockApi.getActiveTasksForIssue).toHaveBeenCalledTimes(3);
+  });
+
+  it("does not release an old session's layout gate after its card unmounts", async () => {
+    let reject!: (error: Error) => void;
+    mockApi.getActiveTasksForIssue.mockReturnValueOnce(new Promise((_, fail) => { reject = fail; }));
+    const ready = vi.fn();
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const view = renderCard("issue-1", "session-old", undefined, true, ready);
+      view.unmount();
+      await act(async () => reject(new Error("old session response failed")));
+      expect(ready).not.toHaveBeenCalled();
+      expect(error).not.toHaveBeenCalled();
+    } finally { error.mockRestore(); }
   });
 
   it("WS reconnect refetch removes a stale banner whose end event was lost", async () => {

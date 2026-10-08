@@ -41,7 +41,7 @@ async function countSql(database: SqlDatabase, action: () => Promise<void> | voi
   }
   finally { querySpy.mockRestore(); runSpy.mockRestore(); }
   return {
-    selects: statements.filter(sql => /^\s*SELECT\b/i.test(sql)).length,
+    selects: statements.filter(sql => /^\s*(SELECT|WITH)\b/i.test(sql)).length,
     updates: statements.filter(sql => /^\s*UPDATE\b/i.test(sql)).length,
   };
 }
@@ -80,38 +80,15 @@ function reportLegacyPluginCapability(h: DaemonProtocolHarness, mode: "missing" 
 }
 
 async function countSocketHeartbeat(h: DaemonProtocolHarness, mesh?: { protocol: number; status: "disabled" | "ready" }) {
-  const captured: { value?: { selects: number; updates: number } } = {};
-  const layer = h.layer as unknown as { handleHeartbeat: (heartbeat: unknown) => unknown };
-  const handle = layer.handleHeartbeat.bind(layer);
-  const handleSpy = spyOn(layer, "handleHeartbeat").mockImplementation(heartbeat => {
-    const statements: string[] = [];
-    const query = h.db.query.bind(h.db);
-    const run = h.db.run.bind(h.db) as (sql: string, ...args: unknown[]) => unknown;
-    const querySpy = spyOn(h.db, "query").mockImplementation(((sql: string) => {
-      statements.push(sql); return query(sql);
-    }) as typeof h.db.query);
-    const runSpy = spyOn(h.db, "run").mockImplementation(((sql: string, ...args: unknown[]) => {
-      statements.push(sql); return run(sql, ...args);
-    }) as typeof h.db.run);
-    try { return handle(heartbeat); }
-    finally {
-      querySpy.mockRestore(); runSpy.mockRestore();
-      captured.value = { selects: statements.filter(sql => /^\s*SELECT\b/i.test(sql)).length,
-        updates: statements.filter(sql => /^\s*UPDATE\b/i.test(sql)).length };
-    }
-  });
-  try { await new Promise<void>(resolve => {
-    let observed = false;
-    h.layer.registerSessionHooks({ heartbeat: () => {
-      if (!observed) { observed = true; resolve(); }
-    } });
-    sendHeartbeat(h, mesh);
-  }); }
-  finally { handleSpy.mockRestore(); }
+  // Direct Store writes in the preceding probe can leave configuration/RPC work queued.
+  // Settle it before measuring the next input, then count that input through both drains.
+  await h.layer.drain();
   await h.settleHeartbeat();
   await h.layer.drain();
-  if (!captured.value) throw new Error("Heartbeat handler was not called");
-  return captured.value;
+  return countSql(h.db, async () => {
+    await nextSocketHeartbeat(h, mesh);
+    await h.layer.drain();
+  });
 }
 
 it("Q419-4 A: absent or zero plugin capability keeps Store and real-socket heartbeats at baseline", async () => {
@@ -133,6 +110,10 @@ it("Q419-4 A: absent or zero plugin capability keeps Store and real-socket heart
   for (const mode of ["missing", "zero"] as const) {
     const restore = reportLegacyPluginCapability(h, mode);
     try {
+      // The direct Store probes above omit other advertised capabilities. Restore those
+      // once before comparing unchanged reports, including their queued configuration work.
+      await nextSocketHeartbeat(h);
+      await h.layer.drain();
       for (let n = 0; n < 3; n++) {
         expect(await countSocketHeartbeat(h)).toEqual({ selects: 6, updates: 2 });
       }
@@ -169,6 +150,8 @@ it("Q419-4 B: protocol 1 Store and socket heartbeat SQL does not exceed v1 HTTP"
     supportsDecisionCard: false, supportsIssueDecisionCard: false };
   const v1Store = await countSql(h.db, () => { h.store.heartbeatRuntime(id, options); });
   const v2Store = await countSql(h.db, () => { h.store.heartbeatRuntime(id, options); });
+  await h.layer.drain();
+  await nextSocketHeartbeat(h);
   await h.layer.drain();
   const v2Socket = await countSocketHeartbeat(h);
   await h.stopDaemon();
@@ -213,24 +196,22 @@ it("Q419-4 B: three real v2 heartbeats block a pending plugin without an attempt
   }
 });
 
-it("Q418-mesh: v2 mesh heartbeat does not exceed v1 HTTP SQL for the same report", async () => {
+it("Q418-mesh: unchanged mesh heartbeats have bounded full-chain SQL without waking downlinks or offers", async () => {
   const h = await fixture();
-  const id = runtimeId(h);
   const mesh = { protocol: 1, status: "disabled" } as const;
   await countSocketHeartbeat(h, mesh);
-  const httpApp = createMultiremiApp({ store: h.store, authToken: "fixture-master" });
-  const v1Http = await countSql(h.db, async () => {
-    const response = await httpApp.request("/api/daemon/heartbeat", {
-      method: "POST", headers: { Authorization: "Bearer fixture-master", "Content-Type": "application/json" },
-      body: JSON.stringify({ runtime_id: id, ssh_mesh_protocol: mesh.protocol,
-        ssh_mesh_status: { status: mesh.status }, drain_ack_generation: 0, active_task_count: 0 }),
-    });
-    expect(response.status).toBe(200);
-  });
-  const v2Socket = await countSocketHeartbeat(h, mesh);
-  console.info(`[Q418-mesh SQL] HTTP v1=${JSON.stringify(v1Http)} socket v2=${JSON.stringify(v2Socket)}`);
-  expect(v2Socket.selects).toBeLessThanOrEqual(v1Http.selects);
-  expect(v2Socket.updates).toBeLessThanOrEqual(v1Http.updates);
+  const snapshots = spyOn(h.store, "pendingRuntimeRequests");
+  const claims = spyOn(h.store, "claimTask");
+  try {
+    for (let n = 0; n < 3; n++) {
+      const fullChain = await countSocketHeartbeat(h, mesh);
+      // v1 HTTP is now an upgrade channel; it does not perform this mesh report.
+      expect(fullChain.selects).toBeLessThanOrEqual(30);
+      expect(fullChain.updates).toBeLessThanOrEqual(6);
+    }
+    expect(snapshots).not.toHaveBeenCalled();
+    expect(claims).not.toHaveBeenCalled();
+  } finally { snapshots.mockRestore(); claims.mockRestore(); }
 });
 
 it("Q418-mesh: old v2 heartbeat does not write mesh, while explicit protocol zero does", async () => {

@@ -1453,7 +1453,7 @@ export class FeishuBotRepo {
    */
   supportsDecisionCard(workspaceId: string, runtimeId: string | null | undefined): boolean {
     if (!runtimeId) return false;
-    const runtime = this.ctx.runtimes().getRuntime(runtimeId);
+    const runtime = this.ctx.runtimes().getRuntimeLite(runtimeId);
     if (!runtime || runtime.workspaceId !== workspaceId) return false;
     return runtime.metadata[FEISHU_DECISION_CARD_CAPABILITY] === 1;
   }
@@ -1582,7 +1582,7 @@ export class FeishuBotRepo {
    */
   supportsIssueDecisionCard(workspaceId: string, runtimeId: string | null | undefined): boolean {
     if (!runtimeId) return false;
-    const runtime = this.ctx.runtimes().getRuntime(runtimeId);
+    const runtime = this.ctx.runtimes().getRuntimeLite(runtimeId);
     if (!runtime || runtime.workspaceId !== workspaceId) return false;
     return runtime.metadata[FEISHU_ISSUE_DECISION_CARD_CAPABILITY] === 1;
   }
@@ -2544,6 +2544,9 @@ export class FeishuBotRepo {
     }
     const config = this.getConfig(input.issue.workspaceId);
     if (!config?.enabled) return [];
+    const leaderTurn = this.ctx.db.query("SELECT turn_id FROM multiremi_turn_attempts WHERE id = ?").get(input.leaderTask.id);
+    if (!leaderTurn) throw new Error("Round push source turn not found");
+    const leaderTurnId = String(leaderTurn.turn_id);
     const rows = this.ctx.db.query(
       `SELECT b.* FROM multiremi_feishu_bot_chat_bindings b
        JOIN multiremi_chat_sessions c ON c.id = b.chat_session_id
@@ -2553,19 +2556,17 @@ export class FeishuBotRepo {
        ORDER BY b.updated_at DESC, b.created_at DESC, b.id DESC`,
     ).all(input.issue.workspaceId, config.appId, input.issue.id) as Row[];
     const enqueued: MultiremiTask[] = [];
-    const seenChats = new Set<string>();
+    const seenBindings = new Set<string>();
     for (const binding of rows) {
-      const bindingChatId = cleanOptionalString(binding.chat_id);
-      const chatSessionId = String(binding.chat_session_id);
-      const conversationKey = bindingChatId ? `chat:${bindingChatId}` : `session:${chatSessionId}`;
-      if (seenChats.has(conversationKey)) continue;
-      seenChats.add(conversationKey);
-      if (!this.ctx.notificationChannels().getAgentChatNotificationChannel(chatSessionId)?.enabled) continue;
       const bindingId = String(binding.id);
+      const chatSessionId = String(binding.chat_session_id);
+      if (seenBindings.has(bindingId)) continue;
+      seenBindings.add(bindingId);
+      if (!this.ctx.notificationChannels().getAgentChatNotificationChannel(chatSessionId)?.enabled) continue;
       const alreadyPrepared = this.ctx.db.query(
         `SELECT 1 AS present FROM multiremi_feishu_bot_round_pushes
          WHERE binding_id = ? AND leader_task_id = ?`,
-      ).get(bindingId, input.leaderTask.id) as Row | null;
+      ).get(bindingId, leaderTurnId) as Row | null;
       if (alreadyPrepared) continue;
 
       let wakeTask = this.ctx.chat().getPendingChatTask(chatSessionId);
@@ -2609,7 +2610,7 @@ export class FeishuBotRepo {
           input.issue.workspaceId,
           bindingId,
           input.issue.id,
-          input.leaderTask.id,
+          leaderTurnId,
           wakeTask.id,
           deliveryMode,
           now,
@@ -3750,6 +3751,7 @@ export class FeishuBotRepo {
     runtimeId: string,
     input: ReportFeishuBotRuntimeStatusInput,
   ): MultiremiFeishuBotRuntimeStatus {
+    const previous = this.getRuntimeStatus(workspaceId, runtimeId);
     const state: FeishuBotRuntimeState = RUNTIME_STATES.has(input.state) ? input.state : "failed";
     const now = nowIso();
     this.ctx.db.run(
@@ -3775,13 +3777,18 @@ export class FeishuBotRepo {
       cleanOptionalString(input.errorMessage),
       now,
     );
-    this.publishDownlinkChange(workspaceId);
-    return this.getRuntimeStatus(workspaceId, runtimeId)!;
+    const current = this.getRuntimeStatus(workspaceId, runtimeId)!;
+    if (!previous || previous.appliedRevision !== current.appliedRevision || previous.state !== current.state
+      || previous.botName !== current.botName || previous.botOpenId !== current.botOpenId
+      || previous.errorCode !== current.errorCode || previous.errorMessage !== current.errorMessage) {
+      this.publishDownlinkChange(workspaceId, runtimeId);
+    }
+    return current;
   }
 
-  private publishDownlinkChange(workspaceId: string): void {
+  private publishDownlinkChange(workspaceId: string, runtimeId?: string): void {
     this.ctx.emitWorkspaceEvent({ type: "daemon:feishu_changed", workspaceId,
-      actorType: "system", actorId: null, payload: {} });
+      actorType: "system", actorId: null, payload: runtimeId ? { runtime_id: runtimeId } : {} });
   }
 
   /**

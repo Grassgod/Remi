@@ -733,7 +733,8 @@ export class AcpProvider implements Provider {
               // block task shutdown. Stop it before allowing session reuse.
               await entry.client.stop();
               await promptCompletion;
-              this._lastResponse ??= buildAgentResponse(entry, { stopReason: "cancelled" }, this._adapter.promptUsageSettleScope, turnFailure());
+              this._lastResponse ??= buildAgentResponse(entry, { stopReason: "cancelled" }, this._adapter.promptUsageSettleScope, turnFailure(),
+                this._adapter.agentType, requestedModel(), requestedModelSource());
             }
           } finally { if (timer) clearTimeout(timer); }
           // ACP permits final tool/content updates before the cancelled reply.
@@ -1389,10 +1390,17 @@ export function accumulateUsage(state: PromptUsageState, update: SessionUpdate, 
   const used = nonNegativeFinite(u.used);
   if (used != null) state.totalTokens = used;
   if (!(u._meta?.claudeCode?.parentToolUseId)) state.collector.context(u.used, u.size);
+  if (providerType === "codex" && u._meta?.remiUsageMode === "request") state.collector.useRequestTelemetry();
 
   const remiUsage = readRemiTokenUsage(u._meta?.remiTokenUsage);
   if (remiUsage) {
     state.collector.update(u._meta.remiTokenUsage, requestedModel, modelSource);
+  }
+  const missing = u._meta?.remiMissingRequestUsage;
+  if (providerType === "codex" && missing?.source === "codex_response_usage"
+    && typeof missing.providerSessionId === "string" && missing.providerSessionId
+    && typeof missing.providerRequestId === "string" && missing.providerRequestId) {
+    state.collector.update(missing, requestedModel, modelSource);
   }
   state.collector.uncertainTotal(u._meta?.remiUncertainUsage?.reportedTotalTokens);
 

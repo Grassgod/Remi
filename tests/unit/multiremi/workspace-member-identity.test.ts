@@ -299,6 +299,27 @@ describe("MUL-288: explicit workspace user identity", () => {
 });
 
 describe("workspace member response identity", () => {
+  it("returns the workspace member id after assigning an issue with a user account id", async () => {
+    const store = createLocalStore();
+    const account = await login(store, "assignee-display");
+    const member = store.createWorkspaceMember({ userId: account.user.id, name: "测试用户" });
+    const issue = store.createIssue({ title: "Member assignee display" });
+    const app = createMultiremiApp({ store, authToken: "test-assignee-identity-master" });
+    const membersResponse = await app.request("/api/workspaces/local/members", { headers: account.headers });
+    expect(membersResponse.status).toBe(200);
+    const members = await membersResponse.json() as Array<{ id: string; user_id: string; name: string }>;
+    expect(members.find((entry) => entry.user_id === account.user.id)).toMatchObject({ id: member.id, name: "测试用户" });
+
+    const assigned = await app.request(`/api/issues/${issue.id}`, {
+      method: "PATCH",
+      headers: { ...account.headers, "Content-Type": "application/json" },
+      body: JSON.stringify({ assignee_type: "member", assignee_id: account.user.id }),
+    });
+    expect(assigned.status).toBe(200);
+    expect(await assigned.json()).toMatchObject({ assignee_type: "member", assignee_id: member.id });
+    expect(store.getIssue(issue.id)?.assigneeId).toBe(member.id);
+  });
+
   it("matches a password owner's member identity to /api/me for permission checks", async () => {
     const store = createStore();
     const email = "member-identity@example.test";

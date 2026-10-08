@@ -233,6 +233,23 @@ describe("SessionLogList", () => {
     view.restore();
   });
 
+  it("keeps row trailers measured while sibling controls can span the whole log", () => {
+    const replica = new MemorySessionReplica({ [SESSION]: { entries: [entry(0), entry(1)], ready: true } });
+    const view = renderList(replica, {
+      afterEntry: row => row.seq === 0 ? <div data-testid="row-trailer">Activity</div> : null,
+      afterRow: row => row.seq === 0 ? <button type="button">Execution controls</button> : null,
+    });
+    reveal();
+    const head = view.container.querySelector("#comment-cmt_0")!;
+    const last = view.container.querySelector("#comment-cmt_1")!;
+    expect(head).toContainElement(view.getByTestId("row-trailer"));
+    const controls = view.getByRole("button", { name: "Execution controls" });
+    expect(controls.parentElement).toBe(view.content);
+    expect(head.nextElementSibling).toBe(controls);
+    expect(controls.nextElementSibling).toBe(last);
+    view.restore();
+  });
+
   it("marks the newest Issue comment as its terminal anchor even after a system notice", () => {
     const replica = new MemorySessionReplica({
       [SESSION]: { entries: [entry(1), entry(2, {

@@ -142,13 +142,13 @@ export class InboxRepo {
         const issue = this.ctx.issues().getIssue(address.issueId);
         if (!issue) throw new Error("Envelope relay Issue not found");
         this.ctx.lockWorkspaceRuntimeLifecycle(issue.workspaceId);
-        const bindings = this.ctx.db.query(`SELECT c.id, c.agent_id, b.chat_id
+        const bindings = this.ctx.db.query(`SELECT c.id, c.agent_id, b.id AS binding_id
           FROM multiremi_feishu_bot_chat_bindings b JOIN multiremi_chat_sessions c ON c.id = b.chat_session_id
           WHERE b.issue_id = ? AND b.workspace_id = ? AND c.workspace_id = ? AND c.status <> 'archived'
-          ORDER BY b.updated_at DESC, b.created_at DESC, b.id DESC`).all(issue.id, issue.workspaceId, issue.workspaceId) as Array<{ id: string; agent_id: string; chat_id: string | null }>;
+          ORDER BY b.updated_at DESC, b.created_at DESC, b.id DESC`).all(issue.id, issue.workspaceId, issue.workspaceId) as Array<{ id: string; agent_id: string; binding_id: string }>;
         const seen = new Set<string>();
         return bindings.filter(binding => {
-          const key = binding.chat_id ? `chat:${binding.chat_id}` : `session:${binding.id}`;
+          const key = binding.binding_id;
           if (seen.has(key)) return false;
           seen.add(key);
           return true;

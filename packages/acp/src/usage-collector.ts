@@ -89,6 +89,12 @@ export class UsageCollector {
   private observed = new Map<string, TaskUsageUnit>();
   private changed = new Set<string>();
   private monetaryTurns = new Set<string>();
+  private requestTelemetry = false;
+
+  /** Exact response notifications supersede the incomplete last-request settle. */
+  useRequestTelemetry(): void {
+    this.requestTelemetry = true;
+  }
 
   update(raw: unknown, requestedModel?: string | null, modelSource?: TaskUsageUnit["modelSource"]): void {
     if (!raw || typeof raw !== "object" || Array.isArray(raw)) return;
@@ -104,10 +110,11 @@ export class UsageCollector {
       unitId: requestUnitId(observationId ?? stableId, sessionId), provider: "", model: typeof value.model === "string" ? value.model : null,
       providerSessionId: sessionId, providerRequestId: requestId,
       providerObservationId: observationId, meterEvidence: meter,
-      requestedModel: typeof value.requestedModel === "string" ? value.requestedModel : requestedModel,
-      modelSource: value.model ? "provider_reported" : value.modelSource === "session_acknowledged" ? "session_acknowledged" : modelSource,
+      requestedModel: typeof value.requestedModel === "string" || value.requestedModel === null ? value.requestedModel : requestedModel,
+      modelSource: value.model ? "provider_reported" : value.modelSource === "session_acknowledged" ? "session_acknowledged"
+        : value.modelSource === "unknown" ? "unknown" : modelSource,
       scope: "request", source: "provider_request",
-      accuracy: typeof value.id !== "string" || value.accuracy === "partial" ? "partial" : "exact",
+      accuracy: value.accuracy === "unknown" ? "unknown" : typeof value.id !== "string" || value.accuracy === "partial" ? "partial" : "exact",
       inputTokens: value.inputTokens, outputTokens: value.outputTokens, cacheReadTokens: value.cachedInputTokens,
       cacheWriteTokens: value.cacheWriteTokens ?? 0, totalTokens: value.totalTokens,
       evidenceRef: typeof value.source === "string" ? value.source : "acp_request_usage",
@@ -119,10 +126,10 @@ export class UsageCollector {
         if (previous[key] != null) entry[key] = Math.max(previous[key]!, entry[key] ?? 0);
       }
       if (!entry.model) entry.model = previous.model;
-      if (!entry.requestedModel) entry.requestedModel = previous.requestedModel;
+      if (!entry.requestedModel && value.requestedModel !== null) entry.requestedModel = previous.requestedModel;
       if (entry.actualUnsplitTokens !== null) entry.actualUnsplitTokens = entry.reportedTotalTokens == null ? null : Math.max(0, entry.reportedTotalTokens
         - (entry.inputTokens ?? 0) - (entry.outputTokens ?? 0) - (entry.cacheReadTokens ?? 0) - (entry.cacheWriteTokens ?? 0));
-      if (previous.accuracy === "exact" && entry.accuracy === "partial") entry.accuracy = "exact";
+      if (previous.accuracy === "exact" && entry.accuracy !== "exact") entry.accuracy = "exact";
       entry.occurredAt = previous.occurredAt;
       entry.revision = previous.revision;
       if (JSON.stringify(entry) === JSON.stringify(previous)) return;
@@ -222,7 +229,7 @@ export class UsageCollector {
       totalTokens: settle?.totalTokens, evidenceRef: "acp_prompt_settle",
     });
     const actual = units.filter(unit => unit.source !== "context_snapshot" && (unit.reportedTotalTokens !== null || unitActualTotal(unit) > 0));
-    if (!actual.length && settle != null) units.push(settled);
+    if (!actual.length && settle != null && !this.requestTelemetry) units.push(settled);
     else if (scope === "turn" && unitActualTotal(settled) > actual.reduce((sum, unit) => sum + unitActualTotal(unit), 0)) {
       const remainder = unitActualTotal(settled) - actual.reduce((sum, unit) => sum + unitActualTotal(unit), 0);
       units.push({ ...settled, inputTokens: null, outputTokens: null, cacheReadTokens: null,

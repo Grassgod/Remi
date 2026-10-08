@@ -149,7 +149,7 @@ export function buildQuestionElements(marker: string, data: AskUserQuestionData,
     elements.push({
       tag: "input", name: `q${qi}_custom`, input_type: "multiline_text", width: "fill",
       label: { tag: "plain_text", content: data.questions.length > 1 ? `问题 ${qi + 1} · 自定义回答` : "自定义回答" },
-      placeholder: { tag: "plain_text", content: "可以补充要求，也可以只在这里回答" }, max_length: 500, rows: 3,
+      placeholder: { tag: "plain_text", content: "可以补充要求，也可以只在这里回答" }, max_length: 1000, rows: 3,
     });
   });
   elements.push({

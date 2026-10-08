@@ -696,7 +696,7 @@ function appendDaemonClaimWorkspaceContext(store: MultiremiStore, task: Multirem
   const workspaceEnv = store.getWorkspaceEnv(task.workspaceId);
   if (Object.keys(workspaceEnv).length) response.workspace_env = workspaceEnv;
 
-  const runtime = task.runtimeId ? store.getRuntime(task.runtimeId) : null;
+  const runtime = task.runtimeId ? store.getRuntimeLite(task.runtimeId) : null;
   const owner = runtime?.ownerId ? store.getUser(runtime.ownerId) : null;
   const requestingUserName = task.requestingUserName?.trim() || owner?.name?.trim();
   const requestingUserProfile = task.requestingUserProfileDescription?.trim() || owner?.profileDescription?.trim();
