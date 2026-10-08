@@ -46,14 +46,18 @@ so the mechanism cannot be owned by the issue timeline component.
    `data-perf-state="ready-forced"` and warns; CI and S1 treat `ready-forced`
    as a failure, so it is a diagnostic, not a fallback that counts as passing.
 
-   S9-6 (MUL-395) removes the live card's initial reconcile from the data gate.
-   Cached tasks can paint the card shell; `active-task`, subscribers and local
-   directory resources are reconciled after reveal. The card, subscriber control,
-   local hint and running row reserve layout slots before their late content
-   arrives. A running page's measurement endpoint remains the actual visible,
-   stable agent-stream row after reveal; an earlier ready attribute alone is
-   insufficient. Late growth beyond the reserved slot uses the same pin state
-   machine, including released readers and element anchors.
+   The live card uses its natural height and sits beside the log rows, so its
+   sticky containing block spans the whole discussion. There is no permanent
+   128px reservation or nested scroller. Cached tasks determine its initial
+   layout; when that seed is absent, the first `active-task` reconciliation
+   settles before reveal (a failed read also releases the gate). This trades
+   one required cache-miss read for avoiding a visible insertion on short pages,
+   where there is no scroll range to compensate. Subsequent reconciliation,
+   subscribers and local directory resources remain deferred. The subscriber
+   control, local hint and bottom running row retain their bounded slots.
+   A running page's measurement endpoint remains the actual visible, stable
+   agent-stream row; an earlier ready attribute alone is insufficient. The
+   first-frame and no-jump budgets remain unchanged.
 
 2. **Stick to the bottom after the reveal.** A separate state machine
    (`pinned | released | returning`) compensates for content that arrives

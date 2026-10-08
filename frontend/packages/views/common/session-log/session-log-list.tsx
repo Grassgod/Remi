@@ -25,7 +25,7 @@ import { DeferredContentContext } from "../deferred-content-context";
  * renders what their state says.
  */
 
-import { useCallback, useEffect, useLayoutEffect, useId, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useLayoutEffect, useId, useMemo, useRef, useState } from "react";
 import { useSyncExternalStore } from "react";
 import { ArrowDown } from "lucide-react";
 import type { SessionLogEntry, SessionReplicaPort } from "@multiremi/core/replica";
@@ -91,6 +91,8 @@ export interface SessionLogListProps {
   contentReady?: boolean;
   onRevealed?: () => void;
   afterEntry?: (entry: SessionLogEntry, context: { highlightedId: string | null }) => React.ReactNode;
+  /** Sibling chrome, outside the measured row so sticky controls span the whole log. */
+  afterRow?: (entry: SessionLogEntry, context: { highlightedId: string | null }) => React.ReactNode;
   header?: React.ReactNode;
   footer?: React.ReactNode;
   transformEntries?: (entries: readonly SessionLogEntry[]) => readonly SessionLogEntry[];
@@ -155,6 +157,7 @@ export function SessionLogList({
   contentReady = true,
   onRevealed,
   afterEntry,
+  afterRow,
   header,
   footer,
   transformEntries,
@@ -394,30 +397,32 @@ export function SessionLogList({
             const reservedHeight = reserve(entry);
             const isLatest = entry === latestEntry;
             return (
-              <div
-                key={entryKey?.(entry) ?? entry.seq}
-                ref={setRowRef(entry.seq)}
-                id={`comment-${entry.id}`}
-                data-perf-item="message"
-                data-perf-key={entry.id}
-                {...(anchorId === `comment-${entry.id}` ? { "data-perf-anchor": "target-comment" } : null)}
-                {...(isLatest && anchorId !== `comment-${entry.id}` ? { "data-perf-anchor": latestAnchor } : null)}
-                style={reservedHeight === null ? undefined : { minHeight: `${reservedHeight}px` }}
-                className={`pb-3 transition-colors duration-500 ${highlighted && anchorId === `comment-${entry.id}` ? "bg-warning/10" : ""}`}
-              >
-                {renderEntry
-                  ? renderEntry({ entry, reservedHeight })
-                  : (
-                    <EntryHtml
-                      html={entry.body_html}
-                      markdown={entry.body_md}
-                      attachments={entryAttachments(entry)}
-                      onDegradedRender={() => reportDegraded(entry)}
-                      fallback={renderFallback ? renderFallback(entry) : null}
-                    />
-                  )}
-                {afterEntry?.(entry, { highlightedId: highlighted ? anchorId : null })}
-              </div>
+              <Fragment key={entryKey?.(entry) ?? entry.seq}>
+                <div
+                  ref={setRowRef(entry.seq)}
+                  id={`comment-${entry.id}`}
+                  data-perf-item="message"
+                  data-perf-key={entry.id}
+                  {...(anchorId === `comment-${entry.id}` ? { "data-perf-anchor": "target-comment" } : null)}
+                  {...(isLatest && anchorId !== `comment-${entry.id}` ? { "data-perf-anchor": latestAnchor } : null)}
+                  style={reservedHeight === null ? undefined : { minHeight: `${reservedHeight}px` }}
+                  className={`pb-3 transition-colors duration-500 ${highlighted && anchorId === `comment-${entry.id}` ? "bg-warning/10" : ""}`}
+                >
+                  {renderEntry
+                    ? renderEntry({ entry, reservedHeight })
+                    : (
+                      <EntryHtml
+                        html={entry.body_html}
+                        markdown={entry.body_md}
+                        attachments={entryAttachments(entry)}
+                        onDegradedRender={() => reportDegraded(entry)}
+                        fallback={renderFallback ? renderFallback(entry) : null}
+                      />
+                    )}
+                  {afterEntry?.(entry, { highlightedId: highlighted ? anchorId : null })}
+                </div>
+                {afterRow?.(entry, { highlightedId: highlighted ? anchorId : null })}
+              </Fragment>
             );
           })}
           {footer}

@@ -231,12 +231,12 @@ export function AgentLiveCard({ issueId, issueSessionId, onInitialReconcile, rec
   ].filter(Boolean).join(" · ");
 
   return (
-    // Sticky bar at the top of the main content, above the editable title —
+    // A sibling of the log rows, sticky across the main content —
     // answers "is anyone working on this issue right now?" while the comment
     // thread scrolls under it. One bordered container in every state: the
     // single row, the collapsed summary, and the expanded list all share it,
     // so the bar reads at one consistent width.
-    <div className="mt-4 sticky top-4 z-10 rounded-lg bg-background/80 supports-[backdrop-filter]:bg-background/55 backdrop-blur-md">
+    <div data-agent-live-card className="my-4 sticky top-4 z-10 rounded-lg bg-background/80 supports-[backdrop-filter]:bg-background/55 backdrop-blur-md">
       <div className="overflow-hidden rounded-lg border border-info/20 bg-info/5">
         {firstEntry && (isMulti ? (
           <>
@@ -262,7 +262,7 @@ export function AgentLiveCard({ issueId, issueSessionId, onInitialReconcile, rec
               />
             </button>
             {expanded && (
-              <div className="divide-y divide-info/15 border-t border-info/15">
+              <div className="max-h-[50vh] overflow-y-auto divide-y divide-info/15 border-t border-info/15">
                 {entries.map(({ task }) => (
                   <AgentLiveRow
                     key={task.id}
