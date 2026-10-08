@@ -92,6 +92,43 @@ pendingTurnBackendTests('explicit responsibility migration and authenticated sou
     const memberExecution=await app.request('/api/multiremi/issues',{method:'POST',headers,body:JSON.stringify({title:'Invalid member execution',assignee_type:'member',assignee_id:member.id})});
     expect(memberExecution.status).toBe(409);expect(store.listIssues()).toHaveLength(before);
   });
+  it('commits explicit human HTTP mapping with the same pending Q and rejects a stale batch without partial transfer',async()=>{
+    const f=fixture();const {store,db}=f;
+    const user=store.getOrCreateUser({email:'migration-confirmation@example.test',name:'Migration administrator'});
+    const admin=store.createWorkspaceMember({userId:user.id,name:'Migration administrator',role:'admin'});
+    const human=store.createWorkspaceMember({name:'Confirmed new root human'});
+    const owner=store.createAgent({name:'Migration execution',provider:'codex'});
+    const worker=store.createAgent({name:'Original question worker',provider:'codex'});
+    const runtime=store.registerRuntime({name:'Migration source host',provider:'codex',daemonId:'migration-question-host'});
+    const root=f.createIssue({title:'Legacy root with pending permission',assigneeType:'agent',assigneeId:owner.id,responsibleMemberId:'mem_local_local'});
+    const other=f.createIssue({title:'Second legacy root'});
+    const task=store.createTask({agentId:worker.id,issueId:root.id,prompt:'Ask original permission'});
+    expect(store.claimTask(runtime.id)?.id).toBe(task.id);store.startTask(task.id);
+    const turn=store.getTurnForAttempt(task.id)!;
+    const result=store.getDaemonTurnBridge().rpc('turn.decision',{turn_id:turn.id,attempt_id:task.id,wait_id:`migration_wait_${task.id}`,dedupe_key:'migration-permission',body_md:'May I proceed?',options:[{label:'Approve',value:'approve'}],metadata:{kind:'permission'},timeout_ms:1000},
+      {runtimeId:runtime.id,daemonId:'migration-question-host',workspaceId:'local'});
+    expect(result.ok).toBeTrue();const id=String(result.message_id);
+    const original=store.getMessage(id)!;
+    db.run('UPDATE multiremi_issues SET responsible_member_id=NULL WHERE id IN (?,?)',[root.id,other.id]);
+    db.run('UPDATE multiremi_conversation_log SET card_token_hash=? WHERE id=?',['legacy-card',id]);
+    const pat=await store.createAccessToken({userId:user.id,name:'Actual migration confirmation',type:'pat',purpose:'session'});
+    const app=createMultiremiApp({store,authToken:'test-secret'});
+    const headers={Authorization:`Bearer ${pat.token}`,'Content-Type':'application/json'};
+    const review=await app.request('/api/workspaces/local/issue-responsibility-migration',{headers});
+    expect(review.status).toBe(200);const list=await review.json();
+    const mappings=list.items.map((item:{issueId:string;revision:string})=>({issueId:item.issueId,revision:item.revision,memberId:human.id}));
+    const map=(entries:typeof mappings)=>app.request('/api/workspaces/local/issue-responsibility-migration/map',{method:'POST',headers,body:JSON.stringify({reason:'Verified with each original requester',mappings:entries})});
+    const stale=await map(mappings.map((entry:typeof mappings[number])=>entry.issueId===other.id?{...entry,revision:'stale'}:entry));
+    expect(stale.status).toBe(409);expect(store.getIssue(root.id)?.responsibleMemberId).toBeNull();expect(store.getIssue(other.id)?.responsibleMemberId).toBeNull();
+    expect(store.getQuestion(id)?.route_revision).toBe(1);expect(store.getMessage(id)?.card_token_hash).toBe('legacy-card');
+    const mapped=await map(mappings);expect(mapped.status).toBe(200);
+    expect(store.getIssue(root.id)?.responsibleMemberId).toBe(human.id);expect(store.getIssue(other.id)?.responsibleMemberId).toBe(human.id);
+    expect(store.getQuestion(id)?.current_handler).toEqual({type:'member',id:human.id});expect(store.getQuestion(id)?.route_revision).toBe(2);
+    expect(store.getQuestion(id)?.history.findLast(event=>event.reason==='issue_responsibility_transferred')?.actor).toEqual({type:'member',id:admin.id});
+    expect(store.getMessage(id)?.card_token_hash).toBeNull();expect(store.getMessage(id)?.session_id).toBe(original.session_id);expect(store.getMessage(id)?.task_id).toBe(original.task_id);
+    expect(store.listIssueActivity(root.id).find(item=>(item.data as {migration?:boolean})?.migration)?.actorId).toBe(admin.id);
+    f.reopen();expect(f.store.getQuestion(id)?.route_revision).toBe(2);expect(f.store.getMessage(id)?.session_id).toBe(original.session_id);
+  });
   it('keeps native and compat reassignment transactional and rolls dispatch failures back',async()=>{
     const f=fixture();const {store}=f;
     const a=store.createAgent({name:'Previous execution',provider:'codex'}),b=store.createAgent({name:'Next execution',provider:'codex'});

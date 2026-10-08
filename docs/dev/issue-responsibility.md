@@ -109,5 +109,7 @@ SQLite 使用内存库；设置 `MULTIREMI_TEST_POSTGRES_URL` 后每个测试创
 
 运行 `bun run test tests/unit/multiremi/issue-responsibility-migration.test.ts` 可验证双后端清单
 只读、候选来源、显式映射的回滚和重启、真实 HTTP 成员来源、自动化配置及技术 Chat 边界。
+真实成员 HTTP 映射同时覆盖原 pending Q 的人类路由、操作人审计和旧卡失效；批量过期版本
+使责任字段和 Q 共同保持原状态，成功后仍保留原问题会话及执行轮，重启不另建问题。
 通用测试创建用 `createResponsibleTestIssue`；结束用 `acceptTestIssueDelivery` 走实际交付验收，
 不覆盖生产 Store 方法，不自动给历史表添加或填充责任。真实生产快照尚需部署迁移前独立复核。
