@@ -2198,6 +2198,31 @@ describe("IssueDetail (shared)", () => {
       expect(view.container.querySelectorAll("[data-system-detail]")).toHaveLength(0);
     });
 
+    it("uses the same human summary for a platform envelope reply reference with system details off and on", async () => {
+      const report = activityRow(1, "message", { id: "platform-report-parent", sender_type: "platform", message_kind: "report",
+        body_md: "QA could not complete a task you delegated. Read the latest Session Updates.", metadata: { envelope: {
+          kind: "report", to: { role: "delegator" }, outcome: "failed", recipient_agent_id: "agent-1",
+        } } });
+      const reply = activityRow(2, "message", { sender_type: "agent", sender_id: "agent-1", author_type: "agent", author_id: "agent-1",
+        reply_to_id: report.id, body_md: "I will fix the blockers", body_html: "<p>I will fix the blockers</p>" });
+      const view = renderActivityRows([activityRow(0, "head"), report, reply], "platform-parent-reference");
+      await act(async () => {});
+      const quote = within(document.getElementById(`comment-${reply.id}`)!).getByText(/^Replying to/).closest("button")!;
+      const preview = quote.textContent;
+      expect(preview).toContain("Notified QA: the delegated task failed");
+      expect(view.container.querySelectorAll("[data-system-detail]")).toHaveLength(0);
+      expect(view.container).not.toHaveTextContent(/could not complete|Read the latest Session Updates/);
+      fireEvent.click(screen.getByRole("switch", { hidden: true }));
+      expect(view.container.querySelectorAll("[data-system-detail]")).toHaveLength(1);
+      expect(view.container.querySelector("[data-system-detail]")).toHaveTextContent("Notified QA: the delegated task failed");
+      expect(quote.textContent).toBe(preview);
+      expect(view.container).not.toHaveTextContent(/could not complete|Read the latest Session Updates/);
+      fireEvent.click(screen.getByRole("switch", { hidden: true }));
+      expect(view.container.querySelectorAll("[data-system-detail]")).toHaveLength(0);
+      expect(quote.textContent).toBe(preview);
+      await act(async () => {});
+    });
+
     it("opens an SSR missing-target tail's gate after preferences, without temporary details", async () => {
       const user = "missing-ssr";
       const rows = [activityRow(0, "head"), activityRow(1, "message", { author_type: "member", body_md: "retained" }),

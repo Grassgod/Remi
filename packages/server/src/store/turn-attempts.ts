@@ -78,7 +78,6 @@ export function projectTurnCard(db: SqlDatabase, entry: ConversationLogEntry): C
     source_event_id:row.assignment_source_event_id??null,continued_from_task_id:row.continued_from_turn_id??null,
     delegation_id:row.delegation_id??null,delegated_by_agent_id:row.delegated_by_agent_id??null,
     turn_id:row.id,current_attempt_id:row.current_attempt_id,legacy_prompt:row.legacy_prompt,
-    wake_source:row.wake_source ?? null,trigger_message_id:row.trigger_message_id ?? null,
   };
   // A Chat card represents the assistant outcome. Its old request text is
   // already a separate human message and must not become assistant history.

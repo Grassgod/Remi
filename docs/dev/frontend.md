@@ -42,7 +42,7 @@ Issue 的说明与评论区之间保留横向分隔，评论使用独立边框�
 
 ## 统一消息与轮展示
 
-对话消息头使用 [MessageHeader](../../frontend/packages/views/common/message-header.tsx) 显示收件人/角色、message_kind 与实际 wake_applied，wake_reason 用作提示；未知显示枚举保留原字符串。Issue 与 Chat 使用 contracts 的 [conversationLogLayer](../../packages/contracts/src/conversation-log.ts)：member/agent 消息保持评论层，即使带 metadata.envelope；platform/timer 消息归系统层。服务端在读侧填 layer，前端 schema 保留它；旧缓存缺 layer 时用同一函数推导。turn 按投影的 metadata.wake_source 与历史「读收件箱」前缀分类；系统轮显示「X 查看新消息」，不展示英文唤醒正文。Chat 乐观发送以 canonical dedupe_key 匹配日志行；日志确认后只显示服务端正文，编辑替换正文，删除或隐藏不会复活本地草稿。Issue 与 Chat 的轮行消费服务端从 multiremi_turns 投影的卡片，卡片不自行制造工作轮或用户消息。
+对话消息头使用 [MessageHeader](../../frontend/packages/views/common/message-header.tsx) 显示收件人/角色、message_kind 与实际 wake_applied，wake_reason 用作提示；未知显示枚举保留原字符串。Issue 与 Chat 使用 contracts 的 [conversationLogLayer](../../packages/contracts/src/conversation-log.ts)：member/agent 消息保持评论层，即使带 metadata.envelope；platform/timer 消息归系统层。服务端只在 `/api/sessions/:sessionId/log` 的窗口及单条展示响应补来源与 layer，前端 schema 保留它；共用卡片投影、message 范围、agent JSONL 与 Hub payload 保持 main `8d761976` 字节兼容，旧缓存缺 layer 时用同一函数推导。turn 按投影的 metadata.wake_source 与历史「读收件箱」前缀分类；系统轮显示「X 查看新消息」，不展示英文唤醒正文。系统父条目的回复引用在开关两种模式都复用系统行的人话摘要。Chat 乐观发送以 canonical dedupe_key 匹配日志行；日志确认后只显示服务端正文，编辑替换正文，删除或隐藏不会复活本地草稿。Issue 与 Chat 的轮行消费服务端从 multiremi_turns 投影的卡片，卡片不自行制造工作轮或用户消息。
 
 Chat 列表和详情的未读数来自创建者对应的 workspace member lane：只计 cursor_seq 之后、发给该成员且 shown/未删除的消息。自动已读经统一 inbox/read 推进同一游标，随后刷新会话列表保持已读；新消息到达后才再次标读。
 

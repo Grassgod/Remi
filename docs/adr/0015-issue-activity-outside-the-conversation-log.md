@@ -85,11 +85,14 @@ the tree, unused.
    Every `WakeReason` is explicitly classified, with an exhaustive test.
    Head rows remain in `conversation`; other kinds belong to `system`.
 
-   The read-side card projection carries `wake_source` and
-   `trigger_message_id` from `multiremi_turns`; log materialization attaches a
-   derived `layer`. Issue and Chat use the same function for cached rows that
+   Only the `/api/sessions/:sessionId/log` display responses (window and
+   entry) carry `wake_source` and `trigger_message_id` from
+   `multiremi_turns` and attach a derived `layer`. Shared card/log
+   materialization, message ranges, agent JSONL and Hub payloads retain the
+   main `8d761976` wire bytes. Issue and Chat use the same function for cached rows that
    lack `layer`. A system turn displays "X 查看新消息" even when its prompt is
-   an English report. `workspace_move_cleared` is a conversation activity;
+   an English report. Reply previews of system parents reuse the same human
+   summary in both system-detail modes. `workspace_move_cleared` is a conversation activity;
    its platform message follows the system rule. No schema change, writer
    layer, migration or backfill is needed.
 

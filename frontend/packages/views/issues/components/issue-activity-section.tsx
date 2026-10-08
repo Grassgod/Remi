@@ -33,6 +33,7 @@ import { LocalDirectoryHint } from "../../projects/components/local-directory-hi
 import { AgentLiveCard } from "./agent-live-card";
 import { useVisibleResults } from "./issue-key-results-section";
 import { IssueLogEventRow } from "./issue-log-event-row";
+import { systemLogSummary } from "./issue-log-summary";
 import { firstTaskResponses, isSystemDetail } from "./issue-log-presentation";
 import { IssueTaskPromptDialog } from "./issue-task-prompt-dialog";
 import { activityTrails, groupEvents, placeActivities } from "../utils/issue-activity-presentation";
@@ -280,7 +281,8 @@ export function IssueActivitySection({ issueId, issueTitle, projectId, members, 
       return <div><MessageHeader message={row} getActorName={getActorName} /><CommentCard issueId={issueId} entry={comment} bodyHtml={row.body_html} currentUserId={currentMemberId}
         canModerate={canModerateComments} onStartReply={setReplyTo}
         assignmentRef={responseTurns.has(row.id) ? { title: eventSummary(responseTurns.get(row.id)!.body_md), onOpen: () => setPromptRow(responseTurns.get(row.id)!) } : undefined}
-        parentRef={parentRow ? { id: parentRow.id, actorType: parentRow.author_type, actorId: parentRow.author_id ?? "", preview: quotePreview(parentRow.body_md) } : undefined}
+        parentRef={parentRow ? { id: parentRow.id, actorType: parentRow.author_type, actorId: parentRow.author_id ?? "",
+          preview: quotePreview(isSystemDetail(parentRow) ? systemLogSummary(parentRow, getActorName, taskAgents, resultsById, t) : parentRow.body_md) } : undefined}
         hasReplies={rowModel.parentsWithReplies.has(row.id)}
         onNavigateToParent={id => document.getElementById(`comment-${id}`)?.scrollIntoView({ block: "center" })}
         onEdit={(id, content, attachmentIds) => run(() => update({ commentId: id, content, attachmentIds }))}
