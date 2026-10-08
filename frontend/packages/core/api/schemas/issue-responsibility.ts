@@ -1,4 +1,9 @@
 import { z } from "zod";
+export const IssueResponsibilityMigrationSchema = z.object({
+  workspaceId: z.string(), total: z.number().int().nonnegative(), rootCount: z.number().int().nonnegative(), legacyMemberExecutionCount: z.number().int().nonnegative(), nextOffset: z.number().int().nonnegative().nullable(),
+  items: z.array(z.object({ issueId: z.string(), key: z.string(), title: z.string(), responsibleMemberId: z.string().nullable(), revision: z.string(), assigneeType: z.string().nullable(), assigneeId: z.string().nullable(), createdById: z.string().nullable(),
+    unresolved: z.array(z.object({ issueId: z.string(), reason: z.string() })), candidates: z.array(z.object({ memberId: z.string(), name: z.string(), source: z.string(), available: z.boolean() })) })),
+});
 
 export const ResponsibilityActorSchema = z.object({ type: z.string(), id: z.string(), issueId: z.string(), name: z.string() });
 export const IssueResponsibilitySchema = z.object({
@@ -29,6 +34,7 @@ export const QuestionViewSchema = z.object({
   status: z.string(), answer_revision: z.number().int().nonnegative(), wait_status: z.string(), wait_reason: z.string().nullable(), answer: AnswerSchema.nullable(),
   history: z.array(z.object({ type: z.string(), at: z.string(), actor: HandlerSchema.nullable(), route_revision: z.number(),
     reason: z.string().optional(), handler: HandlerSchema.nullable().optional(), answer: z.unknown().optional(),
+    overturn: z.string().nullable().optional(),
     source_message_id: z.string().optional(), source_session_id: z.string().optional(),
   }).loose()), actions: z.object({ allowed: z.array(z.string()) }),
 }).loose();

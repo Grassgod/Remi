@@ -7,6 +7,17 @@ const question = { id: "q1", session_id: "session", workspace_id: "ws", source_i
   kind: "question", status: "pending", wait_status: "detached", wait_reason: "provider exited", answer: null, history: [], actions: { allowed: ["answer"] } };
 afterEach(() => vi.unstubAllGlobals());
 describe("responsibility API contracts", () => {
+  it("reads original migration facts and submits only explicit mappings with their fact revision", async () => {
+    const item = { issueId: "root", key: "ROOT-1", title: "Root", responsibleMemberId: null, revision: "v1", assigneeType: "member", assigneeId: "old-member", createdById: "creator", unresolved: [{ issueId: "root", reason: "root_human_missing" }], candidates: [{ memberId: "human", name: "Human", source: "historical_creator", available: true }] };
+    const fetch = vi.fn().mockResolvedValueOnce(new Response(JSON.stringify({ workspaceId: "ws", total: 1, rootCount: 1, legacyMemberExecutionCount: 1, nextOffset: null, items: [item] }))).mockResolvedValueOnce(new Response(JSON.stringify({ mappedIssueIds: ["root"] })));
+    vi.stubGlobal("fetch", fetch);
+    const client = new ApiClient("https://api.test");
+    expect((await client.listIssueResponsibilityMigration("ws", { limit: 50, offset: 10 })).items[0]).toEqual(item);
+    const body = { reason: "Human confirmed", mappings: [{ issueId: "root", memberId: "human", revision: "v1" }] };
+    expect(await client.mapIssueResponsibility("ws", body)).toEqual({ mappedIssueIds: ["root"] });
+    expect(fetch.mock.calls[0]?.[0]).toBe("https://api.test/api/workspaces/ws/issue-responsibility-migration?limit=50&offset=10");
+    expect(JSON.parse(fetch.mock.calls[1]?.[1].body)).toEqual(body);
+  });
   it("preserves complete question history across overlapping pages and rejects repeated cursors", async () => {
     const page = (ids: string[], nextCursor: string | null) => new Response(JSON.stringify({ questions: ids.map(id => ({ ...question, id })), nextCursor }));
     const fetch = vi.fn().mockResolvedValueOnce(page(["recent"], "recent")).mockResolvedValueOnce(page(["recent", "older"], null));

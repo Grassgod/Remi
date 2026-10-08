@@ -1,8 +1,9 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { CommandRegistry } from "../../../apps/remi/cli/core/index.js";
 import { responsibilityCommandSpecs } from "../../../apps/remi/cli/commands/responsibility.js";
+import { workspaceCommandSpecs } from "../../../apps/remi/cli/commands/workspace.js";
 import { issueAssign, issueUpdate } from "../../../apps/remi/cli/multiremi/commands/issue.js";
-const specs = responsibilityCommandSpecs();
+const specs = [...responsibilityCommandSpecs(), ...workspaceCommandSpecs().filter(command => ["workspace.issue-topics.set", "workspace.feishu-bot.set"].includes(command.id))];
 const registry = new CommandRegistry();
 for (const command of specs) registry.register(command);
 const fetchBefore = globalThis.fetch, logBefore = console.log, errorBefore = console.error;
@@ -18,6 +19,7 @@ function setup() {
   globalThis.fetch = (async (input, init) => {
     const request = new Request(input, init); requests.push(request);
     if (new URL(request.url).pathname === "/api/cli/capabilities") return Response.json({ commands: specs.map(command => ({ id: command.id, allowed: true })) });
+    if (new URL(request.url).pathname === "/api/workspaces/local") return Response.json({ id: "local", name: "Synthetic workspace" });
     return Response.json({ question: { id: "q" }, questions: [], deliveries: [] });
   }) as typeof fetch;
 }
@@ -54,6 +56,13 @@ describe("responsibility CLI", () => {
     expect(new URL(request.url).searchParams.get("before")).toBe("older");
   });
   const cases: Array<{ args: string[]; method: string; path: string; body?: unknown }> = [
+    { args: ["workspace", "feishu-bot", "set", "local", "--disabled", "--responsible-member", "human"], method: "PUT", path: "/api/workspaces/local/feishu-bot", body: { enabled: false, responsible_member_id: "human" } },
+    { args: ["workspace", "feishu-bot", "set", "local", "--disabled", "--clear-responsible"], method: "PUT", path: "/api/workspaces/local/feishu-bot", body: { enabled: false, responsible_member_id: null } },
+    { args: ["workspace", "issue-topics", "set", "local", "--disabled", "--responsible-member", "human"], method: "PUT", path: "/api/workspaces/local/issue-topics", body: { enabled: false, responsible_member_id: "human" } },
+    { args: ["workspace", "issue-topics", "set", "local", "--disabled", "--inherit-bot-responsible"], method: "PUT", path: "/api/workspaces/local/issue-topics", body: { enabled: false, responsible_member_id: null } },
+    { args: ["issue", "responsibility-unassigned", "list", "local"], method: "GET", path: "/api/workspaces/local/issue-responsibility-migration" },
+    { args: ["issue", "responsibility-unassigned", "map", "local", "--reason", "Confirmed", "--data", '{"mappings":[{"issueId":"root","memberId":"human","revision":"v1"}]}'], method: "POST", path: "/api/workspaces/local/issue-responsibility-migration/map", body: { reason: "Confirmed", mappings: [{ issueId: "root", memberId: "human", revision: "v1" }] } },
+    { args: ["autopilot", "responsible", "set", "automation", "--member", "human"], method: "PATCH", path: "/api/autopilots/automation", body: { responsible_member_id: "human" } },
     { args: ["issue", "responsibility", "root"], method: "GET", path: "/api/issues/root/responsibility" },
     { args: ["issue", "responsible", "set", "root", "--member", "member"], method: "PATCH", path: "/api/issues/root", body: { responsible_member_id: "member" } },
     { args: ["issue", "question", "list", "child"], method: "GET", path: "/api/issues/child/questions" },
@@ -82,6 +91,8 @@ describe("responsibility CLI", () => {
       ["message", "question", "answer", "q", "--revision", "3", "--data", '{"response":[]}'],
       ["message", "question", "answer", "q", "--revision", "3", "--revise", "--data", '{"response":{}}'],
       ["issue", "delivery", "return", "root", "delivery", "--revision", "v1"],
+      ["issue", "responsibility-unassigned", "map", "local", "--data", '{"mappings":[{"issueId":"root","memberId":"human","revision":"v1"}]}'],
+      ["issue", "responsibility-unassigned", "map", "local", "--reason", "Confirmed", "--data", '{"mappings":[{"issueId":"root","memberId":"human"}]}'],
     ]) { setup(); await expect(registry.execute(args)).rejects.toThrow(); expect(requests.filter(request => request.method !== "GET")).toHaveLength(0); }
   });
 });

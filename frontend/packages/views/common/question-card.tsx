@@ -82,7 +82,8 @@ export function UnifiedQuestionCard({ question, getActorName = (_type, id) => id
       <p>{event.type} · {event.at} · {event.actor && getActorName(event.actor.type, event.actor.id)} · {event.route_revision}</p>
       {event.handler && <p>{t($ => $.responsibility.handler)} · {getActorName(event.handler.type, event.handler.id)} · {event.handler.id}</p>}
       {event.reason && <Markdown mode="minimal">{event.reason}</Markdown>}
-      {event.answer != null && <Markdown mode="minimal">{JSON.stringify(event.answer)}</Markdown>}
+      {event.answer != null && typeof event.answer === "object" && "body_md" in event.answer && typeof event.answer.body_md === "string" && <Markdown mode="minimal">{event.answer.body_md}</Markdown>}
+      {event.overturn && <Markdown mode="minimal">{event.overturn}</Markdown>}
       {event.source_message_id && <AppLink href={sourceLink(event.source_message_id)}>{t($ => $.responsibility.source)}</AppLink>}
     </li>)}</ol>}
   </article>;

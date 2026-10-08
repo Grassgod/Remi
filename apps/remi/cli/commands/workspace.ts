@@ -57,6 +57,8 @@ const RUNTIME_PROVISION_FIELDS: readonly CliOptionSpec[] = [
  * which is the only safe default for a partial update.
  */
 const FEISHU_BOT_FIELDS: readonly CliOptionSpec[] = [
+  { name: "responsible-member", type: "string", description: "Explicit designated human for root issues created from inbound conversations", conflictsWith: ["clear-responsible"] },
+  { name: "clear-responsible", type: "boolean", description: "Clear the human configuration; inbound conversations remain but automatic root creation stops", conflictsWith: ["responsible-member"] },
   { name: "sender-access-policy", type: "string", valueName: "agent|allowlist", description: "Use Agent permissions (default) or require a sender allowlist" },
   { name: "agent", type: "string", valueName: "agent-id", description: "Agent that answers concierge messages" },
   { name: "runtime", type: "string", valueName: "runtime-id", description: "Runtime that hosts the connector" },
@@ -160,6 +162,8 @@ export function workspaceCommandSpecs(): CommandSpec[] {
       "PUT",
       [
         { name: "chat-id", type: "string", valueName: "chat-id", description: "Feishu group chat ID" },
+        { name: "responsible-member", type: "string", description: "Explicit designated human for roots created from this topic", conflictsWith: ["inherit-bot-responsible"] },
+        { name: "inherit-bot-responsible", type: "boolean", description: "Clear topic override and inherit the explicit bot human", conflictsWith: ["responsible-member"] },
         { name: "notify", type: "string", valueName: "group_owner|person|none", description: "Proactive report mention target (default: group_owner)" },
         { name: "notify-open-id", type: "string", valueName: "open-id", description: "Bot-scoped recipient open ID for --notify person" },
         { name: "project", type: "string", valueName: "project-id", repeatable: true, description: "Limit topics to a project" },
@@ -617,6 +621,7 @@ function feishuBotRegistrationPath(workspaceId: string, sessionId: string): stri
 async function feishuBotBody(invocation: CommandInvocation): Promise<Record<string, unknown>> {
   const body = await requestBody(invocation, {
     sender_access_policy: stringOption(invocation, "sender-access-policy") ?? undefined,
+    responsible_member_id: booleanOption(invocation, "clear-responsible") === true ? null : stringOption(invocation, "responsible-member") ?? undefined,
     agent_id: stringOption(invocation, "agent") ?? undefined,
     runtime_id: stringOption(invocation, "runtime") ?? undefined,
     app_id: stringOption(invocation, "app-id") ?? undefined,
@@ -668,6 +673,7 @@ async function issueTopicsBody(invocation: CommandInvocation): Promise<Record<st
       ? false
       : booleanOption(invocation, "enabled") ?? undefined,
     chat_id: stringOption(invocation, "chat-id") ?? undefined,
+    responsible_member_id: booleanOption(invocation, "inherit-bot-responsible") === true ? null : stringOption(invocation, "responsible-member") ?? undefined,
     project_ids: projects.length ? projects : undefined,
     notify_mode: stringOption(invocation, "notify") ?? undefined,
     notify_open_id: stringOption(invocation, "notify-open-id") ?? undefined,

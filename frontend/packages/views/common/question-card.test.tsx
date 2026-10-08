@@ -18,6 +18,12 @@ function mount(question = base) {
 }
 beforeEach(() => { mocks.actOnQuestion.mockReset(); mocks.actOnQuestion.mockResolvedValue(base); });
 describe("one Q on every surface", () => {
+  it("preserves historical answer, reason and overturn guidance without exposing raw response metadata", () => {
+    mount({ ...base, actions: { allowed: [] }, history: [{ type: "answer", actor: { type: "agent", id: "parent-owner" }, at: "then", route_revision: 1, reason: "Checks passed", overturn: "Reconsider if QA finds regression", answer: { body_md: "Original parent reply", response: { internal_shape: "provider-field" } } }] });
+    fireEvent.click(screen.getByRole("button", { name: /Transfer and answer history/ }));
+    expect(screen.getByText("Original parent reply")).toBeInTheDocument(); expect(screen.getByText("Checks passed")).toBeInTheDocument(); expect(screen.getByText("Reconsider if QA finds regression")).toBeInTheDocument();
+    expect(screen.queryByText(/internal_shape/)).toBeNull();
+  });
   it("keeps permission choices single-select and sends the original option ID", async () => {
     mount({ ...base, kind: "permission", options: [{ label: "Allow once", value: "option-allow" }, { label: "Deny", value: "option-deny" }] });
     fireEvent.click(screen.getByRole("button", { name: "Allow once" }));

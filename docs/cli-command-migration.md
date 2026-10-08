@@ -39,6 +39,22 @@ the original Q session; a parent/Remi notification references its Q ID.
 answer changes additionally require `--revise --answer-revision --reason`.
 Ordinary message replies do not require a question revision.
 
+`remi issue responsibility-unassigned list <workspace> --limit 100 --offset 0`
+shows original ownership, creator facts, unconfirmed candidates and the current
+responsibility revision. Workspace administrators apply explicit selections with
+`remi issue responsibility-unassigned map <workspace> --reason <reason> --data
+'{"mappings":[{"issueId":"root","memberId":"human","revision":"current"}]}'`.
+No candidate is automatically selected or promoted into responsibility.
+`remi autopilot responsible set <autopilot> --member <member>` configures future
+automatic root issues; create/update JSON uses `responsible_member_id`.
+Feishu bot configuration JSON uses the same field.
+`workspace feishu-bot set --responsible-member <member>` explicitly configures
+the bot human, while `--clear-responsible` leaves new automatic roots unconfigured.
+Topic configuration accepts
+`workspace issue-topics set --responsible-member <member>` or
+`--inherit-bot-responsible` to clear its override. Missing explicit bot/automation
+configuration blocks automatic root creation while preserving incoming Chat.
+
 Unified usage uses `remi dashboard usage report` with `--days n|all`,
 `--since`, `--until`, `--tz`, `--project` and `--runtime`.
 `--include day_model` adds one genuine consumption-date × model detail page;

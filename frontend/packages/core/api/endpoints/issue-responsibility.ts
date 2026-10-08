@@ -1,10 +1,19 @@
 import { z } from "zod";
 import type { HttpClient } from "../http";
 import { ApiContractError, parseStrictResponse } from "../schema";
-import { IssueResponsibilitySchema, IssueDeliverySchema, QuestionViewSchema, type QuestionView } from "../schemas/issue-responsibility";
+import { IssueResponsibilitySchema, IssueDeliverySchema, QuestionViewSchema, IssueResponsibilityMigrationSchema, type QuestionView } from "../schemas/issue-responsibility";
 
 export class IssueResponsibilityEndpoints {
   constructor(readonly http: HttpClient) {}
+  async listIssueResponsibilityMigration(workspaceId: string, params: { limit?: number; offset?: number } = {}) {
+    const search = new URLSearchParams({ limit: String(params.limit ?? 100), offset: String(params.offset ?? 0) });
+    const path = `/api/workspaces/${encodeURIComponent(workspaceId)}/issue-responsibility-migration?${search}`;
+    return parseStrictResponse<z.infer<typeof IssueResponsibilityMigrationSchema>>(await this.http.fetch<unknown>(path), IssueResponsibilityMigrationSchema, { endpoint: path });
+  }
+  async mapIssueResponsibility(workspaceId: string, body: { reason: string; mappings: Array<{ issueId: string; memberId: string; revision: string }> }) {
+    const path = `/api/workspaces/${encodeURIComponent(workspaceId)}/issue-responsibility-migration/map`;
+    return parseStrictResponse<{ mappedIssueIds: string[] }>(await this.http.fetch<unknown>(path, { method: "POST", body: JSON.stringify(body) }), z.object({ mappedIssueIds: z.array(z.string()) }), { endpoint: path });
+  }
   async getIssueResponsibility(id: string) {
     const path = `/api/issues/${encodeURIComponent(id)}/responsibility`;
     return parseStrictResponse<z.infer<typeof IssueResponsibilitySchema>>(await this.http.fetch<unknown>(path), IssueResponsibilitySchema, { endpoint: path });
