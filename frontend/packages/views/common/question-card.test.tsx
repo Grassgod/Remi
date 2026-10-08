@@ -5,19 +5,36 @@ import { I18nProvider } from "@multiremi/core/i18n/react";
 import type { QuestionView } from "@multiremi/core/api/schemas";
 import enIssues from "../locales/en/issues.json";
 import enChat from "../locales/en/chat.json";
-const mocks = vi.hoisted(() => ({ actOnQuestion: vi.fn(), getQuestion: vi.fn() }));
+const mocks = vi.hoisted(() => ({ actOnQuestion: vi.fn(), getQuestion: vi.fn(), getTask: vi.fn() }));
 vi.mock("@multiremi/core/api", () => ({ api: mocks }));
 vi.mock("@multiremi/core/hooks", () => ({ useWorkspaceId: () => "ws" }));
 vi.mock("@multiremi/core/paths", () => ({ useWorkspaceSlug: () => "ws", useWorkspacePaths: () => ({ issueDetail: (id: string) => `/ws/issues/${id}`, inboxItem: (id: string) => `/ws/inbox?item=${id}` }) }));
 vi.mock("../navigation", () => ({ AppLink: (props: { href: string; children: React.ReactNode }) => <a {...props} /> }));
+vi.mock("./task-transcript/task-trace-dialog", () => ({ TaskTraceDialog: ({ task }: { task: { id: string } }) => <div role="dialog">{task.id}</div> }));
 import { UnifiedQuestionCard } from "./question-card";
 const base: QuestionView = { kind: "question", id: "q1", session_id: "original-session", workspace_id: "ws", source_issue_id: "child", source_agent_id: "worker", source_turn_id: null, source_attempt_id: null, original_questions: [], original_message: "Original exact question?", options: [{ label: "Approve", value: "approve" }], summary: { body_md: "Separate Remi recommendation", agent_id: "remi", at: "now" }, current_handler: { type: "agent", id: "parent-owner" }, stage: "parent_owner", route_revision: 7, answer_revision: 0, status: "pending", wait_status: "waiting", wait_reason: null, answer: null, history: [{ type: "created", actor: null, at: "now", route_revision: 1 }], actions: { allowed: ["answer", "escalate"] } };
 function mount(question = base) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
   return render(<QueryClientProvider client={qc}><I18nProvider locale="en" resources={{ en: { issues: enIssues, chat: enChat } }}><UnifiedQuestionCard question={question} /></I18nProvider></QueryClientProvider>);
 }
-beforeEach(() => { mocks.actOnQuestion.mockReset(); mocks.actOnQuestion.mockResolvedValue(base); });
+beforeEach(() => { mocks.actOnQuestion.mockReset(); mocks.actOnQuestion.mockResolvedValue(base); mocks.getTask.mockReset(); });
 describe("one Q on every surface", () => {
+  it("reads only the confirmed consumer attempt lazily and opens its actual execution", async () => {
+    mocks.getTask.mockResolvedValue({ id: "consumer-attempt", turn_id: "consumer-turn", agent_id: "worker" });
+    mount({ ...base, wait_status: "continuation_consumed", recovery: { consumer_turn_id: "consumer-turn", consumer_attempt_id: "consumer-attempt", reply_message_id: "reply", continuation_message_id: "continuation", consumed_at: "then" } });
+    expect(mocks.getTask).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: /Confirmed consumption attempt/ }));
+    await waitFor(() => expect(mocks.getTask).toHaveBeenCalledWith("consumer-attempt", "consumer-turn"));
+    expect(await screen.findByRole("dialog")).toHaveTextContent("consumer-attempt");
+  });
+  it("links authorized continuation without inventing a consumed attempt before confirmation", () => {
+    mount({ ...base, wait_status: "continuation_pending", recovery: { consumer_turn_id: "turn-new", consumer_attempt_id: null, reply_message_id: "reply", continuation_message_id: "continue-message", consumed_at: null } });
+    expect(screen.getByRole("link", { name: "Continuation instruction" })).toHaveAttribute("href", "/ws/issues/child?comment=continue-message");
+    expect(screen.getByRole("link", { name: "Answer" })).toHaveAttribute("href", "/ws/issues/child?comment=reply");
+    expect(screen.getByText("Consuming turn · turn-new")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Confirmed consumption attempt/ })).toBeNull();
+    expect(screen.getByText("Continuation authorized; awaiting consumption")).toBeInTheDocument();
+  });
   it("preserves historical answer, reason and overturn guidance without exposing raw response metadata", () => {
     mount({ ...base, actions: { allowed: [] }, history: [{ type: "answer", actor: { type: "agent", id: "parent-owner" }, at: "then", route_revision: 1, reason: "Checks passed", overturn: "Reconsider if QA finds regression", answer: { body_md: "Original parent reply", response: { internal_shape: "provider-field" } } }] });
     fireEvent.click(screen.getByRole("button", { name: /Transfer and answer history/ }));

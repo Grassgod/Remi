@@ -113,3 +113,9 @@ SQLite 使用内存库；设置 `MULTIREMI_TEST_POSTGRES_URL` 后每个测试创
 使责任字段和 Q 共同保持原状态，成功后仍保留原问题会话及执行轮，重启不另建问题。
 通用测试创建用 `createResponsibleTestIssue`；结束用 `acceptTestIssueDelivery` 走实际交付验收，
 不覆盖生产 Store 方法，不自动给历史表添加或填充责任。真实生产快照尚需部署迁移前独立复核。
+
+[`responsibility-http-integration.test.ts`](../../tests/unit/remi/responsibility-http-integration.test.ts)
+用 Web ApiClient 通过实际鉴权 HTTP 路由验证创建、子单交付/父单验收、根单指定人类验收，
+以及自动化、bot/topic 配置和历史显式映射；普通成员映射和过期 revision 都被拒绝。
+API 快照脚本对责任与问题流程显式检查预期状态，包括原等待消费、Remi 总结、授权/撤销、
+退回和验收，历史夹具使用单独的明确 SQL 构造。这些验证不代替真实浏览器或 PPE 验收。

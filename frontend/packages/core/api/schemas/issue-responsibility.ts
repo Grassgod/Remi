@@ -32,6 +32,7 @@ export const QuestionViewSchema = z.object({
   current_handler: HandlerSchema.nullable(), stage: z.string(), route_revision: z.number().int().nonnegative(),
   route_reason: z.string().nullable().optional(),
   status: z.string(), answer_revision: z.number().int().nonnegative(), wait_status: z.string(), wait_reason: z.string().nullable(), answer: AnswerSchema.nullable(),
+  recovery: z.object({ consumer_turn_id: z.string().nullable(), consumer_attempt_id: z.string().nullable(), reply_message_id: z.string().nullable(), continuation_message_id: z.string().nullable(), consumed_at: z.string().nullable() }).optional(),
   history: z.array(z.object({ type: z.string(), at: z.string(), actor: HandlerSchema.nullable(), route_revision: z.number(),
     reason: z.string().optional(), handler: HandlerSchema.nullable().optional(), answer: z.unknown().optional(),
     overturn: z.string().nullable().optional(),

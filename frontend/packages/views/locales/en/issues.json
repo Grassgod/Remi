@@ -1,5 +1,8 @@
 {
   "responsibility": {
+    "continuation_source": "Continuation instruction",
+    "consumer_turn": "Consuming turn",
+    "consumer_attempt": "Confirmed consumption attempt",
     "inherit_bot": "Inherit the bot's designated human",
     "migration": "Resolve historical responsibility",
     "migration_hint": "Choose each human explicitly. Historical assignment and creator are candidates requiring confirmation. Missing execution ownership still needs an Agent or team Leader.",

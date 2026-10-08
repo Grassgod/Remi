@@ -791,6 +791,7 @@ async function seedStore(store: MultiremiStore, db: Database): Promise<SeedRefs>
 
   const autopilot = store.createAutopilot({
     id: "apl_snapshot",
+    responsibleMemberId: member.id,
     title: "Snapshot autopilot",
     description: "Autopilot used by the snapshot",
     workspaceId,
@@ -1319,7 +1320,11 @@ flow("issue-responsibility-and-questions", async (rec, refs, store) => {
     if (result.status !== status) throw new Error(`Responsibility flow ${method} ${path}: expected ${status}, got ${result.status} ${JSON.stringify(result.body)}`);
     return result.body;
   };
-  const read = (path: string) => rec.call("GET", path, { headers: { Authorization: `Bearer ${pat.token}` } });
+  const read = async (path: string) => {
+    const result = await rec.call("GET", path, { headers: { Authorization: `Bearer ${pat.token}` } });
+    if (result.status !== 200) throw new Error(`Responsibility read ${path}: expected 200, got ${result.status} ${JSON.stringify(result.body)}`);
+    return result.body;
+  };
   const root = await checked("POST", "/api/issues", { title: "Formal snapshot root", workspace_id: refs.workspaceId, responsible_member_id: human.id, assignee_type: "agent", assignee_id: owner.id }, pat.token, 201);
   const child = await checked("POST", "/api/issues", { title: "Formal snapshot child", workspace_id: refs.workspaceId, parent_issue_id: root.id, assignee_type: "agent", assignee_id: worker.id }, pat.token, 201);
   const sourceTask = store.createTask({ agentId: worker.id, issueId: child.id, prompt: "Question and evidence" });
@@ -1338,7 +1343,11 @@ flow("issue-responsibility-and-questions", async (rec, refs, store) => {
   await checked("POST", `/api/messages/${question.id}/question/transfer`, { expected_route_revision: question.route_revision, reason: "Confirm current facts" }, ownerToken.token);
   const routed = store.getQuestion(question.id)!;
   const humanQuestion = (await checked("POST", `/api/messages/${question.id}/question/escalate`, { expected_route_revision: routed.route_revision, reason: "Explicit human needed" }, ownerToken.token)).question;
+  await checked("PUT", `/api/workspaces/${refs.workspaceId}/feishu-bot`, { agent_id: owner.id, runtime_id: runtime.id, app_id: "cli_responsibility_snapshot", app_secret: "synthetic-secret", app_secret_op: "set", domain: "feishu", enabled: false, responsible_member_id: human.id }, "snapshot-responsibility-master");
+  await checked("POST", `/api/messages/${question.id}/question/present`, { expected_route_revision: humanQuestion.route_revision, summary: "Remi's separate summary; original choices remain unchanged" }, ownerToken.token);
   const answer = (await checked("POST", `/api/messages/${question.id}/question/answer`, { expected_route_revision: humanQuestion.route_revision, response: { answers: { "Which approach?": "A, B" } } }, pat.token)).question;
+  const consumed = store.getDaemonTurnBridge().rpc("turn.decision.consume", { turn_id: turn.id, attempt_id: sourceTask.id, message_id: question.id, reply_message_id: answer.answer.reply_message_id, wait_id: "wait:snapshot-question-answer" }, { runtimeId: runtime.id, daemonId: "dmn_responsibility_snapshot", workspaceId: refs.workspaceId });
+  if (!consumed.ok || store.getQuestion(question.id)?.wait_status !== "consumed") throw new Error("Snapshot Q answer was not consumed by the original provider wait");
   await checked("POST", `/api/messages/${question.id}/question/answer`, { expected_route_revision: answer.route_revision, expected_answer_revision: answer.answer_revision, revise: true, reason: "New evidence", response: { answers: { "Which approach?": "B" } } }, pat.token);
   // An exceptional operation with no detached call must be rejected, never
   // report that a persisted answer magically restored the original provider.
@@ -1358,6 +1367,30 @@ flow("issue-responsibility-and-questions", async (rec, refs, store) => {
   await checked("POST", `/api/issues/${root.id}/deliveries/${finalDelivery.id}/respond`, { action: "accept", revision: finalDelivery.responsibilityRevision }, pat.token);
   await read(`/api/issues/${root.id}/deliveries?limit=1`);
   await read(`/api/issues/${root.id}/deliveries?limit=1&before=${finalDelivery.id}`);
+});
+
+flow("responsibility-migration-and-configuration", async (rec, refs, store) => {
+  const master = "snapshot-migration-master";
+  rec.enableAuthentication(master);
+  const checked = async (method: string, path: string, body: unknown, status = 200) => {
+    const result = await rec.json(method, path, body, master);
+    if (result.status !== status) throw new Error(`Migration flow ${method} ${path}: expected ${status}, got ${result.status} ${JSON.stringify(result.body)}`);
+    return result.body;
+  };
+  const legacy = store.createIssue({ title: "Explicit historical mapping sample", workspaceId: refs.workspaceId, responsibleMemberId: refs.memberId });
+  // An exact historical row, distinct from all new API creation constraints.
+  const historicalDb = (store as unknown as { db: { run: (sql: string, params: unknown[]) => void } }).db;
+  historicalDb.run("UPDATE multiremi_issues SET responsible_member_id=NULL,assignee_type='member',assignee_id=?,created_by=? WHERE id=?", [refs.memberId, refs.userId, legacy.id]);
+  const path = `/api/workspaces/${refs.workspaceId}/issue-responsibility-migration`;
+  const list = await checked("GET", `${path}?limit=100&offset=0`, undefined);
+  const item = list.items.find((item: { issueId: string }) => item.issueId === legacy.id);
+  if (!item || item.responsibleMemberId !== null || item.assigneeId !== refs.memberId) throw new Error("Migration must retain original facts without backfilling them");
+  await checked("POST", `${path}/map`, { reason: "Explicitly verified human", mappings: [{ issueId: legacy.id, memberId: refs.memberId, revision: "stale" }] }, 409);
+  await checked("POST", `${path}/map`, { reason: "Explicitly verified human", mappings: [{ issueId: legacy.id, memberId: refs.memberId, revision: item.revision }] });
+  await checked("GET", `${path}?limit=100&offset=0`, undefined);
+  await checked("PATCH", `/api/autopilots/${refs.autopilotId}`, { responsible_member_id: refs.memberId });
+  await checked("PUT", `/api/workspaces/${refs.workspaceId}/issue-topics`, { enabled: true, chat_id: "oc_migration_snapshot", project_ids: null, responsible_member_id: refs.memberId });
+  await checked("PUT", `/api/workspaces/${refs.workspaceId}/issue-topics`, { enabled: true, chat_id: "oc_migration_snapshot", project_ids: null, responsible_member_id: null });
 });
 
 flow("issues-compat", async (rec, refs) => {
@@ -1566,6 +1599,7 @@ flow("squads", async (rec, refs) => {
 flow("autopilots-compat", async (rec, refs) => {
   const created = await rec.json("POST", "/api/autopilots", {
     title: "Compat autopilot",
+    responsible_member_id: refs.memberId,
     assignee_type: "agent",
     assignee_id: refs.agentId,
     workspace_id: refs.workspaceId,
@@ -1588,6 +1622,7 @@ flow("autopilots-compat", async (rec, refs) => {
 flow("autopilots-native", async (rec, refs) => {
   const created = await rec.json("POST", "/api/multiremi/autopilots", {
     title: "Native autopilot",
+    responsibleMemberId: refs.memberId,
     assigneeType: "agent",
     assigneeId: refs.agentId,
     workspaceId: refs.workspaceId,

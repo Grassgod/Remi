@@ -1,5 +1,8 @@
 {
   "responsibility": {
+    "continuation_source": "継続指示",
+    "consumer_turn": "消費するターン",
+    "consumer_attempt": "消費確認済みの実行",
     "inherit_bot": "ボットの指定担当者を継承",
     "migration": "過去の責任者を確認",
     "migration_hint": "各担当者を明示的に選択してください。過去の割り当てと作成者は確認が必要な候補です。実行責任者にはエージェントまたはチームリーダーを設定してください。",

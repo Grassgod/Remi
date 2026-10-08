@@ -1,5 +1,8 @@
 {
   "responsibility": {
+    "continuation_source": "계속 실행 지시",
+    "consumer_turn": "소비 턴",
+    "consumer_attempt": "소비가 확인된 실행",
     "inherit_bot": "봇의 지정 담당자 상속",
     "migration": "기존 책임 정보 확인",
     "migration_hint": "각 담당자를 명시적으로 선택하세요. 기존 배정과 생성자는 확인이 필요한 후보입니다. 실행 담당자는 에이전트 또는 팀 리더로 설정해야 합니다.",

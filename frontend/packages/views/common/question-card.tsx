@@ -1,6 +1,6 @@
 "use client";
 import { useState } from "react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@multiremi/core/api";
 import type { QuestionView } from "@multiremi/core/api/schemas";
 import { parseTaskHumanRequest } from "@multiremi/core/chat/human-requests";
@@ -13,6 +13,7 @@ import { AppLink } from "../navigation";
 import { useT } from "../i18n";
 import { Markdown } from "./markdown";
 import { QuestionCard } from "./human-request-dock";
+import { TaskTraceDialog } from "./task-transcript/task-trace-dialog";
 
 /** All surfaces operate on the original Q, including cross-session notifications. */
 export function UnifiedQuestionCard({ question, getActorName = (_type, id) => id }: { question: QuestionView; getActorName?: (type: string, id: string) => string }) {
@@ -59,6 +60,13 @@ export function UnifiedQuestionCard({ question, getActorName = (_type, id) => id
     </section>
     {question.summary && <section className="rounded bg-muted/40 p-2"><h4 className="mb-1 text-xs font-medium">{t($ => $.responsibility.remi)}</h4><Markdown mode="minimal">{question.summary.body_md}</Markdown></section>}
     <p className="text-xs text-muted-foreground" data-question-wait-status={question.wait_status}>{waitLabels[question.wait_status] ?? question.wait_status}{question.wait_reason && ` · ${question.wait_reason}`}</p>
+    {question.recovery && <div className="flex flex-wrap items-center gap-2 text-xs">
+      {question.recovery.continuation_message_id && <AppLink href={sourceLink(question.recovery.continuation_message_id)}>{t($ => $.responsibility.continuation_source)}</AppLink>}
+      {question.recovery.reply_message_id && <AppLink href={sourceLink(question.recovery.reply_message_id)}>{t($ => $.responsibility.answer)}</AppLink>}
+      {question.recovery.consumer_turn_id && <span>{t($ => $.responsibility.consumer_turn)} · {question.recovery.consumer_turn_id}</span>}
+      {question.recovery.consumer_attempt_id && question.recovery.consumer_turn_id && <QuestionConsumptionAttempt attemptId={question.recovery.consumer_attempt_id} turnId={question.recovery.consumer_turn_id} getActorName={getActorName} />}
+      {question.recovery.consumed_at && <span>{question.recovery.consumed_at}</span>}
+    </div>}
     {question.answer && <section><h4 className="text-xs font-medium">{getActorName(question.answer.actor.type, question.answer.actor.id)} · {question.answer.at}</h4><Markdown mode="minimal">{question.answer.body_md || JSON.stringify(question.answer.response)}</Markdown></section>}
     {!canAnswer && question.original_questions.length === 0 && question.options?.map(option => <span key={option.value} className="inline-block rounded border px-2 py-1 text-xs">{option.label}</span>)}
     {canAnswer && question.original_questions.length === 0 && <div className="space-y-2">
@@ -87,4 +95,15 @@ export function UnifiedQuestionCard({ question, getActorName = (_type, id) => id
       {event.source_message_id && <AppLink href={sourceLink(event.source_message_id)}>{t($ => $.responsibility.source)}</AppLink>}
     </li>)}</ol>}
   </article>;
+}
+
+function QuestionConsumptionAttempt({ attemptId, turnId, getActorName }: { attemptId: string; turnId: string; getActorName: (type: string, id: string) => string }) {
+  const { t } = useT("issues");
+  const [open, setOpen] = useState(false);
+  const task = useQuery({ queryKey: ["task-detail", attemptId, turnId], enabled: open, queryFn: () => api.getTask(attemptId, turnId) });
+  return <>
+    <Button variant="ghost" size="sm" disabled={task.isFetching} onClick={() => { setOpen(true); if (task.isError) void task.refetch(); }}>{t($ => $.responsibility.consumer_attempt)} · {attemptId}</Button>
+    {task.isError && <p role="alert">{t($ => $.responsibility.load_failed)}</p>}
+    {open && task.data && <TaskTraceDialog task={task.data} agentName={getActorName("agent", task.data.agent_id)} onOpenChange={setOpen} />}
+  </>;
 }

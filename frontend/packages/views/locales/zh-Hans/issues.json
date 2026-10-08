@@ -1,5 +1,8 @@
 {
   "responsibility": {
+    "continuation_source": "续接指令",
+    "consumer_turn": "消费轮次",
+    "consumer_attempt": "已确认消费的执行",
     "inherit_bot": "继承机器人指定的人类责任人",
     "migration": "补齐历史责任",
     "migration_hint": "逐单明确选择人类责任人。历史指派和创建者仅是待确认候选；缺少执行统筹的单还须配置云友或团队组长。",
