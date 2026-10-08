@@ -239,7 +239,7 @@ export function registerUnifiedRoutes(app: Hono, deps: RouterDeps): void {
     const question = store.getQuestion(loaded.message.id, actor);
     return question ? c.json({ question }) : c.json({ error: 'question not found' }, 404);
   });
-  for (const operation of ['answer', 'escalate', 'transfer', 'present', 'continue'] as const) app.post(`/api/messages/:id/question/${operation}`, async c => {
+  for (const operation of ['answer', 'escalate', 'transfer', 'present', 'continue', 'close'] as const) app.post(`/api/messages/:id/question/${operation}`, async c => {
     const loaded = loadMessage(c); if (loaded instanceof Response) return loaded;
     const actor = questionActor(c, loaded.conversation.workspaceId); if (actor instanceof Response) return actor;
     if (!actor) return c.json({ error: 'question actor required' }, 403);
@@ -256,6 +256,7 @@ export function registerUnifiedRoutes(app: Hono, deps: RouterDeps): void {
       const question = operation === 'escalate' ? store.escalateQuestion(loaded.message.id, mutation, actor, callerTurn(c))
         : operation === 'transfer' ? store.transferQuestion(loaded.message.id, mutation, actor, callerTurn(c))
         : operation === 'present' ? store.presentQuestion(loaded.message.id, { ...mutation, summary: input.summary }, actor, callerTurn(c))
+        : operation === 'close' ? store.closeQuestion(loaded.message.id, mutation, actor, callerTurn(c))
         : store.continueQuestion(loaded.message.id, mutation, actor);
       return { question };
     });

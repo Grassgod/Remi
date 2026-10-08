@@ -2,6 +2,7 @@ import type { MultiremiTaskSteerMessage, MultiremiTaskStatus } from "@multiremi/
 import { DaemonProtocolClient, DaemonProtocolRpcError } from "./daemon-protocol-client.js";
 import type { TaskSteerSource } from "./steer.js";
 import type { DaemonTurnInput } from "@multiremi/contracts/daemon-protocol.js";
+import type { DaemonQuestionWait } from '@multiremi/contracts/daemon-protocol.js';
 import type { UnifiedMessage } from "@multiremi/contracts/unified-model.js";
 import { TRIGGER_MESSAGE_INLINE_CHARS, unreadRangeHint } from "@multiremi/contracts/session-input.js";
 
@@ -10,6 +11,9 @@ const MAX_SETTLED_REQUESTS = 1024;
 
 /** Per-runtime push inbox. The executing task owns cancellation and steer consumption. */
 export class DaemonTaskDownlinks implements TaskSteerSource {
+  private readonly nativeQuestionWaits = new Map<string, DaemonQuestionWait>();
+  beginQuestionWait(attemptId: string, messageId: string, waitId: string): void { this.nativeQuestionWaits.set(messageId, { attempt_id: attemptId, message_id: messageId, wait_id: waitId }); }
+  activeQuestionWaits(): DaemonQuestionWait[] { return [...this.nativeQuestionWaits.values()]; }
   private readonly turns = new Map<string, { turnId: string; inputToSeq: number; wrapUpAt: string | null }>();
   private readonly inputSeqs = new Map<string, number>();
   private readonly decisions = new Map<string, UnifiedMessage>();
@@ -172,6 +176,7 @@ export class DaemonTaskDownlinks implements TaskSteerSource {
   beginDecision(attemptId: string): void { this.decisionCreates.add(attemptId); }
 
   finishDecision(attemptId: string): void {
+    for (const [id, wait] of this.nativeQuestionWaits) if (wait.attempt_id === attemptId) this.nativeQuestionWaits.delete(id);
     this.decisionCreates.delete(attemptId);
     for (const message of this.pendingTaskSteerMessages(attemptId)) {
       if (this.inputReplyTo.has(`${attemptId}:${message.id}`) || this.decisionRangeHints.has(message.id)) {

@@ -6546,7 +6546,11 @@ ${placementAfter.sql}
     const detachedEvents = createCommitEventQueue();
     const cancelled: string[] = [];
     for(const row of pending) {
-      if (new Questions(this.ctx).detachWithinTransaction(row.id, task?.status === 'cancelled' ? 'source_turn_cancelled' : 'provider_exit', detachedEvents)) continue;
+      const questions = new Questions(this.ctx);
+      if (questions.get(row.id)) {
+        questions.detachWithinTransaction(row.id, task?.status === 'cancelled' ? 'source_turn_cancelled' : 'provider_exit', detachedEvents);
+        continue;
+      }
       patchDecisionRecord(this.ctx,row.id,'human_request',{status:'cancelled',responded_at:now},'pending');
       cancelled.push(row.id);
     }

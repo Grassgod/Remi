@@ -133,9 +133,9 @@ export class DaemonTurnBridge {
       if(type==='turn.decision'){
         if(typeof payload.body_md!=='string'||typeof payload.dedupe_key!=='string'||!Array.isArray(payload.options))throw new Error('invalid_report');
         const timeout=Number(payload.timeout_ms??0),expires=timeout>0?new Date(Date.now()+timeout).toISOString():null;
-        const result=new Questions(this.ctx).createWithinTransaction({session_id:turn.session_id,sender:{type:'agent',id:turn.agent_id},source_turn_id:turn.id,to:{type:'none'},
+        const result=new Questions(this.ctx).createWithinTransaction({id: typeof payload.message_id === 'string' ? payload.message_id : undefined, session_id:turn.session_id,sender:{type:'agent',id:turn.agent_id},source_turn_id:turn.id,to:{type:'none'},
           body_md:payload.body_md,message_kind:'decision',wake_requested:'now',dedupe_key:payload.dedupe_key,options:payload.options as DecisionOption[],
-          metadata:{...(payload.metadata as object),human_request:{kind:(payload.metadata as any)?.kind??'question',payload:{...(payload.metadata as object),options:(payload.metadata as any)?.options??payload.options},status:'pending',expires_at:expires}}},turn.current_attempt_id,events);
+          metadata:{...(payload.metadata as object),wait_id:payload.wait_id,human_request:{kind:(payload.metadata as any)?.kind??'question',payload:{...(payload.metadata as object),options:(payload.metadata as any)?.options??payload.options},status:'pending',expires_at:expires}}},turn.current_attempt_id,events);
         // The RPC response itself delivers this message to the provider. A
         // short timeout can acknowledge it before the next snapshot arrives.
         this.ctx.db.run('UPDATE multiremi_turn_attempts SET projection_to_seq=CASE WHEN COALESCE(projection_to_seq,0)<? THEN ? ELSE projection_to_seq END WHERE id=?',
@@ -144,7 +144,7 @@ export class DaemonTurnBridge {
       }
       const message=getMessage(this.ctx,String(payload.message_id));if(!message||message.task_id!==turn.id||message.message_kind!=='decision')throw new Error('invalid_report');
       if(type==='turn.decision.consume') {
-        new Questions(this.ctx).consumeWithinTransaction(message.id,turn.id,turn.current_attempt_id,String(payload.reply_message_id),events);
+        new Questions(this.ctx).consumeWithinTransaction(message.id,turn.id,turn.current_attempt_id,String(payload.reply_message_id),events, typeof payload.wait_id === 'string' ? payload.wait_id : undefined);
         return {ok:true};
       }
       if(type==='turn.decision.expire'){

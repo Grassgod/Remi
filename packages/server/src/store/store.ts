@@ -5620,6 +5620,8 @@ runMigrations(this.db);
   presentQuestion(...args: Parameters<Questions['present']>) { return new Questions(this.ctx).present(...args); }
   enqueueQuestionPresentationWithinTransaction(id: string) { return this.feishuBot.enqueueQuestionPresentationWithinTransaction(id); }
   continueQuestion(...args: Parameters<Questions['continue']>) { return new Questions(this.ctx).continue(...args); }
+  closeQuestion(...args: Parameters<Questions['close']>) { return new Questions(this.ctx).close(...args); }
+  reconcileQuestionWaits(...args: Parameters<Questions['reconcileRuntimeWaits']>) { return new Questions(this.ctx).reconcileRuntimeWaits(...args); }
   getMessage(...args: Parameters<InboxRepo["getMessage"]>) { return this.inbox.getMessage(...args); }
   getDaemonTurnBridge() {return new DaemonTurnBridge(this.ctx);}
   sendMessage(input:import("@multiremi/contracts/unified-model.js").SendMessageInput, uploads: CreateAttachmentInput[] = [],

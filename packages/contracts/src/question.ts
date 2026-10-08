@@ -3,7 +3,7 @@ import type { DecisionOption } from './unified-model.js';
 export interface QuestionActor { type: 'agent' | 'member'; id: string }
 export type QuestionStage = 'issue_owner' | 'parent_owner' | 'human' | 'unavailable';
 export type QuestionWaitStatus = 'waiting' | 'detached' | 'consumed' | 'continuation_pending' | 'continuation_consumed' | 'none';
-export type QuestionAction = 'answer' | 'escalate' | 'transfer' | 'present' | 'revise' | 'continue';
+export type QuestionAction = 'answer' | 'escalate' | 'transfer' | 'present' | 'revise' | 'continue' | 'close';
 export interface QuestionAnswer {
   response: Record<string, unknown>;
   body_md: string;
@@ -34,11 +34,13 @@ export interface QuestionView {
   source_attempt_id: string | null;
   original_questions: unknown[];
   original_message: string;
+  original_context: { text: string; truncated?: boolean } | null;
   options: DecisionOption[] | null;
   summary: { body_md: string; agent_id: string; at: string } | null;
   current_handler: QuestionActor | null;
   stage: QuestionStage;
   route_revision: number;
+  route_reason: string | null;
   status: 'pending' | 'answered' | 'closed';
   wait_status: QuestionWaitStatus;
   wait_reason: string | null;

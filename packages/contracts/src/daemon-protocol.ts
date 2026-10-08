@@ -322,9 +322,13 @@ export interface DaemonHelloRuntime {
   max_concurrency: number;
   /** Tasks this process is executing right now; used to reconcile after a reconnect. */
   active_task_ids: string[];
+  /** Only provider callbacks still held by this process; durable outbox tasks are excluded. */
+  active_question_waits?: DaemonQuestionWait[];
   /** Missing fields explicitly mean unsupported, including after a restart. */
   capabilities?: DaemonRuntimeCapabilities;
 }
+
+export interface DaemonQuestionWait { message_id: string; attempt_id: string; wait_id: string }
 
 /** `hello`, daemon -> server, once per connection, before anything else. */
 export interface DaemonHelloPayload {

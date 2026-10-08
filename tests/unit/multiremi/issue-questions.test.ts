@@ -10,7 +10,7 @@ function setup(f: PendingTurnTestFixture, sameOwner = false) {
   const leader = store.createAgent({ name: 'Issue leader', provider: 'codex', maxConcurrentTasks: 8 });
   const parentLeader = sameOwner ? leader : store.createAgent({ name: 'Parent leader', provider: 'codex', maxConcurrentTasks: 8 });
   const worker = store.createAgent({ name: 'Worker', provider: 'codex', maxConcurrentTasks: 8 });
-  const parent = store.createIssue({ title: 'Root', assigneeType: 'agent', assigneeId: parentLeader.id });
+  const parent = store.createIssue({ title: 'Root', assigneeType: 'agent', assigneeId: parentLeader.id, responsibleMemberId: 'mem_local_local' });
   db.run('UPDATE multiremi_issues SET responsible_member_id=? WHERE id=?', ['mem_local_local', parent.id]);
   const issue = store.createIssue({ title: 'Child', parentIssueId: parent.id, assigneeType: 'agent', assigneeId: leader.id });
   const task = store.createTask({ agentId: worker.id, issueId: issue.id, prompt: 'Original task' });
@@ -19,7 +19,7 @@ function setup(f: PendingTurnTestFixture, sameOwner = false) {
   const bridge = store.getDaemonTurnBridge();
   const scope = { runtimeId: runtime.id, daemonId: 'questions-daemon', workspaceId: 'local' };
   const result = bridge.rpc('turn.decision', { turn_id: turn.id, attempt_id: task.id, dedupe_key: `question:${task.id}`,
-    body_md: 'Which approach?', options: [{ label: 'A', value: 'A' }, { label: 'B', value: 'B' }],
+    wait_id: `wait_nonce_${task.id}`, body_md: 'Which approach?', options: [{ label: 'A', value: 'A' }, { label: 'B', value: 'B' }],
     metadata: { kind: 'question', questions: [{ fieldKey: 'approach', question: { question: 'Which approach?', options: [{ label: 'A' }, { label: 'B' }] } }] }, timeout_ms: 50 }, scope);
   expect(result.ok).toBeTrue();
   const q = store.getQuestion(String(result.message_id))!;
@@ -41,7 +41,7 @@ pendingTurnBackendTests('one question through the responsibility chain', fixture
     expect(answered.message.session_id).toBe(h.q.session_id);
     expect(answered.message.reply_to_id).toBe(h.q.id);
     expect(h.store.getQuestion(h.q.id)).toMatchObject({ status: 'answered', wait_status: 'waiting', answer: { response: { answers: { 'Which approach?': 'A' } } } });
-    expect(h.bridge.rpc('turn.decision.consume', { turn_id: h.turn.id, attempt_id: h.task.id, message_id: h.q.id, reply_message_id: answered.message.id }, h.scope)).toEqual({ ok: true });
+    expect(h.bridge.rpc('turn.decision.consume', { turn_id: h.turn.id, attempt_id: h.task.id, message_id: h.q.id, reply_message_id: answered.message.id, wait_id: `wait_nonce_${h.task.id}` }, h.scope)).toEqual({ ok: true });
     expect(h.store.getQuestion(h.q.id)?.wait_status).toBe('consumed');
     expect(() => h.store.answerQuestion(h.q.id, { expected_route_revision: 1, response: { answer: 'B' } }, actor, h.agentTurn(h.leader.id))).toThrow('question_already_settled');
   });
