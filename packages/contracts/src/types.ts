@@ -4120,6 +4120,8 @@ export interface MultiremiAutopilot {
   workspace_id?: string;
   title: string;
   description: string | null;
+  responsibleMemberId?: string | null;
+  responsible_member_id?: string | null;
   projectId: string | null;
   project_id?: string | null;
   assigneeType: MultiremiAutopilotAssigneeType;
@@ -4209,6 +4211,8 @@ export interface MultiremiAutopilotRun {
 export interface CreateAutopilotInput {
   id?: string;
   title: string;
+  responsibleMemberId?: string | null;
+  responsible_member_id?: string | null;
   description?: string | null;
   projectId?: string | null;
   project_id?: string | null;
@@ -4286,6 +4290,8 @@ export interface UpdateAutopilotTriggerInput {
 
 export interface UpdateAutopilotInput {
   title?: string;
+  responsibleMemberId?: string | null;
+  responsible_member_id?: string | null;
   description?: string | null;
   projectId?: string | null;
   assigneeType?: MultiremiAutopilotAssigneeType;
@@ -4520,6 +4526,7 @@ export type IssueTopicNotifyMode = "group_owner" | "person" | "none";
 export interface IssueTopicConfig {
   enabled: boolean;
   chatId: string;
+  responsibleMemberId?: string | null;
   /** Omitted means every project, including projectless Issues. */
   projectIds?: string[];
   notifyMode?: IssueTopicNotifyMode;
@@ -4724,6 +4731,7 @@ export interface MultiremiFeishuBotConfig {
   domain: FeishuBotDomain;
   enabled: boolean;
   senderAccessPolicy: "agent" | "allowlist";
+  responsibleMemberId?: string | null;
   /** Bumped on every mutation; daemons refetch when their applied revision lags. */
   revision: number;
   hasAppSecret: boolean;
@@ -4744,6 +4752,7 @@ export interface MultiremiFeishuBotConfig {
  * short hint; the plaintext never leaves the server.
  */
 export interface FeishuBotConfigView {
+  responsible_member_id?: string | null;
   configured: boolean;
   workspace_id: string;
   agent_id: string | null;
@@ -4812,6 +4821,7 @@ export interface UpsertFeishuBotConfigInput {
   domain: FeishuBotDomain;
   enabled: boolean;
   senderAccessPolicy?: "agent" | "allowlist";
+  responsibleMemberId?: string | null;
   appSecretOp: FeishuBotSecretOp;
   appSecret?: string;
   actor?: string | null;
@@ -4901,6 +4911,7 @@ export interface SubmitFeishuBotMessageInput {
 
 /** The canonical Chat/Task lineage selected for an inbound Feishu event. */
 export interface SubmitFeishuBotMessageResult {
+  responsibilityUnavailableReason?: string;
   chatSessionId: string;
   taskId: string;
   agentId: string;

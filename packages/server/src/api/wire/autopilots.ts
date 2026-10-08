@@ -12,7 +12,7 @@ import type {
   UpdateAutopilotTriggerInput,
 } from "@multiremi/contracts/types.js";
 import type { Context } from "hono";
-import { cleanString, currentAccessToken, currentRequestUserId, hasOwn } from "./context.js";
+import { cleanString, currentAccessToken, currentRequestUserId, currentTaskAccessToken, authenticatedRequestUserId, hasOwn } from "./context.js";
 import { autopilotRunSourceRevision } from "@multiremi/store/repos/autopilots-repo.js";
 
 export function autopilotCreateInput(c: Context, input: CreateAutopilotInput): CreateAutopilotInput {
@@ -23,8 +23,10 @@ export function autopilotCreateInput(c: Context, input: CreateAutopilotInput): C
   return {
     ...input,
     workspaceId,
-    createdByType: input.createdByType ?? input.created_by_type ?? "member",
-    createdById: input.createdById ?? input.created_by_id ?? currentRequestUserId(c),
+    createdByType: currentTaskAccessToken(c) ? 'agent' : 'member',
+    createdById: currentTaskAccessToken(c)?.agentId ?? authenticatedRequestUserId(c) ?? currentRequestUserId(c),
+    created_by_type: currentTaskAccessToken(c) ? 'agent' : 'member',
+    created_by_id: currentTaskAccessToken(c)?.agentId ?? authenticatedRequestUserId(c) ?? currentRequestUserId(c),
   };
 }
 
@@ -68,6 +70,7 @@ export function autopilotCompatibilityResponse(
     title: autopilot.title,
     description: autopilot.description,
     project_id: autopilot.projectId,
+    responsible_member_id: autopilot.responsibleMemberId??null,
     assignee_type: autopilot.assigneeType,
     assignee_id: autopilot.assigneeId,
     status: autopilot.status,
@@ -116,6 +119,7 @@ export function autopilotCreateCompatibilityInput(
     title: input.title,
     description: input.description,
     workspace_id: input.workspace_id,
+    responsibleMemberId:input.responsibleMemberId??input.responsible_member_id??null,
     status: input.status,
     projectId,
     project_id: projectId,
@@ -151,6 +155,7 @@ export function autopilotUpdateCompatibilityInput(
   if (hasOwn(input, "title")) output.title = input.title;
   if (hasOwn(input, "description")) output.description = input.description ?? null;
   if (hasOwn(input, "project_id")) output.projectId = cleanString(input.project_id ?? undefined) ?? null;
+  if (hasOwn(input,'responsible_member_id')||hasOwn(input,'responsibleMemberId')) output.responsibleMemberId=input.responsibleMemberId??input.responsible_member_id??null;
 
   const assigneeTypeSent = hasOwn(input, "assignee_type");
   const assigneeIdSent = hasOwn(input, "assignee_id");

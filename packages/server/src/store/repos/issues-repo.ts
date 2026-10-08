@@ -4118,8 +4118,14 @@ export class IssuesRepo {
   }
 
   assignIssue(id: string, input: AssignIssueInput, options: AssignIssueOptions = {}): AssignIssueResult {
+    // Cancellation, responsibility transfer, dispatch and derived status belong
+    // to one transaction; a dispatch failure must not leave a partial assignment.
+    if (!this.ctx.db.inTransaction) {
+      return retryOnceOnStaleLockSet(() => this.ctx.db.transaction(() => this.assignIssue(id, input, options))());
+    }
     const current = this.getIssue(id);
     if (!current) throw new Error(`Issue not found: ${id}`);
+    this.ctx.lockWorkspaceRuntimeLifecycle(current.workspaceId);
     const requestedAssigneeType = input.assigneeType ?? input.assignee_type ?? null;
     const requestedAssigneeId = input.assigneeId ?? input.assignee_id ?? null;
     const actorType = input.actorType ?? input.actor_type ?? "system";
@@ -4136,7 +4142,7 @@ export class IssuesRepo {
         actorId,
         parentTaskId: resolveCamelOrSnakeString(input, "parentTaskId", "parent_task_id"),
       }, deferredEvents))();
-      this.ctx.emitCommitEvents(deferredEvents);
+      afterCommit(this.ctx.db, () => this.ctx.emitCommitEvents(deferredEvents));
       return { issue: this.getIssue(id)!, task: null, cancelledTasks };
     }
 
@@ -4216,7 +4222,7 @@ export class IssuesRepo {
     }
     const deferredEvents = createCommitEventQueue();
     const cancelled = this.cancelActiveIssueTasks(id, "issue_reassigned", deferredEvents);
-    this.ctx.emitCommitEvents(deferredEvents);
+    afterCommit(this.ctx.db, () => this.ctx.emitCommitEvents(deferredEvents));
     const writeAssignment = (assignmentChanges: ChildStatusChangeCollector, assignmentEvents: CommitEventQueue) => {
       this.ctx.lockWorkspaceRuntimeLifecycle(current.workspaceId);
       // Agent assignment also reopens a settled Issue, independently of PATCH.
@@ -4288,7 +4294,7 @@ export class IssuesRepo {
     };
     const assignment = this.ctx.db.inTransaction ? assignWithinTransaction()
       : retryOnceOnStaleLockSet(() => this.ctx.db.transaction(assignWithinTransaction)());
-    this.ctx.emitCommitEvents(assignment.assignmentEvents);
+    afterCommit(this.ctx.db, () => this.ctx.emitCommitEvents(assignment.assignmentEvents));
     afterCommit(this.ctx.db, () => this.ctx.tasks().runCollectedChildStatusChanges(assignment.assignmentChanges));
 
     let task: MultiremiTask | null = null;

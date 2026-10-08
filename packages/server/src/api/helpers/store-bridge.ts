@@ -564,7 +564,7 @@ export function createOnboardingIssue(
   workspaceId: string,
   title: string,
   description: string,
-  createdBy = "local",
+  createdBy: string,
 ): ReturnType<MultiremiStore["createIssue"]> {
   const existing = store.listIssues({ workspaceId }).find((issue) => issue.title === title);
   if (existing) return existing;

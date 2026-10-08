@@ -520,6 +520,7 @@ interface FeishuBotConfigBody {
   domain?: unknown;
   enabled?: unknown;
   sender_access_policy?: unknown;
+  responsible_member_id?: string | null;
   app_secret?: unknown;
   app_secret_op?: unknown;
   registration_session_id?: unknown;
@@ -564,6 +565,7 @@ function parseConfigBody(
       domain,
       enabled: body.enabled,
       senderAccessPolicy: body.sender_access_policy,
+      responsibleMemberId:body.responsible_member_id,
       appSecretOp,
       appSecret,
     },
@@ -669,6 +671,7 @@ export function configView(store: MultiremiStore, workspaceId: string): FeishuBo
     domain: config.domain,
     enabled: config.enabled,
     sender_access_policy: config.senderAccessPolicy,
+    responsible_member_id:config.responsibleMemberId??null,
     revision: config.revision,
     app_secret_configured: config.hasAppSecret,
     app_secret_hint: config.appSecretHint,

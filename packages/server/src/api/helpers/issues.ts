@@ -69,7 +69,14 @@ export function taskIssueResponsibleMember(c: Context, store: MultiremiStore): s
     return responsibility.unresolved.length ? null : responsibility.rootHuman?.id ?? null;
   }
   const chat = task.chatSessionId ? store.getChatSession(task.chatSessionId) : null;
-  if (!chat?.creatorId || chat.workspaceId !== task.workspaceId) return null;
+  if (!chat || chat.workspaceId !== task.workspaceId) return null;
+  // Transport Chats may have a technical creator unrelated to the external sender.
+  if(store.isFeishuTransportChatSession(chat.id)) {
+    const configuredId=store.getFeishuBotConfig(chat.workspaceId)?.responsibleMemberId;
+    const human=configuredId?store.getWorkspaceMember(configuredId):null;
+    return human && !human.archivedAt && human.workspaceId===chat.workspaceId?human.id:null;
+  }
+  if(!chat.creatorId)return null;
   const member = store.getWorkspaceMember(chat.creatorId)
     ?? store.listWorkspaceMembers(chat.workspaceId).find(member => member.userId === chat.creatorId);
   return member && !member.archivedAt && member.workspaceId === chat.workspaceId ? member.id : null;
@@ -78,6 +85,7 @@ export function taskIssueResponsibleMember(c: Context, store: MultiremiStore): s
 /** A human request is identified only from trusted request credentials. */
 export function humanRequestActor(c: Context): { memberId: string } | null {
   if (currentTaskAccessToken(c)) return null;
+  if(currentAccessToken(c)?.type==='daemon')return null;
   if (cleanString(c.req.header("X-Agent-ID"))) return null;
   return { memberId: authenticatedRequestUserId(c) ?? currentRequestUserId(c) };
 }
@@ -191,7 +199,7 @@ export function withIssueCreateRequestContext(
     cleanString(c.req.query("workspace_id")) ??
     currentAccessToken(c)?.workspaceId ??
     "local";
-  const userId = currentTaskAccessToken(c) ? null : authenticatedRequestUserId(c) ?? currentRequestUserId(c);
+  const userId = currentTaskAccessToken(c) || currentAccessToken(c)?.type==='daemon' ? null : authenticatedRequestUserId(c) ?? currentRequestUserId(c);
   const out: CreateIssueWithTaskInput = {
     title: input.title,
     workspace_id: workspaceId,

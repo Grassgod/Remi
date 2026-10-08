@@ -1,5 +1,6 @@
 import { isRelatedTurnController } from './turn-controls.js';
 import { listIssueDeliveries, submitIssueDelivery, respondIssueDelivery, authorizeIssueDelivery, type IssueDeliveryActor } from './issue-deliveries.js';
+import { listIssueResponsibilityMigration, mapIssueResponsibility } from './issue-responsibility-migration.js';
 import { DaemonTurnBridge } from './inbox/daemon-turn-bridge.js';
 import { getExecutionGroup, listExecutionGroups } from "@multiremi/store/execution-groups.js";
 import type { QuestionCardCredential } from "@multiremi/store/question-card-token.js";
@@ -3741,6 +3742,8 @@ runMigrations(this.db);
   }
 
   listIssueDeliveries(issueId: string, input?: import('@multiremi/contracts').ListIssueDeliveriesInput) { return listIssueDeliveries(this.ctx,issueId,input); }
+  listIssueResponsibilityMigration(workspaceId:string,input?:{limit?:number;offset?:number}) {return listIssueResponsibilityMigration(this.ctx,workspaceId,input);}
+  mapIssueResponsibility(workspaceId:string,input:import('@multiremi/contracts').MapIssueResponsibilityInput,actor:IssueDeliveryActor) {return mapIssueResponsibility(this.ctx,workspaceId,input,actor);}
   authorizeIssueDelivery(issueId: string, deliveryId: string, agentId: string | null, revision: string, actor: IssueDeliveryActor) {
     return authorizeIssueDelivery(this.ctx,issueId,deliveryId,agentId,revision,actor);
   }

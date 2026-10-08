@@ -43,3 +43,18 @@ export interface IssueDelivery {
 export interface SubmitIssueDeliveryInput { summary: string; sessionId?: string; dedupeKey?: string }
 export interface ListIssueDeliveriesInput { limit?: number; before?: string }
 export interface RespondIssueDeliveryInput { action: 'accept' | 'return'; body?: string; revision: string }
+
+export interface IssueResponsibilityMigrationItem {
+  issueId: string; key: string; title: string; responsibleMemberId: string | null;
+  assigneeType: string | null; assigneeId: string | null;
+  createdById: string | null;
+  revision: string; unresolved: IssueResponsibility['unresolved'];
+  candidates: Array<{memberId:string;name:string;source:'legacy_member_assignee'|'historical_creator';available:boolean}>;
+}
+export interface IssueResponsibilityMigrationList {
+  workspaceId:string; total:number; rootCount:number; legacyMemberExecutionCount:number;
+  items:IssueResponsibilityMigrationItem[]; nextOffset:number|null;
+}
+export interface MapIssueResponsibilityInput {
+  reason:string; mappings:Array<{issueId:string;memberId:string;revision:string}>;
+}

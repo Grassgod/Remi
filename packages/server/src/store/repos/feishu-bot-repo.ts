@@ -49,6 +49,7 @@ import { buildFeishuTaskResult } from "@multiremi/feishu-bot/result-card.js";
 import { isFeishuOpenId, parseOutboundMention } from "@shared/feishu-mention.js";
 import { hashQuestionCardToken } from "@multiremi/store/question-card-token.js";
 import { Questions } from '../inbox/questions.js';
+import { sendMessageWithinTransaction } from '../inbox/send-message.js';
 import type { EnvelopeDelivery } from "./inbox-repo.js";
 import {
   buildCardHeader,
@@ -536,6 +537,11 @@ export class FeishuBotRepo {
     if (input.enabled) this.requireDeployableRuntime(workspaceId, runtimeId);
 
     const existing = this.rawConfigRow(workspaceId);
+    const responsibleMemberId=input.responsibleMemberId===undefined?nullableString(existing?.responsible_member_id):cleanOptionalString(input.responsibleMemberId);
+    if(responsibleMemberId) {
+      const human=this.ctx.workspaces().getWorkspaceMember(responsibleMemberId);
+      if(!human||human.archivedAt||human.workspaceId!==workspaceId)throw new FeishuBotConfigError('responsible_member_id must name an active human in this workspace',400,'invalid_config');
+    }
     const senderAccessPolicy = input.senderAccessPolicy ?? existing?.sender_access_policy ?? "agent";
     if (senderAccessPolicy !== "agent" && senderAccessPolicy !== "allowlist") {
       throw new FeishuBotConfigError("sender_access_policy must be agent or allowlist", 400, "invalid_sender_access_policy");
@@ -566,10 +572,10 @@ export class FeishuBotRepo {
       `INSERT INTO multiremi_feishu_bot_configs (
          workspace_id, agent_id, runtime_id, app_id,
          app_secret_encrypted, app_secret_hint,
-         domain, enabled, sender_access_policy, revision,
+         domain, enabled, sender_access_policy, responsible_member_id, revision,
          bot_name, bot_open_id, last_tested_at, last_test_error, last_test_error_code,
          created_at, updated_at, updated_by
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(workspace_id) DO UPDATE SET
          agent_id = excluded.agent_id,
          runtime_id = excluded.runtime_id,
@@ -579,6 +585,7 @@ export class FeishuBotRepo {
          domain = excluded.domain,
          enabled = excluded.enabled,
          sender_access_policy = excluded.sender_access_policy,
+         responsible_member_id = excluded.responsible_member_id,
          revision = excluded.revision,
          bot_name = excluded.bot_name,
          bot_open_id = excluded.bot_open_id,
@@ -596,6 +603,7 @@ export class FeishuBotRepo {
       domain,
       input.enabled ? 1 : 0,
       senderAccessPolicy,
+      responsibleMemberId,
       revision,
       identityChanged ? null : nullableString(existing?.bot_name),
       identityChanged ? null : nullableString(existing?.bot_open_id),
@@ -874,12 +882,17 @@ export class FeishuBotRepo {
         `SELECT * FROM multiremi_feishu_bot_chat_bindings
           WHERE workspace_id = ? AND app_id = ? AND agent_id = ? AND external_session_key = ?`,
       ).get(workspaceId, config.appId, routeAgent.agentId, externalSessionKey) as Row | null;
-      const autoCreateGroupIssue = sender.allowed
+      const groupIssueRequested = sender.allowed
         && !this.ctx.agents().getAgent(routeAgent.agentId)?.issueCreationRequiresProposal
         && chatType === "group"
         && Boolean(chatId)
         && topicConfig?.enabled === true
         && topicConfig.chatId === chatId;
+      const configuredHumanId=topicConfig?.responsibleMemberId??config.responsibleMemberId;
+      const configuredHuman=configuredHumanId?this.ctx.workspaces().getWorkspaceMember(configuredHumanId):null;
+      const humanAvailable=!!configuredHuman&&!configuredHuman.archivedAt&&configuredHuman.workspaceId===workspaceId;
+      const autoCreateGroupIssue=groupIssueRequested&&humanAvailable;
+      const responsibilityUnavailableReason=groupIssueRequested&&!humanAvailable?'Configure an active root human in Feishu bot or Issue topic settings before automatically creating an Issue':null;
       const createGroupIssue = () => this.ctx.issues().createIssueWithinTransaction({
         title: issueTitleFromFeishuMessage(text),
         description: text,
@@ -889,6 +902,7 @@ export class FeishuBotRepo {
         assigneeType: "agent",
         assigneeId: routeAgent.agentId,
         createdBy: sender.actorId,
+        responsibleMemberId:configuredHuman!.id,
         contextRefs: [{
           type: "feishu_bot_message",
           message_id: externalMessageId,
@@ -996,6 +1010,9 @@ export class FeishuBotRepo {
       );
 
       const chatSessionId = String(binding.chat_session_id);
+      if(responsibilityUnavailableReason)sendMessageWithinTransaction(this.ctx,{session_id:chatSessionId,sender:{type:'platform',id:null},
+        to:{type:'none'},message_kind:'status',wake_requested:'inbox_only',body_md:responsibilityUnavailableReason,
+        metadata:{issue_responsibility_unresolved:true,reason:'explicit_root_human_required',external_message_id:externalMessageId}},submitEvents);
       const activeTask = this.ctx.chat().getPendingChatTask(chatSessionId);
       let task;
       let steered = false;
@@ -1091,6 +1108,7 @@ export class FeishuBotRepo {
         steered,
         ...(input.deliveryMode === "native_cot_v1" && chatId ? { deliveryQueued: true } : {}),
         senderAllowed: sender.allowed,
+        ...(responsibilityUnavailableReason?{responsibilityUnavailableReason}:{}),
       };
     })();
     if (enqueuedTask) this.ctx.notifyTaskEnqueued(enqueuedTask);
@@ -4236,6 +4254,7 @@ function mapConfig(row: Row): MultiremiFeishuBotConfig {
     domain: normalizeDomain(row.domain),
     enabled: Boolean(Number(row.enabled ?? 0)),
     senderAccessPolicy: row.sender_access_policy === "allowlist" ? "allowlist" : "agent",
+    responsibleMemberId:nullableString(row.responsible_member_id),
     revision: Number(row.revision ?? 0),
     hasAppSecret: Boolean(nullableString(row.app_secret_encrypted)),
     appSecretHint: nullableString(row.app_secret_hint),

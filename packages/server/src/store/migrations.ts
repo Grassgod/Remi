@@ -85,7 +85,11 @@ export function runMigrations(db: SqlDatabase, options: { dialect?: SqlDatabaseD
     if(tables.has("multiremi_users"))backfillOwnerExternalId(db);
     if (tables.has("multiremi_feishu_bot_configs")) {
       addColumnIfMissing(db, "multiremi_feishu_bot_configs", "sender_access_policy TEXT NOT NULL DEFAULT 'agent'");
+      addColumnIfMissing(db, "multiremi_feishu_bot_configs", "responsible_member_id TEXT");
     }
+    // Additive responsibility upgrade must also run for an already unified snapshot.
+    if(tables.has('multiremi_issues'))addColumnIfMissing(db,'multiremi_issues','responsible_member_id TEXT');
+    if(tables.has('multiremi_autopilots'))addColumnIfMissing(db,'multiremi_autopilots','responsible_member_id TEXT');
     if(tables.has('multiremi_schema_migrations') && db.query('SELECT id FROM multiremi_schema_migrations WHERE id=?').get(UNIFIED_MODEL_MIGRATION)){runUnifiedModelMigration(db,{reportDir:process.env.MULTIREMI_MIGRATION_REPORT_DIR});separateLaneProviderProgress(db);foldAgentReadState(db);createMemberInboxReadProjection(db);foldDecisionRecords(db);createDecisionReadProjections(db);migrateAttemptInput(db);widenAttemptCounters(db);ensureTurnListIndexes(db);ensureQuestionQueryIndexes(db);db.exec(UNIFIED_LANE_SWEEP_INDEX);ensureUsageAccountingSchema(db);return;}
     // Inspect the existing snapshot before bootstrap migrations can touch it.
     const checks=unifiedModelPreflight(db);
@@ -3007,6 +3011,7 @@ function runMigrationsForDialect(db: SqlDatabase, dialect: SqlDatabaseDialect): 
   addColumnIfMissing(db, "multiremi_feishu_bot_chat_bindings", "reply_to_message_id TEXT");
   addColumnIfMissing(db, "multiremi_feishu_bot_deliveries", "sender_id TEXT");
   addColumnIfMissing(db, "multiremi_feishu_bot_configs", "sender_access_policy TEXT NOT NULL DEFAULT 'agent'");
+  addColumnIfMissing(db, "multiremi_feishu_bot_configs", "responsible_member_id TEXT");
   addColumnIfMissing(db, "multiremi_feishu_bot_senders", "name_en TEXT");
   addColumnIfMissing(db, "multiremi_feishu_bot_senders", "profile_checked_at TEXT");
   db.exec(`CREATE INDEX IF NOT EXISTS idx_multiremi_feishu_bot_delivery_sender
@@ -3113,6 +3118,7 @@ function runMigrationsForDialect(db: SqlDatabase, dialect: SqlDatabaseDialect): 
   runMigrationOnce(db, MARKDOWN_ATTACHMENT_OWNERSHIP_MIGRATION, () => backfillMarkdownAttachmentOwnership(db));
   addColumnIfMissing(db, "multiremi_autopilots", "created_by_type TEXT NOT NULL DEFAULT 'member'");
   addColumnIfMissing(db, "multiremi_autopilots", "created_by_id TEXT NOT NULL DEFAULT 'local'");
+  addColumnIfMissing(db, "multiremi_autopilots", "responsible_member_id TEXT");
   addColumnIfMissing(db, "multiremi_autopilots", "session_policy TEXT NOT NULL DEFAULT 'new'");
   addColumnIfMissing(db, "multiremi_autopilots", "workspace_policy TEXT NOT NULL DEFAULT 'reuse_issue'");
   addColumnIfMissing(db, "multiremi_autopilot_triggers", "event_filters TEXT");

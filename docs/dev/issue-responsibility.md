@@ -20,9 +20,17 @@ summary: 明确根人类、统一解析单内及父单责任，并通过具体�
 
 创建根单必须传明确 `responsible_member_id`，或由真实人类创建来源承担责任。
 HTTP 的创建人来自凭据；Agent 创建新根可继承其真实来源 Issue 的明确人类，
-或原私聊 Chat 创建人的有效 workspace member。Task 凭据不把 Runtime owner 记为人类创建人。
-自动化根单从配置的人类创建来源承担；无法取得明确来源时失败，不改用 Runtime owner。
-历史根单迁移只新增 nullable 字段，不猜测回填；缺失责任通过 resolver 和关闭拒绝暴露。
+或 Web Chat 实际创建人的有效 workspace member。Task 凭据不把 Runtime owner 记为人类创建人。
+飞书绑定 Chat 的 creator 可能只是技术归属，不能证明外部发送人的人类责任；群聊和私聊
+都只使用明确配置的 bot `responsible_member_id`，群聊 topic 可显式覆盖。配置缺失时群消息
+仍保留在 Chat，并显示可行动的责任缺口；不自动生成未知责任根单。
+自动化 `create_issue` 使用配置的 `responsibleMemberId`（compat 为 `responsible_member_id`），
+新建 HTTP 自动化可从真实成员凭据或 Task 的有效来源设置初始责任，创建归属也由凭据决定。
+历史自动化的 `createdBy` 仅作归属，运行时不隐式变成人类责任。没有配置则拒绝建根单。
+消息转 Issue 必须由真实成员确认；飞书外部发送人或 Runtime owner 不冒充审批成员。
+入门引导从已验证 bootstrap 用户创建；显式 QA seed 和测试工厂使用有名称的合成成员。
+历史根单迁移新增 nullable 字段，包含已经 unified 的快照升级，不猜测回填；缺失责任
+通过 resolver 和关闭拒绝暴露。
 更新根人类、父单、执行指派保留 `issue_responsibility_transferred` 审计。
 同事务刷新受影响父链的未解决 Q、保留转交历史并失效旧卡凭据。团队 Leader 变更、移除或归档，
 执行 Agent 的工作区移动/归档/恢复，以及根人类工作区移动/归档也执行相同刷新；普通资料编辑不移交问题。
@@ -75,3 +83,22 @@ SQLite 使用内存库；设置 `MULTIREMI_TEST_POSTGRES_URL` 后每个测试创
 这些测试覆盖根人类缺失、Issue 父链、Leader 缺失、验收鉴权、同消息引用、移交失效、
 代理授权撤销、退回继续处理、SQL 写入失败回滚、历史未知责任字段迁移与重启，以及
 责任事实变更与 Q 转交的原子性；不代表生产历史副本、真实 provider 或飞书在线验收。
+
+# 历史归属复核
+
+`GET /api/workspaces/:workspaceId/issue-responsibility-migration?limit=50&offset=0`
+分页列出缺失或失效人类责任的根单，返回 `total`、`rootCount`、`legacyMemberExecutionCount`、
+`items` 和 `nextOffset`。每项保留原执行指派、创建人 ID、resolver revision 和 unresolved。
+旧 member 指派及可解析历史创建人只作为有来源、带可用性标志的候选；读取不写入责任。
+未知记录保留空候选，历史评论、消息与父链不受影响。
+
+真实 workspace 管理员使用 `POST /api/workspaces/:workspaceId/issue-responsibility-migration/map`，
+提交 `{ reason, mappings: [{ issueId, memberId, revision }] }`，返回 `{ mappedIssueIds }`。
+每批 1–100 个唯一根单，必须明确选人并解释依据；跨工作区、归档成员、子单或过期 revision
+使整批回滚。责任字段、审计和未解决 Q 的移交在同一事务提交；Task/daemon 不可借技术 owner
+确认映射。配置执行统筹仍需明确 Agent/团队，映射人类不将历史 member 指派猜成 Agent。
+
+运行 `bun run test tests/unit/multiremi/issue-responsibility-migration.test.ts` 可验证双后端清单
+只读、候选来源、显式映射的回滚和重启、真实 HTTP 成员来源、自动化配置及技术 Chat 边界。
+通用测试创建用 `createResponsibleTestIssue`；结束用 `acceptTestIssueDelivery` 走实际交付验收，
+不覆盖生产 Store 方法，不自动给历史表添加或填充责任。真实生产快照尚需部署迁移前独立复核。

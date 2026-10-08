@@ -262,6 +262,9 @@ function rejectedIssueIds(err: ParentStatusGuardError): { rejected_issue_ids?: s
 }
 
 export function issueErrorResponse(c: Context, err: unknown): Response | null {
+  if (err instanceof Error && err.message === 'Child issue human responsibility is inherited from its root') {
+    return c.json({error:err.message,code:'issue_root_responsibility_inherited'},400);
+  }
   if (err instanceof IssueDeliveryError) return c.json({error:err.message,code:err.code},err.status);
   if (!(err instanceof Error)) return null;
   // Moving a connected issue requires an explicit detach first. Foreign
