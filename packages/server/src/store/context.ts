@@ -1,4 +1,5 @@
 import { sendMessageWithinTransaction } from './inbox/send-message.js';
+import { resolveIssueResponsibility } from './issue-responsibility.js';
 // Cross-domain shared surface for MultiremiStore and its domain repositories.
 // Holds the db handle, the realtime listener registries, the analytics/metric buffers and the
 // private helpers that more than one domain calls. Every member here was moved verbatim out of
@@ -1852,4 +1853,3 @@ export function toIssueComment(row: Row): MultiremiIssueComment {
     updated_at: updatedAt,
   };
 }
-import { resolveIssueResponsibility } from './issue-responsibility.js';

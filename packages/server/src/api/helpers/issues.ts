@@ -187,6 +187,7 @@ export function withIssueCreateRequestContext(
   if (hasRequestField(input, "priority")) out.priority = input.priority;
   if (hasRequestField(input, "project_id")) out.project_id = input.project_id ?? null;
   if (hasRequestField(input, "parent_issue_id")) out.parent_issue_id = input.parent_issue_id ?? null;
+  if (hasRequestField(input, 'responsibleMemberId', 'responsible_member_id')) out.responsible_member_id = input.responsibleMemberId ?? input.responsible_member_id ?? null;
   if (hasRequestField(input, "assignee_type")) out.assignee_type = input.assignee_type ?? null;
   if (hasRequestField(input, "assignee_id")) out.assignee_id = input.assignee_id ?? null;
   if (hasRequestField(input, "position")) out.position = input.position;
@@ -204,6 +205,7 @@ export function withIssueCreateRequestContext(
   // for a private Chat that was already detached by the upgrade.
   const task = taskToken?.taskId && store ? store.getTaskWithAgent(taskToken.taskId) : null;
   const sourceIssue = task?.issue ?? null;
+  if (sourceIssue && !out.parent_issue_id && !out.responsible_member_id) out.responsible_member_id = store!.resolveIssueResponsibility(sourceIssue.id).rootHuman?.id ?? null;
   const isIntake = sourceIssue?.issueKind === "intake";
   if (sourceIssue) {
     // Any task-run creation (intake or follow-up) stays in the source issue's

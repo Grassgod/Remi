@@ -6,6 +6,7 @@
 import type { Context } from "hono";
 import { MultiremiStore } from "@multiremi/store/store.js";
 import { IssueDependencyError } from "@multiremi/store/repos/issue-dependencies.js";
+import { IssueDeliveryError } from '../../store/issue-deliveries.js';
 import { createId } from "@multiremi/ids.js";
 import { IssueLockSetStaleError } from "@multiremi/store/repos/issues-repo.js";
 import { resolveCamelOrSnakeString } from "@multiremi/store/helpers.js";
@@ -671,10 +672,11 @@ export function safeCreateRuntimeUpdateRequest(
   }
 }
 
-export function safeQuickCreateIssue(store: MultiremiStore, input: QuickCreateIssueInput): ReturnType<MultiremiStore["quickCreateIssue"]> | { error: string } {
+export function safeQuickCreateIssue(store: MultiremiStore, input: QuickCreateIssueInput): ReturnType<MultiremiStore["quickCreateIssue"]> | { error: string; code?: string; status?: 403 | 404 | 409 } {
   try {
     return store.quickCreateIssue(input);
   } catch (error) {
+    if (error instanceof IssueDeliveryError) return {error:error.message,code:error.code,status:error.status};
     const message = error instanceof Error ? error.message : String(error);
     if (
       message === "prompt is required"

@@ -36,6 +36,7 @@ import type { Context } from "hono";
 import { issueDetailAttachmentCompatibilityResponse } from "./attachments.js";
 import { cleanString, currentTaskAccessToken, hasRequestField } from "./context.js";
 import { labelCompatibilityResponse } from "./projects.js";
+import { IssueDeliveryError } from '../../store/issue-deliveries.js';
 
 export function issueCompatibilityResponse(
   issue: MultiremiIssue,
@@ -55,6 +56,7 @@ export function issueCompatibilityResponse(
     creator_type: "member",
     creator_id: issue.createdBy ?? "local",
     parent_issue_id: issue.parentIssueId,
+    responsible_member_id: issue.responsibleMemberId ?? null,
     parent_done_grant_at: issue.parentDoneGrantAt,
     parent_done_grant_by: issue.parentDoneGrantBy,
     parent_done_grant_agent_id: issue.parentDoneGrantAgentId,
@@ -260,6 +262,7 @@ function rejectedIssueIds(err: ParentStatusGuardError): { rejected_issue_ids?: s
 }
 
 export function issueErrorResponse(c: Context, err: unknown): Response | null {
+  if (err instanceof IssueDeliveryError) return c.json({error:err.message,code:err.code},err.status);
   if (!(err instanceof Error)) return null;
   // Moving a connected issue requires an explicit detach first. Foreign
   // relationships are represented by a count, never another workspace's keys.
@@ -483,6 +486,7 @@ function stripRequestFields<T extends object>(input: T, fields: readonly string[
 
 export function issueUpdateCompatibilityInput(input: UpdateIssueInput = {}): UpdateIssueInput {
   const out: UpdateIssueInput = {};
+  if (hasRequestField(input, 'responsible_member_id')) out.responsible_member_id = input.responsible_member_id ?? null;
   if (hasRequestField(input, "runtime_workspace_id")) out.runtime_workspace_id = input.runtime_workspace_id ?? null;
   if (hasRequestField(input, "title")) out.title = input.title;
   if (hasRequestField(input, "description")) out.description = input.description ?? null;
@@ -508,6 +512,8 @@ export function issueUpdateCompatibilityInput(input: UpdateIssueInput = {}): Upd
 
 export function issueQuickCreateCompatibilityInput(input: QuickCreateIssueInput): QuickCreateIssueInput {
   const out: QuickCreateIssueInput = { prompt: input.prompt };
+  if (hasRequestField(input, 'parent_issue_id')) out.parent_issue_id = input.parent_issue_id ?? null;
+  if (hasRequestField(input, 'responsible_member_id')) out.responsible_member_id = input.responsible_member_id ?? null;
   if (hasRequestField(input, "runtime_workspace_id")) out.runtime_workspace_id = input.runtime_workspace_id ?? null;
   if (hasRequestField(input, "agent_id")) out.agent_id = input.agent_id ?? null;
   if (hasRequestField(input, "squad_id")) out.squad_id = input.squad_id ?? null;

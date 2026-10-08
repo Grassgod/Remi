@@ -1,4 +1,5 @@
 import { InboxOperations } from '../inbox/operations.js';
+import { assertIssueDeliveryAccepted, IssueDeliveryError } from '../issue-deliveries.js';
 import { sendMessageWithinTransaction } from "../inbox/send-message.js";
 import { patchDecisionRecord } from "../inbox/decision-records.js";
 import { deriveIssueStatusWithinTransaction } from "../inbox/issue-status.js";
@@ -522,6 +523,15 @@ const COMMENT_REACTIONS: ReactionSpec<MultiremiCommentReaction> = {
 export class IssuesRepo {
   constructor(private ctx: StoreContext) {}
 
+  private validateResponsibleMember(id: string | null, workspaceId: string, required: boolean): void {
+    if (!id) {
+      if (required) throw new IssueDeliveryError('issue_responsibility_required','Top-level Issue requires an explicit responsible_member_id or authenticated human creator');
+      return;
+    }
+    const member = this.ctx.workspaces().getWorkspaceMember(id);
+    if (!member || member.workspaceId !== workspaceId || member.archivedAt) throw new IssueDeliveryError('issue_responsibility_invalid','Responsible human must be an active member of this workspace');
+  }
+
   /**
    * MUL-400 E3 gate 3. The whole creation — the issue row, its number, its
    * dependencies and the cycle/ancestor checks — is one transaction, so a
@@ -1037,13 +1047,20 @@ export class IssuesRepo {
     const contextRefs = normalizeJsonArray(input.contextRefs ?? input.context_refs ?? []);
     const createdBy = input.createdBy ?? input.created_by ?? null;
     const status = normalizeIssueStatus(input.status);
+    if (status === 'done') throw new IssueDeliveryError('issue_delivery_acceptance_required','Create an issue before submitting and accepting its delivery');
+    const responsibleRef = resolveOptionalStringField(input, 'responsibleMemberId', 'responsible_member_id', null);
+    if (parentIssueId && responsibleRef) throw new Error('Child issue human responsibility is inherited from its root');
+    const creatorMember = createdBy ? this.ctx.workspaces().getWorkspaceMember(createdBy)
+      ?? this.ctx.workspaces().findWorkspaceMemberForUser(createdBy, workspaceId) : null;
+    const responsibleMemberId = parentIssueId ? null : responsibleRef ?? creatorMember?.id ?? null;
+    this.validateResponsibleMember(responsibleMemberId, workspaceId, !parentIssueId);
     const completedAt = isTerminalIssueStatus(status) ? now : null;
     this.ctx.db.run(
       `INSERT INTO multiremi_issues (
         runtime_workspace_id, id, issue_number, issue_key, title, description, status, priority, workspace_id, project_id,
-        parent_issue_id, issue_kind, source_issue_id, assignee_type, assignee_id, position, start_date, due_date,
+        parent_issue_id, responsible_member_id, issue_kind, source_issue_id, assignee_type, assignee_id, position, start_date, due_date,
         acceptance_criteria, context_refs, created_by, completed_at, archived_at, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         runtimeWorkspaceId,
         id,
@@ -1056,6 +1073,7 @@ export class IssuesRepo {
         workspaceId,
         projectId,
         parentIssueId,
+        responsibleMemberId,
         issueKind,
         sourceIssueId,
         assigneeType,
@@ -2648,6 +2666,16 @@ export class IssuesRepo {
     let nextProjectId = resolveOptionalStringField(input, "projectId", "project_id", current.projectId);
     const nextParentIssueId = parentId ?? resolveOptionalStringField(input, "parentIssueId", "parent_issue_id", current.parentIssueId);
     const nextStatus = requestedStatus ?? current.status;
+    const hasResponsibleField = hasAnyField(input, 'responsibleMemberId', 'responsible_member_id');
+    const nextResponsibleMemberId = nextParentIssueId ? null : resolveOptionalStringField(input,
+      'responsibleMemberId', 'responsible_member_id', current.responsibleMemberId ?? null);
+    if (nextParentIssueId && hasResponsibleField && resolveOptionalStringField(input, 'responsibleMemberId', 'responsible_member_id', null)) {
+      throw new Error('Child issue human responsibility is inherited from its root');
+    }
+    if (hasResponsibleField || moving || (current.parentIssueId && !nextParentIssueId)) {
+      this.validateResponsibleMember(nextResponsibleMemberId, nextWorkspaceId, !nextParentIssueId);
+      if (hasResponsibleField && input.actorType !== 'member') throw new Error('Only a member can transfer human responsibility');
+    }
     // A new membership (even a closed child) changes A4; reopening changes the
     // unfinished-child count as well. Both need the parent row locked above.
     if (nextParentIssueId && (nextParentIssueId !== current.parentIssueId
@@ -2733,6 +2761,11 @@ export class IssuesRepo {
     // Field-only edits are never status decisions, so the guard stays out of
     // their way even for a task identity.
     const statusChanged = nextStatus !== current.status;
+    if (statusChanged && nextStatus === 'done' && !options.holdParentStatus) {
+      if (!options.acceptedDeliveryId) throw new IssueDeliveryError('issue_delivery_acceptance_required','Close the Issue by accepting its specific delivery');
+      if (hasAssigneeField || hasResponsibleField || hasParentField || moving) throw new Error('Transfer responsibility before accepting a delivery');
+      assertIssueDeliveryAccepted(this.ctx, id, options.acceptedDeliveryId);
+    }
     // MUL-400 E1 `holdParentStatus`: a system writer (the SCM merge effect) must
     // not decide a guarded parent transition, and must not fail either — it
     // records why the request was held and leaves the status to the human. The
@@ -2784,6 +2817,7 @@ export class IssuesRepo {
       project_id = ?,
       runtime_workspace_id = ?,
       parent_issue_id = ?,
+      responsible_member_id = ?,
       assignee_type = ?,
       assignee_id = ?,
       position = ?,
@@ -2806,6 +2840,7 @@ export class IssuesRepo {
       nextProjectId,
       nextRuntimeWorkspaceId,
       nextParentIssueId,
+      nextResponsibleMemberId,
       nextAssigneeType,
       nextAssigneeId,
       input.position === undefined || input.position === null ? current.position : normalizeIssuePosition(input.position),
@@ -2819,6 +2854,12 @@ export class IssuesRepo {
       id,
       ],
     );
+    if (hasResponsibleField || nextParentIssueId !== current.parentIssueId || nextAssigneeId !== current.assigneeId || nextAssigneeType !== current.assigneeType) {
+      this.ctx.appendIssueActivity(id, {actorType:input.actorType ?? 'system',actorId:input.actorId ?? null,
+        type:'issue_responsibility_transferred',body:null,data:{previous:{parentIssueId:current.parentIssueId,
+          assigneeType:current.assigneeType,assigneeId:current.assigneeId,responsibleMemberId:current.responsibleMemberId ?? null},
+          current:{parentIssueId:nextParentIssueId,assigneeType:nextAssigneeType,assigneeId:nextAssigneeId,responsibleMemberId:nextResponsibleMemberId}}},deferredEvents);
+    }
     if (moving) {
       // B4: existing Sessions and their history retain their workspace.
       // Role redirects validate the final workspace in sendMessageWithinTransaction.
@@ -4096,14 +4137,8 @@ export class IssuesRepo {
   }
 
   private parentNotificationAgent(parent: MultiremiIssue): MultiremiAgent | null {
-    let id: string | null = parent.assigneeType === "agent" ? parent.assigneeId : null;
-    if (parent.assigneeType === "squad" && parent.assigneeId) {
-      const squad = this.ctx.squads().getSquad(parent.assigneeId);
-      if (!squad || squad.archivedAt || squad.workspaceId !== parent.workspaceId) return null;
-      id = squad.leaderId;
-    }
-    const agent = id ? this.ctx.agents().getAgent(id) : null;
-    return agent && !agent.archivedAt && agent.workspaceId === parent.workspaceId ? agent : null;
+    const id = this.ctx.resolveIssueResponsibility(parent.id).executionOwner?.id;
+    return id ? this.ctx.agents().getAgent(id) : null;
   }
 
   /** MUL-400 E2: a human-owned parent hears about every child terminal state. */
@@ -4751,6 +4786,8 @@ export class IssuesRepo {
     const issue = this.createIssue({
       runtimeWorkspaceId: input.runtimeWorkspaceId ?? input.runtime_workspace_id ?? null,
       title: quickCreateTitle(prompt),
+      parentIssueId: input.parentIssueId ?? input.parent_issue_id ?? null,
+      responsibleMemberId: input.responsibleMemberId ?? input.responsible_member_id ?? null,
       description: prompt,
       workspaceId,
       projectId,

@@ -1561,7 +1561,9 @@ export class AutopilotsRepo {
           description: autopilot.description,
           workspaceId: autopilot.workspaceId,
           projectId: autopilot.projectId,
-          createdBy: autopilot.id,
+          // The configured human creator is an explicit responsibility source;
+          // an agent-owned automation must configure/provide a human before it creates a root.
+          createdBy: autopilot.createdByType === 'member' ? autopilot.createdById : null,
         }, autopilotChanges, autopilotEvents);
       } else if (autopilot.executionMode === "trigger_issue") {
         if (!triggerIssueId) throw new Error("trigger_issue runs require trigger_issue_id");

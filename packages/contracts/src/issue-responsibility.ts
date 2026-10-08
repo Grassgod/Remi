@@ -34,6 +34,8 @@ export interface IssueDelivery {
   reviewOwner: IssueResponsibleActor;
   responsibilityRevision: string;
   responseMessageId: string | null;
+  responseBody: string | null;
+  authorization?: { agentId: string; grantedBy: string; responsibilityRevision: string; grantedAt: string } | null;
   createdAt: string;
   respondedAt: string | null;
 }

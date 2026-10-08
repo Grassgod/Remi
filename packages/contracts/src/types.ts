@@ -2506,6 +2506,8 @@ export interface UpdateIssueInput {
  * merge effect is the only caller and passes this positionally on the server.
  */
 export interface UpdateIssueOptions {
+  /** Server-owned, set only by the atomic designated-reviewer delivery acceptance. */
+  acceptedDeliveryId?: string;
   /**
    * Skip guard A (A1 and A4 included). Only the merge effect uses it: closing an
    * Issue after a merge that already required a human authorization carries the
@@ -2623,6 +2625,10 @@ export interface AssignIssueResult {
 }
 
 export interface QuickCreateIssueInput {
+  parentIssueId?: string | null;
+  parent_issue_id?: string | null;
+  responsibleMemberId?: string | null;
+  responsible_member_id?: string | null;
   runtimeWorkspaceId?: string | null;
   runtime_workspace_id?: string | null;
   agentId?: string | null;

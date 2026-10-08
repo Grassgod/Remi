@@ -123,6 +123,7 @@ import {
 import { resolveIssueArchiveSettings } from "@multiremi/store/issue-archive.js";
 import type { RouterDeps } from "./deps.js";
 import { IssueDecisionError } from "@multiremi/store/repos/issues-repo.js";
+import { IssueDeliveryError } from '../../store/issue-deliveries.js';
 
 function decisionActor(c: Context, store: MultiremiStore, workspaceId: string): IssueDecisionActor | null {
   const token = currentTaskAccessToken(c);
@@ -244,6 +245,69 @@ function existingIssueDispatchResponse(store: MultiremiStore, issue: MultiremiIs
 
 export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
   const { store, sessionArchives } = deps;
+
+  app.get('/api/issues/:id/responsibility', (c) => {
+    const issue = issueFromParam(store,c,'id','compat');
+    if (!issue) return c.json({error:'issue not found'},404);
+    const denied = denyCurrentUserWorkspaceAccess(c,store,issue.workspaceId);
+    if (denied) return denied;
+    return c.json(store.resolveIssueResponsibility(issue.id));
+  });
+  app.get('/api/issues/:id/deliveries', (c) => {
+    const issue = issueFromParam(store,c,'id','compat');
+    if (!issue) return c.json({error:'issue not found'},404);
+    const denied = denyCurrentUserWorkspaceAccess(c,store,issue.workspaceId);
+    if (denied) return denied;
+    return c.json({deliveries:store.listIssueDeliveries(issue.id)});
+  });
+  app.post('/api/issues/:id/deliveries', async (c) => {
+    const issue = issueFromParam(store,c,'id','compat');
+    if (!issue) return c.json({error:'issue not found'},404);
+    const denied = denyCurrentUserWorkspaceAccess(c,store,issue.workspaceId);
+    if (denied) return denied;
+    const actor = decisionActor(c,store,issue.workspaceId);
+    if (!actor) return c.json({error:'authenticated responsibility holder required'},403);
+    try {
+      const input = await readJsonStrict<import('@multiremi/contracts').SubmitIssueDeliveryInput>(c);
+      if (isJsonApiError(input)) return c.json({error:input.apiError},input.statusCode);
+      return c.json({delivery:store.submitIssueDelivery(issue.id,input,actor)},201);
+    } catch (error) {
+      if (error instanceof IssueDeliveryError) return c.json({error:error.message,code:error.code},error.status);
+      const response = issueErrorResponse(c,error);
+      if (response) return response;
+      throw error;
+    }
+  });
+  app.post('/api/issues/:id/deliveries/:deliveryId/respond', async (c) => {
+    const issue = issueFromParam(store,c,'id','compat');
+    if (!issue) return c.json({error:'issue not found'},404);
+    const denied = denyCurrentUserWorkspaceAccess(c,store,issue.workspaceId);
+    if (denied) return denied;
+    const actor = decisionActor(c,store,issue.workspaceId);
+    if (!actor) return c.json({error:'authenticated responsibility holder required'},403);
+    try {
+      const input = await readJsonStrict<import('@multiremi/contracts').RespondIssueDeliveryInput>(c);
+      if (isJsonApiError(input)) return c.json({error:input.apiError},input.statusCode);
+      return c.json({delivery:store.respondIssueDelivery(issue.id,c.req.param('deliveryId'),input,actor),issue:store.getIssue(issue.id)});
+    } catch (error) {
+      if (error instanceof IssueDeliveryError) return c.json({error:error.message,code:error.code},error.status);
+      const response = issueErrorResponse(c,error);
+      if (response) return response;
+      throw error;
+    }
+  });
+  app.post('/api/issues/:id/deliveries/:deliveryId/authorize', async (c) => {
+    const issue = issueFromParam(store,c,'id','compat');
+    if (!issue) return c.json({error:'issue not found'},404);
+    const denied = denyCurrentUserWorkspaceAccess(c,store,issue.workspaceId);
+    if (denied) return denied;
+    const actor = decisionActor(c,store,issue.workspaceId);
+    if (!actor) return c.json({error:'authenticated responsible human required'},403);
+    const input = await readJsonStrict<{agentId:string|null;revision:string}>(c);
+    if (isJsonApiError(input)) return c.json({error:input.apiError},input.statusCode);
+    try { return c.json({delivery:store.authorizeIssueDelivery(issue.id,c.req.param('deliveryId'),input.agentId,input.revision,actor)}); }
+    catch (error) { if (error instanceof IssueDeliveryError) return c.json({error:error.message,code:error.code},error.status); throw error; }
+  });
 
   const lockAutoTitleAfterHumanEdit = (c: Context, issue: MultiremiIssue, input: UpdateIssueInput): void => {
     if (!Object.prototype.hasOwnProperty.call(input, "title")) return;
@@ -792,15 +856,20 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     const sourceStripped = isAnonymousCompatibilityRequest(c)
       ? body
       : stripServerOwnedIssueSourceFields(body);
-    // MUL-448 B4: the body's `created_by` is dropped, but this route does not
-    // stamp the caller either - main records no creator here, and creator
-    // ownership feeds share management and automatic subscription.
+    // Creator and implicit human responsibility come from the credential.
+    // Agent-created roots inherit only their actual source Issue's explicit human.
     let issue: MultiremiIssue;
     try {
       issue = store.createIssue({
         ...stripServerOwnedIssueCreateFields(sourceStripped),
         blockedBy: body.blockedBy ?? body.blocked_by,
         workspaceId,
+        createdBy: currentTaskAccessToken(c) ? null : authenticatedRequestUserId(c) ?? currentRequestUserId(c),
+        responsibleMemberId: body.responsibleMemberId ?? body.responsible_member_id
+          ?? (!(body.parentIssueId ?? body.parent_issue_id) && currentTaskAccessToken(c)?.taskId ? (() => {
+            const source = store.getTask(currentTaskAccessToken(c)!.taskId!);
+            return source?.issueId ? store.resolveIssueResponsibility(source.issueId).rootHuman?.id : null;
+          })() : undefined),
         assigneeType: null,
         assignee_type: null,
         assigneeId: null,
@@ -943,13 +1012,13 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
     if (denied) return denied;
     assertRuntimeWorkspaceAccess(c, store, body.runtimeWorkspaceId ?? body.runtime_workspace_id, workspaceId);
-    // MUL-448 B4: the body's requester is dropped and no credentialed requester
-    // is stamped on, so this route records no creator exactly as main does.
+    // Human responsibility uses the verified requester, never a body-supplied requester.
     const result = safeQuickCreateIssue(store, {
       ...stripServerOwnedQuickCreateFields(body),
       workspaceId,
+      requesterId: currentTaskAccessToken(c) ? null : authenticatedRequestUserId(c) ?? currentRequestUserId(c),
     });
-    if ("error" in result) return c.json({ error: result.error }, 400);
+    if ("error" in result) return c.json({ error: result.error, ...('code' in result ? {code:result.code} : {}) }, 'status' in result ? result.status ?? 400 : 400);
     return c.json({
       taskId: result.task.id,
       task_id: result.task.id,
@@ -968,12 +1037,13 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     const input = {
       ...stripServerOwnedQuickCreateFields(issueQuickCreateCompatibilityInput(body)),
       workspaceId,
+      requesterId: currentTaskAccessToken(c) ? null : authenticatedRequestUserId(c) ?? currentRequestUserId(c),
     };
     const denied = denyCurrentUserWorkspaceAccess(c, store, input.workspaceId ?? input.workspace_id ?? "local");
     if (denied) return denied;
     assertRuntimeWorkspaceAccess(c, store, input.runtimeWorkspaceId ?? input.runtime_workspace_id, input.workspaceId ?? input.workspace_id ?? "local");
     const result = safeQuickCreateIssue(store, input);
-    if ("error" in result) return c.json({ error: result.error }, 400);
+    if ("error" in result) return c.json({ error: result.error, ...('code' in result ? {code:result.code} : {}) }, result.status ?? 400);
     return c.json({
       task_id: result.task.id,
       issue: issueCompatibilityResponse(result.issue),

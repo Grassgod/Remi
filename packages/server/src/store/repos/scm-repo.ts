@@ -1754,7 +1754,7 @@ export class ScmRepo {
           const holdReason = openChildren > 0 ? "children_open"
             : hasChildren && !grant?.effective ? "grant_missing"
             : hasChildren && !summary?.satisfied ? "final_summary_missing"
-            : null;
+            : 'issue_delivery_acceptance_required';
           const result = current && current.status !== "done"
             ? issues.updateIssueWithinTransaction(issueId, {
               status: "done",

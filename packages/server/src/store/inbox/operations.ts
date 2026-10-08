@@ -49,6 +49,8 @@ export class InboxOperations {
     });
   }
   private assertUnread(message:UnifiedMessage):void {
+      if(message.metadata.issue_delivery || message.metadata.issue_delivery_response)
+        throw new IssueDecisionError(409,'Formal deliveries and acceptance records are immutable; submit a new delivery');
       if(this.ctx.db.query(`SELECT 1 FROM multiremi_turns WHERE session_id=? AND input_to_seq>=? LIMIT 1`).get(message.session_id,message.seq)
         ||this.ctx.db.query(`SELECT 1 FROM multiremi_session_lanes WHERE session_id=? AND reader_type='agent'
           AND (cursor_seq>=? OR cursor_seq=? AND cursor_offset>0) LIMIT 1`).get(message.session_id,message.seq,message.seq-1))throw new Error('A consumed message cannot be edited or deleted');

@@ -33,7 +33,7 @@ export function deriveIssueStatusWithinTransaction(ctx:StoreContext,issueId:stri
       : turns.find(t=>t.agent_id===owner?.id);
     if(issue.issueKind==='intake')last=latest??last;
     status=latest?.status==='completed'?'in_review':latest?.status==='failed'?'blocked':latest?.status==='cancelled'?'todo':null;
-    if(issue.issueKind==='intake'&&latest?.status==='completed'&&ctx.issues().listGeneratedIssues(issueId).length)status='done';
+    // Turn/intake completion is delivery evidence, never the designated reviewer's acceptance.
   }
   if(!status)return {changed:false,previousStatus:issue.status};
   status=ctx.issues().holdParentStatusForOpenChildren(issueId,status,{exempt:active.some(t=>t.status==='awaiting_human')||!!decision,deferredEvents:events});

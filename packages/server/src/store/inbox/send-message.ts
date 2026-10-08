@@ -78,8 +78,8 @@ export function sendMessageWithinTransaction(ctx:StoreContext,input:SendMessageI
   let roleScope:string|undefined;
   const owner=(ownerIssue:typeof issue)=>{
     if(!ownerIssue)return;
-    if(ownerIssue.assigneeType==='member'){recipientType='member';recipientId=ownerIssue.assigneeId;}
-    else if(ownerIssue.assigneeType&&ownerIssue.assigneeId){recipientType='agent';recipientId=ctx.resolveRunnableAgentForAssignee(ownerIssue.assigneeType,ownerIssue.assigneeId)?.id??null;}
+    const resolved=ctx.resolveIssueResponsibility(ownerIssue.id).executionOwner;
+    if(resolved){recipientType=resolved.type;recipientId=resolved.id;}
   };
   if(input.to.type==='agent'||input.to.type==='member'){recipientType=input.to.type;recipientId=input.to.ref;}
   else if(input.to.type==='role'){
@@ -88,6 +88,11 @@ export function sendMessageWithinTransaction(ctx:StoreContext,input:SendMessageI
       targetIssue=issue?.parentIssueId?ctx.issues().getIssue(issue.parentIssueId):null;
       if(!targetIssue||targetIssue.workspaceId!==workspaceId)throw new Error('Parent issue not found');
       owner(targetIssue);
+      if (!recipientId) {
+        const responsibility=ctx.resolveIssueResponsibility(targetIssue.id);
+        if (responsibility.rootHuman) {recipientType='member';recipientId=responsibility.rootHuman.id;}
+        input={...input,metadata:{...input.metadata,responsibility_unresolved:responsibility.unresolved}};
+      }
       sessionId=ctx.issueSessions().getOrCreateDefaultIssueSessionWithinTransaction(targetIssue.id).id;
     } else if(input.to.ref==='delegator'){
       const dispatch=source?.trigger_message_id?getMessage(ctx,source.trigger_message_id):null;
@@ -99,9 +104,7 @@ export function sendMessageWithinTransaction(ctx:StoreContext,input:SendMessageI
         const returnSession=ctx.issueSessions().getIssueSession(sessionId);targetIssue=returnSession?ctx.issues().getIssue(returnSession.issueId):null;}
 
     } else if(input.to.ref==='leader'){
-      const squad=ctx.db.query(`SELECT s.leader_id FROM multiremi_squads s JOIN multiremi_squad_members m ON m.squad_id=s.id
-        WHERE m.member_id=? AND m.member_type='agent' AND s.workspace_id=? AND s.archived_at IS NULL ORDER BY s.id LIMIT 1`).get(input.sender.id,workspaceId);
-      recipientType='agent';recipientId=squad?.leader_id??null;
+      owner(issue);
     } else if(input.to.ref==='relay'){recipientType='agent';recipientId=originalChat?.agentId??null;}
   }
   if(sessionId!==input.session_id||input.to.type==='role'&&input.to.ref==='parent_owner'){
