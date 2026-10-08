@@ -41,7 +41,7 @@ vi.mock("@multiremi/core/workspace/queries", () => ({
     queryKey: ["workspaces", "ws-1", "members"],
     queryFn: () =>
       Promise.resolve([
-        { user_id: "user-1", name: "Test User", email: "t@t.com", role: "admin" },
+        { id: "mem-1", user_id: "user-1", name: "Test User", email: "t@t.com", role: "admin" },
       ]),
   }),
   agentListOptions: () => ({

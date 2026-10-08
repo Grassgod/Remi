@@ -6,6 +6,7 @@ import { useWorkspaceId } from "../hooks";
 import { useAfterFirstScreen } from "../platform/use-after-first-screen";
 import { memberListOptions, agentListOptions, squadListOptions } from "./queries";
 import { resolvePublicFileUrl } from "./avatar-url";
+import { findMemberById } from "./member-lookup";
 
 // Stable fallbacks while a list is disabled or loading. A fresh `[]` per render
 // changes every callback below, and consumers that memoize on them (the board's
@@ -32,8 +33,8 @@ export function useActorName(
     squadListOptions(wsId, { enabled: squadsEnabled }),
   );
 
-  const getMemberName = useCallback((userId: string) => {
-    const m = members.find((m) => m.user_id === userId);
+  const getMemberName = useCallback((memberId: string) => {
+    const m = findMemberById(members, memberId);
     return m?.name ?? "Unknown";
   }, [members]);
 
@@ -66,7 +67,7 @@ export function useActorName(
   }, [getActorName]);
 
   const getActorAvatarUrl = useCallback((type: string, id: string): string | null => {
-    if (type === "member") return resolvePublicFileUrl(members.find((m) => m.user_id === id)?.avatar_url);
+    if (type === "member") return resolvePublicFileUrl(findMemberById(members, id)?.avatar_url);
     if (type === "agent") return resolvePublicFileUrl(agents.find((a) => a.id === id)?.avatar_url);
     if (type === "squad") return resolvePublicFileUrl(squads.find((s) => s.id === id)?.avatar_url);
     return null;
