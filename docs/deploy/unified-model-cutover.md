@@ -70,7 +70,7 @@
 
    schema 锁释放后，实际 `serve` 继续执行 `prepareUsageAccountingStartup`，同步 server 入口再执行 `ensureUsageAccountingStartup`，用量 gate 成功才继续启动 HTTP/后台任务。F24 用 v0.2.87/#384 两个标记已就绪的副本，首启与重启分别按 api、api-runtime 角色运行同一数据库顺序，报告全部用量表的稳定内容摘要、原 attempt ID/归属、actual/context/unknown/金额/coverage 和前后 mismatch；有任何内容变化先解释并修复，不能只看 marker 或行数通过。
 
-   F24 的 `copy-startup.json` / `copy-timing.json` 分角色计量 role 锁、数据库连接、schema migration、prepare/ensure gate（含锁等待），不启动 HTTP、daemon、飞书或 outbox。`http_ready_measured=false`，未测模块/进程冷启动、Store facade、read pool/Live Hub/peer、后台任务与生产竞争/并发启动，不能用数据库耗时替代真实 ready 总耗时。窗口预算采用最慢副本两角色首启数据库步骤总耗时，并另外预留未测启动/readback 与人工核对时间。
+   F24 的 `copy-startup.json` / `copy-timing.json` 记录 api、api-runtime 各自独立离线进程的首启/重启，含角色、轮次、PID、完整候选 SHA/镜像 digest、毫秒单位及 success/not_ready。父进程从 spawn 前计时，子进程完成 schema migration、prepare/ensure gate 及统一模型/全部用量/checkpoint/实际读进度/Issue/未读通知的必要读回校验后发送 offline ready；`startup_total_ms` 覆盖这段实际路径，ready 后清理/退出另计。role 锁、数据库连接、schema migration、prepare/ensure gate（含锁等待）的步骤和 `database_total_ms` 保留单列；失败不报 ready，保留阶段与已测步骤。仍不启动 HTTP、daemon、飞书或 outbox，`http_ready_measured=false`。未测容器调度/冷启动、Store facade、read pool/Live Hub/peer、后台任务与生产竞争/并发启动，离线 ready 不代表完整生产服务 ready。窗口预算采用最慢副本两角色首启实测 startup_total_ms 之和，并另外预留未测服务初始化与人工核对时间。
 6. 只读运行对账，记录 counts、mismatches、各会话 head 和游标。迁移前报告用于核对 attempt 身份及链分组；日常对账不再要求人的 cursor 等于当前 head。
 
    ```bash

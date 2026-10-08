@@ -18,7 +18,7 @@ Remi-CC 将以下具体内容提交给贺华杰，批准后把评论 ID 保存�
 
 ## 计划预览与执行命令
 
-脚本 [rehearse-unified-model-copy.sh](../../scripts/rehearse-unified-model-copy.sh) 默认只输出计划，不执行 Docker 或数据库操作。需要 Bash、Docker 本地 Unix socket、Python 3、tar、sha256sum、sed、cmp。PG 镜像提供 pg_dump/pg_restore/psql；API 镜像包含固定 Bun 和仓库源码。候选镜像须包含本页两个演练脚本；旧镜像须包含 `packages/server/src/store/migrations.ts` 和同步 PG adapter。
+脚本 [rehearse-unified-model-copy.sh](../../scripts/rehearse-unified-model-copy.sh) 默认只输出计划，不执行 Docker 或数据库操作。需要 Bash、Docker 本地 Unix socket、Python 3、tar、sha256sum、sed、cmp。PG 镜像提供 pg_dump/pg_restore/psql；API 镜像包含固定 Bun 和仓库源码。候选镜像须包含本页演练脚本及 [unified-model-copy-startup.ts](../../scripts/unified-model-copy-startup.ts)、[unified-model-copy-readback.ts](../../scripts/unified-model-copy-readback.ts)、用量摘要模块；旧镜像须包含 `packages/server/src/store/migrations.ts` 和同步 PG adapter。
 
 以下命令中的路径、digest、SHA、PG 主版本均由 Remi-CC 在审批材料里填定；不是当前生产值。不要将连接串或密码放入参数。
 
@@ -47,7 +47,7 @@ bash scripts/rehearse-unified-model-copy.sh \
 1. 校验输入备份的 SHA256SUMS、archive 路径、候选/旧镜像 revision。工作目录必须不存在，禁止复用已有数据库或数据卷。恢复到新建的 `mul493_rehearsal` PG，核对主版本。源备份只读，永不改写。
 2. 旧镜像仅运行 `runMigrations`，不启动服务，确认副本能由匹配的旧代码幂等打开。比较启动前后完整 schema + data 的 dump 哈希，任何变化均停止，不能让旧启动改写待检快照以绕过预检。保存哈希作为回滚基线。
 3. 对该工作副本执行 pg_dump custom-format 备份和 api-home tar 备份，保存恢复清单、`ROLLBACK-SHA256SUMS`，不备份生产库。它们是本次候选迁移之前的回滚点。
-4. 候选镜像运行 [rehearse-unified-model-copy.ts](../../scripts/rehearse-unified-model-copy.ts)。脚本仅接受指定隔离 PG 的主机/端口/库名/角色，并连接后再次核对身份；不读取 `MULTIREMI_DATABASE_URL`。保存只读预检与业务/用量基线后，按 `serve` 的数据库顺序执行角色锁 → 新数据库连接 → `runMigrations`（含 schema 锁等待）→ `prepareUsageAccountingStartup` → `ensureUsageAccountingStartup`（含用量锁等待）。首启依次跑 api、api-runtime，重启再各跑一次；每次关闭连接并释放角色锁，不启动 HTTP 或后台任务，不连接 peer/daemon，不发送飞书，不投递 outbox。角色锁只尝试一次，失败直接退出，不加演练重试。随后以 repeatable-read 只读事务对账。预检失败保留具体数量及私有诊断。
+4. 候选镜像运行 [rehearse-unified-model-copy.ts](../../scripts/rehearse-unified-model-copy.ts)，shell 把核对过 OCI revision 的完整候选 SHA 和镜像 digest 传入 `--source-sha` / `--image-digest`。脚本仅接受指定隔离 PG 的主机/端口/库名/角色，并连接后再次核对身份；不读取 `MULTIREMI_DATABASE_URL`。保存只读预检与业务/用量基线后，父进程分别启动四个独立 Bun 离线进程：首启 api、api-runtime，再重启 api、api-runtime。每个子进程重新加载模块，按 `serve` 的数据库顺序执行角色锁 → 新数据库连接/身份核对 → `runMigrations`（含 schema 锁等待）→ `prepareUsageAccountingStartup` → `ensureUsageAccountingStartup`（含用量锁等待），然后在只读事务中核对统一模型、终态 steer 正文摘要、全部用量、checkpoint、实际读进度、Issue 状态和历史未读通知。全部检查成功才经本地 IPC 发 offline ready；父进程从 spawn 前计时到收到 ready，且要求正常退出。每次关闭连接并释放角色锁，不启动 HTTP 或后台任务，不连接 peer/daemon，不发送飞书，不投递 outbox。子进程只接收列明的运行环境、报告路径和本次副本地址，不继承生产配置/凭据，不读取环境文件。角色锁只尝试一次，失败直接退出，不加演练重试。失败保留具体阶段及私有诊断并停止后续角色；最后仍执行父进程完整对账。
 5. 无论候选检查成功还是失败，都在**本次副本 PG** 中删除并新建演练库，校验并恢复回滚备份，将迁移后的 api-home 移到 `migrated-api-home` 留证，恢复旧 api-home。比对完整 schema/data 哈希，再用旧镜像重启并再次比对。候选失败即使回滚成功也返回失败。
 6. 退出时清理仅由此次执行创建、且已记录 ID 的 PG 容器、数据卷和网络。私有备份、日志、迁移后 api-home 及报告保留在本次新目录；不运行全局 prune、不操作生产 Compose。若被 SIGKILL 或宿主重启中断，Remi-CC 按 `remi.rehearsal=MUL-493` 标签及本次名称人工核对后只清理本次对象。
 
@@ -63,8 +63,9 @@ bash scripts/rehearse-unified-model-copy.sh \
 | `migrations/preflight.json`、`copy-baseline.json` | 四项预检、全表行数、原 Issue 状态、agent checkpoint、实际读进度 |
 | `migrations/20261004_unified_message_turn_lane-before.json`、`-after.json` | 核心统一模型迁移报告，含 `orphan_steer.count/ids/by_task_status/entries/body_location`，正文不写入报告 |
 | `migrations/copy-usage-before.json`、`copy-usage-reconciliation.json` | 两个 #384 标记、全部 usage 表的列/行数/完整内容 SHA256、attempt 归属孤儿计数、actual/context/unknown/金额/覆盖状态证据；迁移后及四次角色启动的前后对账 |
-| `migrations/copy-startup.json` | 各角色首启/重启的 `steps_ms`、`database_total_ms`、成功/失败阶段与未测范围；失败也保留已测步骤 |
-| `migrations/copy-reconciliation.json`、`copy-timing.json` | 最终启动状态对账、Issue 样本、部分消费计数、迁移/重启及两角色数据库步骤耗时、用量 mismatch |
+| `migrations/copy-startup.json` | 四个离线进程的 role/phase/sample、子/父 PID、完整 SHA/digest、unit=ms、启动/ready 时间、`startup_total_ms`、`attempt_total_ms`、`steps_ms`、单列 `database_total_ms`、success/not_ready 和失败阶段；失败也保留已测步骤 |
+| `migrations/copy-reconciliation.json`、`copy-timing.json` | 最终启动状态对账、Issue 样本、部分消费计数、迁移/重启和两角色独立启动耗时、用量 mismatch；子进程未 ready 时 copy-timing 仍保留失败记录 |
+| `migrations/startup-<phase>-<role>.private.log` | 各独立离线进程 stdout/stderr，只能脱敏摘要后交付 |
 | `*.private.log` | 失败诊断，只能脱敏摘要后交付 |
 
 ## 核对项与人工抽样
@@ -94,9 +95,9 @@ Issue 状态迁移时保留旧值，状态推导仍由业务事件触发。`issu
 
 ## 时间预算、失败与回滚
 
-每轮从相同不可变输入备份恢复到全新目录，建议至少两轮，记录机器、PG/Bun 版本、数据大小、缓存条件；不在已迁移库上重复计时冒充首启。`copy-timing.json` 的 migrationMs/restartMs 保留为 api 首启/重启的 `runMigrations` 耗时（含锁等待、迁移自身报告 IO、事务提交）。`startup` 分别列出 api（all + peer 配置对应 ui 锁）与 api-runtime（runtime 锁）的 `role_lock/database_open/run_migrations/prepare_usage/ensure_usage` 毫秒数，`database_total_ms` 为这些步骤总和，额外对账报告 IO 与连接清理排除。api 首启完成迁移后再测 api-runtime 的首次启动，因此后者是已迁移共享库上的角色首启，不能声称两角色同时冷启动的实测。外层容器耗时单列。暂不填真实数值。
+每轮从相同不可变输入备份恢复到全新目录，建议至少两轮，记录机器、PG/Bun 版本、数据大小、缓存条件；不在已迁移库上重复计时冒充首启。`copy-timing.json` 的 migrationMs/restartMs 保留为 api 首启/重启的 `runMigrations` 耗时（含锁等待、迁移自身报告 IO、事务提交）。`startup` 的每条记录均为独立进程，`sample=1/2` 对应首启/重启，`source_sha/image_digest` 来自已核验镜像；`startup_total_ms` 为父进程 spawn 前到收到子进程 offline ready 的实际单调时钟差，包含模块加载、连接和锁等待、schema migration、用量 gate、必要读回/校验及其 IPC/证据成本。`role_lock/database_open/run_migrations/prepare_usage/ensure_usage` 仍各列毫秒数，`database_total_ms` 只加这五项；`after_schema_readback/readback_validation` 另列，不重复叠加到总耗时。ready 后的连接清理/退出不计入 startup_total；`attempt_total_ms` 从 spawn 到进程退出，失败没有 ready 时 startup_total/ready_at 为 null，status=not_ready，保留 PID/版本、失败阶段、已测步骤及退出码。api 首启完成迁移后再测 api-runtime 的首次启动，因此后者是已迁移共享库上的角色首启；四进程依次执行。外层容器耗时单列。暂不填真实数值。
 
-后续生产窗口的计划为：drain + 最终备份 + 至少两倍最慢副本两角色首启数据库步骤总耗时 + 未测启动/readback + 人工核对预算；回滚截止点 = 获批窗口末尾 − 已测 DB/home 恢复及旧版启动/readback。两倍系数是余量，不是性能保证；不能沿用 0.2.85 那次耗时或 SQLite 小夹具数字。报告 `http_ready_measured=false` 和 `unmeasured` 明确列出 HTTP listener/readyz、模块/进程冷启动、Store facade 构造、read pool/Live Hub/peer 初始化、后台任务及生产竞争/并发启动；副本仅测 ready 前数据库步骤，锁等待包含在对应步骤中，不单独分离纯执行时间。不能把 `database_total_ms` 称为生产冷启动到 ready 总耗时；fleet 升级、bot 卡片、网页及未测部分由切换负责人和 QA 另行核对。
+后续生产窗口的计划为：drain + 最终备份 + 至少两倍最慢副本两角色首启实测 startup_total_ms 之和 + 未测服务初始化 + 人工核对预算；回滚截止点 = 获批窗口末尾 − 已测 DB/home 恢复及旧版启动/readback。两倍系数是余量，不是性能保证；不能沿用 0.2.85 那次耗时或 SQLite 小夹具数字。报告 `http_ready_measured=false` 和 `unmeasured` 仍列出 HTTP listener/readyz、容器调度/冷启动、Store facade 构造、read pool/Live Hub/peer 初始化、后台任务及生产竞争/并发启动。offline ready 是本演练入口完成初始化/gate/读回校验的边界，不能称为完整生产服务 ready；database_total 也不能替代 startup_total。导出的无目标连接测试入口可保留进程内故障注入，但明确标为 in_process_synthetic_fixture、startup_total_ms=null，不用这些记录填 B11 或窗口预算。fleet 升级、bot 卡片、网页及未测部分由切换负责人和 QA 另行核对。
 
 预检、迁移、对账、人工抽样或恢复验证任一失败都不申请继续切换；保留私有证据并修复原因，用新副本再跑。脚本不删退休表，不放宽预检；删表仍需运行 7 天、另行授权。生产回滚须另行批准并沿用[切换手册回滚](../deploy/unified-model-cutover.md#回滚)：暂停写入、恢复 DB 与 api-home、恢复旧镜像，再处理 daemon 降级；直接用旧代码打开新 schema 不算回滚。恢复备份会丢掉切换后新写入，这项取舍必须在生产窗口审批里明确。
 

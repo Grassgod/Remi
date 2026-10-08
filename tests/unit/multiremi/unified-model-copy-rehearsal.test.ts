@@ -8,6 +8,8 @@ import type { SqlDatabase } from "@multiremi/store/db/postgres.js";
 import { ensureUsageAccountingSchema, writeUsageSnapshot } from "@multiremi/store/usage-accounting.js";
 import { prepareUsageAccountingStartup } from "@multiremi/store/usage-migration.js";
 import { collectCopyUsageSnapshot, reconcileCopyUsage } from "../../../scripts/unified-model-copy-usage.js";
+import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
+import { runCopyStartupProcess, validateCopyBuild, type CopyStartupInput } from "../../../scripts/unified-model-copy-startup.js";
 
 async function prepareHistoricalUsage(db: SqlDatabase): Promise<SqlDatabase> {
   const rewrite = (sql: string) => sql.replaceAll("multiremi_turn_execution_records", "multiremi_tasks")
@@ -189,4 +191,168 @@ unifiedModelBackendTests("MUL-493 offline copy rehearsal", fixture => {
     expect(JSON.parse(readFileSync(join(dir, "copy-timing.json"), "utf8")).mismatches)
       .toContain("first_start_api: usage content changed: multiremi_usage_legacy_audit");
   });
+});
+
+test("offline process timing requires a full SHA and pinned digest before spawning", () => {
+  for (const [sha, digest] of [[undefined, undefined], ["dab54917", `sha256:${"a".repeat(64)}`],
+    ["a".repeat(40), "candidate:latest"], ["a".repeat(40), `sha256:${"a".repeat(63)}`]]) {
+    expect(() => validateCopyBuild(sha, digest)).toThrow("Full candidate source SHA");
+  }
+});
+
+const childCommand = [process.execPath, "--no-env-file", join(import.meta.dir, "../../helpers/unified-model-copy-startup-child.ts")];
+const build = { sourceSha: "a".repeat(40), imageDigest: `sha256:${"b".repeat(64)}` };
+
+unifiedModelBackendTests("MUL-493 independent offline role processes", fixture => {
+  async function processFixture(failure?: string) {
+    const { db, store } = fixture();
+    const agent = store.createAgent({ name: "offline process", provider: "codex" });
+    const issue = store.createIssue({ title: "offline copy", assigneeType: "member", assigneeId: "mem_local_local" });
+    db.run("UPDATE multiremi_issues SET status='backlog' WHERE id=?", [issue.id]);
+    store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "history", status: "completed" });
+    const session = store.getOrCreateDefaultIssueSession(issue.id);
+    db.run("UPDATE multiremi_session_agent_lanes SET cursor_seq=2,parent_cursor_seq=1,provider_session_id='offline-checkpoint',generation=3 WHERE session_id=? AND agent_id=?", [session.id, agent.id]);
+    db.run("UPDATE multiremi_conversation_heads SET agent_read_state=? WHERE session_id=?", [JSON.stringify({ [agent.id]: { seq: 1, offset: 7 } }), session.id]);
+    await prepareHistoricalUsage(db);
+    const dir = output();
+    let parentDb = db;
+    let path: string;
+    if (db.dialect === "postgres") {
+      const url = new URL(process.env.MULTIREMI_TEST_POSTGRES_URL!);
+      url.pathname = `/${db.query("SELECT current_database() AS name").get()!.name}`;
+      path = url.toString();
+    } else {
+      path = join(dir, "fixture.sqlite");
+      db.run("VACUUM INTO ?", [path]);
+      parentDb = openSqliteDatabase(path) as unknown as SqlDatabase;
+    }
+    return { dir, parentDb, close: () => { if (parentDb !== db) parentDb.close(); },
+      options: { ...build, process: { command: childCommand, env: {
+        COPY_SYNTHETIC_TARGET: JSON.stringify({ dialect: db.dialect, path }),
+        ...(failure ? { COPY_SYNTHETIC_FAILURE: failure } : {}),
+      } } } };
+  }
+
+  test("launches four distinct PIDs and measures spawn through gate and readback to offline ready", async () => {
+    const f = await processFixture();
+    const previous = process.env.MULTIREMI_TOKEN;
+    process.env.MULTIREMI_TOKEN = "synthetic-must-not-be-inherited";
+    try {
+      const result = await rehearseUnifiedModelCopy(f.parentDb, f.dir, undefined, f.options);
+      expect(result.mismatches).toEqual([]);
+      expect(result.partial_read_count).toBe(1);
+      const startup = JSON.parse(readFileSync(join(f.dir, "copy-startup.json"), "utf8"));
+      expect(startup.process_startup_measured).toBe(true);
+      expect(startup.startup.map((s: any) => [s.role, s.phase, s.sample])).toEqual([
+        ["api", "first_start", 1], ["api-runtime", "first_start", 1], ["api", "restart", 2], ["api-runtime", "restart", 2],
+      ]);
+      expect(new Set(startup.startup.map((s: any) => s.pid)).size).toBe(4);
+      for (const s of startup.startup) {
+        expect(s).toMatchObject({ mode: "offline_process", parent_pid: process.pid, source_sha: build.sourceSha,
+          image_digest: build.imageDigest, unit: "ms", status: "success", completed: true, offline_ready: true,
+          exit_code: 0, http_calls: 0, fetch_calls: 0, connection_open_measured: true });
+        expect(s.pid).not.toBe(process.pid);
+        const databaseMs = ["role_lock", "database_open", "run_migrations", "prepare_usage", "ensure_usage"]
+          .reduce((sum, name) => sum + s.steps_ms[name], 0);
+        expect(s.database_total_ms).toBe(databaseMs);
+        expect(s.steps_ms.readback_validation).toBeGreaterThan(0);
+        expect(s.startup_total_ms).toBeGreaterThanOrEqual(databaseMs + s.steps_ms.readback_validation);
+        expect(s.attempt_total_ms).toBeGreaterThanOrEqual(s.startup_total_ms);
+        expect(Date.parse(s.ready_at)).toBeGreaterThanOrEqual(Date.parse(s.started_at));
+      }
+      expect(startup.http_ready_measured).toBe(false);
+      expect(startup.unmeasured).not.toContain("module loading and process/container cold start");
+      const usage = JSON.parse(readFileSync(join(f.dir, "copy-usage-reconciliation.json"), "utf8"));
+      expect(Object.keys(usage.snapshots)).toEqual(["before", "after_schema", "first_start_api", "first_start_api-runtime", "restart_api", "restart_api-runtime"]);
+      expect(Object.values(usage.stages).every((s: any) => s.mismatches.length === 0)).toBe(true);
+    } finally {
+      if (previous === undefined) delete process.env.MULTIREMI_TOKEN;
+      else process.env.MULTIREMI_TOKEN = previous;
+      f.close();
+    }
+  }, 60_000);
+
+  test("a child gate failure retains measured steps and PID without claiming ready or starting the next role", async () => {
+    const f = await processFixture("gate");
+    try {
+      await expect(rehearseUnifiedModelCopy(f.parentDb, f.dir, undefined, f.options)).rejects.toThrow("offline startup not ready");
+      const report = JSON.parse(readFileSync(join(f.dir, "copy-startup.json"), "utf8"));
+      expect(report.startup).toHaveLength(1);
+      expect(report.startup[0]).toMatchObject({ role: "api", phase: "first_start", status: "not_ready",
+        completed: false, offline_ready: false, failed: true, failure_stage: "prepare_usage", exit_code: 1,
+        startup_total_ms: null, ready_at: null, unit: "ms", source_sha: build.sourceSha, image_digest: build.imageDigest,
+        http_calls: 0, fetch_calls: 0 });
+      expect(report.startup[0].pid).not.toBe(process.pid);
+      expect(report.startup[0].steps_ms.prepare_usage).toBeGreaterThan(0);
+      expect(report.startup[0].steps_ms.ensure_usage).toBeUndefined();
+      expect(report.startup[0].attempt_total_ms).toBeGreaterThan(0);
+      expect(readFileSync(join(f.dir, "startup-first_start-api.private.log"), "utf8")).toContain("synthetic usage gate failure");
+    } finally { f.close(); }
+  }, 30_000);
+
+  test("content drift in child readback fails before ready and retains the changed usage stage", async () => {
+    const f = await processFixture("readback");
+    try {
+      await expect(rehearseUnifiedModelCopy(f.parentDb, f.dir, undefined, f.options)).rejects.toThrow("Copy reconciliation failed");
+      const report = JSON.parse(readFileSync(join(f.dir, "copy-startup.json"), "utf8"));
+      expect(report.startup).toHaveLength(1);
+      expect(report.startup[0]).toMatchObject({ offline_ready: false, completed: false, status: "not_ready",
+        failure_stage: "readback_validation", startup_total_ms: null, ready_at: null });
+      expect(report.startup[0].steps_ms.ensure_usage).toBeGreaterThan(0);
+      expect(report.startup[0].steps_ms.readback_validation).toBeGreaterThan(0);
+      const usage = JSON.parse(readFileSync(join(f.dir, "copy-usage-reconciliation.json"), "utf8"));
+      expect(usage.stages.after_schema.mismatches).toEqual([]);
+      expect(usage.stages.first_start_api.changed_tables).toEqual(["multiremi_usage_legacy_audit"]);
+      expect(JSON.parse(readFileSync(join(f.dir, "copy-timing.json"), "utf8")).mismatches)
+        .toContain("first_start_api: usage content changed: multiremi_usage_legacy_audit");
+    } finally { f.close(); }
+  }, 30_000);
+
+  test("checkpoint and Issue drift are rejected in the child before offline ready", async () => {
+    const f = await processFixture("state");
+    try {
+      await expect(rehearseUnifiedModelCopy(f.parentDb, f.dir, undefined, f.options)).rejects.toThrow("offline startup not ready");
+      const report = JSON.parse(readFileSync(join(f.dir, "copy-startup.json"), "utf8"));
+      expect(report.startup).toHaveLength(1);
+      expect(report.startup[0]).toMatchObject({ offline_ready: false, completed: false, status: "not_ready",
+        failure_stage: "readback_validation", startup_total_ms: null, ready_at: null, http_calls: 0, fetch_calls: 0 });
+      expect(report.startup[0].readback_mismatches.some((m: string) => m.startsWith("checkpoint generation:"))).toBe(true);
+      expect(report.startup[0].readback_mismatches).toContain("stored Issue status/assignment/parent changed during startup");
+    } finally { f.close(); }
+  }, 30_000);
+
+  test("a ready event followed by a nonzero child exit keeps measured time but fails the sample", async () => {
+    const f = await processFixture("after_ready");
+    try {
+      await expect(rehearseUnifiedModelCopy(f.parentDb, f.dir, undefined, f.options)).rejects.toThrow("offline startup not ready");
+      const report = JSON.parse(readFileSync(join(f.dir, "copy-startup.json"), "utf8"));
+      expect(report.startup).toHaveLength(1);
+      expect(report.startup[0]).toMatchObject({ offline_ready: false, completed: false, status: "not_ready",
+        failure_stage: "process_exit", exit_code: 1, http_calls: 0, fetch_calls: 0 });
+      expect(report.startup[0].startup_total_ms).toBeGreaterThan(0);
+      expect(report.startup[0].attempt_total_ms).toBeGreaterThanOrEqual(report.startup[0].startup_total_ms);
+      expect(report.startup[0].ready_at).not.toBeNull();
+    } finally { f.close(); }
+  }, 30_000);
+});
+
+test("a clean process exit without ready is not successful startup", async () => {
+  const input = { role: "api", phase: "first_start", sample: 1, source_sha: build.sourceSha,
+    image_digest: build.imageDigest, report_dir: output() } as CopyStartupInput;
+  const result = await runCopyStartupProcess(input, { command: [process.execPath, "--no-env-file", "-e", "process.exit(0)"] });
+  expect(result).toMatchObject({ offline_ready: false, completed: false, failed: true, status: "not_ready",
+    startup_total_ms: null, ready_at: null, exit_code: 0, failure_stage: "exit_before_ready" });
+  expect(result.pid).not.toBe(process.pid);
+  expect(result.attempt_total_ms).toBeGreaterThan(0);
+});
+
+test("a ready signal without preceding readback validation cannot certify startup", async () => {
+  const input = { role: "api", phase: "first_start", sample: 1, source_sha: build.sourceSha,
+    image_digest: build.imageDigest, report_dir: output() } as CopyStartupInput;
+  const command = `const input=JSON.parse(await Bun.stdin.text());process.send({event:"ready",timing:{
+    role:input.role,phase:input.phase,sample:input.sample,source_sha:input.source_sha,image_digest:input.image_digest,
+    pid:process.pid,offline_ready:true}});process.disconnect();`;
+  const result = await runCopyStartupProcess(input, { command: [process.execPath, "--no-env-file", "-e", command] });
+  expect(result).toMatchObject({ offline_ready: false, completed: false, failed: true, status: "not_ready",
+    startup_total_ms: null, ready_at: null, exit_code: 0, failure_stage: "ready_protocol" });
 });
