@@ -28,6 +28,8 @@ async function ownChat(f: ReturnType<typeof fixture>, creatorId = f.creator.id) 
 
 function logPaths(chatId: string, messageId: string, to: number) {
   return [
+    `/api/sessions/${chatId}/messages`,
+    `/api/messages/${messageId}`,
     `/api/sessions/${chatId}/messages?from=0&to=${to}`,
     `/api/sessions/${chatId}/log/entry?id=${messageId}`,
     `/api/sessions/${chatId}/log/locate?id=${messageId}`,
@@ -157,6 +159,16 @@ test("a personal Feishu bot task reads its bound Chat with the real external cre
       expect(await denied.json()).toEqual({ error: "not your chat session" });
     }
     expect(f.store.getSessionAgentReadProgress(otherChat.id, f.agent.id)).toEqual({ seq: 0, offset: 0 });
+    expect(f.store.getSessionAgentReadProgress(chat.id, f.agent.id)).toEqual({ seq: to, offset: 0 });
+
+    const ownerChat = f.store.createChatSession({ agentId: f.agent.id, creatorId: f.runtime.ownerId! });
+    const ownerMessage = f.store.sendChatMessage(ownerChat.id, { body: "PRIVATE_RUNTIME_OWNER_MESSAGE" });
+    for (const path of logPaths(ownerChat.id, ownerMessage.message.id, f.store.getConversationLogHead(ownerChat.id)!.headSeq)) {
+      const denied = await f.app.request(path, { headers: nextHeaders });
+      expect(denied.status).toBe(403);
+      expect(await denied.json()).toEqual({ error: "not your chat session" });
+    }
+    expect(f.store.getSessionAgentReadProgress(ownerChat.id, f.agent.id)).toEqual({ seq: 0, offset: 0 });
     expect(f.store.getSessionAgentReadProgress(chat.id, f.agent.id)).toEqual({ seq: to, offset: 0 });
   } finally {
     if (previousKey === undefined) delete process.env.MULTIREMI_FEISHU_BOT_ENCRYPTION_KEY;
@@ -323,7 +335,12 @@ test("bound Chat log reads retain parameter validation and missing-entry errors"
   }
   expect((await f.app.request(`/api/sessions/${own.chat.id}/log/locate`, { headers: own.headers })).status).toBe(400);
   expect((await f.app.request(`/api/sessions/${own.chat.id}/log?before=100&after=1`, { headers: own.headers })).status).toBe(400);
-  expect((await f.app.request("/api/sessions/chat_missing/messages?from=0&to=1", { headers: own.headers })).status).toBe(404);
+  for (const path of logPaths("chat_missing", "missing", 1)) {
+    if (path.startsWith("/api/messages/")) continue;
+    const denied = await f.app.request(path, { headers: own.headers });
+    expect(denied.status).toBe(403);
+    expect(await denied.json()).toEqual({ error: "not your chat session" });
+  }
   expect(f.store.getSessionAgentReadProgress(own.chat.id, f.agent.id)).toEqual({ seq: 0, offset: 0 });
 });
 
@@ -369,14 +386,48 @@ test("deleted Chat logs stay inaccessible to retained task credentials without a
   }
 });
 
-test("an unbound task retains the existing creator fallback", async () => {
+for (const creator of ["runtime-owner", "other-user"] as const) test(`a task cannot inherit creator access to another Chat (${creator} source)`, async () => {
   const f = fixture();
-  const { headers } = await ownChat(f);
+  const own = await ownChat(f, creator === "runtime-owner" ? f.runtime.ownerId! : f.creator.id);
+  const { headers } = own;
   const chat = f.store.createChatSession({ agentId: f.agent.id, creatorId: f.runtime.ownerId! });
   const sent = f.store.sendChatMessage(chat.id, { body: "RUNTIME_OWNER_CHAT" });
-  for (const path of logPaths(chat.id, sent.message.id, f.store.getConversationLogHead(chat.id)!.headSeq)) {
-    expect((await f.app.request(path, { headers })).status).toBe(200);
+  const turn = f.store.getTurnForAttempt(sent.task.id)!;
+  const otherAgent = f.store.createAgent({ name: "Other lane", provider: "codex" });
+  const snapshot = () => ({
+    rows: ["multiremi_conversation_log", "multiremi_turns", "multiremi_turn_attempts", "multiremi_attachments", "multiremi_conversation_heads"]
+      .map(table => Number((db!.query(`SELECT COUNT(*) AS n FROM ${table}`).get() as { n: number }).n)),
+    sourceHead: f.store.getConversationLogHead(own.chat.id),
+    targetHead: f.store.getConversationLogHead(chat.id),
+    turn: f.store.getTurn(turn.id),
+    progress: [own.chat.id, chat.id].flatMap(id => [f.agent.id, otherAgent.id]
+      .map(agentId => f.store.getSessionAgentReadProgress(id, agentId))),
+  });
+  const before = snapshot();
+  const seq = f.store.locateConversationLogEntry(chat.id, sent.message.id)!.seq;
+  const paths = [...logPaths(chat.id, sent.message.id, f.store.getConversationLogHead(chat.id)!.headSeq),
+    `/api/sessions/${chat.id}/log/entry?seq=${seq}`, `/api/turns/${turn.id}`];
+  for (const path of paths) {
+    const denied = await f.app.request(path, { headers });
+    expect(denied.status, path).toBe(403);
+    expect(await denied.json()).toEqual({ error: "not your chat session" });
+    expect(snapshot()).toEqual(before);
   }
+  for (const path of [`/api/sessions/${chat.id}/messages`, `/api/turns/${turn.id}/cancel`]) {
+    const denied = await f.app.request(path, {
+      method: "POST", headers: { ...headers, "Content-Type": "application/json" }, body: JSON.stringify({ body_md: "Forbidden" }),
+    });
+    expect(denied.status, path).toBe(403);
+    expect(snapshot()).toEqual(before);
+  }
+  const form = new FormData();
+  form.set("message", JSON.stringify({ body_md: "Forbidden upload" }));
+  form.append("file", new File(["private bytes"], "denied.txt"));
+  expect((await f.app.request(`/api/sessions/${chat.id}/messages`, { method: "POST", headers, body: form })).status).toBe(403);
+  const inbox = await f.app.request("/api/inbox", { headers });
+  expect(inbox.status).toBe(200);
+  expect((await inbox.text())).not.toContain("RUNTIME_OWNER_CHAT");
+  expect(snapshot()).toEqual(before);
 });
 
 test("Issue task credentials still read Issue ranges and persist unread progress", async () => {

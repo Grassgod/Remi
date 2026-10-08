@@ -126,15 +126,18 @@ export function loadConversation(c: Context, store: MultiremiStore, id: string) 
       ?? { id, workspaceId: auto.workspaceId, issueId: null, chatId: null };
   }
   const token = currentTaskAccessToken(c);
-  if (token?.taskId) {
-    const task = store.getTask(token.taskId);
+  if (token) {
+    const task = token.taskId ? store.getTask(token.taskId) : null;
     const chat = store.getChatSession(id);
+    const denied = chat && denyCurrentUserWorkspaceAccess(c, store, chat.workspaceId);
+    if (denied) return denied;
+    // Task credentials never inherit the runtime owner's creator permissions.
+    if (!task || task.chatSessionId !== id) return c.json({ error: "not your chat session" }, 403);
+    if (!chat) return c.json({ error: "chat session not found" }, 404);
     // Feishu Chat creators differ from runtime owners; authorize the bound Task.
-    if (chat && task?.chatSessionId === id
-      && task.workspaceId === chat.workspaceId
-      && token.workspaceId === chat.workspaceId) {
-      return { id, workspaceId: chat.workspaceId, issueId: null, chatId: id };
-    }
+    if (task.workspaceId !== chat.workspaceId || token.workspaceId !== chat.workspaceId)
+      return c.json({ error: "not your chat session" }, 403);
+    return { id, workspaceId: chat.workspaceId, issueId: null, chatId: id };
   }
   const chat = loadChatSessionForCurrentUser(c, store, id);
   return chat instanceof Response ? chat
