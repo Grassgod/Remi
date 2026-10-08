@@ -73,6 +73,38 @@ describe("standalone Task interactions", () => {
     expect(() => parseQuestionAnswers(questions, { q0_option0: "not-a-boolean" })).toThrow("选项值无效");
   });
 
+  for (const text of ["a", "中"]) {
+    it(`MUL-493 B5 parser accepts 1000 ${text === "a" ? "ASCII" : "Chinese"} characters and blocks character 1001`, () => {
+      const custom = text.repeat(1000);
+      expect(parseQuestionAnswers(questions, { q0_custom: custom, q1_custom: { value: custom } }))
+        .toEqual({ "Which features?": `自定义回答：${custom}`, "Which environment?": `自定义回答：${custom}` });
+      expect(() => parseQuestionAnswers(questions, { q0_custom: custom + text, q1_option0: true })).toThrow("问题 1 的自定义回答过长");
+      expect(() => parseQuestionAnswers(questions, { q0_option0: true, q1_custom: { content: custom + text } })).toThrow("问题 2 的自定义回答过长");
+    });
+  }
+
+  for (const length of [1000, 1001]) {
+    it(`MUL-493 B5 callback ${length === 1000 ? "persists 1000 characters" : "rejects 1001 characters without consuming the question"}`, async () => {
+      const r = request();
+      const writes: Record<string, unknown>[] = [];
+      const registration = registerTaskInteraction({ appId: "cli_test", chatId: "oc_group", messageId: "om_request", recipientOpenId: "ou_owner", request: r,
+        submit: async response => { writes.push(response); return answered(r, response); } });
+      try {
+        const custom = "a".repeat(length);
+        const result = await handleTaskInteractionEvent("cli_test", action(interactionMarker(r.taskId, r.id), { q0_custom: custom, q1_option0: true }));
+        if (length === 1000) {
+          expect((result as any).toast.type).toBe("success");
+          expect(writes).toEqual([{ answers: { "Which features?": `自定义回答：${custom}`, "Which environment?": "Staging" } }]);
+          expect(registration.current()?.status).toBe("responded");
+        } else {
+          expect((result as any).toast).toEqual({ type: "error", content: "问题 1 的自定义回答过长" });
+          expect(writes).toEqual([]);
+          expect(registration.current()).toBeUndefined();
+        }
+      } finally { registration.dispose(); }
+    });
+  }
+
   for (const [choice, selected] of [[0, "allow"], [1, "deny"]] as const) {
     it(`persists ${selected} on the original request before returning a non-interactive receipt`, async () => {
       const r = request("permission");

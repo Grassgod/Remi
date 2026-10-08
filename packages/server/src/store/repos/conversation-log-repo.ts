@@ -13,6 +13,7 @@ import { registerTurnChangeHook, registerExecutionMessageWriter, notifyTurnChang
 // cannot take the same seq; the `(session_id, seq)` primary key is the backstop.
 // The legacy row lock plus `MAX(seq) + 1` is gone.
 import { createId, nowIso } from "@multiremi/ids.js";
+import { RELAY_EXECUTION_SCOPE_PREFIX } from "@multiremi/contracts/task-execution.js";
 import { nullableString, parseJson, toJson } from "@multiremi/store/helpers.js";
 import { type StoreContext } from "@multiremi/store/context.js";
 import { afterCommit } from "@multiremi/store/db/postgres.js";
@@ -137,10 +138,26 @@ export class ConversationLogRepo {
   }
   private materialize(row:Row):ConversationLogEntry { return projectTurnCard(this.ctx.db,toConversationLogEntry(row)); }
 
+  private agentReadScope(sessionId: string, source: Row | null): string {
+    if (source?.session_id === sessionId) return String(source.execution_scope);
+    // Chat turns carry Issue identity as a transport projection, not as an
+    // owning issue_id on the turn. Resolve the current topic binding itself.
+    const sourceSessionId = source?.session_id ? String(source.session_id) : null;
+    const boundIssueId = sourceSessionId
+      ? this.ctx.feishuBot().getFeishuIssueIdForChatSession(sourceSessionId) : null;
+    if (boundIssueId) {
+      const session = this.ctx.issueSessions().getIssueSession(sessionId);
+      if (session?.isDefault && session.issueId === boundIssueId) {
+        return `${RELAY_EXECUTION_SCOPE_PREFIX}${sourceSessionId}`;
+      }
+    }
+    return '';
+  }
+
   getSessionAgentReadProgress(sessionId: string, agentId: string, attemptId?:string): SessionAgentReadProgress {
-    const turn=attemptId?this.ctx.db.query('SELECT t.session_id,t.execution_scope FROM multiremi_turns t JOIN multiremi_turn_attempts a ON a.turn_id=t.id WHERE a.id=? AND t.current_attempt_id=a.id AND t.agent_id=?').get(attemptId,agentId):null;
+    const turn=attemptId?this.ctx.db.query('SELECT t.* FROM multiremi_turns t JOIN multiremi_turn_attempts a ON a.turn_id=t.id WHERE a.id=? AND t.current_attempt_id=a.id AND t.agent_id=?').get(attemptId,agentId):null;
     if(attemptId&&!turn)throw new Error('stale_attempt');
-    const scope=turn?.session_id===sessionId?turn.execution_scope:'';
+    const scope=this.agentReadScope(sessionId,turn);
     const row = this.ctx.db.query(`SELECT cursor_seq,cursor_offset FROM multiremi_session_lanes
       WHERE session_id=? AND reader_type='agent' AND reader_id=? AND execution_scope=?`).get(sessionId,agentId,scope) as Row | null;
     return row ? {seq:Number(row.cursor_seq),offset:Number(row.cursor_offset)} : this.updateAgentReadProgress(sessionId,agentId,current=>current,attemptId);
@@ -158,9 +175,10 @@ export class ConversationLogRepo {
         ?this.ctx.db.query('SELECT t.* FROM multiremi_turns t JOIN multiremi_turn_attempts a ON a.turn_id=t.id WHERE a.id=? AND t.current_attempt_id=a.id AND t.agent_id=?').get(attemptId,agentId)
         :this.ctx.db.query("SELECT * FROM multiremi_turns WHERE session_id=? AND agent_id=? AND execution_scope='' AND status IN ('running','awaiting_human') ORDER BY created_at DESC LIMIT 1").get(sessionId,agentId);
       if(attemptId&&!source)throw new Error('stale_attempt');
-      // Inherited conversations have their own reader lane, not this attempt's receipt.
+      // Inherited conversations advance their own lane without changing the
+      // attempt's input receipt. Bound Issue reads belong to this Chat's relay scope.
       const turn=source?.session_id===sessionId?source:null;
-      const scope=turn?.execution_scope??'';
+      const scope=this.agentReadScope(sessionId,source);
       if(source)this.ctx.lockWorkspaceRuntimeLifecycle(source.workspace_id);
       const seed=scope===''?this.storedAgentReadProgress(sessionId,agentId):{seq:0,offset:0};
       const at=nowIso();

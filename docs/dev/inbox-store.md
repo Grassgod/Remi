@@ -18,6 +18,8 @@ summary: 消息唯一入口、lane 状态机、Issue 推导及 Daemon 和用户�
 
 用户 HTTP 发送会传入内部 `authorizeRecipient` 回调，在持有 workspace 锁且解析最终角色 agent 后、写消息之前执行访问检查。拒绝会回滚同事务上传的附件行，上传包装器清理文件。该回调不属于请求体或公共消息合约。提问答复进入 `answerMessageDecision` 后，permission/question response 先按原提问结构规范化并验证，包括嵌套 AskUserQuestion；answers 按问题文本绑定。超时保持 timeout，外部取消保持 cancelled；答复、来源 Issue 推导和事件复用最外层事务，PG 不另开 savepoint。无效结构不会消费请求或卡片 token。
 
+飞书轮内 question 的每个自定义回答输入框 `max_length` 为 1000；宿主 callback parser 接受 1000 字符，第 1001 字符拒绝且不提交答复。Issue decision 自定义回答同样使用 1000 上限。
+
 平台 status/report 正文限 4 KiB，agent reply/final 正文完整保存。委派进度按触发 request 回到发件轮的对话与 scope，终态只发一条有收件人的 report；完成路径只解析一次结论评论快照，重放沿用同一来源 ID。谱系计数也沿触发 request 追溯。派活 lane 按同一派活人和同一回程会话查找，其他派活人的后续请求不会遮蔽已有 lane。对话内 dedupe_key 唯一，合并或插话后的重发返回原 delivery turn。执行适配器通过注册的消息 writer 调用同一入口；隐藏的 terminal reply 暂存和产品回复发布仍在终态事务内，已有本轮 agent 评论时 reply_message_id 指向它，避免重复回复。暂存或发布回复失败时回滚后只完成轮，reply_message_id 留空，报告指向 `remi turn get`。收件人归档时终态报告仍落库为 `inbox_only / recipient_unavailable`。
 
 [lane-machine](../../packages/server/src/store/inbox/lane-machine.ts) 在 `(session_id,agent,execution_scope)` 上串行化发送和结束：pending 合并、running 插话、结束补铃；数据库部分唯一索引保证同 lane 只有一个 pending。只有未读 now 消息能单独补铃。取消或最终失败的轮会消费它的原触发消息，后续未读消息仍补铃；未读委派报告补铃时，其回程指针更新到承接消息的后继轮。扫描以 wake_hint/swept 进度分页、等待 idle 至少一分钟，每个 lane 用 savepoint 隔离失败。确认输入不越过日志 head、不跳 gap。lane 的 `cursor_seq/cursor_offset` 表示当前 provider 会话的实际读取高水位；范围读和合法连续 `turn.input` 确认才推进它。完成、取消、补铃和扫描不改写该游标。新的 provider 会话接受冷 bootstrap 后清零，再按读取和完整 inline 连续确认抬高；准备和拒绝不清零。冷重试的输入范围从 0 开始，原始输入保留且折叠正文必须用新 attempt 重新读取。Runtime 删除和 daemon 退役只重置 provider 位置。`provider_cursor_seq` 单独记录 provider 续接/完成位置，`turn.input_to_seq` 记录业务轮消费边界。
@@ -52,7 +54,7 @@ summary: 消息唯一入口、lane 状态机、Issue 推导及 Daemon 和用户�
 
 ## 状态与迁移
 
-人工强制启动的活动审计沿用认证用户 ID；消息头的 sender_id 使用工作区成员 ID。Chat 终态发布复用该轮已暂存的 reply_message_id，日志只保留一条回复。Chat 与 Issue 共用未读 now 补铃规则，确认输入必须通过规范消息读取及 turn.input 收据。
+人工强制启动的活动审计沿用认证用户 ID；消息头的 sender_id 使用工作区成员 ID。Chat 终态发布复用该轮已暂存的 reply_message_id，日志只保留一条回复。Chat、Issue、未绑定 Issue 的 direct 与 run_only 共用未读 now 补铃规则，后继轮保持原 execution_scope；确认输入必须通过规范消息读取及 turn.input 收据。话题 Chat 读取绑定 Issue 默认 Session 时，实际读进度推进该 Session 的 `relay:<chat_session_id>` lane，不推进普通 scope 或 Chat attempt 的输入回执；下一轮绑定日志从该 relay 游标继续。
 
 [deriveIssueStatusWithinTransaction](../../packages/server/src/store/inbox/issue-status.ts) 按 running、awaiting_human/负责人未答 decision、pending、业务轮终态的顺序推导。建轮或随后合并的消息包含 human_sender 或 agent_dispatch 时，pending 为 todo，纯平台 pending 保持原状态。执行单的负责人最后一轮 completed/failed/cancelled 分别为 in_review/blocked/todo；无负责人时，不以其它 agent 的终态替代这条规则。intake 不要求负责人，按最后结束的业务轮推导：正常结束且有生成单为 done，并保存 completed_at；没有生成单为 in_review，失败为 blocked，取消为 todo。活跃轮、未答复负责人 decision 和父子守卫优先于 intake 终态。尝试失败、lost、换机、重试不推导 Issue。领取只用已完成业务轮的输入边界淘汰已覆盖的旧叫醒；同轮 replacement 不参与这项淘汰。
 

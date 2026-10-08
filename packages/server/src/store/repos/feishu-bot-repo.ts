@@ -2544,6 +2544,9 @@ export class FeishuBotRepo {
     }
     const config = this.getConfig(input.issue.workspaceId);
     if (!config?.enabled) return [];
+    const leaderTurn = this.ctx.db.query("SELECT turn_id FROM multiremi_turn_attempts WHERE id = ?").get(input.leaderTask.id);
+    if (!leaderTurn) throw new Error("Round push source turn not found");
+    const leaderTurnId = String(leaderTurn.turn_id);
     const rows = this.ctx.db.query(
       `SELECT b.* FROM multiremi_feishu_bot_chat_bindings b
        JOIN multiremi_chat_sessions c ON c.id = b.chat_session_id
@@ -2553,19 +2556,17 @@ export class FeishuBotRepo {
        ORDER BY b.updated_at DESC, b.created_at DESC, b.id DESC`,
     ).all(input.issue.workspaceId, config.appId, input.issue.id) as Row[];
     const enqueued: MultiremiTask[] = [];
-    const seenChats = new Set<string>();
+    const seenBindings = new Set<string>();
     for (const binding of rows) {
-      const bindingChatId = cleanOptionalString(binding.chat_id);
-      const chatSessionId = String(binding.chat_session_id);
-      const conversationKey = bindingChatId ? `chat:${bindingChatId}` : `session:${chatSessionId}`;
-      if (seenChats.has(conversationKey)) continue;
-      seenChats.add(conversationKey);
-      if (!this.ctx.notificationChannels().getAgentChatNotificationChannel(chatSessionId)?.enabled) continue;
       const bindingId = String(binding.id);
+      const chatSessionId = String(binding.chat_session_id);
+      if (seenBindings.has(bindingId)) continue;
+      seenBindings.add(bindingId);
+      if (!this.ctx.notificationChannels().getAgentChatNotificationChannel(chatSessionId)?.enabled) continue;
       const alreadyPrepared = this.ctx.db.query(
         `SELECT 1 AS present FROM multiremi_feishu_bot_round_pushes
          WHERE binding_id = ? AND leader_task_id = ?`,
-      ).get(bindingId, input.leaderTask.id) as Row | null;
+      ).get(bindingId, leaderTurnId) as Row | null;
       if (alreadyPrepared) continue;
 
       let wakeTask = this.ctx.chat().getPendingChatTask(chatSessionId);
@@ -2609,7 +2610,7 @@ export class FeishuBotRepo {
           input.issue.workspaceId,
           bindingId,
           input.issue.id,
-          input.leaderTask.id,
+          leaderTurnId,
           wakeTask.id,
           deliveryMode,
           now,

@@ -37,6 +37,13 @@ describe("MUL-531 Feishu input limits", () => {
     ]),
   ];
   for (const { name, card, count } of cards) {
+    if (!name.startsWith("issue decision")) {
+      it(`MUL-493 B5 ${name}: each custom answer accepts exactly the 1000-character limit`, () => {
+        const controls = inputs(card);
+        expect(controls).toHaveLength(count);
+        expect(controls.map(control => control.max_length)).toEqual(Array(count).fill(1000));
+      });
+    }
     it(`${name}: all nested input controls respect the Feishu maximum`, () => {
       const controls = inputs(card);
       expect(controls).toHaveLength(count);

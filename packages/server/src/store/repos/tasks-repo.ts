@@ -6284,7 +6284,7 @@ ${placementAfter.sql}
       }
     }
 
-    if (task.chatSessionId && !task.issueId && (
+    if (!task.issueId && (
       status === "completed"
       || (status === "cancelled" && !replacementPlanned)
       || (status === "failed" && !retry)

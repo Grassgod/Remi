@@ -999,7 +999,7 @@ describe("Feishu bot standard Task bridge", () => {
     expect(store.getFeishuBotConfig("local")?.revision).toBe(config.revision);
   });
 
-  it("keeps one Issue round push on the newest binding after a route switch", () => {
+  it("keeps one Issue round push per active binding after a route switch", () => {
     const { store, agent, config } = scaffold();
     const externalSessionKey = "oc_round_route:thread:omt_round_route";
     const first = store.submitFeishuBotMessage("local", "rt_bot", {
@@ -1072,16 +1072,19 @@ describe("Feishu bot standard Task bridge", () => {
     const roundTasks = store.listTasks().filter((task) =>
       task.status === "queued" && [first.chatSessionId, second.chatSessionId].includes(task.chatSessionId ?? "")
     );
-    expect(roundTasks).toHaveLength(1);
-    expect(roundTasks[0]).toMatchObject({
-      agentId: routedAgent.id,
-      chatSessionId: second.chatSessionId,
-    });
+    expect(roundTasks).toHaveLength(2);
+    expect(roundTasks.map(task => ({ agentId: task.agentId, chatSessionId: task.chatSessionId }))
+      .sort((a, b) => a.chatSessionId!.localeCompare(b.chatSessionId!))).toEqual([
+        { agentId: agent.id, chatSessionId: first.chatSessionId },
+        { agentId: routedAgent.id, chatSessionId: second.chatSessionId },
+      ].sort((a, b) => a.chatSessionId.localeCompare(b.chatSessionId)));
     expect(db!.query(
       `SELECT b.chat_session_id FROM multiremi_feishu_bot_round_pushes r
        JOIN multiremi_feishu_bot_chat_bindings b ON b.id = r.binding_id
-       WHERE r.leader_task_id = ?`,
-    ).all(leaderTask.id)).toEqual([{ chat_session_id: second.chatSessionId }]);
+       WHERE r.leader_task_id = ? ORDER BY b.chat_session_id`,
+    ).all(store.getTurnForAttempt(leaderTask.id)!.id)).toEqual([
+      { chat_session_id: first.chatSessionId }, { chat_session_id: second.chatSessionId },
+    ].sort((a, b) => a.chat_session_id.localeCompare(b.chat_session_id)));
   });
 
   it("assigns an automatically created group Issue to the routed Agent", () => {
