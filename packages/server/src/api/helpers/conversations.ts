@@ -161,9 +161,11 @@ export function messageResponse<T extends object>(message: T) {
   return stripCardTokenFields(message) as Omit<T, "card_token_hash" | "card_token_recipient" | "card_token_consumed_at">;
 }
 
-export function stripCardTokenFields(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(stripCardTokenFields);
+export function stripCardTokenFields(value: unknown, path: string[] = []): unknown {
+  if (Array.isArray(value)) return value.map(item => stripCardTokenFields(item, path));
   if (!value || typeof value !== "object") return value;
-  return Object.fromEntries(Object.entries(value).filter(([key]) => !key.startsWith("card_token_"))
-    .map(([key, nested]) => [key, stripCardTokenFields(nested)]));
+  return Object.fromEntries(Object.entries(value).filter(([key]) => !key.startsWith("card_token_")
+    && !(key === 'wait_id' && (path.at(-1) === 'metadata' || path.at(-1) === 'wait' && path.at(-2) === 'question'))
+    && !(key === 'runtime_id' && path.at(-1) === 'wait' && path.at(-2) === 'question'))
+    .map(([key, nested]) => [key, stripCardTokenFields(nested, [...path, key])]));
 }

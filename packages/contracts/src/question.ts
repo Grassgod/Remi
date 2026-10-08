@@ -45,6 +45,9 @@ export interface QuestionView {
   status: 'pending' | 'answered' | 'closed';
   wait_status: QuestionWaitStatus;
   wait_reason: string | null;
+  /** Auditable execution references; native callback nonces are never public. */
+  recovery: { consumer_turn_id: string | null; consumer_attempt_id: string | null; reply_message_id: string | null;
+    continuation_message_id: string | null; consumed_at: string | null };
   answer: QuestionAnswer | null;
   answer_revision: number;
   history: QuestionHistoryEvent[];

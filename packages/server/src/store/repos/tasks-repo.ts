@@ -5100,10 +5100,10 @@ ${placementAfter.sql}
     return task;
   }
 
-  cancelTask(taskId: string): MultiremiTask {
+  cancelTask(taskId: string, options: { replacementPlanned?: boolean } = {}): MultiremiTask {
     const childStatusChanges: ChildStatusChange[] = [];
     const deferredEvents = createCommitEventQueue();
-    const cancelWithinTransaction = () => this.cancelTaskWithinTransaction(taskId, childStatusChanges, deferredEvents);
+    const cancelWithinTransaction = () => this.cancelTaskWithinTransaction(taskId, childStatusChanges, deferredEvents, options.replacementPlanned === true);
     const terminal = this.ctx.db.inTransaction ? cancelWithinTransaction() : this.ctx.db.transaction(cancelWithinTransaction)();
     afterCommit(this.ctx.db, () => {
       this.runChildStatusChanges(childStatusChanges);
@@ -5119,6 +5119,7 @@ ${placementAfter.sql}
     taskId: string,
     childStatusChanges: ChildStatusChangeCollector,
     deferredEvents: CommitEventQueue,
+    replacementPlanned = false,
   ): CancelTaskResult {
     const initial = this.getTask(taskId);
     if (!initial) throw new Error(`Task not found or terminal: ${taskId}`);
@@ -5126,7 +5127,7 @@ ${placementAfter.sql}
     const current = this.getTask(taskId);
     if (!current || current.workspaceId !== initial.workspaceId) throw new Error(`Task not found or terminal: ${taskId}`);
     this.lockTaskIssueSessionsWithinWorkspaceLock([current]);
-    return this.cancelTaskWithinWorkspaceLock(current, false, childStatusChanges, deferredEvents);
+    return this.cancelTaskWithinWorkspaceLock(current, replacementPlanned, childStatusChanges, deferredEvents);
   }
 
   /** Caller owns the outer transaction; notifications are deferred until it commits. */

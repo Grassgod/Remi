@@ -650,7 +650,7 @@ export interface TasksSurface {
   getTaskHumanRequest(requestId: string): import("@multiremi/contracts/types.js").MultiremiTaskHumanRequest | null;
   respondTaskHumanRequest: import("./repos/tasks-repo.js").TasksRepo["respondTaskHumanRequest"];
   cancelPendingHumanRequestsWithinTransaction(taskId: string, now: string): void;
-  cancelTask(taskId: string): MultiremiTask;
+  cancelTask(taskId: string, options?: { replacementPlanned?: boolean }): MultiremiTask;
   cancelTaskWithinTransaction(
     taskId: string,
     childStatusChanges: import("./repos/tasks-repo.js").ChildStatusChangeCollector,

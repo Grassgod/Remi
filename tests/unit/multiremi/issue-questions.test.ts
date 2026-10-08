@@ -3,17 +3,26 @@ import { pendingTurnBackendTests, type PendingTurnTestFixture } from './pending-
 import { StoreContext, createCommitEventQueue } from '@multiremi/store/context.js';
 import { Questions, refreshIssueQuestionsAfterResponsibilityChangeWithinTransaction } from '@multiremi/store/inbox/questions.js';
 import { MultiremiStore } from '@multiremi/store.js';
-import { decodeDecisionCardBody } from '@shared/feishu-task-card.js';
+import { decodeDecisionCardBody, questionCardAction, interactionMarker } from '@shared/feishu-task-card.js';
+import { handleTaskInteractionEvent, registerQuestionCardClient } from '@connectors/feishu/task-interaction.js';
+import { createMultiremiApp } from '@multiremi/api.js';
+import { MultiremiDaemonClient } from '@multiremi/worker/client.js';
 
-function setup(f: PendingTurnTestFixture, sameOwner = false) {
+function setup(f: PendingTurnTestFixture, sameOwner = false, busyOwner = false) {
   const { store, db } = f;
   const runtime = store.registerRuntime({ name: 'questions host', provider: 'codex', daemonId: 'questions-daemon', maxConcurrency: 8 });
-  const leader = store.createAgent({ name: 'Issue leader', provider: 'codex', maxConcurrentTasks: 8 });
+  const leader = store.createAgent({ name: 'Issue leader', provider: 'codex', maxConcurrentTasks: busyOwner ? 1 : 8 });
   const parentLeader = sameOwner ? leader : store.createAgent({ name: 'Parent leader', provider: 'codex', maxConcurrentTasks: 8 });
   const worker = store.createAgent({ name: 'Worker', provider: 'codex', maxConcurrentTasks: 8 });
   const parent = store.createIssue({ title: 'Root', assigneeType: 'agent', assigneeId: parentLeader.id, responsibleMemberId: 'mem_local_local' });
-  db.run('UPDATE multiremi_issues SET responsible_member_id=? WHERE id=?', ['mem_local_local', parent.id]);
   const issue = store.createIssue({ title: 'Child', parentIssueId: parent.id, assigneeType: 'agent', assigneeId: leader.id });
+  const leaderRuntime = busyOwner ? store.registerRuntime({ name: 'Busy Leader host', provider: 'codex', daemonId: 'busy-leader-daemon', maxConcurrency: 8 }) : null;
+  if (leaderRuntime) {
+    store.updateAgent(leader.id, { runtimeId: leaderRuntime.id }); store.updateAgent(parentLeader.id, { runtimeId: leaderRuntime.id });
+    store.updateAgent(worker.id, { runtimeId: runtime.id });
+  }
+  const busyTask = busyOwner ? store.createTask({ agentId: leader.id, issueId: issue.id, prompt: 'Already coordinating this Issue' }) : null;
+  if (busyTask) { expect(store.claimTask(leaderRuntime!.id)?.id).toBe(busyTask.id); store.startTask(busyTask.id); }
   const task = store.createTask({ agentId: worker.id, issueId: issue.id, prompt: 'Original task' });
   expect(store.claimTask(runtime.id)?.id).toBe(task.id); store.startTask(task.id);
   const turn = store.getTurnForAttempt(task.id)!;
@@ -30,10 +39,173 @@ function setup(f: PendingTurnTestFixture, sameOwner = false) {
     db.run("UPDATE multiremi_turns SET status='running' WHERE id=?", [t.id]);
     return t.id as string;
   };
-  return { ...f, runtime, leader, parentLeader, worker, parent, issue, task, turn, bridge, scope, q, agentTurn };
+  return { ...f, runtime, leader, parentLeader, worker, parent, issue, task, busyTask, turn, bridge, scope, q, agentTurn };
 }
 
 pendingTurnBackendTests('one question through the responsibility chain', fixture => {
+  it('keeps a capacity-busy Leader responsible and delivers Q into its existing coordination turn', () => {
+    const h = setup(fixture(), false, true);
+    expect(h.store.getQuestion(h.q.id)).toMatchObject({ current_handler: { type: 'agent', id: h.leader.id }, stage: 'issue_owner' });
+    const live = h.store.listTasksForIssue(h.issue.id).filter(task => task.agentId === h.leader.id && task.status === 'running');
+    expect(live.map(task => task.id)).toEqual([h.busyTask!.id]);
+    const busyTurn = h.store.getTurnForAttempt(h.busyTask!.id)!;
+    const reply = h.store.answerQuestion(h.q.id, { expected_route_revision: 1, response: { answer: 'A' } }, { type: 'agent', id: h.leader.id }, busyTurn.id);
+    expect(reply.question.answer?.actor).toEqual({ type: 'agent', id: h.leader.id });
+    expect(reply.message.session_id).toBe(h.q.session_id); expect(reply.message.reply_to_id).toBe(h.q.id);
+  });
+  it('HTTP lets the routed Agent answer another private Agent Q but keeps private source turn details protected', async () => {
+    const h = setup(fixture());
+    h.store.updateAgent(h.worker.id, { visibility: 'private', ownerId: 'local' });
+    const user = h.store.getOrCreateUser({ externalId: 'question_answer_http_member', name: 'Question handler caller' });
+    h.store.createWorkspaceMember({ workspaceId: 'local', userId: user.id, name: 'Question handler caller', role: 'member' });
+    const turn = h.store.getTurn(h.agentTurn(h.leader.id))!;
+    const access = await h.store.createTaskAccessToken(h.store.getTask(turn.current_attempt_id!)!, user.id);
+    const api = createMultiremiApp({ store: h.store, authToken: 'MASTER' });
+    const publicSource = await api.request(`/api/messages/${h.q.id}`, { headers: { Authorization: 'Bearer MASTER' } });
+    expect(publicSource.status).toBe(200);
+    const sourceMetadata = (await publicSource.json() as any).message.metadata;
+    expect(sourceMetadata.wait_id).toBeUndefined(); expect(sourceMetadata.question.wait.wait_id).toBeUndefined();
+    expect(sourceMetadata.question.wait.runtime_id).toBeUndefined();
+    const headers = { Authorization: `Bearer ${access.token}`, 'content-type': 'application/json' };
+    expect((await api.request(`/api/turns/${h.turn.id}`, { headers })).status).toBe(404);
+    const response = await api.request(`/api/messages/${h.q.id}/question/answer`, { method: 'POST', headers,
+      body: JSON.stringify({ expected_route_revision: 1, response: { answers: { 'Which approach?': 'A' } } }) });
+    expect(response.status).toBe(200);
+    expect(h.store.getQuestion(h.q.id)?.answer?.actor).toEqual({ type: 'agent', id: h.leader.id });
+    expect(h.store.getQuestion(h.q.id)?.answer_revision).toBe(1);
+  });
+  it('HTTP grants only the routed original private Q to handlers and Remi without granting the source transcript', async () => {
+    const h = setup(fixture());
+    h.store.updateAgent(h.worker.id, { visibility: 'private', ownerId: 'local' });
+    const user = h.store.getOrCreateUser({ externalId: 'question_http_member', name: 'Question caller' });
+    h.store.createWorkspaceMember({ workspaceId: 'local', userId: user.id, name: 'Question caller', role: 'member' });
+    const api = createMultiremiApp({ store: h.store, authToken: 'MASTER' });
+    const agentToken = async (agentId: string) => {
+      const turn = h.store.getTurn(h.agentTurn(agentId))!;
+      return (await h.store.createTaskAccessToken(h.store.getTask(turn.current_attempt_id!)!, user.id)).token;
+    };
+    const request = (token: string, path: string, data?: unknown) => api.request(path, {
+      method: data === undefined ? 'GET' : 'POST', headers: { Authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      ...(data === undefined ? {} : { body: JSON.stringify(data) }),
+    });
+    const leaderToken = await agentToken(h.leader.id);
+    expect((await request(leaderToken, `/api/messages/${h.q.id}`)).status).toBe(404);
+    const exact = await request(leaderToken, `/api/messages/${h.q.id}/question`);
+    expect(exact.status).toBe(200); expect((await exact.json() as any).question.id).toBe(h.q.id);
+    expect((await request(leaderToken, `/api/messages/${h.q.id}/question/escalate`, { expected_route_revision: 1, reason: 'Ask parent' })).status).toBe(200);
+    const parentToken = await agentToken(h.parentLeader.id);
+    expect((await request(parentToken, `/api/messages/${h.q.id}/question`)).status).toBe(200);
+    expect((await request(leaderToken, `/api/messages/${h.q.id}/question`)).status).toBe(403);
+    expect((await request(parentToken, `/api/messages/${h.q.id}/question/escalate`, { expected_route_revision: 2, reason: 'Explicit human' })).status).toBe(200);
+    const previous = process.env.MULTIREMI_FEISHU_BOT_ENCRYPTION_KEY;
+    process.env.MULTIREMI_FEISHU_BOT_ENCRYPTION_KEY = Buffer.alloc(32, 11).toString('base64');
+    try {
+      const remi = h.store.createAgent({ name: 'Remi', provider: 'codex' });
+      h.store.heartbeatRuntime(h.runtime.id, { supportsFeishuBotConfig: true, supportsDecisionCard: true });
+      h.store.upsertFeishuBotConfig('local', { agentId: remi.id, runtimeId: h.runtime.id, appId: 'cli_question_private', appSecretOp: 'set', appSecret: 'synthetic', enabled: true, domain: 'feishu' });
+      h.store.transferQuestion(h.q.id, { expected_route_revision: 3, reason: 'Route presentation through configured Remi' }, { type: 'member', id: 'mem_local_local' });
+      const remiToken = await agentToken(remi.id);
+      expect((await request(remiToken, `/api/messages/${h.q.id}/question`)).status).toBe(200);
+      expect((await request(remiToken, `/api/messages/${h.q.id}`)).status).toBe(404);
+      expect((await request(remiToken, `/api/messages/${h.q.id}/question/present`, { expected_route_revision: 4, summary: 'Same original private question summary' })).status).toBe(200);
+      expect((await request(remiToken, `/api/messages/${h.q.id}/question/answer`, { expected_route_revision: 4, response: { answer: 'A' } })).status).toBe(403);
+      const foreign = h.store.createWorkspace({ name: 'Foreign question HTTP', slug: 'foreign-question-http' });
+      const foreignAgent = h.store.createAgent({ name: 'Foreign actor', provider: 'codex', workspaceId: foreign.id });
+      const human = h.store.listWorkspaceMembers(foreign.id).find(member => member.role === 'owner')!;
+      const foreignIssue = h.store.createIssue({ title: 'Foreign', workspaceId: foreign.id, responsibleMemberId: human.id });
+      const foreignTask = h.store.createTask({ agentId: foreignAgent.id, issueId: foreignIssue.id, prompt: 'Other work' });
+      const foreignToken = (await h.store.createTaskAccessToken(foreignTask, 'local')).token;
+      expect((await request(foreignToken, `/api/messages/${h.q.id}/question`)).status).toBe(404);
+    } finally {
+      if (previous === undefined) delete process.env.MULTIREMI_FEISHU_BOT_ENCRYPTION_KEY; else process.env.MULTIREMI_FEISHU_BOT_ENCRYPTION_KEY = previous;
+    }
+  }, 120_000);
+  it('persists a valid answer when the source Agent is archived and permits one controlled retry after restoring it', () => {
+    const h = setup(fixture());
+    h.bridge.rpc('turn.decision.expire', { turn_id: h.turn.id, attempt_id: h.task.id, message_id: h.q.id, status: 'timeout' }, h.scope);
+    h.store.archiveAgent(h.worker.id);
+    const answer = h.store.answerQuestion(h.q.id, { expected_route_revision: 1, response: { answer: 'A' } }, { type: 'agent', id: h.leader.id }, h.agentTurn(h.leader.id));
+    expect(answer.question).toMatchObject({ status: 'answered', wait_status: 'detached', wait_reason: 'question_source_agent_unavailable', answer_revision: 1 });
+    expect(h.db.query('SELECT id FROM multiremi_conversation_log WHERE dedupe_key=?').all(`question-continuation:${h.q.id}`)).toHaveLength(0);
+    const reopened = new MultiremiStore(h.db);
+    expect(reopened.getQuestion(h.q.id)?.answer?.response).toEqual({ answer: 'A', answers: { 'Which approach?': 'A' } });
+    reopened.restoreAgent(h.worker.id);
+    const resumed = reopened.continueQuestion(h.q.id, { expected_route_revision: 1 }, { type: 'member', id: 'mem_local_local' });
+    expect(resumed.wait_status).toBe('continuation_pending');
+    expect(resumed.recovery.consumer_turn_id).toBeString(); expect(resumed.recovery.consumer_attempt_id).toBeNull();
+    expect(resumed.recovery.reply_message_id).toBe(answer.message.id); expect(resumed.recovery.continuation_message_id).toBeString();
+    reopened.continueQuestion(h.q.id, { expected_route_revision: 1 }, { type: 'member', id: 'mem_local_local' });
+    expect(h.db.query('SELECT id FROM multiremi_conversation_log WHERE dedupe_key=?').all(`question-continuation:${h.q.id}`)).toHaveLength(1);
+    const consumer = h.store.getTurn((h.store.getMessage(h.q.id)!.metadata.question as any).wait.consumer_turn_id)!;
+    expect(consumer.agent_id).toBe(h.worker.id);
+  });
+  it('real Feishu host callback rejects wrong operators and rotated cards then consumes the current same-Q answer once', async () => {
+    const h = setup(fixture());
+    const previous = process.env.MULTIREMI_FEISHU_BOT_ENCRYPTION_KEY;
+    process.env.MULTIREMI_FEISHU_BOT_ENCRYPTION_KEY = Buffer.alloc(32, 11).toString('base64');
+    let stop: (() => void) | undefined, server: ReturnType<typeof Bun.serve> | undefined;
+    try {
+      const remi = h.store.createAgent({ name: 'Remi', provider: 'codex' });
+      const member = h.store.getWorkspaceMember('mem_local_local')!;
+      h.db.run('UPDATE multiremi_users SET feishu_union_id=? WHERE id=?', ['on_question_human', member.userId]);
+      const at = new Date().toISOString();
+      h.db.run("INSERT INTO multiremi_feishu_bot_senders(id,workspace_id,app_id,open_id,union_id,display_name,allowed,first_seen_at,last_seen_at) VALUES('fbs_question','local','cli_question_host','ou_question_human','on_question_human','Human',1,?,?)", [at, at]);
+      h.store.heartbeatRuntime(h.runtime.id, { supportsFeishuBotConfig: true, supportsDecisionCard: true });
+      const config = h.store.upsertFeishuBotConfig('local', { agentId: remi.id, runtimeId: h.runtime.id, appId: 'cli_question_host',
+        appSecretOp: 'set', appSecret: 'synthetic-question-test-secret', enabled: true, domain: 'feishu' });
+      h.store.reportFeishuBotRuntimeStatus('local', h.runtime.id, { appliedRevision: config.revision, state: 'online' });
+      h.store.updateWorkspace('local', { settings: { issueTopics: { enabled: true, chatId: 'oc_question' } } });
+      h.store.prepareFeishuIssueTopicWithinTransaction(h.issue);
+      const topic = h.store.claimFeishuBotOutbound('local', h.runtime.id)!;
+      h.store.reportFeishuBotOutbound('local', h.runtime.id, topic.id, { claimToken: topic.claimToken, status: 'sent', externalMessageId: 'om_question_topic' });
+      h.store.escalateQuestion(h.q.id, { expected_route_revision: 1, reason: 'Need parent' }, { type: 'agent', id: h.leader.id }, h.agentTurn(h.leader.id));
+      h.store.escalateQuestion(h.q.id, { expected_route_revision: 2, reason: 'Need human' }, { type: 'agent', id: h.parentLeader.id }, h.agentTurn(h.parentLeader.id));
+      h.store.presentQuestion(h.q.id, { expected_route_revision: 3, summary: 'Remi summary' }, { type: 'agent', id: remi.id }, h.agentTurn(remi.id));
+      const first = h.store.claimFeishuBotOutbound('local', h.runtime.id)!;
+      expect(first.humanRequestId).toBe(h.q.id);
+      expect(h.store.getMessage(h.q.id)?.card_token_recipient).toBe('ou_question_human');
+      const oldAction = questionCardAction(decodeDecisionCardBody(first.body)!.card)!;
+      h.store.reportFeishuBotOutbound('local', h.runtime.id, first.id, { claimToken: first.claimToken, status: 'sent', externalMessageId: 'om_question_card', interactionOpenId: 'ou_question_human' });
+      const access = await h.store.createAccessToken({ name: 'questions-daemon', type: 'daemon', workspaceId: 'local', daemonId: 'questions-daemon' });
+      const api = createMultiremiApp({ store: h.store, authToken: 'MASTER' });
+      server = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch: request => api.fetch(request) });
+      const client = new MultiremiDaemonClient(server.url.origin, access.token);
+      stop = registerQuestionCardClient('cli_question_host', { getRequest: id => client.getMessageHumanRequest(id),
+        respond: (id, response, credential) => client.respondTaskHumanRequest(id, response, credential),
+        getDecision: async () => null, answer: async () => { throw new Error('retired decision route'); } });
+      const click = (value: Record<string, unknown>, operator = 'ou_question_human') => handleTaskInteractionEvent('cli_question_host', {
+        operator: { open_id: operator }, context: { open_message_id: 'om_question_card', open_chat_id: 'oc_question' },
+        action: { name: interactionMarker(h.task.id, h.q.id), value, form_value: { q0_option0: true } },
+      });
+      expect((await click(oldAction, 'ou_stranger'))?.toast).toMatchObject({ type: 'error' });
+      expect(h.store.getQuestion(h.q.id)?.status).toBe('pending');
+      h.store.transferQuestion(h.q.id, { expected_route_revision: 3, reason: 'Reconfirm responsibility' }, { type: 'member', id: member.id });
+      expect((await click(oldAction))?.toast).toMatchObject({ type: 'error' });
+      h.store.presentQuestion(h.q.id, { expected_route_revision: 4, summary: 'Updated Remi summary' }, { type: 'agent', id: remi.id }, h.agentTurn(remi.id));
+      const current = h.store.claimFeishuBotOutbound('local', h.runtime.id)!;
+      const currentAction = questionCardAction(decodeDecisionCardBody(current.body)!.card)!;
+      h.store.reportFeishuBotOutbound('local', h.runtime.id, current.id, { claimToken: current.claimToken, status: 'sent', externalMessageId: 'om_question_card_current', interactionOpenId: 'ou_question_human' });
+      const durablePatches = () => h.db.query("SELECT id FROM multiremi_feishu_bot_outbound_operations WHERE kind='decision_patch' AND unit_key=? UNION ALL SELECT id FROM multiremi_feishu_bot_outbound_deliveries WHERE kind='decision_card_patch' AND human_request_id=?").all(h.q.id, h.q.id);
+      expect(() => h.db.transaction(() => {
+        h.store.answerQuestion(h.q.id, { expected_route_revision: 4, response: { answers: { 'Which approach?': 'A' } } }, { type: 'member', id: member.id });
+        expect(durablePatches()).toHaveLength(1);
+        throw new Error('Rollback both answer and durable terminal card intent');
+      })()).toThrow('Rollback both answer and durable terminal card intent');
+      expect(h.store.getQuestion(h.q.id)?.status).toBe('pending');
+      expect(h.store.getMessage(h.q.id)?.card_token_consumed_at).toBeNull();
+      expect(durablePatches()).toHaveLength(0);
+      expect((await click(currentAction))?.toast).toMatchObject({ type: 'success' });
+      expect(h.store.getQuestion(h.q.id)).toMatchObject({ status: 'answered', answer_revision: 1, answer: { actor: { type: 'member', id: member.id }, response: { answers: { 'Which approach?': 'A' } } } });
+      const replay = await click(currentAction);
+      expect(replay?.toast).not.toMatchObject({ type: 'success' });
+      expect(h.store.getQuestion(h.q.id)?.history.filter(event => event.type === 'answer')).toHaveLength(1);
+      expect(h.store.getMessage(h.q.id)?.card_token_consumed_at).not.toBeNull();
+      expect(durablePatches()).toHaveLength(1);
+    } finally {
+      stop?.(); await server?.stop(true);
+      if (previous === undefined) delete process.env.MULTIREMI_FEISHU_BOT_ENCRYPTION_KEY; else process.env.MULTIREMI_FEISHU_BOT_ENCRYPTION_KEY = previous;
+    }
+  }, 120_000);
   it('waits for Remi summary before same-Q presentation and preserves the original options in degraded text', () => {
     const h = setup(fixture());
     const previous = process.env.MULTIREMI_FEISHU_BOT_ENCRYPTION_KEY;

@@ -31,6 +31,7 @@ if (input.mode === 'consumer') registerDaemonOfferHandler(client, {
       // its input via the same production protocol used by the daemon.
       const provider = { async *sendStream(prompt: string) {
         if (!prompt.includes('已记录答案') || !prompt.includes('Paris')) throw new Error('continuation answer missing');
+        if (task.sessionId || (task as unknown as { session_id?: string }).session_id) throw new Error('resume-unsafe original provider session was reused');
         // Bootstrap offers intentionally contain range hints. The host reads
         // real source context with the new attempt token before confirming it.
         const response = await fetch(`${input.serverUrl}/api/sessions/${task.issueSessionId}/messages?from=${task.input_from_seq}&to=${task.input_to_seq}`, {
@@ -44,6 +45,11 @@ if (input.mode === 'consumer') registerDaemonOfferHandler(client, {
       for await (const _ of provider.sendStream(task.prompt)) {}
       await downlinks.consumeTaskSteerMessages(task.id, []);
       console.log(JSON.stringify({ event: 'consumer_ack', attempt_id: task.id, turn_id: task.turn_id }));
+      const receipt = await client.event({ t: 'turn.complete', rt: input.rt, seq: 1,
+        p: { turn_id: task.turn_id, attempt_id: task.id, input_to_seq: task.input_to_seq,
+          reply: { body_md: 'Continued original work using Paris', message_kind: 'final' } } });
+      if (receipt.ok !== true) throw new Error(`continuation completion rejected: ${JSON.stringify(receipt)}`);
+      console.log(JSON.stringify({ event: 'consumer_completed', attempt_id: task.id, turn_id: task.turn_id }));
     })().catch(error => { console.error(error); process.exit(2); });
   },
 });

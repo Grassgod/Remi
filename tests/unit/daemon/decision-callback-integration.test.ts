@@ -31,7 +31,7 @@ async function until(predicate: () => boolean) {
     await Bun.sleep(5);
   }
 }
-async function setup({ store }: PendingTurnTestFixture) {
+async function setup({ store }: PendingTurnTestFixture, delegated = false) {
   const rt = "rt_decision_callback", daemonId = "daemon_decision_callback";
   store.registerRuntime({ id: rt, daemonId, name: rt, provider: "claude", workspaceId: "local", metadata: { parallel_agent_execution: 1 } });
   const agent = store.createAgent({ name: "Callback", provider: "claude", runtimeId: rt });
@@ -40,7 +40,18 @@ async function setup({ store }: PendingTurnTestFixture) {
   const send = (body_md: string, wake_requested: "now" | "next_turn" = "now", attachment_ids?: string[]) =>
     store.sendMessage({ session_id: session.id, sender: { type: "member", id: "mem_local_local" },
       to: { type: "agent", ref: agent.id }, message_kind: "request", wake_requested, body_md, attachment_ids });
-  send("Start");
+  let dispatch: { leaderId: string; sessionId: string } | null = null;
+  if (delegated) {
+    const leaderRuntime = store.registerRuntime({ name: 'Original dispatch host', provider: 'claude', workspaceId: 'local', daemonId: 'original-dispatch-daemon' });
+    const leader = store.createAgent({ name: 'Original delegator', provider: 'claude', runtimeId: leaderRuntime.id });
+    const dispatchSession = store.createIssueSession(issue.id, { title: 'Original dispatch', inheritMode: 'none' });
+    const leaderTask = store.createTask({ agentId: leader.id, issueId: issue.id, issueSessionId: dispatchSession.id, prompt: 'Coordinate' });
+    expect(store.claimTask(leaderRuntime.id)?.id).toBe(leaderTask.id); store.startTask(leaderTask.id);
+    store.sendMessage({ session_id: session.id, sender: { type: 'agent', id: leader.id }, source_turn_id: store.getTurnForAttempt(leaderTask.id)!.id,
+      to: { type: 'agent', ref: agent.id }, message_kind: 'request', wake_requested: 'now', body_md: 'Start delegated work' });
+    store.completeTask(leaderTask.id, { output: 'Dispatched the original work' });
+    dispatch = { leaderId: leader.id, sessionId: dispatchSession.id };
+  } else send("Start");
   const claimed = store.claimTask(rt)!;
   store.startTask(claimed.id);
   const attempt = store.getTaskWithAgent(claimed.id)!;
@@ -74,7 +85,7 @@ async function setup({ store }: PendingTurnTestFixture) {
   await inbox.consumeTaskSteerMessages(attempt.id, offer.input_messages.map(m => m.id));
   expect(store.getTurn(offer.turn_id)?.input_to_seq).toBe(offer.input_to_seq);
   const { token } = await store.createTaskAccessToken(attempt, "local");
-  return { store, rt, agent, issue, session, attempt, offer, send, frames, inbox, feed, permission, question, client, lane,
+  return { store, rt, agent, issue, session, attempt, offer, dispatch, send, frames, inbox, feed, permission, question, client, lane,
     serverUrl: `http://127.0.0.1:${server.port}`,
     async readRange(from: number, to: number) {
       const response = await fetch(`http://127.0.0.1:${server.port}/api/sessions/${session.id}/messages?from=${from}&to=${to}`,
@@ -111,8 +122,23 @@ pendingTurnBackendTests("decision callbacks over Store and native WS", fixture =
     } finally { await h.close(); }
   }, 120_000);
 
-  it('process exit loses its wait nonce; a persisted answer executes exactly one new provider consumer', async () => {
+  it('explicit close reaches the live provider callback without turning cancellation into an answer or continuation', async () => {
     const h = await setup(fixture());
+    try {
+      const result = h.question({ mode: 'form', sessionId: 'close-provider', message: 'Where?',
+        requestedSchema: { type: 'object', properties: { answer: { type: 'string', title: 'Where?' } }, required: ['answer'] } });
+      const decision = await h.decision();
+      h.store.closeQuestion(decision.id, { expected_route_revision: 1, reason: 'User explicitly stops this question' }, { type: 'member', id: 'mem_local_local' });
+      expect(await result).toEqual({ action: 'cancel' });
+      expect(h.store.getQuestion(decision.id)).toMatchObject({ status: 'closed', answer: null, wait_status: 'detached', wait_reason: 'explicit_stop' });
+      expect(h.store.getQuestion(decision.id)?.history.filter(event => event.type === 'close')).toHaveLength(1);
+      h.store.reconcileQuestionWaits(h.rt, []);
+      expect(h.store.getQuestion(decision.id)?.history.filter(event => event.type === 'continue')).toHaveLength(0);
+    } finally { await h.close(); }
+  }, 120_000);
+
+  it('process exit loses its wait nonce; a persisted answer executes exactly one new provider consumer', async () => {
+    const h = await setup(fixture(), true);
     const processes: Array<ReturnType<typeof Bun.spawn>> = [];
     const events: Array<Record<string, any>> = [];
     const launch = (mode: 'source' | 'consumer') => {
@@ -133,6 +159,8 @@ pendingTurnBackendTests("decision callbacks over Store and native WS", fixture =
     };
     try {
       h.feed.stop(); h.client.stopLane(h.lane); await h.client.drain();
+      h.store.pinTaskSession(h.attempt.id, 'original-provider-session', '/tmp/original-question-workdir');
+      expect(h.attempt.delegatedByAgentId).toBe(h.dispatch!.leaderId);
       const source = launch('source');
       const decision = await h.decision();
       expect(h.store.getQuestion(decision.id)?.wait_status).toBe('waiting');
@@ -142,7 +170,7 @@ pendingTurnBackendTests("decision callbacks over Store and native WS", fixture =
       // The saved answer is not yet consumed by a callback in the exited process.
       expect(h.store.getQuestion(decision.id)?.wait_status).toBe('waiting');
       launch('consumer');
-      try { await until(() => events.some(event => event.event === 'consumer_ack')); }
+      try { await until(() => events.some(event => event.event === 'consumer_completed')); }
       catch (error) { console.error('process restart evidence', JSON.stringify({ events, question: h.store.getQuestion(decision.id), turns: fixture().db.query('SELECT * FROM multiremi_turns').all(), runtime: h.store.getRuntimeLite(h.rt), exits: processes.map(child => child.exitCode) })); throw error; }
       const question = h.store.getQuestion(decision.id)!;
       expect(question.wait_status).toBe('continuation_consumed');
@@ -155,7 +183,13 @@ pendingTurnBackendTests("decision callbacks over Store and native WS", fixture =
       const newConsumer = h.store.getTask(events.find(event => event.event === 'consumer_ack')!.attempt_id)!;
       expect(newConsumer.execution_scope).toBe(h.attempt.execution_scope);
       expect(newConsumer.continuedFromTaskId).toBe(h.attempt.id);
-      expect(Number(fixture().db.query("SELECT COUNT(*) AS count FROM multiremi_turns WHERE status IN ('pending','running','awaiting_human') AND agent_id=?").get(h.agent.id).count)).toBe(1);
+      expect(newConsumer).toMatchObject({ sessionId: '', workDir: '', projectionMode: 'bootstrap',
+        delegationId: h.attempt.delegationId, delegatedByAgentId: h.dispatch!.leaderId, delegatedFromIssueSessionId: h.dispatch!.sessionId, status: 'completed' });
+      expect(Number(fixture().db.query("SELECT COUNT(*) AS count FROM multiremi_turns WHERE status IN ('pending','running','awaiting_human') AND agent_id=?").get(h.agent.id).count)).toBe(0);
+      const returns = h.store.listConversationLogEntries(h.dispatch!.sessionId).filter(entry => (entry.metadata.message_source as { taskId?: string } | undefined)?.taskId === newConsumer.id);
+      expect(returns).toHaveLength(1);
+      expect(h.store.getMessage(returns[0]!.id)).toMatchObject({ to_agent_id: h.dispatch!.leaderId, message_kind: 'report' });
+      expect(h.store.listConversationLogEntries(h.dispatch!.sessionId).filter(entry => (entry.metadata.message_source as { taskId?: string } | undefined)?.taskId === h.attempt.id)).toHaveLength(0);
       h.store.reconcileQuestionWaits(h.rt, []);
       expect(h.store.getQuestion(decision.id)?.history.filter(event => event.type === 'continue')).toHaveLength(1);
     } finally {

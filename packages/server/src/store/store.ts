@@ -6168,8 +6168,8 @@ runMigrations(this.db);
     this.tasks.notifyCancelledTask(result);
   }
 
-  cancelTask(taskId: string): MultiremiTask {
-    return this.tasks.cancelTask(taskId);
+  cancelTask(taskId: string, options: { replacementPlanned?: boolean } = {}): MultiremiTask {
+    return this.tasks.cancelTask(taskId, options);
   }
 
   cancelTasksByTriggerComments(workspaceId: string, commentIds: string[]): number {

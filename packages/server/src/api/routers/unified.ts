@@ -172,6 +172,7 @@ export function registerUnifiedRoutes(app: Hono, deps: RouterDeps): void {
         if (files.length || input.attachment_ids?.length) throw new InputError("decision answers cannot include attachments");
         const result = store.answerMessageDecision(reply.id, { sender, body_md: text || selected?.join("\n") || JSON.stringify(input.response), source_turn_id: callerTurn(c),
           expected_route_revision: input.expected_route_revision, revise: input.revise, reason: input.reason,
+          expected_answer_revision: input.expected_answer_revision,
           response: input.response ?? (selected?.length ? { selected_options: selected, answer: text || selected.join("\n") } : undefined) });
         return { ...result, message: publicMessage(result.message) };
       }
@@ -222,6 +223,26 @@ export function registerUnifiedRoutes(app: Hono, deps: RouterDeps): void {
     const actor = messageActor(c, store, workspaceId);
     return actor instanceof Response ? actor : actor.type === 'member' || actor.type === 'agent' ? actor as QuestionActor : undefined;
   };
+  // A routed Q grants access to this original question only. It never grants
+  // access to the source Agent's private message history, Chat or trace.
+  const routedQuestionAccess = (q: NonNullable<ReturnType<typeof store.getQuestion>>, actor: QuestionActor | undefined) => !!actor
+    && (actor.type === 'agent' && q.source_agent_id === actor.id
+      || q.current_handler?.type === actor.type && q.current_handler.id === actor.id
+      || q.actions.allowed.some(action => ['present', 'close', 'revise'].includes(action)));
+  const loadQuestion = (c: Context) => {
+    const message = store.getMessage(c.req.param('id')!);
+    if (!message || message.visibility !== 'shown') return c.json({ error: 'question not found' }, 404);
+    const raw = store.getQuestion(message.id);
+    if (!raw) return c.json({ error: 'question not found' }, 404);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, raw.workspace_id); if (denied) return denied;
+    const actor = questionActor(c, raw.workspace_id); if (actor instanceof Response) return actor;
+    const question = store.getQuestion(message.id, actor)!;
+    if (routedQuestionAccess(question, actor)) return { message, question, actor };
+    // Agent credentials cannot borrow their runtime owner's private visibility.
+    if (actor?.type === 'agent') return c.json({ error: 'question handler required' }, 403);
+    const visible = loadMessage(c); if (visible instanceof Response) return visible;
+    return { message, question, actor };
+  };
   app.get('/api/issues/:id/questions', c => {
     const issue = store.getIssue(c.req.param('id'));
     if (!issue) return c.json({ error: 'issue not found' }, 404);
@@ -235,18 +256,16 @@ export function registerUnifiedRoutes(app: Hono, deps: RouterDeps): void {
     catch (error) { if (error instanceof QuestionError) return c.json({ error: error.message, code: error.code }, error.status); throw error; }
     return c.json({ nextCursor: page.length === limit ? page.at(-1)!.id : null, questions: page.filter(q => {
       const message = store.getMessage(q.id)!;
-      return !(loadConversation(c, store, q.session_id) instanceof Response) && visible(message);
+      return routedQuestionAccess(q, actor) || actor?.type !== 'agent' && !(loadConversation(c, store, q.session_id) instanceof Response) && visible(message);
     }) });
   });
   app.get('/api/messages/:id/question', c => {
-    const loaded = loadMessage(c); if (loaded instanceof Response) return loaded;
-    const actor = questionActor(c, loaded.conversation.workspaceId); if (actor instanceof Response) return actor;
-    const question = store.getQuestion(loaded.message.id, actor);
-    return question ? c.json({ question }) : c.json({ error: 'question not found' }, 404);
+    const loaded = loadQuestion(c); if (loaded instanceof Response) return loaded;
+    return c.json({ question: loaded.question });
   });
   for (const operation of ['answer', 'escalate', 'transfer', 'present', 'continue', 'close'] as const) app.post(`/api/messages/:id/question/${operation}`, async c => {
-    const loaded = loadMessage(c); if (loaded instanceof Response) return loaded;
-    const actor = questionActor(c, loaded.conversation.workspaceId); if (actor instanceof Response) return actor;
+    const loaded = loadQuestion(c); if (loaded instanceof Response) return loaded;
+    const actor = loaded.actor;
     if (!actor) return c.json({ error: 'question actor required' }, 403);
     return action(c, async () => {
       const input = await body(c);
