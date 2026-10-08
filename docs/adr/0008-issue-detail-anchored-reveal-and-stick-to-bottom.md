@@ -46,6 +46,12 @@ so the mechanism cannot be owned by the issue timeline component.
    `data-perf-state="ready-forced"` and warns; CI and S1 treat `ready-forced`
    as a failure, so it is a diagnostic, not a fallback that counts as passing.
 
+   SSR pre-positioning and client takeover both use the target's fractional
+   `getBoundingClientRect()` height. Rows taller than the viewport align at
+   their top edge; smaller rows are centered. Mixing integer `offsetHeight`
+   with DOMRect geometry can create a one-pixel hydration scroll even when
+   the comment content has not changed.
+
    The live card uses its natural height and sits beside the log rows, so its
    sticky containing block spans the whole discussion. There is no permanent
    128px reservation or nested scroller. Cached tasks determine its initial
