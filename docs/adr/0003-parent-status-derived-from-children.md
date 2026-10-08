@@ -33,7 +33,8 @@ dropped (`active_task_exists`), so a parent could lose reports entirely.
      of `in_review` or `done` with `open_children > 0` is rejected with 409
      `issue_status_held` (`reason: children_open`, `open_children: N`). A `done`
      target additionally requires the final-summary signal (below), else 409
-     `final_summary_missing`.
+     `final_summary_missing`. Web status controls recognize both 409 codes and
+     offer members an explicit force confirmation.
    - **Guard B** runs on the task-terminal derivation
      (`syncIssueStatusFromTaskWithinTransaction`). A derived `in_review`/`done`
      with open children is rewritten to `in_progress` and recorded as
@@ -50,11 +51,14 @@ dropped (`active_task_exists`), so a parent could lose reports entirely.
    as finished would let the parent close over unresolved work.
 3. **The final-summary signal (A1)** for `done` is: after the last child closes,
    the parent owner completed a round whose `result` carries non-empty output.
-   It is skipped for member-owned parents (a human closing the Issue *is* the
-   summary). An authorized owner agent can also satisfy A1 by posting a non-empty
-   `comment` on that parent after the final child closes. The same alternative
-   applies to SCM merge completion; member closure retains the completed-round
-   rule. The check reads tasks and comments on the parent.
+   It is skipped for member-owned parents and for unassigned parents whose
+   assignee fields are both empty: a human closing the Issue *is* the summary.
+   The unfinished-child guard and member-only closure rule still apply. An
+   authorized owner agent can also satisfy A1 by posting a non-empty `comment`
+   on that parent after the final child closes. The same alternative applies to
+   SCM merge completion. When a member closes an agent- or squad-owned parent,
+   A1 still requires a completed result-bearing round. The check reads tasks
+   and comments on the parent.
 
    The author identity of a (b) comment comes from the credential, never the
    request body: a task token resolves to that agent, a user JWT or PAT resolves

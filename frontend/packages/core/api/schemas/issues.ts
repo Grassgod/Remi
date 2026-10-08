@@ -212,7 +212,7 @@ export const IssueDependencyMutationSchema = z.object({
 }).loose();
 
 export const IssueStatusHeldErrorSchema = z.object({
-  code: z.literal("issue_status_held"),
+  code: z.enum(["issue_status_held", "final_summary_missing"]),
   reason: z.enum(["children_open", "final_summary_missing"]),
   open_children: z.number().int().nonnegative(),
 }).loose();

@@ -28,6 +28,7 @@ import {
   IssueDetailSchema,
   IssueParentDoneGrantMutationResponseSchema,
   IssueRetitleResponseSchema,
+  IssueStatusHeldErrorSchema,
   ListLarkInstallationsResponseSchema,
   ListProjectDocsResponseSchema,
   ListWorkspaceDocsResponseSchema,
@@ -241,6 +242,25 @@ describe("Issue decision and parent-done grant schemas", () => {
       issue: {},
       parent_done_grant: { ...grant, ineffective_reason: "grant_missing" },
     }).success).toBe(false);
+  });
+});
+
+describe("IssueStatusHeldErrorSchema", () => {
+  it.each([
+    { code: "issue_status_held", reason: "children_open", open_children: 2 },
+    { code: "final_summary_missing", reason: "final_summary_missing", open_children: 0, data: { lastChildClosedAt: "2026-10-08T07:43:00.000Z" } },
+    { code: "issue_status_held", reason: "final_summary_missing", open_children: 0 },
+  ])("accepts the member override response $code / $reason", (body) => {
+    expect(IssueStatusHeldErrorSchema.parse(body)).toEqual(body);
+  });
+
+  it.each([
+    { code: "parent_done_requires_member", reason: "grant_missing", open_children: 0 },
+    { code: "final_summary_missing", reason: "final_summary_missing" },
+    { code: "final_summary_missing", reason: "final_summary_missing", open_children: "0" },
+    { code: "final_summary_missing", reason: "unknown", open_children: 0 },
+  ])("rejects an unsupported or malformed override response %#", (body) => {
+    expect(IssueStatusHeldErrorSchema.safeParse(body).success).toBe(false);
   });
 });
 
