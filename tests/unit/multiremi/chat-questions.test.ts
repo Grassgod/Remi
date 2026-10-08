@@ -3,11 +3,11 @@ import { pendingTurnBackendTests, type PendingTurnTestFixture } from './pending-
 import { StoreContext, createCommitEventQueue } from '@multiremi/store/context.js';
 import { refreshChatQuestionsAfterResponsibilityChangeWithinTransaction } from '@multiremi/store/inbox/questions.js';
 
-function setup(f: PendingTurnTestFixture, transport = false, native = true) {
+function setup(f: PendingTurnTestFixture, transport = false, native = true, creatorId = 'local') {
   const { store, db } = f;
   const runtime = store.registerRuntime({ name: 'Chat Q host', provider: 'codex', daemonId: 'chat-q-daemon', maxConcurrency: 8 });
   const agent = store.createAgent({ name: 'Chat source', provider: 'codex' });
-  const chat = store.createChatSession({ agentId: agent.id, creatorId: 'local', title: 'Original Chat' });
+  const chat = store.createChatSession({ agentId: agent.id, creatorId, title: 'Original Chat' });
   if (transport) {
     const at = new Date().toISOString();
     db.run('INSERT INTO multiremi_feishu_bot_chat_bindings(id,workspace_id,app_id,agent_id,external_session_key,chat_session_id,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)',
@@ -29,6 +29,16 @@ function setup(f: PendingTurnTestFixture, transport = false, native = true) {
 }
 
 pendingTurnBackendTests('Chat question explicit responsibility', fixture => {
+  it('an unresolved creator identity cannot become a same-name member through fuzzy lookup', () => {
+    const f = fixture();
+    const user = f.store.getOrCreateUser({ externalId: 'chat_q_name_impostor', name: 'Ambiguous Chat creator' });
+    f.store.createWorkspaceMember({ workspaceId: 'local', userId: user.id, name: 'Ambiguous Chat creator', role: 'member' });
+    const h = setup(f, false, true, 'Ambiguous Chat creator');
+    expect(h.store.getQuestion(h.questionId)).toMatchObject({ current_handler: null, route_reason: 'explicit_human_responsibility_required' });
+    const before = h.store.getMessage(h.questionId)!.revision;
+    h.store.getQuestion(h.questionId);
+    expect(h.store.getMessage(h.questionId)!.revision).toBe(before);
+  });
   it('ordinary Chat uses its explicit creator and source Agent/member changes migrate the same Q', () => {
     const h = setup(fixture());
     expect(h.store.getQuestion(h.questionId)).toMatchObject({ current_handler: { type: 'member', id: 'mem_local_local' }, wait_status: 'waiting', route_revision: 1 });

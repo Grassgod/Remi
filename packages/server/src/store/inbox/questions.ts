@@ -51,7 +51,8 @@ export class Questions {
       const transport = !!chat && this.ctx.feishuBot().isFeishuTransportChatSession(chat.id);
       const config = chat ? this.ctx.feishuBot().getFeishuBotConfig(chat.workspaceId) : null;
       const ref = transport ? config?.responsibleMemberId : chat?.creatorId;
-      const member = ref && chat ? this.ctx.workspaces().getWorkspaceMemberByRef(ref, chat.workspaceId) : null;
+      const member = ref && chat ? transport ? this.ctx.workspaces().getWorkspaceMember(ref)
+        : this.ctx.workspaces().getWorkspaceMember(ref) ?? this.ctx.workspaces().findWorkspaceMemberForUser(ref, chat.workspaceId) : null;
       const remi = config?.agentId ? this.ctx.agents().getAgent(config.agentId) : null;
       const source = sourceAgent ? this.ctx.agents().getAgent(sourceAgent) : null;
       const revision = createHash('sha256').update(JSON.stringify({ sessionId, workspaceId, chatWorkspace: chat?.workspaceId,
@@ -94,7 +95,7 @@ export class Questions {
     const workspaceId = session?.workspaceId ?? chat!.workspaceId;
     if (human && !old) {
       const source = message.task_id ? this.ctx.db.query('SELECT * FROM multiremi_turns WHERE id=?').get(message.task_id) : null;
-      const humanRequired = human.kind === 'permission' || message.metadata.requires_human_authorization === true;
+      const humanRequired = human.kind === 'permission' || ['merge', 'production_change'].includes(String(message.metadata.kind ?? '')) || message.metadata.requires_human_authorization === true;
       const route = this.route(source?.issue_id ?? session?.issueId ?? null, message.sender_id, humanRequired, message.session_id, workspaceId);
       const response = human.response && typeof human.response === 'object' ? human.response : null;
       const member = human.responded_by ? this.ctx.workspaces().getWorkspaceMemberByRef(String(human.responded_by), workspaceId) : null;
@@ -209,7 +210,7 @@ export class Questions {
   createWithinTransaction(input: SendMessageInput, sourceAttemptId: string, events: CommitEventQueue) {
     const turn = input.source_turn_id ? this.ctx.db.query('SELECT * FROM multiremi_turns WHERE id=?').get(input.source_turn_id) : null;
     if (!turn || turn.current_attempt_id !== sourceAttemptId) throw new QuestionError(409, 'question_source_attempt_changed');
-    const humanRequired = input.metadata?.kind === 'permission' || input.metadata?.requires_human_authorization === true;
+    const humanRequired = ['permission', 'merge', 'production_change'].includes(String(input.metadata?.kind ?? '')) || input.metadata?.requires_human_authorization === true;
     const route = this.route(turn.issue_id, turn.agent_id, humanRequired, input.session_id, turn.workspace_id);
     const waitId = typeof input.metadata?.wait_id === 'string' && input.metadata.wait_id ? input.metadata.wait_id : undefined;
     const record: QuestionRecord = { version: 1, workspace_id: turn.workspace_id, source_issue_id: turn.issue_id, source_attempt_id: sourceAttemptId,

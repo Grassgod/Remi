@@ -8,7 +8,7 @@ import { handleTaskInteractionEvent, registerQuestionCardClient } from '@connect
 import { createMultiremiApp } from '@multiremi/api.js';
 import { MultiremiDaemonClient } from '@multiremi/worker/client.js';
 
-function setup(f: PendingTurnTestFixture, sameOwner = false, busyOwner = false) {
+function setup(f: PendingTurnTestFixture, sameOwner = false, busyOwner = false, kind = 'question') {
   const { store, db } = f;
   const runtime = store.registerRuntime({ name: 'questions host', provider: 'codex', daemonId: 'questions-daemon', maxConcurrency: 8 });
   const leader = store.createAgent({ name: 'Issue leader', provider: 'codex', maxConcurrentTasks: busyOwner ? 1 : 8 });
@@ -30,7 +30,7 @@ function setup(f: PendingTurnTestFixture, sameOwner = false, busyOwner = false) 
   const scope = { runtimeId: runtime.id, daemonId: 'questions-daemon', workspaceId: 'local' };
   const result = bridge.rpc('turn.decision', { turn_id: turn.id, attempt_id: task.id, dedupe_key: `question:${task.id}`,
     wait_id: `wait_nonce_${task.id}`, body_md: 'Which approach?', options: [{ label: 'A', value: 'A' }, { label: 'B', value: 'B' }],
-    metadata: { kind: 'question', questions: [{ fieldKey: 'approach', question: { question: 'Which approach?', options: [{ label: 'A' }, { label: 'B' }] } }] }, timeout_ms: 50 }, scope);
+    metadata: { kind, questions: [{ fieldKey: 'approach', question: { question: 'Which approach?', options: [{ label: 'A' }, { label: 'B' }] } }] }, timeout_ms: 50 }, scope);
   expect(result.ok).toBeTrue();
   const q = store.getQuestion(String(result.message_id))!;
   const agentTurn = (id: string) => {
@@ -43,6 +43,15 @@ function setup(f: PendingTurnTestFixture, sameOwner = false, busyOwner = false) 
 }
 
 pendingTurnBackendTests('one question through the responsibility chain', fixture => {
+  for (const kind of ['production_change', 'merge']) {
+    it(`${kind} authorization bypasses Agent handlers and requires the explicitly responsible human`, () => {
+      const h = setup(fixture(), false, false, kind);
+      expect(h.store.getQuestion(h.q.id)).toMatchObject({ stage: 'human', current_handler: { type: 'member', id: 'mem_local_local' } });
+      // A real execution turn belongs to the source Agent; it still cannot grant human authority.
+      expect(() => h.store.answerQuestion(h.q.id, { expected_route_revision: 1, response: { answer: 'A' } }, { type: 'agent', id: h.worker.id }, h.turn.id)).toThrow('question_handler_required');
+      expect(h.store.answerQuestion(h.q.id, { expected_route_revision: 1, response: { answer: 'A' } }, { type: 'member', id: 'mem_local_local' }).question.answer?.actor).toEqual({ type: 'member', id: 'mem_local_local' });
+    });
+  }
   it('keeps a capacity-busy Leader responsible and delivers Q into its existing coordination turn', () => {
     const h = setup(fixture(), false, true);
     expect(h.store.getQuestion(h.q.id)).toMatchObject({ current_handler: { type: 'agent', id: h.leader.id }, stage: 'issue_owner' });

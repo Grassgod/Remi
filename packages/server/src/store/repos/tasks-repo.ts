@@ -4537,7 +4537,8 @@ ${placementAfter.sql}
   respondTaskHumanRequest(requestId: string, input: { response: Record<string, unknown>; respondedBy?: string | null; cardCredential?: QuestionCardCredential; expectedRouteRevision?: number }): MultiremiTaskHumanRequest | null {
     const question = new Questions(this.ctx).get(requestId);
     if (!question) return null;
-    const member = input.respondedBy ? this.ctx.workspaces().getWorkspaceMemberByRef(input.respondedBy, question.workspace_id) : null;
+    const member = input.respondedBy ? this.ctx.workspaces().getWorkspaceMember(input.respondedBy)
+      ?? this.ctx.workspaces().findWorkspaceMemberForUser(input.respondedBy, question.workspace_id) : null;
     if (!member || member.archivedAt || member.workspaceId !== question.workspace_id) throw new Error('Explicit active question respondent required');
     new Questions(this.ctx).answer(requestId, { expected_route_revision: input.expectedRouteRevision ?? input.cardCredential?.routeRevision!, response: input.response }, { type: 'member', id: member.id }, undefined, input.cardCredential);
     return this.getTaskHumanRequest(requestId);

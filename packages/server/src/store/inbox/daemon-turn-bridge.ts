@@ -135,7 +135,7 @@ export class DaemonTurnBridge {
         const timeout=Number(payload.timeout_ms??0),expires=timeout>0?new Date(Date.now()+timeout).toISOString():null;
         const result=new Questions(this.ctx).createWithinTransaction({id: typeof payload.message_id === 'string' ? payload.message_id : undefined, session_id:turn.session_id,sender:{type:'agent',id:turn.agent_id},source_turn_id:turn.id,to:{type:'none'},
           body_md:payload.body_md,message_kind:'decision',wake_requested:'now',dedupe_key:payload.dedupe_key,options:payload.options as DecisionOption[],
-          metadata:{...(payload.metadata as object),wait_id:payload.wait_id,human_request:{kind:(payload.metadata as any)?.kind??'question',payload:{...(payload.metadata as object),options:(payload.metadata as any)?.options??payload.options},status:'pending',expires_at:expires}}},turn.current_attempt_id,events);
+          metadata:{...(payload.metadata as object),wait_id:payload.wait_id,human_request:{kind:(payload.metadata as any)?.kind==='permission'?'permission':'question',payload:{...(payload.metadata as object),options:(payload.metadata as any)?.options??payload.options},status:'pending',expires_at:expires}}},turn.current_attempt_id,events);
         // The RPC response itself delivers this message to the provider. A
         // short timeout can acknowledge it before the next snapshot arrives.
         this.ctx.db.run('UPDATE multiremi_turn_attempts SET projection_to_seq=CASE WHEN COALESCE(projection_to_seq,0)<? THEN ? ELSE projection_to_seq END WHERE id=?',
