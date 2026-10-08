@@ -3,6 +3,7 @@ import { renderToString } from "react-dom/server";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { issueKeys } from "@multiremi/core/issues/queries";
 import type { Issue, TimelineEntry } from "@multiremi/core/types";
 import { MemorySessionReplica } from "@multiremi/core/replica";
 import { useWSEvent } from "@multiremi/core/realtime";
@@ -755,18 +756,66 @@ describe("IssueDetail (shared)", () => {
     });
   });
 
-  it("reveals without active-task reconciliation and starts optional reads afterwards", async () => {
+  it("settles a missing task seed before reveal and starts optional reads afterwards", async () => {
     const phases: Array<{ endpoint: string; state: string | null }> = [];
     const record = (endpoint: string) => phases.push({ endpoint, state: document.querySelector("[data-perf-scroll='issue-detail']")?.getAttribute("data-perf-state") ?? null });
-    mockApiObj.getActiveTasksForIssue.mockImplementation(() => { record("active-task"); return new Promise(() => {}); });
+    let resolveTasks!: (value: { tasks: [] }) => void;
+    mockApiObj.listTasksByIssue.mockImplementation(() => new Promise(() => {}));
+    mockApiObj.getActiveTasksForIssue.mockImplementation(() => { record("active-task"); return new Promise(resolve => { resolveTasks = resolve; }); });
     mockApiObj.listIssueSubscribers.mockImplementation(async () => { record("subscribers"); return []; });
     renderIssueDetail();
+    await waitFor(() => expect(resolveTasks).toBeTypeOf("function"));
+    expect(document.querySelector("[data-perf-scroll='issue-detail']")).toHaveAttribute("data-perf-state", "pending");
+    expect(mockApiObj.listIssueSubscribers).not.toHaveBeenCalled();
+    await act(async () => resolveTasks({ tasks: [] }));
     await waitFor(() => expect(document.querySelector("[data-perf-scroll='issue-detail']")).toHaveAttribute("data-perf-state", "ready"));
     await waitFor(() => expect(phases.map(p => p.endpoint)).toEqual(expect.arrayContaining(["active-task", "subscribers"])));
-    expect(phases.every(p => p.state === "ready")).toBe(true);
-    expect(document.querySelector("[data-agent-card-slot]")).toHaveClass("min-h-20");
+    expect(phases.filter(p => p.endpoint === "subscribers").every(p => p.state === "ready")).toBe(true);
+    expect(mockApiObj.getActiveTasksForIssue).toHaveBeenCalledTimes(1);
+    expect(document.querySelector("[data-agent-card-slot]")).toBeNull();
+    expect(document.querySelector("[data-agent-live-card]")).toBeNull();
     expect(document.querySelector("[data-agent-stream-slot]")).toHaveClass("min-h-16");
     expect(document.querySelector("[data-agent-stream-slot]")).toHaveClass("h-16", "overflow-y-auto");
+  });
+
+  it("uses an existing task seed without waiting for the live reconciliation", async () => {
+    mockApiObj.getActiveTasksForIssue.mockImplementation(() => new Promise(() => {}));
+    renderIssueDetail();
+    await waitForReveal();
+    await waitFor(() => expect(mockApiObj.getActiveTasksForIssue).toHaveBeenCalledTimes(1));
+    expect(screen.getByText("Started working on this")).toBeVisible();
+  });
+
+  it("reveals comments when the initial active-task read fails", async () => {
+    mockApiObj.listTasksByIssue.mockImplementation(() => new Promise(() => {}));
+    mockApiObj.getActiveTasksForIssue.mockRejectedValue(new Error("fixture status unavailable"));
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      renderIssueDetail();
+      await waitForReveal();
+      expect(screen.getByText("Started working on this")).toBeVisible();
+      expect(mockApiObj.getActiveTasksForIssue).toHaveBeenCalledTimes(1);
+    } finally { error.mockRestore(); }
+  });
+
+  it("keeps the live execution bar outside the head row and separates the comment cards", async () => {
+    mockApiObj.getActiveTasksForIssue.mockResolvedValue({ tasks: [{
+      id: "task-live", issue_id: "issue-1", issue_session_id: "session-main", agent_id: "agent-1",
+      status: "running", started_at: new Date().toISOString(), created_at: new Date().toISOString(),
+    }] });
+    renderIssueDetail();
+    await waitForReveal();
+    await waitFor(() => expect(document.querySelector("[data-agent-live-card]")).not.toBeNull());
+    const bar = document.querySelector("[data-agent-live-card]")!;
+    const first = document.getElementById("comment-comment-1")!;
+    expect(bar.parentElement).toBe(first.parentElement);
+    expect(bar.closest('[data-perf-item="message"]')).toBeNull();
+    const separator = document.querySelector("[data-issue-activity-divider]")!;
+    expect(separator.tagName).toBe("HR");
+    expect(separator.compareDocumentPosition(bar) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(bar.compareDocumentPosition(first) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(first.querySelector(".group\\/msg")).toHaveClass("border", "rounded-lg");
+    expect(document.querySelector("[data-agent-card-slot]")).toBeNull();
   });
 
   it("keeps the detail skeleton until member and child gates resolve", async () => {
@@ -2001,6 +2050,8 @@ describe("IssueDetail (shared)", () => {
     function renderActivityRows(entries: SessionLogRow[], userId: string, options: { target?: string; missing?: string; ssr?: boolean;
       activities?: IssueActivityEntry[]; truncated?: boolean; side?: boolean } = {}) {
       const queryClient = createTestQueryClient();
+      // Match the SSR task seed; these cases isolate log display preferences.
+      queryClient.setQueryData(issueKeys.tasks(mockIssue.id), []);
       let target = options.target;
       let activities = options.activities;
       let currentRows = entries;
