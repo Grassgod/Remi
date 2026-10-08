@@ -4,6 +4,7 @@ export const SessionLogEntrySchema = z.object({
   session_id: z.string(), seq: z.number().int().nonnegative(), id: z.string(),
   revision: z.number().int().nonnegative(), kind: z.string(),
   visibility: z.enum(["shown", "hidden"]).default("shown"),
+  layer: z.enum(["conversation", "system"]).optional().catch(undefined),
   author_type: z.string().default("system"), author_id: z.string().nullable().default(null),
   task_id: z.string().nullable().default(null), parent_id: z.string().nullable().default(null),
   body_md: z.string(), body_html: z.string().nullable(), render_version: z.string().nullable(),

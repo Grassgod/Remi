@@ -1,17 +1,11 @@
 import type { SessionLogEntry } from "@multiremi/core/replica";
 import type { SessionLogRow } from "@multiremi/core/api/schemas/session-log";
-import { isInboxTurn, metadataRecord } from "../../common/session-log/event-summary";
+import { conversationLogLayer } from "@multiremi/contracts/conversation-log";
 
 export function isSystemDetail(entry: SessionLogEntry): boolean {
   if (entry.seq === 0) return false;
   const row = entry as SessionLogRow;
-  const metadata = metadataRecord(row.metadata);
-  // Canonical messages may retain envelope metadata from their write adapter.
-  if (row.kind === "message" && (row.message_kind || row.sender_type)) return false;
-  if (metadata.envelope) return true;
-  if (metadata.type === "workspace_move_cleared") return false;
-  if (row.kind === "message" && (!!row.message_kind || row.author_type === "member" || (row.sender_type ?? row.author_type) === "agent")) return false;
-  return row.kind !== "turn" || isInboxTurn(row.body_md);
+  return (row.layer ?? conversationLogLayer(row)) === "system";
 }
 
 export function firstTaskResponses(entries: readonly SessionLogRow[]): Map<string, SessionLogRow> {

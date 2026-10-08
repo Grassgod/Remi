@@ -35,7 +35,7 @@ describe("Issue log presentation", () => {
     },
   );
 
-  it("routes the five internal types before rendering, preserving assignments, comments and workspace changes", () => {
+  it("routes internal types before rendering, preserving assignments and comments", () => {
     const hidden = [
       row({ kind: "result_published" }),
       row({ body_md: "读收件箱 ises_123 cmt_env_456" }),
@@ -44,12 +44,34 @@ describe("Issue log presentation", () => {
       row({ kind: "follow_frozen" }),
       row({ kind: "new_kind" }),
       row({ kind: "message", author_type: "agent", metadata: { envelope: { kind: "unknown" } } }),
+      row({ kind: "system", metadata: { type: "workspace_move_cleared" } }),
     ];
     const shown = [row(), row({ seq: 0, kind: "head" }), row({ kind: "message", author_type: "member" }),
-      row({ kind: "message", author_type: "agent" }), row({ kind: "system", metadata: { type: "workspace_move_cleared" } })];
+      row({ kind: "message", author_type: "agent" })];
     expect(hidden.every(isSystemDetail)).toBe(true);
     expect(shown.some(isSystemDetail)).toBe(false);
     expect([...shown, ...hidden].filter(entry => !isSystemDetail(entry))).toEqual(shown);
+  });
+
+  it("hides canonical platform reports and English wake turns without a precomputed layer", () => {
+    expect(isSystemDetail(row({ kind: "message", sender_type: "platform", message_kind: "report",
+      body_md: "QA completed a task. Read the latest Session Updates.",
+      metadata: { envelope: { kind: "report", to: { role: "delegator" } } } }))).toBe(true);
+    expect(isSystemDetail(row({ body_md: "QA completed a task. Read the latest Session Updates.",
+      metadata: { wake_source: "platform_to_owner", assignee_agent_id: "lead" } }))).toBe(true);
+  });
+
+  it("preserves the wire layer through parsing and prefers it to the cached-row fallback", () => {
+    const system = row({ layer: "system", body_md: "Ordinary looking prompt" });
+    expect(system.layer).toBe("system");
+    expect(isSystemDetail(system)).toBe(true);
+    expect(isSystemDetail(row({ layer: "conversation", metadata: { wake_source: "platform_to_owner" } }))).toBe(false);
+  });
+
+  it.each(["future_layer", null, 7])("falls back to the shared rule for an invalid wire layer %s", layer => {
+    const entry = SessionLogEntrySchema.parse({ ...row({ kind: "message", sender_type: "platform" }), layer });
+    expect(entry.layer).toBeUndefined();
+    expect(isSystemDetail(entry)).toBe(true);
   });
 
   it("uses delegated_by before the author, and does not invent a system delegator", () => {
@@ -102,6 +124,25 @@ describe("Issue log event rows", () => {
     expect(screen.getByRole("status")).toHaveTextContent("系统QA 查看新消息");
     expect(screen.queryByRole("button")).toBeNull();
     expect(document.body).not.toHaveTextContent(/ises_|cmt_env_|Full assignment/);
+  });
+
+  it.each([undefined, "system"] as const)("summarizes an English platform wake turn by layer (%s)", layer => {
+    renderWithI18n(<Event entry={row({ layer, body_md: "QA completed a task. Read ises_123 tsk_456.",
+      metadata: { wake_source: "platform_to_owner", assignee_agent_id: "lead", delegated_by_agent_id: "lead" } })} />,
+    { locale: "zh-Hans" });
+    expect(screen.getByRole("status")).toHaveTextContent("系统Lead 查看新消息");
+    expect(screen.queryByRole("button")).toBeNull();
+    expect(document.body).not.toHaveTextContent(/派活|QA completed|ises_|tsk_/);
+  });
+
+  it("summarizes a canonical platform envelope without exposing the English body", () => {
+    renderWithI18n(<Event entry={row({ kind: "message", sender_type: "platform", message_kind: "report",
+      body_md: "QA completed a task. Read ises_123 tsk_456.", metadata: { envelope: {
+        kind: "report", dedupeKey: "delegation_terminal:x", outcome: "done", recipient_agent_id: "lead",
+        to: { role: "delegator" }, source: { taskId: "task" },
+      } } })} taskAgents={new Map([["task", "qa"]])} />);
+    expect(screen.getByRole("status")).toHaveTextContent("Notified Lead: the task assigned to QA is complete");
+    expect(document.body).not.toHaveTextContent(/QA completed|ises_|tsk_/);
   });
 
   it.each([

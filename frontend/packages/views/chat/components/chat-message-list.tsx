@@ -26,7 +26,7 @@ import type { SessionLogRow } from "@multiremi/core/api/schemas/session-log";
 import type { SessionLogEntry, SessionReplicaPort } from "@multiremi/core/replica";
 import { Markdown } from "@multiremi/views/common/markdown";
 import { SessionLogList } from "../../common/session-log/session-log-list";
-import { isInboxTurn, metadataRecord } from "../../common/session-log/event-summary";
+import { conversationLogLayer } from "@multiremi/contracts/conversation-log";
 import { copyText } from "@multiremi/ui/lib/clipboard";
 import { AttachmentList } from "../../issues/components/comment-card";
 import type { AgentAvailability } from "@multiremi/core/agents";
@@ -114,12 +114,9 @@ export function ChatMessageList({
   }, [onLoadOlderMessages, visible]);
   const transformEntries = useCallback((entries: readonly SessionLogEntry[]) =>
     mergeOptimisticChatRows(entries.filter(entry => {
-      const row = entry as SessionLogEntry & { author_type?: string; sender_type?: string; message_kind?: string; deleted_at?: string | null; metadata?: Record<string, unknown> };
+      const row = entry as SessionLogRow;
       if (row.seq === 0 || row.deleted_at) return false;
-      if (row.kind === "message" && (row.message_kind || row.sender_type)) return true;
-      if (metadataRecord(row.metadata).envelope) return false;
-      if (row.kind === "message" && row.author_type === "system" && !row.sender_type) return false;
-      return row.kind === "turn" ? !isInboxTurn(row.body_md) : row.kind === "message";
+      return (row.layer ?? conversationLogLayer(row)) === "conversation";
     }), optimisticRows), [optimisticRows]);
   const entryKey = useCallback((entry: SessionLogEntry) => clientIdOf(entry) ?? entry.id, []);
   const pendingTaskId = pendingTask?.task_id ?? null;

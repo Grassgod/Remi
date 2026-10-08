@@ -4,7 +4,7 @@ import { TurnControls } from "../../common/turn-controls";
 import { ArrowRight, Diamond } from "lucide-react";
 import type { SessionLogRow } from "@multiremi/core/api/schemas/session-log";
 import type { SessionResult } from "@multiremi/core/types";
-import { envelopeType, eventSummary, isInboxTurn, metadataRecord, metadataString, reportOutcome } from "../../common/session-log/event-summary";
+import { envelopeType, eventSummary, metadataRecord, metadataString, reportOutcome } from "../../common/session-log/event-summary";
 import { formatElapsedMs } from "../../common/format";
 import { useT, useTimeAgo } from "../../i18n";
 import { assignmentAuthor, isSystemDetail } from "./issue-log-presentation";
@@ -58,7 +58,7 @@ export function IssueLogEventRow({ row, onOpenTask, getActorName, taskAgents, re
     }
   } else if (row.kind === "turn") {
     const assignee = agentName(row.metadata.assignee_agent_id);
-    if (isInboxTurn(row.body_md)) {
+    if (system) {
       label = t($ => $.log_event.inbox_view, { name: assignee });
     } else {
       const author = assignmentAuthor(row);

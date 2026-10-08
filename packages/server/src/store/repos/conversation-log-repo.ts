@@ -21,6 +21,7 @@ import { renderMarkdown } from "../../render/markdown.js";
 import {
   CONVERSATION_LOG_BEFORE_VISIBLE_COUNT_CAP,
   CONVERSATION_LOG_KIND_VISIBILITY,
+  conversationLogLayer,
   type ConversationLogEntry,
   type ConversationLogEntryMetadata,
   type ConversationLogKind,
@@ -136,7 +137,10 @@ export class ConversationLogRepo {
       if(entry)this.emit(entry.session_id,created || entry.session_id.startsWith("chat_") ?entry:toPatch(entry.seq,entry.revision,{metadata:entry.metadata,body_md:entry.body_md,body_html:entry.body_html,render_version:entry.render_version},entry.updated_at));
     });
   }
-  private materialize(row:Row):ConversationLogEntry { return projectTurnCard(this.ctx.db,toConversationLogEntry(row)); }
+  private materialize(row:Row):ConversationLogEntry {
+    const entry = projectTurnCard(this.ctx.db,toConversationLogEntry(row));
+    return { ...entry, layer: conversationLogLayer(entry) };
+  }
 
   private agentReadScope(sessionId: string, source: Row | null): string {
     if (source?.session_id === sessionId) return String(source.execution_scope);

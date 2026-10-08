@@ -2,7 +2,7 @@
 export const ISSUE_CONVERSATION_ACTIVITY_TYPES = [
   "issue_created", "issue_updated", "issue_assigned", "issue_unassigned",
   "label_attached", "label_detached", "title_renamed", "issue_status_forced",
-  "parent_status_derived", "parent_status_held",
+  "parent_status_derived", "parent_status_held", "workspace_move_cleared",
 ] as const;
 export const ISSUE_SYSTEM_ACTIVITY_TYPES = [
   "dependency_created", "dependency_deleted", "dependency_ready", "dependency_failed",

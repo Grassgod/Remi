@@ -3,8 +3,9 @@
 ## Status
 
 Accepted (MUL-501, 2026-10-04). Step 2a implements the activity sidecar and
-presentation grouping. Decision 4 (layer storage, backfill and filtered paging)
-is reserved for the subsequent step-2b PR; it is not implemented in 2a.
+presentation grouping. Step 2b's first segment derives display layers on read
+and repairs the unified-model presentation regressions. Filtered paging remains
+reserved for the next segment; no layer column or backfill is required.
 Extends ADR 0006 (one log per session) and ADR 0007 (browser replica).
 
 ## Context
@@ -74,23 +75,30 @@ the tree, unused.
    appended only when the window is the tail. The OPFS replica, its coverage
    and its freshness rule are untouched.
 
-4. **Planned for 2b: display layering is a presentation rule and a paging
-   hint, never a log-visibility change.** The log will gain a `layer` column
-   (`conversation` default, `system` for result markers, envelopes, wake-up
-   turns and `follow_frozen`), set by the writer and backfilled once. One
-   function in `@multiremi/contracts` decides the layer from `(kind,
-   author_type, metadata.envelope, metadata.type)`; it is the same decision
-   table as the frontend's `isSystemDetail` (`issue-log-presentation.ts`) and a
-   parity test keeps the two equal. The only input the row itself does not
-   carry is whether a `turn` is an inbox wake-up: the task writer says so
-   explicitly (`turnLayer: "system"` set by the shared wake-prompt helper), and
-   the backfill uses the prompt prefix once. The window read accepts
-   `layer=conversation` so page size and `before_visible_count` count what the
-   reader sees, and echoes `layer` in its response. `visibility` and
-   `listShown` are unchanged, so agents see the same rows as before.
+4. **Display layers are derived from message headers and turn provenance,
+   never stored in a new column.** `conversationLogLayer` in contracts puts
+   member/agent messages in `conversation` and platform/timer messages in
+   `system`, including canonical envelopes now stored as `kind=message`.
+   Turns with a null/missing source or `human_sender`, `agent_dispatch`,
+   `mention` or `relay` belong to `conversation`; all other sources belong to
+   `system`. A legacy prompt starting with `读收件箱` also belongs to `system`.
+   Every `WakeReason` is explicitly classified, with an exhaustive test.
+   Head rows remain in `conversation`; other kinds belong to `system`.
 
-   Three read rules follow. Replica fills (`readRange`, frame hydration) always
-   read every layer. A presentation window keeps one layer for its lifetime:
+   The read-side card projection carries `wake_source` and
+   `trigger_message_id` from `multiremi_turns`; log materialization attaches a
+   derived `layer`. Issue and Chat use the same function for cached rows that
+   lack `layer`. A system turn displays "X 查看新消息" even when its prompt is
+   an English report. `workspace_move_cleared` is a conversation activity;
+   its platform message follows the system rule. No schema change, writer
+   layer, migration or backfill is needed.
+
+   **Reserved for the next 2b segment:** `window()` and `/log?layer=conversation`
+   filtering, response window-layer echo, SSR wiring and SQL/function parity
+   tests. Page sizes, counts and `visibility` are unchanged in this segment.
+
+   The planned filtering has three read rules. Replica fills (`readRange`,
+   frame hydration) always read every layer. A presentation window keeps one layer for its lifetime:
    `loadTail` and its pages use the effective display layer; a deep-link visit
    (`loadAround` and its pages) always uses `all`, because the target may be a
    system row and the activity spans of adjacent pages are only exact under one
@@ -148,15 +156,17 @@ the tree, unused.
 - **Negative:** `issue_updated` rows store only the new values (`data` is the
   update input), so historical lines read "把状态改为 X" without the previous
   value; new rows carry a `previous` snapshot.
-- **Planned for 2b:** `layer` is a new column on a 1.4-million-row-scale table on
-  production; the backfill is a bounded `UPDATE` run once at startup and is
-  idempotent. Reverting the code leaves the column and its values in place.
+- **Positive:** changing a layer rule requires only a code change; rollback
+  does not leave a new column or backfilled values behind.
 
 ## Step-2a implementation
 
 - The allowlist and activity details shape live in `packages/contracts/src/issue-activity.ts`.
-  Ordinary comment audits and `workspace_move_cleared` activity never repeat
-  their log rows; mention/replay notifications belong to system details.
+  Ordinary comment audits never repeat their log rows; mention/replay
+  notifications belong to system details. Step 2b's first segment includes
+  `workspace_move_cleared` activity and hides its platform message by default.
+  Each cleared reference keeps its own field/name; these activities are not
+  coalesced, and names render as literal text rather than Markdown summaries.
 - New `issue_updated` records carry only changed fields in `data.previous`.
   Historical records without it use new-value-only wording. Metadata, position
   and archive-only updates produce no visible property line.
@@ -170,8 +180,9 @@ the tree, unused.
 - Default-session SSR reads include the sidecar in the same log response.
   Live activities append only at the tail; midstream views wait for navigation
   back to the latest window. No activities are persisted in C7 or given seqs.
-- The CLI opts in with `remi session log window <session> --with-activity`;
-  side sessions and Chats ignore it. The existing entries and counts keep
+- HTTP readers opt in with `/log?with_activity=1`; the former
+  `remi session log window` command was retired by the unified model.
+  Side sessions and Chats ignore the flag. The existing entries and counts keep
   their log meaning. Hidden log rows still consume the 2a page size until 2b.
 
 ## Reversal conditions

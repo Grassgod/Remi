@@ -68,7 +68,7 @@ describe("Issue activity window (MUL-501 2a)", () => {
     expect(window.activities.some((a: { id: string }) => a.id === "act_comment" || a.id === "act_future")).toBe(false);
     expect(ISSUE_ACTIVITY_TYPES).not.toContain("comment_created");
     expect(ISSUE_ACTIVITY_TYPES).not.toContain("comment_updated");
-    expect(ISSUE_ACTIVITY_TYPES).not.toContain("workspace_move_cleared");
+    expect(ISSUE_ACTIVITY_TYPES).toContain("workspace_move_cleared");
   });
 
   it("caps a tail at its newest 200 activities, preserves label names and handles an empty log", () => {
