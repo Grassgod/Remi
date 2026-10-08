@@ -19216,7 +19216,7 @@
             "protocol": {
               "version": 1,
               "state": "rejected",
-              "min_version": "0.2.88",
+              "min_version": "0.2.89",
               "last_error": null
             },
             "executionGroupIds": [
@@ -19277,7 +19277,7 @@
           "protocol": {
             "version": 1,
             "state": "rejected",
-            "min_version": "0.2.88",
+            "min_version": "0.2.89",
             "last_error": null
           },
           "executionGroupIds": [
@@ -20186,7 +20186,7 @@
           "protocol": {
             "version": 1,
             "state": "rejected",
-            "min_version": "0.2.88",
+            "min_version": "0.2.89",
             "last_error": null
           },
           "owner_id": "local",
@@ -20248,7 +20248,7 @@
           "protocol": {
             "version": 1,
             "state": "rejected",
-            "min_version": "0.2.88",
+            "min_version": "0.2.89",
             "last_error": null
           },
           "executionGroupIds": [
@@ -24909,7 +24909,7 @@
           "protocol": {
             "version": 1,
             "state": "rejected",
-            "min_version": "0.2.88",
+            "min_version": "0.2.89",
             "last_error": null
           },
           "executionGroupIds": [
@@ -24969,7 +24969,7 @@
           "protocol": {
             "version": 1,
             "state": "rejected",
-            "min_version": "0.2.88",
+            "min_version": "0.2.89",
             "last_error": null
           },
           "executionGroupIds": [
@@ -25005,7 +25005,7 @@
         "protocol": {
           "version": 1,
           "state": "rejected",
-          "min_version": "0.2.88",
+          "min_version": "0.2.89",
           "last_error": null
         },
         "owner_id": "local",

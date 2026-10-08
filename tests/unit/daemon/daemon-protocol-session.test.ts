@@ -211,7 +211,7 @@ describe("MUL-417 daemon protocol session — handshake", () => {
     expect(h.session.isHandshakeComplete).toBe(false);
   });
 
-  it.each(["0.2.82", "0.2.85", "0.2.86", "0.2.87"])("rejects CLI %s below the minimum with reject and close 4426", async (version) => {
+  it.each(["0.2.82", "0.2.85", "0.2.86", "0.2.87", "0.2.88"])("rejects CLI %s below the minimum with reject and close 4426", async (version) => {
     const h = harness();
     await h.session.handleMessage(JSON.stringify({
       v: 2,

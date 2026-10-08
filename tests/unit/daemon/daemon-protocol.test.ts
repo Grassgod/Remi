@@ -318,6 +318,7 @@ describe("meetsDaemonMinCliVersion", () => {
     expect(meetsDaemonMinCliVersion("0.2.85")).toBe(false);
     expect(meetsDaemonMinCliVersion("0.2.86")).toBe(false);
     expect(meetsDaemonMinCliVersion("0.2.87")).toBe(false);
+    expect(meetsDaemonMinCliVersion("0.2.88")).toBe(false);
     expect(meetsDaemonMinCliVersion("0.1.0")).toBe(false);
   });
 });

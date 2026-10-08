@@ -81,7 +81,7 @@ describe("daemon protocol v2 client", () => {
     expect(b.probes()).toBe(1);
   });
 
-  it.each(["0.2.85", "0.2.86", "0.2.87"])("logs CLI %s on a payload-release rejection without claiming work", async cliVersion => {
+  it.each(["0.2.85", "0.2.86", "0.2.87", "0.2.88"])("logs CLI %s on a payload-release rejection without claiming work", async cliVersion => {
     const b = bed({ cliVersion });
     b.sockets[0]!.emit("open");
     b.sockets[0]!.frame({ t: "reject", p: { code: "daemon_cli_upgrade_required", min_protocol: 2, min_cli_version: DAEMON_MIN_CLI_VERSION } });
