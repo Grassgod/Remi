@@ -1,5 +1,6 @@
 import { InboxOperations } from '../inbox/operations.js';
 import { assertIssueDeliveryAccepted, IssueDeliveryError } from '../issue-deliveries.js';
+import { refreshResponsibilityQuestions } from '../issue-responsibility-changes.js';
 import { sendMessageWithinTransaction } from "../inbox/send-message.js";
 import { patchDecisionRecord } from "../inbox/decision-records.js";
 import { deriveIssueStatusWithinTransaction } from "../inbox/issue-status.js";
@@ -2854,11 +2855,12 @@ export class IssuesRepo {
       id,
       ],
     );
-    if (hasResponsibleField || nextParentIssueId !== current.parentIssueId || nextAssigneeId !== current.assigneeId || nextAssigneeType !== current.assigneeType) {
+    if (nextResponsibleMemberId !== (current.responsibleMemberId ?? null) || nextParentIssueId !== current.parentIssueId || nextAssigneeId !== current.assigneeId || nextAssigneeType !== current.assigneeType) {
       this.ctx.appendIssueActivity(id, {actorType:input.actorType ?? 'system',actorId:input.actorId ?? null,
         type:'issue_responsibility_transferred',body:null,data:{previous:{parentIssueId:current.parentIssueId,
           assigneeType:current.assigneeType,assigneeId:current.assigneeId,responsibleMemberId:current.responsibleMemberId ?? null},
           current:{parentIssueId:nextParentIssueId,assigneeType:nextAssigneeType,assigneeId:nextAssigneeId,responsibleMemberId:nextResponsibleMemberId}}},deferredEvents);
+      refreshResponsibilityQuestions(this.ctx,id,deferredEvents,input.actorType,input.actorId);
     }
     if (moving) {
       // B4: existing Sessions and their history retain their workspace.
@@ -4372,6 +4374,10 @@ export class IssuesRepo {
     actorId: string | null;
     parentTaskId?: string | null;
   }, deferredEvents: CommitEventQueue): number {
+    const issue = this.getIssue(id);
+    if (!issue) throw new Error(`Issue not found: ${id}`);
+    this.ctx.lockWorkspaceRuntimeLifecycle(issue.workspaceId);
+    lockIssueRowWithinTransaction(this.ctx.db,id);
     const cancelled = this.cancelActiveIssueTasks(id, "issue_unassigned", deferredEvents);
     this.ctx.db.run(
       "UPDATE multiremi_issues SET assignee_type = NULL, assignee_id = NULL, updated_at = ? WHERE id = ?",
@@ -4384,6 +4390,7 @@ export class IssuesRepo {
       body: null,
       data: { cancelled, ...sourceTaskActivityData(input.parentTaskId) },
     }, deferredEvents);
+    if (issue.assigneeId) refreshResponsibilityQuestions(this.ctx,id,deferredEvents,input.actorType,input.actorId,'issue_unassigned');
     return cancelled;
   }
 
@@ -4429,58 +4436,66 @@ export class IssuesRepo {
     const forcedDispatch = options.force === true;
     const unmetDependencies = this.dependenciesBlockDispatch(current, forcedDispatch);
     if (unmetDependencies) {
-      this.ctx.db.run(
-        "UPDATE multiremi_issues SET assignee_type = ?, assignee_id = ?, updated_at = ? WHERE id = ?",
-        [assigneeType, assigneeId, now, id],
-      );
-      if (assigneeType === "member") {
-        // A human owner is told about the assignment even though the work is
-        // held: otherwise the issue looks unassigned on every surface.
-        this.addIssueSubscriber(id, assigneeId, "assigned");
-        this.ctx.createInboxItem({
-          issueId: id,
-          memberId: assigneeId,
+      const assignmentEvents = createCommitEventQueue();
+      const heldAssignment = this.ctx.db.transaction(() => {
+        this.ctx.lockWorkspaceRuntimeLifecycle(current.workspaceId);
+        lockIssueRowWithinTransaction(this.ctx.db,id);
+        this.ctx.db.run(
+          "UPDATE multiremi_issues SET assignee_type = ?, assignee_id = ?, updated_at = ? WHERE id = ?",
+          [assigneeType, assigneeId, now, id],
+        );
+        if (assigneeType === "member") {
+          // A human owner is told about the assignment even though the work is
+          // held: otherwise the issue looks unassigned on every surface.
+          this.addIssueSubscriber(id, assigneeId, "assigned");
+          this.ctx.createInboxItem({
+            issueId: id,
+            memberId: assigneeId,
+            type: "issue_assigned",
+            title: `${current.key} assigned to you`,
+            body: current.title,
+            actorType: "system",
+            actorId: null,
+          });
+        }
+        this.ctx.appendIssueActivity(id, {
+          actorType,
+          actorId,
           type: "issue_assigned",
-          title: `${current.key} assigned to you`,
-          body: current.title,
-          actorType: "system",
-          actorId: null,
-        });
-      }
-      this.ctx.appendIssueActivity(id, {
-        actorType,
-        actorId,
-        type: "issue_assigned",
-        body: null,
-        data: {
-          assigneeType,
-          assignee_type: assigneeType,
-          assigneeId,
-          assignee_id: assigneeId,
-          toType: assigneeType,
-          to_type: assigneeType,
-          toId: assigneeId,
-          to_id: assigneeId,
-          taskId: null,
-          task_id: null,
-          deferred: true,
-          ...sourceTaskActivityData(resolveCamelOrSnakeString(input, "parentTaskId", "parent_task_id")),
-          cancelled: 0,
-        },
-      });
-      this.recordDependencyDispatchSkipped(
-        { ...current, assigneeType, assigneeId },
-        unmetDependencies,
-        { actorType, actorId, parentTaskId: resolveCamelOrSnakeString(input, "parentTaskId", "parent_task_id") },
-      );
-      if (current.projectId) this.ctx.db.run("UPDATE multiremi_projects SET updated_at = ? WHERE id = ?", [now, current.projectId]);
-      return { issue: this.getIssue(id)!, task: null, cancelledTasks: 0 };
+          body: null,
+          data: {
+            assigneeType,
+            assignee_type: assigneeType,
+            assigneeId,
+            assignee_id: assigneeId,
+            toType: assigneeType,
+            to_type: assigneeType,
+            toId: assigneeId,
+            to_id: assigneeId,
+            taskId: null,
+            task_id: null,
+            deferred: true,
+            ...sourceTaskActivityData(resolveCamelOrSnakeString(input, "parentTaskId", "parent_task_id")),
+            cancelled: 0,
+          },
+        }, assignmentEvents);
+        this.recordDependencyDispatchSkipped(
+          { ...current, assigneeType, assigneeId },
+          unmetDependencies,
+          { actorType, actorId, parentTaskId: resolveCamelOrSnakeString(input, "parentTaskId", "parent_task_id") },
+        );
+        if (current.projectId) this.ctx.db.run("UPDATE multiremi_projects SET updated_at = ? WHERE id = ?", [now, current.projectId]);
+        if (current.assigneeId !== assigneeId || current.assigneeType !== assigneeType) refreshResponsibilityQuestions(this.ctx,id,assignmentEvents,actorType,actorId,'issue_assigned');
+        return { issue: this.getIssue(id)!, task: null, cancelledTasks: 0 };
+      })();
+      afterCommit(this.ctx.db,() => this.ctx.emitCommitEvents(assignmentEvents));
+      return heldAssignment;
     }
     const deferredEvents = createCommitEventQueue();
     const cancelled = this.cancelActiveIssueTasks(id, "issue_reassigned", deferredEvents);
     this.ctx.emitCommitEvents(deferredEvents);
     const writeAssignment = (assignmentChanges: ChildStatusChangeCollector, assignmentEvents: CommitEventQueue) => {
-      if (taskAgent) this.ctx.lockWorkspaceRuntimeLifecycle(current.workspaceId);
+      this.ctx.lockWorkspaceRuntimeLifecycle(current.workspaceId);
       // Agent assignment also reopens a settled Issue, independently of PATCH.
       // ADR 0003 #8: a fresh unlocked hint (not `current`, read before the
       // cancellation committed) picks the rows; both are locked once in id order.
@@ -4533,6 +4548,7 @@ export class IssuesRepo {
          WHERE id = ?`,
         [assigneeType, assigneeId, taskAgent ? "todo" : locked.status, now, id],
       );
+      if (locked.assigneeId !== assigneeId || locked.assigneeType !== assigneeType) refreshResponsibilityQuestions(this.ctx,id,assignmentEvents,actorType,actorId,'issue_assigned');
       if (taskAgent && isTerminalIssueStatus(locked.status)) {
         this.notifyChildStatusChangeWithinTransaction(
           locked, this.getIssue(id)!, resolveCamelOrSnakeString(input, "parentTaskId", "parent_task_id"),
@@ -6524,9 +6540,7 @@ export class IssuesRepo {
       if (!agent) throw new Error(`Agent not found: ${assigneeId}`);
       if (agent.archivedAt) throw new Error(`Agent is archived: ${assigneeId}`);
     } else if (assigneeType === "member") {
-      const member = this.ctx.workspaces().getWorkspaceMember(assigneeId);
-      if (!member) throw new Error(`Member not found: ${assigneeId}`);
-      if (member.archivedAt) throw new Error(`Member is archived: ${assigneeId}`);
+      throw new IssueDeliveryError('issue_execution_owner_required','Choose an Agent or team Leader for execution; configure the final human through responsible_member_id');
     } else if (assigneeType === "squad") {
       const squad = this.ctx.squads().getSquad(assigneeId);
       if (!squad) throw new Error(`Squad not found: ${assigneeId}`);

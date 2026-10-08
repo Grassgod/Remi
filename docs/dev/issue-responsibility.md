@@ -15,12 +15,17 @@ summary: 明确根人类、统一解析单内及父单责任，并通过具体�
 子单不复制根人类字段。无 Leader、归档或跨工作区 Agent、根人类缺失、父链缺失或循环，
 均保留可见 `unresolved` 原因；不取普通队员、Agent 所属第一个团队或 workspace owner。
 `revision` 只哈希责任事实及可用性，普通评论和更新时间不改变版本。
+新的执行指派仅接受 Agent 或团队；历史 member 指派保留为缺少执行统筹的记录，
+不能将它猜成某个 Agent。人类责任单独配置在根单字段；旧 member 项目默认不复制到新单。
 
 创建根单必须传明确 `responsible_member_id`，或由真实人类创建来源承担责任。
-HTTP 的创建人来自凭据；Agent 创建新根可继承其真实来源 Issue 的明确人类。
+HTTP 的创建人来自凭据；Agent 创建新根可继承其真实来源 Issue 的明确人类，
+或原私聊 Chat 创建人的有效 workspace member。Task 凭据不把 Runtime owner 记为人类创建人。
 自动化根单从配置的人类创建来源承担；无法取得明确来源时失败，不改用 Runtime owner。
 历史根单迁移只新增 nullable 字段，不猜测回填；缺失责任通过 resolver 和关闭拒绝暴露。
 更新根人类、父单、执行指派保留 `issue_responsibility_transferred` 审计。
+同事务刷新受影响父链的未解决 Q、保留转交历史并失效旧卡凭据。团队 Leader 变更、移除或归档，
+执行 Agent 的工作区移动/归档/恢复，以及根人类工作区移动/归档也执行相同刷新；普通资料编辑不移交问题。
 
 父单执行负责人持续接收子单状态及正式交付通知，包含阻塞、失败、取消与结果。
 负责人不可用时保留未送达原因，并向明确根人类呈现责任缺口。普通派活报告仍回到实际
@@ -36,6 +41,8 @@ HTTP 的创建人来自凭据；Agent 创建新根可继承其真实来源 Issue
 验收同事务写入回复、交付收据、Issue `done` 和审计；任何一项失败均回滚。
 有未完成子单不能验收。退回必须填写意见，保存原交付与回复，并向原执行会话和 scope
 排入继续处理消息；Issue 保持开放。消息与收据不可通过普通 edit/delete 改写。
+Agent 提交及验收只能来自其责任 Issue 的主会话，继承旁支和 Chat 不具备正式交付权限。
+交付固定原 Task 会话；取消或归档后不能用 pending 交付重新关单，需先恢复开放状态。
 重复相同验收幂等；相反动作、已被新交付替代或责任移交后的旧交付被拒绝。
 
 顶层指定人类可授权当前执行负责人代理验收，授权仅绑定当前 pending 交付和责任 revision。
@@ -52,7 +59,7 @@ Task 完成、intake 生成子单和 SCM merge 均不能代替验收。SCM effec
 | 请求 | 参数 / 返回 |
 | --- | --- |
 | `GET /api/issues/:id/responsibility` | `IssueResponsibility` |
-| `GET /api/issues/:id/deliveries` | `{ deliveries: IssueDelivery[] }`，包含全部历史 |
+| `GET /api/issues/:id/deliveries` | `limit` 默认 50、最大 100，`before` 为上一页最后交付 id；返回 `{ deliveries: IssueDelivery[], nextCursor: string\|null }` |
 | `POST /api/issues/:id/deliveries` | `{ summary, sessionId?, dedupeKey? }`，返回 `{ delivery }` |
 | `POST /api/issues/:id/deliveries/:deliveryId/respond` | `{ action: accept\|return, body?, revision }`，返回 `{ delivery, issue }` |
 | `POST /api/issues/:id/deliveries/:deliveryId/authorize` | `{ agentId: string\|null, revision }`，null 撤销；返回 `{ delivery }` |
@@ -62,8 +69,9 @@ Task 完成、intake 生成子单和 SCM merge 均不能代替验收。SCM effec
 
 # 验证入口
 
-运行 `bun run test tests/unit/multiremi/issue-responsibility-deliveries.test.ts`。
+运行 `bun run test tests/unit/multiremi/issue-responsibility-deliveries.test.ts tests/unit/multiremi/issue-responsibility-transfer-hooks.test.ts`。
 SQLite 使用内存库；设置 `MULTIREMI_TEST_POSTGRES_URL` 后每个测试创建独立随机数据库，
 运行同一组真实 PostgreSQL 用例并清理自身测试库。未配置 PG 显示 skipped，不计作通过。
 这些测试覆盖根人类缺失、Issue 父链、Leader 缺失、验收鉴权、同消息引用、移交失效、
-代理授权撤销、退回继续处理及失败回滚；不代表生产历史副本、真实 provider 或飞书在线验收。
+代理授权撤销、退回继续处理、SQL 写入失败回滚、历史未知责任字段迁移与重启，以及
+责任事实变更与 Q 转交的原子性；不代表生产历史副本、真实 provider 或飞书在线验收。

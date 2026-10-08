@@ -8,7 +8,7 @@ export function deriveIssueStatusWithinTransaction(ctx:StoreContext,issueId:stri
   if(!ctx.db.run('UPDATE multiremi_issues SET id=id WHERE id=?',[issueId]).changes)return {changed:false,previousStatus:null};
   const issue=ctx.issues().getIssue(issueId);
   if(!issue||['done','cancelled'].includes(issue.status))return {changed:false,previousStatus:issue?.status??null};
-  const owner=issue.assigneeType&&issue.assigneeId?ctx.resolveRunnableAgentForAssignee(issue.assigneeType,issue.assigneeId):null;
+  const owner=ctx.resolveIssueResponsibility(issueId).executionOwner;
   const turns=ctx.db.query(`SELECT t.*,m.sender_type AS trigger_sender,m.wake_reason AS trigger_reason,m.message_kind AS trigger_kind,
       (SELECT COUNT(*) FROM multiremi_conversation_log merged WHERE merged.kind='message' AND merged.deleted_at IS NULL
         AND ${ctx.db.dialect==='postgres'?"merged.metadata::jsonb->>'delivery_turn_id'":"json_extract(merged.metadata,'$.delivery_turn_id')"}=t.id

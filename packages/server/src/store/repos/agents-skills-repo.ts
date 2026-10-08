@@ -1,4 +1,5 @@
 import { runTurnExecutionMutation } from "@multiremi/store/turn-execution-records.js";
+import { refreshResponsibilityEntityChange } from '../issue-responsibility-changes.js';
 import { getExecutionGroup, runtimeExecutionGroupId } from "@multiremi/store/execution-groups.js";
 // Agents + skills domain, extracted verbatim from MultiremiStore (facade delegates here).
 // `listActiveAgentsByRuntime` lives here (rather than in RuntimesRepo) because it hydrates agent
@@ -251,6 +252,7 @@ export class AgentsSkillsRepo {
     );
     this.ctx.db.run("UPDATE multiremi_agents SET execution_group_id = ? WHERE id = ?", [executionGroupId, id]);
     const updated = this.getAgent(id)!;
+    if (updated.workspaceId !== current.workspaceId) refreshResponsibilityEntityChange(this.ctx,'agent',id,'execution_owner_workspace_changed');
     // Changing a scheduling-relevant field (target, engine, owner, or workspace)
     // strands the agent's already-queued tasks: a task pinned to a runtime
     // that no longer matches the agent (provider/owner) can't be claimed, and
@@ -362,6 +364,7 @@ export class AgentsSkillsRepo {
          WHERE default_assignee_type = 'agent' AND default_assignee_id = ?`,
       ).all(id) as Array<{ id: string; workspace_id: string }>);
       this.ctx.db.run("UPDATE multiremi_agents SET archived_at = ?, updated_at = ? WHERE id = ?", [now, now, id]);
+      if (!agent.archivedAt) refreshResponsibilityEntityChange(this.ctx,'agent',id,'execution_owner_archived');
       this.ctx.db.run(
         `UPDATE multiremi_projects
          SET default_assignee_type = NULL, default_assignee_id = NULL, updated_at = ?
@@ -438,6 +441,7 @@ export class AgentsSkillsRepo {
         throw new Error("Agent workspace changed concurrently; retry the restore");
       }
       this.ctx.db.run("UPDATE multiremi_agents SET archived_at = NULL, updated_at = ? WHERE id = ?", [now, id]);
+      if (initial.archivedAt) refreshResponsibilityEntityChange(this.ctx,'agent',id,'execution_owner_restored');
       this.ctx.agentPlugins().reconcileAgentPluginDesiredStateWithinLock(workspaceId);
     })();
     return this.getAgent(id)!;
@@ -687,8 +691,7 @@ export class AgentsSkillsRepo {
     const existing = this.getDefaultAgent(workspaceId, provider, ownerId);
     if (existing) {
       if (existing.archivedAt) {
-        this.ctx.db.run("UPDATE multiremi_agents SET archived_at = NULL, updated_at = ? WHERE id = ?", [nowIso(), existing.id]);
-        return this.getAgent(existing.id)!;
+        return this.restoreAgent(existing.id);
       }
       return existing;
     }

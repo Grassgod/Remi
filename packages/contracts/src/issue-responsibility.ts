@@ -41,4 +41,5 @@ export interface IssueDelivery {
 }
 
 export interface SubmitIssueDeliveryInput { summary: string; sessionId?: string; dedupeKey?: string }
+export interface ListIssueDeliveriesInput { limit?: number; before?: string }
 export interface RespondIssueDeliveryInput { action: 'accept' | 'return'; body?: string; revision: string }

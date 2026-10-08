@@ -78,8 +78,11 @@ export function sendMessageWithinTransaction(ctx:StoreContext,input:SendMessageI
   let roleScope:string|undefined;
   const owner=(ownerIssue:typeof issue)=>{
     if(!ownerIssue)return;
-    const resolved=ctx.resolveIssueResponsibility(ownerIssue.id).executionOwner;
-    if(resolved){recipientType=resolved.type;recipientId=resolved.id;}
+    const responsibility=ctx.resolveIssueResponsibility(ownerIssue.id);
+    if(!responsibility.unresolved.length && responsibility.executionOwner){recipientType='agent';recipientId=responsibility.executionOwner.id;return;}
+    input={...input,metadata:{...input.metadata,responsibility_unresolved:responsibility.unresolved}};
+    if(responsibility.rootHuman){recipientType='member';recipientId=responsibility.rootHuman.id;return;}
+    throw new Error('Issue owner responsibility is unresolved; configure its execution owner and root human');
   };
   if(input.to.type==='agent'||input.to.type==='member'){recipientType=input.to.type;recipientId=input.to.ref;}
   else if(input.to.type==='role'){
@@ -145,8 +148,8 @@ export function sendMessageWithinTransaction(ctx:StoreContext,input:SendMessageI
   const hops=source&&recipientId?countMessageDelegationPairHops(ctx,source.id,recipientId,limit):0;
   const isLeader=recipientId&&input.sender.id?!!ctx.db.query(`SELECT 1 FROM multiremi_squads s JOIN multiremi_squad_members m ON m.squad_id=s.id
     WHERE s.leader_id=? AND m.member_id=? AND m.member_type='agent' AND s.workspace_id=? AND s.archived_at IS NULL`).get(recipientId,input.sender.id,workspaceId):false;
-  const parentOwner=issue?.parentIssueId?ctx.issues().getIssue(issue.parentIssueId):null;
-  const parentAgent=parentOwner?.assigneeType&&parentOwner.assigneeId?ctx.resolveRunnableAgentForAssignee(parentOwner.assigneeType,parentOwner.assigneeId):null;
+  const responsibility=issue?ctx.resolveIssueResponsibility(issue.id):null;
+  const parentAgent=responsibility && !responsibility.unresolved.length && responsibility.reviewOwner?.type==='agent' ? responsibility.reviewOwner : null;
   const policy=resolveWake(input.sender,input.to,input.wake_requested,input.message_kind,{
     recipientType,recipientId,recipientAvailable:recipientType==='agent'?!!targetAgent&&!targetAgent.archivedAt:recipientType==='member'?!!member&&!member.archivedAt:false,
     // Structural platform reports retain main's dependency exemption. Agent
@@ -258,7 +261,7 @@ export function sendMessageWithinTransaction(ctx:StoreContext,input:SendMessageI
   if(turnId&&force&&targetIssue&&unmet.length)ctx.issues().recordDependencyForceStarted(targetIssue.id,{
     source:force.source,status:'todo',previousStatus:targetIssue.status,unmet,actorType:'member',actorId:force.actorMemberId,
     commentId:force.commentId??message.id,taskId:ctx.db.query('SELECT current_attempt_id FROM multiremi_turns WHERE id=?').get(turnId)?.current_attempt_id,agentId:recipientId,
-    assigneeDispatched:recipientId === (targetIssue.assigneeType && targetIssue.assigneeId ? ctx.resolveRunnableAgentForAssignee(targetIssue.assigneeType,targetIssue.assigneeId)?.id : null),
+    assigneeDispatched:recipientId === ctx.resolveIssueResponsibility(targetIssue.id).executionOwner?.id,
   },events);
   const affected=new Set(turnId||input.message_kind==='decision'||reply?.message_kind==='decision'?[targetIssue?.id,source?.issue_id]:[]);
   for(const id of resumedIssues)affected.add(id);

@@ -9,6 +9,7 @@ import {
   canCurrentUserAccessAgent,
   canCurrentUserAccessChatTask,
   currentTaskParentId,
+  taskIssueResponsibleMember,
   denyCurrentUserWorkspaceAccess,
   denyRestrictedTaskIssueCreation,
   isActiveTaskStatus,
@@ -258,7 +259,14 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     if (!issue) return c.json({error:'issue not found'},404);
     const denied = denyCurrentUserWorkspaceAccess(c,store,issue.workspaceId);
     if (denied) return denied;
-    return c.json({deliveries:store.listIssueDeliveries(issue.id)});
+    const limit = Number(c.req.query('limit') ?? 50);
+    if (!Number.isInteger(limit) || limit < 1 || limit > 100) return c.json({error:'limit must be an integer from 1 to 100'},400);
+    try {
+      const deliveries=store.listIssueDeliveries(issue.id,{limit:limit+1,before:c.req.query('before')});
+      const hasMore=deliveries.length>limit;
+      if(hasMore)deliveries.pop();
+      return c.json({deliveries,nextCursor:hasMore?deliveries.at(-1)!.id:null});
+    } catch(error) { if(error instanceof IssueDeliveryError)return c.json({error:error.message,code:error.code},error.status);throw error; }
   });
   app.post('/api/issues/:id/deliveries', async (c) => {
     const issue = issueFromParam(store,c,'id','compat');
@@ -866,10 +874,7 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
         workspaceId,
         createdBy: currentTaskAccessToken(c) ? null : authenticatedRequestUserId(c) ?? currentRequestUserId(c),
         responsibleMemberId: body.responsibleMemberId ?? body.responsible_member_id
-          ?? (!(body.parentIssueId ?? body.parent_issue_id) && currentTaskAccessToken(c)?.taskId ? (() => {
-            const source = store.getTask(currentTaskAccessToken(c)!.taskId!);
-            return source?.issueId ? store.resolveIssueResponsibility(source.issueId).rootHuman?.id : null;
-          })() : undefined),
+          ?? (!(body.parentIssueId ?? body.parent_issue_id) && currentTaskAccessToken(c) ? taskIssueResponsibleMember(c,store) : undefined),
         assigneeType: null,
         assignee_type: null,
         assigneeId: null,

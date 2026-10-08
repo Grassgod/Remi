@@ -1502,11 +1502,7 @@ export class StoreContext {
     if (squad.archivedAt) return null;
     if (squad.leaderId) {
       const leader = this.agents().getAgent(squad.leaderId);
-      if (leader && !leader.archivedAt) return leader;
-    }
-    for (const member of this.squads().listSquadMembers(squad.id).filter((m) => m.memberType === "agent")) {
-      const agent = this.agents().getAgent(member.memberId);
-      if (agent && !agent.archivedAt) return agent;
+      if (leader && !leader.archivedAt && leader.workspaceId === squad.workspaceId) return leader;
     }
     return null;
   }

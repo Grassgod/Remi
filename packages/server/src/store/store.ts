@@ -3740,7 +3740,7 @@ runMigrations(this.db);
     return this.ctx.resolveIssueResponsibility(issueId);
   }
 
-  listIssueDeliveries(issueId: string) { return listIssueDeliveries(this.ctx,issueId); }
+  listIssueDeliveries(issueId: string, input?: import('@multiremi/contracts').ListIssueDeliveriesInput) { return listIssueDeliveries(this.ctx,issueId,input); }
   authorizeIssueDelivery(issueId: string, deliveryId: string, agentId: string | null, revision: string, actor: IssueDeliveryActor) {
     return authorizeIssueDelivery(this.ctx,issueId,deliveryId,agentId,revision,actor);
   }

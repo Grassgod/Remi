@@ -1,10 +1,12 @@
-import type { IssueDelivery, IssueResponsibleActor, SubmitIssueDeliveryInput, RespondIssueDeliveryInput } from '@multiremi/contracts';
+import type { IssueDelivery, IssueResponsibleActor, SubmitIssueDeliveryInput, RespondIssueDeliveryInput, ListIssueDeliveriesInput } from '@multiremi/contracts';
 import type { StoreContext } from './context.js';
 import { createCommitEventQueue } from './context.js';
 import { getMessage, sendMessageWithinTransaction } from './inbox/send-message.js';
 import { lockIssueRowsWithinTransaction } from './issue-row-lock.js';
 import { createId } from '@multiremi/ids.js';
 import type { ChildStatusChangeCollector } from './repos/tasks-repo.js';
+import { parseJson } from './helpers.js';
+import { afterCommit } from './db/postgres.js';
 
 export class IssueDeliveryError extends Error {
   constructor(public code: string, message: string, public status: 403 | 404 | 409 = 409) { super(message); }
@@ -25,20 +27,38 @@ function lockResponsibilityChain(ctx: StoreContext, issueId: string): void {
   if (actual.chain.some(item => !locked.get(item.issueId))) throw new IssueDeliveryError('issue_delivery_revision_stale','Responsibility changed while acquiring its lock; retry');
 }
 
-export function listIssueDeliveries(ctx: StoreContext, issueId: string): IssueDelivery[] {
-  const rows = ctx.db.query(`SELECT m.id FROM multiremi_conversation_log m JOIN multiremi_issue_sessions s ON s.id=m.session_id
-    WHERE s.issue_id=? AND m.kind='message' AND m.deleted_at IS NULL ORDER BY m.created_at DESC,m.seq DESC,m.id DESC`).all(issueId);
-  return rows.flatMap(row => {
-    const message = getMessage(ctx, String(row.id));
-    const delivery = message?.metadata.issue_delivery as IssueDelivery | undefined;
-    return delivery?.issueId === issueId ? [{...delivery,id:message!.id,createdAt:message!.created_at}] : [];
-  });
+function deliveryIssueSql(ctx: StoreContext): string {
+  return ctx.db.dialect === 'postgres' ? "m.metadata::jsonb->'issue_delivery'->>'issueId'" : "json_extract(m.metadata,'$.issue_delivery.issueId')";
+}
+
+function deliveryFromRow(row: Record<string, unknown>): IssueDelivery {
+  const metadata = parseJson<Record<string,unknown>>(row.metadata,{});
+  return {...metadata.issue_delivery as IssueDelivery,id:String(row.id),createdAt:String(row.created_at)};
+}
+
+function getIssueDelivery(ctx: StoreContext, issueId: string, deliveryId: string): IssueDelivery | null {
+  const row = ctx.db.query(`SELECT m.id,m.created_at,m.metadata FROM multiremi_conversation_log m
+    JOIN multiremi_issue_sessions s ON s.id=m.session_id WHERE m.id=? AND s.issue_id=? AND m.kind='message'
+    AND m.message_kind='report' AND m.deleted_at IS NULL AND ${deliveryIssueSql(ctx)}=?`).get(deliveryId,issueId,issueId);
+  return row ? deliveryFromRow(row) : null;
+}
+
+export function listIssueDeliveries(ctx: StoreContext, issueId: string, input: ListIssueDeliveriesInput = {}): IssueDelivery[] {
+  const limit = Math.max(1,Math.min(101,Math.trunc(input.limit ?? 50)));
+  const cursor = input.before ? ctx.db.query(`SELECT m.created_at,m.seq,m.id FROM multiremi_conversation_log m
+    JOIN multiremi_issue_sessions s ON s.id=m.session_id WHERE m.id=? AND s.issue_id=? AND ${deliveryIssueSql(ctx)}=?`).get(input.before,issueId,issueId) : null;
+  if (input.before && !cursor) throw new IssueDeliveryError('issue_delivery_cursor_invalid','Choose a delivery from this Issue as the cursor');
+  const rows = ctx.db.query(`SELECT m.id,m.created_at,m.metadata FROM multiremi_conversation_log m JOIN multiremi_issue_sessions s ON s.id=m.session_id
+    WHERE s.issue_id=? AND m.kind='message' AND m.message_kind='report' AND m.deleted_at IS NULL AND ${deliveryIssueSql(ctx)}=?
+    ${cursor ? 'AND (m.created_at,m.seq,m.id) < (?,?,?)' : ''} ORDER BY m.created_at DESC,m.seq DESC,m.id DESC LIMIT ?`)
+    .all(issueId,issueId,...(cursor ? [cursor.created_at,cursor.seq,cursor.id] : []),limit);
+  return rows.map(deliveryFromRow);
 }
 
 export function assertIssueDeliveryAccepted(ctx: StoreContext, issueId: string, deliveryId?: string): void {
   const responsibility = ctx.resolveIssueResponsibility(issueId);
   if (!responsibility.reviewOwner || !responsibility.rootHuman || responsibility.unresolved.length) throw new IssueDeliveryError('issue_responsibility_unresolved', 'Configure the Issue responsibility chain before closure');
-  const latest = listIssueDeliveries(ctx, issueId)[0];
+  const latest = listIssueDeliveries(ctx, issueId,{limit:1})[0];
   if (!latest || latest.id !== deliveryId || latest.status !== 'accepted' || latest.responsibilityRevision !== responsibility.revision) {
     throw new IssueDeliveryError('issue_delivery_acceptance_required', 'The current delivery must be accepted by its designated reviewer before closure');
   }
@@ -54,6 +74,8 @@ function authorizeActor(ctx: StoreContext, actor: IssueDeliveryActor, expected: 
     if (!task || task.agentId !== actor.id || task.workspaceId !== workspaceId || task.issueId !== expected.issueId) {
       throw new IssueDeliveryError('issue_delivery_actor_forbidden', 'The agent must act from its own responsibility Issue session', 403);
     }
+    const session = task.issueSessionId ? ctx.issueSessions().getIssueSession(task.issueSessionId) : null;
+    if (!session || session.inheritMode !== 'none' || task.chatSessionId) throw new IssueDeliveryError('issue_delivery_side_session_forbidden','Use the main responsibility Issue session for formal delivery or acceptance',403);
   }
 }
 
@@ -70,12 +92,13 @@ export function submitIssueDelivery(ctx: StoreContext, issueId: string, input: S
     const responsibility = ctx.resolveIssueResponsibility(issueId);
     if (!responsibility.executionOwner || !responsibility.reviewOwner || !responsibility.rootHuman || responsibility.unresolved.length) throw new IssueDeliveryError('issue_responsibility_unresolved', 'Configure the Issue responsibility chain before delivery');
     authorizeActor(ctx, actor, responsibility.executionOwner, issue.workspaceId);
-    const summary = input.summary?.trim();
+    const summary = typeof input.summary === 'string' ? input.summary.trim() : '';
     if (!summary) throw new IssueDeliveryError('issue_delivery_summary_required', 'A delivery summary is required');
-    if (['done','cancelled'].includes(issue.status)) throw new IssueDeliveryError('issue_delivery_closed', 'Reopen the Issue before submitting a new delivery');
-    const session = input.sessionId ? ctx.issueSessions().getIssueSession(input.sessionId)
-      : ctx.issueSessions().getOrCreateDefaultIssueSessionWithinTransaction(issueId);
-    if (!session || session.issueId !== issueId || session.workspaceId !== issue.workspaceId) throw new IssueDeliveryError('issue_delivery_session_invalid', 'Delivery session must belong to the Issue');
+    if (['done','cancelled'].includes(issue.status) || issue.archivedAt) throw new IssueDeliveryError('issue_delivery_closed', 'Reopen the Issue before submitting a new delivery');
+    const sourceTask=ctx.tasks().getTask(actor.taskId!)!;
+    const session = ctx.issueSessions().getIssueSession(input.sessionId ?? sourceTask.issueSessionId!);
+    if (!session || session.issueId !== issueId || session.workspaceId !== issue.workspaceId || session.inheritMode !== 'none') throw new IssueDeliveryError('issue_delivery_session_invalid', 'Delivery session must be a main session of the Issue');
+    if(session.id!==sourceTask.issueSessionId)throw new IssueDeliveryError('issue_delivery_session_invalid','Submit from the execution task original Issue session');
     const id = createId('cmt');
     const sourceTurn = actor.taskId ? ctx.db.query('SELECT id,execution_scope FROM multiremi_turns WHERE current_attempt_id=? OR id=?').get(actor.taskId,actor.taskId) : null;
     const delivery: IssueDelivery = {id,issueId,sourceSessionId:session.id,summary,status:'pending',submittedBy:responsibility.executionOwner,
@@ -100,8 +123,11 @@ export function submitIssueDelivery(ctx: StoreContext, issueId: string, input: S
     }
     return stored;
   })();
-  if (outcome) ctx.issues().runIssueUpdatePostCommit(outcome,{status:'in_review'},changes,events);
-  else ctx.emitCommitEvents(events);
+  const committedOutcome=outcome;
+  afterCommit(ctx.db,()=>{
+    if (committedOutcome) ctx.issues().runIssueUpdatePostCommit(committedOutcome,{status:'in_review'},changes,events);
+    else ctx.emitCommitEvents(events);
+  });
   return result;
 }
 
@@ -116,7 +142,7 @@ export function respondIssueDelivery(ctx: StoreContext, issueId: string, deliver
     lockResponsibilityChain(ctx,issueId);
     issue = ctx.issues().getIssue(issueId)!;
     const responsibility = ctx.resolveIssueResponsibility(issueId);
-    const delivery = listIssueDeliveries(ctx,issueId).find(item => item.id === deliveryId);
+    const delivery = getIssueDelivery(ctx,issueId,deliveryId);
     if (!delivery) throw new IssueDeliveryError('issue_delivery_not_found','Delivery not found',404);
     if (!responsibility.reviewOwner || !responsibility.rootHuman || responsibility.unresolved.length) throw new IssueDeliveryError('issue_responsibility_unresolved','Configure the Issue responsibility chain before acceptance');
     const grant = delivery.authorization;
@@ -130,8 +156,10 @@ export function respondIssueDelivery(ctx: StoreContext, issueId: string, deliver
       if (delivery.status === (input.action === 'accept' ? 'accepted' : 'returned')) return delivery;
       throw new IssueDeliveryError('issue_delivery_already_responded','This delivery already has a response');
     }
-    if (listIssueDeliveries(ctx,issueId)[0]?.id !== deliveryId) throw new IssueDeliveryError('issue_delivery_superseded','Only the latest delivery can be accepted or returned');
+    if (['done','cancelled'].includes(issue.status) || issue.archivedAt) throw new IssueDeliveryError('issue_delivery_closed','Reopen the Issue before responding to a pending delivery');
+    if (listIssueDeliveries(ctx,issueId,{limit:1})[0]?.id !== deliveryId) throw new IssueDeliveryError('issue_delivery_superseded','Only the latest delivery can be accepted or returned');
     if (input.action === 'accept' && ctx.issues().countOpenChildIssues(issueId)) throw new IssueDeliveryError('issue_delivery_children_open','Finish or cancel child issues before acceptance');
+    if (input.body !== undefined && typeof input.body !== 'string') throw new IssueDeliveryError('issue_delivery_response_invalid','Delivery response body must be text');
     if (input.action === 'return' && !input.body?.trim()) throw new IssueDeliveryError('issue_delivery_return_reason_required','Explain what needs to change');
     const responseActorId = authorizedAgent ? actor.id : responsibility.reviewOwner.id;
     const response = sendMessageWithinTransaction(ctx,{session_id:delivery.sourceSessionId,sender:{type:actor.type,id:responseActorId},
@@ -154,8 +182,11 @@ export function respondIssueDelivery(ctx: StoreContext, issueId: string, deliver
       payload:{issue:ctx.issues().getIssue(issueId),status_changed:outcome.previous.status !== outcome.issue.status,prev_status:outcome.previous.status}});
     return updated;
   })();
-  if (outcome) ctx.issues().runIssueUpdatePostCommit(outcome,{status:input.action === 'accept' ? 'done' : 'in_progress'},changes,events);
-  else ctx.emitCommitEvents(events);
+  const committedOutcome=outcome;
+  afterCommit(ctx.db,()=>{
+    if (committedOutcome) ctx.issues().runIssueUpdatePostCommit(committedOutcome,{status:input.action === 'accept' ? 'done' : 'in_progress'},changes,events);
+    else ctx.emitCommitEvents(events);
+  });
   return result;
 }
 
@@ -167,10 +198,11 @@ export function authorizeIssueDelivery(ctx: StoreContext, issueId: string, deliv
     if (!issue) throw new IssueDeliveryError('issue_not_found','Issue not found',404);
     ctx.lockWorkspaceRuntimeLifecycle(issue.workspaceId); lockResponsibilityChain(ctx,issueId);
     issue = ctx.issues().getIssue(issueId)!;
+    if (['done','cancelled'].includes(issue.status) || issue.archivedAt) throw new IssueDeliveryError('issue_delivery_closed','Reopen the Issue before authorizing a pending delivery');
     const responsibility = ctx.resolveIssueResponsibility(issueId);
-    const delivery = listIssueDeliveries(ctx,issueId)[0];
+    const delivery = listIssueDeliveries(ctx,issueId,{limit:1})[0];
     if (!delivery || delivery.id !== deliveryId || delivery.status !== 'pending') throw new IssueDeliveryError('issue_delivery_not_pending','Authorize the latest pending delivery');
-    if (!responsibility.reviewOwner || responsibility.reviewOwner.type !== 'member') throw new IssueDeliveryError('issue_delivery_authorization_requires_human','Only the root designated human may grant proxy acceptance',403);
+    if (!responsibility.reviewOwner || responsibility.reviewOwner.type !== 'member' || !responsibility.rootHuman || responsibility.unresolved.length) throw new IssueDeliveryError('issue_delivery_authorization_requires_human','Only the root designated human with a complete responsibility chain may grant proxy acceptance',403);
     authorizeActor(ctx,actor,responsibility.reviewOwner,issue.workspaceId);
     if (revision !== responsibility.revision || delivery.responsibilityRevision !== revision) throw new IssueDeliveryError('issue_delivery_revision_stale','Responsibility changed');
     if (agentId !== null && agentId !== responsibility.executionOwner?.id) throw new IssueDeliveryError('issue_delivery_authorization_target_invalid','Authorize only the Issue execution owner for this specific delivery');
@@ -180,7 +212,9 @@ export function authorizeIssueDelivery(ctx: StoreContext, issueId: string, deliv
     ctx.conversationLog().updateConversationLogWithinTransaction(original.session_id,original.seq,{deferEmit:true,fields:{metadata:{...original.metadata,issue_delivery:updated}}});
     ctx.appendIssueActivity(issueId,{actorType:'member',actorId:responsibility.reviewOwner.id,type:'issue_delivery_authorized',
       body:null,data:{deliveryId,authorization:updated.authorization}},events);
+    events.workspace.push({type:'issue:updated',workspaceId:issue.workspaceId,actorType:'member',actorId:responsibility.reviewOwner.id,
+      payload:{issue,status_changed:false}});
     return updated;
   })();
-  ctx.emitCommitEvents(events); return result;
+  afterCommit(ctx.db,()=>ctx.emitCommitEvents(events)); return result;
 }

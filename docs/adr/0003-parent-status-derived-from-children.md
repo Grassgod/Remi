@@ -97,8 +97,10 @@ dropped (`active_task_exists`), so a parent could lose reports entirely.
 
 8. **Guard decisions and child membership writes share the parent row lock.**
    The API writer locks its Issue before guard A. The SCM effect locks the
-   linked Issue before reading child membership, unfinished-child count, grant
-   and A1, and retains that lock through the status/effect transaction. Child
+   linked Issue before checking its formal-delivery hold, and retains that lock
+   through the effect transaction. Formal acceptance locks the current
+   responsibility chain and verifies the concrete receipt and unfinished-child
+   count in its transaction. Child
    creation, moving an Issue under a new parent (including a terminal child),
    and reopening a `done`/`cancelled` child lock that same parent before writing.
    This also covers Agent assignment's direct terminal-to-`todo` write, whose
@@ -352,7 +354,7 @@ dropped (`active_task_exists`), so a parent could lose reports entirely.
    keep their contracts; a human comment joins queued work only according to
    the Q-B constant defined in ADR 0012.
 9. **A batch update is pre-flighted as a whole, then written row by row.** Before
-   the first write, `batchUpdateIssues` evaluates guard A (A1 and A4 included)
+   the first write, `batchUpdateIssues` evaluates the parent-status guard
    for every row and refuses the whole batch if any row would be rejected,
    returning the refused issue ids in `rejected_issue_ids`. This is what makes
    "refused" and "partially applied" distinguishable. The per-row guard still
@@ -403,9 +405,9 @@ dropped (`active_task_exists`), so a parent could lose reports entirely.
 - **Positive:** no migration, no schema change, no affected claim path
   (`claimTask` / `claimNextTaskForRuntime` are untouched).
 - **Negative:** the guards are the first status validation for Issues, so scripts
-  and agents that used to PATCH `done` directly now must either finish children
-  first or `force` as a member. Team tooling that closes parents programmatically
-  needs the member identity.
+  and agents that used to PATCH `done` directly now submit a concrete formal
+  delivery for its designated reviewer to accept. Neither member `force` nor
+  the legacy parent grant substitutes for acceptance.
 - **Negative:** `MULTIREMI_PARENT_STATUS_GUARD` is a behavioural switch inside the
   store; when off, guard A/B and the re-derivation are skipped but E2's
   notifications continue.

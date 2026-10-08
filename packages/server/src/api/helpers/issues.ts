@@ -59,6 +59,22 @@ export function currentTaskParentId(c: Context): string | null {
   return currentTaskAccessToken(c)?.taskId ?? null;
 }
 
+/** Agent requests inherit a human only from their actual Issue or private Chat. */
+export function taskIssueResponsibleMember(c: Context, store: MultiremiStore): string | null {
+  const taskId = currentTaskAccessToken(c)?.taskId;
+  const task = taskId ? store.getTask(taskId) : null;
+  if (!task) return null;
+  if (task.issueId && !task.chatSessionId) {
+    const responsibility = store.resolveIssueResponsibility(task.issueId);
+    return responsibility.unresolved.length ? null : responsibility.rootHuman?.id ?? null;
+  }
+  const chat = task.chatSessionId ? store.getChatSession(task.chatSessionId) : null;
+  if (!chat?.creatorId || chat.workspaceId !== task.workspaceId) return null;
+  const member = store.getWorkspaceMember(chat.creatorId)
+    ?? store.listWorkspaceMembers(chat.workspaceId).find(member => member.userId === chat.creatorId);
+  return member && !member.archivedAt && member.workspaceId === chat.workspaceId ? member.id : null;
+}
+
 /** A human request is identified only from trusted request credentials. */
 export function humanRequestActor(c: Context): { memberId: string } | null {
   if (currentTaskAccessToken(c)) return null;
@@ -175,7 +191,7 @@ export function withIssueCreateRequestContext(
     cleanString(c.req.query("workspace_id")) ??
     currentAccessToken(c)?.workspaceId ??
     "local";
-  const userId = currentRequestUserId(c);
+  const userId = currentTaskAccessToken(c) ? null : authenticatedRequestUserId(c) ?? currentRequestUserId(c);
   const out: CreateIssueWithTaskInput = {
     title: input.title,
     workspace_id: workspaceId,
@@ -205,7 +221,7 @@ export function withIssueCreateRequestContext(
   // for a private Chat that was already detached by the upgrade.
   const task = taskToken?.taskId && store ? store.getTaskWithAgent(taskToken.taskId) : null;
   const sourceIssue = task?.issue ?? null;
-  if (sourceIssue && !out.parent_issue_id && !out.responsible_member_id) out.responsible_member_id = store!.resolveIssueResponsibility(sourceIssue.id).rootHuman?.id ?? null;
+  if (taskToken && store && !out.parent_issue_id && !out.responsible_member_id) out.responsible_member_id = taskIssueResponsibleMember(c,store);
   const isIntake = sourceIssue?.issueKind === "intake";
   if (sourceIssue) {
     // Any task-run creation (intake or follow-up) stays in the source issue's
@@ -255,7 +271,7 @@ function applyProjectDefaultAssignee(
   const projectId = cleanString(out.project_id);
   const project = projectId ? store.getProject(projectId) : null;
   if (!project || project.archivedAt) return;
-  if (project.defaultAssigneeType && project.defaultAssigneeId) {
+  if (project.defaultAssigneeType && project.defaultAssigneeType !== 'member' && project.defaultAssigneeId) {
     out.assignee_type = project.defaultAssigneeType;
     out.assignee_id = project.defaultAssigneeId;
   }
