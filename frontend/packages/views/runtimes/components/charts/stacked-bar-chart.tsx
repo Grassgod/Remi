@@ -34,6 +34,7 @@ export function StackedBarChart<Row>({
   stackId,
   yAxisWidth,
   yAxisTickFormatter,
+  xAxisTickFormatter,
   yAxisAllowDecimals,
   formatValue,
   totalLabel,
@@ -50,6 +51,7 @@ export function StackedBarChart<Row>({
   stackId?: string;
   yAxisWidth: number;
   yAxisTickFormatter?: (value: number) => string;
+  xAxisTickFormatter?: (value: string) => string;
   yAxisAllowDecimals?: boolean;
   /** Renders one series' value in a tooltip row. Raw value when omitted. */
   formatValue?: (value: number) => string;
@@ -73,6 +75,7 @@ export function StackedBarChart<Row>({
           axisLine={false}
           tickMargin={8}
           interval="preserveStartEnd"
+          tickFormatter={xAxisTickFormatter}
         />
         <YAxis
           tickLine={false}

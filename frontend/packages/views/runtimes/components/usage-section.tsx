@@ -30,6 +30,7 @@ import {
   UsageDiagnostics,
   UsageMore,
   useUsageCalendar,
+  useUsageKpiLabel,
   type UsagePeriod,
 } from "../../usage/experience-controls";
 import { ModelLabel } from "../../usage/model-label";
@@ -74,6 +75,7 @@ function RuntimeUsageContent({
     };
   } | null>(null);
   const windows = useUsageCalendar(days, tz);
+  const kpiLabel = useUsageKpiLabel(days);
   const query = useQuery(
     usageReportOptions(wsId, {
       days,
@@ -214,9 +216,10 @@ function RuntimeUsageContent({
         report && (
           <>
             <UsageDiagnostics report={report} onPrice={() => setPricing({})} />
-            <div className="grid grid-cols-1 divide-y rounded-lg border bg-card sm:grid-cols-3 sm:divide-x sm:divide-y-0">
+            <div data-testid="runtime-usage-kpis" className="grid grid-cols-3 divide-x rounded-lg border bg-card">
               <KpiCard
-                label={t(($) => $.experience.cost)}
+                compact
+                label={kpiLabel(t(($) => $.experience.cost))}
                 value={
                   cost?.value === null || !cost
                     ? "—"
@@ -249,7 +252,8 @@ function RuntimeUsageContent({
                 }
               />
               <KpiCard
-                label={t(($) => $.experience.cache)}
+                compact
+                label={kpiLabel(t(($) => $.experience.cache))}
                 value="—"
                 hint={
                   <>
@@ -268,7 +272,8 @@ function RuntimeUsageContent({
                 }
               />
               <KpiCard
-                label={t(($) => $.experience.tokens)}
+                compact
+                label={kpiLabel(t(($) => $.experience.tokens))}
                 value={
                   tokens?.value === null || !tokens
                     ? "—"
@@ -564,15 +569,15 @@ function CostByList({
     );
   const max = Math.max(0, ...rows.map((r) => r.value.value ?? 0));
   return (
-    <div className="overflow-x-auto pt-4">
-      <div className="min-w-[420px] space-y-2">
+    <div className="pt-4">
+      <div className="space-y-2">
         {rows.map(({ metrics, value }) => (
           <div
             key={"agent_id" in metrics ? metrics.agent_id : modelKey(metrics)}
             data-testid="cost-ranking-row"
-            className="grid grid-cols-[minmax(0,1fr)_minmax(0,2fr)_5rem_6rem] items-center gap-3 py-1"
+            className="grid grid-cols-[minmax(0,1fr)_6rem] items-center gap-x-3 gap-y-1 py-1 sm:grid-cols-[minmax(0,1fr)_minmax(0,2fr)_5rem_6rem] sm:gap-3"
           >
-            <div className="min-w-0">
+            <div className="col-start-1 row-start-1 min-w-0">
               {"agent_id" in metrics ? (
                 <div className="flex min-w-0 items-center gap-2">
                   <ActorAvatar
@@ -601,7 +606,7 @@ function CostByList({
                 </>
               )}
             </div>
-            <div className="relative h-2 overflow-hidden rounded-full bg-muted">
+            <div className="relative col-start-1 row-start-2 h-2 overflow-hidden rounded-full bg-muted sm:col-start-2 sm:row-start-1">
               {value.value !== null && (
                 <div
                   className="h-full rounded-full bg-chart-1"
@@ -611,13 +616,13 @@ function CostByList({
                 />
               )}
             </div>
-            <div className="text-right text-xs tabular-nums text-muted-foreground">
+            <div className="col-start-2 row-start-2 text-right text-xs tabular-nums text-muted-foreground sm:col-start-3 sm:row-start-1">
               {nullableValue(metrics, "tokens").value === null
                 ? "—"
                 : formatTokens(metrics.actual_total_tokens)}
             </div>
             <div
-              className="text-right text-sm font-medium tabular-nums"
+              className="col-start-2 row-start-1 text-right text-sm font-medium tabular-nums sm:col-start-4"
               title={
                 value.state === "subtotal"
                   ? t(($) => $.experience.subtotal)

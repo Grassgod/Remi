@@ -14,6 +14,14 @@ import { formatKnownCost, tokenCoverage, usageCsv } from "./utils";
 
 export type UsagePeriod = number | "all";
 export type UsageMetric = "tokens" | "cost" | "time" | "tasks";
+export function useUsageKpiLabel(days: UsagePeriod) {
+  const { t } = useT("usage");
+  const period =
+    days === "all"
+      ? t(($) => $.filter.all_history)
+      : t(($) => $.experience.period_days, { days });
+  return (label: string) => `${label} · ${period}`;
+}
 export function TokenBreakdownHint({
   metrics,
 }: {

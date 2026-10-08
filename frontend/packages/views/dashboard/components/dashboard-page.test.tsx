@@ -152,10 +152,10 @@ describe("Restored canonical Dashboard", () => {
       ),
     ).toHaveStyle({ width: "20%" });
     expect(
-      screen.getByText(locale.experience.time, { selector: "div" }),
+      screen.getByText(`${locale.experience.time} · 30 days`, { selector: "div" }),
     ).toBeVisible();
     expect(
-      screen.getByText(locale.experience.tasks, { selector: "div" }),
+      screen.getByText(`${locale.experience.tasks} · 30 days`, { selector: "div" }),
     ).toBeVisible();
   });
   it("keeps lifecycle trend dates independent of consumption and stacks actual unsplit, never context", () => {
@@ -226,6 +226,21 @@ describe("Restored canonical Dashboard", () => {
         }),
       ]),
     );
+  });
+  it("keeps KPI period labels synchronized with daily, annual and full-history controls", () => {
+    state.report = usageReport({ summary: usageMetrics({ total_seconds: 12 }) });
+    render(<DashboardPage />);
+    expect(screen.getByText("Cost · 30 days")).toBeVisible();
+    expect(screen.getByText("<1 minute")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "7d" }));
+    expect(screen.getByText("Cost · 7 days")).toBeVisible();
+    expect(screen.getByText("Tokens · 7 days")).toBeVisible();
+    fireEvent.click(screen.getByText(locale.experience.more));
+    fireEvent.click(screen.getByRole("button", { name: "365d" }));
+    expect(screen.getByText("Cost · 365 days")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: locale.filter.all_history }));
+    expect(screen.getByText(`Run time · ${locale.filter.all_history}`)).toBeVisible();
+    expect(screen.getByText(`Tasks · ${locale.filter.all_history}`)).toBeVisible();
   });
   it("folds source, historical date and estimate diagnostics without adding them to the cost KPI", () => {
     state.report = usageReport({

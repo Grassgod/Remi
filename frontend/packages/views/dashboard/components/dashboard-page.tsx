@@ -29,7 +29,7 @@ import { ActorAvatar } from "../../common/actor-avatar";
 import { useViewingTimezone } from "../../common/use-viewing-timezone";
 import { formatTokens } from "../../common/format";
 import { KpiCard } from "../../runtimes/components/shared";
-import { UsageChart, formatRunTime } from "../../runtimes/components/charts";
+import { UsageChart, useFormatRunTime } from "../../runtimes/components/charts";
 import { UsagePricingDialog } from "../../runtimes/components/custom-pricing-dialog";
 import {
   CurrencyControl,
@@ -39,6 +39,7 @@ import {
   UsageDiagnostics,
   UsageMore,
   useUsageCalendar,
+  useUsageKpiLabel,
   type UsageMetric,
   type UsagePeriod,
 } from "../../usage/experience-controls";
@@ -58,6 +59,8 @@ function DashboardContent({ wsId }: { wsId: string }) {
   const [metric, setMetric] = useState<UsageMetric>("tokens"),
     [currency, setCurrency] = useState("USD"),
     [pricing, setPricing] = useState(false);
+  const kpiLabel = useUsageKpiLabel(days);
+  const formatRunTime = useFormatRunTime();
   const projects = useQuery(projectListOptions(wsId)).data ?? [],
     agents = useQuery(agentListOptions(wsId)).data ?? [],
     runtimes = useQuery(runtimeListOptions(wsId)).data ?? [];
@@ -270,7 +273,7 @@ function DashboardContent({ wsId }: { wsId: string }) {
                 />
                 <div className="grid grid-cols-1 divide-y rounded-lg border bg-card sm:grid-cols-2 sm:divide-x sm:divide-y-0 lg:grid-cols-4">
                   <KpiCard
-                    label={t(($) => $.experience.cost)}
+                    label={kpiLabel(t(($) => $.experience.cost))}
                     value={text("cost")}
                     hint={
                       <>
@@ -282,19 +285,19 @@ function DashboardContent({ wsId }: { wsId: string }) {
                     }
                   />
                   <KpiCard
-                    label={t(($) => $.experience.tokens)}
+                    label={kpiLabel(t(($) => $.experience.tokens))}
                     value={text("tokens")}
                     hint={<TokenBreakdownHint metrics={report.summary} />}
                   />
                   <KpiCard
-                    label={t(($) => $.experience.time)}
+                    label={kpiLabel(t(($) => $.experience.time))}
                     value={text("time")}
                     hint={t(($) => $.experience.period_tasks, {
                       count: report.summary.task_count,
                     })}
                   />
                   <KpiCard
-                    label={t(($) => $.experience.tasks)}
+                    label={kpiLabel(t(($) => $.experience.tasks))}
                     value={text("tasks")}
                     hint={t(($) => $.experience.failed, {
                       count: report.summary.status_counts.failed,
@@ -379,6 +382,7 @@ function Leaderboard({
   currency: string;
 }) {
   const { t } = useT("usage");
+  const formatRunTime = useFormatRunTime();
   const [sort, setSort] = useState<UsageMetric>("tokens");
   const rows = [...report.by_agent].sort((a, b) => {
     const x = nullableValue(a, sort, currency).value,

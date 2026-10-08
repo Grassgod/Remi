@@ -37,6 +37,7 @@ export function UsageChart({
   currency?: string;
 }) {
   const { t } = useT("usage");
+  const formatDuration = useFormatRunTime();
   const config: ChartConfig =
     metric === "tokens"
       ? {
@@ -111,7 +112,7 @@ export function UsageChart({
       : metric === "cost"
         ? (n: number) => `${currency} ${n.toFixed(2)}`
         : metric === "time"
-          ? formatRunTime
+          ? formatDuration
           : (n: number) => n.toLocaleString();
   return (
     <StackedBarChart
@@ -121,7 +122,15 @@ export function UsageChart({
       stackId={series.length > 1 ? metric : undefined}
       yAxisWidth={metric === "time" ? 56 : 50}
       yAxisAllowDecimals={metric !== "tasks"}
-      yAxisTickFormatter={format}
+      yAxisTickFormatter={
+        metric === "cost"
+          ? (n) =>
+              n >= 1000
+                ? formatTokens(n)
+                : n.toLocaleString(undefined, { maximumSignificantDigits: 3 })
+          : format
+      }
+      xAxisTickFormatter={formatUsageAxisDate}
       formatValue={format}
       totalLabel={
         metric === "tokens"
@@ -168,6 +177,29 @@ export function formatRunTime(seconds: number): string {
   return minutes >= 60
     ? `${Math.floor(minutes / 60)}h${minutes % 60 ? ` ${minutes % 60}m` : ""}`
     : `${minutes}m`;
+}
+
+export function useFormatRunTime() {
+  const { t } = useT("usage");
+  return (seconds: number): string => {
+    if (seconds === 0) return t(($) => $.experience.zero_duration);
+    if (seconds < 60) return t(($) => $.experience.duration_less_than_minute);
+    const minutes = Math.floor(seconds / 60);
+    if (minutes < 60)
+      return t(($) => $.experience.duration_minutes, { count: minutes });
+    const hours = t(($) => $.experience.duration_hours, {
+      count: Math.floor(minutes / 60),
+    });
+    return minutes % 60
+      ? `${hours} ${t(($) => $.experience.duration_minutes, { count: minutes % 60 })}`
+      : hours;
+  };
+}
+
+/** Short calendar-axis dates; the unmodified ISO date remains in tooltips. */
+export function formatUsageAxisDate(value: string): string {
+  const match = /^\d{4}-(\d{2})-(\d{2})$/.exec(value);
+  return match ? `${Number(match[1])}/${Number(match[2])}` : value;
 }
 
 /** The old chart legend stays in the card header, leaving the plot its space. */

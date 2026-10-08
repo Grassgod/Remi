@@ -155,7 +155,8 @@ describe("Restored canonical Runtime usage", () => {
     expect(screen.getByTestId("token-breakdown")).toHaveTextContent(
       "Input 100 · Output 20 · Cache 15 · Actual unsplit 15",
     );
-    expect(screen.getByText(locale.experience.cache)).toBeVisible();
+    expect(screen.getByText(`${locale.experience.cache} · 30 days`)).toBeVisible();
+    expect(screen.getByTestId("runtime-usage-kpis")).toHaveClass("grid-cols-3");
     expect(screen.getByText(locale.experience.cache_unknown)).toBeVisible();
     expect(screen.queryByText(/hit rate/i)).toBeNull();
     expect(screen.getByTestId("trend")).toHaveAttribute("data-series", "cost");
@@ -178,6 +179,26 @@ describe("Restored canonical Runtime usage", () => {
             (o.queryKey.at(-1) as { runtime_id: string }).runtime_id === "rt",
         ),
     ).toBe(true);
+  });
+  it("updates all three KPI window labels and keeps model amounts with names in the mobile rank grid", () => {
+    render(<UsageSection runtime={runtime} />);
+    fireEvent.click(screen.getByRole("button", { name: "7d" }));
+    const kpis = screen.getByTestId("runtime-usage-kpis");
+    expect(kpis).toHaveTextContent("Cost · 7 days");
+    expect(kpis).toHaveTextContent("Cache savings · 7 days");
+    expect(kpis).toHaveTextContent("Tokens · 7 days");
+    fireEvent.click(screen.getByText(locale.experience.more));
+    fireEvent.click(screen.getByRole("button", { name: "365d" }));
+    expect(kpis).toHaveTextContent("Cost · 365 days");
+    fireEvent.click(screen.getByRole("button", { name: locale.filter.all_history }));
+    expect(kpis).toHaveTextContent(`Cost · ${locale.filter.all_history}`);
+    fireEvent.click(within(screen.getByRole("group", { name: locale.experience.ranking })).getByRole("button", { name: locale.experience.by_model }));
+    const row = screen.getByTestId("cost-ranking-row");
+    expect(row).toHaveTextContent("retired-model");
+    expect(row).toHaveTextContent("USD 0.40");
+    expect(row.parentElement).not.toHaveClass("min-w-[420px]");
+    expect(row).toHaveClass("grid-cols-[minmax(0,1fr)_6rem]");
+    expect(within(row).getByText("USD 0.40")).toHaveClass("col-start-2", "row-start-1");
   });
   it("requests fixed 26-week heatmap only after activation and keeps unknown, measured zero, no record and future distinct", () => {
     const unknown = usageMetrics({

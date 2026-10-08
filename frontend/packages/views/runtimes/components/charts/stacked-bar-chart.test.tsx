@@ -9,6 +9,7 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render } from "@testing-library/react";
 import locale from "../../../locales/en/usage.json";
+import zhLocale from "../../../locales/zh-Hans/usage.json";
 import { trendRows } from "@multiremi/core/usage/view-model";
 import { usageMetrics, usageReport } from "../../../usage/test-fixtures";
 import { UsageChart, type UsageChartRow } from "./usage-chart";
@@ -65,8 +66,8 @@ vi.mock("recharts", () => ({
   Cell: ({ fillOpacity }: { fillOpacity: number }) => (
     <div data-testid="cell" data-opacity={String(fillOpacity)} />
   ),
-  XAxis: ({ dataKey }: { dataKey: string }) => (
-    <div data-testid="x-axis" data-key={dataKey} />
+  XAxis: ({ dataKey, tickFormatter }: { dataKey: string; tickFormatter?: (value: string) => string }) => (
+    <div data-testid="x-axis" data-key={dataKey} data-tick={tickFormatter?.("2026-10-08")} />
   ),
   YAxis: ({
     width,
@@ -100,8 +101,8 @@ vi.mock("recharts", () => ({
 
 vi.mock("../../../i18n", () => ({
   useT: () => ({
-    t: (selector: (translations: TestTranslations & typeof locale) => string) =>
-      selector(translations),
+    t: (selector: (translations: TestTranslations & typeof locale) => string, params?: Record<string, string | number>) =>
+      selector(translations).replace(/\{\{(\w+)\}\}/g, (_, key) => String(params?.[key] ?? key)),
   }),
 }));
 
@@ -291,7 +292,40 @@ describe("Canonical usage tooltip states", () => {
   });
 });
 
-afterEach(() => cleanup());
+afterEach(() => {
+  cleanup();
+  translations.experience = locale.experience;
+});
+
+describe("Usage chart compact presentation", () => {
+  it("uses short calendar and currency-free amount ticks while keeping exact tooltip amounts and dates", () => {
+    const row = { label: "2026-10-08", cost: 12.345 };
+    rechartsState.tooltipLabel = row.label;
+    rechartsState.tooltipPayload = [{ name: "cost", dataKey: "cost", value: row.cost, payload: row }];
+    const r = render(<UsageChart data={[row]} metric="cost" currency="JPY" />);
+    expect(r.getByTestId("x-axis")).toHaveAttribute("data-tick", "10/8");
+    expect(r.getByTestId("y-axis")).toHaveAttribute("data-tick", "1.5K");
+    expect(r.getByTestId("tooltip")).toHaveTextContent("2026-10-08");
+    expect(r.getAllByText("JPY 12.35")).toHaveLength(2);
+  });
+  it("localizes zero and sub-minute run times without changing duration quantities", () => {
+    translations.experience = zhLocale.experience;
+    const row = { label: "2026-10-08", seconds: 0 };
+    const setDuration = (seconds: number) => {
+      row.seconds = seconds;
+      rechartsState.tooltipPayload = [{ name: "seconds", dataKey: "seconds", value: seconds, payload: row }];
+    };
+    setDuration(0);
+    const r = render(<UsageChart data={[row]} metric="time" />);
+    expect(r.getByText(zhLocale.experience.zero_duration)).toBeVisible();
+    setDuration(12);
+    r.rerender(<UsageChart data={[row]} metric="time" />);
+    expect(r.getByText(zhLocale.experience.duration_less_than_minute)).toBeVisible();
+    setDuration(90);
+    r.rerender(<UsageChart data={[row]} metric="time" />);
+    expect(r.getByText("1 分钟")).toBeVisible();
+  });
+});
 
 describe("StackedBarChart", () => {
   it("renders one bar per series, stacked, with only the top bar capped", () => {

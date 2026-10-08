@@ -1,2 +1,7 @@
-export { UsageChart, UsageChartLegend, formatRunTime } from "./usage-chart";
+export {
+  UsageChart,
+  UsageChartLegend,
+  formatRunTime,
+  useFormatRunTime,
+} from "./usage-chart";
 export { ActivityHeatmap } from "./activity-heatmap";
