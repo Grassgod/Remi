@@ -67,7 +67,7 @@ import {
   type ZeroJumpViolation,
 } from "../../frontend/scripts/perf/lib/zero-jump-verdict";
 import { measureLogRender, type RenderMeasurement } from "../../frontend/scripts/perf/lib/render-measurement";
-import { seedZeroJumpFixture, type ZeroJumpFixture } from "./zero-jump-fixture";
+import { markTaskRunning, seedZeroJumpFixture, type ZeroJumpFixture } from "./zero-jump-fixture";
 import { seedImageCases, installImageBarrier, imageObservationFailure, type ImageCase, type ImageObservation } from "./zero-jump-image-cases";
 import { computeInFlightWaves, preRevealWaveFailure } from "./zero-jump-waves";
 
@@ -929,16 +929,17 @@ async function main(): Promise<void> {
     const issue = store.createIssue({ title: "Issue layout regression", description: "Description above the activity divider.", status: "in_progress" });
     layoutIssueId = issue.id;
     const session = store.getOrCreateDefaultIssueSession(issue.id, fixture.userId);
-    const task = store.getTask(fixture.runningTaskId)!;
     for (let index = 0; index < 18; index++) store.createIssueComment(issue.id, {
       issueSessionId: session.id, authorType: "member", authorId: fixture.userId,
       body: `Layout regression comment ${index + 1}\n\n${"Synthetic content for scrolling. ".repeat(15)}`,
     });
     for (let index = 0; index < 3; index++) {
-      const created = store.createTask({ agentId: task.agentId, issueId: issue.id,
+      // Distinct lanes preserve the multi-task fixture under pending-turn coalescing.
+      const agent = store.createAgent({ name: `Layout agent ${index + 1}`, provider: "codex",
+        workspaceId: fixture.workspaceId, ownerId: fixture.userId, visibility: "workspace" });
+      const created = store.createTask({ agentId: agent.id, issueId: issue.id,
         issueSessionId: session.id, prompt: `Layout fixture ${index + 1}` });
-      // Same isolated fixture technique as markTaskRunning; no real daemon is connected.
-      if (index === 0) database.run("UPDATE multiremi_tasks SET status='running', started_at=? WHERE id=?", [new Date().toISOString(), created.id]);
+      if (index === 0) markTaskRunning(store, created.id);
     }
   }
   const minted = await store.createAccessToken({
