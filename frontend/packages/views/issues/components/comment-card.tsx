@@ -350,8 +350,9 @@ function CommentCardImpl({
 
   return (
     <div
+      data-issue-comment={entry.id}
       className={cn(
-        "group/msg relative -mx-2 rounded-md px-2 py-1.5 transition-colors duration-700 hover:bg-muted/30",
+        "group/msg relative rounded-lg border border-border bg-card p-4 transition-colors duration-700 hover:bg-muted/30",
         isHighlighted && "bg-brand/5 ring-1 ring-brand/40",
       )}
     >

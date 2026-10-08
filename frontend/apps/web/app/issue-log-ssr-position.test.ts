@@ -3,8 +3,8 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, it, vi } from "vitest";
 
-it.each([[false, false], [true, false], [false, true], [true, true]])(
-  "positions final SSR rows after preferences and restored sidebar width (deep link: %s, sidebar: %s)", async (deepLink, sidebar) => {
+it.each([32, 381.5, 640.5].flatMap(height => [[false, false, height], [true, false, height], [false, true, height], [true, true, height]] as const))(
+  "positions final SSR rows after preferences and restored sidebar width (deep link: %s, sidebar: %s, height: %s)", async (deepLink, sidebar, targetHeight) => {
   const source = readFileSync(resolve(dirname(fileURLToPath(import.meta.url)), "layout.tsx"), "utf8");
   const script = source.match(/__html: `([\s\S]*?)` }}/)?.[1];
   expect(script).toBeTruthy();
@@ -52,8 +52,10 @@ it.each([[false, false], [true, false], [false, true], [true, true]])(
     expect(root.firstElementChild?.getAttribute("style")).toContain("visibility:hidden");
     root.firstElementChild!.insertAdjacentHTML("beforeend", '<div id="comment-system-target" data-perf-item="message">system detail</div>');
     const target = root.querySelector<HTMLElement>("#comment-system-target")!;
-    Object.defineProperty(target, "offsetHeight", { value: 32 });
-    target.getBoundingClientRect = () => ({ top: 680 - root.scrollTop, height: 32 } as DOMRect);
+    // offsetHeight rounds fractional borders/line heights. SSR must use the
+    // same DOMRect geometry as the client hook or hydration moves the anchor.
+    Object.defineProperty(target, "offsetHeight", { value: Math.round(targetHeight) });
+    target.getBoundingClientRect = () => ({ top: 680 - root.scrollTop, height: targetHeight } as DOMRect);
     root.dataset.ssrExpected = "2";
     await Promise.resolve();
     expect(root.dataset.ssrPositioning).toBeUndefined();
@@ -94,7 +96,8 @@ it.each([[false, false], [true, false], [false, true], [true, true]])(
     expect(root.dataset.ssrPositioned).toBe("1");
     expect(root.dataset.perfState).toBe("ready");
     expect((root.firstElementChild as HTMLElement).style.visibility).toBe("");
-    expect(root.scrollTop).toBe(deepLink ? 496 : finalHeight);
+    const positioned = targetHeight > root.clientHeight ? 680 : 680 - (root.clientHeight - targetHeight) / 2;
+    expect(root.scrollTop).toBe(deepLink ? positioned : finalHeight);
   } finally {
     observers.forEach(observer => observer.disconnect());
     observe.mockRestore();
