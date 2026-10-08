@@ -1667,7 +1667,7 @@ runMigrations(this.db);
         );
       }
       return ack;
-    });
+    }, false);
   }
 
   sshMeshDirectiveForRuntime(runtimeId: string): MultiremiSshMeshHeartbeatAck | null {
@@ -1698,7 +1698,7 @@ runMigrations(this.db);
         );
       }
       return ack;
-    });
+    }, false);
   }
 
   getSshMeshConfigForDaemon(runtimeId: string): MultiremiDaemonSshMeshConfig | null {
@@ -3201,12 +3201,12 @@ runMigrations(this.db);
     });
   }
 
-  private withSshMeshLifecycleLock<T>(workspaceId: string, operation: () => T): T {
+  private withSshMeshLifecycleLock<T>(workspaceId: string, operation: () => T, publishChange = true): T {
     const result = this.db.transaction(() => {
       this.ctx.lockWorkspaceRuntimeLifecycle(workspaceId);
       return operation();
     })();
-    this.ctx.emitWorkspaceEvent({ type: "daemon:ssh_mesh_changed", workspaceId,
+    if (publishChange) this.ctx.emitWorkspaceEvent({ type: "daemon:ssh_mesh_changed", workspaceId,
       actorType: "system", actorId: null, payload: {} });
     return result;
   }
@@ -3254,6 +3254,10 @@ runMigrations(this.db);
 
   getRuntime(id: string): MultiremiRuntime | null {
     return this.runtimes.getRuntime(id);
+  }
+
+  getRuntimeForDispatch(id: string): MultiremiRuntime | null {
+    return this.runtimes.getRuntimeForDispatch(id);
   }
 
   /** The Runtime row without the derived usage/model/group reads. */

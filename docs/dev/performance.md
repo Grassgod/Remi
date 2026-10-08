@@ -32,6 +32,26 @@ summary: 当前性能相关实现、必须保留的语义，以及复用现有�
 - **风险推断：** 长 trace 的分页、全数组派生与 DOM 成本仍可能随事件数增长；断线补读可能与当前帧追赶叠加。需要用请求数、长任务和 React commit 测量实际成本。
 - **采集重点：** 固定事件数、平均文本长度、工具/子 agent 比例和每秒事件数；记录首次打开、滚动、实时追加与断线重连期间的请求数、长任务、React commit 时长与内存。
 
+## Daemon 保活与事件唤醒边界
+
+保活写入与业务变化通知分开：机器人相同状态报告仍更新 `reported_at`，SSH 相同状态心跳
+仍刷新在线时间，但不会因此重建全工作区下行或空派活。SSH 端点/密钥轮换改变配置 revision
+时继续下发整个 mesh。已知 Runtime 的 pending、模型和插件变化定向唤醒；任务输入仍保留
+任务宿主与 bot 可能不在同机的接收范围。事件入口见
+[workspace-wakeups.ts](../../packages/server/src/api/daemon-protocol/workspace-wakeups.ts)，
+协议边界见 [daemon 协议](../daemon-protocol-v2.md)。
+
+派活锁前使用 `getRuntimeLite`，锁后使用 `getRuntimeForDispatch` 保留模型、执行组和协议读取，
+不计算历史用量。CLI 排空、重试时点、任务下发的宿主所有者信息与飞书卡片能力判断也不附带统计；用户侧统计继续使用
+规范化台账的原查询。空派活仍有锁、资格和恢复检查，不能把“没有聚合”理解为“没有 SQL”。
+
+成本检查要计入排队的下行和派活及 `WITH` 查询，不能在同步 heartbeat handler 返回时停止。
+[多 Runtime 回归](../../tests/unit/multiremi/daemon-heartbeat-fanout-cost.test.ts)用 8 个 Runtime、
+初始 0 个任务覆盖相同报告、真实变化、目标范围与活动记录；新增任务用例验证入队立即推送，
+容量释放后在冷却到期前重试且只检查同一 daemon。默认 SQLite，显式
+`MULTIREMI_TEST_POSTGRES_URL` 则创建并清理独立 PostgreSQL 测试库，连接失败不回落。
+这是 SQL 成本与行为检查，不提供生产延迟、吞吐或恢复时间结论。
+
 ## 收件箱已具备的加载边界
 
 - [InboxPage](../../frontend/packages/views/inbox/components/inbox-page.tsx) 通过 [inboxPageOptions](../../frontend/packages/core/inbox/queries.ts) 每页读取 50 条；[listInboxItemsPage](../../packages/server/src/store/repos/issues-repo.ts) 按 `created_at DESC, id DESC` 使用游标，SQL 读取 `limit + 1` 判断后续页，服务端上限 100。`hydrateInboxRows` 已按最多 400 个 issue ID 批量补全关联对象，不能再将收件箱描述为逐行 `getIssue`。
@@ -508,7 +528,7 @@ bun run tests/integration/zero-jump-session-log-check.ts
 | 仓库根 | `bun test tests/unit/multiremi/multiremi-store-issues.test.ts tests/unit/multiremi/multiremi-api-issues.test.ts` | 列表、搜索及 API 行为；功能测试不是性能基线。 |
 | 仓库根 | `bun test tests/unit/multiremi/multiremi-api-search-inbox.test.ts` | 收件箱游标、摘要和原有读/归档契约；不产出性能数据。 |
 | 仓库根 | `bun run --preload ./tests/setup/hermetic-env.ts tests/manual/bench-first-screen-hotspots-pr2.ts --out <path>` | inbox 摘要、附件内容（完整响应与条件请求）、workspace Runtime 列表的同口径 dbq、db、过桥字节及响应字节。显式 `MULTIREMI_TEST_POSTGRES_URL` 启用真实 PG，否则使用 SQLite；PG 失败不回落。摘要按全部未归档 selection 聚合，附件 `/content` 在鉴权后比较 id ETag；三条上传路径统一排他创建，使用完整 UUID id，碰撞最多重试三次，失败只清理本次创建的文件。Runtime usage/group/model 各一次批量读，两条列表查询固定按 `updated_at DESC, id DESC` 排序。基线与 golden 复现见 `reports/performance/MUL-473-pr2-first-screen-hotspots.md`。 |
-| 仓库根 | `env -u MULTIREMI_TOKEN bun run tests/manual/bench-mul395-s9-5.ts --out <path>` | S9-5 Chat 列表、Runtime/执行组/模型列表和 updater heartbeat；必须显式配置一次性 PG，失败不回落 SQLite。250 Chats、10 runtimes，`MUL395_TASKS` 控制历史任务规模；实际桥计数、最大单回复字节和连续 timer 的不可让出区间逐轮留样。sample 0 是各路由首读，随后预热 5 次、正式 20 次；usage 缓存跨路由共享。 |
+| 仓库根 | `env -u MULTIREMI_TOKEN bun run tests/manual/bench-mul395-s9-5.ts --out <path>` | S9-5 Chat 列表、Runtime/执行组/模型列表和 updater heartbeat；必须显式配置一次性 PG，失败不回落 SQLite。250 Chats、10 runtimes，`MUL395_TASKS` 控制历史任务规模；实际桥计数、最大单回复字节和连续 timer 的不可让出区间逐轮留样。sample 0 是各路由首读，随后预热 5 次、正式 20 次；当前 Runtime 统计走规范化台账 SQL 聚合，旧缓存版本的数据按生成提交解释。 |
 | 仓库根 | `bun test tests/unit/multiremi/multiremi-postgres-store.test.ts` | SQL 翻译和真实 PG store 契约；`MULTIREMI_TEST_POSTGRES_URL` 指向可创建临时数据库的测试实例，**本地/Agent 会话必须显式设置，否则集成部分整片静默 skip**（CI 在 `release-build-check.yml` 的 backend suite 步骤显式声明），不可达时跳过并打印原因，须记录 skipped。 |
 | 仓库根 | `MULTIREMI_TEST_POSTGRES_URL=postgres://… bun test tests/unit/multiremi/multiremi-task-list-postgres.test.ts` | MUL-357 的 PG 侧证据：迁移的两个分页索引真的建出且 `indexdef` 与 `ORDER BY created_at DESC, id DESC` 匹配、`EXPLAIN (ANALYZE)` 不出现 Seq Scan/全量 Sort、`?`→`$n` 的 status/游标/limit 绑定顺序、分页走遍后与未分页集合一致。UNSET 时默认落到 `postgres://multimira:multimira@localhost:5432/postgres`（即 CI service container），不可达时跳过并打印原因，须记录 skipped。 |
 | `frontend/packages/core` | `bun run test issues/queries.test.ts issues/ws-updaters.test.ts realtime/sync/tasks.test.ts realtime/use-realtime-sync.test.ts` | 查询、精确缓存更新、实时排序/去重与刷新语义。 |

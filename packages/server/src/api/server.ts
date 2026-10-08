@@ -162,6 +162,7 @@ import {
 } from "./daemon-protocol/index.js";
 import { DaemonTaskOffers, prepareTaskOffer } from "./daemon-protocol/task-offers.js";
 import { DaemonDownlinks } from "./daemon-protocol/downlinks.js";
+import { wakeDaemonWorkspaceEvent } from "./daemon-protocol/workspace-wakeups.js";
 import { taskInputSnapshot } from "./daemon-protocol/task-input-snapshot.js";
 import { registerTaskInputRpcs } from "./daemon-protocol/task-input-rpcs.js";
 import { runtimeInputSnapshot } from "./daemon-protocol/runtime-input-snapshot.js";
@@ -1218,14 +1219,8 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
         downlinks.kickWorkspace(task.workspaceId, rt => store.getRuntimeLite(rt)?.workspaceId ?? "local");
       }
     },
-    onDaemonWorkspaceEvent: (event) => {
-      downlinks.kickWorkspace(event.workspaceId, rt => store.getRuntimeLite(rt)?.workspaceId ?? "local");
-      if (event.type === "daemon:models_updated") {
-        offers.kick(typeof event.payload.runtime_id === "string" ? event.payload.runtime_id : null);
-      } else if (/^(agent:|agent_plugin:|runtime:|project:|execution_group:|daemon:|issue:)/.test(event.type)) {
-        offers.kickWorkspace(event.workspaceId);
-      }
-    },
+    onDaemonWorkspaceEvent: event => wakeDaemonWorkspaceEvent(event, { downlinks, offers,
+      runtimeWorkspace: rt => store.getRuntimeLite(rt)?.workspaceId ?? null }),
   });
   const server = Bun.serve<MultiremiWebSocketData>({
     port,

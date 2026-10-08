@@ -463,6 +463,7 @@ export class SshMeshRepo {
     this.assertNodeKindCompatible(workspaceId, nodeId, nodeKind);
     const currentState = this.getDaemonState(workspaceId, nodeId);
     const workspaceConfig = this.getWorkspaceConfig(workspaceId);
+    const previousRevision = this.configRevision(workspaceId, workspaceConfig, this.listDaemonStates(workspaceId));
     const now = nowIso();
     const normalizedProtocolVersion = normalizeNonNegativeInt(protocolVersion, 0);
     const status = normalizedProtocolVersion < MULTIREMI_SSH_MESH_PROTOCOL_VERSION || observed === undefined
@@ -551,6 +552,11 @@ export class SshMeshRepo {
     }
     this.maybeFinalizeRotation(workspaceId);
     const ack = this.heartbeatAck(workspaceId, nodeId);
+    if (ack.config_revision !== previousRevision) {
+      // Endpoints and rotation alter the desired mesh for every node; report timestamps do not.
+      this.ctx.emitWorkspaceEvent({ type: "daemon:ssh_mesh_changed", workspaceId,
+        actorType: "system", actorId: null, payload: {} });
+    }
     this.ctx.emitWorkspaceEvent({
       type: "daemon:heartbeat",
       workspaceId,
