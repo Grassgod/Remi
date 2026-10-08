@@ -86,6 +86,8 @@ WSClient → useRealtimeSync → sync/<领域>.ts
 
 响应解析由各端点负责，目前并非所有历史方法都已调用 schema helper；新增或修改消费逻辑遵循前端规则。[createQueryClient](../../frontend/packages/core/query-client.ts)默认使用 `staleTime: Infinity`，列表是否更新依赖 mutation、WS 和重连处理，排查陈旧数据时应先核对这些路径。
 
+Issue 的成员负责人保存为工作区成员记录 `id`；成员响应中的 `user_id` 对应用户账号。[负责人选择器](../../frontend/packages/views/issues/components/pickers/assignee-picker.tsx)提交成员 `id`，名称、头像和成员资料通过 [member-lookup.ts](../../frontend/packages/core/workspace/member-lookup.ts)同时识别成员 ID 与账号 ID，优先精确匹配成员 ID；当前账号的角色判断仍按 `user_id` 查找。回归入口为 [workspace hooks 测试](../../frontend/packages/core/workspace/hooks.test.tsx)、[负责人选择器测试](../../frontend/packages/views/issues/components/pickers/assignee-picker.test.tsx)、[成员资料测试](../../frontend/packages/views/members/member-identity.test.tsx)和[服务端身份契约测试](../../tests/unit/multiremi/workspace-member-identity.test.ts)。
+
 执行时间线的旧消息与 trace 读取路径共用“过滤 usage/execution → 合并文字分片 → 脱敏”处理；合并同时保留父调用、回答阶段和记录连续性的边界。[共享 trace 语义](../../packages/shared/src/trace-semantics.ts)供页面、Daemon 和飞书使用，工具按调用 ID 配对并去重计数，取消也是终态。上下文标签独立读取 seq 最新的有效 usage（兼容旧 JSON content），与任务累计 input/output 用量分开显示。
 
 执行过程弹窗打开时读取一页，后续历史由用户继续加载；历史游标独立于 WS 尾部记录，实时帧不能跨过尚未加载的历史。浏览器的历史与实时窗口同时限制记录数和序列化字节数，具体上限集中在 [trace-window.ts](../../frontend/packages/core/api/trace-window.ts)。窗口回收只移除浏览器缓存，可回到历史开头重新分页读取。页面计数明确标示已加载范围，只有序号连续且完整时才从记录提取最终回复；不把某一页文字当作完整回答。切换任务重新创建窗口状态，旧请求不能写入新任务；订阅错误提供重试，`stream.closed` 在最终批次之后结束实时状态。

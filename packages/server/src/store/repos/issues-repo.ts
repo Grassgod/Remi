@@ -2047,19 +2047,21 @@ export class IssuesRepo {
 
   /**
    * A1: the parent owner owes a result-bearing round that finished after the last
-   * child closed. Skipped for member owners — a human closing the issue is the
-   * summary. The signal is the owner's task set on the parent: a `completed` task
-   * with a non-empty result and `completed_at` at or after the last child's
-   * terminal timestamp.
+   * child closed. Skipped for member-owned and unassigned parents — a human
+   * closing the issue is the summary. The signal is the owner's task set on the
+   * parent: a `completed` task with a non-empty result and `completed_at` at or
+   * after the last child's terminal timestamp.
    *
    * An authorized owner agent may also satisfy A1 with its own non-empty
    * comment after the final child closes. SCM checks the same signal before
-   * bypassing guard A; member closure keeps the original completed-task rule.
+   * bypassing guard A; members closing agent/squad parents need a completed task.
    */
   finalSummaryAfterLastChild(parentIssueId: string, options: { acceptCommentBy?: string | null } = {}): { satisfied: boolean; lastChildClosedAt: string | null } {
     const parent = this.getIssue(parentIssueId);
     if (!parent) return { satisfied: false, lastChildClosedAt: null };
-    if (parent.assigneeType === "member") return { satisfied: true, lastChildClosedAt: null };
+    if (parent.assigneeType === "member" || (!parent.assigneeType && !parent.assigneeId)) {
+      return { satisfied: true, lastChildClosedAt: null };
+    }
     const lastChild = this.ctx.db.query(
       `SELECT MAX(COALESCE(child.completed_at, child.updated_at)) AS closed_at
        FROM multiremi_issues child

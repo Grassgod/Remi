@@ -693,6 +693,46 @@ describe("MUL-400 E1 — parent status derived from children", () => {
     expect(store.getIssue(plain.id)?.status).toBe("done");
   });
 
+  it.each(["/api/issues", "/api/multiremi/issues"])("lets members close unassigned parents after all children finish on %s", async (path) => {
+    const store = createStore();
+    store.ensureLocalWorkspace();
+    const memberCredential = await store.createAccessToken({ name: "Closing member", type: "pat", workspaceId: "local", userId: "local" });
+    const agent = store.createAgent({ name: "Unassigned parent caller", provider: "codex" });
+    const task = store.createTask({ agentId: agent.id, prompt: "Try closing an unassigned parent" });
+    const taskCredential = await store.createTaskAccessToken(task, "local");
+    const app = createMultiremiApp({ store });
+
+    for (const batch of [false, true]) {
+      const parent = store.createIssue({ title: `Unassigned parent ${batch}`, status: "in_progress" });
+      const child = store.createIssue({ title: "Unfinished child", parentIssueId: parent.id, status: "in_progress" });
+      const blockedChild = store.createIssue({ title: "Blocked child", parentIssueId: parent.id, status: "blocked" });
+      const close = (token: string) => app.request(batch ? `${path}/batch-update` : `${path}/${parent.id}`, {
+        method: batch ? "POST" : "PATCH",
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        body: JSON.stringify(batch ? { issue_ids: [parent.id], updates: { status: "done" } } : { status: "done" }),
+      });
+
+      const held = await close(memberCredential.token);
+      expect(held.status).toBe(409);
+      expect(await held.json()).toMatchObject({ code: "issue_status_held", reason: "children_open", open_children: 2 });
+      store.updateIssue(child.id, { status: "done" });
+      const stillHeld = await close(memberCredential.token);
+      expect(stillHeld.status).toBe(409);
+      expect(await stillHeld.json()).toMatchObject({ reason: "children_open", open_children: 1 });
+      store.updateIssue(blockedChild.id, { status: "cancelled" });
+
+      const agentAttempt = await close(taskCredential.token);
+      expect(agentAttempt.status).toBe(403);
+      expect(await agentAttempt.json()).toMatchObject({ code: "parent_done_requires_member" });
+      expect(store.getIssue(parent.id)?.status).toBe("in_progress");
+
+      const completed = await close(memberCredential.token);
+      expect(completed.status).toBe(200);
+      expect(store.getIssue(parent.id)).toMatchObject({ status: "done", assigneeType: null, assigneeId: null });
+      expect(activityOf(store, parent.id, "issue_status_forced")).toHaveLength(0);
+    }
+  });
+
   it("applies the A1 final-summary rule to agent owners but not to member owners", () => {
     const store = createStore();
     store.ensureLocalWorkspace();

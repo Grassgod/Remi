@@ -7,6 +7,7 @@ import { useWorkspaceId } from "@multiremi/core/hooks";
 import { useCurrentWorkspace } from "@multiremi/core/paths";
 import { memberListOptions } from "@multiremi/core/workspace/queries";
 import { resolvePublicFileUrl } from "@multiremi/core/workspace/avatar-url";
+import { findMemberById } from "@multiremi/core/workspace/member-lookup";
 import { ActorAvatar as ActorAvatarBase } from "@multiremi/ui/components/common/actor-avatar";
 import { Skeleton } from "@multiremi/ui/components/ui/skeleton";
 import { PageHeader } from "../layout/page-header";
@@ -20,7 +21,7 @@ export function MemberDetailPage({ userId }: { userId: string }) {
   const wsId = useWorkspaceId();
   const workspace = useCurrentWorkspace();
   const { data: members = [], isLoading } = useQuery(memberListOptions(wsId));
-  const member = members.find((m) => m.user_id === userId) ?? null;
+  const member = findMemberById(members, userId) ?? null;
 
   if (isLoading && !member) {
     return <MemberDetailSkeleton />;

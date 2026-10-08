@@ -116,6 +116,7 @@ beforeEach(async () => {
   mockUpdateMutate.mockReset();
   mockCreatePinMutate.mockReset();
   mockDeletePinMutate.mockReset();
+  vi.mocked(toast.error).mockClear();
   pinListRef.value = [];
   localStorage.clear();
   Object.defineProperty(navigator, "clipboard", {
@@ -138,16 +139,41 @@ describe("useIssueActions", () => {
     );
   });
 
-  it("offers a member the force confirmation only for a structured status hold", () => {
+  it.each([
+    { code: "issue_status_held", reason: "children_open", open_children: 2 },
+    { code: "final_summary_missing", reason: "final_summary_missing", open_children: 0, data: { lastChildClosedAt: "2026-10-08T07:43:00.000Z" } },
+  ])("offers a member force confirmation for $code", (body) => {
     const { result } = renderHook(() => useIssueActions(mockIssue), { wrapper });
     act(() => result.current.updateField({ status: "done" }));
     const callbacks = mockUpdateMutate.mock.calls[0]?.[1];
-    act(() => callbacks.onError(new ApiError("held", 409, "Conflict", {
-      code: "issue_status_held", reason: "children_open", open_children: 2,
-    })));
+    act(() => callbacks.onError(new ApiError("held", 409, "Conflict", body)));
     expect(mockOpenModal).toHaveBeenCalledWith("issue-force-status", {
-      issueId: "issue-1", identifier: "TES-1", status: "done", reason: "children_open", openChildren: 2,
+      issueId: "issue-1", identifier: "TES-1", status: "done", reason: body.reason, openChildren: body.open_children,
     });
+    expect(toast.error).not.toHaveBeenCalled();
+  });
+
+  it("does not offer force confirmation without a member identity when the summary is missing", () => {
+    mockAuthState.user = null;
+    const { result } = renderHook(() => useIssueActions(mockIssue), { wrapper });
+    act(() => result.current.updateField({ status: "done" }));
+    const callbacks = mockUpdateMutate.mock.calls[0]?.[1];
+    act(() => callbacks.onError(new ApiError("summary missing", 409, "Conflict", {
+      code: "final_summary_missing", reason: "final_summary_missing", open_children: 0,
+    })));
+    expect(mockOpenModal).not.toHaveBeenCalled();
+    expect(toast.error).toHaveBeenCalledWith("summary missing");
+  });
+
+  it("shows a normal error for a malformed summary refusal", () => {
+    const { result } = renderHook(() => useIssueActions(mockIssue), { wrapper });
+    act(() => result.current.updateField({ status: "done" }));
+    const callbacks = mockUpdateMutate.mock.calls[0]?.[1];
+    act(() => callbacks.onError(new ApiError("malformed summary refusal", 409, "Conflict", {
+      code: "final_summary_missing", reason: "final_summary_missing", open_children: "0",
+    })));
+    expect(mockOpenModal).not.toHaveBeenCalled();
+    expect(toast.error).toHaveBeenCalledWith("malformed summary refusal");
   });
 
   it("keeps an agent rejection on the denied path without opening force confirmation", () => {
