@@ -71,6 +71,7 @@ pendingTurnBackendTests('explicit responsibility migration and authenticated sou
     expect(denied.status).toBe(403);
     store.updateIssue(root.id,{assigneeType:'agent',assigneeId:agent.id});
     const taskHeaders={...headers,Authorization:`Bearer ${token.token}`};
+    expect((await app.request('/api/workspaces/local/issue-responsibility-migration',{headers:taskHeaders})).status).toBe(403);
     for(const path of ['/api/issues','/api/multiremi/issues']) {
       const wrong=await app.request(path,{method:'POST',headers:taskHeaders,body:JSON.stringify({title:'Forged responsibility',responsible_member_id:other.id,createdByType:'member',created_by_type:'member',created_by:'local'})});
       expect(wrong.status).toBe(403);
@@ -127,6 +128,12 @@ pendingTurnBackendTests('explicit responsibility migration and authenticated sou
     expect(store.getQuestion(id)?.history.findLast(event=>event.reason==='issue_responsibility_transferred')?.actor).toEqual({type:'member',id:admin.id});
     expect(store.getMessage(id)?.card_token_hash).toBeNull();expect(store.getMessage(id)?.session_id).toBe(original.session_id);expect(store.getMessage(id)?.task_id).toBe(original.task_id);
     expect(store.listIssueActivity(root.id).find(item=>(item.data as {migration?:boolean})?.migration)?.actorId).toBe(admin.id);
+    const readerUser=store.getOrCreateUser({email:'migration-ordinary-reader@example.test',name:'Ordinary workspace human'});
+    store.createWorkspaceMember({userId:readerUser.id,name:'Ordinary workspace human',role:'member'});
+    const readerToken=await store.createAccessToken({userId:readerUser.id,name:'Ordinary member login',type:'pat',purpose:'session'});
+    const readerHeaders={...headers,Authorization:`Bearer ${readerToken.token}`};
+    expect((await app.request('/api/workspaces/local/issue-responsibility-migration',{headers:readerHeaders})).status).toBe(403);
+    expect((await app.request('/api/workspaces/local/issue-responsibility-migration/map',{method:'POST',headers:readerHeaders,body:JSON.stringify({reason:'Ordinary member cannot administer mapping',mappings})})).status).toBe(403);
     f.reopen();expect(f.store.getQuestion(id)?.route_revision).toBe(2);expect(f.store.getMessage(id)?.session_id).toBe(original.session_id);
   });
   it('keeps native and compat reassignment transactional and rolls dispatch failures back',async()=>{
@@ -225,6 +232,7 @@ pendingTurnBackendTests('explicit responsibility migration and authenticated sou
     const submitted=await post(`/api/issues/${issue.id}/deliveries`,taskToken.token,{summary:'Authenticated result'});expect(submitted.status).toBe(201);
     const {delivery}=await submitted.json();
     for(const token of [taskToken.token,daemon.token]) {
+      expect((await app.request('/api/workspaces/local/issue-responsibility-migration',{headers:{Authorization:`Bearer ${token}`}})).status).toBe(403);
       expect((await post(`/api/issues/${issue.id}/deliveries/${delivery.id}/respond`,token,{action:'accept',revision:delivery.responsibilityRevision,actor_type:'member',actor_id:human.id})).status).toBe(403);
       expect((await post('/api/workspaces/local/issue-responsibility-migration/map',token,{reason:'Borrow owner',mappings:[]})).status).toBe(403);
       expect((await post('/api/workspaces/local/feishu-bot',token,{responsible_member_id:human.id},'PUT')).status).toBe(403);

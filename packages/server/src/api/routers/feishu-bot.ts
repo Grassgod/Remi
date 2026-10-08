@@ -90,7 +90,7 @@ export function registerFeishuBotRoutes(
     c.header("Cache-Control", "no-store");
     // A plain member is told whether a concierge is available and nothing else:
     // the app id and the host Runtime are deployment detail they cannot change.
-    if (requireWorkspaceAdmin(c, store, workspaceId)) {
+    if (requireHumanWorkspaceAdmin(c, store, workspaceId)) {
       return c.json(availabilityView(store.feishuBotStatusSnapshot(workspaceId)));
     }
     return c.json(configView(store, workspaceId));

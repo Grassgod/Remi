@@ -33,6 +33,7 @@ import {
   readJson,
   readJsonStrict,
   requireWorkspaceAdmin,
+  requireHumanWorkspaceAdmin,
   safeAssignIssue,
   safeQuickCreateIssue,
   safeRerunIssue,
@@ -271,14 +272,14 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
 
   app.get('/api/workspaces/:workspaceId/issue-responsibility-migration',(c)=>{
     const workspaceId=c.req.param('workspaceId');
-    const denied=denyCurrentUserWorkspaceAccess(c,store,workspaceId);if(denied)return denied;
+    const denied=denyCurrentUserWorkspaceAccess(c,store,workspaceId)??requireHumanWorkspaceAdmin(c,store,workspaceId);if(denied)return denied;
     const limit=Number(c.req.query('limit')??50),offset=Number(c.req.query('offset')??0);
     if(!Number.isInteger(limit)||limit<1||limit>100||!Number.isInteger(offset)||offset<0)return c.json({error:'Use limit 1..100 and a non-negative offset'},400);
     return c.json(store.listIssueResponsibilityMigration(workspaceId,{limit,offset}));
   });
   app.post('/api/workspaces/:workspaceId/issue-responsibility-migration/map',async(c)=>{
     const workspaceId=c.req.param('workspaceId');
-    const denied=denyCurrentUserWorkspaceAccess(c,store,workspaceId)??requireWorkspaceAdmin(c,store,workspaceId);if(denied)return denied;
+    const denied=denyCurrentUserWorkspaceAccess(c,store,workspaceId)??requireHumanWorkspaceAdmin(c,store,workspaceId);if(denied)return denied;
     const actor=decisionActor(c,store,workspaceId);if(!actor||actor.type!=='member')return c.json({error:'A human administrator must confirm the mapping'},403);
     const input=await readJsonStrict<import('@multiremi/contracts').MapIssueResponsibilityInput>(c);
     if(isJsonApiError(input))return c.json({error:input.apiError},input.statusCode);

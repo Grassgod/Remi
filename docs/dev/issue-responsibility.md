@@ -96,7 +96,7 @@ SQLite 使用内存库；设置 `MULTIREMI_TEST_POSTGRES_URL` 后每个测试创
 # 历史归属复核
 
 `GET /api/workspaces/:workspaceId/issue-responsibility-migration?limit=50&offset=0`
-分页列出缺失或失效人类责任的根单，返回 `total`、`rootCount`、`legacyMemberExecutionCount`、
+仅真实 workspace 管理员可分页复核缺失或失效人类责任的根单，返回 `total`、`rootCount`、`legacyMemberExecutionCount`、
 `items` 和 `nextOffset`。每项保留原执行指派、创建人 ID、resolver revision 和 unresolved。
 旧 member 指派及可解析历史创建人只作为有来源、带可用性标志的候选；读取不写入责任。
 未知记录保留空候选，历史评论、消息与父链不受影响。
