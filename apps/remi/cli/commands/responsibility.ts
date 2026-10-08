@@ -18,7 +18,20 @@ export function responsibilityCommandSpecs(): CommandSpec[] {
   return [
     spec(["issue", "responsibility"], "Resolve execution, parent reviewer and designated root human", "read", [ref("issue")], [], i => request(i, "GET", `${issuePath(i)}/responsibility`)),
     spec(["issue", "responsible", "set"], "Explicitly assign or transfer the root human; retains audit history", "write", [ref("issue")], [{ name: "member", type: "string", required: true, description: "Workspace member ID" }], i => request(i, "PATCH", issuePath(i), { responsible_member_id: stringOption(i, "member") }), true),
-    spec(["issue", "question", "list"], "List original questions and routing/answer history", "read", [ref("issue")], [], i => request(i, "GET", `${issuePath(i)}/questions`, undefined, ["questions"])),
+    spec(["issue", "question", "list"], "List all original questions and routing/answer history", "read", [ref("issue")], [], async i => {
+      const client = await clientFor(i);
+      const questions = new Map<string, unknown>();
+      const seen = new Set<string>();
+      let before: string | undefined;
+      do {
+        const result = await client.request<{ questions: Array<{ id: string }>; nextCursor?: string | null }>({ method: "GET", path: `${issuePath(i)}/questions`, query: { limit: 100, before } });
+        for (const question of result.data.questions) if (!questions.has(question.id)) questions.set(question.id, question);
+        before = result.data.nextCursor ?? undefined;
+        if (before && seen.has(before)) throw new CliError("server", "Server repeated a question page cursor");
+        if (before) seen.add(before);
+      } while (before);
+      renderResource(i, { questions: [...questions.values()] }, ["questions"]);
+    }),
     spec(["issue", "delivery", "list"], "List formal deliveries; --cursor uses the response nextCursor", "read", [ref("issue")], [], i => {
       const limit = integerOption(i, "limit") ?? undefined;
       if (limit != null && (limit < 1 || limit > 100)) throw new CliError("usage", "delivery list --limit must be between 1 and 100");

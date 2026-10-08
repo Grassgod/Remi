@@ -18,7 +18,7 @@ export async function seedImageCases(store: MultiremiStore, fixture: ZeroJumpFix
   const png = await sharp({ create: { width: 640, height: 240, channels: 3, background: "blue" } }).png().toBuffer();
   return (["late", "error", "element", "sized", "fast"] as const).map(kind => {
     const key = `detail-image-${kind}`;
-    const issue = store.createIssue({ id: `iss_zerojump_image_${kind}`, title: `Zero-jump image ${kind}`, status: "in_progress" });
+    const issue = store.createIssue({ id: `iss_zerojump_image_${kind}`, title: `Zero-jump image ${kind}`, status: "in_progress", responsibleMemberId: fixture.memberId });
     const session = store.getOrCreateDefaultIssueSession(issue.id, fixture.userId);
     for (let i = 0; i < 2; i++) store.createIssueComment(issue.id, {
       issueSessionId: session.id, authorType: "member", authorId: fixture.userId, body: `Image preamble ${i}`,

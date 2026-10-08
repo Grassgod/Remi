@@ -38,6 +38,9 @@ export function unifiedCommandSpecs(): CommandSpec[] {
     spec(["message", "send"], "write", [ref("conversation", false)], [
       ...textOptions, option("to"), option("to-type"), option("kind"), option("wake"), option("reply-to"),
       { ...option("response"), description: "JSON permission or question response", conflictsWith: ["option"] },
+      { ...option("revision", "integer"), description: "Expected route revision when replying to an original Q; read message question get first" },
+      { ...option("answer-revision", "integer"), description: "Expected answer revision for an explicit Q revision" },
+      option("revise", "boolean"), option("reason"),
       { ...option("option"), repeatable: true }, { ...option("attachment"), repeatable: true }, option("dedupe-key"),
     ], send),
     spec(["message", "list"], "read", [ref("conversation", false)], [
@@ -150,7 +153,12 @@ async function send(i: CommandInvocation): Promise<void> {
   const wake = (stringOption(i, "wake") ?? "now").replaceAll("-", "_");
   if (!["now", "next_turn", "inbox_only"].includes(wake)) throw new CliError("usage", "invalid --wake");
   const to = recipient(stringOption(i, "to"), stringOption(i, "to-type"));
+  const routeRevision = integerOption(i, "revision"), answerRevision = integerOption(i, "answer-revision");
+  if (routeRevision !== null && (!Number.isSafeInteger(routeRevision) || routeRevision < 1)) throw new CliError("usage", "--revision must be a positive route revision");
+  if (i.options.revise === true && (routeRevision === null || answerRevision === null || !Number.isSafeInteger(answerRevision) || answerRevision < 0 || !stringOption(i, "reason")?.trim())) throw new CliError("usage", "Question revision requires --revision, --answer-revision and --reason");
   const payload = { body_md: body, to, message_kind: kind, wake_requested: wake, reply_to_id: stringOption(i, "reply-to"),
+    ...(routeRevision !== null ? { expected_route_revision: routeRevision } : {}),
+    ...(i.options.revise === true ? { revise: true, expected_answer_revision: answerRevision, reason: stringOption(i, "reason") } : {}),
     dedupe_key: stringOption(i, "dedupe-key"), ...(response ? { response } : {}), ...(kind === "decision" ? { options: selected.map(decisionOption) } : selected.length ? { metadata: { selected_options: selected } } : {}) };
   // Validate local files before capability negotiation or any server-side mutation.
   if (attachments.some((path) => /^https?:\/\//i.test(path))) throw new CliError("usage", "--attachment requires a local file path");

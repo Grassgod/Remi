@@ -35,6 +35,9 @@ human revisions additionally require `--revise --answer-revision <answer_revisio
 --reason <reason>`. Continue is an exceptional human authorization for detached
 calls, not an extra button required after ordinary answers. All replies return to
 the original Q session; a parent/Remi notification references its Q ID.
+`message send --reply-to <Q>` also requires the explicitly read `--revision`;
+answer changes additionally require `--revise --answer-revision --reason`.
+Ordinary message replies do not require a question revision.
 
 Unified usage uses `remi dashboard usage report` with `--days n|all`,
 `--since`, `--until`, `--tz`, `--project` and `--runtime`.

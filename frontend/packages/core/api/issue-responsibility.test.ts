@@ -7,6 +7,16 @@ const question = { id: "q1", session_id: "session", workspace_id: "ws", source_i
   kind: "question", status: "pending", wait_status: "detached", wait_reason: "provider exited", answer: null, history: [], actions: { allowed: ["answer"] } };
 afterEach(() => vi.unstubAllGlobals());
 describe("responsibility API contracts", () => {
+  it("preserves complete question history across overlapping pages and rejects repeated cursors", async () => {
+    const page = (ids: string[], nextCursor: string | null) => new Response(JSON.stringify({ questions: ids.map(id => ({ ...question, id })), nextCursor }));
+    const fetch = vi.fn().mockResolvedValueOnce(page(["recent"], "recent")).mockResolvedValueOnce(page(["recent", "older"], null));
+    vi.stubGlobal("fetch", fetch);
+    const client = new ApiClient("https://api.test");
+    expect((await client.listIssueQuestions("issue")).map(item => item.id)).toEqual(["recent", "older"]);
+    expect(fetch.mock.calls[1]?.[0]).toBe("https://api.test/api/issues/issue/questions?limit=100&before=recent");
+    fetch.mockResolvedValueOnce(page(["recent"], "recent")).mockResolvedValueOnce(page(["older"], "recent"));
+    await expect(client.listIssueQuestions("issue")).rejects.toBeInstanceOf(ApiContractError);
+  });
   it("reads older formal delivery pages and rejects a repeating cursor", async () => {
     const actor = { type: "agent", id: "owner", issueId: "issue", name: "Owner" };
     const delivery = { id: "recent", issueId: "issue", sourceSessionId: "session", summary: "Evidence", status: "returned", submittedBy: actor, reviewOwner: actor, responsibilityRevision: "v1", responseMessageId: null, responseBody: "Fix", createdAt: "now", respondedAt: "now" };

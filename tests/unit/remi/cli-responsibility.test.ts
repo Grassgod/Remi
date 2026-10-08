@@ -18,7 +18,7 @@ function setup() {
   globalThis.fetch = (async (input, init) => {
     const request = new Request(input, init); requests.push(request);
     if (new URL(request.url).pathname === "/api/cli/capabilities") return Response.json({ commands: specs.map(command => ({ id: command.id, allowed: true })) });
-    return Response.json({ question: { id: "q" }, deliveries: [] });
+    return Response.json({ question: { id: "q" }, questions: [], deliveries: [] });
   }) as typeof fetch;
 }
 afterEach(() => {
@@ -26,6 +26,21 @@ afterEach(() => {
   for (const name of envNames) { if (envBefore[name] === undefined) delete process.env[name]; else process.env[name] = envBefore[name]; }
 });
 describe("responsibility CLI", () => {
+  it("reads all question history pages and deduplicates overlapping rows", async () => {
+    setup();
+    const normalFetch = globalThis.fetch;
+    const printed: unknown[] = []; console.log = value => { printed.push(value); };
+    globalThis.fetch = (async (input, init) => {
+      const request = new Request(input, init), url = new URL(request.url);
+      if (!url.pathname.endsWith("/questions")) return normalFetch(input, init);
+      requests.push(request);
+      return Response.json(url.searchParams.has("before") ? { questions: [{ id: "recent" }, { id: "older" }], nextCursor: null } : { questions: [{ id: "recent" }], nextCursor: "recent" });
+    }) as typeof fetch;
+    await registry.execute(["issue", "question", "list", "root", "--output", "json"]);
+    expect(requests.filter(request => new URL(request.url).pathname.endsWith("/questions"))).toHaveLength(2);
+    expect(new URL(requests.at(-1)!.url).searchParams.get("before")).toBe("recent");
+    expect(JSON.stringify(printed)).toContain("older");
+  });
   it("rejects new human execution assignment while keeping root human configuration independent", async () => {
     setup();
     await expect(issueAssign("root", { to: "mem_human" })).rejects.toThrow("Execution assignee must be an Agent or Squad");
