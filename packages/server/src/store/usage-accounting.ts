@@ -378,8 +378,8 @@ export function writeUsageSnapshot(db: SqlDatabase, taskId: string, input: TaskU
     // an older frame may contain a distinct unit that must still be accepted.
     db.run("UPDATE multiremi_usage_runs SET revision=revision WHERE task_id=? AND run_id=?", [taskId, s.runId]);
     const run = db.query("SELECT revision,complete FROM multiremi_usage_runs WHERE task_id=? AND run_id=?").get(taskId, s.runId) as Row;
-    let changed = Number(run.revision) < s.revision || (Number(run.revision) === s.revision && Number(run.complete) === 0 && s.complete);
-    if (changed) db.run(`UPDATE multiremi_usage_runs SET revision=?, complete=? WHERE task_id=? AND run_id=?`, [s.revision, s.complete ? 1 : 0, taskId, s.runId]);
+    let changed = false;
+    let hasCurrentUnit = s.units.length === 0;
     for (const u of s.units) {
       const coverageExpectedCount = u.coverageExpectedCount ?? (u.coveredUnitIds === undefined ? null : u.coveredUnitIds.length);
       const coverageSha256 = u.coverageSha256 ?? (u.coveredUnitIds === undefined ? null : coverageHash(u.coveredUnitIds));
@@ -397,6 +397,12 @@ export function writeUsageSnapshot(db: SqlDatabase, taskId: string, input: TaskU
           db.run("INSERT INTO multiremi_usage_unit_receipts(task_id,run_id,unit_id,revision,disposition,normalized_json) VALUES(?,?,?,?,?,?)", [taskId, s.runId, u.unitId, receipt.revision, receipt.disposition, receipt.normalized_json]);
         }
       }
+      // Reviewed history repair can replace a cumulative observation or settle
+      // remainder with its underlying requests. Keep its receipt as a tombstone:
+      // a delayed daemon frame must not bring the superseded consumption back,
+      // even if that frame has a higher revision than the repaired snapshot.
+      if (receipt?.disposition === "superseded") continue;
+      hasCurrentUnit = true;
       if (receipt && Number(receipt.revision) > u.revision) continue;
       if (receipt && Number(receipt.revision) === u.revision) {
         if (receipt.normalized_json !== normalized) throw new UsageValidationError("Conflicting usage unit at the same revision");
@@ -463,6 +469,13 @@ export function writeUsageSnapshot(db: SqlDatabase, taskId: string, input: TaskU
       }
       db.run(`INSERT INTO multiremi_usage_unit_receipts(task_id,run_id,unit_id,revision,disposition,normalized_json) VALUES(?,?,?,?,?,?)
         ON CONFLICT(task_id,run_id,unit_id) DO UPDATE SET revision=excluded.revision,disposition=excluded.disposition,normalized_json=excluded.normalized_json`, [taskId, s.runId, u.unitId, u.revision, "accepted", normalized]);
+    }
+    // An old frame containing only retired observations must not invalidate the
+    // repaired run's finality either. Empty completion markers remain valid.
+    if (hasCurrentUnit && (Number(run.revision) < s.revision
+      || (Number(run.revision) === s.revision && Number(run.complete) === 0 && s.complete))) {
+      db.run("UPDATE multiremi_usage_runs SET revision=?, complete=? WHERE task_id=? AND run_id=?", [s.revision, s.complete ? 1 : 0, taskId, s.runId]);
+      changed = true;
     }
     return changed;
   })();

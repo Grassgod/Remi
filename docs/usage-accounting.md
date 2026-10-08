@@ -26,11 +26,17 @@ summary: 从可靠采集到规范化事实、SQL 报表、价格版本和可恢�
 
 单位主键是 `(task_id, run_id, unit_id)`。更高 unit revision 替换，同 revision 同内容重放忽略、不同内容拒绝，较低 revision 忽略。整个 snapshot revision 只控制 run 的 complete/revision 元数据：较旧 snapshot 中不同的新单位仍可接受，未包含的单位不会删除。分块终态报告允许同 snapshot revision 的 complete 从 false 单调升级为 true，不允许同 revision 回退。不同 run 中已证明独立的执行消费相加。旧报告边界在任务锁内用上一 revision 加一，不把毫秒时间戳写入 PostgreSQL INTEGER。
 
-`multiremi_usage_unit_receipts` 持久保存单位的最高 revision、规范化不可变字段和 accepted/parked disposition。即使重复事实被撤下或冲突更新仅停放，更旧重放也不能重新插入消费；同 revision 改变事实仍拒绝。升级已有冲突审计时懒恢复停放水位。已建立强请求或 meter owner 的更新发生竞争时，保留此前已接受的小计与 owner 区间，并审计停放新版。只有同一稳定单位的旧弱证据没有强身份、且消费与金额分量一致，补出的强证据明确识别其为已有 owner 的重复时，才撤下该弱事实；不以任意冲突更新删除已确认消费。
+`multiremi_usage_unit_receipts` 持久保存单位的最高 revision、规范化不可变字段和 accepted/parked disposition。即使重复事实被撤下或冲突更新仅停放，更旧重放也不能重新插入消费；同 revision 改变事实仍拒绝。经审核的历史修复可以将已由真实请求替代的差额或累计观测标为 `superseded`，保留原事实审计并撤下其规范化计量行；后续更高 revision 的旧 daemon 重放也不能使它再次入账。普通上报不能自行声明退休其他单位。
+
+升级已有冲突审计时懒恢复停放水位。已建立强请求或 meter owner 的更新发生竞争时，保留此前已接受的小计与 owner 区间，并审计停放新版。只有同一稳定单位的旧弱证据没有强身份、且消费与金额分量一致，补出的强证据明确识别其为已有 owner 的重复时，才撤下该弱事实；不以任意冲突更新删除已确认消费。
 
 真实上游 `providerSessionId` 与 `providerRequestId` 建立跨 task/run 的请求身份；调用引擎、工作区、连接也是命名空间。同请求的 token 与独立金额证据可以在同一 owner run 保存，跨归属竞争不能再加一份消费。两个明确不同连接可区分；未知连接不能证明独立，因此与相同 session/request 的已知连接竞争。PostgreSQL 在 domain 写入前按稳定顺序取得身份事务锁，持久 owner 保证并发只认领一次。竞争证据及此前弱证据写入 `multiremi_usage_identity_conflicts`，报表保留规范 owner 的已知小计，双方显示 `identity_conflict_task_count` 和 incomplete，不把归属争议伪成零消费。上下文和 legacy 聚合不能认领请求身份。
 
-Codex 累计通知使用 `identityKind=cumulative_meter`，真实 session、`providerObservationId` 和 `meterEvidence` 保留 epoch、before/after 及可用 last 的五类规范计数；turn ID 不是 request ID。相同 meter namespace/epoch 内相邻 `(before,after]` 区间可累计，重叠观察跨 run 只保留审计而不另加消费。不同形式的 compaction 时间戳与 item/turn 身份可能指向同一次重置，重叠时保守判为竞争。没有可靠 session、baseline 或 epoch 的证据不建立强身份。计量器 owner 用标量区间检索，证据 JSON 供审计，不用于正常报表逐行解析。
+Claude 采集保留请求状态直到最终用量和终止事件得到确认，内容块对应的早期 assistant 不等于最终结算。相同请求后续的输出计数更新原单位，取消和失败保留已经观察到的部分用量。具体时序见 [Claude 接入](design/acp-claude-via-claude-agent-acp.md)。
+
+Codex 从 `rawResponse/completed` 采集实际逐请求消费，以真实 thread/session 与 response ID 使用 `identityKind=request`，包含上下文压缩请求。旧累计通知和 PromptResult 的最后请求不能与这些请求重复相加。实时采集和原生日志恢复共用计数校验，缓存分量从 input 中拆出，reasoning 不再加到 output；详见 [Codex 接入](design/acp-codex-via-codex-acp.md)。
+
+历史累计证据仍可以具有 `identityKind=cumulative_meter`：真实 session、`providerObservationId` 和 `meterEvidence` 保留 epoch、before/after 及可用 last。相同 meter namespace/epoch 内相邻 `(before,after]` 区间可累计，重叠观察跨 run 只保留审计而不另加消费。不同形式的 compaction 时间戳与 item/turn 身份可能指向同一次重置，重叠时保守判为竞争。没有可靠 session、baseline 或 epoch 的证据不建立强身份。历史请求恢复必须证明与原累计观测的覆盖关系后才能替换，不能将两者相加。计量器 owner 用标量区间检索，证据 JSON 供审计，不用于正常报表逐行解析。
 
 用量报告按字节与单位数分块，避免长任务超过 daemon 的 1 MiB frame 上限。单个 turn 金额关联的请求列表也可分块：`coverageExpectedCount` 和 `coverageSha256` 固定完整排序列表的数量与 SHA-256（UTF-8 `JSON.stringify(sortedIds)`），各块保留同 unit/revision、金额和不可变事实，仅发送列表子集。同 revision 的列表块幂等追加，更新 revision 清空旧关联；较旧 revision 不回退。数量及哈希验证完成前金额只保留诊断，不能提前计入已知费用或与配置估价相加。所有块持久化后才发送 run 完整标记。采集器在金额观测与 turn settle 时关联覆盖，避免每个请求写入不断增长的完整列表。
 
@@ -117,7 +123,17 @@ bun run scripts/reconcile-task-usage.ts --apply-plan=<review-plan.json> --execut
 bun run scripts/reconcile-task-usage.ts --verify-plan=<review-plan.json>
 ```
 
-不带 execute 的 legacy migration 只读计数；native/raw 恢复先生成只读计划，再按审核过的计划执行。恢复读取 v2 ZIP 索引和 v1 tar.gz 的有限大小原生成员，按全部竞争任务的时间边界归属，`--task-id` 仅筛选输出。已有 modern live run 和非终态任务不进入历史证据应用队列；legacy schema 迁移仍处理所有任务。部分原生请求不能证明覆盖旧聚合，因此旧 split 消费保持计量地位，完整请求证据单独存 reconciliation evidence，不能与聚合相加；只有旧消费未知时才补入请求 subtotal，coverage 仍为 partial。相邻相等计数不证明重复，去重使用可验证请求身份；Codex replay 和无重置证据的下降不改变累计差分基线，仅 thread/session 身份变化或明确成功压缩后的有效下降建立新 epoch。原生 `compacted`、`context_compacted` 记录提供压缩证据，total-only 估计不成为消费。恢复按 task 原子检查点保存原事实和旧 usage 校验哈希，复检任务终态及无 modern live run，变化的源拒绝应用，重复应用同一计划恢复进度而不双计。后续计划必须保留已建立的请求身份、已知计数及费用关联，空或较窄扫描不能撤销事实；追加证据的完整超集可以重新应用，并审计原事实。计划生成读取持久 receipts、单位与 run 水位，为修订的单位和重建的 legacy 明确分配更高 revision，保留 receipts 防止旧事实复活。应用复检生成时的水位哈希，水位变化则拒绝并要求重新生成；相同计划的已完成检查点仍幂等恢复，verify 校验计划中的实际 revision。不可恢复项有明确原因。旧 `backfill-codex-task-usage.ts` 不再执行 sum-used 写入。计划、日志和 archive 可能包含敏感证据，应放在维护输出目录，避免在公共日志输出正文或凭据。
+不带 execute 的 legacy migration 只读计数；native/raw 恢复先生成只读计划，再按审核过的计划执行。恢复读取 v2 ZIP 索引和 v1 tar.gz 的有限大小原生成员，按全部竞争任务的时间边界归属，`--task-id` 仅筛选输出。非终态任务不会被修复；已有规范化执行记录的终态任务可以进入 `modernRepairs`，不再一概排除。计划摘要分别列出修复任务、前后已知消费及无法修复的原因。
+
+现代记录修复由 [modern-usage-repair.ts](../scripts/modern-usage-repair.ts)执行，要求任务只有一个已完整上报的执行 run，且任务、原始请求与原生日志的 session 身份一致。Claude 仅使用有明确结束原因的最终请求记录更新同一请求；全部相关请求身份匹配、更新增量恰好解释唯一结算差额时，才将对应 `acp_prompt_unattributed_remainder` 退休。原有进度摘要、上下文和其他调用保留；涉及费用覆盖时同时更新原关联，不把修正后的数字再加一份。
+
+Codex 原生日志的 `token_usage_record` 按 thread/session 与 response ID 去重，`compacted.latest_token_usage_record` 是同一请求的副本。普通生成和压缩请求均进入恢复小计。只有同一 turn 的独立请求分量之和等于最终 `turn_token_usage`、存在匹配的 `task_started` 和 `task_complete`，并满足任务和 run 的归属边界，才能替代该 turn 明确始末范围内的旧 unknown 观测。其他轮次或界外的迟到观测继续保留未知，单一 run 不等于只有一个 turn。
+
+跨 archive 合并同一请求时采用完整的更强快照，不将相互矛盾的分量拼成不存在的数字。合并完所有成员后统一处理旧 `token_count` 与新请求的覆盖：完整 turn 内择一计量，不完整或无明确 turn 归属的重叠观察保留为非计量 unknown，不能与请求重复相加，也不能被当成纯上下文而隐藏消费缺口。明确属于更早、只有旧格式的轮次继续保留原计量证据。
+
+现代修复使用原 run 和规范化写入器，维护审计表 `multiremi_usage_modern_repair_audit` 保存原状态及修复后哈希。执行前在事务内复检任务边界、所有 run、单位、receipts、归属和费用覆盖；计划陈旧则拒绝应用。被替代的差额或旧观测必须已有持久 receipt，退休后设置 `superseded`，迟到上报不恢复旧计量。重复应用同一计划不重复记账，verify 核对修复后状态。此过程不会作为服务启动或普通查询的隐式操作。
+
+只有旧聚合而缺少整个执行覆盖证明的 legacy 任务，仍不能用部分原生日志替换其已知消费：请求证据单独保留供审核，不与旧聚合相加。只有旧消费未知时才补入请求 subtotal，coverage 仍为 partial；不能据此宣称全部历史已恢复。旧累计证据的 replay 和无重置证据下降不改变差分基线，total-only 的上下文估计不成为消费。恢复按 task 保存原事实、旧 usage 校验哈希和修订水位；后续计划须保留已有请求身份、已知计数及费用关联，空或较窄扫描不能撤销事实。不可恢复项保留明确原因。旧 `backfill-codex-task-usage.ts` 不再执行 sum-used 写入。计划、日志和 archive 可能包含敏感证据，应放在维护输出目录，避免在公共日志输出正文或凭据。
 
 ## 验证和性能边界
 

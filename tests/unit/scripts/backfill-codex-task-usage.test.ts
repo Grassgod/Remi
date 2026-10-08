@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { assignHistoricalUnit, parseNativeUsageEvidence, parseRawUsageEvidence, type HistoricalTaskBoundary } from "../../../scripts/usage-evidence.js";
+import { assignHistoricalUnit, parseNativeUsageEvidence, parseRawUsageEvidence, mergeNativeUsageEvidence, reconcileNativeSourceEvidence, type HistoricalTaskBoundary } from "../../../scripts/usage-evidence.js";
 import { unitActualTotal } from "../../../packages/acp/src/usage-collector.js";
 
 const at = "2026-10-01T01:00:00.000Z";
@@ -8,6 +8,72 @@ const counts = (input: number, output: number, cached = 0) => ({ input_tokens: i
 const token = (total: unknown, last = total, timestamp = at) => ({ type: "event_msg", timestamp, payload: { type: "token_count", info: { total_token_usage: total, last_token_usage: last } } });
 
 describe("historical consumption evidence", () => {
+  it("prefers native response identities, includes compaction requests and deduplicates compacted snapshots", () => {
+    const payload = (response_id: string, input: number, output: number, cached: number) => ({ thread_id: "native-thread", turn_id: "native-turn", session_id: "native-session", root_turn_id: "root-turn", response_id,
+      usage: counts(input, output, cached), turn_token_usage: counts(300, 30, 120), thread_token_usage: counts(3000, 300, 1200) });
+    const compaction = payload("compact-response", 200, 20, 80);
+    const parsed = parseNativeUsageEvidence("codex", jsonl({ type: "session_meta", payload: { id: "native-thread" } },
+      { type: "event_msg", timestamp: at, payload: { type: "task_started", turn_id: "native-turn" } },
+      token(counts(100, 10, 40)), { type: "token_usage_record", timestamp: at, payload: payload("normal-response", 100, 10, 40) },
+      { type: "token_usage_record", timestamp: at, payload: compaction },
+      { type: "compacted", timestamp: at, payload: { latest_token_usage_record: compaction } }), "archive:synthetic");
+    expect(parsed.replayed).toBe(1);
+    expect(parsed.units).toHaveLength(3);
+    expect(parsed.units.filter(unit => unit.providerRequestId).every(unit => unit.identityKind === "request" && !unit.meterEvidence)).toBe(true);
+    expect(parsed.units.filter(unit => unit.providerRequestId).map(unit => [unit.providerRequestId, unitActualTotal(unit)])).toEqual([["normal-response", 110], ["compact-response", 220]]);
+    expect(parsed.units.reduce((sum, unit) => sum + unitActualTotal(unit), 0)).toBe(330);
+    expect(parsed.completedTurns).toEqual([]);
+    const complete = parseNativeUsageEvidence("codex", jsonl({ type: "session_meta", payload: { id: "native-thread" } },
+      { type: "event_msg", timestamp: at, payload: { type: "task_started", turn_id: "native-turn" } },
+      { type: "token_usage_record", timestamp: at, payload: payload("normal-response", 100, 10, 40) },
+      { type: "token_usage_record", timestamp: at, payload: compaction },
+      { type: "event_msg", timestamp: at, payload: { type: "task_complete", turn_id: "native-turn" } }), "archive:complete");
+    expect(complete.completedTurns).toHaveLength(1);
+    expect(complete.completedTurns![0]!.responseIds).toEqual(["compact-response", "normal-response"]);
+    const truncated = parseNativeUsageEvidence("codex", jsonl({ type: "session_meta", payload: { id: "native-thread" } },
+      { type: "event_msg", timestamp: at, payload: { type: "task_started", turn_id: "native-turn" } },
+      { type: "token_usage_record", timestamp: at, payload: payload("normal-response", 100, 10, 40) },
+      { type: "event_msg", timestamp: at, payload: { type: "task_complete", turn_id: "native-turn" } }), "archive:missing-request");
+    expect(truncated.completedTurns).toEqual([]);
+  });
+  it("keeps old meter-only turns on a session that later gains native request records, without unscoped double counting", () => {
+    const native = { type: "token_usage_record", timestamp: at, payload: { thread_id: "shared-thread", turn_id: "new-turn", response_id: "new-response", usage: counts(200, 20, 80) } };
+    const meta = { type: "session_meta", payload: { id: "shared-thread" } };
+    const oldAt = "2026-09-01T01:00:00Z";
+    const result = parseNativeUsageEvidence("codex", jsonl(meta,
+      { type: "event_msg", timestamp: oldAt, payload: { type: "task_started", turn_id: "old-turn" } }, token(counts(100, 10, 40), counts(100, 10, 40), oldAt),
+      { type: "event_msg", timestamp: oldAt, payload: { type: "task_complete", turn_id: "old-turn" } },
+      { type: "event_msg", timestamp: at, payload: { type: "task_started", turn_id: "new-turn" } }, token(counts(300, 30, 120), counts(200, 20, 80)), native), "archive:mixed");
+    expect(result.units.map(unit => unitActualTotal(unit))).toEqual([110, 0, 220]);
+    expect(result.units[0]!.identityKind).toBe("cumulative_meter");
+    const unscoped = parseNativeUsageEvidence("codex", jsonl(meta, token(counts(200, 20, 80)), native), "archive:unscoped");
+    expect(unscoped.units.reduce((sum, unit) => sum + unitActualTotal(unit), 0)).toBe(220);
+    expect(unscoped.units.find(unit => !unit.providerRequestId)).toMatchObject({ source: "provider_turn", accuracy: "unknown", inputTokens: null });
+    const meterOnly = parseNativeUsageEvidence("codex", jsonl(meta, token(counts(200, 20, 80))), "archive:meter-only");
+    const requestOnly = parseNativeUsageEvidence("codex", jsonl(meta, native), "archive:request-only");
+    const combined = reconcileNativeSourceEvidence([...meterOnly.sourceUnits!, ...requestOnly.sourceUnits!], [...meterOnly.sourceScopes!, ...requestOnly.sourceScopes!], []);
+    expect(combined.reduce((sum, unit) => sum + unitActualTotal(unit), 0)).toBe(220);
+    expect(combined.find(unit => !unit.providerRequestId)).toMatchObject({ accuracy: "unknown", source: "provider_turn" });
+  });
+  it("keeps incomplete Claude assistant snapshots partial and merges stronger native archive evidence", () => {
+    const row = (output: number, stop_reason: string | null) => ({ type: "assistant", sessionId: "real-session", timestamp: at, message: { id: "real-response", model: "actual-model", stop_reason, usage: { input_tokens: 10, output_tokens: output } } });
+    const early = parseNativeUsageEvidence("claude", jsonl(row(1, null)), "archive:early").units[0]!;
+    const final = parseNativeUsageEvidence("claude", jsonl(row(10, "end_turn")), "archive:final").units[0]!;
+    expect(early.accuracy).toBe("partial");
+    expect(final.accuracy).toBe("exact");
+    expect(mergeNativeUsageEvidence(early, final)).toMatchObject({ accuracy: "exact", outputTokens: 10 });
+    expect(mergeNativeUsageEvidence(final, early)).toEqual(final);
+    const conflict = { ...early, inputTokens: 9, outputTokens: 2 };
+    expect(mergeNativeUsageEvidence(early, conflict)).toEqual(early);
+    const replay = parseNativeUsageEvidence("claude", jsonl(row(10, "end_turn"), row(20, null)), "archive:reordered");
+    expect(replay.units[0]).toMatchObject({ accuracy: "exact", outputTokens: 10 });
+    const firstPartial = row(10, null), conflictingPartial = row(20, null);
+    firstPartial.message.usage.input_tokens = 100;
+    conflictingPartial.message.usage.input_tokens = 90;
+    const conflicted = parseNativeUsageEvidence("claude", jsonl(firstPartial, conflictingPartial), "archive:conflicted");
+    expect(conflicted.units[0]).toMatchObject({ accuracy: "partial", inputTokens: 100, outputTokens: 10 });
+    expect(conflicted.rejected).toBe(1);
+  });
   it("preserves context peaks as diagnostics and rejects all-zero compaction pseudo usage", () => {
     const context = parseRawUsageEvidence({ provider: "codex", meta: { used: 78048, size: 200000,
       _meta: { remiTokenUsage: { inputTokens: 0, outputTokens: 0, cachedInputTokens: 0, totalTokens: 78048 } } }, occurredAt: at, evidenceRef: "raw:1" });

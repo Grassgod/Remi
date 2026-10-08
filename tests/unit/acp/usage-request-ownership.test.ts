@@ -6,12 +6,15 @@ import { TaskUsageLedger } from "@multiremi/worker/task-usage-ledger.js";
 import { createLocalStore, resetMultiremiTestEnv } from "../multiremi/helpers.js";
 
 afterEach(resetMultiremiTestEnv);
-const codexBoundary = "  async createUpdateEvent(notification) { return null; }\n  createUsageUpdate(params) {}\n  handleRateLimitsUpdated(params) {}";
-const vector = (n: number) => ({ inputTokens: 100 * n, cachedInputTokens: 0, outputTokens: 10 * n, reasoningOutputTokens: 0, totalTokens: 110 * n });
+const codexBoundary = "  async handleNotification(notification) {}\n  async createUpdateEvent(notification) { switch(notification.method) { case \"rawResponse/completed\": return null; } }\n  createUsageUpdate(params) {}\n  handleRateLimitsUpdated(params) {}\n  routeChild(childEvent, session) { if (session.current.supportsSubagents) session.current.dispatch(childEvent); }";
+const vector = (n: number) => ({ inputTokens: 100 * n, cachedInputTokens: 0, cacheWriteInputTokens: 0, outputTokens: 10 * n, reasoningOutputTokens: 0, totalTokens: 110 * n });
 async function collect(providerType: "claude" | "codex", updates: any[], connection: string | null, runId: string) {
   const provider = new AcpProvider({ agentType: providerType });
   const client = { _options: { onSessionUpdate: (_event: any) => {} }, prompt: async () => {
-    for (const update of updates) if (update) client._options.onSessionUpdate({ sessionId: "acp-envelope", update });
+    for (const pending of updates) {
+      const update = await pending;
+      if (update) client._options.onSessionUpdate({ sessionId: "acp-envelope", update });
+    }
     return { stopReason: "end_turn" };
   } };
   (provider as any)._ensureSession = async () => ({ client, acpSessionId: "acp-envelope" });
@@ -20,12 +23,13 @@ async function collect(providerType: "claude" | "codex", updates: any[], connect
   ledger.observe(responseToUsageUnits(providerType, provider.getLastResponse(), null, "turn"));
   return ledger.finish();
 }
-function actor(sessionId = "thread", epoch: string | null = "initial") {
+function actor(sessionId = "thread") {
   const Handler = new Function(`return class { ${codexUsagePatch(codexBoundary)!} }`)();
   const handler = new Handler();
-  handler.sessionState = { sessionId, remiMeterEpochId: epoch, totalTokenUsage: null };
+  handler.sessionState = { sessionId, totalTokenUsage: null };
   handler.handleTokenUsageUpdated = (p: any) => Object.assign(handler.sessionState, { totalTokenUsage: p.tokenUsage.total, lastTokenUsage: p.tokenUsage.last });
-  return { handler, notify: (n: number) => handler.createUsageUpdate({ threadId: sessionId, tokenUsage: { total: vector(n), last: vector(1) } }) };
+  return { handler, notify: (id: number, usage = vector(1)) => handler.createUpdateEvent({ method: "rawResponse/completed",
+    params: { threadId: sessionId, turnId: "turn", responseId: `response-${id}`, usage } }) };
 }
 
 describe("actual provider identities survive parsing and canonical ownership", () => {
@@ -55,22 +59,21 @@ describe("actual provider identities survive parsing and canonical ownership", (
     }
   });
 
-  it("counts disjoint Codex meter intervals once across cumulative reordering, replayed runs and overlapping observations", async () => {
+  it("counts independent Codex responses once across notification reordering, replayed tasks and runs", async () => {
     const source = actor();
-    const updates = [1, 3, 2, 4].map(n => source.notify(n));
+    const updates = [1, 3, 2, 4, 2].map(n => source.notify(n));
     const a = await collect("codex", updates, "meter-route", "meter-run-a");
     const b = await collect("codex", updates, "meter-route", "meter-run-b");
-    const units = a.units.filter(unit => unit.meterEvidence);
-    expect(units.map(unit => unit.reportedTotalTokens)).toEqual([110, 220, 110]);
-    expect(units.every(unit => unit.identityKind === "cumulative_meter" && !unit.providerRequestId && unit.providerSessionId === "thread")).toBe(true);
+    const units = a.units.filter(unit => unit.providerRequestId);
+    expect(units.map(unit => unit.reportedTotalTokens)).toEqual([110, 110, 110, 110]);
+    expect(units.every(unit => unit.identityKind === "request" && !unit.meterEvidence && unit.providerSessionId === "thread")).toBe(true);
     const store = createLocalStore();
     const agent = store.createAgent({ name: "meter owner", provider: "codex" });
     const first = store.createTask({ agentId: agent.id, prompt: "first" }), second = store.createTask({ agentId: agent.id, prompt: "replay" });
     store.reportTaskUsageSnapshot(first.id, a);
     store.reportTaskUsageSnapshot(second.id, b);
     expect(store.getUsageReport({ workspaceId: "local", days: null }).summary.actual_total_tokens).toBe(440);
-    // This observation's endpoint is new, but its interval overlaps the earlier
-    // (110,330] checkpoint. An endpoint-only dedup would incorrectly add 110.
+    // A second task observing the same response cannot count it again.
     const overlap = actor();
     const c = await collect("codex", [overlap.notify(1), overlap.notify(2)], "meter-route", "meter-run-c");
     store.reportTaskUsageSnapshot(second.id, c);
@@ -78,17 +81,18 @@ describe("actual provider identities survive parsing and canonical ownership", (
     expect(store.getUsageReport({ workspaceId: "local", days: null }).summary.complete).toBe(false);
   });
 
-  it("retains valid Codex consumption after an explicit compaction and diagnoses resumed epochs without fabricating request IDs", async () => {
-    const source = actor();
-    const before = source.notify(3);
-    await source.handler.createUpdateEvent({ method: "item/completed", params: { threadId: "thread", turnId: "turn", item: { type: "contextCompaction", id: "real-compaction-item" } } });
-    const after = source.notify(1), next = source.notify(2);
-    const snapshot = await collect("codex", [before, after, next], "route", "compacted");
-    expect(snapshot.units.filter(unit => unit.meterEvidence).map(unit => [unit.reportedTotalTokens, unit.meterEvidence!.epochId])).toEqual([
-      [110, "initial"], [110, "compaction-item:real-compaction-item"], [110, "compaction-item:real-compaction-item"],
-    ]);
-    const unknown = await collect("codex", [actor("resumed", null).notify(3)], "route", "resumed-unknown");
-    expect(unknown.units.every(unit => !unit.providerRequestId && !unit.meterEvidence)).toBe(true);
-    expect(unknown.units[0]).toMatchObject({ accuracy: "unknown", inputTokens: null, outputTokens: null, reportedTotalTokens: 110 });
+  it("includes a resumed thread's compaction response with no cumulative epoch or historical consumption", async () => {
+    const source = actor("resumed-native");
+    const totals = [238975, 247635, 86755, 92188];
+    const updates = totals.map((total, i) => source.notify(i, { inputTokens: total - 10, outputTokens: 10,
+      cachedInputTokens: total - 20, cacheWriteInputTokens: 0, reasoningOutputTokens: 5, totalTokens: total }));
+    const snapshot = await collect("codex", updates, "route", "compacted");
+    expect(snapshot.units.map(unit => unit.reportedTotalTokens)).toEqual(totals);
+    expect(snapshot.units.every(unit => unit.accuracy === "exact" && unit.providerSessionId === "resumed-native" && !unit.meterEvidence)).toBe(true);
+    const store = createLocalStore();
+    const agent = store.createAgent({ name: "resumed", provider: "codex" });
+    const task = store.createTask({ agentId: agent.id, prompt: "compacted" });
+    store.reportTaskUsageSnapshot(task.id, snapshot);
+    expect(store.getUsageReport({ workspaceId: "local", days: null }).summary).toMatchObject({ actual_total_tokens: 665553, unknown_task_count: 0 });
   });
 });
