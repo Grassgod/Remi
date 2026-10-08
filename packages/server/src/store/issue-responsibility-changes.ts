@@ -1,5 +1,5 @@
 import type { StoreContext, CommitEventQueue } from './context.js';
-import { refreshIssueQuestionsAfterResponsibilityChangeWithinTransaction } from './inbox/questions.js';
+import { refreshIssueQuestionsAfterResponsibilityChangeWithinTransaction, refreshChatQuestionsAfterResponsibilityChangeWithinTransaction } from './inbox/questions.js';
 import { createCommitEventQueue } from './context.js';
 import { afterCommit } from './db/postgres.js';
 
@@ -10,9 +10,16 @@ export function refreshResponsibilityQuestions(ctx: StoreContext, issueId: strin
   refreshIssueQuestionsAfterResponsibilityChangeWithinTransaction(ctx,issueId,events,actor,reason);
 }
 
-export function refreshResponsibilityEntity(ctx: StoreContext, kind: 'agent' | 'squad' | 'member', id: string, events: CommitEventQueue, reason: string): void {
+export function refreshResponsibilityEntity(ctx: StoreContext, kind: 'agent' | 'squad' | 'member', id: string, events: CommitEventQueue, reason: string, previousWorkspaceIds:string[]=[]): void {
   if (!ctx.db.inTransaction) throw new Error('Responsibility refresh requires its mutation transaction');
   for (const row of affectedIssues(ctx,kind,id)) refreshResponsibilityQuestions(ctx,String(row.id),events,undefined,undefined,reason);
+  if(kind!=='squad') {
+    const entity=kind==='agent'?ctx.agents().getAgent(id):ctx.workspaces().getWorkspaceMember(id);
+    for(const workspaceId of [...new Set([...previousWorkspaceIds,...(entity?[entity.workspaceId]:[])])].sort()) {
+      refreshChatQuestionsAfterResponsibilityChangeWithinTransaction(ctx,workspaceId,events,undefined,undefined,
+        kind==='agent'?{agentId:id}:{memberId:id});
+    }
+  }
 }
 
 function affectedIssues(ctx: StoreContext, kind: 'agent' | 'squad' | 'member', id: string) {
@@ -23,9 +30,9 @@ function affectedIssues(ctx: StoreContext, kind: 'agent' | 'squad' | 'member', i
       OR (assignee_type='squad' AND assignee_id IN (SELECT id FROM multiremi_squads WHERE leader_id=?)) ORDER BY id`).all(id,id);
 }
 
-export function refreshResponsibilityEntityChange(ctx: StoreContext, kind: 'agent' | 'squad' | 'member', id: string, reason: string): void {
+export function refreshResponsibilityEntityChange(ctx: StoreContext, kind: 'agent' | 'squad' | 'member', id: string, reason: string, previousWorkspaceIds:string[]=[]): void {
   const events = createCommitEventQueue();
-  refreshResponsibilityEntity(ctx,kind,id,events,reason);
+  refreshResponsibilityEntity(ctx,kind,id,events,reason,previousWorkspaceIds);
   const issues = affectedIssues(ctx,kind,id);
   for (const row of issues) {
     const issue = ctx.issues().getIssue(String(row.id));

@@ -279,7 +279,7 @@ export function registerFeishuBotRoutes(
 
     c.header("Cache-Control", "no-store");
     try {
-      const saved = store.upsertFeishuBotConfig(workspaceId, parsed.input);
+      const saved = store.upsertFeishuBotConfig(workspaceId, {...parsed.input,actor:currentRequestUserId(c)});
       if (parsed.registrationUsed) {
         store.recordFeishuBotAudit(workspaceId, "registration_used", {
           actorId: currentRequestUserId(c),
@@ -309,9 +309,9 @@ export function registerFeishuBotRoutes(
 
   app.delete("/api/workspaces/:id/feishu-bot", (c) => {
     const workspaceId = c.req.param("id");
-    const denied = requireWorkspaceAdmin(c, store, workspaceId);
+    const denied = requireHumanWorkspaceAdmin(c, store, workspaceId);
     if (denied) return denied;
-    if (!store.deleteFeishuBotConfig(workspaceId)) {
+    if (!store.deleteFeishuBotConfig(workspaceId,currentRequestUserId(c))) {
       return c.json({ error: "feishu bot is not configured" }, 404);
     }
     // The connector is not stopped here: the next heartbeat hands the hosting

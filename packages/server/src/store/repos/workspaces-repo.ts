@@ -207,7 +207,7 @@ export class WorkspacesRepo {
           id,
         ],
       );
-      if (nextWorkspaceId !== current.workspaceId) refreshResponsibilityEntityChange(this.ctx,'member',id,'responsible_human_workspace_changed');
+      if (nextWorkspaceId !== current.workspaceId) refreshResponsibilityEntityChange(this.ctx,'member',id,'responsible_human_workspace_changed',[current.workspaceId]);
       return this.getWorkspaceMember(id)!;
     })();
   }

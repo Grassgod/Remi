@@ -27,7 +27,7 @@ import { createCommitEventQueue, type StoreContext } from "@multiremi/store/cont
 import { activeRequestReadCache, cacheKey } from "@multiremi/store/request-read-cache.js";
 import { cleanOptionalString, nullableString, parseJson, toJson } from "@multiremi/store/helpers.js";
 import { numberAllocationLockKey } from "@multiremi/store/advisory-locks.js";
-import { advisoryXactLock } from "@multiremi/store/db/postgres.js";
+import { advisoryXactLock, afterCommit } from "@multiremi/store/db/postgres.js";
 import {
   decryptFeishuBotSecret,
   encryptFeishuBotSecret,
@@ -48,7 +48,7 @@ import { backgroundJobsEnabled, feishuOutboundKindsEnabled } from "@multiremi/co
 import { buildFeishuTaskResult } from "@multiremi/feishu-bot/result-card.js";
 import { isFeishuOpenId, parseOutboundMention } from "@shared/feishu-mention.js";
 import { hashQuestionCardToken } from "@multiremi/store/question-card-token.js";
-import { Questions } from '../inbox/questions.js';
+import { Questions, refreshChatQuestionsAfterResponsibilityChangeWithinTransaction } from '../inbox/questions.js';
 import { sendMessageWithinTransaction } from '../inbox/send-message.js';
 import type { EnvelopeDelivery } from "./inbox-repo.js";
 import {
@@ -508,6 +508,8 @@ export class FeishuBotRepo {
    * app secret the admin never re-typed.
    */
   upsertConfig(workspaceId: string, input: UpsertFeishuBotConfigInput): MultiremiFeishuBotConfig {
+    if(!this.ctx.db.inTransaction)return this.ctx.db.transaction(()=>this.upsertConfig(workspaceId,input))();
+    this.ctx.lockWorkspaceRuntimeLifecycle(workspaceId);
     const agentId = cleanOptionalString(input.agentId);
     const runtimeId = cleanOptionalString(input.runtimeId);
     const appId = cleanOptionalString(input.appId);
@@ -614,18 +616,28 @@ export class FeishuBotRepo {
       now,
       cleanOptionalString(input.actor),
     );
-    this.publishDownlinkChange(workspaceId);
+    const events=createCommitEventQueue();
+    const actor=input.actor?this.ctx.workspaces().getWorkspaceMember(input.actor)??this.ctx.workspaces().findWorkspaceMemberForUser(input.actor,workspaceId):null;
+    refreshChatQuestionsAfterResponsibilityChangeWithinTransaction(this.ctx,workspaceId,events,
+      actor&&!actor.archivedAt&&actor.workspaceId===workspaceId?{type:'member',id:actor.id}:undefined,undefined,{transportOnly:true});
+    afterCommit(this.ctx.db,()=>{this.ctx.emitCommitEvents(events);this.publishDownlinkChange(workspaceId);});
     return this.getConfig(workspaceId)!;
   }
 
-  deleteConfig(workspaceId: string): boolean {
+  deleteConfig(workspaceId: string, actorId?:string): boolean {
+    if(!this.ctx.db.inTransaction)return this.ctx.db.transaction(()=>this.deleteConfig(workspaceId,actorId))();
+    this.ctx.lockWorkspaceRuntimeLifecycle(workspaceId);
     const existing = this.rawConfigRow(workspaceId);
     if (!existing) return false;
     this.ctx.db.run("DELETE FROM multiremi_feishu_bot_configs WHERE workspace_id = ?", workspaceId);
     // Reported states are intentionally kept: a Runtime that is still hosting
     // the connector must keep appearing here until it confirms it stopped, so
     // `directiveForRuntime` can go on telling it to stop after the row is gone.
-    this.publishDownlinkChange(workspaceId);
+    const events=createCommitEventQueue();
+    const actor=actorId?this.ctx.workspaces().getWorkspaceMember(actorId)??this.ctx.workspaces().findWorkspaceMemberForUser(actorId,workspaceId):null;
+    refreshChatQuestionsAfterResponsibilityChangeWithinTransaction(this.ctx,workspaceId,events,
+      actor&&!actor.archivedAt&&actor.workspaceId===workspaceId?{type:'member',id:actor.id}:undefined,undefined,{transportOnly:true});
+    afterCommit(this.ctx.db,()=>{this.ctx.emitCommitEvents(events);this.publishDownlinkChange(workspaceId);});
     return true;
   }
 

@@ -252,7 +252,7 @@ export class AgentsSkillsRepo {
     );
     this.ctx.db.run("UPDATE multiremi_agents SET execution_group_id = ? WHERE id = ?", [executionGroupId, id]);
     const updated = this.getAgent(id)!;
-    if (updated.workspaceId !== current.workspaceId) refreshResponsibilityEntityChange(this.ctx,'agent',id,'execution_owner_workspace_changed');
+    if (updated.workspaceId !== current.workspaceId) refreshResponsibilityEntityChange(this.ctx,'agent',id,'execution_owner_workspace_changed',[current.workspaceId]);
     // Changing a scheduling-relevant field (target, engine, owner, or workspace)
     // strands the agent's already-queued tasks: a task pinned to a runtime
     // that no longer matches the agent (provider/owner) can't be claimed, and

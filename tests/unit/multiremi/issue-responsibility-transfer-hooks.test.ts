@@ -1,4 +1,5 @@
 import { it, expect } from 'bun:test';
+import { createMultiremiApp } from '@multiremi/api.js';
 import { pendingTurnBackendTests, type PendingTurnTestFixture } from './pending-turn-test-backends.js';
 
 function setup(f: PendingTurnTestFixture) {
@@ -18,6 +19,24 @@ function setup(f: PendingTurnTestFixture) {
   return {...f,root,owner,next,worker,id};
 }
 pendingTurnBackendTests('explicit responsibility mutation hooks',fixture => {
+  it('reassigns a deep child with an escalated pending Q atomically and preserves the parent handler',async()=>{
+    const f=setup(fixture());
+    const parentOwner=f.store.createAgent({name:'Parent execution',provider:'codex'});
+    const grand=f.store.createIssue({id:'a_deep_root',title:'Grand root',responsibleMemberId:'mem_local_local',assigneeType:'agent',assigneeId:parentOwner.id});
+    const parent=f.store.createIssue({id:'b_deep_parent',title:'Direct parent',parentIssueId:grand.id,assigneeType:'agent',assigneeId:parentOwner.id});
+    f.store.updateIssue(f.root.id,{parentIssueId:parent.id,actorType:'member',actorId:'mem_local_local'});
+    const ownerTurn=f.db.query("SELECT id FROM multiremi_turns WHERE agent_id=? AND status='pending' ORDER BY created_at DESC LIMIT 1").get(f.owner.id)!;
+    f.db.run("UPDATE multiremi_turns SET status='running' WHERE id=?",[ownerTurn.id]);
+    const q=f.store.getQuestion(f.id)!;
+    f.store.escalateQuestion(f.id,{expected_route_revision:q.route_revision,reason:'Parent review needed'},{type:'agent',id:f.owner.id},String(ownerTurn.id));
+    expect(f.store.getQuestion(f.id)?.current_handler?.id).toBe(parentOwner.id);
+    const app=createMultiremiApp({store:f.store,authToken:'test-secret'});
+    const response=await app.request(`/api/multiremi/issues/${f.root.id}/assign`,{method:'POST',headers:{Authorization:'Bearer test-secret','Content-Type':'application/json'},body:JSON.stringify({assignee_type:'agent',assignee_id:f.next.id})});
+    expect(response.status).toBe(200);expect(f.store.getIssue(f.root.id)?.assigneeId).toBe(f.next.id);
+    expect(f.store.getQuestion(f.id)?.current_handler?.id).toBe(parentOwner.id);
+    expect(f.store.getQuestion(f.id)?.status).toBe('pending');
+    expect(f.store.getIssue(grand.id)?.status).not.toBe('done');expect(f.store.getIssue(parent.id)?.status).not.toBe('done');
+  });
   it('changes a pending Q handler in the same Issue mutation and invalidates its old card',()=>{
     const f=setup(fixture());
     f.store.updateIssue(f.root.id,{assigneeType:'agent',assigneeId:f.next.id,actorType:'member',actorId:'mem_local_local'});

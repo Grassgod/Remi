@@ -2288,8 +2288,8 @@ runMigrations(this.db);
     return this.feishuBot.upsertConfig(workspaceId, input);
   }
 
-  deleteFeishuBotConfig(workspaceId: string): boolean {
-    return this.feishuBot.deleteConfig(workspaceId);
+  deleteFeishuBotConfig(workspaceId: string, actorId?:string): boolean {
+    return this.feishuBot.deleteConfig(workspaceId,actorId);
   }
 
   setFeishuBotEnabled(workspaceId: string, enabled: boolean, actor?: string | null): MultiremiFeishuBotConfig | null {
