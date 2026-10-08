@@ -1,4 +1,5 @@
 export * from "./types.js";
+export * from "./issue-responsibility.js";
 export * from "./usage-accounting.js";
 export * from "./acp-protocol.js";
 export * from "./provider-types.js";

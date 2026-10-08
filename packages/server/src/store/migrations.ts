@@ -2885,6 +2885,8 @@ function runMigrationsForDialect(db: SqlDatabase, dialect: SqlDatabaseDialect): 
   // close that single parent once its children are finished. Three nullable
   // columns, add-only: NULL means "no grant" and matches the pre-S1c behaviour.
   addColumnIfMissing(db, "multiremi_issues", "parent_done_grant_at TEXT");
+  // No guessed backfill: legacy roots remain visibly unresolved until explicitly assigned.
+  addColumnIfMissing(db, "multiremi_issues", "responsible_member_id TEXT");
   addColumnIfMissing(db, "multiremi_issues", "parent_done_grant_by TEXT");
   addColumnIfMissing(db, "multiremi_issues", "parent_done_grant_agent_id TEXT");
   const issueCompletedAtAdded = addColumnIfMissing(db, "multiremi_issues", "completed_at TEXT");

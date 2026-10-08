@@ -1980,6 +1980,8 @@ export interface MultiremiIssue {
   projectId: string | null;
   parentIssueId: string | null;
   issueKind: MultiremiIssueKind;
+  /** Persisted only on roots. Null explicitly identifies unresolved legacy ownership. */
+  responsibleMemberId?: string | null;
   sourceIssueId: string | null;
   assigneeType: MultiremiAssigneeType | null;
   assigneeId: string | null;
@@ -2402,6 +2404,8 @@ export interface MultiremiTimelinePage {
 }
 
 export interface CreateIssueInput {
+  responsibleMemberId?: string | null;
+  responsible_member_id?: string | null;
   /**
    * MUL-400 E3: prerequisite issues this one waits on, as keys or ids. Created
    * with the issue in the same transaction, with cycle and ancestor checks.
@@ -2451,6 +2455,8 @@ export interface CreateIssueWithTaskInput extends CreateIssueInput {
 }
 
 export interface UpdateIssueInput {
+  responsibleMemberId?: string | null;
+  responsible_member_id?: string | null;
   runtimeWorkspaceId?: string | null;
   runtime_workspace_id?: string | null;
   /** Server-internal attribution, overwritten from the authenticated request. */

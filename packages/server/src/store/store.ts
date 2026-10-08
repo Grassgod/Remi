@@ -3735,6 +3735,10 @@ runMigrations(this.db);
     return this.issues.getIssue(id);
   }
 
+  resolveIssueResponsibility(issueId: string): import('@multiremi/contracts').IssueResponsibility {
+    return this.ctx.resolveIssueResponsibility(issueId);
+  }
+
   getIssueDecision(issueId: string, decisionId: string): MultiremiIssueDecision | null {
     return this.issues.getIssueDecision(issueId, decisionId);
   }

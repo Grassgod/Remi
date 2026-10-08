@@ -1483,6 +1483,10 @@ export class StoreContext {
 
   // Cross-domain: the agent that actually runs work for an assignee ref. Called by the tasks,
   // autopilots and analytics bands, so it lives here rather than in any one of them.
+  resolveIssueResponsibility(issueId: string): import('@multiremi/contracts').IssueResponsibility {
+    return resolveIssueResponsibility(this, issueId);
+  }
+
   resolveRunnableAgentForAssignee(assigneeType: MultiremiAssigneeType, assigneeId: string): MultiremiAgent | null {
     if (assigneeType === "agent") {
       const agent = this.agents().getAgent(assigneeId);
@@ -1848,3 +1852,4 @@ export function toIssueComment(row: Row): MultiremiIssueComment {
     updated_at: updatedAt,
   };
 }
+import { resolveIssueResponsibility } from './issue-responsibility.js';

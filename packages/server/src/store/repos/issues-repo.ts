@@ -7637,6 +7637,7 @@ function toIssue(row: Row): MultiremiIssue {
     workspaceId: String(row.workspace_id ?? "local"),
     projectId: nullableString(row.project_id),
     parentIssueId: nullableString(row.parent_issue_id),
+    responsibleMemberId: nullableString(row.responsible_member_id),
     issueKind: normalizeIssueKind(nullableString(row.issue_kind)),
     sourceIssueId: nullableString(row.source_issue_id),
     assigneeType: nullableString(row.assignee_type) as MultiremiIssue["assigneeType"],
