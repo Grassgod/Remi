@@ -250,6 +250,14 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
   const denyTechnicalResponsibilityWrite=(c:Context,input:{responsibleMemberId?:string|null;responsible_member_id?:string|null;parentIssueId?:string|null;parent_issue_id?:string|null},issue?:MultiremiIssue):Response|null=>{
     const token=currentAccessToken(c);
     if(token?.type!=='task'&&token?.type!=='daemon')return null;
+    const parentField=hasRequestField(input,'parentIssueId','parent_issue_id');
+    const nextParent=input.parentIssueId??input.parent_issue_id??null;
+    if(parentField && nextParent && (!issue||nextParent!==issue.parentIssueId)) {
+      const parent=store.resolveIssueResponsibility(nextParent);
+      const previous=issue?store.resolveIssueResponsibility(issue.id):null;
+      const source=previous?previous.unresolved.length?null:previous.rootHuman?.id:token.type==='task'?taskIssueResponsibleMember(c,store):null;
+      if(parent.unresolved.length||!source||parent.rootHuman?.id!==source)return c.json({error:'A human must confirm moving work to a different root responsibility',code:'human_issue_responsibility_required'},403);
+    }
     const explicit=hasRequestField(input,'responsibleMemberId','responsible_member_id');
     const target=input.responsibleMemberId??input.responsible_member_id??null;
     if(explicit) {
@@ -789,7 +797,9 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
 
   app.post("/api/multiremi/issues/batch-update", async (c) => {
     const body = await readJson<BatchUpdateIssuesInput>(c);
-    const responsibilityDenied=denyTechnicalResponsibilityWrite(c,body.updates??{});if(responsibilityDenied)return responsibilityDenied;
+    for(const id of body.issueIds??body.issue_ids??[]) {
+      const responsibilityDenied=denyTechnicalResponsibilityWrite(c,body.updates??{},store.getIssue(id)??undefined);if(responsibilityDenied)return responsibilityDenied;
+    }
     // MUL-400 E1: batch update is the third status writer, so it takes the same
     // member-only rule for `force` as the two PATCH routes.
     const forceDenied = denyTaskIdentityIssueForce(c, body.updates ?? {});
@@ -820,7 +830,9 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
   });
   app.post("/api/issues/batch-update", async (c) => {
     const body = await readJson<BatchUpdateIssuesInput>(c);
-    const responsibilityDenied=denyTechnicalResponsibilityWrite(c,body.updates??{});if(responsibilityDenied)return responsibilityDenied;
+    for(const id of body.issueIds??body.issue_ids??[]) {
+      const responsibilityDenied=denyTechnicalResponsibilityWrite(c,body.updates??{},store.getIssue(id)??undefined);if(responsibilityDenied)return responsibilityDenied;
+    }
     try {
       const input = issueBatchUpdateCompatibilityInput(body);
       const forceDenied = denyTaskIdentityIssueForce(c, body.updates ?? {});
@@ -888,6 +900,7 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
     if (denied) return denied;
     const assigneeType = body.assigneeType ?? body.assignee_type ?? (body.agentId ? "agent" : null);
+    if(assigneeType==='member')return c.json({error:'Choose an Agent or team Leader for execution; configure the final human through responsible_member_id',code:'issue_execution_owner_required'},409);
     assertRuntimeWorkspaceAccess(c, store, body.runtimeWorkspaceId ?? body.runtime_workspace_id, workspaceId);
     const assigneeId = body.assigneeId ?? body.assignee_id ?? body.agentId ?? null;
     const dispatchDenied = denySideSessionAssigneeDispatch(c, store, workspaceId, assigneeType, assigneeId);

@@ -26,6 +26,9 @@ HTTP 的创建人来自凭据；Agent 创建新根可继承其真实来源 Issue
 仍保留在 Chat，并显示可行动的责任缺口；不自动生成未知责任根单。
 自动化 `create_issue` 使用配置的 `responsibleMemberId`（compat 为 `responsible_member_id`），
 新建 HTTP 自动化可从真实成员凭据或 Task 的有效来源设置初始责任，创建归属也由凭据决定。
+显式自动化、bot 或 topic 人类责任配置要求真实 workspace 管理员；普通通用 settings 写入
+不能绕过 topic 配置的人类门禁。Agent 可提交与已验证来源相同的创建字段，不能另选人类，
+也不能通过改父单将工作移到不同根人类责任下；daemon 不代表其技术 token owner 确认责任。
 历史自动化的 `createdBy` 仅作归属，运行时不隐式变成人类责任。没有配置则拒绝建根单。
 消息转 Issue 必须由真实成员确认；飞书外部发送人或 Runtime owner 不冒充审批成员。
 入门引导从已验证 bootstrap 用户创建；显式 QA seed 和测试工厂使用有名称的合成成员。

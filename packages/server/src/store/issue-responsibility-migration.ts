@@ -23,7 +23,7 @@ export function listIssueResponsibilityMigration(ctx:StoreContext,workspaceId:st
     const candidate=(ref:string|null|undefined,source:IssueResponsibilityMigrationItem['candidates'][number]['source'])=>{
       if(!ref)return;
       const member=ctx.workspaces().getWorkspaceMember(ref)??ctx.workspaces().findWorkspaceMemberForUser(ref,workspaceId);
-      if(member)candidates.push({memberId:member.id,name:member.name,source,available:!member.archivedAt&&member.workspaceId===workspaceId});
+      if(member?.workspaceId===workspaceId)candidates.push({memberId:member.id,name:member.name,source,available:!member.archivedAt});
     };
     if(issue.assigneeType==='member')candidate(issue.assigneeId,'legacy_member_assignee');
     candidate(issue.createdBy,'historical_creator');

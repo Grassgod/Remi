@@ -78,9 +78,19 @@ pendingTurnBackendTests('explicit responsibility migration and authenticated sou
       expect(same.status).toBe(201);const body=await same.json();expect(store.getIssue(body.issue?.id??body.id)?.responsibleMemberId).toBe(member.id);expect(store.getIssue(body.issue?.id??body.id)?.createdBy).not.toBe('local');
     }
     const changed=await app.request(`/api/issues/${root.id}`,{method:'PATCH',headers:taskHeaders,body:JSON.stringify({responsible_member_id:other.id})});expect(changed.status).toBe(403);
+    const differentRoot=f.createIssue({title:'Different confirmed root',responsibleMemberId:other.id,assigneeType:'agent',assigneeId:agent.id});
+    for(const prefix of ['/api','/api/multiremi']) {
+      const batch=await app.request(`${prefix}/issues/batch-update`,{method:'POST',headers:taskHeaders,body:JSON.stringify({issue_ids:[differentRoot.id],updates:{responsible_member_id:member.id}})});
+      expect(batch.status).toBe(403);expect(store.getIssue(differentRoot.id)?.responsibleMemberId).toBe(other.id);
+      const reparent=await app.request(`${prefix}/issues/${root.id}`,{method:'PATCH',headers:taskHeaders,body:JSON.stringify({parent_issue_id:differentRoot.id})});
+      expect(reparent.status).toBe(403);expect(store.getIssue(root.id)?.parentIssueId).toBeNull();
+    }
     const taskChild=await app.request('/api/issues',{method:'POST',headers:taskHeaders,body:JSON.stringify({title:'Task child inherited',parent_issue_id:root.id,responsible_member_id:null})});
     expect(taskChild.status).toBe(201);const taskChildBody=await taskChild.json();expect(store.resolveIssueResponsibility(taskChildBody.id).rootHuman?.id).toBe(member.id);
     const review=await app.request('/api/workspaces/local/issue-responsibility-migration?limit=101',{headers});expect(review.status).toBe(400);
+    const before=store.listIssues().length;
+    const memberExecution=await app.request('/api/multiremi/issues',{method:'POST',headers,body:JSON.stringify({title:'Invalid member execution',assignee_type:'member',assignee_id:member.id})});
+    expect(memberExecution.status).toBe(409);expect(store.listIssues()).toHaveLength(before);
   });
   it('keeps native and compat reassignment transactional and rolls dispatch failures back',async()=>{
     const f=fixture();const {store}=f;
@@ -162,5 +172,53 @@ pendingTurnBackendTests('explicit responsibility migration and authenticated sou
     expect(upgraded.listIssueResponsibilityMigration('local').items[0]?.candidates).toContainEqual({memberId:'mem_local_local',name:'Local User',source:'historical_creator',available:true});
     expect(upgraded.getIssueComment(comment.id)?.body).toBe('Snapshot evidence');
     expect(upgraded.listIssueResponsibilityMigration('local').total).toBe(1);
+  });
+  it('rejects technical credentials for config, mapping and root acceptance despite their human token owner',async()=>{
+    const f=fixture();const {store}=f;
+    const user=store.getOrCreateUser({email:'actual-reviewer@example.test',name:'Actual reviewer'});
+    const human=store.createWorkspaceMember({userId:user.id,name:'Actual reviewer',role:'admin'});
+    const agent=store.createAgent({name:'Owner execution',provider:'codex'});
+    const issue=f.createIssue({title:'Specific human accepts',assigneeType:'agent',assigneeId:agent.id,responsibleMemberId:human.id});
+    const task=store.createTask({agentId:agent.id,issueId:issue.id,prompt:'Deliver'});
+    const taskToken=await store.createTaskAccessToken(task,'local');
+    const daemon=await store.createAccessToken({userId:'local',name:'Technical owner',type:'daemon',purpose:'daemon',daemonId:'daemon_source_gate'});
+    const actual=await store.createAccessToken({userId:user.id,name:'Actual login',type:'pat',purpose:'session'});
+    const app=createMultiremiApp({store,authToken:'test-secret'});
+    const post=(path:string,token:string,body:object,method='POST')=>app.request(path,{method,headers:{Authorization:`Bearer ${token}`,'Content-Type':'application/json'},body:JSON.stringify(body)});
+    const submitted=await post(`/api/issues/${issue.id}/deliveries`,taskToken.token,{summary:'Authenticated result'});expect(submitted.status).toBe(201);
+    const {delivery}=await submitted.json();
+    for(const token of [taskToken.token,daemon.token]) {
+      expect((await post(`/api/issues/${issue.id}/deliveries/${delivery.id}/respond`,token,{action:'accept',revision:delivery.responsibilityRevision,actor_type:'member',actor_id:human.id})).status).toBe(403);
+      expect((await post('/api/workspaces/local/issue-responsibility-migration/map',token,{reason:'Borrow owner',mappings:[]})).status).toBe(403);
+      expect((await post('/api/workspaces/local/feishu-bot',token,{responsible_member_id:human.id},'PUT')).status).toBe(403);
+      expect((await post('/api/workspaces/local/issue-topics',token,{enabled:false,chat_id:'',responsible_member_id:human.id},'PUT')).status).toBe(403);
+      expect((await post('/api/workspaces/local',token,{settings:{issueTopics:{enabled:false,chatId:'',responsibleMemberId:human.id}}},'PATCH')).status).toBe(403);
+      expect((await post('/api/autopilots',token,{title:'Borrow owner',assignee_id:agent.id,execution_mode:'create_issue',responsible_member_id:human.id})).status).toBe(403);
+    }
+    expect(store.getIssue(issue.id)?.status).toBe('in_review');
+    const accepted=await post(`/api/issues/${issue.id}/deliveries/${delivery.id}/respond`,actual.token,{action:'accept',revision:delivery.responsibilityRevision});
+    expect(accepted.status).toBe(200);expect(store.getIssue(issue.id)?.status).toBe('done');
+  });
+  it('uses the real human message approver and refuses external senders or task-owned Runtime attribution',async()=>{
+    const f=fixture();const {store}=f;
+    const humanUser=store.getOrCreateUser({email:'message-human@example.test',name:'Human message approver'});
+    const human=store.createWorkspaceMember({userId:humanUser.id,name:'Human message approver',role:'admin'});
+    store.messaging.upsertConnection({id:'source_connection',workspaceId:'local',provider:'test',channel:'test',name:'Offline source',status:'ready'});
+    store.messaging.upsertSource({id:'source_messages',workspaceId:'local',connectionId:'source_connection',name:'Offline messages',allowlist:[{externalConversationId:'conversation',addedAt:'2026-10-01T00:00:00.000Z'}]});
+    store.messaging.ingestMessages({connectionId:'source_connection',sourceId:'source_messages',messages:[{externalMessageId:'external_source',externalConversationId:'conversation',conversationName:'External conversation',conversationKind:'group',externalThreadId:null,externalRootId:null,externalParentId:null,
+      sender:{externalSenderId:'external-human-without-member',displayName:'External sender',kind:'user',isSelf:false},text:'Create a request',attachments:[],mentions:[],reactions:[],url:null,sentAt:'2026-10-01T01:00:00.000Z',editedAt:null,recalled:false,raw:{}}]});
+    const ref={connectionId:'source_connection',externalMessageId:'external_source'};
+    expect(()=>store.messagingOutcomes.createIssue(ref,{workspaceId:'local',title:'External guessed human',createdBy:'external-human-without-member'})).toThrow('active human creator');
+    const agent=store.createAgent({name:'Message source task',provider:'codex'});
+    const task=store.createTask({agentId:agent.id,prompt:'Propose'});
+    expect(()=>store.messagingOutcomes.createIssue(ref,{workspaceId:'local',title:'Task borrowed owner',taskId:task.id,createdBy:'local'})).toThrow('human approver');
+    const app=createMultiremiApp({store,authToken:'test-secret'});
+    const path='/api/workspaces/local/messaging/connections/source_connection/messages/external_source/create-issue';
+    const pat=await store.createAccessToken({userId:humanUser.id,name:'Actual approver',type:'pat',purpose:'session'});
+    const taskToken=await store.createTaskAccessToken(task,'local');
+    const request=(token:string)=>app.request(path,{method:'POST',headers:{Authorization:`Bearer ${token}`,'Content-Type':'application/json'},body:JSON.stringify({title:'Human-approved external Issue',createdBy:'local',created_by:'local'})});
+    expect((await request(taskToken.token)).status).toBe(403);
+    const response=await request(pat.token);expect(response.status).toBe(201);const body=await response.json();expect(store.getIssue(body.issue.id)?.responsibleMemberId).toBe(human.id);expect(store.getIssue(body.issue.id)?.createdBy).toBe(humanUser.id);
+    expect((await request(pat.token)).status).toBe(200);expect(store.listIssues()).toHaveLength(1);
   });
 });

@@ -471,6 +471,9 @@ export function registerWorkspaceRoutes(app: Hono, deps: RouterDeps): void {
       await readJson<Partial<CreateWorkspaceInput>>(c),
     );
     if (hasOwn(body, "settings")) {
+      if(body.settings && hasOwn(body.settings,'issueTopics')) {
+        const humanDenied=requireHumanWorkspaceAdmin(c,store,c.req.param('id'));if(humanDenied)return humanDenied;
+      }
       const adminDenied = requireWorkspaceAdmin(c, store, c.req.param("id"));
       if (adminDenied) return adminDenied;
     }
@@ -487,6 +490,9 @@ export function registerWorkspaceRoutes(app: Hono, deps: RouterDeps): void {
       await readJson<Partial<CreateWorkspaceInput>>(c),
     );
     if (hasOwn(body, "settings")) {
+      if(body.settings && hasOwn(body.settings,'issueTopics')) {
+        const humanDenied=requireHumanWorkspaceAdmin(c,store,c.req.param('id'));if(humanDenied)return humanDenied;
+      }
       const adminDenied = requireWorkspaceAdmin(c, store, c.req.param("id"));
       if (adminDenied) return adminDenied;
     }

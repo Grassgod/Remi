@@ -24,6 +24,7 @@ import {
   readJsonStrict,
   readJsonStrictAllowEmpty,
   requireWorkspaceAdmin,
+  requireHumanWorkspaceAdmin,
 } from "../helpers.js";
 import { currentRequestUserId } from "../wire/index.js";
 import type { RouterDeps } from "./deps.js";
@@ -266,7 +267,7 @@ export function registerFeishuBotRoutes(
 
   app.put("/api/workspaces/:id/feishu-bot", async (c) => {
     const workspaceId = c.req.param("id");
-    const denied = requireWorkspaceAdmin(c, store, workspaceId);
+    const denied = requireHumanWorkspaceAdmin(c, store, workspaceId);
     if (denied) return denied;
     if (!store.getWorkspace(workspaceId)) return c.json({ error: "workspace not found" }, 404);
     const body = await readJsonStrict<FeishuBotConfigBody>(c);
@@ -294,6 +295,7 @@ export function registerFeishuBotRoutes(
           domain: saved.domain,
           enabled: saved.enabled,
           sender_access_policy: saved.senderAccessPolicy,
+          responsible_member_id:saved.responsibleMemberId??null,
           revision: saved.revision,
           // Which secrets moved, never what they became.
           app_secret_op: parsed.input.appSecretOp,
