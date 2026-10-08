@@ -80,4 +80,16 @@ describe("one Q on every surface", () => {
     fireEvent.click(screen.getByRole("button", { name: "Answer" }));
     await waitFor(() => expect(mocks.actOnQuestion).toHaveBeenCalledWith("q1", "answer", expect.objectContaining({ revise: true, expected_route_revision: 7, expected_answer_revision: 2, reason: "Correction" })));
   });
+  it("renders SDK direct AUQ payloads with multi-select and free answers", async () => {
+    const original = [{ question: "Which SDK options?", options: [{ label: "One" }, { label: "Two" }], multiSelect: true }, { question: "SDK reason?", options: [] }];
+    mount({ ...base, original_questions: original });
+    fireEvent.click(screen.getByRole("button", { name: "One" }));
+    fireEvent.click(screen.getByRole("button", { name: "Two" }));
+    const inputs = screen.getAllByRole("textbox");
+    fireEvent.change(inputs[0]!, { target: { value: "Custom SDK choice" } });
+    fireEvent.change(inputs[1]!, { target: { value: "SDK evidence" } });
+    fireEvent.click(screen.getByRole("button", { name: "Submit" }));
+    await waitFor(() => expect(mocks.actOnQuestion).toHaveBeenCalledWith("q1", "answer", expect.objectContaining({ response: { answers: { "Which SDK options?": "Custom SDK choice", "SDK reason?": "SDK evidence" } } })));
+    expect(original[0]).not.toHaveProperty("fieldKey");
+  });
 });
