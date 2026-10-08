@@ -1086,9 +1086,13 @@ function dashboardSpecs(): CommandSpec[] {
     { name: "tz", type: "string", valueName: "IANA", description: "Viewer timezone" },
     { name: "project", type: "string", valueName: "id", description: "Filter by execution Project" },
     { name: "runtime", type: "string", valueName: "id", description: "Filter by Runtime" },
+    { name: "include", type: "string", valueName: "day_model", description: "Include one page of consumption-date × model detail" },
+    { name: "detail-limit", type: "integer", valueName: "1..500", description: "Detail groups per page (default 200)" },
+    { name: "detail-cursor", type: "string", valueName: "cursor", description: "Opaque next_cursor from the same scope, window and price revision" },
   ];
   const reportQuery = (i: CommandInvocation) => ({ workspace_id: requiredWorkspace(i), days: stringOption(i, "days"),
-    since: stringOption(i, "since"), until: stringOption(i, "until"), tz: stringOption(i, "tz"), project_id: stringOption(i, "project"), runtime_id: stringOption(i, "runtime") });
+    since: stringOption(i, "since"), until: stringOption(i, "until"), tz: stringOption(i, "tz"), project_id: stringOption(i, "project"), runtime_id: stringOption(i, "runtime"),
+    include: stringOption(i, "include"), detail_limit: integerOption(i, "detail-limit"), detail_cursor: stringOption(i, "detail-cursor") });
   return [
     group("dashboard", "Read workspace activity and usage analytics"),
     op({ id: "dashboard.usage.report", path: ["dashboard", "usage", "report"], description: "Read actual consumption, context diagnostics, known cost subtotals and coverage from one snapshot", method: "GET", apiPath: "/api/usage/report", auth: HUMAN_TASK, options: reportOptions, query: reportQuery }),

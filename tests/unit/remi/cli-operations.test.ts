@@ -27,6 +27,17 @@ afterEach(() => {
 });
 
 describe("operations CLI contracts", () => {
+  it("requests one canonical day/model detail page using the declared CLI parameters", async () => {
+    useCliEnv();
+    const spec = specById("dashboard.usage.report");
+    globalThis.fetch = capabilityFetch(spec.id, request => {
+      const query = new URL(request.url).searchParams;
+      expect(query.get("include")).toBe("day_model"); expect(query.get("detail_limit")).toBe("200"); expect(query.get("detail_cursor")).toBe("opaque-next");
+      return Response.json({ day_model: { rows: [], next_cursor: null } });
+    });
+    const output = await capture(() => registryFor([spec]).execute(["dashboard", "usage", "report", "--include", "day_model", "--detail-limit", "200", "--detail-cursor", "opaque-next", "--json"]));
+    expect(JSON.parse(output.stdout)).toEqual({ day_model: { rows: [], next_cursor: null } });
+  });
   it("renders usage report accounting counters through the Registry while removing credentials and disguised statistics", async () => {
     useCliEnv();
     const spec = specById("dashboard.usage.report");

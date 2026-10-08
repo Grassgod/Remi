@@ -7,6 +7,20 @@ import { usageMetrics, usageReport } from "../../usage/test-fixtures";
 afterEach(() => vi.unstubAllGlobals());
 function mock(body: unknown) { const fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify(body), { headers: { "Content-Type": "application/json" } })); vi.stubGlobal("fetch", fetch); return fetch; }
 describe("Usage accounting response boundary", () => {
+  it("sends lazy joint pagination and validates consumption-only detail with unknown provenance", async () => {
+    const { total_seconds: _seconds, status_counts: _status, ...model } = usageReport().by_model[0]!;
+    const fetch = mock(usageReport({ day_model: { rows: [{ ...model, date: "2026-10-01" }], next_cursor: "opaque-next" } }));
+    const api = new UsageAccountingEndpoints(new HttpClient("https://api.example.test"));
+    const parsed = await api.getUsageReport("ws", { tz: "UTC", include: "day_model", detail_limit: 200, detail_cursor: "opaque-prior" });
+    const url = new URL(fetch.mock.calls[0]![0]);
+    expect(url.searchParams.get("include")).toBe("day_model");
+    expect(url.searchParams.get("detail_limit")).toBe("200");
+    expect(url.searchParams.get("detail_cursor")).toBe("opaque-prior");
+    expect(parsed.day_model?.rows[0]).not.toHaveProperty("total_seconds");
+    expect(parsed.day_model?.next_cursor).toBe("opaque-next");
+    mock(usageReport({ day_model: { rows: [{ ...model, actual_total_tokens: 999, date: "2026-10-01" }], next_cursor: null } }));
+    await expect(api.getUsageReport("ws", { tz: "UTC", include: "day_model" })).rejects.toBeInstanceOf(ApiContractError);
+  });
   it("preserves historical time attribution and identity-conflict coverage", async () => {
     const report = usageReport({ summary: usageMetrics({ task_attributed_tokens: 150, task_attributed_task_count: 1, time_provenance: "task_attributed", identity_conflict_task_count: 1, complete: false }) });
     report.time_basis.historical_aggregates = "task_attribution_at";

@@ -65,6 +65,7 @@
     "./runtimes/mutations": "./runtimes/mutations.ts",
     "./runtimes/hooks": "./runtimes/hooks.ts",
     "./usage/queries": "./usage/queries.ts",
+    "./usage/view-model": "./usage/view-model.ts",
     "./agents": "./agents/index.ts",
     "./agents/queries": "./agents/queries.ts",
     "./agents/derive-presence": "./agents/derive-presence.ts",

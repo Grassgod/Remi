@@ -97,6 +97,8 @@ export interface UsageReport {
   by_agent: Array<UsageMetrics & { agent_id: string }>;
   by_model: Array<UsageMetrics & { provider: string; model: string | null; requested_model: string | null; model_source: "reported" | "requested" | "unknown"; model_provenance: string; purpose?: string; connection_id: string | null }>;
   by_runtime: Array<UsageMetrics & { runtime_id: string | null; runtime_provenance: string }>;
+  /** Lazy consumption-date × full model identity projection; never lifecycle durations. */
+  day_model?: { rows: Array<Omit<UsageReport["by_model"][number], "total_seconds" | "status_counts"> & { date: string }>; next_cursor: string | null };
   task_daily: Array<{ date: string; task_count: number; total_seconds: number; status_counts: UsageStatusCounts }>;
   time_basis: { consumption: "unit_occurred_at"; terminal_tasks: "terminal_lifecycle_at"; active_tasks: "current_snapshot"; historical_aggregates?: "task_attribution_at" };
   coverage: { priced_tokens: number; unpriced_tokens: number; token_ratio: number | null; unknown_task_count: number };
