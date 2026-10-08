@@ -451,15 +451,25 @@ export class Questions {
     }
     return 0;
   }
+  private notifyRecoveryOwner(message: UnifiedMessage, record: QuestionRecord, events: CommitEventQueue) {
+    if (record.status !== 'answered' || record.wait.status !== 'detached') return;
+    const human = record.route.find(step => step.stage === 'human');
+    if (human) sendMessageWithinTransaction(this.ctx, { session_id: human.issue_id ? this.ctx.issueSessions().getOrCreateDefaultIssueSessionWithinTransaction(human.issue_id).id : message.session_id,
+      sender: { type: 'platform', id: null }, to: { type: 'member', ref: human.handler.id }, message_kind: 'status', wake_requested: 'inbox_only',
+      dedupe_key: `question-recovery-route:${message.id}:${record.route_revision}`,
+      body_md: `问题 ${message.id} 已保存答案，后续执行仍待恢复（${record.wait.reason ?? 'detached'}）。使用 remi message question get ${message.id} 核对；执行条件恢复后可显式 continue。`,
+      metadata: { root_question_id: message.id, question_route_revision: record.route_revision, question_notification: true } }, events);
+  }
   refreshWithinTransaction(issueId: string, events: CommitEventQueue, actor?: QuestionActor, reason = 'issue_responsibility_transferred') {
     const issue = this.ctx.issues().getIssue(issueId); if (!issue) return;
     this.ctx.lockWorkspaceRuntimeLifecycle(issue.workspaceId);
     const ids = this.ctx.db.query(`${this.subtreeSql()} SELECT m.id FROM multiremi_issue_sessions s JOIN multiremi_conversation_log m ON m.session_id=s.id
-      WHERE s.workspace_id=? AND m.message_kind='decision' AND m.resolved_at IS NULL AND m.deleted_at IS NULL
+      WHERE s.workspace_id=? AND m.message_kind='decision' AND m.deleted_at IS NULL
+        AND (m.resolved_at IS NULL OR (${this.jsonText('m', 'question.status')}='answered' AND ${this.jsonText('m', 'question.wait.status')}='detached'))
         AND (s.issue_id IN (SELECT id FROM subtree) OR ${this.jsonText('m', 'question.source_issue_id')} IN (SELECT id FROM subtree) OR ${this.jsonText('m', 'decision_record.source_issue_id')} IN (SELECT id FROM subtree))`)
       .all(issueId, issue.workspaceId, issue.workspaceId, issue.workspaceId);
     for (const row of ids) {
-      const loaded = this.read(row.id); if (!loaded || loaded.record.status !== 'pending') continue;
+      const loaded = this.read(row.id); if (!loaded || !(loaded.record.status === 'pending' || loaded.record.status === 'answered' && loaded.record.wait.status === 'detached')) continue;
       const { message, record } = loaded;
       if (!this.integrity(message, record)) continue;
       if (!record.source_issue_id) continue;
@@ -471,7 +481,8 @@ export class Questions {
       record.route = route.steps; record.route_index = index; record.route_revision++; record.responsibility_revision = route.revision; record.route_reason = route.reason; record.summary = null;
       this.event(record, 'transfer', actor ?? null, { reason, handler: record.route[index]?.handler ?? null });
       this.ctx.db.run('UPDATE multiremi_conversation_log SET card_token_hash=NULL,card_token_recipient=NULL,card_token_consumed_at=NULL WHERE id=?', [message.id]);
-      this.notify(message, record, events); this.save(message, record, events);
+      if (record.status === 'pending') this.notify(message, record, events);
+      this.save(message, record, events); this.notifyRecoveryOwner(message, record, events);
     }
   }
   refreshChatWithinTransaction(workspaceId: string, events: CommitEventQueue, actor?: QuestionActor, reason = 'chat_responsibility_transferred', filter: ChatQuestionResponsibilityFilter = {}) {
@@ -503,13 +514,7 @@ export class Questions {
       this.ctx.db.run('UPDATE multiremi_conversation_log SET card_token_hash=NULL,card_token_recipient=NULL,card_token_consumed_at=NULL WHERE id=?', [message.id]);
       if (record.status === 'pending') this.notify(message, record, events);
       this.save(message, record, events);
-      if (record.status === 'answered' && record.wait.status === 'detached') {
-        const human = route.steps.find(step => step.stage === 'human')?.handler;
-        if (human) sendMessageWithinTransaction(this.ctx, { session_id: message.session_id, sender: { type: 'platform', id: null }, to: { type: 'member', ref: human.id },
-          message_kind: 'status', wake_requested: 'inbox_only', dedupe_key: `question-recovery-route:${message.id}:${record.route_revision}`,
-          body_md: `问题 ${message.id} 已保存答案，后续执行仍待恢复（${record.wait.reason ?? 'detached'}）。使用 remi message question get ${message.id} 核对；执行条件恢复后可显式 continue。`,
-          metadata: { root_question_id: message.id, question_route_revision: record.route_revision, question_notification: true } }, events);
-      }
+      this.notifyRecoveryOwner(message, record, events);
     }
   }
   consumeWithinTransaction(id: string, turnId: string, attemptId: string, replyId: string, events: CommitEventQueue, waitId?: string) {

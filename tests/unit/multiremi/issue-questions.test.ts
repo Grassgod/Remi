@@ -148,6 +148,30 @@ pendingTurnBackendTests('one question through the responsibility chain', fixture
     const consumer = h.store.getTurn((h.store.getMessage(h.q.id)!.metadata.question as any).wait.consumer_turn_id)!;
     expect(consumer.agent_id).toBe(h.worker.id);
   });
+  it('hands off saved answers that still await recovery to a changed root human without asking Agents again', () => {
+    const h = setup(fixture());
+    h.bridge.rpc('turn.decision.expire', { turn_id: h.turn.id, attempt_id: h.task.id, message_id: h.q.id, status: 'timeout' }, h.scope);
+    h.store.archiveAgent(h.worker.id);
+    const saved = h.store.answerQuestion(h.q.id, { expected_route_revision: 1, response: { answer: 'A' } }, { type: 'agent', id: h.leader.id }, h.agentTurn(h.leader.id));
+    expect(saved.question.wait_status).toBe('detached');
+    const user = h.store.getOrCreateUser({ externalId: 'question_new_recovery_human', name: 'New recovery human' });
+    const human = h.store.createWorkspaceMember({ workspaceId: 'local', userId: user.id, name: 'New recovery human', role: 'member' });
+    const beforeNotifications = h.db.query("SELECT COUNT(*) AS count FROM multiremi_conversation_log WHERE to_agent_id=? AND dedupe_key LIKE 'question-route:%'").get(h.leader.id).count;
+    h.store.updateIssue(h.parent.id, { responsibleMemberId: human.id, actorType: 'member', actorId: 'mem_local_local' });
+    const moved = h.store.getQuestion(h.q.id, { type: 'member', id: human.id })!;
+    expect(moved).toMatchObject({ status: 'answered', wait_status: 'detached', route_revision: 2, answer_revision: 1, answer: saved.question.answer });
+    expect(moved.actions.allowed).toContain('continue');
+    expect(h.db.query("SELECT COUNT(*) AS count FROM multiremi_conversation_log WHERE to_agent_id=? AND dedupe_key LIKE 'question-route:%'").get(h.leader.id).count).toBe(beforeNotifications);
+    const notice = h.db.query('SELECT * FROM multiremi_conversation_log WHERE dedupe_key=?').get(`question-recovery-route:${h.q.id}:2`);
+    expect(notice.to_member_id).toBe(human.id); expect(notice.session_id).not.toBe(h.q.session_id); expect(notice.reply_to_id).toBeNull();
+    expect(JSON.parse(notice.metadata).root_question_id).toBe(h.q.id);
+    expect(() => h.store.continueQuestion(h.q.id, { expected_route_revision: 2 }, { type: 'member', id: 'mem_local_local' })).toThrow('question_continuation_human_required');
+    h.store.restoreAgent(h.worker.id);
+    const resumed = h.store.continueQuestion(h.q.id, { expected_route_revision: 2 }, { type: 'member', id: human.id });
+    expect(resumed.wait_status).toBe('continuation_pending'); expect(resumed.answer_revision).toBe(1);
+    h.store.continueQuestion(h.q.id, { expected_route_revision: 2 }, { type: 'member', id: human.id });
+    expect(h.db.query('SELECT id FROM multiremi_conversation_log WHERE dedupe_key=?').all(`question-continuation:${h.q.id}`)).toHaveLength(1);
+  });
   it('real Feishu host callback rejects wrong operators and rotated cards then consumes the current same-Q answer once', async () => {
     const h = setup(fixture());
     const previous = process.env.MULTIREMI_FEISHU_BOT_ENCRYPTION_KEY;
