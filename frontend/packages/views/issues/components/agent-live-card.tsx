@@ -103,7 +103,11 @@ export function AgentLiveCard({ issueId, issueSessionId, onInitialReconcile, rec
       setHumanRequestTasks(issueTasks.filter((task) => task.status === "awaiting_human"));
       setTaskStates(new Map(tasks.map((task) => [task.id, { task }])));
       onInitialReconcile?.();
-    }).catch(error => { console.error(error); onInitialReconcile?.(); });
+    }).catch(error => {
+      if (!mountedRef.current || mySeq !== reconcileSeq.current) return;
+      console.error(error);
+      onInitialReconcile?.();
+    });
   }, [issueId, issueSessionId, onInitialReconcile, qc, reconcileEnabled]);
 
   // Initial fetch on mount / issueId change.

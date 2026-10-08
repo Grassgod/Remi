@@ -96,7 +96,9 @@ export function IssueActivitySection({ issueId, issueTitle, projectId, members, 
     visit: displayVisit, seeded: queryClient.getQueryData(issueKeys.tasks(issueId)) !== undefined,
   };
   const [tasksReadyVisit, setTasksReadyVisit] = useState<string | null>(null);
-  const onTasksReady = useCallback(() => setTasksReadyVisit(displayVisit), [displayVisit]);
+  const onTasksReady = useCallback(() => {
+    if (taskLayout.current.visit === displayVisit) setTasksReadyVisit(displayVisit);
+  }, [displayVisit]);
   // With no task seed, the bar's natural height is part of first-paint layout.
   // Resolve it before reveal instead of leaving an empty fixed-height box.
   const tasksReady = taskLayout.current.seeded || tasksReadyVisit === displayVisit
