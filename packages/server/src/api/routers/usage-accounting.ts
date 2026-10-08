@@ -19,8 +19,11 @@ export function registerUsageAccountingRoutes(app: Hono, { store }: RouterDeps):
     if (projectId) { const project = store.getProject(projectId); if (!project || project.workspaceId !== workspaceId) return c.json({ error: "Project not found" }, 404); }
     try {
       const days = c.req.query("days");
+      const include = c.req.query("include"), detailLimit = c.req.query("detail_limit");
+      if (include !== undefined && include !== "day_model") throw new UsageValidationError("Invalid report include");
       return c.json(store.getUsageReport({ workspaceId, projectId, runtimeId, tz: c.req.query("tz"),
-        days: days === "all" ? null : days === undefined ? undefined : Number(days), since: c.req.query("since"), until: c.req.query("until") }));
+        days: days === "all" ? null : days === undefined ? undefined : Number(days), since: c.req.query("since"), until: c.req.query("until"),
+        include, detailLimit: detailLimit === undefined ? undefined : Number(detailLimit), detailCursor: c.req.query("detail_cursor") }));
     } catch (e) { if (e instanceof UsageAccountingNotReadyError) return c.json({ error: e.message }, 503); if (e instanceof UsageValidationError) return c.json({ error: e.message }, 400); throw e; }
   });
   app.get("/api/usage/prices", (c) => {

@@ -2,6 +2,12 @@
 
 Unified usage uses `remi dashboard usage report` with `--days n|all`,
 `--since`, `--until`, `--tz`, `--project` and `--runtime`.
+`--include day_model` adds one genuine consumption-date × model detail page;
+`--detail-limit 1..500` defaults to 200 and `--detail-cursor <next_cursor>`
+continues the same workspace, filters, resolved range, timezone and price
+revision. Detail rows omit lifecycle duration/status; distinct related task
+counts are not additive. A stale or invalid cursor returns an error and must
+restart at the first page. Default reports omit this lazy projection.
 JSON output preserves explicit accounting token counters as nonnegative safe
 integers or null, and `coverage.token_ratio` as a finite ratio or null.
 Credential fields remain filtered; strings or objects disguised as token

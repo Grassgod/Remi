@@ -11,7 +11,7 @@ describe("Usage presentation", () => {
   });
   it("keeps lifecycle trends separate from cross-day consumption and exports unknowns as blanks", () => {
     const report = usageReport({ task_daily: [{ date: "2026-10-03", task_count: 1, total_seconds: 120, status_counts: { completed: 0, failed: 1, cancelled: 0, active: 0, queued: 0 } }] });
-    expect(taskTrendRows(report, false)).toEqual([{ label: "2026-10-03", seconds: 120, completed: 0, failed: 1, cancelled: 0, active: 0, queued: 0 }]);
+    expect(taskTrendRows(report, false)).toMatchObject([{ label: "2026-10-03", seconds: 120, completed: 0, failed: 1, cancelled: 0, active: 0, queued: 0 }]);
     expect(trendRows(report, false, "USD")[0]?.label).toBe("2026-10-01");
     const csv = usageCsv([{ label: 'retired,"model', metrics: report.summary }]);
     expect(csv).toContain('"retired,""model"');

@@ -177,11 +177,13 @@ export function KpiCard({
   value,
   hint,
   accent,
+  compact = false,
 }: {
   label: string;
   value: string;
   hint?: React.ReactNode;
   accent?: "brand" | "success" | "default";
+  compact?: boolean;
 }) {
   const valueClass =
     accent === "brand"
@@ -190,11 +192,11 @@ export function KpiCard({
         ? "text-success"
         : "";
   return (
-    <div className="flex flex-col gap-2 p-5">
+    <div className={`flex min-w-0 flex-col gap-2 ${compact ? "p-3 sm:p-5" : "p-5"}`}>
       <div className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
         {label}
       </div>
-      <div className={`text-3xl font-semibold leading-none tabular-nums ${valueClass}`}>
+      <div className={`${compact ? "text-xl sm:text-3xl" : "text-3xl"} font-semibold leading-none tabular-nums ${valueClass}`}>
         {value}
       </div>
       {hint != null && (

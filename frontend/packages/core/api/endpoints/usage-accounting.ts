@@ -10,6 +10,9 @@ export interface UsageReportParams {
   project_id?: string | null;
   runtime_id?: string | null;
   tz: string;
+  include?: "day_model";
+  detail_limit?: number;
+  detail_cursor?: string;
 }
 
 export class UsageAccountingEndpoints {

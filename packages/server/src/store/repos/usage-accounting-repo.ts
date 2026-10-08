@@ -1,4 +1,5 @@
 import { createId, nowIso } from "@multiremi/ids.js";
+import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import type { StoreContext } from "@multiremi/store/context.js";
 import type { SetUsagePriceInput, UsageMetrics, UsagePrice, UsageReport } from "@multiremi/contracts/usage-accounting.js";
 import { USAGE_CUTOVER_MARKER, UsageValidationError, UsageAccountingNotReadyError } from "@multiremi/store/usage-accounting.js";
@@ -12,6 +13,32 @@ export interface UsageReportInput {
   since?: string | null;
   until?: string | null;
   tz?: string | null;
+  include?: "day_model";
+  detailLimit?: number;
+  detailCursor?: string | null;
+}
+const MODEL_DIMENSIONS = ["provider", "model", "requested_model", "model_provenance", "purpose", "connection_id"];
+const DAY_MODEL_DIMENSIONS = ["date", ...MODEL_DIMENSIONS];
+// Reuse the deployment's shared signing secret with a separate cryptographic domain.
+// Unconfigured local processes have an ephemeral key and reject cursors after restart.
+const cursorKey = process.env.JWT_SECRET
+  ? createHash("sha256").update("usage-detail-cursor-v1\0").update(process.env.JWT_SECRET).digest()
+  : randomBytes(32);
+function cursorFingerprint(scope: unknown): string { return createHash("sha256").update(JSON.stringify(scope)).digest("hex"); }
+function encodeCursor(fingerprint: string, last: string): string {
+  const body = Buffer.from(JSON.stringify({ version: 1, fingerprint, last })).toString("base64url");
+  return `${body}.${createHmac("sha256", cursorKey).update(body).digest("base64url")}`;
+}
+function decodeCursor(cursor: string, fingerprint: string): string {
+  if (typeof cursor !== "string" || cursor.length > 32768 || !/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(cursor)) throw new UsageValidationError("Invalid detail cursor");
+  const [body, signature] = cursor.split(".") as [string, string];
+  const supplied = Buffer.from(signature, "base64url"), expected = createHmac("sha256", cursorKey).update(body).digest();
+  if (supplied.length !== expected.length || !timingSafeEqual(supplied, expected)) throw new UsageValidationError("Invalid detail cursor");
+  let payload: unknown;
+  try { payload = JSON.parse(Buffer.from(body, "base64url").toString("utf8")); } catch { throw new UsageValidationError("Invalid detail cursor"); }
+  const value = payload as { version?: unknown; fingerprint?: unknown; last?: unknown } | null;
+  if (!value || value.version !== 1 || value.fingerprint !== fingerprint || typeof value.last !== "string" || value.last.length > 24000) throw new UsageValidationError("Detail cursor scope or price revision has changed");
+  return value.last;
 }
 const COMPONENTS = [
   ["input_tokens", "input_per_million"], ["output_tokens", "output_per_million"],
@@ -76,6 +103,10 @@ export class UsageAccountingRepo {
     const since = input.since ? validTimestamp(input.since) : days === null ? null : localDayStart(addDate(dateInTz(new Date(), tz), -(days - 1)), tz);
     const until = input.until ? validTimestamp(input.until) : null;
     if (since && until && since >= until) throw new UsageValidationError("since must precede until");
+    if (input.include !== undefined && input.include !== "day_model") throw new UsageValidationError("Invalid report include");
+    if (input.include === undefined && (input.detailLimit !== undefined || input.detailCursor != null)) throw new UsageValidationError("Detail parameters require include=day_model");
+    const detailLimit = input.detailLimit ?? 200;
+    if (!Number.isSafeInteger(detailLimit) || detailLimit < 1 || detailLimit > 500) throw new UsageValidationError("detail_limit must be 1..500");
     const where = ["t.workspace_id=?"];
     const params: unknown[] = [input.workspaceId];
     const scheduleProject = this.ctx.db.dialect === "postgres"
@@ -121,6 +152,10 @@ export class UsageAccountingRepo {
         // to execute. Scope the setting to this snapshot transaction only.
         this.ctx.db.exec("SET LOCAL jit=off");
       }
+      const prices = this.ctx.db.query("SELECT revision FROM multiremi_usage_price_revisions WHERE workspace_id=?").get(input.workspaceId) as Row | null;
+      const pricingRevision = String(prices?.revision ?? 0);
+      const fingerprint = cursorFingerprint([input.workspaceId, input.projectId ?? null, input.runtimeId ?? null, since, until, tz, pricingRevision]);
+      const after = input.detailCursor == null ? null : decodeCursor(input.detailCursor, fingerprint);
       const extent = this.ctx.db.query(`SELECT MIN(occurred_at) AS first,MAX(occurred_at) AS last FROM (SELECT ${factTime} AS occurred_at FROM (${tasksSql}) t
         LEFT JOIN multiremi_usage_units u ON u.task_id=t.id AND ${unitPredicate}
         WHERE u.task_id IS NOT NULL OR (${lifePredicate}) UNION ALL SELECT t.occurred_at FROM (${tasksSql}) t WHERE ${lifePredicate}) report_dates`).get(...params, ...unitParams, ...lifeParams, ...params, ...lifeParams) as Row;
@@ -130,7 +165,7 @@ export class UsageAccountingRepo {
         : "MAX(0,(julianday(t.ended_at)-julianday(COALESCE(t.started_at,t.dispatched_at,t.created_at)))*86400)";
       const tokenEvidence = (alias: string) => `(${alias}.input_tokens IS NOT NULL OR ${alias}.output_tokens IS NOT NULL OR ${alias}.cache_read_tokens IS NOT NULL OR ${alias}.cache_write_tokens IS NOT NULL OR ${alias}.actual_unsplit_tokens IS NOT NULL)`;
       const identityConflict = "identity.task_id IS NOT NULL";
-      const cte = `WITH tasks AS (${tasksSql}), identity_conflict_tasks AS (
+      let cte = `WITH tasks AS (${tasksSql}), identity_conflict_tasks AS (
         SELECT c.task_id,c.run_id FROM multiremi_usage_identity_conflicts c JOIN tasks scoped ON scoped.id=c.task_id
         UNION SELECT c.owner_task_id,c.owner_run_id FROM multiremi_usage_identity_conflicts c JOIN tasks scoped ON scoped.id=c.owner_task_id
       ), identity_conflict_scope AS (
@@ -228,7 +263,19 @@ export class UsageAccountingRepo {
         FROM unit_facts GROUP BY task_id,agent_id,runtime_id,status,date,lifecycle_in_window,seconds,provider,model,requested_model,model_provenance,purpose,connection_id,runtime_provenance,time_provenance,currency,quality,reference_amount
       )`;
       const queryParams = [...params, ...runParams, ...runParams, ...lifeParams, ...unitParams, input.workspaceId, ...lifeParams];
-      const dimensions = [[], ["date"], ["agent_id"], ["provider", "model", "requested_model", "model_provenance", "purpose", "connection_id"], ["runtime_id"]];
+      const baseDimensions = [[], ["date"], ["agent_id"], MODEL_DIMENSIONS, ["runtime_id"]];
+      const dimensions = input.include ? [...baseDimensions, DAY_MODEL_DIMENSIONS] : baseDimensions;
+      const detailCollation = this.ctx.db.dialect === "postgres" ? '"C"' : "BINARY";
+      // Hex UTF-8 components plus an explicit NULL marker form one portable, collision-free order.
+      const detailKey = DAY_MODEL_DIMENSIONS.map(field => `CASE WHEN ${field} IS NULL THEN '0' ELSE '1'||${this.ctx.db.dialect === "postgres" ? `encode(convert_to(${field},'UTF8'),'hex')` : `lower(hex(${field}))`} END`).join("||'|'||");
+      if (input.include) {
+        const factFields = "task_id,agent_id,runtime_id,status,date,lifecycle_in_window,seconds,provider,model,requested_model,model_provenance,purpose,connection_id,runtime_provenance,time_provenance,currency,quality,reference_amount,actual_input_tokens,actual_output_tokens,actual_cache_read_tokens,actual_cache_write_tokens,actual_unsplit_tokens,actual_total_tokens,priced_tokens,context_tokens,identity_conflict,unknown,run_complete,price_complete,cost_allocation_complete,amount";
+        cte += `, detail_groups AS MATERIALIZED (SELECT ${detailKey} AS detail_key FROM facts GROUP BY ${DAY_MODEL_DIMENSIONS.join(",")}),
+          detail_keys AS MATERIALIZED (SELECT detail_key FROM detail_groups ${after === null ? "" : `WHERE detail_key COLLATE ${detailCollation}>?`} ORDER BY detail_key COLLATE ${detailCollation} LIMIT ${detailLimit + 1}),
+          detail_page AS MATERIALIZED (SELECT detail_key FROM detail_keys ORDER BY detail_key COLLATE ${detailCollation} LIMIT ${detailLimit}),
+          detail_facts AS MATERIALIZED (SELECT ${factFields} FROM facts WHERE (${detailKey}) IN (SELECT detail_key FROM detail_page))`;
+        if (after !== null) queryParams.push(after);
+      }
       const tokenFields = ["actual_input_tokens", "actual_output_tokens", "actual_cache_read_tokens", "actual_cache_write_tokens", "actual_unsplit_tokens", "actual_total_tokens", "priced_tokens"];
       const totalFields = [...tokenFields, "task_count", "unknown_task_count", "identity_conflict_task_count", "task_attributed_task_count", "task_attributed_tokens", "time_provenance", "context_peak_tokens", "run_complete", "price_complete", "cost_allocation_complete", "runtime_provenance", "completed", "failed", "cancelled", "active", "queued"];
       const branches: string[] = [];
@@ -257,13 +304,13 @@ export class UsageAccountingRepo {
           COUNT(DISTINCT CASE WHEN lifecycle_in_window=1 AND status='cancelled' THEN task_id END) AS cancelled,
           COUNT(DISTINCT CASE WHEN lifecycle_in_window=1 AND status IN ('dispatched','running','waiting_local_directory','awaiting_human') THEN task_id END) AS active,
           COUNT(DISTINCT CASE WHEN lifecycle_in_window=1 AND status IN ('queued','pending') THEN task_id END) AS queued
-          FROM facts ${group}`;
+          FROM ${dimension === 5 ? "detail_facts" : "facts"} ${group}`;
         branch(dimension, "totals", [...keys, ...totalFields], totalsSql);
         const monetarySql = `SELECT ${keySelect}currency,reference_amount,SUM(amount) AS amount,MIN(quality) AS first_quality,MAX(quality) AS last_quality
-          FROM facts WHERE currency IS NOT NULL AND amount IS NOT NULL GROUP BY ${[...keys, "currency", "reference_amount"].join(",")}`;
+          FROM ${dimension === 5 ? "detail_facts" : "facts"} WHERE currency IS NOT NULL AND amount IS NOT NULL GROUP BY ${[...keys, "currency", "reference_amount"].join(",")}`;
         branch(dimension, "monetary", [...keys, "currency", "reference_amount", "amount", "first_quality", "last_quality"], monetarySql);
         if (dimension === 0) { summaryTotalsSql = totalsSql; summaryMonetarySql = monetarySql; }
-        branch(dimension, "durations", [...keys, "total_seconds"], `SELECT ${keySelect}SUM(seconds) AS total_seconds FROM (
+        if (dimension !== 5) branch(dimension, "durations", [...keys, "total_seconds"], `SELECT ${keySelect}SUM(seconds) AS total_seconds FROM (
           SELECT DISTINCT ${keySelect}task_id,CASE WHEN lifecycle_in_window=1 AND status IN ('completed','failed','cancelled') THEN seconds ELSE 0 END AS seconds FROM facts) task_durations ${group}`);
       }
       const dimensionFields = [...new Set(dimensions.flat())];
@@ -271,21 +318,24 @@ export class UsageAccountingRepo {
         // GROUPING distinguishes a real NULL dimension from a rolled-up one.
         // PostgreSQL can calculate the five views in one aggregate pass.
         const groupMask = `GROUPING(${dimensionFields.join(",")})`;
-        const dimension = `CASE ${groupMask} ${dimensions.map((keys, index) => {
+        const dimension = `CASE ${groupMask} ${baseDimensions.map((keys, index) => {
           const mask = dimensionFields.reduce((value, field, bit) => value + (keys.includes(field) ? 0 : 2 ** (dimensionFields.length - bit - 1)), 0);
           return `WHEN ${mask} THEN ${index}`;
         }).join(" ")} END`;
-        const sets = (suffix: string[]) => `GROUP BY GROUPING SETS (${dimensions.map(keys => `(${[...keys, ...suffix].join(",")})`).join(",")})`;
+        const sets = (suffix: string[]) => `GROUP BY GROUPING SETS (${baseDimensions.map(keys => `(${[...keys, ...suffix].join(",")})`).join(",")})`;
         const prefix = `SELECT ${dimension} AS dimension,${dimensionFields.join(",")},`;
         const totalsSql = summaryTotalsSql.replace(/^SELECT /, prefix) + sets([]);
         const monetarySql = summaryMonetarySql.replace(/^SELECT /, prefix).replace("GROUP BY currency,reference_amount", sets(["currency", "reference_amount"]));
         const durationsSql = `SELECT dimension,${dimensionFields.join(",")},SUM(seconds) AS total_seconds FROM (
           ${prefix}task_id,MAX(CASE WHEN lifecycle_in_window=1 AND status IN ('completed','failed','cancelled') THEN seconds ELSE 0 END) AS seconds
           FROM facts ${sets(["task_id"])}) task_durations GROUP BY dimension,${dimensionFields.join(",")}`;
+        const detailBranches = input.include ? branches.slice(-2) : [];
         branches.length = 0;
         for (const [kind, sql] of [["totals", totalsSql], ["monetary", monetarySql], ["durations", durationsSql]]) branches.push(
           `SELECT result.dimension,'${kind}' AS kind,(to_jsonb(result)-'dimension')::text AS payload FROM (${sql}) result`);
+        branches.push(...detailBranches);
       }
+      if (input.include) branch(5, "cursor", ["detail_key"], "SELECT detail_key FROM detail_keys");
       // One materialized SQL fact set serves all views; only aggregate rows
       // cross the DB bridge, and correlated run-evidence scans never repeat
       // per diagnostic unit or per view.
@@ -336,6 +386,14 @@ export class UsageAccountingRepo {
       const by_agent = aggregate(["agent_id"]);
       const by_model = aggregate(["provider", "model", "requested_model", "model_provenance", "purpose", "connection_id"]).map(r => ({ ...r, model_source: r.model !== null ? "reported" : r.requested_model !== null ? "requested" : "unknown" }));
       const by_runtime = aggregate(["runtime_id"]);
+      const cursorKeys = (grouped.get("5:cursor") ?? []).map(row => String(row.detail_key)).sort();
+      const day_model = input.include ? { rows: aggregate(DAY_MODEL_DIMENSIONS).map(row => {
+        const { total_seconds: _duration, status_counts: _status, ...consumption } = row;
+        return { ...consumption, model_source: row.model !== null ? "reported" : row.requested_model !== null ? "requested" : "unknown" };
+      }).sort((a, b) => {
+        const key = (row: Row) => DAY_MODEL_DIMENSIONS.map(field => row[field] === null ? "0" : `1${Buffer.from(String(row[field]), "utf8").toString("hex")}`).join("|");
+        return key(a) < key(b) ? -1 : key(a) > key(b) ? 1 : 0;
+      }), next_cursor: cursorKeys.length > detailLimit ? encodeCursor(fingerprint, cursorKeys[detailLimit - 1]!) : null } : undefined;
       const lifeAggregate = (keys: string[]) => {
         const fields = keys.length ? `${keys.map((k) => k === "date" ? `${dateExpr.replaceAll(factTime, "t.occurred_at")} AS date` : k).join(",")},` : "";
         const group = keys.length ? `GROUP BY ${keys.join(",")}` : "";
@@ -360,12 +418,11 @@ export class UsageAccountingRepo {
           row.status_counts = (life?.status_counts ?? { completed: 0, failed: 0, cancelled: 0, active: 0, queued: 0 }) as unknown as UsageMetrics["status_counts"]; }
       };
       applyLife(daily, "date", task_daily); applyLife(by_agent, "agent_id", lifeAggregate(["agent_id"])); applyLife(by_runtime, "runtime_id", lifeAggregate(["runtime_id"]));
-      const prices = this.ctx.db.query("SELECT revision FROM multiremi_usage_price_revisions WHERE workspace_id=?").get(input.workspaceId) as Row | null;
-      return { summary, daily, by_agent, by_model, by_runtime, task_daily,
+      return { summary, daily, by_agent, by_model, by_runtime, task_daily, ...(day_model ? { day_model } : {}),
         time_basis: { consumption: "unit_occurred_at", terminal_tasks: "terminal_lifecycle_at", active_tasks: "current_snapshot", ...(summary.task_attributed_task_count ? { historical_aggregates: "task_attribution_at" } : {}) },
         coverage: { priced_tokens: summary.priced_tokens, unpriced_tokens: summary.unpriced_tokens,
           token_ratio: summary.actual_total_tokens ? summary.priced_tokens / summary.actual_total_tokens : null, unknown_task_count: summary.unknown_task_count },
-        as_of: asOf, pricing_revision: String(prices?.revision ?? 0),
+        as_of: asOf, pricing_revision: pricingRevision,
         window: { since, until, days, tz, project_id: input.projectId ?? null, runtime_id: input.runtimeId ?? null } } as unknown as UsageReport;
     })();
   }

@@ -46,6 +46,14 @@ Codex 累计通知使用 `identityKind=cumulative_meter`，真实 session、`pro
 
 [路由](../packages/server/src/api/routers/usage-accounting.ts)按 workspace 鉴权，并验证 Runtime/项目过滤器属于该工作区。参数为 `workspace_id`、`days`（默认 30，支持 `all`）、`since`、`until`、`project_id`、`runtime_id` 和 IANA `tz`。范围起点包含、终点不包含；天数按查看者时区的日历日，支持夏令时。
 
+展开日×模型明细时另请求 `include=day_model`，可传 `detail_limit`（默认 200，最大 500）及上页的 `detail_cursor`。可选响应 `day_model` 包含 `rows` 和 `next_cursor`；没有下一页时游标为 null。行按消费日与完整模型身份（provider、实际/请求模型、出处、用途、连接）真正联合聚合，不由 `daily` 和 `by_model` 两个边际结果拼接。数据库先选择有限分组，再返回这些分组的 token、费用与覆盖字段；默认报告不计算联合维度。明细不包含生命周期状态或耗时，关联任务数仍不能跨行相加。
+
+游标签名绑定 workspace、项目、Runtime、已解析范围、时区及价格 revision。改变任一项或伪造游标会返回 400，应重新从第一页读取。部署使用已有共享 `JWT_SECRET` 的独立签名域，多个 API 实例及重启保持一致；没有配置密钥的本地进程采用临时密钥，重启后旧游标失效。分页提供稳定分组顺序，不声称跨多个 HTTP 请求锁定账本：迟到事实或新的单位 revision 仍可能更新同一历史分组；价格保存后必须刷新第一页及其他用量视图。全部历史导出仍使用现有汇总维度，不能将单页联合明细标为全部历史。
+
+页面的纯数据投影在 [core usage view-model](../frontend/packages/core/usage/view-model.ts)。日历 N 日包含今天及此前 N−1 日，前期是紧邻的 N 日；两期都使用同一 IANA 时区的半开窗口。周图只聚合选定窗口，首尾不足整周显示 partial，不为凑整周扩大 KPI。热力图独立查询本周周一向前 25 周至今天的范围，固定 26 列；未来、无记录、未知与明确零保持不同状态。所有查询继续采用同一 canonical 账本，任务/时长趋势只读取 `task_daily`。
+
+展示值区分 known、已知小计、unknown 和 empty；金额按币种显示，公开参考价及 SDK 估算不相加到费用榜。费用环比只在两期完整、相同币种、价格 revision、适用来源及筛选且窗口相邻等长时显示；前期为零、未知、不完整或全部历史时不推造百分比。当前契约没有提供商费用分量或可靠缓存反事实费率：费用图使用服务端金额单系列，缓存节省金额保持未知，实际未拆分 token 仍计入消费。
+
 Runtime 列表/详情和 task/status/Issue 用量兼容响应同样只从规范化标量单位聚合；旧 task JSON 仅在迁移审计和弃用客户端的幂等上报入口读取。旧形状的 consumption 日/小时接口按单位 occurred_at、固化 Runtime/项目过滤；任务活动与时长接口按生命周期过滤。完整的未知覆盖、参考金额和出处使用 report 接口，不能从旧形状缺失字段推断已知零。
 
 消费和金额按 unit 的 `occurredAt` 过滤、分日，但时间证据并不总是逐请求时间。`time_provenance` 区分上游时间 `provider_timestamp`、采集时间 `observed_at`、历史任务归属时间 `task_attributed`、未知或混合。旧 task 聚合没有逐请求时间时保留任务结束/已有记录归属日，不拆成虚构的逐日请求；报表返回 `task_attributed_tokens` 与 `task_attributed_task_count`，`time_basis.historical_aggregates=task_attribution_at`，页面显示明显历史归属日提示，CSV 同步保留时间出处。完成、失败、取消任务按各自生命周期时间统计；时间缺失时回退到已有 updated/created 时间，不能据此推断精确结束时刻。`task_daily` 独立承载任务趋势和已结束任务耗时。active、queued 描述当前状态快照，不代表已完成。响应 `time_basis` 声明这些口径。
@@ -79,6 +87,8 @@ request 范围金额带有真实 session/request 身份时，其覆盖目标已�
 ```bash
 remi dashboard usage report --workspace <id> --days all --tz Asia/Shanghai --json
 remi dashboard usage report --workspace <id> --project <id> --runtime <id> --since <ISO> --until <ISO> --json
+remi dashboard usage report --workspace <id> --days all --include day_model --detail-limit 200 --json
+remi dashboard usage report --workspace <id> --days all --include day_model --detail-cursor <next_cursor> --json
 remi dashboard usage prices list --workspace <id> --json
 remi dashboard usage prices set --workspace <id> --file <approved-price.json> --json
 remi dashboard usage prices close <price-id> --workspace <id> --effective-to <ISO> --json
@@ -119,4 +129,4 @@ bun run scripts/reconcile-task-usage.ts --verify-plan=<review-plan.json>
 
 PostgreSQL 报表在只读 Repeatable Read 事务中取一致快照；SQL bigint/count/sum 明确转换为契约 number。该交互查询仅在自身事务内 SET LOCAL jit=off：实测编译耗时数秒，关闭后执行耗时更低；事务结束恢复原设置，不改变服务全局配置或一致性。SQLite 在同一事务读取，金额和时长使用保留浮点精度的聚合传输；非 UTC 分日依据有效日期边界生成 CASE，长历史范围的边界构造成本需要实测。底层同步 Store/PgBridge 的线程阻塞和事务约束见[架构](ARCHITECTURE.md#存储与事务)；尚未记录统一报告的生产吞吐或 p95 基线。
 
-验证入口为 [标量写入/价格/跨日/跨 Runtime 项目测试](../tests/unit/multiremi/store-usage-accounting.test.ts)、[真实 PostgreSQL 测试](../tests/unit/multiremi/usage-accounting-postgres.test.ts)、[历史恢复检查点测试](../tests/unit/scripts/usage-reconciliation-store.test.ts)、[CLI 测试](../tests/unit/remi/cli-operations.test.ts)、[严格前端边界](../frontend/packages/core/api/endpoints/usage-accounting.test.ts)、[页面测试](../frontend/packages/views/usage/usage-panel.test.tsx)和[价格编辑测试](../frontend/packages/views/runtimes/components/custom-pricing-dialog.test.tsx)。PG 测试需显式 `MULTIREMI_TEST_POSTGRES_URL`，会创建并删除独立测试库；不要指向生产数据库。构建、浏览器和生产性能验收另按 [TESTING.md](../TESTING.md)，文档检查不替代这些验证。
+验证入口为 [标量写入/价格/跨日/跨 Runtime 项目测试](../tests/unit/multiremi/store-usage-accounting.test.ts)、[真实 PostgreSQL 测试](../tests/unit/multiremi/usage-accounting-postgres.test.ts)、[历史恢复检查点测试](../tests/unit/scripts/usage-reconciliation-store.test.ts)、[CLI 测试](../tests/unit/remi/cli-operations.test.ts)、[严格前端边界](../frontend/packages/core/api/endpoints/usage-accounting.test.ts)、[日×模型分页 SQLite 测试](../tests/unit/multiremi/usage-day-model.test.ts)、[日×模型真实 PG 测试](../tests/unit/multiremi/usage-day-model-postgres.test.ts)、[纯投影测试](../frontend/packages/core/usage/view-model.test.ts)和[价格编辑测试](../frontend/packages/views/runtimes/components/custom-pricing-dialog.test.tsx)。PG 测试需显式 `MULTIREMI_TEST_POSTGRES_URL`，会创建并删除独立测试库；不要指向生产数据库。构建、浏览器和生产性能验收另按 [TESTING.md](../TESTING.md)，文档检查不替代这些验证。

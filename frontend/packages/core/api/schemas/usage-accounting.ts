@@ -22,13 +22,17 @@ export const UsageReportSchema = z.object({
   by_agent: z.array(UsageMetricsSchema.extend({ agent_id: z.string() })),
   by_model: z.array(UsageMetricsSchema.extend({ provider: z.string(), model: z.string().nullable(), requested_model: z.string().nullable(), model_source: z.string(), model_provenance: z.string(), purpose: z.string().optional(), connection_id: z.string().nullable() })),
   by_runtime: z.array(UsageMetricsSchema.extend({ runtime_id: z.string().nullable(), runtime_provenance: z.string() })),
+  day_model: z.object({ rows: z.array(UsageMetricsSchema.omit({ total_seconds: true, status_counts: true }).extend({
+    date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), provider: z.string(), model: z.string().nullable(), requested_model: z.string().nullable(),
+    model_source: z.enum(["reported", "requested", "unknown"]), model_provenance: z.string(), purpose: z.string().optional(), connection_id: z.string().nullable(),
+  })).max(500), next_cursor: z.string().min(1).max(32768).nullable() }).optional(),
   task_daily: z.array(z.object({ date: z.string(), task_count: count, total_seconds: amount, status_counts: UsageMetricsSchema.shape.status_counts }).loose()),
   time_basis: z.object({ consumption: z.string(), terminal_tasks: z.string(), active_tasks: z.string(), historical_aggregates: z.literal("task_attribution_at").optional() }).loose(),
   coverage: z.object({ priced_tokens: count, unpriced_tokens: count, token_ratio: z.number().min(0).max(1).nullable(), unknown_task_count: count }).loose(),
   as_of: z.string(), pricing_revision: z.string(),
   window: z.object({ since: z.string().nullable(), until: z.string().nullable(), days: count.nullable(), tz: z.string(), project_id: z.string().nullable(), runtime_id: z.string().nullable() }).loose(),
 }).loose().superRefine((report, ctx) => {
-  const rows = [report.summary, ...report.daily, ...report.by_agent, ...report.by_model, ...report.by_runtime];
+  const rows = [report.summary, ...report.daily, ...report.by_agent, ...report.by_model, ...report.by_runtime, ...(report.day_model?.rows ?? [])];
   for (const r of rows) {
     const sum = r.actual_input_tokens + r.actual_output_tokens + r.actual_cache_read_tokens + r.actual_cache_write_tokens + r.actual_unsplit_tokens;
     if (sum !== r.actual_total_tokens || r.priced_tokens + r.unpriced_tokens !== r.actual_total_tokens || r.unknown_task_count > r.task_count) ctx.addIssue({ code: "custom", message: "Usage totals do not reconcile" });
