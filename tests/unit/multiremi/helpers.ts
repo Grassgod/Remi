@@ -36,6 +36,8 @@ import type {
   MultiremiAutopilot,
   MultiremiAutopilotTrigger,
   MultiremiIssueWorkspaceArchiveBinding,
+  CreateIssueInput,
+  MultiremiIssue,
 } from "@multiremi/contracts/types.js";
 
 /** The sqlite handle behind the store most recently built by `createStore()`. */
@@ -63,6 +65,31 @@ export function createLocalStore(): MultiremiStore {
   const store = createStore();
   store.ensureLocalWorkspace();
   return store;
+}
+
+/** Explicit synthetic-human fixture for new Issues, never a Store default or legacy backfill. */
+export function createResponsibleTestIssue(store: MultiremiStore, input: CreateIssueInput): MultiremiIssue {
+  const parentId=input.parentIssueId??input.parent_issue_id;
+  if(parentId || Object.hasOwn(input,'responsibleMemberId') || Object.hasOwn(input,'responsible_member_id')) return store.createIssue(input);
+  const workspaceId=input.workspaceId??input.workspace_id??'local';
+  const memberId=`test_root_human_${workspaceId}`;
+  const human=store.getWorkspaceMember(memberId)??store.createWorkspaceMember({id:memberId,name:'Explicit test root human',workspaceId,role:'member'});
+  if(human.archivedAt || human.workspaceId!==workspaceId)throw new Error('Synthetic fixture human is unavailable; configure an explicit fixture responsibility');
+  return store.createIssue({...input,responsibleMemberId:human.id});
+}
+
+/** Close through the real delivery API. Fixtures must explicitly supply an Agent execution owner. */
+export function acceptTestIssueDelivery(store: MultiremiStore, issueId: string, summary='Verified fixture delivery'): MultiremiIssue {
+  const responsibility=store.resolveIssueResponsibility(issueId);
+  if(responsibility.unresolved.length || !responsibility.executionOwner || !responsibility.reviewOwner)throw new Error('Configure a complete test Issue responsibility before accepting its delivery');
+  const owner=responsibility.executionOwner;
+  const task=store.createTask({agentId:owner.id,issueId:owner.issueId,prompt:summary});
+  const delivery=store.submitIssueDelivery(issueId,{summary},{type:'agent',id:owner.id,taskId:task.id});
+  const reviewer=responsibility.reviewOwner;
+  const reviewerTask=reviewer.type==='agent'?store.createTask({agentId:reviewer.id,issueId:reviewer.issueId,prompt:'Review fixture delivery'}):null;
+  store.respondIssueDelivery(issueId,delivery.id,{action:'accept',revision:delivery.responsibilityRevision},
+    {type:reviewer.type,id:reviewer.id,...(reviewerTask?{taskId:reviewerTask.id}:{})});
+  return store.getIssue(issueId)!;
 }
 
 export function configureRepositoryWikiAutomation(
