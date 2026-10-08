@@ -1,11 +1,13 @@
 import { useT } from "./use-t";
+import { useHydrationTime } from "./hydration-time";
 
 // Localized relative-time formatter. Returns a function so call-site usage
 // stays terse: `const timeAgo = useTimeAgo(); ...timeAgo(dateStr)`.
 export function useTimeAgo() {
   const { t } = useT("common");
+  const renderedAt = useHydrationTime();
   return (dateStr: string): string => {
-    const diff = Date.now() - new Date(dateStr).getTime();
+    const diff = (renderedAt ?? Date.now()) - new Date(dateStr).getTime();
     const minutes = Math.floor(diff / 60000);
     if (minutes < 1) return t(($) => $.time.just_now);
     if (minutes < 60) return t(($) => $.time.minutes_ago, { count: minutes });

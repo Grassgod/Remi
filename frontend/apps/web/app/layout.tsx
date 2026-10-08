@@ -155,7 +155,7 @@ export default async function RootLayout({
       </head>
       <body className="h-full overflow-hidden">
         <ThemeProvider>
-          <WebProviders locale={locale} resources={resources}>
+          <WebProviders locale={locale} resources={resources} renderedAt={Date.now()}>
             {children}
           </WebProviders>
           <Toaster />

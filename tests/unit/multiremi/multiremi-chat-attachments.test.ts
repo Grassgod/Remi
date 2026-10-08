@@ -28,6 +28,8 @@ async function fixture() {
   const current = backendFixture();
   const store = current.store;
   db = current.db;
+  // Positive transport fixture: the Chat creator also has agent access through
+  // workspace visibility; creator ownership alone does not grant private-agent access.
   const agent = store.createAgent({ name: "Attachments", provider: "codex", workspaceId: "local", visibility: "workspace" });
   store.registerRuntime({ id: "rt_files", name: "Files", provider: "codex", workspaceId: "local", daemonId: "files-daemon" });
   store.heartbeatRuntime("rt_files", { supportsFeishuBotConfig: true });

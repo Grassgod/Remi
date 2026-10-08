@@ -32,6 +32,8 @@ summary: Remi Web 控制台的包职责、认证与工作区接线、查询和�
 4. [工作区 layout](../../frontend/apps/web/app/%5BworkspaceSlug%5D/layout.tsx)从 URL slug 解析工作区，再调用 `setCurrentWorkspace(slug, id)`；它同时控制认证、加载和无访问权页面。当前不强制经过旧 onboarding 向导。
 5. [workspace-storage.ts](../../frontend/packages/core/platform/workspace-storage.ts)维护 slug/id 对及持久化命名空间，通知 WS 和 store 重载。请求头由 [HttpClient](../../frontend/packages/core/api/http.ts)读取当前 slug 生成。
 
+相对时间的首轮 SSR 与浏览器接管使用 RootLayout 传入的同一时间快照，由 [HydrationTimeProvider](../../frontend/packages/views/i18n/hydration-time.tsx) 提供。共享 `useTimeAgo` 在每个流式子树完成接管后使用浏览器当前时间；跨分钟、小时或天边界不会因首帧文本不一致重建日志和重新读取图片。
+
 API 代理目标由 [resolveRemoteApiUrl](../../frontend/apps/web/config/runtime-urls.ts)解析；[next.config.ts](../../frontend/apps/web/next.config.ts)配置 `/api`、`/ws` 等代理路径。改连接配置时同时核对服务端代理目标和浏览器侧 `WebProviders`，不要只改其中一端。
 
 Issue 详情页由 [server-log.ts](../../frontend/apps/web/features/issues/server-log.ts)在 800ms 预算内用 httpOnly cookie 读取详情、会话、最后 30 条日志、seq 0 和 `/api/turns?issue=...` 轮列表，注入同一棵 React 查询缓存；失败时只输出外壳，由 Bearer 客户端补齐。`?comment=<id>` 先经 `/log/locate` 找到所属会话与 seq，再取前后各 15 条的锚点窗口。任务列表同时供底部运行条和上方 `AgentLiveCard` 的首帧使用；SSR 不可用时，揭示只等待 Issue、会话和日志窗口；运行卡片用缓存与预留槽位首绘，轮列表 reconcile、订阅者和本地目录资源在揭示后读取，底部运行条在揭示后挂载并作为运行场景实际终点。尺寸已固定的图片不阻塞揭示；日志无尺寸图片由 SSR 和客户端统一预留 240px 固定框，晚到与失败都不改变行高，详见 ADR 0008。浏览器仍使用 Bearer 请求，不开启 cookieAuth；[IssueLogReplica](../../frontend/packages/core/session-log/issue-log.ts)把 SSR 窗口导入本地副本后继续订阅日志流，深链窗口两端按需分页，回到最新时换回尾部窗口。`body_html` 只消费服务端预渲染结果，缺失时由原客户端 Markdown 路径降级。

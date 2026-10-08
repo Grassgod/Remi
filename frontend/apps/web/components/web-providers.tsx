@@ -13,6 +13,7 @@ import {
 } from "@/features/auth/auth-cookie";
 import { PageviewTracker } from "./pageview-tracker";
 import { ReplicaEnvProvider } from "@multiremi/core/platform/replica-env";
+import { HydrationTimeProvider } from "@multiremi/views/i18n";
 
 const replicaEnv = { createWorker: () => new Worker(new URL("../features/issues/replica-worker.ts", import.meta.url), { type: "module" }) };
 
@@ -36,10 +37,12 @@ export function WebProviders({
   children,
   locale,
   resources,
+  renderedAt,
 }: {
   children: React.ReactNode;
   locale: SupportedLocale;
   resources: Record<string, LocaleResources>;
+  renderedAt: number;
 }) {
   // Keep bearer-token authentication for token-based login. Password login also
   // establishes an HttpOnly browser session, which the Web logout hook clears.
@@ -75,7 +78,9 @@ export function WebProviders({
         <PageviewTracker />
       </Suspense>
       <ReplicaEnvProvider env={replicaEnv}>
-        <WebNavigationProvider>{children}</WebNavigationProvider>
+        <HydrationTimeProvider now={renderedAt}>
+          <WebNavigationProvider>{children}</WebNavigationProvider>
+        </HydrationTimeProvider>
       </ReplicaEnvProvider>
     </CoreProvider>
   );

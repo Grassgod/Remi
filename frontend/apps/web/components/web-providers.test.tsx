@@ -25,7 +25,7 @@ function json(body: unknown, status = 200) {
 }
 
 function browserStore() {
-  render(<WebProviders locale="en" resources={{}}><div>Application</div></WebProviders>);
+  render(<WebProviders locale="en" resources={{}} renderedAt={0}><div>Application</div></WebProviders>);
   const props = captured.props!;
   const client = new ApiClient("");
   setApiInstance(client);
