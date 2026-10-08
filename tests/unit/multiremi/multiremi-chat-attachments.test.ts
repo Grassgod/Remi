@@ -28,7 +28,7 @@ async function fixture() {
   const current = backendFixture();
   const store = current.store;
   db = current.db;
-  const agent = store.createAgent({ name: "Attachments", provider: "codex", workspaceId: "local" });
+  const agent = store.createAgent({ name: "Attachments", provider: "codex", workspaceId: "local", visibility: "workspace" });
   store.registerRuntime({ id: "rt_files", name: "Files", provider: "codex", workspaceId: "local", daemonId: "files-daemon" });
   store.heartbeatRuntime("rt_files", { supportsFeishuBotConfig: true });
   const token = await store.createAccessToken({ name: "Files", type: "daemon", workspaceId: "local", daemonId: "files-daemon" });
@@ -85,6 +85,25 @@ function sendForm(files: File[], content = "") {
     expect((await f.app.request(`/api/attachments/${attachment.id}/download`, {
       headers: { Authorization: `Bearer ${otherCredential.token}` },
     })).status).toBe(404);
+    const foreignWorkspace = f.store.createWorkspace({ name: "Foreign files", slug: "foreign-files" });
+    const foreignAgent = f.store.createAgent({ name: "Foreign reader", provider: "codex", workspaceId: foreignWorkspace.id });
+    const foreignTask = f.store.createTask({ agentId: foreignAgent.id, prompt: "foreign files" });
+    const foreignCredential = await f.store.createTaskAccessToken(foreignTask, "local");
+    const creatorId = f.store.getChatSession(submitted.chatSessionId)!.creatorId!;
+    f.store.createWorkspaceMember({ workspaceId: "local", userId: creatorId, name: "Feishu creator", role: "member" });
+    f.store.createWorkspaceMember({ workspaceId: "local", userId: "attachment-peer", name: "Peer", role: "member" });
+    const creatorCredential = await f.store.createAccessToken({ name: "Creator", type: "pat", workspaceId: "local", userId: creatorId });
+    const peerCredential = await f.store.createAccessToken({ name: "Peer", type: "pat", workspaceId: "local", userId: "attachment-peer" });
+    for (const method of ["GET", "HEAD"]) {
+      for (const [token, status] of [
+        [credential.token, 200], [otherCredential.token, 404], [foreignCredential.token, 404],
+        [creatorCredential.token, 200], [peerCredential.token, 403],
+      ] as const) {
+        expect((await f.app.request(`/api/attachments/${attachment.id}/download`, {
+          method, headers: { Authorization: `Bearer ${token}` },
+        })).status).toBe(status);
+      }
+    }
     const second = await (await f.upload({ external_message_id: "om_image" }, new File(["image"], "screenshot.png"))).json();
     const steered = f.submit({ externalMessageId: "om_image", attachmentIds: [second.attachment.id] });
     expect(steered.steered).toBe(true);

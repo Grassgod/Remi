@@ -126,10 +126,15 @@ export function loadConversation(c: Context, store: MultiremiStore, id: string) 
       ?? { id, workspaceId: auto.workspaceId, issueId: null, chatId: null };
   }
   const token = currentTaskAccessToken(c);
-  if (token) {
-    const task = token.taskId ? store.getTask(token.taskId) : null;
-    if (!task || task.chatSessionId !== id || !canAccessConversationTask(c, store, task)) return c.json({ error: "not your chat session" }, 403);
-    return { id, workspaceId: task.workspaceId, issueId: null, chatId: id };
+  if (token?.taskId) {
+    const task = store.getTask(token.taskId);
+    const chat = store.getChatSession(id);
+    // Feishu Chat creators differ from runtime owners; authorize the bound Task.
+    if (chat && task?.chatSessionId === id
+      && task.workspaceId === chat.workspaceId
+      && token.workspaceId === chat.workspaceId) {
+      return { id, workspaceId: chat.workspaceId, issueId: null, chatId: id };
+    }
   }
   const chat = loadChatSessionForCurrentUser(c, store, id);
   return chat instanceof Response ? chat
