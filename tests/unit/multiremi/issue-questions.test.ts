@@ -294,6 +294,23 @@ pendingTurnBackendTests('one question through the responsibility chain', fixture
     expect(h.store.getMessage(historical.id)?.revision).toBe(before.revision);
     expect(() => h.store.deleteMessage(historical.id)).toThrow('Original questions and their history are immutable');
   });
+  it('preserves unknown historical answer identities and settled records that lack answer content', () => {
+    const h = setup(fixture());
+    const user = h.store.getOrCreateUser({ externalId: 'history_name_impostor', name: 'Unknown history actor' });
+    const member = h.store.createWorkspaceMember({ workspaceId: 'local', userId: user.id, name: 'Unknown history actor', role: 'member' });
+    for (const response of [{ answer: 'A' }, null]) {
+      const historical = h.store.sendMessage({ session_id: h.q.session_id, sender: { type: 'agent', id: h.worker.id }, source_turn_id: h.turn.id,
+        to: { type: 'none' }, message_kind: 'decision', wake_requested: 'inbox_only', body_md: 'Historical settled Q',
+        metadata: { human_request: { kind: 'question', status: 'responded', responded_by: 'Unknown history actor', response,
+          payload: { questions: [{ question: 'Which approach?', options: [{ label: 'A' }] }] } } } }).message;
+      const before = h.store.getMessage(historical.id)!;
+      const question = h.store.getQuestion(historical.id)!;
+      expect(question).toMatchObject({ status: 'answered', wait_status: 'none' });
+      if (response) { expect(question.answer?.actor.id).toBe('Unknown history actor'); expect(question.answer?.actor.id).not.toBe(member.id); }
+      else { expect(question.answer).toBeNull(); expect(question.history).toEqual([]); }
+      expect(h.store.getMessage(historical.id)?.metadata).toEqual(before.metadata); expect(h.store.getMessage(historical.id)?.revision).toBe(before.revision);
+    }
+  });
   it('retires independent IssueDecision writers while preserving historical answer reasons and no fake wait', () => {
     const h = setup(fixture());
     const oldAnswer = { answererType: 'agent', answererId: h.parentLeader.id, answer: 'A', reason: 'Original reason', overturn: 'Ask root human', answeredAt: '2026-01-01T00:00:00Z' };

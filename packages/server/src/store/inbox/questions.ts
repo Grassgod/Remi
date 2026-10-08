@@ -98,14 +98,16 @@ export class Questions {
       const humanRequired = human.kind === 'permission' || ['merge', 'production_change'].includes(String(message.metadata.kind ?? '')) || message.metadata.requires_human_authorization === true;
       const route = this.route(source?.issue_id ?? session?.issueId ?? null, message.sender_id, humanRequired, message.session_id, workspaceId);
       const response = human.response && typeof human.response === 'object' ? human.response : null;
-      const member = human.responded_by ? this.ctx.workspaces().getWorkspaceMemberByRef(String(human.responded_by), workspaceId) : null;
+      const ref = human.responded_by ? String(human.responded_by) : null;
+      const member = ref ? this.ctx.workspaces().getWorkspaceMember(ref) ?? this.ctx.workspaces().findWorkspaceMemberForUser(ref, workspaceId) : null;
       const answer: QuestionAnswer | null = response ? { response, body_md: JSON.stringify(response), actor: { type: 'member', id: member?.id ?? String(human.responded_by ?? '') }, at: String(human.responded_at ?? message.created_at), reply_message_id: '' } : null;
       const closed = human.status === 'cancelled';
+      const settled = !!answer || human.status === 'responded';
       return { message, record: { version: 1, workspace_id: workspaceId, source_issue_id: source?.issue_id ?? session?.issueId ?? null,
         source_attempt_id: source?.current_attempt_id ?? null, responsibility_revision: route.revision, human_required: humanRequired,
-        route: route.steps, route_index: 0, route_revision: 1, route_reason: route.reason, status: answer ? 'answered' : closed ? 'closed' : 'pending', summary: null, answer, answer_revision: answer ? 1 : 0,
+        route: route.steps, route_index: 0, route_revision: 1, route_reason: route.reason, status: settled ? 'answered' : closed ? 'closed' : 'pending', summary: null, answer, answer_revision: answer ? 1 : 0,
         history: answer ? [{ type: 'answer', at: answer.at, actor: answer.actor, route_revision: 1, answer }] : [],
-        wait: { status: answer || closed ? 'none' : 'detached', reason: 'historical_native_wait_unverified' } } };
+        wait: { status: settled || closed ? 'none' : 'detached', reason: 'historical_native_wait_unverified' } } };
     }
     const legacy = old!;
     const required = legacy.status === 'escalated' || ['permission', 'merge', 'production_change'].includes(legacy.kind);
