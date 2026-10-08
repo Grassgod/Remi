@@ -3,6 +3,7 @@ import { formatTokens } from "../../../common/format";
 import { useT } from "../../../i18n";
 import { StackedBarChart } from "./stacked-bar-chart";
 import type { UsageMetric } from "../../../usage/experience-controls";
+import type { ValueState } from "@multiremi/core/usage/view-model";
 
 export interface UsageChartRow {
   label: string;
@@ -21,6 +22,7 @@ export interface UsageChartRow {
   partial?: boolean;
   daysCovered?: number;
   rangeLabel?: string;
+  tokenState?: ValueState;
 }
 
 export function UsageChart({
@@ -121,8 +123,27 @@ export function UsageChart({
       yAxisAllowDecimals={metric !== "tasks"}
       yAxisTickFormatter={format}
       formatValue={format}
-      totalLabel={t(($) => $.table.total)}
-      formatTotal={metric === "time" ? undefined : format}
+      totalLabel={
+        metric === "tokens"
+          ? (row) =>
+              row?.tokenState === "subtotal"
+                ? t(($) => $.experience.subtotal)
+                : row?.tokenState === "unknown" || row?.tokenState === "empty"
+                  ? t(($) => $.experience.token_unknown)
+                  : t(($) => $.table.total)
+          : metric === "cost"
+            ? t(($) => $.table.cost)
+            : t(($) => $.experience.tasks)
+      }
+      formatTotal={
+        metric === "time"
+          ? undefined
+          : (total, row) =>
+              metric === "tokens" &&
+              (row?.tokenState === "unknown" || row?.tokenState === "empty")
+                ? "—"
+                : format(total)
+      }
       tooltipLabel={
         weekly
           ? (row) =>

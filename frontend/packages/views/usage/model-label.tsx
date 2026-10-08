@@ -40,13 +40,15 @@ export function ModelLabel({
       >
         {model.provider} · {title}
       </span>
+      {model.model === null && model.requested_model && (
+        <span className="block text-[11px] text-muted-foreground">
+          {t(($) => $.experience.requested_only)}
+        </span>
+      )}
       <details className="mt-1 text-[11px] text-muted-foreground">
         <summary className="cursor-pointer">
           {t(($) => $.experience.model_detail)}
         </summary>
-        {model.model === null && model.requested_model && (
-          <p>{t(($) => $.price.requested_model)}</p>
-        )}
         {source && <p title={model.model_provenance}>{source}</p>}
         {model.requested_model && model.requested_model !== model.model && (
           <p className="break-all">

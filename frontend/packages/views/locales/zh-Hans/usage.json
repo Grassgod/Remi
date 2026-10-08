@@ -21,6 +21,8 @@
     "cache_unknown": "暂无可验证的节省金额",
     "cache_read": "已记录缓存读取 {{tokens}}",
     "cache_tokens": "缓存",
+    "token_unknown": "消费未知",
+    "requested_only": "请求模型 · 实际模型未上报",
     "trend": "消耗时间",
     "heatmap": "热力图",
     "heatmap_caption": "最近 26 周 · 每日已知费用 · 不受上方时间范围影响",

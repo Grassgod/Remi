@@ -21,6 +21,8 @@
     "cache_unknown": "検証可能な節約額はありません",
     "cache_read": "記録済みキャッシュ読み取り: {{tokens}}",
     "cache_tokens": "キャッシュ",
+    "token_unknown": "消費量不明",
+    "requested_only": "リクエストモデル · 実モデル未報告",
     "trend": "消費日時",
     "heatmap": "ヒートマップ",
     "heatmap_caption": "直近26週・日別の確認済み費用・選択期間とは独立",

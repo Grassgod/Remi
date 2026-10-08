@@ -63,7 +63,8 @@ function RuntimeUsageContent({
   const [heatmap, setHeatmap] = useState(false),
     [breakdown, setBreakdown] = useState(false),
     [costBy, setCostBy] = useState<"agent" | "model">("agent"),
-    [currency, setCurrency] = useState("USD");
+    [currency, setCurrency] = useState("USD"),
+    [heatmapCurrency, setHeatmapCurrency] = useState("USD");
   const [pricing, setPricing] = useState<{
     initial?: {
       provider: string;
@@ -111,6 +112,12 @@ function RuntimeUsageContent({
       ? (Object.keys(report.summary.known_cost_by_currency).sort()[0] ??
         currency)
       : currency;
+  const effectiveHeatmapCurrency =
+    longView.data &&
+    !(heatmapCurrency in longView.data.summary.known_cost_by_currency)
+      ? (Object.keys(longView.data.summary.known_cost_by_currency).sort()[0] ??
+        heatmapCurrency)
+      : heatmapCurrency;
   const data = useMemo(
     () => (report ? trendRows(report, weekly, effectiveCurrency) : []),
     [report, weekly, effectiveCurrency],
@@ -308,9 +315,11 @@ function RuntimeUsageContent({
                     />
                   )}
                   <CurrencyControl
-                    report={report}
-                    value={effectiveCurrency}
-                    onChange={setCurrency}
+                    report={heatmap ? longView.data : report}
+                    value={
+                      heatmap ? effectiveHeatmapCurrency : effectiveCurrency
+                    }
+                    onChange={heatmap ? setHeatmapCurrency : setCurrency}
                   />
                 </div>
               </div>
@@ -339,7 +348,7 @@ function RuntimeUsageContent({
                       <ActivityHeatmap
                         report={longView.data}
                         windows={windows}
-                        currency={effectiveCurrency}
+                        currency={effectiveHeatmapCurrency}
                       />
                     )
                   )

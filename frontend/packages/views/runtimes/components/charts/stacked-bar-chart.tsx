@@ -54,8 +54,8 @@ export function StackedBarChart<Row>({
   /** Renders one series' value in a tooltip row. Raw value when omitted. */
   formatValue?: (value: number) => string;
   /** Both are needed for the tooltip footer; omit for no footer. */
-  totalLabel?: string;
-  formatTotal?: (total: number) => string;
+  totalLabel?: string | ((row: Row | undefined) => string);
+  formatTotal?: (total: number, row?: Row) => string;
   /** Weekly charts relabel the tooltip header with the covered date range. */
   tooltipLabel?: (row: Row) => string;
   /** Weekly charts dim the in-progress bucket. */
@@ -99,6 +99,10 @@ export function StackedBarChart<Row>({
               footer={
                 formatTotal
                   ? (payload) => {
+                      const row = payload[0]?.payload as Row | undefined;
+                      const hasMeasuredValue = payload.some(
+                        (item) => typeof item.value === "number",
+                      );
                       const total = payload.reduce(
                         (sum, item) =>
                           sum +
@@ -107,9 +111,13 @@ export function StackedBarChart<Row>({
                       );
                       return (
                         <div className="flex items-center justify-between gap-2 font-medium">
-                          <span>{totalLabel}</span>
+                          <span>
+                            {typeof totalLabel === "function"
+                              ? totalLabel(row)
+                              : totalLabel}
+                          </span>
                           <span className="font-mono tabular-nums">
-                            {formatTotal(total)}
+                            {hasMeasuredValue ? formatTotal(total, row) : "—"}
                           </span>
                         </div>
                       );

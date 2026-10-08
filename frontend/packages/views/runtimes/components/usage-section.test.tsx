@@ -16,6 +16,7 @@ import { UsageSection } from "./usage-section";
 const state = vi.hoisted(() => ({
   report: null as UsageReport | null,
   previous: null as UsageReport | null,
+  longReport: null as UsageReport | null,
   echoWindows: false,
   error: false,
   ws: "ws",
@@ -34,10 +35,16 @@ vi.mock("@tanstack/react-query", () => ({
   useQuery: (o: { queryKey: unknown[]; enabled?: boolean }) => {
     state.options.push(o);
     const params = o.queryKey.at(-1) as Record<string, unknown>;
+    const isLongWindow =
+      typeof params.since === "string" &&
+      typeof params.until === "string" &&
+      Date.parse(params.until) - Date.parse(params.since) > 100 * 86_400_000;
     const base =
-      params.days === undefined && state.previous
-        ? state.previous
-        : state.report;
+      isLongWindow && state.longReport
+        ? state.longReport
+        : params.days === undefined && state.previous
+          ? state.previous
+          : state.report;
     const data =
       base && state.echoWindows
         ? {
@@ -136,6 +143,7 @@ afterEach(() => {
   state.options = [];
   state.detailRows = [];
   state.previous = null;
+  state.longReport = null;
   state.echoWindows = false;
   state.hasNext = false;
   vi.clearAllMocks();
@@ -278,8 +286,12 @@ describe("Restored canonical Runtime usage", () => {
       ).getByRole("button", { name: locale.experience.by_model }),
     );
     expect(screen.getByText("codex · old-gpt")).toBeVisible();
+    expect(screen.getByText(locale.experience.requested_only)).toBeVisible();
+    expect(
+      screen.getByText(locale.experience.model_detail).closest("details"),
+    ).not.toHaveAttribute("open");
     fireEvent.click(screen.getByText(locale.experience.model_detail));
-    expect(screen.getByText(locale.price.requested_model)).toBeVisible();
+    expect(screen.getByText(locale.experience.requested_only)).toBeVisible();
     expect(screen.getByText("saved-route")).toBeVisible();
     fireEvent.click(
       within(screen.getByTestId("cost-ranking-row")).getByRole("button", {
@@ -368,6 +380,75 @@ describe("Restored canonical Runtime usage", () => {
     expect(screen.getAllByText("EUR 2.00")).toHaveLength(2);
     expect(screen.queryByText(/vs previous period/)).toBeNull();
     expect(screen.queryByText("USD 3.00")).toBeNull();
+  });
+  it("shows confirmed historical CNY heatmap costs even when the selected short period has no costs", () => {
+    state.report = usageReport({
+      summary: usageMetrics({
+        known_cost_by_currency: {},
+        actual_total_tokens: 0,
+        task_count: 0,
+      }),
+      daily: [],
+    });
+    const historical = usageMetrics({ known_cost_by_currency: { CNY: 3 } });
+    state.longReport = usageReport({
+      summary: historical,
+      daily: [{ ...historical, date: "2026-08-07" }],
+    });
+    render(<UsageSection runtime={runtime} />);
+    fireEvent.click(
+      screen.getByRole("button", { name: locale.experience.heatmap }),
+    );
+    const heatmap = screen.getByTestId("activity-heatmap");
+    expect(within(heatmap).getByText("CNY 3.00")).toBeVisible();
+    expect(
+      screen
+        .getByRole("img", { name: locale.experience.heatmap })
+        .querySelector('[data-date="2026-08-07"] title'),
+    ).toHaveTextContent("CNY 3.00");
+    expect(within(heatmap).queryByText("USD 0.00")).toBeNull();
+  });
+  it("keeps heatmap currency independent from current KPIs and stable when the period changes", () => {
+    state.report = usageReport({
+      summary: usageMetrics({ known_cost_by_currency: { USD: 1, EUR: 2 } }),
+    });
+    const historical = usageMetrics({
+      known_cost_by_currency: { CNY: 3, EUR: 4 },
+    });
+    state.longReport = usageReport({
+      summary: historical,
+      daily: [{ ...historical, date: "2026-08-07" }],
+    });
+    render(<UsageSection runtime={runtime} />);
+    fireEvent.change(screen.getByLabelText(locale.experience.currency), {
+      target: { value: "EUR" },
+    });
+    fireEvent.click(
+      screen.getByRole("button", { name: locale.experience.heatmap }),
+    );
+    expect(screen.getByLabelText(locale.experience.currency)).toHaveValue(
+      "CNY",
+    );
+    fireEvent.change(screen.getByLabelText(locale.experience.currency), {
+      target: { value: "EUR" },
+    });
+    expect(
+      within(screen.getByTestId("activity-heatmap")).getByText("EUR 4.00"),
+    ).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "7d" }));
+    expect(screen.getByLabelText(locale.experience.currency)).toHaveValue(
+      "EUR",
+    );
+    expect(
+      within(screen.getByTestId("activity-heatmap")).getByText("EUR 4.00"),
+    ).toBeVisible();
+    fireEvent.click(
+      screen.getByRole("button", { name: locale.experience.heatmap }),
+    );
+    expect(screen.getByLabelText(locale.experience.currency)).toHaveValue(
+      "EUR",
+    );
+    expect(screen.getAllByText("EUR 2.00")).toHaveLength(1);
   });
   it("shows failed report loads as retryable errors without measured zeros", () => {
     state.error = true;

@@ -21,6 +21,8 @@
     "cache_unknown": "No verifiable savings amount",
     "cache_read": "Recorded cache reads: {{tokens}}",
     "cache_tokens": "Cache",
+    "token_unknown": "Consumption unknown",
+    "requested_only": "Requested model · actual not reported",
     "trend": "When",
     "heatmap": "Heatmap",
     "heatmap_caption": "Last 26 weeks · known daily cost · independent of the selected period",
