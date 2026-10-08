@@ -51,7 +51,16 @@ async function countSql(database: SqlDatabase, layer: DaemonProtocolLayer, actio
 }
 
 function historicalAggregates(statements: string[]) {
-  return statements.filter(sql => /WITH selected AS|SELECT runtime_id, status, usage FROM multiremi_tasks/.test(sql));
+  return statements.filter(sql => /WITH selected AS|SELECT runtime_id, status, usage FROM multiremi_(?:tasks|turn_execution_records)/.test(sql));
+}
+
+async function pendingOnDisconnectedRuntime(f: Awaited<ReturnType<typeof fleet>>) {
+  const runtime = f.store.registerRuntime({ id: "rt_cost_disconnected", name: "Disconnected", provider: "claude", workspaceId: "local" });
+  const agent = f.store.createAgent({ name: "Pending elsewhere", provider: "claude", runtimeId: runtime.id });
+  const task = f.store.createTask({ agentId: agent.id, prompt: "pending on another host" });
+  await f.layer.drain();
+  expect(f.store.getTaskIdentity(task.id)?.status).toBe("queued");
+  expect(f.store.hasPendingTaskOffers("local")).toBe(true);
 }
 
 async function fleet() {
@@ -172,7 +181,7 @@ test("enqueue pushes immediately and released capacity retries only its daemon b
   const f = await fleet();
   const task = f.store.createTask({ agentId: f.agent.id, prompt: "dispatch from enqueue" });
   await f.layer.drain();
-  const offers = () => f.frames[0]!.filter(frame => frame.t === "task.offer" && frame.p.id === task.id);
+  const offers = () => f.frames[0]!.filter(frame => frame.t === "task.offer" && frame.p.attempt_id === task.id);
   expect(offers()).toHaveLength(1);
   const first = offers()[0]!;
   expect(first.rt).toBe(f.runtimeIds[0]);
@@ -194,13 +203,14 @@ test("enqueue pushes immediately and released capacity retries only its daemon b
     expect([...new Set(claims.mock.calls.map(args => args[0]))].sort()).toEqual(f.runtimeIds.slice(0, 2));
     expect(offers()).toHaveLength(2);
     expect(offers()[1]!.rt).toBe(f.runtimeIds[0]);
-    expect(f.frames.slice(1).flat().some(frame => frame.t === "task.offer" && frame.p.id === task.id)).toBe(false);
+    expect(f.frames.slice(1).flat().some(frame => frame.t === "task.offer" && frame.p.attempt_id === task.id)).toBe(false);
     expect(historicalAggregates(sql)).toEqual([]);
   } finally { claims.mockRestore(); }
 });
 
 test("model changes check only their runtime and empty claims do not hydrate historical usage", async () => {
   const f = await fleet();
+  await pendingOnDisconnectedRuntime(f);
   const snapshots = spyOn(f.store, "pendingRuntimeRequests");
   const claims = spyOn(f.store, "claimTask");
   try {
@@ -212,6 +222,19 @@ test("model changes check only their runtime and empty claims do not hydrate his
       for (const id of f.runtimeIds) expect(f.store.claimTask(id, { supportsBinarySkillFiles: true })).toBeNull();
     });
     expect(historicalAggregates(sweep)).toEqual([]);
+  } finally { snapshots.mockRestore(); claims.mockRestore(); }
+});
+
+test("an empty workspace still refreshes changed runtime downlinks without taking claim locks", async () => {
+  const f = await fleet();
+  const snapshots = spyOn(f.store, "pendingRuntimeRequests");
+  const claims = spyOn(f.store, "claimTask");
+  try {
+    const sql = await countSql(f.database, f.layer, () => f.store.updateRuntimeModels(f.runtimeIds[0]!, []));
+    expect(snapshots.mock.calls.map(args => args[0])).toEqual([f.runtimeIds[0]]);
+    expect(claims).not.toHaveBeenCalled();
+    expect(historicalAggregates(sql)).toEqual([]);
+    expect(f.frames.flat().some(frame => frame.t === "task.offer")).toBe(false);
   } finally { snapshots.mockRestore(); claims.mockRestore(); }
 });
 
@@ -232,6 +255,7 @@ test("timeline-only activity does not rebuild daemon configuration", async () =>
 
 test("a plugin readiness change wakes its runtime without rebuilding other hosts", async () => {
   const f = await fleet();
+  await pendingOnDisconnectedRuntime(f);
   const agent = f.store.createAgent({ name: "Plugin owner", provider: "claude", runtimeId: f.runtimeIds[0] });
   const plugin = f.store.importAgentPlugin({ provider: "claude", manifest: { name: "cost-plugin", version: "1.0.0" } });
   f.store.createAgentPluginBinding(agent.id, { pluginId: plugin.id });

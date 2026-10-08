@@ -365,7 +365,7 @@ A-2 用它进入 `upgrade_wait`（§7.3）而不是单纯停止重连。另外�
 
 | 帧 | 重连后从哪里重新推导 |
 |---|---|
-| `task.offer` | `multiremi_tasks` 中 queued / dispatched 的行 |
+| `task.offer` | `multiremi_turns` 的 pending 轮及 `multiremi_turn_attempts` 中 offered / accepted 的当前尝试 |
 | `turn.message` | 当前 turn 未确认的 now 消息 |
 | `turn.wrap_up` | 当前 turn 的 `wrap_up_requested_at` |
 | `task.cancelled` | 任务已终态而 daemon 仍在跑 |
@@ -427,7 +427,7 @@ daemon 已创建的 decision 在 RPC 应答中取得消息 ID 与 seq，同答�
 | `trace.append` | `(task_id, trace_seq)` | Hub 丢弃 `≤ head` |
 
 任务状态回报在工作区生命周期锁内复核 task / Runtime / workspace / daemon 归属和成员权限。
-`task.start`、`task.complete`、`task.fail` 的 `ok:true` 只表示状态已提交，或当前任务已经处于允许吸收重放的状态。
+`task.start`、`turn.complete`、`task.fail` 的 `ok:true` 只表示状态已提交，或当前尝试已经处于允许吸收重放的状态。
 任务曾实际发送给当前 Runtime、因未收到接单确认而重新入队时，保留的 `offered_at` 允许该 Runtime 的
 可靠 start 或终态回报恢复原执行；不需要等待下一次 offer，所以升级 drain 暂停派发时也能收口。
 只有 Runtime 偏好、尚未真正发送过 offer 的 queued 任务没有这项恢复资格；缺少证据或状态暂不允许时
@@ -539,7 +539,7 @@ SSH 配置 revision 时，才广播 `daemon:ssh_mesh_changed` 重新下发整个
 
 `claimTask` 在生命周期锁前读取轻量 Runtime，锁后读取派活所需的模型、执行组和协议状态，
 不会附带历史用量聚合。CLI 排空检查、重试时点、任务下发的宿主所有者信息和飞书卡片能力判断
-同样只读取必要字段；
+同样只读取必要字段；统一模型的 `DaemonTurnBridge` 授权也只读取 Runtime 身份字段。
 用户侧 Runtime 列表/详情的统计口径不变。成本回归必须统计心跳到下行、派活全部结束的
 完整链路，并计入 `WITH` 聚合；多 Runtime 用例见
 [daemon-heartbeat-fanout-cost.test.ts](../tests/unit/multiremi/daemon-heartbeat-fanout-cost.test.ts)。
@@ -695,7 +695,7 @@ seq 连续是 Hub「丢弃 `≤ head` 的事件」这条规则成立的前提，
 
 **连续性断言只针对新写的实时 trace。**回填出来的历史 trace 保留原来的稀疏 seq，
 不能断言连续，也**不能断言 `head = event_count`**（A11）；对账历史成员要用 `event_count`。
-这是 `head` 与 `event_count` 在 `task.complete.trace` 里分成两个字段的原因。
+这是 `head` 与 `event_count` 在 `turn.complete.trace` 里分成两个字段的原因。
 
 `closed` 是 trace 唯一的终态信号（裁决 3），出现在 `TraceStore.head()`、reader 结果、
 `trace.read` / `trace.fetch` 的应答、`trace.push` 与 Hub 订阅上。**不存在 `trace.end` 事件**，
@@ -843,8 +843,8 @@ B 方案里的 `GET /api/daemon/tasks/:id/trace` 改用 `trace.fetch`，不新�
 - A（本单）**只删写路径**：daemon 不再产 `messages` outbox 记录，服务端删
   `POST /api/daemon/tasks/:id/messages` 与 `appendTaskMessages` 的 daemon 入口。
 - B（MUL-402）负责删表与指针路由；C（MUL-403）负责前端与飞书 CoT 改订阅 Hub。
-- A 一行不动 `multiremi_task_messages` 的读者（`routers/tasks.ts:385/433`、
-  `helpers/organizer.ts:53`、`routers/issue-shares.ts:166/173`、飞书 CoT）。
+- 当前生产读者从 trace 指针读取，旧 task 路由不注册。`multiremi_task_messages` 仅用于
+  历史 trace 回填、用量取证及旧 reader fixtures；`appendTaskMessages` 不是 daemon 写入入口。
 - 三者在 `v2-integration` 合流 PR 里同时存在，缺一不合。
 
 ## 6. 反向 RPC `trace.read`

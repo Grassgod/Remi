@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { actualUnit, requestUnitId, unitActualTotal } from "../../../packages/acp/src/usage-collector.js";
 import { writeUsageSnapshot } from "../../../packages/server/src/store/usage-accounting.js";
+import { runTurnExecutionMutation } from "@multiremi/store/turn-execution-records.js";
 import { applyModernUsageRepairs, buildModernUsageRepairs, readModernRepairState, storedUsageUnit, verifyModernUsageRepairs } from "../../../scripts/modern-usage-repair.js";
 import { parseNativeUsageEvidence } from "../../../scripts/usage-evidence.js";
 import { createLocalStore, db, resetMultiremiTestEnv } from "../multiremi/helpers.js";
@@ -10,7 +11,7 @@ function fixture(provider = "claude") {
   const store = createLocalStore();
   const agent = store.createAgent({ name: "repair", provider });
   const task = store.createTask({ agentId: agent.id, prompt: "synthetic historical repair" });
-  db!.run("UPDATE multiremi_tasks SET status='completed',provider=?,session_id='native-session',started_at='2026-10-01T00:00:00Z',completed_at='2026-10-01T02:00:00Z',usage='[]' WHERE id=?", [provider, task.id]);
+  runTurnExecutionMutation(db!, "UPDATE multiremi_turn_execution_records SET status='completed',provider=?,session_id='native-session',started_at='2026-10-01T00:00:00Z',completed_at='2026-10-01T02:00:00Z',usage='[]' WHERE id=?", [provider, task.id]);
   return { store, task };
 }
 const request = (output: number) => ({ ...actualUnit({ unitId: requestUnitId("response", "native-session"), provider: "claude", providerSessionId: "native-session", providerRequestId: "response", model: "real-model", scope: "request", source: "provider_request", inputTokens: 10, outputTokens: output, cacheReadTokens: 20, cacheWriteTokens: 0, totalTokens: 30 + output }), occurredAt: at });

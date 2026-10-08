@@ -1,4 +1,4 @@
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it, mock, spyOn } from "bun:test";
 import { normalizeCodexRequestUsage } from "@acp/codex-request-usage.js";
 import { codexUsagePatch } from "@acp/usage-bridge-patches.js";
 import { AcpProvider } from "@acp/provider.js";
@@ -51,8 +51,14 @@ describe("Codex exact response consumption", () => {
     const provider = new AcpProvider({ agentType: "codex" });
     const source = bridge();
     const abort = new AbortController();
+    const interrupted = Promise.withResolvers<never>();
+    const stopped = mock(async () => { interrupted.reject(new Error("ACP client stopped")); });
+    const realSetTimeout = globalThis.setTimeout;
+    // Exercise the real cancellation deadline without spending the test's 5s budget.
+    const deadline = failure === "abort" ? spyOn(globalThis, "setTimeout").mockImplementation(((callback: (...args: any[]) => void, delay?: number, ...args: any[]) =>
+      realSetTimeout(callback, delay === 5_000 ? 0 : delay, ...args)) as typeof setTimeout) : null;
     let turn = 0;
-    const client = { _options: { onSessionUpdate: (_event: any) => {} }, cancel: async () => {}, prompt: async () => {
+    const client = { _options: { onSessionUpdate: (_event: any) => {} }, cancel: async () => {}, stop: stopped, prompt: async () => {
       const emit = (update: any) => client._options.onSessionUpdate({ sessionId: "acp-parent", update });
       if (turn++ > 0) {
         emit(await source.request("next-task", 32));
@@ -64,7 +70,7 @@ describe("Codex exact response consumption", () => {
       if (failure === "throw") throw new Error("fixture connection failure");
       if (failure === "abort") {
         abort.abort();
-        return new Promise(() => {}); // Cancelled provider never settles.
+        return interrupted.promise; // Unresponsive until the provider stops the bridge.
       }
       return { stopReason: failure === "cancelled" ? "cancelled" : "end_turn",
         usage: { inputTokens: 92178, cachedReadTokens: 92168, outputTokens: 10, totalTokens: 92188 } };
@@ -72,8 +78,14 @@ describe("Codex exact response consumption", () => {
     (provider as any)._ensureSession = async () => ({ client, acpSessionId: "acp-parent", models: { currentModelId: "parent-requested-model" } });
     const events: any[] = [];
     const run = async () => { for await (const event of provider.sendStream("synthetic task", { signal: abort.signal })) events.push(event); };
-    if (failure === "end_turn") await run();
-    else await expect(run()).rejects.toThrow();
+    try {
+      if (failure === "end_turn") await run();
+      else await expect(run()).rejects.toThrow();
+      if (failure === "abort") {
+        expect(deadline!.mock.calls.filter(args => args[1] === 5_000)).toHaveLength(1);
+        expect(stopped).toHaveBeenCalledTimes(1);
+      }
+    } finally { deadline?.mockRestore(); stopped.mockRestore(); }
     expect(provider.getLastResponse()?.totalTokens).toBe(665553);
     const units = responseToUsageUnits("codex", provider.getLastResponse(), "requested-model", "turn");
     expect(units.filter(unit => unit.providerRequestId)).toHaveLength(4);

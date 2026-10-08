@@ -733,7 +733,8 @@ export class AcpProvider implements Provider {
               // block task shutdown. Stop it before allowing session reuse.
               await entry.client.stop();
               await promptCompletion;
-              this._lastResponse ??= buildAgentResponse(entry, { stopReason: "cancelled" }, this._adapter.promptUsageSettleScope, turnFailure());
+              this._lastResponse ??= buildAgentResponse(entry, { stopReason: "cancelled" }, this._adapter.promptUsageSettleScope, turnFailure(),
+                this._adapter.agentType, requestedModel(), requestedModelSource());
             }
           } finally { if (timer) clearTimeout(timer); }
           // ACP permits final tool/content updates before the cancelled reply.

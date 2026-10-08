@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { MultiremiStore } from "@multiremi/store.js";
 import { PostgresSyncDatabase } from "@multiremi/store/db/postgres.js";
 import { writeUsageSnapshot } from "@multiremi/store/usage-accounting.js";
+import { runTurnExecutionMutation } from "@multiremi/store/turn-execution-records.js";
 import { actualUnit, requestUnitId } from "../../../packages/acp/src/usage-collector.js";
 import { ZipStreamWriter } from "../../../packages/shared/src/zip/writer.js";
 import { buildReconcileUsagePlan } from "../../../scripts/reconcile-task-usage.js";
@@ -37,7 +38,7 @@ describe.skipIf(!adminUrl)("modern repair PostgreSQL plan and synchronous apply"
     const session = `native-${provider}`;
     const agent = store.createAgent({ name: provider, provider });
     const task = store.createTask({ agentId: agent.id, prompt: "synthetic archived evidence" });
-    db!.run("UPDATE multiremi_tasks SET status='completed',provider=?,session_id=?,started_at='2026-10-01T00:00:00Z',completed_at='2026-10-01T02:00:00Z',usage='[]' WHERE id=?", [provider, session, task.id]);
+    runTurnExecutionMutation(db!, "UPDATE multiremi_turn_execution_records SET status='completed',provider=?,session_id=?,started_at='2026-10-01T00:00:00Z',completed_at='2026-10-01T02:00:00Z',usage='[]' WHERE id=?", [provider, session, task.id]);
     const early = provider === "claude"
       ? actualUnit({ unitId: requestUnitId("response", session), provider, providerSessionId: session, providerRequestId: "response", scope: "request", source: "provider_request", inputTokens: 10, outputTokens: 1, cacheReadTokens: 20, cacheWriteTokens: 0 })
       : actualUnit({ unitId: `request:${session}:epoch:0:${JSON.stringify({ inputTokens: 10, cachedInputTokens: 20, outputTokens: 1, totalTokens: 31 })}`, provider, scope: "request", source: "provider_request", accuracy: "unknown", evidenceRef: "codex_meter_epoch_unresolved" });

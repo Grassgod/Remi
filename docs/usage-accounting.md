@@ -127,13 +127,15 @@ bun run scripts/reconcile-task-usage.ts --verify-plan=<review-plan.json>
 
 不带 execute 的 legacy migration 只读计数；native/raw 恢复先生成只读计划，再按审核过的计划执行。恢复读取 v2 ZIP 索引和 v1 tar.gz 的有限大小原生成员，按全部竞争任务的时间边界归属，`--task-id` 仅筛选输出。非终态任务不会被修复；已有规范化执行记录的终态任务可以进入 `modernRepairs`，不再一概排除。计划摘要分别列出修复任务、前后已知消费及无法修复的原因。
 
-现代记录修复由 [modern-usage-repair.ts](../scripts/modern-usage-repair.ts)执行，要求任务只有一个已完整上报的执行 run，且任务、原始请求与原生日志的 session 身份一致。Claude 仅使用有明确结束原因的最终请求记录更新同一请求；全部相关请求身份匹配、更新增量恰好解释唯一结算差额时，才将对应 `acp_prompt_unattributed_remainder` 退休。原有进度摘要、上下文和其他调用保留；涉及费用覆盖时同时更新原关联，不把修正后的数字再加一份。
+现代记录修复由 [modern-usage-repair.ts](../scripts/modern-usage-repair.ts)执行，通过 `multiremi_turn_execution_records` 读取轮及尝试，原 task ID 对应尝试 ID。每个待修复尝试必须处于终态、只有一个已完整上报的执行 run，且尝试、原始请求与原生日志的 provider session 身份一致。Claude 仅使用有明确结束原因的最终请求记录更新同一请求；全部相关请求身份匹配、更新增量恰好解释唯一结算差额时，才将对应 `acp_prompt_unattributed_remainder` 退休。原有进度摘要、上下文和其他调用保留；涉及费用覆盖时同时更新原关联，不把修正后的数字再加一份。
+
+原始 usage 事件属于尝试的 daemon trace，不属于对话消息。恢复计划读取 v2 archive 的 trace 成员，校验索引、尝试、对话、Agent、provider 和文件封口事实；同一尝试的 seq 在旧行与回填 trace 中只读取一次。`multiremi_task_messages` 的入口仅保留作历史只读取证，与历史 trace 回填一致；统一模型不向它写入新执行事件。原生日志仍优先于重叠的原始消费，缺少请求身份和覆盖证据时保留 unknown。
 
 Codex 原生日志的 `token_usage_record` 按 thread/session 与 response ID 去重，`compacted.latest_token_usage_record` 是同一请求的副本。普通生成和压缩请求均进入恢复小计。只有同一 turn 的独立请求分量之和等于最终 `turn_token_usage`、存在匹配的 `task_started` 和 `task_complete`，并满足任务和 run 的归属边界，才能替代该 turn 明确始末范围内的旧 unknown 观测。其他轮次或界外的迟到观测继续保留未知，单一 run 不等于只有一个 turn。
 
 跨 archive 合并同一请求时采用完整的更强快照，不将相互矛盾的分量拼成不存在的数字。合并完所有成员后统一处理旧 `token_count` 与新请求的覆盖：完整 turn 内择一计量，不完整或无明确 turn 归属的重叠观察保留为非计量 unknown，不能与请求重复相加，也不能被当成纯上下文而隐藏消费缺口。明确属于更早、只有旧格式的轮次继续保留原计量证据。
 
-现代修复使用原 run 和规范化写入器，维护审计表 `multiremi_usage_modern_repair_audit` 保存原状态及修复后哈希。执行前在事务内复检任务边界、所有 run、单位、receipts、归属和费用覆盖；计划陈旧则拒绝应用。被替代的差额或旧观测必须已有持久 receipt，退休后设置 `superseded`，迟到上报不恢复旧计量。重复应用同一计划不重复记账，verify 核对修复后状态。此过程不会作为服务启动或普通查询的隐式操作。
+现代修复使用原 run 和规范化写入器，维护审计表 `multiremi_usage_modern_repair_audit` 的外键关联尝试，保存原状态及修复后哈希。执行前在事务内锁定轮和尝试，复检尝试边界、所有 run、单位、receipts、归属和费用覆盖；计划陈旧则拒绝应用。被替代的差额或旧观测必须已有持久 receipt，退休后设置 `superseded`，迟到上报不恢复旧计量。重复应用同一计划不重复记账，verify 核对修复后状态。此过程不会作为服务启动或普通查询的隐式操作。
 
 只有旧聚合而缺少整个执行覆盖证明的 legacy 任务，仍不能用部分原生日志替换其已知消费：请求证据单独保留供审核，不与旧聚合相加。只有旧消费未知时才补入请求 subtotal，coverage 仍为 partial；不能据此宣称全部历史已恢复。旧累计证据的 replay 和无重置证据下降不改变差分基线，total-only 的上下文估计不成为消费。恢复按 task 保存原事实、旧 usage 校验哈希和修订水位；后续计划须保留已有请求身份、已知计数及费用关联，空或较窄扫描不能撤销事实。不可恢复项保留明确原因。旧 `backfill-codex-task-usage.ts` 不再执行 sum-used 写入。计划、日志和 archive 可能包含敏感证据，应放在维护输出目录，避免在公共日志输出正文或凭据。
 

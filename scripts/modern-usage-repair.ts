@@ -73,7 +73,7 @@ export function modernRepairState(task: Row, units: Row[], runs: Row[], receipts
 }
 export function readModernRepairState(db: SqlDatabase, taskId: string) {
   return {
-    task: db.query("SELECT id,workspace_id,provider,status,session_id,usage,started_at,completed_at,failed_at,cancelled_at FROM multiremi_tasks WHERE id=?").get(taskId) as Row,
+    task: db.query("SELECT id,workspace_id,provider,status,session_id,usage,started_at,completed_at,failed_at,cancelled_at FROM multiremi_turn_execution_records WHERE id=?").get(taskId) as Row,
     units: db.query("SELECT * FROM multiremi_usage_units WHERE task_id=? ORDER BY run_id,unit_id").all(taskId) as Row[],
     runs: db.query("SELECT * FROM multiremi_usage_runs WHERE task_id=? ORDER BY run_id").all(taskId) as Row[],
     receipts: db.query("SELECT * FROM multiremi_usage_unit_receipts WHERE task_id=? ORDER BY run_id,unit_id").all(taskId) as Row[],
@@ -186,7 +186,7 @@ export function buildModernUsageRepairs(state: ReturnType<typeof readModernRepai
 }
 
 export function applyModernUsageRepairs(db: SqlDatabase, repairs: ModernUsageRepair[], checksum: string): { applied: number; resumed: number } {
-  db.exec(`CREATE TABLE IF NOT EXISTS multiremi_usage_modern_repair_audit(task_id TEXT NOT NULL,plan_checksum TEXT NOT NULL,original_state TEXT NOT NULL,result_state_sha256 TEXT NOT NULL,PRIMARY KEY(task_id,plan_checksum),FOREIGN KEY(task_id) REFERENCES multiremi_tasks(id) ON DELETE CASCADE)`);
+  db.exec(`CREATE TABLE IF NOT EXISTS multiremi_usage_modern_repair_audit(task_id TEXT NOT NULL,plan_checksum TEXT NOT NULL,original_state TEXT NOT NULL,result_state_sha256 TEXT NOT NULL,PRIMARY KEY(task_id,plan_checksum),FOREIGN KEY(task_id) REFERENCES multiremi_turn_attempts(id) ON DELETE CASCADE)`);
   let applied = 0, resumed = 0;
   for (const repair of repairs) {
     const changed = db.transaction(() => {
@@ -196,7 +196,8 @@ export function applyModernUsageRepairs(db: SqlDatabase, repairs: ModernUsageRep
       db.run("UPDATE multiremi_workspaces SET updated_at=updated_at WHERE id=?", [initial.task.workspace_id]);
       markRequestReadCacheLockTaken();
       lockUsageIdentities(db, initial.task.workspace_id, repair.snapshot.units);
-      db.query(`SELECT id FROM multiremi_tasks WHERE id=?${db.dialect === "postgres" ? " FOR UPDATE" : ""}`).get(repair.taskId);
+      db.query(`SELECT a.id FROM multiremi_turn_attempts a JOIN multiremi_turns t ON t.id=a.turn_id
+        WHERE a.id=?${db.dialect === "postgres" ? " FOR UPDATE OF t,a" : ""}`).get(repair.taskId);
       const state = readModernRepairState(db, repair.taskId);
       if (!terminal(state.task.status) || modernStateHash(state) !== repair.expectedStateSha256) throw new Error("Modern usage changed after plan; regenerate reviewed plan");
       if (repair.scope.taskId !== repair.taskId || repair.scope.runId !== repair.snapshot.runId || !repair.scope.evidenceRef || !repair.scope.providerSessionId) throw new Error("Invalid modern repair scope");
