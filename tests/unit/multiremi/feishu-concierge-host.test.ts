@@ -557,7 +557,7 @@ describe("control-plane Feishu concierge host", () => {
     });
 
     expect(sent).toEqual({ messageId: "om_fallback" });
-    expect(replies).toEqual(["**MUL-1 - 问题**\n\n1. 继续"]);
+    expect(replies).toEqual(["<at id=ou_group_owner></at> **MUL-1 - 问题**\n\n1. 继续"]);
     // The control plane must learn it degraded, or it would later PATCH a card
     // that does not exist.
     expect(receipts).toEqual([{ messageId: "om_fallback", interactionOpenId: "ou_group_owner", degraded: "send_failed" }]);

@@ -6166,7 +6166,36 @@ ${placementAfter.sql}
     // before the fallback had its chance — then report a second time when the
     // retry finished (MUL-336). The retry adopts the run and finalizes it once.
     const delegationReturns: MultiremiTask[] = [];
-    let roundPushTasks: MultiremiTask[] = [];
+    const roundPushTasks: MultiremiTask[] = [];
+    // Attempts may fail or be replaced while their work turn stays live. Only
+    // its current, terminal attempt can publish the turn's topic reports.
+    const reportTurn = this.ctx.db.query(`SELECT t.id, t.status, t.current_attempt_id
+      FROM multiremi_turns t JOIN multiremi_turn_attempts a ON a.turn_id = t.id
+      WHERE a.id = ?`).get(task.id);
+    const canReportTurn = !task.chatSessionId && !retry && !replacementPlanned
+      && reportTurn?.current_attempt_id === task.id
+      && ["completed", "failed", "cancelled"].includes(reportTurn.status);
+    const reportIssueRound = (issue: MultiremiIssue) => {
+      const issueSession = this.ctx.issueSessions().getOrCreateDefaultIssueSession(issue.id);
+      const head = this.ctx.conversationLog().getConversationLogHead(issueSession.id)?.headSeq ?? 0;
+      const outcome = status === "completed" ? "done" : status;
+      const reason = envelopeSummary(status === "failed" ? (body ?? task.failureReason ?? "unknown") : body);
+      const envelopeBody = `${issue.key} 有新日志：会话 ${issueSession.id}，seq ({{cursor}}, ${head}]；本次轮次 ${reportTurn.id} 状态 ${status}`
+        + (reason ? `，原因 ${reason}` : "");
+      const deliveries: EnvelopeDelivery[] = this.ctx.inbox().sendEnvelopeWithinTransaction({
+        to: { role: "relay", issueId: issue.id }, kind: "report", outcome,
+        wake: "now", dedupeKey: `relay:${issue.id}:${reportTurn.id}`,
+        body: envelopeBody, source: { issueId: issue.id, taskId: task.id },
+      }, childStatusChanges, deferredEvents);
+      if (deliveries.length > 0 && deliveries.every(delivery => delivery.deduplicated)) return;
+      roundPushTasks.push(...this.ctx.feishuBot().prepareFeishuIssueRoundPushesWithinTransaction({
+        issue,
+        leaderTask: task,
+        envelopeDeliveries: deliveries,
+        childStatusChanges,
+        deferredEvents,
+      }));
+    };
     this.ctx.accessTokens().revokeTaskAccessTokens(task.id);
     if (status === "completed" && task.chatSessionId) this.promoteRelayIssueLogCursorWithinTransaction(task);
     if (task.chatSessionId && (status === "completed" || (status === "failed" && !retry))) {
@@ -6355,25 +6384,28 @@ ${placementAfter.sql}
       if(!task.chatSessionId&&!retry&&!replacementPlanned&&task.issueId)
         deriveIssueStatusWithinTransaction(this.ctx,task.issueId,deferredEvents);
       if (issue?.projectId) this.ctx.db.run("UPDATE multiremi_projects SET updated_at = ? WHERE id = ?", [now, issue.projectId]);
-      if (issue && this.shouldReportIssueRound(task, status, issue)) {
-        const issueSession = this.ctx.issueSessions().getOrCreateDefaultIssueSession(issue.id);
-        const head = this.ctx.conversationLog().getConversationLogHead(issueSession.id)?.headSeq ?? 0;
-        const outcome = status === "completed" ? "done" : status;
-        const reason = envelopeSummary(status === "failed" ? (body ?? task.failureReason ?? "unknown") : body);
-        const envelopeBody = `${issue.key} 有新日志：会话 ${issueSession.id}，seq ({{cursor}}, ${head}]；本次轮次 ${task.id} 状态 ${status}`
-          + (reason ? `，原因 ${reason}` : "");
-        const deliveries: EnvelopeDelivery[] = this.ctx.inbox().sendEnvelopeWithinTransaction({
-          to: { role: "relay", issueId: issue.id }, kind: "report", outcome,
-          wake: "now", dedupeKey: `relay:${issue.id}:${task.id}`,
-          body: envelopeBody, source: { issueId: issue.id, taskId: task.id },
-        }, childStatusChanges, deferredEvents);
-        roundPushTasks = this.ctx.feishuBot().prepareFeishuIssueRoundPushesWithinTransaction({
-          issue,
-          leaderTask: task,
-          envelopeDeliveries: deliveries,
-          childStatusChanges,
-          deferredEvents,
-        });
+      if (canReportTurn && issue && this.shouldReportIssueRound(task, status, issue)) {
+        reportIssueRound(issue);
+      }
+    }
+
+    // Standalone/scheduled work can report on Issues without being bound to
+    // them. Ring those topics in this terminal transaction too. Chat replies
+    // must never ring their own relay (or another topic) back into a loop.
+    if (canReportTurn) {
+      const commentedIssues = this.ctx.db.query(
+        `SELECT DISTINCT sessions.issue_id FROM multiremi_conversation_log messages
+         JOIN multiremi_issue_sessions sessions ON sessions.id = messages.session_id
+         WHERE messages.task_id = ? AND messages.kind = 'message'
+           AND messages.sender_type = 'agent' AND messages.sender_id = ?
+           AND messages.message_kind IN ('request', 'reply', 'final') AND messages.deleted_at IS NULL
+           AND sessions.issue_id <> ? ORDER BY sessions.issue_id`,
+      ).all(reportTurn.id, task.agentId, task.issueId ?? "") as { issue_id: string }[];
+      for (const row of commentedIssues) {
+        const issue = this.ctx.issues().getIssue(row.issue_id);
+        if (issue && issue.workspaceId === task.workspaceId && !this.hasActiveTurnForIssue(issue.id)) {
+          reportIssueRound(issue);
+        }
       }
     }
 
@@ -6521,7 +6553,7 @@ ${placementAfter.sql}
 
   private shouldReportIssueRound(task: MultiremiTask, status: "completed" | "failed" | "cancelled", issue: MultiremiIssue): boolean {
     return (status === "completed" || status === "failed" || status === "cancelled")
-      && !!task.issueSessionId && !task.chatSessionId && !this.hasActiveTaskForIssue(issue.id);
+      && !!task.issueSessionId && !task.chatSessionId && !this.hasActiveTurnForIssue(issue.id);
   }
 
   /**
@@ -6837,12 +6869,12 @@ ${placementAfter.sql}
     return Boolean(row);
   }
 
-  private hasActiveTaskForIssue(issueId: string): boolean {
+  private hasActiveTurnForIssue(issueId: string): boolean {
     const row = this.ctx.db.query(
-      `SELECT 1 AS present FROM multiremi_turn_execution_records
-       WHERE issue_id = ?
-         AND chat_session_id IS NULL
-         AND status NOT IN ('completed', 'failed', 'cancelled')
+      `SELECT 1 AS present FROM multiremi_turns turns
+       JOIN multiremi_issue_sessions sessions ON sessions.id = turns.session_id
+       WHERE turns.issue_id = ? AND sessions.issue_id = turns.issue_id
+         AND turns.status IN ('pending', 'running', 'awaiting_human')
        LIMIT 1`,
     ).get(issueId) as { present: number } | null;
     return Boolean(row);

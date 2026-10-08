@@ -91,6 +91,237 @@ function prepareReport(store: MultiremiStore) {
 }
 
 describe("Feishu Issue topics", () => {
+  describe("MUL-531 terminal reports from commented Issues", () => {
+    function issueWithTopic(store: MultiremiStore, agentId: string, title: string) {
+      const issue = store.createIssue({ title, workspaceId: "local", assigneeType: "agent", assigneeId: agentId });
+      store.prepareFeishuIssueTopicWithinTransaction(issue);
+      const root = store.claimFeishuBotOutbound("local", "rt_bot")!;
+      store.reportFeishuBotOutbound("local", "rt_bot", root.id, {
+        claimToken: root.claimToken, status: "sent", externalMessageId: `om_root_${issue.id}`,
+      });
+      return issue;
+    }
+
+    for (const scenario of ["bound", "standalone", "cross-issue", "active", "chat"] as const) {
+      it(`${scenario}: reports each eligible topic once, deduplicated by Issue and turn`, () => {
+        const { store } = scaffold();
+        configureTopics(store);
+        const worker = store.createAgent({ name: "Leader", provider: "codex", workspaceId: "local" });
+        const issue = issueWithTopic(store, worker.id, "Review X");
+        const second = scenario === "standalone" || scenario === "cross-issue"
+          ? issueWithTopic(store, worker.id, "Review Y") : null;
+        const third = scenario === "cross-issue" ? issueWithTopic(store, worker.id, "Review Z") : null;
+        const boundIssue = scenario === "bound" || scenario === "cross-issue" ? issue : null;
+        const chat = scenario === "chat" ? store.createChatSession({ agentId: worker.id }) : null;
+        const task = store.createTask({ agentId: worker.id, workspaceId: "local", prompt: "Review work",
+          ...(boundIssue ? { issueId: boundIssue.id } : {}),
+          ...(chat ? { chatSessionId: chat.id } : {}),
+        });
+        mutateExecutionFixture(db!, "UPDATE multiremi_turn_execution_records SET status = 'running', runtime_id = 'rt_bot' WHERE id = ?", [task.id]);
+        const targets = [issue, ...(second ? [second] : []), ...(third ? [third] : [])];
+        for (const target of targets) {
+          // Two comments on one Issue must still produce one report. In the
+          // bound case they must not duplicate the existing terminal path.
+          for (let i = 0; i < 2; i++) store.createIssueComment(target.id, {
+            authorType: "agent", authorId: worker.id, taskId: task.id, body: "## 待合入确认\n请确认 PR。",
+          });
+        }
+        const active = scenario === "active"
+          ? store.createTask({ agentId: worker.id, issueId: issue.id, prompt: "Still working" }) : null;
+        if (active) mutateExecutionFixture(db!, "UPDATE multiremi_turn_execution_records SET status = 'running' WHERE id = ?", [active.id]);
+        const output = "## 待合入确认\n请确认 PR。";
+        const authority = { runtimeId: "rt_bot", workspaceId: "local", daemonId: "bot-host" };
+        store.completeTaskFromDaemon(task.id, { output }, authority);
+        // The daemon may replay its terminal report after losing the ACK.
+        store.completeTaskFromDaemon(task.id, { output }, authority);
+        const pushes = db!.query(
+          "SELECT issue_id, wake_task_id FROM multiremi_feishu_bot_round_pushes WHERE leader_task_id = ?",
+        ).all(task.id) as { issue_id: string; wake_task_id: string }[];
+        const eligible = scenario !== "active" && scenario !== "chat";
+        expect(pushes).toHaveLength(eligible ? targets.length : 0);
+        for (const target of targets) {
+          const topic = store.listChatSessions("local").find(row => store.getFeishuIssueIdForChatSession(row.id) === target.id)!;
+          const reports = store.listMessages(topic.id, { limit: 1000 }).filter(entry =>
+            entry.dedupe_key === `relay:${target.id}:${store.getTurnForAttempt(task.id)!.id}`);
+          expect(reports).toHaveLength(eligible ? 1 : 0);
+          if (eligible) {
+            expect(reports[0]).toMatchObject({ message_kind: "report", task_id: store.getTurnForAttempt(task.id)!.id });
+            expect(reports[0].metadata.message_source).toMatchObject({ issueId: target.id, taskId: task.id });
+            const push = pushes.find(row => row.issue_id === target.id)!;
+            expect(store.getTask(push.wake_task_id)?.chatSessionId).toBe(topic.id);
+            expect(db!.query("SELECT COUNT(*) AS n FROM multiremi_feishu_bot_outbound_deliveries WHERE task_id = ?")
+              .get(push.wake_task_id)).toEqual({ n: 1 });
+          }
+        }
+        if (active) expect(store.getTask(active.id)?.status).toBe("running");
+      });
+    }
+
+    for (const status of ["queued", "dispatched", "running", "awaiting_human"] as const) {
+      it(`blocks only the Issue with a ${status} task, then its final task reports normally`, () => {
+        const { store } = scaffold();
+        configureTopics(store);
+        const worker = store.createAgent({ name: "Leader", provider: "codex", workspaceId: "local" });
+        const blocked = issueWithTopic(store, worker.id, "Still working");
+        const ready = issueWithTopic(store, worker.id, "Ready for review");
+        const source = store.createTask({ agentId: worker.id, prompt: "Scheduled review" });
+        mutateExecutionFixture(db!, "UPDATE multiremi_turn_execution_records SET status = 'running' WHERE id = ?", [source.id]);
+        for (const target of [blocked, ready]) store.createIssueComment(target.id, {
+          authorType: "agent", authorId: worker.id, taskId: source.id, body: "## 待合入确认",
+        });
+        const active = store.createTask({ agentId: worker.id, issueId: blocked.id, prompt: "Continue work" });
+        mutateExecutionFixture(db!, "UPDATE multiremi_turn_execution_records SET status = ? WHERE id = ?", [status, active.id]);
+        const previousStatus = store.getIssue(ready.id)!.status;
+        const events: boolean[] = [];
+        const unsubscribe = store.onWorkspaceEvent(() => events.push(db!.inTransaction));
+        try { store.completeTask(source.id, { output: "Review both" }); }
+        finally { unsubscribe(); }
+        expect(events.length).toBeGreaterThan(0);
+        expect(events.every(inTransaction => !inTransaction)).toBe(true);
+        expect(store.getIssue(ready.id)?.status).toBe(previousStatus);
+        expect(db!.query("SELECT issue_id FROM multiremi_feishu_bot_round_pushes WHERE leader_task_id = ?")
+          .all(source.id)).toEqual([{ issue_id: ready.id }]);
+        mutateExecutionFixture(db!, "UPDATE multiremi_turn_execution_records SET status = 'running' WHERE id = ?", [active.id]);
+        store.completeTask(active.id, { output: "## 待合入确认" });
+        expect(db!.query("SELECT COUNT(*) AS n FROM multiremi_feishu_bot_round_pushes WHERE issue_id = ?")
+          .get(blocked.id)).toEqual({ n: 1 });
+        expect(store.listConversationLogShown(store.getOrCreateDefaultIssueSession(blocked.id).id)
+          .some(entry => entry.body_md === "## 待合入确认")).toBe(true);
+      });
+    }
+
+    it("ignores comments belonging to another task or a person regardless of their body", () => {
+      const { store } = scaffold();
+      configureTopics(store);
+      const worker = store.createAgent({ name: "Leader", provider: "codex", workspaceId: "local" });
+      const issue = issueWithTopic(store, worker.id, "Unrelated review");
+      const source = store.createTask({ agentId: worker.id, prompt: `Review ${issue.key}: 待合入确认` });
+      const other = store.createTask({ agentId: worker.id, prompt: "Other review" });
+      store.createIssueComment(issue.id, { authorType: "agent", authorId: worker.id, taskId: other.id, body: "## 待合入确认" });
+      store.createIssueComment(issue.id, { authorType: "member", authorId: "local", body: `## 待合入确认\n${source.id}` });
+      mutateExecutionFixture(db!, "UPDATE multiremi_turn_execution_records SET status = 'running' WHERE id = ?", [source.id]);
+      store.completeTask(source.id, { output: `## 待合入确认\n${issue.key}` });
+      expect(db!.query("SELECT COUNT(*) AS n FROM multiremi_feishu_bot_round_pushes WHERE leader_task_id = ?")
+        .get(source.id)).toEqual({ n: 0 });
+    });
+
+    for (const status of ["failed", "cancelled"] as const) {
+      it(`${status}: reports the terminal turn without changing the commented Issue status`, () => {
+        const { store } = scaffold();
+        configureTopics(store);
+        const worker = store.createAgent({ name: "Reviewer", provider: "codex" });
+        const issue = issueWithTopic(store, worker.id, "Reviewed elsewhere");
+        const task = store.createTask({ agentId: worker.id, prompt: "Review work" });
+        const turn = store.getTurnForAttempt(task.id)!;
+        mutateExecutionFixture(db!, "UPDATE multiremi_turn_execution_records SET status = 'running' WHERE id = ?", [task.id]);
+        store.createIssueComment(issue.id, { authorType: "agent", authorId: worker.id, taskId: task.id, body: "Review result" });
+        const previousStatus = store.getIssue(issue.id)!.status;
+        if (status === "failed") store.failTask(task.id, { error: "Review failed", failureReason: "agent_error" });
+        else store.cancelTurn(turn.id);
+        const topic = store.listChatSessions("local").find(row => store.getFeishuIssueIdForChatSession(row.id) === issue.id)!;
+        const reports = store.listMessages(topic.id).filter(message => message.dedupe_key === `relay:${issue.id}:${turn.id}`);
+        expect(reports).toHaveLength(1);
+        expect(reports[0]).toMatchObject({ task_id: turn.id, message_kind: "report" });
+        expect(reports[0].metadata.message_outcome).toBe(status);
+        expect(store.getTurn(turn.id)?.status).toBe(status);
+        expect(store.getIssue(issue.id)?.status).toBe(previousStatus);
+
+        // An explicit replacement keeps the same work identity, so even its
+        // later success cannot create a second report or transport push.
+        const replacement = store.retryTurn(turn.id).current_attempt_id!;
+        mutateExecutionFixture(db!, "UPDATE multiremi_turn_execution_records SET status = 'running' WHERE id = ?", [replacement]);
+        store.completeTask(replacement, { output: "Review complete" });
+        expect(store.listMessages(topic.id).filter(message => message.dedupe_key === `relay:${issue.id}:${turn.id}`)).toHaveLength(1);
+        expect(db!.query("SELECT COUNT(*) AS n FROM multiremi_feishu_bot_round_pushes WHERE issue_id = ?").get(issue.id)).toEqual({ n: 1 });
+      });
+    }
+
+    it("reports comments from an earlier attempt only when the same turn finally ends", () => {
+      const { store } = scaffold();
+      configureTopics(store);
+      const worker = store.createAgent({ name: "Reviewer", provider: "codex" });
+      const origin = issueWithTopic(store, worker.id, "Original work");
+      const target = issueWithTopic(store, worker.id, "Cross-Issue review");
+      const task = store.createTask({ agentId: worker.id, issueId: origin.id, prompt: "Review work" });
+      const turn = store.getTurnForAttempt(task.id)!;
+      mutateExecutionFixture(db!, "UPDATE multiremi_turn_execution_records SET status = 'running', runtime_id = 'rt_bot' WHERE id = ?", [task.id]);
+      store.createIssueComment(target.id, { authorType: "agent", authorId: worker.id, taskId: task.id, body: "Review before recovery" });
+      store.failTask(task.id, { error: "Runtime unavailable", failureReason: "runtime_offline" });
+      const replacement = store.getTurn(turn.id)!.current_attempt_id!;
+      expect(replacement).not.toBe(task.id);
+      expect(store.getTurn(turn.id)?.status).toBe("running");
+      expect(db!.query("SELECT COUNT(*) AS n FROM multiremi_feishu_bot_round_pushes").get()).toEqual({ n: 0 });
+      mutateExecutionFixture(db!, "UPDATE multiremi_turn_execution_records SET status = 'running' WHERE id = ?", [replacement]);
+      store.completeTask(replacement, { output: "Review finished" });
+      for (const issue of [origin, target]) {
+        const topic = store.listChatSessions("local").find(row => store.getFeishuIssueIdForChatSession(row.id) === issue.id)!;
+        const reports = store.listMessages(topic.id).filter(message => message.dedupe_key === `relay:${issue.id}:${turn.id}`);
+        expect(reports).toHaveLength(1);
+        expect(reports[0]).toMatchObject({ task_id: turn.id, message_kind: "report" });
+        expect(reports[0].metadata.message_outcome).toBe("done");
+      }
+    });
+
+    it("reads canonical Issue messages after the retired comment table is removed; an active Chat does not suppress it", () => {
+      const { store } = scaffold();
+      configureTopics(store);
+      const worker = store.createAgent({ name: "Reviewer", provider: "codex" });
+      const issue = issueWithTopic(store, worker.id, "Unified review");
+      const task = store.createTask({ agentId: worker.id, prompt: "Review work" });
+      const turn = store.getTurnForAttempt(task.id)!;
+      const session = store.getOrCreateDefaultIssueSession(issue.id);
+      db!.exec("DROP TABLE multiremi_issue_comments");
+      store.sendMessage({ session_id: session.id, sender: { type: "agent", id: worker.id }, source_turn_id: turn.id,
+        to: { type: "none" }, message_kind: "final", body_md: "Ready for review", wake_requested: "inbox_only" });
+      const chat = store.listChatSessions("local").find(row => store.getFeishuIssueIdForChatSession(row.id) === issue.id)!;
+      const chatTask = store.createTask({ agentId: chat.agentId, chatSessionId: chat.id, issueId: issue.id, prompt: "Chat in progress" });
+      mutateExecutionFixture(db!, "UPDATE multiremi_turn_execution_records SET status = 'running' WHERE id IN (?, ?)", [task.id, chatTask.id]);
+      store.completeTask(task.id, { output: "Review finished" });
+      expect(db!.query("SELECT COUNT(*) AS n FROM multiremi_feishu_bot_round_pushes WHERE leader_task_id = ?").get(task.id)).toEqual({ n: 1 });
+      expect(store.getTask(chatTask.id)?.status).toBe("running");
+    });
+
+    it("rolls back reports for every commented Issue and publishes no events if the second topic fails", () => {
+      const { store } = scaffold();
+      configureTopics(store);
+      const worker = store.createAgent({ name: "Scheduled leader", provider: "codex", workspaceId: "local" });
+      const issue = issueWithTopic(store, worker.id, "Review X");
+      const second = issueWithTopic(store, worker.id, "Review Y");
+      const task = store.createTask({ agentId: worker.id, prompt: "Scheduled review" });
+      mutateExecutionFixture(db!, "UPDATE multiremi_turn_execution_records SET status = 'running' WHERE id = ?", [task.id]);
+      store.createIssueComment(issue.id, { authorType: "agent", authorId: worker.id, taskId: task.id, body: "## 待合入确认" });
+      store.createIssueComment(second.id, { authorType: "agent", authorId: worker.id, taskId: task.id, body: "## 待合入确认" });
+      const events: string[] = [];
+      const unsubscribe = store.onWorkspaceEvent(event => events.push(event.type));
+      const database = db!;
+      const originalRun = database.run;
+      let prepared = 0;
+      database.run = function (sql, ...params) {
+        const result = originalRun.call(this, sql, ...params);
+        if (sql.includes("INSERT INTO multiremi_feishu_bot_round_pushes") && ++prepared === 2) {
+          throw new Error("MUL-531 rollback injection");
+        }
+        return result;
+      };
+      try {
+        expect(() => store.completeTask(task.id, { output: "## 待合入确认" })).toThrow("MUL-531 rollback injection");
+      } finally {
+        database.run = originalRun;
+        unsubscribe();
+      }
+      expect(store.getTask(task.id)?.status).toBe("running");
+      expect(prepared).toBe(2);
+      expect(events).toEqual([]);
+      expect(db!.query("SELECT COUNT(*) AS n FROM multiremi_feishu_bot_round_pushes WHERE leader_task_id = ?")
+        .get(task.id)).toEqual({ n: 0 });
+      for (const target of [issue, second]) {
+        const topic = store.listChatSessions("local").find(row => store.getFeishuIssueIdForChatSession(row.id) === target.id)!;
+        expect(store.listMessages(topic.id, { limit: 1000 }).filter(entry =>
+          entry.dedupe_key === `relay:${target.id}:${store.getTurnForAttempt(task.id)!.id}`)).toHaveLength(0);
+      }
+    });
+  });
+
   describe("unexpected configuration errors", () => {
     it("propagates an ordinary Error from the settings getter unchanged", () => {
       const failure = new Error("Unexpected settings getter failure");

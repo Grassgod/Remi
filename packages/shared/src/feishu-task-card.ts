@@ -481,7 +481,7 @@ export function buildIssueDecisionCard(
       tag: "input", name: `${marker}_answer`, input_type: "multiline_text", width: "fill",
       label: { tag: "plain_text", content: "自定义回答" },
       placeholder: { tag: "plain_text", content: "可以补充要求，也可以只在这里回答" },
-      max_length: 2000, rows: 3,
+      max_length: 1000, rows: 3,
     });
     form.push({
       tag: "button", name: marker, text: { tag: "plain_text", content: "提交" },
