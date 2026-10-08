@@ -60,6 +60,7 @@ function authorizeActor(ctx: StoreContext, actor: IssueDeliveryActor, expected: 
 export function submitIssueDelivery(ctx: StoreContext, issueId: string, input: SubmitIssueDeliveryInput, actor: IssueDeliveryActor): IssueDelivery {
   const events = createCommitEventQueue();
   const changes: ChildStatusChangeCollector = [];
+  let outcome: ReturnType<ReturnType<StoreContext['issues']>['updateIssueWithinTransaction']> | undefined;
   const result = ctx.db.transaction(() => {
     let issue = ctx.issues().getIssue(issueId);
     if (!issue) throw new IssueDeliveryError('issue_not_found', 'Issue not found', 404);
@@ -86,7 +87,9 @@ export function submitIssueDelivery(ctx: StoreContext, issueId: string, input: S
     if (!message.metadata.issue_delivery) throw new IssueDeliveryError('issue_delivery_dedupe_conflict', 'Delivery key belongs to another message');
     const stored = {...message.metadata.issue_delivery as IssueDelivery,id:message.id,createdAt:message.created_at};
     if (message.id === id) {
-      ctx.issues().updateIssueWithinTransaction(issueId,{status:'in_review',actorType:actor.type,actorId:actor.id}, {}, changes, events);
+      outcome = ctx.issues().updateIssueWithinTransaction(issueId,{status:'in_review',actorType:actor.type,actorId:actor.id}, {}, changes, events);
+      events.workspace.push({type:'issue:updated',workspaceId:issue.workspaceId,actorType:actor.type,actorId:actor.id,
+        payload:{issue:outcome.issue,status_changed:outcome.previous.status !== outcome.issue.status,prev_status:outcome.previous.status}});
       ctx.appendIssueActivity(issueId,{actorType:actor.type,actorId:actor.id,type:'issue_delivery_submitted',body:summary,data:{deliveryId:message.id,reviewOwner:responsibility.reviewOwner}},events);
       if (issue.parentIssueId && responsibility.reviewOwner.type === 'agent') {
         const parentSession = ctx.issueSessions().getOrCreateDefaultIssueSessionWithinTransaction(issue.parentIssueId);
@@ -97,14 +100,15 @@ export function submitIssueDelivery(ctx: StoreContext, issueId: string, input: S
     }
     return stored;
   })();
-  ctx.emitCommitEvents(events);
-  ctx.tasks().runCollectedChildStatusChanges(changes);
+  if (outcome) ctx.issues().runIssueUpdatePostCommit(outcome,{status:'in_review'},changes,events);
+  else ctx.emitCommitEvents(events);
   return result;
 }
 
 export function respondIssueDelivery(ctx: StoreContext, issueId: string, deliveryId: string, input: RespondIssueDeliveryInput, actor: IssueDeliveryActor): IssueDelivery {
   const events = createCommitEventQueue();
   const changes: ChildStatusChangeCollector = [];
+  let outcome: ReturnType<ReturnType<StoreContext['issues']>['updateIssueWithinTransaction']> | undefined;
   const result = ctx.db.transaction(() => {
     let issue = ctx.issues().getIssue(issueId);
     if (!issue) throw new IssueDeliveryError('issue_not_found','Issue not found',404);
@@ -138,7 +142,7 @@ export function respondIssueDelivery(ctx: StoreContext, issueId: string, deliver
     const updated: IssueDelivery = {...delivery,status:input.action === 'accept' ? 'accepted' : 'returned',responseMessageId:response.id,responseBody:response.body_md,respondedAt:response.created_at};
     const original = getMessage(ctx,delivery.id)!;
     ctx.conversationLog().updateConversationLogWithinTransaction(original.session_id,original.seq,{deferEmit:true,fields:{metadata:{...original.metadata,issue_delivery:updated}}});
-    ctx.issues().updateIssueWithinTransaction(issueId,{status:input.action === 'accept' ? 'done' : 'in_progress',actorType:actor.type,actorId:responseActorId},
+    outcome = ctx.issues().updateIssueWithinTransaction(issueId,{status:input.action === 'accept' ? 'done' : 'in_progress',actorType:actor.type,actorId:responseActorId},
       {allowParentStatusGuardBypass:true,...(input.action === 'accept' ? {acceptedDeliveryId:deliveryId} : {})},changes,events);
     ctx.appendIssueActivity(issueId,{actorType:actor.type,actorId:responseActorId,type:input.action === 'accept' ? 'issue_delivery_accepted' : 'issue_delivery_returned',
       body:input.body ?? null,data:{deliveryId,responseMessageId:response.id,reviewOwner:responsibility.reviewOwner,...(authorizedAgent ? {authorization:grant} : {})}},events);
@@ -146,10 +150,12 @@ export function respondIssueDelivery(ctx: StoreContext, issueId: string, deliver
       to:{type:'agent',ref:delivery.submittedBy.id},message_kind:'status',wake_requested:'now',
       body_md:`Delivery ${delivery.id} returned: ${input.body}`,execution_scope:typeof original.metadata.execution_scope === 'string' ? original.metadata.execution_scope : '',
       dedupe_key:`issue_delivery_return:${delivery.id}`,metadata:{issue_delivery_id:delivery.id,response_message_id:response.id}},events);
+    events.workspace.push({type:'issue:updated',workspaceId:issue.workspaceId,actorType:actor.type,actorId:responseActorId,
+      payload:{issue:ctx.issues().getIssue(issueId),status_changed:outcome.previous.status !== outcome.issue.status,prev_status:outcome.previous.status}});
     return updated;
   })();
-  ctx.emitCommitEvents(events);
-  ctx.tasks().runCollectedChildStatusChanges(changes);
+  if (outcome) ctx.issues().runIssueUpdatePostCommit(outcome,{status:input.action === 'accept' ? 'done' : 'in_progress'},changes,events);
+  else ctx.emitCommitEvents(events);
   return result;
 }
 
