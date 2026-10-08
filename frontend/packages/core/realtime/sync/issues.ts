@@ -28,11 +28,13 @@ import type { SyncContext, SyncModule } from "./types";
 export function createIssueHandlers({ qc }: SyncContext): SyncModule {
   const invalidateDecisionState = (payload: unknown) => {
     const { issue_id: issueId } = payload as IssueDecisionChangedPayload;
-    if (!issueId) return;
     const wsId = getCurrentWsId();
     if (!wsId) return;
+    qc.invalidateQueries({ queryKey: ["question", wsId] });
+    if (!issueId) { onInboxInvalidate(qc, wsId); return; }
     qc.invalidateQueries({ queryKey: issueKeys.detail(wsId, issueId) });
     qc.invalidateQueries({ queryKey: issueKeys.decisions(wsId, issueId) });
+    qc.invalidateQueries({ queryKey: issueKeys.questions(wsId, issueId) });
     onInboxInvalidate(qc, wsId);
   };
 
@@ -44,6 +46,11 @@ export function createIssueHandlers({ qc }: SyncContext): SyncModule {
         const wsId = getCurrentWsId();
         if (wsId) {
           onIssueUpdated(qc, wsId, issue);
+          // Parent ownership changes also alter every descendant's derived chain.
+          qc.invalidateQueries({ queryKey: [...issueKeys.all(wsId), "responsibility"] });
+          qc.invalidateQueries({ queryKey: [...issueKeys.all(wsId), "deliveries"] });
+          qc.invalidateQueries({ queryKey: [...issueKeys.all(wsId), "questions"] });
+          qc.invalidateQueries({ queryKey: ["question", wsId] });
           if (issue.status) {
             onInboxIssueStatusChanged(qc, wsId, issue.id, issue.status);
           }

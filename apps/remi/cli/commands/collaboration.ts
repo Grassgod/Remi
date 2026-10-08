@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { open } from "node:fs/promises";
 import { basename } from "node:path";
+import { responsibilityCommandSpecs } from "./responsibility.js";
 import { CHAT_ATTACHMENT_MAX_BYTES } from "@multiremi/contracts/attachments.js";
 import type { MultiremiSessionInheritedContext } from "@multiremi/contracts/types.js";
 import {
@@ -62,6 +63,7 @@ const ISSUE_LIST_OPTIONS: readonly CliOptionSpec[] = [
 ];
 
 const ISSUE_FIELDS: readonly CliOptionSpec[] = [
+  { name: "responsible-member", type: "string", valueName: "member-id", description: "Explicit designated human for a root Issue" },
   { name: "runtime-workspace", type: "string", valueName: "id", description: "Persistent Runtime workspace (immutable after execution)" },
   { name: "title", type: "string", valueName: "title", description: "Issue title" },
   { name: "description", type: "string", valueName: "text", description: "Issue description" },
@@ -136,6 +138,7 @@ export function collaborationCommandSpecs(): CommandSpec[] {
     ...labelCommandSpecs(),
     ...chatCommandSpecs(),
     ...taskCommandSpecs(),
+    ...responsibilityCommandSpecs(),
   ];
 }
 
@@ -577,6 +580,7 @@ function issueExtendedSpecs(): CommandSpec[] {
       await mutateAndRender(invocation, "POST", "/api/issues/batch-delete", await requestBody(invocation));
     }),
     nativeSpec("issue.quick-create", ["issue", "quick-create"], "Quick-create an issue", "write", HUMAN, [], [...INPUT_OPTIONS,
+      { name: "responsible-member", type: "string", valueName: "member-id", description: "Designated root human; children inherit" },
       { name: "agent", type: "string", valueName: "id", description: "Creator agent", conflictsWith: ["squad"] },
       { name: "squad", type: "string", valueName: "id", description: "Creator squad", conflictsWith: ["agent"] },
       { name: "prompt", type: "string", valueName: "text", description: "Work to plan" },
@@ -586,6 +590,7 @@ function issueExtendedSpecs(): CommandSpec[] {
       await mutateAndRender(invocation, "POST", "/api/issues/quick-create", await requestBody(invocation, {
         workspace_id: requiredWorkspace(invocation), agent_id: stringOption(invocation, "agent") ?? undefined,
         squad_id: stringOption(invocation, "squad") ?? undefined, prompt: stringOption(invocation, "prompt") ?? undefined,
+        responsible_member_id: stringOption(invocation, "responsible-member") ?? undefined,
         project_id: stringOption(invocation, "project") ?? undefined, runtime_workspace_id: stringOption(invocation, "runtime-workspace") ?? undefined,
       }));
     }),

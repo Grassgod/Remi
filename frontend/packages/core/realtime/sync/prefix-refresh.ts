@@ -69,6 +69,8 @@ export function createPrefixRefresh({ qc, authStore }: SyncContext): {
       const wsId = getCurrentWsId();
       if (wsId) {
         qc.invalidateQueries({ queryKey: workspaceKeys.agents(wsId) });
+        qc.invalidateQueries({ queryKey: [...issueKeys.all(wsId), "responsibility"] });
+        qc.invalidateQueries({ queryKey: ["question", wsId] });
         qc.invalidateQueries({ queryKey: agentPluginKeys.all(wsId) });
         // Squad members status is derived per agent, so any agent
         // change (status flip, archive, runtime swap) needs to refresh the
@@ -79,7 +81,11 @@ export function createPrefixRefresh({ qc, authStore }: SyncContext): {
     },
     member: () => {
       const wsId = getCurrentWsId();
-      if (wsId) qc.invalidateQueries({ queryKey: workspaceKeys.members(wsId) });
+      if (wsId) {
+        qc.invalidateQueries({ queryKey: workspaceKeys.members(wsId) });
+        qc.invalidateQueries({ queryKey: [...issueKeys.all(wsId), "responsibility"] });
+        qc.invalidateQueries({ queryKey: ["question", wsId] });
+      }
     },
     // workspace:updated is handled by the specific handler below
     // (compares prefixes to decide whether to also invalidate issues).
@@ -118,6 +124,7 @@ export function createPrefixRefresh({ qc, authStore }: SyncContext): {
         qc.invalidateQueries({ queryKey: workspaceKeys.squads(wsId) });
         // squad:deleted triggers assignee transfer — refresh issues too.
         qc.invalidateQueries({ queryKey: issueKeys.all(wsId) });
+        qc.invalidateQueries({ queryKey: ["question", wsId] });
       }
     },
     label: () => {

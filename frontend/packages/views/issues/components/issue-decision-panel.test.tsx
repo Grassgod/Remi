@@ -20,7 +20,7 @@ vi.mock("@multiremi/core/api", async (importOriginal) => ({
 
 vi.mock("@multiremi/core/hooks", () => ({ useWorkspaceId: () => "ws-1" }));
 
-import { IssueDecisionBanner, IssueDecisionPanel } from "./issue-decision-panel";
+import { IssueDecisionBanner, MessageDecisionCard } from "./issue-decision-panel";
 
 function renderBanner(count: number) {
   return render(
@@ -35,7 +35,7 @@ describe("IssueDecisionBanner", () => {
     const { rerender } = renderBanner(1);
     const first = document.querySelector("[data-issue-decision-banner]");
     expect(first).toHaveClass("h-10");
-    expect(screen.getByText("Waiting for your decision · 1")).toBeInTheDocument();
+    expect(screen.getByText("Pending questions · 1")).toBeInTheDocument();
 
     rerender(
       <I18nProvider locale="en" resources={{ en: { issues: enIssues } }}>
@@ -43,7 +43,7 @@ describe("IssueDecisionBanner", () => {
       </I18nProvider>,
     );
     expect(document.querySelector("[data-issue-decision-banner]")).toBe(first);
-    expect(screen.getByText("Waiting for your decision · 27")).toBeInTheDocument();
+    expect(screen.getByText("Pending questions · 27")).toBeInTheDocument();
     expect(first).toHaveClass("h-10");
   });
 
@@ -58,7 +58,7 @@ describe("IssueDecisionBanner", () => {
         <IssueDecisionBanner count={0} showOwnerOnly onOpen={vi.fn()} />
       </I18nProvider>,
     );
-    expect(screen.getByRole("button", { name: "Owner decisions" })).toHaveClass("h-10");
+    expect(screen.getByRole("button", { name: "Questions and history" })).toHaveClass("h-10");
     expect(screen.queryByText(/Waiting for your decision/)).not.toBeInTheDocument();
   });
 
@@ -80,14 +80,13 @@ function mountPanel() {
   mockApi.listIssueSessions.mockResolvedValue([{ id: "sess_1" }]);
   mockApi.listMessages.mockResolvedValue({ messages: [decision], next_cursor: null });
   return render(<QueryClientProvider client={qc}><I18nProvider locale="en" resources={{ en: { issues: enIssues, chat: enChat, messages: enMessages } }}>
-    <IssueDecisionPanel issueId="issue-1" pendingCount={1} canAnswer getActorName={(_type, id) => id} />
+    <MessageDecisionCard message={decision} canAnswer getActorName={(_type, id) => id} />
   </I18nProvider></QueryClientProvider>);
 }
 describe("decision message replies", () => {
-  it("loads decisions only on opening and posts the option value with reply_to_id", async () => {
+  it("posts historical decision replies with the option value and original reply_to_id", async () => {
     mockApi.listMessages.mockClear(); mockApi.sendMessage.mockResolvedValue({ message: {} }); mountPanel();
     expect(mockApi.listMessages).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole("button", { name: /Waiting for your decision/ }));
     fireEvent.click(await screen.findByRole("button", { name: "Merge" }));
     fireEvent.click(screen.getByRole("button", { name: "Reply" }));
     await screen.findByRole("button", { name: "Resolved" });
@@ -98,7 +97,6 @@ describe("decision message replies", () => {
   });
   it("shows a duplicate-answer conflict without marking the reply successful", async () => {
     mockApi.sendMessage.mockRejectedValue(new Error("Decision is settled")); mountPanel();
-    fireEvent.click(screen.getByRole("button", { name: /Waiting for your decision/ }));
     fireEvent.click(await screen.findByRole("button", { name: "Merge" }));
     fireEvent.click(screen.getByRole("button", { name: "Reply" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("Decision is settled");

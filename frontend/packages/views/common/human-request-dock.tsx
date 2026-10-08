@@ -1,7 +1,7 @@
 "use client";
 
 import { useLayoutEffect, useRef, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { MessageCircleQuestion, ShieldAlert } from "lucide-react";
 import {
   humanRequestsOptions,
@@ -14,6 +14,7 @@ import { Input } from "@multiremi/ui/components/ui/input";
 import { cn } from "@multiremi/ui/lib/utils";
 import { useT } from "../i18n";
 import { Markdown } from "./markdown";
+import { LinkedQuestion } from "./linked-question";
 
 const COLLAPSED_CONTEXT_HEIGHT_PX = 128;
 
@@ -39,7 +40,7 @@ export function HumanRequestDock({ taskId, sessionId, turnId, enabled = true }: 
   return (
     <div className="flex flex-col gap-2 border-t border-border bg-muted/30 px-3 py-2">
       {pending.map((request) => (
-        <HumanRequestCard key={request.id} taskId={taskId} request={request} />
+        <LinkedQuestion key={request.id} id={request.id} />
       ))}
     </div>
   );
@@ -122,18 +123,23 @@ export function QuestionCard({
   request,
   onResponded,
   readOnly = false,
+  onAnswer,
 }: {
   taskId: string;
   request: TaskHumanRequest;
   onResponded?: () => void;
   readOnly?: boolean;
+  onAnswer?: (response: Record<string, unknown>) => Promise<unknown>;
 }) {
   const { t } = useT("chat");
   const respond = useRespondHumanRequest();
+  const unifiedAnswer = useMutation({ mutationFn: async (response: Record<string, unknown>) => onAnswer?.(response), onSuccess: onResponded });
+  const submission = onAnswer ? unifiedAnswer : respond;
   const questions = request.payload.questions ?? [];
   const message = request.payload.message?.trim();
   const showMessage = Boolean(message && message !== questions[0]?.question.question.trim());
   const [answers, setAnswers] = useState<Record<string, string>>({});
+  const [picks, setPicks] = useState<Record<string, string[]>>({});
   // Free-text "other" answers, kept separate from option picks. A non-empty
   // other-answer wins over a picked option, matching the agent's read-back
   // precedence for its custom-answer field.
@@ -144,16 +150,16 @@ export function QuestionCard({
   };
   const toggleOption = (question: HumanRequestQuestion["question"], label: string) => {
     if (!question.multiSelect) {
-      setAnswer(question.question, label);
+      setPicks(old => ({ ...old, [question.question]: [label] }));
       return;
     }
-    const chosen = new Set((answers[question.question] ?? "").split(", ").filter(Boolean));
+    const chosen = new Set(picks[question.question] ?? []);
     if (chosen.has(label)) chosen.delete(label);
     else chosen.add(label);
-    setAnswer(question.question, [...chosen].join(", "));
+    setPicks(old => ({ ...old, [question.question]: [...chosen] }));
   };
   const effectiveAnswer = (question: string) =>
-    (others[question] ?? "").trim() || (answers[question] ?? "").trim();
+    (others[question] ?? "").trim() || (picks[question] ?? []).join(", ") || (answers[question] ?? "").trim();
   const answered = questions.every(({ question }) => effectiveAnswer(question.question).length > 0);
   const submitAnswers = () =>
     Object.fromEntries(questions.map(({ question }) => [question.question, effectiveAnswer(question.question)]));
@@ -182,9 +188,7 @@ export function QuestionCard({
                   {question.options.map((option) => {
                     const selected =
                       customText.length === 0 &&
-                      (question.multiSelect
-                        ? (answers[question.question] ?? "").split(", ").includes(option.label)
-                        : answers[question.question] === option.label);
+                      (picks[question.question] ?? []).includes(option.label);
                     return readOnly ? (
                       <span
                         key={option.label}
@@ -235,8 +239,8 @@ export function QuestionCard({
         <div className="mt-2 flex justify-end">
           <Button
             size="sm"
-            disabled={!answered || respond.isPending || respond.isSuccess}
-            onClick={() => respond.mutate(
+            disabled={!answered || submission.isPending || submission.isSuccess}
+            onClick={() => onAnswer ? unifiedAnswer.mutate({ answers: submitAnswers() }) : respond.mutate(
               { taskId, requestId: request.id,
                 sessionId: request.sessionId, response: { answers: submitAnswers() } },
               { onSuccess: onResponded },
@@ -246,8 +250,8 @@ export function QuestionCard({
           </Button>
         </div>
       )}
-      {respond.isError && (
-        <div className="mt-2 text-xs text-destructive">{t(($) => $.human_requests.response_failed)}</div>
+      {submission.isError && (
+        <div role="alert" className="mt-2 text-xs text-destructive">{submission.error?.message ?? t(($) => $.human_requests.response_failed)}</div>
       )}
     </div>
   );

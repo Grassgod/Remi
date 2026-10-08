@@ -59,6 +59,8 @@ export function createChatHandlers({ qc }: SyncContext): SyncModule {
     if (!wsId) return;
     void qc.invalidateQueries({ queryKey: issueKeys.detailAll(wsId) });
     void qc.invalidateQueries({ queryKey: issueKeys.decisionsAll(wsId) });
+    void qc.invalidateQueries({ queryKey: [...issueKeys.all(wsId), "questions"] });
+    void qc.invalidateQueries({ queryKey: ["question", wsId] });
   };
   // Helpers reused by chat lifecycle handlers.
   const invalidateUnified = () => {

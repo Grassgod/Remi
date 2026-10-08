@@ -2,7 +2,36 @@
 
 Communication uses `remi message`, addressed unread messages use `remi inbox`,
 and execution uses `remi turn`. Issue, Chat and Autopilot remain conversation containers.
-A decision is a message with options; its answer is a reply to that message.
+An ordinary decision is a message with options and a same-session reply. A persisted
+business question uses the versioned `message question` actions below.
+
+Issue responsibility is resolved with `remi issue responsibility <issue>`: the
+execution coordinator belongs to the Issue, the direct parent coordinator reviews
+child results, and the root explicitly designates a human. Create/update accepts
+`--responsible-member <workspace-member-id>`; `remi issue responsible set <root>
+--member <member-id>` explicitly transfers it and preserves ownership audit.
+Children inherit the root human and never persist an independent copy.
+
+`remi issue delivery list|submit <issue>` reads or submits formal delivery evidence;
+submit requires the execution coordinator's identity and `--summary` or JSON input.
+`remi issue delivery accept|return <issue> <delivery> --revision <responsibilityRevision>`
+reviews that exact delivery (`return` requires `--reason`). The designated human can
+use `remi issue delivery authorize <issue> <delivery> --revision <revision> --agent
+<execution-owner>` or `--revoke`; this authorization applies only to that delivery
+and ownership version. Task completion and ordinary parent-done grants do not
+replace formal acceptance.
+
+`remi issue question list <issue>` and `remi message question get <Q>` expose the
+one original question, unchanged options, separate Remi summary, current handler,
+routing/answer history and actual consumption state. Actions use
+`remi message question answer|escalate|transfer|present|continue|close <Q> --revision
+<route_revision>`. Answer takes `--data '{"response":{"answers":{"question":"answer"}}}'`;
+escalate/transfer/close require `--reason`, and present requires `--summary`. Close
+preserves the original question and history instead of deleting it. Explicit
+human revisions additionally require `--revise --answer-revision <answer_revision>
+--reason <reason>`. Continue is an exceptional human authorization for detached
+calls, not an extra button required after ordinary answers. All replies return to
+the original Q session; a parent/Remi notification references its Q ID.
 
 Unified usage uses `remi dashboard usage report` with `--days n|all`,
 `--since`, `--until`, `--tz`, `--project` and `--runtime`.
@@ -571,8 +600,10 @@ they cannot become undocumented bypasses.
 
 Prompts and durable examples use message / inbox / turn commands. Folded messages
 expand with `remi message get <message>`. Delegation is a directed request, progress
-is a report, and decisions use `--kind decision --option ...`; an answer uses
-`--reply-to <message> --option ...`. Use `remi turn get --input --attempts` for
+is a report. AskUserQuestion retains one original Q and uses the versioned
+`remi message question` actions above; ordinary decision messages use
+`--kind decision --option ...` and same-session `--reply-to <message>` replies.
+Use `remi turn get --input --attempts` for
 execution evidence. Session result publishing and project knowledge commands retain
 their separate responsibilities.
 
@@ -618,12 +649,12 @@ serve the new message and cursor contract. Old item IDs are rejected locally.
 | `remi chat message create` | `remi message send <conversation>` |
 | `remi chat attachment send` | `remi message send --attachment <path>` |
 | `remi issue decision request` | `remi message send --kind decision --option <option>` |
-| `remi issue decision answer` | `remi message send --reply-to <message> --option <option>` |
-| `remi issue decision list` | `remi message list <conversation> --kind decision` |
-| `remi issue decision escalate` | `remi message send --kind decision --to <member>` |
-| `remi issue decision withdraw` | `remi message delete <message>` |
+| `remi issue decision answer` | `remi message question answer <question> --revision <route_revision> --data <json>` |
+| `remi issue decision list` | `remi issue question list <issue>` |
+| `remi issue decision escalate` | `remi message question escalate <question> --revision <route_revision> --reason <reason>` |
+| `remi issue decision withdraw` | `remi message question close <question> --revision <route_revision> --reason <reason>` |
 | `remi task request list` | `remi inbox` |
-| `remi task request respond` | `remi message send --reply-to <message> --option <option>` |
+| `remi task request respond` | `remi message question answer <question> --revision <route_revision> --data <json>` |
 | `remi comment list` | `remi message list <conversation>` |
 | `remi comment update` | `remi message edit <message>` |
 | `remi comment delete` | `remi message delete <message>` |

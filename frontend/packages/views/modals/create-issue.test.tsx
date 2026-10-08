@@ -67,6 +67,8 @@ vi.mock("@multiremi/core/paths", () => ({
 vi.mock("@multiremi/core/hooks", () => ({
   useWorkspaceId: () => "ws-test",
 }));
+vi.mock("@multiremi/core/auth", () => ({ useAuthStore: (selector: (state: { user: { id: string } }) => unknown) => selector({ user: { id: "user-human" } }) }));
+vi.mock("@multiremi/core/workspace/queries", () => ({ memberListOptions: () => ({ queryKey: ["members", "ws-test"], queryFn: async () => [{ id: "member-human", user_id: "user-human", name: "Human" }] }) }));
 
 vi.mock("@multiremi/core/issues/queries", () => ({
   issueDetailOptions: (wsId: string, id: string) => ({
@@ -409,6 +411,7 @@ describe("CreateIssueModal", () => {
         due_date: undefined,
         attachment_ids: undefined,
         parent_issue_id: undefined,
+        responsible_member_id: "member-human",
         project_id: null,
         runtime_workspace_id: null,
       });
@@ -457,6 +460,7 @@ describe("CreateIssueModal", () => {
         due_date: undefined,
         attachment_ids: undefined,
         parent_issue_id: undefined,
+        responsible_member_id: "member-human",
         project_id: null,
         runtime_workspace_id: null,
       });

@@ -50,7 +50,9 @@ Chat 列表和详情的未读数来自创建者对应的 workspace member lane�
 
 Chat 队列读取发给当前 agent、位于实际 cursor_seq 之后的消息；编辑/删除使用 message ID，不提供 prioritize。删除帧的 `fields.deleted_at` 会立即移除副本显示行并保留 revision 水位；IssueLogReplica 以 C7 快照决定行是否存在，只为仍在快照中的行保留已补齐的显示字段，避免旧窗口合并回已删正文。HTTP/SSR 窗口导入完成后才应用完整快照，避免 seq 0 和正文分批写入时丢失首屏行；live entry 的成功回读若已找不到该行，则传递最小隐藏标记，保留同批其他帧，网络与接口失败仍上报错误。重连重放或刷新回填的旧行不能恢复正文，主消息区也过滤带 `deleted_at` 的 canonical 消息。409 消费冲突会刷新队列并保留草稿供复制。消息附件发送后固定，编辑正文不会静默重绑附件；只有原发送人显示编辑/删除入口。回归见 [ChatWindow 日志链路集成测试](../../frontend/packages/views/chat/components/chat-window-log.integration.test.tsx)和 [IssueLogReplica 测试](../../frontend/packages/core/session-log/issue-log.test.ts)。
 
-决定面板按需查各 Issue 对话的 decision 消息；选项提交 value，答复携带原 decision 的 reply_to_id 和它的 session_id。权限/提问表单发送结构化 response，不走退役的 task/issue 答复端点。回答与记录通过 canonical reply 消息展示；表单失败保留输入，解决不自动标读。
+决定面板按需读取 `/api/issues/:id/questions` 的统一原 Q 投影；[共享问题卡](../../frontend/packages/views/common/question-card.tsx)显示原问题、独立 Remi 总结、来源、当前处理者、路由版本和转交/回答历史。Issue 主线、Chat 通知、Inbox 和运行中的问题 dock 沿 `metadata.question` 或 `root_question_id` 读取同一个 Q，答复使用版本校验的 `/api/messages/:id/question/answer`，最终由服务端写回原会话。原权限提问同样读取 Q，保持单选并提交原 `option_id`；原上下文单独按 Markdown 折叠展示。表单失败保留输入；`wait_status` 区分原调用等待、已结束、已消费与续接消费，不能把答案保存成功写成恢复成功。未知展示枚举保留原值。历史入口在责任侧栏常驻，最后一个待答结束后仍可打开。
+
+[责任与交付侧栏](../../frontend/packages/views/issues/components/issue-responsibility-section.tsx)读取服务端统一责任解析，分别显示本单执行统筹、父单结果责任和顶层指定人类。创建顶层单默认显示当前真实成员并允许选择；子单不复制根责任字段。根责任移交调用 Issue update，并保留服务端审计。正式交付由执行统筹提交，指定人类按具体交付接受、退回或授予绑定交付版本的代理验收授权；页面不再凭 Task completed 提供直接完成按钮，也不使用一般 parent-done grant 替代正式验收。
 
 评论与会话日志的 [EntryHtml](../../frontend/packages/views/common/session-log/entry-html.tsx) 会把服务端 `div[data-type="fileCard"]` 增强成统一附件卡片。静态 [entry-html.css](../../frontend/packages/views/common/session-log/entry-html.css) 在首屏给每个槽位预留固定 40px（32px 卡片加上下各 4px 间距），普通和紧凑密度共用；图片与 HTML 文件也保持卡片外观，预览在弹窗中打开。附件记录通过 `attachments` 传入 provider，预览与下载按附件 ID 走现有链路；没有记录时使用 URL 模式，不合法 href 只显示文件名。
 

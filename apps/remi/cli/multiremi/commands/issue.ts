@@ -527,6 +527,7 @@ export async function issueCreate(options: CliOptions): Promise<void> {
   addStringBodyField(body, options, "project_id", "project", false, true);
   addStringBodyField(body, options, "runtime_workspace_id", "runtime-workspace", false, true);
   addStringBodyField(body, options, "parent_issue_id", "parent", false, true);
+  addStringBodyField(body, options, "responsible_member_id", "responsible-member", false, false);
   // MUL-400 E3: declare prerequisites at creation; the server writes them in
   // the same transaction and parks the issue at backlog while they are unmet.
   const blockedBy = stringListOption(options, "blocked-by", "blockedBy");
@@ -795,6 +796,7 @@ export async function issueUpdate(issueId: string, options: CliOptions): Promise
   addStringBodyField(body, options, "project_id", "project", false, true);
   addStringBodyField(body, options, "runtime_workspace_id", "runtime-workspace", false, true);
   addStringBodyField(body, options, "parent_issue_id", "parent", false, true);
+  addStringBodyField(body, options, "responsible_member_id", "responsible-member", false, false);
   addStringBodyField(body, options, "start_date", "start-date", false, true);
   addStringBodyField(body, options, "due_date", "due-date", false, true);
   addAssigneeBodyFields(body, options, "assignee-id", "assignee-type", "assignee");

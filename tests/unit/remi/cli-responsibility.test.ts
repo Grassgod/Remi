@@ -1,0 +1,59 @@
+import { afterEach, describe, expect, it } from "bun:test";
+import { CommandRegistry } from "../../../apps/remi/cli/core/index.js";
+import { responsibilityCommandSpecs } from "../../../apps/remi/cli/commands/responsibility.js";
+const specs = responsibilityCommandSpecs();
+const registry = new CommandRegistry();
+for (const command of specs) registry.register(command);
+const fetchBefore = globalThis.fetch, logBefore = console.log, errorBefore = console.error;
+const envNames = ["MULTIREMI_SERVER_URL", "MULTIREMI_WORKSPACE_ID", "MULTIREMI_TOKEN"] as const;
+const envBefore = Object.fromEntries(envNames.map(name => [name, process.env[name]]));
+let requests: Request[] = [];
+function setup() {
+  requests = [];
+  process.env.MULTIREMI_SERVER_URL = "http://responsibility.test";
+  process.env.MULTIREMI_WORKSPACE_ID = "local";
+  process.env.MULTIREMI_TOKEN = "fixture";
+  console.log = () => {}; console.error = () => {};
+  globalThis.fetch = (async (input, init) => {
+    const request = new Request(input, init); requests.push(request);
+    if (new URL(request.url).pathname === "/api/cli/capabilities") return Response.json({ commands: specs.map(command => ({ id: command.id, allowed: true })) });
+    return Response.json({ question: { id: "q" }, deliveries: [] });
+  }) as typeof fetch;
+}
+afterEach(() => {
+  globalThis.fetch = fetchBefore; console.log = logBefore; console.error = errorBefore;
+  for (const name of envNames) { if (envBefore[name] === undefined) delete process.env[name]; else process.env[name] = envBefore[name]; }
+});
+describe("responsibility CLI", () => {
+  const cases: Array<{ args: string[]; method: string; path: string; body?: unknown }> = [
+    { args: ["issue", "responsibility", "root"], method: "GET", path: "/api/issues/root/responsibility" },
+    { args: ["issue", "responsible", "set", "root", "--member", "member"], method: "PATCH", path: "/api/issues/root", body: { responsible_member_id: "member" } },
+    { args: ["issue", "question", "list", "child"], method: "GET", path: "/api/issues/child/questions" },
+    { args: ["issue", "delivery", "list", "child"], method: "GET", path: "/api/issues/child/deliveries" },
+    { args: ["issue", "delivery", "submit", "child", "--summary", "Evidence", "--session", "source", "--dedupe-key", "one"], method: "POST", path: "/api/issues/child/deliveries", body: { summary: "Evidence", sessionId: "source", dedupeKey: "one" } },
+    { args: ["issue", "delivery", "accept", "root", "delivery", "--revision", "v1"], method: "POST", path: "/api/issues/root/deliveries/delivery/respond", body: { action: "accept", revision: "v1" } },
+    { args: ["issue", "delivery", "return", "root", "delivery", "--revision", "v1", "--reason", "Fix tests"], method: "POST", path: "/api/issues/root/deliveries/delivery/respond", body: { action: "return", revision: "v1", body: "Fix tests" } },
+    { args: ["issue", "delivery", "authorize", "root", "delivery", "--revision", "v1", "--agent", "owner"], method: "POST", path: "/api/issues/root/deliveries/delivery/authorize", body: { agentId: "owner", revision: "v1" } },
+    { args: ["issue", "delivery", "authorize", "root", "delivery", "--revision", "v1", "--revoke"], method: "POST", path: "/api/issues/root/deliveries/delivery/authorize", body: { agentId: null, revision: "v1" } },
+    { args: ["message", "question", "get", "q"], method: "GET", path: "/api/messages/q/question" },
+    { args: ["message", "question", "answer", "q", "--revision", "3", "--data", '{"response":{"answers":{"Why?":"Evidence"}}}'], method: "POST", path: "/api/messages/q/question/answer", body: { expected_route_revision: 3, response: { answers: { "Why?": "Evidence" } } } },
+    { args: ["message", "question", "answer", "q", "--revision", "3", "--revise", "--answer-revision", "2", "--reason", "Correction", "--data", '{"response":{"answer":"Revised"}}'], method: "POST", path: "/api/messages/q/question/answer", body: { expected_route_revision: 3, expected_answer_revision: 2, revise: true, reason: "Correction", response: { answer: "Revised" } } },
+    ...["escalate", "transfer", "close"].map(action => ({ args: ["message", "question", action, "q", "--revision", "3", "--reason", "Need parent"], method: "POST", path: `/api/messages/q/question/${action}`, body: { expected_route_revision: 3, reason: "Need parent" } })),
+    { args: ["message", "question", "present", "q", "--revision", "3", "--summary", "Separate advice"], method: "POST", path: "/api/messages/q/question/present", body: { expected_route_revision: 3, summary: "Separate advice" } },
+    { args: ["message", "question", "continue", "q", "--revision", "3"], method: "POST", path: "/api/messages/q/question/continue", body: { expected_route_revision: 3 } },
+  ];
+  for (const item of cases) it(item.args.slice(0, 3).join(" "), async () => {
+    setup(); await registry.execute([...item.args, "--output", "json"]);
+    const request = requests.find(request => new URL(request.url).pathname === item.path)!;
+    expect(request).toBeDefined(); expect(request.method).toBe(item.method);
+    if (item.body) expect(await request.json()).toEqual(item.body);
+  });
+  it("rejects missing routing reasons, empty return and unauthorized revision shapes without mutation HTTP", async () => {
+    for (const args of [
+      ["message", "question", "escalate", "q", "--revision", "3"],
+      ["message", "question", "answer", "q", "--revision", "3", "--data", '{"response":[]}'],
+      ["message", "question", "answer", "q", "--revision", "3", "--revise", "--data", '{"response":{}}'],
+      ["issue", "delivery", "return", "root", "delivery", "--revision", "v1"],
+    ]) { setup(); await expect(registry.execute(args)).rejects.toThrow(); expect(requests.filter(request => request.method !== "GET")).toHaveLength(0); }
+  });
+});
