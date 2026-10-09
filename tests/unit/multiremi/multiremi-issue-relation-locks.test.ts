@@ -1,4 +1,4 @@
-import { createResponsibleTestIssue } from './helpers.js';
+import { createResponsibleTestIssue, acceptTestIssueDelivery } from './helpers.js';
 import { afterAll, beforeAll, describe, expect, it, spyOn } from "bun:test";
 import { mutateExecutionFixture } from "./unified-test-paths.js";
 import type { Database } from "bun:sqlite";
@@ -79,6 +79,7 @@ for (const backend of ["SQLite", "PostgreSQL"] as const) {
     let admin: Bun.SQL | undefined;
     let databaseUrl = "";
     let serial = 0;
+    const targetHumans=new Map<string,string>();
     const databaseName = `mul476_locks_${process.pid}_${Math.floor(Math.random() * 1e6)}`;
 
     beforeAll(async () => {
@@ -108,21 +109,26 @@ for (const backend of ["SQLite", "PostgreSQL"] as const) {
       const b = store.createWorkspace({ id: `wb-${tag}`, slug: `b-${tag}`, name: `B ${tag}` });
       const source = reverse ? b.id : a.id;
       const target = reverse ? a.id : b.id;
+      const targetHuman=store.createWorkspaceMember({name:`Target human ${tag}`,workspaceId:target});
+      targetHumans.set(target,targetHuman.id);
       const parent = createResponsibleTestIssue(store, { id: `iss_a_${tag}`, title: "Parent", workspaceId: source });
       const child = createResponsibleTestIssue(store, { id: `iss_z_${tag}`, title: "Unrelated child", workspaceId: source });
       const agent = store.createAgent({ name: `Agent ${tag}`, provider: "codex", workspaceId: source });
-      return { tag, source, target, parent, child, agent };
+      return { tag, source, target, targetHuman, parent, child, agent };
     }
 
     /** One workspace: P in progress, C done under P, an Agent. The ids pick which row sorts first. */
     function family(parentFirst = true) {
       const tag = `family-${backend.toLowerCase()}-${++serial}`;
       const workspace = store.createWorkspace({ id: `wf-${tag}`, slug: `f-${tag}`, name: `F ${tag}` }).id;
-      const [parentId, childId] = parentFirst ? [`iss_a_${tag}`, `iss_z_${tag}`] : [`iss_z_${tag}`, `iss_a_${tag}`];
-      const parent = createResponsibleTestIssue(store, { id: parentId, title: "Parent", workspaceId: workspace, status: "in_progress" });
-      const child = createResponsibleTestIssue(store, { id: childId, title: "Child", workspaceId: workspace, parentIssueId: parent.id });
-      store.updateIssue(child.id, { status: "done" });
+      const human=store.createWorkspaceMember({name:`Family human ${tag}`,workspaceId:workspace});
+      targetHumans.set(workspace,human.id);
       const agent = store.createAgent({ name: `Agent ${tag}`, provider: "codex", workspaceId: workspace });
+      const [parentId, childId] = parentFirst ? [`iss_a_${tag}`, `iss_z_${tag}`] : [`iss_z_${tag}`, `iss_a_${tag}`];
+      const parent = createResponsibleTestIssue(store, { id: parentId, title: "Parent", workspaceId: workspace, status: "in_progress",responsibleMemberId:human.id,assigneeType:'agent',assigneeId:agent.id });
+      const child = createResponsibleTestIssue(store, { id: childId, title: "Child", workspaceId: workspace, parentIssueId: parent.id,assigneeType:'agent',assigneeId:agent.id });
+      acceptTestIssueDelivery(store,child.id);
+      store.updateIssue(parent.id,{status:'in_progress'});
       // Sorted after `iss_a_` and before `iss_z_`.
       const extraParent = (letter: "m" | "n") => createResponsibleTestIssue(store, {
         id: `iss_${letter}_${tag}`, title: `Parent ${letter}`, workspaceId: workspace, status: "in_progress",
@@ -202,19 +208,19 @@ for (const backend of ["SQLite", "PostgreSQL"] as const) {
 
     it("S1: sequential move-before-add refuses all relation writes; add-before-move refuses the move", () => {
       const f = fixture();
-      store.updateIssue(f.parent.id, { workspaceId: f.target });
+      store.updateIssue(f.parent.id, { workspaceId: f.target, responsibleMemberId: f.targetHuman.id, actorType:'member',actorId:f.targetHuman.id });
       expect(() => store.createIssue({ title: "Invalid", parentIssueId: f.parent.id, workspaceId: f.source })).toThrow("another workspace");
       expect(() => store.updateIssue(f.child.id, { parentIssueId: f.parent.id })).toThrow("another workspace");
       expect(() => store.createIssueDependency(f.child.id, { dependsOnIssueId: f.parent.id })).toThrow("within a workspace");
       const other = fixture();
       store.updateIssue(other.child.id, { parentIssueId: other.parent.id });
-      expect(() => store.updateIssue(other.parent.id, { workspaceId: other.target })).toThrow("Detach");
+      expect(() => store.updateIssue(other.parent.id, { workspaceId: other.target, responsibleMemberId: other.targetHuman.id, actorType:'member',actorId:other.targetHuman.id })).toThrow("Detach");
       assertNoForeignEdges();
     });
 
     it("S1: sequential move, assignment and task creation refuse whichever comes second", () => {
       const moved = fixture();
-      store.updateIssue(moved.child.id, { workspaceId: moved.target });
+      store.updateIssue(moved.child.id, { workspaceId: moved.target, responsibleMemberId: moved.targetHuman.id, actorType:'member',actorId:moved.targetHuman.id });
       expect(thrown(() => store.assignIssue(moved.child.id, { assigneeType: "agent", assigneeId: moved.agent.id })).message)
         .toBe(`Agent not found: ${moved.agent.id}`);
       expect(thrown(() => store.createTask({ agentId: moved.agent.id, issueId: moved.child.id, workspaceId: moved.source, prompt: "Late" })).message)
@@ -227,7 +233,7 @@ for (const backend of ["SQLite", "PostgreSQL"] as const) {
         const task = first === "assign"
           ? store.assignIssue(f.child.id, { assigneeType: "agent", assigneeId: f.agent.id }).task!
           : store.createTask({ agentId: f.agent.id, issueId: f.child.id, workspaceId: f.source, prompt: "First" });
-        const error = thrown(() => store.updateIssue(f.child.id, { workspaceId: f.target }));
+        const error = thrown(() => store.updateIssue(f.child.id, { workspaceId: f.target, responsibleMemberId: f.targetHuman.id, actorType:'member',actorId:f.targetHuman.id }));
         expect(error).toBeInstanceOf(IssueWorkspaceMoveError);
         expect((error as IssueWorkspaceMoveError).relations.tasks).toEqual([{ id: task.id, status: "queued" }]);
         expect(store.getIssue(f.child.id)?.workspaceId).toBe(f.source);
@@ -238,14 +244,14 @@ for (const backend of ["SQLite", "PostgreSQL"] as const) {
     it("PG-L8b: an Issue with an active task answers 409 with the task; unassigning unblocks the move", async () => {
       const f = fixture();
       const { task } = store.assignIssue(f.child.id, { assigneeType: "agent", assigneeId: f.agent.id });
-      const error = thrown(() => store.updateIssue(f.child.id, { workspaceId: f.target })) as IssueWorkspaceMoveError;
+      const error = thrown(() => store.updateIssue(f.child.id, { workspaceId: f.target, responsibleMemberId: f.targetHuman.id, actorType:'member',actorId:f.targetHuman.id })) as IssueWorkspaceMoveError;
       expect(error.code).toBe("workspace_move_blocked");
       expect(error.relations).toEqual({ parent: null, children: [], dependencies: [], tasks: [{ id: task!.id, status: "queued" }], issue_workspace: null, hidden: 0 });
       const app = createMultiremiApp({ store, authToken: "mul476-locks-root", shareSecret: "mul476-locks-share" });
       const response = await app.request(`/api/multiremi/issues/${f.child.id}`, {
         method: "PATCH",
         headers: { Authorization: "Bearer mul476-locks-root", "Content-Type": "application/json" },
-        body: JSON.stringify({ workspace_id: f.target }),
+        body: JSON.stringify({ workspace_id: f.target, responsibleMemberId: f.targetHuman.id }),
       });
       expect(response.status).toBe(409);
       const body = await response.json();
@@ -254,32 +260,34 @@ for (const backend of ["SQLite", "PostgreSQL"] as const) {
       expect(store.getIssue(f.child.id)?.workspaceId).toBe(f.source);
       // A task in another workspace is counted, never listed.
       mutateExecutionFixture(db, "UPDATE multiremi_turn_execution_records SET workspace_id = ? WHERE id = ?", [f.target, task!.id]);
-      const hidden = thrown(() => store.updateIssue(f.child.id, { workspaceId: f.target })) as IssueWorkspaceMoveError;
+      const hidden = thrown(() => store.updateIssue(f.child.id, { workspaceId: f.target, responsibleMemberId: f.targetHuman.id, actorType:'member',actorId:f.targetHuman.id })) as IssueWorkspaceMoveError;
       expect(hidden.relations.tasks).toEqual([]);
       expect(hidden.relations.hidden).toBe(1);
       mutateExecutionFixture(db, "UPDATE multiremi_turn_execution_records SET workspace_id = ? WHERE id = ?", [f.source, task!.id]);
       // Unassigning cancels the task with the same predicate the guard reads.
       store.assignIssue(f.child.id, {});
-      store.updateIssue(f.child.id, { workspaceId: f.target });
+      store.updateIssue(f.child.id, { workspaceId: f.target, responsibleMemberId: f.targetHuman.id, actorType:'member',actorId:f.targetHuman.id });
       expect(store.getIssue(f.child.id)?.workspaceId).toBe(f.target);
       assertNoForeignEdges();
     });
 
-    it("PG-L8d (MUL-480): a move between assignment and task creation clears the assignee and rejects the source task", () => {
+    it("PG-L8d (MUL-480): an out-of-order move injected inside atomic assignment is refused and rolls back every fact", () => {
       const f = fixture();
-      const createTask = TasksRepo.prototype.createTask;
+      const before=store.getIssue(f.child.id)!;
+      const createTask = TasksRepo.prototype.createTaskWithinTransaction;
       let moved = false;
-      const spy = spyOn(TasksRepo.prototype, "createTask").mockImplementation(function (this: TasksRepo, input) {
-        if (!moved) { moved = true; store.updateIssue(f.child.id, { workspaceId: f.target }); }
-        return createTask.call(this, input);
+      const spy = spyOn(TasksRepo.prototype, "createTaskWithinTransaction").mockImplementation(function (this: TasksRepo, ...args: Parameters<TasksRepo['createTaskWithinTransaction']>) {
+        if (!moved) { moved = true; store.updateIssue(f.child.id, { workspaceId: f.target, responsibleMemberId: f.targetHuman.id, actorType:'member',actorId:f.targetHuman.id }); }
+        return createTask.apply(this,args);
       });
       try {
         expect(thrown(() => store.assignIssue(f.child.id, { assigneeType: "agent", assigneeId: f.agent.id })).message)
-          .toBe("Issue workspace does not match agent workspace");
+          .toContain("MUL-405 lock order violated: first N acquisition comes after a higher class");
       } finally { spy.mockRestore(); }
       const child = store.getIssue(f.child.id)!;
       expect(moved).toBe(true);
-      expect(child.workspaceId).toBe(f.target);
+      expect(child).toEqual(before);
+      expect(child.workspaceId).toBe(f.source);
       expect(child.assigneeType).toBeNull();
       expect(child.assigneeId).toBeNull();
       expect(child.status).toBe("todo");
@@ -293,19 +301,19 @@ for (const backend of ["SQLite", "PostgreSQL"] as const) {
       const top = Math.max(...occupants.map((issue) => issue.number));
       // The source numbers are already taken in the target (MUL-405's unique index).
       expect(occupants.map((issue) => issue.number)).toContain(f.child.number);
-      expect(store.updateIssue(f.child.id, { workspaceId: f.target }))
+      expect(store.updateIssue(f.child.id, { workspaceId: f.target, responsibleMemberId: f.targetHuman.id, actorType:'member',actorId:f.targetHuman.id }))
         .toMatchObject({ workspaceId: f.target, number: top + 1, key: `MUL-${top + 1}` });
       // Saving the same workspace again is not a move and keeps the number.
-      expect(store.updateIssue(f.child.id, { workspaceId: f.target, title: "Renamed" }).number).toBe(top + 1);
+      expect(store.updateIssue(f.child.id, { workspaceId: f.target, responsibleMemberId: f.targetHuman.id, actorType:'member',actorId:f.targetHuman.id, title: "Renamed" }).number).toBe(top + 1);
       const app = createMultiremiApp({ store, authToken: "mul476-locks-root", shareSecret: "mul476-locks-share" });
       const response = await app.request(`/api/multiremi/issues/${f.parent.id}`, {
         method: "PATCH",
         headers: { Authorization: "Bearer mul476-locks-root", "Content-Type": "application/json" },
-        body: JSON.stringify({ workspace_id: f.target }),
+        body: JSON.stringify({ workspace_id: f.target, responsibleMemberId: f.targetHuman.id }),
       });
       expect(response.status, await response.clone().text()).toBe(200);
       expect((await response.json()).issue).toMatchObject({ number: top + 2, key: `MUL-${top + 2}` });
-      store.batchUpdateIssues({ issue_ids: leaves.map((leaf) => leaf.id), updates: { workspace_id: f.target } });
+      store.batchUpdateIssues({ issue_ids: leaves.map((leaf) => leaf.id), updates: { workspace_id: f.target, responsibleMemberId: f.targetHuman.id, actorType:'member',actorId:f.targetHuman.id } });
       expect(leaves.map((leaf) => store.getIssue(leaf.id)!.number)).toEqual([top + 3, top + 4]);
       const numbers = store.listIssues({ workspaceId: f.target }).map((issue) => issue.number);
       expect(new Set(numbers).size).toBe(numbers.length);
@@ -317,8 +325,13 @@ for (const backend of ["SQLite", "PostgreSQL"] as const) {
       it(`S2: ${action} locks its Issue rows once in ascending order, then re-reads them`, () => {
         const f = fixture();
         if (action === "reopen" || action === "assign" || action === "sibling-status") {
+          store.updateIssue(f.parent.id,{assigneeType:'agent',assigneeId:f.agent.id});
           store.updateIssue(f.child.id, { parentIssueId: f.parent.id });
-          store.updateIssue(f.child.id, { status: action === "sibling-status" ? "in_progress" : "done" });
+          if(action==='sibling-status')store.updateIssue(f.child.id,{status:'in_progress'});
+          else {
+            store.updateIssue(f.child.id,{assigneeType:'agent',assigneeId:f.agent.id});
+            acceptTestIssueDelivery(store,f.child.id);
+          }
         }
         const events = trace(() => {
           if (action === "create") createResponsibleTestIssue(store, { title: "Locked child", workspaceId: f.source,
@@ -347,13 +360,14 @@ for (const backend of ["SQLite", "PostgreSQL"] as const) {
     for (const action of ["reopen", "assign"] as const) {
       it(`S3: ${action} of a done child refuses a deleted parent and ignores a parent moved away`, () => {
         const gone = family();
+        const previousTasks=store.listTasksForIssue(gone.child.id);
         // parent_issue_id has no foreign key, so a parent row can vanish under its children.
         db.run("DELETE FROM multiremi_issues WHERE id = ?", [gone.parent.id]);
         expect(store.getIssue(gone.child.id)?.parentIssueId).toBe(gone.parent.id);
         expect(thrown(() => reopenOrAssign(action, gone.child.id, gone.agent.id)).message)
           .toBe(`Parent issue not found: ${gone.parent.id}`);
         expect(store.getIssue(gone.child.id)?.status).toBe("done");
-        expect(taskIds(gone.child.id)).toEqual([]);
+        expect(store.listTasksForIssue(gone.child.id)).toEqual(previousTasks);
 
         const moved = family();
         const elsewhere = store.createWorkspace({ id: `wx-${moved.workspace}`, slug: `x-${moved.workspace}`, name: "Elsewhere" });
@@ -407,7 +421,7 @@ for (const backend of ["SQLite", "PostgreSQL"] as const) {
       const ready = input.gate ? phase(worker, "ready") : Promise.resolve(null);
       const locked = phase(worker, "locked");
       const finished = Promise.all([phase(worker, "done"), phase(worker, "closed")]).then(([done]) => done);
-      worker.postMessage({ ...input, databaseUrl });
+      worker.postMessage({ ...input, databaseUrl,targetResponsibleMemberId:targetHumans.get(input.targetWorkspace) });
       return { worker, ready, locked, finished };
     }
 
@@ -448,7 +462,7 @@ for (const backend of ["SQLite", "PostgreSQL"] as const) {
         const f = fixture(reverse);
         await hold({ mode: "hold-child", role: "create", issueId: f.parent.id, otherId: `${f.child.id}_new`,
           sourceWorkspace: f.source, targetWorkspace: f.target }, () => {
-          expect(() => store.updateIssue(f.parent.id, { workspaceId: f.target })).toThrow("Detach");
+          expect(() => store.updateIssue(f.parent.id, { workspaceId: f.target, responsibleMemberId: f.targetHuman.id, actorType:'member',actorId:f.targetHuman.id })).toThrow("Detach");
         });
         expect(store.getIssue(f.parent.id)?.workspaceId).toBe(f.source);
         assertNoForeignEdges();
@@ -493,7 +507,7 @@ for (const backend of ["SQLite", "PostgreSQL"] as const) {
       const createdId = `iss_n_${f.tag}`;
       await hold({ mode: "hold-number", role: "create", issueId: f.child.id, otherId: createdId,
         sourceWorkspace: f.source, targetWorkspace: f.target }, () => {
-        store.updateIssue(f.child.id, { workspaceId: f.target });
+        store.updateIssue(f.child.id, { workspaceId: f.target, responsibleMemberId: f.targetHuman.id, actorType:'member',actorId:f.targetHuman.id });
       });
       expect(store.getIssue(createdId)?.number).toBe(occupant.number + 1);
       expect(store.getIssue(f.child.id)).toMatchObject({ workspaceId: f.target, number: occupant.number + 2 });
@@ -520,7 +534,7 @@ for (const backend of ["SQLite", "PostgreSQL"] as const) {
       try {
         await hold({ mode: "hold-move", role: "move", issueId: issue.id, otherId: f.child.id,
           sourceWorkspace: f.target, targetWorkspace: f.source }, () => {
-          store.updateIssue(issue.id, { workspaceId: f.target });
+          store.updateIssue(issue.id, { workspaceId: f.target, responsibleMemberId: f.targetHuman.id, actorType:'member',actorId:f.targetHuman.id });
         });
       } finally { lockSpy.mockRestore(); runSpy.mockRestore(); }
       // The first attempt saw the Issue already in the target and took no number lock.
@@ -536,7 +550,7 @@ for (const backend of ["SQLite", "PostgreSQL"] as const) {
       try {
         const ready = workers.map((worker) => phase(worker, "ready"));
         const done = workers.map((worker) => Promise.all([phase(worker, "done"), phase(worker, "closed")]));
-        workers.forEach((worker, i) => worker.postMessage({ ...inputs[i], databaseUrl, mode: "race", barrierPath }));
+        workers.forEach((worker, i) => worker.postMessage({ ...inputs[i], databaseUrl, mode: "race", barrierPath,targetResponsibleMemberId:targetHumans.get(inputs[i]!.targetWorkspace) }));
         await Promise.all(ready);
         writeFileSync(barrierPath, "go");
         const outcomes = (await Promise.all(done)).map(([result]) => result!);
@@ -649,7 +663,7 @@ for (const backend of ["SQLite", "PostgreSQL"] as const) {
         resetDepth();
         await hold({ mode: "hold-report", role: "move", ownerId: runtime.id, issueId: f.child.id, otherId: f.parent.id,
           sourceWorkspace: f.source, targetWorkspace: f.target }, () => {
-          const error = thrown(() => store.updateIssue(f.child.id, { workspaceId: f.target })) as IssueWorkspaceMoveError;
+          const error = thrown(() => store.updateIssue(f.child.id, { workspaceId: f.target, responsibleMemberId: f.targetHuman.id, actorType:'member',actorId:f.targetHuman.id })) as IssueWorkspaceMoveError;
           expect(error).toBeInstanceOf(IssueWorkspaceMoveError);
           expect(error.relations.issue_workspace).toEqual({ status: "ready", runtime_id: runtime.id });
         });
