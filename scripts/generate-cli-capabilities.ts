@@ -137,6 +137,21 @@ export function classifyRoute(route: string): CliManifestRoute {
   if (route === "GET /api/inbox") return { command: "inbox" };
   if (route === "GET /api/sessions/:sessionId/messages") return { command: "message.list" };
   const unified: Record<string, string> = {
+    "GET /api/issues/:id/responsibility": "issue.responsibility",
+    "GET /api/issues/:id/deliveries": "issue.delivery.list",
+    "POST /api/issues/:id/deliveries": "issue.delivery.submit",
+    "POST /api/issues/:id/deliveries/:deliveryId/respond": "issue.delivery.accept",
+    "POST /api/issues/:id/deliveries/:deliveryId/authorize": "issue.delivery.authorize",
+    "GET /api/issues/:id/questions": "issue.question.list",
+    "GET /api/messages/:id/question": "message.question.get",
+    "POST /api/messages/:id/question/answer": "message.question.answer",
+    "POST /api/messages/:id/question/escalate": "message.question.escalate",
+    "POST /api/messages/:id/question/transfer": "message.question.transfer",
+    "POST /api/messages/:id/question/present": "message.question.present",
+    "POST /api/messages/:id/question/continue": "message.question.continue",
+    "POST /api/messages/:id/question/close": "message.question.close",
+    "GET /api/workspaces/:id/issue-responsibility-migration": "issue.responsibility-unassigned.list",
+    "POST /api/workspaces/:id/issue-responsibility-migration/map": "issue.responsibility-unassigned.map",
     "POST /api/sessions/:sessionId/messages": "message.send",
     "GET /api/messages/:id": "message.get", "PATCH /api/messages/:id": "message.edit",
     "DELETE /api/messages/:id": "message.delete", "POST /api/messages/:id/resolve": "message.resolve",

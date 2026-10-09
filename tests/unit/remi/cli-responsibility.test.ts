@@ -3,6 +3,7 @@ import { CommandRegistry } from "../../../apps/remi/cli/core/index.js";
 import { responsibilityCommandSpecs } from "../../../apps/remi/cli/commands/responsibility.js";
 import { workspaceCommandSpecs } from "../../../apps/remi/cli/commands/workspace.js";
 import { issueAssign, issueUpdate } from "../../../apps/remi/cli/multiremi/commands/issue.js";
+import { classifyRoute } from "../../../scripts/generate-cli-capabilities.js";
 const specs = [...responsibilityCommandSpecs(), ...workspaceCommandSpecs().filter(command => ["workspace.issue-topics.set", "workspace.feishu-bot.set"].includes(command.id))];
 const registry = new CommandRegistry();
 for (const command of specs) registry.register(command);
@@ -28,6 +29,28 @@ afterEach(() => {
   for (const name of envNames) { if (envBefore[name] === undefined) delete process.env[name]; else process.env[name] = envBefore[name]; }
 });
 describe("responsibility CLI", () => {
+  it("advertises only the authentication kinds accepted by responsibility APIs", () => {
+    const humanOnly = ["issue.responsibility-unassigned.list", "issue.responsibility-unassigned.map", "issue.responsible.set", "autopilot.responsible.set", "issue.delivery.authorize", "message.question.continue"];
+    const taskOnly = ["issue.delivery.submit", "message.question.present", "message.question.escalate"];
+    for (const id of humanOnly) expect(specs.find(command => command.id === id)?.auth).toEqual(["human"]);
+    for (const id of taskOnly) expect(specs.find(command => command.id === id)?.auth).toEqual(["task"]);
+    for (const id of ["message.question.answer", "message.question.transfer", "message.question.close", "issue.delivery.accept", "issue.delivery.return"]) expect(specs.find(command => command.id === id)?.auth).toEqual(["human", "task"]);
+  });
+  it("maps every new responsibility API to a registered executable command", () => {
+    const mappings = {
+      "GET /api/issues/:id/responsibility": "issue.responsibility",
+      "GET /api/issues/:id/deliveries": "issue.delivery.list", "POST /api/issues/:id/deliveries": "issue.delivery.submit",
+      "POST /api/issues/:id/deliveries/:deliveryId/respond": "issue.delivery.accept", "POST /api/issues/:id/deliveries/:deliveryId/authorize": "issue.delivery.authorize",
+      "GET /api/issues/:id/questions": "issue.question.list", "GET /api/messages/:id/question": "message.question.get",
+      "GET /api/workspaces/:id/issue-responsibility-migration": "issue.responsibility-unassigned.list", "POST /api/workspaces/:id/issue-responsibility-migration/map": "issue.responsibility-unassigned.map",
+      ...Object.fromEntries(["answer", "escalate", "transfer", "present", "continue", "close"].map(action => [`POST /api/messages/:id/question/${action}`, `message.question.${action}`])),
+    };
+    expect(Object.keys(mappings)).toHaveLength(15);
+    for (const [route, command] of Object.entries(mappings)) {
+      expect(classifyRoute(route)).toEqual({ command });
+      expect(specs.find(spec => spec.id === command)?.run).toBeFunction();
+    }
+  });
   it("reads all question history pages and deduplicates overlapping rows", async () => {
     setup();
     const normalFetch = globalThis.fetch;

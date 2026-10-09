@@ -4192,7 +4192,6 @@
       "command": "remi issue delivery submit",
       "aliases": [],
       "auth": [
-        "human",
         "task"
       ],
       "capability": "issue.delivery.submit",
@@ -4277,7 +4276,6 @@
       "command": "remi message question escalate",
       "aliases": [],
       "auth": [
-        "human",
         "task"
       ],
       "capability": "message.question.escalate",
@@ -4311,7 +4309,6 @@
       "command": "remi message question present",
       "aliases": [],
       "auth": [
-        "human",
         "task"
       ],
       "capability": "message.question.present",

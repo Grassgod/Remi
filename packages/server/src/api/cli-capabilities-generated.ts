@@ -3024,7 +3024,6 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "issue.delivery.submit": {
       "command": "remi issue delivery submit",
       "auth": [
-        "human",
         "task"
       ],
       "capability": "issue.delivery.submit",
@@ -3089,7 +3088,6 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "message.question.escalate": {
       "command": "remi message question escalate",
       "auth": [
-        "human",
         "task"
       ],
       "capability": "message.question.escalate",
@@ -3115,7 +3113,6 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "message.question.present": {
       "command": "remi message question present",
       "auth": [
-        "human",
         "task"
       ],
       "capability": "message.question.present",

@@ -35,6 +35,10 @@ human revisions additionally require `--revise --answer-revision <answer_revisio
 --reason <reason>`. Continue is an exceptional human authorization for detached
 calls, not an extra button required after ordinary answers. All replies return to
 the original Q session; a parent/Remi notification references its Q ID.
+Delivery submission, Q escalation and Remi presentation require task credentials;
+root-human configuration, migration mapping, delivery proxy authorization and Q
+continuation require human credentials. The server still checks the exact role,
+notification lane and current responsibility revision for every action.
 `message send --reply-to <Q>` also requires the explicitly read `--revision`;
 answer changes additionally require `--revise --answer-revision --reason`.
 Ordinary message replies do not require a question revision.
