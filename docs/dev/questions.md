@@ -40,8 +40,9 @@ Chat 降级文字的工作台链接打开 Inbox 原 Q 专属定位入口，不�
 
 旧 IssueDecision独立创建、答复、升级和撤回 writer返回410。历史 `decision_record` 和 `human_request` 通过统一投影保留原问题、上下文、答案、原因及历史；没有 native nonce证据的历史 AUQ显示等待分离，历史业务decision为 `none`。读取不迁移数据库；后续答复、修订或关闭在统一写路径落地，不调用旧writer。历史业务问题按原 `source_task_id` 的真实会话、Agent及execution scope回传普通协作通知，同会话答复直接投递原reply；`notify` 历史保留通知来源或不可运行原因。普通回传不改变wait、consumer或continuation事实；派发失败用savepoint隔离，保留合法答案及可读待处理消息。原问题禁止删除或修改正文，关闭必须保留原因和历史。
 
-Web 的 Issue 和 Chat 主线按 `question`、`human_request`、`decision_record` 或
-`root_question_id` 识别原 Q。历史记录同样先读取统一投影，展示当前处理者与版本后答复；
+Web 的 Issue 和 Chat 主线按 `question`、`human_request`、具有上述 Issue 身份的完整
+`decision_record` 或明确同 Q 通知的 `root_question_id` 识别原 Q，前后端共用 contracts 判据。
+历史业务记录同样先读取统一投影，展示当前处理者与版本后答复；
 不能落回没有路由版本的旧回复表单。权限问题也保留原上下文及截断提示。原问题链接使用
 Inbox 的 `?item=<Q>&question=<Q>` 专属定位，只读取 Question API，不扩大原私有消息或 Turn
 的权限。历史链接保留真实 `source_message_id`，通过 `question_source` 打开同 Q 的历史，
