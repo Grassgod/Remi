@@ -608,6 +608,10 @@ export class WorkspacesRepo {
       values,
     );
     if (result.changes === 0) throw new Error(`Workspace not found: ${id}`);
+    if (input.settings !== undefined) {
+      this.ctx.emitWorkspaceEvent({ type: "daemon:pending_changed", workspaceId: id,
+        actorType: "system", actorId: null, payload: { reason: "workspace_settings_changed" } });
+    }
     return this.getWorkspace(id)!;
   }
 
@@ -883,6 +887,8 @@ export class WorkspacesRepo {
         .query("SELECT revision FROM multiremi_relay_config WHERE workspace_id = ? AND engine = ?")
         .get(workspaceId, engine) as Row | null;
       revision = Number(row?.revision ?? 1);
+      this.ctx.emitWorkspaceEvent({ type: "daemon:pending_changed", workspaceId,
+        actorType: "system", actorId: null, payload: { reason: "workspace_relay_changed", engine } });
     })();
     return revision;
   }

@@ -55,6 +55,10 @@ derived from database state rather than from a server-side queue.
   workspace events request a full snapshot; a concurrent full request takes
   precedence. Only acknowledged configuration identities persist across pending
   scans, while each payload and current execution authority is read from the DB.
+  Workspace settings and relay writes publish `daemon:pending_changed` after the
+  outermost commit, requesting a full workspace snapshot without triggering task
+  offers. Rollbacks publish nothing. Plugin binding HTTP mutations retain their
+  existing `agent_plugin:*` event as the configuration wakeup.
 - Trace events do not enter the outbox. The daemon's normalized trace file is both
   the upload source and the replay buffer. Trace sequences are dense and
   append-only per task — assigned by the trace store at the durable write, never
