@@ -2,6 +2,7 @@
 
 import { MessageHeader } from "../../common/message-header";
 import { LinkedQuestion, linkedQuestionId, QuestionReplyReference } from "../../common/linked-question";
+import { questionReplyText } from "../../common/question-answer";
 import { useActorName } from "@multiremi/core/workspace/hooks";
 import { useAfterFirstScreen } from "@multiremi/core/platform/use-after-first-screen";
 import { TurnControls } from "../../common/turn-controls";
@@ -158,7 +159,7 @@ export function ChatMessageList({
       const isUser = row.kind === "message" && (row.sender_type ?? row.author_type) === "member";
       const message: ChatMessage = {
         id: row.id, chat_session_id: sessionId, role: isUser ? "user" : "assistant",
-        content: isUser ? row.body_md : String(row.metadata?.final_reply_md ?? row.body_md),
+        content: questionReplyText(isUser ? row.body_md : String(row.metadata?.final_reply_md ?? row.body_md), row.metadata),
         task_id: row.kind === "turn" ? row.task_id ?? null : null, turn_id: typeof row.metadata?.turn_id === "string" ? row.metadata.turn_id : undefined, created_at: row.created_at ?? "",
         failure_reason: typeof row.metadata?.failure_reason === "string" ? row.metadata.failure_reason : null,
           elapsed_ms: typeof row.metadata?.elapsed_ms === "number" ? row.metadata.elapsed_ms : null,

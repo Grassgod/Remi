@@ -23,6 +23,7 @@ import { quotePreview } from "../utils/quote-preview";
 import { formatActivity } from "../utils/format-activity";
 import { MessageHeader } from "../../common/message-header";
 import { LinkedQuestion, linkedQuestionId, QuestionReplyReference } from "../../common/linked-question";
+import { questionReplyText } from "../../common/question-answer";
 import { CommentCard } from "./comment-card";
 import { CommentInput, type ReplyTarget } from "./comment-input";
 import { IssueLogHead } from "./issue-log-head";
@@ -68,7 +69,7 @@ export function logRowToComment(row: SessionLogRow): TimelineEntry {
   return {
     type: "comment", id: row.id, issue_session_id: row.session_id,
     actor_type: row.sender_type ?? row.author_type, actor_id: row.sender_id ?? row.author_id ?? "", task_id: row.task_id,
-    content: row.body_md, parent_id: row.reply_to_id ?? row.parent_id, created_at: row.created_at, updated_at: row.updated_at,
+    content: questionReplyText(row.body_md, row.metadata), parent_id: row.reply_to_id ?? row.parent_id, created_at: row.created_at, updated_at: row.updated_at,
     resolved_at: row.resolved_at, resolved_by_id: row.resolved_by_id,
     resolved_by_type: row.resolved_by_type === "member" || row.resolved_by_type === "agent" || row.resolved_by_type === "system" ? row.resolved_by_type : null,
     reactions: ReactionSchema.array().safeParse(row.metadata.reactions).data ?? [],

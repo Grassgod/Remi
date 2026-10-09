@@ -8,7 +8,7 @@ import enChat from "../../locales/en/chat.json";
 import enIssues from "../../locales/en/issues.json";
 
 const mockApi = vi.hoisted(() => ({
-  listIssueSessions: vi.fn(), listMessages: vi.fn(), sendMessage: vi.fn(), getQuestion: vi.fn(),
+  listIssueSessions: vi.fn(), listMessages: vi.fn(), sendMessage: vi.fn(), getQuestion: vi.fn(), listIssueQuestions: vi.fn(),
 }));
 
 vi.mock("@multiremi/core/api", async (importOriginal) => ({
@@ -21,7 +21,7 @@ vi.mock("@multiremi/core/api", async (importOriginal) => ({
 vi.mock("@multiremi/core/hooks", () => ({ useWorkspaceId: () => "ws-1" }));
 vi.mock("../../common/question-card", () => ({ UnifiedQuestionCard: ({ question }: { question: { original_message: string; route_revision: number; wait_status: string } }) => <div>{question.original_message} · revision {question.route_revision} · {question.wait_status}</div> }));
 
-import { IssueDecisionBanner, MessageDecisionCard } from "./issue-decision-panel";
+import { IssueDecisionBanner, IssueDecisionPanel, MessageDecisionCard } from "./issue-decision-panel";
 
 function renderBanner(count: number) {
   return render(
@@ -32,6 +32,23 @@ function renderBanner(count: number) {
 }
 
 describe("IssueDecisionBanner", () => {
+  it("loads runtime questions only inside the existing right-side decision panel", async () => {
+    mockApi.listIssueQuestions.mockClear(); mockApi.listIssueSessions.mockClear(); mockApi.listMessages.mockClear();
+    mockApi.listIssueQuestions.mockResolvedValue([{ id: "native", status: "pending", original_message: "Runtime question", route_revision: 2, wait_status: "waiting" }]);
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={qc}><I18nProvider locale="en" resources={{ en: { issues: enIssues } }}>
+      <IssueDecisionPanel issueId="issue-runtime" pendingCount={1} canAnswer getActorName={(_type, id) => id} />
+    </I18nProvider></QueryClientProvider>);
+    expect(mockApi.listIssueQuestions).not.toHaveBeenCalled();
+    expect(screen.queryByRole("dialog")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Pending questions · 1" }));
+    expect(await screen.findByText("Runtime question · revision 2 · waiting")).toBeInTheDocument();
+    expect(screen.getByRole("dialog")).toHaveAttribute("data-side", "right");
+    expect(screen.getByRole("dialog")).toHaveAttribute("data-issue-decision-overlay");
+    expect(mockApi.listIssueQuestions).toHaveBeenCalledWith("issue-runtime");
+    expect(mockApi.listIssueSessions).not.toHaveBeenCalled();
+    expect(mockApi.listMessages).not.toHaveBeenCalled();
+  });
   it("keeps the same fixed-height element when the count changes", () => {
     const { rerender } = renderBanner(1);
     const first = document.querySelector("[data-issue-decision-banner]");

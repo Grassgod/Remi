@@ -42,7 +42,13 @@ Chat 降级文字的工作台链接打开 Inbox 原 Q 专属定位入口，不�
 
 Web 的 Issue 和 Chat 主线按 `question`、`human_request`、具有上述 Issue 身份的完整
 `decision_record` 或明确同 Q 通知的 `root_question_id` 识别原 Q，前后端共用 contracts 判据。
-历史业务记录同样先读取统一投影，展示当前处理者与版本后答复；
+运行中的 AskUserQuestion 仍是新问题的触发源；主线和运行状态区只提供“查看问题”入口，
+点击后在右侧面板答复，不在主线或运行卡片中嵌入完整表单。面板、问题卡片及答复区复用
+原 Issue Decision 的布局，统一由 [`decision-panel.tsx`](../../frontend/packages/views/common/decision-panel.tsx)
+提供；Issue 问题列表使用同一面板。旧 IssueDecision 不再创建独立业务问题。
+原题和选项只展示一次；已答问题收起选择控件，显示可读答案与真实消费状态。
+路由版本、来源引用和执行详情收在历史中，按需打开；原始响应结构继续用于回填 provider。
+历史业务记录同样先读取统一投影，按当前处理者和路由版本答复；
 不能落回没有路由版本的旧回复表单。权限问题也保留原上下文及截断提示。原问题链接使用
 Inbox 的 `?item=<Q>&question=<Q>` 专属定位，只读取 Question API，不扩大原私有消息或 Turn
 的权限。历史链接保留真实 `source_message_id`，通过 `question_source` 打开同 Q 的历史，

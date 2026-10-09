@@ -1,5 +1,6 @@
 {
   "responsibility": {
+    "open_question": "View question",
     "source_notification": "Result delivery to original source",
     "delivery_invalidated": "Responsibility changed. Submit a new delivery for review; the earlier history is retained.",
     "delivery_superseded": "A newer delivery is available. Review that delivery; this earlier history is retained.",

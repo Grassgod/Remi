@@ -1,5 +1,6 @@
 {
   "responsibility": {
+    "open_question": "查看问题",
     "source_notification": "向原来源回传结果",
     "delivery_invalidated": "责任已变更，请重新提交交付以供验收；此前历史仍保留。",
     "delivery_superseded": "已有更新的交付，请验收新交付；此前历史仍保留。",

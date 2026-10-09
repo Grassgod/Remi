@@ -19,6 +19,23 @@ function mount(question = base) {
 }
 beforeEach(() => { mocks.actOnQuestion.mockReset(); mocks.actOnQuestion.mockResolvedValue(base); mocks.getTask.mockReset(); });
 describe("one Q on every surface", () => {
+  it("shows the settled native question once with a readable answer and no stale choices", () => {
+    const response = { answers: { "Continue this task?": "Continue" } };
+    const view = mount({ ...base, original_message: "Continue this task?\n\nContinue this task?", original_questions: [
+      { question: "Continue this task?", header: "Next step", options: [{ label: "Continue" }, { label: "Stop" }] },
+    ], status: "answered", wait_status: "consumed", actions: { allowed: ["revise"] }, answer: {
+      response, body_md: JSON.stringify(response), actor: { type: "member", id: "reviewer" }, at: "now", reply_message_id: "reply",
+    } });
+    expect(screen.getAllByText("Continue this task?")).toHaveLength(1);
+    expect(screen.getByText("Continue")).toBeInTheDocument();
+    expect(screen.queryByText("Stop")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Submit" })).toBeNull();
+    expect(view.container.textContent).not.toContain('"answers"');
+    expect(view.container.querySelectorAll("article")).toHaveLength(1);
+    expect(screen.queryByText("Route revision 7")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: /Transfer and answer history/ }));
+    expect(screen.getByText("Route revision 7")).toBeInTheDocument();
+  });
   it("shows ordinary historical source delivery and its actual surface without claiming native consumption", () => {
     mount({ ...base, status: "answered", wait_status: "none", actions: { allowed: [] }, history: [{ type: "notify", actor: { type: "member", id: "human" }, at: "now", route_revision: 7, reason: "historical_source_dispatch_failed:runtime_workspace_error", source_message_id: "readable-source-result", source_session_id: "source-session" }] });
     fireEvent.click(screen.getByRole("button", { name: /Transfer and answer history/ }));
@@ -43,12 +60,14 @@ describe("one Q on every surface", () => {
     mocks.getTask.mockResolvedValue({ id: "consumer-attempt", turn_id: "consumer-turn", agent_id: "worker" });
     mount({ ...base, wait_status: "continuation_consumed", recovery: { consumer_turn_id: "consumer-turn", consumer_attempt_id: "consumer-attempt", reply_message_id: "reply", continuation_message_id: "continuation", consumed_at: "then" } });
     expect(mocks.getTask).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: /Transfer and answer history/ }));
     fireEvent.click(screen.getByRole("button", { name: /Confirmed consumption attempt/ }));
     await waitFor(() => expect(mocks.getTask).toHaveBeenCalledWith("consumer-attempt", "consumer-turn"));
     expect(await screen.findByRole("dialog")).toHaveTextContent("consumer-attempt");
   });
   it("links authorized continuation without inventing a consumed attempt before confirmation", () => {
     mount({ ...base, wait_status: "continuation_pending", recovery: { consumer_turn_id: "turn-new", consumer_attempt_id: null, reply_message_id: "reply", continuation_message_id: "continue-message", consumed_at: null } });
+    fireEvent.click(screen.getByRole("button", { name: /Transfer and answer history/ }));
     expect(screen.getByRole("link", { name: "Continuation instruction" })).toHaveAttribute("href", "/ws/inbox?item=q1&question=q1&question_source=continue-message");
     expect(screen.getByRole("link", { name: "Continuation instruction" })).toHaveAttribute("title", "continue-message");
     expect(screen.getByRole("link", { name: "Answer" })).toHaveAttribute("href", "/ws/inbox?item=q1&question=q1&question_source=reply");
@@ -84,6 +103,7 @@ describe("one Q on every surface", () => {
     expect(screen.getByText("Waiting for parent issue coordinator")).toBeInTheDocument();
     expect(screen.getByText("Original exact question?")).toBeInTheDocument();
     expect(screen.getByText("Separate Remi recommendation")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /Transfer and answer history/ }));
     expect(screen.getByRole("link")).toHaveAttribute("href", "/ws/inbox?item=q1&question=q1");
     fireEvent.click(screen.getByRole("button", { name: "Approve" }));
     fireEvent.click(screen.getByRole("button", { name: "Answer" }));

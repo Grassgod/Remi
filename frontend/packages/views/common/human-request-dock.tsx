@@ -15,6 +15,7 @@ import { cn } from "@multiremi/ui/lib/utils";
 import { useT } from "../i18n";
 import { Markdown } from "./markdown";
 import { LinkedQuestion } from "./linked-question";
+import { DecisionCardFrame, DecisionAnswerArea } from "./decision-panel";
 
 const COLLAPSED_CONTEXT_HEIGHT_PX = 128;
 
@@ -118,26 +119,46 @@ export function PermissionCard({
   );
 }
 
-export function QuestionCard({
+export function QuestionCard(props: Parameters<typeof QuestionForm>[0]) {
+  const { t } = useT("chat");
+  return <DecisionCardFrame id={props.request.id}>
+    <div className="flex items-center gap-1.5 text-xs font-medium">
+      <MessageCircleQuestion className="h-3.5 w-3.5 text-blue-500" />
+      <span>{t(($) => $.human_requests.question_title)}</span>
+    </div>
+    <QuestionForm {...props} />
+  </DecisionCardFrame>;
+}
+
+export function QuestionForm({
   taskId,
   request,
   onResponded,
   readOnly = false,
   onAnswer,
+  hideOptions = false,
+  disabled = false,
 }: {
   taskId: string;
   request: TaskHumanRequest;
   onResponded?: () => void;
   readOnly?: boolean;
   onAnswer?: (response: Record<string, unknown>) => Promise<unknown>;
+  hideOptions?: boolean;
+  disabled?: boolean;
 }) {
   const { t } = useT("chat");
   const respond = useRespondHumanRequest();
   const unifiedAnswer = useMutation({ mutationFn: async (response: Record<string, unknown>) => onAnswer?.(response), onSuccess: onResponded });
   const submission = onAnswer ? unifiedAnswer : respond;
   const questions = request.payload.questions ?? [];
-  const message = request.payload.message?.trim();
-  const showMessage = Boolean(message && message !== questions[0]?.question.question.trim());
+  const originalMessage = request.payload.message?.trim();
+  const questionBody = questions.map(({ question }) => question.question).join("\n\n");
+  // The runtime log body appends the question text to the provider's message.
+  // Render the original fields once without changing their answer keys.
+  const message = originalMessage?.endsWith(`\n\n${questionBody}`)
+    ? originalMessage.slice(0, -questionBody.length).trim() : originalMessage;
+  const showMessage = Boolean(message && message !== questionBody && !questions.some(({ question }) => message === question.question.trim()));
   const [answers, setAnswers] = useState<Record<string, string>>({});
   const [picks, setPicks] = useState<Record<string, string[]>>({});
   // Free-text "other" answers, kept separate from option picks. A non-empty
@@ -165,25 +186,20 @@ export function QuestionCard({
     Object.fromEntries(questions.map(({ question }) => [question.question, effectiveAnswer(question.question)]));
 
   return (
-    <div className="min-w-0 rounded-md border border-blue-500/40 bg-background p-2.5">
-      <div className="flex items-center gap-1.5 text-xs font-medium">
-        <MessageCircleQuestion className="h-3.5 w-3.5 text-blue-500" />
-        <span>{t(($) => $.human_requests.question_title)}</span>
-      </div>
+    <div className="min-w-0">
       {request.payload.context && <QuestionContext context={request.payload.context} />}
       {showMessage && (
-        <div className="mt-1 break-words text-xs text-muted-foreground">{message}</div>
+        <Markdown mode="minimal">{message!}</Markdown>
       )}
       <div className="mt-2 flex flex-col gap-2.5">
         {questions.map(({ fieldKey, otherFieldKey, question }) => {
           const customText = (others[question.question] ?? "").trim();
           return (
             <div key={fieldKey} className="flex flex-col gap-1">
-              <div className="text-xs font-medium">{question.header ?? question.question}</div>
-              {question.header && question.header !== question.question && (
-                <div className="text-xs text-muted-foreground">{question.question}</div>
-              )}
-              {question.options.length > 0 ? (
+              {question.header && question.header !== question.question && <div className="text-xs text-muted-foreground">{question.header}</div>}
+              <Markdown mode="minimal">{question.question}</Markdown>
+              {!hideOptions && (question.options.length > 0 ? (
+                <DecisionAnswerArea>
                 <div className="flex flex-wrap gap-1.5">
                   {question.options.map((option) => {
                     const selected =
@@ -204,6 +220,7 @@ export function QuestionCard({
                         variant={selected ? "default" : "outline"}
                         aria-pressed={selected}
                         title={option.description}
+                        disabled={disabled || submission.isPending || submission.isSuccess}
                         className={cn(
                           "h-auto max-w-full whitespace-normal break-words text-left",
                           !selected && "text-muted-foreground",
@@ -215,15 +232,20 @@ export function QuestionCard({
                     );
                   })}
                 </div>
+                </DecisionAnswerArea>
               ) : !readOnly ? (
+                <DecisionAnswerArea>
                 <Input
+                  disabled={disabled || submission.isPending || submission.isSuccess}
                   value={answers[question.question] ?? ""}
                   placeholder={t(($) => $.human_requests.answer_placeholder)}
                   onChange={(event) => setAnswer(question.question, event.target.value)}
                 />
-              ) : null}
+                </DecisionAnswerArea>
+              ) : null)}
               {!readOnly && question.options.length > 0 && otherFieldKey && (
                 <Input
+                  disabled={disabled || submission.isPending || submission.isSuccess}
                   value={others[question.question] ?? ""}
                   placeholder={t(($) => $.human_requests.other_answer_placeholder)}
                   onChange={(event) =>
@@ -236,10 +258,10 @@ export function QuestionCard({
         })}
       </div>
       {!readOnly && (
-        <div className="mt-2 flex justify-end">
+        <div className="mt-2">
           <Button
             size="sm"
-            disabled={!answered || submission.isPending || submission.isSuccess}
+            disabled={disabled || !answered || submission.isPending || submission.isSuccess}
             onClick={() => onAnswer ? unifiedAnswer.mutate({ answers: submitAnswers() }) : respond.mutate(
               { taskId, requestId: request.id,
                 sessionId: request.sessionId, response: { answers: submitAnswers() } },

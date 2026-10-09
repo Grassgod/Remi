@@ -10,7 +10,7 @@ import { useWorkspaceId } from "@multiremi/core/hooks";
 import { Button } from "@multiremi/ui/components/ui/button";
 import { Input } from "@multiremi/ui/components/ui/input";
 import { Textarea } from "@multiremi/ui/components/ui/textarea";
-import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@multiremi/ui/components/ui/sheet";
+import { DecisionPanel, DecisionCardFrame, DecisionAnswerArea } from "../../common/decision-panel";
 import { HumanRequestCard } from "../../common/human-request-dock";
 import { MessageHeader } from "../../common/message-header";
 import { Markdown } from "../../common/markdown";
@@ -56,17 +56,13 @@ export function IssueDecisionPanel({ issueId, pendingCount, showOwnerOnly = fals
   const [open, setOpen] = useState(false);
   const query = useQuery({ ...issueQuestionsOptions(wsId, issueId), enabled: open });
   return <><IssueDecisionBanner count={pendingCount} showOwnerOnly={showOwnerOnly} onOpen={() => setOpen(true)} />
-    <Sheet open={open} onOpenChange={setOpen}><SheetContent side="right"
-      className="inset-y-2 right-2 h-auto max-h-[calc(100vh-1rem)] w-[calc(100%-1rem)] gap-0 overflow-hidden rounded-md border sm:top-8 sm:bottom-auto sm:h-[610px] sm:w-[440px] sm:max-w-[440px]" data-issue-decision-overlay>
-      <SheetHeader className="shrink-0 border-b pr-12"><SheetTitle>{t($ => $.responsibility.history)}</SheetTitle>
-        <SheetDescription>{t($ => $.responsibility.pending, { count: query.data?.filter(question => question.status === "pending").length ?? pendingCount })}</SheetDescription></SheetHeader>
-      <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-4">
+    <DecisionPanel open={open} onOpenChange={setOpen} title={t($ => $.responsibility.history)}
+      description={t($ => $.responsibility.pending, { count: query.data?.filter(question => question.status === "pending").length ?? pendingCount })}>
         {query.isPending ? <LoaderCircle className="size-5 animate-spin" /> : query.isError ? <div><p role="alert">{t($ => $.detail.decision_load_failed)}</p>
           <Button size="sm" variant="outline" onClick={() => void query.refetch()}>{t($ => $.detail.decision_retry)}</Button></div>
           : query.data?.length ? query.data.map(question => <UnifiedQuestionCard key={question.id} question={question} getActorName={getActorName} />)
           : <p className="text-sm text-muted-foreground">{t($ => $.responsibility.empty)}</p>}
-      </div>
-    </SheetContent></Sheet></>;
+    </DecisionPanel></>;
 }
 
 export function MessageDecisionCard(props: { message: Message; canAnswer: boolean; getActorName?: (type: string, id: string) => string }) {
@@ -108,13 +104,13 @@ function LegacyMessageDecisionCard({ message, canAnswer, getActorName }: { messa
     createdAt: message.created_at, respondedAt: null, respondedBy: null,
     response: null, status: message.resolved_at ? "responded" : "pending",
   }) : null;
-  return <article className="rounded-md border bg-background p-3" data-decision-entry={message.id}>
+  return <DecisionCardFrame id={message.id}>
     <MessageHeader message={message} getActorName={getActorName} /><Markdown mode="minimal">{message.body_md}</Markdown>
     {message.resolved_at || reply.isSuccess ? <div className="mt-2 text-xs text-muted-foreground">
       <Button variant="ghost" size="xs" onClick={() => setShowReplies(v => !v)}>{tm($ => $.resolved)}</Button>
       {showReplies && (replies.isError ? <p role="alert">{tm($ => $.load_failed)}</p> : replies.data?.filter(m => m.reply_to_id === message.id).map(m => <Markdown key={m.id} mode="minimal">{m.body_md}</Markdown>))}
     </div> : request ? <HumanRequestCard taskId={request.taskId} request={request} readOnly={!canAnswer} onResponded={refresh} />
-    : canAnswer && <div className="mt-3 space-y-2 border-t pt-2.5">
+    : canAnswer && <DecisionAnswerArea>
       {message.options?.length ? <div className="flex flex-wrap gap-1.5">{message.options.map(option => <Button key={option.value} size="sm"
         variant={selected === option.value ? "default" : "outline"} aria-pressed={selected === option.value} disabled={reply.isPending}
         className="h-auto max-w-full whitespace-normal break-words text-left" onClick={() => setSelected(option.value)}>{option.label}</Button>)}</div>
@@ -122,6 +118,6 @@ function LegacyMessageDecisionCard({ message, canAnswer, getActorName }: { messa
       <Input value={reason} disabled={reply.isPending} placeholder={t($ => $.detail.decision_reason_placeholder)} onChange={e => setReason(e.target.value)} />
       {reply.error && <p role="alert" className="text-xs text-destructive">{reply.error.message}</p>}
       <Button size="sm" disabled={reply.isPending || (selected == null && !answer.trim())} onClick={() => reply.mutate()}>{tm($ => $.decision_reply)}</Button>
-    </div>}
-  </article>;
+    </DecisionAnswerArea>}
+  </DecisionCardFrame>;
 }

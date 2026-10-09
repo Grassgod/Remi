@@ -59,6 +59,9 @@ describe("cached message observer visibility", () => {
     const replica = new MemorySessionReplica({ "cs-1": { entries: rows } });
     const view = render(<QueryClientProvider client={client}><ChatMessageList sessionId="cs-1" replica={replica} optimisticRows={[]} pendingTask={null} availability={undefined} /></QueryClientProvider>);
     try {
+      expect(screen.queryByTestId("original-question-card")).toBeNull();
+      expect(getQuestion).not.toHaveBeenCalled();
+      fireEvent.click(view.container.querySelector<HTMLButtonElement>('button[aria-haspopup="dialog"]')!);
       await waitFor(() => expect(screen.getAllByTestId("original-question-card")).toHaveLength(1));
       expect(screen.getByText("Continue with the accepted answer")).toBeTruthy();
       expect([...view.container.querySelectorAll("a")].map(link => link.getAttribute("href"))).toContain(`${paths.workspace("test").inboxItem("q_original")}&question=q_original`);
@@ -67,7 +70,11 @@ describe("cached message observer visibility", () => {
     const noticeClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     const notice = new MemorySessionReplica({ "cs-notice": { entries: [{ ...rows[0], session_id: "cs-notice", id: "notification", metadata: { root_question_id: "q_original", question_notification: true } } as SessionLogEntry] } });
     const noticeView = render(<QueryClientProvider client={noticeClient}><ChatMessageList sessionId="cs-notice" replica={notice} optimisticRows={[]} pendingTask={null} availability={undefined} /></QueryClientProvider>);
-    try { await waitFor(() => expect(screen.getAllByTestId("original-question-card")).toHaveLength(1)); }
+    try {
+      expect(screen.queryByTestId("original-question-card")).toBeNull();
+      fireEvent.click(noticeView.container.querySelector<HTMLButtonElement>('button[aria-haspopup="dialog"]')!);
+      await waitFor(() => expect(screen.getAllByTestId("original-question-card")).toHaveLength(1));
+    }
     finally { noticeView.unmount(); noticeClient.clear(); }
   });
   it("keeps a pinned Chat at the bottom when an availability banner changes layout, but leaves released scrolling alone", () => {
