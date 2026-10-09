@@ -1,4 +1,5 @@
 import type { SqlDatabase } from '../db/postgres.js';
+import { questionNotificationVisibilitySql } from './question-notification-visibility.js';
 
 export interface InboxAccess { userId: string | null; admin: boolean; attemptId?: string }
 
@@ -32,12 +33,15 @@ export function inboxVisibilitySql(db: SqlDatabase, access: InboxAccess) {
   const protectedSource = `(d.kind='turn' OR ${json('d', 'human_request')} IS NOT NULL
     OR ${json('d', 'human_response')} IS NOT NULL AND d.task_id IS NOT NULL)`;
   const sourceIssue = `COALESCE(${json('d', 'decision_record.source_issue_id')},${json('d', 'source_issue_id')})`;
+  // Plain replies inherit only a native notification grant. The source flag
+  // keeps existing Task/private-trace checks on their original typed paths.
   const cte = `WITH RECURSIVE ancestors AS (
-    SELECT id AS root_id,id,session_id,task_id,kind,reply_to_id,metadata,0 AS depth FROM multiremi_conversation_log
+    SELECT id AS root_id,id,session_id,task_id,kind,reply_to_id,to_agent_id,metadata,0 AS depth,1 AS source_inherited FROM multiremi_conversation_log
     UNION ALL
-    SELECT d.root_id,n.id,n.session_id,n.task_id,n.kind,n.reply_to_id,n.metadata,d.depth+1
+    SELECT d.root_id,n.id,n.session_id,n.task_id,n.kind,n.reply_to_id,n.to_agent_id,n.metadata,d.depth+1,
+      CASE WHEN d.source_inherited=1 AND ${inherits('d')} THEN 1 ELSE 0 END
     FROM ancestors d JOIN multiremi_conversation_log n ON ${related('d', 'n')}
-    WHERE d.depth<4 AND ${inherits('d')}
+    WHERE d.depth<4 AND (${inherits('d')} OR d.reply_to_id IS NOT NULL)
   )`;
   const where = `${conversation} AND NOT EXISTS (
     SELECT 1 FROM ancestors d
@@ -47,7 +51,7 @@ export function inboxVisibilitySql(db: SqlDatabase, access: InboxAccess) {
     LEFT JOIN multiremi_issue_sessions ds ON ds.id=d.session_id
     LEFT JOIN multiremi_issues di ON di.id=ds.issue_id
     LEFT JOIN multiremi_issues si ON si.id=${sourceIssue}
-    WHERE d.root_id=m.id AND (
+    WHERE d.root_id=m.id AND d.source_inherited=1 AND (
       ${protectedSource} AND (t.id IS NULL OR t.workspace_id<>h.workspace_id
         OR t.session_id LIKE 'chat_%' AND (sc.id IS NULL OR NOT (${sourceChatGuard}))
         OR t.session_id NOT LIKE 'chat_%' AND NOT (${sourceAgentGuard}))
@@ -58,5 +62,7 @@ export function inboxVisibilitySql(db: SqlDatabase, access: InboxAccess) {
       OR ${sourceIssue} IS NOT NULL AND (di.id IS NULL OR si.id IS NULL OR di.workspace_id<>h.workspace_id OR si.workspace_id<>h.workspace_id)
       OR d.depth=4 AND ${inherits('d')}
     )) AND ${conversationAgentGuard}`;
-  return { cte, where, params };
+  const notification = questionNotificationVisibilitySql(db, access, 'notification');
+  return { cte, where: `${where} AND NOT EXISTS (SELECT 1 FROM ancestors notification
+    WHERE notification.root_id=m.id AND NOT (${notification.where}))`, params: [...params, ...notification.params] };
 }

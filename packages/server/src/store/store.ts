@@ -2,6 +2,8 @@ import { isRelatedTurnController } from './turn-controls.js';
 import { listIssueDeliveries, submitIssueDelivery, respondIssueDelivery, authorizeIssueDelivery, type IssueDeliveryActor } from './issue-deliveries.js';
 import { listIssueResponsibilityMigration, mapIssueResponsibility } from './issue-responsibility-migration.js';
 import { DaemonTurnBridge } from './inbox/daemon-turn-bridge.js';
+import { questionNotificationIdentity, questionNotificationFactsSql, canReadQuestionNotificationFacts } from './inbox/question-notification-visibility.js';
+import type { InboxAccess } from './inbox/inbox-visibility.js';
 import { getExecutionGroup, listExecutionGroups } from "@multiremi/store/execution-groups.js";
 import type { QuestionCardCredential } from "@multiremi/store/question-card-token.js";
 import type { RuntimeConnectionProfile } from "@multiremi/contracts/runtime-connection";
@@ -1540,6 +1542,16 @@ runMigrations(this.db);
 
   findWorkspaceMemberForUser(userId: string | null | undefined, workspaceId: string): MultiremiWorkspaceMember | null {
     return this.workspaces.findWorkspaceMemberForUser(userId, workspaceId);
+  }
+
+  canReadQuestionNotification(id: string, access: InboxAccess): boolean {
+    const entry = this.getMessage(id);
+    if (!entry) return false;
+    const original = typeof entry.metadata.root_question_id === 'string' ? this.getMessage(entry.metadata.root_question_id) : null;
+    const identity = questionNotificationIdentity(entry, original);
+    if (!identity) return false;
+    const query = questionNotificationFactsSql(identity, entry, access);
+    return canReadQuestionNotificationFacts(identity, entry, access, this.db.query(query.sql).get(...query.params));
   }
 
   listWorkspacesForUser(userId: string | null | undefined): MultiremiWorkspace[] {

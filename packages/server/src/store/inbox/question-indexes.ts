@@ -1,7 +1,7 @@
 import type { SqlDatabase } from '../db/postgres.js';
 
 /** Fixed-type JSON parsing is immutable; malformed historical TEXT is no Q fact. */
-export function questionMetadataText(db: SqlDatabase, expression: string, path: string): string {
+export function questionMetadataText(db: Pick<SqlDatabase, 'dialect'>, expression: string, path: string): string {
   return db.dialect === 'postgres' ? `multiremi_question_metadata_text(${expression},'{${path.replaceAll('.', ',')}}')`
     : `json_extract(CASE WHEN json_valid(${expression}) THEN ${expression} ELSE '{}' END,'$.${path}')`;
 }

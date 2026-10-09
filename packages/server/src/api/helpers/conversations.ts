@@ -17,7 +17,17 @@ export function canAccessConversationTask(c: Context, store: MultiremiStore, tas
 /** Memo lives for one request and caches only this caller's source-task checks. */
 export function conversationEntryVisibility(c: Context, store: MultiremiStore) {
   const memo = createTaskAuthMemo(), allowed = new Map<string, boolean>(), decisions = new Map<string, boolean>();
+  const notifications = new Map<string, boolean>();
   return (entry: ConversationVisibilityEntry): boolean => {
+    const notification = conversationEntryQuestionNotification(entry, id => store.getMessage(id),
+      seq => entry.session_id ? store.getConversationLogEntry(entry.session_id, seq) : null);
+    if (notification === null) return false;
+    if (notification) {
+      if (!notification.id) return false;
+      if (!notifications.has(notification.id)) notifications.set(notification.id, store.canReadQuestionNotification(notification.id,
+        { userId: currentRequestUserId(c), admin: false, attemptId: currentTaskAccessToken(c)?.taskId ?? undefined }));
+      return notifications.get(notification.id)!;
+    }
     const decision = conversationEntryDecision(entry,
       id => store.getMessage(id),
       seq => entry.session_id ? store.getConversationLogEntry(entry.session_id, seq) : null);
@@ -52,6 +62,22 @@ export interface ConversationVisibilityEntry {
   reply_to_id?: string | null;
   parent_id?: string | null;
   metadata: Record<string, any>;
+}
+
+/** Related edits and replies cannot reveal a notification hidden from this caller. */
+export function conversationEntryQuestionNotification(
+  entry: ConversationVisibilityEntry,
+  reply: (id: string) => ConversationVisibilityEntry | null | undefined,
+  target: (seq: number) => ConversationVisibilityEntry | null | undefined,
+  depth = 0,
+): ConversationVisibilityEntry | null | undefined {
+  if (depth > 4) return null;
+  if (entry.metadata.question_notification === true || entry.metadata.question_present_request === true) return entry;
+  const replyId = entry.reply_to_id ?? entry.parent_id
+    ?? (typeof entry.metadata.message_id === 'string' ? entry.metadata.message_id : null);
+  const related = Number.isSafeInteger(entry.metadata.target_seq) ? target(entry.metadata.target_seq)
+    : replyId ? reply(replyId) : null;
+  return related ? conversationEntryQuestionNotification(related, reply, target, depth + 1) : undefined;
 }
 
 /** Replies and mutation markers inherit the Issue decision's relation checks. */

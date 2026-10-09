@@ -52,6 +52,8 @@ Inbox 的 `?item=<Q>&question=<Q>` 专属定位，只读取 Question API，不�
 
 历史来源回传和不可执行提醒按其 `question_source_notification` 与 `root_question_id` 继承原 Q 的私有来源及两端工作区可见性；HTTP、WebSocket 和 Inbox 计数/分页使用相同关联，原 Q 不可见或引用缺失时不返回提醒正文。跨会话关联不会创建 `reply_to` 或扩大通用来源读取权。
 
+处理和呈现通知也只授予该条消息及其关联答复、编辑记录的定点读取权：引用必须指向当前版本、来源仍在冻结工作区的真实 Q，并有明确可用人类责任人。人类责任人可读自己的通知；Agent 或 Remi 必须是该通知收件人，且使用当前实际执行轮的同一会话与 scope。旁观成员不能借公有父会话或编辑历史读取私有原题。HTTP 与 WebSocket 共用只读事实判据，Inbox 在计数和分页前按相同条件过滤；旧通知保留数据库历史，但过期版本或缺失、非 Q 引用不返回正文。异步 WebSocket 查询只使用原有 read pool 允许的读取，不放宽自定义函数或写操作门禁。
+
 初建 Q 的题目、路由和通知在同事务保存，由原消息提交后发布最终完整 entry；初次保存不另外发布相同 revision 的 patch。后续答复和移交仍发布真正的新 revision patch，保留 WebSocket 客户端已收到的完整行作为更新基准。
 
 验证入口：[`issue-questions.test.ts`](../../tests/unit/multiremi/issue-questions.test.ts)覆盖 SQLite 和配置的真实 PostgreSQL 上的路由、答复、重复负责人、超时、来源尝试替换和移交。[`decision-callback-integration.test.ts`](../../tests/unit/daemon/decision-callback-integration.test.ts)使用原生 WS 与 mock provider callback，包含短断线保留 nonce 和真实 SIGKILL 后新进程执行唯一续接、读取上下文并确认消费。在线 provider 或飞书在线行为需要独立端到端验证，不由 mock 用例推断。
