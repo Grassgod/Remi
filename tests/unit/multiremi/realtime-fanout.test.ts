@@ -14,6 +14,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { MultiremiStore } from "@multiremi/store.js";
+import type { SqlDatabase } from "@multiremi/store/db/postgres.js";
 import { startMultiremiServer } from "@multiremi/api.js";
 import { MultiremiDaemonClient } from "@multiremi/worker/client.js";
 import { decodeDecisionCardBody, questionCardAction } from "@shared/feishu-task-card.js";
@@ -418,6 +419,7 @@ describe("realtime fanout — two servers over one database", () => {
       const { storeA, serverA, serverB } = two;
       const user = storeA.getOrCreateUser({
         externalId: "ou_peer_decision",
+        feishuUnionId: "on_peer_decision",
         name: "Peer decision member",
         email: "peer-decision@example.test",
       });
@@ -428,6 +430,12 @@ describe("realtime fanout — two servers over one database", () => {
         email: "peer-decision@example.test",
         role: "member",
       });
+      const database = (storeA as unknown as { db: SqlDatabase }).db;
+      const seenAt = new Date().toISOString();
+      database.run(`INSERT INTO multiremi_feishu_bot_senders
+        (id,workspace_id,app_id,open_id,union_id,display_name,allowed,first_seen_at,last_seen_at)
+        VALUES ('peer_question_human','local','cli_peer_decision','ou_peer_decision','on_peer_decision','Peer decision member',1,?,?)`,
+        [seenAt, seenAt]);
       const agent = storeA.createAgent({ name: "Peer decision agent", provider: "codex", workspaceId: "local" });
       storeA.registerRuntime({
         id: "rt_peer_decision",
@@ -436,12 +444,15 @@ describe("realtime fanout — two servers over one database", () => {
         workspaceId: "local",
         daemonId: "peer-decision-host",
       });
+      storeA.updateAgent(agent.id, { runtimeId: "rt_peer_decision" });
       storeA.heartbeatRuntime("rt_peer_decision", {
         supportsFeishuBotConfig: true,
         supportsIssueDecisionCard: true,
+        supportsDecisionCard: true,
       });
       const config = storeA.upsertFeishuBotConfig("local", {
         agentId: agent.id,
+        responsibleMemberId: member.id,
         runtimeId: "rt_peer_decision",
         appId: "cli_peer_decision",
         appSecretOp: "set",
@@ -460,7 +471,8 @@ describe("realtime fanout — two servers over one database", () => {
           issueTopics: { enabled: true, chatId: "oc_peer_decision", notifyMode: "person", notifyOpenId: "ou_peer_decision" },
         },
       });
-      const issue = storeA.createIssue({ title: "Peer decision issue", workspaceId: "local" });
+      const issue = storeA.createIssue({ title: "Peer decision issue", workspaceId: "local",
+        responsibleMemberId: member.id, assigneeType: "agent", assigneeId: agent.id });
       storeA.prepareFeishuIssueTopicWithinTransaction(issue);
       const root = storeA.claimFeishuBotOutbound("local", "rt_peer_decision")!;
       storeA.reportFeishuBotOutbound("local", "rt_peer_decision", root.id, {
@@ -493,21 +505,34 @@ describe("realtime fanout — two servers over one database", () => {
         const runtimeBase = `http://127.0.0.1:${serverB.port}`;
         await Bun.sleep(100);
         const postsBeforeCreate = { ...two.postCounts };
-        const created = storeA.createIssueDecision(issue.id, {
-          kind: "production_change", title: "Ship through the peer?",
-        }, { type: "member", id: member.id, taskId: null });
+        const task = storeA.createTask({ agentId: agent.id, issueId: issue.id, prompt: "Ask the designated human before shipping" });
+        expect(storeA.claimTask("rt_peer_decision")?.id).toBe(task.id);
+        storeA.startTask(task.id);
+        const turn = storeA.getTurnForAttempt(task.id)!;
+        const raised = storeA.getDaemonTurnBridge().rpc("turn.decision", {
+          turn_id: turn.id, attempt_id: task.id, wait_id: `peer-permission:${task.id}`,
+          dedupe_key: `peer-permission:${task.id}`, body_md: "Ship through the peer?",
+          options: [{ label: "Approve shipping", value: "yes" }],
+          metadata: { kind: "permission", human_required: true,
+            options: [{ optionId: "yes", name: "Approve shipping", kind: "allow_once" }] }, timeout_ms: 60_000,
+        }, { runtimeId: "rt_peer_decision", daemonId: "peer-decision-host", workspaceId: "local" });
+        expect(raised).toMatchObject({ ok: true });
+        const created = storeA.getQuestion(String(raised.message_id))!;
         const createDeadline = Date.now() + WS_TIMEOUT_MS;
         while ((!frames.some((frame) => frame.type === "decision:created")
           || two.postCounts.a === postsBeforeCreate.a) && Date.now() < createDeadline) {
           await Bun.sleep(20);
         }
-        expect(frames.filter((frame) => frame.type === "decision:created" && frame.payload.decision.id === created.id)).toHaveLength(1);
+        expect(frames.filter((frame) => frame.type === "decision:created" && frame.payload.root_question_id === created.id)).toHaveLength(1);
         expect(two.postCounts.a).toBeGreaterThan(postsBeforeCreate.a);
         expect(two.postCounts.b).toBe(postsBeforeCreate.b);
 
         const card = storeA.claimFeishuBotOutbound("local", "rt_peer_decision")!;
+        expect(card.kind).toBe("decision_card");
+        expect(card.degraded).toBeUndefined();
         const cardCredential = questionCardAction(decodeDecisionCardBody(card.body)!.card);
         expect(typeof cardCredential?.t).toBe("string");
+        expect(cardCredential?.route_revision).toBe(created.route_revision);
         storeA.reportFeishuBotOutbound("local", "rt_peer_decision", card.id, {
           claimToken: card.claimToken,
           status: "sent",
@@ -522,20 +547,25 @@ describe("realtime fanout — two servers over one database", () => {
           headers: { Authorization: `Bearer ${daemonToken.token}` },
         })).status).toBe(200);
 
+        // Native creation also invalidates the original question index. Count
+        // the answer's update separately from that already-delivered phase.
+        const updatesBeforeAnswer = frames.filter((frame) =>
+          frame.type === "decision:updated" && frame.payload.root_question_id === created.id).length;
         const postsBeforeAnswer = { ...two.postCounts };
         const daemon = new MultiremiDaemonClient(runtimeBase, daemonToken.token);
-        const answered = await daemon.answerFeishuIssueDecision(created.id, {
-          answer: "yes",
+        const answered = await daemon.respondTaskHumanRequest(created.id, { optionId: "yes" }, {
           operatorOpenId: "ou_peer_decision",
           token: cardCredential!.t as string,
+          routeRevision: Number(cardCredential!.route_revision),
         });
-        expect(answered.status).toBe("answered");
+        expect(answered.status).toBe("responded");
+        expect(storeA.getQuestion(created.id)?.status).toBe("answered");
         const answerDeadline = Date.now() + WS_TIMEOUT_MS;
         while (!frames.some((frame) => frame.type === "decision:updated") && Date.now() < answerDeadline) {
           await Bun.sleep(20);
         }
         await Bun.sleep(100);
-        expect(frames.filter((frame) => frame.type === "decision:updated" && frame.payload.decision.id === created.id)).toHaveLength(1);
+        expect(frames.filter((frame) => frame.type === "decision:updated" && frame.payload.root_question_id === created.id)).toHaveLength(updatesBeforeAnswer + 1);
         expect(two.postCounts.b).toBeGreaterThan(postsBeforeAnswer.b);
         expect(two.postCounts.a).toBe(postsBeforeAnswer.a);
       } finally {
