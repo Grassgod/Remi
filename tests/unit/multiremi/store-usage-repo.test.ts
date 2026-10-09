@@ -8,6 +8,7 @@ import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { MultiremiStore } from "@multiremi/store.js";
 import { StoreContext } from "@multiremi/store/context.js";
 import { UsageRepo } from "@multiremi/store/repos/usage-repo.js";
+import { createResponsibleTestIssue } from './helpers.js';
 
 let db: Database | null = null;
 let store: MultiremiStore | null = null;
@@ -90,7 +91,7 @@ describe("UsageRepo", () => {
     const second = store!.registerRuntime({ name: "second", provider: "claude" });
     const project = store!.createProject({ title: "Original", workspaceId: "local" });
     const otherProject = store!.createProject({ title: "Other", workspaceId: "local" });
-    const issue = store!.createIssue({ title: "Work", workspaceId: "local", projectId: project.id });
+    const issue = createResponsibleTestIssue(store!,{ title: "Work", workspaceId: "local", projectId: project.id });
     const agent = store!.createAgent({ name: "worker", workspaceId: "local", provider: "claude", runtimeId: first.id });
     const task = store!.createTask({ agentId: agent.id, issueId: issue.id, prompt: "cross day", workspaceId: "local" });
     store!.claimTask(first.id); store!.startTask(task.id);

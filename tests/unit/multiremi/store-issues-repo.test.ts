@@ -16,6 +16,8 @@ function createRepo(): IssuesRepo {
   // The store owns migrations and is the lazy cross-domain host the context resolves.
   store = new MultiremiStore(db);
   store.ensureLocalWorkspace();
+  store.createWorkspace({id:'wsp_1',name:'Reaction workspace',slug:'reaction'});
+  store.createWorkspaceMember({id:'repo_human_wsp_1',name:'Reaction fixture human',workspaceId:'wsp_1'});
   return new IssuesRepo(new StoreContext(db, () => store!));
 }
 
@@ -29,8 +31,8 @@ describe("IssuesRepo", () => {
   it("creates an issue with a per-workspace key and resolves it by ref", () => {
     const repo = createRepo();
 
-    const first = repo.createIssue({ title: "First", workspaceId: "local" });
-    const second = repo.createIssue({ title: "Second", workspaceId: "local" });
+    const first = repo.createIssue({ title: "First", workspaceId: "local", responsibleMemberId:'mem_local_local' });
+    const second = repo.createIssue({ title: "Second", workspaceId: "local", responsibleMemberId:'mem_local_local' });
     expect([first.key, second.key]).toEqual(["MUL-1", "MUL-2"]);
     expect(repo.getIssue(first.id)?.title).toBe("First");
     expect(repo.getIssueByRef(second.key, "local")?.id).toBe(second.id);
@@ -40,7 +42,7 @@ describe("IssuesRepo", () => {
 
   it("comments on an issue and records the activity timeline", () => {
     const repo = createRepo();
-    const issue = repo.createIssue({ title: "Discuss", workspaceId: "local" });
+    const issue = repo.createIssue({ title: "Discuss", workspaceId: "local", responsibleMemberId:'mem_local_local' });
 
     const comment = repo.createIssueComment(issue.id, { body: "first thought", authorType: "member", authorId: "local" });
     expect(repo.listIssueComments(issue.id).map((entry) => entry.id)).toEqual([comment.id]);
@@ -57,7 +59,7 @@ describe("IssuesRepo", () => {
 
   it("attaches and detaches a label, and hydrates it onto the issue", () => {
     const repo = createRepo();
-    const issue = repo.createIssue({ title: "Tagged", workspaceId: "local" });
+    const issue = repo.createIssue({ title: "Tagged", workspaceId: "local", responsibleMemberId:'mem_local_local' });
     const label = repo.createLabel({ name: "bug", color: "#ff0000", workspaceId: "local" });
 
     expect(repo.attachLabelToIssue(issue.id, label.id).map((entry) => entry.id)).toEqual([label.id]);
@@ -68,7 +70,7 @@ describe("IssuesRepo", () => {
 
   it("stores issue metadata under key/value validation", () => {
     const repo = createRepo();
-    const issue = repo.createIssue({ title: "Meta", workspaceId: "local" });
+    const issue = repo.createIssue({ title: "Meta", workspaceId: "local", responsibleMemberId:'mem_local_local' });
 
     expect(repo.setIssueMetadataKey(issue.id, "branch", "issue/MUL-1")).toEqual({ branch: "issue/MUL-1" });
     expect(repo.listIssueMetadata(issue.id)).toEqual({ branch: "issue/MUL-1" });
@@ -78,7 +80,7 @@ describe("IssuesRepo", () => {
 
   it("preserves private auto-title state while editing public metadata", () => {
     const repo = createRepo();
-    const issue = repo.createIssue({ title: "Meta", workspaceId: "local" });
+    const issue = repo.createIssue({ title: "Meta", workspaceId: "local", responsibleMemberId:'mem_local_local' });
     repo.setIssueAutoTitleMetadata(issue.id, {
       locked: true,
       count: 2,
@@ -114,7 +116,7 @@ describe("IssuesRepo", () => {
 describe("IssuesRepo reactions", () => {
   it("adds, de-duplicates and removes issue reactions", () => {
     const repo = createRepo();
-    const issue = repo.createIssue({ title: "React", workspaceId: "wsp_1" });
+    const issue = repo.createIssue({ title: "React", workspaceId: "wsp_1", responsibleMemberId:'repo_human_wsp_1' });
 
     expect(repo.listIssueReactions(issue.id)).toEqual([]);
     const added = repo.addIssueReaction(issue.id, { emoji: "👍" });
@@ -135,7 +137,7 @@ describe("IssuesRepo reactions", () => {
 
   it("adds, de-duplicates and removes comment reactions", () => {
     const repo = createRepo();
-    const issue = repo.createIssue({ title: "React", workspaceId: "wsp_1" });
+    const issue = repo.createIssue({ title: "React", workspaceId: "wsp_1", responsibleMemberId:'repo_human_wsp_1' });
     const comment = repo.createIssueComment(issue.id, { body: "hi" });
 
     expect(repo.listCommentReactions(comment.id)).toEqual([]);
@@ -155,7 +157,7 @@ describe("IssuesRepo reactions", () => {
 
   it("keeps the two parents' rows apart", () => {
     const repo = createRepo();
-    const issue = repo.createIssue({ title: "React", workspaceId: "local" });
+    const issue = repo.createIssue({ title: "React", workspaceId: "local", responsibleMemberId:'mem_local_local' });
     const comment = repo.createIssueComment(issue.id, { body: "hi" });
 
     repo.addIssueReaction(issue.id, { emoji: "👍" });
@@ -166,7 +168,7 @@ describe("IssuesRepo reactions", () => {
 
   it("rejects a blank emoji and an unknown parent on every entry point", () => {
     const repo = createRepo();
-    const issue = repo.createIssue({ title: "React", workspaceId: "local" });
+    const issue = repo.createIssue({ title: "React", workspaceId: "local", responsibleMemberId:'mem_local_local' });
     const comment = repo.createIssueComment(issue.id, { body: "hi" });
 
     expect(() => repo.addIssueReaction(issue.id, { emoji: "  " })).toThrow("emoji is required");
