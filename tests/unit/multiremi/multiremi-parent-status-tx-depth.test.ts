@@ -1401,7 +1401,11 @@ describe("MUL-400 E2 hook atomicity", () => {
     const original = ctx.db.run.bind(ctx.db);
     const failOn = ["turn_created"];
     ctx.db.run = (sql, params) => {
-      if (/INSERT\s+INTO\s+multiremi_issue_activity/i.test(sql) && Array.isArray(params) && failOn.includes(String(params[2]))) {
+      const columns = /INSERT\s+INTO\s+multiremi_issue_activity\s*\(([^)]+)\)/i.exec(sql)?.[1]?.split(',').map(column => column.trim());
+      const typeIndex = columns?.indexOf('type') ?? -1;
+      const values = /VALUES\s*\(([^)]+)\)/i.exec(sql)?.[1]?.split(',').map(value => value.trim());
+      const parameterIndex = values?.slice(0, typeIndex).filter(value => value === '?').length ?? -1;
+      if (typeIndex >= 0 && values?.[typeIndex] === '?' && Array.isArray(params) && failOn.includes(String(params[parameterIndex]))) {
         throw new Error("injected hook failure");
       }
       return original(sql, params);
