@@ -1,4 +1,4 @@
-import { createResponsibleTestIssue } from './helpers.js';
+import { createResponsibleTestIssue, acceptTestIssueDelivery } from './helpers.js';
 /**
  * MUL-400 E3 blocking 4 (MUL-409 fix round 2): the automatic-start chain must
  * stay a single transaction on the Postgres bridge.
@@ -61,7 +61,7 @@ describe("MUL-400 E3 — automatic start stays one transaction (SQLite)", () => 
     store.startTask(task.id);
     store.completeTask(task.id, { output: "done" });
 
-    store.updateIssue(prereq.id, { status: "done" });
+    acceptTestIssueDelivery(store, prereq.id);
     expect(store.getIssue(dependent.id)!.status).toBe("todo");
     expect(store.listTasksForIssue(dependent.id).filter((row) => row.status !== "cancelled")).toHaveLength(1);
   });
@@ -71,8 +71,8 @@ describe("MUL-400 E3 — automatic start stays one transaction (SQLite)", () => 
     store.ensureLocalWorkspace();
     const runtime = store.registerRuntime({ id: "rt_depth2", name: "Worker", provider: "claude", maxConcurrency: 4 });
     const agent = store.createAgent({ name: "Owner", provider: "claude", runtimeId: runtime.id });
-    const first = createResponsibleTestIssue(store, { title: "First", status: "in_progress" });
-    const second = createResponsibleTestIssue(store, { title: "Second", status: "in_progress" });
+    const first = createResponsibleTestIssue(store, { title: "First", status: "in_progress", assigneeType:'agent',assigneeId:agent.id });
+    const second = createResponsibleTestIssue(store, { title: "Second", status: "in_progress", assigneeType:'agent',assigneeId:agent.id });
     const dependent = createResponsibleTestIssue(store, {
       title: "Dependent",
       status: "backlog",
@@ -81,9 +81,9 @@ describe("MUL-400 E3 — automatic start stays one transaction (SQLite)", () => 
       assigneeId: agent.id,
     });
 
-    store.updateIssue(first.id, { status: "done" });
+    acceptTestIssueDelivery(store, first.id);
     expect(store.getIssue(dependent.id)!.status).toBe("backlog");
-    store.updateIssue(second.id, { status: "done" });
+    acceptTestIssueDelivery(store, second.id);
     expect(store.getIssue(dependent.id)!.status).toBe("todo");
     expect(store.listTasksForIssue(dependent.id).filter((row) => row.status !== "cancelled")).toHaveLength(1);
   });

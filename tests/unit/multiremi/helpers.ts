@@ -30,6 +30,7 @@ import { MultiremiStore } from "@multiremi/store.js";
 import { bootstrapPreUnifiedSchema } from "@multiremi/store/migrations.js";
 import { historicalWriters } from "./unified-model-test-backends.js";
 import { createId } from "@multiremi/ids.js";
+import { createCommitEventQueue, type StoreContext } from '@multiremi/store/context.js';
 import type {
   MultiremiAgent,
   MultiremiAgentPlugin,
@@ -79,17 +80,64 @@ export function createResponsibleTestIssue(store: MultiremiStore, input: CreateI
 }
 
 /** Close through the real delivery API. Fixtures must explicitly supply an Agent execution owner. */
-export function acceptTestIssueDelivery(store: MultiremiStore, issueId: string, summary='Verified fixture delivery'): MultiremiIssue {
+export function prepareTestIssueDelivery(store: MultiremiStore, issueId: string, summary='Verified fixture delivery') {
   const responsibility=store.resolveIssueResponsibility(issueId);
   if(responsibility.unresolved.length || !responsibility.executionOwner || !responsibility.reviewOwner)throw new Error('Configure a complete test Issue responsibility before accepting its delivery');
   const owner=responsibility.executionOwner;
   const task=store.createTask({agentId:owner.id,issueId:owner.issueId,prompt:summary});
   const delivery=store.submitIssueDelivery(issueId,{summary},{type:'agent',id:owner.id,taskId:task.id});
   const reviewer=responsibility.reviewOwner;
-  const reviewerTask=reviewer.type==='agent'?store.createTask({agentId:reviewer.id,issueId:reviewer.issueId,prompt:'Review fixture delivery'}):null;
-  store.respondIssueDelivery(issueId,delivery.id,{action:'accept',revision:delivery.responsibilityRevision},
-    {type:reviewer.type,id:reviewer.id,...(reviewerTask?{taskId:reviewerTask.id}:{})});
+  const reviewerTask=reviewer.type==='agent'?(store.listTasksForIssue(reviewer.issueId).find(candidate=>
+    candidate.agentId===reviewer.id&&['queued','running','awaiting_human'].includes(candidate.status)&&!candidate.chatSessionId&&
+    !!candidate.issueSessionId&&store.getIssueSession(candidate.issueSessionId)?.inheritMode==='none')
+    ??store.createTask({agentId:reviewer.id,issueId:reviewer.issueId,prompt:'Review fixture delivery'})):null;
+  return {delivery,executionTask:task,actor:{type:reviewer.type,id:reviewer.id,...(reviewerTask?{taskId:reviewerTask.id}:{})}};
+}
+
+export function acceptTestIssueDelivery(store: MultiremiStore, issueId: string, summary='Verified fixture delivery'): MultiremiIssue {
+  const {delivery,actor}=prepareTestIssueDelivery(store,issueId,summary);
+  store.respondIssueDelivery(issueId,delivery.id,{action:'accept',revision:delivery.responsibilityRevision},actor);
   return store.getIssue(issueId)!;
+}
+
+/** Seed a documented pre-responsibility snapshot, never a current business write.
+ * No delivery receipt is invented; consumers must still expose legacy gaps. */
+export function seedHistoricalIssueFacts(store: MultiremiStore, issueId: string, facts: {
+  status?: MultiremiIssue['status']; assigneeType?: MultiremiIssue['assigneeType']; assigneeId?: string|null;
+}): MultiremiIssue {
+  const issue=store.getIssue(issueId);
+  if(!issue)throw new Error('Historical fixture Issue not found');
+  const database=(store as unknown as {db:import('@multiremi/store/db/postgres.js').SqlDatabase}).db;
+  const columns:Record<string,unknown>={};
+  if(Object.hasOwn(facts,'status'))columns.status=facts.status;
+  if(Object.hasOwn(facts,'assigneeType'))columns.assignee_type=facts.assigneeType;
+  if(Object.hasOwn(facts,'assigneeId'))columns.assignee_id=facts.assigneeId;
+  const entries=Object.entries(columns);
+  if(entries.length)database.run(`UPDATE multiremi_issues SET ${entries.map(([column])=>`${column}=?`).join(',')} WHERE id=?`,[...entries.map(([,value])=>value),issueId]);
+  return store.getIssue(issueId)!;
+}
+
+/** A read/upgrade fixture with old member execution or already-closed facts.
+ * Never use for current creation, assignment, closing, or acceptance tests. */
+export function createHistoricalTestIssue(store: MultiremiStore,input:CreateIssueInput):MultiremiIssue {
+  const member=(input.assigneeType??input.assignee_type)==='member';
+  const done=input.status==='done';
+  const issue=createResponsibleTestIssue(store,{...input,...(member?{assigneeType:null,assignee_type:null,assigneeId:null,assignee_id:null}:{}),...(done?{status:'in_progress'}:{})});
+  return seedHistoricalIssueFacts(store,issue.id,{...(member?{assigneeType:'member',assigneeId:input.assigneeId??input.assignee_id??null}:{}),...(done?{status:'done'}:{})});
+}
+
+/** Replay a pre-responsibility terminal fact into the notification consumer.
+ * This cannot authorize current closure and deliberately creates no delivery receipt. */
+export function replayHistoricalTestChildDone(store: MultiremiStore, issueId:string):void {
+  const {db:database,ctx}=store as unknown as {db:import('@multiremi/store/db/postgres.js').SqlDatabase;ctx:StoreContext};
+  const previous=store.getIssue(issueId)!;
+  const events=createCommitEventQueue();
+  database.transaction(()=>{
+    ctx.lockWorkspaceRuntimeLifecycle(previous.workspaceId);
+    const historical=seedHistoricalIssueFacts(store,issueId,{status:'done'});
+    ctx.issues().notifyChildStatusChangeWithinTransaction(previous,historical,null,[],events);
+  })();
+  ctx.emitCommitEvents(events);
 }
 
 export function configureRepositoryWikiAutomation(

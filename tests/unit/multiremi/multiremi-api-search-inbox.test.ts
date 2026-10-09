@@ -1,4 +1,4 @@
-import { createResponsibleTestIssue } from './helpers.js';
+import { createResponsibleTestIssue, acceptTestIssueDelivery } from './helpers.js';
 import { issueMessagesPath, requestMessageBody } from "./unified-test-paths.js";
 // Pinned shortcuts, issue/project search, issue subscribers and the member inbox.
 import { afterEach, describe, expect, it } from "bun:test";
@@ -80,8 +80,9 @@ describe("Multiremi API — pins, search, and inbox", () => {
     const store = createStore();
     const app = createMultiremiApp({ store });
     const issue = createResponsibleTestIssue(store, { title: "Searchable API issue", description: "Has api needle context", workspaceId: "local" });
-    const closedIssue = createResponsibleTestIssue(store, { title: "Closed API issue", description: "closed needle", workspaceId: "local" });
-    store.updateIssue(closedIssue.id, { status: "done" });
+    const execution=store.createAgent({name:'Search fixture execution',provider:'codex'});
+    const closedIssue = createResponsibleTestIssue(store, { title: "Closed API issue", description: "closed needle", workspaceId: "local",assigneeType:'agent',assigneeId:execution.id });
+    acceptTestIssueDelivery(store, closedIssue.id);
     const commentedIssue = createResponsibleTestIssue(store, { title: "Comment API issue", description: "No matching body", workspaceId: "local", createdBy: "api-user" });
     store.createIssueComment(commentedIssue.id, { authorType: "member", body: "Fresh comment needle context" });
     const remoteIssue = createResponsibleTestIssue(store, { title: "Remote Issue Needle", description: "Remote issue needle", workspaceId: "remote" });
