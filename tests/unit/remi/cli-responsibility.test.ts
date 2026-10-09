@@ -42,7 +42,7 @@ describe("responsibility CLI", () => {
       "GET /api/issues/:id/deliveries": "issue.delivery.list", "POST /api/issues/:id/deliveries": "issue.delivery.submit",
       "POST /api/issues/:id/deliveries/:deliveryId/respond": "issue.delivery.accept", "POST /api/issues/:id/deliveries/:deliveryId/authorize": "issue.delivery.authorize",
       "GET /api/issues/:id/questions": "issue.question.list", "GET /api/messages/:id/question": "message.question.get",
-      "GET /api/workspaces/:id/issue-responsibility-migration": "issue.responsibility-unassigned.list", "POST /api/workspaces/:id/issue-responsibility-migration/map": "issue.responsibility-unassigned.map",
+      "GET /api/workspaces/:workspaceId/issue-responsibility-migration": "issue.responsibility-unassigned.list", "POST /api/workspaces/:workspaceId/issue-responsibility-migration/map": "issue.responsibility-unassigned.map",
       ...Object.fromEntries(["answer", "escalate", "transfer", "present", "continue", "close"].map(action => [`POST /api/messages/:id/question/${action}`, `message.question.${action}`])),
     };
     expect(Object.keys(mappings)).toHaveLength(15);
