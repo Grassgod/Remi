@@ -12,6 +12,7 @@
 // byte-comparable.
 import { performance } from "node:perf_hooks";
 import type { MultiremiStore } from "@multiremi/store.js";
+import type { SqlDatabase } from '@multiremi/store/db/postgres.js';
 
 export interface IssueDetailFixtureOptions {
   /** Root comments on the long Issue. Replies are added on top. */
@@ -305,9 +306,16 @@ export function seedIssueDetailFirstScreenFixture(
       parentIssueId: issue.id,
       title: `MUL-385 child ${index}`,
       description: filler("child description", index, 400),
-      status: index % 2 === 0 ? "done" : "in_progress",
+      status: "in_progress",
       createdBy: owner.id,
     });
+    // Already-settled legacy children are read facts, not a current closure operation.
+    if(index%2===0) {
+      const statement='UPDATE multiremi_issues SET status=? WHERE id=?';
+      const params=['done',child.id];
+      if(options.run)options.run(statement,params);
+      else (store as unknown as {db:SqlDatabase}).db.run(statement,params);
+    }
     store.getOrCreateDefaultIssueSession(child.id, owner.id);
     childIssueIds.push(child.id);
   }

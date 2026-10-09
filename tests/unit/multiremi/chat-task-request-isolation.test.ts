@@ -20,7 +20,20 @@ async function fixture(topic = false) {
   const defaultSession = store.getOrCreateDefaultIssueSession(issue.id);
   const session = store.createIssueSession(issue.id, { title: "Original task session" });
   const chat = store.createChatSession({ agentId: agent.id, creatorId: "local" });
-  if (topic) bindFeishuTopicFixture(store, db!, chat.id, issue.id);
+  if (topic) {
+    // This Chat's technical creator is not its verified external human source.
+    const runtime=store.registerRuntime({name:'Synthetic transport host',provider:'codex',workspaceId:'local'});
+    const previousKey=process.env.MULTIREMI_FEISHU_BOT_ENCRYPTION_KEY;
+    process.env.MULTIREMI_FEISHU_BOT_ENCRYPTION_KEY=Buffer.alloc(32,19).toString('base64');
+    try {
+      store.upsertFeishuBotConfig('local',{agentId:agent.id,runtimeId:runtime.id,appId:'synthetic-isolation',appSecretOp:'set',appSecret:'synthetic-test-only',
+        enabled:false,responsibleMemberId:store.resolveIssueResponsibility(issue.id).rootHuman!.id});
+    } finally {
+      if(previousKey===undefined)delete process.env.MULTIREMI_FEISHU_BOT_ENCRYPTION_KEY;
+      else process.env.MULTIREMI_FEISHU_BOT_ENCRYPTION_KEY=previousKey;
+    }
+    bindFeishuTopicFixture(store, db!, chat.id, issue.id);
+  }
   const task = store.createTask({
     agentId: agent.id,
     chatSessionId: chat.id,
