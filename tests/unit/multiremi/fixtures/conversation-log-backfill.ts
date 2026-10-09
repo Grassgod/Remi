@@ -1,12 +1,12 @@
-import { createResponsibleTestIssue } from '../helpers.js';
 import type { MultiremiStore } from "@multiremi/store.js";
 import type { SqlDatabase } from "@multiremi/store/db/postgres.js";
 import { bindFeishuTopicFixture } from "../feishu-topic-fixture.js";
 
-/** Shared synthetic inputs for the regression and the reproducible migration report. */
+/** Actual pre-unified inputs for the regression and reproducible migration report.
+ * This writer deliberately preserves the historical absence of modern responsibility. */
 export function prepareConversationBackfillFixture(store: MultiremiStore, db: SqlDatabase) {
   const agent = store.createAgent({ name: "Backfill author", provider: "codex", workspaceId: "local" });
-  const issue = createResponsibleTestIssue(store, { title: "Historical issue", description: "Historical body", workspaceId: "local" });
+  const issue = store.createIssue({ title: "Historical issue", description: "Historical body", workspaceId: "local" });
   const session = store.getOrCreateDefaultIssueSession(issue.id);
   const edited = store.createIssueComment(issue.id, { authorType: "agent", authorId: agent.id, taskId: "tsk_history", body: "Original wording" });
   store.updateIssueComment(edited.id, { body: "Intermediate wording" });

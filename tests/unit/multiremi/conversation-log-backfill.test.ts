@@ -1,4 +1,3 @@
-import { createResponsibleTestIssue } from './helpers.js';
 import { describe, expect, it } from "bun:test";
 import { backfillConversationLogWithinTransaction, CONVERSATION_LOG_BACKFILL_MIGRATION, ConversationBackfillMismatch,
   canonicalConversationJson, reconcileConversationLog } from "@multiremi/store/conversation-log-backfill.js";
@@ -52,7 +51,7 @@ describe("MUL-427 B7: conversation backfill and reconciliation", () => {
               VALUES ('eve_deleted_issue', 'ises_deleted_issue', 1, 'member', 'message', 'Retained legacy event', '{}', ?)`, [at]);
           } else {
             const agent = store.createAgent({ name: "Historical topic worker", provider: "codex", workspaceId: "local" });
-            const issue = createResponsibleTestIssue(store, { title: "Historical topic Issue", workspaceId: "local" });
+            const issue = store.createIssue({ title: "Historical topic Issue", workspaceId: "local" });
             const session = store.getOrCreateDefaultIssueSession(issue.id);
             const chat = store.createChatSession({ agentId: agent.id, workspaceId: "local", creatorId: "local" });
             bindFeishuTopicFixture(store, db, chat.id, issue.id);
@@ -108,7 +107,7 @@ describe("MUL-427 B7: conversation backfill and reconciliation", () => {
     it.skipIf(backend === "pg" && !pgAdminUrl)(`${backend}: old database first v2 startup repairs NULL Issue sessions and preserves Chat-owned topic transport`, async () => {
       await withStore(backend, (store, db) => {
         const agent = store.createAgent({ name: "Legacy startup worker", provider: "codex", workspaceId: "local" });
-        const issue = createResponsibleTestIssue(store, { title: "Legacy NULL sessions", workspaceId: "local" });
+        const issue = store.createIssue({ title: "Legacy NULL sessions", workspaceId: "local" });
         const chat = store.createChatSession({ agentId: agent.id, workspaceId: "local", creatorId: "local" });
         bindFeishuTopicFixture(store, db, chat.id, issue.id);
         const topic = store.sendChatMessage(chat.id, { content: "Historical topic message" });
@@ -206,7 +205,7 @@ describe("MUL-427 B7: conversation backfill and reconciliation", () => {
     for (const field of ["task_id", "created_at"] as const) {
       it.skipIf(backend === "pg" && !pgAdminUrl)(`${backend}: reconciles a ${field} corruption confined to the log row`, async () => {
         await withStore(backend, (store, db) => {
-          const issue = createResponsibleTestIssue(store, { title: `Independent ${field} corruption`, workspaceId: "local" });
+          const issue = store.createIssue({ title: `Independent ${field} corruption`, workspaceId: "local" });
           const comment = store.createIssueComment(issue.id, { body: "Raw body\nno normalization", taskId: "tsk_source_hash" });
           const entry = store.getConversationLogEntryById(comment.id)!;
           expect(reconcileConversationLog(db).mismatches).toEqual([]);
@@ -282,7 +281,7 @@ describe("MUL-427 B7: conversation backfill and reconciliation", () => {
 
     it.skipIf(backend === "pg" && !pgAdminUrl)(`${backend}: task conflicts and last-edit divergence are classified and roll back without repair`, async () => {
       await withStore(backend, (store, db) => {
-        const issue = createResponsibleTestIssue(store, { title: "Rejected mismatch", workspaceId: "local" });
+        const issue = store.createIssue({ title: "Rejected mismatch", workspaceId: "local" });
         const comment = store.createIssueComment(issue.id, { body: "Original", taskId: "tsk_expected" });
         db.run("UPDATE multiremi_conversation_log SET task_id = 'tsk_conflict' WHERE id = ?", [comment.id]);
         expect(() => db.transaction(() => backfillConversationLogWithinTransaction(db))()).toThrow(ConversationBackfillMismatch);
@@ -302,7 +301,7 @@ describe("MUL-427 B7: conversation backfill and reconciliation", () => {
 
     it.skipIf(backend === "pg" && !pgAdminUrl)(`${backend}: startup ledger is atomic on a late SQL failure and the next startup retries exactly once`, async () => {
       await withStore(backend, (store, db) => {
-        const issue = createResponsibleTestIssue(store, { title: "Startup rollback", workspaceId: "local" });
+        const issue = store.createIssue({ title: "Startup rollback", workspaceId: "local" });
         const comment = store.createIssueComment(issue.id, { body: "Historical input", taskId: "tsk_startup" });
         db.run("DELETE FROM multiremi_conversation_log WHERE session_id = ?", [comment.issueSessionId]);
         db.run("DELETE FROM multiremi_schema_migrations WHERE id = ?", [CONVERSATION_LOG_BACKFILL_MIGRATION]);
@@ -328,7 +327,7 @@ describe("MUL-427 B7: conversation backfill and reconciliation", () => {
 
     it.skipIf(backend === "pg" && !pgAdminUrl)(`${backend}: old startup metadata and /events since/to bounds retain comments and hidden markers`, async () => {
       await withStore(backend, (store, db) => {
-        const issue = createResponsibleTestIssue(store, { title: "Wire boundaries", workspaceId: "local" });
+        const issue = store.createIssue({ title: "Wire boundaries", workspaceId: "local" });
         const comment = store.createIssueComment(issue.id, { body: "Original wire", taskId: "tsk_wire" });
         store.resolveIssueComment(comment.id);
         store.unresolveIssueComment(comment.id);
@@ -353,7 +352,7 @@ describe("MUL-427 B7: conversation backfill and reconciliation", () => {
 
   it.skipIf(!pgAdminUrl)("pg: oversized Unicode bodies and escaped metadata backfill through the real worker shared buffer", async () => {
     await withStore("pg", (store, db, target) => {
-      const issue = createResponsibleTestIssue(store, { title: "Bounded bridge chunks", workspaceId: "local" });
+      const issue = store.createIssue({ title: "Bounded bridge chunks", workspaceId: "local" });
       const session = store.getOrCreateDefaultIssueSession(issue.id);
       const body = "\u6f22\ud83d\ude00\u0001".repeat(128 * 1024);
       const comment = store.createIssueComment(issue.id, { body });
@@ -380,7 +379,7 @@ describe("MUL-427 B7: conversation backfill and reconciliation", () => {
 
   it.skipIf(!pgAdminUrl)("pg: 800 control-character rows stay inside the real 64 MiB worker batch bound", async () => {
     await withStore("pg", (store, db) => {
-      const issue = createResponsibleTestIssue(store, { title: "Bounded control-character batches", workspaceId: "local" });
+      const issue = store.createIssue({ title: "Bounded control-character batches", workspaceId: "local" });
       const session = store.getOrCreateDefaultIssueSession(issue.id);
       db.run(`INSERT INTO multiremi_session_events (id, session_id, seq, author_type, kind, body, metadata, created_at)
         SELECT 'eve_ctrl_batch_' || n, ?, n, 'member', 'message', repeat(chr(1), 17000),
