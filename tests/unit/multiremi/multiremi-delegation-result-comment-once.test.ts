@@ -350,10 +350,14 @@ async function runCancelledE2SnapshotCase(store: MultiremiStore): Promise<void> 
     await startThroughDaemon(base, store, credentials.daemon, childTask, f.workerRuntime.id);
 
     const taskToken = await store.createTaskAccessToken(childTask, "local");
-    await requestJson(base, `/api/multiremi/issues/${f.child.id}`, taskToken.token,
-      { status: "done" }, 200, "PATCH");
+    const submitted = await requestJson(base, `/api/issues/${f.child.id}/deliveries`, taskToken.token,
+      { summary: "Work ready for the parent execution owner's review" }, 201);
     const e2Round=store.listTasksForIssue(f.parent.id).find(task=>task.status==="queued"&&task.issueSessionId===store.getOrCreateDefaultIssueSession(f.parent.id).id)!;
     expect(e2Round).toBeDefined();
+    const reviewerToken = await store.createTaskAccessToken(e2Round, "local");
+    await requestJson(base, `/api/issues/${f.child.id}/deliveries/${submitted.delivery.id}/respond`, reviewerToken.token,
+      { action: "accept", revision: submitted.delivery.responsibilityRevision });
+    expect(store.getIssue(f.child.id)?.status).toBe("done");
 
     const selects = countResultCommentSelectsForTask(store, childTask.id);
     await reportThroughDaemon(store, credentials.daemon, childTask.id, "complete",
@@ -363,8 +367,9 @@ async function runCancelledE2SnapshotCase(store: MultiremiStore): Promise<void> 
       .find((event) => event.kind === "message" && (event.metadata.message_source as any)?.taskId === childTask.id)!;
     const bridgeBeforeCancel = JSON.stringify(reportSnapshot(bridge()));
     const automaticComment = store.listIssueComments(f.child.id)
-      .find((comment) => comment.taskId === childTask.id)!;
+      .find((comment) => comment.taskId === childTask.id && comment.id !== submitted.delivery.id)!;
     expect(automaticComment).toBeDefined();
+    expect(automaticComment.body).toContain("Automatic result comment C");
     expect((bridge().metadata.message_source as any).commentId).toBe(automaticComment.id);
     expect(selects.count()).toBe(1);
 
