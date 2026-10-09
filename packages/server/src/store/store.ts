@@ -5616,6 +5616,7 @@ runMigrations(this.db);
   issueMessageCardToken(...args: Parameters<InboxRepo["operations"]["issueMessageCardToken"]>) { return this.inbox.operations.issueMessageCardToken(...args); }
   answerMessageDecision(...args: Parameters<InboxRepo["operations"]["answerMessageDecision"]>) { return this.inbox.operations.answerMessageDecision(...args); }
   getQuestion(...args: Parameters<Questions['get']>) { return new Questions(this.ctx).get(...args); }
+  canAccessQuestionFromTurn(...args: Parameters<Questions['canAccessFromTurn']>) { return new Questions(this.ctx).canAccessFromTurn(...args); }
   listIssueQuestions(...args: Parameters<Questions['list']>) { return new Questions(this.ctx).list(...args); }
   answerQuestion(...args: Parameters<Questions['answer']>) { return new Questions(this.ctx).answer(...args); }
   escalateQuestion(...args: Parameters<Questions['escalate']>) { return new Questions(this.ctx).escalate(...args); }

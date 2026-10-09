@@ -143,13 +143,37 @@ export class Questions {
       return { ...record.wait, status: 'detached', reason: !turn ? 'source_turn_missing' : turn.current_attempt_id !== record.source_attempt_id ? 'provider_attempt_replaced' : `source_turn_${turn.status}` };
     return record.wait;
   }
-  private actor(record: QuestionRecord, sender: SendMessageInput['sender'], sourceTurnId?: string): QuestionActor {
+  canAccessFromTurn(id: string, agentId: string, turnId?: string): boolean {
+    const loaded = this.read(id);
+    const turn = turnId ? this.ctx.db.query('SELECT * FROM multiremi_turns WHERE id=?').get(turnId) : null;
+    if (!loaded || !turn || turn.agent_id !== agentId || turn.workspace_id !== loaded.record.workspace_id
+      || !['running', 'awaiting_human'].includes(turn.status) || !this.integrity(loaded.message, loaded.record)) return false;
+    const { message, record } = loaded;
+    // Source access follows the original product lane, including a cold
+    // continuation. A different session or delegated scope is not that lane.
+    if (message.sender_id === agentId && message.session_id === turn.session_id
+      && String(message.metadata.execution_scope ?? '') === String(turn.execution_scope ?? '')) return true;
+    const handler = record.route[record.route_index]?.handler;
+    const remi = this.ctx.feishuBot().getFeishuBotConfig(record.workspace_id)?.agentId;
+    if (!same(handler, { type: 'agent', id: agentId }) && !(handler?.type === 'member' && remi === agentId)) return false;
+    // A responsibility assignment grants only the notification's actual lane.
+    // Matching Agent identity or an inherited Issue does not grant private Q access.
+    return !!this.ctx.db.query(`SELECT n.id FROM multiremi_conversation_log n WHERE n.session_id=?
+      AND n.to_agent_id=? AND n.deleted_at IS NULL AND ${this.jsonText('n', 'root_question_id')}=?
+      AND CAST(${this.jsonText('n', 'question_route_revision')} AS TEXT)=?
+      AND COALESCE(${this.jsonText('n', 'execution_scope')},'')=?
+      AND (CAST(${this.jsonText('n', 'question_notification')} AS TEXT) IN ('true','1') OR CAST(${this.jsonText('n', 'question_present_request')} AS TEXT) IN ('true','1')) LIMIT 1`)
+      .get(turn.session_id, agentId, id, String(record.route_revision), String(turn.execution_scope ?? ''));
+  }
+  private actor(record: QuestionRecord, sender: SendMessageInput['sender'], sourceTurnId?: string, messageId?: string, expectedRouteRevision?: number): QuestionActor {
     if ((sender.type !== 'agent' && sender.type !== 'member') || !sender.id) throw new QuestionError(403, 'question_actor_required');
     const actor = sender.type === 'agent' ? this.ctx.agents().getAgent(sender.id) : this.ctx.workspaces().getWorkspaceMember(sender.id);
     if (!actor || actor.workspaceId !== record.workspace_id || actor.archivedAt) throw new QuestionError(403, 'question_actor_workspace_mismatch');
     if (sender.type === 'agent') {
       const turn = sourceTurnId ? this.ctx.db.query('SELECT * FROM multiremi_turns WHERE id=?').get(sourceTurnId) : null;
       if (!turn || turn.agent_id !== sender.id || turn.workspace_id !== record.workspace_id || !['running', 'awaiting_human'].includes(turn.status)) throw new QuestionError(403, 'question_agent_current_turn_required');
+      if (Number.isSafeInteger(expectedRouteRevision) && expectedRouteRevision! > 0 && expectedRouteRevision !== record.route_revision) throw new QuestionError(409, 'question_route_changed');
+      if (!messageId || !this.canAccessFromTurn(messageId, sender.id, sourceTurnId)) throw new QuestionError(403, 'question_agent_notification_lane_required');
     }
     return { type: sender.type, id: sender.id };
   }
@@ -272,7 +296,7 @@ export class Questions {
   }
   answer(id: string, input: QuestionAnswerInput, sender: SendMessageInput['sender'], sourceTurnId?: string, credential?: QuestionCardCredential) {
     return this.transaction(events => {
-      const { message, record } = this.lock(id), actor = this.actor(record, sender, sourceTurnId);
+      const { message, record } = this.lock(id), actor = this.actor(record, sender, sourceTurnId, id, input.expected_route_revision);
       const revise = input.revise === true;
       if (revise) {
         if (credential || actor.type !== 'member' || !same(record.route.find(r => r.stage === 'human')?.handler, actor) || record.status !== 'answered') throw new QuestionError(403, 'question_revision_human_required');
@@ -310,7 +334,7 @@ export class Questions {
   }
   escalate(id: string, input: QuestionMutationInput, sender: SendMessageInput['sender'], sourceTurnId?: string) {
     return this.transaction(events => {
-      const { message, record } = this.lock(id), actor = this.actor(record, sender, sourceTurnId);
+      const { message, record } = this.lock(id), actor = this.actor(record, sender, sourceTurnId, id, input.expected_route_revision);
       this.current(message, record, actor, input.expected_route_revision);
       if (actor.type !== 'agent' || record.status !== 'pending' || !input.reason?.trim()) throw new QuestionError(400, 'question_escalation_reason_required');
       record.route_index++; record.route_revision++; record.summary = null;
@@ -322,7 +346,7 @@ export class Questions {
   }
   transfer(id: string, input: QuestionMutationInput, sender: SendMessageInput['sender'], sourceTurnId?: string) {
     return this.transaction(events => {
-      const { message, record } = this.lock(id), actor = this.actor(record, sender, sourceTurnId);
+      const { message, record } = this.lock(id), actor = this.actor(record, sender, sourceTurnId, id, input.expected_route_revision);
       const newRoute = this.route(record.source_issue_id, message.sender_id, record.human_required, message.session_id, record.workspace_id);
       const rootHuman = record.route.find(r => r.stage === 'human')?.handler;
       const newHuman = newRoute.steps.find(r => r.stage === 'human')?.handler;
@@ -338,7 +362,7 @@ export class Questions {
   }
   close(id: string, input: QuestionMutationInput, sender: SendMessageInput['sender'], sourceTurnId?: string) {
     return this.transaction(events => {
-      const { message, record } = this.lock(id), actor = this.actor(record, sender, sourceTurnId);
+      const { message, record } = this.lock(id), actor = this.actor(record, sender, sourceTurnId, id, input.expected_route_revision);
       if (input.expected_route_revision !== record.route_revision) throw new QuestionError(409, 'question_route_changed');
       if (!same(record.route[record.route_index]?.handler, actor) && !same(record.route.find(r => r.stage === 'human')?.handler, actor) && !(actor.type === 'agent' && actor.id === message.sender_id)) throw new QuestionError(403, 'question_close_authority_required');
       if (record.status !== 'pending' || !input.reason?.trim()) throw new QuestionError(400, 'question_close_reason_required');
@@ -357,7 +381,7 @@ export class Questions {
   }
   present(id: string, input: QuestionMutationInput & { summary: string }, sender: SendMessageInput['sender'], sourceTurnId?: string) {
     return this.transaction(events => {
-      const { message, record } = this.lock(id), actor = this.actor(record, sender, sourceTurnId);
+      const { message, record } = this.lock(id), actor = this.actor(record, sender, sourceTurnId, id, input.expected_route_revision);
       const bot = this.ctx.feishuBot().getFeishuBotConfig(record.workspace_id);
       if (actor.type !== 'agent' || actor.id !== bot?.agentId || record.route[record.route_index]?.stage !== 'human') throw new QuestionError(403, 'question_present_remi_required');
       if (input.expected_route_revision !== record.route_revision || record.status !== 'pending') throw new QuestionError(409, 'question_route_changed');

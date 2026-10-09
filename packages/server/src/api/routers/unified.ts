@@ -225,9 +225,9 @@ export function registerUnifiedRoutes(app: Hono, deps: RouterDeps): void {
   };
   // A routed Q grants access to this original question only. It never grants
   // access to the source Agent's private message history, Chat or trace.
-  const routedQuestionAccess = (q: NonNullable<ReturnType<typeof store.getQuestion>>, actor: QuestionActor | undefined) => !!actor
-    && (actor.type === 'agent' && q.source_agent_id === actor.id
-      || q.current_handler?.type === actor.type && q.current_handler.id === actor.id
+  const routedQuestionAccess = (c: Context, q: NonNullable<ReturnType<typeof store.getQuestion>>, actor: QuestionActor | undefined) => !!actor
+    && (actor.type === 'agent' ? store.canAccessQuestionFromTurn(q.id, actor.id, callerTurn(c))
+      : q.current_handler?.type === actor.type && q.current_handler.id === actor.id
       || q.actions.allowed.some(action => ['present', 'close', 'revise'].includes(action)));
   const loadQuestion = (c: Context) => {
     const message = store.getMessage(c.req.param('id')!);
@@ -237,7 +237,7 @@ export function registerUnifiedRoutes(app: Hono, deps: RouterDeps): void {
     const denied = denyCurrentUserWorkspaceAccess(c, store, raw.workspace_id); if (denied) return denied;
     const actor = questionActor(c, raw.workspace_id); if (actor instanceof Response) return actor;
     const question = store.getQuestion(message.id, actor)!;
-    if (routedQuestionAccess(question, actor)) return { message, question, actor };
+    if (routedQuestionAccess(c, question, actor)) return { message, question, actor };
     // Agent credentials cannot borrow their runtime owner's private visibility.
     if (actor?.type === 'agent') return c.json({ error: 'question handler required' }, 403);
     const visible = loadMessage(c); if (visible instanceof Response) return visible;
@@ -256,7 +256,7 @@ export function registerUnifiedRoutes(app: Hono, deps: RouterDeps): void {
     catch (error) { if (error instanceof QuestionError) return c.json({ error: error.message, code: error.code }, error.status); throw error; }
     return c.json({ nextCursor: page.length === limit ? page.at(-1)!.id : null, questions: page.filter(q => {
       const message = store.getMessage(q.id)!;
-      return routedQuestionAccess(q, actor) || actor?.type !== 'agent' && !(loadConversation(c, store, q.session_id) instanceof Response) && visible(message);
+      return routedQuestionAccess(c, q, actor) || actor?.type !== 'agent' && !(loadConversation(c, store, q.session_id) instanceof Response) && visible(message);
     }) });
   });
   app.get('/api/messages/:id/question', c => {

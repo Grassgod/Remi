@@ -208,6 +208,9 @@ trace、usage、附件、Session Archive 与 outbox 分区仍以 attempt id（�
 后者是控制帧，不推进消息游标。elicitation 和 `kind=permission` 都使用 `turn.decision`：
 S2 同事务创建 decision 消息并将轮置为 `awaiting_human`，通过 `reply_to_id` 匹配答复。
 权限选项保留原 option ID、名称、种类和工具上下文；没有旧 `human_request.*` 兼容通道。
+责任链处理者读取原 Q 时使用其实际收到当前路由版本通知的执行轮凭证。
+授权同时绑定通知会话、执行 scope 和指定 Agent；同 Agent 的继承旁支、其它 Issue 或委派 scope 不获得原 Q 的读取、答复或 Remi 总结权限。
+源 Agent 可在原产品会话与执行 scope 内读取自己的 Q，包括受控冷续接；这种例外只开放原 Q，不扩大私有会话或 trace 可见性。
 
 ### 1.5 RPC 清单
 

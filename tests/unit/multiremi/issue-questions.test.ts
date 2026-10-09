@@ -98,6 +98,34 @@ pendingTurnBackendTests('one question through the responsibility chain', fixture
       ...(data === undefined ? {} : { body: JSON.stringify(data) }),
     });
     const leaderToken = await agentToken(h.leader.id);
+    const wrongLaneTokens = async (actorId: string, issueId: string, notifiedSessionId: string) => {
+      const side = h.store.createIssueSession(issueId, { title: 'Unnotified inherited side', parentSessionId: notifiedSessionId, inheritMode: 'follow' });
+      const otherIssue = h.store.createIssue({ title: 'Unrelated responsibility', assigneeType: 'agent', assigneeId: actorId, responsibleMemberId: 'mem_local_local' });
+      const lanes = [
+        { issueId, issueSessionId: side.id },
+        { issueId, issueSessionId: notifiedSessionId, execution_scope: `unnotified:${h.q.id}` },
+        { issueId: otherIssue.id },
+      ];
+      const tokens: string[] = [];
+      for (const lane of lanes) {
+        const sessionId = lane.issueSessionId ?? h.store.getOrCreateDefaultIssueSession(lane.issueId).id;
+        const sent = h.store.sendMessage({ session_id: sessionId, sender: { type: 'member', id: 'mem_local_local' },
+          to: { type: 'agent', ref: actorId }, message_kind: 'request', wake_requested: 'now',
+          body_md: 'Unrelated work cannot borrow Q authority', execution_scope: lane.execution_scope ?? '' });
+        const task = h.store.getTask(h.store.getTurn(sent.turn_id!)!.current_attempt_id!)!;
+        const turn = h.store.getTurnForAttempt(task.id)!;
+        expect(turn.session_id).toBe(sessionId); expect(turn.execution_scope).toBe(lane.execution_scope ?? '');
+        h.db.run("UPDATE multiremi_turns SET status='running' WHERE id=?", [turn.id]);
+        h.db.run("UPDATE multiremi_turn_attempts SET status='running' WHERE id=?", [task.id]);
+        tokens.push((await h.store.createTaskAccessToken(h.store.getTask(task.id)!, user.id)).token);
+      }
+      return tokens;
+    };
+    for (const token of await wrongLaneTokens(h.leader.id, h.issue.id, h.q.session_id)) {
+      expect((await request(token, `/api/messages/${h.q.id}/question`)).status).toBe(403);
+      expect((await request(token, `/api/messages/${h.q.id}/question/answer`, { expected_route_revision: 1, response: { answer: 'A' } })).status).toBe(403);
+      expect(h.store.getQuestion(h.q.id)?.answer_revision).toBe(0);
+    }
     expect((await request(leaderToken, `/api/messages/${h.q.id}`)).status).toBe(404);
     const exact = await request(leaderToken, `/api/messages/${h.q.id}/question`);
     expect(exact.status).toBe(200); expect((await exact.json() as any).question.id).toBe(h.q.id);
@@ -114,6 +142,10 @@ pendingTurnBackendTests('one question through the responsibility chain', fixture
       h.store.upsertFeishuBotConfig('local', { agentId: remi.id, runtimeId: h.runtime.id, appId: 'cli_question_private', appSecretOp: 'set', appSecret: 'synthetic', enabled: true, domain: 'feishu' });
       h.store.transferQuestion(h.q.id, { expected_route_revision: 3, reason: 'Route presentation through configured Remi' }, { type: 'member', id: 'mem_local_local' });
       const remiToken = await agentToken(remi.id);
+      for (const token of await wrongLaneTokens(remi.id, h.parent.id, h.store.getOrCreateDefaultIssueSession(h.parent.id).id)) {
+        expect((await request(token, `/api/messages/${h.q.id}/question`)).status).toBe(403);
+        expect((await request(token, `/api/messages/${h.q.id}/question/present`, { expected_route_revision: 4, summary: 'Unnotified context' })).status).toBe(403);
+      }
       expect((await request(remiToken, `/api/messages/${h.q.id}/question`)).status).toBe(200);
       expect((await request(remiToken, `/api/messages/${h.q.id}`)).status).toBe(404);
       expect((await request(remiToken, `/api/messages/${h.q.id}/question/present`, { expected_route_revision: 4, summary: 'Same original private question summary' })).status).toBe(200);
