@@ -14,9 +14,17 @@ async function fixture(workspace: "local" | "foreign") {
   // A codex task cannot reach the claude worker. Persist an inconsistent
   // runtime assignment to exercise the tenant check itself.
   const agent = h.store.createAgent({ name: "Turn-input authority", provider: "codex", workspaceId });
-  const task = h.store.createTask({ agentId: agent.id, prompt: "authority boundary" });
+  const human = workspace === "local" ? "local" : h.store.getCurrentUser().id;
+  const chat = h.store.createChatSession({ agentId: agent.id, workspaceId, creatorId: human });
+  const task = h.store.createTask({ agentId: agent.id, chatSessionId: chat.id, prompt: "authority boundary" });
   runTurnExecutionMutation(h.db, "UPDATE multiremi_turn_execution_records SET runtime_id = ?, status = 'running' WHERE id = ?", [runtimeId, task.id]);
-  const request = h.store.createTaskHumanRequest({ taskId: task.id, kind: "question", payload: { question: "Proceed?" } });
+  const request = workspace === "local" ? (() => {
+    const created = h.store.getDaemonTurnBridge().rpc("turn.decision", { turn_id: h.store.getTurnForAttempt(task.id)!.id, attempt_id: task.id,
+      wait_id: "authority-native-wait", dedupe_key: "authority-original-question", body_md: "Proceed?", options: [],
+      metadata: { kind: "question", questions: [{ question: "Proceed?" }] } },
+      { runtimeId, daemonId: h.store.getRuntimeLite(runtimeId)!.daemonId!, workspaceId });
+    expect(created.ok).toBe(true); return h.store.getTaskHumanRequest(String(created.message_id))!;
+  })() : h.store.createTaskHumanRequest({ taskId: task.id, kind: "question", payload: { question: "Proceed?" } });
   const steer = h.store.createTaskSteerMessage({ taskId: task.id, kind: "steer", content: "continue" });
   const input = h.store.getDaemonTurnBridge().offerInput(h.store.getTaskWithAgent(task.id)!);
   await h.layer.drain();
