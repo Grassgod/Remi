@@ -30,6 +30,24 @@ it("reads plugin desired state only for a runtime that advertises the plugin pro
   } finally { desired.mockRestore(); }
 });
 
+it("reads fresh pending commands without rehydrating unchanged runtime configuration", () => {
+  const store = createLocalStore();
+  store.registerRuntime({ id: "rt_pending_only", name: "Pending", provider: "claude" });
+  const command = store.createRuntimeCommandRequest("rt_pending_only", { command: "printf fresh", args: [] });
+  const maintenance = spyOn(store, "getPlatformMaintenance");
+  try {
+    const pending = runtimeInputSnapshot(store, "rt_pending_only", undefined, "pending");
+    expect(pending.find(entity => entity.type === "runtime.command")?.payload.id).toBe(command.id);
+    expect(maintenance).not.toHaveBeenCalled();
+    const full = runtimeInputSnapshot(store, "rt_pending_only");
+    expect(full.some(entity => entity.type === "platform.drain")).toBe(true);
+    expect(maintenance).toHaveBeenCalledTimes(1);
+    store.reportRuntimeCommandResult("rt_pending_only", command.id, { status: "completed", exitCode: 0 });
+    expect(runtimeInputSnapshot(store, "rt_pending_only", undefined, "pending")
+      .some(entity => entity.type === "runtime.command")).toBe(false);
+  } finally { maintenance.mockRestore(); }
+});
+
 async function waitFor(predicate: () => boolean) {
   const deadline = performance.now() + 2_000;
   while (!predicate()) {

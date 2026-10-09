@@ -6,10 +6,10 @@ import type { DaemonProtocolSession } from "./session.js";
 
 function config(type: string, payload: Record<string, unknown>): DaemonDownlinkEntity {
   const revision = createHash("sha256").update(JSON.stringify(payload)).digest("hex");
-  return { key: `${type}:${revision}`, type, payload };
+  return { key: `${type}:${revision}`, type, payload, configuration: true };
 }
 
-export function runtimeInputSnapshot(store: MultiremiStore, runtimeId: string, session?: DaemonProtocolSession): DaemonDownlinkEntity[] {
+export function runtimeInputSnapshot(store: MultiremiStore, runtimeId: string, session?: DaemonProtocolSession, mode: "full" | "pending" = "full"): DaemonDownlinkEntity[] {
   const runtime = store.getRuntimeLite(runtimeId);
   if (!runtime) return [];
   const requests = store.pendingRuntimeRequests(runtimeId);
@@ -24,24 +24,26 @@ export function runtimeInputSnapshot(store: MultiremiStore, runtimeId: string, s
     discard: () => store.discardRuntimePendingRequest(runtimeId, request.kind, request.id),
   }));
   const entities: DaemonDownlinkEntity[] = [];
-  const maintenance = store.getPlatformMaintenance();
-  entities.push(config("platform.drain", { mode: maintenance.mode, generation: maintenance.generation }),
-    config("runtime.profile", { codex_profile: store.getRuntimeCodexProfile(runtimeId),
-      claude_profile: store.getRuntimeClaudeProfile(runtimeId) }));
-  if (Number(runtime.metadata.agent_plugin_protocol) >= 1) {
-    const desired = store.getRuntimeAgentPluginDesiredSnapshot(runtimeId);
-    entities.push(config("plugin.desired_revision", { revision: desired.revision }));
-  }
-  const token = session?.ownerAccessToken;
   const workspaceId = runtime.workspaceId ?? "local";
-  const role = token?.userId ? store.getUserRoleInWorkspace(token.userId, workspaceId)
-    : workspaceId === "local" || !token ? "owner" : null;
-  const workspace = workspaceReposResponse(store, runtime.workspaceId ?? "local", role === "owner" || role === "admin");
-  if (workspace) entities.push(config("workspace.settings", { settings: workspace.settings }), config("workspace.relay", { relay: workspace.relay }));
-  const directive = store.feishuBotDirectiveForRuntime(workspaceId, runtimeId);
-  if (directive) entities.push(config("feishu.directive", { ...directive }));
-  const mesh = store.sshMeshDirectiveForRuntime(runtimeId);
-  if (mesh) entities.push(config("ssh_mesh.reconcile", { ...mesh }));
+  if (mode === "full") {
+    const maintenance = store.getPlatformMaintenance();
+    entities.push(config("platform.drain", { mode: maintenance.mode, generation: maintenance.generation }),
+      config("runtime.profile", { codex_profile: store.getRuntimeCodexProfile(runtimeId),
+        claude_profile: store.getRuntimeClaudeProfile(runtimeId) }));
+    if (Number(runtime.metadata.agent_plugin_protocol) >= 1) {
+      const desired = store.getRuntimeAgentPluginDesiredSnapshot(runtimeId);
+      entities.push(config("plugin.desired_revision", { revision: desired.revision }));
+    }
+    const token = session?.ownerAccessToken;
+    const role = token?.userId ? store.getUserRoleInWorkspace(token.userId, workspaceId)
+      : workspaceId === "local" || !token ? "owner" : null;
+    const workspace = workspaceReposResponse(store, runtime.workspaceId ?? "local", role === "owner" || role === "admin");
+    if (workspace) entities.push(config("workspace.settings", { settings: workspace.settings }), config("workspace.relay", { relay: workspace.relay }));
+    const directive = store.feishuBotDirectiveForRuntime(workspaceId, runtimeId);
+    if (directive) entities.push(config("feishu.directive", { ...directive }));
+    const mesh = store.sshMeshDirectiveForRuntime(runtimeId);
+    if (mesh) entities.push(config("ssh_mesh.reconcile", { ...mesh }));
+  }
   const outbound = store.pendingFeishuBotOutbound(workspaceId, runtimeId);
   if (outbound) entities.push({
     key: `feishu.outbound:${outbound.id}`, type: "feishu.outbound",

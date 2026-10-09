@@ -18,9 +18,9 @@ export function wakeDaemonWorkspaceEvent(event: PeerWorkspaceEvent, options: {
   const runtimeId = typeof id === "string" && id.length ? id : null;
   const workspace = runtimeId ? options.runtimeWorkspace(runtimeId) : null;
   if (workspace !== null && workspace !== event.workspaceId) return;
-  const downlink = () => runtimeId
-    ? options.downlinks.kick(runtimeId)
-    : options.downlinks.kickWorkspace(event.workspaceId, rt => options.runtimeWorkspace(rt) ?? "local");
+  const downlink = (mode: "full" | "pending" = "full") => runtimeId
+    ? options.downlinks.kick(runtimeId, mode)
+    : options.downlinks.kickWorkspace(event.workspaceId, rt => options.runtimeWorkspace(rt) ?? "local", mode);
   const offer = () => runtimeId
     ? options.offers.kick(runtimeId)
     : options.offers.kickWorkspace(event.workspaceId);
@@ -29,7 +29,17 @@ export function wakeDaemonWorkspaceEvent(event: PeerWorkspaceEvent, options: {
     case "daemon:task_input":
       // Human-request settlement is consumed by both the task runtime and its bot host.
       // They can be different machines; retain the workspace scope for this multi-recipient input.
-      options.downlinks.kickWorkspace(event.workspaceId, rt => options.runtimeWorkspace(rt) ?? "local");
+      options.downlinks.kickWorkspace(event.workspaceId, rt => options.runtimeWorkspace(rt) ?? "local", "pending");
+      return;
+    case "message:created":
+    case "message:updated":
+    case "decision:created":
+    case "decision:updated":
+      downlink("pending");
+      return;
+    case "issue:updated":
+      downlink("pending");
+      offer();
       return;
     case "daemon:pending_changed":
     case "daemon:feishu_changed":

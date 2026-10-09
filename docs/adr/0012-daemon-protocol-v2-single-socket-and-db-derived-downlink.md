@@ -47,6 +47,14 @@ derived from database state rather than from a server-side queue.
   re-derives offers from `multiremi_tasks`, steers from unconsumed rows, and each
   `pending_*` item from its own table, then resends a snapshot. Duplicate arrivals
   are absorbed by entity id.
+- Execution input is derived and sent before independent runtime/card queues.
+  The sender yields to socket I/O after task input, then lazily reads the other
+  queues; synchronous PostgreSQL scans must not block an already-ready answer.
+  ACK and known message/task mutations scan pending inputs without recomputing
+  unchanged configuration. Hello, runtime readiness, configuration and unknown
+  workspace events request a full snapshot; a concurrent full request takes
+  precedence. Only acknowledged configuration identities persist across pending
+  scans, while each payload and current execution authority is read from the DB.
 - Trace events do not enter the outbox. The daemon's normalized trace file is both
   the upload source and the replay buffer. Trace sequences are dense and
   append-only per task — assigned by the trace store at the durable write, never
