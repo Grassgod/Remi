@@ -112,9 +112,9 @@ export class InboxOperations {
       OR m.message_kind='status' AND ${json('lifecycle_event')} IN ('task_failed','task_cancelled')
       OR m.message_kind IN ('report','final') AND ${json('message_outcome')} IN ('failed','blocked','cancelled')) THEN 1 ELSE 0 END`;
     if (input.access) {
-      const guard=inboxVisibilitySql(this.ctx.db,input.access);
+      const guard=inboxVisibilitySql(this.ctx.db,input.access,{from,params});
       const filtered=from+' AND '+guard.where;
-      const binds=[...params,...guard.params];
+      const binds=[...guard.cteParams,...params,...guard.params];
       const counts=this.ctx.db.query(`${guard.cte} SELECT COUNT(*) AS unread_count,COALESCE(SUM(${attention}),0) AS attention_count ${filtered}`).get(...binds);
       const n=Math.min(input.limit??100,1000),cursor=input.cursor;
       const extra=cursor?' AND (m.created_at<? OR m.created_at=? AND m.id<?)':'';

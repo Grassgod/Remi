@@ -5,7 +5,8 @@ export interface InboxAccess { userId: string | null; admin: boolean; attemptId?
 
 /** The same source boundaries as conversationEntryVisibility, applied before
  * counts and pagination so hidden bodies never cross the synchronous bridge. */
-export function inboxVisibilitySql(db: SqlDatabase, access: InboxAccess) {
+export function inboxVisibilitySql(db: SqlDatabase, access: InboxAccess,
+  source: { from: string; params: unknown[] }) {
   const params: unknown[] = [];
   const json = (alias: string, path: string) => db.dialect === 'postgres'
     ? `${alias}.metadata::jsonb #>> '{${path.replaceAll('.', ',')}}'`
@@ -35,8 +36,11 @@ export function inboxVisibilitySql(db: SqlDatabase, access: InboxAccess) {
   const sourceIssue = `COALESCE(${json('d', 'decision_record.source_issue_id')},${json('d', 'source_issue_id')})`;
   // Plain replies inherit only a native notification grant. The source flag
   // keeps existing Task/private-trace checks on their original typed paths.
+  // Seed only the same unread candidates as the page/count query; source joins
+  // below still follow their references outside that candidate set.
   const cte = `WITH RECURSIVE ancestors AS (
-    SELECT id AS root_id,id,session_id,task_id,kind,reply_to_id,to_agent_id,metadata,0 AS depth,1 AS source_inherited FROM multiremi_conversation_log
+    SELECT m.id AS root_id,m.id,m.session_id,m.task_id,m.kind,m.reply_to_id,m.to_agent_id,m.metadata,0 AS depth,1 AS source_inherited
+    ${source.from}
     UNION ALL
     SELECT d.root_id,n.id,n.session_id,n.task_id,n.kind,n.reply_to_id,n.to_agent_id,n.metadata,d.depth+1,
       CASE WHEN d.source_inherited=1 AND ${inherits('d')} THEN 1 ELSE 0 END
@@ -63,6 +67,6 @@ export function inboxVisibilitySql(db: SqlDatabase, access: InboxAccess) {
       OR d.depth=4 AND ${inherits('d')}
     )) AND ${conversationAgentGuard}`;
   const notification = questionNotificationVisibilitySql(db, access, 'notification');
-  return { cte, where: `${where} AND NOT EXISTS (SELECT 1 FROM ancestors notification
+  return { cte, cteParams: source.params, where: `${where} AND NOT EXISTS (SELECT 1 FROM ancestors notification
     WHERE notification.root_id=m.id AND NOT (${notification.where}))`, params: [...params, ...notification.params] };
 }
