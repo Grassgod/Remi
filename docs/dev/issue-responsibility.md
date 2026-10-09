@@ -16,7 +16,10 @@ summary: 明确根人类、统一解析单内及父单责任，并通过具体�
 均保留可见 `unresolved` 原因；不取普通队员、Agent 所属第一个团队或 workspace owner。
 `revision` 只哈希责任事实及可用性，普通评论和更新时间不改变版本。
 新的执行指派仅接受 Agent 或团队；历史 member 指派保留为缺少执行统筹的记录，
-不能将它猜成某个 Agent。人类责任单独配置在根单字段；旧 member 项目默认不复制到新单。
+不能将它猜成某个 Agent。人类责任单独配置在根单字段；新项目默认执行指派也仅接受
+Agent 或团队，成员写入返回 `409 project_execution_owner_required`。旧 member 项目默认
+保留原事实及明确待配置提示，无关编辑不会改写它；须显式清空或改为 Agent/团队后才能
+作为有效执行默认。旧 member 项目默认不复制到新单。
 
 创建根单必须传明确 `responsible_member_id`，或由真实人类创建来源承担责任。
 HTTP 的创建人来自凭据；Agent 创建新根可继承其真实来源 Issue 的明确人类，

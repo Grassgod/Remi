@@ -463,6 +463,29 @@ describe("native CLI resource contracts", () => {
     expect(requests.some((request) => new URL(request.url).hostname === "127.0.0.1")).toBe(false);
   });
 
+  it("rejects member execution defaults in project options and JSON without a project write", async () => {
+    useCliEnv();
+    expect(registryFor(SPECS).renderHelpForArgv(["project", "create", "--help"])).toContain("agent|squad");
+    expect(registryFor(SPECS).renderHelpForArgv(["project", "create", "--help"])).not.toContain("agent|member|squad");
+    for (const id of ["project.create", "project.update"]) {
+      const spec = specById(id);
+      let writes = 0;
+      globalThis.fetch = mockFetch(id, [], (request) => {
+        if (request.method !== "GET") writes += 1;
+        if (new URL(request.url).pathname === "/api/projects/prj_1") return Response.json({ id: "prj_1", title: "Project", workspace_id: "ws_1" });
+        throw new Error(`unexpected request ${request.method} ${request.url}`);
+      });
+      const prefix = id === "project.create" ? ["--title", "Project"] : ["prj_1"];
+      for (const fields of [
+        ["--default-assignee-type", "member", "--default-assignee", "mem_1"],
+        ["--data", JSON.stringify({ defaultAssigneeType: "member", defaultAssigneeId: "mem_1" })],
+      ]) {
+        await expect(execute(spec, [...prefix, ...fields])).rejects.toThrow("Project default execution assignee must be an Agent or Squad");
+      }
+      expect(writes).toBe(0);
+    }
+  });
+
   it("resolves repository names when creating a project and carries explicit defaults", async () => {
     useCliEnv();
     const spec = specById("project.create");

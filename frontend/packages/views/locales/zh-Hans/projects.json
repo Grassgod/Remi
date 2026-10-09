@@ -52,7 +52,8 @@
   },
   "default_assignee": {
     "label": "默认执行者",
-    "none": "无默认执行者"
+    "none": "无默认执行者",
+    "legacy_member": "待配置云友或团队执行者"
   },
   "relative_date": {
     "today": "今天",

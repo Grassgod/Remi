@@ -54,6 +54,15 @@ export interface ProjectInstructionsWriteContext {
   instructionsUpdatedBy?: string | null;
 }
 
+export class ProjectExecutionOwnerError extends Error {
+  readonly code = "project_execution_owner_required";
+
+  constructor() {
+    super("Project default execution assignee must be an Agent or Squad; configure the final human on the root Issue");
+    this.name = "ProjectExecutionOwnerError";
+  }
+}
+
 export class ProjectInstructionsRevisionConflictError extends Error {
   readonly code = "project_instructions_revision_conflict";
 
@@ -300,15 +309,20 @@ export class ProjectsRepo {
   }
 
   /**
-   * Validates and canonicalizes the project's default assignee (agent, member
-   * or squad — same polymorphic ref an issue assignee uses). Null when unset.
+   * Validates the default Agent/Squad execution assignment. Historical member
+   * values remain readable and survive unrelated edits; explicit writes must
+   * clear or replace them with a valid execution assignment.
    */
   private resolveDefaultAssignee(
     type: MultiremiAssigneeType | null | undefined,
     id: string | null | undefined,
     workspaceId: string,
   ): { assigneeType: MultiremiAssigneeType | null; assigneeId: string | null } {
+    if (type === "member") throw new ProjectExecutionOwnerError();
     const resolved = this.ctx.squads().resolveAssigneeRef(type ?? null, id ?? null, workspaceId);
+    if (resolved && resolved.assigneeType !== "agent" && resolved.assigneeType !== "squad") {
+      throw new ProjectExecutionOwnerError();
+    }
     return resolved ?? { assigneeType: null, assigneeId: null };
   }
 
