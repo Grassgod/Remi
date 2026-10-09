@@ -9,6 +9,7 @@ import { normalizeHumanResponse } from './human-response.js';
 import { assertQuestionCardToken, type QuestionCardCredential } from '../question-card-token.js';
 import { deriveIssueStatusWithinTransaction } from './issue-status.js';
 import { createHash } from 'node:crypto';
+import { questionMetadataText } from './question-indexes.js';
 
 type RouteStep = { handler: QuestionActor; issue_id: string | null; stage: QuestionStage };
 export type ChatQuestionResponsibilityFilter = { transportOnly?: boolean; memberId?: string; agentId?: string };
@@ -158,7 +159,7 @@ export class Questions {
     if (!same(handler, { type: 'agent', id: agentId }) && !(handler?.type === 'member' && remi === agentId)) return false;
     // A responsibility assignment grants only the notification's actual lane.
     // Matching Agent identity or an inherited Issue does not grant private Q access.
-    return !!this.ctx.db.query(`SELECT n.id FROM multiremi_conversation_log n WHERE n.session_id=?
+    return !!this.ctx.db.query(`SELECT n.id FROM multiremi_conversation_log n WHERE n.session_id=? AND n.kind='message'
       AND n.to_agent_id=? AND n.deleted_at IS NULL AND ${this.jsonText('n', 'root_question_id')}=?
       AND CAST(${this.jsonText('n', 'question_route_revision')} AS TEXT)=?
       AND COALESCE(${this.jsonText('n', 'execution_scope')},'')=?
@@ -280,7 +281,7 @@ export class Questions {
     return 'WITH RECURSIVE subtree(id) AS (SELECT id FROM multiremi_issues WHERE id=? AND workspace_id=? UNION SELECT i.id FROM multiremi_issues i JOIN subtree s ON i.parent_issue_id=s.id WHERE i.workspace_id=?)';
   }
   private jsonText(alias: string, path: string): string {
-    return this.ctx.db.dialect === 'postgres' ? `${alias}.metadata::jsonb #>> '{${path.replaceAll('.', ',')}}'` : `json_extract(${alias}.metadata,'$.${path}')`;
+    return questionMetadataText(this.ctx.db, `${alias}.metadata`, path);
   }
   list(issueId: string, actor?: QuestionActor, input: { limit?: number; before?: string } = {}): QuestionView[] {
     const issue = this.ctx.issues().getIssue(issueId); if (!issue) return [];
@@ -289,7 +290,7 @@ export class Questions {
     if (input.before && !cursor) throw new QuestionError(400, 'question_cursor_invalid');
     const ids = this.ctx.db.query(`${this.subtreeSql()}, sessions AS (SELECT id FROM multiremi_issue_sessions WHERE issue_id IN (SELECT id FROM subtree) AND workspace_id=?),
       candidates(id) AS (SELECT id FROM multiremi_conversation_log WHERE session_id IN (SELECT id FROM sessions) AND message_kind='decision'
-        UNION SELECT ${this.jsonText('n', 'root_question_id')} FROM multiremi_conversation_log n WHERE n.session_id IN (SELECT id FROM sessions) AND n.deleted_at IS NULL)
+        UNION SELECT ${this.jsonText('n', 'root_question_id')} FROM multiremi_conversation_log n WHERE n.session_id IN (SELECT id FROM sessions) AND n.kind='message' AND n.deleted_at IS NULL)
       SELECT m.id FROM candidates c JOIN multiremi_conversation_log m ON m.id=c.id JOIN multiremi_conversation_heads h ON h.session_id=m.session_id
       WHERE h.workspace_id=? AND m.message_kind='decision' AND m.deleted_at IS NULL
       AND (CAST(${this.jsonText('m', 'question.version')} AS TEXT)='1' OR ${this.jsonText('m', 'human_request.status')} IS NOT NULL OR ${this.jsonText('m', 'decision_record.status')} IS NOT NULL)
