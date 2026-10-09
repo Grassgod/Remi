@@ -1,4 +1,4 @@
-import { createResponsibleTestIssue } from './helpers.js';
+import { createResponsibleTestIssue, acceptTestIssueDelivery } from './helpers.js';
 import { appendCanonicalInboxInput } from "./fixtures/canonical-inbox-input.js";
 import { runTurnExecutionMutation } from '@multiremi/store/turn-execution-records.js';
 import type { SqlDatabase as UnifiedFixtureDatabase } from '@multiremi/store/db/postgres.js';
@@ -528,9 +528,11 @@ describe("MUL-484 inbox delivery and pending turns", () => {
           const owner = store.createAgent({ name: `Parent owner ${boundary}`, provider: "codex", runtimeId: runtime.id });
           const parent = createResponsibleTestIssue(store, { title: `Parent ${boundary}`, status: "in_progress",
             assigneeType: "agent", assigneeId: owner.id });
-          const child = createResponsibleTestIssue(store, { title: "Child", parentIssueId: parent.id, status: "in_progress" });
+          const worker = store.createAgent({ name: `Child execution ${boundary}`, provider: "claude" });
+          const child = createResponsibleTestIssue(store, { title: "Child", parentIssueId: parent.id, status: "in_progress",
+            assigneeType: "agent", assigneeId: worker.id });
           const session = store.getOrCreateDefaultIssueSession(parent.id);
-          store.updateIssue(child.id, { status: "done" });
+          acceptTestIssueDelivery(store, child.id);
           const summary = store.listTasksForIssue(parent.id).find(row => row.status === "queued")!;
           expect(summary).toMatchObject({ issueSessionId: session.id, wakeSource: "platform_to_owner" });
           const seq = wakeSeq(db, summary.id);
