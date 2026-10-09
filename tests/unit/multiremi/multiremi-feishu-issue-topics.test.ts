@@ -722,7 +722,7 @@ describe("Feishu Issue topics", () => {
         const { store } = scaffold();
         configureTopics(store);
         const botAgentId = store.getFeishuBotConfig("local")!.agentId;
-        const issue = createResponsibleTestIssue(store, { title: "Cross-provider notification", workspaceId: "local" });
+        const issue = createResponsibleTestIssue(store, { title: "Cross-provider notification", workspaceId: "local", responsibleMemberId: "mem_local_local" });
         store.prepareFeishuIssueTopicWithinTransaction(issue);
         const root = store.claimFeishuBotOutbound("local", "rt_bot")!;
         store.reportFeishuBotOutbound("local", "rt_bot", root.id, {
@@ -734,16 +734,35 @@ describe("Feishu Issue topics", () => {
         store.updateAgent(botAgentId, { provider: "claude" });
         const wake = kind === "round"
           ? store.prepareFeishuIssueRoundPushes({ issue, leaderTask: sourceTask })[0]!
-          : store.prepareFeishuBotHumanRequestPush(store.createTaskHumanRequest({
-            taskId: sourceTask.id, kind: "question", payload: { message: "Continue?" },
-          }))!;
+          : (() => {
+            expect(store.claimTask("rt_bot")?.id).toBe(sourceTask.id); store.startTask(sourceTask.id);
+            const question = store.getDaemonTurnBridge().rpc("turn.decision", { turn_id: store.getTurnForAttempt(sourceTask.id)!.id,
+              attempt_id: sourceTask.id, wait_id: `changed-provider-wait:${legacyPin}`, dedupe_key: "changed-provider-question",
+              body_md: "Continue?", options: [], metadata: { kind: "question", questions: [{ question: "Continue?" }] } },
+              { runtimeId: "rt_bot", daemonId: "bot-host", workspaceId: "local" });
+            expect(question.ok).toBe(true);
+            expect(store.claimFeishuBotOutbound("local", "rt_bot", undefined, true)).toBeNull();
+            return store.listTasks().find(task => task.agentId === botAgentId && task.status === "queued")!;
+          })();
         expect(wake.runtimeId).toBeNull();
         if (legacyPin) {
           mutateExecutionFixture(db!, "UPDATE multiremi_turn_execution_records SET runtime_id = 'rt_bot' WHERE id = ?", [wake.id]);
         }
         expect(store.claimTask("rt_claude")?.id).toBe(wake.id);
         expect(store.getTask(wake.id)?.runtimeId).toBe("rt_claude");
-        expect(store.claimFeishuBotOutbound("local", "rt_bot", undefined, true)?.taskId).toBe(wake.id);
+        if (kind === "round") expect(store.claimFeishuBotOutbound("local", "rt_bot", undefined, true)?.taskId).toBe(wake.id);
+        else {
+          store.startTask(wake.id);
+          const notification = store.listMessages(wake.issueSessionId!).find(message => message.metadata.question_present_request === true)!;
+          const questionId = String(notification.metadata.root_question_id);
+          const before = store.getQuestion(questionId)!;
+          store.presentQuestion(questionId, { expected_route_revision: before.route_revision, summary: "Please decide whether the Issue should continue." },
+            { type: "agent", id: botAgentId }, store.getTurnForAttempt(wake.id)!.id);
+          const delivery = store.claimFeishuBotOutbound("local", "rt_bot", undefined, true)!;
+          expect(delivery.humanRequestId).toBe(questionId);
+          expect(delivery.taskId).toBeUndefined();
+          expect(store.getQuestion(questionId)).toMatchObject({ status: "pending", wait_status: "waiting", original_message: "Continue?", summary: { agent_id: botAgentId } });
+        }
       });
     }
   }
@@ -940,7 +959,7 @@ describe("Feishu Issue topics", () => {
     expect(store.listConversationLogShown(session.id).some(entry => entry.body_md === "Verify topic update delivery")).toBe(true);
   });
 
-  it("wakes the bound topic Agent when an Issue task asks a human", () => {
+  it("presents the same Issue question without waking the asking Remi again", () => {
     const { store } = scaffold();
     configureTopics(store);
     const wake = prepareReport(store);
@@ -952,6 +971,8 @@ describe("Feishu Issue topics", () => {
     });
     const sourceTask = store.createTask({ agentId: store.getFeishuBotConfig("local")!.agentId, issueId: store.getTask(wake.id)!.issueId,
       workspaceId: "local", prompt: "Run the Issue" });
+    store.updateIssue(sourceTask.issueId!, { responsibleMemberId: "mem_local_local", actorType: "member", actorId: "mem_local_local" });
+    const tasksBefore = store.listTasks().length;
     const request = store.createTaskHumanRequest({
       taskId: sourceTask.id,
       kind: "question",
@@ -963,7 +984,8 @@ describe("Feishu Issue topics", () => {
 
     const topicWake = store.getTask(wake.id);
     expect(topicWake).toMatchObject({ chatSessionId: store.getTask(wake.id)!.chatSessionId, holdsWorkspace: false });
-    expect(store.listChatMessages(topicWake!.chatSessionId!).at(-1)?.body).toContain(`Human request id: ${request.id}`);
+    expect(store.listTasks()).toHaveLength(tasksBefore);
+    expect(store.getQuestion(request.id)).toMatchObject({ stage: "human", status: "pending", current_handler: { type: "member", id: "mem_local_local" } });
     const delivery = store.claimFeishuBotOutbound("local", "rt_bot", undefined, true)!;
     expect(delivery.id).not.toBe(roundDelivery.id);
     expect(delivery.taskId).toBeUndefined();
@@ -975,8 +997,8 @@ describe("Feishu Issue topics", () => {
 
     // Replaying the same request report is idempotent and does not enqueue a
     // second wake Task or outbound delivery.
-    expect(store.prepareFeishuBotHumanRequestPush(request)?.id).toBe(topicWake?.id);
-    expect(store.listChatMessages(topicWake!.chatSessionId!).filter(message => message.body.includes(`Human request id: ${request.id}`))).toHaveLength(1);
+    expect(store.prepareFeishuBotHumanRequestPush(request)).toBeNull();
+    expect(store.listTasks()).toHaveLength(tasksBefore);
     expect(db!.query("SELECT COUNT(*) AS count FROM multiremi_feishu_bot_outbound_deliveries WHERE human_request_id = ?")
       .get(request.id)).toMatchObject({ count: 1 });
   });
