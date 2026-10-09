@@ -4,6 +4,7 @@
   "type": "module",
   "private": true,
   "exports": {
+    "./agent-execution": "./src/agent-execution.ts",
     "./trace-semantics": "./src/trace-semantics.ts",
     "./*": "./src/*"
   },

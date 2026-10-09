@@ -1,5 +1,6 @@
 import type { TaskMessagePayload } from "@multiremi/core/types/events";
 import type { TraceEvent } from "@multiremi/contracts/trace";
+import { executionModel } from "@multiremi/shared/agent-execution";
 import { canMergeTraceText, isTerminalTraceToolStatus, traceParentToolCallId } from "@multiremi/shared/trace-semantics";
 import { redactString, redactValue } from "./redact";
 
@@ -53,6 +54,22 @@ export interface UsageSnapshot {
   totalTokens?: number;
   cacheReadTokens?: number;
   cacheWriteTokens?: number;
+}
+
+export interface ExecutionModelSnapshot {
+  seq: number;
+  model: string;
+}
+
+/** Keep the latest acknowledged main model even after its trace row is evicted. */
+export function extractExecutionModel(events: readonly TraceEvent[], previous: ExecutionModelSnapshot | null = null): ExecutionModelSnapshot | null {
+  let latest = previous;
+  for (const event of events) {
+    if (event.type !== "execution" || traceParentToolCallId(event)) continue;
+    const model = executionModel(event.meta?.model);
+    if (model && (!latest || event.seq > latest.seq)) latest = { seq: event.seq, model };
+  }
+  return latest;
 }
 
 /**

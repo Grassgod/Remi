@@ -97,6 +97,8 @@ Issue 的成员负责人保存为工作区成员记录 `id`；成员响应中的
 
 执行时间线的旧消息与 trace 读取路径共用“过滤 usage/execution → 合并文字分片 → 脱敏”处理；合并同时保留父调用、回答阶段和记录连续性的边界。[共享 trace 语义](../../packages/shared/src/trace-semantics.ts)供页面、Daemon 和飞书使用，工具按调用 ID 配对并去重计数，取消也是终态。上下文标签独立读取 seq 最新的有效 usage（兼容旧 JSON content），与任务累计 input/output 用量分开显示。
 
+执行模型优先读取最新已收到的顶层 `execution.meta.model`，忽略子任务、空值和默认占位值；模型及其 seq 在弹窗内独立保留，日志窗口回收、历史补读和回到开头不会覆盖较新的模型，切换任务则清空。缺少有效模型事件时依次使用任务执行配置、Agent 配置；混合计费用量包含进度摘要等辅助调用，不能据此推断执行模型。上报模型与任务配置不一致时不借用该配置的推理级别；备用模型切换原因保持任务自身记录。实现和回归入口为 [execution-model-info.tsx](../../frontend/packages/views/common/task-transcript/execution-model-info.tsx) 与 [task-trace-dialog.test.tsx](../../frontend/packages/views/common/task-transcript/task-trace-dialog.test.tsx)。
+
 执行过程弹窗打开时读取一页，后续历史由用户继续加载；历史游标独立于 WS 尾部记录，实时帧不能跨过尚未加载的历史。浏览器的历史与实时窗口同时限制记录数和序列化字节数，具体上限集中在 [trace-window.ts](../../frontend/packages/core/api/trace-window.ts)。窗口回收只移除浏览器缓存，可回到历史开头重新分页读取。页面计数明确标示已加载范围，只有序号连续且完整时才从记录提取最终回复；不把某一页文字当作完整回答。切换任务重新创建窗口状态，旧请求不能写入新任务；订阅错误提供重试，`stream.closed` 在最终批次之后结束实时状态。
 
 Issue 运行条读取已有任务状态、耗时和 `progress_summary`，详细 trace 在点击后读取；不为显示运行条自动下载历史记录，也不把有限窗口的工具计数标成全任务总数。已结束的 Chat 直接展示会话日志保存的最终答复、附件和失败信息，通过“执行过程”按钮查看 trace；复制正文不依赖 trace 是否在线。Chat 正在展示的执行时间线是单独的实时消费者，使用有限尾部窗口。验证入口为 [build-timeline.test.ts](../../frontend/packages/views/common/task-transcript/build-timeline.test.ts)、[task-trace-dialog.test.tsx](../../frontend/packages/views/common/task-transcript/task-trace-dialog.test.tsx)、[chat-message-list.test.tsx](../../frontend/packages/views/chat/components/chat-message-list.test.tsx) 和 [chat-timeline.test.ts](../../frontend/packages/views/chat/lib/chat-timeline.test.ts)。

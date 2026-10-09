@@ -6,7 +6,7 @@ import { api, TraceEventSchema, mergeTraceWindow, TRACE_VIEW_WINDOW_SIZE, TRACE_
 import { useTraceStreamSubscription } from "@multiremi/core/realtime";
 import type { AgentTask } from "@multiremi/core/types/agent";
 import { AgentTranscriptDialog } from "./agent-transcript-dialog";
-import { buildTraceTimeline, extractContextUsage } from "./build-timeline";
+import { buildTraceTimeline, extractContextUsage, extractExecutionModel, type ExecutionModelSnapshot } from "./build-timeline";
 
 const ACTIVE_TASK_STATUSES = new Set(["dispatched", "running", "waiting_local_directory", "awaiting_human"]);
 const TRACE_PAGE_SIZE = 200;
@@ -35,6 +35,7 @@ function TaskTraceDialogView({
 }: TaskTraceDialogProps) {
   const [history, setHistory] = useState<TraceEvent[]>([]);
   const [liveEvents, setLiveEvents] = useState<TraceEvent[]>([]);
+  const [executionModel, setExecutionModel] = useState<ExecutionModelSnapshot | null>(null);
   const events = useMemo(() => mergeTraceWindow(history, liveEvents, TRACE_VIEW_WINDOW_SIZE + TRACE_LIVE_WINDOW_SIZE, TRACE_HISTORY_WINDOW_BYTES + TRACE_LIVE_WINDOW_BYTES), [history, liveEvents]);
   const [result, setResult] = useState<TaskTraceRead | null>(null);
   const [loading, setLoading] = useState(true);
@@ -64,6 +65,7 @@ function TaskTraceDialogView({
       closed.current ||= page.closed;
       setTraceClosed(closed.current);
       setResult({ ...page, closed: closed.current });
+      setExecutionModel((current) => extractExecutionModel(page.events, current));
       setHistory((current) => mergeTraceWindow(current, page.events));
     } catch {
       if (mounted.current) setError(true);
@@ -87,7 +89,10 @@ function TaskTraceDialogView({
         const parsed = TraceEventSchema.safeParse(frame.payload);
         if (parsed.success) incoming.push(parsed.data);
       }
-      if (incoming.length > 0) setLiveEvents((current) => mergeTraceWindow(current, incoming, TRACE_LIVE_WINDOW_SIZE, TRACE_LIVE_WINDOW_BYTES));
+      if (incoming.length > 0) {
+        setExecutionModel((current) => extractExecutionModel(incoming, current));
+        setLiveEvents((current) => mergeTraceWindow(current, incoming, TRACE_LIVE_WINDOW_SIZE, TRACE_LIVE_WINDOW_BYTES));
+      }
     },
     // Missing history stays on the same bounded paging path. A replay's suffix
     // must never jump over pages the viewer has not loaded yet.
@@ -120,6 +125,7 @@ function TaskTraceDialogView({
       task={task}
       items={items}
       contextUsage={contextUsage}
+      traceModel={executionModel?.model}
       agentName={agentName}
       isLive={open && ACTIVE_TASK_STATUSES.has(task.status) && !traceClosed && !streamFailed}
       headerSlot={headerSlot}

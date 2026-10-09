@@ -2,24 +2,28 @@
 
 import { ArrowRightLeft } from "lucide-react";
 import type { AgentTask } from "@multiremi/core/types";
+import { executionModel as normalizeExecutionModel } from "@multiremi/shared/agent-execution";
 import { useT } from "../../i18n";
 
-export function ExecutionModelInfo({ task, agentModel, agentThinkingLevel, usageModel }: {
+export function ExecutionModelInfo({ task, agentModel, agentThinkingLevel, traceModel }: {
   task: AgentTask;
   agentModel?: string | null;
   agentThinkingLevel?: string | null;
-  usageModel?: string | null;
+  traceModel?: string | null;
 }) {
   const { t } = useT("agents");
   const executionModel = [task.executionModel, task.execution_model]
-    .find((value) => typeof value === "string" && value.trim())?.trim();
-  const model = executionModel ?? [usageModel, agentModel]
-    .find((value) => typeof value === "string" && value.trim())?.trim();
+    .map(normalizeExecutionModel).find(Boolean);
+  const observedModel = normalizeExecutionModel(traceModel);
+  const configuredModel = normalizeExecutionModel(agentModel);
+  // Billing usage includes auxiliary calls such as progress summaries.
+  const model = observedModel ?? executionModel ?? configuredModel;
   const switched = task.fallbackSwitched === true || task.fallback_switched === true;
-  const inheritedThinking = !switched && !executionModel && model && model === agentModel?.trim()
+  const inheritedThinking = !switched && !executionModel && model && model === configuredModel
     ? agentThinkingLevel : null;
-  const thinking = [task.executionThinkingLevel, task.execution_thinking_level,
-    inheritedThinking]
+  const snapshotMatches = !observedModel || !executionModel || observedModel === executionModel;
+  const thinking = [snapshotMatches ? task.executionThinkingLevel : null,
+    snapshotMatches ? task.execution_thinking_level : null, inheritedThinking]
     .find((value) => typeof value === "string" && value.trim())?.trim();
   const reason = task.switchReason ?? task.switch_reason;
   const reasonCode = typeof reason === "string" && reason.startsWith("gateway_resource:")

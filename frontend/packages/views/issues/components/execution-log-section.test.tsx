@@ -63,16 +63,16 @@ describe("ExecutionLogSection", () => {
     }
   });
 
-  it("uses legacy task usage instead of the Agent's current model and effort", () => {
+  it("uses configured model metadata instead of mixed auxiliary usage for a legacy task", () => {
     displayedTask = { ...task, status: "completed", executionModel: undefined,
       executionThinkingLevel: undefined, fallbackSwitched: false,
-      usage: [{ model: "observed-backup", inputTokens: 7 }] };
+      usage: [{ model: "gpt-5.6-luna", inputTokens: 7 }] };
     try {
       renderLog();
       fireEvent.click(screen.getByRole("button", { name: /Show past runs/ }));
-      expect(screen.getByText("observed-backup")).toBeInTheDocument();
-      expect(screen.queryByText("gpt-primary")).toBeNull();
-      expect(screen.queryByText("(low)")).toBeNull();
+      expect(screen.queryByText("gpt-5.6-luna")).toBeNull();
+      expect(screen.getByText("gpt-primary")).toBeInTheDocument();
+      expect(screen.getByText("(low)")).toBeInTheDocument();
     } finally {
       displayedTask = task;
     }

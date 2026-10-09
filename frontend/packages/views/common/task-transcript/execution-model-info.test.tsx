@@ -41,19 +41,28 @@ describe("ExecutionModelInfo", () => {
     expect(screen.queryByText(/Switched from primary/)).toBeNull();
   });
 
-  it("does not borrow the Agent effort when legacy usage names a different model", () => {
-    renderWithI18n(<ExecutionModelInfo task={task} usageModel="observed-backup"
+  it("does not borrow the Agent effort when the acknowledged model differs", () => {
+    renderWithI18n(<ExecutionModelInfo task={task} traceModel="observed-backup"
       agentModel="current-primary" agentThinkingLevel="high" />);
     expect(screen.getByText("observed-backup")).toBeInTheDocument();
     expect(screen.queryByText("current-primary")).toBeNull();
     expect(screen.queryByText("(high)")).toBeNull();
   });
 
-  it("retains the Agent effort when legacy usage names the same model", () => {
-    renderWithI18n(<ExecutionModelInfo task={task} usageModel="current-primary"
+  it("retains the Agent effort when the acknowledged model matches", () => {
+    renderWithI18n(<ExecutionModelInfo task={task} traceModel="current-primary"
       agentModel="current-primary" agentThinkingLevel="high" />);
     expect(screen.getByText("current-primary")).toBeInTheDocument();
     expect(screen.getByText("(high)")).toBeInTheDocument();
+  });
+
+  it("prefers an acknowledged model over a conflicting task snapshot without borrowing its effort", () => {
+    renderWithI18n(<ExecutionModelInfo task={{ ...task, executionModel: "requested-backup",
+      executionThinkingLevel: "high", fallbackSwitched: true }} traceModel="actual-backup" />);
+    expect(screen.getByText("actual-backup")).toBeInTheDocument();
+    expect(screen.queryByText("requested-backup")).toBeNull();
+    expect(screen.queryByText("(high)")).toBeNull();
+    expect(screen.getByText(/1 switch/)).toBeInTheDocument();
   });
 
   it("never attributes the primary effort to a switched task without an execution effort snapshot", () => {
