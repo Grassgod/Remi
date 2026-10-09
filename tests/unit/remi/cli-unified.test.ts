@@ -211,6 +211,9 @@ describe("retired commands never negotiate capabilities or touch the network", (
     const guidance = "原生 AskUserQuestion；先用 remi issue responsibility <issue> 查看责任归属";
     expect(RETIRED_CLI_COMMANDS["issue decision request"]).toBe(guidance);
     expect(RETIRED_CLI_ROUTES["POST /api/issues/:id/decisions"]).toBe(guidance);
+    for (const route of ["POST /api/tasks/:id/human-requests/:requestId/respond", "POST /api/multiremi/tasks/:id/human-requests/:requestId/respond"]) {
+      expect(RETIRED_CLI_ROUTES[route]).toBe(RETIRED_CLI_COMMANDS["task request respond"]!);
+    }
     await expect(dispatch(["issue", "decision", "request", "issue_1"])).rejects.toThrow(guidance);
     expect(requests).toEqual([]);
   });
