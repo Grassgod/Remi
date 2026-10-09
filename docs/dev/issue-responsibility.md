@@ -71,6 +71,8 @@ Agent 提交及验收只能来自其责任 Issue 的主会话，继承旁支和 
 Task 完成、intake 生成子单和 SCM merge 均不能代替验收。SCM effect 保存
 `issue_delivery_acceptance_required` 的 hold 记录并结束该 effect，不无限重试或自动关闭。
 旧直接关闭入口返回可行动的 `issue_delivery_acceptance_required`，客户端应展示交付验收。
+批量 `done` 写入在所有行变更前检查关闭规则，并在同一事务内执行；责任或交付拒绝会回滚整个批次，
+不会被吞成 `200 updated:0`。已 `done` 行的状态 no-op 保持可用，但 body 中的收据或绕过选项不授予新关闭权限。
 
 接口在[Issue routes](../../packages/server/src/api/routers/issues.ts)：
 

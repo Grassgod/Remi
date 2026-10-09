@@ -3,7 +3,8 @@ import { MultiremiStore } from '@multiremi/store.js';
 import { openSqliteDatabase } from '@multiremi/store/db/sqlite.js';
 import { PostgresSyncDatabase, type SqlDatabase } from '@multiremi/store/db/postgres.js';
 import { createMultiremiApp } from '@multiremi/api.js';
-import { createCommitEventQueue } from '@multiremi/store/context.js';
+import { createCommitEventQueue, StoreContext } from '@multiremi/store/context.js';
+import { IssueDeliveryError } from '@multiremi/store/issue-deliveries.js';
 
 const adminUrl = process.env.MULTIREMI_TEST_POSTGRES_URL;
 for (const backend of ['sqlite','postgres'] as const) describe.skipIf(backend === 'postgres' && !adminUrl)(`Issue responsibility and formal delivery (${backend})`, () => {
@@ -245,6 +246,76 @@ for (const backend of ['sqlite','postgres'] as const) describe.skipIf(backend ==
     expect(submitted.status).toBe(201);
     const list = await app.request(`/api/issues/${f.child.id}/deliveries`,{headers});
     expect((await list.json()).deliveries).toHaveLength(1);
+  }));
+  it('rejects batch closure before any row changes and ignores body acceptance options on both HTTP surfaces', () => run(async (store,db) => {
+    const f=fixture(store);store.updateIssue(f.child.id,{status:'cancelled'});
+    const submitted=store.submitIssueDelivery(f.root.id,{summary:'Legitimate settled root'},f.ownerActor);
+    const receipt=store.respondIssueDelivery(f.root.id,submitted.id,{action:'accept',revision:submitted.responsibilityRevision},{type:'member',id:f.human.id});
+    const token=await store.createAccessToken({name:'Batch test member',type:'pat',workspaceId:'local',userId:'local'});
+    const app=createMultiremiApp({store,authToken:'batch-test'});
+    const headers={Authorization:`Bearer ${token.token}`,'Content-Type':'application/json'};
+    const activityCount=()=>Number(db.query('SELECT COUNT(*) AS total FROM multiremi_conversation_log').get()?.total);
+    const events:string[]=[];const off=store.onWorkspaceEvent(event=>events.push(event.type));
+    try {
+      for(const surface of ['/api/issues','/api/multiremi/issues'])for(const injected of [
+        {},{force:true},{acceptedDeliveryId:receipt.id},{accepted_delivery_id:receipt.id},
+        {options:{acceptedDeliveryId:receipt.id,allowParentStatusGuardBypass:true}},
+      ]) {
+        const before=activityCount();
+        const response=await app.request(`${surface}/batch-update`,{method:'POST',headers,
+          body:JSON.stringify({issue_ids:[f.root.id,f.child.id],updates:{status:'done',title:'Must not partially write',...injected}})});
+        expect(response.status).toBe(409);
+        expect((await response.json()).code).toBe('issue_delivery_acceptance_required');
+        expect(store.getIssue(f.root.id)).toMatchObject({status:'done',title:'Root'});
+        expect(store.getIssue(f.child.id)).toMatchObject({status:'cancelled',title:'Child'});
+        expect(activityCount()).toBe(before);
+        expect(events).toEqual([]);
+        expect(store.listIssueDeliveries(f.root.id)[0]?.responseMessageId).toBe(receipt.responseMessageId);
+      }
+      for(const surface of ['/api/issues','/api/multiremi/issues']) {
+        const response=await app.request(`${surface}/batch-update`,{method:'POST',headers,
+          body:JSON.stringify({issue_ids:[f.root.id],updates:{status:'done'}})});
+        expect(response.status).toBe(200);
+        expect((await response.json()).updated).toBe(1);
+      }
+    } finally {off();}
+  }));
+  it('rolls back earlier batch rows and deferred events when a per-row delivery guard changes after preflight', () => run(async (store,db) => {
+    const f=fixture(store);store.updateIssue(f.child.id,{status:'cancelled'});
+    const first=store.submitIssueDelivery(f.root.id,{summary:'First settled result'},f.ownerActor);
+    store.respondIssueDelivery(f.root.id,first.id,{action:'accept',revision:first.responsibilityRevision},{type:'member',id:f.human.id});
+    const second=store.createIssue({title:'Second root',responsibleMemberId:f.human.id,assigneeType:'agent',assigneeId:f.owner.id});
+    const task=store.createTask({agentId:f.owner.id,issueId:second.id,prompt:'Settle the second root'});
+    const delivered=store.submitIssueDelivery(second.id,{summary:'Second settled result'},{type:'agent',id:f.owner.id,taskId:task.id});
+    store.respondIssueDelivery(second.id,delivered.id,{action:'accept',revision:delivered.responsibilityRevision},{type:'member',id:f.human.id});
+    const app=createMultiremiApp({store,authToken:'batch-test'});
+    const token=await store.createAccessToken({name:'Batch race member',type:'pat',workspaceId:'local',userId:'local'});
+    for(const surface of ['/api/issues','/api/multiremi/issues']) {
+      const before=Number(db.query('SELECT COUNT(*) AS total FROM multiremi_conversation_log').get()?.total);
+      const events:string[]=[];const off=store.onWorkspaceEvent(event=>events.push(event.type));
+      const append=StoreContext.prototype.appendIssueActivity;let fired=false;
+      StoreContext.prototype.appendIssueActivity=function(issueId,input,...rest) {
+        if(issueId===second.id&&input.type==='issue_updated') {
+          expect(this.db.inTransaction).toBeTrue();
+          expect(this.issues().getIssue(f.root.id)?.title).toBe('Batch title');
+          fired=true;throw new IssueDeliveryError('issue_delivery_revision_stale','Competing responsibility change');
+        }
+        return append.call(this,issueId,input,...rest);
+      };
+      try {
+        const response=await app.request(`${surface}/batch-update`,{method:'POST',headers:{Authorization:`Bearer ${token.token}`,'Content-Type':'application/json'},
+          body:JSON.stringify({issue_ids:[f.root.id,second.id],updates:{status:'done',title:'Batch title'}})});
+        expect(response.status).toBe(409);
+        expect((await response.json()).code).toBe('issue_delivery_revision_stale');
+      } finally {StoreContext.prototype.appendIssueActivity=append;off();}
+      expect(fired).toBeTrue();
+      expect(store.getIssue(f.root.id)?.title).toBe('Root');
+      expect(store.getIssue(second.id)?.title).toBe('Second root');
+      expect(Number(db.query('SELECT COUNT(*) AS total FROM multiremi_conversation_log').get()?.total)).toBe(before);
+      expect(events).toEqual([]);
+      expect(store.listIssueDeliveries(f.root.id)[0]?.status).toBe('accepted');
+      expect(store.listIssueDeliveries(second.id)[0]?.status).toBe('accepted');
+    }
   }));
   it('uses the actual source human for task-created roots and never the Runtime owner or a forged creator', () => run(async (store,db) => {
     const f=fixture(store);const app=createMultiremiApp({store,authToken:'test-root'});

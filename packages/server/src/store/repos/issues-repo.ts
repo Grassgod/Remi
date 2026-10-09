@@ -1184,41 +1184,41 @@ export class IssuesRepo {
     const updates = input.updates ?? {};
     if (issueIds.length === 0) throw new Error("issue_ids is required");
     if (!hasIssueMutation(updates)) return { updated: 0, issues: [], skipped: [] };
-    // Pre-flight the whole batch so a refusal cannot leave half the rows
-    // written while the caller sees a refusal (MUL-400 S1, QA round 2).
-    this.preflightBatchUpdateIssues(issueIds, updates);
-    const issues: MultiremiIssue[] = [];
-    const skipped: Array<{ issueId: string; error: string; code: string | null }> = [];
-    // MUL-400 E3 (QA round 2, blocker 5): batch is not a second way across the
-    // dependency gate. The request's `force` is moved to a server-internal
-    // option that only the parent-status guard reads, so a waiting issue in a
-    // batch stays parked and no `dependency_force_started` is written. S1's
-    // member override for a parent with open children keeps working.
-    const batchOptions: UpdateIssueOptions = updates.force === true ? { parentStatusForce: true } : {};
-    const rowUpdates: UpdateIssueInput = updates.force === true ? { ...updates, force: undefined } : updates;
-    for (const issueId of issueIds) {
-      try {
-        issues.push(this.updateIssue(issueId, rowUpdates, batchOptions));
-      } catch (err) {
-        if (err instanceof IssueWorkspaceMoveError) {
-          throw new IssueWorkspaceMoveError(err.relations, [issueId]);
+    const update = () => {
+      // Pre-flight the whole batch so a refusal cannot leave half the rows
+      // written while the caller sees a refusal (MUL-400 S1, QA round 2).
+      this.preflightBatchUpdateIssues(issueIds, updates);
+      const issues: MultiremiIssue[] = [];
+      const skipped: Array<{ issueId: string; error: string; code: string | null }> = [];
+      // A batch force only overrides the parent status guard, never the dependency gate.
+      const batchOptions: UpdateIssueOptions = updates.force === true ? { parentStatusForce: true } : {};
+      const rowUpdates: UpdateIssueInput = updates.force === true ? { ...updates, force: undefined } : updates;
+      for (const issueId of issueIds) {
+        try {
+          issues.push(this.updateIssue(issueId, rowUpdates, batchOptions));
+        } catch (err) {
+          if (err instanceof IssueWorkspaceMoveError) {
+            throw new IssueWorkspaceMoveError(err.relations, [issueId]);
+          }
+          // A concurrent writer can change guarded facts after the pre-flight.
+          if (err instanceof ParentStatusGuardError) {
+            throw new BatchParentStatusGuardError(err, [issueId]);
+          }
+          if (err instanceof IssueDeliveryError) throw err;
+          // Dependency refusals retain the existing per-row skipped result.
+          if (err instanceof IssueDependencyError) {
+            skipped.push({ issueId, error: err.message, code: err.code });
+            continue;
+          }
+          // Match Multiremi's batch behavior: skip invalid or inaccessible rows.
         }
-        // The per-row guard stays armed: a concurrent writer can still move an
-        // Issue into a guarded state after the pre-flight above.
-        if (err instanceof ParentStatusGuardError) {
-          throw new BatchParentStatusGuardError(err, [issueId]);
-        }
-        // MUL-400 E3: a dependency refusal is reported per row instead of failing
-        // the whole batch, matching the "skip invalid rows" shape callers
-        // already handle. The row stays parked and no override is recorded.
-        if (err instanceof IssueDependencyError) {
-          skipped.push({ issueId, error: err.message, code: err.code });
-          continue;
-        }
-        // Match Multiremi's batch behavior: skip invalid or inaccessible rows.
       }
-    }
-    return { updated: issues.length, issues, skipped };
+      return { updated: issues.length, issues, skipped };
+    };
+    // Only closure batches need this all-or-none boundary; unrelated batches
+    // retain their existing per-row validation/skip transactions.
+    return hasAnyField(updates,'status') && normalizeIssueStatus(updates.status)==='done'
+      ? this.ctx.db.transaction(update)() : update();
   }
 
   /**
@@ -1228,6 +1228,14 @@ export class IssuesRepo {
    * batch, and it does so with the refused issue ids.
    */
   private preflightBatchUpdateIssues(issueIds: string[], updates: UpdateIssueInput): void {
+    // A batch has no server-owned acceptance receipt. Check every row before
+    // any mutation, including force and childless Issues; settled no-ops remain valid.
+    if (hasAnyField(updates,'status') && normalizeIssueStatus(updates.status)==='done') {
+      for (const issueId of issueIds) {
+        const current=this.getIssue(issueId);
+        if(current && current.status!=='done') throw new IssueDeliveryError('issue_delivery_acceptance_required','Close the Issue by accepting its specific delivery');
+      }
+    }
     if (hasAnyField(updates, "workspaceId", "workspace_id")) {
       const rejected: string[] = [];
       let firstError: IssueWorkspaceMoveError | null = null;
