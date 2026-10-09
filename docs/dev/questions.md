@@ -20,6 +20,8 @@ summary: 原会话中的唯一问题、责任路由、答复版本与provider等
 
 原生等待有进程内 nonce，随 `hello.runtimes[].active_question_waits` 和 `runtime.ready` 的清单声明。短暂断线保留同一 nonce；新进程没有旧回调清单，服务端在恢复普通孤儿任务前分离该等待并取消旧 attempt 权限。若答案已保存，自动安排唯一新消费者。数据库中的 `running` 或 `awaiting_human` 只用于检查 attempt 仍有效，不能证明退出进程的回调存在；兼容入口没有 nonce 时直接为 `detached/native_wait_unverified`，正常答复走受控续接，不回填不存在的回调。保存答复与实际消费是两个不同状态。
 
+任务终止只取消原 provider 等待：同一事务中重复取消只产生一次提交后的 `HumanRequestEvent.cancelled`，回滚不发通知。该事件表示宿主等待已释放，业务 Q 仍为 `pending/detached`，不能显示为已撤回；只有显式关闭才结束业务 Q。
+
 公共 `recovery` 投影保留答复消息、续接消息和消费者 Turn 的引用；`consumer_attempt_id`
 只在实际消费确认后提供。Web 问题卡保留这些源消息入口，确认消费后可按现有 Task 权限
 打开对应执行记录；待续接状态不显示一个虚构的消费 attempt，也不绕过私有 trace 权限。

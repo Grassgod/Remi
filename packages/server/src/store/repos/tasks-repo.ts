@@ -6520,7 +6520,13 @@ ${placementAfter.sql}
     for(const row of pending) {
       const questions = new Questions(this.ctx);
       if (questions.get(row.id)) {
-        questions.detachWithinTransaction(row.id, task?.status === 'cancelled' ? 'source_turn_cancelled' : 'provider_exit', detachedEvents);
+        if (questions.detachWithinTransaction(row.id, task?.status === 'cancelled' ? 'source_turn_cancelled' : 'provider_exit', detachedEvents)) {
+          // Cancel the provider wait, while retaining the unanswered business Q.
+          // The changed wait is the once-only guard; notifyHumanRequest defers
+          // delivery until the enclosing transaction commits.
+          const request = this.getTaskHumanRequest(row.id);
+          if (task && request) this.ctx.notifyHumanRequest({ type: "cancelled", request, workspaceId: task.workspaceId });
+        }
         continue;
       }
       patchDecisionRecord(this.ctx,row.id,'human_request',{status:'cancelled',responded_at:now},'pending');
