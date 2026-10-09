@@ -49,6 +49,80 @@ for (const backend of ['sqlite','postgres'] as const) describe.skipIf(backend ==
     const workerTask = store.createTask({agentId:worker.id,issueId:child.id,prompt:'Deliver'});
     return {human,other,owner,worker,root,child,ownerActor:{type:'agent' as const,id:owner.id,taskId:ownerTask.id},workerActor:{type:'agent' as const,id:worker.id,taskId:workerTask.id}};
   }
+  it('uses current Main sequence for latest acceptance and authorization despite clock rollback', () => run((store,db) => {
+    const f = fixture(store);
+    store.updateIssue(f.child.id,{status:'cancelled'});
+    const first = store.submitIssueDelivery(f.root.id,{summary:'Earlier receipt'},f.ownerActor);
+    const second = store.submitIssueDelivery(f.root.id,{summary:'Later durable sequence'},f.ownerActor);
+    // Represent two real writers whose clocks differ, while preserving durable sequence.
+    db.run('UPDATE multiremi_conversation_log SET created_at=? WHERE id=?',['2038-01-01T00:00:00.000Z',first.id]);
+    db.run('UPDATE multiremi_conversation_log SET created_at=? WHERE id=?',['2037-01-01T00:00:00.000Z',second.id]);
+    const human = {type:'member' as const,id:f.human.id};
+    expect(store.listIssueDeliveries(f.root.id,{limit:1})[0]).toMatchObject({id:first.id,isLatest:false});
+    expect(store.listIssueDeliveries(f.root.id,{limit:1,before:first.id})[0]).toMatchObject({id:second.id,isLatest:true});
+    expect(() => store.authorizeIssueDelivery(f.root.id,first.id,f.owner.id,first.responsibilityRevision,human)).toThrow('latest pending');
+    expect(() => store.respondIssueDelivery(f.root.id,first.id,{action:'accept',revision:first.responsibilityRevision},human)).toThrow('latest delivery');
+    store.authorizeIssueDelivery(f.root.id,second.id,f.owner.id,second.responsibilityRevision,human);
+    expect(store.respondIssueDelivery(f.root.id,second.id,{action:'accept',revision:second.responsibilityRevision},f.ownerActor).status).toBe('accepted');
+    expect(store.getIssue(f.root.id)?.status).toBe('done');
+  }));
+  for (const fact of ['human','execution','leader','agent_restore','human_workspace'] as const) it(`permanently invalidates a pending delivery and proxy grant after ${fact} ABA`, () => run((store) => {
+    const f = fixture(store);
+    store.updateIssue(f.child.id,{status:'cancelled'});
+    const team = fact === 'leader' ? store.createSquad({name:'Delivery team',leaderId:f.owner.id,memberIds:[f.owner.id,f.worker.id]}) : null;
+    if (team) store.updateIssue(f.root.id,{assigneeType:'squad',assigneeId:team.id});
+    const delivery = store.submitIssueDelivery(f.root.id,{summary:'Original receipt'},f.ownerActor);
+    const human = {type:'member' as const,id:f.human.id};
+    store.authorizeIssueDelivery(f.root.id,delivery.id,f.owner.id,delivery.responsibilityRevision,human);
+    const transfer = (id:string) => store.updateIssue(f.root.id,fact === 'human'
+      ? {responsibleMemberId:id,actorType:'member',actorId:f.human.id}
+      : {assigneeType:'agent',assigneeId:id,actorType:'member',actorId:f.human.id});
+    if (fact === 'human') { transfer(f.other.id); transfer(f.human.id); }
+    if (fact === 'execution') { transfer(f.worker.id); transfer(f.owner.id); }
+    if (fact === 'leader') { store.updateSquad(team!.id,{leaderId:f.worker.id}); store.updateSquad(team!.id,{leaderId:f.owner.id}); }
+    if (fact === 'agent_restore') { store.archiveAgent(f.owner.id); store.restoreAgent(f.owner.id); }
+    if (fact === 'human_workspace') {
+      const foreign = store.createWorkspace({id:'delivery-human-foreign',name:'Foreign',slug:'delivery-human-foreign'});
+      store.updateWorkspaceMember(f.human.id,{workspaceId:foreign.id});
+      store.updateWorkspaceMember(f.human.id,{workspaceId:'local'});
+    }
+    expect(store.resolveIssueResponsibility(f.root.id).revision).toBe(delivery.responsibilityRevision);
+    const invalidated = store.listIssueDeliveries(f.root.id)[0]!;
+    expect(invalidated.invalidatedAt).toBeString();
+    expect(invalidated.status).toBe('pending');
+    expect(invalidated.authorization?.agentId).toBe(f.owner.id);
+    expect(() => store.respondIssueDelivery(f.root.id,delivery.id,{action:'accept',revision:delivery.responsibilityRevision},f.ownerActor)).toThrow('Responsibility changed');
+    expect(() => store.respondIssueDelivery(f.root.id,delivery.id,{action:'accept',revision:delivery.responsibilityRevision},human)).toThrow('Responsibility changed');
+    expect(() => store.authorizeIssueDelivery(f.root.id,delivery.id,f.owner.id,delivery.responsibilityRevision,human)).toThrow('Responsibility changed');
+    expect(store.listIssueActivity(f.root.id).filter(row=>row.type==='issue_delivery_invalidated')).toHaveLength(1);
+    const fresh = store.submitIssueDelivery(f.root.id,{summary:'Fresh explicit review'},f.ownerActor);
+    expect(store.respondIssueDelivery(f.root.id,fresh.id,{action:'accept',revision:fresh.responsibilityRevision},human).status).toBe('accepted');
+  }));
+  it('invalidates descendant receipts atomically and preserves grants on rollback or ordinary edits', () => run((store,db) => {
+    const f = fixture(store);
+    store.updateIssue(f.child.id,{status:'cancelled'});
+    const rootDelivery = store.submitIssueDelivery(f.root.id,{summary:'Root receipt'},f.ownerActor);
+    store.updateIssue(f.child.id,{status:'in_progress'});
+    const childDelivery = store.submitIssueDelivery(f.child.id,{summary:'Child receipt'},f.workerActor);
+    store.authorizeIssueDelivery(f.root.id,rootDelivery.id,f.owner.id,rootDelivery.responsibilityRevision,{type:'member',id:f.human.id});
+    const before = store.listIssueDeliveries(f.root.id)[0];
+    store.updateIssue(f.root.id,{title:'Ordinary edit'});
+    expect(store.listIssueDeliveries(f.root.id)[0]).toEqual(before);
+    expect(() => db.transaction(() => {
+      store.updateIssue(f.root.id,{responsibleMemberId:f.other.id,actorType:'member',actorId:f.human.id});
+      expect(store.listIssueDeliveries(f.child.id)[0]?.invalidatedAt).toBeString();
+      throw new Error('rollback responsibility and receipt');
+    })()).toThrow('rollback responsibility and receipt');
+    expect(store.listIssueDeliveries(f.root.id)[0]).toEqual(before);
+    expect(store.listIssueDeliveries(f.child.id)[0]?.invalidatedAt).toBeUndefined();
+    expect(store.listIssueActivity(f.root.id).filter(row=>row.type==='issue_delivery_invalidated')).toHaveLength(0);
+    store.updateIssue(f.root.id,{responsibleMemberId:f.other.id,actorType:'member',actorId:f.human.id});
+    store.updateIssue(f.root.id,{responsibleMemberId:f.human.id,actorType:'member',actorId:f.other.id});
+    expect(store.listIssueDeliveries(f.root.id)[0]?.invalidatedAt).toBeString();
+    expect(store.listIssueDeliveries(f.child.id)[0]?.invalidatedAt).toBeString();
+    expect(() => store.respondIssueDelivery(f.child.id,childDelivery.id,{action:'accept',revision:childDelivery.responsibilityRevision},f.ownerActor)).toThrow('Responsibility changed');
+    expect(store.listIssueActivity(f.child.id).filter(row=>row.type==='issue_delivery_invalidated')).toHaveLength(1);
+  }));
   it('requires an explicit human source and exposes unresolved legacy roots without guessing', () => run((store,db) => {
     expect(() => store.createIssue({title:'No responsibility'})).toThrow('explicit responsible_member_id');
     const f = fixture(store);

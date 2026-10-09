@@ -30,6 +30,11 @@ export interface IssueDelivery {
   sourceSessionId: string;
   summary: string;
   status: 'pending' | 'accepted' | 'returned';
+  /** Derived from the current Main's durable message sequence, never its clock. */
+  isLatest?: boolean;
+  /** A real responsibility change permanently invalidates this pending receipt. */
+  invalidatedAt?: string;
+  invalidatedReason?: string;
   submittedBy: IssueResponsibleActor;
   reviewOwner: IssueResponsibleActor;
   /** Current parent review availability; the persisted delivery and any settled receipt remain intact. */

@@ -82,6 +82,11 @@ Agent 提交及验收只能来自其责任 Issue 的主会话，继承旁支和 
 普通成员及 body 中伪造的 Task ID 不能替代该来源，具体交付代理授权也不解除 Issue 创建限制。
 交付固定原 Task 会话；取消或归档后不能用 pending 交付重新关单，需先恢复开放状态。
 重复相同验收幂等；相反动作、已被新交付替代或责任移交后的旧交付被拒绝。
+最新交付按当前 default Main 的持久消息 `seq` 判断，跨进程时间倒退不改变验收对象；
+历史列表仍按创建时间分页，并以派生 `isLatest` 标明实际当前交付。责任事实变更在原事务
+永久标记受影响的 pending 交付 `invalidatedAt`／`invalidatedReason`，保留原授权历史与审计；
+负责人 A→B→A 或归档后恢复不会复活旧交付或代理授权，普通评论和无事实变化的编辑不失效。
+前端仅为当前且未失效的 pending 交付显示验收、退回和授权操作。
 晚到结果仍保存原子单交付；已关闭或归档的父单仅接收可追溯的
 `issue_delivery_review_unavailable` activity，不创建新通知或唤醒轮。交付返回当前
 `reviewUnavailableReason`（`review_issue_closed`／`review_issue_archived`），pending 交付在父单

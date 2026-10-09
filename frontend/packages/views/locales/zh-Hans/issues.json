@@ -1,6 +1,8 @@
 {
   "responsibility": {
     "source_notification": "向原来源回传结果",
+    "delivery_invalidated": "责任已变更，请重新提交交付以供验收；此前历史仍保留。",
+    "delivery_superseded": "已有更新的交付，请验收新交付；此前历史仍保留。",
     "continuation_source": "续接指令",
     "consumer_turn": "消费轮次",
     "consumer_attempt": "已确认消费的执行",

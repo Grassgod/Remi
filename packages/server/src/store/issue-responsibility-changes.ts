@@ -2,11 +2,13 @@ import type { StoreContext, CommitEventQueue } from './context.js';
 import { refreshIssueQuestionsAfterResponsibilityChangeWithinTransaction, refreshChatQuestionsAfterResponsibilityChangeWithinTransaction } from './inbox/questions.js';
 import { createCommitEventQueue } from './context.js';
 import { afterCommit } from './db/postgres.js';
+import { invalidatePendingIssueDeliveriesWithinTransaction } from './issue-deliveries.js';
 
 /** Call after a responsibility fact changes, inside its owning W-locked transaction. */
 export function refreshResponsibilityQuestions(ctx: StoreContext, issueId: string, events: CommitEventQueue,
   actorType?: string, actorId?: string | null, reason = 'issue_responsibility_transferred'): void {
   const actor: import('@multiremi/contracts').QuestionActor | undefined = actorId && (actorType === 'agent' || actorType === 'member') ? {type:actorType,id:actorId} : undefined;
+  invalidatePendingIssueDeliveriesWithinTransaction(ctx,issueId,events,reason);
   refreshIssueQuestionsAfterResponsibilityChangeWithinTransaction(ctx,issueId,events,actor,reason);
 }
 

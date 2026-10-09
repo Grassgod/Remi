@@ -34,7 +34,46 @@ function deliveryIssueSql(ctx: StoreContext): string {
 
 function deliveryFromRow(row: Record<string, unknown>): IssueDelivery {
   const metadata = parseJson<Record<string,unknown>>(row.metadata,{});
-  return {...metadata.issue_delivery as IssueDelivery,id:String(row.id),createdAt:String(row.created_at)};
+  const { isLatest: _derived, ...persisted } = metadata.issue_delivery as IssueDelivery;
+  return {...persisted,id:String(row.id),createdAt:String(row.created_at)};
+}
+
+/** Sequence is monotonic inside the current Main, even across process clock skew. */
+function getLatestIssueDelivery(ctx: StoreContext, issueId: string): IssueDelivery | null {
+  const row = ctx.db.query(`SELECT m.id,m.created_at,m.metadata FROM multiremi_conversation_log m
+    JOIN multiremi_issue_sessions s ON s.id=m.session_id JOIN multiremi_issues i ON i.id=s.issue_id AND i.workspace_id=s.workspace_id
+    WHERE s.issue_id=? AND s.is_default=1 AND m.kind='message'
+    AND m.message_kind='report' AND m.deleted_at IS NULL AND ${deliveryIssueSql(ctx)}=?
+    ORDER BY m.seq DESC LIMIT ?`).get(issueId,issueId,1);
+  return row ? {...withReviewAvailability(deliveryFromRow(row),reviewUnavailableReason(ctx,issueId)),isLatest:true} : null;
+}
+
+/** Invoked only by server-owned responsibility mutation hooks in their transaction. */
+export function invalidatePendingIssueDeliveriesWithinTransaction(ctx: StoreContext, issueId: string,
+  events: import('./context.js').CommitEventQueue, reason: string): void {
+  if (!ctx.db.inTransaction) throw new Error('Delivery invalidation requires its responsibility transaction');
+  const rows = ctx.db.query(`WITH RECURSIVE affected(id) AS (
+    SELECT id FROM multiremi_issues WHERE id=? UNION SELECT child.id FROM multiremi_issues child JOIN affected parent ON child.parent_issue_id=parent.id
+  ) SELECT m.session_id,m.seq,m.id,m.created_at,m.metadata,s.issue_id FROM affected a
+    JOIN multiremi_issue_sessions s ON s.issue_id=a.id JOIN multiremi_issues i ON i.id=s.issue_id AND i.workspace_id=s.workspace_id
+    JOIN multiremi_conversation_log m ON m.session_id=s.id
+    WHERE m.kind='message' AND m.message_kind='report' AND m.deleted_at IS NULL AND ${deliveryIssueSql(ctx)}=s.issue_id
+    AND ${questionMetadataText(ctx.db,'m.metadata','issue_delivery.status')}='pending'
+    AND ${questionMetadataText(ctx.db,'m.metadata','issue_delivery.invalidatedAt')} IS NULL`).all(issueId);
+  const revisions = new Map<string,string>();
+  for (const row of rows) {
+    const id = String(row.issue_id);
+    const revision = revisions.get(id) ?? ctx.resolveIssueResponsibility(id).revision;
+    revisions.set(id,revision);
+    const delivery = deliveryFromRow(row);
+    if (delivery.responsibilityRevision === revision) continue;
+    const metadata = parseJson<Record<string,unknown>>(row.metadata,{});
+    const invalidated = {...delivery,invalidatedAt:new Date().toISOString(),invalidatedReason:reason};
+    ctx.conversationLog().updateConversationLogWithinTransaction(String(row.session_id),Number(row.seq),
+      {deferEmit:true,fields:{metadata:{...metadata,issue_delivery:invalidated}}});
+    ctx.appendIssueActivity(id,{actorType:'system',actorId:null,type:'issue_delivery_invalidated',body:null,
+      data:{deliveryId:delivery.id,reason,previousRevision:delivery.responsibilityRevision,revision}},events);
+  }
 }
 
 function reviewUnavailableReason(ctx: StoreContext, issueId: string): IssueDelivery['reviewUnavailableReason'] {
@@ -70,13 +109,14 @@ export function listIssueDeliveries(ctx: StoreContext, issueId: string, input: L
     ${cursor ? 'AND (m.created_at,m.seq,m.id) < (?,?,?)' : ''} ORDER BY m.created_at DESC,m.seq DESC,m.id DESC LIMIT ?`)
     .all(issueId,issueId,...(cursor ? [cursor.created_at,cursor.seq,cursor.id] : []),limit);
   const unavailable = reviewUnavailableReason(ctx,issueId);
-  return rows.map(row => withReviewAvailability(deliveryFromRow(row),unavailable));
+  const latestId = getLatestIssueDelivery(ctx,issueId)?.id;
+  return rows.map(row => ({...withReviewAvailability(deliveryFromRow(row),unavailable),isLatest:String(row.id)===latestId}));
 }
 
 export function assertIssueDeliveryAccepted(ctx: StoreContext, issueId: string, deliveryId?: string): void {
   const responsibility = ctx.resolveIssueResponsibility(issueId);
   if (!responsibility.reviewOwner || !responsibility.rootHuman || responsibility.unresolved.length) throw new IssueDeliveryError('issue_responsibility_unresolved', 'Configure the Issue responsibility chain before closure');
-  const latest = listIssueDeliveries(ctx, issueId,{limit:1})[0];
+  const latest = getLatestIssueDelivery(ctx, issueId);
   if (!latest || latest.id !== deliveryId || latest.status !== 'accepted' || latest.responsibilityRevision !== responsibility.revision) {
     throw new IssueDeliveryError('issue_delivery_acceptance_required', 'The current delivery must be accepted by its designated reviewer before closure');
   }
@@ -127,7 +167,8 @@ export function submitIssueDelivery(ctx: StoreContext, issueId: string, input: S
       dedupe_key:input.dedupeKey ? `issue_delivery:${input.dedupeKey}` : undefined,metadata:{issue_delivery:delivery}},events).message;
     if (!message.metadata.issue_delivery) throw new IssueDeliveryError('issue_delivery_dedupe_conflict', 'Delivery key belongs to another message');
     const unavailable = reviewUnavailableReason(ctx,issueId);
-    const stored = withReviewAvailability({...message.metadata.issue_delivery as IssueDelivery,id:message.id,createdAt:message.created_at},unavailable);
+    const stored = {...withReviewAvailability({...message.metadata.issue_delivery as IssueDelivery,id:message.id,createdAt:message.created_at},unavailable),
+      isLatest:getLatestIssueDelivery(ctx,issueId)?.id===message.id};
     if (message.id === id) {
       outcome = ctx.issues().updateIssueWithinTransaction(issueId,{status:'in_review',actorType:actor.type,actorId:actor.id,
         parentTaskId:actor.type==='agent'?actor.taskId:null}, {}, changes, events);
@@ -168,6 +209,8 @@ export function respondIssueDelivery(ctx: StoreContext, issueId: string, deliver
     const responsibility = ctx.resolveIssueResponsibility(issueId);
     const delivery = getIssueDelivery(ctx,issueId,deliveryId);
     if (!delivery) throw new IssueDeliveryError('issue_delivery_not_found','Delivery not found',404);
+    delivery.isLatest = getLatestIssueDelivery(ctx,issueId)?.id === delivery.id;
+    if (delivery.invalidatedAt) throw new IssueDeliveryError('issue_delivery_revision_stale','Responsibility changed; submit a new delivery to the current reviewer');
     if (!responsibility.reviewOwner || !responsibility.rootHuman || responsibility.unresolved.length) throw new IssueDeliveryError('issue_responsibility_unresolved','Configure the Issue responsibility chain before acceptance');
     const grant = delivery.authorization;
     const authorizedAgent = actor.type === 'agent' && responsibility.reviewOwner.type === 'member'
@@ -182,7 +225,7 @@ export function respondIssueDelivery(ctx: StoreContext, issueId: string, deliver
     }
     if (delivery.reviewUnavailableReason) throw new IssueDeliveryError('issue_delivery_reviewer_unavailable','Reopen the parent Issue before reviewing this pending delivery');
     if (['done','cancelled'].includes(issue.status) || issue.archivedAt) throw new IssueDeliveryError('issue_delivery_closed','Reopen the Issue before responding to a pending delivery');
-    if (listIssueDeliveries(ctx,issueId,{limit:1})[0]?.id !== deliveryId) throw new IssueDeliveryError('issue_delivery_superseded','Only the latest delivery can be accepted or returned');
+    if (!delivery.isLatest) throw new IssueDeliveryError('issue_delivery_superseded','Only the latest delivery can be accepted or returned');
     if (input.action === 'accept' && ctx.issues().countOpenChildIssues(issueId)) throw new IssueDeliveryError('issue_delivery_children_open','Finish or cancel child issues before acceptance');
     if (input.body !== undefined && typeof input.body !== 'string') throw new IssueDeliveryError('issue_delivery_response_invalid','Delivery response body must be text');
     if (input.action === 'return' && !input.body?.trim()) throw new IssueDeliveryError('issue_delivery_return_reason_required','Explain what needs to change');
@@ -226,8 +269,9 @@ export function authorizeIssueDelivery(ctx: StoreContext, issueId: string, deliv
     issue = ctx.issues().getIssue(issueId)!;
     if (['done','cancelled'].includes(issue.status) || issue.archivedAt) throw new IssueDeliveryError('issue_delivery_closed','Reopen the Issue before authorizing a pending delivery');
     const responsibility = ctx.resolveIssueResponsibility(issueId);
-    const delivery = listIssueDeliveries(ctx,issueId,{limit:1})[0];
+    const delivery = getLatestIssueDelivery(ctx,issueId);
     if (!delivery || delivery.id !== deliveryId || delivery.status !== 'pending') throw new IssueDeliveryError('issue_delivery_not_pending','Authorize the latest pending delivery');
+    if (delivery.invalidatedAt) throw new IssueDeliveryError('issue_delivery_revision_stale','Responsibility changed; submit a new delivery to the current reviewer');
     if (!responsibility.reviewOwner || responsibility.reviewOwner.type !== 'member' || !responsibility.rootHuman || responsibility.unresolved.length) throw new IssueDeliveryError('issue_delivery_authorization_requires_human','Only the root designated human with a complete responsibility chain may grant proxy acceptance',403);
     authorizeActor(ctx,actor,responsibility.reviewOwner,issue.workspaceId);
     if (revision !== responsibility.revision || delivery.responsibilityRevision !== revision) throw new IssueDeliveryError('issue_delivery_revision_stale','Responsibility changed');

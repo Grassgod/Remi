@@ -38,6 +38,13 @@ describe("responsibility and exact delivery review", () => {
     await waitFor(() => expect(onChange).toHaveBeenCalledWith("member-human"));
     expect(onChange).not.toHaveBeenCalledWith("other-human");
   });
+  for (const stale of [{isLatest:false},{isLatest:true,invalidatedAt:'earlier-transfer'}]) it(`keeps stale pending delivery history without review or proxy controls: ${JSON.stringify(stale)}`, async () => {
+    mocks.listIssueDeliveries.mockResolvedValue([{...delivery,...stale}]); mount();
+    await screen.findByText('Formal evidence');
+    expect(screen.queryByRole('button',{name:'Accept delivery'})).toBeNull();
+    expect(screen.queryByRole('button',{name:'Return delivery'})).toBeNull();
+    expect(screen.queryByRole('button',{name:'Authorize coordinator for this delivery'})).toBeNull();
+  });
   it("keeps history available with zero pending questions and retains formal return feedback", async () => {
     mount();
     expect(screen.getByRole("button", { name: "Questions and history" })).toBeInTheDocument();

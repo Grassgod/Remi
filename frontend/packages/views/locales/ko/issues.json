@@ -1,6 +1,8 @@
 {
   "responsibility": {
     "source_notification": "원래 실행 주체로 결과 전달",
+    "delivery_invalidated": "책임자가 변경되었습니다. 검토를 위해 결과물을 다시 제출하세요. 이전 기록은 유지됩니다.",
+    "delivery_superseded": "새로운 결과물이 있습니다. 새 결과물을 검토하세요. 이전 기록은 유지됩니다.",
     "continuation_source": "계속 실행 지시",
     "consumer_turn": "소비 턴",
     "consumer_attempt": "소비가 확인된 실행",

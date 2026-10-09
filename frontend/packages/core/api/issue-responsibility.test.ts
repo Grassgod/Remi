@@ -12,6 +12,9 @@ describe("responsibility API contracts", () => {
     const delivery = { id: "delivery", issueId: "issue", sourceSessionId: "session", summary: "Retained evidence", status: "pending", submittedBy: actor, reviewOwner: actor,
       responsibilityRevision: "v1", responseMessageId: null, createdAt: "now", respondedAt: null };
     expect(IssueDeliverySchema.parse(delivery).reviewUnavailableReason).toBeUndefined();
+    expect(IssueDeliverySchema.parse(delivery).isLatest).toBeUndefined();
+    expect(IssueDeliverySchema.parse({...delivery,isLatest:false,invalidatedAt:'now',invalidatedReason:'owner_changed'})).toMatchObject({isLatest:false,invalidatedAt:'now'});
+    expect(() => IssueDeliverySchema.parse({...delivery,isLatest:'true'})).toThrow();
     for (const reason of ["review_issue_closed", "review_issue_archived", "future_unavailable_reason"]) expect(IssueDeliverySchema.parse({ ...delivery, reviewUnavailableReason: reason }).reviewUnavailableReason).toBe(reason);
     expect(() => IssueDeliverySchema.parse({ ...delivery, reviewUnavailableReason: { reason: "closed" } })).toThrow();
   });
