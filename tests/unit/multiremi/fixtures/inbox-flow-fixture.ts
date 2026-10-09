@@ -16,6 +16,8 @@ export interface InboxFlowFixture {
   decisionIssueId?: string;
   seededTaskId?: string;
   seededWakeSeq?: number;
+  questionTurnId?: string;
+  questionTaskId?: string;
   humanBody?: string;
 }
 
@@ -24,7 +26,7 @@ export function inboxFlowFixture(store: MultiremiStore, scenario: InboxFlowScena
   const member = store.findWorkspaceMemberForUser("local", "local")!;
   const agent = store.createAgent({ name: `Inbox ${scenario}`, provider: "codex" });
   const target = createResponsibleTestIssue(store, { title: `Inbox ${scenario} recipient`, status: "in_progress",
-    assigneeType: "agent", assigneeId: agent.id });
+    assigneeType: "agent", assigneeId: agent.id, responsibleMemberId: member.id });
   const session = store.getOrCreateDefaultIssueSession(target.id);
   const common = { scenario, targetIssueId: target.id, issueSessionId: session.id,
     agentId: agent.id, memberId: member.id };
@@ -39,10 +41,21 @@ export function inboxFlowFixture(store: MultiremiStore, scenario: InboxFlowScena
     return { ...common, subjectIssueId: prerequisite.id };
   }
   if (scenario === "e4") {
-    const decision = store.createIssueDecision(target.id, {
-      kind: "question", title: "E4 direction", body: "Choose a direction",
-    }, { type: "member", id: member.id, taskId: null });
-    return { ...common, subjectIssueId: target.id, decisionId: decision.id, decisionIssueId: decision.issueId };
+    const runtime = store.registerRuntime({ name: "E4 question host", provider: "codex", daemonId: "e4-question-host" });
+    store.updateAgent(agent.id, { runtimeId: runtime.id });
+    const task = store.createTask({ agentId: agent.id, issueId: target.id, issueSessionId: session.id, prompt: "Choose a direction" });
+    if (store.claimTask(runtime.id)?.id !== task.id) throw new Error("E4 source execution was not claimed");
+    store.startTask(task.id);
+    const turn = store.getTurnForAttempt(task.id)!;
+    const bridge = store.getDaemonTurnBridge();
+    const scope = { runtimeId: runtime.id, daemonId: "e4-question-host", workspaceId: "local" };
+    const decision = bridge.rpc("turn.decision", { turn_id: turn.id, attempt_id: task.id,
+      dedupe_key: `e4:${task.id}`, wait_id: `e4-wait:${task.id}`, body_md: "Choose a direction",
+      options: [], metadata: { kind: "question", questions: [{ question: "Choose a direction" }] }, timeout_ms: 50 }, scope);
+    if (!decision.ok || !decision.message_id) throw new Error("E4 native question was not created");
+    return { ...common, subjectIssueId: target.id, decisionId: String(decision.message_id), decisionIssueId: target.id,
+      questionTaskId: task.id, questionTurnId: turn.id,
+      seededWakeSeq: inboxWakeSeq((store as unknown as { db: SqlDatabase }).db, task.id) };
   }
   const { db, ctx } = store as unknown as { db: SqlDatabase; ctx: StoreContext };
   const events = createCommitEventQueue();
@@ -60,9 +73,15 @@ export function triggerInboxFlow(store: MultiremiStore, fixture: InboxFlowFixtur
   switch (fixture.scenario) {
     case "e2": store.updateIssue(fixture.subjectIssueId, { status: "done" }); break;
     case "e3": store.updateIssue(fixture.subjectIssueId, { status: "blocked" }); break;
-    case "e4": store.answerIssueDecision(fixture.decisionIssueId!, fixture.decisionId!, {
-      answer: "E4 approved", reason: "Reviewed",
-    }, { type: "member", id: fixture.memberId, taskId: null }, { idempotent: true }); break;
+    case "e4": {
+      const question = store.getQuestion(fixture.decisionId!)!;
+      // Crash probes repeat the trigger after commit. Replaying an answer is
+      // explicitly different from amending it and must not schedule twice.
+      if (question.status === "answered") break;
+      store.answerQuestion(question.id, { expected_route_revision: question.route_revision,
+        response: { answer: "E4 approved" }, reason: "Reviewed" }, { type: "member", id: fixture.memberId });
+      break;
+    }
     case "human": store.createIssueComment(fixture.subjectIssueId, {
       authorType: "member", authorId: fixture.memberId, body: fixture.humanBody!,
     }); break;
@@ -71,7 +90,7 @@ export function triggerInboxFlow(store: MultiremiStore, fixture: InboxFlowFixtur
 
 export function inboxFlowStatus(store: MultiremiStore, fixture: InboxFlowFixture): string {
   return fixture.scenario === "e4"
-    ? store.getIssueDecision(fixture.decisionIssueId!, fixture.decisionId!)!.status
+    ? store.getQuestion(fixture.decisionId!)!.status
     : store.getIssue(fixture.subjectIssueId)!.status;
 }
 

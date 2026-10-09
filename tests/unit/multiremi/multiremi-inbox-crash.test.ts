@@ -110,6 +110,29 @@ for (const backend of ["SQLite", "PostgreSQL"] as const) {
           await child.exited;
           restart();
           const committed = phase === "after-commit";
+          if (scenario === "e4") {
+            const q = store.getQuestion(f.decisionId!)!;
+            const replies = store.listMessages(f.issueSessionId).filter(message => message.reply_to_id === q.id);
+            expect(q.status).toBe(committed ? "answered" : initialStatus);
+            expect(q.wait_status).toBe("waiting");
+            expect(q.answer_revision).toBe(committed ? 1 : 0);
+            expect(replies).toHaveLength(committed ? 1 : 0);
+            expect(store.listTasksForIssue(f.targetIssueId).map(task => task.id)).toEqual([f.questionTaskId!]);
+            expect(store.getTurnForAttempt(f.questionTaskId!)).toMatchObject({ id: f.questionTurnId!, status: committed ? "running" : "awaiting_human" });
+            const wakeSeq = inboxWakeSeq(db, f.questionTaskId!);
+            expect(wakeSeq).toBe(f.seededWakeSeq!);
+            if (committed) {
+              expect(q.answer!.reply_message_id).toBe(replies[0]!.id);
+              expect(replies[0]).toMatchObject({ sender_type: "member", sender_id: f.memberId,
+                to_agent_id: f.agentId, wake_applied: "now" });
+              triggerInboxFlow(store, f);
+              expect(store.getQuestion(q.id)!.answer_revision).toBe(1);
+              expect(store.listMessages(f.issueSessionId).filter(message => message.reply_to_id === q.id).map(message => message.id))
+                .toEqual([replies[0]!.id]);
+              expect(inboxWakeSeq(db, f.questionTaskId!)).toBe(wakeSeq);
+            }
+            return;
+          }
           if (scenario === "human") {
             const comments = store.listIssueComments(f.targetIssueId).filter(comment => comment.body === f.humanBody);
             expect(comments).toHaveLength(committed ? 1 : 0);

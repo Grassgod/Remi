@@ -22,7 +22,9 @@ pendingTurnBackendTests("D1 inbox transaction depth", fixture => {
         };
       }) as typeof db.transaction;
       db.run = (sql, params) => {
-        if (/INSERT\s+INTO\s+multiremi_turn_attempts/i.test(sql)) {
+        if (scenario === "e4"
+          ? /UPDATE\s+multiremi_turns\s+SET\s+status='running',waiting_on_message_id=NULL/i.test(sql)
+          : /INSERT\s+INTO\s+multiremi_turn_attempts/i.test(sql)) {
           expect(db.inTransaction).toBe(true);
           expect(depth).toBe(1);
           writes++;
@@ -33,6 +35,17 @@ pendingTurnBackendTests("D1 inbox transaction depth", fixture => {
       finally { db.transaction = transaction; db.run = run; }
       expect(maxDepth).toBe(1);
       expect(writes).toBe(1);
+      if (scenario === "e4") {
+        const q = store.getQuestion(flow.decisionId!)!;
+        const reply = store.getMessage(q.answer!.reply_message_id)!;
+        expect(q).toMatchObject({ status: "answered", wait_status: "waiting", answer_revision: 1 });
+        expect(reply).toMatchObject({ sender_type: "member", sender_id: flow.memberId,
+          to_agent_id: flow.agentId, reply_to_id: q.id, session_id: flow.issueSessionId, wake_applied: "now" });
+        expect(store.listTasksForIssue(flow.targetIssueId).map(task => task.id)).toEqual([flow.questionTaskId!]);
+        expect(inboxWakeSeq(db, flow.questionTaskId!)).toBe(flow.seededWakeSeq!);
+        expect(store.getTurnForAttempt(flow.questionTaskId!)).toMatchObject({ id: flow.questionTurnId!, status: "running" });
+        return;
+      }
       const tasks = store.listTasksForIssue(flow.targetIssueId).filter(task => task.status === "queued");
       expect(tasks).toHaveLength(1);
       const comments = store.listIssueComments(flow.targetIssueId).filter(comment => comment.authorType === "system");
