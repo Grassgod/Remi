@@ -1,4 +1,4 @@
-import { createResponsibleTestIssue } from './helpers.js';
+import { createResponsibleTestIssue, prepareTestIssueDelivery, seedHistoricalIssueFacts } from './helpers.js';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
 import type { Database } from "bun:sqlite";
 import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
@@ -74,7 +74,10 @@ function registerTaskWakeupContract(label: string, currentStore: () => Store): v
   it(`${label}: wakes an automatically started task once, after COMMIT`, () => {
     const store = currentStore();
     const owner = createRunnableOwner(store, `${label} auto`);
-    const prerequisite = createResponsibleTestIssue(store, { title: `${label} auto prerequisite`, status: "in_progress" });
+    const prerequisiteOwner = createRunnableOwner(store, `${label} auto prerequisite`);
+    const prerequisite = createResponsibleTestIssue(store, {
+      title: `${label} auto prerequisite`, status: "in_progress", assigneeType: "agent", assigneeId: prerequisiteOwner.id,
+    });
     const dependent = createResponsibleTestIssue(store, {
       title: `${label} auto dependent`,
       status: "backlog",
@@ -82,13 +85,15 @@ function registerTaskWakeupContract(label: string, currentStore: () => Store): v
       assigneeType: "agent",
       assigneeId: owner.id,
     });
+    const prepared = prepareTestIssueDelivery(store, prerequisite.id);
     const wakeups: Array<{ id: string; inTransaction: boolean }> = [];
     const unsubscribe = store.onTaskEnqueued((task) => {
       wakeups.push({ id: task.id, inTransaction: inTransaction(store) });
     });
 
     try {
-      store.updateIssue(prerequisite.id, { status: "done" });
+      store.respondIssueDelivery(prerequisite.id, prepared.delivery.id,
+        { action: "accept", revision: prepared.delivery.responsibilityRevision }, prepared.actor);
     } finally {
       unsubscribe();
     }
@@ -101,7 +106,11 @@ function registerTaskWakeupContract(label: string, currentStore: () => Store): v
   it.each(["force", "auto"] as const)(`${label}: drops the %s wakeup when task creation rolls back`, (kind) => {
     const store = currentStore();
     const owner = createRunnableOwner(store, `${label} rollback ${kind}`);
-    const prerequisite = createResponsibleTestIssue(store, { title: `${label} rollback prerequisite ${kind}`, status: "in_progress" });
+    const prerequisiteOwner = kind === "auto" ? createRunnableOwner(store, `${label} rollback auto prerequisite`) : null;
+    const prerequisite = createResponsibleTestIssue(store, {
+      title: `${label} rollback prerequisite ${kind}`, status: "in_progress",
+      ...(prerequisiteOwner ? { assigneeType: "agent", assigneeId: prerequisiteOwner.id } as const : {}),
+    });
     const dependent = createResponsibleTestIssue(store, {
       title: `${label} rollback dependent ${kind}`,
       status: "backlog",
@@ -109,6 +118,7 @@ function registerTaskWakeupContract(label: string, currentStore: () => Store): v
       assigneeType: "agent",
       assigneeId: owner.id,
     });
+    const prepared = kind === "auto" ? prepareTestIssueDelivery(store, prerequisite.id) : null;
     const wakeups: string[] = [];
     const unsubscribe = store.onTaskEnqueued((task) => wakeups.push(task.id));
     const original = StoreContext.prototype.appendIssueActivity;
@@ -131,7 +141,8 @@ function registerTaskWakeupContract(label: string, currentStore: () => Store): v
           status: "todo", force: true, actorType: "member", actorId: "mem_local",
         })).toThrow(`injected ${kind} rollback after task insert`);
       } else {
-        store.updateIssue(prerequisite.id, { status: "done" });
+        store.respondIssueDelivery(prerequisite.id, prepared!.delivery.id,
+          { action: "accept", revision: prepared!.delivery.responsibilityRevision }, prepared!.actor);
       }
     } finally {
       StoreContext.prototype.appendIssueActivity = original;
@@ -141,6 +152,7 @@ function registerTaskWakeupContract(label: string, currentStore: () => Store): v
     expect(wakeups).toEqual([]);
     expect(store.listTasksForIssue(dependent.id)).toEqual([]);
     expect(store.getIssue(dependent.id)?.status).toBe("backlog");
+    if (kind === "auto") expect(store.getIssue(prerequisite.id)?.status).toBe("done");
   });
 
   it(`${label}: keeps ordinary and session task wakeups at one each`, () => {
@@ -292,9 +304,14 @@ function registerForcedSkipHttpContract(label: string, currentStore: () => Store
         title: `${label} ${testCase.kind} dependent`,
         status: "backlog",
         blockedBy: [prerequisite.id],
-        assigneeType,
-        assigneeId,
+        assigneeType: assigneeType === "member" ? undefined : assigneeType,
+        assigneeId: assigneeType === "member" ? undefined : assigneeId,
       });
+      // Dispatch must still handle existing member-assigned records without
+      // permitting a new member execution assignment or inventing an Agent.
+      if (assigneeType === "member") {
+        seedHistoricalIssueFacts(store, dependent.id, { assigneeType, assigneeId });
+      }
       if (agentToArchive) store.archiveAgent(agentToArchive);
       const app = createMultiremiApp({ store });
 
@@ -325,9 +342,9 @@ function registerForcedSkipHttpContract(label: string, currentStore: () => Store
       title: `${label} skip rollback dependent`,
       status: "backlog",
       blockedBy: [prerequisite.id],
-      assigneeType: "member",
-      assigneeId: member.id,
     });
+    // A legacy member execution record reaches the real skip/audit boundary.
+    seedHistoricalIssueFacts(store, dependent.id, { assigneeType: "member", assigneeId: member.id });
     const events: string[] = [];
     const unsubscribe = store.onWorkspaceEvent((event) => events.push(event.type));
     const original = StoreContext.prototype.appendIssueActivity;
