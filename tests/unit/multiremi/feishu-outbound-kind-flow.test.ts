@@ -13,18 +13,22 @@ import { configureKindBot } from "./feishu-outbound-kind-fixture.js";
 import { createLocalStore, db, resetMultiremiTestEnv } from "./feishu-host-store-fixture.js";
 
 let key: string | undefined, jobs: string | undefined;
+let publicUrl: string | undefined;
 let fetchBefore: typeof fetch;
 beforeEach(() => {
   key = process.env.MULTIREMI_FEISHU_BOT_ENCRYPTION_KEY;
   jobs = process.env.MULTIREMI_BACKGROUND_JOBS;
+  publicUrl = process.env.MULTIREMI_PUBLIC_URL;
   fetchBefore = globalThis.fetch;
   process.env.MULTIREMI_FEISHU_BOT_ENCRYPTION_KEY = Buffer.alloc(32, 7).toString("base64");
   process.env.MULTIREMI_BACKGROUND_JOBS = "1";
+  process.env.MULTIREMI_PUBLIC_URL = "https://remi.example";
 });
 afterEach(() => {
   setSystemTime();
   if (key === undefined) delete process.env.MULTIREMI_FEISHU_BOT_ENCRYPTION_KEY; else process.env.MULTIREMI_FEISHU_BOT_ENCRYPTION_KEY = key;
   if (jobs === undefined) delete process.env.MULTIREMI_BACKGROUND_JOBS; else process.env.MULTIREMI_BACKGROUND_JOBS = jobs;
+  if (publicUrl === undefined) delete process.env.MULTIREMI_PUBLIC_URL; else process.env.MULTIREMI_PUBLIC_URL = publicUrl;
   globalThis.fetch = fetchBefore;
   resetMultiremiTestEnv();
 });
@@ -133,6 +137,27 @@ function questionFlow() {
     return rows.find(row => row.kind === "interaction_card")!;
   };
   return { ...f, ask, respond, interaction };
+}
+
+async function notifiedWorkerQuestion(suffix: string) {
+  const f = questionFlow();
+  const worker = f.store.createAgent({ name: "Private Chat worker", provider: "codex", runtimeId: f.runtimeId, visibility: "private" });
+  f.store.replaceFeishuBotAgentRoutes("local", [{ scope: "chat", chatId: `oc_kind_${suffix}`, agentId: worker.id }]);
+  const taskId = f.inbound(suffix).taskId;
+  for (const row of f.store.claimFeishuBotOutbounds("local", f.runtimeId)) f.store.reportFeishuBotOutbound("local", f.runtimeId, row.id,
+    { claimToken: row.claimToken, status: "sent", externalMessageId: `om_${row.id}` });
+  const request = f.ask(taskId), original = f.store.getQuestion(request.id)!;
+  const record = f.store.getMessage(request.id)!.metadata.question as { presentation_session_id: string };
+  const notification = f.store.listMessages(record.presentation_session_id).find(message => message.metadata.question_present_request === true)!;
+  expect(notification.metadata.root_question_id).toBe(request.id); expect(notification.reply_to_id).toBeNull();
+  expect(notification.session_id).not.toBe(original.session_id);
+  const turn = f.store.getTurn(String(notification.metadata.delivery_turn_id))!;
+  const claimed = f.store.claimTask(f.runtimeId)!;
+  expect(claimed.id).toBe(turn.current_attempt_id!); f.store.startTask(claimed.id);
+  const token = await f.store.createTaskAccessToken(f.store.getTask(claimed.id)!, "local");
+  const app = createMultiremiApp({ store: f.store, authToken: "kind-question-master" });
+  const headers = { Authorization: `Bearer ${token.token}`, "Content-Type": "application/json" };
+  return { ...f, request, original, record, app, headers };
 }
 
 describe("C5 full fake-channel delivery", () => {
@@ -324,6 +349,13 @@ describe("C5 full fake-channel delivery", () => {
     expect(text).toHaveLength(1);
     expect(text[0]).toContain(request.id); expect(text[0]).toContain("Continue?"); expect(text[0]).toContain("Yes");
     expect(text[0]).toContain("Remi 工作台"); expect(text[0]).not.toContain("<at"); expect(text[0]).not.toContain("ou_kind_sender");
+    expect(text[0]).toContain(`/inbox?item=${request.id}&question=${request.id}`);
+    expect(text[0]).not.toContain("/chat?session=");
+    const human = await f.store.createAccessToken({ type: "pat", name: "Specified question human", workspaceId: "local",
+      userId: f.store.getWorkspaceMember("mem_local_local")!.userId! });
+    const api = createMultiremiApp({ store: f.store, authToken: "fallback-master" }), headers = { Authorization: `Bearer ${human.token}` };
+    expect((await api.request(`/api/sessions/${f.store.getQuestion(request.id)!.session_id}/messages`, { headers })).status).toBe(403);
+    expect((await api.request(`/api/messages/${request.id}/question`, { headers })).status).toBe(200);
     expect(f.store.getQuestion(request.id)?.status).toBe("pending");
   });
 
@@ -346,23 +378,7 @@ describe("C5 full fake-channel delivery", () => {
   });
 
   it("authorizes Remi only in the notified Chat lane to read and present the same original worker Q", async () => {
-    const f = questionFlow();
-    const worker = f.store.createAgent({ name: "Private Chat worker", provider: "codex", runtimeId: f.runtimeId, visibility: "private" });
-    f.store.replaceFeishuBotAgentRoutes("local", [{ scope: "chat", chatId: "oc_kind_present_lane", agentId: worker.id }]);
-    const taskId = f.inbound("present_lane").taskId;
-    for (const row of f.store.claimFeishuBotOutbounds("local", f.runtimeId)) f.store.reportFeishuBotOutbound("local", f.runtimeId, row.id,
-      { claimToken: row.claimToken, status: "sent", externalMessageId: `om_${row.id}` });
-    const request = f.ask(taskId), original = f.store.getQuestion(request.id)!;
-    const record = f.store.getMessage(request.id)!.metadata.question as { presentation_session_id: string };
-    const notification = f.store.listMessages(record.presentation_session_id).find(message => message.metadata.question_present_request === true)!;
-    expect(notification.metadata.root_question_id).toBe(request.id); expect(notification.reply_to_id).toBeNull();
-    expect(notification.session_id).not.toBe(original.session_id);
-    const turn = f.store.getTurn(String(notification.metadata.delivery_turn_id))!;
-    const claimed = f.store.claimTask(f.runtimeId)!;
-    expect(claimed.id).toBe(turn.current_attempt_id!); f.store.startTask(claimed.id);
-    const token = await f.store.createTaskAccessToken(f.store.getTask(claimed.id)!, "local");
-    const app = createMultiremiApp({ store: f.store, authToken: "kind-question-master" });
-    const headers = { Authorization: `Bearer ${token.token}`, "Content-Type": "application/json" };
+    const f = await notifiedWorkerQuestion("present_lane"), { request, original, app, headers } = f;
     expect((await app.request(`/api/messages/${request.id}/question`, { headers })).status).toBe(200);
     expect((await app.request(`/api/messages/${request.id}`, { headers })).status).toBe(403);
     const unrelated = f.store.createChatSession({ agentId: f.agent.id, creatorId: "local", title: "Unrelated Remi work" });
@@ -380,6 +396,11 @@ describe("C5 full fake-channel delivery", () => {
     expect(card.humanRequestId).toBe(request.id); expect(card.interactionOpenId).toBe("ou_kind_owner");
     expect(f.store.getQuestion(request.id)?.session_id).toBe(original.session_id);
     expect(f.store.getQuestion(request.id)?.summary?.body_md).toBe("Read the worker's original options");
+  });
+
+  it("moves presentation to a private Chat for the new human and revokes the old Remi notification lane", async () => {
+    const f = await notifiedWorkerQuestion("handoff_lane"), { request, original, record, app, headers } = f;
+    expect((await app.request(`/api/messages/${request.id}/question`, { headers })).status).toBe(200);
     const nextUser = f.store.getOrCreateUser({ externalId: "kind-next-human", name: "New responsible human" });
     const next = f.store.createWorkspaceMember({ workspaceId: "local", userId: nextUser.id, name: nextUser.name, role: "member" });
     f.store.upsertFeishuBotConfig("local", { agentId: f.agent.id, runtimeId: f.runtimeId, appId: f.config.appId,

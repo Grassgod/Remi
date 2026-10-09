@@ -2996,7 +2996,7 @@ export class FeishuBotRepo {
         const recipient: DecisionRecipientResolution = config ? this.questionRecipient(request.id, config.appId, task.workspaceId)
           : { kind: 'degraded', reason: 'unresolved_recipient', degraded: true };
         const fallback = decisionCardTextBody({ request, workspaceSlug: this.ctx.workspaces().getWorkspace(task.workspaceId)?.slug,
-          chatSessionId: task.chatSessionId });
+          questionId: question.id });
         insert('interaction_card', `question:${request.id}:${question.route_revision}:${question.summary?.at ?? 'original'}`,
           toJson({ agentName: this.ctx.agents().getAgent(task.agentId)?.name, sessionId: task.sessionId,
             routeRevision: question.route_revision, fallbackText: fallback }), null, request.id, null, recipient);
@@ -4466,7 +4466,7 @@ export function resolveDecisionRecipient(topics: IssueTopicConfig): DecisionReci
  */
 export function decisionCardTextBody(input: {
   issue?: Pick<MultiremiIssue, "id" | "key" | "title">;
-  chatSessionId?: string | null;
+  questionId?: string | null;
   workspaceSlug?: string | null;
   publicUrl?: string | null;
   request: MultiremiTaskHumanRequest;
@@ -4511,10 +4511,10 @@ export function decisionCardTextBody(input: {
     });
   }
   const base = cleanOptionalString(input.publicUrl ?? process.env.MULTIREMI_PUBLIC_URL)?.replace(/\/+$/, '');
-  const link = issue ? issueWebUrl({ ...input, issue }) : base && input.chatSessionId
-    ? `${base}${input.workspaceSlug ? `/${encodeURIComponent(input.workspaceSlug)}` : ''}/chat?session=${encodeURIComponent(input.chatSessionId)}` : null;
+  const link = issue ? issueWebUrl({ ...input, issue }) : base && input.questionId
+    ? `${base}${input.workspaceSlug ? `/${encodeURIComponent(input.workspaceSlug)}` : ''}/inbox?item=${encodeURIComponent(input.questionId)}&question=${encodeURIComponent(input.questionId)}` : null;
   lines.push("", link
-    ? `请在 Remi 工作台处理：[${issue?.key ?? '原会话'}](${link})`
+    ? `请在 Remi 工作台处理：[${issue?.key ?? '原问题'}](${link})`
     : "请在 Remi 工作台处理此请求。");
   return lines.join("\n");
 }

@@ -34,6 +34,8 @@ summary: 原会话中的唯一问题、责任路由、答复版本与provider等
 
 无 Issue 的 Worker Chat 仍绑定原执行 Agent；Remi 在自己的通知 Chat 接收同 Q 呈现任务，不改变原 Chat 执行归属。只有当前版本通知对应的 Remi 会话与 scope 可定点读原 Q，不能借另一个 Remi 轮读取私有原消息。Chat 交互卡也等待同 Q 总结或明确超时，收件人按指定人类映射，不能继承原消息发送者；映射缺失发送无猜测 @ 的工作台文字，旧路由或失去授权时不发送空卡。
 
+Chat 降级文字的工作台链接打开 Inbox 原 Q 专属定位入口，不要求指定人类拥有原 private Chat 的一般读取权；原题、选项和背景仍由 Question 授权服务读取。
+
 已成功送达的原生 Q 卡片在五十分钟后最多提醒一次；等待超时不取消这次提醒。提醒仍使用当前 Q、当前路由和已验证的指定人类映射，令牌更新、提醒槽和出站意图同事务提交，回滚后可以重试。旧历史请求保留其原有截止窗口。已答、已关闭或仅降级文字的 Q 不生成卡片提醒。
 
 旧 IssueDecision独立创建、答复、升级和撤回 writer返回410。历史 `decision_record` 和 `human_request` 通过统一投影保留原问题、上下文、答案、原因及历史；没有 native nonce证据的历史 AUQ显示等待分离，历史业务decision为 `none`。读取不迁移数据库；后续答复、修订或关闭在统一写路径落地，不调用旧writer。历史业务问题按原 `source_task_id` 的真实会话、Agent及execution scope回传普通协作通知，同会话答复直接投递原reply；`notify` 历史保留通知来源或不可运行原因。普通回传不改变wait、consumer或continuation事实；派发失败用savepoint隔离，保留合法答案及可读待处理消息。原问题禁止删除或修改正文，关闭必须保留原因和历史。

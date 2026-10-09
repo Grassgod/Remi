@@ -43,6 +43,55 @@ function setup(f: PendingTurnTestFixture, sameOwner = false, busyOwner = false, 
 }
 
 pendingTurnBackendTests('one question through the responsibility chain', fixture => {
+  it('native AUQ uses the explicitly assigned second Squad rather than the Worker first membership', async () => {
+    const { store, db } = fixture();
+    const runtime = store.registerRuntime({ name: 'Two Squad Q host', provider: 'codex', daemonId: 'two-squad-q', maxConcurrency: 16 });
+    const first = store.createAgent({ name: 'First Squad leader', provider: 'codex', runtimeId: runtime.id });
+    const second = store.createAgent({ name: 'Assigned Squad leader', provider: 'codex', runtimeId: runtime.id });
+    const worker = store.createAgent({ name: 'Worker in two Squads', provider: 'codex', runtimeId: runtime.id, visibility: 'private', ownerId: 'local' });
+    const firstSquad = store.createSquad({ name: 'First membership', leaderId: first.id, memberIds: [worker.id] });
+    const assignedSquad = store.createSquad({ name: 'Explicit assignment', leaderId: second.id, memberIds: [worker.id] });
+    expect(firstSquad.id).not.toBe(assignedSquad.id);
+    const issue = store.createIssue({ title: 'Second Squad owns this work', assigneeType: 'squad', assigneeId: assignedSquad.id,
+      responsibleMemberId: 'mem_local_local' });
+    const session = store.createIssueSession(issue.id, { title: 'Original private Worker lane', holdsWorkspace: false });
+    const task = store.createTask({ agentId: worker.id, issueId: issue.id, issueSessionId: session.id, prompt: 'Ask the actual Issue owner', priority: 200 });
+    expect(store.claimTask(runtime.id)?.id).toBe(task.id); store.startTask(task.id);
+    const turn = store.getTurnForAttempt(task.id)!, bridge = store.getDaemonTurnBridge();
+    const scope = { runtimeId: runtime.id, daemonId: runtime.daemonId!, workspaceId: 'local' };
+    const created = bridge.rpc('turn.decision', { turn_id: turn.id, attempt_id: task.id, wait_id: `two-squad:${task.id}`,
+      dedupe_key: `two-squad:${task.id}`, body_md: 'Choose the owner-approved approach', options: [{ label: 'A', value: 'A' }],
+      metadata: { kind: 'question', questions: [{ question: 'Approach?', options: [{ label: 'A' }] }] } }, scope);
+    expect(created.ok).toBe(true);
+    const id = String(created.message_id), q = store.getQuestion(id)!;
+    expect(q).toMatchObject({ session_id: session.id, source_agent_id: worker.id, stage: 'issue_owner',
+      current_handler: { type: 'agent', id: second.id }, wait_status: 'waiting' });
+    const main = store.getOrCreateDefaultIssueSession(issue.id);
+    const notifications = store.listMessages(main.id).filter(message => message.metadata.question_notification === true && message.metadata.root_question_id === id);
+    expect(notifications.map(message => message.to_agent_id)).toEqual([second.id]);
+    const unrelatedSession = store.createIssueSession(issue.id, { title: 'First Squad unrelated work', holdsWorkspace: false });
+    const unrelated = store.createTask({ agentId: first.id, issueId: issue.id, issueSessionId: unrelatedSession.id, prompt: 'No Q was assigned here', priority: 300 });
+    expect(store.claimTask(runtime.id)?.id).toBe(unrelated.id); store.startTask(unrelated.id);
+    const wrongToken = await store.createTaskAccessToken(store.getTask(unrelated.id)!, 'local');
+    const notified = store.getTurn(String(notifications[0]!.metadata.delivery_turn_id))!;
+    db.run('UPDATE multiremi_turns SET priority=400 WHERE id=?', [notified.id]);
+    const handler = store.claimTask(runtime.id)!;
+    expect(handler.id).toBe(notified.current_attempt_id!); expect(handler.agentId).toBe(second.id); store.startTask(handler.id);
+    const token = await store.createTaskAccessToken(store.getTask(handler.id)!, 'local');
+    const api = createMultiremiApp({ store, authToken: 'two-squad-master' });
+    const act = (credential: string, action?: string) => api.request(`/api/messages/${id}/question${action ? '/' + action : ''}`, {
+      method: action ? 'POST' : 'GET', headers: { Authorization: `Bearer ${credential}`, 'content-type': 'application/json' },
+      ...(action ? { body: JSON.stringify({ expected_route_revision: q.route_revision, response: { answers: { 'Approach?': 'A' } } }) } : {}) });
+    expect((await act(wrongToken.token)).status).toBe(403);
+    expect((await act(wrongToken.token, 'answer')).status).toBe(403);
+    expect(store.getQuestion(id)?.status).toBe('pending');
+    expect((await act(token.token)).status).toBe(200);
+    expect((await act(token.token, 'answer')).status).toBe(200);
+    expect(store.getQuestion(id)?.answer?.actor).toEqual({ type: 'agent', id: second.id });
+    expect(bridge.rpc('turn.decision.consume', { turn_id: turn.id, attempt_id: task.id, message_id: id,
+      wait_id: `two-squad:${task.id}`, reply_message_id: store.getQuestion(id)!.answer!.reply_message_id }, scope).ok).toBe(true);
+    expect(store.getQuestion(id)?.wait_status).toBe('consumed');
+  });
   it('HTTP hides the original Q after a real source Issue move across workspaces', async () => {
     const h = setup(fixture());
     const api = createMultiremiApp({ store: h.store, authToken: 'MASTER' });
