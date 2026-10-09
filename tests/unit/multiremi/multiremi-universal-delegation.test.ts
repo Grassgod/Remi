@@ -374,7 +374,10 @@ for (const backend of ["sqlite", "postgres"] as const) {
     for (const assignment of ["explicit", "project_default", "reassign"] as const) {
       it(`agent ${assignment} assignment creates an undelegated first round with no return (E6)`,
         async () => withStore(backend, async store => {
-          const f = fixture(store);
+          const f = fixture(store, true);
+          // Agent-created roots inherit a human only from a complete, verified
+          // source chain; configuring that source does not delegate the new work.
+          store.updateIssue(f.a.parentIssueId!, { assigneeType: "agent", assigneeId: f.leader.id });
           const project = store.createProject({ title: "First-round project",
             defaultAssigneeType: "agent", defaultAssigneeId: f.atlas.id });
           store.updateIssue(f.a.id, { projectId: project.id });
