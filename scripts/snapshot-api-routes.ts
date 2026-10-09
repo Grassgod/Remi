@@ -1338,13 +1338,23 @@ flow("issue-responsibility-and-questions", async (rec, refs, store) => {
     if (!result.ok) throw new Error(`Snapshot native Q failed: ${result.code}`);
     return store.getQuestion(String(result.message_id))!;
   };
+  // Configure Remi before escalation so the actual human-stage notification
+  // exists; an unrelated running owner turn does not grant presentation access.
+  await checked("PUT", `/api/workspaces/${refs.workspaceId}/feishu-bot`, { agent_id: owner.id, runtime_id: runtime.id, app_id: "cli_responsibility_snapshot", app_secret: "synthetic-secret", app_secret_op: "set", domain: "feishu", enabled: false, responsible_member_id: human.id }, "snapshot-responsibility-master");
   const question = createQ("snapshot-question-answer");
   await read(`/api/messages/${question.id}/question`);
   await checked("POST", `/api/messages/${question.id}/question/transfer`, { expected_route_revision: question.route_revision, reason: "Confirm current facts" }, ownerToken.token);
   const routed = store.getQuestion(question.id)!;
   const humanQuestion = (await checked("POST", `/api/messages/${question.id}/question/escalate`, { expected_route_revision: routed.route_revision, reason: "Explicit human needed" }, ownerToken.token)).question;
-  await checked("PUT", `/api/workspaces/${refs.workspaceId}/feishu-bot`, { agent_id: owner.id, runtime_id: runtime.id, app_id: "cli_responsibility_snapshot", app_secret: "synthetic-secret", app_secret_op: "set", domain: "feishu", enabled: false, responsible_member_id: human.id }, "snapshot-responsibility-master");
-  await checked("POST", `/api/messages/${question.id}/question/present`, { expected_route_revision: humanQuestion.route_revision, summary: "Remi's separate summary; original choices remain unchanged" }, ownerToken.token);
+  const presentation = store.listMessages(store.getOrCreateDefaultIssueSession(root.id).id).find(message =>
+    message.metadata.question_present_request === true && message.metadata.root_question_id === question.id
+    && message.metadata.question_route_revision === humanQuestion.route_revision);
+  if (!presentation || typeof presentation.metadata.delivery_turn_id !== "string") throw new Error("Snapshot Remi presentation notification has no bound turn");
+  for (let count = 0; count < 8; count++) { const claimed = store.claimTask(runtime.id); if (!claimed) break; store.startTask(claimed.id); }
+  const presentationTurn = store.getTurn(presentation.metadata.delivery_turn_id)!;
+  if (presentationTurn.session_id !== presentation.session_id || presentationTurn.execution_scope !== String(presentation.metadata.execution_scope ?? "")) throw new Error("Snapshot Remi notification lane changed");
+  const presentationToken = await store.createTaskAccessToken(store.getTask(presentationTurn.current_attempt_id!)!, user.id);
+  await checked("POST", `/api/messages/${question.id}/question/present`, { expected_route_revision: humanQuestion.route_revision, summary: "Remi's separate summary; original choices remain unchanged" }, presentationToken.token);
   const answer = (await checked("POST", `/api/messages/${question.id}/question/answer`, { expected_route_revision: humanQuestion.route_revision, response: { answers: { "Which approach?": "A, B" } } }, pat.token)).question;
   const consumed = store.getDaemonTurnBridge().rpc("turn.decision.consume", { turn_id: turn.id, attempt_id: sourceTask.id, message_id: question.id, reply_message_id: answer.answer.reply_message_id, wait_id: "wait:snapshot-question-answer" }, { runtimeId: runtime.id, daemonId: "dmn_responsibility_snapshot", workspaceId: refs.workspaceId });
   if (!consumed.ok || store.getQuestion(question.id)?.wait_status !== "consumed") throw new Error("Snapshot Q answer was not consumed by the original provider wait");
