@@ -1,4 +1,5 @@
 import { patchDecisionRecord } from "../inbox/decision-records.js";
+import { questionMetadataText } from '../inbox/question-indexes.js';
 /**
  * Workspace Feishu concierge bot configuration (MUL-206).
  *
@@ -2259,13 +2260,13 @@ export class FeishuBotRepo {
   }
 
   /**
-   * Queue the one text nudge a pending decision card gets before its deadline.
+   * Queue the one nudge a pending decision card receives.
    *
    * Deriving reminders at claim time is what keeps them correct: a request that
    * was answered a second earlier produces nothing, and `reminder_sent_at` is a
    * single compare-and-set so concurrent claims cannot each decide to nudge.
-   * The window is [expires_at - lead, expires_at], so a host that was offline for
-   * the whole window still delivers exactly one reminder when it comes back.
+   * Historical requests retain their deadline window. Durable Qs are due fifty
+   * minutes after card delivery, including when their native wait has timed out.
    */
   private materializeDecisionRemindersWithinTransaction(
     workspaceId: string,
@@ -2273,16 +2274,23 @@ export class FeishuBotRepo {
     deferredEvents: import("@multiremi/store/context.js").CommitEventQueue,
   ): void {
     const due = this.ctx.db.query(
-      `SELECT request.id, request.task_id, request.expires_at, request.created_at
+      `SELECT request.id, request.task_id, request.expires_at, request.created_at,
+         (SELECT MAX(card.sent_at) FROM multiremi_feishu_bot_outbound_deliveries card
+          WHERE card.human_request_id=request.id AND card.kind='decision_card' AND card.status='sent'
+            AND card.external_message_id IS NOT NULL AND card.degraded IS NULL) AS card_sent_at
        FROM multiremi_message_question_records request
        JOIN multiremi_turn_execution_records task ON task.id = request.task_id
+       JOIN multiremi_conversation_log message ON message.id=request.id
       WHERE request.status = 'pending' AND request.reminder_sent_at IS NULL
-         AND request.expires_at IS NOT NULL
          -- A reminder is worth sending only while it still leaves the reader
          -- time to act: under a minute of lifetime left, the nudge would arrive
          -- as the request expires. The bound is the same expression the CAS and
          -- the claim use, so SQLite and Postgres agree.
-         AND request.expires_at >= ?
+         AND (request.expires_at >= ? OR (request.expires_at IS NULL
+           AND CAST(${questionMetadataText(this.ctx.db, 'message.metadata', 'question.version')} AS TEXT)='1'
+           AND EXISTS (SELECT 1 FROM multiremi_feishu_bot_outbound_deliveries card
+             WHERE card.human_request_id=request.id AND card.kind='decision_card' AND card.status='sent'
+               AND card.external_message_id IS NOT NULL AND card.degraded IS NULL AND card.sent_at<=?)))
          AND task.issue_id IS NOT NULL AND task.workspace_id = ?
          AND (
            SELECT COUNT(*) FROM multiremi_feishu_bot_outbound_deliveries o
@@ -2291,13 +2299,14 @@ export class FeishuBotRepo {
              AND o.degraded IS NULL
          ) > 0
        ORDER BY request.expires_at ASC, request.id ASC`,
-    ).all(new Date(now.getTime() + ISSUE_DECISION_REMINDER_MIN_REMAINING_MS).toISOString(), workspaceId) as Row[];
+    ).all(new Date(now.getTime() + ISSUE_DECISION_REMINDER_MIN_REMAINING_MS).toISOString(),
+      new Date(now.getTime() - ISSUE_DECISION_CARD_REMINDER_DELAY_MS).toISOString(), workspaceId) as Row[];
     for (const row of due) {
-      // A reminder is due once the deadline is within its lead. The lead is
-      // half the request's lifetime, capped at ten minutes, so a five-minute
-      // autopilot request is not already due when its card is sent.
-      const leadMs = decisionReminderLeadMs(String(row.expires_at), String(row.created_at));
-      const dueAt = Date.parse(String(row.expires_at)) - leadMs;
+      // Historical requests retain their deadline lead. Durable Qs have no
+      // deadline and use the existing fifty-minute window after card delivery.
+      const dueAt = row.expires_at
+        ? Date.parse(String(row.expires_at)) - decisionReminderLeadMs(String(row.expires_at), String(row.created_at))
+        : Date.parse(String(row.card_sent_at)) + ISSUE_DECISION_CARD_REMINDER_DELAY_MS;
       if (now.getTime() < dueAt) continue;
       // Resolve and validate the whole target before touching `reminder_sent_at`.
       // The CAS is the one-shot slot, so it must not be spent on a row this
@@ -2328,11 +2337,6 @@ export class FeishuBotRepo {
          ORDER BY o.created_at DESC, o.id DESC LIMIT 1`,
       ).get(request.id) as Row | null;
       if (!card) continue;
-      // Every check that can reject the reminder has passed, so now spend the
-      // one-shot slot. Running the CAS before them would burn it on a row that
-      // is skipped: a cross-workspace Task would lose its reminder forever.
-      const claimed = patchDecisionRecord(this.ctx,String(String(row.id)),'human_request',{reminder_sent_at:now.toISOString()});
-      if (!claimed) continue;
       // @ the person who was asked. The checkpoint on the card is what the
       // host actually used, so a `group_owner` lookup that succeeded once is
       // reused instead of being re-resolved (and possibly failing) here.
@@ -2343,6 +2347,10 @@ export class FeishuBotRepo {
       const nowIsoValue = now.toISOString();
       const reminderCard = this.rotatedQuestionCard(card, recipientOpenId);
       if (!reminderCard) continue;
+      // Validate the current route and mapped recipient before spending the
+      // slot. Token rotation, slot and outbox row commit or roll back together.
+      const claimed = patchDecisionRecord(this.ctx,String(row.id),'human_request',{reminder_sent_at:now.toISOString()});
+      if (!claimed) continue;
       this.ctx.db.run(
         `INSERT INTO multiremi_feishu_bot_outbound_deliveries (
            id, workspace_id, binding_id, task_id, chat_id, thread_id,
@@ -3228,6 +3236,21 @@ export class FeishuBotRepo {
     for (const request of requests) {
       const expires = String(request.expires_at);
       const due = Date.parse(expires) - decisionReminderLeadMs(expires, String(request.created_at));
+      if (due > now) next = Math.min(next, due);
+    }
+    const durable = this.ctx.db.query(`SELECT MAX(delivery.sent_at) AS sent_at
+      FROM multiremi_message_question_records request
+      JOIN multiremi_turn_execution_records task ON task.id=request.task_id
+      JOIN multiremi_conversation_log message ON message.id=request.id
+      JOIN multiremi_feishu_bot_outbound_deliveries delivery ON delivery.human_request_id=request.id
+      WHERE task.workspace_id=? AND task.issue_id IS NOT NULL AND request.status='pending'
+        AND request.reminder_sent_at IS NULL AND request.expires_at IS NULL
+        AND CAST(${questionMetadataText(this.ctx.db, 'message.metadata', 'question.version')} AS TEXT)='1'
+        AND delivery.kind='decision_card' AND delivery.status='sent'
+        AND delivery.external_message_id IS NOT NULL AND delivery.degraded IS NULL
+      GROUP BY request.id`).all(workspaceId) as Row[];
+    for (const request of durable) {
+      const due = Date.parse(String(request.sent_at)) + ISSUE_DECISION_CARD_REMINDER_DELAY_MS;
       if (due > now) next = Math.min(next, due);
     }
     return Number.isFinite(next) ? next : null;
