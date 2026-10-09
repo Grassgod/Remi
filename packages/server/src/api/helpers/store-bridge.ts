@@ -50,45 +50,6 @@ export function publishIssueCreated(
   publishWorkspaceEvent(c, store, "issue:created", issue.workspaceId, { issue: response });
 }
 
-// go-compat (maybeEnqueueOnAssign): changing an issue's assignee, or moving an
-// assigned issue out of backlog, dispatches a task — the update-path twin of
-// the assign-on-create block in POST /api/issues. Done/cancelled targets are
-// excluded so bulk-closing backlog items doesn't wake agents. If no runnable
-// agent is available the assignment stands without a task, matching the Go
-// server's "not ready → skip" behavior.
-export function maybeDispatchOnIssueUpdate(
-  store: MultiremiStore,
-  previous: MultiremiIssue,
-  issue: MultiremiIssue,
-  input: UpdateIssueInput,
-): { issue: MultiremiIssue; task: MultiremiTask | null; cancelledTasks: number } {
-  const unchanged = { issue, task: null, cancelledTasks: 0 };
-  if (!issue.assigneeType || !issue.assigneeId) return unchanged;
-  if (issue.status === "backlog" || issue.status === "done" || issue.status === "cancelled") return unchanged;
-  const assigneeChanged = hasRequestField(input, "assigneeType", "assignee_type", "assigneeId", "assignee_id") &&
-    (previous.assigneeType !== issue.assigneeType || previous.assigneeId !== issue.assigneeId);
-  const leftBacklog = hasRequestField(input, "status") && previous.status === "backlog";
-  if (!assigneeChanged && !leftBacklog) return unchanged;
-  try {
-    // MUL-400 E3: the update already recorded `dependency_force_started` (the
-    // routes refuse `force` for a task identity), so the internal option carries
-    // the same decision into the dispatch. It is not part of the request-bound
-    // AssignIssueInput.
-    return store.assignIssue(issue.id, {
-      assigneeType: issue.assigneeType,
-      assigneeId: issue.assigneeId,
-      actorType: input.actorType,
-      actorId: input.actorId,
-      // MUL-456 fix round 1: the authoritative camelCase read; a present
-      // `parentTaskId` (including an explicit `null`) wins over the alias.
-      parentTaskId: resolveCamelOrSnakeString(input, "parentTaskId", "parent_task_id"),
-    }, { force: input.force === true });
-  } catch (err) {
-    log.warn(`assign-on-update dispatch skipped for ${issue.id}: ${err instanceof Error ? err.message : String(err)}`);
-    return unchanged;
-  }
-}
-
 export function publishIssueUpdated(
   c: Context,
   store: MultiremiStore,

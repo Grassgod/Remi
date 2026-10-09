@@ -83,6 +83,9 @@ Task 完成、intake 生成子单和 SCM merge 均不能代替验收。SCM effec
 批量 `done` 写入在所有行变更前检查关闭规则，并在同一事务内执行；责任或交付拒绝会回滚整个批次，
 不会被吞成 `200 updated:0`。已 `done` 行的状态 no-op 保持可用，但 body 中的收据或绕过选项不授予新关闭权限。
 
+Native/兼容 PATCH 的条件派发由 store 与字段更新同事务完成；真实派发故障回滚归属、Question
+路由、旧卡凭据和任务，不返回成功的半归属。无可运行的已配置负责人保留明确的 `dispatch_skipped` 审计。
+
 接口在[Issue routes](../../packages/server/src/api/routers/issues.ts)：
 
 | 请求 | 参数 / 返回 |

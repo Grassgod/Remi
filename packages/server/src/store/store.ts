@@ -3975,6 +3975,10 @@ runMigrations(this.db);
     return this.updateIssueWithOutcome(id, input, options).issue;
   }
 
+  updateIssueAndDispatch(id: string, input: UpdateIssueInput): ReturnType<IssuesRepo['updateIssueAndDispatch']> {
+    return this.issues.updateIssueAndDispatch(id,input);
+  }
+
   updateIssueWithOutcome(
     id: string,
     input: UpdateIssueInput,

@@ -2258,6 +2258,35 @@ export class IssuesRepo {
     return this.updateIssueWithOutcome(id, input, options).issue;
   }
 
+  /** HTTP updates and their conditional assignment dispatch share one commit. */
+  updateIssueAndDispatch(id: string, input: UpdateIssueInput): ReturnType<IssuesRepo['updateIssueWithOutcome']> & {task: MultiremiTask | null} {
+    const write = () => {
+      const outcome = this.updateIssueWithOutcome(id,input);
+      const {issue,previous}=outcome;
+      const requested = (...fields: string[]) => fields.some(field=>Object.hasOwn(input,field));
+      const assigneeChanged=requested('assigneeType','assignee_type','assigneeId','assignee_id')
+        && (previous.assigneeType!==issue.assigneeType || previous.assigneeId!==issue.assigneeId);
+      const leftBacklog=requested('status') && previous.status==='backlog';
+      if(outcome.handledForcedStart || !issue.assigneeType || !issue.assigneeId
+        || ['backlog','done','cancelled'].includes(issue.status) || (!assigneeChanged&&!leftBacklog))return {...outcome,task:null};
+      try {
+        const assigned=this.assignIssue(id,{assigneeType:issue.assigneeType,assigneeId:issue.assigneeId,
+          actorType:input.actorType,actorId:input.actorId,parentTaskId:resolveCamelOrSnakeString(input,'parentTaskId','parent_task_id')},
+        {force:input.force===true});
+        return {...outcome,issue:assigned.issue,task:assigned.task,cancelledTasks:outcome.cancelledTasks+assigned.cancelledTasks};
+      } catch(error) {
+        // An unavailable configured owner is a visible dispatch hold. Database,
+        // responsibility and scheduling failures must roll the update back.
+        if(!(error instanceof Error) || !error.message.startsWith('No runnable agent'))throw error;
+        const events=createCommitEventQueue();
+        this.recordForcedStartSkipped(issue,{reason:'no_runnable_agent',error:error.message},input,events);
+        afterCommit(this.ctx.db,()=>this.ctx.emitCommitEvents(events));
+        return {...outcome,task:null};
+      }
+    };
+    return this.ctx.db.inTransaction ? write() : retryOnceOnStaleLockSet(()=>this.ctx.db.transaction(write)());
+  }
+
   updateIssueWithOutcome(
     id: string,
     input: UpdateIssueInput,

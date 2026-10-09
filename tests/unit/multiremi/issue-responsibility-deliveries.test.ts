@@ -403,11 +403,19 @@ for (const backend of ['sqlite','postgres'] as const) describe.skipIf(backend ==
     const denied=await app.request('/api/issues',{method:'POST',headers:{...headers,Authorization:`Bearer ${dispatchedCredential.token}`},body:JSON.stringify({title:'Proxy does not relax creation policy'})});
     expect(denied.status).toBe(403);expect(await denied.json()).toMatchObject({code:'issue_creation_requires_proposal'});
   }));
-  it('assigns through native HTTP at depth one and rolls back dispatch failures with every fact', () => run(async (store,db) => {
-    for(const surface of ['/api/multiremi/issues']) {
-      const f=fixture(store,surface==='/api/issues'?'_compat':'_native');const next=store.createAgent({name:'Atomic assignment target',provider:'claude'});
-      const delivery=store.submitIssueDelivery(f.child.id,{summary:'Child finished before assignment'},f.workerActor);
-      store.respondIssueDelivery(f.child.id,delivery.id,{action:'accept',revision:delivery.responsibilityRevision},f.ownerActor);
+  it('assigns and updates through real HTTP surfaces at depth one and rolls back dispatch failures with every fact', () => run(async (store,db) => {
+    for(const [surface,method,suffix] of [['/api/multiremi/issues','POST','/assign'],['/api/multiremi/issues','PATCH',''],['/api/issues','PATCH','']] as const) {
+      const f=fixture(store,`_${method}_${surface.includes('multiremi')?'native':'compat'}`);const next=store.createAgent({name:'Atomic assignment target',provider:'claude'});
+      const runtime=store.registerRuntime({name:'Atomic assignment source',provider:'codex',daemonId:'atomic-assignment',maxConcurrency:8});
+      store.updateAgent(f.worker.id,{provider:'codex',runtimeId:runtime.id});
+      const source=store.claimTask(runtime.id)!;store.startTask(source.id);
+      expect(source.id).toBe(f.workerActor.taskId);
+      const turn=store.getTurnForAttempt(source.id)!;
+      const question=store.getDaemonTurnBridge().rpc('turn.decision',{turn_id:turn.id,attempt_id:source.id,dedupe_key:'atomic-question',body_md:'Review assignment?',
+        options:[{label:'Yes',value:'yes'}],metadata:{kind:'question'},timeout_ms:1000},{runtimeId:runtime.id,daemonId:'atomic-assignment',workspaceId:'local'});
+      expect(question.ok).toBeTrue();const questionId=String(question.message_id);
+      db.run('UPDATE multiremi_conversation_log SET card_token_hash=?,card_token_recipient=? WHERE id=?',['old-card-token','old-recipient',questionId]);
+      const beforeQuestion=store.getQuestion(questionId);
       const app=createMultiremiApp({store,authToken:'test-root'});
       const before=store.getIssue(f.child.id)!;
       const taskFacts=store.listTasksForIssue(f.child.id).map(task=>({id:task.id,status:task.status}));
@@ -417,13 +425,15 @@ for (const backend of ['sqlite','postgres'] as const) describe.skipIf(backend ==
         db.run(`CREATE FUNCTION reject_assignment_turn() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.agent_id='${next.id}' THEN RAISE EXCEPTION 'assignment dispatch rejected'; END IF; RETURN NEW; END $$`);
         db.exec('CREATE TRIGGER reject_assignment_turn BEFORE INSERT ON multiremi_turns FOR EACH ROW EXECUTE FUNCTION reject_assignment_turn()');
       } else db.exec(`CREATE TRIGGER reject_assignment_turn BEFORE INSERT ON multiremi_turns WHEN NEW.agent_id='${next.id}' BEGIN SELECT RAISE(ABORT,'assignment dispatch rejected'); END`);
-      const request=()=>app.request(`${surface}/${f.child.id}/assign`,{method:'POST',headers:{Authorization:'Bearer test-root','Content-Type':'application/json'},
+      const request=()=>app.request(`${surface}/${f.child.id}${suffix}`,{method,headers:{Authorization:'Bearer test-root','Content-Type':'application/json'},
         body:JSON.stringify({assignee_type:'agent',assignee_id:next.id})});
       try {
         const failed=await request();expect(failed.status).toBe(500);
         expect(store.getIssue(f.child.id)).toEqual(before);
         expect(store.listTasksForIssue(f.child.id).map(task=>({id:task.id,status:task.status}))).toEqual(taskFacts);
         expect(store.listIssueActivity(f.child.id).map(entry=>entry.id)).toEqual(activities);
+        expect(store.getQuestion(questionId)).toEqual(beforeQuestion);
+        expect(db.query('SELECT card_token_hash FROM multiremi_conversation_log WHERE id=?').get(questionId)?.card_token_hash).toBe('old-card-token');
         expect(emitted).toEqual([]);
       } finally {
         db.exec('DROP TRIGGER reject_assignment_turn'+(db.dialect==='postgres'?' ON multiremi_turns':''));
@@ -435,11 +445,13 @@ for (const backend of ['sqlite','postgres'] as const) describe.skipIf(backend ==
       expect(store.getIssue(f.child.id)?.status).toBe('todo');
       expect(store.listTasksForIssue(f.child.id).filter(task=>task.agentId===next.id)).toHaveLength(1);
       expect(store.listIssueActivity(f.child.id).filter(entry=>entry.type==='issue_assigned')).toHaveLength(1);
+      expect(store.getQuestion(questionId)?.route_revision).toBe(beforeQuestion!.route_revision+1);
+      expect(db.query('SELECT card_token_hash FROM multiremi_conversation_log WHERE id=?').get(questionId)?.card_token_hash).toBeNull();
       expect(emitted.length).toBeGreaterThan(0);expect(emitted.every(inTransaction=>!inTransaction)).toBeTrue();
       if(db instanceof PostgresSyncDatabase)expect(db.maxTransactionDepth).toBe(1);
       unsubscribe();
     }
-  }),30_000);
+  }),60_000);
   it('keeps human responsibility separate from execution and refuses side-session delivery or acceptance', () => run((store,db) => {
     const f=fixture(store);
     expect(()=>store.createIssue({title:'Human execution',assigneeType:'member',assigneeId:f.human.id,responsibleMemberId:f.human.id})).toThrow('Agent or team Leader');

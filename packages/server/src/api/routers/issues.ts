@@ -25,7 +25,6 @@ import {
   issueSubscriberCaller,
   issueSubscriberTarget,
   log,
-  maybeDispatchOnIssueUpdate,
   normalizeReactionInput,
   normalizeSubscriptionReason,
   parseIssueCommentListQuery,
@@ -1517,21 +1516,10 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     const dispatchDenied = denySideSessionIssueUpdate(c, store, issue, input);
     if (dispatchDenied) return dispatchDenied;
     try {
-      const outcome = store.updateIssueWithOutcome(issue.id, input);
-      const { issue: updated, cancelledTasks, handledForcedStart } = outcome;
+      const outcome = store.updateIssueAndDispatch(issue.id, input);
+      const { issue: updated, cancelledTasks } = outcome;
       lockAutoTitleAfterHumanEdit(c, updated, input);
-      // MUL-400 E3 (QA round 2, blocker 2): a forced start already dispatched
-      // inside the store. Dispatch here as well would cancel that fresh round and
-      // queue a second one, so the route defers to the store in that case.
-      const dispatched = handledForcedStart
-        ? { issue: updated, task: null, cancelledTasks: 0 }
-        // QA round 4: the decision uses the PRE-WRITE snapshot the store took
-        // inside its row lock, never the route's earlier read. A concurrent
-        // automatic start can commit between the route's read and this call, and
-        // the stale `backlog -> todo` answer made this path dispatch a second
-        // round, cancelling the one the automatic start had just queued.
-        : maybeDispatchOnIssueUpdate(store, outcome.previous, updated, input);
-      return c.json({ issue: dispatched.issue, cancelled_tasks: cancelledTasks + dispatched.cancelledTasks });
+      return c.json({ issue: updated, cancelled_tasks: cancelledTasks });
     } catch (err) {
       // MUL-400 E3 (QA round 3, blocker 3): the store refuses a transition that
       // leaves `backlog` with unmet prerequisites by throwing
@@ -1569,20 +1557,15 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     if (dispatchDenied) return dispatchDenied;
     try {
       assertRuntimeWorkspaceAccess(c, store, input.runtimeWorkspaceId ?? input.runtime_workspace_id, issue.workspaceId);
-      const outcome = store.updateIssueWithOutcome(issue.id, input);
-      const { issue: updated, cancelledTasks, handledForcedStart } = outcome;
+      const outcome = store.updateIssueAndDispatch(issue.id, input);
+      const { issue: updated, cancelledTasks } = outcome;
       lockAutoTitleAfterHumanEdit(c, updated, input);
-      // See the native PATCH route: the store already dispatched a forced start,
-      // and the pre-write snapshot only the store can see decides the rest.
-      const dispatched = handledForcedStart
-        ? { issue: updated, task: null, cancelledTasks: 0 }
-        : maybeDispatchOnIssueUpdate(store, outcome.previous, updated, input);
       const response = {
-        ...issueCompatibilityResponse(dispatched.issue),
-        task_id: dispatched.task?.id ?? null,
-        cancelled_tasks: cancelledTasks + dispatched.cancelledTasks,
+        ...issueCompatibilityResponse(updated),
+        task_id: outcome.task?.id ?? null,
+        cancelled_tasks: cancelledTasks,
       };
-      publishIssueUpdated(c, store, issue, dispatched.issue, input, response);
+      publishIssueUpdated(c, store, issue, updated, input, response);
       return c.json(response);
     } catch (err) {
       const response = issueErrorResponse(c, err);
