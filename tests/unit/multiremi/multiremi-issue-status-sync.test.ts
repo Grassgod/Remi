@@ -60,6 +60,17 @@ function statusOf(store: MultiremiStore, issueId: string) {
   return store.getIssue(issueId)?.status;
 }
 
+/** Close the actual executing round's delivery with its designated root human. */
+function acceptTaskDelivery(store: MultiremiStore, issueId: string, taskId: string) {
+  const task = store.getTask(taskId)!;
+  const rootHuman = store.resolveIssueResponsibility(issueId).rootHuman!;
+  const delivery = store.submitIssueDelivery(issueId, { summary: "Verified task result" },
+    { type: "agent", id: task.agentId, taskId });
+  store.respondIssueDelivery(issueId, delivery.id,
+    { action: "accept", revision: delivery.responsibilityRevision },
+    { type: "member", id: rootHuman.id });
+}
+
 /**
  * A task in its own non-workspace-holding Product Session.
  *
@@ -193,7 +204,7 @@ describe("Issue status derived from task terminal transitions", () => {
     expect(statusOf(store, issue.id)).toBe("blocked");
   });
 
-  it("closes an intake Issue that produced generated issues", () => {
+  it("reviews generated intake work before its designated human accepts it", () => {
     const store = createStore();
     const { runtime, agent, issue } = scaffold(store, { issueKind: "intake" });
     const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "triage" });
@@ -203,6 +214,9 @@ describe("Issue status derived from task terminal transitions", () => {
     store.completeTask(task.id, { output: "split into 1" });
 
     expect(store.listGeneratedIssues(issue.id)).toHaveLength(1);
+    expect(statusOf(store, issue.id)).toBe("in_review");
+    expect(store.listIssueDeliveries(issue.id)).toEqual([]);
+    acceptTaskDelivery(store, issue.id, task.id);
     expect(statusOf(store, issue.id)).toBe("done");
   });
 
@@ -224,7 +238,7 @@ describe("Issue status derived from task terminal transitions", () => {
     const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "do it" });
 
     runTask(store, runtime.id, task.id);
-    store.updateIssue(issue.id, { status: "done" });
+    acceptTaskDelivery(store, issue.id, task.id);
     store.completeTask(task.id, { output: "late worker event" });
 
     expect(statusOf(store, issue.id)).toBe("done");
