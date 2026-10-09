@@ -193,7 +193,8 @@ describe("MUL-385 issue detail first-screen query counts", () => {
     // This historical business decision has no provider wait. It remains part
     // of the aggregate alongside a current AUQ, without reviving a retired writer.
     const decision = store.appendConversationLog({ sessionId: session.id, kind: "message", authorType: "member", authorId: "mem_local_local",
-      messageKind: "decision", bodyMd: "Choose the release window", metadata: { decision_record: { status: "escalated", kind: "question" } } });
+      messageKind: "decision", bodyMd: "Choose the release window", metadata: { decision_record: {
+        issue_id: fixture.issueId, source_issue_id: fixture.issueId, status: "escalated", kind: "question" } } });
     expect(store.getQuestion(decision.id)?.wait_status).toBe("none");
     const task = store.createTask({agentId: "agt_mul385", issueId: fixture.issueId, prompt: "Pending question"});
     store.createTaskHumanRequest({taskId: task.id, kind: "question", payload: {message: "Pick a date"}});

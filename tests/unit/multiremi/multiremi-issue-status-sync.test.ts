@@ -1,3 +1,4 @@
+import { createNativeTestQuestion, answerNativeTestQuestion } from './fixtures/native-question.js';
 import { createResponsibleTestIssue } from './helpers.js';
 // Regression coverage for MUL-253 symptom A: an Issue parked at `in_review`
 // while one of its agent tasks is still live.
@@ -33,7 +34,7 @@ afterEach(() => {
 /** Agent + runtime + Issue, ready to hang tasks off. */
 function scaffold(store: MultiremiStore, opts: { issueKind?: "intake" } = {}) {
   const runtime = store.registerRuntime({
-    id: "rt_worker",
+    id: "rt_worker", daemonId: "status-sync-worker",
     name: "Worker box",
     provider: "claude",
     workspaceId: "local",
@@ -339,15 +340,11 @@ describe("awaiting_human round trip", () => {
     runTask(store, runtime.id, task.id);
     expect(statusOf(store, issue.id)).toBe("in_progress");
 
-    const request = store.createTaskHumanRequest({
-      taskId: task.id,
-      kind: "question",
-      payload: { text: "which branch?" },
-    });
+    const request = createNativeTestQuestion(store, task.id);
     expect(store.getTask(task.id)?.status).toBe("awaiting_human");
     expect(statusOf(store, issue.id)).toBe("in_review");
 
-    store.respondTaskHumanRequest(request.id, { response: { text: "main" } });
+    answerNativeTestQuestion(store, request.id, "main");
     expect(store.getTask(task.id)?.status).toBe("running");
     expect(statusOf(store, issue.id)).toBe("in_progress");
   });
@@ -358,10 +355,10 @@ describe("awaiting_human round trip", () => {
     const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "do it" });
 
     runTask(store, runtime.id, task.id);
-    const first = store.createTaskHumanRequest({ taskId: task.id, kind: "question", payload: {} });
-    store.createTaskHumanRequest({ taskId: task.id, kind: "permission", payload: {} });
+    const first = createNativeTestQuestion(store, task.id, "question");
+    createNativeTestQuestion(store, task.id, "permission");
 
-    store.respondTaskHumanRequest(first.id, { response: { text: "ok" } });
+    answerNativeTestQuestion(store, first.id, "ok");
 
     expect(store.getTask(task.id)?.status).toBe("awaiting_human");
     expect(statusOf(store, issue.id)).toBe("in_review");
@@ -377,29 +374,30 @@ describe("awaiting_human round trip", () => {
 
     runTask(store, runtime.id, answered.id);
     runTask(store, runtime.id, stillAsking.id);
-    const requestA = store.createTaskHumanRequest({ taskId: answered.id, kind: "question", payload: {} });
-    store.createTaskHumanRequest({ taskId: stillAsking.id, kind: "question", payload: {} });
+    const requestA = createNativeTestQuestion(store, answered.id, "question");
+    createNativeTestQuestion(store, stillAsking.id, "question");
 
-    store.respondTaskHumanRequest(requestA.id, { response: { text: "go" } });
+    answerNativeTestQuestion(store, requestA.id, "go");
 
     expect(store.getTask(answered.id)?.status).toBe("running");
     expect(store.getTask(stillAsking.id)?.status).toBe("awaiting_human");
     expect(statusOf(store, issue.id)).toBe("in_progress");
   });
 
-  it("resumes the task and the Issue when the request times out", () => {
+  it("releases the provider wait but keeps the timed-out business question visible for review", () => {
     const store = createStore();
     const { runtime, agent, issue } = scaffold(store);
     const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "do it" });
 
     runTask(store, runtime.id, task.id);
-    const request = store.createTaskHumanRequest({ taskId: task.id, kind: "permission", payload: {} });
+    const request = createNativeTestQuestion(store, task.id, "permission");
     expect(statusOf(store, issue.id)).toBe("in_review");
 
     store.expireTaskHumanRequest(request.id, "timeout");
 
     expect(store.getTask(task.id)?.status).toBe("running");
-    expect(statusOf(store, issue.id)).toBe("in_progress");
+    expect(store.getQuestion(request.id)).toMatchObject({ status: 'pending', wait_status: 'detached' });
+    expect(statusOf(store, issue.id)).toBe("in_review");
   });
 
   it("answering a question does not resurrect an Issue the human already accepted", () => {
@@ -408,10 +406,10 @@ describe("awaiting_human round trip", () => {
     const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "do it" });
 
     runTask(store, runtime.id, task.id);
-    const request = store.createTaskHumanRequest({ taskId: task.id, kind: "question", payload: {} });
-    store.updateIssue(issue.id, { status: "done" });
+    const request = createNativeTestQuestion(store, task.id, "question");
+    acceptTaskDelivery(store, issue.id, task.id);
 
-    store.respondTaskHumanRequest(request.id, { response: { text: "main" } });
+    answerNativeTestQuestion(store, request.id, "main");
 
     expect(store.getTask(task.id)?.status).toBe("running");
     expect(statusOf(store, issue.id)).toBe("done");

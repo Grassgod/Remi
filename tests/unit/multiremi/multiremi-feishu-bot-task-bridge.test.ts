@@ -1092,7 +1092,7 @@ describe("Feishu bot standard Task bridge", () => {
     const { store, config } = scaffold();
     const routedAgent = store.createAgent({ name: "Issue worker", provider: "codex", workspaceId: "local" });
     store.updateWorkspace("local", {
-      settings: { issueTopics: { enabled: true, chatId: "oc_issues" } },
+      settings: { issueTopics: { enabled: true, chatId: "oc_issues", responsibleMemberId: 'mem_local_local' } },
     });
     store.replaceFeishuBotAgentRoutes("local", [
       { scope: "chat", chatId: "oc_issues", agentId: routedAgent.id },

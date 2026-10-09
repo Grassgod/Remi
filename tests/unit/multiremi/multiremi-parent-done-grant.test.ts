@@ -234,8 +234,10 @@ describe("MUL-457 parent done grant", () => {
     expect((await oldAgent.json()).code).toBe("issue_delivery_acceptance_required");
     const staleProxy=await app.request(`/api/issues/${parent.id}/deliveries/${prepared.delivery.id}/respond`,{method:'POST',headers:auth(oldSource.token),
       body:JSON.stringify({action:'accept',revision:prepared.delivery.responsibilityRevision})});
-    expect(staleProxy.status).toBe(403);
+    expect(staleProxy.status).toBe(409);
+    expect((await staleProxy.json()).code).toBe('issue_delivery_revision_stale');
     expect(store.listIssueDeliveries(parent.id)[0]?.status).toBe('pending');
+    expect(store.listIssueDeliveries(parent.id)[0]?.invalidatedAt).toBeTruthy();
     store.grantParentDone(parent.id, "local");
     expect(store.issueParentDoneGrantView(store.getIssue(parent.id)!)).toMatchObject({ effective: true, agent_id: other.id });
     expect(activities(store, parent.id, "parent_done_grant_created")).toHaveLength(2);

@@ -532,6 +532,10 @@ SSH 配置 revision 时，才广播 `daemon:ssh_mesh_changed` 重新下发整个
 [workspace-wakeups.ts](../packages/server/src/api/daemon-protocol/workspace-wakeups.ts)处理，
 本地事件与 peer 转发事件共用这条路径：
 
+工作区 settings 和 relay 配置写入在提交后发布 `daemon:pending_changed`，
+使现有连接读取新配置；回滚不发布。插件绑定通过真实 HTTP 写入口发布现有的
+`agent_plugin:*` 事件，唤醒配置下行及派活条件检查。
+
 | 事件 | 下行 | 派活 |
 | --- | --- | --- |
 | `daemon:heartbeat`、`activity:created` | 无 | 无 |

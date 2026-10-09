@@ -1,4 +1,5 @@
 import { createResponsibleTestIssue } from './helpers.js';
+import { seedHistoricalDecision, seedQuestionHumanMapping } from './fixtures/historical-decision.js';
 /**
  * MUL-412 decision cards on real PostgreSQL.
  *
@@ -176,12 +177,13 @@ describe.skipIf(!available)("MUL-412 decision cards on Postgres", () => {
       externalId: openId, name: "PG owner", email: `pg412-${workspaceSeq}@example.com`,
     });
     targetDb.run("UPDATE multiremi_workspace_members SET user_id = ? WHERE id = ?", [user.id, member.id]);
+    seedQuestionHumanMapping(targetDb, workspaceId, 'cli_pg412', user.id, openId);
     const agentId = targetStore.createAgent({ name: "PG Concierge", provider: "codex", workspaceId }).id;
     const runtimeId = `rt_pg412_${workspaceSeq}`;
     targetStore.registerRuntime({ id: runtimeId, name: "Bot", provider: "codex", workspaceId, daemonId: `d-${runtimeId}` });
     targetStore.heartbeatRuntime(runtimeId, { supportsFeishuBotConfig: true, supportsIssueDecisionCard: true });
     const config = targetStore.upsertFeishuBotConfig(workspaceId, {
-      agentId, runtimeId, appId: "cli_pg412", appSecretOp: "set", appSecret: APP_SECRET, domain: "feishu", enabled: true,
+      agentId, runtimeId, responsibleMemberId: member.id, appId: "cli_pg412", appSecretOp: "set", appSecret: APP_SECRET, domain: "feishu", enabled: true,
     });
     targetStore.reportFeishuBotRuntimeStatus(workspaceId, runtimeId, { appliedRevision: config.revision, state: "online" });
     targetStore.updateWorkspace(workspaceId, {
@@ -194,7 +196,7 @@ describe.skipIf(!available)("MUL-412 decision cards on Postgres", () => {
         },
       },
     });
-    const parent = createResponsibleTestIssue(targetStore, { title: `PG ${workspaceSeq}`, workspaceId, assigneeType: "agent", assigneeId: agentId });
+    const parent = createResponsibleTestIssue(targetStore, { title: `PG ${workspaceSeq}`, workspaceId, responsibleMemberId: member.id, assigneeType: "agent", assigneeId: agentId });
     targetStore.prepareFeishuIssueTopicWithinTransaction(parent);
     const root = targetStore.claimFeishuBotOutbound(workspaceId, runtimeId)!;
     targetStore.reportFeishuBotOutbound(workspaceId, runtimeId, root.id, {
@@ -208,7 +210,7 @@ describe.skipIf(!available)("MUL-412 decision cards on Postgres", () => {
   }
 
   function escalate(scope: ReturnType<typeof scaffold>, kind = "production_change", targetStore = store) {
-    const decision = targetStore.createIssueDecision(scope.child.id, {
+    const decision = seedHistoricalDecision(targetStore, scope.child.id, {
       kind, title: "Deploy?", body: "please", options: ["yes", "no"],
     }, { type: "agent", id: scope.agentId, taskId: scope.task.id });
     return decision;
@@ -261,7 +263,7 @@ describe.skipIf(!available)("MUL-412 decision cards on Postgres", () => {
     expect(decodeDecisionCardBody(card.body)).toBeTruthy();
     store.reportFeishuBotOutbound(scope.workspaceId, scope.runtimeId, card.id, {
       claimToken: card.claimToken, status: "sent", externalMessageId: "om_pg_card",
-      interactionOpenId: CARD_OPEN_ID,
+      interactionOpenId: scope.openId,
     });
     // Before the offset: nothing. It is a delay, not a deadline window.
     const early = new Date(Date.now() + 49 * 60 * 1000);
@@ -269,7 +271,7 @@ describe.skipIf(!available)("MUL-412 decision cards on Postgres", () => {
     const due = new Date(Date.now() + 51 * 60 * 1000);
     const reminder = store.claimFeishuBotOutbound(scope.workspaceId, scope.runtimeId, due)!;
     expect(reminder.kind).toBe("decision_reminder");
-    expect(reminder.mention).toMatchObject({ mode: "person", resolvedOpenId: CARD_OPEN_ID });
+    expect(reminder.mention).toMatchObject({ mode: "person", resolvedOpenId: scope.openId });
     store.reportFeishuBotOutbound(scope.workspaceId, scope.runtimeId, reminder.id, {
       claimToken: reminder.claimToken, status: "sent", externalMessageId: "om_pg_reminder",
     }, due);
@@ -285,7 +287,7 @@ describe.skipIf(!available)("MUL-412 decision cards on Postgres", () => {
     const sentAt = new Date(Date.now() - 51 * 60 * 1000);
     const card = store.claimFeishuBotOutbound(scope.workspaceId, scope.runtimeId)!;
     store.reportFeishuBotOutbound(scope.workspaceId, scope.runtimeId, card.id, {
-      claimToken: card.claimToken, status: "sent", externalMessageId: "om_pg_concurrent", interactionOpenId: CARD_OPEN_ID,
+      claimToken: card.claimToken, status: "sent", externalMessageId: "om_pg_concurrent", interactionOpenId: scope.openId,
     }, sentAt);
     const now = new Date();
     const worker = `${import.meta.dir}/mul412-reminder-claim-worker.ts`;
@@ -381,9 +383,8 @@ describe.skipIf(!available)("MUL-412 decision cards on Postgres", () => {
     const marker = decisionInteractionMarker(scope.parent.id, decision.id);
     const originalAnswer = store.answerMessageDecision.bind(store);
     store.answerMessageDecision = (...args) => {
-      store.withdrawIssueDecision(scope.parent.id, decision.id, {
-        type: "agent", id: scope.agentId, taskId: scope.task.id,
-      });
+      store.closeQuestion(decision.id, { expected_route_revision: store.getQuestion(decision.id)!.route_revision,
+        reason: 'Designated human closed this historical question before the callback' }, { type: 'member', id: scope.member.id });
       return originalAnswer(...args);
     };
     const registration = registerIssueDecisionCardInteraction({
@@ -418,56 +419,70 @@ describe.skipIf(!available)("MUL-412 decision cards on Postgres", () => {
     const decision = escalate(scope);
     const card = store.claimFeishuBotOutbound(scope.workspaceId, scope.runtimeId)!;
     store.reportFeishuBotOutbound(scope.workspaceId, scope.runtimeId, card.id, {
-      claimToken: card.claimToken, status: "sent", externalMessageId: "om_pg_terminal", interactionOpenId: CARD_OPEN_ID,
+      claimToken: card.claimToken, status: "sent", externalMessageId: "om_pg_terminal", interactionOpenId: scope.openId,
     });
-    store.answerIssueDecision(scope.parent.id, decision.id, { answer: "yes", reason: "ok", overturn: "" },
-      { type: "member", id: scope.member.id, taskId: null });
+    store.answerQuestion(decision.id, { expected_route_revision: store.getQuestion(decision.id)!.route_revision,
+      response: { answer: 'yes' }, body_md: 'yes' }, { type: 'member', id: scope.member.id });
     const patch = store.claimFeishuBotOutbound(scope.workspaceId, scope.runtimeId)!;
     expect(patch.kind).toBe("decision_card_patch");
     expect(patch.targetMessageId).toBe("om_pg_terminal");
     const parsed = JSON.parse(patch.body) as { card?: Record<string, unknown> };
     expect(parsed.card?.schema).toBe("2.0");
     expect(JSON.stringify(parsed.card)).toContain("已回答");
-    store.answerIssueDecision(scope.parent.id, decision.id, { answer: "no", reason: "changed", overturn: "" },
-      { type: "member", id: scope.member.id, taskId: null });
+    expect(() => store.answerQuestion(decision.id, { expected_route_revision: store.getQuestion(decision.id)!.route_revision,
+      response: { answer: 'no' }, body_md: 'no' }, { type: 'member', id: scope.member.id })).toThrow('question_already_settled');
     expect(store.claimFeishuBotOutbound(scope.workspaceId, scope.runtimeId)).toBeNull();
   });
 
   it("leaves no delivery row behind when the escalation transaction rolls back", () => {
     const scope = scaffold();
-    const ownerTask = store.createTask({ agentId: scope.agentId, issueId: scope.parent.id, workspaceId: scope.workspaceId, prompt: "owner" });
-    const decision = store.createIssueDecision(scope.child.id, { kind: "merge", title: "Merge?" }, {
-      type: "agent", id: scope.agentId, taskId: scope.task.id,
+    store.cancelTask(scope.task.id);
+    const ownerRuntime = store.registerRuntime({ name: 'Parent reviewer', provider: 'codex', workspaceId: scope.workspaceId, daemonId: 'pg-escalation-owner' });
+    store.updateAgent(scope.agentId, { runtimeId: ownerRuntime.id });
+    const worker = store.createAgent({ name: 'Original question source', provider: 'codex', workspaceId: scope.workspaceId, runtimeId: scope.runtimeId });
+    store.updateIssue(scope.child.id, { assigneeType: 'agent', assigneeId: worker.id });
+    const sourceTask = store.createTask({ agentId: worker.id, issueId: scope.child.id, prompt: 'Ask the parent reviewer' });
+    const config = store.upsertFeishuBotConfig(scope.workspaceId, { agentId: worker.id, runtimeId: scope.runtimeId,
+      appId: 'cli_pg412', domain: 'feishu', enabled: true, appSecretOp: 'keep' });
+    store.reportFeishuBotRuntimeStatus(scope.workspaceId, scope.runtimeId, { appliedRevision: config.revision, state: 'online' });
+    const decision = seedHistoricalDecision(store, scope.child.id, { kind: "criteria", title: "Ready for review?" }, {
+      type: "agent", id: worker.id, taskId: sourceTask.id,
     });
+    const notice = store.sendMessage({ session_id: store.getOrCreateDefaultIssueSession(scope.parent.id).id,
+      sender: { type: 'platform', id: null }, to: { type: 'agent', ref: scope.agentId }, message_kind: 'request',
+      wake_requested: 'now', body_md: 'Process this same historical question',
+      metadata: { question_notification: true, root_question_id: decision.id, question_route_revision: 1 } });
+    const ownerTask = store.claimTask(ownerRuntime.id)!;
+    expect(ownerTask.id).toBe(store.getTurn(notice.turn_id!)!.current_attempt_id!);
+    store.startTask(ownerTask.id);
+    const escalateQuestion = () => store.escalateQuestion(decision.id,
+      { expected_route_revision: store.getQuestion(decision.id)!.route_revision, reason: 'The designated human must decide' },
+      { type: 'agent', id: scope.agentId }, store.getTurnForAttempt(ownerTask.id)!.id);
     expect(decision.status).toBe("pending");
-    type ActivityInput = { type: string };
-    const ctx = (store as unknown as {
-      ctx: { appendIssueActivity: (...args: unknown[]) => void };
-    }).ctx;
-    const original = ctx.appendIssueActivity.bind(ctx);
-    ctx.appendIssueActivity = (...args: unknown[]) => {
-      if ((args[1] as ActivityInput).type === "decision_card_queued") throw new Error("injected pg failure");
-      original(...args);
+    const ctx = (store as unknown as { ctx: import('@multiremi/store/context.js').StoreContext }).ctx;
+    const bot = ctx.feishuBot();
+    const original = bot.enqueueQuestionPresentationWithinTransaction.bind(bot);
+    bot.enqueueQuestionPresentationWithinTransaction = id => {
+      original(id);
+      throw new Error('injected pg failure');
     };
     let thrown: Error | null = null;
     try {
-      store.escalateIssueDecision(scope.parent.id, decision.id, {
-        type: "agent", id: scope.agentId, taskId: ownerTask.id,
-      });
+      escalateQuestion();
     } catch (error) {
       thrown = error as Error;
     } finally {
-      ctx.appendIssueActivity = original;
+      bot.enqueueQuestionPresentationWithinTransaction = original;
     }
     expect(thrown?.message).toBe("injected pg failure");
     expect(store.getIssueDecision(scope.parent.id, decision.id)!.status).toBe("pending");
     expect(db.query(
       "SELECT COUNT(*) AS n FROM multiremi_feishu_bot_outbound_deliveries WHERE decision_id = ?",
     ).get(decision.id)).toEqual({ n: "0" });
+    expect(db.query("SELECT COUNT(*) AS n FROM multiremi_feishu_bot_outbound_operations WHERE workspace_id=?").get(scope.workspaceId)).toEqual({ n: '0' });
+    expect(store.getQuestion(decision.id)?.route_revision).toBe(1);
     // And the same transaction commits cleanly on a retry.
-    store.escalateIssueDecision(scope.parent.id, decision.id, {
-      type: "agent", id: scope.agentId, taskId: ownerTask.id,
-    });
+    escalateQuestion();
     expect(store.claimFeishuBotOutbound(scope.workspaceId, scope.runtimeId)!.kind).toBe("decision_card");
   });
 });

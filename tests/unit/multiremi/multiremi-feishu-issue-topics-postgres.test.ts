@@ -46,7 +46,7 @@ describe.skipIf(!available)("Invalid stored Feishu Issue topics on PostgreSQL (M
     store.heartbeatRuntime("rt_pg459", { supportsFeishuBotConfig: true });
     const config = store.upsertFeishuBotConfig("local", {
       agentId: agent.id, runtimeId: "rt_pg459", appId: "cli_pg459", domain: "feishu", enabled: true,
-      senderAccessPolicy: "allowlist", appSecretOp: "set", appSecret: "pg459-test-fixture-secret",
+      senderAccessPolicy: "allowlist", appSecretOp: "set", appSecret: "pg459-test-fixture-secret", responsibleMemberId: 'mem_local_local',
     });
     revision = config.revision;
     store.reportFeishuBotRuntimeStatus("local", "rt_pg459", { appliedRevision: revision, state: "online" });

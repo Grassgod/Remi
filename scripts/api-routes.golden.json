@@ -25398,7 +25398,8 @@
           "responseMessageId": null,
           "responseBody": null,
           "createdAt": "<timestamp>",
-          "respondedAt": null
+          "respondedAt": null,
+          "isLatest": true
         }
       }
     },
@@ -25430,7 +25431,8 @@
           "responseMessageId": "cmt_34xx4xebcbvz",
           "responseBody": "Delivery accepted",
           "createdAt": "<timestamp>",
-          "respondedAt": "<timestamp>"
+          "respondedAt": "<timestamp>",
+          "isLatest": true
         },
         "issue": {
           "runtimeWorkspaceId": null,
@@ -25495,7 +25497,8 @@
           "responseMessageId": null,
           "responseBody": null,
           "createdAt": "<timestamp>",
-          "respondedAt": null
+          "respondedAt": null,
+          "isLatest": true
         }
       }
     },
@@ -25528,6 +25531,7 @@
           "responseBody": null,
           "createdAt": "<timestamp>",
           "respondedAt": null,
+          "isLatest": true,
           "authorization": {
             "agentId": "agt_jez2ujdp6d5n",
             "grantedBy": "mem_2ryujm2j4i6h",
@@ -25566,7 +25570,8 @@
           "responseBody": null,
           "createdAt": "<timestamp>",
           "respondedAt": null,
-          "authorization": null
+          "authorization": null,
+          "isLatest": true
         }
       }
     },
@@ -25599,7 +25604,8 @@
           "responseBody": "Add verification evidence",
           "createdAt": "<timestamp>",
           "respondedAt": "<timestamp>",
-          "authorization": null
+          "authorization": null,
+          "isLatest": true
         },
         "issue": {
           "runtimeWorkspaceId": null,
@@ -25664,7 +25670,8 @@
           "responseMessageId": null,
           "responseBody": null,
           "createdAt": "<timestamp>",
-          "respondedAt": null
+          "respondedAt": null,
+          "isLatest": true
         }
       }
     },
@@ -25696,7 +25703,8 @@
           "responseMessageId": "cmt_ibk7rfb9clat",
           "responseBody": "Delivery accepted",
           "createdAt": "<timestamp>",
-          "respondedAt": "<timestamp>"
+          "respondedAt": "<timestamp>",
+          "isLatest": true
         },
         "issue": {
           "runtimeWorkspaceId": null,
@@ -25762,7 +25770,8 @@
             "responseMessageId": "cmt_ibk7rfb9clat",
             "responseBody": "Delivery accepted",
             "createdAt": "<timestamp>",
-            "respondedAt": "<timestamp>"
+            "respondedAt": "<timestamp>",
+            "isLatest": true
           }
         ],
         "nextCursor": "cmt_13aljmz4o2tq"
@@ -25798,7 +25807,8 @@
             "responseBody": "Add verification evidence",
             "createdAt": "<timestamp>",
             "respondedAt": "<timestamp>",
-            "authorization": null
+            "authorization": null,
+            "isLatest": false
           }
         ],
         "nextCursor": null
@@ -26661,106 +26671,6 @@
             },
             "created_at": "<timestamp>",
             "body_md": "Review continuation question",
-            "body_offset": 0,
-            "body_omitted_chars": 0
-          },
-          {
-            "session_id": "ises_f43d9c9aexj1",
-            "seq": 7,
-            "id": "cmt_0a50xy7qh44z",
-            "kind": "message",
-            "author_type": "system",
-            "author_id": null,
-            "task_id": null,
-            "parent_id": null,
-            "metadata": {
-              "root_question_id": "cmt_l9lxt2vfpkm6",
-              "question_route_revision": 1,
-              "question_notification": true,
-              "source_question_session_id": "ises_f43d9c9aexj1",
-              "execution_scope": "",
-              "delivery_turn_id": "tsk_1vw2bvc7e21p",
-              "envelope": {
-                "to": {
-                  "role": "agent",
-                  "agentId": "agt_jez2ujdp6d5n",
-                  "issueSessionId": "ises_f43d9c9aexj1"
-                },
-                "kind": "request",
-                "wake": "now",
-                "dedupeKey": "question-route:cmt_l9lxt2vfpkm6:1",
-                "source": {},
-                "priority": 4,
-                "recipient_agent_id": "agt_jez2ujdp6d5n"
-              }
-            },
-            "created_at": "<timestamp>",
-            "body_md": "问题 cmt_l9lxt2vfpkm6 等待您处理。原问题：\nProceed after restart?\n使用 remi message question get cmt_l9lxt2vfpkm6 查看原题和选项；答复或升级时必须提交路由版本 1。",
-            "body_offset": 0,
-            "body_omitted_chars": 0
-          },
-          {
-            "session_id": "ises_f43d9c9aexj1",
-            "seq": 8,
-            "id": "cmt_dg2roo32wqgi",
-            "kind": "message",
-            "author_type": "system",
-            "author_id": null,
-            "task_id": null,
-            "parent_id": null,
-            "metadata": {
-              "root_question_id": "cmt_l9lxt2vfpkm6",
-              "question_route_revision": 2,
-              "question_notification": true,
-              "source_question_session_id": "ises_f43d9c9aexj1",
-              "execution_scope": "",
-              "envelope": {
-                "to": {
-                  "role": "mem_2ryujm2j4i6h"
-                },
-                "kind": "request",
-                "wake": "inbox_only",
-                "dedupeKey": "question-route:cmt_l9lxt2vfpkm6:2",
-                "source": {},
-                "priority": 4
-              }
-            },
-            "created_at": "<timestamp>",
-            "body_md": "问题 cmt_l9lxt2vfpkm6 等待您处理。原问题：\nProceed after restart?\n使用 remi message question get cmt_l9lxt2vfpkm6 查看原题和选项；答复或升级时必须提交路由版本 2。",
-            "body_offset": 0,
-            "body_omitted_chars": 0
-          },
-          {
-            "session_id": "ises_f43d9c9aexj1",
-            "seq": 9,
-            "id": "cmt_hsf5ql5i58f8",
-            "kind": "message",
-            "author_type": "system",
-            "author_id": null,
-            "task_id": null,
-            "parent_id": null,
-            "metadata": {
-              "root_question_id": "cmt_l9lxt2vfpkm6",
-              "question_route_revision": 2,
-              "question_present_request": true,
-              "execution_scope": "",
-              "delivery_turn_id": "tsk_1vw2bvc7e21p",
-              "envelope": {
-                "to": {
-                  "role": "agent",
-                  "agentId": "agt_jez2ujdp6d5n",
-                  "issueSessionId": "ises_f43d9c9aexj1"
-                },
-                "kind": "request",
-                "wake": "now",
-                "dedupeKey": "question-present:cmt_l9lxt2vfpkm6:2",
-                "source": {},
-                "priority": 4,
-                "recipient_agent_id": "agt_jez2ujdp6d5n"
-              }
-            },
-            "created_at": "<timestamp>",
-            "body_md": "请读取原问题 cmt_l9lxt2vfpkm6（remi message question get cmt_l9lxt2vfpkm6），总结背景、原选项与建议，然后用 remi message question present cmt_l9lxt2vfpkm6 --revision 2 --summary <总结> 呈现同一个问题。指定人类责任人 mem_2ryujm2j4i6h；不要另建 AUQ，也不要代答批准。",
             "body_offset": 0,
             "body_omitted_chars": 0
           },

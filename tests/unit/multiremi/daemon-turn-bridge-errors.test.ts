@@ -91,12 +91,9 @@ for (const backend of backends) {
           .toMatchObject({ ok: false, code: "input_gap", retryable: false });
         expect(await report("turn.decision.get", { ...input, message_id: "missing" }))
           .toMatchObject({ ok: false, code: "invalid_report", retryable: false });
-        const members = spyOn(store, "listWorkspaceMembers").mockReturnValue([]);
-        try {
-          expect(await report("turn.decision", { ...input, body_md: "Pick", dedupe_key: "no-owner",
-            options: [{ label: "A", value: "a" }], metadata: {} }))
-            .toMatchObject({ ok: false, code: "invalid_report", retryable: false });
-        } finally { members.mockRestore(); }
+        expect(await report("turn.decision", { ...input, body_md: "Pick", dedupe_key: "invalid-options",
+          options: 'not-an-options-array', metadata: {} }))
+          .toMatchObject({ ok: false, code: "invalid_report", retryable: false });
         store.cancelTask(task.id);
         expect(await report("turn.complete", completion))
           .toMatchObject({ ok: false, code: "invalid_report", retryable: false });

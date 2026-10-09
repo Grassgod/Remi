@@ -424,14 +424,14 @@ describe("native collaboration CLI contracts", () => {
       };
       const first = await run("send", [childSession.id, "--to", "parent_owner", "--kind", "decision", "--content", "Ship it", "--option", "yes", "--option", "no"]);
       expect(first.message.message_kind).toBe("decision");
-      expect(first.message.metadata.decision_record.status).toBe("pending");
+      expect(first.message.metadata.message_choice.status).toBe("pending");
       const listed = await run("list", [parentSession.id, "--kind", "decision"]);
       expect(listed.messages.map((message: { id: string }) => message.id)).toContain(first.message.id);
-      const question = store.getQuestion(first.message.id)!;
-      const answered = await run("send", [parentSession.id, "--reply-to", first.message.id, "--revision", String(question.route_revision), "--content", "Approved", "--option", "yes"]);
+      expect(store.getQuestion(first.message.id)).toBeNull();
+      const answered = await run("send", [parentSession.id, "--reply-to", first.message.id, "--content", "Approved", "--option", "yes"]);
       expect(answered.message.reply_to_id).toBe(first.message.id);
       const settled = await run("get", [first.message.id]);
-      expect(settled.message.metadata.question.status).toBe("answered");
+      expect(settled.message.metadata.message_choice.status).toBe("answered");
     } finally {
       database.close();
     }

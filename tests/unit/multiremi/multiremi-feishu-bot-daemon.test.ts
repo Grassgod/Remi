@@ -78,8 +78,9 @@ interface Scaffold {
  * A configured workspace with two concierge-capable Runtimes, each with its own
  * daemon token, so cross-Runtime access can actually be attempted.
  */
-async function scaffold(): Promise<Scaffold> {
+async function scaffold(responsibleMemberId?: string): Promise<Scaffold> {
   const store = createLocalStore();
+  if (responsibleMemberId) store.createWorkspaceMember({ id: responsibleMemberId, workspaceId: 'local', name: 'Explicit configured human', role: 'member' });
   const agent = store.createAgent({ name: "Concierge", provider: "codex", workspaceId: "local" });
   const tokens: Record<string, string> = {};
   for (const suffix of ["a", "b"]) {
@@ -110,6 +111,7 @@ async function scaffold(): Promise<Scaffold> {
       domain: "feishu",
       enabled: true,
       app_secret: APP_SECRET,
+      ...(responsibleMemberId ? { responsible_member_id: responsibleMemberId } : {}),
     }),
   });
   if (saved.status !== 200) throw new Error(`scaffold config failed: ${saved.status}`);
@@ -418,7 +420,7 @@ describe("Feishu bot control-plane delivery", () => {
   }
 
   it("lets only the selected transport stream and answer a Chat executed by another provider", async () => {
-    const test = await scaffold();
+    const test = await scaffold('mem_cross_provider_human');
     test.store.registerRuntime({ id: "rt_claude", name: "Claude executor", provider: "claude",
       workspaceId: "local", daemonId: "daemon-claude" });
     const executor = await test.store.createAccessToken({ name: "executor", type: "daemon",
@@ -463,11 +465,16 @@ describe("Feishu bot control-plane delivery", () => {
       events: [{ seq: 2, ts: "2026-09-28T00:00:01Z", type: "text", content: "foreign write" }] },
       { runtimeId: "rt_a", headers: daemonHeaders(test.tokens.rt_a!), authToken: "MASTER" })).toMatchObject({ ok: false, code: "authority_revoked" });
     const user = test.store.getOrCreateUser({ externalId: "cross-provider-user", feishuUnionId: "on_cross_provider", name: "Recipient" });
-    test.store.createWorkspaceMember({ workspaceId: "local", userId: user.id, name: "Recipient", role: "member" });
+    db!.run('UPDATE multiremi_workspace_members SET user_id=? WHERE id=?', [user.id, 'mem_cross_provider_human']);
     db!.run(`INSERT INTO multiremi_feishu_bot_senders (id, workspace_id, app_id, open_id, union_id, display_name, allowed, first_seen_at, last_seen_at)
       VALUES ('fbs_cross', 'local', 'cli_a1b2c3d4e5f6g7h8', 'ou_cross_provider_recipient', 'on_cross_provider', 'Recipient', 1, '2026-10-05', '2026-10-05')`);
-    const question = test.store.createTaskHumanRequest({ taskId: submitted.taskId, kind: "question",
-      payload: { questions: [{ question: "Continue?", options: [{ label: "yes" }] }] } });
+    const originalTurn = test.store.getTurnForAttempt(submitted.taskId)!;
+    const created = test.store.getDaemonTurnBridge().rpc('turn.decision', { turn_id: originalTurn.id, attempt_id: submitted.taskId,
+      wait_id: 'cross-provider-wait', dedupe_key: 'cross-provider-question', body_md: 'Continue?',
+      options: [{ label: 'yes', value: 'yes' }], metadata: { kind: 'question', questions: [{ question: 'Continue?', options: [{ label: 'yes' }] }] } },
+      { runtimeId: 'rt_claude', daemonId: 'daemon-claude', workspaceId: 'local' });
+    expect(created.ok).toBe(true);
+    const question = test.store.getTaskHumanRequest(String(created.message_id))!;
     const cardPath = `/api/daemon/messages/${question.id}/card`;
     const cardInput = JSON.stringify({ recipient_open_id: "ou_cross_provider_recipient" });
     expect((await test.app.request(cardPath, { method: "POST", headers: daemonHeaders(test.tokens.rt_b!),
@@ -479,7 +486,8 @@ describe("Feishu bot control-plane delivery", () => {
     expect(typeof credential?.t).toBe("string");
     const answer = await test.app.request(`/api/daemon/messages/${question.id}/answer`, {
       method: "POST", headers: daemonHeaders(test.tokens.rt_a!),
-      body: JSON.stringify({ response: { answers: { "Continue?": "yes" } }, token: credential!.t, operator_open_id: "ou_cross_provider_recipient" }),
+      body: JSON.stringify({ response: { answers: { "Continue?": "yes" } }, token: credential!.t, operator_open_id: "ou_cross_provider_recipient",
+        expected_route_revision: test.store.getQuestion(question.id)!.route_revision }),
     });
     expect(answer.status).toBe(200);
     expect(test.store.getTaskHumanRequest(question.id)?.response).toEqual({ answers: { "Continue?": "yes" } });
@@ -559,8 +567,9 @@ describe("Feishu bot control-plane delivery", () => {
     expect(await expire("rt_a", test.tokens.rt_a!)).toMatchObject({ ok: false, code: "stale_attempt" });
     expect(test.store.getTaskHumanRequest(question.id)?.status).toBe("pending");
     expect(await create("rt_claude", executor.token)).toMatchObject({ ok: true, message: { task_id: boundTurnId, message_kind: "decision" } });
-    expect(await expire("rt_claude", executor.token)).toMatchObject({ ok: true, message: { id: question.id, resolved_at: expect.any(String) } });
-    expect(test.store.getTaskHumanRequest(question.id)?.status).toBe("cancelled");
+    expect(await expire("rt_claude", executor.token)).toMatchObject({ ok: true, message: { id: question.id, resolved_at: null }, status: 'pending' });
+    expect(test.store.getTaskHumanRequest(question.id)?.status).toBe("pending");
+    expect(test.store.getQuestion(question.id)?.wait_status).toBe('detached');
   });
 
   it("queues legacy bundled native replies once and recovers CoT, interaction and result IDs through the daemon API", async () => {

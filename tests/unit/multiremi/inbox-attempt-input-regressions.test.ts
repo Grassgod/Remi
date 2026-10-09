@@ -100,7 +100,8 @@ pendingTurnBackendTests('MUL-506 provider input boundaries', fixture => {
         new MultiremiStore(f.db);
         new MultiremiStore(f.db);
         expect(f.store.getMessage(decision.id)?.metadata.decision_record).toEqual({ status: 'pending' });
-        expect(f.store.getQuestion(decision.id)?.wait_status).toBe('none');
+        // The old status-only choice stays an ordinary choice after upgrade.
+        expect(f.store.getQuestion(decision.id)).toBeNull();
         if (f.db.dialect === 'postgres')
             expect(f.db.query("SELECT data_type FROM information_schema.columns WHERE table_name='multiremi_turn_attempts' AND column_name IN ('event_count','tool_call_count') ORDER BY column_name").all()).toEqual([{ data_type: 'bigint' }, { data_type: 'bigint' }]);
         const native=f.bridge.rpc('turn.decision',{turn_id:f.sent.turn_id,attempt_id:f.attempt.id,wait_id:'counter-migration-native-wait',dedupe_key:'counter-native',body_md:'Current approval?',options:[],metadata:{kind:'question',questions:[{question:'Current approval?'}]}},f.scope);
