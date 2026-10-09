@@ -180,8 +180,9 @@ describe("legacy /feishu API on the Messaging Core", () => {
         const { store } = migratedStore();
         let run: () => { issue: { id: string } };
         if (path === "direct") {
+          const creator = store.createWorkspaceMember({ name: "Direct Feishu creator" });
           run = () => store.createFeishuIssueOutcome("om_kept", {
-            workspaceId: "local", title: "Feishu direct audit",
+            workspaceId: "local", title: "Feishu direct audit", createdBy: creator.id,
           });
         } else {
           const member = store.createWorkspaceMember({ name: "Feishu reviewer" });
