@@ -139,14 +139,14 @@ export function createHistoricalTestIssue(store: MultiremiStore,input:CreateIssu
 
 /** Replay a pre-responsibility terminal fact into the notification consumer.
  * This cannot authorize current closure and deliberately creates no delivery receipt. */
-export function replayHistoricalTestChildDone(store: MultiremiStore, issueId:string):void {
+export function replayHistoricalTestChildDone(store: MultiremiStore, issueId:string, statusChangeEventId?:string):void {
   const {db:database,ctx}=store as unknown as {db:import('@multiremi/store/db/postgres.js').SqlDatabase;ctx:StoreContext};
   const previous=store.getIssue(issueId)!;
   const events=createCommitEventQueue();
   database.transaction(()=>{
     ctx.lockWorkspaceRuntimeLifecycle(previous.workspaceId);
     const historical=seedHistoricalIssueFacts(store,issueId,{status:'done'});
-    ctx.issues().notifyChildStatusChangeWithinTransaction(previous,historical,null,[],events);
+    ctx.issues().notifyChildStatusChangeWithinTransaction(previous,historical,null,[],events,{statusChangeEventId});
   })();
   ctx.emitCommitEvents(events);
 }

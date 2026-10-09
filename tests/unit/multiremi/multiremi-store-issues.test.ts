@@ -1,5 +1,5 @@
 import { createResponsibleTestAutopilot } from './helpers.js';
-import { createResponsibleTestIssue } from './helpers.js';
+import { createResponsibleTestIssue, createHistoricalTestIssue, seedHistoricalIssueFacts, replayHistoricalTestChildDone } from './helpers.js';
 import { issueMessagesPath, mutateExecutionFixture } from "./unified-test-paths.js";
 // The issue domain at store level: assignment, keys, GitHub links, hierarchy,
 // dependencies, mentions, notifications/inbox, comment threads and reactions,
@@ -9,13 +9,14 @@ import { createMultiremiApp } from "@multiremi/api.js";
 import type { SqlDatabase } from "@multiremi/store/db/postgres.js";
 import { runMigrations } from "@multiremi/store/migrations.js";
 import { INBOX_ROUTING } from "@multiremi/store/inbox-routing.js";
+import type { StoreContext } from '@multiremi/store/context.js';
 import { inboxReportBody } from "./inbox-test-assertions.js";
 import { createStore, db, resetMultiremiTestEnv, readyArchiveBinding } from "./helpers.js";
 
 afterEach(resetMultiremiTestEnv);
 
 describe("Multiremi store — issues, comments, labels, and inbox", () => {
-  it("assigns issues to members, agents, and squads", () => {
+  it("keeps human responsibility separate and assigns execution to agents and squads", () => {
     const store = createStore();
     const codex = store.createAgent({ name: "Codex", provider: "codex" });
     const leader = store.createAgent({ name: "Squad lead", provider: "claude" });
@@ -23,9 +24,11 @@ describe("Multiremi store — issues, comments, labels, and inbox", () => {
     const squad = store.createSquad({ name: "Feature squad", leaderId: leader.id });
     const issue = createResponsibleTestIssue(store, { title: "Implement assignment" });
 
-    const memberAssigned = store.assignIssue(issue.id, { assigneeType: "member", assigneeId: member.id });
-    expect(memberAssigned.issue.assigneeType).toBe("member");
-    expect(memberAssigned.task).toBeNull();
+    expect(()=>store.assignIssue(issue.id, { assigneeType: "member", assigneeId: member.id })).toThrow('Agent or team Leader');
+    const humanResponsible=store.updateIssue(issue.id,{responsibleMemberId:member.id,actorType:'member',actorId:member.id});
+    expect(humanResponsible.responsibleMemberId).toBe(member.id);
+    expect(humanResponsible.assigneeType).toBeNull();
+    expect(store.listTasksForIssue(issue.id)).toHaveLength(0);
 
     const agentAssigned = store.assignIssue(issue.id, { assigneeType: "agent", assigneeId: codex.id, prompt: "Run codex" });
     expect(agentAssigned.issue.assigneeType).toBe("agent");
@@ -37,9 +40,10 @@ describe("Multiremi store — issues, comments, labels, and inbox", () => {
     expect(squadAssigned.task?.agentId).toBe(leader.id);
     expect(store.getTask(agentAssigned.task!.id)?.status).toBe("cancelled");
 
-    const fuzzyIssue = createResponsibleTestIssue(store, { title: "Assign by fuzzy refs", assigneeId: "human@example.com" });
-    expect(fuzzyIssue.assigneeType).toBe("member");
-    expect(fuzzyIssue.assigneeId).toBe(member.id);
+    expect(()=>createResponsibleTestIssue(store, { title: "Reject human execution by fuzzy refs", assigneeId: "human@example.com" })).toThrow('Agent or team Leader');
+    const fuzzyIssue = createResponsibleTestIssue(store, { title: "Assign by fuzzy refs",responsibleMemberId:member.id });
+    expect(fuzzyIssue.responsibleMemberId).toBe(member.id);
+    expect(fuzzyIssue.assigneeType).toBeNull();
     const fuzzyAgent = store.assignIssue(fuzzyIssue.id, { assigneeId: "cod", prompt: "Run fuzzy Codex" });
     expect(fuzzyAgent.issue.assigneeType).toBe("agent");
     expect(fuzzyAgent.issue.assigneeId).toBe(codex.id);
@@ -48,7 +52,7 @@ describe("Multiremi store — issues, comments, labels, and inbox", () => {
     expect(fuzzySquad.issue.assigneeType).toBe("squad");
     expect(fuzzySquad.issue.assigneeId).toBe(squad.id);
     expect(fuzzySquad.task?.agentId).toBe(leader.id);
-    const quick = store.quickCreateIssue({ agentId: "codex", prompt: "Fuzzy quick create" });
+    const quick = store.quickCreateIssue({ agentId: "codex", prompt: "Fuzzy quick create",responsibleMemberId:member.id });
     expect(quick.issue.assigneeId).toBe(codex.id);
     expect(quick.task.agentId).toBe(codex.id);
 
@@ -61,10 +65,12 @@ describe("Multiremi store — issues, comments, labels, and inbox", () => {
   it("tells the creator agent whether to keep or infer the issue project", () => {
     const store = createStore();
     const agent = store.createAgent({ name: "PM", provider: "codex" });
+    const human=store.createWorkspaceMember({name:'Explicit quick-create requester'});
     const project = store.createProject({ title: "Web" });
 
     const targeted = store.quickCreateIssue({
       agentId: agent.id,
+      responsibleMemberId: human.id,
       projectId: project.id,
       prompt: "Fix the upload flow",
     });
@@ -74,6 +80,7 @@ describe("Multiremi store — issues, comments, labels, and inbox", () => {
 
     const inferred = store.quickCreateIssue({
       agentId: agent.id,
+      responsibleMemberId: human.id,
       prompt: "Investigate the mobile crash",
     });
     expect(inferred.issue.projectId).toBeNull();
@@ -82,12 +89,12 @@ describe("Multiremi store — issues, comments, labels, and inbox", () => {
     expect(inferred.task.prompt).toContain("do not create a new project");
   });
 
-  it("aggregates assignee frequency from created issues and assignment activity", () => {
+  it("aggregates historical member assignee frequency alongside current Agent assignment", () => {
     const store = createStore();
     const alice = store.createWorkspaceMember({ name: "Alice", role: "member" });
     const bob = store.createWorkspaceMember({ name: "Bob", role: "member" });
     const agent = store.createAgent({ name: "Codex", provider: "codex" });
-    const created = createResponsibleTestIssue(store, {
+    const created = createHistoricalTestIssue(store, {
       title: "Created with assignee",
       createdBy: alice.id,
       assigneeType: "member",
@@ -95,12 +102,10 @@ describe("Multiremi store — issues, comments, labels, and inbox", () => {
     });
     const reassigned = createResponsibleTestIssue(store, { title: "Reassigned later", createdBy: alice.id });
 
-    store.assignIssue(reassigned.id, {
-      assignee_type: "member",
-      assignee_id: bob.id,
-      actorType: "member",
-      actorId: alice.id,
-    });
+    seedHistoricalIssueFacts(store,reassigned.id,{assigneeType:'member',assigneeId:bob.id});
+    // Persisted legacy audit is a read fixture, not a new member execution assignment.
+    store.appendIssueActivity(reassigned.id,{type:'issue_assigned',actorType:'member',actorId:alice.id,
+      data:{assignee_type:'member',assignee_id:bob.id}});
     store.assignIssue(created.id, {
       assigneeType: "agent",
       assigneeId: agent.id,
@@ -161,7 +166,7 @@ describe("Multiremi store — issues, comments, labels, and inbox", () => {
     expect(store.listChildIssues(parent.id).map((item) => item.id)).toEqual([child.id]);
     expect(store.getIssueWithTasks(parent.id)?.children[0]?.id).toBe(child.id);
 
-    store.updateIssue(child.id, { status: "done" });
+    seedHistoricalIssueFacts(store,child.id,{status:'done'});
     expect(store.getChildIssueProgress(parent.id)).toEqual({
       parentIssueId: parent.id, total: 1, done: 1, cancelled: 0, blocked: 0, waiting: 0, active: 0,
     });
@@ -180,7 +185,7 @@ describe("Multiremi store — issues, comments, labels, and inbox", () => {
     expect(() => store.createIssue({ title: "Cross workspace", parentIssueId: remoteParent.id, workspaceId: "local" })).toThrow("another workspace");
   });
 
-  it("posts Go-style system comments when child issues transition to done", () => {
+  it("replays persisted child done facts into Go-style notification consumers idempotently", () => {
     const store = createStore();
     const parent = createResponsibleTestIssue(store, { title: "Child-done parent", status: "in_progress" });
     const child = createResponsibleTestIssue(store, {
@@ -189,7 +194,7 @@ describe("Multiremi store — issues, comments, labels, and inbox", () => {
       status: "in_progress",
     });
 
-    store.updateIssue(child.id, { status: "done" });
+    replayHistoricalTestChildDone(store,child.id);
     let comments = store.listIssueComments(parent.id).filter((comment) => comment.authorType === "system");
     expect(comments).toHaveLength(1);
     expect(comments[0]?.type).toBe("system");
@@ -202,22 +207,22 @@ describe("Multiremi store — issues, comments, labels, and inbox", () => {
     expect(comments[0]?.body).not.toContain("mention://member/");
     expect(comments[0]?.body).not.toContain("mention://squad/");
 
-    store.updateIssue(child.id, { status: "done" });
+    replayHistoricalTestChildDone(store,child.id);
     comments = store.listIssueComments(parent.id).filter((comment) => comment.authorType === "system");
     expect(comments).toHaveLength(1);
 
     store.updateIssue(child.id, { status: "in_progress" });
-    store.updateIssue(child.id, { status: "done" });
+    replayHistoricalTestChildDone(store,child.id,'legacy-second-close');
     comments = store.listIssueComments(parent.id).filter((comment) => comment.authorType === "system" && comment.body.includes("is done"));
     expect(comments).toHaveLength(2);
 
-    const doneParent = createResponsibleTestIssue(store, { title: "Already done parent", status: "done" });
+    const doneParent = createHistoricalTestIssue(store, { title: "Already done parent", status: "done" });
     const doneChild = createResponsibleTestIssue(store, { title: "Done child", parentIssueId: doneParent.id, status: "in_progress" });
-    store.updateIssue(doneChild.id, { status: "done" });
+    replayHistoricalTestChildDone(store,doneChild.id);
     expect(store.listIssueComments(doneParent.id).filter((comment) => comment.authorType === "system")).toHaveLength(0);
   });
 
-  it("triggers parent assignee tasks for child-done system comments", () => {
+  it("routes historical child-done reports by explicit parent responsibility", () => {
     const store = createStore();
     const agent = store.createAgent({ name: "Parent] Agent", provider: "codex" });
     const parent = createResponsibleTestIssue(store, {
@@ -234,7 +239,7 @@ describe("Multiremi store — issues, comments, labels, and inbox", () => {
       assigneeId: agent.id,
     });
 
-    store.updateIssue(child.id, { status: "done" });
+    replayHistoricalTestChildDone(store,child.id);
     const comments = store.listIssueComments(parent.id).filter((comment) => comment.authorType === "system");
     expect(comments).toHaveLength(1);
     expect(comments[0]?.body).toContain(`mention://agent/${agent.id}`);
@@ -249,14 +254,15 @@ describe("Multiremi store — issues, comments, labels, and inbox", () => {
     expect(comments[0]?.body).not.toContain("read each sibling's description");
 
     const member = store.createWorkspaceMember({ name: "Human parent", role: "member" });
-    const memberParent = createResponsibleTestIssue(store, {
+    const memberParent = createHistoricalTestIssue(store, {
       title: "Member parent",
       status: "in_progress",
       assigneeType: "member",
       assigneeId: member.id,
+      responsibleMemberId: member.id,
     });
     const memberChild = createResponsibleTestIssue(store, { title: "Member child", parentIssueId: memberParent.id, status: "in_progress" });
-    store.updateIssue(memberChild.id, { status: "done" });
+    replayHistoricalTestChildDone(store,memberChild.id);
     // MUL-400 E2: a human parent gets an inbox item instead of a system comment
     // and a wakeup round.
     expect(store.listIssueComments(memberParent.id).filter((comment) => comment.authorType === "system")).toHaveLength(1);
@@ -274,7 +280,7 @@ describe("Multiremi store — issues, comments, labels, and inbox", () => {
       assigneeId: squad.id,
     });
     const squadChild = createResponsibleTestIssue(store, { title: "Squad child", parentIssueId: squadParent.id, status: "in_progress" });
-    store.updateIssue(squadChild.id, { status: "done" });
+    replayHistoricalTestChildDone(store,squadChild.id);
     const squadComments = store.listIssueComments(squadParent.id).filter((comment) => comment.authorType === "system");
     expect(squadComments).toHaveLength(1);
     expect(squadComments[0]?.body).toContain(`mention://squad/${squad.id}`);
@@ -293,7 +299,7 @@ describe("Multiremi store — issues, comments, labels, and inbox", () => {
       assigneeType: "squad",
       assigneeId: squad.id,
     });
-    store.updateIssue(sameSquadChild.id, { status: "done" });
+    replayHistoricalTestChildDone(store,sameSquadChild.id);
     expect(store.listIssueComments(sameSquadParent.id).filter((comment) => comment.authorType === "system")).toHaveLength(1);
     expect(store.listTasksForIssue(sameSquadParent.id).map((task) => task.agentId)).toEqual([leader.id]);
 
@@ -310,7 +316,7 @@ describe("Multiremi store — issues, comments, labels, and inbox", () => {
       assigneeType: "agent",
       assigneeId: leader.id,
     });
-    store.updateIssue(leaderChild.id, { status: "done" });
+    replayHistoricalTestChildDone(store,leaderChild.id);
     expect(store.listTasksForIssue(leaderChildParent.id).map((task) => task.agentId)).toEqual([leader.id]);
   });
 
@@ -329,7 +335,7 @@ describe("Multiremi store — issues, comments, labels, and inbox", () => {
     mutateExecutionFixture(db!,"UPDATE multiremi_turn_execution_records SET status = 'running' WHERE id = ?", [running.id]);
     const busyChild = createResponsibleTestIssue(store, { title: "Busy child", parentIssueId: busyParent.id, status: "in_progress" });
 
-    store.updateIssue(busyChild.id, { status: "done" });
+    replayHistoricalTestChildDone(store,busyChild.id);
 
     const busyTasks = store.listTasksForIssue(busyParent.id);
     expect(busyTasks).toHaveLength(1);
@@ -366,7 +372,7 @@ describe("Multiremi store — issues, comments, labels, and inbox", () => {
 
     const unassignedParent = createResponsibleTestIssue(store, { title: "Unassigned parent", status: "in_progress" });
     const unassignedChild = createResponsibleTestIssue(store, { title: "Unassigned child", parentIssueId: unassignedParent.id, status: "in_progress" });
-    store.updateIssue(unassignedChild.id, { status: "done" });
+    replayHistoricalTestChildDone(store,unassignedChild.id);
     expect(store.listIssueActivity(unassignedParent.id)
       .find((activity) => activity.type === "child_done_parent_skipped")?.data)
       .toMatchObject({ reason: "no_assignee", outcome: "done" });
@@ -380,7 +386,7 @@ describe("Multiremi store — issues, comments, labels, and inbox", () => {
     });
     const archivedAgentChild = createResponsibleTestIssue(store, { title: "Archived agent child", parentIssueId: archivedAgentParent.id, status: "in_progress" });
     store.archiveAgent(archivedAgent.id);
-    store.updateIssue(archivedAgentChild.id, { status: "done" });
+    replayHistoricalTestChildDone(store,archivedAgentChild.id);
     expect(store.listIssueActivity(archivedAgentParent.id)
       .find((activity) => activity.type === "child_done_parent_skipped")?.data)
       .toMatchObject({ reason: "agent_unavailable" });
@@ -393,7 +399,7 @@ describe("Multiremi store — issues, comments, labels, and inbox", () => {
       assigneeId: leaderlessSquad.id,
     });
     const leaderlessChild = createResponsibleTestIssue(store, { title: "Leaderless child", parentIssueId: leaderlessParent.id, status: "in_progress" });
-    store.updateIssue(leaderlessChild.id, { status: "done" });
+    replayHistoricalTestChildDone(store,leaderlessChild.id);
     expect(store.listIssueActivity(leaderlessParent.id)
       .find((activity) => activity.type === "child_done_parent_skipped")?.data)
       .toMatchObject({ reason: "squad_leader_unavailable" });
@@ -508,13 +514,13 @@ describe("Multiremi store — issues, comments, labels, and inbox", () => {
     const unassigned = createResponsibleTestIssue(store, { title: "Nobody yet" });
     store.createIssueComment(unassigned.id, { body: "Thoughts?" });
 
-    const humanOwned = createResponsibleTestIssue(store, { title: "Human owned", assigneeType: "member", assigneeId: member.id });
+    const humanOwned = createHistoricalTestIssue(store, { title: "Human owned", assigneeType: "member", assigneeId: member.id });
     store.createIssueComment(humanOwned.id, { body: "Ping" });
 
     expect(store.listTasks()).toHaveLength(0);
   });
 
-  it("notifies subscribed members through inbox items", () => {
+  it("reads historical assignment inbox items and notifies current subscribed members", () => {
     const store = createStore();
     const alice = store.createWorkspaceMember({ name: "Alice Reviewer" });
     const bob = store.createWorkspaceMember({ name: "Bob Approver" });
@@ -523,7 +529,11 @@ describe("Multiremi store — issues, comments, labels, and inbox", () => {
 
     expect(store.listIssueSubscribers(issue.id).map((subscriber) => subscriber.memberId)).toEqual([alice.id]);
 
-    store.assignIssue(issue.id, { assigneeType: "member", assigneeId: bob.id });
+    // The old assignment event remains readable; new member execution writes are refused.
+    expect(()=>store.assignIssue(issue.id,{assigneeType:'member',assigneeId:bob.id})).toThrow('Agent or team Leader');
+    store.addIssueSubscriber(issue.id,bob.id,'assigned');
+    (store as unknown as {ctx:StoreContext}).ctx.createInboxItem({issueId:issue.id,memberId:bob.id,
+      type:'issue_assigned',title:`${issue.key} assigned to you`,body:issue.title,actorType:'system'});
     expect(store.listInboxItems(bob.id).some((item) => item.type === "issue_assigned")).toBe(true);
 
     store.createIssueComment(issue.id, {
@@ -562,7 +572,7 @@ describe("Multiremi store — issues, comments, labels, and inbox", () => {
     ];
 
     for (const input of cases) {
-      const issue = createResponsibleTestIssue(store, { title: input.title, status: input.status, createdBy: subscriber.id });
+      const issue = createHistoricalTestIssue(store, { title: input.title, status: input.status, createdBy: subscriber.id });
       store.createIssueComment(issue.id, {
         authorType: input.authorType,
         authorId: input.authorId,
@@ -582,7 +592,9 @@ describe("Multiremi store — issues, comments, labels, and inbox", () => {
     store.updateNotificationPreferences({
       preferences: { assignments: "muted" },
     });
-    store.assignIssue(issue.id, { assigneeType: "member", assigneeId: bob.id });
+    // Exercise the notification writer for a persisted legacy assignment event.
+    (store as unknown as {ctx:StoreContext}).ctx.createInboxItem({issueId:issue.id,memberId:bob.id,
+      type:'issue_assigned',title:`${issue.key} assigned to you`,body:issue.title,actorType:'system'});
 
     expect(store.getNotificationPreferences().preferences.assignments).toBe("muted");
     expect(store.listInboxItems(bob.id).filter((item) => item.type === "issue_assigned")).toHaveLength(0);
@@ -820,7 +832,7 @@ describe("Multiremi store — issues, comments, labels, and inbox", () => {
     const store = createStore();
     createResponsibleTestIssue(store, { title: "Alpha title", description: "No special details", workspaceId: "local" });
     const descIssue = createResponsibleTestIssue(store, { title: "Other title", description: "Contains needle phrase inside a longer issue description", workspaceId: "local" });
-    store.updateIssue(descIssue.id, { status: "done" });
+    seedHistoricalIssueFacts(store,descIssue.id,{status:'done'});
     store.createProject({ title: "Project Alpha", description: "No details", workspaceId: "local" });
     store.createProject({ title: "Project Other", description: "Contains project needle phrase", workspaceId: "local" });
 
@@ -869,14 +881,14 @@ describe("Multiremi store — issues, comments, labels, and inbox", () => {
       },
     });
     const parent = createResponsibleTestIssue(store, { title: "Archive parent" });
-    const oldDone = createResponsibleTestIssue(store, { title: "Old done", status: "done" });
+    const oldDone = createHistoricalTestIssue(store, { title: "Old done", status: "done" });
     const recentCancelled = createResponsibleTestIssue(store, {
       title: "Recent cancelled",
       status: "cancelled",
       parentIssueId: parent.id,
     });
     const active = createResponsibleTestIssue(store, { title: "Still active", status: "in_progress" });
-    const slowerDone = createResponsibleTestIssue(store, {
+    const slowerDone = createHistoricalTestIssue(store, {
       title: "Slower workspace done",
       workspaceId: slowerWorkspace.id,
       status: "done",
@@ -954,7 +966,7 @@ describe("Multiremi store — issues, comments, labels, and inbox", () => {
     expect(store.listTasks()).toHaveLength(0);
   });
 
-  it("skips archived agents when resolving squad autopilots", () => {
+  it("requires an explicitly available squad Leader for autopilot execution", () => {
     const store = createStore();
     const leader = store.createAgent({ name: "Leader", provider: "codex" });
     const backup = store.createAgent({ name: "Backup", provider: "codex" });
@@ -963,13 +975,19 @@ describe("Multiremi store — issues, comments, labels, and inbox", () => {
       title: "Resolve squad",
       assigneeType: "squad",
       assigneeId: squad.id,
-      issueTitleTemplate: "Use active member",
+      issueTitleTemplate: "Use configured Leader",
     });
 
     store.archiveAgent(leader.id);
     const run = store.runAutopilot(autopilot.id);
-    expect(run.status).toBe("running");
-    expect(store.getTask(run.taskId!)?.agentId).toBe(backup.id);
+    expect(run.status).toBe("skipped");
+    expect(run.failureReason).toBe("No runnable agent");
+    expect(run.taskId).toBeNull();
+    expect(store.listTasks()).toHaveLength(0);
+    store.updateSquad(squad.id,{leaderId:backup.id});
+    const configured=store.runAutopilot(autopilot.id);
+    expect(configured.status).toBe('running');
+    expect(store.getTask(configured.taskId!)?.agentId).toBe(backup.id);
 
     store.archiveAgent(backup.id);
     const skipped = store.runAutopilot(autopilot.id);
