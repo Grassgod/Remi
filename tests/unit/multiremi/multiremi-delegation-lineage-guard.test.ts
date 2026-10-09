@@ -63,6 +63,7 @@ async function withStore(backend: "sqlite" | "postgres", run: (store: MultiremiS
 interface Fixture {
   app: ReturnType<typeof createMultiremiApp>;
   memberHeaders: Record<string, string>;
+  memberUserId: string;
   leaderTokenHeaders: Record<string, string>;
   leaderRuntimeId: string;
   workerRuntimeId: string;
@@ -125,6 +126,7 @@ async function fixture(store: MultiremiStore, authToken?: string): Promise<Fixtu
   return {
     app,
     memberHeaders: { Authorization: `Bearer ${pat.token}`, "Content-Type": "application/json" },
+    memberUserId: user.id,
     leaderTokenHeaders: { Authorization: `Bearer ${dispatchToken.token}`, "Content-Type": "application/json" },
     leaderRuntimeId: leaderRuntime.id,
     workerRuntimeId: workerRuntime.id,
@@ -278,8 +280,7 @@ for (const backend of ["sqlite", "postgres"] as const) {
     it("drops parent_task_id on the Chat message routes for a member PAT", async () => {
       await withStore(backend, async (store) => {
         const f = await fixture(store, "lineage-guard-root");
-        const member = store.listWorkspaceMembers("local").find((row) => row.role === "member")!;
-        const chat = store.createChatSession({ agentId: f.leaderId, creatorId: member.userId ?? member.id });
+        const chat = store.createChatSession({ agentId: f.leaderId, creatorId: f.memberUserId });
         for (const [label, forged] of FORGED_SPELLINGS) {
           const body = JSON.parse(JSON.stringify(forged).replaceAll("TARGET", f.delegatedTask.id)) as Record<string, unknown>;
           for (const path of [`/api/sessions/${chat.id}/messages`, `/api/sessions/${chat.id}/messages`]) {
