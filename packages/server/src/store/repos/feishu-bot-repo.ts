@@ -2202,7 +2202,7 @@ export class FeishuBotRepo {
       return;
     }
     if (!this.canWriteOutbound()) {
-      const task = this.ctx.tasks().getTask(request.taskId);
+      const task = this.ctx.tasks().getTaskIdentity(request.taskId);
       if (task) this.deferOutboundOperation(task.workspaceId, request.id, { kind: "decision_patch", request });
       return;
     }

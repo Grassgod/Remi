@@ -1,6 +1,5 @@
 import { createHash } from 'node:crypto';
 import type { IssueResponsibility, IssueResponsibleActor } from '@multiremi/contracts';
-import type { MultiremiIssue } from '@multiremi/contracts/types.js';
 import type { StoreContext } from './context.js';
 
 /** The only responsibility resolver: no sender-team, runnable-member or workspace-owner fallback. */
@@ -9,9 +8,17 @@ export function resolveIssueResponsibility(ctx: StoreContext, issueId: string): 
     rootHuman: null, rootIssueId: null, chain: [], unresolved: [], revision: '' };
   const facts: unknown[] = [];
   const seen = new Set<string>();
-  let issue = ctx.issues().getIssue(issueId);
+  // Only current responsibility facts participate. Labels, usage, prompts and
+  // Agent Skills cannot change the route or its revision.
+  type IssueFacts = { id: string; workspaceId: string; parentIssueId: string | null; assigneeType: string | null; assigneeId: string | null; responsibleMemberId: string | null };
+  const readIssue = (id: string): IssueFacts | null => {
+    const row = ctx.db.query('SELECT id,workspace_id,parent_issue_id,assignee_type,assignee_id,responsible_member_id FROM multiremi_issues WHERE id=?').get(id);
+    return row ? { id: row.id, workspaceId: row.workspace_id, parentIssueId: row.parent_issue_id,
+      assigneeType: row.assignee_type, assigneeId: row.assignee_id, responsibleMemberId: row.responsible_member_id } : null;
+  };
+  let issue = readIssue(issueId);
   const fail = (id: string, reason: IssueResponsibility['unresolved'][number]['reason']) => result.unresolved.push({issueId: id, reason});
-  const owner = (item: MultiremiIssue): IssueResponsibleActor | null => {
+  const owner = (item: IssueFacts): IssueResponsibleActor | null => {
     let id: string | null = null;
     if (item.assigneeType === 'agent') id = item.assigneeId;
     else if (item.assigneeType === 'squad' && item.assigneeId) {
@@ -22,7 +29,7 @@ export function resolveIssueResponsibility(ctx: StoreContext, issueId: string): 
       if (!id) { fail(item.id, 'leader_missing'); return null; }
     }
     if (!id) { fail(item.id, 'execution_owner_missing'); return null; }
-    const agent = ctx.agents().getAgent(id);
+    const agent = ctx.agents().getAgentLite(id);
     facts.push(['agent', id, agent?.workspaceId, agent?.archivedAt]);
     if (!agent || agent.archivedAt || agent.workspaceId !== item.workspaceId) { fail(item.id, 'agent_unavailable'); return null; }
     return {type:'agent', id:agent.id, issueId:item.id, name:agent.name};
@@ -46,7 +53,7 @@ export function resolveIssueResponsibility(ctx: StoreContext, issueId: string): 
       break;
     }
     const parentId: string = issue.parentIssueId;
-    issue = ctx.issues().getIssue(parentId);
+    issue = readIssue(parentId);
     if (!issue) fail(parentId, 'parent_missing');
   }
   result.executionOwner = result.chain[0]?.executionOwner ?? null;

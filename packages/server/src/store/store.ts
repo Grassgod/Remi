@@ -5899,7 +5899,7 @@ runMigrations(this.db);
     input: { response: Record<string, unknown>; respondedBy?: string | null; cardCredential?: QuestionCardCredential; expectedRouteRevision?: number },
   ): MultiremiTaskHumanRequest | null {
     const request = this.tasks.respondTaskHumanRequest(requestId, input);
-    if (request) this.feishuBot.enqueueDecisionCardPatch(request);
+    // Questions.answer persists the card update intent in the answer transaction.
     if (request) this.notifyHumanRequest("responded", request);
     return request;
   }
@@ -5926,7 +5926,7 @@ runMigrations(this.db);
     type: "created" | "responded" | "expired" | "cancelled",
     request: MultiremiTaskHumanRequest,
   ): void {
-    const task = this.tasks.getTask(request.taskId);
+    const task = this.tasks.getTaskIdentity(request.taskId);
     if (!task) return;
     this.ctx.notifyHumanRequest({ type, request, workspaceId: task.workspaceId });
   }

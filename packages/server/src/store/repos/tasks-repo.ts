@@ -4741,13 +4741,19 @@ ${placementAfter.sql}
   }
 
   pinTaskSession(taskId: string, sessionId?: string | null, workDir?: string | null): MultiremiTask {
-    if (!this.getTask(taskId)) throw new Error(`Task not found: ${taskId}`);
-    runTurnExecutionMutation(this.ctx.db, `UPDATE multiremi_turn_execution_records
-       SET session_id = COALESCE(?, session_id), work_dir = COALESCE(?, work_dir), updated_at = ?
-       WHERE id = ? AND status IN ('dispatched', 'running')`,
-      [sessionId ?? null, workDir ?? null, nowIso(), taskId],
-    );
-    return this.getTask(taskId)!;
+    return this.ctx.db.transaction(() => {
+      const identity = this.getTaskIdentity(taskId);
+      if (!identity) throw new Error(`Task not found: ${taskId}`);
+      // Q creation locks the workspace before its session head and turn. Pin
+      // reports also touch that head, so a standalone pin cannot lock the turn first.
+      this.ctx.lockWorkspaceRuntimeLifecycle(identity.workspaceId);
+      runTurnExecutionMutation(this.ctx.db, `UPDATE multiremi_turn_execution_records
+         SET session_id = COALESCE(?, session_id), work_dir = COALESCE(?, work_dir), updated_at = ?
+         WHERE id = ? AND status IN ('dispatched', 'running')`,
+        [sessionId ?? null, workDir ?? null, nowIso(), taskId],
+      );
+      return this.getTask(taskId)!;
+    })();
   }
 
   /** @deprecated Legacy reader fixtures only; production producers use the daemon trace store. */

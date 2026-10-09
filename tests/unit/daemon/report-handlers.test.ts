@@ -57,6 +57,34 @@ function usageState(db: Database, taskId: string) {
 }
 
 describe("v2 reports", () => {
+  it("pins the provider session under the workspace lock before the turn write and ignores a terminal replay", async () => {
+    const { db, store, task, report } = fixture();
+    expect(await report("task.start", { usage_run_id: "pin-provider-run" })).toMatchObject({ execution_authorized: true });
+    const ctx = (store as unknown as { ctx: { lockWorkspaceRuntimeLifecycle: (workspaceId: string) => void } }).ctx;
+    const lock = ctx.lockWorkspaceRuntimeLifecycle.bind(ctx), run = db.run.bind(db);
+    let workspaceLocked = false, pinWrites = 0;
+    const locked = spyOn(ctx, "lockWorkspaceRuntimeLifecycle").mockImplementation(workspaceId => {
+      expect(db.inTransaction).toBe(true);
+      expect(workspaceId).toBe("local");
+      lock(workspaceId);
+      workspaceLocked = true;
+    });
+    const write = spyOn(db, "run").mockImplementation((sql: string, params?: unknown[]) => {
+      if (sql.startsWith("UPDATE multiremi_turns SET current_attempt_id=current_attempt_id")) {
+        expect(db.inTransaction).toBe(true);
+        expect(workspaceLocked).toBe(true);
+        pinWrites++;
+      }
+      return run(sql, params as never);
+    });
+    try {
+      expect(store.pinTaskSession(task.id, "provider-original", "/tmp/provider-original")).toMatchObject({ sessionId: "provider-original", workDir: "/tmp/provider-original" });
+      expect(pinWrites).toBe(1);
+    } finally { write.mockRestore(); locked.mockRestore(); }
+    store.cancelTask(task.id);
+    expect(store.pinTaskSession(task.id, "late-provider", "/tmp/late-provider")).toMatchObject({ status: "cancelled", sessionId: "provider-original", workDir: "/tmp/provider-original" });
+  });
+
   it("restores a queued sent offer and binds a modern run before authorizing execution", async () => {
     const { db, store, task, runtime, report } = fixture();
     store.recordTaskOffered(task.id, runtime.id);

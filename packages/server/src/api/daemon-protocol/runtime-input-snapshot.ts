@@ -25,11 +25,13 @@ export function runtimeInputSnapshot(store: MultiremiStore, runtimeId: string, s
   }));
   const entities: DaemonDownlinkEntity[] = [];
   const maintenance = store.getPlatformMaintenance();
-  const desired = store.getRuntimeAgentPluginDesiredSnapshot(runtimeId);
   entities.push(config("platform.drain", { mode: maintenance.mode, generation: maintenance.generation }),
     config("runtime.profile", { codex_profile: store.getRuntimeCodexProfile(runtimeId),
       claude_profile: store.getRuntimeClaudeProfile(runtimeId) }));
-  if (Number(runtime.metadata.agent_plugin_protocol) >= 1) entities.push(config("plugin.desired_revision", { revision: desired.revision }));
+  if (Number(runtime.metadata.agent_plugin_protocol) >= 1) {
+    const desired = store.getRuntimeAgentPluginDesiredSnapshot(runtimeId);
+    entities.push(config("plugin.desired_revision", { revision: desired.revision }));
+  }
   const token = session?.ownerAccessToken;
   const workspaceId = runtime.workspaceId ?? "local";
   const role = token?.userId ? store.getUserRoleInWorkspace(token.userId, workspaceId)

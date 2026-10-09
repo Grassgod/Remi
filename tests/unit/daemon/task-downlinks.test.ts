@@ -12,8 +12,23 @@ import { DaemonProtocolClient, type DaemonProtocolLane } from "@multiremi/worker
 import { DaemonTaskDownlinks } from "@multiremi/worker/daemon-downlinks.js";
 import { MultiremiTaskReportOutbox } from "@multiremi/worker/outbox.js";
 import { registerDaemonOfferHandler, type DaemonTurnTask } from "@multiremi/worker/daemon-offers.js";
+import { runtimeInputSnapshot } from "@multiremi/api/daemon-protocol/runtime-input-snapshot.js";
 
 afterEach(resetMultiremiTestEnv);
+
+it("reads plugin desired state only for a runtime that advertises the plugin protocol", () => {
+  const store = createLocalStore();
+  store.registerRuntime({ id: "rt_no_plugin_protocol", name: "No plugin support", provider: "claude" });
+  store.registerRuntime({ id: "rt_plugin_protocol", name: "Plugin support", provider: "claude", metadata: { agent_plugin_protocol: 1 } });
+  const desired = spyOn(store, "getRuntimeAgentPluginDesiredSnapshot");
+  try {
+    expect(runtimeInputSnapshot(store, "rt_no_plugin_protocol").some(entity => entity.type === "plugin.desired_revision")).toBe(false);
+    expect(desired).not.toHaveBeenCalled();
+    expect(runtimeInputSnapshot(store, "rt_plugin_protocol").some(entity => entity.type === "plugin.desired_revision")).toBe(true);
+    expect(desired).toHaveBeenCalledTimes(1);
+    expect(desired).toHaveBeenCalledWith("rt_plugin_protocol");
+  } finally { desired.mockRestore(); }
+});
 
 async function waitFor(predicate: () => boolean) {
   const deadline = performance.now() + 2_000;

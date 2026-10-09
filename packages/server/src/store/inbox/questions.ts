@@ -187,7 +187,7 @@ export class Questions {
     if (!same(record.route[record.route_index]?.handler, actor)) throw new QuestionError(403, 'question_handler_required');
     this.fresh(message, record);
   }
-  private save(message: UnifiedMessage, record: QuestionRecord, events: CommitEventQueue) {
+  private save(message: UnifiedMessage, record: QuestionRecord, events: CommitEventQueue, deriveIssue = true) {
     const metadata: Record<string, any> = { ...message.metadata, question: record };
     if (metadata.human_request) metadata.human_request = { ...metadata.human_request, expires_at: null, status: record.status === 'pending' ? 'pending' : record.status === 'answered' ? 'responded' : 'cancelled',
       ...(record.answer ? { response: record.answer.response, responded_by: record.answer.actor.id, responded_at: record.answer.at } : {}),
@@ -202,7 +202,7 @@ export class Questions {
     events.workspace.push({ type: 'inbox:new', workspaceId: record.workspace_id, actorType: 'system', actorId: null, payload: { index_only: true, root_question_id: message.id } });
     const relatedIssues = new Set([record.source_issue_id, ...record.route.map(r => r.issue_id)]);
     for (const issue_id of relatedIssues) if (issue_id) events.workspace.push({ type: 'decision:updated', workspaceId: record.workspace_id, actorType: 'system', actorId: null, payload: { issue_id, root_question_id: message.id } });
-    if (record.source_issue_id) deriveIssueStatusWithinTransaction(this.ctx, record.source_issue_id, events);
+    if (deriveIssue && record.source_issue_id) deriveIssueStatusWithinTransaction(this.ctx, record.source_issue_id, events);
   }
   private event(record: QuestionRecord, type: QuestionHistoryEvent['type'], actor: QuestionActor | null, fields: Partial<QuestionHistoryEvent> = {}) {
     record.history.push({ type, at: nowIso(), actor, route_revision: record.route_revision, ...fields });
@@ -254,7 +254,10 @@ export class Questions {
   }
   get(id: string, actor?: QuestionActor): QuestionView | null {
     const loaded = this.read(id); if (!loaded) return null;
-    const { message, record } = loaded, valid = this.integrity(message, record), step = valid ? record.route[record.route_index] : undefined;
+    return this.view(loaded.message, loaded.record, actor);
+  }
+  private view(message: UnifiedMessage, record: QuestionRecord, actor?: QuestionActor): QuestionView {
+    const valid = this.integrity(message, record), step = valid ? record.route[record.route_index] : undefined;
     const wait: QuestionRecord['wait'] = valid ? this.waiting(message, record) : { ...record.wait, status: 'detached', reason: 'source_workspace_changed' };
     const allowed: QuestionView['actions']['allowed'] = [];
     const rootHuman = record.route.find(r => r.stage === 'human')?.handler;
@@ -324,12 +327,16 @@ export class Questions {
       record.wait.reply_message_id = reply.message.id;
       this.event(record, revise ? 'revise' : 'answer', actor, { answer: record.answer, reason: input.reason, source_message_id: reply.message.id, source_session_id: message.session_id });
       this.ctx.db.run('UPDATE multiremi_conversation_log SET card_token_consumed_at=COALESCE(card_token_consumed_at,?) WHERE id=?', [nowIso(), id]);
-      this.save(message, record, events);
+      // The live reply already resumes and derives its original Issue in
+      // sendMessageWithinTransaction. Do not derive the same unchanged state twice.
+      this.save(message, record, events, !live);
       if (request) this.ctx.feishuBot().enqueueDecisionCardPatch(this.ctx.tasks().getTaskHumanRequest(id)!);
       if (revise && message.sender_id) sendMessageWithinTransaction(this.ctx, { session_id: message.session_id, sender, to: { type: 'agent', ref: message.sender_id }, message_kind: 'request', wake_requested: 'now',
         execution_scope: String(message.metadata.execution_scope ?? ''), body_md: `人类修订了问题 ${id} 的答案：${text}\n原因：${input.reason}。这是补充指令，不是重放原 AUQ。`, metadata: { root_question_id: id, question_answer_revision: true }, dedupe_key: `question-revision:${id}:${reply.message.id}` }, events);
       if (!revise && record.wait.status === 'detached' && !/cancelled|explicit_stop/.test(record.wait.reason ?? '')) this.scheduleContinuation(message, record, actor, events);
-      return { ...reply, question: this.get(id, actor)! };
+      // The workspace/row locks still protect the just-written record. Reuse
+      // it for the response instead of reading and parsing the same Q again.
+      return { ...reply, question: this.view(message, record, actor) };
     });
   }
   escalate(id: string, input: QuestionMutationInput, sender: SendMessageInput['sender'], sourceTurnId?: string) {
