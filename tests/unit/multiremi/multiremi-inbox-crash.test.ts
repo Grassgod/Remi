@@ -67,7 +67,7 @@ for (const backend of ["SQLite", "PostgreSQL"] as const) {
     function envelopes(f: InboxFlowFixture) {
       return db.query("SELECT id, seq, body_md, metadata, to_agent_id FROM multiremi_conversation_log WHERE session_id = ? ORDER BY seq")
         .all(f.issueSessionId).map(row => ({ ...row, metadata: JSON.parse(String(row.metadata)) }))
-        .filter(row => row.to_agent_id === f.agentId);
+        .filter(row => row.to_agent_id === f.agentId && !f.preparedMessageIds?.includes(String(row.id)));
     }
     function spawn(f: InboxFlowFixture, phase: string, ordinal = 0) {
       const file = join(directory, `fixture-${ordinal}.json`);
@@ -101,6 +101,8 @@ for (const backend of ["SQLite", "PostgreSQL"] as const) {
         it(`${scenario}: state and wake survive together at ${phase}`, async () => {
           const f = inboxFlowFixture(store, scenario);
           const initialStatus = inboxFlowStatus(store, f);
+          const initialSystemCommentIds=store.listIssueComments(f.targetIssueId).filter(comment=>comment.authorType==='system').map(comment=>comment.id);
+          const initialQuestionStatus = scenario === 'e4' ? store.getQuestion(f.decisionId!)!.status : null;
           const { child } = spawn(f, phase);
           await waitPhase(child, "ready");
           child.stdin.write("run");
@@ -150,7 +152,7 @@ for (const backend of ["SQLite", "PostgreSQL"] as const) {
           expect(inboxFlowStatus(store, f)).toBe(committed ? finalStatus : initialStatus);
           expect(queued(f)).toHaveLength(committed ? 1 : 0);
           expect(envelopes(f)).toHaveLength(committed ? 1 : 0);
-          expect(store.listIssueComments(f.targetIssueId).filter(comment => comment.authorType === "system"))
+          expect(store.listIssueComments(f.targetIssueId).filter(comment => comment.authorType === "system" && !initialSystemCommentIds.includes(comment.id)))
             .toHaveLength(committed ? 1 : 0);
           if (committed) {
             const taskId = queued(f)[0]!.id;

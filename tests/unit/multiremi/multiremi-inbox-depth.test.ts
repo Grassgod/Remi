@@ -7,6 +7,7 @@ pendingTurnBackendTests("D1 inbox transaction depth", fixture => {
     it(`${scenario}: commits the status, envelope and wake in one transaction without nesting`, () => {
       const { db, store } = fixture();
       const flow = inboxFlowFixture(store, scenario);
+      const initialSystemCommentIds=store.listIssueComments(flow.targetIssueId).filter(comment=>comment.authorType==='system').map(comment=>comment.id);
       const transaction = db.transaction.bind(db);
       const run = db.run.bind(db);
       let depth = 0;
@@ -48,7 +49,7 @@ pendingTurnBackendTests("D1 inbox transaction depth", fixture => {
       }
       const tasks = store.listTasksForIssue(flow.targetIssueId).filter(task => task.status === "queued");
       expect(tasks).toHaveLength(1);
-      const comments = store.listIssueComments(flow.targetIssueId).filter(comment => comment.authorType === "system");
+      const comments = store.listIssueComments(flow.targetIssueId).filter(comment => comment.authorType === "system" && !initialSystemCommentIds.includes(comment.id));
       expect(comments).toHaveLength(1);
       const entry = store.getConversationLogEntryById(comments[0]!.id)!;
       expect(store.getMessage(entry.id)).toMatchObject({sender_type:'platform',to_agent_id:flow.agentId,wake_applied:'now'});
