@@ -28,6 +28,7 @@ interface QuestionRecord {
   status: QuestionView['status'];
   summary: QuestionView['summary'];
   summary_wait_until?: string | null;
+  presentation_session_id?: string | null;
   answer: QuestionAnswer | null;
   answer_revision: number;
   history: QuestionHistoryEvent[];
@@ -298,7 +299,22 @@ export class Questions {
       const remi = bot?.agentId ? this.ctx.agents().getAgent(bot.agentId) : null;
       if (remi && !remi.archivedAt && remi.workspaceId === record.workspace_id && remi.id !== message.sender_id) {
         record.summary_wait_until = new Date(Date.now() + 60_000).toISOString();
-        sendMessageWithinTransaction(this.ctx, { session_id: session, sender: { type: 'platform', id: null }, to: { type: 'agent', ref: remi.id }, message_kind: 'request', wake_requested: 'now',
+        let presentationSession = session;
+        if (!step.issue_id) {
+          // A Chat execution lane belongs to its configured Agent. Remi gets a
+          // notification Chat, while root_question_id keeps the original Q.
+          const human = this.ctx.workspaces().getWorkspaceMember(step.handler.id);
+          if (!human || human.archivedAt || human.workspaceId !== record.workspace_id) return;
+          const creator = human.userId ?? human.id;
+          const existing = record.presentation_session_id ? this.ctx.chat().getChatSession(record.presentation_session_id) : null;
+          const chat = existing?.status === 'active' && existing.workspaceId === record.workspace_id
+            && existing.agentId === remi.id && existing.creatorId === creator ? existing
+            : this.ctx.chat().createChatSessionWithinTransaction({ workspaceId: record.workspace_id, agentId: remi.id,
+              creatorId: creator, title: `原问题 ${message.id} 呈现` });
+          presentationSession = chat.id;
+          record.presentation_session_id = chat.id;
+        }
+        sendMessageWithinTransaction(this.ctx, { session_id: presentationSession, sender: { type: 'platform', id: null }, to: { type: 'agent', ref: remi.id }, message_kind: 'request', wake_requested: 'now',
           dedupe_key: `question-present:${message.id}:${record.route_revision}`, metadata: { root_question_id: message.id, question_route_revision: record.route_revision, question_present_request: true },
           body_md: `请读取原问题 ${message.id}（remi message question get ${message.id}），总结背景、原选项与建议，然后用 remi message question present ${message.id} --revision ${record.route_revision} --summary <总结> 呈现同一个问题。指定人类责任人 ${step.handler.id}；不要另建 AUQ，也不要代答批准。` }, events);
       } else record.summary_wait_until = null;

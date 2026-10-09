@@ -2967,24 +2967,43 @@ export class FeishuBotRepo {
     if (!primary || !task) return;
     const terminal = ['completed', 'failed', 'cancelled'].includes(task.status);
     const insert = (kind: string, unit: string, body: string, previous: string | null = null,
-      requestId: string | null = null, target: string | null = null) => {
+      requestId: string | null = null, target: string | null = null,
+      questionRecipient?: DecisionRecipientResolution) => {
+      const recipient = questionRecipient?.kind === 'resolved' ? questionRecipient.openId : questionRecipient ? null : primary.interaction_open_id;
+      const degraded = questionRecipient?.kind === 'degraded' ? questionRecipient.reason : null;
+      const mention = questionRecipient ? recipient ? toJson({ mode: 'person', openId: recipient, resolvedOpenId: recipient }) : toJson({ mode: 'none' }) : primary.mention_snapshot;
       const id = createId('fbo');
       this.ctx.db.run(`INSERT INTO multiremi_feishu_bot_outbound_deliveries
         (id, workspace_id, binding_id, task_id, chat_id, thread_id, reply_to_message_id, body,
          kind, unit_key, cascade_failure, delivery_mode, previous_delivery_id, human_request_id,
-         human_request_task_id, target_message_id, mention_snapshot, interaction_open_id,
+         human_request_task_id, target_message_id, mention_snapshot, interaction_open_id, degraded,
          status, available_at, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 'split', ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 'split', ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)
         ON CONFLICT DO NOTHING`, [id, task.workspaceId, primary.binding_id, taskId, primary.chat_id,
           primary.thread_id, primary.reply_to_message_id, body, kind, unit, previous, requestId,
-          requestId ? taskId : null, target, primary.mention_snapshot, primary.interaction_open_id, now, now, now]);
+          requestId ? taskId : null, target, mention, recipient, degraded, now, now, now]);
       return this.ctx.db.query(`SELECT id FROM multiremi_feishu_bot_outbound_deliveries
         WHERE task_id = ? AND kind = ? AND unit_key = ?`).get(taskId, kind, unit) as { id: string };
     };
     for (const request of this.ctx.tasks().listTaskHumanRequests(taskId)) {
       if (terminal || request.status !== 'pending') continue;
-      insert('interaction_card', request.id, toJson({ agentName: this.ctx.agents().getAgent(task.agentId)?.name,
-        sessionId: task.sessionId }), null, request.id);
+      const question = new Questions(this.ctx).get(request.id);
+      if (question) {
+        if (question.status !== 'pending' || question.stage !== 'human') continue;
+        const deadline = typeof request.payload.question_summary_wait_until === 'string' ? Date.parse(request.payload.question_summary_wait_until) : 0;
+        if (!question.summary && Date.now() < deadline) continue;
+        const config = this.getConfig(task.workspaceId);
+        const recipient: DecisionRecipientResolution = config ? this.questionRecipient(request.id, config.appId, task.workspaceId)
+          : { kind: 'degraded', reason: 'unresolved_recipient', degraded: true };
+        const fallback = decisionCardTextBody({ request, workspaceSlug: this.ctx.workspaces().getWorkspace(task.workspaceId)?.slug,
+          chatSessionId: task.chatSessionId });
+        insert('interaction_card', `question:${request.id}:${question.route_revision}:${question.summary?.at ?? 'original'}`,
+          toJson({ agentName: this.ctx.agents().getAgent(task.agentId)?.name, sessionId: task.sessionId,
+            routeRevision: question.route_revision, fallbackText: fallback }), null, request.id, null, recipient);
+      } else {
+        insert('interaction_card', request.id, toJson({ agentName: this.ctx.agents().getAgent(task.agentId)?.name,
+          sessionId: task.sessionId }), null, request.id);
+      }
     }
     let resultId: string | null = null;
     if (terminal) {
@@ -4446,7 +4465,8 @@ export function resolveDecisionRecipient(topics: IssueTopicConfig): DecisionReci
  * to the parent Issue's web workbench.
  */
 export function decisionCardTextBody(input: {
-  issue: Pick<MultiremiIssue, "id" | "key" | "title">;
+  issue?: Pick<MultiremiIssue, "id" | "key" | "title">;
+  chatSessionId?: string | null;
   workspaceSlug?: string | null;
   publicUrl?: string | null;
   request: MultiremiTaskHumanRequest;
@@ -4454,7 +4474,7 @@ export function decisionCardTextBody(input: {
   const { issue, request } = input;
   const payload = request.payload ?? {};
   const lines = [
-    `**${issue.key} - ${issue.title}**`,
+    issue ? `**${issue.key} - ${issue.title}**` : "**原会话问题**",
     "",
     request.kind === "permission"
       ? "任务在等你确认一项操作，需要你在 Remi 里点一下。"
@@ -4482,17 +4502,19 @@ export function decisionCardTextBody(input: {
     });
   }
   const options = Array.isArray(payload.options) ? payload.options : [];
-  if (options.length) {
-    const title = String((payload.tool_call as Record<string, unknown> | undefined)?.title ?? "操作审批");
+  if (options.length && (request.kind === 'permission' || !questions.length)) {
+    const title = String((payload.tool_call as Record<string, unknown> | undefined)?.title ?? (request.kind === 'permission' ? "操作审批" : "选项"));
     lines.push("", `**${title}**`);
     options.forEach((option, index) => {
       const item = (option ?? {}) as Record<string, unknown>;
-      lines.push(`${index + 1}. ${String(item.name ?? item.optionId ?? item.option_id ?? "选项")}`);
+      lines.push(`${index + 1}. ${String(item.name ?? item.label ?? item.value ?? item.optionId ?? item.option_id ?? "选项")}`);
     });
   }
-  const link = issueWebUrl(input);
+  const base = cleanOptionalString(input.publicUrl ?? process.env.MULTIREMI_PUBLIC_URL)?.replace(/\/+$/, '');
+  const link = issue ? issueWebUrl({ ...input, issue }) : base && input.chatSessionId
+    ? `${base}${input.workspaceSlug ? `/${encodeURIComponent(input.workspaceSlug)}` : ''}/chat?session=${encodeURIComponent(input.chatSessionId)}` : null;
   lines.push("", link
-    ? `请在 Remi 工作台处理：[${issue.key}](${link})`
+    ? `请在 Remi 工作台处理：[${issue?.key ?? '原会话'}](${link})`
     : "请在 Remi 工作台处理此请求。");
   return lines.join("\n");
 }
