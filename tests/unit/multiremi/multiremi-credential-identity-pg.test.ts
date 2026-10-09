@@ -223,10 +223,11 @@ describe.skipIf(!pgAvailable)("MUL-448 credential identity on PostgreSQL", () =>
     expect(recorded[0]!.actorId).toBe(fixture.leaderId);
   });
 
-  it("B3/B4: forged source lineage is dropped and no creator is stamped", async () => {
+  it("B3/B4: forged lineage and creator are dropped while the authenticated human is recorded", async () => {
     const fixture = await freshFixture();
     const intake = createResponsibleTestIssue(store, {
       title: "MUL448 R2 PG intake", issueKind: "intake", workspaceId: fixture.workspaceId,
+      responsibleMemberId: fixture.memberId, assigneeType: "agent", assigneeId: fixture.agentId,
     });
     const generatedTitle = "MUL448 R2 PG execution";
 
@@ -240,8 +241,12 @@ describe.skipIf(!pgAvailable)("MUL-448 credential identity on PostgreSQL", () =>
       const body = (await decoy.json()) as any;
       const decoyIssue = store.getIssue(body.id ?? body.issue?.id)!;
       expect(decoyIssue.sourceIssueId, spelling).toBeNull();
-      expect(decoyIssue.createdBy, spelling).toBeNull();
-      expect(store.listIssueSubscribers(decoyIssue.id), spelling).toHaveLength(0);
+      expect(decoyIssue.createdBy, spelling).toBe(fixture.ownerId);
+      expect(decoyIssue.createdBy, spelling).not.toBe("someone-else");
+      expect(decoyIssue.responsibleMemberId, spelling).toBe(fixture.memberId);
+      const subscribers = store.listIssueSubscribers(decoyIssue.id);
+      expect(subscribers, spelling).toHaveLength(1);
+      expect(subscribers[0]!.memberId, spelling).toBe(fixture.memberId);
     }
 
     const nativeIntake = await fixture.app.request("/api/multiremi/issues", {
