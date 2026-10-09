@@ -1,5 +1,7 @@
 import { createResponsibleTestAutopilot } from './helpers.js';
 import { createResponsibleTestIssue } from './helpers.js';
+import { acceptTestIssueDelivery, prepareTestIssueDelivery, seedHistoricalIssueFacts } from './helpers.js';
+import type { CreateIssueInput } from '@multiremi/contracts/types.js';
 import { issueMessagesPath, requestMessageBody, taskRequestPath } from "./unified-test-paths.js";
 // MUL-400 S2 (E3): sibling dependencies actually hold and release work.
 //
@@ -23,6 +25,24 @@ afterEach(() => {
 });
 
 type Store = ReturnType<typeof createStore>;
+
+/** An explicit executable prerequisite, isolated from the dependent's host. */
+function createDependencyPrerequisite(store: Store, input: CreateIssueInput) {
+  if (input.assigneeType || input.assignee_type) return createResponsibleTestIssue(store, input);
+  const workspaceId = input.workspaceId ?? input.workspace_id ?? 'local';
+  const owner = store.createAgent({ name: 'Dependency prerequisite executor', provider: 'codex', workspaceId });
+  return createResponsibleTestIssue(store, { ...input, assigneeType: 'agent', assigneeId: owner.id });
+}
+
+/** Preserve already-closed or member-assigned legacy facts as an explicit snapshot. */
+function createHistoricalDependencyIssue(store: Store, input: CreateIssueInput) {
+  const { status, assigneeType, assigneeId, ...current } = input;
+  const member = assigneeType === 'member';
+  const issue = createResponsibleTestIssue(store, { ...current,
+    ...(member ? {} : { assigneeType, assigneeId }), ...(status === 'done' ? {} : { status }) });
+  return seedHistoricalIssueFacts(store, issue.id, {
+    ...(member ? { assigneeType, assigneeId } : {}), ...(status === 'done' ? { status } : {}) });
+}
 
 function activityOf(store: Store, issueId: string, type: string): Array<{ body: string | null; data: Record<string, unknown> | null }> {
   return store.listIssueActivity(issueId)
@@ -69,7 +89,7 @@ function storeWithAgent(name = "Owner") {
 describe("MUL-452 E3 replay", () => {
   function chain() {
     const { store, agent } = storeWithAgent("Replay owner");
-    const prerequisite = createResponsibleTestIssue(store, { title: "Replay prerequisite", status: "in_progress" });
+    const prerequisite = createDependencyPrerequisite(store, { title: "Replay prerequisite", status: "in_progress" });
     const dependent = createResponsibleTestIssue(store, {
       title: "Replay dependent", status: "backlog", blockedBy: [prerequisite.id],
       assigneeType: "agent", assigneeId: agent.id,
@@ -102,7 +122,7 @@ describe("MUL-452 E3 replay", () => {
   function commitWithoutHooks(store: Store, issueId: string) {
     const hook = spyOn(issues(store), "runIssueUpdatePostCommit").mockImplementation(() => {});
     try {
-      store.updateIssue(issueId, { status: "done" });
+      acceptTestIssueDelivery(store, issueId);
     } finally {
       hook.mockRestore();
     }
@@ -111,12 +131,17 @@ describe("MUL-452 E3 replay", () => {
 
   it("U1 commits a delayed check only for done and never for the auto-start's todo", () => {
     const { store, prerequisite, dependent } = chain();
-    store.updateIssue(prerequisite.id, { status: "done" });
+    const prepared = prepareTestIssueDelivery(store, prerequisite.id);
+    const existingIds = new Set((db!.query("SELECT id FROM multiremi_system_events WHERE resource_id = ?")
+      .all(prerequisite.id) as Array<{ id: string }>).map(row => row.id));
+    store.respondIssueDelivery(prerequisite.id, prepared.delivery.id,
+      { action: 'accept', revision: prepared.delivery.responsibilityRevision }, prepared.actor);
     const rows = db!.query(
       "SELECT id FROM multiremi_system_events WHERE resource_id = ?",
     ).all(prerequisite.id) as Array<{ id: string }>;
-    expect(rows).toHaveLength(2);
-    const events = rows.map(({ id }) => store.getSystemEvent(id)!);
+    const acceptanceRows = rows.filter(row => !existingIds.has(row.id));
+    expect(acceptanceRows).toHaveLength(2);
+    const events = acceptanceRows.map(({ id }) => store.getSystemEvent(id)!);
     const check = events.find((event) => event.event === "dependency_auto_start_check")!;
     const status = events.find((event) => event.event === "status_changed")!;
     expect(Date.parse(check.availableAt) - Date.parse(check.createdAt)).toBe(DEPENDENCY_AUTO_START_REPLAY_DELAY_MS);
@@ -128,17 +153,17 @@ describe("MUL-452 E3 replay", () => {
     expect(db!.query("SELECT event FROM multiremi_system_events WHERE resource_id = ?").all(dependent.id))
       .toEqual([{ event: "status_changed" }]);
     store.updateIssue(prerequisite.id, { status: "in_review" });
-    expect(db!.query("SELECT event FROM multiremi_system_events WHERE resource_id = ? AND event = 'status_changed'")
-      .all(prerequisite.id)).toHaveLength(2);
+    expect(db!.query("SELECT id FROM multiremi_system_events WHERE resource_id = ? AND event = 'status_changed'")
+      .all(prerequisite.id).filter(row => !existingIds.has((row as {id:string}).id))).toHaveLength(2);
     expect(db!.query("SELECT event FROM multiremi_system_events WHERE resource_id = ? AND event = 'dependency_auto_start_check'")
       .all(prerequisite.id)).toHaveLength(1);
     store.dispatchPendingSystemEvents(new Date(Date.parse(check.availableAt) - 1));
     expect(store.getSystemEvent(check.id)?.status).toBe("pending");
   });
 
-  it("U1 writes the check with source-task lineage when task completion makes an intake done", () => {
+  it("U1 writes the check with intake source-task lineage after explicit proxy acceptance", () => {
     const { store, runtime, agent } = storeWithAgent("Intake replay owner");
-    const prerequisite = createResponsibleTestIssue(store, { title: "Intake prerequisite", status: "todo", issueKind: "intake" });
+    const prerequisite = createDependencyPrerequisite(store, { title: "Intake prerequisite", status: "todo", issueKind: "intake", assigneeType:'agent', assigneeId:agent.id });
     createResponsibleTestIssue(store, { title: "Generated work", sourceIssueId: prerequisite.id });
     const dependent = createResponsibleTestIssue(store, {
       title: "Intake dependent", status: "backlog", blockedBy: [prerequisite.id],
@@ -149,6 +174,14 @@ describe("MUL-452 E3 replay", () => {
     store.startTask(task.id);
     const hooks = spyOn(store, "runCollectedChildStatusChanges").mockImplementation(() => {});
     try { store.completeTask(task.id, { output: "Generated work" }); } finally { hooks.mockRestore(); }
+    expect(store.getIssue(prerequisite.id)?.status).toBe('in_review');
+    const source = {type:'agent' as const,id:agent.id,taskId:task.id};
+    const delivery = store.submitIssueDelivery(prerequisite.id,{summary:'Generated intake work'},source);
+    store.authorizeIssueDelivery(prerequisite.id,delivery.id,agent.id,delivery.responsibilityRevision,
+      {type:'member',id:store.resolveIssueResponsibility(prerequisite.id).rootHuman!.id});
+    const acceptanceHook = spyOn(issues(store),'runIssueUpdatePostCommit').mockImplementation(() => {});
+    try { store.respondIssueDelivery(prerequisite.id,delivery.id,{action:'accept',revision:delivery.responsibilityRevision},source); }
+    finally { acceptanceHook.mockRestore(); }
     expect(store.getIssue(prerequisite.id)?.status).toBe("done");
     const check = checkEvent(store, prerequisite.id);
     expect(check.payload.automation_source_task_id).toBe(task.id);
@@ -164,9 +197,9 @@ describe("MUL-452 E3 replay", () => {
       .toMatchObject({ dependency_check_event_id: check.id });
   });
 
-  it("U1 passes the task-terminal check id to the normal post-commit start", () => {
+  it("U1 passes the completed intake acceptance check id to the normal post-commit start", () => {
     const { store, runtime, agent } = storeWithAgent("Terminal check owner");
-    const prerequisite = createResponsibleTestIssue(store, { title: "Terminal check prerequisite", status: "todo", issueKind: "intake" });
+    const prerequisite = createDependencyPrerequisite(store, { title: "Terminal check prerequisite", status: "todo", issueKind: "intake", assigneeType:'agent', assigneeId:agent.id });
     createResponsibleTestIssue(store, { title: "Terminal generated work", sourceIssueId: prerequisite.id });
     const dependent = createResponsibleTestIssue(store, { title: "Terminal check dependent", status: "backlog",
       blockedBy: [prerequisite.id], assigneeType: "agent", assigneeId: agent.id });
@@ -174,6 +207,12 @@ describe("MUL-452 E3 replay", () => {
     expect(store.claimTask(runtime.id)?.id).toBe(task.id);
     store.startTask(task.id);
     store.completeTask(task.id, { output: "Generated work" });
+    expect(store.getIssue(prerequisite.id)?.status).toBe('in_review');
+    const source = {type:'agent' as const,id:agent.id,taskId:task.id};
+    const delivery = store.submitIssueDelivery(prerequisite.id,{summary:'Generated intake work'},source);
+    store.authorizeIssueDelivery(prerequisite.id,delivery.id,agent.id,delivery.responsibilityRevision,
+      {type:'member',id:store.resolveIssueResponsibility(prerequisite.id).rootHuman!.id});
+    store.respondIssueDelivery(prerequisite.id,delivery.id,{action:'accept',revision:delivery.responsibilityRevision},source);
 
     const check = checkEvent(store, prerequisite.id);
     expect(store.getIssue(prerequisite.id)?.status).toBe("done");
@@ -187,6 +226,8 @@ describe("MUL-452 E3 replay", () => {
 
   it("U1 rolls back done and both outbox rows if writing the delayed check fails", () => {
     const { store, prerequisite } = chain();
+    const prepared = prepareTestIssueDelivery(store, prerequisite.id);
+    const before = { issue: store.getIssue(prerequisite.id), events: db!.query("SELECT id FROM multiremi_system_events WHERE resource_id = ?").all(prerequisite.id) };
     const run = db!.run.bind(db!);
     const failure = spyOn(db!, "run").mockImplementation((sql, ...args) => {
       if (sql.includes("INSERT INTO multiremi_system_events") && sql.includes("'dependency_auto_start_check'")) {
@@ -195,12 +236,13 @@ describe("MUL-452 E3 replay", () => {
       return run(sql, ...args);
     });
     try {
-      expect(() => store.updateIssue(prerequisite.id, { status: "done" })).toThrow("delayed check insert failure");
+      expect(() => store.respondIssueDelivery(prerequisite.id, prepared.delivery.id,
+        { action: 'accept', revision: prepared.delivery.responsibilityRevision }, prepared.actor)).toThrow("delayed check insert failure");
     } finally {
       failure.mockRestore();
     }
-    expect(store.getIssue(prerequisite.id)?.status).toBe("in_progress");
-    expect(db!.query("SELECT id FROM multiremi_system_events WHERE resource_id = ?").all(prerequisite.id)).toEqual([]);
+    expect({ issue: store.getIssue(prerequisite.id), events: db!.query("SELECT id FROM multiremi_system_events WHERE resource_id = ?").all(prerequisite.id) }).toEqual(before);
+    expect(store.listIssueDeliveries(prerequisite.id)[0]?.status).toBe('pending');
   });
 
   it.each(["todo", "reassign", "cancel"])("U2 leaves human-handled dependents unchanged: %s", (action) => {
@@ -225,7 +267,7 @@ describe("MUL-452 E3 replay", () => {
     const attempts = spyOn(issues(store) as unknown as { autoStartDependent(...args: unknown[]): unknown }, "autoStartDependent");
     try {
       if (missingHooks) commitWithoutHooks(store, prerequisite.id);
-      else store.updateIssue(prerequisite.id, { status: "done" });
+      else acceptTestIssueDelivery(store, prerequisite.id);
       const check = checkEvent(store, prerequisite.id);
       store.dispatchPendingSystemEvents(new Date(check.availableAt));
       // Re-run the same event to exercise the skip guard even after a lease loss.
@@ -243,7 +285,7 @@ describe("MUL-452 E3 replay", () => {
 
   it("U8 ignores a stale backlog issue after its round was already queued", () => {
     const { store, prerequisite, dependent } = chain();
-    store.updateIssue(prerequisite.id, { status: "done" });
+    acceptTestIssueDelivery(store, prerequisite.id);
     expect(store.getIssue(dependent.id)?.status).toBe("todo");
     const before = allTaskRows(store, dependent.id);
     expect(before).toHaveLength(1);
@@ -264,7 +306,7 @@ describe("MUL-452 E3 replay", () => {
       const base = Date.parse("2028-01-01T00:00:00.000Z");
       setSystemTime(new Date(base + (timing === "slower process" ? 60_000 : 0)));
       db!.run("UPDATE multiremi_agents SET archived_at = ? WHERE id = ?", [new Date().toISOString(), agent.id]);
-      store.updateIssue(prerequisite.id, { status: "done" });
+      acceptTestIssueDelivery(store, prerequisite.id);
       const oldCheck = checkEvent(store, prerequisite.id);
       expect(allActivityRows(store, dependent.id, "dependency_auto_start_skipped")).toHaveLength(1);
       expect(allActivityRows(store, dependent.id, "dependency_auto_start_skipped")[0]?.data)
@@ -274,7 +316,7 @@ describe("MUL-452 E3 replay", () => {
       store.updateIssue(prerequisite.id, { status: "in_progress" });
       db!.run("UPDATE multiremi_agents SET archived_at = NULL WHERE id = ?", [agent.id]);
       setSystemTime(new Date(base + (timing === "later" || timing === "slower process" ? 2_000 : 0)));
-      store.updateIssue(prerequisite.id, { status: "done" });
+      acceptTestIssueDelivery(store, prerequisite.id);
       const checks = checkEvents(store, prerequisite.id);
       expect(checks).toHaveLength(2);
       const nextCheck = checks.find((event) => event.id !== oldCheck.id)!;
@@ -391,10 +433,10 @@ describe("MUL-452 E3 replay", () => {
   it("U4 never replays member/unowned readiness, E2 or prerequisite-failure notifications", () => {
     const { store, agent } = storeWithAgent("Notification owner");
     const parent = createResponsibleTestIssue(store, { title: "Parent", status: "in_progress", assigneeType: "agent", assigneeId: agent.id });
-    const prerequisite = createResponsibleTestIssue(store, { title: "Prerequisite", status: "in_progress", parentIssueId: parent.id });
+    const prerequisite = createDependencyPrerequisite(store, { title: "Prerequisite", status: "in_progress", parentIssueId: parent.id });
     const member = store.listWorkspaceMembers("local")[0]!;
     for (const owned of [false, true]) {
-      createResponsibleTestIssue(store, {
+      createHistoricalDependencyIssue(store, {
         title: owned ? "Member owned" : "Unowned", status: "backlog", blockedBy: [prerequisite.id],
         ...(owned ? { assigneeType: "member" as const, assigneeId: member.id } : {}),
       });
@@ -506,7 +548,7 @@ describe("MUL-400 E3 — dependency semantics", () => {
    */
   it("reads a legacy blocks row as (waiter blocked_by prerequisite)", () => {
     const store = createStore();
-    const prerequisite = createResponsibleTestIssue(store, { title: "Prerequisite", status: "in_progress" });
+    const prerequisite = createDependencyPrerequisite(store, { title: "Prerequisite", status: "in_progress" });
     const waiter = createResponsibleTestIssue(store, { title: "Waiter", status: "backlog" });
     db!.run(
       `INSERT INTO multiremi_issue_dependencies (id, workspace_id, issue_id, depends_on_issue_id, type, created_at)
@@ -551,7 +593,7 @@ describe("MUL-400 E3 — dependency semantics", () => {
 
   it("treats only done as satisfied and reports the unmet list", () => {
     const store = createStore();
-    const prereq = createResponsibleTestIssue(store, { title: "Prerequisite" });
+    const prereq = createDependencyPrerequisite(store, { title: "Prerequisite" });
     const dependent = createResponsibleTestIssue(store, { title: "Dependent", status: "backlog" });
     store.createIssueDependency(dependent.id, { dependsOnIssueId: prereq.id, type: "blocked_by" });
 
@@ -560,7 +602,8 @@ describe("MUL-400 E3 — dependency semantics", () => {
       store.updateIssue(prereq.id, { status: unmet });
       expect(store.listUnmetPrerequisites(dependent.id)).toHaveLength(1);
     }
-    store.updateIssue(prereq.id, { status: "done" });
+    store.updateIssue(prereq.id, { status: 'in_progress' });
+    acceptTestIssueDelivery(store, prereq.id);
     expect(store.listUnmetPrerequisites(dependent.id)).toEqual([]);
     expect(store.getIssueWaitingOn(dependent.id)).toMatchObject({ unmet: [] });
     expect(store.getIssueWaitingOn(dependent.id).prerequisites).toHaveLength(1);
@@ -603,7 +646,7 @@ describe("MUL-400 E3 — dependency semantics", () => {
 describe("MUL-400 E3 — gate", () => {
   it("records the assignee without dispatching while a prerequisite is open", () => {
     const { store, agent } = storeWithAgent();
-    const prereq = createResponsibleTestIssue(store, { title: "Prerequisite", status: "in_progress" });
+    const prereq = createDependencyPrerequisite(store, { title: "Prerequisite", status: "in_progress" });
     const dependent = createResponsibleTestIssue(store, { title: "Dependent", status: "backlog" });
     store.createIssueDependency(dependent.id, { dependsOnIssueId: prereq.id, type: "blocked_by" });
 
@@ -618,7 +661,7 @@ describe("MUL-400 E3 — gate", () => {
 
   it("answers 409 on backlog -> todo and lets a member force past it", () => {
     const store = createStore();
-    const prereq = createResponsibleTestIssue(store, { title: "Prerequisite", status: "in_progress" });
+    const prereq = createDependencyPrerequisite(store, { title: "Prerequisite", status: "in_progress" });
     const dependent = createResponsibleTestIssue(store, { title: "Dependent", status: "backlog" });
     store.createIssueDependency(dependent.id, { dependsOnIssueId: prereq.id, type: "blocked_by" });
 
@@ -643,7 +686,7 @@ describe("MUL-400 E3 — gate", () => {
     const { store, agent } = storeWithAgent();
     const squad = store.createSquad({ name: "Force squad", workspaceId: "local", leaderId: agent.id });
     const ownerId = ownerKind === "agent" ? agent.id : squad.id;
-    const prereq = createResponsibleTestIssue(store, { title: "Prerequisite", status: "in_progress" });
+    const prereq = createDependencyPrerequisite(store, { title: "Prerequisite", status: "in_progress" });
     const dependent = createResponsibleTestIssue(store, {
       title: "Dependent",
       status: "backlog",
@@ -668,7 +711,7 @@ describe("MUL-400 E3 — gate", () => {
 
   it("creates only one round when the same issue is forced twice", () => {
     const { store, agent } = storeWithAgent();
-    const prereq = createResponsibleTestIssue(store, { title: "Prerequisite", status: "in_progress" });
+    const prereq = createDependencyPrerequisite(store, { title: "Prerequisite", status: "in_progress" });
     const dependent = createResponsibleTestIssue(store, {
       title: "Dependent",
       status: "backlog",
@@ -694,7 +737,7 @@ describe("MUL-400 E3 — gate", () => {
 
   it("does not dispatch a second round when a forced issue's prerequisite later finishes", () => {
     const { store, agent } = storeWithAgent();
-    const prereq = createResponsibleTestIssue(store, { title: "Prerequisite", status: "in_progress" });
+    const prereq = createDependencyPrerequisite(store, { title: "Prerequisite", status: "in_progress" });
     const dependent = createResponsibleTestIssue(store, {
       title: "Dependent",
       status: "backlog",
@@ -708,7 +751,7 @@ describe("MUL-400 E3 — gate", () => {
 
     // The prerequisite finishing only auto-starts issues still parked in
     // backlog; a forced one is already running and must keep its single round.
-    store.updateIssue(prereq.id, { status: "done" });
+    acceptTestIssueDelivery(store, prereq.id);
     expect(store.listTasksForIssue(dependent.id).filter((task) => task.status !== "cancelled")).toHaveLength(1);
     expect(activityOf(store, dependent.id, "dependency_auto_started")).toHaveLength(0);
   });
@@ -721,7 +764,7 @@ describe("MUL-400 E3 — gate", () => {
    */
   it("lets the same agent pick up a todo issue that carries an unmet prerequisite", () => {
     const { store, agent } = storeWithAgent();
-    const prereq = createResponsibleTestIssue(store, { title: "Prerequisite", status: "in_progress" });
+    const prereq = createDependencyPrerequisite(store, { title: "Prerequisite", status: "in_progress" });
     const dependent = createResponsibleTestIssue(store, {
       title: "Stranded",
       status: "backlog",
@@ -740,15 +783,15 @@ describe("MUL-400 E3 — gate", () => {
 
   it("parks a created issue in backlog when blocked_by is unmet", () => {
     const store = createStore();
-    const prereq = createResponsibleTestIssue(store, { title: "Prerequisite", status: "in_progress" });
+    const prereq = createDependencyPrerequisite(store, { title: "Prerequisite", status: "in_progress" });
     const dependent = createResponsibleTestIssue(store, { title: "Dependent", status: "todo", blockedBy: [prereq.key] });
     expect(dependent.status).toBe("backlog");
     expect(store.listUnmetPrerequisites(dependent.id).map((row) => row.key)).toEqual([prereq.key]);
     expect(activityOf(store, dependent.id, "dependency_waiting")).toHaveLength(1);
 
     // A satisfied prerequisite at creation time keeps the requested status.
-    const donePrereq = createResponsibleTestIssue(store, { title: "Already done" });
-    store.updateIssue(donePrereq.id, { status: "done" });
+    const donePrereq = createDependencyPrerequisite(store, { title: "Already done" });
+    acceptTestIssueDelivery(store, donePrereq.id);
     const started = createResponsibleTestIssue(store, { title: "Ready", status: "todo", blocked_by: [donePrereq.id] });
     expect(started.status).toBe("todo");
   });
@@ -794,14 +837,14 @@ describe("MUL-400 E3 — gate", () => {
     if (parent) expect(store.listChildIssues(parent.id).length).toBe(childrenBefore);
     expect((db!.query("SELECT COUNT(*) AS n FROM multiremi_issue_dependencies").get() as { n: number }).n)
       .toBe(dependenciesBefore);
-    expect(store.createIssue({ title: "After the rejection" }).key).toBe(nextKeyBefore);
+    expect(createResponsibleTestIssue(store, { title: "After the rejection" }).key).toBe(nextKeyBefore);
   });
 });
 
 describe("MUL-400 E3 — automatic start", () => {
   function chain() {
     const { store, runtime, agent } = storeWithAgent();
-    const prereq = createResponsibleTestIssue(store, { title: "Prerequisite", status: "in_progress", assigneeType: "agent", assigneeId: agent.id });
+    const prereq = createDependencyPrerequisite(store, { title: "Prerequisite", status: "in_progress", assigneeType: "agent", assigneeId: agent.id });
     const dependent = createResponsibleTestIssue(store, { title: "Dependent", status: "backlog", blockedBy: [prereq.id] });
     const task = store.createTask({ agentId: agent.id, issueId: prereq.id, prompt: "finish the prerequisite" });
     return { store, runtime, agent, prereq, dependent, task };
@@ -821,7 +864,7 @@ describe("MUL-400 E3 — automatic start", () => {
 
     runTask(store, runtime.id, task.id);
     store.completeTask(task.id, { output: "prerequisite finished" });
-    store.updateIssue(prereq.id, { status: "done" });
+    acceptTestIssueDelivery(store, prereq.id);
 
     const started = store.getIssue(dependent.id)!;
     expect(started.status).toBe("todo");
@@ -834,14 +877,14 @@ describe("MUL-400 E3 — automatic start", () => {
   it("only reports for a member-owned dependent", () => {
     const { store, prereq } = chain();
     const member = store.getWorkspaceMember("mem_local") ?? store.listWorkspaceMembers("local")[0]!;
-    const dependent = createResponsibleTestIssue(store, {
+    const dependent = createHistoricalDependencyIssue(store, {
       title: "Human start",
       status: "backlog",
       blockedBy: [prereq.id],
       assigneeType: "member",
       assigneeId: member.id,
     });
-    store.updateIssue(prereq.id, { status: "done" });
+    acceptTestIssueDelivery(store, prereq.id);
 
     expect(store.getIssue(dependent.id)!.status).toBe("backlog");
     expect(activityOf(store, dependent.id, "dependency_auto_started")).toHaveLength(0);
@@ -858,8 +901,8 @@ describe("MUL-400 E3 — automatic start", () => {
     const { store, agent } = storeWithAgent();
     const member = store.listWorkspaceMembers("local")[0]!;
     const parent = createResponsibleTestIssue(store, { title: "Parent", status: "in_progress", assigneeType: "agent", assigneeId: agent.id });
-    const prerequisite = createResponsibleTestIssue(store, { title: "Prerequisite", status: "in_progress", parentIssueId: parent.id });
-    const dependent = createResponsibleTestIssue(store, {
+    const prerequisite = createDependencyPrerequisite(store, { title: "Prerequisite", status: "in_progress", parentIssueId: parent.id });
+    const dependent = createHistoricalDependencyIssue(store, {
       title: "Human-owned sibling",
       status: "backlog",
       parentIssueId: parent.id,
@@ -868,15 +911,15 @@ describe("MUL-400 E3 — automatic start", () => {
       assigneeId: member.id,
     });
 
-    store.updateIssue(prerequisite.id, { status: "done" });
+    acceptTestIssueDelivery(store, prerequisite.id);
 
     // Exactly one round: the E2 report for the prerequisite, not one per report.
     const rounds = store.listTasksForIssue(parent.id).filter((task) => task.status !== "cancelled");
     expect(rounds).toHaveLength(1);
     expect(rounds[0]!.triggerCommentId).toBeTruthy();
-    const comment = store.getIssueComment(rounds[0]!.triggerCommentId!)!;
-    expect(comment.body).toContain(prerequisite.key);
-    expect(comment.body).toContain(dependent.key);
+    const report = inboxReportBody(store, rounds[0]!);
+    expect(report).toContain(prerequisite.key);
+    expect(report).toContain(dependent.key);
     // The dependent records the merge under the same activity type; the flag is
     // what distinguishes "folded into the prerequisite's report" from "reported
     // on its own".
@@ -891,8 +934,8 @@ describe("MUL-400 E3 — automatic start", () => {
     const member = store.listWorkspaceMembers("local")[0]!;
     const prerequisiteParent = createResponsibleTestIssue(store, { title: "Prerequisite parent", status: "in_progress", assigneeType: "agent", assigneeId: agent.id });
     const dependentParent = createResponsibleTestIssue(store, { title: "Dependent parent", status: "in_progress", assigneeType: "agent", assigneeId: agent.id });
-    const prerequisite = createResponsibleTestIssue(store, { title: "Prerequisite", status: "in_progress", parentIssueId: prerequisiteParent.id });
-    const dependent = createResponsibleTestIssue(store, {
+    const prerequisite = createDependencyPrerequisite(store, { title: "Prerequisite", status: "in_progress", parentIssueId: prerequisiteParent.id });
+    const dependent = createHistoricalDependencyIssue(store, {
       title: "Human-owned",
       status: "backlog",
       parentIssueId: dependentParent.id,
@@ -902,7 +945,7 @@ describe("MUL-400 E3 — automatic start", () => {
     });
 
     const before = store.listTasksForIssue(dependentParent.id).length;
-    store.updateIssue(prerequisite.id, { status: "done" });
+    acceptTestIssueDelivery(store, prerequisite.id);
 
     // No queued round on the dependent's parent, so none is created either.
     expect(store.listTasksForIssue(dependentParent.id).length).toBe(before);
@@ -916,8 +959,8 @@ describe("MUL-400 E3 — automatic start", () => {
     const prerequisiteParent = createResponsibleTestIssue(store, { title: "Prerequisite parent", status: "in_progress", assigneeType: "agent", assigneeId: agent.id });
     const dependentParent = createResponsibleTestIssue(store, { title: "Dependent parent", status: "in_progress", assigneeType: "agent", assigneeId: agent.id });
     const queued = store.createTask({ agentId: agent.id, issueId: dependentParent.id, prompt: "waiting round" });
-    const prerequisite = createResponsibleTestIssue(store, { title: "Prerequisite", status: "in_progress", parentIssueId: prerequisiteParent.id });
-    const dependent = createResponsibleTestIssue(store, {
+    const prerequisite = createDependencyPrerequisite(store, { title: "Prerequisite", status: "in_progress", parentIssueId: prerequisiteParent.id });
+    const dependent = createHistoricalDependencyIssue(store, {
       title: "Human-owned",
       status: "backlog",
       parentIssueId: dependentParent.id,
@@ -926,7 +969,7 @@ describe("MUL-400 E3 — automatic start", () => {
       assigneeId: member.id,
     });
 
-    store.updateIssue(prerequisite.id, { status: "done" });
+    acceptTestIssueDelivery(store, prerequisite.id);
 
     const rounds = store.listTasksForIssue(dependentParent.id).filter((task) => task.status !== "cancelled");
     expect(rounds).toHaveLength(1);
@@ -938,11 +981,11 @@ describe("MUL-400 E3 — automatic start", () => {
   it("is idempotent when the prerequisite is written done twice", () => {
     const { store, agent, prereq, dependent } = chain();
     store.assignIssue(dependent.id, { assigneeType: "agent", assigneeId: agent.id });
-    store.updateIssue(prereq.id, { status: "done" });
+    acceptTestIssueDelivery(store, prereq.id);
     const firstTasks = store.listTasksForIssue(dependent.id).length;
     // Re-enter done (in_review then done) and re-run the hook.
     store.updateIssue(prereq.id, { status: "in_review" });
-    store.updateIssue(prereq.id, { status: "done" });
+    acceptTestIssueDelivery(store, prereq.id);
     expect(activityOf(store, dependent.id, "dependency_auto_started")).toHaveLength(1);
     expect(store.listTasksForIssue(dependent.id).length).toBe(firstTasks);
   });
@@ -952,8 +995,8 @@ describe("MUL-400 E3 — prerequisite failure", () => {
   it("records the failure and reaches the dependent's owner with the three commands", () => {
     const { store, agent } = storeWithAgent();
     const member = store.getWorkspaceMember("mem_local") ?? store.listWorkspaceMembers("local")[0]!;
-    const prereq = createResponsibleTestIssue(store, { title: "Prerequisite", status: "in_progress", assigneeType: "agent", assigneeId: agent.id });
-    const dependent = createResponsibleTestIssue(store, {
+    const prereq = createDependencyPrerequisite(store, { title: "Prerequisite", status: "in_progress", assigneeType: "agent", assigneeId: agent.id });
+    const dependent = createHistoricalDependencyIssue(store, {
       title: "Dependent",
       status: "backlog",
       blockedBy: [prereq.id],
@@ -986,7 +1029,7 @@ describe("MUL-400 E3 — prerequisite failure", () => {
   it.each(["cancelled", "blocked"] as const)("reports a %s prerequisite for an unowned dependent with a parent", (terminal) => {
     const { store, agent } = storeWithAgent();
     const parent = createResponsibleTestIssue(store, { title: "Parent", status: "in_progress", assigneeType: "agent", assigneeId: agent.id });
-    const prereq = createResponsibleTestIssue(store, { title: "Prerequisite", status: "in_progress" });
+    const prereq = createDependencyPrerequisite(store, { title: "Prerequisite", status: "in_progress" });
     const dependent = createResponsibleTestIssue(store, { title: "Unowned", status: "backlog", parentIssueId: parent.id, blockedBy: [prereq.id] });
 
     store.updateIssue(prereq.id, { status: terminal });
@@ -1001,7 +1044,7 @@ describe("MUL-400 E3 — prerequisite failure", () => {
   it.each(["cancelled", "blocked"] as const)("reports a %s prerequisite to the subscribers of an unowned dependent with no parent", (terminal) => {
     const { store } = storeWithAgent();
     const member = store.listWorkspaceMembers("local")[0]!;
-    const prereq = createResponsibleTestIssue(store, { title: "Prerequisite", status: "in_progress" });
+    const prereq = createDependencyPrerequisite(store, { title: "Prerequisite", status: "in_progress" });
     const dependent = createResponsibleTestIssue(store, { title: "Unowned", status: "backlog", blockedBy: [prereq.id] });
     store.addIssueSubscriber(dependent.id, member.id, "manual");
 
@@ -1015,7 +1058,7 @@ describe("MUL-400 E3 — prerequisite failure", () => {
   it("folds the failure into the parent report when the dependent has a parent", () => {
     const { store, agent } = storeWithAgent();
     const parent = createResponsibleTestIssue(store, { title: "Parent", status: "in_progress", assigneeType: "agent", assigneeId: agent.id });
-    const prereq = createResponsibleTestIssue(store, { title: "Prerequisite", status: "in_progress" });
+    const prereq = createDependencyPrerequisite(store, { title: "Prerequisite", status: "in_progress" });
     const dependent = createResponsibleTestIssue(store, { title: "Dependent", status: "backlog", parentIssueId: parent.id, blockedBy: [prereq.id] });
 
     store.updateIssue(prereq.id, { status: "blocked" });
@@ -1032,7 +1075,7 @@ describe("MUL-400 E3 — surfaces", () => {
     const { store } = storeWithAgent();
     const app = createMultiremiApp({ store });
     const parent = createResponsibleTestIssue(store, { title: "Parent", status: "in_progress" });
-    const prereq = createResponsibleTestIssue(store, { title: "Prerequisite", status: "in_progress" });
+    const prereq = createDependencyPrerequisite(store, { title: "Prerequisite", status: "in_progress" });
     const waiting = createResponsibleTestIssue(store, { title: "Waiting", status: "backlog", parentIssueId: parent.id, blockedBy: [prereq.id] });
     const active = createResponsibleTestIssue(store, { title: "Active", status: "in_progress", parentIssueId: parent.id });
     createResponsibleTestIssue(store, { title: "Unscheduled backlog", status: "backlog", parentIssueId: parent.id });
@@ -1113,7 +1156,7 @@ describe("MUL-400 E3 — surfaces", () => {
   ])("ignores a body-supplied force on the assign route (%s)", async (_label, overrides) => {
     const { store, agent } = storeWithAgent();
     const app = createMultiremiApp({ store });
-    const prereq = createResponsibleTestIssue(store, { title: "Prerequisite", status: "in_progress" });
+    const prereq = createDependencyPrerequisite(store, { title: "Prerequisite", status: "in_progress" });
     const dependent = createResponsibleTestIssue(store, { title: "Dependent", status: "backlog", blockedBy: [prereq.id] });
     const camel = "assigneeType" in overrides;
     const body = camel
@@ -1140,7 +1183,7 @@ describe("MUL-400 E3 — surfaces", () => {
   it("keeps the PATCH status override as the only way across, with its audit record", async () => {
     const { store, agent } = storeWithAgent();
     const app = createMultiremiApp({ store });
-    const prereq = createResponsibleTestIssue(store, { title: "Prerequisite", status: "in_progress" });
+    const prereq = createDependencyPrerequisite(store, { title: "Prerequisite", status: "in_progress" });
     const dependent = createResponsibleTestIssue(store, {
       title: "Dependent",
       status: "backlog",
@@ -1164,7 +1207,7 @@ describe("MUL-400 E3 — surfaces", () => {
   it("reports dependencies_unmet on create instead of backlog_status", async () => {
     const { store, agent } = storeWithAgent();
     const app = createMultiremiApp({ store });
-    const prereq = createResponsibleTestIssue(store, { title: "Prerequisite", status: "in_progress" });
+    const prereq = createDependencyPrerequisite(store, { title: "Prerequisite", status: "in_progress" });
 
     const response = await app.request("/api/issues", {
       method: "POST",
@@ -1191,15 +1234,15 @@ describe("MUL-400 E3 — the kill switch", () => {
     process.env.MULTIREMI_DEPENDENCY_GATE = "off";
     try {
       const { store, agent } = storeWithAgent();
-      const prereq = createResponsibleTestIssue(store, { title: "Prerequisite", status: "in_progress" });
+      const prereq = createDependencyPrerequisite(store, { title: "Prerequisite", status: "in_progress" });
       const dependent = createResponsibleTestIssue(store, { title: "Dependent", status: "todo", blockedBy: [prereq.id] });
       expect(dependent.status).toBe("todo");
       const assigned = store.assignIssue(dependent.id, { assigneeType: "agent", assigneeId: agent.id });
       expect(assigned.task).not.toBeNull();
 
-      const other = createResponsibleTestIssue(store, { title: "Other", status: "in_progress" });
+      const other = createDependencyPrerequisite(store, { title: "Other", status: "in_progress" });
       const waiting = createResponsibleTestIssue(store, { title: "Waiting", status: "backlog", blockedBy: [other.id] });
-      store.updateIssue(other.id, { status: "done" });
+      acceptTestIssueDelivery(store, other.id);
       expect(store.getIssue(waiting.id)!.status).toBe("backlog");
       expect(activityOf(store, waiting.id, "dependency_auto_started")).toHaveLength(0);
     } finally {
@@ -1218,7 +1261,7 @@ describe("MUL-400 E3 — the kill switch", () => {
 describe("MUL-400 E3 — task-creation gate", () => {
   function parked() {
     const { store, runtime, agent } = storeWithAgent();
-    const prereq = createResponsibleTestIssue(store, { title: "Prerequisite", status: "in_progress" });
+    const prereq = createDependencyPrerequisite(store, { title: "Prerequisite", status: "in_progress" });
     const dependent = createResponsibleTestIssue(store, { title: "Waiting", status: "backlog", blockedBy: [prereq.id] });
     return { store, runtime, agent, prereq, dependent };
   }
@@ -1359,7 +1402,7 @@ describe("MUL-400 E3 — task-creation gate", () => {
     // issue can be both waiting and already have tasks — and its retry is a
     // continuation of that round, not the issue's first execution.
     const { store, runtime, agent } = storeWithAgent();
-    const prereq = createResponsibleTestIssue(store, { title: "Prerequisite", status: "in_progress" });
+    const prereq = createDependencyPrerequisite(store, { title: "Prerequisite", status: "in_progress" });
     const dependent = createResponsibleTestIssue(store, { title: "Existing work", status: "in_progress" });
     const first = store.createTask({ agentId: agent.id, issueId: dependent.id, prompt: "run" });
     let claimed = store.claimTask(runtime.id);
@@ -1416,7 +1459,7 @@ describe("MUL-400 E3 — task-creation gate", () => {
     const {store,agent}=storeWithAgent();
     const issue=createResponsibleTestIssue(store, {title:"Earlier work",status:"in_progress"});
     const previous=store.createTask({agentId:agent.id,issueId:issue.id,prompt:"Earlier work"});
-    const prerequisite=createResponsibleTestIssue(store, {title:"Blocker",status:"in_progress"});
+    const prerequisite=createDependencyPrerequisite(store, {title:"Blocker",status:"in_progress"});
     store.createIssueDependency(issue.id,{dependsOnIssueId:prerequisite.id,type:"blocked_by"});
     store.updateIssue(issue.id,{status:"backlog"});
     const turn=store.retryTurn(store.getTurnForAttempt(previous.id)!.id);
@@ -1427,7 +1470,7 @@ describe("MUL-400 E3 — task-creation gate", () => {
   it("does not block the E2 wake-up that carries preserveIssueStatus", () => {
     const { store, agent } = storeWithAgent();
     const parent = createResponsibleTestIssue(store, { title: "Parent", status: "in_progress", assigneeType: "agent", assigneeId: agent.id });
-    const other = createResponsibleTestIssue(store, { title: "Other prerequisite", status: "in_progress" });
+    const other = createDependencyPrerequisite(store, { title: "Other prerequisite", status: "in_progress" });
     const parkedParent = createResponsibleTestIssue(store, {
       title: "Parked parent",
       status: "backlog",
@@ -1456,7 +1499,7 @@ describe("MUL-400 E3 — task-creation gate", () => {
 describe("MUL-400 E3 — fix round 3: gate integrity", () => {
   function parkedWithOwner() {
     const { store, runtime, agent } = storeWithAgent();
-    const prereq = createResponsibleTestIssue(store, { title: "Prerequisite", status: "in_progress" });
+    const prereq = createDependencyPrerequisite(store, { title: "Prerequisite", status: "in_progress" });
     const dependent = createResponsibleTestIssue(store, {
       title: "Waiting",
       status: "backlog",
@@ -1622,8 +1665,8 @@ describe("MUL-400 E3 — fix round 3: gate integrity", () => {
     const prerequisiteParent = createResponsibleTestIssue(store, { title: "Prereq parent", status: "in_progress", assigneeType: "agent", assigneeId: agent.id });
     const dependentParent = createResponsibleTestIssue(store, { title: "Dependent parent", status: "in_progress", assigneeType: "agent", assigneeId: agent.id });
     store.createTask({ agentId: agent.id, issueId: dependentParent.id, prompt: "queued round" });
-    const prerequisite = createResponsibleTestIssue(store, { title: "Prerequisite", status: "in_progress", parentIssueId: prerequisiteParent.id });
-    createResponsibleTestIssue(store, {
+    const prerequisite = createDependencyPrerequisite(store, { title: "Prerequisite", status: "in_progress", parentIssueId: prerequisiteParent.id });
+    createHistoricalDependencyIssue(store, {
       title: "Ready sibling",
       status: "backlog",
       parentIssueId: dependentParent.id,
@@ -1632,7 +1675,7 @@ describe("MUL-400 E3 — fix round 3: gate integrity", () => {
       assigneeId: member.id,
     });
 
-    store.updateIssue(prerequisite.id, { status: "done" });
+    acceptTestIssueDelivery(store, prerequisite.id);
 
     const coalesced = allActivityRows(store, dependentParent.id, "turn_merged");
     expect(coalesced).toHaveLength(1);
@@ -1687,7 +1730,8 @@ describe("MUL-400 E3 — fix round 4: atomic automatic start", () => {
   /** A parked dependent plus its in-progress prerequisite and one agent. */
   function parkedChain(name = "Round4") {
     const { store, runtime, agent } = storeWithAgent(name);
-    const prereq = createResponsibleTestIssue(store, { title: "Prerequisite", status: "in_progress" });
+    const prereq = createDependencyPrerequisite(store, { title: "Prerequisite", status: "in_progress",
+      responsibleMemberId: store.findWorkspaceMemberForUser('local', 'local')!.id });
     const dependent = createResponsibleTestIssue(store, {
       title: "Waiting",
       status: "backlog",
@@ -1733,7 +1777,7 @@ describe("MUL-400 E3 — fix round 4: atomic automatic start", () => {
 
   it("starts a parked dependent and leaves exactly one queued round", () => {
     const { store, prereq, dependent } = parkedChain("happy");
-    store.updateIssue(prereq.id, { status: "done" });
+    acceptTestIssueDelivery(store, prereq.id);
 
     // The plain path works, so the failure cases below are not trivially failing.
     expect(store.getIssue(dependent.id)!.status).toBe("todo");
@@ -1747,6 +1791,7 @@ describe("MUL-400 E3 — fix round 4: atomic automatic start", () => {
     ["while writing dependency_auto_started", "activity", "dependency_auto_started"],
   ] as const)("rolls the whole attempt back when a step fails %s", (_label, kind, type) => {
     const { store, prereq, dependent } = parkedChain(`inj_${type ?? kind}`);
+    const prepared = prepareTestIssueDelivery(store, prereq.id);
     const target = seams(store);
     const restore = kind === "task"
       ? injectOnce(target.tasks, "createTaskWithinTransaction", () => true)
@@ -1755,7 +1800,8 @@ describe("MUL-400 E3 — fix round 4: atomic automatic start", () => {
 
     let thrown: Error | null = null;
     try {
-      store.updateIssue(prereq.id, { status: "done" });
+      store.respondIssueDelivery(prereq.id, prepared.delivery.id,
+        { action: 'accept', revision: prepared.delivery.responsibilityRevision }, prepared.actor);
     } catch (err) {
       thrown = err as Error;
     }
@@ -1801,7 +1847,7 @@ describe("MUL-400 E3 — fix round 4: atomic automatic start", () => {
     expect(task.status).toBe("queued");
     expect(store.getIssue(dependent.id)!.status).toBe("backlog");
 
-    store.updateIssue(prereq.id, { status: "done" });
+    acceptTestIssueDelivery(store, prereq.id);
 
     expect(store.getIssue(dependent.id)!.status).toBe("backlog");
     const active = allTaskRows(store, dependent.id)
@@ -1815,9 +1861,10 @@ describe("MUL-400 E3 — fix round 4: atomic automatic start", () => {
     expect(store.getIssue(dependent.id)!.status).toBe("in_progress");
   });
 
-  it("U10 keeps a PATCH successful after an auto-start write error, then replays it", async () => {
+  it("U10 keeps formal acceptance successful after an auto-start write error, then replays it", async () => {
     const { store, prereq, dependent } = parkedChain("patch_write");
     const app = createMultiremiApp({ store });
+    const prepared = prepareTestIssueDelivery(store, prereq.id);
     const run = db!.run.bind(db!);
     let injected = false;
     const failure = spyOn(db!, "run").mockImplementation((sql, ...args) => {
@@ -1829,9 +1876,9 @@ describe("MUL-400 E3 — fix round 4: atomic automatic start", () => {
     });
     const warnings = spyOn(console, "warn").mockImplementation(() => {});
     try {
-      const response = await app.request(`/api/issues/${prereq.id}`, {
-        method: "PATCH", headers: { "content-type": "application/json" },
-        body: JSON.stringify({ status: "done" }),
+      const response = await app.request(`/api/issues/${prereq.id}/deliveries/${prepared.delivery.id}/respond`, {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: 'accept', revision: prepared.delivery.responsibilityRevision }),
       });
       expect(response.status).toBe(200);
       expect(store.getIssue(prereq.id)!.status).toBe("done");
@@ -1857,15 +1904,16 @@ describe("MUL-400 E3 — fix round 4: atomic automatic start", () => {
 
   it("U10b rolls back a failed business skip and records one on replay", async () => {
     const { store, agent, prereq, dependent } = parkedChain("patch_skip");
+    const prepared = prepareTestIssueDelivery(store, prereq.id);
     db!.run("UPDATE multiremi_agents SET archived_at = ? WHERE id = ?", [new Date().toISOString(), agent.id]);
     const app = createMultiremiApp({ store });
     const restoreSkip = injectOnce(seams(store).ctx, "appendIssueActivity", (args) =>
       (args[1] as { type?: string })?.type === "dependency_auto_start_skipped");
     const warnings = spyOn(console, "warn").mockImplementation(() => {});
     try {
-      const response = await app.request(`/api/issues/${prereq.id}`, {
-        method: "PATCH", headers: { "content-type": "application/json" },
-        body: JSON.stringify({ status: "done" }),
+      const response = await app.request(`/api/issues/${prereq.id}/deliveries/${prepared.delivery.id}/respond`, {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: 'accept', revision: prepared.delivery.responsibilityRevision }),
       });
       expect(response.status).toBe(200);
       expect(warnings.mock.calls).toHaveLength(1);
@@ -1888,7 +1936,7 @@ describe("MUL-400 E3 — fix round 4: atomic automatic start", () => {
 
   it("lets a member move a satisfied backlog issue to todo without force and queues its agent", async () => {
     const { store, agent } = storeWithAgent("satisfied_patch");
-    const prereq = createResponsibleTestIssue(store, { title: "Done prerequisite", status: "done" });
+    const prereq = createHistoricalDependencyIssue(store, { title: "Done prerequisite", status: "done" });
     const dependent = createResponsibleTestIssue(store, {
       title: "Recoverable dependent", status: "backlog", blockedBy: [prereq.id],
       assigneeType: "agent", assigneeId: agent.id,
@@ -1908,7 +1956,7 @@ describe("MUL-400 E3 — fix round 4: atomic automatic start", () => {
     const {store,agent}=storeWithAgent("Stable waiting retry");
     const issue=createResponsibleTestIssue(store, {title:"Earlier work",status:"in_progress"});
     const previous=store.createTask({agentId:agent.id,issueId:issue.id,prompt:"Earlier work"});
-    const prerequisite=createResponsibleTestIssue(store, {title:"Blocker",status:"in_progress"});
+    const prerequisite=createDependencyPrerequisite(store, {title:"Blocker",status:"in_progress"});
     store.createIssueDependency(issue.id,{dependsOnIssueId:prerequisite.id,type:"blocked_by"});
     store.updateIssue(issue.id,{status:"backlog"});
     const states:boolean[]=[];const stop=store.onTaskEnqueued(()=>states.push(db!.inTransaction));
@@ -1923,11 +1971,13 @@ describe("MUL-400 E3 — fix round 4: atomic automatic start", () => {
     const blocker=createResponsibleTestIssue(store, {title:"Blocker",status:"in_progress"});
     const parent=createResponsibleTestIssue(store, {title:"Parent",status:"backlog",blockedBy:[blocker.id],assigneeType:"agent",assigneeId:agent.id});
     for(const status of ["done","cancelled"] as const){
-      const child=createResponsibleTestIssue(store, {title:status,parentIssueId:parent.id,status:"in_progress"});
-      store.updateIssue(child.id,{status});
+      const child=createResponsibleTestIssue(store, {title:status,parentIssueId:parent.id,status:"in_progress",
+        assigneeType:'agent',assigneeId:store.createAgent({name:'Structural child executor',provider:'codex'}).id});
+      if(status==='done')acceptTestIssueDelivery(store,child.id);
+      else store.updateIssue(child.id,{status});
     }
     const tasks=store.listTasksForIssue(parent.id);expect(tasks).toHaveLength(1);
-    const reports=store.listMessages(tasks[0]!.issueSessionId!).filter(message=>message.message_kind==="status");
+    const reports=store.listMessages(tasks[0]!.issueSessionId!).filter(message=>message.message_kind==="status"&&['done','cancelled'].includes(String(message.metadata.child_status)));
     expect(reports).toHaveLength(2);expect(reports.every(message=>message.to_agent_id===agent.id&&message.wake_applied==="now")).toBe(true);
     expect(store.getIssue(parent.id)?.status).toBe("backlog");
   });
@@ -1957,7 +2007,7 @@ describe("MUL-400 E3 — fix round 4: atomic automatic start", () => {
     const events: Array<{ type: string; payload: Record<string, unknown> }> = [];
     store.onWorkspaceEvent((event) => { events.push({ type: event.type, payload: event.payload }); });
 
-    store.updateIssue(prereq.id, { status: "done" });
+    acceptTestIssueDelivery(store, prereq.id);
 
     const updated = events.filter((entry) => entry.type === "issue:updated"
       && (entry.payload as { issue?: { id?: string } }).issue?.id === dependent.id);
@@ -1978,7 +2028,7 @@ describe("MUL-400 E3 — fix round 4: atomic automatic start", () => {
     const events: Array<{ type: string; payload: Record<string, unknown> }> = [];
     store.onWorkspaceEvent((event) => { events.push({ type: event.type, payload: event.payload }); });
 
-    store.updateIssue(prereq.id, { status: "done" });
+    acceptTestIssueDelivery(store, prereq.id);
     restore();
 
     expect(events.filter((entry) => entry.type === "issue:updated"
@@ -1990,7 +2040,7 @@ describe("MUL-400 E3 — fix round 4: atomic automatic start", () => {
     const { store, prereq, dependent, agent } = parkedChain("archived_owner");
     db!.run("UPDATE multiremi_agents SET archived_at = ? WHERE id = ?", [new Date().toISOString(), agent.id]);
 
-    store.updateIssue(prereq.id, { status: "done" });
+    acceptTestIssueDelivery(store, prereq.id);
 
     // The failure left the retryable waiting state, with the skip recorded.
     expect(store.getIssue(dependent.id)!.status).toBe("backlog");
@@ -2009,7 +2059,7 @@ describe("MUL-400 E3 — fix round 4: atomic automatic start", () => {
 describe("MUL-400 E3 — fix round 4: native PATCH dependency errors", () => {
   function parked() {
     const { store, agent } = storeWithAgent("Patch4");
-    const prereq = createResponsibleTestIssue(store, { title: "Prerequisite", status: "in_progress" });
+    const prereq = createDependencyPrerequisite(store, { title: "Prerequisite", status: "in_progress" });
     const dependent = createResponsibleTestIssue(store, {
       title: "Waiting",
       status: "backlog",
@@ -2069,7 +2119,7 @@ describe("MUL-400 E3 — fix round 4: native PATCH dependency errors", () => {
 describe("MUL-409 — fix round 5: forced start is one transaction", () => {
   function parked(name = "Force5") {
     const { store, runtime, agent } = storeWithAgent(name);
-    const prereq = createResponsibleTestIssue(store, { title: "Open prerequisite", status: "in_progress" });
+    const prereq = createDependencyPrerequisite(store, { title: "Open prerequisite", status: "in_progress" });
     const dependent = createResponsibleTestIssue(store, {
       title: "Waiting",
       status: "backlog",
@@ -2266,7 +2316,7 @@ describe("MUL-409 — fix round 5: forced start is one transaction", () => {
 describe("MUL-409 — fix round 5: a refused session task leaves no participant or lane", () => {
   function waiting(name: string) {
     const { store, runtime, agent } = storeWithAgent(name);
-    const prereq = createResponsibleTestIssue(store, { title: "Open prerequisite", status: "in_progress" });
+    const prereq = createDependencyPrerequisite(store, { title: "Open prerequisite", status: "in_progress" });
     const dependent = createResponsibleTestIssue(store, {
       title: "Waiting",
       status: "backlog",
