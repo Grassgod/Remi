@@ -14,7 +14,7 @@ export function DecisionPanel({ open, onOpenChange, title, description, children
   title: ReactNode; description: ReactNode; children: ReactNode;
 }) {
   return <Sheet open={open} onOpenChange={onOpenChange}><SheetContent side="right"
-    className="max-h-[calc(100vh-1rem)] gap-0 overflow-hidden rounded-md border data-[side=right]:inset-y-2 data-[side=right]:right-2 data-[side=right]:h-auto data-[side=right]:w-[calc(100%-1rem)] data-[side=right]:sm:top-8 data-[side=right]:sm:bottom-auto data-[side=right]:sm:h-[610px] data-[side=right]:sm:w-[720px] data-[side=right]:sm:max-w-[calc(100%-1rem)]" data-issue-decision-overlay>
+    className="gap-0 overflow-hidden data-[side=right]:w-full data-[side=right]:sm:max-w-[720px]" data-issue-decision-overlay>
     <SheetHeader className="shrink-0 border-b pr-12"><SheetTitle>{title}</SheetTitle>
       <SheetDescription>{description}</SheetDescription></SheetHeader>
     <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-4">{children}</div>
