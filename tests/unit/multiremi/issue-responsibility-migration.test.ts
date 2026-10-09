@@ -2,6 +2,7 @@ import { expect, it, spyOn } from 'bun:test';
 import { createMultiremiApp } from '@multiremi/api.js';
 import { pendingTurnBackendTests } from './pending-turn-test-backends.js';
 import { acceptTestIssueDelivery } from './helpers.js';
+import type { TasksRepo } from '@multiremi/store/repos/tasks-repo.js';
 
 pendingTurnBackendTests('explicit responsibility migration and authenticated sources', fixture => {
   it('provides explicit synthetic fixtures without changing production defaults or negative cases',()=>{
@@ -148,11 +149,12 @@ pendingTurnBackendTests('explicit responsibility migration and authenticated sou
     expect(compat.status).toBe(201);const compatBody=await compat.json();expect(compatBody.dispatch_status).toBe('dispatched');expect(store.getTask(compatBody.task_id)?.agentId).toBe(b.id);
     expect(store.getTask(old.id)?.status).toBe('cancelled');
     const active=store.listTasks().find(item=>item.issueId===issue.id&&!['completed','cancelled','failed'].includes(item.status))!;
-    const taskRepo=(store as unknown as {tasks:{createTask:(input:unknown)=>unknown}}).tasks;
-    const fault=spyOn(taskRepo,'createTask').mockImplementation(()=>{throw new Error('dispatch failure');});
+    const taskRepo=(store as unknown as {tasks:TasksRepo}).tasks;
+    const fault=spyOn(taskRepo,'createTaskWithinTransaction').mockImplementation(()=>{throw new Error('dispatch failure');});
     try {
       const response=await app.request(`/api/multiremi/issues/${issue.id}/assign`,{method:'POST',headers,body:JSON.stringify({assignee_type:'agent',assignee_id:a.id})});
       expect(response.status).toBe(500);expect(await response.text()).toContain('dispatch failure');expect(store.getIssue(issue.id)?.assigneeId).toBe(b.id);expect(store.getTask(active.id)?.status).toBe(active.status);
+      expect(fault).toHaveBeenCalledTimes(1);
     } finally {fault.mockRestore();}
   });
   it('requires explicit automation responsibility and never infers historical creator during a run',async()=>{

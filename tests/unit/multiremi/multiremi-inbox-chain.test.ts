@@ -1,4 +1,4 @@
-import { createResponsibleTestIssue } from './helpers.js';
+import { acceptTestIssueDelivery, createResponsibleTestIssue, seedHistoricalIssueFacts } from './helpers.js';
 import { runTurnExecutionMutation } from '@multiremi/store/turn-execution-records.js';
 import type { SqlDatabase as UnifiedFixtureDatabase } from '@multiremi/store/db/postgres.js';
 import { expect, it } from "bun:test";
@@ -20,7 +20,25 @@ pendingTurnBackendTests("D1 inbox integrated chains", fixture => {
       ctx.emitCommitEvents(events);
       return delivery;
     };
-    return { ...f, flow, ctx, send };
+    return { ...f, flow, ctx, send,
+      preparedSystemCommentIds: new Set(f.store.listIssueComments(flow.targetIssueId)
+        .filter(comment => comment.authorType === "system").map(comment => comment.id)),
+      preparedMergedCount: f.store.listIssueActivity(flow.targetIssueId).filter(row => row.type === "turn_merged").length,
+    };
+  }
+
+  function createPrerequisite(store: ReturnType<typeof setup>["store"], title: string) {
+    const agent = store.createAgent({ name: `${title} execution`, provider: "codex" });
+    return createResponsibleTestIssue(store, { title, status: "in_progress", assigneeType: "agent", assigneeId: agent.id });
+  }
+
+  function createLegacyMemberDependent(f: ReturnType<typeof setup>, prerequisiteId: string, title: string) {
+    const member = f.store.findWorkspaceMemberForUser("local", "local")!;
+    const issue = createResponsibleTestIssue(f.store, { title, status: "backlog", blockedBy: [prerequisiteId],
+      parentIssueId: f.flow.targetIssueId });
+    // Readiness delivery still consumes historical member execution assignments;
+    // current Issue creation must not offer this unsupported execution choice.
+    seedHistoricalIssueFacts(f.store, issue.id, { assigneeType: "member", assigneeId: member.id });
   }
 
   it("T4: E2 uses the earliest human round and writes a system report without copying it into the prompt", () => {
@@ -32,30 +50,29 @@ pendingTurnBackendTests("D1 inbox integrated chains", fixture => {
     expect(tasks.map(task => task.id)).toEqual([human.id]);
     expect(tasks[0]!.wakeSource).toBe("human_sender");
     expect(tasks[0]!.prompt).toBe(human.prompt);
-    const comments = f.store.listIssueComments(f.flow.targetIssueId).filter(comment => comment.authorType === "system");
+    const comments = f.store.listIssueComments(f.flow.targetIssueId)
+      .filter(comment => comment.authorType === "system" && !f.preparedSystemCommentIds.has(comment.id));
     expect(comments).toHaveLength(1);
     const entry = f.store.getConversationLogEntryById(comments[0]!.id)!;
     expect(f.store.getMessage(entry.id)).toMatchObject({ message_kind: "status", wake_applied: "now" });
     expect(inboxWakeSeq(f.db, tasks[0]!.id)).toBe(entry.seq);
-    expect(f.store.listIssueActivity(f.flow.targetIssueId).filter(row => row.type === "turn_merged")).toHaveLength(1);
+    expect(f.store.listIssueActivity(f.flow.targetIssueId).filter(row => row.type === "turn_merged")).toHaveLength(f.preparedMergedCount + 1);
   });
 
   it("T4: E3 readiness leaves an idle or running recipient without a new queued turn", () => {
     const f = setup();
-    const member = f.store.findWorkspaceMemberForUser("local", "local")!;
-    const prerequisite = createResponsibleTestIssue(f.store, { title: "Readiness prerequisite", status: "in_progress" });
-    createResponsibleTestIssue(f.store, { title: "Readiness dependent", status: "backlog", blockedBy: [prerequisite.id],
-      parentIssueId: f.flow.targetIssueId, assigneeType: "member", assigneeId: member.id });
-    f.store.updateIssue(prerequisite.id, { status: "done" });
+    const prerequisite = createPrerequisite(f.store, "Readiness prerequisite");
+    createLegacyMemberDependent(f, prerequisite.id, "Readiness dependent");
+    acceptTestIssueDelivery(f.store, prerequisite.id);
     expect(f.store.listTasksForIssue(f.flow.targetIssueId).filter(task => task.status === "queued")).toEqual([]);
     const running = f.store.createTask({ agentId: f.flow.agentId, issueId: f.flow.targetIssueId, prompt: "Already running" });
     runTurnExecutionMutation(f.db as unknown as UnifiedFixtureDatabase, "UPDATE multiremi_turn_execution_records SET status = 'running' WHERE id = ?", [running.id]);
-    const another = createResponsibleTestIssue(f.store, { title: "Next readiness prerequisite", status: "in_progress" });
-    createResponsibleTestIssue(f.store, { title: "Next readiness dependent", status: "backlog", blockedBy: [another.id],
-      parentIssueId: f.flow.targetIssueId, assigneeType: "member", assigneeId: member.id });
-    f.store.updateIssue(another.id, { status: "done" });
+    const another = createPrerequisite(f.store, "Next readiness prerequisite");
+    createLegacyMemberDependent(f, another.id, "Next readiness dependent");
+    acceptTestIssueDelivery(f.store, another.id);
     expect(f.store.listTasksForIssue(f.flow.targetIssueId).filter(task => task.status === "queued")).toEqual([]);
-    const entries = f.store.listIssueComments(f.flow.targetIssueId).filter(comment => comment.authorType === "system")
+    const entries = f.store.listIssueComments(f.flow.targetIssueId)
+      .filter(comment => comment.authorType === "system" && !f.preparedSystemCommentIds.has(comment.id))
       .map(comment => f.store.getConversationLogEntryById(comment.id)!);
     expect(entries).toHaveLength(2);
     expect(entries.every(entry => f.store.getMessage(entry.id)?.wake_applied === "next_turn")).toBe(true);
@@ -68,12 +85,11 @@ pendingTurnBackendTests("D1 inbox integrated chains", fixture => {
     // The running turn occupies an independent scope; the readiness lane is pending.
     f.db.run('UPDATE multiremi_turns SET execution_scope=? WHERE current_attempt_id=?',['independent',running.id]);
     const queued = f.store.createTask({ agentId: f.flow.agentId, issueId: f.flow.targetIssueId, prompt: "Queued human request" });
-    const member = f.store.findWorkspaceMemberForUser("local", "local")!;
-    const prerequisite = createResponsibleTestIssue(f.store, { title: "Ready beside running", status: "in_progress" });
-    createResponsibleTestIssue(f.store, { title: "Ready dependent", status: "backlog", blockedBy: [prerequisite.id],
-      parentIssueId: f.flow.targetIssueId, assigneeType: "member", assigneeId: member.id });
-    f.store.updateIssue(prerequisite.id, { status: "done" });
-    const comment = f.store.listIssueComments(f.flow.targetIssueId).find(row => row.authorType === "system")!;
+    const prerequisite = createPrerequisite(f.store, "Ready beside running");
+    createLegacyMemberDependent(f, prerequisite.id, "Ready dependent");
+    acceptTestIssueDelivery(f.store, prerequisite.id);
+    const comment = f.store.listIssueComments(f.flow.targetIssueId)
+      .find(row => row.authorType === "system" && !f.preparedSystemCommentIds.has(row.id))!;
     const entry = f.store.getConversationLogEntryById(comment.id)!;
     expect(f.store.getMessage(entry.id)?.wake_applied).toBe("next_turn");
     expect(inboxWakeSeq(f.db, queued.id)).toBe(entry.seq);
@@ -81,7 +97,7 @@ pendingTurnBackendTests("D1 inbox integrated chains", fixture => {
       .toEqual([queued.id]);
     expect(f.store.getTask(queued.id)!.prompt).toBe("Queued human request");
     expect(f.store.getTask(running.id)!.status).toBe("running");
-    expect(f.store.listIssueActivity(f.flow.targetIssueId).filter(row => row.type === "turn_merged")).toHaveLength(1);
+    expect(f.store.listIssueActivity(f.flow.targetIssueId).filter(row => row.type === "turn_merged")).toHaveLength(f.preparedMergedCount + 1);
   });
 
   it("T5: Chat envelope delivery creates, coalesces, steers and deduplicates on the startup schema", () => {
