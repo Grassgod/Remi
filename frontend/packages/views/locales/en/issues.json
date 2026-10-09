@@ -1,5 +1,7 @@
 {
   "responsibility": {
+    "pending_section": "Awaiting answers",
+    "history_section": "Answered and closed",
     "execution_resumed": "Answered · execution resumed",
     "awaiting_resume": "Answer saved · waiting to resume",
     "resume_needed": "Answer saved · execution needs recovery",

@@ -1,7 +1,7 @@
 "use client";
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { ChevronRight, CircleHelp, LoaderCircle } from "lucide-react";
+import { ChevronRight, CircleHelp } from "lucide-react";
 import { isHistoricalIssueQuestionRecord } from "@multiremi/contracts/question";
 import { api } from "@multiremi/core/api";
 import { useWorkspaceId } from "@multiremi/core/hooks";
@@ -11,7 +11,7 @@ import { useWorkspacePaths } from "@multiremi/core/paths";
 import { useT } from "../i18n";
 import { UnifiedQuestionCard } from "./question-card";
 import { questionLocation } from "./question-location";
-import { DecisionPanel } from "./decision-panel";
+import { DecisionPanel, DecisionSection, DecisionListSkeleton } from "./decision-panel";
 
 export function linkedQuestionId(id: string, metadata: Record<string, unknown> | undefined): string | null {
   if (typeof metadata?.root_question_id === "string" && (metadata.question_notification === true || metadata.question_present_request === true)) return metadata.root_question_id;
@@ -36,9 +36,9 @@ export function LinkedQuestion({ id, getActorName }: { id: string; getActorName?
       <CircleHelp className="size-4 shrink-0" />{t($ => $.responsibility.open_question)}<ChevronRight className="size-4 shrink-0" />
     </Button>
     <DecisionPanel open={open} onOpenChange={setOpen} title={t($ => $.responsibility.history)} description={t($ => $.responsibility.original)}>
-      {query.data ? <UnifiedQuestionCard question={query.data} getActorName={getActorName} />
+      {query.data ? <DecisionSection title={query.data.status === "pending" ? t($ => $.responsibility.pending_section) : t($ => $.responsibility.history_section)}><UnifiedQuestionCard question={query.data} getActorName={getActorName} /></DecisionSection>
         : query.isError ? <div><p role="alert">{t($ => $.responsibility.load_failed)}</p><Button variant="outline" size="sm" onClick={() => void query.refetch()}>{t($ => $.responsibility.retry)}</Button></div>
-        : <LoaderCircle className="size-5 animate-spin" />}
+        : <DecisionListSkeleton />}
     </DecisionPanel>
   </>;
 }

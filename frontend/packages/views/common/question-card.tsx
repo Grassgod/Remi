@@ -15,9 +15,8 @@ import { AppLink } from "../navigation";
 import { useT } from "../i18n";
 import { Markdown } from "./markdown";
 import { QuestionForm, QuestionContext } from "./human-request-dock";
-import { DecisionCardFrame, DecisionAnswerArea, DecisionOptions } from "./decision-panel";
-import { MessageHeader } from "./message-header";
-import { questionAnswerBody, questionAnswerText } from "./question-answer";
+import { DecisionCardFrame, DecisionAnswerArea, DecisionOptions, DecisionHeading, DecisionSubmit, DecisionHistory, DecisionHistoryEntry } from "./decision-panel";
+import { questionAnswerHistory, questionAnswerText } from "./question-answer";
 import { TaskTraceDialog } from "./task-transcript/task-trace-dialog";
 import { questionLocation } from "./question-location";
 
@@ -34,7 +33,6 @@ export function UnifiedQuestionCard({ question, getActorName = (_type, id) => id
   const [operation, setOperation] = useState<"escalate" | "transfer" | "present" | "close" | null>(null);
   const [summaryText, setSummaryText] = useState("");
   const [historyOpen, setHistoryOpen] = useState(initiallyShowHistory);
-  const [answerOpen, setAnswerOpen] = useState(false);
   const allowed = question.actions.allowed;
   const act = useMutation({ mutationFn: ({ action, response }: { action: "answer" | "escalate" | "transfer" | "present" | "continue" | "close"; response?: Record<string, unknown> }) => api.actOnQuestion(question.id, action, {
     expected_route_revision: question.route_revision, response, reason: reason.trim(), summary: action === "present" ? summaryText.trim() : undefined,
@@ -64,40 +62,42 @@ export function UnifiedQuestionCard({ question, getActorName = (_type, id) => id
     : question.wait_status === "detached" ? t($ => $.responsibility.resume_needed)
     : question.wait_status === "continuation_pending" || question.wait_status === "waiting" ? t($ => $.responsibility.awaiting_resume)
     : t($ => $.responsibility.saved);
-  return <DecisionCardFrame id={question.id}><div data-question-id={question.id}>
-    <div className="flex items-start justify-between gap-2">
-      <MessageHeader message={{ to_type: question.current_handler?.type ?? "none", to_ref: question.current_handler?.id ?? null,
-        to_agent_id: question.current_handler?.type === "agent" ? question.current_handler.id : null,
-        to_member_id: question.current_handler?.type === "member" ? question.current_handler.id : null,
-        message_kind: "decision", wake_applied: null, wake_reason: null }} getActorName={getActorName} />
-      {(operations.length > 0 || allowed.includes("revise")) && <DropdownMenu>
+  const actions = (operations.length > 0 || allowed.includes("revise")) && <DropdownMenu>
         <DropdownMenuTrigger render={<Button size="icon-xs" variant="ghost" aria-label={t($ => $.responsibility.more_actions)} disabled={act.isPending} />}><MoreHorizontal /></DropdownMenuTrigger>
         <DropdownMenuContent align="end">
           {allowed.includes("revise") && <DropdownMenuItem onClick={() => { setRevise(true); setOperation(null); setReason(""); }}>{t($ => $.responsibility.revise)}</DropdownMenuItem>}
           {operations.map(action => <DropdownMenuItem key={action} variant={action === "close" ? "destructive" : "default"} onClick={() => { setOperation(action); setRevise(false); setReason(""); }}>{operationLabels[action]}</DropdownMenuItem>)}
         </DropdownMenuContent>
-      </DropdownMenu>}
-    </div>
+      </DropdownMenu>;
+  const answers = questionAnswerHistory(question);
+  const answerHistory = answers.length > 0 && <DecisionHistory title={t($ => $.detail.decision_history)}>
+    {answers.map((answer, index) => <DecisionHistoryEntry key={`${answer.at}:${index}`}
+      actor={answer.actor ? getActorName(answer.actor.type, answer.actor.id) : ""} answer={answer.body}
+      reason={answer.reason} reasonLabel={t($ => $.detail.decision_reason)} overturn={answer.overturn} overturnLabel={t($ => $.detail.decision_overturn)} />)}
+  </DecisionHistory>;
+  const answerContext = <>
     {question.summary && <section className="rounded bg-muted/40 p-2"><h4 className="mb-1 text-xs font-medium">{t($ => $.responsibility.remi)}</h4><Markdown mode="minimal">{question.summary.body_md}</Markdown></section>}
+    {answerHistory}
     {revise && <div className="space-y-2"><h4 className="text-xs font-medium">{t($ => $.responsibility.revise)}</h4>
       <Textarea aria-label={t($ => $.responsibility.revision_reason)} placeholder={t($ => $.responsibility.revision_reason)} value={reason} disabled={act.isPending} onChange={e => setReason(e.target.value)} />
       <Button variant="ghost" size="sm" disabled={act.isPending} onClick={() => { setRevise(false); setReason(""); }}>{t($ => $.responsibility.cancel_action)}</Button>
     </div>}
+  </>;
+  return <DecisionCardFrame id={question.id}><div data-question-id={question.id}>
     <section>
       {request && question.original_questions.length > 0 ? <QuestionForm key={`${question.id}:${revise}`} taskId="" request={request} readOnly={!canAnswer || operation !== null} disabled={act.isPending} hideOptions={question.status !== "pending" && !revise}
-        onAnswer={response => act.mutateAsync({ action: "answer", response })} /> : <><Markdown mode="minimal">{question.original_message}</Markdown>{question.original_context && <QuestionContext context={question.original_context} />}</>}
+        actions={actions} history={answerContext} onAnswer={response => act.mutateAsync({ action: "answer", response })} />
+        : <><DecisionHeading title={question.original_message} actions={actions} />{question.original_context && <QuestionContext context={question.original_context} />}{answerContext}</>}
     </section>
-    {question.status === "answered" && <div className="mt-2 text-xs text-muted-foreground">
-      <Button variant="ghost" size="xs" onClick={() => setAnswerOpen(value => !value)} aria-expanded={answerOpen}>{answeredStatus}</Button>
-      {answerOpen && question.answer && <Markdown mode="minimal">{questionAnswerBody(question.answer, question.options)}</Markdown>}
-    </div>}
+    {question.status === "answered" && <p className="mt-2 text-xs text-muted-foreground" role="status">{answeredStatus}</p>}
     {question.status === "closed" && <p className="mt-2 text-xs text-muted-foreground">{t($ => $.responsibility.closed)}</p>}
     {question.status === "pending" && !allowed.includes("answer") && !revise && <p className="mt-2 text-xs text-muted-foreground">{stageLabel}</p>}
     {!canAnswer && question.status === "pending" && question.original_questions.length === 0 && question.options?.map(option => <span key={option.value} className="inline-block rounded border px-2 py-1 text-xs">{option.label}</span>)}
     {canAnswer && !operation && question.original_questions.length === 0 && <DecisionAnswerArea>
       <DecisionOptions options={question.options ?? []} selected={selected} disabled={act.isPending} onSelect={value => { setSelected([value]); setText(""); }} />
-      {question.kind !== "permission" && <Textarea aria-label={t($ => $.responsibility.answer)} value={text} onChange={e => { setText(e.target.value); setSelected([]); }} disabled={act.isPending} />}
-      <Button size="sm" disabled={act.isPending || (!text.trim() && selected.length === 0)} onClick={() => act.mutate({ action: "answer", response: question.kind === "permission" ? { option_id: selected[0] } : selected.length ? { selected_options: selected } : { answer: text.trim() } })}>{t($ => $.responsibility.answer)}</Button>
+      {question.kind !== "permission" && <Textarea className="min-h-16 resize-none text-sm" aria-label={t($ => $.responsibility.answer)} value={text} onChange={e => { setText(e.target.value); setSelected([]); }} disabled={act.isPending} />}
+      <DecisionSubmit label={t($ => $.responsibility.answer)} pending={act.isPending} disabled={!text.trim() && selected.length === 0} error={act.error?.message}
+        onSubmit={() => act.mutate({ action: "answer", response: question.kind === "permission" ? { option_id: selected[0] } : selected.length ? { selected_options: selected } : { answer: text.trim() } })} />
     </DecisionAnswerArea>}
     {operation && allowed.includes(operation) && <div className="space-y-2 border-t pt-3">
       <h4 className="text-xs font-medium">{operationLabels[operation]}</h4>
@@ -112,7 +112,7 @@ export function UnifiedQuestionCard({ question, getActorName = (_type, id) => id
       {allowed.includes("continue") && <Button size="sm" variant="outline" disabled={act.isPending} onClick={() => act.mutate({ action: "continue" })}>{t($ => $.responsibility.continue)}</Button>}
       <Button size="xs" variant="ghost" onClick={() => setHistoryOpen(v => !v)} aria-expanded={historyOpen}>{t($ => $.responsibility.events)} ({question.history.length})</Button>
     </div>
-    {act.error && <p role="alert" className="text-xs text-destructive">{act.error.message}</p>}
+    {act.error && (operation || !canAnswer) && <p role="alert" className="text-xs text-destructive">{act.error.message}</p>}
     {historyOpen && <div className="space-y-2 border-t pt-2 text-xs text-muted-foreground">
       <p data-question-wait-status={question.wait_status}>{waitLabels[question.wait_status] ?? question.wait_status}{question.wait_reason && ` · ${question.wait_reason}`}</p>
       {question.current_handler && <p>{t($ => $.responsibility.handler)} · {getActorName(question.current_handler.type, question.current_handler.id)}</p>}
@@ -129,9 +129,8 @@ export function UnifiedQuestionCard({ question, getActorName = (_type, id) => id
       <ol className="space-y-2">{question.history.map((event, index) => <li key={`${event.at}:${index}`}>
       <p>{event.type === "notify" ? t($ => $.responsibility.source_notification) : event.type} · {event.at} · {event.actor && getActorName(event.actor.type, event.actor.id)} · {event.route_revision}</p>
       {event.handler && <p>{t($ => $.responsibility.handler)} · {getActorName(event.handler.type, event.handler.id)} · {event.handler.id}</p>}
-      {event.reason && <Markdown mode="minimal">{event.reason}</Markdown>}
-      {event.answer != null && typeof event.answer === "object" && "body_md" in event.answer && typeof event.answer.body_md === "string" && <Markdown mode="minimal">{event.answer.body_md}</Markdown>}
-      {event.overturn && <Markdown mode="minimal">{event.overturn}</Markdown>}
+      {!(event.answer && typeof event.answer === "object" && "body_md" in event.answer && typeof event.answer.body_md === "string") && event.reason && <Markdown mode="minimal">{event.reason}</Markdown>}
+      {!(event.answer && typeof event.answer === "object" && "body_md" in event.answer && typeof event.answer.body_md === "string") && event.overturn && <Markdown mode="minimal">{event.overturn}</Markdown>}
       {event.source_message_id && <AppLink href={questionLocation(paths.inboxItem, question.id, event.source_message_id)}>{t($ => $.responsibility.source)} · {event.source_message_id}</AppLink>}
     </li>)}</ol></div>}
   </div></DecisionCardFrame>;

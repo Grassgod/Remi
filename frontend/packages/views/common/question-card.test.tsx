@@ -19,6 +19,21 @@ function mount(question = base) {
 }
 beforeEach(() => { mocks.actOnQuestion.mockReset(); mocks.actOnQuestion.mockResolvedValue(base); mocks.getTask.mockReset(); });
 describe("one Q on every surface", () => {
+  it("shows all answer versions and their authors without repeating the current answer", () => {
+    const first = { response: { answer: "First answer" }, body_md: "First answer", actor: { type: "agent", id: "coordinator" }, at: "first", reply_message_id: "reply-first" };
+    const current = { response: { answers: { "Continue?": "Revised answer" } }, body_md: '{"answers":{"Continue?":"Revised answer"}}', actor: { type: "member", id: "human" }, at: "second", reply_message_id: "reply-second" };
+    mount({ ...base, status: "answered", answer: current, actions: { allowed: ["revise"] }, history: [
+      { type: "answer", at: "first", actor: first.actor, route_revision: 1, answer: first },
+      { type: "revise", at: "second", actor: current.actor, route_revision: 1, answer: current, reason: "New evidence", overturn: "Use the revised answer" },
+    ] });
+    expect(screen.getAllByText("First answer")).toHaveLength(1);
+    expect(screen.getAllByText("Revised answer")).toHaveLength(1);
+    expect(screen.getByText("coordinator")).toBeInTheDocument();
+    expect(screen.getByText("human")).toBeInTheDocument();
+    expect(screen.getByText(/New evidence/)).toBeInTheDocument();
+    expect(screen.getByText(/Use the revised answer/)).toBeInTheDocument();
+    expect(screen.queryByText("Route revision 7")).toBeNull();
+  });
   it("keeps management inputs out of native answers and retains a draft after cancelling a secondary action", async () => {
     mount({ ...base, original_message: "Continue?", original_questions: [
       { question: "Continue?", options: [{ label: "Continue" }, { label: "Stop" }] },
@@ -46,8 +61,7 @@ describe("one Q on every surface", () => {
       response, body_md: JSON.stringify(response), actor: { type: "member", id: "reviewer" }, at: "now", reply_message_id: "reply",
     } });
     expect(screen.getAllByText("Continue this task?")).toHaveLength(1);
-    expect(screen.queryByText("Continue")).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "Answered · execution resumed" }));
+    expect(screen.getByText("Answered · execution resumed")).toBeInTheDocument();
     expect(screen.getByText("Continue")).toBeInTheDocument();
     expect(screen.queryByText("Stop")).toBeNull();
     expect(screen.queryByRole("button", { name: "Submit" })).toBeNull();
@@ -152,7 +166,7 @@ describe("one Q on every surface", () => {
   });
   it("keeps answered history and detached call state visible without claiming recovery", () => {
     mount({ ...base, status: "answered", wait_status: "detached", wait_reason: "Timed out", answer: { response: { answer: "Parent answer" }, body_md: "Parent answer", actor: { type: "agent", id: "parent-owner" }, at: "now", reply_message_id: "reply1" }, actions: { allowed: [] } });
-    fireEvent.click(screen.getByRole("button", { name: "Answer saved · execution needs recovery" }));
+    expect(screen.getByText("Answer saved · execution needs recovery")).toBeInTheDocument();
     expect(screen.queryByText(/Original call ended; answer remains available/)).toBeNull();
     expect(screen.getByText("Parent answer")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Answer" })).toBeNull();

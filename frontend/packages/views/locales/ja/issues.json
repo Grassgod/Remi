@@ -1,5 +1,7 @@
 {
   "responsibility": {
+    "pending_section": "回答待ちの質問",
+    "history_section": "回答済み・終了した質問",
     "execution_resumed": "回答済み・実行を再開しました",
     "awaiting_resume": "回答保存済み・再開待ち",
     "resume_needed": "回答保存済み・実行の復旧が必要です",

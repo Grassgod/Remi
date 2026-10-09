@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { I18nProvider } from "@multiremi/core/i18n/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -34,7 +34,11 @@ function renderBanner(count: number) {
 describe("IssueDecisionBanner", () => {
   it("loads runtime questions only inside the existing right-side decision panel", async () => {
     mockApi.listIssueQuestions.mockClear(); mockApi.listIssueSessions.mockClear(); mockApi.listMessages.mockClear();
-    mockApi.listIssueQuestions.mockResolvedValue([{ id: "native", status: "pending", original_message: "Runtime question", route_revision: 2, wait_status: "waiting" }]);
+    mockApi.listIssueQuestions.mockResolvedValue([
+      { id: "native", status: "pending", original_message: "Runtime question", route_revision: 2, wait_status: "waiting" },
+      { id: "answered", status: "answered", original_message: "Previous question", route_revision: 1, wait_status: "consumed" },
+      { id: "closed", status: "closed", original_message: "Cancelled question", route_revision: 1, wait_status: "detached" },
+    ]);
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(<QueryClientProvider client={qc}><I18nProvider locale="en" resources={{ en: { issues: enIssues } }}>
       <IssueDecisionPanel issueId="issue-runtime" pendingCount={1} canAnswer getActorName={(_type, id) => id} />
@@ -43,6 +47,12 @@ describe("IssueDecisionBanner", () => {
     expect(screen.queryByRole("dialog")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Pending questions · 1" }));
     expect(await screen.findByText("Runtime question · revision 2 · waiting")).toBeInTheDocument();
+    const pending = screen.getByRole("region", { name: "Awaiting answers" });
+    const history = screen.getByRole("region", { name: "Answered and closed" });
+    expect(within(pending).getByText("Runtime question · revision 2 · waiting")).toBeInTheDocument();
+    expect(within(history).getByText("Previous question · revision 1 · consumed")).toBeInTheDocument();
+    expect(within(history).getByText("Cancelled question · revision 1 · detached")).toBeInTheDocument();
+    expect(within(pending).queryByText(/Previous question|Cancelled question/)).toBeNull();
     expect(screen.getByRole("dialog")).toHaveAttribute("data-side", "right");
     expect(screen.getByRole("dialog")).toHaveAttribute("data-issue-decision-overlay");
     expect(mockApi.listIssueQuestions).toHaveBeenCalledWith("issue-runtime");

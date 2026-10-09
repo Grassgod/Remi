@@ -1,5 +1,7 @@
 {
   "responsibility": {
+    "pending_section": "답변 대기 질문",
+    "history_section": "답변 완료 및 종료된 질문",
     "execution_resumed": "답변 완료 · 실행 재개됨",
     "awaiting_resume": "답변 저장됨 · 실행 재개 대기",
     "resume_needed": "답변 저장됨 · 실행 복구 필요",

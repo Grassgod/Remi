@@ -1,6 +1,6 @@
 "use client";
 
-import { useLayoutEffect, useRef, useState } from "react";
+import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { MessageCircleQuestion, ShieldAlert } from "lucide-react";
 import {
@@ -11,11 +11,12 @@ import {
 } from "@multiremi/core/chat/human-requests";
 import { Button } from "@multiremi/ui/components/ui/button";
 import { Input } from "@multiremi/ui/components/ui/input";
+import { Textarea } from "@multiremi/ui/components/ui/textarea";
 import { cn } from "@multiremi/ui/lib/utils";
 import { useT } from "../i18n";
 import { Markdown } from "./markdown";
 import { LinkedQuestion } from "./linked-question";
-import { DecisionCardFrame, DecisionAnswerArea, DecisionOptions } from "./decision-panel";
+import { DecisionCardFrame, DecisionAnswerArea, DecisionOptions, DecisionHeading, DecisionSubmit } from "./decision-panel";
 
 const COLLAPSED_CONTEXT_HEIGHT_PX = 128;
 
@@ -138,6 +139,8 @@ export function QuestionForm({
   onAnswer,
   hideOptions = false,
   disabled = false,
+  actions,
+  history,
 }: {
   taskId: string;
   request: TaskHumanRequest;
@@ -146,6 +149,8 @@ export function QuestionForm({
   onAnswer?: (response: Record<string, unknown>) => Promise<unknown>;
   hideOptions?: boolean;
   disabled?: boolean;
+  actions?: ReactNode;
+  history?: ReactNode;
 }) {
   const { t } = useT("chat");
   const respond = useRespondHumanRequest();
@@ -187,66 +192,45 @@ export function QuestionForm({
 
   return (
     <div className="min-w-0">
-      {request.payload.context && <QuestionContext context={request.payload.context} />}
-      {showMessage && (
-        <Markdown mode="minimal">{message!}</Markdown>
-      )}
-      <div className="mt-2 flex flex-col gap-2.5">
-        {questions.map(({ fieldKey, otherFieldKey, question }) => {
+      <div className="flex flex-col gap-3">
+        {questions.map(({ fieldKey, otherFieldKey, question }, index) => {
           const customText = (others[question.question] ?? "").trim();
           return (
-            <div key={fieldKey} className="flex flex-col gap-1">
-              {question.header && question.header !== question.question && <div className="text-xs text-muted-foreground">{question.header}</div>}
-              <Markdown mode="minimal">{question.question}</Markdown>
-              {!hideOptions && (question.options.length > 0 ? (
-                <DecisionAnswerArea>
-                  <DecisionOptions options={question.options.map(option => ({ ...option, value: option.label }))}
-                    selected={customText ? [] : picks[question.question] ?? []} readOnly={readOnly}
-                    disabled={disabled || submission.isPending || submission.isSuccess}
-                    onSelect={label => toggleOption(question, label)} />
-                </DecisionAnswerArea>
-              ) : !readOnly ? (
-                <DecisionAnswerArea>
-                <Input
+            <div key={fieldKey} className="min-w-0">
+              <DecisionHeading title={question.header || question.question} body={question.header && question.header !== question.question ? question.question : undefined} actions={index === 0 ? actions : undefined} />
+              {index === 0 && showMessage && <Markdown mode="minimal" className="mt-1 text-xs text-muted-foreground [&_p]:my-1">{message!}</Markdown>}
+              {index === 0 && request.payload.context && <QuestionContext context={request.payload.context} />}
+              {!readOnly && index === 0 && history}
+              {!hideOptions && (question.options.length > 0 || !readOnly) && <DecisionAnswerArea>
+                {question.options.length > 0 ? <DecisionOptions options={question.options.map(option => ({ ...option, value: option.label }))}
+                  selected={customText ? [] : picks[question.question] ?? []} readOnly={readOnly}
                   disabled={disabled || submission.isPending || submission.isSuccess}
-                  value={answers[question.question] ?? ""}
-                  placeholder={t(($) => $.human_requests.answer_placeholder)}
-                  onChange={(event) => setAnswer(question.question, event.target.value)}
-                />
-                </DecisionAnswerArea>
-              ) : null)}
-              {!readOnly && question.options.length > 0 && otherFieldKey && (
-                <Input
+                  onSelect={label => toggleOption(question, label)} />
+                  : <Textarea className="min-h-16 resize-none text-sm"
+                    disabled={disabled || submission.isPending || submission.isSuccess}
+                    value={answers[question.question] ?? ""}
+                    placeholder={t(($) => $.human_requests.answer_placeholder)}
+                    onChange={event => setAnswer(question.question, event.target.value)} />}
+                {!readOnly && question.options.length > 0 && otherFieldKey && <Input
                   disabled={disabled || submission.isPending || submission.isSuccess}
                   value={others[question.question] ?? ""}
                   placeholder={t(($) => $.human_requests.other_answer_placeholder)}
-                  onChange={(event) =>
-                    setOthers((old) => ({ ...old, [question.question]: event.target.value }))
-                  }
-                />
-              )}
+                  onChange={event => setOthers(old => ({ ...old, [question.question]: event.target.value }))} />}
+                {!readOnly && index === questions.length - 1 && <DecisionSubmit label={t(($) => $.human_requests.submit)} pending={disabled || submission.isPending}
+                  disabled={!answered || submission.isSuccess}
+                  error={submission.isError ? submission.error?.message ?? t(($) => $.human_requests.response_failed) : null}
+                  onSubmit={() => onAnswer ? unifiedAnswer.mutate({ answers: submitAnswers() }) : respond.mutate(
+                    { taskId, requestId: request.id,
+                      sessionId: request.sessionId, response: { answers: submitAnswers() } },
+                    { onSuccess: onResponded },
+                  )}
+                />}
+              </DecisionAnswerArea>}
             </div>
           );
         })}
       </div>
-      {!readOnly && (
-        <div className="mt-2">
-          <Button
-            size="sm"
-            disabled={disabled || !answered || submission.isPending || submission.isSuccess}
-            onClick={() => onAnswer ? unifiedAnswer.mutate({ answers: submitAnswers() }) : respond.mutate(
-              { taskId, requestId: request.id,
-                sessionId: request.sessionId, response: { answers: submitAnswers() } },
-              { onSuccess: onResponded },
-            )}
-          >
-            {t(($) => $.human_requests.submit)}
-          </Button>
-        </div>
-      )}
-      {submission.isError && (
-        <div role="alert" className="mt-2 text-xs text-destructive">{submission.error?.message ?? t(($) => $.human_requests.response_failed)}</div>
-      )}
+      {readOnly && history}
     </div>
   );
 }
@@ -269,7 +253,7 @@ export function QuestionContext({ context }: { context: { text: string; truncate
   }, [context.text]);
 
   return (
-    <div className="mt-2 min-w-0 border-l-2 border-border pl-2.5">
+    <div className="mt-1 min-w-0">
       {context.truncated && (
         <div className="mb-1 text-[11px] text-muted-foreground">
           {t(($) => $.human_requests.context_truncated)}

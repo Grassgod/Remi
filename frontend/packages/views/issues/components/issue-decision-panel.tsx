@@ -10,7 +10,7 @@ import { useWorkspaceId } from "@multiremi/core/hooks";
 import { Button } from "@multiremi/ui/components/ui/button";
 import { Input } from "@multiremi/ui/components/ui/input";
 import { Textarea } from "@multiremi/ui/components/ui/textarea";
-import { DecisionPanel, DecisionCardFrame, DecisionAnswerArea, DecisionOptions } from "../../common/decision-panel";
+import { DecisionPanel, DecisionCardFrame, DecisionAnswerArea, DecisionOptions, DecisionSection, DecisionListSkeleton } from "../../common/decision-panel";
 import { HumanRequestCard } from "../../common/human-request-dock";
 import { MessageHeader } from "../../common/message-header";
 import { Markdown } from "../../common/markdown";
@@ -55,12 +55,21 @@ export function IssueDecisionPanel({ issueId, pendingCount, showOwnerOnly = fals
   const wsId = useWorkspaceId();
   const [open, setOpen] = useState(false);
   const query = useQuery({ ...issueQuestionsOptions(wsId, issueId), enabled: open });
+  const pendingQuestions = query.data?.filter(question => question.status === "pending") ?? [];
+  const historyQuestions = query.data?.filter(question => question.status !== "pending") ?? [];
   return <><IssueDecisionBanner count={pendingCount} showOwnerOnly={showOwnerOnly} onOpen={() => setOpen(true)} />
     <DecisionPanel open={open} onOpenChange={setOpen} title={t($ => $.responsibility.history)}
       description={t($ => $.responsibility.pending, { count: query.data?.filter(question => question.status === "pending").length ?? pendingCount })}>
-        {query.isPending ? <LoaderCircle className="size-5 animate-spin" /> : query.isError ? <div><p role="alert">{t($ => $.detail.decision_load_failed)}</p>
+        {query.isPending ? <DecisionListSkeleton /> : query.isError ? <div className="flex min-h-28 flex-col items-center justify-center gap-2 text-center"><p role="alert" className="text-sm text-destructive">{t($ => $.detail.decision_load_failed)}</p>
           <Button size="sm" variant="outline" onClick={() => void query.refetch()}>{t($ => $.detail.decision_retry)}</Button></div>
-          : query.data?.length ? query.data.map(question => <UnifiedQuestionCard key={question.id} question={question} getActorName={getActorName} />)
+          : query.data?.length ? <div className="space-y-6">
+            {pendingQuestions.length > 0 && <DecisionSection title={t($ => $.responsibility.pending_section)}>
+              {pendingQuestions.map(question => <UnifiedQuestionCard key={question.id} question={question} getActorName={getActorName} />)}
+            </DecisionSection>}
+            {historyQuestions.length > 0 && <DecisionSection title={t($ => $.responsibility.history_section)}>
+              {historyQuestions.map(question => <UnifiedQuestionCard key={question.id} question={question} getActorName={getActorName} />)}
+            </DecisionSection>}
+          </div>
           : <p className="text-sm text-muted-foreground">{t($ => $.responsibility.empty)}</p>}
     </DecisionPanel></>;
 }

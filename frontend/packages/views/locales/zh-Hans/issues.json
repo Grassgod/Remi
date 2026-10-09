@@ -1,5 +1,7 @@
 {
   "responsibility": {
+    "pending_section": "待回答的问题",
+    "history_section": "已回答与已关闭",
     "execution_resumed": "已答复，执行已继续",
     "awaiting_resume": "答案已保存，等待继续执行",
     "resume_needed": "答案已保存，执行尚未恢复",
