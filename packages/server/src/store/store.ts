@@ -4181,6 +4181,10 @@ runMigrations(this.db);
     return this.issues.unresolveIssueComment(id);
   }
 
+  getIssueCommentSourceWorkspaceId(commentId: string): string | null {
+    return this.issues.getIssueCommentSourceWorkspaceId(commentId);
+  }
+
   getIssueComment(id: string): MultiremiIssueComment | null {
     return this.issues.getIssueComment(id);
   }

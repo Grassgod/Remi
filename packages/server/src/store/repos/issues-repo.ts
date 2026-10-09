@@ -5237,6 +5237,13 @@ export class IssuesRepo {
     return row ? this.hydrateIssueComment(this.commentFromLogRow(row)) : null;
   }
 
+  getIssueCommentSourceWorkspaceId(commentId: string): string | null {
+    const row = this.ctx.db.query(`SELECT h.workspace_id FROM multiremi_issue_message_records cmt
+      JOIN multiremi_conversation_log m ON m.id=cmt.id JOIN multiremi_conversation_heads h ON h.session_id=m.session_id
+      JOIN multiremi_issues i ON i.id=cmt.issue_id WHERE cmt.id=?`).get(commentId);
+    return row?.workspace_id ? String(row.workspace_id) : null;
+  }
+
   listIssueComments(issueId: string): MultiremiIssueComment[] {
     const rows = this.ctx.db.query(
       `SELECT cmt.*, log.id AS log_id, log.body_md AS log_body_md,
@@ -6103,7 +6110,9 @@ export class IssuesRepo {
   /** `listAttachmentsForIssue` for a caller that already proved the issue exists. */
   listAttachmentsForExistingIssue(issueId: string): MultiremiAttachment[] {
     const rows = this.ctx.db.query(
-      "SELECT * FROM multiremi_attachments WHERE issue_id = ? AND comment_id IS NULL ORDER BY created_at ASC",
+      `SELECT * FROM multiremi_attachments WHERE issue_id = ? AND comment_id IS NULL
+       AND workspace_id = (SELECT i.workspace_id FROM multiremi_issues i WHERE i.id = multiremi_attachments.issue_id)
+       ORDER BY created_at ASC`,
     ).all(issueId) as Row[];
     return rows.map(toAttachment);
   }

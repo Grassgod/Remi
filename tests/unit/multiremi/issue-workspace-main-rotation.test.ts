@@ -136,4 +136,62 @@ pendingTurnBackendTests('explicit Issue workspace Main rotation', (fixture, back
     f.db.run("INSERT INTO multiremi_issue_activity(id,issue_id,type,body,created_at) VALUES(?,?,'legacy_unknown',?,?)", ['unknown_origin', issue.id, 'SOURCE_ONLY_PRIVATE_UNKNOWN', new Date().toISOString()]);
     expect(JSON.stringify(store.listIssueActivity(issue.id))).not.toContain('SOURCE_ONLY_PRIVATE');
   });
+  it('keeps known source attachment IDs out of target reads, uploads and new shared capabilities', async () => {
+    const { store } = fixture();
+    const issue = store.createIssue({ title: 'Attachment origin move', responsibleMemberId: 'mem_local_local' });
+    const oldComment = store.createIssueComment(issue.id, { body: 'SOURCE_ONLY_PRIVATE_ATTACHMENT_COMMENT' });
+    const oldAttachments = [null, oldComment.id].map(commentId => store.createAttachment({ workspaceId: 'local', issueId: issue.id, commentId,
+      filename: 'SOURCE_ONLY_PRIVATE_FILE.txt', url: 'https://example.test/source-private-file.txt', contentType: 'text/plain', sizeBytes: 10 }));
+    const target = store.createWorkspace({ name: 'Attachment destination', slug: 'attachment-destination' });
+    const user = store.getOrCreateUser({ externalId: 'attachment-destination-user', name: 'Destination human' });
+    const human = store.createWorkspaceMember({ workspaceId: target.id, userId: user.id, name: 'Destination human', role: 'owner' });
+    store.updateIssue(issue.id, { workspaceId: target.id, responsibleMemberId: human.id, actorType: 'member', actorId: 'mem_local_local' });
+    const sourceToken = await store.createAccessToken({ type: 'pat', name: 'Source history reader', workspaceId: 'local', userId: 'local' });
+    const targetToken = await store.createAccessToken({ type: 'pat', name: 'Destination reader', workspaceId: target.id, userId: user.id });
+    const sourceHeaders = { Authorization: `Bearer ${sourceToken.token}` }, targetHeaders = { Authorization: `Bearer ${targetToken.token}` };
+    const app = createMultiremiApp({ store, authToken: 'attachment-origin-master', shareSecret: 'attachment-origin-share' });
+    for (const attachment of oldAttachments) {
+      const read = await app.request(`/api/multiremi/attachments/${attachment.id}`, { headers: sourceHeaders });
+      expect(read.status).toBe(200);
+      expect(await read.text()).toContain('SOURCE_ONLY_PRIVATE_FILE');
+      expect((await app.request(`/api/multiremi/attachments/${attachment.id}`, { headers: targetHeaders })).status).toBe(404);
+    }
+    const commentAttachment = oldAttachments[1]!;
+    // The source user retains historical reads, not writes to a moved Issue.
+    expect((await app.request(`/api/attachments/${commentAttachment.id}`, { method: 'DELETE', headers: sourceHeaders })).status).toBe(404);
+    expect(store.getAttachment(commentAttachment.id)).toEqual(commentAttachment);
+    for (const headers of [sourceHeaders, targetHeaders]) {
+      const created = await app.request('/api/multiremi/attachments', { method: 'POST', headers: { ...headers, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ workspace_id: target.id, issue_id: issue.id, comment_id: oldComment.id, filename: 'New forbidden link.txt', url: 'https://example.test/forbidden.txt' }) });
+      expect(created.status).toBe(404);
+      const form = new FormData();
+      form.set('file', new File(['forbidden source mutation'], 'forbidden.txt', { type: 'text/plain' }));
+      form.set('issue_id', issue.id); form.set('comment_id', oldComment.id);
+      const upload = await app.request('/api/upload-file', { method: 'POST', headers, body: form });
+      expect(upload.status).toBe(404);
+    }
+    const newComment = store.createIssueComment(issue.id, { body: 'Target attachment comment' });
+    const created = await app.request('/api/multiremi/attachments', { method: 'POST', headers: { ...targetHeaders, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ workspace_id: target.id, issue_id: issue.id, comment_id: newComment.id, filename: 'Target file.txt', url: 'https://example.test/target-file.txt' }) });
+    expect(created.status).toBe(201);
+    const newAttachment = (await created.json() as { attachment: { id: string } }).attachment;
+    expect((await app.request(`/api/multiremi/attachments/${newAttachment.id}`, { headers: targetHeaders })).status).toBe(200);
+    expect(store.listAttachmentsForIssue(issue.id)).toEqual([]);
+    const detail = await app.request(`/api/multiremi/issues/${issue.id}`, { headers: targetHeaders });
+    expect(detail.status).toBe(200);
+    expect(await detail.text()).not.toContain('SOURCE_ONLY_PRIVATE');
+    const shared = await app.request(`/api/issues/${issue.id}/share`, { method: 'POST', headers: targetHeaders });
+    expect(shared.status).toBe(201);
+    const token = (await shared.json() as { share: { token: string } }).share.token;
+    const shareHeaders = { 'X-Remi-Share': token };
+    for (const attachment of oldAttachments) {
+      expect((await app.request(`/api/shares/${token}/attachments/${attachment.id}/content`, { headers: shareHeaders })).status).toBe(404);
+    }
+    const targetFile = await app.request(`/api/shares/${token}/attachments/${newAttachment.id}/content`, { headers: shareHeaders });
+    expect(targetFile.status).toBe(302);
+    expect(targetFile.headers.get('Location')).toBe('https://example.test/target-file.txt');
+    const bundle = await app.request(`/api/shares/${token}`, { headers: shareHeaders });
+    expect(bundle.status).toBe(200);
+    expect(await bundle.text()).not.toContain('SOURCE_ONLY_PRIVATE');
+  });
 });
