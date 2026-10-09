@@ -1,4 +1,5 @@
 import type { MessageHeader, SendMessageInput, SendMessageResult, UnifiedMessage } from '@multiremi/contracts/unified-model.js';
+import { isHistoricalIssueQuestionRecord } from '@multiremi/contracts';
 import type { CreateTaskInput } from '@multiremi/contracts/types.js';
 import type { CommitEventQueue, StoreContext } from '../context.js';
 import { createId } from '@multiremi/ids.js';
@@ -177,7 +178,7 @@ export function sendMessageWithinTransaction(ctx:StoreContext,input:SendMessageI
   // can let Hub observers see the patch before the new message itself.
   const metadata:Record<string,any>={...input.metadata,execution_scope:scope};
   if(input.message_kind==='decision'){
-    const key=metadata.human_request?'human_request':'decision_record';
+    const key=metadata.human_request?'human_request':metadata.question?'question':isHistoricalIssueQuestionRecord(metadata.decision_record)?'decision_record':'message_choice';
     metadata[key]={status:'pending',...(metadata[key] as object)};
   }
   if(existing&&(existing.session_id!==sessionId||existing.sender_type!==input.sender.type||existing.sender_id!==input.sender.id))throw new Error('Cannot readdress a message owned by another sender');

@@ -23,9 +23,10 @@ pendingTurnBackendTests("MUL-508 browser log source visibility", fixture => {
     const user = store.getOrCreateUser({ externalId: "ws-member", name: "Member" });
     const recipient = store.createWorkspaceMember({ userId: user.id, name: user.name, role: "member" });
     const sourceOwner = store.getOrCreateUser({ externalId: "ws-source-owner", name: "Source owner" });
-    store.createWorkspaceMember({ userId: sourceOwner.id, name: sourceOwner.name, role: "member" });
+    const sourceHuman = store.createWorkspaceMember({ userId: sourceOwner.id, name: sourceOwner.name, role: "member" });
     const agent = store.createAgent({ name: "Source", provider: "codex", visibility: shared ? "workspace" : "private", ownerId: sourceOwner.id });
-    const issue = createResponsibleTestIssue(store, { title: "Browser visibility", assigneeType: "agent", assigneeId: agent.id });
+    const runtime = store.registerRuntime({ name: 'Browser native host', provider: 'codex', daemonId: 'browser-native', maxConcurrency: 16, ownerId: sourceOwner.id });
+    const issue = createResponsibleTestIssue(store, { title: "Browser visibility", assigneeType: "agent", assigneeId: agent.id, responsibleMemberId: sourceHuman.id });
     const session = store.getOrCreateDefaultIssueSession(issue.id);
     const member = await store.createAccessToken({ type: "pat", name: "Member", userId: user.id, workspaceId: "local" });
     const owner = await store.createAccessToken({ type: "pat", name: "Source owner", userId: sourceOwner.id, workspaceId: "local" });
@@ -37,14 +38,20 @@ pendingTurnBackendTests("MUL-508 browser log source visibility", fixture => {
     function question(kind: "permission" | "question") {
       const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "Public request" });
       hub.flushNow();
-      db.run("UPDATE multiremi_turns SET status='running',legacy_prompt='Private turn prompt' WHERE current_attempt_id=?", [task.id]);
-      db.run("UPDATE multiremi_turn_attempts SET status='running' WHERE id=?", [task.id]);
-      const request = store.createTaskHumanRequest({ taskId: task.id, kind, payload: kind === "permission"
-        ? { title: "Private request payload", options: [{ optionId: "allow_once", kind: "allow_once", name: "Allow" }] }
-        : { title: "Private request payload", questions: [{ question: "Continue?" }] } });
+      expect(store.claimTask(runtime.id)?.id).toBe(task.id); store.startTask(task.id);
+      db.run("UPDATE multiremi_turns SET legacy_prompt='Private turn prompt' WHERE current_attempt_id=?", [task.id]);
+      const turn = store.getTurnForAttempt(task.id)!;
+      const result = store.getDaemonTurnBridge().rpc('turn.decision', { turn_id: turn.id, attempt_id: task.id,
+        wait_id: `browser:${task.id}`, dedupe_key: `browser:${task.id}`, body_md: 'Private request payload',
+        options: kind === 'permission' ? [{ label: 'Allow', value: 'allow_once' }] : [{ label: 'Yes', value: 'Yes' }],
+        metadata: { kind, title: 'Private request payload', ...(kind === 'permission'
+          ? { options: [{ optionId: 'allow_once', kind: 'allow_once', name: 'Allow' }] }
+          : { questions: [{ question: 'Continue?', options: [{ label: 'Yes' }] }] }) } },
+        { runtimeId: runtime.id, daemonId: runtime.daemonId!, workspaceId: 'local' });
+      expect(result.ok).toBe(true);
+      const request = store.getTaskHumanRequest(String(result.message_id))!;
       hub.flushNow();
       store.issueMessageCardToken(request.id, "open_owner");
-      const turn = store.getTurnForAttempt(task.id)!;
       return { task, request, turn, row: store.getConversationLogEntryById(request.id)! };
     }
     function start(live = true) {
@@ -91,7 +98,7 @@ pendingTurnBackendTests("MUL-508 browser log source visibility", fixture => {
       hub.shutdown();
       await pool.close();
     }
-    return { store, db, agent, issue, session, recipient, member, owner, hub, question, start, request, connect, close };
+    return { store, db, agent, runtime, issue, session, recipient, sourceHuman, member, owner, hub, question, start, request, connect, close };
   }
   function noCredentials(value: unknown) {
     if (Array.isArray(value)) { value.forEach(noCredentials); return; }
@@ -113,12 +120,13 @@ pendingTurnBackendTests("MUL-508 browser log source visibility", fixture => {
   for (const moved of ["source", "target"] as const) it(`retained replay hides decisions, replies and edit markers after the ${moved} Issue moves workspace`, async () => {
     const f = await scaffold(true);
     try {
-      const source = createResponsibleTestIssue(f.store, { title: "Decision source", parentIssueId: f.issue.id });
-      const decision = f.store.createIssueDecision(source.id, {
-        kind: "production_change", title: "PRIVATE decision", body: "PRIVATE body", options: ["yes", "no"],
-      }, { type: "member", id: "mem_local_local", taskId: null });
-      f.store.answerIssueDecision(decision.issueId, decision.id, { answer: "yes", reason: "" },
-        { type: "member", id: "mem_local_local", taskId: null });
+      const source = createResponsibleTestIssue(f.store, { title: "Decision source", parentIssueId: f.issue.id, assigneeType: 'agent', assigneeId: f.agent.id });
+      const decision = f.store.sendMessage({ session_id: f.session.id, sender: { type: 'member', id: f.sourceHuman.id }, to: { type: 'none' },
+        message_kind: 'decision', wake_requested: 'inbox_only', body_md: 'PRIVATE body', options: [{ label: 'Yes', value: 'yes' }, { label: 'No', value: 'no' }],
+        metadata: { decision_record: { source_issue_id: source.id, source_task_id: null, kind: 'production_change', title: 'PRIVATE decision',
+          body: 'PRIVATE body', status: 'escalated', owner_agent_id: f.agent.id, history: [] } } }).message;
+      f.store.answerMessageDecision(decision.id, { sender: { type: 'member', id: f.sourceHuman.id },
+        expected_route_revision: f.store.getQuestion(decision.id)!.route_revision, body_md: 'yes', response: { answer: 'yes' } });
       const original = f.store.getConversationLogEntryById(decision.id)!;
       const reply = f.store.listMessages(f.session.id, { limit: 1000 }).find(message => message.reply_to_id === decision.id)!;
       const marker = f.store.appendConversationLog({ sessionId: f.session.id, kind: "message_edited", authorType: "system",
@@ -194,6 +202,7 @@ pendingTurnBackendTests("MUL-508 browser log source visibility", fixture => {
       const q = f.question(kind); f.start();
       const path = `/api/sessions/${f.session.id}/messages`;
       const answered = await f.request(path, f.owner.token, { reply_to_id: q.request.id,
+        expected_route_revision: f.store.getQuestion(q.request.id)!.route_revision,
         response: kind === "permission" ? { option_id: "allow_once" } : { answers: { "Continue?": "Yes" } } });
       expect(answered.status).toBe(200);
       const reply = answered.data.message;
@@ -211,6 +220,30 @@ pendingTurnBackendTests("MUL-508 browser log source visibility", fixture => {
       });
       expect(owner.frames().find(frame => frame.seq === reply.seq)?.payload.id).toBe(reply.id);
       noCredentials(owner.frames());
+    } finally { await f.close(); }
+  });
+
+  it('the designated human can read and answer the private native Q while generic messages, trace and replay remain hidden', async () => {
+    const f = await scaffold();
+    try {
+      f.store.updateIssue(f.issue.id, { responsibleMemberId: f.recipient.id, actorType: 'member', actorId: f.sourceHuman.id });
+      const q = f.question('permission'); f.start();
+      expect((await f.request(`/api/messages/${q.request.id}/question`, f.member.token)).status).toBe(200);
+      await readReply(f, q.request.id, f.member.token, false);
+      expect((await f.request(`/api/turns/${q.turn.id}/trace`, f.member.token)).status).toBe(404);
+      const browser = await f.connect(f.member.token); await browser.subscribe(); await browser.through(q.row.seq);
+      privateRowsHidden(browser.frames(), [q.request.id, q.turn.id, q.task.id]);
+      const input = { expected_route_revision: f.store.getQuestion(q.request.id)!.route_revision, response: { option_id: 'allow_once' } };
+      expect((await f.request(`/api/messages/${q.request.id}/question/answer`, f.owner.token, input)).status).toBe(403);
+      expect(f.store.getQuestion(q.request.id)?.status).toBe('pending');
+      const answer = await f.request(`/api/messages/${q.request.id}/question/answer`, f.member.token, input);
+      expect(answer.status, JSON.stringify(answer.data)).toBe(200);
+      const replyId = f.store.getQuestion(q.request.id)!.answer!.reply_message_id;
+      await readReply(f, replyId, f.member.token, false);
+      expect(f.store.getDaemonTurnBridge().rpc('turn.decision.consume', { turn_id: q.turn.id, attempt_id: q.task.id,
+        message_id: q.request.id, wait_id: `browser:${q.task.id}`, reply_message_id: replyId },
+        { runtimeId: f.runtime.id, daemonId: f.runtime.daemonId!, workspaceId: 'local' }).ok).toBe(true);
+      expect(f.store.getQuestion(q.request.id)?.wait_status).toBe('consumed');
     } finally { await f.close(); }
   });
 
@@ -259,14 +292,20 @@ pendingTurnBackendTests("MUL-508 browser log source visibility", fixture => {
         fields: { body_md: "Private updated body", metadata: { ...q.row.metadata, card_token_future: "fixture", nested: { card_token_hash: "fixture" } } },
       }));
       f.hub.flushNow();
-      await waitFor(() => owner.frames().some(frame => frame.kind === "patch" && frame.seq === q.row.seq && frame.payload.revision === version), "authorized patch");
+      try {
+        await waitFor(() => owner.frames().some(frame => frame.kind === "patch" && frame.seq === q.row.seq && frame.payload.revision === version), "authorized patch");
+      } catch {
+        throw new Error(JSON.stringify({ expected_revision: version, stored_revision: f.store.getConversationLogEntryById(q.request.id)!.revision,
+          frames: owner.frames().filter(frame => frame.seq === q.row.seq).map(frame => ({ kind: frame.kind, revision: frame.payload.revision })) }));
+      }
       await waitFor(() => member.frames().some(frame => frame.seq === q.row.seq && frame.payload.revision === version), "redacted patch marker");
       const edited = f.store.appendConversationLog({ sessionId: f.session.id, kind: "message_edited", authorType: "system",
         metadata: { target_seq: q.row.seq, previous_body: "Private request payload", body: "Private updated body" } });
       await member.through(edited.seq); await owner.through(edited.seq);
       expect(member.frames().find(frame => frame.seq === edited.seq)?.payload.visibility).toBe("hidden");
-      const reply = f.store.sendMessage({ session_id: f.session.id, sender: { type: "member", id: "mem_local_local" },
-        to: { type: "none" }, message_kind: "reply", reply_to_id: q.request.id, body_md: "Private response", metadata: { human_response: { option_id: "allow_once" } }, wake_requested: "inbox_only" }).message;
+      const reply = f.store.answerMessageDecision(q.request.id, { sender: { type: 'member', id: f.sourceHuman.id },
+        expected_route_revision: f.store.getQuestion(q.request.id)!.route_revision, body_md: 'Private response',
+        response: { option_id: 'allow_once' } }).message;
       await member.through(reply.seq); await owner.through(reply.seq);
       privateRowsHidden(member.frames(), [q.request.id, q.turn.id, q.task.id, reply.id]);
       expect(JSON.stringify(member.frames())).not.toContain("Private response");

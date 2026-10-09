@@ -43,6 +43,26 @@ function setup(f: PendingTurnTestFixture, sameOwner = false, busyOwner = false, 
 }
 
 pendingTurnBackendTests('one question through the responsibility chain', fixture => {
+  it('ordinary choices are excluded before the Question page limit without rewriting historical rows', () => {
+    const h = setup(fixture());
+    const original = h.store.getMessage(h.q.id)!;
+    const ordinary: string[] = [];
+    for (const historical of [false, true]) for (let i = 0; i < 2; i++) {
+      const choice = h.store.sendMessage({ session_id: h.q.session_id, sender: { type: 'platform', id: null },
+        to: { type: 'member', ref: 'mem_local_local' }, message_kind: 'decision', wake_requested: 'inbox_only',
+        body_md: 'Ordinary selection', options: [{ label: 'Yes', value: 'yes' }] }).message;
+      const metadata = historical ? { execution_scope: '', decision_record: { status: 'pending' } } : choice.metadata;
+      h.db.run('UPDATE multiremi_conversation_log SET metadata=?,created_at=? WHERE id=?',
+        [JSON.stringify(metadata), '2030-01-01T00:00:00.000Z', choice.id]);
+      ordinary.push(choice.id);
+    }
+    const before = ordinary.map(id => h.store.getMessage(id)!.metadata);
+    expect(ordinary.map(id => h.store.getQuestion(id))).toEqual([null, null, null, null]);
+    expect(h.store.listIssueQuestions(h.issue.id, undefined, { limit: 1 }).map(question => question.id)).toEqual([h.q.id]);
+    expect(ordinary.map(id => h.store.getMessage(id)!.metadata)).toEqual(before);
+    expect(h.store.getMessage(h.q.id)?.body_md).toBe(original.body_md);
+    expect(h.store.getQuestion(h.q.id)?.wait_status).toBe('waiting');
+  });
   it('native AUQ uses the explicitly assigned second Squad rather than the Worker first membership', async () => {
     const { store, db } = fixture();
     const runtime = store.registerRuntime({ name: 'Two Squad Q host', provider: 'codex', daemonId: 'two-squad-q', maxConcurrency: 16 });

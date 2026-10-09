@@ -21,7 +21,8 @@ pendingTurnBackendTests("MUL-508 access consistency", (fixture, backend) => {
     const user = store.getOrCreateUser({ externalId: "access-member", name: "Member" });
     const member = store.createWorkspaceMember({ userId: user.id, name: user.name, role: "member" });
     const agent = store.createAgent({ name: "Worker", provider: "codex", visibility: "workspace" });
-    const issue = createResponsibleTestIssue(store, { title: "Access", assigneeType: "agent", assigneeId: agent.id });
+    const runtime = store.registerRuntime({ name: 'Access native host', provider: 'codex', daemonId: 'access-native', maxConcurrency: 16 });
+    const issue = createResponsibleTestIssue(store, { title: "Access", assigneeType: "agent", assigneeId: agent.id, responsibleMemberId: member.id });
     const session = store.getOrCreateDefaultIssueSession(issue.id);
     const pat = await store.createAccessToken({ name: "Member", type: "pat", userId: user.id, workspaceId: "local" });
     const app = createMultiremiApp({ store, authToken: "access-master" });
@@ -35,16 +36,25 @@ pendingTurnBackendTests("MUL-508 access consistency", (fixture, backend) => {
     }).message;
     const running = (chatSessionId?: string) => {
       const task = store.createTask({ agentId: agent.id, prompt: "Work", ...(chatSessionId ? { chatSessionId } : { issueId: issue.id }) });
-      db.run("UPDATE multiremi_turns SET status='running' WHERE current_attempt_id=?", [task.id]);
-      db.run("UPDATE multiremi_turn_attempts SET status='running' WHERE id=?", [task.id]);
-      return { task, turn: store.getTurnForAttempt(task.id)! };
+      expect(store.claimTask(runtime.id)?.id).toBe(task.id); store.startTask(task.id);
+      return { task: store.getTask(task.id)!, turn: store.getTurnForAttempt(task.id)! };
+    };
+    const question = (source: ReturnType<typeof running>, kind: 'question' | 'permission') => {
+      const result = store.getDaemonTurnBridge().rpc('turn.decision', { turn_id: source.turn.id, attempt_id: source.task.id,
+        wait_id: `access:${source.task.id}`, dedupe_key: `access:${source.task.id}`, body_md: 'Continue?',
+        options: kind === 'question' ? [{ label: 'Yes', value: 'Yes' }] : [{ label: 'Allow', value: 'allow_once' }],
+        metadata: kind === 'question' ? { kind, questions: [{ question: 'Continue?', options: [{ label: 'Yes' }] }] }
+          : { kind, options: [{ optionId: 'allow_once', kind: 'allow_once', name: 'Allow' }] } },
+        { runtimeId: runtime.id, daemonId: runtime.daemonId!, workspaceId: 'local' });
+      expect(result.ok).toBe(true);
+      return store.getMessage(String(result.message_id))!;
     };
     const snapshot = () => ["multiremi_issue_sessions", "multiremi_conversation_heads", "multiremi_conversation_log", "multiremi_turns", "multiremi_turn_attempts", "multiremi_attachments"]
       .map(table => Number(db.query(`SELECT COUNT(*) AS n FROM ${table}`).get().n));
     const lane = (id: string, type = "member", reader = member.id, scope = "") => Number(db.query(
       "SELECT cursor_seq FROM multiremi_session_lanes WHERE session_id=? AND reader_type=? AND reader_id=? AND execution_scope=?",
     ).get(id, type, reader, scope)?.cursor_seq ?? 0);
-    return { store, db, databaseUrl, user, member, agent, issue, session, pat, app, request, send, running, snapshot, lane };
+    return { store, db, databaseUrl, user, member, agent, runtime, issue, session, pat, app, request, send, running, question, snapshot, lane };
   }
   async function stream(f: Awaited<ReturnType<typeof scaffold>>) {
     const pool = createReadPool({ databaseUrl: f.databaseUrl, sqliteDb: f.db });
@@ -109,6 +119,29 @@ pendingTurnBackendTests("MUL-508 access consistency", (fixture, backend) => {
     expect(result.status).toBe(200); expect(result.data.turn.id).toBe(target.turn.id);
     expect(result.data.turn.current_attempt_id).not.toBe(target.task.id);
     expect(f.store.listTurnAttempts(target.turn.id)).toHaveLength(2);
+  });
+  for (const historical of [false, true]) it(`ordinary ${historical ? 'retained status-only' : 'new message_choice'} keeps recipient-only reply and replay protection without a Q`, async () => {
+    const f = await scaffold();
+    const q = f.store.sendMessage({ session_id: f.session.id, sender: { type: 'agent', id: f.agent.id },
+      to: { type: 'member', ref: f.member.id }, message_kind: 'decision', wake_requested: 'inbox_only', body_md: 'Ordinary choice',
+      options: [{ label: 'Yes', value: 'yes' }] }).message;
+    if (historical) f.db.run('UPDATE multiremi_conversation_log SET metadata=? WHERE id=?',
+      [JSON.stringify({ execution_scope: '', decision_record: { status: 'pending' } }), q.id]);
+    else expect(q.metadata.message_choice).toEqual({ status: 'pending' });
+    expect(f.store.getQuestion(q.id)).toBeNull();
+    expect((await f.request(`/api/messages/${q.id}/question`)).status).toBe(404);
+    const body = { message_kind: 'reply', reply_to_id: q.id, metadata: { selected_options: ['yes'] } };
+    const path = `/api/sessions/${f.session.id}/messages`;
+    expect((await f.request(path, 'POST', body, 'access-master')).status).toBe(403);
+    expect(f.store.getMessage(q.id)?.resolved_at).toBeNull();
+    const reply = await f.request(path, 'POST', body);
+    expect(reply.status, JSON.stringify(reply.data)).toBe(200);
+    expect(reply.data.message.reply_to_id).toBe(q.id);
+    expect(reply.data.message.metadata.human_response.selected_options).toEqual(['yes']);
+    expect(f.store.getMessage(q.id)?.metadata[historical ? 'decision_record' : 'message_choice']).toMatchObject({ status: 'answered' });
+    expect((await f.request(path, 'POST', body)).status).toBe(409);
+    expect(f.store.listMessages(f.session.id).filter(message => message.reply_to_id === q.id)).toHaveLength(1);
+    expect(f.store.getQuestion(q.id)).toBeNull();
   });
 
   for (const kind of ["issue", "chat"] as const) it(`B2: ${kind} replacement revokes every old token atomically and rejects all token entrypoints`, async () => {
@@ -257,18 +290,23 @@ pendingTurnBackendTests("MUL-508 access consistency", (fixture, backend) => {
 
   it("B6 guardrail: moved-source decision, reply and marker stay hidden across HTTP, projector, attachments, counts and read cursors", async () => {
     const f = await scaffold(), s = await stream(f);
-    const parent = createResponsibleTestIssue(f.store, { title: "Parent" }), parentSession = f.store.getOrCreateDefaultIssueSession(parent.id);
-    const child = createResponsibleTestIssue(f.store, { title: "Child", parentIssueId: parent.id });
-    const decision = f.store.createIssueDecision(child.id, { kind: "production_change", title: "Moved source decision" }, { type: "member", id: f.member.id, taskId: null });
-    const q = f.store.getMessage(decision.id)!;
-    f.db.run("UPDATE multiremi_conversation_log SET to_member_id=? WHERE id=?", [f.member.id, q.id]);
+    const parent = createResponsibleTestIssue(f.store, { title: "Parent", responsibleMemberId: f.member.id,
+      assigneeType: 'agent', assigneeId: f.agent.id }), parentSession = f.store.getOrCreateDefaultIssueSession(parent.id);
+    const child = createResponsibleTestIssue(f.store, { title: "Child", parentIssueId: parent.id, assigneeType: 'agent', assigneeId: f.agent.id });
+    // Retain the real pre-Q source/target shape for historical replay checks.
+    const q = f.store.sendMessage({ session_id: parentSession.id, sender: { type: 'member', id: f.member.id }, to: { type: 'member', ref: f.member.id },
+      message_kind: 'decision', wake_requested: 'inbox_only', body_md: 'Moved source edited decision', metadata: { decision_record: {
+        source_issue_id: child.id, source_task_id: null, kind: 'production_change', title: 'Moved source decision',
+        body: 'Moved source decision', status: 'escalated', owner_agent_id: null, history: [] } } }).message;
     const attachment = f.store.createAttachment({ workspaceId: "local", issueId: parent.id, commentId: q.id, filename: "decision.txt", contentType: "text/plain", sizeBytes: 4, url: "https://example.invalid/decision.txt" });
-    const reply = f.store.sendMessage({ session_id: parentSession.id, sender: { type: "member", id: f.member.id }, to: { type: "member", ref: f.member.id },
-      message_kind: "reply", wake_requested: "inbox_only", body_md: "Moved source reply", reply_to_id: q.id, metadata: { human_response: { answer: "Yes" } } }).message;
-    f.store.editMessage(q.id, { body_md: "Moved source edited decision" });
-    const marker = f.store.listConversationLogEntries(parentSession.id).find(e => e.kind === "message_edited")!;
+    const reply = f.store.answerMessageDecision(q.id, { sender: { type: 'member', id: f.member.id },
+      expected_route_revision: f.store.getQuestion(q.id)!.route_revision, body_md: 'Moved source reply', response: { answer: 'Yes' } }).message;
+    const marker = f.store.appendConversationLog({ sessionId: parentSession.id, kind: 'message_edited', authorType: 'system',
+      metadata: { target_seq: q.seq, previous_body: 'Moved source decision' } });
     const foreign = f.store.createWorkspace({ name: "Target" });
-    f.store.updateIssue(child.id, { parentIssueId: null }); f.store.updateIssue(child.id, { workspaceId: foreign.id });
+    f.store.updateIssue(child.id, { parentIssueId: null, responsibleMemberId: f.member.id, actorType: 'member', actorId: f.member.id });
+    const foreignHuman = f.store.createWorkspaceMember({ workspaceId: foreign.id, name: 'Explicit moved-source human' });
+    f.store.updateIssue(child.id, { workspaceId: foreign.id, responsibleMemberId: foreignHuman.id, actorType: 'member', actorId: f.member.id });
     try {
       expect(await s.allowed(parentSession.id, f.user.id)).toBe(true);
       for (const row of [q, reply, marker]) {
@@ -308,11 +346,14 @@ pendingTurnBackendTests("MUL-508 access consistency", (fixture, backend) => {
     const before = (await f.request("/api/inbox", "GET", undefined, token.token)).data.unread_count;
     const privateAgent = f.store.createAgent({ name: "Private source", provider: "codex", visibility: "private", ownerId: "local" });
     const task = f.store.createTask({ agentId: privateAgent.id, issueId: f.issue.id, prompt: "Private source" });
-    f.db.run("UPDATE multiremi_turns SET status='running' WHERE current_attempt_id=?", [task.id]);
-    f.db.run("UPDATE multiremi_turn_attempts SET status='running' WHERE id=?", [task.id]);
-    const request = f.store.createTaskHumanRequest({ taskId: task.id, kind: "question", payload: { questions: [{ question: "Private?" }] } });
-    const metadata = { ...f.store.getMessage(request.id)!.metadata, execution_scope: "private_scope" };
-    f.db.run("UPDATE multiremi_conversation_log SET to_member_id=NULL,to_agent_id=?,metadata=? WHERE id=?", [f.agent.id, JSON.stringify(metadata), request.id]);
+    expect(f.store.claimTask(f.runtime.id)?.id).toBe(task.id); f.store.startTask(task.id);
+    // A retained old private request has no new responsibility notification.
+    // This case measures the historical row's generic Inbox visibility only.
+    const request = f.store.sendMessage({ session_id: f.session.id, source_turn_id: f.store.getTurnForAttempt(task.id)!.id,
+      sender: { type: 'agent', id: privateAgent.id }, to: { type: 'agent', ref: f.agent.id }, message_kind: 'decision',
+      wake_requested: 'inbox_only', execution_scope: 'private_scope', body_md: 'Private?', metadata: { human_request: {
+        task_id: task.id, kind: 'question', status: 'pending', payload: { questions: [{ question: 'Private?' }] } } } }).message;
+    expect(request.metadata.question).toBeUndefined();
     expect((await f.request(`/api/messages/${request.id}`, "GET", undefined, token.token)).status).toBe(404);
     const inbox = await f.request("/api/inbox?limit=1", "GET", undefined, token.token);
     expect(inbox.data.unread_count).toBe(before); expect(inbox.data.items[0].id).toBe(visible.id);
@@ -326,9 +367,7 @@ pendingTurnBackendTests("MUL-508 access consistency", (fixture, backend) => {
 
   for (const kind of ["decision", "question", "permission"] as const) it(`B7: ${kind} cannot resolve or reopen and remains answerable through its state machine`, async () => {
     const f = await scaffold(), running = kind === "decision" ? null : f.running();
-    const message = running ? f.store.getMessage(f.store.createTaskHumanRequest({ taskId: running.task.id, kind: kind as "question" | "permission",
-      payload: kind === "question" ? { questions: [{ question: "Continue?" }] } : { options: [{ optionId: "allow_once", kind: "allow_once", name: "Allow" }] },
-    }).id)! : f.store.sendMessage({ session_id: f.session.id, sender: { type: "agent", id: f.agent.id }, to: { type: "member", ref: f.member.id },
+    const message = running ? f.question(running, kind as 'question' | 'permission') : f.store.sendMessage({ session_id: f.session.id, sender: { type: "agent", id: f.agent.id }, to: { type: "member", ref: f.member.id },
       message_kind: "decision", wake_requested: "now", body_md: "Choose", options: [{ label: "Yes", value: "yes" }] }).message;
     const before = f.store.getConversationLogHead(f.session.id)!.headSeq;
     for (const resolved of [true, false]) {
@@ -339,10 +378,11 @@ pendingTurnBackendTests("MUL-508 access consistency", (fixture, backend) => {
     if (running) { expect(f.store.getTaskHumanRequest(message.id)?.status).toBe("pending"); expect(f.store.getTurn(running.turn.id)?.status).toBe("awaiting_human"); }
     const response = kind === "decision" ? { metadata: { selected_options: ["yes"] } }
       : { response: kind === "question" ? { answers: { "Continue?": "Yes" } } : { option_id: "allow_once" } };
-    const answered = await f.request(`/api/sessions/${f.session.id}/messages`, "POST", { reply_to_id: message.id, ...response });
-    expect(answered.status).toBe(200); expect(f.store.getMessage(message.id)?.resolved_at).toBeTruthy();
+    const version = running ? { expected_route_revision: f.store.getQuestion(message.id)!.route_revision } : {};
+    const answered = await f.request(`/api/sessions/${f.session.id}/messages`, "POST", { reply_to_id: message.id, ...version, ...response });
+    expect(answered.status, JSON.stringify(answered.data)).toBe(200); expect(f.store.getMessage(message.id)?.resolved_at).toBeTruthy();
     expect((await f.request(`/api/messages/${message.id}/resolve`, "POST", { resolved: false })).status).toBe(409);
-    expect((await f.request(`/api/sessions/${f.session.id}/messages`, "POST", { reply_to_id: message.id, ...response })).status).toBe(409);
+    expect((await f.request(`/api/sessions/${f.session.id}/messages`, "POST", { reply_to_id: message.id, ...version, ...response })).status).toBe(409);
     if (running) { expect(f.store.getTaskHumanRequest(message.id)?.status).toBe("responded"); expect(f.store.getTurn(running.turn.id)?.status).toBe("running"); }
   });
 

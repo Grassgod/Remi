@@ -15,6 +15,7 @@ import { patchDecisionRecord } from './decision-records.js';
 import { lockLane } from './lane-machine.js';
 import { IssueDecisionError } from '../repos/issues-repo.js';
 import { Questions } from './questions.js';
+import { isHistoricalIssueQuestionRecord } from '@multiremi/contracts';
 
 type InboxQuery = {access?:InboxAccess;limit?:number;cursor?:{created_at:string;id:string};visible?:(sessionId:string)=>boolean;
   visibleMessage?:(message:Pick<UnifiedMessage,'id'|'session_id'|'reply_to_id'|'kind'|'task_id'|'metadata'>)=>boolean};
@@ -302,10 +303,11 @@ export class InboxOperations {
   }
   answerMessageDecision(id:string,input:{sender:SendMessageInput['sender'];body_md:string;credential?:QuestionCardCredential;response?:Record<string,unknown>;source_turn_id?:string;expected_route_revision?:number;expected_answer_revision?:number;revise?:boolean;reason?:string}) {
     return this.transaction(events=>{const message=getMessage(this.ctx,id);if(!message||message.message_kind!=='decision')throw new Error('Decision not found');this.lockMessage(message);
-      if (message.metadata.question || message.metadata.human_request || message.metadata.decision_record) return new Questions(this.ctx).answer(id, { expected_route_revision: input.expected_route_revision!, response: input.response ?? { answer: input.body_md }, body_md: input.body_md, revise: input.revise, reason: input.reason, expected_answer_revision: input.expected_answer_revision }, input.sender, input.source_turn_id, input.credential);
-      const key='decision_record';
-      if(input.sender.type==='member'?message.to_member_id!==input.sender.id:input.sender.type!=='agent'||message.to_agent_id!==input.sender.id)throw new Error('Decision requires its recipient');
-      if(!patchDecisionRecord(this.ctx,id,key,{status:'answered',answer:input.body_md,responded_at:nowIso()},undefined,input.credential))throw new Error('Decision is settled');
+      if (message.metadata.question || message.metadata.human_request || isHistoricalIssueQuestionRecord(message.metadata.decision_record)) return new Questions(this.ctx).answer(id, { expected_route_revision: input.expected_route_revision!, response: input.response ?? { answer: input.body_md }, body_md: input.body_md, revise: input.revise, reason: input.reason, expected_answer_revision: input.expected_answer_revision }, input.sender, input.source_turn_id, input.credential);
+      // Retain the carrier of old status-only choices without inventing a Q.
+      const key=message.metadata.decision_record?'decision_record':'message_choice';
+      if(input.sender.type==='member'?message.to_member_id!==input.sender.id:input.sender.type!=='agent'||message.to_agent_id!==input.sender.id)throw new IssueDecisionError(403,'Decision requires its recipient');
+      if(!patchDecisionRecord(this.ctx,id,key,{status:'answered',answer:input.body_md,responded_at:nowIso()},'pending',input.credential))throw new IssueDecisionError(409,'Decision is settled');
       return sendMessageWithinTransaction(this.ctx,{session_id:message.session_id,sender:input.sender,to:message.sender_type==='agent'&&message.sender_id?{type:'agent',ref:message.sender_id}:{type:'none'},
         body_md:input.body_md,message_kind:'reply',wake_requested:'now',reply_to_id:id,source_turn_id:input.source_turn_id,
         metadata:input.response?{human_response:input.response}:undefined},events);});

@@ -1,4 +1,5 @@
 import type { QuestionActor, QuestionAnswer, QuestionAnswerInput, QuestionHistoryEvent, QuestionMutationInput, QuestionStage, QuestionView, QuestionWaitStatus } from '@multiremi/contracts';
+import { isHistoricalIssueQuestionRecord } from '@multiremi/contracts';
 import type { SendMessageInput, UnifiedMessage } from '@multiremi/contracts/unified-model.js';
 import type { CommitEventQueue, StoreContext } from '../context.js';
 import { createCommitEventQueue } from '../context.js';
@@ -88,7 +89,7 @@ export class Questions {
     if (!message || message.deleted_at || message.message_kind !== 'decision') return null;
     const stored = message.metadata.question as QuestionRecord | undefined;
     if (stored?.version === 1) return { message, record: stored };
-    const old = message.metadata.decision_record as Record<string, any> | undefined;
+    const old = isHistoricalIssueQuestionRecord(message.metadata.decision_record) ? message.metadata.decision_record as Record<string, any> : undefined;
     const human = message.metadata.human_request as Record<string, any> | undefined;
     // Historical decisions have no native waiting call. Keep their identity and answers.
     if (!old && !human) return null;
@@ -205,7 +206,7 @@ export class Questions {
     if (!same(record.route[record.route_index]?.handler, actor)) throw new QuestionError(403, 'question_handler_required');
     this.fresh(message, record);
   }
-  private save(message: UnifiedMessage, record: QuestionRecord, events: CommitEventQueue, deriveIssue = true) {
+  private save(message: UnifiedMessage, record: QuestionRecord, events: CommitEventQueue, deriveIssue = true, deferEmit = false) {
     const metadata: Record<string, any> = { ...message.metadata, question: record };
     if (metadata.human_request) metadata.human_request = { ...metadata.human_request, expires_at: null, status: record.status === 'pending' ? 'pending' : record.status === 'answered' ? 'responded' : 'cancelled',
       ...(record.answer ? { response: record.answer.response, responded_by: record.answer.actor.id, responded_at: record.answer.at } : {}),
@@ -217,7 +218,7 @@ export class Questions {
         ...(history.length ? { answer: history.at(-1), history } : {}),
         ...(record.answer ? { answered_at: record.answer.at, answered_by_member_id: record.answer.actor.type === 'member' ? record.answer.actor.id : null } : {}) };
     }
-    this.ctx.conversationLog().updateConversationLogWithinTransaction(message.session_id, message.seq, { fields: { metadata, resolved_at: record.status === 'pending' ? null : nowIso() } });
+    this.ctx.conversationLog().updateConversationLogWithinTransaction(message.session_id, message.seq, { fields: { metadata, resolved_at: record.status === 'pending' ? null : nowIso() }, deferEmit });
     events.workspace.push({ type: 'inbox:new', workspaceId: record.workspace_id, actorType: 'system', actorId: null, payload: { index_only: true, root_question_id: message.id } });
     const relatedIssues = new Set([record.source_issue_id, ...record.route.map(r => r.issue_id)]);
     for (const issue_id of relatedIssues) if (issue_id) events.workspace.push({ type: 'decision:updated', workspaceId: record.workspace_id, actorType: 'system', actorId: null, payload: { issue_id, root_question_id: message.id } });
@@ -340,7 +341,9 @@ export class Questions {
     if ((result.message.metadata.question as QuestionRecord | undefined)?.history?.length) return result;
     this.event(record, 'created', { type: 'agent', id: turn.agent_id });
     this.notify(result.message, record, events);
-    this.save(result.message, record, events);
+    // sendMessage publishes the final committed entry. An initial patch at the
+    // same revision would invalidate that freshly delivered Hub patch base.
+    this.save(result.message, record, events, true, true);
     events.workspace.push({ type: 'decision:created', workspaceId: record.workspace_id, actorType: 'agent', actorId: turn.agent_id,
       payload: { issue_id: record.source_issue_id, root_question_id: result.message.id } });
     return { ...result, message: getMessage(this.ctx, result.message.id)! };
@@ -385,7 +388,9 @@ export class Questions {
         UNION SELECT ${this.jsonText('n', 'root_question_id')} FROM multiremi_conversation_log n WHERE n.session_id IN (SELECT id FROM sessions) AND n.kind='message' AND n.deleted_at IS NULL)
       SELECT m.id FROM candidates c JOIN multiremi_conversation_log m ON m.id=c.id JOIN multiremi_conversation_heads h ON h.session_id=m.session_id
       WHERE h.workspace_id=? AND m.message_kind='decision' AND m.deleted_at IS NULL
-      AND (CAST(${this.jsonText('m', 'question.version')} AS TEXT)='1' OR ${this.jsonText('m', 'human_request.status')} IS NOT NULL OR ${this.jsonText('m', 'decision_record.status')} IS NOT NULL)
+      AND (CAST(${this.jsonText('m', 'question.version')} AS TEXT)='1' OR ${this.jsonText('m', 'human_request.status')} IS NOT NULL
+        OR NULLIF(TRIM(CAST(${this.jsonText('m', 'decision_record.source_issue_id')} AS TEXT)),'') IS NOT NULL
+        OR NULLIF(TRIM(CAST(${this.jsonText('m', 'decision_record.issue_id')} AS TEXT)),'') IS NOT NULL)
       ${cursor ? 'AND (m.created_at<? OR (m.created_at=? AND m.id<?))' : ''} ORDER BY m.created_at DESC,m.id DESC LIMIT ?`)
       .all(issue.id, issue.workspaceId, issue.workspaceId, issue.workspaceId, issue.workspaceId, ...(cursor ? [cursor.created_at,cursor.created_at,cursor.id] : []), limit);
     return ids.map(row => this.get(row.id, actor)).filter((q): q is QuestionView => !!q);
