@@ -9,10 +9,12 @@ export function inboxVisibilitySql(db: SqlDatabase, access: InboxAccess) {
   const json = (alias: string, path: string) => db.dialect === 'postgres'
     ? `${alias}.metadata::jsonb #>> '{${path.replaceAll('.', ',')}}'`
     : `json_extract(${alias}.metadata,'$.${path}')`;
-  const inherits = (alias: string) => `(${json(alias, 'human_response')} IS NOT NULL OR ${json(alias, 'target_seq')} IS NOT NULL OR ${json(alias, 'message_id')} IS NOT NULL)`;
-  const related = (alias: string, next: string) => `(${next}.session_id=${alias}.session_id AND (
+  const sourceNotification = (alias: string) => `CAST(${json(alias, 'question_source_notification')} AS TEXT) IN ('true','1')`;
+  const inherits = (alias: string) => `(${json(alias, 'human_response')} IS NOT NULL OR ${json(alias, 'target_seq')} IS NOT NULL OR ${json(alias, 'message_id')} IS NOT NULL OR ${sourceNotification(alias)})`;
+  const related = (alias: string, next: string) => `((${next}.session_id=${alias}.session_id AND (
     ${next}.id=COALESCE(${alias}.reply_to_id,${json(alias, 'message_id')}) OR
-    CAST(${next}.seq AS TEXT)=CAST(${json(alias, 'target_seq')} AS TEXT)))`;
+    CAST(${next}.seq AS TEXT)=CAST(${json(alias, 'target_seq')} AS TEXT))) OR
+    ${sourceNotification(alias)} AND ${next}.id=${json(alias, 'root_question_id')})`;
   const chatGuard = (chat: string, turn: string) => {
     if (access.attemptId) { params.push(access.attemptId); return `${turn}.current_attempt_id=?`; }
     if (access.userId) { params.push(access.userId); return `${chat}.creator_id=?`; }
@@ -51,6 +53,8 @@ export function inboxVisibilitySql(db: SqlDatabase, access: InboxAccess) {
         OR t.session_id NOT LIKE 'chat_%' AND NOT (${sourceAgentGuard}))
       OR ${json('d', 'human_response')} IS NOT NULL AND d.task_id IS NULL AND NOT EXISTS (
         SELECT 1 FROM multiremi_conversation_log n WHERE ${related('d', 'n')})
+      OR ${sourceNotification('d')} AND NOT EXISTS (
+        SELECT 1 FROM multiremi_conversation_log n WHERE n.id=${json('d', 'root_question_id')})
       OR ${sourceIssue} IS NOT NULL AND (di.id IS NULL OR si.id IS NULL OR di.workspace_id<>h.workspace_id OR si.workspace_id<>h.workspace_id)
       OR d.depth=4 AND ${inherits('d')}
     )) AND ${conversationAgentGuard}`;

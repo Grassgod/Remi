@@ -62,6 +62,10 @@ export function conversationEntryDecision(
   depth = 0,
 ): ConversationVisibilityEntry | null | undefined {
   if (depth > 4) return null;
+  if (entry.metadata.question_source_notification === true) {
+    const original = typeof entry.metadata.root_question_id === 'string' ? reply(entry.metadata.root_question_id) : null;
+    return original ? conversationEntryDecision(original, reply, target, depth + 1) : null;
+  }
   if (entry.metadata.decision_record?.source_issue_id || entry.metadata.source_issue_id) return entry;
   if (!entry.metadata.human_response && !entry.metadata.decision_answer && !Number.isSafeInteger(entry.metadata.target_seq)
     && typeof entry.metadata.message_id !== "string") return undefined;
@@ -80,6 +84,10 @@ export function conversationEntrySource(
   depth = 0,
 ): string | null | undefined {
   if (depth > 4) return null;
+  if (entry.metadata.question_source_notification === true) {
+    const original = typeof entry.metadata.root_question_id === 'string' ? reply(entry.metadata.root_question_id) : null;
+    return original ? conversationEntrySource(original, reply, target, depth + 1) : null;
+  }
   if (entry.kind === "turn" || entry.metadata.human_request) {
     const replyId = entry.reply_to_id ?? entry.parent_id;
     return entry.task_id ?? (replyId ? reply(replyId)?.task_id : null) ?? null;

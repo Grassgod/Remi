@@ -339,6 +339,33 @@ pendingTurnBackendTests("MUL-508 access consistency", (fixture, backend) => {
     } finally { await s.pool.close(); }
   });
 
+  it("historical cross-session source returns inherit the original private Q and missing references fail closed", async () => {
+    const f = await scaffold(), s = await stream(f);
+    const q = f.question(f.running(), 'permission');
+    f.store.updateAgent(f.agent.id, { visibility: 'private', ownerId: 'local' });
+    const other = createResponsibleTestIssue(f.store, { title: 'Historical source surface', responsibleMemberId: f.member.id });
+    const session = f.store.getOrCreateDefaultIssueSession(other.id);
+    const notify = (root: string, suffix: string) => f.store.sendMessage({ session_id: session.id,
+      sender: { type: 'platform', id: null }, to: { type: 'none' }, message_kind: 'status', wake_requested: 'inbox_only',
+      body_md: `PRIVATE source return ${suffix}`, metadata: { question_source_notification: true, root_question_id: root } }).message;
+    const linked = notify(q.id, 'linked'), missing = notify('cmt_missing_original_question', 'missing');
+    try {
+      for (const row of [linked, missing]) {
+        expect((await f.request(`/api/messages/${row.id}`)).status).toBe(404);
+        const projected = await s.project(session.id, row.id, f.user.id);
+        expect(projected[0]?.payload).toMatchObject({ visibility: 'hidden' });
+        expect(JSON.stringify(projected)).not.toContain('PRIVATE');
+      }
+      expect((await f.request(`/api/sessions/${session.id}/messages`)).data.messages).toEqual([]);
+      const inbox = await f.request('/api/inbox?limit=1');
+      expect(inbox.data.items.some((row: any) => [linked.id, missing.id].includes(row.id))).toBe(false);
+      expect((await f.request(`/api/messages/${linked.id}`, 'GET', undefined, 'access-master')).status).toBe(200);
+      expect((await f.request(`/api/messages/${missing.id}`, 'GET', undefined, 'access-master')).status).toBe(404);
+      const visible = await s.project(session.id, linked.id, null);
+      expect(visible[0]?.payload).toMatchObject({ visibility: 'shown', body_md: linked.body_md });
+    } finally { await s.pool.close(); }
+  });
+
   it("B6: agent counts and per-scope read-all use the same private human-request visibility as the list", async () => {
     const f = await scaffold(), caller = f.running();
     const token = await f.store.createTaskAccessToken(caller.task, f.user.id);

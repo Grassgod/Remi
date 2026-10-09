@@ -34,16 +34,26 @@ export function createBrowserLogProjection(store: MultiremiStore, pool: ReadPool
       }))];
       const targets = [...new Set(frontier.flatMap(row => Number.isSafeInteger(row.metadata.target_seq)
         && !bySeq.has(Number(row.metadata.target_seq)) ? [Number(row.metadata.target_seq)] : []))];
-      if (!replies.length && !targets.length) break;
+      // Only historical source-return messages inherit this cross-session Q
+      // boundary. Handler/presenter notifications retain their own lane guards.
+      const questionRefs = [...new Set(frontier.flatMap(row => row.metadata.question_source_notification === true
+        && typeof row.metadata.root_question_id === 'string' && !byId.has(row.metadata.root_question_id) ? [row.metadata.root_question_id] : []))];
+      if (!replies.length && !targets.length && !questionRefs.length) break;
+      const conditions: string[] = [], params: unknown[] = [];
+      if (replies.length || targets.length) {
+        conditions.push(`(session_id=? AND (${[
+          ...(replies.length ? [`id IN (${replies.map(() => '?').join(',')})`] : []),
+          ...(targets.length ? [`seq IN (${targets.map(() => '?').join(',')})`] : []),
+        ].join(' OR ')}))`);
+        params.push(sessionId, ...replies, ...targets);
+      }
+      if (questionRefs.length) { conditions.push(`id IN (${questionRefs.map(() => '?').join(',')})`); params.push(...questionRefs); }
       const related = postgres
         ? (await postgres.query<Record<string, unknown>>(
-          `SELECT * FROM multiremi_conversation_log WHERE session_id=? AND (${[
-            ...(replies.length ? [`id IN (${replies.map(() => "?").join(",")})`] : []),
-            ...(targets.length ? [`seq IN (${targets.map(() => "?").join(",")})`] : []),
-          ].join(" OR ")})`, [sessionId, ...replies, ...targets])).map(toConversationLogEntry)
-        : [...replies.flatMap(id => store.getConversationLogEntryById(id) ?? []),
+          `SELECT * FROM multiremi_conversation_log WHERE ${conditions.join(' OR ')}`, params)).map(toConversationLogEntry)
+        : [...[...replies, ...questionRefs].flatMap(id => store.getConversationLogEntryById(id) ?? []),
           ...targets.flatMap(seq => store.getConversationLogEntry(sessionId, seq) ?? [])];
-      for (const row of related) { byId.set(row.id, row); bySeq.set(row.seq, row); }
+      for (const row of related) { byId.set(row.id, row); if (row.session_id === sessionId) bySeq.set(row.seq, row); }
       frontier = related;
     }
     const allowed = new Map<string, boolean>(), decisions = new Map<string, boolean>(), memo = createTaskAuthMemo();

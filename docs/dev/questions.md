@@ -50,6 +50,8 @@ Inbox 的 `?item=<Q>&question=<Q>` 专属定位，只读取 Question API，不�
 
 普通消息中的选项选择使用 `message_choice`，仅其指定收件人按普通 reply 作答；这不创建责任 Q。旧的仅含状态的 `decision_record` 仍按原载体答复和拒绝重复提交。只有 `source_issue_id` 或 `issue_id` 为非空字符串的完整历史业务记录才按责任 Q 读取、分页和鉴权，前后端共用 contracts 判据；读取不改写旧记录。原生 AUQ、`human_request` 和明确的同 Q 通知仍走版本化 Question API。
 
+历史来源回传和不可执行提醒按其 `question_source_notification` 与 `root_question_id` 继承原 Q 的私有来源及两端工作区可见性；HTTP、WebSocket 和 Inbox 计数/分页使用相同关联，原 Q 不可见或引用缺失时不返回提醒正文。跨会话关联不会创建 `reply_to` 或扩大通用来源读取权。
+
 初建 Q 的题目、路由和通知在同事务保存，由原消息提交后发布最终完整 entry；初次保存不另外发布相同 revision 的 patch。后续答复和移交仍发布真正的新 revision patch，保留 WebSocket 客户端已收到的完整行作为更新基准。
 
 验证入口：[`issue-questions.test.ts`](../../tests/unit/multiremi/issue-questions.test.ts)覆盖 SQLite 和配置的真实 PostgreSQL 上的路由、答复、重复负责人、超时、来源尝试替换和移交。[`decision-callback-integration.test.ts`](../../tests/unit/daemon/decision-callback-integration.test.ts)使用原生 WS 与 mock provider callback，包含短断线保留 nonce 和真实 SIGKILL 后新进程执行唯一续接、读取上下文并确认消费。在线 provider 或飞书在线行为需要独立端到端验证，不由 mock 用例推断。
