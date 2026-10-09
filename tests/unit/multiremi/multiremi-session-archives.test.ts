@@ -1,4 +1,3 @@
-import { createResponsibleTestIssue } from './helpers.js';
 import { afterEach, describe, expect, it, setSystemTime } from "bun:test";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";

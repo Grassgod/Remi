@@ -1,4 +1,3 @@
-import { createResponsibleTestIssue } from './helpers.js';
 import { afterEach, beforeEach, expect, it } from "bun:test";
 import { mkdtempSync, rmSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
