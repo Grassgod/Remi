@@ -3165,6 +3165,17 @@ export class IssuesRepo {
     const reported = changed ? childTerminalOutcome(issue.status) : null;
     const outcome = reported === "blocked" && options.taskTerminalStatus === "failed" ? "failed" : reported;
     if(changed&&!['done','cancelled'].includes(parent.status)){
+      const responsibility=this.ctx.resolveIssueResponsibility(parent.id);
+      if(responsibility.unresolved.length&&!responsibility.rootHuman){
+        this.ctx.appendIssueActivity(parent.id,{actorType:'system',actorId:SYSTEM_AUTHOR_ID,
+          type:'child_done_parent_skipped',body:'Parent notice requires a complete responsibility chain; repair the parent chain and configure its root human',
+          data:{reason:'responsibility_unresolved',childIssueId:issue.id,child_issue_id:issue.id,
+            childStatus:issue.status,child_status:issue.status,outcome,responsibility_unresolved:responsibility.unresolved}},deferredEvents);
+        // Ordinary status observation can still derive the same-workspace parent.
+        // No message, recipient or Turn is created from an unknown responsibility.
+        if(parentStatusGuardEnabled())this.rederiveParentStatus(parent,issue,collector,deferredEvents);
+        return;
+      }
       const session=this.ctx.issueSessions().getOrCreateDefaultIssueSessionWithinTransaction(issue.id);
       const details = { childIssueId: issue.id, child_issue_id: issue.id, childIssueKey: issue.key,
         child_issue_key: issue.key, childStatus: issue.status, child_status: issue.status, outcome };
