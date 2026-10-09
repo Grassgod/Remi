@@ -2920,8 +2920,7 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "issue.responsibility-unassigned.list": {
       "command": "remi issue responsibility-unassigned list",
       "auth": [
-        "human",
-        "task"
+        "human"
       ],
       "capability": "issue.responsibility-unassigned.list",
       "output": [
@@ -2933,8 +2932,7 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "issue.responsibility-unassigned.map": {
       "command": "remi issue responsibility-unassigned map",
       "auth": [
-        "human",
-        "task"
+        "human"
       ],
       "capability": "issue.responsibility-unassigned.map",
       "output": [
@@ -2946,8 +2944,7 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "autopilot.responsible.set": {
       "command": "remi autopilot responsible set",
       "auth": [
-        "human",
-        "task"
+        "human"
       ],
       "capability": "autopilot.responsible.set",
       "output": [
@@ -2972,8 +2969,7 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "issue.responsible.set": {
       "command": "remi issue responsible set",
       "auth": [
-        "human",
-        "task"
+        "human"
       ],
       "capability": "issue.responsible.set",
       "output": [
@@ -3011,8 +3007,7 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "issue.delivery.authorize": {
       "command": "remi issue delivery authorize",
       "auth": [
-        "human",
-        "task"
+        "human"
       ],
       "capability": "issue.delivery.authorize",
       "output": [
@@ -3125,8 +3120,7 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "message.question.continue": {
       "command": "remi message question continue",
       "auth": [
-        "human",
-        "task"
+        "human"
       ],
       "capability": "message.question.continue",
       "output": [

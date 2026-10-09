@@ -4056,8 +4056,7 @@
       "command": "remi issue responsibility-unassigned list",
       "aliases": [],
       "auth": [
-        "human",
-        "task"
+        "human"
       ],
       "capability": "issue.responsibility-unassigned.list",
       "mutation": "read",
@@ -4073,8 +4072,7 @@
       "command": "remi issue responsibility-unassigned map",
       "aliases": [],
       "auth": [
-        "human",
-        "task"
+        "human"
       ],
       "capability": "issue.responsibility-unassigned.map",
       "mutation": "write",
@@ -4090,8 +4088,7 @@
       "command": "remi autopilot responsible set",
       "aliases": [],
       "auth": [
-        "human",
-        "task"
+        "human"
       ],
       "capability": "autopilot.responsible.set",
       "mutation": "write",
@@ -4124,8 +4121,7 @@
       "command": "remi issue responsible set",
       "aliases": [],
       "auth": [
-        "human",
-        "task"
+        "human"
       ],
       "capability": "issue.responsible.set",
       "mutation": "write",
@@ -4175,8 +4171,7 @@
       "command": "remi issue delivery authorize",
       "aliases": [],
       "auth": [
-        "human",
-        "task"
+        "human"
       ],
       "capability": "issue.delivery.authorize",
       "mutation": "write",
@@ -4325,8 +4320,7 @@
       "command": "remi message question continue",
       "aliases": [],
       "auth": [
-        "human",
-        "task"
+        "human"
       ],
       "capability": "message.question.continue",
       "mutation": "write",
@@ -11068,6 +11062,9 @@
       "category": "retired_route",
       "reason": "已移除：改用 remi message list <conversation> --kind decision"
     },
+    "GET /api/issues/:id/deliveries": {
+      "command": "issue.delivery.list"
+    },
     "GET /api/issues/:id/dependencies": {
       "command": "issue.dependency.list"
     },
@@ -11080,8 +11077,14 @@
     "GET /api/issues/:id/metadata": {
       "command": "issue.metadata.list"
     },
+    "GET /api/issues/:id/questions": {
+      "command": "issue.question.list"
+    },
     "GET /api/issues/:id/reactions": {
       "command": "issue.reaction.list"
+    },
+    "GET /api/issues/:id/responsibility": {
+      "command": "issue.responsibility"
     },
     "GET /api/issues/:id/session-results": {
       "command": "session.result.list"
@@ -11166,6 +11169,9 @@
     },
     "GET /api/messages/:id": {
       "command": "message.get"
+    },
+    "GET /api/messages/:id/question": {
+      "command": "message.question.get"
     },
     "GET /api/models": {
       "command": "runtime.model.catalog"
@@ -11823,6 +11829,9 @@
     "GET /api/workspaces/:workspaceId/feishu/sources/:sourceId/status": {
       "command": "feishu.source.status"
     },
+    "GET /api/workspaces/:workspaceId/issue-responsibility-migration": {
+      "command": "issue.responsibility-unassigned.list"
+    },
     "GET /api/workspaces/:workspaceId/messaging/connections": {
       "command": "messaging.connection.list"
     },
@@ -12376,6 +12385,15 @@
       "category": "retired_route",
       "reason": "已移除：改用 remi message delete <message>"
     },
+    "POST /api/issues/:id/deliveries": {
+      "command": "issue.delivery.submit"
+    },
+    "POST /api/issues/:id/deliveries/:deliveryId/authorize": {
+      "command": "issue.delivery.authorize"
+    },
+    "POST /api/issues/:id/deliveries/:deliveryId/respond": {
+      "command": "issue.delivery.accept"
+    },
     "POST /api/issues/:id/dependencies": {
       "command": "issue.dependency.add"
     },
@@ -12481,6 +12499,24 @@
     },
     "POST /api/me/onboarding/runtime-bootstrap": {
       "command": "member.onboarding.runtime-bootstrap"
+    },
+    "POST /api/messages/:id/question/answer": {
+      "command": "message.question.answer"
+    },
+    "POST /api/messages/:id/question/close": {
+      "command": "message.question.close"
+    },
+    "POST /api/messages/:id/question/continue": {
+      "command": "message.question.continue"
+    },
+    "POST /api/messages/:id/question/escalate": {
+      "command": "message.question.escalate"
+    },
+    "POST /api/messages/:id/question/present": {
+      "command": "message.question.present"
+    },
+    "POST /api/messages/:id/question/transfer": {
+      "command": "message.question.transfer"
     },
     "POST /api/messages/:id/reactions": {
       "command": "message.react"
@@ -12979,6 +13015,9 @@
     },
     "POST /api/workspaces/:workspaceId/feishu/sources": {
       "command": "feishu.source.add"
+    },
+    "POST /api/workspaces/:workspaceId/issue-responsibility-migration/map": {
+      "command": "issue.responsibility-unassigned.map"
     },
     "POST /api/workspaces/:workspaceId/messaging/connections": {
       "command": "messaging.connection.add"
