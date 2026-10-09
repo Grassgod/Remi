@@ -3,8 +3,8 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, setSystemTime } f
 import { createMultiremiApp } from "@multiremi/api.js";
 import { PostgresSyncDatabase } from "@multiremi/store/db/postgres.js";
 import { MultiremiStore } from "@multiremi/store.js";
+import type { MultiremiIssueDecision } from '@multiremi/contracts/types.js';
 import { createLocalStore as createStore, resetMultiremiTestEnv } from "./helpers.js";
-import { inboxReportBody } from "./inbox-test-assertions.js";
 
 afterEach(resetMultiremiTestEnv);
 // The answered-window cases pin "now" so created_at / answered_at are ordered.
@@ -14,146 +14,117 @@ afterEach(() => setSystemTime());
 // audiences receive canonical status messages rather than duplicate ledger rows.
 function decisionInbox(store:MultiremiStore,memberId:string){
   return store.listMessageInbox(memberId,"local").items.filter(message=>
-    message.message_kind==='decision' || (message.metadata.inbox_item as any)?.type==='decision_requested');
+    message.message_kind==='decision' || message.metadata.question_notification === true || (message.metadata.inbox_item as any)?.type==='decision_requested');
 }
 
+/** Real AUQ source lanes and current-revision notified handler lanes. */
 async function exerciseDecisions(store: MultiremiStore): Promise<void> {
   store.ensureLocalWorkspace();
-  const member = store.findWorkspaceMemberForUser("local", "local")!;
-  const owner = store.createAgent({ name: "Decision parent owner", provider: "codex", ownerId: member.id });
-  const sourceAgent = store.createAgent({ name: "Decision source owner", provider: "codex" });
-  const unrelated = store.createAgent({ name: "Unrelated agent", provider: "codex" });
-  const parent = createResponsibleTestIssue(store, { title: "Decision parent", assigneeType: "agent", assigneeId: owner.id });
-  const source = createResponsibleTestIssue(store, { title: "Decision source", parentIssueId: parent.id, assigneeType: "agent", assigneeId: sourceAgent.id });
-  const ownerTask = store.createTask({ agentId: owner.id, issueId: parent.id, prompt: "Current parent round" });
-  const sourceTask = store.createTask({ agentId: sourceAgent.id, issueId: source.id, prompt: "Current source round" });
-  const foreignTask = store.createTask({ agentId: unrelated.id, issueId: parent.id, prompt: "Unrelated round" });
-  store.addIssueSubscriber(parent.id, member.id);
-  const [ownerToken, sourceToken, foreignToken, memberToken] = await Promise.all([
-    store.createTaskAccessToken(ownerTask, "local"),
-    store.createTaskAccessToken(sourceTask, "local"),
-    store.createTaskAccessToken(foreignTask, "local"),
-    store.createAccessToken({ name: "Decision member", type: "pat", workspaceId: "local", userId: "local" }),
+  const member = store.getWorkspaceMember('mem_local_local')!;
+  const runtime = store.registerRuntime({ name: 'Question executor', provider: 'codex', daemonId: 'decision-acceptance', maxConcurrency: 16 });
+  const owner = store.createAgent({ name: 'Parent owner', provider: 'codex', runtimeId: runtime.id });
+  const sourceAgent = store.createAgent({ name: 'Source owner', provider: 'codex', runtimeId: runtime.id });
+  const unrelated = store.createAgent({ name: 'Unrelated agent', provider: 'codex', runtimeId: runtime.id });
+  const parent = store.createIssue({ title: 'Question parent', assigneeType: 'agent', assigneeId: owner.id, responsibleMemberId: member.id });
+  const source = store.createIssue({ title: 'Question source', parentIssueId: parent.id, assigneeType: 'agent', assigneeId: sourceAgent.id });
+  const originalSession = store.createIssueSession(source.id, { title: 'Original private question', holdsWorkspace: false });
+  const sourceTask = store.createTask({ agentId: sourceAgent.id, issueId: source.id, issueSessionId: originalSession.id, prompt: 'Work child' });
+  expect(store.claimTask(runtime.id)?.id).toBe(sourceTask.id); store.startTask(sourceTask.id);
+  const sourceTurn = store.getTurnForAttempt(sourceTask.id)!;
+  const foreignSession = store.createIssueSession(parent.id, { title: 'Unrelated lane', holdsWorkspace: false });
+  const foreignTask = store.createTask({ agentId: unrelated.id, issueId: parent.id, issueSessionId: foreignSession.id, prompt: 'Unrelated work', priority: 100 });
+  expect(store.claimTask(runtime.id)?.id).toBe(foreignTask.id); store.startTask(foreignTask.id);
+  const app = createMultiremiApp({ store, authToken: 'test-master' });
+  const memberToken = await store.createAccessToken({ name: 'Explicit human', type: 'pat', userId: 'local', workspaceId: 'local' });
+  const [sourceToken, foreignToken] = await Promise.all([
+    store.createTaskAccessToken(store.getTask(sourceTask.id)!, 'local'),
+    store.createTaskAccessToken(store.getTask(foreignTask.id)!, 'local'),
   ]);
-  const app = createMultiremiApp({ store, authToken: "test-master" });
+  const request = (id: string, token: string, body?: unknown, action = 'answer') => app.request(
+    `/api/messages/${id}/question${body === undefined ? '' : '/' + action}`, {
+      method: body === undefined ? 'GET' : 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
   const events: string[] = [];
-  const unsubscribe = store.onWorkspaceEvent((event) => events.push(event.type));
-  const request = (path: string, token: string, body?: unknown) => app.request(path, {
-    method: body === undefined ? "GET" : "POST",
-    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-    body: body === undefined ? undefined : JSON.stringify(body),
-  });
-  const create = async (issueId: string, token: string, kind: string, title: string) => {
-    // Domain creation is a fixture: the unified public decision creator does
-    // not synthesize the old source/owner/escalation metadata.
-    const actor = token === sourceToken.token ? { type: "agent" as const, id: sourceAgent.id, taskId: sourceTask.id }
-      : { type: "member" as const, id: member.id, taskId: null };
-    return store.createIssueDecision(issueId, { kind, title, body: `${title} context` }, actor);
+  const off = store.onWorkspaceEvent(event => events.push(event.type));
+  const ask = (kind: string, title: string) => {
+    const created = store.getDaemonTurnBridge().rpc('turn.decision', {
+      turn_id: sourceTurn.id, attempt_id: sourceTask.id, body_md: title,
+      dedupe_key: title, wait_id: `wait:${title}`, timeout_ms: 60_000,
+      options: [{ label: 'Yes', value: 'Yes' }, { label: 'No', value: 'No' }],
+      metadata: { kind, message: title, questions: [{ question: title, options: [{ label: 'Yes' }, { label: 'No' }] }] },
+    }, { runtimeId: runtime.id, daemonId: runtime.daemonId!, workspaceId: 'local' });
+    expect(created.ok).toBe(true);
+    return store.getQuestion(String(created.message_id))!;
   };
   try {
-    const first = await create(source.id, sourceToken.token, "merge", "Merge the change");
-    const second = await create(source.id, sourceToken.token, "permission", "Access the resource");
-    expect(first).toMatchObject({ status: "pending", issueId: parent.id, createdByAgentId: sourceAgent.id, sourceTaskId: sourceTask.id });
-    expect(store.listTasksForIssue(parent.id).filter((task) => task.agentId === owner.id && task.status === "queued")).toHaveLength(1);
-    const parentMessages = await request(`/api/sessions/${store.getMessage(first.id)!.session_id}/messages?unread_by=${owner.id}`, ownerToken.token);
-    expect(parentMessages.status).toBe(200);
-    const parentInbox = await parentMessages.text();
-    expect(parentInbox).toContain(first.id);
-    expect(parentInbox).toContain(second.id);
-    expect(store.getTask(ownerTask.id)!.prompt).toBe(ownerTask.prompt);
-    expect(decisionInbox(store,member.id)).toHaveLength(0);
-
-    const answerPath = `/api/sessions/${store.getMessage(first.id)!.session_id}/messages`;
+    const first = ask('question', 'Choose branch');
+    expect(first).toMatchObject({ source_issue_id: source.id, session_id: originalSession.id, stage: 'parent_owner',
+      current_handler: { type: 'agent', id: owner.id }, wait_status: 'waiting' });
+    const notification = store.listMessages(store.getOrCreateDefaultIssueSession(parent.id).id)
+      .find(message => message.metadata.root_question_id === first.id && message.to_agent_id === owner.id)!;
+    expect(notification.reply_to_id).toBeNull();
+    expect(notification.metadata.question_route_revision).toBe(1);
+    const handlerTask = store.claimTask(runtime.id)!;
+    expect(handlerTask.agentId).toBe(owner.id); store.startTask(handlerTask.id);
+    const handlerToken = await store.createTaskAccessToken(store.getTask(handlerTask.id)!, 'local');
+    const handlerTurn = store.getTurnForAttempt(handlerTask.id)!;
+    expect((await request(first.id, handlerToken.token)).status).toBe(200);
     for (const token of [sourceToken.token, foreignToken.token]) {
-      const denied = await request(answerPath, token, { reply_to_id: first.id, body_md: "spoofed", response: { reason: "r", overturn: "o" }, answererType: "member", answererId: member.id });
+      const denied = await request(first.id, token, { expected_route_revision: 1, response: { answers: { 'Choose branch': 'spoofed' } },
+        answererType: 'member', answererId: member.id });
       expect(denied.status).toBe(403);
     }
-    const missingReason = await request(answerPath, ownerToken.token, { reply_to_id: first.id, body_md: "yes", answererType: "member", answererId: member.id });
-    expect(missingReason.status).toBe(400);
-    const ownerAnswer = await request(answerPath, ownerToken.token, {
-      reply_to_id: first.id, body_md: "Merge after CI", response: { reason: "Checks passed", overturn: "A member can reverse this if QA fails" },
-      answererType: "member", answererId: member.id,
-    });
-    expect(ownerAnswer.status, await ownerAnswer.clone().text()).toBe(200);
-    expect(store.getIssueDecision(parent.id, first.id)).toMatchObject({
-      status: "answered", answeredByMemberId: null, answer: { answererType: "agent", answererId: owner.id,
-        answer: "Merge after CI", reason: "Checks passed", overturn: "A member can reverse this if QA fails" },
-    });
-    expect(inboxReportBody(store, sourceTask)).toContain(`decision:${first.id}`);
-    expect(store.getTurnForAttempt(sourceTask.id)).toMatchObject({status:"awaiting_human",current_attempt_id:sourceTask.id,waiting_on_message_id:second.id});
-    expect(store.listIssueActivity(parent.id).some((entry) => entry.type === "decision_answered" && entry.actorType === "agent")).toBe(true);
-    expect(store.listIssueActivity(source.id).some((entry) => entry.type === "decision_received")).toBe(true);
-
-    const revised = await request(answerPath, memberToken.token, {
-      reply_to_id: first.id, body_md: "Hold for QA", response: { reason: "Human review" }, answererType: "agent", answererId: unrelated.id,
-    });
+    expect((await request(first.id, handlerToken.token, { response: { answer: 'Yes' } })).status).toBe(400);
+    const answer = await request(first.id, handlerToken.token, { expected_route_revision: 1, response: { answers: { 'Choose branch': 'Yes' } }, body_md: 'Use branch A' });
+    expect(answer.status, await answer.clone().text()).toBe(200);
+    expect(store.getQuestion(first.id)).toMatchObject({ status: 'answered', answer_revision: 1,
+      answer: { actor: { type: 'agent', id: owner.id }, response: { answers: { 'Choose branch': 'Yes' } } } });
+    expect(store.getTurnForAttempt(sourceTask.id)).toMatchObject({ status: 'running', current_attempt_id: sourceTask.id, waiting_on_message_id: null });
+    const consumer = store.getDaemonTurnBridge().rpc('turn.decision.consume', { turn_id: sourceTurn.id,
+      attempt_id: sourceTask.id, message_id: first.id, wait_id: 'wait:Choose branch', reply_message_id: store.getQuestion(first.id)!.answer!.reply_message_id },
+    { runtimeId: runtime.id, daemonId: runtime.daemonId!, workspaceId: 'local' });
+    expect(consumer.ok).toBe(true);
+    expect(store.getQuestion(first.id)?.wait_status).toBe('consumed');
+    const repeat = await request(first.id, handlerToken.token, { expected_route_revision: 1, response: { answers: { 'Choose branch': 'No' } } });
+    expect(repeat.status).toBe(409);
+    const beforeRevision = store.getQuestion(first.id)!;
+    const revised = await request(first.id, memberToken.token, { expected_route_revision: 1,
+      expected_answer_revision: 1, revise: true, reason: 'Human review', response: { answers: { 'Choose branch': 'No' } }, body_md: 'Hold for QA' });
     expect(revised.status, await revised.clone().text()).toBe(200);
-    const history = store.getIssueDecision(parent.id, first.id)!.history;
-    expect(history.map((entry) => entry.answererType)).toEqual(["agent", "member"]);
-    expect(history[1]?.answererId).toBe(member.id);
-    expect(store.getIssueDecision(parent.id, first.id)?.answeredByMemberId).toBe(member.id);
-    expect(store.getIssueDecision(parent.id, first.id)?.answeredAt).toBe(history[1]?.answeredAt);
-    expect(inboxReportBody(store, ownerTask)).toContain(`member changed your answer to decision ${first.id}`);
-    expect(inboxReportBody(store, sourceTask)).toContain("Hold for QA");
+    expect(store.getQuestion(first.id)?.history.filter(event => event.type === 'answer' || event.type === 'revise').map(event => event.actor?.type)).toEqual(['agent', 'member']);
+    expect(store.getQuestion(first.id)?.answer_revision).toBe(beforeRevision.answer_revision + 1);
 
-    store.escalateIssueDecision(parent.id, second.id, { type: "agent", id: owner.id, taskId: ownerTask.id });
-    expect(store.getIssueDecision(parent.id, second.id)?.status).toBe("escalated");
-    expect((await request(`/api/sessions/${store.getMessage(second.id)!.session_id}/messages`, ownerToken.token, {
-      reply_to_id: second.id, body_md: "no", response: { reason: "r", overturn: "o" },
-    })).status).toBe(403);
-    const prod = await create(source.id, sourceToken.token, "production_change", "Deploy to production");
-    expect(prod.status).toBe("escalated");
-    expect((await request(`/api/sessions/${store.getMessage(prod.id)!.session_id}/messages`, ownerToken.token, {
-      reply_to_id: prod.id, body_md: "yes", response: { reason: "r", overturn: "o" },
-    })).status).toBe(403);
-    const items = decisionInbox(store,member.id);
-    expect(items).toHaveLength(2);
-    expect(items.every(item => item.message_kind=== "decision" || (item.metadata.inbox_item as any)?.severity=== "action")).toBe(true);
-    expect(store.listIssueActivity(parent.id).some((entry) => entry.type === "decision_escalated")).toBe(true);
-
-    const criteriaPending = await create(source.id, sourceToken.token, "criteria", "Acceptance terms");
-    const questionPending = await create(source.id, sourceToken.token, "question", "Which branch");
-
-    const parentHuman = store.createTask({ agentId: owner.id, issueId: parent.id, prompt: "Human request" });
-    const human = store.createTaskHumanRequest({ taskId: parentHuman.id, kind: "question", payload: { message: "Pick a date" } });
-    const list = await request(`/api/sessions/${store.getMessage(first.id)!.session_id}/messages?message_kind=decision`, memberToken.token);
+    const second = ask('question', 'Escalate this choice');
+    const escalation = await request(second.id, handlerToken.token, { expected_route_revision: 1, reason: 'Needs human decision' }, 'escalate');
+    expect(escalation.status, await escalation.clone().text()).toBe(200);
+    expect(store.getQuestion(second.id)).toMatchObject({ stage: 'human', route_revision: 2, current_handler: { type: 'member', id: member.id } });
+    expect((await request(second.id, handlerToken.token, { expected_route_revision: 2, response: { answer: 'No' } })).status).toBe(403);
+    for (const kind of ['permission', 'merge', 'production_change']) {
+      const sensitive = ask(kind, `Authorize ${kind}`);
+      expect(sensitive).toMatchObject({ stage: 'human', current_handler: { type: 'member', id: member.id } });
+      expect((await request(sensitive.id, handlerToken.token, { expected_route_revision: 1, response: { answer: 'Yes' } })).status).toBe(403);
+      if (kind === 'production_change') {
+        const approval = await request(sensitive.id, memberToken.token, { expected_route_revision: 1, response: { answers: { [`Authorize ${kind}`]: 'Yes' } } });
+        expect(approval.status, await approval.clone().text()).toBe(200);
+        expect(store.getQuestion(sensitive.id)?.answer?.actor).toEqual({ type: 'member', id: member.id });
+      }
+    }
+    const pending = ask('question', 'Close without losing history');
+    const closed = await request(pending.id, memberToken.token, { expected_route_revision: 1, reason: 'Plan withdrawn explicitly' }, 'close');
+    expect(closed.status, await closed.clone().text()).toBe(200);
+    expect(store.getQuestion(pending.id)).toMatchObject({ status: 'closed', wait_status: 'detached' });
+    expect(store.getMessage(pending.id)?.body_md).toBe('Close without losing history');
+    const list = await app.request(`/api/issues/${parent.id}/questions`, { headers: { Authorization: `Bearer ${memberToken.token}` } });
     expect(list.status).toBe(200);
-    expect((await list.json()).messages.map((message: { id: string }) => message.id))
-      .toEqual(expect.arrayContaining([first.id, second.id, prod.id, human.id, criteriaPending.id, questionPending.id]));
-    const model = store.listIssueDecisions(parent.id);
-    expect(model.count).toBe(3);
-    expect(model.waiting_on_human.map((entry: { id: string }) => entry.id)).toEqual([second.id, prod.id, human.id]);
-    expect(model.owner_and_answered.answered[0].id).toBe(first.id);
-    expect(model.owner_and_answered.pending.map((entry: { id: string }) => entry.id)).toEqual([questionPending.id, criteriaPending.id]);
-    const detail = await request(`/api/issues/${parent.id}`, memberToken.token);
-    expect((await detail.json()).pending_decision_count).toBe(3);
-    const native = await request(`/api/multiremi/issues/${parent.id}`, memberToken.token);
-    expect((await native.json()).issue.pending_decision_count).toBe(3);
-
-    const memberAnswer = await request(`/api/sessions/${store.getMessage(prod.id)!.session_id}/messages`, memberToken.token, {
-      reply_to_id: prod.id, body_md: "Approved for the maintenance window", answererType: "agent", answererId: unrelated.id,
-    });
-    expect(memberAnswer.status).toBe(200);
-    expect(store.getIssueDecision(parent.id, prod.id)?.answer?.answererType).toBe("member");
-
-    const noParent = createResponsibleTestIssue(store, { title: "No parent" });
-    expect((await create(noParent.id, memberToken.token, "criteria", "Define done")).status).toBe("escalated");
-    const humanParent = createResponsibleTestIssue(store, { title: "Member parent", assigneeType: "member", assigneeId: member.id });
-    const humanChild = createResponsibleTestIssue(store, { title: "Member child", parentIssueId: humanParent.id });
-    expect((await create(humanChild.id, memberToken.token, "question", "Choose direction")).status).toBe("escalated");
-    const squad = store.createSquad({ name: "Decision squad", leaderId: owner.id });
-    const squadParent = createResponsibleTestIssue(store, { title: "Squad parent", assigneeType: "squad", assigneeId: squad.id });
-    const squadChild = createResponsibleTestIssue(store, { title: "Squad child", parentIssueId: squadParent.id });
-    expect((await create(squadChild.id, memberToken.token, "criteria", "Set acceptance")).status).toBe("pending");
-
-    const pending = await create(source.id, sourceToken.token, "criteria", "Withdraw this");
-    store.withdrawIssueDecision(parent.id, pending.id, { type: "agent", id: sourceAgent.id, taskId: sourceTask.id });
-    expect(store.getIssueDecision(parent.id, pending.id)?.status).toBe("withdrawn");
-    expect(events).toContain("decision:created");
-    expect(events).toContain("decision:updated");
-  } finally {
-    unsubscribe();
-  }
+    expect((await list.json()).questions.map((q: { id: string }) => q.id)).toEqual(expect.arrayContaining([first.id, second.id, pending.id]));
+    expect(decisionInbox(store, member.id).length).toBeGreaterThanOrEqual(3);
+    expect(store.getTask(handlerTask.id)?.prompt).toBe(handlerTask.prompt);
+    expect(handlerTurn.session_id).toBe(notification.session_id);
+    expect(events).toContain('decision:created');
+    expect(events).toContain('decision:updated');
+  } finally { off(); }
 }
 
 /**
@@ -172,18 +143,27 @@ function steppedClock(startAt = Date.parse("2026-09-27T00:00:00.000Z")): () => s
 
 interface DecisionApi {
   request: (path: string, token: string, body?: unknown) => Promise<Response>;
-  create: (issueId: string, token: string, input: { kind: string; title: string }) => Promise<ReturnType<MultiremiStore["createIssueDecision"]>>;
+  create: (issueId: string, token: string, input: { kind: string; title: string }) => Promise<MultiremiIssueDecision>;
 }
 
-function decisionApi(store: MultiremiStore): DecisionApi {
+function historicalDecisionApi(store: MultiremiStore): DecisionApi {
   const app = createMultiremiApp({ store, authToken: "test-master" });
   return {
     async create(issueId, token, input) {
-      const credential = (await store.verifyAccessToken(token))!;
-      const actor = credential.type === "task"
-        ? { type: "agent" as const, id: credential.agentId!, taskId: credential.taskId }
-        : { type: "member" as const, id: store.findWorkspaceMemberForUser(credential.userId!, credential.workspaceId!)!.id, taskId: null };
-      return store.createIssueDecision(issueId, input, actor);
+      // This helper exclusively seeds pre-Q history for read-window probes;
+      // all new business AUQs use the native bridge in exerciseDecisions.
+      expect(await store.verifyAccessToken(token)).not.toBeNull();
+      const source = store.getIssue(issueId)!;
+      const target = source.parentIssueId ? store.getIssue(source.parentIssueId)! : source;
+      const session = store.getOrCreateDefaultIssueSession(target.id);
+      const result = store.sendMessage({ session_id: session.id, sender: { type: 'agent', id: source.assigneeId! },
+        to: { type: 'none' }, message_kind: 'decision', wake_requested: 'inbox_only', body_md: input.title,
+        metadata: { decision_record: { kind: input.kind, title: input.title, body: input.title,
+          source_issue_id: source.id, source_task_id: null, status: 'pending', owner_agent_id: target.assigneeId,
+          history: [] } } });
+      expect(store.getMessage(result.message.id)?.metadata.question).toBeUndefined();
+      expect(store.getQuestion(result.message.id)?.wait_status).toBe('none');
+      return store.getIssueDecision(target.id, result.message.id)!;
     },
     // `app.request` is overloaded and returns a bare Response when the init is
     // passed as the second argument, so normalize it to a Promise here.
@@ -217,14 +197,14 @@ async function exerciseAnsweredWindow(store: MultiremiStore): Promise<void> {
   const member = store.findWorkspaceMemberForUser("local", "local")!;
   const owner = store.createAgent({ name: "Window owner", provider: "codex", ownerId: member.id });
   const sourceAgent = store.createAgent({ name: "Window source", provider: "codex" });
-  const parent = createResponsibleTestIssue(store, { title: "Window parent", assigneeType: "agent", assigneeId: owner.id });
+  const parent = createResponsibleTestIssue(store, { title: "Window parent", assigneeType: "agent", assigneeId: owner.id, responsibleMemberId: member.id });
   const source = createResponsibleTestIssue(store, { title: "Window source issue", parentIssueId: parent.id, assigneeType: "agent", assigneeId: sourceAgent.id });
   const ownerTask = store.createTask({ agentId: owner.id, issueId: parent.id, prompt: "Parent round" });
   const [ownerToken, memberToken] = await Promise.all([
     store.createTaskAccessToken(ownerTask, "local"),
     store.createAccessToken({ name: "Window member", type: "pat", workspaceId: "local", userId: "local" }),
   ]);
-  const api = decisionApi(store);
+  const api = historicalDecisionApi(store);
 
   // 52 merge decisions, answered 2..52 first and 1 last: the exact QA probe.
   const decisions: Array<{ id: string }> = [];
@@ -237,10 +217,23 @@ async function exerciseAnsweredWindow(store: MultiremiStore): Promise<void> {
   }
   const answer = async (token: string, decision: { id: string }, text: string, reason: string, overturn?: string) => {
     tick();
-    const response = await api.request(`/api/sessions/${store.getMessage(decision.id)!.session_id}/messages`, token, {
-      reply_to_id: decision.id, body_md: text, response: { reason, overturn },
-    });
-    expect(response.status, await response.clone().text()).toBe(200);
+    if (token === ownerToken.token) {
+      // Historical Agent answers existed before human-required authorization.
+      // Preserve their original author/time; do not authorize a new Agent merge.
+      const message = store.getMessage(decision.id)!;
+      const answer = { answererType: 'agent', answererId: owner.id, answer: text, reason, overturn: overturn ?? null, answeredAt: new Date().toISOString() };
+      const old = message.metadata.decision_record as Record<string, unknown>;
+      const db = (store as unknown as { db: import('@multiremi/store/db/postgres.js').SqlDatabase }).db;
+      db.run('UPDATE multiremi_conversation_log SET metadata=? WHERE id=?', [JSON.stringify({ ...message.metadata,
+        decision_record: { ...old, status: 'answered', answer, history: [answer], answered_at: answer.answeredAt } }), decision.id]);
+    } else {
+      const q = store.getQuestion(decision.id)!;
+      const response = await api.request(`/api/messages/${decision.id}/question/answer`, token, {
+        expected_route_revision: q.route_revision, expected_answer_revision: q.answer_revision, revise: true,
+        body_md: text, response: { answer: text }, reason,
+      });
+      expect(response.status, await response.clone().text()).toBe(200);
+    }
   };
   for (let index = 1; index < decisions.length; index += 1) {
     await answer(ownerToken.token, decisions[index]!, `answer ${index + 1}`, "checked", "a member may overturn this");
@@ -324,109 +317,86 @@ async function exerciseAnsweredWindow(store: MultiremiStore): Promise<void> {
   expect(merges.some((entry) => entry.id === decisions[1]!.id)).toBe(true);
 }
 
-/**
- * QA round 1 blocking 2: an escalated decision must land in somebody's inbox
- * even when the parent has no member assignee, no resolvable agent owner and no
- * subscriber. Creator first, then workspace owners; explicit recipients win.
- */
+/** Root human facts supersede the old creator/subscriber/workspace-owner guesses. */
 async function exerciseDecisionRecipientFallback(store: MultiremiStore): Promise<void> {
   store.ensureLocalWorkspace();
-  const workspaceOwner = store.findWorkspaceMemberForUser("local", "local")!;
-  const creator = store.createWorkspaceMember({ workspaceId: "local", name: "Fallback creator", userId: "fallback-creator", role: "member" });
-  const bystander = store.createWorkspaceMember({ workspaceId: "local", name: "Fallback bystander", userId: "fallback-bystander", role: "member" });
-  const ownerAgent = store.createAgent({ name: "Fallback owner agent", provider: "codex", ownerId: workspaceOwner.id });
-  const agentless = store.createAgent({ name: "Fallback ownerless agent", provider: "codex", ownerId: "ghost-user-without-member" });
-  const [memberToken, ownerToken, agentlessToken] = await Promise.all([
-    store.createAccessToken({ name: "Fallback member", type: "pat", workspaceId: "local", userId: "local" }),
-    store.createTaskAccessToken(
-      store.createTask({
-        agentId: ownerAgent.id,
-        issueId: createResponsibleTestIssue(store, { title: "Fallback owner parent", assigneeType: "agent", assigneeId: ownerAgent.id }).id,
-        prompt: "Owner round",
-      }),
-      "local",
-    ),
-    store.createAccessToken({ name: "Fallback agentless", type: "pat", workspaceId: "local", userId: "local" }),
-  ]);
-  void agentlessToken;
-  const api = decisionApi(store);
+  const workspaceOwner = store.getWorkspaceMember('mem_local_local')!;
+  const creator = store.createWorkspaceMember({ workspaceId: 'local', name: 'Creator', userId: 'explicit-creator', role: 'member' });
+  const bystander = store.createWorkspaceMember({ workspaceId: 'local', name: 'Subscriber', userId: 'explicit-subscriber', role: 'member' });
+  const runtime = store.registerRuntime({ name: 'Explicit responsibility executor', provider: 'codex', daemonId: 'explicit-human', maxConcurrency: 16, visibility: 'public' });
+  const sourceAgent = store.createAgent({ name: 'Source with unrelated owner', provider: 'codex', runtimeId: runtime.id, ownerId: workspaceOwner.id, maxConcurrentTasks: 16 });
+  const agentless = store.createAgent({ name: 'Parent with missing ownerId', provider: 'codex', runtimeId: runtime.id, ownerId: 'ghost-user', maxConcurrentTasks: 16 });
+  let sequence = 0;
+  const ask = (issueId: string, kind: string) => {
+    const session = store.createIssueSession(issueId, { title: `Explicit Q ${++sequence}`, holdsWorkspace: false });
+    const task = store.createTask({ agentId: sourceAgent.id, issueId, issueSessionId: session.id,
+      prompt: 'Raise one Q', priority: 100 + sequence });
+    expect(store.claimTask(runtime.id)?.id).toBe(task.id); store.startTask(task.id);
+    const turn = store.getTurnForAttempt(task.id)!;
+    const created = store.getDaemonTurnBridge().rpc('turn.decision', { turn_id: turn.id, attempt_id: task.id,
+      body_md: `Question ${sequence}`, wait_id: `wait-explicit:${sequence}`, dedupe_key: `explicit:${sequence}`,
+      options: [{ label: 'Yes', value: 'Yes' }], metadata: { kind, questions: [{ question: 'Approve?', options: [{ label: 'Yes' }] }] },
+    }, { runtimeId: runtime.id, daemonId: runtime.daemonId!, workspaceId: 'local' });
+    expect(created.ok).toBe(true);
+    return store.getQuestion(String(created.message_id))!;
+  };
+  const questionNotifications = (id: string, memberId: string) => decisionInbox(store, memberId).filter(message =>
+    message.metadata.question_notification === true && message.metadata.root_question_id === id);
   const eventTypes: string[] = [];
-  const unsubscribe = store.onWorkspaceEvent((event) => eventTypes.push(event.type));
-  const decisionRequested = (member: { id: string }, issueId: string) =>
-    decisionInbox(store,member.id).filter(message=>store.getIssueSession(message.session_id)?.issueId===issueId);
+  const off = store.onWorkspaceEvent(event => eventTypes.push(event.type));
   try {
-    // Case 1, the exact QA probe: member PAT raises production_change on a
-    // childless issue with no assignee and no subscribers.
-    const probe = createResponsibleTestIssue(store, { title: "Fallback probe issue", createdBy: creator.id });
-    store.removeIssueSubscriber(probe.id, creator.id);
-    const escalated = await api.create(probe.id, memberToken.token, {
-      kind: "production_change", title: "Deploy the fallback",
-    });
-    expect(escalated.status).toBe("escalated");
-    const creatorItems = decisionRequested(creator, probe.id);
-    expect(creatorItems).toHaveLength(1);
-    expect(creatorItems[0]!.message_kind).toBe("decision");
-    expect(creatorItems[0]!.metadata.decision_record).toMatchObject({ kind: "production_change",status:"escalated" });
-    expect(eventTypes.filter((type) => type === "inbox:new").length).toBeGreaterThanOrEqual(1);
-    expect(decisionRequested(workspaceOwner, probe.id)).toHaveLength(0);
-    expect(decisionRequested(bystander, probe.id)).toHaveLength(0);
+    const probe = store.createIssue({ title: 'Creator differs from responsible human', createdBy: creator.id,
+      assigneeType: 'agent', assigneeId: sourceAgent.id, responsibleMemberId: bystander.id });
+    store.addIssueSubscriber(probe.id, creator.id);
+    const explicit = ask(probe.id, 'production_change');
+    expect(explicit).toMatchObject({ stage: 'human', current_handler: { type: 'member', id: bystander.id } });
+    expect(questionNotifications(explicit.id, bystander.id)).toHaveLength(1);
+    expect(questionNotifications(explicit.id, creator.id)).toHaveLength(0);
+    expect(questionNotifications(explicit.id, workspaceOwner.id)).toHaveLength(0);
+    expect(eventTypes).toContain('inbox:new');
 
-    // Case 2: an agent creator (or an archived member creator) resolves to
-    // nobody, so every workspace owner takes it and non-owners do not.
-    const agentCreated = createResponsibleTestIssue(store, { title: "Fallback agent-created issue", createdBy: agentless.id });
-    const agentEscalated = await api.create(agentCreated.id, memberToken.token, {
-      kind: "production_change", title: "Deploy from an agent-created issue",
-    });
-    expect(agentEscalated.status).toBe("escalated");
-    expect(decisionRequested(workspaceOwner, agentCreated.id)).toHaveLength(1);
-    expect(decisionRequested(bystander, agentCreated.id)).toHaveLength(0);
+    const agentCreated = store.createIssue({ title: 'Agent creator with explicit human', createdBy: agentless.id,
+      assigneeType: 'agent', assigneeId: sourceAgent.id, responsibleMemberId: creator.id });
+    const agentQ = ask(agentCreated.id, 'production_change');
+    expect(agentQ.current_handler).toEqual({ type: 'member', id: creator.id });
+    expect(questionNotifications(agentQ.id, workspaceOwner.id)).toHaveLength(0);
 
-    const archivedCreator = store.createWorkspaceMember({ workspaceId: "local", name: "Archived creator", userId: "fallback-archived", role: "member" });
-    const archivedIssue = createResponsibleTestIssue(store, { title: "Fallback archived creator issue", createdBy: archivedCreator.id });
-    store.removeIssueSubscriber(archivedIssue.id, archivedCreator.id);
-    store.archiveWorkspaceMember(archivedCreator.id);
-    const archivedEscalated = await api.create(archivedIssue.id, memberToken.token, {
-      kind: "production_change", title: "Deploy after the creator left",
-    });
-    expect(archivedEscalated.status).toBe("escalated");
-    expect(decisionRequested(workspaceOwner, archivedIssue.id)).toHaveLength(1);
-    expect(store.listMessages(store.getOrCreateDefaultIssueSession(archivedIssue.id).id)
-      .filter(message=>message.to_member_id===archivedCreator.id)).toHaveLength(0);
+    const archived = store.createWorkspaceMember({ workspaceId: 'local', name: 'Archived explicit human', role: 'member' });
+    const unavailableIssue = store.createIssue({ title: 'Human unavailable', createdBy: creator.id,
+      assigneeType: 'agent', assigneeId: sourceAgent.id, responsibleMemberId: archived.id });
+    const unavailable = ask(unavailableIssue.id, 'production_change');
+    store.archiveWorkspaceMember(archived.id);
+    expect(store.getQuestion(unavailable.id)).toMatchObject({ status: 'pending', stage: 'unavailable', current_handler: null });
+    expect(questionNotifications(unavailable.id, creator.id)).toHaveLength(0);
+    expect(questionNotifications(unavailable.id, workspaceOwner.id)).toHaveLength(0);
+    expect(() => store.answerQuestion(unavailable.id, { expected_route_revision: store.getQuestion(unavailable.id)!.route_revision,
+      response: { answer: 'Yes' } }, { type: 'member', id: workspaceOwner.id })).toThrow();
 
-    // Case 3: an explicit member subscriber suppresses the fallback entirely.
-    const subscribed = createResponsibleTestIssue(store, { title: "Fallback subscribed issue", createdBy: creator.id });
-    store.removeIssueSubscriber(subscribed.id, creator.id);
-    store.addIssueSubscriber(subscribed.id, bystander.id);
-    const subscribedEscalated = await api.create(subscribed.id, memberToken.token, {
-      kind: "production_change", title: "Deploy with a subscriber",
-    });
-    expect(subscribedEscalated.status).toBe("escalated");
-    expect(decisionRequested(bystander, subscribed.id)).toHaveLength(1);
-    expect(decisionRequested(creator, subscribed.id)).toHaveLength(0);
-    expect(decisionRequested(workspaceOwner, subscribed.id)).toHaveLength(0);
-
-    // Case 4: the escalate path falls back too. The owner agent's ownerId does
-    // not resolve to a member and the parent has no subscribers.
-    const escalateParent = createResponsibleTestIssue(store, {
-      title: "Fallback escalation parent", assigneeType: "agent", assigneeId: agentless.id, createdBy: creator.id,
-    });
-    store.removeIssueSubscriber(escalateParent.id, creator.id);
-    const escalateChild = createResponsibleTestIssue(store, { title: "Fallback escalation child", parentIssueId: escalateParent.id });
-    const pending = await api.create(escalateChild.id, memberToken.token, {
-      kind: "question", title: "Who decides this",
-    });
-    const pendingId = pending.id;
-    const escalateTask = store.createTask({ agentId: agentless.id, issueId: escalateParent.id, prompt: "Escalation round" });
-    const escalateToken = await store.createTaskAccessToken(escalateTask, "local");
-    store.escalateIssueDecision(escalateParent.id, pendingId, { type: "agent", id: agentless.id, taskId: escalateTask.id });
-    expect(store.getIssueDecision(escalateParent.id, pendingId)?.status).toBe("escalated");
-    expect(decisionRequested(creator, escalateParent.id)).toHaveLength(1);
-    expect(decisionRequested(bystander, escalateParent.id)).toHaveLength(0);
-    expect(decisionRequested(workspaceOwner, escalateParent.id)).toHaveLength(0);
-    void ownerToken;
-  } finally {
-    unsubscribe();
-  }
+    const parent = store.createIssue({ title: 'Ownerless parent', createdBy: bystander.id,
+      assigneeType: 'agent', assigneeId: agentless.id, responsibleMemberId: creator.id });
+    store.addIssueSubscriber(parent.id, bystander.id);
+    const child = store.createIssue({ title: 'Child asks parent', parentIssueId: parent.id,
+      assigneeType: 'agent', assigneeId: sourceAgent.id });
+    const pending = ask(child.id, 'question');
+    expect(pending).toMatchObject({ stage: 'parent_owner', current_handler: { type: 'agent', id: agentless.id } });
+    const notification = store.listMessages(store.getOrCreateDefaultIssueSession(parent.id).id)
+      .find(message => message.metadata.root_question_id === pending.id && message.to_agent_id === agentless.id)!;
+    const notifiedTurn = store.getTurn(String(notification.metadata.delivery_turn_id))!;
+    // Earlier root fixtures legitimately queue execution-owner work. Claim this
+    // Q's actual notification lane, rather than depending on database tie order.
+    const db = (store as unknown as { db: import('@multiremi/store/db/postgres.js').SqlDatabase }).db;
+    db.run('UPDATE multiremi_turns SET priority = 200 WHERE id = ?', [notifiedTurn.id]);
+    const handler = store.claimTask(runtime.id)!;
+    expect(handler.id).toBe(notifiedTurn.current_attempt_id!);
+    expect(handler.agentId).toBe(agentless.id); store.startTask(handler.id);
+    const turn = store.getTurnForAttempt(handler.id)!;
+    const escalated = store.escalateQuestion(pending.id, { expected_route_revision: 1, reason: 'Need the specified human' },
+      { type: 'agent', id: agentless.id }, turn.id);
+    expect(escalated).toMatchObject({ stage: 'human', current_handler: { type: 'member', id: creator.id }, route_revision: 2 });
+    expect(questionNotifications(pending.id, creator.id)).toHaveLength(1);
+    expect(questionNotifications(pending.id, bystander.id)).toHaveLength(0);
+    expect(questionNotifications(pending.id, workspaceOwner.id)).toHaveLength(0);
+  } finally { off(); }
 }
 
 describe("MUL-400 S4 decisions on SQLite", () => {
@@ -438,7 +408,7 @@ describe("MUL-400 S4 decisions on SQLite", () => {
     await exerciseAnsweredWindow(createStore());
   });
 
-  it("falls back to the issue creator, then workspace owners, when an escalated decision has no explicit audience", async () => {
+  it("uses only the explicit root human and fails closed when that person is unavailable", async () => {
     await exerciseDecisionRecipientFallback(createStore());
   });
 });
@@ -548,7 +518,7 @@ describe.skipIf(!pgAvailable)("MUL-400 S4 decisions on PostgreSQL", () => {
     await exerciseAnsweredWindow(store);
   }, 15_000);
 
-  it("falls back to the issue creator, then workspace owners, when an escalated decision has no explicit audience", async () => {
+  it("uses only the explicit root human and fails closed when that person is unavailable", async () => {
     await exerciseDecisionRecipientFallback(store);
   });
 });
