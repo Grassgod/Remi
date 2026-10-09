@@ -78,7 +78,9 @@ notification in its authorized input range. The fixture reads the referenced
 original Q, checks the notification's current route revision, and invokes
 `remi message question present` under that attempt's task credential. It keeps
 the original question and options intact. A stale notification cannot present
-the current Q; inherited ASK text does not create another question.
+the current Q; inherited ASK text does not create another question. Presenter
+prompts also ignore inherited SUBMIT markers: they only present the original Q
+and leave formal delivery to the source execution.
 
 `PR404/RESP/SUBMIT` invokes `remi issue delivery submit` for the current source
 Issue/session with a stable attempt-specific dedupe key. It can accompany ASK

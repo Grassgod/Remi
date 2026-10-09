@@ -43,7 +43,8 @@ async function responsibilityProbe(prompt: string, dependencies: Dependencies): 
     input_read_seq: receipt.input_read_seq, input_read_offset: receipt.input_read_offset });
   assertActive();
   const actions: Array<Record<string, unknown>> = [];
-  if (prompt.includes("PR404/RESP/PRESENTER")) {
+  const presenter = prompt.includes("PR404/RESP/PRESENTER");
+  if (presenter) {
     const notifications = entries.filter((value: any) => value.metadata?.question_present_request === true);
     if (!notifications.length) throw new Error("ppe_presentation_notification_missing");
     for (const notification of notifications) {
@@ -94,7 +95,9 @@ async function responsibilityProbe(prompt: string, dependencies: Dependencies): 
       actions.push(action); record("responsibility_answer_observed", action);
     }
   }
-  if (prompt.includes("PR404/RESP/SUBMIT")) {
+  // The presenter inherits the source Issue's ASK/SUBMIT markers. Its role
+  // ends after presenting that same Q; only the source execution submits.
+  if (!presenter && prompt.includes("PR404/RESP/SUBMIT")) {
     assertActive();
     if (!turn.issue_id) throw new Error("ppe_delivery_issue_required");
     const submitted = await cli(["issue", "delivery", "submit", turn.issue_id, "--session", turn.session_id,

@@ -229,7 +229,7 @@ test("PPE cancellation releases an unanswered provider RPC without a successful 
   } finally { await f.close(); }
 }, 20_000);
 
-test("PPE PRESENTER reads a real authorized notification and summarizes its original Q", async () => {
+for (const prompt of ["PR404/RESP/PRESENTER", "PR404/RESP/ASK PR404/RESP/SUBMIT PR404/RESP/PRESENTER"]) test(`PPE PRESENTER summarizes its authorized original Q without submitting (${prompt})`, async () => {
   const f = await world("issue");
   const previousKey = process.env.MULTIREMI_FEISHU_BOT_ENCRYPTION_KEY;
   process.env.MULTIREMI_FEISHU_BOT_ENCRYPTION_KEY = Buffer.alloc(32, 7).toString("base64");
@@ -248,11 +248,14 @@ test("PPE PRESENTER reads a real authorized notification and summarizes its orig
       { runtimeId: "rt_ppe_fixture", daemonId: "ppe-fixture-daemon", workspaceId: "local" });
     expect(created.ok).toBe(true);
     f.bridge.offerInput(f.store.getTaskWithAgent(f.task.id)!);
-    expect(await f.prompt("PR404/RESP/PRESENTER")).toMatchObject({ result: { stopReason: "end_turn" } });
+    expect(await f.prompt(prompt)).toMatchObject({ result: { stopReason: "end_turn" } });
     expect(f.store.getQuestion(String(created.message_id))).toMatchObject({ status: "pending", original_message: "Should we continue?",
       summary: { agent_id: f.task.agentId }, original_questions: [{ question: "Should we continue?", options: [{ label: "Yes" }, { label: "No" }] }] });
     expect(f.diagnostics.find(event => event.event === "responsibility_presented"))
       .toMatchObject({ question_id: created.message_id, route_revision: 1 });
+    expect(f.frames.filter(frame => frame.method === "elicitation/create")).toHaveLength(0);
+    expect(f.diagnostics.filter(event => event.event === "responsibility_submitted")).toHaveLength(0);
+    expect(f.store.listIssueDeliveries(f.task.issueId!)).toHaveLength(0);
   } finally {
     if (previousKey === undefined) delete process.env.MULTIREMI_FEISHU_BOT_ENCRYPTION_KEY; else process.env.MULTIREMI_FEISHU_BOT_ENCRYPTION_KEY = previousKey;
     await f.close();
