@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 import { MultiremiStore } from '@multiremi/store.js';
 import { openSqliteDatabase } from '@multiremi/store/db/sqlite.js';
 import { PostgresSyncDatabase, type SqlDatabase } from '@multiremi/store/db/postgres.js';
@@ -8,23 +8,35 @@ import { IssueDeliveryError } from '@multiremi/store/issue-deliveries.js';
 
 const adminUrl = process.env.MULTIREMI_TEST_POSTGRES_URL;
 for (const backend of ['sqlite','postgres'] as const) describe.skipIf(backend === 'postgres' && !adminUrl)(`Issue responsibility and formal delivery (${backend})`, () => {
+  let db: SqlDatabase | undefined;
+  let store: MultiremiStore;
+  let admin: Bun.SQL | null;
+  let name: string;
+  let created: boolean;
+  let databaseUrl: string | undefined;
+  // Cold schema/report bootstrap belongs to isolated fixture setup, not the
+  // test body's unchanged 5s budget. Business assertions retain their bounds.
+  beforeEach(async () => {
+    admin = backend === 'postgres' ? new Bun.SQL(adminUrl!,{max:1}) : null;
+    name = `responsibility_${process.pid}_${crypto.randomUUID().replaceAll('-','')}`;
+    created = false;
+    databaseUrl = undefined;
+    if (admin) { await admin.unsafe(`CREATE DATABASE ${name}`); created = true; const url = new URL(adminUrl!); url.pathname = `/${name}`; databaseUrl=url.toString(); db = new PostgresSyncDatabase(databaseUrl); }
+    else db = openSqliteDatabase(':memory:') as unknown as SqlDatabase;
+    store = new MultiremiStore(db); store.ensureLocalWorkspace();
+    // Match the store's transaction/afterCommit adapter on both backends.
+    db=(store as unknown as {db:SqlDatabase}).db;
+  });
+  afterEach(async () => {
+    db?.close();
+    if (created) await admin!.unsafe(`DROP DATABASE ${name}`);
+    await admin?.end();
+  });
   async function run(check: (store: MultiremiStore, db: SqlDatabase, restart: () => {store:MultiremiStore;db:SqlDatabase}) => void | Promise<void>) {
-    let db: SqlDatabase | undefined;
-    const admin = backend === 'postgres' ? new Bun.SQL(adminUrl!,{max:1}) : null;
-    const name = `responsibility_${process.pid}_${crypto.randomUUID().replaceAll('-','')}`;
-    let created = false;
-    let databaseUrl: string | undefined;
-    try {
-      if (admin) { await admin.unsafe(`CREATE DATABASE ${name}`); created = true; const url = new URL(adminUrl!); url.pathname = `/${name}`; databaseUrl=url.toString(); db = new PostgresSyncDatabase(databaseUrl); }
-      else db = openSqliteDatabase(':memory:') as unknown as SqlDatabase;
-      const store = new MultiremiStore(db); store.ensureLocalWorkspace();
-      // Match the store's transaction/afterCommit adapter on both backends.
-      db=(store as unknown as {db:SqlDatabase}).db;
-      await check(store,db,() => {
-        if (databaseUrl) {db!.close();db=new PostgresSyncDatabase(databaseUrl);}
-        return {store:new MultiremiStore(db!),db:db!};
-      });
-    } finally { db?.close(); if (created) await admin!.unsafe(`DROP DATABASE ${name}`); await admin?.end(); }
+    await check(store,db!,() => {
+      if (databaseUrl) {db!.close();db=new PostgresSyncDatabase(databaseUrl);}
+      return {store:new MultiremiStore(db!),db:db!};
+    });
   }
   function fixture(store: MultiremiStore, suffix='') {
     const human = store.createWorkspaceMember({id:`human_responsible${suffix}`,name:'Responsible human'});
