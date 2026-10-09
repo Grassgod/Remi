@@ -22,6 +22,7 @@ function scaffold() {
   store.registerRuntime({ id: "rt_audit", name: "Audit", provider: "codex", workspaceId: "local" });
   store.heartbeatRuntime("rt_audit", { supportsFeishuBotConfig: true });
   const config = store.upsertFeishuBotConfig("local", {
+    responsibleMemberId:store.findWorkspaceMemberForUser('local','local')!.id,
     agentId: agent.id, runtimeId: "rt_audit", appId: "cli_audit", appSecretOp: "set",
     appSecret: "fixture-only", senderAccessPolicy: "agent", domain: "feishu", enabled: true,
   });

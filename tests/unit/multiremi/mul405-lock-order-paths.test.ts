@@ -1,5 +1,6 @@
 import { createResponsibleTestAutopilot } from './helpers.js';
 import { createResponsibleTestIssue } from './helpers.js';
+import { prepareTestIssueDelivery } from './helpers.js';
 /**
  * MUL-405 (QA round 2, item 2): every real path that can take more than one of
  * the three lock classes must take them in the contract order
@@ -185,6 +186,7 @@ function scaffold(): ReturnType<typeof freshStore> & { agentId: string; runtimeI
   store.registerRuntime({ id: runtimeId, name: "Bot host", provider: "codex", workspaceId: "local", daemonId: "lock-paths-host" });
   store.heartbeatRuntime(runtimeId, { supportsFeishuBotConfig: true });
   const config = store.upsertFeishuBotConfig("local", {
+    responsibleMemberId:store.findWorkspaceMemberForUser('local','local')!.id,
     agentId: agent.id,
     runtimeId,
     appId: "cli_lock_paths",
@@ -409,7 +411,7 @@ describe("MUL-405 per-path lock order", () => {
   it("quick-create: W -> N", () => {
     const { store, recorder, agentId } = scaffold();
     clear(recorder);
-    store.quickCreateIssue({ prompt: "quick create path", workspaceId: "local", agentId });
+    store.quickCreateIssue({ prompt: "quick create path", workspaceId: "local", agentId,responsibleMemberId:store.findWorkspaceMemberForUser('local','local')!.id });
     assertPath("quickCreateIssue", recorder, ["W", "N"]);
   });
 
@@ -571,7 +573,7 @@ describe("MUL-405 per-path lock order", () => {
     const ref = { connectionId: "mconn_lock_paths", externalMessageId: "external_lock_paths" };
     seedMessaging(store, ref);
     clear(recorder);
-    store.messagingOutcomes.createIssue(ref, { workspaceId: "local", title: "Outcome Issue" });
+    store.messagingOutcomes.createIssue(ref, { workspaceId: "local", title: "Outcome Issue",createdBy:'local' });
     assertPath("messagingOutcomes.createIssue", recorder, ["W", "N", "D"]);
   });
 
@@ -595,7 +597,7 @@ describe("MUL-405 per-path lock order", () => {
     const { store, recorder } = freshStore();
     const { messageId } = seedFeishuIngest(store);
     clear(recorder);
-    store.createFeishuIssueOutcome(messageId, { workspaceId: "local", title: "Ingest Issue" });
+    store.createFeishuIssueOutcome(messageId, { workspaceId: "local", title: "Ingest Issue",createdBy:'local' });
     assertPath("createFeishuIssueOutcome", recorder, ["W", "N", "D"]);
   });
 
@@ -707,14 +709,15 @@ describe("MUL-405 per-path lock order", () => {
 
   it("MUL-409 automatic start: W -> issue row -> round, no number lock", () => {
     const { store, recorder, agentId } = freshStoreWithAgent();
-    const prereq = createResponsibleTestIssue(store, { title: "Prereq", workspaceId: "local", status: "in_progress" });
+    const prereq = createResponsibleTestIssue(store, { title: "Prereq", workspaceId: "local", status: "in_progress",assigneeType:'agent',assigneeId:agentId });
     const dependent = createResponsibleTestIssue(store, {
       title: "Auto dependent", workspaceId: "local",
       assigneeType: "agent", assigneeId: agentId,
       blockedBy: [prereq.id],
     });
+    const prepared=prepareTestIssueDelivery(store,prereq.id);
     clear(recorder);
-    store.updateIssue(prereq.id, { status: "done" });
+    store.respondIssueDelivery(prereq.id,prepared.delivery.id,{action:'accept',revision:prepared.delivery.responsibilityRevision},prepared.actor);
     expect(store.getIssue(dependent.id)!.status).toBe("todo");
     expect(store.listTasksForIssue(dependent.id)).toHaveLength(1);
     assertFrames("MUL-409 automatic start", recorder, [["W", "D"], ["W", "D"]]);
@@ -767,7 +770,7 @@ describe("MUL-405 per-path lock order", () => {
     };
     clear(recorder);
     try {
-      expect(store.messagingOutcomes.createIssue(ref, { workspaceId: "local", title: "Owner outcome" }).created).toBe(true);
+      expect(store.messagingOutcomes.createIssue(ref, { workspaceId: "local", title: "Owner outcome",createdBy:'local' }).created).toBe(true);
     } finally {
       store.messaging.recordOutcomeWithinTransaction = original;
     }
@@ -801,7 +804,7 @@ it.skipIf(!process.env.MULTIREMI_TEST_POSTGRES_URL)("MUL-409 real PG: automatic 
     const store = new MultiremiStore(recordedPg);
     store.ensureLocalWorkspace();
     const agent = store.createAgent({ name: "PG frame owner", provider: "codex", workspaceId: "local" });
-    const prerequisite = createResponsibleTestIssue(store, { title: "PG prerequisite", status: "in_progress" });
+    const prerequisite = createResponsibleTestIssue(store, { title: "PG prerequisite", status: "in_progress",assigneeType:'agent',assigneeId:agent.id });
     const dependent = createResponsibleTestIssue(store, {
       title: "PG dependent", assigneeType: "agent", assigneeId: agent.id, status: "backlog",
     });
@@ -812,9 +815,10 @@ it.skipIf(!process.env.MULTIREMI_TEST_POSTGRES_URL)("MUL-409 real PG: automatic 
     expect(pg.maxTransactionDepth).toBe(1);
     console.info("MUL-409 PG dependency frames", JSON.stringify(recorder.frames.map(firstAcquisitions)));
 
+    const prepared=prepareTestIssueDelivery(store,prerequisite.id);
     clear(recorder);
     pg.resetTransactionDepthStats();
-    store.updateIssue(prerequisite.id, { status: "done" });
+    store.respondIssueDelivery(prerequisite.id,prepared.delivery.id,{action:'accept',revision:prepared.delivery.responsibilityRevision},prepared.actor);
     assertFrames("PG automatic start", recorder, [["W", "D"], ["W", "D"]]);
     expect(pg.maxTransactionDepth).toBe(1);
     expect(store.getIssue(dependent.id)!.status).toBe("todo");

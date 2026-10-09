@@ -176,6 +176,7 @@ function recordFeishuOrder(): LockName[] {
   });
   store.heartbeatRuntime("rt_lock_order", { supportsFeishuBotConfig: true });
   const config = store.upsertFeishuBotConfig("local", {
+    responsibleMemberId:store.findWorkspaceMemberForUser('local','local')!.id,
     agentId: agent.id,
     runtimeId: "rt_lock_order",
     appId: "cli_lock_order",
