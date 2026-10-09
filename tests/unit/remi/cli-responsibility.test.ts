@@ -32,8 +32,14 @@ describe("responsibility CLI", () => {
   it("advertises only the authentication kinds accepted by responsibility APIs", () => {
     const humanOnly = ["issue.responsibility-unassigned.list", "issue.responsibility-unassigned.map", "issue.responsible.set", "autopilot.responsible.set", "issue.delivery.authorize", "message.question.continue"];
     const taskOnly = ["issue.delivery.submit", "message.question.present", "message.question.escalate"];
-    for (const id of humanOnly) expect(specs.find(command => command.id === id)?.auth).toEqual(["human"]);
-    for (const id of taskOnly) expect(specs.find(command => command.id === id)?.auth).toEqual(["task"]);
+    for (const id of humanOnly) {
+      expect(specs.find(command => command.id === id)?.auth).toEqual(["human"]);
+      expect(registry.inventory().find(command => command.id === id)?.auth).toEqual(["human"]);
+    }
+    for (const id of taskOnly) {
+      expect(specs.find(command => command.id === id)?.auth).toEqual(["task"]);
+      expect(registry.inventory().find(command => command.id === id)?.auth).toEqual(["task"]);
+    }
     for (const id of ["message.question.answer", "message.question.transfer", "message.question.close", "issue.delivery.accept", "issue.delivery.return"]) expect(specs.find(command => command.id === id)?.auth).toEqual(["human", "task"]);
   });
   it("maps every new responsibility API to a registered executable command", () => {

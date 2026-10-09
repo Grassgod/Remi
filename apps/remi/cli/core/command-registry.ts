@@ -91,6 +91,12 @@ interface RegisteredPath {
 }
 
 const TASK_PARITY_DENIED_COMMAND_IDS = new Set([
+  "issue.responsibility-unassigned.list",
+  "issue.responsibility-unassigned.map",
+  "issue.responsible.set",
+  "autopilot.responsible.set",
+  "issue.delivery.authorize",
+  "message.question.continue",
   "agent.role.set",
   "agent.supervisor.set",
   "autopilot.trigger.rotate-token",
