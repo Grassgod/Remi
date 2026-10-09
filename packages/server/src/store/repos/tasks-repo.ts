@@ -1140,6 +1140,9 @@ function fallbackSwitchPlan(parent: MultiremiTask, agent: MultiremiAgent | null,
 
 export class TasksRepo {
   private readonly acceptedOfferLeases = new Set<string>();
+  // Synchronous request scopes only: the message-to-turn funnel reuses this
+  // caller's Issue lock, and finally removes it on both success and rollback.
+  private readonly taskRequestIssueLocks = new Set<string>();
   constructor(private ctx: StoreContext) {}
 
   countDelegationPairHops(source: MultiremiTask, targetAgentId: string, limit = pairRoundTripLimit()): number {
@@ -1727,8 +1730,24 @@ export class TasksRepo {
     const existingId=input.triggerCommentId??input.trigger_comment_id;
     const existing=existingId?this.ctx.inbox().getMessage(existingId):null;
     const issueId=input.issueId??(existing?this.ctx.getLogIssueComment(existing.id)?.issueId:null);
+    let acquiredIssueLock: string | null = null;
+    try {
+    const agent = this.ctx.agents().getAgent(input.agentId);
+    if (!agent) throw new Error(`Agent not found: ${input.agentId}`);
+    // W is already held. Lock and re-read I before selecting a conversation or
+    // validating its sender, so a moved Issue cannot enter the other W scope.
+    if (issueId) {
+      if (!this.taskRequestIssueLocks.has(issueId)) {
+        lockIssueRowWithinTransaction(this.ctx.db, issueId);
+        this.taskRequestIssueLocks.add(issueId);
+        acquiredIssueLock = issueId;
+      }
+      const issue = this.ctx.db.query('SELECT workspace_id FROM multiremi_issues WHERE id=?').get(issueId);
+      if (!issue) throw new Error(`Issue not found: ${issueId}`);
+      if (issue.workspace_id !== agent.workspaceId) throw new Error("Issue workspace does not match agent workspace");
+    }
     const requestId=input.id??createId("tsk");
-    input={...input,id:requestId,workspaceId:this.ctx.agents().getAgent(input.agentId)?.workspaceId};
+    input={...input,id:requestId,workspaceId:agent.workspaceId};
     const sessionId=input.conversationSessionId??input.issueSessionId??input.issue_session_id??input.chatSessionId
       ??(issueId?this.ctx.issueSessions().getOrCreateDefaultIssueSessionWithinTransaction(issueId).id:null)
       ??this.ctx.db.query('SELECT a.session_id FROM multiremi_autopilots a JOIN multiremi_autopilot_runs r ON r.autopilot_id=a.id WHERE r.turn_id=?').get(input.id)?.session_id??`auto_orphan_${requestId}`;
@@ -1753,6 +1772,9 @@ export class TasksRepo {
     const turn=result.turn_id?this.ctx.db.query('SELECT current_attempt_id FROM multiremi_turns WHERE id=?').get(result.turn_id):null;
     if(!turn)throw Object.assign(new Error(`Message stored without scheduling: ${result.wake_reason}`),{message_result:result});
     return this.getTask(turn.current_attempt_id)!;
+    } finally {
+      if (acquiredIssueLock) this.taskRequestIssueLocks.delete(acquiredIssueLock);
+    }
   }
 
   createTurnForMessageWithinWorkspaceLock(
@@ -1849,7 +1871,7 @@ export class TasksRepo {
     // MUL-476: a task is an edge to its Issue, so lock the Issue (after the
     // workspace lock) before checking its workspace; a concurrent move then
     // either sees this task or commits before this read.
-    if (issueId) lockIssueRowWithinTransaction(this.ctx.db, issueId);
+    if (issueId && !this.taskRequestIssueLocks.has(issueId)) lockIssueRowWithinTransaction(this.ctx.db, issueId);
     const issue = issueId ? this.ctx.issues().getIssue(issueId) : null;
     if (issueId && !issue) throw new Error(`Issue not found: ${issueId}`);
     if (triggerComment && issue && triggerComment.issueId !== issue.id) throw new Error("Trigger comment does not belong to task issue");

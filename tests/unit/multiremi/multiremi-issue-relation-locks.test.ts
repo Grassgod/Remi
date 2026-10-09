@@ -241,6 +241,39 @@ for (const backend of ["SQLite", "PostgreSQL"] as const) {
       assertNoForeignEdges();
     });
 
+    it("refuses a moved Issue before messaging and clears the request lock scope on failure", () => {
+      const f = fixture();
+      store.updateIssue(f.child.id, { workspaceId: f.target, responsibleMemberId: f.targetHuman.id,
+        actorType: "member", actorId: f.targetHuman.id });
+      const activityBefore = store.listIssueActivity(f.child.id);
+      const sessionsBefore = db.query("SELECT id FROM multiremi_issue_sessions WHERE issue_id = ? ORDER BY id").all(f.child.id);
+      const emitted: string[] = [];
+      const stop = store.onWorkspaceEvent((event) => emitted.push(event.type));
+      let rejectedLocks: TraceEvent[];
+      try {
+        rejectedLocks = trace(() => {
+          expect(() => store.createTask({ agentId: f.agent.id, issueId: f.child.id, prompt: "Old workspace request" }))
+            .toThrow("Issue workspace does not match agent workspace");
+        });
+      } finally { stop(); }
+      expect(rejectedLocks.filter((event) => event.kind === "lock")).toEqual([{ kind: "lock", id: f.child.id }]);
+      expect(taskIds(f.child.id)).toEqual([]);
+      expect(store.listIssueActivity(f.child.id)).toEqual(activityBefore);
+      expect(db.query("SELECT id FROM multiremi_issue_sessions WHERE issue_id = ? ORDER BY id").all(f.child.id)).toEqual(sessionsBefore);
+      expect(emitted).toEqual([]);
+
+      const targetAgent = store.createAgent({ name: "Explicit target worker", provider: "codex", workspaceId: f.target });
+      const acceptedLocks = trace(() => {
+        const task = store.createTask({ agentId: targetAgent.id, issueId: f.child.id, prompt: "Target workspace request",
+          assignmentAuthorType: "member", assignmentAuthorId: f.targetHuman.id });
+        expect(task.workspaceId).toBe(f.target);
+        expect(store.getIssueSession(task.issueSessionId!)?.workspaceId).toBe(f.target);
+      });
+      expect(acceptedLocks.filter((event) => event.kind === "lock")).toEqual([{ kind: "lock", id: f.child.id }]);
+      expect(taskIds(f.child.id)).toHaveLength(1);
+      assertNoForeignEdges();
+    });
+
     it("PG-L8b: an Issue with an active task answers 409 with the task; unassigning unblocks the move", async () => {
       const f = fixture();
       const { task } = store.assignIssue(f.child.id, { assigneeType: "agent", assigneeId: f.agent.id });
