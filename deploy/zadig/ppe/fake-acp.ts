@@ -72,7 +72,11 @@ async function responsibilityProbe(prompt: string, dependencies: Dependencies): 
         const listed = await cli(["message", "list", turn.session_id, "--limit", "100"]);
         const messages = Array.isArray(listed) ? listed : listed.messages;
         if (!Array.isArray(messages)) throw new Error("ppe_invalid_range_result");
-        return messages.find((value: any) => value.message_kind === "decision" && value.body_md === message && value.sender_id === turn.agent_id);
+        // The daemon combines the elicitation message and rendered field text
+        // into body_md. Their text can be identical, so compare the preserved
+        // provider payload instead of assuming body_md equals one copy.
+        return messages.find((value: any) => value.message_kind === "decision" && value.sender_id === turn.agent_id
+          && value.task_id === turnId && (value.metadata?.human_request?.payload?.message === message || value.body_md === message));
       };
       let original = await findQuestion();
       if (!original) {

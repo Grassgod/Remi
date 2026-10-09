@@ -67,6 +67,10 @@ Issue request. The provider confirms an actual CLI range read, sends a real
 the daemon returns the human answer. It records the original Q ID by reading
 that conversation and `remi message question get`; a later prompt in the same
 product lane observes the saved answer without creating another Q.
+The lookup uses the original provider message in `human_request.payload.message`
+and the source turn/Agent identity. The daemon may repeat that text in the
+rendered `body_md` when it combines the form message and question field; the
+rendered body is not an exact provider-message identifier.
 
 Add `PR404/RESP/PRESENTER` to the dedicated PPE Remi agent's instructions. A
 presentation prompt must contain an actual `question_present_request`

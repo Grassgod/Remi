@@ -5,6 +5,8 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { createLocalStore, resetMultiremiTestEnv } from "../multiremi/helpers.js";
+import { AcpProvider } from "@acp/index.js";
+import { DaemonProtocolHarness, waitFor } from "../../integration/daemon-protocol-v2/harness.js";
 
 afterEach(resetMultiremiTestEnv);
 const root = resolve(import.meta.dir, "../../..");
@@ -158,6 +160,44 @@ test("PPE ASK waits for a real elicitation answer and records the original busin
     expect(evidence).not.toContain("Bearer");
   } finally { await f.close(); }
 }, 20_000);
+
+test("PPE actual daemon Bootstrap reads its range, consumes a normalized native Q and submits formal delivery", async () => {
+  let evidenceDirectory: string;
+  const h = await DaemonProtocolHarness.create({ database: "sqlite", providerFactory: options => new AcpProvider({
+    ...options, executable: process.execPath, args: [join(root, "deploy/zadig/ppe/fake-acp.ts")], privateTmpDirectory: undefined,
+    env: { ...options.env, PPE_ACP_EVIDENCE_DIR: evidenceDirectory!, PPE_ACP_REMI_BIN: process.execPath, PPE_ACP_REMI_ENTRY: join(root, "apps/remi/main.ts") },
+  }) });
+  evidenceDirectory = join(h.root, "responsibility-evidence");
+  try {
+    await h.startDaemon(); await h.settleHeartbeat();
+    const runtimeId = h.ledger.find(entry => entry.type === "hello")!.frame.p.runtimes[0].runtime_id;
+    const agent = h.store.createAgent({ name: "Actual PPE responsibility execution", provider: "claude", runtimeId });
+    const issue = createResponsibleTestIssue(h.store, { title: "PR404/RESP/ASK PR404/RESP/SUBMIT — native answer and acceptance", assigneeType: "agent", assigneeId: agent.id, responsibleMemberId: "mem_local_local" });
+    const session = h.store.getOrCreateDefaultIssueSession(issue.id);
+    const sent = h.store.sendMessage({ session_id: session.id, sender: { type: "member", id: "mem_local_local" }, to: { type: "agent", ref: agent.id }, message_kind: "request", wake_requested: "now", body_md: issue.title });
+    await waitFor(() => h.store.listIssueQuestions(issue.id).length === 1, "actual native elicitation", 20_000);
+    const question = h.store.listIssueQuestions(issue.id)[0]!;
+    const attemptId = h.store.getTurn(sent.turn_id!)!.current_attempt_id!;
+    const prompt = h.store.getTaskPrompt(attemptId)!;
+    expect(prompt.prompt).toStartWith("# Bootstrap Prompt");
+    expect(prompt.prompt).toContain(`Turn: ${sent.turn_id}; attempt: ${attemptId};`);
+    expect(question.original_message).toBe("PR404/RESP/ASK: Should this PPE Issue continue?\n\nPR404/RESP/ASK: Should this PPE Issue continue?");
+    expect(question.wait_status).toBe("waiting");
+    expect(h.store.listIssueDeliveries(issue.id)).toHaveLength(0);
+    h.store.answerQuestion(question.id, { expected_route_revision: question.route_revision, response: { answers: { "PR404/RESP/ASK: Should this PPE Issue continue?": "Continue" } } }, { type: "member", id: "mem_local_local" });
+    await waitFor(() => ["completed", "failed"].includes(h.store.getTurn(sent.turn_id!)?.status ?? ""), "native answer and formal submit", 20_000);
+    const turn = h.store.getTurn(sent.turn_id!)!;
+    expect({ status: turn.status, error: h.store.getTask(attemptId)?.error }).toEqual({ status: "completed", error: null });
+    expect(h.store.getQuestion(question.id)).toMatchObject({ status: "answered", wait_status: "consumed", recovery: { consumer_turn_id: turn.id, consumer_attempt_id: attemptId } });
+    const delivery = h.store.listIssueDeliveries(issue.id)[0]!;
+    expect(delivery).toMatchObject({ issueId: issue.id, status: "pending", sourceSessionId: session.id, submittedBy: { type: "agent", id: agent.id } });
+    const receipt = h.store.listTurnAttempts(turn.id).find(attempt => attempt.id === attemptId)!;
+    expect(receipt.input_read_seq).toBeGreaterThanOrEqual(sent.message.seq); expect(receipt.input_read_offset).toBe(0);
+    const evidence = readFileSync(join(evidenceDirectory, `${attemptId}-responsibility.jsonl`), "utf8");
+    expect(evidence).toContain('"event":"responsibility_input_read"'); expect(evidence).toContain('"event":"responsibility_answer_observed"'); expect(evidence).toContain('"event":"responsibility_submitted"');
+    expect(evidence).not.toContain("Bearer");
+  } finally { await h.dispose(); }
+}, 45_000);
 
 test("PPE SUBMIT invokes the real task-authenticated formal delivery CLI", async () => {
   const f = await world("issue");
