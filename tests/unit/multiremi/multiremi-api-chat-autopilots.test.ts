@@ -1,5 +1,5 @@
 import { createResponsibleTestAutopilot } from './helpers.js';
-import { createResponsibleTestIssue } from './helpers.js';
+import { acceptTestIssueDelivery, createResponsibleTestIssue } from './helpers.js';
 import { requestMessageBody, sentTask } from "./unified-test-paths.js";
 // Chat session/message routes, autopilot API + public webhook triggering,
 // webhook rate limiting, and scheduler state sync.
@@ -416,7 +416,8 @@ describe("Multiremi API — chat sessions and autopilot triggers", () => {
   it("validates and serializes trigger_issue system event configuration", async () => {
     const store = createStore();
     const agent = store.createAgent({ name: "Wiki maintainer", provider: "codex" });
-    const issue = createResponsibleTestIssue(store, { title: "Completed evidence", status: "done" });
+    const issue = createResponsibleTestIssue(store, { title: "Completed evidence", assigneeType: "agent", assigneeId: agent.id });
+    acceptTestIssueDelivery(store, issue.id);
     const app = createMultiremiApp({ store });
 
     const created = await app.request("/api/autopilots", {

@@ -697,6 +697,7 @@ describe("Multiremi store — Go daemon wire shapes", () => {
       dedupeKey: "repo_claim_context:incremental_update:abc123",
     });
     const quick = store.quickCreateIssue({
+      responsibleMemberId: "mem_local_local",
       agentId: agent.id,
       projectId: project.id,
       prompt: "Create onboarding screenshot follow-up",
