@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, spyOn } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
 import type { Database } from "bun:sqlite";
 import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { join } from "node:path";
@@ -121,16 +121,36 @@ describe("daemon protocol v2 real connection", () => {
     reads.mockRestore();
   });
 
-  it("times out a decision RPC while the executing turn's socket is disconnected", async () => {
-    const h = await fixture();
-    await h.startDaemon();
-    await h.disconnect();
-    const error = await (h.daemon as any).taskDownlinks.rpc("turn.decision.get", {
-      turn_id: "turn_unreachable", attempt_id: "tsk_unreachable", message_id: "msg_unreachable",
-    }, 50)
-      .catch((value: unknown) => value);
-    expect(error).toBeInstanceOf(DaemonProtocolRpcError);
-    expect(error).toMatchObject({ code: "daemon_timeout", retryable: true });
+  describe("disconnected decision RPC", () => {
+    let h: DaemonProtocolHarness;
+    beforeEach(async () => {
+      // Teardown must not stop the socket while the RPC's own 50ms deadline runs.
+      h = await fixture();
+      await h.startDaemon();
+      await h.disconnect();
+    });
+
+    it("times out a decision RPC while the executing turn's socket is disconnected", async () => {
+      expect(h.client.connectionState()).toBe("disconnected");
+      const error = await (h.daemon as any).taskDownlinks.rpc("turn.decision.get", {
+        turn_id: "turn_unreachable", attempt_id: "tsk_unreachable", message_id: "msg_unreachable",
+      }, 50)
+        .catch((value: unknown) => value);
+      expect(error).toBeInstanceOf(DaemonProtocolRpcError);
+      expect(error).toMatchObject({ code: "daemon_timeout", retryable: true });
+      expect(h.client.connectionState()).toBe("disconnected");
+    });
+
+    it("rejects a waiting decision RPC when the daemon is stopped", async () => {
+      const pending = (h.daemon as any).taskDownlinks.rpc("turn.decision.get", {
+        turn_id: "turn_unreachable", attempt_id: "tsk_unreachable", message_id: "msg_unreachable",
+      }, 50).catch((value: unknown) => value);
+      h.daemon.stop();
+      const error = await pending;
+      expect(error).toBeInstanceOf(DaemonProtocolRpcError);
+      expect(error).toMatchObject({ code: "authority_revoked", retryable: false });
+      expect(h.client.connectionState()).toBe("stopped");
+    });
   });
 
   it("stops within 1s while execution start is unacknowledged without calling the provider", async () => {
