@@ -558,8 +558,9 @@ describe("knowledge compilation control plane", () => {
     const store = createStore();
     store.ensureLocalWorkspace();
     const project = store.createProject({ title: "Completion" });
-    const issue = createResponsibleTestIssue(store, { title: "Finish", projectId: project.id });
     const agent = store.createAgent({ name: "Worker", provider: "claude" });
+    const issue = createResponsibleTestIssue(store, { title: "Finish", projectId: project.id,
+      assigneeType: 'agent', assigneeId: agent.id });
     const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "finish" });
     store.createIssueSession(issue.id, { title: "Implementation" });
     const raw = store.createKnowledgeSubmission({
@@ -567,7 +568,9 @@ describe("knowledge compilation control plane", () => {
       body: "raw fact", sourceTaskId: task.id, sourceIssueId: issue.id, authorAgentId: agent.id,
     }).submission;
     mutateExecutionFixture(store, "UPDATE multiremi_turn_execution_records SET status = 'completed', result = ? WHERE id = ?", [JSON.stringify("final task result"), task.id]);
-    store.updateIssue(issue.id, { status: "done" });
+    const delivery = store.submitIssueDelivery(issue.id, { summary: 'final task result' }, { type: 'agent', id: agent.id, taskId: task.id });
+    store.respondIssueDelivery(issue.id, delivery.id, { action: 'accept', revision: delivery.responsibilityRevision },
+      { type: 'member', id: issue.responsibleMemberId! });
     store.updateIssue(issue.id, { status: "done" });
     const bundles = store.listKnowledgeSubmissions({ workspaceId: "local", projectId: project.id })
       .filter((submission) => submission.sourceType === "issue_completion");

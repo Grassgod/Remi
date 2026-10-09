@@ -1416,13 +1416,18 @@ describe("Multiremi API — daemon endpoints", () => {
     const app = createMultiremiApp({ store, authToken: "root-secret" });
     const daemonHeaders = { Authorization: `Bearer ${daemonToken.token}` };
 
-    const completedIssueWithQueuedTask = createResponsibleTestIssue(store, { title: "GC hold", workspaceId: "local" });
+    const completedIssueWithQueuedTask = createResponsibleTestIssue(store, { title: "GC hold", workspaceId: "local",
+      assigneeType: 'agent', assigneeId: agent.id });
     const queuedIssueTask = store.createTask({
       agentId: agent.id,
       issueId: completedIssueWithQueuedTask.id,
       prompt: "Maintain Wiki before GC",
     });
-    store.updateIssue(completedIssueWithQueuedTask.id, { status: "done" });
+    const gcDelivery = store.submitIssueDelivery(completedIssueWithQueuedTask.id, { summary: 'GC fixture verified' },
+      { type: 'agent', id: agent.id, taskId: queuedIssueTask.id });
+    store.respondIssueDelivery(completedIssueWithQueuedTask.id, gcDelivery.id,
+      { action: 'accept', revision: gcDelivery.responsibilityRevision },
+      { type: 'member', id: completedIssueWithQueuedTask.responsibleMemberId! });
     const gcOptions = { headers: daemonHeaders, authToken: "root-secret", runtimeId: runtime.id };
     const heldGc = await reportFrame(store, "gc.check_issue", { issue_id: completedIssueWithQueuedTask.id }, gcOptions);
     expect(heldGc.status).toBe("active");

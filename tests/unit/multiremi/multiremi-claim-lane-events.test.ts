@@ -1,4 +1,4 @@
-import { createResponsibleTestIssue } from './helpers.js';
+import { createHistoricalTestIssue, createResponsibleTestIssue } from './helpers.js';
 import { afterEach, describe, expect, it, spyOn } from "bun:test";
 import { StoreContext } from "@multiremi/store/context.js";
 import { IssueLockSetStaleError, type IssuesRepo } from "@multiremi/store/repos/issues-repo.js";
@@ -82,7 +82,7 @@ describe("MUL-482 transaction ownership and retry boundaries", () => {
             const ctx = (store as unknown as { ctx: StoreContext }).ctx;
             const parent = createResponsibleTestIssue(store, { title: "Parent", status: "in_review" });
             const nextParent = createResponsibleTestIssue(store, { title: "New parent", status: "in_review" });
-            const child = createResponsibleTestIssue(store, { title: "Done child", status: "done", parentIssueId: parent.id });
+            const child = createHistoricalTestIssue(store, { title: "Done child", status: "done", parentIssueId: parent.id });
             const beforeActivity = store.listIssueActivity(child.id);
             const beforeParentActivity = store.listIssueActivity(parent.id);
             const received: Array<{ type: string; inTransaction: boolean }> = [];
