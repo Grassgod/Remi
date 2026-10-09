@@ -274,6 +274,7 @@ export class Questions {
       try {
         const result = this.ctx.db.transaction(() => sendMessageWithinTransaction(this.ctx, { session_id: source.session?.status === 'active' ? source.session.id : message.session_id,
           sender: { type: 'platform', id: null }, to: { type: 'none' }, message_kind: 'status', wake_requested: 'inbox_only',
+          execution_scope: source.session?.status === 'active' ? String(source.turn?.execution_scope ?? '') : String(message.metadata.execution_scope ?? ''),
           dedupe_key: `question-source-unavailable:${message.id}:${eventKey}`, body_md: `${body}\n原来源尚未安排执行：${reason}。`,
           metadata: { root_question_id: message.id, question_source_notification: true, question_source_notification_unavailable: reason } }, staged))();
         notificationId = result.message.id; notificationSession = result.message.session_id;

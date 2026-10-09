@@ -169,14 +169,26 @@ function issueWithTopic(store: MultiremiStore, title = "Decision parent", assign
 }
 
 /** A child Issue with a running task, which is what raises decisions. */
-function childWithTask(store: MultiremiStore, agentId: string, parentId: string) {
+function childWithTask(store: MultiremiStore, agentId: string, parentId: string, delegateFromParent = false) {
+  const parentAgentId = agentId;
   agentId = store.getFeishuBotConfig("local")!.agentId!;
   const child = createResponsibleTestIssue(store, {
     title: "Decision source", workspaceId: "local", parentIssueId: parentId,
     assigneeType: "agent", assigneeId: agentId,
   });
-  const task = store.createTask({ agentId, issueId: child.id, workspaceId: "local", prompt: "Work" });
-  expect(store.claimTask("rt_bot")?.id).toBe(task.id); store.startTask(task.id);
+  let task;
+  if (delegateFromParent) {
+    const owner = parentTask(store, parentAgentId, parentId);
+    store.sendMessage({ session_id: store.getOrCreateDefaultIssueSession(child.id).id, sender: { type: "agent", id: parentAgentId }, source_turn_id: store.getTurnForAttempt(owner.id)!.id,
+      to: { type: "agent", ref: agentId }, message_kind: "request", wake_requested: "now", body_md: "Execute the parent's actual delegated source work" });
+    task = store.claimTask("rt_bot")!;
+    expect(task.agentId).toBe(agentId);
+    expect(task.delegationId).toBeTruthy();
+  } else {
+    task = store.createTask({ agentId, issueId: child.id, workspaceId: "local", prompt: "Work" });
+    expect(store.claimTask("rt_bot")?.id).toBe(task.id);
+  }
+  store.startTask(task.id);
   return { child, task };
 }
 
@@ -195,7 +207,7 @@ function raiseDecision(
   agentId: string,
   childId: string,
   taskId: string,
-  input: { kind: string; title: string; options?: string[] },
+  input: { kind: string; title: string; options?: string[]; executionScope?: string },
 ) {
   // Explicit historical decision_record fixture. No retired writer and no
   // invented native callback: production reads and mutations use the same Q.
@@ -207,6 +219,7 @@ function raiseDecision(
   const human = ["permission", "production_change"].includes(input.kind);
   const at = new Date().toISOString();
   const original = store.sendMessage({ session_id: session.id, sender: { type: "agent", id: task.agentId }, source_turn_id: turn.id,
+    ...(input.executionScope ? { execution_scope: input.executionScope } : {}),
     to: human ? { type: "member", ref: parent.responsibleMemberId! } : { type: "none" }, message_kind: "decision", wake_requested: "inbox_only", body_md: `${input.title} context`, options: input.options?.map(label => ({ label, value: label })),
     metadata: { decision_record: { issue_id: parent.id, source_issue_id: childId, source_task_id: taskId, kind: input.kind, title: input.title, body: `${input.title} context`, options: input.options ?? [],
       status: human ? "escalated" : "pending", created_by_agent_id: task.agentId, owner_agent_id: human ? null : parent.assigneeId, history: [], created_at: at, updated_at: at } } }).message;
@@ -420,7 +433,9 @@ describe("MUL-412 issue decision cards", () => {
   it("isolates a failed ordinary source dispatch with a readable result and no partial wake", () => {
     const { store, agentId, member } = scaffold();
     const parent = issueWithTopic(store, "Source dispatch savepoint", { type: "agent", id: agentId });
-    const { child, task } = childWithTask(store, agentId, parent.id);
+    const { child, task } = childWithTask(store, agentId, parent.id, true);
+    const sourceScope = store.getTurnForAttempt(task.id)!.execution_scope;
+    expect(sourceScope).toBe(task.delegationId!);
     const decision = raiseDecision(store, agentId, child.id, task.id, { kind: "production_change", title: "Durable result" });
     const log = (store as unknown as { ctx: StoreContext }).ctx.conversationLog();
     const append = log.appendWithinTransaction.bind(log);
@@ -444,6 +459,7 @@ describe("MUL-412 issue decision cards", () => {
     expect(event).toMatchObject({ reason: "historical_source_dispatch_failed:fixture_dispatch_failed", source_session_id: task.issueSessionId });
     const fallback = store.getMessage(event.source_message_id!)!;
     expect(fallback).toMatchObject({ to_agent_id: null, message_kind: "status", wake_applied: "inbox_only" });
+    expect(fallback.metadata.execution_scope).toBe(sourceScope);
     expect(fallback.body_md).toContain("Preserved answer");
     expect(fallback.body_md).toContain(event.reason!);
     expect(store.listMessages(task.issueSessionId!).filter(message => message.metadata.question_source_notification)).toEqual([fallback]);
@@ -468,6 +484,36 @@ describe("MUL-412 issue decision cards", () => {
     expect(notification).toMatchObject({ session_id: task.issueSessionId, to_agent_id: task.agentId, reply_to_id: null, wake_applied: "now" });
     expect(notification.metadata.execution_scope).toBe(store.getTurnForAttempt(task.id)!.execution_scope);
     expect(question).toMatchObject({ wait_status: "none", recovery: { consumer_attempt_id: null } });
+  });
+
+  it("keeps an unavailable historical source result on the original Q scope instead of the default parent lane", () => {
+    const { store, agentId, member } = scaffold();
+    const parent = issueWithTopic(store, "Unverifiable historical source", { type: "agent", id: agentId });
+    const { child, task } = childWithTask(store, agentId, parent.id, true);
+    const sourceScope = store.getTurnForAttempt(task.id)!.execution_scope;
+    const decision = raiseDecision(store, agentId, child.id, task.id, { kind: "production_change", title: "Preserved unknown source", executionScope: sourceScope });
+    const original = store.getMessage(decision.id)!;
+    // Explicit retained historical reference: no existing source attempt can
+    // substantiate this old id. Keep the original Q and never guess a lane.
+    db!.run("UPDATE multiremi_conversation_log SET metadata = ? WHERE id = ?", [JSON.stringify({ ...original.metadata, decision_record: { ...(original.metadata.decision_record as object), source_task_id: "tsk_missing_retained_historical_source" } }), decision.id]);
+    const before = decisionSideEffectCounts();
+    let wakes = 0;
+    const stop = store.onTaskEnqueued(() => { wakes++; });
+    try { answerDecision(store, parent.id, decision.id, { answer: "Retained valid answer", reason: "Reviewed" }, { type: "member", id: member.id }); }
+    finally { stop(); }
+    const question = store.getQuestion(decision.id)!;
+    const event = question.history.find(item => item.type === "notify")!;
+    expect(event).toMatchObject({ reason: "historical_source_facts_unavailable", source_session_id: original.session_id });
+    const fallback = store.getMessage(event.source_message_id!)!;
+    expect(fallback).toMatchObject({ session_id: original.session_id, to_agent_id: null, message_kind: "status", wake_applied: "inbox_only" });
+    expect(fallback.metadata.execution_scope).toBe(sourceScope);
+    expect(fallback.body_md).toContain("Retained valid answer");
+    expect(question).toMatchObject({ status: "answered", answer: { body_md: "Retained valid answer" }, wait_status: "none", recovery: { consumer_turn_id: null, consumer_attempt_id: null } });
+    expect(store.getMessage(decision.id)?.body_md).toBe(original.body_md);
+    expect(wakes).toBe(0);
+    const after = decisionSideEffectCounts();
+    expect(after.multiremi_turns).toBe(before.multiremi_turns);
+    expect(after.multiremi_turn_attempts).toBe(before.multiremi_turn_attempts);
   });
 
   it("sends a card when a decision is handed to a person directly", () => {
