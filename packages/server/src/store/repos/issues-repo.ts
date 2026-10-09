@@ -5517,8 +5517,10 @@ export class IssuesRepo {
       if (!this.hasIssue(issueId)) throw new Error(`Issue not found: ${issueId}`);
       const requestedSessionId = cleanOptionalString(options.issueSessionId);
       if (requestedSessionId) {
-        const session = this.ctx.issueSessions().getIssueSession(requestedSessionId);
-        if (!session || session.issueId !== issueId || session.workspaceId !== this.ctx.issueWorkspaceId(issueId)) {
+        const session = this.ctx.db.query(`SELECT s.id FROM multiremi_issue_sessions s
+          JOIN multiremi_issues i ON i.id = s.issue_id AND i.workspace_id = s.workspace_id
+          WHERE s.id = ? AND s.issue_id = ?`).get(requestedSessionId, issueId);
+        if (!session) {
           throw new Error(`Issue session not found for issue: ${requestedSessionId}`);
         }
       }

@@ -38,6 +38,10 @@ pendingTurnBackendTests("MUL-509 moved Issue Session read parity", (fixture, bac
     const targetMain = store.getOrCreateDefaultIssueSession(issue.id);
     expect(targetMain).toMatchObject({ workspaceId: w2.id, isDefault: true });
     expect(targetMain.id).not.toBe(session.id);
+    expect(() => store.listIssueTimelinePage(issue.id, { issueSessionId: session.id, limit: 20 }))
+      .toThrow(`Issue session not found for issue: ${session.id}`);
+    expect(store.listIssueTimelinePage(issue.id, { issueSessionId: targetMain.id, limit: 20 }).entries.length)
+      .toBeGreaterThan(0);
     const head = store.getConversationLogHead(session.id)!.headSeq;
     const audit = store.conversationLogWindow(targetMain.id).entries.find(entry => entry.metadata.type === "workspace_move_cleared")!;
     expect(audit).toMatchObject({ author_type: "system", message_kind: "status", metadata: { field: "assignee" } });
