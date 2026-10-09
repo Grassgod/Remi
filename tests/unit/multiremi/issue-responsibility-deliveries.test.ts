@@ -123,6 +123,29 @@ for (const backend of ['sqlite','postgres'] as const) describe.skipIf(backend ==
     expect(() => store.respondIssueDelivery(f.child.id,childDelivery.id,{action:'accept',revision:childDelivery.responsibilityRevision},f.ownerActor)).toThrow('Responsibility changed');
     expect(store.listIssueActivity(f.child.id).filter(row=>row.type==='issue_delivery_invalidated')).toHaveLength(1);
   }));
+  it('does not invalidate foreign pending receipts through a corrupt historical parent link', () => run((store,db) => {
+    const f = fixture(store);
+    const childDelivery = store.submitIssueDelivery(f.child.id,{summary:'Normal descendant'},f.workerActor);
+    const workspace = store.createWorkspace({id:'foreign-delivery-ws',name:'Foreign delivery',slug:'foreign-delivery-ws'});
+    const human = store.createWorkspaceMember({id:'foreign-delivery-human',name:'Foreign human',workspaceId:workspace.id});
+    const agent = store.createAgent({name:'Foreign executor',provider:'claude',workspaceId:workspace.id});
+    const foreign = store.createIssue({title:'Foreign pending receipt',workspaceId:workspace.id,responsibleMemberId:human.id,assigneeType:'agent',assigneeId:agent.id});
+    const task = store.createTask({agentId:agent.id,issueId:foreign.id,prompt:'Foreign delivery'});
+    const delivery = store.submitIssueDelivery(foreign.id,{summary:'Foreign result'},{type:'agent',id:agent.id,taskId:task.id});
+    db.run('UPDATE multiremi_issues SET parent_issue_id=? WHERE id=?',[f.root.id,foreign.id]);
+    expect(store.resolveIssueResponsibility(foreign.id).unresolved.some(item=>item.reason==='workspace_mismatch')).toBeTrue();
+    const before = {message:store.getMessage(delivery.id),activity:store.listIssueActivity(foreign.id)};
+    expect(() => db.transaction(() => {
+      store.updateIssue(f.root.id,{responsibleMemberId:f.other.id,actorType:'member',actorId:f.human.id});
+      throw new Error('rollback cross-workspace responsibility');
+    })()).toThrow('rollback cross-workspace responsibility');
+    expect(store.listIssueDeliveries(f.child.id)[0]?.invalidatedAt).toBeUndefined();
+    expect({message:store.getMessage(delivery.id),activity:store.listIssueActivity(foreign.id)}).toEqual(before);
+    store.updateIssue(f.root.id,{responsibleMemberId:f.other.id,actorType:'member',actorId:f.human.id});
+    expect(store.listIssueDeliveries(f.child.id)[0]).toMatchObject({id:childDelivery.id,invalidatedAt:expect.any(String)});
+    expect({message:store.getMessage(delivery.id),activity:store.listIssueActivity(foreign.id)}).toEqual(before);
+    expect(store.listIssueDeliveries(foreign.id)[0]?.invalidatedAt).toBeUndefined();
+  }));
   it('requires an explicit human source and exposes unresolved legacy roots without guessing', () => run((store,db) => {
     expect(() => store.createIssue({title:'No responsibility'})).toThrow('explicit responsible_member_id');
     const f = fixture(store);

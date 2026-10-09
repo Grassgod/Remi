@@ -52,10 +52,13 @@ function getLatestIssueDelivery(ctx: StoreContext, issueId: string): IssueDelive
 export function invalidatePendingIssueDeliveriesWithinTransaction(ctx: StoreContext, issueId: string,
   events: import('./context.js').CommitEventQueue, reason: string): void {
   if (!ctx.db.inTransaction) throw new Error('Delivery invalidation requires its responsibility transaction');
-  const rows = ctx.db.query(`WITH RECURSIVE affected(id) AS (
-    SELECT id FROM multiremi_issues WHERE id=? UNION SELECT child.id FROM multiremi_issues child JOIN affected parent ON child.parent_issue_id=parent.id
+  const rows = ctx.db.query(`WITH RECURSIVE affected(id,workspace_id) AS (
+    SELECT id,workspace_id FROM multiremi_issues WHERE id=? UNION
+    SELECT child.id,child.workspace_id FROM multiremi_issues child JOIN affected parent
+      ON child.parent_issue_id=parent.id AND child.workspace_id=parent.workspace_id
   ) SELECT m.session_id,m.seq,m.id,m.created_at,m.metadata,s.issue_id FROM affected a
-    JOIN multiremi_issue_sessions s ON s.issue_id=a.id JOIN multiremi_issues i ON i.id=s.issue_id AND i.workspace_id=s.workspace_id
+    JOIN multiremi_issue_sessions s ON s.issue_id=a.id AND s.workspace_id=a.workspace_id
+    JOIN multiremi_issues i ON i.id=s.issue_id AND i.workspace_id=s.workspace_id
     JOIN multiremi_conversation_log m ON m.session_id=s.id
     WHERE m.kind='message' AND m.message_kind='report' AND m.deleted_at IS NULL AND ${deliveryIssueSql(ctx)}=s.issue_id
     AND ${questionMetadataText(ctx.db,'m.metadata','issue_delivery.status')}='pending'
