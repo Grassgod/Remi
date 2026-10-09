@@ -41,6 +41,7 @@
     "issue_kind": "execution",
     "source_issue_id": null,
     "project_id": null,
+    "responsible_member_id": "mem_local_local",
     "runtime_workspace_id": null,
     "position": 0,
     "start_date": null,

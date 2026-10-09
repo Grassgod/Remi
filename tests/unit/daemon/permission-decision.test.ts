@@ -67,8 +67,12 @@ describe("permission decision messages", () => {
   for (const optionId of ["allow", "deny"]) it(`returns the selected ${optionId} option and confirms its reply`, async () => {
     const reply = answer(optionId); const h = fixture({ reply });
     expect(await h.run()).toEqual({ outcome: "selected", optionId });
-    expect(h.calls).toHaveLength(2);
+    expect(h.calls).toHaveLength(3);
     expect(h.calls[1]!.type).toBe("turn.decision.get");
+    expect(h.calls[2]).toMatchObject({ type: "turn.decision.consume", payload: {
+      turn_id: "turn_one", attempt_id: "tsk_one", message_id: decision.id, reply_message_id: reply.id,
+      wait_id: h.calls[0]!.payload.wait_id,
+    } });
     expect(h.calls[0]).toMatchObject({ type: "turn.decision", payload: {
       turn_id: "turn_one", attempt_id: "tsk_one", timeout_ms: 1000,
       body_md: "Permission requested: Write file",

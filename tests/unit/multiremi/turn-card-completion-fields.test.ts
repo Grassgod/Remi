@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 /**
  * MUL-432 segment 2 item 5: the live `turn` card takes the round-card fields
  * of a daemon's `turn.complete` / `task.fail` frame through A's seam, wired in
@@ -109,7 +110,7 @@ async function withWorld(backend: (typeof backends)[number], body: (world: World
 }
 
 function runIssueTask(world: World, title: string, agentId = world.agentId, runtimeId = world.runtimeId) {
-  const issue = world.store.createIssue({ title, workspaceId: "local" });
+  const issue = createResponsibleTestIssue(world.store, { title, workspaceId: "local" });
   const task = world.store.createTask({ agentId, workspaceId: "local", issueId: issue.id, prompt: title });
   expect(world.store.claimTask(runtimeId)?.id).toBe(task.id);
   world.store.startTask(task.id);

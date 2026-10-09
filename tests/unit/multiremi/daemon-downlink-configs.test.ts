@@ -6,6 +6,7 @@ import type { DaemonProtocolLayer } from "@multiremi/api/daemon-protocol/index.j
 import type { DaemonProtocolSession } from "@multiremi/api/daemon-protocol/session.js";
 import type { MultiremiStore } from "@multiremi/store.js";
 import { createLocalStore, resetMultiremiTestEnv } from "./helpers.js";
+import { pendingTurnBackendTests } from "./pending-turn-test-backends.js";
 
 afterEach(resetMultiremiTestEnv);
 
@@ -19,7 +20,14 @@ const profile = { name: "push", base_url: "http://127.0.0.1:8000/v1", model: "pu
   env_key: "REMI_CODEX_TEST_KEY", auth_mode: "env" as const };
 const claudeProfile = { ...profile, env_key: "REMI_CLAUDE_TEST_KEY", auth_header: "bearer" as const };
 type Config = { name: string; provider?: "codex" | "claude"; type: string;
-  change(store: MultiremiStore): void; assert(payload: Record<string, any>, store: MultiremiStore): void };
+  change(store: MultiremiStore, url: string): void | Promise<void>; assert(payload: Record<string, any>, store: MultiremiStore): void };
+async function writeConfig(url: string, path: string, method: string, body: unknown, expectedStatus: number) {
+  const response = await fetch(`${url}${path}`, { method,
+    headers: { Authorization: "Bearer config-push-test", "Content-Type": "application/json" },
+    body: JSON.stringify(body) });
+  expect(response.status).toBe(expectedStatus);
+  await response.json();
+}
 const configs: Config[] = [
   { name: "codex profile", provider: "codex", type: "runtime.profile",
     change: store => { store.setRuntimeCodexProfile(rt, profile); },
@@ -28,17 +36,17 @@ const configs: Config[] = [
     change: store => { store.setRuntimeClaudeProfile(rt, claudeProfile); },
     assert: payload => { expect(payload.claude_profile).toEqual(claudeProfile); } },
   { name: "workspace settings", type: "workspace.settings",
-    change: store => { store.updateWorkspace("local", { settings: { github_enabled: true } }); },
+    change: (_store, url) => writeConfig(url, "/api/workspaces/local", "PATCH", { settings: { github_enabled: true } }, 200),
     assert: payload => { expect(payload.settings.github_enabled).toBe(true); } },
   { name: "workspace relay", type: "workspace.relay",
-    change: store => { store.upsertRelayConfig("local", "codex", { fragment: 'model = "push-model"', tokenOp: "clear" }); },
+    change: (_store, url) => writeConfig(url, "/api/workspaces/local/relay-config/codex", "PUT", { fragment: 'model_provider = "push-model"', token_op: "clear" }, 200),
     assert: payload => { expect(JSON.stringify(payload.relay)).toContain("push-model"); } },
   { name: "plugin revision", type: "plugin.desired_revision",
-    change: store => {
+    change: async (store, url) => {
       const agent = store.createAgent({ name: "Push plugin", provider: "claude", runtimeId: rt });
       const plugin = store.importAgentPlugin({ provider: "claude", manifest: { name: "push-plugin", version: "1.0.0" },
         files: [{ path: "skills/push/SKILL.md", content: "# Push" }] });
-      store.createAgentPluginBinding(agent.id, { pluginId: plugin.id });
+      await writeConfig(url, `/api/multiremi/agents/${agent.id}/plugins`, "POST", { pluginId: plugin.id }, 201);
     },
     assert: (payload, store) => { expect(payload.revision).toBe(store.getRuntimeAgentPluginDesiredSnapshot(rt).revision);
       expect(store.getRuntimeAgentPluginDesiredSnapshot(rt).plugins).toHaveLength(1); } },
@@ -99,7 +107,7 @@ describe("A-4 configuration snapshots", () => {
     try {
       const first = await connect(); const head = (layer.registry.sessionForRuntime(rt)! as DaemonProtocolSession).lastSentSeq;
       first.socket.send(JSON.stringify({ v: 2, t: "ack", ack: head, p: {} }));
-      config.change(store);
+      await config.change(store, `http://127.0.0.1:${server.port}`);
       const changed = () => first.frames.filter(frame => frame.t === config.type && frame.seq > head);
       await waitFor(() => changed().length > 0);
       const pushed = changed().at(-1)!; config.assert(pushed.p, store);
@@ -119,5 +127,41 @@ describe("A-4 configuration snapshots", () => {
       if (oldMeshKey === undefined) delete process.env.MULTIREMI_SSH_MESH_ENCRYPTION_KEY; else process.env.MULTIREMI_SSH_MESH_ENCRYPTION_KEY = oldMeshKey;
       if (oldFeishuKey === undefined) delete process.env.MULTIREMI_FEISHU_BOT_ENCRYPTION_KEY; else process.env.MULTIREMI_FEISHU_BOT_ENCRYPTION_KEY = oldFeishuKey;
     }
+  });
+});
+
+pendingTurnBackendTests("configuration wakeups follow the outermost commit", fixture => {
+  for (const kind of ["settings", "relay"] as const) it(`${kind}: commit publishes once and rollback publishes nothing`, () => {
+    const { store, db } = fixture();
+    const workspace = store.ensureLocalWorkspace();
+    const events: Array<{ workspaceId: string; inTransaction: boolean | undefined; payload: unknown }> = [];
+    const unsubscribe = store.onWorkspaceEvent(event => {
+      if (event.type === "daemon:pending_changed") events.push({ workspaceId: event.workspaceId,
+        inTransaction: db.inTransaction, payload: event.payload });
+    });
+    const write = (value: string) => kind === "settings"
+      ? store.updateWorkspace(workspace.id, { settings: { config_fixture: value } })
+      : store.upsertRelayConfig(workspace.id, "codex", { fragment: `model = "${value}"`, tokenOp: "clear" });
+    try {
+      expect(() => fixture().transaction(() => {
+        write("rollback");
+        expect(events).toEqual([]);
+        throw new Error("Rollback config mutation");
+      })).toThrow("Rollback config mutation");
+      expect(events).toEqual([]);
+      expect(store.getWorkspace(workspace.id)?.settings).toEqual(workspace.settings);
+      expect(store.getRelayConfigForDaemon(workspace.id).codex).toBeNull();
+      fixture().transaction(() => {
+        fixture().transaction(() => write("committed"));
+        expect(events).toEqual([]);
+      });
+      expect(events).toEqual([{ workspaceId: workspace.id, inTransaction: false,
+        payload: kind === "settings" ? { reason: "workspace_settings_changed" }
+          : { reason: "workspace_relay_changed", engine: "codex" } }]);
+      if (kind === "settings") expect(store.getWorkspace(workspace.id)?.settings).toEqual({ config_fixture: "committed" });
+      else expect(store.getRelayConfigForDaemon(workspace.id).codex).toMatchObject({ fragment: 'model = "committed"', revision: 1 });
+      store.updateWorkspace(workspace.id, { name: "Renamed without config change" });
+      expect(events).toHaveLength(1);
+    } finally { unsubscribe(); }
   });
 });

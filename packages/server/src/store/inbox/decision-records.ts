@@ -32,7 +32,7 @@ export function createDecisionReadProjections(db:SqlDatabase):void {
 }
 
 /** CAS and metadata changes are on the message itself, never on a projection. */
-export function patchDecisionRecord(ctx:StoreContext,id:string,key:'human_request'|'decision_record',fields:Record<string,unknown>,
+export function patchDecisionRecord(ctx:StoreContext,id:string,key:'human_request'|'decision_record'|'message_choice',fields:Record<string,unknown>,
   expectedStatus?:string,credential?:QuestionCardCredential):boolean {
   ctx.db.run(`UPDATE multiremi_workspaces SET updated_at=updated_at WHERE id=(SELECT COALESCE(s.workspace_id,c.workspace_id,a.workspace_id) FROM multiremi_conversation_log m LEFT JOIN multiremi_issue_sessions s ON s.id=m.session_id LEFT JOIN multiremi_chat_sessions c ON c.id=m.session_id LEFT JOIN multiremi_autopilots a ON a.session_id=m.session_id WHERE m.id=?)`,[id]);
   ctx.db.run('UPDATE multiremi_conversation_log SET revision=revision WHERE id=?',[id]);

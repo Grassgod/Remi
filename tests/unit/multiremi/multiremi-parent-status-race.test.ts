@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue, acceptTestIssueDelivery, prepareTestIssueDelivery } from './helpers.js';
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -50,6 +51,7 @@ for (const dialect of ["sqlite", "postgres"] as const) {
     let parentWorker: Worker;
     let childWorker: Worker;
     let ownerId: string;
+    let childOwnerId: string;
     let connectionId: string;
     let sequence = 0;
     const previousKey = process.env.MULTIREMI_SCM_ENCRYPTION_KEY;
@@ -77,6 +79,7 @@ for (const dialect of ["sqlite", "postgres"] as const) {
         settings: { scm_auto_link_enabled: true, scm_complete_issue_on_merge_enabled: true },
       });
       ownerId = store.createAgent({ name: "Race parent owner", provider: "codex" }).id;
+      childOwnerId=store.createAgent({name:'Race child execution owner',provider:'claude'}).id;
       connectionId = store.createScmConnection({
         workspaceId: "local", name: "Race SCM", provider: "github", mode: "poll",
         accessToken: "test-only-token", repositoryIds: ["repo_mul471"],
@@ -100,10 +103,10 @@ for (const dialect of ["sqlite", "postgres"] as const) {
 
     for (const rollback of [false, true]) {
       it(`old-parent re-derivation ${rollback ? "rolls back" : "commits"} with its events`, () => {
-        const oldParent = store.createIssue({ title: "Old parent", status: "in_progress" });
-        const newParent = store.createIssue({ title: "New parent", status: "in_progress" });
-        const child = store.createIssue({ title: "Moving child", parentIssueId: oldParent.id, status: "in_progress" });
-        store.createIssue({ title: "Remaining child", parentIssueId: oldParent.id, status: "in_progress" });
+        const oldParent = createResponsibleTestIssue(store, { title: "Old parent", status: "in_progress" });
+        const newParent = createResponsibleTestIssue(store, { title: "New parent", status: "in_progress" });
+        const child = createResponsibleTestIssue(store, { title: "Moving child", parentIssueId: oldParent.id, status: "in_progress" });
+        createResponsibleTestIssue(store, { title: "Remaining child", parentIssueId: oldParent.id, status: "in_progress" });
         store.updateIssue(oldParent.id, { status: "in_review", force: true, actorType: "member" });
         if (database instanceof PostgresSyncDatabase) database.resetTransactionDepthStats();
         const events: boolean[] = [];
@@ -138,10 +141,10 @@ for (const dialect of ["sqlite", "postgres"] as const) {
     // Re-derivation takes no parent lock before counting: a parent decision that
     // commits in between wins, and the conditional UPDATE leaves no trace.
     if (dialect === "postgres") it("old-parent re-derivation yields to a parent move committed while it counts", () => {
-      const oldParent = store.createIssue({ title: "Old parent", status: "in_progress" });
-      const newParent = store.createIssue({ title: "New parent", status: "in_progress" });
-      const child = store.createIssue({ title: "Moving child", parentIssueId: oldParent.id, status: "in_progress" });
-      store.createIssue({ title: "Remaining child", parentIssueId: oldParent.id, status: "in_progress" });
+      const oldParent = createResponsibleTestIssue(store, { title: "Old parent", status: "in_progress" });
+      const newParent = createResponsibleTestIssue(store, { title: "New parent", status: "in_progress" });
+      const child = createResponsibleTestIssue(store, { title: "Moving child", parentIssueId: oldParent.id, status: "in_progress" });
+      createResponsibleTestIssue(store, { title: "Remaining child", parentIssueId: oldParent.id, status: "in_progress" });
       store.updateIssue(oldParent.id, { status: "in_review", force: true, actorType: "member" });
       const other = new PostgresSyncDatabase(location);
       other.exec("SET lock_timeout = '2s'");
@@ -185,13 +188,20 @@ for (const dialect of ["sqlite", "postgres"] as const) {
             let busy = 0;
             for (let round = 0; round < 20; round += 1) {
               sequence += 1;
-              const parent = store.createIssue({ title: `Parent ${sequence}`, status: "in_progress", assigneeType: "agent", assigneeId: ownerId });
-              const childId = mutation === "create" ? `race-child-${sequence}` : store.createIssue({
-                title: `Child ${sequence}`, status: mutation === "attach" ? "in_progress" : mutation.endsWith("_done") ? "done" : "cancelled",
+              const parent = createResponsibleTestIssue(store, { title: `Parent ${sequence}`, status: "in_progress", assigneeType: "agent", assigneeId: ownerId });
+              const childId = mutation === "create" ? `race-child-${sequence}` : createResponsibleTestIssue(store, {
+                title: `Child ${sequence}`, status: mutation === "attach" || mutation.endsWith('_done') ? "in_progress" : "cancelled",
                 parentIssueId: mutation === "attach" ? null : parent.id,
+                assigneeType:'agent',assigneeId:childOwnerId,
               }).id;
+              if(mutation.endsWith('_done'))acceptTestIssueDelivery(store,childId);
               store.grantParentDone(parent.id, "local");
               store.createIssueComment(parent.id, { body: "Final parent summary", authorType: "agent", authorId: ownerId });
+              const prepared=prepareTestIssueDelivery(store,parent.id);
+              store.authorizeIssueDelivery(parent.id,prepared.delivery.id,ownerId,prepared.delivery.responsibilityRevision,prepared.actor);
+              // Both competing status writers must perform a real transition;
+              // submitting the concrete report already parked this parent at in_review.
+              store.updateIssue(parent.id,{status:'in_progress'});
               if (path === "scm") store.advanceScmEntitySnapshot({
                 connectionId, repositoryId: "repo_mul471", entityType: "change_request", externalId: String(sequence),
                 revisionAt: new Date().toISOString(), revision: `v${sequence}`, contentHash: `race-${sequence}`,
@@ -200,7 +210,8 @@ for (const dialect of ["sqlite", "postgres"] as const) {
               const status = path === "scm" ? "done" : (["done", "in_review"] as const)[round % 2]!;
               const parentControl = new Int32Array(new SharedArrayBuffer(8));
               const childControl = new Int32Array(new SharedArrayBuffer(8));
-              const base = { type: "run" as const, parentId: parent.id, childId, ownerId, mutation, path, status, connectionId, number: sequence };
+              const base = { type: "run" as const, parentId: parent.id, childId, ownerId, mutation, path, status, connectionId, number: sequence,
+                deliveryId:prepared.delivery.id,responsibilityRevision:prepared.delivery.responsibilityRevision,sourceTaskId:prepared.executionTask.id };
               const firstWorker = first === "parent" ? parentWorker : childWorker;
               const secondWorker = first === "parent" ? childWorker : parentWorker;
               const firstControl = first === "parent" ? parentControl : childControl;
@@ -229,11 +240,13 @@ for (const dialect of ["sqlite", "postgres"] as const) {
                 expect(result.maxDepth).toBe(1);
                 expect(result.eventsInTransaction).toBe(0);
                 if (result.error?.includes("database is locked") || result.error?.includes("SQLITE_BUSY")) busy += 1;
-                else if (result.error && !result.error.includes("unfinished child")) violations.push(result.error);
+                else if (result.error && !result.error.includes("unfinished child")&&!result.error.includes('Finish or cancel child issues')) violations.push(result.error);
               }
               if (dialect === "postgres") {
                 const parentResult = first === "parent" ? a : b;
-                if (first === "child" && parentResult.parentStatus !== "in_progress") {
+                // Reopening a child schedules its parent's reader lane; a pending
+                // owner turn derives todo, while an already-running turn keeps in_progress.
+                if (first === "child" && !['in_progress','todo'].includes(parentResult.parentStatus??'')) {
                   violations.push(`round ${round}: stale parent status ${parentResult.parentStatus}`);
                 }
                 expect(store.countOpenChildIssues(parent.id)).toBe(1);

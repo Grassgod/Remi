@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { afterEach, describe, expect, it } from "bun:test";
 import { ProjectKnowledgeService } from "@multiremi/project-knowledge/service.js";
 import { createLocalStore, resetMultiremiTestEnv } from "./helpers.js";
@@ -39,7 +40,7 @@ describe("SQL Chat Project Wiki hydration", () => {
     const service = new ProjectKnowledgeService(store, null, "sql");
     expect(await service.hydrateTaskKnowledge(task)).toBe(task);
     expect(task.projectWikiDocs).toBeUndefined();
-    const issue = store.createIssue({ title: "Issue", projectId: project.id });
+    const issue = createResponsibleTestIssue(store, { title: "Issue", projectId: project.id });
     const issueTask = store.createTask({ agentId: task.agentId, issueId: issue.id, prompt: "Existing behavior" });
     const hydratedIssue = store.getTaskWithAgent(issueTask.id)!;
     expect(await service.hydrateTaskKnowledge(hydratedIssue)).toBe(hydratedIssue);

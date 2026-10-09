@@ -7,6 +7,7 @@ import { StoreContext, createCommitEventQueue } from "@multiremi/store/context.j
 import { AnalyticsRepo } from "@multiremi/store/repos/analytics-repo.js";
 import { TasksRepo } from "@multiremi/store/repos/tasks-repo.js";
 import { pendingTurnBackendTests } from "./pending-turn-test-backends.js";
+import { createResponsibleTestIssue } from './helpers.js';
 
 pendingTurnBackendTests("TasksRepo", (fixture) => {
 let store: MultiremiStore | null = null;
@@ -95,7 +96,7 @@ function createRepo(): TasksRepo {
       const { db } = fixture();
       const runtime = store!.registerRuntime({ name: "Retry runtime", provider: "codex" });
       const agent = store!.createAgent({ name: "Retry worker", provider: "codex" });
-      const issue = store!.createIssue({ title: "Retry", assigneeType: "agent", assigneeId: agent.id });
+      const issue = createResponsibleTestIssue(store!,{ title: "Retry", assigneeType: "agent", assigneeId: agent.id });
       const task = repo.createTask({ agentId: agent.id, issueId: issue.id, prompt: "Retry input", maxAttempts: 1 });
       const cancellations: string[] = [];
       const enqueued: string[] = [];

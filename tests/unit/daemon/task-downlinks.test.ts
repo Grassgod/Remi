@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from "../multiremi/helpers.js";
 import { afterEach, describe, expect, it, spyOn } from "bun:test";
 import { startMultiremiServer } from "../../fixtures/daemon-protocol.js";
 import { createLocalStore, resetMultiremiTestEnv } from "../multiremi/helpers.js";
@@ -11,8 +12,41 @@ import { DaemonProtocolClient, type DaemonProtocolLane } from "@multiremi/worker
 import { DaemonTaskDownlinks } from "@multiremi/worker/daemon-downlinks.js";
 import { MultiremiTaskReportOutbox } from "@multiremi/worker/outbox.js";
 import { registerDaemonOfferHandler, type DaemonTurnTask } from "@multiremi/worker/daemon-offers.js";
+import { runtimeInputSnapshot } from "@multiremi/api/daemon-protocol/runtime-input-snapshot.js";
 
 afterEach(resetMultiremiTestEnv);
+
+it("reads plugin desired state only for a runtime that advertises the plugin protocol", () => {
+  const store = createLocalStore();
+  store.registerRuntime({ id: "rt_no_plugin_protocol", name: "No plugin support", provider: "claude" });
+  store.registerRuntime({ id: "rt_plugin_protocol", name: "Plugin support", provider: "claude", metadata: { agent_plugin_protocol: 1 } });
+  const desired = spyOn(store, "getRuntimeAgentPluginDesiredSnapshot");
+  try {
+    expect(runtimeInputSnapshot(store, "rt_no_plugin_protocol").some(entity => entity.type === "plugin.desired_revision")).toBe(false);
+    expect(desired).not.toHaveBeenCalled();
+    expect(runtimeInputSnapshot(store, "rt_plugin_protocol").some(entity => entity.type === "plugin.desired_revision")).toBe(true);
+    expect(desired).toHaveBeenCalledTimes(1);
+    expect(desired).toHaveBeenCalledWith("rt_plugin_protocol");
+  } finally { desired.mockRestore(); }
+});
+
+it("reads fresh pending commands without rehydrating unchanged runtime configuration", () => {
+  const store = createLocalStore();
+  store.registerRuntime({ id: "rt_pending_only", name: "Pending", provider: "claude" });
+  const command = store.createRuntimeCommandRequest("rt_pending_only", { command: "printf fresh", args: [] });
+  const maintenance = spyOn(store, "getPlatformMaintenance");
+  try {
+    const pending = runtimeInputSnapshot(store, "rt_pending_only", undefined, "pending");
+    expect(pending.find(entity => entity.type === "runtime.command")?.payload.id).toBe(command.id);
+    expect(maintenance).not.toHaveBeenCalled();
+    const full = runtimeInputSnapshot(store, "rt_pending_only");
+    expect(full.some(entity => entity.type === "platform.drain")).toBe(true);
+    expect(maintenance).toHaveBeenCalledTimes(1);
+    store.reportRuntimeCommandResult("rt_pending_only", command.id, { status: "completed", exitCode: 0 });
+    expect(runtimeInputSnapshot(store, "rt_pending_only", undefined, "pending")
+      .some(entity => entity.type === "runtime.command")).toBe(false);
+  } finally { maintenance.mockRestore(); }
+});
 
 async function waitFor(predicate: () => boolean) {
   const deadline = performance.now() + 2_000;
@@ -110,7 +144,7 @@ describe("turn input push inbox over native WS", () => {
     store.registerRuntime({ id: rt, daemonId, name: rt, provider: "claude", workspaceId: "local",
       metadata: { parallel_agent_execution: 1 } });
     const agent = store.createAgent({ name: "Store inputs", provider: "claude", runtimeId: rt });
-    const issue = store.createIssue({ title: "Store inputs", assigneeType: "agent", assigneeId: agent.id });
+    const issue = createResponsibleTestIssue(store, { title: "Store inputs", assigneeType: "agent", assigneeId: agent.id, responsibleMemberId: "mem_local_local" });
     const session = store.getOrCreateDefaultIssueSession(issue.id);
     const send = (body: string) => store.sendMessage({ session_id: session.id,
       sender: { type: "member", id: "mem_local_local" }, to: { type: "agent", ref: agent.id },
@@ -162,14 +196,17 @@ describe("turn input push inbox over native WS", () => {
       expect(store.getTurn(task.turn_id)!.input_to_seq).toBe(interrupt.message.seq);
 
       inbox.beginDecision(task.id);
+      inbox.beginQuestionWait(task.id, "store-permission-question", "store-permission-wait");
       const created = await inbox.rpc("turn.decision", { ...inbox.turnInput(task.id), body_md: "Allow tool?",
+        message_id: "store-permission-question", wait_id: "store-permission-wait",
         dedupe_key: "store-permission", options: [{ label: "Allow", value: "allow" }],
         metadata: { kind: "permission", options: [{ optionId: "allow", name: "Allow", kind: "allow_once" }] } });
       const decision = created.message as UnifiedMessage;
       inbox.registerDecision(decision, task.id);
       expect(store.getTurn(task.turn_id)!.status).toBe("awaiting_human");
       expect(store.getMessage(decision.id)!.message_kind).toBe("decision");
-      const answered = store.answerMessageDecision(decision.id, { sender: { type: "member", id: "mem_local_local" }, body_md: "Allow", response: { option_id: "allow" } });
+      const answered = store.answerQuestion(decision.id, { expected_route_revision: store.getQuestion(decision.id)!.route_revision,
+        body_md: "Allow", response: { option_id: "allow" } }, { type: "member", id: "mem_local_local" });
       const reply = await inbox.waitForDecisionReply(decision.id, new AbortController().signal, 2_000);
       expect(reply?.id).toBe(answered.message.id);
       expect(store.getTurn(task.turn_id)!.status).toBe("running");

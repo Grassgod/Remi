@@ -123,7 +123,7 @@ describe("Repository Wiki atomic migrations", () => {
     expect(store.getRepositoryWikiDocByRef("local", "repo_migration", one.id)?.version).toBe(3);
     expect(store.getRepositoryWikiDocByRef("local", "repo_migration", two.id)).toBeNull();
     const project = store.createProject({ title: "Migration", resources: [{ resourceType: "github_repo", resourceRef: { url: "https://github.com/acme/migration.git" } }] });
-    const issue = store.createIssue({ title: "Migration", projectId: project.id });
+    const issue = store.createIssue({ title: "Migration", projectId: project.id, responsibleMemberId: 'mem_local_local' });
     const agent = store.createAgent({ name: "Ordinary", provider: "claude" });
     const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "move" });
     const credential = await store.createTaskAccessToken(task, "local");

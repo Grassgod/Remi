@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { issueMessagesPath, requestMessageBody, sentTask } from "./unified-test-paths.js";
 // Comment threads and reactions over HTTP, the local attachment file lifecycle,
 // and the Go-style attachment access/delete authz boundaries.
@@ -168,7 +169,7 @@ describe("Multiremi API — comments, reactions, and attachments", () => {
     expect((await pendingAll.json()).turns[0].session_id).toBe(chatBody.id);
     expect((await app.request("/api/inbox/read", { method: "POST" , body: JSON.stringify({ session_id: chatBody.id }) })).status).toBe(200);
 
-    const issue = store.createIssue({ title: "Original inbox", createdBy: alice.id });
+    const issue = createResponsibleTestIssue(store, { title: "Original inbox", createdBy: alice.id });
     store.addIssueSubscriber(issue.id, bob.id);
     store.createIssueComment(issue.id, { authorType: "member", authorId: alice.id, body: "Ping Bob" });
     const camelInbox = await app.request(`/api/inbox?memberId=${encodeURIComponent(bob.id)}`);
@@ -189,7 +190,7 @@ describe("Multiremi API — comments, reactions, and attachments", () => {
   it("serves comment threads, reactions, and attachments through API", async () => {
     const store = createStore();
     const app = createMultiremiApp({ store });
-    const issue = store.createIssue({ title: "API collaboration" });
+    const issue = createResponsibleTestIssue(store, { title: "API collaboration" });
 
     const issueAttachment = await app.request(`/api/multiremi/issues/${issue.id}/attachments`, {
       method: "POST",
@@ -446,7 +447,7 @@ describe("Multiremi API — comments, reactions, and attachments", () => {
     useUploadDir();
     const store = createStore();
     const app = createMultiremiApp({ store });
-    const issue = store.createIssue({ title: "Upload API" });
+    const issue = createResponsibleTestIssue(store, { title: "Upload API" });
     const form = new FormData();
     form.append("file", new File(["hello upload"], "note.txt", { type: "text/plain" }));
     form.append("issue_id", issue.id);
@@ -502,7 +503,7 @@ describe("Multiremi API — comments, reactions, and attachments", () => {
     const auth = (token: string) => ({ headers: { Authorization: `Bearer ${token}` } });
 
     // Issue attachment in the local workspace.
-    const issue = store.createIssue({ title: "Att issue", workspaceId: "local" });
+    const issue = createResponsibleTestIssue(store, { title: "Att issue", workspaceId: "local" });
     const issueForm = new FormData();
     issueForm.append("file", new File(["issue secret"], "issue.txt", { type: "text/plain" }));
     issueForm.append("issue_id", issue.id);
@@ -557,7 +558,7 @@ describe("Multiremi API — comments, reactions, and attachments", () => {
     const bobToken = await store.createAccessToken({ name: "bob", type: "pat", workspaceId: "local", userId: "bob" });
     const carolToken = await store.createAccessToken({ name: "carol", type: "pat", workspaceId: "local", userId: "carol" });
 
-    const issue = store.createIssue({ title: "Delete authz", workspaceId: "local" });
+    const issue = createResponsibleTestIssue(store, { title: "Delete authz", workspaceId: "local" });
     const seed = () => store.createAttachment({
       issueId: issue.id, workspaceId: "local", uploaderType: "member", uploaderId: "alice",
       filename: "secret.txt", url: "/api/attachments/seed/content", contentType: "text/plain", sizeBytes: 5,

@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { reportFrame } from "../../fixtures/report-session.js";
 import { afterEach, describe, expect, it } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
@@ -16,7 +17,7 @@ describe("Multiremi API - runtime commands", () => {
     const adminToken = await store.createAccessToken({ name: "Admin", type: "pat", workspaceId: "local", userId: "command-admin" });
     const memberToken = await store.createAccessToken({ name: "Member", type: "pat", workspaceId: "local", userId: "command-member" });
     const taskAgent = store.createAgent({ name: "Command task actor", provider: "codex", workspaceId: "local" });
-    const taskIssue = store.createIssue({ title: "Command task auth", workspaceId: "local" });
+    const taskIssue = createResponsibleTestIssue(store, { title: "Command task auth", workspaceId: "local" });
     const task = store.createTask({
       agentId: taskAgent.id,
       issueId: taskIssue.id,
@@ -123,7 +124,7 @@ describe("Multiremi API - runtime commands", () => {
     const adminToken = await store.createAccessToken({ name: "Admin", type: "pat", workspaceId: "local", userId: "provision-admin" });
     const memberToken = await store.createAccessToken({ name: "Member", type: "pat", workspaceId: "local", userId: "provision-member" });
     const agent = store.createAgent({ name: "Provision task actor", provider: "codex", workspaceId: "local" });
-    const issue = store.createIssue({ title: "Provision task auth", workspaceId: "local" });
+    const issue = createResponsibleTestIssue(store, { title: "Provision task auth", workspaceId: "local" });
     const task = store.createTask({ agentId: agent.id, issueId: issue.id, workspaceId: "local", prompt: "Attempt a provision" });
     const taskToken = await store.createTaskAccessToken(task, "local");
     const app = createMultiremiApp({ store, authToken: "root-provision-secret" });

@@ -74,6 +74,9 @@ export function parseDaemonHello(payload: Record<string, unknown>): DaemonHelloP
       active_task_ids: Array.isArray(runtime.active_task_ids)
         ? runtime.active_task_ids.filter((id): id is string => typeof id === "string" && Boolean(id.trim())).map((id) => id.trim())
         : [],
+      active_question_waits: Array.isArray(runtime.active_question_waits) ? runtime.active_question_waits.filter((value): value is import('@multiremi/contracts/daemon-protocol.js').DaemonQuestionWait => {
+        return !!value && typeof value === 'object' && typeof value.message_id === 'string' && typeof value.attempt_id === 'string' && typeof value.wait_id === 'string' && value.wait_id.length >= 16;
+      }) : [],
       capabilities: readPayload(runtime.capabilities) as DaemonRuntimeCapabilities,
     });
   }

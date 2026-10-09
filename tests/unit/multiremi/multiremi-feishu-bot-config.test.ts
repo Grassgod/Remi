@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 /**
  * Workspace Feishu concierge configuration API (MUL-206).
  *
@@ -493,7 +494,7 @@ describe("workspace Feishu bot config permissions", () => {
     // let that content repoint which Agent answers Feishu, so even a GET is out.
     const { store, app, agentId } = scaffold();
     await save(app, agentId);
-    const issue = store.createIssue({ title: "Feishu bot auth", workspaceId: "local" });
+    const issue = createResponsibleTestIssue(store, { title: "Feishu bot auth", workspaceId: "local" });
     const task = store.createTask({
       agentId,
       issueId: issue.id,

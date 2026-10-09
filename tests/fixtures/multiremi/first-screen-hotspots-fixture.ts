@@ -248,10 +248,13 @@ export function seedFirstScreenHotspotsFixture(
       id: `iss_hotspot_${index}`,
       workspaceId: WORKSPACE_ID,
       title: `Hotspot issue ${index}`,
-      assigneeType: assignedToMember ? "member" : "agent",
-      assigneeId: assignedToMember ? readerMemberId : agentIds[index % agentIds.length]!,
+      responsibleMemberId: readerMemberId,
+      assigneeType: assignedToMember ? null : "agent",
+      assigneeId: assignedToMember ? null : agentIds[index % agentIds.length]!,
       createdBy: readerUserId,
     });
+    // Explicit persisted member execution facts exercise historical read/grouping only.
+    if(assignedToMember)run('UPDATE multiremi_issues SET assignee_type=?,assignee_id=? WHERE id=?',['member',readerMemberId,issue.id]);
     issueIds.push(issue.id);
   }
 

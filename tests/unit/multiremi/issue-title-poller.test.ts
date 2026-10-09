@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { afterEach, describe, expect, it } from "bun:test";
 import { issueTitleContentHash, shouldAutoRetitle } from "@multiremi/issue-title/eligibility.js";
 import { IssueTitleScheduler } from "@multiremi/issue-title/poller.js";
@@ -24,8 +25,8 @@ describe("Issue title scheduler", () => {
       tokenOp: "set",
       authToken: "secret-not-for-output",
     });
-    const first = store.createIssue({ title: "Remi", description: DESCRIPTION });
-    const second = store.createIssue({ title: "测试", description: DESCRIPTION });
+    const first = createResponsibleTestIssue(store, { title: "Remi", description: DESCRIPTION });
+    const second = createResponsibleTestIssue(store, { title: "测试", description: DESCRIPTION });
     let inFlight = 0;
     let maxInFlight = 0;
     const scheduler = new IssueTitleScheduler({
@@ -55,7 +56,7 @@ describe("Issue title scheduler", () => {
 
   it("silently skips an eligible Issue when its gateway is unconfigured", async () => {
     const store = createLocalStore();
-    const issue = store.createIssue({ title: "Remi", description: DESCRIPTION });
+    const issue = createResponsibleTestIssue(store, { title: "Remi", description: DESCRIPTION });
     const scheduler = new IssueTitleScheduler({ store, now: () => FUTURE });
 
     await expect(scheduler.runOnce()).resolves.toEqual({ attempted: 1, applied: 0, skipped: 1, failed: 0 });
@@ -70,7 +71,7 @@ describe("Issue title scheduler", () => {
       tokenOp: "set",
       authToken: "secret-not-for-output",
     });
-    const issue = store.createIssue({ title: "Remi", description: DESCRIPTION });
+    const issue = createResponsibleTestIssue(store, { title: "Remi", description: DESCRIPTION });
     const scheduler = new IssueTitleScheduler({
       store,
       now: () => FUTURE,
@@ -83,7 +84,7 @@ describe("Issue title scheduler", () => {
 
   it("coalesces overlapping ticks into one run", async () => {
     const store = createLocalStore();
-    store.createIssue({ title: "Remi", description: DESCRIPTION });
+    createResponsibleTestIssue(store, { title: "Remi", description: DESCRIPTION });
     let calls = 0;
     const scheduler = new IssueTitleScheduler({
       store,
@@ -105,7 +106,7 @@ describe("Issue title scheduler", () => {
       tokenOp: "set",
       authToken: "secret-not-for-output",
     });
-    const issue = store.createIssue({ title: "Remi", description: DESCRIPTION });
+    const issue = createResponsibleTestIssue(store, { title: "Remi", description: DESCRIPTION });
     let calls = 0;
     const scheduler = new IssueTitleScheduler({
       store,

@@ -119,7 +119,7 @@ describe("FeishuBotEndpoints control routes", () => {
     "parses the optional Issue topic validation warning (%j)", async (invalid) => {
       const response = {
         workspace_id: "ws_1",
-        config: { enabled: true, chat_id: "oc_topics", project_ids: null, notify_mode: "person", notify_open_id: null },
+        config: { enabled: true, chat_id: "oc_topics", project_ids: null, notify_mode: "person", notify_open_id: null, responsible_member_id: null },
         ...(invalid === undefined ? {} : { invalid }),
       };
       const { api } = endpoints(response);

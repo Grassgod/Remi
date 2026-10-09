@@ -5,6 +5,7 @@ import userEvent from "@testing-library/user-event";
 import { I18nProvider } from "@multiremi/core/i18n/react";
 import enCommon from "../../locales/en/common.json";
 import enSettings from "../../locales/en/settings.json";
+import enIssues from "../../locales/en/issues.json";
 import type { IssueTopicConfigResponse } from "@multiremi/core/types";
 
 const membersRef = vi.hoisted(() => ({
@@ -74,7 +75,7 @@ vi.mock("sonner", () => ({
 import { toast } from "sonner";
 import { IssueTopicSection } from "./issue-topic-section";
 
-const TEST_RESOURCES = { en: { common: enCommon, settings: enSettings } };
+const TEST_RESOURCES = { en: { common: enCommon, settings: enSettings, issues: enIssues } };
 
 function Wrapper({ children }: { children: ReactNode }) {
   return (
@@ -106,6 +107,14 @@ function resetFixtures() {
 
 describe("IssueTopicSection", () => {
   beforeEach(resetFixtures);
+  it("does not infer a topic human from the workspace owner and saves an explicit choice", async () => {
+    membersRef.current = [{ user_id: "user-1", role: "owner", id: "human", name: "Confirmed human" } as typeof membersRef.current[number]];
+    const user = userEvent.setup(); renderSection();
+    const select = screen.getByRole("combobox", { name: "Designated human" });
+    expect(select).toHaveValue("");
+    await user.selectOptions(select, "human"); await user.click(screen.getByRole("button", { name: "Save" }));
+    expect(mockSave).toHaveBeenCalledWith(expect.objectContaining({ responsible_member_id: "human" }));
+  });
 
   it("shows an invalid stored person warning and lets an admin repair the recipient", async () => {
     configRef.current = {
@@ -201,6 +210,7 @@ describe("IssueTopicSection", () => {
       project_ids: ["prj_1"],
       notify_mode: "group_owner",
       notify_open_id: null,
+      responsible_member_id: null,
     }));
     expect(toast.success).toHaveBeenCalledWith("Issue topic settings saved");
   });

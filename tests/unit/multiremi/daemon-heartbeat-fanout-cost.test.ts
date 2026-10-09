@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { afterEach, expect, setSystemTime, spyOn, test } from "bun:test";
 import { MultiremiStore } from "@multiremi/store.js";
 import type { SqlDatabase } from "@multiremi/store/db/postgres.js";
@@ -240,7 +241,7 @@ test("an empty workspace still refreshes changed runtime downlinks without takin
 
 test("timeline-only activity does not rebuild daemon configuration", async () => {
   const f = await fleet();
-  const issue = f.store.createIssue({ title: "Activity fixture", workspaceId: "local" });
+  const issue = createResponsibleTestIssue(f.store, { title: "Activity fixture", workspaceId: "local" });
   await f.layer.drain();
   const snapshots = spyOn(f.store, "pendingRuntimeRequests");
   const claims = spyOn(f.store, "claimTask");

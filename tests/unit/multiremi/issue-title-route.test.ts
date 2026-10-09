@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { afterEach, describe, expect, it } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { createLocalStore, resetMultiremiTestEnv } from "./helpers.js";
@@ -7,7 +8,7 @@ afterEach(resetMultiremiTestEnv);
 describe("POST /api/multiremi/issues/:id/retitle", () => {
   it("returns the manual retitle result and defaults apply to true", async () => {
     const store = createLocalStore();
-    const issue = store.createIssue({ title: "Remi", description: "这是一个足够长的描述，用于验证一键自动命名路由。" });
+    const issue = createResponsibleTestIssue(store, { title: "Remi", description: "这是一个足够长的描述，用于验证一键自动命名路由。" });
     let received: Record<string, unknown> | null = null;
     const app = createMultiremiApp({
       store,
@@ -34,7 +35,7 @@ describe("POST /api/multiremi/issues/:id/retitle", () => {
 
   it("returns 422 for an unconfigured gateway", async () => {
     const store = createLocalStore();
-    const issue = store.createIssue({ title: "Remi" });
+    const issue = createResponsibleTestIssue(store, { title: "Remi" });
     const app = createMultiremiApp({
       store,
       authToken: "root-secret",
@@ -56,7 +57,7 @@ describe("POST /api/multiremi/issues/:id/retitle", () => {
 
   it("rejects a non-boolean apply value", async () => {
     const store = createLocalStore();
-    const issue = store.createIssue({ title: "Remi" });
+    const issue = createResponsibleTestIssue(store, { title: "Remi" });
     const app = createMultiremiApp({ store, authToken: "root-secret" });
     const response = await app.request(`/api/multiremi/issues/${issue.id}/retitle`, {
       method: "POST",
@@ -70,8 +71,8 @@ describe("POST /api/multiremi/issues/:id/retitle", () => {
   it("returns 404 for a missing Issue and for a token outside the Issue workspace", async () => {
     const store = createLocalStore();
     store.createWorkspace({ id: "remote", name: "Remote", slug: "remote", issuePrefix: "REM" });
-    const remote = store.createIssue({ title: "Remote issue", workspaceId: "remote" });
-    const authIssue = store.createIssue({ title: "Task auth source", workspaceId: "local" });
+    const remote = createResponsibleTestIssue(store, { title: "Remote issue", workspaceId: "remote" });
+    const authIssue = createResponsibleTestIssue(store, { title: "Task auth source", workspaceId: "local" });
     const agent = store.createAgent({ name: "Retitle auth agent", provider: "codex" });
     const task = store.createTask({ workspaceId: "local", issueId: authIssue.id, agentId: agent.id, prompt: "auth" });
     const token = await store.createTaskAccessToken(task, "local");
@@ -91,7 +92,7 @@ describe("POST /api/multiremi/issues/:id/retitle", () => {
 
   it("locks automatic title changes after a human explicitly edits the title", async () => {
     const store = createLocalStore();
-    const issue = store.createIssue({ title: "Remi" });
+    const issue = createResponsibleTestIssue(store, { title: "Remi" });
     store.setIssueAutoTitleMetadata(issue.id, {
       generated_at: "2026-08-25T10:00:00.000Z",
       model: "gpt-5.6-luna",
@@ -120,7 +121,7 @@ describe("POST /api/multiremi/issues/:id/retitle", () => {
 describe("Issue auto-title metadata isolation", () => {
   it("returns 400 when public metadata routes try to mutate auto_title", async () => {
     const store = createLocalStore();
-    const issue = store.createIssue({ title: "Remi" });
+    const issue = createResponsibleTestIssue(store, { title: "Remi" });
     store.setIssueAutoTitleMetadata(issue.id, { locked: true, count: 2 });
     const app = createMultiremiApp({ store, authToken: "root-secret" });
     const paths = [

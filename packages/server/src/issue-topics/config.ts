@@ -20,6 +20,10 @@ export function parseIssueTopicConfig(value: unknown): IssueTopicConfig {
     throw new IssueTopicConfigError("issueTopics.chatId is required when enabled");
   }
   const projectIds = parseProjectIds(value.projectIds);
+  if(value.responsibleMemberId!==undefined && value.responsibleMemberId!==null &&
+    (typeof value.responsibleMemberId!=='string'||!value.responsibleMemberId.trim())) {
+    throw new IssueTopicConfigError('issueTopics.responsibleMemberId must be a non-empty member id or null');
+  }
   const notifyMode = value.notifyMode === undefined ? "group_owner" : value.notifyMode;
   if (notifyMode !== "group_owner" && notifyMode !== "person" && notifyMode !== "none") {
     throw new IssueTopicConfigError("issueTopics.notifyMode must be group_owner, person, or none");
@@ -31,6 +35,7 @@ export function parseIssueTopicConfig(value: unknown): IssueTopicConfig {
   return {
     enabled: value.enabled,
     chatId: chatId ?? "",
+    ...(cleanString(value.responsibleMemberId)?{responsibleMemberId:cleanString(value.responsibleMemberId)}:{}),
     ...(projectIds ? { projectIds } : {}),
     notifyMode,
     ...(notifyMode === "person" ? { notifyOpenId: notifyOpenId! } : {}),
@@ -63,6 +68,7 @@ export function readWorkspaceIssueTopicsLenient(
     return {
       enabled: raw.enabled === true,
       chatId: cleanString(raw.chatId) ?? "",
+      ...(cleanString(raw.responsibleMemberId)?{responsibleMemberId:cleanString(raw.responsibleMemberId)}:{}),
       ...(projectIds ? { projectIds } : {}),
       // An unrecognised mode falls back to the documented default rather than
       // inventing `person`, which would send the request looking for a target

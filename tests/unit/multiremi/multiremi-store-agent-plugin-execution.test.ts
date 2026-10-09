@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { afterEach, describe, expect, it } from "bun:test";
 import { createLocalStore as createStore, db, resetMultiremiTestEnv } from "./helpers.js";
 
@@ -123,7 +124,7 @@ describe("Multiremi store - Agent Plugin execution snapshots", () => {
       observedDigest: plugin.activeVersion!.artifactDigest,
     });
 
-    const issue = store.createIssue({ title: "old version run", workspaceId: "local" });
+    const issue = createResponsibleTestIssue(store, { title: "old version run", workspaceId: "local" });
     const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "run v1" });
     const claimed = store.claimTask(runtime.id)!;
     store.startTask(task.id);
@@ -168,7 +169,7 @@ describe("Multiremi store - Agent Plugin execution snapshots", () => {
       workspaceId: "local",
     });
     const agent = store.createAgent({ name: "Empty Plugin retry worker", provider: "claude" });
-    const issue = store.createIssue({ title: "Retry without Plugins", workspaceId: "local" });
+    const issue = createResponsibleTestIssue(store, { title: "Retry without Plugins", workspaceId: "local" });
     const task = store.createTask({
       agentId: agent.id,
       issueId: issue.id,
@@ -254,7 +255,7 @@ describe("Multiremi store - Agent Plugin execution snapshots", () => {
       observedDigest: plugin.activeVersion!.artifactDigest,
     });
 
-    const issue = store.createIssue({ title: "provider drift", workspaceId: "local" });
+    const issue = createResponsibleTestIssue(store, { title: "provider drift", workspaceId: "local" });
     const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "run once" });
     expect(store.claimTask(runtime.id)?.id).toBe(task.id);
     store.startTask(task.id);

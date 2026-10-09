@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { describe, expect, it } from 'bun:test';
 import { createMultiremiApp } from '@multiremi/api.js';
 import { signIssueShareId } from '@multiremi/api/helpers/issue-share-tokens.js';
@@ -8,7 +9,7 @@ describe('Canonical shared conversation bundle',()=>{
     it.skipIf(backend==='pg'&&!conversationLogPgAdminUrl)(`${backend}: shares current comments, tombstones and projected turns without legacy writes`,async()=>{
       await withConversationLogStore(backend,async(store,db)=>{
         const agent=store.createAgent({name:'Shared author',provider:'codex'});
-        const issue=store.createIssue({title:'Shared canonical history'});
+        const issue=createResponsibleTestIssue(store, {title:'Shared canonical history'});
         const session=store.getOrCreateDefaultIssueSession(issue.id);
         const edited=store.createIssueComment(issue.id,{body:'Original'});
         store.updateIssueComment(edited.id,{body:'Current shared wording'});

@@ -44,6 +44,7 @@ function seedIssue(
   const issue = store.getIssue(input.id) ?? store.createIssue({
     id: input.id,
     workspaceId: "local",
+    responsibleMemberId: "mem_local_local",
     title: input.title,
     description: `MUL-249 QA fixture with ${input.count} chronological comments.`,
     status: "in_progress",

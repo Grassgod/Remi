@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { runTurnExecutionMutation } from "@multiremi/store/turn-execution-records.js";
 import { mutateExecutionFixture } from "./unified-test-paths.js";
 import { reportFrame } from "../../fixtures/report-session.js";
@@ -30,7 +31,7 @@ describe("Multiremi API — dashboard JSON endpoints", () => {
     const provider = options.provider ?? "claude";
     store.registerRuntime({ id: options.runtimeId, name: `Runtime ${options.runtimeId}`, provider, workspaceId });
     const agent = store.createAgent({ name: `Agent ${options.runtimeId}`, provider, workspaceId });
-    const issue = store.createIssue({
+    const issue = createResponsibleTestIssue(store, {
       title: `Issue ${options.runtimeId}`,
       assigneeType: "agent",
       assigneeId: agent.id,

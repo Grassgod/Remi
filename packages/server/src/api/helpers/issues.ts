@@ -21,6 +21,7 @@ import type {
   MultiremiIssue,
   MultiremiAgent,
   MultiremiSubscriptionReason,
+  CreateIssueInput,
 } from "@multiremi/contracts/types.js";
 import { currentJwtUserId } from "./auth-guards.js";
 import { splitQueryList } from "./common.js";
@@ -59,9 +60,56 @@ export function currentTaskParentId(c: Context): string | null {
   return currentTaskAccessToken(c)?.taskId ?? null;
 }
 
+/** Agent requests inherit a human only from their actual Issue, Chat or configured automation run. */
+export function taskIssueResponsibleMember(c: Context, store: MultiremiStore): string | null {
+  const taskId = currentTaskAccessToken(c)?.taskId;
+  const task = taskId ? store.getTask(taskId) : null;
+  if (!task) return null;
+  if (task.issueId && !task.chatSessionId) {
+    const responsibility = store.resolveIssueResponsibility(task.issueId);
+    return responsibility.unresolved.length ? null : responsibility.rootHuman?.id ?? null;
+  }
+  if (!task.chatSessionId && task.autopilotRunId) {
+    // task.autopilotRunId is projected from the persisted run's current TurnAttempt,
+    // never a request body. Recheck both sides before trusting its explicit configuration.
+    const run = store.getAutopilotRun(task.autopilotRunId);
+    const turn = store.getTurnForAttempt(task.id);
+    const automation = run ? store.getAutopilot(run.autopilotId) : null;
+    if (!run || run.taskId !== task.id || !turn || turn.current_attempt_id !== task.id
+      || turn.workspace_id !== task.workspaceId || turn.execution_scope !== `auto:${run.id}`
+      || turn.session_id !== `auto_${run.autopilotId}`
+      || !automation || automation.workspaceId !== task.workspaceId || automation.status !== 'active') return null;
+    const human = automation.responsibleMemberId ? store.getWorkspaceMember(automation.responsibleMemberId) : null;
+    return human && !human.archivedAt && human.workspaceId === task.workspaceId ? human.id : null;
+  }
+  const chat = task.chatSessionId ? store.getChatSession(task.chatSessionId) : null;
+  if (!chat || chat.workspaceId !== task.workspaceId) return null;
+  // Transport Chats may have a technical creator unrelated to the external sender.
+  if(store.isFeishuTransportChatSession(chat.id)) {
+    const configuredId=store.getFeishuBotConfig(chat.workspaceId)?.responsibleMemberId;
+    const human=configuredId?store.getWorkspaceMember(configuredId):null;
+    return human && !human.archivedAt && human.workspaceId===chat.workspaceId?human.id:null;
+  }
+  if(!chat.creatorId)return null;
+  const member = store.getWorkspaceMember(chat.creatorId)
+    ?? store.listWorkspaceMembers(chat.workspaceId).find(member => member.userId === chat.creatorId);
+  return member && !member.archivedAt && member.workspaceId === chat.workspaceId ? member.id : null;
+}
+
+/** Record the verified automation configuration at creation, never use audit data as authority. */
+export function taskIssueResponsibilitySourceAudit(c: Context, store: MultiremiStore): CreateIssueInput['responsibilitySourceAudit'] {
+  const id=currentTaskAccessToken(c)?.taskId;
+  const task=id?store.getTask(id):null;
+  if(!task || task.issueId || task.chatSessionId || !task.autopilotRunId)return null;
+  const human=taskIssueResponsibleMember(c,store);
+  const run=human?store.getAutopilotRun(task.autopilotRunId):null;
+  return run && human ? {kind:'autopilot_run',taskId:task.id,runId:run.id,autopilotId:run.autopilotId,responsibleMemberId:human} : null;
+}
+
 /** A human request is identified only from trusted request credentials. */
 export function humanRequestActor(c: Context): { memberId: string } | null {
   if (currentTaskAccessToken(c)) return null;
+  if(currentAccessToken(c)?.type==='daemon')return null;
   if (cleanString(c.req.header("X-Agent-ID"))) return null;
   return { memberId: authenticatedRequestUserId(c) ?? currentRequestUserId(c) };
 }
@@ -175,7 +223,7 @@ export function withIssueCreateRequestContext(
     cleanString(c.req.query("workspace_id")) ??
     currentAccessToken(c)?.workspaceId ??
     "local";
-  const userId = currentRequestUserId(c);
+  const userId = currentTaskAccessToken(c) || currentAccessToken(c)?.type==='daemon' ? null : authenticatedRequestUserId(c) ?? currentRequestUserId(c);
   const out: CreateIssueWithTaskInput = {
     title: input.title,
     workspace_id: workspaceId,
@@ -187,6 +235,7 @@ export function withIssueCreateRequestContext(
   if (hasRequestField(input, "priority")) out.priority = input.priority;
   if (hasRequestField(input, "project_id")) out.project_id = input.project_id ?? null;
   if (hasRequestField(input, "parent_issue_id")) out.parent_issue_id = input.parent_issue_id ?? null;
+  if (hasRequestField(input, 'responsibleMemberId', 'responsible_member_id')) out.responsible_member_id = input.responsibleMemberId ?? input.responsible_member_id ?? null;
   if (hasRequestField(input, "assignee_type")) out.assignee_type = input.assignee_type ?? null;
   if (hasRequestField(input, "assignee_id")) out.assignee_id = input.assignee_id ?? null;
   if (hasRequestField(input, "position")) out.position = input.position;
@@ -203,7 +252,9 @@ export function withIssueCreateRequestContext(
   // Historical task rows remain an audit trail, not an implicit Issue binding
   // for a private Chat that was already detached by the upgrade.
   const task = taskToken?.taskId && store ? store.getTaskWithAgent(taskToken.taskId) : null;
+  out.responsibilitySourceAudit=store?taskIssueResponsibilitySourceAudit(c,store):null;
   const sourceIssue = task?.issue ?? null;
+  if (taskToken && store && !out.parent_issue_id && !out.responsible_member_id) out.responsible_member_id = taskIssueResponsibleMember(c,store);
   const isIntake = sourceIssue?.issueKind === "intake";
   if (sourceIssue) {
     // Any task-run creation (intake or follow-up) stays in the source issue's
@@ -253,7 +304,7 @@ function applyProjectDefaultAssignee(
   const projectId = cleanString(out.project_id);
   const project = projectId ? store.getProject(projectId) : null;
   if (!project || project.archivedAt) return;
-  if (project.defaultAssigneeType && project.defaultAssigneeId) {
+  if (project.defaultAssigneeType && project.defaultAssigneeType !== 'member' && project.defaultAssigneeId) {
     out.assignee_type = project.defaultAssigneeType;
     out.assignee_id = project.defaultAssigneeId;
   }

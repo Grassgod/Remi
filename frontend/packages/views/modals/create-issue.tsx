@@ -59,6 +59,7 @@ import { FileUploadButton } from "@multiremi/ui/components/common/file-upload-bu
 import { PillButton } from "../common/pill-button";
 import { IssuePickerModal } from "./issue-picker-modal";
 import { useT } from "../i18n";
+import { RootHumanPicker } from "../issues/components/issue-responsibility-section";
 
 // ---------------------------------------------------------------------------
 // ManualCreatePanel — manual-mode body of the create-issue dialog. Renders
@@ -90,6 +91,8 @@ export function ManualCreatePanel({
   setBacklogHintIssueId: (id: string | null) => void;
 }) {
   const { t } = useT("modals");
+  const { t: tIssues } = useT("issues");
+  const executionUnconfiguredLabel = tIssues($ => $.responsibility.execution_unconfigured);
   const router = useNavigation();
   const p = useWorkspacePaths();
   const workspaceName = useCurrentWorkspace()?.name;
@@ -113,11 +116,13 @@ export function ManualCreatePanel({
   const [submitting, setSubmitting] = useState(false);
   const [assigneeType, setAssigneeType] = useState<IssueAssigneeType | undefined>(() => {
     if (data && "assignee_type" in data) {
-      return (data.assignee_type as IssueAssigneeType | null) ?? undefined;
+      return data.assignee_type === "agent" || data.assignee_type === "squad" ? data.assignee_type : undefined;
     }
-    return draft.assigneeType;
+    return draft.assigneeType === "agent" || draft.assigneeType === "squad" ? draft.assigneeType : undefined;
   });
   const [assigneeId, setAssigneeId] = useState<string | undefined>(() => {
+    const type = data && "assignee_type" in data ? data.assignee_type : draft.assigneeType;
+    if (type !== "agent" && type !== "squad") return undefined;
     if (data && "assignee_id" in data) {
       return (data.assignee_id as string | null) ?? undefined;
     }
@@ -132,6 +137,7 @@ export function ManualCreatePanel({
     (data?.parent_issue_id as string) || undefined,
   );
   const [runtimeWorkspaceId, setRuntimeWorkspaceId] = useState<string | null>((data?.runtime_workspace_id as string) || null);
+  const [responsibleMemberId, setResponsibleMemberId] = useState<string | null>((data?.responsible_member_id as string) || null);
   const [parentPickerOpen, setParentPickerOpen] = useState(false);
   // Start date is a low-frequency field — by default it lives in the
   // overflow ⋯ menu. Clicking the menu item flips this open, which both
@@ -168,6 +174,7 @@ export function ManualCreatePanel({
   const updateStatus = (v: IssueStatus) => { setStatus(v); setDraft({ status: v }); };
   const updatePriority = (v: IssuePriority) => { setPriority(v); setDraft({ priority: v }); };
   const updateAssignee = (type?: IssueAssigneeType, id?: string) => {
+    if (type === "member") return;
     setAssigneeType(type); setAssigneeId(id);
     setDraft({ assigneeType: type, assigneeId: id });
   };
@@ -175,7 +182,7 @@ export function ManualCreatePanel({
   const updateDueDate = (v: string | null) => { setDueDate(v); setDraft({ dueDate: v }); };
 
   // Project default assignee: when a project that binds a default (squad /
-  // agent / member) is picked — or seeded via data.project_id — prefill the
+  // agent) is picked — or seeded via data.project_id — prefill the
   // assignee pill so the user stops re-picking the same group every time.
   // Only fills when the assignee is empty or was itself auto-filled; a manual
   // pick always wins. The fill is visible in the form before submit, so the
@@ -202,7 +209,7 @@ export function ManualCreatePanel({
     defaultAppliedForProjectRef.current = projectId ?? undefined;
     const shouldOverride = projectSelectionOverridesAssigneeRef.current;
     projectSelectionOverridesAssigneeRef.current = false;
-    const defType = project?.default_assignee_type ?? null;
+    const defType = project?.default_assignee_type === "agent" || project?.default_assignee_type === "squad" ? project.default_assignee_type : null;
     const defId = project?.default_assignee_id ?? null;
     if (defType && defId && (shouldOverride || !assigneeId || autoAssignedRef.current)) {
       autoAssignedRef.current = true;
@@ -269,6 +276,7 @@ export function ManualCreatePanel({
         due_date: dueDate || undefined,
         attachment_ids: attachmentIds.length > 0 ? attachmentIds : undefined,
         parent_issue_id: parentIssueId,
+        ...(parentIssueId ? {} : { responsible_member_id: responsibleMemberId }),
         ...(prerequisites.length > 0 ? { blocked_by: prerequisites.map((prerequisite) => prerequisite.id) } : {}),
         project_id: projectId ?? null,
         runtime_workspace_id: runtimeWorkspaceId,
@@ -561,7 +569,9 @@ export function ManualCreatePanel({
               />
 
               {/* Assignee */}
+              {!parentIssueId && <RootHumanPicker value={responsibleMemberId} onChange={setResponsibleMemberId} disabled={submitting} defaultSelf />}
               <AssigneePicker
+                unassignedLabel={executionUnconfiguredLabel}
                 assigneeType={assigneeType ?? null}
                 assigneeId={assigneeId ?? null}
                 onUpdate={(u) => handleAssigneePicked(

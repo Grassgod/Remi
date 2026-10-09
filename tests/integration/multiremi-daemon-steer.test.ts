@@ -25,9 +25,11 @@ let activeDaemon: MultiremiDaemon | null = null;
 const activeServers = new Set<{ stop(closeActiveConnections?: boolean): unknown }>();
 
 beforeEach(async () => {
-  // Fresh PG creation and migrations are setup, not part of the 5s steer budget.
+  // Database provisioning and schema migration are environment setup. Keep
+  // the unchanged 5s test budget focused on native steer delivery and completion.
   database = await openIntegrationDatabase();
   fixtureStore = new MultiremiStore(database.db);
+  workDir = mkdtempSync(join(tmpdir(), 'multiremi-daemon-steer-'));
 });
 
 afterEach(async () => {
@@ -44,9 +46,8 @@ afterEach(async () => {
   }
 });
 
-async function testBed(prefix: string): Promise<{ store: MultiremiStore; root: string }> {
-  workDir = mkdtempSync(join(tmpdir(), prefix));
-  return { store: fixtureStore!, root: workDir };
+async function testBed(_prefix: string): Promise<{ store: MultiremiStore; root: string }> {
+  return { store: fixtureStore!, root: workDir! };
 }
 
 function daemonRuntimeIdForTest(daemonId: string, provider: string): string {

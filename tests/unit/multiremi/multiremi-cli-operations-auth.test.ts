@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { afterEach, describe, expect, it } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { createStore, resetMultiremiTestEnv } from "./helpers.js";
@@ -28,7 +29,7 @@ describe("operations CLI authorization boundaries", () => {
     const store = createStore();
     store.ensureLocalWorkspace();
     const agent = store.createAgent({ name: "Task actor", provider: "codex", workspaceId: "local" });
-    const issue = store.createIssue({ title: "Operations auth", workspaceId: "local" });
+    const issue = createResponsibleTestIssue(store, { title: "Operations auth", workspaceId: "local" });
     const task = store.createTask({ agentId: agent.id, issueId: issue.id, workspaceId: "local", prompt: "Auth" });
     const token = await store.createTaskAccessToken(task, "local");
     const runtime = store.registerRuntime({ id: "rt_task_ops", name: "Task runtime", provider: "codex", workspaceId: "local" });

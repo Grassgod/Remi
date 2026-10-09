@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import type { Database } from "bun:sqlite";
 import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { describe, expect, it } from "bun:test";
@@ -35,7 +36,7 @@ describe("MUL-427 ruling (e): comment task associations", () => {
     it.skipIf(backend === "pg" && !pgAdminUrl)(`${backend}: every comment mirror uses the comment task while legacy events stay NULL`, async () => {
       await withStore(backend, (store, db) => {
         const agent = store.createAgent({ name: "Comment author", provider: "codex", workspaceId: "local" });
-        const issue = store.createIssue({ title: "Comment tasks", workspaceId: "local" });
+        const issue = createResponsibleTestIssue(store, { title: "Comment tasks", workspaceId: "local" });
         const session = store.getOrCreateDefaultIssueSession(issue.id);
         const task = store.createSessionTask(session.id, { agentId: agent.id, prompt: "Reply" });
         const member = store.createIssueComment(issue.id, { body: "Member comment", taskId: task.id });
@@ -67,7 +68,7 @@ describe("MUL-427 ruling (e): comment task associations", () => {
 
     it.skipIf(backend === "pg" && !pgAdminUrl)(`${backend}: deleting a comment preserves its frozen source and publishes only the tombstone patch`, async () => {
       await withStore(backend, (store) => {
-        const issue = store.createIssue({ title: "Deleted task association", workspaceId: "local" });
+        const issue = createResponsibleTestIssue(store, { title: "Deleted task association", workspaceId: "local" });
         const agent = store.createAgent({ name: "Comment source", provider: "codex" });
         const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "Comment source" });
         const comment = store.createIssueComment(issue.id, { body: "Task-linked comment", taskId: task.id });

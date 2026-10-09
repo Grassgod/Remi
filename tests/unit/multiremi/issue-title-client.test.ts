@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { afterEach, describe, expect, it } from "bun:test";
 import {
   generateIssueTitle,
@@ -39,7 +40,7 @@ describe("Issue title model client", () => {
       tokenOp: "set",
       authToken: "secret-not-for-output",
     });
-    const issue = store.createIssue({
+    const issue = createResponsibleTestIssue(store, {
       title: "Remi",
       description: "实现稳定的一键 Issue 自动命名功能，并且模型失败时不影响主流程。",
     });
@@ -68,7 +69,7 @@ describe("Issue title model client", () => {
       tokenOp: "set",
       authToken: "secret-not-for-output",
     });
-    const issue = store.createIssue({ title: "Remi", description: "这是一个足够长的 Issue 描述，用于验证 Claude 网关回落行为。" });
+    const issue = createResponsibleTestIssue(store, { title: "Remi", description: "这是一个足够长的 Issue 描述，用于验证 Claude 网关回落行为。" });
     let url = "";
     const result = await generateIssueTitle(store, {
       issue,
@@ -83,7 +84,7 @@ describe("Issue title model client", () => {
 
   it("reports an unconfigured gateway before attempting transport", async () => {
     const store = createLocalStore();
-    const issue = store.createIssue({ title: "Remi", description: "这是一个足够长的描述，用于验证未配置网关时的失败原因。" });
+    const issue = createResponsibleTestIssue(store, { title: "Remi", description: "这是一个足够长的描述，用于验证未配置网关时的失败原因。" });
     await expect(generateIssueTitle(store, { issue })).rejects.toBeInstanceOf(IssueTitleGatewayUnconfiguredError);
   });
 });

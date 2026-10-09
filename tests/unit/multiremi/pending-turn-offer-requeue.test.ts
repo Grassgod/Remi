@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { expect, it } from "bun:test";
 import { MultiremiStore } from "@multiremi/store.js";
 import { daemonTaskClaimResponse } from "@multiremi/api/wire/tasks.js";
@@ -13,7 +14,7 @@ pendingTurnBackendTests("pending turn offer rescind", (fixture) => {
       const { store, db } = fixture();
       const runtime = store.registerRuntime({ name: "Archived offer", provider: "codex" });
       const agent = store.createAgent({ name: "Archived owner", provider: "codex", runtimeId: runtime.id });
-      const issue = store.createIssue({ title: "Archived lane", status: "in_progress" });
+      const issue = createResponsibleTestIssue(store, { title: "Archived lane", status: "in_progress" });
       const session = kind === "issue" ? store.getOrCreateDefaultIssueSession(issue.id)
         : store.createChatSession({ agentId: agent.id });
       const input = { agentId: agent.id, wakeSource: "inbox",
@@ -38,7 +39,7 @@ pendingTurnBackendTests("pending turn offer rescind", (fixture) => {
       const { store } = fixture();
       const runtime = store.registerRuntime({ name: "Human offer", provider: "codex" });
       const agent = store.createAgent({ name: "Human owner", provider: "codex", runtimeId: runtime.id });
-      const issue = store.createIssue({ title: "Human queue", status: "in_progress" });
+      const issue = createResponsibleTestIssue(store, { title: "Human queue", status: "in_progress" });
       const session = kind === "issue" ? store.getOrCreateDefaultIssueSession(issue.id)
         : store.createChatSession({ agentId: agent.id });
       const input = { agentId: agent.id,
@@ -59,7 +60,7 @@ pendingTurnBackendTests("pending turn offer rescind", (fixture) => {
           daemonId: "dmn_requeue", status: "online", maxConcurrency: 1, metadata: { parallel_agent_execution: 1 } });
         const agent = store.createAgent({ name: "Offer owner", provider: "codex", runtimeId: runtime.id });
         const delegator = store.createAgent({ name: "Delegator", provider: "codex" });
-        const issue = store.createIssue({ title: "Coalesced offer", status: "in_progress" });
+        const issue = createResponsibleTestIssue(store, { title: "Coalesced offer", status: "in_progress" });
         const session = kind === "issue" ? store.getOrCreateDefaultIssueSession(issue.id)
           : store.createChatSession({ agentId: agent.id });
         const input = { agentId: agent.id, wakeSource: "delegation_return",

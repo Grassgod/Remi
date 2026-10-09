@@ -17,7 +17,17 @@ export function canAccessConversationTask(c: Context, store: MultiremiStore, tas
 /** Memo lives for one request and caches only this caller's source-task checks. */
 export function conversationEntryVisibility(c: Context, store: MultiremiStore) {
   const memo = createTaskAuthMemo(), allowed = new Map<string, boolean>(), decisions = new Map<string, boolean>();
+  const notifications = new Map<string, boolean>();
   return (entry: ConversationVisibilityEntry): boolean => {
+    const notification = conversationEntryQuestionNotification(entry, id => store.getMessage(id),
+      seq => entry.session_id ? store.getConversationLogEntry(entry.session_id, seq) : null);
+    if (notification === null) return false;
+    if (notification) {
+      if (!notification.id) return false;
+      if (!notifications.has(notification.id)) notifications.set(notification.id, store.canReadQuestionNotification(notification.id,
+        { userId: currentRequestUserId(c), admin: false, attemptId: currentTaskAccessToken(c)?.taskId ?? undefined }));
+      return notifications.get(notification.id)!;
+    }
     const decision = conversationEntryDecision(entry,
       id => store.getMessage(id),
       seq => entry.session_id ? store.getConversationLogEntry(entry.session_id, seq) : null);
@@ -54,6 +64,22 @@ export interface ConversationVisibilityEntry {
   metadata: Record<string, any>;
 }
 
+/** Related edits and replies cannot reveal a notification hidden from this caller. */
+export function conversationEntryQuestionNotification(
+  entry: ConversationVisibilityEntry,
+  reply: (id: string) => ConversationVisibilityEntry | null | undefined,
+  target: (seq: number) => ConversationVisibilityEntry | null | undefined,
+  depth = 0,
+): ConversationVisibilityEntry | null | undefined {
+  if (depth > 4) return null;
+  if (entry.metadata.question_notification === true || entry.metadata.question_present_request === true) return entry;
+  const replyId = entry.reply_to_id ?? entry.parent_id
+    ?? (typeof entry.metadata.message_id === 'string' ? entry.metadata.message_id : null);
+  const related = Number.isSafeInteger(entry.metadata.target_seq) ? target(entry.metadata.target_seq)
+    : replyId ? reply(replyId) : null;
+  return related ? conversationEntryQuestionNotification(related, reply, target, depth + 1) : undefined;
+}
+
 /** Replies and mutation markers inherit the Issue decision's relation checks. */
 export function conversationEntryDecision(
   entry: ConversationVisibilityEntry,
@@ -62,6 +88,10 @@ export function conversationEntryDecision(
   depth = 0,
 ): ConversationVisibilityEntry | null | undefined {
   if (depth > 4) return null;
+  if (entry.metadata.question_source_notification === true) {
+    const original = typeof entry.metadata.root_question_id === 'string' ? reply(entry.metadata.root_question_id) : null;
+    return original ? conversationEntryDecision(original, reply, target, depth + 1) : null;
+  }
   if (entry.metadata.decision_record?.source_issue_id || entry.metadata.source_issue_id) return entry;
   if (!entry.metadata.human_response && !entry.metadata.decision_answer && !Number.isSafeInteger(entry.metadata.target_seq)
     && typeof entry.metadata.message_id !== "string") return undefined;
@@ -80,6 +110,10 @@ export function conversationEntrySource(
   depth = 0,
 ): string | null | undefined {
   if (depth > 4) return null;
+  if (entry.metadata.question_source_notification === true) {
+    const original = typeof entry.metadata.root_question_id === 'string' ? reply(entry.metadata.root_question_id) : null;
+    return original ? conversationEntrySource(original, reply, target, depth + 1) : null;
+  }
   if (entry.kind === "turn" || entry.metadata.human_request) {
     const replyId = entry.reply_to_id ?? entry.parent_id;
     return entry.task_id ?? (replyId ? reply(replyId)?.task_id : null) ?? null;
@@ -161,9 +195,11 @@ export function messageResponse<T extends object>(message: T) {
   return stripCardTokenFields(message) as Omit<T, "card_token_hash" | "card_token_recipient" | "card_token_consumed_at">;
 }
 
-export function stripCardTokenFields(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(stripCardTokenFields);
+export function stripCardTokenFields(value: unknown, path: string[] = []): unknown {
+  if (Array.isArray(value)) return value.map(item => stripCardTokenFields(item, path));
   if (!value || typeof value !== "object") return value;
-  return Object.fromEntries(Object.entries(value).filter(([key]) => !key.startsWith("card_token_"))
-    .map(([key, nested]) => [key, stripCardTokenFields(nested)]));
+  return Object.fromEntries(Object.entries(value).filter(([key]) => !key.startsWith("card_token_")
+    && !(key === 'wait_id' && (path.at(-1) === 'metadata' || path.at(-1) === 'wait' && path.at(-2) === 'question'))
+    && !(key === 'runtime_id' && path.at(-1) === 'wait' && path.at(-2) === 'question'))
+    .map(([key, nested]) => [key, stripCardTokenFields(nested, [...path, key])]));
 }

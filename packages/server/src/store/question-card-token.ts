@@ -3,6 +3,7 @@ import { createHash, randomBytes } from "node:crypto";
 export interface QuestionCardCredential {
   token: string;
   operatorOpenId: string;
+  routeRevision?: number;
 }
 
 export class QuestionCardTokenError extends Error {

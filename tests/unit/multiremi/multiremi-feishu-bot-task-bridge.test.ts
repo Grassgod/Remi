@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { runTurnExecutionMutation } from "@multiremi/store/turn-execution-records.js";
 import { mutateExecutionFixture, sentTask } from "./unified-test-paths.js";
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
@@ -179,7 +180,7 @@ describe("Feishu bot standard Task bridge", () => {
   for (const path of ["p2p", "group", "canonical-topic"] as const) {
     it(`rejects shared Chat binding creation and rolls back ${path}`, () => {
       const { store, config } = scaffold();
-      const issue = store.createIssue({ title: "Binding guard", workspaceId: "local" });
+      const issue = createResponsibleTestIssue(store, { title: "Binding guard", workspaceId: "local" });
       store.reportFeishuBotRuntimeStatus("local", "rt_bot", { appliedRevision: config.revision, state: "online" });
       store.updateWorkspace("local", { settings: { issueTopics: { enabled: true, chatId: "oc_guard" } } });
       // Simulate an abnormal writer occupying the newly created Chat. The
@@ -387,7 +388,7 @@ describe("Feishu bot standard Task bridge", () => {
       text: "Create and track this Issue.",
     });
     store.cancelTask(inbound.taskId);
-    const issue = store.createIssue({
+    const issue = createResponsibleTestIssue(store, {
       title: "Proactive Feishu round",
       workspaceId: "local",
       assigneeType: "agent",
@@ -550,7 +551,7 @@ describe("Feishu bot standard Task bridge", () => {
       threadId: "omt_busy",
       text: "I am already waiting for a response.",
     });
-    const issue = store.createIssue({ title: "Busy Feishu topic", workspaceId: "local" });
+    const issue = createResponsibleTestIssue(store, { title: "Busy Feishu topic", workspaceId: "local" });
     store.cancelTask(initial.taskId);
     bindFeishuTopicFixture(store, db!, initial.chatSessionId, issue.id);
     const inbound = store.submitFeishuBotMessage("local", "rt_bot", {
@@ -608,7 +609,7 @@ describe("Feishu bot standard Task bridge", () => {
     });
     expect(store.claimTask("rt_bot")?.id).toBe(inbound.taskId);
     store.startTask(inbound.taskId);
-    const issue = store.createIssue({ title: "New Issue binding", workspaceId: "local" });
+    const issue = createResponsibleTestIssue(store, { title: "New Issue binding", workspaceId: "local" });
     bindFeishuTopicFixture(store, db!, inbound.chatSessionId, issue.id);
     const leader = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "Issue work" });
     const wakes = store.prepareFeishuIssueRoundPushes({ issue, leaderTask: leader });
@@ -643,7 +644,7 @@ describe("Feishu bot standard Task bridge", () => {
       leaderId: agent.id,
       memberIds: [teammate.id],
     });
-    const issue = store.createIssue({
+    const issue = createResponsibleTestIssue(store, {
       title: "Delegated Feishu round",
       workspaceId: "local",
       assigneeType: "squad",
@@ -723,7 +724,7 @@ describe("Feishu bot standard Task bridge", () => {
     store.recordSessionAgentRangeRead(firstSubmission.chatSessionId, agent.id,
       { seq: 1, offset: 0 }, { seq: store.getConversationLogHead(firstSubmission.chatSessionId)!.headSeq + 1, offset: 0 }, firstTask.id);
     store.completeTask(firstTask.id, { output: "first answer", sessionId: "sess_feishu_delta" });
-    const issue = store.createIssue({ title: "Feishu bound Chat", workspaceId: "local" });
+    const issue = createResponsibleTestIssue(store, { title: "Feishu bound Chat", workspaceId: "local" });
     bindFeishuTopicFixture(store, db!, firstSubmission.chatSessionId, issue.id);
     const taskCountBeforeIssueUpdate = store.listTasks().length;
     store.createIssueComment(issue.id, {
@@ -1013,7 +1014,7 @@ describe("Feishu bot standard Task bridge", () => {
       text: "before route switch",
     });
     store.cancelTask(first.taskId);
-    const issue = store.createIssue({
+    const issue = createResponsibleTestIssue(store, {
       title: "Routed round push",
       workspaceId: "local",
       assigneeType: "agent",
@@ -1091,7 +1092,7 @@ describe("Feishu bot standard Task bridge", () => {
     const { store, config } = scaffold();
     const routedAgent = store.createAgent({ name: "Issue worker", provider: "codex", workspaceId: "local" });
     store.updateWorkspace("local", {
-      settings: { issueTopics: { enabled: true, chatId: "oc_issues" } },
+      settings: { issueTopics: { enabled: true, chatId: "oc_issues", responsibleMemberId: 'mem_local_local' } },
     });
     store.replaceFeishuBotAgentRoutes("local", [
       { scope: "chat", chatId: "oc_issues", agentId: routedAgent.id },

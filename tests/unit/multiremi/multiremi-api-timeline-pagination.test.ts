@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { afterEach, describe, expect, it } from "bun:test";
 import type { Database, SQLQueryBindings } from "bun:sqlite";
 import { markSqliteDialect, openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
@@ -32,7 +33,7 @@ describe("issue timeline reverse pagination", () => {
   it("keeps the no-parameter endpoint as the legacy naked array", async () => {
     const { store } = createStore();
     const app = createMultiremiApp({ store, authToken: AUTH_TOKEN });
-    const issue = store.createIssue({ title: "Legacy timeline", workspaceId: "local" });
+    const issue = createResponsibleTestIssue(store, { title: "Legacy timeline", workspaceId: "local" });
     store.createIssueComment(issue.id, { body: "legacy comment" });
 
     const response = await app.request(`/api/issues/${issue.id}/timeline`, {
@@ -47,7 +48,7 @@ describe("issue timeline reverse pagination", () => {
   it("returns the latest page first and walks to the oldest page without duplicates", async () => {
     const { store, db } = createStore();
     const app = createMultiremiApp({ store, authToken: AUTH_TOKEN });
-    const issue = store.createIssue({ title: "Paged session", workspaceId: "local" });
+    const issue = createResponsibleTestIssue(store, { title: "Paged session", workspaceId: "local" });
     const session = store.getOrCreateDefaultIssueSession(issue.id);
     const comments = Array.from({ length: 5 }, (_, index) => {
       const comment = store.createIssueComment(issue.id, {
@@ -100,7 +101,7 @@ describe("issue timeline reverse pagination", () => {
   it("uses conversation sequence when entries share created_at and handles exact page division", async () => {
     const { store, db } = createStore();
     const app = createMultiremiApp({ store, authToken: AUTH_TOKEN });
-    const issue = store.createIssue({ title: "Cursor ties", workspaceId: "local" });
+    const issue = createResponsibleTestIssue(store, { title: "Cursor ties", workspaceId: "local" });
     const session = store.getOrCreateDefaultIssueSession(issue.id);
     const comments = Array.from({ length: 4 }, (_, index) => store.createIssueComment(issue.id, {
       issueSessionId: session.id,
@@ -126,7 +127,7 @@ describe("issue timeline reverse pagination", () => {
   it("returns an empty terminal page for an empty session timeline", async () => {
     const { store } = createStore();
     const app = createMultiremiApp({ store, authToken: AUTH_TOKEN });
-    const issue = store.createIssue({ title: "Empty page", workspaceId: "local" });
+    const issue = createResponsibleTestIssue(store, { title: "Empty page", workspaceId: "local" });
     const session = store.getOrCreateDefaultIssueSession(issue.id);
 
     const response = await app.request(
@@ -146,7 +147,7 @@ describe("issue timeline reverse pagination", () => {
 
   it("merges comments with issue activity only for the aggregate timeline", () => {
     const { store, db } = createStore();
-    const issue = store.createIssue({ title: "Aggregate page", workspaceId: "local" });
+    const issue = createResponsibleTestIssue(store, { title: "Aggregate page", workspaceId: "local" });
     const session = store.getOrCreateDefaultIssueSession(issue.id);
     const comment = store.createIssueComment(issue.id, { issueSessionId: session.id, body: "comment" });
     store.appendIssueActivity(issue.id, { actorType: "system", type: "custom_event", body: "activity" });
@@ -166,7 +167,7 @@ describe("issue timeline reverse pagination", () => {
   it("resolves @default to the default, then the first session, then aggregate", async () => {
     const { store, db } = createStore();
     const app = createMultiremiApp({ store, authToken: AUTH_TOKEN });
-    const issue = store.createIssue({ title: "Default primer", workspaceId: "local" });
+    const issue = createResponsibleTestIssue(store, { title: "Default primer", workspaceId: "local" });
     const main = store.getOrCreateDefaultIssueSession(issue.id);
     const sibling = store.createIssueSession(issue.id, { title: "Sibling" });
 
@@ -197,7 +198,7 @@ describe("issue timeline reverse pagination", () => {
   it("rejects invalid limits and cursors", async () => {
     const { store } = createStore();
     const app = createMultiremiApp({ store, authToken: AUTH_TOKEN });
-    const issue = store.createIssue({ title: "Invalid page", workspaceId: "local" });
+    const issue = createResponsibleTestIssue(store, { title: "Invalid page", workspaceId: "local" });
 
     for (const limit of ["0", "101", "1.5", "nope"]) {
       const response = await app.request(`/api/issues/${issue.id}/timeline?limit=${limit}`, { headers: AUTH_HEADERS });
@@ -233,7 +234,7 @@ describe("issue timeline hydration query count", () => {
       close: () => db.close(),
     });
     const store = new MultiremiStore(countingDb);
-    const issue = store.createIssue({ title: "Constant SQL", workspaceId: "local" });
+    const issue = createResponsibleTestIssue(store, { title: "Constant SQL", workspaceId: "local" });
     const session = store.getOrCreateDefaultIssueSession(issue.id);
     for (let index = 0; index < 20; index += 1) {
       store.createIssueComment(issue.id, { issueSessionId: session.id, body: `row-${index}` });

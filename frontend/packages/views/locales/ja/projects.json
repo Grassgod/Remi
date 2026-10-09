@@ -52,7 +52,8 @@
   },
   "default_assignee": {
     "label": "デフォルト担当者",
-    "none": "デフォルトなし"
+    "none": "デフォルトなし",
+    "legacy_member": "エージェントまたはチームの設定が必要"
   },
   "relative_date": {
     "today": "今日",

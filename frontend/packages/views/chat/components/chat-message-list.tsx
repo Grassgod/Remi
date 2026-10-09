@@ -1,6 +1,8 @@
 "use client";
 
 import { MessageHeader } from "../../common/message-header";
+import { LinkedQuestion, linkedQuestionId, QuestionReplyReference } from "../../common/linked-question";
+import { questionReplyText } from "../../common/question-answer";
 import { useActorName } from "@multiremi/core/workspace/hooks";
 import { useAfterFirstScreen } from "@multiremi/core/platform/use-after-first-screen";
 import { TurnControls } from "../../common/turn-controls";
@@ -157,7 +159,7 @@ export function ChatMessageList({
       const isUser = row.kind === "message" && (row.sender_type ?? row.author_type) === "member";
       const message: ChatMessage = {
         id: row.id, chat_session_id: sessionId, role: isUser ? "user" : "assistant",
-        content: isUser ? row.body_md : String(row.metadata?.final_reply_md ?? row.body_md),
+        content: questionReplyText(isUser ? row.body_md : String(row.metadata?.final_reply_md ?? row.body_md), row.metadata),
         task_id: row.kind === "turn" ? row.task_id ?? null : null, turn_id: typeof row.metadata?.turn_id === "string" ? row.metadata.turn_id : undefined, created_at: row.created_at ?? "",
         failure_reason: typeof row.metadata?.failure_reason === "string" ? row.metadata.failure_reason : null,
           elapsed_ms: typeof row.metadata?.elapsed_ms === "number" ? row.metadata.elapsed_ms : null,
@@ -166,12 +168,15 @@ export function ChatMessageList({
       const clientId = clientIdOf(entry);
       const local = optimisticRows.find((item) => item.clientId === clientId);
       const isPush = row.kind === "turn" && isNonterminalTurn(row.metadata);
+      const questionId = row.kind === "message" ? linkedQuestionId(row.id, row.metadata) : null;
       return <div className="py-2">
         {row.kind === "message" && <MessageHeader message={row} getActorName={getActorName} />}
+        {questionId ? <LinkedQuestion id={questionId} getActorName={getActorName} /> : null}
         {row.kind === "turn" && row.metadata?.final_entry_id ? <div className="text-xs text-muted-foreground">{statuses[String(row.metadata.status)] ?? String(row.metadata.status ?? "")}</div>
           : <MessageBubble message={message} isPending={!!pendingTaskId && row.task_id === pendingTaskId}
             isPush={isPush} visible={visible} />}
         {row.kind === "turn" && <TurnControls turnId={typeof row.metadata?.turn_id === "string" ? row.metadata.turn_id : row.id} />}
+        {row.kind === "message" && !questionId && <QuestionReplyReference metadata={row.metadata} />}
         {isUser && local && <div className="flex justify-end"><SendStatus status={local.status}
           onRetry={() => onRetrySend?.(local.clientId)} /></div>}
       </div>;

@@ -1,4 +1,5 @@
 import type { MessageHeader, SendMessageInput, SendMessageResult, UnifiedMessage } from '@multiremi/contracts/unified-model.js';
+import { isHistoricalIssueQuestionRecord } from '@multiremi/contracts';
 import type { CreateTaskInput } from '@multiremi/contracts/types.js';
 import type { CommitEventQueue, StoreContext } from '../context.js';
 import { createId } from '@multiremi/ids.js';
@@ -78,8 +79,11 @@ export function sendMessageWithinTransaction(ctx:StoreContext,input:SendMessageI
   let roleScope:string|undefined;
   const owner=(ownerIssue:typeof issue)=>{
     if(!ownerIssue)return;
-    if(ownerIssue.assigneeType==='member'){recipientType='member';recipientId=ownerIssue.assigneeId;}
-    else if(ownerIssue.assigneeType&&ownerIssue.assigneeId){recipientType='agent';recipientId=ctx.resolveRunnableAgentForAssignee(ownerIssue.assigneeType,ownerIssue.assigneeId)?.id??null;}
+    const responsibility=ctx.resolveIssueResponsibility(ownerIssue.id);
+    if(!responsibility.unresolved.length && responsibility.executionOwner){recipientType='agent';recipientId=responsibility.executionOwner.id;return;}
+    input={...input,metadata:{...input.metadata,responsibility_unresolved:responsibility.unresolved}};
+    if(responsibility.rootHuman){recipientType='member';recipientId=responsibility.rootHuman.id;return;}
+    throw new Error('Issue owner responsibility is unresolved; configure its execution owner and root human');
   };
   if(input.to.type==='agent'||input.to.type==='member'){recipientType=input.to.type;recipientId=input.to.ref;}
   else if(input.to.type==='role'){
@@ -88,6 +92,11 @@ export function sendMessageWithinTransaction(ctx:StoreContext,input:SendMessageI
       targetIssue=issue?.parentIssueId?ctx.issues().getIssue(issue.parentIssueId):null;
       if(!targetIssue||targetIssue.workspaceId!==workspaceId)throw new Error('Parent issue not found');
       owner(targetIssue);
+      if (!recipientId) {
+        const responsibility=ctx.resolveIssueResponsibility(targetIssue.id);
+        if (responsibility.rootHuman) {recipientType='member';recipientId=responsibility.rootHuman.id;}
+        input={...input,metadata:{...input.metadata,responsibility_unresolved:responsibility.unresolved}};
+      }
       sessionId=ctx.issueSessions().getOrCreateDefaultIssueSessionWithinTransaction(targetIssue.id).id;
     } else if(input.to.ref==='delegator'){
       const dispatch=source?.trigger_message_id?getMessage(ctx,source.trigger_message_id):null;
@@ -99,9 +108,7 @@ export function sendMessageWithinTransaction(ctx:StoreContext,input:SendMessageI
         const returnSession=ctx.issueSessions().getIssueSession(sessionId);targetIssue=returnSession?ctx.issues().getIssue(returnSession.issueId):null;}
 
     } else if(input.to.ref==='leader'){
-      const squad=ctx.db.query(`SELECT s.leader_id FROM multiremi_squads s JOIN multiremi_squad_members m ON m.squad_id=s.id
-        WHERE m.member_id=? AND m.member_type='agent' AND s.workspace_id=? AND s.archived_at IS NULL ORDER BY s.id LIMIT 1`).get(input.sender.id,workspaceId);
-      recipientType='agent';recipientId=squad?.leader_id??null;
+      owner(issue);
     } else if(input.to.ref==='relay'){recipientType='agent';recipientId=originalChat?.agentId??null;}
   }
   if(sessionId!==input.session_id||input.to.type==='role'&&input.to.ref==='parent_owner'){
@@ -142,8 +149,8 @@ export function sendMessageWithinTransaction(ctx:StoreContext,input:SendMessageI
   const hops=source&&recipientId?countMessageDelegationPairHops(ctx,source.id,recipientId,limit):0;
   const isLeader=recipientId&&input.sender.id?!!ctx.db.query(`SELECT 1 FROM multiremi_squads s JOIN multiremi_squad_members m ON m.squad_id=s.id
     WHERE s.leader_id=? AND m.member_id=? AND m.member_type='agent' AND s.workspace_id=? AND s.archived_at IS NULL`).get(recipientId,input.sender.id,workspaceId):false;
-  const parentOwner=issue?.parentIssueId?ctx.issues().getIssue(issue.parentIssueId):null;
-  const parentAgent=parentOwner?.assigneeType&&parentOwner.assigneeId?ctx.resolveRunnableAgentForAssignee(parentOwner.assigneeType,parentOwner.assigneeId):null;
+  const responsibility=issue?ctx.resolveIssueResponsibility(issue.id):null;
+  const parentAgent=responsibility && !responsibility.unresolved.length && responsibility.reviewOwner?.type==='agent' ? responsibility.reviewOwner : null;
   const policy=resolveWake(input.sender,input.to,input.wake_requested,input.message_kind,{
     recipientType,recipientId,recipientAvailable:recipientType==='agent'?!!targetAgent&&!targetAgent.archivedAt:recipientType==='member'?!!member&&!member.archivedAt:false,
     // Structural platform reports retain main's dependency exemption. Agent
@@ -171,7 +178,7 @@ export function sendMessageWithinTransaction(ctx:StoreContext,input:SendMessageI
   // can let Hub observers see the patch before the new message itself.
   const metadata:Record<string,any>={...input.metadata,execution_scope:scope};
   if(input.message_kind==='decision'){
-    const key=metadata.human_request?'human_request':'decision_record';
+    const key=metadata.human_request?'human_request':metadata.question?'question':isHistoricalIssueQuestionRecord(metadata.decision_record)?'decision_record':'message_choice';
     metadata[key]={status:'pending',...(metadata[key] as object)};
   }
   if(existing&&(existing.session_id!==sessionId||existing.sender_type!==input.sender.type||existing.sender_id!==input.sender.id))throw new Error('Cannot readdress a message owned by another sender');
@@ -255,7 +262,7 @@ export function sendMessageWithinTransaction(ctx:StoreContext,input:SendMessageI
   if(turnId&&force&&targetIssue&&unmet.length)ctx.issues().recordDependencyForceStarted(targetIssue.id,{
     source:force.source,status:'todo',previousStatus:targetIssue.status,unmet,actorType:'member',actorId:force.actorMemberId,
     commentId:force.commentId??message.id,taskId:ctx.db.query('SELECT current_attempt_id FROM multiremi_turns WHERE id=?').get(turnId)?.current_attempt_id,agentId:recipientId,
-    assigneeDispatched:recipientId === (targetIssue.assigneeType && targetIssue.assigneeId ? ctx.resolveRunnableAgentForAssignee(targetIssue.assigneeType,targetIssue.assigneeId)?.id : null),
+    assigneeDispatched:recipientId === ctx.resolveIssueResponsibility(targetIssue.id).executionOwner?.id,
   },events);
   const affected=new Set(turnId||input.message_kind==='decision'||reply?.message_kind==='decision'?[targetIssue?.id,source?.issue_id]:[]);
   for(const id of resumedIssues)affected.add(id);

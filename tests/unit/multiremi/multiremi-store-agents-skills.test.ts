@@ -1,7 +1,7 @@
 // Agent lifecycle from the scheduling surfaces plus workspace skill attachment
 // and squad membership.
 import { afterEach, describe, expect, it } from "bun:test";
-import { createStore, resetMultiremiTestEnv } from "./helpers.js";
+import { createStore, db, resetMultiremiTestEnv } from "./helpers.js";
 
 afterEach(resetMultiremiTestEnv);
 
@@ -47,11 +47,10 @@ describe("Multiremi store — agents, workspace skills, and members", () => {
 
     const owner = store.createWorkspaceMember({ name: "Owner", role: "owner" });
     const member = store.createWorkspaceMember({ name: "Project Member", role: "member" });
-    const memberProject = store.createProject({
-      title: "Member project",
-      defaultAssigneeType: "member",
-      defaultAssigneeId: member.id,
-    });
+    const memberProject = store.createProject({ title: "Historical member project" });
+    // Retain an actual pre-responsibility default; new member execution defaults are rejected.
+    db!.run("UPDATE multiremi_projects SET default_assignee_type='member',default_assignee_id=? WHERE id=?",
+      [member.id, memberProject.id]);
 
     store.archiveWorkspaceMember(member.id);
     expect(store.getProject(memberProject.id)).toMatchObject({

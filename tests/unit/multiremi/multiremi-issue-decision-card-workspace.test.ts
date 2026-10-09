@@ -1,3 +1,5 @@
+import { createResponsibleTestIssue } from './helpers.js';
+import { seedHistoricalDecision, seedQuestionHumanMapping } from './fixtures/historical-decision.js';
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { decodeDecisionCardBody, questionCardAction } from "@shared/feishu-task-card.js";
 import type { Database } from "bun:sqlite";
@@ -65,6 +67,7 @@ for (const backend of ["SQLite", "PostgreSQL"] as const) {
       const openId = `ou_card_${tag}`;
       const user = store.getOrCreateUser({ externalId: openId, email: `${tag}@example.test`, name: "Card member" });
       const member = store.createWorkspaceMember({ workspaceId, userId: user.id, name: user.name, role: "member" });
+      seedQuestionHumanMapping(db, workspaceId, 'cli_mul476_cards', user.id, openId);
       const pat = await store.createAccessToken({ workspaceId, userId: user.id, name: "Card member", type: "pat" });
       const agent = store.createAgent({ workspaceId, name: "Card bot", provider: "codex" });
       const runtimeId = `rt_card_${tag}`;
@@ -73,29 +76,29 @@ for (const backend of ["SQLite", "PostgreSQL"] as const) {
       store.heartbeatRuntime(runtimeId, { supportsFeishuBotConfig: true, supportsIssueDecisionCard: true });
       const config = store.upsertFeishuBotConfig(workspaceId, {
         agentId: agent.id, runtimeId, appId: "cli_mul476_cards", appSecretOp: "set",
-        appSecret: "mul476-card-fixture-secret", domain: "feishu", enabled: true,
+        appSecret: "mul476-card-fixture-secret", domain: "feishu", enabled: true, responsibleMemberId: member.id,
       });
       store.reportFeishuBotRuntimeStatus(workspaceId, runtimeId, { appliedRevision: config.revision, state: "online" });
       store.updateWorkspace(workspaceId, { settings: {
         ...store.getWorkspace(workspaceId)!.settings,
         issueTopics: { enabled: true, chatId: `oc_${tag}`, notifyMode: "person", notifyOpenId: openId },
       } });
-      const parent = store.createIssue({ workspaceId, title: `Target ${tag}` });
+      const parent = createResponsibleTestIssue(store, { workspaceId, title: `Target ${tag}`, responsibleMemberId: member.id });
       store.prepareFeishuIssueTopicWithinTransaction(parent);
       const root = store.claimFeishuBotOutbound(workspaceId, runtimeId)!;
       expect(root).toBeTruthy();
       store.reportFeishuBotOutbound(workspaceId, runtimeId, root.id, {
         claimToken: root.claimToken, status: "sent", externalMessageId: `om_root_${tag}`,
       });
-      const child = store.createIssue({ workspaceId, parentIssueId: parent.id, title: `PRIVATE source ${tag}` });
-      const decision = store.createIssueDecision(child.id, {
+      const child = createResponsibleTestIssue(store, { workspaceId, parentIssueId: parent.id, title: `PRIVATE source ${tag}` });
+      const decision = seedHistoricalDecision(store, child.id, {
         kind: "production_change", title: `PRIVATE decision ${tag}`, body: `PRIVATE body ${tag}`, options: ["yes", "no"],
       }, { type: "member", id: member.id, taskId: null });
       const delivery = db.query("SELECT id, binding_id FROM multiremi_feishu_bot_outbound_deliveries WHERE decision_id = ?")
         .get(decision.id) as { id: string; binding_id: string };
       expect(delivery).toBeTruthy();
       // A same-workspace Issue with no part in the decision, for rows that name the wrong one.
-      const other = store.createIssue({ workspaceId, title: `Other ${tag}` });
+      const other = createResponsibleTestIssue(store, { workspaceId, title: `Other ${tag}`, responsibleMemberId: member.id });
       const daemon = await store.createAccessToken({ workspaceId, daemonId, type: "daemon", name: "Card host" });
       const app = createMultiremiApp({ store, authToken: "mul476-card-root" });
       const path = `/api/daemon/messages/${decision.id}`;
@@ -270,16 +273,16 @@ for (const backend of ["SQLite", "PostgreSQL"] as const) {
             // The moved target took the only topic with it, so the later card
             // needs a topic of its own. Its seed is queued after the stale card
             // and must still be the next claim.
-            store.prepareFeishuIssueTopicWithinTransaction(f.child);
+            store.prepareFeishuIssueTopicWithinTransaction(f.other);
             const seed = store.claimFeishuBotOutbound(f.workspaceId, f.runtimeId)!;
             expect(seed.id).not.toBe(f.deliveryId);
             expect(seed.decisionId ?? null).toBeNull();
             store.reportFeishuBotOutbound(f.workspaceId, f.runtimeId, seed.id, {
               claimToken: seed.claimToken, status: "sent", externalMessageId: `om_child_root_${seed.id}`,
             });
-            host = f.child;
+            host = f.other;
           }
-          const valid = store.createIssueDecision(host.id, {
+          const valid = seedHistoricalDecision(store, host.id, {
             kind: "production_change", title: "Valid later card",
           }, { type: "member", id: f.member.id, taskId: null });
           const card = store.claimFeishuBotOutbound(f.workspaceId, f.runtimeId)!;
@@ -304,8 +307,11 @@ for (const backend of ["SQLite", "PostgreSQL"] as const) {
           send(f);
           // Relations block a move, so the child leaves its parent first; after
           // that the store lets either Issue go, and the decision row stays put.
-          store.updateIssue(f.child.id, { parent_issue_id: null });
-          store.updateIssue(endpoint === "source" ? f.child.id : f.parent.id, { workspaceId: f.foreignId });
+          store.updateIssue(f.child.id, { parent_issue_id: null, responsibleMemberId: f.member.id,
+            actorType: 'member', actorId: f.member.id });
+          store.updateIssue(endpoint === "source" ? f.child.id : f.parent.id, { workspaceId: f.foreignId,
+            responsibleMemberId: store.listWorkspaceMembers(f.foreignId).find(member => member.role === 'owner')!.id,
+            actorType: 'member', actorId: f.member.id });
           expect(store.getIssueDecisionAnywhere(f.decision.id)).toBeNull();
           expect(store.getFeishuIssueDecisionCardContext(f.workspaceId, f.decision.id)).toBeNull();
           expect(store.listFeishuIssueDecisionCards(f.workspaceId, f.runtimeId)).toEqual([]);
@@ -332,9 +338,9 @@ for (const backend of ["SQLite", "PostgreSQL"] as const) {
         expect(store.claimFeishuBotOutbound(f.workspaceId, f.runtimeId)).toBeNull();
         expect(db.query("SELECT reminder_sent_at FROM multiremi_message_decision_records WHERE id = ?").get(f.decision.id))
           .toEqual({ reminder_sent_at: null });
-        const result = store.answerIssueDecision(f.parent.id, f.decision.id, { answer: "yes", reason: "ok" },
-          { type: "member", id: f.member.id, taskId: null });
-        expect(result.status).toBe("answered");
+        store.answerQuestion(f.decision.id, { expected_route_revision: store.getQuestion(f.decision.id)!.route_revision,
+          response: { answer: 'yes' }, body_md: 'yes', reason: 'ok' }, { type: 'member', id: f.member.id });
+        expect(store.getQuestion(f.decision.id)?.status).toBe("answered");
         expect(laneRows(f, "decision_card_patch")).toEqual([]);
       });
 
@@ -350,7 +356,8 @@ for (const backend of ["SQLite", "PostgreSQL"] as const) {
         expect(laneRows(f, "decision_reminder")).toHaveLength(1);
         const credential = questionCardAction(decodeDecisionCardBody(reminder.body)!.card)!;
         const answer = () => f.app.request(`${f.path}/answer`, { method: "POST", headers: f.headers,
-          body: JSON.stringify({ answer: "yes", token: credential.t, operator_open_id: f.openId }) });
+          body: JSON.stringify({ answer: "yes", token: credential.t, operator_open_id: f.openId,
+            expected_route_revision: store.getQuestion(f.decision.id)!.route_revision }) });
         expect((await answer()).status).toBe(200);
         expect(store.getMessage(f.decision.id)!.resolved_at).toBeTruthy();
         expect(laneRows(f, "decision_card_patch")).toHaveLength(1);
@@ -422,8 +429,8 @@ for (const backend of ["SQLite", "PostgreSQL"] as const) {
         // Canonical message routes hide foreign resources before reads or writes.
         // The retired Issue-scoped history/withdraw/PUT paths no longer belong to card transport.
         expect(await transport(f, "/api/daemon/messages/msg_missing")).toEqual([404, 404]);
-        const stranger = store.createIssue({ workspaceId: f.foreignId, title: "Stranger" });
-        const foreignDecision = store.createIssueDecision(stranger.id, { kind: "production_change", title: "Foreign private decision" },
+        const stranger = createResponsibleTestIssue(store, { workspaceId: f.foreignId, title: "Stranger" });
+        const foreignDecision = seedHistoricalDecision(store, stranger.id, { kind: "production_change", title: "Foreign private decision" },
           { type: "member", id: store.listWorkspaceMembers(f.foreignId)[0]!.id, taskId: null });
         expect(await transport(f, `/api/daemon/messages/${foreignDecision.id}`)).toEqual([404, 404]);
       });

@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from "../../unit/multiremi/helpers.js";
 import { describe, expect, it } from "bun:test";
 import { startMultiremiServer } from "@multiremi/api/server.js";
 import type { DaemonProtocolLayer } from "@multiremi/api/daemon-protocol/index.js";
@@ -18,7 +19,7 @@ for (const backend of ["sqlite", "pg"] as const) {
           store.registerRuntime({ id: runtimeId, name: "Trace owner", provider: "codex", daemonId: "dmn_default_trace" });
           store.heartbeatRuntime(runtimeId, {});
           const agent = store.createAgent({ name: "Trace owner", provider: "codex", runtimeId });
-          const issue = store.createIssue({ title: "Default trace" });
+          const issue = createResponsibleTestIssue(store, { title: "Default trace" });
           const task = store.createSessionTask(store.getOrCreateDefaultIssueSession(issue.id).id, { agentId: agent.id, prompt: "Default trace" });
           expect(store.claimTask(runtimeId)?.id).toBe(task.id); store.startTask(task.id);
           let layer!: DaemonProtocolLayer;

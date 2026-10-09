@@ -1,3 +1,5 @@
+import { createResponsibleTestAutopilot } from './helpers.js';
+import { createResponsibleTestIssue } from './helpers.js';
 /**
  * MUL-409 fix round 5: the six in-transaction issue-creation call sites, plus the
  * claim lane, each probed for commit and rollback on a real Postgres connection.
@@ -70,7 +72,8 @@ describe.skipIf(!pgAvailable)("MUL-409: in-transaction issue creation on Postgre
     db = new PostgresSyncDatabase(pgDatabaseUrl(TEST_DB));
     store = new MultiremiStore(db);
     store.ensureLocalWorkspace();
-    memberId = store.getWorkspaceMember("mem_local")?.id ?? store.listWorkspaceMembers("local")[0]!.id;
+    const user = store.getOrCreateUser({ email: `mul409-probe-${process.pid}@example.test`, name: "MUL-409 probe human" });
+    memberId = store.createWorkspaceMember({ workspaceId: "local", userId: user.id, name: user.name, role: "member" }).id;
   });
 
   afterAll(async () => {
@@ -155,7 +158,7 @@ describe.skipIf(!pgAvailable)("MUL-409: in-transaction issue creation on Postgre
     counter += 1;
     const title = `Probe autopilot ${counter}`;
     const agent = store.createAgent({ name: `Probe autopilot owner ${counter}`, provider: "claude" });
-    const autopilot = store.createAutopilot({
+    const autopilot = createResponsibleTestAutopilot(store, {
       title, workspaceId: "local", assigneeId: agent.id, executionMode: "create_issue",
     });
     observe(title, () => { store.runAutopilot(autopilot.id); }, rollback);
@@ -170,6 +173,7 @@ describe.skipIf(!pgAvailable)("MUL-409: in-transaction issue creation on Postgre
     store.heartbeatRuntime(runtimeId, { supportsFeishuBotConfig: true });
     const config = store.upsertFeishuBotConfig("local", {
       agentId: agent.id,
+      responsibleMemberId: memberId,
       runtimeId,
       appId: `cli_probe_${counter}`,
       senderAccessPolicy: "allowlist",
@@ -220,7 +224,7 @@ describe.skipIf(!pgAvailable)("MUL-409: in-transaction issue creation on Postgre
     });
     store.ingestFeishuBatch(source.id, [feishuMessage(`om_probe_direct_${counter}`, `oc_probe_direct_${counter}`)]);
     observe(title, () => {
-      store.createFeishuIssueOutcome(`om_probe_direct_${counter}`, { workspaceId: "local", title });
+      store.createFeishuIssueOutcome(`om_probe_direct_${counter}`, { workspaceId: "local", title, createdBy: memberId });
     }, rollback);
   });
 
@@ -366,7 +370,7 @@ describe.skipIf(!pgAvailable)("MUL-409: in-transaction issue creation on Postgre
     const runtimeId = `rt_probe_lane_${counter}`;
     store.registerRuntime({ id: runtimeId, name: `Probe lane runtime ${counter}`, provider: "claude", workspaceId });
     const agent = store.createAgent({ name: `Probe lane agent ${counter}`, provider: "claude", runtimeId, workspaceId });
-    const issue = store.createIssue({ title: `Probe lane ${counter}`, workspaceId });
+    const issue = createResponsibleTestIssue(store, { title: `Probe lane ${counter}`, workspaceId });
     const session = store.getOrCreateDefaultIssueSession(issue.id);
     const task = store.createSessionTask(session.id, { agentId: agent.id, prompt: "Probe lane reset" });
     // Make the lane look stale so the claim path resets it and writes the audit row.

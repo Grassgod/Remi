@@ -39,6 +39,7 @@ export const FeishuBotSenderListSchema = z.object({
 // ---------------------------------------------------------------------------
 
 export const FeishuBotConfigSchema = z.object({
+  responsible_member_id: z.string().nullable().optional().default(null),
   sender_access_policy: z.enum(["agent", "allowlist"]).optional().catch(undefined),
   configured: z.boolean().default(false),
   workspace_id: z.string().default(""),
@@ -81,6 +82,7 @@ export const IssueTopicConfigResponseSchema = z.object({
   workspace_id: z.string().default(""),
   invalid: z.object({ code: z.string(), message: z.string() }).nullable().optional(),
   config: z.object({
+    responsible_member_id: z.string().nullable().optional().default(null),
     enabled: z.boolean().default(false),
     chat_id: z.string().default(""),
     project_ids: z.array(z.string()).nullable().default(null),

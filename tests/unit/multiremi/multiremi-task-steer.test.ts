@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { attemptMessagesPath, requestMessageBody, sentTask } from "./unified-test-paths.js";
 import { afterEach, describe, expect, it } from "bun:test";
 import { MultiremiStore } from "@multiremi/store.js";
@@ -14,7 +15,7 @@ afterEach(resetMultiremiTestEnv);
 
 function createRunningTask(store: MultiremiStore): MultiremiTask {
   const agent = store.createAgent({ name: "Steer Agent", provider: "claude" });
-  const issue=store.createIssue({title:"Steer input"});
+  const issue=createResponsibleTestIssue(store, {title:"Steer input"});
   const task = store.createTask({ agentId: agent.id, issueId:issue.id, prompt: "test" });
   store.registerRuntime({ id: "rt_steer", name: "steer-runtime", provider: "claude", workspaceId: "local", ownerId: "local" });
   const claimed = store.claimTask("rt_steer");

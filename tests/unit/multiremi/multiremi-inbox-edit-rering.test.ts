@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { expect, it } from "bun:test";
 import { pendingTurnBackendTests } from "./pending-turn-test-backends.js";
 import { createCommitEventQueue, type StoreContext } from "@multiremi/store/context.js";
@@ -8,7 +9,7 @@ pendingTurnBackendTests("D1 T6 comment edit recovery", fixture => {
     const { db, store } = fixture();
     const agent = store.createAgent({ name: "Edit owner", provider: "codex" });
     const member = store.findWorkspaceMemberForUser("local", "local")!;
-    const issue = store.createIssue({ title: "Edit recovery", status: "in_progress", assigneeType: "agent", assigneeId: agent.id });
+    const issue = createResponsibleTestIssue(store, { title: "Edit recovery", status: "in_progress", assigneeType: "agent", assigneeId: agent.id });
     const comment = store.createIssueComment(issue.id, { authorType: "member", authorId: member.id,
       body: `Original [@${agent.name}](mention://agent/${agent.id})` });
     const task = store.listTasksForIssue(issue.id).find(task => task.triggerCommentId === comment.id)!;
@@ -123,7 +124,7 @@ pendingTurnBackendTests("D1 T6 comment edit recovery", fixture => {
       const agent = store.createAgent({ name: "Round owner", provider: "codex" });
       const runtime = store.registerRuntime({ name: "Round runtime", provider: "codex" });
       const member = store.findWorkspaceMemberForUser("local", "local")!;
-      const issue = store.createIssue({ title: "Dual re-ring", assigneeType: "agent", assigneeId: agent.id });
+      const issue = createResponsibleTestIssue(store, { title: "Dual re-ring", assigneeType: "agent", assigneeId: agent.id });
       const session = store.getOrCreateDefaultIssueSession(issue.id);
       const running = store.createSessionTask(session.id, { agentId: agent.id, prompt: "Original round" });
       expect(store.claimTask(runtime.id)?.id).toBe(running.id);

@@ -13,7 +13,7 @@ import { buildCardHeader } from "./send.js";
 import type { AskUserQuestion } from "./permission-ui.js";
 
 type Card = Record<string, unknown>;
-export interface QuestionCardCredential { token: string; operatorOpenId: string }
+export interface QuestionCardCredential { token: string; operatorOpenId: string; routeRevision?: number }
 export interface QuestionCardClient {
   getRequest(messageId: string): Promise<MultiremiTaskHumanRequest | null>;
   respond(messageId: string, response: Record<string, unknown>, credential: QuestionCardCredential): Promise<MultiremiTaskHumanRequest>;
@@ -202,7 +202,7 @@ export async function handleIssueDecisionInteractionEvent(appId: string, raw: un
   const entry = pendingDecisions.get(`${appId}:${String(context.open_message_id ?? "")}`);
   const value = object(action.value);
   const client = clients.get(appId);
-  const credential = { token: typeof value.t === "string" ? value.t : "", operatorOpenId: String(object(event.operator).open_id ?? "") };
+  const credential = { token: typeof value.t === "string" ? value.t : "", operatorOpenId: String(object(event.operator).open_id ?? ""), ...(typeof value.route_revision === 'number' ? { routeRevision: value.route_revision } : {}) };
   const toast = (content: string, type = "error") => ({ toast: { type, content } });
   if (!credential.token || typeof value.message_id !== "string") return toast(issueDecisionFailureToast({ code: "token_invalid" }));
   if (!client) return toast("本次没有提交：卡片正在恢复，或这个决定已经处理。请稍后重试，或到网页端查看。", "info");
@@ -286,7 +286,7 @@ export async function handleTaskInteractionEvent(appId: string, raw: unknown): P
   const entry = pending.get(`${appId}:${String(context.open_message_id ?? "")}`);
   const value = object(action.value);
   const client = clients.get(appId);
-  const credential = { token: typeof value.t === "string" ? value.t : "", operatorOpenId: String(object(event.operator).open_id ?? "") };
+  const credential = { token: typeof value.t === "string" ? value.t : "", operatorOpenId: String(object(event.operator).open_id ?? ""), ...(typeof value.route_revision === 'number' ? { routeRevision: value.route_revision } : {}) };
   const toast = (content: string, type = "error") => ({ toast: { type, content } });
   if (!credential.token || typeof value.message_id !== "string") return toast("卡片已更新，请在最新卡片上回答");
   if (!client) return toast("请求已处理，或正在恢复，请稍后重试", "info");

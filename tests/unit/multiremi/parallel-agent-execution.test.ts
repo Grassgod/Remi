@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { afterEach, describe, expect, it } from "bun:test";
 import { createStore, db, resetMultiremiTestEnv } from "./helpers.js";
 import { daemonTaskClaimResponse } from "@multiremi/api/wire/tasks.js";
@@ -16,7 +17,7 @@ function fixture() {
   const leader = store.createAgent({ name: "Leader", provider: "claude" });
   const worker = store.createAgent({ name: "Worker", provider: "claude" });
   const qa = store.createAgent({ name: "QA", provider: "claude" });
-  const issue = store.createIssue({ title: "Concurrent delivery" });
+  const issue = createResponsibleTestIssue(store, { title: "Concurrent delivery" });
   const main = store.createTask({ agentId: leader.id, issueId: issue.id, prompt: "coordinate" });
   expect(store.claimTask(runtime.id)?.id).toBe(main.id);
   store.buildTaskSessionProjection(main.id);

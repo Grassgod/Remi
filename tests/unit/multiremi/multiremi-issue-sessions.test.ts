@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { issueMessagesPath, requestMessageBody, taskRequestPath, turnApiPath, sentTask, mutateExecutionFixture } from "./unified-test-paths.js";
 import { afterEach, describe, expect, it } from "bun:test";
 import { MultiremiStore } from "@multiremi/store.js";
@@ -11,7 +12,7 @@ afterEach(resetMultiremiTestEnv);
 describe("Issue sessions and per-agent projection lanes", () => {
   it("keeps multiple product sessions isolated under one issue", () => {
     const store = createStore();
-    const issue = store.createIssue({ title: "Multi-session issue", workspaceId: "local" });
+    const issue = createResponsibleTestIssue(store, { title: "Multi-session issue", workspaceId: "local" });
     const main = store.getOrCreateDefaultIssueSession(issue.id);
     const review = store.createIssueSession(issue.id, { title: "Review" });
 
@@ -27,7 +28,7 @@ describe("Issue sessions and per-agent projection lanes", () => {
   // #3/#9: destructive pre-S4 shadow-table fixture belongs to migration tests.
   it("reopens normalized sessions without losing canonical comments or turns",()=>{
     const store=createStore(),agent=store.createAgent({name:"Reopen",provider:"claude"});
-    const issue=store.createIssue({title:"Reopen"}),session=store.getOrCreateDefaultIssueSession(issue.id);
+    const issue=createResponsibleTestIssue(store, {title:"Reopen"}),session=store.getOrCreateDefaultIssueSession(issue.id);
     const comment=store.createIssueComment(issue.id,{body:"Canonical comment"});
     const task=store.createTask({agentId:agent.id,issueId:issue.id,prompt:"Canonical task"});
     const migrated=new MultiremiStore(db!);
@@ -39,7 +40,7 @@ describe("Issue sessions and per-agent projection lanes", () => {
 
   it("records comment corrections as append-only legacy Session events", () => {
     const store = createStore();
-    const issue = store.createIssue({ title: "Corrections", workspaceId: "local" });
+    const issue = createResponsibleTestIssue(store, { title: "Corrections", workspaceId: "local" });
     const session = store.getOrCreateDefaultIssueSession(issue.id);
     const comment = store.createIssueComment(issue.id, {
       issueSessionId: session.id,
@@ -70,7 +71,7 @@ describe("Issue sessions and per-agent projection lanes", () => {
     });
     const agentA = store.createAgent({ name: "Agent A", provider: "claude" });
     const agentB = store.createAgent({ name: "Agent B", provider: "claude" });
-    const issue = store.createIssue({ title: "Projection", workspaceId: "local" });
+    const issue = createResponsibleTestIssue(store, { title: "Projection", workspaceId: "local" });
     const session = store.getOrCreateDefaultIssueSession(issue.id);
 
     const agentAComment = store.createIssueComment(issue.id, {
@@ -152,7 +153,7 @@ describe("Issue sessions and per-agent projection lanes", () => {
 
   it("#3: running requests merge and the following round resumes the promoted provider",()=>{
     const store=createStore(),runtime=store.registerRuntime({name:"Merge runtime",provider:"claude"});
-    const agent=store.createAgent({name:"Merge",provider:"claude"}),issue=store.createIssue({title:"Merge"});
+    const agent=store.createAgent({name:"Merge",provider:"claude"}),issue=createResponsibleTestIssue(store, {title:"Merge"});
     const session=store.getOrCreateDefaultIssueSession(issue.id);
     const first=store.createSessionTask(session.id,{agentId:agent.id,prompt:"First"});
     expect(store.claimTask(runtime.id)?.id).toBe(first.id);store.buildTaskSessionProjection(first.id);store.startTask(first.id);
@@ -174,7 +175,7 @@ describe("Issue sessions and per-agent projection lanes", () => {
       workspaceId: "local",
     });
     const agent = store.createAgent({ name: "Frozen lane agent", provider: "claude" });
-    const issue = store.createIssue({ title: "Frozen lane", workspaceId: "local" });
+    const issue = createResponsibleTestIssue(store, { title: "Frozen lane", workspaceId: "local" });
     const session = store.getOrCreateDefaultIssueSession(issue.id);
     const created = store.createSessionTask(session.id, { agentId: agent.id, prompt: "Run once" });
     const claimed = store.claimTask(runtime.id)!;
@@ -207,7 +208,7 @@ describe("Issue sessions and per-agent projection lanes", () => {
       workspaceId: "local",
     });
     const agent = store.createAgent({ name: "Agent B", provider: "claude" });
-    const issue = store.createIssue({ title: "Stale lineage", workspaceId: "local" });
+    const issue = createResponsibleTestIssue(store, { title: "Stale lineage", workspaceId: "local" });
     const session = store.getOrCreateDefaultIssueSession(issue.id);
     store.createIssueComment(issue.id, { issueSessionId: session.id, body: "Canonical context" });
 
@@ -251,7 +252,7 @@ describe("Issue sessions and per-agent projection lanes", () => {
       workspaceId: "local",
     });
     const agent = store.createAgent({ name: "Context agent", provider: "codex" });
-    const issue = store.createIssue({ title: "Context retry", workspaceId: "local" });
+    const issue = createResponsibleTestIssue(store, { title: "Context retry", workspaceId: "local" });
     const session = store.getOrCreateDefaultIssueSession(issue.id);
 
     const seed = store.createSessionTask(session.id, { agentId: agent.id, prompt: "Seed provider state" });
@@ -322,7 +323,7 @@ describe("Issue sessions and per-agent projection lanes", () => {
   it("bounds and records a valid bootstrap projection for more than 300 Session events", () => {
     const store = createStore();
     const agent = store.createAgent({ name: "Long-history agent", provider: "claude" });
-    const issue = store.createIssue({ title: "Long history", workspaceId: "local" });
+    const issue = createResponsibleTestIssue(store, { title: "Long history", workspaceId: "local" });
     const session = store.getOrCreateDefaultIssueSession(issue.id);
     for (let index = 0; index < 320; index += 1) {
       store.appendSessionEvent(session.id, {
@@ -363,7 +364,7 @@ describe("Issue sessions and per-agent projection lanes", () => {
       workspaceId: "local",
     });
     const agent = store.createAgent({ name: "Cancelled agent", provider: "claude" });
-    const issue = store.createIssue({ title: "Cancel keeps lane", workspaceId: "local" });
+    const issue = createResponsibleTestIssue(store, { title: "Cancel keeps lane", workspaceId: "local" });
     const session = store.getOrCreateDefaultIssueSession(issue.id);
 
     const first = store.createSessionTask(session.id, { agentId: agent.id, prompt: "Warm the lane" });
@@ -413,7 +414,7 @@ describe("Issue sessions and per-agent projection lanes", () => {
       workspaceId: "local",
     });
     const agent = store.createAgent({ name: "Failing agent", provider: "claude" });
-    const issue = store.createIssue({ title: "Failure resets lane", workspaceId: "local" });
+    const issue = createResponsibleTestIssue(store, { title: "Failure resets lane", workspaceId: "local" });
     const session = store.getOrCreateDefaultIssueSession(issue.id);
 
     const first = store.createSessionTask(session.id, { agentId: agent.id, prompt: "Warm the lane" });
@@ -445,7 +446,7 @@ describe("Issue sessions and per-agent projection lanes", () => {
       workspaceId: "local",
     });
     const agent = store.createAgent({ name: "Switching agent", provider: "claude" });
-    const issue = store.createIssue({ title: "Provider switch", workspaceId: "local" });
+    const issue = createResponsibleTestIssue(store, { title: "Provider switch", workspaceId: "local" });
     const session = store.getOrCreateDefaultIssueSession(issue.id);
     const first = store.createSessionTask(session.id, { agentId: agent.id, prompt: "Claude turn" });
     expect(store.claimTask(runtime.id)?.id).toBe(first.id);
@@ -468,7 +469,7 @@ describe("Issue sessions and per-agent projection lanes", () => {
 
   it("publishes only explicit results across sibling sessions", () => {
     const store = createStore();
-    const issue = store.createIssue({ title: "Cross-session results", workspaceId: "local" });
+    const issue = createResponsibleTestIssue(store, { title: "Cross-session results", workspaceId: "local" });
     const main = store.getOrCreateDefaultIssueSession(issue.id);
     const implementation = store.createIssueSession(issue.id, { title: "Implementation" });
     store.createIssueComment(issue.id, {
@@ -490,7 +491,7 @@ describe("Issue sessions and per-agent projection lanes", () => {
   it("serves isolated Session timelines and snake-case UI contracts", async () => {
     const store = createStore();
     const app = createMultiremiApp({ store });
-    const issue = store.createIssue({ title: "Session API", workspaceId: "local" });
+    const issue = createResponsibleTestIssue(store, { title: "Session API", workspaceId: "local" });
     const main = store.getOrCreateDefaultIssueSession(issue.id);
     const review = store.createIssueSession(issue.id, { title: "Review" });
     store.createIssueComment(issue.id, { issueSessionId: main.id, body: "Main context" });
@@ -566,7 +567,7 @@ describe("Issue sessions and per-agent projection lanes", () => {
   it("roundtrips result kind and refs metadata through publish and list", async () => {
     const store = createStore();
     const app = createMultiremiApp({ store });
-    const issue = store.createIssue({ title: "Typed results", workspaceId: "local" });
+    const issue = createResponsibleTestIssue(store, { title: "Typed results", workspaceId: "local" });
     const main = store.getOrCreateDefaultIssueSession(issue.id);
 
     const published = await app.request(
@@ -618,7 +619,7 @@ describe("Issue sessions and per-agent projection lanes", () => {
     const store = createStore();
     const app = createMultiremiApp({ store, authToken: "root-secret" });
     const agent = store.createAgent({ name: "Reply agent", provider: "claude" });
-    const issue = store.createIssue({ title: "Reply linkage", workspaceId: "local" });
+    const issue = createResponsibleTestIssue(store, { title: "Reply linkage", workspaceId: "local" });
     const main = store.getOrCreateDefaultIssueSession(issue.id);
     const task = store.createSessionTask(main.id, { agentId: agent.id, prompt: "Reply in thread" });
     const spoofedTask = store.createSessionTask(main.id, { agentId: agent.id, prompt: "Different run" });
@@ -642,7 +643,7 @@ describe("Issue sessions and per-agent projection lanes", () => {
     const store = createStore();
     const app = createMultiremiApp({ store, authToken: "root-secret" });
     const agent = store.createAgent({ name: "Scoped agent", provider: "claude" });
-    const issue = store.createIssue({ title: "Session auth", workspaceId: "local" });
+    const issue = createResponsibleTestIssue(store, { title: "Session auth", workspaceId: "local" });
     const main = store.getOrCreateDefaultIssueSession(issue.id);
     const sibling = store.createIssueSession(issue.id, { title: "Sibling" });
     store.createIssueComment(issue.id, { issueSessionId: main.id, body: "Visible current context" });

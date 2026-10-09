@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { expect, it } from 'bun:test';
 import { pendingTurnBackendTests } from './pending-turn-test-backends.js';
 import { MultiremiStore } from '@multiremi/store.js';
@@ -5,7 +6,7 @@ pendingTurnBackendTests('MUL-506 provider input boundaries', fixture => {
     function setup(body = 'original instructions') {
         const f = fixture();
         const agent = f.store.createAgent({ name: 'Input owner', provider: 'codex' });
-        const issue = f.store.createIssue({ title: 'Attempt input', assigneeType: 'agent', assigneeId: agent.id });
+        const issue = f.store.createIssue({ title: 'Attempt input', assigneeType: 'agent', assigneeId: agent.id, responsibleMemberId: 'mem_local_local' });
         const session = f.store.getOrCreateDefaultIssueSession(issue.id);
         f.store.registerRuntime({ id: 'rt_input', daemonId: 'daemon_input', name: 'Input fixture', provider: 'codex', workspaceId: 'local' });
         const message = { session_id: session.id, sender: { type: 'member' as const, id: 'mem_local_local' }, to: { type: 'agent' as const, ref: agent.id }, message_kind: 'request' as const, wake_requested: 'now' as const, body_md: body };
@@ -74,7 +75,7 @@ pendingTurnBackendTests('MUL-506 provider input boundaries', fixture => {
         expect(f.bridge.rpc('turn.input', f.receipt(retried.current_attempt_id!, input), f.scope).ok).toBe(true);
     });
     it('already covered first-attempt wakes still retire without executing old work', () => {
-        const f = fixture(), agent = f.store.createAgent({ name: 'Old wake', provider: 'codex' }), issue = f.store.createIssue({ title: 'Old wake' });
+        const f = fixture(), agent = f.store.createAgent({ name: 'Old wake', provider: 'codex' }), issue = f.store.createIssue({ title: 'Old wake', responsibleMemberId: 'mem_local_local' });
         const session = f.store.getOrCreateDefaultIssueSession(issue.id);
         f.store.registerRuntime({ id: 'rt_old', daemonId: 'daemon_old', name: 'Old wake runtime', provider: 'codex', workspaceId: 'local' });
         const message = { session_id: session.id, sender: { type: 'member' as const, id: 'mem_local_local' }, to: { type: 'agent' as const, ref: agent.id }, message_kind: 'request' as const, wake_requested: 'now' as const, body_md: 'covered work' };
@@ -90,17 +91,22 @@ pendingTurnBackendTests('MUL-506 provider input boundaries', fixture => {
     });
     it('upgrades existing int4 counters and public decisions on two successive starts', () => {
         const f = setup();
-        const decision = f.store.sendMessage({ session_id: f.session.id, sender: { type: 'agent', id: f.agent.id }, source_turn_id: f.sent.turn_id!, to: { type: 'member', ref: 'mem_local_local' }, message_kind: 'decision', wake_requested: 'now', body_md: 'Approve?', options: [{ value: 'yes', label: 'Yes' }] });
-        f.db.run('UPDATE multiremi_conversation_log SET metadata=? WHERE id=?', ['{}', decision.message.id]);
+        // Seed the real old public row shape, with no Q metadata or native wait.
+        const decision = f.store.appendConversationLog({ sessionId: f.session.id, kind: 'message', authorType: 'agent', authorId: f.agent.id, taskId: f.sent.turn_id!, bodyMd: 'Approve?', metadata: {},
+          messageHeader: { sender_type: 'agent', sender_id: f.agent.id, to_type: 'member', to_ref: 'mem_local_local', to_agent_id: null, to_member_id: 'mem_local_local', message_kind: 'decision', wake_requested: 'now', wake_applied: 'now', wake_reason: 'agent_dispatch', options: [{ value: 'yes', label: 'Yes' }], reply_to_id: null, dedupe_key: null, card_token_hash: null, card_token_recipient: null, card_token_consumed_at: null } });
         f.db.run('DELETE FROM multiremi_schema_migrations WHERE id IN (?,?)', ['20261005_attempt_input_receipts', '20261005_attempt_counters_bigint']);
         if (f.db.dialect === 'postgres')
             f.db.exec('ALTER TABLE multiremi_turn_attempts ALTER COLUMN event_count TYPE INTEGER, ALTER COLUMN tool_call_count TYPE INTEGER');
         new MultiremiStore(f.db);
         new MultiremiStore(f.db);
-        expect(f.store.getMessage(decision.message.id)?.metadata.decision_record).toEqual({ status: 'pending' });
+        expect(f.store.getMessage(decision.id)?.metadata.decision_record).toEqual({ status: 'pending' });
+        // The old status-only choice stays an ordinary choice after upgrade.
+        expect(f.store.getQuestion(decision.id)).toBeNull();
         if (f.db.dialect === 'postgres')
             expect(f.db.query("SELECT data_type FROM information_schema.columns WHERE table_name='multiremi_turn_attempts' AND column_name IN ('event_count','tool_call_count') ORDER BY column_name").all()).toEqual([{ data_type: 'bigint' }, { data_type: 'bigint' }]);
-        f.store.answerMessageDecision(decision.message.id, { sender: { type: 'member', id: 'mem_local_local' }, body_md: 'Yes' });
+        const native=f.bridge.rpc('turn.decision',{turn_id:f.sent.turn_id,attempt_id:f.attempt.id,wait_id:'counter-migration-native-wait',dedupe_key:'counter-native',body_md:'Current approval?',options:[],metadata:{kind:'question',questions:[{question:'Current approval?'}]}},f.scope);
+        expect(native.ok).toBe(true);const nativeId=String(native.message_id);
+        f.store.answerMessageDecision(nativeId, { sender: { type: 'member', id: 'mem_local_local' }, expected_route_revision:f.store.getQuestion(nativeId)!.route_revision, body_md: 'Yes', response:{answers:{'Current approval?':'Yes'}} });
         const offer = f.bridge.offerInput(f.store.getTaskWithAgent(f.attempt.id)!);
         f.store.recordSessionAgentRangeRead(f.session.id, f.agent.id, { seq: 1, offset: 0 }, { seq: offer.input_to_seq + 1, offset: 0 }, f.attempt.id);
         const fields = { trace: { head: 0, event_count: Number.MAX_SAFE_INTEGER, tool_call_count: Number.MAX_SAFE_INTEGER, closed: true as const, type_histogram: [] }, final_reply_md: '', model: { provider: 'codex', model: 'fixture' } };

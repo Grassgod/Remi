@@ -318,7 +318,14 @@ export function denyCurrentUserCommentAccess(
   const comment = store.getIssueComment(commentId);
   if (!comment) return null;
   const issue = store.getIssue(comment.issueId);
-  return issue ? denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId) : null;
+  const sourceWorkspaceId = store.getIssueCommentSourceWorkspaceId(commentId);
+  if (!issue || !sourceWorkspaceId) return c.json({ error: "comment not found" }, 404);
+  // Source conversations remain readable in their original workspace after
+  // movement. They cannot be edited through a destination Issue reference.
+  if (!['GET', 'HEAD'].includes(c.req.method) && sourceWorkspaceId !== issue.workspaceId) {
+    return c.json({ error: "historical source comment is read-only" }, 404);
+  }
+  return denyCurrentUserWorkspaceAccess(c, store, sourceWorkspaceId);
 }
 
 export function currentJwtUserId(c: Context): string | null {
@@ -759,7 +766,8 @@ export function denyAttachmentCreationAccess(
   const commentId = cleanString(input.commentId ?? input.comment_id);
   if (commentId) {
     const comment = store.getIssueComment(commentId);
-    if (!comment || store.getIssue(comment.issueId)?.workspaceId !== workspaceId) {
+    const sourceWorkspaceId = comment ? store.getIssueCommentSourceWorkspaceId(commentId) : null;
+    if (!comment || sourceWorkspaceId !== workspaceId || store.getIssue(comment.issueId)?.workspaceId !== workspaceId) {
       return c.json({ error: "comment not found" }, 404);
     }
   }

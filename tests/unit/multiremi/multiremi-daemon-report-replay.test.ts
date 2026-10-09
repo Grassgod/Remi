@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { readOfferedTurnInput, turnCompletion, completionResponse } from "../../fixtures/turn-report.js";
 // MUL-74: outbox delivery is at-least-once, so every daemon report endpoint
 // must tolerate replays. Terminal replays must not re-trigger side effects
@@ -18,7 +19,7 @@ describe("daemon report replay idempotency", () => {
     const app = createMultiremiApp({ store, authToken: "master-secret" });
     const runtime = store.registerRuntime({ id: "rt_replay", daemonId: "fixture-reports", name: "replay", provider: "claude", workspaceId: "local" });
     const agent = store.createAgent({ name: "Replay Bot", provider: "claude", runtimeId: runtime.id });
-    const issue = store.createIssue({ title: "Replay", workspaceId: "local" });
+    const issue = createResponsibleTestIssue(store, { title: "Replay", workspaceId: "local" });
     const task = store.createTask({ agentId: agent.id, issueId: issue.id, workspaceId: "local", prompt: "x" });
     expect(store.claimTask(runtime.id)?.id).toBe(task.id);
     readOfferedTurnInput(store, task.id);

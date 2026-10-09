@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { describe, expect, it } from "bun:test";
 import { buildSessionProjection } from "@multiremi/store/session-projection.js";
 import { conversationLogProjectionEvents } from "@multiremi/store/conversation-log-projection.js";
@@ -11,7 +12,7 @@ describe("MUL-427: log-backed wakeups and projections", () => {
         const enqueued: string[] = [];
         const unsubscribe = store.onTaskEnqueued((task) => enqueued.push(task.id));
         try {
-          const issue = store.createIssue({ title: "Only a head", workspaceId: "local" });
+          const issue = createResponsibleTestIssue(store, { title: "Only a head", workspaceId: "local" });
           const session = store.getOrCreateDefaultIssueSession(issue.id);
           const lane = store.getOrCreateSessionAgentLane(session.id, agent.id);
           store.updateIssue(issue.id, { title: "Head changed", description: "Still no event" });
@@ -40,7 +41,7 @@ describe("MUL-427: log-backed wakeups and projections", () => {
     it.skipIf(backend === "pg" && !pgAdminUrl)(`${backend}: edited messages and tombstones are read from the canonical range`, async () => {
       await withStore(backend, (store, db) => {
         const agent=store.createAgent({name:"Canonical reader",provider:"codex"});
-        const issue=store.createIssue({title:"Current input"});
+        const issue=createResponsibleTestIssue(store, {title:"Current input"});
         const session=store.getOrCreateDefaultIssueSession(issue.id);
         const edited=store.createIssueComment(issue.id,{body:"Original"});
         store.updateIssueComment(edited.id,{body:"Current body"});

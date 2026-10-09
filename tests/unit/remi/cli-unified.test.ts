@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CommandRegistry } from "../../../apps/remi/cli/core/index.js";
 import { RETIRED_CLI_COMMANDS } from "../../../apps/remi/cli/core/retired-commands.js";
+import { RETIRED_CLI_ROUTES } from "../../../packages/server/src/api/retired-cli-routes.js";
 import { unifiedCommandSpecs, wakeExplanation } from "../../../apps/remi/cli/commands/unified.js";
 import { collaborationCommandSpecs } from "../../../apps/remi/cli/commands/collaboration.js";
 import { operationsCommandSpecs } from "../../../apps/remi/cli/commands/operations.js";
@@ -205,6 +206,17 @@ describe("unified CLI wire contracts", () => {
 });
 
 describe("retired commands never negotiate capabilities or touch the network", () => {
+  it("directs new responsibility questions to native AUQ rather than another decision message", async () => {
+    setup();
+    const guidance = "原生 AskUserQuestion；先用 remi issue responsibility <issue> 查看责任归属";
+    expect(RETIRED_CLI_COMMANDS["issue decision request"]).toBe(guidance);
+    expect(RETIRED_CLI_ROUTES["POST /api/issues/:id/decisions"]).toBe(guidance);
+    for (const route of ["POST /api/tasks/:id/human-requests/:requestId/respond", "POST /api/multiremi/tasks/:id/human-requests/:requestId/respond"]) {
+      expect(RETIRED_CLI_ROUTES[route]).toBe(RETIRED_CLI_COMMANDS["task request respond"]!);
+    }
+    await expect(dispatch(["issue", "decision", "request", "issue_1"])).rejects.toThrow(guidance);
+    expect(requests).toEqual([]);
+  });
   for (const [path, replacement] of Object.entries(RETIRED_CLI_COMMANDS)) it(path, async () => {
     setup();
     const args = [...path.split(" "), "legacy_id", "--attachment", "/missing", "--old-option"];

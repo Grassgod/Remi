@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { requestMessageBody, taskRequestPath, issueMessagesPath, turnApiPath } from "./unified-test-paths.js";
 import { afterEach, describe, expect, it } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
@@ -12,7 +13,7 @@ function sideSessionFixture(inheritMode: "snapshot" | "follow" = "snapshot") {
   const leader = store.createAgent({ name: "Leader", provider: "claude" });
   const teammate = store.createAgent({ name: "Teammate", provider: "claude" });
   const squad = store.createSquad({ name: "Delivery", leaderId: leader.id, memberIds: [teammate.id] });
-  const issue = store.createIssue({ title: "Side conversation", assigneeType: "squad", assigneeId: squad.id });
+  const issue = createResponsibleTestIssue(store, { title: "Side conversation", assigneeType: "squad", assigneeId: squad.id });
   const main = store.getOrCreateDefaultIssueSession(issue.id);
   const side = store.createIssueSession(issue.id, { title: "Side", parentSessionId: main.id, inheritMode });
   const sideTask = store.createTask({

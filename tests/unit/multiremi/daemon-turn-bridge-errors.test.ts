@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { afterAll, describe, expect, it, spyOn } from "bun:test";
 import { DAEMON_MIN_CLI_VERSION, daemonFrameCategory } from "@multiremi/contracts/daemon-protocol.js";
 import { DaemonProtocolLayer } from "@multiremi/api/daemon-protocol/index.js";
@@ -28,7 +29,7 @@ async function openTurn(backend: (typeof backends)[number]) {
   }, { accessToken: null, masterToken: true });
   const close = async () => { session.handleSocketClose(); layer.stop(); await opened.close(); };
   try {
-    const issue = store.createIssue({ title: "Turn rejection", workspaceId: "local" });
+    const issue = createResponsibleTestIssue(store, { title: "Turn rejection", workspaceId: "local" });
     const task = store.createTask({ agentId: agent.id, issueId: issue.id, workspaceId: "local", prompt: "Short input" });
     expect(store.claimTask(runtime.id)?.id).toBe(task.id);
     store.startTask(task.id);
@@ -90,12 +91,9 @@ for (const backend of backends) {
           .toMatchObject({ ok: false, code: "input_gap", retryable: false });
         expect(await report("turn.decision.get", { ...input, message_id: "missing" }))
           .toMatchObject({ ok: false, code: "invalid_report", retryable: false });
-        const members = spyOn(store, "listWorkspaceMembers").mockReturnValue([]);
-        try {
-          expect(await report("turn.decision", { ...input, body_md: "Pick", dedupe_key: "no-owner",
-            options: [{ label: "A", value: "a" }], metadata: {} }))
-            .toMatchObject({ ok: false, code: "invalid_report", retryable: false });
-        } finally { members.mockRestore(); }
+        expect(await report("turn.decision", { ...input, body_md: "Pick", dedupe_key: "invalid-options",
+          options: 'not-an-options-array', metadata: {} }))
+          .toMatchObject({ ok: false, code: "invalid_report", retryable: false });
         store.cancelTask(task.id);
         expect(await report("turn.complete", completion))
           .toMatchObject({ ok: false, code: "invalid_report", retryable: false });

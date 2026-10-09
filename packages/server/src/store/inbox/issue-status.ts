@@ -1,6 +1,7 @@
 import type { CommitEventQueue, StoreContext } from '../context.js';
 import { afterCommit } from '../db/postgres.js';
 import { nowIso } from '@multiremi/ids.js';
+import { questionMetadataText } from './question-indexes.js';
 
 /** Only turns and unanswered owner decisions participate; attempts are deliberately absent. */
 export function deriveIssueStatusWithinTransaction(ctx:StoreContext,issueId:string,events:CommitEventQueue): {changed:boolean;previousStatus:string|null} {
@@ -8,10 +9,10 @@ export function deriveIssueStatusWithinTransaction(ctx:StoreContext,issueId:stri
   if(!ctx.db.run('UPDATE multiremi_issues SET id=id WHERE id=?',[issueId]).changes)return {changed:false,previousStatus:null};
   const issue=ctx.issues().getIssue(issueId);
   if(!issue||['done','cancelled'].includes(issue.status))return {changed:false,previousStatus:issue?.status??null};
-  const owner=issue.assigneeType&&issue.assigneeId?ctx.resolveRunnableAgentForAssignee(issue.assigneeType,issue.assigneeId):null;
+  const owner=ctx.resolveIssueResponsibility(issueId).executionOwner;
   const turns=ctx.db.query(`SELECT t.*,m.sender_type AS trigger_sender,m.wake_reason AS trigger_reason,m.message_kind AS trigger_kind,
       (SELECT COUNT(*) FROM multiremi_conversation_log merged WHERE merged.kind='message' AND merged.deleted_at IS NULL
-        AND ${ctx.db.dialect==='postgres'?"merged.metadata::jsonb->>'delivery_turn_id'":"json_extract(merged.metadata,'$.delivery_turn_id')"}=t.id
+        AND ${questionMetadataText(ctx.db, 'merged.metadata', 'delivery_turn_id')}=t.id
         AND merged.wake_reason IN ('human_sender','agent_dispatch')) AS merged_work_triggers
     FROM multiremi_turns t LEFT JOIN multiremi_conversation_log m ON m.id=t.trigger_message_id
     WHERE t.issue_id=? AND t.session_id NOT LIKE 'chat_%' ORDER BY t.created_at DESC,t.seq DESC,t.id DESC`).all(issueId);
@@ -33,7 +34,7 @@ export function deriveIssueStatusWithinTransaction(ctx:StoreContext,issueId:stri
       : turns.find(t=>t.agent_id===owner?.id);
     if(issue.issueKind==='intake')last=latest??last;
     status=latest?.status==='completed'?'in_review':latest?.status==='failed'?'blocked':latest?.status==='cancelled'?'todo':null;
-    if(issue.issueKind==='intake'&&latest?.status==='completed'&&ctx.issues().listGeneratedIssues(issueId).length)status='done';
+    // Turn/intake completion is delivery evidence, never the designated reviewer's acceptance.
   }
   if(!status)return {changed:false,previousStatus:issue.status};
   status=ctx.issues().holdParentStatusForOpenChildren(issueId,status,{exempt:active.some(t=>t.status==='awaiting_human')||!!decision,deferredEvents:events});

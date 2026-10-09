@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from "../unit/multiremi/helpers.js";
 /**
  * MUL-336 / MUL-478 drill — a REAL primary -> fallback switch on the execution
  * engine, in an isolated environment with controllable availability errors.
@@ -219,7 +220,7 @@ async function runDrill(options: {
       : {}),
   });
   const leader = options.delegated ? store.createAgent({ name: "Drill leader", provider, model: FALLBACK_MODEL, thinkingLevel: "high" }) : null;
-  const issue = store.createIssue({ title: "Gateway drill", workspaceId: "local", assigneeType: "agent", assigneeId: leader?.id ?? agent.id });
+  const issue = createResponsibleTestIssue(store, { title: "Gateway drill", workspaceId: "local", assigneeType: "agent", assigneeId: leader?.id ?? agent.id });
   const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "Do the work",
     ...(leader ? { delegationId: "dlg_drill", delegatedByAgentId: leader.id } : {}) });
   let issueStateAtPrimaryFailure: string | undefined;

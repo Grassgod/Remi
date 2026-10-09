@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue, replayHistoricalTestChildDone } from './helpers.js';
 import { mutateExecutionFixture } from "./unified-test-paths.js";
 import type { Database } from "bun:sqlite";
 import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
@@ -82,7 +83,7 @@ async function withPostgres(run: (db: PostgresSyncDatabase, url: string) => Prom
 
 async function verifyLegacyFirstWrites(db: SqlDatabase, backend: "sqlite" | "pg", target: string): Promise<void> {
   const store = new MultiremiStore(db);
-  const issue = store.createIssue({ title: "Legacy issue", workspaceId: "local" });
+  const issue = createResponsibleTestIssue(store, { title: "Legacy issue", workspaceId: "local" });
   const direct = store.getOrCreateDefaultIssueSession(issue.id);
   const renamed = store.createIssueSession(issue.id, { title: "Other session" });
   const concurrent = store.createIssueSession(issue.id, { title: "Concurrent session" });
@@ -208,7 +209,7 @@ async function verifyCaughtLocalReplyFailure(db: SqlDatabase, nested: boolean): 
 
 function verifyLegacyIssueUpdateQueueIsUnused(db: SqlDatabase): void {
   const store = new MultiremiStore(db);
-  const issue = store.createIssue({ title: "No legacy update queue", workspaceId: "local" });
+  const issue = createResponsibleTestIssue(store, { title: "No legacy update queue", workspaceId: "local" });
   store.queueAgentIssueUpdate = () => {
     throw new Error("Legacy Issue update queue must not be called");
   };
@@ -221,7 +222,7 @@ function verifyLegacyIssueUpdateQueueIsUnused(db: SqlDatabase): void {
 
 function verifyQueueBeforeFlush(db: SqlDatabase): void {
   const store = new MultiremiStore(db);
-  const issue = store.createIssue({ title: "Queue before flush", workspaceId: "local" });
+  const issue = createResponsibleTestIssue(store, { title: "Queue before flush", workspaceId: "local" });
   const agent = store.createAgent({ name: "Flush recipient", provider: "codex" });
   const chat = store.createChatSession({ agentId: agent.id });
   bindFeishuTopicFixture(store, db, chat.id, issue.id);
@@ -244,8 +245,9 @@ function verifyQueueBeforeFlush(db: SqlDatabase): void {
 }
 
 /**
- * Senior ruling cmt_96e1yqxgifms §2: the workspace lookup behind the two
- * best-effort broadcasts is a plain read now, with no savepoint around it. On
+ * Senior ruling cmt_96e1yqxgifms §2: the comment broadcast's workspace lookup
+ * is a plain read, with no savepoint around it. Activity publication reuses the
+ * mandatory origin read and survives a failing realtime listener. On
  * PostgreSQL that means a *real* SQL error poisons the caller's transaction and
  * the write must fail (see the outer-transaction case below); what still has to
  * be survived is the failure the database classifies as non-aborting —
@@ -255,9 +257,21 @@ function verifyQueueBeforeFlush(db: SqlDatabase): void {
  */
 function verifyBestEffortWorkspaceLookups(db: SqlDatabase, backend: "sqlite" | "pg"): void {
   const store = new MultiremiStore(db);
-  const issue = store.createIssue({ title: "Best effort lookups", workspaceId: "local" });
+  const issue = createResponsibleTestIssue(store, { title: "Best effort lookups", workspaceId: "local" });
   const session = store.getOrCreateDefaultIssueSession(issue.id);
   const context = (store as unknown as { ctx: { issueWorkspaceId: (id: string) => string | null } }).ctx;
+  const originalLookup = context.issueWorkspaceId.bind(context);
+  let lookups = 0;
+  const publicationAttempts: Array<{ workspaceId: string; inTransaction: boolean }> = [];
+  const healthyDeliveries: string[] = [];
+  const stopFailingListener = store.onWorkspaceEvent((event) => {
+    if (event.type !== "activity:created") return;
+    publicationAttempts.push({ workspaceId: event.workspaceId, inTransaction: db.inTransaction === true });
+    throw new Error("realtime listener unavailable");
+  });
+  const stopHealthyListener = store.onWorkspaceEvent((event) => {
+    if (event.type === "activity:created") healthyDeliveries.push(event.workspaceId);
+  });
   const previousReplyLimit = process.env.MULTIREMI_PG_REPLY_MAX_BYTES;
   const previousEnforce = process.env.MULTIREMI_PG_REPLY_ENFORCE;
   const replyExceptions = DB_REPLY_TRANSITION_EXCEPTIONS as Set<string>;
@@ -266,6 +280,7 @@ function verifyBestEffortWorkspaceLookups(db: SqlDatabase, backend: "sqlite" | "
     process.env.MULTIREMI_PG_REPLY_ENFORCE = "1";
     resetDbReplyLimitForTest();
     context.issueWorkspaceId = (id) => {
+      if (++lookups === 1) return originalLookup(id);
       // The limit is narrowed for this one statement and restored in `finally`,
       // so only the lookup overflows the bridge — the rest of the transaction
       // keeps the default and the failure stays a single reply-level one.
@@ -280,7 +295,8 @@ function verifyBestEffortWorkspaceLookups(db: SqlDatabase, backend: "sqlite" | "
       }
     };
   } else {
-    context.issueWorkspaceId = (id) => db.query("SELECT missing_workspace_column FROM multiremi_issues WHERE id = ?").get(id);
+    context.issueWorkspaceId = (id) => ++lookups === 1 ? originalLookup(id)
+      : db.query("SELECT missing_workspace_column FROM multiremi_issues WHERE id = ?").get(id);
   }
   const warnings: string[] = [];
   const originalWarn = console.warn;
@@ -299,10 +315,45 @@ function verifyBestEffortWorkspaceLookups(db: SqlDatabase, backend: "sqlite" | "
     }
     expect(store.getIssueComment(comment.id)?.body).toBe("system survives query error");
     expect(store.getConversationLogEntryById(comment.id)?.body_md).toBe("system survives query error");
-    expect(warnings.some((line) => line.includes("activity:created broadcast skipped"))).toBe(true);
+    expect(lookups).toBe(2);
+    expect(publicationAttempts).toEqual([{ workspaceId: issue.workspaceId, inTransaction: false }]);
+    expect(healthyDeliveries).toEqual([issue.workspaceId]);
+    expect(db.query("SELECT workspace_id FROM multiremi_issue_activity WHERE issue_id = ? AND type = 'comment_created'").all(issue.id))
+      .toEqual([{ workspace_id: issue.workspaceId }]);
     expect(warnings.some((line) => line.includes("comment:created broadcast skipped"))).toBe(true);
   } finally {
     console.warn = originalWarn;
+    context.issueWorkspaceId = originalLookup;
+    stopFailingListener();
+    stopHealthyListener();
+  }
+}
+
+function verifyMandatoryActivityOriginFailure(db: SqlDatabase): void {
+  const store = new MultiremiStore(db);
+  const issue = createResponsibleTestIssue(store, { title: "Mandatory activity origin", workspaceId: "local" });
+  const session = store.getOrCreateDefaultIssueSession(issue.id);
+  const context = (store as unknown as { ctx: { issueWorkspaceId: (id: string) => string | null } }).ctx;
+  const originalLookup = context.issueWorkspaceId;
+  const emitted: string[] = [];
+  const stop = store.onWorkspaceEvent((event) => emitted.push(event.type));
+  let failedQueries = 0;
+  context.issueWorkspaceId = (id) => {
+    failedQueries += 1;
+    return db.query("SELECT missing_workspace_column FROM multiremi_issues WHERE id = ?").get(id);
+  };
+  try {
+    expect(() => store.createTaskFailureSystemComment(issue.id, session.id, "tsk_origin_failure", "must roll back"))
+      .toThrow(/missing_workspace_column/);
+    expect(failedQueries).toBe(1);
+    expect(db.inTransaction).toBe(false);
+    expect(db.query("SELECT id FROM multiremi_issue_comments WHERE issue_id = ?").all(issue.id)).toEqual([]);
+    expect(db.query("SELECT id FROM multiremi_conversation_log WHERE session_id = ? AND id NOT LIKE 'head_%'").all(session.id)).toEqual([]);
+    expect(db.query("SELECT id FROM multiremi_issue_activity WHERE issue_id = ? AND type = 'comment_created'").all(issue.id)).toEqual([]);
+    expect(emitted).toEqual([]);
+  } finally {
+    context.issueWorkspaceId = originalLookup;
+    stop();
   }
 }
 
@@ -319,7 +370,7 @@ function rejectWrite(db: SqlDatabase, backend: "sqlite" | "pg", table: string, o
 
 function verifySystemCommentRollback(db: SqlDatabase, backend: "sqlite" | "pg"): void {
   const store = new MultiremiStore(db);
-  const issue = store.createIssue({ title: "System rollback", workspaceId: "local" });
+  const issue = createResponsibleTestIssue(store, { title: "System rollback", workspaceId: "local" });
   const session = store.getOrCreateDefaultIssueSession(issue.id);
   rejectWrite(db, backend, "multiremi_conversation_log", "INSERT", "NEW.kind = 'message' AND NEW.sender_type = 'platform' AND (NEW.body_md = 'blocked' OR NEW.body_md LIKE '%Child%')");
   expect(() => store.createTaskFailureSystemComment(issue.id, session.id, "tsk_failure", "blocked"))
@@ -332,7 +383,7 @@ function verifySystemCommentRollback(db: SqlDatabase, backend: "sqlite" | "pg"):
 
   const agent = store.createAgent({ name: "Parent assignee", provider: "codex", workspaceId: "local" });
   store.assignIssue(issue.id, { assigneeType: "agent", assigneeId: agent.id });
-  const child = store.createIssue({ title: "Child", parentIssueId: issue.id, workspaceId: "local" });
+  const child = createResponsibleTestIssue(store, { title: "Child", parentIssueId: issue.id, workspaceId: "local" });
   const beforeTasks = Number((db.query("SELECT COUNT(*) AS n FROM multiremi_turn_execution_records WHERE issue_id = ?")
     .get(issue.id) as { n: number | string }).n);
   const beforeEvents = store.listSessionEvents(session.id).length;
@@ -344,8 +395,9 @@ function verifySystemCommentRollback(db: SqlDatabase, backend: "sqlite" | "pg"):
   const beforeActivity = Number((db.query("SELECT COUNT(*) AS n FROM multiremi_issue_activity WHERE issue_id = ?")
     .get(issue.id) as { n: number | string }).n);
   const beforeStatus = store.getIssue(issue.id)?.status;
-  // ADR 0012: state, system comment and pending turn roll back together.
-  expect(() => store.updateIssue(child.id, { status: "done" })).toThrow("write rejected");
+  // ADR 0012: consuming a persisted historical terminal fact, its status,
+  // system notification and pending turn roll back together.
+  expect(() => replayHistoricalTestChildDone(store,child.id)).toThrow("write rejected");
   expect(store.getIssue(child.id)?.status).toBe(child.status);
   expect(store.listIssueComments(issue.id)).toEqual(beforeComments);
   expect(store.listSessionEvents(session.id)).toHaveLength(beforeEvents);
@@ -360,7 +412,7 @@ function verifySystemCommentRollback(db: SqlDatabase, backend: "sqlite" | "pg"):
 
 function verifyHeadRollback(db: SqlDatabase, backend: "sqlite" | "pg", rejectedIndex: 0 | 1): void {
   const store = new MultiremiStore(db);
-  const issue = store.createIssue({ title: "Old title", workspaceId: "local" });
+  const issue = createResponsibleTestIssue(store, { title: "Old title", workspaceId: "local" });
   const first = store.getOrCreateDefaultIssueSession(issue.id);
   const second = store.createIssueSession(issue.id, { title: "Second" });
   const before = [first, second].map((session) => store.getConversationLogEntry(session.id, 0));
@@ -376,7 +428,7 @@ function verifyFinalReplyReference(db: SqlDatabase, backend: "sqlite" | "pg"): v
   const store = new MultiremiStore(db);
   const runtime = store.registerRuntime({ name: "reply runtime", provider: "claude", workspaceId: "local" });
   const agent = store.createAgent({ name: "Reply agent", provider: "claude", runtimeId: runtime.id, workspaceId: "local" });
-  const issue = store.createIssue({ title: "Reply reference", workspaceId: "local" });
+  const issue = createResponsibleTestIssue(store, { title: "Reply reference", workspaceId: "local" });
   const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "reply", workspaceId: "local" });
   expect(store.claimTask(runtime.id)?.id).toBe(task.id);
   store.startTask(task.id);
@@ -402,7 +454,7 @@ function startLeaderRound(store: MultiremiStore, runtimeId: string) {
   const leader = store.createAgent({ name: "Reply leader", provider: "codex", workspaceId: "local" });
   const teammate = store.createAgent({ name: "Reply teammate", provider: "codex", workspaceId: "local" });
   const squad = store.createSquad({ name: "Reply squad", leaderId: leader.id, memberIds: [teammate.id], workspaceId: "local" });
-  const issue = store.createIssue({ title: "Reply commit", workspaceId: "local", assigneeType: "squad", assigneeId: squad.id });
+  const issue = createResponsibleTestIssue(store, { title: "Reply commit", workspaceId: "local", assigneeType: "squad", assigneeId: squad.id });
   const session = store.getOrCreateDefaultIssueSession(issue.id);
   const task = store.createSessionTask(session.id, { agentId: leader.id, prompt: "Lead the round" });
   expect(store.claimTask(runtime.id)?.id).toBe(task.id);
@@ -435,7 +487,7 @@ function verifyReplyCommitsWithFinalEntry(db: SqlDatabase, backend: "sqlite" | "
   const store = new MultiremiStore(db);
   const runtime = store.registerRuntime({ id: "rt_reply_final_entry", name: "Reply runtime", provider: "codex", workspaceId: "local" });
   const agent = store.createAgent({ name: "Reply author", provider: "codex", workspaceId: "local" });
-  const issue = store.createIssue({ title: "Final entry", workspaceId: "local" });
+  const issue = createResponsibleTestIssue(store, { title: "Final entry", workspaceId: "local" });
   const session = store.getOrCreateDefaultIssueSession(issue.id);
   const completeRound = (output: string) => {
     const task = store.createSessionTask(session.id, { agentId: agent.id, prompt: "Answer" });
@@ -540,7 +592,7 @@ function verifyPendingDeliveryMetadata(db: SqlDatabase): void {
 function verifySteerTarget(db: SqlDatabase): void {
   const store = new MultiremiStore(db);
   const agent = store.createAgent({ name: "Steer agent", provider: "codex", workspaceId: "local" });
-  const issue = store.createIssue({ title: "Steer target", workspaceId: "local" });
+  const issue = createResponsibleTestIssue(store, { title: "Steer target", workspaceId: "local" });
   const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "work", workspaceId: "local" });
   store.createTaskSteerMessage({ taskId: task.id, kind: "steer", content: "change" });
   const turn = store.findTurnEntry(task.id)!;
@@ -772,11 +824,14 @@ describe("conversation log multi-process allocation (MUL-405)", () => {
   it.skipIf(!pgAdminUrl)("Postgres: a real workspace SQL error inside an outer transaction fails the write", async () => {
     await withPostgres(async (db) => {
       const store = new MultiremiStore(db);
-      const issue = store.createIssue({ title: "Outer transaction lookup", workspaceId: "local" });
+      const issue = createResponsibleTestIssue(store, { title: "Outer transaction lookup", workspaceId: "local" });
       const session = store.getOrCreateDefaultIssueSession(issue.id);
       const context = (store as unknown as { ctx: { issueWorkspaceId: (id: string) => string | null } }).ctx;
+      const originalLookup = context.issueWorkspaceId.bind(context);
+      let lookups = 0;
       let failedQueries = 0;
       context.issueWorkspaceId = (id) => {
+        if (++lookups === 1) return originalLookup(id);
         failedQueries += 1;
         return db.query("SELECT missing_workspace_column FROM multiremi_issues WHERE id = ?").get(id);
       };
@@ -800,6 +855,12 @@ describe("conversation log multi-process allocation (MUL-405)", () => {
       // the one that must not survive the rollback.
       expect(db.query("SELECT id FROM multiremi_issue_activity WHERE issue_id = ? AND type = 'comment_created'").all(issue.id)).toEqual([]);
     });
+  });
+  it("SQLite: a mandatory activity origin SQL error rolls back the entire system comment", async () => {
+    await withSqlite(async (db) => verifyMandatoryActivityOriginFailure(db));
+  });
+  it.skipIf(!pgAdminUrl)("Postgres: a mandatory activity origin SQL error rolls back the entire system comment", async () => {
+    await withPostgres(async (db) => verifyMandatoryActivityOriginFailure(db));
   });
   it.skipIf(!pgAdminUrl)("Postgres: a worker reply exceeding its shared buffer still commits", async () => {
     await withPostgres(async (db, url) => {
@@ -907,7 +968,7 @@ describe("conversation log multi-process allocation (MUL-405)", () => {
   it("SQLite: four processes append without duplicate or missing seq", async () => {
     await withSqlite(async (db, path) => {
       const store = new MultiremiStore(db);
-      const session = store.getOrCreateDefaultIssueSession(store.createIssue({title:"Concurrent",workspaceId:"local"}).id);
+      const session = store.getOrCreateDefaultIssueSession(createResponsibleTestIssue(store, {title:"Concurrent",workspaceId:"local"}).id);
       await runFour("sqlite", path, "append", session.id);
       assertContiguous(db, session.id);
     });
@@ -943,7 +1004,7 @@ describe("conversation log multi-process allocation (MUL-405)", () => {
   it.skipIf(!pgAdminUrl)("Postgres: four processes append without duplicate or missing seq", async () => {
     await withPostgres(async (db, url) => {
       const store = new MultiremiStore(db);
-      const session = store.getOrCreateDefaultIssueSession(store.createIssue({title:"Concurrent",workspaceId:"local"}).id);
+      const session = store.getOrCreateDefaultIssueSession(createResponsibleTestIssue(store, {title:"Concurrent",workspaceId:"local"}).id);
       await runFour("pg", url, "append", session.id);
       assertContiguous(db, session.id);
     });
@@ -951,7 +1012,7 @@ describe("conversation log multi-process allocation (MUL-405)", () => {
   it.skipIf(!pgAdminUrl)("Postgres: rolls back a comment and its mirrored log row together", async () => {
     await withPostgres(async (db) => {
       const store = new MultiremiStore(db);
-      const issue = store.createIssue({ title: "PG comment rollback", workspaceId: "local" });
+      const issue = createResponsibleTestIssue(store, { title: "PG comment rollback", workspaceId: "local" });
       const session = store.getOrCreateDefaultIssueSession(issue.id);
       let commentId = "";
       expect(() => db.transaction(() => {

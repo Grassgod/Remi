@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { AutopilotTriggerSchema, AutopilotRunSchema, EMPTY_AUTOPILOT_TRIGGER, EMPTY_AUTOPILOT_RUN } from "./autopilots";
+import { AutopilotSchema, AutopilotTriggerSchema, AutopilotRunSchema, EMPTY_AUTOPILOT, EMPTY_AUTOPILOT_TRIGGER, EMPTY_AUTOPILOT_RUN } from "./autopilots";
 
 describe("scheduled target response compatibility", () => {
+  it("keeps old automation responsibility unconfigured and preserves explicit human configuration", () => {
+    expect(AutopilotSchema.parse(EMPTY_AUTOPILOT).responsible_member_id).toBeNull();
+    expect(AutopilotSchema.parse({ ...EMPTY_AUTOPILOT, created_by_id: "old-creator", responsible_member_id: "confirmed-human" }).responsible_member_id).toBe("confirmed-human");
+  });
   it("keeps older and malformed responses usable", () => {
     expect(AutopilotTriggerSchema.parse(EMPTY_AUTOPILOT_TRIGGER).schedule_targets).toBeNull();
     expect(AutopilotTriggerSchema.parse({ ...EMPTY_AUTOPILOT_TRIGGER, schedule_targets: { projects: null } }).schedule_targets).toBeNull();

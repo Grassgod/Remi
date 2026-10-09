@@ -2,6 +2,7 @@ import { acknowledgeAttemptInput } from '../inbox/attempt-input.js';
 import { assertOfferedInputRead, lockLane,reRingAfterTurnEnd,sweepIdleLanes,acknowledgeInput } from "../inbox/lane-machine.js";
 import { countMessageDelegationPairHops, sendMessageWithinTransaction } from "../inbox/send-message.js";
 import { patchDecisionRecord } from "../inbox/decision-records.js";
+import { Questions } from '../inbox/questions.js';
 import { deriveIssueStatusWithinTransaction } from "../inbox/issue-status.js";
 import { runAutopilotRunMutation } from "@multiremi/store/autopilot-run-records.js";
 import { createReplacementAttemptWithinTransaction } from "@multiremi/store/turn-attempts.js";
@@ -1139,6 +1140,9 @@ function fallbackSwitchPlan(parent: MultiremiTask, agent: MultiremiAgent | null,
 
 export class TasksRepo {
   private readonly acceptedOfferLeases = new Set<string>();
+  // Synchronous request scopes only: the message-to-turn funnel reuses this
+  // caller's Issue lock, and finally removes it on both success and rollback.
+  private readonly taskRequestIssueLocks = new Set<string>();
   constructor(private ctx: StoreContext) {}
 
   countDelegationPairHops(source: MultiremiTask, targetAgentId: string, limit = pairRoundTripLimit()): number {
@@ -1482,7 +1486,9 @@ export class TasksRepo {
 
   listTasksForIssue(issueId: string): MultiremiTask[] {
     const rows = this.ctx.db.query(
-      "SELECT * FROM multiremi_turn_execution_records WHERE issue_id = ? ORDER BY created_at DESC",
+      `SELECT * FROM multiremi_turn_execution_records task WHERE issue_id = ?
+       AND task.workspace_id = (SELECT i.workspace_id FROM multiremi_issues i WHERE i.id = task.issue_id)
+       ORDER BY created_at DESC`,
     ).all(issueId) as Row[];
     return this.toTasks(rows);
   }
@@ -1724,8 +1730,24 @@ export class TasksRepo {
     const existingId=input.triggerCommentId??input.trigger_comment_id;
     const existing=existingId?this.ctx.inbox().getMessage(existingId):null;
     const issueId=input.issueId??(existing?this.ctx.getLogIssueComment(existing.id)?.issueId:null);
+    let acquiredIssueLock: string | null = null;
+    try {
+    const agent = this.ctx.agents().getAgent(input.agentId);
+    if (!agent) throw new Error(`Agent not found: ${input.agentId}`);
+    // W is already held. Lock and re-read I before selecting a conversation or
+    // validating its sender, so a moved Issue cannot enter the other W scope.
+    if (issueId) {
+      if (!this.taskRequestIssueLocks.has(issueId)) {
+        lockIssueRowWithinTransaction(this.ctx.db, issueId);
+        this.taskRequestIssueLocks.add(issueId);
+        acquiredIssueLock = issueId;
+      }
+      const issue = this.ctx.db.query('SELECT workspace_id FROM multiremi_issues WHERE id=?').get(issueId);
+      if (!issue) throw new Error(`Issue not found: ${issueId}`);
+      if (issue.workspace_id !== agent.workspaceId) throw new Error("Issue workspace does not match agent workspace");
+    }
     const requestId=input.id??createId("tsk");
-    input={...input,id:requestId,workspaceId:this.ctx.agents().getAgent(input.agentId)?.workspaceId};
+    input={...input,id:requestId,workspaceId:agent.workspaceId};
     const sessionId=input.conversationSessionId??input.issueSessionId??input.issue_session_id??input.chatSessionId
       ??(issueId?this.ctx.issueSessions().getOrCreateDefaultIssueSessionWithinTransaction(issueId).id:null)
       ??this.ctx.db.query('SELECT a.session_id FROM multiremi_autopilots a JOIN multiremi_autopilot_runs r ON r.autopilot_id=a.id WHERE r.turn_id=?').get(input.id)?.session_id??`auto_orphan_${requestId}`;
@@ -1750,6 +1772,9 @@ export class TasksRepo {
     const turn=result.turn_id?this.ctx.db.query('SELECT current_attempt_id FROM multiremi_turns WHERE id=?').get(result.turn_id):null;
     if(!turn)throw Object.assign(new Error(`Message stored without scheduling: ${result.wake_reason}`),{message_result:result});
     return this.getTask(turn.current_attempt_id)!;
+    } finally {
+      if (acquiredIssueLock) this.taskRequestIssueLocks.delete(acquiredIssueLock);
+    }
   }
 
   createTurnForMessageWithinWorkspaceLock(
@@ -1846,7 +1871,7 @@ export class TasksRepo {
     // MUL-476: a task is an edge to its Issue, so lock the Issue (after the
     // workspace lock) before checking its workspace; a concurrent move then
     // either sees this task or commits before this read.
-    if (issueId) lockIssueRowWithinTransaction(this.ctx.db, issueId);
+    if (issueId && !this.taskRequestIssueLocks.has(issueId)) lockIssueRowWithinTransaction(this.ctx.db, issueId);
     const issue = issueId ? this.ctx.issues().getIssue(issueId) : null;
     if (issueId && !issue) throw new Error(`Issue not found: ${issueId}`);
     if (triggerComment && issue && triggerComment.issueId !== issue.id) throw new Error("Trigger comment does not belong to task issue");
@@ -4484,14 +4509,11 @@ ${placementAfter.sql}
       this.ctx.lockWorkspaceRuntimeLifecycle(task.workspaceId);
       const turn=this.ctx.db.query('SELECT * FROM multiremi_turns WHERE current_attempt_id=?').get(task.id);
       if(!turn)throw new Error('Decision source is not the current attempt');
-      const members=this.ctx.workspaces().listWorkspaceMembers(task.workspaceId);
-      const recipient=members.find(m=>m.role==='owner'&&!m.archivedAt)??members.find(m=>!m.archivedAt);
-      if(!recipient)throw new Error('Decision has no active member recipient');
-      const question = sendMessageWithinTransaction(this.ctx,{id,session_id:turn.session_id,source_turn_id:turn.id,
-        sender:{type:'agent',id:task.agentId},to:{type:'member',ref:recipient.id},message_kind:'decision',wake_requested:'now',
+      const question = new Questions(this.ctx).createWithinTransaction({id,session_id:turn.session_id,source_turn_id:turn.id,
+        sender:{type:'agent',id:task.agentId},to:{type:'none'},message_kind:'decision',wake_requested:'inbox_only',
         body_md:String(input.payload?.title??input.payload?.message??JSON.stringify(input.payload??{})),
-        metadata:{human_request:{kind:input.kind,payload:input.payload??{},status:'pending',expires_at:expiresAt}},
-      },deferredEvents);
+        metadata:{kind:input.kind,human_request:{kind:input.kind,payload:input.payload??{},status:'pending',expires_at:expiresAt}},
+      },task.id,deferredEvents);
       // Keep the advertised lifetime anchored to the persisted creation time.
       this.ctx.db.run('UPDATE multiremi_conversation_log SET created_at=? WHERE id=?',[now,id]);
       const reason = input.kind === "permission" ? "Waiting for permission approval" : "Waiting for a human answer";
@@ -4535,51 +4557,15 @@ ${placementAfter.sql}
     return rows.map(toTaskHumanRequest);
   }
 
-  /** Atomic first-write-wins: returns null when the request is no longer pending. */
-  respondTaskHumanRequest(
-    requestId: string,
-    input: { response: Record<string, unknown>; respondedBy?: string | null; cardCredential?: QuestionCardCredential },
-  ): MultiremiTaskHumanRequest | null {
-    let resumedTask: MultiremiTask | null = null;
-    const childStatusChanges: ChildStatusChangeCollector = [];
-    const deferredEvents = createCommitEventQueue();
-    const write = () => {
-      const now = nowIso();
-      const credential = input.cardCredential;
-      const changed=patchDecisionRecord(this.ctx,requestId,'human_request',{
-        status:'responded',response:input.response??{},responded_by:credential?.operatorOpenId??input.respondedBy??null,responded_at:now,
-      },'pending',credential);
-      const result={changes:changed?1:0};
-      if (result.changes === 0) {
-        if (credential) {
-          assertQuestionCardToken(this.ctx.db.query("SELECT * FROM multiremi_message_question_records WHERE id = ?")
-            .get(requestId) as Row | null, credential, "pending");
-          throw new QuestionCardTokenError("token_invalid");
-        }
-        return null;
-      }
-      const responded = this.getTaskHumanRequest(requestId)!;
-      const decision=this.ctx.inbox().getMessage(requestId)!;
-      const source=this.getTask(responded.taskId)!;
-      const member=this.ctx.workspaces().getWorkspaceMemberByRef(input.respondedBy??'local',source.workspaceId)
-        ??this.ctx.workspaces().listWorkspaceMembers(source.workspaceId).find(m=>m.role==='owner');
-      if(!member)throw new Error('Decision respondent is not a workspace member');
-      resumedTask = this.resumeTaskFromAwaitingHumanWithinTransaction(responded.taskId, childStatusChanges, deferredEvents);
-      if (resumedTask) this.ctx.db.run('UPDATE multiremi_turns SET waiting_on_message_id=NULL WHERE waiting_on_message_id=?',[decision.id]);
-      sendMessageWithinTransaction(this.ctx,{session_id:decision.session_id,sender:{type:'member',id:member.id},
-        to:{type:'agent',ref:source.agentId},message_kind:'reply',wake_requested:'now',reply_to_id:decision.id,
-        body_md:JSON.stringify(input.response??{}),metadata:{human_response:input.response??{}}},deferredEvents);
-      return responded;
-    };
-    const request = this.ctx.db.inTransaction ? write() : this.ctx.db.transaction(write)();
-    const taskToResume = resumedTask;
-    if (taskToResume) afterCommit(this.ctx.db, () => this.ctx.notifyTaskEvent("task:running", taskToResume));
-    afterCommit(this.ctx.db, () => {
-      this.runChildStatusChanges(childStatusChanges);
-      this.ctx.emitCommitEvents(deferredEvents);
-    });
-    // The canonical decision reply publishes its input event after commit.
-    return request;
+  /** Compatibility facade; unified Q remains the only answer authority. */
+  respondTaskHumanRequest(requestId: string, input: { response: Record<string, unknown>; respondedBy?: string | null; cardCredential?: QuestionCardCredential; expectedRouteRevision?: number }): MultiremiTaskHumanRequest | null {
+    const question = new Questions(this.ctx).get(requestId);
+    if (!question) return null;
+    const member = input.respondedBy ? this.ctx.workspaces().getWorkspaceMember(input.respondedBy)
+      ?? this.ctx.workspaces().findWorkspaceMemberForUser(input.respondedBy, question.workspace_id) : null;
+    if (!member || member.archivedAt || member.workspaceId !== question.workspace_id) throw new Error('Explicit active question respondent required');
+    new Questions(this.ctx).answer(requestId, { expected_route_revision: input.expectedRouteRevision ?? input.cardCredential?.routeRevision!, response: input.response }, { type: 'member', id: member.id }, undefined, input.cardCredential);
+    return this.getTaskHumanRequest(requestId);
   }
 
   /** Worker-initiated terminal transition (timeout, or task aborted while pending). */
@@ -4588,6 +4574,10 @@ ${placementAfter.sql}
     const childStatusChanges: ChildStatusChangeCollector = [];
     const deferredEvents = createCommitEventQueue();
     const request = this.ctx.db.transaction(() => {
+      if (new Questions(this.ctx).get(requestId)) {
+        const changed = new Questions(this.ctx).detachWithinTransaction(requestId, status, deferredEvents);
+        return changed ? this.getTaskHumanRequest(requestId) : null;
+      }
       const result={changes:patchDecisionRecord(this.ctx,requestId,'human_request',{status,responded_at:nowIso()},'pending')?1:0};
       if (result.changes === 0) return null;
       const expired = this.getTaskHumanRequest(requestId)!;
@@ -4775,13 +4765,19 @@ ${placementAfter.sql}
   }
 
   pinTaskSession(taskId: string, sessionId?: string | null, workDir?: string | null): MultiremiTask {
-    if (!this.getTask(taskId)) throw new Error(`Task not found: ${taskId}`);
-    runTurnExecutionMutation(this.ctx.db, `UPDATE multiremi_turn_execution_records
-       SET session_id = COALESCE(?, session_id), work_dir = COALESCE(?, work_dir), updated_at = ?
-       WHERE id = ? AND status IN ('dispatched', 'running')`,
-      [sessionId ?? null, workDir ?? null, nowIso(), taskId],
-    );
-    return this.getTask(taskId)!;
+    return this.ctx.db.transaction(() => {
+      const identity = this.getTaskIdentity(taskId);
+      if (!identity) throw new Error(`Task not found: ${taskId}`);
+      // Q creation locks the workspace before its session head and turn. Pin
+      // reports also touch that head, so a standalone pin cannot lock the turn first.
+      this.ctx.lockWorkspaceRuntimeLifecycle(identity.workspaceId);
+      runTurnExecutionMutation(this.ctx.db, `UPDATE multiremi_turn_execution_records
+         SET session_id = COALESCE(?, session_id), work_dir = COALESCE(?, work_dir), updated_at = ?
+         WHERE id = ? AND status IN ('dispatched', 'running')`,
+        [sessionId ?? null, workDir ?? null, nowIso(), taskId],
+      );
+      return this.getTask(taskId)!;
+    })();
   }
 
   /** @deprecated Legacy reader fixtures only; production producers use the daemon trace store. */
@@ -5135,10 +5131,10 @@ ${placementAfter.sql}
     return task;
   }
 
-  cancelTask(taskId: string): MultiremiTask {
+  cancelTask(taskId: string, options: { replacementPlanned?: boolean } = {}): MultiremiTask {
     const childStatusChanges: ChildStatusChange[] = [];
     const deferredEvents = createCommitEventQueue();
-    const cancelWithinTransaction = () => this.cancelTaskWithinTransaction(taskId, childStatusChanges, deferredEvents);
+    const cancelWithinTransaction = () => this.cancelTaskWithinTransaction(taskId, childStatusChanges, deferredEvents, options.replacementPlanned === true);
     const terminal = this.ctx.db.inTransaction ? cancelWithinTransaction() : this.ctx.db.transaction(cancelWithinTransaction)();
     afterCommit(this.ctx.db, () => {
       this.runChildStatusChanges(childStatusChanges);
@@ -5154,6 +5150,7 @@ ${placementAfter.sql}
     taskId: string,
     childStatusChanges: ChildStatusChangeCollector,
     deferredEvents: CommitEventQueue,
+    replacementPlanned = false,
   ): CancelTaskResult {
     const initial = this.getTask(taskId);
     if (!initial) throw new Error(`Task not found or terminal: ${taskId}`);
@@ -5161,7 +5158,7 @@ ${placementAfter.sql}
     const current = this.getTask(taskId);
     if (!current || current.workspaceId !== initial.workspaceId) throw new Error(`Task not found or terminal: ${taskId}`);
     this.lockTaskIssueSessionsWithinWorkspaceLock([current]);
-    return this.cancelTaskWithinWorkspaceLock(current, false, childStatusChanges, deferredEvents);
+    return this.cancelTaskWithinWorkspaceLock(current, replacementPlanned, childStatusChanges, deferredEvents);
   }
 
   /** Caller owns the outer transaction; notifications are deferred until it commits. */
@@ -6539,11 +6536,29 @@ ${placementAfter.sql}
   cancelPendingHumanRequestsWithinTransaction(taskId: string, now: string = nowIso()): void {
     const task = this.getTaskIdentity(taskId);
     const pending = this.ctx.db.query(
-      "SELECT id FROM multiremi_message_question_records WHERE task_id = ? AND status = 'pending'",
+      "SELECT id FROM multiremi_message_question_records WHERE task_id = ? AND status IN ('pending','responded')",
     ).all(taskId) as Array<{ id: string }>;
     if (pending.length === 0) return;
-    for(const row of pending)patchDecisionRecord(this.ctx,row.id,'human_request',{status:'cancelled',responded_at:now},'pending');
+    const detachedEvents = createCommitEventQueue();
+    const cancelled: string[] = [];
+    for(const row of pending) {
+      const questions = new Questions(this.ctx);
+      if (questions.get(row.id)) {
+        if (questions.detachWithinTransaction(row.id, task?.status === 'cancelled' ? 'source_turn_cancelled' : 'provider_exit', detachedEvents)) {
+          // Cancel the provider wait, while retaining the unanswered business Q.
+          // The changed wait is the once-only guard; notifyHumanRequest defers
+          // delivery until the enclosing transaction commits.
+          const request = this.getTaskHumanRequest(row.id);
+          if (task && request) this.ctx.notifyHumanRequest({ type: "cancelled", request, workspaceId: task.workspaceId });
+        }
+        continue;
+      }
+      patchDecisionRecord(this.ctx,row.id,'human_request',{status:'cancelled',responded_at:now},'pending');
+      cancelled.push(row.id);
+    }
+    afterCommit(this.ctx.db, () => this.ctx.emitCommitEvents(detachedEvents));
     for (const { id } of pending) {
+      if (!cancelled.includes(id)) continue;
       const request = this.getTaskHumanRequest(id)!;
       this.ctx.feishuBot().enqueueDecisionCardPatch(request);
       if (task) this.ctx.notifyHumanRequest({ type: "cancelled", request, workspaceId: task.workspaceId });

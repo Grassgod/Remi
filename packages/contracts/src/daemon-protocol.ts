@@ -127,6 +127,7 @@ export const DAEMON_UPLINK_RPC_FRAMES = [
   "turn.decision",
   "turn.decision.get",
   "turn.decision.expire",
+  "turn.decision.consume",
   "plugin.desired",
   "trace.head",
   "trace.subscribe",
@@ -321,9 +322,13 @@ export interface DaemonHelloRuntime {
   max_concurrency: number;
   /** Tasks this process is executing right now; used to reconcile after a reconnect. */
   active_task_ids: string[];
+  /** Only provider callbacks still held by this process; durable outbox tasks are excluded. */
+  active_question_waits?: DaemonQuestionWait[];
   /** Missing fields explicitly mean unsupported, including after a restart. */
   capabilities?: DaemonRuntimeCapabilities;
 }
+
+export interface DaemonQuestionWait { message_id: string; attempt_id: string; wait_id: string }
 
 /** `hello`, daemon -> server, once per connection, before anything else. */
 export interface DaemonHelloPayload {
@@ -456,6 +461,10 @@ export interface DaemonTurnDecisionPayload {
   turn_id: string;
   attempt_id: string;
   dedupe_key: string;
+  /** Stable original-Q id when replaying the native request. */
+  message_id?: string;
+  /** Process-local callback nonce; a new daemon process cannot claim an old wait. */
+  wait_id: string;
   body_md: string;
   options: DecisionOption[];
   metadata: Record<string, unknown>;

@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { it, expect } from 'bun:test';
 import { pendingTurnBackendTests } from './pending-turn-test-backends.js';
 pendingTurnBackendTests('MUL-506 actual fallback replacement QA', (fixture, backend) => {
@@ -18,7 +19,7 @@ pendingTurnBackendTests('MUL-506 actual fallback replacement QA', (fixture, back
                 model: 'primary-gpt', thinkingLevel: 'high',
                 fallbackModel: 'fallback-deepseek', fallbackThinkingLevel: 'high',
             });
-            const issue = store.createIssue({ title: 'Fallback same-turn recovery', assigneeType: 'agent', assigneeId: agent.id });
+            const issue = createResponsibleTestIssue(store, { title: 'Fallback same-turn recovery', assigneeType: 'agent', assigneeId: agent.id });
             const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: 'Finish original instructions after fallback' });
             expect(store.claimTask(runtime.id)?.id).toBe(task.id);
             store.startTask(task.id);

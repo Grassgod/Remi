@@ -1,0 +1,26 @@
+import { beforeEach, expect, it, vi } from "vitest";
+import { render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { I18nProvider } from "@multiremi/core/i18n/react";
+import enIssues from "../../locales/en/issues.json";
+const fixture = vi.hoisted(() => ({ map: vi.fn(), refetch: vi.fn(), invalidate: vi.fn(), revision: "facts-v1" }));
+vi.mock("@multiremi/core/hooks", () => ({ useWorkspaceId: () => "ws" }));
+vi.mock("@multiremi/core/paths", () => ({ useWorkspacePaths: () => ({ issueDetail: (id: string) => `/issues/${id}` }) }));
+vi.mock("@multiremi/core/workspace/queries", () => ({ memberListOptions: () => ({ queryKey: ["members"] }) }));
+vi.mock("@multiremi/core/issues/queries", () => ({ issueKeys: { all: (id: string) => ["issues", id] } }));
+vi.mock("@multiremi/core/api", () => ({ api: { mapIssueResponsibility: fixture.map, listIssueResponsibilityMigration: vi.fn() } }));
+vi.mock("../../navigation", () => ({ AppLink: ({ href, children }: { href: string; children: React.ReactNode }) => <a href={href}>{children}</a> }));
+vi.mock("@tanstack/react-query", () => ({ useQueryClient: () => ({ invalidateQueries: fixture.invalidate }), useQuery: (options: { queryKey: string[] }) => options.queryKey[0] === "members" ? { data: [{ id: "human", name: "Human" }] } : { refetch: fixture.refetch, data: { total: 1, rootCount: 1, legacyMemberExecutionCount: 1, nextOffset: null, items: [{ issueId: "root", key: "ROOT-1", title: "Historical root", responsibleMemberId: null, assigneeType: "member", assigneeId: "legacy-human", createdById: "creator", revision: fixture.revision, unresolved: [{ issueId: "root", reason: "execution_owner_missing" }], candidates: [{ memberId: "human", name: "Human", source: "historical_creator", available: true }] }] } }, useMutation: (options: { mutationFn: () => Promise<unknown>; onSuccess: () => void }) => ({ isPending: false, mutate: () => { void options.mutationFn().then(options.onSuccess); } }) }));
+import { IssueResponsibilityMigrationSection } from "./issue-responsibility-migration-section";
+beforeEach(() => { vi.clearAllMocks(); fixture.map.mockResolvedValue({ mappedIssueIds: ["root"] }); });
+it("shows original facts and unconfirmed candidates, requiring an explicit human, reason and current revision", async () => {
+  const user = userEvent.setup();
+  render(<I18nProvider locale="en" resources={{ en: { issues: enIssues } }}><IssueResponsibilityMigrationSection /></I18nProvider>);
+  expect(screen.getByText(/legacy-human/)).toBeInTheDocument(); expect(screen.getByText("Recorded creator: creator")).toBeInTheDocument();
+  const select = screen.getByRole("combobox"); expect(select).toHaveValue("");
+  const apply = screen.getByRole("button", { name: "Confirm selected responsibility mappings" }); expect(apply).toBeDisabled();
+  await user.selectOptions(select, "human"); expect(apply).toBeDisabled();
+  await user.type(screen.getByRole("textbox"), "Confirmed with the human"); await user.click(apply);
+  await waitFor(() => expect(fixture.map).toHaveBeenCalledWith("ws", { reason: "Confirmed with the human", mappings: [{ issueId: "root", memberId: "human", revision: "facts-v1" }] }));
+  await waitFor(() => expect(select).toHaveValue("")); expect(fixture.invalidate).toHaveBeenCalled();
+});

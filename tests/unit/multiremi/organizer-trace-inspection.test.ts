@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { turnApiPath } from "./unified-test-paths.js";
 import { afterEach, describe, expect, it } from "bun:test";
 import { organizerTaskInspection, organizerTurnStats } from "@multiremi/api/helpers/organizer.js";
@@ -27,7 +28,7 @@ describe("organizer trace inspection", () => {
       store.ensureLocalWorkspace();
       const runtime = store.registerRuntime({ name: "Organizer stats runtime", provider: "codex", workspaceId: "local" });
       const agent = store.createAgent({ name: "Organizer stats target", provider: "codex", runtimeId: runtime.id, workspaceId: "local" });
-      const issue = store.createIssue({ title: "Organizer stats", workspaceId: "local" });
+      const issue = createResponsibleTestIssue(store, { title: "Organizer stats", workspaceId: "local" });
       const task = store.createTask({ agentId: agent.id, issueId: issue.id, workspaceId: "local", prompt: "inspect" });
       store.appendTaskMessages(task.id, [{ type: "text", content: "legacy" }, { type: "tool_use", tool: "Bash" }]);
       expect(store.claimTask(runtime.id)?.id).toBe(task.id);
@@ -60,7 +61,7 @@ describe("organizer trace inspection", () => {
     const store = createStore();
     store.ensureLocalWorkspace();
     const agent = store.createAgent({ name: "Organizer tail", provider: "codex", workspaceId: "local" });
-    const issue = store.createIssue({ title: "Organizer tail", workspaceId: "local" });
+    const issue = createResponsibleTestIssue(store, { title: "Organizer tail", workspaceId: "local" });
     const task = store.createTask({ agentId: agent.id, issueId: issue.id, workspaceId: "local", prompt: "inspect" });
     store.appendTaskMessages(task.id, [{ type: "text", content: "legacy" }, { type: "tool_use", tool: "Bash" }]);
     db!.run("UPDATE multiremi_turn_attempts SET status = 'completed' WHERE id = ?", [task.id]);

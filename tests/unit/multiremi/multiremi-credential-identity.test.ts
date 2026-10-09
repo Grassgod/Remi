@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { requestMessageBody } from "./unified-test-paths.js";
 /**
  * MUL-448 QA round 1 follow-up (B1-B4): credentialed requests must derive the
@@ -71,7 +72,7 @@ describe("MUL-448 B1: X-Agent-ID cannot outrank a member credential", () => {
   it("keeps session task, session, result and mutation actors as the credential's member", async () => {
     const { store, app, ownerId, memberId, otherAgentId, agentId, headers } = await fixture();
     const forged = { ...headers, "X-Agent-ID": otherAgentId };
-    const issue = store.createIssue({ title: "MUL-448 B1 issue" });
+    const issue = createResponsibleTestIssue(store, { title: "MUL-448 B1 issue" });
     const session = store.createIssueSession(issue.id, { title: "B1 session" });
 
     // Session task: the `turn` author is the member, not the header agent.
@@ -107,7 +108,7 @@ describe("MUL-448 B1: X-Agent-ID cannot outrank a member credential", () => {
     expect(resultBody.published_by_id).toBe(ownerId);
 
     // A dependency edit writes its activity as the member too.
-    const dependsOn = store.createIssue({ title: "MUL-448 B1 depends on" });
+    const dependsOn = createResponsibleTestIssue(store, { title: "MUL-448 B1 depends on" });
     const dependencyResponse = await app.request(`/api/multiremi/issues/${issue.id}/dependencies`, {
       method: "POST", headers: forged, body: JSON.stringify({ dependsOnIssueId: dependsOn.id }),
     });
@@ -150,7 +151,7 @@ describe("MUL-448 B1: X-Agent-ID cannot outrank a member credential", () => {
 
   it("still records the token's agent as the actor for a task credential", async () => {
     const { store, app, headers, agentId, otherAgentId } = await fixture();
-    const issue = store.createIssue({ title: "MUL-448 B1 task token" });
+    const issue = createResponsibleTestIssue(store, { title: "MUL-448 B1 task token" });
     const session = store.createIssueSession(issue.id, { title: "B1 task token session" });
     const source = store.createTask({ agentId, issueId: issue.id, prompt: "Source run" });
     const taskToken = await store.createTaskAccessToken(store.getTask(source.id)!, "local");
@@ -176,7 +177,7 @@ describe("MUL-448 B1: X-Agent-ID cannot outrank a member credential", () => {
 describe("MUL-448 B2: squad-evaluated actor comes from the credential", () => {
   it("rejects member attempts to record an evaluation without writing any activity", async () => {
     const { store, app, headers, leaderId, squadId } = await fixture();
-    const issue = store.createIssue({ title: "MUL-448 B2 issue" });
+    const issue = createResponsibleTestIssue(store, { title: "MUL-448 B2 issue" });
     store.assignIssue(issue.id, { assigneeType: "squad", assigneeId: squadId });
 
     const variants = [
@@ -197,7 +198,7 @@ describe("MUL-448 B2: squad-evaluated actor comes from the credential", () => {
 
   it("records the squad leader for a leader task token and 403s for a non-leader token", async () => {
     const { store, app, leaderId, squadId, agentId } = await fixture();
-    const issue = store.createIssue({ title: "MUL-448 B2 leader issue" });
+    const issue = createResponsibleTestIssue(store, { title: "MUL-448 B2 leader issue" });
     store.assignIssue(issue.id, { assigneeType: "squad", assigneeId: squadId });
 
     const leaderRun = store.createTask({ agentId: leaderId, issueId: issue.id, prompt: "Leader run" });
@@ -230,7 +231,7 @@ describe("MUL-448 B2: squad-evaluated actor comes from the credential", () => {
 describe("MUL-448 B3: provenance comes from the credential, not the body", () => {
   it("ignores a member-forged source issue, and the intake's own run dispatches normally", async () => {
     const { store, app, headers, agentId } = await fixture();
-    const intake = store.createIssue({ title: "MUL-448 B3 intake", issueKind: "intake" });
+    const intake = createResponsibleTestIssue(store, { title: "MUL-448 B3 intake", issueKind: "intake",assigneeType:'agent',assigneeId:agentId });
     const generatedTitle = "Execution from the intake";
 
     // A member files decoys the generated-issue cache would otherwise match.
@@ -279,14 +280,14 @@ describe("MUL-448 B3: provenance comes from the credential, not the body", () =>
   });
 });
 
-describe("MUL-448 B4: create routes keep main's creator semantics", () => {
-  it("records the credentialed creator on the compat route and none on the native one", async () => {
+describe("MUL-448 B4: create routes preserve authenticated human responsibility", () => {
+  it("records the credentialed creator on native and compat routes without trusting a forged creator", async () => {
     const { store, app, headers, ownerId } = await fixture();
     const decoy = store.getOrCreateUser({ email: "mul448-r2-decoy@example.test", name: "MUL-448 R2 Decoy" });
 
     for (const [label, path, forged, expected] of [
-      ["native create", "/api/multiremi/issues", false, null],
-      ["native create forged", "/api/multiremi/issues", true, null],
+      ["native create", "/api/multiremi/issues", false, ownerId],
+      ["native create forged", "/api/multiremi/issues", true, ownerId],
       ["compat create", "/api/issues", false, ownerId],
       ["compat create forged", "/api/issues", true, ownerId],
     ] as const) {
@@ -302,16 +303,15 @@ describe("MUL-448 B4: create routes keep main's creator semantics", () => {
       const issue = store.getIssue(body.id ?? body.issue?.id)!;
       expect(issue.createdBy, label).toBe(expected);
       expect(issue.createdBy, label).not.toBe(decoy.id);
-      // Main does not auto-subscribe on this path (only a stamped creator does,
-      // and the compat route stamps the requester - check per route).
-      if (expected === null) expect(store.listIssueSubscribers(issue.id), label).toHaveLength(0);
+      expect(issue.responsibleMemberId,label).toBe(store.findWorkspaceMemberForUser(ownerId,'local')!.id);
+      expect(store.listIssueSubscribers(issue.id).some(item=>item.memberId===store.findWorkspaceMemberForUser(ownerId,'local')!.id),label).toBeTrue();
     }
   });
 });
 
-describe("MUL-448 B4: quick-create, subscription and share stay at main's level", () => {
-  it("records no creator on any quick-create entry point and strips a forged requester", async () => {
-    const { store, app, headers, agentId } = await fixture();
+describe("MUL-448 B4: quick-create, subscription and share preserve credentials", () => {
+  it("records the actual human creator on every quick-create entry point and strips a forged requester", async () => {
+    const { store, app, headers, agentId,ownerId } = await fixture();
     const decoy = store.getOrCreateUser({ email: "mul448-r2-decoy2@example.test", name: "MUL-448 R2 Decoy 2" });
 
     for (const [label, path, forged] of [
@@ -330,12 +330,11 @@ describe("MUL-448 B4: quick-create, subscription and share stay at main's level"
       expect(response.status, label).toBe(202);
       const body = (await response.json()) as any;
       const issue = store.getIssue(body.issue.id)!;
-      // Main records no creator on any quick-create route (verified against the
-      // pre-fix baseline; see the MUL-448 delivery comment).
-      expect(issue.createdBy, label).toBeNull();
-      expect(store.listIssueSubscribers(issue.id), label).toHaveLength(0);
+      expect(issue.createdBy, label).toBe(ownerId);
+      expect(issue.responsibleMemberId,label).toBe(store.findWorkspaceMemberForUser(ownerId,'local')!.id);
+      expect(store.listIssueSubscribers(issue.id).some(item=>item.memberId===store.findWorkspaceMemberForUser(ownerId,'local')!.id),label).toBeTrue();
       const share = await app.request(`/api/issues/${issue.id}/share`, { method: "POST", headers });
-      expect(share.status, label).toBe(403);
+      expect(share.status, label).toBe(201);
     }
   });
 });
@@ -359,7 +358,7 @@ describe("MUL-448 anonymous compatibility mode keeps main's behaviour", () => {
 
   it("B1: still lets a non-task caller name the session task author", async () => {
     const { store, agentId, otherAgentId, master, open } = await anonymousApps();
-    const issue = store.createIssue({ title: "MUL-448 anon B1" });
+    const issue = createResponsibleTestIssue(store, { title: "MUL-448 anon B1" });
     const session = store.createIssueSession(issue.id, { title: "Anon B1 session" });
 
     for (const [label, app, headers] of [
@@ -383,7 +382,7 @@ describe("MUL-448 anonymous compatibility mode keeps main's behaviour", () => {
 
   it("B2: still records the leader fallback for an anonymous evaluation", async () => {
     const { store, leaderId, squadId, master, open } = await anonymousApps();
-    const issue = store.createIssue({ title: "MUL-448 anon B2" });
+    const issue = createResponsibleTestIssue(store, { title: "MUL-448 anon B2" });
     store.assignIssue(issue.id, { assigneeType: "squad", assigneeId: squadId });
 
     for (const [label, app, headers] of [
@@ -402,7 +401,7 @@ describe("MUL-448 anonymous compatibility mode keeps main's behaviour", () => {
 
   it("B3: still honours a body-supplied source issue from a non-credentialed caller", async () => {
     const { store, master, open } = await anonymousApps();
-    const intake = store.createIssue({ title: "MUL-448 anon B3 intake", issueKind: "intake" });
+    const intake = createResponsibleTestIssue(store, { title: "MUL-448 anon B3 intake", issueKind: "intake" });
 
     for (const [label, app, headers] of [
       ["master token", master, { "Content-Type": "application/json", Authorization: "Bearer mul448-r2-root-secret" }],

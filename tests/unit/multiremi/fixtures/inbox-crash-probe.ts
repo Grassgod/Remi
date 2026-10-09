@@ -29,9 +29,13 @@ function stop(): never {
 const originalRun = db.run.bind(db);
 db.run = (sql, params) => {
   const normalized = sql.replace(/\s+/g, " ").trim().toUpperCase();
-  const turn = fixture.scenario === "human"
+  const turn = fixture.scenario === "e4"
+    ? normalized.startsWith("UPDATE MULTIREMI_TURNS SET STATUS='RUNNING',WAITING_ON_MESSAGE_ID=NULL")
+      && Array.isArray(params) && params.includes(fixture.questionTurnId!)
+    : fixture.scenario === "human"
     ? normalized.startsWith("UPDATE MULTIREMI_TURNS SET WAKE_SEQ=")
-      && normalized.includes("WAKE_SEQ") && Array.isArray(params) && params.includes(store.getTurnForAttempt(fixture.seededTaskId!)!.id)
+      && normalized.includes("WAKE_SEQ") && Array.isArray(params)
+      && params.includes(store.getTurnForAttempt(fixture.seededTaskId!)!.id)
     : /^INSERT INTO MULTIREMI_TURN_ATTEMPTS[ (]/.test(normalized);
   if (turn && phase === "before-turn") {
     if (!db.inTransaction) throw new Error("Before-turn probe is outside the state transaction");

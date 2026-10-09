@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { requestMessageBody, taskRequestPath, sentTask } from "./unified-test-paths.js";
 import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
@@ -75,7 +76,7 @@ function createDelegationFixture(): DelegationFixture {
     leaderId: leader.id,
     memberIds: [qa.id],
   });
-  const issue = store.createIssue({
+  const issue = createResponsibleTestIssue(store, {
     title: "Delegated verification",
     assigneeType: "squad",
     assigneeId: squad.id,
@@ -188,7 +189,7 @@ function createFanoutFixture(feishu = false): FanoutFixture {
     });
   }
 
-  const issue = store.createIssue({
+  const issue = createResponsibleTestIssue(store, {
     title: "Fanout delegation",
     assigneeType: "squad",
     assigneeId: squad.id,
@@ -365,7 +366,7 @@ describe("task-level agent delegation return", () => {
     const store = createStore();
     const leader = store.createAgent({ name: "Leader", provider: "claude" });
     const qa = store.createAgent({ name: "QA", provider: "claude" });
-    const issue = store.createIssue({ title: "Mention semantics" });
+    const issue = createResponsibleTestIssue(store, { title: "Mention semantics" });
 
     store.createIssueComment(issue.id, {
       authorType: "member",
@@ -393,7 +394,7 @@ describe("task-level agent delegation return", () => {
     const store = createStore();
     const leader = store.createAgent({ name: "Leader", provider: "claude" });
     const qa = store.createAgent({ name: "QA", provider: "claude",visibility:"workspace" });
-    const issue = store.createIssue({ title: "Direct delegation" });
+    const issue = createResponsibleTestIssue(store, { title: "Direct delegation" });
     const leaderTask = store.createTask({ agentId: leader.id, issueId: issue.id, prompt: "Lead." });
     const taskToken = await store.createTaskAccessToken(leaderTask, "local");
     const app = createMultiremiApp({ store, authToken: "root-secret" });
@@ -441,7 +442,7 @@ describe("task-level agent delegation return", () => {
     const leader = store.createAgent({ name: "Leader", provider: "claude" });
     const outsider = store.createAgent({ name: "Outsider", provider: "claude" });
     const squad = store.createSquad({ name: "Core", leaderId: leader.id, memberIds: [] });
-    const issue = store.createIssue({ title: "Rejected direct delegation", assigneeType: "squad", assigneeId: squad.id });
+    const issue = createResponsibleTestIssue(store, { title: "Rejected direct delegation", assigneeType: "squad", assigneeId: squad.id });
     const leaderTask = store.createTask({ agentId: leader.id, issueId: issue.id, prompt: "Lead." });
     const taskToken = await store.createTaskAccessToken(leaderTask, "local");
     const app = createMultiremiApp({ store, authToken: "root-secret" });
@@ -468,7 +469,7 @@ describe("task-level agent delegation return", () => {
     const qa = store.createAgent({ name: "QA", provider: "claude" });
     const outsider = store.createAgent({ name: "Outsider", provider: "claude" });
     const squad = store.createSquad({ name: "Core", leaderId: leader.id, memberIds: [qa.id] });
-    const issue = store.createIssue({ title: "Leader delegation", assigneeType: "squad", assigneeId: squad.id });
+    const issue = createResponsibleTestIssue(store, { title: "Leader delegation", assigneeType: "squad", assigneeId: squad.id });
     const leaderTask = store.createTask({ agentId: leader.id, issueId: issue.id, prompt: "Lead." });
 
     store.createIssueComment(issue.id, {
@@ -506,7 +507,7 @@ describe("task-level agent delegation return", () => {
     const leader = store.createAgent({ name: "Leader", provider: "claude" });
     const qa = store.createAgent({ name: "QA", provider: "claude" });
     const squad = store.createSquad({ name: "Core", leaderId: leader.id, memberIds: [qa.id] });
-    const issue = store.createIssue({ title: "Duplicate delegation", assigneeType: "squad", assigneeId: squad.id });
+    const issue = createResponsibleTestIssue(store, { title: "Duplicate delegation", assigneeType: "squad", assigneeId: squad.id });
     const leaderTask = store.createTask({ agentId: leader.id, issueId: issue.id, prompt: "Lead." });
 
     store.createIssueComment(issue.id, {
@@ -541,7 +542,7 @@ describe("task-level agent delegation return", () => {
     const leader = store.createAgent({ name: "Leader", provider: "claude", runtimeId: leaderRuntime.id });
     const qa = store.createAgent({ name: "QA", provider: "claude" });
     const squad = store.createSquad({ name: "Core", leaderId: leader.id, memberIds: [qa.id] });
-    const issue = store.createIssue({ title: "Follow-up delegation", assigneeType: "squad", assigneeId: squad.id });
+    const issue = createResponsibleTestIssue(store, { title: "Follow-up delegation", assigneeType: "squad", assigneeId: squad.id });
     const leaderTask = store.createTask({ agentId: leader.id, issueId: issue.id, prompt: "Lead." });
 
     expect(store.claimTask(leaderRuntime.id)?.id).toBe(leaderTask.id);
@@ -576,7 +577,7 @@ describe("task-level agent delegation return", () => {
   it("human mentions merge in one pending lane", () => {
     const store = createStore();
     const qa = store.createAgent({ name: "QA", provider: "claude" });
-    const issue = store.createIssue({ title: "Human mentions" });
+    const issue = createResponsibleTestIssue(store, { title: "Human mentions" });
 
     store.createIssueComment(issue.id, {
       authorType: "member",
@@ -1011,7 +1012,7 @@ describe("task-level agent delegation return", () => {
   it("keeps ordinary tasks without delegation lineage out of the return audit", () => {
     const store = createStore();
     const agent = store.createAgent({ name: "Solo", provider: "claude" });
-    const issue = store.createIssue({ title: "No lineage" });
+    const issue = createResponsibleTestIssue(store, { title: "No lineage" });
     const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "Work." });
 
     expect(store.cancelTask(task.id).status).toBe("cancelled");
@@ -1029,7 +1030,7 @@ describe("task-level agent delegation return", () => {
   it("audits a malformed delegation lineage instead of silently dropping it", () => {
     const store = createStore();
     const agent = store.createAgent({ name: "Solo", provider: "claude" });
-    const issue = store.createIssue({ title: "Malformed lineage" });
+    const issue = createResponsibleTestIssue(store, { title: "Malformed lineage" });
     const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "Work." });
     db!.run("UPDATE multiremi_turns SET delegation_id = ? WHERE id = ?", ["dlg_incomplete", task.id]);
 

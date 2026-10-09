@@ -848,7 +848,7 @@ function requireHumanAdmin(c: Context, deps: RouterDeps, workspaceId: string): R
 }
 
 function requireHumanApprover(c: Context, deps: RouterDeps, workspaceId: string): Response | null {
-  if (currentAccessToken(c)?.type === "task") {
+  if (currentAccessToken(c)?.type === "task" || currentAccessToken(c)?.type==='daemon') {
     return c.json({ error: "forbidden for task token", code: "human_approval_required" }, 403);
   }
   return requireWorkspaceAdmin(c, deps.store, workspaceId);

@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from "../../unit/multiremi/helpers.js";
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import {
   DAEMON_HEARTBEAT_INTERVAL_MS,
@@ -12,6 +13,7 @@ import { runtimeCapabilitiesInFrame } from "../../fixtures/daemon-protocol.js";
 import { DaemonProtocolHarness, waitFor } from "./harness.js";
 
 const fixtures: DaemonProtocolHarness[] = [];
+const releaseProviders: Array<() => void> = [];
 const savedEnvironment = new Map<string, string | undefined>();
 
 beforeEach(() => {
@@ -27,6 +29,7 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
+  for (const release of releaseProviders.splice(0)) release();
   for (const h of fixtures.splice(0)) await h.dispose();
   for (const [key, value] of savedEnvironment) {
     if (value === undefined) delete process.env[key];
@@ -35,8 +38,8 @@ afterEach(async () => {
   savedEnvironment.clear();
 });
 
-async function fixture() {
-  const h = await DaemonProtocolHarness.create();
+async function fixture(options: Parameters<typeof DaemonProtocolHarness.create>[0] = {}) {
+  const h = await DaemonProtocolHarness.create(options);
   fixtures.push(h);
   return h;
 }
@@ -115,7 +118,8 @@ describe("v2 runtime capability advertisement", () => {
   });
 
   it("declares all host capabilities in hello and hb, creates an Issue decision delivery, and recovers its card", async () => {
-    const h = await fixture();
+    const released = new Promise<void>(resolve => releaseProviders.push(resolve));
+    const h = await fixture({ providerFactory: () => ({ async *sendStream() { await released; }, getLastResponse: () => null }) });
     attachHost(h);
     let atHello: Record<string, unknown> | null = null;
     h.layer.registerSessionHooks({ hello: (_session, hello) => {
@@ -142,27 +146,40 @@ describe("v2 runtime capability advertisement", () => {
     h.store.updateWorkspace("local", { settings: {
       ...workspace.settings, issueTopics: { enabled: true, chatId: "oc_capability_fixture" },
     } });
-    const parent = h.store.createIssue({ title: "Capability parent", workspaceId: "local", assigneeType: "agent", assigneeId: agent.id });
+    h.db.run('UPDATE multiremi_users SET feishu_union_id=? WHERE id=?', ['on_capability_fixture', user.id]);
+    const seen = new Date().toISOString();
+    h.db.run("INSERT INTO multiremi_feishu_bot_senders(id,workspace_id,app_id,open_id,union_id,display_name,allowed,first_seen_at,last_seen_at) VALUES('fbs_capability','local','capability_fixture','ou_capability_fixture','on_capability_fixture','Human',1,?,?)", [seen, seen]);
+    const parent = createResponsibleTestIssue(h.store, { title: "Capability parent", workspaceId: "local", assigneeType: "agent", assigneeId: agent.id, responsibleMemberId: member.id });
     h.store.prepareFeishuIssueTopicWithinTransaction(parent);
     const root = h.store.claimFeishuBotOutbound("local", id)!;
     h.store.reportFeishuBotOutbound("local", id, root.id, {
       claimToken: root.claimToken, status: "sent", externalMessageId: `om_root_${parent.id}`,
     });
-    const child = h.store.createIssue({ title: "Capability child", workspaceId: "local", parentIssueId: parent.id,
+    const child = createResponsibleTestIssue(h.store, { title: "Capability child", workspaceId: "local", parentIssueId: parent.id,
       assigneeType: "agent", assigneeId: agent.id });
+    h.store.prepareFeishuIssueTopicWithinTransaction(child);
+    const childTopic = h.store.claimFeishuBotOutbound('local', id)!;
+    h.store.reportFeishuBotOutbound('local', id, childTopic.id, { claimToken: childTopic.claimToken,
+      status: 'sent', externalMessageId: `om_root_${child.id}` });
     const task = h.store.createTask({ agentId: agent.id, issueId: child.id, workspaceId: "local", prompt: "Decision" });
-    const decision = h.store.createIssueDecision(child.id, {
-      kind: "production_change", title: "Deploy?", body: "A decision requiring a card",
-    }, { type: "agent", id: agent.id, taskId: task.id });
+    const turn = h.store.getTurnForAttempt(task.id)!;
+    await waitFor(() => h.store.getTask(task.id)?.status === 'running', 'source provider execution');
+    const created = h.store.getDaemonTurnBridge().rpc('turn.decision', { turn_id: turn.id, attempt_id: task.id,
+      wait_id: `capability-wait:${task.id}`, dedupe_key: `capability-question:${task.id}`, body_md: 'Deploy?', options: [],
+      metadata: { kind: 'production_change', questions: [{ question: 'Deploy?' }] } },
+      { runtimeId: id, daemonId: 'dmn_fixture', workspaceId: 'local' });
+    expect(created.ok).toBeTrue();
+    const decision = h.store.getQuestion(String(created.message_id))!;
     const card = h.store.claimFeishuBotOutbound("local", id)!;
     expect(card.kind).toBe("decision_card");
-    expect(card.decisionId).toBe(decision.id);
+    expect(card.humanRequestId).toBe(decision.id);
+    expect(card.degraded).toBeUndefined();
     h.store.reportFeishuBotOutbound("local", id, card.id, {
       claimToken: card.claimToken, status: "sent", externalMessageId: "om_capability_card",
       interactionOpenId: "ou_capability_fixture",
     });
-    expect(h.store.listFeishuIssueDecisionCards("local", id)).toMatchObject([{
-      decision_id: decision.id, issue_id: parent.id, message_id: "om_capability_card",
+    expect(h.store.listFeishuBotLiveDecisionCards("local", id)).toMatchObject([{
+      request_id: decision.id, task_id: task.id, message_id: "om_capability_card",
     }]);
   }, 15_000);
 

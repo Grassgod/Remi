@@ -1,3 +1,4 @@
+import { createHistoricalTestIssue, createResponsibleTestIssue } from './helpers.js';
 import { afterEach, describe, expect, it, spyOn } from "bun:test";
 import { StoreContext } from "@multiremi/store/context.js";
 import { IssueLockSetStaleError, type IssuesRepo } from "@multiremi/store/repos/issues-repo.js";
@@ -14,7 +15,7 @@ describe("MUL-482 transaction ownership and retry boundaries", () => {
         const ctx = (store as unknown as { ctx: StoreContext }).ctx;
         const runtime = store.registerRuntime({ name: "Claim owner", provider: "claude" });
         const agent = store.createAgent({ name: "Claim lane", provider: "claude", runtimeId: runtime.id });
-        const issue = store.createIssue({ title: "Before claim" });
+        const issue = createResponsibleTestIssue(store, { title: "Before claim" });
         const session = store.getOrCreateDefaultIssueSession(issue.id);
         const task = store.createSessionTask(session.id, { agentId: agent.id, prompt: "Claim round" });
         store.getOrCreateSessionAgentLane(session.id, agent.id);
@@ -79,9 +80,9 @@ describe("MUL-482 transaction ownership and retry boundaries", () => {
           await withConversationLogStore(backend, (store, db) => {
             store.ensureLocalWorkspace();
             const ctx = (store as unknown as { ctx: StoreContext }).ctx;
-            const parent = store.createIssue({ title: "Parent", status: "in_review" });
-            const nextParent = store.createIssue({ title: "New parent", status: "in_review" });
-            const child = store.createIssue({ title: "Done child", status: "done", parentIssueId: parent.id });
+            const parent = createResponsibleTestIssue(store, { title: "Parent", status: "in_review" });
+            const nextParent = createResponsibleTestIssue(store, { title: "New parent", status: "in_review" });
+            const child = createHistoricalTestIssue(store, { title: "Done child", status: "done", parentIssueId: parent.id });
             const beforeActivity = store.listIssueActivity(child.id);
             const beforeParentActivity = store.listIssueActivity(parent.id);
             const received: Array<{ type: string; inTransaction: boolean }> = [];
@@ -163,7 +164,7 @@ describe("MUL-482 transaction ownership and retry boundaries", () => {
       await withConversationLogStore(backend, (store, db) => {
         store.ensureLocalWorkspace();
         const ctx = (store as unknown as { ctx: StoreContext }).ctx;
-        const issue = store.createIssue({ title: "Before update", status: "todo" });
+        const issue = createResponsibleTestIssue(store, { title: "Before update", status: "todo" });
         const beforeActivity = store.listIssueActivity(issue.id);
         const received: string[] = [];
         const unsubscribe = store.onWorkspaceEvent(event => received.push(event.type));
@@ -220,7 +221,7 @@ describe("stale Issue lane claim events on SQLite", () => {
     store.ensureLocalWorkspace();
     const runtime = store.registerRuntime({ name: "Lane worker", provider: "claude" });
     const agent = store.createAgent({ name: "Lane agent", provider: "claude", runtimeId: runtime.id });
-    const issue = store.createIssue({ title: "Stale lane" });
+    const issue = createResponsibleTestIssue(store, { title: "Stale lane" });
     const session = store.getOrCreateDefaultIssueSession(issue.id);
     const task = store.createSessionTask(session.id, { agentId: agent.id, prompt: "Claim stale lane" });
     store.getOrCreateSessionAgentLane(session.id, agent.id);
@@ -281,7 +282,7 @@ describe("optional activity callers in transaction owners on SQLite", () => {
       const store = createStore();
       store.ensureLocalWorkspace();
       const agent = store.createAgent({ name: `Owner ${path}`, provider: "claude" });
-      const issue = store.createIssue({
+      const issue = createResponsibleTestIssue(store, {
         title: `Audit ${path}`,
         assigneeType: "agent",
         assigneeId: agent.id,
@@ -289,7 +290,7 @@ describe("optional activity callers in transaction owners on SQLite", () => {
       });
       let taskId: string | null = null;
       if (path === "held parent") {
-        store.createIssue({ title: "Open child", parentIssueId: issue.id, status: "in_progress" });
+        createResponsibleTestIssue(store, { title: "Open child", parentIssueId: issue.id, status: "in_progress" });
       } else {
         taskId = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "Queued work" }).id;
       }

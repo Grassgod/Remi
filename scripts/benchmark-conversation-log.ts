@@ -2,7 +2,7 @@ import { MultiremiStore } from "../packages/server/src/store.js";
 import type { SqlDatabase } from "../packages/server/src/store/db/postgres.js";
 import { parseArgs } from "node:util";
 import { backfillConversationLogWithinTransaction, CONVERSATION_LOG_BACKFILL_MIGRATION } from "../packages/server/src/store/conversation-log-backfill.js";
-import { withConversationLogStore } from "../tests/unit/multiremi/fixtures/conversation-log-store.js";
+import { withHistoricalConversationStore as withConversationLogStore } from "../tests/unit/multiremi/fixtures/conversation-log-store.js";
 import { prepareConversationBackfillFixture } from "../tests/unit/multiremi/fixtures/conversation-log-backfill.js";
 import { readOnlyConversationReconciliation, writeConversationMigrationEvidence, type ConversationMigrationEvidence } from "./reconcile-conversation-log.js";
 

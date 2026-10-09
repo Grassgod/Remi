@@ -161,12 +161,14 @@ describe("Multiremi CLI — issues, attachments, and sessions", () => {
 
   test("issue create warns loudly when the issue was created but not dispatched", async () => {
     let createResponse: Record<string, unknown> = {};
+    let createRequests = 0;
     const server = Bun.serve({
       hostname: "127.0.0.1",
       port: 0,
       async fetch(request) {
         const url = new URL(request.url);
         if (url.pathname === "/api/issues" && request.method === "POST") {
+          createRequests += 1;
           await request.json();
           return new Response(JSON.stringify(createResponse), { status: 201 });
         }
@@ -223,10 +225,12 @@ describe("Multiremi CLI — issues, attachments, and sessions", () => {
       await create("--assignee", "agt_1", "--assignee-type", "agent");
       expect(warnings.join("\n")).not.toContain("NOT dispatched");
 
-      // Member assignee: expected outcome, no warning.
+      // Humans are designated separately; a new execution assignee cannot be a member.
       warnings.length = 0;
-      createResponse = { id: "iss_4", identifier: "MUL-12", task_id: null, dispatch_status: "skipped", dispatch_skipped_reason: "member_assignee" };
-      await create("--assignee", "mem_1", "--assignee-type", "member");
+      const beforeRejectedCreate = createRequests;
+      await expect(create("--assignee", "mem_1", "--assignee-type", "member"))
+        .rejects.toThrow("Execution assignee must be an Agent or Squad");
+      expect(createRequests).toBe(beforeRejectedCreate);
       expect(warnings.join("\n")).not.toContain("NOT dispatched");
 
       // Backlog is a parking lot: skipped on purpose, no warning.
@@ -468,7 +472,11 @@ describe("Multiremi CLI — issues, attachments, and sessions", () => {
       await runMultiremi(["issue", "get", "iss_1", ...connection]);
       await runMultiremi(["issue", "create", "--title", "Created", "--description", "Body", "--status", "todo", "--priority", "high", "--assignee-type", "agent", "--assignee", "agt_1", "--project", "prj_1", ...connection]);
       await runMultiremi(["issue", "update", "iss_1", "--title", "Updated", "--project=", ...connection]);
-      await runMultiremi(["issue", "assign", "iss_1", "--to", "mem_1", "--type", "member", ...connection]);
+      const beforeRejectedAssignment = requests.length;
+      await expect(runMultiremi(["issue", "assign", "iss_1", "--to", "mem_1", "--type", "member", ...connection]))
+        .rejects.toThrow("Execution assignee must be an Agent or Squad");
+      expect(requests).toHaveLength(beforeRejectedAssignment);
+      await runMultiremi(["issue", "assign", "iss_1", "--to", "agt_1", "--type", "agent", ...connection]);
       await runMultiremi(["issue", "status", "iss_1", "in_review", ...connection]);
       for (const name of ["list", "get", "set", "delete"]) {
         await runMultiremi(["issue", "metadata", name, "iss_1", ...(name === "list" ? [] : ["--key", "attempts"]), ...(name === "set" ? ["--value", "3"] : []), ...connection]);
@@ -483,7 +491,7 @@ describe("Multiremi CLI — issues, attachments, and sessions", () => {
         { id: "iss_1", title: "Issue one" },
         { id: "iss_created", title: "Created", description: "Body", status: "todo", priority: "high", assignee_type: "agent", assignee_id: "agt_1", project_id: "prj_1" },
         { id: "iss_1", title: "Updated", project_id: null },
-        { id: "iss_1", title: "Issue one", assignee_type: "member", assignee_id: "mem_1", task_id: null, cancelled_tasks: 0 },
+        { id: "iss_1", title: "Issue one", assignee_type: "agent", assignee_id: "agt_1", task_id: null, cancelled_tasks: 0 },
         { id: "iss_1", title: "Issue one", status: "in_review" },
         { attempts: 2, ready: true }, 2, { attempts: 3, ready: true }, { ready: true },
         [{ id: "sub_1", member_id: "mem_1" }], { subscribed: true, member_id: "mem_1" }, { subscribed: false, member_id: "mem_1" },
@@ -498,7 +506,7 @@ describe("Multiremi CLI — issues, attachments, and sessions", () => {
       ]);
       expect(requests[2].body).toEqual({ title: "Created", description: "Body", status: "todo", priority: "high", assignee_type: "agent", assignee_id: "agt_1", project_id: "prj_1" });
       expect(requests[3].body).toEqual({ title: "Updated", project_id: null });
-      expect(requests[4].body).toEqual({ assignee_type: "member", assignee_id: "mem_1" });
+      expect(requests[4].body).toEqual({ assignee_type: "agent", assignee_id: "agt_1" });
       expect(requests[8].body).toEqual({ value: 3 });
       expect(requests[11].body).toEqual({ member_id: "mem_1" });
       expect(requests[12].body).toEqual({ member_id: "mem_1" });

@@ -29,6 +29,7 @@ export const IssueParentDoneGrantSchema = z.object({
 }).loose();
 
 export const IssueSchema = z.object({
+  responsible_member_id: z.string().nullable().optional(),
   runtime_workspace_id: z.string().nullable().optional(),
   id: z.string(),
   workspace_id: z.string(),

@@ -571,9 +571,11 @@ fi
 
 postgres_password="$(openssl rand -hex 24)"
 jwt_secret="$(openssl rand -hex 32)"
+feishu_encryption_key="$(openssl rand -base64 32)"
 "${kubectl_bin}" -n "${namespace}" create secret generic ppe-secrets \
   --from-literal=postgres-password="${postgres_password}" \
   --from-literal=jwt-secret="${jwt_secret}" \
+  --from-literal=feishu-bot-encryption-key="${feishu_encryption_key}" \
   --dry-run=client -o yaml |
   "${kubectl_bin}" label --local -f - "${managed_label}" -o yaml |
   "${kubectl_bin}" apply -f -
@@ -665,6 +667,8 @@ metadata:
     multiremi.io/mode: "${PPE_MODE}"
 spec:
   replicas: 1
+  # The all-role API owns the single hub lock: stop its old process first.
+  strategy: { type: Recreate }
   selector: { matchLabels: { app: api } }
   template:
     metadata: { labels: { app: api, multiremi.io/managed: "true" } }
@@ -686,6 +690,13 @@ spec:
         # Override dev even when reusing an image built before MUL-502.
         - { name: MULTIREMI_VERSION, value: "${multiremi_version}" }
         - { name: HOME, value: /srv/multiremi }
+        # Bun's OS home can follow the image user even when HOME is overridden.
+        # Keep migration evidence and API state on the lease's existing PVC.
+        - { name: MULTIREMI_STATE_DIR, value: /srv/multiremi/.multiremi }
+        - { name: MULTIREMI_CONFIG, value: /srv/multiremi/.multiremi/config.json }
+        - { name: MULTIREMI_MIGRATION_REPORT_DIR, value: /srv/multiremi/reports/migrations }
+        - { name: MULTIREMI_UPLOAD_DIR, value: /srv/multiremi/.remi/multiremi/uploads }
+        - { name: MULTIREMI_SESSION_ARCHIVE_ROOT, value: /srv/multiremi/.remi/multiremi/session-archives }
         - { name: NODE_ENV, value: development }
         - { name: MULTIREMI_HOST, value: 0.0.0.0 }
         - { name: MULTIREMI_PORT, value: "6120" }
@@ -698,6 +709,8 @@ spec:
           value: postgresql://multiremi:\$(POSTGRES_PASSWORD)@postgres:5432/multiremi
         - name: JWT_SECRET
           valueFrom: { secretKeyRef: { name: ppe-secrets, key: jwt-secret } }
+        - name: MULTIREMI_FEISHU_BOT_ENCRYPTION_KEY
+          valueFrom: { secretKeyRef: { name: ppe-secrets, key: feishu-bot-encryption-key } }
         ports: [{ containerPort: 6120 }]
         readinessProbe: { httpGet: { path: /readyz, port: 6120 }, initialDelaySeconds: 10, periodSeconds: 5 }
         resources:

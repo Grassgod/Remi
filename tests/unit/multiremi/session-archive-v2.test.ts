@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { mutateExecutionFixture, sentTask } from "./unified-test-paths.js";
 import { afterAll, afterEach, describe, expect, it, spyOn } from "bun:test";
 import type { Database } from "bun:sqlite";
@@ -161,7 +162,7 @@ describe("Session archive random access", () => {
       daemonId: "dmn_read",
       workspaceId: "local",
     });
-    const issue = store.createIssue({ title: "Random access", workspaceId: "local" });
+    const issue = createResponsibleTestIssue(store, { title: "Random access", workspaceId: "local" });
     store.reportIssueWorkspace({
       issueId: issue.id,
       runtimeId: runtime.id,
@@ -257,7 +258,7 @@ describe("Session archive random access", () => {
       daemonId: "dmn_cursor",
       workspaceId: "local",
     });
-    const issue = store.createIssue({ title: "Trace rules", workspaceId: "local" });
+    const issue = createResponsibleTestIssue(store, { title: "Trace rules", workspaceId: "local" });
     store.reportIssueWorkspace({
       issueId: issue.id,
       runtimeId: runtime.id,
@@ -348,7 +349,7 @@ describe("Session archive random access", () => {
       daemonId: "dmn_hot",
       workspaceId: "local",
     });
-    const issue = store.createIssue({ title: "Hot pointer", workspaceId: "local" });
+    const issue = createResponsibleTestIssue(store, { title: "Hot pointer", workspaceId: "local" });
     store.reportIssueWorkspace({
       issueId: issue.id,
       runtimeId: runtime.id,
@@ -411,7 +412,7 @@ describe("Session archive random access", () => {
       daemonId: "dmn_read",
       workspaceId: "local",
     });
-    const issue = store.createIssue({ title: "Not ready", workspaceId: "local" });
+    const issue = createResponsibleTestIssue(store, { title: "Not ready", workspaceId: "local" });
     store.reportIssueWorkspace({
       issueId: issue.id,
       runtimeId: runtime.id,
@@ -456,7 +457,7 @@ describe("Session archive ingest validation", () => {
       daemonId: "dmn_tamper",
       workspaceId: "local",
     });
-    const issue = store.createIssue({ title: "Tampered index", workspaceId: "local" });
+    const issue = createResponsibleTestIssue(store, { title: "Tampered index", workspaceId: "local" });
     store.reportIssueWorkspace({
       issueId: issue.id,
       runtimeId: runtime.id,
@@ -516,7 +517,7 @@ describe("Session archive ingest validation", () => {
       daemonId: "dmn_tx",
       workspaceId: "local",
     });
-    const issue = store.createIssue({ title: "Transactional pointers", workspaceId: "local" });
+    const issue = createResponsibleTestIssue(store, { title: "Transactional pointers", workspaceId: "local" });
     store.reportIssueWorkspace({
       issueId: issue.id,
       runtimeId: runtime.id,
@@ -573,7 +574,7 @@ describe("Session archive ingest validation", () => {
       daemonId: "dmn_overwrite",
       workspaceId: "local",
     });
-    const issue = store.createIssue({ title: "Overwrite pointers", workspaceId: "local" });
+    const issue = createResponsibleTestIssue(store, { title: "Overwrite pointers", workspaceId: "local" });
     store.reportIssueWorkspace({
       issueId: issue.id,
       runtimeId: runtime.id,
@@ -662,7 +663,7 @@ describe("Session archive v1 upload rejection", () => {
       daemonId: "dmn_v1",
       workspaceId: "local",
     });
-    const issue = store.createIssue({ title: "Legacy upload", workspaceId: "local" });
+    const issue = createResponsibleTestIssue(store, { title: "Legacy upload", workspaceId: "local" });
     store.reportIssueWorkspace({
       issueId: issue.id,
       runtimeId: runtime.id,
@@ -835,7 +836,7 @@ describe("Session archive QA round 1", () => {
       daemonId: "dmn_sparse",
       workspaceId: "local",
     });
-    const issue = store.createIssue({ title: "Sparse seq", workspaceId: "local" });
+    const issue = createResponsibleTestIssue(store, { title: "Sparse seq", workspaceId: "local" });
     store.reportIssueWorkspace({
       issueId: issue.id,
       runtimeId: runtime.id,
@@ -919,7 +920,7 @@ describe("Session archive QA round 1", () => {
       daemonId: "dmn_ptamper",
       workspaceId: "local",
     });
-    const issue = store.createIssue({ title: "Provider tamper", workspaceId: "local" });
+    const issue = createResponsibleTestIssue(store, { title: "Provider tamper", workspaceId: "local" });
     store.reportIssueWorkspace({
       issueId: issue.id,
       runtimeId: runtime.id,
@@ -984,7 +985,7 @@ describe("Session archive QA round 1", () => {
       daemonId: "dmn_mtamper",
       workspaceId: "local",
     });
-    const issue = store.createIssue({ title: "Meta tamper", workspaceId: "local" });
+    const issue = createResponsibleTestIssue(store, { title: "Meta tamper", workspaceId: "local" });
     store.reportIssueWorkspace({
       issueId: issue.id,
       runtimeId: runtime.id,
@@ -1046,7 +1047,7 @@ describe("Session archive QA round 1", () => {
       daemonId: "dmn_lost",
       workspaceId: "local",
     });
-    const issue = store.createIssue({ title: "Lost trace", workspaceId: "local" });
+    const issue = createResponsibleTestIssue(store, { title: "Lost trace", workspaceId: "local" });
     store.reportIssueWorkspace({
       issueId: issue.id,
       runtimeId: runtime.id,
@@ -1108,7 +1109,7 @@ describe("Session archive QA round 1", () => {
       daemonId: "dmn_concurrent",
       workspaceId: "local",
     });
-    const issue = store.createIssue({ title: "Concurrent pointers", workspaceId: "local" });
+    const issue = createResponsibleTestIssue(store, { title: "Concurrent pointers", workspaceId: "local" });
     store.reportIssueWorkspace({
       issueId: issue.id,
       runtimeId: runtime.id,
@@ -1205,7 +1206,7 @@ describe("Session archive trace member authorization", () => {
     store.ensureLocalWorkspace();
     const runtime = store.registerRuntime({ id: `rt_${label}`, name: label, provider: "codex",
       daemonId: `dmn_${label}`, workspaceId: "local" });
-    const issue = store.createIssue({ title: label, workspaceId: "local" });
+    const issue = createResponsibleTestIssue(store, { title: label, workspaceId: "local" });
     store.reportIssueWorkspace({ issueId: issue.id, runtimeId: runtime.id,
       rootPath: `/tmp/${issue.key}`, branchName: `agent/${issue.key}`, status: "ready" });
     const fixture = await buildArchiveFixture({ subject: { kind: "issue", id: issue.id }, traces: {} });
@@ -1339,7 +1340,7 @@ describe("Session archive trace member authorization", () => {
       daemonId: "dmn_issue_shared", workspaceId: "local" });
     const otherProvider = store.registerRuntime({ id: "rt_issue_claude", name: "claude", provider: "claude",
       daemonId: "dmn_issue_shared", workspaceId: "local" });
-    const issue = store.createIssue({ title: "Issue package", workspaceId: "local" });
+    const issue = createResponsibleTestIssue(store, { title: "Issue package", workspaceId: "local" });
     store.reportIssueWorkspace({ issueId: issue.id, runtimeId: owner.id,
       rootPath: `/tmp/${issue.key}`, branchName: `agent/${issue.key}`, status: "ready" });
     const secondSession = store.createIssueSession(issue.id, { title: "Second session" });
@@ -1385,7 +1386,7 @@ describe("Session archive trace member authorization", () => {
       daemonId: "dmn_late_owner", workspaceId: "local" });
     const foreign = store.registerRuntime({ id: "rt_late_foreign", name: "foreign", provider: "claude",
       daemonId: "dmn_late_foreign", workspaceId: "local" });
-    const issue = store.createIssue({ title: "Late reject", workspaceId: "local" });
+    const issue = createResponsibleTestIssue(store, { title: "Late reject", workspaceId: "local" });
     store.reportIssueWorkspace({ issueId: issue.id, runtimeId: owner.id,
       rootPath: `/tmp/${issue.key}`, branchName: `agent/${issue.key}`, status: "ready" });
     const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "trace" });
@@ -1418,7 +1419,7 @@ describe("Session archive trace member authorization", () => {
     store.ensureLocalWorkspace();
     const runtime = store.registerRuntime({ id: "rt_manifest_fail", name: "owner", provider: "codex",
       daemonId: "dmn_manifest_fail", workspaceId: "local" });
-    const issue = store.createIssue({ title: "Manifest failure", workspaceId: "local" });
+    const issue = createResponsibleTestIssue(store, { title: "Manifest failure", workspaceId: "local" });
     store.reportIssueWorkspace({ issueId: issue.id, runtimeId: runtime.id,
       rootPath: `/tmp/${issue.key}`, branchName: `agent/${issue.key}`, status: "ready" });
     const fixture = await buildArchiveFixture({ subject: { kind: "issue", id: issue.id }, traces: {} });
@@ -1445,7 +1446,7 @@ describe("Session archive trace member authorization", () => {
     store.ensureLocalWorkspace();
     const runtime = store.registerRuntime({ id: "rt_late_fence", name: "owner", provider: "codex",
       daemonId: "dmn_late_fence", workspaceId: "local" });
-    const issue = store.createIssue({ title: "Late fence", workspaceId: "local" });
+    const issue = createResponsibleTestIssue(store, { title: "Late fence", workspaceId: "local" });
     store.reportIssueWorkspace({ issueId: issue.id, runtimeId: runtime.id,
       rootPath: `/tmp/${issue.key}`, branchName: `agent/${issue.key}`, status: "ready" });
     const fixture = await buildArchiveFixture({ subject: { kind: "issue", id: issue.id }, traces: {} });
@@ -1495,7 +1496,7 @@ describe("Session archive trace member authorization", () => {
       id: "rt_attempt_fence", name: "attempt fence", provider: "codex",
       daemonId: "dmn_attempt_fence", workspaceId: "local",
     });
-    const issue = store.createIssue({ title: "Attempt fence", workspaceId: "local" });
+    const issue = createResponsibleTestIssue(store, { title: "Attempt fence", workspaceId: "local" });
     store.reportIssueWorkspace({ issueId: issue.id, runtimeId: runtime.id,
       rootPath: `/tmp/${issue.key}`, branchName: `agent/${issue.key}`, status: "ready" });
     const fixture = await buildArchiveFixture({
@@ -1631,7 +1632,7 @@ for (const backend of orphanBackends) {
       const { store, db: database } = opened;
       const runtime = store.registerRuntime({ id: `rt_orphan_${label}`, name: label, provider: "codex",
         daemonId: `dmn_orphan_${label}`, workspaceId: "local" });
-      const issue = store.createIssue({ title: label, workspaceId: "local" });
+      const issue = createResponsibleTestIssue(store, { title: label, workspaceId: "local" });
       store.reportIssueWorkspace({ issueId: issue.id, runtimeId: runtime.id,
         rootPath: `/tmp/${issue.key}`, branchName: `agent/${issue.key}`, status: "ready" });
       const fixture = await buildArchiveFixture({ subject: { kind: "issue", id: issue.id }, traces: {} });

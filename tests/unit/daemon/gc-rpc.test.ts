@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from "../multiremi/helpers.js";
 import { afterEach, describe, expect, it } from "bun:test";
 import type { Database } from "bun:sqlite";
 import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
@@ -26,7 +27,7 @@ async function fixture(code: string) {
   const store = new MultiremiStore(db);
   store.ensureLocalWorkspace();
   const runtime = store.registerRuntime({ id: "runtime", name: "GC", provider: "codex", daemonId: "daemon-gc" });
-  const issue = store.createIssue({ title: "GC parity", workspaceId: "local" });
+  const issue = createResponsibleTestIssue(store, { title: "GC parity", workspaceId: "local" });
   const archives = new SessionArchiveService(store, { root: join(root, "archives"), minFreeBytes: 0 });
   const workspace = (runtimeId: string) => store.reportIssueWorkspace({ issueId: issue.id, runtimeId,
     rootPath: `/tmp/${issue.key}`, branchName: `agent/${issue.key}`, status: "ready" });

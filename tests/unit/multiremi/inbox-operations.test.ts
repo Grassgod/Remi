@@ -1,8 +1,10 @@
+import { createResponsibleTestAutopilot } from './helpers.js';
+import { createResponsibleTestIssue } from './helpers.js';
 import {it,expect} from 'bun:test';
 import {pendingTurnBackendTests} from './pending-turn-test-backends.js';
 pendingTurnBackendTests('MUL-506 message operations and dispatch',fixture=>{
   function setup(){const {store,db}=fixture();const a=store.createAgent({name:'A',provider:'codex'}),b=store.createAgent({name:'B',provider:'codex'});
-    const issue=store.createIssue({title:'Conversation',assigneeType:'agent',assigneeId:a.id}),session=store.getOrCreateDefaultIssueSession(issue.id);
+    const issue=createResponsibleTestIssue(store, {title:'Conversation',assigneeType:'agent',assigneeId:a.id}),session=store.getOrCreateDefaultIssueSession(issue.id);
     const send=(body:string,to=b.id)=>store.sendMessage({session_id:session.id,sender:{type:'member',id:'mem_local_local'},to:{type:'agent',ref:to},message_kind:'request',wake_requested:'now',body_md:body});
     return {store,db,a,b,issue,session,send};}
   it('stores pair-limit downgrades and resumes the chain after a new member message',()=>{const f=setup();let source=f.send('start',f.a.id).turn_id!,sender=f.a.id,target=f.b.id;
@@ -30,18 +32,32 @@ pendingTurnBackendTests('MUL-506 message operations and dispatch',fixture=>{
     const first=f.store.sendChatMessage(chat.id,{body:'first'}),second=f.store.sendChatMessage(chat.id,{body:'second'});
     expect(second.task.id).toBe(first.task.id);expect(f.store.listTurns({workspace_id:'local',session_id:chat.id})).toHaveLength(1);expect(f.store.listMessages(chat.id).map(m=>m.body_md)).toEqual(['first','second']);});
   it('questions and permission answers work after physically dropping the three old tables',()=>{const f=setup();for(const table of ['multiremi_task_human_requests','multiremi_issue_decisions','multiremi_task_steer_messages'])f.db.exec(`DROP TABLE ${table}`);
-    const sent=f.send('work',f.a.id),turn=f.store.getTurn(sent.turn_id!)!;
-    const request=f.store.createTaskHumanRequest({taskId:turn.current_attempt_id!,kind:'permission',payload:{permission:'run'}});
-    expect(f.store.getMessage(request.id)?.message_kind).toBe('decision');expect(f.store.respondTaskHumanRequest(request.id,{response:{allow:true},respondedBy:'local'})?.status).toBe('responded');});
+    f.store.updateIssue(f.issue.id,{responsibleMemberId:'mem_local_local',actorType:'member',actorId:'mem_local_local'});
+    const runtime=f.store.registerRuntime({name:'Permission host',provider:'codex',daemonId:'permission-host'});
+    f.store.updateAgent(f.a.id,{runtimeId:runtime.id});
+    const sent=f.send('work',f.a.id),turn=f.store.getTurn(sent.turn_id!)!,attemptId=turn.current_attempt_id!;
+    expect(f.store.claimTask(runtime.id)?.id).toBe(attemptId);f.store.startTask(attemptId);
+    const result=f.store.getDaemonTurnBridge().rpc('turn.decision',{turn_id:turn.id,attempt_id:attemptId,
+      wait_id:`permission_${attemptId}`,dedupe_key:`permission:${attemptId}`,body_md:'May I run?',
+      options:[{label:'Allow',value:'allow'}],metadata:{kind:'permission',permission:'run',
+        options:[{optionId:'allow',name:'Allow',kind:'allow_once'}]},timeout_ms:50},
+      {runtimeId:runtime.id,daemonId:runtime.daemonId!,workspaceId:'local'});
+    expect(result.ok).toBe(true);
+    const request=f.store.getQuestion(String(result.message_id))!;
+    expect(request.current_handler).toEqual({type:'member',id:'mem_local_local'});
+    expect(f.store.getMessage(request.id)?.message_kind).toBe('decision');
+    expect(()=>f.store.respondTaskHumanRequest(request.id,{response:{option_id:'forged'},respondedBy:'mem_local_local',expectedRouteRevision:request.route_revision})).toThrow('invalid human response');
+    expect(f.store.respondTaskHumanRequest(request.id,{response:{option_id:'allow'},respondedBy:'mem_local_local',expectedRouteRevision:request.route_revision})?.status).toBe('responded');
+    expect(f.store.getQuestion(request.id)?.answer_revision).toBe(1);});
   it('Autopilot inputs use one canonical message and independent run lanes',()=>{const f=setup();
-    const auto=f.store.createAutopilot({title:'Runs',assigneeId:f.a.id,executionMode:'run_only'});
+    const auto=createResponsibleTestAutopilot(f.store, {title:'Runs',assigneeId:f.a.id,executionMode:'run_only'});
     const one=f.store.runAutopilot(auto.id,{prompt:'one'}),two=f.store.runAutopilot(auto.id,{prompt:'two'});
     const turns=f.store.listTurns({workspace_id:'local',session_id:`auto_${auto.id}`});
     expect(turns).toHaveLength(2);expect(new Set(turns.map(t=>t.execution_scope)).size).toBe(2);
     expect(f.store.listMessages(`auto_${auto.id}`).filter(m=>m.message_kind==='request').map(m=>m.body_md)).toEqual(['one','two']);
     for(const run of [one,two]){const task=f.store.getTask(run.taskId!)!;
       expect(turns.find(t=>t.current_attempt_id===task.id)?.trigger_message_id).toBeTruthy();}
-    const issueAuto=f.store.createAutopilot({title:'Issue run',assigneeId:f.b.id,executionMode:'create_issue'}),run=f.store.runAutopilot(issueAuto.id,{prompt:'Issue request'});
+    const issueAuto=createResponsibleTestAutopilot(f.store, {title:'Issue run',assigneeId:f.b.id,executionMode:'create_issue'}),run=f.store.runAutopilot(issueAuto.id,{prompt:'Issue request'});
     expect(f.store.listMessages(f.store.getOrCreateDefaultIssueSession(run.issueId!).id)).toHaveLength(1);
     expect(f.store.listMessages(`auto_${issueAuto.id}`)[0]?.message_kind).toBe('request');
     expect(f.store.listMessages(`auto_${issueAuto.id}`)[0]?.body_md).toBe('Issue request');

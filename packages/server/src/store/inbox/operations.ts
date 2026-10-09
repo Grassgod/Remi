@@ -14,6 +14,8 @@ import { mintQuestionCardToken,hashQuestionCardToken,type QuestionCardCredential
 import { patchDecisionRecord } from './decision-records.js';
 import { lockLane } from './lane-machine.js';
 import { IssueDecisionError } from '../repos/issues-repo.js';
+import { Questions } from './questions.js';
+import { isHistoricalIssueQuestionRecord } from '@multiremi/contracts';
 
 type InboxQuery = {access?:InboxAccess;limit?:number;cursor?:{created_at:string;id:string};visible?:(sessionId:string)=>boolean;
   visibleMessage?:(message:Pick<UnifiedMessage,'id'|'session_id'|'reply_to_id'|'kind'|'task_id'|'metadata'>)=>boolean};
@@ -49,6 +51,10 @@ export class InboxOperations {
     });
   }
   private assertUnread(message:UnifiedMessage):void {
+      if (message.metadata.question || message.metadata.human_request || message.metadata.decision_record)
+        throw new IssueDecisionError(409,'Original questions and their history are immutable; use question close');
+      if(message.metadata.issue_delivery || message.metadata.issue_delivery_response)
+        throw new IssueDecisionError(409,'Formal deliveries and acceptance records are immutable; submit a new delivery');
       if(this.ctx.db.query(`SELECT 1 FROM multiremi_turns WHERE session_id=? AND input_to_seq>=? LIMIT 1`).get(message.session_id,message.seq)
         ||this.ctx.db.query(`SELECT 1 FROM multiremi_session_lanes WHERE session_id=? AND reader_type='agent'
           AND (cursor_seq>=? OR cursor_seq=? AND cursor_offset>0) LIMIT 1`).get(message.session_id,message.seq,message.seq-1))throw new Error('A consumed message cannot be edited or deleted');
@@ -106,9 +112,9 @@ export class InboxOperations {
       OR m.message_kind='status' AND ${json('lifecycle_event')} IN ('task_failed','task_cancelled')
       OR m.message_kind IN ('report','final') AND ${json('message_outcome')} IN ('failed','blocked','cancelled')) THEN 1 ELSE 0 END`;
     if (input.access) {
-      const guard=inboxVisibilitySql(this.ctx.db,input.access);
+      const guard=inboxVisibilitySql(this.ctx.db,input.access,{from,params});
       const filtered=from+' AND '+guard.where;
-      const binds=[...params,...guard.params];
+      const binds=[...guard.cteParams,...params,...guard.params];
       const counts=this.ctx.db.query(`${guard.cte} SELECT COUNT(*) AS unread_count,COALESCE(SUM(${attention}),0) AS attention_count ${filtered}`).get(...binds);
       const n=Math.min(input.limit??100,1000),cursor=input.cursor;
       const extra=cursor?' AND (m.created_at<? OR m.created_at=? AND m.id<?)':'';
@@ -295,43 +301,13 @@ export class InboxOperations {
       const token=mintQuestionCardToken();const changed=this.ctx.db.run(`UPDATE multiremi_conversation_log SET card_token_hash=?,card_token_recipient=?,card_token_consumed_at=NULL WHERE id=? AND resolved_at IS NULL AND card_token_consumed_at IS NULL`,[hashQuestionCardToken(token),recipient,id]);
       if(!changed.changes)throw new Error('Decision is settled');return token;});
   }
-  answerMessageDecision(id:string,input:{sender:SendMessageInput['sender'];body_md:string;credential?:QuestionCardCredential;response?:Record<string,unknown>;source_turn_id?:string}) {
+  answerMessageDecision(id:string,input:{sender:SendMessageInput['sender'];body_md:string;credential?:QuestionCardCredential;response?:Record<string,unknown>;source_turn_id?:string;expected_route_revision?:number;expected_answer_revision?:number;revise?:boolean;reason?:string}) {
     return this.transaction(events=>{const message=getMessage(this.ctx,id);if(!message||message.message_kind!=='decision')throw new Error('Decision not found');this.lockMessage(message);
-      const key=message.metadata.human_request?'human_request':'decision_record';
-      const record=(message.metadata[key]??{}) as Record<string,unknown>;
-      const status=String(record.status??'pending');
-      const issueDecision=!message.metadata.human_request && (typeof record.source_issue_id==='string' || typeof message.metadata.source_issue_id==='string');
-      // Explicit Issue decisions retain the domain's deliberate member revision
-      // behavior. Card callbacks and other settled requests remain single-shot.
-      const memberRevision=issueDecision && status==='answered' && input.sender.type==='member' && !input.credential;
-      if(message.deleted_at || (!memberRevision && (message.resolved_at || !['pending','escalated'].includes(status))))throw new Error('Decision is settled');
-      // Domain decisions keep their response projections and lifecycle hooks,
-      // while their sole authority and reply still live on message rows.
-      if(message.metadata.human_request || issueDecision) {
-        const before=this.ctx.conversationLog().getConversationLogHead(message.session_id)?.headSeq??0;
-        if(message.metadata.human_request) {
-          if(input.sender.type!=='member')throw new Error('Decision requires a member answer');
-          const request=this.ctx.tasks().getTaskHumanRequest(id);
-          const task=request?this.ctx.tasks().getTask(request.taskId):null;
-          if(!task || ['completed','failed','cancelled'].includes(task.status))throw new Error('Decision source turn is settled');
-          const response=normalizeHumanResponse(request!,input.response??{answer:input.body_md});
-          this.ctx.tasks().respondTaskHumanRequest(id,{response,respondedBy:input.sender.id,cardCredential:input.credential});
-        } else {
-          const session=this.ctx.issueSessions().getIssueSession(message.session_id)!;
-          if(input.credential&&!this.ctx.feishuBot().getFeishuIssueDecisionCardContext(session.workspaceId,id)) throw new Error('Decision card context not found');
-          if(input.sender.type!=='member'&&input.sender.type!=='agent')throw new Error('Decision requires its recipient');
-          const source=input.source_turn_id?this.getTurn(input.source_turn_id):null;
-          this.ctx.issues().answerIssueDecision(session.issueId,id,{answer:input.body_md,
-            reason:String(input.response?.reason??'Answered through the message API'),overturn:String(input.response?.overturn??'')},
-            {type:input.sender.type,id:input.sender.id!,taskId:source?.current_attempt_id??null},{cardCredential:input.credential});
-        }
-        const reply=this.listMessages(message.session_id,{from:before,limit:1000}).find(m=>m.reply_to_id===id&&m.sender_id===input.sender.id);
-        if(!reply)throw new Error('Decision reply was not recorded');
-        return {message:reply,wake_applied:reply.wake_applied,wake_reason:reply.wake_reason,
-          ...(typeof reply.metadata.delivery_turn_id==='string'?{turn_id:reply.metadata.delivery_turn_id}:{})};
-      }
-      if(input.sender.type==='member'?message.to_member_id!==input.sender.id:input.sender.type!=='agent'||message.to_agent_id!==input.sender.id)throw new Error('Decision requires its recipient');
-      if(!patchDecisionRecord(this.ctx,id,key,{status:'answered',answer:input.body_md,responded_at:nowIso()},undefined,input.credential))throw new Error('Decision is settled');
+      if (message.metadata.question || message.metadata.human_request || isHistoricalIssueQuestionRecord(message.metadata.decision_record)) return new Questions(this.ctx).answer(id, { expected_route_revision: input.expected_route_revision!, response: input.response ?? { answer: input.body_md }, body_md: input.body_md, revise: input.revise, reason: input.reason, expected_answer_revision: input.expected_answer_revision }, input.sender, input.source_turn_id, input.credential);
+      // Retain the carrier of old status-only choices without inventing a Q.
+      const key=message.metadata.decision_record?'decision_record':'message_choice';
+      if(input.sender.type==='member'?message.to_member_id!==input.sender.id:input.sender.type!=='agent'||message.to_agent_id!==input.sender.id)throw new IssueDecisionError(403,'Decision requires its recipient');
+      if(!patchDecisionRecord(this.ctx,id,key,{status:'answered',answer:input.body_md,responded_at:nowIso()},'pending',input.credential))throw new IssueDecisionError(409,'Decision is settled');
       return sendMessageWithinTransaction(this.ctx,{session_id:message.session_id,sender:input.sender,to:message.sender_type==='agent'&&message.sender_id?{type:'agent',ref:message.sender_id}:{type:'none'},
         body_md:input.body_md,message_kind:'reply',wake_requested:'now',reply_to_id:id,source_turn_id:input.source_turn_id,
         metadata:input.response?{human_response:input.response}:undefined},events);});

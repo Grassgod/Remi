@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { afterEach, describe, expect, it } from "bun:test";
 import { createStore, db, resetMultiremiTestEnv } from "./helpers.js";
 
@@ -13,7 +14,7 @@ describe("follow lane Runtime lifecycle", () => {
     });
     const survivor = store.registerRuntime({ name: "Surviving host", provider: "claude" });
     const agent = store.createAgent({ name: "Following reader", provider: "claude" });
-    const issue = store.createIssue({ title: "Follow history survives host loss" });
+    const issue = createResponsibleTestIssue(store, { title: "Follow history survives host loss" });
     const parent = store.getOrCreateDefaultIssueSession(issue.id);
     for (const body of ["Original parent decision", "Already delivered decision"]) {
       store.appendSessionEvent(parent.id, { authorType: "agent", authorId: agent.id, body });

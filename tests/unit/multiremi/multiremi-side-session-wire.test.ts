@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { afterEach, expect, it } from "bun:test";
 import { daemonTaskClaimResponse } from "@multiremi/api/wire/tasks.js";
 import { MultiremiDaemonClient } from "@multiremi/client.js";
@@ -11,7 +12,7 @@ it("carries frozen inherited history and its truncation metadata through claim, 
   store.ensureLocalWorkspace();
   const runtime = store.registerRuntime({ id: "rt_side_wire", name: "side", provider: "claude", workspaceId: "local" });
   const agent = store.createAgent({ name: "Side agent", provider: "claude", runtimeId: runtime.id });
-  const issue = store.createIssue({ title: "Side wire" });
+  const issue = createResponsibleTestIssue(store, { title: "Side wire" });
   const parent = store.getOrCreateDefaultIssueSession(issue.id);
   store.appendSessionEvent(parent.id, { authorType: "agent", authorId: agent.id, kind: "message", body: "Parent reference decision" });
   const side = store.createIssueSession(issue.id, { title: "Side", parentSessionId: parent.id });
@@ -73,7 +74,7 @@ it("carries follow events as read-only reference through claim, client and promp
   store.ensureLocalWorkspace();
   const runtime = store.registerRuntime({ id: "rt_follow_wire", name: "follow", provider: "claude", workspaceId: "local" });
   const agent = store.createAgent({ name: "Follow agent", provider: "claude", runtimeId: runtime.id });
-  const issue = store.createIssue({ title: "Follow wire" });
+  const issue = createResponsibleTestIssue(store, { title: "Follow wire" });
   const parent = store.getOrCreateDefaultIssueSession(issue.id);
   store.appendSessionEvent(parent.id, { authorType: "agent", authorId: agent.id, body: "Earlier parent reference" });
   const side = store.createIssueSession(issue.id, { title: "Follow", parentSessionId: parent.id, inheritMode: "follow" });
@@ -125,7 +126,7 @@ it("exposes an empty follow round as null through claim and client without an in
   store.ensureLocalWorkspace();
   const runtime = store.registerRuntime({ id: "rt_follow_empty", name: "follow", provider: "claude", workspaceId: "local" });
   const agent = store.createAgent({ name: "Follow agent", provider: "claude", runtimeId: runtime.id });
-  const issue = store.createIssue({ title: "Empty follow" });
+  const issue = createResponsibleTestIssue(store, { title: "Empty follow" });
   const parent = store.getOrCreateDefaultIssueSession(issue.id);
   const side = store.createIssueSession(issue.id, { title: "Follow", parentSessionId: parent.id, inheritMode: "follow" });
   const task = store.createTask({ agentId: agent.id, issueId: issue.id, issueSessionId: side.id, prompt: "Discuss" });

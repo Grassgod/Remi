@@ -81,6 +81,7 @@ vi.mock("../../navigation", () => ({
 vi.mock("./delete-workspace-dialog", () => ({
   DeleteWorkspaceDialog: () => null,
 }));
+vi.mock("./issue-responsibility-migration-section", () => ({ IssueResponsibilityMigrationSection: () => null }));
 
 vi.mock("sonner", () => ({
   toast: { success: vi.fn(), error: vi.fn() },

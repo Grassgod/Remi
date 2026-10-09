@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { runTurnExecutionMutation } from "@multiremi/store/turn-execution-records.js";
 import { afterEach, describe, expect, it } from "bun:test";
 import { createLocalStore as createStore, db, resetMultiremiTestEnv } from "./helpers.js";
@@ -71,11 +72,11 @@ describe("Agent execution target", () => {
       title: "Local files",
       resources: [{ resourceType: "local_directory", resourceRef: { local_path: "/first/files", daemon_id: first.daemonId! } }],
     });
-    const localIssue = store.createIssue({ title: "Local issue", projectId: localProject.id });
+    const localIssue = createResponsibleTestIssue(store, { title: "Local issue", projectId: localProject.id });
     const local = store.createTask({ agentId: agent.id, issueId: localIssue.id, prompt: "Local" });
     const project = store.createProject({ title: "First project" });
     store.createProjectDevice(project.id, { daemonId: first.daemonId! });
-    const issue = store.createIssue({ title: "Bound issue", projectId: project.id });
+    const issue = createResponsibleTestIssue(store, { title: "Bound issue", projectId: project.id });
     const projectTask = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "Project" });
     store.updateAgent(agent.id, { runtimeId: second.id });
     expect(store.claimTask(first.id)).toBeNull();

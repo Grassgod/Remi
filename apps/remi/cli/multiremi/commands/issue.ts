@@ -43,7 +43,7 @@ import {
 import {
   VALID_ISSUE_STATUSES,
   actorBodyFromOptions,
-  addAssigneeBodyFields,
+  addAssigneeBodyFields as addLegacyAssigneeBodyFields,
   addStringBodyField,
   citationRefsOption,
   metadataFilterFromOptions,
@@ -53,6 +53,11 @@ import {
   readOptionalTextBody,
   subscriberBodyFromOptions,
 } from "./fields.js";
+
+function addAssigneeBodyFields(body: Record<string, unknown>, options: CliOptions, idKey: string, typeKey: string, nameKey: string): void {
+  addLegacyAssigneeBodyFields(body, options, idKey, typeKey, nameKey);
+  if (body.assignee_type === "member") throw new Error("Execution assignee must be an Agent or Squad; designate the root human with --responsible-member");
+}
 
 export interface CliIssueComment {
   id: string;
@@ -99,7 +104,7 @@ export async function issue(positional: string[], options: CliOptions): Promise<
   }
   if (action === "assign") {
     const issueId = positional[1]?.trim();
-    if (!issueId) throw new Error("usage: multiremi issue assign <issue-id> (--to <id|name|email> [--to-type agent|member|squad] | --unassign); --unassign clears the assignee and cancels active tasks on this issue");
+    if (!issueId) throw new Error("usage: multiremi issue assign <issue-id> (--to <id|name> [--to-type agent|squad] | --unassign); --unassign clears the assignee and cancels active tasks on this issue");
     await issueAssign(issueId, options);
     return;
   }
@@ -527,6 +532,7 @@ export async function issueCreate(options: CliOptions): Promise<void> {
   addStringBodyField(body, options, "project_id", "project", false, true);
   addStringBodyField(body, options, "runtime_workspace_id", "runtime-workspace", false, true);
   addStringBodyField(body, options, "parent_issue_id", "parent", false, true);
+  addStringBodyField(body, options, "responsible_member_id", "responsible-member", false, true);
   // MUL-400 E3: declare prerequisites at creation; the server writes them in
   // the same transaction and parks the issue at backlog while they are unmet.
   const blockedBy = stringListOption(options, "blocked-by", "blockedBy");
@@ -795,6 +801,7 @@ export async function issueUpdate(issueId: string, options: CliOptions): Promise
   addStringBodyField(body, options, "project_id", "project", false, true);
   addStringBodyField(body, options, "runtime_workspace_id", "runtime-workspace", false, true);
   addStringBodyField(body, options, "parent_issue_id", "parent", false, true);
+  addStringBodyField(body, options, "responsible_member_id", "responsible-member", false, true);
   addStringBodyField(body, options, "start_date", "start-date", false, true);
   addStringBodyField(body, options, "due_date", "due-date", false, true);
   addAssigneeBodyFields(body, options, "assignee-id", "assignee-type", "assignee");
@@ -815,7 +822,7 @@ export async function issueAssign(issueId: string, options: CliOptions): Promise
     body.assignee_type = null;
     body.assignee_id = null;
   } else {
-    if (!hasTarget) throw new Error("provide --to <id|name|email> [--to-type agent|member|squad] or --unassign");
+    if (!hasTarget) throw new Error("provide --to <id|name> [--to-type agent|squad] or --unassign");
     addAssigneeBodyFields(body, options, "to-id", "to-type", "to");
   }
   // MUL-400 E3: to start a parked issue, use `issue update --status todo

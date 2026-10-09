@@ -320,6 +320,15 @@ describe("ProjectDetail issues surface", () => {
     updateProjectAsync.mockResolvedValue(undefined);
   });
 
+  it.each([false, true])("shows historical member defaults as needing execution configuration (archived=%s)", (archived) => {
+    state.project = makeProject({ default_assignee_type: "member", default_assignee_id: "mem_old", ...(archived ? { archived_at: "2026-07-01T00:00:00Z" } : {}) });
+    renderDetail();
+    expect(screen.getByText("member:mem_old")).toBeTruthy();
+    expect(screen.getByText("Needs Agent or Squad configuration")).toBeTruthy();
+    expect(updateProject).not.toHaveBeenCalled();
+    expect(updateProjectAsync).not.toHaveBeenCalled();
+  });
+
   it("defers the project toolbar pin observer until the page gate opens", () => {
     const view = renderDetail();
     expect(pinObserver).toHaveBeenLastCalledWith(false);

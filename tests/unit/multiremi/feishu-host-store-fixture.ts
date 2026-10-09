@@ -2,6 +2,7 @@ import { MultiremiStore } from "@multiremi/store.js";
 import { PostgresSyncDatabase, type SqlDatabase } from "@multiremi/store/db/postgres.js";
 import { createLocalStore as createSqliteStore, db as sqliteDb, resetMultiremiTestEnv as resetSqliteEnv } from "./helpers.js";
 export { useUploadDir } from "./helpers.js";
+export { createResponsibleTestIssue, acceptTestIssueDelivery } from './helpers.js';
 
 // These host suites also run unchanged against a disposable real PostgreSQL database.
 // Opt in explicitly; never probe a default port or fall back to SQLite on PG failure.

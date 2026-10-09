@@ -1,3 +1,5 @@
+import { createResponsibleTestAutopilot } from './helpers.js';
+import { createResponsibleTestIssue } from './helpers.js';
 // Projects/squads/autopilot runs, project resources and how they reach the daemon
 // workdir and the task prompt.
 import { afterEach, describe, expect, it } from "bun:test";
@@ -20,7 +22,7 @@ describe("Multiremi store — projects, resources, and prompt context", () => {
       leaderId: agent.id,
       memberIds: [agent.id],
     });
-    const autopilot = store.createAutopilot({
+    const autopilot = createResponsibleTestAutopilot(store, {
       title: "Triage regressions",
       projectId: project.id,
       assigneeType: "squad",
@@ -62,7 +64,7 @@ describe("Multiremi store — projects, resources, and prompt context", () => {
         label: "primary repo",
       }],
     });
-    const issue = store.createIssue({ title: "Use resources", projectId: project.id });
+    const issue = createResponsibleTestIssue(store, { title: "Use resources", projectId: project.id });
     const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "Inspect the repo" });
 
     expect(store.getProject(project.id)?.resourceCount).toBe(1);
@@ -130,7 +132,7 @@ describe("Multiremi store — projects, resources, and prompt context", () => {
         label: "runtime repo",
       }],
     });
-    const issue = store.createIssue({ title: "Run with context", projectId: project.id });
+    const issue = createResponsibleTestIssue(store, { title: "Run with context", projectId: project.id });
     const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "Use runtime context" });
     const dir = mkdtempSync(join(tmpdir(), "multiremi-context-"));
 
@@ -179,7 +181,7 @@ describe("Multiremi store — projects, resources, and prompt context", () => {
   it("stores issue metadata as a bounded primitive map and includes it in prompts", () => {
     const store = createStore();
     const agent = store.createAgent({ name: "Codex", provider: "codex" });
-    const issue = store.createIssue({ title: "Remember PR state" });
+    const issue = createResponsibleTestIssue(store, { title: "Remember PR state" });
 
     expect(issue.metadata).toEqual({});
     expect(store.setIssueMetadataKey(issue.id, "pr_url", "https://github.com/example/repo/pull/1")).toEqual({
@@ -207,7 +209,7 @@ describe("Multiremi store — projects, resources, and prompt context", () => {
     const agent = store.createAgent({ name: "Worker", provider: "codex" });
     const reviewer = store.createAgent({ name: "Reviewer", provider: "codex" });
     const squad = store.createSquad({ name: "Review squad", leaderId: reviewer.id, memberIds: [agent.id] });
-    const issue = store.createIssue({ title: "Reply with context", assigneeType: "squad", assigneeId: squad.id });
+    const issue = createResponsibleTestIssue(store, { title: "Reply with context", assigneeType: "squad", assigneeId: squad.id });
     const reviewerTask = store.createTask({ agentId: reviewer.id, issueId: issue.id, prompt: "Coordinate review." });
     const root = store.createIssueComment(issue.id, { body: "Root context." });
     const comment = store.createIssueComment(issue.id, {

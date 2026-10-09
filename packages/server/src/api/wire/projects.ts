@@ -15,7 +15,7 @@ import type {
   UpdateProjectInput,
 } from "@multiremi/contracts/types.js";
 import type { Context } from "hono";
-import { ProjectInstructionsRevisionConflictError } from "@multiremi/store/repos/projects-repo.js";
+import { ProjectExecutionOwnerError, ProjectInstructionsRevisionConflictError } from "@multiremi/store/repos/projects-repo.js";
 import type { ProjectSummary } from "@multiremi/store/repos/projects-repo.js";
 import { currentRequestUserId } from "./context.js";
 
@@ -203,6 +203,9 @@ export function labelCompatibilityErrorResponse(c: Context, error: unknown): Res
 }
 
 export function projectErrorResponse(c: Context, err: unknown): Response | null {
+  if (err instanceof ProjectExecutionOwnerError) {
+    return c.json({ error: err.message, code: err.code }, 409);
+  }
   if (err instanceof ProjectInstructionsRevisionConflictError) {
     return c.json({
       error: "project instructions changed after they were loaded",

@@ -31,7 +31,7 @@ const PROJECT_FIELDS: readonly CliOptionSpec[] = [
   { name: "lead", type: "string", valueName: "member-or-agent", description: "Project lead reference" },
   { name: "lead-type", type: "string", valueName: "member|agent", description: "Project lead type" },
   { name: "default-assignee", type: "string", valueName: "ref", description: "Default issue assignee" },
-  { name: "default-assignee-type", type: "string", valueName: "agent|member|squad", description: "Default issue assignee type" },
+  { name: "default-assignee-type", type: "string", valueName: "agent|squad", description: "Default issue execution assignee type; root human responsibility is configured on the Issue" },
   { name: "repo", type: "string", valueName: "repo", repeatable: true, description: "Associate an imported repository" },
   { name: "expected-version", type: "integer", valueName: "n", description: "Expected instructions revision" },
 ];
@@ -221,7 +221,7 @@ async function projectBody(
   const repos = includeResources
     ? await Promise.all(stringOptions(invocation, "repo").map((ref) => resolveRepository(client, requiredWorkspace(invocation), ref)))
     : [];
-  return requestBody(invocation, {
+  const body = await requestBody(invocation, {
     workspace_id: includeResources ? requiredWorkspace(invocation) : undefined,
     title: stringOption(invocation, "title") ?? undefined,
     description: stringOption(invocation, "description") ?? undefined,
@@ -236,6 +236,11 @@ async function projectBody(
     expected_instructions_revision: integerOption(invocation, "expected-version") ?? undefined,
     resources: repos.length ? repos.map((repo) => ({ resource_type: "github_repo", resource_ref: { url: repo.url } })) : undefined,
   });
+  const type = body.default_assignee_type ?? body.defaultAssigneeType;
+  if (type != null && type !== "agent" && type !== "squad") {
+    throw new CliError("usage", "Project default execution assignee must be an Agent or Squad; configure the final human on the root Issue");
+  }
+  return body;
 }
 
 function spec(

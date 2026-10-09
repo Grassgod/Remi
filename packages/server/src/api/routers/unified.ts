@@ -11,6 +11,8 @@ import { currentTaskAccessToken, currentRequestUserId } from "../wire/context.js
 import { parseTraceWindow } from "../trace/request.js";
 import type { RouterDeps } from "./deps.js";
 import { IssueDecisionError } from "@multiremi/store/repos/issues-repo.js";
+import { QuestionError } from '../../store/inbox/questions.js';
+import type { QuestionActor } from '@multiremi/contracts';
 import { supervisorTaskIdentity } from "../helpers/organizer.js";
 import { issueCommentCreateInput, issueMutationActor } from "../helpers/issues.js";
 import { OrganizerActionError } from "../../organizer/settings.js";
@@ -59,6 +61,7 @@ async function action(c: Context, run: () => unknown | Promise<unknown>): Promis
   catch (error) {
     if (error instanceof InputError) return c.json({ error: error.message }, 400);
     if (error instanceof IssueDecisionError) return c.json({ error: error.message }, error.status);
+    if (error instanceof QuestionError) return c.json({ error: error.message, code: error.code }, error.status);
     if (error instanceof OrganizerActionError) return c.json({ error: error.message, code: error.code }, error.status);
     if (error instanceof IssueDependencyError) return issueDependencyErrorResponse(c, error)!;
     if (error instanceof Error && /consumed|settled|running turn|retry|terminal|cancelled|pending attempt/i.test(error.message)) return c.json({ error: error.message }, 409);
@@ -168,6 +171,8 @@ export function registerUnifiedRoutes(app: Hono, deps: RouterDeps): void {
       if (reply?.message_kind === "decision" && kind === "reply") {
         if (files.length || input.attachment_ids?.length) throw new InputError("decision answers cannot include attachments");
         const result = store.answerMessageDecision(reply.id, { sender, body_md: text || selected?.join("\n") || JSON.stringify(input.response), source_turn_id: callerTurn(c),
+          expected_route_revision: input.expected_route_revision, revise: input.revise, reason: input.reason,
+          expected_answer_revision: input.expected_answer_revision,
           response: input.response ?? (selected?.length ? { selected_options: selected, answer: text || selected.join("\n") } : undefined) });
         return { ...result, message: publicMessage(result.message) };
       }
@@ -213,6 +218,77 @@ export function registerUnifiedRoutes(app: Hono, deps: RouterDeps): void {
   app.get("/api/messages/:id", c => {
     const loaded = loadMessage(c);
     return loaded instanceof Response ? loaded : c.json({ message: publicMessage(loaded.message) });
+  });
+  const questionActor = (c: Context, workspaceId: string) => {
+    const actor = messageActor(c, store, workspaceId);
+    return actor instanceof Response ? actor : actor.type === 'member' || actor.type === 'agent' ? actor as QuestionActor : undefined;
+  };
+  // A routed Q grants access to this original question only. It never grants
+  // access to the source Agent's private message history, Chat or trace.
+  const routedQuestionAccess = (c: Context, q: NonNullable<ReturnType<typeof store.getQuestion>>, actor: QuestionActor | undefined) => !!actor
+    && (actor.type === 'agent' ? store.canAccessQuestionFromTurn(q.id, actor.id, callerTurn(c))
+      : q.current_handler?.type === actor.type && q.current_handler.id === actor.id
+      || q.actions.allowed.some(action => ['present', 'close', 'revise'].includes(action)));
+  const loadQuestion = (c: Context) => {
+    const message = store.getMessage(c.req.param('id')!);
+    if (!message || message.visibility !== 'shown') return c.json({ error: 'question not found' }, 404);
+    const raw = store.getQuestion(message.id);
+    if (!raw) return c.json({ error: 'question not found' }, 404);
+    // Original-session membership does not authorize a Q whose source Issue
+    // has moved to another workspace. Do not return its body or answer history.
+    if (raw.route_reason === 'source_workspace_changed') return c.json({ error: 'question not found' }, 404);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, raw.workspace_id); if (denied) return denied;
+    const actor = questionActor(c, raw.workspace_id); if (actor instanceof Response) return actor;
+    const question = store.getQuestion(message.id, actor)!;
+    if (routedQuestionAccess(c, question, actor)) return { message, question, actor };
+    // Agent credentials cannot borrow their runtime owner's private visibility.
+    if (actor?.type === 'agent') return c.json({ error: 'question handler required' }, 403);
+    const visible = loadMessage(c); if (visible instanceof Response) return visible;
+    return { message, question, actor };
+  };
+  app.get('/api/issues/:id/questions', c => {
+    const issue = store.getIssue(c.req.param('id'));
+    if (!issue) return c.json({ error: 'issue not found' }, 404);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId); if (denied) return denied;
+    const actor = questionActor(c, issue.workspaceId); if (actor instanceof Response) return actor;
+    const visible = conversationEntryVisibility(c, store);
+    const limit = Number(c.req.query('limit') ?? 100), before = c.req.query('before');
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 200 || before !== undefined && (!before || before.length > 256)) return c.json({ error: 'invalid question page' }, 400);
+    let page: ReturnType<typeof store.listIssueQuestions>;
+    try { page = store.listIssueQuestions(issue.id, actor, { limit, before }); }
+    catch (error) { if (error instanceof QuestionError) return c.json({ error: error.message, code: error.code }, error.status); throw error; }
+    return c.json({ nextCursor: page.length === limit ? page.at(-1)!.id : null, questions: page.filter(q => {
+      if (q.route_reason === 'source_workspace_changed') return false;
+      const message = store.getMessage(q.id)!;
+      return routedQuestionAccess(c, q, actor) || actor?.type !== 'agent' && !(loadConversation(c, store, q.session_id) instanceof Response) && visible(message);
+    }) });
+  });
+  app.get('/api/messages/:id/question', c => {
+    const loaded = loadQuestion(c); if (loaded instanceof Response) return loaded;
+    return c.json({ question: loaded.question });
+  });
+  for (const operation of ['answer', 'escalate', 'transfer', 'present', 'continue', 'close'] as const) app.post(`/api/messages/:id/question/${operation}`, async c => {
+    const loaded = loadQuestion(c); if (loaded instanceof Response) return loaded;
+    const actor = loaded.actor;
+    if (!actor) return c.json({ error: 'question actor required' }, 403);
+    return action(c, async () => {
+      const input = await body(c);
+      if (!Number.isSafeInteger(input.expected_route_revision) || input.expected_route_revision < 1) throw new InputError('expected_route_revision is required');
+      for (const key of ['reason', 'body_md', 'summary']) if (input[key] !== undefined && typeof input[key] !== 'string') throw new InputError(`${key} must be a string`);
+      const mutation = { expected_route_revision: input.expected_route_revision, reason: input.reason };
+      if (operation === 'answer') {
+        if (!input.response || typeof input.response !== 'object' || Array.isArray(input.response)) throw new InputError('response is required');
+        if (input.revise !== undefined && typeof input.revise !== 'boolean') throw new InputError('revise must be boolean');
+        const result = store.answerQuestion(loaded.message.id, { ...mutation, response: input.response, body_md: input.body_md, revise: input.revise, expected_answer_revision: input.expected_answer_revision }, actor, callerTurn(c));
+        return { ...result, message: publicMessage(result.message) };
+      }
+      const question = operation === 'escalate' ? store.escalateQuestion(loaded.message.id, mutation, actor, callerTurn(c))
+        : operation === 'transfer' ? store.transferQuestion(loaded.message.id, mutation, actor, callerTurn(c))
+        : operation === 'present' ? store.presentQuestion(loaded.message.id, { ...mutation, summary: input.summary }, actor, callerTurn(c))
+        : operation === 'close' ? store.closeQuestion(loaded.message.id, mutation, actor, callerTurn(c))
+        : store.continueQuestion(loaded.message.id, mutation, actor);
+      return { question };
+    });
   });
   for (const method of ["PATCH", "DELETE"] as const) app.on(method, "/api/messages/:id", async c => {
     const loaded = loadMessage(c);

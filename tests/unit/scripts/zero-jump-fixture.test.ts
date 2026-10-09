@@ -8,6 +8,16 @@ it("keeps the F398 overflow fixture across independent pending agent lanes", asy
   try {
     const store = new MultiremiStore(db);
     const fixture = await seedZeroJumpFixture(store);
+    for (const id of [fixture.shortIssueId, fixture.f398IssueId, fixture.parentIssueId, fixture.ungrantedParentIssueId, fixture.ineffectiveParentIssueId, fixture.disabledParentIssueId, fixture.decisionActivityIssueId, fixture.longIssueId, fixture.xlongIssueId, fixture.runningIssueId]) {
+      expect(store.getIssue(id)?.responsibleMemberId).toBe(fixture.memberId);
+      expect(store.resolveIssueResponsibility(id).rootHuman?.id).toBe(fixture.memberId);
+    }
+    const children = store.listChildIssues(fixture.parentIssueId);
+    const completed = children.find(child => child.title === "Completed child")!;
+    expect(completed.status).toBe("done");
+    expect(completed.responsibleMemberId).toBeNull();
+    expect(store.listIssueDeliveries(completed.id)[0]?.status).toBe("accepted");
+    expect(store.resolveIssueResponsibility(fixture.disabledParentIssueId).executionOwner).toBeNull();
     const tasks = store.listActiveTasksForIssue(fixture.f398IssueId, { userId: fixture.userId });
     expect(tasks).toHaveLength(fixture.counts.f398QueuedTasks);
     expect(new Set(tasks.map(task => task.agentId)).size).toBe(fixture.counts.f398QueuedTasks);

@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { afterEach, describe, expect, it } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { canCurrentUserAccessChatTask, denyCurrentUserWorkspaceAccess, issueFromParam } from "@multiremi/api/helpers.js";
@@ -42,7 +43,7 @@ describe("S9-6 active-task SQL selection / public projection", () => {
     for (const taskId of fixture.taskIds) mutateExecution("UPDATE multiremi_turn_execution_records SET issue_id = ? WHERE id = ?", [issue, taskId]);
     seedFirstScreenTaskUsage(store, fixture.taskIds[0]!);
     const foreign = store.createWorkspace({ id: "ws_active_foreign", name: "Foreign" });
-    const foreignIssue = store.createIssue({ id: "iss_active_foreign", title: "Foreign", workspaceId: foreign.id });
+    const foreignIssue = createResponsibleTestIssue(store, { id: "iss_active_foreign", title: "Foreign", workspaceId: foreign.id });
     const foreignAgent = store.createAgent({ name: "Foreign worker", provider: "codex", workspaceId: foreign.id });
     const foreignTask = store.createTask({ agentId: foreignAgent.id, issueId: foreignIssue.id,
       prompt: "Foreign work", assignmentAuthorType: "system" });

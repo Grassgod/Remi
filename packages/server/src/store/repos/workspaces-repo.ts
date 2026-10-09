@@ -2,6 +2,7 @@
 // workspace-scoped model-gateway relay config. Extracted verbatim from MultiremiStore
 // (the facade delegates every public method here).
 import { createId, nowIso } from "@multiremi/ids.js";
+import { refreshResponsibilityEntityChange } from '../issue-responsibility-changes.js';
 import {
   cleanOptionalString,
   hasAnyField,
@@ -176,35 +177,39 @@ export class WorkspacesRepo {
   }
 
   updateWorkspaceMember(id: string, input: UpdateWorkspaceMemberInput): MultiremiWorkspaceMember {
-    const current = this.getWorkspaceMember(id);
-    if (!current) throw new Error(`Member not found: ${id}`);
-    const nextWorkspaceId = input.workspaceId ?? current.workspaceId;
-    const nextRole = input.role ?? current.role;
-    if (!current.archivedAt && nextWorkspaceId !== current.workspaceId) {
-      this.assertMemberHasNoActiveDaemonIdentity(current);
-    }
-    if (current.role === "owner" && (nextRole !== "owner" || nextWorkspaceId !== current.workspaceId)) {
-      this.assertWorkspaceKeepsOwner(current);
-    }
-    const now = nowIso();
-    this.ctx.db.run(
-      `UPDATE multiremi_workspace_members SET
-        workspace_id = ?,
-        name = ?,
-        email = ?,
-        role = ?,
-        updated_at = ?
-       WHERE id = ?`,
-      [
-        nextWorkspaceId,
-        input.name ?? current.name,
-        input.email === undefined ? current.email : input.email,
-        nextRole,
-        now,
-        id,
-      ],
-    );
-    return this.getWorkspaceMember(id)!;
+    return this.ctx.db.transaction(() => {
+      const current = this.getWorkspaceMember(id);
+      if (!current) throw new Error(`Member not found: ${id}`);
+      const nextWorkspaceId = input.workspaceId ?? current.workspaceId;
+      for (const workspaceId of [...new Set([current.workspaceId,nextWorkspaceId])].sort()) this.ctx.lockWorkspaceRuntimeLifecycle(workspaceId);
+      const nextRole = input.role ?? current.role;
+      if (!current.archivedAt && nextWorkspaceId !== current.workspaceId) {
+        this.assertMemberHasNoActiveDaemonIdentity(current);
+      }
+      if (current.role === "owner" && (nextRole !== "owner" || nextWorkspaceId !== current.workspaceId)) {
+        this.assertWorkspaceKeepsOwner(current);
+      }
+      const now = nowIso();
+      this.ctx.db.run(
+        `UPDATE multiremi_workspace_members SET
+          workspace_id = ?,
+          name = ?,
+          email = ?,
+          role = ?,
+          updated_at = ?
+         WHERE id = ?`,
+        [
+          nextWorkspaceId,
+          input.name ?? current.name,
+          input.email === undefined ? current.email : input.email,
+          nextRole,
+          now,
+          id,
+        ],
+      );
+      if (nextWorkspaceId !== current.workspaceId) refreshResponsibilityEntityChange(this.ctx,'member',id,'responsible_human_workspace_changed',[current.workspaceId]);
+      return this.getWorkspaceMember(id)!;
+    })();
   }
 
   archiveWorkspaceMember(id: string): MultiremiWorkspaceMember {
@@ -215,11 +220,13 @@ export class WorkspacesRepo {
     const now = nowIso();
     const affectedProjects: Array<{ id: string; workspace_id: string }> = [];
     const tx = this.ctx.db.transaction(() => {
+      this.ctx.lockWorkspaceRuntimeLifecycle(current.workspaceId);
       affectedProjects.push(...this.ctx.db.query(
         `SELECT id, workspace_id FROM multiremi_projects
          WHERE default_assignee_type = 'member' AND default_assignee_id = ?`,
       ).all(id) as Array<{ id: string; workspace_id: string }>);
       this.ctx.db.run("UPDATE multiremi_workspace_members SET archived_at = ?, updated_at = ? WHERE id = ?", [now, now, id]);
+      if (!current.archivedAt) refreshResponsibilityEntityChange(this.ctx,'member',id,'responsible_human_archived');
       this.ctx.db.run(
         `UPDATE multiremi_projects
          SET default_assignee_type = NULL, default_assignee_id = NULL, updated_at = ?
@@ -601,6 +608,10 @@ export class WorkspacesRepo {
       values,
     );
     if (result.changes === 0) throw new Error(`Workspace not found: ${id}`);
+    if (input.settings !== undefined) {
+      this.ctx.emitWorkspaceEvent({ type: "daemon:pending_changed", workspaceId: id,
+        actorType: "system", actorId: null, payload: { reason: "workspace_settings_changed" } });
+    }
     return this.getWorkspace(id)!;
   }
 
@@ -618,11 +629,13 @@ export class WorkspacesRepo {
       this.ctx.db.run("DELETE FROM multiremi_daemon_ssh_mesh_states WHERE workspace_id = ?", [id]);
       this.ctx.db.run("DELETE FROM multiremi_workspace_ssh_mesh WHERE workspace_id = ?", [id]);
       const now = nowIso();
+      const membersToArchive=this.ctx.db.query('SELECT id FROM multiremi_workspace_members WHERE workspace_id=? AND archived_at IS NULL').all(id);
       this.ctx.db.run("UPDATE multiremi_workspace_members SET archived_at = COALESCE(archived_at, ?), updated_at = ? WHERE workspace_id = ?", [
         now,
         now,
         id,
       ]);
+      for(const member of membersToArchive)refreshResponsibilityEntityChange(this.ctx,'member',String(member.id),'responsible_human_workspace_deleted');
       return true;
     })();
   }
@@ -874,6 +887,8 @@ export class WorkspacesRepo {
         .query("SELECT revision FROM multiremi_relay_config WHERE workspace_id = ? AND engine = ?")
         .get(workspaceId, engine) as Row | null;
       revision = Number(row?.revision ?? 1);
+      this.ctx.emitWorkspaceEvent({ type: "daemon:pending_changed", workspaceId,
+        actorType: "system", actorId: null, payload: { reason: "workspace_relay_changed", engine } });
     })();
     return revision;
   }

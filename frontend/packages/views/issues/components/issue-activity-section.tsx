@@ -22,6 +22,8 @@ import { getSessionDisplayName } from "../utils/session-display";
 import { quotePreview } from "../utils/quote-preview";
 import { formatActivity } from "../utils/format-activity";
 import { MessageHeader } from "../../common/message-header";
+import { LinkedQuestion, linkedQuestionId, QuestionReplyReference } from "../../common/linked-question";
+import { questionReplyText } from "../../common/question-answer";
 import { CommentCard } from "./comment-card";
 import { CommentInput, type ReplyTarget } from "./comment-input";
 import { IssueLogHead } from "./issue-log-head";
@@ -67,7 +69,7 @@ export function logRowToComment(row: SessionLogRow): TimelineEntry {
   return {
     type: "comment", id: row.id, issue_session_id: row.session_id,
     actor_type: row.sender_type ?? row.author_type, actor_id: row.sender_id ?? row.author_id ?? "", task_id: row.task_id,
-    content: row.body_md, parent_id: row.reply_to_id ?? row.parent_id, created_at: row.created_at, updated_at: row.updated_at,
+    content: questionReplyText(row.body_md, row.metadata), parent_id: row.reply_to_id ?? row.parent_id, created_at: row.created_at, updated_at: row.updated_at,
     resolved_at: row.resolved_at, resolved_by_id: row.resolved_by_id,
     resolved_by_type: row.resolved_by_type === "member" || row.resolved_by_type === "agent" || row.resolved_by_type === "system" ? row.resolved_by_type : null,
     reactions: ReactionSchema.array().safeParse(row.metadata.reactions).data ?? [],
@@ -274,6 +276,8 @@ export function IssueActivitySection({ issueId, issueTitle, projectId, members, 
           results={resultsById} onShowKeyResults={onShowKeyResults} onOpenTask={setPromptRow} />;
       }
       const comment = commentsById.get(row.id)!;
+      const questionId = linkedQuestionId(row.id, row.metadata);
+      if (questionId) return <div><MessageHeader message={row} getActorName={getActorName} /><LinkedQuestion id={questionId} getActorName={getActorName} /></div>;
       if (row.resolved_at && !resolved.expanded.has(row.id)) return <ResolvedThreadBar entry={comment} onExpand={() => resolved.toggle(row.id, true)} />;
       const parentId = row.reply_to_id ?? row.parent_id;
       const parentRow = parentId ? rowModel.byId.get(parentId) : null;
@@ -287,7 +291,7 @@ export function IssueActivitySection({ issueId, issueTitle, projectId, members, 
         onDelete={id => run(() => remove(id))}
         onResolveToggle={(id, value) => { resolved.clear(id); void run(() => resolve({ commentId: id, resolved: value })); }}
         onCollapseResolved={row.resolved_at ? () => resolved.toggle(row.id, false) : undefined}
-        onToggleReaction={(id, emoji) => run(() => reaction({ commentId: id, emoji, existing: comment.reactions?.find(r => r.emoji === emoji && r.actor_id === currentMemberId) }))} /></div>;
+        onToggleReaction={(id, emoji) => run(() => reaction({ commentId: id, emoji, existing: comment.reactions?.find(r => r.emoji === emoji && r.actor_id === currentMemberId) }))} /><QuestionReplyReference metadata={row.metadata} /></div>;
     };
     return new Map(rowModel.rows.map(row => [row.id, renderRow(row)]));
   }, [rowModel, commentsById, issueId, issueTitle, currentUserId, currentMemberId, canModerateComments, replica, getActorName, taskAgents, resultsById, onShowKeyResults, responseTurns, resolved.expanded, resolved.toggle, resolved.clear, run, update, remove, resolve, reaction, t]);

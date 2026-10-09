@@ -1,3 +1,5 @@
+import { createNativeTestQuestion, answerNativeTestQuestion } from './fixtures/native-question.js';
+import { createResponsibleTestIssue } from './helpers.js';
 /**
  * The hub's A-0 trace contract and the human-request feed (MUL-403 §2, C1).
  *
@@ -284,12 +286,12 @@ describe("human request feed", () => {
     // The real store write happens; no listener was attached, so nothing reaches
     // the hub. This is the acceptance bullet "MULTIREMI_BACKGROUND_JOBS=0 的进程
     // 不消费" exercised against the store rather than a stub.
-    store.createTaskHumanRequest({ taskId: task.id, kind: "question", payload: {} });
+    store.createTaskHumanRequest({ taskId: task.id, kind: "question", payload: { questions: [{ question: "Continue?" }] } });
     expect(seen).toEqual([]);
     feed.detach();
   });
 
-  it("delivers created, responded, expired and cancelled for a real store", () => {
+  it("publishes compatibility answers and provider expiry while keeping durable questions pending", () => {
     const store = createStore();
     const task = seedTask(store);
     const seen: HumanRequestEvent[] = [];
@@ -300,41 +302,47 @@ describe("human request feed", () => {
     });
     expect(feed.enabled).toBe(true);
 
-    const created = store.createTaskHumanRequest({ taskId: task.id, kind: "question", payload: {} });
-    const responded = store.createTaskHumanRequest({ taskId: task.id, kind: "permission", payload: {} });
-    const expired = store.createTaskHumanRequest({ taskId: task.id, kind: "question", payload: {} });
-    const cancelled = store.createTaskHumanRequest({ taskId: task.id, kind: "question", payload: {} });
+    const created = store.createTaskHumanRequest({ taskId: task.id, kind: "question", payload: { questions: [{ question: "Continue?" }] } });
+    const responded = store.createTaskHumanRequest({ taskId: task.id, kind: "permission", payload: { options: [{ optionId: "allow_once", name: "Allow", kind: "allow_once" }] } });
+    const expiredTask = seedTask(store), cancelledTask = seedTask(store);
+    const expired = createNativeTestQuestion(store, expiredTask.id);
+    const cancelled = createNativeTestQuestion(store, cancelledTask.id);
 
     // One answer only settles the task when the last pending request is gone, so a
     // single `task:running` can carry more than one request's transition: each is
     // published under its own id, which is what E5 keys on.
-    store.respondTaskHumanRequest(responded.id, { response: {}, respondedBy: "mem_1" });
-    store.respondTaskHumanRequest(created.id, { response: {}, respondedBy: "mem_1" });
+    answerNativeTestQuestion(store, responded.id);
+    answerNativeTestQuestion(store, created.id);
     store.expireTaskHumanRequest(expired.id, "timeout");
-    store.expireTaskHumanRequest(cancelled.id, "cancelled");
+    store.expireTaskHumanRequest(cancelled.id, 'cancelled');
     feed.detach();
 
     const byRequest = new Map(seen.map((event) => [event.request_id, event.type]));
     expect(byRequest.get(created.id)).toBe("responded");
     expect(byRequest.get(responded.id)).toBe("responded");
+    // The compatibility feed announces provider expiry; the business Q stays answerable.
     expect(byRequest.get(expired.id)).toBe("expired");
+    expect(store.getQuestion(expired.id)).toMatchObject({ status: 'pending', wait_status: 'detached' });
     expect(byRequest.get(cancelled.id)).toBe("cancelled");
+    expect(store.getQuestion(cancelled.id)).toMatchObject({ status: 'pending', wait_status: 'detached' });
+    const sources = new Map([[created.id, task.id], [responded.id, task.id], [expired.id, expiredTask.id], [cancelled.id, cancelledTask.id]]);
     // Every event is keyed by request id and stamped with the task and workspace.
     for (const event of seen) {
-      expect(event.task_id).toBe(task.id);
+      expect(event.task_id).toBe(sources.get(event.request_id)!);
       expect(event.workspace_id).toBe(task.workspaceId);
       expect(event.at).toBeTruthy();
     }
     // `created` fires for a request that is still pending — the case the map above
     // cannot show, because these requests were all settled by the end.
-    const createdOnly = store.createTaskHumanRequest({ taskId: task.id, kind: "question", payload: {} });
+    const followingTask = seedTask(store);
+    const createdOnly = store.createTaskHumanRequest({ taskId: followingTask.id, kind: "question", payload: { questions: [{ question: "Continue?" }] } });
     const second: HumanRequestEvent[] = [];
     const feed2 = attachHumanRequestFeed({
       store,
       hub: { publishHumanRequest: (event: HumanRequestEvent) => { second.push(event); } },
       enabled: true,
     });
-    store.createTaskHumanRequest({ taskId: task.id, kind: "question", payload: {} });
+    store.createTaskHumanRequest({ taskId: followingTask.id, kind: "question", payload: { questions: [{ question: "Continue?" }] } });
     feed2.detach();
     expect(second.map((event) => event.type)).toEqual(["created"]);
     expect(second[0]!.request_id).not.toBe(createdOnly.id);
@@ -349,13 +357,13 @@ describe("human request feed", () => {
       hub: { publishHumanRequest: (event: HumanRequestEvent) => { seen.push(event); } },
       enabled: true,
     });
-    const request = store.createTaskHumanRequest({ taskId: task.id, kind: "question", payload: {} });
-    store.respondTaskHumanRequest(request.id, { response: {}, respondedBy: "mem_1" });
+    const request = store.createTaskHumanRequest({ taskId: task.id, kind: "question", payload: { questions: [{ question: "Continue?" }] } });
+    answerNativeTestQuestion(store, request.id);
     // A second response for a request that is no longer pending: the store refuses
     // it (first-write-wins) and emits no second transition, so the feed must not
     // invent one. The `task:running` event that follows a settled request is the
     // ambiguous signal the dedupe key exists for.
-    expect(store.respondTaskHumanRequest(request.id, { response: {}, respondedBy: "mem_2" })).toBeNull();
+    expect(() => answerNativeTestQuestion(store, request.id)).toThrow('question_already_settled');
     feed.detach();
 
     expect(seen.map((event) => event.type)).toEqual(["created", "responded"]);
@@ -371,7 +379,7 @@ describe("human request feed", () => {
       enabled: true,
     });
     feed.detach();
-    store.createTaskHumanRequest({ taskId: task.id, kind: "question", payload: {} });
+    store.createTaskHumanRequest({ taskId: task.id, kind: "question", payload: { questions: [{ question: "Continue?" }] } });
     expect(seen).toEqual([]);
   });
 });
@@ -380,13 +388,13 @@ describe("human request feed", () => {
 function seedTask(store: ReturnType<typeof createStore>): { id: string; workspaceId: string } {
   store.ensureLocalWorkspace();
   const runtime = store.registerRuntime({
-    name: "Hub test runtime",
+    name: "Hub test runtime", daemonId: "hub-fixture-provider",
     provider: "claude",
     workspaceId: "local",
     maxConcurrency: 4,
   });
-  const agent = store.createAgent({ name: "Hub test agent", provider: "claude" });
-  const issue = store.createIssue({ title: "Hub human requests", workspaceId: "local" });
+  const agent = store.createAgent({ name: "Hub test agent", provider: "claude", runtimeId: runtime.id });
+  const issue = createResponsibleTestIssue(store, { title: "Hub human requests", workspaceId: "local", assigneeType: "agent", assigneeId: agent.id });
   const session = store.createIssueSession(issue.id, { title: "Requests" });
   const task = store.createTask({
     agentId: agent.id,
@@ -394,7 +402,7 @@ function seedTask(store: ReturnType<typeof createStore>): { id: string; workspac
     issueSessionId: session.id,
     prompt: "ask a human",
   });
-  store.claimTask(runtime.id);
+  expect(store.claimTask(runtime.id)?.id).toBe(task.id); store.startTask(task.id);
   return { id: task.id, workspaceId: task.workspaceId };
 }
 

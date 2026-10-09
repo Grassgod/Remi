@@ -37,7 +37,7 @@ describe("Multiremi notification channels", () => {
   it("keeps inbox-only behavior when no channel is configured", async () => {
     const sent: OutboundNotification[] = [];
     const current = createTestStore(capturingSender(sent));
-    const { issue, member } = createAssignedIssue(current, "Inbox only");
+    const { issue, member } = createCommentNotificationIssue(current, "Inbox only");
 
     await Bun.sleep(10);
 
@@ -58,12 +58,12 @@ describe("Multiremi notification channels", () => {
     });
     createChannel(current, { eventTypes: ["*"], memberId: owner.id, chatId: "oc_owner_group" });
 
-    createAssignedIssue(current, "Someone else's item", other);
+    createCommentNotificationIssue(current, "Someone else's item", other);
     await Bun.sleep(10);
     expect(current.listNotificationDeliveries({ workspaceId: "local" })).toEqual([]);
     expect(sent).toEqual([]);
 
-    createAssignedIssue(current, "The owner's own item", owner);
+    createCommentNotificationIssue(current, "The owner's own item", owner);
     const pending = current.listNotificationDeliveries({ workspaceId: "local" });
     expect(pending).toHaveLength(1);
     await waitForDelivery(current, pending[0]!.id, "sent");
@@ -81,7 +81,7 @@ describe("Multiremi notification channels", () => {
     });
     createChannel(current, { eventTypes: ["*"] });
 
-    createAssignedIssue(current, "Workspace-wide mirror", other);
+    createCommentNotificationIssue(current, "Workspace-wide mirror", other);
     const pending = current.listNotificationDeliveries({ workspaceId: "local" });
     expect(pending).toHaveLength(1);
     await waitForDelivery(current, pending[0]!.id, "sent");
@@ -92,7 +92,7 @@ describe("Multiremi notification channels", () => {
     const sent: OutboundNotification[] = [];
     const current = createTestStore(capturingSender(sent));
     createChannel(current, { enabled: false, eventTypes: ["*"] });
-    createAssignedIssue(current, "Disabled route");
+    createCommentNotificationIssue(current, "Disabled route");
 
     await Bun.sleep(10);
 
@@ -104,7 +104,7 @@ describe("Multiremi notification channels", () => {
     const sent: OutboundNotification[] = [];
     const current = createTestStore(capturingSender(sent));
     createChannel(current, { eventTypes: ["autopilot_paused"] });
-    createAssignedIssue(current, "Mismatched route");
+    createCommentNotificationIssue(current, "Mismatched route");
 
     await Bun.sleep(10);
 
@@ -115,8 +115,8 @@ describe("Multiremi notification channels", () => {
   it("records pending before sending a self-explanatory card to the configured group", async () => {
     const sent: OutboundNotification[] = [];
     const current = createTestStore(capturingSender(sent), { publicUrl: "https://remi.example.test" });
-    createChannel(current, { eventTypes: ["issue_assigned"] });
-    const { issue, member } = createAssignedIssue(current, "Card route result");
+    createChannel(current, { eventTypes: ["comment_created"] });
+    const { issue, member } = createCommentNotificationIssue(current, "Card route result");
 
     const pending = current.listNotificationDeliveries({ workspaceId: "local" });
     expect(pending).toHaveLength(1);
@@ -128,7 +128,7 @@ describe("Multiremi notification channels", () => {
     expect(sent).toHaveLength(1);
     expect(sent[0]!.chatId).toBe("oc_team_123");
     const card = JSON.stringify(sent[0]!.card);
-    expect(card).toContain("Issue assigned");
+    expect(card).toContain("New issue comment");
     expect(card).toContain(issue.key);
     expect(card).toContain("Card route result");
     expect(card).toContain("Occurred");
@@ -142,8 +142,8 @@ describe("Multiremi notification channels", () => {
       },
     };
     const current = createTestStore(sender, { maxAttempts: 3, retryBaseDelayMs: 1 });
-    createChannel(current, { eventTypes: ["issue_assigned"] });
-    const { issue, member } = createAssignedIssue(current, "Sender failure");
+    createChannel(current, { eventTypes: ["comment_created"] });
+    const { issue, member } = createCommentNotificationIssue(current, "Sender failure");
     const pending = current.listNotificationDeliveries({ workspaceId: "local" })[0]!;
 
     const failed = await waitForDelivery(current, pending.id, "failed");
@@ -157,8 +157,8 @@ describe("Multiremi notification channels", () => {
     delete process.env.MULTIREMI_FEISHU_APP_ID;
     delete process.env.MULTIREMI_FEISHU_APP_SECRET;
     const current = createTestStore();
-    createChannel(current, { eventTypes: ["issue_assigned"] });
-    const { issue, member } = createAssignedIssue(current, "Missing credentials");
+    createChannel(current, { eventTypes: ["comment_created"] });
+    const { issue, member } = createCommentNotificationIssue(current, "Missing credentials");
     const pending = current.listNotificationDeliveries({ workspaceId: "local" })[0]!;
 
     const failed = await waitForDelivery(current, pending.id, "failed");
@@ -374,8 +374,8 @@ describe("Multiremi notification channels", () => {
       },
     };
     const current = createTestStore(sender, { maxAttempts: 1 });
-    createChannel(current, { eventTypes: ["issue_assigned"] });
-    createAssignedIssue(current, "Redacted failure");
+    createChannel(current, { eventTypes: ["comment_created"] });
+    createCommentNotificationIssue(current, "Redacted failure");
     const pending = current.listNotificationDeliveries({ workspaceId: "local" })[0]!;
 
     const failed = await waitForDelivery(current, pending.id, "failed");
@@ -428,8 +428,8 @@ describe("Multiremi notification channels", () => {
       },
     );
     const current = createTestStore(sender, { maxAttempts: 1 });
-    createChannel(current, { eventTypes: ["issue_assigned"] });
-    createAssignedIssue(current, "Controlled Feishu failure");
+    createChannel(current, { eventTypes: ["comment_created"] });
+    createCommentNotificationIssue(current, "Controlled Feishu failure");
     const pending = current.listNotificationDeliveries({ workspaceId: "local" })[0]!;
 
     const failed = await waitForDelivery(current, pending.id, "failed");
@@ -486,8 +486,8 @@ describe("Multiremi notification channels", () => {
       },
     );
     const current = createTestStore(sender, { maxAttempts: 1 });
-    createChannel(current, { eventTypes: ["issue_assigned"] });
-    createAssignedIssue(current, "Getter-safe Feishu failure");
+    createChannel(current, { eventTypes: ["comment_created"] });
+    createCommentNotificationIssue(current, "Getter-safe Feishu failure");
     const pending = current.listNotificationDeliveries({ workspaceId: "local" })[0]!;
 
     const failed = await waitForDelivery(current, pending.id, "failed");
@@ -511,8 +511,8 @@ describe("Multiremi notification channels", () => {
       },
     );
     const current = createTestStore(sender, { maxAttempts: 1 });
-    createChannel(current, { eventTypes: ["issue_assigned"] });
-    createAssignedIssue(current, "Message-code Feishu failure");
+    createChannel(current, { eventTypes: ["comment_created"] });
+    createCommentNotificationIssue(current, "Message-code Feishu failure");
     const pending = current.listNotificationDeliveries({ workspaceId: "local" })[0]!;
 
     const failed = await waitForDelivery(current, pending.id, "failed");
@@ -540,8 +540,8 @@ describe("Multiremi notification channels", () => {
       },
     );
     const current = createTestStore(sender, { maxAttempts: 1 });
-    createChannel(current, { eventTypes: ["issue_assigned"] });
-    createAssignedIssue(current, "Credential-code Feishu failure");
+    createChannel(current, { eventTypes: ["comment_created"] });
+    createCommentNotificationIssue(current, "Credential-code Feishu failure");
     const pending = current.listNotificationDeliveries({ workspaceId: "local" })[0]!;
 
     const failed = await waitForDelivery(current, pending.id, "failed");
@@ -714,7 +714,7 @@ describe("Multiremi notification channels", () => {
       name: "Admin private",
     });
     createChannel(current, { eventTypes: ["*"], name: "Shared" });
-    createAssignedIssue(current, "Two mirrors", admin);
+    createCommentNotificationIssue(current, "Two mirrors", admin);
     await Bun.sleep(10);
     // The admin's item matched both channels; only the shared one is anyone else's business.
     expect(current.listNotificationDeliveries({ workspaceId: "local" })).toHaveLength(2);
@@ -745,7 +745,7 @@ describe("Multiremi notification channels", () => {
     const taskToken = await current.createTaskAccessToken(current.createTask({ agentId: current.createAgent({ name: "Task credential fixture", provider: "codex" }).id, prompt: "authorization fixture" }), "local");
     createChannel(current, { eventTypes: ["*"], memberId: owner.id, chatId: "oc_private_group", name: "Private" });
     createChannel(current, { eventTypes: ["*"], name: "Shared" });
-    createAssignedIssue(current, "Task token visibility", owner);
+    createCommentNotificationIssue(current, "Task token visibility", owner);
     await Bun.sleep(10);
 
     const app = createMultiremiApp({ store: current, authToken: "root-secret" });
@@ -789,7 +789,7 @@ describe("Multiremi notification channels", () => {
       userId: "notification-outsider",
     });
     createChannel(current, { eventTypes: ["*"], memberId: owner.id, chatId: "oc_owner_group" });
-    createAssignedIssue(current, "Owner-only failure", owner);
+    createCommentNotificationIssue(current, "Owner-only failure", owner);
     const pending = current.listNotificationDeliveries({ workspaceId: "local" })[0]!;
     const failed = await waitForDelivery(current, pending.id, "failed");
 
@@ -838,8 +838,8 @@ describe("Multiremi notification channels", () => {
       },
     };
     const current = createTestStore(sender, { maxAttempts: 1 });
-    createChannel(current, { eventTypes: ["issue_assigned"] });
-    createAssignedIssue(current, "Retry delivery");
+    createChannel(current, { eventTypes: ["comment_created"] });
+    createCommentNotificationIssue(current, "Retry delivery");
     const pending = current.listNotificationDeliveries({ workspaceId: "local" })[0]!;
     await waitForDelivery(current, pending.id, "failed");
     shouldFail = false;
@@ -904,8 +904,8 @@ describe("Multiremi notification channels", () => {
     });
     try {
       firstStore.ensureLocalWorkspace();
-      createChannel(firstStore, { eventTypes: ["issue_assigned"] });
-      createAssignedIssue(firstStore, "Shared delivery lease");
+      createChannel(firstStore, { eventTypes: ["comment_created"] });
+      createCommentNotificationIssue(firstStore, "Shared delivery lease");
       const delivery = firstStore.listNotificationDeliveries({ workspaceId: "local" })[0]!;
       await firstStarted;
 
@@ -993,14 +993,14 @@ describe("Multiremi notification channels", () => {
     });
     try {
       firstStore.ensureLocalWorkspace();
-      const { issue, member } = createAssignedIssue(firstStore, "Manual retry fencing");
+      const { issue, member } = createCommentNotificationIssue(firstStore, "Manual retry fencing");
       const item = firstStore.listInboxItems(member.id).find((entry) => entry.issueId === issue.id)!;
       const channel = firstStore.createNotificationChannel({
         workspaceId: "local",
         kind: "feishu_group",
         name: "Fenced retry channel",
         target: { chatId: "oc_team_123" },
-        eventTypes: ["issue_assigned"],
+        eventTypes: ["comment_created"],
         createdBy: "local",
       });
       const delivery = firstStore.recordPendingNotificationDelivery(item, channel);
@@ -1065,8 +1065,8 @@ describe("Multiremi notification channels", () => {
       leaseMs: 20,
       sendTimeoutMs: 10,
     });
-    createChannel(current, { eventTypes: ["issue_assigned"] });
-    createAssignedIssue(current, "Hung sender recovery");
+    createChannel(current, { eventTypes: ["comment_created"] });
+    createCommentNotificationIssue(current, "Hung sender recovery");
     const pending = current.listNotificationDeliveries({ workspaceId: "local" })[0]!;
 
     const sent = await waitForDelivery(current, pending.id, "sent");
@@ -1078,14 +1078,14 @@ describe("Multiremi notification channels", () => {
   it("moves an attempts-exhausted pending delivery to failed after its lease expires", async () => {
     const sent: OutboundNotification[] = [];
     const current = createTestStore(capturingSender(sent), { maxAttempts: 3 });
-    const { issue, member } = createAssignedIssue(current, "Exhausted delivery lease");
+    const { issue, member } = createCommentNotificationIssue(current, "Exhausted delivery lease");
     const item = current.listInboxItems(member.id).find((entry) => entry.issueId === issue.id)!;
     const channel = current.createNotificationChannel({
       workspaceId: "local",
       kind: "feishu_group",
       name: "Exhausted lease channel",
       target: { chatId: "oc_team_123" },
-      eventTypes: ["issue_assigned"],
+      eventTypes: ["comment_created"],
       createdBy: "local",
     });
     const pending = current.recordPendingNotificationDelivery(item, channel);
@@ -1145,10 +1145,11 @@ function createChannel(
   });
 }
 
-function createAssignedIssue(current: MultiremiStore, title: string, assignee?: MultiremiWorkspaceMember) {
-  const member = assignee ?? current.listWorkspaceMembers("local")[0]!;
-  const issue = current.createIssue({ title, workspaceId: "local" });
-  current.assignIssue(issue.id, { assigneeType: "member", assigneeId: member.id });
+function createCommentNotificationIssue(current: MultiremiStore, title: string, recipient?: MultiremiWorkspaceMember) {
+  const member = recipient ?? current.findWorkspaceMemberForUser('local','local')!;
+  const issue = current.createIssue({ title, workspaceId: "local",responsibleMemberId:member.id,createdBy:member.id });
+  const author=current.createWorkspaceMember({name:'Notification comment author',workspaceId:issue.workspaceId});
+  current.createIssueComment(issue.id,{authorType:'member',authorId:author.id,body:title});
   return { issue, member };
 }
 

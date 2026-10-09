@@ -144,6 +144,7 @@ export interface DaemonSessionHello {
     provider: string;
     maxConcurrency: number;
     activeTaskIds: string[];
+    activeQuestionWaits?: import('@multiremi/contracts/daemon-protocol.js').DaemonQuestionWait[];
     capabilities?: DaemonRuntimeCapabilities;
   }>;
   caps: DaemonProtocolCap[];
@@ -759,6 +760,7 @@ export class DaemonProtocolSession {
         provider: runtime.provider,
         maxConcurrency: runtime.max_concurrency,
         activeTaskIds: runtime.active_task_ids,
+        activeQuestionWaits: runtime.active_question_waits,
         capabilities: runtime.capabilities,
       })),
       caps: parsed.hello.caps,

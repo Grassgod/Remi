@@ -50,13 +50,18 @@ Chat 列表和详情的未读数来自创建者对应的 workspace member lane�
 
 Chat 队列读取发给当前 agent、位于实际 cursor_seq 之后的消息；编辑/删除使用 message ID，不提供 prioritize。删除帧的 `fields.deleted_at` 会立即移除副本显示行并保留 revision 水位；IssueLogReplica 以 C7 快照决定行是否存在，只为仍在快照中的行保留已补齐的显示字段，避免旧窗口合并回已删正文。HTTP/SSR 窗口导入完成后才应用完整快照，避免 seq 0 和正文分批写入时丢失首屏行；live entry 的成功回读若已找不到该行，则传递最小隐藏标记，保留同批其他帧，网络与接口失败仍上报错误。重连重放或刷新回填的旧行不能恢复正文，主消息区也过滤带 `deleted_at` 的 canonical 消息。409 消费冲突会刷新队列并保留草稿供复制。消息附件发送后固定，编辑正文不会静默重绑附件；只有原发送人显示编辑/删除入口。回归见 [ChatWindow 日志链路集成测试](../../frontend/packages/views/chat/components/chat-window-log.integration.test.tsx)和 [IssueLogReplica 测试](../../frontend/packages/core/session-log/issue-log.test.ts)。
 
-决定面板按需查各 Issue 对话的 decision 消息；选项提交 value，答复携带原 decision 的 reply_to_id 和它的 session_id。权限/提问表单发送结构化 response，不走退役的 task/issue 答复端点。回答与记录通过 canonical reply 消息展示；表单失败保留输入，解决不自动标读。
+决定面板按需读取 `/api/issues/:id/questions` 的统一原 Q 投影；[共享问题卡](../../frontend/packages/views/common/question-card.tsx)显示原问题、独立 Remi 总结、来源、当前处理者、路由版本和转交/回答历史。Issue 主线、Chat 通知、Inbox 和运行中的问题 dock 沿 `metadata.question` 或 `root_question_id` 读取同一个 Q，答复使用版本校验的 `/api/messages/:id/question/answer`，最终由服务端写回原会话。原权限提问同样读取 Q，保持单选并提交原 `option_id`；原上下文单独按 Markdown 折叠展示。表单失败保留输入；`wait_status` 区分原调用等待、已结束、已消费与续接消费，不能把答案保存成功写成恢复成功。未知展示枚举保留原值。历史入口在责任侧栏常驻，最后一个待答结束后仍可打开。
+
+[责任与交付侧栏](../../frontend/packages/views/issues/components/issue-responsibility-section.tsx)读取服务端统一责任解析，分别显示本单执行统筹、父单结果责任和顶层指定人类。创建顶层单默认显示当前真实成员并允许选择；子单不复制根责任字段。根责任移交调用 Issue update，并保留服务端审计。正式交付由执行统筹提交，指定人类按具体交付接受、退回或授予绑定交付版本的代理验收授权；页面不再凭 Task completed 提供直接完成按钮，也不使用一般 parent-done grant 替代正式验收。
 
 评论与会话日志的 [EntryHtml](../../frontend/packages/views/common/session-log/entry-html.tsx) 会把服务端 `div[data-type="fileCard"]` 增强成统一附件卡片。静态 [entry-html.css](../../frontend/packages/views/common/session-log/entry-html.css) 在首屏给每个槽位预留固定 40px（32px 卡片加上下各 4px 间距），普通和紧凑密度共用；图片与 HTML 文件也保持卡片外观，预览在弹窗中打开。附件记录通过 `attachments` 传入 provider，预览与下载按附件 ID 走现有链路；没有记录时使用 URL 模式，不合法 href 只显示文件名。
 
 客户端 [file-cards.ts](../../frontend/packages/ui/markdown/file-cards.ts) 与服务端 [preprocess.ts](../../packages/server/src/render/preprocess.ts) 同步接受 `/api/attachments/<id>/content`，ID 限 `[A-Za-z0-9_-]`，可选查询串不得含 `)`、空白或 `..`。API href 必须整串精确匹配。Chat 直接交给共享 Markdown 渲染，两处附件列表显式使用 `dedupe="url"`：正文内联 URL 不再追加独立卡片，不同 URL 即使同名、同类型、同大小也各自保留并按各自附件 ID 下载。评论使用默认 `dedupe="file"`，保留按文件名、类型、大小隐藏重复上传的现有行为。MUL-518 保持 `RENDER_PIPELINE_REVISION = 1`；已有正文重渲染所需的版本提升由 MUL-513 负责，在其游标与节流回填就绪后处理。
 
 日志中的 HTML 附件预览由 `DeferredContentContext` 延迟到实际揭示后读取，揭示前只显示固定槽位（默认 240px，已有 QueryClient 高度缓存时复用）。成功、错误与重挂载保持槽位高度；日志外的预览保留原高度和错误展示。正文、工具栏、弹窗和独立预览页共用带 workspace slug 与附件 ID 的内容 query key，保留 5 分钟 staleTime、30 分钟 gcTime、无自动重试及既有失效策略。SSR 播种的日志需等定位脚本确认 DOM 已揭示才启动这些可选读取。运行任务卡片使用 128px 可滚动槽位，避免缓存缺任务时后续卡片增高移动日志锚点。
+
+SDK 的直接 AUQ 题项与 ACP 的 `{fieldKey, question}` 题项在展示表单层统一解析，原 Q 的 payload 保持原样；两种形式都支持多题、多选和自由回答。
+执行归属选择器只提供 Agent／Squad，顶层人类使用独立责任字段。历史 member 执行指派保留原身份并明确标为待配置，提供手动迁移入口；新建单不会继承旧 member 项目默认值。正式交付历史沿 `nextCursor` 分页读取，不只展示最近一页。
 
 ## 一次任务读取与更新
 

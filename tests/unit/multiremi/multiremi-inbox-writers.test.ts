@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { expect, it } from 'bun:test';
 import type { Envelope } from '@multiremi/contracts/inbox.js';
 import type { SendMessageInput } from '@multiremi/contracts/unified-model.js';
@@ -10,7 +11,7 @@ pendingTurnBackendTests('transactional inbox writers', fixture => {
   function setup() {
     const f = fixture();
     const agent = f.store.createAgent({ name: 'Inbox owner', provider: 'codex' });
-    const issue = f.store.createIssue({ title: 'Inbox', status: 'in_progress', assigneeType: 'agent', assigneeId: agent.id });
+    const issue = createResponsibleTestIssue(f.store, { title: 'Inbox', status: 'in_progress', assigneeType: 'agent', assigneeId: agent.id });
     const session = f.store.getOrCreateDefaultIssueSession(issue.id);
     const chat = f.store.createChatSession({ agentId: agent.id });
     const ctx = (f.store as unknown as { ctx: StoreContext }).ctx;
@@ -232,7 +233,7 @@ pendingTurnBackendTests('transactional inbox writers', fixture => {
 
   it('uses sessionId in dedupe keys and resolves Issue owners and parent owners', () => {
     const f = setup();
-    const child = f.store.createIssue({ title: 'Child', parentIssueId: f.issue.id });
+    const child = createResponsibleTestIssue(f.store, { title: 'Child', parentIssueId: f.issue.id });
     const side = f.store.createIssueSession(f.issue.id, { title: 'Side', inheritMode: 'none' });
     const owner = f.send({ to: { role: 'issue_owner', issueId: f.issue.id }, dedupeKey: 'same', wake: 'inbox_only' });
     const parent = f.send({ to: { role: 'parent_owner', childIssueId: child.id }, dedupeKey: 'same', wake: 'inbox_only' });
@@ -265,7 +266,7 @@ pendingTurnBackendTests('transactional inbox writers', fixture => {
     const f = setup();
     const worker = f.store.createAgent({ name: 'Delegate', provider: 'codex' });
     const parent = f.store.createTask({ agentId: f.agent.id, issueId: f.issue.id, prompt: 'Original round' });
-    const child = f.store.createIssue({ title: 'Delegated issue', parentIssueId: f.issue.id });
+    const child = createResponsibleTestIssue(f.store, { title: 'Delegated issue', parentIssueId: f.issue.id });
     const source = f.store.createTask({ agentId: worker.id, issueId: child.id, prompt: 'Delegated round', parentTaskId: parent.id,
       delegationId: 'return_address', delegatedByAgentId: f.agent.id, delegatedFromIssueSessionId: f.session.id });
     const delivery = f.send({ to: { role: 'delegator', delegationId: 'return_address' }, source: { taskId: source.id } });

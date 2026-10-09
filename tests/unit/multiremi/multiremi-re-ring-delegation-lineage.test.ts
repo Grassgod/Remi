@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { runTurnExecutionMutation } from '@multiremi/store/turn-execution-records.js';
 import type { SqlDatabase as UnifiedFixtureDatabase } from '@multiremi/store/db/postgres.js';
 import { expect, it } from "bun:test";
@@ -12,7 +13,7 @@ pendingTurnBackendTests("MUL-492 recovered nested delegation lineage", fixture =
       const upstream = f.store.createAgent({ name: "Upstream", provider: "codex" });
       const root = f.store.createAgent({ name: "Root", provider: "codex" });
       const worker = f.store.createAgent({ name: "Worker", provider: "codex" });
-      const issue = f.store.createIssue({ title: "Nested recovery", status: "in_progress", assigneeType: "agent", assigneeId: agent.id });
+      const issue = createResponsibleTestIssue(f.store, { title: "Nested recovery", status: "in_progress", assigneeType: "agent", assigneeId: agent.id });
       const session = f.store.getOrCreateDefaultIssueSession(issue.id);
       const rootTask=f.store.createTask({agentId:root.id,issueId:issue.id,prompt:"Root work"});
       runTurnExecutionMutation(f.db,"UPDATE multiremi_turn_execution_records SET status='completed' WHERE id=?",[rootTask.id]);
@@ -99,7 +100,7 @@ pendingTurnBackendTests("MUL-492 recovered nested delegation lineage", fixture =
   it("08: an unscoped recovery does not acquire a new parent or delegation", () => {
     const f = fixture();
     const agent = f.store.createAgent({ name: "Unscoped", provider: "codex" });
-    const issue = f.store.createIssue({ title: "Unscoped recovery" });
+    const issue = createResponsibleTestIssue(f.store, { title: "Unscoped recovery" });
     const session = f.store.getOrCreateDefaultIssueSession(issue.id);
     const delivery = f.transaction(() => f.store.sendEnvelopeWithinTransaction({
       to: { role: "agent", agentId: agent.id, issueSessionId: session.id }, kind: "report", wake: "now", body: "Wake", source: {},

@@ -926,7 +926,7 @@ async function main(): Promise<void> {
   const fixture = await seedZeroJumpFixture(store);
   let layoutIssueId: string | undefined;
   if (!options.only.length || options.only.includes("detail-layout")) {
-    const issue = store.createIssue({ title: "Issue layout regression", description: "Description above the activity divider.", status: "in_progress" });
+    const issue = store.createIssue({ title: "Issue layout regression", description: "Description above the activity divider.", status: "in_progress", responsibleMemberId: fixture.memberId });
     layoutIssueId = issue.id;
     const session = store.getOrCreateDefaultIssueSession(issue.id, fixture.userId);
     for (let index = 0; index < 18; index++) store.createIssueComment(issue.id, {

@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { MultiremiStore } from "@multiremi/store.js";
 import { historicalWriters } from "./unified-model-test-backends.js";
@@ -47,7 +48,7 @@ describe("side Session snapshots", () => {
 
   it("freezes the cutoff and event count, implies discussion, and keeps inheritance immutable", () => {
     const store = createStore();
-    const issue = store.createIssue({ title: "Snapshot boundary" });
+    const issue = createResponsibleTestIssue(store, { title: "Snapshot boundary" });
     const main = store.getOrCreateDefaultIssueSession(issue.id);
     store.appendSessionEvent(main.id, { authorType: "member", body: "First" });
     const last = store.appendSessionEvent(main.id, { authorType: "member", body: "Before snapshot" });
@@ -79,8 +80,8 @@ describe("side Session snapshots", () => {
 
   it("rejects missing or cross-Issue parents and chained forks without creating a Session", () => {
     const store = createStore();
-    const issue = store.createIssue({ title: "Parent" });
-    const other = store.createIssue({ title: "Other issue" });
+    const issue = createResponsibleTestIssue(store, { title: "Parent" });
+    const other = createResponsibleTestIssue(store, { title: "Other issue" });
     const main = store.getOrCreateDefaultIssueSession(issue.id);
     const side = store.createIssueSession(issue.id, { parentSessionId: main.id });
     const before = store.listIssueSessions(issue.id).length;
@@ -92,7 +93,7 @@ describe("side Session snapshots", () => {
 
   it("uses cutoff zero for an empty parent and never inherits later events", () => {
     const store = createStore();
-    const issue = store.createIssue({ title: "Empty parent" });
+    const issue = createResponsibleTestIssue(store, { title: "Empty parent" });
     const main = store.getOrCreateDefaultIssueSession(issue.id);
     const side = store.createIssueSession(issue.id, { parentSessionId: main.id });
     expect(side.inheritCutoffSeq).toBe(0);
@@ -150,7 +151,7 @@ describe("side Session snapshots", () => {
 
   it("splits the existing budget 40/60 and folds long bodies within that total", () => {
     const store = createStore();
-    const issue = store.createIssue({ title: "Projection budgets" });
+    const issue = createResponsibleTestIssue(store, { title: "Projection budgets" });
     const main = store.getOrCreateDefaultIssueSession(issue.id);
     const agent = store.createAgent({ name: "Budgeted reader", provider: "claude" });
     for (let i = 0; i < 24; i++) {
@@ -180,7 +181,7 @@ describe("side Session snapshots", () => {
       process.env.MULTIREMI_SESSION_PROJECTION_CONTEXT_WINDOWS = '{"claude":10}';
       process.env.MULTIREMI_SESSION_PROJECTION_MIN_TOKENS = "2";
       const store = createStore();
-      const issue = store.createIssue({ title: "Small budget" });
+      const issue = createResponsibleTestIssue(store, { title: "Small budget" });
       const main = store.getOrCreateDefaultIssueSession(issue.id);
       const side = store.createIssueSession(issue.id, { parentSessionId: main.id });
       const agent = store.createAgent({ name: "Reader", provider: "claude" });
@@ -201,7 +202,7 @@ describe("side Session snapshots", () => {
       metadata: { parallel_agent_execution: 1, cli_version: "0.2.73" },
     });
     const agent = store.createAgent({ name: "Parallel agent", provider: "claude", maxConcurrentTasks: 3 });
-    const issue = store.createIssue({ title: "Independent Session execution" });
+    const issue = createResponsibleTestIssue(store, { title: "Independent Session execution" });
     const parent = store.getOrCreateDefaultIssueSession(issue.id);
     const main = store.createSessionTask(parent.id, { agentId: agent.id, prompt: "Work" });
     expect(store.claimTask(runtime.id)?.id).toBe(main.id);

@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { turnApiPath } from "./unified-test-paths.js";
 import { taskOfferResponse } from "../../fixtures/task-offer.js";
 import { reportFrame } from "../../fixtures/report-session.js";
@@ -82,7 +83,7 @@ describe("assembled task prompt audit", () => {
       workspaceId: "local",
     });
     const agent = store.createAgent({ name: "Delta worker", provider: "codex" });
-    const issue = store.createIssue({ title: "Delta results", workspaceId: "local" });
+    const issue = createResponsibleTestIssue(store, { title: "Delta results", workspaceId: "local" });
     const main = store.getOrCreateDefaultIssueSession(issue.id);
     const sibling = store.createIssueSession(issue.id, { title: "Research" });
     const oldResult = store.publishSessionResult(sibling.id, {

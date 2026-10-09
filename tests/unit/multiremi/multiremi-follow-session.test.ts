@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { MultiremiStore } from "@multiremi/store.js";
 import { historicalWriters } from "./unified-model-test-backends.js";
@@ -28,7 +29,7 @@ function fixture(parentEvents = 2) {
   const store = createStore();
   const runtime = store.registerRuntime({ name: "Follow runtime", provider: "claude" });
   const agent = store.createAgent({ name: "Follow reader", provider: "claude" });
-  const issue = store.createIssue({ title: "Follow parent context" });
+  const issue = createResponsibleTestIssue(store, { title: "Follow parent context" });
   const parent = store.getOrCreateDefaultIssueSession(issue.id);
   for (let index = 0; index < parentEvents; index++) {
     store.appendSessionEvent(parent.id, {

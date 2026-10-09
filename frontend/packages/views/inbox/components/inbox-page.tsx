@@ -20,6 +20,7 @@ import { MessageHeader } from "../../common/message-header";
 import { useListPerfMarker } from "../../common/use-list-perf-marker";
 import { useNavigation } from "../../navigation";
 import { useT, useTimeAgo } from "../../i18n";
+import { UnifiedQuestionCard } from "../../common/question-card";
 
 export function InboxPage() {
   const wsId = useWorkspaceId();
@@ -37,7 +38,9 @@ export function InboxPage() {
   const items = useMemo(() => [...new Map((query.data?.pages.flatMap(page => page.items) ?? []).map(item => [item.id, item])).values()], [query.data]);
   const selectedId = selected?.wsId === wsId && selected.sourceItem === searchParams.get("item") ? selected.id : searchParams.get("item") !== dismissed ? searchParams.get("item") : null;
   const selectedItem = items.find(item => item.id === selectedId);
-  const message = useQuery({ queryKey: messageDetailKeys.detail(wsId, selectedId), enabled: !!selectedId,
+  const questionId = selectedId && searchParams.get("question") === selectedId ? selectedId : null;
+  const question = useQuery({ queryKey: ["question", wsId, questionId], enabled: !!questionId, queryFn: () => api.getQuestion(questionId!) });
+  const message = useQuery({ queryKey: messageDetailKeys.detail(wsId, selectedId), enabled: !!selectedId && !questionId,
     queryFn: () => api.getMessage(selectedId!), initialData: selectedItem, staleTime: 15_000 });
   const active = selectedItem && (!message.data || selectedItem.revision >= message.data.revision) ? selectedItem : message.data ?? null;
   const [scrollEl, setScrollEl] = useState<HTMLDivElement | null>(null);
@@ -70,7 +73,10 @@ export function InboxPage() {
       {query.hasNextPage && <Button className="m-3" variant="ghost" disabled={query.isFetchingNextPage} onClick={() => void query.fetchNextPage()}><ChevronDown />{t($ => $.list.load_more)}</Button>}
     </div>
   </div>;
-  const detail = active ? <div ref={setScrollEl} data-inbox-detail data-perf-scroll="inbox-detail" className="min-h-0 flex-1 overflow-y-auto p-4">
+  const detail = questionId ? <div data-inbox-detail className="min-h-0 flex-1 overflow-y-auto p-4">
+    {question.data ? <UnifiedQuestionCard key={`${questionId}:${searchParams.get("question_source") ?? ""}`} question={question.data} getActorName={getActorName} initiallyShowHistory={!!searchParams.get("question_source")} />
+      : question.isError ? <><p role="alert">{tm($ => $.load_failed)} · {question.error.message}</p><Button variant="outline" onClick={() => void question.refetch()}>{tm($ => $.retry_load)}</Button></> : <Skeleton className="h-20 w-3/4" />}
+  </div> : active ? <div ref={setScrollEl} data-inbox-detail data-perf-scroll="inbox-detail" className="min-h-0 flex-1 overflow-y-auto p-4">
     <div ref={setContentEl}>
     {error && isMobile && <p role="alert" className="mb-3 text-xs text-destructive">{error.message}</p>}
     <div id={`inbox-message-${active.id}`} data-inbox-message={active.id} data-perf-item="message" data-perf-key={active.id}>

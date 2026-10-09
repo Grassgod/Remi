@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from '../helpers.js';
 import { existsSync } from "node:fs";
 import { numberAllocationLockKey } from "@multiremi/store/advisory-locks.js";
 import { advisoryXactLock, PostgresSyncDatabase } from "@multiremi/store/db/postgres.js";
@@ -12,6 +13,7 @@ export interface RelationLockInput {
   ownerId?: string;
   sourceWorkspace: string;
   targetWorkspace: string;
+  targetResponsibleMemberId?: string;
   barrierPath?: string;
   /** Hold modes: start once gate[0] is set, and set gate[1] after locking. */
   gate?: SharedArrayBuffer;
@@ -67,7 +69,7 @@ self.onmessage = async ({ data: input }: MessageEvent<RelationLockInput>) => {
         // Commit only once the peer is queued behind these rows, so it must re-read.
         waitForBlockedPeer(db);
         if (input.mode === "hold-move") {
-          db.run("UPDATE multiremi_issues SET workspace_id = ? WHERE id = ?", [input.targetWorkspace, input.issueId]);
+          db.run("UPDATE multiremi_issues SET workspace_id = ?, responsible_member_id=? WHERE id = ?", [input.targetWorkspace,input.targetResponsibleMemberId!, input.issueId]);
         } else if (input.mode === "hold-reparent") {
           db.run("UPDATE multiremi_issues SET parent_issue_id = ? WHERE id = ?", [input.otherId, input.issueId]);
         } else if (input.mode === "hold-number") {
@@ -99,8 +101,8 @@ self.onmessage = async ({ data: input }: MessageEvent<RelationLockInput>) => {
       await Bun.sleep(5);
     }
     try {
-      if (input.role === "move") store.updateIssue(input.issueId, { workspaceId: input.targetWorkspace });
-      if (input.role === "create") store.createIssue({ title: "Racing child", workspaceId: input.sourceWorkspace, parentIssueId: input.otherId });
+      if (input.role === "move") store.updateIssue(input.issueId, { workspaceId: input.targetWorkspace,responsibleMemberId:input.targetResponsibleMemberId!,actorType:'member',actorId:input.targetResponsibleMemberId! });
+      if (input.role === "create") createResponsibleTestIssue(store, { title: "Racing child", workspaceId: input.sourceWorkspace, parentIssueId: input.otherId });
       if (input.role === "reparent") store.updateIssue(input.issueId, { parentIssueId: input.otherId });
       if (input.role === "dependency") store.createIssueDependency(input.issueId, { dependsOnIssueId: input.otherId, type: "blocked_by" });
       if (input.role === "reopen") store.updateIssue(input.issueId, { status: "in_progress" });

@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { mutateExecutionFixture } from "./unified-test-paths.js";
 import { afterEach, describe, expect, it } from "bun:test";
 import { daemonTaskClaimResponse } from "@multiremi/api/wire/tasks.js";
@@ -10,8 +11,8 @@ function setup(kind: "round" | "human" | "user" = "round") {
   const store = createLocalStore();
   const runtime = store.registerRuntime({ id: "rt_destination", name: "Destination", provider: "codex", workspaceId: "local" });
   const agent = store.createAgent({ name: "Topic", provider: "codex", workspaceId: "local" });
-  const first = store.createIssue({ title: "ISSUE_A_PRIVATE", workspaceId: "local" });
-  const second = store.createIssue({ title: "Issue B", workspaceId: "local" });
+  const first = createResponsibleTestIssue(store, { title: "ISSUE_A_PRIVATE", workspaceId: "local" });
+  const second = createResponsibleTestIssue(store, { title: "Issue B", workspaceId: "local" });
   const chat = store.createChatSession({ agentId: agent.id });
   bindFeishuTopicFixture(store, db!, chat.id, first.id);
   const task = store.createTask({ agentId: agent.id, chatSessionId: chat.id, issueId: first.id,

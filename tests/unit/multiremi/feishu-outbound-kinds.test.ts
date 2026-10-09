@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { createLocalStore, db, resetMultiremiTestEnv } from "./helpers.js";
 import { configureKindBot } from "./feishu-outbound-kind-fixture.js";
@@ -23,6 +24,29 @@ const rows = (taskId: string) => db!.query(`SELECT * FROM multiremi_feishu_bot_o
 const claim = (f: ReturnType<typeof configureKindBot>, now?: Date) => f.store.claimFeishuBotOutbounds(f.workspaceId, f.runtimeId, now);
 const report = (f: ReturnType<typeof configureKindBot>, row: { id: string; claimToken: string }, status: "sent" | "failed", retryable?: boolean) =>
   f.store.reportFeishuBotOutbound(f.workspaceId, f.runtimeId, row.id, { claimToken: row.claimToken, status, externalMessageId: `sent_${row.id}`, retryable });
+
+function questionBot() {
+  const store = createLocalStore();
+  const user = store.getOrCreateUser({ externalId: 'kind-question-human', name: 'Explicit question human' });
+  db!.run('UPDATE multiremi_workspace_members SET user_id=? WHERE id=?', [user.id, 'mem_local_local']);
+  db!.run('UPDATE multiremi_users SET feishu_union_id=? WHERE id=?', ['on_kind_question_human', user.id]);
+  const at = new Date().toISOString();
+  db!.run(`INSERT INTO multiremi_feishu_bot_senders(id,workspace_id,app_id,open_id,union_id,display_name,allowed,first_seen_at,last_seen_at)
+    VALUES('fbs_kind_question_human','local','cli_kind_test','ou_owner','on_kind_question_human','Human',1,?,?)`, [at, at]);
+  return configureKindBot(store, 'local', 'rt_kinds', 'mem_local_local');
+}
+
+function nativeQuestion(f: ReturnType<typeof configureKindBot>, taskId: string, question: string) {
+  const task = f.store.getTask(taskId)!;
+  if (task.status === 'queued') { expect(f.store.claimTask(f.runtimeId)?.id).toBe(task.id); f.store.startTask(task.id); }
+  const turn = f.store.getTurnForAttempt(taskId)!;
+  const result = f.store.getDaemonTurnBridge().rpc('turn.decision', { turn_id: turn.id, attempt_id: taskId,
+    wait_id: `kind:${taskId}`, dedupe_key: `kind:${taskId}`, body_md: question, options: [{ label: 'Yes', value: 'Yes' }],
+    metadata: { kind: 'question', questions: [{ question, options: [{ label: 'Yes' }] }] } },
+    { runtimeId: f.runtimeId, daemonId: `daemon_${f.runtimeId}`, workspaceId: f.workspaceId });
+  expect(result.ok).toBe(true);
+  return f.store.getTaskHumanRequest(String(result.message_id))!;
+}
 
 describe("Feishu outbound kind leases", () => {
   it("queues separate result and receipt rows after terminal commit and isolates a permanent receipt failure", () => {
@@ -113,10 +137,10 @@ describe("Feishu outbound kind leases", () => {
   });
 
   it("jobs=0 defers lifecycle writes but a host claim delivers the answer without enabling schedulers", () => {
-    const f = configureKindBot(createLocalStore());
+    const f = questionBot();
     process.env.MULTIREMI_BACKGROUND_JOBS = "0";
     const taskId = f.inbound("disabled").taskId;
-    f.store.createTaskHumanRequest({ taskId, kind: "question", payload: { questions: [{ question: "Continue?" }] } });
+    nativeQuestion(f, taskId, 'Continue?');
     f.store.completeTask(taskId, { output: "Deferred answer" });
     expect(rows(taskId)).toEqual([]);
     const first = claim(f);
@@ -230,11 +254,12 @@ describe("Feishu outbound kind leases", () => {
   });
 
   it("replays topics, E5 requests and patches on the claiming jobs=0 process without re-deferring them", () => {
-    const f = configureKindBot(createLocalStore());
+    const f = questionBot();
     f.store.heartbeatRuntime(f.runtimeId, { supportsFeishuBotConfig: true, supportsDecisionCard: true });
     f.store.updateWorkspace("local", { settings: { issueTopics: { enabled: true, chatId: "oc_deferred_topic", notifyMode: "person", notifyOpenId: "ou_owner" } } });
     process.env.MULTIREMI_BACKGROUND_JOBS = "0";
-    const issue = f.store.createIssue({ title: "Deferred topic", workspaceId: "local" });
+    const issue = createResponsibleTestIssue(f.store, { title: "Deferred topic", workspaceId: "local",
+      responsibleMemberId: 'mem_local_local', assigneeType: 'agent', assigneeId: f.agent.id });
     f.store.prepareFeishuIssueTopicWithinTransaction(issue);
     expect(db!.query("SELECT id FROM multiremi_feishu_bot_outbound_deliveries").all()).toEqual([]);
     const root = claim(f)[0]!;
@@ -242,7 +267,7 @@ describe("Feishu outbound kind leases", () => {
     expect(report(f, root, "sent")).toBe(true);
     const task = f.store.createTask({ agentId: f.agent.id, workspaceId: "local", issueId: issue.id, prompt: "Ask" });
     process.env.MULTIREMI_BACKGROUND_JOBS = "0";
-    const request = f.store.createTaskHumanRequest({ taskId: task.id, kind: "question", payload: { questions: [{ question: "Proceed?" }] } });
+    const request = nativeQuestion(f, task.id, 'Proceed?');
     expect(db!.query("SELECT id FROM multiremi_feishu_bot_outbound_deliveries WHERE kind = 'decision_card'").all()).toEqual([]);
     const decision = claim(f)[0]!;
     expect(decision.kind).toBe("decision_card");
@@ -251,7 +276,8 @@ describe("Feishu outbound kind leases", () => {
     expect(decision.humanRequestId).toBe(request.id);
     expect(report(f, decision, "sent")).toBe(true);
     process.env.MULTIREMI_BACKGROUND_JOBS = "0";
-    f.store.respondTaskHumanRequest(request.id, { response: { answers: {} } });
+    f.store.respondTaskHumanRequest(request.id, { respondedBy: 'mem_local_local', expectedRouteRevision: f.store.getQuestion(request.id)!.route_revision,
+      response: { answers: { 'Proceed?': 'Yes' } } });
     expect(db!.query("SELECT id FROM multiremi_feishu_bot_outbound_deliveries WHERE kind = 'decision_card_patch'").all()).toEqual([]);
     const patch = claim(f)[0]!;
     expect(patch.kind).toBe("decision_card_patch");

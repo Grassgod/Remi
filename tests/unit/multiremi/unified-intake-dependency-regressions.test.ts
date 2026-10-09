@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { expect, it, setSystemTime, spyOn } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { IssuesRepo } from "@multiremi/store/repos/issues-repo.js";
@@ -8,9 +9,9 @@ pendingTurnBackendTests("MUL-508 C1/C2", (fixture) => {
     const f = fixture();
     const runtime = f.store.registerRuntime({ name: "Intake runtime", provider: "codex", daemonId: "intake-daemon", maxConcurrency: 4 });
     const agent = f.store.createAgent({ name: "Intake worker", provider: "codex", runtimeId: runtime.id });
-    const issue = f.store.createIssue({ title: "Intake", issueKind: "intake", status: "todo",
+    const issue = createResponsibleTestIssue(f.store, { title: "Intake", issueKind: "intake", status: "todo",
       ...(assigned ? { assigneeType: "agent" as const, assigneeId: agent.id } : {}) });
-    if (generated) f.store.createIssue({ title: "Generated work", sourceIssueId: issue.id });
+    if (generated) createResponsibleTestIssue(f.store, { title: "Generated work", sourceIssueId: issue.id });
     const session = f.store.getOrCreateDefaultIssueSession(issue.id);
     const sent = f.store.sendMessage({ session_id: session.id, sender: { type: "member", id: "mem_local_local" },
       to: { type: "agent", ref: agent.id }, message_kind: "request", wake_requested: "now", body_md: "Finish intake" });
@@ -34,12 +35,25 @@ pendingTurnBackendTests("MUL-508 C1/C2", (fixture) => {
     return { ...f, runtime, agent, issue, session, sent, attempt, bridge, scope, completion };
   }
 
+  function acceptCompletedIntake(f: ReturnType<typeof intake>, sourceTaskId=f.attempt.id) {
+    if(!f.store.getIssue(f.issue.id)!.assigneeId)f.store.updateIssue(f.issue.id,{assigneeType:'agent',assigneeId:f.agent.id});
+    const delivery=f.store.submitIssueDelivery(f.issue.id,{summary:'Generated intake work verified'},{type:'agent',id:f.agent.id,taskId:sourceTaskId});
+    const human=f.store.resolveIssueResponsibility(f.issue.id).rootHuman!;
+    f.store.authorizeIssueDelivery(f.issue.id,delivery.id,f.agent.id,delivery.responsibilityRevision,{type:'member',id:human.id});
+    f.store.respondIssueDelivery(f.issue.id,delivery.id,{action:'accept',revision:delivery.responsibilityRevision},{type:'agent',id:f.agent.id,taskId:sourceTaskId});
+    expect(f.store.getIssue(f.issue.id)?.status).toBe('done');
+  }
+
   for (const assigned of [false, true]) for (const generated of [false, true]) {
     it(`C1: normally finished intake assigned=${assigned} generated=${generated}`, () => {
       const f = intake(assigned, generated);
       const input = f.completion();
       expect(f.bridge.complete(input, f.scope).ok).toBe(true);
       expect(f.store.getTurn(f.sent.turn_id!)?.status).toBe("completed");
+      expect(f.store.getIssue(f.issue.id)?.status).toBe('in_review');
+      expect(f.store.getIssue(f.issue.id)?.completedAt).toBeNull();
+      expect(f.db.query("SELECT id FROM multiremi_system_events WHERE resource_id=? AND event='dependency_auto_start_check'").all(f.issue.id)).toHaveLength(0);
+      if(generated)acceptCompletedIntake(f);
       const issue = f.store.getIssue(f.issue.id)!;
       expect(issue.status).toBe(generated ? "done" : "in_review");
       if (generated) expect(issue.completedAt).toBe(issue.updatedAt);
@@ -77,6 +91,8 @@ pendingTurnBackendTests("MUL-508 C1/C2", (fixture) => {
     expect(replacement.id).toBe(turn.current_attempt_id!);
     f.store.startTask(replacement.id);
     expect(f.bridge.complete(f.completion(replacement.id), f.scope).ok).toBe(true);
+    expect(f.store.getIssue(f.issue.id)?.status).toBe('in_review');
+    acceptCompletedIntake(f,replacement.id);
     expect(f.store.getIssue(f.issue.id)?.status).toBe("done");
   });
 
@@ -92,12 +108,14 @@ pendingTurnBackendTests("MUL-508 C1/C2", (fixture) => {
     expect(f.store.getTurnForAttempt(task.id)?.id).toBe(sibling.turn_id);
     f.store.startTask(task.id);
     expect(f.bridge.complete(f.completion(task.id), f.scope).ok).toBe(true);
+    expect(f.store.getIssue(f.issue.id)?.status).toBe('in_review');
+    acceptCompletedIntake(f);
     expect(f.store.getIssue(f.issue.id)?.status).toBe("done");
   });
 
   it("C1: an intake parent with an unfinished generated child retains guard B", () => {
     const f = intake(true);
-    f.store.createIssue({ title: "Open child", sourceIssueId: f.issue.id, parentIssueId: f.issue.id });
+    createResponsibleTestIssue(f.store, { title: "Open child", sourceIssueId: f.issue.id, parentIssueId: f.issue.id });
     expect(f.bridge.complete(f.completion(), f.scope).ok).toBe(true);
     expect(f.store.getIssue(f.issue.id)?.status).toBe("in_progress");
     expect(f.store.getIssue(f.issue.id)?.completedAt).toBeNull();
@@ -115,6 +133,8 @@ pendingTurnBackendTests("MUL-508 C1/C2", (fixture) => {
     try {
       setSystemTime(new Date(Date.now() + 1000));
       expect(f.bridge.complete(f.completion(), f.scope).ok).toBe(true);
+      expect(f.store.getIssue(f.issue.id)?.status).toBe('in_review');
+      acceptCompletedIntake(f);
       expect(f.store.getIssue(f.issue.id)?.status).toBe("done");
       const events = f.db.query("SELECT id FROM multiremi_system_events WHERE resource_id=? AND event='dependency_auto_start_check'").all(f.issue.id);
       expect(events).toHaveLength(1);
@@ -129,8 +149,8 @@ pendingTurnBackendTests("MUL-508 C1/C2", (fixture) => {
     const pat = await f.store.createAccessToken({ type: "pat", name: "Request", workspaceId: "local", userId: user.id, purpose: "session" });
     const owner = f.store.createAgent({ name: "Owner", provider: "codex", visibility: "workspace" });
     const target = f.store.createAgent({ name: "Specialist", provider: "codex", visibility: "workspace" });
-    const prerequisite = f.store.createIssue({ title: "Prerequisite", status: "in_progress" });
-    const issue = f.store.createIssue({ title: "Waiting", status: "backlog", blockedBy: [prerequisite.id], assigneeType: "agent", assigneeId: owner.id });
+    const prerequisite = createResponsibleTestIssue(f.store, { title: "Prerequisite", status: "in_progress" });
+    const issue = createResponsibleTestIssue(f.store, { title: "Waiting", status: "backlog", blockedBy: [prerequisite.id], assigneeType: "agent", assigneeId: owner.id });
     const session = f.store.getOrCreateDefaultIssueSession(issue.id);
     const app = createMultiremiApp({ store: f.store, authToken: "fixture-master" });
     const input = { body_md: "Start now", to: { type: "agent", ref: target.id }, message_kind: "request", wake_requested: "now", dedupe_key: "request-once" };

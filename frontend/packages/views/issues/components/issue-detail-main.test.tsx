@@ -206,7 +206,7 @@ describe("MUL-496 first-screen notices", () => {
     renderMain(false, vi.fn(), false, { issue: { pending_decision_count: 2,
       status: "backlog", parent_issue_id: "parent", blocked_by: ["MUL-1"] } });
     expect(document.querySelector("[data-issue-notice-slot]")).toHaveClass("h-10");
-    expect(document.querySelector("[data-issue-decision-banner]")).toHaveTextContent("Waiting for your decision · 2");
+    expect(document.querySelector("[data-issue-decision-banner]")).toHaveTextContent("Pending questions · 2");
     expect(screen.queryByText(/Waiting for MUL-1/)).toBeNull();
   });
 

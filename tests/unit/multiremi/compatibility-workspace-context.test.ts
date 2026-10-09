@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { afterEach, describe, expect, it } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { ProjectKnowledgeService } from "@multiremi/project-knowledge/service.js";
@@ -82,7 +83,7 @@ describe("compatibility workspace request context", () => {
   it("does not let slug headers expand task or daemon CLI identities", async () => {
     const { store, user, workspace, other, app } = await fixture();
     const agent = store.createAgent({ workspaceId: workspace.id, name: "Worker", provider: "claude" });
-    const issue = store.createIssue({ workspaceId: workspace.id, title: "Scoped issue" });
+    const issue = createResponsibleTestIssue(store, { workspaceId: workspace.id, title: "Scoped issue" });
     const task = store.createTask({ workspaceId: workspace.id, agentId: agent.id, issueId: issue.id, prompt: "Scope" });
     const taskToken = await store.createTaskAccessToken(task, user.id);
     const daemon = await store.createAccessToken({ workspaceId: workspace.id, userId: user.id, type: "daemon", daemonId: "dmn_compat_context", name: "Daemon" });
@@ -99,7 +100,7 @@ describe("compatibility workspace request context", () => {
 
   it("keeps share CLI context pinned to the shared issue when a slug is supplied", async () => {
     const { store, workspace, other, app } = await fixture();
-    const issue = store.createIssue({ workspaceId: workspace.id, title: "Shared issue" });
+    const issue = createResponsibleTestIssue(store, { workspaceId: workspace.id, title: "Shared issue" });
     const share = store.ensureIssueShare(issue.id, workspace.id, "local", 60);
     const headers = { "X-Remi-Share": signIssueShareId(share.id, "fixture-share") };
     for (const path of ["/api/cli/context", "/api/cli/capabilities"]) {

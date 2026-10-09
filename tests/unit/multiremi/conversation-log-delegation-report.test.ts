@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { requestMessageBody, taskRequestPath, sentTask } from "./unified-test-paths.js";
 import type { Database } from "bun:sqlite";
 import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
@@ -54,8 +55,8 @@ function fixture(store: MultiremiStore) {
   const leader = store.createAgent({ name: "Leader", provider: "claude", runtimeId: leaderRuntime.id });
   const worker = store.createAgent({ name: "Worker", provider: "claude", runtimeId: workerRuntime.id });
   const squad = store.createSquad({ name: "Core", leaderId: leader.id, memberIds: [worker.id] });
-  const parent = store.createIssue({ title: "Parent", status: "in_progress", assigneeType: "squad", assigneeId: squad.id });
-  const child = store.createIssue({ title: "Child", parentIssueId: parent.id, status: "in_progress",
+  const parent = createResponsibleTestIssue(store, { title: "Parent", status: "in_progress", assigneeType: "squad", assigneeId: squad.id });
+  const child = createResponsibleTestIssue(store, { title: "Child", parentIssueId: parent.id, status: "in_progress",
     assigneeType: "agent", assigneeId: worker.id });
   const leaderSession = store.createIssueSession(parent.id, { title: "Dispatch round" });
   const leaderTask = store.createTask({ agentId: leader.id, issueId: parent.id,

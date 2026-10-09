@@ -874,13 +874,23 @@ export async function sendInteractionCardLane(handle: FeishuChannelHandle, deliv
   let request = await daemon.getFeishuBotHumanRequest(taskId, requestId);
   if (!request) throw new FeishuDeliveryError("Interaction request is unavailable", true);
   if (!delivery.resumeMessageId && request.status !== "pending") return { messageId: "" };
+  const cardInput = JSON.parse(delivery.body) as { agentName?: string; sessionId?: string | null; routeRevision?: number; fallbackText?: string };
+  if (cardInput.routeRevision !== undefined && request.payload.route_revision !== cardInput.routeRevision)
+    throw new FeishuDeliveryError("Interaction question route changed", false);
+  if (delivery.degraded) {
+    const sent = await handle.sendProactiveThreadReply({ chatId: delivery.chatId,
+      replyToMessageId: delivery.replyToMessageId ?? undefined, body: cardInput.fallbackText ?? "请在 Remi 工作台处理原问题。",
+      idempotencyKey: delivery.idempotencyKey });
+    await options.onStarted?.(sent.messageId);
+    return sent;
+  }
   const recipientOpenId = delivery.interactionOpenId
     ?? await handle.resolveProactiveMention(delivery.chatId, { mode: "group_owner" }, options.signal) ?? undefined;
-  const cardInput = JSON.parse(delivery.body) as { agentName?: string; sessionId?: string | null };
   const agentName = cardInput.agentName ?? displayName;
   const sessionId = (await daemon.getFeishuBotTaskSnapshot(taskId)).sessionId ?? cardInput.sessionId;
   if (!recipientOpenId) throw new FeishuDeliveryError("Interaction recipient is unavailable", false);
   const card = delivery.resumeMessageId ? null : await daemon.prepareTaskHumanRequestCard(requestId, recipientOpenId);
+  if (!delivery.resumeMessageId && !card) throw new FeishuDeliveryError("Interaction question is no longer authorized for this recipient", false);
   const messageId = delivery.resumeMessageId ?? (await handle.sendProactiveCard({ chatId: delivery.chatId,
     replyToMessageId: delivery.replyToMessageId ?? undefined,
     card: card!,

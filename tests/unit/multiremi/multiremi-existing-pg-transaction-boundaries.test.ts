@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { runTurnExecutionMutation } from '@multiremi/store/turn-execution-records.js';
 import type { SqlDatabase as UnifiedFixtureDatabase } from '@multiremi/store/db/postgres.js';
 /**
@@ -88,6 +89,18 @@ describe.skipIf(!pgAvailable)("MUL-465 atomic PostgreSQL boundaries", () => {
     return { workspaceId, runtime, agent };
   }
 
+  function nativeQuestion(taskId: string) {
+    const task = store.getTask(taskId)!;
+    const runtime = store.getRuntime(task.runtimeId!)!;
+    const turn = store.getTurnForAttempt(taskId)!;
+    const result = store.getDaemonTurnBridge().rpc('turn.decision', { turn_id: turn.id, attempt_id: taskId,
+      wait_id: `pg-boundary:${taskId}`, dedupe_key: `pg-boundary:${taskId}`, body_md: 'Continue?',
+      options: [], metadata: { kind: 'question', questions: [{ question: 'Continue?' }] } },
+      { runtimeId: runtime.id, daemonId: runtime.daemonId!, workspaceId: task.workspaceId });
+    expect(result.ok).toBe(true);
+    return store.getTaskHumanRequest(String(result.message_id))!;
+  }
+
   function feishuFixture() {
     const fixture = freshAgent();
     store.heartbeatRuntime(fixture.runtime.id, { supportsFeishuBotConfig: true });
@@ -107,10 +120,11 @@ describe.skipIf(!pgAvailable)("MUL-465 atomic PostgreSQL boundaries", () => {
     } };
   }
 
-  it("closes pending human requests only when an outer task cancellation commits", () => {
+  it("detaches native waits only after task cancellation commits and retains the pending business question", () => {
     const { workspaceId, agent, runtime } = freshAgent();
     const task = store.createTask({ agentId: agent.id, workspaceId, runtimeId: runtime.id, prompt: "Wait" });
-    const request = store.createTaskHumanRequest({ taskId: task.id, kind: "question", payload: { message: "Continue?" } });
+    expect(store.claimTask(runtime.id)?.id).toBe(task.id); store.startTask(task.id);
+    const request = nativeQuestion(task.id);
     const events: Array<{ type: string; inTransaction: boolean }> = [];
     const offWorkspace = store.onWorkspaceEvent(event => {
       if (event.payload.task_id === task.id) events.push({ type: event.type, inTransaction: db.inTransaction === true });
@@ -121,17 +135,20 @@ describe.skipIf(!pgAvailable)("MUL-465 atomic PostgreSQL boundaries", () => {
     try {
       expect(() => db.transaction(() => {
         store.cancelTask(task.id);
-        expect(store.getTaskHumanRequest(request.id)?.status).toBe("cancelled");
+        expect(store.getTaskHumanRequest(request.id)?.status).toBe("pending");
+        expect(store.getQuestion(request.id)?.wait_status).toBe('detached');
         expect(events).toEqual([]);
         throw new Error("rollback cancellation");
       })()).toThrow("rollback cancellation");
       expect(store.getTaskHumanRequest(request.id)?.status).toBe("pending");
+      expect(store.getQuestion(request.id)?.wait_status).toBe('waiting');
       expect(events).toEqual([]);
       db.transaction(() => {
         store.cancelTask(task.id);
         expect(events).toEqual([]);
       })();
-      expect(store.getTaskHumanRequest(request.id)?.status).toBe("cancelled");
+      expect(store.getTaskHumanRequest(request.id)?.status).toBe("pending");
+        expect(store.getQuestion(request.id)?.wait_status).toBe('detached');
       expect(events.filter(event => event.type === "daemon:task_input")).toHaveLength(1);
       expect(events.every(event => !event.inTransaction)).toBe(true);
       expect(store.expireTaskHumanRequest(request.id, "cancelled")).toBeNull();
@@ -216,7 +233,7 @@ describe.skipIf(!pgAvailable)("MUL-465 atomic PostgreSQL boundaries", () => {
     store.updateWorkspace(fixture.workspaceId, {
       settings: { issueTopics: { enabled: true, chatId: `oc_mul465_round_${fixtureNumber}` } },
     });
-    const issue = store.createIssue({
+    const issue = createResponsibleTestIssue(store, {
       title: "PG round boundary", workspaceId: fixture.workspaceId,
       assigneeType: "agent", assigneeId: fixture.agent.id,
     });
@@ -387,7 +404,7 @@ describe.skipIf(!pgAvailable)("MUL-465 atomic PostgreSQL boundaries", () => {
 
   it("keeps workspace before session locking and wakes only after the steer transaction commits", () => {
     const { workspaceId, agent, runtime } = freshAgent();
-    const issue = store.createIssue({ title: "Steer lock order", workspaceId });
+    const issue = createResponsibleTestIssue(store, { title: "Steer lock order", workspaceId });
     const session = store.getOrCreateDefaultIssueSession(issue.id);
     const task = store.createSessionTask(session.id, { agentId: agent.id, prompt: "Steer me" });
     expect(store.claimTask(runtime.id)?.id).toBe(task.id);
@@ -439,11 +456,11 @@ describe.skipIf(!pgAvailable)("MUL-465 atomic PostgreSQL boundaries", () => {
 
   it("publishes terminal human-request cancellation after commit and not after rollback", () => {
     const { workspaceId, agent, runtime } = freshAgent();
-    const issue = store.createIssue({ title: "Terminal request", workspaceId });
+    const issue = createResponsibleTestIssue(store, { title: "Terminal request", workspaceId });
     const makePending = () => {
       const task = store.createTask({ agentId: agent.id, issueId: issue.id, workspaceId, prompt: "Work" });
-      runTurnExecutionMutation(db as unknown as UnifiedFixtureDatabase, "UPDATE multiremi_turn_execution_records SET runtime_id = ?, status = 'running' WHERE id = ?", [runtime.id, task.id]);
-      const request = store.createTaskHumanRequest({ taskId: task.id, kind: "question", payload: { question: "Continue?" } });
+      expect(store.claimTask(runtime.id)?.id).toBe(task.id); store.startTask(task.id);
+      const request = nativeQuestion(task.id);
       return { task, request };
     };
     const committed = makePending();
@@ -457,7 +474,8 @@ describe.skipIf(!pgAvailable)("MUL-465 atomic PostgreSQL boundaries", () => {
         expect(transitions).toEqual([]);
       })();
       expect(transitions).toEqual([{ requestId: committed.request.id, type: "cancelled", inTransaction: false }]);
-      expect(store.getTaskHumanRequest(committed.request.id)?.status).toBe("cancelled");
+      expect(store.getTaskHumanRequest(committed.request.id)?.status).toBe("pending");
+      expect(store.getQuestion(committed.request.id)?.wait_status).toBe('detached');
 
       const rolledBack = makePending();
       transitions.length = 0;
@@ -468,6 +486,7 @@ describe.skipIf(!pgAvailable)("MUL-465 atomic PostgreSQL boundaries", () => {
       })()).toThrow("rollback terminal cancellation");
       expect(transitions).toEqual([]);
       expect(store.getTaskHumanRequest(rolledBack.request.id)?.status).toBe("pending");
+      expect(store.getQuestion(rolledBack.request.id)?.wait_status).toBe('waiting');
     } finally { unsubscribe(); }
   });
 
@@ -476,8 +495,8 @@ describe.skipIf(!pgAvailable)("MUL-465 atomic PostgreSQL boundaries", () => {
     const supervisorAgent = store.createAgent({
       name: "PG organizer", provider: "codex", workspaceId, role: "supervisor",
     });
-    const patrol = store.createIssue({ title: "PG organizer patrol", workspaceId });
-    const targetIssue = store.createIssue({ title: "PG organizer target", workspaceId, status: "in_progress" });
+    const patrol = createResponsibleTestIssue(store, { title: "PG organizer patrol", workspaceId });
+    const targetIssue = createResponsibleTestIssue(store, { title: "PG organizer target", workspaceId, status: "in_progress" });
     const supervisorTask = store.createTask({ agentId: supervisorAgent.id, issueId: patrol.id, prompt: "Patrol" });
     const session = store.getOrCreateDefaultIssueSession(targetIssue.id);
     const targetTask = store.createSessionTask(session.id, { agentId: workerAgent.id, prompt: "Organizer target" });

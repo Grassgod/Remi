@@ -7,6 +7,7 @@ import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { MultiremiStore } from "@multiremi/store.js";
 import { StoreContext } from "@multiremi/store/context.js";
 import { AnalyticsRepo } from "@multiremi/store/repos/analytics-repo.js";
+import { createResponsibleTestIssue } from './helpers.js';
 import { RUNTIME_HEARTBEAT_STALE_MS as CONTRACT_RUNTIME_HEARTBEAT_STALE_MS } from "@multiremi/contracts/runtime-health";
 import {
   isRuntimeEffectivelyOnline,
@@ -146,7 +147,7 @@ describe("RuntimesRepo", () => {
       provider: "claude",
       runtimeId: runtime.id,
     });
-    const issue = store!.createIssue({ title: "Cleanup issue" });
+    const issue = createResponsibleTestIssue(store!,{ title: "Cleanup issue" });
     store!.reportIssueWorkspace({
       issueId: issue.id,
       runtimeId: runtime.id,
@@ -263,7 +264,7 @@ describe("RuntimesRepo", () => {
       defaultAssigneeType: "agent",
       defaultAssigneeId: agent.id,
     });
-    const issue = store!.createIssue({
+    const issue = createResponsibleTestIssue(store!,{
       title: "Reference cleanup issue",
       assigneeType: "agent",
       assigneeId: agent.id,

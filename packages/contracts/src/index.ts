@@ -1,4 +1,5 @@
 export * from "./types.js";
+export * from "./issue-responsibility.js";
 export * from "./usage-accounting.js";
 export * from "./acp-protocol.js";
 export * from "./provider-types.js";
@@ -16,3 +17,5 @@ export * from "./unified-model.js";
 export * from "./issue-activity.js";
 export * from "./trace-file.js";
 export type { TaskMessageFanoutSubject } from "./task-message-fanout.js";
+export type * from './question.js';
+export { isHistoricalIssueQuestionRecord } from './question.js';

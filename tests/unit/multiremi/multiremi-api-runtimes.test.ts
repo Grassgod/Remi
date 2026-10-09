@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { taskOfferResponse } from "../../fixtures/task-offer.js";
 import { reportFrame } from "../../fixtures/report-session.js";
 // Runtime metadata/usage, console scoping, delete cascade, and the async request
@@ -1341,7 +1342,7 @@ describe("Multiremi API — runtimes and runtime request queues", () => {
     const store = createStore();
     const runtime = store.registerRuntime({ id: "rt_heartbeat_flow", name: "Heartbeat runtime", provider: "codex" });
     const agent = store.createAgent({ name: "Codex", provider: "codex" });
-    const issue = store.createIssue({ title: "Do not steal heartbeat requests" });
+    const issue = createResponsibleTestIssue(store, { title: "Do not steal heartbeat requests" });
     store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "Claim task" });
     const app = createMultiremiApp({ store });
 

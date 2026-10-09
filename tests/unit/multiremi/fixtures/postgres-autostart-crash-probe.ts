@@ -98,7 +98,11 @@ try {
   if (mode!.startsWith("replay")) {
     store.dispatchPendingSystemEvents(new Date(replayAt ?? Date.now() + 5_000));
   } else {
-    store.updateIssue(prerequisiteId, { status: "done" });
+    const delivery=store.listIssueDeliveries(prerequisiteId,{limit:1})[0]!;
+    const reviewer=store.resolveIssueResponsibility(prerequisiteId).reviewOwner!;
+    if(reviewer.type!=='member')throw new Error('Crash prerequisite requires its explicit human reviewer');
+    store.respondIssueDelivery(prerequisiteId,delivery.id,{action:'accept',revision:delivery.responsibilityRevision},
+      {type:'member',id:reviewer.id});
   }
   announce("completed");
 } catch (error) {

@@ -6,6 +6,7 @@ import { readJsonStrict, isJsonApiError } from "../helpers/request.js";
 import { QuestionCardTokenError, assertQuestionCardToken } from "@multiremi/store/question-card-token.js";
 import { IssueDecisionError } from "@multiremi/store/repos/issues-repo.js";
 import { messageResponse } from "../helpers/conversations.js";
+import { QuestionError } from '../../store/inbox/questions.js';
 
 export function registerMessageCardRoutes(app: Hono, { store }: RouterDeps): void {
   const load = (c: Context) => {
@@ -46,7 +47,7 @@ export function registerMessageCardRoutes(app: Hono, { store }: RouterDeps): voi
   app.post("/api/daemon/messages/:id/answer", async c => {
     const loaded = load(c);
     if (loaded instanceof Response) return loaded;
-    const input = await readJsonStrict<{ answer?: unknown; response?: unknown; token?: unknown; operator_open_id?: unknown }>(c);
+    const input = await readJsonStrict<{ answer?: unknown; response?: unknown; token?: unknown; operator_open_id?: unknown; expected_route_revision?: unknown }>(c);
     if (isJsonApiError(input)) return c.json({ error: input.apiError }, 400);
     const credential = { token: typeof input.token === "string" ? input.token : "", operatorOpenId: typeof input.operator_open_id === "string" ? input.operator_open_id : "" };
     try {
@@ -64,10 +65,11 @@ export function registerMessageCardRoutes(app: Hono, { store }: RouterDeps): voi
     if (loaded.request ? !response : !answer) return c.json({ error: loaded.request ? "response is required" : "answer is required" }, 400);
     try {
       const result = store.answerMessageDecision(loaded.message.id, { sender: { type: "member", id: operator.member.id },
-        body_md: answer ?? JSON.stringify(response), response, credential });
+        body_md: answer ?? JSON.stringify(response), response, credential, expected_route_revision: typeof input.expected_route_revision === 'number' ? input.expected_route_revision : undefined });
       return c.json({ ...result, message: messageResponse(result.message), request: store.getTaskHumanRequest(loaded.message.id), decision: store.getIssueDecisionAnywhere(loaded.message.id) });
     } catch (error) {
       if (error instanceof QuestionCardTokenError) return c.json({ error: error.message, code: error.code }, 403);
+      if (error instanceof QuestionError) return c.json({ error: error.message, code: error.code }, error.status);
       if (error instanceof IssueDecisionError) {
         if (store.getIssueDecisionAnywhere(loaded.message.id)?.status === "withdrawn") return c.json({ error: error.message, code: "token_consumed" }, 403);
         return c.json({ error: error.message, code: (error as IssueDecisionError & { code?: string }).code }, error.status);

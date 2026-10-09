@@ -1,3 +1,5 @@
+import { createResponsibleTestAutopilot } from './helpers.js';
+import { createResponsibleTestIssue } from './helpers.js';
 import { afterEach, describe, expect, it } from "bun:test";
 import type { MultiremiProjectDoc } from "@multiremi/contracts/types.js";
 import {
@@ -305,7 +307,7 @@ describe("Repository Wiki snapshot restoration", () => {
     expect((await denied.json() as any).error).toBe("task knowledge target does not match its repository scope");
     const project = f.store.createProject({ title: "Restore project" });
     f.store.createProjectResource(project.id, { resourceType: "github_repo", resourceRef: { url: "https://github.com/acme/restore.git" } });
-    const issue = f.store.createIssue({ title: "Restore", projectId: project.id });
+    const issue = createResponsibleTestIssue(f.store, { title: "Restore", projectId: project.id });
     const agent = f.store.createAgent({ name: "Non-publisher", provider: "claude" });
     const task = f.store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "restore" });
     const ordinary = await f.store.createTaskAccessToken(task, "local");
@@ -1802,7 +1804,7 @@ describe("RepositoryWikiService OpenViking mode", () => {
     });
     store.createAgent({ name: "Atlas · LLM Wiki", provider: "claude" });
     const userAgent = store.createAgent({ name: "User Wiki", provider: "claude" });
-    const sameTitle = store.createAutopilot({
+    const sameTitle = createResponsibleTestAutopilot(store, {
       title: "Atlas · Repository Wiki",
       workspaceId: "local",
       assigneeId: userAgent.id,

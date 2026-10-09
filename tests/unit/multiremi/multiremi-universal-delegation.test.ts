@@ -1,3 +1,5 @@
+import { createResponsibleTestAutopilot } from './helpers.js';
+import { createResponsibleTestIssue } from './helpers.js';
 import { issueMessagesPath, requestMessageBody, sentTask, taskRequestPath } from "./unified-test-paths.js";
 import { describe, expect, it } from "bun:test";
 import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
@@ -51,10 +53,10 @@ function fixture(store: MultiremiStore, humanAssigned = false) {
     store.registerRuntime({ name, provider: "claude", workspaceId: "local" }));
   const [qa, atlas, leader] = runtimes.map(runtime =>
     store.createAgent({ name: runtime.name, provider: "claude", runtimeId: runtime.id }));
-  const parent = store.createIssue({ title: "Umbrella", status: "in_progress" });
-  const a = store.createIssue({ title: "Unassigned source A", status: "in_progress", parentIssueId: parent.id,
+  const parent = createResponsibleTestIssue(store, { title: "Umbrella", status: "in_progress" });
+  const a = createResponsibleTestIssue(store, { title: "Unassigned source A", status: "in_progress", parentIssueId: parent.id,
     ...(humanAssigned ? { assigneeType: "agent", assigneeId: qa!.id } : {}) });
-  const b = store.createIssue({ title: "Target B", status: "in_progress", parentIssueId: parent.id,
+  const b = createResponsibleTestIssue(store, { title: "Target B", status: "in_progress", parentIssueId: parent.id,
     assigneeType: "agent", assigneeId: atlas!.id });
   const s0 = store.createIssueSession(a.id, { title: "Original dispatcher S0" });
   const wrong = store.getOrCreateDefaultIssueSession(a.id);
@@ -372,14 +374,17 @@ for (const backend of ["sqlite", "postgres"] as const) {
     for (const assignment of ["explicit", "project_default", "reassign"] as const) {
       it(`agent ${assignment} assignment creates an undelegated first round with no return (E6)`,
         async () => withStore(backend, async store => {
-          const f = fixture(store);
+          const f = fixture(store, true);
+          // Agent-created roots inherit a human only from a complete, verified
+          // source chain; configuring that source does not delegate the new work.
+          store.updateIssue(f.a.parentIssueId!, { assigneeType: "agent", assigneeId: f.leader.id });
           const project = store.createProject({ title: "First-round project",
             defaultAssigneeType: "agent", defaultAssigneeId: f.atlas.id });
           store.updateIssue(f.a.id, { projectId: project.id });
           const targetAgentId = assignment === "explicit" ? f.leader.id : f.atlas.id;
           let issueId: string;
           if (assignment === "reassign") {
-            const existing = store.createIssue({ title: "Previously assigned issue", projectId: project.id,
+            const existing = createResponsibleTestIssue(store, { title: "Previously assigned issue", projectId: project.id,
               assigneeType: "agent", assigneeId: f.leader.id, status: "in_progress" });
             expect(store.listTasksForIssue(existing.id)).toHaveLength(0);
             const response = await request(store, f.source, `/api/multiremi/issues/${existing.id}/assign`, {
@@ -422,7 +427,7 @@ for (const backend of ["sqlite", "postgres"] as const) {
       it(`real ${executionMode} autopilot creates an undelegated task with no return (C4)`,
         async () => withStore(backend, async store => {
           const f = fixture(store);
-          const autopilot = store.createAutopilot({ title: `Automatic ${executionMode} work`,
+          const autopilot = createResponsibleTestAutopilot(store, { title: `Automatic ${executionMode} work`,
             assigneeId: f.atlas.id, executionMode, createdByType: "agent", createdById: f.qa.id });
           const run = store.runAutopilot(autopilot.id, { sourceTaskId: f.source.id,
             ...(executionMode === "trigger_issue" ? { triggerIssueId: f.b.id } : {}) });

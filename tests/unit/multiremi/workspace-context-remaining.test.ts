@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { afterEach, describe, expect, it } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { createLocalStore as createStore, resetMultiremiTestEnv } from "./helpers.js";
@@ -21,7 +22,7 @@ async function setup() {
 function seedInbox(store: ReturnType<typeof createStore>, workspaceId: string, userId: string) {
   const member = store.listWorkspaceMembers(workspaceId).find((candidate) => candidate.userId === userId)!;
   const author = store.createWorkspaceMember({ workspaceId, userId: `author-${workspaceId}`, name: "Author" });
-  const issue = store.createIssue({ workspaceId, title: "Private notification", createdBy: member.id });
+  const issue = createResponsibleTestIssue(store, { workspaceId, title: "Private notification", createdBy: member.id });
   store.createIssueComment(issue.id, { authorType: "member", authorId: author.id, body: "Private comment" });
   return { member, item: store.listInboxItems(member.id).find((item) => item.issueId === issue.id)! };
 }
@@ -38,7 +39,7 @@ async function setupMovedInboxMember() {
   expect(moved.status).toBe(200);
   expect(store.getUserRoleInWorkspace(user.id, first.id)).toBeNull();
   const selected = [seedInbox(store, workspace.id, user.id).item];
-  const issue = store.createIssue({ workspaceId: workspace.id, title: "Second selected notification", createdBy: member.id });
+  const issue = createResponsibleTestIssue(store, { workspaceId: workspace.id, title: "Second selected notification", createdBy: member.id });
   const author = store.listWorkspaceMembers(workspace.id).find((candidate) => candidate.userId !== user.id)!;
   store.createIssueComment(issue.id, { authorType: "member", authorId: author.id, body: "Selected comment" });
   selected.push(store.listInboxItems(member.id).find((item) => item.issueId === issue.id)!);

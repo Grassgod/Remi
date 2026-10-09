@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { runTurnExecutionMutation } from '@multiremi/store/turn-execution-records.js';
 import type { SqlDatabase as UnifiedFixtureDatabase } from '@multiremi/store/db/postgres.js';
 import { expect, it } from "bun:test";
@@ -11,7 +12,7 @@ pendingTurnBackendTests("MUL-492 comment intent replay", (fixture, backend) => {
     const f = fixture();
     const agent = f.store.createAgent({ name: "Replay owner", provider: "codex" });
     const team = squad ? f.store.createSquad({ name: "Replay squad", leaderId: agent.id, memberIds: [] }) : null;
-    const issue = f.store.createIssue({ title: "Replay comments", status: "in_progress", assigneeType: team ? "squad" : "agent", assigneeId: team?.id ?? agent.id });
+    const issue = createResponsibleTestIssue(f.store, { title: "Replay comments", status: "in_progress", assigneeType: team ? "squad" : "agent", assigneeId: team?.id ?? agent.id });
     const session = f.store.getOrCreateDefaultIssueSession(issue.id);
     const member = f.store.findWorkspaceMemberForUser("local", "local")!;
     const ctx = (f.store as unknown as { ctx: StoreContext }).ctx;

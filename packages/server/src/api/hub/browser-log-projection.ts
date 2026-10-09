@@ -3,9 +3,10 @@ import type { MultiremiStore } from "@multiremi/store/store.js";
 import type { ReadPool } from "@multiremi/store/db/read-pool.js";
 import { toConversationLogEntry } from "@multiremi/store/repos/conversation-log-repo.js";
 import type { MultiremiWebSocketClient } from "../helpers/realtime-types.js";
-import { conversationEntrySource, conversationEntryDecision, stripCardTokenFields, type ConversationVisibilityEntry } from "../helpers/conversations.js";
+import { conversationEntrySource, conversationEntryDecision, conversationEntryQuestionNotification, stripCardTokenFields, type ConversationVisibilityEntry } from "../helpers/conversations.js";
 import { canUserViewTaskMessages, createTaskAuthMemo } from "../helpers/auth-guards.js";
 import { createPostgresStreamAuthReader, createSqliteStreamAuthReader, decideLogSubscription, decideTraceSubscription } from "./stream-auth.js";
+import { questionNotificationIdentity, questionNotificationFactsSql, canReadQuestionNotificationFacts } from '../../store/inbox/question-notification-visibility.js';
 
 /** The Hub ring is shared. Project at the socket boundary for each recipient. */
 export function createBrowserLogProjection(store: MultiremiStore, pool: ReadPool | null) {
@@ -34,20 +35,46 @@ export function createBrowserLogProjection(store: MultiremiStore, pool: ReadPool
       }))];
       const targets = [...new Set(frontier.flatMap(row => Number.isSafeInteger(row.metadata.target_seq)
         && !bySeq.has(Number(row.metadata.target_seq)) ? [Number(row.metadata.target_seq)] : []))];
-      if (!replies.length && !targets.length) break;
+      // Load the exact original Q for source-return boundaries and the separate
+      // handler/presenter grant; never grant the containing session or trace.
+      const questionRefs = [...new Set(frontier.flatMap(row => (row.metadata.question_source_notification === true
+        || row.metadata.question_notification === true || row.metadata.question_present_request === true)
+        && typeof row.metadata.root_question_id === 'string' && !byId.has(row.metadata.root_question_id) ? [row.metadata.root_question_id] : []))];
+      if (!replies.length && !targets.length && !questionRefs.length) break;
+      const conditions: string[] = [], params: unknown[] = [];
+      if (replies.length || targets.length) {
+        conditions.push(`(session_id=? AND (${[
+          ...(replies.length ? [`id IN (${replies.map(() => '?').join(',')})`] : []),
+          ...(targets.length ? [`seq IN (${targets.map(() => '?').join(',')})`] : []),
+        ].join(' OR ')}))`);
+        params.push(sessionId, ...replies, ...targets);
+      }
+      if (questionRefs.length) { conditions.push(`id IN (${questionRefs.map(() => '?').join(',')})`); params.push(...questionRefs); }
       const related = postgres
         ? (await postgres.query<Record<string, unknown>>(
-          `SELECT * FROM multiremi_conversation_log WHERE session_id=? AND (${[
-            ...(replies.length ? [`id IN (${replies.map(() => "?").join(",")})`] : []),
-            ...(targets.length ? [`seq IN (${targets.map(() => "?").join(",")})`] : []),
-          ].join(" OR ")})`, [sessionId, ...replies, ...targets])).map(toConversationLogEntry)
-        : [...replies.flatMap(id => store.getConversationLogEntryById(id) ?? []),
+          `SELECT * FROM multiremi_conversation_log WHERE ${conditions.join(' OR ')}`, params)).map(toConversationLogEntry)
+        : [...[...replies, ...questionRefs].flatMap(id => store.getConversationLogEntryById(id) ?? []),
           ...targets.flatMap(seq => store.getConversationLogEntry(sessionId, seq) ?? [])];
-      for (const row of related) { byId.set(row.id, row); bySeq.set(row.seq, row); }
+      for (const row of related) { byId.set(row.id, row); if (row.session_id === sessionId) bySeq.set(row.seq, row); }
       frontier = related;
     }
-    const allowed = new Map<string, boolean>(), decisions = new Map<string, boolean>(), memo = createTaskAuthMemo();
+    const allowed = new Map<string, boolean>(), decisions = new Map<string, boolean>(), notifications = new Map<string, boolean>(), memo = createTaskAuthMemo();
     const visible = async (entry: ConversationVisibilityEntry) => {
+      const notification = conversationEntryQuestionNotification(entry, id => byId.get(id), seq => bySeq.get(seq));
+      if (notification === null) return false;
+      if (notification) {
+        if (!notification.id) return false;
+        if (!notifications.has(notification.id)) {
+          const access = { userId: subject.userId, admin: false };
+          const original = typeof notification.metadata.root_question_id === 'string' ? byId.get(notification.metadata.root_question_id) : null;
+          const identity = questionNotificationIdentity(notification, original);
+          const query = identity ? questionNotificationFactsSql(identity, notification, access) : null;
+          const facts = postgres && query ? await postgres.queryOne(query.sql, query.params) : null;
+          notifications.set(notification.id, postgres ? !!identity && identity.workspaceId === subject.workspaceId
+            && canReadQuestionNotificationFacts(identity, notification, access, facts) : store.canReadQuestionNotification(notification.id, access));
+        }
+        return notifications.get(notification.id)!;
+      }
       const decision = conversationEntryDecision(entry, id => byId.get(id), seq => bySeq.get(seq));
       if (decision === null) return false;
       if (decision) {

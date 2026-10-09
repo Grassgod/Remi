@@ -3,6 +3,8 @@ export const ISSUE_CONVERSATION_ACTIVITY_TYPES = [
   "issue_created", "issue_updated", "issue_assigned", "issue_unassigned",
   "label_attached", "label_detached", "title_renamed", "issue_status_forced",
   "parent_status_derived", "parent_status_held",
+  "issue_responsibility_transferred", "issue_delivery_submitted", "issue_delivery_accepted",
+  "issue_delivery_returned", "issue_delivery_authorized",
 ] as const;
 export const ISSUE_SYSTEM_ACTIVITY_TYPES = [
   "dependency_created", "dependency_deleted", "dependency_ready", "dependency_failed",
@@ -13,6 +15,8 @@ export const ISSUE_SYSTEM_ACTIVITY_TYPES = [
   "issue_metadata_updated",
   "delegation_return_triggered", "delegation_return_skipped", "child_done_parent_triggered",
   "child_status_parent_coalesced", "child_status_after_parent_closed", "child_done_parent_skipped",
+  "issue_delivery_review_unavailable",
+  "issue_delivery_invalidated",
   "decision_received", "decision_escalated", "decision_reminder", "decision_card_skipped",
   "decision_card_queued", "decision_card_reminder", "decision_card_degraded",
   "dependency_auto_started", "dependency_gate_exempted", "dependency_satisfied",
@@ -20,7 +24,7 @@ export const ISSUE_SYSTEM_ACTIVITY_TYPES = [
   "dependency_force_started", "dependency_satisfied_coalesced",
   "parent_done_grant_created", "parent_done_grant_revoked", "parent_done_grant_used",
   "issue_dependency_added", "issue_dependency_removed", "issue_metadata_set", "issue_metadata_deleted",
-  "quick_create_queued",
+  "quick_create_queued", "issue_main_session_rotated",
   "comment_mention_skipped", "comment_dispatch_replayed",
 ] as const;
 export const ISSUE_ACTIVITY_TYPES: readonly string[] = [

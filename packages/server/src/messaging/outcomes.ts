@@ -32,6 +32,7 @@ export type MessagingOutcomeHost = Pick<
   | "resolveWorkspaceMemberForNotification"
   | "isNotificationMuted"
   | "issues"
+  | "workspaces"
   | "tasks"
   | "inbox"
   | "emitCommitEvents"
@@ -126,6 +127,7 @@ export interface MessageIssueInput {
   projectId?: string | null;
   assigneeType?: MultiremiAssigneeType | null;
   assigneeId?: string | null;
+  responsibleMemberId?:string|null;
 }
 
 export interface MessageIssueOutcomeInput extends MessageIssueInput {
@@ -171,7 +173,7 @@ export interface ResolveMessageProposalResult extends MessageOutcomeResult {
 }
 
 export class MessagingOutcomeError extends Error {
-  constructor(message: string, readonly status: 400 | 404 | 409 = 400) {
+  constructor(message: string, readonly status: 400 | 403 | 404 | 409 = 400) {
     super(message);
     this.name = "MessagingOutcomeError";
   }
@@ -542,6 +544,9 @@ export class MessagingOutcomeService {
       }
       return { message, outcome: existing, issue, created: false };
     }
+    if(input.taskId)throw new MessagingOutcomeError('Direct message-to-Issue creation requires a human approver, not a task credential',403);
+    const creator=input.createdBy?this.ctx.workspaces().getWorkspaceMember(input.createdBy)??this.ctx.workspaces().findWorkspaceMemberForUser(input.createdBy,input.workspaceId):null;
+    if(!creator||creator.archivedAt||creator.workspaceId!==input.workspaceId)throw new MessagingOutcomeError('An active human creator is required for this Issue outcome',403);
     const issue = this.ctx.issues().createIssueWithinTransaction({
       title: input.title,
       description: input.description ?? null,
@@ -559,6 +564,7 @@ export class MessagingOutcomeService {
         message_url: message.url,
       }],
       createdBy: input.createdBy,
+      responsibleMemberId:input.responsibleMemberId??creator.id,
     }, childStatusChanges, deferredEvents);
     const createdAt = nowIso();
     const outcome = this.repo.recordOutcomeWithinTransaction({
@@ -703,6 +709,7 @@ function normalizeIssueInput(input: Record<string, unknown> | MessageIssueInput)
     projectId: cleanText(input.projectId),
     assigneeType: readAssigneeType(input.assigneeType),
     assigneeId: cleanText(input.assigneeId),
+    responsibleMemberId:cleanText(input.responsibleMemberId),
   };
 }
 

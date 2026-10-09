@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { normalizeDaemonTurnOffer } from "@multiremi/worker/daemon-offers.js";
 import { runTurnExecutionMutation } from "@multiremi/store/turn-execution-records.js";
 // MUL-389: the claim hydrates the selected task and nothing else.
@@ -91,7 +92,7 @@ function fixture(options: {
     return agent;
   });
 
-  const issue = store.createIssue({ title: "Hydrate issue", workspaceId: "local", projectId: project?.id ?? null });
+  const issue = createResponsibleTestIssue(store, { title: "Hydrate issue", workspaceId: "local", projectId: project?.id ?? null });
   // The selected task: highest priority.
   store.createTask({ agentId: agents[0]!.id, issueId: issue.id, prompt: "selected", priority: 100 });
   for (let index = 1; index < agents.length; index += 1) {

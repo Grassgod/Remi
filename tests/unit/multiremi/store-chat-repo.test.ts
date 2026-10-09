@@ -7,6 +7,7 @@ import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { MultiremiStore } from "@multiremi/store.js";
 import { StoreContext } from "@multiremi/store/context.js";
 import { ChatRepo } from "@multiremi/store/repos/chat-repo.js";
+import { createResponsibleTestIssue } from './helpers.js';
 
 let db: Database | null = null;
 let store: MultiremiStore | null = null;
@@ -41,7 +42,7 @@ describe("ChatRepo", () => {
   it("rejects removed Issue binding fields and retains ordinary session controls", () => {
     const repo = createRepo();
     const agent = store!.createAgent({ name: "Chatty", provider: "codex", workspaceId: "local" });
-    const issue = store!.createIssue({ title: "Separate work", workspaceId: "local" });
+    const issue = createResponsibleTestIssue(store!,{ title: "Separate work", workspaceId: "local" });
     const session = repo.createChatSession({ agentId: agent.id, workspaceId: "local" });
 
     expect(session).not.toHaveProperty("issueId");

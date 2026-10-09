@@ -663,6 +663,7 @@ export function issueDraft(body: IssueBody): MessageIssueInput {
     projectId: body.projectId ?? null,
     assigneeType: body.assigneeType ?? null,
     assigneeId: body.assigneeId ?? null,
+    responsibleMemberId:body.responsibleMemberId??null,
   };
 }
 
@@ -719,6 +720,7 @@ interface IssueBody {
   projectId?: string | null;
   assigneeType?: MultiremiAssigneeType | null;
   assigneeId?: string | null;
+  responsibleMemberId?:string|null;
 }
 
 function connectionIdentity(connection: MessageConnection): {
@@ -817,7 +819,7 @@ function denyWorkspace(c: Context, deps: RouterDeps): Response | null {
  * may record outcomes, but it may not widen what the platform ingests.
  */
 function requireHumanAdmin(c: Context, deps: RouterDeps): Response | null {
-  if (currentAccessToken(c)?.type === "task") {
+  if (currentAccessToken(c)?.type === "task" || currentAccessToken(c)?.type==='daemon') {
     return c.json({ error: "forbidden for task token", code: "human_admin_required" }, 403);
   }
   return requireWorkspaceAdmin(c, deps.store, c.req.param("workspaceId") ?? "");
@@ -829,7 +831,7 @@ function requireHumanAdmin(c: Context, deps: RouterDeps): Response | null {
  * An agent may propose; the point of a proposal is that somebody else says yes.
  */
 function requireHumanApprover(c: Context, deps: RouterDeps): Response | null {
-  if (currentAccessToken(c)?.type === "task") {
+  if (currentAccessToken(c)?.type === "task" || currentAccessToken(c)?.type === "daemon") {
     return c.json({ error: "forbidden for task token", code: "human_approval_required" }, 403);
   }
   return requireWorkspaceAdmin(c, deps.store, c.req.param("workspaceId") ?? "");

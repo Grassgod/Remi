@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { resolveMigrationReportDirectory } from "@multiremi/store/migration-report-directory.js";
 import {it,expect} from 'bun:test';
 import {pendingTurnBackendTests} from './pending-turn-test-backends.js';
@@ -17,7 +18,7 @@ pendingTurnBackendTests('MUL-506 PG process concurrency',(fixture,backend)=>{
       return results;
     }finally{for(const p of processes)p.kill();rmSync(dir,{recursive:true,force:true});}
   }
-  function setup(){const f=fixture(),a=f.store.createAgent({name:'PG recipient',provider:'codex'}),issue=f.store.createIssue({title:'PG lane',assigneeType:'agent',assigneeId:a.id}),session=f.store.getOrCreateDefaultIssueSession(issue.id);
+  function setup(){const f=fixture(),a=f.store.createAgent({name:'PG recipient',provider:'codex'}),issue=createResponsibleTestIssue(f.store, {title:'PG lane',assigneeType:'agent',assigneeId:a.id}),session=f.store.getOrCreateDefaultIssueSession(issue.id);
     return {...f,a,issue,session,message:{session_id:session.id,sender:{type:'member',id:'mem_local_local'},to:{type:'agent',ref:a.id},message_kind:'request',wake_requested:'now',body_md:'now'}};}
   it('two server processes sending now messages create only one pending turn',async()=>{const f=setup();const results=await concurrent([1,2].map(i=>({databaseUrl:f.databaseUrl,operation:'send',message:{...f.message,body_md:`now ${i}`}})));
     expect(new Set(results.map(r=>r.turn_id)).size).toBe(1);expect(f.store.listTurns({workspace_id:'local',session_id:f.session.id}).filter(t=>t.status==='pending')).toHaveLength(1);expect(f.store.listMessages(f.session.id)).toHaveLength(2);},30_000);

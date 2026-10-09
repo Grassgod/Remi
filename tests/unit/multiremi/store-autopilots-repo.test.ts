@@ -85,7 +85,8 @@ async function withRepo(
 function dailySchedule(repo: AutopilotsRepo, host: MultiremiStore) {
   setSystemTime(new Date(INITIAL_TIME));
   const agent = host.createAgent({ name: "Daily pilot", provider: "claude", workspaceId: "local" });
-  const autopilot = repo.createAutopilot({ title: "Daily release", assigneeId: agent.id, workspaceId: "local" });
+  const human=host.createWorkspaceMember({name:'Explicit daily schedule human',workspaceId:'local'});
+  const autopilot = repo.createAutopilot({ title: "Daily release", assigneeId: agent.id, workspaceId: "local",responsibleMemberId:human.id });
   const trigger = repo.createAutopilotTrigger(autopilot.id, {
     kind: "schedule", cronExpression: "0 4 * * *", timezone: "Asia/Shanghai",
   });
@@ -199,7 +200,8 @@ describe("AutopilotsRepo", () => {
     const repo = createRepo();
     const agentId = createAgentId();
 
-    const autopilot = repo.createAutopilot({ title: "Nightly", assigneeId: agentId, workspaceId: "local" });
+    const human=store!.createWorkspaceMember({name:'Explicit nightly schedule human',workspaceId:'local'});
+    const autopilot = repo.createAutopilot({ title: "Nightly", assigneeId: agentId, workspaceId: "local",responsibleMemberId:human.id });
     expect(autopilot.title).toBe("Nightly");
     expect(repo.getAutopilot(autopilot.id)?.id).toBe(autopilot.id);
     expect(repo.listAutopilots("local").map((entry) => entry.id)).toEqual([autopilot.id]);
@@ -212,7 +214,8 @@ describe("AutopilotsRepo", () => {
   it("schedules a cron trigger and claims it when due", () => {
     const repo = createRepo();
     const agentId = createAgentId();
-    const autopilot = repo.createAutopilot({ title: "Cron", assigneeId: agentId, workspaceId: "local" });
+    const human=store!.createWorkspaceMember({name:'Explicit cron schedule human',workspaceId:'local'});
+    const autopilot = repo.createAutopilot({ title: "Cron", assigneeId: agentId, workspaceId: "local",responsibleMemberId:human.id });
 
     const trigger = repo.createAutopilotTrigger(autopilot.id, { kind: "schedule", cronExpression: "0 * * * *" });
     expect(trigger.kind).toBe("schedule");
@@ -231,6 +234,7 @@ describe("AutopilotsRepo", () => {
     const agentId = createAgentId();
     const autopilot = repo.createAutopilot({
       title: "Webhooked",
+      responsibleMemberId:store!.createWorkspaceMember({name:'Explicit webhook human',workspaceId:'local'}).id,
       assigneeId: agentId,
       workspaceId: "local",
     });

@@ -154,6 +154,7 @@ function installDeterminism(): () => void {
   setEnv("MULTIREMI_DATABASE_URL", undefined); // never touch a real Postgres
   setEnv("MULTIREMI_API_ROLE", undefined); // capture the baseline without an inherited role
   setEnv("NODE_ENV", "test");
+  setEnv("MULTIREMI_STATE_DIR", join(SNAPSHOT_TMP, "state"));
   setEnv("MULTIREMI_UPLOAD_DIR", UPLOAD_DIR);
   setEnv("MULTIREMI_SESSION_ARCHIVE_ROOT", join(SNAPSHOT_TMP, "session-archives"));
   setEnv("MULTIREMI_RELEASE_DIR", RELEASE_DIR);
@@ -635,6 +636,7 @@ async function seedStore(store: MultiremiStore, db: Database): Promise<SeedRefs>
     assigneeType: "agent",
     assigneeId: agent.id,
     createdBy: member.id,
+    responsibleMemberId: member.id,
   });
   const childIssue = store.createIssue({
     id: "iss_snapshot_child",
@@ -653,6 +655,7 @@ async function seedStore(store: MultiremiStore, db: Database): Promise<SeedRefs>
     workspaceId,
     createdBy: member.id,
     status: "backlog",
+    responsibleMemberId: member.id,
   });
   store.attachLabelToIssue(issue.id, label.id);
   store.setIssueMetadataKey(issue.id, "snapshot_key", "snapshot_value");
@@ -788,6 +791,7 @@ async function seedStore(store: MultiremiStore, db: Database): Promise<SeedRefs>
 
   const autopilot = store.createAutopilot({
     id: "apl_snapshot",
+    responsibleMemberId: member.id,
     title: "Snapshot autopilot",
     description: "Autopilot used by the snapshot",
     workspaceId,
@@ -862,10 +866,11 @@ async function seedStore(store: MultiremiStore, db: Database): Promise<SeedRefs>
   const invitation = store.createWorkspaceInvitation(workspaceId, { email: "invitee@snapshot.invalid", role: "member" });
 
   store.createFeedback({ id: "fbk_snapshot", message: "Snapshot feedback", workspaceId, userId: user.id, memberId: member.id });
-  // Assigning to the local user is what fills the inbox the API reads for an
-  // unauthenticated request (compatibilityInboxMemberId -> "local").
+  // Explicit historical member assignment preserves legacy inbox reads. New
+  // execution assignment rejects members; this seed is not a new API write.
   const inboxMemberId = store.listWorkspaceMembers(workspaceId).find((entry) => entry.userId === "local")?.id ?? member.id;
-  store.assignIssue(blockedIssue.id, { assigneeType: "member", assigneeId: inboxMemberId } as any);
+  db.run("UPDATE multiremi_issues SET assignee_type='member', assignee_id=? WHERE id=?", [inboxMemberId, blockedIssue.id]);
+  db.run("INSERT INTO multiremi_inbox_items (id,workspace_id,issue_id,member_id,recipient_id,type,title,body,created_at) VALUES (?,?,?,?,?,'issue_assigned',?,?,?)", ["inb_snapshot_assignment", workspaceId, blockedIssue.id, inboxMemberId, inboxMemberId, `${blockedIssue.key} assigned to you`, blockedIssue.title, "2026-01-01T00:00:00.000Z"]);
   const inboxItem = store.listInboxItems(inboxMemberId)[0];
 
   return {
@@ -1131,8 +1136,12 @@ class Recorder {
   readonly covered = new Set<string>();
   private step = 0;
 
-  constructor(private readonly app: any, private readonly routes: RouteRef[], private readonly family: string,
+  constructor(private app: any, private readonly routes: RouteRef[], private readonly family: string,
     private readonly store: MultiremiStore) {}
+
+  enableAuthentication(token: string): void {
+    this.app = createMultiremiApp({ store: this.store, authToken: token });
+  }
 
   async report(type: string, payload: Record<string, unknown>): Promise<void> {
     const res = await reportFrame(this.store, type, payload);
@@ -1174,10 +1183,10 @@ class Recorder {
     return { status: response.status, body: parsed };
   }
 
-  json(method: string, path: string, body: unknown): Promise<{ status: number; body: any }> {
+  json(method: string, path: string, body: unknown, token?: string): Promise<{ status: number; body: any }> {
     return this.call(method, path, {
       body: JSON.stringify(body),
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
     });
   }
 }
@@ -1298,6 +1307,143 @@ flow("skills-native", async (rec, refs) => {
 });
 
 // -- issues -----------------------------------------------------------------
+flow("issue-responsibility-and-questions", async (rec, refs, store) => {
+  rec.enableAuthentication("snapshot-responsibility-master");
+  const user = store.getOrCreateUser({ email: "responsible@snapshot.invalid", name: "Explicit snapshot reviewer" });
+  const human = store.createWorkspaceMember({ userId: user.id, workspaceId: refs.workspaceId, name: user.name, role: "member" });
+  const pat = await store.createAccessToken({ type: "pat", workspaceId: refs.workspaceId, userId: user.id, name: "Snapshot designated human" });
+  const runtime = store.registerRuntime({ name: "Responsibility snapshot provider", provider: "codex", ownerId: user.id, daemonId: "dmn_responsibility_snapshot", maxConcurrency: 8 });
+  const owner = store.createAgent({ name: "Root execution coordinator", provider: "codex", ownerId: user.id, runtimeId: runtime.id, visibility: "workspace", maxConcurrentTasks: 8 });
+  const worker = store.createAgent({ name: "Child execution coordinator", provider: "codex", ownerId: user.id, runtimeId: runtime.id, visibility: "workspace", maxConcurrentTasks: 8 });
+  const checked = async (method: string, path: string, body: unknown, token: string, status = 200) => {
+    const result = await rec.json(method, path, body, token);
+    if (result.status !== status) throw new Error(`Responsibility flow ${method} ${path}: expected ${status}, got ${result.status} ${JSON.stringify(result.body)}`);
+    return result.body;
+  };
+  const read = async (path: string) => {
+    const result = await rec.call("GET", path, { headers: { Authorization: `Bearer ${pat.token}` } });
+    if (result.status !== 200) throw new Error(`Responsibility read ${path}: expected 200, got ${result.status} ${JSON.stringify(result.body)}`);
+    return result.body;
+  };
+  const root = await checked("POST", "/api/issues", { title: "Formal snapshot root", workspace_id: refs.workspaceId, responsible_member_id: human.id, assignee_type: "agent", assignee_id: owner.id }, pat.token, 201);
+  const child = await checked("POST", "/api/issues", { title: "Formal snapshot child", workspace_id: refs.workspaceId, parent_issue_id: root.id, assignee_type: "agent", assignee_id: worker.id }, pat.token, 201);
+  const sourceTask = store.createTask({ agentId: worker.id, issueId: child.id, prompt: "Question and evidence" });
+  const ownerTask = store.createTask({ agentId: owner.id, issueId: root.id, prompt: "Review child evidence" });
+  for (let count = 0; count < 8; count++) { const claimed = store.claimTask(runtime.id); if (!claimed) break; store.startTask(claimed.id); }
+  const sourceToken = await store.createTaskAccessToken(store.getTask(sourceTask.id)!, user.id);
+  const ownerToken = await store.createTaskAccessToken(store.getTask(ownerTask.id)!, user.id);
+  const turn = store.getTurnForAttempt(sourceTask.id)!;
+  const createQ = (key: string) => {
+    const result = store.getDaemonTurnBridge().rpc("turn.decision", { turn_id: turn.id, attempt_id: sourceTask.id, dedupe_key: key, wait_id: `wait:${key}`, body_md: "Original snapshot AUQ", options: [{ label: "A", value: "A" }, { label: "B", value: "B" }], metadata: { kind: "question", context: { text: "Original provider context" }, questions: [{ question: "Which approach?", options: [{ label: "A" }, { label: "B" }], multiSelect: true }] } }, { runtimeId: runtime.id, daemonId: "dmn_responsibility_snapshot", workspaceId: refs.workspaceId });
+    if (!result.ok) throw new Error(`Snapshot native Q failed: ${result.code}`);
+    return store.getQuestion(String(result.message_id))!;
+  };
+  // Configure Remi before escalation so the actual human-stage notification
+  // exists; an unrelated running owner turn does not grant presentation access.
+  await checked("PUT", `/api/workspaces/${refs.workspaceId}/feishu-bot`, { agent_id: owner.id, runtime_id: runtime.id, app_id: "cli_responsibility_snapshot", app_secret: "synthetic-secret", app_secret_op: "set", domain: "feishu", enabled: false, responsible_member_id: human.id }, "snapshot-responsibility-master");
+  const question = createQ("snapshot-question-answer");
+  await read(`/api/messages/${question.id}/question`);
+  await checked("POST", `/api/messages/${question.id}/question/transfer`, { expected_route_revision: question.route_revision, reason: "Confirm current facts" }, ownerToken.token);
+  const routed = store.getQuestion(question.id)!;
+  const humanQuestion = (await checked("POST", `/api/messages/${question.id}/question/escalate`, { expected_route_revision: routed.route_revision, reason: "Explicit human needed" }, ownerToken.token)).question;
+  const presentation = store.listMessages(store.getOrCreateDefaultIssueSession(root.id).id).find(message =>
+    message.metadata.question_present_request === true && message.metadata.root_question_id === question.id
+    && message.metadata.question_route_revision === humanQuestion.route_revision);
+  if (!presentation || typeof presentation.metadata.delivery_turn_id !== "string") throw new Error("Snapshot Remi presentation notification has no bound turn");
+  for (let count = 0; count < 8; count++) { const claimed = store.claimTask(runtime.id); if (!claimed) break; store.startTask(claimed.id); }
+  const presentationTurn = store.getTurn(presentation.metadata.delivery_turn_id)!;
+  if (presentationTurn.session_id !== presentation.session_id || presentationTurn.execution_scope !== String(presentation.metadata.execution_scope ?? "")) throw new Error("Snapshot Remi notification lane changed");
+  const presentationToken = await store.createTaskAccessToken(store.getTask(presentationTurn.current_attempt_id!)!, user.id);
+  await checked("POST", `/api/messages/${question.id}/question/present`, { expected_route_revision: humanQuestion.route_revision, summary: "Remi's separate summary; original choices remain unchanged" }, presentationToken.token);
+  const answer = (await checked("POST", `/api/messages/${question.id}/question/answer`, { expected_route_revision: humanQuestion.route_revision, response: { answers: { "Which approach?": "A, B" } } }, pat.token)).question;
+  const consumed = store.getDaemonTurnBridge().rpc("turn.decision.consume", { turn_id: turn.id, attempt_id: sourceTask.id, message_id: question.id, reply_message_id: answer.answer.reply_message_id, wait_id: "wait:snapshot-question-answer" }, { runtimeId: runtime.id, daemonId: "dmn_responsibility_snapshot", workspaceId: refs.workspaceId });
+  if (!consumed.ok || store.getQuestion(question.id)?.wait_status !== "consumed") throw new Error("Snapshot Q answer was not consumed by the original provider wait");
+  await checked("POST", `/api/messages/${question.id}/question/answer`, { expected_route_revision: answer.route_revision, expected_answer_revision: answer.answer_revision, revise: true, reason: "New evidence", response: { answers: { "Which approach?": "B" } } }, pat.token);
+  // An exceptional operation with no detached call must be rejected, never
+  // report that a persisted answer magically restored the original provider.
+  await checked("POST", `/api/messages/${question.id}/question/continue`, { expected_route_revision: answer.route_revision }, pat.token, 409);
+  await checked("POST", `/api/messages/${question.id}/question/present`, { expected_route_revision: answer.route_revision, summary: "Unauthorized summary" }, pat.token, 403);
+  const closed = createQ("snapshot-question-close");
+  await checked("POST", `/api/messages/${closed.id}/question/close`, { expected_route_revision: closed.route_revision, reason: "Explicitly no longer needed" }, ownerToken.token);
+  await read(`/api/issues/${root.id}/questions?limit=100`);
+  await read(`/api/issues/${child.id}/responsibility`);
+  const childDelivery = (await checked("POST", `/api/issues/${child.id}/deliveries`, { summary: "Child evidence" }, sourceToken.token, 201)).delivery;
+  await checked("POST", `/api/issues/${child.id}/deliveries/${childDelivery.id}/respond`, { action: "accept", revision: childDelivery.responsibilityRevision }, ownerToken.token);
+  const delivery = (await checked("POST", `/api/issues/${root.id}/deliveries`, { summary: "Integrated evidence" }, ownerToken.token, 201)).delivery;
+  await checked("POST", `/api/issues/${root.id}/deliveries/${delivery.id}/authorize`, { agentId: owner.id, revision: delivery.responsibilityRevision }, pat.token);
+  await checked("POST", `/api/issues/${root.id}/deliveries/${delivery.id}/authorize`, { agentId: null, revision: delivery.responsibilityRevision }, pat.token);
+  await checked("POST", `/api/issues/${root.id}/deliveries/${delivery.id}/respond`, { action: "return", body: "Add verification evidence", revision: delivery.responsibilityRevision }, pat.token);
+  const finalDelivery = (await checked("POST", `/api/issues/${root.id}/deliveries`, { summary: "Integrated corrected evidence" }, ownerToken.token, 201)).delivery;
+  await checked("POST", `/api/issues/${root.id}/deliveries/${finalDelivery.id}/respond`, { action: "accept", revision: finalDelivery.responsibilityRevision }, pat.token);
+  await read(`/api/issues/${root.id}/deliveries?limit=1`);
+  await read(`/api/issues/${root.id}/deliveries?limit=1&before=${finalDelivery.id}`);
+
+  // A detached native wait keeps its valid answer when execution is temporarily
+  // unavailable. The explicit HTTP continuation creates one new consumer;
+  // only its actual input acknowledgement can mark the question consumed.
+  const continuationIssue = await checked("POST", "/api/issues", { title: "Controlled continuation snapshot", workspace_id: refs.workspaceId, responsible_member_id: human.id, assignee_type: "agent", assignee_id: owner.id }, pat.token, 201);
+  const continuationAgent = store.createAgent({ name: "Continuation source", provider: "codex", ownerId: user.id, runtimeId: runtime.id, visibility: "workspace" });
+  const continuationTask = store.createTask({ agentId: continuationAgent.id, issueId: continuationIssue.id, prompt: "Continue only after explicit authorization" });
+  const reviewerTask = store.createTask({ agentId: owner.id, issueId: continuationIssue.id, prompt: "Review continuation question" });
+  for (let count = 0; count < 8; count++) { const claimed = store.claimTask(runtime.id); if (!claimed) break; store.startTask(claimed.id); }
+  const reviewerToken = await store.createTaskAccessToken(store.getTask(reviewerTask.id)!, user.id);
+  const continuationTurn = store.getTurnForAttempt(continuationTask.id)!;
+  const bridge = store.getDaemonTurnBridge();
+  const scope = { runtimeId: runtime.id, daemonId: "dmn_responsibility_snapshot", workspaceId: refs.workspaceId };
+  const native = bridge.rpc("turn.decision", { turn_id: continuationTurn.id, attempt_id: continuationTask.id, dedupe_key: "snapshot-controlled-continuation", wait_id: "snapshot-continuation-wait", body_md: "Proceed after restart?", options: [{ label: "Proceed", value: "Proceed" }], metadata: { kind: "question", questions: [{ question: "Proceed after restart?", options: [{ label: "Proceed" }] }] } }, scope);
+  if (!native.ok) throw new Error(`Snapshot continuation Q failed: ${native.code}`);
+  const continuationQuestion = store.getQuestion(String(native.message_id))!;
+  const escalated = (await checked("POST", `/api/messages/${continuationQuestion.id}/question/escalate`, { expected_route_revision: continuationQuestion.route_revision, reason: "Explicit human authorization after restart" }, reviewerToken.token)).question;
+  const expired = bridge.rpc("turn.decision.expire", { turn_id: continuationTurn.id, attempt_id: continuationTask.id, message_id: continuationQuestion.id, status: "timeout" }, scope);
+  if (!expired.ok) throw new Error(`Snapshot wait detach failed: ${expired.code}`);
+  store.archiveAgent(continuationAgent.id);
+  const saved = (await checked("POST", `/api/messages/${continuationQuestion.id}/question/answer`, { expected_route_revision: escalated.route_revision, response: { answer: "Proceed" } }, pat.token)).question;
+  if (saved.status !== "answered" || saved.wait_status !== "detached" || saved.wait_reason !== "question_source_agent_unavailable") throw new Error("Snapshot must preserve the answer without pretending unavailable execution resumed");
+  store.restoreAgent(continuationAgent.id);
+  const continued = (await checked("POST", `/api/messages/${continuationQuestion.id}/question/continue`, { expected_route_revision: saved.route_revision }, pat.token)).question;
+  if (continued.wait_status !== "continuation_pending" || !continued.recovery.consumer_turn_id || continued.recovery.consumer_attempt_id !== null) throw new Error("Snapshot continuation must identify a pending consumer, not a consumed attempt");
+  const replay = (await checked("POST", `/api/messages/${continuationQuestion.id}/question/continue`, { expected_route_revision: saved.route_revision }, pat.token)).question;
+  if (replay.recovery.consumer_turn_id !== continued.recovery.consumer_turn_id) throw new Error("Snapshot duplicate continuation created another consumer");
+  const consumer = store.getTurn(continued.recovery.consumer_turn_id)!;
+  for (let count = 0; count < 8; count++) { const claimed = store.claimTask(runtime.id); if (!claimed) break; store.startTask(claimed.id); }
+  const consumerTask = store.getTaskWithAgent(consumer.current_attempt_id!)!;
+  const consumerToken = await store.createTaskAccessToken(consumerTask, user.id);
+  const input = bridge.offerInput(consumerTask);
+  let cursor: string | undefined;
+  do {
+    const page = await rec.call("GET", `/api/sessions/${consumer.session_id}/messages?from=0&to=${input.input_to_seq}${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`, { headers: { Authorization: `Bearer ${consumerToken.token}` } });
+    if (page.status !== 200) throw new Error(`Snapshot continuation context read failed: ${page.status}`);
+    cursor = page.body.next_cursor ?? undefined;
+  } while (cursor);
+  const acknowledged = bridge.rpc("turn.input", { turn_id: consumer.id, attempt_id: consumer.current_attempt_id, input_to_seq: input.input_to_seq, message_ids: input.input_messages.map(message => message.id) }, scope);
+  if (!acknowledged.ok || store.getQuestion(continuationQuestion.id)?.wait_status !== "continuation_consumed") throw new Error(`Snapshot continuation input was not consumed: ${acknowledged.code}`);
+  await read(`/api/messages/${continuationQuestion.id}/question`);
+});
+
+flow("responsibility-migration-and-configuration", async (rec, refs, store) => {
+  const master = "snapshot-migration-master";
+  rec.enableAuthentication(master);
+  const checked = async (method: string, path: string, body: unknown, status = 200) => {
+    const result = await rec.json(method, path, body, master);
+    if (result.status !== status) throw new Error(`Migration flow ${method} ${path}: expected ${status}, got ${result.status} ${JSON.stringify(result.body)}`);
+    return result.body;
+  };
+  const legacy = store.createIssue({ title: "Explicit historical mapping sample", workspaceId: refs.workspaceId, responsibleMemberId: refs.memberId });
+  // An exact historical row, distinct from all new API creation constraints.
+  const historicalDb = (store as unknown as { db: { run: (sql: string, params: unknown[]) => void } }).db;
+  historicalDb.run("UPDATE multiremi_issues SET responsible_member_id=NULL,assignee_type='member',assignee_id=?,created_by=? WHERE id=?", [refs.memberId, refs.userId, legacy.id]);
+  const path = `/api/workspaces/${refs.workspaceId}/issue-responsibility-migration`;
+  const list = await checked("GET", `${path}?limit=100&offset=0`, undefined);
+  const item = list.items.find((item: { issueId: string }) => item.issueId === legacy.id);
+  if (!item || item.responsibleMemberId !== null || item.assigneeId !== refs.memberId) throw new Error("Migration must retain original facts without backfilling them");
+  await checked("POST", `${path}/map`, { reason: "Explicitly verified human", mappings: [{ issueId: legacy.id, memberId: refs.memberId, revision: "stale" }] }, 409);
+  await checked("POST", `${path}/map`, { reason: "Explicitly verified human", mappings: [{ issueId: legacy.id, memberId: refs.memberId, revision: item.revision }] });
+  await checked("GET", `${path}?limit=100&offset=0`, undefined);
+  await checked("PATCH", `/api/autopilots/${refs.autopilotId}`, { responsible_member_id: refs.memberId });
+  await checked("PUT", `/api/workspaces/${refs.workspaceId}/issue-topics`, { enabled: true, chat_id: "oc_migration_snapshot", project_ids: null, responsible_member_id: refs.memberId });
+  await checked("PUT", `/api/workspaces/${refs.workspaceId}/issue-topics`, { enabled: true, chat_id: "oc_migration_snapshot", project_ids: null, responsible_member_id: null });
+});
+
 flow("issues-compat", async (rec, refs) => {
   const created = await rec.json("POST", "/api/issues", {
     title: "Compat issue",
@@ -1305,6 +1451,7 @@ flow("issues-compat", async (rec, refs) => {
     workspace_id: refs.workspaceId,
     project_id: refs.projectId,
     priority: "medium",
+    responsible_member_id: refs.memberId,
   });
   const id = created.body?.id ?? refs.issueId;
   await rec.json("PUT", `/api/issues/${id}`, { title: "Compat issue renamed", status: "in_progress" });
@@ -1314,6 +1461,7 @@ flow("issues-compat", async (rec, refs) => {
     prompt: "do the thing",
     workspace_id: refs.workspaceId,
     agent_id: refs.agentId,
+    responsible_member_id: refs.memberId,
   });
   await rec.json("POST", "/api/issues/batch-update", { issue_ids: [id], status: "done" });
   await rec.json("POST", `/api/issues/${id}/squad-evaluated`, { outcome: "no_action", reason: "nothing to do" });
@@ -1326,6 +1474,7 @@ flow("issues-native", async (rec, refs) => {
     title: "Native issue",
     workspaceId: refs.workspaceId,
     projectId: refs.projectId,
+    responsibleMemberId: refs.memberId,
   });
   const id = created.body?.id ?? refs.issueId;
   await rec.json("PATCH", `/api/multiremi/issues/${id}`, { status: "in_progress" });
@@ -1335,6 +1484,7 @@ flow("issues-native", async (rec, refs) => {
     prompt: "do the thing",
     workspaceId: refs.workspaceId,
     agentId: refs.agentId,
+    responsibleMemberId: refs.memberId,
   });
   await rec.json("POST", "/api/multiremi/issues/batch-update", { issueIds: [id], status: "done" });
   await rec.json("POST", "/api/multiremi/issues/batch-delete", { issueIds: [id] });
@@ -1500,6 +1650,7 @@ flow("squads", async (rec, refs) => {
 flow("autopilots-compat", async (rec, refs) => {
   const created = await rec.json("POST", "/api/autopilots", {
     title: "Compat autopilot",
+    responsible_member_id: refs.memberId,
     assignee_type: "agent",
     assignee_id: refs.agentId,
     workspace_id: refs.workspaceId,
@@ -1522,6 +1673,7 @@ flow("autopilots-compat", async (rec, refs) => {
 flow("autopilots-native", async (rec, refs) => {
   const created = await rec.json("POST", "/api/multiremi/autopilots", {
     title: "Native autopilot",
+    responsibleMemberId: refs.memberId,
     assigneeType: "agent",
     assigneeId: refs.agentId,
     workspaceId: refs.workspaceId,

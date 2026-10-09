@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { open } from "node:fs/promises";
 import { basename } from "node:path";
+import { responsibilityCommandSpecs } from "./responsibility.js";
 import { CHAT_ATTACHMENT_MAX_BYTES } from "@multiremi/contracts/attachments.js";
 import type { MultiremiSessionInheritedContext } from "@multiremi/contracts/types.js";
 import {
@@ -62,6 +63,7 @@ const ISSUE_LIST_OPTIONS: readonly CliOptionSpec[] = [
 ];
 
 const ISSUE_FIELDS: readonly CliOptionSpec[] = [
+  { name: "responsible-member", type: "string", valueName: "member-id", description: "Explicit designated human for a root Issue" },
   { name: "runtime-workspace", type: "string", valueName: "id", description: "Persistent Runtime workspace (immutable after execution)" },
   { name: "title", type: "string", valueName: "title", description: "Issue title" },
   { name: "description", type: "string", valueName: "text", description: "Issue description" },
@@ -72,7 +74,7 @@ const ISSUE_FIELDS: readonly CliOptionSpec[] = [
   { name: "project", type: "string", valueName: "project", description: "Project ID" },
   { name: "parent", type: "string", valueName: "issue", description: "Parent issue" },
   { name: "assignee", type: "string", valueName: "ref", description: "Assignee reference" },
-  { name: "assignee-type", type: "string", valueName: "agent|member|squad", description: "Assignee type" },
+  { name: "assignee-type", type: "string", valueName: "agent|squad", description: "Execution assignee type; root human uses --responsible-member" },
   { name: "start-date", type: "string", valueName: "date", description: "Start date" },
   { name: "due-date", type: "string", valueName: "date", description: "Due date" },
   { name: "attachment", type: "string", valueName: "path", repeatable: true, description: "Attachment file" },
@@ -136,6 +138,7 @@ export function collaborationCommandSpecs(): CommandSpec[] {
     ...labelCommandSpecs(),
     ...chatCommandSpecs(),
     ...taskCommandSpecs(),
+    ...responsibilityCommandSpecs(),
   ];
 }
 
@@ -152,17 +155,15 @@ function issueCompatibilitySpecs(): CommandSpec[] {
     ], ["issue", "bind-topic"]),
     legacySpec("issue.update", ["issue", "update"], "Update an issue", "write", HUMAN_TASK, [refPositional("issue")], [
       ...ISSUE_FIELDS,
-      // MUL-400 E1: member-only override for the parent-status guard. A run
-      // (`task` identity) sending it is rejected by the server.
-      { name: "force", type: "boolean", description: "Force in_review/done with open sub-issues, or start a backlog issue with unmet prerequisites (members only)" },
+      { name: "force", type: "boolean", description: "Override eligible parent/dependency guards as a member; done still requires formal delivery acceptance" },
     ], ["issue", "update"]),
     legacySpec("issue.assign", ["issue", "assign"], "Assign or unassign an issue", "write", HUMAN_TASK, [refPositional("issue")], [
       { name: "to", type: "string", valueName: "ref", description: "Assignee reference" },
-      { name: "to-type", type: "string", valueName: "type", description: "Assignee type" },
+      { name: "to-type", type: "string", valueName: "agent|squad", description: "Execution assignee type" },
       { name: "unassign", type: "boolean", description: "Clear the assignee and cancel active tasks on this issue" },
     ], ["issue", "assign"]),
     legacySpec("issue.status", ["issue", "status"], "Change issue status", "write", HUMAN_TASK, [refPositional("issue"), refPositional("status")], [
-      { name: "force", type: "boolean", description: "Force the transition past the parent-status and dependency guards (members only)" },
+      { name: "force", type: "boolean", description: "Override eligible parent/dependency guards as a member; done still requires formal delivery acceptance" },
     ], ["issue", "status"]),
     legacySpec("issue.delete", ["issue", "delete"], "Delete an issue", "destructive", HUMAN_TASK, [refPositional("issue")], [], ["issue", "delete"]),
     nativeSpec("issue.restore", ["issue", "restore"], "Restore an archived issue", "write", HUMAN, [refPositional("issue")], [], async (invocation) => {
@@ -577,6 +578,7 @@ function issueExtendedSpecs(): CommandSpec[] {
       await mutateAndRender(invocation, "POST", "/api/issues/batch-delete", await requestBody(invocation));
     }),
     nativeSpec("issue.quick-create", ["issue", "quick-create"], "Quick-create an issue", "write", HUMAN, [], [...INPUT_OPTIONS,
+      { name: "responsible-member", type: "string", valueName: "member-id", description: "Designated root human; children inherit" },
       { name: "agent", type: "string", valueName: "id", description: "Creator agent", conflictsWith: ["squad"] },
       { name: "squad", type: "string", valueName: "id", description: "Creator squad", conflictsWith: ["agent"] },
       { name: "prompt", type: "string", valueName: "text", description: "Work to plan" },
@@ -586,6 +588,7 @@ function issueExtendedSpecs(): CommandSpec[] {
       await mutateAndRender(invocation, "POST", "/api/issues/quick-create", await requestBody(invocation, {
         workspace_id: requiredWorkspace(invocation), agent_id: stringOption(invocation, "agent") ?? undefined,
         squad_id: stringOption(invocation, "squad") ?? undefined, prompt: stringOption(invocation, "prompt") ?? undefined,
+        responsible_member_id: stringOption(invocation, "responsible-member") ?? undefined,
         project_id: stringOption(invocation, "project") ?? undefined, runtime_workspace_id: stringOption(invocation, "runtime-workspace") ?? undefined,
       }));
     }),
