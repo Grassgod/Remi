@@ -1,8 +1,18 @@
-import { createResponsibleTestIssue } from './helpers.js';
+import { createResponsibleTestIssue, seedHistoricalIssueFacts } from './helpers.js';
+import type { CreateIssueInput } from '@multiremi/contracts/types.js';
+import type { MultiremiStore } from '@multiremi/store.js';
+import type { TasksRepo } from '@multiremi/store/repos/tasks-repo.js';
 import { describe, expect, it, spyOn } from "bun:test";
 import { StoreContext, type WorkspaceEvent } from "@multiremi/store/context.js";
 import { IssueLockSetStaleError } from "@multiremi/store/repos/issues-repo.js";
 import { conversationLogPgAdminUrl, withConversationLogStore } from "./fixtures/conversation-log-store.js";
+
+/** These tests reopen persisted pre-delivery terminal rows, not newly accepted work. */
+function createReopenFixtureIssue(store:MultiremiStore,input:CreateIssueInput) {
+  const {status,...current}=input;
+  const issue=createResponsibleTestIssue(store,status==='done'?{...current,status:'cancelled'}:input);
+  return status==='done'?seedHistoricalIssueFacts(store,issue.id,{status}):issue;
+}
 
 describe("agent assignment rederives reopened child parents", () => {
   for (const backend of ["sqlite", "pg"] as const) {
@@ -12,7 +22,7 @@ describe("agent assignment rederives reopened child parents", () => {
         const agent = store.createAgent({ name: "Workspace-bound worker", provider: "claude" });
         const foreignWorkspace = store.createWorkspace({ name: "Foreign parent", slug: `foreign-${backend}` });
         const foreign = createResponsibleTestIssue(store, { title: "Foreign parent", status: "in_review", workspaceId: foreignWorkspace.id });
-        const child = createResponsibleTestIssue(store, { title: "Settled child", status: "done" });
+        const child = createReopenFixtureIssue(store, { title: "Settled child", status: "done" });
         // Only raw writes can construct this legacy relation.
         db.run("UPDATE multiremi_issues SET parent_issue_id = ? WHERE id = ?", [foreign.id, child.id]);
         const before = store.listIssueActivity(foreign.id);
@@ -41,7 +51,7 @@ describe("agent assignment rederives reopened child parents", () => {
           const grandparent = createResponsibleTestIssue(store, { title: "Grandparent", status: "in_review",
             workspaceId: ancestor === "foreign" ? foreignWorkspace.id : "local" });
           const parent = createResponsibleTestIssue(store, { title: "Local parent", status: "in_review" });
-          const child = createResponsibleTestIssue(store, { title: "Settled child", parentIssueId: parent.id, status: "done" });
+          const child = createReopenFixtureIssue(store, { title: "Settled child", parentIssueId: parent.id, status: "done" });
           db.run("UPDATE multiremi_issues SET parent_issue_id = ? WHERE id = ?", [grandparent.id, parent.id]);
           if (ancestor === "deleted") db.run("DELETE FROM multiremi_issues WHERE id = ?", [grandparent.id]);
           expect(store.getIssue(parent.id)?.parentIssueId).toBe(grandparent.id);
@@ -89,7 +99,7 @@ describe("agent assignment rederives reopened child parents", () => {
         store.ensureLocalWorkspace();
         const agent = store.createAgent({ name: "Missing parent worker", provider: "claude" });
         const parent = createResponsibleTestIssue(store, { title: "Parent", status: "in_review" });
-        const child = createResponsibleTestIssue(store, { title: "Settled child", parentIssueId: parent.id, status: "done" });
+        const child = createReopenFixtureIssue(store, { title: "Settled child", parentIssueId: parent.id, status: "done" });
         db.run("DELETE FROM multiremi_issues WHERE id = ?", [parent.id]);
         expect(store.getIssue(child.id)?.parentIssueId).toBe(parent.id);
         const beforeActivity = store.listIssueActivity(child.id);
@@ -116,7 +126,7 @@ describe("agent assignment rederives reopened child parents", () => {
           const foreignWorkspace = store.createWorkspace({ name: "Moving parent", slug: `moving-${backend}-${owner}` });
           const grandparent = createResponsibleTestIssue(store, { title: "Local grandparent", status: "in_review" });
           const parent = createResponsibleTestIssue(store, { title: "Initially foreign parent", status: "in_review", workspaceId: foreignWorkspace.id });
-          const child = createResponsibleTestIssue(store, { title: "Settled child", status: "done" });
+          const child = createReopenFixtureIssue(store, { title: "Settled child", status: "done" });
           db.run("UPDATE multiremi_issues SET parent_issue_id = ? WHERE id = ?", [grandparent.id, parent.id]);
           db.run("UPDATE multiremi_issues SET parent_issue_id = ? WHERE id = ?", [parent.id, child.id]);
           const beforeActivity = store.listIssueActivity(child.id);
@@ -165,16 +175,18 @@ describe("agent assignment rederives reopened child parents", () => {
               }
             };
           });
-          const createTask = store.createTask.bind(store);
-          store.createTask = input => {
+          const tasks=(store as unknown as {tasks:TasksRepo}).tasks;
+          const createTask = tasks.createTaskWithinTransaction.bind(tasks);
+          const taskSpy=spyOn(tasks,'createTaskWithinTransaction').mockImplementation((...args) => {
             // Assignment must finish its second complete, sorted lock batch
-            // before task creation can add its own unrelated transaction.
+            // before task creation joins the same atomic assignment transaction.
             expect(attempts).toBe(2);
             expect(lockBatches).toEqual([[child.id, parent.id].sort(), [child.id, parent.id, grandparent.id].sort()]);
             transactionSpy.mockRestore();
             runSpy.mockRestore();
-            return createTask(input);
-          };
+            expect(db.inTransaction).toBe(true);
+            return createTask(...args);
+          });
           try {
             const assign = () => store.assignIssue(child.id, { assigneeType: "agent", assigneeId: agent.id });
             if (owner === "caller") {
@@ -209,9 +221,10 @@ describe("agent assignment rederives reopened child parents", () => {
               expect(received.every(event => !event.inTransaction)).toBe(true);
             }
             expect(attempts).toBe(owner === "caller" ? 1 : 2);
+            expect(taskSpy).toHaveBeenCalledTimes(owner==='caller'?0:1);
             expect(db.inTransaction).toBe(false);
           } finally {
-            store.createTask = createTask;
+            taskSpy.mockRestore();
             transactionSpy.mockRestore();
             runSpy.mockRestore();
             unsubscribe();
@@ -227,7 +240,7 @@ describe("agent assignment rederives reopened child parents", () => {
         const agent = store.createAgent({ name: "Ancestor worker", provider: "claude" });
         const grandparent = createResponsibleTestIssue(store, { title: "Grandparent" });
         const parent = createResponsibleTestIssue(store, { title: "Parent", parentIssueId: grandparent.id });
-        const child = createResponsibleTestIssue(store, { title: "Child", parentIssueId: parent.id, status: "done" });
+        const child = createReopenFixtureIssue(store, { title: "Child", parentIssueId: parent.id, status: "done" });
         ctx.db.run("UPDATE multiremi_issues SET status = 'in_review' WHERE id IN (?, ?)", [parent.id, grandparent.id]);
         const locks: string[] = [];
         const run = ctx.db.run.bind(ctx.db);
@@ -235,16 +248,21 @@ describe("agent assignment rederives reopened child parents", () => {
           if (sql === "UPDATE multiremi_issues SET id = id WHERE id = ?") locks.push(String(Array.isArray(params) ? params[0] : undefined));
           return run(sql, params);
         };
-        const createTask = store.createTask.bind(store);
-        store.createTask = input => {
+        const tasks=(store as unknown as {tasks:TasksRepo}).tasks;
+        const createTask = tasks.createTaskWithinTransaction.bind(tasks);
+        const taskSpy=spyOn(tasks,'createTaskWithinTransaction').mockImplementation((...args) => {
           expect(locks).toEqual([child.id, parent.id, grandparent.id].sort());
           expect(store.getIssue(parent.id)?.status).toBe("in_progress");
           expect(store.getIssue(grandparent.id)?.status).toBe("in_progress");
           ctx.db.run = run;
-          return createTask(input);
-        };
-        try { store.assignIssue(child.id, { assigneeType: "agent", assigneeId: agent.id }); }
-        finally { ctx.db.run = run; store.createTask = createTask; }
+          expect(ctx.db.inTransaction).toBe(true);
+          return createTask(...args);
+        });
+        try {
+          store.assignIssue(child.id, { assigneeType: "agent", assigneeId: agent.id });
+          expect(taskSpy).toHaveBeenCalledTimes(1);
+        }
+        finally { ctx.db.run = run; taskSpy.mockRestore(); }
         for (const issue of [parent, grandparent]) {
           expect(store.listIssueActivity(issue.id).filter(a => a.type === "parent_status_derived")).toHaveLength(1);
         }
@@ -258,22 +276,26 @@ describe("agent assignment rederives reopened child parents", () => {
         const agent = store.createAgent({ name: "Reopen worker", provider: "claude" });
         for (const status of ["done", "cancelled"] as const) {
           const parent = createResponsibleTestIssue(store, { title: "Parent", status: "in_review" });
-          const child = createResponsibleTestIssue(store, { title: "Child", parentIssueId: parent.id, status });
-          const original = store.createTask.bind(store);
-          store.createTask = (input) => {
-            expect(ctx.db.inTransaction).toBe(false);
+          const child = createReopenFixtureIssue(store, { title: "Child", parentIssueId: parent.id, status });
+          const tasks=(store as unknown as {tasks:TasksRepo}).tasks;
+          const original = tasks.createTaskWithinTransaction.bind(tasks);
+          const taskSpy=spyOn(tasks,'createTaskWithinTransaction').mockImplementation((...args) => {
+            expect(ctx.db.inTransaction).toBe(true);
             expect(store.getIssue(child.id)?.status).toBe("todo");
             expect(store.getIssue(parent.id)?.status).toBe("in_progress");
             expect(store.listIssueActivity(parent.id).filter(a => a.type === "parent_status_derived")).toHaveLength(1);
-            return original(input);
-          };
+            return original(...args);
+          });
           const events: string[] = [];
           const unsubscribe = store.onWorkspaceEvent(event => {
             expect(ctx.db.inTransaction).toBe(false);
             if (event.type === "issue:updated") events.push(event.type);
           });
-          try { store.assignIssue(child.id, { assigneeType: "agent", assigneeId: agent.id }); }
-          finally { store.createTask = original; unsubscribe(); }
+          try {
+            store.assignIssue(child.id, { assigneeType: "agent", assigneeId: agent.id });
+            expect(taskSpy).toHaveBeenCalledTimes(1);
+          }
+          finally { taskSpy.mockRestore(); unsubscribe(); }
           const audit = store.listIssueActivity(parent.id).find(a => a.type === "parent_status_derived")!;
           expect(audit.data).toMatchObject({ childIssueId: child.id, childStatus: "todo", previousStatus: "in_review", status: "in_progress", openChildren: 1 });
           expect(events.length).toBeGreaterThan(0);
@@ -289,7 +311,7 @@ describe("agent assignment rederives reopened child parents", () => {
         const ctx = (store as unknown as { ctx: StoreContext }).ctx;
         const agent = store.createAgent({ name: "Atomic reopen", provider: "claude" });
         const parent = createResponsibleTestIssue(store, { title: "Parent", status: "in_review" });
-        const child = createResponsibleTestIssue(store, { title: "Child", parentIssueId: parent.id, status: "done" });
+        const child = createReopenFixtureIssue(store, { title: "Child", parentIssueId: parent.id, status: "done" });
         const received: string[] = [];
         store.onWorkspaceEvent(event => received.push(event.type));
         const append = ctx.appendIssueActivity.bind(ctx);
@@ -314,8 +336,8 @@ describe("agent assignment rederives reopened child parents", () => {
         store.ensureLocalWorkspace();
         const agent = store.createAgent({ name: "Protected parent", provider: "claude" });
         for (const status of ["done", "cancelled", "todo", "in_progress"] as const) {
-          const parent = createResponsibleTestIssue(store, { title: "Parent", status });
-          const child = createResponsibleTestIssue(store, { title: "Child", status: "done", parentIssueId: parent.id });
+          const parent = createReopenFixtureIssue(store, { title: "Parent", status });
+          const child = createReopenFixtureIssue(store, { title: "Child", status: "done", parentIssueId: parent.id });
           store.assignIssue(child.id, { assigneeType: "agent", assigneeId: agent.id });
           expect(store.getIssue(parent.id)?.status).toBe(status);
           expect(store.listIssueActivity(parent.id).filter(a => a.type === "parent_status_derived")).toHaveLength(0);
