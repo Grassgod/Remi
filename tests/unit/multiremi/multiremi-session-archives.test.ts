@@ -8,7 +8,7 @@ import { createMultiremiApp } from "@multiremi/api.js";
 import { MultiremiDaemonClient } from "@multiremi/client.js";
 import { reportFrame } from "../../fixtures/report-session.js";
 import { SessionArchiveService } from "@multiremi/session-archive/service.js";
-import { createStore, db, readyArchiveBinding, resetMultiremiTestEnv } from "./helpers.js";
+import { createStore, createResponsibleTestIssue, db, readyArchiveBinding, resetMultiremiTestEnv } from "./helpers.js";
 import { buildArchiveFixture, fixtureSha256, traceFileBody } from "./session-archive-fixtures.js";
 import {
   SESSION_ARCHIVE_FORMAT_V1,

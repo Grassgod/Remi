@@ -5,7 +5,7 @@ import {IssuesRepo} from '@multiremi/store/repos/issues-repo.js';
 pendingTurnBackendTests('MUL-506 DaemonTurnBridge',fixture=>{
   function setup(){const {store,db}=fixture();const agent=store.createAgent({name:'Daemon worker',provider:'codex'});
     store.registerRuntime({id:'rt_inbox_bridge',daemonId:'daemon_inbox_bridge',name:'Bridge runtime',provider:'codex',workspaceId:'local'});
-    const issue=createResponsibleTestIssue(store, {title:'Bridge',assigneeType:'agent',assigneeId:agent.id}),session=store.getOrCreateDefaultIssueSession(issue.id);
+    const issue=store.createIssue({title:'Bridge',assigneeType:'agent',assigneeId:agent.id,responsibleMemberId:'mem_local_local'}),session=store.getOrCreateDefaultIssueSession(issue.id);
     const sent=store.sendMessage({session_id:session.id,sender:{type:'member',id:'mem_local_local'},to:{type:'agent',ref:agent.id},message_kind:'request',wake_requested:'now',body_md:'start'});
     const attempt=store.claimTask('rt_inbox_bridge')!;store.startTask(attempt.id);
     const bridge=store.getDaemonTurnBridge(),scope={runtimeId:'rt_inbox_bridge',daemonId:'daemon_inbox_bridge',workspaceId:'local'},offer=bridge.offerInput(store.getTaskWithAgent(attempt.id)!);
@@ -16,10 +16,11 @@ pendingTurnBackendTests('MUL-506 DaemonTurnBridge',fixture=>{
     expect(f.bridge.rpc('turn.input',payload,f.scope).ok).toBe(true);expect(f.bridge.rpc('turn.input',payload,f.scope).ok).toBe(true);
     expect(f.store.getTurn(f.sent.turn_id!)?.input_to_seq).toBe(f.offer.input_to_seq);},120_000);
   it('decision/permission waits, member reply resumes, wrap-up is a marker',()=>{const f=setup();
-    const requested=f.bridge.rpc('turn.decision',{turn_id:f.sent.turn_id,attempt_id:f.attempt.id,dedupe_key:'permission',body_md:'Permit?',options:[{label:'Yes',value:'yes'}],metadata:{kind:'permission',options:[{optionId:'yes',name:'Yes',kind:'allow_once'}]}},f.scope);
+    const requested=f.bridge.rpc('turn.decision',{turn_id:f.sent.turn_id,attempt_id:f.attempt.id,wait_id:'bridge-permission-native-wait',dedupe_key:'permission',body_md:'Permit?',options:[{label:'Yes',value:'yes'}],metadata:{kind:'permission',options:[{optionId:'yes',name:'Yes',kind:'allow_once'}]}},f.scope);
     expect(requested.ok).toBe(true);expect(f.store.getTurn(f.sent.turn_id!)?.status).toBe('awaiting_human');
-    const message=requested.message as any;f.store.answerMessageDecision(message.id,{sender:{type:'member',id:'mem_local_local'},body_md:'Yes',response:{option_id:'yes'}});
-    expect(()=>f.store.answerMessageDecision(message.id,{sender:{type:'member',id:'mem_local_local'},body_md:'Again'})).toThrow('settled');
+    const message=requested.message as any,revision=f.store.getQuestion(message.id)!.route_revision;
+    f.store.answerMessageDecision(message.id,{sender:{type:'member',id:'mem_local_local'},expected_route_revision:revision,body_md:'Yes',response:{option_id:'yes'}});
+    expect(()=>f.store.answerMessageDecision(message.id,{sender:{type:'member',id:'mem_local_local'},expected_route_revision:revision,body_md:'Again'})).toThrow('settled');
     expect(f.store.getTurn(f.sent.turn_id!)?.status).toBe('running');expect(f.bridge.rpc('turn.decision.get',{turn_id:f.sent.turn_id,attempt_id:f.attempt.id,message_id:message.id},f.scope).status).toBe('resolved');
     const before=f.store.getSessionAgentReadProgress(f.session.id,f.agent.id);f.store.wrapUpTurn(f.sent.turn_id!);expect(f.bridge.snapshot(f.scope,new Set([f.attempt.id])).wrapUps).toHaveLength(1);expect(f.store.getSessionAgentReadProgress(f.session.id,f.agent.id)).toEqual(before);},120_000);
   it('only a full range read by this attempt permits omitted input IDs',()=>{const f=setup();
