@@ -1,3 +1,4 @@
+import { createResponsibleTestAutopilot } from './helpers.js';
 import { createResponsibleTestIssue } from './helpers.js';
 // Sibling test for packages/server/src/store/repos/workspaces-repo.ts.
 // Drives the carved-out repo directly over its StoreContext (not through the
@@ -174,7 +175,7 @@ describe("WorkspacesRepo", () => {
       provider: "codex",
       workspaceId: workspace.id,
     });
-    const autopilot = store.createAutopilot({
+    const autopilot = createResponsibleTestAutopilot(store, {
       title: "Cleanup automation",
       workspaceId: workspace.id,
       assigneeId: agent.id,

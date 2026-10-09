@@ -1,3 +1,4 @@
+import { createResponsibleTestAutopilot } from './helpers.js';
 import { createResponsibleTestIssue } from './helpers.js';
 import { issueMessagesPath, requestMessageBody, turnApiPath } from "./unified-test-paths.js";
 import { taskOfferResponse, pendingTaskWireSnapshot } from "../../fixtures/task-offer.js";
@@ -1362,7 +1363,7 @@ describe("Multiremi API — Go server compatibility endpoints", () => {
       assigneeType: "agent",
       assigneeId: agent.id,
     });
-    const autopilot = store.createAutopilot({
+    const autopilot = createResponsibleTestAutopilot(store, {
       id: "aut_console_contract",
       title: "Console Autopilot",
       workspaceId: "local",

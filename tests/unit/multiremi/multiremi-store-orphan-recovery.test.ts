@@ -1,3 +1,4 @@
+import { createResponsibleTestAutopilot } from './helpers.js';
 import { createResponsibleTestIssue } from './helpers.js';
 // Recovery of tasks a runtime abandoned, and the Go-compatible retry edge rules.
 import { afterAll, afterEach, describe, expect, it } from "bun:test";
@@ -98,7 +99,7 @@ describe.skipIf(!backend.available)(`Multiremi store — orphan recovery and ret
         chatSessionId: chat.id,
         prompt: "retry chat",
       });
-      const autopilot = store.createAutopilot({
+      const autopilot = createResponsibleTestAutopilot(store, {
         title: "No double retry",
         assigneeType: "agent",
         assigneeId: agent.id,

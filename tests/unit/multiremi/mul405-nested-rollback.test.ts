@@ -1,3 +1,4 @@
+import { createResponsibleTestAutopilot } from './helpers.js';
 /**
  * MUL-405: the three real nested `transaction()` call sites must roll back as
  * one unit.
@@ -440,7 +441,7 @@ describe("MUL-405 nested transaction rollback", () => {
         const store = backend.makeStore();
         const workspaceId = store.createWorkspace({ name: "Autopilot", slug: `autopilot-${backend.name}` }).id;
         const agent = store.createAgent({ name: "Automation", provider: "codex", workspaceId });
-        const autopilot = store.createAutopilot({
+        const autopilot = createResponsibleTestAutopilot(store, {
           title: "Rollback automation", assigneeId: agent.id, workspaceId,
           executionMode: "create_issue", status: "active",
         });
@@ -469,7 +470,7 @@ describe("MUL-405 nested transaction rollback", () => {
         const store = backend.makeStore();
         const workspaceId = store.createWorkspace({ name: "Autopilot late", slug: `autopilot-late-${backend.name}` }).id;
         const agent = store.createAgent({ name: "Automation", provider: "codex", workspaceId });
-        const autopilot = store.createAutopilot({
+        const autopilot = createResponsibleTestAutopilot(store, {
           title: "Late failure automation", assigneeId: agent.id, workspaceId,
           executionMode: "create_issue", status: "active",
         });
@@ -556,7 +557,7 @@ describe("MUL-405 nested transaction rollback", () => {
         const store = backend.makeStore();
         const workspaceId = store.createWorkspace({ name: "Recover", slug: `recover-${backend.name}` }).id;
         const agent = store.createAgent({ name: "Automation", provider: "codex", workspaceId });
-        const autopilot = store.createAutopilot({
+        const autopilot = createResponsibleTestAutopilot(store, {
           title: "Recoverable automation", assigneeId: agent.id, workspaceId,
           executionMode: "create_issue", status: "active",
         });

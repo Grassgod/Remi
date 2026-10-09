@@ -1,3 +1,4 @@
+import { createResponsibleTestAutopilot } from './helpers.js';
 import { createResponsibleTestIssue } from './helpers.js';
 import { runTurnExecutionMutation } from "@multiremi/store/turn-execution-records.js";
 // Store-level task scheduling: which runtime may claim which task.
@@ -2344,7 +2345,7 @@ describe("Multiremi store — task claim, routing, and workspace scoping", () =>
     ).toThrow(/different workspace/i);
     // Same-workspace assignee is accepted.
     const ownAgent = store.createAgent({ name: "Own", provider: "codex", workspaceId: "wsA" });
-    const ap = store.createAutopilot({ title: "AP", workspaceId: "wsA", assigneeType: "agent", assigneeId: ownAgent.id });
+    const ap = createResponsibleTestAutopilot(store, { title: "AP", workspaceId: "wsA", assigneeType: "agent", assigneeId: ownAgent.id });
     expect(ap.assigneeId).toBe(ownAgent.id);
   });
 

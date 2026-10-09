@@ -1,3 +1,4 @@
+import { createResponsibleTestAutopilot } from './helpers.js';
 import { createResponsibleTestIssue } from './helpers.js';
 import { requestMessageBody, sentTask } from "./unified-test-paths.js";
 // Chat session/message routes, autopilot API + public webhook triggering,
@@ -47,7 +48,7 @@ describe("Multiremi API — chat sessions and autopilot triggers", () => {
   it("triggers autopilots through API and webhook endpoints", async () => {
     const store = createStore();
     const agent = store.createAgent({ name: "Codex", provider: "codex" });
-    const autopilot = store.createAutopilot({
+    const autopilot = createResponsibleTestAutopilot(store, {
       title: "Webhook triage",
       assigneeId: agent.id,
       triggerKind: "webhook",
@@ -277,7 +278,7 @@ describe("Multiremi API — chat sessions and autopilot triggers", () => {
       provider: "codex",
       workspaceId: targetWorkspace.id,
     });
-    const autopilot = store.createAutopilot({
+    const autopilot = createResponsibleTestAutopilot(store, {
       title: "Target automation",
       assigneeId: agent.id,
       workspaceId: targetWorkspace.id,
@@ -328,7 +329,7 @@ describe("Multiremi API — chat sessions and autopilot triggers", () => {
   it("rate limits public autopilot webhooks by token and source bucket", async () => {
     const store = createStore();
     const agent = store.createAgent({ name: "Codex", provider: "codex" });
-    const autopilot = store.createAutopilot({ title: "Webhook limited", assigneeId: agent.id, triggerKind: "webhook" });
+    const autopilot = createResponsibleTestAutopilot(store, { title: "Webhook limited", assigneeId: agent.id, triggerKind: "webhook" });
     store.updateAutopilot(autopilot.id, { status: "paused" });
     const trigger = store.createAutopilotTrigger(autopilot.id, { kind: "webhook", label: "Limited webhook" });
 

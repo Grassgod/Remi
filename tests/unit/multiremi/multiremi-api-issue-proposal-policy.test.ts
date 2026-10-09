@@ -1,3 +1,4 @@
+import { createResponsibleTestAutopilot } from './helpers.js';
 import { createResponsibleTestIssue } from './helpers.js';
 import { issueMessagesPath, requestMessageBody, taskRequestPath, sentTask } from "./unified-test-paths.js";
 import { afterEach, describe, expect, it } from "bun:test";
@@ -100,13 +101,13 @@ describe("agent Issue proposal policy", () => {
 
   it("prevents restricted tasks from configuring or firing create_issue Autopilots", async () => {
     const fixture = await policyFixture();
-    const createIssueAutopilot = fixture.store.createAutopilot({
+    const createIssueAutopilot = createResponsibleTestAutopilot(fixture.store, {
       title: "Human-created Issue autopilot",
       assigneeId: fixture.worker.id,
       executionMode: "create_issue",
       triggerKind: "api",
     });
-    const runOnlyAutopilot = fixture.store.createAutopilot({
+    const runOnlyAutopilot = createResponsibleTestAutopilot(fixture.store, {
       title: "Run-only autopilot",
       assigneeId: fixture.worker.id,
       executionMode: "run_only",
@@ -205,7 +206,7 @@ describe("agent Issue proposal policy", () => {
     expect(squadTask).toBeDefined();
     await expectRestrictedTaskCannotCreateIssue(fixture, squadTask!.id, "squad mention delegation");
 
-    const runOnlyAutopilot = fixture.store.createAutopilot({
+    const runOnlyAutopilot = createResponsibleTestAutopilot(fixture.store, {
       title: "Delegated run-only autopilot",
       assigneeId: fixture.worker.id,
       executionMode: "run_only",
@@ -268,7 +269,7 @@ describe("agent Issue proposal policy", () => {
 
   it("persists a restricted task's taint on schedule triggers and blocks future background Issue creation", async () => {
     const fixture = await policyFixture();
-    const autopilot = fixture.store.createAutopilot({
+    const autopilot = createResponsibleTestAutopilot(fixture.store, {
       title: "Future scheduled delegation",
       assigneeId: fixture.worker.id,
       executionMode: "run_only",
@@ -317,7 +318,7 @@ describe("agent Issue proposal policy", () => {
       projectId: project.id,
       status: "todo",
     });
-    const autopilot = fixture.store.createAutopilot({
+    const autopilot = createResponsibleTestAutopilot(fixture.store, {
       title: "Future system event",
       assigneeId: fixture.worker.id,
       executionMode: "trigger_issue",
@@ -364,7 +365,7 @@ describe("agent Issue proposal policy", () => {
       projectId: project.id,
       status: "todo",
     });
-    const eventAutopilot = fixture.store.createAutopilot({
+    const eventAutopilot = createResponsibleTestAutopilot(fixture.store, {
       title: "Clean system-event automation",
       assigneeId: fixture.worker.id,
       executionMode: "trigger_issue",
@@ -393,7 +394,7 @@ describe("agent Issue proposal policy", () => {
       "system-event source task",
     );
 
-    const webhookAutopilot = fixture.store.createAutopilot({
+    const webhookAutopilot = createResponsibleTestAutopilot(fixture.store, {
       title: "Clean webhook automation",
       assigneeId: fixture.worker.id,
       executionMode: "run_only",
@@ -426,7 +427,7 @@ describe("agent Issue proposal policy", () => {
 
   it("makes taint human-visible and clearable while keeping it hidden and immutable for tasks", async () => {
     const fixture = await policyFixture();
-    const autopilot = fixture.store.createAutopilot({
+    const autopilot = createResponsibleTestAutopilot(fixture.store, {
       title: "Shared Wiki-like automation",
       assigneeId: fixture.worker.id,
       executionMode: "run_only",

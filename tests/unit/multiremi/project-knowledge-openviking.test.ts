@@ -1,3 +1,4 @@
+import { createResponsibleTestAutopilot } from './helpers.js';
 import { createResponsibleTestIssue } from './helpers.js';
 import { afterEach, describe, expect, it } from "bun:test";
 import type { MultiremiProjectDoc } from "@multiremi/contracts/types.js";
@@ -1803,7 +1804,7 @@ describe("RepositoryWikiService OpenViking mode", () => {
     });
     store.createAgent({ name: "Atlas · LLM Wiki", provider: "claude" });
     const userAgent = store.createAgent({ name: "User Wiki", provider: "claude" });
-    const sameTitle = store.createAutopilot({
+    const sameTitle = createResponsibleTestAutopilot(store, {
       title: "Atlas · Repository Wiki",
       workspaceId: "local",
       assigneeId: userAgent.id,

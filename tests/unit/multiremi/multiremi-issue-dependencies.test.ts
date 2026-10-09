@@ -1,3 +1,4 @@
+import { createResponsibleTestAutopilot } from './helpers.js';
 import { createResponsibleTestIssue } from './helpers.js';
 import { issueMessagesPath, requestMessageBody, taskRequestPath } from "./unified-test-paths.js";
 // MUL-400 S2 (E3): sibling dependencies actually hold and release work.
@@ -434,7 +435,7 @@ describe("MUL-452 E3 replay", () => {
 
   it("U6 retries replay infrastructure failures without repeating the status_changed autopilot", () => {
     const { store, agent, prerequisite, dependent } = chain();
-    const autopilot = store.createAutopilot({ title: "Done observer", assigneeId: agent.id, executionMode: "trigger_issue" });
+    const autopilot = createResponsibleTestAutopilot(store, { title: "Done observer", assigneeId: agent.id, executionMode: "trigger_issue" });
     store.createAutopilotTrigger(autopilot.id, {
       kind: "system_event", eventConfig: { resource: "issue", event: "status_changed",
         conditions: [{ field: "status", operator: "becomes", value: "done" }] },
@@ -1284,7 +1285,7 @@ describe("MUL-400 E3 — task-creation gate", () => {
 
   it("settles an Autopilot trigger_issue run as skipped without creating a task", () => {
     const { store, agent, dependent } = parked();
-    const autopilot = store.createAutopilot({
+    const autopilot = createResponsibleTestAutopilot(store, {
       workspaceId: "local",
       title: "Run the waiting issue",
       assigneeId: agent.id,

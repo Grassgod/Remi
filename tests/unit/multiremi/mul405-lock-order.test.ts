@@ -1,3 +1,4 @@
+import { createResponsibleTestAutopilot } from './helpers.js';
 import { createResponsibleTestIssue } from './helpers.js';
 /**
  * MUL-405: the Feishu and Autopilot paths must take the workspace lifecycle row
@@ -228,7 +229,7 @@ function recordFeishuOrder(): LockName[] {
 function recordAutopilotOrder(): LockName[] {
   const { store, recorder } = freshStore();
   const agent = store.createAgent({ name: "Automation", provider: "codex", workspaceId: "local" });
-  const autopilot = store.createAutopilot({
+  const autopilot = createResponsibleTestAutopilot(store, {
     title: "Create an Issue",
     assigneeId: agent.id,
     workspaceId: "local",

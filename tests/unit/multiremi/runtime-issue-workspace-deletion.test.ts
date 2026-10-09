@@ -1,3 +1,4 @@
+import { createResponsibleTestAutopilot } from './helpers.js';
 import { createResponsibleTestIssue } from './helpers.js';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "bun:test";
 import type { Database } from "bun:sqlite";
@@ -81,7 +82,7 @@ for (const dialect of ["sqlite", "postgres"] as const) {
         const archived = store.createAgent({ name: "Archived", provider: "codex", runtimeId: source.id, workspaceId });
         const project = store.createProject({ title: "Keep defaults", workspaceId,
           defaultAssigneeType: "agent", defaultAssigneeId: archived.id });
-        const autopilot = store.createAutopilot({ title: "Keep automation", workspaceId,
+        const autopilot = createResponsibleTestAutopilot(store, { title: "Keep automation", workspaceId,
           assigneeId: archived.id, executionMode: "run_only", status: "active" });
         store.archiveAgent(archived.id);
         const before = {

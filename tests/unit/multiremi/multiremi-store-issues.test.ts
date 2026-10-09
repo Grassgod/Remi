@@ -1,3 +1,4 @@
+import { createResponsibleTestAutopilot } from './helpers.js';
 import { createResponsibleTestIssue } from './helpers.js';
 import { issueMessagesPath, mutateExecutionFixture } from "./unified-test-paths.js";
 // The issue domain at store level: assignment, keys, GitHub links, hierarchy,
@@ -958,7 +959,7 @@ describe("Multiremi store — issues, comments, labels, and inbox", () => {
     const leader = store.createAgent({ name: "Leader", provider: "codex" });
     const backup = store.createAgent({ name: "Backup", provider: "codex" });
     const squad = store.createSquad({ name: "Core", leaderId: leader.id, memberIds: [leader.id, backup.id] });
-    const autopilot = store.createAutopilot({
+    const autopilot = createResponsibleTestAutopilot(store, {
       title: "Resolve squad",
       assigneeType: "squad",
       assigneeId: squad.id,

@@ -1,3 +1,4 @@
+import { createResponsibleTestAutopilot } from './helpers.js';
 import { createResponsibleTestIssue } from './helpers.js';
 import { afterEach, beforeEach, expect, it } from 'bun:test';
 import { createMultiremiApp } from '@multiremi/api.js';
@@ -112,7 +113,7 @@ pendingTurnBackendTests('MUL-493 QA blockers B1-B4', fixture => {
     function startedStandalone() {
       const f = setup();
       const id = kind === 'direct' ? f.store.createTask({ agentId: f.worker.id, prompt: 'Original input' }).id
-        : f.store.runAutopilot(f.store.createAutopilot({ title: 'Independent run', assigneeId: f.worker.id, executionMode: 'run_only' }).id, { prompt: 'Original input' }).taskId!;
+        : f.store.runAutopilot(createResponsibleTestAutopilot(f.store, { title: 'Independent run', assigneeId: f.worker.id, executionMode: 'run_only' }).id, { prompt: 'Original input' }).taskId!;
       expect(f.store.claimTask(scope.runtimeId)?.id).toBe(id);
       f.store.startTask(id);
       const turn = f.store.getTurnForAttempt(id)!, bridge = f.store.getDaemonTurnBridge();

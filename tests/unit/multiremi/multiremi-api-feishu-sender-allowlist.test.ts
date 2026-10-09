@@ -1,3 +1,4 @@
+import { createResponsibleTestAutopilot } from './helpers.js';
 import { createResponsibleTestIssue } from './helpers.js';
 import { requestMessageBody, taskRequestPath, sentTask } from "./unified-test-paths.js";
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
@@ -79,7 +80,7 @@ describe("Feishu sender allowlist Issue authorization", () => {
       await expectIssueCapabilities(fixture, headers, true);
       expect((await createIssue(fixture, headers)).status).toBe(201);
     }
-    const autopilot = fixture.store.createAutopilot({ title: "Follow-up Issue", assigneeId: fixture.worker.id, executionMode: "create_issue" });
+    const autopilot = createResponsibleTestAutopilot(fixture.store, { title: "Follow-up Issue", assigneeId: fixture.worker.id, executionMode: "create_issue" });
     expect(fixture.store.runAutopilot(autopilot.id, { sourceTaskId: fixture.inbound.taskId }).issueId).toBeTruthy();
 
     // Ordinary config saves must not silently change the chosen policy.
@@ -166,7 +167,7 @@ describe("Feishu sender allowlist Issue authorization", () => {
     expect(delivery.wake_reason).toBe("no_issue_target");
     const delegatedTaskId = fixture.store.createTask({agentId:fixture.worker.id, prompt:"Trusted platform handoff",
       parentTaskId:fixture.inbound.taskId, assignmentAuthorType:"system"}).id;
-    const autopilot = fixture.store.createAutopilot({
+    const autopilot = createResponsibleTestAutopilot(fixture.store, {
       title: "Existing run-only automation", assigneeId: fixture.worker.id, executionMode: "run_only",
     });
     const run = fixture.store.runAutopilot(autopilot.id, { sourceTaskId: fixture.inbound.taskId });
@@ -237,7 +238,7 @@ describe("Feishu sender allowlist Issue authorization", () => {
     const fixture = await allowlistFixture();
     fixture.allow(true);
     const issue = createResponsibleTestIssue(fixture.store, { title: "Source work", workspaceId: "local", status: "todo" });
-    const autopilot = fixture.store.createAutopilot({
+    const autopilot = createResponsibleTestAutopilot(fixture.store, {
       title: "Follow up source Issue", assigneeId: fixture.worker.id, executionMode: "trigger_issue",
     });
     fixture.store.createAutopilotTrigger(autopilot.id, {
@@ -268,7 +269,7 @@ describe("Feishu sender allowlist Issue authorization", () => {
 
   it("checks the source task again at Autopilot Issue creation instead of trusting its original approval", async () => {
     const fixture = await allowlistFixture();
-    const autopilot = fixture.store.createAutopilot({
+    const autopilot = createResponsibleTestAutopilot(fixture.store, {
       title: "Create requested Issue", assigneeId: fixture.worker.id, executionMode: "create_issue",
     });
     const run = () => fixture.store.runAutopilot(autopilot.id, { sourceTaskId: fixture.inbound.taskId });

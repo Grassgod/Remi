@@ -1,3 +1,4 @@
+import { createResponsibleTestAutopilot } from './helpers.js';
 import { createResponsibleTestIssue } from './helpers.js';
 import { issueMessagesPath, requestMessageBody, taskRequestPath } from "./unified-test-paths.js";
 /** MUL-458 dependency force semantics on real PostgreSQL, including two-connection races. */
@@ -322,7 +323,7 @@ describe.skipIf(!pgAvailable)("MUL-458 human dependency force (PostgreSQL)", () 
 
   it("keeps autopilot blocked and rolls back the transactional force path on PG", async () => {
     const f = await fixture("pat", "autopilot-rollback");
-    const autopilot = store.createAutopilot({
+    const autopilot = createResponsibleTestAutopilot(store, {
       workspaceId: "local", title: `PG gated autopilot ${counter}`, assigneeId: f.agent.id,
       createdById: f.userId, createdByType: "member", executionMode: "trigger_issue",
     });

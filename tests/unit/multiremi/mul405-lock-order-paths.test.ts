@@ -1,3 +1,4 @@
+import { createResponsibleTestAutopilot } from './helpers.js';
 import { createResponsibleTestIssue } from './helpers.js';
 /**
  * MUL-405 (QA round 2, item 2): every real path that can take more than one of
@@ -433,7 +434,7 @@ describe("MUL-405 per-path lock order", () => {
 
   it("Autopilot create_issue: W -> N -> autopilot row", () => {
     const { store, recorder, agentId } = scaffold();
-    const autopilot = store.createAutopilot({
+    const autopilot = createResponsibleTestAutopilot(store, {
       title: "Lock order automation",
       assigneeId: agentId,
       workspaceId: "local",

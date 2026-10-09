@@ -1,3 +1,4 @@
+import { createResponsibleTestAutopilot } from './helpers.js';
 import { createResponsibleTestIssue } from './helpers.js';
 import { expect, it } from "bun:test";
 import { mkdtempSync, readdirSync, rmSync } from "node:fs";
@@ -349,7 +350,7 @@ pendingTurnBackendTests("MUL-508 access consistency", (fixture, backend) => {
     const f = await scaffold(), s = await stream(f);
     const chat = f.store.createChatSession({ agentId: f.agent.id, creatorId: f.user.id });
     f.send("WS chat body", { type: "member", ref: f.member.id }, chat.id);
-    const auto = f.store.createAutopilot({ title: "Auto", assigneeId: f.agent.id, executionMode: "run_only" });
+    const auto = createResponsibleTestAutopilot(f.store, { title: "Auto", assigneeId: f.agent.id, executionMode: "run_only" });
     f.store.runAutopilot(auto.id);
     const orphan = "auto_orphan_inbox_local";
     f.store.ensureConversationLogHead(orphan, { bodyMd: "Orphan" });

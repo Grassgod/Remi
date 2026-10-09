@@ -1,3 +1,4 @@
+import { createResponsibleTestAutopilot } from './helpers.js';
 import { createResponsibleTestIssue } from './helpers.js';
 import { normalizeDaemonTurnOffer } from "@multiremi/worker/daemon-offers.js";
 import { runTurnExecutionMutation } from "@multiremi/store/turn-execution-records.js";
@@ -681,7 +682,7 @@ describe("Multiremi store — Go daemon wire shapes", () => {
     const chat = store.createChatSession({ agentId: agent.id, workspaceId: "local", title: "Claim chat context" });
     const firstChat = store.sendChatMessage(chat.id, { body: "Check Shanghai weather" });
     const queuedChat = store.sendChatMessage(chat.id, { body: "and Qingdao too" });
-    const autopilot = store.createAutopilot({
+    const autopilot = createResponsibleTestAutopilot(store, {
       id: "ap_claim_context",
       title: "Atlas · Repository Wiki",
       description: "Update the repository Wiki",
@@ -1074,7 +1075,7 @@ describe("Multiremi store — Go daemon wire shapes", () => {
     const workdirTask = store.createTask({ agentId: agent.id, workspaceId: "local", prompt: "workdir", priority: 50 });
     const chat = store.createChatSession({ agentId: agent.id, workspaceId: "local", title: "Pending chat" });
     const chatTask = store.sendChatMessage(chat.id, { body: "continue the chat" }).task;
-    const autopilot = store.createAutopilot({
+    const autopilot = createResponsibleTestAutopilot(store, {
       title: "Pending autopilot",
       workspaceId: "local",
       assigneeType: "agent",

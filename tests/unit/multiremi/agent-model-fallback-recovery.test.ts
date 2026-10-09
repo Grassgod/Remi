@@ -1,3 +1,4 @@
+import { createResponsibleTestAutopilot } from './helpers.js';
 import { createResponsibleTestIssue } from './helpers.js';
 import { runTurnExecutionMutation } from "@multiremi/store/turn-execution-records.js";
 /**
@@ -423,7 +424,7 @@ describe("MUL-336 model fallback recovery chain", () => {
       name: "Automation", provider: "claude", ownerId: owner.id, model: PRIMARY, thinkingLevel: "high",
       fallbackModel: FALLBACK, fallbackThinkingLevel: "high",
     });
-    const autopilot = store.createAutopilot({
+    const autopilot = createResponsibleTestAutopilot(store, {
       title: "Nightly sweep",
       assigneeId: agent.id,
       issueTitleTemplate: "Nightly sweep",
@@ -464,7 +465,7 @@ describe("MUL-336 model fallback recovery chain", () => {
       name: "Automation", provider: "claude", ownerId: owner.id, model: PRIMARY, thinkingLevel: "high",
       fallbackModel: FALLBACK, fallbackThinkingLevel: "high",
     });
-    const autopilot = store.createAutopilot({
+    const autopilot = createResponsibleTestAutopilot(store, {
       title: "Nightly sweep",
       assigneeId: agent.id,
       issueTitleTemplate: "Nightly sweep",

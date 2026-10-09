@@ -1,3 +1,4 @@
+import { createResponsibleTestAutopilot } from './helpers.js';
 import { createResponsibleTestIssue } from './helpers.js';
 // Workspace object updates/archival, project resource endpoints, and the original
 // project/squad/autopilot compatibility routes.
@@ -14,7 +15,7 @@ describe("Multiremi API — projects, squads, and workspace objects", () => {
     const agent = store.createAgent({ name: "Claude", provider: "claude" });
     const project = store.createProject({ title: "Ops" });
     const squad = store.createSquad({ name: "Ops squad", leaderId: agent.id });
-    const autopilot = store.createAutopilot({
+    const autopilot = createResponsibleTestAutopilot(store, {
       title: "Ops auto",
       projectId: project.id,
       assigneeType: "squad",
@@ -805,7 +806,7 @@ describe("Multiremi API — projects, squads, and workspace objects", () => {
     expect(autopilotBody.execution_mode).toBe("create_issue");
     expect(autopilotBody.projectId).toBeUndefined();
 
-    const remoteAutopilot = store.createAutopilot({
+    const remoteAutopilot = createResponsibleTestAutopilot(store, {
       title: "Remote Autopilot",
       workspaceId: "remote",
       assigneeId: remoteAgent.id,

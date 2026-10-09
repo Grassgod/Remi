@@ -1,3 +1,4 @@
+import { createResponsibleTestAutopilot } from './helpers.js';
 import { createResponsibleTestIssue } from './helpers.js';
 import {it,expect} from 'bun:test';
 import {pendingTurnBackendTests} from './pending-turn-test-backends.js';
@@ -35,14 +36,14 @@ pendingTurnBackendTests('MUL-506 message operations and dispatch',fixture=>{
     const request=f.store.createTaskHumanRequest({taskId:turn.current_attempt_id!,kind:'permission',payload:{permission:'run'}});
     expect(f.store.getMessage(request.id)?.message_kind).toBe('decision');expect(f.store.respondTaskHumanRequest(request.id,{response:{allow:true},respondedBy:'local'})?.status).toBe('responded');});
   it('Autopilot inputs use one canonical message and independent run lanes',()=>{const f=setup();
-    const auto=f.store.createAutopilot({title:'Runs',assigneeId:f.a.id,executionMode:'run_only'});
+    const auto=createResponsibleTestAutopilot(f.store, {title:'Runs',assigneeId:f.a.id,executionMode:'run_only'});
     const one=f.store.runAutopilot(auto.id,{prompt:'one'}),two=f.store.runAutopilot(auto.id,{prompt:'two'});
     const turns=f.store.listTurns({workspace_id:'local',session_id:`auto_${auto.id}`});
     expect(turns).toHaveLength(2);expect(new Set(turns.map(t=>t.execution_scope)).size).toBe(2);
     expect(f.store.listMessages(`auto_${auto.id}`).filter(m=>m.message_kind==='request').map(m=>m.body_md)).toEqual(['one','two']);
     for(const run of [one,two]){const task=f.store.getTask(run.taskId!)!;
       expect(turns.find(t=>t.current_attempt_id===task.id)?.trigger_message_id).toBeTruthy();}
-    const issueAuto=f.store.createAutopilot({title:'Issue run',assigneeId:f.b.id,executionMode:'create_issue'}),run=f.store.runAutopilot(issueAuto.id,{prompt:'Issue request'});
+    const issueAuto=createResponsibleTestAutopilot(f.store, {title:'Issue run',assigneeId:f.b.id,executionMode:'create_issue'}),run=f.store.runAutopilot(issueAuto.id,{prompt:'Issue request'});
     expect(f.store.listMessages(f.store.getOrCreateDefaultIssueSession(run.issueId!).id)).toHaveLength(1);
     expect(f.store.listMessages(`auto_${issueAuto.id}`)[0]?.message_kind).toBe('request');
     expect(f.store.listMessages(`auto_${issueAuto.id}`)[0]?.body_md).toBe('Issue request');

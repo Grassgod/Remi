@@ -1,3 +1,4 @@
+import { createResponsibleTestAutopilot } from './helpers.js';
 import { createResponsibleTestIssue } from './helpers.js';
 import { requestMessageBody, mutateExecutionFixture, issueMessagesPath } from "./unified-test-paths.js";
 import { receiveRuntimeInputs } from '../../fixtures/runtime-downlinks.js';
@@ -1092,7 +1093,7 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     const agent = store.createAgent({ name: "PG schedule worker", provider: "claude" });
     const firstProject = store.createProject({ title: "PG schedule A" });
     const secondProject = store.createProject({ title: "PG schedule B" });
-    const rule = store.createAutopilot({ title: "PG target schedule", assigneeId: agent.id, executionMode: "run_only" });
+    const rule = createResponsibleTestAutopilot(store, { title: "PG target schedule", assigneeId: agent.id, executionMode: "run_only" });
     const trigger = store.createAutopilotTrigger(rule.id, { kind: "schedule", cronExpression: "0 3 * * *", scheduleTargets: { projects: { all: false, ids: [firstProject.id, secondProject.id] }, repositories: { all: false, ids: [] } } });
     const first = store.runAutopilot(rule.id, { triggerId: trigger.id });
     expect(first.taskId).toBeTruthy();
@@ -3055,7 +3056,7 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     const ws = freshWorkspace();
     const agent = store.createAgent({ name: "Wiki PG", provider: "codex", workspaceId: ws });
     const issue = createResponsibleTestIssue(store, { title: "Wiki PG evidence", workspaceId: ws, status: "in_review" });
-    const autopilot = store.createAutopilot({
+    const autopilot = createResponsibleTestAutopilot(store, {
       title: "Wiki PG maintainer",
       workspaceId: ws,
       assigneeId: agent.id,

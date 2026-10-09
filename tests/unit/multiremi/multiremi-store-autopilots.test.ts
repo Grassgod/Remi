@@ -1,3 +1,4 @@
+import { createResponsibleTestAutopilot } from './helpers.js';
 import { createResponsibleTestIssue } from './helpers.js';
 import { taskOfferResponse } from "../../fixtures/task-offer.js";
 // Autopilot run state, cron scheduling and trigger claiming, the failure-rate
@@ -21,7 +22,7 @@ describe("Multiremi store — autopilots, schedules, and webhooks", () => {
       const store = createStore();
       store.ensureLocalWorkspace();
       const agent = store.createAgent({ name: "Create issue owner", provider: "claude" });
-      const autopilot = store.createAutopilot({
+      const autopilot = createResponsibleTestAutopilot(store, {
         title: "Queued audit run", assigneeId: agent.id, executionMode: "create_issue",
       });
       const events: boolean[] = [];
@@ -54,7 +55,7 @@ describe("Multiremi store — autopilots, schedules, and webhooks", () => {
     const store = createStore();
     store.ensureLocalWorkspace();
     const agent = store.createAgent({ name: "Archive observer", provider: "codex" });
-    const autopilot = store.createAutopilot({
+    const autopilot = createResponsibleTestAutopilot(store, {
       title: "Done observer",
       assigneeId: agent.id,
       executionMode: "trigger_issue",
@@ -91,7 +92,7 @@ describe("Multiremi store — autopilots, schedules, and webhooks", () => {
     const agent = store.createAgent({ name: "Claude", provider: "claude", ownerId: owner.id });
     const runtime = store.registerRuntime({ name: "local-claude", provider: "claude", ownerId: owner.id });
     const project = store.createProject({ title: "Core" });
-    const autopilot = store.createAutopilot({
+    const autopilot = createResponsibleTestAutopilot(store, {
       title: "Regression sweep",
       projectId: project.id,
       assigneeId: agent.id,
@@ -148,14 +149,14 @@ describe("Multiremi store — autopilots, schedules, and webhooks", () => {
       runtimeId: runtime.id,
       ownerId: owner.id,
     });
-    const completedAutopilot = store.createAutopilot({
+    const completedAutopilot = createResponsibleTestAutopilot(store, {
       title: "Daily summary",
       assigneeId: agent.id,
       executionMode: "run_only",
       createdByType: "member",
       createdById: creator.id,
     });
-    const failedAutopilot = store.createAutopilot({
+    const failedAutopilot = createResponsibleTestAutopilot(store, {
       title: "Dependency audit",
       assigneeId: agent.id,
       executionMode: "run_only",
@@ -245,7 +246,7 @@ describe("Multiremi store — autopilots, schedules, and webhooks", () => {
     const store = createStore();
     const agent = store.createAgent({ name: "Autopilot Claude", provider: "claude" });
     const runtime = store.registerRuntime({ name: "autopilot-runtime", provider: "claude" });
-    const autopilot = store.createAutopilot({
+    const autopilot = createResponsibleTestAutopilot(store, {
       title: "Autopilot payload",
       assigneeId: agent.id,
       executionMode: "run_only",
@@ -296,7 +297,7 @@ describe("Multiremi store — autopilots, schedules, and webhooks", () => {
   it("schedules active cron autopilots and unschedules inactive ones", () => {
     const store = createStore();
     const agent = store.createAgent({ name: "Codex", provider: "codex" });
-    const autopilot = store.createAutopilot({
+    const autopilot = createResponsibleTestAutopilot(store, {
       title: "Scheduled triage",
       assigneeId: agent.id,
       triggerKind: "schedule",
@@ -322,7 +323,7 @@ describe("Multiremi store — autopilots, schedules, and webhooks", () => {
   it("claims due schedule triggers and recovers lost next_run_at like Go", () => {
     const store = createStore();
     const agent = store.createAgent({ name: "Codex", provider: "codex" });
-    const autopilot = store.createAutopilot({
+    const autopilot = createResponsibleTestAutopilot(store, {
       title: "Trigger scheduled triage",
       assigneeId: agent.id,
       triggerKind: "manual",
@@ -369,7 +370,7 @@ describe("Multiremi store — autopilots, schedules, and webhooks", () => {
   it("requires event ids to identify a trigger while allowing eventless trigger executions", () => {
     const store = createStore();
     const agent = store.createAgent({ name: "Trigger invariant worker", provider: "codex" });
-    const autopilot = store.createAutopilot({
+    const autopilot = createResponsibleTestAutopilot(store, {
       title: "Trigger invariant",
       assigneeId: agent.id,
       executionMode: "run_only",
@@ -444,28 +445,28 @@ describe("Multiremi store — autopilots, schedules, and webhooks", () => {
     const creator = store.createWorkspaceMember({ id: "mem_failure_creator", name: "Failure Creator", workspaceId: "local" });
     const owner = store.createWorkspaceMember({ id: "mem_failure_owner", name: "Failure Owner", workspaceId: "local" });
     const agent = store.createAgent({ name: "Codex", provider: "codex", ownerId: owner.id });
-    const offender = store.createAutopilot({
+    const offender = createResponsibleTestAutopilot(store, {
       title: "Failure loop",
       assigneeId: agent.id,
       executionMode: "run_only",
       createdByType: "member",
       createdById: creator.id,
     });
-    const skippedDiluted = store.createAutopilot({
+    const skippedDiluted = createResponsibleTestAutopilot(store, {
       title: "Failure loop with skips",
       assigneeId: agent.id,
       executionMode: "run_only",
       createdByType: "agent",
       createdById: agent.id,
     });
-    const outsideLookback = store.createAutopilot({
+    const outsideLookback = createResponsibleTestAutopilot(store, {
       title: "Old failures",
       assigneeId: agent.id,
       executionMode: "run_only",
       createdByType: "member",
       createdById: creator.id,
     });
-    const belowThreshold = store.createAutopilot({
+    const belowThreshold = createResponsibleTestAutopilot(store, {
       title: "Mixed outcomes",
       assigneeId: agent.id,
       executionMode: "run_only",
@@ -558,7 +559,7 @@ describe("Multiremi store — autopilots, schedules, and webhooks", () => {
     const store = createStore();
     const runtime = store.registerRuntime({ id: "rt_autopilot_analytics", name: "Autopilot analytics", provider: "codex" });
     const agent = store.createAgent({ name: "Analytics Codex", provider: "codex", runtimeId: runtime.id });
-    const autopilot = store.createAutopilot({
+    const autopilot = createResponsibleTestAutopilot(store, {
       title: "Analytics autopilot",
       assigneeId: agent.id,
       executionMode: "run_only",
@@ -609,7 +610,7 @@ describe("Multiremi store — autopilots, schedules, and webhooks", () => {
     expect(metricValue(store, "multiremi_autopilot_run_started_total", { cadence: "webhook", trigger_kind: "webhook" })).toBe(1);
     expect(metricValue(store, "multiremi_autopilot_run_terminal_total", { cadence: "webhook", trigger_kind: "webhook", terminal_status: "completed" })).toBe(1);
 
-    const failingAutopilot = store.createAutopilot({
+    const failingAutopilot = createResponsibleTestAutopilot(store, {
       title: "Failing analytics autopilot",
       assigneeId: agent.id,
       executionMode: "run_only",
@@ -646,7 +647,7 @@ describe("Multiremi store — autopilots, schedules, and webhooks", () => {
   it("records, deduplicates, ignores, rejects, and replays webhook deliveries", () => {
     const store = createStore();
     const agent = store.createAgent({ name: "Codex", provider: "codex" });
-    const autopilot = store.createAutopilot({
+    const autopilot = createResponsibleTestAutopilot(store, {
       title: "Webhook delivery",
       assigneeId: agent.id,
       triggerKind: "webhook",
@@ -771,7 +772,7 @@ describe("Multiremi store — autopilots, schedules, and webhooks", () => {
     const agent = store.createAgent({ name: "Wiki maintainer", provider: "codex" });
     const project = store.createProject({ title: "Knowledge project" });
     const issue = createResponsibleTestIssue(store, { title: "Ship feature", projectId: project.id, status: "in_review" });
-    const autopilot = store.createAutopilot({
+    const autopilot = createResponsibleTestAutopilot(store, {
       title: "Maintain Wiki",
       projectId: project.id,
       assigneeId: agent.id,
@@ -810,7 +811,7 @@ describe("Multiremi store — autopilots, schedules, and webhooks", () => {
       kind: "webhook",
     })).toThrow("trigger_issue execution does not support schedule or webhook triggers");
 
-    const scheduled = store.createAutopilot({
+    const scheduled = createResponsibleTestAutopilot(store, {
       title: "Scheduled run",
       assigneeId: agent.id,
       executionMode: "run_only",
@@ -861,7 +862,7 @@ describe("Multiremi store — autopilots, schedules, and webhooks", () => {
     const store = createStore();
     const agent = store.createAgent({ name: "Done checker", provider: "claude" });
     const issue = createResponsibleTestIssue(store, { title: "Completed prerequisite", status: "in_progress" });
-    const autopilot = store.createAutopilot({ title: "Observe done", assigneeId: agent.id, executionMode: "trigger_issue" });
+    const autopilot = createResponsibleTestAutopilot(store, { title: "Observe done", assigneeId: agent.id, executionMode: "trigger_issue" });
     store.createAutopilotTrigger(autopilot.id, {
       kind: "system_event", eventConfig: { resource: "issue", event: "status_changed",
         conditions: [{ field: "status", operator: "becomes", value: "done" }] },
@@ -884,7 +885,7 @@ describe("Multiremi store — autopilots, schedules, and webhooks", () => {
     const agent = store.createAgent({ name: "Review maintainer", provider: "codex" });
     const runtime = store.registerRuntime({ name: "review-runtime", provider: "codex" });
     const issue = createResponsibleTestIssue(store, { title: "Review without a loop", status: "todo" });
-    const autopilot = store.createAutopilot({
+    const autopilot = createResponsibleTestAutopilot(store, {
       title: "Review on in_review",
       assigneeId: agent.id,
       executionMode: "trigger_issue",
@@ -933,7 +934,7 @@ describe("Multiremi store — autopilots, schedules, and webhooks", () => {
       "UPDATE multiremi_issue_sessions SET updated_at = ? WHERE id = ?",
       ["2099-01-01T00:00:00.000Z", latest.id],
     );
-    const autopilot = store.createAutopilot({
+    const autopilot = createResponsibleTestAutopilot(store, {
       title: "Reuse Wiki session",
       assigneeId: agent.id,
       executionMode: "trigger_issue",
@@ -986,7 +987,7 @@ describe("Multiremi store — autopilots, schedules, and webhooks", () => {
     const store = createStore();
     const agent = store.createAgent({ name: "Wiki maintainer", provider: "codex" });
     const issue = createResponsibleTestIssue(store, { title: "Retry missing Issue", status: "in_review" });
-    const autopilot = store.createAutopilot({
+    const autopilot = createResponsibleTestAutopilot(store, {
       title: "Retry Wiki maintenance",
       assigneeId: agent.id,
       executionMode: "trigger_issue",
@@ -1112,7 +1113,7 @@ describe("Multiremi store — autopilots, schedules, and webhooks", () => {
     });
 
     // Runs without repository scoping (every other autopilot) never dedupe.
-    const other = store.createAutopilot({
+    const other = createResponsibleTestAutopilot(store, {
       title: "Not a wiki autopilot",
       assigneeId: agent.id,
       executionMode: "run_only",
@@ -1129,7 +1130,7 @@ describe("Multiremi store — autopilots, schedules, and webhooks", () => {
     store.ensureLocalWorkspace();
     const atlas = store.createAgent({ name: "Atlas · LLM Wiki", provider: "claude", role: "maintainer" });
     const userAgent = store.createAgent({ name: "User Wiki", provider: "claude" });
-    const userOwned = store.createAutopilot({
+    const userOwned = createResponsibleTestAutopilot(store, {
       title: "Atlas · Repository Wiki",
       assigneeId: userAgent.id,
       executionMode: "run_only",
@@ -1277,7 +1278,7 @@ describe("Multiremi store — autopilots, schedules, and webhooks", () => {
   it("rolls back the reserved run when trigger_issue has no triggering Issue", () => {
     const store = createStore();
     const agent = store.createAgent({ name: "Wiki maintainer", provider: "codex" });
-    const autopilot = store.createAutopilot({
+    const autopilot = createResponsibleTestAutopilot(store, {
       title: "Missing Issue",
       assigneeId: agent.id,
       executionMode: "trigger_issue",

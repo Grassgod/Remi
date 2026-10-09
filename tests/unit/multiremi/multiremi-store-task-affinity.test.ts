@@ -1,3 +1,4 @@
+import { createResponsibleTestAutopilot } from './helpers.js';
 import { createResponsibleTestIssue } from './helpers.js';
 import { runTurnExecutionMutation } from "@multiremi/store/turn-execution-records.js";
 // Store-level task placement over time: local_directory pins, resume-safe vs
@@ -411,7 +412,7 @@ describe("Multiremi store — local_directory affinity, retries, and agent re-ho
   it("allows pausing an autopilot without re-validating an unchanged assignee", () => {
     const store = createStore();
     const agent = store.createAgent({ name: "AP agent", provider: "codex", workspaceId: "wsA" });
-    const ap = store.createAutopilot({ title: "AP", workspaceId: "wsA", assigneeType: "agent", assigneeId: agent.id });
+    const ap = createResponsibleTestAutopilot(store, { title: "AP", workspaceId: "wsA", assigneeType: "agent", assigneeId: agent.id });
     // Simulate drift: the agent later moves to another workspace.
     store.updateAgent(agent.id, { workspaceId: "wsB" });
     // A status-only update must still succeed (no assignee re-validation).

@@ -1,3 +1,4 @@
+import { createResponsibleTestAutopilot } from './helpers.js';
 import { createResponsibleTestIssue } from './helpers.js';
 import { taskOfferResponse } from "../../fixtures/task-offer.js";
 import { afterEach, describe, expect, it } from "bun:test";
@@ -1363,7 +1364,7 @@ describe("SCM connection and canonical event store", () => {
       observedAt: "2020-01-01T00:00:00.000Z",
     });
     const agent = store.createAgent({ name: "Wiki Maintainer", provider: "codex" });
-    const autopilot = store.createAutopilot({
+    const autopilot = createResponsibleTestAutopilot(store, {
       title: "Update repository wiki",
       description: "Rebuild the affected wiki pages",
       workspaceId: "local",
@@ -1564,7 +1565,7 @@ describe("SCM connection and canonical event store", () => {
       },
     });
     const userAgent = store.createAgent({ name: "User wiki agent", provider: "claude" });
-    const sameTitleUserWiki = store.createAutopilot({
+    const sameTitleUserWiki = createResponsibleTestAutopilot(store, {
       title: "Atlas · Repository Wiki",
       workspaceId: "local",
       assigneeId: userAgent.id,
@@ -1580,7 +1581,7 @@ describe("SCM connection and canonical event store", () => {
       },
     });
     const announcerAgent = store.createAgent({ name: "Merge announcer", provider: "claude" });
-    const announcer = store.createAutopilot({
+    const announcer = createResponsibleTestAutopilot(store, {
       title: "Merge announcer",
       workspaceId: "local",
       assigneeId: announcerAgent.id,
@@ -1680,7 +1681,7 @@ describe("SCM connection and canonical event store", () => {
   it("retries the persisted delivery set after filters change and explicitly skips disabled triggers", () => {
     const { store, connection } = seedConnection();
     const agent = store.createAgent({ name: "Wiki Maintainer", provider: "codex" });
-    const autopilot = store.createAutopilot({
+    const autopilot = createResponsibleTestAutopilot(store, {
       title: "Update repository wiki",
       workspaceId: "local",
       assigneeId: agent.id,
@@ -1736,13 +1737,13 @@ describe("SCM connection and canonical event store", () => {
   it("dispatches GitHub Actions pipeline events only to matching branch filters", () => {
     const { store, connection } = seedConnection();
     const agent = store.createAgent({ name: "Pipeline Agent", provider: "codex" });
-    const main = store.createAutopilot({
+    const main = createResponsibleTestAutopilot(store, {
       title: "Main pipeline",
       workspaceId: "local",
       assigneeId: agent.id,
       executionMode: "run_only",
     });
-    const feature = store.createAutopilot({
+    const feature = createResponsibleTestAutopilot(store, {
       title: "Feature pipeline",
       workspaceId: "local",
       assigneeId: agent.id,
@@ -1791,7 +1792,7 @@ describe("SCM connection and canonical event store", () => {
   it("rejects SCM automation filters outside the automation workspace bindings", () => {
     const { store } = seedConnection();
     const agent = store.createAgent({ name: "Wiki Maintainer", provider: "codex" });
-    const autopilot = store.createAutopilot({
+    const autopilot = createResponsibleTestAutopilot(store, {
       title: "Update repository wiki",
       workspaceId: "local",
       assigneeId: agent.id,
@@ -1819,7 +1820,7 @@ describe("SCM connection and canonical event store", () => {
     const { store, connection } = seedConnection();
     store.updateScmConnection(connection.id, { mode: "poll" });
     const agent = store.createAgent({ name: "Wiki Maintainer", provider: "codex" });
-    const autopilot = store.createAutopilot({
+    const autopilot = createResponsibleTestAutopilot(store, {
       title: "Update repository wiki",
       workspaceId: "local",
       assigneeId: agent.id,

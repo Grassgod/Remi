@@ -1,3 +1,4 @@
+import { createResponsibleTestAutopilot } from './helpers.js';
 import { createResponsibleTestIssue } from './helpers.js';
 import { afterEach, describe, expect, it } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
@@ -272,7 +273,7 @@ describe("Multiremi API - workspace repositories", () => {
     }]);
     store.createAgent({ name: "Atlas · LLM Wiki", provider: "claude" });
     const userAgent = store.createAgent({ name: "User Wiki", provider: "claude" });
-    const sameTitle = store.createAutopilot({
+    const sameTitle = createResponsibleTestAutopilot(store, {
       title: "Atlas · Repository Wiki",
       workspaceId: workspace.id,
       assigneeId: userAgent.id,

@@ -1,3 +1,4 @@
+import { createResponsibleTestAutopilot } from './helpers.js';
 import { createResponsibleTestIssue } from './helpers.js';
 // Projects/squads/autopilot runs, project resources and how they reach the daemon
 // workdir and the task prompt.
@@ -21,7 +22,7 @@ describe("Multiremi store — projects, resources, and prompt context", () => {
       leaderId: agent.id,
       memberIds: [agent.id],
     });
-    const autopilot = store.createAutopilot({
+    const autopilot = createResponsibleTestAutopilot(store, {
       title: "Triage regressions",
       projectId: project.id,
       assigneeType: "squad",

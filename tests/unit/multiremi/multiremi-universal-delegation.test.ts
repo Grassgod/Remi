@@ -1,3 +1,4 @@
+import { createResponsibleTestAutopilot } from './helpers.js';
 import { createResponsibleTestIssue } from './helpers.js';
 import { issueMessagesPath, requestMessageBody, sentTask, taskRequestPath } from "./unified-test-paths.js";
 import { describe, expect, it } from "bun:test";
@@ -423,7 +424,7 @@ for (const backend of ["sqlite", "postgres"] as const) {
       it(`real ${executionMode} autopilot creates an undelegated task with no return (C4)`,
         async () => withStore(backend, async store => {
           const f = fixture(store);
-          const autopilot = store.createAutopilot({ title: `Automatic ${executionMode} work`,
+          const autopilot = createResponsibleTestAutopilot(store, { title: `Automatic ${executionMode} work`,
             assigneeId: f.atlas.id, executionMode, createdByType: "agent", createdById: f.qa.id });
           const run = store.runAutopilot(autopilot.id, { sourceTaskId: f.source.id,
             ...(executionMode === "trigger_issue" ? { triggerIssueId: f.b.id } : {}) });

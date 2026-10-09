@@ -1,3 +1,4 @@
+import { createResponsibleTestAutopilot } from './helpers.js';
 import { createResponsibleTestIssue } from './helpers.js';
 import { expect, it } from 'bun:test';
 import { pendingTurnBackendTests } from './pending-turn-test-backends.js';
@@ -61,7 +62,7 @@ pendingTurnBackendTests('MUL-505 canonical runtime',fixture=>{
   it('run-only automation writes a timer request in its own conversation and links the ledger to its turn',()=>{
     const {store,db}=fixture();
     const agent=store.createAgent({name:'Worker',provider:'codex'});
-    const auto=store.createAutopilot({title:'Automation',assigneeType:'agent',assigneeId:agent.id,executionMode:'run_only',description:'do work'});
+    const auto=createResponsibleTestAutopilot(store, {title:'Automation',assigneeType:'agent',assigneeId:agent.id,executionMode:'run_only',description:'do work'});
     const run=store.runAutopilot(auto.id);expect(run.taskId).toBeTruthy();
     const session=db.query('SELECT session_id FROM multiremi_autopilots WHERE id=?').get(auto.id).session_id;
     expect(session).toBe(`auto_${auto.id}`);
@@ -75,7 +76,7 @@ pendingTurnBackendTests('MUL-505 canonical runtime',fixture=>{
     const { store, db } = fixture();
     const agent = store.createAgent({ name: 'Concurrent auto', provider: 'codex' });
     const runtime = store.registerRuntime({ name: 'auto host', provider: 'codex' });
-    const auto = store.createAutopilot({ title: 'Repeat', assigneeId: agent.id, executionMode: 'run_only' });
+    const auto = createResponsibleTestAutopilot(store, { title: 'Repeat', assigneeId: agent.id, executionMode: 'run_only' });
     const first = store.runAutopilot(auto.id);
     const second = store.runAutopilot(auto.id);
     expect(second.id).not.toBe(first.id);
@@ -99,7 +100,7 @@ pendingTurnBackendTests('MUL-505 canonical runtime',fixture=>{
     const { store, db } = fixture();
     const agent = store.createAgent({ name: 'Issue auto', provider: 'codex' });
     const runtime = store.registerRuntime({ name: 'auto host', provider: 'codex' });
-    const auto = store.createAutopilot({ title: 'Create Issue', assigneeId: agent.id, executionMode: 'create_issue' });
+    const auto = createResponsibleTestAutopilot(store, { title: 'Create Issue', assigneeId: agent.id, executionMode: 'create_issue' });
     const run = store.runAutopilot(auto.id);
     // The original timer request uses the unified platform wake policy.
     expect(db.query('SELECT id,wake_source FROM multiremi_turns WHERE issue_id=?').all(run.issueId)).toEqual([
@@ -130,7 +131,7 @@ pendingTurnBackendTests('MUL-505 canonical runtime',fixture=>{
     expect(card.body_md).toBe('chat answer');
     expect(card.visibility).toBe('shown');
     expect(db.query("SELECT CAST(COUNT(*) AS INTEGER) AS n FROM multiremi_conversation_log WHERE session_id=? AND sender_type='agent' AND kind='message'").get(chat.id).n).toBe(1);
-    const auto=store.createAutopilot({title:'Completion',assigneeType:'agent',assigneeId:agent.id,executionMode:'run_only',description:'input'});
+    const auto=createResponsibleTestAutopilot(store, {title:'Completion',assigneeType:'agent',assigneeId:agent.id,executionMode:'run_only',description:'input'});
     const run=store.runAutopilot(auto.id);expect(store.claimTask(runtime.id)?.id).toBe(run.taskId!);store.startTask(run.taskId!);
     store.completeTask(run.taskId!,{output:'auto answer'});
     expect(store.getAutopilotRun(run.id)?.status).toBe('completed');

@@ -1,3 +1,4 @@
+import { createResponsibleTestAutopilot } from './helpers.js';
 import { createResponsibleTestIssue } from './helpers.js';
 /**
  * MUL-409 fix round 5: the six in-transaction issue-creation call sites, plus the
@@ -156,7 +157,7 @@ describe.skipIf(!pgAvailable)("MUL-409: in-transaction issue creation on Postgre
     counter += 1;
     const title = `Probe autopilot ${counter}`;
     const agent = store.createAgent({ name: `Probe autopilot owner ${counter}`, provider: "claude" });
-    const autopilot = store.createAutopilot({
+    const autopilot = createResponsibleTestAutopilot(store, {
       title, workspaceId: "local", assigneeId: agent.id, executionMode: "create_issue",
     });
     observe(title, () => { store.runAutopilot(autopilot.id); }, rollback);

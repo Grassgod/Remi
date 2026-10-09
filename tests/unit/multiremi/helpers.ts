@@ -38,6 +38,7 @@ import type {
   MultiremiAutopilotTrigger,
   MultiremiIssueWorkspaceArchiveBinding,
   CreateIssueInput,
+  CreateAutopilotInput,
   MultiremiIssue,
 } from "@multiremi/contracts/types.js";
 
@@ -72,11 +73,20 @@ export function createLocalStore(): MultiremiStore {
 export function createResponsibleTestIssue(store: MultiremiStore, input: CreateIssueInput): MultiremiIssue {
   const parentId=input.parentIssueId??input.parent_issue_id;
   if(parentId || Object.hasOwn(input,'responsibleMemberId') || Object.hasOwn(input,'responsible_member_id')) return store.createIssue(input);
-  const workspaceId=input.workspaceId??input.workspace_id??'local';
+  return store.createIssue({...input,responsibleMemberId:explicitTestHuman(store,input.workspaceId??input.workspace_id??'local').id});
+}
+
+function explicitTestHuman(store:MultiremiStore,workspaceId:string) {
   const memberId=`test_root_human_${workspaceId}`;
   const human=store.getWorkspaceMember(memberId)??store.createWorkspaceMember({id:memberId,name:'Explicit test root human',workspaceId,role:'member'});
   if(human.archivedAt || human.workspaceId!==workspaceId)throw new Error('Synthetic fixture human is unavailable; configure an explicit fixture responsibility');
-  return store.createIssue({...input,responsibleMemberId:human.id});
+  return human;
+}
+
+/** Explicit automation responsibility configuration, scoped to its actual fixture workspace. */
+export function createResponsibleTestAutopilot(store:MultiremiStore,input:CreateAutopilotInput):MultiremiAutopilot {
+  if(Object.hasOwn(input,'responsibleMemberId')||Object.hasOwn(input,'responsible_member_id'))return store.createAutopilot(input);
+  return createResponsibleTestAutopilot(store, {...input,responsibleMemberId:explicitTestHuman(store,input.workspaceId??input.workspace_id??'local').id});
 }
 
 /** Close through the real delivery API. Fixtures must explicitly supply an Agent execution owner. */
@@ -86,6 +96,7 @@ export function prepareTestIssueDelivery(store: MultiremiStore, issueId: string,
   const owner=responsibility.executionOwner;
   const task=store.createTask({agentId:owner.id,issueId:owner.issueId,prompt:summary});
   const delivery=store.submitIssueDelivery(issueId,{summary},{type:'agent',id:owner.id,taskId:task.id});
+  if(delivery.reviewUnavailableReason)throw new Error('Reopen the parent before preparing its acceptance fixture');
   const reviewer=responsibility.reviewOwner;
   const reviewerTask=reviewer.type==='agent'?(store.listTasksForIssue(reviewer.issueId).find(candidate=>
     candidate.agentId===reviewer.id&&['queued','running','awaiting_human'].includes(candidate.status)&&!candidate.chatSessionId&&
@@ -182,7 +193,7 @@ export function configureRepositoryWikiAutomation(
   } else if (!binding.enabled) {
     store.updateAgentPluginBinding(agent.id, binding.id, { enabled: true });
   }
-  const autopilot = input.autopilot ?? store.createAutopilot({
+  const autopilot = input.autopilot ?? createResponsibleTestAutopilot(store, {
     title: "Repository Wiki updater",
     workspaceId,
     assigneeId: agent.id,

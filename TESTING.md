@@ -24,6 +24,8 @@ bun run test tests/arch/
 API/store 测试可参考 [issues API 测试](tests/unit/multiremi/multiremi-api-issues.test.ts)的进程内 `app.request()`，共享夹具在 [helpers.ts](tests/unit/multiremi/helpers.ts)。需要真实服务的测试应在自身入口明确配置和隔离方式，不能把本地凭据或生产数据作为普通单测前提。
 
 普通合成根 Issue 使用 `createResponsibleTestIssue(store, input)`，显式建立命名测试人类；
+合成自动化配置使用 `createResponsibleTestAutopilot`，按实际 workspace 建立同样明确的测试人类，
+避免调度、Webhook 或事件派活借 Runtime owner 创建根责任。已给出的责任字段（包括显式 null）保留原事实。
 子单仍继承根责任，显式空责任和生产创建负向用例直接调用原 Store，不能覆盖 Store 方法。
 闭环用例明确配置 Agent/团队执行归属，并用 `acceptTestIssueDelivery` 提交、验收实际交付。
 历史升级 fixture 使用其原表形状和历史 writer，不能借合成工厂提前写入新责任字段或验收收据。

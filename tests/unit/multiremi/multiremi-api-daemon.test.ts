@@ -1,3 +1,4 @@
+import { createResponsibleTestAutopilot } from './helpers.js';
 import { createResponsibleTestIssue } from './helpers.js';
 import { turnApiPath, mutateExecutionFixture } from "./unified-test-paths.js";
 import { taskOfferResponse, reconcileRuntimeReady } from "../../fixtures/task-offer.js";
@@ -1379,7 +1380,7 @@ describe("Multiremi API — daemon endpoints", () => {
     });
     const issue = createResponsibleTestIssue(store, { title: "GC issue", workspaceId: "local" });
     const chat = store.createChatSession({ agentId: agent.id, workspaceId: "local", title: "GC chat" });
-    const autopilot = store.createAutopilot({
+    const autopilot = createResponsibleTestAutopilot(store, {
       title: "GC autopilot",
       workspaceId: "local",
       assigneeId: agent.id,
@@ -1398,7 +1399,7 @@ describe("Multiremi API — daemon endpoints", () => {
     const remoteIssue = createResponsibleTestIssue(store, { title: "Remote GC issue", workspaceId: "remote" });
     const remoteAgent = store.createAgent({ name: "Remote GC Codex", provider: "codex", workspaceId: "remote" });
     const remoteChat = store.createChatSession({ agentId: remoteAgent.id, workspaceId: "remote", title: "Remote GC chat" });
-    const remoteAutopilot = store.createAutopilot({
+    const remoteAutopilot = createResponsibleTestAutopilot(store, {
       title: "Remote GC autopilot",
       workspaceId: "remote",
       assigneeId: remoteAgent.id,
