@@ -245,8 +245,9 @@ function verifyQueueBeforeFlush(db: SqlDatabase): void {
 }
 
 /**
- * Senior ruling cmt_96e1yqxgifms §2: the workspace lookup behind the two
- * best-effort broadcasts is a plain read now, with no savepoint around it. On
+ * Senior ruling cmt_96e1yqxgifms §2: the comment broadcast's workspace lookup
+ * is a plain read, with no savepoint around it. Activity publication reuses the
+ * mandatory origin read and survives a failing realtime listener. On
  * PostgreSQL that means a *real* SQL error poisons the caller's transaction and
  * the write must fail (see the outer-transaction case below); what still has to
  * be survived is the failure the database classifies as non-aborting —
@@ -259,6 +260,18 @@ function verifyBestEffortWorkspaceLookups(db: SqlDatabase, backend: "sqlite" | "
   const issue = createResponsibleTestIssue(store, { title: "Best effort lookups", workspaceId: "local" });
   const session = store.getOrCreateDefaultIssueSession(issue.id);
   const context = (store as unknown as { ctx: { issueWorkspaceId: (id: string) => string | null } }).ctx;
+  const originalLookup = context.issueWorkspaceId.bind(context);
+  let lookups = 0;
+  const publicationAttempts: Array<{ workspaceId: string; inTransaction: boolean }> = [];
+  const healthyDeliveries: string[] = [];
+  const stopFailingListener = store.onWorkspaceEvent((event) => {
+    if (event.type !== "activity:created") return;
+    publicationAttempts.push({ workspaceId: event.workspaceId, inTransaction: db.inTransaction === true });
+    throw new Error("realtime listener unavailable");
+  });
+  const stopHealthyListener = store.onWorkspaceEvent((event) => {
+    if (event.type === "activity:created") healthyDeliveries.push(event.workspaceId);
+  });
   const previousReplyLimit = process.env.MULTIREMI_PG_REPLY_MAX_BYTES;
   const previousEnforce = process.env.MULTIREMI_PG_REPLY_ENFORCE;
   const replyExceptions = DB_REPLY_TRANSITION_EXCEPTIONS as Set<string>;
@@ -267,6 +280,7 @@ function verifyBestEffortWorkspaceLookups(db: SqlDatabase, backend: "sqlite" | "
     process.env.MULTIREMI_PG_REPLY_ENFORCE = "1";
     resetDbReplyLimitForTest();
     context.issueWorkspaceId = (id) => {
+      if (++lookups === 1) return originalLookup(id);
       // The limit is narrowed for this one statement and restored in `finally`,
       // so only the lookup overflows the bridge — the rest of the transaction
       // keeps the default and the failure stays a single reply-level one.
@@ -281,7 +295,8 @@ function verifyBestEffortWorkspaceLookups(db: SqlDatabase, backend: "sqlite" | "
       }
     };
   } else {
-    context.issueWorkspaceId = (id) => db.query("SELECT missing_workspace_column FROM multiremi_issues WHERE id = ?").get(id);
+    context.issueWorkspaceId = (id) => ++lookups === 1 ? originalLookup(id)
+      : db.query("SELECT missing_workspace_column FROM multiremi_issues WHERE id = ?").get(id);
   }
   const warnings: string[] = [];
   const originalWarn = console.warn;
@@ -300,10 +315,45 @@ function verifyBestEffortWorkspaceLookups(db: SqlDatabase, backend: "sqlite" | "
     }
     expect(store.getIssueComment(comment.id)?.body).toBe("system survives query error");
     expect(store.getConversationLogEntryById(comment.id)?.body_md).toBe("system survives query error");
-    expect(warnings.some((line) => line.includes("activity:created broadcast skipped"))).toBe(true);
+    expect(lookups).toBe(2);
+    expect(publicationAttempts).toEqual([{ workspaceId: issue.workspaceId, inTransaction: false }]);
+    expect(healthyDeliveries).toEqual([issue.workspaceId]);
+    expect(db.query("SELECT workspace_id FROM multiremi_issue_activity WHERE issue_id = ? AND type = 'comment_created'").all(issue.id))
+      .toEqual([{ workspace_id: issue.workspaceId }]);
     expect(warnings.some((line) => line.includes("comment:created broadcast skipped"))).toBe(true);
   } finally {
     console.warn = originalWarn;
+    context.issueWorkspaceId = originalLookup;
+    stopFailingListener();
+    stopHealthyListener();
+  }
+}
+
+function verifyMandatoryActivityOriginFailure(db: SqlDatabase): void {
+  const store = new MultiremiStore(db);
+  const issue = createResponsibleTestIssue(store, { title: "Mandatory activity origin", workspaceId: "local" });
+  const session = store.getOrCreateDefaultIssueSession(issue.id);
+  const context = (store as unknown as { ctx: { issueWorkspaceId: (id: string) => string | null } }).ctx;
+  const originalLookup = context.issueWorkspaceId;
+  const emitted: string[] = [];
+  const stop = store.onWorkspaceEvent((event) => emitted.push(event.type));
+  let failedQueries = 0;
+  context.issueWorkspaceId = (id) => {
+    failedQueries += 1;
+    return db.query("SELECT missing_workspace_column FROM multiremi_issues WHERE id = ?").get(id);
+  };
+  try {
+    expect(() => store.createTaskFailureSystemComment(issue.id, session.id, "tsk_origin_failure", "must roll back"))
+      .toThrow(/missing_workspace_column/);
+    expect(failedQueries).toBe(1);
+    expect(db.inTransaction).toBe(false);
+    expect(db.query("SELECT id FROM multiremi_issue_comments WHERE issue_id = ?").all(issue.id)).toEqual([]);
+    expect(db.query("SELECT id FROM multiremi_conversation_log WHERE session_id = ? AND id NOT LIKE 'head_%'").all(session.id)).toEqual([]);
+    expect(db.query("SELECT id FROM multiremi_issue_activity WHERE issue_id = ? AND type = 'comment_created'").all(issue.id)).toEqual([]);
+    expect(emitted).toEqual([]);
+  } finally {
+    context.issueWorkspaceId = originalLookup;
+    stop();
   }
 }
 
@@ -777,8 +827,11 @@ describe("conversation log multi-process allocation (MUL-405)", () => {
       const issue = createResponsibleTestIssue(store, { title: "Outer transaction lookup", workspaceId: "local" });
       const session = store.getOrCreateDefaultIssueSession(issue.id);
       const context = (store as unknown as { ctx: { issueWorkspaceId: (id: string) => string | null } }).ctx;
+      const originalLookup = context.issueWorkspaceId.bind(context);
+      let lookups = 0;
       let failedQueries = 0;
       context.issueWorkspaceId = (id) => {
+        if (++lookups === 1) return originalLookup(id);
         failedQueries += 1;
         return db.query("SELECT missing_workspace_column FROM multiremi_issues WHERE id = ?").get(id);
       };
@@ -802,6 +855,12 @@ describe("conversation log multi-process allocation (MUL-405)", () => {
       // the one that must not survive the rollback.
       expect(db.query("SELECT id FROM multiremi_issue_activity WHERE issue_id = ? AND type = 'comment_created'").all(issue.id)).toEqual([]);
     });
+  });
+  it("SQLite: a mandatory activity origin SQL error rolls back the entire system comment", async () => {
+    await withSqlite(async (db) => verifyMandatoryActivityOriginFailure(db));
+  });
+  it.skipIf(!pgAdminUrl)("Postgres: a mandatory activity origin SQL error rolls back the entire system comment", async () => {
+    await withPostgres(async (db) => verifyMandatoryActivityOriginFailure(db));
   });
   it.skipIf(!pgAdminUrl)("Postgres: a worker reply exceeding its shared buffer still commits", async () => {
     await withPostgres(async (db, url) => {
