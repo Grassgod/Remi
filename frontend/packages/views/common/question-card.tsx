@@ -46,7 +46,6 @@ export function UnifiedQuestionCard({ question, getActorName = (_type, id) => id
   const canAnswer = revise ? allowed.includes("revise") && Boolean(reason.trim()) : allowed.includes("answer");
   const stageLabel = question.stage === "issue_owner" ? t($ => $.responsibility.issue_owner) : question.stage === "parent_owner" ? t($ => $.responsibility.parent_owner) : question.stage === "human" ? t($ => $.responsibility.waiting_human) : question.stage === "unavailable" ? t($ => $.responsibility.unavailable) : question.stage;
   const waitLabels: Record<string, string> = { waiting: t($ => $.responsibility.waiting), detached: t($ => $.responsibility.detached), consumed: t($ => $.responsibility.consumed), continuation_pending: t($ => $.responsibility.continuation_pending), continuation_consumed: t($ => $.responsibility.continuation_consumed), none: t($ => $.responsibility.none) };
-  const sourceLink = (messageId: string) => question.source_issue_id ? `${paths.issueDetail(question.source_issue_id)}?comment=${encodeURIComponent(messageId)}` : paths.inboxItem(messageId);
   return <article className="min-w-0 space-y-3 rounded-md border bg-background p-3" data-question-id={question.id}>
     <div className="space-y-1 text-xs text-muted-foreground">
       <p className="font-medium text-foreground">{question.status === "pending" ? stageLabel : question.status === "answered" ? t($ => $.responsibility.saved) : question.status === "closed" ? t($ => $.responsibility.closed) : question.status}</p>
@@ -62,8 +61,8 @@ export function UnifiedQuestionCard({ question, getActorName = (_type, id) => id
     {question.summary && <section className="rounded bg-muted/40 p-2"><h4 className="mb-1 text-xs font-medium">{t($ => $.responsibility.remi)}</h4><Markdown mode="minimal">{question.summary.body_md}</Markdown></section>}
     <p className="text-xs text-muted-foreground" data-question-wait-status={question.wait_status}>{waitLabels[question.wait_status] ?? question.wait_status}{question.wait_reason && ` · ${question.wait_reason}`}</p>
     {question.recovery && <div className="flex flex-wrap items-center gap-2 text-xs">
-      {question.recovery.continuation_message_id && <AppLink href={sourceLink(question.recovery.continuation_message_id)}>{t($ => $.responsibility.continuation_source)}</AppLink>}
-      {question.recovery.reply_message_id && <AppLink href={sourceLink(question.recovery.reply_message_id)}>{t($ => $.responsibility.answer)}</AppLink>}
+      {question.recovery.continuation_message_id && <AppLink title={question.recovery.continuation_message_id} href={questionLocation(paths.inboxItem, question.id, question.recovery.continuation_message_id)}>{t($ => $.responsibility.continuation_source)}</AppLink>}
+      {question.recovery.reply_message_id && <AppLink title={question.recovery.reply_message_id} href={questionLocation(paths.inboxItem, question.id, question.recovery.reply_message_id)}>{t($ => $.responsibility.answer)}</AppLink>}
       {question.recovery.consumer_turn_id && <span>{t($ => $.responsibility.consumer_turn)} · {question.recovery.consumer_turn_id}</span>}
       {question.recovery.consumer_attempt_id && question.recovery.consumer_turn_id && <QuestionConsumptionAttempt attemptId={question.recovery.consumer_attempt_id} turnId={question.recovery.consumer_turn_id} getActorName={getActorName} />}
       {question.recovery.consumed_at && <span>{question.recovery.consumed_at}</span>}

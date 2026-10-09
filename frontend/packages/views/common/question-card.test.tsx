@@ -49,8 +49,9 @@ describe("one Q on every surface", () => {
   });
   it("links authorized continuation without inventing a consumed attempt before confirmation", () => {
     mount({ ...base, wait_status: "continuation_pending", recovery: { consumer_turn_id: "turn-new", consumer_attempt_id: null, reply_message_id: "reply", continuation_message_id: "continue-message", consumed_at: null } });
-    expect(screen.getByRole("link", { name: "Continuation instruction" })).toHaveAttribute("href", "/ws/issues/child?comment=continue-message");
-    expect(screen.getByRole("link", { name: "Answer" })).toHaveAttribute("href", "/ws/issues/child?comment=reply");
+    expect(screen.getByRole("link", { name: "Continuation instruction" })).toHaveAttribute("href", "/ws/inbox?item=q1&question=q1&question_source=continue-message");
+    expect(screen.getByRole("link", { name: "Continuation instruction" })).toHaveAttribute("title", "continue-message");
+    expect(screen.getByRole("link", { name: "Answer" })).toHaveAttribute("href", "/ws/inbox?item=q1&question=q1&question_source=reply");
     expect(screen.getByText("Consuming turn · turn-new")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Confirmed consumption attempt/ })).toBeNull();
     expect(screen.getByText("Continuation authorized; awaiting consumption")).toBeInTheDocument();

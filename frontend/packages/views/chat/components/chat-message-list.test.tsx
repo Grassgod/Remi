@@ -61,7 +61,7 @@ describe("cached message observer visibility", () => {
     try {
       await waitFor(() => expect(screen.getAllByTestId("original-question-card")).toHaveLength(1));
       expect(screen.getByText("Continue with the accepted answer")).toBeTruthy();
-      expect(view.container.querySelector(`a[href="${paths.workspace("test").inboxItem("q_original")}"]`)).toBeTruthy();
+      expect([...view.container.querySelectorAll("a")].map(link => link.getAttribute("href"))).toContain(`${paths.workspace("test").inboxItem("q_original")}&question=q_original`);
       expect(getQuestion).toHaveBeenCalledTimes(1);
     } finally { view.unmount(); client.clear(); }
     const noticeClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });

@@ -1266,7 +1266,7 @@ export class MultiremiDaemon {
 
   answerFeishuIssueDecision(
     decisionId: string,
-    input: { answer: string; operatorOpenId: string; token?: string },
+    input: { answer: string; operatorOpenId: string; token?: string; routeRevision?: number },
   ): Promise<MultiremiIssueDecision> {
     return this.client.answerFeishuIssueDecision(decisionId, input);
   }
