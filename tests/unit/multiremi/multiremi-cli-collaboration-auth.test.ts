@@ -2,7 +2,7 @@ import { issueMessagesPath, requestMessageBody } from "./unified-test-paths.js";
 import { afterEach, describe, expect, it } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { signIssueShareId } from "@multiremi/api/helpers/issue-share-tokens.js";
-import { createLocalStore as createStore, resetMultiremiTestEnv } from "./helpers.js";
+import { createLocalStore as createStore, createResponsibleTestIssue, resetMultiremiTestEnv } from "./helpers.js";
 
 afterEach(resetMultiremiTestEnv);
 
@@ -12,8 +12,8 @@ describe("collaboration CLI authorization boundaries", () => {
     store.ensureLocalWorkspace();
     const app = createMultiremiApp({ store, authToken: "root-secret" });
     const agent = store.createAgent({ name: "Scoped CLI agent", provider: "claude" });
-    const current = store.createIssue({ title: "Current issue", workspaceId: "local" });
-    const sibling = store.createIssue({ title: "Sibling issue", workspaceId: "local" });
+    const current = createResponsibleTestIssue(store, { title: "Current issue", workspaceId: "local", assigneeType: "agent", assigneeId: agent.id });
+    const sibling = createResponsibleTestIssue(store, { title: "Sibling issue", workspaceId: "local", assigneeType: "agent", assigneeId: agent.id });
     const task = store.createTask({ agentId: agent.id, issueId: current.id, prompt: "Work current" });
     const token = await store.createTaskAccessToken(task, "local");
     const headers = { Authorization: `Bearer ${token.token}`, "Content-Type": "application/json" };
@@ -51,7 +51,7 @@ describe("collaboration CLI authorization boundaries", () => {
     });
     expect(child.status).toBe(201);
 
-    const deletable = store.createIssue({ title: "Task deletable sibling", workspaceId: "local" });
+    const deletable = createResponsibleTestIssue(store, { title: "Task deletable sibling", workspaceId: "local" });
     const deleted = await app.request(`/api/issues/${deletable.id}`, { method: "DELETE", headers });
     expect(deleted.status).toBe(204);
   });
@@ -61,8 +61,8 @@ describe("collaboration CLI authorization boundaries", () => {
     store.ensureLocalWorkspace();
     const secret = "share-cli-secret";
     const app = createMultiremiApp({ store, authToken: "root-secret", shareSecret: secret });
-    const first = store.createIssue({ title: "First shared issue", workspaceId: "local" });
-    const second = store.createIssue({ title: "Second shared issue", workspaceId: "local" });
+    const first = createResponsibleTestIssue(store, { title: "First shared issue", workspaceId: "local" });
+    const second = createResponsibleTestIssue(store, { title: "Second shared issue", workspaceId: "local" });
     const firstToken = signIssueShareId(store.ensureIssueShare(first.id, "local", "local", 60).id, secret);
     const secondToken = signIssueShareId(store.ensureIssueShare(second.id, "local", "local", 60).id, secret);
 

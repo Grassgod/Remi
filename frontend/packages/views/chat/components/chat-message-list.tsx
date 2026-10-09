@@ -1,7 +1,7 @@
 "use client";
 
 import { MessageHeader } from "../../common/message-header";
-import { LinkedQuestion, linkedQuestionId } from "../../common/linked-question";
+import { LinkedQuestion, linkedQuestionId, QuestionReplyReference } from "../../common/linked-question";
 import { useActorName } from "@multiremi/core/workspace/hooks";
 import { useAfterFirstScreen } from "@multiremi/core/platform/use-after-first-screen";
 import { TurnControls } from "../../common/turn-controls";
@@ -175,6 +175,7 @@ export function ChatMessageList({
           : <MessageBubble message={message} isPending={!!pendingTaskId && row.task_id === pendingTaskId}
             isPush={isPush} visible={visible} />}
         {row.kind === "turn" && <TurnControls turnId={typeof row.metadata?.turn_id === "string" ? row.metadata.turn_id : row.id} />}
+        {row.kind === "message" && !questionId && <QuestionReplyReference metadata={row.metadata} />}
         {isUser && local && <div className="flex justify-end"><SendStatus status={local.status}
           onRetry={() => onRetrySend?.(local.clientId)} /></div>}
       </div>;

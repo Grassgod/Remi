@@ -16,7 +16,7 @@ const issuePath = (i: CommandInvocation) => `/api/issues/${encodePath(positional
 const questionPath = (i: CommandInvocation) => `/api/messages/${encodePath(positional(i, 0, "question"))}/question`;
 export function responsibilityCommandSpecs(): CommandSpec[] {
   return [
-    spec(["issue", "responsibility-unassigned", "list"], "Inspect historical responsibility, original facts and unconfirmed candidates as a workspace member", "read", [ref("workspace")], [{ name: "offset", type: "integer", description: "Offset returned by nextOffset" }], i => {
+    spec(["issue", "responsibility-unassigned", "list"], "Inspect historical responsibility, original facts and unconfirmed candidates as a workspace admin", "read", [ref("workspace")], [{ name: "offset", type: "integer", description: "Offset returned by nextOffset" }], i => {
       const limit = integerOption(i, "limit") ?? 100, offset = integerOption(i, "offset") ?? 0;
       if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100 || !Number.isSafeInteger(offset) || offset < 0) throw new CliError("usage", "Use --limit 1..100 and --offset >=0");
       return request(i, "GET", `/api/workspaces/${encodePath(positional(i, 0, "workspace"))}/issue-responsibility-migration`, undefined, ["items"], { limit, offset });

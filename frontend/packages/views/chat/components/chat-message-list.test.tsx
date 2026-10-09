@@ -8,6 +8,7 @@ import { MemorySessionReplica, openBrowserReplica, type SessionLogEntry } from "
 import { setApiInstance } from "@multiremi/core/api";
 import type { OptimisticChatRow } from "../lib/optimistic-log";
 import { useTraceStreamSubscription } from "@multiremi/core/realtime";
+import { paths } from "@multiremi/core/paths";
 
 const { copiedText } = vi.hoisted(() => ({ copiedText: vi.fn().mockResolvedValue(true) }));
 vi.mock("@multiremi/ui/lib/clipboard", () => ({ copyText: copiedText }));
@@ -31,6 +32,10 @@ vi.mock("@multiremi/core/paths", async importOriginal => {
 vi.mock("../../common/markdown", () => ({
   Markdown: ({ children }: { children: string }) => <span>{children}</span>,
 }));
+vi.mock("../../common/question-card", () => ({
+  UnifiedQuestionCard: ({ question }: { question: { id: string } }) => <div data-testid="original-question-card">Original question {question.id}</div>,
+}));
+vi.mock("../../navigation", () => ({ AppLink: ({ children, ...props }: React.AnchorHTMLAttributes<HTMLAnchorElement>) => <a {...props}>{children}</a> }));
 vi.mock("../../issues/components/comment-card", () => ({
   AttachmentList: ({ attachments }: { attachments?: Attachment[] }) => (
     <div data-testid="attachment-list">{attachments?.length ?? 0}</div>
@@ -43,6 +48,28 @@ vi.mock("./task-status-pill", () => ({
 import { ChatMessageList } from "./chat-message-list";
 
 describe("cached message observer visibility", () => {
+  it("renders one original Q, retains its answer body and source link, and renders an explicit cross-session notification", async () => {
+    const getQuestion = vi.fn(async (id: string) => ({ id }));
+    setApiInstance({ getQuestion } as never);
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const rows = [
+      { id: "q_original", seq: 1, sender_type: "agent", message_kind: "decision", body_md: "Native original question", metadata: { question: { version: 1 } } },
+      { id: "answer", seq: 2, sender_type: "member", message_kind: "reply", body_md: "Continue with the accepted answer", metadata: { root_question_id: "q_original", human_response: { answers: { question: "Continue" } }, question_route_revision: 1 } },
+    ].map(row => ({ session_id: "cs-1", revision: 1, kind: "message", body_html: null, render_version: null, ...row })) as SessionLogEntry[];
+    const replica = new MemorySessionReplica({ "cs-1": { entries: rows } });
+    const view = render(<QueryClientProvider client={client}><ChatMessageList sessionId="cs-1" replica={replica} optimisticRows={[]} pendingTask={null} availability={undefined} /></QueryClientProvider>);
+    try {
+      await waitFor(() => expect(screen.getAllByTestId("original-question-card")).toHaveLength(1));
+      expect(screen.getByText("Continue with the accepted answer")).toBeTruthy();
+      expect(view.container.querySelector(`a[href="${paths.workspace("test").inboxItem("q_original")}"]`)).toBeTruthy();
+      expect(getQuestion).toHaveBeenCalledTimes(1);
+    } finally { view.unmount(); client.clear(); }
+    const noticeClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const notice = new MemorySessionReplica({ "cs-notice": { entries: [{ ...rows[0], session_id: "cs-notice", id: "notification", metadata: { root_question_id: "q_original", question_notification: true } } as SessionLogEntry] } });
+    const noticeView = render(<QueryClientProvider client={noticeClient}><ChatMessageList sessionId="cs-notice" replica={notice} optimisticRows={[]} pendingTask={null} availability={undefined} /></QueryClientProvider>);
+    try { await waitFor(() => expect(screen.getAllByTestId("original-question-card")).toHaveLength(1)); }
+    finally { noticeView.unmount(); noticeClient.clear(); }
+  });
   it("keeps a pinned Chat at the bottom when an availability banner changes layout, but leaves released scrolling alone", () => {
     const client = new QueryClient();
     const replica = new MemorySessionReplica({ "cs-1": { entries: [] } });

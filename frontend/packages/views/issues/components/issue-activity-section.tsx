@@ -22,7 +22,7 @@ import { getSessionDisplayName } from "../utils/session-display";
 import { quotePreview } from "../utils/quote-preview";
 import { formatActivity } from "../utils/format-activity";
 import { MessageHeader } from "../../common/message-header";
-import { LinkedQuestion, linkedQuestionId } from "../../common/linked-question";
+import { LinkedQuestion, linkedQuestionId, QuestionReplyReference } from "../../common/linked-question";
 import { CommentCard } from "./comment-card";
 import { CommentInput, type ReplyTarget } from "./comment-input";
 import { IssueLogHead } from "./issue-log-head";
@@ -290,7 +290,7 @@ export function IssueActivitySection({ issueId, issueTitle, projectId, members, 
         onDelete={id => run(() => remove(id))}
         onResolveToggle={(id, value) => { resolved.clear(id); void run(() => resolve({ commentId: id, resolved: value })); }}
         onCollapseResolved={row.resolved_at ? () => resolved.toggle(row.id, false) : undefined}
-        onToggleReaction={(id, emoji) => run(() => reaction({ commentId: id, emoji, existing: comment.reactions?.find(r => r.emoji === emoji && r.actor_id === currentMemberId) }))} /></div>;
+        onToggleReaction={(id, emoji) => run(() => reaction({ commentId: id, emoji, existing: comment.reactions?.find(r => r.emoji === emoji && r.actor_id === currentMemberId) }))} /><QuestionReplyReference metadata={row.metadata} /></div>;
     };
     return new Map(rowModel.rows.map(row => [row.id, renderRow(row)]));
   }, [rowModel, commentsById, issueId, issueTitle, currentUserId, currentMemberId, canModerateComments, replica, getActorName, taskAgents, resultsById, onShowKeyResults, responseTurns, resolved.expanded, resolved.toggle, resolved.clear, run, update, remove, resolve, reaction, t]);
