@@ -58,6 +58,10 @@ HTTP 的创建人来自凭据；Agent 创建新根可继承其真实来源 Issue
 Agent 提交及验收只能来自其责任 Issue 的主会话，继承旁支和 Chat 不具备正式交付权限。
 交付固定原 Task 会话；取消或归档后不能用 pending 交付重新关单，需先恢复开放状态。
 重复相同验收幂等；相反动作、已被新交付替代或责任移交后的旧交付被拒绝。
+晚到结果仍保存原子单交付；已关闭或归档的父单仅接收可追溯的
+`issue_delivery_review_unavailable` activity，不创建新通知或唤醒轮。交付返回当前
+`reviewUnavailableReason`（`review_issue_closed`／`review_issue_archived`），pending 交付在父单
+恢复前不能验收或退回；已 settled 收据保持原事实，重复验收仍幂等。
 
 顶层指定人类可授权当前执行负责人代理验收，授权仅绑定当前 pending 交付和责任 revision。
 授权/撤销均留审计；普通 parent-done-grant 不提供交付授权。代理验收保留原人类责任，

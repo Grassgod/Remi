@@ -36,11 +36,24 @@ function deliveryFromRow(row: Record<string, unknown>): IssueDelivery {
   return {...metadata.issue_delivery as IssueDelivery,id:String(row.id),createdAt:String(row.created_at)};
 }
 
+function reviewUnavailableReason(ctx: StoreContext, issueId: string): IssueDelivery['reviewUnavailableReason'] {
+  const issue = ctx.issues().getIssue(issueId);
+  const parent = issue?.parentIssueId ? ctx.issues().getIssue(issue.parentIssueId) : null;
+  if (parent?.archivedAt) return 'review_issue_archived';
+  if (parent && ['done','cancelled'].includes(parent.status)) return 'review_issue_closed';
+  return undefined;
+}
+
+function withReviewAvailability(delivery: IssueDelivery, reason: IssueDelivery['reviewUnavailableReason']): IssueDelivery {
+  const {reviewUnavailableReason: _previous, ...persisted} = delivery;
+  return reason ? {...persisted,reviewUnavailableReason:reason} : persisted;
+}
+
 function getIssueDelivery(ctx: StoreContext, issueId: string, deliveryId: string): IssueDelivery | null {
   const row = ctx.db.query(`SELECT m.id,m.created_at,m.metadata FROM multiremi_conversation_log m
     JOIN multiremi_issue_sessions s ON s.id=m.session_id WHERE m.id=? AND s.issue_id=? AND m.kind='message'
     AND m.message_kind='report' AND m.deleted_at IS NULL AND ${deliveryIssueSql(ctx)}=?`).get(deliveryId,issueId,issueId);
-  return row ? deliveryFromRow(row) : null;
+  return row ? withReviewAvailability(deliveryFromRow(row),reviewUnavailableReason(ctx,issueId)) : null;
 }
 
 export function listIssueDeliveries(ctx: StoreContext, issueId: string, input: ListIssueDeliveriesInput = {}): IssueDelivery[] {
@@ -52,7 +65,8 @@ export function listIssueDeliveries(ctx: StoreContext, issueId: string, input: L
     WHERE s.issue_id=? AND m.kind='message' AND m.message_kind='report' AND m.deleted_at IS NULL AND ${deliveryIssueSql(ctx)}=?
     ${cursor ? 'AND (m.created_at,m.seq,m.id) < (?,?,?)' : ''} ORDER BY m.created_at DESC,m.seq DESC,m.id DESC LIMIT ?`)
     .all(issueId,issueId,...(cursor ? [cursor.created_at,cursor.seq,cursor.id] : []),limit);
-  return rows.map(deliveryFromRow);
+  const unavailable = reviewUnavailableReason(ctx,issueId);
+  return rows.map(row => withReviewAvailability(deliveryFromRow(row),unavailable));
 }
 
 export function assertIssueDeliveryAccepted(ctx: StoreContext, issueId: string, deliveryId?: string): void {
@@ -108,17 +122,22 @@ export function submitIssueDelivery(ctx: StoreContext, issueId: string, input: S
       source_turn_id:sourceTurn ? String(sourceTurn.id) : undefined,execution_scope:sourceTurn ? String(sourceTurn.execution_scope) : undefined,
       dedupe_key:input.dedupeKey ? `issue_delivery:${input.dedupeKey}` : undefined,metadata:{issue_delivery:delivery}},events).message;
     if (!message.metadata.issue_delivery) throw new IssueDeliveryError('issue_delivery_dedupe_conflict', 'Delivery key belongs to another message');
-    const stored = {...message.metadata.issue_delivery as IssueDelivery,id:message.id,createdAt:message.created_at};
+    const unavailable = reviewUnavailableReason(ctx,issueId);
+    const stored = withReviewAvailability({...message.metadata.issue_delivery as IssueDelivery,id:message.id,createdAt:message.created_at},unavailable);
     if (message.id === id) {
       outcome = ctx.issues().updateIssueWithinTransaction(issueId,{status:'in_review',actorType:actor.type,actorId:actor.id}, {}, changes, events);
       events.workspace.push({type:'issue:updated',workspaceId:issue.workspaceId,actorType:actor.type,actorId:actor.id,
         payload:{issue:outcome.issue,status_changed:outcome.previous.status !== outcome.issue.status,prev_status:outcome.previous.status}});
       ctx.appendIssueActivity(issueId,{actorType:actor.type,actorId:actor.id,type:'issue_delivery_submitted',body:summary,data:{deliveryId:message.id,reviewOwner:responsibility.reviewOwner}},events);
       if (issue.parentIssueId && responsibility.reviewOwner.type === 'agent') {
-        const parentSession = ctx.issueSessions().getOrCreateDefaultIssueSessionWithinTransaction(issue.parentIssueId);
-        sendMessageWithinTransaction(ctx,{session_id:parentSession.id,sender:{type:'platform',id:null},to:{type:'agent',ref:responsibility.reviewOwner.id},
-          message_kind:'report',wake_requested:'now',body_md:`${issue.key} delivered for acceptance. Read delivery ${message.id}.`,
-          dedupe_key:`issue_delivery_notice:${message.id}`,metadata:{issue_delivery_id:message.id,source_issue_id:issue.id}},events);
+        if (unavailable) ctx.appendIssueActivity(issue.parentIssueId,{actorType:actor.type,actorId:actor.id,type:'issue_delivery_review_unavailable',
+          body:`${issue.key} delivered after its parent became unavailable for review`,data:{childIssueId:issue.id,deliveryId:message.id,reason:unavailable}},events);
+        else {
+          const parentSession = ctx.issueSessions().getOrCreateDefaultIssueSessionWithinTransaction(issue.parentIssueId);
+          sendMessageWithinTransaction(ctx,{session_id:parentSession.id,sender:{type:'platform',id:null},to:{type:'agent',ref:responsibility.reviewOwner.id},
+            message_kind:'report',wake_requested:'now',body_md:`${issue.key} delivered for acceptance. Read delivery ${message.id}.`,
+            dedupe_key:`issue_delivery_notice:${message.id}`,metadata:{issue_delivery_id:message.id,source_issue_id:issue.id}},events);
+        }
       }
     }
     return stored;
@@ -156,6 +175,7 @@ export function respondIssueDelivery(ctx: StoreContext, issueId: string, deliver
       if (delivery.status === (input.action === 'accept' ? 'accepted' : 'returned')) return delivery;
       throw new IssueDeliveryError('issue_delivery_already_responded','This delivery already has a response');
     }
+    if (delivery.reviewUnavailableReason) throw new IssueDeliveryError('issue_delivery_reviewer_unavailable','Reopen the parent Issue before reviewing this pending delivery');
     if (['done','cancelled'].includes(issue.status) || issue.archivedAt) throw new IssueDeliveryError('issue_delivery_closed','Reopen the Issue before responding to a pending delivery');
     if (listIssueDeliveries(ctx,issueId,{limit:1})[0]?.id !== deliveryId) throw new IssueDeliveryError('issue_delivery_superseded','Only the latest delivery can be accepted or returned');
     if (input.action === 'accept' && ctx.issues().countOpenChildIssues(issueId)) throw new IssueDeliveryError('issue_delivery_children_open','Finish or cancel child issues before acceptance');

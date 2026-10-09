@@ -106,6 +106,42 @@ for (const backend of ['sqlite','postgres'] as const) describe.skipIf(backend ==
     store.updateIssue(f.root.id,{status:'todo'});
     expect(() => store.updateIssue(f.root.id,{status:'done',actorType:'member',actorId:f.human.id})).toThrow('specific delivery');
   }));
+  for (const parentState of ['done','cancelled','archived'] as const) it(`persists a late formal delivery without waking its ${parentState} parent`, () => run((store,db) => {
+    const f = fixture(store);
+    store.updateIssue(f.child.id,{status:'cancelled'});
+    const rootDelivery = store.submitIssueDelivery(f.root.id,{summary:'Original settled root result'},f.ownerActor);
+    const rootReceipt = store.respondIssueDelivery(f.root.id,rootDelivery.id,{action:'accept',revision:rootDelivery.responsibilityRevision},{type:'member',id:f.human.id});
+    if (parentState === 'cancelled') store.updateIssue(f.root.id,{status:'cancelled'});
+    if (parentState === 'archived') store.archiveEligibleIssues(new Date(Date.now()+8*24*60*60*1000));
+    const lateChild = store.createIssue({title:'Late child',parentIssueId:f.root.id,assigneeType:'agent',assigneeId:f.worker.id});
+    const task = store.createTask({agentId:f.worker.id,issueId:lateChild.id,prompt:'Persist the late result'});
+    const parentSession = store.getOrCreateDefaultIssueSession(f.root.id);
+    const countParentTurns = () => Number(db.query('SELECT COUNT(*) AS total FROM multiremi_turns WHERE issue_id=?').get(f.root.id)?.total);
+    const turnsBefore = countParentTurns();
+    const messagesBefore = store.listMessages(parentSession.id).map(message=>message.id);
+    const delivery = store.submitIssueDelivery(lateChild.id,{summary:'Late verified result'},{type:'agent',id:f.worker.id,taskId:task.id});
+    const reason = parentState === 'archived' ? 'review_issue_archived' : 'review_issue_closed';
+    expect(delivery.reviewUnavailableReason).toBe(reason);
+    expect(delivery.sourceSessionId).toBe(task.issueSessionId!);
+    expect(store.listIssueDeliveries(lateChild.id)[0]).toEqual(delivery);
+    expect(store.getIssue(lateChild.id)?.status).toBe('in_review');
+    expect(store.getIssue(f.root.id)?.status).toBe(parentState === 'cancelled' ? 'cancelled' : 'done');
+    expect(store.listIssueDeliveries(f.root.id)[0]?.status).toBe('accepted');
+    expect(store.listIssueDeliveries(f.root.id)[0]?.responseMessageId).toBe(rootReceipt.responseMessageId);
+    expect(countParentTurns()).toBe(turnsBefore);
+    expect(store.listMessages(parentSession.id).map(message=>message.id)).toEqual(messagesBefore);
+    const activity = store.listIssueActivity(f.root.id).filter(entry=>entry.type==='issue_delivery_review_unavailable');
+    expect(activity).toHaveLength(1);
+    expect(activity[0]?.data).toMatchObject({childIssueId:lateChild.id,deliveryId:delivery.id,reason});
+    expect(()=>store.respondIssueDelivery(lateChild.id,delivery.id,{action:'accept',revision:delivery.responsibilityRevision},f.ownerActor)).toThrow('Reopen the parent');
+    expect(()=>store.respondIssueDelivery(lateChild.id,delivery.id,{action:'return',body:'Review later',revision:delivery.responsibilityRevision},f.ownerActor)).toThrow('Reopen the parent');
+    expect(store.listIssueDeliveries(lateChild.id)[0]?.responseMessageId).toBeNull();
+    if (parentState !== 'archived') {
+      store.updateIssue(f.root.id,{status:'in_progress'});
+      expect(store.listIssueDeliveries(lateChild.id)[0]?.reviewUnavailableReason).toBeUndefined();
+      expect(store.respondIssueDelivery(lateChild.id,delivery.id,{action:'accept',revision:delivery.responsibilityRevision},f.ownerActor).status).toBe('accepted');
+    }
+  }));
   it('returns with a referenced reason, keeps the Issue open, and makes an old responsibility revision ineffective', () => run((store) => {
     const f = fixture(store);
     const delivery = store.submitIssueDelivery(f.child.id,{summary:'First delivery'},f.workerActor);

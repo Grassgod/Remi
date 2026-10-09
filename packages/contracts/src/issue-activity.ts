@@ -15,6 +15,7 @@ export const ISSUE_SYSTEM_ACTIVITY_TYPES = [
   "issue_metadata_updated",
   "delegation_return_triggered", "delegation_return_skipped", "child_done_parent_triggered",
   "child_status_parent_coalesced", "child_status_after_parent_closed", "child_done_parent_skipped",
+  "issue_delivery_review_unavailable",
   "decision_received", "decision_escalated", "decision_reminder", "decision_card_skipped",
   "decision_card_queued", "decision_card_reminder", "decision_card_degraded",
   "dependency_auto_started", "dependency_gate_exempted", "dependency_satisfied",

@@ -32,6 +32,8 @@ export interface IssueDelivery {
   status: 'pending' | 'accepted' | 'returned';
   submittedBy: IssueResponsibleActor;
   reviewOwner: IssueResponsibleActor;
+  /** Current parent review availability; the persisted delivery and any settled receipt remain intact. */
+  reviewUnavailableReason?: 'review_issue_closed' | 'review_issue_archived';
   responsibilityRevision: string;
   responseMessageId: string | null;
   responseBody: string | null;
