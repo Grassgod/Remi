@@ -292,17 +292,42 @@ describe("Multiremi multi-user auth", () => {
     });
     expect(store.listAgents().filter((agent) => agent.workspaceId === "local")).toEqual([]);
 
-    const issue = createResponsibleTestIssue(store, { title: "B member assignment", workspaceId: workspace.id });
+    const createdIssue = await app.request("/api/multiremi/issues", {
+      method: "POST", headers: jsonAuth(b.token),
+      body: JSON.stringify({ title: "B responsible Issue" }),
+    });
+    expect(createdIssue.status).toBe(201);
+    const { issue } = await createdIssue.json();
+    const member = store.findWorkspaceMemberForUser(b.userId, workspace.id)!;
+    expect(issue).toMatchObject({ workspaceId: workspace.id, createdBy: b.userId,
+      responsibleMemberId: member.id });
     const assigned = await app.request(`/api/multiremi/issues/${issue.id}/assign`, {
       method: "POST",
       headers: jsonAuth(b.token),
-      body: JSON.stringify({ assigneeType: "member", assigneeId: b.userId }),
+      body: JSON.stringify({ assigneeType: "agent", assigneeId: createdAgentBody.id }),
     });
     expect(assigned.status).toBe(200);
     expect((await assigned.json()).issue).toMatchObject({
-      assigneeType: "member",
-      assigneeId: `mem_${workspace.id}_${b.userId}`,
+      workspaceId: workspace.id, responsibleMemberId: member.id,
+      assigneeType: "agent", assigneeId: createdAgentBody.id,
     });
+    const tasksBeforeRejectedAssignment = store.listTasksForIssue(issue.id).map(task => ({ id: task.id, status: task.status }));
+    const memberExecution = await app.request(`/api/multiremi/issues/${issue.id}/assign`, {
+      method: "POST", headers: jsonAuth(b.token),
+      body: JSON.stringify({ assigneeType: "member", assigneeId: b.userId }),
+    });
+    expect(memberExecution.status).toBe(409);
+    expect(await memberExecution.json()).toMatchObject({ code: "issue_execution_owner_required" });
+    expect(store.getIssue(issue.id)).toMatchObject({ assigneeType: "agent",
+      assigneeId: createdAgentBody.id, responsibleMemberId: member.id });
+    const compatMemberExecution = await app.request(`/api/issues/${issue.id}`, {
+      method: "PATCH", headers: jsonAuth(b.token),
+      body: JSON.stringify({ assignee_type: "member", assignee_id: member.id }),
+    });
+    expect(compatMemberExecution.status).toBe(409);
+    expect(await compatMemberExecution.json()).toMatchObject({ code: "issue_execution_owner_required" });
+    expect(store.listTasksForIssue(issue.id).map(task => ({ id: task.id, status: task.status })))
+      .toEqual(tasksBeforeRejectedAssignment);
     const missingMember = await app.request(`/api/multiremi/issues/${issue.id}/assign`, {
       method: "POST",
       headers: jsonAuth(b.token),

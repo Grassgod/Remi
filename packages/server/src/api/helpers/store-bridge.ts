@@ -594,10 +594,11 @@ export function safeAssignIssue(
   store: MultiremiStore,
   issueId: string,
   input: AssignIssueInput,
-): ReturnType<MultiremiStore["assignIssue"]> | { error: string; status: 400 | 404 | 409; code?: string } {
+): ReturnType<MultiremiStore["assignIssue"]> | { error: string; status: 400 | 403 | 404 | 409; code?: string } {
   try {
     return store.assignIssue(issueId, input);
   } catch (error) {
+    if (error instanceof IssueDeliveryError) return { error: error.message, status: error.status, code: error.code };
     if (error instanceof IssueLockSetStaleError) return { error: error.message, status: 409, code: error.code };
     const message = error instanceof Error ? error.message : String(error);
     if (message.startsWith("Issue not found:")) return { error: "issue not found", status: 404 };
