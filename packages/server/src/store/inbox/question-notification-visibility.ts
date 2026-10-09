@@ -80,7 +80,9 @@ export function questionNotificationVisibilitySql(db: Pick<SqlDatabase, 'dialect
       WHERE admin.workspace_id=${workspace} AND admin.archived_at IS NULL AND admin.role IN ('owner','admin')
       AND (admin.user_id=? OR admin.id=?)))`;
   }
-  const where = `(NOT COALESCE(${notification},FALSE) OR EXISTS (
+  // CASE keeps the correlated Q lookup out of ordinary-message reads. An OR
+  // lets PostgreSQL plan/evaluate that lookup before the notification flag.
+  const where = `(CASE WHEN COALESCE(${notification},FALSE) THEN EXISTS (
     SELECT 1 FROM multiremi_conversation_log q
     JOIN multiremi_conversation_heads qh ON qh.session_id=q.session_id
     JOIN multiremi_workspace_members human ON human.id=${rootText('handler.id')}
@@ -92,6 +94,6 @@ export function questionNotificationVisibilitySql(db: Pick<SqlDatabase, 'dialect
       AND (${text('q', 'question.source_issue_id')} IS NULL OR source.workspace_id=${workspace})
       AND ${rootText('stage')}='human' AND ${rootText('handler.type')}='member'
       AND CAST(${text('q', 'question.route_revision')} AS TEXT)=CAST(${text(alias, 'question_route_revision')} AS TEXT)
-      AND ${actor}))`;
+      AND ${actor}) ELSE TRUE END)`;
   return { where, params };
 }

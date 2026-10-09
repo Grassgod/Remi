@@ -58,9 +58,10 @@ summary: 当前性能相关实现、必须保留的语义，以及复用现有�
 
 ## 收件箱已具备的加载边界
 
-- [InboxPage](../../frontend/packages/views/inbox/components/inbox-page.tsx) 通过 [inboxPageOptions](../../frontend/packages/core/inbox/queries.ts) 每页读取 50 条；[listInboxItemsPage](../../packages/server/src/store/repos/issues-repo.ts) 按 `created_at DESC, id DESC` 使用游标，SQL 读取 `limit + 1` 判断后续页，服务端上限 100。`hydrateInboxRows` 已按最多 400 个 issue ID 批量补全关联对象，不能再将收件箱描述为逐行 `getIssue`。
-- 侧栏和页内计数复用 `/api/inbox/summary`，摘要不返回正文、不补全 Issue。普通通知按 selection key 取最新行并聚合；成功自动运行在 SQL 中提取字符串 `autopilot_id`，按用户时区的 today/yesterday/this_week/earlier 桶去重并统计未读。PG 对普通 JSON 走安全校验后的字段提取；NUL/孤立代理项等不能解码成 PG text 的合法 JSON 走词法提取，仅将最后一个顶层字符串字段规范成 UTF-16 分组键，保持 JS JSON.parse 的重复键与转义语义。SQLite 保留 json_each 最后键语义；非法 JSON/缺失或非字符串字段按独立行计数。两个聚合各只返回一行，`details` 和逐 run 行均不跨桥；SQL 扫描工作仍随未归档记录数增长。旧 `/api/inbox` 全量接口仍存在，页面已使用分页入口。
-- 测量时分别记录首屏、摘要、追加页、定位较后页通知，以及 mutation/WS 失效后的刷新。来源筛选和展示折叠仅处理已加载项；URL 定位可能连续读取多页，不能把 50 条默认页大小当作每次页面交互的总工作量。当前没有这些场景的延迟或内存基线。
+- [InboxPage](../../frontend/packages/views/inbox/components/inbox-page.tsx)通过统一 `/api/inbox` 读取消息页、`unread_count`、`attention_count` 和 `next_cursor`；HTTP 每页默认 100、最多 500 条。计数覆盖当前读者游标之后的所有可见消息，正文只读取当前页。旧通知 selection/timezone 折叠不参与这两个计数。
+- [listReaderMessageInbox](../../packages/server/src/store/inbox/operations.ts)在 SQL 中应用工作区、会话、私有来源及 Question 通知权限，再聚合计数和按 `created_at DESC, id DESC` 分页。定点通知的授权不会扩大其原私聊或执行轨迹的读取权；关联答复与编辑记录继承同一限制，不能在分页之后才去掉隐藏消息。
+- [Question 通知过滤](../../packages/server/src/store/inbox/question-notification-visibility.ts)用 `CASE` 仅为处理/呈现通知执行关联原 Q 的查询。普通消息跳过该分支，保留 PostgreSQL 对原题、当前路由和实际通知执行范围的校验。功能、查询数及过桥字节边界由 [首屏回归](../../tests/unit/multiremi/first-screen-hotspots-inbox-attachments.test.ts)和 [通知权限回归](../../tests/unit/multiremi/question-notification-access.test.ts)检查；单次诊断耗时不作为生产延迟基线。
+- 测量时分别记录首屏、追加页、较后页原问题定位、已读写入及 mutation/WS 失效后的刷新；默认页大小不代表一次页面交互的总读取量。
 
 ## 请求级观测：Server-Timing 与两类日志（MUL-367）
 
