@@ -7,6 +7,7 @@ import { AppLink } from "../navigation";
 import { useWorkspacePaths } from "@multiremi/core/paths";
 import { useT } from "../i18n";
 import { UnifiedQuestionCard } from "./question-card";
+import { questionLocation } from "./question-location";
 
 export function linkedQuestionId(id: string, metadata: Record<string, unknown> | undefined): string | null {
   if (typeof metadata?.root_question_id === "string" && (metadata.question_notification === true || metadata.question_present_request === true)) return metadata.root_question_id;
@@ -18,7 +19,7 @@ export function QuestionReplyReference({ metadata }: { metadata: Record<string, 
   const paths = useWorkspacePaths();
   const { t } = useT("issues");
   const id = typeof metadata?.root_question_id === "string" ? metadata.root_question_id : null;
-  return id ? <AppLink href={paths.inboxItem(id)} className="text-xs text-muted-foreground">{t($ => $.responsibility.source)}</AppLink> : null;
+  return id ? <AppLink href={questionLocation(paths.inboxItem, id)} className="text-xs text-muted-foreground">{t($ => $.responsibility.source)}</AppLink> : null;
 }
 
 export function LinkedQuestion({ id, getActorName }: { id: string; getActorName?: (type: string, id: string) => string }) {

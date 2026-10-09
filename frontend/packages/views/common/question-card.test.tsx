@@ -19,6 +19,15 @@ function mount(question = base) {
 }
 beforeEach(() => { mocks.actOnQuestion.mockReset(); mocks.actOnQuestion.mockResolvedValue(base); mocks.getTask.mockReset(); });
 describe("one Q on every surface", () => {
+  it("shows ordinary historical source delivery and its actual surface without claiming native consumption", () => {
+    mount({ ...base, status: "answered", wait_status: "none", actions: { allowed: [] }, history: [{ type: "notify", actor: { type: "member", id: "human" }, at: "now", route_revision: 7, reason: "historical_source_dispatch_failed:runtime_workspace_error", source_message_id: "readable-source-result", source_session_id: "source-session" }] });
+    fireEvent.click(screen.getByRole("button", { name: /Transfer and answer history/ }));
+    expect(screen.getByText(/Result delivery to original source/)).toBeInTheDocument();
+    expect(screen.getByText("historical_source_dispatch_failed:runtime_workspace_error")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Source · readable-source-result" })).toHaveAttribute("href", "/ws/inbox?item=q1&question=q1&question_source=readable-source-result");
+    expect(screen.getByText("Historical question; no original waiting call")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Confirmed consumption attempt/ })).toBeNull();
+  });
   it("retains original permission background separately from Remi advice", () => {
     mount({ ...base, kind: "permission", original_context: { text: "The exact operation requiring authorization", truncated: true } });
     expect(screen.getByText("The exact operation requiring authorization")).toBeInTheDocument();
@@ -28,7 +37,7 @@ describe("one Q on every surface", () => {
   it("links a transfer notification in its receiving session instead of the child issue timeline", () => {
     mount({ ...base, history: [{ type: "transfer", actor: null, at: "now", route_revision: 7, source_message_id: "parent-notification", source_session_id: "parent-session" }] });
     fireEvent.click(screen.getByRole("button", { name: /Transfer and answer history/ }));
-    expect(screen.getAllByRole("link", { name: "Source" }).at(-1)).toHaveAttribute("href", "/ws/inbox?item=parent-notification");
+    expect(screen.getByRole("link", { name: "Source · parent-notification" })).toHaveAttribute("href", "/ws/inbox?item=q1&question=q1&question_source=parent-notification");
   });
   it("reads only the confirmed consumer attempt lazily and opens its actual execution", async () => {
     mocks.getTask.mockResolvedValue({ id: "consumer-attempt", turn_id: "consumer-turn", agent_id: "worker" });
@@ -74,7 +83,7 @@ describe("one Q on every surface", () => {
     expect(screen.getByText("Waiting for parent issue coordinator")).toBeInTheDocument();
     expect(screen.getByText("Original exact question?")).toBeInTheDocument();
     expect(screen.getByText("Separate Remi recommendation")).toBeInTheDocument();
-    expect(screen.getByRole("link")).toHaveAttribute("href", "/ws/issues/child?comment=q1");
+    expect(screen.getByRole("link")).toHaveAttribute("href", "/ws/inbox?item=q1&question=q1");
     fireEvent.click(screen.getByRole("button", { name: "Approve" }));
     fireEvent.click(screen.getByRole("button", { name: "Answer" }));
     await waitFor(() => expect(mocks.actOnQuestion).toHaveBeenCalledWith("q1", "answer", expect.objectContaining({ expected_route_revision: 7, response: { selected_options: ["approve"] } })));

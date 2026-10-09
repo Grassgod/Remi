@@ -3,12 +3,13 @@ import { fireEvent, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { renderWithI18n } from "../../test/i18n";
 import { messageFixture } from "../../test/messages";
-const mock = vi.hoisted(() => ({ ws: "ws-1", mobile: false, searchParams: new URLSearchParams(), getMessage: vi.fn(), listInboxPage: vi.fn(), markInboxRead: vi.fn(), markAllInboxRead: vi.fn() }));
+const mock = vi.hoisted(() => ({ ws: "ws-1", mobile: false, searchParams: new URLSearchParams(), getQuestion: vi.fn(), getMessage: vi.fn(), listInboxPage: vi.fn(), markInboxRead: vi.fn(), markAllInboxRead: vi.fn() }));
 vi.mock("@multiremi/core/api", () => ({ api: mock }));
 vi.mock("@multiremi/core/hooks", () => ({ useWorkspaceId: () => mock.ws }));
 vi.mock("@multiremi/core/workspace/hooks", () => ({ useActorName: () => ({ getActorName: (_type: string, id: string) => id }) }));
 vi.mock("@multiremi/ui/hooks/use-mobile", () => ({ useIsMobile: () => mock.mobile }));
-vi.mock("../../navigation", () => ({ useNavigation: () => ({ pathname: "/inbox", searchParams: mock.searchParams, replace: vi.fn() }) }));
+vi.mock("../../navigation", () => ({ useNavigation: () => ({ pathname: "/inbox", searchParams: mock.searchParams, replace: vi.fn() }), AppLink: (props: { href: string; children: React.ReactNode }) => <a {...props} /> }));
+vi.mock("@multiremi/core/paths", () => ({ useWorkspacePaths: () => ({ inboxItem: (id: string) => `/ws/inbox?item=${id}`, issueDetail: (id: string) => `/ws/issues/${id}` }) }));
 vi.mock("../../common/use-list-perf-marker", () => ({ useListPerfMarker: () => null }));
 vi.mock("../../common/markdown", () => ({ Markdown: ({ children }: { children: string }) => <div>{children}</div> }));
 vi.mock("@multiremi/ui/components/ui/resizable", () => ({ ResizablePanelGroup: ({ children }: { children: React.ReactNode }) => <div>{children}</div>, ResizablePanel: ({ children }: { children: React.ReactNode }) => <div>{children}</div>, ResizableHandle: () => null }));
@@ -18,6 +19,30 @@ const page = { items: [messageFixture()], unread_count: 200, attention_count: 3,
 const mount = (qc = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })) => renderWithI18n(<QueryClientProvider client={qc}><InboxPage /></QueryClientProvider>);
 beforeEach(() => { vi.clearAllMocks(); mock.ws = "ws-1"; mock.mobile = false; mock.searchParams = new URLSearchParams(); mock.getMessage.mockResolvedValue(messageFixture()); mock.listInboxPage.mockResolvedValue(page); mock.markInboxRead.mockResolvedValue({ session_id: "sess_1", cursor_seq: 8 }); mock.markAllInboxRead.mockResolvedValue({ conversations_read: 12 }); });
 describe("cursor inbox", () => {
+  it("opens a private source Q using its dedicated API without reading the source message or marking its lane read", async () => {
+    mock.searchParams = new URLSearchParams("item=q-private&question=q-private&question_source=result-private");
+    mock.getMessage.mockRejectedValue(new Error("Raw private source forbidden"));
+    mock.getQuestion.mockResolvedValue({ id: "q-private", kind: "question", workspace_id: "ws-1", session_id: "private-session", source_issue_id: "private-child", source_agent_id: "worker", source_turn_id: null, source_attempt_id: null,
+      original_questions: [], original_message: "Private original question", original_context: { text: "Original context" }, options: null, summary: { body_md: "Separate Remi summary", agent_id: "remi", at: "now" },
+      current_handler: { type: "member", id: "designated-human" }, stage: "human", route_revision: 2, answer_revision: 1, status: "answered", wait_status: "none", wait_reason: null, answer: null,
+      history: [{ type: "notify", at: "now", actor: null, route_revision: 2, reason: "historical_source_notified", source_message_id: "result-private", source_session_id: "source-private" }], actions: { allowed: [] } });
+    mount();
+    expect(await screen.findByText("Private original question")).toBeInTheDocument();
+    expect(screen.getByText("Separate Remi summary")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Source · result-private" })).toHaveAttribute("href", "/ws/inbox?item=q-private&question=q-private&question_source=result-private");
+    expect(mock.getQuestion).toHaveBeenCalledWith("q-private");
+    expect(mock.getMessage).not.toHaveBeenCalled();
+    expect(mock.markInboxRead).not.toHaveBeenCalled();
+    expect(screen.queryByRole("button", { name: /Read through/ })).toBeNull();
+  });
+  it.each(["question_not_found", "question_access_denied"])("shows dedicated Q access failure %s without falling back to private message reads", async reason => {
+    mock.searchParams = new URLSearchParams("item=q-private&question=q-private");
+    mock.getQuestion.mockRejectedValue(new Error(reason));
+    mount();
+    expect(await screen.findByRole("alert")).toHaveTextContent(reason);
+    expect(mock.getMessage).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "Reload" })).toBeInTheDocument();
+  });
   for (const alreadyRead of [true, false]) {
     it(`refreshes an external answer while ${alreadyRead ? "opening an already-read deep link" : "remaining in detail after marking read"}`, async () => {
       const pending = messageFixture({ message_kind: "decision", options: [{ label: "Approve", value: "yes" }] });

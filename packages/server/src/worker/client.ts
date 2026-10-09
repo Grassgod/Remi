@@ -673,11 +673,11 @@ export class MultiremiDaemonClient {
    */
   answerFeishuIssueDecision(
     decisionId: string,
-    input: { answer: string; operatorOpenId: string; token?: string },
+    input: { answer: string; operatorOpenId: string; token?: string; routeRevision?: number },
   ): Promise<MultiremiIssueDecision> {
     return this.post<{ decision: MultiremiIssueDecision }>(
       `/api/daemon/messages/${encodeURIComponent(decisionId)}/answer`,
-      { answer: input.answer, operator_open_id: input.operatorOpenId, token: input.token },
+      { answer: input.answer, operator_open_id: input.operatorOpenId, token: input.token, expected_route_revision: input.routeRevision },
     ).then(resp => resp.decision);
   }
 

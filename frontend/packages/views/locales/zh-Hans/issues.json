@@ -1,5 +1,6 @@
 {
   "responsibility": {
+    "source_notification": "向原来源回传结果",
     "continuation_source": "续接指令",
     "consumer_turn": "消费轮次",
     "consumer_attempt": "已确认消费的执行",

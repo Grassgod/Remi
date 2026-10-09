@@ -1,5 +1,6 @@
 {
   "responsibility": {
+    "source_notification": "원래 실행 주체로 결과 전달",
     "continuation_source": "계속 실행 지시",
     "consumer_turn": "소비 턴",
     "consumer_attempt": "소비가 확인된 실행",

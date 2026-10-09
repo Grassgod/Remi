@@ -22,14 +22,14 @@ function cleanup(...disposers: (() => void)[]): () => void {
 export function registerIssueDecisionCardFixture(entry: CardPatchMetadata & {
   chatId: string; recipientOpenId: string;
   getDecision: () => Promise<MultiremiIssueDecision | null>;
-  submit: (answer: string, operatorOpenId: string, token: string) => Promise<MultiremiIssueDecision>;
+  submit: (answer: string, operatorOpenId: string, token: string, routeRevision?: number) => Promise<MultiremiIssueDecision>;
 }) {
   const patch = registerIssueDecisionCardInteraction({ appId: entry.appId, messageId: entry.messageId,
     agentName: entry.agentName, sessionId: entry.sessionId });
   const stop = registerQuestionCardClient(entry.appId, {
     getRequest: async () => null, respond: async () => { throw new Error("not a task fixture"); },
     getDecision: entry.getDecision,
-    answer: (_decisionId, answer, credential) => entry.submit(answer, credential.operatorOpenId, credential.token),
+    answer: (_decisionId, answer, credential) => entry.submit(answer, credential.operatorOpenId, credential.token, credential.routeRevision),
   });
   return { dispose: cleanup(patch.dispose, stop) };
 }

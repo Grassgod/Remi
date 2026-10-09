@@ -10,6 +10,7 @@ import { assertQuestionCardToken, type QuestionCardCredential } from '../questio
 import { deriveIssueStatusWithinTransaction } from './issue-status.js';
 import { createHash } from 'node:crypto';
 import { questionMetadataText } from './question-indexes.js';
+import { RuntimeWorkspaceError } from '../repos/runtime-workspaces-repo.js';
 
 type RouteStep = { handler: QuestionActor; issue_id: string | null; stage: QuestionStage };
 export type ChatQuestionResponsibilityFilter = { transportOnly?: boolean; memberId?: string; agentId?: string };
@@ -159,7 +160,9 @@ export class Questions {
     if (legacy && message.sender_id === agentId) {
       const source = legacy.source_task_id ? this.ctx.tasks().getTask(legacy.source_task_id) : null;
       const session = source?.issueSessionId ? this.ctx.issueSessions().getIssueSession(source.issueSessionId) : null;
+      const attempt = source ? this.ctx.db.query('SELECT turn_id,status FROM multiremi_turn_attempts WHERE id=?').get(source.id) : null;
       return !!source && legacy.source_task_id === turn.current_attempt_id && message.task_id === turn.id
+        && attempt?.turn_id === turn.id && attempt.status === 'running'
         && legacy.source_issue_id === turn.issue_id && record.source_attempt_id === turn.current_attempt_id
         && source.issueSessionId === turn.session_id && !!session && session.issueId === turn.issue_id && session.workspaceId === record.workspace_id;
     }
@@ -221,6 +224,63 @@ export class Questions {
   }
   private event(record: QuestionRecord, type: QuestionHistoryEvent['type'], actor: QuestionActor | null, fields: Partial<QuestionHistoryEvent> = {}) {
     record.history.push({ type, at: nowIso(), actor, route_revision: record.route_revision, ...fields });
+  }
+  private historicalSource(message: UnifiedMessage, record: QuestionRecord) {
+    const legacy = message.metadata.decision_record as { source_task_id?: string; source_issue_id?: string } | undefined;
+    if (!legacy || message.metadata.human_request || record.wait.wait_id) return null;
+    const task = legacy.source_task_id ? this.ctx.tasks().getTask(legacy.source_task_id) : null;
+    const turn = task ? this.ctx.db.query('SELECT t.* FROM multiremi_turns t JOIN multiremi_turn_attempts a ON a.turn_id=t.id WHERE a.id=?').get(task.id) : null;
+    const session = task?.issueSessionId ? this.ctx.issueSessions().getIssueSession(task.issueSessionId) : null;
+    const agent = message.sender_id ? this.ctx.agents().getAgent(message.sender_id) : null;
+    const valid = !!task && !!turn && !!session && task.agentId === message.sender_id && turn.agent_id === message.sender_id
+      && task.workspaceId === record.workspace_id && turn.workspace_id === record.workspace_id && session.workspaceId === record.workspace_id
+      && task.issueId === legacy.source_issue_id && turn.issue_id === legacy.source_issue_id && session.issueId === legacy.source_issue_id
+      && message.task_id === turn.id && task.issueSessionId === turn.session_id && this.ctx.issues().getIssue(session.issueId)?.workspaceId === record.workspace_id;
+    const reason = !valid ? 'historical_source_facts_unavailable' : !agent || agent.archivedAt || agent.workspaceId !== record.workspace_id
+      ? 'historical_source_agent_unavailable' : session.status !== 'active' ? 'historical_source_session_unavailable' : null;
+    return { task, turn, session: valid ? session : null, agent, reason };
+  }
+  private mergeEvents(events: CommitEventQueue, staged: CommitEventQueue) {
+    events.workspace.push(...staged.workspace); events.issueActivities.push(...staged.issueActivities); events.enqueuedTasks.push(...staged.enqueuedTasks);
+  }
+  private sourceDispatchReason(error: unknown) {
+    return `historical_source_dispatch_failed:${error instanceof RuntimeWorkspaceError ? 'runtime_workspace_error' : error && typeof error === 'object' && 'code' in error && typeof error.code === 'string' ? error.code : 'dispatch_error'}`;
+  }
+  /** Ordinary collaboration delivery. It neither restores a callback nor records a consumer. */
+  private notifyHistoricalSource(message: UnifiedMessage, record: QuestionRecord, actor: QuestionActor, events: CommitEventQueue,
+    eventKey: string, body: string, sameSessionReply?: { id: string; failure: string | null }) {
+    const source = this.historicalSource(message, record);
+    if (!source) return;
+    let reason = source.reason, notificationId: string | undefined, notificationSession = source.session?.id;
+    if (sameSessionReply && source.session?.id === message.session_id) {
+      notificationId = sameSessionReply.id; notificationSession = message.session_id; reason = sameSessionReply.failure ?? reason;
+    } else if (!reason && source.session && source.agent && source.turn) {
+      const staged = createCommitEventQueue();
+      try {
+        const result = this.ctx.db.transaction(() => sendMessageWithinTransaction(this.ctx, { session_id: source.session!.id,
+          sender: { type: 'platform', id: null }, to: { type: 'agent', ref: source.agent!.id }, message_kind: 'request', wake_requested: 'now',
+          execution_scope: String(source.turn.execution_scope ?? ''), dedupe_key: `question-source-notification:${message.id}:${eventKey}`,
+          body_md: body, metadata: { root_question_id: message.id, question_source_notification: true, question_route_revision: record.route_revision,
+            original_source_turn_id: source.turn.id, source_question_session_id: message.session_id } }, staged))();
+        notificationId = result.message.id; notificationSession = result.message.session_id;
+        this.mergeEvents(events, staged);
+      } catch (error) { reason = this.sourceDispatchReason(error); }
+    }
+    if (reason && !notificationId) {
+      // Preserve a readable pending fact even if dispatch or its surface failed.
+      // The original Q stays in its frozen workspace; never leak into a moved lane.
+      const staged = createCommitEventQueue();
+      try {
+        const result = this.ctx.db.transaction(() => sendMessageWithinTransaction(this.ctx, { session_id: source.session?.status === 'active' ? source.session.id : message.session_id,
+          sender: { type: 'platform', id: null }, to: { type: 'none' }, message_kind: 'status', wake_requested: 'inbox_only',
+          dedupe_key: `question-source-unavailable:${message.id}:${eventKey}`, body_md: `${body}\n原来源尚未安排执行：${reason}。`,
+          metadata: { root_question_id: message.id, question_source_notification: true, question_source_notification_unavailable: reason } }, staged))();
+        notificationId = result.message.id; notificationSession = result.message.session_id;
+        this.mergeEvents(events, staged);
+      } catch { notificationId = message.id; notificationSession = message.session_id; }
+    }
+    this.event(record, 'notify', actor, { reason: reason ?? 'historical_source_notified', source_message_id: notificationId, source_session_id: notificationSession });
+    this.save(message, record, events, false);
   }
   private notify(message: UnifiedMessage, record: QuestionRecord, events: CommitEventQueue) {
     const step = record.route[record.route_index];
@@ -316,6 +376,7 @@ export class Questions {
   answer(id: string, input: QuestionAnswerInput, sender: SendMessageInput['sender'], sourceTurnId?: string, credential?: QuestionCardCredential) {
     return this.transaction(events => {
       const { message, record } = this.lock(id), actor = this.actor(record, sender, sourceTurnId, id, input.expected_route_revision);
+      if (credential) assertQuestionCardToken({ token_hash: message.card_token_hash, token_recipient: message.card_token_recipient, token_consumed_at: message.card_token_consumed_at, status: record.status }, credential, 'pending');
       const revise = input.revise === true;
       if (revise) {
         if (credential || actor.type !== 'member' || !same(record.route.find(r => r.stage === 'human')?.handler, actor) || record.status !== 'answered') throw new QuestionError(403, 'question_revision_human_required');
@@ -325,18 +386,29 @@ export class Questions {
         this.fresh(message, record);
       } else { this.current(message, record, actor, input.expected_route_revision); if (record.status !== 'pending') throw new QuestionError(409, 'question_already_settled'); }
       if (record.human_required && actor.type !== 'member') throw new QuestionError(403, 'question_human_authorization_required');
-      if (credential) assertQuestionCardToken({ token_hash: message.card_token_hash, token_recipient: message.card_token_recipient, token_consumed_at: message.card_token_consumed_at, status: record.status }, credential, 'pending');
       const request = this.ctx.tasks().getTaskHumanRequest(id);
       const response = request ? normalizeHumanResponse(request, input.response) : input.response;
       const text = input.body_md?.trim() || JSON.stringify(response);
       if (!text) throw new QuestionError(400, 'question_answer_required');
       record.wait = this.waiting(message, record);
       const live = !revise && record.wait.status === 'waiting';
-      const reply = sendMessageWithinTransaction(this.ctx, { session_id: message.session_id, sender,
+      const replyInput: SendMessageInput = { session_id: message.session_id, sender,
         to: live && message.sender_id ? { type: 'agent', ref: message.sender_id } : { type: 'none' },
         message_kind: revise ? 'status' : 'reply', wake_requested: live ? 'now' : 'inbox_only', reply_to_id: id,
         execution_scope: String(message.metadata.execution_scope ?? ''), body_md: request ? JSON.stringify(response) : text,
-        metadata: { root_question_id: id, human_response: response, question_revision: revise, question_route_revision: record.route_revision, answer_source_turn_id: sourceTurnId ?? null } }, events);
+        metadata: { root_question_id: id, human_response: response, question_revision: revise, question_route_revision: record.route_revision, answer_source_turn_id: sourceTurnId ?? null } };
+      const historical = this.historicalSource(message, record);
+      const historicalSameLane = historical?.session?.id === message.session_id
+        && String(historical.turn?.execution_scope ?? '') === String(message.metadata.execution_scope ?? '');
+      let reply: ReturnType<typeof sendMessageWithinTransaction>, sameSessionFailure: string | null = null;
+      if (!live && historicalSameLane && historical && !historical.reason && historical.agent && historical.turn) {
+        const staged = createCommitEventQueue();
+        try {
+          reply = this.ctx.db.transaction(() => sendMessageWithinTransaction(this.ctx, { ...replyInput, to: { type: 'agent', ref: historical.agent!.id },
+            wake_requested: 'now', execution_scope: String(historical.turn.execution_scope ?? '') }, staged))();
+          this.mergeEvents(events, staged);
+        } catch (error) { sameSessionFailure = this.sourceDispatchReason(error); reply = sendMessageWithinTransaction(this.ctx, replyInput, events); }
+      } else reply = sendMessageWithinTransaction(this.ctx, replyInput, events);
       record.answer = { response, body_md: text, actor, at: nowIso(), reply_message_id: reply.message.id };
       record.answer_revision++;
       record.status = 'answered';
@@ -351,7 +423,10 @@ export class Questions {
         const current = this.ctx.issues().getIssueDecisionAnywhere(id);
         if (current) this.ctx.feishuBot().enqueueIssueDecisionCardPatchWithinTransaction(current, events);
       }
-      if (revise && message.sender_id) sendMessageWithinTransaction(this.ctx, { session_id: message.session_id, sender, to: { type: 'agent', ref: message.sender_id }, message_kind: 'request', wake_requested: 'now',
+      if (historical) this.notifyHistoricalSource(message, record, actor, events, `${revise ? 'revise' : 'answer'}:${reply.message.id}`,
+        `问题 ${id} 的${revise ? '修订' : '答复'}已记录。原问题：\n${message.body_md}\n答复：\n${text}${input.reason ? `\n原因：${input.reason}` : ''}`,
+        historicalSameLane ? { id: reply.message.id, failure: sameSessionFailure } : undefined);
+      if (revise && message.sender_id && !historical) sendMessageWithinTransaction(this.ctx, { session_id: message.session_id, sender, to: { type: 'agent', ref: message.sender_id }, message_kind: 'request', wake_requested: 'now',
         execution_scope: String(message.metadata.execution_scope ?? ''), body_md: `人类修订了问题 ${id} 的答案：${text}\n原因：${input.reason}。这是补充指令，不是重放原 AUQ。`, metadata: { root_question_id: id, question_answer_revision: true }, dedupe_key: `question-revision:${id}:${reply.message.id}` }, events);
       if (!revise && record.wait.status === 'detached' && !/cancelled|explicit_stop/.test(record.wait.reason ?? '')) this.scheduleContinuation(message, record, actor, events);
       // The workspace/row locks still protect the just-written record. Reuse
@@ -395,7 +470,8 @@ export class Questions {
       if (record.status !== 'pending' || !input.reason?.trim()) throw new QuestionError(400, 'question_close_reason_required');
       this.fresh(message, record);
       const waiting = this.waiting(message, record).status === 'waiting';
-      record.status = 'closed'; record.wait = { ...record.wait, status: 'detached', reason: 'explicit_stop' };
+      record.status = 'closed'; record.wait = { ...record.wait, status: message.metadata.decision_record && record.wait.status === 'none' ? 'none' : 'detached',
+        reason: message.metadata.decision_record && record.wait.status === 'none' ? 'historical_decision_without_native_call' : 'explicit_stop' };
       this.event(record, 'close', actor, { reason: input.reason }); this.save(message, record, events);
       this.ctx.db.run('UPDATE multiremi_conversation_log SET card_token_consumed_at=COALESCE(card_token_consumed_at,?) WHERE id=?', [nowIso(), id]);
       if (waiting && message.sender_id) sendMessageWithinTransaction(this.ctx, { session_id: message.session_id, sender: { type: 'platform', id: null }, to: { type: 'agent', ref: message.sender_id },
@@ -407,6 +483,7 @@ export class Questions {
         const current = this.ctx.issues().getIssueDecisionAnywhere(id);
         if (current) this.ctx.feishuBot().enqueueIssueDecisionCardPatchWithinTransaction(current, events);
       }
+      this.notifyHistoricalSource(message, record, actor, events, `close:${record.history.findLast(event => event.type === 'close')!.at}`, `问题 ${id} 已关闭。原因：${input.reason}`);
       return this.get(id, actor)!;
     });
   }

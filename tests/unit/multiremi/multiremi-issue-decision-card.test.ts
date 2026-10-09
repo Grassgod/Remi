@@ -27,8 +27,8 @@ import { MultiremiDaemonClient } from "@multiremi/worker/client.js";
 import { bootstrapPreUnifiedSchema } from "@multiremi/store/migrations.js";
 import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { restoreMul412Baseline828291b9Schema, tableColumns } from "./mul412-schema-fixture.js";
-import { inboxReportBody } from "./inbox-test-assertions.js";
 import { historicalWriters } from "./unified-model-test-backends.js";
+import { createCommitEventQueue, type StoreContext } from "@multiremi/store/context.js";
 
 pendingTurnBackendTests("MUL-508 Issue decision cards", (fixture) => {
 let db: UnifiedFixtureDatabase;
@@ -48,6 +48,7 @@ const DECISION_SIDE_EFFECT_TABLES = [
   "multiremi_conversation_log",
   "multiremi_session_lanes",
   "multiremi_feishu_bot_outbound_deliveries",
+  "multiremi_feishu_bot_outbound_operations",
   "multiremi_turns",
   "multiremi_turn_attempts",
   "multiremi_session_events",
@@ -120,20 +121,25 @@ function scaffold(options: {
   const store = createLocalStore();
   const member = store.findWorkspaceMemberForUser("local", "local")!;
   const user = store.getOrCreateUser({
-    externalId: CARD_OPEN_ID, name: "贺华杰", email: "hehuajie@example.com",
+    externalId: CARD_OPEN_ID, feishuUnionId: "on_card_person", name: "Synthetic card human", email: "card-human@example.com",
   });
   db!.run("UPDATE multiremi_workspace_members SET user_id = ? WHERE id = ?", [user.id, member.id]);
-  const agentId = store.createAgent({ name: "Concierge", provider: "codex", workspaceId: "local" }).id;
-  store.registerRuntime({ id: "rt_bot", name: "Bot host", provider: "codex", workspaceId: "local", daemonId: "bot-host" });
+  const parentRuntime = store.registerRuntime({ name: "Parent owner host", provider: "codex", workspaceId: "local", daemonId: "parent-owner-host" });
+  const agentId = store.createAgent({ name: "Concierge", provider: "codex", workspaceId: "local", runtimeId: parentRuntime.id }).id;
+  store.registerRuntime({ id: "rt_bot", name: "Bot host", provider: "codex", workspaceId: "local", daemonId: "bot-host", maxConcurrency: 16 });
+  const sourceId = store.createAgent({ name: "Historical source Remi", provider: "codex", workspaceId: "local", runtimeId: "rt_bot", maxConcurrentTasks: 16 }).id;
   store.heartbeatRuntime("rt_bot", {
     supportsFeishuBotConfig: true,
     ...(options.hostSupportsIssueDecisions === false ? {} : { supportsIssueDecisionCard: true }),
   });
   const config = store.upsertFeishuBotConfig("local", {
-    agentId, runtimeId: "rt_bot", appId: "cli_issue_decision", appSecretOp: "set",
+    agentId: sourceId, responsibleMemberId: member.id, runtimeId: "rt_bot", appId: "cli_issue_decision", appSecretOp: "set",
     appSecret: APP_SECRET, domain: "feishu", enabled: true,
   });
   store.reportFeishuBotRuntimeStatus("local", "rt_bot", { appliedRevision: config.revision, state: "online" });
+  const at = new Date().toISOString();
+  db!.run(`INSERT INTO multiremi_feishu_bot_senders (id,workspace_id,app_id,open_id,union_id,display_name,allowed,first_seen_at,last_seen_at)
+    VALUES ('card_person_sender','local','cli_issue_decision',?,'on_card_person','Synthetic card human',1,?,?)`, [CARD_OPEN_ID, at, at]);
   const workspace = store.getWorkspace("local")!;
   store.updateWorkspace("local", {
     settings: {
@@ -151,7 +157,7 @@ function scaffold(options: {
 /** An Issue whose topic root message has been sent, so replies have a seed. */
 function issueWithTopic(store: MultiremiStore, title = "Decision parent", assignee?: { type: "agent"; id: string }) {
   const issue = createResponsibleTestIssue(store, {
-    title, workspaceId: "local",
+    title, workspaceId: "local", responsibleMemberId: "mem_local_local",
     ...(assignee ? { assigneeType: assignee.type, assigneeId: assignee.id } : {}),
   });
   store.prepareFeishuIssueTopicWithinTransaction(issue);
@@ -164,17 +170,24 @@ function issueWithTopic(store: MultiremiStore, title = "Decision parent", assign
 
 /** A child Issue with a running task, which is what raises decisions. */
 function childWithTask(store: MultiremiStore, agentId: string, parentId: string) {
+  agentId = store.getFeishuBotConfig("local")!.agentId!;
   const child = createResponsibleTestIssue(store, {
     title: "Decision source", workspaceId: "local", parentIssueId: parentId,
     assigneeType: "agent", assigneeId: agentId,
   });
   const task = store.createTask({ agentId, issueId: child.id, workspaceId: "local", prompt: "Work" });
+  expect(store.claimTask("rt_bot")?.id).toBe(task.id); store.startTask(task.id);
   return { child, task };
 }
 
 /** The parent's owner-task round: escalating and agent-answering require it. */
 function parentTask(store: MultiremiStore, agentId: string, parentId: string) {
-  return store.createTask({ agentId, issueId: parentId, workspaceId: "local", prompt: "Own the parent" });
+  const runtime = store.registerRuntime({ name: "Historical parent host", provider: "codex", daemonId: "parent-host" });
+  store.updateAgent(agentId, { runtimeId: runtime.id });
+  const pending = store.listTasksForIssue(parentId).find(task => task.agentId === agentId && task.status === "queued");
+  const task = pending ?? store.createTask({ agentId, issueId: parentId, workspaceId: "local", prompt: "Own the parent" });
+  expect(store.claimTask(runtime.id)?.id).toBe(task.id); store.startTask(task.id);
+  return task;
 }
 
 function raiseDecision(
@@ -184,15 +197,55 @@ function raiseDecision(
   taskId: string,
   input: { kind: string; title: string; options?: string[] },
 ) {
-  return store.createIssueDecision(childId, {
-    kind: input.kind, title: input.title, body: `${input.title} context`,
-    ...(input.options ? { options: input.options } : {}),
-  }, { type: "agent", id: agentId, taskId });
+  // Explicit historical decision_record fixture. No retired writer and no
+  // invented native callback: production reads and mutations use the same Q.
+  const child = store.getIssue(childId)!;
+  const parent = store.getIssue(child.parentIssueId ?? child.id)!;
+  const task = store.getTask(taskId)!;
+  const turn = store.getTurnForAttempt(taskId)!;
+  const session = store.getOrCreateDefaultIssueSession(parent.id);
+  const human = ["permission", "production_change"].includes(input.kind);
+  const at = new Date().toISOString();
+  const original = store.sendMessage({ session_id: session.id, sender: { type: "agent", id: task.agentId }, source_turn_id: turn.id,
+    to: human ? { type: "member", ref: parent.responsibleMemberId! } : { type: "none" }, message_kind: "decision", wake_requested: "inbox_only", body_md: `${input.title} context`, options: input.options?.map(label => ({ label, value: label })),
+    metadata: { decision_record: { issue_id: parent.id, source_issue_id: childId, source_task_id: taskId, kind: input.kind, title: input.title, body: `${input.title} context`, options: input.options ?? [],
+      status: human ? "escalated" : "pending", created_by_agent_id: task.agentId, owner_agent_id: human ? null : parent.assigneeId, history: [], created_at: at, updated_at: at } } }).message;
+  if (!human) store.sendMessage({ session_id: store.getOrCreateDefaultIssueSession(parent.id).id, sender: { type: "platform", id: null }, to: { type: "agent", ref: agentId },
+    message_kind: "request", wake_requested: "now", body_md: `Historical question ${original.id}`, metadata: { root_question_id: original.id, question_route_revision: 1, question_notification: true } });
+  const decision = store.getIssueDecision(parent.id, original.id)!;
+  if (human) db.transaction(() => store.prepareIssueDecisionCardWithinTransaction(parent, decision, createCommitEventQueue()))();
+  return decision;
+}
+
+function answerDecision(store: MultiremiStore, _issueId: string, id: string, input: { answer: string; reason: string; overturn?: string }, actor: { type: "agent" | "member"; id: string; taskId?: string | null }) {
+  const q = store.getQuestion(id)!;
+  store.answerQuestion(id, { expected_route_revision: q.route_revision, response: { answer: input.answer }, body_md: input.answer, reason: input.reason },
+    { type: actor.type, id: actor.id }, actor.taskId ? store.getTurnForAttempt(actor.taskId)!.id : undefined);
+  return store.getIssueDecisionAnywhere(id)!;
+}
+function escalateDecision(store: MultiremiStore, _issueId: string, id: string, actor: { type: "agent"; id: string; taskId: string }) {
+  return store.escalateQuestion(id, { expected_route_revision: store.getQuestion(id)!.route_revision, reason: "Parent execution owner requires the designated human" },
+    { type: actor.type, id: actor.id }, store.getTurnForAttempt(actor.taskId)!.id);
+}
+function closeDecision(store: MultiremiStore, _issueId: string, id: string, actor: { type: "agent"; id: string; taskId: string }) {
+  const source = store.getTask(actor.taskId)!;
+  return store.closeQuestion(id, { expected_route_revision: store.getQuestion(id)!.route_revision, reason: "Original source explicitly withdrew the historical question" },
+    { type: "agent", id: source.agentId }, store.getTurnForAttempt(actor.taskId)!.id);
 }
 
 function sendCard(store: MultiremiStore, messageId = "om_card", openId = CARD_OPEN_ID, sentAt?: Date) {
   const card = store.claimFeishuBotOutbound("local", "rt_bot");
   if (!card) return null;
+  if (card.kind === "decision_card" && card.decisionId && card.interactionOpenId !== openId) {
+    // Explicit pre-upgrade signed-card fixture: old cards could name a topic
+    // recipient. Retain that frozen token to test actual identity rejection;
+    // new production dispatch always resolves the designated root human.
+    const envelope = decodeDecisionCardBody(card.body)!;
+    const action = questionCardAction(envelope.card)!;
+    action.t = store.issueMessageCardToken(card.decisionId, openId);
+    card.body = JSON.stringify({ ...JSON.parse(card.body), card: envelope.card });
+    db.run('UPDATE multiremi_feishu_bot_outbound_deliveries SET body=?,interaction_open_id=? WHERE id=?', [card.body, openId, card.id]);
+  }
   store.reportFeishuBotOutbound("local", "rt_bot", card.id, {
     claimToken: card.claimToken, status: "sent", externalMessageId: messageId, interactionOpenId: openId,
   }, sentAt);
@@ -256,15 +309,15 @@ describe("MUL-412 issue decision cards", () => {
     const { store, agentId } = scaffold();
     const parent = issueWithTopic(store, "Escalated decision", { type: "agent", id: agentId });
     const { child, task } = childWithTask(store, agentId, parent.id);
-    // A merge decision first goes to the parent's owner agent, so no card.
-    const decision = raiseDecision(store, agentId, child.id, task.id, { kind: "merge", title: "Merge the change" });
+    // An ordinary criteria question first goes to the parent's owner Agent.
+    const decision = raiseDecision(store, agentId, child.id, task.id, { kind: "criteria", title: "Merge the change" });
     expect(decision.status).toBe("pending");
     expect(db!.query("SELECT CAST(COUNT(*) AS INTEGER) AS n FROM multiremi_feishu_bot_outbound_deliveries WHERE kind = 'decision_card'").get())
       .toEqual({ n: 0 });
     expect(store.getIssueDecision(parent.id, decision.id)!.status).toBe("pending");
 
     const ownerTask = parentTask(store, agentId, parent.id);
-    store.escalateIssueDecision(parent.id, decision.id, { type: "agent", id: agentId, taskId: ownerTask.id });
+    escalateDecision(store, parent.id, decision.id, { type: "agent", id: agentId, taskId: ownerTask.id });
     const card = store.claimFeishuBotOutbound("local", "rt_bot")!;
     expect(card.kind).toBe("decision_card");
     expect(card.decisionId).toBe(decision.id);
@@ -280,6 +333,141 @@ describe("MUL-412 issue decision cards", () => {
     // A decision has no deadline, so no expiry rides the delivery.
     expect(card.expiresAt ?? null).toBeNull();
     expect(store.listIssueActivity(parent.id).some(entry => entry.type === "decision_card_queued")).toBe(true);
+  });
+
+  it("grants historical source access only to the exact live original attempt", () => {
+    const { store, agentId } = scaffold();
+    const parent = issueWithTopic(store, "Exact historical source", { type: "agent", id: agentId });
+    const { child, task } = childWithTask(store, agentId, parent.id);
+    const originalTurn = store.getTurnForAttempt(task.id)!;
+    const decision = raiseDecision(store, agentId, child.id, task.id, { kind: "production_change", title: "Sensitive original question" });
+    expect(store.canAccessQuestionFromTurn(decision.id, task.agentId, originalTurn.id)).toBe(true);
+    expect(() => store.answerQuestion(decision.id, { expected_route_revision: 1, response: { answer: "yes" } }, { type: "agent", id: task.agentId }, originalTurn.id)).toThrow();
+    expect(store.getQuestion(decision.id)?.status).toBe("pending");
+    const otherSession = store.createIssueSession(child.id, { title: "Unrelated source lane", holdsWorkspace: false });
+    const other = store.createTask({ agentId: task.agentId, issueId: child.id, issueSessionId: otherSession.id, workspaceId: "local", prompt: "Different lane" });
+    expect(store.claimTask("rt_bot")?.id).toBe(other.id); store.startTask(other.id);
+    const otherTurn = store.getTurnForAttempt(other.id)!;
+    expect(store.canAccessQuestionFromTurn(decision.id, task.agentId, otherTurn.id)).toBe(false);
+    const original = store.getMessage(decision.id)!;
+    const metadata = structuredClone(original.metadata);
+    (metadata.decision_record as { source_task_id: string }).source_task_id = other.id;
+    db!.run("UPDATE multiremi_conversation_log SET metadata = ? WHERE id = ?", [JSON.stringify(metadata), decision.id]);
+    expect(store.canAccessQuestionFromTurn(decision.id, task.agentId, originalTurn.id)).toBe(false);
+    expect(store.canAccessQuestionFromTurn(decision.id, task.agentId, otherTurn.id)).toBe(false);
+    db!.run("UPDATE multiremi_conversation_log SET metadata = ? WHERE id = ?", [JSON.stringify(original.metadata), decision.id]);
+    db!.run("UPDATE multiremi_turns SET current_attempt_id = ? WHERE id = ?", [other.id, originalTurn.id]);
+    expect(store.canAccessQuestionFromTurn(decision.id, task.agentId, originalTurn.id)).toBe(false);
+    db!.run("UPDATE multiremi_turns SET current_attempt_id = ? WHERE id = ?", [task.id, originalTurn.id]);
+    expect(store.canAccessQuestionFromTurn(decision.id, task.agentId, originalTurn.id)).toBe(true);
+    db!.run("UPDATE multiremi_turn_attempts SET status = 'completed' WHERE id = ?", [task.id]);
+    expect(store.canAccessQuestionFromTurn(decision.id, task.agentId, originalTurn.id)).toBe(false);
+    db!.run("UPDATE multiremi_turn_attempts SET status = 'running' WHERE id = ?", [task.id]);
+    store.completeTask(task.id, { output: "Original source completed" });
+    expect(store.canAccessQuestionFromTurn(decision.id, task.agentId, originalTurn.id)).toBe(false);
+    expect(() => closeDecision(store, parent.id, decision.id, { type: "agent", id: task.agentId, taskId: task.id })).toThrow();
+    expect(store.getQuestion(decision.id)?.status).toBe("pending");
+  });
+
+  it("returns each historical answer revision and close to its actual source lane without native recovery", () => {
+    const { store, agentId, member } = scaffold();
+    const parent = issueWithTopic(store, "Ordinary source results", { type: "agent", id: agentId });
+    const { task, child } = childWithTask(store, agentId, parent.id);
+    const sourceTurn = store.getTurnForAttempt(task.id)!;
+    const decision = raiseDecision(store, agentId, child.id, task.id, { kind: "production_change", title: "First result" });
+    answerDecision(store, parent.id, decision.id, { answer: "Initial answer", reason: "Reviewed" }, { type: "member", id: member.id });
+    const before = store.getQuestion(decision.id)!;
+    expect(() => answerDecision(store, parent.id, decision.id, { answer: "Replay", reason: "Replay" }, { type: "member", id: member.id })).toThrow();
+    store.answerQuestion(decision.id, { expected_route_revision: before.route_revision, expected_answer_revision: before.answer_revision, revise: true, reason: "New evidence", response: { answer: "Revised answer" }, body_md: "Revised answer" }, { type: "member", id: member.id });
+    const question = store.getQuestion(decision.id)!;
+    const notifications = question.history.filter(event => event.type === "notify");
+    expect(notifications).toHaveLength(2);
+    for (const event of notifications) {
+      const message = store.getMessage(event.source_message_id!)!;
+      expect(event).toMatchObject({ reason: "historical_source_notified", source_session_id: task.issueSessionId });
+      expect(message).toMatchObject({ session_id: task.issueSessionId, to_agent_id: task.agentId, message_kind: "request", reply_to_id: null, wake_applied: "now" });
+      expect(message.metadata).toMatchObject({ root_question_id: decision.id, execution_scope: sourceTurn.execution_scope });
+      expect(message.metadata.question_continuation).toBeUndefined();
+    }
+    expect(store.getMessage(notifications[1].source_message_id!)?.body_md).toContain("Revised answer");
+    expect(store.getMessage(question.answer!.reply_message_id)).toMatchObject({ session_id: question.session_id, to_agent_id: null, body_md: "Revised answer" });
+    expect(question).toMatchObject({ wait_status: "none", recovery: { consumer_turn_id: null, consumer_attempt_id: null, continuation_message_id: null } });
+    const withdrawn = raiseDecision(store, agentId, child.id, task.id, { kind: "production_change", title: "Obsolete result" });
+    closeDecision(store, parent.id, withdrawn.id, { type: "agent", id: task.agentId, taskId: task.id });
+    const closed = store.getQuestion(withdrawn.id)!;
+    expect(closed).toMatchObject({ status: "closed", wait_status: "none" });
+    const closeNotification = closed.history.find(event => event.type === "notify")!;
+    expect(store.getMessage(closeNotification.source_message_id!)).toMatchObject({ session_id: task.issueSessionId, to_agent_id: task.agentId, wake_applied: "now" });
+    expect(store.getMessage(closeNotification.source_message_id!)?.body_md).toContain("已关闭");
+  });
+
+  it("delivers one reply for a historical source on the exact same session and scope", () => {
+    const { store, agentId, member } = scaffold();
+    const issue = issueWithTopic(store, "Same lane reply", { type: "agent", id: agentId });
+    const sourceAgentId = store.getFeishuBotConfig("local")!.agentId!;
+    const task = store.createTask({ agentId: sourceAgentId, issueId: issue.id, workspaceId: "local", prompt: "Ask from the root lane" });
+    expect(store.claimTask("rt_bot")?.id).toBe(task.id); store.startTask(task.id);
+    const decision = raiseDecision(store, agentId, issue.id, task.id, { kind: "production_change", title: "Same source" });
+    answerDecision(store, issue.id, decision.id, { answer: "Proceed", reason: "Reviewed" }, { type: "member", id: member.id });
+    const question = store.getQuestion(decision.id)!;
+    const event = question.history.find(item => item.type === "notify")!;
+    expect(event.source_message_id).toBe(question.answer!.reply_message_id);
+    expect(store.getMessage(event.source_message_id!)).toMatchObject({ session_id: task.issueSessionId, to_agent_id: task.agentId, wake_applied: "now" });
+    expect(store.listMessages(task.issueSessionId!).filter(message => message.metadata.question_source_notification)).toHaveLength(0);
+    expect(question).toMatchObject({ wait_status: "none", recovery: { consumer_attempt_id: null } });
+  });
+
+  it("isolates a failed ordinary source dispatch with a readable result and no partial wake", () => {
+    const { store, agentId, member } = scaffold();
+    const parent = issueWithTopic(store, "Source dispatch savepoint", { type: "agent", id: agentId });
+    const { child, task } = childWithTask(store, agentId, parent.id);
+    const decision = raiseDecision(store, agentId, child.id, task.id, { kind: "production_change", title: "Durable result" });
+    const log = (store as unknown as { ctx: StoreContext }).ctx.conversationLog();
+    const append = log.appendWithinTransaction.bind(log);
+    let failureInjected = false, wakes = 0;
+    const stop = store.onTaskEnqueued(() => { wakes++; });
+    log.appendWithinTransaction = (...args) => {
+      const result = append(...args);
+      if (args[0].metadata?.question_source_notification && !args[0].metadata.question_source_notification_unavailable) {
+        failureInjected = true;
+        throw Object.assign(new Error("Synthetic dispatch failure after source row insertion"), { code: "fixture_dispatch_failed" });
+      }
+      return result;
+    };
+    try { answerDecision(store, parent.id, decision.id, { answer: "Preserved answer", reason: "Reviewed" }, { type: "member", id: member.id }); }
+    finally { log.appendWithinTransaction = append; stop(); }
+    expect(failureInjected).toBe(true);
+    expect(wakes).toBe(0);
+    const question = store.getQuestion(decision.id)!;
+    expect(question).toMatchObject({ status: "answered", wait_status: "none", answer: { body_md: "Preserved answer" }, recovery: { consumer_attempt_id: null } });
+    const event = question.history.find(item => item.type === "notify")!;
+    expect(event).toMatchObject({ reason: "historical_source_dispatch_failed:fixture_dispatch_failed", source_session_id: task.issueSessionId });
+    const fallback = store.getMessage(event.source_message_id!)!;
+    expect(fallback).toMatchObject({ to_agent_id: null, message_kind: "status", wake_applied: "inbox_only" });
+    expect(fallback.body_md).toContain("Preserved answer");
+    expect(fallback.body_md).toContain(event.reason!);
+    expect(store.listMessages(task.issueSessionId!).filter(message => message.metadata.question_source_notification)).toEqual([fallback]);
+  });
+
+  it("keeps a historical parent reply separate when the actual source has another scope on the same session", () => {
+    const { store, agentId, member } = scaffold();
+    const issue = issueWithTopic(store, "Same session, different scopes", { type: "agent", id: agentId });
+    const sourceAgentId = store.getFeishuBotConfig("local")!.agentId!;
+    const task = store.createTask({ agentId: sourceAgentId, issueId: issue.id, workspaceId: "local", prompt: "Original source scope" });
+    expect(store.claimTask("rt_bot")?.id).toBe(task.id); store.startTask(task.id);
+    const decision = raiseDecision(store, agentId, issue.id, task.id, { kind: "production_change", title: "Parent-scope original Q" });
+    const original = store.getMessage(decision.id)!;
+    db!.run("UPDATE multiremi_conversation_log SET metadata = ? WHERE id = ?", [JSON.stringify({ ...original.metadata, execution_scope: "historical-parent-scope" }), decision.id]);
+    answerDecision(store, issue.id, decision.id, { answer: "Scoped source result", reason: "Reviewed" }, { type: "member", id: member.id });
+    const question = store.getQuestion(decision.id)!;
+    const reply = store.getMessage(question.answer!.reply_message_id)!;
+    const notification = store.getMessage(question.history.find(event => event.type === "notify")!.source_message_id!)!;
+    expect(reply).toMatchObject({ session_id: task.issueSessionId, to_agent_id: null, reply_to_id: decision.id });
+    expect(reply.metadata.execution_scope).toBe("historical-parent-scope");
+    expect(notification.id).not.toBe(reply.id);
+    expect(notification).toMatchObject({ session_id: task.issueSessionId, to_agent_id: task.agentId, reply_to_id: null, wake_applied: "now" });
+    expect(notification.metadata.execution_scope).toBe(store.getTurnForAttempt(task.id)!.execution_scope);
+    expect(question).toMatchObject({ wait_status: "none", recovery: { consumer_attempt_id: null } });
   });
 
   it("sends a card when a decision is handed to a person directly", () => {
@@ -298,6 +486,56 @@ describe("MUL-412 issue decision cards", () => {
     expect(card.decisionIssueId).toBe(issue.id);
   });
 
+  it("persists a historical card intent until actual Remi presents a separate summary for the same Q", () => {
+    const { store, agentId } = scaffold();
+    const parent = issueWithTopic(store, "Historical presentation gate", { type: "agent", id: agentId });
+    const { child, task } = childWithTask(store, agentId, parent.id);
+    const remi = store.createAgent({ name: "Presentation Remi", provider: "codex", workspaceId: "local", runtimeId: "rt_bot" });
+    const bot = store.upsertFeishuBotConfig("local", { agentId: remi.id, runtimeId: "rt_bot", appId: "cli_issue_decision", appSecretOp: "set", appSecret: APP_SECRET, domain: "feishu", enabled: true });
+    store.reportFeishuBotRuntimeStatus("local", "rt_bot", { appliedRevision: bot.revision, state: "online" });
+    const decision = raiseDecision(store, agentId, child.id, task.id, { kind: "criteria", title: "Immutable original question", options: ["yes", "no"] });
+    const owner = parentTask(store, agentId, parent.id);
+    escalateDecision(store, parent.id, decision.id, { type: "agent", id: agentId, taskId: owner.id });
+    expect(store.claimFeishuBotOutbound("local", "rt_bot")).toBeNull();
+    expect(db!.query("SELECT CAST(COUNT(*) AS INTEGER) AS n FROM multiremi_feishu_bot_outbound_operations WHERE unit_key = ?").get(decision.id)).toMatchObject({ n: 1 });
+    const remiTask = store.claimTask("rt_bot")!;
+    expect(remiTask.agentId).toBe(remi.id); store.startTask(remiTask.id);
+    store.presentQuestion(decision.id, { expected_route_revision: store.getQuestion(decision.id)!.route_revision, summary: "Separate Remi recommendation" }, { type: "agent", id: remi.id }, store.getTurnForAttempt(remiTask.id)!.id);
+    const card = store.claimFeishuBotOutbound("local", "rt_bot")!;
+    expect(card).toMatchObject({ kind: "decision_card", decisionId: decision.id, interactionOpenId: CARD_OPEN_ID });
+    expect(card.body).toContain("Separate Remi recommendation");
+    expect(card.body).toContain("Immutable original question");
+    expect(questionCardAction(decodeDecisionCardBody(card.body)!.card)).toMatchObject({ message_id: decision.id, route_revision: 2 });
+    expect(store.getQuestion(decision.id)).toMatchObject({ original_message: "Immutable original question context", wait_status: "none", summary: { body_md: "Separate Remi recommendation", agent_id: remi.id } });
+    expect(db!.query("SELECT CAST(COUNT(*) AS INTEGER) AS n FROM multiremi_feishu_bot_outbound_deliveries WHERE decision_id = ? AND kind = 'decision_card'").get(decision.id)).toMatchObject({ n: 1 });
+  });
+
+  it("issues a current card after an explicit route transfer and rejects the old card and missing revision", async () => {
+    const { store, agentId, member } = scaffold();
+    const parent = issueWithTopic(store, "Versioned historical card", { type: "agent", id: agentId });
+    const { child, task } = childWithTask(store, agentId, parent.id);
+    const decision = raiseDecision(store, agentId, child.id, task.id, { kind: "production_change", title: "Current route only", options: ["yes"] });
+    const first = sendCard(store, "om_route_one")!;
+    const oldAction = questionCardAction(decodeDecisionCardBody(first.body)!.card)!;
+    const host = await daemonToken(store);
+    const answer = (body: Record<string, unknown>) => app(store).request(`/api/daemon/messages/${decision.id}/answer`, { method: "POST", headers: { Authorization: `Bearer ${host.token}`, "content-type": "application/json" }, body: JSON.stringify(body) });
+    const missingRevision = await answer({ answer: "yes", token: oldAction.t, operator_open_id: CARD_OPEN_ID });
+    expect(missingRevision.status).toBe(400);
+    expect(await missingRevision.text()).toContain("question_route_revision_required");
+    store.transferQuestion(decision.id, { expected_route_revision: 1, reason: "Explicitly reconfirm current responsibility" }, { type: "member", id: member.id });
+    const second = sendCard(store, "om_route_two")!;
+    expect(second).toMatchObject({ kind: "decision_card", decisionId: decision.id });
+    const currentAction = questionCardAction(decodeDecisionCardBody(second.body)!.card)!;
+    expect(currentAction).toMatchObject({ message_id: decision.id, route_revision: 2 });
+    expect(currentAction.t).not.toBe(oldAction.t);
+    const stale = await answer({ answer: "yes", token: oldAction.t, expected_route_revision: 1, operator_open_id: CARD_OPEN_ID });
+    expect(stale.status).toBe(403);
+    expect(store.getQuestion(decision.id)?.status).toBe("pending");
+    const current = await answer({ answer: "yes", token: currentAction.t, expected_route_revision: 2, operator_open_id: CARD_OPEN_ID });
+    expect(current.status, await current.clone().text()).toBe(200);
+    expect(store.getQuestion(decision.id)?.answer?.actor).toEqual({ type: "member", id: member.id });
+  });
+
   it("does not card a decision the parent's owner agent answers itself", () => {
     const { store, agentId } = scaffold();
     const parent = issueWithTopic(store, "Self-answered", { type: "agent", id: agentId });
@@ -305,7 +543,7 @@ describe("MUL-412 issue decision cards", () => {
     const decision = raiseDecision(store, agentId, child.id, task.id, { kind: "criteria", title: "Acceptance terms" });
     expect(decision.status).toBe("pending");
     const ownerTask = parentTask(store, agentId, parent.id);
-    store.answerIssueDecision(parent.id, decision.id, {
+    answerDecision(store, parent.id, decision.id, {
       answer: "Keep them", reason: "The document is the spec", overturn: "A member can revise it",
     }, { type: "agent", id: agentId, taskId: ownerTask.id });
     expect(store.getIssueDecision(parent.id, decision.id)!.status).toBe("answered");
@@ -318,7 +556,7 @@ describe("MUL-412 issue decision cards", () => {
     const { store, agentId } = scaffold();
     // No `prepareFeishuIssueTopicWithinTransaction`, so the binding exists
     // without a `reply_to_message_id`: there is no thread to reply into.
-    const parent = createResponsibleTestIssue(store, { title: "Unsown topic", workspaceId: "local", assigneeType: "agent", assigneeId: agentId });
+    const parent = createResponsibleTestIssue(store, { title: "Unsown topic", workspaceId: "local", assigneeType: "agent", assigneeId: agentId, responsibleMemberId: "mem_local_local" });
     // Seed the binding (so it is live and active) but leave its thread anchor
     // unset, which is what an Issue created before the topic root went out
     // looks like. The seed delivery itself is drained first so the queue is
@@ -355,7 +593,7 @@ describe("MUL-412 issue decision cards", () => {
     ).get()).toEqual({ n: 0 });
     // Skipped without a card: the skip activity is only for a missing topic.
     expect(store.listIssueActivity(parent.id).filter(entry => entry.type === "decision_card_skipped")).toHaveLength(0);
-    expect(store.listIssueActivity(parent.id).some(entry => entry.type === "decision_escalated")).toBe(true);
+    expect(store.getQuestion(decision.id)).toMatchObject({ status: "pending", stage: "human", wait_status: "none", current_handler: { type: "member", id: "mem_local_local" } });
   });
 
   it("answers a card click through the same store write as the HTTP answer route", async () => {
@@ -374,9 +612,10 @@ describe("MUL-412 issue decision cards", () => {
     const response = await app(store).request(answerPath, {
       method: "POST",
       headers: { Authorization: `Bearer ${host.token}`, "content-type": "application/json" },
-      body: JSON.stringify({ answer: "yes\n自定义回答：after CI", token: cardAction(decision.id).t, operator_open_id: CARD_OPEN_ID }),
+      body: JSON.stringify({ answer: "yes\n自定义回答：after CI", token: cardAction(decision.id).t, expected_route_revision: cardAction(decision.id).route_revision, operator_open_id: CARD_OPEN_ID }),
     });
-    // The reply rings the running lane; its successor is created after completion.
+    // Ordinary source delivery may enqueue the next lane round after this
+    // running source finishes; it never restores a historical native callback.
     store.completeTask(task.id, { output: "decision requested" });
     stopWake();
     expect(response.status, await response.clone().text()).toBe(200);
@@ -389,18 +628,17 @@ describe("MUL-412 issue decision cards", () => {
     expect(settled.answer?.answer).toBe("yes\n自定义回答：after CI");
 
     // Everything S4's HTTP answer produces is produced here too.
-    expect(store.listIssueActivity(parent.id).some(entry => entry.type === "decision_answered")).toBe(true);
-    expect(store.listIssueActivity(child.id).some(entry => entry.type === "decision_received")).toBe(true);
+    expect(store.getQuestion(decision.id)?.history).toEqual(expect.arrayContaining([expect.objectContaining({ type: "answer", actor: { type: "member", id: member.id } })]));
     const sourceOwnerTask = store.listTasksForIssue(child.id).find(item => item.status === "queued");
     expect(sourceOwnerTask).toBeTruthy();
-    expect(inboxReportBody(store, sourceOwnerTask!)).toContain(decision.id);
-    expect(sourceOwnerTask).toMatchObject({
-      delegationId: null,
-      delegatedByAgentId: null,
-      delegatedFromIssueSessionId: null,
-      delegationSkipReason: null,
-      wakeSource: "platform_to_owner",
-    });
+    const notification = store.getQuestion(decision.id)!.history.find(event => event.type === "notify")!;
+    const sourceReply = store.getMessage(notification.source_message_id!)!;
+    expect(notification).toMatchObject({ reason: "historical_source_notified", source_session_id: task.issueSessionId });
+    expect(sourceReply).toMatchObject({ session_id: task.issueSessionId, to_agent_id: task.agentId, wake_applied: "now" });
+    expect(sourceReply.body_md).toContain(decision.id);
+    expect(sourceReply.body_md).toContain("after CI");
+    expect(sourceOwnerTask).toMatchObject({ delegationId: null, delegatedByAgentId: null, delegatedFromIssueSessionId: null, delegationSkipReason: null });
+    expect(store.getQuestion(decision.id)).toMatchObject({ wait_status: "none", wait_reason: "historical_decision_without_native_call", recovery: { consumer_turn_id: null, consumer_attempt_id: null, continuation_message_id: null } });
     const inbox = store.listMessageInbox(member.id, "local");
     expect(inbox.items).toHaveLength(1);
     expect(inbox.items[0]).toMatchObject({
@@ -426,7 +664,7 @@ describe("MUL-412 issue decision cards", () => {
     const response = await app(store).request(`/api/daemon/messages/${decision.id}/answer`, {
       method: "POST",
       headers: { Authorization: `Bearer ${host.token}`, "content-type": "application/json" },
-      body: JSON.stringify({ answer: "yes", token: cardAction(decision.id).t, operator_open_id: "ou_somebody_else" }),
+      body: JSON.stringify({ answer: "yes", token: cardAction(decision.id).t, expected_route_revision: cardAction(decision.id).route_revision, operator_open_id: "ou_somebody_else" }),
     });
     expect(response.status).toBe(403);
     expect(store.getIssueDecision(parent.id, decision.id)!.status).toBe("escalated");
@@ -444,7 +682,7 @@ describe("MUL-412 issue decision cards", () => {
       `/api/daemon/messages/${decision.id}/answer`, {
         method: "POST",
         headers: { Authorization: `Bearer ${host.token}`, "content-type": "application/json" },
-        body: JSON.stringify({ answer: "yes", token: cardAction(decision.id).t, operator_open_id: "ou_other_member" }),
+        body: JSON.stringify({ answer: "yes", token: cardAction(decision.id).t, expected_route_revision: cardAction(decision.id).route_revision, operator_open_id: "ou_other_member" }),
       },
     );
     expect(notAddressed.status).toBe(403);
@@ -463,7 +701,7 @@ describe("MUL-412 issue decision cards", () => {
       `/api/daemon/messages/${decision.id}/answer`, {
         method: "POST",
         headers: { Authorization: `Bearer ${host.token}`, "content-type": "application/json" },
-        body: JSON.stringify({ answer: "yes", token: cardAction(decision.id).t, operator_open_id: openId }),
+        body: JSON.stringify({ answer: "yes", token: cardAction(decision.id).t, expected_route_revision: cardAction(decision.id).route_revision, operator_open_id: openId }),
       },
     );
 
@@ -485,7 +723,7 @@ describe("MUL-412 issue decision cards", () => {
       `/api/daemon/messages/${bobDecision.id}/answer`, {
         method: "POST",
         headers: { Authorization: `Bearer ${host.token}`, "content-type": "application/json" },
-        body: JSON.stringify({ answer: "yes", token: cardAction(bobDecision.id).t, operator_open_id: "ou_bob" }),
+        body: JSON.stringify({ answer: "yes", token: cardAction(bobDecision.id).t, expected_route_revision: cardAction(bobDecision.id).route_revision, operator_open_id: "ou_bob" }),
       },
     );
     expect(archived.status).toBe(403);
@@ -517,7 +755,7 @@ describe("MUL-412 issue decision cards", () => {
       `/api/daemon/messages/${strangerDecision.id}/answer`, {
         method: "POST",
         headers: { Authorization: `Bearer ${host.token}`, "content-type": "application/json" },
-        body: JSON.stringify({ answer: "yes", token: cardAction(strangerDecision.id).t, operator_open_id: "ou_never_seen" }),
+        body: JSON.stringify({ answer: "yes", token: cardAction(strangerDecision.id).t, expected_route_revision: cardAction(strangerDecision.id).route_revision, operator_open_id: "ou_never_seen" }),
       },
     );
     expect(unmapped.status).toBe(403);
@@ -562,7 +800,7 @@ describe("MUL-412 issue decision cards", () => {
     const response = await app(store).request(`/api/daemon/messages/${decision.id}/answer`, {
       method: "POST",
       headers: { Authorization: `Bearer ${host.token}`, "content-type": "application/json" },
-      body: JSON.stringify({ answer: "yes", token: cardAction(decision.id).t, operator_open_id: "ou_cross_app" }),
+      body: JSON.stringify({ answer: "yes", token: cardAction(decision.id).t, expected_route_revision: cardAction(decision.id).route_revision, operator_open_id: "ou_cross_app" }),
     });
     stopWake();
     stopEvents();
@@ -588,6 +826,8 @@ describe("MUL-412 issue decision cards", () => {
     });
     sendCard(store, "om_sso_mismatch")!;
     process.env.MULTIREMI_LARK_APP_ID = "cli_different_sso_app";
+    // Remove the independent same-app union evidence: this case isolates SSO.
+    db.run("DELETE FROM multiremi_feishu_bot_senders WHERE id='card_person_sender'");
     const before = {
       parentActivity: store.listIssueActivity(parent.id).length,
       childActivity: store.listIssueActivity(child.id).length,
@@ -602,7 +842,7 @@ describe("MUL-412 issue decision cards", () => {
     const response = await app(store).request(`/api/daemon/messages/${decision.id}/answer`, {
       method: "POST",
       headers: { Authorization: `Bearer ${host.token}`, "content-type": "application/json" },
-      body: JSON.stringify({ answer: "yes", token: cardAction(decision.id).t, operator_open_id: CARD_OPEN_ID }),
+      body: JSON.stringify({ answer: "yes", token: cardAction(decision.id).t, expected_route_revision: cardAction(decision.id).route_revision, operator_open_id: CARD_OPEN_ID }),
     });
     stopWake();
     stopEvents();
@@ -622,9 +862,6 @@ describe("MUL-412 issue decision cards", () => {
     const { store, agentId } = scaffold();
     const parent = issueWithTopic(store, "Same-app identity", { type: "agent", id: agentId });
     const { child, task } = childWithTask(store, agentId, parent.id);
-    const decision = raiseDecision(store, agentId, child.id, task.id, {
-      kind: "production_change", title: "Deploy?",
-    });
     const senderUser = store.getOrCreateUser({
       externalId: "ou_sender_sso", feishuUnionId: "on_same_app", name: "Sender member", email: "same-app@example.com",
     });
@@ -638,12 +875,14 @@ describe("MUL-412 issue decision cards", () => {
        VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)`,
       ["fbs_same_app", "local", "cli_issue_decision", "ou_same_app", "on_same_app", "Sender member", now, now],
     );
+    store.updateIssue(parent.id, { responsibleMemberId: senderMember.id, actorType: "member", actorId: "mem_local_local" });
+    const decision = raiseDecision(store, agentId, child.id, task.id, { kind: "production_change", title: "Deploy?" });
     sendCard(store, "om_same_app", "ou_same_app")!;
     const host = await daemonToken(store);
     const response = await app(store).request(`/api/daemon/messages/${decision.id}/answer`, {
       method: "POST",
       headers: { Authorization: `Bearer ${host.token}`, "content-type": "application/json" },
-      body: JSON.stringify({ answer: "yes", token: cardAction(decision.id).t, operator_open_id: "ou_same_app" }),
+      body: JSON.stringify({ answer: "yes", token: cardAction(decision.id).t, expected_route_revision: cardAction(decision.id).route_revision, operator_open_id: "ou_same_app" }),
     });
     expect(response.status, await response.clone().text()).toBe(200);
     expect(store.getIssueDecision(parent.id, decision.id)!.answeredByMemberId).toBe(senderMember.id);
@@ -682,7 +921,7 @@ describe("MUL-412 issue decision cards", () => {
     const response = await app(store).request(`/api/daemon/messages/${decision.id}/answer`, {
       method: "POST",
       headers: { Authorization: `Bearer ${host.token}`, "content-type": "application/json" },
-      body: JSON.stringify({ answer: "yes", token: cardAction(decision.id).t, operator_open_id: "ou_ambiguous" }),
+      body: JSON.stringify({ answer: "yes", token: cardAction(decision.id).t, expected_route_revision: cardAction(decision.id).route_revision, operator_open_id: "ou_ambiguous" }),
     });
     stopWake();
     stopEvents();
@@ -745,7 +984,7 @@ describe("MUL-412 issue decision cards", () => {
     const asTask = await app(store).request(writePath, {
       method: "POST",
       headers: { Authorization: `Bearer ${taskToken.token}`, "content-type": "application/json" },
-      body: JSON.stringify({ answer: "yes", token: cardAction(decision.id).t, operator_open_id: CARD_OPEN_ID }),
+      body: JSON.stringify({ answer: "yes", token: cardAction(decision.id).t, expected_route_revision: cardAction(decision.id).route_revision, operator_open_id: CARD_OPEN_ID }),
     });
     expect(asTask.status).toBe(403);
 
@@ -756,7 +995,7 @@ describe("MUL-412 issue decision cards", () => {
     const write = await app(store).request(writePath, {
       method: "POST",
       headers: { Authorization: `Bearer ${other.token}`, "content-type": "application/json" },
-      body: JSON.stringify({ answer: "yes", token: cardAction(decision.id).t, operator_open_id: CARD_OPEN_ID }),
+      body: JSON.stringify({ answer: "yes", token: cardAction(decision.id).t, expected_route_revision: cardAction(decision.id).route_revision, operator_open_id: CARD_OPEN_ID }),
     });
     expect(write.status).toBe(403);
     expect(store.getIssueDecision(parent.id, decision.id)!.status).toBe("escalated");
@@ -784,6 +1023,7 @@ describe("MUL-412 issue decision cards", () => {
       headers: { Authorization: `Bearer ${host.token}`, "content-type": "application/json" },
       body: JSON.stringify({
         answer: "yes", token: cardAction(decision.id).t, operator_open_id: CARD_OPEN_ID,
+        expected_route_revision: cardAction(decision.id).route_revision,
         answered_by_member_id: otherMember.id, answererId: otherMember.id, answerer_id: otherMember.id,
         answererType: "agent", memberId: otherMember.id,
       }),
@@ -802,14 +1042,14 @@ describe("MUL-412 issue decision cards", () => {
     const decision = raiseDecision(store, agentId, child.id, task.id, { kind: "production_change", title: "Deploy?" });
     sendCard(store, "om_revision_card")!;
     const action = cardAction(decision.id);
-    store.answerIssueDecision(parent.id, decision.id, { answer: "Yes", reason: "Reviewed" }, { type: "member", id: member.id, taskId: null });
+    answerDecision(store, parent.id, decision.id, { answer: "Yes", reason: "Reviewed" }, { type: "member", id: member.id, taskId: null });
     const firstPatch = store.claimFeishuBotOutbound("local", "rt_bot")!;
     expect(firstPatch.kind).toBe("decision_card_patch");
     const token = await store.createAccessToken({ name: "Revision member", type: "pat", workspaceId: "local", userId: store.getWorkspaceMember(member.id)!.userId! });
     const sessionId = store.getMessage(decision.id)!.session_id;
     const response = await app(store).request(`/api/sessions/${sessionId}/messages`, {
       method: "POST", headers: { Authorization: `Bearer ${token.token}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ reply_to_id: decision.id, message_kind: "reply", body_md: "Hold for QA" }),
+      body: JSON.stringify({ reply_to_id: decision.id, message_kind: "reply", body_md: "Hold for QA", expected_route_revision: store.getQuestion(decision.id)!.route_revision, expected_answer_revision: store.getQuestion(decision.id)!.answer_revision, revise: true, reason: "Human revises after QA review" }),
     });
     expect(response.status, await response.clone().text()).toBe(200);
     const reply = (await response.json()).message;
@@ -846,13 +1086,13 @@ describe("MUL-412 issue decision cards", () => {
     const { child, task } = childWithTask(store, agentId, parent.id);
     const decision = raiseDecision(store, agentId, child.id, task.id, { kind: "production_change", title: "Deploy?" });
     sendCard(store, "om_legacy_revision")!;
-    store.answerIssueDecision(parent.id, decision.id, { answer: "First", reason: "Reviewed" }, { type: "member", id: member.id, taskId: null });
+    answerDecision(store, parent.id, decision.id, { answer: "First", reason: "Reviewed" }, { type: "member", id: member.id, taskId: null });
     db.run("UPDATE multiremi_feishu_bot_outbound_deliveries SET unit_key='' WHERE kind='decision_card_patch' AND decision_id=?", [decision.id]);
     const token = await store.createAccessToken({ name: "Legacy revision member", type: "pat", workspaceId: "local", userId: store.getWorkspaceMember(member.id)!.userId! });
     for (const body_md of ["Second", "Third"]) {
       const response = await app(store).request(`/api/sessions/${store.getMessage(decision.id)!.session_id}/messages`, {
         method: "POST", headers: { Authorization: `Bearer ${token.token}`, "Content-Type": "application/json" },
-        body: JSON.stringify({ reply_to_id: decision.id, body_md }),
+        body: JSON.stringify({ reply_to_id: decision.id, body_md, expected_route_revision: store.getQuestion(decision.id)!.route_revision, expected_answer_revision: store.getQuestion(decision.id)!.answer_revision, revise: true, reason: "Human explicitly changes the previous answer" }),
       });
       expect(response.status, await response.clone().text()).toBe(200);
     }
@@ -884,7 +1124,7 @@ describe("MUL-412 issue decision cards", () => {
       `/api/daemon/messages/${decision.id}/answer`, {
         method: "POST",
         headers: { Authorization: `Bearer ${host.token}`, "content-type": "application/json" },
-        body: JSON.stringify({ answer: text, token: cardAction(decision.id).t, operator_open_id: CARD_OPEN_ID }),
+        body: JSON.stringify({ answer: text, token: cardAction(decision.id).t, expected_route_revision: cardAction(decision.id).route_revision, operator_open_id: CARD_OPEN_ID }),
       },
     );
     // Two callbacks in flight at once, then the same callback replayed.
@@ -899,8 +1139,8 @@ describe("MUL-412 issue decision cards", () => {
     // One write: one history entry, one activity pair, one delivery patch.
     expect(settled.history).toHaveLength(1);
     expect(settled.answer?.answer).toBe("yes");
-    expect(store.listIssueActivity(parent.id).filter(entry => entry.type === "decision_answered")).toHaveLength(1);
-    expect(store.listIssueActivity(child.id).filter(entry => entry.type === "decision_received")).toHaveLength(1);
+    expect(store.getQuestion(decision.id)?.history.filter(event => event.type === "answer")).toHaveLength(1);
+    expect(store.listMessages(store.getMessage(decision.id)!.session_id).filter(message => message.reply_to_id === decision.id)).toHaveLength(1);
     expect(db!.query(
       "SELECT CAST(COUNT(*) AS INTEGER) AS n FROM multiremi_feishu_bot_outbound_deliveries WHERE kind = 'decision_card_patch' AND decision_id = ?",
     ).get(decision.id)).toEqual({ n: 1 });
@@ -914,7 +1154,7 @@ describe("MUL-412 issue decision cards", () => {
     const card = sendCard(store, "om_web_card")!;
     // Answered from the web workbench, not the card: the patch must still land,
     // and it must be queued inside the same transaction as the answer.
-    store.answerIssueDecision(parent.id, decision.id, { answer: "yes", reason: "Looks good", overturn: "" }, {
+    answerDecision(store, parent.id, decision.id, { answer: "yes", reason: "Looks good", overturn: "" }, {
       type: "member", id: member.id, taskId: null,
     });
     const patch = store.claimFeishuBotOutbound("local", "rt_bot")!;
@@ -928,16 +1168,16 @@ describe("MUL-412 issue decision cards", () => {
     expect(terminal).toContain("答者：");
     expect(terminal).toContain(member.id.replace(/_/g, "&#95;"));
     // Idempotent: a second terminal write queues nothing further.
-    store.answerIssueDecision(parent.id, decision.id, { answer: "no", reason: "changed", overturn: "" }, {
+    expect(() => answerDecision(store, parent.id, decision.id, { answer: "no", reason: "changed", overturn: "" }, {
       type: "member", id: member.id, taskId: null,
-    });
+    })).toThrow("question_already_settled");
     expect(store.claimFeishuBotOutbound("local", "rt_bot")).toBeNull();
 
     // Withdrawal is its own terminal state; the card is rewritten, not left
     // actionable, and never says "timed out" (E4 has no expiry).
     const second = raiseDecision(store, agentId, child.id, task.id, { kind: "production_change", title: "Withdraw me" });
     sendCard(store, "om_withdraw_card")!;
-    store.withdrawIssueDecision(parent.id, second.id, { type: "agent", id: agentId, taskId: task.id });
+    closeDecision(store, parent.id, second.id, { type: "agent", id: agentId, taskId: task.id });
     const withdrawn = store.claimFeishuBotOutbound("local", "rt_bot")!;
     expect(withdrawn.kind).toBe("decision_card_patch");
     expect(withdrawn.targetMessageId).toBe("om_withdraw_card");
@@ -994,13 +1234,13 @@ describe("MUL-412 issue decision cards", () => {
     const { store, agentId } = scaffold();
     const parent = issueWithTopic(store, "Old pending decision", { type: "agent", id: agentId });
     const { child, task } = childWithTask(store, agentId, parent.id);
-    const decision = raiseDecision(store, agentId, child.id, task.id, { kind: "merge", title: "Merge?" });
+    const decision = raiseDecision(store, agentId, child.id, task.id, { kind: "criteria", title: "Merge?" });
     expect(decision.status).toBe("pending");
     const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
     db!.run("UPDATE multiremi_conversation_log SET created_at = ?, updated_at = ? WHERE id = ?",
       [twoHoursAgo, twoHoursAgo, decision.id]);
     const ownerTask = parentTask(store, agentId, parent.id);
-    store.escalateIssueDecision(parent.id, decision.id, { type: "agent", id: agentId, taskId: ownerTask.id });
+    escalateDecision(store, parent.id, decision.id, { type: "agent", id: agentId, taskId: ownerTask.id });
     const sentAt = new Date();
     sendCard(store, "om_old_pending", CARD_OPEN_ID, sentAt)!;
     expect(store.claimFeishuBotOutbound("local", "rt_bot", sentAt)).toBeNull();
@@ -1043,7 +1283,7 @@ describe("MUL-412 issue decision cards", () => {
     const { child, task } = childWithTask(store, agentId, parent.id);
     const decision = raiseDecision(store, agentId, child.id, task.id, { kind: "production_change", title: "Deploy?" });
     sendCard(store, "om_early_card")!;
-    store.answerIssueDecision(parent.id, decision.id, { answer: "yes", reason: "ok", overturn: "" }, {
+    answerDecision(store, parent.id, decision.id, { answer: "yes", reason: "ok", overturn: "" }, {
       type: "member", id: member.id, taskId: null,
     });
     const patch = store.claimFeishuBotOutbound("local", "rt_bot", new Date(Date.now() + 51 * 60 * 1000), true, true, true)!;
@@ -1057,20 +1297,22 @@ describe("MUL-412 issue decision cards", () => {
     const { child, task } = childWithTask(store, agentId, parent.id);
     const decision = raiseDecision(store, agentId, child.id, task.id, { kind: "production_change", title: "Deploy?" });
     sendCard(store, "om_withdrawn_early")!;
-    store.withdrawIssueDecision(parent.id, decision.id, { type: "agent", id: agentId, taskId: task.id });
+    closeDecision(store, parent.id, decision.id, { type: "agent", id: agentId, taskId: task.id });
     const patch = store.claimFeishuBotOutbound("local", "rt_bot", new Date(Date.now() + 51 * 60 * 1000), true, true, true)!;
     expect(patch.kind).toBe("decision_card_patch");
     expect(store.claimFeishuBotOutbound("local", "rt_bot", new Date(Date.now() + 52 * 60 * 1000))).toBeNull();
   });
 
   for (const mode of [
-    { notifyMode: "none" as const, reason: "notify_none" as const },
-    { notifyMode: "person" as const, notifyOpenId: "not-an-open-id", reason: "invalid_recipient" as const },
+    { notifyMode: "none" as const, reason: "unresolved_recipient" as const, remove: "sender" },
+    { notifyMode: "person" as const, notifyOpenId: "not-an-open-id", reason: "unresolved_recipient" as const, remove: "user" },
   ]) {
-    it(`degrades to text when the topic has nobody to ask (${mode.reason})`, () => {
+    it(`degrades to text when the designated human lacks verified ${mode.remove} mapping`, () => {
       const { store, agentId, member } = scaffold({ notifyMode: mode.notifyMode, notifyOpenId: mode.notifyOpenId });
       const parent = issueWithTopic(store, "Degraded", { type: "agent", id: agentId });
       const { child, task } = childWithTask(store, agentId, parent.id);
+      if (mode.remove === "sender") db.run("DELETE FROM multiremi_feishu_bot_senders WHERE id='card_person_sender'");
+      else db.run("UPDATE multiremi_users SET feishu_union_id=NULL WHERE id=?", [store.getWorkspaceMember(member.id)!.userId!]);
       const decision = raiseDecision(store, agentId, child.id, task.id, {
         kind: "production_change", title: "Deploy?", options: ["yes", "no"],
       });
@@ -1088,7 +1330,7 @@ describe("MUL-412 issue decision cards", () => {
         claimToken: delivery.claimToken, status: "sent", externalMessageId: "om_text",
       });
       // A degraded decision has no card on screen, so no patch and no reminder.
-      store.answerIssueDecision(parent.id, decision.id, { answer: "yes", reason: "ok", overturn: "" }, {
+      answerDecision(store, parent.id, decision.id, { answer: "yes", reason: "ok", overturn: "" }, {
         type: "member", id: member.id, taskId: null,
       });
       const later = store.claimFeishuBotOutbound("local", "rt_bot", new Date(Date.now() + 2 * 60 * 60 * 1000));
@@ -1140,31 +1382,25 @@ describe("MUL-412 issue decision cards", () => {
     const { store, agentId } = scaffold();
     const parent = issueWithTopic(store, "Atomic escalate", { type: "agent", id: agentId });
     const { child, task } = childWithTask(store, agentId, parent.id);
-    const decision = raiseDecision(store, agentId, child.id, task.id, { kind: "merge", title: "Merge?" });
+    const decision = raiseDecision(store, agentId, child.id, task.id, { kind: "criteria", title: "Merge?" });
     const ownerTask = parentTask(store, agentId, parent.id);
     const events: string[] = [];
     const unsubscribe = store.onWorkspaceEvent(event => events.push(event.type));
-    // Fail after the card delivery row is written but before COMMIT: the S1
-    // hard constraint says a failed transaction leaves neither the row nor any
-    // event behind. `appendIssueActivity` is the writer the card lane uses
-    // after its INSERT.
-    type ActivityInput = { type: string };
-    const ctx = (store as unknown as {
-      ctx: { appendIssueActivity: (...args: unknown[]) => void };
-    }).ctx;
-    const original = ctx.appendIssueActivity.bind(ctx);
-    ctx.appendIssueActivity = (...args: unknown[]) => {
-      const input = args[1] as ActivityInput;
-      if (input.type === "decision_card_queued") throw new Error("injected escalation failure");
+    // The new writer durably queues presentation before dispatch. Fail after
+    // that INSERT; neither intent, route, notification nor events may commit.
+    const bot = (store as unknown as { ctx: StoreContext }).ctx.feishuBot();
+    const original = bot.enqueueQuestionPresentationWithinTransaction.bind(bot);
+    bot.enqueueQuestionPresentationWithinTransaction = (...args) => {
       original(...args);
+      throw new Error("injected escalation failure");
     };
     let thrown: Error | null = null;
     try {
-      store.escalateIssueDecision(parent.id, decision.id, { type: "agent", id: agentId, taskId: ownerTask.id });
+      escalateDecision(store, parent.id, decision.id, { type: "agent", id: agentId, taskId: ownerTask.id });
     } catch (error) {
       thrown = error as Error;
     } finally {
-      ctx.appendIssueActivity = original;
+      bot.enqueueQuestionPresentationWithinTransaction = original;
       unsubscribe();
     }
     expect(thrown?.message).toBe("injected escalation failure");
@@ -1173,9 +1409,11 @@ describe("MUL-412 issue decision cards", () => {
     expect(db!.query("SELECT CAST(COUNT(*) AS INTEGER) AS n FROM multiremi_feishu_bot_outbound_deliveries WHERE decision_id = ?")
       .get(decision.id)).toEqual({ n: 0 });
     expect(store.listIssueActivity(parent.id).filter(entry => entry.type === "decision_card_queued")).toHaveLength(0);
+    expect(db.query('SELECT id FROM multiremi_feishu_bot_outbound_operations WHERE unit_key=?').all(decision.id)).toEqual([]);
+    expect(store.getQuestion(decision.id)?.history).toEqual([]);
     expect(events.filter(type => type.startsWith("decision") || type === "activity:created")).toHaveLength(0);
     // The queue is still usable afterwards, and the row goes out once.
-    store.escalateIssueDecision(parent.id, decision.id, { type: "agent", id: agentId, taskId: ownerTask.id });
+    escalateDecision(store, parent.id, decision.id, { type: "agent", id: agentId, taskId: ownerTask.id });
     expect(store.claimFeishuBotOutbound("local", "rt_bot")!.kind).toBe("decision_card");
     expect(db!.query("SELECT CAST(COUNT(*) AS INTEGER) AS n FROM multiremi_feishu_bot_outbound_deliveries WHERE kind = 'decision_card' AND decision_id = ?")
       .get(decision.id)).toEqual({ n: 1 });
@@ -1189,24 +1427,20 @@ describe("MUL-412 issue decision cards", () => {
     sendCard(store, "om_atomic")!;
     const events: string[] = [];
     const unsubscribe = store.onWorkspaceEvent(event => events.push(event.type));
-    type ActivityInput = { type: string };
-    const ctx = (store as unknown as {
-      ctx: { appendIssueActivity: (...args: unknown[]) => void };
-    }).ctx;
-    const original = ctx.appendIssueActivity.bind(ctx);
-    ctx.appendIssueActivity = (...args: unknown[]) => {
-      const input = args[1] as ActivityInput;
-      if (input.type === "decision_received") throw new Error("injected answer failure");
+    const bot = (store as unknown as { ctx: StoreContext }).ctx.feishuBot();
+    const original = bot.enqueueIssueDecisionCardPatchWithinTransaction.bind(bot);
+    bot.enqueueIssueDecisionCardPatchWithinTransaction = (...args) => {
       original(...args);
+      throw new Error("injected answer failure");
     };
     let thrown: Error | null = null;
     try {
-      store.answerIssueDecision(parent.id, decision.id, { answer: "yes", reason: "ok", overturn: "" },
+      answerDecision(store, parent.id, decision.id, { answer: "yes", reason: "ok", overturn: "" },
         { type: "member", id: member.id, taskId: null });
     } catch (error) {
       thrown = error as Error;
     } finally {
-      ctx.appendIssueActivity = original;
+      bot.enqueueIssueDecisionCardPatchWithinTransaction = original;
       unsubscribe();
     }
     expect(thrown?.message).toBe("injected answer failure");
@@ -1217,7 +1451,7 @@ describe("MUL-412 issue decision cards", () => {
     expect(store.listIssueActivity(parent.id).filter(entry => entry.type === "decision_answered")).toHaveLength(0);
     expect(events.filter(type => type.startsWith("decision") || type === "activity:created")).toHaveLength(0);
     // A retry after the rollback commits cleanly and queues exactly one patch.
-    store.answerIssueDecision(parent.id, decision.id, { answer: "yes", reason: "ok", overturn: "" },
+    answerDecision(store, parent.id, decision.id, { answer: "yes", reason: "ok", overturn: "" },
       { type: "member", id: member.id, taskId: null });
     expect(store.getIssueDecision(parent.id, decision.id)!.status).toBe("answered");
     expect(db!.query("SELECT CAST(COUNT(*) AS INTEGER) AS n FROM multiremi_feishu_bot_outbound_deliveries WHERE kind = 'decision_card_patch'")
@@ -1248,7 +1482,7 @@ describe("MUL-412 issue decision cards", () => {
     }]);
     expect(card.decisionId).toBe(decision.id);
     // A settled decision drops out: the button is no longer actionable.
-    store.answerIssueDecision(parent.id, decision.id, { answer: "yes", reason: "ok", overturn: "" }, {
+    answerDecision(store, parent.id, decision.id, { answer: "yes", reason: "ok", overturn: "" }, {
       type: "member", id: member.id, taskId: null,
     });
     expect(store.listFeishuIssueDecisionCards("local", "rt_bot")).toEqual([]);
@@ -1273,11 +1507,11 @@ describe("MUL-412 issue decision cards", () => {
         );
         return response.ok ? (await response.json()).decision : null;
       },
-      answerFeishuIssueDecision: async (decisionId: string, input: { answer: string; operatorOpenId: string; token: string }) => {
+      answerFeishuIssueDecision: async (decisionId: string, input: { answer: string; operatorOpenId: string; token: string; routeRevision?: number }) => {
         const response = await app(store).request(`/api/daemon/messages/${decisionId}/answer`, {
           method: "POST",
           headers: { Authorization: `Bearer ${host.token}`, "content-type": "application/json" },
-          body: JSON.stringify({ answer: input.answer, token: input.token, operator_open_id: input.operatorOpenId }),
+          body: JSON.stringify({ answer: input.answer, token: input.token, expected_route_revision: input.routeRevision, operator_open_id: input.operatorOpenId }),
         });
         if (!response.ok) {
           const error = await response.json();
@@ -1290,7 +1524,7 @@ describe("MUL-412 issue decision cards", () => {
       appId: "cli_issue_decision", chatId: "oc_issue_decision", messageId: "om_clickable",
       recipientOpenId: CARD_OPEN_ID,
       getDecision: () => client.getFeishuIssueDecision(decision.id),
-      submit: (answer, operatorOpenId, token) => client.answerFeishuIssueDecision(decision.id, { answer, operatorOpenId, token }),
+      submit: (answer, operatorOpenId, token, routeRevision) => client.answerFeishuIssueDecision(decision.id, { answer, operatorOpenId, token, routeRevision }),
     });
     const marker = decisionInteractionMarker(parent.id, decision.id);
     const wrongOperator = await handleIssueDecisionInteractionEvent("cli_issue_decision", {
@@ -1316,18 +1550,19 @@ describe("MUL-412 issue decision cards", () => {
   });
 
   for (const failure of ["archived runtime workspace", "agent moved to another machine"] as const) {
-    it(`does not report ${failure} as a finished decision`, async () => {
+    it(`preserves the valid historical answer and records ordinary source dispatch failure for ${failure}`, async () => {
       const { store, agentId } = scaffold();
       const parent = issueWithTopic(store, `Rolled back: ${failure}`, { type: "agent", id: agentId });
+      const sourceAgentId = store.getFeishuBotConfig("local")!.agentId!;
       const runtimeWorkspace = store.runtimeWorkspaces.create("rt_bot", {
         name: `MUL-412 ${failure}`,
         root_path: `/tmp/mul412-${failure.replaceAll(" ", "-")}`,
       });
       const child = createResponsibleTestIssue(store, {
         title: "Decision source", workspaceId: "local", parentIssueId: parent.id,
-        assigneeType: "agent", assigneeId: agentId, runtimeWorkspaceId: runtimeWorkspace.id,
+        assigneeType: "agent", assigneeId: sourceAgentId, runtimeWorkspaceId: runtimeWorkspace.id,
       });
-      const task = store.createTask({ agentId, issueId: child.id, workspaceId: "local", prompt: "Work" });
+      const task = store.createTask({ agentId: sourceAgentId, issueId: child.id, workspaceId: "local", prompt: "Work" });
       const decision = raiseDecision(store, agentId, child.id, task.id, {
         kind: "production_change", title: "Deploy?", options: ["yes"],
       });
@@ -1340,7 +1575,7 @@ describe("MUL-412 issue decision cards", () => {
           id: "rt_other_machine", name: "Other machine", provider: "codex",
           workspaceId: "local", daemonId: "other-machine",
         });
-        store.updateAgent(agentId, { runtimeId: other.id });
+        store.updateAgent(sourceAgentId, { runtimeId: other.id });
       }
 
       const before = decisionSideEffectCounts();
@@ -1359,8 +1594,8 @@ describe("MUL-412 issue decision cards", () => {
             appId: "cli_issue_decision", chatId: "oc_issue_decision", messageId,
             recipientOpenId: CARD_OPEN_ID,
             getDecision: () => client.getFeishuIssueDecision(decision.id),
-            submit: (answer, operatorOpenId, token) => client.answerFeishuIssueDecision(
-              decision.id, { answer, operatorOpenId, token },
+            submit: (answer, operatorOpenId, token, routeRevision) => client.answerFeishuIssueDecision(
+              decision.id, { answer, operatorOpenId, token, routeRevision },
             ),
           });
           return handleIssueDecisionInteractionEvent("cli_issue_decision", {
@@ -1369,24 +1604,28 @@ describe("MUL-412 issue decision cards", () => {
             action: { value: cardAction(decision.id), name: `${marker}_o0`, form_value: {} },
           });
         });
-        expect(result?.toast).toEqual({
-          type: "error",
-          content: "本次没有提交：这次没能提交（错误码：runtime_workspace_error）。这个决定可能还没结束，请到网页端查看；如果还在等回答，请在网页端回答。",
-        });
-        expect(result).not.toHaveProperty("card");
+        expect(result?.toast).toEqual({ type: "success", content: "已提交" });
+        expect(result).toHaveProperty("card");
       } finally {
         registration.current?.dispose();
         stopWake();
         stopEvents();
       }
-      expect(store.getIssueDecision(parent.id, decision.id)).toMatchObject({ status: "escalated", history: [] });
-      expect(decisionSideEffectCounts()).toEqual(before);
+      expect(store.getIssueDecision(parent.id, decision.id)).toMatchObject({ status: "answered", history: [expect.objectContaining({ answer: "yes" })] });
+      const q = store.getQuestion(decision.id)!;
+      expect(q).toMatchObject({ wait_status: "none", recovery: { consumer_turn_id: null, consumer_attempt_id: null, continuation_message_id: null } });
+      const notification = q.history.find(event => event.type === "notify")!;
+      expect(notification.reason).toStartWith("historical_source_dispatch_failed:");
+      expect(store.getMessage(notification.source_message_id!)?.body_md).toContain("yes");
+      const after = decisionSideEffectCounts();
+      expect(after.multiremi_turns).toBe(before.multiremi_turns);
+      expect(after.multiremi_turn_attempts).toBe(before.multiremi_turn_attempts);
       expect(wakes).toBe(0);
-      expect(events).toEqual([]);
+      expect(events).toContain("decision:updated");
     });
   }
 
-  it("keeps a no-card-context 404 non-terminal after a successful GET", async () => {
+  it("keeps a source-Q disappearance 404 non-terminal after a successful GET", async () => {
     const { store, agentId } = scaffold();
     const parent = issueWithTopic(store, "Missing card context", { type: "agent", id: agentId });
     const { child, task } = childWithTask(store, agentId, parent.id);
@@ -1411,12 +1650,12 @@ describe("MUL-412 issue decision cards", () => {
           recipientOpenId: CARD_OPEN_ID,
           getDecision: async () => {
             const current = await client.getFeishuIssueDecision(decision.id);
-            db!.run("DELETE FROM multiremi_feishu_bot_outbound_deliveries WHERE decision_id = ?", [decision.id]);
+            db!.run("DELETE FROM multiremi_conversation_log WHERE id = ?", [decision.id]);
             before = decisionSideEffectCounts();
             return current;
           },
-          submit: (answer, operatorOpenId, token) => client.answerFeishuIssueDecision(
-            decision.id, { answer, operatorOpenId, token },
+          submit: (answer, operatorOpenId, token, routeRevision) => client.answerFeishuIssueDecision(
+            decision.id, { answer, operatorOpenId, token, routeRevision },
           ),
         });
         return handleIssueDecisionInteractionEvent("cli_issue_decision", {
@@ -1434,7 +1673,7 @@ describe("MUL-412 issue decision cards", () => {
     }
     expect(before).not.toBeNull();
     expect(decisionSideEffectCounts()).toEqual(before!);
-    expect(store.getIssueDecision(parent.id, decision.id)).toMatchObject({ status: "escalated", history: [] });
+    expect(store.getIssueDecision(parent.id, decision.id)).toBeNull();
     expect(wakes).toBe(0);
     expect(events).toEqual([]);
   });
@@ -1456,8 +1695,8 @@ describe("MUL-412 issue decision cards", () => {
             appId: "cli_issue_decision", chatId: "oc_issue_decision", messageId,
             recipientOpenId: CARD_OPEN_ID,
             getDecision: () => client.getFeishuIssueDecision(decisionId),
-            submit: (answer, operatorOpenId, token) => client.answerFeishuIssueDecision(
-              decisionId, { answer, operatorOpenId, token },
+            submit: (answer, operatorOpenId, token, routeRevision) => client.answerFeishuIssueDecision(
+              decisionId, { answer, operatorOpenId, token, routeRevision },
             ),
           });
           return handleIssueDecisionInteractionEvent("cli_issue_decision", {
@@ -1486,7 +1725,7 @@ describe("MUL-412 issue decision cards", () => {
     const marker = decisionInteractionMarker(parent.id, decision.id);
     const originalAnswer = store.answerMessageDecision.bind(store);
     const injectedAnswer: typeof store.answerMessageDecision = (...args) => {
-      store.withdrawIssueDecision(parent.id, decision.id, { type: "agent", id: agentId, taskId: task.id });
+      closeDecision(store, parent.id, decision.id, { type: "agent", id: agentId, taskId: task.id });
       return originalAnswer(...args);
     };
     store.answerMessageDecision = injectedAnswer;
@@ -1499,8 +1738,8 @@ describe("MUL-412 issue decision cards", () => {
           appId: "cli_issue_decision", chatId: "oc_issue_decision", messageId,
           recipientOpenId: CARD_OPEN_ID,
           getDecision: () => client.getFeishuIssueDecision(decision.id),
-          submit: (answer, operatorOpenId, token) => client.answerFeishuIssueDecision(
-            decision.id, { answer, operatorOpenId, token },
+          submit: (answer, operatorOpenId, token, routeRevision) => client.answerFeishuIssueDecision(
+            decision.id, { answer, operatorOpenId, token, routeRevision },
           ),
         });
         return handleIssueDecisionInteractionEvent("cli_issue_decision", {
@@ -1543,12 +1782,13 @@ describe("MUL-412 issue decision cards", () => {
               raced = true;
               await client.answerFeishuIssueDecision(decision.id, {
                 answer: "yes", operatorOpenId: CARD_OPEN_ID, token: String(cardAction(decision.id).t),
+                routeRevision: Number(cardAction(decision.id).route_revision),
               });
             }
             return current;
           },
-          submit: (answer, operatorOpenId, token) => client.answerFeishuIssueDecision(
-            decision.id, { answer, operatorOpenId, token },
+          submit: (answer, operatorOpenId, token, routeRevision) => client.answerFeishuIssueDecision(
+            decision.id, { answer, operatorOpenId, token, routeRevision },
           ),
         });
         return handleIssueDecisionInteractionEvent("cli_issue_decision", {
@@ -1623,8 +1863,8 @@ describe("MUL-412 issue decision cards", () => {
           appId: "cli_issue_decision", chatId: "oc_issue_decision", messageId,
           recipientOpenId: CARD_OPEN_ID,
           getDecision: () => client.getFeishuIssueDecision(decision.id),
-          submit: (answer, operatorOpenId, token) => client.answerFeishuIssueDecision(
-            decision.id, { answer, operatorOpenId, token },
+          submit: (answer, operatorOpenId, token, routeRevision) => client.answerFeishuIssueDecision(
+            decision.id, { answer, operatorOpenId, token, routeRevision },
           ),
         }) : null;
         const actionName = row.route === "ignored"
@@ -1784,9 +2024,9 @@ describe("MUL-412 issue decision cards", () => {
           messageId,
           recipientOpenId: CARD_OPEN_ID,
           getDecision: () => readClient.getFeishuIssueDecision(decision.id),
-          submit: (answer, operatorOpenId, token) => submitClient.answerFeishuIssueDecision(
+          submit: (answer, operatorOpenId, token, routeRevision) => submitClient.answerFeishuIssueDecision(
             decision.id,
-            { answer, operatorOpenId, token },
+            { answer, operatorOpenId, token, routeRevision },
           ),
         });
         try {

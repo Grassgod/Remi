@@ -14,9 +14,10 @@ import { useT } from "../i18n";
 import { Markdown } from "./markdown";
 import { QuestionCard, QuestionContext } from "./human-request-dock";
 import { TaskTraceDialog } from "./task-transcript/task-trace-dialog";
+import { questionLocation } from "./question-location";
 
 /** All surfaces operate on the original Q, including cross-session notifications. */
-export function UnifiedQuestionCard({ question, getActorName = (_type, id) => id }: { question: QuestionView; getActorName?: (type: string, id: string) => string }) {
+export function UnifiedQuestionCard({ question, getActorName = (_type, id) => id, initiallyShowHistory = false }: { question: QuestionView; getActorName?: (type: string, id: string) => string; initiallyShowHistory?: boolean }) {
   const { t } = useT("issues");
   const wsId = useWorkspaceId();
   const paths = useWorkspacePaths();
@@ -25,7 +26,7 @@ export function UnifiedQuestionCard({ question, getActorName = (_type, id) => id
   const [reason, setReason] = useState("");
   const [selected, setSelected] = useState<string[]>([]);
   const [revise, setRevise] = useState(false);
-  const [historyOpen, setHistoryOpen] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(initiallyShowHistory);
   const allowed = question.actions.allowed;
   const act = useMutation({ mutationFn: ({ action, response }: { action: "answer" | "escalate" | "transfer" | "present" | "continue" | "close"; response?: Record<string, unknown> }) => api.actOnQuestion(question.id, action, {
     expected_route_revision: question.route_revision, response, reason: reason.trim(), summary: action === "present" ? text.trim() : undefined,
@@ -52,7 +53,7 @@ export function UnifiedQuestionCard({ question, getActorName = (_type, id) => id
       {question.current_handler && <p className="break-words">{t($ => $.responsibility.handler)}: {getActorName(question.current_handler.type, question.current_handler.id)} · {question.current_handler.id}</p>}
       <p>{t($ => $.responsibility.revision, { revision: question.route_revision })}</p>
       {question.route_reason && <p className="break-words">{question.route_reason}</p>}
-      <AppLink href={sourceLink(question.id)}>{t($ => $.responsibility.source)} · {question.source_issue_id ?? question.session_id} · {question.source_agent_id && getActorName("agent", question.source_agent_id)}</AppLink>
+      <AppLink href={questionLocation(paths.inboxItem, question.id)}>{t($ => $.responsibility.source)} · {question.source_issue_id ?? question.session_id} · {question.source_agent_id && getActorName("agent", question.source_agent_id)}</AppLink>
     </div>
     <section><h4 className="mb-1 text-xs font-medium">{t($ => $.responsibility.original)}</h4>
       {request && question.original_questions.length > 0 ? <QuestionCard key={`${question.id}:${revise}`} taskId="" request={request} readOnly={!canAnswer || act.isPending}
@@ -87,12 +88,12 @@ export function UnifiedQuestionCard({ question, getActorName = (_type, id) => id
     </div>
     {act.error && <p role="alert" className="text-xs text-destructive">{act.error.message}</p>}
     {historyOpen && <ol className="space-y-2 border-t pt-2 text-xs">{question.history.map((event, index) => <li key={`${event.at}:${index}`}>
-      <p>{event.type} · {event.at} · {event.actor && getActorName(event.actor.type, event.actor.id)} · {event.route_revision}</p>
+      <p>{event.type === "notify" ? t($ => $.responsibility.source_notification) : event.type} · {event.at} · {event.actor && getActorName(event.actor.type, event.actor.id)} · {event.route_revision}</p>
       {event.handler && <p>{t($ => $.responsibility.handler)} · {getActorName(event.handler.type, event.handler.id)} · {event.handler.id}</p>}
       {event.reason && <Markdown mode="minimal">{event.reason}</Markdown>}
       {event.answer != null && typeof event.answer === "object" && "body_md" in event.answer && typeof event.answer.body_md === "string" && <Markdown mode="minimal">{event.answer.body_md}</Markdown>}
       {event.overturn && <Markdown mode="minimal">{event.overturn}</Markdown>}
-      {event.source_message_id && <AppLink href={event.source_session_id && event.source_session_id !== question.session_id ? paths.inboxItem(event.source_message_id) : sourceLink(event.source_message_id)}>{t($ => $.responsibility.source)}</AppLink>}
+      {event.source_message_id && <AppLink href={questionLocation(paths.inboxItem, question.id, event.source_message_id)}>{t($ => $.responsibility.source)} · {event.source_message_id}</AppLink>}
     </li>)}</ol>}
   </article>;
 }

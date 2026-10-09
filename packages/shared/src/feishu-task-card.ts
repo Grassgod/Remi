@@ -397,6 +397,8 @@ export function decisionOptionValue(index: number): string {
 
 export interface IssueDecisionCardOptions {
   token?: string;
+  summary?: string | null;
+  routeRevision?: number;
   header: Record<string, unknown>;
   recipientOpenId?: string;
   /** Only the sending host can resolve the recipient; see TaskInteractionCardOptions. */
@@ -447,6 +449,7 @@ export function buildIssueDecisionCard(
   const marker = decisionInteractionMarker(decision.issueId, decision.id);
   const elements: Card[] = [];
   const terminal = options.receipt || decision.status === "answered" || decision.status === "withdrawn";
+  if (options.summary?.trim()) elements.push({ tag: "markdown", content: `**Remi 总结**\n${escapeCardText(options.summary)}` });
   elements.push({ tag: "markdown", content: `**${escapeCardText(decision.title)}**` });
   const body = decision.body.trim();
   if (body) elements.push({ tag: "markdown", content: escapeCardText(body.slice(0, 6000)) });
@@ -491,7 +494,7 @@ export function buildIssueDecisionCard(
     form.push({
       tag: "button", name: marker, text: { tag: "plain_text", content: "提交" },
       type: "primary_filled", width: "fill", form_action_type: "submit",
-      ...(options.token ? { value: { t: options.token, message_id: decision.id } } : {}),
+      ...(options.token ? { value: { t: options.token, message_id: decision.id, ...(options.routeRevision != null ? { route_revision: options.routeRevision } : {}) } } : {}),
     });
     elements.push({ tag: "form", name: `form_${marker}`, elements: form });
   }

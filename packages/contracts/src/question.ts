@@ -12,7 +12,7 @@ export interface QuestionAnswer {
   reply_message_id: string;
 }
 export interface QuestionHistoryEvent {
-  type: 'created' | 'escalate' | 'transfer' | 'present' | 'answer' | 'revise' | 'detach' | 'continue' | 'consume' | 'close';
+  type: 'created' | 'escalate' | 'transfer' | 'present' | 'answer' | 'revise' | 'detach' | 'continue' | 'consume' | 'close' | 'notify';
   at: string;
   actor: QuestionActor | null;
   route_revision: number;

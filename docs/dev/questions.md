@@ -34,12 +34,14 @@ summary: 原会话中的唯一问题、责任路由、答复版本与provider等
 
 已成功送达的原生 Q 卡片在五十分钟后最多提醒一次；等待超时不取消这次提醒。提醒仍使用当前 Q、当前路由和已验证的指定人类映射，令牌更新、提醒槽和出站意图同事务提交，回滚后可以重试。旧历史请求保留其原有截止窗口。已答、已关闭或仅降级文字的 Q 不生成卡片提醒。
 
-旧 IssueDecision独立创建、答复、升级和撤回 writer返回410。历史 `decision_record` 和 `human_request` 通过统一投影保留原问题、上下文、答案、原因及历史；没有 native nonce证据的历史 AUQ显示等待分离，历史业务decision为 `none`。读取不迁移数据库；后续答复、修订或关闭在统一写路径落地，不调用旧writer。原问题禁止删除或修改正文，关闭必须保留原因和历史。
+旧 IssueDecision独立创建、答复、升级和撤回 writer返回410。历史 `decision_record` 和 `human_request` 通过统一投影保留原问题、上下文、答案、原因及历史；没有 native nonce证据的历史 AUQ显示等待分离，历史业务decision为 `none`。读取不迁移数据库；后续答复、修订或关闭在统一写路径落地，不调用旧writer。历史业务问题按原 `source_task_id` 的真实会话、Agent及execution scope回传普通协作通知，同会话答复直接投递原reply；`notify` 历史保留通知来源或不可运行原因。普通回传不改变wait、consumer或continuation事实；派发失败用savepoint隔离，保留合法答案及可读待处理消息。原问题禁止删除或修改正文，关闭必须保留原因和历史。
 
 Web 的 Issue 和 Chat 主线按 `question`、`human_request`、`decision_record` 或
 `root_question_id` 识别原 Q。历史记录同样先读取统一投影，展示当前处理者与版本后答复；
-不能落回没有路由版本的旧回复表单。权限问题也保留原上下文及截断提示；转交历史的
-跨会话通知链接指向收件消息，不把父单通知误定位到子单时间线。
+不能落回没有路由版本的旧回复表单。权限问题也保留原上下文及截断提示。原问题链接使用
+Inbox 的 `?item=<Q>&question=<Q>` 专属定位，只读取 Question API，不扩大原私有消息或 Turn
+的权限。历史链接保留真实 `source_message_id`，通过 `question_source` 打开同 Q 的历史，
+不把收件通知误定位到子单时间线，也不承诺能读取原来源的全部消息或执行轨迹。
 
 验证入口：[`issue-questions.test.ts`](../../tests/unit/multiremi/issue-questions.test.ts)覆盖 SQLite 和配置的真实 PostgreSQL 上的路由、答复、重复负责人、超时、来源尝试替换和移交。[`decision-callback-integration.test.ts`](../../tests/unit/daemon/decision-callback-integration.test.ts)使用原生 WS 与 mock provider callback，包含短断线保留 nonce 和真实 SIGKILL 后新进程执行唯一续接、读取上下文并确认消费。在线 provider 或飞书在线行为需要独立端到端验证，不由 mock 用例推断。
 

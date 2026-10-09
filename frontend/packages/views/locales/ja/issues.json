@@ -1,5 +1,6 @@
 {
   "responsibility": {
+    "source_notification": "元の実行元への結果通知",
     "continuation_source": "継続指示",
     "consumer_turn": "消費するターン",
     "consumer_attempt": "消費確認済みの実行",

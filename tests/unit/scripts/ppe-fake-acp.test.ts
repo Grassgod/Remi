@@ -192,7 +192,7 @@ test("PPE actual daemon Bootstrap reads its range, consumes a normalized native 
     expect(h.store.listIssueDeliveries(issue.id)).toHaveLength(1);
     const delivery = h.store.listIssueDeliveries(issue.id)[0]!;
     expect(delivery).toMatchObject({ issueId: issue.id, status: "pending", sourceSessionId: session.id, submittedBy: { type: "agent", id: agent.id } });
-    const receipt = h.store.listTurnAttempts(turn.id).find(attempt => attempt.id === attemptId)!;
+    const receipt = h.db.query('SELECT input_read_seq,input_read_offset FROM multiremi_turn_attempts WHERE id=?').get(attemptId)!;
     expect(receipt.input_read_seq).toBeGreaterThanOrEqual(sent.message.seq); expect(receipt.input_read_offset).toBe(0);
     await h.settleHeartbeat();
     expect(h.db.query('SELECT id FROM multiremi_turns WHERE issue_id=? AND agent_id=?').all(issue.id, agent.id)).toEqual([{ id: turn.id }]);

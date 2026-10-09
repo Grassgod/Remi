@@ -1,5 +1,6 @@
 {
   "responsibility": {
+    "source_notification": "Result delivery to original source",
     "continuation_source": "Continuation instruction",
     "consumer_turn": "Consuming turn",
     "consumer_attempt": "Confirmed consumption attempt",
