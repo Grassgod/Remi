@@ -8,7 +8,7 @@ import { decryptScmCredential, encryptScmCredential } from "@multiremi/scm/crede
 import { reconcileObservation } from "@multiremi/scm/reconcile.js";
 import { scmIngestionStore } from "@multiremi/scm/store.js";
 import { ScmWebhookIngestor } from "@multiremi/scm/webhook.js";
-import { configureRepositoryWikiAutomation, createLocalStore, db, resetMultiremiTestEnv } from "./helpers.js";
+import { acceptTestIssueDelivery, configureRepositoryWikiAutomation, createLocalStore, db, resetMultiremiTestEnv } from "./helpers.js";
 
 const previousScmKey = process.env.MULTIREMI_SCM_ENCRYPTION_KEY;
 const previousAllowedApiHosts = process.env.MULTIREMI_SCM_ALLOWED_API_HOSTS;
@@ -98,6 +98,32 @@ function projectChangeRequest(
     contentHash: `change-${externalId}`,
     payload,
   });
+}
+
+function expectMergeReceiptHold(store: ReturnType<typeof createLocalStore>, issueId: string, status = 'todo') {
+  expect(store.getIssue(issueId)?.status).toBe(status);
+  expect(store.listIssueActivity(issueId).filter(entry => entry.type === 'parent_status_held')).toHaveLength(1);
+  expect(store.listIssueActivity(issueId).find(entry => entry.type === 'parent_status_held')?.data)
+    .toMatchObject({ requested: 'done', reason: 'issue_delivery_acceptance_required', source: 'scm_merge' });
+  expect(store.listIssueActivity(issueId).filter(entry => entry.type === 'scm_merge_completed')).toHaveLength(0);
+  expect(db!.query("SELECT COUNT(*) AS count FROM multiremi_scm_effects WHERE issue_id=? AND status='applied'").get(issueId)).toEqual({ count: 1 });
+}
+
+/** Current closure uses an explicit execution owner and its specific receipt. */
+function acceptScmFixtureDelivery(store: ReturnType<typeof createLocalStore>, issueId: string) {
+  const chain = store.resolveIssueResponsibility(issueId).chain;
+  for (const node of [...chain].reverse()) if (!node.executionOwner) {
+    const owner = store.createAgent({ name: `Explicit SCM fixture executor ${node.issueId}`, provider: 'codex' });
+    store.updateIssue(node.issueId, { assigneeType: 'agent', assigneeId: owner.id });
+  }
+  return acceptTestIssueDelivery(store, issueId, 'Explicit SCM fixture formal delivery');
+}
+
+function retainLegacyParentGrant(store: ReturnType<typeof createLocalStore>, issueId: string, agentId: string) {
+  // A persisted pre-delivery grant remains readable but never authorizes SCM
+  // to accept a new specific delivery or close a current parent.
+  db!.run('UPDATE multiremi_issues SET parent_done_grant_at=?,parent_done_grant_by=?,parent_done_grant_agent_id=? WHERE id=?',
+    [new Date().toISOString(), store.resolveIssueResponsibility(issueId).rootHuman!.id, agentId, issueId]);
 }
 
 describe("SCM connection and canonical event store", () => {
@@ -898,7 +924,7 @@ describe("SCM connection and canonical event store", () => {
     expect(store.listScmChangeRequestsForIssue(issue.id)).toHaveLength(1);
   });
 
-  it("completes linked issues through the standard lifecycle once when enabled", () => {
+  it("settles linked merge evidence once and closes only after explicit human delivery acceptance", () => {
     const { store, connection } = seedConnection();
     store.updateWorkspace("local", {
       settings: { scm_auto_link_enabled: true, scm_complete_issue_on_merge_enabled: true },
@@ -929,26 +955,29 @@ describe("SCM connection and canonical event store", () => {
     });
     expect(first.created).toBe(true);
     expect(duplicate.created).toBe(false);
-    expect(store.getIssue(issue.id)?.status).toBe("done");
+    expectMergeReceiptHold(store, issue.id);
     expect(db!.query(
       "SELECT COUNT(*) AS count FROM multiremi_system_events WHERE resource_id = ? AND event = 'status_changed'",
-    ).get(issue.id)).toEqual({ count: 1 });
+    ).get(issue.id)).toEqual({ count: 0 });
     expect(db!.query(
       "SELECT COUNT(*) AS count FROM multiremi_scm_effects WHERE issue_id = ? AND status = 'applied'",
     ).get(issue.id)).toEqual({ count: 1 });
-    expect(store.listIssueActivity(issue.id).find((activity) => activity.type === "scm_merge_completed"))
+    expect(store.listIssueActivity(issue.id).find((activity) => activity.type === "parent_status_held"))
       .toMatchObject({
         actorType: "system",
         actorId: null,
         data: {
-          change_request_id: expect.any(String),
-          number: 42,
-          url: "https://github.com/acme/widgets/pull/42",
-          source_branch: `agent/${issue.key}`,
-          event_id: first.event.id,
-          attribution: ["branch", "title"],
+          reason: 'issue_delivery_acceptance_required', changeRequestNumber: 42,
+          changeRequestUrl: "https://github.com/acme/widgets/pull/42",
         },
       });
+    expect(db!.query('SELECT event_id,issue_id FROM multiremi_scm_effects WHERE issue_id=?').get(issue.id))
+      .toEqual({ event_id: first.event.id, issue_id: issue.id });
+    expect(store.listScmChangeRequestsForIssue(issue.id)![0]).toMatchObject({ title: `${issue.key} merge`, sourceBranch: `agent/${issue.key}` });
+    expect(acceptScmFixtureDelivery(store, issue.id).status).toBe('done');
+    const accepted = store.listIssueDeliveries(issue.id).filter(delivery => delivery.status === 'accepted');
+    expect(accepted).toHaveLength(1);
+    expect(store.getMessage(accepted[0]!.responseMessageId!)).toMatchObject({ sender_type: 'member', sender_id: store.resolveIssueResponsibility(issue.id).rootHuman!.id });
   });
 
   it("holds a parent with open children when a child change request merges", () => {
@@ -1006,7 +1035,7 @@ describe("SCM connection and canonical event store", () => {
     // Finishing the child does NOT auto-close the parent: under E1 that is the
     // human's call, not a deferred merge effect.
     const child = store.listChildIssues(parent.id)[0]!;
-    store.updateIssue(child.id, { status: "done" });
+    acceptScmFixtureDelivery(store, child.id);
     expect(store.getIssue(parent.id)?.status).not.toBe("done");
   });
 
@@ -1022,8 +1051,8 @@ describe("SCM connection and canonical event store", () => {
         assigneeType: "agent", assigneeId: owner.id,
       });
       const child = createResponsibleTestIssue(store, { title: "Finished child", parentIssueId: parent.id, status: "in_progress" });
-      store.updateIssue(child.id, { status: "done" });
-      if (grantEnabled) store.grantParentDone(parent.id, "local");
+      acceptScmFixtureDelivery(store, child.id);
+      if (grantEnabled) retainLegacyParentGrant(store, parent.id, owner.id);
       projectChangeRequest(store, connection.id, "42", { number: 42, title: `${parent.key} delivery`, state: "merged" });
       recordChange(store, connection.id, { logicalKey: `change.merged:42:hold-${grantEnabled}` });
       expect(store.getIssue(parent.id)?.status).toBe("in_progress");
@@ -1034,7 +1063,7 @@ describe("SCM connection and canonical event store", () => {
     }
   });
 
-  it("completes a granted parent with a post-child summary, without an issue_status_forced row", () => {
+  it("holds a legacy-granted summarized parent until a specific delivery receives human acceptance", () => {
     const { store, connection } = seedConnection();
     store.updateWorkspace("local", {
       settings: { scm_auto_link_enabled: true, scm_complete_issue_on_merge_enabled: true },
@@ -1049,8 +1078,8 @@ describe("SCM connection and canonical event store", () => {
       parentIssueId: parent.id,
       status: "in_progress",
     });
-    store.updateIssue(child.id, { status: "done" });
-    store.grantParentDone(parent.id, "local");
+    acceptScmFixtureDelivery(store, child.id);
+    retainLegacyParentGrant(store, parent.id, owner.id);
     store.createIssueComment(parent.id, { body: "All child work delivered", authorType: "agent", authorId: owner.id });
 
     // `recordChange` addresses subject id "42" (the shared fixture), so this case
@@ -1064,16 +1093,17 @@ describe("SCM connection and canonical event store", () => {
     });
     recordChange(store, connection.id, { logicalKey: "change.merged:42:closed" });
 
-    expect(store.getIssue(parent.id)?.status).toBe("done");
+    expectMergeReceiptHold(store, parent.id, 'in_progress');
     // The merge exemption must not look like a human force.
     expect(store.listIssueActivity(parent.id).filter((activity) => activity.type === "issue_status_forced"))
       .toHaveLength(0);
     expect(store.listIssueActivity(parent.id).filter((activity) => activity.type === "parent_status_held"))
-      .toHaveLength(0);
+      .toHaveLength(1);
     expect(store.listIssueActivity(parent.id).find((activity) => activity.type === "scm_merge_completed"))
-      .toBeDefined();
-    expect(store.listIssueActivity(parent.id).find((activity) => activity.type === "parent_done_grant_used")?.data)
-      .toMatchObject({ source: "scm_merge", agentId: owner.id });
+      .toBeUndefined();
+    expect(store.listIssueActivity(parent.id).filter((activity) => activity.type === "parent_done_grant_used")).toHaveLength(0);
+    expect(acceptScmFixtureDelivery(store, parent.id).status).toBe('done');
+    expect(store.listIssueActivity(parent.id).filter((activity) => activity.type === "issue_status_forced")).toHaveLength(0);
   });
 
   it("completes only the owning issue while preserving weak cross-reference links", () => {
@@ -1093,9 +1123,11 @@ describe("SCM connection and canonical event store", () => {
 
     recordChange(store, connection.id, { logicalKey: "change.merged:42:cross-reference" });
 
-    expect(store.getIssue(owningIssue.id)?.status).toBe("done");
+    expectMergeReceiptHold(store, owningIssue.id);
     expect(store.getIssue(mentionedIssue.id)?.status).toBe("todo");
     expect(store.listScmChangeRequestsForIssue(mentionedIssue.id)).toHaveLength(1);
+    expect(store.listIssueActivity(mentionedIssue.id).filter(entry => entry.type === 'parent_status_held')).toHaveLength(0);
+    expect(db!.query('SELECT COUNT(*) AS count FROM multiremi_scm_effects WHERE issue_id=?').get(mentionedIssue.id)).toEqual({ count: 0 });
   });
 
   it("does not complete an issue while another non-draft owning change request is open", () => {
@@ -1122,6 +1154,7 @@ describe("SCM connection and canonical event store", () => {
     expect(store.getIssue(issue.id)?.status).toBe("todo");
     expect(db!.query("SELECT COUNT(*) AS count FROM multiremi_scm_effects WHERE issue_id = ?").get(issue.id))
       .toEqual({ count: 0 });
+    expect(store.listIssueActivity(issue.id).filter(entry => entry.type === 'parent_status_held')).toHaveLength(0);
   });
 
   it("keeps branch-only owning change requests eligible for merge completion", () => {
@@ -1139,7 +1172,7 @@ describe("SCM connection and canonical event store", () => {
 
     recordChange(store, connection.id, { logicalKey: "change.merged:42:branch-owner" });
 
-    expect(store.getIssue(issue.id)?.status).toBe("done");
+    expectMergeReceiptHold(store, issue.id);
   });
 
   it("treats issue keys anywhere in release titles as ownership", () => {
@@ -1157,7 +1190,7 @@ describe("SCM connection and canonical event store", () => {
 
     recordChange(store, connection.id, { logicalKey: "change.merged:42:release-title" });
 
-    expect(store.getIssue(issue.id)?.status).toBe("done");
+    expectMergeReceiptHold(store, issue.id);
   });
 
   it("ignores draft owners and weak open mentions when checking merge completion blockers", () => {
@@ -1186,7 +1219,7 @@ describe("SCM connection and canonical event store", () => {
 
     recordChange(store, connection.id, { logicalKey: "change.merged:42:draft-blocker" });
 
-    expect(store.getIssue(issue.id)?.status).toBe("done");
+    expectMergeReceiptHold(store, issue.id);
   });
 
   it("accepts declarative body ownership and explicit manual links", () => {
@@ -1207,8 +1240,8 @@ describe("SCM connection and canonical event store", () => {
 
     recordChange(store, connection.id, { logicalKey: "change.merged:42:declared-and-manual" });
 
-    expect(store.getIssue(bodyOwnedIssue.id)?.status).toBe("done");
-    expect(store.getIssue(manuallyLinkedIssue.id)?.status).toBe("done");
+    expectMergeReceiptHold(store, bodyOwnedIssue.id);
+    expectMergeReceiptHold(store, manuallyLinkedIssue.id);
   });
 
   // The three sentence shapes below are verbatim from the change requests that
@@ -1236,8 +1269,10 @@ describe("SCM connection and canonical event store", () => {
     recordChange(store, connection.id, { logicalKey: "change.merged:42:prose-mention" });
 
     expect(store.getIssue(mentioned.id)?.status).toBe("todo");
-    expect(store.getIssue(owner.id)?.status).toBe("done");
+    expectMergeReceiptHold(store, owner.id);
     expect(store.listScmChangeRequestsForIssue(mentioned.id)).toHaveLength(1);
+    expect(store.listIssueActivity(mentioned.id).filter(entry => entry.type === 'parent_status_held')).toHaveLength(0);
+    expect(db!.query('SELECT COUNT(*) AS count FROM multiremi_scm_effects WHERE issue_id=?').get(mentioned.id)).toEqual({ count: 0 });
   });
 
   it("judges ownership by the derived issue key when issue_key is not stored", () => {
@@ -1262,6 +1297,8 @@ describe("SCM connection and canonical event store", () => {
     recordChange(store, connection.id, { logicalKey: "change.merged:42:null-key" });
 
     expect(store.getIssue(issue.id)?.status).toBe("todo");
+    expect(store.listIssueActivity(issue.id).filter(entry => entry.type === 'parent_status_held')).toHaveLength(0);
+    expect(db!.query('SELECT COUNT(*) AS count FROM multiremi_scm_effects WHERE issue_id=?').get(issue.id)).toEqual({ count: 0 });
   });
 
   it("keeps merge completion retryable after a transient lifecycle failure", () => {
@@ -1282,8 +1319,8 @@ describe("SCM connection and canonical event store", () => {
     });
     db!.exec(`
       CREATE TRIGGER fail_merge_completion
-      BEFORE UPDATE OF status ON multiremi_issues
-      WHEN NEW.status = 'done'
+      BEFORE INSERT ON multiremi_issue_activity
+      WHEN NEW.issue_id = '${issue.id}' AND NEW.type = 'parent_status_held'
       BEGIN
         SELECT RAISE(ABORT, 'transient merge completion failure');
       END
@@ -1294,6 +1331,7 @@ describe("SCM connection and canonical event store", () => {
     expect(store.dispatchPendingScmEvents(firstDispatchAt)).toEqual([]);
     expect(store.getIssue(issue.id)?.status).toBe("todo");
     expect(store.getScmCanonicalEvent(recorded.event.id)?.status).toBe("pending");
+    expect(store.listIssueActivity(issue.id).filter(entry => entry.type === 'parent_status_held')).toHaveLength(0);
     expect(db!.query(
       "SELECT status, last_error FROM multiremi_scm_effects WHERE event_id = ?",
     ).get(recorded.event.id)).toEqual({
@@ -1303,8 +1341,11 @@ describe("SCM connection and canonical event store", () => {
 
     db!.exec("DROP TRIGGER fail_merge_completion");
     expect(store.dispatchPendingScmEvents(new Date(firstDispatchAt.getTime() + 60_000))).toEqual([]);
-    expect(store.getIssue(issue.id)?.status).toBe("done");
+    expectMergeReceiptHold(store, issue.id);
     expect(store.getScmCanonicalEvent(recorded.event.id)?.status).toBe("processed");
+    expect(store.dispatchPendingScmEvents(new Date(firstDispatchAt.getTime() + 120_000))).toEqual([]);
+    expectMergeReceiptHold(store, issue.id);
+    expect(acceptScmFixtureDelivery(store, issue.id).status).toBe('done');
   });
 
   it("does not replay merge completion when the setting is enabled after event history exists", () => {
