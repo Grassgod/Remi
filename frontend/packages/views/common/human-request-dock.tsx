@@ -257,7 +257,7 @@ export function QuestionCard({
   );
 }
 
-function QuestionContext({ context }: { context: { text: string; truncated?: boolean } }) {
+export function QuestionContext({ context }: { context: { text: string; truncated?: boolean } }) {
   const { t } = useT("chat");
   const contentRef = useRef<HTMLDivElement>(null);
   const [expanded, setExpanded] = useState(false);

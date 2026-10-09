@@ -6,6 +6,11 @@ import { Button } from "@multiremi/ui/components/ui/button";
 import { useT } from "../i18n";
 import { UnifiedQuestionCard } from "./question-card";
 
+export function linkedQuestionId(id: string, metadata: Record<string, unknown> | undefined): string | null {
+  if (typeof metadata?.root_question_id === "string") return metadata.root_question_id;
+  return metadata?.question || metadata?.human_request || metadata?.decision_record ? id : null;
+}
+
 export function LinkedQuestion({ id, getActorName }: { id: string; getActorName?: (type: string, id: string) => string }) {
   const wsId = useWorkspaceId();
   const { t } = useT("issues");

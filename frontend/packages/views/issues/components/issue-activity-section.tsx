@@ -22,7 +22,7 @@ import { getSessionDisplayName } from "../utils/session-display";
 import { quotePreview } from "../utils/quote-preview";
 import { formatActivity } from "../utils/format-activity";
 import { MessageHeader } from "../../common/message-header";
-import { LinkedQuestion } from "../../common/linked-question";
+import { LinkedQuestion, linkedQuestionId } from "../../common/linked-question";
 import { CommentCard } from "./comment-card";
 import { CommentInput, type ReplyTarget } from "./comment-input";
 import { IssueLogHead } from "./issue-log-head";
@@ -275,7 +275,7 @@ export function IssueActivitySection({ issueId, issueTitle, projectId, members, 
           results={resultsById} onShowKeyResults={onShowKeyResults} onOpenTask={setPromptRow} />;
       }
       const comment = commentsById.get(row.id)!;
-      const questionId = typeof row.metadata.root_question_id === "string" ? row.metadata.root_question_id : row.metadata.question ? row.id : null;
+      const questionId = linkedQuestionId(row.id, row.metadata);
       if (questionId) return <div><MessageHeader message={row} getActorName={getActorName} /><LinkedQuestion id={questionId} getActorName={getActorName} /></div>;
       if (row.resolved_at && !resolved.expanded.has(row.id)) return <ResolvedThreadBar entry={comment} onExpand={() => resolved.toggle(row.id, true)} />;
       const parentId = row.reply_to_id ?? row.parent_id;

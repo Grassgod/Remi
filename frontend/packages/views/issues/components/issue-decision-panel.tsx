@@ -16,6 +16,7 @@ import { MessageHeader } from "../../common/message-header";
 import { Markdown } from "../../common/markdown";
 import { useT } from "../../i18n";
 import { UnifiedQuestionCard } from "../../common/question-card";
+import { linkedQuestionId } from "../../common/linked-question";
 interface IssueDecisionPanelProps {
   issueId: string; pendingCount: number; showOwnerOnly?: boolean; canAnswer: boolean;
   getActorName: (type: string, id: string) => string;
@@ -70,8 +71,8 @@ export function IssueDecisionPanel({ issueId, pendingCount, showOwnerOnly = fals
 
 export function MessageDecisionCard(props: { message: Message; canAnswer: boolean; getActorName?: (type: string, id: string) => string }) {
   const wsId = useWorkspaceId();
-  const unified = props.message.metadata.question || props.message.metadata.root_question_id;
-  const questionId = typeof props.message.metadata.root_question_id === "string" ? props.message.metadata.root_question_id : props.message.id;
+  const unified = linkedQuestionId(props.message.id, props.message.metadata);
+  const questionId = unified ?? props.message.id;
   const question = useQuery({ queryKey: ["question", wsId, questionId], queryFn: () => api.getQuestion(questionId), enabled: Boolean(unified) });
   const { t } = useT("issues");
   if (unified) return question.data ? <UnifiedQuestionCard question={question.data} getActorName={props.getActorName} /> : question.isError ? <div role="alert">{t($ => $.responsibility.load_failed)}<Button onClick={() => void question.refetch()}>{t($ => $.responsibility.retry)}</Button></div> : <LoaderCircle className="size-5 animate-spin" />;

@@ -8,7 +8,7 @@ import enChat from "../../locales/en/chat.json";
 import enIssues from "../../locales/en/issues.json";
 
 const mockApi = vi.hoisted(() => ({
-  listIssueSessions: vi.fn(), listMessages: vi.fn(), sendMessage: vi.fn(),
+  listIssueSessions: vi.fn(), listMessages: vi.fn(), sendMessage: vi.fn(), getQuestion: vi.fn(),
 }));
 
 vi.mock("@multiremi/core/api", async (importOriginal) => ({
@@ -19,6 +19,7 @@ vi.mock("@multiremi/core/api", async (importOriginal) => ({
 }));
 
 vi.mock("@multiremi/core/hooks", () => ({ useWorkspaceId: () => "ws-1" }));
+vi.mock("../../common/question-card", () => ({ UnifiedQuestionCard: ({ question }: { question: { original_message: string; route_revision: number; wait_status: string } }) => <div>{question.original_message} · revision {question.route_revision} · {question.wait_status}</div> }));
 
 import { IssueDecisionBanner, MessageDecisionCard } from "./issue-decision-panel";
 
@@ -84,6 +85,16 @@ function mountPanel() {
   </I18nProvider></QueryClientProvider>);
 }
 describe("decision message replies", () => {
+  it.each(["human_request", "decision_record"])("reads historical %s through the original Q projection without the retired reply path", async metadataKey => {
+    mockApi.sendMessage.mockClear(); mockApi.getQuestion.mockClear();
+    mockApi.getQuestion.mockResolvedValue({ original_message: "Historical original question", route_revision: 9, wait_status: "detached" });
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={qc}><I18nProvider locale="en" resources={{ en: { issues: enIssues } }}><MessageDecisionCard message={{ ...decision, metadata: { [metadataKey]: { status: "pending" } } }} canAnswer /></I18nProvider></QueryClientProvider>);
+    expect(await screen.findByText("Historical original question · revision 9 · detached")).toBeInTheDocument();
+    expect(mockApi.getQuestion).toHaveBeenCalledWith(decision.id);
+    expect(mockApi.sendMessage).not.toHaveBeenCalled();
+    expect(screen.queryByRole("button", { name: "Reply" })).toBeNull();
+  });
   it("posts historical decision replies with the option value and original reply_to_id", async () => {
     mockApi.listMessages.mockClear(); mockApi.sendMessage.mockResolvedValue({ message: {} }); mountPanel();
     expect(mockApi.listMessages).not.toHaveBeenCalled();

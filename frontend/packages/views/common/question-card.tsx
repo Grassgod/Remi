@@ -12,7 +12,7 @@ import { Textarea } from "@multiremi/ui/components/ui/textarea";
 import { AppLink } from "../navigation";
 import { useT } from "../i18n";
 import { Markdown } from "./markdown";
-import { QuestionCard } from "./human-request-dock";
+import { QuestionCard, QuestionContext } from "./human-request-dock";
 import { TaskTraceDialog } from "./task-transcript/task-trace-dialog";
 
 /** All surfaces operate on the original Q, including cross-session notifications. */
@@ -56,7 +56,7 @@ export function UnifiedQuestionCard({ question, getActorName = (_type, id) => id
     </div>
     <section><h4 className="mb-1 text-xs font-medium">{t($ => $.responsibility.original)}</h4>
       {request && question.original_questions.length > 0 ? <QuestionCard key={`${question.id}:${revise}`} taskId="" request={request} readOnly={!canAnswer || act.isPending}
-        onAnswer={response => act.mutateAsync({ action: "answer", response })} /> : <Markdown mode="minimal">{question.original_message}</Markdown>}
+        onAnswer={response => act.mutateAsync({ action: "answer", response })} /> : <><Markdown mode="minimal">{question.original_message}</Markdown>{question.original_context && <QuestionContext context={question.original_context} />}</>}
     </section>
     {question.summary && <section className="rounded bg-muted/40 p-2"><h4 className="mb-1 text-xs font-medium">{t($ => $.responsibility.remi)}</h4><Markdown mode="minimal">{question.summary.body_md}</Markdown></section>}
     <p className="text-xs text-muted-foreground" data-question-wait-status={question.wait_status}>{waitLabels[question.wait_status] ?? question.wait_status}{question.wait_reason && ` · ${question.wait_reason}`}</p>
@@ -92,7 +92,7 @@ export function UnifiedQuestionCard({ question, getActorName = (_type, id) => id
       {event.reason && <Markdown mode="minimal">{event.reason}</Markdown>}
       {event.answer != null && typeof event.answer === "object" && "body_md" in event.answer && typeof event.answer.body_md === "string" && <Markdown mode="minimal">{event.answer.body_md}</Markdown>}
       {event.overturn && <Markdown mode="minimal">{event.overturn}</Markdown>}
-      {event.source_message_id && <AppLink href={sourceLink(event.source_message_id)}>{t($ => $.responsibility.source)}</AppLink>}
+      {event.source_message_id && <AppLink href={event.source_session_id && event.source_session_id !== question.session_id ? paths.inboxItem(event.source_message_id) : sourceLink(event.source_message_id)}>{t($ => $.responsibility.source)}</AppLink>}
     </li>)}</ol>}
   </article>;
 }

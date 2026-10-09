@@ -19,6 +19,17 @@ function mount(question = base) {
 }
 beforeEach(() => { mocks.actOnQuestion.mockReset(); mocks.actOnQuestion.mockResolvedValue(base); mocks.getTask.mockReset(); });
 describe("one Q on every surface", () => {
+  it("retains original permission background separately from Remi advice", () => {
+    mount({ ...base, kind: "permission", original_context: { text: "The exact operation requiring authorization", truncated: true } });
+    expect(screen.getByText("The exact operation requiring authorization")).toBeInTheDocument();
+    expect(screen.getByText("Separate Remi recommendation")).toBeInTheDocument();
+    expect(screen.getByText(enChat.human_requests.context_truncated)).toBeInTheDocument();
+  });
+  it("links a transfer notification in its receiving session instead of the child issue timeline", () => {
+    mount({ ...base, history: [{ type: "transfer", actor: null, at: "now", route_revision: 7, source_message_id: "parent-notification", source_session_id: "parent-session" }] });
+    fireEvent.click(screen.getByRole("button", { name: /Transfer and answer history/ }));
+    expect(screen.getAllByRole("link", { name: "Source" }).at(-1)).toHaveAttribute("href", "/ws/inbox?item=parent-notification");
+  });
   it("reads only the confirmed consumer attempt lazily and opens its actual execution", async () => {
     mocks.getTask.mockResolvedValue({ id: "consumer-attempt", turn_id: "consumer-turn", agent_id: "worker" });
     mount({ ...base, wait_status: "continuation_consumed", recovery: { consumer_turn_id: "consumer-turn", consumer_attempt_id: "consumer-attempt", reply_message_id: "reply", continuation_message_id: "continuation", consumed_at: "then" } });

@@ -67,6 +67,21 @@ test("issue CLI filters assignee types and resolves a parent key over local HTTP
   }
 
   try {
+    const rejected = Bun.spawn([process.execPath, "run", "apps/remi/main.ts", "issue", "assign", parent.id, "--to", member.id, "--to-type", "member", "--server", server.url.toString(), "--workspace", "local", "--output", "json"], {
+      cwd: root, env, stdout: "pipe", stderr: "pipe", timeout: 10_000,
+    });
+    const [rejectedError, rejectedCode] = await Promise.all([new Response(rejected.stderr).text(), rejected.exited]);
+    expect(rejectedCode).not.toBe(0);
+    expect(rejectedError).toContain("Execution assignee must be an Agent or Squad");
+    expect(store.getIssue(parent.id)?.assigneeType).toBeNull();
+    expect(requests.some(url => url.pathname === `/api/issues/${parent.id}`)).toBe(false);
+    const humanSubmit = Bun.spawn([process.execPath, "run", "apps/remi/main.ts", "issue", "delivery", "submit", parent.id, "--summary", "Human cannot impersonate execution coordinator", "--server", server.url.toString(), "--workspace", "local", "--output", "json"], {
+      cwd: root, env, stdout: "pipe", stderr: "pipe", timeout: 10_000,
+    });
+    const [submitError, submitCode] = await Promise.all([new Response(humanSubmit.stderr).text(), humanSubmit.exited]);
+    expect(submitCode).not.toBe(0);
+    expect(submitError).toContain("current credential cannot run issue.delivery.submit");
+    expect(requests.some(url => url.pathname === `/api/issues/${parent.id}/deliveries`)).toBe(false);
     for (const [index, { type }] of assignments.entries()) {
       const result = await runCli(["issue", "list", "--assignee-type", type]);
       expect(result.total).toBe(1);

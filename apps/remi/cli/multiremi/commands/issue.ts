@@ -104,7 +104,7 @@ export async function issue(positional: string[], options: CliOptions): Promise<
   }
   if (action === "assign") {
     const issueId = positional[1]?.trim();
-    if (!issueId) throw new Error("usage: multiremi issue assign <issue-id> (--to <id|name|email> [--to-type agent|member|squad] | --unassign); --unassign clears the assignee and cancels active tasks on this issue");
+    if (!issueId) throw new Error("usage: multiremi issue assign <issue-id> (--to <id|name> [--to-type agent|squad] | --unassign); --unassign clears the assignee and cancels active tasks on this issue");
     await issueAssign(issueId, options);
     return;
   }

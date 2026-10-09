@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { CommandRegistry } from "../../../apps/remi/cli/core/index.js";
 import { responsibilityCommandSpecs } from "../../../apps/remi/cli/commands/responsibility.js";
+import { collaborationCommandSpecs } from "../../../apps/remi/cli/commands/collaboration.js";
 import { workspaceCommandSpecs } from "../../../apps/remi/cli/commands/workspace.js";
 import { issueAssign, issueUpdate } from "../../../apps/remi/cli/multiremi/commands/issue.js";
 import { classifyRoute } from "../../../scripts/generate-cli-capabilities.js";
@@ -29,6 +30,15 @@ afterEach(() => {
   for (const name of envNames) { if (envBefore[name] === undefined) delete process.env[name]; else process.env[name] = envBefore[name]; }
 });
 describe("responsibility CLI", () => {
+  it("keeps execution assignment and formal acceptance constraints visible in generated help", () => {
+    const issueHelp = new CommandRegistry();
+    for (const command of collaborationCommandSpecs().filter(command => ["issue.assign", "issue.update", "issue.status"].includes(command.id))) issueHelp.register(command);
+    expect(issueHelp.renderHelp(["issue", "assign"])).toContain("agent|squad");
+    expect(issueHelp.renderHelp(["issue", "assign"])).not.toContain("agent|member|squad");
+    for (const action of ["update", "status"]) expect(issueHelp.renderHelp(["issue", action])).toContain("done still requires formal delivery acceptance");
+    expect(registry.renderHelp(["message", "question", "answer"])).toContain("--revision");
+    expect(registry.renderHelp(["message", "question", "answer"])).toContain("--answer-revision");
+  });
   it("advertises only the authentication kinds accepted by responsibility APIs", () => {
     const humanOnly = ["issue.responsibility-unassigned.list", "issue.responsibility-unassigned.map", "issue.responsible.set", "autopilot.responsible.set", "issue.delivery.authorize", "message.question.continue"];
     const taskOnly = ["issue.delivery.submit", "message.question.present", "message.question.escalate"];

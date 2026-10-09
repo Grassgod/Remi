@@ -155,9 +155,7 @@ function issueCompatibilitySpecs(): CommandSpec[] {
     ], ["issue", "bind-topic"]),
     legacySpec("issue.update", ["issue", "update"], "Update an issue", "write", HUMAN_TASK, [refPositional("issue")], [
       ...ISSUE_FIELDS,
-      // MUL-400 E1: member-only override for the parent-status guard. A run
-      // (`task` identity) sending it is rejected by the server.
-      { name: "force", type: "boolean", description: "Force in_review/done with open sub-issues, or start a backlog issue with unmet prerequisites (members only)" },
+      { name: "force", type: "boolean", description: "Override eligible parent/dependency guards as a member; done still requires formal delivery acceptance" },
     ], ["issue", "update"]),
     legacySpec("issue.assign", ["issue", "assign"], "Assign or unassign an issue", "write", HUMAN_TASK, [refPositional("issue")], [
       { name: "to", type: "string", valueName: "ref", description: "Assignee reference" },
@@ -165,7 +163,7 @@ function issueCompatibilitySpecs(): CommandSpec[] {
       { name: "unassign", type: "boolean", description: "Clear the assignee and cancel active tasks on this issue" },
     ], ["issue", "assign"]),
     legacySpec("issue.status", ["issue", "status"], "Change issue status", "write", HUMAN_TASK, [refPositional("issue"), refPositional("status")], [
-      { name: "force", type: "boolean", description: "Force the transition past the parent-status and dependency guards (members only)" },
+      { name: "force", type: "boolean", description: "Override eligible parent/dependency guards as a member; done still requires formal delivery acceptance" },
     ], ["issue", "status"]),
     legacySpec("issue.delete", ["issue", "delete"], "Delete an issue", "destructive", HUMAN_TASK, [refPositional("issue")], [], ["issue", "delete"]),
     nativeSpec("issue.restore", ["issue", "restore"], "Restore an archived issue", "write", HUMAN, [refPositional("issue")], [], async (invocation) => {
