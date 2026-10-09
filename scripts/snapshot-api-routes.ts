@@ -1367,6 +1367,47 @@ flow("issue-responsibility-and-questions", async (rec, refs, store) => {
   await checked("POST", `/api/issues/${root.id}/deliveries/${finalDelivery.id}/respond`, { action: "accept", revision: finalDelivery.responsibilityRevision }, pat.token);
   await read(`/api/issues/${root.id}/deliveries?limit=1`);
   await read(`/api/issues/${root.id}/deliveries?limit=1&before=${finalDelivery.id}`);
+
+  // A detached native wait keeps its valid answer when execution is temporarily
+  // unavailable. The explicit HTTP continuation creates one new consumer;
+  // only its actual input acknowledgement can mark the question consumed.
+  const continuationIssue = await checked("POST", "/api/issues", { title: "Controlled continuation snapshot", workspace_id: refs.workspaceId, responsible_member_id: human.id, assignee_type: "agent", assignee_id: owner.id }, pat.token, 201);
+  const continuationAgent = store.createAgent({ name: "Continuation source", provider: "codex", ownerId: user.id, runtimeId: runtime.id, visibility: "workspace" });
+  const continuationTask = store.createTask({ agentId: continuationAgent.id, issueId: continuationIssue.id, prompt: "Continue only after explicit authorization" });
+  const reviewerTask = store.createTask({ agentId: owner.id, issueId: continuationIssue.id, prompt: "Review continuation question" });
+  for (let count = 0; count < 8; count++) { const claimed = store.claimTask(runtime.id); if (!claimed) break; store.startTask(claimed.id); }
+  const reviewerToken = await store.createTaskAccessToken(store.getTask(reviewerTask.id)!, user.id);
+  const continuationTurn = store.getTurnForAttempt(continuationTask.id)!;
+  const bridge = store.getDaemonTurnBridge();
+  const scope = { runtimeId: runtime.id, daemonId: "dmn_responsibility_snapshot", workspaceId: refs.workspaceId };
+  const native = bridge.rpc("turn.decision", { turn_id: continuationTurn.id, attempt_id: continuationTask.id, dedupe_key: "snapshot-controlled-continuation", wait_id: "snapshot-continuation-wait", body_md: "Proceed after restart?", options: [{ label: "Proceed", value: "Proceed" }], metadata: { kind: "question", questions: [{ question: "Proceed after restart?", options: [{ label: "Proceed" }] }] } }, scope);
+  if (!native.ok) throw new Error(`Snapshot continuation Q failed: ${native.code}`);
+  const continuationQuestion = store.getQuestion(String(native.message_id))!;
+  const escalated = (await checked("POST", `/api/messages/${continuationQuestion.id}/question/escalate`, { expected_route_revision: continuationQuestion.route_revision, reason: "Explicit human authorization after restart" }, reviewerToken.token)).question;
+  const expired = bridge.rpc("turn.decision.expire", { turn_id: continuationTurn.id, attempt_id: continuationTask.id, message_id: continuationQuestion.id, status: "timeout" }, scope);
+  if (!expired.ok) throw new Error(`Snapshot wait detach failed: ${expired.code}`);
+  store.archiveAgent(continuationAgent.id);
+  const saved = (await checked("POST", `/api/messages/${continuationQuestion.id}/question/answer`, { expected_route_revision: escalated.route_revision, response: { answer: "Proceed" } }, pat.token)).question;
+  if (saved.status !== "answered" || saved.wait_status !== "detached" || saved.wait_reason !== "question_source_agent_unavailable") throw new Error("Snapshot must preserve the answer without pretending unavailable execution resumed");
+  store.restoreAgent(continuationAgent.id);
+  const continued = (await checked("POST", `/api/messages/${continuationQuestion.id}/question/continue`, { expected_route_revision: saved.route_revision }, pat.token)).question;
+  if (continued.wait_status !== "continuation_pending" || !continued.recovery.consumer_turn_id || continued.recovery.consumer_attempt_id !== null) throw new Error("Snapshot continuation must identify a pending consumer, not a consumed attempt");
+  const replay = (await checked("POST", `/api/messages/${continuationQuestion.id}/question/continue`, { expected_route_revision: saved.route_revision }, pat.token)).question;
+  if (replay.recovery.consumer_turn_id !== continued.recovery.consumer_turn_id) throw new Error("Snapshot duplicate continuation created another consumer");
+  const consumer = store.getTurn(continued.recovery.consumer_turn_id)!;
+  for (let count = 0; count < 8; count++) { const claimed = store.claimTask(runtime.id); if (!claimed) break; store.startTask(claimed.id); }
+  const consumerTask = store.getTaskWithAgent(consumer.current_attempt_id!)!;
+  const consumerToken = await store.createTaskAccessToken(consumerTask, user.id);
+  const input = bridge.offerInput(consumerTask);
+  let cursor: string | undefined;
+  do {
+    const page = await rec.call("GET", `/api/sessions/${consumer.session_id}/messages?from=0&to=${input.input_to_seq}${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`, { headers: { Authorization: `Bearer ${consumerToken.token}` } });
+    if (page.status !== 200) throw new Error(`Snapshot continuation context read failed: ${page.status}`);
+    cursor = page.body.next_cursor ?? undefined;
+  } while (cursor);
+  const acknowledged = bridge.rpc("turn.input", { turn_id: consumer.id, attempt_id: consumer.current_attempt_id, input_to_seq: input.input_to_seq, message_ids: input.input_messages.map(message => message.id) }, scope);
+  if (!acknowledged.ok || store.getQuestion(continuationQuestion.id)?.wait_status !== "continuation_consumed") throw new Error(`Snapshot continuation input was not consumed: ${acknowledged.code}`);
+  await read(`/api/messages/${continuationQuestion.id}/question`);
 });
 
 flow("responsibility-migration-and-configuration", async (rec, refs, store) => {
