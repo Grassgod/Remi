@@ -1,5 +1,12 @@
 import type { DecisionOption } from './unified-model.js';
 
+/** Historical IssueDecision records carry an Issue identity; ordinary choices only carry status. */
+export function isHistoricalIssueQuestionRecord(value: unknown): value is Record<string, unknown> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  return [record.source_issue_id, record.issue_id].some(id => typeof id === 'string' && id.trim().length > 0);
+}
+
 export interface QuestionActor { type: 'agent' | 'member'; id: string }
 export type QuestionStage = 'issue_owner' | 'parent_owner' | 'human' | 'unavailable';
 export type QuestionWaitStatus = 'waiting' | 'detached' | 'consumed' | 'continuation_pending' | 'continuation_consumed' | 'none';
