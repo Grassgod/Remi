@@ -1,4 +1,4 @@
-import { createResponsibleTestIssue } from './helpers.js';
+import { createResponsibleTestIssue, replayHistoricalTestChildDone } from './helpers.js';
 import { mutateExecutionFixture } from "./unified-test-paths.js";
 import type { Database } from "bun:sqlite";
 import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
@@ -345,8 +345,9 @@ function verifySystemCommentRollback(db: SqlDatabase, backend: "sqlite" | "pg"):
   const beforeActivity = Number((db.query("SELECT COUNT(*) AS n FROM multiremi_issue_activity WHERE issue_id = ?")
     .get(issue.id) as { n: number | string }).n);
   const beforeStatus = store.getIssue(issue.id)?.status;
-  // ADR 0012: state, system comment and pending turn roll back together.
-  expect(() => store.updateIssue(child.id, { status: "done" })).toThrow("write rejected");
+  // ADR 0012: consuming a persisted historical terminal fact, its status,
+  // system notification and pending turn roll back together.
+  expect(() => replayHistoricalTestChildDone(store,child.id)).toThrow("write rejected");
   expect(store.getIssue(child.id)?.status).toBe(child.status);
   expect(store.listIssueComments(issue.id)).toEqual(beforeComments);
   expect(store.listSessionEvents(session.id)).toHaveLength(beforeEvents);

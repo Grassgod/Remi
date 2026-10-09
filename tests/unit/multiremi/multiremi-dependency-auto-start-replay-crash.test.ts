@@ -1,4 +1,4 @@
-import { createResponsibleTestIssue } from './helpers.js';
+import { createResponsibleTestIssue, prepareTestIssueDelivery } from './helpers.js';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -37,6 +37,7 @@ for (const dialect of ["sqlite", "postgres"] as const) {
     let directory: string;
     let database: string;
     const probes: Bun.Subprocess<"ignore", "pipe", "pipe">[] = [];
+    const preparedEventIds=new Map<string,Set<string>>();
 
     beforeAll(async () => {
       if (dialect !== "postgres") return;
@@ -92,11 +93,14 @@ for (const dialect of ["sqlite", "postgres"] as const) {
       const runtime = store.registerRuntime({ name: `Replay ${directory}`, provider: "claude", maxConcurrency: 4 });
       const agent = store.createAgent({ name: `Replay ${directory}`, provider: "claude", runtimeId: runtime.id });
       const squad = owner === "squad" ? store.createSquad({ name: `Replay ${directory}`, leaderId: agent.id }) : null;
-      const prerequisite = createResponsibleTestIssue(store, { title: "Crash prerequisite", status: "in_progress" });
+      const prerequisiteOwner=store.createAgent({name:`Prerequisite owner ${directory}`,provider:'codex',workspaceId:'local'});
+      const prerequisite = createResponsibleTestIssue(store, { title: "Crash prerequisite", status: "in_progress",assigneeType:'agent',assigneeId:prerequisiteOwner.id });
       const dependent = createResponsibleTestIssue(store, {
         title: "Crash dependent", status: "backlog", blockedBy: [prerequisite.id],
         assigneeType: owner, assigneeId: squad?.id ?? agent.id,
       });
+      prepareTestIssueDelivery(store,prerequisite.id);
+      preparedEventIds.set(prerequisite.id,new Set(db.query('SELECT id FROM multiremi_system_events WHERE resource_id=?').all(prerequisite.id).map(row=>String(row.id))));
       return { prerequisite, dependent };
     }
 
@@ -186,8 +190,8 @@ for (const dialect of ["sqlite", "postgres"] as const) {
       await killAt(prerequisite, dependent, "after-done-commit");
       expect(store.getIssue(prerequisite.id)?.status).toBe("done");
       assertWaiting(dependent);
-      const rows = db.query("SELECT event, status FROM multiremi_system_events WHERE resource_id = ? ORDER BY event")
-        .all(prerequisite.id);
+      const rows = db.query("SELECT id, event, status FROM multiremi_system_events WHERE resource_id = ? ORDER BY event")
+        .all(prerequisite.id).filter(row=>!preparedEventIds.get(prerequisite.id)!.has(String(row.id))).map(({event,status})=>({event,status}));
       expect(rows).toEqual([
         { event: "dependency_auto_start_check", status: "pending" },
         { event: "status_changed", status: "pending" },
