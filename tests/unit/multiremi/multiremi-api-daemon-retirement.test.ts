@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { afterEach, describe, expect, it } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { createLocalStore as createStore, db, readyArchiveBinding, resetMultiremiTestEnv } from "./helpers.js";
@@ -473,7 +474,7 @@ describe("Multiremi API — daemon retirement", () => {
         resourceRef: { local_path: "/work/project", daemon_id: "daemon-blocked" },
       }],
     });
-    const issue = store.createIssue({ title: "Running work", workspaceId: "local", projectId: project.id });
+    const issue = createResponsibleTestIssue(store, { title: "Running work", workspaceId: "local", projectId: project.id });
     const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "keep running" });
     expect(store.claimTask(claude.id)?.id).toBe(task.id);
     store.startTask(task.id);
@@ -560,7 +561,7 @@ describe("Multiremi API — daemon retirement", () => {
       workspaceId: "local",
       daemonId: "daemon-abandon-issue-workspace",
     });
-    const issue = store.createIssue({ title: "Workspace left on dead machine", workspaceId: "local" });
+    const issue = createResponsibleTestIssue(store, { title: "Workspace left on dead machine", workspaceId: "local" });
     store.reportIssueWorkspace({
       issueId: issue.id,
       runtimeId: runtime.id,
@@ -665,7 +666,7 @@ describe("Multiremi API — daemon retirement", () => {
     });
     const queued = store.createTask({ agentId: agent.id, prompt: "run later" });
     expect(queued.runtimeId).toBe(claude.id);
-    const issue = store.createIssue({ title: "Clean workspace", workspaceId: "local" });
+    const issue = createResponsibleTestIssue(store, { title: "Clean workspace", workspaceId: "local" });
     store.reportIssueWorkspace({
       issueId: issue.id,
       runtimeId: claude.id,
@@ -906,7 +907,7 @@ describe("Multiremi API — daemon retirement", () => {
       workspaceId: "local",
       daemonId: "daemon-issue-delete",
     });
-    const issue = store.createIssue({ title: "Delete checkout", workspaceId: "local" });
+    const issue = createResponsibleTestIssue(store, { title: "Delete checkout", workspaceId: "local" });
     store.reportIssueWorkspace({
       issueId: issue.id,
       runtimeId: runtime.id,
@@ -940,7 +941,7 @@ describe("Multiremi API — daemon retirement", () => {
       daemonId: "daemon-snapshot",
     });
     const agent = store.createAgent({ name: "Snapshot agent", provider: "claude", workspaceId: "local" });
-    const issue = store.createIssue({ title: "Snapshot issue", workspaceId: "local" });
+    const issue = createResponsibleTestIssue(store, { title: "Snapshot issue", workspaceId: "local" });
     const session = store.getOrCreateDefaultIssueSession(issue.id);
 
     let plan = store.getDaemonRetirementPlan("local", "daemon-snapshot");

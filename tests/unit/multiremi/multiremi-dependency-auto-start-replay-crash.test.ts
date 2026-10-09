@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -91,8 +92,8 @@ for (const dialect of ["sqlite", "postgres"] as const) {
       const runtime = store.registerRuntime({ name: `Replay ${directory}`, provider: "claude", maxConcurrency: 4 });
       const agent = store.createAgent({ name: `Replay ${directory}`, provider: "claude", runtimeId: runtime.id });
       const squad = owner === "squad" ? store.createSquad({ name: `Replay ${directory}`, leaderId: agent.id }) : null;
-      const prerequisite = store.createIssue({ title: "Crash prerequisite", status: "in_progress" });
-      const dependent = store.createIssue({
+      const prerequisite = createResponsibleTestIssue(store, { title: "Crash prerequisite", status: "in_progress" });
+      const dependent = createResponsibleTestIssue(store, {
         title: "Crash dependent", status: "backlog", blockedBy: [prerequisite.id],
         assigneeType: owner, assigneeId: squad?.id ?? agent.id,
       });

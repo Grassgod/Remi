@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "bun:test";
 import type { Database } from "bun:sqlite";
 import { createMultiremiApp } from "@multiremi/api.js";
@@ -50,7 +51,7 @@ for (const dialect of ["sqlite", "postgres"] as const) {
     }
 
     function issueOn(runtimeId: string) {
-      const issue = store.createIssue({ title: "Workspace at risk", workspaceId });
+      const issue = createResponsibleTestIssue(store, { title: "Workspace at risk", workspaceId });
       store.reportIssueWorkspace({
         issueId: issue.id, runtimeId, rootPath: `/work/${issue.key}`,
         branchName: `agent/${issue.key}`, status: "ready",

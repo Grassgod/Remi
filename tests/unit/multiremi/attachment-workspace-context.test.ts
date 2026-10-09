@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { afterEach, describe, expect, it } from "bun:test";
 import { readdirSync } from "node:fs";
 import { createMultiremiApp } from "@multiremi/api.js";
@@ -13,8 +14,8 @@ async function fixture() {
   const other = store.createWorkspace({ name: "Other", slug: "other-attachments" });
   const agent = store.createAgent({ workspaceId: workspace.id, ownerId: user.id, name: "Worker", provider: "claude" });
   const otherAgent = store.createAgent({ workspaceId: other.id, name: "Other worker", provider: "claude" });
-  const issue = store.createIssue({ workspaceId: workspace.id, title: "Allowed issue" });
-  const otherIssue = store.createIssue({ workspaceId: other.id, title: "Other issue" });
+  const issue = createResponsibleTestIssue(store, { workspaceId: workspace.id, title: "Allowed issue" });
+  const otherIssue = createResponsibleTestIssue(store, { workspaceId: other.id, title: "Other issue" });
   const otherComment = store.createIssueComment(otherIssue.id, { body: "Other comment" });
   const otherChat = store.createChatSession({ workspaceId: other.id, agentId: otherAgent.id, creatorId: "local" });
   const otherMessage = store.sendChatMessage(otherChat.id, { body: "Other message" }).message;

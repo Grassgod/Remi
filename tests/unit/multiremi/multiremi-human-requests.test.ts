@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { pendingTurnBackendTests } from "./pending-turn-test-backends.js";
 import { attemptMessagesPath } from "./unified-test-paths.js";
 import { afterEach, describe, expect, it } from "bun:test";
@@ -28,7 +29,7 @@ describe("task human requests (store)", () => {
       ownerId: "local",
     });
     const agent = store.createAgent({ name: "Issue Flow Agent", provider: "claude" });
-    const issue = store.createIssue({ title: "Verify task-driven issue states", assigneeType:"agent", assigneeId:agent.id, status: "in_review" });
+    const issue = createResponsibleTestIssue(store, { title: "Verify task-driven issue states", assigneeType:"agent", assigneeId:agent.id, status: "in_review" });
     const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "Implement it" });
 
     expect(store.getIssue(issue.id)?.status).toBe("todo");
@@ -128,7 +129,7 @@ describe("task human requests (store)", () => {
       ownerId: "local",
     });
     const agent = store.createAgent({ name: "Review Failure Agent", provider: "claude" });
-    const issue = store.createIssue({ title: "Review failure", assigneeType:"agent", assigneeId:agent.id });
+    const issue = createResponsibleTestIssue(store, { title: "Review failure", assigneeType:"agent", assigneeId:agent.id });
     const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "Try it" });
     expect(store.claimTask(runtime.id)?.id).toBe(task.id);
     store.startTask(task.id);
@@ -143,7 +144,7 @@ describe("task human requests (store)", () => {
   it("merges pending owner inputs and cancels the shared turn", () => {
     const store = createStore();
     const agent = store.createAgent({ name: "Parallel Agent", provider: "claude" });
-    const issue = store.createIssue({ title: "Parallel work", assigneeType:"agent", assigneeId:agent.id });
+    const issue = createResponsibleTestIssue(store, { title: "Parallel work", assigneeType:"agent", assigneeId:agent.id });
     const first = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "First" });
     const second = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "Second" });
 
@@ -160,7 +161,7 @@ describe("task human requests (store)", () => {
     const store = createStore();
     const runtime = store.registerRuntime({ name: "Cancel runtime", provider: "claude" });
     const agent = store.createAgent({ name: "Cancel Agent", provider: "claude" });
-    const issue = store.createIssue({ title: "Cancel execution only", assigneeType:"agent", assigneeId:agent.id });
+    const issue = createResponsibleTestIssue(store, { title: "Cancel execution only", assigneeType:"agent", assigneeId:agent.id });
     const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "Start" });
 
     expect(store.claimTask(runtime.id)?.id).toBe(task.id);
@@ -180,7 +181,7 @@ describe("task human requests (store)", () => {
     const agent = store.createAgent({ name: "Late Agent", provider: "claude" });
 
     for (const terminalStatus of ["done", "cancelled"] as const) {
-      const issue = store.createIssue({ title: `Keep ${terminalStatus}` });
+      const issue = createResponsibleTestIssue(store, { title: `Keep ${terminalStatus}` });
       const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "Run" });
       expect(store.claimTask(runtime.id)?.id).toBe(task.id);
       store.startTask(task.id);

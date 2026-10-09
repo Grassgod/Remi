@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from '../helpers.js';
 import type { MultiremiStore } from "@multiremi/store.js";
 import { createCommitEventQueue, type StoreContext } from "@multiremi/store/context.js";
 import type { SqlDatabase } from "@multiremi/store/db/postgres.js";
@@ -22,18 +23,18 @@ export function inboxFlowFixture(store: MultiremiStore, scenario: InboxFlowScena
   store.ensureLocalWorkspace();
   const member = store.findWorkspaceMemberForUser("local", "local")!;
   const agent = store.createAgent({ name: `Inbox ${scenario}`, provider: "codex" });
-  const target = store.createIssue({ title: `Inbox ${scenario} recipient`, status: "in_progress",
+  const target = createResponsibleTestIssue(store, { title: `Inbox ${scenario} recipient`, status: "in_progress",
     assigneeType: "agent", assigneeId: agent.id });
   const session = store.getOrCreateDefaultIssueSession(target.id);
   const common = { scenario, targetIssueId: target.id, issueSessionId: session.id,
     agentId: agent.id, memberId: member.id };
   if (scenario === "e2") {
-    const child = store.createIssue({ title: "E2 child", status: "in_progress", parentIssueId: target.id });
+    const child = createResponsibleTestIssue(store, { title: "E2 child", status: "in_progress", parentIssueId: target.id });
     return { ...common, subjectIssueId: child.id };
   }
   if (scenario === "e3") {
-    const prerequisite = store.createIssue({ title: "E3 prerequisite", status: "in_progress" });
-    store.createIssue({ title: "E3 waiting dependent", status: "backlog", parentIssueId: target.id,
+    const prerequisite = createResponsibleTestIssue(store, { title: "E3 prerequisite", status: "in_progress" });
+    createResponsibleTestIssue(store, { title: "E3 waiting dependent", status: "backlog", parentIssueId: target.id,
       blockedBy: [prerequisite.id], assigneeType: "member", assigneeId: member.id });
     return { ...common, subjectIssueId: prerequisite.id };
   }

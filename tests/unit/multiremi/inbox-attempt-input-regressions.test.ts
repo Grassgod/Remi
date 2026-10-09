@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { expect, it } from 'bun:test';
 import { pendingTurnBackendTests } from './pending-turn-test-backends.js';
 import { MultiremiStore } from '@multiremi/store.js';
@@ -5,7 +6,7 @@ pendingTurnBackendTests('MUL-506 provider input boundaries', fixture => {
     function setup(body = 'original instructions') {
         const f = fixture();
         const agent = f.store.createAgent({ name: 'Input owner', provider: 'codex' });
-        const issue = f.store.createIssue({ title: 'Attempt input', assigneeType: 'agent', assigneeId: agent.id });
+        const issue = createResponsibleTestIssue(f.store, { title: 'Attempt input', assigneeType: 'agent', assigneeId: agent.id });
         const session = f.store.getOrCreateDefaultIssueSession(issue.id);
         f.store.registerRuntime({ id: 'rt_input', daemonId: 'daemon_input', name: 'Input fixture', provider: 'codex', workspaceId: 'local' });
         const message = { session_id: session.id, sender: { type: 'member' as const, id: 'mem_local_local' }, to: { type: 'agent' as const, ref: agent.id }, message_kind: 'request' as const, wake_requested: 'now' as const, body_md: body };
@@ -74,7 +75,7 @@ pendingTurnBackendTests('MUL-506 provider input boundaries', fixture => {
         expect(f.bridge.rpc('turn.input', f.receipt(retried.current_attempt_id!, input), f.scope).ok).toBe(true);
     });
     it('already covered first-attempt wakes still retire without executing old work', () => {
-        const f = fixture(), agent = f.store.createAgent({ name: 'Old wake', provider: 'codex' }), issue = f.store.createIssue({ title: 'Old wake' });
+        const f = fixture(), agent = f.store.createAgent({ name: 'Old wake', provider: 'codex' }), issue = createResponsibleTestIssue(f.store, { title: 'Old wake' });
         const session = f.store.getOrCreateDefaultIssueSession(issue.id);
         f.store.registerRuntime({ id: 'rt_old', daemonId: 'daemon_old', name: 'Old wake runtime', provider: 'codex', workspaceId: 'local' });
         const message = { session_id: session.id, sender: { type: 'member' as const, id: 'mem_local_local' }, to: { type: 'agent' as const, ref: agent.id }, message_kind: 'request' as const, wake_requested: 'now' as const, body_md: 'covered work' };

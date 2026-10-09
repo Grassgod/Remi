@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { requestMessageBody, taskRequestPath, sentTask } from "./unified-test-paths.js";
 import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { describe, expect, it, spyOn } from "bun:test";
@@ -20,8 +21,8 @@ function fiveChildFixture(store: MultiremiStore) {
   const workers = workerRuntimes.map((runtime, index) =>
     store.createAgent({ name: `Worker ${index}`, provider: "claude", runtimeId: runtime.id }));
   const squad = store.createSquad({ name: "Delivery", leaderId: leader.id, memberIds: workers.map((agent) => agent.id) });
-  const parent = store.createIssue({ title: "Umbrella", status: "in_progress", assigneeType: "squad", assigneeId: squad.id });
-  const children = workers.map((agent, index) => store.createIssue({ title: `Child ${index}`,
+  const parent = createResponsibleTestIssue(store, { title: "Umbrella", status: "in_progress", assigneeType: "squad", assigneeId: squad.id });
+  const children = workers.map((agent, index) => createResponsibleTestIssue(store, { title: `Child ${index}`,
     parentIssueId: parent.id, status: "in_progress", assigneeType: "agent", assigneeId: agent.id }));
   const leaderSession = store.createIssueSession(parent.id, { title: "Dispatch five" });
   const leaderTask = store.createTask({ agentId: leader.id, issueId: parent.id,
@@ -72,8 +73,8 @@ function fixture(store: MultiremiStore, db?: SqlDatabase) {
   // Batch independent fixture writes; Issue creation owns its transaction and callbacks.
   const { leaderRuntime, workerRuntime, leader, worker, outsider, squad } =
     db ? db.transaction(registerMembers)() : registerMembers();
-  const parent = store.createIssue({ title: "Parent", status: "in_progress", assigneeType: "squad", assigneeId: squad.id });
-  const child = store.createIssue({ title: "Child", parentIssueId: parent.id, status: "in_progress", assigneeType: "agent", assigneeId: worker.id });
+  const parent = createResponsibleTestIssue(store, { title: "Parent", status: "in_progress", assigneeType: "squad", assigneeId: squad.id });
+  const child = createResponsibleTestIssue(store, { title: "Child", parentIssueId: parent.id, status: "in_progress", assigneeType: "agent", assigneeId: worker.id });
   const leaderSession = store.createIssueSession(parent.id, { title: "Dispatch round" });
   const leaderTask = store.createTask({ agentId: leader.id, issueId: parent.id,
     issueSessionId: leaderSession.id, prompt: "Coordinate." });
@@ -114,15 +115,15 @@ for (const backend of ["sqlite", "postgres"] as const) {
   describe.skipIf(backend === "postgres" && !pgAdminUrl)(`MUL-456 cross-issue return (${backend})`, () => {
     it("delegates inside and outside the subtree and retains audited exceptions", async () => withStore(backend, async (store) => {
       const f = fixture(store);
-      const grandchild = store.createIssue({ title: "Grandchild", parentIssueId: f.child.id });
-      const sibling = store.createIssue({ title: "Sibling", parentIssueId: f.parent.id });
-      const siblingChild = store.createIssue({ title: "Sibling child", parentIssueId: sibling.id });
+      const grandchild = createResponsibleTestIssue(store, { title: "Grandchild", parentIssueId: f.child.id });
+      const sibling = createResponsibleTestIssue(store, { title: "Sibling", parentIssueId: f.parent.id });
+      const siblingChild = createResponsibleTestIssue(store, { title: "Sibling child", parentIssueId: sibling.id });
       for (const target of [f.child, grandchild, sibling, siblingChild]) {
         const decision = store.resolveAgentDelegation({ targetIssue: target, sourceTask: f.leaderTask,
           authorAgentId: f.leader.id, targetAgentId: f.worker.id });
         expect(decision).toEqual({ ok: true, delegatedFromIssueSessionId: f.leaderSession.id });
       }
-      const unrelated = store.createIssue({ title: "Unrelated" });
+      const unrelated = createResponsibleTestIssue(store, { title: "Unrelated" });
       for (const [targetIssue, targetAgentId] of [[f.child, f.outsider.id], [unrelated, f.worker.id]] as const) {
         expect(store.resolveAgentDelegation({ targetIssue, sourceTask: f.leaderTask,
           authorAgentId: f.leader.id, targetAgentId }))
@@ -140,7 +141,7 @@ for (const backend of ["sqlite", "postgres"] as const) {
       expect(store.resolveAgentDelegation({ targetIssue: f.child, sourceTask: sideTask,
         authorAgentId: f.leader.id, targetAgentId: f.worker.id }))
         .toEqual({ ok: false, reason: "source_side_session" });
-      const nonSquad = store.createIssue({ title: "Agent owner", parentIssueId: f.parent.id,
+      const nonSquad = createResponsibleTestIssue(store, { title: "Agent owner", parentIssueId: f.parent.id,
         assigneeType: "agent", assigneeId: f.leader.id });
       const nonSquadTask = store.createTask({ agentId: f.leader.id, issueId: nonSquad.id, prompt: "Lead" });
       expect(store.resolveAgentDelegation({ targetIssue: f.child, sourceTask: nonSquadTask,
@@ -318,7 +319,7 @@ for (const backend of ["sqlite", "postgres"] as const) {
       const f = fixture(store);
       const childTask = await dispatch(store, f.leaderTask, f.child, f.worker.id);
       finishLeaderRound(store, f);
-      const prerequisite = store.createIssue({ title: "Prerequisite", status: "todo" });
+      const prerequisite = createResponsibleTestIssue(store, { title: "Prerequisite", status: "todo" });
       store.createIssueDependency(f.parent.id, { dependsOnIssueId: prerequisite.id, type: "blocked_by" });
       store.updateIssue(f.parent.id, { status: "backlog" });
       expect(store.getIssue(f.parent.id)?.status).toBe("backlog");

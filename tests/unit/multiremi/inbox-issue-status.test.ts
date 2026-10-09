@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import {it,expect} from 'bun:test';
 import {pendingTurnBackendTests} from './pending-turn-test-backends.js';
 import {StoreContext,createCommitEventQueue} from '@multiremi/store/context.js';
@@ -6,7 +7,7 @@ import {foldAgentReadState,FOLD_AGENT_READ_STATE_MIGRATION} from '@multiremi/sto
 
 pendingTurnBackendTests('MUL-506 Issue derivation and read progress',fixture=>{
   function setup(){const {store,db}=fixture(),agent=store.createAgent({name:'Owner',provider:'codex'});
-    const issue=store.createIssue({title:'Derived',assigneeType:'agent',assigneeId:agent.id});
+    const issue=createResponsibleTestIssue(store, {title:'Derived',assigneeType:'agent',assigneeId:agent.id});
     const session=store.getOrCreateDefaultIssueSession(issue.id),ctx=new StoreContext(db,()=>store);
     const sent=store.sendMessage({session_id:session.id,sender:{type:'member',id:'mem_local_local'},to:{type:'agent',ref:agent.id},message_kind:'request',wake_requested:'now',body_md:'work'});
     const derive=()=>db.transaction(()=>{ctx.lockWorkspaceRuntimeLifecycle('local');deriveIssueStatusWithinTransaction(ctx,issue.id,createCommitEventQueue());})();
@@ -23,7 +24,7 @@ pendingTurnBackendTests('MUL-506 Issue derivation and read progress',fixture=>{
     expect(f.store.getMessage(decision.message.id)?.resolved_at).not.toBeNull();expect(f.store.getIssue(f.issue.id)?.status).toBe('in_progress');});
   it('attempt mutations never derive Issue status',()=>{const f=setup();f.db.run("UPDATE multiremi_issues SET status='in_progress' WHERE id=?",[f.issue.id]);
     const before=f.store.getIssue(f.issue.id)!;for(const status of ['failed','lost','offered'])f.db.run('UPDATE multiremi_turn_attempts SET status=? WHERE turn_id=?',[status,f.sent.turn_id!]);expect(f.store.getIssue(f.issue.id)?.status).toBe(before.status);expect(f.store.getIssue(f.issue.id)?.updatedAt).toBe(before.updatedAt);});
-  it('each child status transition sends its member parent owner one status message',()=>{const f=setup();const parent=f.store.createIssue({title:'Parent',assigneeType:'member',assigneeId:'mem_local_local'});f.store.updateIssue(f.issue.id,{parentIssueId:parent.id});
+  it('each child status transition sends its member parent owner one status message',()=>{const f=setup();const parent=createResponsibleTestIssue(f.store, {title:'Parent',assigneeType:'member',assigneeId:'mem_local_local'});f.store.updateIssue(f.issue.id,{parentIssueId:parent.id});
     f.db.run("UPDATE multiremi_turns SET status='running' WHERE id=?",[f.sent.turn_id!]);f.derive();const inbox=f.store.listMessageInbox('mem_local_local','local').items;
     expect(inbox.filter(m=>m.message_kind==='status'&&m.to_ref==='parent_owner'&&m.metadata.child_issue_id===f.issue.id)).toHaveLength(1);f.derive();expect(f.store.listMessageInbox('mem_local_local','local').items).toHaveLength(inbox.length);});
   it('folds maximum lane/read-state sequence and offset exactly once, survives removal',()=>{const f=setup();

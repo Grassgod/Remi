@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { normalizeDaemonTurnOffer } from "@multiremi/worker/daemon-offers.js";
 import { runTurnExecutionMutation } from "@multiremi/store/turn-execution-records.js";
 import { taskOfferResponse, receiveTaskOffer, pendingTaskWireSnapshot } from "../../fixtures/task-offer.js";
@@ -21,7 +22,7 @@ pendingTurnBackendTests("Comment reply routing", fixture => {
   it("keeps the canonical reply when routing an existing comment to an agent", () => {
     const { store } = fixture();
     const agent = store.createAgent({ name: "Reply reader", provider: "codex" });
-    const issue = store.createIssue({ title: "Reply route", assigneeType: "agent", assigneeId: agent.id });
+    const issue = createResponsibleTestIssue(store, { title: "Reply route", assigneeType: "agent", assigneeId: agent.id });
     const root = store.createIssueComment(issue.id, { authorType: "member", authorId: "local", body: "thread root" });
     const reply = store.createIssueComment(issue.id, { authorType: "member", authorId: "local", body: "thread reply", parentId: root.id });
     const message = store.getMessage(reply.id)!;
@@ -182,7 +183,7 @@ describe("Multiremi store — Go daemon wire shapes", () => {
     const boundAgent = store.createAgent({ name: "Bound Codex", provider: "codex", runtimeId: runtime.id });
     const unboundAgent = store.createAgent({ name: "Unbound Codex", provider: "codex" });
     const otherBoundAgent = store.createAgent({ name: "Other Bound Codex", provider: "codex", runtimeId: otherRuntime.id });
-    const issue = store.createIssue({ title: "Pending response parity", assigneeType: "agent", assigneeId: boundAgent.id });
+    const issue = createResponsibleTestIssue(store, { title: "Pending response parity", assigneeType: "agent", assigneeId: boundAgent.id });
     const high = store.createTask({ agentId: boundAgent.id, issueId: issue.id, workspaceId: "local", prompt: "high", priority: 100 });
     const sameOld = store.createTask({ agentId: boundAgent.id, workspaceId: "local", prompt: "same old", priority: 5 });
     const sameNew = store.createTask({ agentId: boundAgent.id, workspaceId: "local", prompt: "same new", priority: 5 });
@@ -309,7 +310,7 @@ describe("Multiremi store — Go daemon wire shapes", () => {
         label: "local",
       }],
     });
-    const issue = store.createIssue({
+    const issue = createResponsibleTestIssue(store, {
       id: "iss_claim_shape",
       title: "Claim shape issue",
       description: "Issue context",
@@ -318,7 +319,7 @@ describe("Multiremi store — Go daemon wire shapes", () => {
       assigneeId: agent.id,
     });
     store.setIssueMetadataKey(issue.id, "target", "daemon-claim");
-    const secondIssue = store.createIssue({
+    const secondIssue = createResponsibleTestIssue(store, {
       id: "iss_claim_shape_second",
       title: "Second claim shape issue",
       projectId: project.id,
@@ -466,7 +467,7 @@ describe("Multiremi store — Go daemon wire shapes", () => {
       contentType: "image/png",
       sizeBytes: 123,
     });
-    const issue = store.createIssue({
+    const issue = createResponsibleTestIssue(store, {
       title: "Read the screenshots",
       description: "![issue](/api/attachments/att_issue_prompt/content)",
     });
@@ -553,7 +554,7 @@ describe("Multiremi store — Go daemon wire shapes", () => {
       title: "Mutable instructions project",
       instructions: "Use the instructions from task creation time.",
     });
-    const issue = store.createIssue({
+    const issue = createResponsibleTestIssue(store, {
       title: "Queued before Project Instructions change",
       projectId: project.id,
       assigneeType: "agent",
@@ -605,7 +606,7 @@ describe("Multiremi store — Go daemon wire shapes", () => {
       memberIds: [teammate.id],
       instructions: "Use the instructions from task creation time.",
     });
-    const issue = store.createIssue({
+    const issue = createResponsibleTestIssue(store, {
       title: "Queued before Squad Instructions change",
       assigneeType: "squad",
       assigneeId: squad.id,
@@ -858,7 +859,7 @@ describe("Multiremi store — Go daemon wire shapes", () => {
     store.ensureLocalWorkspace();
     const runtime = store.registerRuntime({ id: "rt_detached_dispatch", name: "Detached dispatch", provider: "codex", workspaceId: "local" });
     const agent = store.createAgent({ name: "Detached dispatch", provider: "codex", runtimeId: runtime.id });
-    const issue = store.createIssue({ title: "Former private Chat binding" });
+    const issue = createResponsibleTestIssue(store, { title: "Former private Chat binding" });
     store.createIssueComment(issue.id, { body: "UNRELATED_ISSUE_HISTORY_MUST_NOT_SHIP" });
     const chat = store.createChatSession({ agentId: agent.id });
     const first = store.sendChatMessage(chat.id, { body: "Our earlier private question" });
@@ -918,7 +919,7 @@ describe("Multiremi store — Go daemon wire shapes", () => {
     });
     store.createProjectDoc(project.id, { kind: "wiki", title: "Project rules", body: "PROJECT_WIKI_MUST_NOT_SHIP" });
     store.createRepositoryWikiDoc("local", "repo_chat_independent", { title: "Repository rules", path: "index.md", body: "REPOSITORY_WIKI_MUST_NOT_SHIP" });
-    const issue = store.createIssue({ title: "Unrelated Issue", projectId: project.id, description: "ISSUE_BODY_MUST_NOT_SHIP" });
+    const issue = createResponsibleTestIssue(store, { title: "Unrelated Issue", projectId: project.id, description: "ISSUE_BODY_MUST_NOT_SHIP" });
     const runtime = store.registerRuntime({ id: "rt_chat_independent", name: "Chat independent", provider: "codex", workspaceId: "local" });
     const agent = store.createAgent({ name: "Independent Chat", provider: "codex", runtimeId: runtime.id });
     const chat = store.createChatSession({ agentId: agent.id, title: "Independent" });
@@ -961,7 +962,7 @@ describe("Multiremi store — Go daemon wire shapes", () => {
       content: "Inspect the repository carefully.\n".repeat(400),
     });
     store.setAgentSkills(agent.id, { skillIds: [skill.id!] });
-    const issue = store.createIssue({ title: "Bound delta", workspaceId: "local" });
+    const issue = createResponsibleTestIssue(store, { title: "Bound delta", workspaceId: "local" });
     const chat = prepareIssueTopic(store, { runtimeId: runtime.id, agentId: agent.id, issueId: issue.id });
     const app = createMultiremiApp({ store });
 
@@ -996,7 +997,7 @@ describe("Multiremi store — Go daemon wire shapes", () => {
     const store = createStore();
     const runtime = store.registerRuntime({ id: "rt_topic_identity", name: "topic identity", provider: "codex", workspaceId: "local" });
     const agent = store.createAgent({ name: "Caller ID agent", provider: "codex" });
-    const issue = store.createIssue({ title: "Caller ID issue", workspaceId: "local" });
+    const issue = createResponsibleTestIssue(store, { title: "Caller ID issue", workspaceId: "local" });
     const boundChat = prepareIssueTopic(store, { runtimeId: runtime.id, agentId: agent.id, issueId: issue.id });
     const boundChatTask = store.sendChatMessage(boundChat.id, { body: "What is the status?" }).task;
     const boundTask = store.getTaskWithAgent(boundChatTask.id)!;
@@ -1039,7 +1040,7 @@ describe("Multiremi store — Go daemon wire shapes", () => {
     const store = createStore();
     const runtime = store.registerRuntime({ id: "rt_bound_topic", name: "bound topic", provider: "codex", workspaceId: "local" });
     const agent = store.createAgent({ name: "Bound topic agent", provider: "codex", runtimeId: runtime.id });
-    const issue = store.createIssue({ title: "Real bound topic", workspaceId: "local" });
+    const issue = createResponsibleTestIssue(store, { title: "Real bound topic", workspaceId: "local" });
     const chat = prepareIssueTopic(store, { runtimeId: runtime.id, agentId: agent.id, issueId: issue.id });
     const task = store.sendChatMessage(chat.id, { body: "Please summarize the topic" }).task;
     expect(task.issueId).toBe(issue.id);
@@ -1185,7 +1186,7 @@ describe("Multiremi store — Go daemon wire shapes", () => {
     const runtime = store.registerRuntime({ id: "rt_pending_comment", name: "pending comment", provider: "claude", workspaceId: "local" });
     const agent = store.createAgent({ name: "Comment Bot", provider: "claude", runtimeId: runtime.id });
     const member = store.createWorkspaceMember({ id: "mem_alice", name: "Alice Reviewer", workspaceId: "local" });
-    const issue = store.createIssue({ title: "Comment trigger", workspaceId: "local" });
+    const issue = createResponsibleTestIssue(store, { title: "Comment trigger", workspaceId: "local" });
     const previous = store.createTask({ agentId: agent.id, issueId: issue.id, workspaceId: "local", prompt: "previous run" });
     const previousStartedAt = "2025-01-01T00:00:00.000Z";
     expect(store.claimTask(runtime.id)?.id).toBe(previous.id);
@@ -1259,7 +1260,7 @@ describe("Multiremi store — Go daemon wire shapes", () => {
     const store = createStore();
     const runtime = store.registerRuntime({ id: "rt_assign_update", name: "assign update", provider: "claude", workspaceId: "local" });
     const agent = store.createAgent({ name: "Update Bot", provider: "claude", runtimeId: runtime.id });
-    const issue = store.createIssue({ title: "Assign later", workspaceId: "local" });
+    const issue = createResponsibleTestIssue(store, { title: "Assign later", workspaceId: "local" });
     const app = createMultiremiApp({ store });
 
     const res = await app.request(`/api/issues/${issue.id}`, {
@@ -1289,7 +1290,7 @@ describe("Multiremi store — Go daemon wire shapes", () => {
     const store = createStore();
     const runtime = store.registerRuntime({ id: "rt_backlog_update", name: "backlog update", provider: "claude", workspaceId: "local" });
     const agent = store.createAgent({ name: "Backlog Bot", provider: "claude", runtimeId: runtime.id });
-    const issue = store.createIssue({
+    const issue = createResponsibleTestIssue(store, {
       title: "Parked work",
       workspaceId: "local",
       status: "backlog",
@@ -1310,7 +1311,7 @@ describe("Multiremi store — Go daemon wire shapes", () => {
     expect(tasks[0]!.agentId).toBe(agent.id);
 
     // Closing a backlog issue must NOT wake the agent.
-    const parked = store.createIssue({
+    const parked = createResponsibleTestIssue(store, {
       title: "Parked forever",
       workspaceId: "local",
       status: "backlog",

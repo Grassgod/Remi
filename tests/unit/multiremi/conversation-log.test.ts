@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { requestMessageBody } from "./unified-test-paths.js";
 import { afterEach, describe, expect, it } from "bun:test";
 import type { ConversationLogEntry, ConversationLogPatch } from "@multiremi/contracts/conversation-log";
@@ -10,7 +11,7 @@ afterEach(resetMultiremiTestEnv);
 describe("conversation log (MUL-426)", () => {
   it("locates comments and pages by seq while hiding lifecycle markers", () => {
     const store = createStore();
-    const issue = store.createIssue({ title: "Window", workspaceId: "local" });
+    const issue = createResponsibleTestIssue(store, { title: "Window", workspaceId: "local" });
     const session = store.getOrCreateDefaultIssueSession(issue.id);
     const comments = Array.from({ length: 5 }, (_, index) =>
       store.createIssueComment(issue.id, { issueSessionId: session.id, body: `message ${index}` }));
@@ -31,7 +32,7 @@ describe("conversation log (MUL-426)", () => {
 
   it("returns the same 404 for hidden, deleted and missing locate ids", async () => {
     const store = createStore();
-    const issue = store.createIssue({ title: "Locate visibility", workspaceId: "local" });
+    const issue = createResponsibleTestIssue(store, { title: "Locate visibility", workspaceId: "local" });
     const comment = store.createIssueComment(issue.id, { body: "remove me" });
     const sessionId = comment.issueSessionId!;
     store.editMessage(comment.id, { body_md: "edited" });
@@ -51,7 +52,7 @@ describe("conversation log (MUL-426)", () => {
 
   it("updates comments in place, emits resolved patches, and appends hidden resolve markers", () => {
     const store = createStore();
-    const issue = store.createIssue({ title: "Patches", workspaceId: "local" });
+    const issue = createResponsibleTestIssue(store, { title: "Patches", workspaceId: "local" });
     const session = store.getOrCreateDefaultIssueSession(issue.id);
     const emitted: Array<ConversationLogEntry | ConversationLogPatch> = [];
     store.setConversationLogListener({ onEntry: (_sessionId, entry) => emitted.push(entry) });
@@ -95,7 +96,7 @@ describe("conversation log (MUL-426)", () => {
 
   it("clears a resolved root in place when a reply reopens its thread", () => {
     const store = createStore();
-    const issue = store.createIssue({ title: "Thread", workspaceId: "local" });
+    const issue = createResponsibleTestIssue(store, { title: "Thread", workspaceId: "local" });
     const root = store.createIssueComment(issue.id, { body: "root" });
     const sessionId = root.issueSessionId!;
     store.resolveIssueComment(root.id);
@@ -120,7 +121,7 @@ describe("conversation log (MUL-426)", () => {
 
   it("rolls back a log append together with its allocated seq", () => {
     const store = createStore();
-    const issue = store.createIssue({title:"Rollback",workspaceId:"local"});
+    const issue = createResponsibleTestIssue(store, {title:"Rollback",workspaceId:"local"});
     const session = store.getOrCreateDefaultIssueSession(issue.id);
     const before = store.getConversationLogHead(session.id);
     expect(() => db!.transaction(() => {
@@ -133,7 +134,7 @@ describe("conversation log (MUL-426)", () => {
 
   it("rolls back a comment when its log mirror fails", () => {
     const store = createStore();
-    const issue = store.createIssue({ title: "Atomic", workspaceId: "local" });
+    const issue = createResponsibleTestIssue(store, { title: "Atomic", workspaceId: "local" });
     const session = store.getOrCreateDefaultIssueSession(issue.id);
     db!.exec(`CREATE TRIGGER reject_comment_log BEFORE INSERT ON multiremi_conversation_log
       WHEN NEW.kind = 'message' BEGIN SELECT RAISE(ABORT, 'log rejected'); END`);
@@ -145,7 +146,7 @@ describe("conversation log (MUL-426)", () => {
 
   it("caps the visible count and validates the HTTP window and locate requests", async () => {
     const store = createStore();
-    const issue = store.createIssue({ title: "HTTP window", workspaceId: "local" });
+    const issue = createResponsibleTestIssue(store, { title: "HTTP window", workspaceId: "local" });
     const session = store.getOrCreateDefaultIssueSession(issue.id);
     for (let index = 0; index < 1002; index++) {
       store.appendConversationLog({ sessionId: session.id, kind: "message", authorType: "system", bodyMd: `${index}` });
@@ -170,7 +171,7 @@ describe("conversation log (MUL-426)", () => {
 
   it("syncs Issue and Chat heads and keeps the canonical chat dedupe key", async () => {
     const store = createStore();
-    const issue = store.createIssue({ title: "Initial issue", description: "Initial body", workspaceId: "local" });
+    const issue = createResponsibleTestIssue(store, { title: "Initial issue", description: "Initial body", workspaceId: "local" });
     const first = store.getOrCreateDefaultIssueSession(issue.id);
     const second = store.createIssueSession(issue.id, { title: "Review" });
     expect(store.getConversationLogEntry(first.id, 0)?.body_md).toBe("Initial issue\n\nInitial body");
@@ -264,7 +265,7 @@ pendingTurnBackendTests("read-only display log", fixture => {
   for (const kind of ["Issue", "Chat"] as const) it(`${kind}: task capability display reads leave every agent lane field unchanged`, async () => {
     const { store, db } = fixture();
     const agent = store.createAgent({ name: "Display reader", provider: "codex", visibility: "workspace" });
-    const issue = kind === "Issue" ? store.createIssue({ title: "Display Issue", assigneeType: "agent", assigneeId: agent.id }) : null;
+    const issue = kind === "Issue" ? createResponsibleTestIssue(store, { title: "Display Issue", assigneeType: "agent", assigneeId: agent.id }) : null;
     const sessionId = issue ? store.getOrCreateDefaultIssueSession(issue.id).id : store.createChatSession({ agentId: agent.id, creatorId: "local" }).id;
     const sent = store.sendMessage({ session_id: sessionId, sender: { type: "member", id: "mem_local_local" }, to: { type: "agent", ref: agent.id }, message_kind: "request", body_md: "Display input", wake_requested: "now" });
     const turn = store.getTurn(sent.turn_id!)!;

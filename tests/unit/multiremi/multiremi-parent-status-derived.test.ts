@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 // MUL-400 S1 (E1 + E2): a parent issue's status is derived from its children,
 // and every child ending reports to the parent owner.
 //
@@ -50,13 +51,13 @@ describe("MUL-400 E1 — parent status derived from children", () => {
     store.ensureLocalWorkspace();
     const runtime = store.registerRuntime({ id: "rt_parent", name: "Worker", provider: "claude", maxConcurrency: 4 });
     const agent = store.createAgent({ name: "Parent owner", provider: "claude", runtimeId: runtime.id });
-    const parent = store.createIssue({
+    const parent = createResponsibleTestIssue(store, {
       title: "Parent with open children",
       status: "in_progress",
       assigneeType: "agent",
       assigneeId: agent.id,
     });
-    store.createIssue({ title: "Open child", parentIssueId: parent.id, status: "in_progress" });
+    createResponsibleTestIssue(store, { title: "Open child", parentIssueId: parent.id, status: "in_progress" });
 
     const task = store.createTask({ agentId: agent.id, issueId: parent.id, prompt: "do the parent work" });
     runTask(store, runtime.id, task.id);
@@ -72,10 +73,10 @@ describe("MUL-400 E1 — parent status derived from children", () => {
   it("rejects a direct in_review/done write while children are open and reports the count", () => {
     const store = createStore();
     store.ensureLocalWorkspace();
-    const parent = store.createIssue({ title: "Guarded parent", status: "in_progress" });
+    const parent = createResponsibleTestIssue(store, { title: "Guarded parent", status: "in_progress" });
     const [first, second] = [
-      store.createIssue({ title: "Child A", parentIssueId: parent.id, status: "in_progress" }),
-      store.createIssue({ title: "Child B", parentIssueId: parent.id, status: "blocked" }),
+      createResponsibleTestIssue(store, { title: "Child A", parentIssueId: parent.id, status: "in_progress" }),
+      createResponsibleTestIssue(store, { title: "Child B", parentIssueId: parent.id, status: "blocked" }),
     ];
 
     for (const status of ["in_review", "done"] as const) {
@@ -107,13 +108,13 @@ describe("MUL-400 E1 — parent status derived from children", () => {
       // the target status with an open child. Build the child first, then put
       // the parent there, so the create-time re-derivation does not fight the
       // arrangement under test.
-      const parent = store.createIssue({
+      const parent = createResponsibleTestIssue(store, {
         title: `${label} parent`,
         status: "in_progress",
         assigneeType: "agent",
         assigneeId: agent.id,
       });
-      const child = store.createIssue({
+      const child = createResponsibleTestIssue(store, {
         title: `${label} child`,
         parentIssueId: parent.id,
         status: "in_progress",
@@ -153,13 +154,13 @@ describe("MUL-400 E1 — parent status derived from children", () => {
     const store = createStore();
     store.ensureLocalWorkspace();
     const agent = store.createAgent({ name: "System writer owner", provider: "codex" });
-    const inReviewParent = store.createIssue({
+    const inReviewParent = createResponsibleTestIssue(store, {
       title: "Auto retitle parent",
       status: "in_progress",
       assigneeType: "agent",
       assigneeId: agent.id,
     });
-    store.createIssue({ title: "Open child", parentIssueId: inReviewParent.id, status: "in_progress" });
+    createResponsibleTestIssue(store, { title: "Open child", parentIssueId: inReviewParent.id, status: "in_progress" });
     store.updateIssue(inReviewParent.id, { status: "in_review", force: true });
     expect(store.getIssue(inReviewParent.id)?.status).toBe("in_review");
 
@@ -172,7 +173,7 @@ describe("MUL-400 E1 — parent status derived from children", () => {
     // regardless of A1/A4, because the merge is the authorization. The bypass is
     // a server-only option (never an input field), which is what makes it
     // unreachable from a request body.
-    const mergeParent = store.createIssue({
+    const mergeParent = createResponsibleTestIssue(store, {
       title: "Merge parent",
       status: "in_progress",
       assigneeType: "agent",
@@ -193,8 +194,8 @@ describe("MUL-400 E1 — parent status derived from children", () => {
   it("derives an in_review parent back to in_progress when a child changes, and never moves done/cancelled", () => {
     const store = createStore();
     store.ensureLocalWorkspace();
-    const parent = store.createIssue({ title: "Deriving parent", status: "in_review" });
-    const child = store.createIssue({ title: "Late child", parentIssueId: parent.id, status: "in_progress" });
+    const parent = createResponsibleTestIssue(store, { title: "Deriving parent", status: "in_review" });
+    const child = createResponsibleTestIssue(store, { title: "Late child", parentIssueId: parent.id, status: "in_progress" });
 
     store.updateIssue(child.id, { status: "blocked" });
     expect(store.getIssue(parent.id)?.status).toBe("in_progress");
@@ -212,8 +213,8 @@ describe("MUL-400 E1 — parent status derived from children", () => {
 
     // done / cancelled parents are human decisions and never move automatically.
     for (const status of ["done", "cancelled"] as const) {
-      const terminalParent = store.createIssue({ title: `Terminal ${status} parent`, status });
-      const lateChild = store.createIssue({
+      const terminalParent = createResponsibleTestIssue(store, { title: `Terminal ${status} parent`, status });
+      const lateChild = createResponsibleTestIssue(store, {
         title: `Late child of ${status}`,
         parentIssueId: terminalParent.id,
         status: "in_progress",
@@ -229,13 +230,13 @@ describe("MUL-400 E1 — parent status derived from children", () => {
     store.ensureLocalWorkspace();
     const agent = store.createAgent({ name: "Frozen owner", provider: "codex" });
     const member = store.createWorkspaceMember({ name: "Owner", role: "member" });
-    const parent = store.createIssue({
+    const parent = createResponsibleTestIssue(store, {
       title: "Force parent",
       status: "in_progress",
       assigneeType: "member",
       assigneeId: member.id,
     });
-    store.createIssue({ title: "Open child", parentIssueId: parent.id, status: "in_progress" });
+    createResponsibleTestIssue(store, { title: "Open child", parentIssueId: parent.id, status: "in_progress" });
 
     // The member path succeeds only with force, and leaves an audit record.
     expect(catchError(() => store.updateIssue(parent.id, { status: "done" })).code).toBe("issue_status_held");
@@ -245,8 +246,8 @@ describe("MUL-400 E1 — parent status derived from children", () => {
     expect(forced[0]?.data).toMatchObject({ status: "done", openChildren: 1 });
 
     // The same fields through the API: a task identity is refused, a member is not.
-    const otherParent = store.createIssue({ title: "Task identity parent", status: "in_progress" });
-    store.createIssue({ title: "Task identity child", parentIssueId: otherParent.id, status: "in_progress" });
+    const otherParent = createResponsibleTestIssue(store, { title: "Task identity parent", status: "in_progress" });
+    createResponsibleTestIssue(store, { title: "Task identity child", parentIssueId: otherParent.id, status: "in_progress" });
     const callerTask = store.createTask({ agentId: agent.id, prompt: "caller" });
     const credential = await store.createTaskAccessToken(callerTask, "local");
     const app = createMultiremiApp({ store });
@@ -364,13 +365,13 @@ describe("MUL-400 E1 — parent status derived from children", () => {
     let index = 0;
     for (const injected of injectedFields) {
       // A fresh parent per attempt, so a prior partial write cannot mask the next.
-      const parent = store.createIssue({
+      const parent = createResponsibleTestIssue(store, {
         title: `Injection parent ${index++}`,
         status: "in_progress",
         assigneeType: "member",
         assigneeId: member.id,
       });
-      store.createIssue({ title: "Injection child", parentIssueId: parent.id, status: "in_progress" });
+      createResponsibleTestIssue(store, { title: "Injection child", parentIssueId: parent.id, status: "in_progress" });
       const label = JSON.stringify(injected);
 
       // The two PATCH routes, task identity: A4 refuses before anything else.
@@ -414,14 +415,14 @@ describe("MUL-400 E1 — parent status derived from children", () => {
       // The other half of QA's finding: an AGENT-owned parent whose children are
       // all finished but which has no result-bearing round yet. A member request
       // is refused by A1, and the injected bypass must not lift that either.
-      const agentParent = store.createIssue({
+      const agentParent = createResponsibleTestIssue(store, {
         title: `Injection A1 parent ${index++}`,
         status: "in_progress",
         assigneeType: "agent",
         assigneeId: agent.id,
       });
       store.updateIssue(
-        store.createIssue({ title: "Injection A1 child", parentIssueId: agentParent.id, status: "in_progress" }).id,
+        createResponsibleTestIssue(store, { title: "Injection A1 child", parentIssueId: agentParent.id, status: "in_progress" }).id,
         { status: "done" },
       );
       const memberA1 = await app.request(`/api/multiremi/issues/${agentParent.id}`, {
@@ -459,13 +460,13 @@ describe("MUL-400 E1 — parent status derived from children", () => {
 
     let index = 0;
     for (const forged of forgedIdentities) {
-      const parent = store.createIssue({
+      const parent = createResponsibleTestIssue(store, {
         title: `Identity parent ${index++}`,
         status: "in_progress",
         assigneeType: "member",
         assigneeId: member.id,
       });
-      store.createIssue({ title: "Identity child", parentIssueId: parent.id, status: "in_progress" });
+      createResponsibleTestIssue(store, { title: "Identity child", parentIssueId: parent.id, status: "in_progress" });
       const label = JSON.stringify(forged);
 
       for (const path of ["/api/multiremi/issues", "/api/issues"]) {
@@ -522,13 +523,13 @@ describe("MUL-400 E1 — parent status derived from children", () => {
         { path: "/api/multiremi/issues/batch-update", batch: true },
         { path: "/api/issues/batch-update", batch: true },
       ]) {
-        const parent = store.createIssue({
+        const parent = createResponsibleTestIssue(store, {
           title: `Forge parent ${index++}`,
           status: "in_progress",
           assigneeType: "member",
           assigneeId: member.id,
         });
-        store.createIssue({ title: "Forge child", parentIssueId: parent.id, status: "in_progress" });
+        createResponsibleTestIssue(store, { title: "Forge child", parentIssueId: parent.id, status: "in_progress" });
         const url = route.path.replace("{id}", parent.id);
         const response = await app.request(url, {
           method: route.batch ? "POST" : "PATCH",
@@ -574,10 +575,10 @@ describe("MUL-400 E1 — parent status derived from children", () => {
     for (const path of ["/api/multiremi/issues/batch-update", "/api/issues/batch-update"]) {
       // [plain, guarded parent, plain]: only the middle row is refused, and no
       // row may be written.
-      const plainA = store.createIssue({ title: `Batch plain A ${path}`, status: "in_progress", assigneeType: "member", assigneeId: member.id });
-      const parent = store.createIssue({ title: `Batch parent ${path}`, status: "in_progress", assigneeType: "member", assigneeId: member.id });
-      store.createIssue({ title: "Batch parent child", parentIssueId: parent.id, status: "in_progress" });
-      const plainB = store.createIssue({ title: `Batch plain B ${path}`, status: "in_progress", assigneeType: "member", assigneeId: member.id });
+      const plainA = createResponsibleTestIssue(store, { title: `Batch plain A ${path}`, status: "in_progress", assigneeType: "member", assigneeId: member.id });
+      const parent = createResponsibleTestIssue(store, { title: `Batch parent ${path}`, status: "in_progress", assigneeType: "member", assigneeId: member.id });
+      createResponsibleTestIssue(store, { title: "Batch parent child", parentIssueId: parent.id, status: "in_progress" });
+      const plainB = createResponsibleTestIssue(store, { title: `Batch plain B ${path}`, status: "in_progress", assigneeType: "member", assigneeId: member.id });
 
       const response = await app.request(path, {
         method: "POST",
@@ -608,8 +609,8 @@ describe("MUL-400 E1 — parent status derived from children", () => {
 
     // `in_review` is not a member-only terminal, so the pre-flight lets the
     // batch through; only `done` on a parent is A4's business.
-    const parent = store.createIssue({ title: "Non-terminal batch parent", status: "in_progress" });
-    const child = store.createIssue({ title: "Non-terminal child", parentIssueId: parent.id, status: "in_progress" });
+    const parent = createResponsibleTestIssue(store, { title: "Non-terminal batch parent", status: "in_progress" });
+    const child = createResponsibleTestIssue(store, { title: "Non-terminal child", parentIssueId: parent.id, status: "in_progress" });
     const response = await app.request("/api/issues/batch-update", {
       method: "POST",
       headers: { Authorization: `Bearer ${credential.token}`, "Content-Type": "application/json" },
@@ -624,13 +625,13 @@ describe("MUL-400 E1 — parent status derived from children", () => {
     store.ensureLocalWorkspace();
     const runtime = store.registerRuntime({ id: "rt_closed_parent", name: "Worker", provider: "claude", maxConcurrency: 4 });
     const agent = store.createAgent({ name: "Closed parent owner", provider: "claude", runtimeId: runtime.id });
-    const parent = store.createIssue({
+    const parent = createResponsibleTestIssue(store, {
       title: "Already closed parent",
       status: "in_progress",
       assigneeType: "agent",
       assigneeId: agent.id,
     });
-    const failingChild = store.createIssue({
+    const failingChild = createResponsibleTestIssue(store, {
       title: "Child that fails late",
       parentIssueId: parent.id,
       status: "in_progress",
@@ -655,7 +656,7 @@ describe("MUL-400 E1 — parent status derived from children", () => {
     expect(store.listTasksForIssue(parent.id)).toHaveLength(roundsBefore);
 
     // The same for a late `done` on another child, with its own activity.
-    const doneChild = store.createIssue({
+    const doneChild = createResponsibleTestIssue(store, {
       title: "Child that finishes late",
       parentIssueId: parent.id,
       status: "in_progress",
@@ -674,7 +675,7 @@ describe("MUL-400 E1 — parent status derived from children", () => {
     const store = createStore();
     store.ensureLocalWorkspace();
     const agent = store.createAgent({ name: "Plain closer", provider: "codex" });
-    const plain = store.createIssue({
+    const plain = createResponsibleTestIssue(store, {
       title: "Childless issue",
       status: "in_progress",
       assigneeType: "agent",
@@ -703,9 +704,9 @@ describe("MUL-400 E1 — parent status derived from children", () => {
     const app = createMultiremiApp({ store });
 
     for (const batch of [false, true]) {
-      const parent = store.createIssue({ title: `Unassigned parent ${batch}`, status: "in_progress" });
-      const child = store.createIssue({ title: "Unfinished child", parentIssueId: parent.id, status: "in_progress" });
-      const blockedChild = store.createIssue({ title: "Blocked child", parentIssueId: parent.id, status: "blocked" });
+      const parent = createResponsibleTestIssue(store, { title: `Unassigned parent ${batch}`, status: "in_progress" });
+      const child = createResponsibleTestIssue(store, { title: "Unfinished child", parentIssueId: parent.id, status: "in_progress" });
+      const blockedChild = createResponsibleTestIssue(store, { title: "Blocked child", parentIssueId: parent.id, status: "blocked" });
       const close = (token: string) => app.request(batch ? `${path}/batch-update` : `${path}/${parent.id}`, {
         method: batch ? "POST" : "PATCH",
         headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
@@ -738,13 +739,13 @@ describe("MUL-400 E1 — parent status derived from children", () => {
     store.ensureLocalWorkspace();
     const runtime = store.registerRuntime({ id: "rt_summary", name: "Worker", provider: "claude", maxConcurrency: 4 });
     const agent = store.createAgent({ name: "Summary owner", provider: "claude", runtimeId: runtime.id });
-    const parent = store.createIssue({
+    const parent = createResponsibleTestIssue(store, {
       title: "Summary parent",
       status: "in_progress",
       assigneeType: "agent",
       assigneeId: agent.id,
     });
-    const child = store.createIssue({ title: "Only child", parentIssueId: parent.id, status: "in_progress" });
+    const child = createResponsibleTestIssue(store, { title: "Only child", parentIssueId: parent.id, status: "in_progress" });
     store.updateIssue(child.id, { status: "done" });
 
     // No result-bearing round since the child closed: `done` is refused.
@@ -759,13 +760,13 @@ describe("MUL-400 E1 — parent status derived from children", () => {
 
     // A member owner needs no machine-checked summary.
     const member = store.createWorkspaceMember({ name: "Human owner", role: "member" });
-    const memberParent = store.createIssue({
+    const memberParent = createResponsibleTestIssue(store, {
       title: "Member summary parent",
       status: "in_progress",
       assigneeType: "member",
       assigneeId: member.id,
     });
-    const memberChild = store.createIssue({
+    const memberChild = createResponsibleTestIssue(store, {
       title: "Member child",
       parentIssueId: memberParent.id,
       status: "in_progress",
@@ -780,13 +781,13 @@ describe("MUL-400 E1 — parent status derived from children", () => {
     store.ensureLocalWorkspace();
     const runtime = store.registerRuntime({ id: "rt_done_parent", name: "Worker", provider: "claude" });
     const agent = store.createAgent({ name: "Done parent owner", provider: "claude", runtimeId: runtime.id });
-    const parent = store.createIssue({
+    const parent = createResponsibleTestIssue(store, {
       title: "Done parent",
       status: "in_progress",
       assigneeType: "agent",
       assigneeId: agent.id,
     });
-    store.createIssue({ title: "Open child", parentIssueId: parent.id, status: "in_progress" });
+    createResponsibleTestIssue(store, { title: "Open child", parentIssueId: parent.id, status: "in_progress" });
     store.updateIssue(parent.id, { status: "done", force: true });
 
     // A task finishing on that Issue derives in_review; the Issue is a settled
@@ -804,13 +805,13 @@ describe("MUL-400 E1 — parent status derived from children", () => {
     store.ensureLocalWorkspace();
     const runtime = store.registerRuntime({ id: "rt_ask", name: "Worker", provider: "claude" });
     const agent = store.createAgent({ name: "Asking owner", provider: "claude", runtimeId: runtime.id });
-    const parent = store.createIssue({
+    const parent = createResponsibleTestIssue(store, {
       title: "Asking parent",
       status: "in_progress",
       assigneeType: "agent",
       assigneeId: agent.id,
     });
-    store.createIssue({ title: "Open child", parentIssueId: parent.id, status: "in_progress" });
+    createResponsibleTestIssue(store, { title: "Open child", parentIssueId: parent.id, status: "in_progress" });
 
     const task = store.createTask({ agentId: agent.id, issueId: parent.id, prompt: "ask the human" });
     runTask(store, runtime.id, task.id);
@@ -833,10 +834,10 @@ describe("MUL-400 E1 — parent status derived from children", () => {
   it("derives an in_review parent when a child is created under it, and when a child is moved away", () => {
     const store = createStore();
     store.ensureLocalWorkspace();
-    const parent = store.createIssue({ title: "Creation parent", status: "in_review" });
+    const parent = createResponsibleTestIssue(store, { title: "Creation parent", status: "in_review" });
 
     // createIssue is the third entry point the plan names.
-    const child = store.createIssue({
+    const child = createResponsibleTestIssue(store, {
       title: "New child",
       parentIssueId: parent.id,
       status: "backlog",
@@ -848,11 +849,11 @@ describe("MUL-400 E1 — parent status derived from children", () => {
     // parent back at in_review with another open child, then move one child out:
     // the old parent re-derives, and so does the new parent that just gained a
     // child while sitting at in_review.
-    store.createIssue({ title: "Sibling that stays", parentIssueId: parent.id, status: "in_progress" });
+    createResponsibleTestIssue(store, { title: "Sibling that stays", parentIssueId: parent.id, status: "in_progress" });
     store.updateIssue(parent.id, { status: "in_review", force: true });
     expect(store.getIssue(parent.id)?.status).toBe("in_review");
 
-    const otherParent = store.createIssue({ title: "Other parent", status: "in_progress" });
+    const otherParent = createResponsibleTestIssue(store, { title: "Other parent", status: "in_progress" });
     store.updateIssue(otherParent.id, { status: "in_review" });
     expect(store.getIssue(otherParent.id)?.status).toBe("in_review");
 
@@ -868,16 +869,16 @@ describe("MUL-400 E1 — parent status derived from children", () => {
     const store = createStore();
     store.ensureLocalWorkspace();
     const agent = store.createAgent({ name: "Parent owner", provider: "codex" });
-    const parent = store.createIssue({
+    const parent = createResponsibleTestIssue(store, {
       title: "In-review parent",
       status: "in_review",
       assigneeType: "agent",
       assigneeId: agent.id,
     });
-    const child = store.createIssue({ title: "Manual child", parentIssueId: parent.id, status: "in_progress" });
+    const child = createResponsibleTestIssue(store, { title: "Manual child", parentIssueId: parent.id, status: "in_progress" });
     // A second child stays open, so the parent is still mid-flight when the
     // wakeup round is created — the case that used to reset it to todo.
-    store.createIssue({ title: "Still open child", parentIssueId: parent.id, status: "in_progress" });
+    createResponsibleTestIssue(store, { title: "Still open child", parentIssueId: parent.id, status: "in_progress" });
 
     store.updateIssue(child.id, { status: "done" });
 
@@ -898,13 +899,13 @@ describe("MUL-400 hook ordering — the notification cannot roll back a status c
     const agent = store.createAgent({ name: "Hook victim", provider: "claude", runtimeId: runtime.id });
     const parentRuntime = store.registerRuntime({ name: "Parent notifications", provider: "claude" });
     const parentAgent = store.createAgent({ name: "Parent notifier", provider: "claude", runtimeId: parentRuntime.id });
-    const parent = store.createIssue({
+    const parent = createResponsibleTestIssue(store, {
       title: "Hook parent",
       status: "in_progress",
       assigneeType: "agent",
       assigneeId: parentAgent.id,
     });
-    const child = store.createIssue({
+    const child = createResponsibleTestIssue(store, {
       title: "Hook child",
       parentIssueId: parent.id,
       status: "in_progress",
@@ -930,7 +931,7 @@ describe("MUL-400 hook ordering — the notification cannot roll back a status c
     expect(store.getIssue(child.id)?.status).toBe("in_review");
 
     // And the same holds for the failure path.
-    const failing = store.createIssue({
+    const failing = createResponsibleTestIssue(store, {
       title: "Hook failure child",
       parentIssueId: parent.id,
       status: "in_progress",
@@ -953,13 +954,13 @@ describe("MUL-400 hook ordering — the notification cannot roll back a status c
     const agent = store.createAgent({ name: "Hook owner", provider: "claude", runtimeId: runtime.id });
     const parentRuntime = store.registerRuntime({ name: "Parent notifications", provider: "claude" });
     const parentAgent = store.createAgent({ name: "Parent notifier", provider: "claude", runtimeId: parentRuntime.id });
-    const parent = store.createIssue({
+    const parent = createResponsibleTestIssue(store, {
       title: "Ordered parent",
       status: "in_progress",
       assigneeType: "agent",
       assigneeId: parentAgent.id,
     });
-    const child = store.createIssue({
+    const child = createResponsibleTestIssue(store, {
       title: "Ordered child",
       parentIssueId: parent.id,
       status: "in_progress",
@@ -994,7 +995,7 @@ describe("MUL-400 E2 — child endings notify the parent owner", () => {
     store.ensureLocalWorkspace();
     const runtime = store.registerRuntime({ id: "rt_notify", name: "Worker", provider: "claude", maxConcurrency: 8 });
     const agent = store.createAgent({ name: "Notified owner", provider: "claude", runtimeId: runtime.id });
-    const parent = store.createIssue({
+    const parent = createResponsibleTestIssue(store, {
       title: "Notification parent",
       status: "in_progress",
       assigneeType: "agent",
@@ -1006,7 +1007,7 @@ describe("MUL-400 E2 — child endings notify the parent owner", () => {
     const cases: Array<{ outcome: string; issueId: string; apply: () => void }> = [];
     // The task-failure ending runs first: the parent wakeup round it queues would
     // otherwise be the natural target of `runTask`'s claim loop.
-    const failingChild = store.createIssue({
+    const failingChild = createResponsibleTestIssue(store, {
       title: "Child failed",
       parentIssueId: parent.id,
       status: "in_progress",
@@ -1023,7 +1024,7 @@ describe("MUL-400 E2 — child endings notify the parent owner", () => {
       },
     });
     for (const [label, status] of [["done", "done"], ["cancelled", "cancelled"], ["blocked", "blocked"]] as const) {
-      const child = store.createIssue({
+      const child = createResponsibleTestIssue(store, {
         title: `Child ${label}`,
         parentIssueId: parent.id,
         status: "in_progress",
@@ -1059,7 +1060,7 @@ describe("MUL-400 E2 — child endings notify the parent owner", () => {
     const store = createStore();
     store.ensureLocalWorkspace();
     const member = store.createWorkspaceMember({ name: "Human owner", role: "member" });
-    const parent = store.createIssue({
+    const parent = createResponsibleTestIssue(store, {
       title: "Human parent",
       status: "in_progress",
       assigneeType: "member",
@@ -1068,7 +1069,7 @@ describe("MUL-400 E2 — child endings notify the parent owner", () => {
 
     const severities: Array<[string, string, string]> = [];
     for (const status of ["done", "cancelled", "blocked"] as const) {
-      const child = store.createIssue({ title: `Human child ${status}`, parentIssueId: parent.id, status: "in_progress" });
+      const child = createResponsibleTestIssue(store, { title: `Human child ${status}`, parentIssueId: parent.id, status: "in_progress" });
       store.updateIssue(child.id, { status });
       severities.push([status, status === "done" || status === "cancelled" ? "info" : "warning", child.id]);
     }
@@ -1101,13 +1102,13 @@ describe("MUL-400 E2 — child endings notify the parent owner", () => {
     const runtime = store.registerRuntime({ id: "rt_member_failed", name: "Worker", provider: "claude" });
     const agent = store.createAgent({ name: "Failing child owner", provider: "claude", runtimeId: runtime.id });
     const member = store.createWorkspaceMember({ name: "Human parent", role: "member" });
-    const parent = store.createIssue({
+    const parent = createResponsibleTestIssue(store, {
       title: "Human failure parent",
       status: "in_progress",
       assigneeType: "member",
       assigneeId: member.id,
     });
-    const child = store.createIssue({
+    const child = createResponsibleTestIssue(store, {
       title: "Child that fails",
       parentIssueId: parent.id,
       status: "in_progress",
@@ -1142,7 +1143,7 @@ describe("MUL-400 E2 — child endings notify the parent owner", () => {
         outcome: "done",
         severity: "info",
         run: (parentId) => {
-          const child = store.createIssue({ title: "Unowned done", parentIssueId: parentId, status: "in_progress" });
+          const child = createResponsibleTestIssue(store, { title: "Unowned done", parentIssueId: parentId, status: "in_progress" });
           store.updateIssue(child.id, { status: "done" });
           return child.id;
         },
@@ -1151,7 +1152,7 @@ describe("MUL-400 E2 — child endings notify the parent owner", () => {
         outcome: "failed",
         severity: "warning",
         run: (parentId) => {
-          const child = store.createIssue({
+          const child = createResponsibleTestIssue(store, {
             title: "Unowned failed",
             parentIssueId: parentId,
             status: "in_progress",
@@ -1168,7 +1169,7 @@ describe("MUL-400 E2 — child endings notify the parent owner", () => {
         outcome: "cancelled",
         severity: "info",
         run: (parentId) => {
-          const child = store.createIssue({ title: "Unowned cancelled", parentIssueId: parentId, status: "in_progress" });
+          const child = createResponsibleTestIssue(store, { title: "Unowned cancelled", parentIssueId: parentId, status: "in_progress" });
           store.updateIssue(child.id, { status: "cancelled" });
           return child.id;
         },
@@ -1176,7 +1177,7 @@ describe("MUL-400 E2 — child endings notify the parent owner", () => {
     ];
 
     for (const testCase of outcomes) {
-      const parent = store.createIssue({ title: `Unowned ${testCase.outcome} parent`, status: "in_progress" });
+      const parent = createResponsibleTestIssue(store, { title: `Unowned ${testCase.outcome} parent`, status: "in_progress" });
       store.addIssueSubscriber(parent.id, watcher.id, "manual");
       const childId = testCase.run(parent.id);
 
@@ -1200,7 +1201,7 @@ describe("MUL-400 E2 — child endings notify the parent owner", () => {
     const runtime = store.registerRuntime({ name: "Busy runtime", provider: "claude" });
     const leader = store.createAgent({ name: "Busy leader", provider: "claude", runtimeId: runtime.id });
     const squad = store.createSquad({ name: "Busy squad", leaderId: leader.id });
-    const parent = store.createIssue({
+    const parent = createResponsibleTestIssue(store, {
       title: "Busy parent",
       status: "in_progress",
       assigneeType: "squad",
@@ -1210,7 +1211,7 @@ describe("MUL-400 E2 — child endings notify the parent owner", () => {
     runTask(store, runtime.id, running.id);
 
     const children = ["done", "failed", "blocked", "cancelled"].map((status) =>
-      store.createIssue({ title: `Ending ${status}`, parentIssueId: parent.id, status: "in_progress" })
+      createResponsibleTestIssue(store, { title: `Ending ${status}`, parentIssueId: parent.id, status: "in_progress" })
     );
     const [doneChild, blockedChild] = [children[0]!, children[2]!];
     store.updateIssue(doneChild.id, { status: "done" });
@@ -1244,9 +1245,9 @@ describe("MUL-400 E2 — child endings notify the parent owner", () => {
     const store = createStore();
     store.ensureLocalWorkspace();
     const subscriber = store.createWorkspaceMember({ name: "Watcher", role: "member" });
-    const parent = store.createIssue({ title: "Unassigned parent", status: "in_progress" });
+    const parent = createResponsibleTestIssue(store, { title: "Unassigned parent", status: "in_progress" });
     store.addIssueSubscriber(parent.id, subscriber.id, "manual");
-    const child = store.createIssue({ title: "Unassigned child", parentIssueId: parent.id, status: "in_progress" });
+    const child = createResponsibleTestIssue(store, { title: "Unassigned child", parentIssueId: parent.id, status: "in_progress" });
 
     store.updateIssue(child.id, { status: "blocked" });
 

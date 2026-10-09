@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { taskOfferResponse } from "../../fixtures/task-offer.js";
 import { afterEach, describe, expect, it } from "bun:test";
 import { hydrateClaimKnowledge } from "@multiremi/project-knowledge/claim-hydration.js";
@@ -13,7 +14,7 @@ function fixture() {
   const store = createLocalStore();
   const runtime = store.registerRuntime({ name: "Budget runtime", provider: "codex", workspaceId: "local" });
   const agent = store.createAgent({ name: "Budget agent", provider: "codex", workspaceId: "local" });
-  const issue = store.createIssue({ title: "Budget", workspaceId: "local" });
+  const issue = createResponsibleTestIssue(store, { title: "Budget", workspaceId: "local" });
   const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "Work" });
   const project = new ProjectKnowledgeService(store, null, "sql");
   const repository = new RepositoryWikiService(store, null, "sql");

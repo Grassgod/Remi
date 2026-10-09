@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { afterEach, describe, expect, it } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { parseRuntimeCodexProfile } from "@multiremi/contracts/codex-profile";
@@ -168,7 +169,7 @@ describe("Runtime Codex profiles", () => {
     store.updateRuntimeModels(runtime.id, [{ id: "custom-alternative", label: "Alternative", provider: "codex", default: false }], saved);
     const agent = store.createAgent({ name: "Custom", provider: "codex", model: "custom-alternative" });
     const frozen = { ...saved, model: "custom-alternative" };
-    const task = store.createTask({ agentId: agent.id, issueId: store.createIssue({ title: "Retry profile" }).id, prompt: "work" });
+    const task = store.createTask({ agentId: agent.id, issueId: createResponsibleTestIssue(store, { title: "Retry profile" }).id, prompt: "work" });
     const claimed = store.claimTask(runtime.id)!;
     store.startTask(task.id);
     store.updateAgent(agent.id, { model: "another-model" });
@@ -277,7 +278,7 @@ describe("Runtime Codex profiles", () => {
     const { store, runtime } = setup();
     store.setRuntimeCodexProfile(runtime.id, profile);
     const agent = store.createAgent({ name: "Custom", provider: "codex" });
-    const task = store.createTask({ agentId: agent.id, issueId: store.createIssue({ title: "Downgrade retry" }).id, prompt: "work" });
+    const task = store.createTask({ agentId: agent.id, issueId: createResponsibleTestIssue(store, { title: "Downgrade retry" }).id, prompt: "work" });
     expect(store.claimTask(runtime.id)?.id).toBe(task.id);
     store.startTask(task.id);
     store.failTask(task.id, { error: "stalled", failureReason: "codex_semantic_inactivity" });

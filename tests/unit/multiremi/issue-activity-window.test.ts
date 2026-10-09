@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { afterEach, describe, expect, it } from "bun:test";
 import { ISSUE_ACTIVITY_TYPES } from "@multiremi/contracts";
 import { createMultiremiApp } from "@multiremi/api.js";
@@ -13,7 +14,7 @@ function insert(issueId: string, id: string, timestamp: string, type = "issue_up
 describe("Issue activity window (MUL-501 2a)", () => {
   it("tiles adjacent windows exactly once, including equal millisecond boundaries", async () => {
     const store = createStore();
-    const issue = store.createIssue({ title: "Tiled activity", workspaceId: "local" });
+    const issue = createResponsibleTestIssue(store, { title: "Tiled activity", workspaceId: "local" });
     const session = store.getOrCreateDefaultIssueSession(issue.id);
     db!.run("UPDATE multiremi_conversation_log SET created_at = ? WHERE session_id = ?", [time(0), session.id]);
     let seed = 501;
@@ -49,7 +50,7 @@ describe("Issue activity window (MUL-501 2a)", () => {
 
   it("opts in only on the default Issue session and excludes comment and unknown audits", async () => {
     const store = createStore();
-    const issue = store.createIssue({ title: "Default only", workspaceId: "local" });
+    const issue = createResponsibleTestIssue(store, { title: "Default only", workspaceId: "local" });
     const main = store.getOrCreateDefaultIssueSession(issue.id);
     const side = store.createIssueSession(issue.id, { title: "Side" });
     const agent = store.createAgent({ name: "Chat agent", provider: "claude" });
@@ -73,7 +74,7 @@ describe("Issue activity window (MUL-501 2a)", () => {
 
   it("caps a tail at its newest 200 activities, preserves label names and handles an empty log", () => {
     const store = createStore();
-    const issue = store.createIssue({ title: "Capped", workspaceId: "local" });
+    const issue = createResponsibleTestIssue(store, { title: "Capped", workspaceId: "local" });
     const session = store.getOrCreateDefaultIssueSession(issue.id);
     db!.run("DELETE FROM multiremi_issue_activity WHERE issue_id = ?", [issue.id]);
     for (let i = 0; i < 205; i++) insert(issue.id, `act_${String(i).padStart(3, "0")}`, time(i));
@@ -90,7 +91,7 @@ describe("Issue activity window (MUL-501 2a)", () => {
 
   it("records only changed old field values alongside the new update, including camel aliases", () => {
     const store = createStore();
-    const issue = store.createIssue({ title: "Old title", workspaceId: "local", priority: "medium" });
+    const issue = createResponsibleTestIssue(store, { title: "Old title", workspaceId: "local", priority: "medium" });
     store.updateIssue(issue.id, { title: "New title", startDate: "2026-10-05", priority: "medium" });
     const row = store.listIssueActivity(issue.id).findLast(a => a.type === "issue_updated")!;
     expect(row.data).toMatchObject({ title: "New title", startDate: "2026-10-05", previous: { title: "Old title", start_date: null } });
@@ -100,7 +101,7 @@ describe("Issue activity window (MUL-501 2a)", () => {
 
   it("rolls back the field update and previous snapshot when audit insertion fails", () => {
     const store = createStore();
-    const issue = store.createIssue({ title: "Atomic audit", workspaceId: "local", priority: "medium" });
+    const issue = createResponsibleTestIssue(store, { title: "Atomic audit", workspaceId: "local", priority: "medium" });
     db!.exec("CREATE TRIGGER reject_activity BEFORE INSERT ON multiremi_issue_activity WHEN NEW.type = 'issue_updated' BEGIN SELECT RAISE(ABORT, 'audit rejected'); END");
     expect(() => store.updateIssue(issue.id, { priority: "high" })).toThrow("audit rejected");
     expect(store.getIssue(issue.id)?.priority).toBe("medium");

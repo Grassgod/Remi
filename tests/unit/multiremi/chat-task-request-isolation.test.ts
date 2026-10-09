@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { issueMessagesPath, requestMessageBody, taskRequestPath, sentTask, mutateExecutionFixture } from "./unified-test-paths.js";
 import { afterEach, describe, expect, it } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
@@ -15,7 +16,7 @@ async function fixture(topic = false) {
     defaultAssigneeType: "agent",
     defaultAssigneeId: executor.id,
   });
-  const issue = store.createIssue({ title: "Former Chat Issue", projectId: project.id, issueKind: "intake" });
+  const issue = createResponsibleTestIssue(store, { title: "Former Chat Issue", projectId: project.id, issueKind: "intake" });
   const defaultSession = store.getOrCreateDefaultIssueSession(issue.id);
   const session = store.createIssueSession(issue.id, { title: "Original task session" });
   const chat = store.createChatSession({ agentId: agent.id, creatorId: "local" });
@@ -173,7 +174,7 @@ describe("Chat task request isolation", () => {
 
   it("ignores transport Issue overrides and keeps the persisted Feishu topic binding", async () => {
     const { store, app, headers, agent, chat, issue, task } = await fixture(true);
-    const other = store.createIssue({ title: "Unrelated Issue" });
+    const other = createResponsibleTestIssue(store, { title: "Unrelated Issue" });
     for (const issueId of [issue.id, other.id]) {
       const before = store.listTasks().length;
       const response = await app.request(`/api/sessions/${chat.id}/messages`, {

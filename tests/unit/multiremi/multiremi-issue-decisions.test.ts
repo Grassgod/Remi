@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { afterAll, afterEach, beforeAll, describe, expect, it, setSystemTime } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { PostgresSyncDatabase } from "@multiremi/store/db/postgres.js";
@@ -22,8 +23,8 @@ async function exerciseDecisions(store: MultiremiStore): Promise<void> {
   const owner = store.createAgent({ name: "Decision parent owner", provider: "codex", ownerId: member.id });
   const sourceAgent = store.createAgent({ name: "Decision source owner", provider: "codex" });
   const unrelated = store.createAgent({ name: "Unrelated agent", provider: "codex" });
-  const parent = store.createIssue({ title: "Decision parent", assigneeType: "agent", assigneeId: owner.id });
-  const source = store.createIssue({ title: "Decision source", parentIssueId: parent.id, assigneeType: "agent", assigneeId: sourceAgent.id });
+  const parent = createResponsibleTestIssue(store, { title: "Decision parent", assigneeType: "agent", assigneeId: owner.id });
+  const source = createResponsibleTestIssue(store, { title: "Decision source", parentIssueId: parent.id, assigneeType: "agent", assigneeId: sourceAgent.id });
   const ownerTask = store.createTask({ agentId: owner.id, issueId: parent.id, prompt: "Current parent round" });
   const sourceTask = store.createTask({ agentId: sourceAgent.id, issueId: source.id, prompt: "Current source round" });
   const foreignTask = store.createTask({ agentId: unrelated.id, issueId: parent.id, prompt: "Unrelated round" });
@@ -135,14 +136,14 @@ async function exerciseDecisions(store: MultiremiStore): Promise<void> {
     expect(memberAnswer.status).toBe(200);
     expect(store.getIssueDecision(parent.id, prod.id)?.answer?.answererType).toBe("member");
 
-    const noParent = store.createIssue({ title: "No parent" });
+    const noParent = createResponsibleTestIssue(store, { title: "No parent" });
     expect((await create(noParent.id, memberToken.token, "criteria", "Define done")).status).toBe("escalated");
-    const humanParent = store.createIssue({ title: "Member parent", assigneeType: "member", assigneeId: member.id });
-    const humanChild = store.createIssue({ title: "Member child", parentIssueId: humanParent.id });
+    const humanParent = createResponsibleTestIssue(store, { title: "Member parent", assigneeType: "member", assigneeId: member.id });
+    const humanChild = createResponsibleTestIssue(store, { title: "Member child", parentIssueId: humanParent.id });
     expect((await create(humanChild.id, memberToken.token, "question", "Choose direction")).status).toBe("escalated");
     const squad = store.createSquad({ name: "Decision squad", leaderId: owner.id });
-    const squadParent = store.createIssue({ title: "Squad parent", assigneeType: "squad", assigneeId: squad.id });
-    const squadChild = store.createIssue({ title: "Squad child", parentIssueId: squadParent.id });
+    const squadParent = createResponsibleTestIssue(store, { title: "Squad parent", assigneeType: "squad", assigneeId: squad.id });
+    const squadChild = createResponsibleTestIssue(store, { title: "Squad child", parentIssueId: squadParent.id });
     expect((await create(squadChild.id, memberToken.token, "criteria", "Set acceptance")).status).toBe("pending");
 
     const pending = await create(source.id, sourceToken.token, "criteria", "Withdraw this");
@@ -216,8 +217,8 @@ async function exerciseAnsweredWindow(store: MultiremiStore): Promise<void> {
   const member = store.findWorkspaceMemberForUser("local", "local")!;
   const owner = store.createAgent({ name: "Window owner", provider: "codex", ownerId: member.id });
   const sourceAgent = store.createAgent({ name: "Window source", provider: "codex" });
-  const parent = store.createIssue({ title: "Window parent", assigneeType: "agent", assigneeId: owner.id });
-  const source = store.createIssue({ title: "Window source issue", parentIssueId: parent.id, assigneeType: "agent", assigneeId: sourceAgent.id });
+  const parent = createResponsibleTestIssue(store, { title: "Window parent", assigneeType: "agent", assigneeId: owner.id });
+  const source = createResponsibleTestIssue(store, { title: "Window source issue", parentIssueId: parent.id, assigneeType: "agent", assigneeId: sourceAgent.id });
   const ownerTask = store.createTask({ agentId: owner.id, issueId: parent.id, prompt: "Parent round" });
   const [ownerToken, memberToken] = await Promise.all([
     store.createTaskAccessToken(ownerTask, "local"),
@@ -340,7 +341,7 @@ async function exerciseDecisionRecipientFallback(store: MultiremiStore): Promise
     store.createTaskAccessToken(
       store.createTask({
         agentId: ownerAgent.id,
-        issueId: store.createIssue({ title: "Fallback owner parent", assigneeType: "agent", assigneeId: ownerAgent.id }).id,
+        issueId: createResponsibleTestIssue(store, { title: "Fallback owner parent", assigneeType: "agent", assigneeId: ownerAgent.id }).id,
         prompt: "Owner round",
       }),
       "local",
@@ -356,7 +357,7 @@ async function exerciseDecisionRecipientFallback(store: MultiremiStore): Promise
   try {
     // Case 1, the exact QA probe: member PAT raises production_change on a
     // childless issue with no assignee and no subscribers.
-    const probe = store.createIssue({ title: "Fallback probe issue", createdBy: creator.id });
+    const probe = createResponsibleTestIssue(store, { title: "Fallback probe issue", createdBy: creator.id });
     store.removeIssueSubscriber(probe.id, creator.id);
     const escalated = await api.create(probe.id, memberToken.token, {
       kind: "production_change", title: "Deploy the fallback",
@@ -372,7 +373,7 @@ async function exerciseDecisionRecipientFallback(store: MultiremiStore): Promise
 
     // Case 2: an agent creator (or an archived member creator) resolves to
     // nobody, so every workspace owner takes it and non-owners do not.
-    const agentCreated = store.createIssue({ title: "Fallback agent-created issue", createdBy: agentless.id });
+    const agentCreated = createResponsibleTestIssue(store, { title: "Fallback agent-created issue", createdBy: agentless.id });
     const agentEscalated = await api.create(agentCreated.id, memberToken.token, {
       kind: "production_change", title: "Deploy from an agent-created issue",
     });
@@ -381,7 +382,7 @@ async function exerciseDecisionRecipientFallback(store: MultiremiStore): Promise
     expect(decisionRequested(bystander, agentCreated.id)).toHaveLength(0);
 
     const archivedCreator = store.createWorkspaceMember({ workspaceId: "local", name: "Archived creator", userId: "fallback-archived", role: "member" });
-    const archivedIssue = store.createIssue({ title: "Fallback archived creator issue", createdBy: archivedCreator.id });
+    const archivedIssue = createResponsibleTestIssue(store, { title: "Fallback archived creator issue", createdBy: archivedCreator.id });
     store.removeIssueSubscriber(archivedIssue.id, archivedCreator.id);
     store.archiveWorkspaceMember(archivedCreator.id);
     const archivedEscalated = await api.create(archivedIssue.id, memberToken.token, {
@@ -393,7 +394,7 @@ async function exerciseDecisionRecipientFallback(store: MultiremiStore): Promise
       .filter(message=>message.to_member_id===archivedCreator.id)).toHaveLength(0);
 
     // Case 3: an explicit member subscriber suppresses the fallback entirely.
-    const subscribed = store.createIssue({ title: "Fallback subscribed issue", createdBy: creator.id });
+    const subscribed = createResponsibleTestIssue(store, { title: "Fallback subscribed issue", createdBy: creator.id });
     store.removeIssueSubscriber(subscribed.id, creator.id);
     store.addIssueSubscriber(subscribed.id, bystander.id);
     const subscribedEscalated = await api.create(subscribed.id, memberToken.token, {
@@ -406,11 +407,11 @@ async function exerciseDecisionRecipientFallback(store: MultiremiStore): Promise
 
     // Case 4: the escalate path falls back too. The owner agent's ownerId does
     // not resolve to a member and the parent has no subscribers.
-    const escalateParent = store.createIssue({
+    const escalateParent = createResponsibleTestIssue(store, {
       title: "Fallback escalation parent", assigneeType: "agent", assigneeId: agentless.id, createdBy: creator.id,
     });
     store.removeIssueSubscriber(escalateParent.id, creator.id);
-    const escalateChild = store.createIssue({ title: "Fallback escalation child", parentIssueId: escalateParent.id });
+    const escalateChild = createResponsibleTestIssue(store, { title: "Fallback escalation child", parentIssueId: escalateParent.id });
     const pending = await api.create(escalateChild.id, memberToken.token, {
       kind: "question", title: "Who decides this",
     });

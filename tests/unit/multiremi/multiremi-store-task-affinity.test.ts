@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { runTurnExecutionMutation } from "@multiremi/store/turn-execution-records.js";
 // Store-level task placement over time: local_directory pins, resume-safe vs
 // resume-unsafe retries, stale-dispatch recovery, and what happens to an agent's
@@ -134,7 +135,7 @@ describe("Multiremi store — local_directory affinity, retries, and agent re-ho
     const dirRuntime = store.registerRuntime({ id: "rt_pref_dir", name: "dir", provider: "codex", daemonId: "daemon-pref-dir" });
     const sessRuntime = store.registerRuntime({ id: "rt_pref_sess", name: "sess", provider: "codex", daemonId: "daemon-pref-sess" });
     const agent = store.createAgent({ name: "Pref", provider: "codex" });
-    const issue = store.createIssue({ title: "dir", workspaceId: "local" });
+    const issue = createResponsibleTestIssue(store, { title: "dir", workspaceId: "local" });
     const warmup = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "hi" });
     expect(store.claimTask(sessRuntime.id)?.id).toBe(warmup.id);
     store.buildTaskSessionProjection(warmup.id);
@@ -159,7 +160,7 @@ describe("Multiremi store — local_directory affinity, retries, and agent re-ho
     const codex = store.registerRuntime({ id: "rt_retry_codex2", name: "codex", provider: "codex" });
     const claude = store.registerRuntime({ id: "rt_retry_claude2", name: "claude", provider: "claude" });
     const agent = store.createAgent({ name: "RetrySwitch", provider: "codex" });
-    const issue = store.createIssue({ title: "i", workspaceId: "local" });
+    const issue = createResponsibleTestIssue(store, { title: "i", workspaceId: "local" });
     const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "work" });
     expect(store.claimTask(codex.id)?.id).toBe(task.id);
     store.startTask(task.id);
@@ -183,7 +184,7 @@ describe("Multiremi store — local_directory affinity, retries, and agent re-ho
       workspaceId: "local",
       resources: [{ resourceType: "local_directory", resourceRef: { local_path: "/abs/p", daemon_id: "daemon-ovr" } }],
     });
-    const issue = store.createIssue({ title: "dir", workspaceId: "local", projectId: project.id });
+    const issue = createResponsibleTestIssue(store, { title: "dir", workspaceId: "local", projectId: project.id });
     // Explicitly try to pin the task to the WRONG machine.
     const task = store.createTask({ agentId: agent.id, issueId: issue.id, runtimeId: wrongRuntime.id, prompt: "work" });
     // The directory affinity wins — the task is pinned to the machine that
@@ -202,7 +203,7 @@ describe("Multiremi store — local_directory affinity, retries, and agent re-ho
       workspaceId: "local",
       resources: [{ resourceType: "local_directory", resourceRef: { local_path: "/abs/p", daemon_id: "daemon-arch-dir" } }],
     });
-    const issue = store.createIssue({ title: "dir", workspaceId: "local", projectId: project.id });
+    const issue = createResponsibleTestIssue(store, { title: "dir", workspaceId: "local", projectId: project.id });
     const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "work" });
     expect(store.claimTask(dirRuntime.id)?.id).toBe(task.id);
     runTurnExecutionMutation(db!, "UPDATE multiremi_turn_execution_records SET dispatched_at = ? WHERE id = ?", ["2020-01-01T00:00:00.000Z", task.id]);
@@ -238,7 +239,7 @@ describe("Multiremi store — local_directory affinity, retries, and agent re-ho
       workspaceId: "local",
       resources: [{ resourceType: "local_directory", resourceRef: { local_path: "/abs/p", daemon_id: "daemon-stale-dir" } }],
     });
-    const issue = store.createIssue({ title: "dir issue", workspaceId: "local", projectId: project.id });
+    const issue = createResponsibleTestIssue(store, { title: "dir issue", workspaceId: "local", projectId: project.id });
     const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "work" });
     expect(task.runtimeId).toBe(dirRuntime.id);
     expect(store.claimTask(dirRuntime.id)?.id).toBe(task.id);
@@ -276,7 +277,7 @@ describe("Multiremi store — local_directory affinity, retries, and agent re-ho
       workspaceId: "local",
       resources: [{ resourceType: "local_directory", resourceRef: { local_path: "/abs/p", daemon_id: "daemon-mig-dir" } }],
     });
-    const issue = store.createIssue({ title: "dir", workspaceId: "local", projectId: project.id });
+    const issue = createResponsibleTestIssue(store, { title: "dir", workspaceId: "local", projectId: project.id });
     const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "work" });
     // local_directory task is pinned to the directory's runtime and has no session.
     expect(task.runtimeId).toBe(dirRuntime.id);
@@ -290,7 +291,7 @@ describe("Multiremi store — local_directory affinity, retries, and agent re-ho
     const store = createStore();
     const codex = store.registerRuntime({ id: "rt_fc_nostamp", name: "codex", provider: "codex" });
     const agent = store.createAgent({ name: "NoStamp", provider: "codex" });
-    const issue = store.createIssue({ title: "i", workspaceId: "local" });
+    const issue = createResponsibleTestIssue(store, { title: "i", workspaceId: "local" });
     const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "work" });
     expect(store.claimTask(codex.id)?.id).toBe(task.id);
     store.startTask(task.id);
@@ -309,7 +310,7 @@ describe("Multiremi store — local_directory affinity, retries, and agent re-ho
     const store = createStore();
     const codex = store.registerRuntime({ id: "rt_unpinned_sess", name: "codex", provider: "codex" });
     const agent = store.createAgent({ name: "Unpinned", provider: "codex" });
-    const issue = store.createIssue({ title: "i", workspaceId: "local" });
+    const issue = createResponsibleTestIssue(store, { title: "i", workspaceId: "local" });
     const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "work" });
     expect(store.claimTask(codex.id)?.id).toBe(task.id);
     store.startTask(task.id);
@@ -334,7 +335,7 @@ describe("Multiremi store — local_directory affinity, retries, and agent re-ho
       workspaceId: "local",
       resources: [{ resourceType: "local_directory", resourceRef: { local_path: "/abs/p", daemon_id: "daemon-dir-resume" } }],
     });
-    const issue = store.createIssue({ title: "dir", workspaceId: "local", projectId: project.id });
+    const issue = createResponsibleTestIssue(store, { title: "dir", workspaceId: "local", projectId: project.id });
     const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "work" });
     expect(task.runtimeId).toBe(dirRuntime.id);
     expect(store.claimTask(dirRuntime.id)?.id).toBe(task.id);
@@ -358,7 +359,7 @@ describe("Multiremi store — local_directory affinity, retries, and agent re-ho
       workspaceId: "local",
       resources: [{ resourceType: "local_directory", resourceRef: { local_path: "/abs/p", daemon_id: "daemon-repin" } }],
     });
-    const issue = store.createIssue({ title: "dir", workspaceId: "local", projectId: project.id });
+    const issue = createResponsibleTestIssue(store, { title: "dir", workspaceId: "local", projectId: project.id });
     const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "work" });
     expect(task.runtimeId).toBe("rt_repin");
     // The same-id runtime re-registers under a different engine. The codex
@@ -560,7 +561,7 @@ describe("Multiremi store — local_directory affinity, retries, and agent re-ho
       resourceType: "local_directory",
       resourceRef: { local_path: "/abs/project", daemon_id: "daemon-dir" },
     });
-    const issue = store.createIssue({ title: "dir issue", workspaceId: "local", projectId: project.id });
+    const issue = createResponsibleTestIssue(store, { title: "dir issue", workspaceId: "local", projectId: project.id });
     const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "work in the local dir" });
     expect(task.runtimeId).toBe(dirRuntime.id);
 
@@ -572,7 +573,7 @@ describe("Multiremi store — local_directory affinity, retries, and agent re-ho
       resourceType: "local_directory",
       resourceRef: { local_path: "/abs/orphan", daemon_id: "daemon-gone" },
     });
-    const orphanIssue = store.createIssue({ title: "orphan issue", workspaceId: "local", projectId: orphanProject.id });
+    const orphanIssue = createResponsibleTestIssue(store, { title: "orphan issue", workspaceId: "local", projectId: orphanProject.id });
     const orphanTask = store.createTask({ agentId: agent.id, issueId: orphanIssue.id, prompt: "no machine has this" });
     expect(orphanTask.runtimeId).toBe(daemonRuntimeId("daemon-gone", "codex"));
     // Not claimable by machines that don't have the directory.
@@ -592,7 +593,7 @@ describe("Multiremi store — local_directory affinity, retries, and agent re-ho
     const runtime = store.registerRuntime({ id: "rt_retry_codex", name: "retry codex", provider: "codex" });
     const agent = store.createAgent({ name: "Retry pool", provider: "codex" });
 
-    const offlineIssue = store.createIssue({ title: "offline retry", workspaceId: "local" });
+    const offlineIssue = createResponsibleTestIssue(store, { title: "offline retry", workspaceId: "local" });
     const offlineTask = store.createTask({ agentId: agent.id, issueId: offlineIssue.id, prompt: "fails offline" });
     expect(store.claimTask(runtime.id)?.id).toBe(offlineTask.id);
     store.startTask(offlineTask.id);
@@ -600,7 +601,7 @@ describe("Multiremi store — local_directory affinity, retries, and agent re-ho
     const offlineRetry = store.listTasks().find((task) => task.parentTaskId === offlineTask.id)!;
     expect(offlineRetry.runtimeId).toBe(runtime.id);
 
-    const unsafeIssue = store.createIssue({ title: "unsafe retry", workspaceId: "local" });
+    const unsafeIssue = createResponsibleTestIssue(store, { title: "unsafe retry", workspaceId: "local" });
     // Priority beats the queued offline retry in the claim ordering.
     const unsafeTask = store.createTask({ agentId: agent.id, issueId: unsafeIssue.id, prompt: "fails unsafely", priority: 100 });
     expect(store.claimTask(runtime.id)?.id).toBe(unsafeTask.id);

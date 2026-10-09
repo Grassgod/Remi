@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { expect, it } from "bun:test";
 import { startMultiremiServer } from "@multiremi/api.js";
 import { createReadPool } from "@multiremi/store/db/read-pool.js";
@@ -24,7 +25,7 @@ pendingTurnBackendTests("MUL-508 browser log source visibility", fixture => {
     const sourceOwner = store.getOrCreateUser({ externalId: "ws-source-owner", name: "Source owner" });
     store.createWorkspaceMember({ userId: sourceOwner.id, name: sourceOwner.name, role: "member" });
     const agent = store.createAgent({ name: "Source", provider: "codex", visibility: shared ? "workspace" : "private", ownerId: sourceOwner.id });
-    const issue = store.createIssue({ title: "Browser visibility", assigneeType: "agent", assigneeId: agent.id });
+    const issue = createResponsibleTestIssue(store, { title: "Browser visibility", assigneeType: "agent", assigneeId: agent.id });
     const session = store.getOrCreateDefaultIssueSession(issue.id);
     const member = await store.createAccessToken({ type: "pat", name: "Member", userId: user.id, workspaceId: "local" });
     const owner = await store.createAccessToken({ type: "pat", name: "Source owner", userId: sourceOwner.id, workspaceId: "local" });
@@ -112,7 +113,7 @@ pendingTurnBackendTests("MUL-508 browser log source visibility", fixture => {
   for (const moved of ["source", "target"] as const) it(`retained replay hides decisions, replies and edit markers after the ${moved} Issue moves workspace`, async () => {
     const f = await scaffold(true);
     try {
-      const source = f.store.createIssue({ title: "Decision source", parentIssueId: f.issue.id });
+      const source = createResponsibleTestIssue(f.store, { title: "Decision source", parentIssueId: f.issue.id });
       const decision = f.store.createIssueDecision(source.id, {
         kind: "production_change", title: "PRIVATE decision", body: "PRIVATE body", options: ["yes", "no"],
       }, { type: "member", id: "mem_local_local", taskId: null });

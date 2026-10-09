@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { attemptMessagesPath, requestMessageBody, turnApiPath } from "./unified-test-paths.js";
 import { afterEach, describe, expect, it } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
@@ -59,8 +60,8 @@ async function setup() {
     workspaceId: "local",
     ownerId: "owner",
   });
-  const targetIssue = store.createIssue({ title: "Target issue", workspaceId: "local" });
-  const patrolIssue = store.createIssue({ title: "Organizer patrol", workspaceId: "local" });
+  const targetIssue = createResponsibleTestIssue(store, { title: "Target issue", workspaceId: "local" });
+  const patrolIssue = createResponsibleTestIssue(store, { title: "Organizer patrol", workspaceId: "local" });
   store.addIssueSubscriber(patrolIssue.id, owner.id);
   const supervisorTask = store.createTask({
     agentId: supervisorAgent.id,
@@ -137,7 +138,7 @@ describe("Organizer supervisor privilege layer", () => {
     const fixture = await setup();
     const supervisorToken = await grantSupervisor(fixture);
     await setMode(fixture, "act");
-    const prerequisite = fixture.store.createIssue({ title: "Still open", status: "in_progress" });
+    const prerequisite = createResponsibleTestIssue(fixture.store, { title: "Still open", status: "in_progress" });
     fixture.store.createIssueDependency(fixture.targetIssue.id, {
       dependsOnIssueId: prerequisite.id, type: "blocked_by",
     });
@@ -265,7 +266,7 @@ describe("Organizer supervisor privilege layer", () => {
 
     const ordinaryTarget = fixture.store.createTask({
       agentId: fixture.targetAgent.id,
-      issueId: fixture.store.createIssue({ title: "Owner parity target", workspaceId: "local" }).id,
+      issueId: createResponsibleTestIssue(fixture.store, { title: "Owner parity target", workspaceId: "local" }).id,
       workspaceId: "local",
       prompt: "ordinary owner action",
     });
@@ -330,7 +331,7 @@ describe("Organizer supervisor privilege layer", () => {
     fixture.store.setAgentSupervisor(protectedAgent.id, true);
     const protectedTask = fixture.store.createTask({
       agentId: protectedAgent.id,
-      issueId: fixture.store.createIssue({ title: "Protected", workspaceId: "local" }).id,
+      issueId: createResponsibleTestIssue(fixture.store, { title: "Protected", workspaceId: "local" }).id,
       workspaceId: "local",
       prompt: "patrol",
     });
@@ -443,7 +444,7 @@ describe("Organizer supervisor privilege layer", () => {
     expect((disclosure!.metadata.inbox_item as any)?.severity).toBe("attention");
     expect(disclosure!.body_md).toContain(steeredBody.organizer_action.id);
 
-    const cancelIssue = fixture.store.createIssue({ title: "Cancel target", workspaceId: "local" });
+    const cancelIssue = createResponsibleTestIssue(fixture.store, { title: "Cancel target", workspaceId: "local" });
     const cancelTask = fixture.store.createTask({
       agentId: fixture.targetAgent.id,
       issueId: cancelIssue.id,
@@ -462,7 +463,7 @@ describe("Organizer supervisor privilege layer", () => {
     expect(fixture.store.listOrganizerActionsForTask(cancelTask.id)).toHaveLength(1);
     expect(fixture.store.listIssueComments(fixture.patrolIssue.id).at(-1)?.body).toContain("Organizer action: cancel");
 
-    const redispatchIssue = fixture.store.createIssue({ title: "Redispatch target", workspaceId: "local" });
+    const redispatchIssue = createResponsibleTestIssue(fixture.store, { title: "Redispatch target", workspaceId: "local" });
     const continuedFromTask = fixture.store.createTask({
       agentId: fixture.targetAgent.id,
       issueId: redispatchIssue.id,
@@ -669,7 +670,7 @@ describe("Organizer supervisor privilege layer", () => {
       leaderId: leader.id,
       memberIds: [fixture.supervisorAgent.id],
     });
-    const delegatedIssue = fixture.store.createIssue({
+    const delegatedIssue = createResponsibleTestIssue(fixture.store, {
       title: "Delegated organizer patrol",
       workspaceId: "local",
       assigneeType: "squad",

@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { runTurnExecutionMutation } from '@multiremi/store/turn-execution-records.js';
 import type { SqlDatabase as UnifiedFixtureDatabase } from '@multiremi/store/db/postgres.js';
 import { expect, it } from "bun:test";
@@ -42,15 +43,15 @@ pendingTurnBackendTests("D1 inbox integrated chains", fixture => {
   it("T4: E3 readiness leaves an idle or running recipient without a new queued turn", () => {
     const f = setup();
     const member = f.store.findWorkspaceMemberForUser("local", "local")!;
-    const prerequisite = f.store.createIssue({ title: "Readiness prerequisite", status: "in_progress" });
-    f.store.createIssue({ title: "Readiness dependent", status: "backlog", blockedBy: [prerequisite.id],
+    const prerequisite = createResponsibleTestIssue(f.store, { title: "Readiness prerequisite", status: "in_progress" });
+    createResponsibleTestIssue(f.store, { title: "Readiness dependent", status: "backlog", blockedBy: [prerequisite.id],
       parentIssueId: f.flow.targetIssueId, assigneeType: "member", assigneeId: member.id });
     f.store.updateIssue(prerequisite.id, { status: "done" });
     expect(f.store.listTasksForIssue(f.flow.targetIssueId).filter(task => task.status === "queued")).toEqual([]);
     const running = f.store.createTask({ agentId: f.flow.agentId, issueId: f.flow.targetIssueId, prompt: "Already running" });
     runTurnExecutionMutation(f.db as unknown as UnifiedFixtureDatabase, "UPDATE multiremi_turn_execution_records SET status = 'running' WHERE id = ?", [running.id]);
-    const another = f.store.createIssue({ title: "Next readiness prerequisite", status: "in_progress" });
-    f.store.createIssue({ title: "Next readiness dependent", status: "backlog", blockedBy: [another.id],
+    const another = createResponsibleTestIssue(f.store, { title: "Next readiness prerequisite", status: "in_progress" });
+    createResponsibleTestIssue(f.store, { title: "Next readiness dependent", status: "backlog", blockedBy: [another.id],
       parentIssueId: f.flow.targetIssueId, assigneeType: "member", assigneeId: member.id });
     f.store.updateIssue(another.id, { status: "done" });
     expect(f.store.listTasksForIssue(f.flow.targetIssueId).filter(task => task.status === "queued")).toEqual([]);
@@ -68,8 +69,8 @@ pendingTurnBackendTests("D1 inbox integrated chains", fixture => {
     f.db.run('UPDATE multiremi_turns SET execution_scope=? WHERE current_attempt_id=?',['independent',running.id]);
     const queued = f.store.createTask({ agentId: f.flow.agentId, issueId: f.flow.targetIssueId, prompt: "Queued human request" });
     const member = f.store.findWorkspaceMemberForUser("local", "local")!;
-    const prerequisite = f.store.createIssue({ title: "Ready beside running", status: "in_progress" });
-    f.store.createIssue({ title: "Ready dependent", status: "backlog", blockedBy: [prerequisite.id],
+    const prerequisite = createResponsibleTestIssue(f.store, { title: "Ready beside running", status: "in_progress" });
+    createResponsibleTestIssue(f.store, { title: "Ready dependent", status: "backlog", blockedBy: [prerequisite.id],
       parentIssueId: f.flow.targetIssueId, assigneeType: "member", assigneeId: member.id });
     f.store.updateIssue(prerequisite.id, { status: "done" });
     const comment = f.store.listIssueComments(f.flow.targetIssueId).find(row => row.authorType === "system")!;

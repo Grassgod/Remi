@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { MultiremiStore } from "@multiremi/store.js";
 import { describe, expect, it } from "bun:test";
 import { createCommitEventQueue, type StoreContext } from "@multiremi/store/context.js";
@@ -29,7 +30,7 @@ describe("MUL-427 merge rulings", () => {
       it.skipIf(backend === "pg" && !pgAdminUrl)(`${backend}: ${operation} comment emits every workspace event after its own COMMIT`, async () => {
         await withStore(backend, (store, db) => {
           const agent = store.createAgent({ name: "Comment recipient", provider: "codex", workspaceId: "local" });
-          const issue = store.createIssue({ title: "Commit queue", workspaceId: "local" });
+          const issue = createResponsibleTestIssue(store, { title: "Commit queue", workspaceId: "local" });
           store.assignIssue(issue.id, { assigneeType: "agent", assigneeId: agent.id });
           for (const task of store.listTasksForIssue(issue.id)) store.cancelTask(task.id);
           const comment = store.createIssueComment(issue.id, { body: "Before" });
@@ -74,7 +75,7 @@ describe("MUL-427 merge rulings", () => {
         await withStore(backend, (store, db) => {
           const leader = store.createAgent({ name: "Leader", provider: "codex", workspaceId: "local" });
           const worker = store.createAgent({ name: "Worker", provider: "codex", workspaceId: "local" });
-          const issue = store.createIssue({ title: "Dispatch queue", workspaceId: "local" });
+          const issue = createResponsibleTestIssue(store, { title: "Dispatch queue", workspaceId: "local" });
           store.assignIssue(issue.id, { assigneeType: "agent", assigneeId: leader.id });
           for (const task of store.listTasksForIssue(issue.id)) store.cancelTask(task.id);
           const parent=store.createTask({agentId:leader.id,issueId:issue.id,prompt:"Delegate"});store.cancelTask(parent.id);
@@ -115,7 +116,7 @@ describe("MUL-427 merge rulings", () => {
     it.skipIf(backend === "pg" && !pgAdminUrl)(`${backend}: failed comment deletion leaves trigger tasks queued and emits nothing`, async () => {
       await withStore(backend, (store, db) => {
         const agent = store.createAgent({ name: "Assignee", provider: "codex", workspaceId: "local" });
-        const issue = store.createIssue({ title: "Delete rollback", workspaceId: "local" });
+        const issue = createResponsibleTestIssue(store, { title: "Delete rollback", workspaceId: "local" });
         store.assignIssue(issue.id, { assigneeType: "agent", assigneeId: agent.id });
         for (const task of store.listTasksForIssue(issue.id)) store.cancelTask(task.id);
         const comment = store.createIssueComment(issue.id, { body: "Keep on failure" });
@@ -145,7 +146,7 @@ describe("MUL-427 merge rulings", () => {
     // pending-turn writes are part of the mutation, covered by rollback below.
     it.skipIf(backend === "pg" && !pgAdminUrl)(`${backend}: post-COMMIT member notification failure keeps the comment and emits only outside the transaction`, async () => {
       await withStore(backend, (store, db) => {
-        const issue = store.createIssue({ title: "Notification failure", workspaceId: "local" });
+        const issue = createResponsibleTestIssue(store, { title: "Notification failure", workspaceId: "local" });
         const session = store.getOrCreateDefaultIssueSession(issue.id);
         const body = "Saved before member notification";
         const repo = (store as unknown as { issues: IssuesRepo }).issues;
@@ -189,7 +190,7 @@ describe("MUL-427 merge rulings", () => {
     it.skipIf(backend === "pg" && !pgAdminUrl)(`${backend}: late mention SQL failure rolls back the comment and discards all queued events`, async () => {
       await withStore(backend, (store, db) => {
         const agent = store.createAgent({ name: "Rejected recipient", provider: "codex", workspaceId: "local" });
-        const issue = store.createIssue({ title: "Late rollback", workspaceId: "local" });
+        const issue = createResponsibleTestIssue(store, { title: "Late rollback", workspaceId: "local" });
         const session = store.getOrCreateDefaultIssueSession(issue.id);
         if (backend === "pg") {
           db.run("CREATE FUNCTION reject_late_mention() RETURNS trigger AS $$ BEGIN RAISE EXCEPTION 'late mention rejected'; END; $$ LANGUAGE plpgsql");
@@ -220,7 +221,7 @@ describe("MUL-427 merge rulings", () => {
     it.skipIf(backend === "pg" && !pgAdminUrl)(`${backend}: caller-owned mention SQL failure rolls back the comment and discards all queued events`, async () => {
       await withStore(backend, (store, db) => {
         const agent = store.createAgent({ name: "Rejected recipient", provider: "codex", workspaceId: "local" });
-        const issue = store.createIssue({ title: "Late rollback", workspaceId: "local" });
+        const issue = createResponsibleTestIssue(store, { title: "Late rollback", workspaceId: "local" });
         const session = store.getOrCreateDefaultIssueSession(issue.id);
         if (backend === "pg") {
           db.run("CREATE FUNCTION reject_late_mention() RETURNS trigger AS $$ BEGIN RAISE EXCEPTION 'late mention rejected'; END; $$ LANGUAGE plpgsql");
@@ -250,7 +251,7 @@ describe("MUL-427 merge rulings", () => {
 
     it.skipIf(backend === "pg" && !pgAdminUrl)(`${backend}: an existing caller queue retains ownership of comment events`, async () => {
       await withStore(backend, (store, db) => {
-        const issue = store.createIssue({ title: "Caller owns COMMIT", workspaceId: "local" });
+        const issue = createResponsibleTestIssue(store, { title: "Caller owns COMMIT", workspaceId: "local" });
         store.getOrCreateDefaultIssueSession(issue.id);
         const author=store.createAgent({name:"Caller author",provider:"codex"});
         const queue = createCommitEventQueue();
@@ -273,7 +274,7 @@ describe("MUL-427 merge rulings", () => {
 
     it.skipIf(backend === "pg" && !pgAdminUrl)(`${backend}: caller queue preserves interleaved activity and comment order after routing`, async () => {
       await withStore(backend, (store, db) => {
-        const issue = store.createIssue({ title: "Ordered caller queue", workspaceId: "local" });
+        const issue = createResponsibleTestIssue(store, { title: "Ordered caller queue", workspaceId: "local" });
         store.getOrCreateDefaultIssueSession(issue.id);
         const author=store.createAgent({name:"Caller author",provider:"codex"});
         const queue = createCommitEventQueue();
@@ -301,7 +302,7 @@ describe("MUL-427 merge rulings", () => {
 
     it.skipIf(backend === "pg" && !pgAdminUrl)(`${backend}: failed optional activity routing removes only its reserved caller event`, async () => {
       await withStore(backend, (store, db) => {
-        const issue = store.createIssue({ title: "Failed activity route", workspaceId: "local" });
+        const issue = createResponsibleTestIssue(store, { title: "Failed activity route", workspaceId: "local" });
         store.getOrCreateDefaultIssueSession(issue.id);
         const author=store.createAgent({name:"Caller author",provider:"codex"});
         const context = (store as unknown as { ctx: StoreContext }).ctx;
@@ -346,7 +347,7 @@ describe("MUL-427 merge rulings", () => {
 
     it.skipIf(backend === "pg" && !pgAdminUrl)(`${backend}: all three main-produced kinds preserve the dense seq axis and marker targets`, async () => {
       await withStore(backend, (store) => {
-        const issue = store.createIssue({ title: "Ruling ③", workspaceId: "local" });
+        const issue = createResponsibleTestIssue(store, { title: "Ruling ③", workspaceId: "local" });
         const session = store.getOrCreateDefaultIssueSession(issue.id);
         const first = store.createIssueComment(issue.id, { body: "First target" });
         const second = store.createIssueComment(issue.id, { body: "Second target" });
@@ -395,7 +396,7 @@ describe("MUL-427 merge rulings", () => {
         const leader = store.createAgent({ name: "Reply leader", provider: "codex", workspaceId: "local" });
         const teammate = store.createAgent({ name: "Reply teammate", provider: "codex", workspaceId: "local" });
         const squad = store.createSquad({ name: "Reply squad", leaderId: leader.id, memberIds: [teammate.id], workspaceId: "local" });
-        const issue = store.createIssue({ title: "Reply commit", workspaceId: "local", assigneeType: "squad", assigneeId: squad.id });
+        const issue = createResponsibleTestIssue(store, { title: "Reply commit", workspaceId: "local", assigneeType: "squad", assigneeId: squad.id });
         const session = store.getOrCreateDefaultIssueSession(issue.id);
         const task = store.createSessionTask(session.id, { agentId: leader.id, prompt: "Lead the round" });
         expect(store.claimTask(runtime.id)?.id).toBe(task.id);
@@ -464,7 +465,7 @@ describe("MUL-427 merge rulings", () => {
         const agent = store.createAgent({ name: "Reply author", provider: "codex", workspaceId: "local" });
         const teammate = store.createAgent({ name: "Reply recipient", provider: "codex", workspaceId: "local" });
         const squad = store.createSquad({ name: "Reply squad", leaderId: agent.id, memberIds: [teammate.id], workspaceId: "local" });
-        const issue = store.createIssue({ title: "Final entry", workspaceId: "local", assigneeType: "squad", assigneeId: squad.id });
+        const issue = createResponsibleTestIssue(store, { title: "Final entry", workspaceId: "local", assigneeType: "squad", assigneeId: squad.id });
         const session = store.getOrCreateDefaultIssueSession(issue.id);
         const completeRound = (output: string) => {
           const task = store.createSessionTask(session.id, { agentId: agent.id, prompt: "Answer" });

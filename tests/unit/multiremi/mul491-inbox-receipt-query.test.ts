@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { appendCanonicalInboxInput } from "./fixtures/canonical-inbox-input.js";
 import { runTurnExecutionMutation } from '@multiremi/store/turn-execution-records.js';
 import type { SqlDatabase as UnifiedFixtureDatabase } from '@multiremi/store/db/postgres.js';
@@ -53,7 +54,7 @@ function scaffold(db: SqlDatabase) {
   store.ensureLocalWorkspace();
   const recipient = store.createAgent({ name: "Recipient", provider: "codex" });
   const other = store.createAgent({ name: "Foreign", provider: "codex" });
-  const issue = store.createIssue({ title: "Receipt read", status: "in_progress",
+  const issue = createResponsibleTestIssue(store, { title: "Receipt read", status: "in_progress",
     assigneeType: "agent", assigneeId: recipient.id });
   const session = store.getOrCreateDefaultIssueSession(issue.id);
   const task = store.createSessionTask(session.id, { agentId: recipient.id, prompt: "Read" });
@@ -114,7 +115,7 @@ describe("MUL-491 bounded inbox receipt reads", () => {
     test(`${backend}: ownership, business boundaries and ignored legacy receipt metadata`, async () => {
       await withConversationLogStore(backend, async (_, db) => {
         const f = scaffold(db);
-        const otherSession=f.store.getOrCreateDefaultIssueSession(f.store.createIssue({title:'Other conversation'}).id);
+        const otherSession=f.store.getOrCreateDefaultIssueSession(createResponsibleTestIssue(f.store, {title:'Other conversation'}).id);
         const turnId=f.store.getTask(f.task.id)!.turn_id!;
         db.run("UPDATE multiremi_turns SET status='completed' WHERE id=?",[turnId]);
         for(const c of [

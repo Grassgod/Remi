@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { resolveMigrationReportDirectory } from "@multiremi/store/migration-report-directory.js";
 import { issueMessagesPath, requestMessageBody } from "./unified-test-paths.js";
 import { runTurnExecutionMutation } from '@multiremi/store/turn-execution-records.js';
@@ -242,7 +243,7 @@ describe.skipIf(!pgAvailable)("MUL-400 S1 on PostgreSQL", () => {
 
   function staleLaneClaim() {
     const { workspaceId, agent, runtime } = freshWorkspace();
-    const issue = store.createIssue({ title: "PG stale lane", workspaceId });
+    const issue = createResponsibleTestIssue(store, { title: "PG stale lane", workspaceId });
     const session = store.getOrCreateDefaultIssueSession(issue.id);
     const task = store.createSessionTask(session.id, { agentId: agent, prompt: "Claim stale lane" });
     store.getOrCreateSessionAgentLane(session.id, agent);
@@ -310,13 +311,13 @@ describe.skipIf(!pgAvailable)("MUL-400 S1 on PostgreSQL", () => {
   for (const path of ["held parent", "assign unassign", "update unassign"] as const) {
     function activityCase() {
       const { workspaceId, agent } = freshWorkspace();
-      const issue = store.createIssue({
+      const issue = createResponsibleTestIssue(store, {
         title: `PG audit ${path}`, workspaceId, status: "in_progress",
         assigneeType: "agent", assigneeId: agent,
       });
       let taskId: string | null = null;
       if (path === "held parent") {
-        store.createIssue({ title: "PG open child", workspaceId, parentIssueId: issue.id, status: "in_progress" });
+        createResponsibleTestIssue(store, { title: "PG open child", workspaceId, parentIssueId: issue.id, status: "in_progress" });
       } else {
         taskId = store.createTask({ agentId: agent, issueId: issue.id, prompt: "PG queued work" }).id;
       }
@@ -385,7 +386,7 @@ describe.skipIf(!pgAvailable)("MUL-400 S1 on PostgreSQL", () => {
 
   it("keeps updateIssue(child -> done) at depth 1 on Postgres (owner busy: coalesced)", () => {
     const { workspaceId, agent } = freshWorkspace();
-    const parent = store.createIssue({
+    const parent = createResponsibleTestIssue(store, {
       title: "PG busy parent",
       workspaceId,
       status: "in_progress",
@@ -394,7 +395,7 @@ describe.skipIf(!pgAvailable)("MUL-400 S1 on PostgreSQL", () => {
     });
     const running = store.createTask({ agentId: agent, issueId: parent.id, prompt: "current round" });
     runTurnExecutionMutation(db as unknown as UnifiedFixtureDatabase,"UPDATE multiremi_turn_execution_records SET status = 'running' WHERE id = ?", [running.id]);
-    const child = store.createIssue({
+    const child = createResponsibleTestIssue(store, {
       title: "PG busy child",
       workspaceId,
       parentIssueId: parent.id,
@@ -415,14 +416,14 @@ describe.skipIf(!pgAvailable)("MUL-400 S1 on PostgreSQL", () => {
 
   it("keeps updateIssue(child -> done) at depth 1 on Postgres (owner free: fresh round)", () => {
     const { workspaceId, agent } = freshWorkspace();
-    const parent = store.createIssue({
+    const parent = createResponsibleTestIssue(store, {
       title: "PG free parent",
       workspaceId,
       status: "in_progress",
       assigneeType: "agent",
       assigneeId: agent,
     });
-    const child = store.createIssue({
+    const child = createResponsibleTestIssue(store, {
       title: "PG free child",
       workspaceId,
       parentIssueId: parent.id,
@@ -457,11 +458,11 @@ describe.skipIf(!pgAvailable)("MUL-400 S1 on PostgreSQL", () => {
    */
   it("rolls the API status and audit rows back on a grant-used failure (Postgres)", () => {
     const { workspaceId, agent } = freshWorkspace();
-    const parent = store.createIssue({
+    const parent = createResponsibleTestIssue(store, {
       title: "PG grant parent", workspaceId, status: "in_progress",
       assigneeType: "agent", assigneeId: agent,
     });
-    store.updateIssue(store.createIssue({
+    store.updateIssue(createResponsibleTestIssue(store, {
       title: "PG grant child", workspaceId, parentIssueId: parent.id, status: "in_progress",
     }).id, { status: "done" });
     store.grantParentDone(parent.id, workspaceId);
@@ -518,11 +519,11 @@ describe.skipIf(!pgAvailable)("MUL-400 S1 on PostgreSQL", () => {
       workspaceId: "local",
     }).id;
     const workspaceId = "local";
-    const parent = store.createIssue({
+    const parent = createResponsibleTestIssue(store, {
       title: "PG 409 parent", workspaceId, status: "in_progress",
       assigneeType: "agent", assigneeId: agent,
     });
-    store.updateIssue(store.createIssue({
+    store.updateIssue(createResponsibleTestIssue(store, {
       title: "PG 409 child", workspaceId, parentIssueId: parent.id, status: "in_progress",
     }).id, { status: "done" });
     store.grantParentDone(parent.id, workspaceId);
@@ -563,11 +564,11 @@ describe.skipIf(!pgAvailable)("MUL-400 S1 on PostgreSQL", () => {
       workspaceId, name: "PG SCM atomic", provider: "github", mode: "hybrid",
       accessToken: "test-only-token", webhookSecret: "pg-webhook-secret", repositoryIds: [repoId],
     });
-    const parent = store.createIssue({
+    const parent = createResponsibleTestIssue(store, {
       title: "PG SCM atomic parent", workspaceId, status: "in_progress",
       assigneeType: "agent", assigneeId: agent,
     });
-    store.updateIssue(store.createIssue({
+    store.updateIssue(createResponsibleTestIssue(store, {
       title: "PG SCM atomic child", workspaceId, parentIssueId: parent.id, status: "in_progress",
     }).id, { status: "done" });
     store.grantParentDone(parent.id, workspaceId);
@@ -638,11 +639,11 @@ describe.skipIf(!pgAvailable)("MUL-400 S1 on PostgreSQL", () => {
       workspaceId,
     }).id;
     const other = store.createAgent({ name: "PG other agent", provider: "claude", workspaceId });
-    const parent = store.createIssue({
+    const parent = createResponsibleTestIssue(store, {
       title: "PG forgery parent", workspaceId, status: "in_progress",
       assigneeType: "agent", assigneeId: agent,
     });
-    store.updateIssue(store.createIssue({
+    store.updateIssue(createResponsibleTestIssue(store, {
       title: "PG forgery child", workspaceId, parentIssueId: parent.id, status: "in_progress",
     }).id, { status: "done" });
     store.grantParentDone(parent.id, workspaceId);
@@ -697,14 +698,14 @@ describe.skipIf(!pgAvailable)("MUL-400 S1 on PostgreSQL", () => {
 
   it("keeps the WHOLE task lifecycle at depth 1, counter armed before createTask (Postgres)", () => {
     const { workspaceId, agent, runtime } = freshWorkspace();
-    const parent = store.createIssue({
+    const parent = createResponsibleTestIssue(store, {
       title: "PG lifecycle parent",
       workspaceId,
       status: "in_progress",
       assigneeType: "agent",
       assigneeId: agent,
     });
-    const child = store.createIssue({
+    const child = createResponsibleTestIssue(store, {
       title: "PG lifecycle child",
       workspaceId,
       parentIssueId: parent.id,
@@ -738,14 +739,14 @@ describe.skipIf(!pgAvailable)("MUL-400 S1 on PostgreSQL", () => {
 
   it("keeps a comment-triggered automatic dispatch at depth 1 (Postgres)", () => {
     const { workspaceId, agent, runtime } = freshWorkspace();
-    const parent = store.createIssue({
+    const parent = createResponsibleTestIssue(store, {
       title: "PG dispatch parent",
       workspaceId,
       status: "in_progress",
       assigneeType: "agent",
       assigneeId: agent,
     });
-    const child = store.createIssue({
+    const child = createResponsibleTestIssue(store, {
       title: "PG dispatch child",
       workspaceId,
       parentIssueId: parent.id,
@@ -769,7 +770,7 @@ describe.skipIf(!pgAvailable)("MUL-400 S1 on PostgreSQL", () => {
 
   it("keeps completeTask, failTask and cancelTask at depth 1 on Postgres", () => {
     const { workspaceId, agent, runtime } = freshWorkspace();
-    const parent = store.createIssue({
+    const parent = createResponsibleTestIssue(store, {
       title: "PG terminal parent",
       workspaceId,
       status: "in_progress",
@@ -783,7 +784,7 @@ describe.skipIf(!pgAvailable)("MUL-400 S1 on PostgreSQL", () => {
       return store.startTask(taskId);
     };
 
-    const completingChild = store.createIssue({
+    const completingChild = createResponsibleTestIssue(store, {
       title: "PG completing child",
       workspaceId,
       parentIssueId: parent.id,
@@ -797,7 +798,7 @@ describe.skipIf(!pgAvailable)("MUL-400 S1 on PostgreSQL", () => {
     store.completeTask(completing.id, { output: "finished" });
     expect(counter.max, "completeTask").toBe(1);
 
-    const failingChild = store.createIssue({
+    const failingChild = createResponsibleTestIssue(store, {
       title: "PG failing child",
       workspaceId,
       parentIssueId: parent.id,
@@ -820,14 +821,14 @@ describe.skipIf(!pgAvailable)("MUL-400 S1 on PostgreSQL", () => {
 
   it("commits the child ending and rolls nothing back when the hook throws (Postgres)", () => {
     const { workspaceId, agent, runtime } = freshWorkspace();
-    const parent = store.createIssue({
+    const parent = createResponsibleTestIssue(store, {
       title: "PG hook parent",
       workspaceId,
       status: "in_progress",
       assigneeType: "agent",
       assigneeId: agent,
     });
-    const child = store.createIssue({
+    const child = createResponsibleTestIssue(store, {
       title: "PG hook child",
       workspaceId,
       parentIssueId: parent.id,
@@ -878,14 +879,14 @@ describe.skipIf(!pgAvailable)("MUL-400 S1 on PostgreSQL", () => {
 
   it("walks child -> parent -> grandparent at depth 1 on Postgres", () => {
     const { workspaceId, agent } = freshWorkspace();
-    const grandparent = store.createIssue({
+    const grandparent = createResponsibleTestIssue(store, {
       title: "PG grandparent",
       workspaceId,
       status: "in_progress",
       assigneeType: "agent",
       assigneeId: agent,
     });
-    const parent = store.createIssue({
+    const parent = createResponsibleTestIssue(store, {
       title: "PG parent",
       workspaceId,
       status: "in_progress",
@@ -893,7 +894,7 @@ describe.skipIf(!pgAvailable)("MUL-400 S1 on PostgreSQL", () => {
       assigneeType: "agent",
       assigneeId: agent,
     });
-    const child = store.createIssue({
+    const child = createResponsibleTestIssue(store, {
       title: "PG child",
       workspaceId,
       parentIssueId: parent.id,
@@ -901,8 +902,8 @@ describe.skipIf(!pgAvailable)("MUL-400 S1 on PostgreSQL", () => {
       assigneeType: "agent",
       assigneeId: agent,
     });
-    store.createIssue({ title: "PG sibling gp", workspaceId, parentIssueId: grandparent.id, status: "in_progress" });
-    store.createIssue({ title: "PG sibling p", workspaceId, parentIssueId: parent.id, status: "in_progress" });
+    createResponsibleTestIssue(store, { title: "PG sibling gp", workspaceId, parentIssueId: grandparent.id, status: "in_progress" });
+    createResponsibleTestIssue(store, { title: "PG sibling p", workspaceId, parentIssueId: parent.id, status: "in_progress" });
     store.updateIssue(parent.id, { status: "in_review", force: true });
     store.updateIssue(grandparent.id, { status: "in_review", force: true });
 
@@ -930,12 +931,12 @@ describe.skipIf(!pgAvailable)("MUL-400 S1 on PostgreSQL", () => {
   for (const parentStatus of ["done", "cancelled"] as const) {
     it(`delivers the ${parentStatus}-parent activity after COMMIT on Postgres`, () => {
       const { workspaceId } = freshWorkspace();
-      const parent = store.createIssue({
+      const parent = createResponsibleTestIssue(store, {
         title: `PG closed parent ${parentStatus}`,
         workspaceId,
         status: "in_progress",
       });
-      const child = store.createIssue({
+      const child = createResponsibleTestIssue(store, {
         title: `PG late child ${parentStatus}`,
         workspaceId,
         parentIssueId: parent.id,
@@ -974,8 +975,8 @@ describe.skipIf(!pgAvailable)("MUL-400 S1 on PostgreSQL", () => {
       role: "supervisor",
     });
     const workerAgent = store.createAgent({ name: "PG worker", provider: "claude", workspaceId });
-    const patrol = store.createIssue({ title: "PG patrol", workspaceId });
-    const targetIssue = store.createIssue({ title: "PG target", workspaceId, status: "in_progress" });
+    const patrol = createResponsibleTestIssue(store, { title: "PG patrol", workspaceId });
+    const targetIssue = createResponsibleTestIssue(store, { title: "PG target", workspaceId, status: "in_progress" });
     const supervisorTask = store.createTask({ agentId: supervisorAgent.id, issueId: patrol.id, prompt: "patrol" });
     const targetTask = store.createTask({ agentId: workerAgent.id, issueId: targetIssue.id, prompt: "work" });
     store.updateWorkspace(workspaceId, { settings: { organizer: { mode: "act" } } });
@@ -1018,7 +1019,7 @@ describe.skipIf(!pgAvailable)("MUL-400 S1 on PostgreSQL", () => {
 
   it("publishes the self-transactional system-comment activity after its outer COMMIT (Postgres)", () => {
     const { workspaceId } = freshWorkspace();
-    const issue = store.createIssue({ title: "PG wrapper issue", workspaceId, status: "in_progress" });
+    const issue = createResponsibleTestIssue(store, { title: "PG wrapper issue", workspaceId, status: "in_progress" });
     const events: Array<{ action: string; inTransaction: boolean; lastControl: string | undefined }> = [];
     const unsubscribe = store.onWorkspaceEvent((event) => {
       const entry = (event.payload as { entry?: { action?: string } } | undefined)?.entry;
@@ -1083,7 +1084,7 @@ describe.skipIf(!pgAvailable)("MUL-400 S1 on PostgreSQL", () => {
     for (const status of ["blocked", "cancelled"] as const) {
       for (const busy of [false, true]) {
         const { workspaceId, agent } = freshWorkspace();
-        const parent = store.createIssue({
+        const parent = createResponsibleTestIssue(store, {
           title: `PG ${status} parent ${busy}`, workspaceId, status: "in_progress",
           assigneeType: "agent", assigneeId: agent,
         });
@@ -1091,18 +1092,18 @@ describe.skipIf(!pgAvailable)("MUL-400 S1 on PostgreSQL", () => {
           const task = store.createTask({ agentId: agent, issueId: parent.id, prompt: "current round" });
           runTurnExecutionMutation(db as unknown as UnifiedFixtureDatabase,"UPDATE multiremi_turn_execution_records SET status = 'running' WHERE id = ?", [task.id]);
         }
-        const child = store.createIssue({ title: "PG terminal child", workspaceId, parentIssueId: parent.id, status: "in_progress" });
+        const child = createResponsibleTestIssue(store, { title: "PG terminal child", workspaceId, parentIssueId: parent.id, status: "in_progress" });
         check(`updateIssue ${status}, busy=${busy}`, () => { store.updateIssue(child.id, { status }); });
       }
     }
 
     const { workspaceId, agent, runtime } = freshWorkspace();
-    const parent = store.createIssue({ title: "PG remaining parent", workspaceId, status: "in_review" });
+    const parent = createResponsibleTestIssue(store, { title: "PG remaining parent", workspaceId, status: "in_review" });
     let child!: ReturnType<MultiremiStore["createIssue"]>;
     check("createIssue re-derivation", () => {
-      child = store.createIssue({ title: "PG new child", workspaceId, parentIssueId: parent.id, status: "in_progress" });
+      child = createResponsibleTestIssue(store, { title: "PG new child", workspaceId, parentIssueId: parent.id, status: "in_progress" });
     });
-    const second = store.createIssue({ title: "PG second parent", workspaceId, status: "in_review" });
+    const second = createResponsibleTestIssue(store, { title: "PG second parent", workspaceId, status: "in_review" });
     check("updateIssue re-parent", () => { store.updateIssue(child.id, { parentIssueId: second.id }); });
 
     const task = store.createTask({ agentId: agent, issueId: child.id, prompt: "PG ask" });
@@ -1130,7 +1131,7 @@ describe.skipIf(!pgAvailable)("MUL-400 S1 on PostgreSQL", () => {
 
     const supervisor = store.createAgent({ name: "PG controls organizer", provider: "claude", workspaceId, role: "supervisor" });
     const worker = store.createAgent({ name: "PG controls worker", provider: "claude", workspaceId });
-    const patrol = store.createIssue({ title: "PG controls patrol", workspaceId });
+    const patrol = createResponsibleTestIssue(store, { title: "PG controls patrol", workspaceId });
     const supervisorTask = store.createTask({ agentId: supervisor.id, issueId: patrol.id, prompt: "PG patrol" });
     store.updateWorkspace(workspaceId, { settings: { organizer: { mode: "act" } } });
     for (const action of ["cancel", "redispatch"] as const) {
@@ -1156,8 +1157,8 @@ describe.skipIf(!pgAvailable)("MUL-400 S1 on PostgreSQL", () => {
         accessToken: "ghp_depth_token", webhookSecret: "depth-webhook-secret", repositoryIds: [repositoryId],
       });
       for (const hasOpenChildren of [true, false]) {
-        const mergedIssue = store.createIssue({ title: "PG SCM controls", workspaceId, status: "in_progress" });
-        const scmChild = store.createIssue({ title: "PG SCM child", workspaceId, parentIssueId: mergedIssue.id, status: "in_progress" });
+        const mergedIssue = createResponsibleTestIssue(store, { title: "PG SCM controls", workspaceId, status: "in_progress" });
+        const scmChild = createResponsibleTestIssue(store, { title: "PG SCM child", workspaceId, parentIssueId: mergedIssue.id, status: "in_progress" });
         if (!hasOpenChildren) store.updateIssue(scmChild.id, { status: "done" });
         const externalId = hasOpenChildren ? "42" : "43";
         store.advanceScmEntitySnapshot({
@@ -1183,7 +1184,7 @@ describe.skipIf(!pgAvailable)("MUL-400 S1 on PostgreSQL", () => {
 
   it("coalesces two children ending concurrently into one queued round (Postgres)", async () => {
     const { workspaceId, agent } = freshWorkspace();
-    const parent = store.createIssue({
+    const parent = createResponsibleTestIssue(store, {
       title: "PG coalesce parent",
       workspaceId,
       status: "in_progress",
@@ -1192,13 +1193,13 @@ describe.skipIf(!pgAvailable)("MUL-400 S1 on PostgreSQL", () => {
     });
     const running = store.createTask({ agentId: agent, issueId: parent.id, prompt: "current round" });
     runTurnExecutionMutation(db as unknown as UnifiedFixtureDatabase,"UPDATE multiremi_turn_execution_records SET status = 'running' WHERE id = ?", [running.id]);
-    const first = store.createIssue({
+    const first = createResponsibleTestIssue(store, {
       title: "PG coalesce child A",
       workspaceId,
       parentIssueId: parent.id,
       status: "in_progress",
     });
-    const second = store.createIssue({
+    const second = createResponsibleTestIssue(store, {
       title: "PG coalesce child B",
       workspaceId,
       parentIssueId: parent.id,

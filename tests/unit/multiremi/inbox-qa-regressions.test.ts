@@ -1,9 +1,10 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { it, expect, spyOn } from 'bun:test';
 import { pendingTurnBackendTests } from './pending-turn-test-backends.js';
 // Reproductions from QA cmt_p5e4j4bnm9hd; execute unchanged behavior on both backends.
 pendingTurnBackendTests('MUL-506 independent QA probes', (fixture, backend) => {
     function setup() {
-        const f = fixture(), a = f.store.createAgent({ name: 'QA owner', provider: 'codex' }), issue = f.store.createIssue({ title: 'QA probes', assigneeType: 'agent', assigneeId: a.id }), session = f.store.getOrCreateDefaultIssueSession(issue.id);
+        const f = fixture(), a = f.store.createAgent({ name: 'QA owner', provider: 'codex' }), issue = createResponsibleTestIssue(f.store, { title: 'QA probes', assigneeType: 'agent', assigneeId: a.id }), session = f.store.getOrCreateDefaultIssueSession(issue.id);
         f.store.registerRuntime({ id: 'rt_qa', daemonId: 'daemon_qa', name: 'QA fixture', provider: 'codex', workspaceId: 'local' });
         const message = { session_id: session.id, sender: { type: 'member' as const, id: 'mem_local_local' }, to: { type: 'agent' as const, ref: a.id }, message_kind: 'request' as const, wake_requested: 'now' as const, body_md: 'start' };
         const sent = f.store.sendMessage(message), attempt = f.store.claimTask('rt_qa')!;
@@ -40,7 +41,7 @@ pendingTurnBackendTests('MUL-506 independent QA probes', (fixture, backend) => {
 pendingTurnBackendTests('MUL-506 scoped decision QA', (fixture, backend) => {
     for (const kind of ['permission', 'question'] as const)
         it(`${kind} answer resumes the original delegated lane without creating a second pending turn`, () => {
-            const f = fixture(), a = f.store.createAgent({ name: 'Scoped QA', provider: 'codex' }), issue = f.store.createIssue({ title: 'Scoped question', assigneeType: 'agent', assigneeId: a.id }), s = f.store.getOrCreateDefaultIssueSession(issue.id);
+            const f = fixture(), a = f.store.createAgent({ name: 'Scoped QA', provider: 'codex' }), issue = createResponsibleTestIssue(f.store, { title: 'Scoped question', assigneeType: 'agent', assigneeId: a.id }), s = f.store.getOrCreateDefaultIssueSession(issue.id);
             f.store.registerRuntime({ id: 'rt_scope', daemonId: 'daemon_scope', name: 'QA scoped fixture', provider: 'codex', workspaceId: 'local' });
             const sent = f.store.sendMessage({ session_id: s.id, sender: { type: 'member', id: 'mem_local_local' }, to: { type: 'agent', ref: a.id }, message_kind: 'request', wake_requested: 'now', body_md: 'scope work', execution_scope: 'dlg_qa' }), attempt = f.store.claimTask('rt_scope')!;
             f.store.startTask(attempt.id);
@@ -54,7 +55,7 @@ pendingTurnBackendTests('MUL-506 scoped decision QA', (fixture, backend) => {
 });
 pendingTurnBackendTests('MUL-506 cross issue decision QA', (fixture, backend) => {
     it('answer of a parent decision re-derives the unassigned source Issue when its turn resumes', () => {
-        const f = fixture(), a = f.store.createAgent({ name: 'QA child worker', provider: 'codex' }), b = f.store.createAgent({ name: 'QA parent owner', provider: 'codex' }), parent = f.store.createIssue({ title: 'QA decision parent', assigneeType: 'agent', assigneeId: b.id }), child = f.store.createIssue({ title: 'QA unassigned source', parentIssueId: parent.id }), s = f.store.getOrCreateDefaultIssueSession(child.id);
+        const f = fixture(), a = f.store.createAgent({ name: 'QA child worker', provider: 'codex' }), b = f.store.createAgent({ name: 'QA parent owner', provider: 'codex' }), parent = createResponsibleTestIssue(f.store, { title: 'QA decision parent', assigneeType: 'agent', assigneeId: b.id }), child = createResponsibleTestIssue(f.store, { title: 'QA unassigned source', parentIssueId: parent.id }), s = f.store.getOrCreateDefaultIssueSession(child.id);
         f.store.registerRuntime({ id: 'rt_cross', daemonId: 'daemon_cross', name: 'QA cross fixture', provider: 'codex', workspaceId: 'local' });
         const sent = f.store.sendMessage({ session_id: s.id, sender: { type: 'member', id: 'mem_local_local' }, to: { type: 'agent', ref: a.id }, message_kind: 'request', wake_requested: 'now', body_md: 'do work' }), attempt = f.store.claimTask('rt_cross')!;
         f.store.startTask(attempt.id);
@@ -68,7 +69,7 @@ pendingTurnBackendTests('MUL-506 cross issue decision QA', (fixture, backend) =>
 });
 pendingTurnBackendTests('MUL-506 cold retry input QA', (fixture, backend) => {
     it('a fresh cold attempt receives the context the previous provider acknowledged', () => {
-        const f = fixture(), a = f.store.createAgent({ name: 'QA cold', provider: 'codex' }), issue = f.store.createIssue({ title: 'Cold context', assigneeType: 'agent', assigneeId: a.id }), s = f.store.getOrCreateDefaultIssueSession(issue.id);
+        const f = fixture(), a = f.store.createAgent({ name: 'QA cold', provider: 'codex' }), issue = createResponsibleTestIssue(f.store, { title: 'Cold context', assigneeType: 'agent', assigneeId: a.id }), s = f.store.getOrCreateDefaultIssueSession(issue.id);
         f.store.registerRuntime({ id: 'rt_cold', daemonId: 'daemon_cold', name: 'QA cold fixture', provider: 'codex', workspaceId: 'local' });
         const sent = f.store.sendMessage({ session_id: s.id, sender: { type: 'member', id: 'mem_local_local' }, to: { type: 'agent', ref: a.id }, message_kind: 'request', wake_requested: 'now', body_md: 'critical original instructions' }), attempt = f.store.claimTask('rt_cold')!;
         f.store.startTask(attempt.id);
@@ -92,7 +93,7 @@ pendingTurnBackendTests('MUL-506 cold retry input QA', (fixture, backend) => {
 });
 pendingTurnBackendTests('MUL-506 mixed pending status QA', (fixture, backend) => {
     it('a member message merged into platform pending changes a blocked Issue to todo', () => {
-        const f = fixture(), a = f.store.createAgent({ name: 'QA merged owner', provider: 'codex' }), issue = f.store.createIssue({ title: 'Mixed pending', status: 'blocked', assigneeType: 'agent', assigneeId: a.id }), s = f.store.getOrCreateDefaultIssueSession(issue.id);
+        const f = fixture(), a = f.store.createAgent({ name: 'QA merged owner', provider: 'codex' }), issue = createResponsibleTestIssue(f.store, { title: 'Mixed pending', status: 'blocked', assigneeType: 'agent', assigneeId: a.id }), s = f.store.getOrCreateDefaultIssueSession(issue.id);
         const base = { session_id: s.id, to: { type: 'agent' as const, ref: a.id }, wake_requested: 'now' as const, body_md: 'platform status' };
         const first = f.store.sendMessage({ ...base, sender: { type: 'platform', id: null }, message_kind: 'status' });
         expect(f.store.getIssue(issue.id)?.status).toBe('blocked');
@@ -102,7 +103,7 @@ pendingTurnBackendTests('MUL-506 mixed pending status QA', (fixture, backend) =>
     });
 });
 pendingTurnBackendTests('MUL-506 dependency audit QA', (fixture, backend) => {
-    function setup() { const f = fixture(), a = f.store.createAgent({ name: 'QA dependency owner', provider: 'codex' }), prerequisite = f.store.createIssue({ title: 'Unfinished prerequisite', status: 'in_progress' }), issue = f.store.createIssue({ title: 'Waiting work', status: 'backlog', blockedBy: [prerequisite.id], assigneeType: 'agent', assigneeId: a.id }); return { ...f, a, issue, prerequisite }; }
+    function setup() { const f = fixture(), a = f.store.createAgent({ name: 'QA dependency owner', provider: 'codex' }), prerequisite = createResponsibleTestIssue(f.store, { title: 'Unfinished prerequisite', status: 'in_progress' }), issue = createResponsibleTestIssue(f.store, { title: 'Waiting work', status: 'backlog', blockedBy: [prerequisite.id], assigneeType: 'agent', assigneeId: a.id }); return { ...f, a, issue, prerequisite }; }
     it('a member force comment keeps one dependency override audit with the user actor', () => {
         const f = setup(), member = f.store.getWorkspaceMember('mem_local_local')!;
         expect(member.userId).toBe('local');
@@ -128,7 +129,7 @@ pendingTurnBackendTests('MUL-506 retry report link QA', (fixture, backend) => {
     it('a retried delegate with no reply points to its stable turn', () => {
         const f = fixture();
         const rtA = f.store.registerRuntime({ id: 'rt_report_a', daemonId: 'daemon_report_a', name: 'QA reporter', provider: 'codex', workspaceId: 'local' }), rtB = f.store.registerRuntime({ id: 'rt_report_b', daemonId: 'daemon_report_b', name: 'QA worker', provider: 'codex', workspaceId: 'local' });
-        const a = f.store.createAgent({ name: 'Report origin', provider: 'codex', runtimeId: rtA.id }), b = f.store.createAgent({ name: 'Retried delegate', provider: 'codex', runtimeId: rtB.id }), parent = f.store.createIssue({ title: 'Report target', assigneeType: 'agent', assigneeId: a.id }), child = f.store.createIssue({ title: 'Retried report source', assigneeType: 'agent', assigneeId: b.id });
+        const a = f.store.createAgent({ name: 'Report origin', provider: 'codex', runtimeId: rtA.id }), b = f.store.createAgent({ name: 'Retried delegate', provider: 'codex', runtimeId: rtB.id }), parent = createResponsibleTestIssue(f.store, { title: 'Report target', assigneeType: 'agent', assigneeId: a.id }), child = createResponsibleTestIssue(f.store, { title: 'Retried report source', assigneeType: 'agent', assigneeId: b.id });
         const source = f.store.createTask({ agentId: a.id, issueId: parent.id, prompt: 'delegate' });
         expect(f.store.claimTask(rtA.id)?.id).toBe(source.id);
         f.store.startTask(source.id);

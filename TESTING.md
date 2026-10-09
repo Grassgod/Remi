@@ -23,6 +23,11 @@ bun run test tests/arch/
 
 API/store 测试可参考 [issues API 测试](tests/unit/multiremi/multiremi-api-issues.test.ts)的进程内 `app.request()`，共享夹具在 [helpers.ts](tests/unit/multiremi/helpers.ts)。需要真实服务的测试应在自身入口明确配置和隔离方式，不能把本地凭据或生产数据作为普通单测前提。
 
+普通合成根 Issue 使用 `createResponsibleTestIssue(store, input)`，显式建立命名测试人类；
+子单仍继承根责任，显式空责任和生产创建负向用例直接调用原 Store，不能覆盖 Store 方法。
+闭环用例明确配置 Agent/团队执行归属，并用 `acceptTestIssueDelivery` 提交、验收实际交付。
+历史升级 fixture 使用其原表形状和历史 writer，不能借合成工厂提前写入新责任字段或验收收据。
+
 [公开参考价格 PG/CLI 回归](tests/unit/scripts/usage-reference-prices.test.ts)沿用 CI 的 `MULTIREMI_TEST_POSTGRES_URL`；可用 `MULTIREMI_TEST_REFERENCE_DATABASE_URL` 单独覆盖。所选测试连接必须具有创建测试库的权限，两条用例各创建随机命名的独立数据库，所有并发 writer 与 CLI 只连接该库，完成后仅删除本次成功创建的数据库。不要指向生产；连接或清理失败会使测试失败，不会跳过或强制删除公共表。
 
 ## 真实服务与手动验证

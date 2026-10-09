@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { decodeDecisionCardBody, questionCardAction } from "@shared/feishu-task-card.js";
 import type { Database } from "bun:sqlite";
@@ -80,14 +81,14 @@ for (const backend of ["SQLite", "PostgreSQL"] as const) {
         ...store.getWorkspace(workspaceId)!.settings,
         issueTopics: { enabled: true, chatId: `oc_${tag}`, notifyMode: "person", notifyOpenId: openId },
       } });
-      const parent = store.createIssue({ workspaceId, title: `Target ${tag}` });
+      const parent = createResponsibleTestIssue(store, { workspaceId, title: `Target ${tag}` });
       store.prepareFeishuIssueTopicWithinTransaction(parent);
       const root = store.claimFeishuBotOutbound(workspaceId, runtimeId)!;
       expect(root).toBeTruthy();
       store.reportFeishuBotOutbound(workspaceId, runtimeId, root.id, {
         claimToken: root.claimToken, status: "sent", externalMessageId: `om_root_${tag}`,
       });
-      const child = store.createIssue({ workspaceId, parentIssueId: parent.id, title: `PRIVATE source ${tag}` });
+      const child = createResponsibleTestIssue(store, { workspaceId, parentIssueId: parent.id, title: `PRIVATE source ${tag}` });
       const decision = store.createIssueDecision(child.id, {
         kind: "production_change", title: `PRIVATE decision ${tag}`, body: `PRIVATE body ${tag}`, options: ["yes", "no"],
       }, { type: "member", id: member.id, taskId: null });
@@ -95,7 +96,7 @@ for (const backend of ["SQLite", "PostgreSQL"] as const) {
         .get(decision.id) as { id: string; binding_id: string };
       expect(delivery).toBeTruthy();
       // A same-workspace Issue with no part in the decision, for rows that name the wrong one.
-      const other = store.createIssue({ workspaceId, title: `Other ${tag}` });
+      const other = createResponsibleTestIssue(store, { workspaceId, title: `Other ${tag}` });
       const daemon = await store.createAccessToken({ workspaceId, daemonId, type: "daemon", name: "Card host" });
       const app = createMultiremiApp({ store, authToken: "mul476-card-root" });
       const path = `/api/daemon/messages/${decision.id}`;
@@ -422,7 +423,7 @@ for (const backend of ["SQLite", "PostgreSQL"] as const) {
         // Canonical message routes hide foreign resources before reads or writes.
         // The retired Issue-scoped history/withdraw/PUT paths no longer belong to card transport.
         expect(await transport(f, "/api/daemon/messages/msg_missing")).toEqual([404, 404]);
-        const stranger = store.createIssue({ workspaceId: f.foreignId, title: "Stranger" });
+        const stranger = createResponsibleTestIssue(store, { workspaceId: f.foreignId, title: "Stranger" });
         const foreignDecision = store.createIssueDecision(stranger.id, { kind: "production_change", title: "Foreign private decision" },
           { type: "member", id: store.listWorkspaceMembers(f.foreignId)[0]!.id, taskId: null });
         expect(await transport(f, `/api/daemon/messages/${foreignDecision.id}`)).toEqual([404, 404]);

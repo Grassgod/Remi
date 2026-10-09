@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 /**
  * MUL-405: the Feishu and Autopilot paths must take the workspace lifecycle row
  * lock and the Issue number lock in the SAME order.
@@ -245,7 +246,7 @@ function recordAutopilotOrder(): LockName[] {
 function recordCreateIssueOrder(): LockName[] {
   const { store, recorder } = freshStore();
   recorder.locks.length = 0;
-  store.createIssue({ title: "Plain create", workspaceId: "local" });
+  createResponsibleTestIssue(store, { title: "Plain create", workspaceId: "local" });
   return [...recorder.locks];
 }
 

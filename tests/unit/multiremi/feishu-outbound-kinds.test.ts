@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { createLocalStore, db, resetMultiremiTestEnv } from "./helpers.js";
 import { configureKindBot } from "./feishu-outbound-kind-fixture.js";
@@ -234,7 +235,7 @@ describe("Feishu outbound kind leases", () => {
     f.store.heartbeatRuntime(f.runtimeId, { supportsFeishuBotConfig: true, supportsDecisionCard: true });
     f.store.updateWorkspace("local", { settings: { issueTopics: { enabled: true, chatId: "oc_deferred_topic", notifyMode: "person", notifyOpenId: "ou_owner" } } });
     process.env.MULTIREMI_BACKGROUND_JOBS = "0";
-    const issue = f.store.createIssue({ title: "Deferred topic", workspaceId: "local" });
+    const issue = createResponsibleTestIssue(f.store, { title: "Deferred topic", workspaceId: "local" });
     f.store.prepareFeishuIssueTopicWithinTransaction(issue);
     expect(db!.query("SELECT id FROM multiremi_feishu_bot_outbound_deliveries").all()).toEqual([]);
     const root = claim(f)[0]!;

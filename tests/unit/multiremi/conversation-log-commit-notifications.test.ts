@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import type { Database } from "bun:sqlite";
 import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { describe, expect, it } from "bun:test";
@@ -38,7 +39,7 @@ describe("conversation log notifications after commit", () => {
     it.skipIf(backend === "pg" && !pgAdminUrl)(`${backend}: rollback discards a notification and a reused seq publishes only its committed row`, async () => {
       await withStore(backend, (store, db) => {
         store.ensureLocalWorkspace();
-        const sessionId = store.getOrCreateDefaultIssueSession(store.createIssue({ title: "Commit rollback" }).id).id;
+        const sessionId = store.getOrCreateDefaultIssueSession(createResponsibleTestIssue(store, { title: "Commit rollback" }).id).id;
         const received: Array<ConversationLogEntry | ConversationLogPatch> = [];
         store.setConversationLogListener({ onEntry: (_sessionId, payload) => received.push(payload) });
         let rolledSeq = -1;
@@ -60,7 +61,7 @@ describe("conversation log notifications after commit", () => {
     it.skipIf(backend === "pg" && !pgAdminUrl)(`${backend}: two appends and a patch publish in write order after commit`, async () => {
       await withStore(backend, (store, db) => {
         store.ensureLocalWorkspace();
-        const sessionId = store.getOrCreateDefaultIssueSession(store.createIssue({ title: "Commit order" }).id).id;
+        const sessionId = store.getOrCreateDefaultIssueSession(createResponsibleTestIssue(store, { title: "Commit order" }).id).id;
         const received: Array<ConversationLogEntry | ConversationLogPatch> = [];
         store.setConversationLogListener({ onEntry: (_sessionId, payload) => received.push(payload) });
         let firstSeq = -1;
@@ -84,7 +85,7 @@ describe("conversation log notifications after commit", () => {
     it.skipIf(backend === "pg" && !pgAdminUrl)(`${backend}: public append joins its caller and rolls back both row and notification`, async () => {
       await withStore(backend, (store, db) => {
         store.ensureLocalWorkspace();
-        const sessionId = store.getOrCreateDefaultIssueSession(store.createIssue({ title: "Public append rollback" }).id).id;
+        const sessionId = store.getOrCreateDefaultIssueSession(createResponsibleTestIssue(store, { title: "Public append rollback" }).id).id;
         const received: Array<ConversationLogEntry | ConversationLogPatch> = [];
         store.setConversationLogListener({ onEntry: (_sessionId, payload) => received.push(payload) });
         if (db instanceof PostgresSyncDatabase) db.resetTransactionDepthStats();

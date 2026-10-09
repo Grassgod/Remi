@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { issueMessagesPath, requestMessageBody, taskRequestPath, sentTask } from "./unified-test-paths.js";
 /**
  * MUL-456 fix round 1: `parent_task_id` is credential-owned lineage.
@@ -88,10 +89,10 @@ async function fixture(store: MultiremiStore, authToken?: string): Promise<Fixtu
     name: "Worker", provider: "claude", runtimeId: workerRuntime.id, visibility: "workspace",
   });
   const squad = store.createSquad({ name: "Core", leaderId: leader.id, memberIds: [worker.id] });
-  const parent = store.createIssue({
+  const parent = createResponsibleTestIssue(store, {
     title: "Parent", status: "in_progress", assigneeType: "squad", assigneeId: squad.id,
   });
-  const child = store.createIssue({
+  const child = createResponsibleTestIssue(store, {
     title: "Child", parentIssueId: parent.id, status: "in_progress", assigneeType: "agent", assigneeId: worker.id,
   });
   const leaderSession = store.createIssueSession(parent.id, { title: "Dispatch round" });
@@ -370,8 +371,8 @@ for (const backend of ["sqlite", "postgres"] as const) {
     it("keeps an explicit null parent authoritative in the forced-start activity", async () => {
       await withStore(backend, async (store) => {
         const f = await fixture(store, "lineage-guard-root");
-        const prerequisite = store.createIssue({ title: "Open prerequisite", status: "in_progress" });
-        const waiting = store.createIssue({
+        const prerequisite = createResponsibleTestIssue(store, { title: "Open prerequisite", status: "in_progress" });
+        const waiting = createResponsibleTestIssue(store, {
           title: "Waiting force target",
           status: "backlog",
           blockedBy: [prerequisite.id],

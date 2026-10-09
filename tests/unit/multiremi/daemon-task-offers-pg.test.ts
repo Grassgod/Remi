@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { MultiremiStore } from "@multiremi/store.js";
 import { PostgresSyncDatabase } from "@multiremi/store/db/postgres.js";
@@ -89,7 +90,7 @@ describe.skipIf(!adminUrl)("A-3 task offers on real PostgreSQL", () => {
     const h = fixture(async task => ({ id: task.id, prompt: task.prompt,
       repos: task.prompt === "structure" ? new Array(600_000).fill(0) : [] }));
     try {
-      const issue = store.createIssue({ title: "PG structural size" });
+      const issue = createResponsibleTestIssue(store, { title: "PG structural size" });
       const huge = store.createTask({ agentId: h.agentId, issueId: issue.id, prompt: "structure", maxAttempts: 3 });
       const next = h.task(); await h.hello();
       expect(store.getTask(huge.id)).toMatchObject({ status: "failed", failureReason: "offer_too_large" });
@@ -102,7 +103,7 @@ describe.skipIf(!adminUrl)("A-3 task offers on real PostgreSQL", () => {
     const h = fixture();
     try {
       const other = store.createAgent({ name: `Other reader ${serial}`, provider: "claude" });
-      const issue = store.createIssue({ title: "PG unread state" });
+      const issue = createResponsibleTestIssue(store, { title: "PG unread state" });
       const session = store.getOrCreateDefaultIssueSession(issue.id);
       store.createIssueComment(issue.id, { authorType: "member", authorId: "local", body: "x".repeat(70_000) });
       expect(store.getSessionAgentReadProgress(session.id, h.agentId)).toEqual({ seq: 0, offset: 0 });

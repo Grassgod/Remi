@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { expect, it } from 'bun:test';
 import { pendingTurnBackendTests } from './pending-turn-test-backends.js';
 import { MultiremiStore } from '@multiremi/store.js';
@@ -17,7 +18,7 @@ pendingTurnBackendTests('MUL-505 canonical runtime',fixture=>{
       else for(const verb of ['INSERT','UPDATE','DELETE'])db.exec(`CREATE TRIGGER reject_${table}_${verb} BEFORE ${verb} ON multiremi_${table} BEGIN SELECT RAISE(ABORT,'retired conversation write'); END`);
     }
     const agent=store.createAgent({name:'Worker',provider:'codex'});
-    const issue=store.createIssue({title:'Canonical',assigneeType:'member',assigneeId:'mem_local_local'});
+    const issue=createResponsibleTestIssue(store, {title:'Canonical',assigneeType:'member',assigneeId:'mem_local_local'});
     const comment=store.createIssueComment(issue.id,{body:'hello',authorType:'member',authorId:'mem_local_local'});
     expect(store.getIssueComment(comment.id)?.body).toBe('hello');
     const chat=store.createChatSession({agentId:agent.id,creatorId:'local'});
@@ -39,7 +40,7 @@ pendingTurnBackendTests('MUL-505 canonical runtime',fixture=>{
     const {store,db}=fixture();
     const agent=store.createAgent({name:'Worker',provider:'codex',maxConcurrentTasks:4});
     const runtime=store.registerRuntime({name:'test',provider:'codex',maxConcurrency:4});
-    const issue=store.createIssue({title:'Recovery',assigneeType:'agent',assigneeId:agent.id});
+    const issue=createResponsibleTestIssue(store, {title:'Recovery',assigneeType:'agent',assigneeId:agent.id});
     const task=store.createTask({agentId:agent.id,issueId:issue.id,prompt:'input'});
     expect(store.claimTask(runtime.id)?.id).toBe(task.id);store.startTask(task.id);
     db.run("UPDATE multiremi_issues SET status='in_review' WHERE id=?",[issue.id]);
@@ -139,7 +140,7 @@ pendingTurnBackendTests('MUL-505 canonical runtime',fixture=>{
   it('keeps old attempt statistics independent and emits projected creation and update frames',()=>{
     const {store,db}=fixture();const agent=store.createAgent({name:'Worker',provider:'codex'});
     const runtime=store.registerRuntime({name:'test',provider:'codex'});
-    const issue=store.createIssue({title:'Statistics'});const frames:any[]=[];
+    const issue=createResponsibleTestIssue(store, {title:'Statistics'});const frames:any[]=[];
     store.subscribeConversationLog({onEntry:(_session,entry)=>{frames.push(entry);}});
     const first=store.createTask({agentId:agent.id,issueId:issue.id,prompt:'input'});
     expect(frames.find(f=>f.kind==='turn')?.metadata.current_attempt_id).toBe(first.id);

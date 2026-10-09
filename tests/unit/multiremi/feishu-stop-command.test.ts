@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { mutateExecutionFixture } from "./unified-test-paths.js";
 /**
  * Resolving a Feishu stop request against durable Tasks (MUL-358).
@@ -231,7 +232,7 @@ describe("Feishu stop resolution", () => {
     // must not end work delegated in an independent Issue conversation.
     const { store, agentId, revision } = scaffold();
     const worker = store.createAgent({ name: "Worker", provider: "codex", workspaceId: "local" });
-    const issue = store.createIssue({ title: "Delegated stop", workspaceId: "local", assigneeType: "agent", assigneeId: agentId });
+    const issue = createResponsibleTestIssue(store, { title: "Delegated stop", workspaceId: "local", assigneeType: "agent", assigneeId: agentId });
     const sessionKey = `${CHAT}:thread:omt_leader`;
     const submitted = submit(store, revision, { messageId: "om_leader", senderOpenId: "ou_owner", sessionKey });
     start(store, submitted.taskId);
@@ -283,7 +284,7 @@ describe("Feishu stop resolution", () => {
     // which never inspects the parent Task, only the child's own lineage.
     const { store, agentId, revision } = scaffold();
     const worker = store.createAgent({ name: "Worker", provider: "codex", workspaceId: "local" });
-    const issue = store.createIssue({ title: "Delegated stop", workspaceId: "local", assigneeType: "agent", assigneeId: agentId });
+    const issue = createResponsibleTestIssue(store, { title: "Delegated stop", workspaceId: "local", assigneeType: "agent", assigneeId: agentId });
     const sessionKey = `${CHAT}:thread:omt_leader_2`;
     const submitted = submit(store, revision, { messageId: "om_leader_2", senderOpenId: "ou_owner", sessionKey });
     start(store, submitted.taskId);

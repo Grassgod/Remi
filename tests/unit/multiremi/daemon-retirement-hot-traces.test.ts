@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 /**
  * MUL-432 segment 2 item 3: retirement waits for the daemon's hot traces
  * (ADR 0006 Decision 8).
@@ -159,7 +160,7 @@ for (const backend of backends) {
     it("blocks on hot traces, sends archive_sessions, and retires only after the archives are ready", async () => {
       await withStore(backend, async ({ store }) => {
         const { runtime, agent } = seedRuntime(store, "rt_retire_hot");
-        const issue = store.createIssue({ title: "Hot trace issue", workspaceId: "local" });
+        const issue = createResponsibleTestIssue(store, { title: "Hot trace issue", workspaceId: "local" });
         store.reportIssueWorkspace({ issueId: issue.id, runtimeId: runtime.id, rootPath: `/work/${issue.key}`,
           branchName: `agent/${issue.key}`, status: "ready" });
         const issueTask = runTask(store, runtime.id, { agentId: agent.id, issueId: issue.id });
@@ -266,7 +267,7 @@ for (const backend of backends) {
     it("abandons an offline daemon's hot traces as lost", async () => {
       await withStore(backend, async ({ store }) => {
         const { runtime, agent } = seedRuntime(store, "rt_retire_hot");
-        const issue = store.createIssue({ title: "Abandoned issue", workspaceId: "local" });
+        const issue = createResponsibleTestIssue(store, { title: "Abandoned issue", workspaceId: "local" });
         store.reportIssueWorkspace({ issueId: issue.id, runtimeId: runtime.id, rootPath: `/work/${issue.key}`,
           branchName: `agent/${issue.key}`, status: "ready" });
         const issueTask = runTask(store, runtime.id, { agentId: agent.id, issueId: issue.id });
@@ -344,7 +345,7 @@ for (const backend of backends) {
       await withStore(backend, async ({ store }) => {
         const { runtime, agent } = seedRuntime(store, "rt_retire_hot");
         const other = seedRuntime(store, "rt_retire_other", "dmn_retire_other");
-        const issue = store.createIssue({ title: "Listed issue", workspaceId: "local" });
+        const issue = createResponsibleTestIssue(store, { title: "Listed issue", workspaceId: "local" });
         const chat = store.createChatSession({ agentId: agent.id, title: "Listed chat", workspaceId: "local" });
         const issueTask = runTask(store, runtime.id, { agentId: agent.id, issueId: issue.id });
         const chatTask = runTask(store, runtime.id, { agentId: agent.id, chatSessionId: chat.id });

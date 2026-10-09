@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { mutateExecutionFixture } from "./unified-test-paths.js";
 import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { afterEach, describe, expect, it } from "bun:test";
@@ -207,7 +208,7 @@ describe("knowledge compilation control plane", () => {
     store.ensureLocalWorkspace();
     store.updateWorkspaceRepositories("local", [{ id: "repo_shared_raw", name: "shared", url: "https://github.com/acme/shared.git", source: "github" }]);
     const project = store.createProject({ title: "Issue project" });
-    const issue = store.createIssue({ title: "Inspect Raw", projectId: project.id });
+    const issue = createResponsibleTestIssue(store, { title: "Inspect Raw", projectId: project.id });
     const agent = store.createAgent({ name: "Reader", provider: "claude" });
     const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "inspect" });
     const token = await store.createTaskAccessToken(task, "local");
@@ -233,7 +234,7 @@ describe("knowledge compilation control plane", () => {
   it("routes ordinary task writes to Raw, trusts only token identity, and excludes Raw from recall", async () => {
     const store = createStore();
     const project = store.createProject({ title: "Raw routing" });
-    const issue = store.createIssue({ title: "Collect a fact", projectId: project.id });
+    const issue = createResponsibleTestIssue(store, { title: "Collect a fact", projectId: project.id });
     const agent = store.createAgent({ name: "Executor", provider: "claude" });
     const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "collect" });
     const credential = await store.createTaskAccessToken(task, "local");
@@ -285,7 +286,7 @@ describe("knowledge compilation control plane", () => {
     const store = createStore();
     store.ensureLocalWorkspace();
     const project = store.createProject({ title: "Atlas publishing" });
-    const issue = store.createIssue({ title: "Curate knowledge", projectId: project.id });
+    const issue = createResponsibleTestIssue(store, { title: "Curate knowledge", projectId: project.id });
     const { agent } = configureRepositoryWikiAutomation(store);
     const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "curate" });
     const credential = await store.createTaskAccessToken(task, "local");
@@ -516,7 +517,7 @@ describe("knowledge compilation control plane", () => {
       title: "Repository publishing",
       resources: [{ resourceType: "github_repo", resourceRef: { url: repositoryUrl } }],
     });
-    const issue = store.createIssue({ title: "Curate repository", projectId: project.id });
+    const issue = createResponsibleTestIssue(store, { title: "Curate repository", projectId: project.id });
     const normal = store.createAgent({ name: "Normal", provider: "claude" });
     const normalTask = store.createTask({ agentId: normal.id, issueId: issue.id, prompt: "bypass" });
     const normalCredential = await store.createTaskAccessToken(normalTask, "local");
@@ -557,7 +558,7 @@ describe("knowledge compilation control plane", () => {
     const store = createStore();
     store.ensureLocalWorkspace();
     const project = store.createProject({ title: "Completion" });
-    const issue = store.createIssue({ title: "Finish", projectId: project.id });
+    const issue = createResponsibleTestIssue(store, { title: "Finish", projectId: project.id });
     const agent = store.createAgent({ name: "Worker", provider: "claude" });
     const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "finish" });
     store.createIssueSession(issue.id, { title: "Implementation" });

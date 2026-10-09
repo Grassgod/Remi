@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 /**
  * MUL-412 decision cards on real PostgreSQL.
  *
@@ -193,13 +194,13 @@ describe.skipIf(!available)("MUL-412 decision cards on Postgres", () => {
         },
       },
     });
-    const parent = targetStore.createIssue({ title: `PG ${workspaceSeq}`, workspaceId, assigneeType: "agent", assigneeId: agentId });
+    const parent = createResponsibleTestIssue(targetStore, { title: `PG ${workspaceSeq}`, workspaceId, assigneeType: "agent", assigneeId: agentId });
     targetStore.prepareFeishuIssueTopicWithinTransaction(parent);
     const root = targetStore.claimFeishuBotOutbound(workspaceId, runtimeId)!;
     targetStore.reportFeishuBotOutbound(workspaceId, runtimeId, root.id, {
       claimToken: root.claimToken, status: "sent", externalMessageId: `om_root_${workspaceSeq}`,
     });
-    const child = targetStore.createIssue({
+    const child = createResponsibleTestIssue(targetStore, {
       title: `PG child ${workspaceSeq}`, workspaceId, parentIssueId: parent.id, assigneeType: "agent", assigneeId: agentId,
     });
     const task = targetStore.createTask({ agentId, issueId: child.id, workspaceId, prompt: "W" });

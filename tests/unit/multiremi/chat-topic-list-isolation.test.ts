@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { afterEach, describe, expect, it } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
 import {
@@ -14,7 +15,7 @@ describe("Chat list isolation from Feishu Issue topics", () => {
     store.ensureLocalWorkspace();
     const runtime = store.registerRuntime({ name: "Topic list runtime", provider: "codex", workspaceId: "local" });
     const agent = store.createAgent({ name: "Chat and topic agent", provider: "codex", runtimeId: runtime.id });
-    const issue = store.createIssue({ title: "Topic only", createdBy: "local" });
+    const issue = createResponsibleTestIssue(store, { title: "Topic only", createdBy: "local" });
     const topic = prepareFeishuIssueTopic(store, { runtimeId: runtime.id, agentId: agent.id, issueId: issue.id });
     expect(topic.creatorId).toBe("local");
     const session = store.getOrCreateDefaultIssueSession(issue.id);

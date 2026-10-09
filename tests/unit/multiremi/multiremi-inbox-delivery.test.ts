@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { appendCanonicalInboxInput } from "./fixtures/canonical-inbox-input.js";
 import { runTurnExecutionMutation } from '@multiremi/store/turn-execution-records.js';
 import type { SqlDatabase as UnifiedFixtureDatabase } from '@multiremi/store/db/postgres.js';
@@ -41,7 +42,7 @@ describe("MUL-484 inbox delivery and pending turns", () => {
           store.ensureLocalWorkspace();
           const runtime = store.registerRuntime({ name: "Inbox runtime", provider: "codex" });
           const agent = store.createAgent({ name: "Inbox owner", provider: "codex", runtimeId: runtime.id });
-          const issue = store.createIssue({ title: "Ring", status: "in_progress", assigneeType: "agent", assigneeId: agent.id });
+          const issue = createResponsibleTestIssue(store, { title: "Ring", status: "in_progress", assigneeType: "agent", assigneeId: agent.id });
           const session = store.getOrCreateDefaultIssueSession(issue.id);
           const task = store.createSessionTask(session.id, { agentId: agent.id, prompt: "First round" });
           expect(store.claimTask(runtime.id)?.id).toBe(task.id);
@@ -75,7 +76,7 @@ describe("MUL-484 inbox delivery and pending turns", () => {
           store.ensureLocalWorkspace();
           const runtime = store.registerRuntime({ name: "Inbox runtime", provider: "codex" });
           const agent = store.createAgent({ name: "Inbox owner", provider: "codex", runtimeId: runtime.id });
-          const issue = store.createIssue({ title: "Ring fallback", status: "in_progress", assigneeType: "agent", assigneeId: agent.id });
+          const issue = createResponsibleTestIssue(store, { title: "Ring fallback", status: "in_progress", assigneeType: "agent", assigneeId: agent.id });
           const session = store.getOrCreateDefaultIssueSession(issue.id);
           const task = store.createSessionTask(session.id, { agentId: agent.id, prompt: "First round" });
           expect(store.claimTask(runtime.id)?.id).toBe(task.id);
@@ -106,7 +107,7 @@ describe("MUL-484 inbox delivery and pending turns", () => {
       await withStore(backend,(store,db)=>{
         const runtime=store.registerRuntime({name:"Coverage",provider:"codex"});
         const agent=store.createAgent({name:"Owner",provider:"codex",runtimeId:runtime.id});
-        const issue=store.createIssue({title:"Coverage",assigneeType:"agent",assigneeId:agent.id});
+        const issue=createResponsibleTestIssue(store, {title:"Coverage",assigneeType:"agent",assigneeId:agent.id});
         const session=store.getOrCreateDefaultIssueSession(issue.id);
         const covered=sendIssueWake(store,db,session.id,agent.id,"now","Covered work").task!;
         coverBusiness(db,store,covered.id,wakeSeq(db,covered.id));
@@ -127,7 +128,7 @@ describe("MUL-484 inbox delivery and pending turns", () => {
         store.ensureLocalWorkspace();
         const runtime = store.registerRuntime({ name: "Legacy runtime", provider: "codex" });
         const agent = store.createAgent({ name: "Legacy owner", provider: "codex", runtimeId: runtime.id });
-        const issue = store.createIssue({ title: "Legacy wake", status: "in_progress", assigneeType: "agent", assigneeId: agent.id });
+        const issue = createResponsibleTestIssue(store, { title: "Legacy wake", status: "in_progress", assigneeType: "agent", assigneeId: agent.id });
         const session = store.getOrCreateDefaultIssueSession(issue.id);
         const task = store.createTask({ agentId: agent.id, issueId: issue.id, issueSessionId: session.id,
           prompt: "Legacy system round", wakeSource: "child_status" });
@@ -145,7 +146,7 @@ describe("MUL-484 inbox delivery and pending turns", () => {
         const firstRuntime = store.registerRuntime({ name: "First runtime", provider: "codex" });
         const nextRuntime = store.registerRuntime({ name: "Next runtime", provider: "codex" });
         const agent = store.createAgent({ name: "Moved owner", provider: "codex", runtimeId: firstRuntime.id });
-        const issue = store.createIssue({ title: "Requeue", status: "in_progress", assigneeType: "agent", assigneeId: agent.id });
+        const issue = createResponsibleTestIssue(store, { title: "Requeue", status: "in_progress", assigneeType: "agent", assigneeId: agent.id });
         const session = store.createIssueSession(issue.id, { title: "Requeue lane", withCode: false, holdsWorkspace: false });
         const task = store.createSessionTask(session.id, { agentId: agent.id, prompt: "Initial" });
         expect(store.claimTask(firstRuntime.id)?.id).toBe(task.id);
@@ -178,7 +179,7 @@ describe("MUL-484 inbox delivery and pending turns", () => {
         const runtime = store.registerRuntime({ name: "Return runtime", provider: "codex" });
         const leader = store.createAgent({ name: "Leader", provider: "codex", runtimeId: runtime.id });
         const worker = store.createAgent({ name: "Worker", provider: "codex", runtimeId: runtime.id });
-        const issue = store.createIssue({ title: "Return", status: "in_progress", assigneeType: "agent", assigneeId: leader.id });
+        const issue = createResponsibleTestIssue(store, { title: "Return", status: "in_progress", assigneeType: "agent", assigneeId: leader.id });
         const session = store.getOrCreateDefaultIssueSession(issue.id);
         const source = store.createTask({ agentId: worker.id, issueId: issue.id, issueSessionId: session.id,
           prompt: "Delegated work", delegationId: "dlg_delivery", delegatedByAgentId: leader.id,
@@ -216,7 +217,7 @@ describe("MUL-484 inbox delivery and pending turns", () => {
         const runtime = store.registerRuntime({ name: "Return runtime", provider: "codex" });
         const leader = store.createAgent({ name: "Leader", provider: "codex", runtimeId: runtime.id });
         const worker = store.createAgent({ name: "Worker", provider: "codex", runtimeId: runtime.id });
-        const issue = store.createIssue({ title: "Unread return", status: "in_progress", assigneeType: "agent", assigneeId: leader.id });
+        const issue = createResponsibleTestIssue(store, { title: "Unread return", status: "in_progress", assigneeType: "agent", assigneeId: leader.id });
         const session = store.getOrCreateDefaultIssueSession(issue.id);
         const source = store.createTask({ agentId: worker.id, issueId: issue.id, issueSessionId: session.id,
           prompt: "Delegated work", delegationId: "dlg_unread", delegatedByAgentId: leader.id,
@@ -241,7 +242,7 @@ describe("MUL-484 inbox delivery and pending turns", () => {
         const workerRuntime = store.registerRuntime({ name: "Worker runtime", provider: "codex" });
         const leader = store.createAgent({ name: "Leader", provider: "codex", runtimeId: leaderRuntime.id });
         const worker = store.createAgent({ name: "Worker", provider: "codex", runtimeId: workerRuntime.id });
-        const issue = store.createIssue({ title: "Return replacement", status: "in_progress", assigneeType: "agent", assigneeId: leader.id });
+        const issue = createResponsibleTestIssue(store, { title: "Return replacement", status: "in_progress", assigneeType: "agent", assigneeId: leader.id });
         const session = store.getOrCreateDefaultIssueSession(issue.id);
         const source = store.createTask({ agentId: worker.id, issueId: issue.id, issueSessionId: session.id,
           prompt: "Delegated work", delegationId: "dlg_redrain", delegatedByAgentId: leader.id,
@@ -283,7 +284,7 @@ describe("MUL-484 inbox delivery and pending turns", () => {
           const workerRuntime = store.registerRuntime({ name: `Worker ${terminal}`, provider: "codex" });
           const leader = store.createAgent({ name: "Leader", provider: "codex", runtimeId: leaderRuntime.id });
           const worker = store.createAgent({ name: "Worker", provider: "codex", runtimeId: workerRuntime.id });
-          const issue = store.createIssue({ title: `Return ${terminal}`, assigneeType: "agent", assigneeId: leader.id });
+          const issue = createResponsibleTestIssue(store, { title: `Return ${terminal}`, assigneeType: "agent", assigneeId: leader.id });
           const session = store.getOrCreateDefaultIssueSession(issue.id);
           const source = store.createTask({ agentId: worker.id, issueId: issue.id, issueSessionId: session.id,
             prompt: "Delegated work", delegationId: `dlg_${terminal}`, delegatedByAgentId: leader.id,
@@ -314,7 +315,7 @@ describe("MUL-484 inbox delivery and pending turns", () => {
           metadata: { parallel_agent_execution: 1, cli_version: "0.2.66" } });
         const leader = store.createAgent({ name: "Leader", provider: "codex" });
         const worker = store.createAgent({ name: "Worker", provider: "codex" });
-        const issue = store.createIssue({ title: "Scope isolation" });
+        const issue = createResponsibleTestIssue(store, { title: "Scope isolation" });
         const main = store.createTask({ agentId: leader.id, issueId: issue.id, prompt: "Coordinate" });
         expect(store.claimTask(runtime.id)?.id).toBe(main.id);
         daemonTaskClaimResponse(store, store.getTaskWithAgent(main.id)!);
@@ -349,7 +350,7 @@ describe("MUL-484 inbox delivery and pending turns", () => {
         const agent = store.createAgent({ name: "Pinned owner", provider: "codex" });
         const project = store.createProject({ title: "Local directory", resources: [{ resourceType: "local_directory",
           resourceRef: { local_path: "/abs/mul484", daemon_id: "directory-host" } }] });
-        const issue = store.createIssue({ title: "Pin repool", projectId: project.id, status: "in_progress",
+        const issue = createResponsibleTestIssue(store, { title: "Pin repool", projectId: project.id, status: "in_progress",
           assigneeType: "agent", assigneeId: agent.id });
         const session = store.getOrCreateDefaultIssueSession(issue.id);
         const task = store.createTask({ agentId: agent.id, issueId: issue.id, issueSessionId: session.id,
@@ -390,7 +391,7 @@ describe("MUL-484 inbox delivery and pending turns", () => {
           for (const { boundary, hasUnreadNow } of boundaries) {
             const runtime = store.registerRuntime({ name: `${source} ${boundary} ${hasUnreadNow}`, provider: "codex" });
             const agent = store.createAgent({ name: `${source} owner`, provider: "codex", runtimeId: runtime.id });
-            const issue = store.createIssue({ title: `${source} ${boundary} ${hasUnreadNow}`, assigneeType: "agent", assigneeId: agent.id });
+            const issue = createResponsibleTestIssue(store, { title: `${source} ${boundary} ${hasUnreadNow}`, assigneeType: "agent", assigneeId: agent.id });
             const session = store.getOrCreateDefaultIssueSession(issue.id);
             let pendingId: string;
             if (source === "re_ring") {
@@ -420,7 +421,7 @@ describe("MUL-484 inbox delivery and pending turns", () => {
               store.completeTask(delegated.id, { output: "Worker report", sessionId: "worker_provider" });
               pendingId = store.listTasksForIssue(issue.id).find(row => row.status === "queued" && row.agentId === agent.id)!.id;
             } else {
-              const child = source === "child_status" ? store.createIssue({ title: "Child", parentIssueId: issue.id }) : null;
+              const child = source === "child_status" ? createResponsibleTestIssue(store, { title: "Child", parentIssueId: issue.id }) : null;
               const delivered = db.transaction(() => store.sendEnvelopeWithinTransaction({
                 to: { role: "agent", issueSessionId: session.id, agentId: agent.id },
                 kind: source === "dependency" ? "lifecycle" : "report", wake: "now",
@@ -468,8 +469,8 @@ describe("MUL-484 inbox delivery and pending turns", () => {
           metadata: { parallel_agent_execution: 1, cli_version: "0.2.66" } });
         const owner = store.createAgent({ name: "Owner", provider: "codex", runtimeId: runtime.id });
         const other = store.createAgent({ name: "Other", provider: "codex", runtimeId: runtime.id });
-        const firstIssue = store.createIssue({ title: "Covered head", assigneeType: "agent", assigneeId: owner.id });
-        const secondIssue = store.createIssue({ title: "Other issue", assigneeType: "agent", assigneeId: other.id });
+        const firstIssue = createResponsibleTestIssue(store, { title: "Covered head", assigneeType: "agent", assigneeId: owner.id });
+        const secondIssue = createResponsibleTestIssue(store, { title: "Other issue", assigneeType: "agent", assigneeId: other.id });
         const firstSession = store.getOrCreateDefaultIssueSession(firstIssue.id);
         const secondSession = store.getOrCreateDefaultIssueSession(secondIssue.id);
         const first = sendIssueWake(store, db, firstSession.id, owner.id, "now", "Covered wake").task!;
@@ -496,7 +497,7 @@ describe("MUL-484 inbox delivery and pending turns", () => {
         for(const kind of ['human','chat','continuation','manual'] as const){
           const runtime=store.registerRuntime({name:kind,provider:"codex"});
           const agent=store.createAgent({name:kind,provider:"codex",runtimeId:runtime.id});
-          const issue=store.createIssue({title:kind,assigneeType:"agent",assigneeId:agent.id});
+          const issue=createResponsibleTestIssue(store, {title:kind,assigneeType:"agent",assigneeId:agent.id});
           const session=store.getOrCreateDefaultIssueSession(issue.id);
           let task;
           if(kind==='chat'){const chat=store.createChatSession({agentId:agent.id});task=store.sendChatMessage(chat.id,{content:'Chat work'}).task;}
@@ -525,9 +526,9 @@ describe("MUL-484 inbox delivery and pending turns", () => {
         for (const boundary of ["legacy_zero", "covered", "unread"] as const) {
           const runtime = store.registerRuntime({ name: `Parent ${boundary}`, provider: "codex" });
           const owner = store.createAgent({ name: `Parent owner ${boundary}`, provider: "codex", runtimeId: runtime.id });
-          const parent = store.createIssue({ title: `Parent ${boundary}`, status: "in_progress",
+          const parent = createResponsibleTestIssue(store, { title: `Parent ${boundary}`, status: "in_progress",
             assigneeType: "agent", assigneeId: owner.id });
-          const child = store.createIssue({ title: "Child", parentIssueId: parent.id, status: "in_progress" });
+          const child = createResponsibleTestIssue(store, { title: "Child", parentIssueId: parent.id, status: "in_progress" });
           const session = store.getOrCreateDefaultIssueSession(parent.id);
           store.updateIssue(child.id, { status: "done" });
           const summary = store.listTasksForIssue(parent.id).find(row => row.status === "queued")!;
@@ -582,7 +583,7 @@ describe("MUL-484 inbox delivery and pending turns", () => {
           store.updateWorkspace("local", { settings: { issueTopics: { enabled: true, chatId: "oc_mul484" } } });
           const squad = store.createSquad({ name: "Delivery", leaderId: leader.id,
             memberIds: workers.map(worker => worker.id) });
-          const issue = store.createIssue({ title: "Feishu fanout", assigneeType: "squad", assigneeId: squad.id });
+          const issue = createResponsibleTestIssue(store, { title: "Feishu fanout", assigneeType: "squad", assigneeId: squad.id });
           expect(store.prepareFeishuIssueTopicWithinTransaction(issue)).toBe(true);
           const topic = store.claimFeishuBotOutbound("local", leaderRuntime.id)!;
           store.reportFeishuBotOutbound("local", leaderRuntime.id, topic.id,
@@ -634,7 +635,7 @@ describe("MUL-484 inbox delivery and pending turns", () => {
         const agent = store.createAgent({ name: "Mixed owner", provider: "codex", runtimeId: runtime.id });
         const delegatorRuntime = store.registerRuntime({ name: "Delegator runtime", provider: "codex" });
         const delegator = store.createAgent({ name: "Delegator", provider: "codex", runtimeId: delegatorRuntime.id });
-        const issue = store.createIssue({ title: "Mixed lanes", assigneeType: "agent", assigneeId: agent.id });
+        const issue = createResponsibleTestIssue(store, { title: "Mixed lanes", assigneeType: "agent", assigneeId: agent.id });
         const session = store.getOrCreateDefaultIssueSession(issue.id);
         const main = store.createSessionTask(session.id, { agentId: agent.id, prompt: "Main scope" });
         const origin=store.createTask({agentId:delegator.id,issueId:issue.id,prompt:"Scoped source"});
@@ -673,7 +674,7 @@ describe("MUL-484 inbox delivery and pending turns", () => {
         store.ensureLocalWorkspace();
         const runtime = store.registerRuntime({ name: "Receipt runtime", provider: "codex" });
         const agent = store.createAgent({ name: "Receipt owner", provider: "codex", runtimeId: runtime.id });
-        const issue = store.createIssue({ title: "Receipt contract", status: "in_progress", assigneeType: "agent", assigneeId: agent.id });
+        const issue = createResponsibleTestIssue(store, { title: "Receipt contract", status: "in_progress", assigneeType: "agent", assigneeId: agent.id });
         const session = store.getOrCreateDefaultIssueSession(issue.id);
         const issueTask = store.createSessionTask(session.id, { agentId: agent.id, prompt: "Read issue" });
         const issueEnvelope = sendIssueWake(store, db, session.id, agent.id, "inbox_only", "Issue payload").entry;
@@ -733,7 +734,7 @@ describe("MUL-484 inbox delivery and pending turns", () => {
         const nextRuntime = store.registerRuntime({ name: "Next owner runtime", provider: "codex" });
         const original = store.createAgent({ name: "Original owner", provider: "codex", runtimeId: originalRuntime.id });
         const next = store.createAgent({ name: "Next owner", provider: "codex", runtimeId: nextRuntime.id });
-        const issue = store.createIssue({ title: "Frozen recipient", status: "in_progress",
+        const issue = createResponsibleTestIssue(store, { title: "Frozen recipient", status: "in_progress",
           assigneeType: "agent", assigneeId: original.id });
         const session = store.getOrCreateDefaultIssueSession(issue.id);
         const first = store.createSessionTask(session.id, { agentId: original.id, prompt: "First round" });
@@ -776,7 +777,7 @@ describe("MUL-484 inbox delivery and pending turns", () => {
         store.ensureLocalWorkspace();
         const runtime = store.registerRuntime({ name: "Failure runtime", provider: "codex" });
         const agent = store.createAgent({ name: "Failure owner", provider: "codex", runtimeId: runtime.id });
-        const issue = store.createIssue({ title: "Recoverable failure", status: "in_progress", assigneeType: "agent", assigneeId: agent.id });
+        const issue = createResponsibleTestIssue(store, { title: "Recoverable failure", status: "in_progress", assigneeType: "agent", assigneeId: agent.id });
         const session = store.getOrCreateDefaultIssueSession(issue.id);
         const task = store.createSessionTask(session.id, { agentId: agent.id, prompt: "Before failure" });
         expect(store.claimTask(runtime.id)?.id).toBe(task.id);
@@ -807,7 +808,7 @@ describe("MUL-484 inbox delivery and pending turns", () => {
         store.ensureLocalWorkspace();
         const runtime = store.registerRuntime({ name: "Terminal failure runtime", provider: "codex" });
         const agent = store.createAgent({ name: "Terminal failure owner", provider: "codex", runtimeId: runtime.id });
-        const issue = store.createIssue({ title: "Recoverable session after exhausted retry", status: "in_progress",
+        const issue = createResponsibleTestIssue(store, { title: "Recoverable session after exhausted retry", status: "in_progress",
           assigneeType: "agent", assigneeId: agent.id });
         const session = store.getOrCreateDefaultIssueSession(issue.id);
         const task = store.createTask({ agentId: agent.id, issueId: issue.id, issueSessionId: session.id,
@@ -876,7 +877,7 @@ describe("MUL-484 inbox delivery and pending turns", () => {
           store.ensureLocalWorkspace();
           const runtime = store.registerRuntime({ name: "Ordered runtime", provider: "codex" });
           const agent = store.createAgent({ name: "Ordered owner", provider: "codex", runtimeId: runtime.id });
-          const issue = store.createIssue({ title: "Ordered wake", status: "in_progress", assigneeType: "agent", assigneeId: agent.id });
+          const issue = createResponsibleTestIssue(store, { title: "Ordered wake", status: "in_progress", assigneeType: "agent", assigneeId: agent.id });
           const session = store.getOrCreateDefaultIssueSession(issue.id);
           const running = store.createSessionTask(session.id, { agentId: agent.id, prompt: "Running" });
           expect(store.claimTask(runtime.id)?.id).toBe(running.id);

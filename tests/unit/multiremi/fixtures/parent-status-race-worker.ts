@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from '../helpers.js';
 import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { PostgresSyncDatabase, type SqlDatabase } from "@multiremi/store/db/postgres.js";
 import { IssuesRepo } from "@multiremi/store/repos/issues-repo.js";
@@ -105,7 +106,7 @@ self.onmessage = (event: MessageEvent<
   try {
     if (input.role === "child") {
       if (input.mutation === "create") {
-        store.createIssue({ id: input.childId, title: "Concurrent child", parentIssueId: input.parentId, status: "in_progress" });
+        createResponsibleTestIssue(store, { id: input.childId, title: "Concurrent child", parentIssueId: input.parentId, status: "in_progress" });
       } else if (input.mutation.startsWith("assign_")) {
         store.assignIssue(input.childId, { assigneeType: "agent", assigneeId: input.ownerId });
       } else {

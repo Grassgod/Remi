@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -100,10 +101,10 @@ for (const dialect of ["sqlite", "postgres"] as const) {
 
     for (const rollback of [false, true]) {
       it(`old-parent re-derivation ${rollback ? "rolls back" : "commits"} with its events`, () => {
-        const oldParent = store.createIssue({ title: "Old parent", status: "in_progress" });
-        const newParent = store.createIssue({ title: "New parent", status: "in_progress" });
-        const child = store.createIssue({ title: "Moving child", parentIssueId: oldParent.id, status: "in_progress" });
-        store.createIssue({ title: "Remaining child", parentIssueId: oldParent.id, status: "in_progress" });
+        const oldParent = createResponsibleTestIssue(store, { title: "Old parent", status: "in_progress" });
+        const newParent = createResponsibleTestIssue(store, { title: "New parent", status: "in_progress" });
+        const child = createResponsibleTestIssue(store, { title: "Moving child", parentIssueId: oldParent.id, status: "in_progress" });
+        createResponsibleTestIssue(store, { title: "Remaining child", parentIssueId: oldParent.id, status: "in_progress" });
         store.updateIssue(oldParent.id, { status: "in_review", force: true, actorType: "member" });
         if (database instanceof PostgresSyncDatabase) database.resetTransactionDepthStats();
         const events: boolean[] = [];
@@ -138,10 +139,10 @@ for (const dialect of ["sqlite", "postgres"] as const) {
     // Re-derivation takes no parent lock before counting: a parent decision that
     // commits in between wins, and the conditional UPDATE leaves no trace.
     if (dialect === "postgres") it("old-parent re-derivation yields to a parent move committed while it counts", () => {
-      const oldParent = store.createIssue({ title: "Old parent", status: "in_progress" });
-      const newParent = store.createIssue({ title: "New parent", status: "in_progress" });
-      const child = store.createIssue({ title: "Moving child", parentIssueId: oldParent.id, status: "in_progress" });
-      store.createIssue({ title: "Remaining child", parentIssueId: oldParent.id, status: "in_progress" });
+      const oldParent = createResponsibleTestIssue(store, { title: "Old parent", status: "in_progress" });
+      const newParent = createResponsibleTestIssue(store, { title: "New parent", status: "in_progress" });
+      const child = createResponsibleTestIssue(store, { title: "Moving child", parentIssueId: oldParent.id, status: "in_progress" });
+      createResponsibleTestIssue(store, { title: "Remaining child", parentIssueId: oldParent.id, status: "in_progress" });
       store.updateIssue(oldParent.id, { status: "in_review", force: true, actorType: "member" });
       const other = new PostgresSyncDatabase(location);
       other.exec("SET lock_timeout = '2s'");
@@ -185,8 +186,8 @@ for (const dialect of ["sqlite", "postgres"] as const) {
             let busy = 0;
             for (let round = 0; round < 20; round += 1) {
               sequence += 1;
-              const parent = store.createIssue({ title: `Parent ${sequence}`, status: "in_progress", assigneeType: "agent", assigneeId: ownerId });
-              const childId = mutation === "create" ? `race-child-${sequence}` : store.createIssue({
+              const parent = createResponsibleTestIssue(store, { title: `Parent ${sequence}`, status: "in_progress", assigneeType: "agent", assigneeId: ownerId });
+              const childId = mutation === "create" ? `race-child-${sequence}` : createResponsibleTestIssue(store, {
                 title: `Child ${sequence}`, status: mutation === "attach" ? "in_progress" : mutation.endsWith("_done") ? "done" : "cancelled",
                 parentIssueId: mutation === "attach" ? null : parent.id,
               }).id;

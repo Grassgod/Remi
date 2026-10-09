@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 // MUL-438 / C3 over real sockets: the frames a browser actually receives on
 // `/ws` and `/api/trace/ws`.
 //
@@ -33,7 +34,7 @@ async function pausedSubscriptionFixture(stream: "log" | "trace") {
   const store = createStore();
   const workspace = store.ensureLocalWorkspace();
   store.createWorkspaceMember({ workspaceId: workspace.id, userId: "creator", name: "Creator", role: "owner" });
-  const issue = store.createIssue({ title: "Subscription races", workspaceId: workspace.id });
+  const issue = createResponsibleTestIssue(store, { title: "Subscription races", workspaceId: workspace.id });
   const session = store.getOrCreateDefaultIssueSession(issue.id, "creator");
   const agent = store.createAgent({ name: "Streamer", provider: "codex", workspaceId: workspace.id });
   const task = store.createTask({ agentId: agent.id, workspaceId: workspace.id, prompt: "race", issueId: issue.id });
@@ -148,7 +149,7 @@ async function streamResumeFixture(stream: "log" | "trace") {
   const store = createStore();
   const workspace = store.ensureLocalWorkspace();
   store.createWorkspaceMember({ workspaceId: workspace.id, userId: "creator", name: "Creator", role: "owner" });
-  const issue = store.createIssue({ title: "Resume anchors", workspaceId: workspace.id });
+  const issue = createResponsibleTestIssue(store, { title: "Resume anchors", workspaceId: workspace.id });
   const session = store.getOrCreateDefaultIssueSession(issue.id, "creator");
   const agent = store.createAgent({ name: "Streamer", provider: "codex", workspaceId: workspace.id });
   const task = store.createTask({ agentId: agent.id, workspaceId: workspace.id, prompt: "resume", issueId: issue.id });
@@ -250,7 +251,7 @@ describe("MUL-438 browser stream endpoints", () => {
     const store = createStore();
     const workspace = store.ensureLocalWorkspace();
     store.createWorkspaceMember({ workspaceId: workspace.id, userId: "creator", name: "Creator", role: "owner" });
-    const issue = store.createIssue({ title: "Zero anchor", workspaceId: workspace.id });
+    const issue = createResponsibleTestIssue(store, { title: "Zero anchor", workspaceId: workspace.id });
     const session = store.getOrCreateDefaultIssueSession(issue.id, "creator");
     const token = await store.createAccessToken({ name: "Creator", type: "pat", workspaceId: workspace.id, userId: "creator" });
     const hub = createEmptyLiveHub(createLocalHubTransport());
@@ -281,7 +282,7 @@ describe("MUL-438 browser stream endpoints", () => {
     const store = createStore();
     const workspace = store.ensureLocalWorkspace();
     store.createWorkspaceMember({ workspaceId: workspace.id, userId: "creator", name: "Creator", role: "owner" });
-    const issue = store.createIssue({ title: "Client handshake", workspaceId: workspace.id });
+    const issue = createResponsibleTestIssue(store, { title: "Client handshake", workspaceId: workspace.id });
     const session = store.getOrCreateDefaultIssueSession(issue.id, "creator");
     const token = await store.createAccessToken({ name: "Creator", type: "pat", workspaceId: workspace.id, userId: "creator" });
     const verify = store.verifyAccessToken.bind(store);
@@ -327,7 +328,7 @@ describe("MUL-438 browser stream endpoints", () => {
     const workspace = store.ensureLocalWorkspace();
     store.createWorkspaceMember({ workspaceId: workspace.id, userId: "creator", name: "Creator", role: "owner" });
     const agent = store.createAgent({ name: "Streamer", provider: "codex", workspaceId: workspace.id });
-    const issue = store.createIssue({ title: "Socket issue", workspaceId: workspace.id });
+    const issue = createResponsibleTestIssue(store, { title: "Socket issue", workspaceId: workspace.id });
     const session = store.getOrCreateDefaultIssueSession(issue.id, "creator");
     const task = store.createTask({ agentId: agent.id, workspaceId: workspace.id, prompt: "socket task", issueId: issue.id });
     const token = await store.createAccessToken({ name: "Socket owner", type: "pat", workspaceId: workspace.id, userId: "creator" });

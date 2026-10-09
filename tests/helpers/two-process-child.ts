@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from '../unit/multiremi/helpers.js';
 import { randomUUID } from "node:crypto";
 import { MultiremiStore } from "@multiremi/store.js";
 import { PostgresSyncDatabase } from "@multiremi/store/db/postgres.js";
@@ -37,7 +38,7 @@ async function command(name: string, args: any): Promise<unknown> {
   }
   if (name === "seed") {
     const agent = store.createAgent({ name: "Two-process comments", provider: "codex" });
-    const issue = store.createIssue({ title: "Two-process comments", workspaceId: "local" });
+    const issue = createResponsibleTestIssue(store, { title: "Two-process comments", workspaceId: "local" });
     const browser = await store.createAccessToken({ name: "Two-process browser", type: "pat", workspaceId: "local" });
     return { agentId: agent.id, issueId: issue.id, browserToken: browser.token };
   }

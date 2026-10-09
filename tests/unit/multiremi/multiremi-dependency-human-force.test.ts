@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { issueMessagesPath, requestMessageBody, taskRequestPath } from "./unified-test-paths.js";
 /** MUL-458: credential-verified human actions force-start waiting issues. */
 import { afterEach, describe, expect, it, spyOn } from "bun:test";
@@ -37,8 +38,8 @@ async function humanFixture(kind: "jwt" | "pat", suffix: string): Promise<HumanF
     runtimeId: runtime.id,
     visibility: "workspace",
   });
-  const prerequisite = store.createIssue({ title: `Prerequisite ${suffix}`, status: "in_progress" });
-  const issue = store.createIssue({
+  const prerequisite = createResponsibleTestIssue(store, { title: `Prerequisite ${suffix}`, status: "in_progress" });
+  const issue = createResponsibleTestIssue(store, {
     title: `Waiting ${suffix}`,
     status: "backlog",
     blockedBy: [prerequisite.id],
@@ -185,7 +186,7 @@ describe("MUL-458 human dependency force (SQLite)", () => {
       leaderId: leader.id,
       memberIds: [teammate.id],
     });
-    const sourceIssue = fixture.store.createIssue({
+    const sourceIssue = createResponsibleTestIssue(fixture.store, {
       title: "Agent source",
       status: "in_progress",
       assigneeType: "squad",
@@ -291,8 +292,8 @@ describe("MUL-458 human dependency force (SQLite)", () => {
 
   it("re-derives an in-review parent when its waiting child is started by comment", async () => {
     const fixture = await humanFixture("pat", "parent-rederive");
-    const parent = fixture.store.createIssue({ title: "Parent under review", status: "in_review" });
-    const child = fixture.store.createIssue({
+    const parent = createResponsibleTestIssue(fixture.store, { title: "Parent under review", status: "in_review" });
+    const child = createResponsibleTestIssue(fixture.store, {
       title: "Waiting child",
       status: "backlog",
       parentIssueId: parent.id,

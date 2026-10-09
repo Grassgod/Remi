@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { InMemoryTraceStore } from "@multiremi/worker/trace-store.js";
 import { InMemoryDaemonTraceReader } from "@multiremi/api/trace/daemon-trace-reader.js";
 import { turnApiPath } from "./unified-test-paths.js";
@@ -226,7 +227,7 @@ describe("Multiremi multi-user auth", () => {
 
     // Owner's PRIVATE agent runs a task that records transcript messages.
     const agent = store.createAgent({ name: "Secret", provider: "claude", workspaceId: "local", ownerId: "local", visibility: "private" });
-    const issue = store.createIssue({ title: "secret work", workspaceId: "local" });
+    const issue = createResponsibleTestIssue(store, { title: "secret work", workspaceId: "local" });
     const task = store.createTask({ agentId: agent.id, issueId: issue.id, workspaceId: "local", prompt: "x" });
     const runtime = store.registerRuntime({name:"Private trace daemon",provider:"claude"});
     expect(store.claimTask(runtime.id)?.id).toBe(task.id);
@@ -291,7 +292,7 @@ describe("Multiremi multi-user auth", () => {
     });
     expect(store.listAgents().filter((agent) => agent.workspaceId === "local")).toEqual([]);
 
-    const issue = store.createIssue({ title: "B member assignment", workspaceId: workspace.id });
+    const issue = createResponsibleTestIssue(store, { title: "B member assignment", workspaceId: workspace.id });
     const assigned = await app.request(`/api/multiremi/issues/${issue.id}/assign`, {
       method: "POST",
       headers: jsonAuth(b.token),

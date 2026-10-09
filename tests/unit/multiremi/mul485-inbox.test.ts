@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { requestMessageBody, sentTask } from "./unified-test-paths.js";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "bun:test";
 import { readFileSync } from "node:fs";
@@ -15,7 +16,7 @@ import { createLocalStore as createStore, resetMultiremiTestEnv } from "./helper
 const plan = readFileSync(new URL("../../fixtures/multiremi/mul404-plan.md", import.meta.url), "utf8").trimEnd();
 
 async function verifyPlanRoundTrip(store: MultiremiStore): Promise<void> {
-  const issue = store.createIssue({ title: "MUL-485 fixture", workspaceId: "local" });
+  const issue = createResponsibleTestIssue(store, { title: "MUL-485 fixture", workspaceId: "local" });
   const session = store.getOrCreateDefaultIssueSession(issue.id);
   const comment = store.createIssueComment(issue.id, { issueSessionId: session.id, body: plan });
   const entry = store.getConversationLogEntryById(comment.id)!;
@@ -57,7 +58,7 @@ async function verifyPlanRoundTrip(store: MultiremiStore): Promise<void> {
 }
 
 async function verifyLegacyDeliveryUnknown(store: MultiremiStore): Promise<void> {
-  const issue = store.createIssue({ title: "Legacy delivery", workspaceId: "local" });
+  const issue = createResponsibleTestIssue(store, { title: "Legacy delivery", workspaceId: "local" });
   const session = store.getOrCreateDefaultIssueSession(issue.id);
   const entry = store.appendConversationLog({ sessionId: session.id, kind: "message",
     authorType: "member", authorId: "local", bodyMd: "Before envelopes" });
@@ -71,7 +72,7 @@ async function verifyLegacyDeliveryUnknown(store: MultiremiStore): Promise<void>
 
 async function verifyLegacyReportStaysWhole(store: MultiremiStore): Promise<void> {
   const agent = store.createAgent({ name: "Legacy report reader", provider: "codex", visibility: "workspace" });
-  const issue = store.createIssue({ title: "Long legacy report", workspaceId: "local" });
+  const issue = createResponsibleTestIssue(store, { title: "Long legacy report", workspaceId: "local" });
   const session = store.getOrCreateDefaultIssueSession(issue.id);
   const body = "R".repeat(4_001);
   const report = store.appendSessionEvent(session.id, { kind: "delegation_report", authorType: "system", body });
@@ -88,7 +89,7 @@ async function verifyLegacyReportStaysWhole(store: MultiremiStore): Promise<void
 
 async function verifyEveryFoldedEntryExpands(store: MultiremiStore): Promise<void> {
   const agent = store.createAgent({ name: "Expansion invariant reader", provider: "codex", visibility: "workspace" });
-  const issue = store.createIssue({ title: "Expansion invariant", workspaceId: "local" });
+  const issue = createResponsibleTestIssue(store, { title: "Expansion invariant", workspaceId: "local" });
   const session = store.getOrCreateDefaultIssueSession(issue.id);
   const expected = new Map<number, { id: string; body: string; expandable: boolean }>();
   for (const kind of CONVERSATION_LOG_SHOWN_KINDS) {
@@ -153,7 +154,7 @@ async function verifyEveryFoldedEntryExpands(store: MultiremiStore): Promise<voi
 
 async function verifyDeliveryReceipt(store: MultiremiStore): Promise<void> {
   const agent = store.createAgent({ name: "MUL485 recipient", provider: "codex", visibility: "workspace" });
-  const issue = store.createIssue({ title: "Receipt", workspaceId: "local" });
+  const issue = createResponsibleTestIssue(store, { title: "Receipt", workspaceId: "local" });
   const session = store.getOrCreateDefaultIssueSession(issue.id);
   const comment = store.createIssueComment(issue.id, { issueSessionId: session.id, body: "Decide" });
   const entry = store.getConversationLogEntryById(comment.id)!;
@@ -172,13 +173,13 @@ async function verifySymbolicRecipientDelivery(
 ): Promise<void> {
   const recipient = store.createAgent({ name: "Symbolic recipient", provider: "codex", visibility: "workspace" });
   const other = store.createAgent({ name: "Other recipient", provider: "codex", visibility: "workspace" });
-  const issue = store.createIssue({ title: "Symbolic report", workspaceId: "local", status: "in_progress",
+  const issue = createResponsibleTestIssue(store, { title: "Symbolic report", workspaceId: "local", status: "in_progress",
     assigneeType: "agent", assigneeId: recipient.id });
   const session = store.getOrCreateDefaultIssueSession(issue.id);
   let to: EnvelopeAddress = { role: "issue_owner", issueId: issue.id };
   let source: { taskId?: string } = {};
   if (role !== "issue_owner") {
-    const child = store.createIssue({ title: "Report source", workspaceId: "local", parentIssueId: issue.id });
+    const child = createResponsibleTestIssue(store, { title: "Report source", workspaceId: "local", parentIssueId: issue.id });
     if (role === "parent_owner") {
       to = { role: "parent_owner", childIssueId: child.id };
     } else {
@@ -242,7 +243,7 @@ async function verifyCursorDeliveryAcrossScopes(
   delivered: boolean,
 ): Promise<void> {
   const agent = store.createAgent({ name: "Scoped receipt agent", provider: "codex", visibility: "workspace" });
-  const issue = store.createIssue({ title: "Scoped receipt", workspaceId: "local" });
+  const issue = createResponsibleTestIssue(store, { title: "Scoped receipt", workspaceId: "local" });
   const session = store.getOrCreateDefaultIssueSession(issue.id);
   const comment = store.createIssueComment(issue.id, { issueSessionId: session.id, body: "Read this" });
   const entry = store.getConversationLogEntryById(comment.id)!;
@@ -270,7 +271,7 @@ async function verifyCursorDeliveryAcrossScopes(
 
 async function verifyDeliveryLaneIsolation(store: MultiremiStore, otherLane: "session" | "agent"): Promise<void> {
   const recipient = store.createAgent({ name: "Lane isolation recipient", provider: "codex", visibility: "workspace" });
-  const issue = store.createIssue({ title: "Lane isolation", workspaceId: "local" });
+  const issue = createResponsibleTestIssue(store, { title: "Lane isolation", workspaceId: "local" });
   const session = store.getOrCreateDefaultIssueSession(issue.id);
   const comment = store.createIssueComment(issue.id, { issueSessionId: session.id, body: "Read this entry" });
   const entry = store.getConversationLogEntryById(comment.id)!;
@@ -279,7 +280,7 @@ async function verifyDeliveryLaneIsolation(store: MultiremiStore, otherLane: "se
   let otherSessionId = session.id;
   let otherAgentId = recipient.id;
   if (otherLane === "session") {
-    const otherIssue = store.createIssue({ title: "Other lane session", workspaceId: "local" });
+    const otherIssue = createResponsibleTestIssue(store, { title: "Other lane session", workspaceId: "local" });
     otherSessionId = store.getOrCreateDefaultIssueSession(otherIssue.id).id;
     store.createIssueComment(otherIssue.id, { issueSessionId: otherSessionId, body: "Unrelated entry" });
   } else {
@@ -395,7 +396,7 @@ async function verifyIssueWorkspaceAccess(store: MultiremiStore): Promise<void> 
   store.createWorkspaceMember({ workspaceId: "local", userId: "mul485_outsider", name: "Outsider", role: "member" });
   const reader = await store.createAccessToken({ name: "MUL485 reader", type: "pat", workspaceId: workspace.id, userId: "mul485_reader" });
   const outsider = await store.createAccessToken({ name: "MUL485 outsider", type: "pat", workspaceId: "local", userId: "mul485_outsider" });
-  const issue = store.createIssue({ title: "Workspace-only plan", workspaceId: workspace.id });
+  const issue = createResponsibleTestIssue(store, { title: "Workspace-only plan", workspaceId: workspace.id });
   const session = store.getOrCreateDefaultIssueSession(issue.id);
   const comment = store.createIssueComment(issue.id, { issueSessionId: session.id, body: plan });
   const path = `/api/sessions/${session.id}/log/entry?id=${comment.id}`;

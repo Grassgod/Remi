@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 // Workspace object updates/archival, project resource endpoints, and the original
 // project/squad/autopilot compatibility routes.
 import { afterEach, describe, expect, it } from "bun:test";
@@ -446,7 +447,7 @@ describe("Multiremi API — projects, squads, and workspace objects", () => {
       provider: "claude",
       workspaceId: workspace.id,
     });
-    const issue = store.createIssue({
+    const issue = createResponsibleTestIssue(store, {
       title: "Scoped task",
       workspaceId: workspace.id,
       projectId: project.id,

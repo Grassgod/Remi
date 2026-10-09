@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { requestMessageBody, taskRequestPath, sentTask } from "./unified-test-paths.js";
 import { reportFrame } from "../../fixtures/report-session.js";
 import { afterEach, describe, expect, it } from "bun:test";
@@ -956,7 +957,7 @@ describe("Multiremi API — agent plugins", () => {
     });
     const app = createMultiremiApp({ store });
 
-    const response = await app.request(taskRequestPath(store, {issueId:store.createIssue({title:"Dispatch fixture",workspaceId:"local"}).id}), {
+    const response = await app.request(taskRequestPath(store, {issueId:createResponsibleTestIssue(store, {title:"Dispatch fixture",workspaceId:"local"}).id}), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(requestMessageBody(store, {

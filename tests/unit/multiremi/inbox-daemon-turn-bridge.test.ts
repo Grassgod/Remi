@@ -1,10 +1,11 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import {it,expect,spyOn} from 'bun:test';
 import {pendingTurnBackendTests} from './pending-turn-test-backends.js';
 import {IssuesRepo} from '@multiremi/store/repos/issues-repo.js';
 pendingTurnBackendTests('MUL-506 DaemonTurnBridge',fixture=>{
   function setup(){const {store,db}=fixture();const agent=store.createAgent({name:'Daemon worker',provider:'codex'});
     store.registerRuntime({id:'rt_inbox_bridge',daemonId:'daemon_inbox_bridge',name:'Bridge runtime',provider:'codex',workspaceId:'local'});
-    const issue=store.createIssue({title:'Bridge',assigneeType:'agent',assigneeId:agent.id}),session=store.getOrCreateDefaultIssueSession(issue.id);
+    const issue=createResponsibleTestIssue(store, {title:'Bridge',assigneeType:'agent',assigneeId:agent.id}),session=store.getOrCreateDefaultIssueSession(issue.id);
     const sent=store.sendMessage({session_id:session.id,sender:{type:'member',id:'mem_local_local'},to:{type:'agent',ref:agent.id},message_kind:'request',wake_requested:'now',body_md:'start'});
     const attempt=store.claimTask('rt_inbox_bridge')!;store.startTask(attempt.id);
     const bridge=store.getDaemonTurnBridge(),scope={runtimeId:'rt_inbox_bridge',daemonId:'daemon_inbox_bridge',workspaceId:'local'},offer=bridge.offerInput(store.getTaskWithAgent(attempt.id)!);

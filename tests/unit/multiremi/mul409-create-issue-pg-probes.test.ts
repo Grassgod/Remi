@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 /**
  * MUL-409 fix round 5: the six in-transaction issue-creation call sites, plus the
  * claim lane, each probed for commit and rollback on a real Postgres connection.
@@ -366,7 +367,7 @@ describe.skipIf(!pgAvailable)("MUL-409: in-transaction issue creation on Postgre
     const runtimeId = `rt_probe_lane_${counter}`;
     store.registerRuntime({ id: runtimeId, name: `Probe lane runtime ${counter}`, provider: "claude", workspaceId });
     const agent = store.createAgent({ name: `Probe lane agent ${counter}`, provider: "claude", runtimeId, workspaceId });
-    const issue = store.createIssue({ title: `Probe lane ${counter}`, workspaceId });
+    const issue = createResponsibleTestIssue(store, { title: `Probe lane ${counter}`, workspaceId });
     const session = store.getOrCreateDefaultIssueSession(issue.id);
     const task = store.createSessionTask(session.id, { agentId: agent.id, prompt: "Probe lane reset" });
     // Make the lane look stale so the claim path resets it and writes the audit row.

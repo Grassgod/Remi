@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 /**
  * The hub's A-0 trace contract and the human-request feed (MUL-403 §2, C1).
  *
@@ -386,7 +387,7 @@ function seedTask(store: ReturnType<typeof createStore>): { id: string; workspac
     maxConcurrency: 4,
   });
   const agent = store.createAgent({ name: "Hub test agent", provider: "claude" });
-  const issue = store.createIssue({ title: "Hub human requests", workspaceId: "local" });
+  const issue = createResponsibleTestIssue(store, { title: "Hub human requests", workspaceId: "local" });
   const session = store.createIssueSession(issue.id, { title: "Requests" });
   const task = store.createTask({
     agentId: agent.id,

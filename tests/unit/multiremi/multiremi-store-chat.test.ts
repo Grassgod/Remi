@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { requestMessageBody, turnApiPath, sentTask, mutateExecutionFixture } from "./unified-test-paths.js";
 // Chat session persistence/resume plus the creator-scoped HTTP surfaces.
 import { afterEach, describe, expect, it } from "bun:test";
@@ -62,7 +63,7 @@ describe("Multiremi store — chat sessions and private agent access", () => {
   it("keeps Chat tasks independent from Issue ownership", () => {
     const store = createStore();
     const agent = store.createAgent({ name: "Private chat", provider: "codex" });
-    const issue = store.createIssue({ title: "Separate work", workspaceId: "local" });
+    const issue = createResponsibleTestIssue(store, { title: "Separate work", workspaceId: "local" });
     const session = store.createChatSession({ agentId: agent.id });
     const sent = store.sendChatMessage(session.id, { body: "Continue chatting" });
 
@@ -81,7 +82,7 @@ describe("Multiremi store — chat sessions and private agent access", () => {
     const store = createStore();
     const agent = store.createAgent({ name: "Chat", provider: "codex" });
     const runtime = store.registerRuntime({ name: "Local", provider: "codex" });
-    const issue = store.createIssue({ title: "Former accidental binding" });
+    const issue = createResponsibleTestIssue(store, { title: "Former accidental binding" });
     const chat = store.createChatSession({ agentId: agent.id });
     const sent = store.sendChatMessage(chat.id, { body: "Continue" });
     store.claimTask(runtime.id);

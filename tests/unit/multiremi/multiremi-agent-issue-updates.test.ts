@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { runTurnExecutionMutation } from '@multiremi/store/turn-execution-records.js';
 import type { SqlDatabase as UnifiedFixtureDatabase } from '@multiremi/store/db/postgres.js';
 import { beforeEach, expect, it, spyOn } from "bun:test";
@@ -13,7 +14,7 @@ pendingTurnBackendTests("MUL-486 relay Issue log", (fixture) => {
   function setup() {
     const f = fixture();
     const agent = f.store.createAgent({ name: "Relay", provider: "codex", maxConcurrentTasks: 4 });
-    const issue = f.store.createIssue({ title: "Relay log", status: "in_progress", assigneeType: "agent", assigneeId: agent.id });
+    const issue = createResponsibleTestIssue(f.store, { title: "Relay log", status: "in_progress", assigneeType: "agent", assigneeId: agent.id });
     const session = f.store.getOrCreateDefaultIssueSession(issue.id);
     const chat = f.store.createChatSession({ agentId: agent.id });
     bindFeishuTopicFixture(f.store, f.db, chat.id, issue.id);
@@ -331,7 +332,7 @@ pendingTurnBackendTests("MUL-486 relay Issue log", (fixture) => {
   it("hides system queue rows from user edits, priority, and removal", () => {
     const f = fixture();
     const agent = f.store.createAgent({ name: "Relay queue", provider: "codex", maxConcurrentTasks: 4 });
-    const issue = f.store.createIssue({ title: "Bound", status: "in_progress" });
+    const issue = createResponsibleTestIssue(f.store, { title: "Bound", status: "in_progress" });
     const chat = f.store.createChatSession({ agentId: agent.id });
     const runtime = f.store.registerRuntime({ name: "Chat", provider: "codex", maxConcurrency: 4 });
     const user = f.store.sendChatMessage(chat.id, { content: "Private turn" });

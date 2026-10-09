@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { afterEach, expect, it, setSystemTime } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { pendingTurnBackendTests } from "./pending-turn-test-backends.js";
@@ -10,8 +11,8 @@ pendingTurnBackendTests("MUL-508 Issue decision revisions", fixture => {
     const member = store.findWorkspaceMemberForUser("local", "local")!;
     const owner = store.createAgent({ name: "Parent owner", provider: "codex", ownerId: member.id });
     const worker = store.createAgent({ name: "Source owner", provider: "codex" });
-    const parent = store.createIssue({ title: "Parent", assigneeType: "agent", assigneeId: owner.id });
-    const source = store.createIssue({ title: "Source", parentIssueId: parent.id, assigneeType: "agent", assigneeId: worker.id });
+    const parent = createResponsibleTestIssue(store, { title: "Parent", assigneeType: "agent", assigneeId: owner.id });
+    const source = createResponsibleTestIssue(store, { title: "Source", parentIssueId: parent.id, assigneeType: "agent", assigneeId: worker.id });
     const task = store.createTask({ agentId: owner.id, issueId: parent.id, prompt: "Decide" });
     const sourceTask = store.createTask({ agentId: worker.id, issueId: source.id, prompt: "Ask" });
     const token = await store.createTaskAccessToken(task, "local");

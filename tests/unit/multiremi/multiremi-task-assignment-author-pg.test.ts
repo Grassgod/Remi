@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { issueMessagesPath, requestMessageBody, taskRequestPath, sentTask } from "./unified-test-paths.js";
 /**
  * MUL-448 on real PostgreSQL: the credential-derived author and the request-body
@@ -107,7 +108,7 @@ describe.skipIf(!pgAvailable)("MUL-448 task attribution on PostgreSQL", () => {
 
   it("keeps forged assignment authors out of the session ledger", async () => {
     const fixture = await freshFixture();
-    const issue = store.createIssue({ title: "MUL448 PG author", workspaceId: fixture.workspaceId });
+    const issue = createResponsibleTestIssue(store, { title: "MUL448 PG author", workspaceId: fixture.workspaceId });
     const session = store.getOrCreateDefaultIssueSession(issue.id);
     const source = store.createTask({ agentId: fixture.agentId, issueId: issue.id, prompt: "Source run", workspaceId: fixture.workspaceId });
     const taskToken = await store.createTaskAccessToken(store.getTask(source.id)!, fixture.ownerId);
@@ -157,7 +158,7 @@ describe.skipIf(!pgAvailable)("MUL-448 task attribution on PostgreSQL", () => {
 
   it("strips trigger and lineage provenance from the task row", async () => {
     const fixture = await freshFixture();
-    const issue = store.createIssue({ title: "MUL448 PG provenance", workspaceId: fixture.workspaceId });
+    const issue = createResponsibleTestIssue(store, { title: "MUL448 PG provenance", workspaceId: fixture.workspaceId });
     const session = store.getOrCreateDefaultIssueSession(issue.id);
     const comment = store.createIssueComment(issue.id, {
       body: "Real trigger comment", authorType: "member", authorId: fixture.ownerId,
@@ -193,7 +194,7 @@ describe.skipIf(!pgAvailable)("MUL-448 task attribution on PostgreSQL", () => {
 
   it("strips the comment run link and the assign/session-task lineage aliases", async () => {
     const fixture = await freshFixture();
-    const issue = store.createIssue({ title: "MUL448 PG lineage", workspaceId: fixture.workspaceId });
+    const issue = createResponsibleTestIssue(store, { title: "MUL448 PG lineage", workspaceId: fixture.workspaceId });
     const session = store.createIssueSession(issue.id, { title: "PG session" });
     const decoy = store.createTask({ agentId: fixture.agentId, issueId: issue.id, prompt: "Decoy run", workspaceId: fixture.workspaceId });
 

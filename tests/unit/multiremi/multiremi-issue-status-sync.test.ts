@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 // Regression coverage for MUL-253 symptom A: an Issue parked at `in_review`
 // while one of its agent tasks is still live.
 //
@@ -45,7 +46,7 @@ function scaffold(store: MultiremiStore, opts: { issueKind?: "intake" } = {}) {
     workspaceId: "local",
     runtimeId: runtime.id,
   });
-  const issue = store.createIssue({
+  const issue = createResponsibleTestIssue(store, {
     title: "Ship it",
     workspaceId: "local",
     assigneeType: "agent",
@@ -198,7 +199,7 @@ describe("Issue status derived from task terminal transitions", () => {
     const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "triage" });
 
     runTask(store, runtime.id, task.id);
-    store.createIssue({ title: "Generated child", workspaceId: "local", sourceIssueId: issue.id });
+    createResponsibleTestIssue(store, { title: "Generated child", workspaceId: "local", sourceIssueId: issue.id });
     store.completeTask(task.id, { output: "split into 1" });
 
     expect(store.listGeneratedIssues(issue.id)).toHaveLength(1);

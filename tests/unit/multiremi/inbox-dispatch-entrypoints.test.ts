@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import {it,expect} from 'bun:test';
 import {pendingTurnBackendTests} from './pending-turn-test-backends.js';
 import {createMultiremiApp} from '@multiremi/api.js';
@@ -9,7 +10,7 @@ pendingTurnBackendTests('MUL-508 unified dispatch replacements',fixture=>{
       const {store}=fixture();
       const runtimes=['Sender','Recipient'].map(name=>store.registerRuntime({name,provider:'codex',workspaceId:'local'}));
       const [a,b]=runtimes.map(runtime=>store.createAgent({name:runtime.name,provider:'codex',runtimeId:runtime.id}));
-      const sourceIssue=store.createIssue({title:'Source'}),target=store.createIssue({title:'Target',assigneeType:'agent',assigneeId:b!.id});
+      const sourceIssue=createResponsibleTestIssue(store, {title:'Source'}),target=createResponsibleTestIssue(store, {title:'Target',assigneeType:'agent',assigneeId:b!.id});
       const s0=store.createIssueSession(sourceIssue.id,{title:'Return here'}),s1=store.createIssueSession(target.id,{title:'Work here'});
       const source=store.createTask({agentId:a!.id,issueId:sourceIssue.id,issueSessionId:s0.id,prompt:'Coordinate'});
       expect(store.claimTask(runtimes[0]!.id)?.id).toBe(source.id);store.startTask(source.id);
@@ -58,7 +59,7 @@ pendingTurnBackendTests('MUL-508 unified dispatch replacements',fixture=>{
   it('a real dispatch/return chain reaches 2L and all four entrypoints preserve downgraded messages',async()=>{
     const {store}=fixture();const runtimes=['A','B'].map(name=>store.registerRuntime({name,provider:'codex',workspaceId:'local'}));
     const [a,b]=runtimes.map(r=>store.createAgent({name:r.name,provider:'codex',runtimeId:r.id}));
-    const issue=store.createIssue({title:'Pair'}),session=store.getOrCreateDefaultIssueSession(issue.id);
+    const issue=createResponsibleTestIssue(store, {title:'Pair'}),session=store.getOrCreateDefaultIssueSession(issue.id);
     let source=store.createTask({agentId:a!.id,issueId:issue.id,issueSessionId:session.id,prompt:'start'});
     expect(store.claimTask(runtimes[0]!.id)?.id).toBe(source.id);store.startTask(source.id);
     for(let round=0;round<5;round++){

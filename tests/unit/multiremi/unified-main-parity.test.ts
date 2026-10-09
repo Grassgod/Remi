@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { expect, it, spyOn } from 'bun:test';
 import { createMultiremiApp } from '@multiremi/api.js';
 import { IssuesRepo } from '@multiremi/store/repos/issues-repo.js';
@@ -10,8 +11,8 @@ pendingTurnBackendTests('MUL-508 main parity', fixture => {
     const {store,db}=fixture();
     const worker=store.createAgent({name:'Worker',provider:'codex',visibility:'workspace'});
     const controller=store.createAgent({name:'Controller',provider:'codex',visibility:'workspace'});
-    const parent=store.createIssue({title:'Parent',assigneeType:'agent',assigneeId:controller.id});
-    const child=store.createIssue({title:'Child',parentIssueId:parent.id,assigneeType:'agent',assigneeId:worker.id});
+    const parent=createResponsibleTestIssue(store, {title:'Parent',assigneeType:'agent',assigneeId:controller.id});
+    const child=createResponsibleTestIssue(store, {title:'Child',parentIssueId:parent.id,assigneeType:'agent',assigneeId:worker.id});
     const patrol=store.createTask({agentId:controller.id,issueId:parent.id,prompt:'Patrol'});
     const task=store.createTask({agentId:worker.id,issueId:child.id,prompt:'Work'});
     const turn=store.getTurnForAttempt(task.id)!;
@@ -75,7 +76,7 @@ pendingTurnBackendTests('MUL-508 main parity', fixture => {
     expect(f.store.getTask(child.current_attempt_id!)?.delegatedByAgentId).toBe(f.controller.id);
     f.db.run("UPDATE multiremi_turns SET status='running' WHERE id=?",[child.id]);
     f.db.run("UPDATE multiremi_turn_attempts SET status='running' WHERE id=?",[child.current_attempt_id]);
-    const blocked=f.store.createIssue({title:"Delegator blocker",status:"todo"});
+    const blocked=createResponsibleTestIssue(f.store, {title:"Delegator blocker",status:"todo"});
     f.store.createIssueDependency(f.parent.id,{dependsOnIssueId:blocked.id,type:"blocked_by"});
     f.store.updateIssue(f.parent.id,{status:"backlog"});
     expect(f.store.listUnmetPrerequisites(f.parent.id)).toHaveLength(1);
@@ -122,7 +123,7 @@ pendingTurnBackendTests('MUL-508 main parity', fixture => {
     const {store,db}=fixture();
     const workspace=store.createWorkspace({name:'Trusted empty workspace',slug:'empty-'+Date.now()+'-'+Math.floor(Math.random()*1e9)});
     db.run('DELETE FROM multiremi_workspace_members WHERE workspace_id=?',[workspace.id]);
-    const issue=store.createIssue({title:'Empty workspace',workspaceId:workspace.id});
+    const issue=createResponsibleTestIssue(store, {title:'Empty workspace',workspaceId:workspace.id});
     const session=store.getOrCreateDefaultIssueSession(issue.id);
     const app=createMultiremiApp({store,authToken:'root'});
     const events:Array<{kind:string;seq:number}>=[];
@@ -170,8 +171,8 @@ pendingTurnBackendTests('MUL-508 main parity', fixture => {
 
   it('#2: forced owner comments merge once and failed audit rolls back the whole message',async()=>{
     const f=await scaffold();f.store.cancelTask(f.task.id);
-    const blocker=f.store.createIssue({title:'Blocker',status:'in_progress'});
-    const waiting=f.store.createIssue({title:'Waiting',status:'backlog',blockedBy:[blocker.id],assigneeType:'agent',assigneeId:f.worker.id});
+    const blocker=createResponsibleTestIssue(f.store, {title:'Blocker',status:'in_progress'});
+    const waiting=createResponsibleTestIssue(f.store, {title:'Waiting',status:'backlog',blockedBy:[blocker.id],assigneeType:'agent',assigneeId:f.worker.id});
     const session=f.store.getOrCreateDefaultIssueSession(waiting.id);
     const path=`/api/sessions/${session.id}/messages`;
     const input={body_md:'Start explicitly',to:{type:'role',ref:'issue_owner'},message_kind:'request',wake_requested:'now'};
@@ -254,8 +255,8 @@ pendingTurnBackendTests('MUL-508 main parity', fixture => {
     const task=store.createTask({agentId:agent.id,prompt:'Historical orphan'});
     expect(store.claimTask(runtime.id)?.id).toBe(task.id);store.startTask(task.id);
     expect(store.createTaskSteerMessage({taskId:task.id,kind:'steer',content:'Follow up'}).attachments).toEqual([]);
-    const parent=store.createIssue({title:'Unavailable parent',assigneeType:'agent',assigneeId:agent.id});
-    const child=store.createIssue({title:'Child',parentIssueId:parent.id,status:'in_progress'});
+    const parent=createResponsibleTestIssue(store, {title:'Unavailable parent',assigneeType:'agent',assigneeId:agent.id});
+    const child=createResponsibleTestIssue(store, {title:'Child',parentIssueId:parent.id,status:'in_progress'});
     store.archiveAgent(agent.id);store.updateIssue(child.id,{status:'done'});
     expect(store.listIssueActivity(parent.id).find(row=>row.type==='child_done_parent_skipped')?.data).toMatchObject({reason:'agent_unavailable',outcome:'done'});
   });

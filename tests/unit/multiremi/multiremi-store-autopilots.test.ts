@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { taskOfferResponse } from "../../fixtures/task-offer.js";
 // Autopilot run state, cron scheduling and trigger claiming, the failure-rate
 // auto-pause, analytics, and webhook delivery.
@@ -66,7 +67,7 @@ describe("Multiremi store — autopilots, schedules, and webhooks", () => {
         conditions: [{ field: "status", operator: "becomes", value: "done" }],
       },
     });
-    const issue = store.createIssue({ title: "Already done", status: "done" });
+    const issue = createResponsibleTestIssue(store, { title: "Already done", status: "done" });
     db!.run(
       "UPDATE multiremi_issues SET completed_at = ? WHERE id = ?",
       ["2026-08-18T00:00:00.000Z", issue.id],
@@ -268,7 +269,7 @@ describe("Multiremi store — autopilots, schedules, and webhooks", () => {
     const store = createStore();
     const agent = store.createAgent({ name: "Atomic Codex", provider: "codex" });
     const runtime = store.registerRuntime({ name: "atomic-runtime", provider: "codex" });
-    const issue = store.createIssue({ title: "Atomic task transition", status: "backlog" });
+    const issue = createResponsibleTestIssue(store, { title: "Atomic task transition", status: "backlog" });
     const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "Run atomically" });
     expect(store.getIssue(issue.id)?.status).toBe("todo");
     expect(store.claimTask(runtime.id)?.id).toBe(task.id);
@@ -769,7 +770,7 @@ describe("Multiremi store — autopilots, schedules, and webhooks", () => {
     const store = createStore();
     const agent = store.createAgent({ name: "Wiki maintainer", provider: "codex" });
     const project = store.createProject({ title: "Knowledge project" });
-    const issue = store.createIssue({ title: "Ship feature", projectId: project.id, status: "in_review" });
+    const issue = createResponsibleTestIssue(store, { title: "Ship feature", projectId: project.id, status: "in_review" });
     const autopilot = store.createAutopilot({
       title: "Maintain Wiki",
       projectId: project.id,
@@ -859,7 +860,7 @@ describe("Multiremi store — autopilots, schedules, and webhooks", () => {
   it("U7 does not match dependency_auto_start_check to a done autopilot", () => {
     const store = createStore();
     const agent = store.createAgent({ name: "Done checker", provider: "claude" });
-    const issue = store.createIssue({ title: "Completed prerequisite", status: "in_progress" });
+    const issue = createResponsibleTestIssue(store, { title: "Completed prerequisite", status: "in_progress" });
     const autopilot = store.createAutopilot({ title: "Observe done", assigneeId: agent.id, executionMode: "trigger_issue" });
     store.createAutopilotTrigger(autopilot.id, {
       kind: "system_event", eventConfig: { resource: "issue", event: "status_changed",
@@ -882,7 +883,7 @@ describe("Multiremi store — autopilots, schedules, and webhooks", () => {
     const store = createStore();
     const agent = store.createAgent({ name: "Review maintainer", provider: "codex" });
     const runtime = store.registerRuntime({ name: "review-runtime", provider: "codex" });
-    const issue = store.createIssue({ title: "Review without a loop", status: "todo" });
+    const issue = createResponsibleTestIssue(store, { title: "Review without a loop", status: "todo" });
     const autopilot = store.createAutopilot({
       title: "Review on in_review",
       assigneeId: agent.id,
@@ -926,7 +927,7 @@ describe("Multiremi store — autopilots, schedules, and webhooks", () => {
   it("reuses the most recently updated active Issue Session when configured", () => {
     const store = createStore();
     const agent = store.createAgent({ name: "Wiki maintainer", provider: "claude" });
-    const issue = store.createIssue({ title: "Reuse session", status: "in_review" });
+    const issue = createResponsibleTestIssue(store, { title: "Reuse session", status: "in_review" });
     const latest = store.createIssueSession(issue.id, { title: "Latest context" });
     db!.run(
       "UPDATE multiremi_issue_sessions SET updated_at = ? WHERE id = ?",
@@ -984,7 +985,7 @@ describe("Multiremi store — autopilots, schedules, and webhooks", () => {
   it("requeues a system event when its trigger execution fails", () => {
     const store = createStore();
     const agent = store.createAgent({ name: "Wiki maintainer", provider: "codex" });
-    const issue = store.createIssue({ title: "Retry missing Issue", status: "in_review" });
+    const issue = createResponsibleTestIssue(store, { title: "Retry missing Issue", status: "in_review" });
     const autopilot = store.createAutopilot({
       title: "Retry Wiki maintenance",
       assigneeId: agent.id,

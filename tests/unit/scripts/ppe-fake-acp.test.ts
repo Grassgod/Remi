@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from '../multiremi/helpers.js';
 import { afterEach, expect, spyOn, test } from "bun:test";
 import { mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -16,7 +17,7 @@ async function world(kind: "chat" | "issue", pause = "") {
   const runtime = store.registerRuntime({ id: "rt_ppe_fixture", name: "PPE", provider: "codex", daemonId: "ppe-fixture-daemon" });
   const agent = store.createAgent({ name: "PPE", provider: "codex", runtimeId: runtime.id });
   const session = kind === "chat" ? store.createChatSession({ agentId: agent.id })
-    : store.getOrCreateDefaultIssueSession(store.createIssue({ title: "PPE", assigneeType: "agent", assigneeId: agent.id }).id);
+    : store.getOrCreateDefaultIssueSession(createResponsibleTestIssue(store, { title: "PPE", assigneeType: "agent", assigneeId: agent.id }).id);
   const marker = `MUL-493/PROBE/${kind}-first`;
   const send = (text: string) => store.sendMessage({ session_id: session.id, sender: { type: "member", id: "mem_local_local" },
     to: { type: "agent", ref: agent.id }, message_kind: "request", wake_requested: "now", body_md: text });

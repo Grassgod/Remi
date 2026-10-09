@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { expect, it } from "bun:test";
 import { mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
@@ -15,7 +16,7 @@ pendingTurnBackendTests("MUL-508 stage 1 regressions", (fixture) => {
     const user = store.getOrCreateUser({ externalId: "stage1-member", name: "Member" });
     store.createWorkspaceMember({ userId: user.id, name: user.name, role: "member" });
     const agent = store.createAgent({ name: "Private", provider: "codex", visibility: "private", ownerId: "local" });
-    const issue = store.createIssue({ title: "Stage 1", assigneeType: "agent", assigneeId: agent.id });
+    const issue = createResponsibleTestIssue(store, { title: "Stage 1", assigneeType: "agent", assigneeId: agent.id });
     const session = store.getOrCreateDefaultIssueSession(issue.id);
     const token = await store.createAccessToken({ type: "pat", name: "Member", userId: user.id, workspaceId: "local" });
     const app = createMultiremiApp({ store, authToken: "stage1-master" });
@@ -44,7 +45,7 @@ pendingTurnBackendTests("MUL-508 stage 1 regressions", (fixture) => {
     const dir = mkdtempSync(join(tmpdir(), "mul508-denied-")), previous = process.env.MULTIREMI_UPLOAD_DIR;
     process.env.MULTIREMI_UPLOAD_DIR = dir;
     const snapshot = () => ["multiremi_conversation_log", "multiremi_turns", "multiremi_turn_attempts", "multiremi_attachments", "multiremi_conversation_heads"].map(table => Number(f.db.query(`SELECT COUNT(*) AS n FROM ${table}`).get().n));
-    const parent = f.store.createIssue({ title: "Parent", assigneeType: "agent", assigneeId: f.agent.id });
+    const parent = createResponsibleTestIssue(f.store, { title: "Parent", assigneeType: "agent", assigneeId: f.agent.id });
     f.store.updateIssue(f.issue.id, { parentIssueId: parent.id });
     const before = snapshot();
     let enqueued = 0;
@@ -230,7 +231,7 @@ pendingTurnBackendTests("MUL-508 stage 1 regressions", (fixture) => {
 
   it("S5: sends committed workspace inbox invalidations to both tabs, isolating rollback and other workspaces", async () => {
     const f = await scaffold();
-    const second = f.store.createIssue({ title: "Other conversation" }), session = f.store.getOrCreateDefaultIssueSession(second.id);
+    const second = createResponsibleTestIssue(f.store, { title: "Other conversation" }), session = f.store.getOrCreateDefaultIssueSession(second.id);
     const frames: any[][] = [[], [], []], events: any[] = [], transactionStates: boolean[] = [];
     const client = (i: number, workspaceId: string) => ({ data: { kind: "browser", workspaceId, authenticated: true, userId: "local", accessToken: null }, sendText: (frame: string) => frames[i]!.push(JSON.parse(frame)), close() {} });
     const fanout = createRealtimeFanout({ role: "all", store: f.store, registries: { browser: new Map([["local", new Set([client(0, "local"), client(1, "local")])], ["other-workspace", new Set([client(2, "other-workspace")])]]) as any, browserUser: new Map() } });

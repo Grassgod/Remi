@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { issueMessagesPath, requestMessageBody } from "./unified-test-paths.js";
 // Pinned shortcuts, issue/project search, issue subscribers and the member inbox.
 import { afterEach, describe, expect, it } from "bun:test";
@@ -10,7 +11,7 @@ describe("Multiremi API — pins, search, and inbox", () => {
   it("serves pinned item endpoints", async () => {
     const store = createStore();
     const app = createMultiremiApp({ store });
-    const issue = store.createIssue({ title: "Pinned API issue", workspaceId: "local" });
+    const issue = createResponsibleTestIssue(store, { title: "Pinned API issue", workspaceId: "local" });
     const project = store.createProject({ title: "Pinned API project", workspaceId: "local" });
 
     const issuePin = await app.request("/api/multiremi/pins", {
@@ -78,12 +79,12 @@ describe("Multiremi API — pins, search, and inbox", () => {
   it("serves issue and project search endpoints", async () => {
     const store = createStore();
     const app = createMultiremiApp({ store });
-    const issue = store.createIssue({ title: "Searchable API issue", description: "Has api needle context", workspaceId: "local" });
-    const closedIssue = store.createIssue({ title: "Closed API issue", description: "closed needle", workspaceId: "local" });
+    const issue = createResponsibleTestIssue(store, { title: "Searchable API issue", description: "Has api needle context", workspaceId: "local" });
+    const closedIssue = createResponsibleTestIssue(store, { title: "Closed API issue", description: "closed needle", workspaceId: "local" });
     store.updateIssue(closedIssue.id, { status: "done" });
-    const commentedIssue = store.createIssue({ title: "Comment API issue", description: "No matching body", workspaceId: "local", createdBy: "api-user" });
+    const commentedIssue = createResponsibleTestIssue(store, { title: "Comment API issue", description: "No matching body", workspaceId: "local", createdBy: "api-user" });
     store.createIssueComment(commentedIssue.id, { authorType: "member", body: "Fresh comment needle context" });
-    const remoteIssue = store.createIssue({ title: "Remote Issue Needle", description: "Remote issue needle", workspaceId: "remote" });
+    const remoteIssue = createResponsibleTestIssue(store, { title: "Remote Issue Needle", description: "Remote issue needle", workspaceId: "remote" });
     store.createProject({ title: "Searchable API project", description: "No needle", workspaceId: "local" });
     store.createProject({ title: "Other project", description: "Project needle context", workspaceId: "local" });
     const closedProject = store.createProject({ title: "Closed Project", description: "Closed project needle", status: "cancelled", workspaceId: "local" });
@@ -163,7 +164,7 @@ describe("Multiremi API — pins, search, and inbox", () => {
     store.onWorkspaceEvent((event) => events.push(event));
     const alice = store.createWorkspaceMember({ name: "Alice API" });
     const bob = store.createWorkspaceMember({ name: "Bob API" });
-    const issue = store.createIssue({ title: "Inbox API", createdBy: alice.id });
+    const issue = createResponsibleTestIssue(store, { title: "Inbox API", createdBy: alice.id });
 
     const subscribed = await app.request(`/api/multiremi/issues/${issue.id}/subscribers`, {
       method: "POST",
@@ -304,7 +305,7 @@ describe("Multiremi API — pins, search, and inbox", () => {
     const app = createMultiremiApp({ store });
     const reviewer = store.createWorkspaceMember({ name: "Reviewer", userId: "user-rev" });
     const author = store.createWorkspaceMember({ name: "Author", userId: "user-author" });
-    const issue = store.createIssue({ title: "Inbox identity", createdBy: reviewer.id });
+    const issue = createResponsibleTestIssue(store, { title: "Inbox identity", createdBy: reviewer.id });
     store.createIssueComment(issue.id, { authorType: "member", authorId: author.id, body: "ping subscribers" });
 
     // Sanity: the notification row exists under the member id.
@@ -332,7 +333,7 @@ describe("Multiremi API — pins, search, and inbox", () => {
     const reviewer = store.createWorkspaceMember({ name: "Paged Reviewer", userId: "user-page" });
     const author = store.createWorkspaceMember({ name: "Paged Author", userId: "user-page-author" });
     for (const title of ["First page issue", "Second page issue", "Third page issue"]) {
-      const issue = store.createIssue({ title, createdBy: reviewer.id });
+      const issue = createResponsibleTestIssue(store, { title, createdBy: reviewer.id });
       store.createIssueComment(issue.id, {
         authorType: "member",
         authorId: author.id,
@@ -380,8 +381,8 @@ describe("Multiremi API — pins, search, and inbox", () => {
       name: "Parent scope author",
       role: "member",
     });
-    const parent = store.createIssue({ title: "Private parent in B", workspaceId: workspaceA.id });
-    const child = store.createIssue({
+    const parent = createResponsibleTestIssue(store, { title: "Private parent in B", workspaceId: workspaceA.id });
+    const child = createResponsibleTestIssue(store, {
       title: "Child staying in A",
       workspaceId: workspaceA.id,
       parentIssueId: parent.id,
@@ -441,8 +442,8 @@ describe("Multiremi API — pins, search, and inbox", () => {
     const store = createStore();
     const reviewer = store.createWorkspaceMember({ name: "Deleted parent reviewer", userId: "usr_deleted_parent" });
     const author = store.createWorkspaceMember({ name: "Deleted parent author", userId: "usr_deleted_parent_author" });
-    const parent = store.createIssue({ title: "Parent to delete" });
-    const child = store.createIssue({ title: "Orphaned child", parentIssueId: parent.id, createdBy: reviewer.id });
+    const parent = createResponsibleTestIssue(store, { title: "Parent to delete" });
+    const child = createResponsibleTestIssue(store, { title: "Orphaned child", parentIssueId: parent.id, createdBy: reviewer.id });
     store.createIssueComment(child.id, {
       authorType: "member",
       authorId: author.id,

@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { runTurnExecutionMutation } from "@multiremi/store/turn-execution-records.js";
 // What happens while a claimed task runs: ACP message ingress, completion
 // side effects (issue comments, realtime events), per-agent/per-runtime capacity,
@@ -31,7 +32,7 @@ describe("Multiremi store — task message ingress, completion, and capacity", (
     const store = createStore();
     const runtime = store.registerRuntime({ id: "rt_compaction", name: "compaction", provider: "claude", workspaceId: "local" });
     const agent = store.createAgent({ name: "Compaction Bot", provider: "claude", runtimeId: runtime.id });
-    const issue = store.createIssue({ title: "Compaction tail", workspaceId: "local" });
+    const issue = createResponsibleTestIssue(store, { title: "Compaction tail", workspaceId: "local" });
     const task = store.createTask({ agentId: agent.id, issueId: issue.id, workspaceId: "local", prompt: "fix it" });
     expect(store.claimTask(runtime.id)?.id).toBe(task.id);
     store.startTask(task.id);
@@ -53,7 +54,7 @@ describe("Multiremi store — task message ingress, completion, and capacity", (
     const store = createStore();
     const runtime = store.registerRuntime({ id: "rt_acp_semantics", name: "acp", provider: "claude", workspaceId: "local" });
     const agent = store.createAgent({ name: "ACP Bot", provider: "claude", runtimeId: runtime.id });
-    const issue = store.createIssue({ title: "ACP", workspaceId: "local" });
+    const issue = createResponsibleTestIssue(store, { title: "ACP", workspaceId: "local" });
     const task = store.createTask({ agentId: agent.id, issueId: issue.id, workspaceId: "local", prompt: "x" });
 
     const fired: number[] = [];
@@ -126,7 +127,7 @@ describe("Multiremi store — task message ingress, completion, and capacity", (
     const store = createStore();
     const runtime = store.registerRuntime({ id: "rt_caps", name: "caps", provider: "claude", workspaceId: "local" });
     const agent = store.createAgent({ name: "Caps Bot", provider: "claude", runtimeId: runtime.id });
-    const issue = store.createIssue({ title: "Caps", workspaceId: "local" });
+    const issue = createResponsibleTestIssue(store, { title: "Caps", workspaceId: "local" });
     const task = store.createTask({ agentId: agent.id, issueId: issue.id, workspaceId: "local", prompt: "x" });
 
     const big = "a".repeat(200_000);
@@ -147,7 +148,7 @@ describe("Multiremi store — task message ingress, completion, and capacity", (
     const agent = store.createAgent({ name: "Reply Bot", provider: "claude", runtimeId: runtime.id });
 
     // Direct work also has a request message; the final reply threads under it.
-    const issue = store.createIssue({ title: "总结项目", workspaceId: "local" });
+    const issue = createResponsibleTestIssue(store, { title: "总结项目", workspaceId: "local" });
     const task = store.createTask({ agentId: agent.id, issueId: issue.id, workspaceId: "local", prompt: "总结项目" });
     expect(store.claimTask(runtime.id)?.id).toBe(task.id);
     store.startTask(task.id);
@@ -200,7 +201,7 @@ describe("Multiremi store — task message ingress, completion, and capacity", (
     const store = createStore();
     const runtime = store.registerRuntime({ id: "rt_no_dup", name: "no dup", provider: "claude", workspaceId: "local" });
     const agent = store.createAgent({ name: "Self Bot", provider: "claude", runtimeId: runtime.id });
-    const issue = store.createIssue({ title: "架构", workspaceId: "local" });
+    const issue = createResponsibleTestIssue(store, { title: "架构", workspaceId: "local" });
     const task = store.createTask({ agentId: agent.id, issueId: issue.id, workspaceId: "local", prompt: "总结架构" });
     expect(store.claimTask(runtime.id)?.id).toBe(task.id);
     store.startTask(task.id);
@@ -221,7 +222,7 @@ describe("Multiremi store — task message ingress, completion, and capacity", (
     const store = createStore();
     const runtime = store.registerRuntime({ id: "rt_ws_events", name: "ws events", provider: "claude", workspaceId: "local" });
     const agent = store.createAgent({ name: "Event Bot", provider: "claude", runtimeId: runtime.id });
-    const issue = store.createIssue({ title: "实时推送", workspaceId: "local", assigneeType: "agent", assigneeId: agent.id });
+    const issue = createResponsibleTestIssue(store, { title: "实时推送", workspaceId: "local", assigneeType: "agent", assigneeId: agent.id });
     const task = store.createTask({ agentId: agent.id, issueId: issue.id, workspaceId: "local", prompt: "回答" });
     expect(store.claimTask(runtime.id)?.id).toBe(task.id);
     store.startTask(task.id);
@@ -264,7 +265,7 @@ describe("Multiremi store — task message ingress, completion, and capacity", (
     // Production shape: the request identity is a user id ("local"), while the
     // workspace member row is keyed mem_<ws>_<userId> with a user_id link.
     store.createWorkspaceMember({ id: "mem_local_local", userId: "local", name: "贺华杰", workspaceId: "local" });
-    const issue = store.createIssue({ title: "架构图", workspaceId: "local", createdBy: "local" });
+    const issue = createResponsibleTestIssue(store, { title: "架构图", workspaceId: "local", createdBy: "local" });
 
     const subscribersAfterCreate = store.listIssueSubscribers(issue.id);
     expect(subscribersAfterCreate.map((s) => s.userId)).toContain("mem_local_local");
@@ -285,7 +286,7 @@ describe("Multiremi store — task message ingress, completion, and capacity", (
     const store = createStore();
     const runtime = store.registerRuntime({ id: "rt_trigger_cancel", name: "trigger cancel", provider: "claude", workspaceId: "local" });
     const agent = store.createAgent({ name: "Comment Bot", provider: "claude", runtimeId: runtime.id });
-    const issue = store.createIssue({ title: "Trigger cancellation", workspaceId: "local" });
+    const issue = createResponsibleTestIssue(store, { title: "Trigger cancellation", workspaceId: "local" });
 
     const edited = store.createIssueComment(issue.id, {
       body: `Please inspect [@Comment Bot](mention://agent/${agent.id}).`,
@@ -310,8 +311,8 @@ describe("Multiremi store — task message ingress, completion, and capacity", (
     const store = createStore();
     const agent = store.createAgent({ name: "Codex", provider: "codex", maxConcurrentTasks: 2 });
     const runtime = store.registerRuntime({ name: "local-codex", provider: "codex", maxConcurrency: 3 });
-    const issueA = store.createIssue({ title: "Issue A", assigneeType: "agent", assigneeId: agent.id });
-    const issueB = store.createIssue({ title: "Issue B", assigneeType: "agent", assigneeId: agent.id });
+    const issueA = createResponsibleTestIssue(store, { title: "Issue A", assigneeType: "agent", assigneeId: agent.id });
+    const issueB = createResponsibleTestIssue(store, { title: "Issue B", assigneeType: "agent", assigneeId: agent.id });
     const firstA = store.createTask({ agentId: agent.id, issueId: issueA.id, prompt: "A1" });
     const secondA = store.createTask({ agentId: agent.id, issueId: issueA.id, prompt: "A2" });
     const firstB = store.createTask({ agentId: agent.id, issueId: issueB.id, prompt: "B1" });
@@ -371,7 +372,7 @@ describe("Multiremi store — task message ingress, completion, and capacity", (
     const store = createStore();
     const agent = store.createAgent({ name: "Codex", provider: "codex", maxConcurrentTasks: 2 });
     const runtime = store.registerRuntime({ name: "local-codex", provider: "codex", maxConcurrency: 2 });
-    const issue = store.createIssue({ title: "Local directory lock", assigneeType: "agent", assigneeId: agent.id });
+    const issue = createResponsibleTestIssue(store, { title: "Local directory lock", assigneeType: "agent", assigneeId: agent.id });
     const first = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "First" });
     const second = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "Second" });
 
@@ -395,8 +396,8 @@ describe("Multiremi store — task message ingress, completion, and capacity", (
   it("honors runtime max concurrency and derives stale liveness", () => {
     const store = createStore();
     const agent = store.createAgent({ name: "Codex", provider: "codex", maxConcurrentTasks: 2 });
-    const firstIssue = store.createIssue({ title: "First usage task", assigneeType: "agent", assigneeId: agent.id });
-    const secondIssue = store.createIssue({ title: "Second usage task", assigneeType: "agent", assigneeId: agent.id });
+    const firstIssue = createResponsibleTestIssue(store, { title: "First usage task", assigneeType: "agent", assigneeId: agent.id });
+    const secondIssue = createResponsibleTestIssue(store, { title: "Second usage task", assigneeType: "agent", assigneeId: agent.id });
     const first = store.createTask({ agentId: agent.id, issueId: firstIssue.id, prompt: "First" });
     const second = store.createTask({ agentId: agent.id, issueId: secondIssue.id, prompt: "Second" });
     const runtime = store.registerRuntime({ name: "local-codex", provider: "codex", maxConcurrency: 1 });
@@ -428,8 +429,8 @@ describe("Multiremi store — task message ingress, completion, and capacity", (
       metadata: { version: "1.0.0", cli_version: "0.2.26", launched_by: "desktop", parallel_agent_execution: 1 },
       models: [{ id: "gpt-5.5", label: "GPT-5.5", provider: "openai", default: true }],
     });
-    const firstIssue = store.createIssue({ title: "First usage task", assigneeType: "agent", assigneeId: agent.id });
-    const secondIssue = store.createIssue({ title: "Second usage task", assigneeType: "agent", assigneeId: agent.id });
+    const firstIssue = createResponsibleTestIssue(store, { title: "First usage task", assigneeType: "agent", assigneeId: agent.id });
+    const secondIssue = createResponsibleTestIssue(store, { title: "Second usage task", assigneeType: "agent", assigneeId: agent.id });
     const first = store.createTask({ agentId: agent.id, issueId: firstIssue.id, prompt: "First" });
     const second = store.createTask({ agentId: agent.id, issueId: secondIssue.id, prompt: "Second" });
 

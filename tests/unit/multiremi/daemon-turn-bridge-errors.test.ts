@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { afterAll, describe, expect, it, spyOn } from "bun:test";
 import { DAEMON_MIN_CLI_VERSION, daemonFrameCategory } from "@multiremi/contracts/daemon-protocol.js";
 import { DaemonProtocolLayer } from "@multiremi/api/daemon-protocol/index.js";
@@ -28,7 +29,7 @@ async function openTurn(backend: (typeof backends)[number]) {
   }, { accessToken: null, masterToken: true });
   const close = async () => { session.handleSocketClose(); layer.stop(); await opened.close(); };
   try {
-    const issue = store.createIssue({ title: "Turn rejection", workspaceId: "local" });
+    const issue = createResponsibleTestIssue(store, { title: "Turn rejection", workspaceId: "local" });
     const task = store.createTask({ agentId: agent.id, issueId: issue.id, workspaceId: "local", prompt: "Short input" });
     expect(store.claimTask(runtime.id)?.id).toBe(task.id);
     store.startTask(task.id);

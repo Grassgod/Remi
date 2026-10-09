@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { runTurnExecutionMutation } from '@multiremi/store/turn-execution-records.js';
 import type { SqlDatabase as UnifiedFixtureDatabase } from '@multiremi/store/db/postgres.js';
 /**
@@ -216,7 +217,7 @@ describe.skipIf(!pgAvailable)("MUL-465 atomic PostgreSQL boundaries", () => {
     store.updateWorkspace(fixture.workspaceId, {
       settings: { issueTopics: { enabled: true, chatId: `oc_mul465_round_${fixtureNumber}` } },
     });
-    const issue = store.createIssue({
+    const issue = createResponsibleTestIssue(store, {
       title: "PG round boundary", workspaceId: fixture.workspaceId,
       assigneeType: "agent", assigneeId: fixture.agent.id,
     });
@@ -387,7 +388,7 @@ describe.skipIf(!pgAvailable)("MUL-465 atomic PostgreSQL boundaries", () => {
 
   it("keeps workspace before session locking and wakes only after the steer transaction commits", () => {
     const { workspaceId, agent, runtime } = freshAgent();
-    const issue = store.createIssue({ title: "Steer lock order", workspaceId });
+    const issue = createResponsibleTestIssue(store, { title: "Steer lock order", workspaceId });
     const session = store.getOrCreateDefaultIssueSession(issue.id);
     const task = store.createSessionTask(session.id, { agentId: agent.id, prompt: "Steer me" });
     expect(store.claimTask(runtime.id)?.id).toBe(task.id);
@@ -439,7 +440,7 @@ describe.skipIf(!pgAvailable)("MUL-465 atomic PostgreSQL boundaries", () => {
 
   it("publishes terminal human-request cancellation after commit and not after rollback", () => {
     const { workspaceId, agent, runtime } = freshAgent();
-    const issue = store.createIssue({ title: "Terminal request", workspaceId });
+    const issue = createResponsibleTestIssue(store, { title: "Terminal request", workspaceId });
     const makePending = () => {
       const task = store.createTask({ agentId: agent.id, issueId: issue.id, workspaceId, prompt: "Work" });
       runTurnExecutionMutation(db as unknown as UnifiedFixtureDatabase, "UPDATE multiremi_turn_execution_records SET runtime_id = ?, status = 'running' WHERE id = ?", [runtime.id, task.id]);
@@ -476,8 +477,8 @@ describe.skipIf(!pgAvailable)("MUL-465 atomic PostgreSQL boundaries", () => {
     const supervisorAgent = store.createAgent({
       name: "PG organizer", provider: "codex", workspaceId, role: "supervisor",
     });
-    const patrol = store.createIssue({ title: "PG organizer patrol", workspaceId });
-    const targetIssue = store.createIssue({ title: "PG organizer target", workspaceId, status: "in_progress" });
+    const patrol = createResponsibleTestIssue(store, { title: "PG organizer patrol", workspaceId });
+    const targetIssue = createResponsibleTestIssue(store, { title: "PG organizer target", workspaceId, status: "in_progress" });
     const supervisorTask = store.createTask({ agentId: supervisorAgent.id, issueId: patrol.id, prompt: "Patrol" });
     const session = store.getOrCreateDefaultIssueSession(targetIssue.id);
     const targetTask = store.createSessionTask(session.id, { agentId: workerAgent.id, prompt: "Organizer target" });

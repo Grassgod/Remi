@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
 import type { Database } from "bun:sqlite";
 import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
@@ -44,8 +45,8 @@ function registerTaskWakeupContract(label: string, currentStore: () => Store): v
   it(`${label}: wakes a force-started task once, after COMMIT`, () => {
     const store = currentStore();
     const owner = createRunnableOwner(store, `${label} force`);
-    const prerequisite = store.createIssue({ title: `${label} force prerequisite`, status: "in_progress" });
-    const dependent = store.createIssue({
+    const prerequisite = createResponsibleTestIssue(store, { title: `${label} force prerequisite`, status: "in_progress" });
+    const dependent = createResponsibleTestIssue(store, {
       title: `${label} force dependent`,
       status: "backlog",
       blockedBy: [prerequisite.id],
@@ -73,8 +74,8 @@ function registerTaskWakeupContract(label: string, currentStore: () => Store): v
   it(`${label}: wakes an automatically started task once, after COMMIT`, () => {
     const store = currentStore();
     const owner = createRunnableOwner(store, `${label} auto`);
-    const prerequisite = store.createIssue({ title: `${label} auto prerequisite`, status: "in_progress" });
-    const dependent = store.createIssue({
+    const prerequisite = createResponsibleTestIssue(store, { title: `${label} auto prerequisite`, status: "in_progress" });
+    const dependent = createResponsibleTestIssue(store, {
       title: `${label} auto dependent`,
       status: "backlog",
       blockedBy: [prerequisite.id],
@@ -100,8 +101,8 @@ function registerTaskWakeupContract(label: string, currentStore: () => Store): v
   it.each(["force", "auto"] as const)(`${label}: drops the %s wakeup when task creation rolls back`, (kind) => {
     const store = currentStore();
     const owner = createRunnableOwner(store, `${label} rollback ${kind}`);
-    const prerequisite = store.createIssue({ title: `${label} rollback prerequisite ${kind}`, status: "in_progress" });
-    const dependent = store.createIssue({
+    const prerequisite = createResponsibleTestIssue(store, { title: `${label} rollback prerequisite ${kind}`, status: "in_progress" });
+    const dependent = createResponsibleTestIssue(store, {
       title: `${label} rollback dependent ${kind}`,
       status: "backlog",
       blockedBy: [prerequisite.id],
@@ -151,7 +152,7 @@ function registerTaskWakeupContract(label: string, currentStore: () => Store): v
     stopOrdinary();
     expect(ordinaryWakeups).toEqual([ordinary.id]);
 
-    const issue = store.createIssue({ title: `${label} session issue`, status: "todo" });
+    const issue = createResponsibleTestIssue(store, { title: `${label} session issue`, status: "todo" });
     const session = store.getOrCreateDefaultIssueSession(issue.id);
     const sessionWakeups: string[] = [];
     const stopSession = store.onTaskEnqueued((task) => sessionWakeups.push(task.id));
@@ -258,7 +259,7 @@ function registerForcedSkipHttpContract(label: string, currentStore: () => Store
     it(`${label}: force keeps todo and records one skip for ${testCase.kind}`, async () => {
       const store = currentStore();
       store.ensureLocalWorkspace();
-      const prerequisite = store.createIssue({
+      const prerequisite = createResponsibleTestIssue(store, {
         title: `${label} ${testCase.kind} prerequisite`,
         status: "in_progress",
       });
@@ -287,7 +288,7 @@ function registerForcedSkipHttpContract(label: string, currentStore: () => Store
         assigneeId = member.id;
       }
 
-      const dependent = store.createIssue({
+      const dependent = createResponsibleTestIssue(store, {
         title: `${label} ${testCase.kind} dependent`,
         status: "backlog",
         blockedBy: [prerequisite.id],
@@ -319,8 +320,8 @@ function registerForcedSkipHttpContract(label: string, currentStore: () => Store
     const store = currentStore();
     store.ensureLocalWorkspace();
     const member = store.listWorkspaceMembers("local")[0]!;
-    const prerequisite = store.createIssue({ title: `${label} skip rollback prerequisite`, status: "in_progress" });
-    const dependent = store.createIssue({
+    const prerequisite = createResponsibleTestIssue(store, { title: `${label} skip rollback prerequisite`, status: "in_progress" });
+    const dependent = createResponsibleTestIssue(store, {
       title: `${label} skip rollback dependent`,
       status: "backlog",
       blockedBy: [prerequisite.id],

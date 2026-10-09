@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { runTurnExecutionMutation } from "@multiremi/store/turn-execution-records.js";
 import { expect } from "bun:test";
 import type { MultiremiStore } from "@multiremi/store.js";
@@ -105,7 +106,7 @@ export function assertRejectedAuditWithLegacyRun(store: MultiremiStore, db: SqlD
 export async function assertRecordedV2RetryChain(store: MultiremiStore, db: SqlDatabase, startupWhileQueued: boolean): Promise<void> {
   const runtime = store.registerRuntime({ name: `native retry ${startupWhileQueued}`, provider: "claude", workspaceId: "local" });
   const agent = store.createAgent({ name: `native retry ${startupWhileQueued}`, provider: "claude", workspaceId: "local", runtimeId: runtime.id });
-  const issue = store.createIssue({ title: "synthetic recovery", workspaceId: "local" });
+  const issue = createResponsibleTestIssue(store, { title: "synthetic recovery", workspaceId: "local" });
   const parent = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "synthetic retry chain", workspaceId: "local", maxAttempts: 2 });
   expect(store.claimTask(runtime.id)?.id).toBe(parent.id);
   store.startTask(parent.id, "v2-parent", runtime.id);

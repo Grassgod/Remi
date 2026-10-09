@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { requestMessageBody, taskRequestPath, sentTask, issueMessagesPath, turnApiPath } from "./unified-test-paths.js";
 /**
  * MUL-456 fix round 1, blocker 2: the terminal transaction resolves the result
@@ -67,8 +68,8 @@ function fixture(store: MultiremiStore, daemonId?: string) {
   const leader = store.createAgent({ name: "Leader", provider: "claude", runtimeId: leaderRuntime.id });
   const worker = store.createAgent({ name: "Worker", provider: "claude", runtimeId: workerRuntime.id });
   const squad = store.createSquad({ name: "Core", leaderId: leader.id, memberIds: [worker.id] });
-  const parent = store.createIssue({ title: "Parent", status: "in_progress", assigneeType: "squad", assigneeId: squad.id });
-  const child = store.createIssue({ title: "Child", parentIssueId: parent.id, status: "in_progress",
+  const parent = createResponsibleTestIssue(store, { title: "Parent", status: "in_progress", assigneeType: "squad", assigneeId: squad.id });
+  const child = createResponsibleTestIssue(store, { title: "Child", parentIssueId: parent.id, status: "in_progress",
     assigneeType: "agent", assigneeId: worker.id });
   const leaderSession = store.createIssueSession(parent.id, { title: "Dispatch round" });
   const leaderTask = store.createTask({ agentId: leader.id, issueId: parent.id,
@@ -433,7 +434,7 @@ async function runRedispatchThenDrainSnapshotCase(store: MultiremiStore): Promis
     store.updateWorkspace("local", { settings: { organizer: { mode: "act" } } });
     const supervisor = store.createAgent({ name: "Snapshot supervisor", provider: "claude", role: "supervisor" });
     store.setAgentSupervisor(supervisor.id, true);
-    const patrol = store.createIssue({ title: "Snapshot patrol", status: "in_progress" });
+    const patrol = createResponsibleTestIssue(store, { title: "Snapshot patrol", status: "in_progress" });
     const supervisorTask = store.createTask({ agentId: supervisor.id, issueId: patrol.id, prompt: "Supervise." });
     const supervisorToken = await store.createTaskAccessToken(supervisorTask, "local");
     const redispatched = await requestJson(base, turnApiPath(store, originalReturn.id, "/retry"),
@@ -577,7 +578,7 @@ async function runDelegateWakeupCoverageStillDrainsHistoryCase(store: MultiremiS
     store.updateWorkspace("local", { settings: { organizer: { mode: "act" } } });
     const supervisor = store.createAgent({ name: "Drain supervisor", provider: "claude", role: "supervisor" });
     store.setAgentSupervisor(supervisor.id, true);
-    const patrol = store.createIssue({ title: "Drain patrol", status: "in_progress" });
+    const patrol = createResponsibleTestIssue(store, { title: "Drain patrol", status: "in_progress" });
     const supervisorTask = store.createTask({ agentId: supervisor.id, issueId: patrol.id, prompt: "Supervise." });
     const supervisorToken = await store.createTaskAccessToken(supervisorTask, "local");
     const redispatched = await requestJson(base, turnApiPath(store, firstReturn.id, "/retry"),

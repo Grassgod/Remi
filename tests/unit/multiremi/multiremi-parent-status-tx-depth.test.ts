@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { runTurnExecutionMutation } from '@multiremi/store/turn-execution-records.js';
 import type { SqlDatabase as UnifiedFixtureDatabase } from '@multiremi/store/db/postgres.js';
 /**
@@ -116,7 +117,7 @@ export function runTask(store: Store, runtimeId: string, taskId: string) {
 }
 
 function busyParent(store: Store, agentId: string, title: string) {
-  const parent = store.createIssue({
+  const parent = createResponsibleTestIssue(store, {
     title,
     status: "in_progress",
     assigneeType: "agent",
@@ -131,13 +132,13 @@ describe("MUL-400 S1 transaction depth — issue write paths", () => {
   for (const status of ["done", "blocked", "cancelled"] as const) {
     it(`keeps updateIssue(child -> ${status}) at depth 1 when the owner is free`, () => {
       const { store, agent } = setupDepthStore();
-      const parent = store.createIssue({
+      const parent = createResponsibleTestIssue(store, {
         title: `Free parent ${status}`,
         status: "in_progress",
         assigneeType: "agent",
         assigneeId: agent.id,
       });
-      const child = store.createIssue({ title: `Child ${status}`, parentIssueId: parent.id, status: "in_progress" });
+      const child = createResponsibleTestIssue(store, { title: `Child ${status}`, parentIssueId: parent.id, status: "in_progress" });
       const counter = wrapStore(store);
       counter.reset();
       store.updateIssue(child.id, { status });
@@ -152,7 +153,7 @@ describe("MUL-400 S1 transaction depth — issue write paths", () => {
     it(`keeps updateIssue(child -> ${status}) at depth 1 when the owner is busy`, () => {
       const { store, agent } = setupDepthStore();
       const parent = busyParent(store, agent.id, `Busy parent ${status}`);
-      const child = store.createIssue({ title: `Busy child ${status}`, parentIssueId: parent.id, status: "in_progress" });
+      const child = createResponsibleTestIssue(store, { title: `Busy child ${status}`, parentIssueId: parent.id, status: "in_progress" });
       const counter = wrapStore(store);
       counter.reset();
       store.updateIssue(child.id, { status });
@@ -181,10 +182,10 @@ describe("MUL-400 S1 transaction depth — issue write paths", () => {
 
   it("keeps the in_review-parent re-derivation for a new child at depth 1", () => {
     const { store } = setupDepthStore();
-    const parent = store.createIssue({ title: "Review parent", status: "in_review" });
+    const parent = createResponsibleTestIssue(store, { title: "Review parent", status: "in_review" });
     const counter = wrapStore(store);
     counter.reset();
-    store.createIssue({ title: "New child", parentIssueId: parent.id, status: "todo" });
+    createResponsibleTestIssue(store, { title: "New child", parentIssueId: parent.id, status: "todo" });
     expect(counter.max).toBeLessThanOrEqual(1);
     expect(store.getIssue(parent.id)?.status).toBe("in_progress");
     expect(store.listIssueActivity(parent.id).filter((entry) => entry.type === "parent_status_derived"))
@@ -193,14 +194,14 @@ describe("MUL-400 S1 transaction depth — issue write paths", () => {
 
   it("keeps the re-derivation on a new child and on a re-parented child at depth 1", () => {
     const { store } = setupDepthStore();
-    const parent = store.createIssue({ title: "Derive parent", status: "in_review" });
+    const parent = createResponsibleTestIssue(store, { title: "Derive parent", status: "in_review" });
     const counter = wrapStore(store);
 
     // A child created under an in_review parent pushes it back. `createIssue`
     // is a single INSERT that re-derives inline, so it needs no transaction of
     // its own; the ceiling is what matters here.
     counter.reset();
-    const child = store.createIssue({ title: "Late child", parentIssueId: parent.id, status: "in_progress" });
+    const child = createResponsibleTestIssue(store, { title: "Late child", parentIssueId: parent.id, status: "in_progress" });
     expect(counter.max, "createIssue").toBeLessThanOrEqual(1);
     expect(store.getIssue(parent.id)?.status).toBe("in_progress");
 
@@ -208,14 +209,14 @@ describe("MUL-400 S1 transaction depth — issue write paths", () => {
     // in review (a member decision, so `force`), then move the first child to a
     // different parent: BOTH parents re-derive — the new one because a child
     // arrived, the old one because its remaining child set is still open.
-    const stayBehind = store.createIssue({
+    const stayBehind = createResponsibleTestIssue(store, {
       title: "Stays behind",
       parentIssueId: parent.id,
       status: "in_progress",
     });
     store.updateIssue(parent.id, { status: "in_review", force: true });
     expect(store.getIssue(parent.id)?.status).toBe("in_review");
-    const second = store.createIssue({ title: "Second parent", status: "in_review" });
+    const second = createResponsibleTestIssue(store, { title: "Second parent", status: "in_review" });
     counter.reset();
     store.updateIssue(child.id, { parentIssueId: second.id });
     expect(counter.max, "re-parent").toBe(1);
@@ -228,7 +229,7 @@ describe("MUL-400 S1 transaction depth — issue write paths", () => {
 describe("MUL-400 S1 transaction depth — task terminal paths", () => {
   it("keeps completeTask, failTask and cancelTask at depth 1", () => {
     const { store, runtime, agent } = setupDepthStore();
-    const parent = store.createIssue({
+    const parent = createResponsibleTestIssue(store, {
       title: "Terminal depth parent",
       status: "in_progress",
       assigneeType: "agent",
@@ -236,7 +237,7 @@ describe("MUL-400 S1 transaction depth — task terminal paths", () => {
     });
     const counter = wrapStore(store);
 
-    const completingChild = store.createIssue({
+    const completingChild = createResponsibleTestIssue(store, {
       title: "Completing child",
       parentIssueId: parent.id,
       status: "in_progress",
@@ -249,7 +250,7 @@ describe("MUL-400 S1 transaction depth — task terminal paths", () => {
     store.completeTask(completing.id, { output: "finished" });
     expect(counter.max, "completeTask").toBe(1);
 
-    const failingChild = store.createIssue({
+    const failingChild = createResponsibleTestIssue(store, {
       title: "Failing child",
       parentIssueId: parent.id,
       status: "in_progress",
@@ -264,7 +265,7 @@ describe("MUL-400 S1 transaction depth — task terminal paths", () => {
     // A task failure ends the child on `blocked`, so the E2 hook really ran.
     expect(store.getIssue(failingChild.id)?.status).toBe("blocked");
 
-    const cancellingChild = store.createIssue({
+    const cancellingChild = createResponsibleTestIssue(store, {
       title: "Cancelling child",
       parentIssueId: parent.id,
       status: "in_progress",
@@ -279,13 +280,13 @@ describe("MUL-400 S1 transaction depth — task terminal paths", () => {
 
   it("keeps the WHOLE task lifecycle at depth 1, counter armed before createTask", () => {
     const { store, runtime, agent } = setupDepthStore();
-    const parent = store.createIssue({
+    const parent = createResponsibleTestIssue(store, {
       title: "Lifecycle parent",
       status: "in_progress",
       assigneeType: "agent",
       assigneeId: agent.id,
     });
-    const child = store.createIssue({
+    const child = createResponsibleTestIssue(store, {
       title: "Lifecycle child",
       parentIssueId: parent.id,
       status: "in_progress",
@@ -319,13 +320,13 @@ describe("MUL-400 S1 transaction depth — task terminal paths", () => {
     const counter = wrapStore(store);
 
     // createTaskHumanRequest parks the Issue at in_review (guard B exempt).
-    const askParent = store.createIssue({
+    const askParent = createResponsibleTestIssue(store, {
       title: "Ask parent",
       status: "in_progress",
       assigneeType: "agent",
       assigneeId: agent.id,
     });
-    const askChild = store.createIssue({
+    const askChild = createResponsibleTestIssue(store, {
       title: "Ask child",
       parentIssueId: askParent.id,
       status: "in_progress",
@@ -352,13 +353,13 @@ describe("MUL-400 S1 transaction depth — task terminal paths", () => {
     expect(counter.max, "expireTaskHumanRequest").toBeLessThanOrEqual(1);
 
     // A comment mention dispatches through the same creation entry point.
-    const dispatchParent = store.createIssue({
+    const dispatchParent = createResponsibleTestIssue(store, {
       title: "Dispatch parent",
       status: "in_progress",
       assigneeType: "agent",
       assigneeId: agent.id,
     });
-    const dispatchChild = store.createIssue({
+    const dispatchChild = createResponsibleTestIssue(store, {
       title: "Dispatch child",
       parentIssueId: dispatchParent.id,
       status: "in_progress",
@@ -376,13 +377,13 @@ describe("MUL-400 S1 transaction depth — task terminal paths", () => {
 
   it("keeps cancelTasksByTriggerComments and recoverOrphans at depth 1", () => {
     const { store, runtime, agent } = setupDepthStore();
-    const parent = store.createIssue({
+    const parent = createResponsibleTestIssue(store, {
       title: "Sweep depth parent",
       status: "in_progress",
       assigneeType: "agent",
       assigneeId: agent.id,
     });
-    const child = store.createIssue({
+    const child = createResponsibleTestIssue(store, {
       title: "Sweep depth child",
       parentIssueId: parent.id,
       status: "in_progress",
@@ -444,20 +445,20 @@ describe("MUL-400 S1 transaction depth — organizer actions", () => {
       ownerId: owner.userId ?? owner.id,
     });
     store.updateWorkspace("local", { settings: { organizer: { mode: "act" } } });
-    const patrol = store.createIssue({ title: "Organizer patrol depth", workspaceId: "local" });
+    const patrol = createResponsibleTestIssue(store, { title: "Organizer patrol depth", workspaceId: "local" });
     const supervisorTask = store.createTask({
       agentId: supervisor.id,
       issueId: patrol.id,
       workspaceId: "local",
       prompt: "patrol",
     });
-    const parent = store.createIssue({
+    const parent = createResponsibleTestIssue(store, {
       title: "Organizer target parent",
       status: "in_progress",
       assigneeType: "agent",
       assigneeId: worker.id,
     });
-    const child = store.createIssue({
+    const child = createResponsibleTestIssue(store, {
       title: "Organizer target child",
       parentIssueId: parent.id,
       status: "in_progress",
@@ -564,9 +565,9 @@ describe("MUL-400 S1 transaction depth — SCM merge completion", () => {
   it("keeps the held branch (children still open) at depth 1", () => {
     const { store } = setupDepthStore();
     const connection = seedScm(store);
-    const parent = store.createIssue({ title: "SCM held parent", workspaceId: "local" });
+    const parent = createResponsibleTestIssue(store, { title: "SCM held parent", workspaceId: "local" });
     store.updateIssue(parent.id, { status: "in_progress" });
-    store.createIssue({ title: "Running child", parentIssueId: parent.id, status: "in_progress" });
+    createResponsibleTestIssue(store, { title: "Running child", parentIssueId: parent.id, status: "in_progress" });
     projectChangeRequest(store, connection.id, `${parent.key}: deliver one slice`);
 
     const counter = wrapStore(store);
@@ -581,11 +582,11 @@ describe("MUL-400 S1 transaction depth — SCM merge completion", () => {
   it("rolls the SCM status, audit rows and effect mark back on a grant-used failure", () => {
     const { store, agent } = setupDepthStore();
     const connection = seedScm(store);
-    const parent = store.createIssue({
+    const parent = createResponsibleTestIssue(store, {
       title: "SCM atomic parent", workspaceId: "local", status: "in_progress",
       assigneeType: "agent", assigneeId: agent.id,
     });
-    store.updateIssue(store.createIssue({
+    store.updateIssue(createResponsibleTestIssue(store, {
       title: "SCM finished child",
       parentIssueId: parent.id,
       status: "in_progress",
@@ -648,11 +649,11 @@ describe("MUL-400 S1 transaction depth — SCM merge completion", () => {
   it("emits the SCM grant-used events exactly once and only after COMMIT", () => {
     const { store, agent } = setupDepthStore();
     const connection = seedScm(store);
-    const parent = store.createIssue({
+    const parent = createResponsibleTestIssue(store, {
       title: "SCM event parent", workspaceId: "local", status: "in_progress",
       assigneeType: "agent", assigneeId: agent.id,
     });
-    store.updateIssue(store.createIssue({
+    store.updateIssue(createResponsibleTestIssue(store, {
       title: "SCM event child",
       parentIssueId: parent.id,
       status: "in_progress",
@@ -679,11 +680,11 @@ describe("MUL-400 S1 transaction depth — SCM merge completion", () => {
   it("keeps the granted and summarized done branch at depth 1", () => {
     const { store, agent } = setupDepthStore();
     const connection = seedScm(store);
-    const parent = store.createIssue({
+    const parent = createResponsibleTestIssue(store, {
       title: "SCM done parent", workspaceId: "local", status: "in_progress",
       assigneeType: "agent", assigneeId: agent.id,
     });
-    store.updateIssue(store.createIssue({
+    store.updateIssue(createResponsibleTestIssue(store, {
       title: "Finished child",
       parentIssueId: parent.id,
       status: "in_progress",
@@ -713,13 +714,13 @@ describe("MUL-457 — grant use is atomic with the parent status", () => {
    * effect must still be retryable.
    */
   function grantedParentCase(store: Store, agentId: string) {
-    const parent = store.createIssue({
+    const parent = createResponsibleTestIssue(store, {
       title: "Granted parent",
       status: "in_progress",
       assigneeType: "agent",
       assigneeId: agentId,
     });
-    const child = store.createIssue({
+    const child = createResponsibleTestIssue(store, {
       title: "Finished child",
       parentIssueId: parent.id,
       status: "in_progress",
@@ -813,20 +814,20 @@ describe("MUL-400 S1 — the replay walks the whole ancestor chain", () => {
    * and each entry point that ends the child must walk both hops.
    */
   function threeLayerChain(store: Store, agentId: string) {
-    const grandparent = store.createIssue({
+    const grandparent = createResponsibleTestIssue(store, {
       title: "Grandparent",
       status: "in_progress",
       assigneeType: "agent",
       assigneeId: agentId,
     });
-    const parent = store.createIssue({
+    const parent = createResponsibleTestIssue(store, {
       title: "Parent",
       status: "in_progress",
       parentIssueId: grandparent.id,
       assigneeType: "agent",
       assigneeId: agentId,
     });
-    const child = store.createIssue({
+    const child = createResponsibleTestIssue(store, {
       title: "Child",
       parentIssueId: parent.id,
       status: "in_progress",
@@ -838,8 +839,8 @@ describe("MUL-400 S1 — the replay walks the whole ancestor chain", () => {
     // siblings must exist BEFORE the parents are parked at in_review: creating a
     // child under an in_review parent re-derives that parent immediately (that
     // is E1 working), which would collapse the chain before the probe starts.
-    store.createIssue({ title: "Sibling gp", parentIssueId: grandparent.id, status: "in_progress" });
-    store.createIssue({ title: "Sibling p", parentIssueId: parent.id, status: "in_progress" });
+    createResponsibleTestIssue(store, { title: "Sibling gp", parentIssueId: grandparent.id, status: "in_progress" });
+    createResponsibleTestIssue(store, { title: "Sibling p", parentIssueId: parent.id, status: "in_progress" });
     store.updateIssue(parent.id, { status: "in_review", force: true });
     store.updateIssue(grandparent.id, { status: "in_review", force: true });
     expect(store.getIssue(parent.id)?.status).toBe("in_review");
@@ -940,27 +941,27 @@ describe("MUL-400 S1 — the replay walks the whole ancestor chain", () => {
     const { store, agent } = setupDepthStore();
     // The whole point of the case: a chain deeper than the QA repro must walk
     // past the first hop, so every level keeps an open child of its own.
-    const top = store.createIssue({
+    const top = createResponsibleTestIssue(store, {
       title: "Top",
       status: "in_progress",
       assigneeType: "agent",
       assigneeId: agent.id,
     });
-    const mid = store.createIssue({
+    const mid = createResponsibleTestIssue(store, {
       title: "Mid",
       status: "in_progress",
       parentIssueId: top.id,
       assigneeType: "agent",
       assigneeId: agent.id,
     });
-    const low = store.createIssue({
+    const low = createResponsibleTestIssue(store, {
       title: "Low",
       status: "in_progress",
       parentIssueId: mid.id,
       assigneeType: "agent",
       assigneeId: agent.id,
     });
-    const leaf = store.createIssue({
+    const leaf = createResponsibleTestIssue(store, {
       title: "Leaf",
       parentIssueId: low.id,
       status: "in_progress",
@@ -968,7 +969,7 @@ describe("MUL-400 S1 — the replay walks the whole ancestor chain", () => {
       assigneeId: agent.id,
     });
     for (const holder of [top, mid, low]) {
-      store.createIssue({ title: `Sibling ${holder.id}`, parentIssueId: holder.id, status: "in_progress" });
+      createResponsibleTestIssue(store, { title: `Sibling ${holder.id}`, parentIssueId: holder.id, status: "in_progress" });
     }
     for (const holder of [low, mid, top]) {
       store.updateIssue(holder.id, { status: "in_review", force: true });
@@ -1036,8 +1037,8 @@ describe("MUL-400 S1 — no activity is broadcast before its transaction commits
    * the row and the client-side event at zero.
    */
   function closedParentCase(store: Store, status: "done" | "cancelled") {
-    const parent = store.createIssue({ title: `Closed parent ${status}`, status: "in_progress" });
-    const child = store.createIssue({
+    const parent = createResponsibleTestIssue(store, { title: `Closed parent ${status}`, status: "in_progress" });
+    const child = createResponsibleTestIssue(store, {
       title: `Late child ${status}`,
       parentIssueId: parent.id,
       status: "in_progress",
@@ -1127,18 +1128,18 @@ describe("MUL-400 S1 — no activity is broadcast before its transaction commits
   it("delivers `parent_status_derived` only after COMMIT", () => {
     const { store, agent } = setupDepthStore();
     const chain = (() => {
-      const parent = store.createIssue({
+      const parent = createResponsibleTestIssue(store, {
         title: "Derive parent",
         status: "in_progress",
         assigneeType: "agent",
         assigneeId: agent.id,
       });
-      const child = store.createIssue({
+      const child = createResponsibleTestIssue(store, {
         title: "Derive child",
         parentIssueId: parent.id,
         status: "in_progress",
       });
-      store.createIssue({ title: "Open sibling", parentIssueId: parent.id, status: "in_progress" });
+      createResponsibleTestIssue(store, { title: "Open sibling", parentIssueId: parent.id, status: "in_progress" });
       store.updateIssue(parent.id, { status: "in_review", force: true });
       return { parent, child };
     })();
@@ -1163,7 +1164,7 @@ describe("MUL-400 S1 — no activity is broadcast before its transaction commits
   it("keeps the self-transactional system-comment wrapper's activity inside its own COMMIT", () => {
     const store = createStore();
     store.ensureLocalWorkspace();
-    const issue = store.createIssue({ title: "Wrapper issue", status: "in_progress" });
+    const issue = createResponsibleTestIssue(store, { title: "Wrapper issue", status: "in_progress" });
 
     const events: Array<{ action: string; inTransaction: boolean }> = [];
     const unsubscribe = store.onWorkspaceEvent((event) => {
@@ -1218,13 +1219,13 @@ describe("MUL-400 S1 — no activity is broadcast before its transaction commits
 describe("MUL-400 S1 events never fire inside a transaction", () => {
   it("publishes the E1/E2 pushes only after the write transaction commits", () => {
     const { store, agent } = setupDepthStore();
-    const parent = store.createIssue({
+    const parent = createResponsibleTestIssue(store, {
       title: "Emission parent",
       status: "in_progress",
       assigneeType: "agent",
       assigneeId: agent.id,
     });
-    const child = store.createIssue({
+    const child = createResponsibleTestIssue(store, {
       title: "Emission child",
       parentIssueId: parent.id,
       status: "in_progress",
@@ -1243,7 +1244,7 @@ describe("MUL-400 S1 events never fire inside a transaction", () => {
       store.updateIssue(child.id, { status: "done" });
       // E1 re-derivation: an in_review parent with an open child goes back.
       store.updateIssue(parent.id, { status: "in_review", force: true });
-      const second = store.createIssue({
+      const second = createResponsibleTestIssue(store, {
         title: "Emission child two",
         parentIssueId: parent.id,
         status: "in_progress",
@@ -1293,7 +1294,7 @@ describe("MUL-400 S1 events never fire inside a transaction", () => {
       ownerId: owner.userId ?? owner.id,
     });
     store.updateWorkspace("local", { settings: { organizer: { mode: "act" } } });
-    const patrol = store.createIssue({ title: "Emitter patrol", workspaceId: "local" });
+    const patrol = createResponsibleTestIssue(store, { title: "Emitter patrol", workspaceId: "local" });
     const supervisorTask = store.createTask({
       agentId: supervisor.id,
       issueId: patrol.id,
@@ -1343,13 +1344,13 @@ describe("MUL-400 S1 events never fire inside a transaction", () => {
 describe("MUL-400 E2 hook atomicity", () => {
   it("leaves no orphan round and no half activity when the hook fails mid-write", () => {
     const { store, agent } = setupDepthStore();
-    const parent = store.createIssue({
+    const parent = createResponsibleTestIssue(store, {
       title: "Atomic parent",
       status: "in_progress",
       assigneeType: "agent",
       assigneeId: agent.id,
     });
-    const child = store.createIssue({
+    const child = createResponsibleTestIssue(store, {
       title: "Atomic child",
       parentIssueId: parent.id,
       status: "in_progress",
@@ -1393,13 +1394,13 @@ describe("MUL-400 E2 hook atomicity", () => {
 
   it("logs the failure for a task-terminal hook (how an operator finds it)", () => {
     const { store, runtime, agent } = setupDepthStore();
-    const parent = store.createIssue({
+    const parent = createResponsibleTestIssue(store, {
       title: "Logged hook parent",
       status: "in_progress",
       assigneeType: "agent",
       assigneeId: agent.id,
     });
-    const child = store.createIssue({
+    const child = createResponsibleTestIssue(store, {
       title: "Logged hook child",
       parentIssueId: parent.id,
       status: "in_progress",

@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { afterAll, beforeAll, describe, expect, it, spyOn } from "bun:test";
 import { mutateExecutionFixture } from "./unified-test-paths.js";
 import type { Database } from "bun:sqlite";
@@ -107,8 +108,8 @@ for (const backend of ["SQLite", "PostgreSQL"] as const) {
       const b = store.createWorkspace({ id: `wb-${tag}`, slug: `b-${tag}`, name: `B ${tag}` });
       const source = reverse ? b.id : a.id;
       const target = reverse ? a.id : b.id;
-      const parent = store.createIssue({ id: `iss_a_${tag}`, title: "Parent", workspaceId: source });
-      const child = store.createIssue({ id: `iss_z_${tag}`, title: "Unrelated child", workspaceId: source });
+      const parent = createResponsibleTestIssue(store, { id: `iss_a_${tag}`, title: "Parent", workspaceId: source });
+      const child = createResponsibleTestIssue(store, { id: `iss_z_${tag}`, title: "Unrelated child", workspaceId: source });
       const agent = store.createAgent({ name: `Agent ${tag}`, provider: "codex", workspaceId: source });
       return { tag, source, target, parent, child, agent };
     }
@@ -118,12 +119,12 @@ for (const backend of ["SQLite", "PostgreSQL"] as const) {
       const tag = `family-${backend.toLowerCase()}-${++serial}`;
       const workspace = store.createWorkspace({ id: `wf-${tag}`, slug: `f-${tag}`, name: `F ${tag}` }).id;
       const [parentId, childId] = parentFirst ? [`iss_a_${tag}`, `iss_z_${tag}`] : [`iss_z_${tag}`, `iss_a_${tag}`];
-      const parent = store.createIssue({ id: parentId, title: "Parent", workspaceId: workspace, status: "in_progress" });
-      const child = store.createIssue({ id: childId, title: "Child", workspaceId: workspace, parentIssueId: parent.id });
+      const parent = createResponsibleTestIssue(store, { id: parentId, title: "Parent", workspaceId: workspace, status: "in_progress" });
+      const child = createResponsibleTestIssue(store, { id: childId, title: "Child", workspaceId: workspace, parentIssueId: parent.id });
       store.updateIssue(child.id, { status: "done" });
       const agent = store.createAgent({ name: `Agent ${tag}`, provider: "codex", workspaceId: workspace });
       // Sorted after `iss_a_` and before `iss_z_`.
-      const extraParent = (letter: "m" | "n") => store.createIssue({
+      const extraParent = (letter: "m" | "n") => createResponsibleTestIssue(store, {
         id: `iss_${letter}_${tag}`, title: `Parent ${letter}`, workspaceId: workspace, status: "in_progress",
       });
       return { workspace, parent, child, agent, extraParent };
@@ -287,8 +288,8 @@ for (const backend of ["SQLite", "PostgreSQL"] as const) {
 
     it("S4: a move takes the next number in the target workspace, alone, over HTTP and in a batch", async () => {
       const f = fixture();
-      const leaves = [1, 2].map((i) => store.createIssue({ title: `Leaf ${i}`, workspaceId: f.source }));
-      const occupants = [1, 2, 3].map((i) => store.createIssue({ title: `Occupant ${i}`, workspaceId: f.target }));
+      const leaves = [1, 2].map((i) => createResponsibleTestIssue(store, { title: `Leaf ${i}`, workspaceId: f.source }));
+      const occupants = [1, 2, 3].map((i) => createResponsibleTestIssue(store, { title: `Occupant ${i}`, workspaceId: f.target }));
       const top = Math.max(...occupants.map((issue) => issue.number));
       // The source numbers are already taken in the target (MUL-405's unique index).
       expect(occupants.map((issue) => issue.number)).toContain(f.child.number);
@@ -320,7 +321,7 @@ for (const backend of ["SQLite", "PostgreSQL"] as const) {
           store.updateIssue(f.child.id, { status: action === "sibling-status" ? "in_progress" : "done" });
         }
         const events = trace(() => {
-          if (action === "create") store.createIssue({ title: "Locked child", workspaceId: f.source,
+          if (action === "create") createResponsibleTestIssue(store, { title: "Locked child", workspaceId: f.source,
             parentIssueId: f.parent.id, blockedBy: [f.child.key] });
           if (action === "reparent") store.updateIssue(f.child.id, { parentIssueId: f.parent.id });
           if (action === "dependency") store.createIssueDependency(f.child.id, { dependsOnIssueId: f.parent.key });
@@ -437,7 +438,7 @@ for (const backend of ["SQLite", "PostgreSQL"] as const) {
           });
           expect(store.getIssue(f.child.id)?.parentIssueId).toBeNull();
           expect(store.listIssues({ workspaceId: f.source })).toHaveLength(before.length - 1);
-          const next = store.createIssue({ title: "No consumed number", workspaceId: f.source });
+          const next = createResponsibleTestIssue(store, { title: "No consumed number", workspaceId: f.source });
           expect(next.number).toBe(Math.max(...before.filter((issue) => issue.id !== f.parent.id).map((issue) => issue.number)) + 1);
           assertNoForeignEdges();
         }, 15_000);
@@ -488,7 +489,7 @@ for (const backend of ["SQLite", "PostgreSQL"] as const) {
 
     it("PG-L9: a move waits on a creation holding the target's number lock, then takes the next number", async () => {
       const f = fixture();
-      const occupant = store.createIssue({ title: "Occupant", workspaceId: f.target });
+      const occupant = createResponsibleTestIssue(store, { title: "Occupant", workspaceId: f.target });
       const createdId = `iss_n_${f.tag}`;
       await hold({ mode: "hold-number", role: "create", issueId: f.child.id, otherId: createdId,
         sourceWorkspace: f.source, targetWorkspace: f.target }, () => {
@@ -502,8 +503,8 @@ for (const backend of ["SQLite", "PostgreSQL"] as const) {
     it("PG-L10: a move whose Issue was moved away while it waited retries once, taking the number lock first", async () => {
       const f = fixture();
       // Target numbers run past the source's, so the raw move back to the source keeps a free number.
-      for (const i of [1, 2, 3]) store.createIssue({ title: `Filler ${i}`, workspaceId: f.target });
-      const issue = store.createIssue({ title: "Moved away", workspaceId: f.target });
+      for (const i of [1, 2, 3]) createResponsibleTestIssue(store, { title: `Filler ${i}`, workspaceId: f.target });
+      const issue = createResponsibleTestIssue(store, { title: "Moved away", workspaceId: f.target });
       const pg = db as PostgresSyncDatabase;
       const events: string[] = [];
       const originalRun = pg.run.bind(pg);

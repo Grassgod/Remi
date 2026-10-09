@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from '../helpers.js';
 import { existsSync } from "node:fs";
 import { numberAllocationLockKey } from "@multiremi/store/advisory-locks.js";
 import { advisoryXactLock, PostgresSyncDatabase } from "@multiremi/store/db/postgres.js";
@@ -100,7 +101,7 @@ self.onmessage = async ({ data: input }: MessageEvent<RelationLockInput>) => {
     }
     try {
       if (input.role === "move") store.updateIssue(input.issueId, { workspaceId: input.targetWorkspace });
-      if (input.role === "create") store.createIssue({ title: "Racing child", workspaceId: input.sourceWorkspace, parentIssueId: input.otherId });
+      if (input.role === "create") createResponsibleTestIssue(store, { title: "Racing child", workspaceId: input.sourceWorkspace, parentIssueId: input.otherId });
       if (input.role === "reparent") store.updateIssue(input.issueId, { parentIssueId: input.otherId });
       if (input.role === "dependency") store.createIssueDependency(input.issueId, { dependsOnIssueId: input.otherId, type: "blocked_by" });
       if (input.role === "reopen") store.updateIssue(input.issueId, { status: "in_progress" });

@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { taskOfferResponse } from "../../fixtures/task-offer.js";
 import { afterEach, describe, expect, it } from "bun:test";
 import { createHmac } from "node:crypto";
@@ -251,7 +252,7 @@ describe("SCM connection and canonical event store", () => {
       contentHash: "old",
       payload: { head_sha: "old" },
     });
-    const issue = store.createIssue({ title: "Transferred projection", workspaceId: "local" });
+    const issue = createResponsibleTestIssue(store, { title: "Transferred projection", workspaceId: "local" });
     store.upsertScmEntitySnapshot({
       connectionId: connection.id,
       repositoryId: "repo_widgets",
@@ -583,7 +584,7 @@ describe("SCM connection and canonical event store", () => {
 
   it("explicitly cleans baseline state when deleting a connection without event history", () => {
     const { store, connection } = seedConnection();
-    const issue = store.createIssue({ title: "Delete projection", workspaceId: "local" });
+    const issue = createResponsibleTestIssue(store, { title: "Delete projection", workspaceId: "local" });
     expect(store.deleteScmRepositoryBinding(connection.id, "repo_missing")).toBe(false);
     store.upsertScmSyncCursor({
       connectionId: connection.id,
@@ -823,7 +824,7 @@ describe("SCM connection and canonical event store", () => {
 
   it("projects baseline change requests and auto-links issue keys from title, branch, or body", () => {
     const { store, connection } = seedConnection();
-    const issue = store.createIssue({ title: "Projection target", workspaceId: "local" });
+    const issue = createResponsibleTestIssue(store, { title: "Projection target", workspaceId: "local" });
     const events: Array<{ type: string; payload: Record<string, unknown> }> = [];
     store.onWorkspaceEvent((event) => events.push(event));
 
@@ -867,7 +868,7 @@ describe("SCM connection and canonical event store", () => {
 
   it("keeps a manual unlink suppressed across later auto-link projection updates", () => {
     const { store, connection } = seedConnection();
-    const issue = store.createIssue({ title: "Manual unlink", workspaceId: "local" });
+    const issue = createResponsibleTestIssue(store, { title: "Manual unlink", workspaceId: "local" });
     store.advanceScmEntitySnapshot({
       connectionId: connection.id,
       repositoryId: "repo_widgets",
@@ -901,7 +902,7 @@ describe("SCM connection and canonical event store", () => {
     store.updateWorkspace("local", {
       settings: { scm_auto_link_enabled: true, scm_complete_issue_on_merge_enabled: true },
     });
-    const issue = store.createIssue({ title: "Complete after merge", workspaceId: "local" });
+    const issue = createResponsibleTestIssue(store, { title: "Complete after merge", workspaceId: "local" });
     store.advanceScmEntitySnapshot({
       connectionId: connection.id,
       repositoryId: "repo_widgets",
@@ -957,9 +958,9 @@ describe("SCM connection and canonical event store", () => {
     // MUL-400 E1: a parent with a running child. The merged change request is a
     // CHILD's PR that names the parent key in its title, which is exactly how
     // auto-link ends up linking it to the parent.
-    const parent = store.createIssue({ title: "Parent with a running child", workspaceId: "local" });
+    const parent = createResponsibleTestIssue(store, { title: "Parent with a running child", workspaceId: "local" });
     store.updateIssue(parent.id, { status: "in_progress" });
-    store.createIssue({
+    createResponsibleTestIssue(store, {
       title: "Still running child",
       parentIssueId: parent.id,
       status: "in_progress",
@@ -1015,11 +1016,11 @@ describe("SCM connection and canonical event store", () => {
         settings: { scm_auto_link_enabled: true, scm_complete_issue_on_merge_enabled: true },
       });
       const owner = store.createAgent({ name: "SCM parent owner", provider: "codex" });
-      const parent = store.createIssue({
+      const parent = createResponsibleTestIssue(store, {
         title: "Finished parent without summary", workspaceId: "local", status: "in_progress",
         assigneeType: "agent", assigneeId: owner.id,
       });
-      const child = store.createIssue({ title: "Finished child", parentIssueId: parent.id, status: "in_progress" });
+      const child = createResponsibleTestIssue(store, { title: "Finished child", parentIssueId: parent.id, status: "in_progress" });
       store.updateIssue(child.id, { status: "done" });
       if (grantEnabled) store.grantParentDone(parent.id, "local");
       projectChangeRequest(store, connection.id, "42", { number: 42, title: `${parent.key} delivery`, state: "merged" });
@@ -1038,11 +1039,11 @@ describe("SCM connection and canonical event store", () => {
       settings: { scm_auto_link_enabled: true, scm_complete_issue_on_merge_enabled: true },
     });
     const owner = store.createAgent({ name: "SCM parent owner", provider: "codex" });
-    const parent = store.createIssue({
+    const parent = createResponsibleTestIssue(store, {
       title: "Parent with finished children", workspaceId: "local", status: "in_progress",
       assigneeType: "agent", assigneeId: owner.id,
     });
-    const child = store.createIssue({
+    const child = createResponsibleTestIssue(store, {
       title: "Finished child",
       parentIssueId: parent.id,
       status: "in_progress",
@@ -1079,8 +1080,8 @@ describe("SCM connection and canonical event store", () => {
     store.updateWorkspace("local", {
       settings: { scm_auto_link_enabled: true, scm_complete_issue_on_merge_enabled: true },
     });
-    const mentionedIssue = store.createIssue({ title: "Mentioned defect", workspaceId: "local" });
-    const owningIssue = store.createIssue({ title: "Delivered change", workspaceId: "local" });
+    const mentionedIssue = createResponsibleTestIssue(store, { title: "Mentioned defect", workspaceId: "local" });
+    const owningIssue = createResponsibleTestIssue(store, { title: "Delivered change", workspaceId: "local" });
     projectChangeRequest(store, connection.id, "42", {
       number: 42,
       title: `${owningIssue.key} delivery`,
@@ -1101,7 +1102,7 @@ describe("SCM connection and canonical event store", () => {
     store.updateWorkspace("local", {
       settings: { scm_auto_link_enabled: true, scm_complete_issue_on_merge_enabled: true },
     });
-    const issue = store.createIssue({ title: "Split delivery", workspaceId: "local" });
+    const issue = createResponsibleTestIssue(store, { title: "Split delivery", workspaceId: "local" });
     projectChangeRequest(store, connection.id, "42", {
       number: 42,
       title: `${issue.key} first part`,
@@ -1127,7 +1128,7 @@ describe("SCM connection and canonical event store", () => {
     store.updateWorkspace("local", {
       settings: { scm_auto_link_enabled: true, scm_complete_issue_on_merge_enabled: true },
     });
-    const issue = store.createIssue({ title: "Branch-owned delivery", workspaceId: "local" });
+    const issue = createResponsibleTestIssue(store, { title: "Branch-owned delivery", workspaceId: "local" });
     projectChangeRequest(store, connection.id, "42", {
       number: 42,
       title: "Implement the delivery",
@@ -1145,7 +1146,7 @@ describe("SCM connection and canonical event store", () => {
     store.updateWorkspace("local", {
       settings: { scm_auto_link_enabled: true, scm_complete_issue_on_merge_enabled: true },
     });
-    const issue = store.createIssue({ title: "Release delivery", workspaceId: "local" });
+    const issue = createResponsibleTestIssue(store, { title: "Release delivery", workspaceId: "local" });
     projectChangeRequest(store, connection.id, "42", {
       number: 42,
       title: `release: prepare v0.2.54 (${issue.key})`,
@@ -1163,7 +1164,7 @@ describe("SCM connection and canonical event store", () => {
     store.updateWorkspace("local", {
       settings: { scm_auto_link_enabled: true, scm_complete_issue_on_merge_enabled: true },
     });
-    const issue = store.createIssue({ title: "Draft follow-up", workspaceId: "local" });
+    const issue = createResponsibleTestIssue(store, { title: "Draft follow-up", workspaceId: "local" });
     projectChangeRequest(store, connection.id, "42", {
       number: 42,
       title: `${issue.key} delivery`,
@@ -1192,8 +1193,8 @@ describe("SCM connection and canonical event store", () => {
     store.updateWorkspace("local", {
       settings: { scm_auto_link_enabled: true, scm_complete_issue_on_merge_enabled: true },
     });
-    const bodyOwnedIssue = store.createIssue({ title: "Body-owned delivery", workspaceId: "local" });
-    const manuallyLinkedIssue = store.createIssue({ title: "Manual delivery", workspaceId: "local" });
+    const bodyOwnedIssue = createResponsibleTestIssue(store, { title: "Body-owned delivery", workspaceId: "local" });
+    const manuallyLinkedIssue = createResponsibleTestIssue(store, { title: "Manual delivery", workspaceId: "local" });
     projectChangeRequest(store, connection.id, "42", {
       number: 42,
       title: "Combined delivery",
@@ -1221,8 +1222,8 @@ describe("SCM connection and canonical event store", () => {
     store.updateWorkspace("local", {
       settings: { scm_auto_link_enabled: true, scm_complete_issue_on_merge_enabled: true },
     });
-    const mentioned = store.createIssue({ title: "Merely mentioned", workspaceId: "local" });
-    const owner = store.createIssue({ title: "Actually delivered", workspaceId: "local" });
+    const mentioned = createResponsibleTestIssue(store, { title: "Merely mentioned", workspaceId: "local" });
+    const owner = createResponsibleTestIssue(store, { title: "Actually delivered", workspaceId: "local" });
     projectChangeRequest(store, connection.id, "42", {
       number: 42,
       title: `${owner.key} deliver the real change`,
@@ -1243,7 +1244,7 @@ describe("SCM connection and canonical event store", () => {
     store.updateWorkspace("local", {
       settings: { scm_auto_link_enabled: true, scm_complete_issue_on_merge_enabled: true },
     });
-    const issue = store.createIssue({ title: "Legacy row", workspaceId: "local" });
+    const issue = createResponsibleTestIssue(store, { title: "Legacy row", workspaceId: "local" });
     // Pre-backfill rows carry a NULL key column while Issue.key derives from the number.
     db!.run("UPDATE multiremi_issues SET issue_key = NULL WHERE id = ?", [issue.id]);
     const derivedKey = store.getIssue(issue.id)!.key;
@@ -1267,7 +1268,7 @@ describe("SCM connection and canonical event store", () => {
     store.updateWorkspace("local", {
       settings: { scm_auto_link_enabled: true, scm_complete_issue_on_merge_enabled: true },
     });
-    const issue = store.createIssue({ title: "Retry merge completion", workspaceId: "local" });
+    const issue = createResponsibleTestIssue(store, { title: "Retry merge completion", workspaceId: "local" });
     store.advanceScmEntitySnapshot({
       connectionId: connection.id,
       repositoryId: "repo_widgets",
@@ -1307,7 +1308,7 @@ describe("SCM connection and canonical event store", () => {
 
   it("does not replay merge completion when the setting is enabled after event history exists", () => {
     const { store, connection } = seedConnection();
-    const issue = store.createIssue({ title: "Historical merge", workspaceId: "local" });
+    const issue = createResponsibleTestIssue(store, { title: "Historical merge", workspaceId: "local" });
     store.advanceScmEntitySnapshot({
       connectionId: connection.id,
       repositoryId: "repo_widgets",
@@ -1952,7 +1953,7 @@ describe("SCM connection and canonical event store", () => {
 
   it("serves camelCase issue change requests and supports manual link and unlink", async () => {
     const { store, connection } = seedConnection();
-    const issue = store.createIssue({ title: "Manual API link", workspaceId: "local" });
+    const issue = createResponsibleTestIssue(store, { title: "Manual API link", workspaceId: "local" });
     store.advanceScmEntitySnapshot({
       connectionId: connection.id,
       repositoryId: "repo_widgets",

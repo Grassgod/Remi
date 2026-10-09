@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { expect, it } from "bun:test";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -22,7 +23,7 @@ pendingTurnBackendTests("pending turn concurrency", (fixture, backend) => {
       installPendingTurnTestConstraints(fixture());
       const f = fixture();
       const agent = f.store.createAgent({ name: "Lock-order owner", provider: "codex" });
-      const issue = f.store.createIssue({ title: "Lock-order inbox" });
+      const issue = createResponsibleTestIssue(f.store, { title: "Lock-order inbox" });
       const session = kind === "issue" ? f.store.getOrCreateDefaultIssueSession(issue.id)
         : f.store.createChatSession({ agentId: agent.id });
       const beforeHead = Number(f.db.query("SELECT head_seq FROM multiremi_conversation_heads WHERE session_id = ?").get(session.id).head_seq);
@@ -83,7 +84,7 @@ pendingTurnBackendTests("pending turn concurrency", (fixture, backend) => {
     installPendingTurnTestConstraints(fixture());
     const f = fixture();
     const agent = f.store.createAgent({ name: "Concurrent owner", provider: "codex" });
-    const issue = f.store.createIssue({ title: "Concurrent inbox" });
+    const issue = createResponsibleTestIssue(f.store, { title: "Concurrent inbox" });
     const session = f.store.getOrCreateDefaultIssueSession(issue.id);
     const entry = f.transaction(() => f.store.sendEnvelopeWithinTransaction({
       to: { role: "agent", agentId: agent.id, issueSessionId: session.id }, kind: "report",

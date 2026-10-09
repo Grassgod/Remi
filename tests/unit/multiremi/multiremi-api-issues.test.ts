@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { mutateExecutionFixture } from "./unified-test-paths.js";
 // Issues as first-class records plus the compatibility list/grouped/batch,
 // quick-create, hierarchy/planning, dependency, assignment, metadata and label routes.
@@ -18,7 +19,7 @@ describe("Multiremi API — issue endpoints", () => {
       const store = createStore();
       store.ensureLocalWorkspace();
       const agent = store.createAgent({ name: "Unassign worker", provider: "codex" });
-      const issue = store.createIssue({ title: "Unassign target", assigneeType: "agent", assigneeId: agent.id });
+      const issue = createResponsibleTestIssue(store, { title: "Unassign target", assigneeType: "agent", assigneeId: agent.id });
       const tasks = ["running", "awaiting_human", "queued", "completed"].map((status) => {
         const session = store.createIssueSession(issue.id, { title: status });
         const task = store.createTask({ agentId: agent.id, issueId: issue.id, issueSessionId: session.id, prompt: status });
@@ -53,7 +54,7 @@ describe("Multiremi API — issue endpoints", () => {
     store.ensureLocalWorkspace();
     const agent = store.createAgent({ name: "Original assignee", provider: "codex" });
     const replacement = store.createAgent({ name: "Replacement assignee", provider: "codex" });
-    const issue = store.createIssue({ title: "Keep running", status: "in_progress", assigneeType: "agent", assigneeId: agent.id });
+    const issue = createResponsibleTestIssue(store, { title: "Keep running", status: "in_progress", assigneeType: "agent", assigneeId: agent.id });
     const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "active work" });
     const app = createMultiremiApp({ store });
     const update = (body: unknown) => app.request(`${prefix}/${issue.id}`, {
@@ -79,13 +80,13 @@ describe("Multiremi API — issue endpoints", () => {
     store.ensureLocalWorkspace();
     const agent = store.createAgent({ name: "Unassign store worker", provider: "codex" });
     for (const input of [{ assigneeType: null, assigneeId: null }, { assigneeId: null }, { assignee_id: null }]) {
-      const issue = store.createIssue({ title: "Clear assignment", assigneeType: "agent", assigneeId: agent.id });
+      const issue = createResponsibleTestIssue(store, { title: "Clear assignment", assigneeType: "agent", assigneeId: agent.id });
       store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "active" });
       expect(store.updateIssueWithOutcome(issue.id, input).cancelledTasks).toBe(1);
       expect(store.updateIssueWithOutcome(issue.id, input).cancelledTasks).toBe(0);
       expect(store.listIssueActivity(issue.id).filter((entry) => entry.type === "issue_unassigned")).toHaveLength(1);
     }
-    const issue = store.createIssue({ title: "Already unassigned" });
+    const issue = createResponsibleTestIssue(store, { title: "Already unassigned" });
     const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "direct task" });
     expect(store.updateIssueWithOutcome(issue.id, { assigneeId: null }).cancelledTasks).toBe(0);
     expect(store.getTask(task.id)?.status).toBe(task.status);
@@ -154,8 +155,8 @@ describe("Multiremi API — issue endpoints", () => {
   it("configures issue archiving and exposes archived list and restore APIs", async () => {
     const store = createStore();
     store.ensureLocalWorkspace();
-    const archived = store.createIssue({ title: "Archived API issue", status: "done" });
-    const active = store.createIssue({ title: "Active API issue" });
+    const archived = createResponsibleTestIssue(store, { title: "Archived API issue", status: "done" });
+    const active = createResponsibleTestIssue(store, { title: "Active API issue" });
     const app = createMultiremiApp({ store });
 
     const invalidSettings = await app.request("/api/workspaces/local/issue-archive", {
@@ -204,8 +205,8 @@ describe("Multiremi API — issue endpoints", () => {
   it("gives an owner task token delete parity while rejecting daemon and member credentials", async () => {
     const store = createStore();
     store.ensureLocalWorkspace();
-    const target = store.createIssue({ title: "Human-admin delete only", workspaceId: "local" });
-    const authIssue = store.createIssue({ title: "Task credential source", workspaceId: "local" });
+    const target = createResponsibleTestIssue(store, { title: "Human-admin delete only", workspaceId: "local" });
+    const authIssue = createResponsibleTestIssue(store, { title: "Task credential source", workspaceId: "local" });
     const agent = store.createAgent({ name: "Delete auth agent", provider: "codex" });
     const task = store.createTask({
       workspaceId: "local",
@@ -236,14 +237,14 @@ describe("Multiremi API — issue endpoints", () => {
     });
     const app = createMultiremiApp({ store, authToken: "root-secret" });
 
-    const taskSingleTarget = store.createIssue({ title: "Task single delete", workspaceId: "local" });
+    const taskSingleTarget = createResponsibleTestIssue(store, { title: "Task single delete", workspaceId: "local" });
     expect((await app.request(`/api/issues/${taskSingleTarget.id}`, {
       method: "DELETE",
       headers: { Authorization: `Bearer ${taskToken.token}` },
     })).status).toBe(204);
     expect(store.getIssue(taskSingleTarget.id)).toBeNull();
 
-    const taskBatchTarget = store.createIssue({ title: "Task batch delete", workspaceId: "local" });
+    const taskBatchTarget = createResponsibleTestIssue(store, { title: "Task batch delete", workspaceId: "local" });
     expect((await app.request("/api/issues/batch-delete", {
       method: "POST",
       headers: {
@@ -277,8 +278,8 @@ describe("Multiremi API — issue endpoints", () => {
 
   it("preflights batch-delete workspace access before deleting any Issue", async () => {
     const store = createStore();
-    const local = store.createIssue({ title: "Local batch delete", workspaceId: "local" });
-    const remote = store.createIssue({ title: "Remote batch delete", workspaceId: "remote" });
+    const local = createResponsibleTestIssue(store, { title: "Local batch delete", workspaceId: "local" });
+    const remote = createResponsibleTestIssue(store, { title: "Remote batch delete", workspaceId: "remote" });
     store.createWorkspaceMember({
       id: "mem_batch_owner",
       workspaceId: "local",
@@ -310,8 +311,8 @@ describe("Multiremi API — issue endpoints", () => {
   it("preflights batch lifecycle fences before deleting any Issue", async () => {
     const store = createStore();
     store.ensureLocalWorkspace();
-    const deletable = store.createIssue({ title: "Batch deletable", workspaceId: "local" });
-    const materialized = store.createIssue({ title: "Batch materialized", workspaceId: "local" });
+    const deletable = createResponsibleTestIssue(store, { title: "Batch deletable", workspaceId: "local" });
+    const materialized = createResponsibleTestIssue(store, { title: "Batch materialized", workspaceId: "local" });
     store.createIssueSession(materialized.id, { title: "Materialized session" });
     const app = createMultiremiApp({ store, authToken: "root-secret" });
 
@@ -371,7 +372,7 @@ describe("Multiremi API — issue endpoints", () => {
     const events: Array<{ type: string; workspaceId: string; payload: Record<string, unknown>; actorId?: string | null; actorType?: string }> = [];
     store.onWorkspaceEvent((event) => events.push(event));
 
-    const first = store.createIssue({
+    const first = createResponsibleTestIssue(store, {
       title: "Batch first",
       workspaceId: "local",
       projectId: project.id,
@@ -381,7 +382,7 @@ describe("Multiremi API — issue endpoints", () => {
       priority: "low",
       position: 2,
     });
-    const second = store.createIssue({
+    const second = createResponsibleTestIssue(store, {
       title: "Batch second",
       workspaceId: "local",
       assigneeType: "member",
@@ -390,8 +391,8 @@ describe("Multiremi API — issue endpoints", () => {
       priority: "medium",
       position: 1,
     });
-    store.createIssue({ title: "Other workspace", workspaceId: "other", status: "open" });
-    const remoteIssue = store.createIssue({ title: "Remote workspace issue", workspaceId: "remote", status: "open" });
+    createResponsibleTestIssue(store, { title: "Other workspace", workspaceId: "other", status: "open" });
+    const remoteIssue = createResponsibleTestIssue(store, { title: "Remote workspace issue", workspaceId: "remote", status: "open" });
     const label = store.createLabel({ name: "Batch label", color: "#22c55e" });
     store.attachLabelToIssue(first.id, label.id);
     const reaction = store.addIssueReaction(first.id, { actorType: "member", actorId: "local", emoji: "👍" });
@@ -937,8 +938,8 @@ describe("Multiremi API — issue endpoints", () => {
       parentIssueId: parent.id, total: 1, done: 1, cancelled: 0, blocked: 0, waiting: 0, active: 0,
     }]);
 
-    const remoteParent = store.createIssue({ title: "Remote API parent", workspaceId: "remote" });
-    const remoteChild = store.createIssue({ title: "Remote API child", workspaceId: "remote", parentIssueId: remoteParent.id });
+    const remoteParent = createResponsibleTestIssue(store, { title: "Remote API parent", workspaceId: "remote" });
+    const remoteChild = createResponsibleTestIssue(store, { title: "Remote API child", workspaceId: "remote", parentIssueId: remoteParent.id });
 
     const camelProgress = await app.request("/api/issues/child-progress?workspaceId=remote");
     expect((await camelProgress.json()).progress).toEqual([{
@@ -968,8 +969,8 @@ describe("Multiremi API — issue endpoints", () => {
   it("serves issue dependency endpoints", async () => {
     const store = createStore();
     const app = createMultiremiApp({ store });
-    const blocker = store.createIssue({ title: "API blocker" });
-    const blocked = store.createIssue({ title: "API blocked" });
+    const blocker = createResponsibleTestIssue(store, { title: "API blocker" });
+    const blocked = createResponsibleTestIssue(store, { title: "API blocked" });
 
     const created = await app.request(`/api/issues/${blocked.id}/dependencies`, {
       method: "POST",
@@ -1075,7 +1076,7 @@ describe("Multiremi API — issue endpoints", () => {
   it("serves issue metadata endpoints", async () => {
     const store = createStore();
     const app = createMultiremiApp({ store });
-    const issue = store.createIssue({ title: "Metadata API" });
+    const issue = createResponsibleTestIssue(store, { title: "Metadata API" });
 
     const set = await app.request(`/api/multiremi/issues/${issue.id}/metadata/pipeline_status`, {
       method: "PUT",
@@ -1088,7 +1089,7 @@ describe("Multiremi API — issue endpoints", () => {
     const listed = await app.request(`/api/multiremi/issues/${issue.id}/metadata`);
     expect((await listed.json()).metadata).toEqual({ pipeline_status: "waiting_review" });
 
-    const other = store.createIssue({ title: "Other Metadata API" });
+    const other = createResponsibleTestIssue(store, { title: "Other Metadata API" });
     store.setIssueMetadataKey(other.id, "pipeline_status", "done");
     const filtered = await app.request(`/api/issues?metadata=${encodeURIComponent(JSON.stringify({ pipeline_status: "waiting_review" }))}`);
     expect((await filtered.json()).issues.map((item: any) => item.id)).toEqual([issue.id]);
@@ -1100,7 +1101,7 @@ describe("Multiremi API — issue endpoints", () => {
   it("serves issue label endpoints", async () => {
     const store = createStore();
     const app = createMultiremiApp({ store });
-    const issue = store.createIssue({ title: "Label API", workspaceId: "local" });
+    const issue = createResponsibleTestIssue(store, { title: "Label API", workspaceId: "local" });
 
     const created = await app.request("/api/multiremi/labels", {
       method: "POST",
@@ -1238,7 +1239,7 @@ describe("Multiremi API — issue endpoints", () => {
       defaultAssigneeId: executor.id,
     });
     const otherProject = store.createProject({ title: "Sibling project" });
-    const sourceIssue = store.createIssue({
+    const sourceIssue = createResponsibleTestIssue(store, {
       title: "Execution parent",
       workspaceId: "local",
       projectId: project.id,
@@ -1344,7 +1345,7 @@ describe("Multiremi API — issue endpoints", () => {
       defaultAssigneeId: executor.id,
     });
     const otherProject = store.createProject({ title: "Out-of-scope project" });
-    const intakeIssue = store.createIssue({
+    const intakeIssue = createResponsibleTestIssue(store, {
       title: "Intake triage",
       workspaceId: "local",
       projectId: project.id,
@@ -1454,7 +1455,7 @@ describe("Multiremi API — issue endpoints", () => {
       defaultAssigneeType: "agent",
       defaultAssigneeId: executor.id,
     });
-    const intakeIssue = store.createIssue({
+    const intakeIssue = createResponsibleTestIssue(store, {
       title: "Projectless intake",
       workspaceId: "local",
       issueKind: "intake",
@@ -1505,7 +1506,7 @@ describe("Multiremi API — issue endpoints", () => {
     store.ensureLocalWorkspace();
     const worker = store.createAgent({ name: "Projectless worker", provider: "codex" });
     store.createProject({ title: "Some active project" });
-    const sourceIssue = store.createIssue({ title: "Projectless parent", workspaceId: "local" });
+    const sourceIssue = createResponsibleTestIssue(store, { title: "Projectless parent", workspaceId: "local" });
     const task = store.createTask({
       workspaceId: "local",
       issueId: sourceIssue.id,
@@ -1643,7 +1644,7 @@ describe("Multiremi API — issue endpoints", () => {
     const store = createStore();
     store.ensureLocalWorkspace();
     const agent = store.createAgent({ name: "Intake agent", provider: "claude" });
-    const intake = store.createIssue({ title: "Intake source", workspaceId: "local", issueKind: "intake" });
+    const intake = createResponsibleTestIssue(store, { title: "Intake source", workspaceId: "local", issueKind: "intake" });
     const intakeTask = store.createTask({
       workspaceId: "local",
       issueId: intake.id,

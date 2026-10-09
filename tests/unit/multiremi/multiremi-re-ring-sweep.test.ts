@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { runTurnExecutionMutation } from '@multiremi/store/turn-execution-records.js';
 import type { SqlDatabase as UnifiedFixtureDatabase } from '@multiremi/store/db/postgres.js';
 import { expect, it } from "bun:test";
@@ -13,13 +14,13 @@ pendingTurnBackendTests("MUL-492 periodic re-ring", (fixture, backend) => {
   function setup(role: "agent" | "issue_owner" | "parent_owner" | "delegator" = "agent") {
     const f = fixture();
     const agent = f.store.createAgent({ name: "Sweep owner", provider: "codex" });
-    const issue = f.store.createIssue({ title: "Sweep inbox", status: "in_progress", assigneeType: "agent", assigneeId: agent.id });
+    const issue = createResponsibleTestIssue(f.store, { title: "Sweep inbox", status: "in_progress", assigneeType: "agent", assigneeId: agent.id });
     const session = f.store.getOrCreateDefaultIssueSession(issue.id);
     const source: Envelope["source"] = {};
     let to: Envelope["to"] = { role: "agent", agentId: agent.id, issueSessionId: session.id };
     if (role === "issue_owner") to = { role, issueId: issue.id };
     if (role === "parent_owner") {
-      const child = f.store.createIssue({ title: "Child", parentIssueId: issue.id });
+      const child = createResponsibleTestIssue(f.store, { title: "Child", parentIssueId: issue.id });
       to = { role, childIssueId: child.id };
     }
     if (role === "delegator") {
@@ -243,7 +244,7 @@ pendingTurnBackendTests("MUL-492 periodic re-ring", (fixture, backend) => {
     const f = setup();
     f.db.run("UPDATE multiremi_issues SET status = ? WHERE id = ?", [status, f.issue.id]);
     if (status === "backlog") {
-      const prerequisite = f.store.createIssue({ title: "Unmet prerequisite" });
+      const prerequisite = createResponsibleTestIssue(f.store, { title: "Unmet prerequisite" });
       f.store.createIssueDependency(f.issue.id, { dependsOnIssueId: prerequisite.id });
     }
     expect(f.store.sweepIdleIssueLanes(f.now).rang).toBe(1);
@@ -300,7 +301,7 @@ pendingTurnBackendTests("MUL-492 periodic re-ring", (fixture, backend) => {
     const runtime = f.store.registerRuntime({ name: "Directory host", provider: "codex", daemonId: "mul492-directory", metadata: { runtime_workspaces: 1 } });
     const directory = f.store.runtimeWorkspaces.create(runtime.id, { name: "Work", root_path: "/tmp/mul492-fixture-directory" });
     const agent = f.store.createAgent({ name: "Directory owner", provider: "codex" });
-    const issue = f.store.createIssue({ title: "Directory recovery", runtimeWorkspaceId: directory.id });
+    const issue = createResponsibleTestIssue(f.store, { title: "Directory recovery", runtimeWorkspaceId: directory.id });
     const main = f.store.getOrCreateDefaultIssueSession(issue.id);
     const side = f.store.createIssueSession(issue.id, { title: "Discussion", parentSessionId: main.id });
     const deliveries = [main, side].map(session => f.transaction(() => f.store.sendEnvelopeWithinTransaction({

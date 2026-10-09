@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { expect, it } from "bun:test";
 import { mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -19,7 +20,7 @@ pendingTurnBackendTests("MUL-508 access consistency", (fixture, backend) => {
     const user = store.getOrCreateUser({ externalId: "access-member", name: "Member" });
     const member = store.createWorkspaceMember({ userId: user.id, name: user.name, role: "member" });
     const agent = store.createAgent({ name: "Worker", provider: "codex", visibility: "workspace" });
-    const issue = store.createIssue({ title: "Access", assigneeType: "agent", assigneeId: agent.id });
+    const issue = createResponsibleTestIssue(store, { title: "Access", assigneeType: "agent", assigneeId: agent.id });
     const session = store.getOrCreateDefaultIssueSession(issue.id);
     const pat = await store.createAccessToken({ name: "Member", type: "pat", userId: user.id, workspaceId: "local" });
     const app = createMultiremiApp({ store, authToken: "access-master" });
@@ -88,7 +89,7 @@ pendingTurnBackendTests("MUL-508 access consistency", (fixture, backend) => {
     f.db.run("UPDATE multiremi_access_tokens SET scopes=? WHERE id=?", ['["organizer:supervisor"]', normal.id]);
     expect((await f.request(`/api/turns/${target.turn.id}/retry`, "POST", {}, normal.token)).status).toBe(403);
     const supervisor = f.store.createAgent({ name: "Supervisor", provider: "codex", role: "supervisor", visibility: "workspace" });
-    const supervisorIssue = f.store.createIssue({ title: "Supervision", assigneeType: "agent", assigneeId: supervisor.id });
+    const supervisorIssue = createResponsibleTestIssue(f.store, { title: "Supervision", assigneeType: "agent", assigneeId: supervisor.id });
     const task = f.store.createTask({ agentId: supervisor.id, issueId: supervisorIssue.id, prompt: "Supervise" });
     const withoutScope = await f.store.createAccessToken({ type: "task", name: "No scope", taskId: task.id, agentId: supervisor.id, workspaceId: "local", userId: "local" });
     expect((await f.request(`/api/turns/${target.turn.id}/retry`, "POST", {}, withoutScope.token)).status).toBe(403);
@@ -219,7 +220,7 @@ pendingTurnBackendTests("MUL-508 access consistency", (fixture, backend) => {
   it("B5: foreign or missing parent_owner rejects JSON and multipart without any rows, heads, events or files", async () => {
     const f = await scaffold();
     const foreign = f.store.createWorkspace({ name: "Foreign" });
-    const parent = f.store.createIssue({ workspaceId: foreign.id, title: "Foreign unassigned parent" });
+    const parent = createResponsibleTestIssue(f.store, { workspaceId: foreign.id, title: "Foreign unassigned parent" });
     const parentSessions = f.store.listIssueSessions(parent.id);
     const directory = mkdtempSync(join(tmpdir(), "mul508-role-")), previous = process.env.MULTIREMI_UPLOAD_DIR;
     process.env.MULTIREMI_UPLOAD_DIR = directory;
@@ -237,7 +238,7 @@ pendingTurnBackendTests("MUL-508 access consistency", (fixture, backend) => {
         expect(f.store.listIssueSessions(parent.id)).toEqual(parentSessions);
         expect(readdirSync(directory, { recursive: true }).filter(p => String(p).endsWith(".txt"))).toEqual([]);
       }
-      const localParent = f.store.createIssue({ title: "Local unassigned parent" });
+      const localParent = createResponsibleTestIssue(f.store, { title: "Local unassigned parent" });
       f.db.run("UPDATE multiremi_issues SET parent_issue_id=? WHERE id=?", [localParent.id, f.issue.id]);
       const result = await f.request(`/api/sessions/${f.session.id}/messages`, "POST", { body_md: "Local write", to: { type: "role", ref: "parent_owner" } });
       expect(result.status).toBe(200);
@@ -255,8 +256,8 @@ pendingTurnBackendTests("MUL-508 access consistency", (fixture, backend) => {
 
   it("B6 guardrail: moved-source decision, reply and marker stay hidden across HTTP, projector, attachments, counts and read cursors", async () => {
     const f = await scaffold(), s = await stream(f);
-    const parent = f.store.createIssue({ title: "Parent" }), parentSession = f.store.getOrCreateDefaultIssueSession(parent.id);
-    const child = f.store.createIssue({ title: "Child", parentIssueId: parent.id });
+    const parent = createResponsibleTestIssue(f.store, { title: "Parent" }), parentSession = f.store.getOrCreateDefaultIssueSession(parent.id);
+    const child = createResponsibleTestIssue(f.store, { title: "Child", parentIssueId: parent.id });
     const decision = f.store.createIssueDecision(child.id, { kind: "production_change", title: "Moved source decision" }, { type: "member", id: f.member.id, taskId: null });
     const q = f.store.getMessage(decision.id)!;
     f.db.run("UPDATE multiremi_conversation_log SET to_member_id=? WHERE id=?", [f.member.id, q.id]);

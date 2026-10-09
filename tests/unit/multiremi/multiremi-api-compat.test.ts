@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { issueMessagesPath, requestMessageBody, turnApiPath } from "./unified-test-paths.js";
 import { taskOfferResponse, pendingTaskWireSnapshot } from "../../fixtures/task-offer.js";
 import { receiveRuntimeInputs } from "../../fixtures/runtime-downlinks.js";
@@ -24,7 +25,7 @@ describe("Multiremi API — Go server compatibility endpoints", () => {
       maxConcurrency: 10,
     });
     const firstAgent = store.createAgent({ name: "Builder", provider: "claude" });
-    const issue = store.createIssue({ title: "Queue source", workspaceId: "local" });
+    const issue = createResponsibleTestIssue(store, { title: "Queue source", workspaceId: "local" });
     const firstSession = store.createIssueSession(issue.id, { title: "Implementation" });
     const first = store.createTask({
       agentId: firstAgent.id,
@@ -1005,7 +1006,7 @@ describe("Multiremi API — Go server compatibility endpoints", () => {
     const store = createStore();
     const agent = store.createAgent({ name: "Codex", provider: "codex" });
     const member = store.createWorkspaceMember({ id: "mem_compat", name: "Compat Member" });
-    const issue = store.createIssue({
+    const issue = createResponsibleTestIssue(store, {
       title: "Compatibility task surface",
       workspaceId: "local",
       assigneeType: "agent",
@@ -1187,13 +1188,13 @@ describe("Multiremi API — Go server compatibility endpoints", () => {
       customEnv: { SECRET_TOKEN: "real-value", KEEP_ME: "yes" },
     });
     const skill = store.createSkill({ name: "Deploy Helper", description: "Deployment skill", content: "ship it" });
-    const parent = store.createIssue({ title: "Parent issue", workspaceId: "local" });
-    const child = store.createIssue({ title: "Child issue", workspaceId: "local", parentIssueId: parent.id });
+    const parent = createResponsibleTestIssue(store, { title: "Parent issue", workspaceId: "local" });
+    const child = createResponsibleTestIssue(store, { title: "Child issue", workspaceId: "local", parentIssueId: parent.id });
     const runtime = store.registerRuntime({ name: "Compat runtime", provider: "codex" });
     const task = store.createTask({ agentId: agent.id, prompt: "wait locally" });
     const chat = store.createChatSession({ agentId: agent.id, title: "Compat chat" });
     const squad = store.createSquad({ name: "Compat squad", leaderId: agent.id });
-    const squadIssue = store.createIssue({
+    const squadIssue = createResponsibleTestIssue(store, {
       title: "Squad evaluation",
       workspaceId: "local",
       assigneeType: "squad",
@@ -1353,7 +1354,7 @@ describe("Multiremi API — Go server compatibility endpoints", () => {
       files: [{ path: "notes/console.md", content: "Use the selected console workflow." }],
     });
     const project = store.createProject({ id: "prj_console_contract", title: "Console Project", workspaceId: "local" });
-    const issue = store.createIssue({
+    const issue = createResponsibleTestIssue(store, {
       id: "iss_console_contract",
       title: "Console Issue",
       workspaceId: "local",

@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { describe, expect, it } from 'bun:test';
 import { PostgresSyncDatabase } from '@multiremi/store/db/postgres.js';
 import { conversationLogPgAdminUrl, withConversationLogStore } from './fixtures/conversation-log-store.js';
@@ -8,7 +9,7 @@ describe('Canonical mention and delegation inputs',()=>{
       await withConversationLogStore(backend,(store,db)=>{
         const leader=store.createAgent({name:'Leader',provider:'codex'});
         const worker=store.createAgent({name:'Worker',provider:'codex'});
-        const issue=store.createIssue({title:'Canonical dispatch',assigneeType:'agent',assigneeId:leader.id});
+        const issue=createResponsibleTestIssue(store, {title:'Canonical dispatch',assigneeType:'agent',assigneeId:leader.id});
         const session=store.getOrCreateDefaultIssueSession(issue.id);
         const parent=store.createSessionTask(session.id,{agentId:leader.id,prompt:'Coordinate'});
         const runtime=store.registerRuntime({id:'rt_rules',name:'Rules',provider:'codex',workspaceId:'local'});

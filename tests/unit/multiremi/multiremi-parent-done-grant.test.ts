@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { issueMessagesPath, requestMessageBody } from "./unified-test-paths.js";
 import { runTurnExecutionMutation } from '@multiremi/store/turn-execution-records.js';
 import type { SqlDatabase as UnifiedFixtureDatabase } from '@multiremi/store/db/postgres.js';
@@ -12,8 +13,8 @@ function setup() {
   store.ensureLocalWorkspace();
   const owner = store.createAgent({ name: "Parent owner", provider: "codex" });
   const other = store.createAgent({ name: "Other agent", provider: "codex" });
-  const parent = store.createIssue({ title: "Parent", status: "in_progress", assigneeType: "agent", assigneeId: owner.id });
-  const child = store.createIssue({ title: "Child", status: "in_progress", parentIssueId: parent.id });
+  const parent = createResponsibleTestIssue(store, { title: "Parent", status: "in_progress", assigneeType: "agent", assigneeId: owner.id });
+  const child = createResponsibleTestIssue(store, { title: "Child", status: "in_progress", parentIssueId: parent.id });
   return { store, owner, other, parent, child, app: createMultiremiApp({ store }) };
 }
 
@@ -285,8 +286,8 @@ describe("MUL-457 parent done grant", () => {
       [JSON.stringify({ output: "All children delivered" }), new Date(Date.now() + 1_000).toISOString(), finished.id],
       );
     })();
-    const otherParent = store.createIssue({ title: "Other parent", status: "in_progress", assigneeType: "agent", assigneeId: other.id });
-    const otherChild = store.createIssue({ title: "Other child", status: "in_progress", parentIssueId: otherParent.id });
+    const otherParent = createResponsibleTestIssue(store, { title: "Other parent", status: "in_progress", assigneeType: "agent", assigneeId: other.id });
+    const otherChild = createResponsibleTestIssue(store, { title: "Other child", status: "in_progress", parentIssueId: otherParent.id });
     store.updateIssue(otherChild.id, { status: "cancelled" });
     const beforeBatch = store.getIssue(parent.id)!.status;
     for (const route of ["/api/issues/batch-update", "/api/multiremi/issues/batch-update"]) {

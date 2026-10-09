@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { turnApiPath, mutateExecutionFixture } from "./unified-test-paths.js";
 import { taskOfferResponse, reconcileRuntimeReady } from "../../fixtures/task-offer.js";
 import { requestRuntimeRpc } from "../../fixtures/runtime-downlinks.js";
@@ -132,7 +133,7 @@ describe("Multiremi API — daemon endpoints", () => {
     store.updateDaemonDisplayName("remote", "daemon-workspace-api", "Wrong workspace", "local");
     store.updateDaemonDisplayName("local", "daemon-workspace-api", "Build workstation", "local");
     const agent = store.createAgent({ name: "Workspace Codex", provider: "codex" });
-    const issue = store.createIssue({ title: "Show workspace", workspaceId: "local" });
+    const issue = createResponsibleTestIssue(store, { title: "Show workspace", workspaceId: "local" });
     const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "work" });
     expect(store.claimTask(runtime.id)?.id).toBe(task.id);
     const app = createMultiremiApp({ store });
@@ -208,7 +209,7 @@ describe("Multiremi API — daemon endpoints", () => {
     const store = createStore();
     const runtime = store.registerRuntime({ id: "rt_intake_workspace", name: "claude (devbox)", provider: "claude" });
     const agent = store.createAgent({ name: "Intake PM", provider: "claude" });
-    const issue = store.createIssue({ title: "Triage request", workspaceId: "local", issueKind: "intake" });
+    const issue = createResponsibleTestIssue(store, { title: "Triage request", workspaceId: "local", issueKind: "intake" });
     const task = store.createTask({ agentId: agent.id, issueId: issue.id, taskKind: "quick_create", prompt: "triage" });
     expect(store.claimTask(runtime.id)?.id).toBe(task.id);
     const app = createMultiremiApp({ store });
@@ -1077,7 +1078,7 @@ describe("Multiremi API — daemon endpoints", () => {
   it("serves daemon claim/start/complete endpoints", async () => {
     const store = createStore();
     const agent = store.createAgent({ name: "Claude", provider: "claude" });
-    const issue = store.createIssue({ title: "Daemon issue", assigneeType: "agent", assigneeId: agent.id });
+    const issue = createResponsibleTestIssue(store, { title: "Daemon issue", assigneeType: "agent", assigneeId: agent.id });
     const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "hello" });
     const runtime = store.registerRuntime({ name: "local", provider: "claude",daemonId:"fixture-reports" });
     const app = createMultiremiApp({ store });
@@ -1229,8 +1230,8 @@ describe("Multiremi API — daemon endpoints", () => {
     const runningAgent = store.createAgent({ name: "Running Claude", provider: "claude", maxConcurrentTasks: 3 });
     const waitingAgent = store.createAgent({ name: "Waiting Claude", provider: "claude", maxConcurrentTasks: 3 });
     const runtime = store.registerRuntime({ name: "local", provider: "claude", maxConcurrency: 3 });
-    const runningIssue = store.createIssue({ title: "Retry running", assigneeType: "agent", assigneeId: runningAgent.id });
-    const waitingIssue = store.createIssue({ title: "Retry waiting", assigneeType: "agent", assigneeId: waitingAgent.id });
+    const runningIssue = createResponsibleTestIssue(store, { title: "Retry running", assigneeType: "agent", assigneeId: runningAgent.id });
+    const waitingIssue = createResponsibleTestIssue(store, { title: "Retry waiting", assigneeType: "agent", assigneeId: waitingAgent.id });
     const running = store.createTask({ agentId: runningAgent.id, issueId: runningIssue.id, prompt: "running" });
     const waiting = store.createTask({ agentId: waitingAgent.id, issueId: waitingIssue.id, prompt: "waiting" });
     const app = createMultiremiApp({ store });
@@ -1376,7 +1377,7 @@ describe("Multiremi API — daemon endpoints", () => {
       workspaceId: "local",
       daemonId: "daemon-local-gc",
     });
-    const issue = store.createIssue({ title: "GC issue", workspaceId: "local" });
+    const issue = createResponsibleTestIssue(store, { title: "GC issue", workspaceId: "local" });
     const chat = store.createChatSession({ agentId: agent.id, workspaceId: "local", title: "GC chat" });
     const autopilot = store.createAutopilot({
       title: "GC autopilot",
@@ -1394,7 +1395,7 @@ describe("Multiremi API — daemon endpoints", () => {
     store.startTask(task.id);
     const completedTask = store.completeTask(task.id, { output: "done" });
 
-    const remoteIssue = store.createIssue({ title: "Remote GC issue", workspaceId: "remote" });
+    const remoteIssue = createResponsibleTestIssue(store, { title: "Remote GC issue", workspaceId: "remote" });
     const remoteAgent = store.createAgent({ name: "Remote GC Codex", provider: "codex", workspaceId: "remote" });
     const remoteChat = store.createChatSession({ agentId: remoteAgent.id, workspaceId: "remote", title: "Remote GC chat" });
     const remoteAutopilot = store.createAutopilot({
@@ -1414,7 +1415,7 @@ describe("Multiremi API — daemon endpoints", () => {
     const app = createMultiremiApp({ store, authToken: "root-secret" });
     const daemonHeaders = { Authorization: `Bearer ${daemonToken.token}` };
 
-    const completedIssueWithQueuedTask = store.createIssue({ title: "GC hold", workspaceId: "local" });
+    const completedIssueWithQueuedTask = createResponsibleTestIssue(store, { title: "GC hold", workspaceId: "local" });
     const queuedIssueTask = store.createTask({
       agentId: agent.id,
       issueId: completedIssueWithQueuedTask.id,

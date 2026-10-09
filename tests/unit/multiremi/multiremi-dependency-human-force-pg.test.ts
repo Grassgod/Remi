@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { issueMessagesPath, requestMessageBody, taskRequestPath } from "./unified-test-paths.js";
 /** MUL-458 dependency force semantics on real PostgreSQL, including two-connection races. */
 import { afterAll, beforeAll, describe, expect, it, spyOn } from "bun:test";
@@ -114,8 +115,8 @@ describe.skipIf(!pgAvailable)("MUL-458 human dependency force (PostgreSQL)", () 
       runtimeId: runtime.id,
       visibility: "workspace",
     });
-    const prerequisite = store.createIssue({ title: `PG prerequisite ${suffix}`, status: "in_progress" });
-    const issue = store.createIssue({
+    const prerequisite = createResponsibleTestIssue(store, { title: `PG prerequisite ${suffix}`, status: "in_progress" });
+    const issue = createResponsibleTestIssue(store, {
       title: `PG waiting ${suffix}`,
       status: "backlog",
       blockedBy: [prerequisite.id],
@@ -213,8 +214,8 @@ describe.skipIf(!pgAvailable)("MUL-458 human dependency force (PostgreSQL)", () 
     expect(forces(repeated.issue.id)).toHaveLength(1);
 
     const parentCase = await fixture("pat", "parent");
-    const parent = store.createIssue({ title: `PG parent ${counter}`, status: "in_review" });
-    const child = store.createIssue({
+    const parent = createResponsibleTestIssue(store, { title: `PG parent ${counter}`, status: "in_review" });
+    const child = createResponsibleTestIssue(store, {
       title: `PG child ${counter}`, status: "backlog", parentIssueId: parent.id,
       blockedBy: [parentCase.prerequisite.id], assigneeType: "agent", assigneeId: parentCase.agent.id,
     });
@@ -258,7 +259,7 @@ describe.skipIf(!pgAvailable)("MUL-458 human dependency force (PostgreSQL)", () 
     const leader = store.createAgent({ name: `PG leader ${counter}`, provider: "claude", visibility: "workspace" });
     const teammate = store.createAgent({ name: `PG teammate ${counter}`, provider: "claude", visibility: "workspace" });
     const squad = store.createSquad({ name: `PG squad ${counter}`, leaderId: leader.id, memberIds: [teammate.id] });
-    const sourceIssue = store.createIssue({
+    const sourceIssue = createResponsibleTestIssue(store, {
       title: `PG source ${counter}`, status: "in_progress", assigneeType: "squad", assigneeId: squad.id,
     });
     const source = store.createTask({ agentId: leader.id, issueId: sourceIssue.id, prompt: "Lead" });

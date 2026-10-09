@@ -1,8 +1,9 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import {it,expect} from 'bun:test';
 import {pendingTurnBackendTests} from './pending-turn-test-backends.js';
 pendingTurnBackendTests('MUL-506 message operations and dispatch',fixture=>{
   function setup(){const {store,db}=fixture();const a=store.createAgent({name:'A',provider:'codex'}),b=store.createAgent({name:'B',provider:'codex'});
-    const issue=store.createIssue({title:'Conversation',assigneeType:'agent',assigneeId:a.id}),session=store.getOrCreateDefaultIssueSession(issue.id);
+    const issue=createResponsibleTestIssue(store, {title:'Conversation',assigneeType:'agent',assigneeId:a.id}),session=store.getOrCreateDefaultIssueSession(issue.id);
     const send=(body:string,to=b.id)=>store.sendMessage({session_id:session.id,sender:{type:'member',id:'mem_local_local'},to:{type:'agent',ref:to},message_kind:'request',wake_requested:'now',body_md:body});
     return {store,db,a,b,issue,session,send};}
   it('stores pair-limit downgrades and resumes the chain after a new member message',()=>{const f=setup();let source=f.send('start',f.a.id).turn_id!,sender=f.a.id,target=f.b.id;

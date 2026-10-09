@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { afterAll, beforeAll, describe, expect, it, spyOn } from "bun:test";
 import { createHash } from "node:crypto";
 import { createMultiremiApp } from "@multiremi/api.js";
@@ -84,11 +85,11 @@ for (const backend of ["SQLite", "Postgres"] as const) {
       store.updateWorkspace(workspaceId, { settings: { ...workspace.settings,
         issueTopics: { enabled: true, chatId: `oc_mul487_${n}`, notifyMode: mode, ...(mode === "person" ? { notifyOpenId: recipient } : {}) },
       } });
-      const issue = store.createIssue({ title: "Question parent", workspaceId, assigneeType: "agent", assigneeId: agent.id });
+      const issue = createResponsibleTestIssue(store, { title: "Question parent", workspaceId, assigneeType: "agent", assigneeId: agent.id });
       store.prepareFeishuIssueTopicWithinTransaction(issue);
       const root = store.claimFeishuBotOutbound(workspaceId, runtimeId)!;
       store.reportFeishuBotOutbound(workspaceId, runtimeId, root.id, { claimToken: root.claimToken, status: "sent", externalMessageId: `om_root_${n}` });
-      const source = lane === "fd" ? store.createIssue({ title: "Question source", workspaceId, parentIssueId: issue.id,
+      const source = lane === "fd" ? createResponsibleTestIssue(store, { title: "Question source", workspaceId, parentIssueId: issue.id,
         assigneeType: "agent", assigneeId: agent.id }) : issue;
       const task = store.createTask({ agentId: agent.id, workspaceId, issueId: source.id, prompt: "Do the work" });
       const request = lane === "fr"

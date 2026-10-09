@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { afterEach, describe, expect, it } from "bun:test";
 import { createLocalStore, configureRepositoryWikiAutomation, db, resetMultiremiTestEnv } from "./helpers.js";
 import { createMultiremiApp } from "@multiremi/api.js";
@@ -80,7 +81,7 @@ describe("scheduled targets", () => {
     const run = store.runAutopilot(autopilot.id, { triggerId: trigger.id });
     expect(run.taskId).toBeTruthy();
     expect(run.issueId).toBeNull();
-    const issue = store.createIssue({ title: "Delivered", projectId: project.id });
+    const issue = createResponsibleTestIssue(store, { title: "Delivered", projectId: project.id });
     const eventRun = store.runAutopilot(autopilot.id, { triggerIssueId: issue.id });
     expect(eventRun.issueId).toBe(issue.id);
     expect(eventRun.scheduleTarget).toBeNull();

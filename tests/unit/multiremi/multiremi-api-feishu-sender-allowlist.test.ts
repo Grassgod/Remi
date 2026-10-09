@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { requestMessageBody, taskRequestPath, sentTask } from "./unified-test-paths.js";
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
@@ -235,7 +236,7 @@ describe("Feishu sender allowlist Issue authorization", () => {
   it("preserves dynamic sender authority through queued system-event tasks", async () => {
     const fixture = await allowlistFixture();
     fixture.allow(true);
-    const issue = fixture.store.createIssue({ title: "Source work", workspaceId: "local", status: "todo" });
+    const issue = createResponsibleTestIssue(fixture.store, { title: "Source work", workspaceId: "local", status: "todo" });
     const autopilot = fixture.store.createAutopilot({
       title: "Follow up source Issue", assigneeId: fixture.worker.id, executionMode: "trigger_issue",
     });

@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { issueMessagesPath, requestMessageBody, taskRequestPath, sentTask } from "./unified-test-paths.js";
 /**
  * MUL-448: the task surface must derive its assignment author, run lineage and
@@ -64,7 +65,7 @@ function assignmentEvents(store: Fixture["store"], sessionId: string, taskId: st
 describe("MUL-448 task assignment author comes from the credential", () => {
   it("ignores a task credential's forged assignment author (snake and camel)", async () => {
     const { store, app, agentId, headers } = await fixture();
-    const issue = store.createIssue({ title: "Forged assignment author" });
+    const issue = createResponsibleTestIssue(store, { title: "Forged assignment author" });
     const session = store.getOrCreateDefaultIssueSession(issue.id);
     const source = store.createTask({ agentId, issueId: issue.id, prompt: "Source run" });
     const taskToken = await store.createTaskAccessToken(store.getTask(source.id)!, "local");
@@ -100,7 +101,7 @@ describe("MUL-448 task assignment author comes from the credential", () => {
 
   it("records a member as the assignment author and cannot forge a run", async () => {
     const { store, app, agentId, headers, owner } = await fixture();
-    const issue = store.createIssue({ title: "Member assignment author" });
+    const issue = createResponsibleTestIssue(store, { title: "Member assignment author" });
     const session = store.getOrCreateDefaultIssueSession(issue.id);
 
     const response = await app.request(taskRequestPath(store, { issueId: issue.id, issueSessionId: session.id }), {
@@ -124,7 +125,7 @@ describe("MUL-448 task assignment author comes from the credential", () => {
 
   it("strips task provenance the server owns from every task-create caller", async () => {
     const { store, app, agentId, headers } = await fixture();
-    const issue = store.createIssue({ title: "Task provenance" });
+    const issue = createResponsibleTestIssue(store, { title: "Task provenance" });
     const session = store.getOrCreateDefaultIssueSession(issue.id);
     const source = store.createTask({ agentId, issueId: issue.id, prompt: "Source run" });
     const taskToken = await store.createTaskAccessToken(store.getTask(source.id)!, "local");
@@ -193,7 +194,7 @@ describe("MUL-448 task assignment author comes from the credential", () => {
 
   it("keeps server-internal comment dispatch producing trigger_comment_id", async () => {
     const { store, app, agentId, headers } = await fixture();
-    const issue = store.createIssue({ title: "Mention dispatch", assigneeType: "agent", assigneeId: agentId });
+    const issue = createResponsibleTestIssue(store, { title: "Mention dispatch", assigneeType: "agent", assigneeId: agentId });
     const session = store.getOrCreateDefaultIssueSession(issue.id);
 
     // The @mention path calls the repo directly, so it must be unaffected by the
@@ -217,7 +218,7 @@ describe("MUL-448 task assignment author comes from the credential", () => {
 describe("MUL-448 comment run link comes from the credential", () => {
   it("strips a member's forged task_id and taskId from comments", async () => {
     const { store, app, agentId, headers } = await fixture();
-    const issue = store.createIssue({ title: "Comment run link" });
+    const issue = createResponsibleTestIssue(store, { title: "Comment run link" });
     const session = store.createIssueSession(issue.id, { title: "Discussion" });
     const otherRun = store.createTask({ agentId, issueId: issue.id, prompt: "Another run" });
 
@@ -244,7 +245,7 @@ describe("MUL-448 comment run link comes from the credential", () => {
 
   it("keeps using the credential's task for a task-credential comment", async () => {
     const { store, app, agentId, headers } = await fixture();
-    const issue = store.createIssue({ title: "Run comment link" });
+    const issue = createResponsibleTestIssue(store, { title: "Run comment link" });
     const ownRun = store.createTask({ agentId, issueId: issue.id, prompt: "This run" });
     const otherRun = store.createTask({ agentId, issueId: issue.id, prompt: "Another run" });
     const taskToken = await store.createTaskAccessToken(store.getTask(ownRun.id)!, "local");
@@ -262,7 +263,7 @@ describe("MUL-448 comment run link comes from the credential", () => {
 
   it("does not let a member comment smuggle a parent task into the dispatched run", async () => {
     const { store, app, agentId, headers } = await fixture();
-    const issue = store.createIssue({ title: "Comment lineage", assigneeType: "agent", assigneeId: agentId });
+    const issue = createResponsibleTestIssue(store, { title: "Comment lineage", assigneeType: "agent", assigneeId: agentId });
     const decoyRun = store.createTask({ agentId, issueId: issue.id, prompt: "Decoy run" });
 
     const response = await app.request(issueMessagesPath(store, issue.id), {
@@ -284,7 +285,7 @@ describe("MUL-448 comment run link comes from the credential", () => {
 describe("MUL-448 identity aliases on the remaining write routes", () => {
   it("strips the assign route's snake_case parent lineage", async () => {
     const { store, app, agentId, headers } = await fixture();
-    const issue = store.createIssue({ title: "Assign lineage" });
+    const issue = createResponsibleTestIssue(store, { title: "Assign lineage" });
     const decoyRun = store.createTask({ agentId, prompt: "Decoy run" });
 
     const response = await app.request(`/api/multiremi/issues/${issue.id}/assign`, {
@@ -343,7 +344,7 @@ describe("MUL-448 identity aliases on the remaining write routes", () => {
 
   it("strips the session task route's snake_case lineage and source event", async () => {
     const { store, app, agentId, headers } = await fixture();
-    const issue = store.createIssue({ title: "Session task lineage" });
+    const issue = createResponsibleTestIssue(store, { title: "Session task lineage" });
     const session = store.createIssueSession(issue.id, { title: "Session" });
     const decoyRun = store.createTask({ agentId, issueId: issue.id, prompt: "Decoy run" });
 

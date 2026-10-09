@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { afterEach, describe, expect, it } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
 import {
@@ -534,7 +535,7 @@ describe("Multiremi API - workspace repositories", () => {
       workspaceId: workspace.id,
       resources: [{ resourceType: "github_repo", resourceRef: { url: "git@github.com:acme/task-wiki.git" } }],
     });
-    const issue = store.createIssue({ title: "Publish repository Wiki", projectId: project.id });
+    const issue = createResponsibleTestIssue(store, { title: "Publish repository Wiki", projectId: project.id });
     const task = store.createTask({ agentId: agent.id, issueId: issue.id, workspaceId: workspace.id, prompt: "Publish repository Wiki" });
     const credential = await store.createTaskAccessToken(task, "local");
     const auth = { Authorization: `Bearer ${credential.token}` };

@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { afterEach, beforeEach, expect, it } from "bun:test";
 import { mkdtempSync, rmSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -17,7 +18,7 @@ beforeEach(() => {
   db = fixture().db;
   agent = store.createAgent({ name: "Worker", provider: "codex", visibility: "workspace" });
   other = store.createAgent({ name: "Other", provider: "codex", visibility: "workspace" });
-  issue = store.createIssue({ title: "API", assigneeType: "agent", assigneeId: agent.id });
+  issue = createResponsibleTestIssue(store, { title: "API", assigneeType: "agent", assigneeId: agent.id });
   session = store.getOrCreateDefaultIssueSession(issue.id); app = createMultiremiApp({ store });
 });
 afterEach(() => { store.stopNotificationDeliverySweeper(); });
@@ -159,7 +160,7 @@ it("lists and inspects turns, wraps up, cancels and retries with trace tied to t
   expect(store.listMessages(session.id)).toHaveLength(1);
   expect((await request(`/api/turns/${id}/cancel`, "POST", {})).data.turn.status).toBe("cancelled");
   store.setAgentRole(other.id, "supervisor");
-  const supervisorIssue = store.createIssue({ title: "Supervision", assigneeType: "agent", assigneeId: other.id });
+  const supervisorIssue = createResponsibleTestIssue(store, { title: "Supervision", assigneeType: "agent", assigneeId: other.id });
   const supervisorTask = store.createTask({ agentId: other.id, issueId: supervisorIssue.id, prompt: "Supervise" });
   const supervisor = await store.createTaskAccessToken(supervisorTask, "local");
   store.updateWorkspace("local", { settings: { ...store.getWorkspace("local")!.settings, organizer: { mode: "act" } } });
@@ -202,7 +203,7 @@ it("rejects cross workspace resources and malformed sends without writes", async
   const headers = { Authorization: `Bearer ${access.token}` };
   expect((await request(path(), "POST", { body_md: "foreign", to: { type: "agent", ref: foreignAgent.id } }, headers)).status).toBe(400);
   expect((await request(path(), "POST", { body_md: "invalid", wake_requested: "invalid" }, headers)).status).toBe(400);
-  const foreignIssue = store.createIssue({ title: "Foreign", workspaceId: workspace.id }), foreignSession = store.getOrCreateDefaultIssueSession(foreignIssue.id);
+  const foreignIssue = createResponsibleTestIssue(store, { title: "Foreign", workspaceId: workspace.id }), foreignSession = store.getOrCreateDefaultIssueSession(foreignIssue.id);
   expect((await request(`/api/sessions/${foreignSession.id}/messages`, "GET", undefined, headers)).status).toBe(404);
   expect(store.listMessages(session.id)).toHaveLength(0);
 });
@@ -223,7 +224,7 @@ it("sends atomic multipart attachments and cleans files on validation failure", 
     expect(readdirSync(dir, { recursive: true }).filter(name => String(name).endsWith(".txt"))).toHaveLength(1);
     expect(Number((db.query("SELECT COUNT(*) AS n FROM multiremi_attachments").get() as { n: number }).n)).toBe(1);
     expect(store.listMessages(session.id)).toHaveLength(1);
-    const parent = store.createIssue({ title: "Parent", assigneeType: "agent", assigneeId: other.id });
+    const parent = createResponsibleTestIssue(store, { title: "Parent", assigneeType: "agent", assigneeId: other.id });
     store.updateIssue(issue.id, { parentIssueId: parent.id });
     const routed = new FormData();
     routed.set("message", JSON.stringify({ body_md: "parent file", to: { type: "role", ref: "parent_owner" }, wake_requested: "inbox_only" }));

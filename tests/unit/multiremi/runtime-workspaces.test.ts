@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { afterEach, describe, expect, it } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { daemonTaskClaimResponse } from "@multiremi/api/wire/tasks.js";
@@ -32,7 +33,7 @@ describe("Runtime-owned workspaces", () => {
   it("keeps side discussions independent from their Issue's runtime workspace", () => {
     const { store, runtime, workspace, agent } = fixture();
     const other = store.registerRuntime({ name: "Discussion host", provider: "codex", daemonId: "discussion-host", workspaceId: "local" });
-    const issue = store.createIssue({ title: "Work in local files", runtimeWorkspaceId: workspace.id });
+    const issue = createResponsibleTestIssue(store, { title: "Work in local files", runtimeWorkspaceId: workspace.id });
     const mainSession = store.getOrCreateDefaultIssueSession(issue.id);
     const sideSession = store.createIssueSession(issue.id, { title: "Discuss", parentSessionId: mainSession.id });
     const main = store.createTask({ agentId: agent.id, issueId: issue.id, issueSessionId: mainSession.id, prompt: "Implement" });
@@ -112,7 +113,7 @@ describe("Runtime-owned workspaces", () => {
     const { store, runtime, workspace } = fixture();
     const claude = store.registerRuntime({ name: "Laptop Claude", provider: "claude", daemonId: "laptop", workspaceId: "local" });
     const agent = store.createAgent({ name: "Writer", provider: "claude" });
-    const issue = store.createIssue({ title: "Local-only Issue", runtime_workspace_id: workspace.id });
+    const issue = createResponsibleTestIssue(store, { title: "Local-only Issue", runtime_workspace_id: workspace.id });
     const task = store.createTask({ issueId: issue.id, agentId: agent.id, prompt: "Inspect" });
     expect(store.claimTask(runtime.id)).toBeNull();
     expect(store.claimTask(claude.id)).toBeNull();
@@ -156,8 +157,8 @@ describe("Runtime-owned workspaces", () => {
 
   it("keeps Issue workspace selection explicit and validates batch binding access", async () => {
     const { store, workspace } = fixture();
-    const parent = store.createIssue({ title: "Parent", runtime_workspace_id: workspace.id });
-    const child = store.createIssue({ title: "Child", parent_issue_id: parent.id, runtime_workspace_id: null });
+    const parent = createResponsibleTestIssue(store, { title: "Parent", runtime_workspace_id: workspace.id });
+    const child = createResponsibleTestIssue(store, { title: "Child", parent_issue_id: parent.id, runtime_workspace_id: null });
     expect(child.runtimeWorkspaceId).toBeNull();
     const foreign = store.registerRuntime({ name: "Private machine", provider: "codex", daemonId: "private", workspaceId: "local", ownerId: "someone-else", visibility: "private" });
     const privateWorkspace = store.runtimeWorkspaces.create(foreign.id, { name: "Private", root_path: "/private" });
@@ -203,9 +204,9 @@ describe("Runtime-owned workspaces", () => {
 it("assigns either a project or directory, replaces single-field selections, and preserves execution locks", () => {
   const { store, workspace, agent } = fixture();
   const project = store.createProject({ title: "Remi" });
-  const parent = store.createIssue({ title: "Parent", projectId: project.id });
+  const parent = createResponsibleTestIssue(store, { title: "Parent", projectId: project.id });
   expect(() => store.createIssue({ title: "Ambiguous", project_id: project.id, runtime_workspace_id: workspace.id })).toThrow("either a project");
-  const child = store.createIssue({ title: "Local child", parentIssueId: parent.id, runtime_workspace_id: workspace.id });
+  const child = createResponsibleTestIssue(store, { title: "Local child", parentIssueId: parent.id, runtime_workspace_id: workspace.id });
   expect(child.projectId).toBeNull();
   expect(store.createIssue({ title: "Independent", parentIssueId: parent.id, project_id: null }).projectId).toBeNull();
   const toProject = store.updateIssue(child.id, { project_id: project.id });
@@ -245,7 +246,7 @@ it("binds a project's context and device routing to Chat while rejecting Issue b
   store.createProjectDevice(project.id, { daemonId: "laptop", createdBy: "local" });
   const other = store.registerRuntime({ name: "Other", provider: "codex", daemonId: "other", workspaceId: "local" });
   const otherProject = store.createProject({ title: "Linked issue project" });
-  const issue = store.createIssue({ title: "Reference only", projectId: otherProject.id });
+  const issue = createResponsibleTestIssue(store, { title: "Reference only", projectId: otherProject.id });
   const app = createMultiremiApp({ store });
   const response = await app.request("/api/chat/sessions", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ agent_id: agent.id, project_id: project.id, issue_id: issue.id }) });
   expect(response.status).toBe(400);

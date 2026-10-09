@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { afterEach, describe, expect, it } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { sha256Text } from "@multiremi/project-knowledge/codec.js";
@@ -164,7 +165,7 @@ describe("Repository Wiki log history", () => {
       title: "Repair scope",
       resources: [{ resourceType: "github_repo", resourceRef: { url: "https://github.com/acme/log.git" } }],
     });
-    const issue = store.createIssue({ title: "Repair", projectId: project.id });
+    const issue = createResponsibleTestIssue(store, { title: "Repair", projectId: project.id });
     const ordinaryAgent = store.createAgent({ name: "Ordinary", provider: "claude" });
     const ordinaryTask = store.createTask({ agentId: ordinaryAgent.id, issueId: issue.id, prompt: "repair" });
     const ordinaryToken = await store.createTaskAccessToken(ordinaryTask, "local");

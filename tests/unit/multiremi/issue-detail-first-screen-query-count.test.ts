@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 // MUL-385: guards for the Issue detail first-screen routes.
 //
 // The three routes the detail page fires on open are `GET /api/issues/:id`,
@@ -157,9 +158,9 @@ describe("MUL-385 issue detail first-screen query counts", () => {
   it("includes unmet keys with one dependency read only while a child is in backlog", async () => {
     const { store, probe } = await createCountedStore();
     const app = createMultiremiApp({ store, authToken: AUTH_TOKEN });
-    const parent = store.createIssue({ title: "Parent", status: "backlog" });
-    const prerequisite = store.createIssue({ title: "Prerequisite", status: "in_progress" });
-    const child = store.createIssue({ title: "Waiting child", parentIssueId: parent.id,
+    const parent = createResponsibleTestIssue(store, { title: "Parent", status: "backlog" });
+    const prerequisite = createResponsibleTestIssue(store, { title: "Prerequisite", status: "in_progress" });
+    const child = createResponsibleTestIssue(store, { title: "Waiting child", parentIssueId: parent.id,
       status: "backlog", blockedBy: [prerequisite.id] });
 
     probe.reset();

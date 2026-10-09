@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import type { Database } from "bun:sqlite";
 import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { describe, expect, it } from "bun:test";
@@ -77,7 +78,7 @@ describe("conversation log server Hub wiring", () => {
     const db = openSqliteDatabase(":memory:");
     const store = new MultiremiStore(db);
     store.ensureLocalWorkspace();
-    const sessionId=store.getOrCreateDefaultIssueSession(store.createIssue({title:"Cold fill",workspaceId:"local"}).id).id;
+    const sessionId=store.getOrCreateDefaultIssueSession(createResponsibleTestIssue(store, {title:"Cold fill",workspaceId:"local"}).id).id;
     for (let i = 1; i <= 3; i++) {
       store.appendConversationLog({ sessionId, kind: "message", authorType: "system", bodyMd: `row ${i}` });
     }
@@ -103,7 +104,7 @@ describe("conversation log server Hub wiring", () => {
       const runtimeStore = new MultiremiStore(runtimeDb);
       const readPool = createReadPool({ databaseUrl: url, role: "ui" });
       runtimeStore.ensureLocalWorkspace();
-      const sessionId = runtimeStore.getOrCreateDefaultIssueSession(runtimeStore.createIssue({title:"Peer fill",workspaceId:"local"}).id).id;
+      const sessionId = runtimeStore.getOrCreateDefaultIssueSession(createResponsibleTestIssue(runtimeStore, {title:"Peer fill",workspaceId:"local"}).id).id;
       const cold = runtimeStore.appendConversationLog({ sessionId, kind: "message", authorType: "system", bodyMd: "cold row" });
       let receiver!: PeerChannel;
       const sender = createPeerChannel({
@@ -149,7 +150,7 @@ describe("conversation log server Hub wiring", () => {
       store.createWorkspaceMember({ workspaceId: workspace.id, userId: "creator", name: "Creator", role: "owner" });
       const agent = store.createAgent({ name: "Log agent", provider: "codex", workspaceId: workspace.id });
       const chat = store.createChatSession({ agentId: agent.id, workspaceId: workspace.id, creatorId: "creator", title: "Hub chat" });
-      const issue = store.createIssue({ title: "Hub issue", workspaceId: workspace.id });
+      const issue = createResponsibleTestIssue(store, { title: "Hub issue", workspaceId: workspace.id });
       const issueSession = store.getOrCreateDefaultIssueSession(issue.id, "creator");
       const token = await store.createAccessToken({ name: "Hub test", type: "pat", workspaceId: workspace.id, userId: "creator" });
       const server = startMultiremiServer({ store, backgroundJobs: false, port: 0, hostname: "127.0.0.1", authToken: null });
@@ -214,7 +215,7 @@ describe("conversation log server Hub wiring", () => {
     const db = openSqliteDatabase(":memory:");
     const store = new MultiremiStore(db);
     store.ensureLocalWorkspace();
-    const sessionId=store.getOrCreateDefaultIssueSession(store.createIssue({title:"Injected",workspaceId:"local"}).id).id;
+    const sessionId=store.getOrCreateDefaultIssueSession(createResponsibleTestIssue(store, {title:"Injected",workspaceId:"local"}).id).id;
     const hub = createHub({ transport: createLocalHubTransport(), role: "all" });
     const received: string[] = [];
     store.setConversationLogListener({ onEntry: (_sessionId, row) => received.push("seq" in row ? String(row.seq) : "patch") });
@@ -238,7 +239,7 @@ describe("conversation log server Hub wiring", () => {
     const db = openSqliteDatabase(":memory:");
     const store = new MultiremiStore(db);
     store.ensureLocalWorkspace();
-    const sessionId=store.getOrCreateDefaultIssueSession(store.createIssue({title:"Owned",workspaceId:"local"}).id).id;
+    const sessionId=store.getOrCreateDefaultIssueSession(createResponsibleTestIssue(store, {title:"Owned",workspaceId:"local"}).id).id;
     const received: number[] = [];
     store.subscribeConversationLog({ onEntry: (_sessionId, row) => {
       if ("seq" in row) received.push(row.seq);

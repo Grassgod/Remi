@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { runTurnExecutionMutation } from "@multiremi/store/turn-execution-records.js";
 // Store-level task scheduling: which runtime may claim which task.
 // Covers provider/agent-binding routing, private-runtime visibility, cross-workspace
@@ -33,7 +34,7 @@ describe("Multiremi store — task claim, routing, and workspace scoping", () =>
     const agent = store.createAgent({ name: "Routing agent", provider: "codex" });
 
     const unrestricted = store.createProject({ title: "Unrestricted" });
-    const unrestrictedIssue = store.createIssue({ title: "Ordinary work", projectId: unrestricted.id });
+    const unrestrictedIssue = createResponsibleTestIssue(store, { title: "Ordinary work", projectId: unrestricted.id });
     const unrestrictedTask = store.createTask({ agentId: agent.id, issueId: unrestrictedIssue.id, prompt: "ordinary" });
     expect(store.claimTask(personal.id)?.id).toBe(unrestrictedTask.id);
     store.startTask(unrestrictedTask.id);
@@ -41,7 +42,7 @@ describe("Multiremi store — task claim, routing, and workspace scoping", () =>
 
     const bound = store.createProject({ title: "Personal-only" });
     store.createProjectDevice(bound.id, { daemonId: "device-personal", createdBy: "local" });
-    const boundIssue = store.createIssue({ title: "Independent work", projectId: bound.id });
+    const boundIssue = createResponsibleTestIssue(store, { title: "Independent work", projectId: bound.id });
     const boundTask = store.createTask({ agentId: agent.id, issueId: boundIssue.id, prompt: "independent" });
     expect(store.claimTask(devbox.id)).toBeNull();
     expect(store.claimTask(personal.id)?.id).toBe(boundTask.id);
@@ -94,7 +95,7 @@ describe("Multiremi store — task claim, routing, and workspace scoping", () =>
     store.startTask(projectless.id);
     store.completeTask(projectless.id, { output: "done" });
 
-    const issue = store.createIssue({ title: "Bound issue", projectId: project.id });
+    const issue = createResponsibleTestIssue(store, { title: "Bound issue", projectId: project.id });
     const constrained = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "bound" });
     expect(store.claimTask(unidentified.id)).toBeNull();
     expect(store.claimTask(dedicated.id)?.id).toBe(constrained.id);
@@ -173,7 +174,7 @@ describe("Multiremi store — task claim, routing, and workspace scoping", () =>
     });
     const agent = store.createAgent({ name: "Workspace Issue", provider: "codex" });
     const workspace = store.runtimeWorkspaces.create(runtime.id, { name: "Issue files", root_path: "/local/issue" });
-    const issue = store.createIssue({ title: "Local Issue", runtimeWorkspaceId: workspace.id });
+    const issue = createResponsibleTestIssue(store, { title: "Local Issue", runtimeWorkspaceId: workspace.id });
     const session = store.getOrCreateDefaultIssueSession(issue.id);
     const first = store.createTask({ agentId: agent.id, issueId: issue.id, issueSessionId: session.id, prompt: "first" });
     expect(store.claimTask(runtime.id)?.id).toBe(first.id);
@@ -216,7 +217,7 @@ describe("Multiremi store — task claim, routing, and workspace scoping", () =>
     // A Project bound to the dedicated device may still use it.
     const bound = store.createProject({ title: "Bound to personal" });
     store.createProjectDevice(bound.id, { daemonId: "device-holds-personal" });
-    const boundIssue = store.createIssue({ title: "Bound work", projectId: bound.id });
+    const boundIssue = createResponsibleTestIssue(store, { title: "Bound work", projectId: bound.id });
     const boundSide = store.createIssueSession(boundIssue.id, { title: "Discussion", holdsWorkspace: false });
     const boundTask = store.createTask({
       agentId: agent.id,
@@ -232,7 +233,7 @@ describe("Multiremi store — task claim, routing, and workspace scoping", () =>
     // A Project bound to another device must be refused even without a lease.
     const foreign = store.createProject({ title: "Bound to devbox" });
     store.createProjectDevice(foreign.id, { daemonId: "device-holds-devbox" });
-    const foreignIssue = store.createIssue({ title: "Foreign work", projectId: foreign.id });
+    const foreignIssue = createResponsibleTestIssue(store, { title: "Foreign work", projectId: foreign.id });
     const foreignSide = store.createIssueSession(foreignIssue.id, { title: "Discussion", holdsWorkspace: false });
     const foreignTask = store.createTask({
       agentId: agent.id,
@@ -269,7 +270,7 @@ describe("Multiremi store — task claim, routing, and workspace scoping", () =>
     const agent = store.createAgent({ name: "Pooled agent", provider: "codex" });
 
     const unbound = store.createProject({ title: "Unbound project" });
-    const unboundIssue = store.createIssue({ title: "Unbound work", projectId: unbound.id });
+    const unboundIssue = createResponsibleTestIssue(store, { title: "Unbound work", projectId: unbound.id });
     const unboundSide = store.createIssueSession(unboundIssue.id, { title: "Discussion", holdsWorkspace: false });
     const unboundTask = store.createTask({
       agentId: agent.id,
@@ -288,7 +289,7 @@ describe("Multiremi store — task claim, routing, and workspace scoping", () =>
 
     const elsewhere = store.createProject({ title: "Elsewhere" });
     store.createProjectDevice(elsewhere.id, { daemonId: "device-holds-other" });
-    const elsewhereIssue = store.createIssue({ title: "Elsewhere work", projectId: elsewhere.id });
+    const elsewhereIssue = createResponsibleTestIssue(store, { title: "Elsewhere work", projectId: elsewhere.id });
     const elsewhereSide = store.createIssueSession(elsewhereIssue.id, { title: "Discussion", holdsWorkspace: false });
     const elsewhereTask = store.createTask({
       agentId: agent.id,
@@ -343,7 +344,7 @@ describe("Multiremi store — task claim, routing, and workspace scoping", () =>
         for (const runtime of runtimes) {
           index += 1;
           const issue = project.projectId
-            ? store.createIssue({ title: `${project.label} ${index}`, projectId: project.projectId })
+            ? createResponsibleTestIssue(store, { title: `${project.label} ${index}`, projectId: project.projectId })
             : null;
           const session = issue
             ? store.createIssueSession(issue.id, {
@@ -484,7 +485,7 @@ describe("Multiremi store — task claim, routing, and workspace scoping", () =>
     const agent = store.createAgent({ name: "Workspace conflict", provider: "codex", workspaceId: "local" });
     const project = store.createProject({ title: "Workspace conflict", workspaceId: "local" });
     for (const daemonId of devices) store.createProjectDevice(project.id, { daemonId });
-    const issue = store.createIssue({ title: "Conflicting workspace", projectId: project.id, workspaceId: "local" });
+    const issue = createResponsibleTestIssue(store, { title: "Conflicting workspace", projectId: project.id, workspaceId: "local" });
     const session = store.createIssueSession(issue.id, { title: "Work", holdsWorkspace: true });
     return { store, a, b, agent, project, issue, session };
   }
@@ -505,7 +506,7 @@ describe("Multiremi store — task claim, routing, and workspace scoping", () =>
     const claudeAgent = store.createAgent({ name: "Sibling claude", provider: "claude", workspaceId: "local" });
     const project = store.createProject({ title: "Sibling project", workspaceId: "local" });
     store.createProjectDevice(project.id, { daemonId: "dev-sib" });
-    const issue = store.createIssue({ title: "Sibling issue", projectId: project.id, workspaceId: "local" });
+    const issue = createResponsibleTestIssue(store, { title: "Sibling issue", projectId: project.id, workspaceId: "local" });
     const session = store.createIssueSession(issue.id, { title: "Shared", holdsWorkspace: true });
 
     // The codex Runtime on the machine builds the workspace.
@@ -562,7 +563,7 @@ describe("Multiremi store — task claim, routing, and workspace scoping", () =>
     const agent = store.createAgent({ name: "Discussion", provider: "codex", workspaceId: "local" });
     const project = store.createProject({ title: "Discussion project", workspaceId: "local" });
     store.createProjectDevice(project.id, { daemonId: "dev-disc-a" });
-    const issue = store.createIssue({ title: "Discussion issue", projectId: project.id, workspaceId: "local" });
+    const issue = createResponsibleTestIssue(store, { title: "Discussion issue", projectId: project.id, workspaceId: "local" });
     // A discussion session holds no workspace, so the workspace clause does
     // not apply to its turns (the claim SQL guards it with holds_workspace).
     const session = store.createIssueSession(issue.id, { title: "Discussion", holdsWorkspace: false });
@@ -811,7 +812,7 @@ describe("Multiremi store — task claim, routing, and workspace scoping", () =>
     const project = store.createProject({ title: "Invariant project", workspaceId: "local" });
     store.createProjectDevice(project.id, { daemonId: "dev-inv" });
     store.createProjectDevice(project.id, { daemonId: "dev-inv-legacy" });
-    const issue = store.createIssue({ title: "Invariant issue", projectId: project.id, workspaceId: "local" });
+    const issue = createResponsibleTestIssue(store, { title: "Invariant issue", projectId: project.id, workspaceId: "local" });
     // The workspace lives on the codex machine; bind the Agent to the OTHER
     // machine so the two hard constraints cannot both hold.
     store.reportIssueWorkspace({
@@ -839,7 +840,7 @@ describe("Multiremi store — task claim, routing, and workspace scoping", () =>
     const { store, machine, sibling } = placementFixture();
     const project = store.createProject({ title: "Reachable project", workspaceId: "local" });
     store.createProjectDevice(project.id, { daemonId: "dev-inv" });
-    const issue = store.createIssue({ title: "Reachable issue", projectId: project.id, workspaceId: "local" });
+    const issue = createResponsibleTestIssue(store, { title: "Reachable issue", projectId: project.id, workspaceId: "local" });
     store.reportIssueWorkspace({
       issueId: issue.id, runtimeId: machine.id, rootPath: "/tmp/MUL-1", branchName: "agent/MUL-1", status: "ready", repos: [],
     });
@@ -1019,7 +1020,7 @@ describe("Multiremi store — task claim, routing, and workspace scoping", () =>
         const chat = store.createChatSession({ agentId: agent.id, projectId: null, workspaceId: "local" });
         taskId = store.sendChatMessage(chat.id, { body: "matrix" }).task.id;
       } else {
-        const issue = store.createIssue({
+        const issue = createResponsibleTestIssue(store, {
           title: `matrix ${label}`, projectId: project!.id, workspaceId: "local",
         });
         issueId = issue.id;
@@ -1296,7 +1297,7 @@ describe("Multiremi store — task claim, routing, and workspace scoping", () =>
     const agent = store.createAgent({ name: "Lane reset", provider: "codex", workspaceId: "local" });
     const project = store.createProject({ title: "Moves A to B", workspaceId: "local" });
     store.createProjectDevice(project.id, { daemonId: "dev-lane-reset-a" });
-    const issue = store.createIssue({ title: "Lane issue", projectId: project.id, workspaceId: "local" });
+    const issue = createResponsibleTestIssue(store, { title: "Lane issue", projectId: project.id, workspaceId: "local" });
     const session = store.createIssueSession(issue.id, { title: "Discussion", holdsWorkspace: false });
 
     const first = store.createTask({
@@ -1335,7 +1336,7 @@ describe("Multiremi store — task claim, routing, and workspace scoping", () =>
     // Project P1 legitimately binds the personal device.
     const p1 = store.createProject({ title: "P1 owns personal", workspaceId: "local" });
     store.createProjectDevice(p1.id, { daemonId: "dev-lane-personal" });
-    const p1Issue = store.createIssue({ title: "P1 issue", projectId: p1.id, workspaceId: "local" });
+    const p1Issue = createResponsibleTestIssue(store, { title: "P1 issue", projectId: p1.id, workspaceId: "local" });
     const p1Session = store.createIssueSession(p1Issue.id, { title: "Discussion", holdsWorkspace: false });
     const seeded = store.createTask({
       agentId: agent.id, issueId: p1Issue.id, issueSessionId: p1Session.id, prompt: "first",
@@ -1348,7 +1349,7 @@ describe("Multiremi store — task claim, routing, and workspace scoping", () =>
     // really did claim other Projects' topic turns while the exemption was in
     // place). Once the device is dedicated, P2's next turn must not inherit it.
     const p2 = store.createProject({ title: "P2 must not use personal", workspaceId: "local" });
-    const p2Issue = store.createIssue({ title: "P2 issue", projectId: p2.id, workspaceId: "local" });
+    const p2Issue = createResponsibleTestIssue(store, { title: "P2 issue", projectId: p2.id, workspaceId: "local" });
     const p2Session = store.createIssueSession(p2Issue.id, { title: "Discussion", holdsWorkspace: false });
     db!.run(
       `INSERT INTO multiremi_session_lanes
@@ -1377,7 +1378,7 @@ describe("Multiremi store — task claim, routing, and workspace scoping", () =>
     const agent = store.createAgent({ name: "Queued lane", provider: "codex", workspaceId: "local" });
     const project = store.createProject({ title: "Moves while queued", workspaceId: "local" });
     store.createProjectDevice(project.id, { daemonId: "dev-queued-lane-a" });
-    const issue = store.createIssue({ title: "Queued issue", projectId: project.id, workspaceId: "local" });
+    const issue = createResponsibleTestIssue(store, { title: "Queued issue", projectId: project.id, workspaceId: "local" });
     const session = store.createIssueSession(issue.id, { title: "Discussion", holdsWorkspace: false });
 
     const first = store.createTask({
@@ -1411,7 +1412,7 @@ describe("Multiremi store — task claim, routing, and workspace scoping", () =>
     const agent = store.createAgent({ name: "Bound A", provider: "codex", runtimeId: a.id });
     const project = store.createProject({ title: "A only" });
     store.createProjectDevice(project.id, { daemonId: "dev-stale-a" });
-    const issue = store.createIssue({ title: "Stale lane", projectId: project.id });
+    const issue = createResponsibleTestIssue(store, { title: "Stale lane", projectId: project.id });
     const session = store.createIssueSession(issue.id, { title: "Discussion", holdsWorkspace: false });
     const task = store.createTask({ agentId: agent.id, issueId: issue.id, issueSessionId: session.id, prompt: "resume" });
     // Simulate a historical lane and queued task left on B after the binding moved.
@@ -1437,7 +1438,7 @@ describe("Multiremi store — task claim, routing, and workspace scoping", () =>
     const agent = store.createAgent({ name: "Queued kept", provider: "codex", workspaceId: "local" });
     const project = store.createProject({ title: "Stays allowed", workspaceId: "local" });
     store.createProjectDevice(project.id, { daemonId: "dev-queued-kept" });
-    const issue = store.createIssue({ title: "Kept queued", projectId: project.id, workspaceId: "local" });
+    const issue = createResponsibleTestIssue(store, { title: "Kept queued", projectId: project.id, workspaceId: "local" });
     const session = store.createIssueSession(issue.id, { title: "Discussion", holdsWorkspace: false });
 
     const first = store.createTask({
@@ -1481,7 +1482,7 @@ describe("Multiremi store — task claim, routing, and workspace scoping", () =>
       resources: [{ resourceType: "local_directory", resourceRef: { local_path: "/abs/dir-a", daemon_id: "dev-dir-disc-a" } }],
     });
     store.createProjectDevice(project.id, { daemonId: "dev-dir-disc-a" });
-    const issue = store.createIssue({ title: "Directory issue", projectId: project.id, workspaceId: "local" });
+    const issue = createResponsibleTestIssue(store, { title: "Directory issue", projectId: project.id, workspaceId: "local" });
     const session = store.createIssueSession(issue.id, { title: "Discussion", holdsWorkspace: false });
 
     const first = store.createTask({
@@ -1520,7 +1521,7 @@ describe("Multiremi store — task claim, routing, and workspace scoping", () =>
       resources: [{ resourceType: "local_directory", resourceRef: { local_path: "/abs/retire-a", daemon_id: "dev-dir-retire-a" } }],
     });
     store.createProjectDevice(project.id, { daemonId: "dev-dir-retire-a" });
-    const issue = store.createIssue({ title: "Retiring issue", projectId: project.id, workspaceId: "local" });
+    const issue = createResponsibleTestIssue(store, { title: "Retiring issue", projectId: project.id, workspaceId: "local" });
     const discussion = store.createIssueSession(issue.id, { title: "Discussion", holdsWorkspace: false });
     const holding = store.createIssueSession(issue.id, { title: "Work", holdsWorkspace: true });
     const discussionTask = store.createTask({
@@ -1550,7 +1551,7 @@ describe("Multiremi store — task claim, routing, and workspace scoping", () =>
     const agent = store.createAgent({ name: "Workspace holder", provider: "codex", workspaceId: "local" });
     const project = store.createProject({ title: "Moves", workspaceId: "local" });
     store.createProjectDevice(project.id, { daemonId: "dev-ws-a" });
-    const issue = store.createIssue({ title: "Workspace issue", projectId: project.id, workspaceId: "local" });
+    const issue = createResponsibleTestIssue(store, { title: "Workspace issue", projectId: project.id, workspaceId: "local" });
     const session = store.createIssueSession(issue.id, { title: "Work", holdsWorkspace: true });
     const task = store.createTask({
       agentId: agent.id, issueId: issue.id, issueSessionId: session.id, prompt: "hold",
@@ -1578,7 +1579,7 @@ describe("Multiremi store — task claim, routing, and workspace scoping", () =>
     const project = store.createProject({ title: "Stays on personal", workspaceId: "local" });
     store.createProjectDevice(project.id, { daemonId: "dev-lane-kept" });
     store.updateDaemonDedicated("local", "dev-lane-kept", true, "local");
-    const issue = store.createIssue({ title: "Kept issue", projectId: project.id, workspaceId: "local" });
+    const issue = createResponsibleTestIssue(store, { title: "Kept issue", projectId: project.id, workspaceId: "local" });
     const session = store.createIssueSession(issue.id, { title: "Discussion", holdsWorkspace: false });
 
     const first = store.createTask({
@@ -1608,7 +1609,7 @@ describe("Multiremi store — task claim, routing, and workspace scoping", () =>
       id: "rt_lane_none_pooled", name: "pooled", provider: "codex", workspaceId: "local", daemonId: "dev-lane-none-pooled",
     });
     const agent = store.createAgent({ name: "Project-less lane", provider: "codex", workspaceId: "local" });
-    const issue = store.createIssue({ title: "No project", workspaceId: "local" });
+    const issue = createResponsibleTestIssue(store, { title: "No project", workspaceId: "local" });
     const session = store.createIssueSession(issue.id, { title: "Discussion", holdsWorkspace: false });
     db!.run(
       `INSERT INTO multiremi_session_lanes
@@ -1643,7 +1644,7 @@ describe("Multiremi store — task claim, routing, and workspace scoping", () =>
       daemonId: "device-pin-devbox",
     });
     const agent = store.createAgent({ name: "Pinned chat", provider: "codex", workspaceId: "local" });
-    const issue = store.createIssue({
+    const issue = createResponsibleTestIssue(store, {
       title: "Topic with a moving device",
       workspaceId: "local",
       assigneeType: "agent",
@@ -1717,7 +1718,7 @@ describe("Multiremi store — task claim, routing, and workspace scoping", () =>
     });
     const agent = store.createAgent({ name: "Stale routing", provider: "codex" });
     const project = store.createProject({ title: "Becomes personal" });
-    const issue = store.createIssue({ title: "Move after dispatch", projectId: project.id });
+    const issue = createResponsibleTestIssue(store, { title: "Move after dispatch", projectId: project.id });
     const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "move" });
 
     expect(store.claimTask(devbox.id)?.id).toBe(task.id);
@@ -1745,7 +1746,7 @@ describe("Multiremi store — task claim, routing, and workspace scoping", () =>
     });
     const agent = store.createAgent({ name: "Stale dedicated", provider: "codex" });
     const ordinaryProject = store.createProject({ title: "Ordinary" });
-    const ordinaryIssue = store.createIssue({ title: "Ordinary issue", projectId: ordinaryProject.id });
+    const ordinaryIssue = createResponsibleTestIssue(store, { title: "Ordinary issue", projectId: ordinaryProject.id });
     const allowedProject = store.createProject({ title: "Allowed" });
     store.createProjectDevice(allowedProject.id, { daemonId: "device-stale-dedicated" });
     const task = store.createTask({ agentId: agent.id, issueId: ordinaryIssue.id, prompt: "fallback" });
@@ -1765,7 +1766,7 @@ describe("Multiremi store — task claim, routing, and workspace scoping", () =>
     const claude = store.registerRuntime({ id: "rt_issue_claude", name: "claude", provider: "claude" });
     const codexAgent = store.createAgent({ name: "Issue Codex", provider: "codex" });
     const claudeAgent = store.createAgent({ name: "Issue Claude", provider: "claude" });
-    const issue = store.createIssue({ title: "One workspace", workspaceId: "local" });
+    const issue = createResponsibleTestIssue(store, { title: "One workspace", workspaceId: "local" });
     const first = store.createTask({ agentId: codexAgent.id, issueId: issue.id, prompt: "first" });
     const second = store.createTask({ agentId: claudeAgent.id, issueId: issue.id, prompt: "second" });
 
@@ -1782,7 +1783,7 @@ describe("Multiremi store — task claim, routing, and workspace scoping", () =>
     const firstRuntime = store.registerRuntime({ id: "rt_workspace_a", name: "a", provider: "codex" });
     const otherRuntime = store.registerRuntime({ id: "rt_workspace_b", name: "b", provider: "codex" });
     const agent = store.createAgent({ name: "Workspace Agent", provider: "codex" });
-    const issue = store.createIssue({ title: "Runtime affinity", workspaceId: "local" });
+    const issue = createResponsibleTestIssue(store, { title: "Runtime affinity", workspaceId: "local" });
     store.reportIssueWorkspace({
       issueId: issue.id,
       runtimeId: firstRuntime.id,
@@ -1802,7 +1803,7 @@ describe("Multiremi store — task claim, routing, and workspace scoping", () =>
     const source = store.registerRuntime({ id: "rt_mul467_source", name: "source", provider: "codex" });
     const target = store.registerRuntime({ id: "rt_mul467_target", name: "target", provider: "codex" });
     const agent = store.createAgent({ name: "Recovery", provider: "codex" });
-    const issue = store.createIssue({ title: "Deletion invariant" });
+    const issue = createResponsibleTestIssue(store, { title: "Deletion invariant" });
     store.reportIssueWorkspace({ issueId: issue.id, runtimeId: source.id, rootPath: "/tmp/mul467",
       branchName: `agent/${issue.key}`, status: "dirty" });
     const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "continue" });
@@ -1823,7 +1824,7 @@ describe("Multiremi store — task claim, routing, and workspace scoping", () =>
     const source = store.registerRuntime({ id: "rt_mul467_legacy", name: "legacy", provider: "codex" });
     const target = store.registerRuntime({ id: "rt_mul467_recovery", name: "recovery", provider: "codex" });
     const agent = store.createAgent({ name: "Legacy recovery", provider: "codex" });
-    const issue = store.createIssue({ title: "Historical orphan" });
+    const issue = createResponsibleTestIssue(store, { title: "Historical orphan" });
     store.reportIssueWorkspace({ issueId: issue.id, runtimeId: source.id, rootPath: "/tmp/mul467-legacy",
       branchName: `agent/${issue.key}`, status: "ready" });
     db!.run("UPDATE multiremi_issue_workspaces SET runtime_id = NULL, status = 'runtime_offline' WHERE issue_id = ?", [issue.id]);
@@ -1856,7 +1857,7 @@ describe("Multiremi store — task claim, routing, and workspace scoping", () =>
       daemonId: "machine-b",
     });
     const agent = store.createAgent({ name: "Codex follower", provider: "codex" });
-    const issue = store.createIssue({ title: "Cross-provider continuation", workspaceId: "local" });
+    const issue = createResponsibleTestIssue(store, { title: "Cross-provider continuation", workspaceId: "local" });
     store.reportIssueWorkspace({
       issueId: issue.id,
       runtimeId: claude.id,
@@ -1900,7 +1901,7 @@ describe("Multiremi store — task claim, routing, and workspace scoping", () =>
       provider: "codex",
       daemonId: "machine-b",
     });
-    const issue = store.createIssue({ title: "Machine affinity", workspaceId: "local" });
+    const issue = createResponsibleTestIssue(store, { title: "Machine affinity", workspaceId: "local" });
     store.reportIssueWorkspace({
       issueId: issue.id,
       runtimeId: owner.id,
@@ -1942,7 +1943,7 @@ describe("Multiremi store — task claim, routing, and workspace scoping", () =>
       metadata: { cli_version: "v0.2.26", parallel_agent_execution: 1 },
     });
     const agent = store.createAgent({ name: "Workspace Agent", provider: "codex" });
-    const issue = store.createIssue({ title: "Use persistent workspace", workspaceId: "local" });
+    const issue = createResponsibleTestIssue(store, { title: "Use persistent workspace", workspaceId: "local" });
     const issueTask = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "issue work" });
     const ordinaryTask = store.createTask({ agentId: agent.id, prompt: "ordinary work" });
 
@@ -1957,7 +1958,7 @@ describe("Multiremi store — task claim, routing, and workspace scoping", () =>
     const store = createStore();
     const agent = store.createAgent({ name: "Codex", provider: "codex", maxConcurrentTasks: 2 });
     const other = store.createAgent({ name: "Claude", provider: "claude" });
-    const issue = store.createIssue({ title: "Fix bug", workspaceId: "local" });
+    const issue = createResponsibleTestIssue(store, { title: "Fix bug", workspaceId: "local" });
     const codexTask = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "Fix the bug" });
     store.createTask({ agentId: other.id, issueId: issue.id, prompt: "Should not claim" });
     const runtime = store.registerRuntime({ name: "local-codex", provider: "codex", workspaceId: "local" });
@@ -2061,7 +2062,7 @@ describe("Multiremi store — task claim, routing, and workspace scoping", () =>
       visibility: "public",
     });
     const aliceAgent = store.createAgent({ name: "Alice codex", provider: "codex", workspaceId: "local", ownerId: "alice" });
-    const issueA = store.createIssue({ title: "alice a", workspaceId: "local" });
+    const issueA = createResponsibleTestIssue(store, { title: "alice a", workspaceId: "local" });
     const task = store.createTask({ agentId: aliceAgent.id, issueId: issueA.id, prompt: "alice work", workspaceId: "local" });
 
     // Bob's private machine must not receive alice's agent (custom_env /
@@ -2072,7 +2073,7 @@ describe("Multiremi store — task claim, routing, and workspace scoping", () =>
     // A stamp is NOT an escape hatch: the unauthenticated /tasks API lets any
     // member stamp an arbitrary agent+runtime, so bob stamping alice's private
     // agent to his own private runtime must still be refused at claim time.
-    const issueB = store.createIssue({ title: "alice b", workspaceId: "local" });
+    const issueB = createResponsibleTestIssue(store, { title: "alice b", workspaceId: "local" });
     store.createTask({
       agentId: aliceAgent.id,
       issueId: issueB.id,
@@ -2327,10 +2328,10 @@ describe("Multiremi store — task claim, routing, and workspace scoping", () =>
     const store = createStore();
     const agent = store.createAgent({ name: "WS agent", provider: "codex", workspaceId: "wsA" });
     // An issue in a different workspace can't be linked to this agent's task.
-    const foreignIssue = store.createIssue({ title: "foreign", workspaceId: "wsB" });
+    const foreignIssue = createResponsibleTestIssue(store, { title: "foreign", workspaceId: "wsB" });
     expect(() => store.createTask({ agentId: agent.id, issueId: foreignIssue.id, prompt: "x" })).toThrow(/workspace/i);
     // A same-workspace issue is fine, and the task lands in the agent's workspace.
-    const ownIssue = store.createIssue({ title: "own", workspaceId: "wsA" });
+    const ownIssue = createResponsibleTestIssue(store, { title: "own", workspaceId: "wsA" });
     const task = store.createTask({ agentId: agent.id, issueId: ownIssue.id, workspaceId: "wsB", prompt: "x" });
     expect(task.workspaceId).toBe("wsA");
   });
@@ -2414,7 +2415,7 @@ describe("Multiremi store — task claim, routing, and workspace scoping", () =>
     const store = createStore();
     const codex = store.registerRuntime({ id: "rt_failclosed", name: "codex", provider: "codex" });
     const agent = store.createAgent({ name: "FailClosed", provider: "codex" });
-    const issue = store.createIssue({ title: "i", workspaceId: "local" });
+    const issue = createResponsibleTestIssue(store, { title: "i", workspaceId: "local" });
     const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "work" });
     expect(store.claimTask(codex.id)?.id).toBe(task.id);
     store.startTask(task.id);
@@ -2468,7 +2469,7 @@ describe("Multiremi store — task claim, routing, and workspace scoping", () =>
     store.startTask(task.id);
     store.completeTask(task.id, { output: "ok", sessionId: "sess_merge", workDir: "/tmp/merge" });
     expect(store.getChatSession(session.id)?.sessionRuntimeId).toBe(oldRuntime.id);
-    const issue = store.createIssue({ title: "Merged lane" });
+    const issue = createResponsibleTestIssue(store, { title: "Merged lane" });
     const issueSession = store.getOrCreateDefaultIssueSession(issue.id);
     store.getOrCreateSessionAgentLane(issueSession.id, agent.id);
     db!.run(

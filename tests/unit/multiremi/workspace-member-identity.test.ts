@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { afterEach, describe, expect, it } from "bun:test";
 import { memberRemovedPayload } from "@multiremi/api/wire/workspaces.js";
 import type { Context } from "hono";
@@ -28,7 +29,7 @@ async function login(store: MultiremiStore, name: string) {
 
 function seedInbox(store: MultiremiStore, workspaceId: string, memberId: string, body: string) {
   const author = store.createWorkspaceMember({ workspaceId, name: "Notification author" });
-  const issue = store.createIssue({ workspaceId, title: "Inbox identity", createdBy: memberId });
+  const issue = createResponsibleTestIssue(store, { workspaceId, title: "Inbox identity", createdBy: memberId });
   store.createIssueComment(issue.id, { authorType: "member", authorId: author.id, body });
   const item = store.listInboxItems(memberId, workspaceId).find((candidate) => candidate.issueId === issue.id);
   expect(item).toBeDefined();
@@ -275,7 +276,7 @@ describe("MUL-288: explicit workspace user identity", () => {
     const commenterUser = store.getOrCreateUser({ email: "commenter@example.test", name: "Commenter" });
     const creator = store.createWorkspaceMember({ name: "Creator", userId: linked ? creatorUser.id : null });
     const commenter = store.createWorkspaceMember({ name: "Commenter", userId: linked ? commenterUser.id : null });
-    const issue = store.createIssue({ title: "Member row collaborators", createdBy: creator.id });
+    const issue = createResponsibleTestIssue(store, { title: "Member row collaborators", createdBy: creator.id });
     const session = store.getOrCreateDefaultIssueSession(issue.id);
     const comment = store.createIssueComment(issue.id, { authorType: "member", authorId: commenter.id, body: "Subscribe me" });
 
@@ -303,7 +304,7 @@ describe("workspace member response identity", () => {
     const store = createLocalStore();
     const account = await login(store, "assignee-display");
     const member = store.createWorkspaceMember({ userId: account.user.id, name: "测试用户" });
-    const issue = store.createIssue({ title: "Member assignee display" });
+    const issue = createResponsibleTestIssue(store, { title: "Member assignee display" });
     const app = createMultiremiApp({ store, authToken: "test-assignee-identity-master" });
     const membersResponse = await app.request("/api/workspaces/local/members", { headers: account.headers });
     expect(membersResponse.status).toBe(200);

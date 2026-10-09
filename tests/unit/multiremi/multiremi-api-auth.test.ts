@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { reportFrame } from "../../fixtures/report-session.js";
 // Bearer auth, daemon-token route scoping, and the cookie fallback for safe methods.
 import { afterEach, describe, expect, it } from "bun:test";
@@ -85,7 +86,7 @@ describe("Multiremi API — authentication and token scoping", () => {
     const store = createStore();
     store.ensureLocalWorkspace();
     const agent = store.createAgent({ name: "Release agent", provider: "codex", workspaceId: "local" });
-    const issue = store.createIssue({ title: "Ship a release", workspaceId: "local" });
+    const issue = createResponsibleTestIssue(store, { title: "Ship a release", workspaceId: "local" });
     const task = store.createTask({ agentId: agent.id, issueId: issue.id, workspaceId: "local", prompt: "release" });
     const taskToken = await store.createTaskAccessToken(task, "local");
     const app = createMultiremiApp({ store, authToken: "root-secret" });
@@ -140,7 +141,7 @@ describe("Multiremi API — authentication and token scoping", () => {
       resourceRef: { url: "git@github.com:acme/alpha.git" },
     });
     const agent = store.createAgent({ name: "Wiki agent", provider: "codex", workspaceId: workspace.id });
-    const issue = store.createIssue({ title: "Update Alpha Wiki", workspaceId: workspace.id, projectId: project.id });
+    const issue = createResponsibleTestIssue(store, { title: "Update Alpha Wiki", workspaceId: workspace.id, projectId: project.id });
     const task = store.createTask({ agentId: agent.id, issueId: issue.id, workspaceId: workspace.id, prompt: "work" });
     const taskToken = await store.createTaskAccessToken(task, "local");
     const daemonToken = await store.createAccessToken({
@@ -281,7 +282,7 @@ describe("Multiremi API — authentication and token scoping", () => {
       workspaceId: "local",
       runtimeId: runtime.id,
     });
-    const issue = store.createIssue({
+    const issue = createResponsibleTestIssue(store, {
       title: "Legacy task token",
       workspaceId: "local",
       assigneeType: "agent",
@@ -460,7 +461,7 @@ describe("Multiremi API — authentication and token scoping", () => {
       ownerId: "usr_runtime_owner",
       runtimeId: ownerRuntimeId,
     });
-    const taskTokenIssue = store.createIssue({
+    const taskTokenIssue = createResponsibleTestIssue(store, {
       title: "Task token issue",
       assigneeType: "agent",
       assigneeId: taskTokenAgent.id,
@@ -648,7 +649,7 @@ describe("Multiremi API — authentication and token scoping", () => {
       runtimeId: otherDaemonRuntime.id,
     });
     const otherDaemonTask = store.createTask({ agentId: otherDaemonAgent.id, prompt: "stay on the other machine" });
-    const otherDaemonIssue = store.createIssue({
+    const otherDaemonIssue = createResponsibleTestIssue(store, {
       title: "Other daemon issue",
       assigneeType: "agent",
       assigneeId: otherDaemonAgent.id,

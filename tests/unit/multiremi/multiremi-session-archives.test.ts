@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { afterEach, describe, expect, it, setSystemTime } from "bun:test";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
@@ -42,7 +43,7 @@ async function fixture(daemonDirectBaseUrl?: string | null, maxBytes = 1024 * 10
     daemonId,
     workspaceId: "local",
   });
-  const issue = store.createIssue({ title: "Archive sessions", workspaceId: "local" });
+  const issue = createResponsibleTestIssue(store, { title: "Archive sessions", workspaceId: "local" });
   store.reportIssueWorkspace({
     issueId: issue.id,
     runtimeId: runtime.id,
@@ -1305,7 +1306,7 @@ describe("Multiremi session archives", () => {
 
   it("physically verifies every exact archive before atomically batch deleting Issues", async () => {
     const { store, app, issue, runtime, sessionArchives } = await fixture();
-    const second = store.createIssue({ title: "Second atomic delete", workspaceId: "local" });
+    const second = createResponsibleTestIssue(store, { title: "Second atomic delete", workspaceId: "local" });
     store.reportIssueWorkspace({
       issueId: second.id,
       runtimeId: runtime.id,
@@ -1414,7 +1415,7 @@ describe("Multiremi session archives", () => {
   it("isolates purge receipt failures and periodically converges committed cleanup", async () => {
     const { store, issue, runtime, sessionArchives } = await fixture();
     sessionArchives.stopIssueArchivePurgeRecovery();
-    const second = store.createIssue({ title: "Second purge receipt", workspaceId: "local" });
+    const second = createResponsibleTestIssue(store, { title: "Second purge receipt", workspaceId: "local" });
     store.reportIssueWorkspace({
       issueId: second.id,
       runtimeId: runtime.id,
@@ -1495,7 +1496,7 @@ describe("Multiremi session archives", () => {
 
   it("fails closed when a materialized Issue is missing its workspace cleanup record", async () => {
     const { store, app, runtime, sessionArchives } = await fixture();
-    const neverMaterialized = store.createIssue({
+    const neverMaterialized = createResponsibleTestIssue(store, {
       title: "Never materialized",
       workspaceId: "local",
     });
@@ -1504,7 +1505,7 @@ describe("Multiremi session archives", () => {
       headers: { Authorization: "Bearer root-secret" },
     })).status).toBe(204);
 
-    const taskIssue = store.createIssue({ title: "Task evidence", workspaceId: "local" });
+    const taskIssue = createResponsibleTestIssue(store, { title: "Task evidence", workspaceId: "local" });
     const agent = store.createAgent({ name: "Evidence agent", provider: "codex" });
     const task = store.createTask({
       workspaceId: "local",
@@ -1514,10 +1515,10 @@ describe("Multiremi session archives", () => {
     });
     store.cancelTask(task.id);
 
-    const sessionIssue = store.createIssue({ title: "Session evidence", workspaceId: "local" });
+    const sessionIssue = createResponsibleTestIssue(store, { title: "Session evidence", workspaceId: "local" });
     store.createIssueSession(sessionIssue.id, { title: "Materialized session" });
 
-    const archiveIssue = store.createIssue({ title: "Archive evidence", workspaceId: "local" });
+    const archiveIssue = createResponsibleTestIssue(store, { title: "Archive evidence", workspaceId: "local" });
     store.reportIssueWorkspace({
       issueId: archiveIssue.id,
       runtimeId: runtime.id,
@@ -1609,7 +1610,7 @@ describe("Multiremi session archives", () => {
     expect(blockedInit.status).toBe(409);
     expect(await blockedInit.json()).toMatchObject({ code: "issue_archive_lifecycle_closed" });
 
-    const deleting = store.createIssue({ title: "Deleting archive fence", workspaceId: "local" });
+    const deleting = createResponsibleTestIssue(store, { title: "Deleting archive fence", workspaceId: "local" });
     store.reportIssueWorkspace({
       issueId: deleting.id,
       runtimeId: runtime.id,

@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 /**
  * Manual diagnostic fixture, deliberately not named *.test.ts.
  * MULTIREMI_TEST_POSTGRES_URL=… MUL406_NESTING_REPORT=/tmp/positive.jsonl \
@@ -24,7 +25,7 @@ test("PG scanner positive control: five channels, connection ownership and nesti
     installProbes(ctx);
     store.ensureLocalWorkspace();
     const agent = store.createAgent({ name: "Classification control", provider: "claude" });
-    const issue = store.createIssue({ title: "Tail caller classification control" });
+    const issue = createResponsibleTestIssue(store, { title: "Tail caller classification control" });
     const autopilot = store.createAutopilot({ title: "Exception mismatch control",
       assigneeId: agent.id, executionMode: "create_issue", status: "active" });
     const other = new PostgresSyncDatabase(process.env.MULTIREMI_TEST_POSTGRES_URL!);

@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { afterEach, describe, expect, it } from "bun:test";
 import { buildTaskPrompt, buildTaskPromptArtifact } from "@multiremi/prompt.js";
 import { MultiremiStore } from "@multiremi/store.js";
@@ -28,7 +29,7 @@ function createProjectTask(store: MultiremiStore) {
       resourceRef: { url: "https://github.com/example/knowledge" },
     }],
   });
-  const issue = store.createIssue({
+  const issue = createResponsibleTestIssue(store, {
     title: "Use project knowledge",
     description: "Implement the requested behavior.",
     projectId: project.id,

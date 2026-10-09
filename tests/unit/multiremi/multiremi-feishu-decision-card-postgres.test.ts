@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 /**
  * MUL-407 decision-card lifecycle on real PostgreSQL.
  *
@@ -79,7 +80,7 @@ describe.skipIf(!available)("Feishu decision cards on Postgres (MUL-407)", () =>
     store.updateWorkspace(workspaceId, {
       settings: { ...workspace.settings, issueTopics: { enabled: true, chatId: "oc_pg" } },
     });
-    const issue = store.createIssue({ title: `PG ${workspaceSeq}`, workspaceId, assigneeType: "agent", assigneeId: agentId });
+    const issue = createResponsibleTestIssue(store, { title: `PG ${workspaceSeq}`, workspaceId, assigneeType: "agent", assigneeId: agentId });
     store.prepareFeishuIssueTopicWithinTransaction(issue);
     const root = store.claimFeishuBotOutbound(workspaceId, runtimeId)!;
     store.reportFeishuBotOutbound(workspaceId, runtimeId, root.id, {

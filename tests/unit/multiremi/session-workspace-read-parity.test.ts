@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { afterEach, expect, it } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { createReadPool } from "@multiremi/store/db/read-pool.js";
@@ -22,7 +23,7 @@ pendingTurnBackendTests("MUL-509 moved Issue Session read parity", (fixture, bac
       const access = await store.createAccessToken({ type: "pat", name: user.name, userId: user.id, workspaceId: workspace.id });
       callers.push({ user, member, workspace, readable, token: access.token });
     }
-    const issue = store.createIssue({ workspaceId: w1.id, title: "Move without migrating history",
+    const issue = createResponsibleTestIssue(store, { workspaceId: w1.id, title: "Move without migrating history",
       assigneeType: "member", assigneeId: callers[0]!.member.id });
     const session = store.getOrCreateDefaultIssueSession(issue.id);
     const history = store.sendMessage({ session_id: session.id, sender: { type: "member", id: callers[0]!.member.id },

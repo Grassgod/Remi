@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { afterEach, describe, expect, it } from "bun:test";
 import { retitleIssue } from "@multiremi/issue-title/service.js";
 import { createLocalStore, resetMultiremiTestEnv } from "./helpers.js";
@@ -20,7 +21,7 @@ describe("Issue title service", () => {
       tokenOp: "set",
       authToken: "secret-not-for-output",
     });
-    const issue = store.createIssue({
+    const issue = createResponsibleTestIssue(store, {
       title: "现有标题已经足够长且刚刚编辑",
       description: "这是一个足够长的描述，用于验证手动触发会跳过自动 eligibility 判断。",
     });
@@ -63,7 +64,7 @@ describe("Issue title service", () => {
   it("returns a generated preview without mutating when apply is false", async () => {
     const store = createLocalStore();
     store.upsertRelayConfig("local", "codex", { fragment: CODEX_FRAGMENT, tokenOp: "set", authToken: "secret" });
-    const issue = store.createIssue({ title: "Remi", description: "这是一个足够长的描述，用于验证 dry-run 不会写入数据库。" });
+    const issue = createResponsibleTestIssue(store, { title: "Remi", description: "这是一个足够长的描述，用于验证 dry-run 不会写入数据库。" });
     const result = await retitleIssue(store, issue.id, {
       source: "manual",
       apply: false,
@@ -84,7 +85,7 @@ describe("Issue title service", () => {
       tokenOp: "set",
       authToken: "secret",
     });
-    const issue = store.createIssue({
+    const issue = createResponsibleTestIssue(store, {
       title: "Remi",
       description: "这是一个足够长的描述，用于验证模型调用期间人工编辑不会被自动流程覆盖。",
     });
@@ -118,7 +119,7 @@ describe("Issue title service", () => {
       tokenOp: "set",
       authToken: "secret",
     });
-    const issue = store.createIssue({
+    const issue = createResponsibleTestIssue(store, {
       title: "Remi",
       description: "登录认证流程持续失败，需要修复会话刷新和凭据校验逻辑。",
     });

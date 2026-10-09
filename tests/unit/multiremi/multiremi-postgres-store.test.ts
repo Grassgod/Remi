@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { requestMessageBody, mutateExecutionFixture, issueMessagesPath } from "./unified-test-paths.js";
 import { receiveRuntimeInputs } from '../../fixtures/runtime-downlinks.js';
 /**
@@ -343,7 +344,7 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
       const runtime = store.registerRuntime({ id: "rt_pg_trace_reader", name: "PG trace runtime", provider: "codex",
         daemonId: "dmn_pg_trace_reader", workspaceId: "local" });
       const agent = store.createAgent({ name: "PG trace agent", provider: "codex", workspaceId: "local", runtimeId: runtime.id });
-      const issue = store.createIssue({ title: "PG trace reader", workspaceId: "local" });
+      const issue = createResponsibleTestIssue(store, { title: "PG trace reader", workspaceId: "local" });
       store.reportIssueWorkspace({ issueId: issue.id, runtimeId: runtime.id,
         rootPath: `/tmp/${issue.key}`, branchName: `agent/${issue.key}`, status: "ready" });
       const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "trace" });
@@ -390,9 +391,9 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
   it("retries the same waiting Turn after commit without nested PG transactions", () => {
     const runtime=store.registerRuntime({id:`rt_pg_retry_${++wsCounter}`,name:"PG retry",provider:"claude"});
     const agent=store.createAgent({name:"PG retry",provider:"claude",runtimeId:runtime.id});
-    const issue=store.createIssue({title:"Earlier work",status:"in_progress"});
+    const issue=createResponsibleTestIssue(store, {title:"Earlier work",status:"in_progress"});
     const previous=store.createTask({agentId:agent.id,issueId:issue.id,prompt:"Earlier work"});
-    const blocker=store.createIssue({title:"Blocker",status:"in_progress"});
+    const blocker=createResponsibleTestIssue(store, {title:"Blocker",status:"in_progress"});
     store.createIssueDependency(issue.id,{dependsOnIssueId:blocker.id,type:"blocked_by"});
     store.updateIssue(issue.id,{status:"backlog"});
     const states:boolean[]=[];const stop=store.onTaskEnqueued(()=>states.push(db.inTransaction));
@@ -407,11 +408,11 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
 
   it("merges structural parent status wakes behind dependencies after commit (PG)",()=>{
     const agent=store.createAgent({name:`PG parent wake ${++wsCounter}`,provider:"claude"});
-    const blocker=store.createIssue({title:"Blocker",status:"in_progress"});
-    const parent=store.createIssue({title:"Parent",status:"backlog",blockedBy:[blocker.id],assigneeType:"agent",assigneeId:agent.id});
+    const blocker=createResponsibleTestIssue(store, {title:"Blocker",status:"in_progress"});
+    const parent=createResponsibleTestIssue(store, {title:"Parent",status:"backlog",blockedBy:[blocker.id],assigneeType:"agent",assigneeId:agent.id});
     const states:boolean[]=[];const stop=store.onTaskEnqueued(()=>states.push(db.inTransaction));
     for(const status of ["done","cancelled"] as const){
-      const child=store.createIssue({title:status,parentIssueId:parent.id,status:"in_progress"});
+      const child=createResponsibleTestIssue(store, {title:status,parentIssueId:parent.id,status:"in_progress"});
       db.resetTransactionDepthStats();store.updateIssue(child.id,{status});
       expect(db.maxTransactionDepth).toBe(1);assertTransactionControl(`parent ${status}`);
     }
@@ -425,8 +426,8 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
   it("does not auto-claim a backlog issue with an active exempt round (PG)", () => {
     const runtime = store.registerRuntime({ id: `rt_pg_active_${++wsCounter}`, name: "Active exemption", provider: "claude" });
     const agent = store.createAgent({ name: `Active exemption ${wsCounter}`, provider: "claude", runtimeId: runtime.id });
-    const prerequisite = store.createIssue({ title: "Active prerequisite", status: "in_progress" });
-    const issue = store.createIssue({
+    const prerequisite = createResponsibleTestIssue(store, { title: "Active prerequisite", status: "in_progress" });
+    const issue = createResponsibleTestIssue(store, {
       title: "Active dependent", status: "backlog", blockedBy: [prerequisite.id],
       assigneeType: "agent", assigneeId: agent.id,
     });
@@ -450,8 +451,8 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
 
   it("#2-C2: force-starts a waiting member session request with an audit (PG)", async () => {
     const agent = store.createAgent({ name: `Session gate ${++wsCounter}`, provider: "claude" });
-    const prerequisite = store.createIssue({ title: "Session prerequisite", status: "in_progress" });
-    const issue = store.createIssue({ title: "Session waiting", status: "backlog", blockedBy: [prerequisite.id] });
+    const prerequisite = createResponsibleTestIssue(store, { title: "Session prerequisite", status: "in_progress" });
+    const issue = createResponsibleTestIssue(store, { title: "Session waiting", status: "backlog", blockedBy: [prerequisite.id] });
     const session = store.getOrCreateDefaultIssueSession(issue.id);
     const app = createMultiremiApp({ store });
     const response = await app.request(`/api/sessions/${session.id}/messages`, {
@@ -616,7 +617,7 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
         daemonId: "dmn_pg_issue_shared", workspaceId: "local" });
       const otherProvider = store.registerRuntime({ id: "rt_pg_issue_claude", name: "claude", provider: "claude",
         daemonId: "dmn_pg_issue_shared", workspaceId: "local" });
-      const issue = store.createIssue({ title: "PG Issue package", workspaceId: "local" });
+      const issue = createResponsibleTestIssue(store, { title: "PG Issue package", workspaceId: "local" });
       store.reportIssueWorkspace({ issueId: issue.id, runtimeId: owner.id,
         rootPath: `/tmp/${issue.key}`, branchName: `agent/${issue.key}`, status: "ready" });
       const secondSession = store.createIssueSession(issue.id, { title: "Second session" });
@@ -806,7 +807,7 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     const root = mkdtempSync(join(tmpdir(), `multiremi-pg-${label}-`));
     const runtime = store.registerRuntime({ id: `rt_pg_${label}`, name: label, provider: "codex",
       daemonId: `dmn_pg_${label}`, workspaceId: "local" });
-    const issue = store.createIssue({ title: label, workspaceId: "local" });
+    const issue = createResponsibleTestIssue(store, { title: label, workspaceId: "local" });
     store.reportIssueWorkspace({ issueId: issue.id, runtimeId: runtime.id,
       rootPath: `/tmp/${issue.key}`, branchName: `agent/${issue.key}`, status: "ready" });
     const fixture = await buildArchiveFixture({ subject: { kind: "issue", id: issue.id }, traces: {} });
@@ -980,7 +981,7 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
         daemonId: "dmn_pg_late_owner", workspaceId: "local" });
       const foreign = store.registerRuntime({ id: "rt_pg_late_foreign", name: "foreign", provider: "claude",
         daemonId: "dmn_pg_late_foreign", workspaceId: "local" });
-      const issue = store.createIssue({ title: "PG late archive", workspaceId: "local" });
+      const issue = createResponsibleTestIssue(store, { title: "PG late archive", workspaceId: "local" });
       store.reportIssueWorkspace({ issueId: issue.id, runtimeId: owner.id,
         rootPath: `/tmp/${issue.key}`, branchName: `agent/${issue.key}`, status: "ready" });
       const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "trace" });
@@ -1418,7 +1419,7 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
       memberIds: [qa.id],
       workspaceId,
     });
-    const issue = store.createIssue({
+    const issue = createResponsibleTestIssue(store, {
       title: `PG delegation ${wsCounter}`,
       assigneeType: "squad",
       assigneeId: squad.id,
@@ -1884,8 +1885,8 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
 
   it("creates issues with auto-incrementing per-workspace keys", () => {
     const ws = freshWorkspace();
-    const i1 = store.createIssue({ title: "One", workspaceId: ws });
-    const i2 = store.createIssue({ title: "Two", workspaceId: ws });
+    const i1 = createResponsibleTestIssue(store, { title: "One", workspaceId: ws });
+    const i2 = createResponsibleTestIssue(store, { title: "Two", workspaceId: ws });
     expect(i1.number).toBe(1);
     expect(i2.number).toBe(2);
     expect(store.getIssue(i1.id)?.title).toBe("One");
@@ -1894,7 +1895,7 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
   it("persists notification channels and delivery state on Postgres", () => {
     const ws = freshWorkspace();
     const member = store.listWorkspaceMembers(ws)[0]!;
-    const issue = store.createIssue({ title: "PG notification", workspaceId: ws });
+    const issue = createResponsibleTestIssue(store, { title: "PG notification", workspaceId: ws });
     store.assignIssue(issue.id, { assigneeType: "member", assigneeId: member.id });
     const item = store.listInboxItems(member.id).find((entry) => entry.issueId === issue.id)!;
     const channel = store.createNotificationChannel({
@@ -1946,7 +1947,7 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
       mode: "poll",
       repositoryIds: [repositoryId],
     });
-    const issue = store.createIssue({ title: "PG change request", workspaceId: ws });
+    const issue = createResponsibleTestIssue(store, { title: "PG change request", workspaceId: ws });
 
     expect(store.advanceScmEntitySnapshot({
       connectionId: connection.id,
@@ -2046,7 +2047,7 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
       workspaceId: ws,
       runtimeId: runtime.id,
     });
-    const issue = store.createIssue({ title: "Session PG issue", workspaceId: ws });
+    const issue = createResponsibleTestIssue(store, { title: "Session PG issue", workspaceId: ws });
     const main = store.getOrCreateDefaultIssueSession(issue.id);
     const sibling = store.createIssueSession(issue.id, { title: "Sibling" });
 
@@ -2101,9 +2102,9 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
   it("listIssues pushes status/priority/project/assignee filters + pagination into SQL", () => {
     const ws = freshWorkspace();
     const project = store.createProject({ title: "P", workspaceId: ws });
-    const todoHigh = store.createIssue({ title: "todo-high", workspaceId: ws, status: "todo", priority: "high", projectId: project.id });
-    const progLow = store.createIssue({ title: "prog-low", workspaceId: ws, status: "in_progress", priority: "low" });
-    const done = store.createIssue({ title: "done", workspaceId: ws, status: "done", priority: "none" });
+    const todoHigh = createResponsibleTestIssue(store, { title: "todo-high", workspaceId: ws, status: "todo", priority: "high", projectId: project.id });
+    const progLow = createResponsibleTestIssue(store, { title: "prog-low", workspaceId: ws, status: "in_progress", priority: "low" });
+    const done = createResponsibleTestIssue(store, { title: "done", workspaceId: ws, status: "done", priority: "none" });
 
     const keyset = (issues: { id: string }[]) => new Set(issues.map((i) => i.id));
 
@@ -2121,10 +2122,10 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
   it("keeps backlog out of active child progress and projects parent inbox fields (PG)", () => {
     const ws = freshWorkspace();
     const member = store.createWorkspaceMember({ name: "Parent owner", workspaceId: ws, role: "member" });
-    const parent = store.createIssue({ title: "Parent", workspaceId: ws, status: "in_progress", assigneeType: "member", assigneeId: member.id });
-    store.createIssue({ title: "Unscheduled", workspaceId: ws, parentIssueId: parent.id, status: "backlog" });
-    store.createIssue({ title: "Active", workspaceId: ws, parentIssueId: parent.id, status: "todo" });
-    const terminal = store.createIssue({ title: "Terminal", workspaceId: ws, parentIssueId: parent.id, status: "in_progress" });
+    const parent = createResponsibleTestIssue(store, { title: "Parent", workspaceId: ws, status: "in_progress", assigneeType: "member", assigneeId: member.id });
+    createResponsibleTestIssue(store, { title: "Unscheduled", workspaceId: ws, parentIssueId: parent.id, status: "backlog" });
+    createResponsibleTestIssue(store, { title: "Active", workspaceId: ws, parentIssueId: parent.id, status: "todo" });
+    const terminal = createResponsibleTestIssue(store, { title: "Terminal", workspaceId: ws, parentIssueId: parent.id, status: "in_progress" });
     store.updateIssue(terminal.id, { status: "done" });
 
     expect(store.getChildIssueProgress(parent.id)).toMatchObject({ total: 3, active: 1, done: 1, waiting: 0 });
@@ -2142,8 +2143,8 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     const workspaceB = freshWorkspace();
     const reviewer = store.createWorkspaceMember({ name: "Scoped parent reviewer", workspaceId: workspaceA, role: "member" });
     const author = store.createWorkspaceMember({ name: "Scoped parent author", workspaceId: workspaceA, role: "member" });
-    const parent = store.createIssue({ title: "Parent moved to B", workspaceId: workspaceA });
-    const child = store.createIssue({
+    const parent = createResponsibleTestIssue(store, { title: "Parent moved to B", workspaceId: workspaceA });
+    const child = createResponsibleTestIssue(store, {
       title: "Child staying in A",
       workspaceId: workspaceA,
       parentIssueId: parent.id,
@@ -2175,8 +2176,8 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     expect(store.listIssues({ workspaceId: workspaceA, topLevelOnly: true }).map((issue) => issue.id)).toContain(child.id);
     expect(store.listIssues({ workspaceId: workspaceA, parentId: parent.id })).toHaveLength(0);
 
-    const deletedParent = store.createIssue({ title: "Parent deleted in A", workspaceId: workspaceA });
-    const orphan = store.createIssue({
+    const deletedParent = createResponsibleTestIssue(store, { title: "Parent deleted in A", workspaceId: workspaceA });
+    const orphan = createResponsibleTestIssue(store, {
       title: "Child orphaned in A",
       workspaceId: workspaceA,
       parentIssueId: deletedParent.id,
@@ -2198,8 +2199,8 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
   it("filters issues by assignee via the IN (…) pushdown", () => {
     const ws = freshWorkspace();
     const member = store.createWorkspaceMember({ name: "Assignee", workspaceId: ws, role: "member" });
-    const assigned = store.createIssue({ title: "assigned", workspaceId: ws, assigneeType: "member", assigneeId: member.id });
-    store.createIssue({ title: "unassigned", workspaceId: ws });
+    const assigned = createResponsibleTestIssue(store, { title: "assigned", workspaceId: ws, assigneeType: "member", assigneeId: member.id });
+    createResponsibleTestIssue(store, { title: "unassigned", workspaceId: ws });
     expect(store.listIssues({ workspaceId: ws, assigneeIds: [member.id] }).map((i) => i.id)).toEqual([assigned.id]);
     expect(store.listIssues({ workspaceId: ws, assigneeTypes: ["member"] }).map((i) => i.id)).toEqual([assigned.id]);
     expect(store.listIssues({ workspaceId: ws, includeNoAssignee: true }).map((i) => i.title)).toEqual(["unassigned"]);
@@ -2261,7 +2262,7 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
       workspaceId: ws,
       maxConcurrentTasks: 2,
     });
-    const issue = store.createIssue({ title: "Concurrent workspace lease", workspaceId: ws });
+    const issue = createResponsibleTestIssue(store, { title: "Concurrent workspace lease", workspaceId: ws });
     const firstSession = store.createIssueSession(issue.id, { title: "Work A" });
     const secondAgent = independent
       ? store.createAgent({ name: "Independent worker", provider: "claude", workspaceId: ws, maxConcurrentTasks: 2 })
@@ -2370,7 +2371,7 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
       workspaceId: ws,
       resources: [{ resourceType: "local_directory", resourceRef: { local_path: "/abs/pg-project", daemon_id: "daemon-pg-pool" } }],
     });
-    const issue = store.createIssue({ title: "pg dir issue", workspaceId: ws, projectId: project.id });
+    const issue = createResponsibleTestIssue(store, { title: "pg dir issue", workspaceId: ws, projectId: project.id });
     const dirTask = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "work in dir", workspaceId: ws });
     expect(dirTask.runtimeId).toBe(codex.id);
 
@@ -2391,7 +2392,7 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
       ownerId: "someone-else",
       visibility: "public",
     });
-    const ownedIssue = store.createIssue({ title: "pg owned", workspaceId: ws });
+    const ownedIssue = createResponsibleTestIssue(store, { title: "pg owned", workspaceId: ws });
     const ownedTask = store.createTask({ agentId: agent.id, issueId: ownedIssue.id, prompt: "owned", workspaceId: ws });
     expect(store.claimTask(privateRt.id)).toBeNull();
     expect(store.claimTask(publicRt.id)?.id).toBe(ownedTask.id);
@@ -2421,7 +2422,7 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
       }],
     });
     const localDirectory = store.listProjectResources(project.id)[0]!;
-    const issue = store.createIssue({ title: "PG clean workspace", workspaceId: ws });
+    const issue = createResponsibleTestIssue(store, { title: "PG clean workspace", workspaceId: ws });
     store.reportIssueWorkspace({
       issueId: issue.id,
       runtimeId: runtime.id,
@@ -2434,7 +2435,7 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
       runtimeId: runtime.id,
       ...readyArchiveBinding(store, issue.id, runtime.id),
     });
-    const deletedIssue = store.createIssue({ title: "PG deleted workspace", workspaceId: ws });
+    const deletedIssue = createResponsibleTestIssue(store, { title: "PG deleted workspace", workspaceId: ws });
     store.reportIssueWorkspace({
       issueId: deletedIssue.id,
       runtimeId: runtime.id,
@@ -2682,7 +2683,7 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
       workspaceId: ws,
       runtimeId: oldRuntime.id,
     });
-    const issue = store.createIssue({ title: "PG merged workspace", workspaceId: ws });
+    const issue = createResponsibleTestIssue(store, { title: "PG merged workspace", workspaceId: ws });
     store.reportIssueWorkspace({
       issueId: issue.id,
       runtimeId: oldRuntime.id,
@@ -2764,7 +2765,7 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
       workspaceId: ws,
       resources: [{ resourceType: "local_directory", resourceRef: { local_path: "/abs/pg-repin", daemon_id: "daemon-pg-repin" } }],
     });
-    const issue = store.createIssue({ title: "pg repin issue", workspaceId: ws, projectId: project.id });
+    const issue = createResponsibleTestIssue(store, { title: "pg repin issue", workspaceId: ws, projectId: project.id });
     const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "work", workspaceId: ws });
     expect(task.runtimeId).toBe("rt-pg-repin");
     // Same-id re-registration flips the engine → the codex directory task re-pins
@@ -2830,7 +2831,7 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
       workspaceId: ws,
       daemonId: `dmn_archive_failure_${wsCounter}`,
     });
-    const issue = store.createIssue({ title: "Archive failure PG", workspaceId: ws });
+    const issue = createResponsibleTestIssue(store, { title: "Archive failure PG", workspaceId: ws });
     store.reportIssueWorkspace({
       issueId: issue.id,
       runtimeId: runtime.id,
@@ -3000,7 +3001,7 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     });
 
     const agent = store.createAgent({ name: "dirscan-agent", provider: "claude", workspaceId: ws });
-    const issue = store.createIssue({ title: "Ref work", workspaceId: ws, projectId: main.id });
+    const issue = createResponsibleTestIssue(store, { title: "Ref work", workspaceId: ws, projectId: main.id });
     const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "work", workspaceId: ws });
     expect(store.getTaskWithAgent(task.id)!.repos.map((repo) => repo.url)).toEqual([
       "https://github.com/acme/main",
@@ -3020,7 +3021,7 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     const ws = freshWorkspace();
     const runtime = store.registerRuntime({ name: "rt-reply-pg", provider: "claude", workspaceId: ws });
     const agent = store.createAgent({ name: "Reply PG", provider: "claude", workspaceId: ws, runtimeId: runtime.id });
-    const issue = store.createIssue({ title: "统计后端文件", workspaceId: ws });
+    const issue = createResponsibleTestIssue(store, { title: "统计后端文件", workspaceId: ws });
     const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "统计后端文件", workspaceId: ws });
     expect(store.claimTask(runtime.id)?.id).toBe(task.id);
     store.startTask(task.id);
@@ -3053,7 +3054,7 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
 
     const ws = freshWorkspace();
     const agent = store.createAgent({ name: "Wiki PG", provider: "codex", workspaceId: ws });
-    const issue = store.createIssue({ title: "Wiki PG evidence", workspaceId: ws, status: "in_review" });
+    const issue = createResponsibleTestIssue(store, { title: "Wiki PG evidence", workspaceId: ws, status: "in_review" });
     const autopilot = store.createAutopilot({
       title: "Wiki PG maintainer",
       workspaceId: ws,
@@ -3091,8 +3092,8 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
         },
       },
     });
-    const archived = store.createIssue({ title: "Archive PG", workspaceId: ws, status: "done" });
-    const active = store.createIssue({ title: "Active PG", workspaceId: ws });
+    const archived = createResponsibleTestIssue(store, { title: "Archive PG", workspaceId: ws, status: "done" });
+    const active = createResponsibleTestIssue(store, { title: "Active PG", workspaceId: ws });
     db.run(
       "UPDATE multiremi_issues SET completed_at = ? WHERE id = ?",
       ["2026-08-22T06:00:00.000Z", archived.id],
@@ -3118,7 +3119,7 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     const ws = freshWorkspace();
     const runtime = store.registerRuntime({ name: "terminal-race-runtime", provider: "codex", workspaceId: ws });
     const agent = store.createAgent({ name: "Terminal Race", provider: "codex", workspaceId: ws });
-    const issue = store.createIssue({ title: "Do not reopen", workspaceId: ws, status: "backlog" });
+    const issue = createResponsibleTestIssue(store, { title: "Do not reopen", workspaceId: ws, status: "backlog" });
     const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "Start after acceptance" });
     expect(store.claimTask(runtime.id)?.id).toBe(task.id);
     db.run("DELETE FROM multiremi_system_events WHERE resource_id = ?", [issue.id]);
@@ -3159,7 +3160,7 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     const ws = freshWorkspace();
     const runtime = store.registerRuntime({ name: "projection-race-runtime", provider: "codex", workspaceId: ws });
     const agent = store.createAgent({ name: "Projection Race", provider: "codex", workspaceId: ws });
-    const issue = store.createIssue({ title: "Projection race", workspaceId: ws });
+    const issue = createResponsibleTestIssue(store, { title: "Projection race", workspaceId: ws });
     const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "Freeze this prompt" });
     expect(store.claimTask(runtime.id)?.id).toBe(task.id);
     expect(task.issueSessionId).toBeString();
@@ -3313,7 +3314,7 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
    * assertions below pin the rollback itself.
    */
   it("rolls a rejected blocked_by creation back and stays a single transaction (PG)", () => {
-    const parent = store.createIssue({ title: "PG rollback parent", status: "in_progress" });
+    const parent = createResponsibleTestIssue(store, { title: "PG rollback parent", status: "in_progress" });
     const issuesBefore = store.listIssues({ workspaceId: "local" }).length;
     const childrenBefore = store.listChildIssues(parent.id).length;
     const dependenciesBefore = (db.query("SELECT COUNT(*) AS n FROM multiremi_issue_dependencies").get() as { n: number }).n;
@@ -3326,7 +3327,7 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     db.resetTransactionDepthStats();
     let failure: Error & { code?: string } | null = null;
     try {
-      store.createIssue({
+      createResponsibleTestIssue(store, {
         title: "PG rejected child",
         status: "todo",
         parentIssueId: parent.id,
@@ -3362,8 +3363,8 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     const owner = store.createAgent({ name: "Depth owner", provider: "claude", runtimeId: runtime.id });
 
     // (a) prerequisite done -> dependent auto-starts
-    const prereq = store.createIssue({ title: "Depth prerequisite", status: "in_progress", assigneeType: "agent", assigneeId: owner.id });
-    const dependent = store.createIssue({
+    const prereq = createResponsibleTestIssue(store, { title: "Depth prerequisite", status: "in_progress", assigneeType: "agent", assigneeId: owner.id });
+    const dependent = createResponsibleTestIssue(store, {
       title: "Depth dependent",
       status: "backlog",
       blockedBy: [prereq.id],
@@ -3385,9 +3386,9 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     expect(store.listTasksForIssue(dependent.id).filter((task) => task.status !== "cancelled")).toHaveLength(1);
 
     // (b) two prerequisites finishing: one dispatch, still depth 1
-    const first = store.createIssue({ title: "Depth first", status: "in_progress" });
-    const second = store.createIssue({ title: "Depth second", status: "in_progress" });
-    const bothWaiting = store.createIssue({
+    const first = createResponsibleTestIssue(store, { title: "Depth first", status: "in_progress" });
+    const second = createResponsibleTestIssue(store, { title: "Depth second", status: "in_progress" });
+    const bothWaiting = createResponsibleTestIssue(store, {
       title: "Depth both",
       status: "backlog",
       blockedBy: [first.id, second.id],
@@ -3404,8 +3405,8 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     expect(store.listTasksForIssue(bothWaiting.id).filter((task) => task.status !== "cancelled")).toHaveLength(1);
 
     // (c) member forced start: the override dispatches after its own commit
-    const forcedPrereq = store.createIssue({ title: "Depth forced prerequisite", status: "in_progress" });
-    const forced = store.createIssue({
+    const forcedPrereq = createResponsibleTestIssue(store, { title: "Depth forced prerequisite", status: "in_progress" });
+    const forced = createResponsibleTestIssue(store, {
       title: "Depth forced",
       status: "backlog",
       blockedBy: [forcedPrereq.id],
@@ -3430,8 +3431,8 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
   it("keeps the prerequisite done and the dependent retryable when auto-start dispatch fails (PG)", () => {
     const runtime = store.registerRuntime({ id: "rt_dep_fail", name: "Depth worker", provider: "claude", maxConcurrency: 4 });
     const owner = store.createAgent({ name: "Doomed owner", provider: "claude", runtimeId: runtime.id });
-    const prereq = store.createIssue({ title: "Prerequisite", status: "in_progress" });
-    const dependent = store.createIssue({
+    const prereq = createResponsibleTestIssue(store, { title: "Prerequisite", status: "in_progress" });
+    const dependent = createResponsibleTestIssue(store, {
       title: "Dependent",
       status: "backlog",
       blockedBy: [prereq.id],
@@ -3477,8 +3478,8 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     const app = createMultiremiApp({ store });
     const runtime = store.registerRuntime({ id: "rt_gate_pg", name: "Gate worker", provider: "claude", maxConcurrency: 4 });
     const owner = store.createAgent({ name: "Gate owner", provider: "claude", runtimeId: runtime.id });
-    const prereq = store.createIssue({ title: "Gate prerequisite", status: "in_progress" });
-    const waiting = store.createIssue({
+    const prereq = createResponsibleTestIssue(store, { title: "Gate prerequisite", status: "in_progress" });
+    const waiting = createResponsibleTestIssue(store, {
       title: "Gate waiting",
       status: "backlog",
       blockedBy: [prereq.id],
@@ -3497,7 +3498,7 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
 
     // (a) forged exemptions are ignored on the public task route
     const requester = store.createAgent({ name: "PG exemption requester", provider: "codex" });
-    const sourceIssue = store.createIssue({ title: "PG exemption source" });
+    const sourceIssue = createResponsibleTestIssue(store, { title: "PG exemption source" });
     const source = store.createTask({ agentId: requester.id, issueId: sourceIssue.id, prompt: "Request work" });
     const credential = await store.createTaskAccessToken(source, "local");
     for (const extra of [{ attempt: 2 }, { preserve_issue_status: true }]) {
@@ -3540,7 +3541,7 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     expect(forceActivities()).toHaveLength(1);
 
     // (d) a rejected blocked_by keeps its HTTP contract and rolls back
-    const parent = store.createIssue({ title: "PG parent" });
+    const parent = createResponsibleTestIssue(store, { title: "PG parent" });
     const issuesBefore = (db.query("SELECT COUNT(*) AS n FROM multiremi_issues").get() as { n: number }).n;
     for (const [blockedBy, expected] of [
       [[parent.id], 409],
@@ -3582,9 +3583,9 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     const ROUNDS = Number(process.env.MUL409_CONCURRENCY_ROUNDS ?? 12);
     let doubleDispatched = 0;
     for (let round = 0; round < ROUNDS; round++) {
-      const first = store.createIssue({ title: `Conc first ${round}`, status: "in_progress" });
-      const second = store.createIssue({ title: `Conc second ${round}`, status: "in_progress" });
-      const dependent = store.createIssue({
+      const first = createResponsibleTestIssue(store, { title: `Conc first ${round}`, status: "in_progress" });
+      const second = createResponsibleTestIssue(store, { title: `Conc second ${round}`, status: "in_progress" });
+      const dependent = createResponsibleTestIssue(store, {
         title: `Conc dependent ${round}`,
         status: "backlog",
         blockedBy: [first.id, second.id],
@@ -3627,8 +3628,8 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     const ROUNDS = Number(process.env.MUL409_FORCE_RACE_ROUNDS ?? 8);
     let doubleDispatched = 0;
     for (let round = 0; round < ROUNDS; round++) {
-      const prereq = store.createIssue({ title: `Race prereq ${round}`, status: "in_progress" });
-      const dependent = store.createIssue({
+      const prereq = createResponsibleTestIssue(store, { title: `Race prereq ${round}`, status: "in_progress" });
+      const dependent = createResponsibleTestIssue(store, {
         title: `Race dependent ${round}`,
         status: "backlog",
         blockedBy: [prereq.id],
@@ -3690,8 +3691,8 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     const app = createMultiremiApp({ store });
     const runtime = store.registerRuntime({ id: "rt_patch_pg", name: "Patch worker", provider: "claude", maxConcurrency: 4 });
     const owner = store.createAgent({ name: "Patch owner", provider: "claude", runtimeId: runtime.id });
-    const prereq = store.createIssue({ title: "Patch prerequisite", status: "in_progress" });
-    const waiting = store.createIssue({
+    const prereq = createResponsibleTestIssue(store, { title: "Patch prerequisite", status: "in_progress" });
+    const waiting = createResponsibleTestIssue(store, {
       title: "Patch waiting",
       status: "backlog",
       blockedBy: [prereq.id],
@@ -3746,8 +3747,8 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     drainSystemEvents();
     const runtime = store.registerRuntime({ id: "rt_atomic_pg", name: "Atomic worker", provider: "claude", maxConcurrency: 4 });
     const owner = store.createAgent({ name: "Atomic owner", provider: "claude", runtimeId: runtime.id });
-    const prereq = store.createIssue({ title: "Atomic prerequisite", status: "in_progress" });
-    const dependent = store.createIssue({
+    const prereq = createResponsibleTestIssue(store, { title: "Atomic prerequisite", status: "in_progress" });
+    const dependent = createResponsibleTestIssue(store, {
       title: "Atomic dependent",
       status: "backlog",
       blockedBy: [prereq.id],
@@ -3821,8 +3822,8 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
   it("U8 ignores a stale backlog issue after its round was already queued (PG)", () => {
     const runtime = store.registerRuntime({ name: "Stale PG runtime", provider: "claude" });
     const owner = store.createAgent({ name: "Stale PG owner", provider: "claude", runtimeId: runtime.id });
-    const prereq = store.createIssue({ title: "Stale PG prerequisite", status: "in_progress" });
-    const dependent = store.createIssue({ title: "Stale PG dependent", status: "backlog", blockedBy: [prereq.id],
+    const prereq = createResponsibleTestIssue(store, { title: "Stale PG prerequisite", status: "in_progress" });
+    const dependent = createResponsibleTestIssue(store, { title: "Stale PG dependent", status: "backlog", blockedBy: [prereq.id],
       assigneeType: "agent", assigneeId: owner.id });
     store.updateIssue(prereq.id, { status: "done" });
     expect(store.getIssue(dependent.id)?.status).toBe("todo");
@@ -3850,8 +3851,8 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     function chain() {
       const runtime = store.registerRuntime({ name: `Check identity ${++wsCounter}`, provider: "claude" });
       const agent = store.createAgent({ name: `Check identity ${wsCounter}`, provider: "claude", runtimeId: runtime.id });
-      const prerequisite = store.createIssue({ title: `Check prerequisite ${wsCounter}`, status: "in_progress" });
-      const dependent = store.createIssue({ title: `Check dependent ${wsCounter}`, status: "backlog",
+      const prerequisite = createResponsibleTestIssue(store, { title: `Check prerequisite ${wsCounter}`, status: "in_progress" });
+      const dependent = createResponsibleTestIssue(store, { title: `Check dependent ${wsCounter}`, status: "backlog",
         blockedBy: [prerequisite.id], assigneeType: "agent", assigneeId: agent.id });
       return { agent, prerequisite, dependent };
     }
@@ -3876,9 +3877,9 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
       drainIdentityEvents();
       const runtime = store.registerRuntime({ name: `Terminal check PG ${++wsCounter}`, provider: "claude" });
       const owner = store.createAgent({ name: `Terminal check PG ${wsCounter}`, provider: "claude", runtimeId: runtime.id });
-      const prerequisite = store.createIssue({ title: `Terminal check prerequisite PG ${wsCounter}`, status: "todo", issueKind: "intake" });
-      store.createIssue({ title: `Terminal generated PG ${wsCounter}`, sourceIssueId: prerequisite.id });
-      const dependent = store.createIssue({ title: `Terminal check dependent PG ${wsCounter}`, status: "backlog",
+      const prerequisite = createResponsibleTestIssue(store, { title: `Terminal check prerequisite PG ${wsCounter}`, status: "todo", issueKind: "intake" });
+      createResponsibleTestIssue(store, { title: `Terminal generated PG ${wsCounter}`, sourceIssueId: prerequisite.id });
+      const dependent = createResponsibleTestIssue(store, { title: `Terminal check dependent PG ${wsCounter}`, status: "backlog",
         blockedBy: [prerequisite.id], assigneeType: "agent", assigneeId: owner.id });
       const task = store.createTask({ agentId: owner.id, issueId: prerequisite.id, prompt: "Finish intake" });
       expect(store.claimTask(runtime.id)?.id).toBe(task.id);
@@ -3969,10 +3970,10 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
       drainIdentityEvents();
       const { agent, prerequisite, dependent } = chain();
       const unavailable = store.createAgent({ name: `Unavailable PG ${++wsCounter}`, provider: "claude", runtimeId: agent.runtimeId! });
-      const skipped = store.createIssue({ title: `Skipped PG ${wsCounter}`, status: "backlog", blockedBy: [prerequisite.id],
+      const skipped = createResponsibleTestIssue(store, { title: `Skipped PG ${wsCounter}`, status: "backlog", blockedBy: [prerequisite.id],
         assigneeType: "agent", assigneeId: unavailable.id });
       db.run("UPDATE multiremi_agents SET archived_at = ? WHERE id = ?", [new Date().toISOString(), unavailable.id]);
-      const failed = store.createIssue({ title: `Failed PG ${wsCounter}`, status: "backlog", blockedBy: [prerequisite.id],
+      const failed = createResponsibleTestIssue(store, { title: `Failed PG ${wsCounter}`, status: "backlog", blockedBy: [prerequisite.id],
         assigneeType: "agent", assigneeId: agent.id });
       withoutHooks(() => store.updateIssue(prerequisite.id, { status: "done" }));
       const check = checks(prerequisite.id)[0]!;
@@ -4012,8 +4013,8 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     drainSystemEvents();
     const runtime = store.registerRuntime({ name: "Replay write PG", provider: "claude" });
     const owner = store.createAgent({ name: "Replay write PG", provider: "claude", runtimeId: runtime.id });
-    const prereq = store.createIssue({ title: "Replay write PG prerequisite", status: "in_progress" });
-    const dependent = store.createIssue({ title: "Replay write PG dependent", status: "backlog", blockedBy: [prereq.id],
+    const prereq = createResponsibleTestIssue(store, { title: "Replay write PG prerequisite", status: "in_progress" });
+    const dependent = createResponsibleTestIssue(store, { title: "Replay write PG dependent", status: "backlog", blockedBy: [prereq.id],
       assigneeType: "agent", assigneeId: owner.id });
     const issues = (store as unknown as { issues: { runIssueUpdatePostCommit(...args: unknown[]): void } }).issues;
     const hook = spyOn(issues, "runIssueUpdatePostCommit").mockImplementation(() => {});
@@ -4053,8 +4054,8 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     const app = createMultiremiApp({ store });
     const runtime = store.registerRuntime({ name: "Patch write PG", provider: "claude" });
     const owner = store.createAgent({ name: "Patch write PG", provider: "claude", runtimeId: runtime.id });
-    const prereq = store.createIssue({ title: "Patch write PG prerequisite", status: "in_progress" });
-    const dependent = store.createIssue({ title: "Patch write PG dependent", status: "backlog", blockedBy: [prereq.id],
+    const prereq = createResponsibleTestIssue(store, { title: "Patch write PG prerequisite", status: "in_progress" });
+    const dependent = createResponsibleTestIssue(store, { title: "Patch write PG dependent", status: "backlog", blockedBy: [prereq.id],
       assigneeType: "agent", assigneeId: owner.id });
     const run = db.run.bind(db);
     let injected = false;
@@ -4098,8 +4099,8 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     const app = createMultiremiApp({ store });
     const runtime = store.registerRuntime({ name: "Patch skip PG", provider: "claude" });
     const owner = store.createAgent({ name: "Patch skip PG", provider: "claude", runtimeId: runtime.id });
-    const prereq = store.createIssue({ title: "Patch skip PG prerequisite", status: "in_progress" });
-    const dependent = store.createIssue({ title: "Patch skip PG dependent", status: "backlog", blockedBy: [prereq.id],
+    const prereq = createResponsibleTestIssue(store, { title: "Patch skip PG prerequisite", status: "in_progress" });
+    const dependent = createResponsibleTestIssue(store, { title: "Patch skip PG dependent", status: "backlog", blockedBy: [prereq.id],
       assigneeType: "agent", assigneeId: owner.id });
     db.run("UPDATE multiremi_agents SET archived_at = ? WHERE id = ?", [new Date().toISOString(), owner.id]);
     const ctx = (store as unknown as { ctx: StoreContext }).ctx;
@@ -4141,8 +4142,8 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
   it("leaves no todo-without-round and no backlog-with-round when the process dies at the claim (PG)", async () => {
     const runtime = store.registerRuntime({ id: "rt_crash_pg", name: "Crash worker", provider: "claude", maxConcurrency: 4 });
     const owner = store.createAgent({ name: "Crash owner", provider: "claude", runtimeId: runtime.id });
-    const prereq = store.createIssue({ title: "Crash prerequisite", status: "in_progress" });
-    const dependent = store.createIssue({
+    const prereq = createResponsibleTestIssue(store, { title: "Crash prerequisite", status: "in_progress" });
+    const dependent = createResponsibleTestIssue(store, {
       title: "Crash dependent",
       status: "backlog",
       blockedBy: [prereq.id],
@@ -4214,8 +4215,8 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
   it("rolls the forced start back when the process dies before COMMIT (PG)", async () => {
     const runtime = store.registerRuntime({ id: "rt_force_before", name: "Force before worker", provider: "claude", maxConcurrency: 4 });
     const owner = store.createAgent({ name: "Force before owner", provider: "claude", runtimeId: runtime.id });
-    const prereq = store.createIssue({ title: "Force before prerequisite", status: "in_progress" });
-    const dependent = store.createIssue({
+    const prereq = createResponsibleTestIssue(store, { title: "Force before prerequisite", status: "in_progress" });
+    const dependent = createResponsibleTestIssue(store, {
       title: "Force before dependent",
       status: "backlog",
       blockedBy: [prereq.id],
@@ -4244,8 +4245,8 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
   it("keeps todo plus its round when the process dies after the forced start commits (PG)", async () => {
     const runtime = store.registerRuntime({ id: "rt_force_after", name: "Force after worker", provider: "claude", maxConcurrency: 4 });
     const owner = store.createAgent({ name: "Force after owner", provider: "claude", runtimeId: runtime.id });
-    const prereq = store.createIssue({ title: "Force after prerequisite", status: "in_progress" });
-    const dependent = store.createIssue({
+    const prereq = createResponsibleTestIssue(store, { title: "Force after prerequisite", status: "in_progress" });
+    const dependent = createResponsibleTestIssue(store, {
       title: "Force after dependent",
       status: "backlog",
       blockedBy: [prereq.id],
@@ -4280,8 +4281,8 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
   it("keeps the gate-open member start record when the process dies after COMMIT (PG)", async () => {
     const runtime = store.registerRuntime({ id: "rt_gate_open_after", name: "Gate-open worker", provider: "claude", maxConcurrency: 4 });
     const owner = store.createAgent({ name: "Gate-open owner", provider: "claude", runtimeId: runtime.id });
-    const prereq = store.createIssue({ title: "Gate-open prerequisite", status: "in_progress" });
-    const dependent = store.createIssue({
+    const prereq = createResponsibleTestIssue(store, { title: "Gate-open prerequisite", status: "in_progress" });
+    const dependent = createResponsibleTestIssue(store, {
       title: "Gate-open dependent",
       status: "backlog",
       blockedBy: [prereq.id],
@@ -4325,8 +4326,8 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     (step) => {
       const runtime = store.registerRuntime({ id: `rt_force_inj_${step.replace(/ /g, "_")}`, name: "Force injection worker", provider: "claude", maxConcurrency: 4 });
       const owner = store.createAgent({ name: `Force injection ${step}`, provider: "claude", runtimeId: runtime.id });
-      const prereq = store.createIssue({ title: "Injection prerequisite", status: "in_progress" });
-      const dependent = store.createIssue({
+      const prereq = createResponsibleTestIssue(store, { title: "Injection prerequisite", status: "in_progress" });
+      const dependent = createResponsibleTestIssue(store, {
         title: `Injection dependent ${step}`,
         status: "backlog",
         blockedBy: [prereq.id],
@@ -4394,8 +4395,8 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
   it("keeps todo plus its round when the process dies after COMMIT (PG)", async () => {
     const runtime = store.registerRuntime({ id: "rt_after_commit", name: "After commit worker", provider: "claude", maxConcurrency: 4 });
     const owner = store.createAgent({ name: "After commit owner", provider: "claude", runtimeId: runtime.id });
-    const prereq = store.createIssue({ title: "After commit prerequisite", status: "in_progress" });
-    const dependent = store.createIssue({
+    const prereq = createResponsibleTestIssue(store, { title: "After commit prerequisite", status: "in_progress" });
+    const dependent = createResponsibleTestIssue(store, {
       title: "After commit dependent",
       status: "backlog",
       blockedBy: [prereq.id],
@@ -4431,8 +4432,8 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     const app = createMultiremiApp({ store });
     const runtime = store.registerRuntime({ id: "rt_order_pg", name: "Order worker", provider: "claude", maxConcurrency: 4 });
     const owner = store.createAgent({ name: "Order owner", provider: "claude", runtimeId: runtime.id });
-    const prereq = store.createIssue({ title: "Order prerequisite", status: "in_progress" });
-    const dependent = store.createIssue({
+    const prereq = createResponsibleTestIssue(store, { title: "Order prerequisite", status: "in_progress" });
+    const dependent = createResponsibleTestIssue(store, {
       title: "Order dependent",
       status: "backlog",
       blockedBy: [prereq.id],
@@ -4563,8 +4564,8 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     const distribution = { auto: 0, force: 0, member: 0, none: 0, both: 0 };
     const mismatches: Array<Record<string, unknown>> = [];
     for (let round = 0; round < ROUNDS; round++) {
-      const prereq = store.createIssue({ title: `Two conn prereq ${round}`, status: "in_progress" });
-      const dependent = store.createIssue({
+      const prereq = createResponsibleTestIssue(store, { title: `Two conn prereq ${round}`, status: "in_progress" });
+      const dependent = createResponsibleTestIssue(store, {
         title: `Two conn dependent ${round}`,
         status: "backlog",
         blockedBy: [prereq.id],

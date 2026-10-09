@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { mutateExecutionFixture } from "./unified-test-paths.js";
 import { reportFrame } from "../../fixtures/report-session.js";
 import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
@@ -78,7 +79,7 @@ function configureTopics(store: MultiremiStore, projectIds?: string[]): void {
 
 function prepareReport(store: MultiremiStore) {
   const agent = store.getFeishuBotConfig("local")!.agentId;
-  const issue = store.createIssue({ title: "Review requested", workspaceId: "local", assigneeType: "agent", assigneeId: agent });
+  const issue = createResponsibleTestIssue(store, { title: "Review requested", workspaceId: "local", assigneeType: "agent", assigneeId: agent });
   store.prepareFeishuIssueTopicWithinTransaction(issue);
   const root = store.claimFeishuBotOutbound("local", "rt_bot")!;
   expect(root.bodyOrigin).toBe("issue");
@@ -93,7 +94,7 @@ function prepareReport(store: MultiremiStore) {
 describe("Feishu Issue topics", () => {
   describe("MUL-531 terminal reports from commented Issues", () => {
     function issueWithTopic(store: MultiremiStore, agentId: string, title: string) {
-      const issue = store.createIssue({ title, workspaceId: "local", assigneeType: "agent", assigneeId: agentId });
+      const issue = createResponsibleTestIssue(store, { title, workspaceId: "local", assigneeType: "agent", assigneeId: agentId });
       store.prepareFeishuIssueTopicWithinTransaction(issue);
       const root = store.claimFeishuBotOutbound("local", "rt_bot")!;
       store.reportFeishuBotOutbound("local", "rt_bot", root.id, {
@@ -720,7 +721,7 @@ describe("Feishu Issue topics", () => {
         const { store } = scaffold();
         configureTopics(store);
         const botAgentId = store.getFeishuBotConfig("local")!.agentId;
-        const issue = store.createIssue({ title: "Cross-provider notification", workspaceId: "local" });
+        const issue = createResponsibleTestIssue(store, { title: "Cross-provider notification", workspaceId: "local" });
         store.prepareFeishuIssueTopicWithinTransaction(issue);
         const root = store.claimFeishuBotOutbound("local", "rt_bot")!;
         store.reportFeishuBotOutbound("local", "rt_bot", root.id, {
@@ -755,7 +756,7 @@ describe("Feishu Issue topics", () => {
       userId: creatorKind === "unbound-member-id" ? null : user.id,
     });
     const createdBy = creatorKind === "user-id" ? user.id : member.id;
-    const issue = store.createIssue({ title: "Member-created topic", createdBy });
+    const issue = createResponsibleTestIssue(store, { title: "Member-created topic", createdBy });
 
     expect(store.prepareFeishuIssueTopicWithinTransaction(issue)).toBe(true);
     const chat = store.getChatSession(`chat_issue_topic_${issue.id}`)!;

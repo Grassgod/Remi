@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { turnApiPath } from "./unified-test-paths.js";
 import { afterEach, describe, expect, it } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
@@ -41,7 +42,7 @@ describe("Project Chat startup progress", () => {
     const store = createLocalStore();
     const agent = store.createAgent({ name: "Worker", provider: "codex" });
     const project = store.createProject({ title: "Project" });
-    const issue = store.createIssue({ title: "Issue", projectId: project.id });
+    const issue = createResponsibleTestIssue(store, { title: "Issue", projectId: project.id });
     const app = createMultiremiApp({ store });
     for (const topic of [false, true]) {
       const chat = store.createChatSession({ agentId: agent.id, ...(topic ? { projectId: project.id } : {}) });

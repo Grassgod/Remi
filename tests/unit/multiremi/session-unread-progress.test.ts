@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { afterEach, expect, spyOn, test } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { daemonTaskClaimResponse } from "@multiremi/api/wire/tasks.js";
@@ -37,7 +38,7 @@ function fixture() {
   const runtime = store.registerRuntime({ id: "rt_reader", name: "Reader", provider: "claude", daemonId: "reader-daemon",
     workspaceId: "local", ownerId: "local", status: "online", maxConcurrency: 1, metadata: { parallel_agent_execution: 1 } });
   const agent = store.createAgent({ name: "Reader", provider: "claude", runtimeId: runtime.id });
-  const issue = store.createIssue({ title: "Unread progress" });
+  const issue = createResponsibleTestIssue(store, { title: "Unread progress" });
   const session = store.getOrCreateDefaultIssueSession(issue.id);
   const claim = () => {
     store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "read context" });

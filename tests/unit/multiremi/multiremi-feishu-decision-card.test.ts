@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { runTurnExecutionMutation } from '@multiremi/store/turn-execution-records.js';
 import type { SqlDatabase as UnifiedFixtureDatabase } from '@multiremi/store/db/postgres.js';
 /**
@@ -109,7 +110,7 @@ function scaffold(options: {
 
 /** An Issue whose topic root message has been sent, so replies have a seed. */
 function issueWithTopic(store: MultiremiStore, agentId: string, title = "Decision card issue") {
-  const issue = store.createIssue({ title, workspaceId: "local", assigneeType: "agent", assigneeId: agentId });
+  const issue = createResponsibleTestIssue(store, { title, workspaceId: "local", assigneeType: "agent", assigneeId: agentId });
   store.prepareFeishuIssueTopicWithinTransaction(issue);
   const root = store.claimFeishuBotOutbound("local", "rt_bot")!;
   store.reportFeishuBotOutbound("local", "rt_bot", root.id, {
@@ -330,7 +331,7 @@ describe("Feishu decision cards for Issue human requests", () => {
 
   it("skips the topic entirely when the Issue has no seed and records why", () => {
     const { store, agentId } = scaffold();
-    const issue = store.createIssue({ title: "No topic yet", workspaceId: "local" });
+    const issue = createResponsibleTestIssue(store, { title: "No topic yet", workspaceId: "local" });
     db!.run(`INSERT INTO multiremi_feishu_bot_chat_bindings
       (id, workspace_id, app_id, agent_id, external_session_key, chat_session_id, issue_id, chat_id, thread_id, created_at, updated_at)
       VALUES ('fcb_no_seed', 'local', 'cli_decision_card', ?, 'pending:no_seed',
@@ -1744,7 +1745,7 @@ describe("Feishu decision card heartbeat delivery", () => {
 
     const other = store.createWorkspace({ name: "Other", slug: "other" });
     const otherAgent = store.createAgent({ name: "Other agent", provider: "codex", workspaceId: other.id });
-    const otherIssue = store.createIssue({
+    const otherIssue = createResponsibleTestIssue(store, {
       title: "Other workspace issue", workspaceId: other.id,
       assigneeType: "agent", assigneeId: otherAgent.id,
     });
@@ -1793,7 +1794,7 @@ describe("Feishu decision card heartbeat delivery", () => {
 
     const other = store.createWorkspace({ name: "Other", slug: "other" });
     const otherAgent = store.createAgent({ name: "Other agent", provider: "codex", workspaceId: other.id });
-    const otherIssue = store.createIssue({
+    const otherIssue = createResponsibleTestIssue(store, {
       title: "Other workspace issue", workspaceId: other.id,
       assigneeType: "agent", assigneeId: otherAgent.id,
     });
@@ -1844,7 +1845,7 @@ describe("Feishu decision card heartbeat delivery", () => {
 
     const other = store.createWorkspace({ name: "Other", slug: "other" });
     const otherAgent = store.createAgent({ name: "Other agent", provider: "codex", workspaceId: other.id });
-    const otherIssue = store.createIssue({
+    const otherIssue = createResponsibleTestIssue(store, {
       title: "Other workspace issue", workspaceId: other.id,
       assigneeType: "agent", assigneeId: otherAgent.id,
     });
@@ -1879,7 +1880,7 @@ describe("Feishu decision card heartbeat delivery", () => {
     });
     const other = store.createWorkspace({ name: "Other", slug: "other" });
     const otherAgent = store.createAgent({ name: "Other agent", provider: "codex", workspaceId: other.id });
-    const otherIssue = store.createIssue({
+    const otherIssue = createResponsibleTestIssue(store, {
       title: "Other workspace issue", workspaceId: other.id,
       assigneeType: "agent", assigneeId: otherAgent.id,
     });

@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { runTurnExecutionMutation } from '@multiremi/store/turn-execution-records.js';
 import type { SqlDatabase as UnifiedFixtureDatabase } from '@multiremi/store/db/postgres.js';
 /**
@@ -149,7 +150,7 @@ function scaffold(options: {
 
 /** An Issue whose topic root message has been sent, so replies have a seed. */
 function issueWithTopic(store: MultiremiStore, title = "Decision parent", assignee?: { type: "agent"; id: string }) {
-  const issue = store.createIssue({
+  const issue = createResponsibleTestIssue(store, {
     title, workspaceId: "local",
     ...(assignee ? { assigneeType: assignee.type, assigneeId: assignee.id } : {}),
   });
@@ -163,7 +164,7 @@ function issueWithTopic(store: MultiremiStore, title = "Decision parent", assign
 
 /** A child Issue with a running task, which is what raises decisions. */
 function childWithTask(store: MultiremiStore, agentId: string, parentId: string) {
-  const child = store.createIssue({
+  const child = createResponsibleTestIssue(store, {
     title: "Decision source", workspaceId: "local", parentIssueId: parentId,
     assigneeType: "agent", assigneeId: agentId,
   });
@@ -317,7 +318,7 @@ describe("MUL-412 issue decision cards", () => {
     const { store, agentId } = scaffold();
     // No `prepareFeishuIssueTopicWithinTransaction`, so the binding exists
     // without a `reply_to_message_id`: there is no thread to reply into.
-    const parent = store.createIssue({ title: "Unsown topic", workspaceId: "local", assigneeType: "agent", assigneeId: agentId });
+    const parent = createResponsibleTestIssue(store, { title: "Unsown topic", workspaceId: "local", assigneeType: "agent", assigneeId: agentId });
     // Seed the binding (so it is live and active) but leave its thread anchor
     // unset, which is what an Issue created before the topic root went out
     // looks like. The seed delivery itself is drained first so the queue is
@@ -1322,7 +1323,7 @@ describe("MUL-412 issue decision cards", () => {
         name: `MUL-412 ${failure}`,
         root_path: `/tmp/mul412-${failure.replaceAll(" ", "-")}`,
       });
-      const child = store.createIssue({
+      const child = createResponsibleTestIssue(store, {
         title: "Decision source", workspaceId: "local", parentIssueId: parent.id,
         assigneeType: "agent", assigneeId: agentId, runtimeWorkspaceId: runtimeWorkspace.id,
       });

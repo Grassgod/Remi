@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { runTurnExecutionMutation } from '@multiremi/store/turn-execution-records.js';
 import type { SqlDatabase as UnifiedFixtureDatabase } from '@multiremi/store/db/postgres.js';
 import { expect, it } from "bun:test";
@@ -62,7 +63,7 @@ pendingTurnBackendTests("MUL-492 wake recovery concurrency", (fixture, backend) 
   it("13: two independent sweeps blocked on W create exactly one turn", async () => {
     const f = fixture();
     const agent = f.store.createAgent({ name: "Race owner", provider: "codex" });
-    const issue = f.store.createIssue({ title: "Concurrent sweep" });
+    const issue = createResponsibleTestIssue(f.store, { title: "Concurrent sweep" });
     const session = f.store.getOrCreateDefaultIssueSession(issue.id);
     const delivery = f.transaction(() => f.store.sendEnvelopeWithinTransaction({ to: { role: "agent", agentId: agent.id,
       issueSessionId: session.id }, kind: "report", wake: "now", body: "Lost wake", source: {} }, [], createCommitEventQueue()))[0]!;
@@ -81,7 +82,7 @@ pendingTurnBackendTests("MUL-492 wake recovery concurrency", (fixture, backend) 
   for (const kind of ["comment_dispatch", "trigger_comment_changed"] as const) it(`14: two independent ${kind} claims dispatch only once`, async () => {
     const f = fixture();
     const agent = f.store.createAgent({ name: "Replay race owner", provider: "codex" });
-    const issue = f.store.createIssue({ title: "Concurrent replay", status: "in_progress", assigneeType: "agent", assigneeId: agent.id });
+    const issue = createResponsibleTestIssue(f.store, { title: "Concurrent replay", status: "in_progress", assigneeType: "agent", assigneeId: agent.id });
     const repo = (f.store as unknown as { issues: IssuesRepo }).issues;
     const input = { authorType: "member", authorId: "local", body: "Continue" };
     let eventId: string;

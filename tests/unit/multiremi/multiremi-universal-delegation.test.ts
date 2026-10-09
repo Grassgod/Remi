@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { issueMessagesPath, requestMessageBody, sentTask, taskRequestPath } from "./unified-test-paths.js";
 import { describe, expect, it } from "bun:test";
 import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
@@ -51,10 +52,10 @@ function fixture(store: MultiremiStore, humanAssigned = false) {
     store.registerRuntime({ name, provider: "claude", workspaceId: "local" }));
   const [qa, atlas, leader] = runtimes.map(runtime =>
     store.createAgent({ name: runtime.name, provider: "claude", runtimeId: runtime.id }));
-  const parent = store.createIssue({ title: "Umbrella", status: "in_progress" });
-  const a = store.createIssue({ title: "Unassigned source A", status: "in_progress", parentIssueId: parent.id,
+  const parent = createResponsibleTestIssue(store, { title: "Umbrella", status: "in_progress" });
+  const a = createResponsibleTestIssue(store, { title: "Unassigned source A", status: "in_progress", parentIssueId: parent.id,
     ...(humanAssigned ? { assigneeType: "agent", assigneeId: qa!.id } : {}) });
-  const b = store.createIssue({ title: "Target B", status: "in_progress", parentIssueId: parent.id,
+  const b = createResponsibleTestIssue(store, { title: "Target B", status: "in_progress", parentIssueId: parent.id,
     assigneeType: "agent", assigneeId: atlas!.id });
   const s0 = store.createIssueSession(a.id, { title: "Original dispatcher S0" });
   const wrong = store.getOrCreateDefaultIssueSession(a.id);
@@ -379,7 +380,7 @@ for (const backend of ["sqlite", "postgres"] as const) {
           const targetAgentId = assignment === "explicit" ? f.leader.id : f.atlas.id;
           let issueId: string;
           if (assignment === "reassign") {
-            const existing = store.createIssue({ title: "Previously assigned issue", projectId: project.id,
+            const existing = createResponsibleTestIssue(store, { title: "Previously assigned issue", projectId: project.id,
               assigneeType: "agent", assigneeId: f.leader.id, status: "in_progress" });
             expect(store.listTasksForIssue(existing.id)).toHaveLength(0);
             const response = await request(store, f.source, `/api/multiremi/issues/${existing.id}/assign`, {

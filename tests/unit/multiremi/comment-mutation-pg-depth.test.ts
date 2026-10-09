@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { describe, expect, it } from "bun:test";
 import { StoreContext } from "@multiremi/store/context.js";
 import { PostgresSyncDatabase } from "@multiremi/store/db/postgres.js";
@@ -10,7 +11,7 @@ describe("comment mutations own exactly one PG transaction", () => {
         if (!(db instanceof PostgresSyncDatabase)) throw new Error("PG depth test requires a real handle");
         store.ensureLocalWorkspace();
         const ctx = (store as unknown as { ctx: StoreContext }).ctx;
-        const issue = store.createIssue({ title: "Comment atomicity", workspaceId: "local" });
+        const issue = createResponsibleTestIssue(store, { title: "Comment atomicity", workspaceId: "local" });
         const comment = store.createIssueComment(issue.id, { body: "original", authorType: "member", authorId: "local" });
         if (operation === "unresolve") store.resolveIssueComment(comment.id);
         const mutate = () => {

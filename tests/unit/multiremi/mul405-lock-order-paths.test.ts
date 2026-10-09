@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 /**
  * MUL-405 (QA round 2, item 2): every real path that can take more than one of
  * the three lock classes must take them in the contract order
@@ -400,7 +401,7 @@ describe("MUL-405 per-path lock order", () => {
   it("direct createIssue: W -> N", () => {
     const { store, recorder } = freshStore();
     clear(recorder);
-    store.createIssue({ title: "direct", workspaceId: "local" });
+    createResponsibleTestIssue(store, { title: "direct", workspaceId: "local" });
     assertPath("direct createIssue", recorder, ["W", "N"]);
   });
 
@@ -553,7 +554,7 @@ describe("MUL-405 per-path lock order", () => {
 
   it("createPinnedItem: W -> N", () => {
     const { store, recorder } = freshStore();
-    const issue = store.createIssue({ title: "pin me", workspaceId: "local" });
+    const issue = createResponsibleTestIssue(store, { title: "pin me", workspaceId: "local" });
     clear(recorder);
     store.createPinnedItem({
       workspaceId: "local",
@@ -638,7 +639,7 @@ describe("MUL-405 per-path lock order", () => {
 
   it("updateIssueWithinTransaction: W -> issue row, and it takes no number lock", () => {
     const { store, recorder } = freshStore();
-    const issue = store.createIssue({ title: "MUL-457 write path", workspaceId: "local" });
+    const issue = createResponsibleTestIssue(store, { title: "MUL-457 write path", workspaceId: "local" });
     clear(recorder);
     // Moves the Issue into a project, which is the branch that takes the
     // workspace lifecycle lock before the Issue row lock. The path never creates
@@ -652,7 +653,7 @@ describe("MUL-405 per-path lock order", () => {
 
   it("grantParentDone: W (via the issue lock) then issue row, no number lock", () => {
     const { store, recorder, agentId } = freshStoreWithAgent();
-    const issue = store.createIssue({
+    const issue = createResponsibleTestIssue(store, {
       title: "Parent-done target", workspaceId: "local",
       assigneeType: "agent", assigneeId: agentId,
     });
@@ -668,7 +669,7 @@ describe("MUL-405 per-path lock order", () => {
 
   it("revokeParentDone: issue row lock only, no number lock", () => {
     const { store, recorder, agentId } = freshStoreWithAgent();
-    const issue = store.createIssue({
+    const issue = createResponsibleTestIssue(store, {
       title: "Parent-done revoke target", workspaceId: "local",
       assigneeType: "agent", assigneeId: agentId,
     });
@@ -688,8 +689,8 @@ describe("MUL-405 per-path lock order", () => {
 
   it("MUL-409 forced start: W -> issue row -> round, no number lock", () => {
     const { store, recorder, agentId } = freshStoreWithAgent();
-    const prereq = store.createIssue({ title: "Prereq", workspaceId: "local", status: "in_progress" });
-    const dependent = store.createIssue({
+    const prereq = createResponsibleTestIssue(store, { title: "Prereq", workspaceId: "local", status: "in_progress" });
+    const dependent = createResponsibleTestIssue(store, {
       title: "Forced dependent", workspaceId: "local",
       assigneeType: "agent", assigneeId: agentId,
       blockedBy: [prereq.id],
@@ -705,8 +706,8 @@ describe("MUL-405 per-path lock order", () => {
 
   it("MUL-409 automatic start: W -> issue row -> round, no number lock", () => {
     const { store, recorder, agentId } = freshStoreWithAgent();
-    const prereq = store.createIssue({ title: "Prereq", workspaceId: "local", status: "in_progress" });
-    const dependent = store.createIssue({
+    const prereq = createResponsibleTestIssue(store, { title: "Prereq", workspaceId: "local", status: "in_progress" });
+    const dependent = createResponsibleTestIssue(store, {
       title: "Auto dependent", workspaceId: "local",
       assigneeType: "agent", assigneeId: agentId,
       blockedBy: [prereq.id],
@@ -722,7 +723,7 @@ describe("MUL-405 per-path lock order", () => {
 
   it("MUL-409 session task creation: W -> participant row -> task, no number lock", () => {
     const { store, recorder, agentId } = freshStoreWithAgent();
-    const issue = store.createIssue({
+    const issue = createResponsibleTestIssue(store, {
       title: "Session task host", workspaceId: "local",
       assigneeType: "agent", assigneeId: agentId,
     });
@@ -737,8 +738,8 @@ describe("MUL-405 per-path lock order", () => {
 
   it("MUL-409 standalone dependency write: D only, no workspace or number lock", () => {
     const { store, recorder, agentId } = freshStoreWithAgent();
-    const prereq = store.createIssue({ title: "Prereq", workspaceId: "local", status: "in_progress" });
-    const dependent = store.createIssue({
+    const prereq = createResponsibleTestIssue(store, { title: "Prereq", workspaceId: "local", status: "in_progress" });
+    const dependent = createResponsibleTestIssue(store, {
       title: "Dependency writer", workspaceId: "local",
       assigneeType: "agent", assigneeId: agentId,
     });
@@ -799,8 +800,8 @@ it.skipIf(!process.env.MULTIREMI_TEST_POSTGRES_URL)("MUL-409 real PG: automatic 
     const store = new MultiremiStore(recordedPg);
     store.ensureLocalWorkspace();
     const agent = store.createAgent({ name: "PG frame owner", provider: "codex", workspaceId: "local" });
-    const prerequisite = store.createIssue({ title: "PG prerequisite", status: "in_progress" });
-    const dependent = store.createIssue({
+    const prerequisite = createResponsibleTestIssue(store, { title: "PG prerequisite", status: "in_progress" });
+    const dependent = createResponsibleTestIssue(store, {
       title: "PG dependent", assigneeType: "agent", assigneeId: agent.id, status: "backlog",
     });
     clear(recorder);

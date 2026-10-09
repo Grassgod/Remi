@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { PostgresSyncDatabase } from "@multiremi/store/db/postgres.js";
 import { MultiremiStore } from "@multiremi/store.js";
@@ -35,8 +36,8 @@ describe.skipIf(!adminUrl)("MUL-457 PostgreSQL grant and merge paths", () => {
 
   it("migrates old rows twice and keeps grant, revocation and agent closure at depth one", () => {
     const owner = store.createAgent({ name: "PG parent owner", provider: "codex" });
-    const parent = store.createIssue({ title: "PG parent", status: "in_progress", assigneeType: "agent", assigneeId: owner.id });
-    const child = store.createIssue({ title: "PG child", status: "in_progress", parentIssueId: parent.id });
+    const parent = createResponsibleTestIssue(store, { title: "PG parent", status: "in_progress", assigneeType: "agent", assigneeId: owner.id });
+    const child = createResponsibleTestIssue(store, { title: "PG child", status: "in_progress", parentIssueId: parent.id });
     expect(store.getIssue(parent.id)).toMatchObject({ parentDoneGrantAt: null, parentDoneGrantBy: null, parentDoneGrantAgentId: null });
     const secondConnection = new PostgresSyncDatabase(databaseUrl(databaseName));
     new MultiremiStore(secondConnection);
@@ -65,8 +66,8 @@ describe.skipIf(!adminUrl)("MUL-457 PostgreSQL grant and merge paths", () => {
       accessToken: "test-only-token", repositoryIds: ["repo_mul457"],
     });
     for (const summary of [false, true]) {
-      const parent = store.createIssue({ title: `PG SCM parent ${summary}`, status: "in_progress", assigneeType: "agent", assigneeId: owner.id });
-      const child = store.createIssue({ title: `PG SCM child ${summary}`, status: "in_progress", parentIssueId: parent.id });
+      const parent = createResponsibleTestIssue(store, { title: `PG SCM parent ${summary}`, status: "in_progress", assigneeType: "agent", assigneeId: owner.id });
+      const child = createResponsibleTestIssue(store, { title: `PG SCM child ${summary}`, status: "in_progress", parentIssueId: parent.id });
       store.updateIssue(child.id, { status: "done" });
       store.grantParentDone(parent.id, "local");
       if (summary) store.createIssueComment(parent.id, { body: "PG merge summary", authorType: "agent", authorId: owner.id });
