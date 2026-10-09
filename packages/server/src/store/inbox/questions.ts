@@ -113,12 +113,14 @@ export class Questions {
     const legacy = old!;
     const required = legacy.status === 'escalated' || ['permission', 'merge', 'production_change'].includes(legacy.kind);
     const sourceIssueId = typeof legacy.source_issue_id === 'string' ? legacy.source_issue_id : session?.issueId ?? null;
+    const sourceAttempt = typeof legacy.source_task_id === 'string' ? this.ctx.tasks().getTask(legacy.source_task_id) : null;
+    const sourceAttemptId = sourceAttempt?.agentId === message.sender_id && sourceAttempt.workspaceId === workspaceId && sourceAttempt.issueId === sourceIssueId ? sourceAttempt.id : null;
     const route = this.route(sourceIssueId, message.sender_id, required, message.session_id, workspaceId);
     const oldAnswers = Array.isArray(legacy.history) ? legacy.history : [];
     const answer = (value: any): QuestionAnswer => ({ body_md: String(value.text ?? value.answer ?? ''), response: { answer: String(value.text ?? value.answer ?? '') },
       actor: { type: value.answererType === 'agent' ? 'agent' : 'member', id: String(value.answererId ?? legacy.answered_by_member_id ?? '') },
       at: String(value.at ?? value.answeredAt ?? legacy.answered_at ?? message.created_at), reply_message_id: '' });
-    return { message, record: { version: 1, workspace_id: workspaceId, source_issue_id: sourceIssueId, source_attempt_id: null,
+    return { message, record: { version: 1, workspace_id: workspaceId, source_issue_id: sourceIssueId, source_attempt_id: sourceAttemptId,
       responsibility_revision: route.revision, human_required: required, route: route.steps, route_index: 0, route_revision: 1, route_reason: route.reason,
       status: legacy.status === 'answered' ? 'answered' : legacy.status === 'withdrawn' ? 'closed' : 'pending', summary: null,
       answer: legacy.answer ? answer(legacy.answer) : null, answer_revision: oldAnswers.length || (legacy.answer ? 1 : 0), history: oldAnswers.map((a: any) => ({ type: 'answer', at: answer(a).at, actor: answer(a).actor, route_revision: 1, reason: a.reason, overturn: a.overturn, answer: answer(a) })),
@@ -150,6 +152,17 @@ export class Questions {
     if (!loaded || !turn || turn.agent_id !== agentId || turn.workspace_id !== loaded.record.workspace_id
       || !['running', 'awaiting_human'].includes(turn.status) || !this.integrity(loaded.message, loaded.record)) return false;
     const { message, record } = loaded;
+    // Historical business Qs were stored on the parent's lane. Only the exact
+    // recorded source attempt can read/close that Q across the lane boundary;
+    // another turn of the same Agent gains no access, and no native wait exists.
+    const legacy = message.metadata.decision_record as { source_task_id?: string; source_issue_id?: string } | undefined;
+    if (legacy && message.sender_id === agentId) {
+      const source = legacy.source_task_id ? this.ctx.tasks().getTask(legacy.source_task_id) : null;
+      const session = source?.issueSessionId ? this.ctx.issueSessions().getIssueSession(source.issueSessionId) : null;
+      return !!source && legacy.source_task_id === turn.current_attempt_id && message.task_id === turn.id
+        && legacy.source_issue_id === turn.issue_id && record.source_attempt_id === turn.current_attempt_id
+        && source.issueSessionId === turn.session_id && !!session && session.issueId === turn.issue_id && session.workspaceId === record.workspace_id;
+    }
     // Source access follows the original product lane, including a cold
     // continuation. A different session or delegated scope is not that lane.
     if (message.sender_id === agentId && message.session_id === turn.session_id
@@ -197,7 +210,8 @@ export class Questions {
       const history = record.history.filter(event => event.answer).map(event => ({ answererType: event.answer!.actor.type, answererId: event.answer!.actor.id,
         answer: event.answer!.body_md, reason: event.reason ?? '', overturn: event.overturn ?? null, answeredAt: event.answer!.at }));
       metadata.decision_record = { ...metadata.decision_record, status: record.status === 'pending' ? record.route[record.route_index]?.stage === 'human' ? 'escalated' : 'pending' : record.status === 'answered' ? 'answered' : 'withdrawn',
-        ...(history.length ? { answer: history.at(-1), history } : {}) };
+        ...(history.length ? { answer: history.at(-1), history } : {}),
+        ...(record.answer ? { answered_at: record.answer.at, answered_by_member_id: record.answer.actor.type === 'member' ? record.answer.actor.id : null } : {}) };
     }
     this.ctx.conversationLog().updateConversationLogWithinTransaction(message.session_id, message.seq, { fields: { metadata, resolved_at: record.status === 'pending' ? null : nowIso() } });
     events.workspace.push({ type: 'inbox:new', workspaceId: record.workspace_id, actorType: 'system', actorId: null, payload: { index_only: true, root_question_id: message.id } });
@@ -230,8 +244,7 @@ export class Questions {
       } else record.summary_wait_until = null;
       // This intent is durable, but dispatch waits for Remi present or its
       // explicit deadline; the web always retains the original question.
-      const request = this.ctx.tasks().getTaskHumanRequest(message.id);
-      if (request) this.ctx.feishuBot().enqueueQuestionPresentationWithinTransaction(message.id);
+      this.ctx.feishuBot().enqueueQuestionPresentationWithinTransaction(message.id);
     }
   }
   createWithinTransaction(input: SendMessageInput, sourceAttemptId: string, events: CommitEventQueue) {
@@ -251,6 +264,8 @@ export class Questions {
     this.event(record, 'created', { type: 'agent', id: turn.agent_id });
     this.notify(result.message, record, events);
     this.save(result.message, record, events);
+    events.workspace.push({ type: 'decision:created', workspaceId: record.workspace_id, actorType: 'agent', actorId: turn.agent_id,
+      payload: { issue_id: record.source_issue_id, root_question_id: result.message.id } });
     return { ...result, message: getMessage(this.ctx, result.message.id)! };
   }
   get(id: string, actor?: QuestionActor): QuestionView | null {
@@ -332,6 +347,10 @@ export class Questions {
       // sendMessageWithinTransaction. Do not derive the same unchanged state twice.
       this.save(message, record, events, !live);
       if (request) this.ctx.feishuBot().enqueueDecisionCardPatch(this.ctx.tasks().getTaskHumanRequest(id)!);
+      if (message.metadata.decision_record) {
+        const current = this.ctx.issues().getIssueDecisionAnywhere(id);
+        if (current) this.ctx.feishuBot().enqueueIssueDecisionCardPatchWithinTransaction(current, events);
+      }
       if (revise && message.sender_id) sendMessageWithinTransaction(this.ctx, { session_id: message.session_id, sender, to: { type: 'agent', ref: message.sender_id }, message_kind: 'request', wake_requested: 'now',
         execution_scope: String(message.metadata.execution_scope ?? ''), body_md: `人类修订了问题 ${id} 的答案：${text}\n原因：${input.reason}。这是补充指令，不是重放原 AUQ。`, metadata: { root_question_id: id, question_answer_revision: true }, dedupe_key: `question-revision:${id}:${reply.message.id}` }, events);
       if (!revise && record.wait.status === 'detached' && !/cancelled|explicit_stop/.test(record.wait.reason ?? '')) this.scheduleContinuation(message, record, actor, events);
@@ -384,6 +403,10 @@ export class Questions {
         metadata: { root_question_id: id, question_closed: true, human_response: { cancelled: true }, question_route_revision: record.route_revision } }, events);
       const request = this.ctx.tasks().getTaskHumanRequest(id);
       if (request) this.ctx.feishuBot().enqueueDecisionCardPatch(request);
+      if (message.metadata.decision_record) {
+        const current = this.ctx.issues().getIssueDecisionAnywhere(id);
+        if (current) this.ctx.feishuBot().enqueueIssueDecisionCardPatchWithinTransaction(current, events);
+      }
       return this.get(id, actor)!;
     });
   }
