@@ -15,7 +15,7 @@ import { cn } from "@multiremi/ui/lib/utils";
 import { useT } from "../i18n";
 import { Markdown } from "./markdown";
 import { LinkedQuestion } from "./linked-question";
-import { DecisionCardFrame, DecisionAnswerArea } from "./decision-panel";
+import { DecisionCardFrame, DecisionAnswerArea, DecisionOptions } from "./decision-panel";
 
 const COLLAPSED_CONTEXT_HEIGHT_PX = 128;
 
@@ -200,38 +200,10 @@ export function QuestionForm({
               <Markdown mode="minimal">{question.question}</Markdown>
               {!hideOptions && (question.options.length > 0 ? (
                 <DecisionAnswerArea>
-                <div className="flex flex-wrap gap-1.5">
-                  {question.options.map((option) => {
-                    const selected =
-                      customText.length === 0 &&
-                      (picks[question.question] ?? []).includes(option.label);
-                    return readOnly ? (
-                      <span
-                        key={option.label}
-                        className="max-w-full rounded border px-2 py-1 text-xs text-muted-foreground"
-                        title={option.description}
-                      >
-                        {option.label}
-                      </span>
-                    ) : (
-                      <Button
-                        key={option.label}
-                        size="sm"
-                        variant={selected ? "default" : "outline"}
-                        aria-pressed={selected}
-                        title={option.description}
-                        disabled={disabled || submission.isPending || submission.isSuccess}
-                        className={cn(
-                          "h-auto max-w-full whitespace-normal break-words text-left",
-                          !selected && "text-muted-foreground",
-                        )}
-                        onClick={() => toggleOption(question, option.label)}
-                      >
-                        {option.label}
-                      </Button>
-                    );
-                  })}
-                </div>
+                  <DecisionOptions options={question.options.map(option => ({ ...option, value: option.label }))}
+                    selected={customText ? [] : picks[question.question] ?? []} readOnly={readOnly}
+                    disabled={disabled || submission.isPending || submission.isSuccess}
+                    onSelect={label => toggleOption(question, label)} />
                 </DecisionAnswerArea>
               ) : !readOnly ? (
                 <DecisionAnswerArea>

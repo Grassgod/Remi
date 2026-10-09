@@ -1,5 +1,12 @@
 {
   "responsibility": {
+    "execution_resumed": "已答复，执行已继续",
+    "awaiting_resume": "答案已保存，等待继续执行",
+    "resume_needed": "答案已保存，执行尚未恢复",
+    "more_actions": "更多操作",
+    "action_reason": "说明原因",
+    "revision_reason": "修订原因",
+    "cancel_action": "取消",
     "open_question": "查看问题",
     "source_notification": "向原来源回传结果",
     "delivery_invalidated": "责任已变更，请重新提交交付以供验收；此前历史仍保留。",
@@ -58,7 +65,7 @@
     "answer": "回答",
     "revise": "修订答案",
     "escalate": "上交下一层责任人",
-    "refresh_owner": "移交给当前责任人",
+    "refresh_owner": "更新问题处理人",
     "present": "呈现总结",
     "continue": "授权续接",
     "waiting": "原调用仍在等待",
@@ -69,7 +76,7 @@
     "none": "历史问题；无原等待调用",
     "saved": "答案已保存",
     "closed": "已关闭",
-    "events": "转交与回答历史",
+    "events": "历史与详情",
     "load_failed": "加载失败，请重试。",
     "retry": "重试"
   },

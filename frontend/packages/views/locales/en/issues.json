@@ -1,5 +1,12 @@
 {
   "responsibility": {
+    "execution_resumed": "Answered · execution resumed",
+    "awaiting_resume": "Answer saved · waiting to resume",
+    "resume_needed": "Answer saved · execution needs recovery",
+    "more_actions": "More actions",
+    "action_reason": "Reason",
+    "revision_reason": "Reason for revising",
+    "cancel_action": "Cancel",
     "open_question": "View question",
     "source_notification": "Result delivery to original source",
     "delivery_invalidated": "Responsibility changed. Submit a new delivery for review; the earlier history is retained.",
@@ -58,7 +65,7 @@
     "answer": "Answer",
     "revise": "Revise answer",
     "escalate": "Escalate to next owner",
-    "refresh_owner": "Transfer to current responsibility",
+    "refresh_owner": "Refresh responsible handler",
     "present": "Present summary",
     "continue": "Authorize continuation",
     "waiting": "Original call is waiting",
@@ -69,7 +76,7 @@
     "none": "Historical question; no original waiting call",
     "saved": "Answer saved",
     "closed": "Closed",
-    "events": "Transfer and answer history",
+    "events": "History and details",
     "load_failed": "Could not load. Retry.",
     "retry": "Retry"
   },

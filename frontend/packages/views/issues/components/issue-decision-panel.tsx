@@ -10,7 +10,7 @@ import { useWorkspaceId } from "@multiremi/core/hooks";
 import { Button } from "@multiremi/ui/components/ui/button";
 import { Input } from "@multiremi/ui/components/ui/input";
 import { Textarea } from "@multiremi/ui/components/ui/textarea";
-import { DecisionPanel, DecisionCardFrame, DecisionAnswerArea } from "../../common/decision-panel";
+import { DecisionPanel, DecisionCardFrame, DecisionAnswerArea, DecisionOptions } from "../../common/decision-panel";
 import { HumanRequestCard } from "../../common/human-request-dock";
 import { MessageHeader } from "../../common/message-header";
 import { Markdown } from "../../common/markdown";
@@ -111,9 +111,7 @@ function LegacyMessageDecisionCard({ message, canAnswer, getActorName }: { messa
       {showReplies && (replies.isError ? <p role="alert">{tm($ => $.load_failed)}</p> : replies.data?.filter(m => m.reply_to_id === message.id).map(m => <Markdown key={m.id} mode="minimal">{m.body_md}</Markdown>))}
     </div> : request ? <HumanRequestCard taskId={request.taskId} request={request} readOnly={!canAnswer} onResponded={refresh} />
     : canAnswer && <DecisionAnswerArea>
-      {message.options?.length ? <div className="flex flex-wrap gap-1.5">{message.options.map(option => <Button key={option.value} size="sm"
-        variant={selected === option.value ? "default" : "outline"} aria-pressed={selected === option.value} disabled={reply.isPending}
-        className="h-auto max-w-full whitespace-normal break-words text-left" onClick={() => setSelected(option.value)}>{option.label}</Button>)}</div>
+      {message.options?.length ? <DecisionOptions options={message.options} selected={selected === null ? [] : [selected]} disabled={reply.isPending} onSelect={setSelected} />
         : <Textarea value={answer} disabled={reply.isPending} placeholder={t($ => $.detail.decision_answer_placeholder)} onChange={e => setAnswer(e.target.value)} />}
       <Input value={reason} disabled={reply.isPending} placeholder={t($ => $.detail.decision_reason_placeholder)} onChange={e => setReason(e.target.value)} />
       {reply.error && <p role="alert" className="text-xs text-destructive">{reply.error.message}</p>}

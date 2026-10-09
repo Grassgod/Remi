@@ -84,7 +84,7 @@ function renderDock(requests: unknown[]) {
 async function openQuestion() {
   fireEvent.click(await screen.findByRole("button", { name: "View question" }));
   await screen.findByRole("dialog");
-  await screen.findByText("Waiting for designated human");
+  await waitFor(() => expect(document.querySelector("[data-question-id]")).not.toBeNull());
 }
 
 function mountDock() {
@@ -145,8 +145,8 @@ describe("HumanRequestDock", () => {
     await waitFor(() =>
       expect(actOnQuestion).toHaveBeenCalledWith("hrq_q", "answer", expect.objectContaining({ expected_route_revision: 1, response: { answers: { "Which environment should I deploy to?": "staging" } } })),
     );
-    await screen.findByText("Answer saved");
-    expect(screen.getByText("Answer consumed by original call")).toBeInTheDocument();
+    fireEvent.click(await screen.findByRole("button", { name: "Answered · execution resumed" }));
+    expect(screen.queryByText("Answer consumed by original call")).toBeNull();
     expect(screen.queryByRole("button", { name: "staging" })).toBeNull();
     expect(screen.queryByText("production")).toBeNull();
     expect(screen.getByText("staging")).toBeInTheDocument();

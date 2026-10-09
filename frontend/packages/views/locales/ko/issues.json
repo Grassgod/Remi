@@ -1,5 +1,12 @@
 {
   "responsibility": {
+    "execution_resumed": "답변 완료 · 실행 재개됨",
+    "awaiting_resume": "답변 저장됨 · 실행 재개 대기",
+    "resume_needed": "답변 저장됨 · 실행 복구 필요",
+    "more_actions": "추가 작업",
+    "action_reason": "사유",
+    "revision_reason": "답변 수정 사유",
+    "cancel_action": "취소",
     "open_question": "질문 보기",
     "source_notification": "원래 실행 주체로 결과 전달",
     "delivery_invalidated": "책임자가 변경되었습니다. 검토를 위해 결과물을 다시 제출하세요. 이전 기록은 유지됩니다.",
@@ -58,7 +65,7 @@
     "answer": "답변",
     "revise": "답변 수정",
     "escalate": "상위 책임자에게 전달",
-    "refresh_owner": "현재 책임자에게 이전",
+    "refresh_owner": "질문 담당자 새로 고침",
     "present": "요약 제시",
     "continue": "계속 진행 허용",
     "waiting": "원래 호출이 대기 중",
@@ -69,7 +76,7 @@
     "none": "이전 질문. 대기 중인 원래 호출 없음",
     "saved": "답변 저장됨",
     "closed": "종료됨",
-    "events": "전달과 답변 기록",
+    "events": "기록 및 상세 정보",
     "load_failed": "불러오지 못했습니다. 다시 시도하세요.",
     "retry": "다시 시도"
   },
