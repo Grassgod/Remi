@@ -10055,7 +10055,7 @@
     },
     "remi issue decision request": {
       "command": "retired.issue.decision.request",
-      "replacement": "remi message send --kind decision --option <option>"
+      "replacement": "原生 AskUserQuestion；先用 remi issue responsibility <issue> 查看责任归属"
     },
     "remi issue decision answer": {
       "command": "retired.issue.decision.answer",
@@ -11060,7 +11060,7 @@
     "GET /api/issues/:id/decisions": {
       "cli_exempt": true,
       "category": "retired_route",
-      "reason": "已移除：改用 remi message list <conversation> --kind decision"
+      "reason": "已移除：改用 remi issue question list <issue>"
     },
     "GET /api/issues/:id/deliveries": {
       "command": "issue.delivery.list"
@@ -12368,22 +12368,22 @@
     "POST /api/issues/:id/decisions": {
       "cli_exempt": true,
       "category": "retired_route",
-      "reason": "已移除：改用 remi message send --kind decision --option <option>"
+      "reason": "已移除：改用 原生 AskUserQuestion；先用 remi issue responsibility <issue> 查看责任归属"
     },
     "POST /api/issues/:id/decisions/:decisionId/answer": {
       "cli_exempt": true,
       "category": "retired_route",
-      "reason": "已移除：改用 remi message send --reply-to <message> --option <option>"
+      "reason": "已移除：改用 remi message question answer <question> --revision <route_revision> --data <json>"
     },
     "POST /api/issues/:id/decisions/:decisionId/escalate": {
       "cli_exempt": true,
       "category": "retired_route",
-      "reason": "已移除：改用 remi message send --kind decision --to <member>"
+      "reason": "已移除：改用 remi message question escalate <question> --revision <route_revision> --reason <reason>"
     },
     "POST /api/issues/:id/decisions/:decisionId/withdraw": {
       "cli_exempt": true,
       "category": "retired_route",
-      "reason": "已移除：改用 remi message delete <message>"
+      "reason": "已移除：改用 remi message question close <question> --revision <route_revision> --reason <reason>"
     },
     "POST /api/issues/:id/deliveries": {
       "command": "issue.delivery.submit"
@@ -12744,7 +12744,7 @@
     "POST /api/multiremi/tasks/:id/human-requests/:requestId/respond": {
       "cli_exempt": true,
       "category": "retired_route",
-      "reason": "已移除：改用 remi message send --reply-to <message> --option <option>"
+      "reason": "已移除：改用 remi message question answer <question> --revision <route_revision> --data <json>"
     },
     "POST /api/multiremi/tasks/:id/redispatch": {
       "cli_exempt": true,
@@ -12866,7 +12866,7 @@
     "POST /api/tasks/:id/human-requests/:requestId/respond": {
       "cli_exempt": true,
       "category": "retired_route",
-      "reason": "已移除：改用 remi message send --reply-to <message> --option <option>"
+      "reason": "已移除：改用 remi message question answer <question> --revision <route_revision> --data <json>"
     },
     "POST /api/tasks/:id/redispatch": {
       "cli_exempt": true,
