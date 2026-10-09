@@ -3,16 +3,23 @@ import { MultiremiStore } from "@multiremi/store.js";
 import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { ApiClient } from "../../../frontend/packages/core/api/client";
+import { getCurrentSlug, getCurrentWsId, setCurrentWorkspace } from "../../../frontend/packages/core/platform/workspace-storage";
 
 const originalFetch = globalThis.fetch;
-afterEach(() => { globalThis.fetch = originalFetch; });
+const originalWorkspace = { slug: getCurrentSlug(), id: getCurrentWsId() };
+afterEach(() => {
+  globalThis.fetch = originalFetch;
+  setCurrentWorkspace(originalWorkspace.slug, originalWorkspace.id);
+});
 
 it("uses the browser client against real HTTP to configure future automatic responsibility and explicitly map history", async () => {
   const db = openSqliteDatabase(":memory:");
   const encryptionBefore = process.env.MULTIREMI_FEISHU_BOT_ENCRYPTION_KEY;
   process.env.MULTIREMI_FEISHU_BOT_ENCRYPTION_KEY = Buffer.alloc(32, 7).toString("base64");
   try {
-    const store = new MultiremiStore(db); store.ensureLocalWorkspace();
+    const store = new MultiremiStore(db);
+    const workspace = store.ensureLocalWorkspace();
+    setCurrentWorkspace(workspace.slug, workspace.id);
     const user = store.getOrCreateUser({ email: "migration-http@example.invalid", name: "Explicit migration admin" });
     const admin = store.createWorkspaceMember({ userId: user.id, workspaceId: "local", name: user.name, role: "admin" });
     const responsibleUser = store.getOrCreateUser({ email: "automation-http@example.invalid", name: "Explicit automation human" });
@@ -33,7 +40,7 @@ it("uses the browser client against real HTTP to configure future automatic resp
     expect(bot.responsible_member_id).toBe(human.id);
     expect((await client.saveIssueTopicConfig("local", { enabled: true, chat_id: "oc_http_fixture", project_ids: null, responsible_member_id: admin.id })).config.responsible_member_id).toBe(admin.id);
     expect((await client.saveIssueTopicConfig("local", { enabled: true, chat_id: "oc_http_fixture", project_ids: null, responsible_member_id: null })).config.responsible_member_id).toBeNull();
-    const root = await client.createIssue({ title: "Explicit historical sample", workspace_id: "local", responsible_member_id: human.id });
+    const root = await client.createIssue({ title: "Explicit historical sample", responsible_member_id: human.id });
     // Deliberate historical construction tests migration without giving new
     // root creation an implicit fallback or changing any production defaults.
     db.run("UPDATE multiremi_issues SET responsible_member_id=NULL,assignee_type='member',assignee_id=?,created_by=? WHERE id=?", [human.id, responsibleUser.id, root.id]);
@@ -56,7 +63,9 @@ it("uses the browser client against real HTTP to configure future automatic resp
 it("uses the browser API client against authenticated HTTP for creation, Q routing and exact delivery acceptance", async () => {
   const db = openSqliteDatabase(":memory:");
   try {
-    const store = new MultiremiStore(db); store.ensureLocalWorkspace();
+    const store = new MultiremiStore(db);
+    const workspace = store.ensureLocalWorkspace();
+    setCurrentWorkspace(workspace.slug, workspace.id);
     const user = store.getOrCreateUser({ email: "responsible-http@example.invalid", name: "Designated synthetic human" });
     const human = store.createWorkspaceMember({ userId: user.id, workspaceId: "local", name: user.name, role: "member" });
     const otherUser = store.getOrCreateUser({ email: "other-http@example.invalid", name: "Other synthetic human" });
@@ -69,8 +78,10 @@ it("uses the browser API client against authenticated HTTP for creation, Q routi
     const app = createMultiremiApp({ store, authToken: "fixture-master-required" });
     globalThis.fetch = ((input, init) => app.request(new Request(input, init))) as typeof fetch;
     const client = new ApiClient("http://responsibility-http.test"); client.setToken(pat.token);
-    const root = await client.createIssue({ title: "HTTP root", workspace_id: "local", responsible_member_id: human.id, assignee_type: "agent", assignee_id: owner.id });
-    const child = await client.createIssue({ title: "HTTP child", workspace_id: "local", parent_issue_id: root.id, assignee_type: "agent", assignee_id: worker.id });
+    const root = await client.createIssue({ title: "HTTP root", responsible_member_id: human.id, assignee_type: "agent", assignee_id: owner.id });
+    const child = await client.createIssue({ title: "HTTP child", parent_issue_id: root.id, assignee_type: "agent", assignee_id: worker.id });
+    expect(root.workspace_id).toBe(workspace.id);
+    expect(child.workspace_id).toBe(workspace.id);
     expect(child.responsible_member_id).toBeNull();
     const facts = await client.getIssueResponsibility(child.id);
     expect(facts.executionOwner?.id).toBe(worker.id); expect(facts.reviewOwner?.id).toBe(owner.id); expect(facts.rootHuman?.id).toBe(human.id);

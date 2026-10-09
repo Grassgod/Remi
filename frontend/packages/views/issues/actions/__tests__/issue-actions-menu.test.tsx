@@ -46,7 +46,7 @@ vi.mock("@multiremi/core/workspace/queries", () => ({
   }),
   agentListOptions: () => ({
     queryKey: ["workspaces", "ws-1", "agents"],
-    queryFn: () => Promise.resolve([]),
+    queryFn: () => Promise.resolve([{ id: "agt-1", name: "Execution Agent", workspace_id: "ws-1", archived_at: null }]),
   }),
   squadListOptions: () => ({
     queryKey: ["workspaces", "ws-1", "squads"],
@@ -185,13 +185,15 @@ describe("IssueActionsDropdown", () => {
     fireEvent.click(await screen.findByText("Assignee"));
 
     // The shared picker exposes a search input and renders the workspace
-    // member under a "Members" group — both come from `AssigneePicker`, not
+    // execution agent under an "Agents" group — both come from `AssigneePicker`, not
     // the legacy submenu (which had neither).
     expect(
       await screen.findByPlaceholderText("Assign to..."),
     ).toBeInTheDocument();
-    expect(await screen.findByText("Members")).toBeInTheDocument();
-    expect(await screen.findByText("Test User")).toBeInTheDocument();
+    expect(await screen.findByText("Agents")).toBeInTheDocument();
+    expect(await screen.findByText("Execution Agent")).toBeInTheDocument();
+    expect(screen.queryByText("Members")).not.toBeInTheDocument();
+    expect(screen.queryByText("Test User")).not.toBeInTheDocument();
   });
 
   it("clicking Delete issue opens the delete-confirm modal", async () => {
