@@ -292,7 +292,10 @@ describe("MUL-458 human dependency force (SQLite)", () => {
 
   it("re-derives an in-review parent when its waiting child is started by comment", async () => {
     const fixture = await humanFixture("pat", "parent-rederive");
-    const parent = createResponsibleTestIssue(fixture.store, { title: "Parent under review", status: "in_review" });
+    const parent = createResponsibleTestIssue(fixture.store, {
+      title: "Parent under review", status: "in_review", responsibleMemberId: fixture.memberId,
+      assigneeType: "agent", assigneeId: fixture.agentId,
+    });
     const child = createResponsibleTestIssue(fixture.store, {
       title: "Waiting child",
       status: "backlog",
