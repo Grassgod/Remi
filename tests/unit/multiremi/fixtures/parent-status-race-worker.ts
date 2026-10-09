@@ -16,6 +16,9 @@ export interface RaceOperation {
   status: "done" | "in_review";
   connectionId: string;
   number: number;
+  deliveryId: string;
+  responsibilityRevision: string;
+  sourceTaskId: string;
   pause: boolean;
   control: SharedArrayBuffer;
 }
@@ -50,7 +53,7 @@ IssuesRepo.prototype.hasChildIssues = function (id) {
 const countChildren = IssuesRepo.prototype.countOpenChildIssues;
 IssuesRepo.prototype.countOpenChildIssues = function (id) {
   const result = countChildren.call(this, id);
-  if (operation?.role === "parent" && id === operation.parentId && operation.status !== "done") barrier();
+  if (operation?.role === "parent" && id === operation.parentId) barrier();
   return result;
 };
 const finalSummary = IssuesRepo.prototype.finalSummaryAfterLastChild;
@@ -114,18 +117,17 @@ self.onmessage = (event: MessageEvent<
           ? { parent_issue_id: input.parentId }
           : { status: "in_progress" });
       }
-    } else if (input.path === "api") {
-      store.updateIssue(input.parentId, { status: input.status, actorType: "agent", actorId: input.ownerId });
     } else {
-      store.recordScmCanonicalEvent({
+      if(input.path==='scm')store.recordScmCanonicalEvent({
         workspaceId: "local", connectionId: input.connectionId, repositoryId: "repo_mul471",
         type: "change.merged", subjectType: "change_request", subjectId: String(input.number),
         logicalKey: `change.merged:${input.number}`, fidelity: "exact",
         payload: { number: input.number, branch: "main", mergeSha: `sha-${input.number}` },
         evidence: { source: "poll", dedupeKey: `poll:${input.number}` },
       });
-      const effect = database.query("SELECT last_error FROM multiremi_scm_effects WHERE issue_id = ?").get(input.parentId);
-      error = effect?.last_error ?? null;
+      if(input.status==='done')store.respondIssueDelivery(input.parentId,input.deliveryId,
+        {action:'accept',revision:input.responsibilityRevision},{type:'agent',id:input.ownerId,taskId:input.sourceTaskId});
+      else store.updateIssue(input.parentId,{status:input.status,actorType:'agent',actorId:input.ownerId});
     }
   } catch (caught) {
     error = caught instanceof Error ? caught.message : String(caught);
