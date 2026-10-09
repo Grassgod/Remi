@@ -45,6 +45,7 @@ function scaffold(options: { online?: boolean } = {}): {
   });
   store.heartbeatRuntime("rt_bot", { supportsFeishuBotConfig: true });
   const config = store.upsertFeishuBotConfig("local", {
+    responsibleMemberId:store.findWorkspaceMemberForUser('local','local')!.id,
     agentId: agent.id,
     runtimeId: "rt_bot",
     appId: "cli_issue_topics",
@@ -451,7 +452,7 @@ describe("Feishu Issue topics", () => {
       expect(response.status).toBe(200);
       expect(await response.json()).toEqual({
         workspace_id: "local",
-        config: {
+        config: { responsible_member_id: null,
           enabled: scenario.enabled, chat_id: scenario.chatId,
           project_ids: null, notify_mode: "group_owner", notify_open_id: null,
         },
@@ -473,7 +474,7 @@ describe("Feishu Issue topics", () => {
       const body = await response.json();
       expect(body).toEqual({
         workspace_id: "local",
-        config: { enabled: true, chat_id: "oc_repaired", project_ids: null, notify_mode: "none", notify_open_id: null },
+        config: { responsible_member_id: null, enabled: true, chat_id: "oc_repaired", project_ids: null, notify_mode: "none", notify_open_id: null },
       });
       expect(store.getWorkspace("local")?.settings).toEqual({
         preserved: "setting", issueTopics: { enabled: true, chatId: "oc_repaired", notifyMode: "none" },
@@ -536,7 +537,7 @@ describe("Feishu Issue topics", () => {
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({
       workspace_id: "local",
-      config: { enabled: true, chat_id: "oc_issue_topics", project_ids: null, notify_mode: "person", notify_open_id: null },
+      config: { responsible_member_id: null, enabled: true, chat_id: "oc_issue_topics", project_ids: null, notify_mode: "person", notify_open_id: null },
       invalid: {
         code: "issue_topic_config_invalid",
         message: "issueTopics.notifyOpenId must be a bot-scoped open_id when notifyMode is person",
@@ -556,7 +557,7 @@ describe("Feishu Issue topics", () => {
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({
       workspace_id: "local",
-      config: { enabled: true, chat_id: "oc_issue_topics", project_ids: [project.id], notify_mode: "person", notify_open_id: "ou_reviewer" },
+      config: { responsible_member_id: null, enabled: true, chat_id: "oc_issue_topics", project_ids: [project.id], notify_mode: "person", notify_open_id: "ou_reviewer" },
     });
   });
 
@@ -1173,7 +1174,7 @@ describe("Feishu Issue topics", () => {
     const initial = await app.request("/api/workspaces/local/issue-topics", { headers: JSON_HEADERS });
     expect(await initial.json()).toEqual({
       workspace_id: "local",
-      config: { enabled: false, chat_id: "", project_ids: null, notify_mode: "group_owner", notify_open_id: null },
+      config: { responsible_member_id: null, enabled: false, chat_id: "", project_ids: null, notify_mode: "group_owner", notify_open_id: null },
     });
     const updated = await app.request("/api/workspaces/local/issue-topics", {
       method: "PUT",
@@ -1183,7 +1184,7 @@ describe("Feishu Issue topics", () => {
     expect(updated.status).toBe(200);
     expect(await updated.json()).toEqual({
       workspace_id: "local",
-      config: { enabled: true, chat_id: "oc_filtered", project_ids: [project.id], notify_mode: "group_owner", notify_open_id: null },
+      config: { responsible_member_id: null, enabled: true, chat_id: "oc_filtered", project_ids: [project.id], notify_mode: "group_owner", notify_open_id: null },
     });
 
     const rejected = await app.request("/api/workspaces/local/issue-topics", {
