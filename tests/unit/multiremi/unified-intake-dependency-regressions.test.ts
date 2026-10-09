@@ -35,12 +35,25 @@ pendingTurnBackendTests("MUL-508 C1/C2", (fixture) => {
     return { ...f, runtime, agent, issue, session, sent, attempt, bridge, scope, completion };
   }
 
+  function acceptCompletedIntake(f: ReturnType<typeof intake>, sourceTaskId=f.attempt.id) {
+    if(!f.store.getIssue(f.issue.id)!.assigneeId)f.store.updateIssue(f.issue.id,{assigneeType:'agent',assigneeId:f.agent.id});
+    const delivery=f.store.submitIssueDelivery(f.issue.id,{summary:'Generated intake work verified'},{type:'agent',id:f.agent.id,taskId:sourceTaskId});
+    const human=f.store.resolveIssueResponsibility(f.issue.id).rootHuman!;
+    f.store.authorizeIssueDelivery(f.issue.id,delivery.id,f.agent.id,delivery.responsibilityRevision,{type:'member',id:human.id});
+    f.store.respondIssueDelivery(f.issue.id,delivery.id,{action:'accept',revision:delivery.responsibilityRevision},{type:'agent',id:f.agent.id,taskId:sourceTaskId});
+    expect(f.store.getIssue(f.issue.id)?.status).toBe('done');
+  }
+
   for (const assigned of [false, true]) for (const generated of [false, true]) {
     it(`C1: normally finished intake assigned=${assigned} generated=${generated}`, () => {
       const f = intake(assigned, generated);
       const input = f.completion();
       expect(f.bridge.complete(input, f.scope).ok).toBe(true);
       expect(f.store.getTurn(f.sent.turn_id!)?.status).toBe("completed");
+      expect(f.store.getIssue(f.issue.id)?.status).toBe('in_review');
+      expect(f.store.getIssue(f.issue.id)?.completedAt).toBeNull();
+      expect(f.db.query("SELECT id FROM multiremi_system_events WHERE resource_id=? AND event='dependency_auto_start_check'").all(f.issue.id)).toHaveLength(0);
+      if(generated)acceptCompletedIntake(f);
       const issue = f.store.getIssue(f.issue.id)!;
       expect(issue.status).toBe(generated ? "done" : "in_review");
       if (generated) expect(issue.completedAt).toBe(issue.updatedAt);
@@ -78,6 +91,8 @@ pendingTurnBackendTests("MUL-508 C1/C2", (fixture) => {
     expect(replacement.id).toBe(turn.current_attempt_id!);
     f.store.startTask(replacement.id);
     expect(f.bridge.complete(f.completion(replacement.id), f.scope).ok).toBe(true);
+    expect(f.store.getIssue(f.issue.id)?.status).toBe('in_review');
+    acceptCompletedIntake(f,replacement.id);
     expect(f.store.getIssue(f.issue.id)?.status).toBe("done");
   });
 
@@ -93,6 +108,8 @@ pendingTurnBackendTests("MUL-508 C1/C2", (fixture) => {
     expect(f.store.getTurnForAttempt(task.id)?.id).toBe(sibling.turn_id);
     f.store.startTask(task.id);
     expect(f.bridge.complete(f.completion(task.id), f.scope).ok).toBe(true);
+    expect(f.store.getIssue(f.issue.id)?.status).toBe('in_review');
+    acceptCompletedIntake(f);
     expect(f.store.getIssue(f.issue.id)?.status).toBe("done");
   });
 
@@ -116,6 +133,8 @@ pendingTurnBackendTests("MUL-508 C1/C2", (fixture) => {
     try {
       setSystemTime(new Date(Date.now() + 1000));
       expect(f.bridge.complete(f.completion(), f.scope).ok).toBe(true);
+      expect(f.store.getIssue(f.issue.id)?.status).toBe('in_review');
+      acceptCompletedIntake(f);
       expect(f.store.getIssue(f.issue.id)?.status).toBe("done");
       const events = f.db.query("SELECT id FROM multiremi_system_events WHERE resource_id=? AND event='dependency_auto_start_check'").all(f.issue.id);
       expect(events).toHaveLength(1);
