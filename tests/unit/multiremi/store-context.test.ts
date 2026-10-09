@@ -103,10 +103,14 @@ function createStore(): MultiremiStore {
   it("resolves the lazy host for cross-domain inbox creation", () => {
     const store = createStore();
     store.ensureLocalWorkspace();
-    const member = store.listWorkspaceMembers("local")[0]!;
+    const member = store.getWorkspaceMember("mem_local_local")!;
     const issue = createResponsibleTestIssue(store, { title: "Assign me", workspaceId: "local" });
 
-    store.assignIssue(issue.id, { assigneeType: "member", assigneeId: member.id });
+    expect(() => store.assignIssue(issue.id, { assigneeType: "member", assigneeId: member.id })).toThrow("Agent or team Leader");
+    // Historical assignment notifications still use the lazy Inbox/Issue host;
+    // they do not authorize a new member execution assignment.
+    const ctx = new StoreContext(db, () => store);
+    ctx.createInboxItem({ issueId: issue.id, memberId: member.id, type: "issue_assigned", title: "Existing assignment evidence", body: issue.title, actorType: "system" });
 
     const inbox = store.listInboxItems(member.id);
     expect(inbox.some((item) => item.type === "issue_assigned" && item.issueId === issue.id)).toBe(true);
