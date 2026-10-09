@@ -307,14 +307,12 @@ describe("MUL-448 identity aliases on the remaining write routes", () => {
     const { store, app, agentId, headers, owner } = await fixture();
     const decoy = store.getOrCreateUser({ email: "mul448-decoy@example.test", name: "MUL448 Decoy" });
 
-    // MUL-448 B4 (QA round 1): the compat create route stamps the credentialed
-    // creator - it always did - but the native create and both quick-create
-    // routes leave `createdBy` unset exactly as main does, because creator
-    // ownership feeds share management and automatic subscription. The body
-    // never wins on any of them.
-    for (const [label, prefix, expected] of [
-      ["compat", "/api", owner.id],
-      ["native", "/api/multiremi", null],
+    // Both surfaces derive creator and implicit root-human responsibility from
+    // the real member credential. Forged creator/requester body fields never win.
+    const actualMember = store.findWorkspaceMemberForUser(owner.id, "local")!;
+    for (const [label, prefix] of [
+      ["compat", "/api"],
+      ["native", "/api/multiremi"],
     ] as const) {
       const created = await app.request(`${prefix}/issues`, {
         method: "POST", headers,
@@ -323,8 +321,9 @@ describe("MUL-448 identity aliases on the remaining write routes", () => {
       expect(created.status).toBe(201);
       const createdBody = (await created.json()) as any;
       const issueId = createdBody.id ?? createdBody.issue?.id;
-      expect(store.getIssue(issueId)!.createdBy).toBe(expected);
+      expect(store.getIssue(issueId)!.createdBy).toBe(owner.id);
       expect(store.getIssue(issueId)!.createdBy).not.toBe(decoy.id);
+      expect(store.getIssue(issueId)!.responsibleMemberId).toBe(actualMember.id);
 
       const quick = await app.request(`${prefix}/issues/quick-create`, {
         method: "POST", headers,
@@ -337,8 +336,9 @@ describe("MUL-448 identity aliases on the remaining write routes", () => {
       });
       expect(quick.status).toBe(202);
       const quickBody = (await quick.json()) as any;
-      expect(store.getIssue(quickBody.issue.id)!.createdBy).toBeNull();
+      expect(store.getIssue(quickBody.issue.id)!.createdBy).toBe(owner.id);
       expect(store.getIssue(quickBody.issue.id)!.createdBy).not.toBe(decoy.id);
+      expect(store.getIssue(quickBody.issue.id)!.responsibleMemberId).toBe(actualMember.id);
     }
   });
 

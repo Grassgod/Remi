@@ -5,7 +5,7 @@ import type { Context } from "hono";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { currentWorkspaceMember, currentWorkspaceRoleStrict } from "@multiremi/api/wire/context.js";
 import type { MultiremiStore } from "@multiremi/store.js";
-import { createLocalStore, createStore, resetMultiremiTestEnv } from "./helpers.js";
+import { createLocalStore, createStore, db, resetMultiremiTestEnv } from "./helpers.js";
 
 afterEach(resetMultiremiTestEnv);
 
@@ -300,11 +300,11 @@ describe("MUL-288: explicit workspace user identity", () => {
 });
 
 describe("workspace member response identity", () => {
-  it("returns the workspace member id after assigning an issue with a user account id", async () => {
+  it("keeps workspace member identity for root humans and historical member execution assignments", async () => {
     const store = createLocalStore();
     const account = await login(store, "assignee-display");
     const member = store.createWorkspaceMember({ userId: account.user.id, name: "测试用户" });
-    const issue = createResponsibleTestIssue(store, { title: "Member assignee display" });
+    const issue = createResponsibleTestIssue(store, { title: "Historical member assignee display" });
     const app = createMultiremiApp({ store, authToken: "test-assignee-identity-master" });
     const membersResponse = await app.request("/api/workspaces/local/members", { headers: account.headers });
     expect(membersResponse.status).toBe(200);
@@ -316,9 +316,31 @@ describe("workspace member response identity", () => {
       headers: { ...account.headers, "Content-Type": "application/json" },
       body: JSON.stringify({ assignee_type: "member", assignee_id: account.user.id }),
     });
-    expect(assigned.status).toBe(200);
-    expect(await assigned.json()).toMatchObject({ assignee_type: "member", assignee_id: member.id });
+    expect(assigned.status).toBe(409);
+    expect(await assigned.json()).toMatchObject({ code: "issue_execution_owner_required" });
+    expect(store.getIssue(issue.id)?.assigneeId).toBeNull();
+
+    // Explicit human responsibility uses the member ID resolved above, rather
+    // than overloading the Agent/Squad execution assignment with a user ID.
+    const responsible = await app.request(`/api/issues/${issue.id}`, {
+      method: "PATCH",
+      headers: { ...account.headers, "Content-Type": "application/json" },
+      body: JSON.stringify({ responsible_member_id: member.id }),
+    });
+    expect(responsible.status).toBe(200);
+    expect(await responsible.json()).toMatchObject({ responsible_member_id: member.id });
+    expect(store.getIssue(issue.id)?.responsibleMemberId).toBe(member.id);
+
+    // Retain a genuine historical member execution row for the display contract;
+    // current write APIs deliberately cannot create this legacy assignment.
+    db!.run("UPDATE multiremi_issues SET assignee_type='member', assignee_id=? WHERE id=?", [member.id, issue.id]);
+    const historical = await app.request(`/api/issues/${issue.id}`, { headers: account.headers });
+    expect(historical.status).toBe(200);
+    expect(await historical.json()).toMatchObject({ assignee_type: "member", assignee_id: member.id, responsible_member_id: member.id });
     expect(store.getIssue(issue.id)?.assigneeId).toBe(member.id);
+    expect(store.resolveIssueResponsibility(issue.id).unresolved).toEqual(expect.arrayContaining([
+      expect.objectContaining({ reason: "execution_owner_missing" }),
+    ]));
   });
 
   it("matches a password owner's member identity to /api/me for permission checks", async () => {
