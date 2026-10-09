@@ -1,6 +1,6 @@
 "use client";
 import { useQuery } from "@tanstack/react-query";
-import { isHistoricalIssueQuestionRecord } from "@multiremi/contracts";
+import { isHistoricalIssueQuestionRecord } from "@multiremi/contracts/question";
 import { api } from "@multiremi/core/api";
 import { useWorkspaceId } from "@multiremi/core/hooks";
 import { Button } from "@multiremi/ui/components/ui/button";
