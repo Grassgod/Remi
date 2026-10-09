@@ -100,7 +100,7 @@ export function prepareTestIssueDelivery(store: MultiremiStore, issueId: string,
   const reviewer=responsibility.reviewOwner;
   const reviewerTask=reviewer.type==='agent'?(store.listTasksForIssue(reviewer.issueId).find(candidate=>
     candidate.agentId===reviewer.id&&['queued','running','awaiting_human'].includes(candidate.status)&&!candidate.chatSessionId&&
-    !!candidate.issueSessionId&&store.getIssueSession(candidate.issueSessionId)?.inheritMode==='none')
+    !!candidate.issueSessionId&&store.getIssueSession(candidate.issueSessionId)?.isDefault===true&&store.getIssueSession(candidate.issueSessionId)?.inheritMode==='none')
     ??store.createTask({agentId:reviewer.id,issueId:reviewer.issueId,prompt:'Review fixture delivery'})):null;
   return {delivery,executionTask:task,actor:{type:reviewer.type,id:reviewer.id,...(reviewerTask?{taskId:reviewerTask.id}:{})}};
 }

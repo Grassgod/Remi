@@ -1433,12 +1433,14 @@ export class StoreContext {
   }, deferredEvents?: CommitEventQueue): void {
     const id = createId("act");
     const now = nowIso();
+    const workspaceId = this.issueWorkspaceId(issueId);
     this.db.run(
-      `INSERT INTO multiremi_issue_activity (id, issue_id, actor_type, actor_id, type, body, data, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO multiremi_issue_activity (id, issue_id, workspace_id, actor_type, actor_id, type, body, data, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         id,
         issueId,
+        workspaceId,
         input.actorType,
         input.actorId ?? null,
         input.type,
@@ -1459,7 +1461,6 @@ export class StoreContext {
       // transaction, so the only remaining failure is a real SQL error, and a
       // broken schema must fail the write rather than be swallowed.
       // Basis: Senior ruling cmt_96e1yqxgifms §2.
-      const workspaceId = this.issueWorkspaceId(issueId);
       if (!workspaceId) return;
       const event: WorkspaceEvent = {
         type: "activity:created",

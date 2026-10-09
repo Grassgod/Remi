@@ -1,6 +1,7 @@
 import type { CommitEventQueue, StoreContext } from '../context.js';
 import { afterCommit } from '../db/postgres.js';
 import { nowIso } from '@multiremi/ids.js';
+import { questionMetadataText } from './question-indexes.js';
 
 /** Only turns and unanswered owner decisions participate; attempts are deliberately absent. */
 export function deriveIssueStatusWithinTransaction(ctx:StoreContext,issueId:string,events:CommitEventQueue): {changed:boolean;previousStatus:string|null} {
@@ -11,7 +12,7 @@ export function deriveIssueStatusWithinTransaction(ctx:StoreContext,issueId:stri
   const owner=ctx.resolveIssueResponsibility(issueId).executionOwner;
   const turns=ctx.db.query(`SELECT t.*,m.sender_type AS trigger_sender,m.wake_reason AS trigger_reason,m.message_kind AS trigger_kind,
       (SELECT COUNT(*) FROM multiremi_conversation_log merged WHERE merged.kind='message' AND merged.deleted_at IS NULL
-        AND ${ctx.db.dialect==='postgres'?"merged.metadata::jsonb->>'delivery_turn_id'":"json_extract(merged.metadata,'$.delivery_turn_id')"}=t.id
+        AND ${questionMetadataText(ctx.db, 'merged.metadata', 'delivery_turn_id')}=t.id
         AND merged.wake_reason IN ('human_sender','agent_dispatch')) AS merged_work_triggers
     FROM multiremi_turns t LEFT JOIN multiremi_conversation_log m ON m.id=t.trigger_message_id
     WHERE t.issue_id=? AND t.session_id NOT LIKE 'chat_%' ORDER BY t.created_at DESC,t.seq DESC,t.id DESC`).all(issueId);

@@ -452,6 +452,45 @@ for (const backend of ['sqlite','postgres'] as const) describe.skipIf(backend ==
       unsubscribe();
     }
   }),60_000);
+  it('rejects formal submission and acceptance from an independent non-default session through real task HTTP credentials', () => run(async store => {
+    const f = fixture(store);
+    const childSide = store.createIssueSession(f.child.id, { title: 'Independent execution discussion' });
+    const parentSide = store.createIssueSession(f.root.id, { title: 'Independent review discussion' });
+    expect(childSide).toMatchObject({ isDefault: false, inheritMode: 'none' });
+    expect(parentSide).toMatchObject({ isDefault: false, inheritMode: 'none' });
+    const childTask = store.createSessionTask(childSide.id, { agentId: f.worker.id, prompt: 'Independent execution' });
+    const parentTask = store.createSessionTask(parentSide.id, { agentId: f.owner.id, prompt: 'Independent review' });
+    const childAccess = await store.createTaskAccessToken(childTask, 'local');
+    const parentAccess = await store.createTaskAccessToken(parentTask, 'local');
+    const app = createMultiremiApp({ store, authToken: 'independent-session-test' });
+    const request = (path: string, token: string, body: unknown) => app.request(path, { method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    const submit = await request(`/api/issues/${f.child.id}/deliveries`, childAccess.token, { summary: 'Forbidden independent report' });
+    expect(submit.status).toBe(403);
+    expect(await submit.json()).toMatchObject({ code: 'issue_delivery_side_session_forbidden' });
+    expect(store.listIssueDeliveries(f.child.id)).toEqual([]);
+    const delivery = store.submitIssueDelivery(f.child.id, { summary: 'Actual Main result' }, f.workerActor);
+    const accept = await request(`/api/issues/${f.child.id}/deliveries/${delivery.id}/respond`, parentAccess.token,
+      { action: 'accept', expected_revision: delivery.responsibilityRevision });
+    expect(accept.status).toBe(403);
+    expect(await accept.json()).toMatchObject({ code: 'issue_delivery_side_session_forbidden' });
+    expect(store.listIssueDeliveries(f.child.id)[0]).toMatchObject({ status: 'pending', responseMessageId: null });
+    expect(store.getIssue(f.child.id)?.status).toBe('in_review');
+  }));
+  it('ignores malformed historical report metadata without discarding valid deliveries', () => run((store, db) => {
+    const f = fixture(store);
+    const delivery = store.submitIssueDelivery(f.child.id, { summary: 'Valid delivery among historical reports' }, f.workerActor);
+    const session = store.getOrCreateDefaultIssueSession(f.child.id);
+    for (const metadata of ['not-json', '{"issue_delivery":', JSON.stringify({ unrelated: '\u0000' })]) {
+      const message = store.sendMessage({ session_id: session.id, sender: { type: 'platform', id: null }, to: { type: 'none' },
+        message_kind: 'report', wake_requested: 'inbox_only', body_md: 'Historical report' }).message;
+      db.run('UPDATE multiremi_conversation_log SET metadata=? WHERE id=?', [metadata, message.id]);
+    }
+    expect(store.listIssueDeliveries(f.child.id).map(item => item.id)).toEqual([delivery.id]);
+    const accepted = store.respondIssueDelivery(f.child.id, delivery.id, { action: 'accept', revision: delivery.responsibilityRevision }, f.ownerActor);
+    expect(accepted.status).toBe('accepted');
+    expect(store.getIssue(f.child.id)?.status).toBe('done');
+  }));
   it('keeps human responsibility separate from execution and refuses side-session delivery or acceptance', () => run((store,db) => {
     const f=fixture(store);
     expect(()=>store.createIssue({title:'Human execution',assigneeType:'member',assigneeId:f.human.id,responsibleMemberId:f.human.id})).toThrow('Agent or team Leader');

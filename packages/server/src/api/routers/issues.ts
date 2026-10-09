@@ -1861,7 +1861,7 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
   app.get("/api/issues/:id/sessions/:sessionId", (c) => {
     const issue = issueFromParam(store, c, "id", "compat");
     const session = store.getIssueSession(c.req.param("sessionId"));
-    if (!issue || !session || session.issueId !== issue.id) return c.json({ error: "session not found" }, 404);
+    if (!issue || !session || session.issueId !== issue.id || session.workspaceId !== issue.workspaceId) return c.json({ error: "session not found" }, 404);
     const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
     if (denied) return denied;
     return c.json(issueSessionCompatibilityResponse(
@@ -1872,7 +1872,7 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
   app.patch("/api/issues/:id/sessions/:sessionId", async (c) => {
     const issue = issueFromParam(store, c, "id", "compat");
     const session = store.getIssueSession(c.req.param("sessionId"));
-    if (!issue || !session || session.issueId !== issue.id) return c.json({ error: "session not found" }, 404);
+    if (!issue || !session || session.issueId !== issue.id || session.workspaceId !== issue.workspaceId) return c.json({ error: "session not found" }, 404);
     const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
     if (denied) return denied;
     const body = await readJson<UpdateIssueSessionInput>(c);
@@ -1888,7 +1888,7 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
   app.get("/api/issues/:id/sessions/:sessionId/participants", (c) => {
     const issue = issueFromParam(store, c, "id", "compat");
     const session = store.getIssueSession(c.req.param("sessionId"));
-    if (!issue || !session || session.issueId !== issue.id) return c.json({ error: "session not found" }, 404);
+    if (!issue || !session || session.issueId !== issue.id || session.workspaceId !== issue.workspaceId) return c.json({ error: "session not found" }, 404);
     const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
     if (denied) return denied;
     return c.json(store.listSessionParticipants(session.id).map(sessionParticipantCompatibilityResponse));
@@ -1896,7 +1896,7 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
   app.post("/api/issues/:id/sessions/:sessionId/participants", async (c) => {
     const issue = issueFromParam(store, c, "id", "compat");
     const session = store.getIssueSession(c.req.param("sessionId"));
-    if (!issue || !session || session.issueId !== issue.id) return c.json({ error: "session not found" }, 404);
+    if (!issue || !session || session.issueId !== issue.id || session.workspaceId !== issue.workspaceId) return c.json({ error: "session not found" }, 404);
     const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
     if (denied) return denied;
     const body = await readJson<AddSessionParticipantInput>(c);
@@ -1917,7 +1917,7 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
   app.delete("/api/issues/:id/sessions/:sessionId/participants/:participantType/:participantId", (c) => {
     const issue = issueFromParam(store, c, "id", "compat");
     const session = store.getIssueSession(c.req.param("sessionId"));
-    if (!issue || !session || session.issueId !== issue.id) return c.json({ error: "session not found" }, 404);
+    if (!issue || !session || session.issueId !== issue.id || session.workspaceId !== issue.workspaceId) return c.json({ error: "session not found" }, 404);
     const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
     if (denied) return denied;
     store.removeSessionParticipant(session.id, c.req.param("participantType"), c.req.param("participantId"));
@@ -1926,7 +1926,7 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
   app.get("/api/issues/:id/sessions/:sessionId/events", (c) => {
     const issue = issueFromParam(store, c, "id", "compat");
     const session = store.getIssueSession(c.req.param("sessionId"));
-    if (!issue || !session || session.issueId !== issue.id) return c.json({ error: "session not found" }, 404);
+    if (!issue || !session || session.issueId !== issue.id || session.workspaceId !== issue.workspaceId) return c.json({ error: "session not found" }, 404);
     const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
     if (denied) return denied;
     // Task-scoped agents may read their current Session, but cannot use this
@@ -1940,7 +1940,7 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
   app.post("/api/issues/:id/sessions/:sessionId/messages", async (c) => {
     const issue = issueFromParam(store, c, "id", "compat");
     const session = store.getIssueSession(c.req.param("sessionId"));
-    if (!issue || !session || session.issueId !== issue.id) return c.json({ error: "session not found" }, 404);
+    if (!issue || !session || session.issueId !== issue.id || session.workspaceId !== issue.workspaceId) return c.json({ error: "session not found" }, 404);
     const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
     if (denied) return denied;
     const body = await readJson<CreateIssueCommentInput>(c);
@@ -1956,7 +1956,7 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
   app.get("/api/issues/:id/sessions/:sessionId/tasks", (c) => {
     const issue = issueFromParam(store, c, "id", "compat");
     const session = store.getIssueSession(c.req.param("sessionId"));
-    if (!issue || !session || session.issueId !== issue.id) return c.json({ error: "session not found" }, 404);
+    if (!issue || !session || session.issueId !== issue.id || session.workspaceId !== issue.workspaceId) return c.json({ error: "session not found" }, 404);
     const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
     if (denied) return denied;
     return c.json(store.listTasksForIssue(issue.id)
@@ -1972,7 +1972,7 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
   app.post("/api/issues/:id/sessions/:sessionId/tasks", async (c) => {
     const issue = issueFromParam(store, c, "id", "compat");
     const session = store.getIssueSession(c.req.param("sessionId"));
-    if (!issue || !session || session.issueId !== issue.id) return c.json({ error: "session not found" }, 404);
+    if (!issue || !session || session.issueId !== issue.id || session.workspaceId !== issue.workspaceId) return c.json({ error: "session not found" }, 404);
     const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
     if (denied) return denied;
     const body = await readJson<CreateSessionTaskInput>(c);
@@ -2011,7 +2011,7 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
   app.post("/api/issues/:id/sessions/:sessionId/results", async (c) => {
     const issue = issueFromParam(store, c, "id", "compat");
     const session = store.getIssueSession(c.req.param("sessionId"));
-    if (!issue || !session || session.issueId !== issue.id) return c.json({ error: "session not found" }, 404);
+    if (!issue || !session || session.issueId !== issue.id || session.workspaceId !== issue.workspaceId) return c.json({ error: "session not found" }, 404);
     const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
     if (denied) return denied;
     const body = await readJson<PublishSessionResultInput>(c);

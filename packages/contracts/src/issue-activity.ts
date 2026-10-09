@@ -23,7 +23,7 @@ export const ISSUE_SYSTEM_ACTIVITY_TYPES = [
   "dependency_force_started", "dependency_satisfied_coalesced",
   "parent_done_grant_created", "parent_done_grant_revoked", "parent_done_grant_used",
   "issue_dependency_added", "issue_dependency_removed", "issue_metadata_set", "issue_metadata_deleted",
-  "quick_create_queued",
+  "quick_create_queued", "issue_main_session_rotated",
   "comment_mention_skipped", "comment_dispatch_replayed",
 ] as const;
 export const ISSUE_ACTIVITY_TYPES: readonly string[] = [

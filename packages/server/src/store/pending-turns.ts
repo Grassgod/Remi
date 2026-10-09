@@ -54,9 +54,9 @@ export function appendPendingTurnAuditWithinTransaction(
   const payload = { task_id: task.id, ...data };
   if (task.issueId) {
     db.run(`INSERT INTO multiremi_issue_activity
-      (id, issue_id, actor_type, actor_id, type, body, data, created_at)
-      VALUES (?, ?, 'system', NULL, ?, NULL, ?, ?)`,
-    [createId("act"), task.issueId, type, JSON.stringify(payload), at]);
+      (id, issue_id, workspace_id, actor_type, actor_id, type, body, data, created_at)
+      VALUES (?, ?, ?, 'system', NULL, ?, NULL, ?, ?)`,
+    [createId("act"), task.issueId, task.workspaceId, type, JSON.stringify(payload), at]);
   } else {
     db.run(`INSERT INTO multiremi_system_events
       (id, workspace_id, resource, event, resource_id, payload, status, available_at, created_at, processed_at)

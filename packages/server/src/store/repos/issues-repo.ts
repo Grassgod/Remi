@@ -4,6 +4,7 @@ import { refreshResponsibilityQuestions } from '../issue-responsibility-changes.
 import { sendMessageWithinTransaction } from "../inbox/send-message.js";
 import { patchDecisionRecord } from "../inbox/decision-records.js";
 import { deriveIssueStatusWithinTransaction } from "../inbox/issue-status.js";
+import { questionMetadataText } from "../inbox/question-indexes.js";
 import { runAutopilotRunMutation } from "@multiremi/store/autopilot-run-records.js";
 import { runTurnExecutionMutation } from "@multiremi/store/turn-execution-records.js";
 // Issues domain (issues, comments, activity/timeline, dependencies, subscribers, labels, inbox,
@@ -2570,6 +2571,17 @@ export class IssuesRepo {
     // workspace change in one statement so the unique index never sees the
     // row with the old number in either workspace.
     const movedNumber = moving ? this.nextIssueNumber(nextWorkspaceId) : null;
+    if (moving) {
+      // Freeze unknown legacy origins before the Issue changes workspace.
+      // Existing comment/Task facts take precedence over the Issue's current
+      // ownership; untouched body/data remain the original audit evidence.
+      const commentId = `COALESCE(${questionMetadataText(this.ctx.db, 'multiremi_issue_activity.data', 'commentId')},${questionMetadataText(this.ctx.db, 'multiremi_issue_activity.data', 'comment_id')})`;
+      const taskId = `COALESCE(${questionMetadataText(this.ctx.db, 'multiremi_issue_activity.data', 'taskId')},${questionMetadataText(this.ctx.db, 'multiremi_issue_activity.data', 'task_id')})`;
+      this.ctx.db.run(`UPDATE multiremi_issue_activity SET workspace_id=COALESCE(
+        (SELECT s.workspace_id FROM multiremi_conversation_log m JOIN multiremi_issue_sessions s ON s.id=m.session_id WHERE m.id=${commentId}),
+        (SELECT t.workspace_id FROM multiremi_turn_execution_records t WHERE t.id=${taskId}),?)
+        WHERE issue_id=? AND workspace_id IS NULL`, [current.workspaceId, id]);
+    }
     this.ctx.db.run(
       `UPDATE multiremi_issues SET
       title = ?,
@@ -2619,6 +2631,18 @@ export class IssuesRepo {
       id,
       ],
     );
+    if (moving) {
+      // Preserve old conversations in their original workspace. Only the Main
+      // designation rotates; new dispatches and move audits use a fresh head in
+      // the destination, never the source's messages or pending Questions.
+      const previousMain = this.ctx.db.query("SELECT id FROM multiremi_issue_sessions WHERE issue_id = ? AND is_default = 1").get(id) as { id: string } | null;
+      this.ctx.db.run("UPDATE multiremi_issue_sessions SET is_default = 0 WHERE issue_id = ? AND is_default = 1", [id]);
+      const nextMain = this.ctx.issueSessions().getOrCreateDefaultIssueSessionWithinTransaction(id, null);
+      this.ctx.appendIssueActivity(id, { actorType: input.actorType ?? "system", actorId: input.actorId ?? null,
+        type: "issue_main_session_rotated", body: null,
+        data: { previousSessionId: previousMain?.id ?? null, sessionId: nextMain.id, previousWorkspaceId: current.workspaceId, workspaceId: nextWorkspaceId },
+      }, deferredEvents);
+    }
     if (nextResponsibleMemberId !== (current.responsibleMemberId ?? null) || nextParentIssueId !== current.parentIssueId || nextAssigneeId !== current.assigneeId || nextAssigneeType !== current.assigneeType) {
       this.ctx.appendIssueActivity(id, {actorType:input.actorType ?? 'system',actorId:input.actorId ?? null,
         type:'issue_responsibility_transferred',body:null,data:{previous:{parentIssueId:current.parentIssueId,
@@ -5220,7 +5244,9 @@ export class IssuesRepo {
          log.resolved_by_type AS log_resolved_by_type, log.resolved_by_id AS log_resolved_by_id
        FROM multiremi_issue_message_records cmt
        LEFT JOIN multiremi_conversation_log log ON log.id = cmt.id
-       WHERE cmt.issue_id = ? ORDER BY cmt.created_at ASC`,
+       WHERE cmt.issue_id = ? AND EXISTS (SELECT 1 FROM multiremi_conversation_heads h JOIN multiremi_issues i
+         ON i.id = cmt.issue_id AND i.workspace_id = h.workspace_id WHERE h.session_id = log.session_id)
+       ORDER BY cmt.created_at ASC`,
     ).all(issueId) as Row[];
     return this.hydrateIssueComments(rows.map((row) => this.commentFromLogRow(row)));
   }
@@ -5233,7 +5259,7 @@ export class IssuesRepo {
     const issueSessionId = cleanOptionalString(input.issueSessionId ?? input.issue_session_id);
     if (issueSessionId) {
       const session = this.ctx.issueSessions().getIssueSession(issueSessionId);
-      if (!session || session.issueId !== issueId) throw new Error("issue session not found in this issue");
+      if (!session || session.issueId !== issueId || session.workspaceId !== this.ctx.issueWorkspaceId(issueId)) throw new Error("issue session not found in this issue");
     }
     const comments = this.listIssueComments(issueId)
       .filter((comment) => !issueSessionId || comment.issueSessionId === issueSessionId)
@@ -5324,9 +5350,19 @@ export class IssuesRepo {
 
   listIssueActivity(issueId: string): MultiremiIssueActivity[] {
     const rows = this.ctx.db.query(
-      "SELECT * FROM multiremi_issue_activity WHERE issue_id = ? ORDER BY created_at ASC",
+      `SELECT * FROM multiremi_issue_activity WHERE issue_id = ? AND ${this.activityWorkspacePredicate()}
+       ORDER BY created_at ASC`,
     ).all(issueId) as Row[];
     return rows.map(toIssueActivity);
+  }
+
+  private activityWorkspacePredicate(): string {
+    // Legacy null remains visible only when all known conversations agree
+    // with the Issue. A moved/mixed historical snapshot cannot use null to
+    // grant the destination access to an unknown source activity body.
+    return `(workspace_id = (SELECT i.workspace_id FROM multiremi_issues i WHERE i.id = multiremi_issue_activity.issue_id)
+      OR (workspace_id IS NULL AND NOT EXISTS (SELECT 1 FROM multiremi_issue_sessions s JOIN multiremi_issues i
+        ON i.id = s.issue_id WHERE s.issue_id = multiremi_issue_activity.issue_id AND s.workspace_id <> i.workspace_id)))`;
   }
 
   listIssueActivityBetween(issueId: string, input: {
@@ -5334,7 +5370,7 @@ export class IssuesRepo {
   }): { activities: IssueActivityEntry[]; activities_truncated: boolean } {
     if (!input.types.length) return { activities: [], activities_truncated: false };
     const limit = Math.max(1, Math.min(200, input.limit ?? 200));
-    const where = ["issue_id = ?", `type IN (${input.types.map(() => "?").join(",")})`];
+    const where = ["issue_id = ?", this.activityWorkspacePredicate(), `type IN (${input.types.map(() => "?").join(",")})`];
     const params: (string | number)[] = [issueId, ...input.types];
     if (input.fromInclusive != null) { where.push("created_at >= ?"); params.push(input.fromInclusive); }
     if (input.toExclusive != null) { where.push("created_at < ?"); params.push(input.toExclusive); }
@@ -5402,11 +5438,12 @@ export class IssuesRepo {
     const id = createId("act");
     const now = nowIso();
     this.ctx.db.run(
-      `INSERT INTO multiremi_issue_activity (id, issue_id, actor_type, actor_id, type, body, data, created_at)
-       VALUES (?, ?, 'agent', ?, 'squad_leader_evaluated', ?, ?, ?)`,
+      `INSERT INTO multiremi_issue_activity (id, issue_id, workspace_id, actor_type, actor_id, type, body, data, created_at)
+       VALUES (?, ?, ?, 'agent', ?, 'squad_leader_evaluated', ?, ?, ?)`,
       [
         id,
         issue.id,
+        issue.workspaceId,
         actorId ?? null,
         input.reason ?? null,
         toJson({
@@ -5426,7 +5463,7 @@ export class IssuesRepo {
     const sessionId = cleanOptionalString(options.issueSessionId);
     if (sessionId) {
       const session = this.ctx.issueSessions().getIssueSession(sessionId);
-      if (!session || session.issueId !== issueId) throw new Error(`Issue session not found for issue: ${sessionId}`);
+      if (!session || session.issueId !== issueId || session.workspaceId !== this.ctx.issueWorkspaceId(issueId)) throw new Error(`Issue session not found for issue: ${sessionId}`);
     }
     const entries: MultiremiTimelineEntry[] = [
       ...this.listIssueComments(issueId)
@@ -5463,7 +5500,7 @@ export class IssuesRepo {
       const requestedSessionId = cleanOptionalString(options.issueSessionId);
       if (requestedSessionId) {
         const session = this.ctx.issueSessions().getIssueSession(requestedSessionId);
-        if (!session || session.issueId !== issueId) {
+        if (!session || session.issueId !== issueId || session.workspaceId !== this.ctx.issueWorkspaceId(issueId)) {
           throw new Error(`Issue session not found for issue: ${requestedSessionId}`);
         }
       }
@@ -5471,7 +5508,7 @@ export class IssuesRepo {
     const sessionId = cleanOptionalString(options.issueSessionId);
 
     const rowLimit = options.limit + 1;
-    const commentWhere = ["issue_id = ?"];
+    const commentWhere = ["issue_id = ?", "EXISTS (SELECT 1 FROM multiremi_conversation_log m JOIN multiremi_conversation_heads h ON h.session_id = m.session_id JOIN multiremi_issues i ON i.id = multiremi_issue_message_records.issue_id AND i.workspace_id = h.workspace_id WHERE m.id = multiremi_issue_message_records.id)"];
     const commentParams: unknown[] = [issueId];
     if (sessionId) {
       commentWhere.push("issue_session_id = ?");
@@ -5493,7 +5530,7 @@ export class IssuesRepo {
       ? []
       : this.ctx.db.query(
         `SELECT * FROM multiremi_issue_activity
-         WHERE issue_id = ?
+         WHERE issue_id = ? AND ${this.activityWorkspacePredicate()}
            ${options.before ? "AND (created_at < ? OR (created_at = ? AND id < ?))" : ""}
          ORDER BY created_at DESC, id DESC
          LIMIT ?`,

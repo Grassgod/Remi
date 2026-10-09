@@ -650,7 +650,7 @@ export function issueTimelineResponse(
   if (issueSessionId) {
     const known = sessionsForDefault?.find((session) => session.id === issueSessionId);
     const session = known ?? store.getIssueSession(issueSessionId);
-    if (!session || session.issueId !== issueId) return null;
+    if (!session || session.issueId !== issueId || session.workspaceId !== store.getIssue(issueId)?.workspaceId) return null;
   }
   const wrapped = ["limit", "before", "after", "around"].some((name) => c.req.query(name) != null);
   if (!wrapped) return store.listIssueTimeline(issueId, { ascending: true, issueSessionId });

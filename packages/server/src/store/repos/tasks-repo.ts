@@ -1483,7 +1483,9 @@ export class TasksRepo {
 
   listTasksForIssue(issueId: string): MultiremiTask[] {
     const rows = this.ctx.db.query(
-      "SELECT * FROM multiremi_turn_execution_records WHERE issue_id = ? ORDER BY created_at DESC",
+      `SELECT * FROM multiremi_turn_execution_records task WHERE issue_id = ?
+       AND task.workspace_id = (SELECT i.workspace_id FROM multiremi_issues i WHERE i.id = task.issue_id)
+       ORDER BY created_at DESC`,
     ).all(issueId) as Row[];
     return this.toTasks(rows);
   }

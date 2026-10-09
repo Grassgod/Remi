@@ -7,6 +7,7 @@ import { createId } from '@multiremi/ids.js';
 import type { ChildStatusChangeCollector } from './repos/tasks-repo.js';
 import { parseJson } from './helpers.js';
 import { afterCommit } from './db/postgres.js';
+import { questionMetadataText } from './inbox/question-indexes.js';
 
 export class IssueDeliveryError extends Error {
   constructor(public code: string, message: string, public status: 403 | 404 | 409 = 409) { super(message); }
@@ -28,7 +29,7 @@ function lockResponsibilityChain(ctx: StoreContext, issueId: string): void {
 }
 
 function deliveryIssueSql(ctx: StoreContext): string {
-  return ctx.db.dialect === 'postgres' ? "m.metadata::jsonb->'issue_delivery'->>'issueId'" : "json_extract(m.metadata,'$.issue_delivery.issueId')";
+  return questionMetadataText(ctx.db, 'm.metadata', 'issue_delivery.issueId');
 }
 
 function deliveryFromRow(row: Record<string, unknown>): IssueDelivery {
@@ -51,7 +52,8 @@ function withReviewAvailability(delivery: IssueDelivery, reason: IssueDelivery['
 
 function getIssueDelivery(ctx: StoreContext, issueId: string, deliveryId: string): IssueDelivery | null {
   const row = ctx.db.query(`SELECT m.id,m.created_at,m.metadata FROM multiremi_conversation_log m
-    JOIN multiremi_issue_sessions s ON s.id=m.session_id WHERE m.id=? AND s.issue_id=? AND m.kind='message'
+    JOIN multiremi_issue_sessions s ON s.id=m.session_id JOIN multiremi_issues i ON i.id=s.issue_id AND i.workspace_id=s.workspace_id
+    WHERE m.id=? AND s.issue_id=? AND m.kind='message'
     AND m.message_kind='report' AND m.deleted_at IS NULL AND ${deliveryIssueSql(ctx)}=?`).get(deliveryId,issueId,issueId);
   return row ? withReviewAvailability(deliveryFromRow(row),reviewUnavailableReason(ctx,issueId)) : null;
 }
@@ -59,9 +61,11 @@ function getIssueDelivery(ctx: StoreContext, issueId: string, deliveryId: string
 export function listIssueDeliveries(ctx: StoreContext, issueId: string, input: ListIssueDeliveriesInput = {}): IssueDelivery[] {
   const limit = Math.max(1,Math.min(101,Math.trunc(input.limit ?? 50)));
   const cursor = input.before ? ctx.db.query(`SELECT m.created_at,m.seq,m.id FROM multiremi_conversation_log m
-    JOIN multiremi_issue_sessions s ON s.id=m.session_id WHERE m.id=? AND s.issue_id=? AND ${deliveryIssueSql(ctx)}=?`).get(input.before,issueId,issueId) : null;
+    JOIN multiremi_issue_sessions s ON s.id=m.session_id JOIN multiremi_issues i ON i.id=s.issue_id AND i.workspace_id=s.workspace_id
+    WHERE m.id=? AND s.issue_id=? AND ${deliveryIssueSql(ctx)}=?`).get(input.before,issueId,issueId) : null;
   if (input.before && !cursor) throw new IssueDeliveryError('issue_delivery_cursor_invalid','Choose a delivery from this Issue as the cursor');
   const rows = ctx.db.query(`SELECT m.id,m.created_at,m.metadata FROM multiremi_conversation_log m JOIN multiremi_issue_sessions s ON s.id=m.session_id
+    JOIN multiremi_issues i ON i.id=s.issue_id AND i.workspace_id=s.workspace_id
     WHERE s.issue_id=? AND m.kind='message' AND m.message_kind='report' AND m.deleted_at IS NULL AND ${deliveryIssueSql(ctx)}=?
     ${cursor ? 'AND (m.created_at,m.seq,m.id) < (?,?,?)' : ''} ORDER BY m.created_at DESC,m.seq DESC,m.id DESC LIMIT ?`)
     .all(issueId,issueId,...(cursor ? [cursor.created_at,cursor.seq,cursor.id] : []),limit);
@@ -89,7 +93,7 @@ function authorizeActor(ctx: StoreContext, actor: IssueDeliveryActor, expected: 
       throw new IssueDeliveryError('issue_delivery_actor_forbidden', 'The agent must act from its own responsibility Issue session', 403);
     }
     const session = task.issueSessionId ? ctx.issueSessions().getIssueSession(task.issueSessionId) : null;
-    if (!session || session.inheritMode !== 'none' || task.chatSessionId) throw new IssueDeliveryError('issue_delivery_side_session_forbidden','Use the main responsibility Issue session for formal delivery or acceptance',403);
+    if (!session || !session.isDefault || session.workspaceId !== workspaceId || session.issueId !== expected.issueId || session.inheritMode !== 'none' || task.chatSessionId) throw new IssueDeliveryError('issue_delivery_side_session_forbidden','Use the main responsibility Issue session for formal delivery or acceptance',403);
   }
 }
 
@@ -111,7 +115,7 @@ export function submitIssueDelivery(ctx: StoreContext, issueId: string, input: S
     if (['done','cancelled'].includes(issue.status) || issue.archivedAt) throw new IssueDeliveryError('issue_delivery_closed', 'Reopen the Issue before submitting a new delivery');
     const sourceTask=ctx.tasks().getTask(actor.taskId!)!;
     const session = ctx.issueSessions().getIssueSession(input.sessionId ?? sourceTask.issueSessionId!);
-    if (!session || session.issueId !== issueId || session.workspaceId !== issue.workspaceId || session.inheritMode !== 'none') throw new IssueDeliveryError('issue_delivery_session_invalid', 'Delivery session must be a main session of the Issue');
+    if (!session || !session.isDefault || session.issueId !== issueId || session.workspaceId !== issue.workspaceId || session.inheritMode !== 'none') throw new IssueDeliveryError('issue_delivery_session_invalid', 'Delivery session must be a main session of the Issue');
     if(session.id!==sourceTask.issueSessionId)throw new IssueDeliveryError('issue_delivery_session_invalid','Submit from the execution task original Issue session');
     const id = createId('cmt');
     const sourceTurn = actor.taskId ? ctx.db.query('SELECT id,execution_scope FROM multiremi_turns WHERE current_attempt_id=? OR id=?').get(actor.taskId,actor.taskId) : null;
