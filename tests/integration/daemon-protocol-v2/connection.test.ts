@@ -176,6 +176,19 @@ describe("daemon protocol v2 real connection", () => {
         expect(h.client.connectionState()).toBe('disconnected');
       } finally { releaseProvider(); }
     });
+    it("rejects a waiting decision RPC when the daemon is stopped", async () => {
+      try {
+        await h.disconnect();
+        const pending = (h.daemon as any).taskDownlinks.rpc("turn.decision.get", {
+          turn_id: turnId, attempt_id: attemptId, message_id: "msg_unreachable",
+        }, 50).catch((value: unknown) => value);
+        h.daemon.stop();
+        const error = await pending;
+        expect(error).toBeInstanceOf(DaemonProtocolRpcError);
+        expect(error).toMatchObject({ code: "authority_revoked", retryable: false });
+        expect(h.client.connectionState()).toBe("stopped");
+      } finally { releaseProvider(); }
+    });
   });
 
   it("stops within 1s while execution start is unacknowledged without calling the provider", async () => {

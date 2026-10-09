@@ -289,6 +289,8 @@ describe("Bun Multiremi daemon steering", () => {
     let steerPushes = 0;
     let steerId = "";
     let replayedMessage: Record<string, unknown> | null = null;
+    let resolveReplay!: () => void;
+    const replayReceived = new Promise<void>(resolve => { resolveReplay = resolve; });
     const prompts: string[] = [];
     const response: AgentResponse = {
       text: "",
@@ -305,26 +307,21 @@ describe("Bun Multiremi daemon steering", () => {
         if (prompts.length === 1) {
           yield chunk("english draft. ");
           steerId = store.createTaskSteerMessage({ taskId: task.id, kind: "steer", content: "改用中文输出" }).id;
-          await Bun.sleep(450);
+          await new Promise<void>(resolve => {
+            if (options?.signal?.aborted) resolve();
+            else options?.signal?.addEventListener("abort", () => resolve(), { once: true });
+          });
           return;
         }
         yield chunk("中文结论");
         expect(replayedMessage).not.toBeNull();
-        const replay = setTimeout(() => {
-          const session = layer.registry.sessionForRuntime(runtimeId);
-          if (session instanceof DaemonProtocolSession) session.sendEvent({ t: "turn.message", rt: runtimeId,
-            p: replayedMessage! });
-        }, 200);
-        // Keep turn 2 running while the stale push lands. Like the
-        // real ACP provider, an abort cancels the turn — a duplicate-triggered
-        // interrupt here is exactly the bug this test guards against.
-        const deadline = Date.now() + 900;
-        try {
-          while (Date.now() < deadline) {
-            if (options?.signal?.aborted) throw new Error("Cancelled");
-            await Bun.sleep(20);
-          }
-        } finally { clearTimeout(replay); }
+        const session = layer.registry.sessionForRuntime(runtimeId);
+        expect(session).toBeInstanceOf(DaemonProtocolSession);
+        (session as DaemonProtocolSession).sendEvent({ t: "turn.message", rt: runtimeId, p: replayedMessage! });
+        // Hold turn 2 open until every handler for the replay has settled.
+        await replayReceived;
+        await activeDaemon!.daemonProtocolClient().drain();
+        expect(options?.signal?.aborted).toBe(false);
       },
       getLastResponse: () => response,
     });
@@ -346,6 +343,7 @@ describe("Bun Multiremi daemon steering", () => {
           if (frame.type === "turn.message" && (frame.payload.message as { id?: string })?.id === steerId) {
             steerPushes++;
             replayedMessage = frame.payload;
+            if (steerPushes === 2) resolveReplay();
           }
         } },
         providerFactory,
