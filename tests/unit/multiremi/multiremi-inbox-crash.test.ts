@@ -115,7 +115,7 @@ for (const backend of ["SQLite", "PostgreSQL"] as const) {
           if (scenario === "e4") {
             const q = store.getQuestion(f.decisionId!)!;
             const replies = store.listMessages(f.issueSessionId).filter(message => message.reply_to_id === q.id);
-            expect(q.status).toBe(committed ? "answered" : initialStatus);
+            expect(q.status).toBe(committed ? "answered" : initialQuestionStatus!);
             expect(q.wait_status).toBe("waiting");
             expect(q.answer_revision).toBe(committed ? 1 : 0);
             expect(replies).toHaveLength(committed ? 1 : 0);
