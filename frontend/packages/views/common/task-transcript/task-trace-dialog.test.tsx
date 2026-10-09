@@ -54,21 +54,70 @@ beforeEach(() => {
 });
 
 describe("task trace dialog", () => {
+  it("shows the acknowledged main execution model instead of the progress summarizer model", async () => {
+    getTaskTrace.mockResolvedValue(page({ closed: true, head: 6, next_after_seq: 6, events: [
+      { seq: 1, ts: "", type: "execution", meta: { provider: "codex" } },
+      { seq: 2, ts: "", type: "execution", meta: { provider: "codex", model: "gpt-6.1-sol" } },
+      { seq: 3, ts: "", type: "usage", meta: { used: 121800, size: 258400 } },
+      { seq: 4, ts: "", type: "execution", meta: { model: "child-model", parent_tool_call_id: "child" } },
+      { seq: 5, ts: "", type: "execution", meta: { model: 42 } },
+      { seq: 6, ts: "", type: "execution", meta: { model: "default" } },
+    ] }));
+    renderTrace({ status: "completed", usage: [{ model: "gpt-5.6-luna", inputTokens: 2652, outputTokens: 293 }] });
+
+    expect(await screen.findByText("gpt-6.1-sol")).toBeInTheDocument();
+    expect(screen.queryByText("gpt-5.6-luna")).toBeNull();
+    expect(screen.queryByText("child-model")).toBeNull();
+    expect(screen.getByText("2.7K→293")).toBeInTheDocument();
+    expect(screen.getByText("Context 121.8K / 258.4K")).toBeInTheDocument();
+    expect(screen.getByText("0 events")).toBeInTheDocument();
+  });
+
+  it("does not infer the execution model from mixed billing usage when execution metadata is missing", async () => {
+    getTaskTrace.mockResolvedValue(page({ closed: true }));
+    renderTrace({ status: "completed", usage: [{ model: "gpt-5.6-luna", inputTokens: 7 }] });
+    await screen.findByText("Execution finished · 0 events");
+    expect(screen.queryByText("gpt-5.6-luna")).toBeNull();
+  });
+
+  it("keeps a newer live model switch when older history arrives later", async () => {
+    getTaskTrace.mockResolvedValueOnce(page({ events: [
+      { seq: 1, ts: "", type: "execution", meta: { model: "primary" } },
+    ], next_after_seq: 1, head: 150, eof: false })).mockResolvedValueOnce(page({ events: [
+      { seq: 2, ts: "", type: "execution", meta: { model: "older-primary" } },
+    ], next_after_seq: 2, head: 150 }));
+    renderTrace();
+    await screen.findByText("primary");
+    await act(async () => handlers.current?.onFrames?.([
+      { kind: "trace", payload: { seq: 150, ts: "", type: "execution", meta: { model: "backup" } } },
+      { kind: "trace", payload: { seq: 149, ts: "", type: "execution", meta: { model: "older-primary" } } },
+    ] as never));
+    expect(screen.getByText("backup")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Load more events" }));
+    await waitFor(() => expect(getTaskTrace).toHaveBeenCalledWith(task.id, 1, 200, "turn_1"));
+    expect(screen.getByText("backup")).toBeInTheDocument();
+    expect(screen.queryByText("older-primary")).toBeNull();
+  });
+
   it("can reload history evicted by the byte budget even before 200 events", async () => {
     const large = (seq: number) => ({ ...event(seq), type: "tool_result", status: "completed", output: "x".repeat(3 * 1024 * 1024), input: { command: `history-command-${seq}` } });
-    getTaskTrace.mockResolvedValueOnce(page({ events: [large(1)], next_after_seq: 1, head: 3, eof: false }))
-      .mockResolvedValueOnce(page({ events: [large(2)], next_after_seq: 2, head: 3, eof: false }))
-      .mockResolvedValueOnce(page({ events: [large(3)], next_after_seq: 3, head: 3 }))
-      .mockResolvedValueOnce(page({ events: [large(1)], next_after_seq: 1, head: 3, eof: false }));
+    const model = { seq: 1, ts: "", type: "execution", meta: { model: "acknowledged-model" } };
+    getTaskTrace.mockResolvedValueOnce(page({ events: [model, large(2)], next_after_seq: 2, head: 4, eof: false }))
+      .mockResolvedValueOnce(page({ events: [large(3)], next_after_seq: 3, head: 4, eof: false }))
+      .mockResolvedValueOnce(page({ events: [large(4)], next_after_seq: 4, head: 4 }))
+      .mockResolvedValueOnce(page({ events: [model, large(2)], next_after_seq: 2, head: 4, eof: false }));
     renderTrace({ status: "completed" });
-    await screen.findByText("$ history-command-1");
-    fireEvent.click(screen.getByRole("button", { name: "Load more events" }));
     await screen.findByText("$ history-command-2");
+    expect(screen.getByText("acknowledged-model")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Load more events" }));
     await screen.findByText("$ history-command-3");
-    expect(screen.queryByText("$ history-command-1")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Load more events" }));
+    await screen.findByText("$ history-command-4");
+    expect(screen.queryByText("$ history-command-2")).toBeNull();
+    expect(screen.getByText("acknowledged-model")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Back to beginning" }));
-    expect(await screen.findByText("$ history-command-1")).toBeInTheDocument();
+    expect(await screen.findByText("$ history-command-2")).toBeInTheDocument();
+    expect(screen.getByText("acknowledged-model")).toBeInTheDocument();
   });
   it("keeps unread history reachable when live suffixes arrive and allows restarting", async () => {
     getTaskTrace.mockResolvedValueOnce(page({ events: [event(1)], next_after_seq: 1, head: 400, eof: false }))
