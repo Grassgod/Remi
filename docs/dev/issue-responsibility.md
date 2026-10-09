@@ -21,6 +21,11 @@ summary: 明确根人类、统一解析单内及父单责任，并通过具体�
 创建根单必须传明确 `responsible_member_id`，或由真实人类创建来源承担责任。
 HTTP 的创建人来自凭据；Agent 创建新根可继承其真实来源 Issue 的明确人类，
 或 Web Chat 实际创建人的有效 workspace member。Task 凭据不把 Runtime owner 记为人类创建人。
+无 Issue/Chat 的自动化轮可使用真实 run 配置的明确人类：run 必须绑定当前 Task/TurnAttempt，
+其工作区和执行 scope 一致、自动化仍 active、人类有效；body 中的 run ID 不提供来源权限。
+新根单冻结创建时责任，后续配置变化不会改写它；缺失责任的来源 Issue 不回退到自动化配置。
+`issue_created` 同事务审计真实 run、Task、自动化和配置人；这些 server-internal 审计字段
+由 HTTP 入口覆盖客户端值，仅用于追溯，不能作为后续授权来源。
 飞书绑定 Chat 的 creator 可能只是技术归属，不能证明外部发送人的人类责任；群聊和私聊
 都只使用明确配置的 bot `responsible_member_id`，群聊 topic 可显式覆盖。配置缺失时群消息
 仍保留在 Chat，并显示可行动的责任缺口；不自动生成未知责任根单。
@@ -56,6 +61,8 @@ HTTP 的创建人来自凭据；Agent 创建新根可继承其真实来源 Issue
 有未完成子单不能验收。退回必须填写意见，保存原交付与回复，并向原执行会话和 scope
 排入继续处理消息；Issue 保持开放。消息与收据不可通过普通 edit/delete 改写。
 Agent 提交及验收只能来自其责任 Issue 的主会话，继承旁支和 Chat 不具备正式交付权限。
+正式提交与验收写入状态事件时保留已核实 Agent 的真实来源 Task；后续自动化派活继承原业务限制。
+普通成员及 body 中伪造的 Task ID 不能替代该来源，具体交付代理授权也不解除 Issue 创建限制。
 交付固定原 Task 会话；取消或归档后不能用 pending 交付重新关单，需先恢复开放状态。
 重复相同验收幂等；相反动作、已被新交付替代或责任移交后的旧交付被拒绝。
 晚到结果仍保存原子单交付；已关闭或归档的父单仅接收可追溯的

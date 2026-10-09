@@ -125,7 +125,8 @@ export function submitIssueDelivery(ctx: StoreContext, issueId: string, input: S
     const unavailable = reviewUnavailableReason(ctx,issueId);
     const stored = withReviewAvailability({...message.metadata.issue_delivery as IssueDelivery,id:message.id,createdAt:message.created_at},unavailable);
     if (message.id === id) {
-      outcome = ctx.issues().updateIssueWithinTransaction(issueId,{status:'in_review',actorType:actor.type,actorId:actor.id}, {}, changes, events);
+      outcome = ctx.issues().updateIssueWithinTransaction(issueId,{status:'in_review',actorType:actor.type,actorId:actor.id,
+        parentTaskId:actor.type==='agent'?actor.taskId:null}, {}, changes, events);
       events.workspace.push({type:'issue:updated',workspaceId:issue.workspaceId,actorType:actor.type,actorId:actor.id,
         payload:{issue:outcome.issue,status_changed:outcome.previous.status !== outcome.issue.status,prev_status:outcome.previous.status}});
       ctx.appendIssueActivity(issueId,{actorType:actor.type,actorId:actor.id,type:'issue_delivery_submitted',body:summary,data:{deliveryId:message.id,reviewOwner:responsibility.reviewOwner}},events);
@@ -190,7 +191,8 @@ export function respondIssueDelivery(ctx: StoreContext, issueId: string, deliver
     const updated: IssueDelivery = {...delivery,status:input.action === 'accept' ? 'accepted' : 'returned',responseMessageId:response.id,responseBody:response.body_md,respondedAt:response.created_at};
     const original = getMessage(ctx,delivery.id)!;
     ctx.conversationLog().updateConversationLogWithinTransaction(original.session_id,original.seq,{deferEmit:true,fields:{metadata:{...original.metadata,issue_delivery:updated}}});
-    outcome = ctx.issues().updateIssueWithinTransaction(issueId,{status:input.action === 'accept' ? 'done' : 'in_progress',actorType:actor.type,actorId:responseActorId},
+    outcome = ctx.issues().updateIssueWithinTransaction(issueId,{status:input.action === 'accept' ? 'done' : 'in_progress',actorType:actor.type,actorId:responseActorId,
+      parentTaskId:actor.type==='agent'?actor.taskId:null},
       {allowParentStatusGuardBypass:true,...(input.action === 'accept' ? {acceptedDeliveryId:deliveryId} : {})},changes,events);
     ctx.appendIssueActivity(issueId,{actorType:actor.type,actorId:responseActorId,type:input.action === 'accept' ? 'issue_delivery_accepted' : 'issue_delivery_returned',
       body:input.body ?? null,data:{deliveryId,responseMessageId:response.id,reviewOwner:responsibility.reviewOwner,...(authorizedAgent ? {authorization:grant} : {})}},events);

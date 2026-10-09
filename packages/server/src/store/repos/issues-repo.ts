@@ -829,7 +829,8 @@ export class IssuesRepo {
       actorId: createdBy,
       type: "issue_created",
       body: input.title,
-      data: { projectId, parentIssueId, issueKind, sourceIssueId, priority, startDate, dueDate },
+      data: { projectId, parentIssueId, issueKind, sourceIssueId, priority, startDate, dueDate,
+        ...(input.responsibilitySourceAudit?{responsibilitySource:input.responsibilitySourceAudit}:{}) },
     }, deferredEvents);
     // MUL-400 E1 re-derivation: a child created under an in_review parent puts
     // that parent back to in_progress. `createIssue` is the third entry point
@@ -4544,6 +4545,7 @@ export class IssuesRepo {
       title: quickCreateTitle(prompt),
       parentIssueId: input.parentIssueId ?? input.parent_issue_id ?? null,
       responsibleMemberId: input.responsibleMemberId ?? input.responsible_member_id ?? null,
+      responsibilitySourceAudit:input.responsibilitySourceAudit,
       description: prompt,
       workspaceId,
       projectId,

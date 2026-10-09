@@ -338,6 +338,71 @@ for (const backend of ['sqlite','postgres'] as const) describe.skipIf(backend ==
     expect(missing.status).toBeGreaterThanOrEqual(400);
     expect(await missing.text()).toContain('explicit responsible_member_id');
   }));
+  it('uses only the actual active automation run and freezes its explicit human on new roots', () => run(async (store,db) => {
+    const f=fixture(store);const app=createMultiremiApp({store,authToken:'test-root'});
+    const automation=store.createAutopilot({title:'Configured run source',assigneeId:f.worker.id,executionMode:'run_only',responsibleMemberId:f.human.id});
+    const scheduled=store.runAutopilot(automation.id,{source:'api'});
+    const task=store.getTask(scheduled.taskId!)!;
+    const token=await store.createTaskAccessToken(task,'local');
+    const headers={Authorization:`Bearer ${token.token}`,'Content-Type':'application/json'};
+    const createdIds:string[]=[];
+    for(const path of ['/api/issues','/api/multiremi/issues']) {
+      const response=await app.request(path,{method:'POST',headers,body:JSON.stringify({title:'Automation child root',created_by:'local',
+        responsibilitySourceAudit:{kind:'autopilot_run',taskId:'forged',runId:'forged',autopilotId:'forged',responsibleMemberId:f.other.id},
+        responsibility_source_audit:{taskId:'forged-snake'}})});
+      expect(response.status).toBe(201);const body=await response.json();const id=body.issue?.id??body.id;
+      createdIds.push(id);expect(store.getIssue(id)?.responsibleMemberId).toBe(f.human.id);
+      expect(store.listIssueActivity(id).find(entry=>entry.type==='issue_created')?.data).toMatchObject({responsibilitySource:{
+        kind:'autopilot_run',taskId:task.id,runId:scheduled.id,autopilotId:automation.id,responsibleMemberId:f.human.id}});
+    }
+    const unrelated=store.createTask({agentId:f.worker.id,prompt:'No verified source'});
+    const unrelatedToken=await store.createTaskAccessToken(unrelated,'local');
+    const forged=await app.request('/api/issues',{method:'POST',headers:{...headers,Authorization:`Bearer ${unrelatedToken.token}`},
+      body:JSON.stringify({title:'Forged source',autopilotRunId:scheduled.id,autopilot_run_id:scheduled.id,created_by:'local'})});
+    expect(forged.status).toBe(409);
+    const ordinary=await app.request('/api/multiremi/issues',{method:'POST',headers:{...headers,Authorization:'Bearer test-root'},
+      body:JSON.stringify({title:'Human source is not a run',responsibilitySourceAudit:{kind:'autopilot_run',taskId:task.id,runId:scheduled.id,autopilotId:automation.id,responsibleMemberId:f.human.id}})});
+    expect(ordinary.status).toBe(201);const ordinaryBody=await ordinary.json();
+    expect(store.listIssueActivity(ordinaryBody.issue?.id??ordinaryBody.id).find(entry=>entry.type==='issue_created')?.data).not.toHaveProperty('responsibilitySource');
+    store.updateAutopilot(automation.id,{responsibleMemberId:f.other.id});
+    for(const id of createdIds)expect(store.getIssue(id)?.responsibleMemberId).toBe(f.human.id);
+    const next=await app.request('/api/issues',{method:'POST',headers,body:JSON.stringify({title:'Current authorized configuration'})});
+    expect(next.status).toBe(201);expect(store.getIssue((await next.json()).id)?.responsibleMemberId).toBe(f.other.id);
+    store.updateAutopilot(automation.id,{status:'paused'});
+    expect((await app.request('/api/issues',{method:'POST',headers,body:JSON.stringify({title:'Inactive source'})})).status).toBe(409);
+    store.updateAutopilot(automation.id,{status:'active'});
+    db.run('UPDATE multiremi_turns SET execution_scope=? WHERE current_attempt_id=?',['unrelated-scope',task.id]);
+    expect((await app.request('/api/issues',{method:'POST',headers,body:JSON.stringify({title:'Wrong run scope'})})).status).toBe(409);
+  }));
+  it('preserves verified formal Agent source taint through HTTP acceptance and system-event dispatch', () => run(async (store,db) => {
+    const human=store.findWorkspaceMemberForUser('local','local')!;
+    const restricted=store.createAgent({name:'Restricted formal owner',provider:'claude',issueCreationRequiresProposal:true});
+    const worker=store.createAgent({name:'Automation worker',provider:'claude'});
+    const project=store.createProject({title:'Formal source project'});
+    const issue=store.createIssue({title:'Formal tainted result',responsibleMemberId:human.id,assigneeType:'agent',assigneeId:restricted.id,projectId:project.id});
+    const source=store.createTask({agentId:restricted.id,issueId:issue.id,prompt:'Deliver restricted result'});
+    const innocent=store.createTask({agentId:worker.id,prompt:'Unrelated source'});
+    const auto=store.createAutopilot({title:'Clean event configuration',responsibleMemberId:human.id,assigneeId:worker.id,executionMode:'trigger_issue',projectId:project.id});
+    store.createAutopilotTrigger(auto.id,{kind:'system_event',eventConfig:{resource:'issue',event:'status_changed',conditions:[{field:'status',operator:'becomes',value:'done'}],projectId:project.id}});
+    const app=createMultiremiApp({store,authToken:'test-root'});const credential=await store.createTaskAccessToken(source,'local');
+    const headers={Authorization:`Bearer ${credential.token}`,'Content-Type':'application/json'};
+    const submission=await app.request(`/api/issues/${issue.id}/deliveries`,{method:'POST',headers,body:JSON.stringify({summary:'Verified formal result',parentTaskId:innocent.id})});
+    expect(submission.status).toBe(201);const {delivery}=await submission.json();
+    const authorized=await app.request(`/api/issues/${issue.id}/deliveries/${delivery.id}/authorize`,{method:'POST',headers:{...headers,Authorization:'Bearer test-root'},
+      body:JSON.stringify({agentId:restricted.id,revision:delivery.responsibilityRevision})});
+    expect(authorized.status).toBe(200);
+    const accepted=await app.request(`/api/issues/${issue.id}/deliveries/${delivery.id}/respond`,{method:'POST',headers,
+      body:JSON.stringify({action:'accept',revision:delivery.responsibilityRevision,parentTaskId:innocent.id,parent_task_id:innocent.id})});
+    expect(accepted.status).toBe(200);
+    const event=db.query("SELECT payload FROM multiremi_system_events WHERE resource_id=? AND event='status_changed'").all(issue.id)
+      .find(row=>JSON.parse(row.payload).status==='done')!;
+    expect(JSON.parse(event.payload).automation_source_task_id).toBe(source.id);
+    const [dispatched]=store.dispatchPendingSystemEvents();expect(dispatched).toBeDefined();
+    const task=store.getTask(dispatched!.taskId!)!;expect(task.issueCreationRestricted).toBe(true);
+    const dispatchedCredential=await store.createTaskAccessToken(task,'local');
+    const denied=await app.request('/api/issues',{method:'POST',headers:{...headers,Authorization:`Bearer ${dispatchedCredential.token}`},body:JSON.stringify({title:'Proxy does not relax creation policy'})});
+    expect(denied.status).toBe(403);expect(await denied.json()).toMatchObject({code:'issue_creation_requires_proposal'});
+  }));
   it('keeps human responsibility separate from execution and refuses side-session delivery or acceptance', () => run((store,db) => {
     const f=fixture(store);
     expect(()=>store.createIssue({title:'Human execution',assigneeType:'member',assigneeId:f.human.id,responsibleMemberId:f.human.id})).toThrow('Agent or team Leader');

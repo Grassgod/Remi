@@ -442,7 +442,7 @@ export function stripServerOwnedSessionTaskFields(input: CreateSessionTaskInput)
  * compatibility `POST /api/issues` route still stamps the credentialed caller
  * through `withIssueCreateRequestContext`.
  */
-const SERVER_OWNED_ISSUE_CREATE_FIELDS = ["createdBy", "created_by"] as const;
+const SERVER_OWNED_ISSUE_CREATE_FIELDS = ["createdBy", "created_by", "responsibilitySourceAudit", "responsibility_source_audit"] as const;
 
 export function stripServerOwnedIssueCreateFields<T extends object>(input: T): T {
   return stripRequestFields(input, SERVER_OWNED_ISSUE_CREATE_FIELDS);
@@ -475,7 +475,7 @@ export function stripServerOwnedIssueSourceFields<T extends object>(input: T): T
 }
 
 /** The quick-create equivalent: `requester_id` is who asked, not who is asked. */
-const SERVER_OWNED_QUICK_CREATE_FIELDS = ["requesterId", "requester_id"] as const;
+const SERVER_OWNED_QUICK_CREATE_FIELDS = ["requesterId", "requester_id", "responsibilitySourceAudit", "responsibility_source_audit"] as const;
 
 export function stripServerOwnedQuickCreateFields(input: QuickCreateIssueInput): QuickCreateIssueInput {
   return stripRequestFields(input, SERVER_OWNED_QUICK_CREATE_FIELDS);

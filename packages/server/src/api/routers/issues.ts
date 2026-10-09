@@ -10,6 +10,7 @@ import {
   canCurrentUserAccessChatTask,
   currentTaskParentId,
   taskIssueResponsibleMember,
+  taskIssueResponsibilitySourceAudit,
   denyCurrentUserWorkspaceAccess,
   denyRestrictedTaskIssueCreation,
   isActiveTaskStatus,
@@ -918,6 +919,7 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     try {
       issue = store.createIssue({
         ...stripServerOwnedIssueCreateFields(sourceStripped),
+        responsibilitySourceAudit:taskIssueResponsibilitySourceAudit(c,store),
         blockedBy: body.blockedBy ?? body.blocked_by,
         workspaceId,
         createdBy: currentTaskAccessToken(c) || currentAccessToken(c)?.type==='daemon' ? null : authenticatedRequestUserId(c) ?? currentRequestUserId(c),
@@ -1070,6 +1072,7 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     // Human responsibility uses the verified requester, never a body-supplied requester.
     const result = safeQuickCreateIssue(store, {
       ...stripServerOwnedQuickCreateFields(body),
+      responsibilitySourceAudit:taskIssueResponsibilitySourceAudit(c,store),
       workspaceId,
       responsibleMemberId:body.responsibleMemberId??body.responsible_member_id??(!(body.parentIssueId??body.parent_issue_id)&&currentTaskAccessToken(c)?taskIssueResponsibleMember(c,store):undefined),
       requesterId: currentTaskAccessToken(c) || currentAccessToken(c)?.type==='daemon' ? null : authenticatedRequestUserId(c) ?? currentRequestUserId(c),
@@ -1093,6 +1096,7 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     if (workspaceId instanceof Response) return workspaceId;
     const input = {
       ...stripServerOwnedQuickCreateFields(issueQuickCreateCompatibilityInput(body)),
+      responsibilitySourceAudit:taskIssueResponsibilitySourceAudit(c,store),
       workspaceId,
       responsibleMemberId:body.responsibleMemberId??body.responsible_member_id??(!(body.parentIssueId??body.parent_issue_id)&&currentTaskAccessToken(c)?taskIssueResponsibleMember(c,store):undefined),
       requesterId: currentTaskAccessToken(c) || currentAccessToken(c)?.type==='daemon' ? null : authenticatedRequestUserId(c) ?? currentRequestUserId(c),

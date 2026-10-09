@@ -2404,6 +2404,10 @@ export interface MultiremiTimelinePage {
 }
 
 export interface CreateIssueInput {
+  /** Server-internal creation audit only; HTTP callers cannot supply trusted provenance. */
+  responsibilitySourceAudit?: {
+    kind: 'autopilot_run'; taskId: string; runId: string; autopilotId: string; responsibleMemberId: string;
+  } | null;
   responsibleMemberId?: string | null;
   responsible_member_id?: string | null;
   /**
@@ -2625,6 +2629,8 @@ export interface AssignIssueResult {
 }
 
 export interface QuickCreateIssueInput {
+  /** Server-internal creation audit, derived from the verified requesting Task. */
+  responsibilitySourceAudit?: CreateIssueInput['responsibilitySourceAudit'];
   parentIssueId?: string | null;
   parent_issue_id?: string | null;
   responsibleMemberId?: string | null;
