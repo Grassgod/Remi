@@ -91,10 +91,7 @@ it("leaves the entire startup home untouched after daemon and archive tests", as
         console.info(`[home-isolation] ${file}: ${(performance.now() - startedAt).toFixed(0)}ms, exit=${exitCode}`);
         return { file, exitCode, stdout, stderr };
       };
-      // PG fixture setup competes with steer delivery inside its 5s cases.
-      // Give steer its own phase; overlap the longer suites to keep the shared
-      // 90s budget at steer + max(approval, drain), rather than all three added.
-      const results = [await runChild(files[0]!), ...await Promise.all(files.slice(1).map(runChild))];
+      const results = await Promise.all(files.map(runChild));
       if (budgetExpired) throw new Error("Daemon/archive children exceeded the shared 90s budget");
       const failures = results.filter(result => result.exitCode !== 0);
       if (failures.length) throw new Error(failures.map(result =>

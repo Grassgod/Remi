@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 /**
  * MUL-405 unit coverage for the three mechanisms that make multi-process
  * startup safe. The end-to-end two-process evidence lives in
@@ -139,7 +140,7 @@ describe("MUL-405 issue number allocation lock", () => {
     expect(resolveSqlDialect(countedDb)).toBe("sqlite");
     const store = new MultiremiStore(countedDb);
 
-    store.createIssue({ title: "Locked", workspaceId: "local" });
+    createResponsibleTestIssue(store, { title: "Locked", workspaceId: "local" });
 
     // The lock is taken, and it happens before the read that produces the number.
     const lockIndex = statements.findIndex((sql) => sql.startsWith("LOCK "));
@@ -151,8 +152,8 @@ describe("MUL-405 issue number allocation lock", () => {
 
   it("allocates one number per issue and keeps them increasing", () => {
     const store = createStore();
-    const first = store.createIssue({ title: "One", workspaceId: "local" });
-    const second = store.createIssue({ title: "Two", workspaceId: "local" });
+    const first = createResponsibleTestIssue(store, { title: "One", workspaceId: "local" });
+    const second = createResponsibleTestIssue(store, { title: "Two", workspaceId: "local" });
     expect(second.number).toBe(first.number + 1);
     expect(second.key).not.toBe(first.key);
   });
@@ -160,8 +161,8 @@ describe("MUL-405 issue number allocation lock", () => {
   it("allocates per workspace, not globally", () => {
     const store = createStore();
     const workspace = store.createWorkspace({ name: "Other", slug: "other" });
-    const local = store.createIssue({ title: "Local", workspaceId: "local" });
-    const other = store.createIssue({ title: "Other", workspaceId: workspace.id });
+    const local = createResponsibleTestIssue(store, { title: "Local", workspaceId: "local" });
+    const other = createResponsibleTestIssue(store, { title: "Other", workspaceId: workspace.id });
     expect(local.workspaceId).toBe("local");
     expect(other.workspaceId).toBe(workspace.id);
     expect(other.number).toBe(1);

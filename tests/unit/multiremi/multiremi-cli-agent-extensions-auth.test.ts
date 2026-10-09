@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { afterEach, describe, expect, it } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { createStore, resetMultiremiTestEnv } from "./helpers.js";
@@ -25,7 +26,7 @@ describe("agent extension CLI authorization boundaries", () => {
       customArgs: [privateValues.arg],
       mcpConfig: { authorization: privateValues.mcp },
     });
-    const issue = store.createIssue({ title: "Task credential", workspaceId: "local" });
+    const issue = createResponsibleTestIssue(store, { title: "Task credential", workspaceId: "local" });
     const task = store.createTask({ agentId: taskAgent.id, issueId: issue.id, workspaceId: "local", prompt: "Inspect directory" });
     const taskToken = await store.createTaskAccessToken(task, "local");
     const app = createMultiremiApp({ store, authToken: "root-secret" });
@@ -57,7 +58,7 @@ describe("agent extension CLI authorization boundaries", () => {
     const store = createStore();
     store.ensureLocalWorkspace();
     const agent = store.createAgent({ name: "Task actor", provider: "codex", workspaceId: "local" });
-    const issue = store.createIssue({ title: "Task credential", workspaceId: "local" });
+    const issue = createResponsibleTestIssue(store, { title: "Task credential", workspaceId: "local" });
     const task = store.createTask({ agentId: agent.id, issueId: issue.id, workspaceId: "local", prompt: "Authenticate" });
     const taskToken = await store.createTaskAccessToken(task, "local");
     const squad = store.createSquad({ name: "Readable squad", workspaceId: "local", leaderId: agent.id });

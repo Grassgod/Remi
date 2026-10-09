@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { expect, it } from 'bun:test';
 import { pendingTurnBackendTests } from './pending-turn-test-backends.js';
 import { MultiremiStore } from '@multiremi/store.js';
@@ -8,7 +9,7 @@ pendingTurnBackendTests('MUL-506 actual reader and provider checkpoints', fixtur
   function setup(chat = false, body = 'original input') {
     const f = fixture();
     const agent = f.store.createAgent({ name: 'Reader', provider: 'codex' });
-    const issue = f.store.createIssue({ title: 'Read progress' });
+    const issue = createResponsibleTestIssue(f.store, { title: 'Read progress' });
     const session = chat ? f.store.createChatSession({ agentId: agent.id }) : f.store.getOrCreateDefaultIssueSession(issue.id);
     f.store.registerRuntime({ id: 'rt_read', daemonId: 'daemon_read', name: 'Reader runtime', provider: 'codex', workspaceId: 'local' });
     const sent = f.store.sendMessage({ session_id: session.id, sender: { type: 'member', id: 'mem_local_local' }, to: { type: 'agent', ref: agent.id }, message_kind: 'request', wake_requested: 'now', body_md: body });

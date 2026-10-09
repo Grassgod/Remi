@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { runTurnExecutionMutation } from "@multiremi/store/turn-execution-records.js";
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -82,7 +83,7 @@ for (const backend of ["SQLite", "PostgreSQL"] as const) {
     for (const phase of ["before-insert", "after-insert", "after-commit"] as const) {
       it(`${phase}: relay message and running turn input commit together`, async () => {
         const agent = store.createAgent({ name: "Crash relay", provider: "codex" });
-        const issue = store.createIssue({ title: "Crash relay", status: "in_progress" });
+        const issue = createResponsibleTestIssue(store, { title: "Crash relay", status: "in_progress" });
         const chat = store.createChatSession({ agentId: agent.id });
         bindFeishuTopicFixture(store, db, chat.id, issue.id);
         const initial = db.transaction(() => store.sendEnvelopeWithinTransaction({

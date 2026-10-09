@@ -1,6 +1,7 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { requestMessageBody, taskRequestPath, sentTask } from "./unified-test-paths.js";
 import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
-import { describe, expect, it, spyOn } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
 import { IssuesRepo } from "@multiremi/store/repos/issues-repo.js";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { MultiremiStore } from "@multiremi/store.js";
@@ -20,8 +21,8 @@ function fiveChildFixture(store: MultiremiStore) {
   const workers = workerRuntimes.map((runtime, index) =>
     store.createAgent({ name: `Worker ${index}`, provider: "claude", runtimeId: runtime.id }));
   const squad = store.createSquad({ name: "Delivery", leaderId: leader.id, memberIds: workers.map((agent) => agent.id) });
-  const parent = store.createIssue({ title: "Umbrella", status: "in_progress", assigneeType: "squad", assigneeId: squad.id });
-  const children = workers.map((agent, index) => store.createIssue({ title: `Child ${index}`,
+  const parent = createResponsibleTestIssue(store, { title: "Umbrella", status: "in_progress", assigneeType: "squad", assigneeId: squad.id });
+  const children = workers.map((agent, index) => createResponsibleTestIssue(store, { title: `Child ${index}`,
     parentIssueId: parent.id, status: "in_progress", assigneeType: "agent", assigneeId: agent.id }));
   const leaderSession = store.createIssueSession(parent.id, { title: "Dispatch five" });
   const leaderTask = store.createTask({ agentId: leader.id, issueId: parent.id,
@@ -29,17 +30,17 @@ function fiveChildFixture(store: MultiremiStore) {
   return { leaderRuntime, workerRuntimes, leader, workers, squad, parent, children, leaderSession, leaderTask };
 }
 
-async function withStore(backend: "sqlite" | "postgres", run: (store: MultiremiStore, db: SqlDatabase) => Promise<void>): Promise<void> {
+async function openStore(backend: "sqlite" | "postgres") {
   if (backend === "sqlite") {
     const db = openSqliteDatabase(":memory:");
     try {
       const store = new MultiremiStore(db);
       store.ensureLocalWorkspace();
-      await run(store, db);
-    } finally {
+      return { store, db, close: async () => db.close() };
+    } catch (error) {
       db.close();
+      throw error;
     }
-    return;
   }
   const admin = new Bun.SQL(pgAdminUrl!, { max: 1 });
   const name = `mul456i_${process.pid}_${++sequence}`;
@@ -51,11 +52,16 @@ async function withStore(backend: "sqlite" | "postgres", run: (store: MultiremiS
     db = new PostgresSyncDatabase(url.toString());
     const store = new MultiremiStore(db);
     store.ensureLocalWorkspace();
-    await run(store, db);
-  } finally {
+    return { store, db, close: async () => {
+      db?.close();
+      await admin.unsafe(`DROP DATABASE IF EXISTS ${name} WITH (FORCE)`);
+      await admin.end();
+    } };
+  } catch (error) {
     db?.close();
     await admin.unsafe(`DROP DATABASE IF EXISTS ${name} WITH (FORCE)`);
     await admin.end();
+    throw error;
   }
 }
 
@@ -72,8 +78,8 @@ function fixture(store: MultiremiStore, db?: SqlDatabase) {
   // Batch independent fixture writes; Issue creation owns its transaction and callbacks.
   const { leaderRuntime, workerRuntime, leader, worker, outsider, squad } =
     db ? db.transaction(registerMembers)() : registerMembers();
-  const parent = store.createIssue({ title: "Parent", status: "in_progress", assigneeType: "squad", assigneeId: squad.id });
-  const child = store.createIssue({ title: "Child", parentIssueId: parent.id, status: "in_progress", assigneeType: "agent", assigneeId: worker.id });
+  const parent = createResponsibleTestIssue(store, { title: "Parent", status: "in_progress", assigneeType: "squad", assigneeId: squad.id });
+  const child = createResponsibleTestIssue(store, { title: "Child", parentIssueId: parent.id, status: "in_progress", assigneeType: "agent", assigneeId: worker.id });
   const leaderSession = store.createIssueSession(parent.id, { title: "Dispatch round" });
   const leaderTask = store.createTask({ agentId: leader.id, issueId: parent.id,
     issueSessionId: leaderSession.id, prompt: "Coordinate." });
@@ -112,17 +118,25 @@ for (const backend of ["sqlite", "postgres"] as const) {
   // These PG scenarios do several writes; CI runner jitter is outside the behavior asserted below.
   const pgScenarioTimeout = backend === "postgres" ? 15000 : 5000;
   describe.skipIf(backend === "postgres" && !pgAdminUrl)(`MUL-456 cross-issue return (${backend})`, () => {
+    let opened: Awaited<ReturnType<typeof openStore>>;
+    // Keep cold database/bootstrap and teardown outside each behavior's existing
+    // timeout; the transactional scenarios retain their original budgets.
+    beforeEach(async () => { opened = await openStore(backend); });
+    afterEach(async () => { await opened?.close(); });
+    const withStore = async (_backend: typeof backend, run: (store: MultiremiStore, db: SqlDatabase) => Promise<void>) => {
+      await run(opened.store, opened.db);
+    };
     it("delegates inside and outside the subtree and retains audited exceptions", async () => withStore(backend, async (store) => {
       const f = fixture(store);
-      const grandchild = store.createIssue({ title: "Grandchild", parentIssueId: f.child.id });
-      const sibling = store.createIssue({ title: "Sibling", parentIssueId: f.parent.id });
-      const siblingChild = store.createIssue({ title: "Sibling child", parentIssueId: sibling.id });
+      const grandchild = createResponsibleTestIssue(store, { title: "Grandchild", parentIssueId: f.child.id });
+      const sibling = createResponsibleTestIssue(store, { title: "Sibling", parentIssueId: f.parent.id });
+      const siblingChild = createResponsibleTestIssue(store, { title: "Sibling child", parentIssueId: sibling.id });
       for (const target of [f.child, grandchild, sibling, siblingChild]) {
         const decision = store.resolveAgentDelegation({ targetIssue: target, sourceTask: f.leaderTask,
           authorAgentId: f.leader.id, targetAgentId: f.worker.id });
         expect(decision).toEqual({ ok: true, delegatedFromIssueSessionId: f.leaderSession.id });
       }
-      const unrelated = store.createIssue({ title: "Unrelated" });
+      const unrelated = createResponsibleTestIssue(store, { title: "Unrelated" });
       for (const [targetIssue, targetAgentId] of [[f.child, f.outsider.id], [unrelated, f.worker.id]] as const) {
         expect(store.resolveAgentDelegation({ targetIssue, sourceTask: f.leaderTask,
           authorAgentId: f.leader.id, targetAgentId }))
@@ -140,7 +154,7 @@ for (const backend of ["sqlite", "postgres"] as const) {
       expect(store.resolveAgentDelegation({ targetIssue: f.child, sourceTask: sideTask,
         authorAgentId: f.leader.id, targetAgentId: f.worker.id }))
         .toEqual({ ok: false, reason: "source_side_session" });
-      const nonSquad = store.createIssue({ title: "Agent owner", parentIssueId: f.parent.id,
+      const nonSquad = createResponsibleTestIssue(store, { title: "Agent owner", parentIssueId: f.parent.id,
         assigneeType: "agent", assigneeId: f.leader.id });
       const nonSquadTask = store.createTask({ agentId: f.leader.id, issueId: nonSquad.id, prompt: "Lead" });
       expect(store.resolveAgentDelegation({ targetIssue: f.child, sourceTask: nonSquadTask,
@@ -223,10 +237,15 @@ for (const backend of ["sqlite", "postgres"] as const) {
       const f=fixture(store),child=await dispatch(store,f.leaderTask,f.child,f.worker.id);
       finishLeaderRound(store,f);expect(store.claimTask(f.workerRuntime.id)?.id).toBe(child.id);
       store.buildTaskSessionProjection(child.id);store.startTask(child.id);
-      store.updateIssue(f.child.id,{status:"done",parentTaskId:child.id,actorType:"agent",actorId:f.worker.id});
+      const delivery = store.submitIssueDelivery(f.child.id, { summary: "Child implementation complete" },
+        { type: "agent", id: f.worker.id, taskId: child.id });
       const owner=store.getOrCreateDefaultIssueSession(f.parent.id);
       const statusTurn=store.listTasksForIssue(f.parent.id).find(task=>task.status==="queued"&&task.issueSessionId===owner.id)!;
       expect(statusTurn).toBeDefined();expect(owner.id).not.toBe(f.leaderSession.id);
+      store.respondIssueDelivery(f.child.id, delivery.id,
+        { action: "accept", revision: delivery.responsibilityRevision },
+        { type: "agent", id: f.leader.id, taskId: statusTurn.id });
+      expect(store.getIssue(f.child.id)?.status).toBe("done");
       store.completeTask(child.id,{output:"Finished after closing the child."});
       const returned=store.getTurn(store.getTask(child.id)!.delegationReturnTaskId!)!;
       expect(returned).toMatchObject({session_id:f.leaderSession.id,status:"pending"});
@@ -276,9 +295,13 @@ for (const backend of ["sqlite", "postgres"] as const) {
       expect(store.claimTask(f.workerRuntime.id)?.id).toBe(childTask.id);
       store.buildTaskSessionProjection(childTask.id);
       store.startTask(childTask.id);
-      store.updateIssue(f.child.id, { status: "done", parentTaskId: childTask.id,
-        actorType: "agent", actorId: f.worker.id });
+      const delivery = store.submitIssueDelivery(f.child.id, { summary: "Child implementation complete" },
+        { type: "agent", id: f.worker.id, taskId: childTask.id });
       const e2Round = store.listTasksForIssue(f.parent.id).find((task) => task.status === "queued" && task.issueSessionId === store.getOrCreateDefaultIssueSession(f.parent.id).id)!;
+      store.respondIssueDelivery(f.child.id, delivery.id,
+        { action: "accept", revision: delivery.responsibilityRevision },
+        { type: "agent", id: f.leader.id, taskId: e2Round.id });
+      expect(store.getIssue(f.child.id)?.status).toBe("done");
       store.updateWorkspace("local", { settings: { organizer: { mode: "act" } } });
       const supervisor = store.createAgent({ name: "Supervisor", provider: "claude", role: "supervisor" });
       const supervisorTask = store.createTask({ agentId: supervisor.id, issueId: f.parent.id, prompt: "Supervise" });
@@ -318,7 +341,7 @@ for (const backend of ["sqlite", "postgres"] as const) {
       const f = fixture(store);
       const childTask = await dispatch(store, f.leaderTask, f.child, f.worker.id);
       finishLeaderRound(store, f);
-      const prerequisite = store.createIssue({ title: "Prerequisite", status: "todo" });
+      const prerequisite = createResponsibleTestIssue(store, { title: "Prerequisite", status: "todo" });
       store.createIssueDependency(f.parent.id, { dependsOnIssueId: prerequisite.id, type: "blocked_by" });
       store.updateIssue(f.parent.id, { status: "backlog" });
       expect(store.getIssue(f.parent.id)?.status).toBe("backlog");

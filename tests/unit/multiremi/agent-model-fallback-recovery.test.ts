@@ -1,3 +1,5 @@
+import { createResponsibleTestAutopilot } from './helpers.js';
+import { createResponsibleTestIssue } from './helpers.js';
 import { runTurnExecutionMutation } from "@multiremi/store/turn-execution-records.js";
 /**
  * MUL-336 / MUL-478 — the Agent's default fallback model.
@@ -66,7 +68,7 @@ function fixture(options: { fallback?: boolean } = {}) {
     model: PRIMARY, thinkingLevel: "high",
     ...(options.fallback === false ? {} : { fallbackModel: FALLBACK, fallbackThinkingLevel: "high" }),
   });
-  const issue = store.createIssue({
+  const issue = createResponsibleTestIssue(store, {
     title: "Gateway exhausted", assigneeType: "agent", assigneeId: agent.id,
   });
   return { store, runtime, agent, issue };
@@ -150,7 +152,7 @@ describe("MUL-336 model fallback recovery chain", () => {
 
     // An independent task still hands the engine the primary selection, with the
     // configured fallback available for its own future recovery.
-    const otherIssue = store.createIssue({
+    const otherIssue = createResponsibleTestIssue(store, {
       title: "Independent", assigneeType: "agent", assigneeId: agent.id,
     });
     const plain = store.createTask({ agentId: agent.id, issueId: otherIssue.id, prompt: "Primary again" });
@@ -167,7 +169,7 @@ describe("MUL-336 model fallback recovery chain", () => {
     failClaimed(store, runtime.id, first.id, NO_ACCOUNT_ERROR);
     expect(successor(store, first.id)!.executionModel).toBe(FALLBACK);
 
-    const independentIssue = store.createIssue({ title: "Independent primary-model lane" });
+    const independentIssue = createResponsibleTestIssue(store, { title: "Independent primary-model lane" });
     const independent = store.createTask({ agentId: agent.id, issueId: independentIssue.id, prompt: "Second" });
     expect(independent.executionModel).toBeNull();
     expect(independent.fallbackSwitched).toBe(false);
@@ -189,7 +191,7 @@ describe("MUL-336 model fallback recovery chain", () => {
     // The gateway now only advertises the fallback model: this machine can no
     // longer execute the Agent's primary selection.
     store.updateRuntimeModels(runtime.id, [model(FALLBACK)]);
-    const nextIssue = store.createIssue({ title: "Independent capability probe" });
+    const nextIssue = createResponsibleTestIssue(store, { title: "Independent capability probe" });
     const next = store.createTask({ agentId: agent.id, issueId: nextIssue.id, prompt: "Primary only" });
     // The queued retry still runs, because the capability that matters is the
     // one the task will actually execute with (requirement 6) ...
@@ -390,7 +392,7 @@ describe("MUL-336 model fallback recovery chain", () => {
 
   it("isolates concurrent tasks of the same Agent", () => {
     const { store, runtime, agent, issue } = fixture();
-    const chatIssue = store.createIssue({
+    const chatIssue = createResponsibleTestIssue(store, {
       title: "Parallel work", assigneeType: "agent", assigneeId: agent.id,
     });
     const first = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "A" });
@@ -422,7 +424,7 @@ describe("MUL-336 model fallback recovery chain", () => {
       name: "Automation", provider: "claude", ownerId: owner.id, model: PRIMARY, thinkingLevel: "high",
       fallbackModel: FALLBACK, fallbackThinkingLevel: "high",
     });
-    const autopilot = store.createAutopilot({
+    const autopilot = createResponsibleTestAutopilot(store, {
       title: "Nightly sweep",
       assigneeId: agent.id,
       issueTitleTemplate: "Nightly sweep",
@@ -463,7 +465,7 @@ describe("MUL-336 model fallback recovery chain", () => {
       name: "Automation", provider: "claude", ownerId: owner.id, model: PRIMARY, thinkingLevel: "high",
       fallbackModel: FALLBACK, fallbackThinkingLevel: "high",
     });
-    const autopilot = store.createAutopilot({
+    const autopilot = createResponsibleTestAutopilot(store, {
       title: "Nightly sweep",
       assigneeId: agent.id,
       issueTitleTemplate: "Nightly sweep",
@@ -517,7 +519,7 @@ describe("MUL-336 model fallback recovery chain", () => {
       models: [model(PRIMARY), model(FALLBACK)],
     });
     const runtime = store.listRuntimes()[0]!;
-    const issue = store.createIssue({ title: "Delegated work", assigneeType: "agent", assigneeId: leader.id });
+    const issue = createResponsibleTestIssue(store, { title: "Delegated work", assigneeType: "agent", assigneeId: leader.id });
     const session = store.getOrCreateDefaultIssueSession(issue.id);
     const child = store.createTask({
       agentId: teammate.id, issueId: issue.id, issueSessionId: session.id,
@@ -559,7 +561,7 @@ describe("MUL-336 model fallback recovery chain", () => {
       name: "Level mismatch", provider: "claude", maxConcurrentTasks: 4,
       model: PRIMARY, thinkingLevel: "high", fallbackModel: FALLBACK,
     });
-    const issue = store.createIssue({
+    const issue = createResponsibleTestIssue(store, {
       title: "Level mismatch", assigneeType: "agent", assigneeId: agent.id,
     });
     const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "Recover at another level" });

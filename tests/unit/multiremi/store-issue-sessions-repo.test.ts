@@ -7,6 +7,7 @@ import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { MultiremiStore } from "@multiremi/store.js";
 import { StoreContext } from "@multiremi/store/context.js";
 import { IssueSessionsRepo } from "@multiremi/store/repos/issue-sessions-repo.js";
+import { createResponsibleTestIssue } from './helpers.js';
 
 let db: Database | null = null;
 let store: MultiremiStore | null = null;
@@ -27,7 +28,7 @@ afterEach(() => {
 describe("IssueSessionsRepo", () => {
   it("returns the same default session for an issue on every call", () => {
     const repo = createRepo();
-    const issue = store!.createIssue({ title: "Session host", workspaceId: "local" });
+    const issue = createResponsibleTestIssue(store!,{ title: "Session host", workspaceId: "local" });
 
     const first = repo.getOrCreateDefaultIssueSession(issue.id);
     const second = repo.getOrCreateDefaultIssueSession(issue.id);
@@ -39,7 +40,7 @@ describe("IssueSessionsRepo", () => {
 
   it("appends session events with a monotonic per-session sequence", () => {
     const repo = createRepo();
-    const issue = store!.createIssue({ title: "Event log", workspaceId: "local" });
+    const issue = createResponsibleTestIssue(store!,{ title: "Event log", workspaceId: "local" });
     const session = repo.getOrCreateDefaultIssueSession(issue.id);
 
     const first = repo.appendSessionEvent(session.id, { authorType: "system", body: "one" });
@@ -51,7 +52,7 @@ describe("IssueSessionsRepo", () => {
 
   it("adds an agent participant and opens its lane (cross-domain agent lookup)", () => {
     const repo = createRepo();
-    const issue = store!.createIssue({ title: "Lane", workspaceId: "local" });
+    const issue = createResponsibleTestIssue(store!,{ title: "Lane", workspaceId: "local" });
     const session = repo.getOrCreateDefaultIssueSession(issue.id);
     // Agents live in another repo, reached through ctx.agents().
     const agent = store!.createAgent({ name: "Laner", provider: "claude", workspaceId: "local" });

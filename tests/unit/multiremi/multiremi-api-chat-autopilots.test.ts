@@ -1,3 +1,5 @@
+import { createResponsibleTestAutopilot } from './helpers.js';
+import { acceptTestIssueDelivery, createResponsibleTestIssue } from './helpers.js';
 import { requestMessageBody, sentTask } from "./unified-test-paths.js";
 // Chat session/message routes, autopilot API + public webhook triggering,
 // webhook rate limiting, and scheduler state sync.
@@ -46,7 +48,7 @@ describe("Multiremi API — chat sessions and autopilot triggers", () => {
   it("triggers autopilots through API and webhook endpoints", async () => {
     const store = createStore();
     const agent = store.createAgent({ name: "Codex", provider: "codex" });
-    const autopilot = store.createAutopilot({
+    const autopilot = createResponsibleTestAutopilot(store, {
       title: "Webhook triage",
       assigneeId: agent.id,
       triggerKind: "webhook",
@@ -276,7 +278,7 @@ describe("Multiremi API — chat sessions and autopilot triggers", () => {
       provider: "codex",
       workspaceId: targetWorkspace.id,
     });
-    const autopilot = store.createAutopilot({
+    const autopilot = createResponsibleTestAutopilot(store, {
       title: "Target automation",
       assigneeId: agent.id,
       workspaceId: targetWorkspace.id,
@@ -327,7 +329,7 @@ describe("Multiremi API — chat sessions and autopilot triggers", () => {
   it("rate limits public autopilot webhooks by token and source bucket", async () => {
     const store = createStore();
     const agent = store.createAgent({ name: "Codex", provider: "codex" });
-    const autopilot = store.createAutopilot({ title: "Webhook limited", assigneeId: agent.id, triggerKind: "webhook" });
+    const autopilot = createResponsibleTestAutopilot(store, { title: "Webhook limited", assigneeId: agent.id, triggerKind: "webhook" });
     store.updateAutopilot(autopilot.id, { status: "paused" });
     const trigger = store.createAutopilotTrigger(autopilot.id, { kind: "webhook", label: "Limited webhook" });
 
@@ -414,7 +416,8 @@ describe("Multiremi API — chat sessions and autopilot triggers", () => {
   it("validates and serializes trigger_issue system event configuration", async () => {
     const store = createStore();
     const agent = store.createAgent({ name: "Wiki maintainer", provider: "codex" });
-    const issue = store.createIssue({ title: "Completed evidence", status: "done" });
+    const issue = createResponsibleTestIssue(store, { title: "Completed evidence", assigneeType: "agent", assigneeId: agent.id });
+    acceptTestIssueDelivery(store, issue.id);
     const app = createMultiremiApp({ store });
 
     const created = await app.request("/api/autopilots", {

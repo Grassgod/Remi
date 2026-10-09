@@ -1,3 +1,4 @@
+import { createResponsibleTestAutopilot } from './helpers.js';
 /**
  * MUL-405: the three real nested `transaction()` call sites must roll back as
  * one unit.
@@ -127,6 +128,7 @@ function feishuFixture(store: MultiremiStore, workspaceId: string): {
   runtimeId: string;
 } {
   const agent = store.createAgent({ name: "Concierge", provider: "codex", workspaceId });
+  const human = store.createWorkspaceMember({ name: "Explicit bot responsible human", workspaceId });
   const runtimeId = `rt_rollback_${Math.floor(Math.random() * 1e6)}`;
   store.registerRuntime({ id: runtimeId, name: "Bot host", provider: "codex", workspaceId, daemonId: `${runtimeId}-host` });
   store.heartbeatRuntime(runtimeId, { supportsFeishuBotConfig: true });
@@ -139,6 +141,7 @@ function feishuFixture(store: MultiremiStore, workspaceId: string): {
     appSecret: APP_SECRET,
     domain: "feishu",
     enabled: true,
+    responsibleMemberId: human.id,
   });
   store.reportFeishuBotRuntimeStatus(workspaceId, runtimeId, {
     appliedRevision: config.revision, state: "online",
@@ -392,12 +395,13 @@ describe("MUL-405 nested transaction rollback", () => {
         const workspaceId = store.createWorkspace({ name: "Outcomes", slug: `outcomes-${backend.name}` }).id;
         const ref = { connectionId: "mconn_rollback", externalMessageId: "external_rollback" };
         seedMessaging(store, workspaceId, ref);
+        const creator = store.createWorkspaceMember({ name: "Outcome creator", workspaceId });
         const before = snapshot(backend.db());
         const injection = injectFailures();
         injection.install(store);
 
         injection.failInnerTransaction();
-        expect(() => store.messagingOutcomes.createIssue(ref, { workspaceId, title: "Rolled back Issue" }))
+        expect(() => store.messagingOutcomes.createIssue(ref, { workspaceId, title: "Rolled back Issue", createdBy: creator.id }))
           .toThrow("injected inner failure");
         injection.disarm();
         expect(injection.innerCalls()).toBeGreaterThan(0);
@@ -405,7 +409,7 @@ describe("MUL-405 nested transaction rollback", () => {
         // The message stays unprocessed, so a retry is still possible.
         expect(store.messaging.getMessage(ref.connectionId, ref.externalMessageId)?.processedAt).toBeNull();
 
-        const retried = store.messagingOutcomes.createIssue(ref, { workspaceId, title: "Committed on retry" });
+        const retried = store.messagingOutcomes.createIssue(ref, { workspaceId, title: "Committed on retry", createdBy: creator.id });
         expect(retried.created).toBe(true);
       });
 
@@ -414,6 +418,7 @@ describe("MUL-405 nested transaction rollback", () => {
         const workspaceId = store.createWorkspace({ name: "Outcomes late", slug: `outcomes-late-${backend.name}` }).id;
         const ref = { connectionId: "mconn_rollback_late", externalMessageId: "external_rollback_late" };
         seedMessaging(store, workspaceId, ref);
+        const creator = store.createWorkspaceMember({ name: "Outcome creator", workspaceId });
         const before = snapshot(backend.db());
         const db = backend.db();
 
@@ -422,7 +427,7 @@ describe("MUL-405 nested transaction rollback", () => {
         // processed_at all land — and then the outer transaction fails. Nothing
         // may survive: no Issue, no outcome, and no message state change.
         expect(() => db.transaction(() => {
-          store.messagingOutcomes.createIssue(ref, { workspaceId, title: "Committed then rolled back" });
+          store.messagingOutcomes.createIssue(ref, { workspaceId, title: "Committed then rolled back", createdBy: creator.id });
           expect(store.messaging.getMessage(ref.connectionId, ref.externalMessageId)?.processedAt).not.toBeNull();
           throw new Error("injected outer failure");
         })()).toThrow("injected outer failure");
@@ -432,7 +437,7 @@ describe("MUL-405 nested transaction rollback", () => {
         expect(store.messaging.listOutcomes(ref.connectionId, ref.externalMessageId)).toHaveLength(0);
 
         // The rollback left the message retryable.
-        const retried = store.messagingOutcomes.createIssue(ref, { workspaceId, title: "Retried after outer failure" });
+        const retried = store.messagingOutcomes.createIssue(ref, { workspaceId, title: "Retried after outer failure", createdBy: creator.id });
         expect(retried.created).toBe(true);
       });
 
@@ -440,7 +445,7 @@ describe("MUL-405 nested transaction rollback", () => {
         const store = backend.makeStore();
         const workspaceId = store.createWorkspace({ name: "Autopilot", slug: `autopilot-${backend.name}` }).id;
         const agent = store.createAgent({ name: "Automation", provider: "codex", workspaceId });
-        const autopilot = store.createAutopilot({
+        const autopilot = createResponsibleTestAutopilot(store, {
           title: "Rollback automation", assigneeId: agent.id, workspaceId,
           executionMode: "create_issue", status: "active",
         });
@@ -469,7 +474,7 @@ describe("MUL-405 nested transaction rollback", () => {
         const store = backend.makeStore();
         const workspaceId = store.createWorkspace({ name: "Autopilot late", slug: `autopilot-late-${backend.name}` }).id;
         const agent = store.createAgent({ name: "Automation", provider: "codex", workspaceId });
-        const autopilot = store.createAutopilot({
+        const autopilot = createResponsibleTestAutopilot(store, {
           title: "Late failure automation", assigneeId: agent.id, workspaceId,
           executionMode: "create_issue", status: "active",
         });
@@ -489,6 +494,7 @@ describe("MUL-405 nested transaction rollback", () => {
       it("nested createIssue publishes nothing before the outermost commit", () => {
         const store = backend.makeStore();
         const workspaceId = store.createWorkspace({ name: "Nested commit", slug: `nested-commit-${backend.name}` }).id;
+        const human = store.createWorkspaceMember({ name: "Nested Issue responsible human", workspaceId });
         // The store's own handle, not the raw one: that is where the after-commit
         // queue lives, and a caller-owned outer transaction runs through it.
         const db = (store as unknown as { db: SqlDatabase }).db;
@@ -509,7 +515,7 @@ describe("MUL-405 nested transaction rollback", () => {
           // on Postgres the inner call only released a SAVEPOINT.
           const owner = { childStatusChanges: [], deferredEvents: createCommitEventQueue() };
           db.transaction(() => {
-            store.createIssue({ title: "Nested before commit", workspaceId }, owner);
+            store.createIssue({ title: "Nested before commit", workspaceId, responsibleMemberId: human.id }, owner);
             expect(seen).toHaveLength(0);
           })();
           // The owner of the transaction is the owner of the queue (MUL-409),
@@ -527,6 +533,7 @@ describe("MUL-405 nested transaction rollback", () => {
       it("nested createIssue publishes nothing when the outer transaction rolls back", () => {
         const store = backend.makeStore();
         const workspaceId = store.createWorkspace({ name: "Nested rollback", slug: `nested-rollback-${backend.name}` }).id;
+        const human = store.createWorkspaceMember({ name: "Nested Issue responsible human", workspaceId });
         const db = (store as unknown as { db: SqlDatabase }).db;
         const before = snapshot(backend.db());
 
@@ -539,7 +546,7 @@ describe("MUL-405 nested transaction rollback", () => {
         });
 
         expect(() => db.transaction(() => {
-          store.createIssue({ title: "Nested then rollback", workspaceId }, {
+          store.createIssue({ title: "Nested then rollback", workspaceId, responsibleMemberId: human.id }, {
             childStatusChanges: [], deferredEvents: createCommitEventQueue(),
           });
           expect(seen).toHaveLength(0);
@@ -556,7 +563,7 @@ describe("MUL-405 nested transaction rollback", () => {
         const store = backend.makeStore();
         const workspaceId = store.createWorkspace({ name: "Recover", slug: `recover-${backend.name}` }).id;
         const agent = store.createAgent({ name: "Automation", provider: "codex", workspaceId });
-        const autopilot = store.createAutopilot({
+        const autopilot = createResponsibleTestAutopilot(store, {
           title: "Recoverable automation", assigneeId: agent.id, workspaceId,
           executionMode: "create_issue", status: "active",
         });
@@ -579,7 +586,7 @@ describe("MUL-405 nested transaction rollback", () => {
           }
           injection.disarm();
           expect(innerFailed).toBe(true);
-          return store.createIssue({ title: "Committed after inner failure", workspaceId }, {
+          return store.createIssue({ title: "Committed after inner failure", workspaceId, responsibleMemberId: autopilot.responsibleMemberId }, {
             childStatusChanges: [], deferredEvents: createCommitEventQueue(),
           });
         })();

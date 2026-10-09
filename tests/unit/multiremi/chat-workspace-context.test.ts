@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { afterEach, describe, expect, it } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { createLocalStore as createStore, resetMultiremiTestEnv } from "./helpers.js";
@@ -119,7 +120,7 @@ describe("chat workspace request context", () => {
     it(`keeps task, ownerless PAT and daemon credentials scoped: ${route}`, async () => {
       const { store, workspace, other, user, agent, headers, app } = await fixture();
       store.createWorkspaceMember({ workspaceId: other.id, userId: user.id, name: user.name, role: "member" });
-      const issue = store.createIssue({ workspaceId: workspace.id, title: "Task" });
+      const issue = createResponsibleTestIssue(store, { workspaceId: workspace.id, title: "Task" });
       const task = store.createTask({ workspaceId: workspace.id, agentId: agent.id, issueId: issue.id, prompt: "Work" });
       const taskToken = await store.createTaskAccessToken(task, user.id);
       const pat = await store.createAccessToken({ workspaceId: workspace.id, name: "Scoped PAT", type: "pat" });

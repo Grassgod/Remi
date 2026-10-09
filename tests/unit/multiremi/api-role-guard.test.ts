@@ -60,6 +60,23 @@ function captureConsoleLog<T>(run: () => Promise<T> | T): Promise<{ lines: strin
 const GOLDEN_PATH = join(import.meta.dir, "../../../scripts/api-routes.golden.json");
 const GOLDEN = JSON.parse(readFileSync(GOLDEN_PATH, "utf8")) as { routes: string[] };
 const UI_USAGE_ROUTES = ["GET /api/usage/report", "GET /api/usage/prices", "POST /api/usage/prices", "PATCH /api/usage/prices/:id"];
+const UI_RESPONSIBILITY_ROUTES = [
+  "GET /api/issues/:id/deliveries",
+  "GET /api/issues/:id/questions",
+  "GET /api/issues/:id/responsibility",
+  "GET /api/messages/:id/question",
+  "GET /api/workspaces/:workspaceId/issue-responsibility-migration",
+  "POST /api/issues/:id/deliveries",
+  "POST /api/issues/:id/deliveries/:deliveryId/authorize",
+  "POST /api/issues/:id/deliveries/:deliveryId/respond",
+  "POST /api/messages/:id/question/answer",
+  "POST /api/messages/:id/question/close",
+  "POST /api/messages/:id/question/continue",
+  "POST /api/messages/:id/question/escalate",
+  "POST /api/messages/:id/question/present",
+  "POST /api/messages/:id/question/transfer",
+  "POST /api/workspaces/:workspaceId/issue-responsibility-migration/map",
+];
 
 /**
  * What the plan's guard table says, written out literally.
@@ -390,7 +407,7 @@ describe("MUL-461 api role — guard over the full golden route inventory", () =
     expect(misdirected).toContain("GET /api/daemon/runtimes/:runtimeId/feishu-bot/decision-cards");
     expect(misdirected).not.toContain("POST /api/issues/:id/workspace/abandon");
     expect(misdirected).not.toContain("GET /api/sessions/:sessionId/log/entry");
-    for (const route of UI_USAGE_ROUTES) {
+    for (const route of [...UI_USAGE_ROUTES, ...UI_RESPONSIBILITY_ROUTES]) {
       expect(statuses.has(route)).toBe(true);
       expect(statuses.get(route), `${route} belongs to the browser/CLI process`).not.toBe(421);
     }
@@ -407,16 +424,20 @@ describe("MUL-461 api role — guard over the full golden route inventory", () =
       expect(status === 421, `${pattern} -> ${status}`).toBe(expectedRefusal("runtime", path));
       if (status === 421) refused += 1;
     }
-    // The merged inventory has 786 routes. Runtime owns
-    // daemon/health/peer/trace routes; 712 HTTP routes and two browser upgrades
-    // are refused. The independent literal oracle checks every route above.
+    // The merged inventory has 801 routes. Responsibility, delivery and Question
+    // user operations belong to UI; runtime owns daemon/health/peer/trace routes.
+    // It refuses 727 HTTP routes and two browser upgrades.
+    // The independent literal oracle checks every route above.
     const mintRoute = "GET /api/daemon/runtimes/:runtimeId/feishu-bot/decision-cards";
     expect(statuses.has(mintRoute)).toBe(true);
     expect(statuses.get(mintRoute)).not.toBe(421);
     expect(statuses.get("POST /api/issues/:id/workspace/abandon")).toBe(421);
-    for (const route of UI_USAGE_ROUTES) expect(statuses.get(route), `${route} belongs to ui`).toBe(421);
-    expect(refused, routeCountHint("runtime")).toBe(712);
-    expect(refused + 2, routeCountHint("runtime")).toBe(714);
+    for (const route of [...UI_USAGE_ROUTES, ...UI_RESPONSIBILITY_ROUTES]) {
+      expect(statuses.has(route), `${route} is registered`).toBe(true);
+      expect(statuses.get(route), `${route} belongs to ui`).toBe(421);
+    }
+    expect(refused, routeCountHint("runtime")).toBe(727);
+    expect(refused + 2, routeCountHint("runtime")).toBe(729);
   });
 
   it("answers 421 with the misdirected body, the role header, and a real route still reachable", async () => {

@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { runTurnExecutionMutation } from "@multiremi/store/turn-execution-records.js";
 import { afterEach, describe, expect, it } from "bun:test";
 import type { MultiremiStore } from "@multiremi/store.js";
@@ -23,7 +24,7 @@ function seed(store: MultiremiStore) {
     provider: "claude",
     maxConcurrentTasks: 10,
   });
-  const issue = store.createIssue({ title: "Workspace lease", workspaceId: "local" });
+  const issue = createResponsibleTestIssue(store, { title: "Workspace lease", workspaceId: "local" });
   return { runtime, firstAgent, secondAgent, issue };
 }
 

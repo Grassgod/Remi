@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { afterEach, describe, expect, it } from "bun:test";
 import type { MultiremiRepoData } from "@multiremi/contracts/types.js";
 import { createMultiremiApp } from "@multiremi/api.js";
@@ -31,7 +32,7 @@ function importRepositories(store: MultiremiStore, urls: string[]): void {
 // Exercises the private resolveTaskRepos via getTaskWithAgent().repos.
 function taskReposForProject(store: MultiremiStore, projectId: string): MultiremiRepoData[] {
   const agent = store.createAgent({ name: `agent-${projectId}`, provider: "codex" });
-  const issue = store.createIssue({ title: `issue-${projectId}`, projectId });
+  const issue = createResponsibleTestIssue(store, { title: `issue-${projectId}`, projectId });
   const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "work" });
   return store.getTaskWithAgent(task.id)!.repos;
 }
@@ -56,7 +57,7 @@ describe("Bun Multiremi project_ref resource", () => {
 
     const agent = store.createAgent({ name: "Intake worker", provider: "codex" });
     for (const issueKind of ["code", "intake"] as const) {
-      const issue = store.createIssue({ title: "Branch wire", projectId: project.id, ...(issueKind === "intake" ? { issueKind } : {}) });
+      const issue = createResponsibleTestIssue(store, { title: "Branch wire", projectId: project.id, ...(issueKind === "intake" ? { issueKind } : {}) });
       const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "Inspect" });
       const hydrated = store.getTaskWithAgent(task.id)!;
       expect(hydrated.repos[0]?.defaultBranch).toBe(expected);

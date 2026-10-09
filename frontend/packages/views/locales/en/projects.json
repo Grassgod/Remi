@@ -52,7 +52,8 @@
   },
   "default_assignee": {
     "label": "Default assignee",
-    "none": "No default"
+    "none": "No default",
+    "legacy_member": "Needs Agent or Squad configuration"
   },
   "relative_date": {
     "today": "Today",

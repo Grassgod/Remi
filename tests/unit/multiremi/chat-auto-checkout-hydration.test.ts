@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { afterEach, describe, expect, it } from "bun:test";
 import type { MultiremiStore } from "@multiremi/store.js";
 import { daemonTaskClaimResponse } from "@multiremi/api/wire/tasks.js";
@@ -41,7 +42,7 @@ pendingTurnBackendTests("Read-only topic repository catalog", fixture => {
     store.updateWorkspaceRepositories("local", [{ id: "repo_topic", name: "topic", url: repoUrl("topic"),
       source: "github", default_branch: "trunk" }]);
     const project = store.createProject({ title: "Topic project", resources: [githubResource("topic")] });
-    const issue = store.createIssue({ title: "Topic issue", projectId: project.id });
+    const issue = createResponsibleTestIssue(store, { title: "Topic issue", projectId: project.id });
     const agent = store.createAgent({ name: "Topic reader", provider: "codex" });
     const chat = store.createChatSession({ agentId: agent.id, projectId: project.id });
     bindFeishuTopicFixture(store, db, chat.id, issue.id);
@@ -116,7 +117,7 @@ describe("Chat explicit automatic checkout catalog", () => {
     expect(pure.repos).toEqual([]);
     expect(pure).not.toHaveProperty("chatAutoCheckoutRepos");
     expect(daemonTaskClaimResponse(store, pure)).not.toHaveProperty("chat_auto_checkout_repos");
-    const issue = store.createIssue({ title: "Topic Issue", projectId: project.id });
+    const issue = createResponsibleTestIssue(store, { title: "Topic Issue", projectId: project.id });
     const agent = store.createAgent({ name: "Issue worker", provider: "codex" });
     const topic = store.createChatSession({ agentId: agent.id, projectId: project.id });
     bindFeishuTopicFixture(store, db!, topic.id, issue.id);

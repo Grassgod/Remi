@@ -1980,6 +1980,8 @@ export interface MultiremiIssue {
   projectId: string | null;
   parentIssueId: string | null;
   issueKind: MultiremiIssueKind;
+  /** Persisted only on roots. Null explicitly identifies unresolved legacy ownership. */
+  responsibleMemberId?: string | null;
   sourceIssueId: string | null;
   assigneeType: MultiremiAssigneeType | null;
   assigneeId: string | null;
@@ -2402,6 +2404,12 @@ export interface MultiremiTimelinePage {
 }
 
 export interface CreateIssueInput {
+  /** Server-internal creation audit only; HTTP callers cannot supply trusted provenance. */
+  responsibilitySourceAudit?: {
+    kind: 'autopilot_run'; taskId: string; runId: string; autopilotId: string; responsibleMemberId: string;
+  } | null;
+  responsibleMemberId?: string | null;
+  responsible_member_id?: string | null;
   /**
    * MUL-400 E3: prerequisite issues this one waits on, as keys or ids. Created
    * with the issue in the same transaction, with cycle and ancestor checks.
@@ -2451,6 +2459,8 @@ export interface CreateIssueWithTaskInput extends CreateIssueInput {
 }
 
 export interface UpdateIssueInput {
+  responsibleMemberId?: string | null;
+  responsible_member_id?: string | null;
   runtimeWorkspaceId?: string | null;
   runtime_workspace_id?: string | null;
   /** Server-internal attribution, overwritten from the authenticated request. */
@@ -2500,6 +2510,8 @@ export interface UpdateIssueInput {
  * merge effect is the only caller and passes this positionally on the server.
  */
 export interface UpdateIssueOptions {
+  /** Server-owned, set only by the atomic designated-reviewer delivery acceptance. */
+  acceptedDeliveryId?: string;
   /**
    * Skip guard A (A1 and A4 included). Only the merge effect uses it: closing an
    * Issue after a merge that already required a human authorization carries the
@@ -2617,6 +2629,12 @@ export interface AssignIssueResult {
 }
 
 export interface QuickCreateIssueInput {
+  /** Server-internal creation audit, derived from the verified requesting Task. */
+  responsibilitySourceAudit?: CreateIssueInput['responsibilitySourceAudit'];
+  parentIssueId?: string | null;
+  parent_issue_id?: string | null;
+  responsibleMemberId?: string | null;
+  responsible_member_id?: string | null;
   runtimeWorkspaceId?: string | null;
   runtime_workspace_id?: string | null;
   agentId?: string | null;
@@ -4108,6 +4126,8 @@ export interface MultiremiAutopilot {
   workspace_id?: string;
   title: string;
   description: string | null;
+  responsibleMemberId?: string | null;
+  responsible_member_id?: string | null;
   projectId: string | null;
   project_id?: string | null;
   assigneeType: MultiremiAutopilotAssigneeType;
@@ -4197,6 +4217,8 @@ export interface MultiremiAutopilotRun {
 export interface CreateAutopilotInput {
   id?: string;
   title: string;
+  responsibleMemberId?: string | null;
+  responsible_member_id?: string | null;
   description?: string | null;
   projectId?: string | null;
   project_id?: string | null;
@@ -4274,6 +4296,8 @@ export interface UpdateAutopilotTriggerInput {
 
 export interface UpdateAutopilotInput {
   title?: string;
+  responsibleMemberId?: string | null;
+  responsible_member_id?: string | null;
   description?: string | null;
   projectId?: string | null;
   assigneeType?: MultiremiAutopilotAssigneeType;
@@ -4508,6 +4532,7 @@ export type IssueTopicNotifyMode = "group_owner" | "person" | "none";
 export interface IssueTopicConfig {
   enabled: boolean;
   chatId: string;
+  responsibleMemberId?: string | null;
   /** Omitted means every project, including projectless Issues. */
   projectIds?: string[];
   notifyMode?: IssueTopicNotifyMode;
@@ -4712,6 +4737,7 @@ export interface MultiremiFeishuBotConfig {
   domain: FeishuBotDomain;
   enabled: boolean;
   senderAccessPolicy: "agent" | "allowlist";
+  responsibleMemberId?: string | null;
   /** Bumped on every mutation; daemons refetch when their applied revision lags. */
   revision: number;
   hasAppSecret: boolean;
@@ -4732,6 +4758,7 @@ export interface MultiremiFeishuBotConfig {
  * short hint; the plaintext never leaves the server.
  */
 export interface FeishuBotConfigView {
+  responsible_member_id?: string | null;
   configured: boolean;
   workspace_id: string;
   agent_id: string | null;
@@ -4800,6 +4827,7 @@ export interface UpsertFeishuBotConfigInput {
   domain: FeishuBotDomain;
   enabled: boolean;
   senderAccessPolicy?: "agent" | "allowlist";
+  responsibleMemberId?: string | null;
   appSecretOp: FeishuBotSecretOp;
   appSecret?: string;
   actor?: string | null;
@@ -4889,6 +4917,7 @@ export interface SubmitFeishuBotMessageInput {
 
 /** The canonical Chat/Task lineage selected for an inbound Feishu event. */
 export interface SubmitFeishuBotMessageResult {
+  responsibilityUnavailableReason?: string;
   chatSessionId: string;
   taskId: string;
   agentId: string;

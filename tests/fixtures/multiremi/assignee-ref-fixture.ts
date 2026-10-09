@@ -12,6 +12,7 @@
 // `593ff2ba` returned for each of them. Every value below is explicit so the
 // capture and the assertion run over the same rows.
 import type { MultiremiStore } from "@multiremi/store.js";
+import { seedHistoricalIssueFacts } from "../../unit/multiremi/helpers.js";
 
 export interface AssigneeRefFixture {
   workspaceId: string;
@@ -295,10 +296,12 @@ export function seedAssigneeRefFixture(store: MultiremiStore): AssigneeRefFixtur
       workspaceId: WORKSPACE_ID,
       title: `Assignee ref ${id}`,
       status: "in_progress",
-      assigneeType,
-      assigneeId,
+      ...(assigneeType === "member" ? {} : { assigneeType, assigneeId }),
       createdBy: reader.id,
     });
+    // Keep the captured legacy member-assignee facts readable without using
+    // the current write API to configure a human as an execution owner.
+    if (assigneeType === "member") seedHistoricalIssueFacts(store, issue.id, { assigneeType, assigneeId });
     issueIds.push(issue.id);
   };
   addIssue("iss_assignee_plain_agent", "agent", "agt_assignee_plain");

@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { afterEach, describe, expect, it } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { createStore, resetMultiremiTestEnv, useUploadDir } from "./helpers.js";
@@ -29,7 +30,7 @@ describe("web workspace request context", () => {
   it("keeps task and daemon credentials scoped despite explicit cross-workspace headers", async () => {
     const { app, store, user, workspace, other } = await fixture();
     const agent = store.createAgent({ workspaceId: workspace.id, name: "Worker", provider: "claude" });
-    const issue = store.createIssue({ workspaceId: workspace.id, title: "Task issue" });
+    const issue = createResponsibleTestIssue(store, { workspaceId: workspace.id, title: "Task issue" });
     const task = store.createTask({ workspaceId: workspace.id, agentId: agent.id, issueId: issue.id, prompt: "Work" });
     const taskToken = await store.createTaskAccessToken(task, user.id);
     const daemonToken = await store.createAccessToken({ workspaceId: workspace.id, type: "daemon", daemonId: "dmn_context", userId: user.id, name: "Daemon" });

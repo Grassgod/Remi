@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { afterEach, describe, expect, it } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -35,7 +36,7 @@ async function archiveReaderFor(events: TraceEvent[]): Promise<TraceReader> {
   const store = createStore();
   store.ensureLocalWorkspace();
   const runtime = store.registerRuntime({ id: "rt_trace", name: "Trace runtime", provider: "codex", daemonId: "dmn_trace", workspaceId: "local" });
-  const issue = store.createIssue({ title: "Trace budget", workspaceId: "local" });
+  const issue = createResponsibleTestIssue(store, { title: "Trace budget", workspaceId: "local" });
   store.reportIssueWorkspace({ issueId: issue.id, runtimeId: runtime.id, rootPath: `/tmp/${issue.key}`, branchName: `agent/${issue.key}`, status: "ready" });
   const body = [
     { format: TRACE_FILE_FORMAT, task_id: "tsk_trace", session_id: "ises_fixture", agent_id: "agt_fixture", provider: "codex", started_at: "2026-09-28T00:00:00Z" },
@@ -274,7 +275,7 @@ describe("TraceReader archive path", () => {
     const store = createStore();
     store.ensureLocalWorkspace();
     const runtime = store.registerRuntime({ id: "rt_trace", name: "Trace runtime", provider: "codex", daemonId: "dmn_trace", workspaceId: "local" });
-    const issue = store.createIssue({ title: "Sparse trace", workspaceId: "local" });
+    const issue = createResponsibleTestIssue(store, { title: "Sparse trace", workspaceId: "local" });
     store.reportIssueWorkspace({ issueId: issue.id, runtimeId: runtime.id, rootPath: `/tmp/${issue.key}`, branchName: `agent/${issue.key}`, status: "ready" });
     const fixture = await buildArchiveFixture({
       subject: { kind: "issue", id: issue.id },

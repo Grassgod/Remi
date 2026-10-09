@@ -52,7 +52,8 @@
   },
   "default_assignee": {
     "label": "기본 실행자",
-    "none": "기본값 없음"
+    "none": "기본값 없음",
+    "legacy_member": "에이전트 또는 팀 설정 필요"
   },
   "relative_date": {
     "today": "오늘",

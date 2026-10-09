@@ -15,7 +15,7 @@ export function registerTaskInputRpcs(layer: DaemonProtocolLayer, store: Multire
       masterToken: session.ownerAccessToken === null }, session.daemonId, frame.rt);
     return runtime.ok;
   };
-  for (const type of ["turn.input", "turn.decision", "turn.decision.get", "turn.decision.expire"] as const) {
+  for (const type of ["turn.input", "turn.decision", "turn.decision.get", "turn.decision.expire", "turn.decision.consume"] as const) {
     layer.registerRpcHandler(type, async (frame, session) => {
       if (!await authorized(frame, session)) return denied("authority_revoked");
       const p = frame.payload;
@@ -28,6 +28,7 @@ export function registerTaskInputRpcs(layer: DaemonProtocolLayer, store: Multire
         || (p.timeout_ms !== undefined && (typeof p.timeout_ms !== "number" || !Number.isFinite(p.timeout_ms) || p.timeout_ms < 0)))) return denied();
       if (type !== "turn.input" && type !== "turn.decision" && (typeof p.message_id !== "string" || !p.message_id)) return denied();
       if (type === "turn.decision.expire" && p.status !== "cancelled" && p.status !== "timeout") return denied();
+      if (type === "turn.decision.consume" && (typeof p.reply_message_id !== "string" || !p.reply_message_id)) return denied();
       const result = await turns.rpc(type as DaemonTurnRpc, p, { runtimeId: frame.rt!, daemonId: session.daemonId,
         workspaceId: store.getRuntimeLite(frame.rt!)!.workspaceId ?? "local" });
       if (result.ok === true) kick(frame.rt!);

@@ -2,6 +2,8 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe } from "bun:test";
 import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { PostgresSyncDatabase, type SqlDatabase } from "@multiremi/store/db/postgres.js";
 import { MultiremiStore } from "@multiremi/store.js";
+import { createResponsibleTestIssue } from './helpers.js';
+import type { CreateIssueInput, MultiremiIssue } from '@multiremi/contracts/types.js';
 
 export interface PendingTurnTestFixture {
   db: SqlDatabase;
@@ -9,6 +11,7 @@ export interface PendingTurnTestFixture {
   databaseUrl?: string;
   reopen(): void;
   transaction<T>(fn: () => T): T;
+  createIssue(input: CreateIssueInput): MultiremiIssue;
 }
 
 export function installPendingTurnTestConstraints(fixture: PendingTurnTestFixture): void {
@@ -57,6 +60,7 @@ export function pendingTurnBackendTests(
           transaction<T>(fn: () => T): T {
             return (current.store as unknown as { db: SqlDatabase }).db.transaction(fn)();
           },
+          createIssue(input) { return createResponsibleTestIssue(current.store,input); },
           reopen() {
             if (!databaseUrl) return;
             current.db.close();

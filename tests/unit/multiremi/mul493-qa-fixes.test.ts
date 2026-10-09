@@ -1,3 +1,5 @@
+import { createResponsibleTestAutopilot } from './helpers.js';
+import { createResponsibleTestIssue } from './helpers.js';
 import { afterEach, beforeEach, expect, it } from 'bun:test';
 import { createMultiremiApp } from '@multiremi/api.js';
 import { daemonTaskClaimResponse } from '@multiremi/api/wire/tasks.js';
@@ -35,7 +37,7 @@ pendingTurnBackendTests('MUL-493 QA blockers B1-B4', fixture => {
     store.reportFeishuBotRuntimeStatus('local', scope.runtimeId, { appliedRevision: config.revision, state: 'online' });
     store.updateWorkspace('local', { settings: { issueTopics: { enabled: true, chatId: 'oc_same_group' } } });
     function topic(title: string) {
-      const issue = store.createIssue({ title, assigneeType: 'agent', assigneeId: worker.id });
+      const issue = createResponsibleTestIssue(store, { title, assigneeType: 'agent', assigneeId: worker.id });
       store.prepareFeishuIssueTopicWithinTransaction(issue);
       const root = store.claimFeishuBotOutbound('local', scope.runtimeId)!;
       expect(root).toBeTruthy();
@@ -90,7 +92,7 @@ pendingTurnBackendTests('MUL-493 QA blockers B1-B4', fixture => {
 
   it('B4: a replacement attempt stores and deduplicates round pushes by the stable turn', () => {
     const f = setup(), target = f.topic('Recovered source');
-    const origin = f.store.createIssue({ title: 'Source Issue', assigneeType: 'agent', assigneeId: f.worker.id });
+    const origin = createResponsibleTestIssue(f.store, { title: 'Source Issue', assigneeType: 'agent', assigneeId: f.worker.id });
     const source = f.running(origin.id), turn = f.store.getTurnForAttempt(source.id)!;
     f.message(target, source.id);
     f.store.failTask(source.id, { error: 'Runtime unavailable', failureReason: 'runtime_offline' });
@@ -111,7 +113,7 @@ pendingTurnBackendTests('MUL-493 QA blockers B1-B4', fixture => {
     function startedStandalone() {
       const f = setup();
       const id = kind === 'direct' ? f.store.createTask({ agentId: f.worker.id, prompt: 'Original input' }).id
-        : f.store.runAutopilot(f.store.createAutopilot({ title: 'Independent run', assigneeId: f.worker.id, executionMode: 'run_only' }).id, { prompt: 'Original input' }).taskId!;
+        : f.store.runAutopilot(createResponsibleTestAutopilot(f.store, { title: 'Independent run', assigneeId: f.worker.id, executionMode: 'run_only' }).id, { prompt: 'Original input' }).taskId!;
       expect(f.store.claimTask(scope.runtimeId)?.id).toBe(id);
       f.store.startTask(id);
       const turn = f.store.getTurnForAttempt(id)!, bridge = f.store.getDaemonTurnBridge();

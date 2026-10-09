@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { expect, it } from "bun:test";
 import { organizerSettings } from "@multiremi/organizer/settings.js";
 import type { StoreContext } from "@multiremi/store/context.js";
@@ -12,9 +13,9 @@ pendingTurnBackendTests("MUL-483 organizer mention atomicity", fixture => {
     const leader = store.createAgent({ name: "Squad leader", provider: "codex" });
     const squad = store.createSquad({ name: "Organizer squad", leaderId: leader.id,
       memberIds: [organizer.id] });
-    const patrol = store.createIssue({ title: "Organizer patrol", assigneeType: "squad", assigneeId: squad.id });
+    const patrol = createResponsibleTestIssue(store, { title: "Organizer patrol", assigneeType: "squad", assigneeId: squad.id });
     const auditSession = store.getOrCreateDefaultIssueSession(patrol.id);
-    const returnIssue=store.createIssue({title:"Leader return",assigneeType:"agent",assigneeId:leader.id});
+    const returnIssue=createResponsibleTestIssue(store, {title:"Leader return",assigneeType:"agent",assigneeId:leader.id});
     const returnSession=store.getOrCreateDefaultIssueSession(returnIssue.id);
     const parent=store.createTask({agentId:leader.id,issueId:returnIssue.id,prompt:"Coordinate the organizer"});
     store.cancelTask(parent.id);
@@ -22,7 +23,7 @@ pendingTurnBackendTests("MUL-483 organizer mention atomicity", fixture => {
       issueSessionId: auditSession.id, prompt: "Inspect delegated tasks", delegationId: "dlg_organizer_atomicity",
       parentTaskId:parent.id, delegatedByAgentId: leader.id, delegatedFromIssueSessionId: returnSession.id });
     const worker = store.createAgent({ name: "Worker", provider: "codex" });
-    const target = store.createIssue({ title: "Organizer target" });
+    const target = createResponsibleTestIssue(store, { title: "Organizer target" });
     const targetTask = store.createTask({ agentId: worker.id, issueId: target.id, prompt: "Review target" });
     const workspace = store.getWorkspace("local")!;
     store.updateWorkspace("local", { settings: organizerSettings(workspace, "act") });

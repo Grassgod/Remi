@@ -2917,6 +2917,231 @@ export const CLI_CAPABILITIES_RUNTIME = {
         "jsonl"
       ]
     },
+    "issue.responsibility-unassigned.list": {
+      "command": "remi issue responsibility-unassigned list",
+      "auth": [
+        "human"
+      ],
+      "capability": "issue.responsibility-unassigned.list",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "issue.responsibility-unassigned.map": {
+      "command": "remi issue responsibility-unassigned map",
+      "auth": [
+        "human"
+      ],
+      "capability": "issue.responsibility-unassigned.map",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "autopilot.responsible.set": {
+      "command": "remi autopilot responsible set",
+      "auth": [
+        "human"
+      ],
+      "capability": "autopilot.responsible.set",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "issue.responsibility": {
+      "command": "remi issue responsibility",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "issue.responsibility",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "issue.responsible.set": {
+      "command": "remi issue responsible set",
+      "auth": [
+        "human"
+      ],
+      "capability": "issue.responsible.set",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "issue.question.list": {
+      "command": "remi issue question list",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "issue.question.list",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "issue.delivery.list": {
+      "command": "remi issue delivery list",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "issue.delivery.list",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "issue.delivery.authorize": {
+      "command": "remi issue delivery authorize",
+      "auth": [
+        "human"
+      ],
+      "capability": "issue.delivery.authorize",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "issue.delivery.submit": {
+      "command": "remi issue delivery submit",
+      "auth": [
+        "task"
+      ],
+      "capability": "issue.delivery.submit",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "issue.delivery.accept": {
+      "command": "remi issue delivery accept",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "issue.delivery.accept",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "issue.delivery.return": {
+      "command": "remi issue delivery return",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "issue.delivery.return",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "message.question.get": {
+      "command": "remi message question get",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "message.question.get",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "message.question.answer": {
+      "command": "remi message question answer",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "message.question.answer",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "message.question.escalate": {
+      "command": "remi message question escalate",
+      "auth": [
+        "task"
+      ],
+      "capability": "message.question.escalate",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "message.question.transfer": {
+      "command": "remi message question transfer",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "message.question.transfer",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "message.question.present": {
+      "command": "remi message question present",
+      "auth": [
+        "task"
+      ],
+      "capability": "message.question.present",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "message.question.continue": {
+      "command": "remi message question continue",
+      "auth": [
+        "human"
+      ],
+      "capability": "message.question.continue",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "message.question.close": {
+      "command": "remi message question close",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "message.question.close",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
     "agent.list": {
       "command": "remi agent list",
       "auth": [

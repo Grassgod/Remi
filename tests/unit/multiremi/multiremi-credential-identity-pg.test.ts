@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { requestMessageBody, sentTask } from "./unified-test-paths.js";
 /**
  * MUL-448 QA round 1 follow-up (B1-B4) on real PostgreSQL.
@@ -121,7 +122,7 @@ describe.skipIf(!pgAvailable)("MUL-448 credential identity on PostgreSQL", () =>
     const fixture = await freshFixture();
     const forged = { ...fixture.headers, "X-Agent-ID": fixture.otherAgentId };
 
-    const issue = store.createIssue({ title: "MUL448 R2 PG B1", workspaceId: fixture.workspaceId });
+    const issue = createResponsibleTestIssue(store, { title: "MUL448 R2 PG B1", workspaceId: fixture.workspaceId });
     const session = store.createIssueSession(issue.id, { title: "PG B1 session" });
     const sessionTasksPath = `/api/sessions/${session.id}/messages`;
     const taskResponse = await fixture.app.request(sessionTasksPath, {
@@ -151,7 +152,7 @@ describe.skipIf(!pgAvailable)("MUL-448 credential identity on PostgreSQL", () =>
     expect(resultBody.published_by_type).toBe("member");
     expect(resultBody.published_by_id).toBe(fixture.ownerId);
 
-    const dependsOn = store.createIssue({ title: "MUL448 R2 PG B1 dependency", workspaceId: fixture.workspaceId });
+    const dependsOn = createResponsibleTestIssue(store, { title: "MUL448 R2 PG B1 dependency", workspaceId: fixture.workspaceId });
     const dependenciesPath = "/api/multiremi/issues/" + issue.id + "/dependencies";
     const dependencyResponse = await fixture.app.request(dependenciesPath, {
       method: "POST", headers: forged, body: JSON.stringify({ dependsOnIssueId: dependsOn.id }),
@@ -188,7 +189,7 @@ describe.skipIf(!pgAvailable)("MUL-448 credential identity on PostgreSQL", () =>
 
   it("B2: member evaluations are rejected and only the leader records one", async () => {
     const fixture = await freshFixture();
-    const issue = store.createIssue({ title: "MUL448 R2 PG B2", workspaceId: fixture.workspaceId });
+    const issue = createResponsibleTestIssue(store, { title: "MUL448 R2 PG B2", workspaceId: fixture.workspaceId });
     store.assignIssue(issue.id, { assigneeType: "squad", assigneeId: fixture.squadId });
     const evaluationPath = "/api/issues/" + issue.id + "/squad-evaluated";
 
@@ -222,10 +223,11 @@ describe.skipIf(!pgAvailable)("MUL-448 credential identity on PostgreSQL", () =>
     expect(recorded[0]!.actorId).toBe(fixture.leaderId);
   });
 
-  it("B3/B4: forged source lineage is dropped and no creator is stamped", async () => {
+  it("B3/B4: forged lineage and creator are dropped while the authenticated human is recorded", async () => {
     const fixture = await freshFixture();
-    const intake = store.createIssue({
+    const intake = createResponsibleTestIssue(store, {
       title: "MUL448 R2 PG intake", issueKind: "intake", workspaceId: fixture.workspaceId,
+      responsibleMemberId: fixture.memberId, assigneeType: "agent", assigneeId: fixture.agentId,
     });
     const generatedTitle = "MUL448 R2 PG execution";
 
@@ -239,8 +241,12 @@ describe.skipIf(!pgAvailable)("MUL-448 credential identity on PostgreSQL", () =>
       const body = (await decoy.json()) as any;
       const decoyIssue = store.getIssue(body.id ?? body.issue?.id)!;
       expect(decoyIssue.sourceIssueId, spelling).toBeNull();
-      expect(decoyIssue.createdBy, spelling).toBeNull();
-      expect(store.listIssueSubscribers(decoyIssue.id), spelling).toHaveLength(0);
+      expect(decoyIssue.createdBy, spelling).toBe(fixture.ownerId);
+      expect(decoyIssue.createdBy, spelling).not.toBe("someone-else");
+      expect(decoyIssue.responsibleMemberId, spelling).toBe(fixture.memberId);
+      const subscribers = store.listIssueSubscribers(decoyIssue.id);
+      expect(subscribers, spelling).toHaveLength(1);
+      expect(subscribers[0]!.memberId, spelling).toBe(fixture.memberId);
     }
 
     const nativeIntake = await fixture.app.request("/api/multiremi/issues", {
@@ -273,7 +279,7 @@ describe.skipIf(!pgAvailable)("MUL-448 credential identity on PostgreSQL", () =>
   it("keeps the anonymous compatibility mode's historical identity reading", async () => {
     const fixture = await freshFixture();
     const open = createMultiremiApp({ store, authToken: null });
-    const issue = store.createIssue({ title: "MUL448 R2 PG anon", workspaceId: fixture.workspaceId });
+    const issue = createResponsibleTestIssue(store, { title: "MUL448 R2 PG anon", workspaceId: fixture.workspaceId });
     const session = store.createIssueSession(issue.id, { title: "PG anon session" });
     const response = await open.request(
       `/api/sessions/${session.id}/messages`,

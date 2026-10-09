@@ -281,10 +281,12 @@ export class IssueSessionsRepo {
     }
     const rows = includeArchived
       ? this.ctx.db.query(
-        `${SESSION_SELECT} WHERE issue_id = ? ORDER BY is_default DESC, updated_at DESC`,
+        `${SESSION_SELECT} WHERE issue_id = ? AND s.workspace_id = (SELECT i.workspace_id FROM multiremi_issues i WHERE i.id = s.issue_id)
+         ORDER BY is_default DESC, updated_at DESC`,
       ).all(issueId) as Row[]
       : this.ctx.db.query(
-        `${SESSION_SELECT} WHERE issue_id = ? AND status = 'active' ORDER BY is_default DESC, updated_at DESC`,
+        `${SESSION_SELECT} WHERE issue_id = ? AND status = 'active' AND s.workspace_id = (SELECT i.workspace_id FROM multiremi_issues i WHERE i.id = s.issue_id)
+         ORDER BY is_default DESC, updated_at DESC`,
       ).all(issueId) as Row[];
     return rows.map(toIssueSession);
   }

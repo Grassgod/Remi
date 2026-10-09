@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { runTurnExecutionMutation } from "@multiremi/store/turn-execution-records.js";
 import { afterEach, describe, expect, it, spyOn } from "bun:test";
 import { createHash } from "node:crypto";
@@ -251,7 +252,7 @@ describe("normalized task consumption", () => {
     const secondRuntime = store.registerRuntime({ name: "second-attempt", provider: "claude", workspaceId: "local" });
     const firstProject = store.createProject({ title: "First project", workspaceId: "local" });
     const secondProject = store.createProject({ title: "Second project", workspaceId: "local" });
-    const issue = store.createIssue({ title: "Execution project", projectId: firstProject.id, workspaceId: "local" });
+    const issue = createResponsibleTestIssue(store, { title: "Execution project", projectId: firstProject.id, workspaceId: "local" });
     runTurnExecutionMutation(db!, "UPDATE multiremi_turn_execution_records SET issue_id=? WHERE id=?", [issue.id, task.id]);
     store.reportTaskUsageSnapshot(task.id, snapshot([unit({ inputTokens: 10, outputTokens: 0 })]));
     runTurnExecutionMutation(db!, "UPDATE multiremi_turn_execution_records SET runtime_id=? WHERE id=?", [secondRuntime.id, task.id]);
@@ -274,7 +275,7 @@ describe("normalized task consumption", () => {
   it("includes queued project tasks as unknown coverage without consuming usage or inventing a scope", () => {
     const store = createLocalStore();
     const project = store.createProject({ title: "Queued scope", workspaceId: "local" });
-    const issue = store.createIssue({ title: "Pending", projectId: project.id, workspaceId: "local" });
+    const issue = createResponsibleTestIssue(store, { title: "Pending", projectId: project.id, workspaceId: "local" });
     const agent = store.createAgent({ name: "Queued worker", provider: "claude", workspaceId: "local" });
     const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "Wait", workspaceId: "local" });
     const report = store.getUsageReport({ workspaceId: "local", projectId: project.id, days: null });

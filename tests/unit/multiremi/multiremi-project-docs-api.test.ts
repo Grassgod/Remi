@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { taskOfferResponse, receiveTaskOffer } from "../../fixtures/task-offer.js";
 import { afterEach, describe, expect, it } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
@@ -93,7 +94,7 @@ describe("Bun Multiremi project docs API", () => {
     const project = store.createProject({ title: "Migration API" });
     store.createProjectDoc(project.id, { kind: "memory", title: "Fact", body: "legacy SQL" });
     const agent = store.createAgent({ name: "Migration agent", provider: "claude" });
-    const issue = store.createIssue({ title: "Migration task", projectId: project.id });
+    const issue = createResponsibleTestIssue(store, { title: "Migration task", projectId: project.id });
     const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "work" });
     const taskToken = await store.createTaskAccessToken(task, "local");
     const app = createMultiremiApp({ store, authToken: "root-secret" });
@@ -205,7 +206,7 @@ describe("Bun Multiremi project docs API", () => {
     const app = createMultiremiApp({ store, authToken: "root-secret" });
     const project = store.createProject({ title: "Agent writes" });
     const agent = store.createAgent({ name: "Scribe", provider: "claude" });
-    const issue = store.createIssue({ title: "Ship it", projectId: project.id });
+    const issue = createResponsibleTestIssue(store, { title: "Ship it", projectId: project.id });
     const task = store.createTask({ agentId: agent.id, issueId: issue.id, workspaceId: "local", prompt: "work" });
     const taskToken = await store.createTaskAccessToken(task, "local");
 
@@ -254,7 +255,7 @@ describe("Bun Multiremi project docs API", () => {
     const app = createMultiremiApp({ store, authToken: "root-secret" });
     const project = store.createProject({ title: "Own project" });
     const agent = store.createAgent({ name: "Scribe", provider: "claude" });
-    const issue = store.createIssue({ title: "Own issue", projectId: project.id });
+    const issue = createResponsibleTestIssue(store, { title: "Own issue", projectId: project.id });
     const task = store.createTask({ agentId: agent.id, issueId: issue.id, workspaceId: "local", prompt: "work" });
     const taskToken = await store.createTaskAccessToken(task, "local");
 
@@ -263,7 +264,7 @@ describe("Bun Multiremi project docs API", () => {
     const foreignWorkspace = store.createWorkspace({ name: "Foreign", slug: "foreign" });
     const foreignAgent = store.createAgent({ name: "Stranger", provider: "claude", workspaceId: foreignWorkspace.id });
     const foreignProject = store.createProject({ title: "Foreign project", workspaceId: foreignWorkspace.id });
-    const foreignIssue = store.createIssue({ title: "Foreign issue", projectId: foreignProject.id, workspaceId: foreignWorkspace.id });
+    const foreignIssue = createResponsibleTestIssue(store, { title: "Foreign issue", projectId: foreignProject.id, workspaceId: foreignWorkspace.id });
     const foreignTask = store.createTask({
       agentId: foreignAgent.id,
       issueId: foreignIssue.id,
@@ -295,7 +296,7 @@ describe("Bun Multiremi project docs API", () => {
     const app = createMultiremiApp({ store, authToken: "root-secret" });
     const agent = store.createAgent({ name: "Scribe", provider: "claude" });
     const ownProject = store.createProject({ title: "Own project" });
-    const ownIssue = store.createIssue({ title: "Own issue", projectId: ownProject.id });
+    const ownIssue = createResponsibleTestIssue(store, { title: "Own issue", projectId: ownProject.id });
     const task = store.createTask({ agentId: agent.id, issueId: ownIssue.id, workspaceId: "local", prompt: "work" });
     const taskToken = await store.createTaskAccessToken(task, "local");
     const otherProject = store.createProject({ title: "Other project" });
@@ -334,7 +335,7 @@ describe("Bun Multiremi project docs API", () => {
     const app = createMultiremiApp({ store, authToken: "root-secret" });
     const agent = store.createAgent({ name: "Scribe", provider: "claude" });
     const project = store.createProject({ title: "Unreachable" });
-    const looseIssue = store.createIssue({ title: "No project" });
+    const looseIssue = createResponsibleTestIssue(store, { title: "No project" });
     const looseTask = store.createTask({ agentId: agent.id, issueId: looseIssue.id, workspaceId: "local", prompt: "work" });
     const looseToken = await store.createTaskAccessToken(looseTask, "local");
     const chatTask = store.createTask({ agentId: agent.id, workspaceId: "local", prompt: "no issue at all" });
@@ -589,7 +590,7 @@ describe("Bun Multiremi project docs API", () => {
     const app = createMultiremiApp({ store, authToken: "root-secret" });
     const agent = store.createAgent({ name: "Scribe", provider: "claude" });
     const project = store.createProject({ title: "Own project" });
-    const issue = store.createIssue({ title: "Own issue", projectId: project.id });
+    const issue = createResponsibleTestIssue(store, { title: "Own issue", projectId: project.id });
     const task = store.createTask({ agentId: agent.id, issueId: issue.id, workspaceId: "local", prompt: "work" });
     const taskToken = await store.createTaskAccessToken(task, "local");
     const other = store.createProject({ title: "Other project" });
@@ -610,7 +611,7 @@ describe("Bun Multiremi project docs API", () => {
     const project = store.createProject({ title: "Claim docs" });
     const runtime = store.registerRuntime({ name: "rt", provider: "claude", workspaceId: "local" });
     const agent = store.createAgent({ name: "Claimer", provider: "claude", runtimeId: runtime.id });
-    const issue = store.createIssue({ title: "Do work", projectId: project.id });
+    const issue = createResponsibleTestIssue(store, { title: "Do work", projectId: project.id });
     store.createProjectDoc(project.id, { kind: "memory", title: "Build needs bun 1.2", body: "install via curl" });
     store.createProjectDoc(project.id, { kind: "wiki", title: "Architecture", summary: "Hub and spoke" });
     store.createTask({ agentId: agent.id, issueId: issue.id, workspaceId: "local", prompt: "go" });
@@ -637,7 +638,7 @@ describe("Bun Multiremi project docs API", () => {
     const runtime = store.registerRuntime({ name: "Knowledge runtime", provider: "claude" });
     const agent = store.createAgent({ name: "Knowledge agent", provider: "claude", runtimeId: runtime.id });
     const project = store.createProject({ title: "Knowledge project" });
-    const issue = store.createIssue({ title: "Needs knowledge", projectId: project.id });
+    const issue = createResponsibleTestIssue(store, { title: "Needs knowledge", projectId: project.id });
     const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "work", maxAttempts: 2 });
     const projectKnowledge = new ProjectKnowledgeService(store, null, "sql");
     projectKnowledge.hydrateTaskKnowledge = async () => { throw new Error("planned OpenViking outage"); };

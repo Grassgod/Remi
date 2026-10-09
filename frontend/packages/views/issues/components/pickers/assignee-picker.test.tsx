@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { describe, expect, it, vi } from "vitest";
 import { I18nProvider } from "@multiremi/core/i18n/react";
@@ -43,8 +43,8 @@ const member: MemberWithUser = {
 function renderPicker(assigneeId: string | null, members = [member], frequency: Array<{ assignee_type: string; assignee_id: string; frequency: number }> = []) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
   qc.setQueryData(workspaceKeys.members("ws-1"), members);
-  qc.setQueryData(workspaceKeys.agents("ws-1"), []);
-  qc.setQueryData(workspaceKeys.squads("ws-1"), []);
+  qc.setQueryData(workspaceKeys.agents("ws-1"), [{ id: "agent-execution", name: "Execution Agent", visibility: "public", archived_at: null }]);
+  qc.setQueryData(workspaceKeys.squads("ws-1"), [{ id: "squad-execution", name: "Execution Squad", leader_id: "agent-execution", archived_at: null }]);
   qc.setQueryData(workspaceKeys.assigneeFrequency("ws-1"), frequency);
   const onUpdate = vi.fn();
   const wrap = (id: string | null) => (
@@ -58,7 +58,7 @@ function renderPicker(assigneeId: string | null, members = [member], frequency: 
   return { onUpdate, ...result, rerenderAssignee: (id: string) => result.rerender(wrap(id)) };
 }
 
-async function findMemberOption(name: string) {
+async function findExecutionOption(name: string) {
   return waitFor(() => {
     const button = screen.getAllByRole("button", { name })
       .find((button) => button.hasAttribute("data-picker-item"));
@@ -67,36 +67,25 @@ async function findMemberOption(name: string) {
   });
 }
 
-describe("AssigneePicker member identity", () => {
-  it("submits the member row id and keeps the saved member visible and selected", async () => {
-    const { onUpdate, rerenderAssignee } = renderPicker(null);
+describe("AssigneePicker execution ownership", () => {
+  it("offers Agent and Squad execution ownership, with root humans configured separately", async () => {
+    const { onUpdate } = renderPicker(null);
     fireEvent.click(screen.getByRole("button", { name: "Unassigned" }));
-    fireEvent.click(await findMemberOption("测试用户"));
-    expect(onUpdate).toHaveBeenCalledWith({ assignee_type: "member", assignee_id: member.id });
-
-    rerenderAssignee(member.id);
-    expect(screen.queryByText("Unknown")).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "测试用户" }));
-    const selected = await findMemberOption("测试用户");
-    expect(selected.querySelector("svg")).not.toHaveClass("invisible");
-    fireEvent.click(screen.getByRole("button", { name: "Unassigned" }));
-    expect(onUpdate).toHaveBeenLastCalledWith({ assignee_type: null, assignee_id: null });
+    expect(await findExecutionOption("Execution Squad")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "测试用户" })).toBeNull();
+    fireEvent.click(await findExecutionOption("Execution Agent"));
+    expect(onUpdate).toHaveBeenCalledWith({ assignee_type: "agent", assignee_id: "agent-execution" });
   });
 
-  it.each([member.id, member.user_id])("marks the existing member selected for identity %s", async (id) => {
-    renderPicker(id);
-    fireEvent.click(screen.getByRole("button", { name: "测试用户" }));
-    const selected = await findMemberOption("测试用户");
-    expect(selected.querySelector("svg")).not.toHaveClass("invisible");
+  it.each([member.id, member.user_id])("preserves historical member identity %s and makes configuration explicit", async (id) => {
+    const { onUpdate } = renderPicker(id);
+    expect(screen.getByText("测试用户")).toBeInTheDocument();
+    expect(screen.getByText("Historical human assignment · execution needs configuration")).toBeInTheDocument();
+    expect(onUpdate).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: /测试用户/ }));
+    expect(screen.getAllByRole("button", { name: /测试用户/ }).filter(button => button.hasAttribute("data-picker-item"))).toHaveLength(0);
     expect(screen.getByRole("button", { name: "Unassigned" })).toBeInTheDocument();
-  });
-
-  it("sorts members by the stored member-row frequency", async () => {
-    const other = { ...member, id: "mem_other", user_id: "usr_other", name: "Other member" };
-    renderPicker(null, [other, member], [{ assignee_type: "member", assignee_id: member.id, frequency: 5 }]);
-    fireEvent.click(screen.getByRole("button", { name: "Unassigned" }));
-    const first = await findMemberOption("测试用户");
-    const group = first.parentElement!;
-    expect(within(group).getAllByRole("button")[0]).toHaveTextContent("测试用户");
+    fireEvent.click(await findExecutionOption("Execution Squad"));
+    expect(onUpdate).toHaveBeenCalledWith({ assignee_type: "squad", assignee_id: "squad-execution" });
   });
 });

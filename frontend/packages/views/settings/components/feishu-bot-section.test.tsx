@@ -5,6 +5,7 @@ import userEvent from "@testing-library/user-event";
 import { I18nProvider } from "@multiremi/core/i18n/react";
 import enCommon from "../../locales/en/common.json";
 import enSettings from "../../locales/en/settings.json";
+import enIssues from "../../locales/en/issues.json";
 
 type MemberRole = "owner" | "admin" | "member" | "guest";
 
@@ -140,7 +141,7 @@ vi.mock("react-qr-code", () => {
 import { FeishuBotSection } from "./feishu-bot-section";
 import { toast } from "sonner";
 
-const TEST_RESOURCES = { en: { common: enCommon, settings: enSettings } };
+const TEST_RESOURCES = { en: { common: enCommon, settings: enSettings, issues: enIssues } };
 
 function Wrapper({ children }: { children: ReactNode }) {
   return (
@@ -288,7 +289,7 @@ describe("FeishuBotSection (admin form)", () => {
   it("shows the Agent name and machine name without exposing provider engines", () => {
     renderSection();
     expect(screen.getByText("Default Agent")).toBeInTheDocument();
-    const selectors = screen.getAllByRole("combobox");
+    const selectors = screen.getAllByRole("combobox").filter(element => element.getAttribute("aria-label") !== "Designated human");
     expect(selectors[0]).toHaveTextContent("Remi");
     expect(selectors[1]).toHaveTextContent("mac-mini");
     expect(selectors[1]).not.toHaveTextContent(/claude|codex/i);

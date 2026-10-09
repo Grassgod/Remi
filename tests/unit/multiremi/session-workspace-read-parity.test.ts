@@ -1,3 +1,4 @@
+import { createHistoricalTestIssue } from './helpers.js';
 import { afterEach, expect, it } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { createReadPool } from "@multiremi/store/db/read-pool.js";
@@ -22,18 +23,27 @@ pendingTurnBackendTests("MUL-509 moved Issue Session read parity", (fixture, bac
       const access = await store.createAccessToken({ type: "pat", name: user.name, userId: user.id, workspaceId: workspace.id });
       callers.push({ user, member, workspace, readable, token: access.token });
     }
-    const issue = store.createIssue({ workspaceId: w1.id, title: "Move without migrating history",
+    const issue = createHistoricalTestIssue(store, { workspaceId: w1.id, title: "Move without migrating history",
       assigneeType: "member", assigneeId: callers[0]!.member.id });
     const session = store.getOrCreateDefaultIssueSession(issue.id);
     const history = store.sendMessage({ session_id: session.id, sender: { type: "member", id: callers[0]!.member.id },
       to: { type: "none" }, body_md: "W1 conversation history", message_kind: "status", wake_requested: "inbox_only" }).message;
 
-    // Exercise the real move transaction, including its W1 Session audit row.
-    store.updateIssue(issue.id, { workspaceId: w2.id });
+    // Exercise the real move transaction. New clearing audits belong to W2's
+    // fresh Main; the original W1 Session and body never change ownership.
+    store.updateIssue(issue.id, { workspaceId: w2.id, responsibleMemberId: callers[1]!.member.id,
+      actorType: 'member', actorId: callers[1]!.member.id });
     expect(store.getIssue(issue.id)?.workspaceId).toBe(w2.id);
-    expect(store.getOrCreateDefaultIssueSession(issue.id)).toMatchObject({ id: session.id, workspaceId: w1.id });
+    expect(store.getIssueSession(session.id)).toMatchObject({ workspaceId: w1.id, isDefault: false });
+    const targetMain = store.getOrCreateDefaultIssueSession(issue.id);
+    expect(targetMain).toMatchObject({ workspaceId: w2.id, isDefault: true });
+    expect(targetMain.id).not.toBe(session.id);
+    expect(() => store.listIssueTimelinePage(issue.id, { issueSessionId: session.id, limit: 20 }))
+      .toThrow(`Issue session not found for issue: ${session.id}`);
+    expect(store.listIssueTimelinePage(issue.id, { issueSessionId: targetMain.id, limit: 20 }).entries.length)
+      .toBeGreaterThan(0);
     const head = store.getConversationLogHead(session.id)!.headSeq;
-    const audit = store.conversationLogWindow(session.id).entries.find(entry => entry.metadata.type === "workspace_move_cleared")!;
+    const audit = store.conversationLogWindow(targetMain.id).entries.find(entry => entry.metadata.type === "workspace_move_cleared")!;
     expect(audit).toMatchObject({ author_type: "system", message_kind: "status", metadata: { field: "assignee" } });
 
     const app = createMultiremiApp({ store, authToken: "fixture-master" });
@@ -48,7 +58,6 @@ pendingTurnBackendTests("MUL-509 moved Issue Session read parity", (fixture, bac
         `/api/messages/${history.id}`,
         `/api/sessions/${session.id}/log`,
         `/api/sessions/${session.id}/log/entry?id=${history.id}`,
-        `/api/sessions/${session.id}/log/entry?id=${audit.id}`,
         `/api/sessions/${session.id}/log/locate?id=${history.id}`,
       ];
       for (const caller of callers) {
@@ -69,9 +78,9 @@ pendingTurnBackendTests("MUL-509 moved Issue Session read parity", (fixture, bac
           if (caller.readable && route.endsWith("/messages")) {
             expect(body).toMatchObject({ messages: expect.arrayContaining([expect.objectContaining({ id: history.id, body_md: history.body_md })]) });
           } else if (caller.readable && route.endsWith("/log")) {
+            expect(body.entries.some((entry: { id: string }) => entry.id === audit.id)).toBe(false);
             expect(body).toMatchObject({ entries: expect.arrayContaining([
               expect.objectContaining({ id: history.id, body_md: history.body_md }),
-              expect.objectContaining({ id: audit.id, author_type: "system" }),
             ]) });
           } else if (!caller.readable) {
             expect(JSON.stringify(body)).not.toContain(history.body_md);
@@ -83,6 +92,19 @@ pendingTurnBackendTests("MUL-509 moved Issue Session read parity", (fixture, bac
           body: JSON.stringify({ to: { type: "none" }, body_md: "Follow-up in W1", message_kind: "status", wake_requested: "inbox_only" }) });
         expect(sent.status).toBe(caller.readable ? 200 : 404);
         expect(store.getConversationLogHead(session.id)!.headSeq).toBe(before + (caller.readable ? 1 : 0));
+
+        const targetSubject = { userId: caller.user.id, workspaceId: caller.workspace.id };
+        const targetFacts = await auth.logFacts(targetMain.id, targetSubject);
+        expect(targetFacts).toEqual({ ok: true, facts: { kind: 'issue', workspaceId: w2.id,
+          creatorId: null, requesterIsMember: !caller.readable } });
+        if (!targetFacts.ok) throw new Error('Target WS log facts unavailable');
+        expect(decideLogSubscription(targetSubject, targetFacts.facts).ok).toBe(!caller.readable);
+        for (const route of [`/api/sessions/${targetMain.id}/log`,
+          `/api/sessions/${targetMain.id}/log/entry?id=${audit.id}`, `/api/messages/${audit.id}`]) {
+          const response = await app.request(route, { headers: { Authorization: `Bearer ${caller.token}` } });
+          expect(response.status, `${caller.workspace.name}: ${route}`).toBe(caller.readable ? 404 : 200);
+          expect(await response.text()).not.toContain(history.body_md);
+        }
       }
     } finally { await pool.close(); }
   });

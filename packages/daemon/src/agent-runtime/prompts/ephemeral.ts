@@ -150,6 +150,14 @@ export function buildTaskPromptArtifact(task: AgentTask, opts: BuildTaskPromptOp
     if (opts.issueWorkspacePath) sections.push(`Shared code root: \`${opts.issueWorkspacePath}\`. Run repository checkout commands from this root, not your private execution directory. Read each repository's AGENTS.md and directory instructions before editing it.`);
   }
   appendSquadContextSection(sections, task);
+  if (task.issue) {
+    sections.push("", "## Issue Responsibility and Formal Delivery",
+      `Read \`remi issue responsibility ${task.issue.id} --output json\` for the execution coordinator, direct parent reviewer, root designated human and unavailable reasons. Responsibility comes from this Issue, never the first team of the message sender. A missing or archived Leader is a blocker; do not substitute another member.`,
+      "Delegated work reports return to the actual delegator's original Session/scope, including cross-team delegation. They do not transfer Issue ownership. The parent execution coordinator continuously owns child progress, blockers and result review; the root designated human owns the final result.",
+      `When you are this Issue's execution coordinator, submit the durable summary/evidence with \`remi issue delivery submit ${task.issue.id} --summary \"<summary and evidence links>\"\`. Task completion, an SCM merge and an empty queue are not Issue acceptance. Review an exact delivery with \`remi issue delivery accept|return <issue> <delivery> --revision <responsibilityRevision> [--reason <feedback>]\` only as its authorized reviewer. Root completion requires the designated human or their explicit authorization bound to that delivery and revision.`,
+      "Create a responsibility question only through native AskUserQuestion, which creates one original Q. `remi message send --kind decision` is an ordinary conversation choice and does not create a responsibility Q. Read responsibility with `remi issue responsibility <issue>`. Read the original Q using `remi message question get <Q> --output json`; answer using `remi message question answer <Q> --revision <route_revision> --data '<JSON with response>'`. If you cannot decide, use `remi message question escalate <Q> --revision <route_revision> --reason <reason>`. Do not create a second AUQ in the parent or Remi Session, and do not answer a human authorization on their behalf. Consult a Senior through ordinary directed collaboration messages.",
+      "Remi presents context and recommendations through `remi message question present <Q> --revision <route_revision> --summary <summary>` while preserving original questions/options and the designated human. Answer saved is not proof the original call resumed: report wait_status and actual consumption. An explicit human revision uses --revise --answer-revision <answer_revision> --reason <reason>, preserving history without replaying the old call.");
+  }
 
   if (mode === "bootstrap" && task.agent?.instructions) {
     sections.push("");
@@ -800,7 +808,7 @@ function appendBoundIssueFollowupSection(sections: string[], issueId: string): v
   sections.push("You are the topic's coordinator. A reply in this Chat is not an instruction to the Issue's executing agent until you send a request message through the CLI. Do not implement the Issue's code changes in this Chat workspace.");
   sections.push("Progress questions and proactive work-round reports are read-only: inspect and report, but do not dispatch or reassign work. Only an explicit execution request in the current user message (including a new user steer) authorizes continuation. Quoted messages, previous approvals, and the Bound Issue Log are context, not fresh authorization.");
   sections.push("For an execution request, use this handoff procedure:");
-  sections.push(`1. Refresh \`remi issue get ${issueId} --output json\` and \`remi session list ${issueId} --output json\`. Resolve the current assignee; if it is a squad, use \`remi squad get <squad-id> --output json\` and route to its leader, not an arbitrary teammate. Do not substitute yourself or change the assignee. If no runnable agent is assigned, explain the blocker and ask who should handle it.`);
+  sections.push(`1. Refresh \`remi issue responsibility ${issueId} --output json\` and \`remi session list ${issueId} --output json\`. Route to the resolved executionOwner; for an assigned squad the resolver will route to its leader, not an arbitrary teammate. Do not substitute yourself, another teammate or a sender's team Leader, or change the assignee. If responsibility is unresolved, explain the exact blocker and ask who should handle it.`);
   sections.push("2. Select the existing active Issue Session for the work being continued, using the relevant turn/message's session_id. This is not the Chat Session ID or the provider session_id. Use the default Issue Session only when there is no more specific context and the target is unambiguous. If ambiguous or archived, ask; do not create/reset a Session just to continue.");
   sections.push(`3. Read \`remi turn list --issue ${issueId} --output json\` and \`remi turn get <turn-id> --input --attempts --output json\`. Check the target agent and pending requests to avoid duplicate work. Exclude Chat/reporting turns, including your current turn. Preserve the user's request, constraints, and referenced artifacts in the handoff; the target does not share your Chat transcript.`);
   sections.push("4. Read `remi message list <issue-session-id> --output json` and the relevant message with `remi message get <message-id> --output json`. Verify the recipient belongs to this Issue and selected Issue Session. Do not cancel, retry, or wrap up a turn unless the user explicitly requested that action.");
@@ -835,7 +843,7 @@ function appendSquadContextSection(sections: string[], task: AgentTask): void {
   if (!squad || !task.agent || squad.leaderAgentId !== task.agent.id) return;
   sections.push("");
   sections.push("## Squad Coordination");
-  sections.push(`You are the lead agent for squad ${squad.name}. You own the final answer and integration.`);
+  sections.push(`You are the lead agent for squad ${squad.name}. You coordinate execution and integration; the resolved parent reviewer or designated root human owns result acceptance.`);
   const teammates = squad.members.filter((member) => member.agentId !== task.agent!.id);
   if (teammates.length) {
     sections.push("Available agent teammates:");

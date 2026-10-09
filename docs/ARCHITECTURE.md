@@ -72,6 +72,10 @@ bot 控制指令携带版本和期望状态。[concierge supervisor](../packages
 
 ## 存储与事务
 
+Issue 责任由 [统一 resolver](../packages/server/src/store/issue-responsibility.ts)根据明确指派和父链解析，
+根单持久化唯一人类。正式交付和验收使用统一消息，同事务保存收据、状态与审计；Task、intake 或
+SCM 完成均不代替 Issue 验收。入口与迁移/授权边界见[责任与正式交付](dev/issue-responsibility.md)。
+
 用量由 [collector](../packages/acp/src/usage-collector.ts) 和可靠 task usage ledger 产生可修订单位，写入 [规范化标量表](../packages/server/src/store/usage-accounting.ts)；[UsageAccountingRepo](../packages/server/src/store/repos/usage-accounting-repo.ts)统一 SQL 聚合及价格版本匹配，Web 与 CLI 共用 report。消费按单位证据时间、任务状态与耗时按独立生命周期时间归属；历史聚合单独标明任务归属日，run 保存执行 Runtime/项目，不从 task 最新绑定改写旧消费。真实请求有跨 task/run 的持久 owner；累计 meter 用已证明的区间认领，重叠或归属竞争保留审计而不叠加，身份事务锁先于 domain 写入。schema migration 只建表，启动随后在全局 schema 锁外执行 bounded/resumable 标量迁移，成功前不开放 HTTP/jobs；未完成切换的 report 返回 503。字段、计价来源和维护命令见[统一用量与价格](usage-accounting.md)。
 
 当前 Store 使用同步 `SqlDatabase` 接口。[openMultiremiDatabase](../packages/server/src/store/db/postgres.ts)

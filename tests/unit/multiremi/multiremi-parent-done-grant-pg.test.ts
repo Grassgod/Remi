@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue, acceptTestIssueDelivery, prepareTestIssueDelivery } from './helpers.js';
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { PostgresSyncDatabase } from "@multiremi/store/db/postgres.js";
 import { MultiremiStore } from "@multiremi/store.js";
@@ -35,8 +36,8 @@ describe.skipIf(!adminUrl)("MUL-457 PostgreSQL grant and merge paths", () => {
 
   it("migrates old rows twice and keeps grant, revocation and agent closure at depth one", () => {
     const owner = store.createAgent({ name: "PG parent owner", provider: "codex" });
-    const parent = store.createIssue({ title: "PG parent", status: "in_progress", assigneeType: "agent", assigneeId: owner.id });
-    const child = store.createIssue({ title: "PG child", status: "in_progress", parentIssueId: parent.id });
+    const parent = createResponsibleTestIssue(store, { title: "PG parent", status: "in_progress", assigneeType: "agent", assigneeId: owner.id });
+    const child = createResponsibleTestIssue(store, { title: "PG child", status: "in_progress", parentIssueId: parent.id,assigneeType:'agent',assigneeId:owner.id });
     expect(store.getIssue(parent.id)).toMatchObject({ parentDoneGrantAt: null, parentDoneGrantBy: null, parentDoneGrantAgentId: null });
     const secondConnection = new PostgresSyncDatabase(databaseUrl(databaseName));
     new MultiremiStore(secondConnection);
@@ -46,14 +47,21 @@ describe.skipIf(!adminUrl)("MUL-457 PostgreSQL grant and merge paths", () => {
     store.revokeParentDone(parent.id, "local");
     expect(store.issueParentDoneGrantView(store.getIssue(parent.id)!)).toBeNull();
     store.grantParentDone(parent.id, "local");
-    store.updateIssue(child.id, { status: "done" });
+    acceptTestIssueDelivery(store,child.id);
     store.createIssueComment(parent.id, { body: "PG summary", authorType: "agent", authorId: owner.id });
-    expect(store.updateIssue(parent.id, { status: "done", actorType: "agent", actorId: owner.id }).status).toBe("done");
+    expect(()=>store.updateIssue(parent.id,{status:'done',actorType:'agent',actorId:owner.id})).toThrow('specific delivery');
+    const prepared=prepareTestIssueDelivery(store,parent.id);
+    store.authorizeIssueDelivery(parent.id,prepared.delivery.id,owner.id,prepared.delivery.responsibilityRevision,prepared.actor);
+    database.resetTransactionDepthStats();
+    store.respondIssueDelivery(parent.id,prepared.delivery.id,{action:'accept',revision:prepared.delivery.responsibilityRevision},
+      {type:'agent',id:owner.id,taskId:prepared.executionTask.id});
+    expect(database.maxTransactionDepth).toBe(1);
+    expect(store.getIssue(parent.id)?.status).toBe('done');
     expect(store.listIssueActivity(parent.id).find((entry) => entry.type === "parent_done_grant_used")?.data)
       .toMatchObject({ source: "api", agentId: owner.id });
   });
 
-  it("settles an SCM hold, then closes a different granted parent with a summary", () => {
+  it("settles SCM receipt holds with and without summaries, then explicitly accepts the concrete delivery", () => {
     process.env.MULTIREMI_SCM_ENCRYPTION_KEY = Buffer.alloc(32, 7).toString("base64");
     const owner = store.createAgent({ name: "PG SCM owner", provider: "codex" });
     store.updateWorkspace("local", {
@@ -65,9 +73,9 @@ describe.skipIf(!adminUrl)("MUL-457 PostgreSQL grant and merge paths", () => {
       accessToken: "test-only-token", repositoryIds: ["repo_mul457"],
     });
     for (const summary of [false, true]) {
-      const parent = store.createIssue({ title: `PG SCM parent ${summary}`, status: "in_progress", assigneeType: "agent", assigneeId: owner.id });
-      const child = store.createIssue({ title: `PG SCM child ${summary}`, status: "in_progress", parentIssueId: parent.id });
-      store.updateIssue(child.id, { status: "done" });
+      const parent = createResponsibleTestIssue(store, { title: `PG SCM parent ${summary}`, status: "in_progress", assigneeType: "agent", assigneeId: owner.id });
+      const child = createResponsibleTestIssue(store, { title: `PG SCM child ${summary}`, status: "in_progress", parentIssueId: parent.id,assigneeType:'agent',assigneeId:owner.id });
+      acceptTestIssueDelivery(store,child.id);
       store.grantParentDone(parent.id, "local");
       if (summary) store.createIssueComment(parent.id, { body: "PG merge summary", authorType: "agent", authorId: owner.id });
       const number = summary ? 4572 : 4571;
@@ -84,12 +92,22 @@ describe.skipIf(!adminUrl)("MUL-457 PostgreSQL grant and merge paths", () => {
         payload: { number, branch: "main", mergeSha: `sha-${number}` },
         evidence: { source: "poll", dedupeKey: `poll:${number}` },
       });
-      expect(store.getIssue(parent.id)?.status).toBe(summary ? "done" : "in_progress");
+      expect(store.getIssue(parent.id)?.status).not.toBe('done');
       const activity = store.listIssueActivity(parent.id);
-      if (summary) expect(activity.find((entry) => entry.type === "parent_done_grant_used")?.data)
-        .toMatchObject({ source: "scm_merge" });
-      else expect(activity.find((entry) => entry.type === "parent_status_held")?.data)
-        .toMatchObject({ reason: "final_summary_missing", source: "scm_merge" });
+      expect(activity.filter(entry=>entry.type==='parent_done_grant_used')).toHaveLength(0);
+      expect(activity.find((entry) => entry.type === "parent_status_held")?.data)
+        .toMatchObject({ reason: summary ? "issue_delivery_acceptance_required" : "final_summary_missing", source: "scm_merge" });
+      expect(activity.filter(entry=>entry.type==='parent_status_held')).toHaveLength(1);
+      expect(database.query('SELECT status,last_error FROM multiremi_scm_effects WHERE issue_id=?').get(parent.id))
+        .toMatchObject({status:'applied',last_error:null});
+      const prepared=prepareTestIssueDelivery(store,parent.id);
+      store.authorizeIssueDelivery(parent.id,prepared.delivery.id,owner.id,prepared.delivery.responsibilityRevision,prepared.actor);
+      database.resetTransactionDepthStats();
+      store.respondIssueDelivery(parent.id,prepared.delivery.id,{action:'accept',revision:prepared.delivery.responsibilityRevision},
+        {type:'agent',id:owner.id,taskId:prepared.executionTask.id});
+      expect(database.maxTransactionDepth).toBe(1);
+      expect(store.getIssue(parent.id)?.status).toBe('done');
+      expect(store.listIssueActivity(parent.id).filter(entry=>entry.type==='parent_done_grant_used')).toHaveLength(1);
     }
   });
 });

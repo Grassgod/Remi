@@ -1,3 +1,5 @@
+import { createResponsibleTestAutopilot } from './helpers.js';
+import { createResponsibleTestIssue, prepareTestIssueDelivery } from './helpers.js';
 import { issueMessagesPath, requestMessageBody, taskRequestPath } from "./unified-test-paths.js";
 /** MUL-458 dependency force semantics on real PostgreSQL, including two-connection races. */
 import { afterAll, beforeAll, describe, expect, it, spyOn } from "bun:test";
@@ -101,7 +103,7 @@ describe.skipIf(!pgAvailable)("MUL-458 human dependency force (PostgreSQL)", () 
     counter += 1;
     const suffix = `${process.pid}-${counter}-${label}`;
     const user = store.getOrCreateUser({ email: `mul458-pg-${suffix}@example.test`, name: `MUL-458 PG ${label}` });
-    store.createWorkspaceMember({ workspaceId: "local", userId: user.id, name: user.name, role: "member" });
+    const member = store.createWorkspaceMember({ workspaceId: "local", userId: user.id, name: user.name, role: "member" });
     const runtime = store.registerRuntime({
       id: `rt_mul458_pg_${counter}`,
       name: `MUL-458 PG ${label}`,
@@ -114,8 +116,11 @@ describe.skipIf(!pgAvailable)("MUL-458 human dependency force (PostgreSQL)", () 
       runtimeId: runtime.id,
       visibility: "workspace",
     });
-    const prerequisite = store.createIssue({ title: `PG prerequisite ${suffix}`, status: "in_progress" });
-    const issue = store.createIssue({
+    const prerequisite = createResponsibleTestIssue(store, {
+      title: `PG prerequisite ${suffix}`, status: "in_progress", responsibleMemberId: member.id,
+      assigneeType: "agent", assigneeId: agent.id,
+    });
+    const issue = createResponsibleTestIssue(store, {
       title: `PG waiting ${suffix}`,
       status: "backlog",
       blockedBy: [prerequisite.id],
@@ -213,8 +218,8 @@ describe.skipIf(!pgAvailable)("MUL-458 human dependency force (PostgreSQL)", () 
     expect(forces(repeated.issue.id)).toHaveLength(1);
 
     const parentCase = await fixture("pat", "parent");
-    const parent = store.createIssue({ title: `PG parent ${counter}`, status: "in_review" });
-    const child = store.createIssue({
+    const parent = createResponsibleTestIssue(store, { title: `PG parent ${counter}`, status: "in_review" });
+    const child = createResponsibleTestIssue(store, {
       title: `PG child ${counter}`, status: "backlog", parentIssueId: parent.id,
       blockedBy: [parentCase.prerequisite.id], assigneeType: "agent", assigneeId: parentCase.agent.id,
     });
@@ -258,7 +263,7 @@ describe.skipIf(!pgAvailable)("MUL-458 human dependency force (PostgreSQL)", () 
     const leader = store.createAgent({ name: `PG leader ${counter}`, provider: "claude", visibility: "workspace" });
     const teammate = store.createAgent({ name: `PG teammate ${counter}`, provider: "claude", visibility: "workspace" });
     const squad = store.createSquad({ name: `PG squad ${counter}`, leaderId: leader.id, memberIds: [teammate.id] });
-    const sourceIssue = store.createIssue({
+    const sourceIssue = createResponsibleTestIssue(store, {
       title: `PG source ${counter}`, status: "in_progress", assigneeType: "squad", assigneeId: squad.id,
     });
     const source = store.createTask({ agentId: leader.id, issueId: sourceIssue.id, prompt: "Lead" });
@@ -321,7 +326,7 @@ describe.skipIf(!pgAvailable)("MUL-458 human dependency force (PostgreSQL)", () 
 
   it("keeps autopilot blocked and rolls back the transactional force path on PG", async () => {
     const f = await fixture("pat", "autopilot-rollback");
-    const autopilot = store.createAutopilot({
+    const autopilot = createResponsibleTestAutopilot(store, {
       workspaceId: "local", title: `PG gated autopilot ${counter}`, assigneeId: f.agent.id,
       createdById: f.userId, createdByType: "member", executionMode: "trigger_issue",
     });
@@ -353,6 +358,8 @@ describe.skipIf(!pgAvailable)("MUL-458 human dependency force (PostgreSQL)", () 
     const barrierDir = mkdtempSync(join(tmpdir(), "mul458b-two-connection-"));
     const barrierPath = join(barrierDir, "go");
     const workerUrl = new URL("./fixtures/postgres-two-connection-race-worker.ts", import.meta.url);
+    const acceptance = roles.includes("auto") ? prepareTestIssueDelivery(store, prerequisiteId) : null;
+    if (acceptance && acceptance.actor.type !== "member") throw new Error("The race prerequisite requires its designated root human");
     const entries = roles.map((role) => {
       const worker = new Worker(workerUrl, { type: "module", env: workerEnv() });
       const ready = workerPhase(worker, "ready");
@@ -361,6 +368,9 @@ describe.skipIf(!pgAvailable)("MUL-458 human dependency force (PostgreSQL)", () 
       void done.catch(() => {});
       worker.postMessage({
         databaseUrl: pgDatabaseUrl(TEST_DB), issueId, prerequisiteId, agentId, barrierPath, role,
+        prerequisiteDelivery: acceptance ? {
+          id: acceptance.delivery.id, revision: acceptance.delivery.responsibilityRevision, memberId: acceptance.actor.id,
+        } : null,
       });
       return { worker, ready, done };
     });
@@ -414,6 +424,9 @@ describe.skipIf(!pgAvailable)("MUL-458 human dependency force (PostgreSQL)", () 
   it.each(["force_first", "auto_first", "member_after_commit"] as const)(
     "records only the actual start for %s across two PG connections", async (order) => {
       const f = await fixture("pat", order);
+      const acceptance = prepareTestIssueDelivery(store, f.prerequisite.id);
+      const completePrerequisite = () => store.respondIssueDelivery(f.prerequisite.id, acceptance.delivery.id,
+        { action: "accept", revision: acceptance.delivery.responsibilityRevision }, acceptance.actor);
       const peerDb = new PostgresSyncDatabase(pgDatabaseUrl(TEST_DB));
       try {
         const peerStore = new MultiremiStore(peerDb);
@@ -427,27 +440,32 @@ describe.skipIf(!pgAvailable)("MUL-458 human dependency force (PostgreSQL)", () 
         };
         if (order === "force_first") {
           await memberRequest();
-          store.updateIssue(f.prerequisite.id, { status: "done" });
+          completePrerequisite();
           assertSingleStart(f, 1, 0);
         } else if (order === "auto_first") {
-          store.updateIssue(f.prerequisite.id, { status: "done" });
+          completePrerequisite();
           await memberRequest();
           assertSingleStart(f, 0, 1);
         } else {
           // Pause only the post-COMMIT hook: the prerequisite and durable check are committed.
           const issues = (store as unknown as { issues: IssuesRepo }).issues;
           const hook = spyOn(issues, "runIssueUpdatePostCommit").mockImplementation(() => {});
-          try { store.updateIssue(f.prerequisite.id, { status: "done" }); } finally { hook.mockRestore(); }
+          try { completePrerequisite(); } finally { hook.mockRestore(); }
           const row = db.query("SELECT id FROM multiremi_system_events WHERE resource_id = ? AND event = 'dependency_auto_start_check'")
             .get(f.prerequisite.id);
           expect(row).toBeDefined();
           const check = store.getSystemEvent(row!.id)!;
           await memberRequest();
           assertSingleStart(f, 0, 0);
-          store.dispatchPendingSystemEvents(new Date(check.availableAt));
+          // Earlier cases share this database and their delivery status events
+          // remain pending. Drain the supported batch size so this case's exact
+          // committed recovery event is included, rather than the oldest 25.
+          store.dispatchPendingSystemEvents(new Date(check.availableAt), 100);
           expect(store.getSystemEvent(check.id)?.status).toBe("processed");
           assertSingleStart(f, 0, 0);
         }
+        expect(store.getIssue(f.prerequisite.id)?.status).toBe("done");
+        expect(store.listIssueDeliveries(f.prerequisite.id).find((delivery) => delivery.id === acceptance.delivery.id)?.status).toBe("accepted");
       } finally {
         peerDb.close();
       }

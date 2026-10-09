@@ -1214,6 +1214,13 @@ export class FeishuIngestRepo {
       }
       return { message: this.getMessage(messageId)!, outcome, issue, created: false };
     }
+    if (taskId) throw new Error('Direct Feishu message-to-Issue creation requires a human approver');
+    const creatorRef = cleanOptionalString(input.createdBy);
+    const creator = creatorRef ? this.ctx.workspaces().getWorkspaceMember(creatorRef)
+      ?? this.ctx.workspaces().findWorkspaceMemberForUser(creatorRef, input.workspaceId) : null;
+    if (!creator || creator.archivedAt || creator.workspaceId !== input.workspaceId) {
+      throw new Error('An active human creator is required for this Feishu Issue outcome');
+    }
     const issue = this.ctx.issues().createIssueWithinTransaction({
       title: input.title,
       description: input.description ?? null,
@@ -1230,6 +1237,7 @@ export class FeishuIngestRepo {
         message_app_link: message.messageAppLink,
       }],
       createdBy: cleanOptionalString(input.createdBy),
+      responsibleMemberId: creator.id,
     }, childStatusChanges, deferredEvents);
     const createdAt = nowIso();
     const outcome = this.insertOutcome({

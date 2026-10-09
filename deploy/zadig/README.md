@@ -95,6 +95,23 @@ loads the updated workflow definition. The workflow emits a structured
 are `http://10.37.117.209:32101` through `:32106`; PPE intentionally has no
 Feishu SSO, needs no custom Header, and must never receive a production Web token.
 
+The all-role API uses `Recreate` so the old single hub owner exits before its
+replacement starts. Its state, config, migration reports, uploads and Session
+Archives have explicit paths under `/srv/multiremi`, mounted from the slot's
+`multiremi-data` PVC. Setting `HOME` alone does not establish the OS home path
+used by Bun. Pod replacement preserves the original migration reports beside
+the retained PostgreSQL database; missing reports still fail the migration
+gate and require restoration. Never recreate reports or alter migration markers
+to bypass that failure.
+
+Each deploy generates an isolated random Feishu credential encryption key in
+the namespace's `ppe-secrets` Secret and supplies it to the API through a Secret
+reference. This key survives Pod replacement and supports synthetic presenter
+configuration without importing a production key. A workflow `deploy` resets
+the managed workloads and PVCs even when it reuses the Issue's lease; `release`
+or TTL collection also removes them. These are disposable PPE data, while a
+normal Pod restart retains the current deploy's data and Secret.
+
 ## Verify
 
 ```bash

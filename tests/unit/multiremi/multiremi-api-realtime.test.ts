@@ -1,3 +1,5 @@
+import { createResponsibleTestAutopilot } from './helpers.js';
+import { createResponsibleTestIssue } from './helpers.js';
 // Daemon and browser websocket upgrades, workspace-scoped fanout, and the
 // privacy boundaries on chat/member/invitation events.
 import { afterEach, describe, expect, it } from "bun:test";
@@ -122,7 +124,7 @@ describe("Multiremi API — realtime websockets", () => {
       workspaceId: "local",
       userId: "local",
     });
-    const autopilot = store.createAutopilot({
+    const autopilot = createResponsibleTestAutopilot(store, {
       title: "Human managed webhook",
       assigneeId: worker.id,
       executionMode: "run_only",
@@ -663,7 +665,7 @@ describe("Multiremi API — realtime websockets", () => {
       type: "pat",
     });
     const taskAgent = store.createAgent({ name: "WS task agent", provider: "codex", workspaceId: "local" });
-    const taskIssue = store.createIssue({ title: "WS task", workspaceId: "local" });
+    const taskIssue = createResponsibleTestIssue(store, { title: "WS task", workspaceId: "local" });
     const task = store.createTask({
       agentId: taskAgent.id,
       issueId: taskIssue.id,

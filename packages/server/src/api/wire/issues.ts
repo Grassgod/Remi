@@ -36,6 +36,7 @@ import type { Context } from "hono";
 import { issueDetailAttachmentCompatibilityResponse } from "./attachments.js";
 import { cleanString, currentTaskAccessToken, hasRequestField } from "./context.js";
 import { labelCompatibilityResponse } from "./projects.js";
+import { IssueDeliveryError } from '../../store/issue-deliveries.js';
 
 export function issueCompatibilityResponse(
   issue: MultiremiIssue,
@@ -55,6 +56,7 @@ export function issueCompatibilityResponse(
     creator_type: "member",
     creator_id: issue.createdBy ?? "local",
     parent_issue_id: issue.parentIssueId,
+    responsible_member_id: issue.responsibleMemberId ?? null,
     parent_done_grant_at: issue.parentDoneGrantAt,
     parent_done_grant_by: issue.parentDoneGrantBy,
     parent_done_grant_agent_id: issue.parentDoneGrantAgentId,
@@ -260,6 +262,10 @@ function rejectedIssueIds(err: ParentStatusGuardError): { rejected_issue_ids?: s
 }
 
 export function issueErrorResponse(c: Context, err: unknown): Response | null {
+  if (err instanceof Error && err.message === 'Child issue human responsibility is inherited from its root') {
+    return c.json({error:err.message,code:'issue_root_responsibility_inherited'},400);
+  }
+  if (err instanceof IssueDeliveryError) return c.json({error:err.message,code:err.code},err.status);
   if (!(err instanceof Error)) return null;
   // Moving a connected issue requires an explicit detach first. Foreign
   // relationships are represented by a count, never another workspace's keys.
@@ -436,7 +442,7 @@ export function stripServerOwnedSessionTaskFields(input: CreateSessionTaskInput)
  * compatibility `POST /api/issues` route still stamps the credentialed caller
  * through `withIssueCreateRequestContext`.
  */
-const SERVER_OWNED_ISSUE_CREATE_FIELDS = ["createdBy", "created_by"] as const;
+const SERVER_OWNED_ISSUE_CREATE_FIELDS = ["createdBy", "created_by", "responsibilitySourceAudit", "responsibility_source_audit"] as const;
 
 export function stripServerOwnedIssueCreateFields<T extends object>(input: T): T {
   return stripRequestFields(input, SERVER_OWNED_ISSUE_CREATE_FIELDS);
@@ -469,7 +475,7 @@ export function stripServerOwnedIssueSourceFields<T extends object>(input: T): T
 }
 
 /** The quick-create equivalent: `requester_id` is who asked, not who is asked. */
-const SERVER_OWNED_QUICK_CREATE_FIELDS = ["requesterId", "requester_id"] as const;
+const SERVER_OWNED_QUICK_CREATE_FIELDS = ["requesterId", "requester_id", "responsibilitySourceAudit", "responsibility_source_audit"] as const;
 
 export function stripServerOwnedQuickCreateFields(input: QuickCreateIssueInput): QuickCreateIssueInput {
   return stripRequestFields(input, SERVER_OWNED_QUICK_CREATE_FIELDS);
@@ -483,6 +489,7 @@ function stripRequestFields<T extends object>(input: T, fields: readonly string[
 
 export function issueUpdateCompatibilityInput(input: UpdateIssueInput = {}): UpdateIssueInput {
   const out: UpdateIssueInput = {};
+  if (hasRequestField(input, 'responsible_member_id')) out.responsible_member_id = input.responsible_member_id ?? null;
   if (hasRequestField(input, "runtime_workspace_id")) out.runtime_workspace_id = input.runtime_workspace_id ?? null;
   if (hasRequestField(input, "title")) out.title = input.title;
   if (hasRequestField(input, "description")) out.description = input.description ?? null;
@@ -508,6 +515,8 @@ export function issueUpdateCompatibilityInput(input: UpdateIssueInput = {}): Upd
 
 export function issueQuickCreateCompatibilityInput(input: QuickCreateIssueInput): QuickCreateIssueInput {
   const out: QuickCreateIssueInput = { prompt: input.prompt };
+  if (hasRequestField(input, 'parent_issue_id')) out.parent_issue_id = input.parent_issue_id ?? null;
+  if (hasRequestField(input, 'responsible_member_id')) out.responsible_member_id = input.responsible_member_id ?? null;
   if (hasRequestField(input, "runtime_workspace_id")) out.runtime_workspace_id = input.runtime_workspace_id ?? null;
   if (hasRequestField(input, "agent_id")) out.agent_id = input.agent_id ?? null;
   if (hasRequestField(input, "squad_id")) out.squad_id = input.squad_id ?? null;
@@ -641,7 +650,7 @@ export function issueTimelineResponse(
   if (issueSessionId) {
     const known = sessionsForDefault?.find((session) => session.id === issueSessionId);
     const session = known ?? store.getIssueSession(issueSessionId);
-    if (!session || session.issueId !== issueId) return null;
+    if (!session || session.issueId !== issueId || session.workspaceId !== store.getIssue(issueId)?.workspaceId) return null;
   }
   const wrapped = ["limit", "before", "after", "around"].some((name) => c.req.query(name) != null);
   if (!wrapped) return store.listIssueTimeline(issueId, { ascending: true, issueSessionId });

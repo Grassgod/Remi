@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { afterEach, describe, expect, it, spyOn, setSystemTime } from "bun:test";
 import { DaemonProtocolLayer } from "@multiremi/api/daemon-protocol/index.js";
 import { DaemonTaskOffers } from "@multiremi/api/daemon-protocol/task-offers.js";
@@ -75,7 +76,7 @@ describe("A-3 task offers", () => {
   it("fails only irreducible structure with size diagnostics and continues the same runtime queue", async () => {
     const h = fixture(async task => ({ id: task.id, prompt: task.prompt,
       repos: task.prompt === "structure" ? new Array(600_000).fill(0) : [] }));
-    const issue = h.store.createIssue({ title: "Structural capacity", status: "in_progress" });
+    const issue = createResponsibleTestIssue(h.store, { title: "Structural capacity", status: "in_progress" });
     const huge = h.store.createTask({ agentId: h.agentIds[0]!, issueId: issue.id, prompt: "structure", maxAttempts: 3 });
     const next = h.task(); await h.hello();
     expect(h.store.getTask(huge.id)).toMatchObject({ status: "failed", failureReason: "offer_too_large" });
@@ -92,7 +93,7 @@ describe("A-3 task offers", () => {
     const h = fixture(async task => ({ id: task.id, prompt: "触发".repeat(200_000),
       issue: { id: task.issueId, description: "description".repeat(100_000) },
       repository_wiki_contexts: [{ docs: [{ body: "wiki".repeat(200_000) }] }] }));
-    const issue = h.store.createIssue({ title: "Oversized offer" });
+    const issue = createResponsibleTestIssue(h.store, { title: "Oversized offer" });
     const task = h.store.createTask({ agentId: h.agentIds[0]!, issueId: issue.id, prompt: "work" });
     await h.hello();
     expect(h.offered()).toHaveLength(1);
@@ -350,7 +351,7 @@ describe("A-3 task offers", () => {
   it("dispatches huge agent instructions and then the next task on the same runtime", async () => {
     const h = fixture(async task => ({ id: task.id, prompt: task.prompt, auth_token: "fixture-capability",
       agent: { id: task.agentId, provider: "claude", instructions: "😀中文\\\n\"".repeat(200_000) } }));
-    const issue = h.store.createIssue({ title: "Irreducible input" });
+    const issue = createResponsibleTestIssue(h.store, { title: "Irreducible input" });
     const task = h.store.createTask({ agentId: h.agentIds[0]!, issueId: issue.id, prompt: "request" });
     const next = h.task();
     await h.hello();

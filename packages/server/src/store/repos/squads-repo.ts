@@ -1,6 +1,7 @@
 // Squads domain (squads, squad members and the shared assignee-ref resolver), extracted verbatim
 // from MultiremiStore (the facade delegates every public method here).
 import { createId, nowIso } from "@multiremi/ids.js";
+import { refreshResponsibilityEntityChange } from '../issue-responsibility-changes.js';
 import { nullableString, uniqueBy, uniqueRefMatch } from "@multiremi/store/helpers.js";
 import { type StoreContext } from "@multiremi/store/context.js";
 import type {
@@ -181,6 +182,7 @@ export class SquadsRepo {
     }
     const now = nowIso();
     const tx = this.ctx.db.transaction(() => {
+      this.ctx.lockWorkspaceRuntimeLifecycle(current.workspaceId);
       this.ctx.db.run(
         `UPDATE multiremi_squads SET
           name = ?,
@@ -208,6 +210,7 @@ export class SquadsRepo {
         if (input.leaderId) {
           this.upsertSquadMemberRow(id, "agent", input.leaderId, "leader", now);
         }
+        if (input.leaderId !== current.leaderId) refreshResponsibilityEntityChange(this.ctx,'squad',id,'team_leader_changed');
       }
     });
     tx();
@@ -220,11 +223,13 @@ export class SquadsRepo {
     const now = nowIso();
     const affectedProjects: Array<{ id: string; workspace_id: string }> = [];
     const tx = this.ctx.db.transaction(() => {
+      this.ctx.lockWorkspaceRuntimeLifecycle(squad.workspaceId);
       affectedProjects.push(...this.ctx.db.query(
         `SELECT id, workspace_id FROM multiremi_projects
          WHERE default_assignee_type = 'squad' AND default_assignee_id = ?`,
       ).all(id) as Array<{ id: string; workspace_id: string }>);
       this.ctx.db.run("UPDATE multiremi_squads SET archived_at = ?, updated_at = ? WHERE id = ?", [now, now, id]);
+      if (!squad.archivedAt) refreshResponsibilityEntityChange(this.ctx,'squad',id,'team_archived');
       this.ctx.db.run(
         `UPDATE multiremi_projects
          SET default_assignee_type = NULL, default_assignee_id = NULL, updated_at = ?
@@ -278,6 +283,7 @@ export class SquadsRepo {
     const now = nowIso();
     let id = "";
     const tx = this.ctx.db.transaction(() => {
+      this.ctx.lockWorkspaceRuntimeLifecycle(squad.workspaceId);
       if (role === "leader") {
         this.ctx.db.run(
           "UPDATE multiremi_squad_members SET role = 'member' WHERE squad_id = ? AND role = 'leader'",
@@ -291,23 +297,30 @@ export class SquadsRepo {
           : "UPDATE multiremi_squads SET updated_at = ? WHERE id = ?",
         role === "leader" ? [input.memberId, now, squadId] : [now, squadId],
       );
+      if (role === 'leader' && squad.leaderId !== input.memberId) refreshResponsibilityEntityChange(this.ctx,'squad',squadId,'team_leader_changed');
     });
     tx();
     return this.getSquadMember(id)!;
   }
 
   removeSquadMember(squadId: string, input: RemoveSquadMemberInput): void {
-    const now = nowIso();
-    this.ctx.db.run(
-      "DELETE FROM multiremi_squad_members WHERE squad_id = ? AND member_type = ? AND member_id = ?",
-      [squadId, input.memberType, input.memberId],
-    );
-    const squad = this.getSquad(squadId);
-    if (squad?.leaderId === input.memberId && input.memberType === "agent") {
-      this.ctx.db.run("UPDATE multiremi_squads SET leader_id = NULL, updated_at = ? WHERE id = ?", [now, squadId]);
-    } else {
-      this.ctx.db.run("UPDATE multiremi_squads SET updated_at = ? WHERE id = ?", [now, squadId]);
-    }
+    const initial = this.getSquad(squadId);
+    if (!initial) throw new Error(`Squad not found: ${squadId}`);
+    this.ctx.db.transaction(() => {
+      this.ctx.lockWorkspaceRuntimeLifecycle(initial.workspaceId);
+      const now = nowIso();
+      this.ctx.db.run(
+        "DELETE FROM multiremi_squad_members WHERE squad_id = ? AND member_type = ? AND member_id = ?",
+        [squadId, input.memberType, input.memberId],
+      );
+      const squad = this.getSquad(squadId);
+      if (squad?.leaderId === input.memberId && input.memberType === "agent") {
+        this.ctx.db.run("UPDATE multiremi_squads SET leader_id = NULL, updated_at = ? WHERE id = ?", [now, squadId]);
+        refreshResponsibilityEntityChange(this.ctx,'squad',squadId,'team_leader_removed');
+      } else {
+        this.ctx.db.run("UPDATE multiremi_squads SET updated_at = ? WHERE id = ?", [now, squadId]);
+      }
+    })();
   }
 
   getSquadMember(id: string): MultiremiSquadMember | null {

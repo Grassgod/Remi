@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { createMultiremiApp, startMultiremiServer } from "@multiremi/api.js";
 import { createHub } from "@multiremi/api/hub/hub-core.js";
@@ -21,7 +22,7 @@ async function fixture() {
   const store = createStore();
   const workspace = store.ensureLocalWorkspace();
   store.createWorkspaceMember({ workspaceId: workspace.id, userId: "creator", name: "Creator", role: "owner" });
-  const issue = store.createIssue({ title: "Shared Hub", workspaceId: workspace.id });
+  const issue = createResponsibleTestIssue(store, { title: "Shared Hub", workspaceId: workspace.id });
   const session = store.getOrCreateDefaultIssueSession(issue.id, "creator");
   const agent = store.createAgent({ name: "Streamer", provider: "codex", workspaceId: workspace.id });
   const task = store.createTask({ agentId: agent.id, workspaceId: workspace.id, prompt: "stream", issueId: issue.id });

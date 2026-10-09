@@ -8,7 +8,8 @@
  * barrier so both sides issue their write at the same moment.
  *
  * Role `force` sends `{status: todo, force: true}`; `comment` and `rerun` drive
- * MUL-458's real HTTP entry points; role `auto` marks the prerequisite done.
+ * MUL-458's real HTTP entry points; role `auto` accepts the prerequisite's
+ * submitted delivery as its designated human.
  * Every worker owns its own bridge and connection and reports its maximum
  * transaction depth to the parent.
  */
@@ -22,12 +23,13 @@ interface RaceInput {
   issueId: string;
   prerequisiteId: string;
   agentId?: string;
+  prerequisiteDelivery?: { id: string; revision: string; memberId: string } | null;
   barrierPath: string;
   role: "force" | "comment" | "rerun" | "owner_request" | "auto";
 }
 
 self.onmessage = async (message: MessageEvent<RaceInput>) => {
-  const { databaseUrl, issueId, prerequisiteId, agentId, barrierPath, role } = message.data;
+  const { databaseUrl, issueId, prerequisiteId, agentId, prerequisiteDelivery, barrierPath, role } = message.data;
   const db = new PostgresSyncDatabase(databaseUrl);
   const store = new MultiremiStore(db);
   try {
@@ -75,8 +77,11 @@ self.onmessage = async (message: MessageEvent<RaceInput>) => {
       responseStatus = response.status;
       if (response.status !== 200) throw new Error(`unexpected rerun response ${response.status}`);
     } else {
+      if (!prerequisiteDelivery) throw new Error("auto role requires an explicit submitted prerequisite delivery");
       try {
-        store.updateIssue(prerequisiteId, { status: "done" });
+        store.respondIssueDelivery(prerequisiteId, prerequisiteDelivery.id,
+          { action: "accept", revision: prerequisiteDelivery.revision },
+          { type: "member", id: prerequisiteDelivery.memberId });
         responseStatus = 200;
       } catch {
         // Same: a refusal is a valid outcome for the arbitration loser.

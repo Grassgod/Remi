@@ -245,6 +245,7 @@ export function seedRepositoryWikisBridgeFixture(
     assigneeId: agent.id,
     executionMode: "run_only",
     status: "active",
+    responsibleMemberId:'mem_local_local',
   });
 
   const insertRun = (

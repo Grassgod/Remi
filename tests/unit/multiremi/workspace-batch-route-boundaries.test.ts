@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { afterEach, describe, expect, it, mock, spyOn } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { createLocalStore as createStore, db, resetMultiremiTestEnv } from "./helpers.js";
@@ -29,8 +30,8 @@ async function setup() {
   expect(store.getUserRoleInWorkspace(user.id, workspaceB.id)).toBe("member");
 
   const createRecords = (workspaceId: string, label: string) => {
-    const parent = store.createIssue({ workspaceId, title: `${label} parent`, priority: "low", status: "todo" });
-    const child = store.createIssue({ workspaceId, title: `${label} child`, parentIssueId: parent.id });
+    const parent = createResponsibleTestIssue(store, { workspaceId, title: `${label} parent`, priority: "low", status: "todo" });
+    const child = createResponsibleTestIssue(store, { workspaceId, title: `${label} child`, parentIssueId: parent.id });
     const agent = store.createAgent({ workspaceId, name: `${label} agent`, provider: "codex" });
     const task = store.createTask({ agentId: agent.id, prompt: `${label} ordinary task` });
     expect(task.chatSessionId).toBeNull();
@@ -117,8 +118,8 @@ for (const { prefix, issueIdsKey } of issueRoutes) {
 
     it("skips keys for an unknown explicit slug while still resolving full IDs", async () => {
       const { store, app, own, workspaceB, headers } = await setup();
-      const keyedParent = store.createIssue({ workspaceId: workspaceB.id, title: "Unique keyed parent" });
-      store.createIssue({ workspaceId: workspaceB.id, title: "Unique keyed child", parentIssueId: keyedParent.id });
+      const keyedParent = createResponsibleTestIssue(store, { workspaceId: workspaceB.id, title: "Unique keyed parent" });
+      createResponsibleTestIssue(store, { workspaceId: workspaceB.id, title: "Unique keyed child", parentIssueId: keyedParent.id });
       expect(store.getIssueByRef(keyedParent.key, null)?.id).toBe(keyedParent.id);
       const listChildren = spyOn(store, "listChildIssues");
       const response = await app.request(`${prefix}/children?parent_ids=${keyedParent.key},${own.parent.id}`, {
@@ -151,10 +152,10 @@ for (const { prefix, issueIdsKey } of issueRoutes) {
 
       it(`keeps exact IDs ahead of a scoped prefix candidate selected by ${selector}`, async () => {
         const { store, app, workspaceA, workspaceB } = await setup();
-        const exactParent = store.createIssue({ id: "iss_mul415_exact111", workspaceId: workspaceB.id, title: "Exact parent" });
-        const exactChild = store.createIssue({ workspaceId: workspaceB.id, title: "Exact child", parentIssueId: exactParent.id });
-        const prefixParent = store.createIssue({ id: `${exactParent.id}extra`, workspaceId: workspaceA.id, title: "Prefix parent" });
-        const prefixChild = store.createIssue({ workspaceId: workspaceA.id, title: "Prefix child", parentIssueId: prefixParent.id });
+        const exactParent = createResponsibleTestIssue(store, { id: "iss_mul415_exact111", workspaceId: workspaceB.id, title: "Exact parent" });
+        const exactChild = createResponsibleTestIssue(store, { workspaceId: workspaceB.id, title: "Exact child", parentIssueId: exactParent.id });
+        const prefixParent = createResponsibleTestIssue(store, { id: `${exactParent.id}extra`, workspaceId: workspaceA.id, title: "Prefix parent" });
+        const prefixChild = createResponsibleTestIssue(store, { workspaceId: workspaceA.id, title: "Prefix child", parentIssueId: prefixParent.id });
         expect(store.getIssueByRef(exactParent.id, workspaceA.id)?.id).toBe(prefixParent.id);
 
         const response = await request(app, exactParent.id, workspaceA, authHeaders(masterToken));
@@ -178,8 +179,8 @@ for (const { prefix, issueIdsKey } of issueRoutes) {
 
     it("lists children of distinct parents supplied as a key and an id", async () => {
       const { store, app, own, workspaceB, headers } = await setup();
-      const otherParent = store.createIssue({ workspaceId: workspaceB.id, title: "Other keyed parent" });
-      const otherChild = store.createIssue({ workspaceId: workspaceB.id, title: "Other keyed child", parentIssueId: otherParent.id });
+      const otherParent = createResponsibleTestIssue(store, { workspaceId: workspaceB.id, title: "Other keyed parent" });
+      const otherChild = createResponsibleTestIssue(store, { workspaceId: workspaceB.id, title: "Other keyed child", parentIssueId: otherParent.id });
       const response = await app.request(`${prefix}/children?parent_ids=${own.parent.key},${otherParent.id}&workspace_id=${workspaceB.id}`, { headers });
       expect(response.status).toBe(200);
       const body = await response.json();
@@ -234,12 +235,12 @@ for (const { prefix, issueIdsKey } of issueRoutes) {
     for (const refType of ["key", "prefix"] as const) {
       it(`prefers a unique local row for an unscoped ambiguous ${refType} and honors explicit workspace scope`, async () => {
         const { store, app, own, workspaceB } = await setup();
-        const localParent = store.createIssue({ id: "iss_mul415_shared_local", title: "Local parent" });
-        const localChild = store.createIssue({ title: "Local child", parentIssueId: localParent.id });
-        const otherParent = refType === "key" ? own.parent : store.createIssue({
+        const localParent = createResponsibleTestIssue(store, { id: "iss_mul415_shared_local", title: "Local parent" });
+        const localChild = createResponsibleTestIssue(store, { title: "Local child", parentIssueId: localParent.id });
+        const otherParent = refType === "key" ? own.parent : createResponsibleTestIssue(store, {
           id: "iss_mul415_shared_other", workspaceId: workspaceB.id, title: "Other prefix parent",
         });
-        const otherChild = refType === "key" ? own.child : store.createIssue({
+        const otherChild = refType === "key" ? own.child : createResponsibleTestIssue(store, {
           workspaceId: workspaceB.id, title: "Other prefix child", parentIssueId: otherParent.id,
         });
         const ref = refType === "key" ? localParent.key : "iss_mul415_shared";
@@ -267,8 +268,8 @@ for (const { prefix, issueIdsKey } of issueRoutes) {
 
     it("resolves an unambiguous key when no workspace is supplied", async () => {
       const { store, app, workspaceB, headers } = await setup();
-      const parent = store.createIssue({ workspaceId: workspaceB.id, title: "Unique unscoped parent" });
-      const child = store.createIssue({ workspaceId: workspaceB.id, title: "Unique unscoped child", parentIssueId: parent.id });
+      const parent = createResponsibleTestIssue(store, { workspaceId: workspaceB.id, title: "Unique unscoped parent" });
+      const child = createResponsibleTestIssue(store, { workspaceId: workspaceB.id, title: "Unique unscoped child", parentIssueId: parent.id });
       const response = await app.request(`${prefix}/children?parent_ids=${parent.key}`, { headers });
       expect(response.status).toBe(200);
       const body = await response.json();
@@ -278,7 +279,7 @@ for (const { prefix, issueIdsKey } of issueRoutes) {
 
     it("checks child workspace access after resolving a parent key", async () => {
       const { store, app, own, workspaceA, workspaceB, headers } = await setup();
-      const foreignChild = store.createIssue({ workspaceId: workspaceA.id, title: "Foreign child under keyed parent" });
+      const foreignChild = createResponsibleTestIssue(store, { workspaceId: workspaceA.id, title: "Foreign child under keyed parent" });
       db!.run("UPDATE multiremi_issues SET parent_issue_id = ? WHERE id = ?", [own.parent.id, foreignChild.id]);
       const response = await app.request(`${prefix}/children?parent_ids=${own.parent.key}&workspace_id=${workspaceB.id}`, { headers });
       expect(response.status).toBe(200);
@@ -326,8 +327,8 @@ for (const { prefix, issueIdsKey } of issueRoutes) {
 
     it("checks child workspace independently and never traverses an inaccessible parent", async () => {
       const { store, app, workspaceA, workspaceB, foreign, own, headers } = await setup();
-      const foreignChild = store.createIssue({ workspaceId: workspaceA.id, title: "Foreign child under own parent" });
-      const ownChild = store.createIssue({ workspaceId: workspaceB.id, title: "Own child under foreign parent" });
+      const foreignChild = createResponsibleTestIssue(store, { workspaceId: workspaceA.id, title: "Foreign child under own parent" });
+      const ownChild = createResponsibleTestIssue(store, { workspaceId: workspaceB.id, title: "Own child under foreign parent" });
       db!.run("UPDATE multiremi_issues SET parent_issue_id = ? WHERE id = ?", [own.parent.id, foreignChild.id]);
       db!.run("UPDATE multiremi_issues SET parent_issue_id = ? WHERE id = ?", [foreign.parent.id, ownChild.id]);
       const response = await app.request(`${prefix}/children?parent_ids=${own.parent.id},${foreign.parent.id}`, { headers });
@@ -339,9 +340,9 @@ for (const { prefix, issueIdsKey } of issueRoutes) {
 
     it("memoizes both allowed and denied workspace checks within each request", async () => {
       const { store, app, workspaceA, workspaceB, foreign, own, headers } = await setup();
-      const otherForeignParent = store.createIssue({ workspaceId: workspaceA.id, title: "Other foreign parent" });
-      const otherOwnParent = store.createIssue({ workspaceId: workspaceB.id, title: "Other own parent" });
-      store.createIssue({ workspaceId: workspaceB.id, title: "Other own child", parentIssueId: otherOwnParent.id });
+      const otherForeignParent = createResponsibleTestIssue(store, { workspaceId: workspaceA.id, title: "Other foreign parent" });
+      const otherOwnParent = createResponsibleTestIssue(store, { workspaceId: workspaceB.id, title: "Other own parent" });
+      createResponsibleTestIssue(store, { workspaceId: workspaceB.id, title: "Other own child", parentIssueId: otherOwnParent.id });
       const membership = spyOn(store, "findWorkspaceMemberForUser");
       const parentIds = [foreign.parent.id, own.parent.id, otherForeignParent.id, otherOwnParent.id];
       const response = await app.request(`${prefix}/children?parent_ids=${parentIds.join(",")}`, { headers });

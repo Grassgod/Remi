@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { afterEach, describe, expect, it } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { signIssueShareId } from "@multiremi/api/helpers/issue-share-tokens.js";
@@ -37,7 +38,7 @@ describe("Multiremi API - CLI context and capabilities", () => {
     expect(invalidShare.status).toBe(401);
 
     const remoteWorkspace = fixture.store.createWorkspace({ id: "ws_shared", name: "Shared", slug: "shared" }, "local");
-    const remoteIssue = fixture.store.createIssue({ title: "Remote share", workspaceId: remoteWorkspace.id });
+    const remoteIssue = createResponsibleTestIssue(fixture.store, { title: "Remote share", workspaceId: remoteWorkspace.id });
     const remoteShare = fixture.store.ensureIssueShare(remoteIssue.id, remoteWorkspace.id, "local", 60);
     const remoteShareValue = signIssueShareId(remoteShare.id, SHARE_SECRET);
     const remoteContext = await fixture.app.request("/api/cli/context", {
@@ -334,7 +335,7 @@ async function cliFixture() {
     instructions: "agent-instructions-secret",
     customEnv: { API_SECRET: "agent-env-secret" },
   });
-  const issue = store.createIssue({
+  const issue = createResponsibleTestIssue(store, {
     title: "CLI context issue",
     workspaceId: "local",
     projectId: project.id,

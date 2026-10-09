@@ -41,6 +41,10 @@ summary: 当前性能相关实现、必须保留的语义，以及复用现有�
 [workspace-wakeups.ts](../../packages/server/src/api/daemon-protocol/workspace-wakeups.ts)，
 协议边界见 [daemon 协议](../daemon-protocol-v2.md)。
 
+责任 resolver 只读取路由事实列，不水合 Issue 标签或 Agent Skills。活 AUQ 答复复用
+事务锁保护的 Q 投影，卡片更新意图由答案事务写入一次；原回复路径已派生来源 Issue
+时不重复派生。下行只为声明插件协议的宿主读取插件 desired 状态。
+
 派活锁前使用 `getRuntimeLite`，锁后使用 `getRuntimeForDispatch` 保留模型、执行组和协议读取，
 不计算历史用量。CLI 排空、重试时点、任务下发的宿主所有者信息与飞书卡片能力判断也不附带统计；用户侧统计继续使用
 规范化台账的原查询。空派活仍有锁、资格和恢复检查，不能把“没有聚合”理解为“没有 SQL”。
@@ -54,9 +58,10 @@ summary: 当前性能相关实现、必须保留的语义，以及复用现有�
 
 ## 收件箱已具备的加载边界
 
-- [InboxPage](../../frontend/packages/views/inbox/components/inbox-page.tsx) 通过 [inboxPageOptions](../../frontend/packages/core/inbox/queries.ts) 每页读取 50 条；[listInboxItemsPage](../../packages/server/src/store/repos/issues-repo.ts) 按 `created_at DESC, id DESC` 使用游标，SQL 读取 `limit + 1` 判断后续页，服务端上限 100。`hydrateInboxRows` 已按最多 400 个 issue ID 批量补全关联对象，不能再将收件箱描述为逐行 `getIssue`。
-- 侧栏和页内计数复用 `/api/inbox/summary`，摘要不返回正文、不补全 Issue。普通通知按 selection key 取最新行并聚合；成功自动运行在 SQL 中提取字符串 `autopilot_id`，按用户时区的 today/yesterday/this_week/earlier 桶去重并统计未读。PG 对普通 JSON 走安全校验后的字段提取；NUL/孤立代理项等不能解码成 PG text 的合法 JSON 走词法提取，仅将最后一个顶层字符串字段规范成 UTF-16 分组键，保持 JS JSON.parse 的重复键与转义语义。SQLite 保留 json_each 最后键语义；非法 JSON/缺失或非字符串字段按独立行计数。两个聚合各只返回一行，`details` 和逐 run 行均不跨桥；SQL 扫描工作仍随未归档记录数增长。旧 `/api/inbox` 全量接口仍存在，页面已使用分页入口。
-- 测量时分别记录首屏、摘要、追加页、定位较后页通知，以及 mutation/WS 失效后的刷新。来源筛选和展示折叠仅处理已加载项；URL 定位可能连续读取多页，不能把 50 条默认页大小当作每次页面交互的总工作量。当前没有这些场景的延迟或内存基线。
+- [InboxPage](../../frontend/packages/views/inbox/components/inbox-page.tsx)通过统一 `/api/inbox` 读取消息页、`unread_count`、`attention_count` 和 `next_cursor`；HTTP 每页默认 100、最多 500 条。计数覆盖当前读者游标之后的所有可见消息，正文只读取当前页。旧通知 selection/timezone 折叠不参与这两个计数。
+- [listReaderMessageInbox](../../packages/server/src/store/inbox/operations.ts)在 SQL 中应用工作区、会话、私有来源及 Question 通知权限，再聚合计数和按 `created_at DESC, id DESC` 分页。关联权限查询仅从当前读者、工作区及游标之后的未读消息开始；递归仍读取这些消息实际引用的来源。定点通知的授权不会扩大其原私聊或执行轨迹的读取权；关联答复与编辑记录继承同一限制，不能在分页之后才去掉隐藏消息。
+- [Question 通知过滤](../../packages/server/src/store/inbox/question-notification-visibility.ts)用 `CASE` 仅为处理/呈现通知执行关联原 Q 的查询。普通消息跳过该分支，保留 PostgreSQL 对原题、当前路由和实际通知执行范围的校验。功能、查询数及过桥字节边界由 [首屏回归](../../tests/unit/multiremi/first-screen-hotspots-inbox-attachments.test.ts)和 [通知权限回归](../../tests/unit/multiremi/question-notification-access.test.ts)检查；单次诊断耗时不作为生产延迟基线。
+- 测量时分别记录首屏、追加页、较后页原问题定位、已读写入及 mutation/WS 失效后的刷新；默认页大小不代表一次页面交互的总读取量。
 
 ## 请求级观测：Server-Timing 与两类日志（MUL-367）
 
@@ -521,7 +526,7 @@ bun run tests/integration/zero-jump-session-log-check.ts
 | 仓库根 | `bun run tests/manual/bench-issue-detail-first-screen.ts --out <path>` | MUL-385 的 Issue 详情首屏三路由（`/api/issues/:id`、`/sessions`、`/timeline?issue_session_id=@default&limit=40`，外加只留档的 `/comments`）：每个路由的 `dbq`、db 耗时、**过桥字节**（按 worker 的 `JSON.stringify({ rows, count })` 口径模拟）、响应字节与 p50/p95，并附带 1/5/20 个 session 的查询数规模扫描和鉴权链查询数。fixture 是 MUL-307 规模（173 条评论 / 多个 session / 50+ task，见 `tests/fixtures/multiremi/issue-detail-first-screen-fixture.ts`）。默认内存 SQLite + `app.request()`；设置 `MULTIREMI_TEST_POSTGRES_URL` 指向可一次性创建的测试 PG 时改用真实桥，不可达时回落 SQLite 并在报告里注明。响应形状由 `tests/unit/multiremi/issue-detail-first-screen-query-count.test.ts` 对 golden 比对。改前数字用同一文件在父提交上运行。 |
 | 仓库根 | `bun test tests/unit/multiremi/multiremi-store-issues.test.ts tests/unit/multiremi/multiremi-api-issues.test.ts` | 列表、搜索及 API 行为；功能测试不是性能基线。 |
 | 仓库根 | `bun test tests/unit/multiremi/multiremi-api-search-inbox.test.ts` | 收件箱游标、摘要和原有读/归档契约；不产出性能数据。 |
-| 仓库根 | `bun run --preload ./tests/setup/hermetic-env.ts tests/manual/bench-first-screen-hotspots-pr2.ts --out <path>` | inbox 摘要、附件内容（完整响应与条件请求）、workspace Runtime 列表的同口径 dbq、db、过桥字节及响应字节。显式 `MULTIREMI_TEST_POSTGRES_URL` 启用真实 PG，否则使用 SQLite；PG 失败不回落。摘要按全部未归档 selection 聚合，附件 `/content` 在鉴权后比较 id ETag；三条上传路径统一排他创建，使用完整 UUID id，碰撞最多重试三次，失败只清理本次创建的文件。Runtime usage/group/model 各一次批量读，两条列表查询固定按 `updated_at DESC, id DESC` 排序。基线与 golden 复现见 `reports/performance/MUL-473-pr2-first-screen-hotspots.md`。 |
+| 仓库根 | `bun run tests/manual/bench-first-screen-hotspots-pr2.ts --out <path>` | 在已隔离的临时 HOME/state/config 环境运行；该独立 harness 不加载含 `bun:test` 生命周期 hook 的测试 preload。采集 inbox 摘要、附件内容（完整响应与条件请求）、workspace Runtime 列表的同口径 dbq、db、过桥字节及响应字节。显式 `MULTIREMI_TEST_POSTGRES_URL` 启用真实 PG，否则使用 SQLite；PG 失败不回落。摘要按全部未归档 selection 聚合，附件 `/content` 在鉴权后比较 id ETag；三条上传路径统一排他创建，使用完整 UUID id，碰撞最多重试三次，失败只清理本次创建的文件。Runtime usage/group/model 各一次批量读，两条列表查询固定按 `updated_at DESC, id DESC` 排序。基线与 golden 复现见 `reports/performance/MUL-473-pr2-first-screen-hotspots.md`。 |
 | 仓库根 | `env -u MULTIREMI_TOKEN bun run tests/manual/bench-mul395-s9-5.ts --out <path>` | S9-5 Chat 列表、Runtime/执行组/模型列表和 updater heartbeat；必须显式配置一次性 PG，失败不回落 SQLite。250 Chats、10 runtimes，`MUL395_TASKS` 控制历史任务规模；实际桥计数、最大单回复字节和连续 timer 的不可让出区间逐轮留样。sample 0 是各路由首读，随后预热 5 次、正式 20 次；当前 Runtime 统计走规范化台账 SQL 聚合，旧缓存版本的数据按生成提交解释。 |
 | 仓库根 | `bun test tests/unit/multiremi/multiremi-postgres-store.test.ts` | SQL 翻译和真实 PG store 契约；`MULTIREMI_TEST_POSTGRES_URL` 指向可创建临时数据库的测试实例，**本地/Agent 会话必须显式设置，否则集成部分整片静默 skip**（CI 在 `release-build-check.yml` 的 backend suite 步骤显式声明），不可达时跳过并打印原因，须记录 skipped。 |
 | 仓库根 | `MULTIREMI_TEST_POSTGRES_URL=postgres://… bun test tests/unit/multiremi/multiremi-task-list-postgres.test.ts` | MUL-357 的 PG 侧证据：迁移的两个分页索引真的建出且 `indexdef` 与 `ORDER BY created_at DESC, id DESC` 匹配、`EXPLAIN (ANALYZE)` 不出现 Seq Scan/全量 Sort、`?`→`$n` 的 status/游标/limit 绑定顺序、分页走遍后与未分页集合一致。UNSET 时默认落到 `postgres://multimira:multimira@localhost:5432/postgres`（即 CI service container），不可达时跳过并打印原因，须记录 skipped。 |

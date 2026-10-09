@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { createConversationLogFillReader } from "@multiremi/api/hub/conversation-log-fill-reader.js";
 import type { ConversationLogEntry, ConversationLogPatch } from "@multiremi/contracts/conversation-log.js";
-import { createLocalStore as createStore, db, resetMultiremiTestEnv } from "./helpers.js";
+import { createLocalStore as createStore, createResponsibleTestIssue, db, resetMultiremiTestEnv } from "./helpers.js";
 
 afterEach(resetMultiremiTestEnv);
 
@@ -10,7 +10,7 @@ describe("conversation log read-side layers (MUL-501 2b first segment)", () => {
   it("projects wake provenance and derives layers only in display reads without storing or filtering them", async () => {
     const store = createStore();
     const agent = store.createAgent({ name: "Lead", provider: "codex" });
-    const issue = store.createIssue({ title: "Layers" });
+    const issue = createResponsibleTestIssue(store, { title: "Layers" });
     const session = store.getOrCreateDefaultIssueSession(issue.id);
     const sent = store.sendMessage({ session_id: session.id, sender: { type: "platform", id: null },
       to: { type: "agent", ref: agent.id }, message_kind: "report", wake_requested: "now",
@@ -48,7 +48,7 @@ describe("conversation log read-side layers (MUL-501 2b first segment)", () => {
     const store = createStore();
     const agent = store.createAgent({ name: "Lead", provider: "codex" });
     const reader = store.createAgent({ name: "Reader", provider: "codex" });
-    const issue = store.createIssue({ title: "Wire compatibility" });
+    const issue = createResponsibleTestIssue(store, { title: "Wire compatibility" });
     const session = store.getOrCreateDefaultIssueSession(issue.id);
     const liveEntries: Array<ConversationLogEntry | ConversationLogPatch> = [];
     const detach = store.subscribeConversationLog({ onEntry: (_sessionId, entry) => liveEntries.push(entry) });
@@ -114,12 +114,15 @@ describe("conversation log read-side layers (MUL-501 2b first segment)", () => {
   it("returns workspace clearing in the activity sidecar with the name and field intact", async () => {
     const store = createStore();
     const project = store.createProject({ title: "Original project", workspaceId: "local" });
-    const issue = store.createIssue({ title: "Move", projectId: project.id });
-    const session = store.getOrCreateDefaultIssueSession(issue.id);
+    const issue = createResponsibleTestIssue(store, { title: "Move", projectId: project.id });
+    store.getOrCreateDefaultIssueSession(issue.id);
     const target = store.createWorkspace({ name: "Target", slug: "layer-target" });
-    store.updateIssue(issue.id, { workspaceId: target.id });
+    const responsible = store.createWorkspaceMember({ name: "Target human", workspaceId: target.id, role: "member" });
+    store.updateIssue(issue.id, { workspaceId: target.id, responsibleMemberId: responsible.id,
+      actorType: "member", actorId: responsible.id });
     const app = createMultiremiApp({ store });
-    // Existing session histories retain the original workspace after a move.
+    // Workspace moves rotate Main; clearing audits belong to the new default session.
+    const session = store.getOrCreateDefaultIssueSession(issue.id);
     const response = await app.request(`/api/sessions/${session.id}/log?with_activity=1`);
     expect(response.status).toBe(200);
     const window = await response.json();

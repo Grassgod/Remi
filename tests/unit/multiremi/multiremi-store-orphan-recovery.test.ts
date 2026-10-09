@@ -1,3 +1,5 @@
+import { createResponsibleTestAutopilot } from './helpers.js';
+import { createResponsibleTestIssue } from './helpers.js';
 // Recovery of tasks a runtime abandoned, and the Go-compatible retry edge rules.
 import { afterAll, afterEach, describe, expect, it } from "bun:test";
 import { resetMultiremiTestEnv } from "./helpers.js";
@@ -31,8 +33,8 @@ describe.skipIf(!backend.available)(`Multiremi store — orphan recovery and ret
     try {
       const agent = store.createAgent({ name: "Claude", provider: "claude", maxConcurrentTasks: 3 });
       const runtime = store.registerRuntime({ name: "local", provider: "claude", maxConcurrency: 3 });
-      const firstIssue = store.createIssue({ title: "Running orphan", assigneeType: "agent", assigneeId: agent.id });
-      const secondIssue = store.createIssue({ title: "Waiting orphan", assigneeType: "agent", assigneeId: agent.id });
+      const firstIssue = createResponsibleTestIssue(store, { title: "Running orphan", assigneeType: "agent", assigneeId: agent.id });
+      const secondIssue = createResponsibleTestIssue(store, { title: "Waiting orphan", assigneeType: "agent", assigneeId: agent.id });
       const first = store.createTask({ agentId: agent.id, issueId: firstIssue.id, prompt: "Run" });
       const second = store.createTask({ agentId: agent.id, issueId: secondIssue.id, prompt: "Wait" });
 
@@ -85,7 +87,7 @@ describe.skipIf(!backend.available)(`Multiremi store — orphan recovery and ret
     try {
       const agent = store.createAgent({ name: "Claude", provider: "claude", maxConcurrentTasks: 8 });
       const runtime = store.registerRuntime({ name: "local", provider: "claude", maxConcurrency: 8 });
-      const retryIssue = store.createIssue({ title: "Retry issue", status: "in_progress", assigneeType: "agent", assigneeId: agent.id });
+      const retryIssue = createResponsibleTestIssue(store, { title: "Retry issue", status: "in_progress", assigneeType: "agent", assigneeId: agent.id });
       const retryTask = store.createTask({
         agentId: agent.id,
         issueId: retryIssue.id,
@@ -97,7 +99,7 @@ describe.skipIf(!backend.available)(`Multiremi store — orphan recovery and ret
         chatSessionId: chat.id,
         prompt: "retry chat",
       });
-      const autopilot = store.createAutopilot({
+      const autopilot = createResponsibleTestAutopilot(store, {
         title: "No double retry",
         assigneeType: "agent",
         assigneeId: agent.id,
@@ -106,7 +108,7 @@ describe.skipIf(!backend.available)(`Multiremi store — orphan recovery and ret
       const run = store.runAutopilot(autopilot.id);
       store.updateIssue(run.issueId!, { status: "in_progress" });
       const autopilotTask = store.getTask(run.taskId!)!;
-      const exhaustedIssue = store.createIssue({ title: "Exhausted issue", status: "in_progress", assigneeType: "agent", assigneeId: agent.id });
+      const exhaustedIssue = createResponsibleTestIssue(store, { title: "Exhausted issue", status: "in_progress", assigneeType: "agent", assigneeId: agent.id });
       const exhaustedTask = store.createTask({
         agentId: agent.id,
         issueId: exhaustedIssue.id,
@@ -158,7 +160,11 @@ describe.skipIf(!backend.available)(`Multiremi store — orphan recovery and ret
       expect(store.listTasks().some((task) => task.parentTaskId === exhaustedTask.id)).toBeFalse();
       expect(store.listTasks().some((task) => task.parentTaskId === directTask.id)).toBeFalse();
       expect(store.getAutopilotRun(run.id)?.status).toBe("failed");
-      expect(issueIds.map((id) => store.getIssue(id)?.status)).toEqual([issuesBefore[0], issuesBefore[1], "blocked"]);
+      // The configured Autopilot Agent now owns its generated Issue. Losing its
+      // only attempt blocks that Issue without retrying the automation or
+      // inventing a formal delivery/acceptance receipt.
+      expect(issueIds.map((id) => store.getIssue(id)?.status)).toEqual([issuesBefore[0], "blocked", "blocked"]);
+      expect(store.listIssueDeliveries(run.issueId!)).toEqual([]);
       expect(turnIdentities(db)).toEqual(turnsBefore);
       expect(Number(db.query("SELECT COUNT(*) AS n FROM multiremi_turn_attempts").get().n)).toBe(attemptsBefore + 2);
       expectReplacement(db, retryTask.id, issueRetry!.id);
@@ -173,7 +179,7 @@ describe.skipIf(!backend.available)(`Multiremi store — orphan recovery and ret
     try {
       const agent = store.createAgent({ name: "Codex", provider: "codex", maxConcurrentTasks: 2 });
       const runtime = store.registerRuntime({ name: "local-codex", provider: "codex", maxConcurrency: 2 });
-      const issue = store.createIssue({ title: "Fresh retry", status: "in_progress", assigneeType: "agent", assigneeId: agent.id });
+      const issue = createResponsibleTestIssue(store, { title: "Fresh retry", status: "in_progress", assigneeType: "agent", assigneeId: agent.id });
       const task = store.createTask({
         agentId: agent.id,
         issueId: issue.id,
@@ -211,7 +217,7 @@ describe.skipIf(!backend.available)(`Multiremi store — orphan recovery and ret
       const agent = store.createAgent({ name: "Terminal states", provider: "codex" });
       const runtime = store.registerRuntime({ name: "local-codex", provider: "codex" });
 
-      const failedIssue = store.createIssue({ title: "Final failure", assigneeType: "agent", assigneeId: agent.id });
+      const failedIssue = createResponsibleTestIssue(store, { title: "Final failure", assigneeType: "agent", assigneeId: agent.id });
       const failedTask = store.createTask({
         agentId: agent.id,
         issueId: failedIssue.id,
@@ -223,7 +229,7 @@ describe.skipIf(!backend.available)(`Multiremi store — orphan recovery and ret
       store.failTask(failedTask.id, { error: "terminal", failureReason: "agent_error" });
       expect(store.getIssue(failedIssue.id)?.status).toBe("blocked");
 
-      const cancelledIssue = store.createIssue({ title: "Cancelled", assigneeType: "agent", assigneeId: agent.id });
+      const cancelledIssue = createResponsibleTestIssue(store, { title: "Cancelled", assigneeType: "agent", assigneeId: agent.id });
       const cancelledTask = store.createTask({ agentId: agent.id, issueId: cancelledIssue.id, prompt: "cancel" });
       expect(store.claimTask(runtime.id)?.id).toBe(cancelledTask.id);
       store.startTask(cancelledTask.id);

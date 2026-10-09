@@ -2,7 +2,7 @@ import type { DaemonTurnInput, DaemonTurnMessagePayload, DaemonTurnWrapUpPayload
   DaemonTurnCompletePayload, DaemonTaskCompletionFields } from "@multiremi/contracts/daemon-protocol.js";
 import type { MultiremiTaskWithAgent } from "@multiremi/contracts/types.js";
 
-export type DaemonTurnRpc = "turn.input" | "turn.decision" | "turn.decision.get" | "turn.decision.expire";
+export type DaemonTurnRpc = "turn.input" | "turn.decision" | "turn.decision.get" | "turn.decision.expire" | "turn.decision.consume";
 export interface DaemonTurnScope { runtimeId: string; daemonId: string; workspaceId: string; userId?: string | null }
 
 /**

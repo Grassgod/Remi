@@ -196,14 +196,14 @@ describe("Restored canonical Dashboard", () => {
     await user.click(
       screen.getByRole("combobox", { name: locale.filter.project }),
     );
-    await user.click(screen.getByRole("option", { name: "Project" }));
+    await user.click(await screen.findByRole("option", { name: "Project" }));
     expect(state.options.at(-1)?.queryKey).toEqual(
       expect.arrayContaining([expect.objectContaining({ project_id: "p" })]),
     );
     await user.click(
       screen.getByRole("combobox", { name: locale.filter.runtime }),
     );
-    await user.click(screen.getByRole("option", { name: "Runtime" }));
+    await user.click(await screen.findByRole("option", { name: "Runtime" }));
     expect(state.options.at(-1)?.queryKey).toEqual(
       expect.arrayContaining([expect.objectContaining({ runtime_id: "r" })]),
     );

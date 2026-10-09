@@ -686,9 +686,8 @@ export function ProjectDetail({
           </PropertyPicker>}
         </PropRow>
 
-        {/* Default assignee — prefilled on issues created under this project.
-            Reuses the issue AssigneePicker so squads/agents/members show the
-            same way they do on an issue. */}
+        {/* Default Agent/Squad execution assignment; historical member values
+            stay visible until explicitly cleared or replaced. */}
         <PropRow label={t(($) => $.default_assignee.label)}>
           {isArchived ? (
             <span className="inline-flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
@@ -696,6 +695,9 @@ export function ProjectDetail({
                 <>
                   <ActorAvatar actorType={project.default_assignee_type} actorId={project.default_assignee_id} size={16} enableHoverCard />
                   <span className="truncate">{getActorName(project.default_assignee_type, project.default_assignee_id)}</span>
+                  {project.default_assignee_type === "member" && (
+                    <span className="text-destructive">{t(($) => $.default_assignee.legacy_member)}</span>
+                  )}
                 </>
               ) : t(($) => $.default_assignee.none)}
             </span>
@@ -718,6 +720,9 @@ export function ProjectDetail({
                   <>
                     <ActorAvatar actorType={project.default_assignee_type} actorId={project.default_assignee_id} size={16} enableHoverCard showStatusDot />
                     <span className="cursor-pointer">{getActorName(project.default_assignee_type, project.default_assignee_id)}</span>
+                    {project.default_assignee_type === "member" && (
+                      <span className="text-destructive">{t(($) => $.default_assignee.legacy_member)}</span>
+                    )}
                   </>
                 ) : (
                   <span className="text-muted-foreground">{t(($) => $.default_assignee.none)}</span>

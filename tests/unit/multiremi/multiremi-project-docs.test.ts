@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { afterEach, describe, expect, it } from "bun:test";
 import type { MultiremiProjectDocRef } from "@multiremi/contracts/types.js";
 import { createStore, db, resetMultiremiTestEnv } from "./helpers.js";
@@ -341,14 +342,14 @@ describe("Bun Multiremi project docs", () => {
     store.createProjectDoc(project.id, { kind: "wiki", title: "Architecture" });
     const agent = store.createAgent({ name: "docs-agent", provider: "codex" });
 
-    const issue = store.createIssue({ title: "Do the thing", projectId: project.id });
+    const issue = createResponsibleTestIssue(store, { title: "Do the thing", projectId: project.id });
     const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "work" });
     const withProject = store.getTaskWithAgent(task.id)!;
     expect(withProject.projectDocs!.memory.map((entry) => entry.title)).toEqual(["Build with bun"]);
     expect(withProject.projectDocs!.memory[0]!.body).toBe("bun install first");
     expect(withProject.projectDocs!.wiki.map((entry) => entry.title)).toEqual(["Architecture"]);
 
-    const looseIssue = store.createIssue({ title: "No project" });
+    const looseIssue = createResponsibleTestIssue(store, { title: "No project" });
     const looseTask = store.createTask({ agentId: agent.id, issueId: looseIssue.id, prompt: "work" });
     expect(store.getTaskWithAgent(looseTask.id)!.projectDocs).toBeNull();
   });

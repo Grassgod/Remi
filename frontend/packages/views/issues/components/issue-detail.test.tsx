@@ -958,7 +958,7 @@ describe("IssueDetail (shared)", () => {
     });
   });
 
-  it("offers result acceptance in the sidebar after the latest agent task completes", async () => {
+  it("does not equate a completed task with formal issue acceptance", async () => {
     mockApiObj.getIssue.mockResolvedValue({ ...mockIssue, status: "in_review" });
     mockApiObj.listTasksByIssue.mockResolvedValue([
       {
@@ -978,12 +978,9 @@ describe("IssueDetail (shared)", () => {
     ]);
     renderIssueDetail();
 
-    const button = await screen.findByRole("button", { name: "Complete issue" });
-    fireEvent.click(button);
-
-    await waitFor(() => {
-      expect(mockApiObj.updateIssue).toHaveBeenCalledWith("issue-1", { status: "done" });
-    });
+    await screen.findByRole("button", { name: "Questions and history" });
+    expect(screen.queryByRole("button", { name: "Complete issue" })).toBeNull();
+    expect(mockApiObj.updateIssue).not.toHaveBeenCalled();
   });
 
   it("does not offer result acceptance while the latest agent task is active", async () => {
@@ -1822,7 +1819,7 @@ describe("IssueDetail (shared)", () => {
 
     // Core rows — always rendered regardless of whether the issue has a value.
     expect(screen.getByText("Status")).toBeInTheDocument();
-    expect(screen.getByText("Assignee")).toBeInTheDocument();
+    expect(screen.getByText("Execution coordinator")).toBeInTheDocument();
     // "Project" appears twice (row label + picker stub), so disambiguate by id.
     expect(screen.getByTestId("project-picker")).toBeInTheDocument();
     // priority="high" + due_date are set in the fixture, so both optional rows show.

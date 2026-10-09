@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { mutateExecutionFixture } from "./unified-test-paths.js";
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { MultiremiStore } from "@multiremi/store.js";
@@ -21,6 +22,7 @@ function scaffold() {
   store.registerRuntime({ id: "rt_audit", name: "Audit", provider: "codex", workspaceId: "local" });
   store.heartbeatRuntime("rt_audit", { supportsFeishuBotConfig: true });
   const config = store.upsertFeishuBotConfig("local", {
+    responsibleMemberId:store.findWorkspaceMemberForUser('local','local')!.id,
     agentId: agent.id, runtimeId: "rt_audit", appId: "cli_audit", appSecretOp: "set",
     appSecret: "fixture-only", senderAccessPolicy: "agent", domain: "feishu", enabled: true,
   });
@@ -31,7 +33,7 @@ function scaffold() {
   };
   const first = store.submitFeishuBotMessage("local", "rt_audit", input);
   store.cancelTask(first.taskId);
-  const issue = store.createIssue({ title: "Legacy Issue", workspaceId: "local", assigneeType: "agent", assigneeId: agent.id });
+  const issue = createResponsibleTestIssue(store, { title: "Legacy Issue", workspaceId: "local", assigneeType: "agent", assigneeId: agent.id });
   const binding = db!.query("SELECT * FROM multiremi_feishu_bot_chat_bindings WHERE chat_session_id = ?")
     .get(first.chatSessionId)! as Record<string, string>;
   const channel = store.upsertAgentChatNotificationChannel({

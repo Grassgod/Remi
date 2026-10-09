@@ -1,3 +1,6 @@
+import { createResponsibleTestAutopilot } from './helpers.js';
+import { createResponsibleTestIssue } from './helpers.js';
+import { prepareTestIssueDelivery } from './helpers.js';
 import { issueMessagesPath, requestMessageBody, taskRequestPath, sentTask } from "./unified-test-paths.js";
 import { afterEach, describe, expect, it } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
@@ -99,13 +102,13 @@ describe("agent Issue proposal policy", () => {
 
   it("prevents restricted tasks from configuring or firing create_issue Autopilots", async () => {
     const fixture = await policyFixture();
-    const createIssueAutopilot = fixture.store.createAutopilot({
+    const createIssueAutopilot = createResponsibleTestAutopilot(fixture.store, {
       title: "Human-created Issue autopilot",
       assigneeId: fixture.worker.id,
       executionMode: "create_issue",
       triggerKind: "api",
     });
-    const runOnlyAutopilot = fixture.store.createAutopilot({
+    const runOnlyAutopilot = createResponsibleTestAutopilot(fixture.store, {
       title: "Run-only autopilot",
       assigneeId: fixture.worker.id,
       executionMode: "run_only",
@@ -176,7 +179,7 @@ describe("agent Issue proposal policy", () => {
       leaderId: fixture.restricted.id,
       memberIds: [fixture.worker.id],
     });
-    const squadIssue = fixture.store.createIssue({
+    const squadIssue = createResponsibleTestIssue(fixture.store, {
       title: "Squad policy work",
       workspaceId: "local",
       assigneeType: "squad",
@@ -204,7 +207,7 @@ describe("agent Issue proposal policy", () => {
     expect(squadTask).toBeDefined();
     await expectRestrictedTaskCannotCreateIssue(fixture, squadTask!.id, "squad mention delegation");
 
-    const runOnlyAutopilot = fixture.store.createAutopilot({
+    const runOnlyAutopilot = createResponsibleTestAutopilot(fixture.store, {
       title: "Delegated run-only autopilot",
       assigneeId: fixture.worker.id,
       executionMode: "run_only",
@@ -267,7 +270,7 @@ describe("agent Issue proposal policy", () => {
 
   it("persists a restricted task's taint on schedule triggers and blocks future background Issue creation", async () => {
     const fixture = await policyFixture();
-    const autopilot = fixture.store.createAutopilot({
+    const autopilot = createResponsibleTestAutopilot(fixture.store, {
       title: "Future scheduled delegation",
       assigneeId: fixture.worker.id,
       executionMode: "run_only",
@@ -310,13 +313,15 @@ describe("agent Issue proposal policy", () => {
   it("persists system-event taint independently of the later event caller", async () => {
     const fixture = await policyFixture();
     const project = fixture.store.createProject({ title: "Approval policy project" });
-    const triggerIssue = fixture.store.createIssue({
+    const triggerIssue = createResponsibleTestIssue(fixture.store, {
       title: "Later human event",
+      responsibleMemberId: fixture.human.id,
+      assigneeType: 'agent', assigneeId: fixture.ordinary.id,
       workspaceId: "local",
       projectId: project.id,
       status: "todo",
     });
-    const autopilot = fixture.store.createAutopilot({
+    const autopilot = createResponsibleTestAutopilot(fixture.store, {
       title: "Future system event",
       assigneeId: fixture.worker.id,
       executionMode: "trigger_issue",
@@ -337,10 +342,11 @@ describe("agent Issue proposal policy", () => {
     });
     expect(configured.status).toBe(201);
 
-    const changed = await fixture.app.request(`/api/issues/${triggerIssue.id}`, {
-      method: "PATCH",
+    const prepared=prepareTestIssueDelivery(fixture.store,triggerIssue.id);
+    const changed = await fixture.app.request(`/api/issues/${triggerIssue.id}/deliveries/${prepared.delivery.id}/respond`, {
+      method: "POST",
       headers: fixture.humanHeaders,
-      body: JSON.stringify({ status: "done" }),
+      body: JSON.stringify({ action: "accept",revision:prepared.delivery.responsibilityRevision }),
     });
     expect(changed.status).toBe(200);
     const [run] = fixture.store.dispatchPendingSystemEvents();
@@ -357,13 +363,15 @@ describe("agent Issue proposal policy", () => {
   it("uses trusted event and webhook-delivery source tasks as a second inheritance path", async () => {
     const fixture = await policyFixture();
     const project = fixture.store.createProject({ title: "Source lineage project" });
-    const eventIssue = fixture.store.createIssue({
+    const eventIssue = createResponsibleTestIssue(fixture.store, {
       title: "Restricted source event",
+      responsibleMemberId: fixture.human.id,
+      assigneeType: 'agent', assigneeId: fixture.restricted.id,
       workspaceId: "local",
       projectId: project.id,
       status: "todo",
     });
-    const eventAutopilot = fixture.store.createAutopilot({
+    const eventAutopilot = createResponsibleTestAutopilot(fixture.store, {
       title: "Clean system-event automation",
       assigneeId: fixture.worker.id,
       executionMode: "trigger_issue",
@@ -378,10 +386,13 @@ describe("agent Issue proposal policy", () => {
         projectId: project.id,
       },
     });
-    const changed = await fixture.app.request(`/api/issues/${eventIssue.id}`, {
-      method: "PATCH",
-      headers: fixture.restrictedHeaders,
-      body: JSON.stringify({ status: "done" }),
+    const prepared=prepareTestIssueDelivery(fixture.store,eventIssue.id);
+    fixture.store.authorizeIssueDelivery(eventIssue.id,prepared.delivery.id,fixture.restricted.id,prepared.delivery.responsibilityRevision,{type:'member',id:fixture.human.id});
+    const sourceCredential=await fixture.store.createTaskAccessToken(prepared.executionTask,'local');
+    const changed = await fixture.app.request(`/api/issues/${eventIssue.id}/deliveries/${prepared.delivery.id}/respond`, {
+      method: "POST",
+      headers: {...fixture.restrictedHeaders,Authorization:`Bearer ${sourceCredential.token}`},
+      body: JSON.stringify({ action: "accept",revision:prepared.delivery.responsibilityRevision }),
     });
     expect(changed.status).toBe(200);
     const [eventRun] = fixture.store.dispatchPendingSystemEvents();
@@ -392,7 +403,7 @@ describe("agent Issue proposal policy", () => {
       "system-event source task",
     );
 
-    const webhookAutopilot = fixture.store.createAutopilot({
+    const webhookAutopilot = createResponsibleTestAutopilot(fixture.store, {
       title: "Clean webhook automation",
       assigneeId: fixture.worker.id,
       executionMode: "run_only",
@@ -425,7 +436,7 @@ describe("agent Issue proposal policy", () => {
 
   it("makes taint human-visible and clearable while keeping it hidden and immutable for tasks", async () => {
     const fixture = await policyFixture();
-    const autopilot = fixture.store.createAutopilot({
+    const autopilot = createResponsibleTestAutopilot(fixture.store, {
       title: "Shared Wiki-like automation",
       assigneeId: fixture.worker.id,
       executionMode: "run_only",
@@ -543,6 +554,7 @@ describe("agent Issue proposal policy", () => {
 async function policyFixture() {
   const store = createStore();
   store.ensureLocalWorkspace();
+  const human=store.findWorkspaceMemberForUser('local','local')!;
   const restricted = store.createAgent({
     name: "Feishu watcher",
     provider: "codex",
@@ -550,7 +562,7 @@ async function policyFixture() {
   });
   const ordinary = store.createAgent({ name: "Ordinary collaborator", provider: "codex" });
   const worker = store.createAgent({ name: "Quick-create worker", provider: "codex" });
-  const current = store.createIssue({ title: "Current work", workspaceId: "local" });
+  const current = createResponsibleTestIssue(store, { title: "Current work", workspaceId: "local",assigneeType:'agent',assigneeId:ordinary.id });
   const restrictedTask = store.createTask({ agentId: restricted.id, issueId: current.id, prompt: "watch Feishu" });
   const ordinaryTask = store.createTask({ agentId: ordinary.id, issueId: current.id, prompt: "collaborate" });
   const restrictedCredential = await store.createTaskAccessToken(restrictedTask, "local");
@@ -559,6 +571,7 @@ async function policyFixture() {
   return {
     app,
     store,
+    human,
     restricted,
     ordinary,
     worker,

@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { expect, it } from "bun:test";
 import { mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
@@ -15,7 +16,7 @@ pendingTurnBackendTests("MUL-508 stage 1 regressions", (fixture) => {
     const user = store.getOrCreateUser({ externalId: "stage1-member", name: "Member" });
     store.createWorkspaceMember({ userId: user.id, name: user.name, role: "member" });
     const agent = store.createAgent({ name: "Private", provider: "codex", visibility: "private", ownerId: "local" });
-    const issue = store.createIssue({ title: "Stage 1", assigneeType: "agent", assigneeId: agent.id });
+    const issue = createResponsibleTestIssue(store, { title: "Stage 1", assigneeType: "agent", assigneeId: agent.id, responsibleMemberId: "mem_local_local" });
     const session = store.getOrCreateDefaultIssueSession(issue.id);
     const token = await store.createAccessToken({ type: "pat", name: "Member", userId: user.id, workspaceId: "local" });
     const app = createMultiremiApp({ store, authToken: "stage1-master" });
@@ -29,11 +30,25 @@ pendingTurnBackendTests("MUL-508 stage 1 regressions", (fixture) => {
     return { store, db, user, agent, issue, session, app, headers, owner, path, request };
   }
   function runningRequest(store: MultiremiStore, db: SqlDatabase, agentId: string, issueId: string, kind: "permission" | "question", payload: Record<string, unknown>) {
+    const runtime = store.registerRuntime({ name: "Stage 1 native source", provider: "codex", daemonId: "stage1-native", maxConcurrency: 16 });
+    store.updateAgent(agentId, { runtimeId: runtime.id });
     const task = store.createTask({ agentId, issueId, prompt: "Work" });
-    db.run("UPDATE multiremi_turns SET status='running' WHERE current_attempt_id=?", [task.id]);
-    db.run("UPDATE multiremi_turn_attempts SET status='running' WHERE id=?", [task.id]);
-    const request = store.createTaskHumanRequest({ taskId: task.id, kind, payload });
-    return { task, request, turn: store.getTurnForAttempt(task.id)! };
+    expect(store.claimTask(runtime.id)?.id).toBe(task.id); store.startTask(task.id);
+    const turn = store.getTurnForAttempt(task.id)!;
+    const waitId = `stage1-wait:${task.id}`;
+    const questions = payload.questions as Array<{ options?: Array<{ label: string }> }> | undefined;
+    const options = kind === "permission" ? [{ label: "Allow once", value: "allow_once" }, { label: "Reject", value: "reject_once" }]
+      : questions?.length === 1 ? (questions[0]!.options ?? []).map(option => ({ label: option.label, value: option.label })) : [];
+    const result = store.getDaemonTurnBridge().rpc("turn.decision", { turn_id: turn.id, attempt_id: task.id,
+      body_md: kind === "permission" ? "Approve operation?" : "Answer the original questions", wait_id: waitId,
+      dedupe_key: `stage1-q:${task.id}`, options,
+      metadata: { ...payload, kind },
+    }, { runtimeId: runtime.id, daemonId: runtime.daemonId!, workspaceId: "local" });
+    expect(result.ok).toBe(true);
+    const request = store.getTaskHumanRequest(String(result.message_id))!;
+    expect(store.getQuestion(request.id)?.wait_status).toBe("waiting");
+    return { task, request, turn: store.getTurnForAttempt(task.id)!, runtime, waitId,
+      revision: store.getQuestion(request.id)!.route_revision };
   }
   const permission = { options: [{ optionId: "allow_once", kind: "allow_once", name: "Allow once" }, { optionId: "reject_once", kind: "reject_once", name: "Reject" }] };
   const question = { questions: [{ question: "Continue?", options: [{ label: "Yes" }, { label: "No" }] }] };
@@ -44,7 +59,7 @@ pendingTurnBackendTests("MUL-508 stage 1 regressions", (fixture) => {
     const dir = mkdtempSync(join(tmpdir(), "mul508-denied-")), previous = process.env.MULTIREMI_UPLOAD_DIR;
     process.env.MULTIREMI_UPLOAD_DIR = dir;
     const snapshot = () => ["multiremi_conversation_log", "multiremi_turns", "multiremi_turn_attempts", "multiremi_attachments", "multiremi_conversation_heads"].map(table => Number(f.db.query(`SELECT COUNT(*) AS n FROM ${table}`).get().n));
-    const parent = f.store.createIssue({ title: "Parent", assigneeType: "agent", assigneeId: f.agent.id });
+    const parent = createResponsibleTestIssue(f.store, { title: "Parent", assigneeType: "agent", assigneeId: f.agent.id });
     f.store.updateIssue(f.issue.id, { parentIssueId: parent.id });
     const before = snapshot();
     let enqueued = 0;
@@ -90,16 +105,43 @@ pendingTurnBackendTests("MUL-508 stage 1 regressions", (fixture) => {
     expect(f.store.getTaskHumanRequest(q.request.id)?.status).toBe("pending");
     expect(f.store.getTurn(q.turn.id)?.status).toBe("awaiting_human");
     expect(f.store.getConversationLogHead(f.session.id)?.headSeq).toBe(before);
-    expect((await f.request(f.path, "POST", { reply_to_id: q.request.id, response: kind === "permission" ? { option_id: "allow_once" } : { answers: { "Continue?": "Yes" } } }, f.owner)).status).toBe(200);
+    expect((await f.request(f.path, "POST", { reply_to_id: q.request.id, expected_route_revision: q.revision,
+      response: kind === "permission" ? { option_id: "allow_once" } : { answers: { "Continue?": "Yes" } } }, f.owner)).status).toBe(200);
     expect((await f.request(f.path)).data.messages.some((m: any) => m.reply_to_id === q.request.id)).toBe(false);
   });
 
-  it("B2: keeps shared-agent questions answerable by an authorized member other than the recipient", async () => {
+  it("B2: shared-agent visibility does not authorize a different member to answer the specified human's Q", async () => {
     const f = await scaffold(); f.store.updateAgent(f.agent.id, { visibility: "workspace" });
     const q = runningRequest(f.store, f.db, f.agent.id, f.issue.id, "question", question);
     expect((await f.request(`/api/messages/${q.request.id}`)).status).toBe(200);
-    expect((await f.request(f.path, "POST", { reply_to_id: q.request.id, metadata: { selected_options: ["Yes"] } })).status).toBe(200);
+    expect((await f.request(f.path, "POST", { reply_to_id: q.request.id, expected_route_revision: q.revision,
+      metadata: { selected_options: ["Yes"] } })).status).toBe(403);
+    expect(f.store.getTaskHumanRequest(q.request.id)?.status).toBe("pending");
+    expect(f.store.getTurn(q.turn.id)?.status).toBe("awaiting_human");
+    expect((await f.request(f.path, "POST", { reply_to_id: q.request.id, expected_route_revision: q.revision,
+      metadata: { selected_options: ["Yes"] } }, f.owner)).status).toBe(200);
     expect(f.store.getTaskHumanRequest(q.request.id)?.response).toMatchObject({ answers: { "Continue?": "Yes" } });
+  });
+
+  for (const kind of ["permission", "question"] as const) it(`B2: the specified human can read and answer private ${kind} only through the original Q surface`, async () => {
+    const f = await scaffold(), member = f.store.findWorkspaceMemberForUser(f.user.id, "local")!;
+    f.store.updateIssue(f.issue.id, { responsibleMemberId: member.id, actorType: "member", actorId: "mem_local_local" });
+    const q = runningRequest(f.store, f.db, f.agent.id, f.issue.id, kind, kind === "permission" ? permission : question);
+    expect((await f.request(`/api/messages/${q.request.id}`)).status).toBe(404);
+    expect((await f.request(`/api/turns/${q.turn.id}`)).status).toBe(404);
+    expect((await f.request(`/api/turns/${q.turn.id}/trace`)).status).toBe(404);
+    const view = await f.request(`/api/messages/${q.request.id}/question`);
+    expect(view.status).toBe(200); expect(view.data.question.current_handler).toEqual({ type: "member", id: member.id });
+    const response = kind === "permission" ? { option_id: "allow_once" } : { answers: { "Continue?": "Yes" } };
+    expect((await f.request(`/api/messages/${q.request.id}/question/answer`, "POST",
+      { expected_route_revision: q.revision, response })).status).toBe(200);
+    expect(f.store.getQuestion(q.request.id)?.answer?.actor).toEqual({ type: "member", id: member.id });
+    expect(f.store.getQuestion(q.request.id)?.wait_status).toBe("waiting");
+    const consumed = f.store.getDaemonTurnBridge().rpc("turn.decision.consume", { turn_id: q.turn.id, attempt_id: q.task.id,
+      message_id: q.request.id, wait_id: q.waitId, reply_message_id: f.store.getQuestion(q.request.id)!.answer!.reply_message_id },
+      { runtimeId: q.runtime.id, daemonId: q.runtime.daemonId!, workspaceId: "local" });
+    expect(consumed.ok).toBe(true); expect(f.store.getQuestion(q.request.id)?.wait_status).toBe("consumed");
+    expect((await f.request(`/api/messages/${q.request.id}`)).status).toBe(404);
   });
 
   it("B3: accepts only the exact current Chat task capability throughout message, range, inbox and turn", async () => {
@@ -160,13 +202,13 @@ pendingTurnBackendTests("MUL-508 stage 1 regressions", (fixture) => {
     expect(f.store.getTaskHumanRequest(q.request.id)?.status).toBe("pending"); expect(f.store.getTurn(q.turn.id)?.status).toBe("awaiting_human");
     expect(f.store.getConversationLogHead(f.session.id)?.headSeq).toBe(before);
     for (const args of [["--option", "unknown"], ["--response", kind === "permission" ? '{"option_id":"unknown"}' : '{"answers":{"Other":"Yes"}}'], ["--response", '{"answers":[]}']]) {
-      const result = await cli(f.app, "stage1-master", ["message", "send", f.session.id, "--reply-to", q.request.id, ...args]);
+      const result = await cli(f.app, "stage1-master", ["message", "send", f.session.id, "--reply-to", q.request.id, "--revision", String(q.revision), ...args]);
       expect(result.code).not.toBe(0);
       expect(f.store.getTaskHumanRequest(q.request.id)?.status).toBe("pending");
       expect(f.store.getTurn(q.turn.id)?.status).toBe("awaiting_human");
       expect(f.store.getConversationLogHead(f.session.id)?.headSeq).toBe(before);
     }
-    const result = await cli(f.app, "stage1-master", ["message", "send", f.session.id, "--reply-to", q.request.id, "--option", kind === "permission" ? "allow_once" : "Yes"]);
+    const result = await cli(f.app, "stage1-master", ["message", "send", f.session.id, "--reply-to", q.request.id, "--revision", String(q.revision), "--option", kind === "permission" ? "allow_once" : "Yes"]);
     expect(result.code, result.stderr).toBe(0);
     const delivered = JSON.parse(result.stdout).message;
     expect(delivered.reply_to_id).toBe(q.request.id);
@@ -174,19 +216,19 @@ pendingTurnBackendTests("MUL-508 stage 1 regressions", (fixture) => {
     const settled = f.store.getTaskHumanRequest(q.request.id)!;
     expect(settled.status).toBe("responded"); expect(f.store.getTurn(q.turn.id)?.status).toBe("running");
     expect(settled.response).toMatchObject(kind === "permission" ? { option_id: "allow_once" } : { answers: { "Continue?": "Yes" } });
-    expect((await cli(f.app, "stage1-master", ["message", "send", f.session.id, "--reply-to", q.request.id, "--option", "Yes"])).code).not.toBe(0);
+    expect((await cli(f.app, "stage1-master", ["message", "send", f.session.id, "--reply-to", q.request.id, "--revision", String(q.revision), "--option", "Yes"])).code).not.toBe(0);
     expect(f.store.listMessages(f.session.id).filter(m => m.reply_to_id === q.request.id)).toHaveLength(1);
   });
 
   it("B4: multi-question CLI response requires complete answers before consuming", async () => {
     const f = await scaffold(), q = runningRequest(f.store, f.db, f.agent.id, f.issue.id, "question", { questions: [{ question: "First?" }, { question: "Second?" }] });
     for (const args of [["--option", "Yes"], ["--response", '{"answers":{"First?":"Yes"}}']]) {
-      expect((await cli(f.app, "stage1-master", ["message", "send", f.session.id, "--reply-to", q.request.id, ...args])).code).not.toBe(0);
+      expect((await cli(f.app, "stage1-master", ["message", "send", f.session.id, "--reply-to", q.request.id, "--revision", String(q.revision), ...args])).code).not.toBe(0);
       expect(f.store.getTaskHumanRequest(q.request.id)?.status).toBe("pending");
       expect(f.store.getTurn(q.turn.id)?.status).toBe("awaiting_human");
     }
     const response = { answers: { "First?": "Yes", "Second?": "Some free text" } };
-    expect((await cli(f.app, "stage1-master", ["message", "send", f.session.id, "--reply-to", q.request.id, "--response", JSON.stringify(response)])).code).toBe(0);
+    expect((await cli(f.app, "stage1-master", ["message", "send", f.session.id, "--reply-to", q.request.id, "--revision", String(q.revision), "--response", JSON.stringify(response)])).code).toBe(0);
     expect(f.store.getTaskHumanRequest(q.request.id)?.response).toEqual(response);
   });
 
@@ -230,7 +272,7 @@ pendingTurnBackendTests("MUL-508 stage 1 regressions", (fixture) => {
 
   it("S5: sends committed workspace inbox invalidations to both tabs, isolating rollback and other workspaces", async () => {
     const f = await scaffold();
-    const second = f.store.createIssue({ title: "Other conversation" }), session = f.store.getOrCreateDefaultIssueSession(second.id);
+    const second = createResponsibleTestIssue(f.store, { title: "Other conversation" }), session = f.store.getOrCreateDefaultIssueSession(second.id);
     const frames: any[][] = [[], [], []], events: any[] = [], transactionStates: boolean[] = [];
     const client = (i: number, workspaceId: string) => ({ data: { kind: "browser", workspaceId, authenticated: true, userId: "local", accessToken: null }, sendText: (frame: string) => frames[i]!.push(JSON.parse(frame)), close() {} });
     const fanout = createRealtimeFanout({ role: "all", store: f.store, registries: { browser: new Map([["local", new Set([client(0, "local"), client(1, "local")])], ["other-workspace", new Set([client(2, "other-workspace")])]]) as any, browserUser: new Map() } });

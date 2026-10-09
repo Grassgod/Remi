@@ -74,7 +74,7 @@ export async function createPr2Harness(options: { inboxRows?: number; runtimes?:
   // #4: independent canonical conversations replace notification archive/fold
   // sentinels. A lane cursor reads one; a message tombstone hides another.
   for (let index=0;index<6;index++) {
-    const issue=store.createIssue({title:`PR2 sentinel ${index}`});
+    const issue=store.createIssue({title:`PR2 sentinel ${index}`,responsibleMemberId:fixture.readerMemberId});
     const session=store.getOrCreateDefaultIssueSession(issue.id);
     const message=store.sendMessage({id:`cmt_pr2_sentinel_${index}`,session_id:session.id,
       sender:{type:'platform',id:null},to:{type:'member',ref:fixture.readerMemberId},

@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { afterEach, expect, spyOn, test } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { daemonTaskClaimResponse } from "@multiremi/api/wire/tasks.js";
@@ -21,7 +22,7 @@ function fixture() {
   const store = createLocalStore();
   const runtime = store.registerRuntime({ name: "Input", provider: "codex" });
   const agent = store.createAgent({ name: "Input", provider: "codex", runtimeId: runtime.id });
-  const issue = store.createIssue({ title: "Long issue" });
+  const issue = createResponsibleTestIssue(store, { title: "Long issue" });
   const session = store.getOrCreateDefaultIssueSession(issue.id);
   return { store, runtime, agent, issue, session };
 }

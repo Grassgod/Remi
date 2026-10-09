@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { afterEach, describe, expect, it } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { createStore, resetMultiremiTestEnv } from "./helpers.js";
@@ -13,7 +14,7 @@ async function fixture() {
   const foreign = store.createWorkspace({ name: "Foreign", slug: "native-foreign" });
   const agent = store.createAgent({ workspaceId: workspace.id, ownerId: user.id, name: "Worker", provider: "claude" });
   const project = store.createProject({ workspaceId: workspace.id, title: "Pinned project" });
-  const issue = store.createIssue({ workspaceId: workspace.id, title: "Task issue" });
+  const issue = createResponsibleTestIssue(store, { workspaceId: workspace.id, title: "Task issue" });
   const { token } = await store.createAccessToken({ workspaceId: "local", userId: user.id, name: "Session", type: "pat", purpose: "session" });
   const app = createMultiremiApp({ store, authToken: "fixture-master", backgroundJobs: false });
   const headers = { Authorization: `Bearer ${token}`, "Content-Type": "application/json", "X-Workspace-Slug": workspace.slug };
@@ -163,7 +164,7 @@ describe("native workspace request context", () => {
     const comment = store.createIssueComment(issue.id, { body: "Attached comment" });
     const chat = store.createChatSession({ workspaceId: workspace.id, agentId: agent.id, creatorId: user.id });
     const message = store.sendChatMessage(chat.id, { body: "Attached message" }).message;
-    const foreignIssue = store.createIssue({ workspaceId: other.id, title: "Another workspace" });
+    const foreignIssue = createResponsibleTestIssue(store, { workspaceId: other.id, title: "Another workspace" });
     const file = { filename: "linked.txt", url: "https://example.test/linked.txt" };
     for (const reference of [{ issueId: issue.id }, { commentId: comment.id }, { chatSessionId: chat.id }, { chatMessageId: message.id }]) {
       const response = await app.request("/api/multiremi/attachments", {

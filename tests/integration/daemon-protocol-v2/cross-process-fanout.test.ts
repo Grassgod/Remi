@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from "../../unit/multiremi/helpers.js";
 import { afterEach, describe, expect, it, spyOn } from "bun:test";
 import { join } from "node:path";
 import { createPeerChannel, type PeerFetch } from "../../../packages/server/src/api/peer/peer-channel.js";
@@ -56,7 +57,7 @@ async function startUiProcess(databasePath: string, runtimePort: number, secret:
   return {
     port: ready.port,
     async command(command: { op: string; runtimeId?: string; taskId?: string; agentId?: string;
-      issueId?: string; requestId?: string; status?: "timeout" | "cancelled" }): Promise<UiReply> {
+      issueId?: string; requestId?: string; humanToken?: string; status?: "timeout" | "cancelled" }): Promise<UiReply> {
       child.stdin.write(`${JSON.stringify(command)}\n`);
       await child.stdin.flush();
       const reply = await next();
@@ -109,6 +110,7 @@ describe("MUL-419 ui to runtime fanout across OS processes", () => {
     if (h.db.dialect === "sqlite") { h.db.exec("PRAGMA journal_mode = WAL"); h.db.exec("PRAGMA busy_timeout = 5000"); }
     let ui: Awaited<ReturnType<typeof startUiProcess>> | null = null;
     let host: WebSocket | null = null;
+    let decisionTaskId: string | undefined;
     try {
       await h.startDaemon(); await h.settleHeartbeat();
       const executorId = h.ledger.find(entry => entry.type === "hello")!.frame.p.runtimes[0].runtime_id as string;
@@ -125,8 +127,14 @@ describe("MUL-419 ui to runtime fanout across OS processes", () => {
       const workspace = h.store.getWorkspace("local")!;
       h.store.updateWorkspace("local", { settings: { ...workspace.settings,
         issueTopics: { enabled: true, chatId: "oc_settled", notifyMode: "person", notifyOpenId: "ou_recipient" } } });
-      const issue = h.store.createIssue({ title: "Settle", workspaceId: "local",
-        assigneeType: "agent", assigneeId: agent.id });
+      const issue = createResponsibleTestIssue(h.store, { title: "Settle", workspaceId: "local",
+        assigneeType: "agent", assigneeId: agent.id, responsibleMemberId: 'mem_local_local' });
+      const recipient = h.store.getOrCreateUser({ externalId: 'ou_recipient', name: 'Explicit question recipient' });
+      h.db.run('UPDATE multiremi_workspace_members SET user_id=? WHERE id=?', [recipient.id, 'mem_local_local']);
+      h.db.run('UPDATE multiremi_users SET feishu_union_id=? WHERE id=?', ['on_recipient', recipient.id]);
+      const humanAccess = await h.store.createAccessToken({ name: 'Designated question human', type: 'pat', userId: recipient.id, workspaceId: 'local' });
+      const seen = new Date().toISOString();
+      h.db.run("INSERT INTO multiremi_feishu_bot_senders(id,workspace_id,app_id,open_id,union_id,display_name,allowed,first_seen_at,last_seen_at) VALUES('fbs_cross_process','local','mul401_settled','ou_recipient','on_recipient','Human',1,?,?)", [seen, seen]);
       h.store.prepareFeishuIssueTopicWithinTransaction(issue);
       const root = h.store.claimFeishuBotOutbound("local", "rt_bot_host")!;
       h.store.reportFeishuBotOutbound("local", "rt_bot_host", root.id,
@@ -138,10 +146,16 @@ describe("MUL-419 ui to runtime fanout across OS processes", () => {
       uiPort = ui.port;
       const taskId = (await ui.command({ op: "create_task", agentId: agent.id, issueId: issue.id,
         runtimeId: executorId })).taskId!;
+      decisionTaskId = taskId;
       await waitFor(() => h.store.getTask(taskId)?.status === "running", "running decision task", 10_000);
+      (h.daemon as any).taskDownlinks.beginDecision(taskId);
+      (h.daemon as any).taskDownlinks.beginQuestionWait(taskId, `cross-process-question:${taskId}`, `cross-process-wait:${taskId}`);
       const requestId = (await ui.command({ op: "create_human_request", taskId })).requestId!;
+      (h.daemon as any).taskDownlinks.registerDecision(h.store.getMessage(requestId)!, taskId);
       const card = h.store.claimFeishuBotOutbound("local", "rt_bot_host")!;
       expect(card.kind).toBe("decision_card");
+      expect(card.degraded).toBeUndefined();
+      expect(h.store.getMessage(requestId)?.card_token_recipient).toBe('ou_recipient');
       h.store.reportFeishuBotOutbound("local", "rt_bot_host", card.id, {
         claimToken: card.claimToken, status: "sent", externalMessageId: "om_settled_card",
         interactionOpenId: "ou_recipient" });
@@ -153,15 +167,16 @@ describe("MUL-419 ui to runtime fanout across OS processes", () => {
         host!.addEventListener("error", reject, { once: true }); });
       host.send(JSON.stringify({ v: 2, t: "hello", p: { protocol: 2, daemon_id: "dmn_bot_host",
         cli_version: DAEMON_MIN_CLI_VERSION, caps: [], runtimes: [{ runtime_id: "rt_bot_host",
-          provider: "claude", max_concurrency: 1, active_task_ids: [] }] } }));
+          provider: "claude", max_concurrency: 1, active_task_ids: [], capabilities: { feishu_decision_card: 1, feishu_concierge_protocol: 1 } }] } }));
       await waitFor(() => hostFrames.some(frame => frame.t === "welcome"), "bot host welcome");
       expect(hostFrames.filter(frame => frame.t === "task.human_request.settled")).toHaveLength(0);
       if (status !== "responded") await new Promise<void>(resolve => {
         host!.addEventListener("close", () => resolve(), { once: true }); host!.close(); });
+      await h.settleHeartbeat();
       await h.layer.drain();
       const claims = spyOn(h.store, "claimTask");
       const started = performance.now();
-      expect((await ui.command(status === "responded" ? { op: "respond_human_request", requestId }
+      expect((await ui.command(status === "responded" ? { op: "respond_human_request", requestId, humanToken: humanAccess.token }
         : { op: "expire_human_request", requestId, status })).requestId).toBe(requestId);
       if (status === "responded") await waitFor(() => h.received.some(frame => frame.t === "turn.message"
         && frame.p.message.reply_to_id === requestId), "decision reply message", 200);
@@ -172,16 +187,23 @@ describe("MUL-419 ui to runtime fanout across OS processes", () => {
         .toHaveLength(status === "responded" ? 1 : 0);
       const read = await fetch(`${h.url}/api/daemon/messages/${requestId}`, { headers: { Authorization: `Bearer ${token.token}` } });
       expect(read.status).toBe(200);
-      expect((await read.json() as any).request).toMatchObject({ id: requestId, status });
+      expect((await read.json() as any).request).toMatchObject({ id: requestId, status: status === 'responded' ? 'responded' : 'pending' });
+      if (status !== 'responded') expect(h.store.getQuestion(requestId)).toMatchObject({ status: 'pending', wait_status: 'detached', wait_reason: status });
       expect(hostFrames.filter(frame => frame.t === "turn.message")).toHaveLength(0);
       expect(h.received.filter(frame => frame.t === "task.human_request.settled")).toHaveLength(0);
       expect((await ui.command({ op: "stats" })).daemonHookCalls).toBe(0);
 
       if (status === "responded") await new Promise<void>(resolve => {
         host!.addEventListener("close", () => resolve(), { once: true }); host!.close(); });
-      expect(h.store.listFeishuBotLiveDecisionCards("local", "rt_bot_host")).toEqual([]);
-      expect(h.store.listFeishuBotSettledHumanRequestCandidates("local", "rt_bot_host"))
-        .toContainEqual({ requestId, taskId });
+      if (status === 'responded') {
+        expect(h.store.listFeishuBotLiveDecisionCards("local", "rt_bot_host")).toEqual([]);
+        expect(h.store.listFeishuBotSettledHumanRequestCandidates("local", "rt_bot_host"))
+          .toContainEqual({ requestId, taskId });
+      } else {
+        expect(h.store.listFeishuBotLiveDecisionCards("local", "rt_bot_host")).toHaveLength(1);
+        expect(h.store.listFeishuBotSettledHumanRequestCandidates("local", "rt_bot_host"))
+          .not.toContainEqual({ requestId, taskId });
+      }
       const recoveredFrames: Record<string, any>[] = [];
       host = new WebSocket(`${h.url.replace("http:", "ws:")}/api/daemon/ws?protocol=2`,
         { headers: { Authorization: `Bearer ${token.token}` } } as never);
@@ -190,13 +212,14 @@ describe("MUL-419 ui to runtime fanout across OS processes", () => {
         host!.addEventListener("error", reject, { once: true }); });
       host.send(JSON.stringify({ v: 2, t: "hello", p: { protocol: 2, daemon_id: "dmn_bot_host",
         cli_version: DAEMON_MIN_CLI_VERSION, caps: [], runtimes: [{ runtime_id: "rt_bot_host",
-          provider: "claude", max_concurrency: 1, active_task_ids: [] }] } }));
+          provider: "claude", max_concurrency: 1, active_task_ids: [], capabilities: { feishu_decision_card: 1, feishu_concierge_protocol: 1 } }] } }));
       await waitFor(() => recoveredFrames.some(frame => frame.t === "welcome"), "bot host reconnect");
       const recovered = await fetch(`${h.url}/api/daemon/messages/${requestId}`, { headers: { Authorization: `Bearer ${token.token}` } });
       expect(recovered.status).toBe(200);
-      expect((await recovered.json() as any).request).toMatchObject({ id: requestId, status });
+      expect((await recovered.json() as any).request).toMatchObject({ id: requestId, status: status === 'responded' ? 'responded' : 'pending' });
       expect(recoveredFrames.filter(frame => frame.t === "task.human_request.settled" || frame.t === "turn.message")).toHaveLength(0);
     } finally {
+      if (decisionTaskId) (h.daemon as any).taskDownlinks.finishDecision(decisionTaskId);
       releaseProvider();
       if (host && host.readyState !== WebSocket.CLOSED) await new Promise<void>(resolve => {
         host!.addEventListener("close", () => resolve(), { once: true }); host!.close(); });

@@ -208,10 +208,13 @@ trace、usage、附件、Session Archive 与 outbox 分区仍以 attempt id（�
 后者是控制帧，不推进消息游标。elicitation 和 `kind=permission` 都使用 `turn.decision`：
 S2 同事务创建 decision 消息并将轮置为 `awaiting_human`，通过 `reply_to_id` 匹配答复。
 权限选项保留原 option ID、名称、种类和工具上下文；没有旧 `human_request.*` 兼容通道。
+责任链处理者读取原 Q 时使用其实际收到当前路由版本通知的执行轮凭证。
+授权同时绑定通知会话、执行 scope 和指定 Agent；同 Agent 的继承旁支、其它 Issue 或委派 scope 不获得原 Q 的读取、答复或 Remi 总结权限。
+源 Agent 可在原产品会话与执行 scope 内读取自己的 Q，包括受控冷续接；这种例外只开放原 Q，不扩大私有会话或 trace 可见性。
 
 ### 1.5 RPC 清单
 
-**daemon → server**：`concierge.status_report`、`turn.input`、`turn.decision`、`turn.decision.get`、`turn.decision.expire`、`plugin.desired`、
+**daemon → server**：`concierge.status_report`、`turn.input`、`turn.decision`、`turn.decision.get`、`turn.decision.expire`、`turn.decision.consume`、`plugin.desired`、
 `trace.append`、`trace.head`、`trace.subscribe`、`trace.unsubscribe`、`trace.fetch`、`gc.check_issue`、
 `gc.check_chat_session`、`gc.check_autopilot_run`、`gc.check_task`、`gc.workspace_cleaned`。
 
@@ -228,6 +231,7 @@ connector，下一次心跳重试当前状态。服务端在同一条连接里�
 `turn.decision.get` 按 `p:{turn_id,attempt_id,message_id}` 读取 decision 消息及答复；
 创建、读取、过期都交给 S2 的 `DaemonTurnBridge.rpc`，写入时校验 runtime / 当前 attempt / turn。
 答复超时或取消走 `turn.decision.expire`；若答复先于过期提交，以返回的 reply 消息为准。
+`turn.decision`还带进程内随机 `wait_id` 与客户端预分配的 `message_id`。daemon 在 `hello.runtimes[].active_question_waits` 和 `runtime.ready` 声明仍存在的 `{message_id,attempt_id,wait_id}`；短断线保留 nonce，新进程缺少旧 nonce 时，服务端先撤销旧 attempt，再安排已授权的新续接。原回调真正消费答复后用 `turn.decision.consume` 携带同一 nonce 和 `reply_message_id` 确认。答案已保存不表示旧调用恢复；业务 Q 超时仍持久待答，详见[统一问题](dev/questions.md)。
 服务端启动时默认取 `Store.getDaemonTurnBridge()`，将同一适配器接入 offer 输入、
 下行快照、decision/input RPC 与原子完成；绑定无效的尝试由 Store 拒绝，不访问旧请求表。
 
@@ -527,6 +531,10 @@ SSH 配置 revision 时，才广播 `daemon:ssh_mesh_changed` 重新下发整个
 下行与派活的事件范围统一由
 [workspace-wakeups.ts](../packages/server/src/api/daemon-protocol/workspace-wakeups.ts)处理，
 本地事件与 peer 转发事件共用这条路径：
+
+工作区 settings 和 relay 配置写入在提交后发布 `daemon:pending_changed`，
+使现有连接读取新配置；回滚不发布。插件绑定通过真实 HTTP 写入口发布现有的
+`agent_plugin:*` 事件，唤醒配置下行及派活条件检查。
 
 | 事件 | 下行 | 派活 |
 | --- | --- | --- |

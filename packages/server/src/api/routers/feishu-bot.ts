@@ -24,6 +24,7 @@ import {
   readJsonStrict,
   readJsonStrictAllowEmpty,
   requireWorkspaceAdmin,
+  requireHumanWorkspaceAdmin,
 } from "../helpers.js";
 import { currentRequestUserId } from "../wire/index.js";
 import type { RouterDeps } from "./deps.js";
@@ -89,7 +90,7 @@ export function registerFeishuBotRoutes(
     c.header("Cache-Control", "no-store");
     // A plain member is told whether a concierge is available and nothing else:
     // the app id and the host Runtime are deployment detail they cannot change.
-    if (requireWorkspaceAdmin(c, store, workspaceId)) {
+    if (requireHumanWorkspaceAdmin(c, store, workspaceId)) {
       return c.json(availabilityView(store.feishuBotStatusSnapshot(workspaceId)));
     }
     return c.json(configView(store, workspaceId));
@@ -266,7 +267,7 @@ export function registerFeishuBotRoutes(
 
   app.put("/api/workspaces/:id/feishu-bot", async (c) => {
     const workspaceId = c.req.param("id");
-    const denied = requireWorkspaceAdmin(c, store, workspaceId);
+    const denied = requireHumanWorkspaceAdmin(c, store, workspaceId);
     if (denied) return denied;
     if (!store.getWorkspace(workspaceId)) return c.json({ error: "workspace not found" }, 404);
     const body = await readJsonStrict<FeishuBotConfigBody>(c);
@@ -278,7 +279,7 @@ export function registerFeishuBotRoutes(
 
     c.header("Cache-Control", "no-store");
     try {
-      const saved = store.upsertFeishuBotConfig(workspaceId, parsed.input);
+      const saved = store.upsertFeishuBotConfig(workspaceId, {...parsed.input,actor:currentRequestUserId(c)});
       if (parsed.registrationUsed) {
         store.recordFeishuBotAudit(workspaceId, "registration_used", {
           actorId: currentRequestUserId(c),
@@ -294,6 +295,7 @@ export function registerFeishuBotRoutes(
           domain: saved.domain,
           enabled: saved.enabled,
           sender_access_policy: saved.senderAccessPolicy,
+          responsible_member_id:saved.responsibleMemberId??null,
           revision: saved.revision,
           // Which secrets moved, never what they became.
           app_secret_op: parsed.input.appSecretOp,
@@ -307,9 +309,9 @@ export function registerFeishuBotRoutes(
 
   app.delete("/api/workspaces/:id/feishu-bot", (c) => {
     const workspaceId = c.req.param("id");
-    const denied = requireWorkspaceAdmin(c, store, workspaceId);
+    const denied = requireHumanWorkspaceAdmin(c, store, workspaceId);
     if (denied) return denied;
-    if (!store.deleteFeishuBotConfig(workspaceId)) {
+    if (!store.deleteFeishuBotConfig(workspaceId,currentRequestUserId(c))) {
       return c.json({ error: "feishu bot is not configured" }, 404);
     }
     // The connector is not stopped here: the next heartbeat hands the hosting
@@ -520,6 +522,7 @@ interface FeishuBotConfigBody {
   domain?: unknown;
   enabled?: unknown;
   sender_access_policy?: unknown;
+  responsible_member_id?: string | null;
   app_secret?: unknown;
   app_secret_op?: unknown;
   registration_session_id?: unknown;
@@ -564,6 +567,7 @@ function parseConfigBody(
       domain,
       enabled: body.enabled,
       senderAccessPolicy: body.sender_access_policy,
+      responsibleMemberId:body.responsible_member_id,
       appSecretOp,
       appSecret,
     },
@@ -669,6 +673,7 @@ export function configView(store: MultiremiStore, workspaceId: string): FeishuBo
     domain: config.domain,
     enabled: config.enabled,
     sender_access_policy: config.senderAccessPolicy,
+    responsible_member_id:config.responsibleMemberId??null,
     revision: config.revision,
     app_secret_configured: config.hasAppSecret,
     app_secret_hint: config.appSecretHint,

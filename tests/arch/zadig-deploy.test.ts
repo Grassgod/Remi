@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { parseAllDocuments } from 'yaml';
 
 const repoRoot = resolve(import.meta.dir, "../..");
 const deployRoot = resolve(repoRoot, "deploy/zadig");
@@ -37,6 +38,24 @@ const versionResolution = workflow.slice(
   versionResolutionStart,
   workflow.indexOf('\nelse\n  : "${PPE_LEASE_ID', versionResolutionStart),
 );
+
+function renderPpeRuntimeManifest() {
+  const start = workflow.lastIndexOf('cat <<YAML | "${kubectl_bin}" -n "${namespace}" apply -f -');
+  const end = workflow.indexOf('\nYAML\n', start);
+  const result = spawnSync('bash', ['-c', `set -euo pipefail\nppe_test_kubectl() { cat; }\nkubectl_bin=ppe_test_kubectl\n${workflow.slice(start, end + 6)}`], {
+    encoding: 'utf8', env: { ...process.env, namespace: 'multiremi-ppe-1', GIT_COMMIT: 'a'.repeat(40),
+      PPE_MODE: 'platform-daemon', PPE_SLOT: '1', multiremi_version: '0.2.89',
+      api_image: 'ppe.test/api:candidate', web_image: 'ppe.test/web:candidate', node_port: '32101', daemon_replicas: '1' },
+  });
+  expect(result.status, result.stderr).toBe(0);
+  return parseAllDocuments(result.stdout).map(document => document.toJS()) as Array<{
+    kind: string; metadata: { name: string }; spec: { replicas: number; strategy?: { type: string };
+      template: { spec: { containers: Array<{ name: string; env: Array<{ name: string; value?: string;
+        valueFrom?: { secretKeyRef: { name: string; key: string } } }>;
+        volumeMounts: Array<{ name: string; mountPath: string }> }>;
+        volumes: Array<{ name: string; persistentVolumeClaim?: { claimName: string } }> } } };
+  }>;
+}
 
 function parsePpeVersion(packageJson: string, curlStatus = 0, action = "deploy") {
   return spawnSync("bash", ["-c", `
@@ -152,6 +171,28 @@ describe("Zadig PPE deployment", () => {
     expect(workflow).toContain("wait-for-postgres");
     expect(workflow).toContain("wait-for-api");
     expect(workflow).toContain("ppe-fake-acp-only");
+  });
+
+  test('keeps API migration evidence and state on the same PPE PVC through Pod replacement', () => {
+    const resources = renderPpeRuntimeManifest();
+    const api = resources.find(resource => resource.kind === 'Deployment' && resource.metadata.name === 'api')!;
+    expect(api.spec.replicas).toBe(1);
+    expect(api.spec.strategy).toEqual({ type: 'Recreate' });
+    const pod = api.spec.template.spec;
+    const container = pod.containers.find(candidate => candidate.name === 'api')!;
+    const paths = ['MULTIREMI_STATE_DIR', 'MULTIREMI_CONFIG', 'MULTIREMI_MIGRATION_REPORT_DIR',
+      'MULTIREMI_UPLOAD_DIR', 'MULTIREMI_SESSION_ARCHIVE_ROOT'];
+    for (const name of paths) {
+      const path = container.env.find(variable => variable.name === name)?.value;
+      expect(path, name).toMatch(/^\/srv\/multiremi\//);
+      const mount = container.volumeMounts.find(candidate => path?.startsWith(`${candidate.mountPath}/`))!;
+      expect(pod.volumes.find(volume => volume.name === mount.name)?.persistentVolumeClaim?.claimName).toBe('multiremi-data');
+    }
+    expect(resources.some(resource => resource.kind === 'PersistentVolumeClaim' && resource.metadata.name === 'multiremi-data')).toBe(true);
+    expect(container.env.find(variable => variable.name === 'MULTIREMI_FEISHU_BOT_ENCRYPTION_KEY')?.valueFrom)
+      .toEqual({ secretKeyRef: { name: 'ppe-secrets', key: 'feishu-bot-encryption-key' } });
+    expect(workflow).toContain('feishu_encryption_key="$(openssl rand -base64 32)"');
+    expect(workflow).toContain('--from-literal=feishu-bot-encryption-key="${feishu_encryption_key}"');
   });
 
   test("pins API builds and both deployed containers to the target commit version (MUL-502)", () => {

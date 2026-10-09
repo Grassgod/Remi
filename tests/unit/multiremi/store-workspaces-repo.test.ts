@@ -1,3 +1,5 @@
+import { createResponsibleTestAutopilot } from './helpers.js';
+import { createResponsibleTestIssue } from './helpers.js';
 // Sibling test for packages/server/src/store/repos/workspaces-repo.ts.
 // Drives the carved-out repo directly over its StoreContext (not through the
 // MultiremiStore facade) so a broken delegation cannot mask a broken move.
@@ -138,7 +140,7 @@ describe("WorkspacesRepo", () => {
       stream: "change_requests",
       baselineCompletedAt: "2026-08-22T00:00:00.000Z",
     });
-    const issue = store.createIssue({ title: "Clean SCM state", workspaceId: workspace.id });
+    const issue = createResponsibleTestIssue(store, { title: "Clean SCM state", workspaceId: workspace.id });
     store.advanceScmEntitySnapshot({
       connectionId: connection.id,
       repositoryId: "repo_cleanup",
@@ -173,7 +175,7 @@ describe("WorkspacesRepo", () => {
       provider: "codex",
       workspaceId: workspace.id,
     });
-    const autopilot = store.createAutopilot({
+    const autopilot = createResponsibleTestAutopilot(store, {
       title: "Cleanup automation",
       workspaceId: workspace.id,
       assigneeId: agent.id,

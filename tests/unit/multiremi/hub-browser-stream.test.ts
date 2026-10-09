@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { afterEach, describe, expect, it } from "bun:test";
 import { createHub, type HubImpl, type HubOptions } from "@multiremi/api/hub/hub-core.js";
 import { createLocalHubTransport } from "@multiremi/api/hub/hub-transport.js";
@@ -149,7 +150,7 @@ describe("MUL-436 regression 4B: real Hub browser sink", () => {
   it("sends running gaps and late-revision gaps over the real browser endpoint", async () => {
     const store = createStore();
     const workspace = store.ensureLocalWorkspace();
-    const issue = store.createIssue({ title: "Hub socket gap", workspaceId: workspace.id });
+    const issue = createResponsibleTestIssue(store, { title: "Hub socket gap", workspaceId: workspace.id });
     const session = store.getOrCreateDefaultIssueSession(issue.id, "local");
     const token = await store.createAccessToken({ name: "Hub sink test", type: "pat", workspaceId: workspace.id });
     const hub = createHub({ transport: createLocalHubTransport(), scheduleFlush: () => {}, limits: { ring: { streamMaxFrames: 3 } } });

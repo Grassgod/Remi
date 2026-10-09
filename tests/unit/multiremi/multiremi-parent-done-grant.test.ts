@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue, acceptTestIssueDelivery, prepareTestIssueDelivery, seedHistoricalIssueFacts } from './helpers.js';
 import { issueMessagesPath, requestMessageBody } from "./unified-test-paths.js";
 import { runTurnExecutionMutation } from '@multiremi/store/turn-execution-records.js';
 import type { SqlDatabase as UnifiedFixtureDatabase } from '@multiremi/store/db/postgres.js';
@@ -12,13 +13,14 @@ function setup() {
   store.ensureLocalWorkspace();
   const owner = store.createAgent({ name: "Parent owner", provider: "codex" });
   const other = store.createAgent({ name: "Other agent", provider: "codex" });
-  const parent = store.createIssue({ title: "Parent", status: "in_progress", assigneeType: "agent", assigneeId: owner.id });
-  const child = store.createIssue({ title: "Child", status: "in_progress", parentIssueId: parent.id });
+  const parent = createResponsibleTestIssue(store, { title: "Parent", status: "in_progress", assigneeType: "agent", assigneeId: owner.id,
+    responsibleMemberId:store.findWorkspaceMemberForUser('local','local')!.id });
+  const child = createResponsibleTestIssue(store, { title: "Child", status: "in_progress", parentIssueId: parent.id,assigneeType:'agent',assigneeId:other.id });
   return { store, owner, other, parent, child, app: createMultiremiApp({ store }) };
 }
 
-async function tokens(store: ReturnType<typeof createStore>, ownerId: string) {
-  const task = store.createTask({ agentId: ownerId, prompt: "Summarize parent" });
+async function tokens(store: ReturnType<typeof createStore>, ownerId: string, issueId:string) {
+  const task = store.createTask({ agentId: ownerId, issueId,prompt: "Summarize parent" });
   const taskToken = await store.createTaskAccessToken(task, "local");
   const memberToken = await store.createAccessToken({ name: "Granting member", type: "pat", workspaceId: "local", userId: "local" });
   return { taskToken: taskToken.token, memberToken: memberToken.token };
@@ -32,10 +34,20 @@ function activities(store: ReturnType<typeof createStore>, issueId: string, type
   return store.listIssueActivity(issueId).filter((entry) => entry.type === type);
 }
 
+async function acceptConcreteProxyDelivery(store:ReturnType<typeof createStore>,app:ReturnType<typeof createMultiremiApp>,issueId:string,ownerId:string,memberToken:string) {
+  const prepared=prepareTestIssueDelivery(store,issueId,'All child work formally delivered.');
+  const granted=await app.request(`/api/issues/${issueId}/deliveries/${prepared.delivery.id}/authorize`,{method:'POST',headers:auth(memberToken),
+    body:JSON.stringify({agentId:ownerId,revision:prepared.delivery.responsibilityRevision})});
+  expect(granted.status).toBe(200);
+  const credential=await store.createTaskAccessToken(prepared.executionTask,'local');
+  return app.request(`/api/issues/${issueId}/deliveries/${prepared.delivery.id}/respond`,{method:'POST',headers:auth(credential.token),
+    body:JSON.stringify({action:'accept',revision:prepared.delivery.responsibilityRevision})});
+}
+
 describe("MUL-457 parent done grant", () => {
   it("requires a member to grant, preserves idempotence, and exposes the fixed detail shape", async () => {
     const { store, owner, parent, app } = setup();
-    const { taskToken, memberToken } = await tokens(store, owner.id);
+    const { taskToken, memberToken } = await tokens(store, owner.id,parent.id);
     expect(store.issueParentDoneGrantView(store.getIssue(parent.id)!)).toBeNull();
     expect(store.getIssue(parent.id)).toMatchObject({ parentDoneGrantAt: null, parentDoneGrantBy: null, parentDoneGrantAgentId: null });
     for (const base of ["/api/issues", "/api/multiremi/issues"]) {
@@ -48,8 +60,8 @@ describe("MUL-457 parent done grant", () => {
     const missing = await app.request(`/api/issues/${parent.id}`, {
       method: "PATCH", headers: auth(taskToken), body: JSON.stringify({ status: "done" }),
     });
-    expect(missing.status).toBe(403);
-    expect(await missing.json()).toMatchObject({ code: "parent_done_requires_member", reason: "grant_missing" });
+    expect(missing.status).toBe(409);
+    expect(await missing.json()).toMatchObject({ code: "issue_delivery_acceptance_required" });
 
     for (const base of ["/api/issues", "/api/multiremi/issues"]) {
       const added = await app.request(`${base}/${parent.id}/parent-done-grant`, { method: "POST", headers: auth(memberToken) });
@@ -72,17 +84,17 @@ describe("MUL-457 parent done grant", () => {
     const revoked = await app.request(`/api/issues/${parent.id}`, {
       method: "PATCH", headers: auth(taskToken), body: JSON.stringify({ status: "done" }),
     });
-    expect(revoked.status).toBe(403);
-    expect((await revoked.json()).reason).toBe("grant_missing");
+    expect(revoked.status).toBe(409);
+    expect((await revoked.json()).code).toBe("issue_delivery_acceptance_required");
   });
 
-  it("accepts only an authorized agent's non-empty comment after the final child closed", async () => {
+  it("requires a concrete authorized delivery even after legitimate final comments", async () => {
     const { store, owner, other, parent, child, app } = setup();
-    const { taskToken, memberToken } = await tokens(store, owner.id);
+    const { taskToken, memberToken } = await tokens(store, owner.id,parent.id);
     store.grantParentDone(parent.id, "local");
     store.createIssueComment(parent.id, { body: "Earlier summary", authorType: "agent", authorId: owner.id });
     db!.run("UPDATE multiremi_conversation_log SET created_at = '2020-01-01T00:00:00.000Z' WHERE session_id = ?", [store.getOrCreateDefaultIssueSession(parent.id).id]);
-    store.updateIssue(child.id, { status: "done" });
+    acceptTestIssueDelivery(store,child.id);
     store.createIssueComment(parent.id, { body: "Other agent summary", authorType: "agent", authorId: other.id });
     store.createIssueComment(parent.id, { body: "Member summary", authorType: "member", authorId: "local" });
     const done = () => app.request(`/api/issues/${parent.id}`, {
@@ -92,15 +104,15 @@ describe("MUL-457 parent done grant", () => {
     expect(held.status).toBe(409);
     // MUL-400 S1c (QA round 1): the guard's structured detail is under `data`.
     expect(await held.json()).toMatchObject({
-      code: "final_summary_missing",
-      reason: "final_summary_missing",
-      data: { lastChildClosedAt: expect.any(String) },
+      code: "issue_delivery_acceptance_required",
+      error: expect.stringContaining('delivery'),
     });
     const comment = await app.request(issueMessagesPath(store, parent.id), {
       method: "POST", headers: auth(taskToken), body: JSON.stringify(requestMessageBody(store, { body: "All child work is complete." }, { type: "role", ref: "issue_owner" })),
     });
     expect(comment.status).toBe(200);
-    const accepted = await done();
+    expect((await done()).status).toBe(409);
+    const accepted = await acceptConcreteProxyDelivery(store,app,parent.id,owner.id,memberToken);
     expect(accepted.status).toBe(200);
     expect(activities(store, parent.id, "issue_updated").length).toBeGreaterThan(0);
     expect(activities(store, parent.id, "parent_done_grant_used")[0]?.data).toMatchObject({ source: "api" });
@@ -108,11 +120,11 @@ describe("MUL-457 parent done grant", () => {
     expect(memberToken).toBeTruthy();
   });
 
-  it("returns the guard detail under data on both issue prefixes", async () => {
+  it("returns actionable formal acceptance refusal on both issue prefixes", async () => {
     const { store, owner, parent, child, app } = setup();
-    const { taskToken } = await tokens(store, owner.id);
+    const { taskToken } = await tokens(store, owner.id,parent.id);
     store.grantParentDone(parent.id, "local");
-    store.updateIssue(child.id, { status: "done" });
+    acceptTestIssueDelivery(store,child.id);
     for (const base of ["/api/issues", "/api/multiremi/issues"]) {
       const response = await app.request(`${base}/${parent.id}`, {
         method: "PATCH", headers: auth(taskToken), body: JSON.stringify({ status: "done" }),
@@ -120,8 +132,8 @@ describe("MUL-457 parent done grant", () => {
       expect(response.status, base).toBe(409);
       const body = await response.json();
       expect(body, base).toMatchObject({
-        code: "final_summary_missing",
-        data: { lastChildClosedAt: expect.any(String) },
+        code: "issue_delivery_acceptance_required",
+        error: expect.stringContaining('delivery'),
       });
       // The QA round 1 top-level name is gone; nothing should keep parsing it.
       expect(body.last_child_closed_at, base).toBeUndefined();
@@ -132,10 +144,11 @@ describe("MUL-457 parent done grant", () => {
     const { store, owner, other, parent, child, app } = setup();
     // Give this fixture's canonical member the literal id used by its identity assertions.
     db!.run("UPDATE multiremi_workspace_members SET id='local' WHERE id='mem_local_local'");
-    const { taskToken, memberToken } = await tokens(store, owner.id);
-    const otherTaskToken = (await tokens(store, other.id)).taskToken;
+    store.updateIssue(parent.id,{responsibleMemberId:'local',actorType:'member',actorId:'local'});
+    const { taskToken, memberToken } = await tokens(store, owner.id,parent.id);
+    const otherTaskToken = (await tokens(store, other.id,parent.id)).taskToken;
     store.grantParentDone(parent.id, "local");
-    store.updateIssue(child.id, { status: "done" });
+    acceptTestIssueDelivery(store,child.id);
 
     // 1. Another agent posts with its own task token but claims the owner's id.
     const forgedByAgent = await app.request(issueMessagesPath(store, parent.id), {
@@ -157,7 +170,7 @@ describe("MUL-457 parent done grant", () => {
       method: "PATCH", headers: auth(taskToken), body: JSON.stringify({ status: "done" }),
     });
     expect(afterAgentForgery.status).toBe(409);
-    expect((await afterAgentForgery.json()).code).toBe("final_summary_missing");
+    expect((await afterAgentForgery.json()).code).toBe("issue_delivery_acceptance_required");
 
     // 2. A member PAT posts with the same forged identity; the stored author is
     //    the member, so (b) still does not hold for the agent.
@@ -180,23 +193,25 @@ describe("MUL-457 parent done grant", () => {
       method: "PATCH", headers: auth(taskToken), body: JSON.stringify({ status: "done" }),
     });
     expect(afterMemberForgery.status).toBe(409);
-    expect((await afterMemberForgery.json()).code).toBe("final_summary_missing");
+    expect((await afterMemberForgery.json()).code).toBe("issue_delivery_acceptance_required");
 
-    // 3. The authorized agent's own comment does satisfy (b).
+    // 3. Even the owner's genuine comment requires a concrete delivery and proxy grant.
     const own = await app.request(issueMessagesPath(store, parent.id), {
       method: "POST", headers: auth(taskToken), body: JSON.stringify(requestMessageBody(store, { body: "Owner summary" }, { type: "role", ref: "issue_owner" })),
     });
     expect(own.status).toBe(200);
-    const accepted = await app.request(`/api/issues/${parent.id}`, {
+    const stillRefused = await app.request(`/api/issues/${parent.id}`, {
       method: "PATCH", headers: auth(taskToken), body: JSON.stringify({ status: "done" }),
     });
+    expect(stillRefused.status).toBe(409);
+    const accepted=await acceptConcreteProxyDelivery(store,app,parent.id,owner.id,memberToken);
     expect(accepted.status).toBe(200);
     expect(store.getIssue(parent.id)?.status).toBe("done");
   });
 
   it("keeps member A1 unchanged and invalidates a grant after reassignment", async () => {
     const { store, owner, other, parent, child, app } = setup();
-    const { taskToken, memberToken } = await tokens(store, owner.id);
+    const { taskToken, memberToken } = await tokens(store, owner.id,parent.id);
     store.grantParentDone(parent.id, "local");
     store.updateIssue(child.id, { status: "cancelled" });
     store.createIssueComment(parent.id, { body: "Owner summary", authorType: "agent", authorId: owner.id });
@@ -204,7 +219,10 @@ describe("MUL-457 parent done grant", () => {
       method: "PATCH", headers: auth(memberToken), body: JSON.stringify({ status: "done" }),
     });
     expect(memberDone.status).toBe(409);
-    expect((await memberDone.json()).code).toBe("final_summary_missing");
+    expect((await memberDone.json()).code).toBe("issue_delivery_acceptance_required");
+    const prepared=prepareTestIssueDelivery(store,parent.id);
+    store.authorizeIssueDelivery(parent.id,prepared.delivery.id,owner.id,prepared.delivery.responsibilityRevision,prepared.actor);
+    const oldSource=await store.createTaskAccessToken(prepared.executionTask,'local');
     store.updateIssue(parent.id, { assigneeType: "agent", assigneeId: other.id });
     expect(store.issueParentDoneGrantView(store.getIssue(parent.id)!)).toMatchObject({
       effective: false, ineffective_reason: "assignee_changed", agent_id: owner.id,
@@ -212,21 +230,38 @@ describe("MUL-457 parent done grant", () => {
     const oldAgent = await app.request(`/api/issues/${parent.id}`, {
       method: "PATCH", headers: auth(taskToken), body: JSON.stringify({ status: "done" }),
     });
-    expect(oldAgent.status).toBe(403);
-    expect((await oldAgent.json()).reason).toBe("assignee_changed");
+    expect(oldAgent.status).toBe(409);
+    expect((await oldAgent.json()).code).toBe("issue_delivery_acceptance_required");
+    const staleProxy=await app.request(`/api/issues/${parent.id}/deliveries/${prepared.delivery.id}/respond`,{method:'POST',headers:auth(oldSource.token),
+      body:JSON.stringify({action:'accept',revision:prepared.delivery.responsibilityRevision})});
+    expect(staleProxy.status).toBe(409);
+    expect((await staleProxy.json()).code).toBe('issue_delivery_revision_stale');
+    expect(store.listIssueDeliveries(parent.id)[0]?.status).toBe('pending');
+    expect(store.listIssueDeliveries(parent.id)[0]?.invalidatedAt).toBeTruthy();
     store.grantParentDone(parent.id, "local");
     expect(store.issueParentDoneGrantView(store.getIssue(parent.id)!)).toMatchObject({ effective: true, agent_id: other.id });
     expect(activities(store, parent.id, "parent_done_grant_created")).toHaveLength(2);
   });
 
   it("holds unfinished children after authorization and rejects non-agent owners", async () => {
-    const { store, owner, other, parent, app } = setup();
-    const { taskToken, memberToken } = await tokens(store, owner.id);
+    const { store, owner, other, parent, child, app } = setup();
+    const { taskToken, memberToken } = await tokens(store, owner.id,parent.id);
     store.grantParentDone(parent.id, "local");
     const held = await app.request(`/api/multiremi/issues/${parent.id}`, {
       method: "PATCH", headers: auth(taskToken), body: JSON.stringify({ status: "done" }),
     });
-    expect(await held.json()).toMatchObject({ code: "issue_status_held", reason: "children_open", open_children: 1 });
+    expect(await held.json()).toMatchObject({ code: "issue_delivery_acceptance_required" });
+    acceptTestIssueDelivery(store,child.id);
+    const prepared=prepareTestIssueDelivery(store,parent.id);
+    store.authorizeIssueDelivery(parent.id,prepared.delivery.id,owner.id,prepared.delivery.responsibilityRevision,prepared.actor);
+    store.updateIssue(child.id,{status:'in_progress'});
+    const ownerSource=await store.createTaskAccessToken(prepared.executionTask,'local');
+    const heldDelivery=await app.request(`/api/issues/${parent.id}/deliveries/${prepared.delivery.id}/respond`,{method:'POST',headers:auth(ownerSource.token),
+      body:JSON.stringify({action:'accept',revision:prepared.delivery.responsibilityRevision})});
+    expect(heldDelivery.status).toBe(409);
+    expect(await heldDelivery.json()).toMatchObject({code:'issue_delivery_children_open'});
+    expect(store.countOpenChildIssues(parent.id)).toBe(1);
+    expect(store.listIssueDeliveries(parent.id)[0]?.status).toBe('pending');
     const forced = await app.request(`/api/issues/${parent.id}`, {
       method: "PATCH", headers: auth(taskToken), body: JSON.stringify({ status: "done", force: true }),
     });
@@ -234,18 +269,22 @@ describe("MUL-457 parent done grant", () => {
     expect((await forced.json()).code).toBe("issue_force_requires_member");
     expect(() => store.updateIssue(parent.id, {
       status: "done", force: true, actorType: "agent", actorId: owner.id,
-    })).toThrow("Only a member can force");
-    const otherToken = (await tokens(store, other.id)).taskToken;
+    })).toThrow("specific delivery");
+    const otherToken = (await tokens(store, other.id,parent.id)).taskToken;
     const denied = await app.request(`/api/issues/${parent.id}`, {
       method: "PATCH", headers: auth(otherToken), body: JSON.stringify({ status: "done" }),
     });
-    expect((await denied.json()).reason).toBe("not_owner_agent");
+    expect((await denied.json()).code).toBe("issue_delivery_acceptance_required");
+    const otherDelivery=await app.request(`/api/issues/${parent.id}/deliveries/${prepared.delivery.id}/respond`,{method:'POST',headers:auth(otherToken),
+      body:JSON.stringify({action:'accept',revision:prepared.delivery.responsibilityRevision})});
+    expect(otherDelivery.status).toBe(403);
     store.updateIssue(parent.id, { assigneeType: null, assigneeId: null });
     const invalid = await app.request(`/api/issues/${parent.id}/parent-done-grant`, { method: "POST", headers: auth(memberToken) });
     expect(invalid.status).toBe(409);
     expect((await invalid.json()).code).toBe("parent_done_grant_owner_not_agent");
     const human = store.createWorkspaceMember({ name: "Human owner" });
-    store.updateIssue(parent.id, { assigneeType: "member", assigneeId: human.id });
+    expect(()=>store.updateIssue(parent.id, { assigneeType: "member", assigneeId: human.id })).toThrow('Agent or team Leader');
+    seedHistoricalIssueFacts(store,parent.id,{assigneeType:'member',assigneeId:human.id});
     const memberOwner = await app.request(`/api/issues/${parent.id}/parent-done-grant`, { method: "POST", headers: auth(memberToken) });
     expect(memberOwner.status).toBe(409);
     expect((await memberOwner.json()).code).toBe("parent_done_grant_owner_not_agent");
@@ -255,28 +294,33 @@ describe("MUL-457 parent done grant", () => {
     const { store, owner, other, parent, child, app } = setup();
     const squad = store.createSquad({ name: "Parent squad", leaderId: owner.id, memberIds: [other.id] });
     store.updateIssue(parent.id, { assigneeType: "squad", assigneeId: squad.id });
-    const { taskToken, memberToken } = await tokens(store, owner.id);
+    const { taskToken, memberToken } = await tokens(store, owner.id,parent.id);
     const granted = await app.request(`/api/issues/${parent.id}/parent-done-grant`, { method: "POST", headers: auth(memberToken) });
     expect(granted.status).toBe(200);
     expect((await granted.json()).parent_done_grant).toMatchObject({ agent_id: owner.id, effective: true });
-    store.updateIssue(child.id, { status: "done" });
+    acceptTestIssueDelivery(store,child.id);
     store.createIssueComment(parent.id, { body: "Squad summary", authorType: "agent", authorId: owner.id });
-    const teammateToken = (await tokens(store, other.id)).taskToken;
+    const teammateToken = (await tokens(store, other.id,parent.id)).taskToken;
     const teammate = await app.request(`/api/issues/${parent.id}`, {
       method: "PATCH", headers: auth(teammateToken), body: JSON.stringify({ status: "done" }),
     });
-    expect(teammate.status).toBe(403);
-    const leader = await app.request(`/api/issues/${parent.id}`, {
-      method: "PATCH", headers: auth(taskToken), body: JSON.stringify({ status: "done" }),
-    });
+    expect(teammate.status).toBe(409);
+    expect((await teammate.json()).code).toBe('issue_delivery_acceptance_required');
+    const prepared=prepareTestIssueDelivery(store,parent.id);
+    store.authorizeIssueDelivery(parent.id,prepared.delivery.id,owner.id,prepared.delivery.responsibilityRevision,prepared.actor);
+    const teammateDelivery=await app.request(`/api/issues/${parent.id}/deliveries/${prepared.delivery.id}/respond`,{method:'POST',headers:auth(teammateToken),
+      body:JSON.stringify({action:'accept',revision:prepared.delivery.responsibilityRevision})});
+    expect(teammateDelivery.status).toBe(403);
+    expect((await app.request(`/api/issues/${parent.id}`,{method:'PATCH',headers:auth(taskToken),body:JSON.stringify({status:'done'})})).status).toBe(409);
+    const leader=await acceptConcreteProxyDelivery(store,app,parent.id,owner.id,memberToken);
     expect(leader.status).toBe(200);
   });
 
-  it("accepts a completed result-bearing owner round and applies authorized batch updates atomically", async () => {
+  it("requires formal acceptance after owner completion and preserves atomic authorized batch updates", async () => {
     const { store, owner, other, parent, child, app } = setup();
-    const { taskToken } = await tokens(store, owner.id);
+    const { taskToken,memberToken } = await tokens(store, owner.id,parent.id);
     store.grantParentDone(parent.id, "local");
-    store.updateIssue(child.id, { status: "done" });
+    acceptTestIssueDelivery(store,child.id);
     const finished = store.createTask({ agentId: owner.id, issueId: parent.id, prompt: "Final report" });
     (store as any).ctx.db.transaction(() => {
       (store as any).ctx.lockWorkspaceRuntimeLifecycle("local");
@@ -285,8 +329,8 @@ describe("MUL-457 parent done grant", () => {
       [JSON.stringify({ output: "All children delivered" }), new Date(Date.now() + 1_000).toISOString(), finished.id],
       );
     })();
-    const otherParent = store.createIssue({ title: "Other parent", status: "in_progress", assigneeType: "agent", assigneeId: other.id });
-    const otherChild = store.createIssue({ title: "Other child", status: "in_progress", parentIssueId: otherParent.id });
+    const otherParent = createResponsibleTestIssue(store, { title: "Other parent", status: "in_progress", assigneeType: "agent", assigneeId: other.id });
+    const otherChild = createResponsibleTestIssue(store, { title: "Other child", status: "in_progress", parentIssueId: otherParent.id });
     store.updateIssue(otherChild.id, { status: "cancelled" });
     const beforeBatch = store.getIssue(parent.id)!.status;
     for (const route of ["/api/issues/batch-update", "/api/multiremi/issues/batch-update"]) {
@@ -298,11 +342,16 @@ describe("MUL-457 parent done grant", () => {
       expect(await refused.json()).toMatchObject({ rejected_issue_ids: [otherParent.id] });
       expect(store.getIssue(parent.id)?.status).toBe(beforeBatch);
     }
-    const accepted = await app.request("/api/issues/batch-update", {
+    const missingReceipt = await app.request("/api/issues/batch-update", {
       method: "POST", headers: auth(taskToken),
       body: JSON.stringify({ issue_ids: [parent.id], updates: { status: "done" } }),
     });
+    expect(missingReceipt.status).toBe(409);
+    expect(store.getIssue(parent.id)?.status).toBe(beforeBatch);
+    const accepted=await acceptConcreteProxyDelivery(store,app,parent.id,owner.id,memberToken);
     expect(accepted.status).toBe(200);
+    const noop=await app.request('/api/issues/batch-update',{method:'POST',headers:auth(taskToken),body:JSON.stringify({issue_ids:[parent.id],updates:{status:'done'}})});
+    expect(noop.status).toBe(200);
     expect(store.getIssue(parent.id)?.status).toBe("done");
     expect(activities(store, parent.id, "parent_done_grant_used")).toHaveLength(1);
   });

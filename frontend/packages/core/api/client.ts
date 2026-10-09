@@ -37,6 +37,7 @@ import { PlatformEndpoints } from "./endpoints/platform";
 import { FeishuEndpoints } from "./endpoints/feishu";
 import { FeishuBotEndpoints } from "./endpoints/feishu-bot";
 import { KnowledgeEndpoints } from "./endpoints/knowledge";
+import { IssueResponsibilityEndpoints } from "./endpoints/issue-responsibility";
 
 export { ApiError, PreviewTooLargeError, PreviewUnsupportedError } from "./http";
 export type { ApiClientIdentity, ApiClientOptions } from "./http";
@@ -97,6 +98,7 @@ export const ENDPOINT_FACTORIES: ReadonlyArray<(http: HttpClient) => object> = [
   (http: HttpClient) => new FeishuEndpoints(http),
   (http: HttpClient) => new FeishuBotEndpoints(http),
   (http: HttpClient) => new KnowledgeEndpoints(http),
+  (http: HttpClient) => new IssueResponsibilityEndpoints(http),
 ];
 
 // Declaration merging: the facade's type is the union of every endpoint
@@ -147,7 +149,8 @@ export interface ApiClient extends
     PlatformEndpoints,
     FeishuEndpoints,
     FeishuBotEndpoints,
-    KnowledgeEndpoints {}
+    KnowledgeEndpoints,
+    IssueResponsibilityEndpoints {}
 
 // eslint-disable-next-line @typescript-eslint/no-unsafe-declaration-merging -- see the interface above
 export class ApiClient {

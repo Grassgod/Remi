@@ -1,3 +1,5 @@
+import { createResponsibleTestAutopilot } from './helpers.js';
+import { createResponsibleTestIssue } from './helpers.js';
 import { requestMessageBody, taskRequestPath, mutateExecutionFixture, sentTask } from "./unified-test-paths.js";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, spyOn } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
@@ -93,11 +95,11 @@ for (const dialect of ["sqlite", "postgres"] as const) {
       const project = store.createProject({
         title: "Deletion defaults", workspaceId, defaultAssigneeType: "agent", defaultAssigneeId: agent.id,
       });
-      const autopilot = store.createAutopilot({
+      const autopilot = createResponsibleTestAutopilot(store, {
         title: "Deletion automation", workspaceId, assigneeId: agent.id, executionMode: "run_only", status: "active",
       });
-      const parent = store.createIssue({ title: "Parent", workspaceId, status: "in_progress" });
-      const issue = store.createIssue({
+      const parent = createResponsibleTestIssue(store, { title: "Parent", workspaceId, status: "in_progress" });
+      const issue = createResponsibleTestIssue(store, {
         title: "Workspace and child status", workspaceId, projectId: project.id, parentIssueId: parent.id,
       });
       store.reportIssueWorkspace({

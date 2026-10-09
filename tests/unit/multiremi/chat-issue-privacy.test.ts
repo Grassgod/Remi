@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { turnApiPath, mutateExecutionFixture } from "./unified-test-paths.js";
 import { afterEach, describe, expect, it } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
@@ -14,7 +15,7 @@ async function setup() {
   const alice = await store.createAccessToken({ name: "Alice", type: "pat", userId: "alice", workspaceId: "local" });
   const bob = await store.createAccessToken({ name: "Bob", type: "pat", userId: "bob", workspaceId: "local" });
   const agent = store.createAgent({ name: "Shared agent", provider: "codex", workspaceId: "local", visibility: "workspace" });
-  const issue = store.createIssue({ title: "Team issue", workspaceId: "local", createdBy: "alice" });
+  const issue = createResponsibleTestIssue(store, { title: "Team issue", workspaceId: "local", createdBy: "alice" });
   const chat = store.createChatSession({ agentId: agent.id, creatorId: "alice" });
   const privateTask = store.sendChatMessage(chat.id, { content: "PRIVATE_CHAT_PROMPT" }).task;
   // Historical tasks can still reference an Issue after their Chat binding is

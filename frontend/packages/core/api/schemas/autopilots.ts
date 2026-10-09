@@ -52,6 +52,7 @@ export const AutopilotEventConfigSchema = z.union([
 ]);
 
 export const AutopilotSchema = z.object({
+  responsible_member_id: z.string().nullable().optional().default(null),
   id: z.string(),
   workspace_id: z.string(),
   title: z.string(),

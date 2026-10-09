@@ -1,3 +1,5 @@
+import { createResponsibleTestIssue } from './helpers.js';
+import { seedHistoricalDecision, seedQuestionHumanMapping } from './fixtures/historical-decision.js';
 import { afterAll, beforeAll, describe, expect, it, spyOn } from "bun:test";
 import { createHash } from "node:crypto";
 import { createMultiremiApp } from "@multiremi/api.js";
@@ -72,6 +74,7 @@ for (const backend of ["SQLite", "Postgres"] as const) {
       const member = store.listWorkspaceMembers(workspaceId).find(item => item.role === "owner")!;
       const user = store.getOrCreateUser({ externalId: recipient, name: "Token recipient", email: `mul487-${n}@example.com` });
       db.run("UPDATE multiremi_workspace_members SET user_id = ? WHERE id = ?", [user.id, member.id]);
+      seedQuestionHumanMapping(db, workspaceId, 'cli_mul487', user.id, recipient);
       const agent = store.createAgent({ name: "Question bot", provider: "codex", workspaceId });
       const runtimeId = `rt_mul487_${n}`;
       const daemonId = `daemon_mul487_${n}`;
@@ -79,22 +82,24 @@ for (const backend of ["SQLite", "Postgres"] as const) {
       store.heartbeatRuntime(runtimeId, { supportsFeishuBotConfig: true, supportsDecisionCard: true, supportsIssueDecisionCard: true });
       const config = store.upsertFeishuBotConfig(workspaceId, {
         agentId: agent.id, runtimeId, appId: "cli_mul487", appSecretOp: "set", appSecret: fixtureSecret, domain: "feishu", enabled: true,
+        responsibleMemberId: member.id,
       });
       store.reportFeishuBotRuntimeStatus(workspaceId, runtimeId, { appliedRevision: config.revision, state: "online" });
       store.updateWorkspace(workspaceId, { settings: { ...workspace.settings,
         issueTopics: { enabled: true, chatId: `oc_mul487_${n}`, notifyMode: mode, ...(mode === "person" ? { notifyOpenId: recipient } : {}) },
       } });
-      const issue = store.createIssue({ title: "Question parent", workspaceId, assigneeType: "agent", assigneeId: agent.id });
+      const issue = createResponsibleTestIssue(store, { title: "Question parent", workspaceId, assigneeType: "agent", assigneeId: agent.id,
+        responsibleMemberId: member.id });
       store.prepareFeishuIssueTopicWithinTransaction(issue);
       const root = store.claimFeishuBotOutbound(workspaceId, runtimeId)!;
       store.reportFeishuBotOutbound(workspaceId, runtimeId, root.id, { claimToken: root.claimToken, status: "sent", externalMessageId: `om_root_${n}` });
-      const source = lane === "fd" ? store.createIssue({ title: "Question source", workspaceId, parentIssueId: issue.id,
+      const source = lane === "fd" ? createResponsibleTestIssue(store, { title: "Question source", workspaceId, parentIssueId: issue.id,
         assigneeType: "agent", assigneeId: agent.id }) : issue;
       const task = store.createTask({ agentId: agent.id, workspaceId, issueId: source.id, prompt: "Do the work" });
       const request = lane === "fr"
         ? store.createTaskHumanRequest({ taskId: task.id, kind: "question", timeoutMs: 60 * 60_000,
           payload: { questions: [{ question: "Continue?", options: [{ label: "Yes" }, { label: "No" }] }] } })
-        : store.createIssueDecision(source.id, { kind: "production_change", title: "Deploy?", options: ["Yes", "No"] },
+        : seedHistoricalDecision(store, source.id, { kind: "production_change", title: "Deploy?", options: ["Yes", "No"] },
           { type: "agent", id: agent.id, taskId: task.id });
       const delivery = store.claimFeishuBotOutbound(workspaceId, runtimeId)!;
       const token = action(delivery).t as string;
@@ -103,7 +108,7 @@ for (const backend of ["SQLite", "Postgres"] as const) {
       const path = `/api/daemon/messages/${request.id}/answer`;
       const respond = (suppliedToken: unknown = token, operator: unknown = recipient) => api.request(path, {
         method: "POST", headers: { Authorization: `Bearer ${access.token}`, "content-type": "application/json" },
-        body: JSON.stringify({ token: suppliedToken, operator_open_id: operator,
+        body: JSON.stringify({ token: suppliedToken, operator_open_id: operator, expected_route_revision: store.getQuestion(request.id)!.route_revision,
           ...(lane === "fr" ? { response: { answers: { "Continue?": "Yes" } } } : { answer: "Yes" }) }),
       });
       const sent = (card = delivery, openId = recipient, now?: Date) => store.reportFeishuBotOutbound(workspaceId, runtimeId, card.id, {
@@ -134,7 +139,7 @@ for (const backend of ["SQLite", "Postgres"] as const) {
         const replay = await f.respond();
         expect(replay.status).toBe(403);
         expect(await replay.json()).toMatchObject({ code: "token_consumed" });
-        if (lane === "fr") expect(store.getTaskHumanRequest(f.request.id)?.respondedBy).toBe(f.recipient);
+        if (lane === "fr") expect(store.getTaskHumanRequest(f.request.id)?.respondedBy).toBe(f.member.id);
         else expect(store.getIssueDecision(f.issue.id, f.request.id)?.answeredByMemberId).toBe(f.member.id);
       });
 
@@ -157,10 +162,10 @@ for (const backend of ["SQLite", "Postgres"] as const) {
         expect((await f.respond()).status).toBe(200);
       });
 
-      it(`${lane}: binds group owner only on sent and never overwrites the recipient`, async () => {
+      it(`${lane}: binds the designated human despite a group-owner topic setting and never overwrites the recipient`, async () => {
         const f = await setup(lane, "group_owner");
-        expect(f.row().token_recipient).toBeNull();
-        const unbound = await f.respond();
+        expect(f.row().token_recipient).toBe(f.recipient);
+        const unbound = await f.respond(f.token, 'ou_unconfigured_group_owner');
         expect(unbound.status).toBe(403);
         expect(await unbound.json()).toMatchObject({ code: "recipient_mismatch" });
         expect(f.sent()).toBe(true);
@@ -181,7 +186,7 @@ for (const backend of ["SQLite", "Postgres"] as const) {
         expect(questionCardIdempotencyKey(decodeDecisionCardBody(retry.body)!.card, retry.idempotencyKey)
           === questionCardIdempotencyKey(decodeDecisionCardBody(f.delivery.body)!.card, f.delivery.idempotencyKey)).toBe(false);
         expect(f.sent(f.delivery, "ou_stale_owner")).toBe(false);
-        expect(f.row().token_recipient).toBeNull();
+        expect(f.row().token_recipient).toBe(f.recipient);
         f.sent(retry);
         const stale = await f.respond(f.token);
         expect(stale.status).toBe(403);
@@ -193,8 +198,7 @@ for (const backend of ["SQLite", "Postgres"] as const) {
         const f = await setup(lane);
         const sentAt = new Date();
         f.sent(f.delivery, f.recipient, sentAt);
-        const due = lane === "fd" ? sentAt.getTime() + 51 * 60_000
-          : new Date(store.getTaskHumanRequest(f.request.id)!.expiresAt!).getTime() - 61_000;
+        const due = sentAt.getTime() + 51 * 60_000;
         const reminder = store.claimFeishuBotOutbound(f.workspaceId, f.runtimeId, new Date(due))!;
         expect(reminder.kind).toBe("decision_reminder");
         expect(reminder.targetMessageId).toBe(`om_card_${f.n}`);
@@ -234,12 +238,7 @@ for (const backend of ["SQLite", "Postgres"] as const) {
         f.sent(f.delivery, "ou_wrong_sent_recipient");
         expect(f.row().token_recipient).toBe(f.recipient);
         const result = await f.respond();
-        if (lane === "fr") expect(result.status).toBe(200);
-        else {
-          expect(result.status).toBe(403);
-          expect(await result.json()).toMatchObject({ code: "decision_operator_mismatch" });
-          expect(f.row().token_consumed_at).toBeNull();
-        }
+        expect(result.status).toBe(200);
       });
 
       it(`${lane}: click survives restart with no message registration and ignores chat identity`, async () => {
@@ -304,7 +303,11 @@ for (const backend of ["SQLite", "Postgres"] as const) {
       expect(nativeToken === f.token).toBe(false);
       const changedRecipient = "ou_new_addressee";
       const changedUser = store.getOrCreateUser({ externalId: changedRecipient, name: "New addressee" });
-      store.createWorkspaceMember({ workspaceId: f.workspaceId, userId: changedUser.id, name: "New addressee", role: "member" });
+      const changedMember = store.createWorkspaceMember({ workspaceId: f.workspaceId, userId: changedUser.id, name: "New addressee", role: "member" });
+      seedQuestionHumanMapping(db, f.workspaceId, 'cli_mul487', changedUser.id, changedRecipient);
+      expect((await mint(changedRecipient)).status).toBe(409);
+      expect(f.row().token_recipient).toBe(f.recipient);
+      store.updateIssue(f.issue.id, { responsibleMemberId: changedMember.id, actorType: 'member', actorId: f.member.id });
       const retargeted = await mint(changedRecipient);
       expect(retargeted.status).toBe(200);
       const newToken = questionCardAction((await retargeted.json()).card)!.t as string;
@@ -339,7 +342,8 @@ for (const backend of ["SQLite", "Postgres"] as const) {
       expect(typeof credential?.t).toBe("string");
       const other = await store.createAccessToken({ name: "Not the bot host", type: "daemon", workspaceId: f.workspaceId,
         daemonId: `daemon_other_${f.n}` });
-      const answer = JSON.stringify({ token: credential!.t, operator_open_id: f.recipient, response: { answers: { "Continue?": "Yes" } } });
+      const answer = JSON.stringify({ token: credential!.t, operator_open_id: f.recipient,
+        expected_route_revision: store.getQuestion(request.id)!.route_revision, response: { answers: { "Continue?": "Yes" } } });
       for (const [suffix, body] of [["card", cardInput], ["answer", answer]]) {
         expect((await f.api.request(`${path}/${suffix}`, { method: "POST",
           headers: { ...headers, Authorization: `Bearer ${other.token}` }, body })).status).toBe(403);
@@ -373,7 +377,8 @@ for (const backend of ["SQLite", "Postgres"] as const) {
       const presentation = new FeishuTaskPresentation(h.client as any, "oc_mul487", {
         taskId: f.task.id, getHumanRequest: async () => store.getTaskHumanRequest(f.request.id),
         prepareHumanRequestCard: async (id, recipient) => store.prepareTaskStreamQuestionCard(id, recipient)!,
-        respondHumanRequest: async (_id, response, credential) => store.respondTaskHumanRequest(f.request.id, { response, cardCredential: credential })!,
+        respondHumanRequest: async (_id, response, credential) => store.respondTaskHumanRequest(f.request.id,
+          { response, cardCredential: credential, respondedBy: f.member.id, expectedRouteRevision: store.getQuestion(f.request.id)!.route_revision })!,
       }, { appId: "cli_mul487", idempotencyKey: "native-token-retry", interactionOpenId: f.recipient, save: h.save });
       async function* stream() {
         yield taskEvent(1, "question_request", { input: { request_id: f.request.id } });
@@ -411,8 +416,11 @@ for (const backend of ["SQLite", "Postgres"] as const) {
         const stop = registerQuestionCardClient("cli_mul487_checker", {
           getRequest: async () => null, respond: async () => { throw new Error("not a task card"); },
           getDecision: async () => store.getIssueDecision(f.issue.id, f.request.id),
-          answer: async (_requestId, answer, credential) => store.answerIssueDecision(f.issue.id, f.request.id,
-            { answer, reason: "", overturn: "" }, { type: "member", id: f.member.id, taskId: null }, { cardCredential: credential }),
+          answer: async (_requestId, answer, credential) => {
+            store.answerMessageDecision(f.request.id, { body_md: answer, sender: { type: 'member', id: f.member.id },
+              credential, expected_route_revision: store.getQuestion(f.request.id)!.route_revision });
+            return store.getIssueDecision(f.issue.id, f.request.id)!;
+          },
         });
         try {
           const result = await handleIssueDecisionInteractionEvent("cli_mul487_checker", {
@@ -449,20 +457,22 @@ for (const backend of ["SQLite", "Postgres"] as const) {
     it("fr and fd: member web answers still work without a card credential", async () => {
       const fr = await setup("fr");
       const frToken = await store.createAccessToken({ name: "Member answer", type: "pat", workspaceId: fr.workspaceId, userId: fr.user.id });
-      const frResponse = await fr.api.request(`/api/sessions/${store.getMessage(fr.request.id)!.session_id}/messages`, {
+      const frResponse = await fr.api.request(`/api/messages/${fr.request.id}/question/answer`, {
         method: "POST", headers: { Authorization: `Bearer ${frToken.token}`, "content-type": "application/json" },
-        body: JSON.stringify({ reply_to_id: fr.request.id, body_md: "No", response: { answers: { "Continue?": "No" } } }),
+        body: JSON.stringify({ expected_route_revision: store.getQuestion(fr.request.id)!.route_revision,
+          body_md: "No", response: { answers: { "Continue?": "No" } } }),
       });
       expect(frResponse.status).toBe(200);
       const fd = await setup("fd");
       const memberToken = await store.createAccessToken({ name: "Member answer", type: "pat", workspaceId: fd.workspaceId, userId: fd.user.id });
-      const fdResponse = await fd.api.request(`/api/sessions/${store.getMessage(fd.request.id)!.session_id}/messages`, {
+      const fdResponse = await fd.api.request(`/api/messages/${fd.request.id}/question/answer`, {
         method: "POST", headers: { Authorization: `Bearer ${memberToken.token}`, "content-type": "application/json" },
-        body: JSON.stringify({ reply_to_id: fd.request.id, body_md: "No" }),
+        body: JSON.stringify({ expected_route_revision: store.getQuestion(fd.request.id)!.route_revision, body_md: "No", response: { answer: 'No' } }),
       });
       expect(fdResponse.status).toBe(200);
       expect(fd.row().status).toBe("answered");
-      expect(fd.row().token_consumed_at).toBeNull();
+      expect(typeof fd.row().token_consumed_at).toBe('string');
+      expect((await fd.respond()).status).toBe(403);
     });
 
 

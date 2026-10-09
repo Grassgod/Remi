@@ -1,10 +1,11 @@
 import type { MultiremiStore } from "@multiremi/store.js";
 
-export function configureKindBot(store: MultiremiStore, workspaceId = "local", runtimeId = "rt_kinds") {
+export function configureKindBot(store: MultiremiStore, workspaceId = "local", runtimeId = "rt_kinds", responsibleMemberId?: string) {
   const agent = store.createAgent({ name: "Kind bot", provider: "codex", workspaceId });
   store.registerRuntime({ id: runtimeId, name: "Kind host", provider: "codex", workspaceId, daemonId: `daemon_${runtimeId}` });
   store.heartbeatRuntime(runtimeId, { supportsFeishuBotConfig: true });
   const config = store.upsertFeishuBotConfig(workspaceId, { agentId: agent.id, runtimeId,
+    ...(responsibleMemberId ? { responsibleMemberId } : {}),
     appId: "cli_kind_test", appSecretOp: "set", appSecret: "local-fake-channel-secret", domain: "feishu", enabled: true });
   store.reportFeishuBotRuntimeStatus(workspaceId, runtimeId, { appliedRevision: config.revision, state: "online" });
   const inbound = (suffix: string) => {

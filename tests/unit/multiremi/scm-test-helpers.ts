@@ -269,3 +269,4 @@ export class MemoryScmIngestionStore implements ScmIngestionStore {
     return { event, created, evidenceCreated };
   }
 }
+export { createResponsibleTestIssue, acceptTestIssueDelivery } from './helpers.js';

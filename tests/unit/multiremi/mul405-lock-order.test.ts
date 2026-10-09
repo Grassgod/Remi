@@ -1,3 +1,5 @@
+import { createResponsibleTestAutopilot } from './helpers.js';
+import { createResponsibleTestIssue } from './helpers.js';
 /**
  * MUL-405: the Feishu and Autopilot paths must take the workspace lifecycle row
  * lock and the Issue number lock in the SAME order.
@@ -174,6 +176,7 @@ function recordFeishuOrder(): LockName[] {
   });
   store.heartbeatRuntime("rt_lock_order", { supportsFeishuBotConfig: true });
   const config = store.upsertFeishuBotConfig("local", {
+    responsibleMemberId:store.findWorkspaceMemberForUser('local','local')!.id,
     agentId: agent.id,
     runtimeId: "rt_lock_order",
     appId: "cli_lock_order",
@@ -227,7 +230,7 @@ function recordFeishuOrder(): LockName[] {
 function recordAutopilotOrder(): LockName[] {
   const { store, recorder } = freshStore();
   const agent = store.createAgent({ name: "Automation", provider: "codex", workspaceId: "local" });
-  const autopilot = store.createAutopilot({
+  const autopilot = createResponsibleTestAutopilot(store, {
     title: "Create an Issue",
     assigneeId: agent.id,
     workspaceId: "local",
@@ -245,7 +248,7 @@ function recordAutopilotOrder(): LockName[] {
 function recordCreateIssueOrder(): LockName[] {
   const { store, recorder } = freshStore();
   recorder.locks.length = 0;
-  store.createIssue({ title: "Plain create", workspaceId: "local" });
+  createResponsibleTestIssue(store, { title: "Plain create", workspaceId: "local" });
   return [...recorder.locks];
 }
 

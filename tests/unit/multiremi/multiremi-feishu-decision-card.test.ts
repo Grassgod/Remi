@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { runTurnExecutionMutation } from '@multiremi/store/turn-execution-records.js';
 import type { SqlDatabase as UnifiedFixtureDatabase } from '@multiremi/store/db/postgres.js';
 /**
@@ -75,6 +76,13 @@ function scaffold(options: {
   notifyOpenId?: string;
 } = {}) {
   const store = createLocalStore();
+  const member = store.getWorkspaceMember('mem_local_local')!;
+  const person = store.getOrCreateUser({ externalId: 'ou_the_person', name: 'Explicit question human' });
+  db.run('UPDATE multiremi_workspace_members SET user_id=? WHERE id=?', [person.id, member.id]);
+  db.run('UPDATE multiremi_users SET feishu_union_id=? WHERE id=?', ['on_the_person', person.id]);
+  const seen = new Date().toISOString();
+  db.run(`INSERT INTO multiremi_feishu_bot_senders(id,workspace_id,app_id,open_id,union_id,display_name,allowed,first_seen_at,last_seen_at)
+    VALUES('fbs_explicit_question_human','local','cli_decision_card','ou_the_person','on_the_person','Human',1,?,?) ON CONFLICT(id) DO NOTHING`, [seen, seen]);
   const agentId = store.createAgent({ name: "Concierge", provider: "codex", workspaceId: "local" }).id;
   store.registerRuntime({ id: "rt_bot", name: "Bot host", provider: "codex", workspaceId: "local", daemonId: "bot-host" });
   store.heartbeatRuntime("rt_bot", {
@@ -89,6 +97,7 @@ function scaffold(options: {
     appSecret: APP_SECRET,
     domain: "feishu",
     enabled: true,
+    responsibleMemberId: member.id,
   });
   store.reportFeishuBotRuntimeStatus("local", "rt_bot", { appliedRevision: config.revision, state: "online" });
   const workspace = store.getWorkspace("local")!;
@@ -109,7 +118,7 @@ function scaffold(options: {
 
 /** An Issue whose topic root message has been sent, so replies have a seed. */
 function issueWithTopic(store: MultiremiStore, agentId: string, title = "Decision card issue") {
-  const issue = store.createIssue({ title, workspaceId: "local", assigneeType: "agent", assigneeId: agentId });
+  const issue = createResponsibleTestIssue(store, { title, workspaceId: "local", assigneeType: "agent", assigneeId: agentId, responsibleMemberId: 'mem_local_local' });
   store.prepareFeishuIssueTopicWithinTransaction(issue);
   const root = store.claimFeishuBotOutbound("local", "rt_bot")!;
   store.reportFeishuBotOutbound("local", "rt_bot", root.id, {
@@ -120,9 +129,13 @@ function issueWithTopic(store: MultiremiStore, agentId: string, title = "Decisio
 
 /** A task that runs on another machine, exactly as production does. */
 function sourceTask(store: MultiremiStore, agentId: string, issueId: string): string {
-  const task = store.createTask({ agentId, issueId, workspaceId: "local", prompt: "Work the Issue" });
-  store.registerRuntime({ id: `rt_worker_${task.id}`, name: "Executor", provider: "claude", workspaceId: "local", daemonId: `worker-${task.id}` });
+  const session = store.createIssueSession(issueId, { title: `Card test ${store.listTasks().length}`, holdsWorkspace: false });
+  const task = store.createTask({ agentId, issueId, issueSessionId: session.id, workspaceId: "local", prompt: "Work the Issue",
+    priority: 10 + store.listTasks().length });
+  store.registerRuntime({ id: `rt_worker_${task.id}`, name: "Executor", provider: store.getAgent(agentId)!.provider, workspaceId: "local", daemonId: `worker-${task.id}` });
   runTurnExecutionMutation(db! as unknown as UnifiedFixtureDatabase,"UPDATE multiremi_turn_execution_records SET runtime_id = ? WHERE id = ?", [`rt_worker_${task.id}`, task.id]);
+  expect(store.claimTask(`rt_worker_${task.id}`)?.id).toBe(task.id);
+  store.startTask(task.id);
   return task.id;
 }
 
@@ -135,7 +148,9 @@ function patchHumanRequestFixture(id: string, fields: Record<string, unknown>): 
 
 function cloneSettledQuestion(store: MultiremiStore, sourceId: string, id: string, respondedAt?: string): void {
   const source = store.getMessage(sourceId)!;
-  const metadata = { ...source.metadata, human_request: { ...(source.metadata.human_request as object), ...(respondedAt ? { responded_at: respondedAt } : {}) } };
+  // Read-budget rows are actual historical human_request records, without a
+  // native wait or a copied modern Q identity/token.
+  const metadata = { human_request: { ...(source.metadata.human_request as object), ...(respondedAt ? { responded_at: respondedAt } : {}) } };
   store.sendMessage({ id, session_id: source.session_id, sender: { type: "agent", id: source.sender_id },
     source_turn_id: source.task_id, to: { type: "none" }, body_md: source.body_md, message_kind: "decision", wake_requested: "inbox_only", metadata });
 }
@@ -174,15 +189,49 @@ function cloneSettledQuestionBatch(store: MultiremiStore, sourceId: string, coun
 }
 
 function askQuestion(store: MultiremiStore, taskId: string, timeoutMs?: number) {
-  return store.createTaskHumanRequest({
-    taskId,
-    kind: "question",
-    ...(timeoutMs === undefined ? {} : { timeoutMs }),
-    payload: {
+  const task = store.getTask(taskId)!;
+  const turn = store.getTurnForAttempt(taskId)!;
+  const runtime = store.getRuntimeLite(task.runtimeId!)!;
+  const count = store.listTaskHumanRequests(taskId).length;
+  const result = store.getDaemonTurnBridge().rpc('turn.decision', {
+    turn_id: turn.id, attempt_id: taskId, dedupe_key: `question-card:${taskId}:${count}`,
+    wait_id: `native-question-card:${taskId}:${count}`, body_md: 'Should I continue?',
+    options: [{ label: 'Yes', value: 'Yes' }, { label: 'No', value: 'No' }],
+    timeout_ms: timeoutMs ?? 60 * 60 * 1000,
+    metadata: {
+      kind: 'question',
       message: "Should I continue?",
       questions: [{ question: "Continue?", options: [{ label: "Yes" }, { label: "No" }] }],
     },
-  });
+  }, { runtimeId: runtime.id, daemonId: runtime.daemonId!, workspaceId: task.workspaceId });
+  expect(result.ok, String(result.error)).toBe(true);
+  expect(store.getQuestion(String(result.message_id))?.wait_status).toBe('waiting');
+  return store.getTaskHumanRequest(String(result.message_id))!;
+}
+
+/** Deadline-window regressions retain the exact pre-Q metadata shape. */
+function historicalQuestion(store: MultiremiStore, taskId: string, timeoutMs = 60 * 60 * 1000) {
+  const turn = store.getTurnForAttempt(taskId)!;
+  const task = store.getTask(taskId)!;
+  const createdAt = new Date().toISOString();
+  const expiresAt = new Date(Date.parse(createdAt) + timeoutMs).toISOString();
+  const message = store.sendMessage({ session_id: turn.session_id, source_turn_id: turn.id,
+    sender: { type: 'agent', id: task.agentId }, to: { type: 'none' }, message_kind: 'decision',
+    wake_requested: 'inbox_only', body_md: 'Should I continue?', metadata: { human_request: {
+      task_id: taskId, kind: 'question', status: 'pending', expires_at: expiresAt,
+      payload: { message: 'Should I continue?', questions: [{ question: 'Continue?', options: [{ label: 'Yes' }, { label: 'No' }] }] },
+    } } });
+  const request = store.getTaskHumanRequest(message.message.id)!;
+  db.run('UPDATE multiremi_conversation_log SET created_at=? WHERE id=?', [createdAt, request.id]);
+  store.prepareFeishuBotHumanRequestPush(request);
+  expect(store.getMessage(message.message.id)?.metadata.question).toBeUndefined();
+  expect(store.getQuestion(message.message.id)?.wait_status).toBe('detached');
+  return request;
+}
+
+function fixedReminderAt(store: MultiremiStore, id: string) {
+  const row = db.query("SELECT MAX(sent_at) AS sent_at FROM multiremi_feishu_bot_outbound_deliveries WHERE human_request_id=? AND kind='decision_card' AND status='sent'").get(id)!;
+  return Date.parse(String(row.sent_at)) + 50 * 60 * 1000;
 }
 
 async function readDecisionRequest(store: MultiremiStore, daemonId: string, requestId: string) {
@@ -195,6 +244,12 @@ async function readDecisionRequest(store: MultiremiStore, daemonId: string, requ
   if (response.status === 403 || response.status === 404) return null;
   expect(response.status).toBe(200);
   return (await response.json() as { request: import('@multiremi/contracts/types.js').MultiremiTaskHumanRequest }).request;
+}
+
+/** A Web answer carries the explicit human and the revision read from this Q. */
+function respondQuestion(store: MultiremiStore, id: string, input: Parameters<MultiremiStore['respondTaskHumanRequest']>[1]) {
+  return store.respondTaskHumanRequest(id, { ...input, respondedBy: 'mem_local_local',
+    expectedRouteRevision: input.expectedRouteRevision ?? input.cardCredential?.routeRevision ?? store.getQuestion(id)!.route_revision });
 }
 
 describe("Feishu decision cards for Issue human requests", () => {
@@ -242,7 +297,7 @@ describe("Feishu decision cards for Issue human requests", () => {
     ).get(request.id)).toEqual({ n: 1 });
   });
 
-  it("falls back to the relay wake when the bot host predates decision cards", () => {
+  it("keeps the same Q and sends text when the bot host predates decision cards", () => {
     const { store, agentId } = scaffold({ hostSupportsCard: false });
     expect(store.getRuntime("rt_bot")!.metadata[FEISHU_DECISION_CARD_CAPABILITY]).toBeUndefined();
     const issue = issueWithTopic(store, agentId);
@@ -250,17 +305,16 @@ describe("Feishu decision cards for Issue human requests", () => {
     const before = store.listTasks().length;
     const request = askQuestion(store, taskId);
 
-    // The pre-MUL-407 behavior: a workspace-free relay Task carries the prompt.
-    expect(store.listTasks()).toHaveLength(before + 1);
-    const wake = store.listTasks().find((task) => task.prompt.includes(`Human request id: ${request.id}`))!;
-    expect(wake).toBeDefined();
+    expect(store.listTasks()).toHaveLength(before);
     const delivery = store.claimFeishuBotOutbound("local", "rt_bot", undefined, true)!;
-    expect(delivery.taskId).toBe(wake.id);
-    expect(delivery.kind).toBeUndefined();
+    expect(delivery.taskId).toBeUndefined();
+    expect(delivery.kind).toBe('decision_card');
+    expect(delivery.degraded).toBe('send_failed');
+    expect(delivery.humanRequestId).toBe(request.id);
     expect(delivery.body).toContain("Should I continue?");
     expect(db!.query(
       "SELECT wake_task_id, delivery_id FROM multiremi_feishu_bot_human_request_pushes WHERE request_id = ?",
-    ).get(request.id)).toEqual({ wake_task_id: wake.id, delivery_id: delivery.id });
+    ).get(request.id)).toEqual({ wake_task_id: null, delivery_id: delivery.id });
   });
 
   it("still degrades to text on a host that cannot render cards", () => {
@@ -275,7 +329,7 @@ describe("Feishu decision cards for Issue human requests", () => {
     expect(store.listTasks()).toHaveLength(before);
     const delivery = store.claimFeishuBotOutbound("local", "rt_bot", undefined, true)!;
     expect(delivery.kind).toBe("decision_card");
-    expect(delivery.degraded).toBe("notify_none");
+    expect(delivery.degraded).toBe("send_failed");
     expect(decodeDecisionCardBody(delivery.body)).toBeNull();
     expect(delivery.body).toContain("Continue?");
     expect(delivery.body).toContain(`https://remi.example.com/local/issues/${issue.id}`);
@@ -330,7 +384,7 @@ describe("Feishu decision cards for Issue human requests", () => {
 
   it("skips the topic entirely when the Issue has no seed and records why", () => {
     const { store, agentId } = scaffold();
-    const issue = store.createIssue({ title: "No topic yet", workspaceId: "local" });
+    const issue = createResponsibleTestIssue(store, { title: "No topic yet", workspaceId: "local", responsibleMemberId: 'mem_local_local' });
     db!.run(`INSERT INTO multiremi_feishu_bot_chat_bindings
       (id, workspace_id, app_id, agent_id, external_session_key, chat_session_id, issue_id, chat_id, thread_id, created_at, updated_at)
       VALUES ('fcb_no_seed', 'local', 'cli_decision_card', ?, 'pending:no_seed',
@@ -339,8 +393,7 @@ describe("Feishu decision cards for Issue human requests", () => {
     db!.run(`INSERT INTO multiremi_chat_sessions (id, workspace_id, agent_id, creator_id, title, status, created_at, updated_at)
       VALUES ('chat_unseeded', 'local', ?, 'local', 'Unseeded topic', 'active', ?, ?)`,
     [agentId, "2026-09-27T00:00:00.000Z", "2026-09-27T00:00:00.000Z"]);
-    const task = store.createTask({ agentId, issueId: issue.id, workspaceId: "local", prompt: "Work" });
-    const request = store.createTaskHumanRequest({ taskId: task.id, kind: "question", payload: {} });
+    const request = askQuestion(store, sourceTask(store, agentId, issue.id));
 
     expect(store.claimFeishuBotOutbound("local", "rt_bot")).toBeNull();
     const activity = store.listIssueActivity(issue.id).find((entry) => entry.type === "decision_card_skipped");
@@ -349,11 +402,12 @@ describe("Feishu decision cards for Issue human requests", () => {
   });
 
   for (const scenario of [
-    { name: "notifyMode=none", options: { notifyMode: "none" as const }, reason: "notify_none" as const },
+    { name: "explicit human has no application identity", options: { notifyMode: "none" as const }, reason: "unresolved_recipient" as const },
   ]) {
     it(`degrades to text for ${scenario.name}`, () => {
       const { store, agentId } = scaffold(scenario.options);
       const issue = issueWithTopic(store, agentId);
+      db.run("DELETE FROM multiremi_feishu_bot_senders WHERE id='fbs_explicit_question_human'");
       const taskId = sourceTask(store, agentId, issue.id);
       const before = store.listTasks().length;
       const request = askQuestion(store, taskId);
@@ -378,18 +432,18 @@ describe("Feishu decision cards for Issue human requests", () => {
   it("does not patch or @ a degraded request's terminal state", () => {
     const { store, agentId } = scaffold({ notifyMode: "none" });
     const issue = issueWithTopic(store, agentId);
+    db.run("DELETE FROM multiremi_feishu_bot_senders WHERE id='fbs_explicit_question_human'");
     const request = askQuestion(store, sourceTask(store, agentId, issue.id));
     const text = store.claimFeishuBotOutbound("local", "rt_bot")!;
     store.reportFeishuBotOutbound("local", "rt_bot", text.id, {
       claimToken: text.claimToken, status: "sent", externalMessageId: "om_degraded_text",
     });
-    store.respondTaskHumanRequest(request.id, { response: { answers: { "Continue?": "Yes" } } });
+    respondQuestion(store, request.id, { response: { answers: { "Continue?": "Yes" } } });
 
     // No terminal patch: the message on screen is the question, and rewriting it
     // would replace the question with a receipt the reader never asked for.
     expect(store.claimFeishuBotOutbound("local", "rt_bot")).toBeNull();
-    const expiresAt = new Date(store.getTaskHumanRequest(request.id)!.expiresAt!).getTime();
-    expect(store.claimFeishuBotOutbound("local", "rt_bot", new Date(expiresAt - 60_000))).toBeNull();
+    expect(store.claimFeishuBotOutbound("local", "rt_bot", new Date(Date.now() + 50 * 60_000))).toBeNull();
     expect(db!.query("SELECT CAST(COUNT(*) AS INTEGER) AS n FROM multiremi_feishu_bot_outbound_deliveries WHERE kind = 'decision_card_patch' AND human_request_id = ?")
       .get(request.id)).toEqual({ n: 0 });
   });
@@ -404,7 +458,7 @@ describe("Feishu decision cards for Issue human requests", () => {
       interactionOpenId: "ou_the_person",
     });
 
-    store.respondTaskHumanRequest(request.id, { response: { answers: { "Continue?": "Yes" } }, respondedBy: "feishu:open:ou_owner" });
+    respondQuestion(store, request.id, { response: { answers: { "Continue?": "Yes" } } });
     const patch = store.claimFeishuBotOutbound("local", "rt_bot")!;
     expect(patch.kind).toBe("decision_card_patch");
     expect(patch.targetMessageId).toBe("om_decision_card");
@@ -414,9 +468,9 @@ describe("Feishu decision cards for Issue human requests", () => {
     expect(envelope).toBeTruthy();
     expect(JSON.stringify(envelope.card)).toContain("已提交");
     expect(JSON.stringify(envelope.card)).toContain("Yes");
-    expect(JSON.stringify(envelope.card)).toContain("ou&#95;owner");
+    expect(JSON.stringify(envelope.card)).toContain("mem&#95;local&#95;local");
     // Idempotent: a second terminal write must not queue a second patch.
-    store.respondTaskHumanRequest(request.id, { response: { answers: { "Continue?": "No" } } });
+    expect(() => respondQuestion(store, request.id, { response: { answers: { "Continue?": "No" } } })).toThrow('question_already_settled');
     expect(store.claimFeishuBotOutbound("local", "rt_bot")).toBeNull();
   });
 
@@ -424,7 +478,7 @@ describe("Feishu decision cards for Issue human requests", () => {
     { name: "timeout", status: "timeout" as const, expected: "已超时，未回答" },
     { name: "cancellation", status: "cancelled" as const, expected: "已取消" },
   ]) {
-    it(`writes a complete terminal card for ${terminal.name}`, () => {
+    it(`keeps the business Q and card pending after native ${terminal.name}`, () => {
       const { store, agentId } = scaffold();
       const issue = issueWithTopic(store, agentId);
       const request = askQuestion(store, sourceTask(store, agentId, issue.id));
@@ -434,24 +488,25 @@ describe("Feishu decision cards for Issue human requests", () => {
       });
 
       store.expireTaskHumanRequest(request.id, terminal.status);
-      const patch = store.claimFeishuBotOutbound("local", "rt_bot")!;
-      expect(patch.kind).toBe("decision_card_patch");
-      const envelope = decodeDecisionCardBody(patch.body)!;
+      expect(store.claimFeishuBotOutbound("local", "rt_bot")).toBeNull();
+      expect(store.getQuestion(request.id)).toMatchObject({ status: 'pending', wait_status: 'detached' });
+      expect(store.getMessage(request.id)?.card_token_consumed_at).toBeNull();
+      const envelope = decodeDecisionCardBody(sent.body)!;
       expect(envelope).toBeTruthy();
       const text = JSON.stringify(envelope.card);
-      expect(text).toContain(terminal.expected);
+      expect(text).toContain('Continue?');
       expect(text).toContain("Continue?");
       // The body is a full card: schema, header and a body with elements.
       expect(envelope.card.schema).toBe("2.0");
       expect((envelope.card.body as { elements: unknown[] }).elements.length).toBeGreaterThan(0);
-      if (terminal.status === "timeout") expect(text).toContain("不会被自动批准");
+      expect(text).not.toContain(terminal.expected);
     });
   }
 
   it("B4: a five-minute request is not already due when its card is sent", () => {
     const { store, agentId } = scaffold();
     const issue = issueWithTopic(store, agentId);
-    const request = askQuestion(store, sourceTask(store, agentId, issue.id), 5 * 60 * 1000);
+    const request = historicalQuestion(store, sourceTask(store, agentId, issue.id), 5 * 60 * 1000);
     const createdAt = store.getTaskHumanRequest(request.id)!.createdAt;
     const expiresAt = store.getTaskHumanRequest(request.id)!.expiresAt!;
     // Half the lifetime, not the ten-minute ceiling.
@@ -478,7 +533,7 @@ describe("Feishu decision cards for Issue human requests", () => {
   it("B4: a host that was offline across the window still gets one reminder", () => {
     const { store, agentId } = scaffold();
     const issue = issueWithTopic(store, agentId);
-    const request = askQuestion(store, sourceTask(store, agentId, issue.id), 60 * 60 * 1000);
+    const request = historicalQuestion(store, sourceTask(store, agentId, issue.id), 60 * 60 * 1000);
     const card = store.claimFeishuBotOutbound("local", "rt_bot")!;
     const expiresAt = Date.parse(store.getTaskHumanRequest(request.id)!.expiresAt!);
     // The host is down: the card is parked far out of reach, so materialization
@@ -516,8 +571,7 @@ describe("Feishu decision cards for Issue human requests", () => {
       claimToken: card.claimToken, status: "sent", externalMessageId: "om_person_card",
       interactionOpenId: "ou_the_person",
     });
-    const expiresAt = Date.parse(store.getTaskHumanRequest(request.id)!.expiresAt!);
-    const reminder = store.claimFeishuBotOutbound("local", "rt_bot", new Date(expiresAt - 60_000))!;
+    const reminder = store.claimFeishuBotOutbound("local", "rt_bot", new Date(fixedReminderAt(store, request.id)))!;
     expect(reminder.kind).toBe("decision_reminder");
     expect(reminder.mention).toMatchObject({ mode: "person", resolvedOpenId: "ou_the_person" });
     expect(reminder.interactionOpenId).toBe("ou_the_person");
@@ -532,24 +586,19 @@ describe("Feishu decision cards for Issue human requests", () => {
       claimToken: sent.claimToken, status: "sent", externalMessageId: "om_answered_card",
       interactionOpenId: "ou_the_person",
     });
-    store.respondTaskHumanRequest(request.id, { response: { answers: { "Continue?": "Yes" } } });
+    respondQuestion(store, request.id, { response: { answers: { "Continue?": "Yes" } } });
     // Drain the terminal patch, then look for a reminder inside the window.
     const patch = store.claimFeishuBotOutbound("local", "rt_bot")!;
     expect(patch.kind).toBe("decision_card_patch");
     store.reportFeishuBotOutbound("local", "rt_bot", patch.id, {
       claimToken: patch.claimToken, status: "sent", externalMessageId: "om_answered_card",
     });
-    const expiresAt = new Date(store.getTaskHumanRequest(request.id)!.expiresAt!).getTime();
-    expect(store.claimFeishuBotOutbound("local", "rt_bot", new Date(expiresAt - 60_000))).toBeNull();
+    expect(store.claimFeishuBotOutbound("local", "rt_bot", new Date(fixedReminderAt(store, request.id)))).toBeNull();
   });
 
   it("keeps reminders and patches invisible to a second, unrelated daemon", async () => {
     const { store, agentId, app } = scaffold();
-    const user = store.getOrCreateUser({ externalId: "ou_the_person", feishuUnionId: "on_recipient", name: "Recipient" });
-    store.createWorkspaceMember({ workspaceId: "local", userId: user.id, name: "Recipient", role: "member" });
-    const at = new Date().toISOString();
-    db!.run("INSERT INTO multiremi_feishu_bot_senders(id,workspace_id,app_id,open_id,union_id,display_name,allowed,first_seen_at,last_seen_at) VALUES('fbs_recipient','local','cli_decision_card','ou_the_person','on_recipient','Recipient',1,?,?)", [at,at]);
-    store.registerRuntime({ id: "rt_exec", name: "Executor", provider: "claude", workspaceId: "local", daemonId: "executor" });
+    store.registerRuntime({ id: "rt_exec", name: "Executor", provider: "codex", workspaceId: "local", daemonId: "executor" });
     const executor = await store.createAccessToken({ name: "executor", type: "daemon", workspaceId: "local", daemonId: "executor" });
     const issue = issueWithTopic(store, agentId);
     // Execution is pinned to another machine, exactly as it is in production.
@@ -572,6 +621,7 @@ describe("Feishu decision cards for Issue human requests", () => {
     const respond = await app.request(`${requestPath}/answer`, {
       method: "POST", headers: host,
       body: JSON.stringify({ token: questionCardAction(decodeDecisionCardBody(card.body)!.card)!.t,
+        expected_route_revision: questionCardAction(decodeDecisionCardBody(card.body)!.card)!.route_revision,
         operator_open_id: "ou_the_person", response: { answers: { "Continue?": "Yes" } } }),
     });
     expect(respond.status, await respond.clone().text()).toBe(200);
@@ -581,7 +631,7 @@ describe("Feishu decision cards for Issue human requests", () => {
       turn_id: taskId, attempt_id: taskId, dedupe_key: 'foreign', body_md: 'Question?', options: [], metadata: { kind: 'question' },
     }, hostToken.token, "MASTER");
     expect(create).toMatchObject({ ok: false, code: "stale_attempt" });
-    const second = store.createTaskHumanRequest({ taskId, kind: "question", payload: {} });
+    const second = askQuestion(store, taskId);
     const expire = await requestRuntimeRpc(store, "rt_bot", "turn.decision.expire", {
       turn_id: taskId, attempt_id: taskId, message_id: second.id, status: "cancelled",
     }, hostToken.token, "MASTER");
@@ -626,7 +676,7 @@ describe("Feishu decision cards for Issue human requests", () => {
       claimToken: sent.claimToken, status: "sent", externalMessageId: "om_receipt_card",
       interactionOpenId: "ou_the_person",
     });
-    store.respondTaskHumanRequest(request.id, { response: { answers: { "Continue?": "Yes" } } });
+    respondQuestion(store, request.id, { response: { answers: { "Continue?": "Yes" } } });
     const patch = store.claimFeishuBotOutbound("local", "rt_bot")!;
     expect(patch.taskId).toBeUndefined();
     expect(patch.receiptMessageIds).toBeUndefined();
@@ -640,8 +690,8 @@ describe("Feishu decision cards for Issue human requests", () => {
   });
 
   it("S5: concurrent claims produce exactly one card, one patch and one reminder", () => {
-    // No PostgreSQL is reachable in this environment, so this is the SQLite
-    // claim-token compare-and-set rather than a true two-process race.
+    // Back-to-back claims exercise the compare-and-set on both databases;
+    // two-process races are covered by the native fanout integration suite.
     const { store, agentId } = scaffold();
     const issue = issueWithTopic(store, agentId);
     const request = askQuestion(store, sourceTask(store, agentId, issue.id), 60 * 60 * 1000);
@@ -651,8 +701,8 @@ describe("Feishu decision cards for Issue human requests", () => {
       claimToken: first.claimToken, status: "sent", externalMessageId: "om_single_card",
       interactionOpenId: "ou_the_person",
     });
-    store.respondTaskHumanRequest(request.id, { response: { answers: { "Continue?": "Yes" } } });
-    store.respondTaskHumanRequest(request.id, { response: { answers: { "Continue?": "No" } } });
+    respondQuestion(store, request.id, { response: { answers: { "Continue?": "Yes" } } });
+    expect(() => respondQuestion(store, request.id, { response: { answers: { "Continue?": "No" } } })).toThrow('question_already_settled');
     const patch = store.claimFeishuBotOutbound("local", "rt_bot")!;
     expect(store.claimFeishuBotOutbound("local", "rt_bot")).toBeNull();
     store.reportFeishuBotOutbound("local", "rt_bot", patch.id, {
@@ -678,11 +728,11 @@ describe("Feishu decision cards for Issue human requests", () => {
       claimToken: card.claimToken, status: "sent", externalMessageId: "om_race_card",
       interactionOpenId: "ou_the_person",
     });
-    const expiresAt = Date.parse(store.getTaskHumanRequest(request.id)!.expiresAt!);
-    const reminder = store.claimFeishuBotOutbound("local", "rt_bot", new Date(expiresAt - 60_000))!;
+    const dueAt = fixedReminderAt(store, request.id);
+    const reminder = store.claimFeishuBotOutbound("local", "rt_bot", new Date(dueAt))!;
     expect(reminder.kind).toBe("decision_reminder");
     // The second claimer, in the same window, finds nothing to materialize.
-    expect(store.claimFeishuBotOutbound("local", "rt_bot", new Date(expiresAt - 50_000))).toBeNull();
+    expect(store.claimFeishuBotOutbound("local", "rt_bot", new Date(dueAt + 10_000))).toBeNull();
     expect(db!.query(
       "SELECT CAST(COUNT(*) AS INTEGER) AS n FROM multiremi_feishu_bot_outbound_deliveries WHERE human_request_id = ? AND kind = 'decision_reminder'",
     ).get(request.id)).toEqual({ n: 1 });
@@ -723,7 +773,7 @@ describe("Feishu decision cards for Issue human requests", () => {
       recipient_open_id: "ou_the_person",
     }]);
     // A settled request is no longer clickable, so it drops out.
-    store.respondTaskHumanRequest(request.id, { response: { answers: { "Continue?": "Yes" } } });
+    respondQuestion(store, request.id, { response: { answers: { "Continue?": "Yes" } } });
     expect(store.listFeishuBotLiveDecisionCards("local", "rt_bot")).toEqual([]);
   });
 
@@ -743,7 +793,7 @@ describe("Feishu decision cards for Issue human requests", () => {
     try {
       const waiting = daemon.waitFeishuBotHumanRequestSettled(request.id, new AbortController().signal);
       await read;
-      const settled = store.respondTaskHumanRequest(request.id, { response: { answers: { 'Continue?': 'Yes' } } });
+      const settled = respondQuestion(store, request.id, { response: { answers: { 'Continue?': 'Yes' } } });
       expect(await waiting).toEqual(settled);
       expect(await daemon.getFeishuBotHumanRequest(taskId, request.id)).toEqual(settled);
       expect(await daemon.getFeishuBotHumanRequest('unrelated-task', request.id)).toBeNull();
@@ -767,7 +817,7 @@ describe("Feishu decision cards for Issue human requests", () => {
       new Set(runtimeId === `rt_worker_${taskId}` || runtimeId === "rt_bot" ? [taskId] : []), () => {})
       .filter(entity => entity.type === "task.human_request.settled");
     expect(snapshot("rt_bot", "bot-host")).toEqual([]);
-    const settled = store.respondTaskHumanRequest(request.id, { response: { answer: "yes" } })!;
+    const settled = respondQuestion(store, request.id, { response: { answer: "yes" } })!;
     expect(await readDecisionRequest(store, `worker-${taskId}`, request.id)).toEqual(settled);
     expect(await readDecisionRequest(store, 'bot-host', request.id)).toEqual(settled);
     expect(snapshot(`rt_worker_${taskId}`, `worker-${taskId}`)).toEqual([]);
@@ -811,7 +861,7 @@ describe("Feishu decision cards for Issue human requests", () => {
     try {
       expect(() => storeDb.transaction(() => {
         store.cancelTask(taskId);
-        expect(store.getTaskHumanRequest(request.id)?.status).toBe("cancelled");
+        expect(store.getQuestion(request.id)).toMatchObject({ status: 'pending', wait_status: 'detached' });
         expect(notifications).toEqual([]);
         throw new Error("rollback cancellation");
       })()).toThrow("rollback cancellation");
@@ -822,19 +872,20 @@ describe("Feishu decision cards for Issue human requests", () => {
 
       store.cancelTask(taskId);
       const cancelled = store.getTaskHumanRequest(request.id)!;
-      expect(cancelled.status).toBe("cancelled");
+      expect(cancelled.status).toBe("pending");
+      expect(store.getQuestion(request.id)?.wait_status).toBe('detached');
       expect(cancelled.response).toBeNull();
-      expect(cancelled.respondedAt).not.toBeNull();
+      expect(cancelled.respondedAt).toBeNull();
       expect(notifications).toContain("daemon:task_input");
       expect(db!.query("SELECT CAST(COUNT(*) AS INTEGER) AS n FROM multiremi_feishu_bot_outbound_deliveries WHERE kind = 'decision_card_patch' AND human_request_id = ?")
-        .get(request.id)).toEqual({ n: 1 });
+        .get(request.id)).toEqual({ n: 0 });
       expect(taskInputSnapshot(store, "rt_bot", "bot-host", new Set(), () => {})
         .filter(entity => entity.type === "task.human_request.settled"))
         .toEqual([]);
       expect(await readDecisionRequest(store, 'bot-host', request.id)).toEqual(cancelled);
-      expect(store.expireTaskHumanRequest(request.id, "cancelled")).toBeNull();
+      store.expireTaskHumanRequest(request.id, "cancelled");
       expect(db!.query("SELECT CAST(COUNT(*) AS INTEGER) AS n FROM multiremi_feishu_bot_outbound_deliveries WHERE kind = 'decision_card_patch' AND human_request_id = ?")
-        .get(request.id)).toEqual({ n: 1 });
+        .get(request.id)).toEqual({ n: 0 });
       expect(store.getTaskHumanRequest(request.id)).toEqual(cancelled);
     } finally {
       offWorkspace();
@@ -848,13 +899,15 @@ describe("Feishu decision cards for Issue human requests", () => {
       revision: config.revision, externalSessionKey: "oc_settled_chat",
       externalMessageId: "om_settled_chat", senderOpenId: "ou_the_person", text: "Need a decision",
     });
-    store.registerRuntime({ id: "rt_chat_executor", name: "Chat executor", provider: "claude",
+    store.registerRuntime({ id: "rt_chat_executor", name: "Chat executor", provider: "codex",
       workspaceId: "local", daemonId: "chat-executor" });
     runTurnExecutionMutation(db! as unknown as UnifiedFixtureDatabase,"UPDATE multiremi_turn_execution_records SET runtime_id = ? WHERE id = ?", ["rt_chat_executor", chat.taskId]);
+    expect(store.claimTask('rt_chat_executor')?.id).toBe(chat.taskId);
+    store.startTask(chat.taskId);
     const request = askQuestion(store, chat.taskId);
     expect(store.canFeishuBotDaemonAccessTask("local", "bot-host", chat.taskId)).toBe(true);
     expect(taskInputSnapshot(store, "rt_bot", "bot-host", new Set(), () => [])).toEqual([]);
-    const settled = store.respondTaskHumanRequest(request.id, { response: { answer: "yes" } })!;
+    const settled = respondQuestion(store, request.id, { response: { answer: "yes" } })!;
     expect(store.listFeishuBotSettledHumanRequestCandidates("local", "rt_bot"))
       .toContainEqual({ requestId: request.id, taskId: chat.taskId });
     expect(taskInputSnapshot(store, "rt_bot", "bot-host", new Set(), () => [])).toEqual([]);
@@ -880,7 +933,7 @@ describe("Feishu decision cards for Issue human requests", () => {
       claimToken: card.claimToken, status: "sent", externalMessageId: "om_previous_app",
       interactionOpenId: "ou_the_person",
     });
-    store.respondTaskHumanRequest(request.id, { response: { answer: "yes" } });
+    respondQuestion(store, request.id, { response: { answer: "yes" } });
     expect(store.listFeishuBotSettledHumanRequestCandidates("local", "rt_bot"))
       .toContainEqual({ requestId: request.id, taskId });
     store.upsertFeishuBotConfig("local", { agentId, runtimeId: "rt_bot", appId: "cli_replacement_app",
@@ -919,7 +972,7 @@ describe("Feishu decision cards for Issue human requests", () => {
       claimToken: card.claimToken, status: "sent", externalMessageId: "om_replay_oldest",
       interactionOpenId: "ou_the_person",
     });
-    store.respondTaskHumanRequest(request.id, { response: { answer: "yes" } });
+    respondQuestion(store, request.id, { response: { answer: "yes" } });
     patchHumanRequestFixture(request.id, { responded_at: "2000-01-01T00:00:00.000Z" });
     cloneSettledQuestionBatch(store, request.id, 1024, "replay", card.id, taskId, new Date().toISOString());
     const candidates = store.listFeishuBotSettledHumanRequestCandidates("local", "rt_bot");
@@ -938,7 +991,7 @@ describe("Feishu decision cards for Issue human requests", () => {
       claimToken: card.claimToken, status: "sent", externalMessageId: "om_budget",
       interactionOpenId: "ou_the_person",
     });
-    store.respondTaskHumanRequest(request.id, { response: { answer: "yes" } });
+    respondQuestion(store, request.id, { response: { answer: "yes" } });
     const database = db!;
     const originalQuery = database.query.bind(database);
     const selectCounts: number[] = [];
@@ -973,7 +1026,7 @@ describe("Feishu decision cards for Issue human requests", () => {
       claimToken: card.claimToken, status: "sent", externalMessageId: "om_audience",
       interactionOpenId: "ou_the_person",
     });
-    store.respondTaskHumanRequest(request.id, { response: { answer: "yes" } });
+    respondQuestion(store, request.id, { response: { answer: "yes" } });
     const settled = (runtimeId: string, daemonId: string) => store.getRuntimeLite(runtimeId)?.daemonId === daemonId
       ? store.listFeishuBotSettledHumanRequestCandidates('local', runtimeId, daemonId) : [];
     expect(settled("rt_bot", "bot-host")).toHaveLength(1);
@@ -1001,7 +1054,7 @@ describe("Feishu decision cards for Issue human requests", () => {
       if (event.type === "daemon:task_input" && event.payload.task_id === taskId) events.push(event.type);
     });
     const unsubscribeTask = store.onTaskEvent(event => {
-      if (event.type === "task:running" && event.task.id === taskId) {
+      if (event.type === 'task:running' && event.task.id === taskId) {
         taskEvents.push({ type: event.type, inTransaction: storeDb.inTransaction === true });
       }
     });
@@ -1012,21 +1065,23 @@ describe("Feishu decision cards for Issue human requests", () => {
         events.length = 0;
         taskEvents.length = 0;
         storeDb.transaction(() => {
-          if (status === "responded") store.respondTaskHumanRequest(request.id, { response: { answer: "yes" } });
+          if (status === "responded") respondQuestion(store, request.id, { response: { answer: "yes" } });
           else store.expireTaskHumanRequest(request.id, status);
           expect(events).toEqual([]);
           expect(taskEvents).toEqual([]);
         })();
         expect(events).toEqual(["daemon:task_input"]);
-        expect(taskEvents).toEqual([{ type: "task:running", inTransaction: false }]);
-        expect(store.getTaskHumanRequest(request.id)?.status).toBe(status);
+        expect(taskEvents).toEqual(status === 'responded' ? [{ type: 'task:running', inTransaction: false }] : []);
+        expect(store.getTurnForAttempt(taskId)?.status).toBe('running');
+        expect(store.getTaskHumanRequest(request.id)?.status).toBe(status === 'responded' ? 'responded' : 'pending');
+        if (status !== 'responded') expect(store.getQuestion(request.id)?.wait_status).toBe('detached');
       }
       const rolledBack = askQuestion(store, taskId);
       runTurnExecutionMutation(db! as unknown as UnifiedFixtureDatabase,"UPDATE multiremi_turn_execution_records SET status = 'awaiting_human' WHERE id = ?", [taskId]);
       events.length = 0;
       taskEvents.length = 0;
       expect(() => storeDb.transaction(() => {
-        store.respondTaskHumanRequest(rolledBack.id, { response: { answer: "rollback" } });
+        respondQuestion(store, rolledBack.id, { response: { answer: "rollback" } });
         throw new Error("rollback outer transaction");
       })()).toThrow("rollback outer transaction");
       expect(events).toEqual([]);
@@ -1038,8 +1093,8 @@ describe("Feishu decision cards for Issue human requests", () => {
   it("publishes terminal human-request cancellation once after commit and never on rollback", () => {
     const { store, agentId } = scaffold();
     const storeDb = (store as unknown as { db: SqlDatabase }).db;
-    const issue = issueWithTopic(store, agentId);
     const makePending = () => {
+      const issue = issueWithTopic(store, agentId);
       const taskId = sourceTask(store, agentId, issue.id);
       runTurnExecutionMutation(db! as unknown as UnifiedFixtureDatabase,"UPDATE multiremi_turn_execution_records SET status = 'running' WHERE id = ?", [taskId]);
       return { taskId, request: askQuestion(store, taskId) };
@@ -1055,7 +1110,7 @@ describe("Feishu decision cards for Issue human requests", () => {
         expect(transitions).toEqual([]);
       })();
       expect(transitions).toEqual([{ requestId: committed.request.id, type: "cancelled", inTransaction: false }]);
-      expect(store.getTaskHumanRequest(committed.request.id)?.status).toBe("cancelled");
+      expect(store.getQuestion(committed.request.id)).toMatchObject({ status: 'pending', wait_status: 'detached' });
 
       const rolledBack = makePending();
       transitions.length = 0;
@@ -1158,7 +1213,7 @@ describe("Feishu decision cards for Issue human requests", () => {
   it("B4: a reminder is suppressed once less than a minute of lifetime remains", () => {
     const { store, agentId } = scaffold();
     const issue = issueWithTopic(store, agentId);
-    const request = askQuestion(store, sourceTask(store, agentId, issue.id), 60 * 60 * 1000);
+    const request = historicalQuestion(store, sourceTask(store, agentId, issue.id), 60 * 60 * 1000);
     const card = store.claimFeishuBotOutbound("local", "rt_bot")!;
     store.reportFeishuBotOutbound("local", "rt_bot", card.id, {
       claimToken: card.claimToken, status: "sent", externalMessageId: "om_window_card",
@@ -1185,7 +1240,7 @@ describe("Feishu decision cards for Issue human requests", () => {
   it("B4: a late card still gets its reminder while a minute remains", () => {
     const { store, agentId } = scaffold();
     const issue = issueWithTopic(store, agentId);
-    const request = askQuestion(store, sourceTask(store, agentId, issue.id), 60 * 60 * 1000);
+    const request = historicalQuestion(store, sourceTask(store, agentId, issue.id), 60 * 60 * 1000);
     const expiresAt = Date.parse(store.getTaskHumanRequest(request.id)!.expiresAt!);
     // The host was offline across the window; the card is parked far out.
     const card = store.claimFeishuBotOutbound("local", "rt_bot")!;
@@ -1255,7 +1310,7 @@ describe("Feishu decision cards for Issue human requests", () => {
       interactionOpenId: "ou_someone_else",
     })).toBe(false);
     expect(db!.query("SELECT interaction_open_id, status FROM multiremi_feishu_bot_outbound_deliveries WHERE id = ?")
-      .get(card.id)).toEqual({ interaction_open_id: null, status: "sending" });
+      .get(card.id)).toEqual({ interaction_open_id: 'ou_the_person', status: "sending" });
     // The real host writes it, and only for its own row.
     store.reportFeishuBotOutbound("local", "rt_bot", card.id, {
       claimToken: card.claimToken, status: "sent", externalMessageId: "om_ok",
@@ -1280,12 +1335,12 @@ describe("Feishu decision cards for Issue human requests", () => {
     expect(request).not.toBeNull();
     const delivery = store.claimFeishuBotOutbound("local", "rt_bot")!;
     expect(delivery.kind).toBe("decision_card");
-    expect(delivery.degraded).toBe("invalid_recipient");
+    expect(delivery.degraded).toBe("unresolved_recipient");
     expect(decodeDecisionCardBody(delivery.body)).toBeNull();
     expect(delivery.body).toContain("Continue?");
     expect(delivery.body).not.toContain("<at id=");
     const degraded = store.listIssueActivity(issue.id).find((entry) => entry.type === "decision_card_degraded");
-    expect((degraded?.data as Record<string, unknown>).reason).toBe("invalid_recipient");
+    expect((degraded?.data as Record<string, unknown>).reason).toBe("unresolved_recipient");
   });
 });
 
@@ -1295,6 +1350,9 @@ describe("Feishu decision cards for Issue human requests", () => {
  * would look. QA's repro for the heartbeat 500 starts here.
  */
 function writeInvalidPersonTopicConfig(): void {
+  // The legacy topic config is invalid and the designated human has no
+  // reliable application mapping. Q delivery must degrade without @ing it.
+  db.run("DELETE FROM multiremi_feishu_bot_senders WHERE id='fbs_explicit_question_human'");
   writePersonTopicConfig("not-an-open-id");
 }
 
@@ -1428,11 +1486,12 @@ describe("Feishu decision card heartbeat delivery", () => {
     const settings = JSON.parse(settingsRow.settings) as Record<string, unknown>;
     settings.issueTopics = { enabled: true, chatId: "oc_decision_card", notifyMode: "none" };
     db!.run("UPDATE multiremi_workspaces SET settings = ? WHERE id = 'local'", [JSON.stringify(settings)]);
+    db.run("DELETE FROM multiremi_feishu_bot_senders WHERE id='fbs_explicit_question_human'");
     const degradedTaskId = sourceTask(store, agentId, issue.id);
     const degradedRequest = askQuestion(store, degradedTaskId);
     const degraded = (await withRealClient(app, store, async (client, receive) =>
       (await receive()).pending_feishu_outbound))!;
-    expect(degraded.degraded).toBe("notify_none");
+    expect(degraded.degraded).toBe("unresolved_recipient");
     expect(degraded.humanRequestTaskId).toBe(degradedTaskId);
     expect(degraded.humanRequestId).toBe(degradedRequest.id);
     // A degraded body is plain text, not a card envelope.
@@ -1443,11 +1502,12 @@ describe("Feishu decision card heartbeat delivery", () => {
   it("sends a heartbeat-delivered card as text, not as a retried card", async () => {
     const { store, agentId, app } = scaffold({ notifyMode: "none" });
     const issue = issueWithTopic(store, agentId);
+    db.run("DELETE FROM multiremi_feishu_bot_senders WHERE id='fbs_explicit_question_human'");
     const request = askQuestion(store, sourceTask(store, agentId, issue.id));
     const delivered = (await withRealClient(app, store, async (client, receive) =>
       (await receive()).pending_feishu_outbound))!;
     expect(delivered.id).toBeTruthy();
-    expect(delivered.degraded).toBe("notify_none");
+    expect(delivered.degraded).toBe("unresolved_recipient");
 
     // The host's own branch: a degraded row goes out as text and never as a card.
     const handle = decisionLaneHandle();
@@ -1475,7 +1535,7 @@ describe("Feishu decision card heartbeat delivery", () => {
     const delivered = (await withRealClient(app, store, async (client, receive) =>
       (await receive()).pending_feishu_outbound))!;
     expect(delivered.kind).toBe("decision_card");
-    expect(delivered.degraded).toBe("invalid_recipient");
+    expect(delivered.degraded).toBe("unresolved_recipient");
     expect(delivered.humanRequestId).toBe(request.id);
     // A degraded row is plain text: it carries the question and no @.
     expect(decodeDecisionCardBody(delivered.body)).toBeNull();
@@ -1547,7 +1607,7 @@ describe("Feishu decision card heartbeat delivery", () => {
       return ack.pending_feishu_outbound!;
     });
     expect(second.kind).toBe("decision_card");
-    expect(second.degraded).toBe("invalid_recipient");
+    expect(second.degraded).toBe("unresolved_recipient");
     expect(second.humanRequestId).toBe(request.id);
     expect(second.body).toContain("Continue?");
     expect(second.body).not.toContain("<at id=");
@@ -1563,11 +1623,11 @@ describe("Feishu decision card heartbeat delivery", () => {
     expect(relay.sentText).toHaveLength(1);
     expect(relay.sentText[0]).toContain("Continue?");
     expect(relay.sentText[0]).not.toContain("<at id=");
-    expect(receipts).toEqual([{ messageId: "om_text", interactionOpenId: null, degraded: "invalid_recipient" }]);
+    expect(receipts).toEqual([{ messageId: "om_text", interactionOpenId: null, degraded: "unresolved_recipient" }]);
 
     expect(store.reportFeishuBotOutbound("local", "rt_bot", second.id, {
       claimToken: second.claimToken, status: "sent", externalMessageId: "om_text",
-      degraded: "invalid_recipient",
+      degraded: "unresolved_recipient",
     })).toBe(true);
     expect(store.listIssueActivity(issue.id).filter((a) => a.type === "decision_card_degraded")).toHaveLength(1);
     expect(store.claimFeishuBotOutbound("local", "rt_bot")).toBeNull();
@@ -1713,7 +1773,7 @@ describe("Feishu decision card heartbeat delivery", () => {
     });
     const stop = registerQuestionCardClient("cli_decision_card", {
       getRequest: async () => store.getTaskHumanRequest(request.id),
-      respond: async (requestId, response, credential) => store.respondTaskHumanRequest(requestId, { response, cardCredential: credential })!,
+      respond: async (requestId, response, credential) => respondQuestion(store, requestId, { response, cardCredential: credential })!,
       getDecision: async () => null, answer: async () => { throw new Error("not a decision"); },
     });
     // Application routing answers clicks without relying on message registration.
@@ -1744,7 +1804,7 @@ describe("Feishu decision card heartbeat delivery", () => {
 
     const other = store.createWorkspace({ name: "Other", slug: "other" });
     const otherAgent = store.createAgent({ name: "Other agent", provider: "codex", workspaceId: other.id });
-    const otherIssue = store.createIssue({
+    const otherIssue = createResponsibleTestIssue(store, {
       title: "Other workspace issue", workspaceId: other.id,
       assigneeType: "agent", assigneeId: otherAgent.id,
     });
@@ -1793,7 +1853,7 @@ describe("Feishu decision card heartbeat delivery", () => {
 
     const other = store.createWorkspace({ name: "Other", slug: "other" });
     const otherAgent = store.createAgent({ name: "Other agent", provider: "codex", workspaceId: other.id });
-    const otherIssue = store.createIssue({
+    const otherIssue = createResponsibleTestIssue(store, {
       title: "Other workspace issue", workspaceId: other.id,
       assigneeType: "agent", assigneeId: otherAgent.id,
     });
@@ -1841,16 +1901,16 @@ describe("Feishu decision card heartbeat delivery", () => {
     const { store, agentId } = scaffold();
     const issue = issueWithTopic(store, agentId);
     const taskId = sourceTask(store, agentId, issue.id);
+    const request = askQuestion(store, taskId);
 
     const other = store.createWorkspace({ name: "Other", slug: "other" });
     const otherAgent = store.createAgent({ name: "Other agent", provider: "codex", workspaceId: other.id });
-    const otherIssue = store.createIssue({
+    const otherIssue = createResponsibleTestIssue(store, {
       title: "Other workspace issue", workspaceId: other.id,
       assigneeType: "agent", assigneeId: otherAgent.id,
     });
     // The Task stays in `local`; only its Issue pointer moves.
     runTurnExecutionMutation(db! as unknown as UnifiedFixtureDatabase,"UPDATE multiremi_turn_execution_records SET issue_id = ? WHERE id = ?", [otherIssue.id, taskId]);
-    const request = askQuestion(store, taskId);
 
     expect(db!.query(
       "SELECT CAST(COUNT(*) AS INTEGER) AS n FROM multiremi_feishu_bot_outbound_deliveries WHERE human_request_id = ?",
@@ -1863,6 +1923,12 @@ describe("Feishu decision card heartbeat delivery", () => {
     db!.run("UPDATE multiremi_turns SET issue_id=? WHERE current_attempt_id=?", [issue.id, taskId]);
     store.cancelTask(taskId);
     const okRequest = askQuestion(store, sourceTask(store, agentId, issue.id));
+    // Repair restores the original durable Q's pending outbox operation too.
+    // Its native wait was cancelled; its business question was retained.
+    const repaired = store.claimFeishuBotOutbound('local', 'rt_bot')!;
+    expect(repaired.humanRequestId).toBe(request.id);
+    store.reportFeishuBotOutbound('local', 'rt_bot', repaired.id, { claimToken: repaired.claimToken,
+      status: 'sent', externalMessageId: 'om_repaired_original', interactionOpenId: 'ou_the_person' });
     expect(store.claimFeishuBotOutbound("local", "rt_bot")!.humanRequestId).toBe(okRequest.id);
   });
 
@@ -1879,13 +1945,13 @@ describe("Feishu decision card heartbeat delivery", () => {
     });
     const other = store.createWorkspace({ name: "Other", slug: "other" });
     const otherAgent = store.createAgent({ name: "Other agent", provider: "codex", workspaceId: other.id });
-    const otherIssue = store.createIssue({
+    const otherIssue = createResponsibleTestIssue(store, {
       title: "Other workspace issue", workspaceId: other.id,
       assigneeType: "agent", assigneeId: otherAgent.id,
     });
     runTurnExecutionMutation(db! as unknown as UnifiedFixtureDatabase,"UPDATE multiremi_turn_execution_records SET issue_id = ? WHERE id = ?", [otherIssue.id, request.taskId]);
 
-    const expiresAt = Date.parse(request.expiresAt!);
+    const expiresAt = fixedReminderAt(store, request.id) + 61_000;
     expect(store.claimFeishuBotOutbound("local", "rt_bot", new Date(expiresAt - 61_000))).toBeNull();
     // Nothing was sent, nothing was written, and the one slot is still free.
     expect(db!.query("SELECT reminder_sent_at FROM multiremi_message_question_records WHERE id = ?").get(request.id))
@@ -1928,7 +1994,7 @@ describe("Feishu decision card heartbeat delivery", () => {
         claimToken: card.claimToken, status: "sent", externalMessageId: "om_card",
         interactionOpenId: "ou_the_person",
       });
-      store.respondTaskHumanRequest(request.id, { response: { answers: { "Continue?": "Yes" } } });
+      respondQuestion(store, request.id, { response: { answers: { "Continue?": "Yes" } } });
       const patch = store.claimFeishuBotOutbound("local", "rt_bot")!;
       await sendDecisionLaneForTest(handle, patch, undefined, decisionDaemon(store));
       expect(handle.calls).toEqual(["card:send", "card:patch"]);
@@ -2056,7 +2122,7 @@ function decisionDaemon(store: MultiremiStore): MultiremiDaemon {
     respondFeishuBotHumanRequest: async (requestId: string, response: Record<string, unknown>) => {
       const request = store.getTaskHumanRequest(requestId);
       if (!request) throw new Error("request not found");
-      const settled = store.respondTaskHumanRequest(requestId, { response, respondedBy: "feishu" });
+      const settled = respondQuestion(store, requestId, { response, respondedBy: "feishu" });
       if (!settled) throw new Error("request is no longer pending");
       return settled;
     },

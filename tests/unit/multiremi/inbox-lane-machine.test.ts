@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { expect,it } from 'bun:test';
 import { pendingTurnBackendTests } from './pending-turn-test-backends.js';
 import { StoreContext,createCommitEventQueue } from '@multiremi/store/context.js';
@@ -5,7 +6,7 @@ import { acknowledgeInput,reRingAfterTurnEnd } from '@multiremi/store/inbox/lane
 pendingTurnBackendTests('MUL-506 canonical inbox',fixture=>{
   it('coalesces pending messages, deduplicates and preserves the resolved header',()=>{
     const {store,db}=fixture();const agent=store.createAgent({name:'Worker',provider:'codex'});
-    const issue=store.createIssue({title:'Inbox',assigneeType:'member',assigneeId:'mem_local_local'});
+    const issue=createResponsibleTestIssue(store, {title:'Inbox',assigneeType:'agent',assigneeId:agent.id});
     const session=store.getOrCreateDefaultIssueSession(issue.id);
     const input={session_id:session.id,sender:{type:'member' as const,id:'mem_local_local'},to:{type:'agent' as const,ref:agent.id},message_kind:'request' as const,wake_requested:'now' as const,body_md:'one',dedupe_key:'one'};
     const one=store.sendMessage(input),two=store.sendMessage({...input,body_md:'two',dedupe_key:'two'});
@@ -17,7 +18,7 @@ pendingTurnBackendTests('MUL-506 canonical inbox',fixture=>{
   });
   it('delivers running input without creating another turn and re-rings exactly once at the end',()=>{
     const {store,db}=fixture();const agent=store.createAgent({name:'Worker',provider:'codex'});
-    const issue=store.createIssue({title:'Running',assigneeType:'member',assigneeId:'mem_local_local'}),session=store.getOrCreateDefaultIssueSession(issue.id);
+    const issue=createResponsibleTestIssue(store, {title:'Running',assigneeType:'agent',assigneeId:agent.id}),session=store.getOrCreateDefaultIssueSession(issue.id);
     const input={session_id:session.id,sender:{type:'member' as const,id:'mem_local_local'},to:{type:'agent' as const,ref:agent.id},message_kind:'request' as const,wake_requested:'now' as const,body_md:'start'};
     const first=store.sendMessage(input),ctx=new StoreContext(db,()=>store);
     db.transaction(()=>{ctx.lockWorkspaceRuntimeLifecycle('local');db.run("UPDATE multiremi_turns SET status='running' WHERE id=?",[first.turn_id!]);acknowledgeInput(ctx,first.turn_id!,0,first.message.seq);})();
@@ -29,7 +30,7 @@ pendingTurnBackendTests('MUL-506 canonical inbox',fixture=>{
   });
   it('keeps downgraded messages and rejects a gap in input acknowledgement',()=>{
     const {store,db}=fixture();const agent=store.createAgent({name:'Worker',provider:'codex'});
-    const issue=store.createIssue({title:'Gap'}),session=store.getOrCreateDefaultIssueSession(issue.id);
+    const issue=createResponsibleTestIssue(store, {title:'Gap'}),session=store.getOrCreateDefaultIssueSession(issue.id);
     const sent=store.sendMessage({session_id:session.id,sender:{type:'member',id:'mem_local_local'},to:{type:'agent',ref:agent.id},body_md:'start',message_kind:'request',wake_requested:'now'});
     expect(()=>db.transaction(()=>acknowledgeInput(new StoreContext(db,()=>store),sent.turn_id!,sent.message.seq,sent.message.seq))()).toThrow('contiguous');
     const quiet=store.sendMessage({session_id:session.id,sender:{type:'agent',id:agent.id},to:{type:'agent',ref:agent.id},body_md:'self',message_kind:'request',wake_requested:'now'});

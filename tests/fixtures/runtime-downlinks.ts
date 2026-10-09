@@ -4,7 +4,7 @@ import { runtimeInputSnapshot } from "@multiremi/api/daemon-protocol/runtime-inp
 import { taskInputSnapshot } from "@multiremi/api/daemon-protocol/task-input-snapshot.js";
 import { registerTaskInputRpcs } from "@multiremi/api/daemon-protocol/task-input-rpcs.js";
 import type { DaemonProtocolIdentity } from "@multiremi/api/daemon-protocol/index.js";
-import { DAEMON_MIN_CLI_VERSION, type DaemonRuntimeCapabilities } from "@multiremi/contracts/daemon-protocol.js";
+import { DAEMON_MIN_CLI_VERSION, type DaemonRuntimeCapabilities, type DaemonQuestionWait } from "@multiremi/contracts/daemon-protocol.js";
 import {
   FEISHU_CONCIERGE_CONFIG_CAPABILITY,
   FEISHU_CONCIERGE_PROTOCOL_VERSION,
@@ -34,7 +34,7 @@ function configuredRuntimeCapabilities(metadata: Record<string, unknown>): Daemo
 }
 
 export async function openRuntimeDownlinks(store: MultiremiStore, runtimeId: string,
-  options: { identity?: DaemonProtocolIdentity; activeTaskIds?: string[]; capabilities?: DaemonRuntimeCapabilities } = {}) {
+  options: { identity?: DaemonProtocolIdentity; activeTaskIds?: string[]; activeQuestionWaits?: DaemonQuestionWait[]; capabilities?: DaemonRuntimeCapabilities } = {}) {
   const runtime = store.getRuntimeLite(runtimeId);
   if (!runtime) throw new Error("Runtime not found");
   const layer = new DaemonProtocolLayer({ store });
@@ -49,7 +49,7 @@ export async function openRuntimeDownlinks(store: MultiremiStore, runtimeId: str
   await session.handleMessage(JSON.stringify({ v: 2, t: "hello", p: { protocol: 2,
     daemon_id: runtime.daemonId ?? "dmn_downlinks_unit", cli_version: DAEMON_MIN_CLI_VERSION, caps: [],
     runtimes: [{ runtime_id: runtimeId, provider: runtime.provider, max_concurrency: 1,
-      active_task_ids: options.activeTaskIds ?? [], capabilities: options.capabilities }] } }));
+      active_task_ids: options.activeTaskIds ?? [], active_question_waits: options.activeQuestionWaits ?? [], capabilities: options.capabilities }] } }));
   await layer.drain();
   let rpcId = 0;
   return { frames, layer, session, downlinks,

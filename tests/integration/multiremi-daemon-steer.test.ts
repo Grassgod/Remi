@@ -3,7 +3,7 @@
 // prompt on the same provider session; turn wrap-up additionally arms a grace
 // deadline after which the run completes with the output produced so far.
 import { disabledSshMeshRuntime } from "../helpers/ssh-mesh-isolation.js";
-import { afterEach, describe, expect, it, spyOn } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
 import { MultiremiDaemonClient } from "@multiremi/client.js";
 import { openIntegrationDatabase, type IntegrationDatabase } from "../helpers/integration-database.js";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -19,9 +19,18 @@ import { DaemonProtocolSession } from "@multiremi/api/daemon-protocol/session.js
 import { unreadRangeHint } from "@multiremi/contracts/session-input.js";
 
 let database: IntegrationDatabase | null = null;
+let fixtureStore: MultiremiStore | null = null;
 let workDir: string | null = null;
 let activeDaemon: MultiremiDaemon | null = null;
 const activeServers = new Set<{ stop(closeActiveConnections?: boolean): unknown }>();
+
+beforeEach(async () => {
+  // Database provisioning and schema migration are environment setup. Keep
+  // the unchanged 5s test budget focused on native steer delivery and completion.
+  database = await openIntegrationDatabase();
+  fixtureStore = new MultiremiStore(database.db);
+  workDir = mkdtempSync(join(tmpdir(), 'multiremi-daemon-steer-'));
+});
 
 afterEach(async () => {
   await activeDaemon?.stopAndDrainTestWork();
@@ -30,16 +39,15 @@ afterEach(async () => {
   activeServers.clear();
   await database?.close();
   database = null;
+  fixtureStore = null;
   if (workDir) {
     rmSync(workDir, { recursive: true, force: true });
     workDir = null;
   }
 });
 
-async function testBed(prefix: string): Promise<{ store: MultiremiStore; root: string }> {
-  database = await openIntegrationDatabase();
-  workDir = mkdtempSync(join(tmpdir(), prefix));
-  return { store: new MultiremiStore(database.db), root: workDir };
+async function testBed(_prefix: string): Promise<{ store: MultiremiStore; root: string }> {
+  return { store: fixtureStore!, root: workDir! };
 }
 
 function daemonRuntimeIdForTest(daemonId: string, provider: string): string {
@@ -281,6 +289,8 @@ describe("Bun Multiremi daemon steering", () => {
     let steerPushes = 0;
     let steerId = "";
     let replayedMessage: Record<string, unknown> | null = null;
+    let resolveReplay!: () => void;
+    const replayReceived = new Promise<void>(resolve => { resolveReplay = resolve; });
     const prompts: string[] = [];
     const response: AgentResponse = {
       text: "",
@@ -297,26 +307,21 @@ describe("Bun Multiremi daemon steering", () => {
         if (prompts.length === 1) {
           yield chunk("english draft. ");
           steerId = store.createTaskSteerMessage({ taskId: task.id, kind: "steer", content: "改用中文输出" }).id;
-          await Bun.sleep(450);
+          await new Promise<void>(resolve => {
+            if (options?.signal?.aborted) resolve();
+            else options?.signal?.addEventListener("abort", () => resolve(), { once: true });
+          });
           return;
         }
         yield chunk("中文结论");
         expect(replayedMessage).not.toBeNull();
-        const replay = setTimeout(() => {
-          const session = layer.registry.sessionForRuntime(runtimeId);
-          if (session instanceof DaemonProtocolSession) session.sendEvent({ t: "turn.message", rt: runtimeId,
-            p: replayedMessage! });
-        }, 200);
-        // Keep turn 2 running while the stale push lands. Like the
-        // real ACP provider, an abort cancels the turn — a duplicate-triggered
-        // interrupt here is exactly the bug this test guards against.
-        const deadline = Date.now() + 900;
-        try {
-          while (Date.now() < deadline) {
-            if (options?.signal?.aborted) throw new Error("Cancelled");
-            await Bun.sleep(20);
-          }
-        } finally { clearTimeout(replay); }
+        const session = layer.registry.sessionForRuntime(runtimeId);
+        expect(session).toBeInstanceOf(DaemonProtocolSession);
+        (session as DaemonProtocolSession).sendEvent({ t: "turn.message", rt: runtimeId, p: replayedMessage! });
+        // Hold turn 2 open until every handler for the replay has settled.
+        await replayReceived;
+        await activeDaemon!.daemonProtocolClient().drain();
+        expect(options?.signal?.aborted).toBe(false);
       },
       getLastResponse: () => response,
     });
@@ -338,6 +343,7 @@ describe("Bun Multiremi daemon steering", () => {
           if (frame.type === "turn.message" && (frame.payload.message as { id?: string })?.id === steerId) {
             steerPushes++;
             replayedMessage = frame.payload;
+            if (steerPushes === 2) resolveReplay();
           }
         } },
         providerFactory,

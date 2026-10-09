@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { afterEach, describe, expect, it } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { createStore, jsonResponse, mockFetch, resetMultiremiTestEnv } from "./helpers.js";
@@ -167,7 +168,7 @@ describe("skill workspace request context", () => {
       const { store, workspace, other, user, headers, app } = await fixture();
       store.createWorkspaceMember({ workspaceId: other.id, userId: user.id, name: user.name, role: "member" });
       const agent = store.createAgent({ workspaceId: workspace.id, name: "Task agent", provider: "claude" });
-      const issue = store.createIssue({ workspaceId: workspace.id, title: "Task" });
+      const issue = createResponsibleTestIssue(store, { workspaceId: workspace.id, title: "Task" });
       const task = store.createTask({ workspaceId: workspace.id, agentId: agent.id, issueId: issue.id, prompt: "Work" });
       const taskToken = await store.createTaskAccessToken(task, user.id);
       const pat = await store.createAccessToken({ workspaceId: workspace.id, name: "Scoped PAT", type: "pat" });

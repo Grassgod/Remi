@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { describe, expect, it } from "bun:test";
 import { conversationLogPgAdminUrl as pgAdminUrl, withConversationLogStore as withStore } from "./fixtures/conversation-log-store.js";
 
@@ -32,11 +33,11 @@ describe("MUL-427 ruling (e): agentCommentedSince query equivalence", () => {
         const runtime = store.registerRuntime({ id: "rt_comment_matrix", name: "Matrix runtime", provider: "codex", workspaceId: "local" });
         const sinceBoundary = "2026-01-02T00:00:00.000Z";
         for (const [name, expected] of AGENT_COMMENTED_EQUIVALENCE_CASES) {
-          const issue = store.createIssue({ title: name, workspaceId: "local" });
+          const issue = createResponsibleTestIssue(store, { title: name, workspaceId: "local" });
           const session = store.getOrCreateDefaultIssueSession(issue.id);
           let taskId = store.createSessionTask(session.id,{agentId:agent.id,prompt:"Matrix input"}).id;
           const sourceIssue = name === "different issue"
-            ? store.createIssue({ title: "Other issue", workspaceId: "local" }) : issue;
+            ? createResponsibleTestIssue(store, { title: "Other issue", workspaceId: "local" }) : issue;
           const sourceSession = name === "same issue side session"
             ? store.createIssueSession(issue.id, { title: "Side" })
             : store.getOrCreateDefaultIssueSession(sourceIssue.id);
@@ -94,7 +95,7 @@ describe("MUL-427 ruling (e): agentCommentedSince query equivalence", () => {
       await withStore(backend, (store, db) => {
         const runtime = store.registerRuntime({ id: "rt_no_double_reply", name: "Reply runtime", provider: "codex", workspaceId: "local" });
         const agent = store.createAgent({ name: "Reply author", provider: "codex", workspaceId: "local" });
-        const issue = store.createIssue({ title: "One reply per round", workspaceId: "local" });
+        const issue = createResponsibleTestIssue(store, { title: "One reply per round", workspaceId: "local" });
         const session = store.getOrCreateDefaultIssueSession(issue.id);
         const task = store.createSessionTask(session.id, { agentId: agent.id, prompt: "Respond" });
         expect(store.claimTask(runtime.id)?.id).toBe(task.id);
@@ -118,7 +119,7 @@ describe("MUL-427 ruling (e): agentCommentedSince query equivalence", () => {
       await withStore(backend, (store, db) => {
         const runtime = store.registerRuntime({ id: "rt_deleted_reply", name: "Deleted reply runtime", provider: "codex", workspaceId: "local" });
         const agent = store.createAgent({ name: "Deleted reply author", provider: "codex", workspaceId: "local" });
-        const issue = store.createIssue({ title: "Deleted comment does not count", workspaceId: "local" });
+        const issue = createResponsibleTestIssue(store, { title: "Deleted comment does not count", workspaceId: "local" });
         const session = store.getOrCreateDefaultIssueSession(issue.id);
         const task = store.createSessionTask(session.id, { agentId: agent.id, prompt: "Reply after deletion" });
         expect(store.claimTask(runtime.id)?.id).toBe(task.id);

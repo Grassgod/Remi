@@ -61,6 +61,41 @@ the provider's separate steering extensions or a real model.
 
 Local regression: `bun run test tests/integration/daemon-protocol-v2/running-chat-interrupts.test.ts`.
 
+For the responsibility acceptance scenario, send `PR404/RESP/ASK` in the source
+Issue request. The provider confirms an actual CLI range read, sends a real
+`elicitation/create` JSON-RPC request, and keeps the original prompt open until
+the daemon returns the human answer. It records the original Q ID by reading
+that conversation and `remi message question get`; a later prompt in the same
+product lane observes the saved answer without creating another Q.
+The lookup uses the original provider message in `human_request.payload.message`
+and the source turn/Agent identity. The daemon may repeat that text in the
+rendered `body_md` when it combines the form message and question field; the
+rendered body is not an exact provider-message identifier.
+
+Add `PR404/RESP/PRESENTER` to the dedicated PPE Remi agent's instructions. A
+presentation prompt must contain an actual `question_present_request`
+notification in its authorized input range. The fixture reads the referenced
+original Q, checks the notification's current route revision, and invokes
+`remi message question present` under that attempt's task credential. It keeps
+the original question and options intact. A stale notification cannot present
+the current Q; inherited ASK text does not create another question. Presenter
+prompts also ignore inherited SUBMIT markers: they only present the original Q
+and leave formal delivery to the source execution.
+
+`PR404/RESP/SUBMIT` invokes `remi issue delivery submit` for the current source
+Issue/session with a stable attempt-specific dedupe key. It can accompany ASK
+to submit only after the answer. The backend still enforces the actual
+execution-owner permission. These branches never impersonate a human reviewer
+or approve a delivery. `session/cancel` also releases a pending provider RPC
+without a successful reply.
+
+Responsibility evidence uses `PPE_RESPONSIBILITY_EVIDENCE` and a separate 0600
+JSONL file containing receipt boundaries, Q/delivery IDs and actions; it omits
+credentials and raw conversation text. This is a synthetic PPE provider
+scenario. Correlate the Q and consumer turn with the real UI and daemon before
+claiming product acceptance. Local coverage is
+`bun run test tests/unit/scripts/ppe-fake-acp.test.ts`.
+
 The PPE image runs the source CLI with Bun; the fixture detects
 `/app/apps/remi/main.ts` and uses that same entry. Other environments use `remi`
 on PATH. Local fixture tests may supply `PPE_ACP_REMI_BIN` and

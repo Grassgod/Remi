@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { MultiremiStore } from "@multiremi/store.js";
 import { historicalWriters } from "./unified-model-test-backends.js";
@@ -20,7 +21,7 @@ function fixture() {
   ] });
   const project = store.createProject({ title: "Code discussion", workspaceId: "local" });
   store.createProjectResource(project.id, { resourceType: "github_repo", resourceRef: { url: repositoryUrl } });
-  const issue = store.createIssue({ title: "Read current code", workspaceId: "local", projectId: project.id });
+  const issue = createResponsibleTestIssue(store, { title: "Read current code", workspaceId: "local", projectId: project.id });
   const parent = store.getOrCreateDefaultIssueSession(issue.id);
   const agent = store.createAgent({ name: "Code reader", provider: "codex", workspaceId: "local" });
   const runtime = store.registerRuntime({

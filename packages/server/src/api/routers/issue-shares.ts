@@ -116,7 +116,9 @@ export function registerIssueShareRoutes(app: Hono, deps: RouterDeps): void {
     const share = resolveActiveIssueShareToken(token, store, shareSecret);
     if (!share) return c.json({ error: "attachment not found" }, 404);
     const attachment = store.getAttachment(c.req.param("attachmentId"));
-    if (!attachment || !attachmentBelongsToIssue(attachment.issueId, attachment.commentId, share.issueId, deps)) {
+    const issue = store.getIssue(share.issueId);
+    if (!issue || issue.workspaceId !== share.workspaceId || !attachment || attachment.workspaceId !== share.workspaceId
+      || !attachmentBelongsToIssue(attachment.issueId, attachment.commentId, share.issueId, deps)) {
       return c.json({ error: "attachment not found" }, 404);
     }
     if (!attachment.url.startsWith("/api/attachments/")) return c.redirect(attachment.url);
@@ -290,9 +292,13 @@ function attachmentBelongsToIssue(
   sharedIssueId: string,
   deps: RouterDeps,
 ): boolean {
-  if (issueId === sharedIssueId) return true;
-  if (!commentId) return false;
-  return deps.store.getIssueComment(commentId)?.issueId === sharedIssueId;
+  const issue = deps.store.getIssue(sharedIssueId);
+  if (!issue) return false;
+  if (commentId) {
+    const comment = deps.store.getIssueComment(commentId);
+    return comment?.issueId === sharedIssueId && deps.store.getIssueCommentSourceWorkspaceId(commentId) === issue.workspaceId;
+  }
+  return issueId === sharedIssueId;
 }
 
 function referencedActors(

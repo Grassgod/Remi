@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { afterEach, describe, expect, it } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { createStore, resetMultiremiTestEnv } from "./helpers.js";
@@ -173,14 +174,14 @@ describe("Multiremi API — project device routing", () => {
     });
 
     const agent = store.createAgent({ name: "Migrated routing", provider: "codex" });
-    const issue = store.createIssue({ title: "Bound work", projectId: project.id });
+    const issue = createResponsibleTestIssue(store, { title: "Bound work", projectId: project.id });
     const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "run" });
     expect(store.claimTask(canonicalRuntimeId)?.id).toBe(task.id);
     store.startTask(task.id);
     store.completeTask(task.id, { output: "done" });
 
     const ordinary = store.createProject({ title: "Ordinary" });
-    const ordinaryIssue = store.createIssue({ title: "Ordinary work", projectId: ordinary.id });
+    const ordinaryIssue = createResponsibleTestIssue(store, { title: "Ordinary work", projectId: ordinary.id });
     store.createTask({ agentId: agent.id, issueId: ordinaryIssue.id, prompt: "reject" });
     expect(store.claimTask(canonicalRuntimeId)).toBeNull();
   });

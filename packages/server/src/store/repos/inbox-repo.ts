@@ -39,9 +39,13 @@ export class InboxRepo {
     const members=(address.role==='issue_owner'||address.role==='parent_owner')?(()=>{
       const issueId=address.role==='issue_owner'?address.issueId:this.ctx.issues().getIssue(address.childIssueId)?.parentIssueId;
       const issue=issueId?this.ctx.issues().getIssue(issueId):null;
-      if(issue?.assigneeType!=='member'||!issue.assigneeId)return [];
+      const child=address.role==='parent_owner'?this.ctx.issues().getIssue(address.childIssueId):null;
+      if(child && issue && child.workspaceId!==issue.workspaceId)throw new Error('Envelope parent Issue belongs to another workspace');
+      const responsibility=issue?this.ctx.resolveIssueResponsibility(issue.id):null;
+      if(!issue||responsibility?.executionOwner||!responsibility?.rootHuman)return [];
       const session=this.ctx.issueSessions().getOrCreateDefaultIssueSessionWithinTransaction(issue.id);
-      return [{workspaceId:issue.workspaceId,agentId:'',issueId:issue.id,issueSessionId:session.id,chatSessionId:null,executionScope:''}];
+      return [{workspaceId:issue.workspaceId,agentId:'',issueId:issue.id,issueSessionId:session.id,chatSessionId:null,executionScope:'',
+        memberId:responsibility.rootHuman.id,unresolved:responsibility.unresolved}];
     })():[];
     const recipients=members.length?members:this.resolveRecipients(env);
     const source=env.source.taskId?this.ctx.tasks().getTask(env.source.taskId):null;
@@ -49,7 +53,7 @@ export class InboxRepo {
     for(const recipient of recipients){
       const sessionId=recipient.issueSessionId??recipient.chatSessionId!;
       const before=env.dedupeKey?this.ctx.db.query('SELECT id FROM multiremi_conversation_log WHERE session_id=? AND dedupe_key=?').get(sessionId,env.dedupeKey):null;
-      const member=members.length?this.ctx.issues().getIssue(recipient.issueId!)!.assigneeId:null;
+      const member=members.find(item=>item.issueId===recipient.issueId)?.memberId;
       const reply=env.replyTo?this.getMessage(env.replyTo):null;
       const activeBefore=this.ctx.db.query("SELECT id FROM multiremi_turns WHERE session_id=? AND agent_id=? AND execution_scope=? AND status IN ('pending','running','awaiting_human')").get(sessionId,recipient.agentId,recipient.executionScope);
       const sourceTurn=source?this.ctx.db.query('SELECT turn_id FROM multiremi_turn_attempts WHERE id=?').get(source.id):null;
@@ -57,7 +61,8 @@ export class InboxRepo {
         to:member?{type:'member',ref:member}:{type:'agent',ref:recipient.agentId},message_kind:env.kind==='lifecycle'?'status':env.kind==='decision_needed'?'decision':env.kind,
         wake_requested:env.wake,body_md:env.body,dedupe_key:env.dedupeKey,
         reply_to_id:reply?.session_id===sessionId?reply.id:null,execution_scope:recipient.executionScope,
-        metadata:{message_source:env.source,message_outcome:env.outcome,priority:envelopePriority(env),address_context:env.to},
+        metadata:{message_source:env.source,message_outcome:env.outcome,priority:envelopePriority(env),address_context:env.to,
+          ...(member?{responsibility_unresolved:members[0]!.unresolved}:{})},
       },deferredEvents,{issueId:recipient.issueId,...(env.to.role==='delegator'&&source?{
         delegationId:source.delegationId,delegatedByAgentId:recipient.agentId,delegatedFromIssueSessionId:source.delegatedFromIssueSessionId,
         priority:source.priority,parentTaskId:null,wakeSource:'delegation_return',
@@ -82,9 +87,10 @@ export class InboxRepo {
     this.ctx.lockWorkspaceRuntimeLifecycle(initial.workspaceId);
     const issue = this.ctx.issues().getIssue(issueId);
     if (!issue || issue.workspaceId !== initial.workspaceId) throw new Error("Envelope Issue moved or was removed");
-    const agent = agentId ? this.ctx.agents().getAgent(agentId)
-      : issue.assigneeType && issue.assigneeId
-        ? this.ctx.resolveRunnableAgentForAssignee(issue.assigneeType, issue.assigneeId) : null;
+    const responsibility = !agentId ? this.ctx.resolveIssueResponsibility(issue.id) : null;
+    if (responsibility?.unresolved.length) throw new Error('Envelope Issue responsibility is unresolved; repair its owner and root human');
+    const ownerId = agentId ?? responsibility?.executionOwner?.id;
+    const agent = ownerId ? this.ctx.agents().getAgent(ownerId) : null;
     if (!agent || agent.archivedAt || agent.workspaceId !== issue.workspaceId) {
       throw new Error("Envelope Issue has no runnable owner in its workspace");
     }
@@ -104,6 +110,8 @@ export class InboxRepo {
       case "parent_owner": {
         const child = this.ctx.issues().getIssue(address.childIssueId);
         if (!child?.parentIssueId) throw new Error("Envelope child Issue has no parent");
+        const parent=this.ctx.issues().getIssue(child.parentIssueId);
+        if(!parent || parent.workspaceId!==child.workspaceId)throw new Error('Envelope parent Issue is missing or belongs to another workspace');
         return [this.issueRecipient(child.parentIssueId)];
       }
       case "agent": {

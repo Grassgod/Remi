@@ -52,11 +52,26 @@ function expectedSummary(db: SqlDatabase, runtimeId: string) {
   return expected;
 }
 
-test("runtime list/detail uses canonical facts across repeated reads, revisions, transactions and isolated runtimes", async () => {
-  const database = await openHotspotDatabase();
-  const db = database.db;
-  const store = new MultiremiStore(db);
-  try {
+describe("runtime list canonical facts", () => {
+  let database: Awaited<ReturnType<typeof openHotspotDatabase>> | undefined;
+  let db: SqlDatabase;
+  let store: MultiremiStore;
+  const disposeFixture = async () => {
+    const current = database;
+    database = undefined;
+    await current?.dispose();
+  };
+  // Schema/database creation has its own fixture budget, as for the open-usage suite below.
+  beforeAll(async () => {
+    try {
+      database = await openHotspotDatabase();
+      db = database.db;
+      store = new MultiremiStore(db);
+    } catch (error) { await disposeFixture(); throw error; }
+  }, 30_000);
+  afterAll(disposeFixture);
+
+  test("runtime list/detail uses canonical facts across repeated reads, revisions, transactions and isolated runtimes", () => {
     store.ensureLocalWorkspace();
     const agent = store.createAgent({ name: "usage golden", provider: "codex" });
     for (const id of ["rt_usage_a", "rt_usage_b", "rt_usage_empty"]) store.registerRuntime({ id, name: id, provider: "codex" });
@@ -99,7 +114,7 @@ test("runtime list/detail uses canonical facts across repeated reads, revisions,
     })()).toThrow("rollback");
     compare();
     db.run("DELETE FROM multiremi_turn_attempts WHERE id = ?", changed); compare();
-  } finally { await database.dispose(); }
+  });
 });
 
 describe("runtime list open-usage fixture", () => {

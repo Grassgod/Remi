@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { requestMessageBody, taskRequestPath, sentTask, mutateExecutionFixture } from "./unified-test-paths.js";
 import { afterEach, describe, expect, it } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
@@ -21,7 +22,7 @@ function fixture() {
     visibility: "private",
   });
   const squad = store.createSquad({ name: "Delivery", leaderId: leader.id, memberIds: [worker.id, otherWorker.id] });
-  const issue = store.createIssue({ title: "Continue delegated work", assigneeType: "squad", assigneeId: squad.id });
+  const issue = createResponsibleTestIssue(store, { title: "Continue delegated work", assigneeType: "squad", assigneeId: squad.id });
   const session = store.getOrCreateDefaultIssueSession(issue.id);
   const leaderTask = store.createTask({
     agentId: leader.id,

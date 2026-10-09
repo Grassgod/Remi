@@ -3,18 +3,23 @@ import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { I18nProvider } from "@multiremi/core/i18n/react";
 import enChat from "../../locales/en/chat.json";
+import enIssues from "../../locales/en/issues.json";
 import { HumanRequestDock } from "./human-request-dock";
 
-const { listMessages, sendMessage } = vi.hoisted(() => ({
+const { listMessages, sendMessage, getQuestion, actOnQuestion } = vi.hoisted(() => ({
   listMessages: vi.fn(),
   sendMessage: vi.fn(async () => ({})),
+  getQuestion: vi.fn(), actOnQuestion: vi.fn(),
 }));
 
 vi.mock("@multiremi/core/api", () => ({
-  api: { listMessages, sendMessage },
+  api: { listMessages, sendMessage, getQuestion, actOnQuestion },
 }));
+vi.mock("@multiremi/core/hooks", () => ({ useWorkspaceId: () => "ws" }));
+vi.mock("@multiremi/core/paths", () => ({ useWorkspaceSlug: () => "ws", useWorkspacePaths: () => ({ inboxItem: (id: string) => `/ws/inbox?item=${id}` }) }));
+vi.mock("../../navigation", () => ({ AppLink: (props: { href: string; children: React.ReactNode }) => <a {...props} /> }));
 
-const TEST_RESOURCES = { en: { chat: enChat } };
+const TEST_RESOURCES = { en: { chat: enChat, issues: enIssues } };
 
 const PERMISSION_REQUEST = {
   id: "hrq_perm",
@@ -60,6 +65,13 @@ const QUESTION_REQUEST = {
 };
 
 function renderDock(requests: unknown[]) {
+  getQuestion.mockImplementation(async (id: string) => {
+    const request = requests.find(value => (value as { id: string }).id === id) as typeof PERMISSION_REQUEST & typeof QUESTION_REQUEST & { payload: { context?: { text: string } } };
+    return { id, kind: request.kind, session_id: "session_1", workspace_id: "ws", source_issue_id: null, source_agent_id: "agent", source_turn_id: "turn_1", source_attempt_id: null,
+      original_questions: request.payload.questions ?? [], original_context: request.payload.context ?? null, original_message: request.payload.message ?? request.payload.tool_call?.title ?? "",
+      options: request.kind === "permission" ? request.payload.options.map(option => ({ label: option.name, value: option.optionId })) : null,
+      summary: null, current_handler: { type: "member", id: "human" }, stage: "human", route_revision: 1, answer_revision: 0, status: "pending", wait_status: "waiting", wait_reason: null, answer: null, history: [], actions: { allowed: ["answer"] } };
+  });
   listMessages.mockResolvedValue({ messages: requests.map(value => {
     const request = value as typeof PERMISSION_REQUEST;
     return { id: request.id, task_id: "turn_1", created_at: request.createdAt,
@@ -67,6 +79,12 @@ function renderDock(requests: unknown[]) {
       metadata: { human_request: request } };
   }), next_cursor: null });
   mountDock();
+}
+
+async function openQuestion() {
+  fireEvent.click(await screen.findByRole("button", { name: "View question" }));
+  await screen.findByRole("dialog");
+  await waitFor(() => expect(document.querySelector("[data-question-id]")).not.toBeNull());
 }
 
 function mountDock() {
@@ -83,6 +101,7 @@ function mountDock() {
 beforeEach(() => {
   listMessages.mockReset();
   sendMessage.mockClear();
+  getQuestion.mockReset(); actOnQuestion.mockReset(); actOnQuestion.mockImplementation(async (id: string) => getQuestion(id));
 });
 
 describe("HumanRequestDock", () => {
@@ -94,18 +113,27 @@ describe("HumanRequestDock", () => {
 
   it("responds to a permission request with the clicked option", async () => {
     renderDock([PERMISSION_REQUEST]);
-    await screen.findByText("Permission required");
+    await openQuestion();
     expect(screen.getByText("Bash: rm -rf ./dist")).toBeTruthy();
 
     fireEvent.click(screen.getByText("Allow once"));
+    fireEvent.click(screen.getByRole("button", { name: "Answer" }));
     await waitFor(() =>
-      expect(sendMessage).toHaveBeenCalledWith("session_1", { body_md: "opt-allow", message_kind: "reply", reply_to_id: "hrq_perm", response: { option_id: "opt-allow" } }),
+      expect(actOnQuestion).toHaveBeenCalledWith("hrq_perm", "answer", expect.objectContaining({ expected_route_revision: 1, response: { option_id: "opt-allow" } })),
     );
   });
 
   it("submits question answers keyed by question text", async () => {
     renderDock([QUESTION_REQUEST]);
-    await screen.findByText("Agent question");
+    await screen.findByRole("button", { name: "View question" });
+    expect(screen.queryByText("Which environment should I deploy to?")).toBeNull();
+    expect(getQuestion).not.toHaveBeenCalled();
+    actOnQuestion.mockImplementationOnce(async (id: string, _action: string, input: { response: Record<string, unknown> }) => ({
+      ...await getQuestion(id), status: "answered", wait_status: "consumed", actions: { allowed: [] },
+      answer: { response: input.response, body_md: JSON.stringify(input.response), actor: { type: "member", id: "human" }, at: "now", reply_message_id: "reply" },
+    }));
+    await openQuestion();
+    expect(screen.getByRole("dialog")).toHaveAttribute("data-side", "right");
 
     const submit = screen.getByText("Submit").closest("button")!;
     expect(submit.disabled).toBe(true);
@@ -115,8 +143,14 @@ describe("HumanRequestDock", () => {
 
     fireEvent.click(submit);
     await waitFor(() =>
-      expect(sendMessage).toHaveBeenCalledWith("session_1", { body_md: "staging", message_kind: "reply", reply_to_id: "hrq_q", response: { answers: { "Which environment should I deploy to?": "staging" } } }),
+      expect(actOnQuestion).toHaveBeenCalledWith("hrq_q", "answer", expect.objectContaining({ expected_route_revision: 1, response: { answers: { "Which environment should I deploy to?": "staging" } } })),
     );
+    await screen.findByText("Answered · execution resumed");
+    expect(screen.queryByText("Answer consumed by original call")).toBeNull();
+    expect(screen.queryByRole("button", { name: "staging" })).toBeNull();
+    expect(screen.queryByText("production")).toBeNull();
+    expect(screen.getByText("staging")).toBeInTheDocument();
+    expect(sendMessage).not.toHaveBeenCalled();
   });
 
   it("renders markdown context and hides a message that duplicates the first question", async () => {
@@ -128,6 +162,7 @@ describe("HumanRequestDock", () => {
       },
     }]);
 
+    await openQuestion();
     const emphasized = await screen.findByText("deployment tradeoffs");
     expect(emphasized.tagName).toBe("STRONG");
     expect(screen.getAllByText("Which environment should I deploy to?")).toHaveLength(1);
@@ -136,7 +171,7 @@ describe("HumanRequestDock", () => {
   it("renders an old question payload without context", async () => {
     renderDock([QUESTION_REQUEST]);
 
-    await screen.findByText("Agent question");
+    await openQuestion();
     expect(screen.queryByText("Earlier context omitted")).toBeNull();
     expect(screen.queryByRole("button", { name: "Expand" })).toBeNull();
     expect(screen.getAllByText("Which environment should I deploy to?")).toHaveLength(1);
@@ -153,6 +188,7 @@ describe("HumanRequestDock", () => {
         },
       }]);
 
+      await openQuestion();
       const expand = await screen.findByRole("button", { name: "Expand" });
       expect(expand).toHaveAttribute("aria-expanded", "false");
       fireEvent.click(expand);
@@ -178,6 +214,7 @@ describe("HumanRequestDock", () => {
       },
     }]);
 
+    await openQuestion();
     const option = await screen.findByRole("button", { name: longLabel });
     expect(option).toHaveClass("max-w-full", "whitespace-normal", "break-words");
   });
@@ -191,13 +228,14 @@ describe("HumanRequestDock", () => {
   });
 
   it("keeps the request actionable and shows feedback after a response failure", async () => {
-    sendMessage.mockRejectedValueOnce(new Error("network down"));
+    actOnQuestion.mockRejectedValueOnce(new Error("network down"));
     renderDock([PERMISSION_REQUEST]);
-    await screen.findByText("Permission required");
+    await openQuestion();
 
     fireEvent.click(screen.getByText("Allow once"));
+    fireEvent.click(screen.getByRole("button", { name: "Answer" }));
 
-    expect(await screen.findByText("Response failed. Try again.")).toBeTruthy();
+    expect(await screen.findByRole("alert")).toHaveTextContent("network down");
     expect(screen.getByText("Allow once").closest("button")?.disabled).toBe(false);
   });
 });

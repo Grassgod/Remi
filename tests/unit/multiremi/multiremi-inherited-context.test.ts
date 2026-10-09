@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { MultiremiStore } from "@multiremi/store.js";
 import { historicalWriters } from "./unified-model-test-backends.js";
@@ -30,7 +31,7 @@ function fixture(largeParent = false, parentAuthorType: "agent" | "member" = "ag
   const store = createLocalStore();
   const runtime = store.registerRuntime({ name: "Inherited diagnostics", provider: "claude", workspaceId: "local" });
   const agent = store.createAgent({ name: "Reader", provider: "claude", workspaceId: "local", runtimeId: runtime.id });
-  const issue = store.createIssue({ title: "Inherited diagnostics", workspaceId: "local" });
+  const issue = createResponsibleTestIssue(store, { title: "Inherited diagnostics", workspaceId: "local" });
   const parent = store.getOrCreateDefaultIssueSession(issue.id);
   for (let index = 0; index < (largeParent ? 24 : 2); index++) {
     store.appendSessionEvent(parent.id, {
@@ -250,7 +251,7 @@ describe("persisted inherited context diagnostics", () => {
   it("distinguishes an empty inherited snapshot from a task that has no diagnostics", async () => {
     const store = createLocalStore();
     const agent = store.createAgent({ name: "Empty reader", provider: "claude", workspaceId: "local" });
-    const issue = store.createIssue({ title: "Empty snapshot", workspaceId: "local" });
+    const issue = createResponsibleTestIssue(store, { title: "Empty snapshot", workspaceId: "local" });
     const parent = store.getOrCreateDefaultIssueSession(issue.id);
     const side = store.createIssueSession(issue.id, { parentSessionId: parent.id });
     const task = store.createSessionTask(side.id, { agentId: agent.id, prompt: "Read" });
@@ -344,7 +345,7 @@ describe("persisted inherited context diagnostics", () => {
   it("requires authentication and hides other workspaces from both member and task tokens", async () => {
     const { store, issue, side, task, app } = fixture();
     const privateWorkspace = store.createWorkspace({ name: "Private", slug: "private", issuePrefix: "PRI" });
-    const privateIssue = store.createIssue({ title: "Hidden issue", workspaceId: privateWorkspace.id });
+    const privateIssue = createResponsibleTestIssue(store, { title: "Hidden issue", workspaceId: privateWorkspace.id });
     const privateParent = store.getOrCreateDefaultIssueSession(privateIssue.id);
     const privateSide = store.createIssueSession(privateIssue.id, { title: "Hidden side", parentSessionId: privateParent.id });
     store.createWorkspaceMember({ workspaceId: issue.workspaceId, userId: "reader", name: "Reader", role: "member" });

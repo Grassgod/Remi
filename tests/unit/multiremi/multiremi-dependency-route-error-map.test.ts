@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { issueMessagesPath, requestMessageBody } from "./unified-test-paths.js";
 /**
  * MUL-409 fix round 4 (QA round 3, blocker 3): every native and compatibility
@@ -28,15 +29,15 @@ function storeWithAgent(name = "Map") {
 /** A parked dependent, its open prerequisite, and a second independent issue. */
 function parked() {
   const { store, runtime, agent } = storeWithAgent("errormap");
-  const prereq = store.createIssue({ title: "Prerequisite", status: "in_progress" });
-  const dependent = store.createIssue({
+  const prereq = createResponsibleTestIssue(store, { title: "Prerequisite", status: "in_progress" });
+  const dependent = createResponsibleTestIssue(store, {
     title: "Waiting",
     status: "backlog",
     blockedBy: [prereq.id],
     assigneeType: "agent",
     assigneeId: agent.id,
   });
-  const other = store.createIssue({ title: "Other", status: "in_progress" });
+  const other = createResponsibleTestIssue(store, { title: "Other", status: "in_progress" });
   return { store, runtime, agent, prereq, dependent, other };
 }
 
@@ -47,7 +48,7 @@ describe("MUL-400 E3 — fix round 4: dependency errors never surface as 500", (
     for (const identity of ["agent", "member session", "member direct"]) {
       const { store, agent, dependent, prereq } = parked();
       const requester = store.createAgent({name: "Other requester", provider: "claude"});
-      const sourceIssue = store.createIssue({title: "Source work"});
+      const sourceIssue = createResponsibleTestIssue(store, {title: "Source work"});
       const source = store.createTask({agentId: requester.id, issueId: sourceIssue.id, prompt: "Request delegated work"});
       const credential = await store.createTaskAccessToken(store.getTask(source.id)!, "local");
       const app = createMultiremiApp({ store });
@@ -91,7 +92,7 @@ describe("MUL-400 E3 — fix round 4: dependency errors never surface as 500", (
   it("maps every waiting-issue entry point to 4xx with a code", async () => {
     const { store, agent, prereq, dependent, other } = parked();
     const requester = store.createAgent({name: "Other requester", provider: "claude"});
-    const sourceIssue = store.createIssue({title: "Source work"});
+    const sourceIssue = createResponsibleTestIssue(store, {title: "Source work"});
     const source = store.createTask({agentId: requester.id, issueId: sourceIssue.id, prompt: "Request delegated work"});
     const credential = await store.createTaskAccessToken(store.getTask(source.id)!, "local");
     const app = createMultiremiApp({ store });

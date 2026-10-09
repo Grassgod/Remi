@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from "../../unit/multiremi/helpers.js";
 import { runTurnExecutionMutation } from "@multiremi/store/turn-execution-records.js";
 import { turnCompletion } from "../../fixtures/turn-report.js";
 import { expect, spyOn, test } from "bun:test";
@@ -183,7 +184,7 @@ for (const confirmed of [false, true]) {
       await h.settleHeartbeat();
       const runtimeId = h.ledger.find(entry => entry.type === "hello")!.frame.p.runtimes[0].runtime_id;
       const agent = h.store.createAgent({ name: "inert report recovery", provider: "claude", runtimeId, workspaceId: "local" });
-      const issue = h.store.createIssue({ title: "Recovered report", workspaceId: "local", assigneeType: "agent", assigneeId: agent.id });
+      const issue = createResponsibleTestIssue(h.store, { title: "Recovered report", workspaceId: "local", assigneeType: "agent", assigneeId: agent.id });
       const task = h.store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "inert recovery", maxAttempts: 1 });
       await waitFor(() => droppedStart && h.client.connectionState() === "disconnected", "first start disconnected", 5_000);
       expect(runs).toBe(0);
@@ -281,7 +282,7 @@ test("a new Issue message during offer recovery is consumed in the same turn", a
     await h.settleHeartbeat();
     const runtimeId = h.ledger.find(entry => entry.type === "hello")!.frame.p.runtimes[0].runtime_id;
     const agent = h.store.createAgent({ name: "Issue envelope recovery", provider: "claude", runtimeId });
-    const issue = h.store.createIssue({ title: "New work during recovery", status: "in_progress",
+    const issue = createResponsibleTestIssue(h.store, { title: "New work during recovery", status: "in_progress",
       assigneeType: "agent", assigneeId: agent.id });
     const send = (body: string, dedupeKey: string) => {
       const events = createCommitEventQueue();
@@ -344,8 +345,8 @@ test("duplicate completion does not repeat delegation wakeups, comments or count
     const leaderRuntime = h.store.registerRuntime({ name: "Inert upstream", provider: "codex", workspaceId: "local", daemonId: "upstream-device" });
     const leader = h.store.createAgent({ name: "Upstream", provider: "codex", runtimeId: leaderRuntime.id });
     const worker = h.store.createAgent({ name: "Actual offered worker", provider: "claude", runtimeId });
-    const parent = h.store.createIssue({ title: "Delegation parent", status: "in_progress", assigneeType: "agent", assigneeId: leader.id });
-    const child = h.store.createIssue({ title: "Delegation child", parentIssueId: parent.id, status: "in_progress", assigneeType: "agent", assigneeId: worker.id });
+    const parent = createResponsibleTestIssue(h.store, { title: "Delegation parent", status: "in_progress", assigneeType: "agent", assigneeId: leader.id });
+    const child = createResponsibleTestIssue(h.store, { title: "Delegation child", parentIssueId: parent.id, status: "in_progress", assigneeType: "agent", assigneeId: worker.id });
     const source = h.store.createTask({ agentId: leader.id, issueId: parent.id, prompt: "Coordinate child" });
     expect(h.store.claimTask(leaderRuntime.id)?.id).toBe(source.id);
     h.store.startTask(source.id);

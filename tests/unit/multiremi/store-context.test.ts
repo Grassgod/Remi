@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 // Sibling test for packages/server/src/store/context.ts — proves the StoreContext
 // is wired to the same state the MultiremiStore
 // facade exposes (listener Sets, analytics buffers) and that its lazy host
@@ -76,7 +77,7 @@ function createStore(): MultiremiStore {
 
   it("appends issue activity and broadcasts activity:created from the context", () => {
     const store = createStore();
-    const issue = store.createIssue({ title: "Ctx issue", workspaceId: "local" });
+    const issue = createResponsibleTestIssue(store, { title: "Ctx issue", workspaceId: "local" });
     const broadcasts: string[] = [];
     store.onWorkspaceEvent((event) => {
       broadcasts.push(event.type);
@@ -102,10 +103,14 @@ function createStore(): MultiremiStore {
   it("resolves the lazy host for cross-domain inbox creation", () => {
     const store = createStore();
     store.ensureLocalWorkspace();
-    const member = store.listWorkspaceMembers("local")[0]!;
-    const issue = store.createIssue({ title: "Assign me", workspaceId: "local" });
+    const member = store.getWorkspaceMember("mem_local_local")!;
+    const issue = createResponsibleTestIssue(store, { title: "Assign me", workspaceId: "local" });
 
-    store.assignIssue(issue.id, { assigneeType: "member", assigneeId: member.id });
+    expect(() => store.assignIssue(issue.id, { assigneeType: "member", assigneeId: member.id })).toThrow("Agent or team Leader");
+    // Historical assignment notifications still use the lazy Inbox/Issue host;
+    // they do not authorize a new member execution assignment.
+    const ctx = new StoreContext(db, () => store);
+    ctx.createInboxItem({ issueId: issue.id, memberId: member.id, type: "issue_assigned", title: "Existing assignment evidence", body: issue.title, actorType: "system" });
 
     const inbox = store.listInboxItems(member.id);
     expect(inbox.some((item) => item.type === "issue_assigned" && item.issueId === issue.id)).toBe(true);
@@ -113,13 +118,13 @@ function createStore(): MultiremiStore {
 
   it("routes to the triggering Issue Session before the default and rejects sessions outside the current workspace or Issue", () => {
     const store = createStore();
-    const issue = store.createIssue({ title: "Notification routing" });
+    const issue = createResponsibleTestIssue(store, { title: "Notification routing" });
     const main = store.getOrCreateDefaultIssueSession(issue.id);
     const side = store.createIssueSession(issue.id, { title: "Triggering comment" });
     const foreignWorkspace = store.createWorkspace({ name: "Foreign", slug: "foreign" });
-    const foreignIssue = store.createIssue({ title: "Foreign issue", workspaceId: foreignWorkspace.id });
+    const foreignIssue = createResponsibleTestIssue(store, { title: "Foreign issue", workspaceId: foreignWorkspace.id });
     const foreign = store.getOrCreateDefaultIssueSession(foreignIssue.id);
-    const otherIssue = store.createIssue({ title: "Other local issue" });
+    const otherIssue = createResponsibleTestIssue(store, { title: "Other local issue" });
     const other = store.getOrCreateDefaultIssueSession(otherIssue.id);
     const ctx = new StoreContext(db, () => store);
     for (const [trigger, expected] of [[side.id, side.id], [foreign.id, main.id], [other.id, main.id], ["ises_missing", main.id]]) {

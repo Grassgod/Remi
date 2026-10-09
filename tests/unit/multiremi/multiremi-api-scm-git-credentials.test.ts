@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { afterEach, describe, expect, it } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { createStore, db, resetMultiremiTestEnv } from "./helpers.js";
@@ -25,7 +26,7 @@ describe("Multiremi API — JIT Git credentials", () => {
     });
     const project = store.createProject({ title: "Read-only source", workspaceId: "local" });
     store.createProjectResource(project.id, { resourceType: "github_repo", resourceRef: { url: repositoryUrl } });
-    const issue = store.createIssue({ title: "Review code", workspaceId: "local", projectId: project.id });
+    const issue = createResponsibleTestIssue(store, { title: "Review code", workspaceId: "local", projectId: project.id });
     const agent = store.createAgent({ name: "Reader", provider: "codex", workspaceId: "local" });
     const runtime = store.registerRuntime({
       id: "rt_readonly", name: "Source", provider: "codex", workspaceId: "local", daemonId: "daemon_readonly",
@@ -99,7 +100,7 @@ describe("Multiremi API — JIT Git credentials", () => {
       resourceType: "github_repo",
       resourceRef: { url: repositoryUrl },
     });
-    const issue = store.createIssue({ title: "Use private repo", workspaceId: "local", projectId: project.id });
+    const issue = createResponsibleTestIssue(store, { title: "Use private repo", workspaceId: "local", projectId: project.id });
     const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "push" });
     const runtime = store.registerRuntime({ id: "rt_git", name: "codex", provider: "codex" });
     expect(store.claimTask(runtime.id)?.id).toBe(task.id);

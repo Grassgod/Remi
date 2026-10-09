@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { issueMessagesPath, requestMessageBody } from "./unified-test-paths.js";
 import { afterEach, describe, expect, it } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
@@ -23,7 +24,7 @@ async function fixture() {
     return { Authorization: `Bearer ${token}`, "Content-Type": "application/json", "X-Workspace-Slug": workspace.slug };
   }));
   const app = createMultiremiApp({ store, authToken: "root-secret" });
-  const issue = store.createIssue({ title: "Actor identity", workspaceId: workspace.id });
+  const issue = createResponsibleTestIssue(store, { title: "Actor identity", workspaceId: workspace.id });
   const comment = store.createIssueComment(issue.id, { body: "Thread", authorType: "member", authorId: users[0]!.id });
   return { store, app, workspace, users, members, headers, issue, comment };
 }

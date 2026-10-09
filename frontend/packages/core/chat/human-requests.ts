@@ -5,10 +5,9 @@ import { chatKeys } from "./queries";
 
 // ─── Types ───────────────────────────────────────────────────────────────
 //
-// A human request is an agent-side pause routed through the server: either a
-// tool-permission prompt ("permission") or an AskUserQuestion form
-// ("question"). The worker holds the ACP promise open until someone responds
-// here (or the request times out), so responding resumes the task.
+// Native permission and AskUserQuestion payloads feed the persistent Q view.
+// A worker may still be waiting or may have ended its provider call; answering
+// alone does not prove consumption. The Q projection owns that state.
 
 export type TaskHumanRequestKind = "permission" | "question";
 export type TaskHumanRequestStatus = "pending" | "responded" | "timeout" | "cancelled";
@@ -59,16 +58,21 @@ const permissionOptionSchema = z.object({
   name: z.string(),
 });
 
-const questionSchema = z.object({
+const questionPayloadSchema = z.object({
+  question: z.string(),
+  header: z.string().optional(),
+  options: z.array(z.object({ label: z.string(), description: z.string().optional() })).default([]),
+  multiSelect: z.boolean().optional(),
+});
+const questionSchema = z.union([z.object({
   fieldKey: z.string(),
   otherFieldKey: z.string().optional(),
-  question: z.object({
-    question: z.string(),
-    header: z.string().optional(),
-    options: z.array(z.object({ label: z.string(), description: z.string().optional() })).default([]),
-    multiSelect: z.boolean().optional(),
-  }),
-});
+  question: questionPayloadSchema,
+}), questionPayloadSchema.transform(question => ({
+  // SDK direct AUQ accepts a custom answer without an ACP other-field key.
+  // These keys belong only to the form projection; the original Q stays intact.
+  fieldKey: question.question, otherFieldKey: `${question.question}__other`, question,
+}))]);
 
 const questionContextSchema = z
   .object({

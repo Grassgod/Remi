@@ -184,11 +184,17 @@ export function registerProjectRoutes(app: Hono, deps: RouterDeps): void {
       body.resources,
     );
     if (repositoryError) return c.json({ error: repositoryError }, 400);
-    return c.json({
-      project: store.createProject(projectCreateInputWithDefaultLead(c, { ...body, workspaceId }), {
-        instructionsUpdatedBy: currentRequestUserId(c),
-      }),
-    }, 201);
+    try {
+      return c.json({
+        project: store.createProject(projectCreateInputWithDefaultLead(c, { ...body, workspaceId }), {
+          instructionsUpdatedBy: currentRequestUserId(c),
+        }),
+      }, 201);
+    } catch (err) {
+      const response = projectErrorResponse(c, err);
+      if (response) return response;
+      throw err;
+    }
   });
   app.get("/api/multiremi/projects/:id", (c) => {
     const project = loadProjectForDocs(c, store, c.req.param("id"));

@@ -9,13 +9,14 @@ import { sendMessageWithinTransaction,getMessage } from './send-message.js';
 import { lockLane,acknowledgeInput,assertOfferedInputRead } from './lane-machine.js';
 import { deriveIssueStatusWithinTransaction } from './issue-status.js';
 import { patchDecisionRecord } from './decision-records.js';
+import { Questions, QuestionError } from './questions.js';
 import { nowIso } from '@multiremi/ids.js';
 import { taskSessionInput } from '../task-session-input.js';
 import { TRIGGER_MESSAGE_INLINE_CHARS, expandHint } from '@multiremi/contracts/session-input.js';
 
 // Structurally identical to S3's transport interface, without coupling the store to API routers.
 export interface DaemonTurnScope {runtimeId:string;daemonId:string;workspaceId:string;userId?:string|null}
-export type DaemonTurnRpc='turn.input'|'turn.decision'|'turn.decision.get'|'turn.decision.expire';
+export type DaemonTurnRpc='turn.input'|'turn.decision'|'turn.decision.get'|'turn.decision.expire'|'turn.decision.consume';
 export interface DaemonTurnInput {turn_id:string;attempt_id:string;input_from_seq:number;input_to_seq:number;input_messages:UnifiedMessage[]}
 export interface DaemonTurnCompletePayload {turn_id:string;attempt_id:string;input_to_seq:number;reply:{body_md:string;message_kind:'reply'|'final'};session_id?:string|null;work_dir?:string|null}
 
@@ -125,15 +126,16 @@ export class DaemonTurnBridge {
           assertOfferedInputRead(this.ctx,turn,to);}
         acknowledgeInput(this.ctx,turn.id,Math.min(from,to),to);
         acknowledgeAttemptInput(this.ctx,turn,to);
+        for (const message of this.messages(turn.session_id,from,to)) if (message.metadata.question_continuation === true && typeof message.metadata.root_question_id === 'string')
+          new Questions(this.ctx).consumeWithinTransaction(message.metadata.root_question_id, turn.id, turn.current_attempt_id, message.id, events);
         return {ok:true,input_to_seq:Math.max(from,to)};
       }
       if(type==='turn.decision'){
         if(typeof payload.body_md!=='string'||typeof payload.dedupe_key!=='string'||!Array.isArray(payload.options))throw new Error('invalid_report');
-        const member=this.ctx.workspaces().listWorkspaceMembers(scope.workspaceId).find(m=>m.role==='owner');if(!member)throw new Error('recipient_unavailable');
         const timeout=Number(payload.timeout_ms??0),expires=timeout>0?new Date(Date.now()+timeout).toISOString():null;
-        const result=sendMessageWithinTransaction(this.ctx,{session_id:turn.session_id,sender:{type:'agent',id:turn.agent_id},source_turn_id:turn.id,to:{type:'member',ref:member.id},
+        const result=new Questions(this.ctx).createWithinTransaction({id: typeof payload.message_id === 'string' ? payload.message_id : undefined, session_id:turn.session_id,sender:{type:'agent',id:turn.agent_id},source_turn_id:turn.id,to:{type:'none'},
           body_md:payload.body_md,message_kind:'decision',wake_requested:'now',dedupe_key:payload.dedupe_key,options:payload.options as DecisionOption[],
-          metadata:{...(payload.metadata as object),human_request:{kind:(payload.metadata as any)?.kind??'question',payload:{...(payload.metadata as object),options:(payload.metadata as any)?.options??payload.options},status:'pending',expires_at:expires}}},events);
+          metadata:{...(payload.metadata as object),wait_id:payload.wait_id,human_request:{kind:(payload.metadata as any)?.kind==='permission'?'permission':'question',payload:{...(payload.metadata as object),options:(payload.metadata as any)?.options??payload.options},status:'pending',expires_at:expires}}},turn.current_attempt_id,events);
         // The RPC response itself delivers this message to the provider. A
         // short timeout can acknowledge it before the next snapshot arrives.
         this.ctx.db.run('UPDATE multiremi_turn_attempts SET projection_to_seq=CASE WHEN COALESCE(projection_to_seq,0)<? THEN ? ELSE projection_to_seq END WHERE id=?',
@@ -141,16 +143,22 @@ export class DaemonTurnBridge {
         return {ok:true,message:result.message,message_id:result.message.id};
       }
       const message=getMessage(this.ctx,String(payload.message_id));if(!message||message.task_id!==turn.id||message.message_kind!=='decision')throw new Error('invalid_report');
+      if(type==='turn.decision.consume') {
+        new Questions(this.ctx).consumeWithinTransaction(message.id,turn.id,turn.current_attempt_id,String(payload.reply_message_id),events, typeof payload.wait_id === 'string' ? payload.wait_id : undefined);
+        return {ok:true};
+      }
       if(type==='turn.decision.expire'){
         if(!['timeout','cancelled'].includes(String(payload.status)))throw new Error('invalid_report');
         const key=message.metadata.human_request?'human_request':'decision_record';
-        patchDecisionRecord(this.ctx,message.id,key,{status:payload.status,responded_at:nowIso()},'pending');
+        if (message.metadata.question) new Questions(this.ctx).detachWithinTransaction(message.id,String(payload.status),events);
+        else patchDecisionRecord(this.ctx,message.id,key,{status:payload.status,responded_at:nowIso()},'pending');
         if(turn.waiting_on_message_id===message.id){this.ctx.db.run("UPDATE multiremi_turns SET status='running',waiting_on_message_id=NULL WHERE id=?",[turn.id]);if(turn.issue_id)deriveIssueStatusWithinTransaction(this.ctx,turn.issue_id,events);}
       }
       const current=getMessage(this.ctx,message.id)!;
       const reply=this.ctx.db.query("SELECT id FROM multiremi_conversation_log WHERE reply_to_id=? AND message_kind='reply' AND deleted_at IS NULL ORDER BY seq LIMIT 1").get(message.id);
       return {ok:true,message:current,reply:reply?getMessage(this.ctx,reply.id):null,status:current.resolved_at?'resolved':'pending'};
     });}catch(error){
+      if (error instanceof QuestionError) return {ok:false,code:error.code,retryable:false};
       const code=turnRejectionCode(error,String(payload.attempt_id),scope.runtimeId);
       if(code===null)throw error;
       return {ok:false,code,retryable:false};

@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { requestMessageBody, taskRequestPath, sentTask, mutateExecutionFixture } from "./unified-test-paths.js";
 import { taskOfferResponse } from "../../fixtures/task-offer.js";
 import { codexNativeModel } from "../../fixtures/codex-native-catalog.js";
@@ -114,7 +115,7 @@ describe("Codex native model membership through API and dispatch", () => {
       store.onTaskEvent(({ type, task }) => { if (type === "task:dispatch") dispatches.push(task.id); });
       await discover();
 
-      const created = await app.request(taskRequestPath(store, {issueId:store.createIssue({title:"Dispatch fixture",workspaceId:"local"}).id}), { method: "POST", headers,
+      const created = await app.request(taskRequestPath(store, {issueId:createResponsibleTestIssue(store, {title:"Dispatch fixture",workspaceId:"local"}).id}), { method: "POST", headers,
         body: JSON.stringify(requestMessageBody(store, { agentId: saved.id, prompt: "Must retain requested model", priority: 100 })),
       });
       expect(created.status).toBe(200);

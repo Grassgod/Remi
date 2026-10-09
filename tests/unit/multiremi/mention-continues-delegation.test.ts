@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from './helpers.js';
 import { afterEach, describe, expect, it } from "bun:test";
 import { createStore, resetMultiremiTestEnv } from "./helpers.js";
 
@@ -21,7 +22,7 @@ function fixture() {
   const leader = store.createAgent({ name: "Leader", provider: "codex" });
   const teammate = store.createAgent({ name: "Teammate", provider: "codex" });
   const squad = store.createSquad({ name: "Delivery", leaderId: leader.id, memberIds: [teammate.id] });
-  const issue = store.createIssue({
+  const issue = createResponsibleTestIssue(store, {
     title: "Repeated delegation",
     assigneeType: "squad",
     assigneeId: squad.id,

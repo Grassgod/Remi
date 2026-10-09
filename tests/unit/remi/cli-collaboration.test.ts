@@ -85,7 +85,7 @@ describe("native collaboration CLI contracts", () => {
           const runtime = store.registerRuntime({ name: "Delivery CLI runtime", provider: "codex" });
           const agent = store.createAgent({ name: "Delivery CLI owner", provider: "codex", runtimeId: runtime.id });
           const issue = store.createIssue({ title: "Delivery CLI issue", status: "in_progress",
-            assigneeType: "agent", assigneeId: agent.id });
+            assigneeType: "agent", assigneeId: agent.id, responsibleMemberId: "mem_local_local" });
           const session = store.getOrCreateDefaultIssueSession(issue.id);
           const issueTask = store.createSessionTask(session.id, { agentId: agent.id, prompt: "Read issue" });
           const [issueDelivery] = db.transaction(() => store.sendEnvelopeWithinTransaction({
@@ -169,7 +169,7 @@ describe("native collaboration CLI contracts", () => {
             const recipient = store.createAgent({ name: "Receipt recipient", provider: "codex" });
             const other = store.createAgent({ name: "Other receipt author", provider: "codex" });
             const issue = store.createIssue({ title: "Receipt attribution", status: "in_progress",
-              assigneeType: "agent", assigneeId: recipient.id });
+              assigneeType: "agent", assigneeId: recipient.id, responsibleMemberId: "mem_local_local" });
             const session = store.getOrCreateDefaultIssueSession(issue.id);
             const task = store.createSessionTask(session.id, { agentId: recipient.id, prompt: "Read issue" });
             const [delivery] = db.transaction(() => store.sendEnvelopeWithinTransaction({
@@ -301,9 +301,12 @@ describe("native collaboration CLI contracts", () => {
         { type: "squad", id: squad.id },
       ] as const;
       const issues = assignments.map(({ type, id }) => store.createIssue({
-        title: `Grouped ${type}`, assigneeType: type, assigneeId: id,
+        title: `Grouped ${type}`, assigneeType: type === "member" ? null : type, assigneeId: type === "member" ? null : id, responsibleMemberId: member.id,
       }));
-      store.createIssue({ title: "Grouped unassigned" });
+      // Preserve historical member assignments so the list/filter migration
+      // assertions remain useful without exercising a forbidden new write.
+      database.run("UPDATE multiremi_issues SET assignee_type='member',assignee_id=? WHERE id=?", [member.id, issues[0]!.id]);
+      store.createIssue({ title: "Grouped unassigned", responsibleMemberId: member.id });
       const app = createMultiremiApp({ store, authToken: "test-token" });
       const spec = specById("issue.grouped");
       const requests: URL[] = [];
@@ -397,7 +400,10 @@ describe("native collaboration CLI contracts", () => {
     try {
       const store = new MultiremiStore(database);
       store.ensureLocalWorkspace();
-      const parent = store.createIssue({ title: "CLI parent", assigneeType: "member", assigneeId: "mem_local_local" });
+      const parent = store.createIssue({ title: "CLI parent", responsibleMemberId: "mem_local_local" });
+      // This read/reply compatibility case intentionally models a historical
+      // member assignment. Current executable assignment rejects this shape.
+      database.run("UPDATE multiremi_issues SET assignee_type='member',assignee_id=? WHERE id=?", ["mem_local_local", parent.id]);
       const child = store.createIssue({ title: "CLI child", parentIssueId: parent.id });
       const childSession = store.getOrCreateDefaultIssueSession(child.id);
       const parentSession = store.getOrCreateDefaultIssueSession(parent.id);
@@ -418,13 +424,14 @@ describe("native collaboration CLI contracts", () => {
       };
       const first = await run("send", [childSession.id, "--to", "parent_owner", "--kind", "decision", "--content", "Ship it", "--option", "yes", "--option", "no"]);
       expect(first.message.message_kind).toBe("decision");
-      expect(first.message.metadata.decision_record.status).toBe("pending");
+      expect(first.message.metadata.message_choice.status).toBe("pending");
       const listed = await run("list", [parentSession.id, "--kind", "decision"]);
       expect(listed.messages.map((message: { id: string }) => message.id)).toContain(first.message.id);
+      expect(store.getQuestion(first.message.id)).toBeNull();
       const answered = await run("send", [parentSession.id, "--reply-to", first.message.id, "--content", "Approved", "--option", "yes"]);
       expect(answered.message.reply_to_id).toBe(first.message.id);
       const settled = await run("get", [first.message.id]);
-      expect(settled.message.metadata.decision_record.status).toBe("answered");
+      expect(settled.message.metadata.message_choice.status).toBe("answered");
     } finally {
       database.close();
     }

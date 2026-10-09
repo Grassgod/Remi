@@ -1,7 +1,7 @@
 "use client";
 import { WorkLocationPicker } from "../../runtimes/components/runtime-workspace-picker";
 
-import { Bot, CalendarClock, CalendarDays, CheckCircle2, ChevronRight, ListTree, Plus, Tag } from "lucide-react";
+import { Bot, CalendarClock, CalendarDays, ChevronRight, ListTree, Plus, Tag } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@multiremi/core/api";
 import {
@@ -9,7 +9,6 @@ import {
   issueDetailOptions,
   issueKeys,
 } from "@multiremi/core/issues/queries";
-import { Button } from "@multiremi/ui/components/ui/button";
 import { Popover, PopoverTrigger, PopoverContent } from "@multiremi/ui/components/ui/popover";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@multiremi/ui/components/ui/dialog";
 import type {
@@ -44,7 +43,7 @@ import { IssueCodeWorkspaceSection } from "./issue-code-workspace-section";
 import { IssueSessionArchivesSection } from "./issue-session-archives-section";
 import { IssueSubIssuesSummary } from "./issue-sub-issues-summary";
 import { IssueDependencyEditor } from "./issue-dependency-editor";
-import { ParentDoneGrantControl } from "./parent-done-grant-control";
+import { IssueResponsibilitySection } from "./issue-responsibility-section";
 
 function shortDate(date: string | null): string {
   if (!date) return "—";
@@ -90,7 +89,6 @@ export function IssueDetailSidebar({
   issueSessions,
   usage,
   canManageArchives,
-  isMember,
   childIssues,
   onCreateSubIssue,
 }: IssueDetailSidebarProps) {
@@ -111,22 +109,10 @@ export function IssueDetailSidebar({
     staleTime: 30_000,
     refetchOnWindowFocus: true,
   });
-  const latestTask = tasks.toSorted(
-    (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
-  )[0];
-  const hasActiveTask = tasks.some(
-    (task) =>
-      task.status !== "completed" &&
-      task.status !== "failed" &&
-      task.status !== "cancelled",
-  );
-  const canCompleteIssue =
-    issue.status === "in_review" &&
-    latestTask?.status === "completed" &&
-    !hasActiveTask;
 
   return (
     <div className="space-y-5">
+      <IssueResponsibilitySection issue={issue} enabled={queriesEnabled} getActorName={getActorName} />
       {/* Properties */}
       <div>
         <button
@@ -142,18 +128,6 @@ export function IssueDetailSidebar({
           <PropRow label={t(($) => $.detail.prop_status)}>
             <div className="flex min-w-0 flex-wrap items-center gap-1.5">
               <StatusPicker status={issue.status} onUpdate={onUpdateField} align="start" />
-              {canCompleteIssue && (
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  className="h-7 gap-1 px-2 text-xs"
-                  onClick={() => onUpdateField({ status: "done" })}
-                >
-                  <CheckCircle2 className="size-3.5" />
-                  {t(($) => $.detail.complete_issue_action)}
-                </Button>
-              )}
             </div>
           </PropRow>
           <div className="col-start-2 h-[18px] truncate text-[11px] leading-[18px] text-muted-foreground" aria-live="polite">
@@ -267,12 +241,6 @@ export function IssueDetailSidebar({
           )}
         </div>}
       </div>
-
-      <ParentDoneGrantControl
-        issue={issue}
-        isMember={isMember}
-        hasChildren={childIssues.length > 0}
-      />
 
       {/* Issue hierarchy — parent above children, so the rail reads in the
           same direction as the tree (parent → this issue → sub-issues).

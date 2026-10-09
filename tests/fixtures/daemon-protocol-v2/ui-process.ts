@@ -47,19 +47,30 @@ function reply(value: Record<string, unknown>): void {
 reply({ ready: true, port: server.port });
 for await (const line of createInterface({ input: process.stdin })) {
   const command = JSON.parse(line) as { op: string; runtimeId?: string; taskId?: string; agentId?: string;
-    issueId?: string; requestId?: string; status?: "timeout" | "cancelled" };
+    issueId?: string; requestId?: string; humanToken?: string; status?: "timeout" | "cancelled" };
   try {
     if (command.op === "create_task") {
       const task = store.createTask({ agentId: command.agentId!, issueId: command.issueId, runtimeId: command.runtimeId,
         prompt: "cross-process offer" });
       reply({ op: command.op, taskId: task.id });
     } else if (command.op === "create_human_request") {
-      const request = store.createTaskHumanRequest({ taskId: command.taskId!, kind: "question",
-        payload: { message: "Continue?", questions: [{ question: "Continue?", options: [{ label: "Yes" }] }] } });
-      reply({ op: command.op, requestId: request.id });
+      const task = store.getTask(command.taskId!)!, turn = store.getTurnForAttempt(task.id)!;
+      const runtime = store.getRuntime(task.runtimeId!)!;
+      const id = `cross-process-question:${task.id}`;
+      const request = store.getDaemonTurnBridge().rpc('turn.decision', { turn_id: turn.id, attempt_id: task.id,
+        message_id: id, wait_id: `cross-process-wait:${task.id}`, dedupe_key: id, body_md: 'Continue?', options: [{ label: 'Yes', value: 'Yes' }],
+        metadata: { kind: 'question', questions: [{ question: 'Continue?', options: [{ label: 'Yes' }] }] } },
+        { runtimeId: runtime.id, daemonId: runtime.daemonId!, workspaceId: task.workspaceId });
+      if (!request.ok) throw new Error(String(request.error ?? 'Native question creation failed'));
+      reply({ op: command.op, requestId: request.message_id });
     } else if (command.op === "respond_human_request") {
-      const request = store.respondTaskHumanRequest(command.requestId!, { response: { answers: { "Continue?": "Yes" } } });
-      reply({ op: command.op, requestId: request?.id });
+      const response = await fetch(`http://127.0.0.1:${server.port}/api/messages/${encodeURIComponent(command.requestId!)}/question/answer`, {
+        method: 'POST', headers: { Authorization: `Bearer ${command.humanToken!}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ response: { answers: { 'Continue?': 'Yes' } }, expected_route_revision: store.getQuestion(command.requestId!)!.route_revision }),
+      });
+      const result = await response.json() as { question?: { id: string }; error?: string };
+      if (!response.ok) throw new Error(result.error ?? `Question answer HTTP ${response.status}`);
+      reply({ op: command.op, requestId: result.question?.id });
     } else if (command.op === "expire_human_request") {
       const request = store.expireTaskHumanRequest(command.requestId!, command.status ?? "timeout");
       reply({ op: command.op, requestId: request?.id });
