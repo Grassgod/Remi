@@ -1230,12 +1230,12 @@ export class IssuesRepo {
   private preflightBatchUpdateIssues(issueIds: string[], updates: UpdateIssueInput): void {
     // A batch has no server-owned acceptance receipt. Check every row before
     // any mutation, including force and childless Issues; settled no-ops remain valid.
-    if (hasAnyField(updates,'status') && normalizeIssueStatus(updates.status)==='done') {
+    const assertDeliveryClosure = () => { if (hasAnyField(updates,'status') && normalizeIssueStatus(updates.status)==='done') {
       for (const issueId of issueIds) {
         const current=this.getIssue(issueId);
         if(current && current.status!=='done') throw new IssueDeliveryError('issue_delivery_acceptance_required','Close the Issue by accepting its specific delivery');
       }
-    }
+    } };
     if (hasAnyField(updates, "workspaceId", "workspace_id")) {
       const rejected: string[] = [];
       let firstError: IssueWorkspaceMoveError | null = null;
@@ -1252,7 +1252,7 @@ export class IssuesRepo {
       }
       if (firstError) throw new IssueWorkspaceMoveError(firstError.relations, rejected);
     }
-    if (!parentStatusGuardEnabled()) return;
+    if (!parentStatusGuardEnabled()) { assertDeliveryClosure(); return; }
     if (!hasAnyField(updates, "status")) return;
     const rejected: string[] = [];
     let firstError: ParentStatusGuardError | null = null;
@@ -1265,11 +1265,14 @@ export class IssuesRepo {
         this.assertParentStatusAllowed(issueId, current, nextStatus, updates);
       } catch (err) {
         if (!(err instanceof ParentStatusGuardError)) throw err;
+        // Final summaries are now part of the concrete delivery receipt.
+        if (err.code==='final_summary_missing') assertDeliveryClosure();
         rejected.push(issueId);
         firstError ??= err;
       }
     }
     if (firstError) throw new BatchParentStatusGuardError(firstError, rejected);
+    assertDeliveryClosure();
   }
 
   private assertIssueWorkspaceMoveAllowed(current: MultiremiIssue, input: UpdateIssueInput): void {
