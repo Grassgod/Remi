@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from "../multiremi/helpers.js";
 import { expect, it } from "bun:test";
 import { pendingTurnBackendTests } from "../multiremi/pending-turn-test-backends.js";
 import { DaemonProtocolLayer } from "@multiremi/api/daemon-protocol/index.js";
@@ -14,7 +15,7 @@ pendingTurnBackendTests("cold bootstrap offer acceptance", fixture => {
     store.registerRuntime({ id: runtimeId, daemonId, name: "Bootstrap", provider: "codex", workspaceId: "local",
       metadata: { parallel_agent_execution: 1 } });
     const agent = store.createAgent({ name: "Bootstrap", provider: "codex", runtimeId });
-    const issue = store.createIssue({ title: "Cold offer" });
+    const issue = createResponsibleTestIssue(store, { title: "Cold offer" });
     const conversation = store.getOrCreateDefaultIssueSession(issue.id);
     const original = store.sendMessage({ session_id: conversation.id, sender: { type: "member", id: "mem_local_local" },
       to: { type: "agent", ref: agent.id }, message_kind: "request", wake_requested: "now", body_md: "original input ".repeat(2_000) });

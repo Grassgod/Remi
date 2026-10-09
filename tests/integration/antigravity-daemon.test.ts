@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from "../unit/multiremi/helpers.js";
 import { disabledSshMeshRuntime } from "../helpers/ssh-mesh-isolation.js";
 import { expect, it, spyOn } from "bun:test";
 import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
@@ -53,7 +54,7 @@ it("runs native Antigravity through API, daemon, Chat resume and an Issue in a r
     const chat = store.createChatSession({ agentId: agent.id, runtime_workspace_id: directory.id });
     for (const action of ["chat", "resume", "issue"]) {
       const task = action === "issue"
-        ? store.createTask({ agentId: agent.id, issueId: store.createIssue({ title: "Use agy", runtime_workspace_id: directory.id }).id, prompt: "Inspect project" })
+        ? store.createTask({ agentId: agent.id, issueId: createResponsibleTestIssue(store, { title: "Use agy", runtime_workspace_id: directory.id }).id, prompt: "Inspect project" })
         : store.sendChatMessage(chat.id, { body: "Inspect project" }).task;
       await poll(() => ["completed", "failed"].includes(store.getTask(task.id)?.status ?? ""));
       const complete = store.getTask(task.id)!;

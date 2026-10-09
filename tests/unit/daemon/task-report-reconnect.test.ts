@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from "../multiremi/helpers.js";
 import { readOfferedTurnInput, turnCompletion, completionResponse } from "../../fixtures/turn-report.js";
 import { runTurnExecutionMutation } from "@multiremi/store/turn-execution-records.js";
 import { expect, it, spyOn } from "bun:test";
@@ -221,7 +222,7 @@ function fixture() {
   it("keeps a sent Issue projection frozen and consumes later inbox input in the recovered turn", async () => {
     const { db, store, runtime, task, sendEnvelope } = fixture();
     store.startTask(task.id); store.completeTask(task.id, { output: "done" });
-    const issue = store.createIssue({ title: "Reconnect inbox", status: "in_progress", assigneeType: "agent", assigneeId: task.agentId });
+    const issue = createResponsibleTestIssue(store, { title: "Reconnect inbox", status: "in_progress", assigneeType: "agent", assigneeId: task.agentId });
     const to = { role: "issue_owner" as const, issueId: issue.id };
     const original = sendEnvelope(to, "original");
     expect(original.action).toBe("created");

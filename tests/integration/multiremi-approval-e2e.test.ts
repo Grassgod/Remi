@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from "../unit/multiremi/helpers.js";
 import { disabledSshMeshRuntime } from "../helpers/ssh-mesh-isolation.js";
 import { afterEach, describe, expect, it } from "bun:test";
 import type { SqlDatabase } from "@multiremi/store/db/postgres.js";
@@ -135,7 +136,9 @@ async function startHarness(options: {
         if (!run.taskId) throw new Error("Autopilot run did not create a task");
         return store.getTask(run.taskId)!;
       })()
-    : store.createSessionTask(store.getOrCreateDefaultIssueSession(store.createIssue({ title: "Approval fixture" }).id).id, { agentId: agent.id, prompt: "Do something dangerous" });
+    : store.createSessionTask(store.getOrCreateDefaultIssueSession(createResponsibleTestIssue(store, { title: "Approval fixture",
+        assigneeType: "agent", assigneeId: agent.id, responsibleMemberId: "mem_local_local" }).id).id,
+        { agentId: agent.id, prompt: "Do something dangerous" });
   const server = startMultiremiServer({ store, scheduler: null, hostname: "127.0.0.1", port: 0 });
   activeServer = server;
   const baseUrl = `http://127.0.0.1:${server.port}`;
@@ -235,7 +238,8 @@ async function respond(store: MultiremiStore, baseUrl: string, taskId: string, r
   return fetch(`${baseUrl}/api/sessions/${store.getMessage(requestId)!.session_id}/messages`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ message_kind: "reply", reply_to_id: requestId, body_md: "Approval response", response: body }),
+    body: JSON.stringify({ message_kind: "reply", reply_to_id: requestId, body_md: "Approval response", response: body,
+      expected_route_revision: store.getQuestion(requestId)!.route_revision }),
   });
 }
 
@@ -248,7 +252,8 @@ describe("Multiremi approval routing e2e", () => {
     );
     await stopHarness(h);
     expect(h.store.getTaskStatus(h.taskId)).toBe("cancelled");
-    expect(h.store.getTaskHumanRequest(pending.id)?.status).toBe("cancelled");
+    expect(h.store.getTaskHumanRequest(pending.id)?.status).toBe("pending");
+    expect(h.store.getQuestion(pending.id)).toMatchObject({ status: 'pending', wait_status: 'detached', wait_reason: 'source_turn_cancelled' });
     await expect(fetch(`${h.baseUrl}/api/health`)).rejects.toThrow();
     await stopHarness(h);
   }, 30_000);
@@ -367,7 +372,8 @@ describe("Multiremi approval routing e2e", () => {
 
       await h.run; // nobody responds; worker times out and expires the request
       expect(h.outcomes).toEqual([{ outcome: "cancelled" }]);
-      expect(h.store.getTaskHumanRequest(pending.id)!.status).toBe("timeout");
+      expect(h.store.getTaskHumanRequest(pending.id)!.status).toBe("pending");
+      expect(h.store.getQuestion(pending.id)).toMatchObject({ status: 'pending', wait_status: 'detached', wait_reason: 'timeout' });
       // The task itself resumes and completes — a denied tool is not a failure.
       expect(h.store.getTask(h.taskId)!.status).toBe("completed");
     } finally {
@@ -389,7 +395,8 @@ describe("Multiremi approval routing e2e", () => {
 
       await h.run;
       expect(h.outcomes).toEqual([{ outcome: "cancelled" }]);
-      expect(h.store.getTaskHumanRequest(pending.id)!.status).toBe("timeout");
+      expect(h.store.getTaskHumanRequest(pending.id)!.status).toBe("pending");
+      expect(h.store.getQuestion(pending.id)).toMatchObject({ status: 'pending', wait_status: 'detached', wait_reason: 'timeout' });
     } finally {
       await stopHarness(h);
     }
@@ -432,7 +439,8 @@ describe("Multiremi approval routing e2e", () => {
 
       await h.run;
       expect(h.elicitationResults).toEqual([{ action: "cancel" }]);
-      expect(h.store.getTaskHumanRequest(pending.id)!.status).toBe("timeout");
+      expect(h.store.getTaskHumanRequest(pending.id)!.status).toBe("pending");
+      expect(h.store.getQuestion(pending.id)).toMatchObject({ status: 'pending', wait_status: 'detached', wait_reason: 'timeout' });
       expect(h.store.getTask(h.taskId)!.status).toBe("completed");
     } finally {
       await stopHarness(h);

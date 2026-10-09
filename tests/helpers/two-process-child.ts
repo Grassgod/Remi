@@ -38,7 +38,7 @@ async function command(name: string, args: any): Promise<unknown> {
   }
   if (name === "seed") {
     const agent = store.createAgent({ name: "Two-process comments", provider: "codex" });
-    const issue = createResponsibleTestIssue(store, { title: "Two-process comments", workspaceId: "local" });
+    const issue = createResponsibleTestIssue(store, { title: "Two-process comments", workspaceId: "local", responsibleMemberId: "mem_local_local" });
     const browser = await store.createAccessToken({ name: "Two-process browser", type: "pat", workspaceId: "local" });
     return { agentId: agent.id, issueId: issue.id, browserToken: browser.token };
   }

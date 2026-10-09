@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from "../unit/multiremi/helpers.js";
 import { afterEach, expect, test } from "bun:test";
 import { randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
@@ -12,16 +13,23 @@ test("issue CLI filters assignee types and resolves a parent key over local HTTP
   store.ensureLocalWorkspace();
   const member = store.createWorkspaceMember({ name: "CLI member" });
   const agent = store.createAgent({ name: "CLI agent", provider: "codex" });
-  const squad = store.createSquad({ name: "CLI squad" });
+  const squad = store.createSquad({ name: "CLI squad", leaderId: agent.id });
   const assignments = [
     { type: "member", id: member.id },
     { type: "agent", id: agent.id },
     { type: "squad", id: squad.id },
   ] as const;
-  const assignedIssues = assignments.map(({ type, id }) =>
-    store.createIssue({ title: `Assigned to ${type}`, assigneeType: type, assigneeId: id }));
-  const parent = store.createIssue({ title: "CLI parent" });
-  const child = store.createIssue({ title: "CLI child", parentIssueId: parent.id });
+  const assignedIssues = assignments.map(({ type, id }) => {
+    const issue = createResponsibleTestIssue(store, { title: `Assigned to ${type}`,
+      assigneeType: type === 'member' ? 'agent' : type, assigneeId: type === 'member' ? agent.id : id });
+    // Read-only CLI filtering must still display a genuine legacy member row.
+    // New Issue writes reject a member execution owner; this is snapshot seeding.
+    if (type === 'member') (store as unknown as { db: { run: (sql: string, params: string[]) => unknown } }).db
+      .run("UPDATE multiremi_issues SET assignee_type='member',assignee_id=? WHERE id=?", [id, issue.id]);
+    return issue;
+  });
+  const parent = createResponsibleTestIssue(store, { title: "CLI parent" });
+  const child = createResponsibleTestIssue(store, { title: "CLI child", parentIssueId: parent.id });
   const authToken = randomUUID();
   const app = createMultiremiApp({ store, authToken });
   const requests: URL[] = [];
@@ -83,8 +91,8 @@ test("issue CLI resolves the same parent key within each explicitly selected wor
   const owner = store.getOrCreateUser({ name: "CLI workspace owner", email: "cli-workspace-owner@example.test" });
   const records = ["A", "B"].map((label) => {
     const workspace = store.createWorkspace({ name: `Workspace ${label}`, slug: `cli-workspace-${label.toLowerCase()}` }, owner.id);
-    const parent = store.createIssue({ workspaceId: workspace.id, title: `${label} parent` });
-    const child = store.createIssue({ workspaceId: workspace.id, title: `${label} child`, parentIssueId: parent.id });
+    const parent = createResponsibleTestIssue(store, { workspaceId: workspace.id, title: `${label} parent` });
+    const child = createResponsibleTestIssue(store, { workspaceId: workspace.id, title: `${label} child`, parentIssueId: parent.id });
     return { workspace, parent, child };
   });
   expect(records.map(({ parent }) => parent.key)).toEqual(["MUL-1", "MUL-1"]);
@@ -135,8 +143,8 @@ test("issue CLI resolves a full parent ID outside the default workspace", async 
   store.ensureLocalWorkspace();
   const owner = store.getOrCreateUser({ name: "CLI default owner", email: "cli-default-owner@example.test" });
   const workspace = store.createWorkspace({ name: "Workspace A", slug: "cli-default-a" }, owner.id);
-  const parent = store.createIssue({ workspaceId: workspace.id, title: "A parent" });
-  const child = store.createIssue({ workspaceId: workspace.id, title: "A child", parentIssueId: parent.id });
+  const parent = createResponsibleTestIssue(store, { workspaceId: workspace.id, title: "A parent" });
+  const child = createResponsibleTestIssue(store, { workspaceId: workspace.id, title: "A child", parentIssueId: parent.id });
   const authToken = randomUUID();
   const app = createMultiremiApp({ store, authToken });
   const workspaceHeaders: Array<string | null> = [];

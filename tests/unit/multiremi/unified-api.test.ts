@@ -18,7 +18,7 @@ beforeEach(() => {
   db = fixture().db;
   agent = store.createAgent({ name: "Worker", provider: "codex", visibility: "workspace" });
   other = store.createAgent({ name: "Other", provider: "codex", visibility: "workspace" });
-  issue = createResponsibleTestIssue(store, { title: "API", assigneeType: "agent", assigneeId: agent.id });
+  issue = createResponsibleTestIssue(store, { title: "API", assigneeType: "agent", assigneeId: agent.id, responsibleMemberId: "mem_local_local" });
   session = store.getOrCreateDefaultIssueSession(issue.id); app = createMultiremiApp({ store });
 });
 afterEach(() => { store.stopNotificationDeliverySweeper(); });
@@ -28,6 +28,20 @@ async function request(url: string, method = "GET", input?: unknown, headers: Re
   return { status: response.status, data: await response.json() as any };
 }
 const send = (body_md: string, input = {}) => request(path(), "POST", { body_md, to: { type: "agent", ref: agent.id }, ...input });
+function nativeQuestion(source = agent, choose = false) {
+  const runtime = store.registerRuntime({ name: 'Unified Q fixture', provider: 'codex', daemonId: 'unified-q-fixture', maxConcurrency: 8 });
+  store.updateAgent(source.id, { runtimeId: runtime.id });
+  const task = store.createTask({ agentId: source.id, issueId: issue.id, issueSessionId: session.id, prompt: 'Original work' });
+  expect(store.claimTask(runtime.id)?.id).toBe(task.id); store.startTask(task.id);
+  const turn = store.getTurnForAttempt(task.id)!;
+  const scope = { runtimeId: runtime.id, daemonId: 'unified-q-fixture', workspaceId: 'local' };
+  const created = store.getDaemonTurnBridge().rpc('turn.decision', { turn_id: turn.id, attempt_id: task.id,
+    wait_id: `native:${task.id}`, dedupe_key: `native:${task.id}`, body_md: choose ? 'Choose' : 'Continue?',
+    options: choose ? [{ label: 'yes', value: 'yes' }] : [],
+    metadata: { kind: 'question', questions: [{ question: choose ? 'Choose' : 'Continue?', ...(choose ? { options: [{ label: 'yes' }] } : {}) }] } }, scope);
+  expect(created.ok).toBeTrue();
+  return { question: store.getQuestion(String(created.message_id))!, task, turn, scope };
+}
 
 it("sends all message kinds and wake values, freezes identity, and deduplicates", async () => {
   for (const message_kind of ["request", "reply", "report", "decision", "status", "final"]) {
@@ -125,27 +139,32 @@ it("stores member inbox cursor and attention counts without old inbox_items", as
   expect((await request("/api/inbox")).data.unread_count).toBe(0);
 });
 it("routes decision option answers through the original message and rejects replay", async () => {
-  const message = store.sendMessage({ session_id: session.id, sender: { type: "agent", id: agent.id }, to: { type: "member", ref: "mem_local_local" }, body_md: "Choose", message_kind: "decision", wake_requested: "now", options: [{ label: "Yes", value: "yes" }] }).message;
-  expect((await send("", { reply_to_id: message.id, metadata: { selected_options: ["bad"] } })).status).toBe(400);
-  const answered = await send("", { reply_to_id: message.id, metadata: { selected_options: ["yes"] } });
-  expect(answered.status).toBe(200); expect(answered.data.message.reply_to_id).toBe(message.id); expect(answered.data.message.body_md).toBe("yes");
+  const { question } = nativeQuestion(agent, true);
+  const message = store.getMessage(question.id)!;
+  expect((await send("", { reply_to_id: message.id, expected_route_revision: question.route_revision, metadata: { selected_options: ["bad"] } })).status).toBe(400);
+  const answered = await send("", { reply_to_id: message.id, expected_route_revision: question.route_revision, metadata: { selected_options: ["yes"] } });
+  expect(answered.status).toBe(200); expect(answered.data.message.reply_to_id).toBe(message.id);
+  expect(JSON.parse(answered.data.message.body_md)).toEqual({ selected_options: ['yes'], answer: 'yes', answers: { Choose: 'yes' } });
+  expect(store.getQuestion(question.id)?.answer?.body_md).toBe('yes');
   expect(store.getMessage(message.id)?.resolved_at).toBeTruthy();
-  expect((await send("again", { reply_to_id: message.id })).status).toBe(409);
+  expect((await send("again", { reply_to_id: message.id, expected_route_revision: question.route_revision })).status).toBe(409);
   const range = await request(`${path()}?from=0&to=${message.seq}`);
   const entry = range.data.entries.find((m: any) => m.id === message.id);
   expect(entry).not.toHaveProperty("card_token_hash");
   expect(entry).not.toHaveProperty("card_token_recipient");
 });
 it("answers an awaiting human request and restores the same turn", async () => {
-  const sent = await send("work"), turn = store.getTurn(sent.data.turn_id)!;
-  db.run("UPDATE multiremi_turns SET status='running' WHERE id=?", [turn.id]);
-  db.run("UPDATE multiremi_turn_attempts SET status='running' WHERE id=?", [turn.current_attempt_id!]);
-  const question = store.createTaskHumanRequest({ taskId: turn.current_attempt_id!, kind: "question", payload: { title: "Question", questions: [{ question: "Continue?" }] } });
+  const { question, turn, task, scope } = nativeQuestion();
   expect(store.getTurn(turn.id)?.status).toBe("awaiting_human");
-  expect((await send("Yes", { reply_to_id: question.id })).status).toBe(200);
+  const answered = await send("Yes", { reply_to_id: question.id, expected_route_revision: question.route_revision });
+  expect(answered.status).toBe(200);
   expect(store.getTaskHumanRequest(question.id)?.response).toEqual({ answer: "Yes", answers: { "Continue?": "Yes" } });
   expect(store.getTurn(turn.id)?.status).toBe("running");
   expect(store.listTurns({ workspace_id: "local" })).toHaveLength(1);
+  expect(store.getQuestion(question.id)?.wait_status).toBe('waiting');
+  expect(store.getDaemonTurnBridge().rpc('turn.decision.consume', { turn_id: turn.id, attempt_id: task.id,
+    message_id: question.id, reply_message_id: answered.data.message.id, wait_id: `native:${task.id}` }, scope)).toEqual({ ok: true });
+  expect(store.getQuestion(question.id)?.wait_status).toBe('consumed');
 });
 it("lists and inspects turns, wraps up, cancels and retries with trace tied to the attempt", async () => {
   const sent = await send("work"), id = sent.data.turn_id, oldAttempt = store.getTurn(id)!.current_attempt_id;
@@ -250,19 +269,22 @@ it("filters private conversations before inbox counts, pagination and read-all",
   expect(store.listMessageInbox("mem_local_local", "local").unread_count).toBe(1);
 });
 it("lets the addressed agent answer a decision once through its authenticated message sender", async () => {
-  const turn = store.getTurn((await send("source")).data.turn_id)!;
-  const question = store.sendMessage({ session_id: session.id, sender: { type: "agent", id: other.id }, to: { type: "agent", ref: agent.id }, message_kind: "decision", wake_requested: "inbox_only", body_md: "Choose", options: [{ label: "Yes", value: "yes" }] }).message;
+  const { question } = nativeQuestion(other, true);
+  const pending = store.listTasksForIssue(issue.id).find(task => task.agentId === agent.id && task.status === 'queued')!;
+  const runtimeId = store.getTask(question.source_attempt_id!)!.runtimeId!;
+  expect(store.claimTask(runtimeId)?.id).toBe(pending.id); store.startTask(pending.id);
+  const turn = store.getTurnForAttempt(pending.id)!;
   app = createMultiremiApp({ store, authToken: "master" });
   const token = await store.createAccessToken({ name: "agent", type: "task", taskId: turn.current_attempt_id!, agentId: agent.id, userId: "local", workspaceId: "local" });
   const headers = { Authorization: `Bearer ${token.token}` };
   const memberToken = await store.createAccessToken({ name: "member", type: "pat", userId: "local", workspaceId: "local" });
-  expect((await request(path(), "POST", { reply_to_id: question.id, body_md: "forged" }, { Authorization: `Bearer ${memberToken.token}` })).status).toBe(400);
-  expect(store.getMessage(question.id)?.metadata.decision_record).toMatchObject({ status: "pending" });
+  expect((await request(path(), "POST", { reply_to_id: question.id, expected_route_revision: question.route_revision, body_md: "forged" }, { Authorization: `Bearer ${memberToken.token}` })).status).toBe(403);
+  expect(store.getQuestion(question.id)?.status).toBe("pending");
   expect(store.getMessage(question.id)?.resolved_at).toBeNull();
-  const result = await request(path(), "POST", { reply_to_id: question.id, metadata: { selected_options: ["yes"] } }, headers);
+  const result = await request(path(), "POST", { reply_to_id: question.id, expected_route_revision: question.route_revision, metadata: { selected_options: ["yes"] } }, headers);
   expect(result.status).toBe(200); expect(result.data.message.sender_id).toBe(agent.id); expect(result.data.message.to_agent_id).toBe(other.id);
   expect(store.getMessage(question.id)?.resolved_at).toBeTruthy();
-  expect((await request(path(), "POST", { reply_to_id: question.id, body_md: "replay" }, headers)).status).toBe(409);
+  expect((await request(path(), "POST", { reply_to_id: question.id, expected_route_revision: question.route_revision, body_md: "replay" }, headers)).status).toBe(409);
 });
 it("run-now leaves a request in auto conversation with an execution turn", async () => {
   const auto = store.createAutopilot({ title: "Manual", assigneeId: agent.id, executionMode: "run_only", description: "Run" });

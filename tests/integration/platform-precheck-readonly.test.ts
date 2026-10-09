@@ -205,8 +205,7 @@ describe("MUL-464 serialized platform-operation invariants", () => {
     } finally { f.close(); }
   });
 
-  test("report maps every contract status to its terminal or active slot", () => {
-    for (const status of contractStatuses) {
+  test.each(contractStatuses)("report maps contract status %s to its terminal or active slot", status => {
       const f = repoFixture();
       try {
         const operation = f.repo.create({ kind: "restart" }, "local");
@@ -215,7 +214,6 @@ describe("MUL-464 serialized platform-operation invariants", () => {
         expect(row.active_slot, status).toBe(isTerminalPlatformOperationStatus(status) ? null : 1);
         expect(row.finished_at, status).toBe(isTerminalPlatformOperationStatus(status) ? row.updated_at : null);
       } finally { f.close(); }
-    }
   });
 
   test("a terminal operation ignores subsequent reports for every contract status", () => {

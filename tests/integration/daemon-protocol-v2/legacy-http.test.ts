@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from "../../unit/multiremi/helpers.js";
 import { afterAll, beforeAll, expect, it } from "bun:test";
 import type { Database } from "bun:sqlite";
 import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
@@ -162,7 +163,7 @@ it.each(["all", "runtime"] as const)("keeps v1 task claim inert and authenticate
     store.ensureLocalWorkspace();
     const runtime = store.registerRuntime({ id: `rt_claim_${apiRole}`, name: "Legacy claim", provider: "claude" });
     const agent = store.createAgent({ name: "Legacy claim", provider: "claude", runtimeId: runtime.id });
-    const issue = store.createIssue({ title: "Legacy claim" });
+    const issue = createResponsibleTestIssue(store, { title: "Legacy claim" });
     const task = store.createTask({ agentId: agent.id, issueId: issue.id, runtimeId: runtime.id, prompt: "Remain queued" });
     const authToken = "isolated-legacy-claim";
     const app = createMultiremiApp({ store, authToken, apiRole });
@@ -230,7 +231,7 @@ it.each(["all", "runtime"] as const)("automatically rejects removed snapshot rou
   const store = new MultiremiStore(db);
   store.ensureLocalWorkspace();
   const runtime = store.registerRuntime({ id: "rt_legacy_http", name: "Legacy HTTP", provider: "claude", daemonId: "dmn_legacy_http", metadata: { cli_version: "0.2.82" } });
-  const issue = store.createIssue({ title: "Legacy HTTP routes" });
+  const issue = createResponsibleTestIssue(store, { title: "Legacy HTTP routes" });
   const agent = store.createAgent({ name: "Legacy HTTP", provider: "claude", runtimeId: runtime.id });
   const task = store.createTask({ agentId: agent.id, issueId: issue.id, runtimeId: runtime.id, prompt: "Do not dispatch this fixture" });
   const credential = await store.createAccessToken({ name: "Legacy HTTP fixture", type: "daemon", workspaceId: "local", daemonId: runtime.daemonId, userId: "local" });

@@ -66,6 +66,7 @@ describe("turn input RPC workspace authority over a real v2 socket", () => {
       metadata: { kind: "question", questions: [{ question: "Allowed?", options: [] }] },
     })).toMatchObject({ ok: true, message: { message_kind: "decision", body_md: "Allowed?" } });
     expect(await rpc(h, runtimeId, "turn.decision.expire", { ...input, message_id: request.id, status: "cancelled" }))
-      .toMatchObject({ ok: true, message: { id: request.id, metadata: { human_request: { status: "cancelled" } } } });
+      .toMatchObject({ ok: true, message: { id: request.id, metadata: { human_request: { status: "pending" } } } });
+    expect(h.store.getQuestion(request.id)).toMatchObject({ status: 'pending', wait_status: 'detached', wait_reason: 'cancelled' });
   });
 });

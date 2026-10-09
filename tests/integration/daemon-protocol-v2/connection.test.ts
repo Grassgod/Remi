@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, spyOn } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
 import type { Database } from "bun:sqlite";
 import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { join } from "node:path";
@@ -99,19 +99,41 @@ describe("daemon protocol v2 real connection", () => {
     expect(h.store.getAccessToken(token.id)!.lastUsedAt).toBe(lastUsedAt);
   });
 
-  it("reads pending and settled decision messages through the card host's real HTTP client", async () => {
-    const h = await fixture();
-    await h.startDaemon();
-    const runtimeId = h.ledger.find(entry => entry.type === "hello")!.frame.p.runtimes[0].runtime_id;
-    const agent = h.store.createAgent({ name: "human request RPC", provider: "claude", runtimeId });
-    const task = h.store.createTask({ agentId: agent.id, runtimeId, prompt: "question" });
-    const request = h.store.createTaskHumanRequest({ taskId: task.id, kind: "question", payload: { question: "Continue?" } });
+  describe('card host native question reads', () => {
+    let h: DaemonProtocolHarness, task: ReturnType<DaemonProtocolHarness['store']['createTask']>;
+    let request: NonNullable<ReturnType<DaemonProtocolHarness['store']['getTaskHumanRequest']>>;
+    beforeEach(async () => {
+      let requestId = '';
+      h = await fixture({ providerFactory: () => ({
+        async *sendStream(_message, options) {
+          const inbox = (h.daemon as any).taskDownlinks;
+          const id = `native-card-question:${task.id}`, nonce = `native-card-wait:${task.id}`;
+          inbox.beginDecision(task.id); inbox.beginQuestionWait(task.id, id, nonce);
+          const created = await inbox.rpc('turn.decision', { ...inbox.turnInput(task.id), message_id: id, wait_id: nonce,
+            body_md: 'Continue?', dedupe_key: id, options: [], metadata: { kind: 'question', questions: [{ question: 'Continue?' }] } });
+          inbox.registerDecision(created.message, task.id);
+          requestId = created.message_id;
+          try {
+            const reply = await inbox.waitForDecisionReply(requestId, options!.signal, 20_000);
+            if (reply) inbox.confirmDecisionReply(task.id, reply);
+          } finally { inbox.finishDecision(task.id); }
+        }, getLastResponse: () => null,
+      }) });
+      await h.startDaemon();
+      const runtimeId = h.store.listRuntimes()[0]!.id;
+      const agent = h.store.createAgent({ name: 'human request RPC', provider: 'claude', runtimeId });
+      const issue = h.store.createIssue({ title: 'Native card reads', assigneeType: 'agent', assigneeId: agent.id, responsibleMemberId: 'mem_local_local' });
+      task = h.store.createTask({ agentId: agent.id, issueId: issue.id, runtimeId, prompt: 'question' });
+      await waitFor(() => !!requestId, 'native provider question creation');
+      request = h.store.getTaskHumanRequest(requestId)!;
+    });
+    it("reads pending and settled decision messages through the card host's real HTTP client", async () => {
     const reads = spyOn(h.daemon, "getMessageHumanRequest");
     expect(await h.daemon.isFeishuBotHumanRequestPending(task.id, request.id)).toBe(true);
     expect(await h.daemon.getFeishuBotHumanRequest(task.id, request.id)).toEqual(request);
-    expect(h.store.respondTaskHumanRequest(request.id, { response: { answer: "yes" }, respondedBy: "test" })).toBeTruthy();
+    expect(h.store.respondTaskHumanRequest(request.id, { response: { answer: "yes" }, respondedBy: "mem_local_local", expectedRouteRevision: h.store.getQuestion(request.id)!.route_revision })).toBeTruthy();
     expect(await h.daemon.isFeishuBotHumanRequestPending(task.id, request.id)).toBe(false);
-    expect(await h.daemon.getFeishuBotHumanRequest(task.id, request.id)).toMatchObject({ status: "responded", response: { answer: "yes" } });
+    expect(await h.daemon.getFeishuBotHumanRequest(task.id, request.id)).toMatchObject({ status: "responded", response: { answer: "yes", answers: { 'Continue?': 'yes' } } });
     await expect(h.daemon.getFeishuBotHumanRequest(task.id, "hrq_missing")).rejects.toBeInstanceOf(MultiremiDaemonHttpError);
     await expect(h.daemon.getFeishuBotHumanRequest(task.id, "hrq_missing")).rejects.toMatchObject({ status: 404 });
     expect(reads.mock.calls.map(args => args[0])).toEqual([
@@ -119,18 +141,41 @@ describe("daemon protocol v2 real connection", () => {
     ]);
     expect(h.ledger.filter(entry => entry.type === "human_request.get")).toHaveLength(0);
     reads.mockRestore();
+    });
   });
 
-  it("times out a decision RPC while the executing turn's socket is disconnected", async () => {
-    const h = await fixture();
-    await h.startDaemon();
-    await h.disconnect();
-    const error = await (h.daemon as any).taskDownlinks.rpc("turn.decision.get", {
-      turn_id: "turn_unreachable", attempt_id: "tsk_unreachable", message_id: "msg_unreachable",
-    }, 50)
-      .catch((value: unknown) => value);
-    expect(error).toBeInstanceOf(DaemonProtocolRpcError);
-    expect(error).toMatchObject({ code: "daemon_timeout", retryable: true });
+  describe('disconnected executing turn RPC', () => {
+    let h: DaemonProtocolHarness, attemptId: string, turnId: string;
+    let releaseProvider: () => void;
+    beforeEach(async () => {
+      let executing = false;
+      const released = new Promise<void>(resolve => { releaseProvider = resolve; });
+      h = await fixture({ providerFactory: () => ({
+        async *sendStream() {
+          executing = true;
+          await released;
+        }, getLastResponse: () => null,
+      }) });
+      await h.startDaemon();
+      const runtimeId = h.store.listRuntimes()[0]!.id;
+      const agent = h.store.createAgent({ name: 'Disconnected decision caller', provider: 'claude', runtimeId });
+      const task = h.store.createTask({ agentId: agent.id, runtimeId, prompt: 'Remain executing across disconnect' });
+      attemptId = task.id; turnId = h.store.getTurnForAttempt(task.id)!.id;
+      await waitFor(() => executing, 'real provider execution');
+      expect(h.store.getTask(attemptId)?.status).toBe('running');
+    });
+    it("times out a decision RPC while the executing turn's socket is disconnected", async () => {
+      try {
+        await h.disconnect();
+        const error = await (h.daemon as any).taskDownlinks.rpc("turn.decision.get", {
+          turn_id: turnId, attempt_id: attemptId, message_id: "msg_unreachable",
+        }, 50).catch((value: unknown) => value);
+        expect(error).toBeInstanceOf(DaemonProtocolRpcError);
+        expect(error).toMatchObject({ code: "daemon_timeout", retryable: true });
+        expect(h.store.getTask(attemptId)?.status).toBe('running');
+        expect(h.client.connectionState()).toBe('disconnected');
+      } finally { releaseProvider(); }
+    });
   });
 
   it("stops within 1s while execution start is unacknowledged without calling the provider", async () => {

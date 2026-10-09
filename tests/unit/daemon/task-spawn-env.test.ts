@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from "../multiremi/helpers.js";
 import { afterEach, expect, it } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -19,7 +20,7 @@ pendingTurnBackendTests("Store offer to actual provider spawn", fixture => {
       const { store } = fixture();
       const runtime = store.registerRuntime({ id: "rt_spawn", daemonId: "daemon_spawn", name: "Spawn", provider: "codex", workspaceId: "local" });
       const agent = store.createAgent({ name: "Spawn", provider: "codex", runtimeId: runtime.id });
-      const issue = store.createIssue({ title: "Store to spawn" });
+      const issue = createResponsibleTestIssue(store, { title: "Store to spawn" });
       const session = store.getOrCreateDefaultIssueSession(issue.id);
       const seed = store.sendMessage({ session_id: session.id, sender: { type: "member", id: "mem_local_local" },
         to: { type: "agent", ref: agent.id }, message_kind: "request", wake_requested: "now", body_md: "Spawn with real IDs" });

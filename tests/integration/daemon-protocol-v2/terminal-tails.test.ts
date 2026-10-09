@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from "../../unit/multiremi/helpers.js";
 import { expect, it, spyOn } from "bun:test";
 import { MultiremiTaskReportOutbox } from "@multiremi/worker/outbox.js";
 import { daemonTraceService } from "@multiremi/api/daemon-protocol/trace-handlers.js";
@@ -70,7 +71,7 @@ it("replays real runAgent finally/workspace and finalize/progress tails once aft
       },
     });
     const agent = h.store.createAgent({ name: "Real terminal tails", provider: "claude" });
-    const issue = h.store.createIssue({ title: "Terminal tail replay", workspaceId: "local" });
+    const issue = createResponsibleTestIssue(h.store, { title: "Terminal tail replay", workspaceId: "local" });
     const task = h.store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "finish the local fixture" });
     taskId = task.id;
     const realWorkspace = h.store.reportIssueWorkspace.bind(h.store);

@@ -1,3 +1,4 @@
+import { createResponsibleTestIssue } from "../multiremi/helpers.js";
 import { afterEach, describe, expect, it, spyOn } from "bun:test";
 import { startMultiremiServer } from "../../fixtures/daemon-protocol.js";
 import { createLocalStore, resetMultiremiTestEnv } from "../multiremi/helpers.js";
@@ -110,7 +111,7 @@ describe("turn input push inbox over native WS", () => {
     store.registerRuntime({ id: rt, daemonId, name: rt, provider: "claude", workspaceId: "local",
       metadata: { parallel_agent_execution: 1 } });
     const agent = store.createAgent({ name: "Store inputs", provider: "claude", runtimeId: rt });
-    const issue = store.createIssue({ title: "Store inputs", assigneeType: "agent", assigneeId: agent.id });
+    const issue = createResponsibleTestIssue(store, { title: "Store inputs", assigneeType: "agent", assigneeId: agent.id, responsibleMemberId: "mem_local_local" });
     const session = store.getOrCreateDefaultIssueSession(issue.id);
     const send = (body: string) => store.sendMessage({ session_id: session.id,
       sender: { type: "member", id: "mem_local_local" }, to: { type: "agent", ref: agent.id },
@@ -162,14 +163,17 @@ describe("turn input push inbox over native WS", () => {
       expect(store.getTurn(task.turn_id)!.input_to_seq).toBe(interrupt.message.seq);
 
       inbox.beginDecision(task.id);
+      inbox.beginQuestionWait(task.id, "store-permission-question", "store-permission-wait");
       const created = await inbox.rpc("turn.decision", { ...inbox.turnInput(task.id), body_md: "Allow tool?",
+        message_id: "store-permission-question", wait_id: "store-permission-wait",
         dedupe_key: "store-permission", options: [{ label: "Allow", value: "allow" }],
         metadata: { kind: "permission", options: [{ optionId: "allow", name: "Allow", kind: "allow_once" }] } });
       const decision = created.message as UnifiedMessage;
       inbox.registerDecision(decision, task.id);
       expect(store.getTurn(task.turn_id)!.status).toBe("awaiting_human");
       expect(store.getMessage(decision.id)!.message_kind).toBe("decision");
-      const answered = store.answerMessageDecision(decision.id, { sender: { type: "member", id: "mem_local_local" }, body_md: "Allow", response: { option_id: "allow" } });
+      const answered = store.answerQuestion(decision.id, { expected_route_revision: store.getQuestion(decision.id)!.route_revision,
+        body_md: "Allow", response: { option_id: "allow" } }, { type: "member", id: "mem_local_local" });
       const reply = await inbox.waitForDecisionReply(decision.id, new AbortController().signal, 2_000);
       expect(reply?.id).toBe(answered.message.id);
       expect(store.getTurn(task.turn_id)!.status).toBe("running");
