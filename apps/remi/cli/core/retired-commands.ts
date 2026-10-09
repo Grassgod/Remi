@@ -14,7 +14,7 @@ const retiredCommands: Record<string, string> = {
   "session message create": "remi message send <conversation>",
   "chat message create": "remi message send <conversation>",
   "chat attachment send": "remi message send --attachment <path>",
-  "issue decision request": "remi message send --kind decision --option <option>",
+  "issue decision request": "原生 AskUserQuestion；先用 remi issue responsibility <issue> 查看责任归属",
   "issue decision answer": "remi message question answer <question> --revision <route_revision> --data <json>",
   "issue decision list": "remi issue question list <issue>",
   "issue decision escalate": "remi message question escalate <question> --revision <route_revision> --reason <reason>",

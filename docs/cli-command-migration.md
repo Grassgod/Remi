@@ -626,9 +626,13 @@ they cannot become undocumented bypasses.
 
 Prompts and durable examples use message / inbox / turn commands. Folded messages
 expand with `remi message get <message>`. Delegation is a directed request, progress
-is a report. AskUserQuestion retains one original Q and uses the versioned
-`remi message question` actions above; ordinary decision messages use
-`--kind decision --option ...` and same-session `--reply-to <message>` replies.
+is a report. New responsibility questions originate only from native
+AskUserQuestion, retain one original Q and use the versioned `remi message question`
+actions above. Read responsibility with `remi issue responsibility <issue>`;
+the CLI does not create a replacement Q. Ordinary decision messages use
+`--kind decision --option ...` and same-session `--reply-to <message>` replies;
+they do not enter the responsibility question chain. Consulting a Senior remains
+ordinary collaboration through directed messages.
 Use `remi turn get --input --attempts` for
 execution evidence. Session result publishing and project knowledge commands retain
 their separate responsibilities.
@@ -674,7 +678,7 @@ serve the new message and cursor contract. Old item IDs are rejected locally.
 | `remi session message create` | `remi message send <conversation>` |
 | `remi chat message create` | `remi message send <conversation>` |
 | `remi chat attachment send` | `remi message send --attachment <path>` |
-| `remi issue decision request` | `remi message send --kind decision --option <option>` |
+| `remi issue decision request` | Native AskUserQuestion; `remi issue responsibility <issue>` reads responsibility |
 | `remi issue decision answer` | `remi message question answer <question> --revision <route_revision> --data <json>` |
 | `remi issue decision list` | `remi issue question list <issue>` |
 | `remi issue decision escalate` | `remi message question escalate <question> --revision <route_revision> --reason <reason>` |

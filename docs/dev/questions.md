@@ -8,6 +8,8 @@ summary: 原会话中的唯一问题、责任路由、答复版本与provider等
 
 [`Questions`](../../packages/server/src/store/inbox/questions.ts)以原会话的 decision 消息为问题主体，状态保存在 `metadata.question`，不建立第二个问答表。原题在 `human_request.payload.questions`；Remi 总结独立保存，选项不改写。跨会话通知只带 `root_question_id`，`reply_to_id` 仍只允许同会话引用。
 
+新责任问题只由 provider 的原生 AskUserQuestion 进入；CLI 不提供另建业务 Q 的入口。`remi issue responsibility <issue>`读取责任归属，`remi message question`操作既有原 Q。普通 `message send --kind decision` 是会话消息选择，不进入责任链；Leader 咨询 Senior 仍用普通协作消息。
+
 [`QuestionView`](../../packages/contracts/src/question.ts)是 Web 与 CLI 的共享投影。`GET /api/issues/:id/questions` 返回待答和历史；`GET /api/messages/:id/question`读取一个原问题。答复、升级、责任移交、Remi 总结、例外续接及显式关闭使用 `/api/messages/:id/question/{answer,escalate,transfer,present,continue,close}`。所有写操作提交 `expected_route_revision`；已答问题只有指定人类可以显式 `revise`，且必须给原因和 `expected_answer_revision`。正常答复重放不当作改答。原 provider 上下文在 `original_context`，责任不可解析原因在 `route_reason`；均与 Remi 总结分开。关闭保存原因和完整历史，并取消尚存的原 provider 等待。
 
 责任从唯一 Issue resolver 读取。Worker 先问本单执行统筹人，再逐级问父单执行统筹人，最后问顶层明确人类。重复负责人和提问者自己被跳过。缺少 Leader 不能替换成普通成员；父链循环、父单缺失或跨工作区链保持不可处理状态。无 Issue 的普通 Chat 只从明确创建人映射人类；飞书 transport Chat 只使用配置的 `responsibleMemberId`，技术会话创建人不授予人类答复权，不取工作区 owner。明确来源和可用性事实形成责任 hash；配置或实体变更在其事务调用 Chat 刷新 hook，定位相关会话的待答或待恢复 Q、记录移交并使旧卡失效，GET 不写迁移。密钥或域名更新不改变责任 hash。权限请求直接交人类，Remi 只总结同一个 Q。
