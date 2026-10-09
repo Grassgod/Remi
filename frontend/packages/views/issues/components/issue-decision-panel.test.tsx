@@ -76,12 +76,12 @@ describe("IssueDecisionBanner", () => {
 });
 
 const decision = messageFixture({ message_kind: "decision", body_md: "Merge after QA?", options: [{ label: "Merge", value: "approve" }] });
-function mountPanel() {
+function mountPanel(message = decision) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
   mockApi.listIssueSessions.mockResolvedValue([{ id: "sess_1" }]);
   mockApi.listMessages.mockResolvedValue({ messages: [decision], next_cursor: null });
   return render(<QueryClientProvider client={qc}><I18nProvider locale="en" resources={{ en: { issues: enIssues, chat: enChat, messages: enMessages } }}>
-    <MessageDecisionCard message={decision} canAnswer getActorName={(_type, id) => id} />
+    <MessageDecisionCard message={message} canAnswer getActorName={(_type, id) => id} />
   </I18nProvider></QueryClientProvider>);
 }
 describe("decision message replies", () => {
@@ -89,21 +89,28 @@ describe("decision message replies", () => {
     mockApi.sendMessage.mockClear(); mockApi.getQuestion.mockClear();
     mockApi.getQuestion.mockResolvedValue({ original_message: "Historical original question", route_revision: 9, wait_status: "detached" });
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    render(<QueryClientProvider client={qc}><I18nProvider locale="en" resources={{ en: { issues: enIssues } }}><MessageDecisionCard message={{ ...decision, metadata: { [metadataKey]: { status: "pending" } } }} canAnswer /></I18nProvider></QueryClientProvider>);
+    const metadata = metadataKey === "decision_record"
+      ? { decision_record: { status: "pending", issue_id: "iss_actual_source" } }
+      : { human_request: { status: "pending" } };
+    render(<QueryClientProvider client={qc}><I18nProvider locale="en" resources={{ en: { issues: enIssues } }}><MessageDecisionCard message={{ ...decision, metadata }} canAnswer /></I18nProvider></QueryClientProvider>);
     expect(await screen.findByText("Historical original question · revision 9 · detached")).toBeInTheDocument();
     expect(mockApi.getQuestion).toHaveBeenCalledWith(decision.id);
     expect(mockApi.sendMessage).not.toHaveBeenCalled();
     expect(screen.queryByRole("button", { name: "Reply" })).toBeNull();
   });
-  it("posts historical decision replies with the option value and original reply_to_id", async () => {
-    mockApi.listMessages.mockClear(); mockApi.sendMessage.mockResolvedValue({ message: {} }); mountPanel();
+  it.each([{}, { decision_record: { status: "pending" } }, { message_choice: { status: "pending" } }])("posts an ordinary choice exactly once with its original option and reply reference (%j)", async metadata => {
+    mockApi.listMessages.mockClear(); mockApi.getQuestion.mockClear(); mockApi.sendMessage.mockClear();
+    mockApi.sendMessage.mockResolvedValue({ message: {} }); mountPanel({ ...decision, metadata });
     expect(mockApi.listMessages).not.toHaveBeenCalled();
+    expect(screen.getByText("Merge after QA?")).toBeInTheDocument();
     fireEvent.click(await screen.findByRole("button", { name: "Merge" }));
     fireEvent.click(screen.getByRole("button", { name: "Reply" }));
     await screen.findByRole("button", { name: "Resolved" });
     expect(mockApi.sendMessage).toHaveBeenCalledWith("sess_1", expect.objectContaining({
-      message_kind: "reply", reply_to_id: "msg_1", metadata: { selected_options: ["approve"] },
+      body_md: "Merge", message_kind: "reply", reply_to_id: "msg_1", metadata: { selected_options: ["approve"] },
     }));
+    expect(mockApi.sendMessage).toHaveBeenCalledTimes(1);
+    expect(mockApi.getQuestion).not.toHaveBeenCalled();
     expect(screen.queryByRole("button", { name: "Merge" })).toBeNull();
   });
   it("shows a duplicate-answer conflict without marking the reply successful", async () => {

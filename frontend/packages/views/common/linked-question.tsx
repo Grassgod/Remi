@@ -1,5 +1,6 @@
 "use client";
 import { useQuery } from "@tanstack/react-query";
+import { isHistoricalIssueQuestionRecord } from "@multiremi/contracts";
 import { api } from "@multiremi/core/api";
 import { useWorkspaceId } from "@multiremi/core/hooks";
 import { Button } from "@multiremi/ui/components/ui/button";
@@ -11,7 +12,7 @@ import { questionLocation } from "./question-location";
 
 export function linkedQuestionId(id: string, metadata: Record<string, unknown> | undefined): string | null {
   if (typeof metadata?.root_question_id === "string" && (metadata.question_notification === true || metadata.question_present_request === true)) return metadata.root_question_id;
-  return metadata?.question || metadata?.human_request || metadata?.decision_record ? id : null;
+  return metadata?.question || metadata?.human_request || isHistoricalIssueQuestionRecord(metadata?.decision_record) ? id : null;
 }
 
 /** Replies keep their own body; their reference is a link, rather than another full Q. */
