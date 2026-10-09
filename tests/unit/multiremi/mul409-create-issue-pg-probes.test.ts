@@ -72,7 +72,8 @@ describe.skipIf(!pgAvailable)("MUL-409: in-transaction issue creation on Postgre
     db = new PostgresSyncDatabase(pgDatabaseUrl(TEST_DB));
     store = new MultiremiStore(db);
     store.ensureLocalWorkspace();
-    memberId = store.getWorkspaceMember("mem_local")?.id ?? store.listWorkspaceMembers("local")[0]!.id;
+    const user = store.getOrCreateUser({ email: `mul409-probe-${process.pid}@example.test`, name: "MUL-409 probe human" });
+    memberId = store.createWorkspaceMember({ workspaceId: "local", userId: user.id, name: user.name, role: "member" }).id;
   });
 
   afterAll(async () => {
@@ -172,6 +173,7 @@ describe.skipIf(!pgAvailable)("MUL-409: in-transaction issue creation on Postgre
     store.heartbeatRuntime(runtimeId, { supportsFeishuBotConfig: true });
     const config = store.upsertFeishuBotConfig("local", {
       agentId: agent.id,
+      responsibleMemberId: memberId,
       runtimeId,
       appId: `cli_probe_${counter}`,
       senderAccessPolicy: "allowlist",
@@ -222,7 +224,7 @@ describe.skipIf(!pgAvailable)("MUL-409: in-transaction issue creation on Postgre
     });
     store.ingestFeishuBatch(source.id, [feishuMessage(`om_probe_direct_${counter}`, `oc_probe_direct_${counter}`)]);
     observe(title, () => {
-      store.createFeishuIssueOutcome(`om_probe_direct_${counter}`, { workspaceId: "local", title });
+      store.createFeishuIssueOutcome(`om_probe_direct_${counter}`, { workspaceId: "local", title, createdBy: memberId });
     }, rollback);
   });
 
