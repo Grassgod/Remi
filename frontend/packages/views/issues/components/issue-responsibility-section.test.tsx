@@ -22,6 +22,17 @@ function mount(child: React.ReactNode = <IssueResponsibilitySection issue={issue
 }
 beforeEach(() => { Object.values(mocks).forEach(mock => mock.mockReset()); mocks.getIssueResponsibility.mockResolvedValue(responsibility); mocks.listIssueDeliveries.mockResolvedValue([delivery]); mocks.listIssueQuestions.mockResolvedValue([]); mocks.respondIssueDelivery.mockResolvedValue(delivery); mocks.authorizeIssueDelivery.mockResolvedValue(delivery); mocks.updateIssue.mockResolvedValue(issue); });
 describe("responsibility and exact delivery review", () => {
+  for (const reason of ["review_issue_closed", "review_issue_archived", "future_unavailable_reason"]) it(`retains pending history and disables review when ${reason}`, async () => {
+    mocks.listIssueDeliveries.mockResolvedValue([{ ...delivery, reviewUnavailableReason: reason }]); mount();
+    await screen.findByText("Formal evidence");
+    expect(await screen.findByRole("status")).toHaveTextContent(reason === "review_issue_closed" ? "Reviewer issue is closed" : reason === "review_issue_archived" ? "Reviewer issue is archived" : "Delivery review is currently unavailable");
+    const accept = screen.getByRole("button", { name: "Accept delivery" }), back = screen.getByRole("button", { name: "Return delivery" });
+    fireEvent.change(screen.getByRole("textbox", { name: "Reason / review feedback" }), { target: { value: "Retained review feedback" } });
+    expect(accept).toBeDisabled(); expect(back).toBeDisabled();
+    fireEvent.click(accept); fireEvent.click(back);
+    expect(mocks.respondIssueDelivery).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "Questions and history" })).toBeInTheDocument();
+  });
   it("defaults new roots to the authenticated workspace member, never another member", async () => {
     const onChange = vi.fn(); mount(<RootHumanPicker value={null} onChange={onChange} defaultSelf />);
     await waitFor(() => expect(onChange).toHaveBeenCalledWith("member-human"));

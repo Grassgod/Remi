@@ -1,12 +1,20 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ApiClient } from "./client";
 import { ApiContractError } from "./schema";
-import { QuestionViewSchema } from "./schemas/issue-responsibility";
+import { IssueDeliverySchema, QuestionViewSchema } from "./schemas/issue-responsibility";
 const question = { id: "q1", session_id: "session", workspace_id: "ws", source_issue_id: "issue", source_agent_id: "agent", source_turn_id: null, source_attempt_id: null,
   original_questions: [], original_message: "Choose?", options: [{ label: "Yes", value: "yes" }], summary: null, current_handler: { type: "member", id: "human" }, stage: "human", route_revision: 3, answer_revision: 0,
   kind: "question", status: "pending", wait_status: "detached", wait_reason: "provider exited", answer: null, history: [], actions: { allowed: ["answer"] } };
 afterEach(() => vi.unstubAllGlobals());
 describe("responsibility API contracts", () => {
+  it("retains unavailable review reasons, tolerates older projections and rejects malformed reasons", () => {
+    const actor = { type: "member", id: "human", issueId: "parent", name: "Human" };
+    const delivery = { id: "delivery", issueId: "issue", sourceSessionId: "session", summary: "Retained evidence", status: "pending", submittedBy: actor, reviewOwner: actor,
+      responsibilityRevision: "v1", responseMessageId: null, createdAt: "now", respondedAt: null };
+    expect(IssueDeliverySchema.parse(delivery).reviewUnavailableReason).toBeUndefined();
+    for (const reason of ["review_issue_closed", "review_issue_archived", "future_unavailable_reason"]) expect(IssueDeliverySchema.parse({ ...delivery, reviewUnavailableReason: reason }).reviewUnavailableReason).toBe(reason);
+    expect(() => IssueDeliverySchema.parse({ ...delivery, reviewUnavailableReason: { reason: "closed" } })).toThrow();
+  });
   it("reads original migration facts and submits only explicit mappings with their fact revision", async () => {
     const item = { issueId: "root", key: "ROOT-1", title: "Root", responsibleMemberId: null, revision: "v1", assigneeType: "member", assigneeId: "old-member", createdById: "creator", unresolved: [{ issueId: "root", reason: "root_human_missing" }], candidates: [{ memberId: "human", name: "Human", source: "historical_creator", available: true }] };
     const fetch = vi.fn().mockResolvedValueOnce(new Response(JSON.stringify({ workspaceId: "ws", total: 1, rootCount: 1, legacyMemberExecutionCount: 1, nextOffset: null, items: [item] }))).mockResolvedValueOnce(new Response(JSON.stringify({ mappedIssueIds: ["root"] })));

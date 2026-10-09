@@ -15,6 +15,7 @@ export const IssueResponsibilitySchema = z.object({
 export const IssueDeliverySchema = z.object({
   id: z.string(), issueId: z.string(), sourceSessionId: z.string(), summary: z.string(), status: z.string(),
   submittedBy: ResponsibilityActorSchema, reviewOwner: ResponsibilityActorSchema,
+  reviewUnavailableReason: z.string().nullable().optional(),
   responsibilityRevision: z.string(), responseMessageId: z.string().nullable(), createdAt: z.string(), respondedAt: z.string().nullable(),
   responseBody: z.string().nullable().optional(),
   authorization: z.object({ agentId: z.string(), grantedBy: z.string(), responsibilityRevision: z.string(), grantedAt: z.string() }).nullable().optional(),

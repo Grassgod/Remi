@@ -61,18 +61,21 @@ function DeliveryCard({ delivery, canReview, authorizeAgentId }: { delivery: Iss
   const wsId = useWorkspaceId();
   const paths = useWorkspacePaths();
   const [body, setBody] = useState("");
+  const reviewUnavailable = !!delivery.reviewUnavailableReason;
   const refresh = () => { void qc.invalidateQueries({ queryKey: issueKeys.all(wsId) }); };
   const response = useMutation({ mutationFn: (action: "accept" | "return") => api.respondIssueDelivery(delivery.issueId, delivery.id, { action, body: body.trim(), revision: delivery.responsibilityRevision }), onSettled: refresh });
   const authorization = useMutation({ mutationFn: (agentId: string | null) => api.authorizeIssueDelivery(delivery.issueId, delivery.id, { agentId, revision: delivery.responsibilityRevision }), onSettled: refresh });
   return <article className="space-y-2 rounded border p-2 text-xs" data-issue-delivery={delivery.id}>
     <p>{delivery.submittedBy.name} → {delivery.reviewOwner.name} · {delivery.status}</p><Markdown mode="minimal">{delivery.summary}</Markdown>
+    {reviewUnavailable && <p role="status">{delivery.reviewUnavailableReason === "review_issue_closed" ? t($ => $.responsibility.review_closed)
+      : delivery.reviewUnavailableReason === "review_issue_archived" ? t($ => $.responsibility.review_archived) : t($ => $.responsibility.review_unavailable)}</p>}
     {delivery.responseBody && <Markdown mode="minimal">{delivery.responseBody}</Markdown>}
     {delivery.responseMessageId && <AppLink href={`${paths.issueDetail(delivery.issueId)}?comment=${encodeURIComponent(delivery.responseMessageId)}`}>{t($ => $.responsibility.source)}</AppLink>}
     {delivery.authorization && <p>{t($ => $.responsibility.authorized)} · {delivery.authorization.agentId} · {delivery.authorization.grantedAt}</p>}
     {canReview && delivery.status === "pending" && !response.isSuccess && <>
       <Textarea aria-label={t($ => $.responsibility.reason)} placeholder={t($ => $.responsibility.reason)} value={body} disabled={response.isPending} onChange={e => setBody(e.target.value)} />
-      <div className="flex flex-wrap gap-2"><Button size="sm" disabled={response.isPending} onClick={() => response.mutate("accept")}>{t($ => $.responsibility.accept)}</Button>
-        <Button size="sm" variant="outline" disabled={response.isPending || !body.trim()} onClick={() => response.mutate("return")}>{t($ => $.responsibility.return)}</Button></div>
+      <div className="flex flex-wrap gap-2"><Button size="sm" disabled={response.isPending || reviewUnavailable} onClick={() => response.mutate("accept")}>{t($ => $.responsibility.accept)}</Button>
+        <Button size="sm" variant="outline" disabled={response.isPending || reviewUnavailable || !body.trim()} onClick={() => response.mutate("return")}>{t($ => $.responsibility.return)}</Button></div>
     </>}
     {canReview && authorizeAgentId && delivery.status === "pending" && <Button size="sm" variant="outline" disabled={authorization.isPending} onClick={() => authorization.mutate(delivery.authorization ? null : authorizeAgentId)}>{delivery.authorization ? t($ => $.responsibility.revoke) : t($ => $.responsibility.authorize)}</Button>}
     {authorization.error && <p role="alert" className="text-destructive">{authorization.error.message}</p>}
