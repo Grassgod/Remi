@@ -234,6 +234,9 @@ export function registerUnifiedRoutes(app: Hono, deps: RouterDeps): void {
     if (!message || message.visibility !== 'shown') return c.json({ error: 'question not found' }, 404);
     const raw = store.getQuestion(message.id);
     if (!raw) return c.json({ error: 'question not found' }, 404);
+    // Original-session membership does not authorize a Q whose source Issue
+    // has moved to another workspace. Do not return its body or answer history.
+    if (raw.route_reason === 'source_workspace_changed') return c.json({ error: 'question not found' }, 404);
     const denied = denyCurrentUserWorkspaceAccess(c, store, raw.workspace_id); if (denied) return denied;
     const actor = questionActor(c, raw.workspace_id); if (actor instanceof Response) return actor;
     const question = store.getQuestion(message.id, actor)!;
@@ -255,6 +258,7 @@ export function registerUnifiedRoutes(app: Hono, deps: RouterDeps): void {
     try { page = store.listIssueQuestions(issue.id, actor, { limit, before }); }
     catch (error) { if (error instanceof QuestionError) return c.json({ error: error.message, code: error.code }, error.status); throw error; }
     return c.json({ nextCursor: page.length === limit ? page.at(-1)!.id : null, questions: page.filter(q => {
+      if (q.route_reason === 'source_workspace_changed') return false;
       const message = store.getMessage(q.id)!;
       return routedQuestionAccess(c, q, actor) || actor?.type !== 'agent' && !(loadConversation(c, store, q.session_id) instanceof Response) && visible(message);
     }) });

@@ -43,6 +43,42 @@ function setup(f: PendingTurnTestFixture, sameOwner = false, busyOwner = false, 
 }
 
 pendingTurnBackendTests('one question through the responsibility chain', fixture => {
+  it('HTTP hides the original Q after a real source Issue move across workspaces', async () => {
+    const h = setup(fixture());
+    const api = createMultiremiApp({ store: h.store, authToken: 'MASTER' });
+    const headers = { Authorization: 'Bearer MASTER', 'content-type': 'application/json' };
+    const read = () => api.request(`/api/messages/${h.q.id}/question`, { headers });
+    expect((await read()).status).toBe(200);
+    // The real move API requires the source Issue's executions to stop first.
+    // Provider cancellation detaches this business Q; it does not erase it.
+    for (const task of h.store.listTasksForIssue(h.issue.id)) if (!['completed', 'failed', 'cancelled'].includes(task.status)) h.store.cancelTask(task.id);
+    expect(h.store.getQuestion(h.q.id)).toMatchObject({ status: 'pending', wait_status: 'detached' });
+    const foreign = h.store.createWorkspace({ name: 'Moved Q source', slug: 'moved-q-source' });
+    const human = h.store.listWorkspaceMembers(foreign.id).find(member => member.role === 'owner')!;
+    const agent = h.store.createAgent({ name: 'Moved execution owner', provider: 'codex', workspaceId: foreign.id });
+    const detached = await api.request(`/api/issues/${h.issue.id}`, { method: 'PATCH', headers,
+      body: JSON.stringify({ parent_issue_id: null, responsible_member_id: 'mem_local_local' }) });
+    expect(detached.status).toBe(200);
+    // Responsibility handoff emits a fresh Q notification; stop that newly
+    // queued handler execution as well before the guarded workspace move.
+    for (const task of h.store.listTasksForIssue(h.issue.id)) if (!['completed', 'failed', 'cancelled'].includes(task.status)) h.store.cancelTask(task.id);
+    const moved = await api.request(`/api/issues/${h.issue.id}`, { method: 'PATCH', headers,
+      body: JSON.stringify({ workspace_id: foreign.id, responsible_member_id: human.id, assignee_type: 'agent', assignee_id: agent.id }) });
+    expect(moved.status, JSON.stringify(await moved.clone().json())).toBe(200);
+    expect(h.store.getIssue(h.issue.id)?.workspaceId).toBe(foreign.id);
+    expect((await read()).status).toBe(404);
+    const oldList = await api.request(`/api/issues/${h.parent.id}/questions`, { headers });
+    expect(oldList.status).toBe(200);
+    expect((await oldList.json() as any).questions.some((question: any) => question.id === h.q.id)).toBe(false);
+    const newList = await api.request(`/api/issues/${h.issue.id}/questions`, { headers });
+    expect(newList.status).toBe(200);
+    expect((await newList.json() as any).questions.some((question: any) => question.id === h.q.id)).toBe(false);
+    expect((await api.request(`/api/messages/${h.q.id}/question/answer`, { method: 'POST', headers,
+      body: JSON.stringify({ expected_route_revision: h.store.getQuestion(h.q.id)!.route_revision, response: { answer: 'A' } }) })).status).toBe(404);
+    expect(h.store.getQuestion(h.q.id)?.answer_revision).toBe(0);
+    expect(h.store.getMessage(h.q.id)?.body_md).toBe('Which approach?');
+  });
+
   for (const kind of ['production_change', 'merge']) {
     it(`${kind} authorization bypasses Agent handlers and requires the explicitly responsible human`, () => {
       const h = setup(fixture(), false, false, kind);
