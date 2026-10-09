@@ -26,9 +26,9 @@ for (const backend of ['sqlite','postgres'] as const) describe.skipIf(backend ==
       });
     } finally { db?.close(); if (created) await admin!.unsafe(`DROP DATABASE ${name}`); await admin?.end(); }
   }
-  function fixture(store: MultiremiStore) {
-    const human = store.createWorkspaceMember({id:'human_responsible',name:'Responsible human'});
-    const other = store.createWorkspaceMember({id:'human_other',name:'Other human'});
+  function fixture(store: MultiremiStore, suffix='') {
+    const human = store.createWorkspaceMember({id:`human_responsible${suffix}`,name:'Responsible human'});
+    const other = store.createWorkspaceMember({id:`human_other${suffix}`,name:'Other human'});
     const owner = store.createAgent({name:'Issue owner',provider:'claude'});
     const worker = store.createAgent({name:'Worker',provider:'claude'});
     const root = store.createIssue({title:'Root',responsibleMemberId:human.id,assigneeType:'agent',assigneeId:owner.id});
@@ -403,6 +403,43 @@ for (const backend of ['sqlite','postgres'] as const) describe.skipIf(backend ==
     const denied=await app.request('/api/issues',{method:'POST',headers:{...headers,Authorization:`Bearer ${dispatchedCredential.token}`},body:JSON.stringify({title:'Proxy does not relax creation policy'})});
     expect(denied.status).toBe(403);expect(await denied.json()).toMatchObject({code:'issue_creation_requires_proposal'});
   }));
+  it('assigns through native HTTP at depth one and rolls back dispatch failures with every fact', () => run(async (store,db) => {
+    for(const surface of ['/api/multiremi/issues']) {
+      const f=fixture(store,surface==='/api/issues'?'_compat':'_native');const next=store.createAgent({name:'Atomic assignment target',provider:'claude'});
+      const delivery=store.submitIssueDelivery(f.child.id,{summary:'Child finished before assignment'},f.workerActor);
+      store.respondIssueDelivery(f.child.id,delivery.id,{action:'accept',revision:delivery.responsibilityRevision},f.ownerActor);
+      const app=createMultiremiApp({store,authToken:'test-root'});
+      const before=store.getIssue(f.child.id)!;
+      const taskFacts=store.listTasksForIssue(f.child.id).map(task=>({id:task.id,status:task.status}));
+      const activities=store.listIssueActivity(f.child.id).map(entry=>entry.id);
+      const emitted:boolean[]=[];const unsubscribe=store.onWorkspaceEvent(()=>emitted.push(db.inTransaction===true));
+      if(db.dialect==='postgres') {
+        db.run(`CREATE FUNCTION reject_assignment_turn() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.agent_id='${next.id}' THEN RAISE EXCEPTION 'assignment dispatch rejected'; END IF; RETURN NEW; END $$`);
+        db.exec('CREATE TRIGGER reject_assignment_turn BEFORE INSERT ON multiremi_turns FOR EACH ROW EXECUTE FUNCTION reject_assignment_turn()');
+      } else db.exec(`CREATE TRIGGER reject_assignment_turn BEFORE INSERT ON multiremi_turns WHEN NEW.agent_id='${next.id}' BEGIN SELECT RAISE(ABORT,'assignment dispatch rejected'); END`);
+      const request=()=>app.request(`${surface}/${f.child.id}/assign`,{method:'POST',headers:{Authorization:'Bearer test-root','Content-Type':'application/json'},
+        body:JSON.stringify({assignee_type:'agent',assignee_id:next.id})});
+      try {
+        const failed=await request();expect(failed.status).toBe(500);
+        expect(store.getIssue(f.child.id)).toEqual(before);
+        expect(store.listTasksForIssue(f.child.id).map(task=>({id:task.id,status:task.status}))).toEqual(taskFacts);
+        expect(store.listIssueActivity(f.child.id).map(entry=>entry.id)).toEqual(activities);
+        expect(emitted).toEqual([]);
+      } finally {
+        db.exec('DROP TRIGGER reject_assignment_turn'+(db.dialect==='postgres'?' ON multiremi_turns':''));
+        if(db.dialect==='postgres')db.exec('DROP FUNCTION reject_assignment_turn()');
+      }
+      if(db instanceof PostgresSyncDatabase)db.resetTransactionDepthStats();
+      const assigned=await request();expect(assigned.status).toBe(200);
+      expect(store.getIssue(f.child.id)?.assigneeId).toBe(next.id);
+      expect(store.getIssue(f.child.id)?.status).toBe('todo');
+      expect(store.listTasksForIssue(f.child.id).filter(task=>task.agentId===next.id)).toHaveLength(1);
+      expect(store.listIssueActivity(f.child.id).filter(entry=>entry.type==='issue_assigned')).toHaveLength(1);
+      expect(emitted.length).toBeGreaterThan(0);expect(emitted.every(inTransaction=>!inTransaction)).toBeTrue();
+      if(db instanceof PostgresSyncDatabase)expect(db.maxTransactionDepth).toBe(1);
+      unsubscribe();
+    }
+  }),30_000);
   it('keeps human responsibility separate from execution and refuses side-session delivery or acceptance', () => run((store,db) => {
     const f=fixture(store);
     expect(()=>store.createIssue({title:'Human execution',assigneeType:'member',assigneeId:f.human.id,responsibleMemberId:f.human.id})).toThrow('Agent or team Leader');

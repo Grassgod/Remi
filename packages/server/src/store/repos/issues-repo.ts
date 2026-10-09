@@ -4149,11 +4149,11 @@ export class IssuesRepo {
     }
     if (!requestedAssigneeType && !requestedAssigneeId) {
       const deferredEvents = createCommitEventQueue();
-      const cancelledTasks = this.ctx.db.transaction(() => this.unassignIssueWithinTransaction(id, {
+      const cancelledTasks = this.unassignIssueWithinTransaction(id, {
         actorType,
         actorId,
         parentTaskId: resolveCamelOrSnakeString(input, "parentTaskId", "parent_task_id"),
-      }, deferredEvents))();
+      }, deferredEvents);
       afterCommit(this.ctx.db, () => this.ctx.emitCommitEvents(deferredEvents));
       return { issue: this.getIssue(id)!, task: null, cancelledTasks };
     }
@@ -4178,7 +4178,7 @@ export class IssuesRepo {
     const unmetDependencies = this.dependenciesBlockDispatch(current, forcedDispatch);
     if (unmetDependencies) {
       const assignmentEvents = createCommitEventQueue();
-      const heldAssignment = this.ctx.db.transaction(() => {
+      const holdAssignment = () => {
         this.ctx.lockWorkspaceRuntimeLifecycle(current.workspaceId);
         lockIssueRowWithinTransaction(this.ctx.db,id);
         this.ctx.db.run(
@@ -4228,7 +4228,8 @@ export class IssuesRepo {
         if (current.projectId) this.ctx.db.run("UPDATE multiremi_projects SET updated_at = ? WHERE id = ?", [now, current.projectId]);
         if (current.assigneeId !== assigneeId || current.assigneeType !== assigneeType) refreshResponsibilityQuestions(this.ctx,id,assignmentEvents,actorType,actorId,'issue_assigned');
         return { issue: this.getIssue(id)!, task: null, cancelledTasks: 0 };
-      })();
+      };
+      const heldAssignment = holdAssignment();
       afterCommit(this.ctx.db,() => this.ctx.emitCommitEvents(assignmentEvents));
       return heldAssignment;
     }
@@ -4311,7 +4312,7 @@ export class IssuesRepo {
 
     let task: MultiremiTask | null = null;
     if (taskAgent) {
-      task = this.ctx.tasks().createTask({
+      task = this.ctx.tasks().createTaskWithinTransaction({
         agentId: taskAgent.id,
         issueId: id,
         workspaceId: current.workspaceId,
@@ -4319,7 +4320,7 @@ export class IssuesRepo {
         assignmentAuthorType: "system",
         // Same authoritative-camelCase read as the other task-creation paths.
         parentTaskId: resolveCamelOrSnakeString(input, "parentTaskId", "parent_task_id"),
-      });
+      }, assignment.assignmentChanges, assignment.assignmentEvents);
     }
     if (assigneeType === "member") {
       this.addIssueSubscriber(id, assigneeId, "assigned");
@@ -4354,7 +4355,7 @@ export class IssuesRepo {
         ...sourceTaskActivityData(resolveCamelOrSnakeString(input, "parentTaskId", "parent_task_id")),
         cancelled,
       },
-    });
+    }, assignment.assignmentEvents);
     if (current.projectId) this.ctx.db.run("UPDATE multiremi_projects SET updated_at = ? WHERE id = ?", [now, current.projectId]);
     return { issue: this.getIssue(id)!, task, cancelledTasks: cancelled };
   }
