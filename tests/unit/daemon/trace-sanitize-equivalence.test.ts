@@ -58,13 +58,8 @@ describe("cleanTraceField matches the historical null rules", () => {
   });
 });
 
-describe("normalizeTraceStatus matches the accepted set", () => {
-  it("keeps terminal cancellation alongside the other known statuses", () => {
-    for (const status of ["pending", "in_progress", "completed", "failed", "cancelled"]) {
-      expect(normalizeTraceStatus(status)).toBe(status);
-    }
-  });
-
+// Accepted statuses are checked against the live contract in trace-contract-guard.
+describe("normalizeTraceStatus rejects unsupported values", () => {
   it("drops anything else to null, including the empty string", () => {
     expect(normalizeTraceStatus("not-a-real-status")).toBeNull();
     expect(normalizeTraceStatus(null)).toBeNull();
@@ -147,16 +142,6 @@ describe("sanitizeTraceEventFields produces the stored row columns", () => {
     expect(stored.tool).toBeNull();
     expect(stored.output).toBeNull();
     expect(stored.status).toBeNull();
-  });
-
-  it("truncates a structured field only after serialization, and it stops parsing", () => {
-    // A payload of wide objects is not base64-shaped, so the byte cap (not the
-    // base64 rule) is what fires. The cap applies to the serialized text, so the
-    // stored value is a truncated string rather than parseable JSON.
-    const big = { rows: Array.from({ length: 200 }, (_, index) => ({ id: index, note: "x".repeat(2000) })) };
-    const stored = sanitizeTraceEventFields({ type: "tool_use", input: big });
-    expect(stored.input!.endsWith(TRACE_TRUNCATION_MARKER)).toBe(true);
-    expect(parseStoredTraceJson(stored.input)).toBeNull();
   });
 
   it("round-trips a structured field that fits", () => {

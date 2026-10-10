@@ -51,19 +51,31 @@ describe.each(["memory", "sqlite"] as const)("%s revision watermarks", kind => {
     } finally { storage.close(); }
   });
 
-  test.each(["tombstone", "hidden"] as const)("%s rejects old/equal entries and HTTP rows after engine reopen", async removal => {
+  test.each(["tombstone", "hidden"] as const)("%s rejects old/equal entries and HTTP rows before and after engine reopen", async removal => {
     const storage = await storageFor(kind);
     try {
       const first = new ReplicaEngine(storage);
-      open(first); first.ack(sid, ack()); first.frames(sid, [entry(), remove(removal)]);
+      open(first); first.ack(sid, ack()); first.frames(sid, [entry()]);
+      first.frames(sid, [remove(removal)]);
+      expect(first.readWindow(sid, 1, 1)).toEqual([]);
+      // Check HTTP replay directly after removal, without a preceding stale WS frame.
+      first.writeWindow(sid, [row()], { from: 1, to: 1 });
+      expect(first.readWindow(sid, 1, 1)).toEqual([]);
+      const rejectStaleInputs = (engine: ReplicaEngine) => {
+        for (const revision of [0, 1, 5]) {
+          engine.frames(sid, [entry(revision)]);
+          expect(engine.readWindow(sid, 1, 1)).toEqual([]);
+          expect(storage.readRevisionWatermarks(sid).get(1)).toBe(5);
+          engine.writeWindow(sid, [row(revision)], { from: 1, to: 1 });
+          expect(engine.readWindow(sid, 1, 1)).toEqual([]);
+          expect(storage.readRevisionWatermarks(sid).get(1)).toBe(5);
+        }
+      };
+      // Removal and stale replay arrive in separate batches, including before restart.
+      rejectStaleInputs(first);
       const reopened = new ReplicaEngine(storage);
       open(reopened);
-      for (const revision of [0, 1, 5]) {
-        reopened.frames(sid, [entry(revision)]);
-        reopened.writeWindow(sid, [row(revision)], { from: 1, to: 1 });
-        expect(reopened.readWindow(sid, 1, 1)).toEqual([]);
-        expect(storage.readRevisionWatermarks(sid).get(1)).toBe(5);
-      }
+      rejectStaleInputs(reopened);
       // A genuinely newer full row can supersede the removal.
       reopened.writeWindow(sid, [row(6)], { from: 1, to: 1 });
       expect(reopened.readWindow(sid, 1, 1)).toEqual([row(6)]);

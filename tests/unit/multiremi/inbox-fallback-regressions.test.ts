@@ -66,4 +66,4 @@ pendingTurnBackendTests('MUL-506 actual fallback replacement QA', (fixture, back
             expect(store.getAgent(agent.id)?.model).toBe('primary-gpt');
         }, 30000);
     }
-});
+}, { isolation: 'committed-baseline' });

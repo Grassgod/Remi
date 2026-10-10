@@ -2,19 +2,19 @@ import { createResponsibleTestAutopilot } from './helpers.js';
 import { createResponsibleTestIssue } from './helpers.js';
 // Projects/squads/autopilot runs, project resources and how they reach the daemon
 // workdir and the task prompt.
-import { afterEach, describe, expect, it } from "bun:test";
+import { beforeAll, afterAll, afterEach, describe, expect, it } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { writeAgentSkillContext, writeProjectResourceContext } from "@multiremi/daemon.js";
 import { buildTaskPrompt } from "@multiremi/prompt.js";
-import { createStore, resetMultiremiTestEnv } from "./helpers.js";
+import { snapshotStatsForFile, createSnapshotStore, resetMultiremiTestEnv } from "./helpers.js";
 
 afterEach(resetMultiremiTestEnv);
 
 describe("Multiremi store — projects, resources, and prompt context", () => {
   it("creates projects, squads, and autopilot runs", () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     const agent = store.createAgent({ name: "Claude", provider: "claude" });
     const project = store.createProject({ title: "Launch", priority: "high" });
     const squad = store.createSquad({
@@ -46,7 +46,7 @@ describe("Multiremi store — projects, resources, and prompt context", () => {
   });
 
   it("manages project resources and includes them in task prompts", () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     const agent = store.createAgent({ name: "Codex", provider: "codex" });
     store.ensureLocalWorkspace();
     store.updateWorkspace("local", {
@@ -104,7 +104,7 @@ describe("Multiremi store — projects, resources, and prompt context", () => {
   });
 
   it("falls back to workspace repos when a task has no project repos", () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     const agent = store.createAgent({ name: "Codex", provider: "codex" });
     store.ensureLocalWorkspace();
     store.updateWorkspace("local", {
@@ -118,7 +118,7 @@ describe("Multiremi store — projects, resources, and prompt context", () => {
   });
 
   it("writes project resources into the daemon workdir", () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     const agent = store.createAgent({ name: "Codex", provider: "codex" });
     store.ensureLocalWorkspace();
     store.updateWorkspace("local", {
@@ -154,7 +154,7 @@ describe("Multiremi store — projects, resources, and prompt context", () => {
   });
 
   it("writes agent skills into the daemon workdir", () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     const agent = store.createAgent({ name: "Claude", provider: "claude" });
     const skill = store.createSkill({
       name: "Review Helper",
@@ -179,7 +179,7 @@ describe("Multiremi store — projects, resources, and prompt context", () => {
   });
 
   it("stores issue metadata as a bounded primitive map and includes it in prompts", () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     const agent = store.createAgent({ name: "Codex", provider: "codex" });
     const issue = createResponsibleTestIssue(store, { title: "Remember PR state" });
 
@@ -205,7 +205,7 @@ describe("Multiremi store — projects, resources, and prompt context", () => {
   });
 
   it("renders Go-style comment trigger context in daemon prompts", () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     const agent = store.createAgent({ name: "Worker", provider: "codex" });
     const reviewer = store.createAgent({ name: "Reviewer", provider: "codex" });
     const squad = store.createSquad({ name: "Review squad", leaderId: reviewer.id, memberIds: [agent.id] });
@@ -244,7 +244,7 @@ describe("Multiremi store — projects, resources, and prompt context", () => {
   });
 
   it("renders daemon claim execution context in provider prompts", () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     const agent = store.createAgent({ name: "Context Worker", provider: "claude" });
     const task = store.getTaskWithAgent(store.createTask({ agentId: agent.id, prompt: "Fallback prompt" }).id)!;
     const prompt = buildTaskPrompt({
@@ -278,3 +278,8 @@ describe("Multiremi store — projects, resources, and prompt context", () => {
     expect(prompt).toContain("Create onboarding screenshot follow-up");
   });
 });
+
+// Register hooks in this file; shared modules only load once per test process.
+let reportSnapshotStats: (() => void) | undefined;
+beforeAll(() => { reportSnapshotStats = snapshotStatsForFile(import.meta.path); });
+afterAll(() => { reportSnapshotStats?.(); });

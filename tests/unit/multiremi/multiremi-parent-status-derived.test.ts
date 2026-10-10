@@ -7,13 +7,13 @@ import { createResponsibleTestIssue, createHistoricalTestIssue, seedHistoricalIs
 // rewritten to `in_progress`, and a child event pulls an `in_review` parent back.
 // E2: done / failed / blocked / cancelled all reach the parent owner, and a busy
 // owner coalesces several reports into one queued round.
-import { afterEach, describe, expect, it } from "bun:test";
+import { beforeAll, afterAll, afterEach, describe, expect, it } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
-import { createStore, db, resetMultiremiTestEnv } from "./helpers.js";
+import { snapshotStatsForFile, createSnapshotStore, db, resetMultiremiTestEnv } from "./helpers.js";
 
 afterEach(resetMultiremiTestEnv);
 
-type Store = ReturnType<typeof createStore>;
+type Store = ReturnType<typeof createSnapshotStore>;
 
 /** Issue activity rows with their free-form `data` narrowed for assertions. */
 function activityOf(store: Store, issueId: string, type: string): Array<{ data: Record<string, unknown> | null }> {
@@ -47,7 +47,7 @@ function catchError(fn: () => unknown): Error & { code?: string; details?: { ope
 
 describe("MUL-400 E1 — parent status derived from children", () => {
   it("holds a parent at in_progress when the task path derives in_review with open children", () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     store.ensureLocalWorkspace();
     const runtime = store.registerRuntime({ id: "rt_parent", name: "Worker", provider: "claude", maxConcurrency: 4 });
     const agent = store.createAgent({ name: "Parent owner", provider: "claude", runtimeId: runtime.id });
@@ -71,7 +71,7 @@ describe("MUL-400 E1 — parent status derived from children", () => {
   });
 
   it("rejects a direct in_review/done write while children are open and reports the count", () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     store.ensureLocalWorkspace();
     const parent = createResponsibleTestIssue(store, { assigneeType:'agent',assigneeId:store.createAgent({name:'Explicit execution fixture',provider:'codex'}).id, title: "Guarded parent", status: "in_progress" });
     const [first, second] = [
@@ -98,7 +98,7 @@ describe("MUL-400 E1 — parent status derived from children", () => {
   });
 
   it("lets field-only edits through on parents with children, for both identities", () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     store.ensureLocalWorkspace();
     const agent = store.createAgent({ name: "Field editor owner", provider: "codex" });
     const member = store.createWorkspaceMember({ name: "Field editor", role: "member" });
@@ -151,7 +151,7 @@ describe("MUL-400 E1 — parent status derived from children", () => {
   });
 
   it("keeps the auto-retitle and merge-completion paths working on a parent", () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     store.ensureLocalWorkspace();
     const agent = store.createAgent({ name: "System writer owner", provider: "codex" });
     const inReviewParent = createResponsibleTestIssue(store, {
@@ -186,7 +186,7 @@ describe("MUL-400 E1 — parent status derived from children", () => {
   });
 
   it("derives an in_review parent back to in_progress when a child changes, and never moves done/cancelled", () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     store.ensureLocalWorkspace();
     const parent = createResponsibleTestIssue(store, { assigneeType:'agent',assigneeId:store.createAgent({name:'Explicit execution fixture',provider:'codex'}).id, title: "Deriving parent", status: "in_review" });
     const child = createResponsibleTestIssue(store, { assigneeType:'agent',assigneeId:store.createAgent({name:'Explicit execution fixture',provider:'codex'}).id, title: "Late child", parentIssueId: parent.id, status: "in_progress" });
@@ -220,7 +220,7 @@ describe("MUL-400 E1 — parent status derived from children", () => {
   });
 
   it("lets a member force the guard and audits it, while refusing a task identity on every writer", async () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     store.ensureLocalWorkspace();
     const agent = store.createAgent({ name: "Frozen owner", provider: "codex" });
     const member = store.createWorkspaceMember({ name: "Owner", role: "member" });
@@ -333,7 +333,7 @@ describe("MUL-400 E1 — parent status derived from children", () => {
   });
 
   it("ignores every injected parent-status bypass spelling on all four write routes", async () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     store.ensureLocalWorkspace();
     const agent = store.createAgent({ name: "Injection caller", provider: "codex" });
     const member = store.createWorkspaceMember({ name: "Injection owner", role: "member" });
@@ -434,7 +434,7 @@ describe("MUL-400 E1 — parent status derived from children", () => {
   });
 
   it("refuses a body that claims a member identity on all four write routes", async () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     store.ensureLocalWorkspace();
     const agent = store.createAgent({ name: "Identity caller", provider: "codex" });
     const member = store.createWorkspaceMember({ name: "Identity owner", role: "member" });
@@ -494,7 +494,7 @@ describe("MUL-400 E1 — parent status derived from children", () => {
   });
 
   it("strips a forged snake_case parent_task_id from every write route", async () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     store.ensureLocalWorkspace();
     const agent = store.createAgent({ name: "Forge caller", provider: "codex" });
     const member = store.createWorkspaceMember({ name: "Forge owner", role: "member" });
@@ -561,7 +561,7 @@ describe("MUL-400 E1 — parent status derived from children", () => {
   });
 
   it("refuses the whole batch without writing any row when one row is guarded", async () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     store.ensureLocalWorkspace();
     const agent = store.createAgent({ name: "Batch caller", provider: "codex" });
     const member = store.createWorkspaceMember({ name: "Batch owner", role: "member" });
@@ -597,7 +597,7 @@ describe("MUL-400 E1 — parent status derived from children", () => {
   });
 
   it("keeps a batch update that clears the guard to a status the rows may enter", async () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     store.ensureLocalWorkspace();
     const agent = store.createAgent({ name: "Batch mover", provider: "codex" });
     const callerTask = store.createTask({ agentId: agent.id, prompt: "caller" });
@@ -618,7 +618,7 @@ describe("MUL-400 E1 — parent status derived from children", () => {
   });
 
   it("records one activity and nothing else when a child ends after the parent closed", () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     store.ensureLocalWorkspace();
     const runtime = store.registerRuntime({ id: "rt_closed_parent", name: "Worker", provider: "claude", maxConcurrency: 4 });
     const agent = store.createAgent({ name: "Closed parent owner", provider: "claude", runtimeId: runtime.id });
@@ -669,7 +669,7 @@ describe("MUL-400 E1 — parent status derived from children", () => {
   });
 
   it("does not apply A4 to an agent closing an issue without children", async () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     store.ensureLocalWorkspace();
     const agent = store.createAgent({ name: "Plain closer", provider: "codex" });
     const plain = createResponsibleTestIssue(store, {
@@ -694,7 +694,7 @@ describe("MUL-400 E1 — parent status derived from children", () => {
   });
 
   it.each(["/api/issues", "/api/multiremi/issues"])("requires configuration and concrete human acceptance for unassigned parents on %s", async (path) => {
-    const store = createStore();
+    const store = createSnapshotStore();
     store.ensureLocalWorkspace();
     const memberCredential = await store.createAccessToken({ name: "Closing member", type: "pat", workspaceId: "local", userId: "local" });
     const agent = store.createAgent({ name: "Unassigned parent caller", provider: "codex" });
@@ -747,7 +747,7 @@ describe("MUL-400 E1 — parent status derived from children", () => {
   });
 
   it("requires formal summaries and keeps legacy member execution unresolved until explicitly configured", () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     store.ensureLocalWorkspace();
     const runtime = store.registerRuntime({ id: "rt_summary", name: "Worker", provider: "claude", maxConcurrency: 4 });
     const agent = store.createAgent({ name: "Summary owner", provider: "claude", runtimeId: runtime.id });
@@ -794,7 +794,7 @@ describe("MUL-400 E1 — parent status derived from children", () => {
   });
 
   it("does not touch done/cancelled parents and writes no held noise on them", () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     store.ensureLocalWorkspace();
     const runtime = store.registerRuntime({ id: "rt_done_parent", name: "Worker", provider: "claude" });
     const agent = store.createAgent({ name: "Done parent owner", provider: "claude", runtimeId: runtime.id });
@@ -818,7 +818,7 @@ describe("MUL-400 E1 — parent status derived from children", () => {
   });
 
   it("keeps the human-request in_review transient out of guard B", () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     store.ensureLocalWorkspace();
     const runtime = store.registerRuntime({ id: "rt_ask", name: "Worker", provider: "claude",daemonId:'parent-question-host' });
     const agent = store.createAgent({ name: "Asking owner", provider: "claude", runtimeId: runtime.id });
@@ -852,7 +852,7 @@ describe("MUL-400 E1 — parent status derived from children", () => {
   });
 
   it("derives an in_review parent when a child is created under it, and when a child is moved away", () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     store.ensureLocalWorkspace();
     const parent = createResponsibleTestIssue(store, { assigneeType:'agent',assigneeId:store.createAgent({name:'Explicit execution fixture',provider:'codex'}).id, title: "Creation parent", status: "in_review" });
 
@@ -886,7 +886,7 @@ describe("MUL-400 E1 — parent status derived from children", () => {
   });
 
   it("does not park a parent at todo when a member closes a child by hand", () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     store.ensureLocalWorkspace();
     const agent = store.createAgent({ name: "Parent owner", provider: "codex" });
     const parent = createResponsibleTestIssue(store, {
@@ -913,7 +913,7 @@ describe("MUL-400 E1 — parent status derived from children", () => {
 
 describe("MUL-400 hook ordering — the notification cannot roll back a status change", () => {
   it("commits the task terminal state and the child status even when the hook throws", () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     store.ensureLocalWorkspace();
     const runtime = store.registerRuntime({ id: "rt_hook_fail", name: "Worker", provider: "claude" });
     const agent = store.createAgent({ name: "Hook victim", provider: "claude", runtimeId: runtime.id });
@@ -968,7 +968,7 @@ describe("MUL-400 hook ordering — the notification cannot roll back a status c
   });
 
   it("still notifies after a terminal transition commits", () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     store.ensureLocalWorkspace();
     const runtime = store.registerRuntime({ id: "rt_hook_ok", name: "Worker", provider: "claude" });
     const agent = store.createAgent({ name: "Hook owner", provider: "claude", runtimeId: runtime.id });
@@ -1011,7 +1011,7 @@ describe("MUL-400 hook ordering — the notification cannot roll back a status c
 
 describe("MUL-400 E2 — child endings notify the parent owner", () => {
   it("notifies an agent owner for all four endings, distinguishing failed from a human block", () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     store.ensureLocalWorkspace();
     const runtime = store.registerRuntime({ id: "rt_notify", name: "Worker", provider: "claude", maxConcurrency: 8 });
     const agent = store.createAgent({ name: "Notified owner", provider: "claude", runtimeId: runtime.id });
@@ -1077,7 +1077,7 @@ describe("MUL-400 E2 — child endings notify the parent owner", () => {
   });
 
   it("files a child_issue_terminal inbox item for a member owner with the right severity", () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     store.ensureLocalWorkspace();
     const member = store.createWorkspaceMember({ name: "Human owner", role: "member" });
     const parent = createHistoricalTestIssue(store, {
@@ -1121,7 +1121,7 @@ describe("MUL-400 E2 — child endings notify the parent owner", () => {
   });
 
   it("reports a failed child to a member owner as a warning", () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     store.ensureLocalWorkspace();
     const runtime = store.registerRuntime({ id: "rt_member_failed", name: "Worker", provider: "claude" });
     const agent = store.createAgent({ name: "Failing child owner", provider: "claude", runtimeId: runtime.id });
@@ -1157,7 +1157,7 @@ describe("MUL-400 E2 — child endings notify the parent owner", () => {
   });
 
   it("reports done, failed and cancelled children of an unowned parent to subscribers", () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     store.ensureLocalWorkspace();
     const runtime = store.registerRuntime({ id: "rt_no_owner", name: "Worker", provider: "claude" });
     const agent = store.createAgent({ name: "Unowned child owner", provider: "claude", runtimeId: runtime.id });
@@ -1221,7 +1221,7 @@ describe("MUL-400 E2 — child endings notify the parent owner", () => {
   });
 
   it("coalesces several child endings into one queued round while the owner is busy", () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     store.ensureLocalWorkspace();
     const runtime = store.registerRuntime({ name: "Busy runtime", provider: "claude" });
     const leader = store.createAgent({ name: "Busy leader", provider: "claude", runtimeId: runtime.id });
@@ -1267,7 +1267,7 @@ describe("MUL-400 E2 — child endings notify the parent owner", () => {
   });
 
   it("keeps the no-assignee comment and skip record, and reaches subscribers", () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     store.ensureLocalWorkspace();
     const subscriber = store.createWorkspaceMember({ name: "Watcher", role: "member" });
     const parent = createResponsibleTestIssue(store, { title: "Unassigned parent", status: "in_progress" });
@@ -1287,3 +1287,8 @@ describe("MUL-400 E2 — child endings notify the parent owner", () => {
     expect(items[0]?.details).toMatchObject({ outcome: "blocked", noAssignee: true } as Record<string, unknown>);
   });
 });
+
+// Register hooks in this file; shared modules only load once per test process.
+let reportSnapshotStats: (() => void) | undefined;
+beforeAll(() => { reportSnapshotStats = snapshotStatsForFile(import.meta.path); });
+afterAll(() => { reportSnapshotStats?.(); });

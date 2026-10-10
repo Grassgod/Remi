@@ -172,7 +172,7 @@ async function getJson(
 }
 
 describe("MUL-473 first-screen hotspot response shapes", () => {
-  it("matches the pre-optimization golden for pending-tasks and the three assignee filters", async () => {
+  it("matches the pre-optimization golden and pending ranking for the three assignee filters", async () => {
     // A capture in the same process (same pinned clock and PRNG) is what makes a
     // golden comparison meaningful: `installFirstScreenHotspotIds` is what the
     // capture script uses.
@@ -191,30 +191,26 @@ describe("MUL-473 first-screen hotspot response shapes", () => {
       expect(normalize(byUserId.body)).toEqual(golden.issuesMyAssignee);
       expect(normalize(byMemberRowId.body)).toEqual(golden.issuesByMemberRowId);
       expect(normalize(byAgentName.body)).toEqual(golden.issuesByAgentName);
+
+      const { fixture } = harness;
+      const tasks = pending.body as { turns: Array<{ current_attempt_id: string; status: string; session_id: string }> };
+      const bySession = new Map(tasks.turns.map((task) => [task.session_id, task]));
+      const ranking = fixture.ranking;
+      expect(ranking.runningBeatsQueuedWinnerTaskId).not.toBeNull();
+      expect(ranking.prioritizedWinnerTaskId).not.toBeNull();
+
+      // #3/#7: a lane merges pending messages into one turn. Running turns are
+      // outside the pending filter; priority remains on the merged lane turn.
+      expect(bySession.has(ranking.runningBeatsQueuedSessionId!)).toBe(false);
+      expect(bySession.get(ranking.prioritizedSessionId!)).toMatchObject({
+        current_attempt_id: ranking.prioritizedWinnerTaskId!,status: "pending",
+      });
+      // Each Session contributes at most one task, and only the reader's Sessions do.
+      expect(new Set(tasks.turns.map((task) => task.session_id)).size).toBe(tasks.turns.length);
+      expect(tasks.turns.every((task) => fixture.sessionIds.includes(task.session_id))).toBe(true);
     } finally {
       restoreIds();
     }
-  }, 20000);
-
-  it("keeps pending-tasks' ranking identical to the per-Session pendingTasks() order", async () => {
-    const harness = await createHarness();
-    const { fixture } = harness;
-    const body = await getJson(harness, "/api/turns?status=pending&limit=500");
-    const tasks = body.body as { turns: Array<{ current_attempt_id: string; status: string; session_id: string }> };
-    const bySession = new Map(tasks.turns.map((task) => [task.session_id, task]));
-    const ranking = fixture.ranking;
-    expect(ranking.runningBeatsQueuedWinnerTaskId).not.toBeNull();
-    expect(ranking.prioritizedWinnerTaskId).not.toBeNull();
-
-    // #3/#7: a lane merges pending messages into one turn. Running turns are
-    // outside the pending filter; priority remains on the merged lane turn.
-    expect(bySession.has(ranking.runningBeatsQueuedSessionId!)).toBe(false);
-    expect(bySession.get(ranking.prioritizedSessionId!)).toMatchObject({
-      current_attempt_id: ranking.prioritizedWinnerTaskId!,status: "pending",
-    });
-    // Each Session contributes at most one task, and only the reader's Sessions do.
-    expect(new Set(tasks.turns.map((task) => task.session_id)).size).toBe(tasks.turns.length);
-    expect(tasks.turns.every((task) => fixture.sessionIds.includes(task.session_id))).toBe(true);
   }, 20000);
 });
 
@@ -251,20 +247,14 @@ describe("MUL-473 first-screen hotspot query counts", () => {
     expect(twoHundred.bytes).toBeGreaterThan(one.bytes);
   }, 90000); // PG fixture construction is outside the unchanged SQL/byte budgets.
 
-  it("reads no Chat message column for pending-tasks", async () => {
-    const harness = await createHarness();
-    await getJson(harness, "/api/turns?status=pending&limit=500");
-    const sql = [...harness.probe.bySql.keys()];
-    const messageReads = sql.filter((statement) => /multiremi_chat_messages/i.test(statement));
-    expect(messageReads).toEqual([]);
-  }, 20000);
-
-  it("loads no Skill body on the pending-tasks path", async () => {
+  it("reads neither Chat message columns nor Skill bodies on the pending-tasks path", async () => {
     const harness = await createHarness({ skillBodyBytes: 64_000 });
     const baseline = await getJson(harness, "/api/turns?status=pending&limit=500");
     // Each fixture Agent carries a 64 KB Skill file. A hydrated Agent load would
     // pull all 20 across the bridge; the lite projection keeps it to the row.
     expect(baseline.bytes).toBeLessThan(40_000);
+    expect([...harness.probe.bySql.keys()].filter((statement) =>
+      /multiremi_chat_messages/i.test(statement))).toEqual([]);
     const skillSql = [...harness.probe.bySql.keys()].filter((statement) =>
       /multiremi_skill_files/i.test(statement));
     expect(skillSql).toEqual([]);
@@ -275,8 +265,17 @@ describe("MUL-473 first-screen hotspot query counts", () => {
     const byAgentId: number[] = [];
     const byMemberRowId: number[] = [];
     for (const issues of [1, 60, 300]) {
-      const harness = await createHarness({ issues, sessions: 1, inboxRows: 0 });
+      const harness = await createHarness({ issues, sessions: 1, inboxRows: 0,
+        ...(issues === 60 ? { skillBodyBytes: 64_000 } : {}),
+      });
       byUserId.push((await getJson(harness, `/api/issues?assignee_id=${harness.fixture.readerUserId}&limit=50`)).statements);
+      if (issues === 60) {
+        // Inspect the user-filter request before getJson resets the next measurement.
+        expect([...harness.probe.bySql.keys()].filter((statement) =>
+          /multiremi_skill_files/i.test(statement))).toEqual([]);
+        expect([...harness.probe.bySql.keys()].filter((statement) =>
+          /multiremi_skills/i.test(statement))).toEqual([]);
+      }
       byAgentId.push((await getJson(
         harness,
         `/api/issues?assignee_id=${harness.fixture.agentIds[1]}&limit=50`,
@@ -335,15 +334,6 @@ describe("MUL-473 first-screen hotspot query counts", () => {
       }
     }
   }, 30000);
-
-  it("does not hydrate Skills while resolving an assignee filter", async () => {
-    const harness = await createHarness({ issues: 60, sessions: 1, inboxRows: 0, skillBodyBytes: 64_000 });
-    await getJson(harness, `/api/issues?assignee_id=${harness.fixture.readerUserId}&limit=50`);
-    expect([...harness.probe.bySql.keys()].filter((statement) =>
-      /multiremi_skill_files/i.test(statement))).toEqual([]);
-    expect([...harness.probe.bySql.keys()].filter((statement) =>
-      /multiremi_skills/i.test(statement))).toEqual([]);
-  }, 20000);
 
   it("still resolves name-shaped and ambiguous refs through the alias tiers", async () => {
     const harness = await createHarness({ issues: 60, sessions: 1, inboxRows: 0 });

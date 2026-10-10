@@ -74,7 +74,7 @@ for (const kind of ["ordinary", "task", "daemon"] as const) {
     it(`${kind} upload retries a ${collision} collision without changing old bytes or leaving files`, async () => {
       const previousKey = process.env.MULTIREMI_FEISHU_BOT_ENCRYPTION_KEY;
       process.env.MULTIREMI_FEISHU_BOT_ENCRYPTION_KEY = Buffer.alloc(32, 7).toString("base64");
-      const h = await createPr2Harness({ runtimes: 1, foreignRuntimes: 1 });
+      const h = await createPr2Harness({ attachmentOnly: true });
       try {
         // A different suffix lets wx succeed, then exercises the real backend's INSERT rejection.
         const existing = original(h, collision === "file" ? "collision.pdf" : "collision.txt");
@@ -112,7 +112,7 @@ for (const kind of ["ordinary", "task", "daemon"] as const) {
 
 for (const collision of ["file", "primary key"] as const) {
   it(`stops after three ${collision} collisions, preserves the original and leaves no files`, async () => {
-    const h = await createPr2Harness({ runtimes: 1, foreignRuntimes: 1 });
+    const h = await createPr2Harness({ attachmentOnly: true });
     try {
       const existing = original(h, collision === "file" ? "collision.pdf" : "collision.txt");
       const filesBefore = diskFiles();
@@ -129,7 +129,7 @@ for (const collision of ["file", "primary key"] as const) {
 }
 
 it("cleans a real non-collision INSERT failure without retrying or deleting preexisting bytes", async () => {
-  const h = await createPr2Harness({ runtimes: 1, foreignRuntimes: 1 });
+  const h = await createPr2Harness({ attachmentOnly: true });
   try {
     const existing = original(h);
     const filesBefore = diskFiles();
@@ -146,7 +146,7 @@ it("cleans a real non-collision INSERT failure without retrying or deleting pree
 }, 20000);
 
 it("rolls back every row and created file when a Chat batch INSERT collides", async () => {
-  const h = await createPr2Harness({ runtimes: 1, foreignRuntimes: 1 });
+  const h = await createPr2Harness({ attachmentOnly: true });
   try {
     original(h, "collision.txt");
     const filesBefore = diskFiles();
@@ -173,7 +173,7 @@ it("keeps old ids readable and extracts full UUID ids from attachment URLs", () 
 });
 
 it("hard-deletes legacy attachments but never truncates a new upload back to the old id", async () => {
-  const h = await createPr2Harness({ runtimes: 1, foreignRuntimes: 1 });
+  const h = await createPr2Harness({ attachmentOnly: true });
   try {
     const id = "att_0123456789ab";
     const existing = h.store.createAttachment({ id, workspaceId: "local", uploaderId: h.fixture.readerUserId,

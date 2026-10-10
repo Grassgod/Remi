@@ -17,56 +17,26 @@ import { formatSchedulePartialFailureToast } from "./autopilot-dialog-toast";
 describe("autopilot dialog partial-success toast", () => {
   const reason = "schedule conflict: 09:00 overlaps existing trigger";
 
-  describe("en", () => {
-    const i18n = createI18n("en", { en: { autopilots: enAutopilots } });
-    const t = i18n.getFixedT("en", "autopilots") as TFunction<"autopilots">;
+  describe.each([
+    ["en", { en: { autopilots: enAutopilots } }],
+    ["zh-Hans", { "zh-Hans": { autopilots: zhAutopilots }, en: { autopilots: enAutopilots } }],
+  ] as const)("%s", (locale, resources) => {
+    const i18n = createI18n(locale, resources);
+    const t = i18n.getFixedT(locale, "autopilots") as TFunction<"autopilots">;
 
-    it("renders create partial-success with the server reason verbatim", () => {
-      const rendered = formatSchedulePartialFailureToast(t, "create", reason);
+    it.each(["create", "update"] as const)("renders %s partial-success with the server reason verbatim", mode => {
+      const rendered = formatSchedulePartialFailureToast(t, mode, reason);
       expect(rendered).toContain(reason);
       expect(rendered).not.toContain("{{");
       expect(rendered).not.toContain("{reason}");
     });
-
-    it("renders update partial-success with the server reason verbatim", () => {
-      const rendered = formatSchedulePartialFailureToast(t, "update", reason);
-      expect(rendered).toContain(reason);
-      expect(rendered).not.toContain("{{");
-      expect(rendered).not.toContain("{reason}");
-    });
-
-    it("falls back to the no-reason create string when reason is null", () => {
-      expect(formatSchedulePartialFailureToast(t, "create", null)).toBe(
-        "Autopilot created, but schedule failed to save",
-      );
-    });
-
-    it("falls back to the no-reason update string when reason is null", () => {
-      expect(formatSchedulePartialFailureToast(t, "update", null)).toBe(
-        "Autopilot updated, but schedule failed to save",
-      );
-    });
-  });
-
-  describe("zh-Hans", () => {
-    const i18n = createI18n("zh-Hans", {
-      "zh-Hans": { autopilots: zhAutopilots },
-      en: { autopilots: enAutopilots },
-    });
-    const t = i18n.getFixedT("zh-Hans", "autopilots") as TFunction<"autopilots">;
-
-    it("renders create partial-success with the server reason verbatim", () => {
-      const rendered = formatSchedulePartialFailureToast(t, "create", reason);
-      expect(rendered).toContain(reason);
-      expect(rendered).not.toContain("{{");
-      expect(rendered).not.toContain("{reason}");
-    });
-
-    it("renders update partial-success with the server reason verbatim", () => {
-      const rendered = formatSchedulePartialFailureToast(t, "update", reason);
-      expect(rendered).toContain(reason);
-      expect(rendered).not.toContain("{{");
-      expect(rendered).not.toContain("{reason}");
-    });
+    if (locale === "en") {
+      it.each([
+        ["create", "Autopilot created, but schedule failed to save"],
+        ["update", "Autopilot updated, but schedule failed to save"],
+      ] as const)("falls back to the no-reason %s string when reason is null", (mode, expected) => {
+        expect(formatSchedulePartialFailureToast(t, mode, null)).toBe(expected);
+      });
+    }
   });
 });

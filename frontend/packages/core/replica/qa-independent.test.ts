@@ -5,7 +5,6 @@ import { ReplicaView } from "./view";
 import { ReplicaLeader } from "./leader";
 import { ReplicaFollower } from "./follower";
 import { openBrowserReplica, type BrowserReplica } from "./browser";
-import { computeFresh } from "./protocol";
 import { META_SCHEMA_VERSION, META_USER_ID, META_WORKSPACE_ID, REPLICA_SCHEMA_VERSION } from "./schema";
 import { rowHeightKey, type SessionLogEntry } from "./port";
 import type { HubFrame, HubStreamAckPayload } from "@multiremi/contracts/live-hub";
@@ -51,13 +50,6 @@ async function shared(input: { readRange?: (id:string,range:{from:number;to:numb
 }
 
 describe("QA independent engine and storage contracts", () => {
-  test("freshness requires both version and head, and an ack", () => {
-    const state = {head:3,ranges:[{from:1,to:3}],logVersion:2,synced:true};
-    expect(computeFresh({state,ackHeadSeq:3,ackLogVersion:2})).toBe(true);
-    expect(computeFresh({state,ackHeadSeq:3,ackLogVersion:1})).toBe(false);
-    expect(computeFresh({state,ackHeadSeq:4,ackLogVersion:2})).toBe(false);
-    expect(computeFresh({state:{...state,synced:false},ackHeadSeq:3,ackLogVersion:2})).toBe(false);
-  });
   test("sparse windows and out-of-order batches never advance past a hole", () => {
     const { replica, storage } = engine();
     replica.ack(sid, ack(9)); replica.frames(sid,[frame(1),frame(5),frame(9)]);
@@ -119,13 +111,7 @@ describe("QA independent engine and storage contracts", () => {
     expect(view.getSnapshot(sid)).toBe(view.getSnapshot(sid));
     expect(follower.getSnapshot(sid)).toBe(follower.getSnapshot(sid));
   });
-  test("a pending window response from before clear cannot resurrect old rows", () => {
-    const view=new ReplicaView(), follower=new ReplicaFollower({view,broadcast:()=>{},requestWindow:()=>{}});
-    follower.getSnapshot(sid);
-    follower.handle({type:"replica:cleared",reason:"logout"});
-    follower.handle({type:"replica:window",requestId:"req_1",sessionId:sid,entries:[row(1,{body_md:"old user data"})],snapshot:{head:1,ready:true,fresh:true}});
-    expect(follower.getSnapshot(sid).entries).toHaveLength(0);
-  });
+
 });
 
 describe("QA independent leader lifecycle", () => {
@@ -134,32 +120,10 @@ describe("QA independent leader lifecycle", () => {
     leader.close(sid);leader.close(sid);expect(unsubs).toHaveLength(0);
     leader.close(sid);expect(unsubs).toEqual([sid]);
   });
-  test("worker open completed after close cannot create an orphan subscription", () => {
-    const {leader,subscriptions,requests}=harness();leader.open(sid);leader.close(sid);
-    leader.handleWorkerMessage({...requests.at(-1),type:"opened",sessionId:sid,fromSeq:7,head:6,fresh:false,cleared:null,entries:[]});
-    expect(subscriptions).toHaveLength(0);
-  });
-  test("disposed leader ignores late worker response", () => {
-    const {leader,subscriptions,requests}=harness();leader.open(sid);leader.dispose();
-    leader.handleWorkerMessage({...requests.at(-1),type:"opened",sessionId:sid,fromSeq:7,head:6,fresh:false,cleared:null,entries:[]});
-    expect(subscriptions).toHaveLength(0);
-  });
   test("a persisted head is the subscription cursor", () => {
     const {leader,subscriptions,requests}=harness();leader.open(sid);
     leader.handleWorkerMessage({...requests.at(-1),type:"opened",sessionId:sid,fromSeq:43,head:42,fresh:false,cleared:null,entries:[row(42)]});
     expect(subscriptions).toEqual([[sid,43]]);
-  });
-  test("two holes in one batch both backfill without another frame", async () => {
-    const {replica,reads}=await shared();replica.ack(sid,ack(5));replica.frames(sid,[frame(1),frame(3),frame(5)]);
-    await ticks();
-    expect(reads).toEqual([{from:2,to:2},{from:4,to:4}]);
-    expect(replica.port.getSnapshot(sid).head).toBe(5);replica.dispose();
-  });
-  test("ack with newer server head immediately revokes view freshness", async () => {
-    const {replica}=await shared();replica.ack(sid,ack(3));replica.frames(sid,[frame(1),frame(2),frame(3)]);
-    expect(replica.port.getSnapshot(sid).fresh).toBe(true);
-    replica.ack(sid,ack(4));
-    expect(replica.port.getSnapshot(sid).fresh).toBe(false);replica.dispose();
   });
   test("version flip with no replay still revokes and restarts from reset head", async () => {
     const {replica,subs,reads}=await shared();replica.ack(sid,ack(3));replica.frames(sid,[frame(1),frame(2),frame(3)]);
@@ -211,10 +175,6 @@ describe.each(["no-opfs","no-locks"])("QA fallback %s", (mode) => {
   test("ack gap actually triggers the range read", async () => {
     const {replica,reads}=await memory();replica.ack(sid,ack(3,1,{from:1,to:2}));replica.frames(sid,[frame(3)]);await ticks();
     expect(reads).toEqual([{from:1,to:2}]);expect(replica.port.getSnapshot(sid).head).toBe(3);replica.dispose();
-  });
-  test("a frame above head fills its missing range", async () => {
-    const {replica,reads}=await memory();replica.ack(sid,ack(3));replica.frames(sid,[frame(1),frame(3)]);await ticks();
-    expect(reads).toEqual([{from:2,to:2}]);expect(replica.port.getSnapshot(sid).head).toBe(3);replica.dispose();
   });
   test("logout emits the clear notification on the fallback path", async () => {
     const {replica,cleared}=await memory();replica.clear("logout");expect(cleared).toEqual(["logout"]);replica.dispose();

@@ -32,3 +32,12 @@ bun run build:multiremi
 ```
 
 文档检查使用 Node.js 22+，不需要 Bun 或安装依赖。测试分层、需要真实服务的 E2E 和 CI 范围见 [TESTING.md](TESTING.md)；性能复现入口见[性能调查](docs/dev/performance.md)。构建产物不等于发版。
+
+CI 的后端四分片、完整覆盖报告和权重维护入口见 [测试与 CI 覆盖](TESTING.md#ci-覆盖)。文件规划不执行测试：
+
+```bash
+bun run scripts/ci-backend.ts plan --sha <40位提交SHA> --shards 4 --out ci-backend/plan.json
+bun run scripts/ci-backend.ts weights --coverage ci-backend/coverage.json --run-id <完整运行ID> --out ci-backend/weights.json
+```
+
+正式版本候选仅在依赖准备已提交后用 `gh workflow run release-build-check.yml --ref main -f release_candidate=true` 显式生成；该命令执行完整 CI 并保存 CLI/OCI 归档，不等于授权发版。发布复用与失败恢复规则见 [TESTING.md](TESTING.md)。

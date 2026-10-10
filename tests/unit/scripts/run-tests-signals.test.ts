@@ -13,14 +13,16 @@ async function bounded<T>(promise: Promise<T>): Promise<T> {
   } finally { clearTimeout(timer!); }
 }
 
-it.each(["SIGINT", "SIGTERM"] as const)("forwards %s to the test child and preserves its exit code", async (signal) => {
+it.each([
+  ["SIGINT", 0], ["SIGINT", 77], ["SIGTERM", 0], ["SIGTERM", 77],
+] as const)("forwards %s and rejects interrupted child exit %i", async (signal, childExitCode) => {
   const directory = mkdtempSync(join(tmpdir(), "wrapper-signal-"));
   const file = join(directory, "signal.test.ts");
   writeFileSync(file, `import {test} from "bun:test";
     import {homedir} from "node:os";
     test("await signal", async () => {
-      process.on("SIGINT", () => process.exit(77));
-      process.on("SIGTERM", () => process.exit(77));
+      process.on("SIGINT", () => process.exit(${childExitCode}));
+      process.on("SIGTERM", () => process.exit(${childExitCode}));
       console.log("SIGNAL_HOME=" + homedir());
       await new Promise(() => { setInterval(() => {}, 100); });
     }, 20_000);`);
@@ -43,7 +45,7 @@ it.each(["SIGINT", "SIGTERM"] as const)("forwards %s to the test child and prese
       }
     })());
     child.kill(signal);
-    expect(await bounded(child.exited)).toBe(77);
+    expect(await bounded(child.exited)).toBe(childExitCode || 1);
     expect(await stderr).toContain("[test-home] residual paths: []");
     expect(existsSync(home)).toBe(false);
   } finally {

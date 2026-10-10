@@ -1,7 +1,7 @@
 import { createResponsibleTestIssue } from './helpers.js';
 import { requestMessageBody, taskRequestPath, sentTask } from "./unified-test-paths.js";
 import { reportFrame } from "../../fixtures/report-session.js";
-import { afterEach, describe, expect, it } from "bun:test";
+import { beforeAll, afterAll, afterEach, describe, expect, it } from "bun:test";
 import { receiveTaskOffer } from "../../fixtures/task-offer.js";
 import { requestRuntimeRpc, receiveRuntimeInputs } from "../../fixtures/runtime-downlinks.js";
 import { normalizeDaemonClaimTask } from "@multiremi/client.js";
@@ -9,13 +9,13 @@ import { createHash } from "node:crypto";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { MultiremiDaemonClient } from "@multiremi/client.js";
 import type { ResolveAgentPluginGitSourceInput } from "@multiremi/agent-plugins/git-import.js";
-import { createLocalStore as createStore, mockFetch, resetMultiremiTestEnv, signTestJwt } from "./helpers.js";
+import { snapshotStatsForFile, createLocalSnapshotStore as createSnapshotStore, mockFetch, resetMultiremiTestEnv, signTestJwt } from "./helpers.js";
 
 afterEach(resetMultiremiTestEnv);
 
 describe("Multiremi API — agent plugins", () => {
   it("lists disabled plugins and allows switching back through the public Agent API", async () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     const agent = store.createAgent({ name: "Leader", provider: "claude" });
     const plugin = store.importAgentPlugin({ provider: "claude", name: "test-disabled",
       manifest: { name: "test-disabled", version: "1.0.0" },
@@ -36,7 +36,7 @@ describe("Multiremi API — agent plugins", () => {
   });
 
   it("inspects and imports a Git Plugin source as an immutable artifact", async () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     const resolverCalls: ResolveAgentPluginGitSourceInput[] = [];
     const resolveAgentPluginGitSource = async (input: ResolveAgentPluginGitSourceInput) => {
       resolverCalls.push(input);
@@ -160,7 +160,7 @@ describe("Multiremi API — agent plugins", () => {
   });
 
   it("selects provider manifests precisely when they share a repository directory", async () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     const app = createMultiremiApp({
       store,
       resolveAgentPluginGitSource: async () => ({
@@ -232,7 +232,7 @@ describe("Multiremi API — agent plugins", () => {
   });
 
   it("inherits the stored Git source identity when importing a new version", async () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     const plugin = store.importAgentPlugin({
       workspaceId: "local",
       provider: "claude",
@@ -289,7 +289,7 @@ describe("Multiremi API — agent plugins", () => {
   });
 
   it("does not reveal cross-workspace Plugin ids through Git version imports", async () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     const owner = store.getOrCreateUser({
       externalId: "plugin-owner",
       email: "plugin-owner@example.com",
@@ -360,7 +360,7 @@ describe("Multiremi API — agent plugins", () => {
   });
 
   it("rejects a Git import when the branch changes after inspection", async () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     const app = createMultiremiApp({
       store,
       resolveAgentPluginGitSource: async () => ({
@@ -405,7 +405,7 @@ describe("Multiremi API — agent plugins", () => {
   });
 
   it("keeps duplicate Runtime state reports idempotent", async () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     const runtime = store.registerRuntime({
       id: "rt_plugin_idempotent",
       name: "Idempotent runtime",
@@ -465,7 +465,7 @@ describe("Multiremi API — agent plugins", () => {
   });
 
   it("imports, binds and exposes provider-specific plugins", async () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     const claude = store.createAgent({ name: "Claude", provider: "claude" });
     const codex = store.createAgent({ name: "Codex", provider: "codex" });
     const app = createMultiremiApp({ store });
@@ -545,7 +545,7 @@ describe("Multiremi API — agent plugins", () => {
   });
 
   it("requires access to an Agent move's target workspace", async () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     const user = store.getOrCreateUser({
       externalId: "plugin-move-user",
       email: "plugin-move@example.com",
@@ -589,7 +589,7 @@ describe("Multiremi API — agent plugins", () => {
   });
 
   it("rejects Plugin connection and config values until Runtime injection exists", async () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     const agent = store.createAgent({ name: "Claude", provider: "claude" });
     const plugin = store.importAgentPlugin({
       provider: "claude",
@@ -625,7 +625,7 @@ describe("Multiremi API — agent plugins", () => {
   });
 
   it("serves desired state, observed reports, retry generations and exact artifact bytes to daemons", async () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     const runtimeStateEvents: any[] = [];
     store.onWorkspaceEvent((event) => {
       if (event.type === "agent_plugin:runtime_state") runtimeStateEvents.push(event);
@@ -813,7 +813,7 @@ describe("Multiremi API — agent plugins", () => {
   });
 
   it("binds legacy daemon tokens on first registration and rejects identity changes", async () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     const capabilityEvents: any[] = [];
     store.onWorkspaceEvent((event) => {
       if (event.type === "agent_plugin:runtime_capability") capabilityEvents.push(event);
@@ -932,7 +932,7 @@ describe("Multiremi API — agent plugins", () => {
   });
 
   it("ignores forged execution snapshots submitted through the public task API", async () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     const runtime = store.registerRuntime({
       id: "rt_api_plugin_forgery",
       name: "Plugin forgery runtime",
@@ -992,7 +992,7 @@ describe("Multiremi API — agent plugins", () => {
   });
 
   it("includes the frozen Plugin snapshot in daemon claim wire and client models", async () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     const runtime = store.registerRuntime({
       id: "rt_api_plugin_claim",
       name: "Plugin claim runtime",
@@ -1040,7 +1040,7 @@ describe("Multiremi API — agent plugins", () => {
   });
 
   it("pushes the desired Plugin revision separately from the upgrade-only heartbeat ack", async () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     const runtime = store.registerRuntime({
       id: "rt_api_plugin_ack",
       name: "Plugin ack runtime",
@@ -1151,7 +1151,7 @@ describe("Multiremi API — agent plugins", () => {
   });
 
   it("blocks activation until online runtimes report the candidate digest ready", async () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     const runtime = store.registerRuntime({ id: "rt_api_activate", name: "Runtime", provider: "codex", workspaceId: "local" });
     const agent = store.createAgent({ name: "Codex", provider: "codex" });
     const plugin = store.importAgentPlugin({
@@ -1194,3 +1194,8 @@ describe("Multiremi API — agent plugins", () => {
     expect((await activated.json()).plugin).toMatchObject({ activeVersionId: version.id, candidateVersionId: null });
   });
 });
+
+// Register hooks in this file; shared modules only load once per test process.
+let reportSnapshotStats: (() => void) | undefined;
+beforeAll(() => { reportSnapshotStats = snapshotStatsForFile(import.meta.path); });
+afterAll(() => { reportSnapshotStats?.(); });

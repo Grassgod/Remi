@@ -16,7 +16,17 @@ pendingTurnBackendTests('MUL-506 Issue derivation and read progress',fixture=>{
     it(`derives ${status} from owner ${turnStatus}`,()=>{const f=setup();f.db.run("UPDATE multiremi_issues SET status='todo' WHERE id=?",[f.issue.id]);f.db.run('UPDATE multiremi_turns SET status=? WHERE id=?',[turnStatus,f.sent.turn_id!]);f.derive();expect(f.store.getIssue(f.issue.id)?.status).toBe(status);});}
   it('human and agent_dispatch pending become todo, platform pending preserves status',()=>{const f=setup();expect(f.store.getIssue(f.issue.id)?.status).toBe('todo');
     f.db.run("UPDATE multiremi_issues SET status='blocked' WHERE id=?",[f.issue.id]);f.db.run("UPDATE multiremi_conversation_log SET sender_type='platform',wake_reason='platform_to_owner' WHERE id=?",[f.sent.message.id]);f.db.run("UPDATE multiremi_turns SET wake_source='platform_to_owner' WHERE id=?",[f.sent.turn_id!]);f.derive();expect(f.store.getIssue(f.issue.id)?.status).toBe('blocked');
-    f.db.run("UPDATE multiremi_conversation_log SET sender_type='agent',wake_reason='agent_dispatch' WHERE id=?",[f.sent.message.id]);f.derive();expect(f.store.getIssue(f.issue.id)?.status).toBe('todo');});
+    f.db.run("UPDATE multiremi_conversation_log SET sender_type='agent',wake_reason='agent_dispatch' WHERE id=?",[f.sent.message.id]);f.derive();expect(f.store.getIssue(f.issue.id)?.status).toBe('todo');
+    // Real writer path from the mixed-pending QA reproduction: do not replace
+    // the merged-message trigger with a manually edited original trigger.
+    const mergedIssue=f.store.createIssue({title:'Mixed pending',status:'blocked',assigneeType:'agent',assigneeId:f.agent.id,responsibleMemberId:'mem_local_local'});
+    const mergedSession=f.store.getOrCreateDefaultIssueSession(mergedIssue.id);
+    const base={session_id:mergedSession.id,to:{type:'agent' as const,ref:f.agent.id},wake_requested:'now' as const,body_md:'platform status'};
+    const first=f.store.sendMessage({...base,sender:{type:'platform',id:null},message_kind:'status'});
+    expect(f.store.getIssue(mergedIssue.id)?.status).toBe('blocked');
+    const second=f.store.sendMessage({...base,sender:{type:'member',id:'mem_local_local'},message_kind:'request',body_md:'human starts work'});
+    expect(second.turn_id).toBe(first.turn_id);
+    expect(f.store.getIssue(mergedIssue.id)?.status).toBe('todo');});
   it('unanswered owner decision derives review, while running takes precedence',()=>{const f=setup();
     const runtime=f.store.registerRuntime({name:'Derivation native host',provider:'codex',daemonId:'derive-native'});
     const attempt=f.store.claimTask(runtime.id)!;f.store.startTask(attempt.id);

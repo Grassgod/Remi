@@ -294,4 +294,4 @@ pendingTurnBackendTests('transactional inbox writers', fixture => {
     expect(f.queued()).toHaveLength(2);
     expect(f.transaction(() => f.store.sendEnvelopeWithinTransaction({ ...f.env, to: { role: 'relay', issueId: f.issue.id }, dedupeKey: 'fanout' }, [], f.queue)).map(row => row.deduplicated)).toEqual([true, true]);
   });
-});
+}, { isolation: 'committed-baseline' });

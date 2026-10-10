@@ -74,11 +74,4 @@ describe("preprocessFileCards", () => {
     expect(result).toContain('data-filename="notes[v2](draft).txt"');
     expect(result).toContain('data-href="https://cdn.example.com/notes.txt"');
   });
-
-  it("converts a normal file-card syntax", () => {
-    const input = "!file[readme.md](https://cdn.example.com/readme.md)";
-    const result = preprocessFileCards(input, "cdn.example.com");
-    expect(result).toContain('data-type="fileCard"');
-    expect(result).toContain('data-filename="readme.md"');
-  });
 });

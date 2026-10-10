@@ -1,15 +1,15 @@
 import { createResponsibleTestIssue, acceptTestIssueDelivery } from './helpers.js';
 import { issueMessagesPath, requestMessageBody } from "./unified-test-paths.js";
 // Pinned shortcuts, issue/project search, issue subscribers and the member inbox.
-import { afterEach, describe, expect, it } from "bun:test";
+import { beforeAll, afterAll, afterEach, describe, expect, it } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
-import { createLocalStore as createStore, db, resetMultiremiTestEnv } from "./helpers.js";
+import { snapshotStatsForFile, createLocalSnapshotStore as createSnapshotStore, db, resetMultiremiTestEnv } from "./helpers.js";
 
 afterEach(resetMultiremiTestEnv);
 
 describe("Multiremi API — pins, search, and inbox", () => {
   it("serves pinned item endpoints", async () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     const app = createMultiremiApp({ store });
     const issue = createResponsibleTestIssue(store, { title: "Pinned API issue", workspaceId: "local" });
     const project = store.createProject({ title: "Pinned API project", workspaceId: "local" });
@@ -77,7 +77,7 @@ describe("Multiremi API — pins, search, and inbox", () => {
   });
 
   it("serves issue and project search endpoints", async () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     const app = createMultiremiApp({ store });
     const issue = createResponsibleTestIssue(store, { title: "Searchable API issue", description: "Has api needle context", workspaceId: "local" });
     const execution=store.createAgent({name:'Search fixture execution',provider:'codex'});
@@ -159,7 +159,7 @@ describe("Multiremi API — pins, search, and inbox", () => {
   });
 
   it("serves issue subscribers and member inbox endpoints", async () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     const app = createMultiremiApp({ store });
     const events: Array<{ type: string; workspaceId: string; payload: Record<string, unknown>; actorType?: string; actorId?: string | null }> = [];
     store.onWorkspaceEvent((event) => events.push(event));
@@ -302,7 +302,7 @@ describe("Multiremi API — pins, search, and inbox", () => {
   // user id to the member id — querying with the raw user id used to return a
   // permanently empty inbox while notifications piled up.
   it("resolves a user id to the member id on the compat inbox routes", async () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     const app = createMultiremiApp({ store });
     const reviewer = store.createWorkspaceMember({ name: "Reviewer", userId: "user-rev" });
     const author = store.createWorkspaceMember({ name: "Author", userId: "user-author" });
@@ -329,7 +329,7 @@ describe("Multiremi API — pins, search, and inbox", () => {
   });
 
   it("paginates the compat inbox and returns grouped counts without loading every item", async () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     const app = createMultiremiApp({ store });
     const reviewer = store.createWorkspaceMember({ name: "Paged Reviewer", userId: "user-page" });
     const author = store.createWorkspaceMember({ name: "Paged Author", userId: "user-page-author" });
@@ -365,7 +365,7 @@ describe("Multiremi API — pins, search, and inbox", () => {
   });
 
   it("does not project or count a parent moved outside the notification workspace", async () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     const workspaceA = store.createWorkspace({ id: "ws_parent_scope_a", name: "Parent Scope A", slug: "parent-scope-a" });
     const workspaceB = store.createWorkspace({ id: "ws_parent_scope_b", name: "Parent Scope B", slug: "parent-scope-b" });
     const reviewer = store.createWorkspaceMember({
@@ -440,7 +440,7 @@ describe("Multiremi API — pins, search, and inbox", () => {
   });
 
   it("clears every projected parent field after the parent is deleted", async () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     const reviewer = store.createWorkspaceMember({ name: "Deleted parent reviewer", userId: "usr_deleted_parent" });
     const author = store.createWorkspaceMember({ name: "Deleted parent author", userId: "usr_deleted_parent_author" });
     const parent = createResponsibleTestIssue(store, { title: "Parent to delete" });
@@ -462,3 +462,8 @@ describe("Multiremi API — pins, search, and inbox", () => {
     expect(JSON.stringify(message)).not.toContain(parent.title);
   });
 });
+
+// Register hooks in this file; shared modules only load once per test process.
+let reportSnapshotStats: (() => void) | undefined;
+beforeAll(() => { reportSnapshotStats = snapshotStatsForFile(import.meta.path); });
+afterAll(() => { reportSnapshotStats?.(); });

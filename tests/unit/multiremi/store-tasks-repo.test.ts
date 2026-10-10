@@ -102,23 +102,30 @@ function createRepo(): TasksRepo {
       const enqueued: string[] = [];
       ctx.taskEventListeners.add(event => { if (event.type === "task:cancelled") cancellations.push(event.task.id); });
       ctx.taskEnqueuedListeners.add(next => { enqueued.push(next.id); });
-      if (status === "cancelled") repo.cancelTask(task.id);
-      if (status === "failed") {
-        repo.claimTask(runtime.id);
-        repo.startTask(task.id);
-        repo.failTask(task.id, { error: "Terminal failure" });
+      try {
+        if (status === "cancelled") repo.cancelTask(task.id);
+        if (status === "failed") {
+          repo.claimTask(runtime.id);
+          repo.startTask(task.id);
+          repo.failTask(task.id, { error: "Terminal failure" });
+        }
+        const previous = repo.getTask(task.id)!;
+        const before = cancellations.length;
+        const result = db.transaction(() => repo.redispatchTaskWithinTransaction(task.id, [], createCommitEventQueue()))();
+        expect(cancellations).toHaveLength(before);
+        repo.notifyRedispatchedTask(result);
+        expect(cancellations).toHaveLength(before + (status === "queued" ? 1 : 0));
+        expect(enqueued).toEqual([result.replacement.id]);
+        expect(result.replacement).toMatchObject({ status: "queued", attempt: 2, parentTaskId: task.id });
+        expect(store!.getTurnForAttempt(result.replacement.id)?.id).toBe(store!.getTurnForAttempt(task.id)?.id);
+        if (status !== "queued") expect(repo.getTask(task.id)).toMatchObject({ status: previous.status,
+          completedAt: previous.completedAt, failedAt: previous.failedAt, cancelledAt: previous.cancelledAt });
+      } finally {
+        // This case creates a separate Context; the reusable Store cannot own
+        // or silently discard its per-case subscriptions.
+        ctx.taskEventListeners.clear();
+        ctx.taskEnqueuedListeners.clear();
       }
-      const previous = repo.getTask(task.id)!;
-      const before = cancellations.length;
-      const result = db.transaction(() => repo.redispatchTaskWithinTransaction(task.id, [], createCommitEventQueue()))();
-      expect(cancellations).toHaveLength(before);
-      repo.notifyRedispatchedTask(result);
-      expect(cancellations).toHaveLength(before + (status === "queued" ? 1 : 0));
-      expect(enqueued).toEqual([result.replacement.id]);
-      expect(result.replacement).toMatchObject({ status: "queued", attempt: 2, parentTaskId: task.id });
-      expect(store!.getTurnForAttempt(result.replacement.id)?.id).toBe(store!.getTurnForAttempt(task.id)?.id);
-      if (status !== "queued") expect(repo.getTask(task.id)).toMatchObject({ status: previous.status,
-        completedAt: previous.completedAt, failedAt: previous.failedAt, cancelledAt: previous.cancelledAt });
     });
   }
 
@@ -137,4 +144,4 @@ function createRepo(): TasksRepo {
     expect(repo.getTask(task.id)).toEqual(previous);
     expect(repo.listAgentTasks(agent.id)).toHaveLength(1);
   });
-});
+}, { isolation: 'committed-baseline' });

@@ -20,6 +20,7 @@
  * `db!.run(...)` exactly as it did when the variable was file-local.
  */
 import { expect } from "bun:test";
+import { createSqliteStoreSnapshotFactory } from "../../helpers/sqlite-store-snapshot.js";
 import type { Database } from "bun:sqlite";
 import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { createHash, createHmac } from "node:crypto";
@@ -51,6 +52,44 @@ let previousFetch: typeof globalThis.fetch | null = null;
 export function createStore(): MultiremiStore {
   db = openSqliteDatabase(":memory:");
   return new MultiremiStore(db);
+}
+
+// Lazy and opt-in: importing helpers never opens a snapshot database. Default
+// factories below retain empty-schema/seed-clock/startup behavior.
+const sqliteSnapshots = createSqliteStoreSnapshotFactory();
+
+/** Ordinary business tests only; retains an independent handle and new Store. */
+export function createSnapshotStore(): MultiremiStore {
+  const fixture = sqliteSnapshots.create();
+  db = fixture.db;
+  return fixture.store;
+}
+
+/** Call in a consuming file's beforeAll, then invoke its reporter in afterAll.
+ * Bun's normal test completion does not emit process exit. File windows are
+ * explicit deltas rather than cumulative totals that could be double-counted.
+ */
+export function snapshotStatsForFile(file: string): () => void {
+  const start = sqliteSnapshots.stats();
+  return () => {
+    const end = sqliteSnapshots.stats();
+    const report = {
+      fixture: end.fixture, dialect: end.dialect, scope: "file-window", file,
+      coldBootstraps: end.coldBootstraps - start.coldBootstraps,
+      clones: end.clones - start.clones,
+      freshFallbacks: end.freshFallbacks - start.freshFallbacks,
+      storeInitializations: end.storeInitializations - start.storeInitializations,
+      initializationMs: end.initializationMs - start.initializationMs,
+    };
+    console.info(`REMI_TEST_DB_FIXTURE_STATS ${JSON.stringify(report)}`);
+  };
+}
+
+/** Snapshot clone plus the same explicit local-workspace seed as createLocalStore. */
+export function createLocalSnapshotStore(): MultiremiStore {
+  const store = createSnapshotStore();
+  store.ensureLocalWorkspace();
+  return store;
 }
 
 /** An offline snapshot; construct the current Store only after seeding/draining it. */

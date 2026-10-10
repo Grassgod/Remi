@@ -3,7 +3,9 @@
 // to get wrong. These assertions guard the invariants the API cannot enforce
 // at runtime.
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { readFileSync, mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { workspaceManifestPaths } from "../../scripts/docker-workspace-manifests.js";
 import { resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import ts from "typescript";
@@ -35,6 +37,72 @@ function splitSection(readme: string): string {
 }
 
 describe("application compose stack", () => {
+  test("container installs use all live workspace manifests before source or release metadata", () => {
+    const root = JSON.parse(readFileSync(resolve(repoRoot, "package.json"), "utf8"));
+    const expected = new Set<string>(["package.json"]);
+    for (const pattern of root.workspaces) {
+      for (const path of new Bun.Glob(`${pattern}/package.json`).scanSync({ cwd: repoRoot, dot: true })) expected.add(path);
+    }
+    expect(workspaceManifestPaths(repoRoot)).toEqual([...expected].sort());
+    const fixture = mkdtempSync(resolve(tmpdir(), "docker-manifests-"));
+    try {
+      mkdirSync(resolve(fixture, "packages/new-workspace"), { recursive: true });
+      writeFileSync(resolve(fixture, "package.json"), JSON.stringify({ workspaces: ["packages/*"], bin: { remi: "./apps/remi/main.ts" } }));
+      const workspace = resolve(fixture, "packages/new-workspace/package.json");
+      writeFileSync(workspace, JSON.stringify({ name: "new-workspace" }));
+      expect(workspaceManifestPaths(fixture)).toEqual(["package.json", "packages/new-workspace/package.json"]);
+      for (const extra of [{ dependencies: { local: "file:../local" } }, { bin: "./cli.ts" }, { patchedDependencies: { pkg: "patches/pkg.patch" } }]) {
+        writeFileSync(workspace, JSON.stringify({ name: "new-workspace", ...extra }));
+        expect(() => workspaceManifestPaths(fixture)).toThrow(/requires|require/);
+      }
+      writeFileSync(resolve(fixture, "package.json"), JSON.stringify({ workspaces: ["packages/**"] }));
+      expect(() => workspaceManifestPaths(fixture)).toThrow("Unsupported workspace pattern");
+    } finally { rmSync(fixture, { recursive: true, force: true }); }
+
+    for (const name of ["api", "web"]) {
+      const source = readFileSync(resolve(repoRoot, `deploy/docker/Dockerfile.${name}`), "utf8");
+      const install = source.indexOf("RUN bun install --registry https://registry.npmjs.org --frozen-lockfile --ignore-scripts");
+      const manifests = source.indexOf("COPY --from=workspace-manifests");
+      const sources = source.indexOf(name === "api" ? "COPY . ." : "COPY --chown=bun:bun . .");
+      expect(source).toContain("--mount=type=bind,target=/source,readonly");
+      expect(source).toContain("scripts/docker-workspace-manifests.ts --root /source --out /manifests");
+      expect(manifests).toBeGreaterThan(-1);
+      expect(install).toBeGreaterThan(manifests);
+      expect(sources).toBeGreaterThan(install);
+      if (name === "api") {
+        expect(source.indexOf("ENV NODE_ENV=production")).toBeLessThan(install);
+        expect(source.indexOf("ARG MULTIREMI_VERSION=dev")).toBeGreaterThan(install);
+      }
+    }
+    const ci = parse(readFileSync(resolve(repoRoot, ".github/workflows/release-build-check.yml"), "utf8"));
+    for (const [jobName, job] of Object.entries(ci.jobs) as [string, any][]) {
+      const install = job.steps?.findIndex((step: any) => step.run?.includes("bun install --registry")) ?? -1;
+      if (install < 0) continue;
+      const restore = job.steps.findIndex((step: any) => step.uses === "actions/cache/restore@v4");
+      expect(restore, jobName).toBeGreaterThan(-1);
+      expect(restore).toBeLessThan(install);
+      expect(job.steps[restore].with.path).toBe("~/.bun/install/cache");
+      expect(job.steps[restore].with.key).toContain("runner.os");
+      expect(job.steps[restore].with.key).toContain("1.3.14");
+      expect(job.steps[restore].with.key).toContain("hashFiles('bun.lock')");
+      if (["frontend-zero-jump", "frontend-replica"].includes(jobName)) {
+        expect(job.steps[install].if).toBe("steps.relevant.outputs.run == 'true'");
+        expect(job.steps[restore].if).toBe(job.steps[install].if);
+      } else {
+        expect(job.steps[install].if).toBeUndefined();
+        expect(job.steps[restore].if).toBeUndefined();
+      }
+      // Download hits never replace a frozen install for a relevant job.
+      expect(job.steps[install].if ?? "").not.toContain("cache-hit");
+      for (const step of job.steps.filter((step: any) => step.uses === "actions/cache/save@v4")) {
+        expect(["guards", "session-archive-platform"]).toContain(jobName);
+        expect(step.if).toContain("github.ref == 'refs/heads/main'");
+        expect(step.if).toContain("github.event_name != 'pull_request'");
+        if (jobName === "session-archive-platform") expect(step.if).toContain("matrix.os == 'macos-latest'");
+      }
+    }
+  });
+
   test("both production topologies mount the default migration report HOME for each API role", () => {
     for (const file of ["compose.application.yml", "compose.platform.yml"]) {
       const stack = parse(readFileSync(resolve(repoRoot, "deploy/docker", file), "utf8"));

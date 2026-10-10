@@ -1,8 +1,8 @@
 import { createResponsibleTestIssue } from './helpers.js';
 import { runTurnExecutionMutation } from "@multiremi/store/turn-execution-records.js";
-import { afterEach, describe, expect, it } from "bun:test";
+import { beforeAll, afterAll, afterEach, describe, expect, it } from "bun:test";
 import type { MultiremiStore } from "@multiremi/store.js";
-import { createStore, db, resetMultiremiTestEnv } from "./helpers.js";
+import { snapshotStatsForFile, createSnapshotStore, db, resetMultiremiTestEnv } from "./helpers.js";
 
 afterEach(resetMultiremiTestEnv);
 
@@ -30,7 +30,7 @@ function seed(store: MultiremiStore) {
 
 describe("Issue Session workspace leases", () => {
   it("claims tasks from two discussion Sessions concurrently", () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     const { runtime, firstAgent, secondAgent, issue } = seed(store);
     const firstSession = store.createIssueSession(issue.id, { title: "Discussion A", holdsWorkspace: false });
     const secondSession = store.createIssueSession(issue.id, { title: "Discussion B", holdsWorkspace: false });
@@ -55,7 +55,7 @@ describe("Issue Session workspace leases", () => {
   });
 
   it("claims a workspace Task and a discussion Task concurrently", () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     const { runtime, firstAgent, secondAgent, issue } = seed(store);
     const workSession = store.createIssueSession(issue.id, { title: "Work" });
     const discussionSession = store.createIssueSession(issue.id, { title: "Discussion", holds_workspace: false });
@@ -80,7 +80,7 @@ describe("Issue Session workspace leases", () => {
   });
 
   it("allows two workspace-holding Sessions to run concurrently", () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     const { runtime, firstAgent, secondAgent, issue } = seed(store);
     const firstSession = store.createIssueSession(issue.id, { title: "Work A" });
     const secondSession = store.createIssueSession(issue.id, { title: "Work B" });
@@ -104,7 +104,7 @@ describe("Issue Session workspace leases", () => {
   });
 
   it("coalesces unread requests before a dispatched turn starts", () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     const { runtime, firstAgent, issue } = seed(store);
     const session = store.createIssueSession(issue.id, { title: "One discussion", holdsWorkspace: false });
     const first = store.createTask({
@@ -131,7 +131,7 @@ describe("Issue Session workspace leases", () => {
   });
 
   it("keeps the same Agent context in one Session serialized", () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     const { runtime, firstAgent, secondAgent, issue } = seed(store);
     const session = store.createIssueSession(issue.id, { title: "One discussion", holdsWorkspace: false });
     const first = store.createTask({
@@ -156,7 +156,7 @@ describe("Issue Session workspace leases", () => {
   });
 
   it("binds issue requests without an explicit Session to one default conversation", () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     const { runtime, firstAgent, secondAgent, issue } = seed(store);
     const first = store.createTask({
       agentId: firstAgent.id,
@@ -177,3 +177,8 @@ describe("Issue Session workspace leases", () => {
     expect(store.getTask(second.id)?.status).toBe("dispatched");
   });
 });
+
+// Register hooks in this file; shared modules only load once per test process.
+let reportSnapshotStats: (() => void) | undefined;
+beforeAll(() => { reportSnapshotStats = snapshotStatsForFile(import.meta.path); });
+afterAll(() => { reportSnapshotStats?.(); });

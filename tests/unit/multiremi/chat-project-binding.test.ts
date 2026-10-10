@@ -1,16 +1,16 @@
 import { mutateExecutionFixture } from "./unified-test-paths.js";
-import { afterEach, describe, expect, it } from "bun:test";
+import { beforeAll, afterAll, afterEach, describe, expect, it } from "bun:test";
 import { ChatValidationError } from "@multiremi/store/repos/chat-repo.js";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { daemonTaskClaimResponse } from "@multiremi/api/wire/tasks.js";
 import { daemonRuntimeId } from "@multiremi/store.js";
-import { createLocalStore as createStore, db, resetMultiremiTestEnv } from "./helpers.js";
+import { snapshotStatsForFile, createLocalSnapshotStore as createSnapshotStore, db, resetMultiremiTestEnv } from "./helpers.js";
 
 afterEach(resetMultiremiTestEnv);
 
 describe("Chat Project binding", () => {
   it("creates optional Project bindings with explicit null taking precedence over the alias", () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     const agent = store.createAgent({ name: "Chat", provider: "codex" });
     const project = store.createProject({ title: "Project context" });
     const create = (fields = {}) => store.createChatSession({ agentId: agent.id, ...fields });
@@ -22,7 +22,7 @@ describe("Chat Project binding", () => {
   });
 
   it("rejects missing, foreign, archived and malformed Projects", () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     const agent = store.createAgent({ name: "Chat", provider: "codex" });
     const other = store.createWorkspace({ name: "Other", slug: "chat-project-other" });
     const foreign = store.createProject({ title: "Foreign", workspaceId: other.id });
@@ -34,7 +34,7 @@ describe("Chat Project binding", () => {
   });
 
   it("keeps the creation-time Project and provider lineage through ordinary updates", () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     const agent = store.createAgent({ name: "Chat", provider: "codex" });
     const project = store.createProject({ title: "Project" });
     for (const projectId of [project.id, null]) {
@@ -57,7 +57,7 @@ describe("Chat Project binding", () => {
   });
 
   it("allows ordinary updates and still cancels all unfinished states when archiving", () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     const agent = store.createAgent({ name: "Chat", provider: "codex" });
     const project = store.createProject({ title: "Project" });
     for (const status of ["queued", "dispatched", "running", "waiting_local_directory", "awaiting_human"]) {
@@ -73,7 +73,7 @@ describe("Chat Project binding", () => {
   });
 
   it("hydrates only the bound Project and preserves the marker in daemon claims", () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     store.updateWorkspaceRepositories("local", [{ id: "repo_chat_project", name: "project", url: "https://github.com/example/project.git", source: "github" }]);
     const agent = store.createAgent({ name: "Chat", provider: "codex" });
     const project = store.createProject({ title: "Context", instructions: "Project rules",
@@ -96,7 +96,7 @@ describe("Chat Project binding", () => {
   });
 
   it("pins directory Chat and resume-unsafe retries to its daemon, overriding explicit runtime choices", () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     const directory = store.registerRuntime({ id: "rt_directory", name: "directory", provider: "codex", daemonId: "chat-directory" });
     const other = store.registerRuntime({ id: "rt_other", name: "other", provider: "codex", daemonId: "chat-other" });
     const agent = store.createAgent({ name: "Chat", provider: "codex" });
@@ -117,7 +117,7 @@ describe("Chat Project binding", () => {
   });
 
   it("waits for a missing directory daemon and preserves its pin across provider changes", () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     const agent = store.createAgent({ name: "Chat", provider: "codex" });
     const other = store.registerRuntime({ name: "other", provider: "codex", daemonId: "other" });
     const project = store.createProject({ title: "Offline directory", resources: [{ resourceType: "local_directory",
@@ -131,7 +131,7 @@ describe("Chat Project binding", () => {
   });
 
   it("applies Project device routing to Chat, including dedicated daemons", () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     const directory = store.registerRuntime({ id: "rt_device", name: "dedicated", provider: "codex", daemonId: "chat-device" });
     const other = store.registerRuntime({ name: "other", provider: "codex", daemonId: "other" });
     const project = store.createProject({ title: "Device project" });
@@ -146,7 +146,7 @@ describe("Chat Project binding", () => {
 
   for (const unavailable of ["archived", "deleted"] as const) {
     it(`falls back to pure Chat when its fixed Project is ${unavailable}, including stale claims and directory routing`, () => {
-      const store = createStore();
+      const store = createSnapshotStore();
       const directory = store.registerRuntime({ name: "Directory", provider: "codex", daemonId: "project-directory" });
       const available = store.registerRuntime({ name: "Available", provider: "codex", daemonId: "available" });
       const agent = store.createAgent({ name: "Chat", provider: "codex" });
@@ -187,7 +187,7 @@ describe("Chat Project binding", () => {
   for (const unavailable of ["archived", "deleted"] as const) {
     for (const source of ["local_directory", "dedicated_runtime"] as const) {
       it(`starts cold once after a completed ${source} Chat loses its ${unavailable} Project, then resumes pure Chat`, () => {
-        const store = createStore();
+        const store = createSnapshotStore();
         const previous = store.registerRuntime({ name: "Project runtime", provider: "codex", daemonId: "project-owner" });
         const available = store.registerRuntime({ name: "Pool runtime", provider: "codex", daemonId: "chat-pool" });
         const agent = store.createAgent({ name: "Chat", provider: "codex" });
@@ -231,7 +231,7 @@ describe("Chat Project binding", () => {
   }
 
   it("clears legacy workDir-only lineage and does not promote a late Project completion", () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     const runtime = store.registerRuntime({ name: "Runtime", provider: "codex" });
     const agent = store.createAgent({ name: "Chat", provider: "codex" });
     const project = store.createProject({ title: "Project" });
@@ -259,7 +259,7 @@ describe("Chat Project binding", () => {
   });
 
   it("drops an old retained claim's cwd after the same dispatched task is reclaimed in fallback mode", () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     const previous = store.registerRuntime({ name: "Previous", provider: "codex", daemonId: "project-owner" });
     const replacement = store.registerRuntime({ name: "Replacement", provider: "codex", daemonId: "chat-pool" });
     const agent = store.createAgent({ name: "Chat", provider: "codex" });
@@ -293,7 +293,7 @@ describe("Chat Project binding", () => {
 
   for (const target of ["same_runtime", "new_runtime"] as const) {
     it(`preserves frozen Plugins while a fallback retry selects credentials for ${target}`, () => {
-      const store = createStore();
+      const store = createSnapshotStore();
       const metadata = { codex_profiles: 1, agent_plugin_protocol: 1 };
       const previous = store.registerRuntime({ name: "Previous", provider: "codex", daemonId: "project-owner", metadata });
       const replacement = store.registerRuntime({ name: "Replacement", provider: "codex", daemonId: "chat-pool", metadata });
@@ -332,7 +332,7 @@ describe("Chat Project binding", () => {
 
   for (const route of ["/api/chat/sessions", "/api/multiremi/chats"]) {
     it(`allows binding only at creation and rejects both update spellings through ${route}`, async () => {
-      const store = createStore();
+      const store = createSnapshotStore();
       const agent = store.createAgent({ name: "Chat", provider: "codex" });
       const project = store.createProject({ title: "Project" });
       const other = store.createWorkspace({ name: "Other", slug: "foreign-project" });
@@ -374,3 +374,8 @@ describe("Chat Project binding", () => {
     });
   }
 });
+
+// Register hooks in this file; shared modules only load once per test process.
+let reportSnapshotStats: (() => void) | undefined;
+beforeAll(() => { reportSnapshotStats = snapshotStatsForFile(import.meta.path); });
+afterAll(() => { reportSnapshotStats?.(); });

@@ -21,7 +21,7 @@ export function describeTraceStoreContract(
       }]).events;
       expect(event!.seq).toBe(3);
       expect(event!.tool!.endsWith(TRACE_TRUNCATION_MARKER)).toBe(true);
-      expect(event!.content!.endsWith(TRACE_TRUNCATION_MARKER)).toBe(true);
+      expect(event!.content).toBe("c".repeat(256 * 1024) + TRACE_TRUNCATION_MARKER);
       expect(event!.output!.endsWith(TRACE_TRUNCATION_MARKER)).toBe(true);
       expect(event!.input).toEqual({ payload: "[base64-elided]" });
       expect(event!.meta).toBeNull();
@@ -32,6 +32,9 @@ export function describeTraceStoreContract(
         const store = create();
         store.append("tsk_one", [{ type: "text", content: status }]);
         store.close("tsk_one", { status, ended_at: NOW });
+        // Assert the first close before an idempotent retry can mask a defect.
+        expect(store.head("tsk_one")).toEqual({ head: 1, closed: true });
+        expect(store.append("tsk_one", [{ type: "text", content: "late" }])).toEqual({ head: 1, events: [] });
         store.close("tsk_one", { status: "failed", ended_at: NOW });
         expect(store.head("tsk_one")).toEqual({ head: 1, closed: true });
         expect(store.append("tsk_one", [{ type: "text", content: "late" }])).toEqual({ head: 1, events: [] });
@@ -54,7 +57,7 @@ export function describeTraceStoreContract(
       store.append("tsk_one", Array.from({ length: 525 }, () => ({ type: "text", content: "x" })));
       for (const [limit, count] of [
         [undefined, 200], [NaN, 200], [Infinity, 500], [-Infinity, 1],
-        [0, 1], [-4, 1], [1.9, 1], [501, 500],
+        [0, 1], [-4, 1], [1.9, 1], [501, 500], [5000, 500],
       ] as const) {
         const page = store.read("tsk_one", 0, limit);
         expect(page.events).toHaveLength(count);
@@ -77,10 +80,11 @@ export function describeTraceStoreContract(
       for (const budget of [undefined, NaN, Infinity]) {
         expect(store.read("tsk_one", 0, 3, budget).events).toHaveLength(3);
       }
-      for (const budget of [0, -1, -Infinity, 0.9]) {
+      for (const budget of [0, -1, -Infinity, 0.9, 1]) {
         expect(store.read("tsk_one", 0, 3, budget).events).toEqual([events[0]]);
       }
       const two = traceEventBytes(events[0]!) + traceEventBytes(events[1]!);
+      expect(store.read("tsk_one", 0, 3, two).events).toEqual(events.slice(0, 2));
       expect(store.read("tsk_one", 0, 3, two + 0.9).events).toEqual(events.slice(0, 2));
       expect(store.read("tsk_one", 2, 1, 0)).toEqual({ events: [events[2]], head: 3, eof: true });
     });

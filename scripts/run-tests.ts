@@ -36,33 +36,44 @@ function homeEntries(home: string): string[] {
   return entries;
 }
 
-export async function runTests(args: string[]): Promise<number> {
+export interface TestRunMetadata { childExitCode: number; homeEmpty: boolean; observerFailed: boolean; interrupted: boolean }
+export async function runTests(args: string[], observe?: (text: string, stream: "stdout" | "stderr") => void, onComplete?: (metadata: TestRunMetadata) => void): Promise<number> {
   const home = mkdtempSync(join(tmpdir(), "remi-test-home-"));
   try {
     const env = testProcessEnv(home);
     mkdirSync(env.BUN_RUNTIME_TRANSPILER_CACHE_PATH!, { recursive: true });
     mkdirSync(env.BUN_INSTALL_CACHE_DIR!, { recursive: true });
     const child = Bun.spawn([process.execPath, "test", ...args], {
-      env, stdin: "inherit", stdout: "inherit", stderr: "inherit",
+      env, stdin: "inherit", stdout: observe ? "pipe" : "inherit", stderr: observe ? "pipe" : "inherit",
     });
-    const interrupt = () => child.kill("SIGINT");
-    const terminate = () => child.kill("SIGTERM");
+    let observerFailed = false;
+    const pump = async (stream: ReadableStream<Uint8Array>, output: NodeJS.WriteStream, source: "stdout" | "stderr") => {
+      const decoder = new TextDecoder();
+      for await (const chunk of stream) { output.write(chunk); try { observe!(decoder.decode(chunk, { stream: true }), source); } catch (error) { observerFailed = true; console.error("[test-home] log observer failed:", error); } }
+      const tail = decoder.decode(); if (tail) { try { observe!(tail, source); } catch (error) { observerFailed = true; console.error("[test-home] log observer failed:", error); } }
+    };
+    const streams = observe ? [pump(child.stdout as ReadableStream<Uint8Array>, process.stdout, "stdout"), pump(child.stderr as ReadableStream<Uint8Array>, process.stderr, "stderr")] : [];
+    const drained = Promise.all(streams).catch(error => { observerFailed = true; console.error("[test-home] stream drain failed:", error); });
+    let interrupted = false;
+    const interrupt = () => { interrupted = true; child.kill("SIGINT"); };
+    const terminate = () => { interrupted = true; child.kill("SIGTERM"); };
     process.on("SIGINT", interrupt);
     process.on("SIGTERM", terminate);
     let exitCode: number;
-    try { exitCode = await child.exited; }
+    try { exitCode = await child.exited; await drained; }
     finally {
       process.off("SIGINT", interrupt);
       process.off("SIGTERM", terminate);
     }
     const entries = homeEntries(home);
+    onComplete?.({ childExitCode: exitCode, homeEmpty: entries.length === 0, observerFailed, interrupted });
     if (entries.length > 0) {
       console.error("[test-home] unexpected writes:");
       for (const entry of entries) console.error(entry);
       return 1;
     }
     console.error("[test-home] residual paths: []");
-    return exitCode;
+    return exitCode || (observerFailed || interrupted ? 1 : 0);
   } finally {
     rmSync(home, { recursive: true, force: true });
   }
