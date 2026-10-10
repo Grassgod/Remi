@@ -120,26 +120,6 @@ describe("useRealtimeSync — ws instance change", () => {
     expect(invalidateSpy).not.toHaveBeenCalled();
   });
 
-  it("invalidates exactly once when a new ws instance appears after null gap", () => {
-    const ws1 = createMockWs();
-    const { rerender } = renderHook(
-      ({ ws }) => useRealtimeSync(ws, stores),
-      { initialProps: { ws: ws1 as WSClient | null }, wrapper: createWrapper(qc) },
-    );
-
-    // Simulate workspace switch: ws -> null -> new ws
-    invalidateSpy.mockClear();
-    rerender({ ws: null });
-    expect(invalidateSpy).not.toHaveBeenCalled();
-
-    const ws2 = createMockWs();
-    rerender({ ws: ws2 });
-
-    // Should have called invalidateQueries for all workspace-scoped keys,
-    // including task and Product Session caches affected by daemon retirement.
-    expect(invalidateSpy).toHaveBeenCalledTimes(24);
-  });
-
   it("does not re-invalidate when rerendered with the same ws instance", () => {
     const ws1 = createMockWs();
     const { rerender } = renderHook(
@@ -154,7 +134,7 @@ describe("useRealtimeSync — ws instance change", () => {
     expect(invalidateSpy).not.toHaveBeenCalled();
   });
 
-  it("invalidates chat, plugins, pins, labels, and invitations queries on ws instance change", () => {
+  it("invalidates all workspace query families exactly once after a null gap", () => {
     const ws1 = createMockWs();
     const { rerender } = renderHook(
       ({ ws }) => useRealtimeSync(ws, stores),
@@ -163,10 +143,12 @@ describe("useRealtimeSync — ws instance change", () => {
 
     invalidateSpy.mockClear();
     rerender({ ws: null });
+    expect(invalidateSpy).not.toHaveBeenCalled();
 
     const ws2 = createMockWs();
     rerender({ ws: ws2 });
 
+    expect(invalidateSpy).toHaveBeenCalledTimes(24);
     const calls = invalidateSpy.mock.calls.map((call: [{ queryKey?: unknown }, ...unknown[]]) => call[0].queryKey);
     expect(calls).toContainEqual(["chat", "ws-1"]);
     expect(calls).toContainEqual(["labels", "ws-1"]);

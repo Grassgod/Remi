@@ -1,9 +1,15 @@
+# BuildKit's context bind is read-only; only dependency inputs leave this stage.
+FROM oven/bun:1.3.14 AS workspace-manifests
+RUN --mount=type=bind,target=/source,readonly \
+  bun /source/scripts/docker-workspace-manifests.ts --root /source --out /manifests
+
 FROM oven/bun:1.3.14 AS dependencies
 
 WORKDIR /app
 
-COPY --chown=bun:bun . .
+COPY --from=workspace-manifests --chown=bun:bun /manifests/ ./
 RUN bun install --registry https://registry.npmjs.org --frozen-lockfile --ignore-scripts
+COPY --chown=bun:bun . .
 
 ARG REMOTE_API_URL=http://api:6120
 ARG REMI_APP_VERSION=dev

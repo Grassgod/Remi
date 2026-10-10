@@ -1,8 +1,8 @@
 import { createResponsibleTestIssue } from './helpers.js';
-import { afterEach, describe, expect, it } from "bun:test";
+import { beforeAll, afterAll, afterEach, describe, expect, it } from "bun:test";
 import { buildTaskPrompt, buildTaskPromptArtifact } from "@multiremi/prompt.js";
 import { MultiremiStore } from "@multiremi/store.js";
-import { createStore, resetMultiremiTestEnv } from "./helpers.js";
+import { snapshotStatsForFile, createSnapshotStore, resetMultiremiTestEnv } from "./helpers.js";
 
 afterEach(resetMultiremiTestEnv);
 
@@ -40,7 +40,7 @@ function createProjectTask(store: MultiremiStore) {
 
 describe("bootstrap and delta task prompts", () => {
   it("bootstraps homepage Chat from canonical session events and CLI directory instructions only", () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     store.ensureLocalWorkspace();
     store.updateWorkspace("local", {
       repos: [{
@@ -82,7 +82,7 @@ describe("bootstrap and delta task prompts", () => {
 
   for (const mode of ["bootstrap", "delta"] as const) {
     it(`keeps a private Chat ${mode} free of stale Issue context and broadcasts`, () => {
-      const store = createStore();
+      const store = createSnapshotStore();
       const { task } = createProjectTask(store);
       const prompt = buildTaskPrompt({
         ...task,
@@ -110,7 +110,7 @@ describe("bootstrap and delta task prompts", () => {
     });
 
     it(`preserves Feishu Issue topic context and update guidance in ${mode}`, () => {
-      const store = createStore();
+      const store = createSnapshotStore();
       const { issue, task } = createProjectTask(store);
       const prompt = buildTaskPrompt({
         ...task,
@@ -136,7 +136,7 @@ describe("bootstrap and delta task prompts", () => {
   }
 
   it("builds a bootstrap prompt with stable execution context", () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     const { project, issue, task } = createProjectTask(store);
 
     const artifact = buildTaskPromptArtifact({
@@ -182,7 +182,7 @@ describe("bootstrap and delta task prompts", () => {
   });
 
   it("does not claim repositories are mounted for a discussion Session", () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     const { task } = createProjectTask(store);
     const prompt = buildTaskPrompt({
       ...task,
@@ -201,7 +201,7 @@ describe("bootstrap and delta task prompts", () => {
   });
 
   it("tells issue tasks how to pick a project before creating an issue", () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     const { task } = createProjectTask(store);
     const prompt = buildTaskPrompt(task as any);
 
@@ -218,7 +218,7 @@ describe("bootstrap and delta task prompts", () => {
   });
 
   it("injects Project Instructions exactly once after Project Context in bootstrap", () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     const { task } = createProjectTask(store);
     const instructions = "Run the focused tests before handing off.";
     const prompt = buildTaskPrompt({
@@ -233,7 +233,7 @@ describe("bootstrap and delta task prompts", () => {
   });
 
   it("omits blank Project Instructions from bootstrap", () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     const { task } = createProjectTask(store);
     const prompt = buildTaskPrompt({
       ...task,
@@ -246,7 +246,7 @@ describe("bootstrap and delta task prompts", () => {
   });
 
   it("does not embed Memory, Wiki, or schema bodies in a bootstrap prompt", () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     const { task } = createProjectTask(store);
     const prompt = buildTaskPrompt({
       ...task,
@@ -268,7 +268,7 @@ describe("bootstrap and delta task prompts", () => {
   });
 
   it("builds a compact delta without replaying stable context", () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     const { task } = createProjectTask(store);
     const instructions = "DO_NOT_REPEAT_PROJECT_INSTRUCTIONS";
     const deltaInstructions = "Re-read the newest review comment.";
@@ -308,7 +308,7 @@ describe("bootstrap and delta task prompts", () => {
   });
 
   it("does not duplicate an Autopilot Runbook already used as Current Request", () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     const { task } = createProjectTask(store);
     const runbook = "Review the merged Issue and update its Wiki.";
     const prompt = buildTaskPrompt({
@@ -325,7 +325,7 @@ describe("bootstrap and delta task prompts", () => {
   });
 
   it("does not advertise provider history without an Issue Session workspace", () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     const agent = store.createAgent({ name: "Direct", provider: "codex" });
     const task = store.createTask({ agentId: agent.id, prompt: "Direct task" });
     const prompt = buildTaskPrompt(store.getTaskWithAgent(task.id)! as any);
@@ -335,7 +335,7 @@ describe("bootstrap and delta task prompts", () => {
   });
 
   it("renders one canonical triggering comment and strips legacy duplication", () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     const { task } = createProjectTask(store);
     const triggerBody = "Please fix the `$PATH` handling.";
     const prompt = buildTaskPrompt({
@@ -359,7 +359,7 @@ describe("bootstrap and delta task prompts", () => {
   });
 
   it("quotes a trigger once when no canonical Session projection is available", () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     const { task } = createProjectTask(store);
     const triggerBody = "One standalone trigger.";
     const prompt = buildTaskPrompt({
@@ -373,7 +373,7 @@ describe("bootstrap and delta task prompts", () => {
   });
 
   it("injects squad roster and bounded delegation guidance for the leader", () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     const { agent, issue, task } = createProjectTask(store);
     const prompt = buildTaskPrompt({
       ...task,
@@ -407,7 +407,7 @@ describe("bootstrap and delta task prompts", () => {
   });
 
   it("does not teach squad mention syntax to a non-leader agent", () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     const { agent, task } = createProjectTask(store);
     const prompt = buildTaskPrompt({
       ...task,
@@ -429,7 +429,7 @@ describe("bootstrap and delta task prompts", () => {
   });
 
   it("marks pre-checked-out repositories in bootstrap prompts", () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     const { task } = createProjectTask(store);
     const prompt = buildTaskPrompt(task, {
       repoCheckouts: [{
@@ -444,7 +444,7 @@ describe("bootstrap and delta task prompts", () => {
   });
 
   it("injects bounded repository failure diagnostics into the agent prompt", () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     const { task } = createProjectTask(store);
     const prompt = buildTaskPrompt(task, {
       repoWarnings: [
@@ -472,14 +472,14 @@ describe("bootstrap and delta task prompts", () => {
   });
 
   it("does not add a repository warning section to healthy prompts", () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     const { task } = createProjectTask(store);
 
     expect(buildTaskPrompt(task)).not.toContain("Repository Availability Warnings");
   });
 
   it("reports default branch fallback without claiming checkout or fetch failed", () => {
-    const { task } = createProjectTask(createStore());
+    const { task } = createProjectTask(createSnapshotStore());
     const prompt = buildTaskPrompt(task, { repoWarnings: [{
       repoUrl: "https://example.test/repo.git", kind: "default_branch_fallback",
       message: "workflow-dev could not be resolved; fell back to refs/remotes/origin/main",
@@ -492,7 +492,7 @@ describe("bootstrap and delta task prompts", () => {
   });
 
   it("keeps a checkout command for repositories the daemon did not materialize", () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     const { task } = createProjectTask(store);
     const prompt = buildTaskPrompt({
       ...task,
@@ -512,3 +512,8 @@ describe("bootstrap and delta task prompts", () => {
     expect(prompt).toContain("For repositories without a path above, use `remi repo checkout");
   });
 });
+
+// Register hooks in this file; shared modules only load once per test process.
+let reportSnapshotStats: (() => void) | undefined;
+beforeAll(() => { reportSnapshotStats = snapshotStatsForFile(import.meta.path); });
+afterAll(() => { reportSnapshotStats?.(); });

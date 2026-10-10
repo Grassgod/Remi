@@ -52,32 +52,22 @@ function usePageGate(ready: boolean): boolean {
   return useAfterFirstScreen({ routeKey: "/local/issues" });
 }
 
-it("unmount then remount starts a pending publisher closed", () => {
+it("a remounted pending page does not send a new deferred request", async () => {
   const first = renderHook(() => usePageGate(true));
   act(() => { flushFrames(); flushIdle(); });
   expect(first.result.current).toBe(true);
   first.unmount();
+  const requests = vi.fn(async () => []);
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   const renders: boolean[] = [];
   const second = renderHook(() => {
     const open = usePageGate(false);
     renders.push(open);
-    return open;
-  });
-  expect(renders[0]).toBe(false);
-  expect(second.result.current).toBe(false);
-});
-
-it("a remounted pending page does not send a new deferred request", async () => {
-  const first = renderHook(() => usePageGate(true));
-  act(() => { flushFrames(); flushIdle(); });
-  first.unmount();
-  const requests = vi.fn(async () => []);
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  const second = renderHook(() => {
-    const open = usePageGate(false);
     useQuery({ queryKey: ["new-page-auxiliary"], queryFn: requests, enabled: open });
   }, { wrapper: ({ children }) => <QueryClientProvider client={client}>{children}</QueryClientProvider> });
+  expect(renders[0]).toBe(false);
   await act(async () => { await Promise.resolve(); });
+  expect(renders.every(open => !open)).toBe(true);
   expect(requests).not.toHaveBeenCalled();
   second.unmount();
   client.clear();

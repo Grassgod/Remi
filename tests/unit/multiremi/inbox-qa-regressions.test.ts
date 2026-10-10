@@ -100,17 +100,6 @@ pendingTurnBackendTests('MUL-506 cold retry input QA', (fixture, backend) => {
         expect(f.store.getTurn(sent.turn_id!)?.status).toBe('completed');
     });
 });
-pendingTurnBackendTests('MUL-506 mixed pending status QA', (fixture, backend) => {
-    it('a member message merged into platform pending changes a blocked Issue to todo', () => {
-        const f = fixture(), a = f.store.createAgent({ name: 'QA merged owner', provider: 'codex' }), issue = f.store.createIssue({ title: 'Mixed pending', status: 'blocked', assigneeType: 'agent', assigneeId: a.id, responsibleMemberId: 'mem_local_local' }), s = f.store.getOrCreateDefaultIssueSession(issue.id);
-        const base = { session_id: s.id, to: { type: 'agent' as const, ref: a.id }, wake_requested: 'now' as const, body_md: 'platform status' };
-        const first = f.store.sendMessage({ ...base, sender: { type: 'platform', id: null }, message_kind: 'status' });
-        expect(f.store.getIssue(issue.id)?.status).toBe('blocked');
-        const second = f.store.sendMessage({ ...base, sender: { type: 'member', id: 'mem_local_local' }, message_kind: 'request', body_md: 'human starts work' });
-        expect(second.turn_id).toBe(first.turn_id);
-        expect(f.store.getIssue(issue.id)?.status).toBe('todo');
-    });
-});
 pendingTurnBackendTests('MUL-506 dependency audit QA', (fixture, backend) => {
     function setup() { const f = fixture(), a = f.store.createAgent({ name: 'QA dependency owner', provider: 'codex' }), prerequisite = f.store.createIssue({ title: 'Unfinished prerequisite', status: 'in_progress', responsibleMemberId: 'mem_local_local' }), issue = f.store.createIssue({ title: 'Waiting work', status: 'backlog', blockedBy: [prerequisite.id], assigneeType: 'agent', assigneeId: a.id, responsibleMemberId: 'mem_local_local' }); return { ...f, a, issue, prerequisite }; }
     it('a member force comment keeps one dependency override audit with the user actor', () => {

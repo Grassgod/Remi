@@ -1,10 +1,10 @@
 import { createResponsibleTestIssue } from './helpers.js';
 import { mutateExecutionFixture } from "./unified-test-paths.js";
 import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
-import { afterEach, describe, expect, it } from "bun:test";
+import { beforeAll, afterAll, afterEach, describe, expect, it } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { agentHasKnowledgePublishCapability } from "@multiremi/knowledge/capability.js";
-import { configureRepositoryWikiAutomation, createStore, db, resetMultiremiTestEnv } from "./helpers.js";
+import { snapshotStatsForFile, configureRepositoryWikiAutomation, createSnapshotStore, db, resetMultiremiTestEnv } from "./helpers.js";
 
 afterEach(resetMultiremiTestEnv);
 
@@ -13,7 +13,7 @@ const ROOT_JSON_HEADERS = { ...JSON_HEADERS, Authorization: "Bearer root-secret"
 
 describe("knowledge compilation control plane", () => {
   it("migrates the SQLite schema additively and deduplicates only pending raw submissions", () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     const tables = (db!.query("SELECT name FROM sqlite_master WHERE type = 'table'").all() as Array<{ name: string }>).map((row) => row.name);
     expect(tables).toContain("multiremi_knowledge_submissions");
     expect(tables).toContain("multiremi_knowledge_compilation_runs");
@@ -48,7 +48,7 @@ describe("knowledge compilation control plane", () => {
   });
 
   it("paginates submissions and compilation runs with stable composite ordering", () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     const project = store.createProject({ title: "Knowledge pagination" });
     const submissions = Array.from({ length: 3 }, (_, index) => store.createKnowledgeSubmission({
       workspaceId: "local",
@@ -118,7 +118,7 @@ describe("knowledge compilation control plane", () => {
   });
 
   it("returns and consumes next_cursor for submission and run API pages", async () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     const project = store.createProject({ title: "Knowledge API pagination" });
     const submissions = Array.from({ length: 3 }, (_, index) => store.createKnowledgeSubmission({
       workspaceId: "local",
@@ -186,7 +186,7 @@ describe("knowledge compilation control plane", () => {
   });
 
   it("derives publish capability from maintainer role and an enabled allowlisted plugin", () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     store.ensureLocalWorkspace();
     const namedAtlas = store.createAgent({ name: "Atlas", provider: "claude", role: "maintainer" });
     expect(agentHasKnowledgePublishCapability(store, namedAtlas)).toBe(false);
@@ -204,7 +204,7 @@ describe("knowledge compilation control plane", () => {
   });
 
   it("reports the actual submission filter intersection without silently hiding repository Raw by task project", async () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     store.ensureLocalWorkspace();
     store.updateWorkspaceRepositories("local", [{ id: "repo_shared_raw", name: "shared", url: "https://github.com/acme/shared.git", source: "github" }]);
     const project = store.createProject({ title: "Issue project" });
@@ -232,7 +232,7 @@ describe("knowledge compilation control plane", () => {
   });
 
   it("routes ordinary task writes to Raw, trusts only token identity, and excludes Raw from recall", async () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     const project = store.createProject({ title: "Raw routing" });
     const issue = createResponsibleTestIssue(store, { title: "Collect a fact", projectId: project.id });
     const agent = store.createAgent({ name: "Executor", provider: "claude" });
@@ -283,7 +283,7 @@ describe("knowledge compilation control plane", () => {
   });
 
   it("lets a capable task publish multiple Raw inputs with deterministic preflight and provenance", async () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     store.ensureLocalWorkspace();
     const project = store.createProject({ title: "Atlas publishing" });
     const issue = createResponsibleTestIssue(store, { title: "Curate knowledge", projectId: project.id });
@@ -374,7 +374,7 @@ describe("knowledge compilation control plane", () => {
   });
 
   it("records human edits as manual compilation runs, including the seeded schema", async () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     const project = store.createProject({ title: "Manual provenance" });
     const app = createMultiremiApp({ store, authToken: "root-secret" });
     const created = await app.request(`/api/projects/${project.id}/docs`, {
@@ -404,7 +404,7 @@ describe("knowledge compilation control plane", () => {
   });
 
   it("publishes repository Wiki only for capable scoped tasks and accepts idempotent merge events", async () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     const workspace = store.ensureLocalWorkspace();
     const repositoryUrl = "git@github.com:acme/publish.git";
     store.updateWorkspaceRepositories(workspace.id, [{
@@ -555,7 +555,7 @@ describe("knowledge compilation control plane", () => {
   });
 
   it("creates one Issue Done bundle and one repository merge run per after SHA", () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     store.ensureLocalWorkspace();
     const project = store.createProject({ title: "Completion" });
     const agent = store.createAgent({ name: "Worker", provider: "claude" });
@@ -595,7 +595,7 @@ describe("knowledge compilation control plane", () => {
   });
 
   it("migrates legacy knowledge without deleting it and is retry-safe", async () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     const project = store.createProject({ title: "Legacy" });
     const legacyWiki = store.createProjectDoc(project.id, { kind: "wiki", title: "Legacy Wiki", body: "still readable" });
     const legacyMemory = store.createProjectDoc(project.id, { kind: "memory", title: "Legacy Memory", body: "still recalled" });
@@ -632,7 +632,7 @@ describe("knowledge compilation control plane", () => {
  */
 describe("knowledge list payloads (MUL-386 C.2)", () => {
   it("omits body and patch from the submissions list but keeps an excerpt", async () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     const longBody = `first line of the raw body\n${"filler ".repeat(400)}`;
     const longPatch = `--- a/file\n${"patch filler\n".repeat(200)}`;
     const submission = store.createKnowledgeSubmission({
@@ -666,7 +666,7 @@ describe("knowledge list payloads (MUL-386 C.2)", () => {
   });
 
   it("answers the submissions list from a projection that never selects body or patch", async () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     const statements: string[] = [];
     const db2 = openSqliteDatabase(":memory:");
     void db2;
@@ -712,7 +712,7 @@ describe("knowledge list payloads (MUL-386 C.2)", () => {
   });
 
   it("searches submissions server-side on body, id, path, slug, type and scope", async () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     const project = store.createProject({ title: "Search" });
     const needle = "NeeDle-Token-42";
     const hit = store.createKnowledgeSubmission({
@@ -759,7 +759,7 @@ describe("knowledge list payloads (MUL-386 C.2)", () => {
   });
 
   it("omits sources[].metadata from the runs list but keeps it on the single run", async () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     const run = store.createKnowledgeCompilationRun({
       workspaceId: "local", mode: "repository_update",
     }).run;
@@ -783,7 +783,7 @@ describe("knowledge list payloads (MUL-386 C.2)", () => {
   });
 
   it("resolves runs-list artifacts from a bounded id lookup instead of whole doc tables", async () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     const workspace = store.getWorkspace("local") ?? store.ensureLocalWorkspace();
     store.updateWorkspaceRepositories("local", [...workspace.repos, {
       id: "repo_artifact_scope", name: "artifacts", url: "https://github.com/acme/artifacts.git", source: "github",
@@ -832,3 +832,8 @@ describe("knowledge list payloads (MUL-386 C.2)", () => {
     }
   });
 });
+
+// Register hooks in this file; shared modules only load once per test process.
+let reportSnapshotStats: (() => void) | undefined;
+beforeAll(() => { reportSnapshotStats = snapshotStatsForFile(import.meta.path); });
+afterAll(() => { reportSnapshotStats?.(); });

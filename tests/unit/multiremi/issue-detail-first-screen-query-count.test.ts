@@ -109,48 +109,53 @@ async function createStore(): Promise<{ store: MultiremiStore; db: SqlDatabase }
 }
 
 describe("MUL-385 issue detail first-screen response shape", () => {
-  it("matches the pinned golden for all three routes", async () => {
+  it("matches the pinned golden, legacy timeline shape and participant hydration for all three routes", async () => {
     // The golden was captured with the same PRNG + clock pin, so ids and page
     // cursors line up and only a genuine shape change can fail this comparison.
     const restoreIds = installDeterministicIds();
     try {
-    const { store, db } = await createStore();
-    const app = createMultiremiApp({ store, authToken: AUTH_TOKEN });
-    const fixture = seedIssueDetailFirstScreenFixture(store, {
-      run: (sql, params) => { runPinned(db, sql, params); },
-    });
+      const { store, db } = await createStore();
+      const app = createMultiremiApp({ store, authToken: AUTH_TOKEN });
+      const fixture = seedIssueDetailFirstScreenFixture(store, {
+        run: (sql, params) => { runPinned(db, sql, params); },
+      });
 
-    const issueDetail = await (await app.request(`/api/issues/${fixture.issueId}`, { headers: AUTH_HEADERS })).json();
-    const sessions = await (await app.request(`/api/issues/${fixture.issueId}/sessions`, { headers: AUTH_HEADERS })).json();
-    const timeline = await (await app.request(
-      `/api/issues/${fixture.issueId}/timeline?issue_session_id=%40default&limit=40`,
-      { headers: AUTH_HEADERS },
-    )).json();
+      // Check untouched seed reads before any API route can hydrate or repair state.
+      const storedSessions = store.listIssueSessions(fixture.issueId);
+      const batched = store.listSessionParticipantsForSessions(storedSessions.map((session) => session.id));
+      for (const session of storedSessions) {
+        const expected = store.listSessionParticipants(session.id);
+        expect(batched.get(session.id)).toEqual(expected);
+        expect(expected.length).toBe(fixture.participantCountBySession[session.id]!);
+      }
 
-    // Timestamps are scrubbed on both sides: the golden carries `<timestamp>`
-    // placeholders, so field presence and value types are still compared while
-    // the wall clock is not.
-    expect(normalizeIssueDetailResponse(issueDetail)).toEqual(golden.issueDetail);
-    expect(normalizeIssueDetailResponse(sessions)).toEqual(golden.sessions);
-    expect(normalizeIssueDetailResponse(timeline)).toEqual(golden.timeline);
+      // An empty input must not issue a statement and must not invent sessions.
+      expect(store.listSessionParticipantsForSessions([]).size).toBe(0);
+
+      const issueDetail = await (await app.request(`/api/issues/${fixture.issueId}`, { headers: AUTH_HEADERS })).json();
+      const sessions = await (await app.request(`/api/issues/${fixture.issueId}/sessions`, { headers: AUTH_HEADERS })).json();
+      const timeline = await (await app.request(
+        `/api/issues/${fixture.issueId}/timeline?issue_session_id=%40default&limit=40`,
+        { headers: AUTH_HEADERS },
+      )).json();
+
+      // Timestamps are scrubbed on both sides: the golden carries `<timestamp>`
+      // placeholders, so field presence and value types are still compared while
+      // the wall clock is not.
+      expect(normalizeIssueDetailResponse(issueDetail)).toEqual(golden.issueDetail);
+      expect(normalizeIssueDetailResponse(sessions)).toEqual(golden.sessions);
+      expect(normalizeIssueDetailResponse(timeline)).toEqual(golden.timeline);
+
+      const body = await (await app.request(
+        `/api/issues/${fixture.issueId}/timeline`,
+        { headers: AUTH_HEADERS },
+      )).json();
+      expect(Array.isArray(body)).toBe(true);
+      expect(body.length).toBeGreaterThan(0);
+
     } finally {
       restoreIds();
     }
-  });
-
-  it("keeps the timeline's legacy naked-array shape when no page parameter is sent", async () => {
-    const { store, db } = await createStore();
-    const app = createMultiremiApp({ store, authToken: AUTH_TOKEN });
-    const fixture = seedIssueDetailFirstScreenFixture(store, {
-      run: (sql, params) => { runPinned(db, sql, params); },
-    });
-
-    const body = await (await app.request(
-      `/api/issues/${fixture.issueId}/timeline`,
-      { headers: AUTH_HEADERS },
-    )).json();
-    expect(Array.isArray(body)).toBe(true);
-    expect(body.length).toBeGreaterThan(0);
   });
 });
 
@@ -239,22 +244,6 @@ describe("MUL-385 issue detail first-screen query counts", () => {
     // before scanning participants), so 1 vs 10 sessions went 9 → 27.
     expect(counts[0]).toBe(4);
     expect(counts[1]).toBe(counts[0]);
-  });
-
-  it("round-trips every session's participants through the batched lookup", async () => {
-    const { store } = await createCountedStore();
-    const fixture = seedIssueDetailFirstScreenFixture(store);
-
-    const sessions = store.listIssueSessions(fixture.issueId);
-    const batched = store.listSessionParticipantsForSessions(sessions.map((session) => session.id));
-    for (const session of sessions) {
-      const expected = store.listSessionParticipants(session.id);
-      expect(batched.get(session.id)).toEqual(expected);
-      expect(expected.length).toBe(fixture.participantCountBySession[session.id]!);
-    }
-
-    // An empty input must not issue a statement and must not invent sessions.
-    expect(store.listSessionParticipantsForSessions([]).size).toBe(0);
   });
 });
 

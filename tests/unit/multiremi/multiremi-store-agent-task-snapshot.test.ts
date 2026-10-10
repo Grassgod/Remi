@@ -1,9 +1,9 @@
 import { runTurnExecutionMutation } from "@multiremi/store/turn-execution-records.js";
-import { afterEach, describe, expect, it } from "bun:test";
+import { beforeAll, afterAll, afterEach, describe, expect, it } from "bun:test";
 import type { MultiremiTask, MultiremiTaskStatus } from "@multiremi/contracts/types.js";
 import { isActiveTaskStatus } from "@multiremi/store/helpers.js";
 import type { MultiremiStore } from "@multiremi/store.js";
-import { createStore, db, resetMultiremiTestEnv } from "./helpers.js";
+import { snapshotStatsForFile, createSnapshotStore, db, resetMultiremiTestEnv } from "./helpers.js";
 
 afterEach(resetMultiremiTestEnv);
 
@@ -45,7 +45,7 @@ function expectSnapshotMatchesLegacy(store: MultiremiStore, workspaceId: string)
 
 describe("listWorkspaceAgentTaskSnapshot", () => {
   it("returns every active task in updated order", () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     const agent = store.createAgent({ name: "Active agent", provider: "codex" });
     const statuses = [
       "queued",
@@ -69,7 +69,7 @@ describe("listWorkspaceAgentTaskSnapshot", () => {
   });
 
   it("returns one terminal outcome per agent and excludes cancelled tasks", () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     const completedAgent = store.createAgent({ name: "Completed agent", provider: "codex" });
     const failedAgent = store.createAgent({ name: "Failed agent", provider: "codex" });
     const completed = store.createTask({ agentId: completedAgent.id, prompt: "completed" });
@@ -84,7 +84,7 @@ describe("listWorkspaceAgentTaskSnapshot", () => {
   });
 
   it("uses outcome time to select the latest terminal task for an agent", () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     const agent = store.createAgent({ name: "Outcome agent", provider: "codex" });
     const earlierOutcome = store.createTask({ agentId: agent.id, prompt: "earlier outcome" });
     const laterOutcome = store.createTask({ agentId: agent.id, prompt: "later outcome" });
@@ -96,7 +96,7 @@ describe("listWorkspaceAgentTaskSnapshot", () => {
   });
 
   it("does not mix tasks from another workspace", () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     const otherWorkspace = store.createWorkspace({ name: "Other workspace", slug: "other-workspace" });
     const localAgent = store.createAgent({ name: "Local agent", provider: "codex" });
     const otherAgent = store.createAgent({ name: "Other agent", provider: "codex", workspaceId: otherWorkspace.id });
@@ -112,14 +112,14 @@ describe("listWorkspaceAgentTaskSnapshot", () => {
   });
 
   it("returns an empty result when the workspace has no tasks", () => {
-    const store = createStore();
+    const store = createSnapshotStore();
 
     expectSnapshotMatchesLegacy(store, "local");
     expect(store.listWorkspaceAgentTaskSnapshot("local")).toEqual([]);
   });
 
   it("looks up autopilot runs in batches when the snapshot exceeds 500 tasks", () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     const agent = store.createAgent({ name: "Large snapshot agent", provider: "codex" });
     const tasks = Array.from({ length: 501 }, (_, index) => store.createTask({
       agentId: agent.id,
@@ -139,3 +139,8 @@ describe("listWorkspaceAgentTaskSnapshot", () => {
     expect(snapshot.find((task) => task.id === tasks.at(-1)!.id)?.autopilotRunId).toBe(runId);
   });
 });
+
+// Register hooks in this file; shared modules only load once per test process.
+let reportSnapshotStats: (() => void) | undefined;
+beforeAll(() => { reportSnapshotStats = snapshotStatsForFile(import.meta.path); });
+afterAll(() => { reportSnapshotStats?.(); });

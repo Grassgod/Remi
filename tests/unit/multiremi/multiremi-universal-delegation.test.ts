@@ -18,7 +18,6 @@ import { inboxReportBody, inboxReportEntry } from "./inbox-test-assertions.js";
 const pgAdminUrl = process.env.MULTIREMI_TEST_POSTGRES_URL;
 let sequence = 0;
 type Backend = "sqlite" | "postgres";
-type Entry = "task" | "session" | "rerun";
 
 async function withStore(backend: Backend, run: (store: MultiremiStore, db: SqlDatabase) => Promise<void>) {
   if (backend === "sqlite") {
@@ -82,7 +81,7 @@ async function request(store: MultiremiStore, source: MultiremiTask | null, path
 }
 
 async function dispatchResponse(store: MultiremiStore, source: MultiremiTask | null, issue: MultiremiIssue,
-  agentId: string, entry: Entry = "task", issueSessionId?: string) {
+  agentId: string, issueSessionId?: string) {
   const sessionId = issueSessionId ?? store.getOrCreateDefaultIssueSession(issue.id).id;
   // All former task/session/rerun entry points now send an explicit request.
   const body = { agentId, issueId: issue.id, issueSessionId: sessionId,
@@ -93,8 +92,8 @@ async function dispatchResponse(store: MultiremiStore, source: MultiremiTask | n
 }
 
 async function dispatch(store: MultiremiStore, source: MultiremiTask, issue: MultiremiIssue,
-  agentId: string, entry: Entry = "task", sessionId?: string) {
-  const response = await dispatchResponse(store, source, issue, agentId, entry, sessionId);
+  agentId: string, sessionId?: string) {
+  const response = await dispatchResponse(store, source, issue, agentId, sessionId);
   expect(response.status).toBe(200);
   return sentTask(store, await response.json());
 }
@@ -146,7 +145,7 @@ async function chain(store: MultiremiStore, f: ReturnType<typeof fixture>, hops:
       const target = source.agentId === f.qa.id ? f.atlas : f.qa;
       const targetIssue = target.id === f.qa.id ? f.a : f.b;
       const targetSession = target.id === f.qa.id ? f.s0 : f.s1;
-      const child = await dispatch(store, source, targetIssue, target.id, "task", targetSession.id);
+      const child = await dispatch(store, source, targetIssue, target.id, targetSession.id);
       store.completeTask(source.id, { output: "Dispatched." });
       start(store, child);
       count++;
@@ -174,12 +173,14 @@ function expectDowngradedMessage(store: MultiremiStore, result: any, source: Mul
 for (const backend of ["sqlite", "postgres"] as const) {
   const timeout = backend === "postgres" ? 180_000 : 15_000;
   describe.skipIf(backend === "postgres" && !pgAdminUrl)(`MUL-510 universal delegation (${backend})`, () => {
-    for (const entry of ["task", "session", "rerun"] as const) {
+    // Former task/session/rerun labels all resolved to the identical canonical
+    // request after migration; exercise the real request once per terminal state.
+    {
       for (const terminal of ["completed", "failed", "cancelled"] as const) {
-        it(`${entry}: returns ${terminal} from B/S1 to an unassigned A/S0 exactly once (C1/C1'/C2/C3)`,
+        it(`canonical request: returns ${terminal} from B/S1 to an unassigned A/S0 exactly once (C1/C1'/C2/C3)`,
           async () => withStore(backend, async store => {
             const f = fixture(store);
-            const child = await dispatch(store, f.source, f.b, f.atlas.id, entry, f.s1.id);
+            const child = await dispatch(store, f.source, f.b, f.atlas.id, f.s1.id);
             const targetSessionId = f.s1.id;
             expect(child).toMatchObject({ parentTaskId: null, delegatedByAgentId: f.qa.id,
               delegatedFromIssueSessionId: f.s0.id, issueSessionId: targetSessionId });
@@ -234,15 +235,15 @@ for (const backend of ["sqlite", "postgres"] as const) {
       }
     }
 
-    for (const entry of ["task", "session"] as const) {
-      it(`${entry}: reproduces a leader in unassigned A/S0 dispatching QA to B (C1/C1')`,
+    {
+      it("canonical request: reproduces a leader in unassigned A/S0 dispatching QA to B (C1/C1')",
         async () => withStore(backend, async store => {
           const f = fixture(store);
           store.completeTask(f.source.id, { output: "QA first round ended." });
           const leaderSource = store.createTask({ agentId: f.leader.id, issueId: f.a.id,
             issueSessionId: f.s0.id, prompt: "Dispatch acceptance." });
           start(store, leaderSource);
-          const child = await dispatch(store, leaderSource, f.b, f.qa.id, entry, f.s1.id);
+          const child = await dispatch(store, leaderSource, f.b, f.qa.id, f.s1.id);
           expect(child).toMatchObject({ delegatedByAgentId: f.leader.id, parentTaskId: null,
             delegatedFromIssueSessionId: f.s0.id, issueSessionId: f.s1.id });
           expect(sourceTaskId(store, child)).toBe(leaderSource.id);
@@ -262,7 +263,7 @@ for (const backend of ["sqlite", "postgres"] as const) {
         }), timeout);
     }
 
-    for (const entry of ["task", "session", "mention"] as const) {
+    for (const entry of ["request", "mention"] as const) {
       it(`${entry}: a human-assigned QA delegates to Atlas in another ordinary Session on the same Issue`,
         async () => withStore(backend, async store => {
           const f = fixture(store, true);
@@ -271,7 +272,7 @@ for (const backend of ["sqlite", "postgres"] as const) {
           if (entry === "mention") {
             expect((await mention(store, f.source, f.a, targetSession.id, f.atlas.id)).status).toBe(200);
             child = store.listTasksForIssue(f.a.id).find(t => t.agentId === f.atlas.id)!;
-          } else child = await dispatch(store, f.source, f.a, f.atlas.id, entry, targetSession.id);
+          } else child = await dispatch(store, f.source, f.a, f.atlas.id, targetSession.id);
           // Same-Issue task credentials bind comments to the source Session.
           expect(child).toMatchObject({ issueSessionId: targetSession.id, delegatedByAgentId: f.qa.id,
             delegatedFromIssueSessionId: f.s0.id, parentTaskId: null });
@@ -314,8 +315,8 @@ for (const backend of ["sqlite", "postgres"] as const) {
         expect(store.listTasks().length).toBe(before + 1);
       }), timeout);
 
-    for (const leaderEntry of ["task", "mention"] as const) {
-      it(`two dispatchers share B/S1 with leader ${leaderEntry} and QA ${leaderEntry === "task" ? "mention" : "task"}, then return independently (R10)`,
+    for (const leaderEntry of ["request", "mention"] as const) {
+      it(`two dispatchers share B/S1 with leader ${leaderEntry} and QA ${leaderEntry === "request" ? "mention" : "request"}, then return independently (R10)`,
         async () => withStore(backend, async store => {
           const f = fixture(store);
           const leaderSession = store.createIssueSession(f.a.id, { title: "Leader S0" });
@@ -324,10 +325,10 @@ for (const backend of ["sqlite", "postgres"] as const) {
           start(store, leaderSource);
           const sources = [
             { task: leaderSource, entry: leaderEntry },
-            { task: f.source, entry: leaderEntry === "task" ? "mention" : "task" },
+            { task: f.source, entry: leaderEntry === "request" ? "mention" : "request" },
           ] as const;
           for (const source of sources) {
-            if (source.entry === "task") await dispatch(store, source.task, f.b, f.atlas.id, "task", f.s1.id);
+            if (source.entry === "request") await dispatch(store, source.task, f.b, f.atlas.id, f.s1.id);
             else expect((await mention(store, source.task, f.b, f.s1.id, f.atlas.id)).status).toBe(200);
           }
           const children = store.listTasksForIssue(f.b.id);
@@ -461,7 +462,7 @@ for (const backend of ["sqlite", "postgres"] as const) {
           let source = f.source;
           for (let round = 0; round < limit; round++) {
             expect(store.countDelegationPairHops(source, f.atlas.id)).toBe(2 * round);
-            const child = await dispatch(store, source, f.b, f.atlas.id, "task", f.s1.id);
+            const child = await dispatch(store, source, f.b, f.atlas.id, f.s1.id);
             store.completeTask(source.id, { output: "Dispatched." });
             start(store, child);
             store.completeTask(child.id, { output: "Result." });
@@ -470,8 +471,9 @@ for (const backend of ["sqlite", "postgres"] as const) {
           }
           expect(store.countDelegationPairHops(source, f.atlas.id)).toBe(2 * limit);
           const before = store.listTasks().length;
-          for (const entry of ["task", "session", "rerun"] as const) {
-            const response = await dispatchResponse(store, source, f.b, f.atlas.id, entry, f.s1.id);
+          // Replayed canonical requests must still produce only one limit notice.
+          for (let replay = 0; replay < 3; replay++) {
+            const response = await dispatchResponse(store, source, f.b, f.atlas.id, f.s1.id);
             expect(response.status).toBe(200);
             expectDowngradedMessage(store, await response.json(), source, f.atlas.id);
             expect(store.listTasks().length).toBe(before);
@@ -531,8 +533,8 @@ for (const backend of ["sqlite", "postgres"] as const) {
         const source = await chain(store, f, 4);
         expect(store.countDelegationPairHops(source, f.atlas.id)).toBe(4);
         expect(store.countDelegationPairHops(source, f.leader.id)).toBe(1);
-        const third = await dispatch(store, source, f.a, f.leader.id, "task", f.s0.id);
-        const afterThird = await dispatch(store, third, f.a, f.qa.id, "task", f.s0.id);
+        const third = await dispatch(store, source, f.a, f.leader.id, f.s0.id);
+        const afterThird = await dispatch(store, third, f.a, f.qa.id, f.s0.id);
         expect(store.countDelegationPairHops(afterThird, f.atlas.id)).toBe(1);
         // Corrupt one edge of the real four-hop chain to probe the stop conditions.
         const trigger = store.getTurn(source.id)!.trigger_message_id!;
@@ -576,9 +578,9 @@ for (const backend of ["sqlite", "postgres"] as const) {
         const chat = store.createChatSession({ agentId: f.qa.id, creatorId: "local" });
         const chatSource = store.createTask({ agentId: f.qa.id, chatSessionId: chat.id, prompt: "Chat source" });
         for (const source of [detached, chatSource]) {
-          for (const entry of ["task", "session"] as const) {
+          for (let replay = 0; replay < 2; replay++) {
             const before = store.listTasks().length;
-            const response = await dispatchResponse(store, source, f.b, f.atlas.id, entry);
+            const response = await dispatchResponse(store, source, f.b, f.atlas.id);
             expect(response.status).toBe(200);
             const result = await response.json();
             expect(result).toMatchObject({ wake_applied: "next_turn", wake_reason: "no_issue_target" });
@@ -603,7 +605,7 @@ for (const backend of ["sqlite", "postgres"] as const) {
         let source = f.source;
         let previous: MultiremiTask | null = null;
         for (let round = 0; round < 2; round++) {
-          const child = await dispatch(store, source, f.a, f.atlas.id, "task", f.s0.id);
+          const child = await dispatch(store, source, f.a, f.atlas.id, f.s0.id);
           previous ??= child;
           store.completeTask(source.id, { output: "Dispatched." });
           start(store, child);
@@ -612,7 +614,7 @@ for (const backend of ["sqlite", "postgres"] as const) {
           start(store, source);
         }
         expect(store.countDelegationPairHops(source, f.atlas.id)).toBe(4);
-        const foreign = await withLimit("50", () => dispatch(store, source, f.b, f.atlas.id, "task", f.s1.id));
+        const foreign = await withLimit("50", () => dispatch(store, source, f.b, f.atlas.id, f.s1.id));
         const before = store.listTasks().length;
         const response = await request(store, source, `/api/sessions/${f.s0.id}/messages`, requestMessageBody(store, {
           agentId: f.atlas.id, continueTaskId: previous!.id, prompt: "Another round" }));

@@ -3,16 +3,16 @@ import { taskOfferResponse } from "../../fixtures/task-offer.js";
 import { reportFrame } from "../../fixtures/report-session.js";
 // Runtime metadata/usage, console scoping, delete cascade, and the async request
 // queues (model list, update, local skill list/import) plus register/deregister.
-import { afterEach, describe, expect, it } from "bun:test";
+import { beforeAll, afterAll, afterEach, describe, expect, it } from "bun:test";
 import { receiveRuntimeInputs } from "../../fixtures/runtime-downlinks.js";
 import { createMultiremiApp } from "@multiremi/api.js";
-import { createStore, db, metricValue, resetMultiremiTestEnv } from "./helpers.js";
+import { snapshotStatsForFile, createSnapshotStore, db, metricValue, resetMultiremiTestEnv } from "./helpers.js";
 
 afterEach(resetMultiremiTestEnv);
 
 describe("Multiremi API — runtimes and runtime request queues", () => {
   it("accepts runtime model snapshots only from the bound daemon identity", async () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     const runtime = store.registerRuntime({
       id: "rt_daemon_models",
       name: "Daemon models runtime",
@@ -183,7 +183,7 @@ describe("Multiremi API — runtimes and runtime request queues", () => {
   });
 
   it("serves runtime metadata updates and usage endpoints", async () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     const member = store.createWorkspaceMember({ name: "Ada", workspaceId: "local" });
     const agent = store.createAgent({ name: "Codex", provider: "codex" });
     const task = store.createTask({ agentId: agent.id, prompt: "usage" });
@@ -359,7 +359,7 @@ describe("Multiremi API — runtimes and runtime request queues", () => {
 
   // A legacy total cannot establish actual consumption or context occupancy.
   it("retains ambiguous total-only evidence as unknown across runtime and dashboard APIs", async () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     store.registerRuntime({ id: "rt_total_only", name: "Legacy runtime", provider: "claude", workspaceId: "local" });
     const agent = store.createAgent({ name: "Legacy agent", provider: "claude", workspaceId: "local" });
     const task = store.createTask({ agentId: agent.id, workspaceId: "local", prompt: "legacy usage" });
@@ -393,7 +393,7 @@ describe("Multiremi API — runtimes and runtime request queues", () => {
   });
 
   it("forwards total_tokens alongside splits when a modern daemon reports both", async () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     store.registerRuntime({ id: "rt_split", name: "Modern runtime", provider: "claude", workspaceId: "local" });
     const agent = store.createAgent({ name: "Modern agent", provider: "claude", workspaceId: "local" });
     const task = store.createTask({ agentId: agent.id, workspaceId: "local", prompt: "modern usage" });
@@ -432,7 +432,7 @@ describe("Multiremi API — runtimes and runtime request queues", () => {
   });
 
   it("scopes runtime console APIs by workspace and owner permissions", async () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     store.createWorkspaceMember({ id: "alice", userId: "alice", name: "Alice", role: "member" });
     store.createWorkspaceMember({ id: "bob", userId: "bob", name: "Bob", role: "member" });
     store.createWorkspaceMember({ id: "admin", userId: "admin", name: "Admin", role: "admin" });
@@ -561,7 +561,7 @@ describe("Multiremi API — runtimes and runtime request queues", () => {
   });
 
   it("matches Go runtime delete cascade contracts", async () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     const runtime = store.registerRuntime({ id: "rt_delete_contract", name: "Delete contract", provider: "codex" });
     const agent = store.createAgent({
       id: "agt_delete_contract",
@@ -641,7 +641,7 @@ describe("Multiremi API — runtimes and runtime request queues", () => {
   });
 
   it("fails closed when ordinary deletion would orphan an in-flight task", async () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     const runtime = store.registerRuntime({
       id: "rt_delete_in_flight",
       name: "Delete in-flight",
@@ -680,7 +680,7 @@ describe("Multiremi API — runtimes and runtime request queues", () => {
   });
 
   it("rechecks active Agents after taking the Runtime lifecycle lock", async () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     const runtime = store.registerRuntime({
       id: "rt_delete_agent_race",
       name: "Delete Agent race",
@@ -714,7 +714,7 @@ describe("Multiremi API — runtimes and runtime request queues", () => {
   });
 
   it("protects the last local daemon Runtime while leaving Cloud Runtime deletion unaffected", async () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     const lastLocal = store.registerRuntime({
       id: "rt_last_local_daemon",
       name: "Last local daemon Runtime",
@@ -763,7 +763,7 @@ describe("Multiremi API — runtimes and runtime request queues", () => {
   });
 
   it("serves runtime model list request flow", async () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     store.registerRuntime({
       id: "rt_models_flow",
       name: "Models runtime",
@@ -907,7 +907,7 @@ describe("Multiremi API — runtimes and runtime request queues", () => {
   });
 
   it("serves runtime update request flow", async () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     store.registerRuntime({ id: "rt_update_flow", name: "Update runtime", provider: "codex" });
     const app = createMultiremiApp({ store });
 
@@ -1066,7 +1066,7 @@ describe("Multiremi API — runtimes and runtime request queues", () => {
   });
 
   it("supports ACP-scope update requests (no target version, defaults to latest)", async () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     const runtime = store.registerRuntime({ id: "rt_acp_update", name: "ACP update runtime", provider: "codex" });
     const app = createMultiremiApp({ store });
 
@@ -1089,7 +1089,7 @@ describe("Multiremi API — runtimes and runtime request queues", () => {
   });
 
   it("supports agent-scope update requests (runs the agent CLI updater)", async () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     const runtime = store.registerRuntime({ id: "rt_agent_update", name: "Agent update runtime", provider: "claude" });
     const app = createMultiremiApp({ store });
 
@@ -1109,7 +1109,7 @@ describe("Multiremi API — runtimes and runtime request queues", () => {
   });
 
   it("serves runtime local skill list and import request flows", async () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     const runtime = store.registerRuntime({ name: "skill-runtime", provider: "claude", workspaceId: "local" });
     const app = createMultiremiApp({ store });
 
@@ -1339,7 +1339,7 @@ describe("Multiremi API — runtimes and runtime request queues", () => {
   });
 
   it("keeps HTTP heartbeat upgrade-only while v2 delivers pending requests", async () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     const runtime = store.registerRuntime({ id: "rt_heartbeat_flow", name: "Heartbeat runtime", provider: "codex" });
     const agent = store.createAgent({ name: "Codex", provider: "codex" });
     const issue = createResponsibleTestIssue(store, { title: "Do not steal heartbeat requests" });
@@ -1444,7 +1444,7 @@ describe("Multiremi API — runtimes and runtime request queues", () => {
   });
 
   it("records Go-style runtime_failed telemetry when daemon register persistence fails", async () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     store.ensureLocalWorkspace();
     const app = createMultiremiApp({ store });
     store.registerDaemonRuntimeBatch = (() => {
@@ -1487,3 +1487,8 @@ describe("Multiremi API — runtimes and runtime request queues", () => {
     expect(store.listAnalyticsEvents({ includeMetricsOnly: false }).some((analyticsEvent) => analyticsEvent.name === "runtime_failed")).toBe(false);
   });
 });
+
+// Register hooks in this file; shared modules only load once per test process.
+let reportSnapshotStats: (() => void) | undefined;
+beforeAll(() => { reportSnapshotStats = snapshotStatsForFile(import.meta.path); });
+afterAll(() => { reportSnapshotStats?.(); });

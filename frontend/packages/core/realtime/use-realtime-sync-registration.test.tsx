@@ -162,12 +162,6 @@ describe("useRealtimeSync — registration / teardown parity", () => {
     renderHook(() => useRealtimeSync(mock.ws, stores), { wrapper: createWrapper(qc) });
 
     expect(mock.registered).toEqual(["*", ...EXPECTED_EVENTS]);
-  });
-
-  it("registers each event exactly once", () => {
-    const mock = createRecordingWs();
-    renderHook(() => useRealtimeSync(mock.ws, stores), { wrapper: createWrapper(qc) });
-
     expect(new Set(mock.registered).size).toBe(mock.registered.length);
   });
 

@@ -1,18 +1,18 @@
 import { receiveRuntimeInputs } from "../../fixtures/runtime-downlinks.js";
 import { reportFrame } from "../../fixtures/report-session.js";
-import { afterEach, describe, expect, it } from "bun:test";
+import { beforeAll, afterAll, afterEach, describe, expect, it } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { browseRuntimeDirectory, scanRuntimeDirectories } from "@multiremi/daemon.js";
-import { createStore, db, resetMultiremiTestEnv } from "./helpers.js";
+import { snapshotStatsForFile, createSnapshotStore, db, resetMultiremiTestEnv } from "./helpers.js";
 
 afterEach(resetMultiremiTestEnv);
 
 describe("Bun Multiremi runtime directory scan", () => {
   it("runs the queue lifecycle create → claim → report", () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     const runtime = store.registerRuntime({ id: "rt_dirscan_lifecycle", name: "Scan runtime", provider: "codex" });
 
     const request = store.createRuntimeDirectoryScanRequest(runtime.id, { root: "~/code", maxDepth: 2 });
@@ -50,7 +50,7 @@ describe("Bun Multiremi runtime directory scan", () => {
   });
 
   it("reports failure with the daemon-provided error", () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     const runtime = store.registerRuntime({ id: "rt_dirscan_failure", name: "Scan runtime", provider: "codex" });
     const request = store.createRuntimeDirectoryScanRequest(runtime.id);
     store.claimRuntimeDirectoryScanRequest(runtime.id);
@@ -64,14 +64,14 @@ describe("Bun Multiremi runtime directory scan", () => {
   });
 
   it("refuses to enqueue a scan for an offline runtime", () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     const runtime = store.registerRuntime({ id: "rt_dirscan_offline", name: "Offline runtime", provider: "codex", status: "offline" });
     expect(runtime.status).toBe("offline");
     expect(() => store.createRuntimeDirectoryScanRequest(runtime.id)).toThrow("runtime is offline");
   });
 
   it("only claims a directory scan when the daemon advertises support", async () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     const runtime = store.registerRuntime({ id: "rt_dirscan_capability", name: "Scan runtime", provider: "codex" });
     const request = store.createRuntimeDirectoryScanRequest(runtime.id, { root: "/srv/work", maxDepth: 4 });
 
@@ -91,7 +91,7 @@ describe("Bun Multiremi runtime directory scan", () => {
   });
 
   it("times out a pending scan the daemon never picks up", () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     const runtime = store.registerRuntime({ id: "rt_dirscan_pending_timeout", name: "Scan runtime", provider: "codex" });
     const request = store.createRuntimeDirectoryScanRequest(runtime.id);
 
@@ -111,7 +111,7 @@ describe("Bun Multiremi runtime directory scan", () => {
   });
 
   it("times out a running scan the daemon never finishes", () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     const runtime = store.registerRuntime({ id: "rt_dirscan_running_timeout", name: "Scan runtime", provider: "codex" });
     const request = store.createRuntimeDirectoryScanRequest(runtime.id);
     store.claimRuntimeDirectoryScanRequest(runtime.id);
@@ -138,7 +138,7 @@ describe("Bun Multiremi runtime directory scan", () => {
   });
 
   it("keeps a terminal result idempotent under repeated reports", () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     const runtime = store.registerRuntime({ id: "rt_dirscan_idempotent", name: "Scan runtime", provider: "codex" });
     const request = store.createRuntimeDirectoryScanRequest(runtime.id);
     store.claimRuntimeDirectoryScanRequest(runtime.id);
@@ -157,7 +157,7 @@ describe("Bun Multiremi runtime directory scan", () => {
   });
 
   it("serves the runtime directory scan HTTP flow across both URL variants", async () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     const runtime = store.registerRuntime({ id: "rt_dirscan_http", name: "Scan runtime", provider: "codex" });
     const app = createMultiremiApp({ store });
 
@@ -247,7 +247,7 @@ describe("Bun Multiremi runtime directory scan", () => {
   });
 
   it("rejects a directory scan for an offline runtime over HTTP with 503", async () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     const runtime = store.registerRuntime({ id: "rt_dirscan_http_offline", name: "Offline runtime", provider: "codex", status: "offline" });
     const app = createMultiremiApp({ store });
 
@@ -269,7 +269,7 @@ describe("Bun Multiremi runtime directory scan", () => {
   });
 
   it("forbids initiating a directory scan on another owner's runtime", async () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     const runtime = store.registerRuntime({ id: "rt_dirscan_owned", name: "Owned runtime", provider: "codex", workspaceId: "local", ownerId: "someone-else" });
     const app = createMultiremiApp({ store });
 
@@ -290,7 +290,7 @@ describe("Bun Multiremi runtime directory scan", () => {
   });
 
   it("embeds the browse mode in params and the heartbeat ack", async () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     const runtime = store.registerRuntime({ id: "rt_dirscan_mode", name: "Scan runtime", provider: "codex" });
     const request = store.createRuntimeDirectoryScanRequest(runtime.id, { root: "~/code", mode: "browse" });
     expect(request.params).toEqual({ root: "~/code", mode: "browse" });
@@ -300,14 +300,14 @@ describe("Bun Multiremi runtime directory scan", () => {
   });
 
   it("rejects an unknown scan mode", () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     const runtime = store.registerRuntime({ id: "rt_dirscan_bad_mode", name: "Scan runtime", provider: "codex" });
     expect(() => store.createRuntimeDirectoryScanRequest(runtime.id, { mode: "sideways" as "scan" | "browse" }))
       .toThrow('directory scan mode must be "scan" or "browse"');
   });
 
   it("rejects an unknown scan mode over HTTP with 400 on both URL variants", async () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     const runtime = store.registerRuntime({ id: "rt_dirscan_bad_mode_http", name: "Scan runtime", provider: "codex" });
     const app = createMultiremiApp({ store });
 
@@ -323,7 +323,7 @@ describe("Bun Multiremi runtime directory scan", () => {
   });
 
   it("passes browse mode through the compat rail and emits is_git_repo", async () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     const runtime = store.registerRuntime({ id: "rt_dirscan_browse_http", name: "Scan runtime", provider: "codex" });
     const app = createMultiremiApp({ store });
 
@@ -439,3 +439,8 @@ describe("browseRuntimeDirectory", () => {
     await expect(browseRuntimeDirectory("/no/such/dir/remi-browse")).rejects.toThrow("directory does not exist:");
   });
 });
+
+// Register hooks in this file; shared modules only load once per test process.
+let reportSnapshotStats: (() => void) | undefined;
+beforeAll(() => { reportSnapshotStats = snapshotStatsForFile(import.meta.path); });
+afterAll(() => { reportSnapshotStats?.(); });

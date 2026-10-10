@@ -111,4 +111,4 @@ pendingTurnBackendTests("MUL-492 recovered nested delegation lineage", fixture =
     expect(f.store.listTasksForIssue(issue.id).find(t => t.status === "queued"))
       .toMatchObject({ execution_scope: "", parentTaskId: null, delegationId: null, delegatedByAgentId: null });
   });
-});
+}, { isolation: 'committed-baseline' });

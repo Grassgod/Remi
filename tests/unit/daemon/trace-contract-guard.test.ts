@@ -45,8 +45,20 @@ const REPO_ROOT = join(import.meta.dir, "../../..");
  * producer need not reference a sink or TaskMessageInput to be in scope.
  */
 
+// All cases inspect the same immutable checkout. Cache discovery/source/inventory,
+// not assertions, so positive controls and every drift check still execute.
+let sourceFilesSnapshot: string[] | undefined;
+const sourceTextSnapshot = new Map<string, string>();
+const sourceText = (file: string): string => {
+  if (!sourceTextSnapshot.has(file)) sourceTextSnapshot.set(file, readFileSync(file, "utf8"));
+  return sourceTextSnapshot.get(file)!;
+};
+let producerFilesSnapshot: Array<{ file: string; reason: string }> | undefined;
+let producerTypesSnapshot: Map<string, string[]> | undefined;
+
 /** Every source file under the given roots, tests and build output excluded. */
-function sourceFiles(): string[] {
+function sourceFiles(): readonly string[] {
+  if (sourceFilesSnapshot) return sourceFilesSnapshot;
   const roots = [
     join(REPO_ROOT, "packages"),
     join(REPO_ROOT, "apps"),
@@ -74,7 +86,7 @@ function sourceFiles(): string[] {
       // that do exist are read.
     }
   }
-  return out;
+  return sourceFilesSnapshot = out;
 }
 
 const rel = (file: string): string => file.replace(`${REPO_ROOT}/`, "");
@@ -124,11 +136,12 @@ const NON_EVENT_FILES: Record<string, string> = {
 };
 
 /** The files to read the type inventory from, and why each is in scope. */
-function producerFiles(): Array<{ file: string; reason: string }> {
+function producerFiles(): ReadonlyArray<{ readonly file: string; readonly reason: string }> {
+  if (producerFilesSnapshot) return producerFilesSnapshot;
   const out = new Map<string, string>();
 
   for (const file of sourceFiles()) {
-    const src = readFileSync(file, "utf8");
+    const src = sourceText(file);
     const sink = WRITE_SINK_PATTERNS.find(({ re }) => re.test(src));
     if (sink) out.set(file, `calls ${sink.label}`);
   }
@@ -141,7 +154,7 @@ function producerFiles(): Array<{ file: string; reason: string }> {
     }
   }
 
-  return [...out.entries()].map(([file, reason]) => ({ file, reason }));
+  return producerFilesSnapshot = [...out.entries()].map(([file, reason]) => ({ file, reason }));
 }
 
 /**
@@ -166,7 +179,8 @@ const CHUNK_TERNARY_RE =
  *   2. the mapper's chunk ternary
  *   3. a `reportHumanRequestMessage(..., "x", ...)` positional argument
  */
-function producerEventTypes(): Map<string, string[]> {
+function producerEventTypes(): ReadonlyMap<string, readonly string[]> {
+  if (producerTypesSnapshot) return producerTypesSnapshot;
   const found = new Map<string, string[]>();
   const add = (type: string, file: string): void => {
     const files = found.get(type) ?? [];
@@ -175,7 +189,7 @@ function producerEventTypes(): Map<string, string[]> {
   };
 
   for (const { file } of producerFiles()) {
-    const src = readFileSync(file, "utf8");
+    const src = sourceText(file);
     const source = ts.createSourceFile(file, src, ts.ScriptTarget.Latest, true);
     const controls: Array<[number, number]> = [];
     const visit = (node: ts.Node): void => {
@@ -210,7 +224,7 @@ function producerEventTypes(): Map<string, string[]> {
       add(match[1]!, file);
     }
   }
-  return found;
+  return producerTypesSnapshot = found;
 }
 
 describe("trace contract drift guards", () => {

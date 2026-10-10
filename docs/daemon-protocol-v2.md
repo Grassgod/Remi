@@ -676,10 +676,13 @@ B8 回填在 Bun 里解析，SQL 里不用 `::jsonb`）。
 | `meta` | 64 KiB |
 
 `input` / `meta` 另有 JSON 深度 8、数组 256、**base64 消隐**（长度 > 4096 且形如 base64 的字符串）
-三项结构处理，与 `sanitizeTaskMessageJson` 一致。UTF-8 边界的截断方式（按字节切、去掉尾部
-U+FFFD、追加 `… [truncated]`）也逐字一致。实现是 `packages/shared/src/trace-sanitize.ts`，
-由 `tests/unit/daemon/trace-sanitize-equivalence.test.ts` 用同一组夹具同时喂给它和
-`tasks-repo.ts` 的现行实现，断言输出相等；A-6 删掉旧写路径时该测试的 tasks-repo 一侧随之删除。
+三项结构处理由 [共享 sanitizer](../packages/shared/src/trace-sanitize.ts)统一实现。UTF-8
+截断按字节切、去掉尾部 U+FFFD、追加 `… [truncated]`。
+[边界夹具](../tests/unit/daemon/trace-sanitize-equivalence.test.ts)直接断言 UTF-8、阈值两侧、
+深度、数组宽度、base64 消隐及截断后结构解析；不再把委托同一 sanitizer 的旧 DB writer
+当作独立参照。[共享 TraceStore 契约](../tests/unit/daemon/trace-store-contract.ts)分别用于
+内存与文件 Store，验证 append 上的 cap、seq、关闭与分页；文件恢复和磁盘安全另由
+[文件 Store 用例](../tests/unit/daemon/trace-file-store.test.ts)覆盖。
 
 `TaskMessageBatcher` 的 64 KiB 是 text/thinking 的**合并上限**，不是截断上限（裁决 6b）；
 截断上限只有 `TraceStore.append` 一处。

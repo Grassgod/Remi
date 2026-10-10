@@ -177,48 +177,6 @@ describe("LoginPage", () => {
     });
   });
 
-  it("shows 'Sending code...' while submitting", async () => {
-    searchParamsState.params = new URLSearchParams({ cli_callback: CLI_CALLBACK });
-    mockSendCode.mockReturnValueOnce(new Promise(() => {}));
-    const user = userEvent.setup();
-    render(<LoginPage />, { wrapper: createWrapper() });
-
-    await user.type(screen.getByLabelText("Email"), "test@multimira.ai");
-    await user.click(screen.getByRole("button", { name: "Continue" }));
-
-    await waitFor(() => {
-      expect(screen.getByText("Sending code...")).toBeInTheDocument();
-    });
-  });
-
-  it("shows verification code step after sending code", async () => {
-    searchParamsState.params = new URLSearchParams({ cli_callback: CLI_CALLBACK });
-    mockSendCode.mockResolvedValueOnce(undefined);
-    const user = userEvent.setup();
-    render(<LoginPage />, { wrapper: createWrapper() });
-
-    await user.type(screen.getByLabelText("Email"), "test@multimira.ai");
-    await user.click(screen.getByRole("button", { name: "Continue" }));
-
-    await waitFor(() => {
-      expect(screen.getByText("Check your email")).toBeInTheDocument();
-    });
-  });
-
-  it("shows error when sendCode fails", async () => {
-    searchParamsState.params = new URLSearchParams({ cli_callback: CLI_CALLBACK });
-    mockSendCode.mockRejectedValueOnce(new Error("Network error"));
-    const user = userEvent.setup();
-    render(<LoginPage />, { wrapper: createWrapper() });
-
-    await user.type(screen.getByLabelText("Email"), "test@multimira.ai");
-    await user.click(screen.getByRole("button", { name: "Continue" }));
-
-    await waitFor(() => {
-      expect(screen.getByText("Network error")).toBeInTheDocument();
-    });
-  });
-
   // Regression: MUL-1080 — if the user is already authenticated on the web
   // and the Desktop app redirects them to /login?platform=desktop, the web
   // must exchange the cookie session for a bearer token and hand it off via

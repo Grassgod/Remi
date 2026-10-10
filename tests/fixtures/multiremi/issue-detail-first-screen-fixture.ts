@@ -483,7 +483,8 @@ export function normalizeIssueDetailResponse(value: unknown): unknown {
  * harness uses (`scripts/snapshot-api-routes.ts`), scoped to this fixture.
  */
 export function installDeterministicIds(): () => void {
-  const realGetRandomValues = globalThis.crypto.getRandomValues.bind(globalThis.crypto);
+  // Restore the exact function object; a bound copy leaks identity changes.
+  const realGetRandomValues = globalThis.crypto.getRandomValues;
   const RealDate = globalThis.Date;
   // One tick per read, like the route snapshot harness: stable ordering with no
   // ties, and no chance of two rows sharing a timestamp.

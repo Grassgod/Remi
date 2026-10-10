@@ -131,37 +131,49 @@ describe("operations CLI authorization boundaries", () => {
   });
 
   it("keeps SCM, billing, and Lark responses free of configured secret values", async () => {
-    process.env.MULTIREMI_SCM_ENCRYPTION_KEY = Buffer.alloc(32, 13).toString("base64");
-    process.env.MULTIREMI_LARK_APP_SECRET = "lark-app-secret-never-return";
-    process.env.STRIPE_SECRET_KEY = "stripe-secret-never-return";
-    const store = createStore();
-    store.ensureLocalWorkspace();
-    store.createScmConnection({
-      workspaceId: "local",
-      name: "Secret-safe GitHub",
-      provider: "github",
-      mode: "poll",
-      accessToken: "scm-token-never-return",
-      webhookSecret: "scm-webhook-never-return",
-    });
-    const app = createMultiremiApp({ store, authToken: "root-operations-secret" });
-    const headers = { Authorization: "Bearer root-operations-secret" };
-    const secretValues = [
-      "scm-token-never-return",
-      "scm-webhook-never-return",
-      "lark-app-secret-never-return",
-      "stripe-secret-never-return",
-    ];
+    const previousEnv = {
+      MULTIREMI_SCM_ENCRYPTION_KEY: process.env.MULTIREMI_SCM_ENCRYPTION_KEY,
+      MULTIREMI_LARK_APP_SECRET: process.env.MULTIREMI_LARK_APP_SECRET,
+      STRIPE_SECRET_KEY: process.env.STRIPE_SECRET_KEY,
+    };
+    try {
+      process.env.MULTIREMI_SCM_ENCRYPTION_KEY = Buffer.alloc(32, 13).toString("base64");
+      process.env.MULTIREMI_LARK_APP_SECRET = "lark-app-secret-never-return";
+      process.env.STRIPE_SECRET_KEY = "stripe-secret-never-return";
+      const store = createStore();
+      store.ensureLocalWorkspace();
+      store.createScmConnection({
+        workspaceId: "local",
+        name: "Secret-safe GitHub",
+        provider: "github",
+        mode: "poll",
+        accessToken: "scm-token-never-return",
+        webhookSecret: "scm-webhook-never-return",
+      });
+      const app = createMultiremiApp({ store, authToken: "root-operations-secret" });
+      const headers = { Authorization: "Bearer root-operations-secret" };
+      const secretValues = [
+        "scm-token-never-return",
+        "scm-webhook-never-return",
+        "lark-app-secret-never-return",
+        "stripe-secret-never-return",
+      ];
 
-    for (const path of [
-      "/api/workspaces/local/scm/connections",
-      "/api/cloud-billing/balance",
-      "/api/workspaces/local/lark/installations",
-    ]) {
-      const response = await app.request(path, { headers });
-      expect(response.status, path).toBe(200);
-      const serialized = await response.text();
-      for (const secret of secretValues) expect(serialized, path).not.toContain(secret);
+      for (const path of [
+        "/api/workspaces/local/scm/connections",
+        "/api/cloud-billing/balance",
+        "/api/workspaces/local/lark/installations",
+      ]) {
+        const response = await app.request(path, { headers });
+        expect(response.status, path).toBe(200);
+        const serialized = await response.text();
+        for (const secret of secretValues) expect(serialized, path).not.toContain(secret);
+      }
+    } finally {
+      for (const [key, value] of Object.entries(previousEnv)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
     }
   });
 });

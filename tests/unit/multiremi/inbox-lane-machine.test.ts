@@ -36,4 +36,4 @@ pendingTurnBackendTests('MUL-506 canonical inbox',fixture=>{
     const quiet=store.sendMessage({session_id:session.id,sender:{type:'agent',id:agent.id},to:{type:'agent',ref:agent.id},body_md:'self',message_kind:'request',wake_requested:'now'});
     expect(quiet.wake_reason).toBe('self');expect(quiet.turn_id).toBeUndefined();expect(store.getMessage(quiet.message.id)?.body_md).toBe('self');
   });
-});
+}, { isolation: 'committed-baseline' });

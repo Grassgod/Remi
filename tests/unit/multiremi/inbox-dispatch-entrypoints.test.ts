@@ -4,7 +4,8 @@ import {pendingTurnBackendTests} from './pending-turn-test-backends.js';
 import {createMultiremiApp} from '@multiremi/api.js';
 
 pendingTurnBackendTests('MUL-508 unified dispatch replacements',fixture=>{
-  for(const entry of ['task','session','rerun','mention'] as const){
+  // Canonical request, issue-owner role and rich mention are distinct inputs.
+  for(const entry of ['request','issue-owner','mention'] as const){
     for(const terminal of ['completed','failed','cancelled'] as const){
     it(`${entry} derives delegation from the request and returns ${terminal} exactly once`,async()=>{
       const {store}=fixture();
@@ -15,9 +16,9 @@ pendingTurnBackendTests('MUL-508 unified dispatch replacements',fixture=>{
       const source=store.createTask({agentId:a!.id,issueId:sourceIssue.id,issueSessionId:s0.id,prompt:'Coordinate'});
       expect(store.claimTask(runtimes[0]!.id)?.id).toBe(source.id);store.startTask(source.id);
       const app=createMultiremiApp({store,authToken:'fixture-root'}),credential=(await store.createTaskAccessToken(source,'local')).token;
-      const session=entry==='rerun'?store.getOrCreateDefaultIssueSession(target.id):s1;
+      const session=entry==='issue-owner'?store.getOrCreateDefaultIssueSession(target.id):s1;
       const response=await app.request(`/api/sessions/${session.id}/messages`,{method:'POST',headers:{Authorization:`Bearer ${credential}`,'Content-Type':'application/json'},body:JSON.stringify({
-        to:entry==='rerun'?{type:'role',ref:'issue_owner'}:{type:'agent',ref:b!.id},
+        to:entry==='issue-owner'?{type:'role',ref:'issue_owner'}:{type:'agent',ref:b!.id},
         message_kind:'request',wake_requested:'now',body_md:entry==='mention'?`Verify [@Recipient](mention://agent/${b!.id})`:'Verify',
       })});
       expect(response.status).toBe(200);
@@ -56,7 +57,7 @@ pendingTurnBackendTests('MUL-508 unified dispatch replacements',fixture=>{
     }, 120_000);
     }
   }
-  it('a real dispatch/return chain reaches 2L and all four entrypoints preserve downgraded messages',async()=>{
+  it('a real dispatch/return chain reaches 2L and repeated canonical requests and mentions preserve downgraded messages',async()=>{
     const {store}=fixture();const runtimes=['A','B'].map(name=>store.registerRuntime({name,provider:'codex',workspaceId:'local'}));
     const [a,b]=runtimes.map(r=>store.createAgent({name:r.name,provider:'codex',runtimeId:r.id}));
     const issue=createResponsibleTestIssue(store, {title:'Pair'}),session=store.getOrCreateDefaultIssueSession(issue.id);
@@ -72,7 +73,7 @@ pendingTurnBackendTests('MUL-508 unified dispatch replacements',fixture=>{
     }
     expect(store.countDelegationPairHops(source,b!.id)).toBe(10);
     const before=store.listTurns({workspace_id:'local'}).length,app=createMultiremiApp({store,authToken:'fixture-root'}),credential=(await store.createTaskAccessToken(source,'local')).token;
-    for(const entry of ['task','session','rerun','mention'] as const){
+    for(const entry of ['request-1','request-2','request-3','mention'] as const){
       const marker=`limited ${entry}`;
       const response=await app.request(`/api/sessions/${session.id}/messages`,{method:'POST',headers:{Authorization:`Bearer ${credential}`,'Content-Type':'application/json'},body:JSON.stringify({
         to:{type:'agent',ref:b!.id},message_kind:'request',wake_requested:'now',

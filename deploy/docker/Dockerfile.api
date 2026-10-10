@@ -1,9 +1,12 @@
+# BuildKit's context bind is read-only; only dependency inputs leave this stage.
+FROM oven/bun:1.3.14 AS workspace-manifests
+RUN --mount=type=bind,target=/source,readonly \
+  bun /source/scripts/docker-workspace-manifests.ts --root /source --out /manifests
+
 FROM oven/bun:1.3.14 AS runtime
 
 WORKDIR /app
-ARG MULTIREMI_VERSION=dev
 ENV NODE_ENV=production
-ENV MULTIREMI_VERSION=$MULTIREMI_VERSION
 
 RUN apt-get update \
   && apt-get install -y --no-install-recommends ca-certificates curl git gosu openssh-client passwd \
@@ -34,10 +37,14 @@ RUN set -eu; \
   chmod 0755 /usr/local/bin/lark-cli; \
   lark-cli --version
 
-COPY . .
+COPY --from=workspace-manifests /manifests/ ./
 RUN bun install --registry https://registry.npmjs.org --frozen-lockfile --ignore-scripts \
-  && rm -rf /root/.bun/install/cache \
-  && chmod 0755 /app/deploy/docker/api-entrypoint.sh
+  && rm -rf /root/.bun/install/cache
+
+ARG MULTIREMI_VERSION=dev
+ENV MULTIREMI_VERSION=$MULTIREMI_VERSION
+COPY . .
+RUN chmod 0755 /app/deploy/docker/api-entrypoint.sh
 
 EXPOSE 6120
 ENTRYPOINT ["/app/deploy/docker/api-entrypoint.sh"]

@@ -24,7 +24,7 @@ jobs:
         with:
           bun-version: 1.3.14
 
-      - name: Validate prepared release and successful full CI
+      - name: Validate prepared release and main ancestry
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -32,16 +32,28 @@ jobs:
           bun run release:check --tag "$GITHUB_REF_NAME"
           SHA="$(git rev-parse HEAD)"
           git merge-base --is-ancestor "$SHA" origin/main
-          # A main push or a manual run on main; pull request runs skip the
-          # backend suite (MUL-516) and never count.
-          SUCCESS_RUNS="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/release-build-check.yml/runs?head_sha=$SHA&branch=main&status=success&per_page=100" --jq '[.workflow_runs[] | select(.event == "push" or .event == "workflow_dispatch")] | length')"
-          test "$SUCCESS_RUNS" -ge 1
+          # Candidate resolution independently requires full main-SHA CI or a strictly verified retry.
+
+      - name: Resolve and verify formal release candidate
+        id: candidate
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bun run scripts/release-candidate.ts resolve --kind cli --dir candidate --sha "$(git rev-parse HEAD)"
 
       - name: Install dependencies from the public registry
+        if: steps.candidate.outputs.reused != 'true'
         run: bun install --registry https://registry.npmjs.org --frozen-lockfile --ignore-scripts
 
       - name: Build Multiremi daemon CLI release archives
+        if: steps.candidate.outputs.reused != 'true'
         run: MULTIREMI_VERSION="${GITHUB_REF_NAME}" bun run build:multiremi
+
+      - name: Reuse checked candidate CLI archives
+        if: steps.candidate.outputs.reused == 'true'
+        run: |
+          mkdir -p dist
+          cp candidate/remi-*.tar.gz dist/
+          cmp candidate/install-remi.sh scripts/install-remi.sh
 
       - name: Upload to GitHub Release
         uses: softprops/action-gh-release@v2
@@ -58,6 +70,7 @@ jobs:
       tag: ${{ github.ref_name }}
     permissions:
       contents: write
+      actions: read
       packages: write
       attestations: write
       id-token: write

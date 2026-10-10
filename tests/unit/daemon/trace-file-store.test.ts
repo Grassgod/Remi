@@ -6,7 +6,7 @@ import { TraceFileStore, TRACE_FILE_MAX_EVENT_BYTES } from "@multiremi/worker/tr
 import { DAEMON_WS_MAX_PAYLOAD_BYTES } from "@multiremi/contracts/daemon-protocol.js";
 import { encodeDaemonProtocolFrame, daemonFrameByteLimit } from "@multiremi/api/daemon-protocol/frames.js";
 import { prepareSessionArchive, removePreparedSessionArchive } from "@daemon/agent-runtime/workspace/session-archive.js";
-import { InMemoryTraceStore, traceEventBytes, sanitizeStoredEvent, type TraceStore } from "@multiremi/worker/trace-store.js";
+import { InMemoryTraceStore, traceEventBytes, sanitizeStoredEvent } from "@multiremi/worker/trace-store.js";
 import type { TraceEventInput } from "@multiremi/contracts/trace.js";
 import { TRACE_FILE_FORMAT } from "@multiremi/contracts/trace-file.js";
 import { TRACE_TRUNCATION_MARKER } from "@shared/trace-sanitize.js";
@@ -188,16 +188,6 @@ describe("TraceFileStore", () => {
       type: "tool_use", input: { a: { b: { c: { d: { e: { f: { g: { h: { i: "deep" } } } } } } } } },
     }]).events[0]!;
     expect(JSON.stringify(depth.input)).toContain("[depth-limited]");
-  });
-
-  it("pages by seq and serialized bytes, returning one oversized event", () => {
-    const { make } = fixture();
-    const store: TraceStore = make();
-    const events = store.append("tsk_one", [row("a"), row("b"), row("c")]).events;
-    const budget = traceEventBytes(events[0]!) + traceEventBytes(events[1]!);
-    expect(store.read("tsk_one", 0, 3, budget).events.map((event) => event.seq)).toEqual([1, 2]);
-    expect(store.read("tsk_one", 2, 1, 1)).toEqual({ events: [events[2]], head: 3, eof: true });
-    expect(store.read("tsk_one", 3)).toEqual({ events: [], head: 3, eof: true });
   });
 
   it("discards an incomplete tail, retains the first duplicate seq and resumes at max seq", () => {

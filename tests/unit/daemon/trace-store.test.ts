@@ -2,11 +2,9 @@ import { describe, expect, it } from "bun:test";
 import {
   InMemoryTraceStore,
   TRACE_READ_DEFAULT_LIMIT,
-  TRACE_READ_MAX_LIMIT,
   traceEventBytes,
 } from "@multiremi/worker/trace-store.js";
 import type { TraceEventInput } from "@multiremi/contracts/trace.js";
-import { TRACE_TRUNCATION_MARKER } from "@shared/trace-sanitize.js";
 import { describeTraceStoreContract } from "./trace-store-contract.js";
 
 /** A fixed clock so the `ts` the store assigns is assertable. */
@@ -20,6 +18,7 @@ function event(patch: Partial<TraceEventInput> = {}): TraceEventInput {
   return { type: "text", content: "hello", ...patch };
 }
 
+// Shared cases own cursor/head, limit caps, terminal appends and sanitizer bounds.
 describeTraceStoreContract("InMemoryTraceStore", store, () => {
   const sparse = store();
   const events = sparse.append("tsk_one", [event(), event(), event()]).events;
@@ -85,15 +84,6 @@ describe("InMemoryTraceStore", () => {
     expect(s.head("task_a")).toEqual({ head: 1, closed: true });
   });
 
-  it("treats a cursor at the head as an empty page that reports eof", () => {
-    const s = store();
-    s.append("task_a", [event(), event()]);
-    const page = s.read("task_a", 2);
-    expect(page.events).toEqual([]);
-    expect(page.eof).toBe(true);
-    expect(page.head).toBe(2);
-  });
-
   it("stops a page at maxBytes but still returns one oversized event", () => {
     const s = store();
     const small = event({ content: "x".repeat(64) });
@@ -111,25 +101,6 @@ describe("InMemoryTraceStore", () => {
     const page = s2.read("task_b", 0, TRACE_READ_DEFAULT_LIMIT, 8);
     expect(page.events.map((e) => e.seq)).toEqual([1]);
     expect(page.eof).toBe(true);
-  });
-
-  it("clamps a limit above the reader maximum instead of returning everything", () => {
-    const s = store();
-    s.append("task_a", Array.from({ length: TRACE_READ_MAX_LIMIT + 25 }, () => event()));
-    const page = s.read("task_a", 0, TRACE_READ_MAX_LIMIT * 10);
-    expect(page.events).toHaveLength(TRACE_READ_MAX_LIMIT);
-    expect(page.eof).toBe(false);
-  });
-
-  it("refuses to reopen a closed task, so the archived tail stays final", () => {
-    const s = store();
-    s.append("task_a", [event()]);
-    s.close("task_a", { status: "completed", ended_at: NOW });
-    expect(s.head("task_a")).toEqual({ head: 1, closed: true });
-
-    const late = s.append("task_a", [event({ content: "too late" })]);
-    expect(late).toEqual({ head: 1, events: [] });
-    expect(s.read("task_a").events).toHaveLength(1);
   });
 
   it("keeps the first close status, and closing an unseen task still marks it closed", () => {
@@ -166,13 +137,6 @@ describe("InMemoryTraceStore", () => {
     });
     expect(input).not.toHaveProperty("seq");
     expect(input).not.toHaveProperty("ts");
-  });
-
-  it("sanitizes on append, so the file and the frame carry identical bounded events", () => {
-    const s = store();
-    const stored = s.append("task_a", [event({ content: "C".repeat(300 * 1024) })]).events[0]!;
-    expect(stored.content!.endsWith(TRACE_TRUNCATION_MARKER)).toBe(true);
-    expect(stored.content!.length).toBeLessThan(300 * 1024);
   });
 
   it("preserves cancellation and the raw type on append", () => {

@@ -61,19 +61,31 @@ export function reportPr2Usage(store: MultiremiStore, taskId: string, index: num
   }] });
 }
 
-export async function createPr2Harness(options: { inboxRows?: number; runtimes?: number; foreignRuntimes?: number; attachmentBytes?: number } = {}) {
+export async function createPr2Harness(options: {
+  inboxRows?: number;
+  runtimes?: number;
+  foreignRuntimes?: number;
+  attachmentBytes?: number;
+  /** Functional attachment scenarios only; full golden/benchmark scale is the default. */
+  attachmentOnly?: boolean;
+} = {}) {
   const database = await openHotspotDatabase();
   const probe = hotspotProbe();
   const db = instrumentHotspotDatabase(database.db, probe);
   const store = new MultiremiStore(db);
+  const attachmentOnly = options.attachmentOnly === true;
   const fixture = seedFirstScreenHotspotsFixture(store, {
-    inboxRows: options.inboxRows ?? 300,
+    // Upload/ETag tests need identities, an Issue and a Chat, not the performance
+    // dataset. Four Chats preserve the seed's explicit pinned fourth-Chat row.
+    // Default captures and manual benchmarks retain the full scale unchanged.
+    ...(attachmentOnly ? { sessions: 4, agents: 1, issues: 1, rankingCases: false } : {}),
+    inboxRows: options.inboxRows ?? (attachmentOnly ? 0 : 300),
     privatePrimaryAgent:false,
     run: (sql, params) => { db.run(sql, ...params); },
   });
   // #4: independent canonical conversations replace notification archive/fold
   // sentinels. A lane cursor reads one; a message tombstone hides another.
-  for (let index=0;index<6;index++) {
+  for (let index=0;index<(attachmentOnly ? 0 : 6);index++) {
     const issue=store.createIssue({title:`PR2 sentinel ${index}`,responsibleMemberId:fixture.readerMemberId});
     const session=store.getOrCreateDefaultIssueSession(issue.id);
     const message=store.sendMessage({id:`cmt_pr2_sentinel_${index}`,session_id:session.id,
@@ -87,7 +99,7 @@ export async function createPr2Harness(options: { inboxRows?: number; runtimes?:
   }
   const other = store.createWorkspace({ id: "ws_pr2_foreign", name: "Foreign fleet", slug: "pr2-foreign" });
   const runtimeIds = [fixture.runtimeId];
-  for (let index = 1; index < (options.runtimes ?? 20); index++) {
+  for (let index = 1; index < (options.runtimes ?? (attachmentOnly ? 1 : 20)); index++) {
     const id = `rt_pr2_${index}`;
     store.registerRuntime({ id, name: `Runtime ${index}`, workspaceId: "local", provider: "codex", ownerId: fixture.readerUserId });
     store.updateRuntimeModels(id, [
@@ -101,7 +113,7 @@ export async function createPr2Harness(options: { inboxRows?: number; runtimes?:
     reportPr2Usage(store, taskId, index);
     runtimeIds.push(id);
   }
-  for (let index = 0; index < (options.foreignRuntimes ?? 30); index++) {
+  for (let index = 0; index < (options.foreignRuntimes ?? (attachmentOnly ? 0 : 30)); index++) {
     store.registerRuntime({ id: `rt_pr2_foreign_${index}`, name: `Foreign ${index}`, workspaceId: other.id, provider: "claude" });
     store.updateRuntimeModels(`rt_pr2_foreign_${index}`, [{ id: "foreign-model", label: "Foreign", provider: "claude", default: true }]);
   }

@@ -1,3 +1,4 @@
+import { createRoutingMatrixDatabase } from "../../helpers/routing-matrix-database.js";
 import { createResponsibleTestAutopilot } from './helpers.js';
 import { createResponsibleTestIssue } from './helpers.js';
 import { runTurnExecutionMutation } from "@multiremi/store/turn-execution-records.js";
@@ -7,12 +8,12 @@ import { runTurnExecutionMutation } from "@multiremi/store/turn-execution-record
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "bun:test";
 import type { Database } from "bun:sqlite";
 import { MultiremiStore } from "@multiremi/store/store.js";
-import { PostgresSyncDatabase, type SqlDatabase } from "@multiremi/store/db/postgres.js";
+import { type SqlDatabase } from "@multiremi/store/db/postgres.js";
 import { createLocalStore as createStore, createLocalStore, db, readyArchiveBinding, resetMultiremiTestEnv } from "./helpers.js";
 import { prepareFeishuIssueTopic } from "../../fixtures/multiremi-feishu-topic.js";
 import { MUL449_CLAIM_SQL_GOLDEN } from "../../fixtures/mul449-claim-sql-golden.js";
 import { bootstrapPreUnifiedSchema } from "@multiremi/store/migrations.js";
-import { deserializeSqliteDatabase, openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
+import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { historicalWriters } from "./unified-model-test-backends.js";
 
 afterEach(resetMultiremiTestEnv);
@@ -870,56 +871,25 @@ describe("Multiremi store — task claim, routing, and workspace scoping", () =>
   // ───────────────────────────────────────────────────────────────────────
   for (const dialect of ["sqlite", "postgres"] as const) {
   describe.skipIf(dialect === "postgres" && !process.env.MULTIREMI_TEST_POSTGRES_URL)(`placement invariant matrix (${dialect})`, () => {
+    let fixtureDatabase: ReturnType<typeof createRoutingMatrixDatabase> | undefined;
     let matrixDb: SqlDatabase;
-    let admin: PostgresSyncDatabase;
-    let cellDatabase: string | null = null;
-    let sequence = 0;
-    const template = `mul449_matrix_${process.pid}_${Math.floor(Math.random() * 1e6)}`;
-    let sqliteTemplate: Uint8Array;
 
     beforeAll(() => {
-      if (dialect === "sqlite") {
-        createLocalStore();
-        sqliteTemplate = db!.serialize();
-        return;
-      }
-      admin = new PostgresSyncDatabase(process.env.MULTIREMI_TEST_POSTGRES_URL!);
-      admin.exec(`CREATE DATABASE ${template}`);
-      const url = new URL(process.env.MULTIREMI_TEST_POSTGRES_URL!);
-      url.pathname = `/${template}`;
-      const templateDb = new PostgresSyncDatabase(url.toString());
-      try {
-        new MultiremiStore(templateDb).ensureLocalWorkspace();
-      } finally {
-        templateDb.close();
-      }
-    });
+      fixtureDatabase = createRoutingMatrixDatabase(dialect, process.env.MULTIREMI_TEST_POSTGRES_URL);
+      matrixDb = fixtureDatabase.db;
+    }, 30_000);
 
-    afterAll(() => {
-      matrixDb?.close();
-      if (dialect !== "postgres" || !admin) return;
+    afterAll(async () => {
+      if (!fixtureDatabase) return;
       try {
-        if (cellDatabase) admin.exec(`DROP DATABASE ${cellDatabase} WITH (FORCE)`);
-        admin.exec(`DROP DATABASE ${template} WITH (FORCE)`);
+        await fixtureDatabase.dispose();
       } finally {
-        admin.close();
+        console.info(`REMI_TEST_DB_FIXTURE_STATS ${JSON.stringify(fixtureDatabase.stats)}`);
       }
-    });
+    }, 30_000);
 
     function createCellStore(): MultiremiStore {
-      matrixDb?.close();
-      if (dialect === "sqlite") {
-        matrixDb = deserializeSqliteDatabase(sqliteTemplate) as unknown as SqlDatabase;
-        return new MultiremiStore(matrixDb);
-      }
-      if (cellDatabase) admin.exec(`DROP DATABASE ${cellDatabase} WITH (FORCE)`);
-      cellDatabase = `${template}_${++sequence}`;
-      // Clone only the migrated, empty fixture; each cell still owns all its rows.
-      admin.exec(`CREATE DATABASE ${cellDatabase} TEMPLATE ${template}`);
-      const url = new URL(process.env.MULTIREMI_TEST_POSTGRES_URL!);
-      url.pathname = `/${cellDatabase}`;
-      matrixDb = new PostgresSyncDatabase(url.toString());
-      return new MultiremiStore(matrixDb);
+      return fixtureDatabase!.reset();
     }
     const M = "dev-inv-m";
     const M_LEGACY = "dev-inv-m-legacy";
@@ -951,8 +921,8 @@ describe("Multiremi store — task claim, routing, and workspace scoping", () =>
     }
 
     /**
-     * Build one cell. Every cell gets its own store, so a claim cannot leak into
-     * another cell and the assertions do not depend on test order.
+     * Build one cell on the reusable Store after a committed baseline reset,
+     * so claims cannot leak rows or analytics state into another cell.
      */
     function cell(shape: Shape, pin: Pin, devices: Devices, dedicated: boolean): Fixture {
       const label = `${shape} / ${pin} / ${devices} / ${dedicated ? "dedicated" : "shared"}`;

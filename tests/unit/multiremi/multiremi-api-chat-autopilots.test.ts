@@ -3,16 +3,16 @@ import { acceptTestIssueDelivery, createResponsibleTestIssue } from './helpers.j
 import { requestMessageBody, sentTask } from "./unified-test-paths.js";
 // Chat session/message routes, autopilot API + public webhook triggering,
 // webhook rate limiting, and scheduler state sync.
-import { afterEach, describe, expect, it } from "bun:test";
+import { beforeAll, afterAll, afterEach, describe, expect, it } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { MultiremiScheduler } from "@multiremi/scheduler.js";
-import { createLocalStore as createStore, resetMultiremiTestEnv } from "./helpers.js";
+import { snapshotStatsForFile, createLocalSnapshotStore as createSnapshotStore, resetMultiremiTestEnv } from "./helpers.js";
 
 afterEach(resetMultiremiTestEnv);
 
 describe("Multiremi API — chat sessions and autopilot triggers", () => {
   it("serves chat session and message endpoints", async () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     const agent = store.createAgent({ name: "Codex", provider: "codex" });
     const runtime = store.registerRuntime({ name: "local-codex", provider: "codex" });
     const app = createMultiremiApp({ store });
@@ -46,7 +46,7 @@ describe("Multiremi API — chat sessions and autopilot triggers", () => {
   });
 
   it("triggers autopilots through API and webhook endpoints", async () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     const agent = store.createAgent({ name: "Codex", provider: "codex" });
     const autopilot = createResponsibleTestAutopilot(store, {
       title: "Webhook triage",
@@ -258,7 +258,7 @@ describe("Multiremi API — chat sessions and autopilot triggers", () => {
   });
 
   it("hides every Autopilot id surface from callers in another workspace", async () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     const callerWorkspace = store.createWorkspace({ name: "Caller", slug: "caller" });
     const targetWorkspace = store.createWorkspace({ name: "Target", slug: "target" });
     store.createWorkspaceMember({
@@ -327,7 +327,7 @@ describe("Multiremi API — chat sessions and autopilot triggers", () => {
   });
 
   it("rate limits public autopilot webhooks by token and source bucket", async () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     const agent = store.createAgent({ name: "Codex", provider: "codex" });
     const autopilot = createResponsibleTestAutopilot(store, { title: "Webhook limited", assigneeId: agent.id, triggerKind: "webhook" });
     store.updateAutopilot(autopilot.id, { status: "paused" });
@@ -356,7 +356,7 @@ describe("Multiremi API — chat sessions and autopilot triggers", () => {
     expect(await overTokenLimit.json()).toEqual({ error: "rate limit exceeded" });
 
     const ipLimitedApp = createMultiremiApp({
-      store: createStore(),
+      store: createSnapshotStore(),
       webhookRateLimit: false,
       webhookIpRateLimit: { limit: 2, windowMs: 60_000 },
     });
@@ -378,7 +378,7 @@ describe("Multiremi API — chat sessions and autopilot triggers", () => {
   });
 
   it("syncs scheduler state through autopilot API updates", async () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     const scheduler = new MultiremiScheduler({ store });
     const agent = store.createAgent({ name: "Codex", provider: "codex" });
     const app = createMultiremiApp({ store, scheduler });
@@ -414,7 +414,7 @@ describe("Multiremi API — chat sessions and autopilot triggers", () => {
   });
 
   it("validates and serializes trigger_issue system event configuration", async () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     const agent = store.createAgent({ name: "Wiki maintainer", provider: "codex" });
     const issue = createResponsibleTestIssue(store, { title: "Completed evidence", assigneeType: "agent", assigneeId: agent.id });
     acceptTestIssueDelivery(store, issue.id);
@@ -499,3 +499,8 @@ describe("Multiremi API — chat sessions and autopilot triggers", () => {
     });
   });
 });
+
+// Register hooks in this file; shared modules only load once per test process.
+let reportSnapshotStats: (() => void) | undefined;
+beforeAll(() => { reportSnapshotStats = snapshotStatsForFile(import.meta.path); });
+afterAll(() => { reportSnapshotStats?.(); });

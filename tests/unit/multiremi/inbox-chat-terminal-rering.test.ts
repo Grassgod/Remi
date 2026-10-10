@@ -99,4 +99,4 @@ pendingTurnBackendTests('MUL-493 B4 Chat terminal re-ring', fixture => {
     expect(f.store.listTurns({ workspace_id: 'local', session_id: f.session.id })).toHaveLength(1);
     expect(f.store.listTurnAttempts(f.first.turn_id!)).toHaveLength(2);
   }, 120_000);
-});
+}, { isolation: 'committed-baseline' });

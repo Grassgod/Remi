@@ -103,6 +103,7 @@ describe("useAfterFirstScreen timing (MUL-472 b)", () => {
   it("opens within the idle window once the route publishes content readiness", async () => {
     const { result } = renderHook(() => useAfterFirstScreen({ routeKey: "/test/issues" }));
 
+    // Readiness means settled, including empty/error; the hook receives no success flag.
     act(() => {
       markRouteContentReady("/test/issues");
     });
@@ -147,20 +148,6 @@ describe("useAfterFirstScreen timing (MUL-472 b)", () => {
     // Fallback reached content-ready; the idle step is a macrotask in jsdom.
     await act(async () => {
       vi.advanceTimersByTime(1);
-    });
-    expect(result.current).toBe(true);
-  });
-
-  it("opens for a failed or empty route too, because readiness is not success", async () => {
-    const { result } = renderHook(() => useAfterFirstScreen({ routeKey: "/test/issues" }));
-
-    // A page publishes "settled" for error and empty states as well; from the
-    // gate's point of view they are identical.
-    act(() => {
-      markRouteContentReady("/test/issues");
-    });
-    await act(async () => {
-      flushIdle();
     });
     expect(result.current).toBe(true);
   });

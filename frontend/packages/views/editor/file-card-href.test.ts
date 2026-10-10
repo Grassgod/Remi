@@ -6,6 +6,11 @@ import {
   preprocessFileCards,
 } from "@multiremi/ui/markdown";
 
+// Mirror the parser usage: a fresh anchored regex composed from the pattern.
+const parser = new RegExp(
+  `^!file\\[([^\\]]*)\\]\\((${FILE_CARD_URL_PATTERN.source})\\)$`,
+);
+
 describe("isAllowedFileCardHref", () => {
   it.each([
     ["/uploads/ok", true],
@@ -18,27 +23,17 @@ describe("isAllowedFileCardHref", () => {
   });
 
   it.each([
-    ["javascript:alert(1)", false],
     ["JavaScript:alert(1)", false],
-    ["data:text/html,xss", false],
     ["//evil.com/x", false],
-    ["/../api/x", false],
-    ["/api/x", false],
-    ["/api/internal/x", false],
-    ["", false],
-    ["ftp://example.com/x", false],
-    ["uploads/x", false],
   ])("rejects %s", (href, expected) => {
     expect(isAllowedFileCardHref(href)).toBe(expected);
+    const markdown = `!file[evil.txt](${href})`;
+    expect(parser.test(markdown)).toBe(false);
+    expect(preprocessFileCards(markdown, "cdn.example.com")).toBe(markdown);
   });
 });
 
 describe("FILE_CARD_URL_PATTERN", () => {
-  // Mirror the parser usage: a fresh anchored regex composed from the pattern.
-  const parser = new RegExp(
-    `^!file\\[([^\\]]*)\\]\\((${FILE_CARD_URL_PATTERN.source})\\)$`,
-  );
-
   it.each([
     "!file[doc.md](/uploads/x.md)",
     "!file[name](/uploads/workspaces/abc/019e.md)",
@@ -48,16 +43,8 @@ describe("FILE_CARD_URL_PATTERN", () => {
     expect(parser.test(input)).toBe(true);
   });
 
-  it.each([
-    "!file[evil.txt](javascript:alert(1))",
-    "!file[evil.txt](data:text/html,xss)",
-    "!file[evil.txt](//evil.com/x)",
-    "!file[evil.txt](/../api/x)",
-    "!file[evil.txt](/api/x)",
-    "!file[doc.md](uploads/x.md)",
-    "!file[doc.md](ftp://example.com/x)",
-  ])("does not parse %s", (input) => {
-    expect(parser.test(input)).toBe(false);
+  it("does not parse a bare uploads path with a filename", () => {
+    expect(parser.test("!file[doc.md](uploads/x.md)")).toBe(false);
   });
 });
 
@@ -70,35 +57,17 @@ describe("preprocessFileCards (integration)", () => {
     expect(out).toContain('data-href="/uploads/x.md"');
     expect(out).toContain('data-filename="doc.md"');
   });
-
-  it("leaves a protocol-relative href untouched (not parsed as file-card)", () => {
-    const out = preprocessFileCards("!file[evil.txt](//evil.com/x)", cdn);
-    expect(out).not.toContain('data-type="fileCard"');
-    expect(out).toBe("!file[evil.txt](//evil.com/x)");
-  });
-
-  it("leaves javascript: untouched (not parsed as file-card)", () => {
-    const out = preprocessFileCards(
-      "!file[evil.txt](javascript:alert(1))",
-      cdn,
-    );
-    expect(out).not.toContain('data-type="fileCard"');
-  });
-
-  it("leaves a non-/uploads relative path untouched", () => {
-    const out = preprocessFileCards("!file[name](/api/internal/x)", cdn);
-    expect(out).not.toContain('data-type="fileCard"');
-  });
 });
 
 // The same corpus drives the server and full renderer parity checks.
 import FILE_CARD_CASES from "../../../../tests/unit/multiremi/file-card-fixtures.json";
 
-describe("shared S2 corpus (MUL-518)", () => {
+describe("shared file-card URL and markdown contract corpus", () => {
   it.each(FILE_CARD_CASES)("$href -> $allowed", ({ href, markdown, allowed }) => {
     expect(isAllowedFileCardHref(href)).toBe(allowed);
     const exact = new RegExp(`^(?:${FILE_CARD_URL_PATTERN.source})$`).exec(href)?.[0] === href;
     expect(exact).toBe(allowed);
+    expect(parser.test(markdown)).toBe(allowed);
     const output = preprocessFileCards(markdown, "");
     expect(output.includes('data-type="fileCard"')).toBe(allowed);
     if (!allowed) expect(output).toBe(markdown);

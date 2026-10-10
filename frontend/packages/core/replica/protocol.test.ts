@@ -231,8 +231,10 @@ describe("step 6: freshness", () => {
     expect(computeFresh({ state, ackHeadSeq: 11, ackLogVersion: 7 })).toBe(false);
   });
 
-  test("an in-place update that keeps the seq is caught by log_version", () => {
-    expect(computeFresh({ state, ackHeadSeq: 10, ackLogVersion: 8 })).toBe(false);
+  test("either an older ack or an in-place update is stale when log_version differs", () => {
+    for (const ackLogVersion of [6, 8]) {
+      expect(computeFresh({ state, ackHeadSeq: 10, ackLogVersion })).toBe(false);
+    }
   });
 
   test("no ack, no version or no stored head is never fresh", () => {

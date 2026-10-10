@@ -140,4 +140,4 @@ pendingTurnBackendTests("D1 inbox integrated chains", fixture => {
     expect(f.store.listTaskSteerMessages(privateTask.id)).toEqual([]);
     expect(f.store.getTask(privateTask.id)!.prompt).toBe("Private user message");
   });
-});
+}, { isolation: 'committed-baseline' });

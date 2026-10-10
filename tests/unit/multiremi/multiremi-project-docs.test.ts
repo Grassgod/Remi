@@ -1,7 +1,7 @@
 import { createResponsibleTestIssue } from './helpers.js';
-import { afterEach, describe, expect, it } from "bun:test";
+import { beforeAll, afterAll, afterEach, describe, expect, it } from "bun:test";
 import type { MultiremiProjectDocRef } from "@multiremi/contracts/types.js";
-import { createStore, db, resetMultiremiTestEnv } from "./helpers.js";
+import { snapshotStatsForFile, createSnapshotStore, db, resetMultiremiTestEnv } from "./helpers.js";
 
 afterEach(resetMultiremiTestEnv);
 
@@ -19,7 +19,7 @@ function withoutSchema<T extends { slug: string }>(docs: T[]): T[] {
 
 describe("Bun Multiremi project docs", () => {
   it("creates docs with kind defaults and slugifies the title", () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     const project = store.createProject({ title: "Docs project" });
 
     const wiki = store.createProjectDoc(project.id, { kind: "wiki", title: "Build & Deploy Guide" });
@@ -59,7 +59,7 @@ describe("Bun Multiremi project docs", () => {
   });
 
   it("stores summary, body, tags, source and author fields (camel or snake)", () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     const project = store.createProject({ title: "Fields" });
     const doc = store.createProjectDoc(project.id, {
       kind: "memory",
@@ -85,7 +85,7 @@ describe("Bun Multiremi project docs", () => {
   });
 
   it("rejects an unknown kind, an empty title and a missing project", () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     const project = store.createProject({ title: "Validation" });
 
     expect(() => store.createProjectDoc(project.id, { kind: "note", title: "Nope" })).toThrow("unknown kind: note");
@@ -95,7 +95,7 @@ describe("Bun Multiremi project docs", () => {
   });
 
   it("rejects unsafe, over-deep, and duplicate paths", () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     const project = store.createProject({ title: "Paths" });
     store.createProjectDoc(project.id, { kind: "wiki", title: "First", path: "guides/first.md" });
 
@@ -114,7 +114,7 @@ describe("Bun Multiremi project docs", () => {
   });
 
   it("rejects a duplicate slug in the same project but allows it across projects", () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     const project = store.createProject({ title: "Slugs" });
     const other = store.createProject({ title: "Other" });
     store.createProjectDoc(project.id, { kind: "wiki", title: "Runbook" });
@@ -130,7 +130,7 @@ describe("Bun Multiremi project docs", () => {
   });
 
   it("resolves a doc by id or by slug, scoped to its project", () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     const project = store.createProject({ title: "Refs" });
     const other = store.createProject({ title: "Other" });
     const doc = store.createProjectDoc(project.id, { kind: "wiki", title: "Architecture" });
@@ -144,7 +144,7 @@ describe("Bun Multiremi project docs", () => {
   });
 
   it("bumps the version, records a revision and touches the project on update", () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     const project = store.createProject({ title: "Updates" });
     const beforeProject = store.getProject(project.id)!;
     const doc = store.createProjectDoc(project.id, { kind: "wiki", title: "Deploy", body: "v1 body" });
@@ -195,7 +195,7 @@ describe("Bun Multiremi project docs", () => {
   });
 
   it("rejects an update whose expectedVersion is stale", () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     const project = store.createProject({ title: "Locking" });
     const doc = store.createProjectDoc(project.id, { kind: "wiki", title: "Contract" });
 
@@ -215,7 +215,7 @@ describe("Bun Multiremi project docs", () => {
   });
 
   it("deletes a doc together with its revisions", () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     const project = store.createProject({ title: "Deletes" });
     const doc = store.createProjectDoc(project.id, { kind: "wiki", title: "Temporary" });
     store.updateProjectDoc(project.id, doc.slug, { body: "still here" });
@@ -229,7 +229,7 @@ describe("Bun Multiremi project docs", () => {
   });
 
   it("lists docs pinned first then newest, and filters by kind", () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     const project = store.createProject({ title: "Listing" });
     const pinned = store.createProjectDoc(project.id, { kind: "memory", title: "Pinned memory" });
     const oldWiki = store.createProjectDoc(project.id, { kind: "wiki", title: "Old wiki" });
@@ -245,7 +245,7 @@ describe("Bun Multiremi project docs", () => {
   });
 
   it("searches case-insensitively across title, summary, body and tags", () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     const project = store.createProject({ title: "Search" });
     const other = store.createProject({ title: "Elsewhere" });
     const byTitle = store.createProjectDoc(project.id, { kind: "wiki", title: "Release Checklist" });
@@ -267,7 +267,7 @@ describe("Bun Multiremi project docs", () => {
   });
 
   it("treats LIKE metacharacters in the term as literal text", () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     const project = store.createProject({ title: "Escaping" });
     const percent = store.createProjectDoc(project.id, { kind: "memory", title: "Cache hit 90% on warm runs" });
     const underscore = store.createProjectDoc(project.id, { kind: "memory", title: "Set MAX_WORKERS before the run" });
@@ -290,7 +290,7 @@ describe("Bun Multiremi project docs", () => {
   });
 
   it("builds a docs index that trims bodies and summaries and caps each kind", () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     const project = store.createProject({ title: "Index" });
     const longBody = "b".repeat(900);
     const longSummary = "s".repeat(400);
@@ -325,7 +325,7 @@ describe("Bun Multiremi project docs", () => {
   });
 
   it("puts pinned memory entries first in the index", () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     const project = store.createProject({ title: "Pinning" });
     const unpinned = store.createProjectDoc(project.id, { kind: "memory", title: "Unpinned", pinned: false });
     const pinned = store.createProjectDoc(project.id, { kind: "memory", title: "Pinned" });
@@ -336,7 +336,7 @@ describe("Bun Multiremi project docs", () => {
   });
 
   it("attaches the docs index to getTaskWithAgent, or null without a project", () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     const project = store.createProject({ title: "Task context" });
     store.createProjectDoc(project.id, { kind: "memory", title: "Build with bun", body: "bun install first" });
     store.createProjectDoc(project.id, { kind: "wiki", title: "Architecture" });
@@ -355,7 +355,7 @@ describe("Bun Multiremi project docs", () => {
   });
 
   it("normalizes refs on create and replaces them wholesale on update", () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     const project = store.createProject({ title: "Citations" });
     const doc = store.createProjectDoc(project.id, {
       kind: "memory",
@@ -397,7 +397,7 @@ describe("Bun Multiremi project docs", () => {
   });
 
   it("tolerates junk refs from the input and from the column", () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     const project = store.createProject({ title: "Junk" });
     const doc = store.createProjectDoc(project.id, {
       kind: "wiki",
@@ -415,7 +415,7 @@ describe("Bun Multiremi project docs", () => {
   });
 
   it("seeds the reserved _schema doc before the project's first doc", () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     const project = store.createProject({ title: "Schema seeding" });
     expect(store.getProjectDocByRef(project.id, "_schema")).toBeNull();
 
@@ -455,7 +455,7 @@ describe("Bun Multiremi project docs", () => {
   });
 
   it("respects a user-created _schema instead of seeding over it", () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     const project = store.createProject({ title: "Own schema" });
     const own = store.createProjectDoc(project.id, {
       kind: "wiki",
@@ -476,7 +476,7 @@ describe("Bun Multiremi project docs", () => {
   });
 
   it("lists workspace docs across projects, newest first, with project titles", () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     const alpha = store.createProject({ title: "Alpha" });
     const beta = store.createProject({ title: "Beta" });
     const elsewhere = store.createWorkspace({ name: "Elsewhere", slug: "elsewhere" });
@@ -502,7 +502,7 @@ describe("Bun Multiremi project docs", () => {
   });
 
   it("filters and searches workspace docs with the same literal LIKE semantics", () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     const alpha = store.createProject({ title: "Alpha" });
     const beta = store.createProject({ title: "Beta" });
     const memory = store.createProjectDoc(alpha.id, { kind: "memory", title: "Cache hit 90% on warm runs" });
@@ -524,7 +524,7 @@ describe("Bun Multiremi project docs", () => {
   });
 
   it("keeps _schema out of the index wiki list and exposes it as schema", () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     const project = store.createProject({ title: "Index schema" });
     expect(store.getProjectDocsIndex(project.id).schema).toBeNull();
 
@@ -545,3 +545,8 @@ describe("Bun Multiremi project docs", () => {
     expect(capped.wiki.every((entry) => entry.slug !== "_schema")).toBe(true);
   });
 });
+
+// Register hooks in this file; shared modules only load once per test process.
+let reportSnapshotStats: (() => void) | undefined;
+beforeAll(() => { reportSnapshotStats = snapshotStatsForFile(import.meta.path); });
+afterAll(() => { reportSnapshotStats?.(); });

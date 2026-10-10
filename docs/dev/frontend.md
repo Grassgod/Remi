@@ -165,7 +165,7 @@ Worker 请求带 session 生命周期令牌和清库代次，窗口查询带唯�
 | 范围 | 当前配置与用途 |
 | --- | --- |
 | core | [package.json](../../frontend/packages/core/package.json)、[vitest.config.ts](../../frontend/packages/core/vitest.config.ts)：Vitest 默认 Node；需要 DOM 的测试可按文件声明环境 |
-| views | [package.json](../../frontend/packages/views/package.json)、[vitest.config.ts](../../frontend/packages/views/vitest.config.ts)：Vitest + jsdom、Testing Library，共享业务组件测试 |
+| views | [package.json](../../frontend/packages/views/package.json)、[vitest.config.ts](../../frontend/packages/views/vitest.config.ts)：显式 21 个纯逻辑测试文件使用 Node 且不加载 DOM setup；其余共享业务组件与 Editor 测试使用 jsdom、Testing Library。文件隔离保持，新文件默认 DOM |
 | web | [package.json](../../frontend/apps/web/package.json)、[vitest.config.ts](../../frontend/apps/web/vitest.config.ts)：Vitest + jsdom，验证 Next.js 平台接线 |
 | 类型检查 | 各包 `typecheck` 脚本；`ui` 也有独立类型检查，但没有独立 `test` 脚本 |
 | 浏览器端到端 | [tests/integration/e2e-frontend-ours.ts](../../tests/integration/e2e-frontend-ours.ts)：仓库实际 E2E 入口，运行条件以该脚本为准 |

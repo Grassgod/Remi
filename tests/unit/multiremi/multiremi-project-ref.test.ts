@@ -1,11 +1,11 @@
 import { createResponsibleTestIssue } from './helpers.js';
-import { afterEach, describe, expect, it } from "bun:test";
+import { beforeAll, afterAll, afterEach, describe, expect, it } from "bun:test";
 import type { MultiremiRepoData } from "@multiremi/contracts/types.js";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { MultiremiStore } from "@multiremi/store.js";
 import { daemonTaskClaimResponse } from "@multiremi/api/wire/tasks.js";
 import { projectResourceCompatibilityResponse } from "@multiremi/api/wire/projects.js";
-import { createStore, db, resetMultiremiTestEnv } from "./helpers.js";
+import { snapshotStatsForFile, createSnapshotStore, db, resetMultiremiTestEnv } from "./helpers.js";
 
 afterEach(resetMultiremiTestEnv);
 
@@ -43,7 +43,7 @@ describe("Bun Multiremi project_ref resource", () => {
     { configured: null, hint: "legacy", expected: "legacy" },
     { configured: null, hint: undefined, expected: undefined },
   ])("derives task and intake branches from repository records before legacy hints: %j", ({ configured, hint, expected }) => {
-    const store = createStore();
+    const store = createSnapshotStore();
     const url = "git@github.com:acme/default-branch.git";
     importRepositories(store, [url]);
     const project = store.createProject({
@@ -76,7 +76,7 @@ describe("Bun Multiremi project_ref resource", () => {
   });
 
   it("uses repository defaults when falling back to the workspace repository catalog", () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     const url = "https://github.com/acme/default-branch.git";
     store.ensureLocalWorkspace();
     store.updateWorkspace("local", { repos: [{ url, default_branch: "workflow-dev" }] });
@@ -85,7 +85,7 @@ describe("Bun Multiremi project_ref resource", () => {
   });
 
   it("normalizes both casings to a deterministic {projectId, project_id} ref", () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     const target = store.createProject({ title: "Target" });
     const snakeOwner = store.createProject({ title: "Snake owner" });
     const camelOwner = store.createProject({ title: "Camel owner" });
@@ -110,14 +110,14 @@ describe("Bun Multiremi project_ref resource", () => {
   });
 
   it("rejects a project_ref that points at its own project", () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     const project = store.createProject({ title: "Self" });
     expect(() => store.createProjectResource(project.id, projectRefResource(project.id)))
       .toThrow("project_ref cannot reference its own project");
   });
 
   it("rejects a project_ref whose target is missing or in another workspace", () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     const owner = store.createProject({ title: "Owner" });
     expect(() => store.createProjectResource(owner.id, projectRefResource("prj_ghost")))
       .toThrow("project_ref target project not found: prj_ghost");
@@ -129,7 +129,7 @@ describe("Bun Multiremi project_ref resource", () => {
   });
 
   it("rejects direct and transitive reference cycles", () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     const a = store.createProject({ title: "A" });
     const b = store.createProject({ title: "B" });
     const c = store.createProject({ title: "C" });
@@ -146,7 +146,7 @@ describe("Bun Multiremi project_ref resource", () => {
   });
 
   it("validates a new project_ref even when a referenced project's target is dangling", () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     const a = store.createProject({ title: "A" });
     const b = store.createProject({ title: "B" });
     const c = store.createProject({ title: "C" });
@@ -164,7 +164,7 @@ describe("Bun Multiremi project_ref resource", () => {
   });
 
   it("rejects an invalid project_ref supplied via createProject inline resources", () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     expect(() => store.createProject({
       id: "prj_inline_self",
       title: "Inline self",
@@ -175,7 +175,7 @@ describe("Bun Multiremi project_ref resource", () => {
   });
 
   it("normalizes casing and catches duplicates over HTTP", async () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     const owner = store.createProject({ title: "Owner" });
     const target = store.createProject({ title: "Target" });
     const app = createMultiremiApp({ store });
@@ -201,7 +201,7 @@ describe("Bun Multiremi project_ref resource", () => {
   });
 
   it("surfaces project_ref validation failures as 400s over HTTP", async () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     const a = store.createProject({ title: "A" });
     const b = store.createProject({ title: "B" });
     const app = createMultiremiApp({ store });
@@ -229,7 +229,7 @@ describe("Bun Multiremi project_ref resource", () => {
   });
 
   it("expands referenced project github repos", () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     importRepositories(store, ["https://github.com/acme/lib", "https://github.com/acme/main"]);
     const lib = store.createProject({
       title: "Lib",
@@ -248,7 +248,7 @@ describe("Bun Multiremi project_ref resource", () => {
   });
 
   it("walks nested project references", () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     importRepositories(store, ["https://github.com/acme/leaf", "https://github.com/acme/main"]);
     const leaf = store.createProject({ title: "Leaf", resources: [githubResource("https://github.com/acme/leaf")] });
     const mid = store.createProject({ title: "Mid", resources: [projectRefResource(leaf.id)] });
@@ -264,7 +264,7 @@ describe("Bun Multiremi project_ref resource", () => {
   });
 
   it("dedupes repo urls that appear across references", () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     importRepositories(store, ["https://github.com/acme/shared", "https://github.com/acme/unique"]);
     const other = store.createProject({
       title: "Other",
@@ -282,7 +282,7 @@ describe("Bun Multiremi project_ref resource", () => {
   });
 
   it("caps project_ref expansion at a fixed depth", () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     importRepositories(
       store,
       Array.from({ length: 7 }, (_, index) => `https://github.com/acme/p${index}`),
@@ -308,7 +308,7 @@ describe("Bun Multiremi project_ref resource", () => {
   });
 
   it("falls back to workspace repos only when the expansion is empty", () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     importRepositories(store, ["https://github.com/acme/workspace", "https://github.com/acme/lib"]);
 
     // Non-empty expansion → workspace repos are NOT mixed in.
@@ -330,7 +330,7 @@ describe("Bun Multiremi project_ref resource", () => {
   });
 
   it("terminates on a cycle forced into the database at resolution time", () => {
-    const store = createStore();
+    const store = createSnapshotStore();
     importRepositories(store, ["https://github.com/acme/a", "https://github.com/acme/b"]);
     const a = store.createProject({ title: "A", resources: [githubResource("https://github.com/acme/a")] });
     const b = store.createProject({ title: "B", resources: [githubResource("https://github.com/acme/b")] });
@@ -349,3 +349,8 @@ describe("Bun Multiremi project_ref resource", () => {
     ]);
   });
 });
+
+// Register hooks in this file; shared modules only load once per test process.
+let reportSnapshotStats: (() => void) | undefined;
+beforeAll(() => { reportSnapshotStats = snapshotStatsForFile(import.meta.path); });
+afterAll(() => { reportSnapshotStats?.(); });

@@ -34,13 +34,25 @@ const A0_MODULES = [
 ] as const;
 
 /** The one file allowed to import a not-yet-wired module: this guard's own subject list. */
-function listTsFiles(dir: string): string[] {
+// The checkout is immutable throughout these guards. Reuse only filesystem
+// discovery and source bytes; each contract keeps its own matching/assertions.
+const directorySnapshot = new Map<string, string[]>();
+const sourceSnapshot = new Map<string, string>();
+function sourceText(file: string): string {
+  if (!sourceSnapshot.has(file)) sourceSnapshot.set(file, readFileSync(file, "utf8"));
+  return sourceSnapshot.get(file)!;
+}
+
+function listTsFiles(dir: string): readonly string[] {
+  const cached = directorySnapshot.get(dir);
+  if (cached) return cached;
   const out: string[] = [];
   for (const entry of readdirSync(dir)) {
     const full = join(dir, entry);
     if (statSync(full).isDirectory()) out.push(...listTsFiles(full));
     else if (entry.endsWith(".ts") || entry.endsWith(".tsx")) out.push(full);
   }
+  directorySnapshot.set(dir, out);
   return out;
 }
 
@@ -129,7 +141,7 @@ describe("A-0 module wiring boundaries", () => {
         for (const file of files) {
           // A wired implementation's dependencies are now production consumers.
           if (A0_SOURCES.has(file) && !wired) continue;
-          const src = readFileSync(file, "utf8");
+          const src = sourceText(file);
           for (const match of src.matchAll(IMPORT_RE)) {
             const spec = match[1]!;
             // Match the bare specifier and its `.js` ESM form.

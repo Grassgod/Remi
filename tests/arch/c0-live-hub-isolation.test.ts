@@ -47,13 +47,25 @@ const C0_MODULES = [
   { specifier: "@multiremi/api/hub/upstream-contracts", wired: false },
 ] as const;
 
-function listTsFiles(dir: string): string[] {
+// The checkout is immutable throughout these guards. Reuse only filesystem
+// discovery and source bytes; each contract keeps its own matching/assertions.
+const directorySnapshot = new Map<string, string[]>();
+const sourceSnapshot = new Map<string, string>();
+function sourceText(file: string): string {
+  if (!sourceSnapshot.has(file)) sourceSnapshot.set(file, readFileSync(file, "utf8"));
+  return sourceSnapshot.get(file)!;
+}
+
+function listTsFiles(dir: string): readonly string[] {
+  const cached = directorySnapshot.get(dir);
+  if (cached) return cached;
   const out: string[] = [];
   for (const entry of readdirSync(dir)) {
     const full = join(dir, entry);
     if (statSync(full).isDirectory()) out.push(...listTsFiles(full));
     else if (entry.endsWith(".ts") || entry.endsWith(".tsx")) out.push(full);
   }
+  directorySnapshot.set(dir, out);
   return out;
 }
 
@@ -179,7 +191,7 @@ describe("C0 live-hub modules are not yet wired into runtime code", () => {
         expect(files.length, `${root} yielded no files to scan`).toBeGreaterThan(0);
         for (const file of files) {
           if (C0_SOURCES.has(file)) continue;
-          const source = readFileSync(file, "utf8");
+          const source = sourceText(file);
           for (const match of source.matchAll(IMPORT_RE)) {
             const spec = match[1]!;
             if (!matchesSpecifier(spec, specifier, file)) continue;
@@ -216,7 +228,7 @@ describe("C0 live-hub modules are not yet wired into runtime code", () => {
     const valueImports: string[] = [];
     const consumers: string[] = [];
     for (const file of files) {
-      const src = readFileSync(file, "utf8");
+      const src = sourceText(file);
       if (hasLiveHubValueImport(src)) valueImports.push(file.replace(`${REPO_ROOT}/`, ""));
       for (const match of src.matchAll(IMPORT_RE)) {
         const spec = match[1]!;

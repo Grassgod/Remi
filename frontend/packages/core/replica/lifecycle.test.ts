@@ -69,8 +69,10 @@ describe("page and subscription lifetimes", () => {
     follower.getSnapshot("session");
     follower.handle({ type: "replica:cleared", reason: "logout" });
     follower.handle({ type: "replica:window", sessionId: "session", requestId: "req_1",
-      entries: [], snapshot: { head: 8, fresh: true, ready: true } });
-    expect(view.getSnapshot("session")).toMatchObject({ head: null, ready: false, fresh: false });
+      entries: [{ session_id: "session", seq: 1, id: "old-user-row", kind: "message", revision: 1,
+        body_md: "old user data", body_html: null, render_version: null }],
+      snapshot: { head: 8, fresh: true, ready: true } });
+    expect(view.getSnapshot("session")).toMatchObject({ entries: [], head: null, ready: false, fresh: false });
   });
 
   test("late opened after close or dispose never subscribes", () => {
