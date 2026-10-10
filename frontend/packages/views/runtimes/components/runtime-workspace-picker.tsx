@@ -17,7 +17,7 @@ export interface WorkLocation {
 }
 
 /** One assignment slot. Selecting either kind replaces the other atomically. */
-export function WorkLocationPicker({ wsId, projectId = null, value, onChange, disabled = false, projectsEnabled = true, includeProjects = true, triggerRender }: {
+export function WorkLocationPicker({ wsId, projectId = null, value, onChange, disabled = false, projectsEnabled = true, includeProjects = true, triggerRender, wrapLabel = false }: {
   wsId: string;
   projectId?: string | null;
   value: string | null;
@@ -27,6 +27,8 @@ export function WorkLocationPicker({ wsId, projectId = null, value, onChange, di
   projectsEnabled?: boolean;
   includeProjects?: boolean;
   triggerRender?: ReactElement;
+  /** Detail sidebars use the full value column and show long names on multiple lines. */
+  wrapLabel?: boolean;
 }) {
   const { t } = useT("runtimes");
   const directories = useQuery(runtimeWorkspacesOptions(wsId));
@@ -42,14 +44,14 @@ export function WorkLocationPicker({ wsId, projectId = null, value, onChange, di
   const label = value ? selected?.name || t($ => $.location.directory_missing)
     : projectId ? project?.title || t($ => $.location.project_missing) : t($ => $.location.unassigned);
   const detail = selected ? `${machine(selected.daemon_id)} · ${path}` : project?.title;
-  return <div className="min-w-0 max-w-full">
+  return <div className={wrapLabel ? "w-full min-w-0" : "min-w-0 max-w-full"}>
     <DropdownMenu>
       <DropdownMenuTrigger render={triggerRender} disabled={disabled}
         aria-label={`${t($ => $.location.label)}: ${label}`}
         title={disabled ? `${detail || label}\n${t($ => $.location.locked)}` : detail || label}
-        className={triggerRender ? "max-w-full" : "flex max-w-full items-center gap-1.5 rounded-md px-1 py-1 -mx-1 text-xs text-left transition-colors hover:bg-accent/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-default"}>
+        className={triggerRender ? "max-w-full" : `flex ${wrapLabel ? "w-full min-w-0" : "max-w-full"} items-center gap-1.5 rounded-md px-1 py-1 -mx-1 text-xs text-left transition-colors hover:bg-accent/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-default`}>
         {value ? <FolderOpen className="size-3.5 shrink-0 text-muted-foreground" /> : project ? <ProjectIcon project={project} size="sm" /> : <FolderKanban className="size-3.5 shrink-0 text-muted-foreground" />}
-        <span className="min-w-0 truncate">{label}</span>
+        <span className={wrapLabel ? "min-w-0 flex-1 whitespace-normal [overflow-wrap:anywhere]" : "min-w-0 truncate"}>{label}</span>
         {selected?.status !== "available" && value && <span aria-label={t($ => $.workspaces.unavailable)} className="size-1.5 shrink-0 rounded-full bg-muted-foreground" />}
         {!disabled && <ChevronDown className="size-3 shrink-0 text-muted-foreground" />}
       </DropdownMenuTrigger>

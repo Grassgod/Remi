@@ -146,7 +146,7 @@ export function IssueDetailSidebar({
             </PropRow>
           )}
           <PropRow label={tRuntime($ => $.location.label)} interactive={tasks.length === 0}>
-            <WorkLocationPicker wsId={issue.workspace_id} projectId={issue.project_id}
+            <WorkLocationPicker wsId={issue.workspace_id} projectId={issue.project_id} wrapLabel
               value={issue.runtime_workspace_id ?? null} onChange={onUpdateField} disabled={tasks.length > 0} />
           </PropRow>
           {/* Optional props — rendered only when set on the issue OR added
