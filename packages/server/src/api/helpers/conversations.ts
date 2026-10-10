@@ -4,6 +4,16 @@ import { denyCurrentUserWorkspaceAccess, loadChatSessionForCurrentUser, canCurre
 import { currentTaskAccessToken, currentWorkspaceMember, currentRequestUserId, hasVerifiedRequestIdentity } from "../wire/context.js";
 import type { SendMessageInput } from "@multiremi/contracts/unified-model.js";
 import type { TaskVisibilitySubject, TaskAuthMemo } from "./auth-guards.js";
+import { conversationLogLayer, type ConversationLogEntry } from "@multiremi/contracts/conversation-log.js";
+
+/** Display-only enrichment for /log; shared agent and Hub projections keep their wire. */
+export function conversationLogDisplayEntry(store: MultiremiStore, entry: ConversationLogEntry): ConversationLogEntry {
+  const turn = entry.kind === "turn" ? store.getTurn(entry.id) : null;
+  const display = turn ? { ...entry, metadata: { ...entry.metadata,
+    wake_source: turn.wake_source, trigger_message_id: turn.trigger_message_id,
+  } } : entry;
+  return { ...display, layer: conversationLogLayer(display) };
+}
 
 export function canAccessConversationTask(c: Context, store: MultiremiStore, task: TaskVisibilitySubject, memo?: TaskAuthMemo): boolean {
   if (task.chatSessionId) {

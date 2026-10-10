@@ -11,12 +11,56 @@
  * is renamed to `turn`, which keeps the backfill a 1:1 copy instead of a lossy
  * mapping.
  *
- * Type-only module plus the kind constants. The writer and the read routes land
- * in MUL-426 (B1).
+ * Shared row types, kind constants and read-side display-layer classification.
  */
 import type { MultiremiTaskStatus, TaskUsageEntry } from "./types.js";
 import type { TraceRef } from "./trace-file.js";
 import type { EnvelopeMetadata } from "./inbox.js";
+import type { WakeReason } from "./unified-model.js";
+
+export type ConversationLogLayer = "conversation" | "system";
+
+const TURN_WAKE_LAYERS = {
+  human_sender: "conversation", agent_dispatch: "conversation",
+  platform_to_owner: "system", member_to_delegator: "system",
+  to_leader: "system", to_parent_owner: "system",
+  agent_pair_not_privileged: "system", pair_round_trip_limit: "system",
+  self: "system", recipient_unavailable: "system", no_recipient: "system",
+  requested_next_turn: "system", requested_inbox_only: "system", migration: "system",
+  dependencies_unmet: "system", source_side_session: "system", no_issue_target: "system",
+  mention: "conversation", relay: "conversation",
+  delegation_return: "system", re_ring: "system",
+} as const satisfies Record<WakeReason | "mention" | "relay" | "delegation_return" | "re_ring", ConversationLogLayer>;
+
+/** Read-side presentation only; accepts cached rows without canonical headers. */
+export function conversationLogLayer(entry: {
+  kind: string;
+  body_md: string;
+  author_type?: string;
+  sender_type?: string | null;
+  message_kind?: string | null;
+  metadata?: Record<string, unknown>;
+}): ConversationLogLayer {
+  const metadata = entry.metadata ?? {};
+  if (entry.kind === "head") return "conversation";
+  if (entry.kind === "message") {
+    if (entry.sender_type != null) {
+      return entry.sender_type === "member" || entry.sender_type === "agent" ? "conversation" : "system";
+    }
+    // Old C7 envelopes lack a sender header; canonical member/agent messages
+    // may also carry an envelope reconstructed from their recipient columns.
+    if ((!entry.message_kind && metadata.envelope) || metadata.type === "workspace_move_cleared") return "system";
+    return entry.author_type === "member" || entry.author_type === "agent" ? "conversation" : "system";
+  }
+  if (entry.kind === "turn") {
+    if (metadata.envelope || /^\s*(?:#{1,6}\s*)?(?:\*\*|__)?读收件箱/.test(entry.body_md)) return "system";
+    const source = metadata.wake_source;
+    if (source == null) return "conversation";
+    return typeof source === "string" && Object.hasOwn(TURN_WAKE_LAYERS, source)
+      ? TURN_WAKE_LAYERS[source as keyof typeof TURN_WAKE_LAYERS] : "system";
+  }
+  return "system";
+}
 
 /** A row is either a display unit or a hidden lifecycle marker. */
 export type ConversationLogVisibility = "shown" | "hidden";
@@ -145,6 +189,8 @@ export interface ConversationLogEntryMetadata {
 
 /** The `turn` card: one row per agent turn, updated in place until it is terminal. */
 export interface ConversationLogTurnMetadata extends ConversationLogEntryMetadata {
+  wake_source?: string | null;
+  trigger_message_id?: string | null;
   /** Chat turns: the final reply folded into the card. */
   final_reply_md?: string | null;
   /** Issue turns: the reply stays a threadable `message` row, referenced by id. */
@@ -174,6 +220,8 @@ export interface ConversationLogTurnMetadata extends ConversationLogEntryMetadat
  * deep links working.
  */
 export interface ConversationLogEntry {
+  /** Derived on read; older cached rows may omit it. */
+  layer?: ConversationLogLayer;
   session_id: string;
   seq: number;
   id: string;

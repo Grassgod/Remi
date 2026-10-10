@@ -19,7 +19,11 @@ export function IssueActivityTrail({ group, expanded, showOlder, truncateOlder, 
 }) {
   const { t } = useT("issues");
   const timeAgo = useTimeAgo();
-  const summary = (event: ActivityEvent) => eventSummary(event.kind === "log" ? event.entry.body_md : formatActivity(event.entry, t, getActorName));
+  const summary = (event: ActivityEvent) => {
+    if (event.kind === "log") return eventSummary(event.entry.body_md);
+    const text = formatActivity(event.entry, t, getActorName);
+    return event.entry.action === "workspace_move_cleared" ? text : eventSummary(text);
+  };
   const hidden = expanded && truncateOlder && !showOlder ? Math.max(0, group.events.length - 8) : 0;
   const events = hidden ? group.events.slice(-8) : group.events;
   return <div data-activity-group={group.id} data-system-detail={group.system || undefined}>

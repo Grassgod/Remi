@@ -30,10 +30,10 @@ export interface TimelineView {
 // Coalesce consecutive activities from the same actor + action.
 // - task_completed / task_failed: no time limit (these repeat across runs)
 // - all other actions: within a 2-minute window
-// - squad_leader_evaluated: never coalesce; outcome/reason are audit data
+// - squad_leader_evaluated / workspace_move_cleared: keep each audit's details
 const COALESCE_MS = 2 * 60 * 1000;
 const NO_TIME_LIMIT_ACTIONS = new Set(["task_completed", "task_failed"]);
-const NEVER_COALESCE_ACTIONS = new Set(["squad_leader_evaluated"]);
+const NEVER_COALESCE_ACTIONS = new Set(["squad_leader_evaluated", "workspace_move_cleared"]);
 
 /**
  * Projects a raw timeline into what the stream renders. A session is already

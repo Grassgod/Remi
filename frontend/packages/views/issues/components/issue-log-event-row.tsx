@@ -4,10 +4,11 @@ import { TurnControls } from "../../common/turn-controls";
 import { ArrowRight, Diamond } from "lucide-react";
 import type { SessionLogRow } from "@multiremi/core/api/schemas/session-log";
 import type { SessionResult } from "@multiremi/core/types";
-import { envelopeType, eventSummary, isInboxTurn, metadataRecord, metadataString, reportOutcome } from "../../common/session-log/event-summary";
+import { eventSummary, metadataString } from "../../common/session-log/event-summary";
 import { formatElapsedMs } from "../../common/format";
 import { useT, useTimeAgo } from "../../i18n";
 import { assignmentAuthor, isSystemDetail } from "./issue-log-presentation";
+import { systemLogSummary } from "./issue-log-summary";
 
 interface IssueLogEventRowProps {
   row: SessionLogRow;
@@ -23,7 +24,6 @@ export function IssueLogEventRow({ row, onOpenTask, getActorName, taskAgents, re
   const timeAgo = useTimeAgo();
   const agentName = (id: unknown) => eventSummary(getActorName("agent", metadataString(id))) || t($ => $.log_event.unknown_agent);
   const system = isSystemDetail(row);
-  const envelope = metadataRecord(row.metadata.envelope);
   const summary = eventSummary(row.body_md) || t($ => $.log_event.generic);
   let label = summary;
   let status = "";
@@ -31,35 +31,11 @@ export function IssueLogEventRow({ row, onOpenTask, getActorName, taskAgents, re
   let action: (() => void) | undefined;
 
   if (row.metadata.envelope || row.id.startsWith("cmt_env_")) {
-    const recipient = eventSummary(getActorName("agent", metadataString(envelope.recipient_agent_id)));
-    const type = envelopeType(envelope);
-    const outcome = reportOutcome(envelope.outcome);
-    const source = metadataRecord(envelope.source);
-    const reporter = taskAgents.get(metadataString(source.taskId));
-    const name = reporter ? eventSummary(getActorName("agent", reporter)) : "";
-    const values = { notification: recipient ? t($ => $.log_event.envelope_recipient, { name: recipient }) : t($ => $.log_event.envelope_notice), reporter: name };
-    switch (type) {
-      case "delegation":
-        label = outcome === "completed" ? (name ? t($ => $.log_event.envelope_delegation_completed, values) : t($ => $.log_event.envelope_delegation_completed_generic, values))
-          : outcome === "failed" ? (name ? t($ => $.log_event.envelope_delegation_failed, values) : t($ => $.log_event.envelope_delegation_failed_generic, values))
-          : outcome === "cancelled" ? (name ? t($ => $.log_event.envelope_delegation_cancelled, values) : t($ => $.log_event.envelope_delegation_cancelled_generic, values))
-          : t($ => $.log_event.envelope_delegation_progress, values);
-        break;
-      case "child": label = outcome === "completed" ? t($ => $.log_event.envelope_child_completed, values)
-        : outcome === "failed" ? t($ => $.log_event.envelope_child_failed, values)
-        : outcome === "cancelled" ? t($ => $.log_event.envelope_child_cancelled, values) : t($ => $.log_event.envelope_child_updated, values); break;
-      case "dependency_failed": label = t($ => $.log_event.envelope_dependency_failed, values); break;
-      case "dependency_ready": label = t($ => $.log_event.envelope_dependency_ready, values); break;
-      case "decision_needed": label = t($ => $.log_event.envelope_decision_needed, values); break;
-      case "decision_answer": label = t($ => $.log_event.envelope_decision_answer, values); break;
-      case "delegation_progress": label = t($ => $.log_event.envelope_delegation_progress, values); break;
-      case "relay": label = t($ => $.log_event.envelope_relay, values); break;
-      default: label = t($ => $.log_event.envelope_generic, values);
-    }
+    label = systemLogSummary(row, getActorName, taskAgents, results, t);
   } else if (row.kind === "turn") {
     const assignee = agentName(row.metadata.assignee_agent_id);
-    if (isInboxTurn(row.body_md)) {
-      label = t($ => $.log_event.inbox_view, { name: assignee });
+    if (system) {
+      label = systemLogSummary(row, getActorName, taskAgents, results, t);
     } else {
       const author = assignmentAuthor(row);
       label = author ? t($ => $.log_event.task_assigned, {
@@ -75,10 +51,7 @@ export function IssueLogEventRow({ row, onOpenTask, getActorName, taskAgents, re
       if (typeof row.metadata.elapsed_ms === "number" && Number.isFinite(row.metadata.elapsed_ms)) duration = formatElapsedMs(row.metadata.elapsed_ms);
     }
   } else if (row.kind === "result_published") {
-    const result = results.get(metadataString(row.metadata.result_id));
-    const title = eventSummary(metadataString(row.metadata.title) || result?.title || "") || t($ => $.detail.result_untitled);
-    const publisher = result ? eventSummary(getActorName(result.published_by_type, result.published_by_id ?? "")) : "";
-    label = `${publisher ? `${publisher} ` : ""}${t($ => $.detail.result_published_activity, { title })}`;
+    label = systemLogSummary(row, getActorName, taskAgents, results, t);
     action = onShowKeyResults;
   }
 

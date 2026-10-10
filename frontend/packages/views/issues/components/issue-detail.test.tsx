@@ -2159,7 +2159,7 @@ describe("IssueDetail (shared)", () => {
 
     it("filters side-session activities and toggles third-layer audits while showing the cap hint", async () => {
       const activities = [audit("second", 1, "issue_created"), audit("system", 2, "decision_requested"),
-        audit("comment", 3, "comment_created"), audit("mention", 4, "comment_mention_skipped"), audit("duplicate", 5, "workspace_move_cleared")];
+        audit("comment", 3, "comment_created"), audit("mention", 4, "comment_mention_skipped"), audit("duplicate", 5, "comment_updated")];
       const head = activityRow(0, "head");
       const side = renderActivityRows([head], "side-activity", { activities, side: true });
       expect(side.container.querySelector("[data-issue-activity]")).toBeNull();
@@ -2170,6 +2170,53 @@ describe("IssueDetail (shared)", () => {
       fireEvent.click(screen.getByRole("switch", { hidden: true }));
       expect(view.container.querySelectorAll("[data-issue-activity]")).toHaveLength(3);
       expect(view.container.querySelectorAll("[data-activity-group][data-system-detail]")).toHaveLength(2);
+      await act(async () => {});
+    });
+
+    it("hides canonical platform reports and English wake turns until system details are enabled", async () => {
+      const report = activityRow(1, "message", { sender_type: "platform", message_kind: "report",
+        body_md: "INTERNAL report ises_hidden tsk_hidden", metadata: { envelope: {
+          kind: "report", to: { role: "delegator" }, outcome: "done", recipient_agent_id: "agent-1",
+        } } });
+      const wake = activityRow(2, "turn", { body_md: "INTERNAL English wake ises_hidden tsk_hidden",
+        metadata: { wake_source: "platform_to_owner", assignee_agent_id: "agent-1", delegated_by_agent_id: "agent-1" } });
+      const comment = activityRow(3, "message", { sender_type: "member", body_md: "Visible comment" });
+      const view = renderActivityRows([activityRow(0, "head"), report, wake, comment], "canonical-system-regression");
+      await act(async () => {});
+      expect(view.container).toHaveTextContent("Visible comment");
+      expect(view.container.querySelectorAll("[data-system-detail]")).toHaveLength(0);
+      expect(view.container).not.toHaveTextContent(/INTERNAL|ises_hidden|tsk_hidden/);
+      fireEvent.click(screen.getByRole("switch", { hidden: true }));
+      expect(view.container.querySelectorAll("[data-system-detail]")).toHaveLength(2);
+      expect(view.container).toHaveTextContent("QA checks new messages");
+      expect(view.container).toHaveTextContent("the delegated task is complete");
+      expect(view.container).not.toHaveTextContent(/INTERNAL|ises_hidden|tsk_hidden|QA → QA/);
+      fireEvent.click(screen.getByRole("switch", { hidden: true }));
+      expect(view.container.querySelectorAll("[data-system-detail]")).toHaveLength(0);
+    });
+
+    it("uses the same human summary for a platform envelope reply reference with system details off and on", async () => {
+      const report = activityRow(1, "message", { id: "platform-report-parent", sender_type: "platform", message_kind: "report",
+        body_md: "QA could not complete a task you delegated. Read the latest Session Updates.", metadata: { envelope: {
+          kind: "report", to: { role: "delegator" }, outcome: "failed", recipient_agent_id: "agent-1",
+        } } });
+      const reply = activityRow(2, "message", { sender_type: "agent", sender_id: "agent-1", author_type: "agent", author_id: "agent-1",
+        reply_to_id: report.id, body_md: "I will fix the blockers", body_html: "<p>I will fix the blockers</p>" });
+      const view = renderActivityRows([activityRow(0, "head"), report, reply], "platform-parent-reference");
+      await act(async () => {});
+      const quote = within(document.getElementById(`comment-${reply.id}`)!).getByText(/^Replying to/).closest("button")!;
+      const preview = quote.textContent;
+      expect(preview).toContain("Notified QA: the delegated task failed");
+      expect(view.container.querySelectorAll("[data-system-detail]")).toHaveLength(0);
+      expect(view.container).not.toHaveTextContent(/could not complete|Read the latest Session Updates/);
+      fireEvent.click(screen.getByRole("switch", { hidden: true }));
+      expect(view.container.querySelectorAll("[data-system-detail]")).toHaveLength(1);
+      expect(view.container.querySelector("[data-system-detail]")).toHaveTextContent("Notified QA: the delegated task failed");
+      expect(quote.textContent).toBe(preview);
+      expect(view.container).not.toHaveTextContent(/could not complete|Read the latest Session Updates/);
+      fireEvent.click(screen.getByRole("switch", { hidden: true }));
+      expect(view.container.querySelectorAll("[data-system-detail]")).toHaveLength(0);
+      expect(quote.textContent).toBe(preview);
       await act(async () => {});
     });
 
@@ -2696,43 +2743,53 @@ describe("IssueDetail (shared)", () => {
     });
   });
 
-  it.each(["en", "zh-Hans"] as const)("renders workspace move system log rows in %s with literal names", async (locale) => {
+  it.each(["en", "zh-Hans"] as const)("renders workspace move activities in %s with literal names", async (locale) => {
     const name = '**x** [x](mention://agent/fake) <b>x</b>';
-    mockApiObj.listTimeline.mockResolvedValue(["assignee", "project", "label"].map((field, index) => ({
-      type: "activity", id: `move-${field}`, actor_type: "system", actor_id: "",
-      content: "Server fallback body", details: { type: "workspace_move_cleared", field, name },
-      created_at: `2026-01-01T00:00:0${index}Z`, updated_at: `2026-01-01T00:00:0${index}Z`,
+    const activities: IssueActivityEntry[] = ["assignee", "project", "label"].map((field, index) => ({
+      type: "activity", id: `move-${field}`, actor_type: "system", actor_id: null,
+      action: "workspace_move_cleared", details: { field, name }, created_at: `2026-01-01T00:00:0${index}Z`,
+    }));
+    mockApiObj.listTimeline.mockResolvedValue(activities.map(({ details, created_at, id }) => ({
+      type: "activity", id: `message-${id}`, actor_type: "system", actor_id: "",
+      content: "Server fallback body", details: { type: "workspace_move_cleared", ...details },
+      created_at, updated_at: created_at,
     })));
+    const readLog = mockApiObj.getSessionLog.getMockImplementation()!;
+    mockApiObj.getSessionLog.mockImplementation(async (...args) => ({ ...await readLog(...args), activities }));
     renderIssueDetail("issue-1", undefined, undefined, locale);
+    await waitForReveal();
 
     const messages = locale === "en"
       ? [`cleared assignee “${name}” when moving workspaces`, `cleared project “${name}” when moving workspaces`, `removed label “${name}” when moving workspaces`]
       : [`移动工作区时清空了经办人「${name}」`, `移动工作区时清空了项目「${name}」`, `移动工作区时移除了标签「${name}」`];
-    await screen.findByText(messages[0]!);
-    for (const message of messages) expect(screen.getByText(message)).toBeInTheDocument();
+    const actor = locale === "en" ? "System" : "系统";
+    await screen.findByText(`${actor} ${messages[0]}`);
+    for (const message of messages) expect(screen.getByText(`${actor} ${message}`)).toBeInTheDocument();
     expect(screen.queryByText("Server fallback body")).not.toBeInTheDocument();
-    for (const row of document.querySelectorAll("[data-log-kind='system']")) {
+    expect(document.querySelectorAll("[data-issue-activity]")).toHaveLength(3);
+    expect(document.querySelector("[data-log-kind='system']")).toBeNull();
+    for (const row of document.querySelectorAll("[data-issue-activity]")) {
       expect(row.querySelector("a, strong, b")).toBeNull();
     }
   });
 
-  it("refreshes workspace move system log rows on the committed comment event", async () => {
+  it("appends workspace move activities on the committed activity event", async () => {
     mockApiObj.listTimeline.mockResolvedValue([]);
     renderIssueDetail();
     await screen.findByText("Add JWT auth to the backend");
     await waitForReveal();
-    expect(screen.queryByText("cleared project “Original project” when moving workspaces")).not.toBeInTheDocument();
-    mockApiObj.listTimeline.mockResolvedValue([{
-      type: "activity", id: "move-project", actor_type: "system", actor_id: "",
-      content: "Server fallback body", details: { type: "workspace_move_cleared", field: "project", name: "Original project" },
-      created_at: "2026-01-01T00:00:01Z", updated_at: "2026-01-01T00:00:01Z",
-    }]);
-    const callbacks = vi.mocked(useWSEvent).mock.calls.filter(([event]) => event === "comment:created");
+    expect(screen.queryByText("System cleared project “Original project” when moving workspaces")).not.toBeInTheDocument();
+    const entry: IssueActivityEntry = {
+      type: "activity", id: "move-project", actor_type: "system", actor_id: null,
+      action: "workspace_move_cleared", details: { field: "project", name: "Original project" },
+      created_at: "2026-01-01T00:00:01Z",
+    };
+    const callbacks = vi.mocked(useWSEvent).mock.calls.filter(([event]) => event === "activity:created");
     expect(callbacks.length).toBeGreaterThan(0);
     await act(async () => {
-      for (const [, handler] of callbacks) handler({ comment: { id: "move-project", issue_id: "issue-1", issue_session_id: "session-main" } });
+      for (const [, handler] of callbacks) handler({ issue_id: "issue-1", entry });
     });
-    expect(await screen.findByText("cleared project “Original project” when moving workspaces")).toBeInTheDocument();
+    expect(await screen.findByText("System cleared project “Original project” when moving workspaces")).toBeInTheDocument();
   });
 
   it("renders system log rows in seq order only when system details are enabled", async () => {

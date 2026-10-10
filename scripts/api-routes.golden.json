@@ -21135,7 +21135,8 @@
             "revision": 1,
             "created_at": "<timestamp>",
             "updated_at": "<timestamp>",
-            "deleted_at": null
+            "deleted_at": null,
+            "layer": "conversation"
           },
           {
             "sender_type": "member",
@@ -21174,7 +21175,8 @@
             "revision": 1,
             "created_at": "<timestamp>",
             "updated_at": "<timestamp>",
-            "deleted_at": null
+            "deleted_at": null,
+            "layer": "conversation"
           },
           {
             "sender_type": "platform",
@@ -21212,7 +21214,8 @@
             "revision": 1,
             "created_at": "<timestamp>",
             "updated_at": "<timestamp>",
-            "deleted_at": null
+            "deleted_at": null,
+            "layer": "system"
           }
         ],
         "head_seq": 3,

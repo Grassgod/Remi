@@ -65,7 +65,21 @@ describe("Issue activity placement and groups", () => {
     ]);
     expect(splitActivity(activity("old", 1, "issue_updated", { status: "todo", parent_id: null }))).toHaveLength(2);
     expect(splitActivity(activity("a", 1, "issue_updated", { position: 3, metadata: {}, archived_at: null }))).toEqual([]);
-    expect(placeActivities([], [activity("a", 1, "comment_created"), activity("b", 2, "workspace_move_cleared"), activity("c", 3, "unknown")], true)).toEqual([]);
+    expect(placeActivities([], [activity("a", 1, "comment_created"), activity("c", 3, "unknown")], true)).toEqual([]);
+  });
+  it("keeps workspace clearing as a conversation activity while hiding its platform message", () => {
+    const cleared = activity("cleared", 2, "workspace_move_cleared", { field: "project", name: "Original project" });
+    const message = { ...row(1, 2), sender_type: "platform", metadata: { type: "workspace_move_cleared" } };
+    const events = placeActivities([row(0, 0, "head"), message], [cleared], false);
+    expect(events.map(event => event.entry.id)).toEqual(["row-0", "cleared"]);
+    expect(events[1]!.kind === "activity" && events[1]!.system).toBe(false);
+    expect(events[1]!.entry).toMatchObject({ details: { field: "project", name: "Original project" } });
+  });
+  it("preserves every workspace clearing detail when consecutive records share an actor and action", () => {
+    const activities = ["assignee", "project", "label", "label"].map((field, n) =>
+      activity(`clear-${n}`, n + 1, "workspace_move_cleared", { field, name: `Name ${n}` }));
+    const groups = activityTrails(groupEvents(placeActivities([row(0, 0, "head")], activities, false)));
+    expect(groups.trailers.get("row-0")![0]!.events.map(event => event.entry.id)).toEqual(activities.map(a => a.id));
   });
 });
 

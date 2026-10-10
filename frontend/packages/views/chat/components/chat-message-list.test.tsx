@@ -332,6 +332,34 @@ describe("ChatMessageList measurement contract", () => {
     view.unmount(); client.clear();
   });
 
+  it.each([false, true])("hides platform/timer reports and English wake turns with wire layer present: %s", withLayer => {
+    const entries = ["platform", "timer"].map((sender_type, index) => SessionLogEntrySchema.parse({
+      session_id: "cs-1", seq: index + 1, id: `internal-${index}`, revision: 1, kind: "message",
+      sender_type, message_kind: "report", body_md: "INTERNAL report ises_123 tsk_456",
+      body_html: null, render_version: null, metadata: { envelope: { kind: "report" } },
+      ...(withLayer ? { layer: "system" } : {}),
+    }));
+    entries.push(SessionLogEntrySchema.parse({ session_id: "cs-1", seq: 3, id: "wake-platform",
+      revision: 1, kind: "turn", body_md: "INTERNAL English wake prompt ises_123", body_html: null,
+      render_version: null, metadata: { wake_source: "platform_to_owner", final_reply_md: "INTERNAL wake reply" },
+      ...(withLayer ? { layer: "system" } : {}),
+    }));
+    entries.push(SessionLogEntrySchema.parse({ session_id: "cs-1", seq: 4, id: "reply-agent",
+      revision: 1, kind: "message", sender_type: "agent", message_kind: "reply", body_md: "Visible reply",
+      body_html: null, render_version: null, metadata: { envelope: { kind: "reply" } },
+      ...(withLayer ? { layer: "conversation" } : {}),
+    }));
+    const client = new QueryClient();
+    const replica = new MemorySessionReplica({ "cs-1": { entries } });
+    const view = render(<QueryClientProvider client={client}>
+      <ChatMessageList sessionId="cs-1" replica={replica} optimisticRows={[]} pendingTask={null} availability={undefined} />
+    </QueryClientProvider>);
+    expect(view.container).not.toHaveTextContent(/INTERNAL|ises_|tsk_/);
+    expect(view.container).toHaveTextContent("Visible reply");
+    expect(view.container.querySelectorAll('[data-perf-item="message"]')).toHaveLength(1);
+    view.unmount(); client.clear();
+  });
+
   it("marks exactly one terminal anchor on the last log row", () => {
     const { container } = renderList(
       [attachmentPush("msg-1", "first"), terminalReply("msg-2")],
