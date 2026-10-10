@@ -4443,7 +4443,8 @@ ${placementAfter.sql}
   private lockTaskDaemonReport(taskId: string, authority: TaskDaemonReportAuthority, usageRunId?: string): MultiremiTask {
     this.ctx.lockWorkspaceRuntimeLifecycle(authority.workspaceId);
     const task = this.getTask(taskId);
-    const runtime = this.ctx.runtimes().getRuntime(authority.runtimeId);
+    // Report authority needs identity fields, never the Runtime's historical usage.
+    const runtime = this.ctx.runtimes().getRuntimeLite(authority.runtimeId);
     const bound = usageRunId ? this.ctx.db.query("SELECT runtime_id,workspace_id FROM multiremi_usage_run_scopes WHERE task_id=? AND run_id=?").get(taskId, usageRunId) as Row | null : null;
     if (!task || (bound?.runtime_id ?? task.runtimeId) !== authority.runtimeId || task.workspaceId !== authority.workspaceId
       || (bound && bound.workspace_id !== authority.workspaceId)

@@ -536,6 +536,10 @@ SSH 配置 revision 时，才广播 `daemon:ssh_mesh_changed` 重新下发整个
 使现有连接读取新配置；回滚不发布。插件绑定通过真实 HTTP 写入口发布现有的
 `agent_plugin:*` 事件，唤醒配置下行及派活条件检查。
 
+插件心跳协调只读取当前 Runtime 及其状态；工作区绑定和活跃任务的版本需求仍用于计算
+desired，配置变更继续协调整个工作区。`task:usage` 仅向浏览器通知用量变化，不唤醒 daemon
+下行或派活。Daemon 报告在事务锁内使用轻量 Runtime 身份校验，不计算历史用量。
+
 | 事件 | 下行 | 派活 |
 | --- | --- | --- |
 | `daemon:heartbeat`、`activity:created` | 无 | 无 |
