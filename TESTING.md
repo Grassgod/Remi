@@ -63,7 +63,8 @@ API/store 测试可参考 [issues API 测试](tests/unit/multiremi/multiremi-api
 
 - 合并请求只跑快检查：架构守卫、CLI 能力、前端类型/测试、CLI 和容器构建、平台专项检查。`build` job 里的「Backend test suite」显示为跳过（skipped），job 仍正常报告结果。同一个合并请求推送新提交时，未跑完的旧运行会被自动取消。
 - 后端全套 `bun run test` 在合入 main 后的 push 运行里跑。main 上的运行互不取消，每个 main 提交都有自己的完整结果。
-- 发版门禁不变：打 tag 前，目标 main SHA 必须有一次全绿的 main push 运行或 main 上的手动运行（都含后端全套）。合并请求上的绿灯不能代替。检查停用后重新打开时，main 不会自动补跑，用 `gh workflow run release-build-check.yml --ref main` 手动跑一次。
+- 打 tag 前，目标 main SHA 必须有一次全绿的 main push 运行或 main 上的手动运行。默认运行后端全套；合并请求上的绿灯不能代替。检查停用后重新打开时，main 不会自动补跑，用 `gh workflow run release-build-check.yml --ref main` 手动跑一次。
+- 完整后端套件已经跑完且仅少量用例失败时，可以用 `gh workflow run release-build-check.yml --ref main -f retry_backend_run_id=<完整运行 ID>` 补跑失败文件。入口核验原运行来自 main、完整测试汇总和 HOME 清理、失败文件数量及其他 job 全绿；原 SHA 必须是目标 SHA 的祖先，差异只能是这条重跑入口、其脚本/测试和本说明，业务源码、依赖与原有测试必须完全相同。通过部分复用原完整运行的证据，失败文件与重跑入口自身的测试实跑；前端、架构与构建检查继续执行。取消或中断的套件、源码变化、只有部分测试的运行和重跑本身都不能作为基准。夹具创建使用 15 秒完成预算，该预算不是性能验收阈值。
 - main 上后端全套变红时，带头大哥当天定位到对应的合并，修复或回滚。QA 维护测试集的职责不变：测试本身的问题由 QA 修复或暂时隔离，代码问题开单处理。
 - 合并请求作者仍应在本地跑与改动相关的测试文件（`bun run test <path>`）。
 
