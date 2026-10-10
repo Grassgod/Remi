@@ -6,23 +6,22 @@ An ordinary decision is a message with options and a same-session reply. A persi
 business question uses the versioned `message question` actions below.
 
 Issue responsibility is resolved with `remi issue responsibility <issue>`: the
-execution coordinator belongs to the Issue, the direct parent coordinator reviews
-child results, and the root explicitly designates a human. Create/update accepts
-`--responsible-member <workspace-member-id>`; `remi issue responsible set <root>
---member <member-id>` explicitly transfers it and preserves ownership audit.
-Children inherit the root human and never persist an independent copy. New execution
-assignees use `agent` or `squad`; historical member assignments remain visible as
-needing configuration and are not valid execution coordinators.
+execution coordinator belongs to the Issue and the direct parent coordinator
+reviews child results. Workers consult their Leader, Leaders consult the parent
+Leader when needed, and user questions remain in the native AskUserQuestion entry.
+No designated-human field is required for creation, native questions or ordinary
+closure. New execution assignees use `agent` or `squad`; historical member assignments
+remain visible as needing an Agent/Leader configuration.
 
-`remi issue delivery list|submit <issue>` reads or submits formal delivery evidence;
-submit requires the execution coordinator's identity and `--summary` or JSON input.
-Delivery list takes `--limit 1..100` and `--cursor <nextCursor>` for older pages.
-`remi issue delivery accept|return <issue> <delivery> --revision <responsibilityRevision>`
-reviews that exact delivery (`return` requires `--reason`). The designated human can
-use `remi issue delivery authorize <issue> <delivery> --revision <revision> --agent
-<execution-owner>` or `--revoke`; this authorization applies only to that delivery
-and ownership version. Task completion and ordinary parent-done grants do not
-replace formal acceptance.
+`remi issue delivery list|submit <issue>` reads or submits optional formal delivery
+evidence; submit requires the execution coordinator's identity and `--summary` or
+JSON input. Delivery list takes `--limit 1..100` and `--cursor <nextCursor>` for older
+pages. `remi issue delivery accept|return <issue> <delivery> --revision
+<responsibilityRevision>` reviews that exact delivery (`return` requires `--reason`).
+Child review belongs to its parent Leader. Legacy human-reviewed receipts and their
+concrete `delivery authorize --agent <execution-owner>|--revoke` grants remain
+compatible. Ordinary status changes preserve parent, dependency, summary and member
+permission guards, without requiring a formal human acceptance receipt.
 
 `remi issue question list <issue>` and `remi message question get <Q>` expose the
 one original question, unchanged options, separate Remi summary, current handler,
@@ -43,21 +42,15 @@ notification lane and current responsibility revision for every action.
 answer changes additionally require `--revise --answer-revision --reason`.
 Ordinary message replies do not require a question revision.
 
-`remi issue responsibility-unassigned list <workspace> --limit 100 --offset 0`
-shows original ownership, creator facts, unconfirmed candidates and the current
-responsibility revision. Workspace administrators apply explicit selections with
-`remi issue responsibility-unassigned map <workspace> --reason <reason> --data
-'{"mappings":[{"issueId":"root","memberId":"human","revision":"current"}]}'`.
-No candidate is automatically selected or promoted into responsibility.
-`remi autopilot responsible set <autopilot> --member <member>` configures future
-automatic root issues; create/update JSON uses `responsible_member_id`.
-Feishu bot configuration JSON uses the same field.
-`workspace feishu-bot set --responsible-member <member>` explicitly configures
-the bot human, while `--clear-responsible` leaves new automatic roots unconfigured.
-Topic configuration accepts
-`workspace issue-topics set --responsible-member <member>` or
-`--inherit-bot-responsible` to clear its override. Missing explicit bot/automation
-configuration blocks automatic root creation while preserving incoming Chat.
+Legacy `issue responsible set`, `issue responsibility-unassigned list|map`,
+`autopilot responsible set`, the `--responsible-member` / `--clear-responsible`
+options and `responsible_member_id` JSON fields remain executable for old clients
+and historical receipt compatibility. New web forms do not expose these controls.
+They are not prerequisites for new Issues or automatic root creation, and bot or
+automation fields are not copied into new roots. Notification preferences choose
+transport targets; actual native answers still require the source's member and
+private-conversation permissions. These compatibility fields never appoint an
+answerer for a native Issue question.
 
 Unified usage uses `remi dashboard usage report` with `--days n|all`,
 `--since`, `--until`, `--tz`, `--project` and `--runtime`.

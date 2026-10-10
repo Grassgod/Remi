@@ -34,8 +34,8 @@ describe("one Q on every surface", () => {
     expect(screen.getByText(/Use the revised answer/)).toBeInTheDocument();
     expect(screen.queryByText("Route revision 7")).toBeNull();
   });
-  it("keeps management inputs out of native answers and retains a draft after cancelling a secondary action", async () => {
-    mount({ ...base, original_message: "Continue?", original_questions: [
+  it("answers native user questions without a designated handler and retains a draft after cancelling a secondary action", async () => {
+    mount({ ...base, current_handler: null, stage: "human", original_message: "Continue?", original_questions: [
       { question: "Continue?", options: [{ label: "Continue" }, { label: "Stop" }] },
     ], actions: { allowed: ["answer", "transfer", "close"] } });
     expect(screen.queryByRole("textbox", { name: "Reason" })).toBeNull();

@@ -1,4 +1,4 @@
-import { expect, it } from 'bun:test';
+import { beforeEach, afterEach, expect, it } from 'bun:test';
 import { createMultiremiApp, startMultiremiServer } from '@multiremi/api.js';
 import { createReadPool } from '@multiremi/store/db/read-pool.js';
 import { createHub } from '@multiremi/api/hub/hub-core.js';
@@ -9,14 +9,17 @@ import { createResponsibleTestIssue, authenticateBrowserWebSocket } from './help
 import { pendingTurnBackendTests } from './pending-turn-test-backends.js';
 
 pendingTurnBackendTests('private native Q notifications', fixture => {
+  let previousEncryptionKey: string | undefined;
+  beforeEach(() => { previousEncryptionKey = process.env.MULTIREMI_FEISHU_BOT_ENCRYPTION_KEY; process.env.MULTIREMI_FEISHU_BOT_ENCRYPTION_KEY = Buffer.alloc(32, 11).toString('base64'); });
+  afterEach(() => { if (previousEncryptionKey === undefined) delete process.env.MULTIREMI_FEISHU_BOT_ENCRYPTION_KEY; else process.env.MULTIREMI_FEISHU_BOT_ENCRYPTION_KEY = previousEncryptionKey; });
   it('a public parent lane does not reveal the private original Q to an unrelated member', async () => {
     const { store, db, databaseUrl } = fixture();
     const humanUser = store.getOrCreateUser({ externalId: 'notification-human', name: 'Human' });
     const human = store.createWorkspaceMember({ userId: humanUser.id, name: 'Human', role: 'member' });
     const observerUser = store.getOrCreateUser({ externalId: 'notification-observer', name: 'Observer' });
     store.createWorkspaceMember({ userId: observerUser.id, name: 'Observer', role: 'member' });
-    const runtime = store.registerRuntime({ name: 'Notification host', provider: 'codex', daemonId: 'notification-native' });
-    const worker = store.createAgent({ name: 'Private source', visibility: 'private', ownerId: 'local', provider: 'codex' });
+    const runtime = store.registerRuntime({ name: 'Notification host', provider: 'codex', daemonId: 'notification-native', ownerId: humanUser.id });
+    const worker = store.createAgent({ name: 'Private source', visibility: 'private', ownerId: humanUser.id, provider: 'codex' });
     const parent = createResponsibleTestIssue(store, { title: 'Public parent', responsibleMemberId: human.id, assigneeType: 'agent', assigneeId: worker.id });
     const child = createResponsibleTestIssue(store, { title: 'Private source work', parentIssueId: parent.id, assigneeType: 'agent', assigneeId: worker.id });
     const parentSession = store.getOrCreateDefaultIssueSession(parent.id);
@@ -30,7 +33,11 @@ pendingTurnBackendTests('private native Q notifications', fixture => {
       { runtimeId: runtime.id, daemonId: runtime.daemonId!, workspaceId: 'local' });
     expect(created.ok).toBe(true);
     const id = String(created.message_id);
-    const notification = store.listMessages(parentSession.id).find(row => row.metadata.question_notification && row.metadata.root_question_id === id)!;
+    // A normal forwarded notification retains source visibility without appointing a human.
+    const notification = store.sendMessage({ session_id: parentSession.id, sender: { type: 'platform', id: null },
+      to: { type: 'member', ref: human.id }, message_kind: 'request', wake_requested: 'inbox_only',
+      body_md: 'PRIVATE-NATIVE-NOTIFICATION-BODY', metadata: { question_notification: true, root_question_id: id,
+        question_route_revision: store.getQuestion(id)!.route_revision } }).message;
     expect(notification).toBeDefined(); expect(notification.body_md).toContain('PRIVATE-NATIVE-NOTIFICATION-BODY');
     const app = createMultiremiApp({ store, authToken: 'notification-master' });
     const rootToken = await store.createAccessToken({ type: 'pat', name: 'Human', userId: humanUser.id, workspaceId: 'local' });
@@ -40,7 +47,7 @@ pendingTurnBackendTests('private native Q notifications', fixture => {
     expect((await get(`/api/messages/${notification.id}`, rootToken.token)).status).toBe(200);
     expect((await get(`/api/messages/${id}/question`, observerToken.token)).status).toBe(404);
     expect((await get(`/api/messages/${notification.id}`, observerToken.token)).status).toBe(404);
-    expect((await get(`/api/messages/${id}`, rootToken.token)).status).toBe(404);
+    expect((await get(`/api/messages/${id}`, rootToken.token)).status).toBe(200);
     const rootInbox = await (await get('/api/inbox?limit=1', rootToken.token)).json() as any;
     expect(rootInbox.items.map((row: any) => row.id)).toEqual([notification.id]);
     expect(rootInbox).toMatchObject({ unread_count: 1, attention_count: 0, next_cursor: null });
@@ -119,52 +126,52 @@ pendingTurnBackendTests('private native Q notifications', fixture => {
       expect(rootAfter.items.map((row: any) => row.id)).toEqual([related.id]); expect(rootAfter.unread_count).toBe(3);
     } finally { sockets.forEach(socket => socket.close()); server.stop(true); detach(); hub.shutdown(); await pool.close(); }
   }, 20_000);
-  it('Remi reads and presents from the actual current notification scope without inheriting its human token owner', async () => {
-    const { store } = fixture();
-    const previousKey = process.env.MULTIREMI_FEISHU_BOT_ENCRYPTION_KEY;
-    process.env.MULTIREMI_FEISHU_BOT_ENCRYPTION_KEY = Buffer.alloc(32, 7).toString('base64');
-    try {
-      const user = store.getOrCreateUser({ externalId: 'presenter-root', name: 'Root' });
-      const human = store.createWorkspaceMember({ userId: user.id, name: 'Root', role: 'member' });
-      const runtime = store.registerRuntime({ name: 'Presenter host', provider: 'codex', daemonId: 'notification-presenter', maxConcurrency: 16 });
-      const worker = store.createAgent({ name: 'Private source', provider: 'codex', visibility: 'private', ownerId: 'local', runtimeId: runtime.id });
-      const remi = store.createAgent({ name: 'Presenter', provider: 'codex', maxConcurrentTasks: 8, runtimeId: runtime.id });
-      store.upsertFeishuBotConfig('local', { agentId: remi.id, runtimeId: runtime.id, appId: 'cli_notification_test', enabled: false,
-        appSecretOp: 'set', appSecret: 'synthetic-only', domain: 'feishu', responsibleMemberId: human.id });
-      const issue = createResponsibleTestIssue(store, { title: 'Private question for root', assigneeType: 'agent', assigneeId: worker.id, responsibleMemberId: human.id });
-      const session = store.getOrCreateDefaultIssueSession(issue.id);
-      const task = store.createTask({ agentId: worker.id, issueId: issue.id, prompt: 'Private question' });
-      expect(store.claimTask(runtime.id)?.id).toBe(task.id); store.startTask(task.id);
-      const turn = store.getTurnForAttempt(task.id)!;
-      const created = store.getDaemonTurnBridge().rpc('turn.decision', { turn_id: turn.id, attempt_id: task.id,
-        wait_id: 'presenter-private', dedupe_key: 'presenter-private', body_md: 'PRIVATE-PRESENTER-QUESTION',
-        options: [{ label: 'Allow', value: 'allow_once' }], metadata: { kind: 'permission', options: [{ optionId: 'allow_once', kind: 'allow_once', name: 'Allow' }] } },
-        { runtimeId: runtime.id, daemonId: runtime.daemonId!, workspaceId: 'local' });
-      expect(created.ok).toBe(true); const id = String(created.message_id);
-      const notification = store.listMessages(session.id).find(row => row.metadata.question_present_request && row.metadata.root_question_id === id)!;
-      const notified = store.claimTask(runtime.id)!; expect(notified.agentId).toBe(remi.id); store.startTask(notified.id);
-      const credential = await store.createTaskAccessToken(store.getTask(notified.id)!, user.id);
-      const app = createMultiremiApp({ store, authToken: 'presenter-master' });
-      const call = (path: string, token: string, body?: unknown) => app.request(path, { method: body ? 'POST' : 'GET',
-        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, ...(body ? { body: JSON.stringify(body) } : {}) });
-      expect((await call(`/api/messages/${notification.id}`, credential.token)).status).toBe(200);
-      expect((await call(`/api/messages/${id}/question`, credential.token)).status).toBe(200);
-      expect((await call(`/api/messages/${id}`, credential.token)).status).toBe(404);
-      const side = store.sendMessage({ session_id: session.id, execution_scope: 'unrelated-presenter-scope',
-        sender: { type: 'member', id: human.id }, to: { type: 'agent', ref: remi.id }, message_kind: 'request', wake_requested: 'now', body_md: 'Unrelated work' });
-      const sideTask = store.claimTask(runtime.id)!; expect(sideTask.id).toBe(store.getTurn(side.turn_id!)!.current_attempt_id!); store.startTask(sideTask.id);
-      const wrong = await store.createTaskAccessToken(store.getTask(sideTask.id)!, user.id);
-      expect((await call(`/api/messages/${notification.id}`, wrong.token)).status).toBe(404);
-      expect((await call(`/api/messages/${id}/question`, wrong.token)).status).toBe(403);
-      expect((await call(`/api/messages/${id}/question/present`, credential.token,
-        { expected_route_revision: 1, summary: 'Same Q, authorized presenter.' })).status).toBe(200);
-      expect(store.getQuestion(id)?.summary?.agent_id).toBe(remi.id);
-      const rootToken = await store.createAccessToken({ type: 'pat', name: 'Root', userId: user.id, workspaceId: 'local' });
-      store.updateIssue(issue.id, { responsibleMemberId: 'mem_local_local', actorType: 'member', actorId: human.id });
-      expect((await call(`/api/messages/${notification.id}`, credential.token)).status).toBe(404);
-      expect((await call(`/api/messages/${notification.id}`, rootToken.token)).status).toBe(404);
-      expect((await call(`/api/messages/${id}/question`, rootToken.token)).status).toBe(404);
-      expect(store.getMessage(notification.id)).not.toBeNull();
-    } finally { if (previousKey === undefined) delete process.env.MULTIREMI_FEISHU_BOT_ENCRYPTION_KEY; else process.env.MULTIREMI_FEISHU_BOT_ENCRYPTION_KEY = previousKey; }
-  }, 20_000);
+  it('native Issue questions do not appoint Remi or borrow its token owner as an answerer', async () => {
+    const { store, db } = fixture();
+    const user = store.getOrCreateUser({ externalId: 'native-source-owner', name: 'Source owner' });
+    const human = store.createWorkspaceMember({ userId: user.id, name: 'Source owner', role: 'member' });
+    const runtime = store.registerRuntime({ name: 'Native presenter host', provider: 'codex', daemonId: 'native-presenter', maxConcurrency: 8, ownerId: user.id });
+    const worker = store.createAgent({ name: 'Private source', provider: 'codex', visibility: 'private', ownerId: user.id });
+    const remi = store.createAgent({ name: 'Remi', provider: 'codex', visibility: 'workspace', ownerId: user.id, maxConcurrentTasks: 8 });
+    store.upsertFeishuBotConfig('local', { agentId: remi.id, runtimeId: runtime.id, appId: 'cli_native_presenter', enabled: false,
+      appSecretOp: 'set', appSecret: 'synthetic-only', domain: 'feishu' });
+    const issue = store.createIssue({ title: 'Native permission', assigneeType: 'agent', assigneeId: worker.id });
+    const task = store.createTask({ agentId: worker.id, issueId: issue.id, prompt: 'Original source' });
+    expect(store.claimTask(runtime.id)?.id).toBe(task.id); store.startTask(task.id);
+    const turn = store.getTurnForAttempt(task.id)!;
+    const created = store.getDaemonTurnBridge().rpc('turn.decision', { turn_id: turn.id, attempt_id: task.id,
+      wait_id: 'native-source-permission', dedupe_key: 'native-source-permission', body_md: 'PRIVATE-NATIVE-PERMISSION',
+      options: [{ label: 'Allow', value: 'allow_once' }], metadata: { kind: 'permission',
+        options: [{ optionId: 'allow_once', kind: 'allow_once', name: 'Allow' }] } },
+      { runtimeId: runtime.id, daemonId: runtime.daemonId!, workspaceId: 'local' });
+    expect(created.ok).toBe(true); const id = String(created.message_id);
+    expect(store.getQuestion(id)).toMatchObject({ stage: 'human', current_handler: null });
+    const presented = store.claimTask(runtime.id)!;
+    expect(presented.agentId).toBe(remi.id); store.startTask(presented.id);
+    const presentationCredential = await store.createTaskAccessToken(store.getTask(presented.id)!, user.id);
+    const unrelatedMessage = store.sendMessage({ session_id: store.getOrCreateDefaultIssueSession(issue.id).id, sender: { type: 'platform', id: null },
+      to: { type: 'agent', ref: remi.id }, message_kind: 'request', wake_requested: 'now', execution_scope: 'unrelated-remi', body_md: 'Unrelated Remi work' });
+    const unrelatedTurn = store.getTurn(unrelatedMessage.turn_id!)!;
+    const unrelated = store.getTask(unrelatedTurn.current_attempt_id!)!;
+    expect(unrelatedTurn.execution_scope).toBe('unrelated-remi');
+    db.run("UPDATE multiremi_turns SET status='running' WHERE id=?", [unrelatedTurn.id]);
+    db.run("UPDATE multiremi_turn_attempts SET status='running' WHERE id=?", [unrelated.id]);
+    const credential = await store.createTaskAccessToken(store.getTask(unrelated.id)!, user.id);
+    const app = createMultiremiApp({ store, authToken: 'native-presenter-master' });
+    const request = (path: string, token: string) => app.request(path, { headers: { Authorization: `Bearer ${token}` } });
+    expect((await request(`/api/messages/${id}/question`, credential.token)).status).toBe(403);
+    expect((await request(`/api/messages/${id}/question`, presentationCredential.token)).status).toBe(200);
+    const present = await app.request(`/api/messages/${id}/question/present`, { method: 'POST',
+      headers: { Authorization: `Bearer ${presentationCredential.token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ expected_route_revision: 1, summary: 'Present the same native question' }) });
+    expect(present.status).toBe(200);
+    const answer = await app.request(`/api/messages/${id}/question/answer`, { method: 'POST',
+      headers: { Authorization: `Bearer ${presentationCredential.token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ expected_route_revision: 1, response: { answer: 'Allow' } }) });
+    expect(answer.status).toBe(403);
+    const humanCredential = await store.createAccessToken({ type: 'pat', name: 'Source user', userId: user.id, workspaceId: 'local' });
+    const question = await (await request(`/api/messages/${id}/question`, humanCredential.token)).json() as any;
+    expect(question.question.actions.allowed).toContain('answer');
+    expect(store.getWorkspaceMember(human.id)?.userId).toBe(user.id);
+  });
 });

@@ -146,14 +146,14 @@ for (const backend of ['sqlite','postgres'] as const) describe.skipIf(backend ==
     expect({message:store.getMessage(delivery.id),activity:store.listIssueActivity(foreign.id)}).toEqual(before);
     expect(store.listIssueDeliveries(foreign.id)[0]?.invalidatedAt).toBeUndefined();
   }));
-  it('requires an explicit human source and exposes unresolved legacy roots without guessing', () => run((store,db) => {
-    expect(() => store.createIssue({title:'No responsibility'})).toThrow('explicit responsible_member_id');
+  it('permits roots and child delivery without a designated human', () => run((store,db) => {
+    expect(store.createIssue({title:'No responsibility'}).responsibleMemberId).toBeNull();
     const f = fixture(store);
     db.run('UPDATE multiremi_issues SET responsible_member_id=NULL WHERE id=?',[f.root.id]);
     const resolution = store.resolveIssueResponsibility(f.child.id);
     expect(resolution.rootHuman).toBeNull();
-    expect(resolution.unresolved).toContainEqual({issueId:f.root.id,reason:'human_missing'});
-    expect(() => store.submitIssueDelivery(f.child.id,{summary:'Delivered'},f.workerActor)).toThrow('responsibility chain');
+    expect(resolution.unresolved).not.toContainEqual({issueId:f.root.id,reason:'human_missing'});
+    expect(store.submitIssueDelivery(f.child.id,{summary:'Delivered'},f.workerActor).reviewOwner.id).toBe(f.owner.id);
   }));
   it('derives parent review and root human only from the Issue tree; comments do not change revision', () => run((store) => {
     const f = fixture(store);
@@ -203,9 +203,8 @@ for (const backend of ['sqlite','postgres'] as const) describe.skipIf(backend ==
     expect(store.listIssueDeliveries(f.child.id)).toHaveLength(1);
     expect(store.respondIssueDelivery(f.child.id,delivery.id,{action:'accept',revision:delivery.responsibilityRevision},f.ownerActor)).toEqual(accepted);
   }));
-  it('requires the root designated human; force, task completion and ordinary members cannot substitute', () => run((store) => {
+  it('retains designated reviewers for legacy receipts without requiring them for ordinary closure', () => run((store) => {
     const f = fixture(store);
-    expect(() => store.updateIssue(f.root.id,{status:'done',force:true,actorType:'member',actorId:f.other.id})).toThrow('specific delivery');
     store.updateIssue(f.child.id,{status:'cancelled'});
     const delivery = store.submitIssueDelivery(f.root.id,{summary:'Final root result'},f.ownerActor);
     expect(() => store.respondIssueDelivery(f.root.id,delivery.id,{action:'accept',revision:delivery.responsibilityRevision},f.ownerActor)).toThrow('designated');
@@ -214,7 +213,8 @@ for (const backend of ['sqlite','postgres'] as const) describe.skipIf(backend ==
     expect(accepted.status).toBe('accepted');
     expect(store.getIssue(f.root.id)?.status).toBe('done');
     store.updateIssue(f.root.id,{status:'todo'});
-    expect(() => store.updateIssue(f.root.id,{status:'done',actorType:'member',actorId:f.human.id})).toThrow('specific delivery');
+    expect(() => store.updateIssue(f.root.id,{status:'done',actorType:'member',actorId:f.human.id})).toThrow('owner publishes a result');
+    expect(store.updateIssue(f.root.id,{status:'done',force:true,actorType:'member',actorId:f.human.id}).status).toBe('done');
   }));
   for (const parentState of ['done','cancelled','archived'] as const) it(`persists a late formal delivery without waking its ${parentState} parent`, () => run((store,db) => {
     const f = fixture(store);
@@ -310,7 +310,7 @@ for (const backend of ['sqlite','postgres'] as const) describe.skipIf(backend ==
     db.exec('ALTER TABLE multiremi_issues DROP COLUMN responsible_member_id');
     const migrated=restart();
     expect(migrated.store.getIssue(f.root.id)?.responsibleMemberId).toBeNull();
-    expect(migrated.store.resolveIssueResponsibility(f.child.id).unresolved).toContainEqual({issueId:f.root.id,reason:'human_missing'});
+    expect(migrated.store.resolveIssueResponsibility(f.child.id).unresolved).not.toContainEqual({issueId:f.root.id,reason:'human_missing'});
     expect(migrated.store.listIssueDeliveries(f.child.id)[0]?.sourceSessionId).toBe(delivery.sourceSessionId);
     const again=restart();
     expect(again.store.getMessage(delivery.id)?.session_id).toBe(delivery.sourceSessionId);
@@ -356,38 +356,26 @@ for (const backend of ['sqlite','postgres'] as const) describe.skipIf(backend ==
     const list = await app.request(`/api/issues/${f.child.id}/deliveries`,{headers});
     expect((await list.json()).deliveries).toHaveLength(1);
   }));
-  it('rejects batch closure before any row changes and ignores body acceptance options on both HTTP surfaces', () => run(async (store,db) => {
-    const f=fixture(store);store.updateIssue(f.child.id,{status:'cancelled'});
-    const submitted=store.submitIssueDelivery(f.root.id,{summary:'Legitimate settled root'},f.ownerActor);
-    const receipt=store.respondIssueDelivery(f.root.id,submitted.id,{action:'accept',revision:submitted.responsibilityRevision},{type:'member',id:f.human.id});
-    const token=await store.createAccessToken({name:'Batch test member',type:'pat',workspaceId:'local',userId:'local'});
-    const app=createMultiremiApp({store,authToken:'batch-test'});
-    const headers={Authorization:`Bearer ${token.token}`,'Content-Type':'application/json'};
-    const activityCount=()=>Number(db.query('SELECT COUNT(*) AS total FROM multiremi_conversation_log').get()?.total);
-    const events:string[]=[];const off=store.onWorkspaceEvent(event=>events.push(event.type));
-    try {
-      for(const surface of ['/api/issues','/api/multiremi/issues'])for(const injected of [
-        {},{force:true},{acceptedDeliveryId:receipt.id},{accepted_delivery_id:receipt.id},
-        {options:{acceptedDeliveryId:receipt.id,allowParentStatusGuardBypass:true}},
-      ]) {
-        const before=activityCount();
-        const response=await app.request(`${surface}/batch-update`,{method:'POST',headers,
-          body:JSON.stringify({issue_ids:[f.root.id,f.child.id],updates:{status:'done',title:'Must not partially write',...injected}})});
+  it('keeps parent guards atomic and ignores forged bypass options on both batch HTTP surfaces', () => run(async (store) => {
+    const f = fixture(store);
+    const token = await store.createAccessToken({ name: 'Batch member', type: 'pat', workspaceId: 'local', userId: 'local' });
+    const app = createMultiremiApp({ store, authToken: 'batch-test' });
+    const headers = { Authorization: `Bearer ${token.token}`, 'Content-Type': 'application/json' };
+    for (const surface of ['/api/issues', '/api/multiremi/issues']) {
+      for (const injected of [{}, { acceptedDeliveryId: 'forged' }, { options: { allowParentStatusGuardBypass: true } }]) {
+        const response = await app.request(`${surface}/batch-update`, { method: 'POST', headers,
+          body: JSON.stringify({ issue_ids: [f.root.id, f.child.id], updates: { status: 'done', title: 'Must be atomic', ...injected } }) });
         expect(response.status).toBe(409);
-        expect((await response.json()).code).toBe('issue_delivery_acceptance_required');
-        expect(store.getIssue(f.root.id)).toMatchObject({status:'done',title:'Root'});
-        expect(store.getIssue(f.child.id)).toMatchObject({status:'cancelled',title:'Child'});
-        expect(activityCount()).toBe(before);
-        expect(events).toEqual([]);
-        expect(store.listIssueDeliveries(f.root.id)[0]?.responseMessageId).toBe(receipt.responseMessageId);
+        expect(store.getIssue(f.root.id)?.title).toBe('Root');
+        expect(store.getIssue(f.child.id)?.title).toBe('Child');
       }
-      for(const surface of ['/api/issues','/api/multiremi/issues']) {
-        const response=await app.request(`${surface}/batch-update`,{method:'POST',headers,
-          body:JSON.stringify({issue_ids:[f.root.id],updates:{status:'done'}})});
-        expect(response.status).toBe(200);
-        expect((await response.json()).updated).toBe(1);
-      }
-    } finally {off();}
+    }
+    store.updateIssue(f.child.id, { status: 'cancelled' });
+    const response = await app.request('/api/issues/batch-update', { method: 'POST', headers,
+      body: JSON.stringify({ issue_ids: [f.root.id, f.child.id], updates: { status: 'done', force: true } }) });
+    expect(response.status).toBe(200);
+    expect(store.getIssue(f.root.id)?.status).toBe('done');
+    expect(store.getIssue(f.child.id)?.status).toBe('done');
   }));
   it('rolls back earlier batch rows and deferred events when a per-row delivery guard changes after preflight', () => run(async (store,db) => {
     const f=fixture(store);store.updateIssue(f.child.id,{status:'cancelled'});
@@ -426,7 +414,7 @@ for (const backend of ['sqlite','postgres'] as const) describe.skipIf(backend ==
       expect(store.listIssueDeliveries(second.id)[0]?.status).toBe('accepted');
     }
   }));
-  it('uses the actual source human for task-created roots and never the Runtime owner or a forged creator', () => run(async (store,db) => {
+  it('creates task and Chat roots without appointing a human or accepting a forged creator', () => run(async (store,db) => {
     const f=fixture(store);const app=createMultiremiApp({store,authToken:'test-root'});
     const sourceToken=await store.createTaskAccessToken(store.getTask(f.workerActor.taskId)!,'local');
     const create=async (path:string,token:string) => app.request(path,{method:'POST',headers:{Authorization:`Bearer ${token}`,'Content-Type':'application/json'},
@@ -434,20 +422,21 @@ for (const backend of ['sqlite','postgres'] as const) describe.skipIf(backend ==
     for(const path of ['/api/issues','/api/multiremi/issues']) {
       const response=await create(path,sourceToken.token);expect(response.status).toBe(201);
       const body=await response.json();const id=body.issue?.id??body.id;
-      expect(store.getIssue(id)?.responsibleMemberId).toBe(f.human.id);
+      expect(store.getIssue(id)?.responsibleMemberId).toBeNull();
       expect(store.getIssue(id)?.createdBy).not.toBe('local');
     }
     const chat=store.createChatSession({agentId:f.worker.id,creatorId:f.other.id});
     const task=store.createTask({agentId:f.worker.id,chatSessionId:chat.id,prompt:'Create from Chat'});
     const chatToken=await store.createTaskAccessToken(task,'local');
     const response=await create('/api/issues',chatToken.token);expect(response.status).toBe(201);
-    const body=await response.json();expect(store.getIssue(body.issue?.id??body.id)?.responsibleMemberId).toBe(f.other.id);
+    const body=await response.json();expect(store.getIssue(body.issue?.id??body.id)?.responsibleMemberId).toBeNull();
     db.run('UPDATE multiremi_chat_sessions SET creator_id=? WHERE id=?',['unknown-legacy-human',chat.id]);
     const missing=await create('/api/issues',chatToken.token);
-    expect(missing.status).toBeGreaterThanOrEqual(400);
-    expect(await missing.text()).toContain('explicit responsible_member_id');
+    expect(missing.status).toBe(201);
+    const missingBody = await missing.json();
+    expect(store.getIssue(missingBody.issue?.id ?? missingBody.id)?.responsibleMemberId).toBeNull();
   }));
-  it('uses only the actual active automation run and freezes its explicit human on new roots', () => run(async (store,db) => {
+  it('retains verified automation provenance without appointing its configured human on new roots', () => run(async (store,db) => {
     const f=fixture(store);const app=createMultiremiApp({store,authToken:'test-root'});
     const automation=store.createAutopilot({title:'Configured run source',assigneeId:f.worker.id,executionMode:'run_only',responsibleMemberId:f.human.id});
     const scheduled=store.runAutopilot(automation.id,{source:'api'});
@@ -460,7 +449,7 @@ for (const backend of ['sqlite','postgres'] as const) describe.skipIf(backend ==
         responsibilitySourceAudit:{kind:'autopilot_run',taskId:'forged',runId:'forged',autopilotId:'forged',responsibleMemberId:f.other.id},
         responsibility_source_audit:{taskId:'forged-snake'}})});
       expect(response.status).toBe(201);const body=await response.json();const id=body.issue?.id??body.id;
-      createdIds.push(id);expect(store.getIssue(id)?.responsibleMemberId).toBe(f.human.id);
+      createdIds.push(id);expect(store.getIssue(id)?.responsibleMemberId).toBeNull();
       expect(store.listIssueActivity(id).find(entry=>entry.type==='issue_created')?.data).toMatchObject({responsibilitySource:{
         kind:'autopilot_run',taskId:task.id,runId:scheduled.id,autopilotId:automation.id,responsibleMemberId:f.human.id}});
     }
@@ -468,20 +457,28 @@ for (const backend of ['sqlite','postgres'] as const) describe.skipIf(backend ==
     const unrelatedToken=await store.createTaskAccessToken(unrelated,'local');
     const forged=await app.request('/api/issues',{method:'POST',headers:{...headers,Authorization:`Bearer ${unrelatedToken.token}`},
       body:JSON.stringify({title:'Forged source',autopilotRunId:scheduled.id,autopilot_run_id:scheduled.id,created_by:'local'})});
-    expect(forged.status).toBe(409);
+    expect(forged.status).toBe(201);
+    const forgedBody = await forged.json();
+    expect(store.getIssue(forgedBody.issue?.id ?? forgedBody.id)?.responsibleMemberId).toBeNull();
     const ordinary=await app.request('/api/multiremi/issues',{method:'POST',headers:{...headers,Authorization:'Bearer test-root'},
       body:JSON.stringify({title:'Human source is not a run',responsibilitySourceAudit:{kind:'autopilot_run',taskId:task.id,runId:scheduled.id,autopilotId:automation.id,responsibleMemberId:f.human.id}})});
     expect(ordinary.status).toBe(201);const ordinaryBody=await ordinary.json();
     expect(store.listIssueActivity(ordinaryBody.issue?.id??ordinaryBody.id).find(entry=>entry.type==='issue_created')?.data).not.toHaveProperty('responsibilitySource');
     store.updateAutopilot(automation.id,{responsibleMemberId:f.other.id});
-    for(const id of createdIds)expect(store.getIssue(id)?.responsibleMemberId).toBe(f.human.id);
+    for(const id of createdIds)expect(store.getIssue(id)?.responsibleMemberId).toBeNull();
     const next=await app.request('/api/issues',{method:'POST',headers,body:JSON.stringify({title:'Current authorized configuration'})});
-    expect(next.status).toBe(201);expect(store.getIssue((await next.json()).id)?.responsibleMemberId).toBe(f.other.id);
+    expect(next.status).toBe(201);expect(store.getIssue((await next.json()).id)?.responsibleMemberId).toBeNull();
     store.updateAutopilot(automation.id,{status:'paused'});
-    expect((await app.request('/api/issues',{method:'POST',headers,body:JSON.stringify({title:'Inactive source'})})).status).toBe(409);
+    const inactive = await app.request('/api/issues',{method:'POST',headers,body:JSON.stringify({title:'Inactive source'})});
+    expect(inactive.status).toBe(201);
+    const inactiveBody = await inactive.json();
+    expect(store.listIssueActivity(inactiveBody.id).find(entry => entry.type === 'issue_created')?.data).not.toHaveProperty('responsibilitySource');
     store.updateAutopilot(automation.id,{status:'active'});
     db.run('UPDATE multiremi_turns SET execution_scope=? WHERE current_attempt_id=?',['unrelated-scope',task.id]);
-    expect((await app.request('/api/issues',{method:'POST',headers,body:JSON.stringify({title:'Wrong run scope'})})).status).toBe(409);
+    const wrongScope = await app.request('/api/issues',{method:'POST',headers,body:JSON.stringify({title:'Wrong run scope'})});
+    expect(wrongScope.status).toBe(201);
+    const wrongScopeBody = await wrongScope.json();
+    expect(store.listIssueActivity(wrongScopeBody.id).find(entry => entry.type === 'issue_created')?.data).not.toHaveProperty('responsibilitySource');
   }));
   it('preserves verified formal Agent source taint through HTTP acceptance and system-event dispatch', () => run(async (store,db) => {
     const human=store.findWorkspaceMemberForUser('local','local')!;

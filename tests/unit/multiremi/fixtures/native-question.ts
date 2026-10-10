@@ -21,8 +21,8 @@ export function createNativeTestQuestion(store: MultiremiStore, taskId: string, 
 
 export function answerNativeTestQuestion(store: MultiremiStore, id: string, answer = 'Yes') {
   const question = store.getQuestion(id)!;
-  expect(question.current_handler?.type).toBe('member');
-  return store.respondTaskHumanRequest(id, { respondedBy: question.current_handler!.id,
+  expect(question.stage).toBe('human');
+  return store.respondTaskHumanRequest(id, { respondedBy: question.current_handler?.id ?? 'mem_local_local',
     expectedRouteRevision: question.route_revision,
     response: question.kind === 'permission' ? { option_id: 'allow_once' } : { answers: { 'Continue?': answer } } });
 }

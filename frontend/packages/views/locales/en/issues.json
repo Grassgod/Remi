@@ -41,7 +41,7 @@
     "review_closed": "Reviewer issue is closed. Reopen it to review this pending delivery.",
     "review_archived": "Reviewer issue is archived. Restore it to review this pending delivery.",
     "review_unavailable": "Delivery review is currently unavailable. The delivery and its history are retained.",
-    "title": "Responsibility and delivery",
+    "title": "Execution ownership",
     "execution": "Execution coordinator",
     "review": "Result reviewer",
     "human": "Designated human",

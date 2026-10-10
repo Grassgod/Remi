@@ -118,7 +118,7 @@ export function listIssueDeliveries(ctx: StoreContext, issueId: string, input: L
 
 export function assertIssueDeliveryAccepted(ctx: StoreContext, issueId: string, deliveryId?: string): void {
   const responsibility = ctx.resolveIssueResponsibility(issueId);
-  if (!responsibility.reviewOwner || !responsibility.rootHuman || responsibility.unresolved.length) throw new IssueDeliveryError('issue_responsibility_unresolved', 'Configure the Issue responsibility chain before closure');
+  if (!responsibility.reviewOwner || responsibility.unresolved.length) throw new IssueDeliveryError('issue_responsibility_unresolved', 'Configure the Agent responsibility chain before closure');
   const latest = getLatestIssueDelivery(ctx, issueId);
   if (!latest || latest.id !== deliveryId || latest.status !== 'accepted' || latest.responsibilityRevision !== responsibility.revision) {
     throw new IssueDeliveryError('issue_delivery_acceptance_required', 'The current delivery must be accepted by its designated reviewer before closure');
@@ -151,7 +151,7 @@ export function submitIssueDelivery(ctx: StoreContext, issueId: string, input: S
     lockResponsibilityChain(ctx,issueId);
     issue = ctx.issues().getIssue(issueId)!;
     const responsibility = ctx.resolveIssueResponsibility(issueId);
-    if (!responsibility.executionOwner || !responsibility.reviewOwner || !responsibility.rootHuman || responsibility.unresolved.length) throw new IssueDeliveryError('issue_responsibility_unresolved', 'Configure the Issue responsibility chain before delivery');
+    if (!responsibility.executionOwner || !responsibility.reviewOwner || responsibility.unresolved.length) throw new IssueDeliveryError('issue_responsibility_unresolved', 'Configure the Agent responsibility chain before delivery');
     authorizeActor(ctx, actor, responsibility.executionOwner, issue.workspaceId);
     const summary = typeof input.summary === 'string' ? input.summary.trim() : '';
     if (!summary) throw new IssueDeliveryError('issue_delivery_summary_required', 'A delivery summary is required');
@@ -214,7 +214,7 @@ export function respondIssueDelivery(ctx: StoreContext, issueId: string, deliver
     if (!delivery) throw new IssueDeliveryError('issue_delivery_not_found','Delivery not found',404);
     delivery.isLatest = getLatestIssueDelivery(ctx,issueId)?.id === delivery.id;
     if (delivery.invalidatedAt) throw new IssueDeliveryError('issue_delivery_revision_stale','Responsibility changed; submit a new delivery to the current reviewer');
-    if (!responsibility.reviewOwner || !responsibility.rootHuman || responsibility.unresolved.length) throw new IssueDeliveryError('issue_responsibility_unresolved','Configure the Issue responsibility chain before acceptance');
+    if (!responsibility.reviewOwner || responsibility.unresolved.length) throw new IssueDeliveryError('issue_responsibility_unresolved','Configure the Agent responsibility chain before acceptance');
     const grant = delivery.authorization;
     const authorizedAgent = actor.type === 'agent' && responsibility.reviewOwner.type === 'member'
       && grant?.agentId === actor.id && grant.grantedBy === responsibility.reviewOwner.id

@@ -52,7 +52,10 @@ Chat 队列读取发给当前 agent、位于实际 cursor_seq 之后的消息；
 
 决定面板按需读取 `/api/issues/:id/questions` 的统一原 Q 投影；[共享问题卡](../../frontend/packages/views/common/question-card.tsx)显示原问题、独立 Remi 总结、来源、当前处理者、路由版本和转交/回答历史。Issue 主线、Chat 通知、Inbox 和运行中的问题 dock 沿 `metadata.question` 或 `root_question_id` 读取同一个 Q，答复使用版本校验的 `/api/messages/:id/question/answer`，最终由服务端写回原会话。原权限提问同样读取 Q，保持单选并提交原 `option_id`；原上下文单独按 Markdown 折叠展示。表单失败保留输入；`wait_status` 区分原调用等待、已结束、已消费与续接消费，不能把答案保存成功写成恢复成功。未知展示枚举保留原值。历史入口在责任侧栏常驻，最后一个待答结束后仍可打开。
 
-[责任与交付侧栏](../../frontend/packages/views/issues/components/issue-responsibility-section.tsx)读取服务端统一责任解析，分别显示本单执行统筹、父单结果责任和顶层指定人类。创建顶层单默认显示当前真实成员并允许选择；子单不复制根责任字段。根责任移交调用 Issue update，并保留服务端审计。正式交付由执行统筹提交，指定人类按具体交付接受、退回或授予绑定交付版本的代理验收授权；页面不再凭 Task completed 提供直接完成按钮，也不使用一般 parent-done grant 替代正式验收。
+[执行责任侧栏](../../frontend/packages/views/issues/components/issue-responsibility-section.tsx)显示本单执行统筹和父单结果责任。
+手动、智能创建、自动化及集成设置不提供顶层指定人类选择器；用户通过原生 AskUserQuestion 入口回答，
+服务端按实际成员及原问题来源校验权限。缺少旧人类字段不阻断建单、提问或普通完成。
+历史交付和验收记录仍可读取，普通关闭沿既有父子及依赖守卫，不要求人类验收收据。
 
 评论与会话日志的 [EntryHtml](../../frontend/packages/views/common/session-log/entry-html.tsx) 会把服务端 `div[data-type="fileCard"]` 增强成统一附件卡片。静态 [entry-html.css](../../frontend/packages/views/common/session-log/entry-html.css) 在首屏给每个槽位预留固定 40px（32px 卡片加上下各 4px 间距），普通和紧凑密度共用；图片与 HTML 文件也保持卡片外观，预览在弹窗中打开。附件记录通过 `attachments` 传入 provider，预览与下载按附件 ID 走现有链路；没有记录时使用 URL 模式，不合法 href 只显示文件名。
 
@@ -61,7 +64,7 @@ Chat 队列读取发给当前 agent、位于实际 cursor_seq 之后的消息；
 日志中的 HTML 附件预览由 `DeferredContentContext` 延迟到实际揭示后读取，揭示前只显示固定槽位（默认 240px，已有 QueryClient 高度缓存时复用）。成功、错误与重挂载保持槽位高度；日志外的预览保留原高度和错误展示。正文、工具栏、弹窗和独立预览页共用带 workspace slug 与附件 ID 的内容 query key，保留 5 分钟 staleTime、30 分钟 gcTime、无自动重试及既有失效策略。SSR 播种的日志需等定位脚本确认 DOM 已揭示才启动这些可选读取。运行任务卡片使用 128px 可滚动槽位，避免缓存缺任务时后续卡片增高移动日志锚点。
 
 SDK 的直接 AUQ 题项与 ACP 的 `{fieldKey, question}` 题项在展示表单层统一解析，原 Q 的 payload 保持原样；两种形式都支持多题、多选和自由回答。
-执行归属选择器只提供 Agent／Squad，顶层人类使用独立责任字段。历史 member 执行指派保留原身份并明确标为待配置，提供手动迁移入口；新建单不会继承旧 member 项目默认值。正式交付历史沿 `nextCursor` 分页读取，不只展示最近一页。
+执行归属选择器只提供 Agent／Squad。历史 member 执行指派保留原身份并明确标为执行归属待配置；新建单不会继承旧 member 项目默认值。历史责任映射 API 保留兼容，网页不再提供人类映射入口。正式交付历史沿 `nextCursor` 分页读取，不只展示最近一页。
 
 ## 一次任务读取与更新
 

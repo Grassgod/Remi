@@ -50,22 +50,18 @@ dropped (`active_task_exists`), so a parent could lose reports entirely.
 2. **`open_children` excludes only `done` and `cancelled`.** `blocked` counts as
    open: a parked child is precisely what a human must rule on, and treating it
    as finished would let the parent close over unresolved work.
-3. **Formal delivery replaces implicit final-summary closure.** Task results
-   and summary comments remain evidence. They cannot close an Issue. Its
-   execution owner submits a message-backed delivery, and its parent execution
-   owner accepts a child delivery. The root's explicitly designated human
-   accepts a root delivery. The response references that delivery, validates
-   the responsibility revision and commits with the receipt and Issue status.
-   The [responsibility contract](../dev/issue-responsibility.md) defines the
-   single resolver, legacy missing-human handling and complete API.
-4. **`force` remains member-only and cannot override formal acceptance.**
-   The old broad parent grant remains readable for audit but does not authorize
-   closure. A root human can grant/revoke proxy acceptance only for one concrete
-   pending delivery, its current execution owner and current responsibility
-   revision. A reassignment or newer delivery invalidates the grant. The
-   universal store guard runs independently of the parent guard's environment
-   switch and rejects PATCH/batch/system closure without the server-owned
-   accepted-delivery receipt. Clients cannot supply that receipt option.
+3. **Agent ownership and native user questions are separate.** Workers consult
+   their Issue Leader and, when necessary, the parent Leader. A Leader needing
+   user input uses the original AskUserQuestion entry; root Issues require no
+   designated-human field. Native answers retain their source permissions,
+   original message, provider wait and execution scope.
+4. **Ordinary closure retains parent/dependency guards.** Member-only `force`
+   and effective parent grants retain their existing scope. A mandatory human
+   acceptance receipt is not a prerequisite for PATCH, batch or SCM closure.
+   Optional delivery review validates its concrete receipt and revision;
+   historical receipts and authorizations remain readable. The current
+   [execution responsibility contract](../dev/issue-responsibility.md) defines
+   Agent routing and compatibility boundaries.
 5. **Child endings always notify the parent owner through one hook.**
    `notifyChildStatusChange` is called post-commit by both Issue write paths, so
    `done`, `failed`, `blocked` and `cancelled` all report. Agent and squad owners

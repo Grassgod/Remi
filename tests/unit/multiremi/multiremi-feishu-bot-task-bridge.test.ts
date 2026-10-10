@@ -1088,11 +1088,11 @@ describe("Feishu bot standard Task bridge", () => {
     ].sort((a, b) => a.chat_session_id.localeCompare(b.chat_session_id)));
   });
 
-  it("assigns an automatically created group Issue to the routed Agent", () => {
+  it("assigns an automatically created group Issue to the routed Agent without a designated human", () => {
     const { store, config } = scaffold();
     const routedAgent = store.createAgent({ name: "Issue worker", provider: "codex", workspaceId: "local" });
     store.updateWorkspace("local", {
-      settings: { issueTopics: { enabled: true, chatId: "oc_issues", responsibleMemberId: 'mem_local_local' } },
+      settings: { issueTopics: { enabled: true, chatId: "oc_issues" } },
     });
     store.replaceFeishuBotAgentRoutes("local", [
       { scope: "chat", chatId: "oc_issues", agentId: routedAgent.id },
@@ -1117,6 +1117,7 @@ describe("Feishu bot standard Task bridge", () => {
     expect(store.getIssue(store.getFeishuIssueIdForChatSession(chat.id)!)).toMatchObject({
       assigneeType: "agent",
       assigneeId: routedAgent.id,
+      responsibleMemberId: null,
     });
   });
 

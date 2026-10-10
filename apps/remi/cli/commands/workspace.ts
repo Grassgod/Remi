@@ -57,8 +57,8 @@ const RUNTIME_PROVISION_FIELDS: readonly CliOptionSpec[] = [
  * which is the only safe default for a partial update.
  */
 const FEISHU_BOT_FIELDS: readonly CliOptionSpec[] = [
-  { name: "responsible-member", type: "string", description: "Explicit designated human for root issues created from inbound conversations", conflictsWith: ["clear-responsible"] },
-  { name: "clear-responsible", type: "boolean", description: "Clear the human configuration; inbound conversations remain but automatic root creation stops", conflictsWith: ["responsible-member"] },
+  { name: "responsible-member", type: "string", description: "Legacy optional human-responsibility compatibility field", conflictsWith: ["clear-responsible"] },
+  { name: "clear-responsible", type: "boolean", description: "Clear the legacy human-responsibility field; automatic root creation is unaffected", conflictsWith: ["responsible-member"] },
   { name: "sender-access-policy", type: "string", valueName: "agent|allowlist", description: "Use Agent permissions (default) or require a sender allowlist" },
   { name: "agent", type: "string", valueName: "agent-id", description: "Agent that answers concierge messages" },
   { name: "runtime", type: "string", valueName: "runtime-id", description: "Runtime that hosts the connector" },
@@ -162,8 +162,8 @@ export function workspaceCommandSpecs(): CommandSpec[] {
       "PUT",
       [
         { name: "chat-id", type: "string", valueName: "chat-id", description: "Feishu group chat ID" },
-        { name: "responsible-member", type: "string", description: "Explicit designated human for roots created from this topic", conflictsWith: ["inherit-bot-responsible"] },
-        { name: "inherit-bot-responsible", type: "boolean", description: "Clear topic override and inherit the explicit bot human", conflictsWith: ["responsible-member"] },
+        { name: "responsible-member", type: "string", description: "Legacy optional topic human-responsibility compatibility field", conflictsWith: ["inherit-bot-responsible"] },
+        { name: "inherit-bot-responsible", type: "boolean", description: "Clear the legacy topic human-responsibility override", conflictsWith: ["responsible-member"] },
         { name: "notify", type: "string", valueName: "group_owner|person|none", description: "Proactive report mention target (default: group_owner)" },
         { name: "notify-open-id", type: "string", valueName: "open-id", description: "Bot-scoped recipient open ID for --notify person" },
         { name: "project", type: "string", valueName: "project-id", repeatable: true, description: "Limit topics to a project" },

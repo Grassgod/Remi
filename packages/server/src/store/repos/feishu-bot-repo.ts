@@ -542,7 +542,7 @@ export class FeishuBotRepo {
 
     const existing = this.rawConfigRow(workspaceId);
     const responsibleMemberId=input.responsibleMemberId===undefined?nullableString(existing?.responsible_member_id):cleanOptionalString(input.responsibleMemberId);
-    if(responsibleMemberId) {
+    if(input.responsibleMemberId !== undefined && responsibleMemberId) {
       const human=this.ctx.workspaces().getWorkspaceMember(responsibleMemberId);
       if(!human||human.archivedAt||human.workspaceId!==workspaceId)throw new FeishuBotConfigError('responsible_member_id must name an active human in this workspace',400,'invalid_config');
     }
@@ -902,11 +902,8 @@ export class FeishuBotRepo {
         && Boolean(chatId)
         && topicConfig?.enabled === true
         && topicConfig.chatId === chatId;
-      const configuredHumanId=topicConfig?.responsibleMemberId??config.responsibleMemberId;
-      const configuredHuman=configuredHumanId?this.ctx.workspaces().getWorkspaceMember(configuredHumanId):null;
-      const humanAvailable=!!configuredHuman&&!configuredHuman.archivedAt&&configuredHuman.workspaceId===workspaceId;
-      const autoCreateGroupIssue=groupIssueRequested&&humanAvailable;
-      const responsibilityUnavailableReason=groupIssueRequested&&!humanAvailable?'Configure an active root human in Feishu bot or Issue topic settings before automatically creating an Issue':null;
+      const autoCreateGroupIssue = groupIssueRequested;
+      const responsibilityUnavailableReason = null;
       const createGroupIssue = () => this.ctx.issues().createIssueWithinTransaction({
         title: issueTitleFromFeishuMessage(text),
         description: text,
@@ -916,7 +913,6 @@ export class FeishuBotRepo {
         assigneeType: "agent",
         assigneeId: routeAgent.agentId,
         createdBy: sender.actorId,
-        responsibleMemberId:configuredHuman!.id,
         contextRefs: [{
           type: "feishu_bot_message",
           message_id: externalMessageId,
@@ -1668,7 +1664,7 @@ export class FeishuBotRepo {
       const operator = recipientOpenId && config ? this.resolveIssueDecisionOperatorMember(String(row.workspace_id), config.appId, recipientOpenId) : null;
       if (!question || question.stage !== 'human' || question.status !== 'pending'
         || (!question.summary && Date.now() < Date.parse(metadata?.summary_wait_until ?? ''))
-        || operator?.status !== 'resolved' || question.current_handler?.id !== operator.member.id) return null;
+        || operator?.status !== 'resolved' || !new Questions(this.ctx).get(question.id, { type: 'member', id: operator.member.id })?.actions.allowed.includes('answer')) return null;
       return buildIssueDecisionCard(decision, { header,
         routeRevision: question.route_revision, summary: question.summary?.body_md,
         token: this.rotateQuestionCardToken("multiremi_message_decision_records", decisionId, recipientOpenId),
@@ -1684,7 +1680,7 @@ export class FeishuBotRepo {
       if (!question.summary && Date.now() < deadline) return null;
       const config = this.getConfig(question.workspace_id);
       const operator = recipientOpenId && config ? this.resolveIssueDecisionOperatorMember(question.workspace_id, config.appId, recipientOpenId) : null;
-      if (question.stage !== 'human' || operator?.status !== 'resolved' || question.current_handler?.id !== operator.member.id) return null;
+      if (question.stage !== 'human' || operator?.status !== 'resolved' || !new Questions(this.ctx).get(question.id, { type: 'member', id: operator.member.id })?.actions.allowed.includes('answer')) return null;
     }
     return buildTaskInteractionCard(request, { header,
       token: this.rotateQuestionCardToken("multiremi_message_question_records", request.id, recipientOpenId),
@@ -2852,6 +2848,16 @@ export class FeishuBotRepo {
   }
   private questionRecipient(id: string, appId: string, workspaceId: string): DecisionRecipientResolution {
     const question = new Questions(this.ctx).get(id);
+    if (question?.stage === 'human' && !question.current_handler) {
+      // Notification preferences decide transport delivery, not Issue ownership.
+      const workspace = this.ctx.workspaces().getWorkspace(workspaceId);
+      const target = resolveDecisionRecipient(readWorkspaceIssueTopicsForDelivery(workspace?.settings ?? {}));
+      if (target.kind !== 'resolved') return target;
+      const operator = this.resolveIssueDecisionOperatorMember(workspaceId, appId, target.openId);
+      const allowed = operator.status === 'resolved'
+        && new Questions(this.ctx).get(id, { type: 'member', id: operator.member.id })?.actions.allowed.includes('answer');
+      return allowed ? target : { kind: 'degraded', reason: 'unresolved_recipient', degraded: true };
+    }
     const member = question?.current_handler?.type === 'member' ? this.ctx.workspaces().getWorkspaceMember(question.current_handler.id) : null;
     if (!member || question?.stage !== 'human' || member.archivedAt || member.workspaceId !== workspaceId || !member.userId)
       return { kind: 'degraded', reason: 'unresolved_recipient', degraded: true };

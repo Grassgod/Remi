@@ -41,7 +41,7 @@
     "review_closed": "验收单已关闭，重新打开后可验收这份待处理交付。",
     "review_archived": "验收单已归档，恢复后可验收这份待处理交付。",
     "review_unavailable": "当前无法验收，交付内容与历史仍保留。",
-    "title": "责任与正式交付",
+    "title": "执行责任",
     "execution": "本单执行统筹",
     "review": "上级结果责任人",
     "human": "顶层指定人类",

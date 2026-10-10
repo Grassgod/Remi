@@ -149,9 +149,9 @@ pendingTurnBackendTests('one question through the responsibility chain', fixture
   });
 
   for (const kind of ['production_change', 'merge']) {
-    it(`${kind} authorization bypasses Agent handlers and requires the explicitly responsible human`, () => {
+    it(`${kind} authorization bypasses Agent handlers and requires a real user through the native entry`, () => {
       const h = setup(fixture(), false, false, kind);
-      expect(h.store.getQuestion(h.q.id)).toMatchObject({ stage: 'human', current_handler: { type: 'member', id: 'mem_local_local' } });
+      expect(h.store.getQuestion(h.q.id)).toMatchObject({ stage: 'human', current_handler: null });
       // A real execution turn belongs to the source Agent; it still cannot grant human authority.
       expect(() => h.store.answerQuestion(h.q.id, { expected_route_revision: 1, response: { answer: 'A' } }, { type: 'agent', id: h.worker.id }, h.turn.id)).toThrow('question_handler_required');
       expect(h.store.answerQuestion(h.q.id, { expected_route_revision: 1, response: { answer: 'A' } }, { type: 'member', id: 'mem_local_local' }).question.answer?.actor).toEqual({ type: 'member', id: 'mem_local_local' });
@@ -285,29 +285,19 @@ pendingTurnBackendTests('one question through the responsibility chain', fixture
     const consumer = h.store.getTurn((h.store.getMessage(h.q.id)!.metadata.question as any).wait.consumer_turn_id)!;
     expect(consumer.agent_id).toBe(h.worker.id);
   });
-  it('hands off saved answers that still await recovery to a changed root human without asking Agents again', () => {
+  it('does not transfer saved answers or private access when a legacy human field changes', () => {
     const h = setup(fixture());
     h.bridge.rpc('turn.decision.expire', { turn_id: h.turn.id, attempt_id: h.task.id, message_id: h.q.id, status: 'timeout' }, h.scope);
     h.store.archiveAgent(h.worker.id);
     const saved = h.store.answerQuestion(h.q.id, { expected_route_revision: 1, response: { answer: 'A' } }, { type: 'agent', id: h.leader.id }, h.agentTurn(h.leader.id));
-    expect(saved.question.wait_status).toBe('detached');
-    const user = h.store.getOrCreateUser({ externalId: 'question_new_recovery_human', name: 'New recovery human' });
-    const human = h.store.createWorkspaceMember({ workspaceId: 'local', userId: user.id, name: 'New recovery human', role: 'member' });
-    const beforeNotifications = h.db.query("SELECT COUNT(*) AS count FROM multiremi_conversation_log WHERE to_agent_id=? AND dedupe_key LIKE 'question-route:%'").get(h.leader.id).count;
-    h.store.updateIssue(h.parent.id, { responsibleMemberId: human.id, actorType: 'member', actorId: 'mem_local_local' });
-    const moved = h.store.getQuestion(h.q.id, { type: 'member', id: human.id })!;
-    expect(moved).toMatchObject({ status: 'answered', wait_status: 'detached', route_revision: 2, answer_revision: 1, answer: saved.question.answer });
-    expect(moved.actions.allowed).toContain('continue');
-    expect(h.db.query("SELECT COUNT(*) AS count FROM multiremi_conversation_log WHERE to_agent_id=? AND dedupe_key LIKE 'question-route:%'").get(h.leader.id).count).toBe(beforeNotifications);
-    const notice = h.db.query('SELECT * FROM multiremi_conversation_log WHERE dedupe_key=?').get(`question-recovery-route:${h.q.id}:2`);
-    expect(notice.to_member_id).toBe(human.id); expect(notice.session_id).not.toBe(h.q.session_id); expect(notice.reply_to_id).toBeNull();
-    expect(JSON.parse(notice.metadata).root_question_id).toBe(h.q.id);
-    expect(() => h.store.continueQuestion(h.q.id, { expected_route_revision: 2 }, { type: 'member', id: 'mem_local_local' })).toThrow('question_continuation_human_required');
+    const user = h.store.getOrCreateUser({ externalId: 'legacy-question-peer', name: 'Peer' });
+    const peer = h.store.createWorkspaceMember({ userId: user.id, name: 'Peer', role: 'member' });
+    h.store.updateIssue(h.parent.id, { responsibleMemberId: peer.id, actorType: 'member', actorId: 'mem_local_local' });
+    const unchanged = h.store.getQuestion(h.q.id, { type: 'member', id: peer.id })!;
+    expect(unchanged).toMatchObject({ status: 'answered', wait_status: 'detached', route_revision: 1, answer: saved.question.answer });
+    expect(unchanged.actions.allowed).not.toContain('continue');
     h.store.restoreAgent(h.worker.id);
-    const resumed = h.store.continueQuestion(h.q.id, { expected_route_revision: 2 }, { type: 'member', id: human.id });
-    expect(resumed.wait_status).toBe('continuation_pending'); expect(resumed.answer_revision).toBe(1);
-    h.store.continueQuestion(h.q.id, { expected_route_revision: 2 }, { type: 'member', id: human.id });
-    expect(h.db.query('SELECT id FROM multiremi_conversation_log WHERE dedupe_key=?').all(`question-continuation:${h.q.id}`)).toHaveLength(1);
+    expect(h.store.continueQuestion(h.q.id, { expected_route_revision: 1 }, { type: 'member', id: 'mem_local_local' }).wait_status).toBe('continuation_pending');
   });
   it('real Feishu host callback rejects wrong operators and rotated cards then consumes the current same-Q answer once', async () => {
     const h = setup(fixture());
@@ -324,7 +314,7 @@ pendingTurnBackendTests('one question through the responsibility chain', fixture
       const config = h.store.upsertFeishuBotConfig('local', { agentId: remi.id, runtimeId: h.runtime.id, appId: 'cli_question_host',
         appSecretOp: 'set', appSecret: 'synthetic-question-test-secret', enabled: true, domain: 'feishu' });
       h.store.reportFeishuBotRuntimeStatus('local', h.runtime.id, { appliedRevision: config.revision, state: 'online' });
-      h.store.updateWorkspace('local', { settings: { issueTopics: { enabled: true, chatId: 'oc_question' } } });
+      h.store.updateWorkspace('local', { settings: { issueTopics: { enabled: true, chatId: 'oc_question', notifyMode: 'person', notifyOpenId: 'ou_question_human' } } });
       h.store.prepareFeishuIssueTopicWithinTransaction(h.issue);
       const topic = h.store.claimFeishuBotOutbound('local', h.runtime.id)!;
       h.store.reportFeishuBotOutbound('local', h.runtime.id, topic.id, { claimToken: topic.claimToken, status: 'sent', externalMessageId: 'om_question_topic' });
@@ -386,7 +376,7 @@ pendingTurnBackendTests('one question through the responsibility chain', fixture
       const config = h.store.upsertFeishuBotConfig('local', { agentId: remi.id, runtimeId: h.runtime.id, appId: 'cli_question',
         appSecretOp: 'set', appSecret: 'synthetic-question-test-secret', enabled: true, domain: 'feishu' });
       h.store.reportFeishuBotRuntimeStatus('local', h.runtime.id, { appliedRevision: config.revision, state: 'online' });
-      h.store.updateWorkspace('local', { settings: { issueTopics: { enabled: true, chatId: 'oc_question' } } });
+      h.store.updateWorkspace('local', { settings: { issueTopics: { enabled: true, chatId: 'oc_question', notifyMode: 'person', notifyOpenId: 'ou_question_human' } } });
       h.store.prepareFeishuIssueTopicWithinTransaction(h.issue);
       const topic = h.store.claimFeishuBotOutbound('local', h.runtime.id)!;
       expect(topic).toBeTruthy();
@@ -482,13 +472,13 @@ pendingTurnBackendTests('one question through the responsibility chain', fixture
     h.db.transaction(() => refreshIssueQuestionsAfterResponsibilityChangeWithinTransaction(ctx, h.issue.id, events))();
     expect(h.store.getMessage(unrelatedQ.id)?.metadata.question).toBeUndefined();
   });
-  it('fails closed for invalid ancestry, missing root human and moved source workspace', () => {
+  it('does not block on missing human fields and still rejects moved source workspaces', () => {
     const h = setup(fixture());
     h.db.run('UPDATE multiremi_issues SET responsible_member_id=NULL WHERE id=?', [h.parent.id]);
     const ctx = new StoreContext(h.db, () => h.store), events = createCommitEventQueue();
     h.db.transaction(() => refreshIssueQuestionsAfterResponsibilityChangeWithinTransaction(ctx, h.parent.id, events))();
-    expect(h.store.getQuestion(h.q.id)).toMatchObject({ current_handler: null, stage: 'unavailable' });
-    expect(h.store.getQuestion(h.q.id)?.route_reason).toContain('human_missing');
+    expect(h.store.getQuestion(h.q.id)).toMatchObject({ current_handler: { type: 'agent', id: h.leader.id }, stage: 'issue_owner' });
+    expect(h.store.getQuestion(h.q.id)?.route_reason).toBeNull();
     const other = h.store.createWorkspace({ name: 'Other', slug: 'question-other' });
     const agent = h.store.createAgent({ name: 'Foreign actor', provider: 'codex', workspaceId: other.id });
     expect(() => h.store.answerQuestion(h.q.id, { expected_route_revision: 2, response: { answer: 'A' } }, { type: 'agent', id: agent.id })).toThrow('question_actor_workspace_mismatch');
@@ -514,7 +504,7 @@ pendingTurnBackendTests('one question through the responsibility chain', fixture
     expect(first).toMatchObject({ id: h.q.id, current_handler: { id: h.parentLeader.id }, route_revision: 2, stage: 'parent_owner' });
     expect(() => h.store.answerQuestion(h.q.id, { expected_route_revision: 1, response: { answer: 'A' } }, { type: 'agent', id: h.leader.id }, h.agentTurn(h.leader.id))).toThrow('question_route_changed');
     const human = h.store.escalateQuestion(h.q.id, { expected_route_revision: 2, reason: 'Need human' }, { type: 'agent', id: h.parentLeader.id }, h.agentTurn(h.parentLeader.id));
-    expect(human).toMatchObject({ id: h.q.id, current_handler: { type: 'member', id: 'mem_local_local' }, route_revision: 3, stage: 'human' });
+    expect(human).toMatchObject({ id: h.q.id, current_handler: null, route_revision: 3, stage: 'human' });
     expect(human.options).toEqual(h.q.options); expect(human.original_questions).toEqual(h.q.original_questions);
     const notifications = h.db.query("SELECT session_id,reply_to_id,metadata FROM multiremi_conversation_log WHERE message_kind='request'").all().filter(m => JSON.parse(m.metadata ?? '{}').root_question_id === h.q.id);
     expect(notifications.some(m => m.session_id !== h.q.session_id)).toBeTrue();

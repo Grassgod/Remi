@@ -31,7 +31,7 @@ summary: 按任务定位当前实现、约束和验证命令。
 | 改工作台与通知 | [工作台/收件箱边界](../inbox-workbench-boundary.md) | 通知的触发条件与状态归属 |
 | 改 daemon 轮询节奏、心跳 ack 或插件 desired 协议 | [ADR 0001](../adr/0001-daemon-poll-cadence-and-desired-revision.md) | 已定的取舍、被否决的替代方案和回到源码的位置 |
 | 改父 issue 状态推导、子 issue 结束通知或 `force` | [ADR 0003](../adr/0003-parent-status-derived-from-children.md) | 守卫 A/B、再推导、A1/A4 判定和排一轮合并的取舍 |
-| 改 Issue 责任、正式交付、根人类或关闭权限 | [Issue 责任与正式交付](issue-responsibility.md) | 统一 resolver、未知历史责任、具体交付验收与代理授权 |
+| 改 Issue 执行责任、交付或关闭权限 | [Issue 执行责任与交付](issue-responsibility.md) | Agent/父单 Leader、原生用户问题、可选交付与历史收据兼容 |
 | 改系统收件箱、平台待处理轮或唤醒事务 | [统一收件箱 Store](inbox-store.md)、[Message HTTP 接口](message-api.md)、[ADR 0016](../adr/0016-unified-message-inbox-and-turn.md) | 唯一入口、叫醒降级、合并/插话/补铃、member 游标与页面接口 |
 | 改提问卡片答复鉴权、令牌轮换或宿主重启恢复 | [ADR 0011](../adr/0011-question-card-one-time-token.md) | 服务端一次性令牌、收件人绑定与成员映射的边界 |
 | 改 AUQ 责任路由、同 Q 总结、答复或续接 | [统一问题](questions.md) | 原会话、路由/改答版本、provider 等待与实际消费边界 |
