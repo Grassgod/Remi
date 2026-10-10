@@ -11,7 +11,7 @@ import { AgentReplyCommentError, turnExecutionMutationStatement, runTurnExecutio
 // terminal-state fan-out into issues/sessions/autopilots), extracted verbatim from MultiremiStore
 // (the facade delegates every public method here).
 import { createHash } from "node:crypto";
-import { hasProtectedNativeUsage, legacyUsageSnapshot, matchesAcceptedLegacyFacts, UsageValidationError, writeUsageSnapshot } from "@multiremi/store/usage-accounting.js";
+import { UsageValidationError, writeUsageSnapshot } from "@multiremi/store/usage-accounting.js";
 import type { TaskUsageSnapshot } from "@multiremi/contracts/usage-accounting.js";
 import { taskUsageProjection } from "@multiremi/store/usage-projection.js";
 import { assertQuestionCardToken, hashQuestionCardToken, QuestionCardTokenError, type QuestionCardCredential } from "@multiremi/store/question-card-token.js";
@@ -35,14 +35,11 @@ import {
   daemonRuntimeId,
   isActiveTaskStatus,
   normalizePositiveInt,
-  normalizeTaskUsageEntries,
   nullableString,
   parseJson,
-  parseTaskUsageEntries,
   resolveCamelOrSnakeString,
   resolveOptionalStringField,
   toJson,
-  type RuntimeUsageEntry,
 } from "@multiremi/store/helpers.js";
 import { selectChatLocalDirectory } from "@multiremi/contracts/chat-local-directory.js";
 import { activeRequestReadCache, cacheKey } from "@multiremi/store/request-read-cache.js";
@@ -5307,51 +5304,6 @@ ${placementAfter.sql}
     return row.status as MultiremiTaskStatus;
   }
 
-  reportTaskUsage(taskId: string, usage: TaskUsageEntry[]): MultiremiTask {
-    return this.ctx.db.transaction(() => {
-      // Serialize deprecated snapshots too: receipt timestamps can collide or go backwards.
-      runTurnExecutionMutation(this.ctx.db, "UPDATE multiremi_turn_execution_records SET updated_at=updated_at WHERE id=?", [taskId]);
-      const task = this.getTask(taskId);
-      if (!task) throw new Error(`Task not found: ${taskId}`);
-      const merged = new Map<string, RuntimeUsageEntry>();
-      // Only the deprecated ingestion boundary may read the prior legacy snapshot.
-      const legacy = this.ctx.db.query("SELECT usage FROM multiremi_turn_execution_records WHERE id=?").get(taskId) as Row;
-      for (const entry of parseTaskUsageEntries(legacy.usage)) {
-        merged.set(`${entry.provider}\u0000${entry.model}`, entry);
-      }
-      for (const entry of normalizeTaskUsageEntries(usage)) {
-        merged.set(`${entry.provider}\u0000${entry.model}`, entry);
-      }
-      const keyed = (raw: unknown) => [...parseTaskUsageEntries(raw)].sort((a, b) => `${a.provider}\u0000${a.model}`.localeCompare(`${b.provider}\u0000${b.model}`));
-      const previousEntries = toJson(keyed(legacy.usage));
-      const unchanged = previousEntries === toJson(keyed(toJson([...merged.values()])));
-      if (hasProtectedNativeUsage(this.ctx.db, taskId)) {
-        if (!unchanged) throw new UsageValidationError("Changed legacy usage cannot replace or add to native evidence; use reviewed reconciliation");
-        const baseline = this.ctx.db.query("SELECT source_usage FROM multiremi_usage_legacy_sources WHERE task_id=?").get(taskId) as Row | null;
-        if (baseline ? previousEntries !== toJson(keyed(baseline.source_usage))
-          : previousEntries !== "[]" && !matchesAcceptedLegacyFacts(this.ctx.db, taskId, legacy.usage, nowIso())) {
-          throw new UsageValidationError("Changed legacy usage cannot replace or add to native evidence; use reviewed reconciliation");
-        }
-        // Identical old snapshots acknowledge without touching facts, clocks,
-        // revision receipts, or the historical aggregate's audit checkpoint.
-        return task;
-      }
-      if (unchanged) return task;
-      runTurnExecutionMutation(this.ctx.db, "UPDATE multiremi_turn_execution_records SET usage = ?, updated_at = ? WHERE id = ?",
-        [toJson([...merged.values()]), nowIso(), taskId],
-      );
-      const snapshot = legacyUsageSnapshot(taskId, [...merged.values()], nowIso());
-      const previous = this.ctx.db.query("SELECT revision FROM multiremi_usage_runs WHERE task_id=? AND run_id='legacy'").get(taskId) as Row | null;
-      const receipts = this.ctx.db.query("SELECT MAX(revision) AS revision FROM multiremi_usage_unit_receipts WHERE task_id=? AND run_id='legacy'").get(taskId) as Row;
-      snapshot.revision = Math.max(Number(previous?.revision ?? 0), Number(receipts.revision ?? 0)) + 1;
-      for (const unit of snapshot.units) {
-        if (this.ctx.db.query("SELECT unit_id FROM multiremi_usage_units WHERE task_id=? AND run_id='legacy' AND unit_id=? AND source<>'legacy_task'").get(taskId, unit.unitId)) unit.unitId = `legacy-aggregate:${unit.unitId}`;
-        unit.revision = snapshot.revision;
-      }
-      writeUsageSnapshot(this.ctx.db, taskId, snapshot);
-      return this.getTask(taskId)!;
-    })();
-  }
 
   recoverOrphans(runtimeId: string, activeTaskIds?: readonly string[]): { orphaned: number; retried: number } {
     const initialRuntime = this.ctx.runtimes().getRuntime(runtimeId);

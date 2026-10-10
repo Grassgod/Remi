@@ -7,11 +7,10 @@ import { DAEMON_OFFER_COOLDOWN_MS } from "@multiremi/contracts/daemon-protocol.j
 import { actualUnit } from "@acp/usage-collector.js";
 import { MultiremiTaskReportOutbox } from "@multiremi/worker/outbox.js";
 import { outboxRecordFrame } from "@multiremi/worker/report-frames.js";
-import { migrateLegacyUsage } from "@multiremi/store/usage-accounting.js";
 import { join } from "node:path";
 import { DaemonProtocolHarness, waitFor } from "./harness.js";
 
-for (const nativeRunId of ["historical-evidence-v2", "current"]) test(`late deprecated aggregates beside ${nativeRunId} park as invalid without blocking independent bound usage over the real socket`, async () => {
+for (const nativeRunId of ["historical-evidence-v2", "current"]) test(`retired aggregates beside ${nativeRunId} cannot block independent bound usage over the real socket`, async () => {
   const h = await DaemonProtocolHarness.create();
   let outbox: MultiremiTaskReportOutbox | undefined;
   try {
@@ -20,16 +19,13 @@ for (const nativeRunId of ["historical-evidence-v2", "current"]) test(`late depr
     const agent = h.store.createAgent({ name: "late legacy", provider: "claude", runtimeId });
     const task = h.store.createTask({ agentId: agent.id, prompt: "synthetic overlap", maxAttempts: 1 });
     expect(h.store.claimTask(runtimeId)?.id).toBe(task.id);
-    const original = nativeRunId === "current" ? [] : [{ provider: "claude", model: "configured", totalTokens: 70 }];
-    runTurnExecutionMutation(h.db, "UPDATE multiremi_turn_execution_records SET usage=? WHERE id=?", [JSON.stringify(original), task.id]);
-    migrateLegacyUsage(h.db);
     await expect(h.client.event({ t: "task.start", rt: runtimeId, seq: 920000,
       p: { task_id: task.id, usage_run_id: "current" } })).resolves.toMatchObject({ execution_authorized: true });
     h.store.reportTaskUsageSnapshot(task.id, { version: 2, runId: nativeRunId, revision: 1, complete: false,
       units: [actualUnit({ unitId: "native", provider: "claude", scope: "request", source: "provider_request", inputTokens: 10, outputTokens: 2 })] });
     const before = h.db.query("SELECT revision FROM multiremi_usage_unit_receipts WHERE task_id=? ORDER BY run_id,unit_id").all(task.id);
     await expect(h.client.event({ t: "task.usage", rt: runtimeId, seq: 920001, p: { task_id: task.id,
-      usage: original.length ? [{ provider: "claude", model: "configured", total_tokens: 70 }] : [] } })).resolves.toMatchObject({ ok: true });
+      usage: [] } })).rejects.toMatchObject({ code: "report_shape_retired", retryable: false });
     expect(h.db.query("SELECT revision FROM multiremi_usage_unit_receipts WHERE task_id=? ORDER BY run_id,unit_id").all(task.id)).toEqual(before);
     outbox = new MultiremiTaskReportOutbox({ path: join(h.root, "late-legacy.db"), canSend: () => h.client.connectionState() === "connected",
       deliver: record => h.client.event({ ...outboxRecordFrame(record), seq: 920010 + record.seq }) });
@@ -38,15 +34,12 @@ for (const nativeRunId of ["historical-evidence-v2", "current"]) test(`late depr
     const good = outbox.enqueueAndWait(task.id, "usage", { runtime_id: runtimeId,
       usageSnapshot: { version: 2, runId: "current", revision: 1, complete: true,
         units: [actualUnit({ unitId: "independent", provider: "claude", scope: "request", source: "provider_request", inputTokens: 3 })] } });
-    await expect(bad).rejects.toMatchObject({ code: "invalid_report", retryable: false });
+    await expect(bad).rejects.toMatchObject({ code: "report_shape_retired", retryable: false });
     await expect(good).resolves.toMatchObject({ ok: true });
     expect(h.store.getUsageReport({ workspaceId: "local", days: null }).summary.actual_total_tokens).toBe(15);
-    expect((h.db.query("SELECT usage FROM multiremi_turn_execution_records WHERE id=?").get(task.id) as { usage: string }).usage).toBe(JSON.stringify(original));
+    expect(h.db.query("SELECT usage FROM multiremi_turn_attempts WHERE id=?").get(task.id)?.usage).toBe("[]");
     expect(outbox.stats()).toMatchObject({ pending: 0, blocked: 1 });
-    // A raw JSON drift cannot acquire a false replay ACK through the fast path.
-    const changed = [{ provider: "claude", model: "configured", inputTokens: 20, outputTokens: 0 }];
-    runTurnExecutionMutation(h.db, "UPDATE multiremi_turn_execution_records SET usage=? WHERE id=?", [JSON.stringify(changed), task.id]);
-    await expect(h.client.event({ t: "task.usage", rt: runtimeId, seq: 920009, p: { task_id: task.id, usage: [{ provider: "claude", model: "configured", input_tokens: 20, output_tokens: 0 }] } })).rejects.toMatchObject({ code: "invalid_report", retryable: false });
+    await expect(h.client.event({ t: "task.usage", rt: runtimeId, seq: 920009, p: { task_id: task.id, usage: [{ provider: "claude", model: "configured", input_tokens: 20, output_tokens: 0 }] } })).rejects.toMatchObject({ code: "report_shape_retired", retryable: false });
   } finally { await outbox?.close(); await h.dispose(); }
 }, 15000);
 

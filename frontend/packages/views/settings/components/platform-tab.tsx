@@ -49,6 +49,17 @@ type ConfirmAction =
 const CANCELLABLE_STATUSES = new Set(["queued", "preparing", "pulling", "draining"]);
 const RECENT_OPERATION_WINDOW_MS = 30 * 60_000;
 
+function versionAtLeast(version: string, floor: string | null | undefined): boolean {
+  if (!floor) return true;
+  const parse = (value: string) => /^v?(\d+)\.(\d+)\.(\d+)(?:\+[\w.-]+)?$/.exec(value.trim())?.slice(1, 4).map(Number);
+  const left = parse(version), right = parse(floor);
+  if (!left || !right || [...left, ...right].some(value => !Number.isSafeInteger(value))) return false;
+  for (let index = 0; index < 3; index++) {
+    if (left[index] !== right[index]) return left[index]! > right[index]!;
+  }
+  return true;
+}
+
 export function PlatformTab() {
   const { t } = useT("settings");
   const statusQuery = useQuery(platformStatusOptions());
@@ -131,6 +142,8 @@ export function PlatformTab() {
   const currentVersion = status.currentRelease?.version || t(($) => $.platform.unknown_version);
   const progressLines = active ? operationProgressLines(active, t) : [];
   const recentResult = !active ? recentOperationResult(status.lastOperation, t) : null;
+  const rollbackReleases = status.recentReleases.filter(release =>
+    release.ref !== status.currentRelease?.ref && versionAtLeast(release.version, status.minimumRollbackVersion)).slice(0, 3);
 
   return (
     <div className="space-y-6">
@@ -307,8 +320,11 @@ export function PlatformTab() {
               <ChevronDown className="h-4 w-4 text-muted-foreground" />
             </CollapsibleTrigger>
             <CollapsibleContent className="pt-3">
+              {status.minimumRollbackVersion && <p className="mb-3 text-sm text-muted-foreground">
+                {t(($) => $.platform.minimum_rollback_version, { version: status.minimumRollbackVersion })}
+              </p>}
               <div className="divide-y rounded-md border">
-                {status.recentReleases.filter((release) => release.ref !== status.currentRelease?.ref).slice(0, 3).map((release) => (
+                {rollbackReleases.map((release) => (
                   <div key={`${release.version}-${release.ref}`} className="flex items-center justify-between gap-3 px-3 py-3">
                     <div className="min-w-0">
                       <p className="truncate text-sm font-medium">{release.version}</p>
@@ -319,7 +335,7 @@ export function PlatformTab() {
                     </Button>
                   </div>
                 ))}
-                {status.recentReleases.length <= 1 && <p className="px-3 py-5 text-center text-sm text-muted-foreground">{t(($) => $.platform.no_rollback)}</p>}
+                {rollbackReleases.length === 0 && <p className="px-3 py-5 text-center text-sm text-muted-foreground">{t(($) => $.platform.no_rollback)}</p>}
               </div>
             </CollapsibleContent>
           </Collapsible>

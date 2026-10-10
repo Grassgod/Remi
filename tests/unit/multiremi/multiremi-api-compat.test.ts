@@ -1,3 +1,4 @@
+import { taskUsageSnapshot } from "../../fixtures/multiremi/task-usage-snapshot.js";
 import { createResponsibleTestAutopilot } from './helpers.js';
 import { createResponsibleTestIssue } from './helpers.js';
 import { issueMessagesPath, requestMessageBody, turnApiPath } from "./unified-test-paths.js";
@@ -1014,14 +1015,14 @@ describe("Multiremi API — Go server compatibility endpoints", () => {
       assigneeId: agent.id,
     });
     const task = store.createTask({ agentId: agent.id, issueId: issue.id, workspaceId: "local", prompt: "Run compatibility" });
-    store.reportTaskUsage(task.id, [{
+    store.reportTaskUsageSnapshot(task.id, taskUsageSnapshot([{
       provider: "codex",
       model: "gpt-5",
       inputTokens: 12,
       outputTokens: 8,
       cacheReadTokens: 3,
       cacheWriteTokens: 2,
-    }]);
+    }]));
     // Isolate Plugin capability negotiation from the automatic CLI upgrade channel.
     const runtime = store.registerRuntime({ name: "Codex Runtime", provider: "codex", workspaceId: "local", metadata: { cli_version: DAEMON_MIN_CLI_VERSION, parallel_agent_execution: 1 } });
     const app = createMultiremiApp({ store });
@@ -1484,7 +1485,7 @@ describe("Multiremi API — Go server compatibility endpoints", () => {
 
     const claim = await taskOfferResponse(store, runtime.id);
     expect((await claim.json()).task.attempt_id).toBe(task.id);
-    await reportFrame(store, "task.usage", { task_id: task.id, usage: [{ provider: "claude", model: "sonnet", input_tokens: 21, output_tokens: 8 }] }, { headers: { "Content-Type": "application/json" }, authToken: "" });
+    await reportFrame(store, "task.usage", { task_id: task.id, usageSnapshot: taskUsageSnapshot([{ provider: "claude", model: "sonnet", inputTokens: 21, outputTokens: 8 }], 1, task.createdAt) }, { headers: { "Content-Type": "application/json" }, authToken: "" });
 
     // Dashboard rollups are snake_case on the wire (MUL-92): the frontend zod
     // schemas default unknown fields to 0, so camelCase here renders all-zeros.

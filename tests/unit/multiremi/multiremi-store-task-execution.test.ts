@@ -1,3 +1,4 @@
+import { taskUsageSnapshot } from "../../fixtures/multiremi/task-usage-snapshot.js";
 import { createResponsibleTestIssue } from './helpers.js';
 import { runTurnExecutionMutation } from "@multiremi/store/turn-execution-records.js";
 // What happens while a claimed task runs: ACP message ingress, completion
@@ -452,13 +453,13 @@ describe("Multiremi store — task message ingress, completion, and capacity", (
     expect(store.claimTask(runtime.id)?.id).toBe(first.id);
     expect(store.claimTask(runtime.id)?.id).toBe(second.id);
     store.startTask(first.id);
-    store.reportTaskUsage(first.id, [
+    store.reportTaskUsageSnapshot(first.id, taskUsageSnapshot([
       { provider: "codex", model: "gpt-5", inputTokens: 100, outputTokens: 25, cacheReadTokens: 5 },
       { provider: "codex", model: "gpt-5", inputTokens: 40, outputTokens: 10, cacheWriteTokens: 3 },
-    ]);
-    store.reportTaskUsage(second.id, [
+    ]));
+    store.reportTaskUsageSnapshot(second.id, taskUsageSnapshot([
       { provider: "codex", model: "gpt-5-mini", inputTokens: 7, outputTokens: 2 },
-    ]);
+    ]));
     store.completeTask(first.id, { output: "done" });
 
     const detailed = store.getRuntime(runtime.id)!;

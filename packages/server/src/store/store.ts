@@ -71,7 +71,7 @@ import type {
 import { UsageRepo } from "@multiremi/store/repos/usage-repo.js";
 import { UsageAccountingRepo, type UsageReportInput } from "@multiremi/store/repos/usage-accounting-repo.js";
 import { writeUsageSnapshot } from "@multiremi/store/usage-accounting.js";
-import { ensureUsageAccountingStartup } from "@multiremi/store/usage-migration.js";
+import { minimumRollbackVersion } from "@multiremi/store/rollback-floor.js";
 import type { TaskUsageSnapshot, SetUsagePriceInput, UsagePrice, UsageReport } from "@multiremi/contracts/usage-accounting.js";
 import { SquadsRepo } from "@multiremi/store/repos/squads-repo.js";
 import { ProjectsRepo, type ProjectInstructionsWriteContext } from "@multiremi/store/repos/projects-repo.js";
@@ -724,8 +724,8 @@ runMigrations(this.db);
   }
 
   /** Required cutover gate; call after schema migration and before API/jobs. */
-  ensureUsageAccountingStartup(): void {
-    ensureUsageAccountingStartup(this.db);
+  minimumRollbackVersion(): string | null {
+    return minimumRollbackVersion(this.db);
   }
 
   getPlatformState() {
@@ -3636,12 +3636,6 @@ runMigrations(this.db);
       WHERE t.id=? AND t.runtime_id=? AND t.status='running' AND s.active_run_id=? AND r.complete=0`).get(taskId, runtimeId, runId);
   }
 
-  /** Deprecated transport replay check; never a reporting/statistics source. */
-  getLegacyTaskUsageForIngestion(taskId: string): unknown {
-    const row = this.ctx.db.query("SELECT usage FROM multiremi_turn_execution_records WHERE id=?").get(taskId) as { usage: unknown } | null;
-    return row?.usage ?? null;
-  }
-
 
   listUsageDaily(input: {
     workspaceId?: string | null;
@@ -6206,10 +6200,6 @@ runMigrations(this.db);
 
   getTaskStatus(taskId: string): MultiremiTaskStatus {
     return this.tasks.getTaskStatus(taskId);
-  }
-
-  reportTaskUsage(taskId: string, usage: TaskUsageEntry[]): MultiremiTask {
-    return this.tasks.reportTaskUsage(taskId, usage);
   }
 
   recoverOrphans(runtimeId: string, activeTaskIds?: readonly string[]): { orphaned: number; retried: number } {

@@ -21,6 +21,7 @@ import { loadCurrentWorkspaceRole, readJson } from "../helpers.js";
 import { currentRequestUserId } from "../wire/index.js";
 import type { RouterDeps } from "./deps.js";
 import { observableConfiguration } from "../../config/startup-env.js";
+import { compareRollbackVersions } from "@multiremi/store/rollback-floor.js";
 
 const OPERATION_KINDS = new Set<MultiremiPlatformOperationKind>([
   "check_updates", "restart", "update", "rollback",
@@ -65,6 +66,7 @@ export function registerPlatformRoutes(app: Hono, deps: RouterDeps): void {
       lastOperation: store.listPlatformOperations(1)[0] ?? null,
       maintenance: store.getPlatformMaintenance(),
       recentReleases: state.recentReleases,
+      minimumRollbackVersion: store.minimumRollbackVersion(),
       daemonProtocol: runtimeProtocolSummary(store.listRuntimes()),
     });
   });
@@ -83,10 +85,32 @@ export function registerPlatformRoutes(app: Hono, deps: RouterDeps): void {
     if ((body.kind === "update" || body.kind === "rollback") && !clean(body.targetRef) && !clean(body.targetVersion)) {
       return c.json({ error: "targetVersion or targetRef is required" }, 400);
     }
+    let targetVersion = clean(body.targetVersion);
+    const targetRef = clean(body.targetRef);
+    if (body.kind === "update" || body.kind === "rollback") {
+      const floor = store.minimumRollbackVersion();
+      const release = targetRef ? store.getPlatformState().recentReleases.find(item =>
+        item.ref === targetRef || item.manifestUrl === targetRef) : undefined;
+      targetVersion ??= release?.version ?? null;
+      const comparison = targetVersion && floor ? compareRollbackVersions(targetVersion, floor) : null;
+      const refComparison = release && floor ? compareRollbackVersions(release.version, floor) : null;
+      const manifestVersion = clean(body.targetManifest?.version);
+      const manifestRef = clean(body.targetManifest?.ref);
+      const manifestComparison = manifestVersion && floor ? compareRollbackVersions(manifestVersion, floor) : null;
+      if (floor && (comparison === null || comparison < 0
+        || (body.targetManifest?.version !== undefined && (manifestComparison === null || manifestComparison < 0
+          || compareRollbackVersions(targetVersion!, manifestVersion!) !== 0))
+        || (targetRef && manifestRef && targetRef !== manifestRef)
+        || (release && (refComparison === null || refComparison < 0
+          || compareRollbackVersions(targetVersion!, release.version) !== 0)))) {
+        return c.json({ code: "rollback_below_floor", minimumRollbackVersion: floor,
+          error: `Target ${targetVersion ?? targetRef ?? "unknown"} cannot be verified at or above the minimum rollback version ${floor}; lower versions require restoring the database and api-home from backup (只能恢复备份).` }, 400);
+      }
+    }
     const operation = store.createPlatformOperation({
       kind: body.kind,
-      targetVersion: clean(body.targetVersion),
-      targetRef: clean(body.targetRef),
+      targetVersion,
+      targetRef,
       targetManifest: body.targetManifest ?? {},
     }, currentRequestUserId(c));
     return c.json({ operation }, 202);

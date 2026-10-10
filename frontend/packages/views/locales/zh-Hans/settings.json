@@ -581,7 +581,8 @@
     "confirm_rollback_title": "回退平台版本？",
     "confirm_rollback_desc": "将平台切换至 {{version}} 并重启服务。",
     "cancel": "取消",
-    "confirm": "确认"
+    "confirm": "确认",
+    "minimum_rollback_version": "最低可回滚版本：{{version}}。更早版本只能恢复备份。"
   },
   "modelGateway": {
     "context_title": "1M 上下文",

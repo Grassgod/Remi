@@ -1196,20 +1196,6 @@ export class MultiremiDaemonClient {
     });
   }
 
-  async reportTaskUsage(taskId: string, usage: TaskUsageEntry[]): Promise<void> {
-    if (usage.length === 0) return;
-    await this.report("task.usage", taskId, {
-      usage: usage.map((entry) => ({
-        provider: entry.provider,
-        model: entry.model,
-        input_tokens: entry.inputTokens,
-        output_tokens: entry.outputTokens,
-        cache_read_tokens: entry.cacheReadTokens ?? 0,
-        cache_write_tokens: entry.cacheWriteTokens ?? 0,
-        total_tokens: entry.totalTokens ?? 0,
-      })),
-    });
-  }
 
   async reportTaskUsageSnapshot(taskId: string, usageSnapshot: TaskUsageSnapshot): Promise<void> {
     await this.report("task.usage", taskId, { usageSnapshot });

@@ -7,7 +7,6 @@ import type {
   MultiremiRuntime,
   MultiremiTask,
   MultiremiTaskStatus,
-  TaskUsageEntry,
 } from "@multiremi/contracts/types.js";
 
 export function parseOptionalTaskMessageSince(value: string | undefined): number | undefined | { error: string } {
@@ -17,24 +16,6 @@ export function parseOptionalTaskMessageSince(value: string | undefined): number
   return parsed;
 }
 
-export function daemonTaskUsageEntries(raw: unknown): TaskUsageEntry[] {
-  if (!Array.isArray(raw)) return [];
-  const entries: TaskUsageEntry[] = [];
-  for (const item of raw) {
-    if (!item || typeof item !== "object" || Array.isArray(item)) continue;
-    const record = item as Record<string, unknown>;
-    entries.push({
-      provider: String(record.provider ?? "unknown"),
-      model: String(record.model ?? "unknown"),
-      inputTokens: normalizeDaemonUsageNumber(record.input_tokens),
-      outputTokens: normalizeDaemonUsageNumber(record.output_tokens),
-      cacheReadTokens: normalizeDaemonUsageNumber(record.cache_read_tokens),
-      cacheWriteTokens: normalizeDaemonUsageNumber(record.cache_write_tokens),
-      totalTokens: normalizeDaemonUsageNumber(record.total_tokens),
-    });
-  }
-  return entries;
-}
 
 export function normalizeDaemonUsageNumber(value: unknown): number {
   const number = Number(value ?? 0);

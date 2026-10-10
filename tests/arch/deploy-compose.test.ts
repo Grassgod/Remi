@@ -11,8 +11,6 @@ import { parse } from "yaml";
 import { isTerminalPlatformOperationStatus } from "@multiremi/store/repos/platform-operations-repo.js";
 import type { MultiremiPlatformOperationStatus } from "@multiremi/contracts/types.js";
 import { DEFAULT_PLATFORM_HEALTH_TIMEOUT_MS } from "../../packages/platform-updater/src/health-check.js";
-import { DEFAULT_USAGE_MIGRATION_TIMEOUT_MS, STARTUP_MARGIN_MS, validateComposeStartupBudgets } from "../../packages/platform-updater/src/startup-budget.js";
-import { DEFAULT_USAGE_MIGRATION_TIMEOUT_MS as SERVER_USAGE_MIGRATION_TIMEOUT_MS } from "@multiremi/store/usage-migration.js";
 
 const repoRoot = resolve(import.meta.dir, "../..");
 const compose = parse(readFileSync(resolve(repoRoot, "deploy/docker/compose.application.yml"), "utf8")) as {
@@ -47,10 +45,8 @@ describe("application compose stack", () => {
     expect(apiDockerfile).toContain("WORKDIR /app");
   });
 
-  test("both deployment templates satisfy the updater startup budgets for both API roles", () => {
-    expect(DEFAULT_USAGE_MIGRATION_TIMEOUT_MS).toBe(SERVER_USAGE_MIGRATION_TIMEOUT_MS);
-    expect(DEFAULT_USAGE_MIGRATION_TIMEOUT_MS).toBe(300_000);
-    expect(STARTUP_MARGIN_MS).toBe(60_000);
+  test("both deployment templates retain the schema startup grace for both API roles", () => {
+    expect(DEFAULT_PLATFORM_HEALTH_TIMEOUT_MS).toBeGreaterThanOrEqual(360_000);
     for (const file of ["compose.application.yml", "compose.platform.yml"]) {
       const composeFile = resolve(repoRoot, "deploy/docker", file);
       const template = parse(readFileSync(composeFile, "utf8"));
@@ -64,9 +60,6 @@ describe("application compose stack", () => {
       expect(template.services.web.depends_on.api.condition).toBe("service_healthy");
       expect(template.services["api-runtime"].profiles).toEqual(["split"]);
       expect(template.services["api-runtime"].healthcheck).toEqual(template.services.api.healthcheck);
-      expect(() => validateComposeStartupBudgets(template, {
-        composeFile, coreServices: ["api", "api-runtime"], healthTimeoutMs: DEFAULT_PLATFORM_HEALTH_TIMEOUT_MS,
-      })).not.toThrow();
     }
   });
 

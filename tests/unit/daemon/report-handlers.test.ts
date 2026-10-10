@@ -1,3 +1,4 @@
+import { taskUsageSnapshot } from "../../fixtures/multiremi/task-usage-snapshot.js";
 import { runTurnExecutionMutation } from "@multiremi/store/turn-execution-records.js";
 import { afterEach, describe, expect, it, spyOn } from "bun:test";
 import type { Database } from "bun:sqlite";
@@ -48,8 +49,7 @@ function success(store: MultiremiStore, type: string) {
 }
 function usageState(db: Database, taskId: string) {
   const tables = ["multiremi_usage_runs", "multiremi_usage_units", "multiremi_usage_unit_receipts",
-    "multiremi_usage_task_scopes", "multiremi_usage_run_scopes", "multiremi_usage_legacy_audit",
-    "multiremi_usage_legacy_versions", "multiremi_usage_legacy_sources"];
+    "multiremi_usage_task_scopes", "multiremi_usage_run_scopes"];
   return { task: db.query("SELECT * FROM multiremi_turn_attempts WHERE id=?").get(taskId) as Record<string, unknown>,
     ledger: Object.fromEntries(tables.map(table => [table,
       db.query("SELECT name FROM sqlite_master WHERE type='table' AND name=?").get(table)
@@ -152,17 +152,17 @@ describe("v2 reports", () => {
     } finally { write.mockRestore(); }
   });
 
-  it("keeps normalized usage subset replays side-effect free after Store source verification", async () => {
+  it("keeps versioned usage snapshot replays side-effect free after Store source verification", async () => {
     const { db, store, task, report } = fixture();
     store.startTask(task.id);
     const progress = spyOn(store, "reportProgress");
-    const realUsage = store.reportTaskUsage.bind(store);
+    const realUsage = store.reportTaskUsageSnapshot.bind(store);
     const changed: ReturnType<typeof usageState>[] = [];
-    const usage = spyOn(store, "reportTaskUsage").mockImplementation((id, entries) => {
+    const usage = spyOn(store, "reportTaskUsageSnapshot").mockImplementation((id, entries) => {
       const before = usageState(db, id);
       const result = realUsage(id, entries);
       const after = usageState(db, id);
-      if (before.task.usage === after.task.usage) expect(after).toEqual(before);
+      if (JSON.stringify(before.ledger) === JSON.stringify(after.ledger)) expect(after).toEqual(before);
       else changed.push(after);
       return result;
     });
@@ -173,16 +173,18 @@ describe("v2 reports", () => {
       expect(progress).toHaveBeenCalledTimes(1);
       expect(await report("task.progress", { summary: "last", step: 2, total: 2 })).toEqual({ ok: true });
       expect(progress).toHaveBeenCalledTimes(2);
-      const a = { provider: "claude", model: "a", input_tokens: 5, output_tokens: 2 };
-      const b = { provider: "claude", model: "b", input_tokens: 7, output_tokens: 3 };
-      for (const entries of [[a], [b], [a], [b], [{ ...a, input_tokens: 999 }, a]]) {
-        expect(await report("task.usage", { usage: entries })).toEqual({ ok: true });
+      const a = { provider: "claude", model: "a", inputTokens: 5, outputTokens: 2 };
+      const b = { provider: "claude", model: "b", inputTokens: 7, outputTokens: 3 };
+      const first = taskUsageSnapshot([a], 1, task.createdAt);
+      const second = taskUsageSnapshot([a, b], 2, task.createdAt);
+      for (const usageSnapshot of [first, second, first, second, first]) {
+        expect(await report("task.usage", { usageSnapshot })).toEqual({ ok: true });
       }
       // Source/canonical verification may run on every replay. Only the first
       // two distinct aggregates may change persisted facts or revision receipts.
       const settled = usageState(db, task.id);
       for (let index = 0; index < 120; index++) {
-        expect(await report("task.usage", { usage: index % 2 ? [a] : [b] })).toEqual({ ok: true });
+        expect(await report("task.usage", { usageSnapshot: index % 2 ? first : second })).toEqual({ ok: true });
       }
       expect(usageState(db, task.id)).toEqual(settled);
       expect(changed).toHaveLength(2);

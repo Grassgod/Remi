@@ -8,7 +8,6 @@ import type {
 } from "@multiremi/contracts";
 import { DrainAbortedError, type PlatformDrainGate } from "./drain.js";
 import { resolveHealthTimeoutMs, waitForHealthyUrl } from "./health-check.js";
-import { validateComposeStartupBudgets } from "./startup-budget.js";
 import type { CommandRunner, PlatformDeploymentDriver, PlatformInspection } from "./types.js";
 
 interface ComposeConfig {
@@ -134,7 +133,6 @@ export class DockerComposeDriver implements PlatformDeploymentDriver {
     drain?: PlatformDrainGate,
   ): Promise<MultiremiPlatformRelease> {
     // Preflight stays outside the rollback catch and precedes all host changes.
-    if (!rollback) await this.validateStartupBudgets();
     const previous = await this.readCurrentRelease();
     const originalEnv = await readFile(this.config.envFile, "utf8").catch(() => "");
     await report({ status: rollback ? "rolling_back" : "pulling", previousRelease: previous, progress: { message: rollback ? `Restoring ${manifest.version}` : `Pulling ${manifest.version}` } });
@@ -287,27 +285,6 @@ export class DockerComposeDriver implements PlatformDeploymentDriver {
     await Promise.all(urls.map((url) => waitForHealthyUrl(url, this.healthTimeoutMs)));
   }
 
-  private async validateStartupBudgets(): Promise<void> {
-    let result;
-    try {
-      result = await this.compose(["config", "--format", "json"]);
-    } catch {
-      throw new Error(`docker compose config failed; fix ${this.config.composeFile} and its env files. See deploy/README.md#usage-accounting-startup-cutover.`);
-    }
-    // Do not include stdout, stderr or JSON parser errors: env_file is expanded.
-    if (result.exitCode !== 0) {
-      throw new Error(`docker compose config failed (exit ${result.exitCode}); fix ${this.config.composeFile} and its env files. See deploy/README.md#usage-accounting-startup-cutover.`);
-    }
-    let rendered: unknown;
-    try { rendered = JSON.parse(result.stdout); } catch {
-      throw new Error(`docker compose config returned invalid JSON; fix ${this.config.composeFile}. See deploy/README.md#usage-accounting-startup-cutover.`);
-    }
-    validateComposeStartupBudgets(rendered, {
-      coreServices: this.coreServices,
-      healthTimeoutMs: this.healthTimeoutMs,
-      composeFile: this.config.composeFile,
-    });
-  }
 
   private async compose(args: string[]) {
     return this.runner.run("docker", ["compose", "--env-file", this.config.envFile, "-f", this.config.composeFile, ...args], { cwd: dirname(this.config.composeFile) });

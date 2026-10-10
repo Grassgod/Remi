@@ -1,4 +1,4 @@
-/** Five-minute startup migrations need a grace period before local rollback. */
+/** Schema startup work needs a grace period before local rollback. */
 export const DEFAULT_PLATFORM_HEALTH_TIMEOUT_MS = 360_000;
 
 export function resolveHealthTimeoutMs(value: string | number | undefined): number {

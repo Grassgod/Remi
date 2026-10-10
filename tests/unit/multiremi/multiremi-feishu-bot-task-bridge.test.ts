@@ -1,3 +1,4 @@
+import { taskUsageSnapshot } from "../../fixtures/multiremi/task-usage-snapshot.js";
 import { createResponsibleTestIssue } from './helpers.js';
 import { runTurnExecutionMutation } from "@multiremi/store/turn-execution-records.js";
 import { mutateExecutionFixture, sentTask } from "./unified-test-paths.js";
@@ -1130,12 +1131,12 @@ describe("Feishu bot standard Task bridge", () => {
     });
     expect(store.claimTask("rt_bot")?.id).toBe(submitted.taskId);
     store.startTask(submitted.taskId);
-    store.reportTaskUsage(submitted.taskId, [{
+    store.reportTaskUsageSnapshot(submitted.taskId, taskUsageSnapshot([{
       provider: "codex",
       model: "gpt-test",
       inputTokens: 12,
       outputTokens: 3,
-    }]);
+    }]));
     store.completeTask(submitted.taskId, {
       output: "done",
       sessionId: "ses_1",

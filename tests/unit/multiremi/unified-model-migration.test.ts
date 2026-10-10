@@ -9,7 +9,7 @@ import { UNIFIED_MODEL_MIGRATION } from "@multiremi/store/unified-model-schema.j
 import { dropRetiredTables, RETIRED_TABLE_SETS, RETIRED_COLUMN_SETS } from "../../../scripts/drop-retired-tables.js";
 import { unifiedModelBackendTests } from "./unified-model-test-backends.js";
 import { createReplacementAttemptWithinTransaction } from "@multiremi/store/turn-attempts.js";
-import { ensureUsageAccountingSchema } from "@multiremi/store/usage-accounting.js";
+import { ensureUsageAccountingSchema, USAGE_CUTOVER_MARKER, USAGE_STARTUP_CUTOVER_MARKER } from "@multiremi/store/usage-accounting.js";
 import type { SqlDatabase } from "@multiremi/store/db/postgres.js";
 
 const dirs: string[] = [];
@@ -17,6 +17,37 @@ function reportDir(): string { const dir=mkdtempSync(join(tmpdir(),"mul505-"));d
 afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir,{recursive:true,force:true}); });
 
 unifiedModelBackendTests("MUL-505 normalized model migration", fixture => {
+  it("starts an already unified database without rebuilding its old execution view", () => {
+    const { db } = fixture();
+    // Reproduce the v0.2.89 projection's extra column on both real backends.
+    const historical = new Proxy(db, { get(target, key) {
+      if (key === "exec") return (sql: string) => target.exec(sql.includes("VIEW IF NOT EXISTS multiremi_turn_execution_records AS SELECT")
+        || sql.includes("VIEW multiremi_turn_execution_records AS SELECT")
+        ? sql.replace("a.created_at AS created_at", "a.usage AS usage,a.created_at AS created_at") : sql);
+      const value = Reflect.get(target, key);
+      return typeof value === "function" ? value.bind(target) : value;
+    } });
+    new MultiremiStore(historical);
+    const definition = () => db.dialect === "postgres"
+      ? db.query("SELECT pg_get_viewdef('multiremi_turn_execution_records'::regclass) AS definition").get().definition
+      : db.query("SELECT sql AS definition FROM sqlite_master WHERE name='multiremi_turn_execution_records'").get().definition;
+    const before = definition();
+    expect(db.query("PRAGMA table_info(multiremi_turn_execution_records)").all().some((column: any) => column.name === "usage")).toBe(true);
+    let rebuilds = 0;
+    const recording = new Proxy(db, { get(target, key) {
+      if (key === "exec") return (sql: string) => {
+        if (/CREATE(?: OR REPLACE)? VIEW(?: IF NOT EXISTS)? multiremi_turn_execution_records/i.test(sql)) rebuilds++;
+        return target.exec(sql);
+      };
+      const value = Reflect.get(target, key);
+      return typeof value === "function" ? value.bind(target) : value;
+    } });
+    const restarted = new MultiremiStore(recording);
+    expect(rebuilds).toBe(0);
+    expect(definition()).toBe(before);
+    expect(db.query("SELECT * FROM multiremi_turn_execution_records").all()).toEqual([]);
+    expect(restarted.getUsageReport({ workspaceId: "local", days: null }).summary.actual_total_tokens).toBe(0);
+  });
   it("blocks unconsumed steer for every unfinished task state and does not exempt a failed attempt's queued retry", () => {
     const { db, store } = fixture();
     const agent = store.createAgent({ name: "Active steer", provider: "codex" });
@@ -73,10 +104,11 @@ unifiedModelBackendTests("MUL-505 normalized model migration", fixture => {
     // Reproduce #384's historical schema before invoking the current cutover.
     const historical = new Proxy(db, { get(target, key) {
       if (key === "exec") return (sql: string) => target.exec(sql.replaceAll("multiremi_turn_attempts", "multiremi_tasks"));
-      if (key === "query") return (sql: string) => target.query(sql.replaceAll("multiremi_turn_execution_records", "multiremi_tasks"));
+      if (key === "query") return (sql: string) => target.query(sql.replaceAll("multiremi_turn_execution_records", "multiremi_tasks").replaceAll("multiremi_turn_attempts", "multiremi_tasks"));
       const value = Reflect.get(target, key);
       return typeof value === "function" ? value.bind(target) : value;
     } }) as SqlDatabase;
+    for (const marker of [USAGE_CUTOVER_MARKER, USAGE_STARTUP_CUTOVER_MARKER]) db.run("INSERT INTO multiremi_schema_migrations(id,applied_at) VALUES(?,?) ON CONFLICT(id) DO NOTHING", [marker, task.createdAt]);
     ensureUsageAccountingSchema(historical);
     if (db.dialect === "postgres") {
       db.exec("ALTER TABLE multiremi_usage_runs ADD CONSTRAINT historical_usage_attempt_fk FOREIGN KEY(task_id) REFERENCES multiremi_tasks(id) ON DELETE CASCADE");
@@ -86,7 +118,6 @@ unifiedModelBackendTests("MUL-505 normalized model migration", fixture => {
     db.run(`INSERT INTO multiremi_usage_units(task_id,run_id,unit_id,revision,workspace_id,agent_id,provider,model,scope,source,accuracy,input_tokens,output_tokens,occurred_at)
       VALUES(?,'existing','request',1,'local',?,'claude','opus','request','provider_request','exact',5,2,'2026-10-01T00:00:00.000Z')`, [task.id, agent.id]);
     const current = new MultiremiStore(db);
-    current.ensureUsageAccountingStartup();
     expect(current.getTask(task.id)?.usage).toMatchObject([{ inputTokens: 5, outputTokens: 2, totalTokens: 7 }]);
     expect(current.getUsageReport({ workspaceId: "local", days: null }).summary.actual_total_tokens).toBe(7);
     db.run("DELETE FROM multiremi_turn_attempts WHERE id=?", [task.id]);
@@ -222,6 +253,7 @@ unifiedModelBackendTests("MUL-505 normalized model migration", fixture => {
   });
   it('starts a historical store and preserves structured outputs and automation lineage',()=>{
     const {db,store}=fixture();const agent=store.createAgent({name:'auto',provider:'codex'});
+    for (const marker of [USAGE_CUTOVER_MARKER, USAGE_STARTUP_CUTOVER_MARKER]) db.run("INSERT INTO multiremi_schema_migrations(id,applied_at) VALUES(?,?) ON CONFLICT(id) DO NOTHING", [marker, "2026-10-01T00:00:00.000Z"]);
     const a=store.createTask({agentId:agent.id,prompt:'first auto'});
     const b=store.createTask({agentId:agent.id,prompt:'scheduled target',parentTaskId:a.id,attempt:1});
     const at='2026-10-01T00:00:00.000Z';

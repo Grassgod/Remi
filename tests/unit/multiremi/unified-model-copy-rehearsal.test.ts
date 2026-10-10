@@ -5,8 +5,7 @@ import { tmpdir } from "node:os";
 import { rehearseUnifiedModelCopy, validateCopyDatabaseUrl } from "../../../scripts/rehearse-unified-model-copy.js";
 import { unifiedModelBackendTests } from "./unified-model-test-backends.js";
 import type { SqlDatabase } from "@multiremi/store/db/postgres.js";
-import { ensureUsageAccountingSchema, writeUsageSnapshot } from "@multiremi/store/usage-accounting.js";
-import { prepareUsageAccountingStartup } from "@multiremi/store/usage-migration.js";
+import { ensureUsageAccountingSchema, writeUsageSnapshot, USAGE_CUTOVER_MARKER, USAGE_STARTUP_CUTOVER_MARKER } from "@multiremi/store/usage-accounting.js";
 import { collectCopyUsageSnapshot, reconcileCopyUsage } from "../../../scripts/unified-model-copy-usage.js";
 import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { runCopyStartupProcess, validateCopyBuild, type CopyStartupInput } from "../../../scripts/unified-model-copy-startup.js";
@@ -21,8 +20,18 @@ async function prepareHistoricalUsage(db: SqlDatabase): Promise<SqlDatabase> {
     const value = Reflect.get(target, key);
     return typeof value === "function" ? value.bind(target) : value;
   } });
+  for (const marker of [USAGE_CUTOVER_MARKER, USAGE_STARTUP_CUTOVER_MARKER]) {
+    db.run("INSERT INTO multiremi_schema_migrations(id,applied_at) VALUES(?,?) ON CONFLICT(id) DO NOTHING", [marker, new Date().toISOString()]);
+  }
   ensureUsageAccountingSchema(historical);
-  await prepareUsageAccountingStartup(historical);
+  for (const task of db.query("SELECT id,created_at FROM multiremi_tasks").all() as { id: string; created_at: string }[]) {
+    writeUsageSnapshot(historical, task.id, { version: 2, runId: "legacy", revision: 1, complete: false, units: [{
+      unitId: "historical", revision: 1, provider: "codex", model: null, modelSource: "unknown",
+      scope: "task", source: "legacy_task", accuracy: "unknown", inputTokens: null, outputTokens: null,
+      cacheReadTokens: null, cacheWriteTokens: null, actualUnsplitTokens: null, reportedTotalTokens: null,
+      contextTokens: null, contextWindow: null, costAmount: null, costCurrency: null, occurredAt: task.created_at,
+    }] }, { historical: true });
+  }
   return historical;
 }
 
@@ -91,11 +100,11 @@ unifiedModelBackendTests("MUL-493 offline copy rehearsal", fixture => {
     expect(result.startup.map((s: any) => [s.phase, s.role])).toEqual([
       ["first_start", "api"], ["first_start", "api-runtime"], ["restart", "api"], ["restart", "api-runtime"],
     ]);
-    expect(result.startup.every((s: any) => s.completed && s.steps_ms.prepare_usage > 0 && s.steps_ms.ensure_usage > 0)).toBe(true);
+    expect(result.startup.every((s: any) => s.completed && s.steps_ms.run_migrations > 0)).toBe(true);
     expect(result.http_ready_measured).toBe(false);
     const usage = JSON.parse(readFileSync(join(dir, "copy-usage-reconciliation.json"), "utf8"));
     expect(usage.snapshots.before.markers).toHaveLength(2);
-    expect(usage.snapshots.before.tables.multiremi_usage_legacy_versions.count).toBeGreaterThan(0);
+    expect(usage.snapshots.before.tables.multiremi_usage_units.count).toBeGreaterThan(0);
     expect(usage.snapshots.before.tables.multiremi_usage_request_owners.count).toBe(1);
     expect(usage.snapshots.before.unit_evidence.some((u: any) => Number(u.actual_tokens) === 10 && Number(u.cost_amount) === 0.01)).toBe(true);
     const context = usage.snapshots.before.unit_evidence.find((u: any) => u.source === "context_snapshot");
@@ -126,30 +135,30 @@ unifiedModelBackendTests("MUL-493 offline copy rehearsal", fixture => {
     await expect(rehearseUnifiedModelCopy(db, output())).rejects.toThrow("both #384 usage cutover markers");
     await prepareHistoricalUsage(db);
     const longBody = "evidence-tail-".repeat(2500);
-    db.run("UPDATE multiremi_usage_legacy_audit SET original_usage=? WHERE task_id=?", [longBody, task.id]);
+    db.run("UPDATE multiremi_usage_units SET evidence_ref=? WHERE task_id=?", [longBody, task.id]);
     const before = collectCopyUsageSnapshot(db, "multiremi_tasks");
-    db.run("UPDATE multiremi_usage_legacy_audit SET original_usage=? WHERE task_id=?", [longBody.slice(0, -1) + "X", task.id]);
+    db.run("UPDATE multiremi_usage_units SET evidence_ref=? WHERE task_id=?", [longBody.slice(0, -1) + "X", task.id]);
     const after = collectCopyUsageSnapshot(db, "multiremi_tasks");
-    expect(after.tables.multiremi_usage_legacy_audit.count).toBe(before.tables.multiremi_usage_legacy_audit.count);
-    expect(reconcileCopyUsage(before, after).changed_tables).toEqual(["multiremi_usage_legacy_audit"]);
+    expect(after.tables.multiremi_usage_units.count).toBe(before.tables.multiremi_usage_units.count);
+    expect(reconcileCopyUsage(before, after).changed_tables).toEqual(["multiremi_usage_units"]);
     const altered = structuredClone(before);
-    altered.tables.multiremi_usage_legacy_audit.orphan_task_refs = 1;
+    altered.tables.multiremi_usage_units.orphan_task_refs = 1;
     altered.markers = [];
     altered.unit_evidence = [{ actual_tokens: 999, cost_amount: 99 }];
-    expect(reconcileCopyUsage(before, altered).mismatches).toContain("usage attempt attribution missing: multiremi_usage_legacy_audit");
+    expect(reconcileCopyUsage(before, altered).mismatches).toContain("usage attempt attribution missing: multiremi_usage_units");
     expect(reconcileCopyUsage(before, altered).mismatches).toContain("usage cutover markers changed");
     expect(reconcileCopyUsage(before, altered).mismatches).toContain("usage actual/context/unknown/money evidence changed");
   });
 
-  test("keeps failed usage gate timing and stops before the next role or restart", async () => {
+  test("keeps failed schema startup timing and stops before the next role or restart", async () => {
     const { db, store } = fixture();
     const agent = store.createAgent({ name: "gate failure", provider: "codex" });
     store.createTask({ agentId: agent.id, prompt: "history", status: "completed" });
     await prepareHistoricalUsage(db);
     const failing = new Proxy(db, { get(target, key) {
       if (key === "query") return (sql: string) => {
-        if (sql.includes("SELECT t.id FROM multiremi_turn_execution_records t LEFT JOIN multiremi_usage_legacy_sources")) {
-          throw new Error("synthetic usage gate failure");
+        if (sql.includes("SELECT id FROM multiremi_turn_attempts LIMIT 1")) {
+          throw new Error("synthetic schema startup failure");
         }
         return target.query(sql);
       };
@@ -157,12 +166,12 @@ unifiedModelBackendTests("MUL-493 offline copy rehearsal", fixture => {
       return typeof value === "function" ? value.bind(target) : value;
     } });
     const dir = output();
-    await expect(rehearseUnifiedModelCopy(failing, dir)).rejects.toThrow("synthetic usage gate failure");
+    await expect(rehearseUnifiedModelCopy(failing, dir)).rejects.toThrow("synthetic schema startup failure");
     const report = JSON.parse(readFileSync(join(dir, "copy-startup.json"), "utf8"));
     expect(report.startup).toHaveLength(1);
     expect(report.startup[0]).toMatchObject({ role: "api", phase: "first_start", failed: true, completed: false });
-    expect(report.startup[0].steps_ms.prepare_usage).toBeGreaterThan(0);
-    expect(report.startup[0].steps_ms.ensure_usage).toBeUndefined();
+    expect(report.startup[0].steps_ms.run_migrations).toBeGreaterThan(0);
+    expect(report.startup[0].steps_ms.readback_validation).toBeUndefined();
     expect(report.http_ready_measured).toBe(false);
   });
 
@@ -171,12 +180,11 @@ unifiedModelBackendTests("MUL-493 offline copy rehearsal", fixture => {
     const agent = store.createAgent({ name: "startup drift", provider: "codex" });
     const task = store.createTask({ agentId: agent.id, prompt: "history", status: "completed" });
     await prepareHistoricalUsage(db);
-    let changed = false;
+    let snapshots = 0;
     const drifting = new Proxy(db, { get(target, key) {
       if (key === "query") return (sql: string) => {
-        if (!changed && sql.includes("SELECT t.id FROM multiremi_turn_execution_records t LEFT JOIN multiremi_usage_legacy_sources")) {
-          target.run("UPDATE multiremi_usage_legacy_audit SET original_usage='unexpected content change' WHERE task_id=?", [task.id]);
-          changed = true;
+        if ((sql.includes("table_info(multiremi_usage_units)") || (sql.includes("information_schema.columns") && sql.includes("multiremi_usage_units"))) && ++snapshots === 3) {
+          target.run("UPDATE multiremi_usage_units SET evidence_ref='unexpected content change' WHERE task_id=?", [task.id]);
         }
         return target.query(sql);
       };
@@ -187,9 +195,9 @@ unifiedModelBackendTests("MUL-493 offline copy rehearsal", fixture => {
     await expect(rehearseUnifiedModelCopy(drifting, dir)).rejects.toThrow("Copy reconciliation failed");
     const usage = JSON.parse(readFileSync(join(dir, "copy-usage-reconciliation.json"), "utf8"));
     expect(usage.stages.after_schema.mismatches).toEqual([]);
-    expect(usage.stages.first_start_api.changed_tables).toEqual(["multiremi_usage_legacy_audit"]);
+    expect(usage.stages.first_start_api.changed_tables).toEqual(["multiremi_usage_units"]);
     expect(JSON.parse(readFileSync(join(dir, "copy-timing.json"), "utf8")).mismatches)
-      .toContain("first_start_api: usage content changed: multiremi_usage_legacy_audit");
+      .toContain("first_start_api: usage content changed: multiremi_usage_units");
   });
 });
 
@@ -233,7 +241,7 @@ unifiedModelBackendTests("MUL-493 independent offline role processes", fixture =
       } } } };
   }
 
-  test("launches four distinct PIDs and measures spawn through gate and readback to offline ready", async () => {
+  test("launches four distinct PIDs and measures spawn through schema startup and readback to offline ready", async () => {
     const f = await processFixture();
     const previous = process.env.MULTIREMI_TOKEN;
     process.env.MULTIREMI_TOKEN = "synthetic-must-not-be-inherited";
@@ -252,7 +260,7 @@ unifiedModelBackendTests("MUL-493 independent offline role processes", fixture =
           image_digest: build.imageDigest, unit: "ms", status: "success", completed: true, offline_ready: true,
           exit_code: 0, http_calls: 0, fetch_calls: 0, connection_open_measured: true });
         expect(s.pid).not.toBe(process.pid);
-        const databaseMs = ["role_lock", "database_open", "run_migrations", "prepare_usage", "ensure_usage"]
+        const databaseMs = ["role_lock", "database_open", "run_migrations"]
           .reduce((sum, name) => sum + s.steps_ms[name], 0);
         expect(s.database_total_ms).toBe(databaseMs);
         expect(s.steps_ms.readback_validation).toBeGreaterThan(0);
@@ -272,21 +280,21 @@ unifiedModelBackendTests("MUL-493 independent offline role processes", fixture =
     }
   }, 60_000);
 
-  test("a child gate failure retains measured steps and PID without claiming ready or starting the next role", async () => {
+  test("a child schema startup failure retains measured steps and PID without claiming ready or starting the next role", async () => {
     const f = await processFixture("gate");
     try {
       await expect(rehearseUnifiedModelCopy(f.parentDb, f.dir, undefined, f.options)).rejects.toThrow("offline startup not ready");
       const report = JSON.parse(readFileSync(join(f.dir, "copy-startup.json"), "utf8"));
       expect(report.startup).toHaveLength(1);
       expect(report.startup[0]).toMatchObject({ role: "api", phase: "first_start", status: "not_ready",
-        completed: false, offline_ready: false, failed: true, failure_stage: "prepare_usage", exit_code: 1,
+        completed: false, offline_ready: false, failed: true, failure_stage: "run_migrations", exit_code: 1,
         startup_total_ms: null, ready_at: null, unit: "ms", source_sha: build.sourceSha, image_digest: build.imageDigest,
         http_calls: 0, fetch_calls: 0 });
       expect(report.startup[0].pid).not.toBe(process.pid);
-      expect(report.startup[0].steps_ms.prepare_usage).toBeGreaterThan(0);
-      expect(report.startup[0].steps_ms.ensure_usage).toBeUndefined();
+      expect(report.startup[0].steps_ms.run_migrations).toBeGreaterThan(0);
+      expect(report.startup[0].steps_ms.readback_validation).toBeUndefined();
       expect(report.startup[0].attempt_total_ms).toBeGreaterThan(0);
-      expect(readFileSync(join(f.dir, "startup-first_start-api.private.log"), "utf8")).toContain("synthetic usage gate failure");
+      expect(readFileSync(join(f.dir, "startup-first_start-api.private.log"), "utf8")).toContain("synthetic schema startup failure");
     } finally { f.close(); }
   }, 30_000);
 
@@ -298,13 +306,13 @@ unifiedModelBackendTests("MUL-493 independent offline role processes", fixture =
       expect(report.startup).toHaveLength(1);
       expect(report.startup[0]).toMatchObject({ offline_ready: false, completed: false, status: "not_ready",
         failure_stage: "readback_validation", startup_total_ms: null, ready_at: null });
-      expect(report.startup[0].steps_ms.ensure_usage).toBeGreaterThan(0);
+      expect(report.startup[0].steps_ms.readback_validation).toBeGreaterThan(0);
       expect(report.startup[0].steps_ms.readback_validation).toBeGreaterThan(0);
       const usage = JSON.parse(readFileSync(join(f.dir, "copy-usage-reconciliation.json"), "utf8"));
       expect(usage.stages.after_schema.mismatches).toEqual([]);
-      expect(usage.stages.first_start_api.changed_tables).toEqual(["multiremi_usage_legacy_audit"]);
+      expect(usage.stages.first_start_api.changed_tables).toEqual(["multiremi_usage_units"]);
       expect(JSON.parse(readFileSync(join(f.dir, "copy-timing.json"), "utf8")).mismatches)
-        .toContain("first_start_api: usage content changed: multiremi_usage_legacy_audit");
+        .toContain("first_start_api: usage content changed: multiremi_usage_units");
     } finally { f.close(); }
   }, 30_000);
 

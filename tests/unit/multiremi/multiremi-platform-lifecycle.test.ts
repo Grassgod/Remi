@@ -9,6 +9,54 @@ afterEach(() => {
 });
 
 describe("platform lifecycle", () => {
+  for (const kind of ["update", "rollback"] as const) {
+    for (const targetVersion of ["0.2.88", "v0.2.87", "0.2.89-rc.1", "invalid"]) {
+      it(`rejects ${kind} below or unverified against the database floor: ${targetVersion}`, async () => {
+        const store = createLocalStore();
+        const app = createMultiremiApp({ store, authToken: "floor-admin" });
+        const response = await app.request("/api/multiremi/platform/operations", { method: "POST",
+          headers: { Authorization: "Bearer floor-admin", "Content-Type": "application/json" },
+          body: JSON.stringify({ kind, targetVersion }) });
+        expect(response.status).toBe(400);
+        expect(await response.json()).toMatchObject({ code: "rollback_below_floor", minimumRollbackVersion: "0.2.89", error: expect.stringContaining("backup") });
+        expect(store.listPlatformOperations()).toEqual([]);
+        expect(store.getPlatformMaintenance().mode).toBe("normal");
+      });
+    }
+    for (const targetVersion of ["v0.2.89", "0.2.100", "0.10.0"]) {
+      it(`allows ${kind} at or above the database floor: ${targetVersion}`, async () => {
+        const store = createLocalStore();
+        const app = createMultiremiApp({ store, authToken: "floor-admin" });
+        const response = await app.request("/api/multiremi/platform/operations", { method: "POST",
+          headers: { Authorization: "Bearer floor-admin", "Content-Type": "application/json" },
+          body: JSON.stringify({ kind, targetVersion }) });
+        expect(response.status).toBe(202);
+        expect(store.getActivePlatformOperation()?.targetVersion).toBe(targetVersion);
+      });
+    }
+  }
+
+  it("reports the floor and resolves refs while rejecting mismatched target declarations", async () => {
+    const store = createLocalStore();
+    store.heartbeatPlatformUpdater({ driver: "docker_compose", recentReleases: [release("0.2.88"), release("0.2.89")] });
+    const app = createMultiremiApp({ store, authToken: "floor-admin" });
+    const headers = { Authorization: "Bearer floor-admin", "Content-Type": "application/json" };
+    const status = await app.request("/api/multiremi/platform/status", { headers });
+    expect((await status.json()).minimumRollbackVersion).toBe("0.2.89");
+    for (const kind of ["update", "rollback"]) for (const target of [
+      { targetRef: release("0.2.88").ref }, { targetRef: "unknown-ref" },
+      { targetVersion: "0.2.100", targetRef: release("0.2.88").ref },
+      { targetVersion: "0.2.100", targetRef: release("0.2.88").manifestUrl },
+    ]) {
+      const response = await app.request("/api/multiremi/platform/operations", { method: "POST", headers, body: JSON.stringify({ kind, ...target }) });
+      expect(response.status).toBe(400);
+      expect((await response.json()).code).toBe("rollback_below_floor");
+    }
+    expect(store.listPlatformOperations()).toEqual([]);
+    const accepted = await app.request("/api/multiremi/platform/operations", { method: "POST", headers, body: JSON.stringify({ kind: "rollback", targetRef: release("0.2.89").ref }) });
+    expect(accepted.status).toBe(202);
+    expect(store.getActivePlatformOperation()?.targetVersion).toBe("0.2.89");
+  });
   it("serializes operations and resumes a claimed operation", () => {
     const store = createLocalStore();
     const created = store.createPlatformOperation({ kind: "restart" }, "local");

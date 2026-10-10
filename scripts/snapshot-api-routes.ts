@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { taskUsageSnapshot } from "../tests/fixtures/multiremi/task-usage-snapshot.js";
 /**
  * Golden route snapshot for the Multiremi HTTP API.
  *
@@ -695,7 +696,7 @@ async function seedStore(store: MultiremiStore, db: Database): Promise<SeedRefs>
   store.startTask(task.id);
   store.appendTaskMessages(task.id, [{ type: "assistant", content: "working" }]);
   store.reportProgress(task.id, "halfway", 1, 2);
-  store.reportTaskUsage(task.id, [{ model: "claude-sonnet-4", inputTokens: 10, outputTokens: 5 } as any]);
+  store.reportTaskUsageSnapshot(task.id, taskUsageSnapshot([{ model: "claude-sonnet-4", inputTokens: 10, outputTokens: 5 } as any]));
   const humanRequest = store.createTaskHumanRequest({
     id: "hrq_snapshot",
     taskId: task.id,
@@ -1812,7 +1813,7 @@ flow("daemon-task-lifecycle", async (rec, refs, store) => {
   });
   await rec.call("GET", `/api/tasks/${id}/prompt`);
   await rec.report("task.session_pin", { task_id: id, session_id: "ses_snapshot", work_dir: "/snapshot/work" });
-  await rec.report("task.usage", { task_id: id, usage: [{ model: "claude-sonnet-4", input_tokens: 3, output_tokens: 4 }] });
+  await rec.report("task.usage", { task_id: id, usageSnapshot: taskUsageSnapshot([{ provider: "claude", model: "claude-sonnet-4", inputTokens: 3, outputTokens: 4 }]) });
   const requestId = store.createTaskHumanRequest({ taskId: id, kind: "permission", payload: { tool: "Bash" } }).id;
   await rec.json("POST", `/api/multiremi/tasks/${id}/human-requests/${requestId}/respond`, { outcome: "approved" });
   const secondId = store.createTaskHumanRequest({ taskId: id, kind: "permission", payload: { tool: "Read" } }).id;

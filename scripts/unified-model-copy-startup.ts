@@ -3,7 +3,6 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { PostgresSyncDatabase, type SqlDatabase } from "../packages/server/src/store/db/postgres.js";
 import { runMigrations } from "../packages/server/src/store/migrations.js";
-import { prepareUsageAccountingStartup, ensureUsageAccountingStartup } from "../packages/server/src/store/usage-migration.js";
 import { locksForRole, startHubRoleGuard } from "../packages/server/src/api/hub/hub-role-guard.js";
 import type { UnifiedModelReport } from "../packages/server/src/store/unified-model-migration.js";
 import { readOnlyConversationTransaction } from "./reconcile-conversation-log.js";
@@ -64,7 +63,7 @@ export async function runCopyStartupWorker(input: CopyStartupInput, options: {
     steps_ms: {}, database_total_ms: 0, offline_ready: false, completed: false, status: "not_ready",
     connection_open_measured: true, role_lock_measured: Boolean(options.databaseUrl) };
   const emit = (event: CopyStartupEvent["event"], extra: Partial<CopyStartupEvent> = {}) => options.emit({ event, timing, ...extra });
-  const databaseSteps = new Set(["role_lock", "database_open", "run_migrations", "prepare_usage", "ensure_usage"]);
+  const databaseSteps = new Set(["role_lock", "database_open", "run_migrations"]);
   const measure = async <T>(name: string, action: () => T | Promise<T>): Promise<T> => {
     timing.active_step = name;
     emit("progress");
@@ -90,8 +89,6 @@ export async function runCopyStartupWorker(input: CopyStartupInput, options: {
         () => collectCopyUsageSnapshot(db!, "multiremi_turn_attempts")));
       emit("after_schema", { snapshot });
     }
-    await measure("prepare_usage", () => prepareUsageAccountingStartup(db!));
-    await measure("ensure_usage", () => ensureUsageAccountingStartup(db!));
     const evidence = await measure("readback_validation", () => readOnlyConversationTransaction(db!, () => {
       const snapshot = collectCopyUsageSnapshot(db!, "multiremi_turn_attempts");
       const model = reconcileCopyReadback(db!, input.model_before, input.baseline);
