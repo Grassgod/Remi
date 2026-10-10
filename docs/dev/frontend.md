@@ -40,6 +40,8 @@ Issue 详情页由 [server-log.ts](../../frontend/apps/web/features/issues/serve
 
 Issue 的说明与评论区之间保留横向分隔，评论使用独立边框卡片。`AgentLiveCard` 通过 `SessionLogList.afterRow` 放在说明行之后、与其他日志行同级，吸顶范围覆盖整个评论滚动内容；不能再把它嵌入单个日志行或固定高度的 `overflow-y-auto` 占位。没有活动任务时不留空盒子；多任务展开按内容占高，列表最多占半个视口并可滚动。旧会话或旧请求的迟到结果不会改变当前访问的显示门禁。缓存缺失时以一次首个状态读取替代永久的 128px 预留，不用提高揭示预算或放宽可见跳动门禁。日志头移出的控件及评论新内边距使用 `issue-cards-v2` 行高缓存版本，避免复用旧的 128px 占位或平铺行尺寸。真实几何回归在 [zero-jump-check.ts](../../tests/integration/zero-jump-check.ts) 的 `detail-layout` 场景覆盖桌面、手机、滚动吸顶及展开，`detail-running-empty-cache` 覆盖晚到状态与首屏锚点。
 
+Issue 属性侧栏的工作位置通过 [WorkLocationPicker](../../frontend/packages/views/runtimes/components/runtime-workspace-picker.tsx) 的 `wrapLabel` 模式占满属性值列，长项目名和本地目录名称按可用宽度换行；有任务而禁止改位置时也保留完整名称。Chat 与创建 Issue 的紧凑选择器沿用默认的单行截断。
+
 ## 统一消息与轮展示
 
 对话消息头使用 [MessageHeader](../../frontend/packages/views/common/message-header.tsx) 显示收件人/角色、message_kind 与实际 wake_applied，wake_reason 用作提示；未知显示枚举保留原字符串。Issue 与 Chat 优先识别 canonical 消息头，保留的 metadata.envelope 不会把正常消息变成系统详情。Chat 乐观发送以 canonical dedupe_key 匹配日志行；日志确认后只显示服务端正文，编辑替换正文，删除或隐藏不会复活本地草稿。Issue 与 Chat 的轮行消费服务端从 multiremi_turns 投影的卡片，卡片不自行制造工作轮或用户消息。
