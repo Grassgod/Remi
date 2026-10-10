@@ -28,7 +28,7 @@ import { createResponsibleTestIssue } from './helpers.js';
  * PG-backed suites. Point `MULTIREMI_TEST_POSTGRES_URL` at an instance where the
  * configured role may CREATE DATABASE.
  */
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "bun:test";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
 import type { Database } from "bun:sqlite";
 import { PostgresSyncDatabase } from "@multiremi/store/db/postgres.js";
 import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
@@ -141,6 +141,11 @@ class LockRecordingDatabase implements SqlDatabase {
 let openDbs: Database[] = [];
 let previousEncryptionKey: string | undefined;
 
+beforeEach(() => {
+  // A case can construct several stores; capture the original only once.
+  previousEncryptionKey = process.env.MULTIREMI_FEISHU_BOT_ENCRYPTION_KEY;
+});
+
 afterEach(() => {
   for (const db of openDbs) db.close();
   openDbs = [];
@@ -149,7 +154,6 @@ afterEach(() => {
 });
 
 function freshStore(): { store: MultiremiStore; recorder: LockRecordingDatabase } {
-  previousEncryptionKey = process.env.MULTIREMI_FEISHU_BOT_ENCRYPTION_KEY;
   process.env.MULTIREMI_FEISHU_BOT_ENCRYPTION_KEY = Buffer.alloc(32, 13).toString("base64");
   const db = openSqliteDatabase(":memory:");
   openDbs.push(db);
