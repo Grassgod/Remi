@@ -288,3 +288,62 @@ test("a changed concierge status wakes only its host and preserves the new state
       .toMatchObject({ state: "failed", errorMessage: "fixture connection failure" });
   } finally { snapshots.mockRestore(); claims.mockRestore(); }
 });
+
+test("native usage reports persist and notify without historical runtime scans or daemon downlinks", async () => {
+  const f = await fleet();
+  const task = f.store.createTask({ agentId: f.agent.id, prompt: "usage cost" });
+  await f.layer.drain();
+  const offer = f.frames[0]!.find(frame => frame.t === "task.offer" && frame.p.attempt_id === task.id)!;
+  expect(offer).toBeDefined();
+  await f.sessions[0]!.handleMessage(JSON.stringify({ v: 2, t: "res", re: String(offer.seq),
+    ack: offer.seq, p: { ok: true } }));
+  await f.layer.drain();
+  const send = (seq: number, type: string, payload: Record<string, unknown>) =>
+    f.sessions[0]!.handleMessage(JSON.stringify({ v: 2, t: type, seq, rt: f.runtimeIds[0],
+      p: { task_id: task.id, ...payload } }));
+  await send(1, "task.start", { usage_run_id: "cost-run" });
+  await f.layer.drain();
+  expect(f.store.getTaskIdentity(task.id)?.status).toBe("running");
+  await f.sessions[0]!.handleMessage(JSON.stringify({ v: 2, t: "ack",
+    ack: f.sessions[0]!.lastSentSeq, p: {} }));
+  await f.layer.drain();
+
+  const usageSnapshot = { version: 2, runId: "cost-run", revision: 1, complete: false, units: [{
+    unitId: "request", revision: 1, provider: "claude", model: "fixture-model", scope: "request",
+    source: "provider_request", accuracy: "exact", inputTokens: 10, outputTokens: 2,
+    cacheReadTokens: 0, cacheWriteTokens: 0, actualUnsplitTokens: 0, reportedTotalTokens: 12,
+    contextTokens: null, contextWindow: null, costAmount: null, costCurrency: null,
+    occurredAt: "2026-10-10T00:00:00Z",
+  }] };
+  const notifications: string[] = [];
+  const unsubscribe = f.store.onTaskEvent(event => {
+    if (event.task.id === task.id) notifications.push(event.type);
+  });
+  const snapshots = spyOn(f.store, "pendingRuntimeRequests");
+  const claims = spyOn(f.store, "claimTask");
+  try {
+    const sql = await countSql(f.database, f.layer, () => send(2, "task.usage", { usageSnapshot }));
+    console.info(JSON.stringify({ fixture: "native-usage-cost", sql: sql.length,
+      runtime_aggregates: historicalAggregates(sql).length, downlinks: snapshots.mock.calls.length }));
+    expect(f.frames[0]!.find(frame => frame.t === "res" && frame.re === "2")?.p).toEqual({ ok: true });
+    expect(historicalAggregates(sql)).toEqual([]);
+    expect(sql.length).toBeLessThanOrEqual(40);
+    expect(snapshots).not.toHaveBeenCalled();
+    expect(claims).not.toHaveBeenCalled();
+    expect(notifications).toEqual(["task:usage"]);
+    expect(f.store.getTask(task.id)?.usage[0]?.totalTokens).toBe(12);
+    const stored = f.database.query("SELECT runtime_id,input_tokens,output_tokens FROM multiremi_usage_units WHERE task_id=?")
+      .get(task.id) as { runtime_id: string; input_tokens: number | string; output_tokens: number | string };
+    expect(stored.runtime_id).toBe(f.runtimeIds[0]!);
+    expect(Number(stored.input_tokens)).toBe(10);
+    expect(Number(stored.output_tokens)).toBe(2);
+
+    const replay = await countSql(f.database, f.layer, () => send(3, "task.usage", { usageSnapshot }));
+    expect(f.frames[0]!.find(frame => frame.t === "res" && frame.re === "3")?.p).toEqual({ ok: true });
+    expect(historicalAggregates(replay)).toEqual([]);
+    expect(snapshots).not.toHaveBeenCalled();
+    expect(claims).not.toHaveBeenCalled();
+    expect(notifications).toEqual(["task:usage"]);
+    expect(f.store.getTask(task.id)?.usage[0]?.totalTokens).toBe(12);
+  } finally { unsubscribe(); snapshots.mockRestore(); claims.mockRestore(); }
+}, 15_000);

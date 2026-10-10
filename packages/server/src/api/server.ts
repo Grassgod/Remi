@@ -1225,6 +1225,8 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
       browserUser: browserUserWebSockets,
     },
     onDaemonTask: ({ type, task }) => {
+      // Accounting changes update browser statistics, not daemon input or capacity.
+      if (type === "task:usage") return;
       if (type === "task:queued") {
         offers.enqueued(task);
         return;

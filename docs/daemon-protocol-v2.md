@@ -548,7 +548,10 @@ SSH 配置 revision 时，才广播 `daemon:ssh_mesh_changed` 重新下发整个
 `claimTask` 在生命周期锁前读取轻量 Runtime，锁后读取派活所需的模型、执行组和协议状态，
 不会附带历史用量聚合。CLI 排空检查、重试时点、任务下发的宿主所有者信息和飞书卡片能力判断
 同样只读取必要字段；统一模型的 `DaemonTurnBridge` 授权也只读取 Runtime 身份字段。
-用户侧 Runtime 列表/详情的统计口径不变。成本回归必须统计心跳到下行、派活全部结束的
+用户侧 Runtime 列表/详情的统计口径不变。用量上报的事务内授权也只读取 Runtime 身份；
+`task:usage` 保留浏览器统计通知与 peer 转发，不唤醒 daemon 下行或派活。
+实际用量的归属、revision 去重和持久化仍由原记账事务保证。
+成本回归必须统计心跳到下行、派活全部结束的
 完整链路，并计入 `WITH` 聚合；多 Runtime 用例见
 [daemon-heartbeat-fanout-cost.test.ts](../tests/unit/multiremi/daemon-heartbeat-fanout-cost.test.ts)。
 该回归也验证新任务入队直接推送，以及本地容量释放补发的 `hb` 在拒收冷却到期前重试派发：
