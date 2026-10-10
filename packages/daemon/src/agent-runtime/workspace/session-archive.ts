@@ -50,6 +50,7 @@ import { createLogger } from "@shared/logger.js";
 const log = createLogger("multiremi-session-archive");
 
 const DEFAULT_MAX_SOURCE_BYTES = 512 * 1024 * 1024;
+const ARCHIVE_READ_CHUNK_BYTES = 64 * 1024;
 export const ISSUE_SESSION_ARCHIVE_RECEIPT_FILE = "session-archive-receipt.json";
 export const SESSION_ARCHIVE_FORMAT = SESSION_ARCHIVE_FORMAT_V2;
 /** Directories whose contents never enter an archive. */
@@ -606,16 +607,29 @@ async function* readMemberBytes(file: ScannedFile): AsyncGenerator<Buffer> {
   try {
     const before = await handle.stat();
     if (!matchesScannedFile(before, file)) throw archiveEntryChanged(file.archivePath);
-    if (file.size > 0) {
-      const stream = handle.createReadStream({ autoClose: false, start: 0, end: file.size - 1 });
-      for await (const chunk of stream) {
-        yield Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-      }
+    for await (const chunk of readOpenFileBytes(handle, file.size, () => archiveEntryChanged(file.archivePath))) {
+      yield chunk;
     }
     const after = await handle.stat();
     if (!sameFileSnapshot(before, after)) throw archiveEntryChanged(file.archivePath);
   } finally {
     await handle.close().catch(() => {});
+  }
+}
+
+/** Read only the scanned bytes; Bun can retain an FD behind FileHandle.createReadStream(autoClose:false). */
+async function* readOpenFileBytes(
+  handle: FileHandle,
+  size: number,
+  changed: () => Error,
+): AsyncGenerator<Buffer> {
+  let position = 0;
+  while (position < size) {
+    const chunk = Buffer.allocUnsafe(Math.min(ARCHIVE_READ_CHUNK_BYTES, size - position));
+    const { bytesRead } = await handle.read(chunk, 0, chunk.length, position);
+    if (bytesRead === 0) throw changed();
+    position += bytesRead;
+    yield chunk.subarray(0, bytesRead);
   }
 }
 
@@ -645,15 +659,14 @@ async function inspectOpenRegularFile(
     const hash = createHash("sha256");
     const chunks: Buffer[] = [];
     let bytesRead = 0;
-    if (before.size > 0) {
-      const stream = handle.createReadStream({ autoClose: false, start: 0, end: before.size - 1 });
-      for await (const chunk of stream) {
-        const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-        bytesRead += bytes.length;
-        if (bytesRead > before.size) throw new Error(`File changed while preparing session archive: ${path}`);
-        hash.update(bytes);
-        chunks.push(bytes);
-      }
+    for await (const bytes of readOpenFileBytes(
+      handle,
+      before.size,
+      () => new Error(`File changed while preparing session archive: ${path}`),
+    )) {
+      bytesRead += bytes.length;
+      hash.update(bytes);
+      chunks.push(bytes);
     }
     const after = await handle.stat();
     if (bytesRead !== before.size || !sameFileSnapshot(before, after)) {
