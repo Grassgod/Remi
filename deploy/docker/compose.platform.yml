@@ -68,8 +68,8 @@ services:
       interval: 10s
       timeout: 5s
       retries: 12
-      # Each update validates: migration timeout + 60s <= start_period <= updater health timeout.
-      # Timeouts: MULTIREMI_USAGE_MIGRATION_TIMEOUT_MS / MULTIREMI_PLATFORM_HEALTH_TIMEOUT_MS.
+      # Allow schema startup work before health failures count toward rollback.
+      # Updater health timeout: MULTIREMI_PLATFORM_HEALTH_TIMEOUT_MS.
       start_period: 360s
     ports:
       - 127.0.0.1:${REMI_API_BIND_PORT:-6120}:6120
@@ -116,8 +116,8 @@ services:
       interval: 10s
       timeout: 5s
       retries: 12
-      # Each update validates: migration timeout + 60s <= start_period <= updater health timeout.
-      # Timeouts: MULTIREMI_USAGE_MIGRATION_TIMEOUT_MS / MULTIREMI_PLATFORM_HEALTH_TIMEOUT_MS.
+      # Allow schema startup work before health failures count toward rollback.
+      # Updater health timeout: MULTIREMI_PLATFORM_HEALTH_TIMEOUT_MS.
       start_period: 360s
     ports:
       - 127.0.0.1:${REMI_API_RUNTIME_BIND_PORT:-16121}:6120

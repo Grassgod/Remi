@@ -1056,7 +1056,6 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
     ? (peerUrl ? createPeerChannel({ url: peerUrl, secret: peerSecret }) : null)
     : options.peerChannel;
   const store = options.store ?? new MultiremiStore();
-  store.ensureUsageAccountingStartup();
   // The Hub fill and stream auth share this pool; only the server-created one is ours to close.
   const readPool = options.readPool ?? (process.env.NODE_ENV === "test" || !isPostgresConfigured()
     ? null

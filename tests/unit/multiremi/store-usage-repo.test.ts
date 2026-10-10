@@ -1,3 +1,4 @@
+import { taskUsageSnapshot } from "../../fixtures/multiremi/task-usage-snapshot.js";
 import { runTurnExecutionMutation } from "@multiremi/store/turn-execution-records.js";
 // Sibling test for packages/server/src/store/repos/usage-repo.ts.
 // Drives the carved-out repo directly over its StoreContext (not through the
@@ -26,9 +27,9 @@ function seedCompletedTaskWithUsage(): void {
   const task = store!.createTask({ agentId: agent.id, prompt: "burn tokens", workspaceId: "local" });
   store!.claimTask(runtime.id);
   store!.startTask(task.id);
-  store!.reportTaskUsage(task.id, [
+  store!.reportTaskUsageSnapshot(task.id, taskUsageSnapshot([
     { provider: "claude", model: "opus", inputTokens: 100, outputTokens: 20, cacheReadTokens: 5, cacheWriteTokens: 1 },
-  ]);
+  ]));
   store!.completeTask(task.id, { output: "done" });
 }
 
@@ -74,7 +75,7 @@ describe("UsageRepo", () => {
     store!.claimTask(runtime.id);
     store!.startTask(task.id);
     // Legacy total semantics are ambiguous; context cannot be inferred either.
-    store!.reportTaskUsage(task.id, [{ provider: "claude", model: "opus", inputTokens: 0, outputTokens: 0, totalTokens: 78048 }]);
+    store!.reportTaskUsageSnapshot(task.id, taskUsageSnapshot([{ provider: "claude", model: "opus", inputTokens: 0, outputTokens: 0, totalTokens: 78048 }]));
     store!.completeTask(task.id, { output: "done" });
 
     const daily = repo.listUsageDaily({ workspaceId: "local" });

@@ -1,3 +1,4 @@
+import { taskUsageSnapshot } from "../../fixtures/multiremi/task-usage-snapshot.js";
 import { createResponsibleTestIssue } from './helpers.js';
 import { runTurnExecutionMutation } from "@multiremi/store/turn-execution-records.js";
 import { mutateExecutionFixture } from "./unified-test-paths.js";
@@ -41,12 +42,12 @@ describe("Multiremi API — dashboard JSON endpoints", () => {
     const task = store.createTask({ agentId: agent.id, workspaceId, issueId: issue.id, prompt: "seed usage" });
     const claimed = store.claimTask(options.runtimeId);
     expect(claimed?.id).toBe(task.id);
-    store.reportTaskUsage(task.id, [{
+    store.reportTaskUsageSnapshot(task.id, taskUsageSnapshot([{
       provider,
       model: options.model ?? "sonnet",
       inputTokens: options.inputTokens ?? 21,
       outputTokens: options.outputTokens ?? 8,
-    }]);
+    }]));
     return { agentId: agent.id, runtimeId: options.runtimeId, taskId: task.id };
   }
 
@@ -168,16 +169,16 @@ describe("Multiremi API — dashboard JSON endpoints", () => {
     const app = createMultiremiApp({ store });
     const seeded = seedRuntimeWithUsage(store, { runtimeId: "rt_e2e", inputTokens: 0, outputTokens: 0 });
 
-    // The daemon client posts snake_case usage entries (worker/client.ts).
-    const report = await reportFrame(store, "task.usage", { task_id: seeded.taskId, usage: [{
+    // The daemon client posts canonical versioned usage snapshots.
+    const report = await reportFrame(store, "task.usage", { task_id: seeded.taskId, usageSnapshot: taskUsageSnapshot([{
           provider: "claude",
           model: "sonnet",
-          input_tokens: 1200,
-          output_tokens: 340,
-          cache_read_tokens: 5600,
-          cache_write_tokens: 780,
-          total_tokens: 7920,
-        }], }, { headers: { "Content-Type": "application/json" }, authToken: "" });
+          inputTokens: 1200,
+          outputTokens: 340,
+          cacheReadTokens: 5600,
+          cacheWriteTokens: 780,
+          totalTokens: 7920,
+        }], 2), }, { headers: { "Content-Type": "application/json" }, authToken: "" });
     expect(report.ok).toBe(true);
 
     const daily = await (await app.request("/api/dashboard/usage/daily?workspace_id=local")).json();

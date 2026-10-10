@@ -15,7 +15,7 @@ import { SessionArchiveError } from "@multiremi/session-archive/service.js";
 import type { DaemonGcErrorReply, DaemonFeishuOutboundOkReply, DaemonTaskCompletionFields } from "@multiremi/contracts/daemon-protocol.js";
 import { createLogger } from "@shared/logger.js";
 import { log as apiLog } from "../helpers/common.js";
-import { daemonTaskUsageEntries, daemonLocalSkillListReportBody, daemonLocalSkillImportReportBody } from "../helpers.js";
+import { daemonLocalSkillListReportBody, daemonLocalSkillImportReportBody } from "../helpers.js";
 import { daemonAgentPluginStateResponse } from "../wire/index.js";
 import type { DaemonProtocolLayer } from "./index.js";
 import type { DaemonProtocolSession } from "./session.js";
@@ -202,12 +202,7 @@ export function registerDaemonReportHandlers(layer: DaemonProtocolLayer, store: 
               catch (error) { if (error instanceof UsageValidationError) reject(); throw error; }
               break;
             }
-            const usage = daemonTaskUsageEntries(p.usage);
-            // The ingestion boundary performs replay checks and rejects JSON
-            // drift against its protected historical source checkpoint.
-            try { store.reportTaskUsage(taskId, usage); }
-            catch (error) { if (error instanceof UsageValidationError) reject(); throw error; }
-            break;
+            return { ok: false, code: "report_shape_retired", retryable: false };
           }
           case "task.workspace": {
             const runtimeId = string(p.runtime_id);

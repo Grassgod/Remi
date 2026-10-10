@@ -74,6 +74,7 @@ export const PlatformAutoUpdateScheduleSchema = z.object({
 }).loose();
 
 export const PlatformStatusSchema = z.object({
+  minimumRollbackVersion: z.string().nullable().optional(),
   canManage: z.boolean().default(false),
   driver: z.string().default("systemd_release"),
   currentRelease: PlatformReleaseSchema.nullable().default(null),

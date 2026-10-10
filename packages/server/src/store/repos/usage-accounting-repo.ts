@@ -2,7 +2,7 @@ import { createId, nowIso } from "@multiremi/ids.js";
 import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import type { StoreContext } from "@multiremi/store/context.js";
 import type { SetUsagePriceInput, UsageMetrics, UsagePrice, UsageReport } from "@multiremi/contracts/usage-accounting.js";
-import { USAGE_CUTOVER_MARKER, UsageValidationError, UsageAccountingNotReadyError } from "@multiremi/store/usage-accounting.js";
+import { UsageValidationError } from "@multiremi/store/usage-accounting.js";
 
 type Row = Record<string, unknown>;
 export interface UsageReportInput {
@@ -95,7 +95,6 @@ export class UsageAccountingRepo {
   }
 
   report(input: UsageReportInput): UsageReport {
-    if (!this.ctx.db.query("SELECT id FROM multiremi_schema_migrations WHERE id=?").get(USAGE_CUTOVER_MARKER)) throw new UsageAccountingNotReadyError("Usage history backfill has not completed");
     const asOf = nowIso();
     const tz = validTimezone(input.tz ?? "UTC");
     const days = input.days === null ? null : input.days ?? 30;

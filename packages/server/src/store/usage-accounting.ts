@@ -1,10 +1,9 @@
 import type { TaskUsageSnapshot, TaskUsageUnit } from "@multiremi/contracts/usage-accounting.js";
 import { createHash } from "node:crypto";
-import { advisoryLock, advisoryXactLock, type SqlDatabase } from "@multiremi/store/db/postgres.js";
+import { advisoryXactLock, type SqlDatabase } from "@multiremi/store/db/postgres.js";
 
 type Row = Record<string, unknown>;
 export class UsageValidationError extends Error {}
-export class UsageAccountingNotReadyError extends Error {}
 export const USAGE_CUTOVER_MARKER = "20261006_usage_accounting_v2";
 export const USAGE_STARTUP_CUTOVER_MARKER = "20261006_usage_accounting_startup_v1";
 export interface UsageScopeEvidence { id: string | null; provenance: string; }
@@ -120,10 +119,6 @@ export function ensureUsageAccountingSchema(db: SqlDatabase): void {
       before_write BIGINT,after_write BIGINT,before_total BIGINT,after_total BIGINT
     );
     CREATE INDEX IF NOT EXISTS idx_usage_meter_namespace ON multiremi_usage_meter_owners(workspace_id,provider,provider_session_id,epoch_id);
-    CREATE TABLE IF NOT EXISTS multiremi_usage_legacy_audit (
-      task_id TEXT PRIMARY KEY, original_usage TEXT, migrated_at TEXT NOT NULL,
-      FOREIGN KEY(task_id) REFERENCES multiremi_turn_attempts(id) ON DELETE CASCADE
-    );
     CREATE TABLE IF NOT EXISTS multiremi_usage_prices (
       id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, provider TEXT NOT NULL, model TEXT NOT NULL,
       connection_id TEXT, requested_model_alias INTEGER NOT NULL DEFAULT 0, currency TEXT NOT NULL,
@@ -152,11 +147,15 @@ export function ensureUsageAccountingSchema(db: SqlDatabase): void {
   if (!unitColumns.some(field => field.name === "cost_coverage_received_count")) db.run("ALTER TABLE multiremi_usage_units ADD COLUMN cost_coverage_received_count INTEGER");
   const taskScopeColumns = db.query("PRAGMA table_info(multiremi_usage_task_scopes)").all() as Array<{ name: string }>;
   if (!taskScopeColumns.some(field => field.name === "active_run_id")) db.run("ALTER TABLE multiremi_usage_task_scopes ADD COLUMN active_run_id TEXT");
-  // A fresh database has no legacy facts to backfill. Existing installations
-  // remain gated until the resumable scalar backfill has finished. Startup
-  // performs that work after releasing the global schema migration lock.
-  if (!db.query("SELECT id FROM multiremi_turn_execution_records LIMIT 1").get()) {
-    db.run("INSERT INTO multiremi_schema_migrations(id,applied_at) VALUES(?,?) ON CONFLICT(id) DO NOTHING", [USAGE_CUTOVER_MARKER, new Date().toISOString()]);
+  if (!db.query("SELECT id FROM multiremi_turn_attempts LIMIT 1").get()) {
+    db.transaction(() => {
+      const appliedAt = new Date().toISOString();
+      for (const marker of [USAGE_CUTOVER_MARKER, USAGE_STARTUP_CUTOVER_MARKER]) {
+        db.run("INSERT INTO multiremi_schema_migrations(id,applied_at) VALUES(?,?) ON CONFLICT(id) DO NOTHING", [marker, appliedAt]);
+      }
+    })();
+  } else if (!db.query("SELECT id FROM multiremi_schema_migrations WHERE id=?").get(USAGE_STARTUP_CUTOVER_MARKER)) {
+    throw new Error("Usage cutover is required: 先升级到 0.2.87–0.2.89 完成用量切换 before starting this version.");
   }
 }
 
@@ -481,187 +480,3 @@ export function writeUsageSnapshot(db: SqlDatabase, taskId: string, input: TaskU
   })();
 }
 
-/** Legacy totals have ambiguous semantics; preserve them as evidence only. */
-export function legacyUsageSnapshot(taskId: string, raw: unknown, occurredAt: string): TaskUsageSnapshot {
-  let entries: unknown = raw;
-  if (typeof entries === "string") { try { entries = JSON.parse(entries); } catch { entries = []; } }
-  const units: TaskUsageUnit[] = [];
-  for (const [index, entry] of (Array.isArray(entries) ? entries : []).entries()) {
-    if (!entry || typeof entry !== "object") continue;
-    const e = entry as Row;
-    const token = (key: string) => typeof e[key] === "number" && Number.isSafeInteger(e[key]) && Number(e[key]) >= 0 ? Number(e[key]) : null;
-    const split = ["inputTokens", "outputTokens", "cacheReadTokens", "cacheWriteTokens"].map(token);
-    const hasSplit = split.some((n) => n !== null && n > 0);
-    units.push({ unitId: `legacy:${index}`, revision: 0, provider: typeof e.provider === "string" ? e.provider : "unknown",
-      model: e.modelSource === "upstream" && typeof e.model === "string" && e.model.trim() ? e.model : null,
-      requestedModel: typeof e.model === "string" && e.model.trim() ? e.model : null,
-      modelSource: e.modelSource === "upstream" ? "provider_reported" : typeof e.model === "string" && e.model.trim() ? "configured" : "unknown",
-      timeProvenance: "task_attributed",
-      scope: "task", source: "legacy_task", accuracy: hasSplit ? "partial" : "unknown",
-      inputTokens: hasSplit ? split[0]! : null, outputTokens: hasSplit ? split[1]! : null, cacheReadTokens: hasSplit ? split[2]! : null, cacheWriteTokens: hasSplit ? split[3]! : null,
-      actualUnsplitTokens: null, reportedTotalTokens: token("totalTokens"), contextTokens: null, contextWindow: null,
-      costAmount: null, costCurrency: null, occurredAt, evidenceRef: `legacy-task-usage:${taskId}` });
-  }
-  return { version: 2, runId: "legacy", revision: 0, complete: false, units };
-}
-
-export const USAGE_MIGRATION_LOCK = "multiremi:usage-legacy-migration:v1";
-
-/** Migration checkpoints live outside the global schema migration lock. */
-export function ensureLegacyUsageMigrationSchema(db: SqlDatabase): void {
-  advisoryLock(db, USAGE_MIGRATION_LOCK, () => db.exec(`CREATE TABLE IF NOT EXISTS multiremi_usage_legacy_sources (
-    task_id TEXT PRIMARY KEY, source_version INTEGER NOT NULL, source_usage TEXT, source_occurred_at TEXT NOT NULL,
-    FOREIGN KEY(task_id) REFERENCES multiremi_turn_attempts(id) ON DELETE CASCADE
-  );
-  CREATE TABLE IF NOT EXISTS multiremi_usage_legacy_versions (
-    task_id TEXT NOT NULL, source_version INTEGER NOT NULL, original_usage TEXT, source_occurred_at TEXT, recorded_at TEXT NOT NULL,
-    PRIMARY KEY(task_id,source_version), FOREIGN KEY(task_id) REFERENCES multiremi_turn_attempts(id) ON DELETE CASCADE
-  )`));
-}
-
-const LEGACY_OCCURRED_AT = "COALESCE(t.completed_at,t.failed_at,t.cancelled_at,t.started_at,t.dispatched_at,t.updated_at,t.created_at)";
-// A normal retry creates a DISTINCT task, not another execution on this ID.
-// An accepted live v2 parent run establishes where its prior consumption lives.
-// An attempt ordinal without this task/owner evidence cannot establish coverage.
-const LEGACY_RECORDED_RETRY = `EXISTS (SELECT 1 FROM multiremi_turn_execution_records parent
-  JOIN multiremi_usage_task_scopes parent_scope ON parent_scope.task_id=parent.id
-  JOIN multiremi_usage_runs parent_run ON parent_run.task_id=parent.id AND parent_run.run_id=parent_scope.active_run_id
-  JOIN multiremi_usage_run_scopes parent_owner ON parent_owner.task_id=parent.id AND parent_owner.run_id=parent_run.run_id
-  WHERE parent.id=t.parent_task_id AND parent.id<>t.id AND parent.workspace_id=t.workspace_id AND parent.agent_id=t.agent_id
-    AND parent.attempt+1=t.attempt AND parent.status IN ('failed','cancelled')
-    AND parent_run.run_id NOT IN ('legacy','historical-evidence-v2') AND parent_run.complete=1
-    AND parent_owner.runtime_id IS NOT NULL AND parent_owner.runtime_provenance='live_task')`;
-// New protocol executions do not write the deprecated JSON column. A missing
-// checkpoint (or a changed lifecycle timestamp) for their null source must not
-// manufacture an empty legacy run and downgrade established consumption.
-const LEGACY_SOURCE_EXISTS = `((t.usage IS NOT NULL AND t.usage<>'[]') OR (s.source_usage IS NOT NULL AND s.source_usage<>'[]') OR (t.attempt>1 AND NOT ${LEGACY_RECORDED_RETRY}) OR NOT EXISTS (
-  SELECT 1 FROM multiremi_usage_runs modern WHERE modern.task_id=t.id AND modern.run_id NOT IN ('legacy','historical-evidence-v2')))`;
-const LEGACY_PENDING = `${LEGACY_SOURCE_EXISTS} AND (s.task_id IS NULL OR t.usage IS DISTINCT FROM s.source_usage OR ${LEGACY_OCCURRED_AT} IS DISTINCT FROM s.source_occurred_at)`;
-
-export function hasPendingLegacyUsage(db: SqlDatabase): boolean {
-  return Boolean(db.query(`SELECT t.id FROM multiremi_turn_execution_records t LEFT JOIN multiremi_usage_legacy_sources s ON s.task_id=t.id WHERE ${LEGACY_PENDING} LIMIT 1`).get());
-}
-
-/** Deprecated aggregates cannot establish independence from reviewed native evidence. */
-export function hasProtectedNativeUsage(db: SqlDatabase, taskId: string): boolean {
-  return Boolean(db.query(`SELECT unit_id FROM multiremi_usage_units WHERE task_id=?
-    AND source<>'legacy_task'
-    AND (COALESCE(input_tokens,0)+COALESCE(output_tokens,0)+COALESCE(cache_read_tokens,0)+COALESCE(cache_write_tokens,0)+COALESCE(actual_unsplit_tokens,0)>0
-      OR (cost_amount>0 AND cost_source='provider_reported')) LIMIT 1`).get(taskId));
-}
-
-/** Pre-checkpoint writers already persisted these facts; an audit is not acceptance. */
-export function matchesAcceptedLegacyFacts(db: SqlDatabase, taskId: string, raw: unknown, occurredAt: string): boolean {
-  const expected = legacyUsageSnapshot(taskId, raw, occurredAt).units;
-  if (!expected.length) return false;
-  const stored = db.query("SELECT * FROM multiremi_usage_units WHERE task_id=? AND run_id='legacy' AND source='legacy_task'").all(taskId) as Row[];
-  if (stored.length !== expected.length) return false;
-  const storedById = new Map(stored.map(row => [row.unit_id, row]));
-  return expected.every(unit => {
-    const row = storedById.get(unit.unitId);
-    if (!row) return false;
-    return unitValues(unit).every((value, index) => {
-      // Legacy occurrence time follows the task lifecycle, not the source payload.
-      const field = UNIT_FIELDS[index]!;
-      return field === "occurred_at" || (typeof value === "number" ? row[field] !== null && Number(row[field]) === value : row[field] === value);
-    });
-  });
-}
-
-/** Bounded backfill. Immutable originals and every observed source version survive retries. */
-export function migrateLegacyUsage(db: SqlDatabase, options: { batchSize?: number; afterTaskId?: string; schemaReady?: boolean } = {}): { migrated: number; remaining: number; complete: boolean; lastTaskId?: string } {
-  const batchSize = options.batchSize ?? 500;
-  if (!Number.isSafeInteger(batchSize) || batchSize < 1 || batchSize > 5000) throw new UsageValidationError("batchSize must be 1..5000");
-  if (!options.schemaReady) ensureLegacyUsageMigrationSchema(db);
-  return advisoryLock(db, USAGE_MIGRATION_LOCK, () => migrateLegacyUsageBatch(db, options, batchSize));
-}
-
-function migrateLegacyUsageBatch(db: SqlDatabase, options: { afterTaskId?: string }, batchSize: number) {
-  // Startup uses a keyset pass, avoiding an ever-growing prefix scan per batch.
-  const keyset = options.afterTaskId !== undefined;
-  const rows = db.query(`SELECT t.id FROM multiremi_turn_execution_records t LEFT JOIN multiremi_usage_legacy_sources s ON s.task_id=t.id
-    WHERE ${keyset ? "t.id > ?" : LEGACY_PENDING} ORDER BY t.id LIMIT ?`).all(...(keyset ? [options.afterTaskId, batchSize] : [batchSize])) as Row[];
-  let migrated = 0;
-  for (const selected of rows) {
-    let rejectedHistoricalSource = false;
-    const migrateTask = db.transaction(() => {
-      // Read the current source AFTER taking the task lock, never a stale batch payload.
-      const row = db.query(`SELECT t.id,t.usage,t.status,t.attempt,t.dispatched_at,t.started_at,t.completed_at,t.failed_at,t.cancelled_at,
-        CASE WHEN ${LEGACY_RECORDED_RETRY} THEN 1 ELSE 0 END AS recorded_retry,${LEGACY_OCCURRED_AT} AS occurred_at
-        FROM multiremi_turn_execution_records t WHERE t.id=?${db.dialect === "postgres" ? " FOR UPDATE" : ""}`).get(selected.id) as Row | null;
-      if (!row) return 0;
-      const state = db.query("SELECT * FROM multiremi_usage_legacy_sources WHERE task_id=?").get(row.id) as Row | null;
-      const runs = db.query("SELECT run_id,revision FROM multiremi_usage_runs WHERE task_id=?").all(row.id) as Row[];
-      const protectedUnit = db.query("SELECT unit_id FROM multiremi_usage_units WHERE task_id=? AND run_id='legacy' AND source<>'legacy_task' LIMIT 1").get(row.id);
-      // Merely accepting a new execution (or observing some of its requests)
-      // proves neither overlap nor complete coverage of the old aggregate.
-      // Only reviewed identity-based reconciliation may retire that evidence.
-      if (state && state.source_usage === row.usage && state.source_occurred_at === row.occurred_at) return 0;
-      if ((Number(row.attempt) <= 1 || Number(row.recorded_retry) === 1) && (row.usage == null || row.usage === "[]") && (state?.source_usage == null || state.source_usage === "[]")
-        && runs.some(run => run.run_id !== "legacy" && run.run_id !== "historical-evidence-v2")) return 0;
-      const timestamp = new Date().toISOString();
-      // Original preparation and deprecated live ingress had no checkpoints.
-      // Only the already accepted canonical legacy facts can prove equivalence;
-      // an audit (even alongside an unrelated legacy run) may be a rejection.
-      const acceptedEquivalent = !state && matchesAcceptedLegacyFacts(db, String(row.id), row.usage, String(row.occurred_at));
-      const changedAggregate = state ? state.source_usage !== row.usage : !acceptedEquivalent && row.usage != null && row.usage !== "[]";
-      db.run("INSERT INTO multiremi_usage_legacy_audit(task_id,original_usage,migrated_at) VALUES(?,?,?) ON CONFLICT(task_id) DO NOTHING", [row.id, row.usage ?? null, timestamp]);
-      const original = db.query("SELECT original_usage,migrated_at FROM multiremi_usage_legacy_audit WHERE task_id=?").get(row.id) as Row;
-      db.run("INSERT INTO multiremi_usage_legacy_versions(task_id,source_version,original_usage,source_occurred_at,recorded_at) VALUES(?,0,?,?,?) ON CONFLICT(task_id,source_version) DO NOTHING",
-        [row.id, original.original_usage, null, original.migrated_at]);
-      if (changedAggregate && hasProtectedNativeUsage(db, String(row.id))) {
-        // Commit the newly observed raw source to audit, but leave its consumed
-        // checkpoint and all canonical facts untouched. Throw AFTER commit:
-        // throwing inside this transaction would erase the conflict evidence.
-        const latest = db.query(`SELECT source_version,original_usage,source_occurred_at FROM multiremi_usage_legacy_versions
-          WHERE task_id=? ORDER BY source_version DESC LIMIT 1`).get(row.id) as Row;
-        if (latest.original_usage !== (row.usage ?? null) || latest.source_occurred_at !== row.occurred_at) {
-          db.run("INSERT INTO multiremi_usage_legacy_versions(task_id,source_version,original_usage,source_occurred_at,recorded_at) VALUES(?,?,?,?,?)",
-            [row.id, Number(latest.source_version) + 1, row.usage ?? null, row.occurred_at, timestamp]);
-        }
-        // An earlier ready marker must not survive detection of source drift.
-        db.run("DELETE FROM multiremi_schema_migrations WHERE id IN (?,?)", [USAGE_CUTOVER_MARKER, USAGE_STARTUP_CUTOVER_MARKER]);
-        rejectedHistoricalSource = true;
-        return 0;
-      }
-      const lastVersion = db.query("SELECT MAX(source_version) AS version FROM multiremi_usage_legacy_versions WHERE task_id=?").get(row.id) as Row;
-      const version = Math.max(Number(state?.source_version ?? 0), Number(lastVersion.version ?? 0)) + 1;
-      {
-        // Replace only the provisional legacy aggregate, including removed entries.
-        db.run("DELETE FROM multiremi_usage_units WHERE task_id=? AND run_id='legacy' AND source='legacy_task'", [row.id]);
-        if (!protectedUnit) {
-          db.run("DELETE FROM multiremi_usage_run_scopes WHERE task_id=? AND run_id='legacy'", [row.id]);
-          db.run("DELETE FROM multiremi_usage_runs WHERE task_id=? AND run_id='legacy'", [row.id]);
-        }
-        const snapshot = legacyUsageSnapshot(String(row.id), row.usage, String(row.occurred_at));
-        const floor = Number((db.query("SELECT MAX(revision) AS revision FROM multiremi_usage_unit_receipts WHERE task_id=? AND run_id='legacy'").get(row.id) as Row).revision ?? 0);
-        snapshot.revision = Math.max(version, floor + 1);
-        for (const unit of snapshot.units) {
-          // Preserve diagnostic native units even when an old legacy ID collides.
-          if (db.query("SELECT unit_id FROM multiremi_usage_units WHERE task_id=? AND run_id='legacy' AND unit_id=? AND source<>'legacy_task'").get(row.id, unit.unitId)) unit.unitId = `legacy-aggregate:${unit.unitId}`;
-          unit.revision = snapshot.revision;
-        }
-        const neverExecuted = row.status === "queued" && (Number(row.attempt) <= 1 || Number(row.recorded_retry) === 1)
-          && [row.dispatched_at, row.started_at, row.completed_at, row.failed_at, row.cancelled_at].every(value => value == null)
-          && runs.every(run => run.run_id === "legacy");
-        // A queued first attempt with no execution evidence has no missing
-        // consumption to represent. Audit its empty old source, without a
-        // phantom legacy run that would make its future v2 facts incomplete.
-        if (snapshot.units.length || !neverExecuted || protectedUnit) writeUsageSnapshot(db, String(row.id), snapshot, { historical: true });
-      }
-      db.run("INSERT INTO multiremi_usage_legacy_versions(task_id,source_version,original_usage,source_occurred_at,recorded_at) VALUES(?,?,?,?,?)", [row.id, version, row.usage ?? null, row.occurred_at, timestamp]);
-      db.run(`INSERT INTO multiremi_usage_legacy_sources(task_id,source_version,source_usage,source_occurred_at) VALUES(?,?,?,?)
-        ON CONFLICT(task_id) DO UPDATE SET source_version=excluded.source_version,source_usage=excluded.source_usage,source_occurred_at=excluded.source_occurred_at`, [row.id, version, row.usage ?? null, row.occurred_at]);
-      return 1;
-    });
-    migrated += (migrateTask as typeof migrateTask & { immediate?: () => number }).immediate?.() ?? migrateTask();
-    if (rejectedHistoricalSource) throw new UsageValidationError("Legacy usage changed after native accounting; stop legacy writers and provide reviewed source evidence before resuming migration");
-  }
-  const lastTaskId = rows.length ? String(rows[rows.length - 1]!.id) : options.afterTaskId;
-  // Internal keyset passes need only know whether another bounded batch exists;
-  // counting the entire tail every batch would make startup quadratic.
-  const remaining = keyset ? (db.query("SELECT id FROM multiremi_turn_execution_records WHERE id > ? LIMIT 1").get(lastTaskId) ? 1 : 0)
-    : Number((db.query(`SELECT COUNT(*) AS n FROM multiremi_turn_execution_records t LEFT JOIN multiremi_usage_legacy_sources s ON s.task_id=t.id WHERE ${LEGACY_PENDING}`).get() as Row).n);
-  if (remaining === 0) db.run("INSERT INTO multiremi_schema_migrations(id,applied_at) VALUES(?,?) ON CONFLICT(id) DO NOTHING", [USAGE_CUTOVER_MARKER, new Date().toISOString()]);
-  return { migrated, remaining, complete: remaining === 0, lastTaskId };
-}

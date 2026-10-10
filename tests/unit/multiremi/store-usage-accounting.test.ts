@@ -1,13 +1,15 @@
+import { taskUsageSnapshot } from "../../fixtures/multiremi/task-usage-snapshot.js";
 import { createResponsibleTestIssue } from './helpers.js';
 import { runTurnExecutionMutation } from "@multiremi/store/turn-execution-records.js";
 import { afterEach, describe, expect, it, spyOn } from "bun:test";
 import { createHash } from "node:crypto";
 import type { SetUsagePriceInput, TaskUsageSnapshot, TaskUsageUnit, UsageMetrics } from "@multiremi/contracts/usage-accounting.js";
-import { migrateLegacyUsage, validateUsageSnapshot, writeUsageSnapshot } from "@multiremi/store/usage-accounting.js";
+import { USAGE_CUTOVER_MARKER, USAGE_STARTUP_CUTOVER_MARKER, validateUsageSnapshot, writeUsageSnapshot } from "@multiremi/store/usage-accounting.js";
 import { createLocalStore, db, resetMultiremiTestEnv } from "./helpers.js";
 import { MultiremiStore } from "@multiremi/store.js";
 import { assertRequestChargeIdentity, assertUsageIdentityBoundaries } from "./usage-accounting-boundary-cases.js";
 import { createReplacementAttemptWithinTransaction } from "@multiremi/store/turn-attempts.js";
+import { createMultiremiApp } from "@multiremi/api.js";
 
 afterEach(resetMultiremiTestEnv);
 
@@ -36,6 +38,29 @@ const price = (overrides: Partial<SetUsagePriceInput> = {}): SetUsagePriceInput 
 });
 
 describe("normalized task consumption", () => {
+  it("starts an empty database with both markers and returns an empty report immediately", async () => {
+    const store = createLocalStore();
+    const markers = () => db!.query("SELECT id,applied_at FROM multiremi_schema_migrations WHERE id IN (?,?) ORDER BY id").all(USAGE_CUTOVER_MARKER, USAGE_STARTUP_CUTOVER_MARKER);
+    const before = markers();
+    expect(before).toHaveLength(2);
+    new MultiremiStore(db!);
+    expect(markers()).toEqual(before);
+    const response = await createMultiremiApp({ store }).request("/api/usage/report?workspace_id=local&days=all");
+    expect(response.status).toBe(200);
+    expect((await response.json()).summary).toMatchObject({ task_count: 0, actual_total_tokens: 0 });
+  });
+
+  for (const missing of [[USAGE_STARTUP_CUTOVER_MARKER], [USAGE_STARTUP_CUTOVER_MARKER, USAGE_CUTOVER_MARKER]]) {
+    it(`refuses a nonempty database missing ${missing.length} cutover markers without rewriting usage`, () => {
+      const { store, task } = fixture();
+      store.reportTaskUsageSnapshot(task.id, snapshot([unit()]));
+      const before = db!.query("SELECT * FROM multiremi_usage_units ORDER BY task_id,run_id,unit_id").all();
+      for (const marker of missing) db!.run("DELETE FROM multiremi_schema_migrations WHERE id=?", [marker]);
+      expect(() => new MultiremiStore(db!)).toThrow("先升级到 0.2.87–0.2.89 完成用量切换");
+      expect(db!.query("SELECT * FROM multiremi_usage_units ORDER BY task_id,run_id,unit_id").all()).toEqual(before);
+      for (const marker of missing) expect(db!.query("SELECT id FROM multiremi_schema_migrations WHERE id=?").get(marker)).toBeNull();
+    });
+  }
   it("keeps retry consumption on attempts while counting and rendering one turn", () => {
     const { store, runtime, task } = fixture();
     const attempt = db!.query("SELECT turn_id FROM multiremi_turn_attempts WHERE id=?").get(task.id) as { turn_id: string };
@@ -154,22 +179,22 @@ describe("normalized task consumption", () => {
   });
   it("labels historical aggregate dates as task attribution rather than fabricating request times", () => {
     const { store, task } = fixture();
-    runTurnExecutionMutation(db!, "UPDATE multiremi_turn_execution_records SET status='completed',started_at='2026-10-01T23:30:00Z',completed_at='2026-10-02T00:30:00Z',usage=? WHERE id=?", [JSON.stringify([{ provider: "claude", model: "old", inputTokens: 100, outputTokens: 2 }]), task.id]);
-    migrateLegacyUsage(db!);
+    runTurnExecutionMutation(db!, "UPDATE multiremi_turn_execution_records SET status='completed',started_at='2026-10-01T23:30:00Z',completed_at='2026-10-02T00:30:00Z' WHERE id=?", [task.id]);
+    store.reportTaskUsageSnapshot(task.id, taskUsageSnapshot([{ provider: "claude", model: "old", inputTokens: 100, outputTokens: 2 }], 1, "2026-10-02T00:30:00Z"));
     store.reportTaskUsageSnapshot(task.id, snapshot([unit({ inputTokens: 5, outputTokens: 0, reportedTotalTokens: 5, occurredAt: "2026-10-01T23:40:00Z", timeProvenance: "provider_timestamp" })]));
     const report = store.getUsageReport({ workspaceId: "local", days: null });
     expect(report.daily.map(row => [row.date, row.actual_total_tokens, row.time_provenance])).toEqual([["2026-10-01", 5, "provider_timestamp"], ["2026-10-02", 102, "task_attributed"]]);
     expect(report.summary).toMatchObject({ actual_total_tokens: 107, task_attributed_tokens: 102, task_attributed_task_count: 1, time_provenance: "mixed" });
     expect(report.time_basis.historical_aggregates).toBe("task_attribution_at");
   });
-  it("serializes legacy snapshots when receipt clocks collide or move backwards", () => {
+  it("applies explicit snapshot revisions when receipt clocks collide or move backwards", () => {
     const { store, task } = fixture();
     const clock = spyOn(Date, "now").mockReturnValue(1000);
     try {
-      store.reportTaskUsage(task.id, [{ provider: "codex", model: "old-model", inputTokens: 10, outputTokens: 2 }]);
-      store.reportTaskUsage(task.id, [{ provider: "codex", model: "old-model", inputTokens: 20, outputTokens: 3 }]);
+      store.reportTaskUsageSnapshot(task.id, taskUsageSnapshot([{ provider: "codex", model: "old-model", inputTokens: 10, outputTokens: 2 }]));
+      store.reportTaskUsageSnapshot(task.id, taskUsageSnapshot([{ provider: "codex", model: "old-model", inputTokens: 20, outputTokens: 3 }], 2));
       clock.mockReturnValue(500);
-      store.reportTaskUsage(task.id, [{ provider: "codex", model: "old-model", inputTokens: 30, outputTokens: 4 }]);
+      store.reportTaskUsageSnapshot(task.id, taskUsageSnapshot([{ provider: "codex", model: "old-model", inputTokens: 30, outputTokens: 4 }], 3));
       expect(store.getTask(task.id)?.usage).toMatchObject([{ inputTokens: 30, outputTokens: 4, totalTokens: 34 }]);
       expect(db!.query("SELECT revision FROM multiremi_usage_runs WHERE task_id=? AND run_id='legacy'").get(task.id)).toEqual({ revision: 3 });
     } finally { clock.mockRestore(); }
@@ -323,7 +348,7 @@ describe("normalized task consumption", () => {
 
   it("preserves totals-only legacy observations as ambiguous evidence without inventing context or charges", () => {
     const { store, task } = fixture();
-    store.reportTaskUsage(task.id, [{ provider: "codex", model: "gpt-model", inputTokens: 0, outputTokens: 0, totalTokens: 78048 }]);
+    store.reportTaskUsageSnapshot(task.id, taskUsageSnapshot([{ provider: "codex", model: "gpt-model", inputTokens: 0, outputTokens: 0, totalTokens: 78048 }]));
     const report = store.getUsageReport({ workspaceId: "local", days: null });
     expect(report.summary).toMatchObject({ actual_total_tokens: 0, context_peak_tokens: null, unknown_task_count: 1, complete: false });
     expect(db!.query("SELECT reported_total_tokens,context_tokens FROM multiremi_usage_units WHERE task_id=?").get(task.id)).toMatchObject({ reported_total_tokens: 78048, context_tokens: null });

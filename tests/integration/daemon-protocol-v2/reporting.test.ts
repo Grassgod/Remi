@@ -1,3 +1,4 @@
+import { taskUsageSnapshot } from "../../fixtures/multiremi/task-usage-snapshot.js";
 import { turnCompletion } from "../../fixtures/turn-report.js";
 import { afterEach, describe, expect, it, spyOn } from "bun:test";
 import type { SqlDatabase } from "@multiremi/store/db/postgres.js";
@@ -29,11 +30,10 @@ async function readInput(h: DaemonProtocolHarness, id: string) {
 
 function usageState(db: SqlDatabase, taskId: string) {
   const tables = ["multiremi_usage_runs", "multiremi_usage_units", "multiremi_usage_unit_receipts",
-    "multiremi_usage_task_scopes", "multiremi_usage_run_scopes", "multiremi_usage_legacy_audit",
-    "multiremi_usage_legacy_versions", "multiremi_usage_legacy_sources"];
+    "multiremi_usage_task_scopes", "multiremi_usage_run_scopes"];
   return { task: db.query("SELECT * FROM multiremi_turn_attempts WHERE id=?").get(taskId) as Record<string, unknown>,
     ledger: Object.fromEntries(tables.map(table => [table,
-      db.query(`SELECT * FROM ${table} WHERE task_id=? ORDER BY ${table === "multiremi_usage_runs" || table === "multiremi_usage_run_scopes" ? "run_id" : table === "multiremi_usage_units" || table === "multiremi_usage_unit_receipts" ? "run_id, unit_id" : table === "multiremi_usage_legacy_versions" ? "source_version" : "task_id"}`).all(taskId)])) };
+      db.query(`SELECT * FROM ${table} WHERE task_id=? ORDER BY ${table === "multiremi_usage_runs" || table === "multiremi_usage_run_scopes" ? "run_id" : table === "multiremi_usage_units" || table === "multiremi_usage_unit_receipts" ? "run_id, unit_id" : "task_id"}`).all(taskId)])) };
 }
 
 describe("v2 report reconciliation with real sockets and DB", () => {
@@ -69,14 +69,14 @@ describe("v2 report reconciliation with real sockets and DB", () => {
       });
       const progress = spyOn(h.store, "reportProgress");
       const usageChanges = new Map<string, number>();
-      const realUsage = h.store.reportTaskUsage.bind(h.store);
-      const usageReport = spyOn(h.store, "reportTaskUsage").mockImplementation((id, entries) => {
+      const realUsage = h.store.reportTaskUsageSnapshot.bind(h.store);
+      const usageReport = spyOn(h.store, "reportTaskUsageSnapshot").mockImplementation((id, entries) => {
         const before = usageState(h.db, id);
         const result = realUsage(id, entries);
         const after = usageState(h.db, id);
         // A replay must not touch the task clock, canonical facts, revision
         // receipts or source audits, even when its ACK was lost across restart.
-        if (before.task.usage === after.task.usage) expect(after).toEqual(before);
+        if (JSON.stringify(before.ledger) === JSON.stringify(after.ledger)) expect(after).toEqual(before);
         else {
           const runs = (state: ReturnType<typeof usageState>) => state.ledger.multiremi_usage_runs as Array<{ run_id: string; revision: number }>;
           const priorRevision = runs(before).find(run => run.run_id === "legacy")?.revision ?? 0;
@@ -91,14 +91,16 @@ describe("v2 report reconciliation with real sockets and DB", () => {
           const box = outbox(h);
           interruptTask = t.id;
           const payload = { runtime_id: runtime(h) };
+          const a = { provider: "claude", model: "fixture-a", inputTokens: 5, outputTokens: 2 };
+          const b = { provider: "claude", model: "fixture-b", inputTokens: 7, outputTokens: 3 };
           const start = box.enqueue(t.id, "start", payload);
           await box.waitForTaskDrain(t.id);
           await readInput(h, t.id);
           const rows = [start,
             box.enqueue(t.id, "progress", { ...payload, summary: `early-${round}`, step: 1, total: 2 }),
             box.enqueue(t.id, "progress", { ...payload, summary: `step-${round}`, step: 2, total: 2 }),
-            box.enqueue(t.id, "usage", { ...payload, usage: [{ provider: "claude", model: "fixture-a", inputTokens: 5, outputTokens: 2 }] }),
-            box.enqueue(t.id, "usage", { ...payload, usage: [{ provider: "claude", model: "fixture-b", inputTokens: 7, outputTokens: 3 }] }),
+            box.enqueue(t.id, "usage", { ...payload, usageSnapshot: taskUsageSnapshot([a], 1, t.createdAt) }),
+            box.enqueue(t.id, "usage", { ...payload, usageSnapshot: taskUsageSnapshot([a, b], 2, t.createdAt) }),
             box.enqueue(t.id, "turn.complete", turnCompletion(h.store, t.id, `result-${round}`, { ...payload }))];
           rows.forEach(id => sent.add(`${t.id}:${id}`));
           await waitFor(() => h.client.connectionState() === "disconnected" && h.store.getTask(t.id)?.usage?.length === 1,
@@ -115,8 +117,7 @@ describe("v2 report reconciliation with real sockets and DB", () => {
           expect(completed.get(t.id)).toBe(1);
           expect(progress.mock.calls.filter(([id]) => id === t.id)).toHaveLength(2);
           expect(usageChanges.get(t.id)).toBe(2);
-          // A server restart may checkpoint the accepted old source at a newer
-          // revision. Replay stability is checked around each Store call above.
+          // Restart and lost-ACK replays keep the same canonical revisions.
           expect(h.db.query(`SELECT CAST(COUNT(*) AS INTEGER) AS units,
             CAST(SUM(input_tokens) AS INTEGER) AS input_tokens,CAST(SUM(output_tokens) AS INTEGER) AS output_tokens
             FROM multiremi_usage_units WHERE task_id=? AND run_id='legacy'`).get(t.id)).toEqual({ units: 2, input_tokens: 12, output_tokens: 5 });

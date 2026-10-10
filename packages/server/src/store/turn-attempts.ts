@@ -59,7 +59,7 @@ export function createReplacementAttemptWithinTransaction(db: SqlDatabase, turnI
 export function projectTurnCard(db: SqlDatabase, entry: ConversationLogEntry): ConversationLogEntry {
   if (entry.kind!=="turn") return entry;
   const row=db.query(`SELECT t.*,a.status AS attempt_status,a.attempt_no,a.failure_reason,a.progress_summary,a.event_count,
-    a.tool_call_count,a.type_histogram,a.model,a.trace_ref,a.usage,a.started_at AS attempt_started_at,a.ended_at AS attempt_ended_at
+    a.tool_call_count,a.type_histogram,a.model,a.trace_ref,a.started_at AS attempt_started_at,a.ended_at AS attempt_ended_at
     FROM multiremi_turns t LEFT JOIN multiremi_turn_attempts a ON a.id=t.current_attempt_id WHERE t.id=?`).get(entry.id);
   if (!row) throw new Error(`Missing turn for conversation pointer: ${entry.id}`);
   const reply=row.reply_message_id ? db.query("SELECT body_md FROM multiremi_conversation_log WHERE id=?").get(row.reply_message_id) : null;

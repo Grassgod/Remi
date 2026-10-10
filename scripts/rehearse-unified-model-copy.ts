@@ -7,7 +7,6 @@ import { collectUnifiedBeforeReport, unifiedModelPreflight } from "../packages/s
 import { runMigrations } from "../packages/server/src/store/migrations.js";
 import { UNIFIED_MODEL_MIGRATION } from "../packages/server/src/store/unified-model-schema.js";
 import { readOnlyConversationTransaction } from "./reconcile-conversation-log.js";
-import { prepareUsageAccountingStartup, ensureUsageAccountingStartup } from "../packages/server/src/store/usage-migration.js";
 import { locksForRole, startHubRoleGuard } from "../packages/server/src/api/hub/hub-role-guard.js";
 import { collectCopyUsageSnapshot, reconcileCopyUsage, type CopyUsageSnapshot } from "./unified-model-copy-usage.js";
 import { runCopyStartupProcess, validateCopyBuild, validateCopyDatabaseUrl, type CopyStartupProcessOptions } from "./unified-model-copy-startup.js";
@@ -153,8 +152,6 @@ export async function rehearseUnifiedModelCopy(db: SqlDatabase, reportDir: strin
           if (copyDatabaseUrl) startupDb = await measure("database_open", () => new PostgresSyncDatabase(copyDatabaseUrl));
           await measure("run_migrations", () => runMigrations(startupDb));
           if (phase === "first_start" && role === "api") recordUsage("after_schema");
-          await measure("prepare_usage", () => prepareUsageAccountingStartup(startupDb));
-          await measure("ensure_usage", () => ensureUsageAccountingStartup(startupDb));
           timing.completed = true;
           recordUsage(`${phase}_${role}`);
         } catch (error) {

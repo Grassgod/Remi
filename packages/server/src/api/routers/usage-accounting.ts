@@ -3,7 +3,7 @@ import type { SetUsagePriceInput } from "@multiremi/contracts/usage-accounting.j
 import { resolveRequestWorkspaceId } from "../helpers/workspace-context.js";
 import { denyCurrentUserWorkspaceAccess, requireWorkspaceAdmin, readJsonStrict } from "../helpers.js";
 import type { RouterDeps } from "./deps.js";
-import { UsageValidationError, UsageAccountingNotReadyError } from "@multiremi/store/usage-accounting.js";
+import { UsageValidationError } from "@multiremi/store/usage-accounting.js";
 
 export function registerUsageAccountingRoutes(app: Hono, { store }: RouterDeps): void {
   const workspace = (c: Context): string | Response => {
@@ -24,7 +24,7 @@ export function registerUsageAccountingRoutes(app: Hono, { store }: RouterDeps):
       return c.json(store.getUsageReport({ workspaceId, projectId, runtimeId, tz: c.req.query("tz"),
         days: days === "all" ? null : days === undefined ? undefined : Number(days), since: c.req.query("since"), until: c.req.query("until"),
         include, detailLimit: detailLimit === undefined ? undefined : Number(detailLimit), detailCursor: c.req.query("detail_cursor") }));
-    } catch (e) { if (e instanceof UsageAccountingNotReadyError) return c.json({ error: e.message }, 503); if (e instanceof UsageValidationError) return c.json({ error: e.message }, 400); throw e; }
+    } catch (e) { if (e instanceof UsageValidationError) return c.json({ error: e.message }, 400); throw e; }
   });
   app.get("/api/usage/prices", (c) => {
     const id = workspace(c); if (id instanceof Response) return id;

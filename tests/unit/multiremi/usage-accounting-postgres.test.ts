@@ -1,12 +1,12 @@
+import { taskUsageSnapshot } from "../../fixtures/multiremi/task-usage-snapshot.js";
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { createHash } from "node:crypto";
 import type { TaskUsageUnit } from "@multiremi/contracts/usage-accounting.js";
 import { MultiremiStore } from "@multiremi/store.js";
 import { PostgresSyncDatabase } from "@multiremi/store/db/postgres.js";
-import { writeUsageSnapshot } from "@multiremi/store/usage-accounting.js";
+import { writeUsageSnapshot, USAGE_CUTOVER_MARKER, USAGE_STARTUP_CUTOVER_MARKER } from "@multiremi/store/usage-accounting.js";
+import { createMultiremiApp } from "@multiremi/api.js";
 import { assertRequestChargeIdentity, assertUsageIdentityBoundaries } from "./usage-accounting-boundary-cases.js";
-import { assertLegacyHistoryBoundary, assertNonconsumingHistoryBoundary, assertRecordedV2RetryChain, assertRejectedAuditWithLegacyRun } from "./usage-legacy-history-boundaries.js";
-import { assertRecoveryRevisions, assertRecreatedLegacyReceipt } from "../scripts/usage-reconciliation-revision-cases.js";
 
 const adminUrl = process.env.MULTIREMI_TEST_POSTGRES_URL;
 const databaseName = `multiremi_usage_pg_${process.pid}_${Math.floor(Math.random() * 1e6)}`;
@@ -32,6 +32,32 @@ describe.skipIf(!adminUrl)("normalized usage on PostgreSQL", () => {
       await admin.end();
     }
   });
+  it("starts empty with both markers and preserves their timestamps on restart", async () => {
+    const before = db!.query("SELECT id,applied_at FROM multiremi_schema_migrations WHERE id IN (?,?) ORDER BY id").all(USAGE_CUTOVER_MARKER, USAGE_STARTUP_CUTOVER_MARKER);
+    expect(before).toHaveLength(2);
+    new MultiremiStore(db!);
+    expect(db!.query("SELECT id,applied_at FROM multiremi_schema_migrations WHERE id IN (?,?) ORDER BY id").all(USAGE_CUTOVER_MARKER, USAGE_STARTUP_CUTOVER_MARKER)).toEqual(before);
+    const response = await createMultiremiApp({ store }).request("/api/usage/report?workspace_id=local&days=all");
+    expect(response.status).toBe(200);
+    expect((await response.json()).summary.actual_total_tokens).toBe(0);
+  });
+
+  it("refuses missing cutover markers in a nonempty PostgreSQL database without touching facts", () => {
+    const agent = store.createAgent({ name: "marker guard", provider: "claude", workspaceId: "local" });
+    store.createTask({ agentId: agent.id, prompt: "marker guard" });
+    const before = db!.query("SELECT * FROM multiremi_usage_units ORDER BY task_id,run_id,unit_id").all();
+    const markers = db!.query("SELECT id,applied_at FROM multiremi_schema_migrations WHERE id IN (?,?) ORDER BY id").all(USAGE_CUTOVER_MARKER, USAGE_STARTUP_CUTOVER_MARKER);
+    try {
+      for (const missing of [[USAGE_STARTUP_CUTOVER_MARKER], [USAGE_STARTUP_CUTOVER_MARKER, USAGE_CUTOVER_MARKER]]) {
+        for (const marker of missing) db!.run("DELETE FROM multiremi_schema_migrations WHERE id=?", [marker]);
+        expect(() => new MultiremiStore(db!)).toThrow("先升级到 0.2.87–0.2.89 完成用量切换");
+        for (const marker of missing) expect(db!.query("SELECT id FROM multiremi_schema_migrations WHERE id=?").get(marker)).toBeNull();
+      }
+      expect(db!.query("SELECT * FROM multiremi_usage_units ORDER BY task_id,run_id,unit_id").all()).toEqual(before);
+    } finally {
+      for (const marker of markers) db!.run("INSERT INTO multiremi_schema_migrations(id,applied_at) VALUES(?,?) ON CONFLICT(id) DO NOTHING", [marker.id, marker.applied_at]);
+    }
+  });
   it("persists parked revision floors and preserves established owners across PostgreSQL reconnection", () => {
     const jitBefore = db!.query("SHOW jit").get();
     const runtime = store.registerRuntime({ name: "boundary-pg", provider: "claude", workspaceId: "local" });
@@ -50,32 +76,6 @@ describe.skipIf(!adminUrl)("normalized usage on PostgreSQL", () => {
     } finally { for (const connection of connections) connection.close(); }
     expect(db!.query("SHOW jit").get()).toEqual(jitBefore);
   }, 20_000);
-  it("protects ordinary v2 consumption from late aggregates and ready-startup rollback on PostgreSQL", () => {
-    const agent = store.createAgent({ name: "ordinary pg", provider: "claude", workspaceId: "local" });
-    const task = store.createTask({ agentId: agent.id, prompt: "ordinary native facts", workspaceId: "local" });
-    assertLegacyHistoryBoundary(store, db!, task.id, "ordinary-v2-run");
-  });
-  for (const startupWhileQueued of [false, true]) it(`keeps a real Store v2 retry chain complete on PostgreSQL (startup while queued=${startupWhileQueued})`, async () => {
-    await assertRecordedV2RetryChain(store, db!, startupWhileQueued);
-  });
-  it("never promotes rejected JSON beside a real deprecated-ingress legacy run on PostgreSQL", () => {
-    assertRejectedAuditWithLegacyRun(store, db!);
-  });
-  it("rejects overlapping late legacy ingestion and stops source refresh durably on PostgreSQL", () => {
-    const agent = store.createAgent({ name: "late old writer pg", provider: "claude", workspaceId: "local" });
-    const task = store.createTask({ agentId: agent.id, prompt: "late legacy boundary", workspaceId: "local" });
-    assertLegacyHistoryBoundary(store, db!, task.id);
-    for (const kind of ["empty_modern", "empty_history", "context_history"] as const) {
-      const other = store.createTask({ agentId: agent.id, prompt: kind, workspaceId: "local" });
-      assertNonconsumingHistoryBoundary(store, db!, other.id, kind);
-    }
-  }, 20_000);
-  it("advances stronger historical evidence and recreated legacy receipts on PostgreSQL", async () => {
-    const agent = store.createAgent({ name: "revision-pg", provider: "claude", workspaceId: "local" });
-    const tasks = [0, 1].map(index => store.createTask({ agentId: agent.id, prompt: `revision ${index}`, workspaceId: "local" }));
-    await assertRecoveryRevisions(store, db!, tasks[0]!.id);
-    await assertRecreatedLegacyReceipt(store, db!, tasks[1]!.id);
-  }, 30_000);
   for (const order of ["money-first", "tokens-first", "identity-later"] as const) it(`rejects contradictory monetary request identity on PostgreSQL with ${order}`, () => {
     const runtime = store.registerRuntime({ name: `charge-pg-${order}`, provider: "claude", workspaceId: "local" });
     const agent = store.createAgent({ name: `charge-pg-${order}`, provider: "claude", workspaceId: "local", runtimeId: runtime.id });
@@ -124,7 +124,7 @@ describe.skipIf(!adminUrl)("normalized usage on PostgreSQL", () => {
     const task = store.createTask({ agentId: agent.id, prompt: "Legacy revision", workspaceId: "local" });
     store.claimTask(runtime.id); store.startTask(task.id);
     expect(Date.now()).toBeGreaterThan(2_147_483_647);
-    for (const inputTokens of [10, 20, 30]) store.reportTaskUsage(task.id, [{ provider: "claude", model: "legacy-model", inputTokens, outputTokens: 2 }]);
+    for (const [index, inputTokens] of [10, 20, 30].entries()) store.reportTaskUsageSnapshot(task.id, taskUsageSnapshot([{ provider: "claude", model: "legacy-model", inputTokens, outputTokens: 2 }], index + 1));
     expect(db!.query("SELECT revision FROM multiremi_usage_runs WHERE task_id=? AND run_id='legacy'").get(task.id)).toEqual({ revision: 3 });
     expect(store.getUsageReport({ workspaceId: "local", runtimeId: runtime.id, days: null }).summary).toMatchObject({ actual_total_tokens: 32, task_attributed_tokens: 32, time_provenance: "task_attributed" });
   });

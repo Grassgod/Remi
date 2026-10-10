@@ -1,3 +1,4 @@
+import { taskUsageSnapshot } from "../../fixtures/multiremi/task-usage-snapshot.js";
 import { createResponsibleTestAutopilot } from './helpers.js';
 import { createResponsibleTestIssue } from './helpers.js';
 import { runTurnExecutionMutation } from "@multiremi/store/turn-execution-records.js";
@@ -1974,12 +1975,12 @@ describe("Multiremi store — task claim, routing, and workspace scoping", () =>
       { type: "assistant", content: "done" },
       { type: "usage", content: "{}" },
     ]);
-    store.reportTaskUsage(codexTask.id, [{
+    store.reportTaskUsageSnapshot(codexTask.id, taskUsageSnapshot([{
       provider: "codex",
       model: "test",
       inputTokens: 10,
       outputTokens: 4,
-    }]);
+    }]));
     const completed = store.completeTask(codexTask.id, { output: "done", sessionId: "sess_1", workDir: "/tmp/work" });
 
     expect(completed.status).toBe("completed");

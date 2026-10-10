@@ -581,7 +581,8 @@
     "confirm_rollback_title": "Rollback platform?",
     "confirm_rollback_desc": "Switch the platform back to {{version}} and restart its services.",
     "cancel": "Cancel",
-    "confirm": "Confirm"
+    "confirm": "Confirm",
+    "minimum_rollback_version": "Minimum rollback version: {{version}}. Earlier versions require restoring a backup."
   },
   "modelGateway": {
     "context_title": "1M context",

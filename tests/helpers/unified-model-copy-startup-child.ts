@@ -21,12 +21,17 @@ try {
     open: () => {
       const db = target.dialect === "postgres" ? new PostgresSyncDatabase(target.path)
         : openSqliteDatabase(target.path) as unknown as SqlDatabase;
+      let snapshots = 0;
       return new Proxy(db, { get(original, key) {
         if (key === "query") return (sql: string) => {
-          if (sql.includes("SELECT t.id FROM multiremi_turn_execution_records t LEFT JOIN multiremi_usage_legacy_sources")) {
-            if (process.env.COPY_SYNTHETIC_FAILURE === "gate") throw new Error("synthetic usage gate failure");
+          if (sql.includes("SELECT id FROM multiremi_turn_attempts LIMIT 1") && process.env.COPY_SYNTHETIC_FAILURE === "gate") {
+            throw new Error("synthetic schema startup failure");
+          }
+          const usageColumns = sql.includes("table_info(multiremi_usage_units)") ||
+            (sql.includes("information_schema.columns") && sql.includes("multiremi_usage_units"));
+          if (usageColumns && ++snapshots === 2) {
             if (process.env.COPY_SYNTHETIC_FAILURE === "readback") {
-              original.run("UPDATE multiremi_usage_legacy_audit SET original_usage='synthetic content drift'");
+              original.run("UPDATE multiremi_usage_units SET evidence_ref='synthetic content drift'");
             }
             if (process.env.COPY_SYNTHETIC_FAILURE === "state") {
               original.run("UPDATE multiremi_session_lanes SET generation=999 WHERE reader_type='agent'");

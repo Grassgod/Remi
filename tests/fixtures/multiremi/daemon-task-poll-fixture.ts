@@ -1,3 +1,4 @@
+import { taskUsageSnapshot } from "./task-usage-snapshot.js";
 // MUL-474 (MUL-383 S8e): deterministic fixture for the daemon task-level polls.
 //
 // The three routes under test must keep answering with the same body before and
@@ -95,9 +96,9 @@ export async function seedDaemonTaskPollFixture(
   const claimed = store.claimTask("rt_mul474_poll");
   if (!claimed || claimed.id !== task.id) throw new Error("fixture could not claim its Task on the poll Runtime");
   store.startTask(task.id);
-  store.reportTaskUsage(task.id, [
+  store.reportTaskUsageSnapshot(task.id, taskUsageSnapshot([
     { provider: "codex", model: "gpt-5", inputTokens: 1_000, outputTokens: 500 },
-  ]);
+  ]));
   // The fixture Task stays *running*: that is the shape every one of these routes
   // sees in production (a 2.5 s poll only exists while a task runs). Its session
   // and work dir are pinned anyway, and usage is reported, so the projections
