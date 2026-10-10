@@ -52,7 +52,6 @@ import {
 } from "@multiremi/ui/components/ui/alert-dialog";
 import { cn } from "@multiremi/ui/lib/utils";
 import { useT } from "../../i18n";
-import { RootHumanPicker } from "../../issues/components/root-human-picker";
 import { useTimeAgo } from "../../i18n/use-time-ago";
 import { FeishuBotRegistrationDialog, type ClaimedRegistration } from "./feishu-bot-registration-dialog";
 import { FeishuBotRoutes } from "./feishu-bot-routes";
@@ -239,7 +238,6 @@ function FeishuBotAdminPanel({
   function buildRequest(): UpsertFeishuBotRequest {
     const request: UpsertFeishuBotRequest = {
       agent_id: draft.agentId,
-      responsible_member_id: draft.responsibleMemberId,
       runtime_id: draft.runtimeId,
       app_id: draft.appId.trim(),
       domain: draft.domain,
@@ -321,7 +319,6 @@ function FeishuBotAdminPanel({
 
       <Card>
         <CardContent className="space-y-4">
-          <RootHumanPicker value={draft.responsibleMemberId} onChange={id => edit({ responsibleMemberId: id })} onClear={() => edit({ responsibleMemberId: null })} disabled={busy} automation />
           <div className="grid gap-4 sm:grid-cols-2">
             <div className="space-y-1.5">
               <Label>{t(($) => $.feishu.concierge.agent_label)}</Label>

@@ -524,9 +524,8 @@ const COMMENT_REACTIONS: ReactionSpec<MultiremiCommentReaction> = {
 export class IssuesRepo {
   constructor(private ctx: StoreContext) {}
 
-  private validateResponsibleMember(id: string | null, workspaceId: string, required: boolean): void {
+  private validateResponsibleMember(id: string | null, workspaceId: string): void {
     if (!id) {
-      if (required) throw new IssueDeliveryError('issue_responsibility_required','Top-level Issue requires an explicit responsible_member_id or authenticated human creator');
       return;
     }
     const member = this.ctx.workspaces().getWorkspaceMember(id);
@@ -772,13 +771,11 @@ export class IssuesRepo {
     const contextRefs = normalizeJsonArray(input.contextRefs ?? input.context_refs ?? []);
     const createdBy = input.createdBy ?? input.created_by ?? null;
     const status = normalizeIssueStatus(input.status);
-    if (status === 'done') throw new IssueDeliveryError('issue_delivery_acceptance_required','Create an issue before submitting and accepting its delivery');
     const responsibleRef = resolveOptionalStringField(input, 'responsibleMemberId', 'responsible_member_id', null);
     if (parentIssueId && responsibleRef) throw new Error('Child issue human responsibility is inherited from its root');
-    const creatorMember = createdBy ? this.ctx.workspaces().getWorkspaceMember(createdBy)
-      ?? this.ctx.workspaces().findWorkspaceMemberForUser(createdBy, workspaceId) : null;
-    const responsibleMemberId = parentIssueId ? null : responsibleRef ?? creatorMember?.id ?? null;
-    this.validateResponsibleMember(responsibleMemberId, workspaceId, !parentIssueId);
+    // Legacy responsibility fields remain readable; new roots need no human assignment.
+    const responsibleMemberId = parentIssueId ? null : responsibleRef;
+    this.validateResponsibleMember(responsibleMemberId, workspaceId);
     const completedAt = isTerminalIssueStatus(status) ? now : null;
     this.ctx.db.run(
       `INSERT INTO multiremi_issues (
@@ -1230,14 +1227,6 @@ export class IssuesRepo {
    * batch, and it does so with the refused issue ids.
    */
   private preflightBatchUpdateIssues(issueIds: string[], updates: UpdateIssueInput): void {
-    // A batch has no server-owned acceptance receipt. Check every row before
-    // any mutation, including force and childless Issues; settled no-ops remain valid.
-    const assertDeliveryClosure = () => { if (hasAnyField(updates,'status') && normalizeIssueStatus(updates.status)==='done') {
-      for (const issueId of issueIds) {
-        const current=this.getIssue(issueId);
-        if(current && current.status!=='done') throw new IssueDeliveryError('issue_delivery_acceptance_required','Close the Issue by accepting its specific delivery');
-      }
-    } };
     if (hasAnyField(updates, "workspaceId", "workspace_id")) {
       const rejected: string[] = [];
       let firstError: IssueWorkspaceMoveError | null = null;
@@ -1254,7 +1243,7 @@ export class IssuesRepo {
       }
       if (firstError) throw new IssueWorkspaceMoveError(firstError.relations, rejected);
     }
-    if (!parentStatusGuardEnabled()) { assertDeliveryClosure(); return; }
+    if (!parentStatusGuardEnabled()) return;
     if (!hasAnyField(updates, "status")) return;
     const rejected: string[] = [];
     let firstError: ParentStatusGuardError | null = null;
@@ -1267,14 +1256,11 @@ export class IssuesRepo {
         this.assertParentStatusAllowed(issueId, current, nextStatus, updates);
       } catch (err) {
         if (!(err instanceof ParentStatusGuardError)) throw err;
-        // Final summaries are now part of the concrete delivery receipt.
-        if (err.code==='final_summary_missing') assertDeliveryClosure();
         rejected.push(issueId);
         firstError ??= err;
       }
     }
     if (firstError) throw new BatchParentStatusGuardError(firstError, rejected);
-    assertDeliveryClosure();
   }
 
   private assertIssueWorkspaceMoveAllowed(current: MultiremiIssue, input: UpdateIssueInput): void {
@@ -2439,7 +2425,7 @@ export class IssuesRepo {
       throw new Error('Child issue human responsibility is inherited from its root');
     }
     if (hasResponsibleField || moving || (current.parentIssueId && !nextParentIssueId)) {
-      this.validateResponsibleMember(nextResponsibleMemberId, nextWorkspaceId, !nextParentIssueId);
+      this.validateResponsibleMember(nextResponsibleMemberId, nextWorkspaceId);
       if (hasResponsibleField && input.actorType !== 'member') throw new Error('Only a member can transfer human responsibility');
     }
     // A new membership (even a closed child) changes A4; reopening changes the
@@ -2527,8 +2513,7 @@ export class IssuesRepo {
     // Field-only edits are never status decisions, so the guard stays out of
     // their way even for a task identity.
     const statusChanged = nextStatus !== current.status;
-    if (statusChanged && nextStatus === 'done' && !options.holdParentStatus) {
-      if (!options.acceptedDeliveryId) throw new IssueDeliveryError('issue_delivery_acceptance_required','Close the Issue by accepting its specific delivery');
+    if (statusChanged && nextStatus === 'done' && options.acceptedDeliveryId && !options.holdParentStatus) {
       if (hasAssigneeField || hasResponsibleField || hasParentField || moving) throw new Error('Transfer responsibility before accepting a delivery');
       assertIssueDeliveryAccepted(this.ctx, id, options.acceptedDeliveryId);
     }
@@ -6371,7 +6356,7 @@ export class IssuesRepo {
       if (!agent) throw new Error(`Agent not found: ${assigneeId}`);
       if (agent.archivedAt) throw new Error(`Agent is archived: ${assigneeId}`);
     } else if (assigneeType === "member") {
-      throw new IssueDeliveryError('issue_execution_owner_required','Choose an Agent or team Leader for execution; configure the final human through responsible_member_id');
+      throw new IssueDeliveryError('issue_execution_owner_required','Choose an Agent or team Leader for execution');
     } else if (assigneeType === "squad") {
       const squad = this.ctx.squads().getSquad(assigneeId);
       if (!squad) throw new Error(`Squad not found: ${assigneeId}`);

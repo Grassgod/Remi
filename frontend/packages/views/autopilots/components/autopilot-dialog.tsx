@@ -71,7 +71,6 @@ import type {
 import { TitleEditor, ContentEditor } from "../../editor";
 import { ActorAvatar } from "../../common/actor-avatar";
 import { ProjectPicker } from "../../projects/components/project-picker";
-import { RootHumanPicker } from "../../issues/components/root-human-picker";
 import { ProjectIcon } from "../../projects/components/project-icon";
 import { AgentPicker, type AssigneeSelection } from "./pickers/agent-picker";
 import {
@@ -313,7 +312,6 @@ export function AutopilotDialog(props: AutopilotDialogProps) {
   const [title, setTitle] = useState(initial.title ?? "");
   const [description, setDescription] = useState(initial.description ?? "");
   const [projectId, setProjectId] = useState<string | null>(initial.project_id ?? null);
-  const [responsibleMemberId, setResponsibleMemberId] = useState<string | null>(initial.responsible_member_id ?? null);
   const [assigneeType, setAssigneeType] = useState<AutopilotAssigneeType>(
     initial.assignee_type ?? "agent",
   );
@@ -463,7 +461,6 @@ export function AutopilotDialog(props: AutopilotDialogProps) {
     (triggerKind !== "schedule" || scheduleTargets === null || (executionMode !== "create_issue" && hasScheduleTargets(scheduleTargets))) &&
     title.trim().length > 0 &&
     assigneeId.length > 0 &&
-    (executionMode !== "create_issue" || !!responsibleMemberId) &&
     modeAndTriggerAreCompatible &&
     (triggerKind !== "scm_event" || scmEventConfig.events.length > 0) &&
     !submitting;
@@ -479,7 +476,6 @@ export function AutopilotDialog(props: AutopilotDialogProps) {
           project_id: executionMode === "create_issue" ? projectId : null,
           assignee_type: assigneeType,
           assignee_id: assigneeId,
-          responsible_member_id: responsibleMemberId,
           execution_mode: executionMode,
           session_policy: sessionPolicy,
           workspace_policy: workspacePolicy,
@@ -544,7 +540,6 @@ export function AutopilotDialog(props: AutopilotDialogProps) {
           project_id: executionMode === "create_issue" ? projectId : null,
           assignee_type: assigneeType,
           assignee_id: assigneeId,
-          responsible_member_id: responsibleMemberId,
           execution_mode: executionMode,
           session_policy: sessionPolicy,
           workspace_policy: workspacePolicy,
@@ -782,7 +777,6 @@ export function AutopilotDialog(props: AutopilotDialogProps) {
 
           {/* Right: Configuration */}
           <aside className="w-full lg:w-[340px] shrink-0 overflow-visible lg:overflow-y-auto px-5 py-5 space-y-5 bg-muted/30">
-            {executionMode === "create_issue" && <RootHumanPicker value={responsibleMemberId} onChange={setResponsibleMemberId} defaultSelf={isCreate} disabled={submitting} automation />}
             <AgentSection
               selectedType={assigneeType}
               selectedId={assigneeId}

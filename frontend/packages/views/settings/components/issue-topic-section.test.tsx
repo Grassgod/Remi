@@ -107,13 +107,14 @@ function resetFixtures() {
 
 describe("IssueTopicSection", () => {
   beforeEach(resetFixtures);
-  it("does not infer a topic human from the workspace owner and saves an explicit choice", async () => {
-    membersRef.current = [{ user_id: "user-1", role: "owner", id: "human", name: "Confirmed human" } as typeof membersRef.current[number]];
+  it("saves topic settings without a designated human configuration", async () => {
     const user = userEvent.setup(); renderSection();
-    const select = screen.getByRole("combobox", { name: "Designated human" });
-    expect(select).toHaveValue("");
-    await user.selectOptions(select, "human"); await user.click(screen.getByRole("button", { name: "Save" }));
-    expect(mockSave).toHaveBeenCalledWith(expect.objectContaining({ responsible_member_id: "human" }));
+    expect(screen.queryByRole("combobox", { name: "Designated human" })).toBeNull();
+    await user.clear(screen.getByLabelText("Feishu group chat ID"));
+    await user.type(screen.getByLabelText("Feishu group chat ID"), "oc_updated");
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    expect(mockSave).toHaveBeenCalledWith(expect.objectContaining({ chat_id: "oc_updated" }));
+    expect(mockSave.mock.calls[0]?.[0]).not.toHaveProperty("responsible_member_id");
   });
 
   it("shows an invalid stored person warning and lets an admin repair the recipient", async () => {
@@ -210,7 +211,6 @@ describe("IssueTopicSection", () => {
       project_ids: ["prj_1"],
       notify_mode: "group_owner",
       notify_open_id: null,
-      responsible_member_id: null,
     }));
     expect(toast.success).toHaveBeenCalledWith("Issue topic settings saved");
   });

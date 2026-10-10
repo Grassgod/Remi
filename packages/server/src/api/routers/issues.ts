@@ -251,14 +251,6 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
   const denyTechnicalResponsibilityWrite=(c:Context,input:{responsibleMemberId?:string|null;responsible_member_id?:string|null;parentIssueId?:string|null;parent_issue_id?:string|null},issue?:MultiremiIssue):Response|null=>{
     const token=currentAccessToken(c);
     if(token?.type!=='task'&&token?.type!=='daemon')return null;
-    const parentField=hasRequestField(input,'parentIssueId','parent_issue_id');
-    const nextParent=input.parentIssueId??input.parent_issue_id??null;
-    if(parentField && nextParent && (!issue||nextParent!==issue.parentIssueId)) {
-      const parent=store.resolveIssueResponsibility(nextParent);
-      const previous=issue?store.resolveIssueResponsibility(issue.id):null;
-      const source=previous?previous.unresolved.length?null:previous.rootHuman?.id:token.type==='task'?taskIssueResponsibleMember(c,store):null;
-      if(parent.unresolved.length||!source||parent.rootHuman?.id!==source)return c.json({error:'A human must confirm moving work to a different root responsibility',code:'human_issue_responsibility_required'},403);
-    }
     const explicit=hasRequestField(input,'responsibleMemberId','responsible_member_id');
     const target=input.responsibleMemberId??input.responsible_member_id??null;
     if(explicit) {
@@ -901,7 +893,7 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
     if (denied) return denied;
     const assigneeType = body.assigneeType ?? body.assignee_type ?? (body.agentId ? "agent" : null);
-    if(assigneeType==='member')return c.json({error:'Choose an Agent or team Leader for execution; configure the final human through responsible_member_id',code:'issue_execution_owner_required'},409);
+    if(assigneeType==='member')return c.json({error:'Choose an Agent or team Leader for execution',code:'issue_execution_owner_required'},409);
     assertRuntimeWorkspaceAccess(c, store, body.runtimeWorkspaceId ?? body.runtime_workspace_id, workspaceId);
     const assigneeId = body.assigneeId ?? body.assignee_id ?? body.agentId ?? null;
     const dispatchDenied = denySideSessionAssigneeDispatch(c, store, workspaceId, assigneeType, assigneeId);
@@ -912,8 +904,7 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     const sourceStripped = isAnonymousCompatibilityRequest(c)
       ? body
       : stripServerOwnedIssueSourceFields(body);
-    // Creator and implicit human responsibility come from the credential.
-    // Agent-created roots inherit only their actual source Issue's explicit human.
+    // Creator identity comes from the credential; no designated human is inferred.
     let issue: MultiremiIssue;
     try {
       issue = store.createIssue({
@@ -922,8 +913,7 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
         blockedBy: body.blockedBy ?? body.blocked_by,
         workspaceId,
         createdBy: currentTaskAccessToken(c) || currentAccessToken(c)?.type==='daemon' ? null : authenticatedRequestUserId(c) ?? currentRequestUserId(c),
-        responsibleMemberId: body.responsibleMemberId ?? body.responsible_member_id
-          ?? (!(body.parentIssueId ?? body.parent_issue_id) && currentTaskAccessToken(c) ? taskIssueResponsibleMember(c,store) : undefined),
+        responsibleMemberId: body.responsibleMemberId ?? body.responsible_member_id,
         assigneeType: null,
         assignee_type: null,
         assigneeId: null,
@@ -1068,12 +1058,12 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
     if (denied) return denied;
     assertRuntimeWorkspaceAccess(c, store, body.runtimeWorkspaceId ?? body.runtime_workspace_id, workspaceId);
-    // Human responsibility uses the verified requester, never a body-supplied requester.
+    // Record the verified requester, never a body-supplied requester.
     const result = safeQuickCreateIssue(store, {
       ...stripServerOwnedQuickCreateFields(body),
       responsibilitySourceAudit:taskIssueResponsibilitySourceAudit(c,store),
       workspaceId,
-      responsibleMemberId:body.responsibleMemberId??body.responsible_member_id??(!(body.parentIssueId??body.parent_issue_id)&&currentTaskAccessToken(c)?taskIssueResponsibleMember(c,store):undefined),
+      responsibleMemberId:body.responsibleMemberId??body.responsible_member_id,
       requesterId: currentTaskAccessToken(c) || currentAccessToken(c)?.type==='daemon' ? null : authenticatedRequestUserId(c) ?? currentRequestUserId(c),
     });
     if ("error" in result) return c.json({ error: result.error, ...('code' in result ? {code:result.code} : {}) }, 'status' in result ? result.status ?? 400 : 400);
@@ -1097,7 +1087,7 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
       ...stripServerOwnedQuickCreateFields(issueQuickCreateCompatibilityInput(body)),
       responsibilitySourceAudit:taskIssueResponsibilitySourceAudit(c,store),
       workspaceId,
-      responsibleMemberId:body.responsibleMemberId??body.responsible_member_id??(!(body.parentIssueId??body.parent_issue_id)&&currentTaskAccessToken(c)?taskIssueResponsibleMember(c,store):undefined),
+      responsibleMemberId:body.responsibleMemberId??body.responsible_member_id,
       requesterId: currentTaskAccessToken(c) || currentAccessToken(c)?.type==='daemon' ? null : authenticatedRequestUserId(c) ?? currentRequestUserId(c),
     };
     const denied = denyCurrentUserWorkspaceAccess(c, store, input.workspaceId ?? input.workspace_id ?? "local");

@@ -254,7 +254,6 @@ export function withIssueCreateRequestContext(
   const task = taskToken?.taskId && store ? store.getTaskWithAgent(taskToken.taskId) : null;
   out.responsibilitySourceAudit=store?taskIssueResponsibilitySourceAudit(c,store):null;
   const sourceIssue = task?.issue ?? null;
-  if (taskToken && store && !out.parent_issue_id && !out.responsible_member_id) out.responsible_member_id = taskIssueResponsibleMember(c,store);
   const isIntake = sourceIssue?.issueKind === "intake";
   if (sourceIssue) {
     // Any task-run creation (intake or follow-up) stays in the source issue's

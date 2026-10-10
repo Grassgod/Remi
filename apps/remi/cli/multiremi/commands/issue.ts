@@ -56,7 +56,7 @@ import {
 
 function addAssigneeBodyFields(body: Record<string, unknown>, options: CliOptions, idKey: string, typeKey: string, nameKey: string): void {
   addLegacyAssigneeBodyFields(body, options, idKey, typeKey, nameKey);
-  if (body.assignee_type === "member") throw new Error("Execution assignee must be an Agent or Squad; designate the root human with --responsible-member");
+  if (body.assignee_type === "member") throw new Error("Execution assignee must be an Agent or Squad");
 }
 
 export interface CliIssueComment {

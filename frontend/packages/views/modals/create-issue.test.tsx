@@ -412,7 +412,6 @@ describe("CreateIssueModal", () => {
         due_date: undefined,
         attachment_ids: undefined,
         parent_issue_id: undefined,
-        responsible_member_id: "member-human",
         project_id: null,
         runtime_workspace_id: null,
       });
@@ -461,7 +460,6 @@ describe("CreateIssueModal", () => {
         due_date: undefined,
         attachment_ids: undefined,
         parent_issue_id: undefined,
-        responsible_member_id: "member-human",
         project_id: null,
         runtime_workspace_id: null,
       });
@@ -753,7 +751,7 @@ describe("CreateIssueModal", () => {
     await waitFor(() => expect(screen.getByTestId("assignee-picker").dataset.assigneeType).toBe(""));
     fireEvent.change(screen.getByPlaceholderText("Issue title"), { target: { value: "Configure execution later" } });
     await user.click(screen.getByRole("button", { name: "Create Issue" }));
-    await waitFor(() => expect(mockCreateIssue).toHaveBeenCalledWith(expect.objectContaining({ assignee_type: null, assignee_id: null, responsible_member_id: "member-human" })));
+    await waitFor(() => expect(mockCreateIssue).toHaveBeenCalledWith(expect.objectContaining({ assignee_type: null, assignee_id: null })));
   });
 
   it("prefills the assignee from the picked project's bound default", async () => {

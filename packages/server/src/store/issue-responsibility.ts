@@ -47,9 +47,10 @@ export function resolveIssueResponsibility(ctx: StoreContext, issueId: string): 
       const id = issue.responsibleMemberId;
       const human = id ? ctx.workspaces().getWorkspaceMember(id) : null;
       facts.push(['human', id, human?.workspaceId, human?.archivedAt]);
-      if (!id) fail(issue.id, 'human_missing');
-      else if (!human || human.archivedAt || human.workspaceId !== issue.workspaceId) fail(issue.id, 'human_unavailable');
-      else result.rootHuman = {type:'member', id:human.id, issueId:issue.id, name:human.name};
+      // Compatibility projection for historical delivery receipts only. Native
+      // AskUserQuestion and ordinary Issue lifecycle never require this field.
+      if (human && !human.archivedAt && human.workspaceId === issue.workspaceId)
+        result.rootHuman = {type:'member', id:human.id, issueId:issue.id, name:human.name};
       break;
     }
     const parentId: string = issue.parentIssueId;
@@ -57,7 +58,7 @@ export function resolveIssueResponsibility(ctx: StoreContext, issueId: string): 
     if (!issue) fail(parentId, 'parent_missing');
   }
   result.executionOwner = result.chain[0]?.executionOwner ?? null;
-  result.reviewOwner = result.chain.length > 1 ? result.chain[1]!.executionOwner : result.rootHuman;
+  result.reviewOwner = result.chain.length > 1 ? result.chain[1]!.executionOwner : result.rootHuman ?? result.executionOwner;
   result.revision = createHash('sha256').update(JSON.stringify(facts)).digest('hex');
   return result;
 }

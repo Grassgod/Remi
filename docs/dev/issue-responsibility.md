@@ -1,162 +1,65 @@
 ---
-title: Issue 责任与正式交付
+title: Issue 执行责任与交付
 status: active
-summary: 明确根人类、统一解析单内及父单责任，并通过具体交付验收关闭 Issue。
+summary: Agent 按本单及父单 Leader 请示，用户通过原生 AskUserQuestion 回答，无需指定顶层人类。
 ---
 
-# Issue 责任与正式交付
+# Issue 执行责任
 
-责任事实来自 Issue，普通 Task/Turn 协作不会改变这些事实。
-[共享类型](../../packages/contracts/src/issue-responsibility.ts)定义稳定投影；
-[resolver](../../packages/server/src/store/issue-responsibility.ts)是唯一解析入口。
+责任事实来自 Issue 的执行指派和父子关系；普通 Task/Turn 协作不改写这些事实。
+[共享类型](../../packages/contracts/src/issue-responsibility.ts)和
+[统一 resolver](../../packages/server/src/store/issue-responsibility.ts)保留本单执行统筹和直接父单结果责任。
+明确指派 Agent 或小队可用 Leader 才是执行统筹；不使用普通队员、Agent 的第一个团队或 Runtime owner 兜底。
+缺少执行统筹、Leader 不可用、父链缺失、循环或跨工作区，保留对应 Agent/结构缺口。
 
-`executionOwner` 是明确指派 Agent 或指派团队的可用 Leader；`reviewOwner` 是直接父单的
-`executionOwner`，顶层则为明确人类。`rootHuman` 沿父链读取根单的 `responsible_member_id`。
-子单不复制根人类字段。无 Leader、归档或跨工作区 Agent、根人类缺失、父链缺失或循环，
-均保留可见 `unresolved` 原因；不取普通队员、Agent 所属第一个团队或 workspace owner。
-`revision` 只哈希责任事实及可用性，普通评论和更新时间不改变版本。
-新的执行指派仅接受 Agent 或团队；历史 member 指派保留为缺少执行统筹的记录，
-不能将它猜成某个 Agent。人类责任单独配置在根单字段；新项目默认执行指派也仅接受
-Agent 或团队，成员写入返回 `409 project_execution_owner_required`。旧 member 项目默认
-保留原事实及明确待配置提示，无关编辑不会改写它；须显式清空或改为 Agent/团队后才能
-作为有效执行默认。旧 member 项目默认不复制到新单。
+建单、普通状态变更和原生提问无需 `responsible_member_id`。
+网页的手动创建、智能创建、自动化和集成配置不提供“顶层指定人类”选择器；
+任务详情只展示执行统筹和父单结果责任。
+新根单不把创建者、Runtime owner 或自动化创建者写成指定人类。
+飞书消息自动建单沿已有来源、权限和话题设置运行，不增加指定人类前提。
 
-创建根单必须传明确 `responsible_member_id`，或由真实人类创建来源承担责任。
-HTTP 的创建人来自凭据；Agent 创建新根可继承其真实来源 Issue 的明确人类，
-或 Web Chat 实际创建人的有效 workspace member。Task 凭据不把 Runtime owner 记为人类创建人。
-无 Issue/Chat 的自动化轮可使用真实 run 配置的明确人类：run 必须绑定当前 Task/TurnAttempt，
-其工作区和执行 scope 一致、自动化仍 active、人类有效；body 中的 run ID 不提供来源权限。
-新根单冻结创建时责任，后续配置变化不会改写它；缺失责任的来源 Issue 不回退到自动化配置。
-`issue_created` 同事务审计真实 run、Task、自动化和配置人；这些 server-internal 审计字段
-由 HTTP 入口覆盖客户端值，仅用于追溯，不能作为后续授权来源。
-飞书绑定 Chat 的 creator 可能只是技术归属，不能证明外部发送人的人类责任；群聊和私聊
-都只使用明确配置的 bot `responsible_member_id`，群聊 topic 可显式覆盖。配置缺失时群消息
-仍保留在 Chat，并显示可行动的责任缺口；不自动生成未知责任根单。
-自动化 `create_issue` 使用配置的 `responsibleMemberId`（compat 为 `responsible_member_id`），
-新建 HTTP 自动化可从真实成员凭据或 Task 的有效来源设置初始责任，创建归属也由凭据决定。
-显式自动化、bot 或 topic 人类责任配置要求真实 workspace 管理员；普通通用 settings 写入
-不能绕过 topic 配置的人类门禁。Agent 可提交与已验证来源相同的创建字段，不能另选人类，
-也不能通过改父单将工作移到不同根人类责任下；daemon 不代表其技术 token owner 确认责任。
-历史自动化的 `createdBy` 仅作归属，运行时不隐式变成人类责任。没有配置则拒绝建根单。
-消息转 Issue 必须由真实成员确认；飞书外部发送人或 Runtime owner 不冒充审批成员。
-入门引导从已验证 bootstrap 用户创建；显式 QA seed 和测试工厂使用有名称的合成成员。
-历史根单迁移新增 nullable 字段，包含已经 unified 的快照升级，不猜测回填；缺失责任
-通过 resolver 和关闭拒绝暴露。
-更新根人类、父单、执行指派保留 `issue_responsibility_transferred` 审计。
-显式跨工作区移动在同事务建立目标工作区的新 Main，并以 `issue_main_session_rotated` 审计
-主线替换；旧 Session、head、消息、Q 和 provider 历史留在原工作区，不自动迁走。
-目标 Issue 的会话、任务、评论、时间线及共享聚合只包含目标工作区历史；原会话直接读取
-仍按其原工作区鉴权。派发失败时移动、新 Main 和审计共同回滚，进行中执行仍阻止移动。
-活动新增 nullable `workspace_id` 保存审计发生时的来源。旧未知活动不猜回填；首次显式移动
-在原事务冻结来源，已有评论/Task 的空间事实优先，其余沿当时 Issue 归属。原正文和数据
-保留；目标聚合只读目标来源，跨空间历史中未知来源的活动也不能因 null 越权显示。
-附件读取同样核对附件和原评论 conversation head 的来源；原空间成员可读历史附件，
-旧评论在移动后只读，目标空间不能用已知旧评论/附件 ID 上传、重新关联或通过新分享取文件。
-显式派活的取消、责任转交、Task/轮创建和派生状态共享调用方事务；gate 与 unassign 也不
-另开事务。派活失败全部回滚，事件及子状态副作用统一在提交后处理一次。
-Task 请求在选择会话前沿 W→I 锁定并重新核对 Issue 与 Agent 的工作区；移动先完成时，
-后来的旧空间派活会被结构校验拒绝，不进入目标主线或目标工作区锁。消息到轮的建单阶段
-复用当前同步调用持有的 Issue 锁，调用结束或失败即释放复用标记，不跨事务缓存。
-同事务刷新受影响父链的未解决 Q、保留转交历史并失效旧卡凭据。团队 Leader 变更、移除或归档，
-执行 Agent 的工作区移动/归档/恢复，以及根人类工作区移动/归档也执行相同刷新；普通资料编辑不移交问题。
-无 Issue 的 Chat 问题在 bot 配置变更/删除及来源 Agent、明确成员的工作区或可用性变更时，
-也在原变更事务刷新。移动实体同时核对旧工作区，避免原 Chat 遗留有效旧卡。配置的人类变更
-保留实际成员操作人；密钥、域名等不改变责任事实的编辑不旋转问题版本。
+# 提问与请示
 
-父单执行负责人持续接收子单状态及正式交付通知，包含阻塞、失败、取消与结果。
-历史父链缺父或跨工作区而无法解析根人类时，普通子单状态变更在本工作区父单记录
-`child_done_parent_skipped`（`reason: responsibility_unresolved`）及具体缺口；不创建通知或唤醒轮。
-本空间结构状态派生与合法重开仍在同一事务执行，正式交付和验收继续拒绝未配置责任链。
-负责人不可用时保留未送达原因，并向明确根人类呈现责任缺口。普通派活报告仍回到实际
-派活人的原 Session 和 execution scope，跨团队不改变 Issue 责任。
+子 Agent 先请示本单执行统筹；需要上级判断时，逐级请示父单 Leader。
+重复负责人和提问者自己跳过。需要用户判断时，问题进入原生 AskUserQuestion 的用户入口。
+权限、合并及生产变更授权直接进入用户阶段，Agent 不得代答批准。
+`stage: human`、`current_handler: null` 表示等待用户通过原问题入口回答，不表示责任配置缺失。
 
-# 正式交付与验收
+用户必须是实际工作区成员，并符合原问题的来源权限；私有 Agent、Chat 创建者和跨工作区边界仍有效。
+Agent 只能在当前通知对应的真实执行会话与 scope 处理问题，不借宿主 token owner 的人类权限。
+答复保留原 Q、路由版本和原 provider 等待；答案回原会话，重启及超时恢复沿既有唯一续接流程。
+可选 Remi 总结和飞书通知引用同一个问题；通知偏好决定运输收件目标，不赋予 Issue 人类责任或额外答复权。
+完整提问契约见[统一问题](questions.md)。
 
-[交付服务](../../packages/server/src/store/issue-deliveries.ts)将正式交付放在统一消息的
-`issue_delivery` 元数据中，回复通过原会话 `reply_to_id` 引用交付，不建立另一套工作流表。
-执行负责人使用自己的 Task 凭据提交非空总结，Issue 进入 `in_review`；父单或根人类收到
-可定位的交付对象。只有当前指定 reviewer 能验收或退回，责任 revision 必须一致。
+升级前缺少指定人类而被阻塞的 Issue Q，在读取投影中按 Agent 链和原生用户入口解析。
+保留原消息 ID、答案、历史、路由版本和 provider wait；读取不改库，后续正常操作保存新投影。
 
-验收同事务写入回复、交付收据、Issue `done` 和审计；任何一项失败均回滚。
-有未完成子单不能验收。退回必须填写意见，保存原交付与回复，并向原执行会话和 scope
-排入继续处理消息；Issue 保持开放。消息与收据不可通过普通 edit/delete 改写。
-Agent 提交及验收只能来自其责任 Issue 的主会话，继承旁支和 Chat 不具备正式交付权限。
-正式提交与验收写入状态事件时保留已核实 Agent 的真实来源 Task；后续自动化派活继承原业务限制。
-普通成员及 body 中伪造的 Task ID 不能替代该来源，具体交付代理授权也不解除 Issue 创建限制。
-交付固定原 Task 会话；取消或归档后不能用 pending 交付重新关单，需先恢复开放状态。
-重复相同验收幂等；相反动作、已被新交付替代或责任移交后的旧交付被拒绝。
-最新交付按当前 default Main 的持久消息 `seq` 判断，跨进程时间倒退不改变验收对象；
-历史列表仍按创建时间分页，并以派生 `isLatest` 标明实际当前交付。责任事实变更在原事务
-永久标记受影响的 pending 交付 `invalidatedAt`／`invalidatedReason`，保留原授权历史与审计；
-负责人 A→B→A 或归档后恢复不会复活旧交付或代理授权，普通评论和无事实变化的编辑不失效。
-前端仅为当前且未失效的 pending 交付显示验收、退回和授权操作。
-晚到结果仍保存原子单交付；已关闭或归档的父单仅接收可追溯的
-`issue_delivery_review_unavailable` activity，不创建新通知或唤醒轮。交付返回当前
-`reviewUnavailableReason`（`review_issue_closed`／`review_issue_archived`），pending 交付在父单
-恢复前不能验收或退回；已 settled 收据保持原事实，重复验收仍幂等。
+# 交付与关闭
 
-顶层指定人类可授权当前执行负责人代理验收，授权仅绑定当前 pending 交付和责任 revision。
-授权/撤销均留审计；普通 parent-done-grant 不提供交付授权。代理验收保留原人类责任，
-并记录实际 Agent 与授权人。重新提交、改责任或撤销使旧授权失效。
+[交付服务](../../packages/server/src/store/issue-deliveries.ts)保留可选的消息交付、验收和退回。
+子单的正式交付由执行统筹提交、直接父单统筹验收，仍核对责任版本、具体交付和未完成子单。
+没有历史人类验收记录的根单由自身执行统筹处理可选交付，不需要指定人类。
 
-所有 `done` 状态写入都要求服务端正式验收收据，普通 PATCH、batch、`force`、旧 grant、
-Task 完成、intake 生成子单和 SCM merge 均不能代替验收。SCM effect 保存
-`issue_delivery_acceptance_required` 的 hold 记录并结束该 effect，不无限重试或自动关闭。
-旧直接关闭入口返回可行动的 `issue_delivery_acceptance_required`，客户端应展示交付验收。
-批量 `done` 写入在所有行变更前检查关闭规则，并在同一事务内执行；责任或交付拒绝会回滚整个批次，
-不会被吞成 `200 updated:0`。已 `done` 行的状态 no-op 保持可用，但 body 中的收据或绕过选项不授予新关闭权限。
+普通 PATCH、批量更新和 SCM 合并关闭恢复既有父子状态、依赖及授权守卫，
+不强制每张 Issue 先产生人类验收收据。只有交付验收入口传入服务端收据时，才核对该具体收据。
+`force` 仍按已有成员权限限制，未完成子单及依赖检查不因移除人类配置而绕过。
+父单状态规则见[ADR 0003](../adr/0003-parent-status-derived-from-children.md)。
 
-Native/兼容 PATCH 的条件派发由 store 与字段更新同事务完成；真实派发故障回滚归属、Question
-路由、旧卡凭据和任务，不返回成功的半归属。无可运行的已配置负责人保留明确的 `dispatch_skipped` 审计。
-
-接口在[Issue routes](../../packages/server/src/api/routers/issues.ts)：
-
-| 请求 | 参数 / 返回 |
-| --- | --- |
-| `GET /api/issues/:id/responsibility` | `IssueResponsibility` |
-| `GET /api/issues/:id/deliveries` | `limit` 默认 50、最大 100，`before` 为上一页最后交付 id；返回 `{ deliveries: IssueDelivery[], nextCursor: string\|null }` |
-| `POST /api/issues/:id/deliveries` | `{ summary, sessionId?, dedupeKey? }`，返回 `{ delivery }` |
-| `POST /api/issues/:id/deliveries/:deliveryId/respond` | `{ action: accept\|return, body?, revision }`，返回 `{ delivery, issue }` |
-| `POST /api/issues/:id/deliveries/:deliveryId/authorize` | `{ agentId: string\|null, revision }`，null 撤销；返回 `{ delivery }` |
-
-通知与实时投递在事务提交后执行，可靠工作意图保留在统一消息/lane 中；不能把通知已发送
-或执行队列为空当作验收完成。实际执行、AUQ 等待恢复以及飞书在线投递需要各自的独立证据。
+已有 `responsible_member_id`、`rootHuman` 投影、交付与单次代理授权数据保留，供旧客户端及历史收据兼容。
+它们不作为原生 Issue 提问的接收人，也不是新建、普通完成或交付的必填前提。
+历史映射和代理授权接口保留一个兼容周期；新网页不展示其配置入口，CLI 将相关参数说明为兼容字段。
+不做删除历史字段、猜测填人或全库重写的迁移。
 
 # 验证入口
 
-运行 `bun run test tests/unit/multiremi/issue-responsibility-deliveries.test.ts tests/unit/multiremi/issue-responsibility-transfer-hooks.test.ts`。
-SQLite 使用内存库；设置 `MULTIREMI_TEST_POSTGRES_URL` 后每个测试创建独立随机数据库，
-运行同一组真实 PostgreSQL 用例并清理自身测试库。未配置 PG 显示 skipped，不计作通过。
-这些测试覆盖根人类缺失、Issue 父链、Leader 缺失、验收鉴权、同消息引用、移交失效、
-代理授权撤销、退回继续处理、SQL 写入失败回滚、历史未知责任字段迁移与重启，以及
-责任事实变更与 Q 转交的原子性；不代表生产历史副本、真实 provider 或飞书在线验收。
-`chat-responsibility-mutation-hooks.test.ts` 通过实际配置和实体变更验证 Chat 转交、旧卡失效、
-外层事务失败后配置/问题/凭据共同回滚及重启保留原会话；
-`issue-responsibility-transfer-hooks.test.ts` 包含深层子单指派和已升级 Q 的真实 HTTP 回归。
+`bun run test tests/unit/multiremi/native-user-without-designation.test.ts` 验证无需指定人类建单、
+Agent 逐级请示、原生答复和实际消费、私有来源及工作区边界、旧阻塞 Q 的只读投影兼容和普通关闭。
+SQLite 使用内存库；配置 `MULTIREMI_TEST_POSTGRES_URL` 后运行独立临时 PostgreSQL 数据库，
+未配置的 PostgreSQL 用例标为 skipped，不计作通过。
 
-# 历史归属复核
-
-`GET /api/workspaces/:workspaceId/issue-responsibility-migration?limit=50&offset=0`
-仅真实 workspace 管理员可分页复核缺失或失效人类责任的根单，返回 `total`、`rootCount`、`legacyMemberExecutionCount`、
-`items` 和 `nextOffset`。每项保留原执行指派、创建人 ID、resolver revision 和 unresolved。
-旧 member 指派及可解析历史创建人只作为有来源、带可用性标志的候选；读取不写入责任。
-未知记录保留空候选，历史评论、消息与父链不受影响。
-
-真实 workspace 管理员使用 `POST /api/workspaces/:workspaceId/issue-responsibility-migration/map`，
-提交 `{ reason, mappings: [{ issueId, memberId, revision }] }`，返回 `{ mappedIssueIds }`。
-每批 1–100 个唯一根单，必须明确选人并解释依据；跨工作区、归档成员、子单或过期 revision
-使整批回滚。责任字段、审计和未解决 Q 的移交在同一事务提交；Task/daemon 不可借技术 owner
-确认映射。配置执行统筹仍需明确 Agent/团队，映射人类不将历史 member 指派猜成 Agent。
-
-运行 `bun run test tests/unit/multiremi/issue-responsibility-migration.test.ts` 可验证双后端清单
-只读、候选来源、显式映射的回滚和重启、真实 HTTP 成员来源、自动化配置及技术 Chat 边界。
-真实成员 HTTP 映射同时覆盖原 pending Q 的人类路由、操作人审计和旧卡失效；批量过期版本
-使责任字段和 Q 共同保持原状态，成功后仍保留原问题会话及执行轮，重启不另建问题。
-通用测试创建用 `createResponsibleTestIssue`；结束用 `acceptTestIssueDelivery` 走实际交付验收，
-不覆盖生产 Store 方法，不自动给历史表添加或填充责任。真实生产快照尚需部署迁移前独立复核。
-
-[`responsibility-http-integration.test.ts`](../../tests/unit/remi/responsibility-http-integration.test.ts)
-用 Web ApiClient 通过实际鉴权 HTTP 路由验证创建、子单交付/父单验收、根单指定人类验收，
-以及自动化、bot/topic 配置和历史显式映射；普通成员映射和过期 revision 都被拒绝。
-API 快照脚本对责任与问题流程显式检查预期状态，包括原等待消费、Remi 总结、授权/撤销、
-退回和验收，历史夹具使用单独的明确 SQL 构造。这些验证不代替真实浏览器或 PPE 验收。
+交付兼容验证使用
+`bun run test tests/unit/multiremi/issue-responsibility-deliveries.test.ts`；
+提问与通知权限验证使用
+`bun run test tests/unit/multiremi/issue-questions.test.ts tests/unit/multiremi/question-notification-access.test.ts`。
+网页验证入口为创建表单和执行责任侧栏的组件测试。
+这些入口不代表已完成真实 provider、飞书在线或生产发布验证。

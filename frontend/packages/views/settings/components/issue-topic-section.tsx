@@ -19,7 +19,6 @@ import { Label } from "@multiremi/ui/components/ui/label";
 import { Switch } from "@multiremi/ui/components/ui/switch";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@multiremi/ui/components/ui/select";
 import { useT } from "../../i18n";
-import { RootHumanPicker } from "../../issues/components/root-human-picker";
 
 const EMPTY_CONFIG: IssueTopicConfig = {
   enabled: false,
@@ -29,7 +28,6 @@ const EMPTY_CONFIG: IssueTopicConfig = {
 
 export function IssueTopicSection() {
   const { t } = useT("settings");
-  const { t: responsibilityT } = useT("issues");
   const workspaceId = useWorkspaceId();
   const user = useAuthStore((state) => state.user);
   const membersQuery = useQuery(memberListOptions(workspaceId));
@@ -88,7 +86,6 @@ export function IssueTopicSection() {
         project_ids: draft.project_ids,
         notify_mode: notifyMode,
         notify_open_id: notifyMode === "person" ? draft.notify_open_id?.trim() ?? "" : null,
-        responsible_member_id: draft.responsible_member_id ?? null,
       });
       setDraft(response.config);
       setDirty(false);
@@ -123,7 +120,6 @@ export function IssueTopicSection() {
 
       <Card>
         <CardContent className="space-y-5">
-          <RootHumanPicker value={draft.responsible_member_id ?? null} onChange={id => edit({ responsible_member_id: id })} onClear={() => edit({ responsible_member_id: null })} emptyLabel={responsibilityT($ => $.responsibility.inherit_bot)} disabled={!canManage || save.isPending} />
           <div className="flex items-center justify-between gap-4 rounded-md border px-3 py-2.5">
             <div className="min-w-0">
               <Label htmlFor="issue-topic-enabled">{t(($) => $.feishu.issueTopics.enabled)}</Label>

@@ -190,10 +190,6 @@ export function registerAutopilotRoutes(app: Hono, deps: RouterDeps): void {
     if (workspaceId instanceof Response) return workspaceId;
     const input = autopilotCreateCompatibilityInput(c, { ...body, workspace_id: workspaceId });
     if (isJsonApiError(input)) return c.json({ error: input.apiError }, input.statusCode);
-    if(!hasRequestField(body,'responsibleMemberId','responsible_member_id')) {
-      const creator=store.getWorkspaceMember(input.createdById??'')??store.findWorkspaceMemberForUser(input.createdById,workspaceId);
-      input.responsibleMemberId=currentTaskAccessToken(c)?taskIssueResponsibleMember(c,store):creator?.id??null;
-    }
     const policy = autopilotIssueCreationPolicyInput(c, store, {...body,workspaceId});
     if (policy instanceof Response) return policy;
     const issueDenied = denyRestrictedTaskCreateIssueAutopilot(c, store, input.executionMode ?? input.execution_mode);
@@ -217,11 +213,6 @@ export function registerAutopilotRoutes(app: Hono, deps: RouterDeps): void {
     const workspaceId = resolveRequestWorkspaceId(c, store, cleanString(body.workspaceId) ?? cleanString(body.workspace_id));
     if (workspaceId instanceof Response) return workspaceId;
     const input = autopilotCreateInput(c, { ...body, workspaceId });
-    if(!hasRequestField(body,'responsibleMemberId','responsible_member_id')) {
-      const sourceHuman=taskIssueResponsibleMember(c,store);
-      const creator=store.getWorkspaceMember(input.createdById??'')??store.findWorkspaceMemberForUser(input.createdById,workspaceId);
-      input.responsibleMemberId=currentTaskAccessToken(c)?sourceHuman:creator?.id??null;
-    }
     const policy = autopilotIssueCreationPolicyInput(c, store, {...body,workspaceId});
     if (policy instanceof Response) return policy;
     const issueDenied = denyRestrictedTaskCreateIssueAutopilot(

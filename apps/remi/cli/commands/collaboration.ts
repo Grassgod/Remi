@@ -63,7 +63,7 @@ const ISSUE_LIST_OPTIONS: readonly CliOptionSpec[] = [
 ];
 
 const ISSUE_FIELDS: readonly CliOptionSpec[] = [
-  { name: "responsible-member", type: "string", valueName: "member-id", description: "Explicit designated human for a root Issue" },
+  { name: "responsible-member", type: "string", valueName: "member-id", description: "Legacy optional compatibility field; not required for native user questions" },
   { name: "runtime-workspace", type: "string", valueName: "id", description: "Persistent Runtime workspace (immutable after execution)" },
   { name: "title", type: "string", valueName: "title", description: "Issue title" },
   { name: "description", type: "string", valueName: "text", description: "Issue description" },
@@ -74,7 +74,7 @@ const ISSUE_FIELDS: readonly CliOptionSpec[] = [
   { name: "project", type: "string", valueName: "project", description: "Project ID" },
   { name: "parent", type: "string", valueName: "issue", description: "Parent issue" },
   { name: "assignee", type: "string", valueName: "ref", description: "Assignee reference" },
-  { name: "assignee-type", type: "string", valueName: "agent|squad", description: "Execution assignee type; root human uses --responsible-member" },
+  { name: "assignee-type", type: "string", valueName: "agent|squad", description: "Execution assignee type" },
   { name: "start-date", type: "string", valueName: "date", description: "Start date" },
   { name: "due-date", type: "string", valueName: "date", description: "Due date" },
   { name: "attachment", type: "string", valueName: "path", repeatable: true, description: "Attachment file" },
@@ -155,7 +155,7 @@ function issueCompatibilitySpecs(): CommandSpec[] {
     ], ["issue", "bind-topic"]),
     legacySpec("issue.update", ["issue", "update"], "Update an issue", "write", HUMAN_TASK, [refPositional("issue")], [
       ...ISSUE_FIELDS,
-      { name: "force", type: "boolean", description: "Override eligible parent/dependency guards as a member; done still requires formal delivery acceptance" },
+      { name: "force", type: "boolean", description: "Override eligible parent/dependency guards as a member" },
     ], ["issue", "update"]),
     legacySpec("issue.assign", ["issue", "assign"], "Assign or unassign an issue", "write", HUMAN_TASK, [refPositional("issue")], [
       { name: "to", type: "string", valueName: "ref", description: "Assignee reference" },
@@ -163,7 +163,7 @@ function issueCompatibilitySpecs(): CommandSpec[] {
       { name: "unassign", type: "boolean", description: "Clear the assignee and cancel active tasks on this issue" },
     ], ["issue", "assign"]),
     legacySpec("issue.status", ["issue", "status"], "Change issue status", "write", HUMAN_TASK, [refPositional("issue"), refPositional("status")], [
-      { name: "force", type: "boolean", description: "Override eligible parent/dependency guards as a member; done still requires formal delivery acceptance" },
+      { name: "force", type: "boolean", description: "Override eligible parent/dependency guards as a member" },
     ], ["issue", "status"]),
     legacySpec("issue.delete", ["issue", "delete"], "Delete an issue", "destructive", HUMAN_TASK, [refPositional("issue")], [], ["issue", "delete"]),
     nativeSpec("issue.restore", ["issue", "restore"], "Restore an archived issue", "write", HUMAN, [refPositional("issue")], [], async (invocation) => {
@@ -578,7 +578,7 @@ function issueExtendedSpecs(): CommandSpec[] {
       await mutateAndRender(invocation, "POST", "/api/issues/batch-delete", await requestBody(invocation));
     }),
     nativeSpec("issue.quick-create", ["issue", "quick-create"], "Quick-create an issue", "write", HUMAN, [], [...INPUT_OPTIONS,
-      { name: "responsible-member", type: "string", valueName: "member-id", description: "Designated root human; children inherit" },
+      { name: "responsible-member", type: "string", valueName: "member-id", description: "Legacy optional root compatibility field" },
       { name: "agent", type: "string", valueName: "id", description: "Creator agent", conflictsWith: ["squad"] },
       { name: "squad", type: "string", valueName: "id", description: "Creator squad", conflictsWith: ["agent"] },
       { name: "prompt", type: "string", valueName: "text", description: "Work to plan" },

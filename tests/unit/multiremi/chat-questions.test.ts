@@ -34,7 +34,8 @@ pendingTurnBackendTests('Chat question explicit responsibility', fixture => {
     const user = f.store.getOrCreateUser({ externalId: 'chat_q_name_impostor', name: 'Ambiguous Chat creator' });
     f.store.createWorkspaceMember({ workspaceId: 'local', userId: user.id, name: 'Ambiguous Chat creator', role: 'member' });
     const h = setup(f, false, true, 'Ambiguous Chat creator');
-    expect(h.store.getQuestion(h.questionId)).toMatchObject({ current_handler: null, route_reason: 'explicit_human_responsibility_required' });
+    expect(h.store.getQuestion(h.questionId)).toMatchObject({ current_handler: null, stage: 'human', route_reason: null });
+    expect(h.store.getQuestion(h.questionId, { type: 'member', id: 'mem_local_local' })?.actions.allowed).not.toContain('answer');
     const before = h.store.getMessage(h.questionId)!.revision;
     h.store.getQuestion(h.questionId);
     expect(h.store.getMessage(h.questionId)!.revision).toBe(before);
@@ -47,13 +48,13 @@ pendingTurnBackendTests('Chat question explicit responsibility', fixture => {
     const ownerUser = h.store.getOrCreateUser({ externalId: 'chat_q_other_owner', name: 'Other workspace owner' });
     h.store.createWorkspaceMember({ workspaceId: 'local', userId: ownerUser.id, name: 'Other workspace owner', role: 'owner' });
     h.db.transaction(() => { h.store.archiveWorkspaceMember('mem_local_local'); h.refresh({ memberId: 'mem_local_local' }); })();
-    expect(h.store.getQuestion(h.questionId)).toMatchObject({ current_handler: null, stage: 'unavailable', route_reason: 'explicit_human_responsibility_required', route_revision: 3 });
+    expect(h.store.getQuestion(h.questionId)).toMatchObject({ current_handler: null, stage: 'human', route_reason: null, route_revision: 3 });
     expect(h.store.getQuestion(h.questionId)?.history.filter(e => e.reason === 'chat_responsibility_transferred')).toHaveLength(2);
   });
-  it('transport creator is never human authority, config changes rotate old cards atomically, and no-op config facts do not transfer', () => {
+  it('transport users answer through source permissions without a designated human and legacy fields do not transfer authority', () => {
     const h = setup(fixture(), true);
-    expect(h.store.getQuestion(h.questionId)).toMatchObject({ current_handler: null, route_reason: 'explicit_human_responsibility_required' });
-    expect(() => h.store.answerQuestion(h.questionId, { expected_route_revision: 1, response: { answer: 'A' } }, { type: 'member', id: 'mem_local_local' })).toThrow('question_handler_required');
+    expect(h.store.getQuestion(h.questionId)).toMatchObject({ current_handler: null, stage: 'human', route_reason: null });
+    expect(h.store.getQuestion(h.questionId, { type: 'member', id: 'mem_local_local' })?.actions.allowed).toContain('answer');
     const user = h.store.getOrCreateUser({ externalId: 'chat_q_designated', name: 'Designated Chat human' });
     const human = h.store.createWorkspaceMember({ workspaceId: 'local', userId: user.id, name: 'Designated Chat human', role: 'member' });
     const prior = process.env.MULTIREMI_FEISHU_BOT_ENCRYPTION_KEY;
@@ -65,7 +66,7 @@ pendingTurnBackendTests('Chat question explicit responsibility', fixture => {
     };
     try {
       h.db.transaction(() => { set(human.id); h.refresh({ transportOnly: true }); })();
-      expect(h.store.getQuestion(h.questionId)).toMatchObject({ current_handler: { id: human.id }, route_revision: 2 });
+      expect(h.store.getQuestion(h.questionId)).toMatchObject({ current_handler: null, stage: 'human', route_revision: 2 });
       const token = h.store.issueMessageCardToken(h.questionId, 'ou_chat_designated'); expect(token).toBeTruthy();
       const cardHash = h.store.getMessage(h.questionId)!.card_token_hash;
       expect(() => h.db.transaction(() => { set('mem_local_local'); h.refresh({ transportOnly: true }); throw new Error('Rollback config and Q'); })()).toThrow('Rollback config and Q');
@@ -74,10 +75,10 @@ pendingTurnBackendTests('Chat question explicit responsibility', fixture => {
       h.db.transaction(() => { set(human.id); h.refresh({ transportOnly: true }); })();
       expect(h.store.getQuestion(h.questionId)?.route_revision).toBe(2);
       h.db.transaction(() => { set('mem_local_local'); h.refresh({ transportOnly: true }); })();
-      expect(h.store.getQuestion(h.questionId)).toMatchObject({ current_handler: { id: 'mem_local_local' }, route_revision: 3 });
-      expect(h.store.getMessage(h.questionId)!.card_token_hash).toBeNull();
-      expect(() => h.store.answerQuestion(h.questionId, { expected_route_revision: 2, response: { answer: 'A' } }, { type: 'member', id: human.id })).toThrow('question_route_changed');
-      expect(() => h.store.answerQuestion(h.questionId, { expected_route_revision: 3, response: { answer: 'A' } }, { type: 'member', id: human.id })).toThrow('question_handler_required');
+      expect(h.store.getQuestion(h.questionId)).toMatchObject({ current_handler: null, stage: 'human', route_revision: 2 });
+      expect(h.store.getMessage(h.questionId)!.card_token_hash).toBe(cardHash);
+      expect(() => h.store.answerQuestion(h.questionId, { expected_route_revision: 2, response: { answer: 'A' } }, { type: 'member', id: human.id })).toThrow('question_handler_required');
+      expect(h.store.answerQuestion(h.questionId, { expected_route_revision: 2, response: { answer: 'A' } }, { type: 'member', id: 'mem_local_local' }).question.answer?.actor.id).toBe('mem_local_local');
     } finally { if (prior === undefined) delete process.env.MULTIREMI_FEISHU_BOT_ENCRYPTION_KEY; else process.env.MULTIREMI_FEISHU_BOT_ENCRYPTION_KEY = prior; }
   });
   it('compatibility creation without a native wait nonce cannot treat running DB status as a live callback', () => {

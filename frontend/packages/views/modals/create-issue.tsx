@@ -59,7 +59,6 @@ import { FileUploadButton } from "@multiremi/ui/components/common/file-upload-bu
 import { PillButton } from "../common/pill-button";
 import { IssuePickerModal } from "./issue-picker-modal";
 import { useT } from "../i18n";
-import { RootHumanPicker } from "../issues/components/issue-responsibility-section";
 
 // ---------------------------------------------------------------------------
 // ManualCreatePanel — manual-mode body of the create-issue dialog. Renders
@@ -137,7 +136,6 @@ export function ManualCreatePanel({
     (data?.parent_issue_id as string) || undefined,
   );
   const [runtimeWorkspaceId, setRuntimeWorkspaceId] = useState<string | null>((data?.runtime_workspace_id as string) || null);
-  const [responsibleMemberId, setResponsibleMemberId] = useState<string | null>((data?.responsible_member_id as string) || null);
   const [parentPickerOpen, setParentPickerOpen] = useState(false);
   // Start date is a low-frequency field — by default it lives in the
   // overflow ⋯ menu. Clicking the menu item flips this open, which both
@@ -276,7 +274,6 @@ export function ManualCreatePanel({
         due_date: dueDate || undefined,
         attachment_ids: attachmentIds.length > 0 ? attachmentIds : undefined,
         parent_issue_id: parentIssueId,
-        ...(parentIssueId ? {} : { responsible_member_id: responsibleMemberId }),
         ...(prerequisites.length > 0 ? { blocked_by: prerequisites.map((prerequisite) => prerequisite.id) } : {}),
         project_id: projectId ?? null,
         runtime_workspace_id: runtimeWorkspaceId,
@@ -569,7 +566,6 @@ export function ManualCreatePanel({
               />
 
               {/* Assignee */}
-              {!parentIssueId && <RootHumanPicker value={responsibleMemberId} onChange={setResponsibleMemberId} disabled={submitting} defaultSelf />}
               <AssigneePicker
                 unassignedLabel={executionUnconfiguredLabel}
                 assigneeType={assigneeType ?? null}

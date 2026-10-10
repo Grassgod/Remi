@@ -11,7 +11,7 @@ vi.mock("@multiremi/core/auth", () => ({ useAuthStore: (selector: (state: { user
 vi.mock("@multiremi/core/workspace/queries", () => ({ memberListOptions: () => ({ queryKey: ["members", "ws"], queryFn: async () => [{ id: "member-human", user_id: "user-human", name: "Designated human" }, { id: "other-human", user_id: "user-other", name: "Other human" }] }) }));
 vi.mock("@multiremi/core/paths", () => ({ useWorkspaceSlug: () => "ws", useWorkspacePaths: () => ({ issueDetail: (id: string) => `/ws/issues/${id}`, squadDetail: (id: string) => `/ws/squads/${id}`, inboxItem: (id: string) => `/ws/inbox?item=${id}` }) }));
 vi.mock("../../navigation", () => ({ AppLink: (props: { href: string; children: React.ReactNode }) => <a {...props} /> }));
-import { IssueResponsibilitySection, RootHumanPicker } from "./issue-responsibility-section";
+import { IssueResponsibilitySection } from "./issue-responsibility-section";
 const issue = { id: "root", workspace_id: "ws", parent_issue_id: null, responsible_member_id: "member-human" } as Issue;
 const actor = (id: string, type = "agent") => ({ id, type, name: id, issueId: "root" });
 const delivery = { id: "delivery", issueId: "root", sourceSessionId: "session", summary: "Formal evidence", status: "pending", submittedBy: actor("execution"), reviewOwner: actor("member-human", "member"), responsibilityRevision: "v3", responseMessageId: null, responseBody: null, authorization: null, createdAt: "now", respondedAt: null };
@@ -33,10 +33,11 @@ describe("responsibility and exact delivery review", () => {
     expect(mocks.respondIssueDelivery).not.toHaveBeenCalled();
     expect(screen.getByRole("button", { name: "Questions and history" })).toBeInTheDocument();
   });
-  it("defaults new roots to the authenticated workspace member, never another member", async () => {
-    const onChange = vi.fn(); mount(<RootHumanPicker value={null} onChange={onChange} defaultSelf />);
-    await waitFor(() => expect(onChange).toHaveBeenCalledWith("member-human"));
-    expect(onChange).not.toHaveBeenCalledWith("other-human");
+  it("does not ask users to designate a human even on historical roots", async () => {
+    mount(); await screen.findByText("Formal evidence");
+    expect(screen.queryByRole("combobox")).toBeNull();
+    expect(screen.queryByText("Root designated human")).toBeNull();
+    expect(mocks.updateIssue).not.toHaveBeenCalled();
   });
   for (const stale of [{isLatest:false},{isLatest:true,invalidatedAt:'earlier-transfer'}]) it(`keeps stale pending delivery history without review or proxy controls: ${JSON.stringify(stale)}`, async () => {
     mocks.listIssueDeliveries.mockResolvedValue([{...delivery,...stale}]); mount();
@@ -56,9 +57,10 @@ describe("responsibility and exact delivery review", () => {
     fireEvent.click(screen.getByRole("button", { name: "Questions and history" }));
     await waitFor(() => expect(mocks.listIssueQuestions).toHaveBeenCalledWith("root"));
   });
-  it("authorizes only the execution coordinator for the exact delivery revision", async () => {
-    mount(); fireEvent.click(await screen.findByRole("button", { name: "Authorize coordinator for this delivery" }));
-    await waitFor(() => expect(mocks.authorizeIssueDelivery).toHaveBeenCalledWith("root", "delivery", { agentId: "execution", revision: "v3" }));
+  it("does not expose designated-human proxy configuration", async () => {
+    mount(); await screen.findByText("Formal evidence");
+    expect(screen.queryByRole("button", { name: "Authorize coordinator for this delivery" })).toBeNull();
+    expect(mocks.authorizeIssueDelivery).not.toHaveBeenCalled();
   });
   it("does not show human review controls when the designated reviewer is another member", async () => {
     mocks.listIssueDeliveries.mockResolvedValue([{ ...delivery, reviewOwner: actor("other-human", "member") }]); mount();
@@ -66,21 +68,15 @@ describe("responsibility and exact delivery review", () => {
     expect(screen.queryByRole("button", { name: "Accept delivery" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Authorize coordinator for this delivery" })).toBeNull();
   });
-  it("changes root responsibility explicitly and keeps the historical data intact", async () => {
-    mount(); await screen.findByRole("option", { name: "Other human" });
-    fireEvent.change(screen.getByRole("combobox"), { target: { value: "other-human" } });
-    expect(mocks.updateIssue).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole("button", { name: "Transfer responsibility" }));
-    await waitFor(() => expect(mocks.updateIssue).toHaveBeenCalledWith("root", { responsible_member_id: "other-human" }));
-  });
   it("does not copy or edit the root human on child issues", async () => {
     mount(<IssueResponsibilitySection issue={{ ...issue, id: "child", parent_issue_id: "root", responsible_member_id: null }} getActorName={(_type, id) => id} />);
     await screen.findByText("Formal evidence"); expect(screen.queryByRole("combobox")).toBeNull();
   });
-  it("links a missing inherited human to the root configuration", async () => {
+  it("ignores pre-hotfix human-missing diagnostics without hiding Agent gaps", async () => {
     mocks.getIssueResponsibility.mockResolvedValue({ ...responsibility, rootHuman: null, unresolved: [{ issueId: "root", reason: "human_missing" }] });
-    mount(<IssueResponsibilitySection issue={{ ...issue, id: "child", parent_issue_id: "root" }} getActorName={(_type, id) => id} />);
-    expect(await screen.findByRole("link", { name: "Configure responsible owner" })).toHaveAttribute("href", "/ws/issues/root");
+    mount(); await screen.findByText("Formal evidence");
+    expect(screen.queryByRole("link", { name: "Configure responsible owner" })).toBeNull();
+    expect(screen.queryByText(/human_missing/)).toBeNull();
   });
   it("links a missing squad leader to the assigned squad, without a teammate fallback", async () => {
     mocks.getIssueResponsibility.mockResolvedValue({ ...responsibility, executionOwner: null, unresolved: [{ issueId: "root", reason: "leader_missing" }] });
