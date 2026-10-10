@@ -84,7 +84,7 @@ export function MessageDecisionCard(props: { message: Message; canAnswer: boolea
   return <LegacyMessageDecisionCard {...props} />;
 }
 
-function LegacyMessageDecisionCard({ message, canAnswer, getActorName }: { message: Message; canAnswer: boolean; getActorName?: (type: string, id: string) => string }) {
+function LegacyMessageDecisionCard({ message, canAnswer }: { message: Message; canAnswer: boolean; getActorName?: (type: string, id: string) => string }) {
   const { t } = useT("issues");
   const { t: tm } = useT("messages");
   const wsId = useWorkspaceId();
@@ -114,7 +114,7 @@ function LegacyMessageDecisionCard({ message, canAnswer, getActorName }: { messa
     response: null, status: message.resolved_at ? "responded" : "pending",
   }) : null;
   return <DecisionCardFrame id={message.id}>
-    <MessageHeader message={message} getActorName={getActorName} /><Markdown mode="minimal">{message.body_md}</Markdown>
+    <MessageHeader message={message} /><Markdown mode="minimal">{message.body_md}</Markdown>
     {message.resolved_at || reply.isSuccess ? <div className="mt-2 text-xs text-muted-foreground">
       <Button variant="ghost" size="xs" onClick={() => setShowReplies(v => !v)}>{tm($ => $.resolved)}</Button>
       {showReplies && (replies.isError ? <p role="alert">{tm($ => $.load_failed)}</p> : replies.data?.filter(m => m.reply_to_id === message.id).map(m => <Markdown key={m.id} mode="minimal">{m.body_md}</Markdown>))}

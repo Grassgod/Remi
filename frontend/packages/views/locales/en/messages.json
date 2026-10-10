@@ -68,5 +68,15 @@
   "load_more": "Load more",
   "retry_load": "Reload",
   "consumed_draft": "This message has been read or removed. Your draft is kept here so you can copy it.",
-  "consumed_message": "This message has already been read by the agent. It can no longer be edited or deleted."
+  "consumed_message": "This message has already been read by the agent. It can no longer be edited or deleted.",
+  "trigger": {
+    "unknown": "Trigger source not recorded",
+    "unknown_actor": "Unknown initiator",
+    "timer": "Scheduled task",
+    "system": "System",
+    "parent_actor": "{{name}} (parent Issue {{issue}})",
+    "scheduled": "Triggered by {{name}} (scheduled)",
+    "comment": "Triggered by {{name}}’s comment",
+    "by": "Triggered by {{name}}"
+  }
 }

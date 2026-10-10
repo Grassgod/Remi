@@ -1,3 +1,4 @@
+import { readMessageTriggerFacts, type TriggerEntry } from './message-trigger-source.js';
 import { isRelatedTurnController } from './turn-controls.js';
 import { listIssueDeliveries, submitIssueDelivery, respondIssueDelivery, authorizeIssueDelivery, type IssueDeliveryActor } from './issue-deliveries.js';
 import { listIssueResponsibilityMigration, mapIssueResponsibility } from './issue-responsibility-migration.js';
@@ -4695,6 +4696,10 @@ runMigrations(this.db);
 
   getConversationLogEntry(sessionId: string, seq: number, query?: ConversationLogQuery | null): ConversationLogEntry | null {
     return this.conversationLog.getEntry(sessionId, seq, query);
+  }
+
+  readMessageTriggerFacts(entries: readonly TriggerEntry[]) {
+    return readMessageTriggerFacts(this.db, entries);
   }
 
   getConversationLogEntryById(id: string): ConversationLogEntry | null {

@@ -1,3 +1,5 @@
+import type { MessageTriggerSource } from '@multiremi/contracts/conversation-log.js';
+import { messageTriggerQuery, messageTriggerSource, triggerVisibilityEntry, type MessageTriggerFact } from '@multiremi/store/message-trigger-source.js';
 import type { HubFrame } from "@multiremi/contracts/live-hub.js";
 import type { MultiremiStore } from "@multiremi/store/store.js";
 import type { ReadPool } from "@multiremi/store/db/read-pool.js";
@@ -128,6 +130,26 @@ export function createBrowserLogProjection(store: MultiremiStore, pool: ReadPool
         projected.push({ ...frame, payload: stripCardTokenFields(payload) });
       }
     }
-    return projected;
+    const query = messageTriggerQuery(rows);
+    const facts = postgres && query
+      ? await postgres.query<MessageTriggerFact>(query.sql, query.params)
+      : store.readMessageTriggerFacts(rows);
+    const triggers = new Map<string, MessageTriggerSource>(), triggerSessions = new Map<string, boolean>();
+    for (const fact of facts) {
+      if (fact.source_visibility !== 'shown' || fact.source_deleted || fact.workspace_id !== subject.workspaceId) continue;
+      if (!triggerSessions.has(fact.source_session)) {
+        const sourceFacts = await auth.logFacts(fact.source_session, subject);
+        if (!sourceFacts.ok) throw new Error('Trigger visibility unavailable');
+        triggerSessions.set(fact.source_session, decideLogSubscription(subject, sourceFacts.facts).ok);
+      }
+      if (triggerSessions.get(fact.source_session) && await visible(triggerVisibilityEntry(fact))) {
+        triggers.set(fact.entry_id, messageTriggerSource(fact));
+      }
+    }
+    return projected.map(frame => {
+      const row = bySeq.get(frame.seq), payload = frame.payload as Record<string, any>;
+      if (!row || payload.visibility === 'hidden' || frame.kind === 'patch') return frame;
+      return { ...frame, payload: { ...payload, trigger_source: triggers.get(row.id) ?? null } };
+    });
   };
 }

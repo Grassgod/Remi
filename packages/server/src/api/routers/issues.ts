@@ -1,3 +1,4 @@
+import { withMessageTriggers } from '../helpers/message-triggers.js';
 import { resolveRequestWorkspaceId } from "../helpers/workspace-context.js";
 import { ISSUE_ACTIVITY_TYPES } from "@multiremi/contracts";
 import { readSessionLogRange } from "../session-log-range.js";
@@ -1727,7 +1728,7 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     // The canonical log row already includes the recipient header.
     const recipient = (entry as typeof entry & { to_agent_id: string | null }).to_agent_id;
     const delivered = recipient ? store.getSessionAgentMaxCursorSeq(sessionId, recipient) >= entry.seq || store.hasInboxReceiptCovering(sessionId, recipient, entry.seq) : null;
-    return c.json({ ...messageResponse(entry), delivered });
+    return c.json({ ...messageResponse(withMessageTriggers(c, store, [entry])[0]!), delivered });
   });
   app.get("/api/sessions/:sessionId/messages", (c) => {
     const sessionId = logSessionAccess(c);
@@ -1779,7 +1780,7 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     }
     const window = store.conversationLogWindow(sessionId, { anchor, before, after });
     const activityTo = window.has_more_after ? window.entries.at(-1)?.created_at : null;
-    window.entries = window.entries.filter(conversationEntryVisibility(c, store)).map(entry => messageResponse(entry));
+    window.entries = withMessageTriggers(c, store, window.entries.filter(conversationEntryVisibility(c, store))).map(entry => messageResponse(entry));
     const issueSession = store.getIssueSession(sessionId);
     if (c.req.query("with_activity") === "1" && issueSession?.isDefault) {
       Object.assign(window, store.listIssueActivityBetween(issueSession.issueId, {

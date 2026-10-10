@@ -1,3 +1,4 @@
+import { withMessageTriggers } from '../helpers/message-triggers.js';
 import { isRelatedTurnController } from '../../store/turn-controls.js';
 import type { Context, Hono } from "hono";
 import { unlink } from "node:fs/promises";
@@ -79,13 +80,13 @@ export function registerUnifiedRoutes(app: Hono, deps: RouterDeps): void {
     if (!turn || turn.current_attempt_id !== token.taskId) throw new InputError("source attempt is no longer current");
     return turn.id;
   };
-  const publicMessages = (messages: UnifiedMessage[]) => {
+  const publicMessages = (c: Context, messages: UnifiedMessage[]) => {
     const ids = messages.map(m => m.id);
     const attachments = store.listAttachmentsForMessages(ids);
     const reactions = store.listCommentReactionsForComments(ids);
-    return messages.map(message => ({ ...messageResponse(message), attachments: attachments.get(message.id) ?? [], reactions: reactions.get(message.id) ?? [] }));
+    return withMessageTriggers(c, store, messages).map(message => ({ ...messageResponse(message), attachments: attachments.get(message.id) ?? [], reactions: reactions.get(message.id) ?? [] }));
   };
-  const publicMessage = (message: UnifiedMessage) => publicMessages([message])[0]!;
+  const publicMessage = (c: Context, message: UnifiedMessage) => publicMessages(c, [message])[0]!;
   const loadMessage = (c: Context) => {
     const message = store.getMessage(c.req.param("id")!);
     if (!message || message.visibility !== "shown") return c.json({ error: "message not found" }, 404);
@@ -113,7 +114,7 @@ export function registerUnifiedRoutes(app: Hono, deps: RouterDeps): void {
         if (page.length < n + 1 || rows.length > n) break;
         from = page.at(-1)!.seq;
       }
-      return { messages: publicMessages(rows.slice(0, n)), next_cursor: rows.length > n ? String(rows[n - 1]!.seq) : null };
+      return { messages: publicMessages(c, rows.slice(0, n)), next_cursor: rows.length > n ? String(rows[n - 1]!.seq) : null };
     });
   });
   app.post("/api/sessions/:sessionId/messages", async (c) => {
@@ -174,7 +175,7 @@ export function registerUnifiedRoutes(app: Hono, deps: RouterDeps): void {
           expected_route_revision: input.expected_route_revision, revise: input.revise, reason: input.reason,
           expected_answer_revision: input.expected_answer_revision,
           response: input.response ?? (selected?.length ? { selected_options: selected, answer: text || selected.join("\n") } : undefined) });
-        return { ...result, message: publicMessage(result.message) };
+        return { ...result, message: publicMessage(c, result.message) };
       }
       const attachmentIds = input.attachment_ids ?? [];
       if (!Array.isArray(attachmentIds) || attachmentIds.some((id: unknown) => typeof id !== "string")) throw new InputError("invalid attachment_ids");
@@ -212,12 +213,12 @@ export function registerUnifiedRoutes(app: Hono, deps: RouterDeps): void {
           return sent;
         }) : send();
       await Promise.all(unusedUploads.map(upload => unlink(uploadedAttachmentPath(upload))));
-      return { ...result, message: publicMessage(result.message) };
+      return { ...result, message: publicMessage(c, result.message) };
     });
   });
   app.get("/api/messages/:id", c => {
     const loaded = loadMessage(c);
-    return loaded instanceof Response ? loaded : c.json({ message: publicMessage(loaded.message) });
+    return loaded instanceof Response ? loaded : c.json({ message: publicMessage(c, loaded.message) });
   });
   const questionActor = (c: Context, workspaceId: string) => {
     const actor = messageActor(c, store, workspaceId);
@@ -280,7 +281,7 @@ export function registerUnifiedRoutes(app: Hono, deps: RouterDeps): void {
         if (!input.response || typeof input.response !== 'object' || Array.isArray(input.response)) throw new InputError('response is required');
         if (input.revise !== undefined && typeof input.revise !== 'boolean') throw new InputError('revise must be boolean');
         const result = store.answerQuestion(loaded.message.id, { ...mutation, response: input.response, body_md: input.body_md, revise: input.revise, expected_answer_revision: input.expected_answer_revision }, actor, callerTurn(c));
-        return { ...result, message: publicMessage(result.message) };
+        return { ...result, message: publicMessage(c, result.message) };
       }
       const question = operation === 'escalate' ? store.escalateQuestion(loaded.message.id, mutation, actor, callerTurn(c))
         : operation === 'transfer' ? store.transferQuestion(loaded.message.id, mutation, actor, callerTurn(c))
@@ -297,10 +298,10 @@ export function registerUnifiedRoutes(app: Hono, deps: RouterDeps): void {
     if (actor instanceof Response) return actor;
     if (actor.type !== loaded.message.sender_type || actor.id !== loaded.message.sender_id) return c.json({ error: "only the sender may edit or delete" }, 403);
     return action(c, async () => {
-      if (method === "DELETE") return { message: publicMessage(store.deleteMessage(loaded.message.id)) };
+      if (method === "DELETE") return { message: publicMessage(c, store.deleteMessage(loaded.message.id)) };
       const input = await body(c);
       if (typeof input.body_md !== "string" || !input.body_md.trim()) throw new InputError("body_md is required");
-      return { message: publicMessage(store.editMessage(loaded.message.id, { body_md: input.body_md })) };
+      return { message: publicMessage(c, store.editMessage(loaded.message.id, { body_md: input.body_md })) };
     });
   });
   for (const operation of ["resolve", "reactions"] as const) app.post(`/api/messages/:id/${operation}`, async c => {
@@ -310,7 +311,7 @@ export function registerUnifiedRoutes(app: Hono, deps: RouterDeps): void {
       const input = await body(c);
       const mutation = issueMutationActor(c, input);
       const actor = { type: mutation.actorType, id: mutation.actorId };
-      if (operation === "resolve") return { message: publicMessage(store.resolveMessage(loaded.message.id, actor, boolean(input.resolved, true))) };
+      if (operation === "resolve") return { message: publicMessage(c, store.resolveMessage(loaded.message.id, actor, boolean(input.resolved, true))) };
       if (typeof input.emoji !== "string" || !input.emoji.trim() || input.emoji.length > 64) throw new InputError("emoji is required");
       store.reactMessage(loaded.message.id, { emoji: input.emoji, actorType: actor.type, actorId: actor.id!, remove: boolean(input.remove, false) });
       return { reactions: store.listCommentReactionsForComments([loaded.message.id]).get(loaded.message.id) ?? [] };
@@ -337,7 +338,7 @@ export function registerUnifiedRoutes(app: Hono, deps: RouterDeps): void {
         attemptId: currentTaskAccessToken(c)?.taskId ?? undefined,
       } };
       const page = store.listReaderMessageInbox(scope.type,scope.readerId,scope.workspaceId,options);
-      return { ...page, items: publicMessages(page.items), next_cursor: encodeCursor(page.next_cursor) };
+      return { ...page, items: publicMessages(c, page.items), next_cursor: encodeCursor(page.next_cursor) };
     });
   });
   app.post("/api/inbox/read", async c => {
@@ -410,7 +411,7 @@ export function registerUnifiedRoutes(app: Hono, deps: RouterDeps): void {
       const source = turn.current_attempt_id ? store.getTask(turn.current_attempt_id) : null;
       if (c.req.query("input") === "true" && source && !canAccessConversationTask(c, store, source)) return c.json({error:"forbidden"},403);
       const input = c.req.query("input") === "true" ? store.getTurnInput(turn.id) : null;
-      return { turn, ...(input ? { input: { ...input, messages: publicMessages(input.messages.filter(conversationEntryVisibility(c, store))) } } : {}),
+      return { turn, ...(input ? { input: { ...input, messages: publicMessages(c, input.messages.filter(conversationEntryVisibility(c, store))) } } : {}),
         ...(c.req.query("attempts") === "true" ? { attempts: store.listTurnAttempts(turn.id) } : {}) };
     });
   });
