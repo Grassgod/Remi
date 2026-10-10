@@ -53,7 +53,7 @@ for (const dialect of ["sqlite", "postgres"] as const) {
       const fixture = createRoutingMatrixDatabase(dialect, process.env.MULTIREMI_TEST_POSTGRES_URL);
       try {
         expect(() => withRequestReadCache(() => fixture.reset())).toThrow("request read caches");
-        const unsubscribe = fixture.store.subscribeConversationLog(() => {});
+        const unsubscribe = fixture.store.subscribeConversationLog({ onEntry() {} });
         expect(() => fixture.reset()).toThrow("subscriptions");
         unsubscribe();
         fixture.db.transaction(() => {

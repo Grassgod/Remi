@@ -170,7 +170,7 @@ if (import.meta.main) {
     const exitCode = await runTests(shard.files.map(path => `./${path}`), (text, source) => parser.feed(text, source), metadata => { report.runner = metadata; });
     parser.finish();
     report.shardExitCode = exitCode;
-    if (exitCode < 128 && !report.logErrors.length && report.files.length === shard.files.length) report.finishedAt = new Date().toISOString();
+    if (exitCode < 128 && report.logErrors?.length === 0 && report.files.length === shard.files.length) report.finishedAt = new Date().toISOString();
     save(out, report); process.exitCode = exitCode || (report.finishedAt ? 0 : 1);
   } else if (command === "verify") {
     const plan: Plan = json(option("plan"));

@@ -45,6 +45,13 @@ export function readConnectionPragma(db: Pick<Database, "query">, pragma: typeof
   return value;
 }
 
+interface SqliteStoreSnapshot {
+  bytes: Uint8Array;
+  environment: string;
+  pragmas: Record<string, number>;
+  reportDir: string;
+}
+
 /**
  * Opt-in ordinary business fixtures only. Each caller gets a new handle and a
  * new Store, with the normal production migration entrance still running. The
@@ -53,7 +60,7 @@ export function readConnectionPragma(db: Pick<Database, "query">, pragma: typeof
  * fresh factory instead. No enclosing rollback, Store mock or migration skip.
  */
 export function createSqliteStoreSnapshotFactory() {
-  let snapshot: { bytes: Uint8Array; environment: string; pragmas: Record<string, number>; reportDir: string } | undefined;
+  let snapshot: SqliteStoreSnapshot | undefined;
   const stats = {
     fixture: "ordinary-sqlite-snapshot", dialect: "sqlite", coldBootstraps: 0,
     clones: 0, freshFallbacks: 0, storeInitializations: 0, initializationMs: 0,
@@ -87,7 +94,7 @@ export function createSqliteStoreSnapshotFactory() {
       }
       if (!snapshot) {
         const template = coldStore();
-        let image: typeof snapshot;
+        let image: SqliteStoreSnapshot;
         try {
           const pragmas = Object.fromEntries(connectionPragmas.map(pragma => [pragma, readConnectionPragma(template.db, pragma)]));
           const bytes = template.db.serialize();

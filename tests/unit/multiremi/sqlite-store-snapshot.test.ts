@@ -70,7 +70,7 @@ it("uses fresh migration timestamps under a controlled clock instead of cloning 
   setSystemTime(time);
   const second = factory.create();
   try {
-    expect(second.db.query("SELECT applied_at FROM multiremi_schema_migrations WHERE id = ?").get(UNIFIED_MODEL_MIGRATION)?.applied_at).toBe(time.toISOString());
+    expect(second.db.query<{ applied_at: string }, [string]>("SELECT applied_at FROM multiremi_schema_migrations WHERE id = ?").get(UNIFIED_MODEL_MIGRATION)?.applied_at).toBe(time.toISOString());
     expect(factory.stats()).toMatchObject({ coldBootstraps: 2, clones: 1, freshFallbacks: 1 });
   } finally {
     second.db.close();
