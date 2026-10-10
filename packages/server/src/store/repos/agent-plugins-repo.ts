@@ -813,7 +813,7 @@ export class AgentPluginsRepo {
     };
     const beforeRows = desiredRows();
     const before = new Map(beforeRows.map((row) => [String(row.id), runtimeStateFingerprint(row)]));
-    this.reconcileAgentPluginDesiredStateLocked(workspaceId);
+    this.reconcileAgentPluginDesiredStateLocked(workspaceId, { runtimeId });
     // Reconciliation may have inserted, removed or flipped rows, so this read has to be fresh.
     // Going back through the memoized reader is what makes it fresh *and* free when nothing
     // changed: reconciliation writes this table through the same store handle, so a write clears
@@ -980,7 +980,7 @@ export class AgentPluginsRepo {
 
   private reconcileAgentPluginDesiredStateLocked(
     workspaceId: string,
-    options: { additionalVersionId?: string; pluginId?: string } = {},
+    options: { additionalVersionId?: string; pluginId?: string; runtimeId?: string } = {},
   ): void {
     const desired = new Map<string, {
       pluginId: string;
@@ -1039,12 +1039,14 @@ export class AgentPluginsRepo {
       this.addDesired(desired, options.additionalVersionId, options.pluginId, plugin.provider, "candidate");
     }
 
+    // Heartbeats reconcile their own host; configuration mutations retain workspace scope.
+    const runtimeParams = options.runtimeId ? [workspaceId, options.runtimeId] : [workspaceId];
     const runtimes = this.ctx.db.query(
-      "SELECT * FROM multiremi_runtimes WHERE COALESCE(workspace_id, 'local') = ?",
-    ).all(workspaceId) as Row[];
+      `SELECT * FROM multiremi_runtimes WHERE COALESCE(workspace_id, 'local') = ?${options.runtimeId ? " AND id = ?" : ""}`,
+    ).all(...runtimeParams) as Row[];
     const existingRows = this.ctx.db.query(
-      "SELECT * FROM multiremi_agent_plugin_runtime_states WHERE workspace_id = ?",
-    ).all(workspaceId) as Row[];
+      `SELECT * FROM multiremi_agent_plugin_runtime_states WHERE workspace_id = ?${options.runtimeId ? " AND runtime_id = ?" : ""}`,
+    ).all(...runtimeParams) as Row[];
     const stateKey = (runtimeId: string, versionId: string) => `${runtimeId}\u0000${versionId}`;
     const existingByKey = new Map(
       existingRows.map((row) => [stateKey(String(row.runtime_id), String(row.plugin_version_id)), row]),

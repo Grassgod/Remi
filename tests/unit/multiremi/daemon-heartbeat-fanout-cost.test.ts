@@ -21,7 +21,8 @@ afterEach(async () => {
 
 // Count executions, including WITH queries, until queued downlinks/offers finish.
 // Counting only inside handleHeartbeat hides the work it schedules afterwards.
-async function countSql(database: SqlDatabase, layer: DaemonProtocolLayer, action: () => unknown) {
+async function countSql(database: SqlDatabase, layer: DaemonProtocolLayer, action: () => unknown,
+  onResult?: (sql: string, value: unknown) => void) {
   const statements: string[] = [];
   const query = database.query.bind(database);
   const run = database.run.bind(database);
@@ -33,7 +34,9 @@ async function countSql(database: SqlDatabase, layer: DaemonProtocolLayer, actio
         const value = Reflect.get(target, key, target);
         if (["get", "all", "run", "values"].includes(String(key))) return (...args: unknown[]) => {
           statements.push(sql);
-          return value.apply(target, args);
+          const result = value.apply(target, args);
+          onResult?.(sql, result);
+          return result;
         };
         return typeof value === "function" ? value.bind(target) : value;
       },
@@ -147,8 +150,14 @@ test("unchanged SSH status heartbeats stay local; a changed endpoint still recon
   const snapshots = spyOn(f.store, "pendingRuntimeRequests");
   const claims = spyOn(f.store, "claimTask");
   try {
-    const sql = await countSql(f.database, f.layer, () => f.heartbeat(0, true));
+    const reconciledRuntimeIds: string[] = [];
+    const sql = await countSql(f.database, f.layer, () => f.heartbeat(0, true), (sql, result) => {
+      if (/SELECT \* FROM multiremi_runtimes WHERE COALESCE/.test(sql) && Array.isArray(result)) {
+        reconciledRuntimeIds.push(...result.map(row => String(row.id)));
+      }
+    });
     expect(sql.length).toBeLessThanOrEqual(100);
+    expect(reconciledRuntimeIds.sort()).toEqual(f.runtimeIds.slice(0, 2));
     expect(historicalAggregates(sql)).toEqual([]);
     expect(snapshots).not.toHaveBeenCalled();
     expect(claims).not.toHaveBeenCalled();
@@ -157,6 +166,41 @@ test("unchanged SSH status heartbeats stay local; a changed endpoint still recon
     expect(snapshots).toHaveBeenCalledTimes(8);
     expect(claims).not.toHaveBeenCalled();
   } finally { snapshots.mockRestore(); claims.mockRestore(); }
+});
+
+test("usage reports preserve accounting and replay without runtime history or daemon downlinks", async () => {
+  const f = await fleet();
+  const task = f.store.createTask({ agentId: f.agent.id, prompt: "account for isolated work" });
+  await f.layer.drain();
+  f.store.startTask(task.id);
+  await f.layer.drain();
+  const snapshots = spyOn(f.store, "pendingRuntimeRequests");
+  const claims = spyOn(f.store, "claimTask");
+  const notified: string[] = [];
+  const unsubscribe = f.store.onTaskEvent(event => notified.push(event.type));
+  const units = Array.from({ length: 32 }, (_, index) => ({
+    unitId: `cost-unit-${index}`, revision: 1, provider: "claude", model: "fixture", modelSource: "provider_reported",
+    scope: "request", source: "provider_request", accuracy: "exact", inputTokens: 10, outputTokens: 2,
+    cacheReadTokens: 0, cacheWriteTokens: 0, actualUnsplitTokens: 0, reportedTotalTokens: 12,
+    contextTokens: null, contextWindow: null, costAmount: null, costCurrency: null, occurredAt: "2026-10-10T09:00:00.000Z",
+  }));
+  let seq = 1;
+  const report = async (count: number) => {
+    const current = seq++;
+    await f.sessions[0]!.handleMessage(JSON.stringify({ v: 2, t: "task.usage", rt: f.runtimeIds[0], seq: current,
+      p: { task_id: task.id, usageSnapshot: { version: 2, runId: "cost-run", revision: 1, complete: false, units: units.slice(0, count) } } }));
+    expect(f.frames[0]!.find(frame => frame.t === "res" && frame.re === String(current))?.p).toEqual({ ok: true });
+  };
+  try {
+    for (const count of [1, 32, 32]) {
+      const sql = await countSql(f.database, f.layer, () => report(count));
+      expect(historicalAggregates(sql)).toEqual([]);
+      expect(snapshots).not.toHaveBeenCalled();
+      expect(claims).not.toHaveBeenCalled();
+      expect(f.store.getTask(task.id)?.usage[0]?.totalTokens).toBe(count * 12);
+    }
+    expect(notified).toEqual(["task:usage", "task:usage"]);
+  } finally { unsubscribe(); snapshots.mockRestore(); claims.mockRestore(); }
 });
 
 test("a directory request reaches its runtime without querying or offering on other runtimes", async () => {
