@@ -1,3 +1,6 @@
+// Capture genuine built-ins before any test module can install mocks.
+import "../helpers/native-test-clock.js";
+
 /**
  * `bun test` preload: cut the backend test process off from the host environment.
  *

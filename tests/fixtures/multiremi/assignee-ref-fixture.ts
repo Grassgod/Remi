@@ -98,7 +98,8 @@ const OTHER_WORKSPACE_ID = "ws_assignee_ref_other";
  * one-tick-per-read clock). Returns a restore function.
  */
 export function installAssigneeRefIds(): () => void {
-  const realGetRandomValues = globalThis.crypto.getRandomValues.bind(globalThis.crypto);
+  // Restore the exact function object; a bound copy leaks identity changes.
+  const realGetRandomValues = globalThis.crypto.getRandomValues;
   const RealDate = globalThis.Date;
   let clock = Date.UTC(2026, 8, 27, 9, 0, 0);
   class FixtureDate extends RealDate {

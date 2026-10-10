@@ -877,7 +877,7 @@ describe("Multiremi store — task claim, routing, and workspace scoping", () =>
     beforeAll(() => {
       fixtureDatabase = createRoutingMatrixDatabase(dialect, process.env.MULTIREMI_TEST_POSTGRES_URL);
       matrixDb = fixtureDatabase.db;
-    });
+    }, 30_000);
 
     afterAll(async () => {
       if (!fixtureDatabase) return;
@@ -886,7 +886,7 @@ describe("Multiremi store — task claim, routing, and workspace scoping", () =>
       } finally {
         console.info(`REMI_TEST_DB_FIXTURE_STATS ${JSON.stringify(fixtureDatabase.stats)}`);
       }
-    });
+    }, 30_000);
 
     function createCellStore(): MultiremiStore {
       return fixtureDatabase!.reset();

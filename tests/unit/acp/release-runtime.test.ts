@@ -1,8 +1,8 @@
 import { afterEach, expect, test } from "bun:test";
-import { execFileSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync, spawnSync } from "node:child_process";
+import { copyFileSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { BRIDGE_PACKAGE, RUNTIME_PIN } from "../../../packages/acp/src/runtime-versions.js";
 import { checkRelease, checkReleaseSnapshot, latestRuntimeVersions, prepareRelease, SNAPSHOT_PATH, type RuntimeSnapshot } from "../../../scripts/release-runtime.js";
 
@@ -113,14 +113,32 @@ test("a simple package version bump cannot bypass the CI release snapshot gate",
   git("add", ".");
   git("-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "--quiet", "-m", "baseline");
   const baseRef = git("rev-parse", "HEAD");
-  expect(() => checkRelease(root, { baseRef })).not.toThrow();
+  mkdirSync(join(root, "scripts"));
+  for (const file of ["scripts/release-runtime.ts", "packages/acp/src/runtime-versions.ts"]) {
+    copyFileSync(resolve(import.meta.dir, "../../..", file), join(root, file));
+  }
+  const output = join(root, "github-output");
+  const cliCheck = (ref = baseRef) => {
+    writeFileSync(output, "");
+    const child = spawnSync(process.execPath, [join(root, "scripts/release-runtime.ts"), "check", "--base-ref", ref], {
+      cwd: root, encoding: "utf8", env: { ...process.env, GITHUB_OUTPUT: output },
+    });
+    expect(child.error).toBeUndefined();
+    return { status: child.status, output: readFileSync(output, "utf8") };
+  };
+  expect(checkRelease(root, { baseRef })).toBe(false);
+  expect(cliCheck()).toEqual({ status: 0, output: "version_changed=false\n" });
   writeFileSync(join(root, "package.json"), '{"version":"0.2.70"}');
   expect(() => checkRelease(root, { baseRef })).toThrow("not prepared");
+  expect(cliCheck()).toEqual({ status: 1, output: "" });
   expect(() => checkRelease(root, { tag: "v0.2.70" })).toThrow("not prepared");
   expect(() => checkRelease(root, { tag: "v0.2.71" })).toThrow("Tag");
   await prepareRelease(root, "0.2.70", { latest: async () => next, verify: async () => {} });
-  expect(() => checkRelease(root, { baseRef })).not.toThrow();
+  expect(checkRelease(root, { baseRef })).toBe(true);
+  expect(cliCheck()).toEqual({ status: 0, output: "version_changed=true\n" });
   expect(() => checkRelease(root, { baseRef: "--bad-ref" })).toThrow("base commit");
+  expect(cliCheck("--bad-ref")).toEqual({ status: 1, output: "" });
+  expect(cliCheck("f".repeat(40))).toEqual({ status: 1, output: "" });
 });
 
 test("tag publication rejects malformed snapshots and prerelease dependency pins", () => {

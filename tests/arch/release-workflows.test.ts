@@ -57,18 +57,27 @@ describe("release workflows", () => {
     expect(JSON.stringify(ci.jobs["backend-retry"])).toContain("scripts/retry-failed-backend-tests.ts");
   });
 
-  test("candidate producer requires explicit full main validation and retains immutable OCI inputs", () => {
+  test("candidate producer shares one checked main flag and retains full validation and immutable OCI inputs", () => {
     const ci = readWorkflow("release-build-check.yml");
     expect(ci.on.workflow_dispatch.inputs.release_candidate.default).toBe(false);
-    expect(ci.jobs["candidate-package"].needs).toBe("build");
-    expect(ci.jobs["candidate-package"].if).toContain("!inputs.retry_backend_run_id");
-    expect(ci.jobs["candidate-package"].if).toContain("refs/heads/main");
+    expect(ci.jobs.guards.outputs.candidate).toBe("${{ steps.candidate.outputs.enabled }}");
+    expect(ci.jobs["candidate-package"].needs).toEqual(["build", "guards"]);
+    expect(ci.jobs["candidate-package"].if).toBe("needs.guards.outputs.candidate == 'true'");
+    const create = ci.jobs["candidate-package"].steps.find((step: any) => step.run?.includes("scripts/release-candidate.ts create"));
+    expect(create.env.RELEASE_BASE_SHA).toBe("${{ github.event.before }}");
+    expect(create.env.RELEASE_CANDIDATE_REQUEST).toBe("${{ inputs.release_candidate }}");
+    expect(create.env.RETRY_BACKEND_RUN_ID).toBe("${{ inputs.retry_backend_run_id }}");
+    expect(ci.jobs["candidate-package"].steps[0].with["fetch-depth"]).toBe(0);
     expect(JSON.stringify(ci.jobs["candidate-package"])).toContain("scripts/release-candidate.ts create");
     const finalUpload = ci.jobs["candidate-package"].steps.find((step: any) => step.uses === "actions/upload-artifact@v4");
     expect(finalUpload.with.path).toBe("candidate/release-candidate.json");
     expect(finalUpload.with["retention-days"]).toBe(30);
     for (const kind of ["cli", "api", "web"]) {
+      expect(ci.jobs[`${kind}-build`].needs).toBe("guards");
+      const version = ci.jobs[`${kind}-build`].steps.find((step: any) => step.env?.CANDIDATE);
+      expect(version.env.CANDIDATE).toBe("${{ needs.guards.outputs.candidate }}");
       const upload = ci.jobs[`${kind}-build`].steps.find((step: any) => step.uses === "actions/upload-artifact@v4");
+      expect(upload.if).toBe(ci.jobs["candidate-package"].if);
       expect(upload.with["retention-days"]).toBe(30);
       expect(upload.with["compression-level"]).toBe(0);
     }
@@ -77,11 +86,64 @@ describe("release workflows", () => {
       expect(image.with.platforms).toBe("linux/amd64");
       expect(image.with.provenance).toBe(false);
       expect(image.with.outputs).toContain("oci-mediatypes=true");
+      expect(image.with.outputs).toContain("needs.guards.outputs.candidate == 'true'");
       expect(image.with.labels).toContain("org.opencontainers.image.revision=${{ github.sha }}");
     }
     const platform = readWorkflow("platform-release.yml");
     const publish = platform.jobs.publish.steps.find((step: any) => step.name === "Publish verified candidate images without rebuilding");
     expect(publish.run).toContain("--preserve-digests");
+  });
+
+  test("real candidate selection enables new-version main pushes and manual requests without PR or retry promotion", () => {
+    const ci = readWorkflow("release-build-check.yml");
+    const select = ci.jobs.guards.steps.find((step: any) => step.id === "candidate");
+    const reject = ci.jobs.guards.steps.find((step: any) => step.name === "Reject invalid candidate requests");
+    expect(reject.if).toBe("inputs.release_candidate");
+    expect(select.env.VERSION_CHANGED).toBe("${{ steps.release.outputs.version_changed }}");
+    const directory = mkdtempSync(join(tmpdir(), "release-candidate-selection-"));
+    const output = join(directory, "output");
+    try {
+      for (const [event, ref, changed, requested, retry, enabled, rejected] of [
+        ["push", "refs/heads/main", "true", "", "", true, false],
+        ["push", "refs/heads/main", "false", "", "", false, false],
+        ["push", "refs/heads/main", "", "", "", false, false],
+        ["push", "refs/heads/feature", "true", "", "", false, false],
+        ["pull_request", "refs/pull/1/merge", "true", "", "", false, false],
+        ["workflow_dispatch", "refs/heads/main", "false", "true", "", true, false],
+        ["workflow_dispatch", "refs/heads/main", "true", "false", "", false, false],
+        ["workflow_dispatch", "refs/heads/main", "true", "", "123", false, false],
+        ["workflow_dispatch", "refs/heads/main", "true", "true", "123", false, true],
+        ["workflow_dispatch", "refs/heads/feature", "true", "true", "", false, true],
+      ] as const) {
+        writeFileSync(output, "");
+        const env = { ...process.env, EVENT: event, REF: ref, VERSION_CHANGED: changed, REQUESTED: requested, RETRY: retry, GITHUB_OUTPUT: output };
+        const run = (script: string) => spawnSync("bash", ["--noprofile", "--norc", "-e", "-o", "pipefail", "-c", script], { cwd: directory, env, encoding: "utf8" });
+        if (requested === "true") {
+          const result = run(reject.run);
+          expect(result.error).toBeUndefined();
+          expect(result.status === 0).toBe(!rejected);
+          if (rejected) {
+            expect(readFileSync(output, "utf8")).toBe("");
+            continue;
+          }
+        }
+        const result = run(select.run);
+        expect(result.error).toBeUndefined();
+        expect(result.status).toBe(0);
+        expect(readFileSync(output, "utf8")).toBe(`enabled=${enabled}\n`);
+      }
+    } finally { rmSync(directory, { recursive: true, force: true }); }
+  });
+
+  test("PR guards exercise only the bounded CI orchestration regressions in GitHub log mode", () => {
+    const ci = readWorkflow("release-build-check.yml");
+    const step = ci.jobs.guards.steps.find((step: any) => step.name === "CI orchestration regression tests");
+    expect(step.if).toBeUndefined();
+    expect(step.env).toEqual({ CI: "true", GITHUB_ACTIONS: "true" });
+    expect(step.run.trim().split(/\s+/)).toEqual(["bun", "run", "test", ...[
+      "ci-backend", "run-tests", "run-tests-signals", "retry-failed-backend-tests", "release-candidate",
+    ].map(name => `tests/unit/scripts/${name}.test.ts`)]);
+    expect(ci.jobs["backend-plan"].if).toContain("github.event_name != 'pull_request'");
   });
 
   test("publishes the platform automatically after the tag release", () => {

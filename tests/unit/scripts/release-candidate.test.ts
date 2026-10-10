@@ -4,7 +4,7 @@ import { execFileSync } from "node:child_process";
 import { cpSync, mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { candidateFiles, candidateIdentity, createCandidate, ociDigest, resolveCandidate, trustedReleaseRun, verifyCandidate, type CandidateManifest } from "../../../scripts/release-candidate.js";
+import { candidateFiles, candidateIdentity, checkCandidateSource, createCandidate, ociDigest, resolveCandidate, trustedReleaseRun, verifyCandidate, type CandidateManifest } from "../../../scripts/release-candidate.js";
 
 const repository = "example/remi", sha = "a".repeat(40), runId = "123";
 const directories: string[] = [];
@@ -80,6 +80,7 @@ describe("candidate release inputs and provenance", () => {
 
   test("only exact repository main full success produces candidates; strict retry remains fallback-only", () => {
     expect(trustedReleaseRun(run, fullJobs, repository, sha, true)).toBe(true);
+    expect(trustedReleaseRun({ ...run, event: "push" }, fullJobs, repository, sha, true)).toBe(true);
     for (const changed of [{ head_sha: "b".repeat(40) }, { head_branch: "feature" }, { event: "pull_request" }, { conclusion: "failure" }, { head_repository: { full_name: "fork/remi" } }]) {
       expect(trustedReleaseRun({ ...run, ...changed }, fullJobs, repository, sha, true)).toBe(false);
     }
@@ -88,6 +89,31 @@ describe("candidate release inputs and provenance", () => {
     expect(trustedReleaseRun(run, retryJobs, repository, sha)).toBe(true);
     expect(trustedReleaseRun(run, retryJobs, repository, sha, true)).toBe(false);
     expect(trustedReleaseRun(run, [{ name: "build", conclusion: "success" }], repository, sha)).toBe(false);
+  });
+
+  test("producer accepts prepared version pushes and explicit manual requests, rejecting other sources", () => {
+    const f = fixture();
+    const git = (...args: string[]) => execFileSync("git", args, { cwd: f.root, encoding: "utf8" }).trim();
+    git("init", "--quiet");
+    writeFileSync(join(f.root, "package.json"), '{"version":"1.2.2"}');
+    git("add", "package.json");
+    git("-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "--quiet", "-m", "baseline");
+    const baseRef = git("rev-parse", "HEAD");
+    const push = { event: "push", ref: "refs/heads/main", baseRef };
+    expect(() => checkCandidateSource(f.root, push)).toThrow("version change");
+    writeFileSync(join(f.root, "package.json"), '{"version":"1.2.3"}');
+    expect(() => checkCandidateSource(f.root, push)).not.toThrow();
+    expect(() => checkCandidateSource(f.root, { ...push, baseRef: "--bad-ref" })).toThrow("base commit");
+    expect(() => checkCandidateSource(f.root, { ...push, retryRunId: "123" })).toThrow("non-retry");
+    expect(() => checkCandidateSource(f.root, { ...push, ref: "refs/heads/feature" })).toThrow("main");
+    const manual = { event: "workflow_dispatch", ref: "refs/heads/main", releaseCandidate: "true" };
+    expect(() => checkCandidateSource(f.root, manual)).not.toThrow();
+    for (const source of [{ ...manual, releaseCandidate: "false" }, { ...manual, releaseCandidate: undefined },
+      { ...manual, retryRunId: "123" }, { ...manual, event: "pull_request" }, { ...manual, ref: "refs/heads/feature" }]) {
+      expect(() => checkCandidateSource(f.root, source)).toThrow();
+    }
+    writeFileSync(join(f.root, "packages/acp/src/runtime-versions.json"), '{}');
+    expect(() => checkCandidateSource(f.root, push)).toThrow("not prepared");
   });
 
   test("missing/expired candidate falls back only with verified CI; API errors and discovered damage fail", async () => {

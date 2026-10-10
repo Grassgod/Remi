@@ -1,6 +1,7 @@
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, relative } from "node:path";
+import { runTests } from "../../../scripts/run-tests.js";
 import { expect, test } from "bun:test";
 import { createPlan, discoverTests, verifyReports, BackendLogParser, type Report } from "../../../scripts/ci-backend.js";
 
@@ -70,3 +71,42 @@ test("stream parser accepts singular totals and fails missing or duplicate actua
   repeated.finish();
   expect(duplicate.logErrors).toEqual(["Duplicate file heading: tests/one.test.ts"]);
 });
+
+
+test("live GitHub Actions runner groups establish complete coverage only from stderr", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "ci-github-live-"));
+  const file = join(directory, "tiny.test.ts");
+  const assigned = relative(process.cwd(), file).replaceAll("\\", "/");
+  const previous = { CI: process.env.CI, GITHUB_ACTIONS: process.env.GITHUB_ACTIONS };
+  try {
+    process.env.CI = "true";
+    process.env.GITHUB_ACTIONS = "true";
+    writeFileSync(file, String.raw`import { test, expect } from "bun:test";
+console.log("stdout-decoy.test.ts:\n99 pass\n0 fail\nRan 99 tests across 1 file.");
+test("live tiny", () => expect(1).toBe(1));
+`);
+    const sha = "a".repeat(40);
+    const plan = createPlan([assigned], 1, {}, sha, "tests", [], {});
+    const report: Report = { schemaVersion: 1, sha, shard: 0, scope: "tests", startedAt: "start", files: [] };
+    const parser = new BackendLogParser([assigned], report);
+    const streams = { stdout: "", stderr: "" };
+    report.shardExitCode = await runTests([file], (chunk, source) => {
+      streams[source] += chunk;
+      parser.feed(chunk, source);
+    }, metadata => { report.runner = metadata; });
+    parser.finish();
+    report.finishedAt = "end";
+    expect(streams.stderr).toContain(`::group::${assigned}:`);
+    expect(streams.stdout).toContain("stdout-decoy.test.ts:");
+    expect(report.shardExitCode).toBe(0);
+    expect(report.files.map(entry => entry.path)).toEqual([assigned]);
+    expect(report.summary).toEqual({ pass: 1, skip: 0, fail: 0, tests: 1, files: 1 });
+    expect(() => verifyReports(plan, [report])).not.toThrow();
+  } finally {
+    for (const key of ["CI", "GITHUB_ACTIONS"] as const) {
+      if (previous[key] === undefined) delete process.env[key];
+      else process.env[key] = previous[key];
+    }
+    rmSync(directory, { recursive: true, force: true });
+  }
+}, 10_000);

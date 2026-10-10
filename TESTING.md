@@ -64,14 +64,14 @@ API/store 测试可参考 [issues API 测试](tests/unit/multiremi/multiremi-api
 | 工作流 | 实际检查范围 |
 |---|---|
 | [dev-context.yml](.github/workflows/dev-context.yml) | PR / main push；Linux、Windows 上的 Node 检查器测试及默认文档阅读链校验 |
-| [release-build-check.yml](.github/workflows/release-build-check.yml) | 按路径触发；独立的架构/CLI 守卫、前端类型、前端测试、CLI/API/Web 构建、平台专项和浏览器专项；main push 与手动运行另有四个后端分片及完整覆盖校验 |
+| [release-build-check.yml](.github/workflows/release-build-check.yml) | 按路径触发；独立的架构/CLI 守卫、CI 编排小回归、前端类型、前端测试、CLI/API/Web 构建、平台专项和浏览器专项；main push 与手动运行另有四个后端分片及完整覆盖校验 |
 | [release.yml](.github/workflows/release.yml) / [platform-release.yml](.github/workflows/platform-release.yml) | 校验准备快照、tag 版本及同一 main SHA 的成功完整 CI 或严格验证的失败文件补跑；复用符合来源与内容校验的正式 candidate，缺少可用 candidate 时保留原构建路径 |
 
 `build` 保留为分支保护的必需检查，是所有适用 job 的汇总，不再承载串行测试与构建。它逐项要求预期的 success / skipped；失败、取消、缺少分片报告或非预期 skipped 均不能给出绿灯。PR 跳过后端分片；main push 与默认手动运行要求完整后端覆盖。PR 新提交取消该 PR 的旧运行，main 运行互不取消。两个浏览器专项保留各自的路径检测，路径不相关时跳过专项步骤，job 仍需正常成功。
 
 [ci-backend.ts](scripts/ci-backend.ts) 从 bunfig 的 test root 自动发现 Bun 支持的 `.test` / `_test` / `.spec` / `_spec` 文件和八种 JS/TS 扩展，排除隐藏目录与 node_modules，隐藏文件名仍按后缀发现；不维护测试文件清单。它按 [历史权重](scripts/ci-backend-weights.json) 做 LPT 分配，新文件使用至少 60 秒或历史 p90 的保守权重。初始权重来自文件中标识的真实 Actions run/job/SHA，按日志文件标题边界计时，包含部分 runner 开销，不能视为当前版本的实测耗时。
 
-每片使用独立 runner、PostgreSQL service 和一次包装测试进程，保留 hermetic preload、假 HOME 检查及 lock-order sentinel。启动前实际验证显式 `MULTIREMI_TEST_POSTGRES_URL` 的连接，失败报错。计划与报告绑定 SHA、bunfig 指纹、scope/preload 和完整文件归属；覆盖校验要求每个文件恰好出现一次且所有分片成功。架构快守卫故意在 `guards` 先跑，并在全量分片再次覆盖，以保留快速反馈与可审计发现范围。
+每片使用独立 runner、PostgreSQL service 和一次包装测试进程，保留 hermetic preload、假 HOME 检查及 lock-order sentinel。启动前实际验证显式 `MULTIREMI_TEST_POSTGRES_URL` 的连接，失败报错。计划与报告绑定 SHA、bunfig 指纹、scope/preload 和完整文件归属；覆盖校验要求每个文件恰好出现一次且所有分片成功。架构快守卫故意在 `guards` 先跑，并在全量分片再次覆盖，以保留快速反馈与可审计发现范围。`guards` 另以 `CI=true`、`GITHUB_ACTIONS=true` 显式执行 CI 编排自身的五个小回归文件（ci-backend、run-tests、run-tests-signals、retry-failed-backend-tests、release-candidate），让真实 GitHub 分组日志、包装退出/清理、覆盖及补跑来源问题在 PR 阶段暴露；该步骤不执行数据库或业务套件。
 
 每次完整运行上传 `backend-plan`、各 `backend-shard-*` 和 `backend-coverage`；失败片尽可能上传已形成的报告。coverage JSON 包含文件耗时、分片归属、总文件时间、各片时间和最慢 30 个文件；文件时间按 stderr 标题至下一标题或进程退出计量。夹具的 `REMI_TEST_DB_FIXTURE_STATS` 行提供创建数据库、初始化 Store、迁移、重置、连接与 setup/reset 时间，只覆盖输出该行的 helper，不能当作全仓数据库成本。
 
@@ -87,7 +87,7 @@ bun run scripts/ci-backend.ts weights --coverage ci-backend/coverage.json --prev
 
 完整后端套件已经跑完且仅少量用例失败时，可用 `gh workflow run release-build-check.yml --ref main -f retry_backend_run_id=<完整运行ID>` 补跑失败文件。[旧基准验证器](scripts/retry-failed-backend-tests.ts)仍核验原运行来自 main、完整测试汇总和 HOME 清理、失败文件数量与其他 job 全绿；原 SHA 必须是目标 SHA 的祖先，差异只能是它允许的重跑入口、脚本/测试和本说明，不能改变业务源码、依赖或原有测试。旧单进程基准继续使用最终日志汇总；分片基准下载同仓库该运行的计划与全部分片 artifact，核对完整实际文件归属、Bun 最终汇总、精确失败文件、子进程退出与 HOME 清理，且其他 job 必须成功（覆盖校验仅因后端失败跳过）。HOME 写入、observer 错误、缺报告、取消、中断、部分套件及补跑自身均不能作基准。合法补跑记录为 `verified-retry`，保留原有发布资格，但不声称本轮重跑全量，不生成正式 candidate。夹具创建的 15 秒预算不是性能验收阈值。
 
-正式 candidate 必须在依赖准备变更已提交后，以 `gh workflow run release-build-check.yml --ref main -f release_candidate=true` 显式触发；它不发版、不打 tag、不推送镜像。非 main 或同时指定 retry 的请求失败。构建使用 package.json 的正式版本，并校验准备快照；只有实际完整后端覆盖与其余检查成功后，`candidate-package` 才上传 `release-candidate-<SHA>`（保留 30 天）。产物分为保留 30 天的 `candidate-cli`（四平台 CLI 归档与安装脚本）、`candidate-api` / `candidate-web`（linux/amd64 OCI 归档）和最终 `release-candidate-<SHA>` manifest；聚合时完整校验三部分，最终 artifact 不重复上传 OCI。
+依赖准备变更提交到 main 后，若 `release:check` 对 push 的 base SHA 检查成功且版本增加，该次 main push 完整检查直接生成正式 candidate；正常流程无需再为同一 SHA 手动执行一轮完整检查。普通非版本变更 main、PR、verified retry 和未请求候选的手动运行不生成候选。需要补生成或重建时仍可显式执行 `gh workflow run release-build-check.yml --ref main -f release_candidate=true`，该手动请求会重新执行完整检查；非 main 或同时指定 retry 的候选请求失败。候选不发版、不打 tag、不推送镜像。构建使用 package.json 的正式版本，并校验准备快照；只有实际完整后端覆盖与其余检查成功后，`candidate-package` 才上传 `release-candidate-<SHA>`（保留 30 天）。产物分为保留 30 天的 `candidate-cli`（四平台 CLI 归档与安装脚本）、`candidate-api` / `candidate-web`（linux/amd64 OCI 归档）和最终 `release-candidate-<SHA>` manifest；聚合时完整校验三部分，最终 artifact 不重复上传 OCI。
 
 发布侧 [release-candidate.ts](scripts/release-candidate.ts)核对同仓库、main、精确 SHA、workflow/event/run/job 来源，以及版本、Bun、lock/runtime 快照、构建参数、目标平台、文件 SHA-256、OCI digest 和配置标签；CLI 侧使用 `resolve --kind cli`，只下载 manifest 与 CLI 部分；平台侧使用 `resolve --kind images`，只下载 manifest 与 API/Web 部分。固定部分名绑定同一个可信 run，不跟随 manifest 内任意 URL；复用已验证归档，保持镜像 digest。manifest 或所需部分不存在/过期时，仅在完整 CI / 合法 verified retry 证据成立时回退原发布构建；存在但损坏、来源不符、认证或网络失败均报错。平台手动恢复仍使用既有正式 tag；已有版本/source 镜像对必须同 digest，不能覆盖冲突状态。现行依赖准备、完整 CI、SemVer 和用户明确授权发版要求不变。
 

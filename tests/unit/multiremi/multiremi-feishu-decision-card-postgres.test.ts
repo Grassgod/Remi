@@ -37,8 +37,12 @@ if (!available) console.warn(`[multiremi-decision-card-postgres] Postgres unreac
 describe.skipIf(!available)("Feishu decision cards on Postgres (MUL-407)", () => {
   let db: PostgresSyncDatabase;
   let store: MultiremiStore;
+  const previousEnv = new Map<string, string | undefined>();
 
   beforeAll(async () => {
+    for (const key of ["MULTIREMI_FEISHU_BOT_ENCRYPTION_KEY", "MULTIREMI_PUBLIC_URL"]) {
+      previousEnv.set(key, process.env[key]);
+    }
     const admin = new Bun.SQL(PG_ADMIN_URL, { max: 1 });
     await admin.unsafe(`DROP DATABASE IF EXISTS ${TEST_DB} WITH (FORCE)`);
     await admin.unsafe(`CREATE DATABASE ${TEST_DB}`);
@@ -51,10 +55,20 @@ describe.skipIf(!available)("Feishu decision cards on Postgres (MUL-407)", () =>
   });
 
   afterAll(async () => {
-    try { db?.close(); } catch { /* best effort */ }
-    const admin = new Bun.SQL(PG_ADMIN_URL, { max: 1 });
-    await admin.unsafe(`DROP DATABASE IF EXISTS ${TEST_DB} WITH (FORCE)`);
-    await admin.end();
+    try {
+      try { db?.close(); } catch { /* best effort */ }
+      const admin = new Bun.SQL(PG_ADMIN_URL, { max: 1 });
+      try {
+        await admin.unsafe(`DROP DATABASE IF EXISTS ${TEST_DB} WITH (FORCE)`);
+      } finally {
+        await admin.end();
+      }
+    } finally {
+      for (const [key, value] of previousEnv) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
   });
 
   // The Feishu bot is per-workspace, so each case gets its own workspace. That

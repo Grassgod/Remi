@@ -7,21 +7,13 @@ import { deserializeSqliteDatabase, openSqliteDatabase } from "@multiremi/store/
 import { resolveMigrationReportDirectory } from "@multiremi/store/migration-report-directory.js";
 import { UNIFIED_MODEL_MIGRATION } from "@multiremi/store/unified-model-schema.js";
 
-const nativeDate = Date;
-const nativeNow = Date.now;
-const nativeRandom = Math.random;
-const nativeGetRandomValues = crypto.getRandomValues;
-const nativeRandomUUID = crypto.randomUUID;
-const clockWall = nativeNow();
-const clockMonotonic = process.hrtime.bigint();
+import { nativeTestClock } from "./native-test-clock.js";
 
 function normalClockAndRandom(): boolean {
-  const elapsed = Number(process.hrtime.bigint() - clockMonotonic) / 1_000_000;
-  return Date === nativeDate && Date.now === nativeNow && Math.random === nativeRandom
-    && crypto.getRandomValues === nativeGetRandomValues && crypto.randomUUID === nativeRandomUUID
-    && Math.abs(Date.now() - clockWall - elapsed) < 250
-    // A module can itself be loaded while Date is already mocked; captured
-    // function identity alone is not proof of a real wall clock.
+  return Date === nativeTestClock.Date && Date.now === nativeTestClock.now && Math.random === nativeTestClock.random
+    && crypto.getRandomValues === nativeTestClock.getRandomValues && crypto.randomUUID === nativeTestClock.randomUUID
+    // Check the live clock, not a wall-clock sample captured while this module
+    // may first be loaded under setSystemTime. Restoring real time is reusable.
     && Math.abs(Date.now() - (performance.timeOrigin + performance.now())) < 250;
 }
 

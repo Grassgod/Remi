@@ -3,11 +3,21 @@ import { execFileSync } from "node:child_process";
 import { appendFileSync, closeSync, existsSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { parseArgs } from "node:util";
-import { checkReleaseSnapshot, type RuntimeSnapshot } from "./release-runtime.js";
+import { checkRelease, checkReleaseSnapshot, type RuntimeSnapshot } from "./release-runtime.js";
 import { MULTIREMI_RELEASE_TARGETS, multiremiArchiveName } from "./build-multiremi.js";
 
 export const CANDIDATE_WORKFLOW = ".github/workflows/release-build-check.yml";
 export const RELEASE_BUN = "1.3.14";
+export function checkCandidateSource(root: string, source: {
+  event?: string; ref?: string; releaseCandidate?: string; retryRunId?: string; baseRef?: string;
+}): void {
+  if (source.ref !== "refs/heads/main" || source.retryRunId) throw new Error("Candidates require a full non-retry run on main");
+  if (source.event === "push") {
+    if (!checkRelease(root, { baseRef: source.baseRef })) throw new Error("Automatic candidates require a prepared version change");
+  } else if (source.event !== "workflow_dispatch" || source.releaseCandidate !== "true") {
+    throw new Error("Manual candidates require an explicit candidate request on main");
+  }
+}
 const ROOT = resolve(import.meta.dir, "..");
 const sha256 = (value: string | Buffer) => createHash("sha256").update(value).digest("hex");
 function fileSha256(path: string): string {
@@ -182,7 +192,7 @@ export async function resolveCandidate(root: string, directory: string, reposito
   return { reused: false };
 }
 if (import.meta.main) {
-  const { values, positionals } = parseArgs({ args: process.argv.slice(2), allowPositionals: true, options: { dir: { type: "string" }, sha: { type: "string" }, kind: { type: "string" } } });
+  const { values, positionals } = parseArgs({ args: process.argv.slice(2), allowPositionals: true, options: { dir: { type: "string" }, sha: { type: "string" }, kind: { type: "string" }, "base-ref": { type: "string" } } });
   const repository = process.env.GITHUB_REPOSITORY ?? "";
   const sha = values.sha ?? process.env.GITHUB_SHA ?? "";
   const directory = resolve(values.dir ?? "candidate");
@@ -190,7 +200,8 @@ if (import.meta.main) {
   if (Bun.version !== RELEASE_BUN) throw new Error(`Release candidates require Bun ${RELEASE_BUN}`);
   if (positionals.length !== 1) throw new Error("Expected create or resolve");
   if (positionals[0] === "create") {
-    if (process.env.GITHUB_EVENT_NAME !== "workflow_dispatch" || process.env.GITHUB_REF !== "refs/heads/main") throw new Error("Candidates can only be created by an explicit manual run on main");
+    checkCandidateSource(ROOT, { event: process.env.GITHUB_EVENT_NAME, ref: process.env.GITHUB_REF,
+      releaseCandidate: process.env.RELEASE_CANDIDATE_REQUEST, retryRunId: process.env.RETRY_BACKEND_RUN_ID, baseRef: values["base-ref"] });
     const manifest = createCandidate(ROOT, directory, repository, sha, process.env.GITHUB_RUN_ID ?? "");
     writeFileSync(join(directory, "release-candidate.json"), JSON.stringify(manifest, null, 2) + "\n");
   } else if (positionals[0] === "resolve") {

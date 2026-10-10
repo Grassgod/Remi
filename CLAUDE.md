@@ -40,4 +40,4 @@ bun run scripts/ci-backend.ts plan --sha <40位提交SHA> --shards 4 --out ci-ba
 bun run scripts/ci-backend.ts weights --coverage ci-backend/coverage.json --run-id <完整运行ID> --out ci-backend/weights.json
 ```
 
-正式版本候选仅在依赖准备已提交后用 `gh workflow run release-build-check.yml --ref main -f release_candidate=true` 显式生成；该命令执行完整 CI 并保存 CLI/OCI 归档，不等于授权发版。发布复用与失败恢复规则见 [TESTING.md](TESTING.md)。
+依赖准备的新版本提交到 main 后，该次 main push 完整 CI 直接保存正式 CLI/OCI 候选，无需再为同一 SHA 手动重复完整检查。补生成或重建仍可用 `gh workflow run release-build-check.yml --ref main -f release_candidate=true` 显式执行完整 CI；普通 main、PR 和 verified retry 不生成正式候选，候选生成不等于授权发版。发布复用与失败恢复规则见 [TESTING.md](TESTING.md)。

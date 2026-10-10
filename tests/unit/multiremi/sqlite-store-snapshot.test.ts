@@ -1,7 +1,15 @@
+import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { join, resolve } from "node:path";
+import { tmpdir } from "node:os";
+import { runTests } from "../../../scripts/run-tests.js";
 import { afterEach, expect, it, setSystemTime } from "bun:test";
 import { createSqliteStoreSnapshotFactory, readConnectionPragma } from "../../helpers/sqlite-store-snapshot.js";
 import { UNIFIED_MODEL_MIGRATION } from "@multiremi/store/unified-model-schema.js";
 import { createResponsibleTestIssue } from "./helpers.js";
+
+import { installFirstScreenHotspotIds } from "../../fixtures/multiremi/first-screen-hotspots-normalize.js";
+import { installDeterministicIds } from "../../fixtures/multiremi/issue-detail-first-screen-fixture.js";
+import { installAssigneeRefIds } from "../../fixtures/multiremi/assignee-ref-fixture.js";
 
 const ownerOpenId = process.env.MULTIREMI_OWNER_OPEN_ID;
 afterEach(() => {
@@ -14,6 +22,26 @@ it("keeps handles, rows, listeners and the first Issue number independent while 
   const factory = createSqliteStoreSnapshotFactory();
   const first = factory.create();
   try {
+    // Golden captures temporarily replace both globals. Restoration must be
+    // exact so a later ordinary suite still hits the same immutable template.
+    const originalRandom = crypto.getRandomValues;
+    const originalDate = Date;
+    for (const install of [installFirstScreenHotspotIds, installDeterministicIds, installAssigneeRefIds]) {
+      const outputs: number[][] = [];
+      for (let capture = 0; capture < 2; capture++) {
+        const restore = install();
+        try {
+          const bytes = new Uint8Array(8);
+          crypto.getRandomValues.call(crypto, bytes);
+          outputs.push([...bytes]);
+        }
+        finally { restore(); }
+        expect(crypto.getRandomValues).toBe(originalRandom);
+        expect(Date).toBe(originalDate);
+      }
+      expect(outputs[0]).toEqual(outputs[1]);
+    }
+    expect(crypto.getRandomValues.call(crypto, new Uint8Array(1))).toHaveLength(1);
     first.store.ensureLocalWorkspace();
     const agent = first.store.createAgent({ name: "First", provider: "codex" });
     const issue = createResponsibleTestIssue(first.store, { title: "First" });
@@ -88,3 +116,36 @@ it("reads connection PRAGMAs by scalar shape and rejects missing or invalid valu
     expect(() => readConnectionPragma(database(row), "foreign_keys")).toThrow("Unsupported SQLite connection PRAGMA result");
   }
 });
+
+
+it("permits genuine late-import clock and UUID restoration while injected inputs stay fresh", async () => {
+  // A child is necessary: this suite's ordinary imports already loaded the
+  // snapshot helper. Its configured preload captures only pure native refs.
+  const directory = mkdtempSync(join(tmpdir(), "snapshot-late-import-"));
+  const file = join(directory, "late-import.test.ts");
+  const helper = resolve(import.meta.dir, "../../helpers/sqlite-store-snapshot.ts");
+  try {
+    writeFileSync(file, `import { test, expect, setSystemTime } from "bun:test";
+test("late import restores real inputs", async () => {
+  const originalUUID = crypto.randomUUID;
+  setSystemTime(new Date("2020-01-01"));
+  try {
+    const { createSqliteStoreSnapshotFactory } = await import(${JSON.stringify(helper)});
+    const factory = createSqliteStoreSnapshotFactory();
+    const controlled = factory.create(); controlled.db.close();
+    expect(factory.stats()).toMatchObject({ coldBootstraps: 1, clones: 0, freshFallbacks: 1 });
+    setSystemTime();
+    const restored = factory.create(); restored.db.close();
+    expect(factory.stats()).toMatchObject({ coldBootstraps: 2, clones: 1, freshFallbacks: 1 });
+    crypto.randomUUID = () => "00000000-0000-4000-8000-000000000000";
+    const injected = factory.create(); injected.db.close();
+    expect(factory.stats()).toMatchObject({ coldBootstraps: 3, clones: 1, freshFallbacks: 2 });
+    crypto.randomUUID = originalUUID;
+    const recovered = factory.create(); recovered.db.close();
+    expect(factory.stats()).toMatchObject({ coldBootstraps: 3, clones: 2, freshFallbacks: 2 });
+  } finally { setSystemTime(); crypto.randomUUID = originalUUID; }
+});
+`);
+    expect(await runTests([file])).toBe(0);
+  } finally { rmSync(directory, { recursive: true, force: true }); }
+}, 10_000);

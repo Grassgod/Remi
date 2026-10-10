@@ -1,5 +1,5 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { parseArgs } from "node:util";
@@ -111,13 +111,13 @@ export async function prepareRelease(root: string, version: string, options: {
   return snapshot;
 }
 
-export function checkRelease(root: string, options: { baseRef?: string; tag?: string }): void {
+export function checkRelease(root: string, options: { baseRef?: string; tag?: string }): boolean {
   const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
   const snapshot = JSON.parse(readFileSync(join(root, SNAPSHOT_PATH), "utf8"));
   if (options.tag) {
     if (options.tag !== `v${pkg.version}`) throw new Error("Tag must match package.json");
     checkReleaseSnapshot(pkg.version, snapshot);
-    return;
+    return false;
   }
   // PR and main checks require a fresh snapshot when preparing a new release;
   // ordinary development commits may retain the previous release's snapshot.
@@ -128,7 +128,9 @@ export function checkRelease(root: string, options: { baseRef?: string; tag?: st
   if (base.version !== pkg.version) {
     if (compareVersions(pkg.version, base.version) <= 0) throw new Error("Release version must increase");
     checkReleaseSnapshot(pkg.version, snapshot);
+    return true;
   }
+  return false;
 }
 
 if (import.meta.main) {
@@ -146,7 +148,8 @@ if (import.meta.main) {
       const snapshot = await prepareRelease(ROOT, version, { dryRun: values["dry-run"] });
       console.log(JSON.stringify({ written: !values["dry-run"], snapshot }, null, 2));
     } else if (positionals[0] === "check") {
-      checkRelease(ROOT, { baseRef: values["base-ref"], tag: values.tag });
+      const versionChanged = checkRelease(ROOT, { baseRef: values["base-ref"], tag: values.tag });
+      if (process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT, `version_changed=${versionChanged}\n`);
       console.log("Release dependency preparation check passed");
     } else {
       throw new Error("Expected prepare or check");

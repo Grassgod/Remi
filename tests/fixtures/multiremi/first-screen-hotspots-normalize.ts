@@ -18,7 +18,8 @@ const ISO_RE = /\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z/g;
  * repeat across runs.
  */
 export function installFirstScreenHotspotIds(): () => void {
-  const realGetRandomValues = globalThis.crypto.getRandomValues.bind(globalThis.crypto);
+  // Restore the exact function object; a bound copy leaks identity changes.
+  const realGetRandomValues = globalThis.crypto.getRandomValues;
   const RealDate = globalThis.Date;
   let clock = Date.UTC(2026, 8, 26, 9, 0, 0);
   class FixtureDate extends RealDate {

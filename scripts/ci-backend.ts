@@ -105,7 +105,7 @@ export class BackendLogParser {
     const stats = /^REMI_TEST_DB_FIXTURE_STATS\s+(.+)$/.exec(clean);
     if (stats) { try { this.report.fixtureStats!.push(JSON.parse(stats[1])); } catch { this.report.logErrors!.push("Invalid fixture stats JSON"); } }
     if (source !== "stderr") return;
-    const heading = /^(?:##\[group\])?((?:\.\/)?.+[._](?:test|spec)\.(?:js|jsx|ts|tsx|mjs|cjs|mts|cts)):$/.exec(clean);
+    const heading = /^(?:##\[group\]|::group::)?((?:\.\/)?.+[._](?:test|spec)\.(?:js|jsx|ts|tsx|mjs|cjs|mts|cts)):$/.exec(clean);
     if (heading) {
       const path = heading[1].replace(/^\.\//, "");
       if (!this.assigned.includes(path)) { this.nested = true; return; }
