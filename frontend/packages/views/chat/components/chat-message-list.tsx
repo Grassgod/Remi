@@ -170,7 +170,7 @@ export function ChatMessageList({
       const isPush = row.kind === "turn" && isNonterminalTurn(row.metadata);
       const questionId = row.kind === "message" ? linkedQuestionId(row.id, row.metadata) : null;
       return <div className="py-2">
-        {row.kind === "message" && <MessageHeader message={row} getActorName={getActorName} />}
+        {row.kind === "message" && <MessageHeader message={row} />}
         {questionId ? <LinkedQuestion id={questionId} getActorName={getActorName} /> : null}
         {row.kind === "turn" && row.metadata?.final_entry_id ? <div className="text-xs text-muted-foreground">{statuses[String(row.metadata.status)] ?? String(row.metadata.status ?? "")}</div>
           : <MessageBubble message={message} isPending={!!pendingTaskId && row.task_id === pendingTaskId}

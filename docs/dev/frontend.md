@@ -38,13 +38,15 @@ API 代理目标由 [resolveRemoteApiUrl](../../frontend/apps/web/config/runtime
 
 Issue 详情页由 [server-log.ts](../../frontend/apps/web/features/issues/server-log.ts)在 800ms 预算内用 httpOnly cookie 读取详情、会话、最后 30 条日志、seq 0 和 `/api/turns?issue=...` 轮列表，注入同一棵 React 查询缓存；失败时只输出外壳，由 Bearer 客户端补齐。`?comment=<id>` 先经 `/log/locate` 找到所属会话与 seq，再取前后各 15 条的锚点窗口。轮列表同时供底部运行条和上方 `AgentLiveCard` 的首帧使用；运行卡片按实际内容占高：有 SSR/查询缓存时直接首绘，缓存缺失时首个轮状态读取也作为揭示的布局门禁，结束（含失败）后才显示日志；后续 reconcile、订阅者和本地目录资源仍在揭示后处理，底部运行条在揭示后挂载并作为运行场景实际终点。尺寸已固定的图片不阻塞揭示；日志无尺寸图片由 SSR 和客户端统一预留 240px 固定框，晚到与失败都不改变行高，详见 ADR 0008。浏览器仍使用 Bearer 请求，不开启 cookieAuth；[IssueLogReplica](../../frontend/packages/core/session-log/issue-log.ts)把 SSR 窗口导入本地副本后继续订阅日志流，深链窗口两端按需分页，回到最新时换回尾部窗口。`body_html` 只消费服务端预渲染结果，缺失时由原客户端 Markdown 路径降级。
 
-Issue 的说明与评论区之间保留横向分隔，评论使用独立边框卡片。`AgentLiveCard` 通过 `SessionLogList.afterRow` 放在说明行之后、与其他日志行同级，吸顶范围覆盖整个评论滚动内容；不能再把它嵌入单个日志行或固定高度的 `overflow-y-auto` 占位。没有活动任务时不留空盒子；多任务展开按内容占高，列表最多占半个视口并可滚动。旧会话或旧请求的迟到结果不会改变当前访问的显示门禁。缓存缺失时以一次首个状态读取替代永久的 128px 预留，不用提高揭示预算或放宽可见跳动门禁。日志头移出的控件及评论新内边距使用 `issue-cards-v2` 行高缓存版本，避免复用旧的 128px 占位或平铺行尺寸。真实几何回归在 [zero-jump-check.ts](../../tests/integration/zero-jump-check.ts) 的 `detail-layout` 场景覆盖桌面、手机、滚动吸顶及展开，`detail-running-empty-cache` 覆盖晚到状态与首屏锚点。
+Issue 的说明与评论区之间保留横向分隔，评论使用独立边框卡片。`AgentLiveCard` 通过 `SessionLogList.afterRow` 放在说明行之后、与其他日志行同级，吸顶范围覆盖整个评论滚动内容；不能再把它嵌入单个日志行或固定高度的 `overflow-y-auto` 占位。没有活动任务时不留空盒子；多任务展开按内容占高，列表最多占半个视口并可滚动。旧会话或旧请求的迟到结果不会改变当前访问的显示门禁。缓存缺失时以一次首个状态读取替代永久的 128px 预留，不用提高揭示预算或放宽可见跳动门禁。日志头移出的控件及评论新内边距使用 `issue-cards-v3` 行高缓存版本，避免复用旧的 128px 占位或平铺行尺寸。真实几何回归在 [zero-jump-check.ts](../../tests/integration/zero-jump-check.ts) 的 `detail-layout` 场景覆盖桌面、手机、滚动吸顶及展开，`detail-running-empty-cache` 覆盖晚到状态与首屏锚点。
 
 Issue 属性侧栏的工作位置通过 [WorkLocationPicker](../../frontend/packages/views/runtimes/components/runtime-workspace-picker.tsx) 的 `wrapLabel` 模式占满属性值列，长项目名和本地目录名称按可用宽度换行；有任务而禁止改位置时也保留完整名称。Chat 与创建 Issue 的紧凑选择器沿用默认的单行截断。
 
 ## 统一消息与轮展示
 
-对话消息头使用 [MessageHeader](../../frontend/packages/views/common/message-header.tsx) 显示收件人/角色、message_kind 与实际 wake_applied，wake_reason 用作提示；未知显示枚举保留原字符串。Issue 与 Chat 优先识别 canonical 消息头，保留的 metadata.envelope 不会把正常消息变成系统详情。Chat 乐观发送以 canonical dedupe_key 匹配日志行；日志确认后只显示服务端正文，编辑替换正文，删除或隐藏不会复活本地草稿。Issue 与 Chat 的轮行消费服务端从 multiremi_turns 投影的卡片，卡片不自行制造工作轮或用户消息。
+对话消息头使用 [MessageHeader](../../frontend/packages/views/common/message-header.tsx) 只显示 agent 消息的触发来源；成员消息不重复显示来源。来源沿输出消息的 task_id → 原始 turn.trigger_message_id 解析，显示触发成员/agent 名字、父 Issue 关系或定时任务名，点击可访问的 Issue 来源定位原消息。历史来源缺失、已删除或不可访问时显示「触发来源未记录」，不使用收件人、当前负责人或最近评论推断。HTTP/SSR 窗口和浏览器实时帧按当前批次查询来源，并对来源会话与消息沿用权限检查；不增加逐消息前端请求。原收件人、message_kind、wake_applied/wake_reason 仍是 API 字段，不在普通消息头展示。
+
+Issue 与 Chat 优先识别 canonical 消息头，保留的 metadata.envelope 不会把正常消息变成系统详情。Chat 乐观发送以 canonical dedupe_key 匹配日志行；日志确认后只显示服务端正文，编辑替换正文，删除或隐藏不会复活本地草稿。Issue 与 Chat 的轮行消费服务端从 multiremi_turns 投影的卡片，卡片不自行制造工作轮或用户消息。
 
 Chat 列表和详情的未读数来自创建者对应的 workspace member lane：只计 cursor_seq 之后、发给该成员且 shown/未删除的消息。自动已读经统一 inbox/read 推进同一游标，随后刷新会话列表保持已读；新消息到达后才再次标读。
 

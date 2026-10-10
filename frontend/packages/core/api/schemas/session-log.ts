@@ -1,5 +1,11 @@
 import { z } from "zod";
 
+export const MessageTriggerSourceSchema = z.object({
+  actor_type: z.string(), actor_id: z.string().nullable(), actor_name: z.string().nullable(),
+  message_id: z.string(), session_id: z.string(), issue_id: z.string().nullable(),
+  issue_key: z.string().nullable(), parent_issue_key: z.string().nullable().optional(), parent_issue: z.boolean(),
+});
+
 export const SessionLogEntrySchema = z.object({
   session_id: z.string(), seq: z.number().int().nonnegative(), id: z.string(),
   revision: z.number().int().nonnegative(), kind: z.string(),
@@ -9,6 +15,7 @@ export const SessionLogEntrySchema = z.object({
   body_md: z.string(), body_html: z.string().nullable(), render_version: z.string().nullable(),
   resolved_at: z.string().nullable().default(null),
   resolved_by_type: z.string().nullable().default(null), resolved_by_id: z.string().nullable().default(null),
+  trigger_source: z.preprocess(value => MessageTriggerSourceSchema.safeParse(value).success ? value : null, MessageTriggerSourceSchema.nullable()).optional(),
   metadata: z.record(z.string(), z.unknown()).default({}),
   created_at: z.string().default(""), updated_at: z.string().default(""),
   sender_type: z.string().nullish(), sender_id: z.string().nullable().optional(),
