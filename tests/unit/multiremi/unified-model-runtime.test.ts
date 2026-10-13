@@ -111,8 +111,8 @@ pendingTurnBackendTests('MUL-505 canonical runtime',fixture=>{
     store.startTask(run.taskId!);
     store.completeTask(run.taskId!, { output: 'fixed' });
     expect(store.getAutopilotRun(run.id)?.status).toBe('completed');
-    expect(store.getIssue(run.issueId!)).toMatchObject({assigneeType:'agent',assigneeId:agent.id,status:'in_review',responsibleMemberId:auto.responsibleMemberId});
-    expect(store.listIssueDeliveries(run.issueId!)).toEqual([]);
+    // The round's last reply is its summary: the Issue waits in review, closed by nobody.
+    expect(store.getIssue(run.issueId!)).toMatchObject({assigneeType:'agent',assigneeId:agent.id,status:'in_review'});
     expect(db.query('SELECT id,status,wake_source FROM multiremi_turns WHERE issue_id=?').all(run.issueId)).toEqual([
       { id: run.taskId, status: 'completed', wake_source: 'platform_to_owner' },
     ]);

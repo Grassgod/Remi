@@ -6,7 +6,7 @@
 import type { Context } from "hono";
 import { MultiremiStore } from "@multiremi/store/store.js";
 import { IssueDependencyError } from "@multiremi/store/repos/issue-dependencies.js";
-import { IssueDeliveryError } from '../../store/issue-deliveries.js';
+import { IssueResponsibilityError } from '../../store/issue-responsibility.js';
 import { createId } from "@multiremi/ids.js";
 import { IssueLockSetStaleError } from "@multiremi/store/repos/issues-repo.js";
 import { resolveCamelOrSnakeString } from "@multiremi/store/helpers.js";
@@ -598,7 +598,7 @@ export function safeAssignIssue(
   try {
     return store.assignIssue(issueId, input);
   } catch (error) {
-    if (error instanceof IssueDeliveryError) return { error: error.message, status: error.status, code: error.code };
+    if (error instanceof IssueResponsibilityError) return { error: error.message, status: error.status, code: error.code };
     if (error instanceof IssueLockSetStaleError) return { error: error.message, status: 409, code: error.code };
     const message = error instanceof Error ? error.message : String(error);
     if (message.startsWith("Issue not found:")) return { error: "issue not found", status: 404 };
@@ -638,7 +638,7 @@ export function safeQuickCreateIssue(store: MultiremiStore, input: QuickCreateIs
   try {
     return store.quickCreateIssue(input);
   } catch (error) {
-    if (error instanceof IssueDeliveryError) return {error:error.message,code:error.code,status:error.status};
+    if (error instanceof IssueResponsibilityError) return {error:error.message,code:error.code,status:error.status};
     const message = error instanceof Error ? error.message : String(error);
     if (
       message === "prompt is required"

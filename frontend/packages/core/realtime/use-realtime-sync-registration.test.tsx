@@ -222,8 +222,11 @@ describe("useRealtimeSync — registration / teardown parity", () => {
       const issueId = "issue-1";
       const detailKey = issueKeys.detail("ws-1", issueId);
       const decisionsKey = issueKeys.decisions("ws-1", issueId);
+      // An ancestor's drawer lists the subtree's questions too.
+      const ancestorQuestionsKey = issueKeys.questions("ws-1", "parent-1");
       qc.setQueryData(detailKey, { id: issueId });
       qc.setQueryData(decisionsKey, { count: 1 });
+      qc.setQueryData(ancestorQuestionsKey, []);
       const mock = createRecordingWs();
       renderHook(() => useRealtimeSync(mock.ws, stores), {
         wrapper: createWrapper(qc),
@@ -233,15 +236,16 @@ describe("useRealtimeSync — registration / teardown parity", () => {
 
       expect(qc.getQueryState(detailKey)?.isInvalidated).toBe(true);
       expect(qc.getQueryState(decisionsKey)?.isInvalidated).toBe(true);
+      expect(qc.getQueryState(ancestorQuestionsKey)?.isInvalidated).toBe(true);
     },
   );
 
   it.each(["parent_done_grant_created", "parent_done_grant_revoked"] as const)(
-    "refetches the server-derived grant after %s activity",
+    "only marks the timeline for historical %s activity",
     (action) => {
       const issueId = "issue-1";
       const detailKey = issueKeys.detail("ws-1", issueId);
-      qc.setQueryData(detailKey, { id: issueId, parent_done_grant: null });
+      qc.setQueryData(detailKey, { id: issueId });
       const mock = createRecordingWs();
       renderHook(() => useRealtimeSync(mock.ws, stores), {
         wrapper: createWrapper(qc),
@@ -259,7 +263,7 @@ describe("useRealtimeSync — registration / teardown parity", () => {
         },
       });
 
-      expect(qc.getQueryState(detailKey)?.isInvalidated).toBe(true);
+      expect(qc.getQueryState(detailKey)?.isInvalidated).toBe(false);
     },
   );
 
@@ -278,16 +282,25 @@ describe("useRealtimeSync — registration / teardown parity", () => {
   });
 
   it.each(["agent:archived", "agent:restored"] as const)(
-    "refetches detail grant effectiveness after %s",
+    "refetches every human-stage count and the re-routed questions after %s",
     (event) => {
+      vi.useFakeTimers();
+      // An owner's availability re-routes its questions into or out of the human stage.
       const detailKey = issueKeys.detail("ws-1", "issue-1");
-      qc.setQueryData(detailKey, { id: "issue-1", parent_done_grant: { effective: true } });
+      const questionsKey = issueKeys.questions("ws-1", "issue-1");
+      const questionKey = ["question", "ws-1", "question-1"];
+      qc.setQueryData(detailKey, { id: "issue-1", pending_decision_count: 1 });
+      qc.setQueryData(questionsKey, []);
+      qc.setQueryData(questionKey, { id: "question-1" });
       const mock = createRecordingWs();
       renderHook(() => useRealtimeSync(mock.ws, stores), { wrapper: createWrapper(qc) });
 
       mock.emit(event, { agent: { id: "agent-1" } });
 
       expect(qc.getQueryState(detailKey)?.isInvalidated).toBe(true);
+      vi.advanceTimersByTime(100);
+      expect(qc.getQueryState(questionsKey)?.isInvalidated).toBe(true);
+      expect(qc.getQueryState(questionKey)?.isInvalidated).toBe(true);
     },
   );
 

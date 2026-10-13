@@ -288,19 +288,19 @@ export function registerWorkspaceRoutes(app: Hono, deps: RouterDeps): void {
       project_ids?: unknown;
       notify_mode?: unknown;
       notify_open_id?: unknown;
+      /** @deprecated Accepted for old clients; ignored, never validated or stored. */
       responsible_member_id?: unknown;
     }>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
     const fields = Object.keys(body);
     if (fields.some((key) => !["enabled", "chat_id", "project_ids", "notify_mode", "notify_open_id",'responsible_member_id'].includes(key))) {
-      return c.json({ error: "only enabled, chat_id, project_ids, notify_mode, notify_open_id, and responsible_member_id are allowed" }, 400);
+      return c.json({ error: "only enabled, chat_id, project_ids, notify_mode, and notify_open_id are allowed" }, 400);
     }
     try {
       const previous = readWorkspaceIssueTopicsLenient(workspace.settings);
       const issueTopics = parseIssueTopicConfig({
         enabled: body.enabled,
         chatId: body.chat_id,
-        responsibleMemberId:body.responsible_member_id===undefined?previous.responsibleMemberId:body.responsible_member_id,
         projectIds: body.project_ids,
         notifyMode: body.notify_mode === undefined ? previous.notifyMode : body.notify_mode,
         notifyOpenId: body.notify_open_id === undefined
@@ -311,10 +311,6 @@ export function registerWorkspaceRoutes(app: Hono, deps: RouterDeps): void {
         if (!project || project.workspaceId !== workspaceId) {
           throw new IssueTopicConfigError(`project does not belong to this workspace: ${projectId}`);
         }
-      }
-      if(issueTopics.responsibleMemberId) {
-        const human=store.getWorkspaceMember(issueTopics.responsibleMemberId);
-        if(!human||human.archivedAt||human.workspaceId!==workspaceId)throw new IssueTopicConfigError('responsible_member_id must name an active human in this workspace');
       }
       const updated = store.updateWorkspace(workspaceId, {
         settings: { ...workspace.settings, issueTopics },
@@ -1645,7 +1641,6 @@ function issueTopicConfigResponse(workspaceId: string, config: IssueTopicConfig)
     config: {
       enabled: config.enabled,
       chat_id: config.chatId,
-      responsible_member_id:config.responsibleMemberId??null,
       project_ids: config.projectIds ?? null,
       notify_mode: config.notifyMode ?? "group_owner",
       notify_open_id: config.notifyOpenId ?? null,

@@ -1,4 +1,4 @@
-import { createResponsibleTestIssue } from './helpers.js';
+import { acceptTestIssueDelivery, createResponsibleTestIssue } from './helpers.js';
 import { mutateExecutionFixture } from "./unified-test-paths.js";
 import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { beforeAll, afterAll, afterEach, describe, expect, it } from "bun:test";
@@ -568,9 +568,8 @@ describe("knowledge compilation control plane", () => {
       body: "raw fact", sourceTaskId: task.id, sourceIssueId: issue.id, authorAgentId: agent.id,
     }).submission;
     mutateExecutionFixture(store, "UPDATE multiremi_turn_execution_records SET status = 'completed', result = ? WHERE id = ?", [JSON.stringify("final task result"), task.id]);
-    const delivery = store.submitIssueDelivery(issue.id, { summary: 'final task result' }, { type: 'agent', id: agent.id, taskId: task.id });
-    store.respondIssueDelivery(issue.id, delivery.id, { action: 'accept', revision: delivery.responsibilityRevision },
-      { type: 'member', id: issue.responsibleMemberId! });
+    // A member closes the root; a repeated done write creates no second bundle.
+    acceptTestIssueDelivery(store, issue.id);
     store.updateIssue(issue.id, { status: "done" });
     const bundles = store.listKnowledgeSubmissions({ workspaceId: "local", projectId: project.id })
       .filter((submission) => submission.sourceType === "issue_completion");

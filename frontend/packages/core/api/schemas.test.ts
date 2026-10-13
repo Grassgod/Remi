@@ -26,7 +26,6 @@ import {
   IssueDecisionListSchema,
   IssueDecisionMutationResponseSchema,
   IssueDetailSchema,
-  IssueParentDoneGrantMutationResponseSchema,
   IssueRetitleResponseSchema,
   IssueStatusHeldErrorSchema,
   ListLarkInstallationsResponseSchema,
@@ -119,25 +118,22 @@ describe("IssueSchema (via ListIssuesResponseSchema)", () => {
     expect(ListIssuesResponseSchema.safeParse(payload).success).toBe(false);
   });
 
-  it("preserves the raw parent-done grant columns carried by list rows", () => {
+  it("still parses rows from an older server that carries retired grant and human columns", () => {
     const parsed = ListIssuesResponseSchema.parse({
       issues: [{
         ...baseIssue,
+        responsible_member_id: "member-1",
         parent_done_grant_at: "2026-09-28T08:00:00.000Z",
         parent_done_grant_by: "member-1",
         parent_done_grant_agent_id: "agent-1",
       }],
       total: 1,
     });
-    expect(parsed.issues[0]).toMatchObject({
-      parent_done_grant_at: "2026-09-28T08:00:00.000Z",
-      parent_done_grant_by: "member-1",
-      parent_done_grant_agent_id: "agent-1",
-    });
+    expect(parsed.issues[0]).toMatchObject({ id: baseIssue.id, assignee_type: baseIssue.assignee_type });
   });
 });
 
-describe("Issue decision and parent-done grant schemas", () => {
+describe("Issue decision schemas", () => {
   const answer = {
     answererType: "agent",
     answererId: "agent-1",
@@ -183,23 +179,13 @@ describe("Issue decision and parent-done grant schemas", () => {
     createdAt: entry.createdAt,
     updatedAt: entry.updatedAt,
   };
-  const grant = {
-    granted_at: "2026-09-28T08:00:00.000Z",
-    granted_by: "member-1",
-    agent_id: "agent-1",
-    effective: false,
-    ineffective_reason: "assignee_changed",
-  };
 
-  it("parses the detail-only count and derived grant", () => {
-    expect(IssueDetailSchema.parse({
-      ...baseIssue,
+  it("parses the detail-only count of human-stage questions and requires it", () => {
+    expect(IssueDetailSchema.parse({ ...baseIssue, pending_decision_count: 2 })).toMatchObject({
       pending_decision_count: 2,
-      parent_done_grant: grant,
-    })).toMatchObject({
-      pending_decision_count: 2,
-      parent_done_grant: grant,
     });
+    expect(IssueDetailSchema.safeParse(baseIssue).success).toBe(false);
+    expect(IssueDetailSchema.safeParse({ ...baseIssue, pending_decision_count: -1 }).success).toBe(false);
   });
 
   it("parses decision history and a human request without history", () => {
@@ -224,24 +210,6 @@ describe("Issue decision and parent-done grant schemas", () => {
     expect(parsed.waiting_on_human[0]).not.toHaveProperty("history");
     expect(parsed.owner_and_answered.answered[0]?.history).toEqual([answer]);
     expect(IssueDecisionMutationResponseSchema.parse({ decision }).decision).toEqual(decision);
-  });
-
-  it("accepts grant and revoke mutation bodies but rejects impossible detail reasons", () => {
-    expect(IssueParentDoneGrantMutationResponseSchema.parse({
-      issue: {},
-      parent_done_grant: grant,
-    }).parent_done_grant).toEqual(grant);
-    expect(IssueParentDoneGrantMutationResponseSchema.parse({
-      issue: {},
-      parent_done_grant: null,
-    }).parent_done_grant).toBeNull();
-    expect(IssueParentDoneGrantMutationResponseSchema.safeParse({
-      parent_done_grant: grant,
-    }).success).toBe(false);
-    expect(IssueParentDoneGrantMutationResponseSchema.safeParse({
-      issue: {},
-      parent_done_grant: { ...grant, ineffective_reason: "grant_missing" },
-    }).success).toBe(false);
   });
 });
 

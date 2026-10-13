@@ -16,9 +16,7 @@ export interface RaceOperation {
   status: "done" | "in_review";
   connectionId: string;
   number: number;
-  deliveryId: string;
-  responsibilityRevision: string;
-  sourceTaskId: string;
+  memberId: string;
   pause: boolean;
   control: SharedArrayBuffer;
 }
@@ -56,12 +54,6 @@ IssuesRepo.prototype.countOpenChildIssues = function (id) {
   if (operation?.role === "parent" && id === operation.parentId) barrier();
   return result;
 };
-const finalSummary = IssuesRepo.prototype.finalSummaryAfterLastChild;
-IssuesRepo.prototype.finalSummaryAfterLastChild = function (id, options) {
-  const result = finalSummary.call(this, id, options);
-  if (operation?.role === "parent" && id === operation.parentId) barrier();
-  return result;
-};
 
 self.onmessage = (event: MessageEvent<
   | { type: "init"; dialect: "sqlite" | "postgres"; location: string; migrationReportDir: string; applicationName: string }
@@ -84,6 +76,10 @@ self.onmessage = (event: MessageEvent<
     const run = database.run.bind(database);
     database.run = (sql, ...params) => {
       const result = run(sql, ...params);
+      // A merge never reads the children: it pauses holding the parent row lock.
+      if (operation?.role === "parent" && operation.path === "scm"
+        && /UPDATE multiremi_issues SET id = id WHERE id = \?/.test(sql)
+        && (params[0] as unknown[] | undefined)?.[0] === operation.parentId) barrier();
       if (operation?.role === "child"
         && (/INSERT INTO multiremi_issues\s*\(/.test(sql)
           || /UPDATE multiremi_issues SET\s+title =/.test(sql)
@@ -118,16 +114,20 @@ self.onmessage = (event: MessageEvent<
           : { status: "in_progress" });
       }
     } else {
-      if(input.path==='scm')store.recordScmCanonicalEvent({
-        workspaceId: "local", connectionId: input.connectionId, repositoryId: "repo_mul471",
-        type: "change.merged", subjectType: "change_request", subjectId: String(input.number),
-        logicalKey: `change.merged:${input.number}`, fidelity: "exact",
-        payload: { number: input.number, branch: "main", mergeSha: `sha-${input.number}` },
-        evidence: { source: "poll", dedupeKey: `poll:${input.number}` },
-      });
-      if(input.status==='done')store.respondIssueDelivery(input.parentId,input.deliveryId,
-        {action:'accept',revision:input.responsibilityRevision},{type:'agent',id:input.ownerId,taskId:input.sourceTaskId});
-      else store.updateIssue(input.parentId,{status:input.status,actorType:'agent',actorId:input.ownerId});
+      if (input.path === "scm") {
+        store.recordScmCanonicalEvent({
+          workspaceId: "local", connectionId: input.connectionId, repositoryId: "repo_mul471",
+          type: "change.merged", subjectType: "change_request", subjectId: String(input.number),
+          logicalKey: `change.merged:${input.number}`, fidelity: "exact",
+          payload: { number: input.number, branch: "main", mergeSha: `sha-${input.number}` },
+          evidence: { source: "poll", dedupeKey: `poll:${input.number}` },
+        });
+        const effect = database.query("SELECT last_error FROM multiremi_scm_effects WHERE issue_id = ?").get(input.parentId);
+        error = effect?.last_error ?? null;
+      } else if (input.status === "done") {
+        // The done rule: a member closes any Issue; the owner Agent of a root cannot.
+        store.updateIssue(input.parentId, { status: "done", actorType: "member", actorId: input.memberId });
+      } else store.updateIssue(input.parentId, { status: input.status, actorType: "agent", actorId: input.ownerId });
     }
   } catch (caught) {
     error = caught instanceof Error ? caught.message : String(caught);

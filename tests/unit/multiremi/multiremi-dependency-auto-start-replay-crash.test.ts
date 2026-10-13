@@ -1,4 +1,4 @@
-import { createResponsibleTestIssue, prepareTestIssueDelivery } from './helpers.js';
+import { createResponsibleTestIssue, testWorkspaceMember } from './helpers.js';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -99,7 +99,8 @@ for (const dialect of ["sqlite", "postgres"] as const) {
         title: "Crash dependent", status: "backlog", blockedBy: [prerequisite.id],
         assigneeType: owner, assigneeId: squad?.id ?? agent.id,
       });
-      prepareTestIssueDelivery(store,prerequisite.id);
+      // The probe closes the prerequisite as this member; create it before the crash window.
+      testWorkspaceMember(store,'local');
       preparedEventIds.set(prerequisite.id,new Set(db.query('SELECT id FROM multiremi_system_events WHERE resource_id=?').all(prerequisite.id).map(row=>String(row.id))));
       return { prerequisite, dependent };
     }

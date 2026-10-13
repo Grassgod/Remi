@@ -34,7 +34,8 @@ export function createIssueHandlers({ qc }: SyncContext): SyncModule {
     if (!issueId) { onInboxInvalidate(qc, wsId); return; }
     qc.invalidateQueries({ queryKey: issueKeys.detail(wsId, issueId) });
     qc.invalidateQueries({ queryKey: issueKeys.decisions(wsId, issueId) });
-    qc.invalidateQueries({ queryKey: issueKeys.questions(wsId, issueId) });
+    // Every ancestor's drawer lists its subtree's questions; only open ones refetch.
+    qc.invalidateQueries({ queryKey: [...issueKeys.all(wsId), "questions"] });
     onInboxInvalidate(qc, wsId);
   };
 
@@ -46,9 +47,8 @@ export function createIssueHandlers({ qc }: SyncContext): SyncModule {
         const wsId = getCurrentWsId();
         if (wsId) {
           onIssueUpdated(qc, wsId, issue);
-          // Parent ownership changes also alter every descendant's derived chain.
-          qc.invalidateQueries({ queryKey: [...issueKeys.all(wsId), "responsibility"] });
-          qc.invalidateQueries({ queryKey: [...issueKeys.all(wsId), "deliveries"] });
+          // Parent or assignee changes re-route the questions of every
+          // descendant on the server; their stage and handler follow.
           qc.invalidateQueries({ queryKey: [...issueKeys.all(wsId), "questions"] });
           qc.invalidateQueries({ queryKey: ["question", wsId] });
           if (issue.status) {

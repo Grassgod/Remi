@@ -258,8 +258,9 @@ describe("Feishu outbound kind leases", () => {
     f.store.heartbeatRuntime(f.runtimeId, { supportsFeishuBotConfig: true, supportsDecisionCard: true });
     f.store.updateWorkspace("local", { settings: { issueTopics: { enabled: true, chatId: "oc_deferred_topic", notifyMode: "person", notifyOpenId: "ou_owner" } } });
     process.env.MULTIREMI_BACKGROUND_JOBS = "0";
+    // The card for a human-stage Q goes to the root's creator, mapped here to one Feishu account.
     const issue = createResponsibleTestIssue(f.store, { title: "Deferred topic", workspaceId: "local",
-      responsibleMemberId: 'mem_local_local', assigneeType: 'agent', assigneeId: f.agent.id });
+      createdBy: f.store.getWorkspaceMember('mem_local_local')!.userId, assigneeType: 'agent', assigneeId: f.agent.id });
     f.store.prepareFeishuIssueTopicWithinTransaction(issue);
     expect(db!.query("SELECT id FROM multiremi_feishu_bot_outbound_deliveries").all()).toEqual([]);
     const root = claim(f)[0]!;

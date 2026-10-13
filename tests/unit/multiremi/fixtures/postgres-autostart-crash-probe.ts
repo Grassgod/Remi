@@ -9,6 +9,7 @@ import { PostgresSyncDatabase, type SqlDatabase } from "@multiremi/store/db/post
 import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { MultiremiStore } from "@multiremi/store.js";
 import type { StoreContext } from "@multiremi/store/context.js";
+import { acceptTestIssueDelivery } from "../helpers.js";
 
 const [databaseUrl, prerequisiteId, dependentId, mode, replayAt, resumeFile, migrationReportDir] = process.argv.slice(2);
 const MODES = [
@@ -98,11 +99,7 @@ try {
   if (mode!.startsWith("replay")) {
     store.dispatchPendingSystemEvents(new Date(replayAt ?? Date.now() + 5_000));
   } else {
-    const delivery=store.listIssueDeliveries(prerequisiteId,{limit:1})[0]!;
-    const reviewer=store.resolveIssueResponsibility(prerequisiteId).reviewOwner!;
-    if(reviewer.type!=='member')throw new Error('Crash prerequisite requires its explicit human reviewer');
-    store.respondIssueDelivery(prerequisiteId,delivery.id,{action:'accept',revision:delivery.responsibilityRevision},
-      {type:'member',id:reviewer.id});
+    acceptTestIssueDelivery(store, prerequisiteId);
   }
   announce("completed");
 } catch (error) {

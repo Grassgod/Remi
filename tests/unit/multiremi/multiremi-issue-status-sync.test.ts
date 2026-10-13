@@ -1,5 +1,5 @@
 import { createNativeTestQuestion, answerNativeTestQuestion } from './fixtures/native-question.js';
-import { createResponsibleTestIssue } from './helpers.js';
+import { acceptTestIssueDelivery, createResponsibleTestIssue } from './helpers.js';
 // Regression coverage for MUL-253 symptom A: an Issue parked at `in_review`
 // while one of its agent tasks is still live.
 //
@@ -61,15 +61,9 @@ function statusOf(store: MultiremiStore, issueId: string) {
   return store.getIssue(issueId)?.status;
 }
 
-/** Close the actual executing round's delivery with its designated root human. */
-function acceptTaskDelivery(store: MultiremiStore, issueId: string, taskId: string) {
-  const task = store.getTask(taskId)!;
-  const rootHuman = store.resolveIssueResponsibility(issueId).rootHuman!;
-  const delivery = store.submitIssueDelivery(issueId, { summary: "Verified task result" },
-    { type: "agent", id: task.agentId, taskId });
-  store.respondIssueDelivery(issueId, delivery.id,
-    { action: "accept", revision: delivery.responsibilityRevision },
-    { type: "member", id: rootHuman.id });
+/** A member closes the root Issue while its round may still be live. */
+function acceptTaskDelivery(store: MultiremiStore, issueId: string) {
+  acceptTestIssueDelivery(store, issueId);
 }
 
 /**
@@ -130,7 +124,7 @@ describe("Issue status derived from task terminal transitions", () => {
     expect(statusOf(store, issue.id)).toBe("in_review");
   });
 
-  it("keeps running work ahead of a sibling blocked on a human", () => {
+  it("keeps running work ahead of a sibling waiting for a human answer, then parks it in review", () => {
     const store = createStore();
     const { runtime, agent, issue } = scaffold(store);
     const asking = createSessionTask(store, agent.id, issue.id, "ask");
@@ -143,6 +137,7 @@ describe("Issue status derived from task terminal transitions", () => {
     // ADR 0016: running work precedes awaiting_human in Issue derivation.
     expect(statusOf(store, issue.id)).toBe("in_progress");
 
+    // The remaining sibling waits for a human answer: a human must act now.
     store.completeTask(working.id, { output: "done" });
     expect(statusOf(store, issue.id)).toBe("in_review");
   });
@@ -205,7 +200,7 @@ describe("Issue status derived from task terminal transitions", () => {
     expect(statusOf(store, issue.id)).toBe("blocked");
   });
 
-  it("reviews generated intake work before its designated human accepts it", () => {
+  it("reviews generated intake work before a member closes it", () => {
     const store = createStore();
     const { runtime, agent, issue } = scaffold(store, { issueKind: "intake" });
     const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "triage" });
@@ -216,8 +211,7 @@ describe("Issue status derived from task terminal transitions", () => {
 
     expect(store.listGeneratedIssues(issue.id)).toHaveLength(1);
     expect(statusOf(store, issue.id)).toBe("in_review");
-    expect(store.listIssueDeliveries(issue.id)).toEqual([]);
-    acceptTaskDelivery(store, issue.id, task.id);
+    acceptTaskDelivery(store, issue.id);
     expect(statusOf(store, issue.id)).toBe("done");
   });
 
@@ -233,13 +227,13 @@ describe("Issue status derived from task terminal transitions", () => {
     expect(statusOf(store, issue.id)).toBe("in_review");
   });
 
-  it("leaves an accepted Issue alone — done is a human decision", () => {
+  it("leaves a closed Issue alone — done is a member decision", () => {
     const store = createStore();
     const { runtime, agent, issue } = scaffold(store);
     const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "do it" });
 
     runTask(store, runtime.id, task.id);
-    acceptTaskDelivery(store, issue.id, task.id);
+    acceptTaskDelivery(store, issue.id);
     store.completeTask(task.id, { output: "late worker event" });
 
     expect(statusOf(store, issue.id)).toBe("done");
@@ -332,7 +326,7 @@ describe("chat-lane tasks are invisible to Issue status", () => {
 });
 
 describe("awaiting_human round trip", () => {
-  it("moves to in_review on the question and back to in_progress on the answer", () => {
+  it("parks in_review while a human answers, then returns to in_progress", () => {
     const store = createStore();
     const { runtime, agent, issue } = scaffold(store);
     const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "do it" });
@@ -342,6 +336,7 @@ describe("awaiting_human round trip", () => {
 
     const request = createNativeTestQuestion(store, task.id);
     expect(store.getTask(task.id)?.status).toBe("awaiting_human");
+    // The question waits at the human stage: the Issue needs a human now.
     expect(statusOf(store, issue.id)).toBe("in_review");
 
     answerNativeTestQuestion(store, request.id, "main");
@@ -384,7 +379,7 @@ describe("awaiting_human round trip", () => {
     expect(statusOf(store, issue.id)).toBe("in_progress");
   });
 
-  it("releases the provider wait but keeps the timed-out business question visible for review", () => {
+  it("releases the provider wait and keeps the timed-out business question pending while the task runs on", () => {
     const store = createStore();
     const { runtime, agent, issue } = scaffold(store);
     const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "do it" });
@@ -397,17 +392,17 @@ describe("awaiting_human round trip", () => {
 
     expect(store.getTask(task.id)?.status).toBe("running");
     expect(store.getQuestion(request.id)).toMatchObject({ status: 'pending', wait_status: 'detached' });
-    expect(statusOf(store, issue.id)).toBe("in_review");
+    expect(statusOf(store, issue.id)).toBe("in_progress");
   });
 
-  it("answering a question does not resurrect an Issue the human already accepted", () => {
+  it("answering a question does not resurrect an Issue a member already closed", () => {
     const store = createStore();
     const { runtime, agent, issue } = scaffold(store);
     const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "do it" });
 
     runTask(store, runtime.id, task.id);
     const request = createNativeTestQuestion(store, task.id, "question");
-    acceptTaskDelivery(store, issue.id, task.id);
+    acceptTaskDelivery(store, issue.id);
 
     answerNativeTestQuestion(store, request.id, "main");
 

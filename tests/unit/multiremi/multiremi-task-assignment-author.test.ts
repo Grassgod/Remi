@@ -323,7 +323,7 @@ describe("MUL-448 identity aliases on the remaining write routes", () => {
       const issueId = createdBody.id ?? createdBody.issue?.id;
       expect(store.getIssue(issueId)!.createdBy).toBe(owner.id);
       expect(store.getIssue(issueId)!.createdBy).not.toBe(decoy.id);
-      expect(store.getIssue(issueId)!.responsibleMemberId).toBe(actualMember.id);
+      expect(store.getIssue(issueId)!).not.toHaveProperty('responsibleMemberId');
 
       const quick = await app.request(`${prefix}/issues/quick-create`, {
         method: "POST", headers,
@@ -338,7 +338,7 @@ describe("MUL-448 identity aliases on the remaining write routes", () => {
       const quickBody = (await quick.json()) as any;
       expect(store.getIssue(quickBody.issue.id)!.createdBy).toBe(owner.id);
       expect(store.getIssue(quickBody.issue.id)!.createdBy).not.toBe(decoy.id);
-      expect(store.getIssue(quickBody.issue.id)!.responsibleMemberId).toBe(actualMember.id);
+      expect(store.getIssue(quickBody.issue.id)!).not.toHaveProperty('responsibleMemberId');
     }
   });
 

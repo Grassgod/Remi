@@ -294,49 +294,33 @@ describe("first-screen notice cache updates", () => {
   });
 });
 
-describe("parent done grant cache updates", () => {
-  it("invalidates detail when raw grant columns arrive without deriving effective state", () => {
+describe("issue closure cache updates", () => {
+  it("patches a done status in place without refetching the detail", () => {
     const qc = new QueryClient();
     qc.setQueryData<Issue>(issueKeys.detail(WS_ID, ISSUE_ID), {
-      ...baseIssue,
-      parent_done_grant_at: "2026-09-28T00:00:00.000Z",
-      parent_done_grant_by: "member-1",
-      parent_done_grant_agent_id: "agent-old",
-      parent_done_grant: {
-        granted_at: "2026-09-28T00:00:00.000Z",
-        granted_by: "member-1",
-        agent_id: "agent-old",
-        effective: true,
-        ineffective_reason: null,
-      },
+      ...baseIssue, status: "in_review", pending_decision_count: 0,
     });
 
-    onIssueUpdated(qc, WS_ID, {
-      id: ISSUE_ID,
-      parent_done_grant_at: "2026-09-28T00:00:00.000Z",
-      parent_done_grant_by: "member-1",
-      parent_done_grant_agent_id: "agent-new",
-    });
+    onIssueUpdated(qc, WS_ID, { id: ISSUE_ID, status: "done" });
 
-    expectInvalidated(qc, issueKeys.detail(WS_ID, ISSUE_ID));
-    expect(
-      qc.getQueryData<Issue>(issueKeys.detail(WS_ID, ISSUE_ID))
-        ?.parent_done_grant,
-    ).toEqual({
-      granted_at: "2026-09-28T00:00:00.000Z",
-      granted_by: "member-1",
-      agent_id: "agent-old",
-      effective: true,
-      ineffective_reason: null,
+    expect(qc.getQueryData<Issue>(issueKeys.detail(WS_ID, ISSUE_ID))).toMatchObject({
+      status: "done", pending_decision_count: 0,
     });
+    expect(qc.getQueryState(issueKeys.detail(WS_ID, ISSUE_ID))?.isInvalidated)
+      .toBe(false);
   });
 
-  it("keeps detail valid for updates without raw grant columns", () => {
+  it("does not treat retired grant columns from an older server as a refresh signal", () => {
     const qc = new QueryClient();
     qc.setQueryData<Issue>(issueKeys.detail(WS_ID, ISSUE_ID), baseIssue);
 
-    onIssueUpdated(qc, WS_ID, { id: ISSUE_ID, title: "Updated" });
+    onIssueUpdated(qc, WS_ID, {
+      id: ISSUE_ID,
+      title: "Updated",
+      ...{ parent_done_grant_at: "2026-09-28T00:00:00.000Z", parent_done_grant_agent_id: "agent-new" },
+    });
 
+    expect(qc.getQueryData<Issue>(issueKeys.detail(WS_ID, ISSUE_ID))?.title).toBe("Updated");
     expect(qc.getQueryState(issueKeys.detail(WS_ID, ISSUE_ID))?.isInvalidated)
       .toBe(false);
   });

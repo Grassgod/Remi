@@ -27,7 +27,7 @@ async function fixture(topic = false) {
     process.env.MULTIREMI_FEISHU_BOT_ENCRYPTION_KEY=Buffer.alloc(32,19).toString('base64');
     try {
       store.upsertFeishuBotConfig('local',{agentId:agent.id,runtimeId:runtime.id,domain:'feishu',appId:'synthetic-isolation',appSecretOp:'set',appSecret:'synthetic-test-only',
-        enabled:false,responsibleMemberId:store.resolveIssueResponsibility(issue.id).rootHuman!.id});
+        enabled:false,responsibleMemberId:store.createWorkspaceMember({name:'Chat question handler',workspaceId:'local'}).id});
     } finally {
       if(previousKey===undefined)delete process.env.MULTIREMI_FEISHU_BOT_ENCRYPTION_KEY;
       else process.env.MULTIREMI_FEISHU_BOT_ENCRYPTION_KEY=previousKey;

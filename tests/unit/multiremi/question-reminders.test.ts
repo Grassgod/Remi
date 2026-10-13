@@ -21,7 +21,8 @@ pendingTurnBackendTests('persistent native Q reminders', fixture => {
       appSecretOp: 'set', appSecret: 'synthetic-reminder-secret', domain: 'feishu', enabled: true, responsibleMemberId: 'mem_local_local' });
     store.reportFeishuBotRuntimeStatus('local', runtime.id, { appliedRevision: config.revision, state: 'online' });
     store.updateWorkspace('local', { settings: { issueTopics: { enabled: true, chatId: 'oc_reminder' } } });
-    const issue = store.createIssue({ title: 'Persistent question', assigneeType: 'agent', assigneeId: agent.id, responsibleMemberId: 'mem_local_local' });
+    // The person created the root: the human-stage card goes to the root creator.
+    const issue = store.createIssue({ title: 'Persistent question', assigneeType: 'agent', assigneeId: agent.id, createdBy: person.id });
     store.prepareFeishuIssueTopicWithinTransaction(issue);
     const root = store.claimFeishuBotOutbound('local', runtime.id)!;
     store.reportFeishuBotOutbound('local', runtime.id, root.id, { claimToken: root.claimToken, status: 'sent', externalMessageId: 'om_reminder_root' });

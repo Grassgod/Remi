@@ -349,14 +349,16 @@ async function runCancelledE2SnapshotCase(store: MultiremiStore): Promise<void> 
       { output: "Leader dispatched the work." });
     await startThroughDaemon(base, store, credentials.daemon, childTask, f.workerRuntime.id);
 
-    const taskToken = await store.createTaskAccessToken(childTask, "local");
-    const submitted = await requestJson(base, `/api/issues/${f.child.id}/deliveries`, taskToken.token,
-      { summary: "Work ready for the parent execution owner's review" }, 201);
-    const e2Round=store.listTasksForIssue(f.parent.id).find(task=>task.status==="queued"&&task.issueSessionId===store.getOrCreateDefaultIssueSession(f.parent.id).id)!;
+    // A member asks the parent's execution owner to review the child: its queued round in the
+    // parent's Main session is the coverage round the child's report later folds into.
+    const parentMain = store.getOrCreateDefaultIssueSession(f.parent.id);
+    await requestJson(base, `/api/sessions/${parentMain.id}/messages`, credentials.owner,
+      { body_md: "Review the child and close it when it is ready", message_kind: "request", to: { type: "agent", ref: f.leader.id } });
+    const e2Round=store.listTasksForIssue(f.parent.id).find(task=>task.status==="queued"&&task.issueSessionId===parentMain.id)!;
     expect(e2Round).toBeDefined();
     const reviewerToken = await store.createTaskAccessToken(e2Round, "local");
-    await requestJson(base, `/api/issues/${f.child.id}/deliveries/${submitted.delivery.id}/respond`, reviewerToken.token,
-      { action: "accept", revision: submitted.delivery.responsibilityRevision });
+    // The parent's execution owner closes its direct child; there is no delivery to accept.
+    await requestJson(base, `/api/issues/${f.child.id}`, reviewerToken.token, { status: "done" }, 200, "PATCH");
     expect(store.getIssue(f.child.id)?.status).toBe("done");
 
     const selects = countResultCommentSelectsForTask(store, childTask.id);
@@ -367,7 +369,7 @@ async function runCancelledE2SnapshotCase(store: MultiremiStore): Promise<void> 
       .find((event) => event.kind === "message" && (event.metadata.message_source as any)?.taskId === childTask.id)!;
     const bridgeBeforeCancel = JSON.stringify(reportSnapshot(bridge()));
     const automaticComment = store.listIssueComments(f.child.id)
-      .find((comment) => comment.taskId === childTask.id && comment.id !== submitted.delivery.id)!;
+      .find((comment) => comment.taskId === childTask.id)!;
     expect(automaticComment).toBeDefined();
     expect(automaticComment.body).toContain("Automatic result comment C");
     expect((bridge().metadata.message_source as any).commentId).toBe(automaticComment.id);

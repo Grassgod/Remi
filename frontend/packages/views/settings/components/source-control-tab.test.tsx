@@ -83,14 +83,16 @@ describe("SourceControlTab", () => {
     expect(screen.queryByText(/Enable GitHub features/i)).not.toBeInTheDocument();
     expect(screen.getByRole("switch", { name: "Code changes sidebar" })).toBeChecked();
     expect(screen.getByRole("switch", { name: "Auto-link issues and code changes" })).toBeChecked();
-    expect(screen.getByRole("switch", { name: "Complete issue after merge" })).not.toBeChecked();
+    expect(screen.getByRole("switch", { name: "Record merges on the issue" })).not.toBeChecked();
+    // A merge never closes the issue; closing is a status change by a member or the parent owner.
+    expect(screen.getByText(/record the merge on the issue\. Its status does not change\./)).toBeInTheDocument();
   });
 
   it("persists the generic merge behavior without dropping unrelated settings", async () => {
     const user = userEvent.setup();
     render(<SourceControlTab />, { wrapper: I18nWrapper });
 
-    await user.click(screen.getByRole("switch", { name: "Complete issue after merge" }));
+    await user.click(screen.getByRole("switch", { name: "Record merges on the issue" }));
 
     await waitFor(() => expect(updateWorkspace).toHaveBeenCalledWith("workspace-1", {
       settings: {

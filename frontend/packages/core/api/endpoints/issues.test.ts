@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { HttpClient } from "../http";
+import { ApiContractError } from "../schema";
 import { IssuesEndpoints } from "./issues";
 
 function jsonResponse(body: unknown): Response {
@@ -26,14 +27,6 @@ const workspace = {
   updated_at: "2026-08-28T00:00:00.000Z",
 };
 
-const parentDoneGrant = {
-  granted_at: "2026-09-28T08:00:00.000Z",
-  granted_by: "member-1",
-  agent_id: "agent-1",
-  effective: true,
-  ineffective_reason: null,
-};
-
 const issue = {
   id: "issue-1",
   workspace_id: "ws-1",
@@ -48,10 +41,6 @@ const issue = {
   creator_type: "member",
   creator_id: "member-1",
   parent_issue_id: null,
-  parent_done_grant_at: parentDoneGrant.granted_at,
-  parent_done_grant_by: parentDoneGrant.granted_by,
-  parent_done_grant_agent_id: parentDoneGrant.agent_id,
-  parent_done_grant: parentDoneGrant,
   pending_decision_count: 1,
   project_id: null,
   position: 0,
@@ -108,37 +97,41 @@ describe("IssuesEndpoints batch updates", () => {
   });
 });
 
-describe("IssuesEndpoints decision and parent-done detail contracts", () => {
-  it("parses the detail-only decision count and derived parent-done grant", async () => {
+describe("IssuesEndpoints decision detail contract", () => {
+  it("parses the detail-only count of this issue's human-stage questions", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(issue)));
     const endpoints = new IssuesEndpoints(new HttpClient("https://api.example.test"));
 
-    await expect(endpoints.getIssue("issue-1")).resolves.toMatchObject({
-      pending_decision_count: 1,
-      parent_done_grant: parentDoneGrant,
-      parent_done_grant_at: parentDoneGrant.granted_at,
-      parent_done_grant_by: parentDoneGrant.granted_by,
-      parent_done_grant_agent_id: parentDoneGrant.agent_id,
-    });
+    const detail = await endpoints.getIssue("issue-1");
+    expect(detail.pending_decision_count).toBe(1);
+    expect(detail).not.toHaveProperty("parent_done_grant");
+    expect(detail).not.toHaveProperty("responsible_member_id");
   });
 
-  it("uses the native empty-body grant routes and returns their derived state", async () => {
-    const fetchMock = vi.fn()
-      .mockResolvedValueOnce(jsonResponse({ issue: {}, parent_done_grant: parentDoneGrant }))
-      .mockResolvedValueOnce(jsonResponse({ issue: {}, parent_done_grant: null }));
-    vi.stubGlobal("fetch", fetchMock);
+  it("still reads an older server that sends the retired grant and human fields", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse({
+      ...issue,
+      responsible_member_id: "member-1",
+      parent_done_grant_at: "2026-09-28T08:00:00.000Z",
+      parent_done_grant: { granted_at: "2026-09-28T08:00:00.000Z", granted_by: "member-1", agent_id: "agent-1", effective: true, ineffective_reason: null },
+    })));
     const endpoints = new IssuesEndpoints(new HttpClient("https://api.example.test"));
 
-    await expect(endpoints.grantParentDone("issue-1")).resolves.toEqual(parentDoneGrant);
-    await expect(endpoints.revokeParentDone("issue-1")).resolves.toBeNull();
+    await expect(endpoints.getIssue("issue-1")).resolves.toMatchObject({ id: "issue-1", pending_decision_count: 1 });
+  });
 
-    expect(fetchMock.mock.calls.map(([url, init]) => [
-      url,
-      (init as RequestInit).method,
-      (init as RequestInit).body,
-    ])).toEqual([
-      ["https://api.example.test/api/multiremi/issues/issue-1/parent-done-grant", "POST", undefined],
-      ["https://api.example.test/api/multiremi/issues/issue-1/parent-done-grant", "DELETE", undefined],
-    ]);
+  it("rejects a detail without the decision count", async () => {
+    const listRow: Record<string, unknown> = { ...issue };
+    delete listRow.pending_decision_count;
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(listRow)));
+    const endpoints = new IssuesEndpoints(new HttpClient("https://api.example.test"));
+
+    await expect(endpoints.getIssue("issue-1")).rejects.toBeInstanceOf(ApiContractError);
+  });
+
+  it("no longer offers the parent-done grant routes", () => {
+    const endpoints = new IssuesEndpoints(new HttpClient("https://api.example.test")) as unknown as Record<string, unknown>;
+    expect(endpoints.grantParentDone).toBeUndefined();
+    expect(endpoints.revokeParentDone).toBeUndefined();
   });
 });

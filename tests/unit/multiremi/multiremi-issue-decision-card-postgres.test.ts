@@ -196,7 +196,8 @@ describe.skipIf(!available)("MUL-412 decision cards on Postgres", () => {
         },
       },
     });
-    const parent = createResponsibleTestIssue(targetStore, { title: `PG ${workspaceSeq}`, workspaceId, responsibleMemberId: member.id, assigneeType: "agent", assigneeId: agentId });
+    // The owner created the root: a human-stage card goes to the root creator.
+    const parent = createResponsibleTestIssue(targetStore, { title: `PG ${workspaceSeq}`, workspaceId, createdBy: user.id, assigneeType: "agent", assigneeId: agentId });
     targetStore.prepareFeishuIssueTopicWithinTransaction(parent);
     const root = targetStore.claimFeishuBotOutbound(workspaceId, runtimeId)!;
     targetStore.reportFeishuBotOutbound(workspaceId, runtimeId, root.id, {

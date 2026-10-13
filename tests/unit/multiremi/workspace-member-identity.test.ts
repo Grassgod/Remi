@@ -300,7 +300,7 @@ describe("MUL-288: explicit workspace user identity", () => {
 });
 
 describe("workspace member response identity", () => {
-  it("keeps workspace member identity for root humans and historical member execution assignments", async () => {
+  it("keeps workspace member identity for historical member execution assignments", async () => {
     const store = createLocalStore();
     const account = await login(store, "assignee-display");
     const member = store.createWorkspaceMember({ userId: account.user.id, name: "测试用户" });
@@ -320,23 +320,25 @@ describe("workspace member response identity", () => {
     expect(await assigned.json()).toMatchObject({ code: "issue_execution_owner_required" });
     expect(store.getIssue(issue.id)?.assigneeId).toBeNull();
 
-    // Explicit human responsibility uses the member ID resolved above, rather
-    // than overloading the Agent/Squad execution assignment with a user ID.
+    // A deprecated responsible member is accepted for old clients and ignored:
+    // it is neither stored nor projected, and it designates nobody.
     const responsible = await app.request(`/api/issues/${issue.id}`, {
       method: "PATCH",
       headers: { ...account.headers, "Content-Type": "application/json" },
       body: JSON.stringify({ responsible_member_id: member.id }),
     });
     expect(responsible.status).toBe(200);
-    expect(await responsible.json()).toMatchObject({ responsible_member_id: member.id });
-    expect(store.getIssue(issue.id)?.responsibleMemberId).toBe(member.id);
+    expect(await responsible.json()).not.toHaveProperty("responsible_member_id");
+    expect(db!.query("SELECT responsible_member_id FROM multiremi_issues WHERE id=?").get(issue.id)).toEqual({ responsible_member_id: null });
 
     // Retain a genuine historical member execution row for the display contract;
     // current write APIs deliberately cannot create this legacy assignment.
     db!.run("UPDATE multiremi_issues SET assignee_type='member', assignee_id=? WHERE id=?", [member.id, issue.id]);
     const historical = await app.request(`/api/issues/${issue.id}`, { headers: account.headers });
     expect(historical.status).toBe(200);
-    expect(await historical.json()).toMatchObject({ assignee_type: "member", assignee_id: member.id, responsible_member_id: member.id });
+    const historicalBody = await historical.json();
+    expect(historicalBody).toMatchObject({ assignee_type: "member", assignee_id: member.id });
+    expect(historicalBody).not.toHaveProperty("responsible_member_id");
     expect(store.getIssue(issue.id)?.assigneeId).toBe(member.id);
     expect(store.resolveIssueResponsibility(issue.id).unresolved).toEqual(expect.arrayContaining([
       expect.objectContaining({ reason: "execution_owner_missing" }),

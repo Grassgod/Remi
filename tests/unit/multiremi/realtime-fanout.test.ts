@@ -471,8 +471,9 @@ describe("realtime fanout — two servers over one database", () => {
           issueTopics: { enabled: true, chatId: "oc_peer_decision", notifyMode: "person", notifyOpenId: "ou_peer_decision" },
         },
       });
+      // The card for a human-stage Q goes to the root's creator, mapped to one Feishu account.
       const issue = storeA.createIssue({ title: "Peer decision issue", workspaceId: "local",
-        responsibleMemberId: member.id, assigneeType: "agent", assigneeId: agent.id });
+        createdBy: user.id, assigneeType: "agent", assigneeId: agent.id });
       storeA.prepareFeishuIssueTopicWithinTransaction(issue);
       const root = storeA.claimFeishuBotOutbound("local", "rt_peer_decision")!;
       storeA.reportFeishuBotOutbound("local", "rt_peer_decision", root.id, {
@@ -503,9 +504,16 @@ describe("realtime fanout — two servers over one database", () => {
       try {
         const uiBase = `http://127.0.0.1:${serverA.port}`;
         const runtimeBase = `http://127.0.0.1:${serverB.port}`;
+        // Peer posts are batched and sent asynchronously: let both senders drain
+        // earlier batches before a snapshot, so only the next action is counted.
+        const drained = async () => {
+          let last = "";
+          while (last !== JSON.stringify(two.postCounts)) { last = JSON.stringify(two.postCounts); await Bun.sleep(150); }
+        };
         await Bun.sleep(100);
+        await drained();
         const postsBeforeCreate = { ...two.postCounts };
-        const task = storeA.createTask({ agentId: agent.id, issueId: issue.id, prompt: "Ask the designated human before shipping" });
+        const task = storeA.createTask({ agentId: agent.id, issueId: issue.id, prompt: "Ask a member before shipping" });
         expect(storeA.claimTask("rt_peer_decision")?.id).toBe(task.id);
         storeA.startTask(task.id);
         const turn = storeA.getTurnForAttempt(task.id)!;
@@ -551,6 +559,7 @@ describe("realtime fanout — two servers over one database", () => {
         // the answer's update separately from that already-delivered phase.
         const updatesBeforeAnswer = frames.filter((frame) =>
           frame.type === "decision:updated" && frame.payload.root_question_id === created.id).length;
+        await drained();
         const postsBeforeAnswer = { ...two.postCounts };
         const daemon = new MultiremiDaemonClient(runtimeBase, daemonToken.token);
         const answered = await daemon.respondTaskHumanRequest(created.id, { optionId: "yes" }, {

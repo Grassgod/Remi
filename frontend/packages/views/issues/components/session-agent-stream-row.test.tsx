@@ -170,12 +170,13 @@ describe("session agent stream row", () => {
     expect(screen.queryByText("Agent a1 is starting")).not.toBeInTheDocument();
   });
 
-  it("shows an agent waiting for review instead of calling it working", async () => {
+  it("shows an agent waiting for an answer instead of calling it working", async () => {
     listTasksByIssue.mockResolvedValue([task({ status: "awaiting_human" })]);
 
     renderRow();
 
-    expect(await screen.findByText("Agent a1 is waiting for review")).toBeInTheDocument();
+    expect(await screen.findByText("Agent a1 is waiting for an answer")).toBeInTheDocument();
+    expect(screen.queryByText(/waiting for review/)).not.toBeInTheDocument();
     expect(screen.queryByText("Agent a1 is working")).not.toBeInTheDocument();
   });
 

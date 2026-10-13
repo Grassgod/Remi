@@ -23,7 +23,7 @@ afterEach(() => {
   resetMultiremiTestEnv();
 });
 
-function scaffold(options: { online?: boolean } = {}): {
+function scaffold(options: { online?: boolean; chatQuestionHandler?: boolean } = {}): {
   store: MultiremiStore;
   revision: number;
 } {
@@ -45,7 +45,7 @@ function scaffold(options: { online?: boolean } = {}): {
   });
   store.heartbeatRuntime("rt_bot", { supportsFeishuBotConfig: true });
   const config = store.upsertFeishuBotConfig("local", {
-    responsibleMemberId:store.findWorkspaceMemberForUser('local','local')!.id,
+    ...(options.chatQuestionHandler === false ? {} : { responsibleMemberId: store.findWorkspaceMemberForUser('local','local')!.id }),
     agentId: agent.id,
     runtimeId: "rt_bot",
     appId: "cli_issue_topics",
@@ -452,7 +452,7 @@ describe("Feishu Issue topics", () => {
       expect(response.status).toBe(200);
       expect(await response.json()).toEqual({
         workspace_id: "local",
-        config: { responsible_member_id: null,
+        config: {
           enabled: scenario.enabled, chat_id: scenario.chatId,
           project_ids: null, notify_mode: "group_owner", notify_open_id: null,
         },
@@ -474,7 +474,7 @@ describe("Feishu Issue topics", () => {
       const body = await response.json();
       expect(body).toEqual({
         workspace_id: "local",
-        config: { responsible_member_id: null, enabled: true, chat_id: "oc_repaired", project_ids: null, notify_mode: "none", notify_open_id: null },
+        config: { enabled: true, chat_id: "oc_repaired", project_ids: null, notify_mode: "none", notify_open_id: null },
       });
       expect(store.getWorkspace("local")?.settings).toEqual({
         preserved: "setting", issueTopics: { enabled: true, chatId: "oc_repaired", notifyMode: "none" },
@@ -537,7 +537,7 @@ describe("Feishu Issue topics", () => {
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({
       workspace_id: "local",
-      config: { responsible_member_id: null, enabled: true, chat_id: "oc_issue_topics", project_ids: null, notify_mode: "person", notify_open_id: null },
+      config: { enabled: true, chat_id: "oc_issue_topics", project_ids: null, notify_mode: "person", notify_open_id: null },
       invalid: {
         code: "issue_topic_config_invalid",
         message: "issueTopics.notifyOpenId must be a bot-scoped open_id when notifyMode is person",
@@ -557,7 +557,7 @@ describe("Feishu Issue topics", () => {
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({
       workspace_id: "local",
-      config: { responsible_member_id: null, enabled: true, chat_id: "oc_issue_topics", project_ids: [project.id], notify_mode: "person", notify_open_id: "ou_reviewer" },
+      config: { enabled: true, chat_id: "oc_issue_topics", project_ids: [project.id], notify_mode: "person", notify_open_id: "ou_reviewer" },
     });
   });
 
@@ -674,6 +674,29 @@ describe("Feishu Issue topics", () => {
     });
   }
 
+  it("auto-creates a group Issue with no designated human and no Chat question handler configured", () => {
+    const { store, revision } = scaffold({ chatQuestionHandler: false });
+    expect(store.getFeishuBotConfig("local")?.responsibleMemberId ?? null).toBeNull();
+    configureTopics(store);
+    store.submitFeishuBotMessage("local", "rt_bot", {
+      revision, externalSessionKey: "oc_no_human_discovery", externalMessageId: "om_no_human_discovery",
+      senderOpenId: "ou_issue_topic_owner", text: "Hello",
+    });
+    store.setFeishuBotSenderAllowed("local", store.listFeishuBotSenders("local")[0]!.id, true, "local");
+    const created = store.submitFeishuBotMessage("local", "rt_bot", {
+      revision, chatType: "group", chatId: "oc_issue_topics",
+      externalSessionKey: "oc_issue_topics:thread:om_no_human_root",
+      externalMessageId: "om_no_human_root", senderOpenId: "ou_issue_topic_owner",
+      text: "Group work that needs no designated human",
+    });
+    const issueId = store.getFeishuIssueIdForChatSession(created.chatSessionId)!;
+    expect(store.getIssue(issueId)).toMatchObject({ parentIssueId: null, assigneeType: "agent", assigneeId: created.agentId });
+    expect(db!.query("SELECT responsible_member_id FROM multiremi_issues WHERE id=?").get(issueId)).toEqual({ responsible_member_id: null });
+    // The work starts; no "configure a root human" status is posted into the Chat.
+    expect(store.getTask(created.taskId)).toMatchObject({ agentId: created.agentId });
+    expect(store.listMessages(created.chatSessionId).filter(message => message.sender_type === "platform" && message.message_kind === "status")).toEqual([]);
+  });
+
   for (const rollback of [false, true]) {
     it(`publishes group Issue creation ${rollback ? "never on rollback" : "after commit"}`, () => {
       const { store, revision } = scaffold();
@@ -722,7 +745,7 @@ describe("Feishu Issue topics", () => {
         const { store } = scaffold();
         configureTopics(store);
         const botAgentId = store.getFeishuBotConfig("local")!.agentId;
-        const issue = createResponsibleTestIssue(store, { title: "Cross-provider notification", workspaceId: "local", responsibleMemberId: "mem_local_local" });
+        const issue = createResponsibleTestIssue(store, { title: "Cross-provider notification", workspaceId: "local" });
         store.prepareFeishuIssueTopicWithinTransaction(issue);
         const root = store.claimFeishuBotOutbound("local", "rt_bot")!;
         store.reportFeishuBotOutbound("local", "rt_bot", root.id, {
@@ -971,7 +994,6 @@ describe("Feishu Issue topics", () => {
     });
     const sourceTask = store.createTask({ agentId: store.getFeishuBotConfig("local")!.agentId, issueId: store.getTask(wake.id)!.issueId,
       workspaceId: "local", prompt: "Run the Issue" });
-    store.updateIssue(sourceTask.issueId!, { responsibleMemberId: "mem_local_local", actorType: "member", actorId: "mem_local_local" });
     const tasksBefore = store.listTasks().length;
     const request = store.createTaskHumanRequest({
       taskId: sourceTask.id,
@@ -985,7 +1007,8 @@ describe("Feishu Issue topics", () => {
     const topicWake = store.getTask(wake.id);
     expect(topicWake).toMatchObject({ chatSessionId: store.getTask(wake.id)!.chatSessionId, holdsWorkspace: false });
     expect(store.listTasks()).toHaveLength(tasksBefore);
-    expect(store.getQuestion(request.id)).toMatchObject({ stage: "human", status: "pending", current_handler: { type: "member", id: "mem_local_local" } });
+    // The asking owner of a root is skipped: the Q waits at the human stage for any member.
+    expect(store.getQuestion(request.id)).toMatchObject({ stage: "human", status: "pending", current_handler: null });
     const delivery = store.claimFeishuBotOutbound("local", "rt_bot", undefined, true)!;
     expect(delivery.id).not.toBe(roundDelivery.id);
     expect(delivery.taskId).toBeUndefined();
@@ -1196,7 +1219,7 @@ describe("Feishu Issue topics", () => {
     const initial = await app.request("/api/workspaces/local/issue-topics", { headers: JSON_HEADERS });
     expect(await initial.json()).toEqual({
       workspace_id: "local",
-      config: { responsible_member_id: null, enabled: false, chat_id: "", project_ids: null, notify_mode: "group_owner", notify_open_id: null },
+      config: { enabled: false, chat_id: "", project_ids: null, notify_mode: "group_owner", notify_open_id: null },
     });
     const updated = await app.request("/api/workspaces/local/issue-topics", {
       method: "PUT",
@@ -1206,7 +1229,7 @@ describe("Feishu Issue topics", () => {
     expect(updated.status).toBe(200);
     expect(await updated.json()).toEqual({
       workspace_id: "local",
-      config: { responsible_member_id: null, enabled: true, chat_id: "oc_filtered", project_ids: [project.id], notify_mode: "group_owner", notify_open_id: null },
+      config: { enabled: true, chat_id: "oc_filtered", project_ids: [project.id], notify_mode: "group_owner", notify_open_id: null },
     });
 
     const rejected = await app.request("/api/workspaces/local/issue-topics", {

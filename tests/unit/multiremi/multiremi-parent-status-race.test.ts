@@ -1,4 +1,4 @@
-import { createResponsibleTestIssue, acceptTestIssueDelivery, prepareTestIssueDelivery } from './helpers.js';
+import { createResponsibleTestIssue, acceptTestIssueDelivery, testWorkspaceMember } from './helpers.js';
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -195,13 +195,6 @@ for (const dialect of ["sqlite", "postgres"] as const) {
                 assigneeType:'agent',assigneeId:childOwnerId,
               }).id;
               if(mutation.endsWith('_done'))acceptTestIssueDelivery(store,childId);
-              store.grantParentDone(parent.id, "local");
-              store.createIssueComment(parent.id, { body: "Final parent summary", authorType: "agent", authorId: ownerId });
-              const prepared=prepareTestIssueDelivery(store,parent.id);
-              store.authorizeIssueDelivery(parent.id,prepared.delivery.id,ownerId,prepared.delivery.responsibilityRevision,prepared.actor);
-              // Both competing status writers must perform a real transition;
-              // submitting the concrete report already parked this parent at in_review.
-              store.updateIssue(parent.id,{status:'in_progress'});
               if (path === "scm") store.advanceScmEntitySnapshot({
                 connectionId, repositoryId: "repo_mul471", entityType: "change_request", externalId: String(sequence),
                 revisionAt: new Date().toISOString(), revision: `v${sequence}`, contentHash: `race-${sequence}`,
@@ -211,7 +204,7 @@ for (const dialect of ["sqlite", "postgres"] as const) {
               const parentControl = new Int32Array(new SharedArrayBuffer(8));
               const childControl = new Int32Array(new SharedArrayBuffer(8));
               const base = { type: "run" as const, parentId: parent.id, childId, ownerId, mutation, path, status, connectionId, number: sequence,
-                deliveryId:prepared.delivery.id,responsibilityRevision:prepared.delivery.responsibilityRevision,sourceTaskId:prepared.executionTask.id };
+                memberId: testWorkspaceMember(store, "local").id };
               const firstWorker = first === "parent" ? parentWorker : childWorker;
               const secondWorker = first === "parent" ? childWorker : parentWorker;
               const firstControl = first === "parent" ? parentControl : childControl;
@@ -240,7 +233,7 @@ for (const dialect of ["sqlite", "postgres"] as const) {
                 expect(result.maxDepth).toBe(1);
                 expect(result.eventsInTransaction).toBe(0);
                 if (result.error?.includes("database is locked") || result.error?.includes("SQLITE_BUSY")) busy += 1;
-                else if (result.error && !result.error.includes("unfinished child")&&!result.error.includes('Finish or cancel child issues')) violations.push(result.error);
+                else if (result.error && !result.error.includes("unfinished child")) violations.push(result.error);
               }
               if (dialect === "postgres") {
                 const parentResult = first === "parent" ? a : b;
@@ -254,6 +247,12 @@ for (const dialect of ["sqlite", "postgres"] as const) {
                 // SQLite's database-wide writer lock rejects the contender (including
                 // read-to-write promotion in the pre-fix SCM path) instead of closing stale.
                 expect(store.getIssue(parent.id)?.status === status && store.countOpenChildIssues(parent.id) > 0).toBe(false);
+              }
+              // A merge only records itself; it never closes or holds the parent.
+              if (path === "scm") {
+                expect(store.getIssue(parent.id)?.status).not.toBe("done");
+                expect(store.listIssueActivity(parent.id).filter(entry => entry.type === "parent_status_held")).toEqual([]);
+                expect(store.listIssueActivity(parent.id).filter(entry => entry.type === "scm_merge_completed").length).toBeLessThanOrEqual(1);
               }
             }
             console.log(`[MUL-471 ${dialect}] ${path}/${mutation}/${first}: 20 rounds, busy=${busy}, violations=${violations.length}`);

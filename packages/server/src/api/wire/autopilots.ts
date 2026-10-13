@@ -70,7 +70,6 @@ export function autopilotCompatibilityResponse(
     title: autopilot.title,
     description: autopilot.description,
     project_id: autopilot.projectId,
-    responsible_member_id: autopilot.responsibleMemberId??null,
     assignee_type: autopilot.assigneeType,
     assignee_id: autopilot.assigneeId,
     status: autopilot.status,
@@ -119,7 +118,6 @@ export function autopilotCreateCompatibilityInput(
     title: input.title,
     description: input.description,
     workspace_id: input.workspace_id,
-    responsibleMemberId:input.responsibleMemberId??input.responsible_member_id??null,
     status: input.status,
     projectId,
     project_id: projectId,
@@ -155,7 +153,6 @@ export function autopilotUpdateCompatibilityInput(
   if (hasOwn(input, "title")) output.title = input.title;
   if (hasOwn(input, "description")) output.description = input.description ?? null;
   if (hasOwn(input, "project_id")) output.projectId = cleanString(input.project_id ?? undefined) ?? null;
-  if (hasOwn(input,'responsible_member_id')||hasOwn(input,'responsibleMemberId')) output.responsibleMemberId=input.responsibleMemberId??input.responsible_member_id??null;
 
   const assigneeTypeSent = hasOwn(input, "assignee_type");
   const assigneeIdSent = hasOwn(input, "assignee_id");

@@ -9,6 +9,7 @@ import {
   type HumanRequestQuestion,
   type TaskHumanRequest,
 } from "@multiremi/core/chat/human-requests";
+import { useActorName } from "@multiremi/core/workspace/hooks";
 import { Button } from "@multiremi/ui/components/ui/button";
 import { Input } from "@multiremi/ui/components/ui/input";
 import { Textarea } from "@multiremi/ui/components/ui/textarea";
@@ -20,9 +21,14 @@ import { DecisionCardFrame, DecisionAnswerArea, DecisionOptions, DecisionHeading
 
 const COLLAPSED_CONTEXT_HEIGHT_PX = 128;
 
-/** Pending permission and AskUserQuestion forms for any in-flight task. */
-export function HumanRequestDock({ taskId, sessionId, turnId, enabled = true }: { taskId: string | null; sessionId?: string; turnId?: string; enabled?: boolean }) {
+/**
+ * One summary line per permission or AskUserQuestion of an in-flight turn,
+ * including the ones already answered, so the run reads like its card. Each
+ * line opens the question drawer; answering keeps the line (and drawer) here.
+ */
+export function HumanRequestDock({ taskId, sessionId, turnId, enabled = true, getActorName }: { taskId: string | null; sessionId?: string; turnId?: string; enabled?: boolean; getActorName?: (type: string, id: string) => string }) {
   const { t } = useT("chat");
+  const names = useActorName({ enabled: enabled && !getActorName });
   const { data, error, isFetching, refetch } = useQuery({
     ...humanRequestsOptions(taskId ?? "", sessionId, turnId),
     enabled: enabled && Boolean(taskId),
@@ -37,12 +43,12 @@ export function HumanRequestDock({ taskId, sessionId, turnId, enabled = true }: 
       </div>
     );
   }
-  const pending = (data ?? []).filter((request) => request.status === "pending");
-  if (!taskId || pending.length === 0) return null;
+  const requests = data ?? [];
+  if (!taskId || requests.length === 0) return null;
   return (
     <div className="flex flex-col gap-2 border-t border-border bg-muted/30 px-3 py-2">
-      {pending.map((request) => (
-        <LinkedQuestion key={request.id} id={request.id} />
+      {requests.map((request) => (
+        <LinkedQuestion key={request.id} id={request.id} getActorName={getActorName ?? names.getActorName} />
       ))}
     </div>
   );
@@ -140,6 +146,7 @@ export function QuestionForm({
   hideOptions = false,
   disabled = false,
   actions,
+  notice,
   history,
 }: {
   taskId: string;
@@ -150,6 +157,8 @@ export function QuestionForm({
   hideOptions?: boolean;
   disabled?: boolean;
   actions?: ReactNode;
+  /** Shown under the first question, before its options (e.g. why it reached members). */
+  notice?: ReactNode;
   history?: ReactNode;
 }) {
   const { t } = useT("chat");
@@ -200,6 +209,7 @@ export function QuestionForm({
               <DecisionHeading title={question.header || question.question} body={question.header && question.header !== question.question ? question.question : undefined} actions={index === 0 ? actions : undefined} />
               {index === 0 && showMessage && <Markdown mode="minimal" className="mt-1 text-xs text-muted-foreground [&_p]:my-1">{message!}</Markdown>}
               {index === 0 && request.payload.context && <QuestionContext context={request.payload.context} />}
+              {index === 0 && notice}
               {!readOnly && index === 0 && history}
               {!hideOptions && (question.options.length > 0 || !readOnly) && <DecisionAnswerArea>
                 {question.options.length > 0 ? <DecisionOptions options={question.options.map(option => ({ ...option, value: option.label }))}

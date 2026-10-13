@@ -29,7 +29,7 @@ export function seedHistoricalDecision(store: MultiremiStore, sourceIssueId: str
   return decision;
 }
 
-/** The designated human must map to exactly one sender within this bot's app. */
+/** A card person (the root Issue's creator) must map to exactly one sender within this bot's app. */
 export function seedQuestionHumanMapping(db: Pick<SqlDatabase, 'run'>,
   workspaceId: string, appId: string, userId: string, openId: string) {
   const unionId = `synthetic_union_${userId}`;

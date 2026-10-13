@@ -87,7 +87,8 @@ export function runMigrations(db: SqlDatabase, options: { dialect?: SqlDatabaseD
       addColumnIfMissing(db, "multiremi_feishu_bot_configs", "sender_access_policy TEXT NOT NULL DEFAULT 'agent'");
       addColumnIfMissing(db, "multiremi_feishu_bot_configs", "responsible_member_id TEXT");
     }
-    // Additive responsibility upgrade must also run for an already unified snapshot.
+    // Additive upgrade must also run for an already unified snapshot.
+    // Deprecated: both responsible_member_id columns are kept for old rows and clients; nothing reads them.
     if(tables.has('multiremi_issues'))addColumnIfMissing(db,'multiremi_issues','responsible_member_id TEXT');
     if(tables.has('multiremi_autopilots'))addColumnIfMissing(db,'multiremi_autopilots','responsible_member_id TEXT');
     if(tables.has('multiremi_issue_activity'))addColumnIfMissing(db,'multiremi_issue_activity','workspace_id TEXT');
@@ -2888,11 +2889,11 @@ function runMigrationsForDialect(db: SqlDatabase, dialect: SqlDatabaseDialect): 
   // purge snapshot or resurrect archive bytes after the control-plane row is
   // removed.
   addColumnIfMissing(db, "multiremi_issues", "lifecycle_state TEXT NOT NULL DEFAULT 'active'");
-  // MUL-400 S1c (A4): a member may authorize the parent issue's owner agent to
-  // close that single parent once its children are finished. Three nullable
-  // columns, add-only: NULL means "no grant" and matches the pre-S1c behaviour.
+  // MUL-400 S1c (A4): the retired parent-done grant. Three nullable columns,
+  // add-only, kept for old rows; the done rule replaced the grant and nothing
+  // reads them.
   addColumnIfMissing(db, "multiremi_issues", "parent_done_grant_at TEXT");
-  // No guessed backfill: legacy roots remain visibly unresolved until explicitly assigned.
+  // Deprecated: kept for old rows and clients; nothing reads it.
   addColumnIfMissing(db, "multiremi_issues", "responsible_member_id TEXT");
   addColumnIfMissing(db, "multiremi_issues", "parent_done_grant_by TEXT");
   addColumnIfMissing(db, "multiremi_issues", "parent_done_grant_agent_id TEXT");
@@ -3120,6 +3121,7 @@ function runMigrationsForDialect(db: SqlDatabase, dialect: SqlDatabaseDialect): 
   runMigrationOnce(db, MARKDOWN_ATTACHMENT_OWNERSHIP_MIGRATION, () => backfillMarkdownAttachmentOwnership(db));
   addColumnIfMissing(db, "multiremi_autopilots", "created_by_type TEXT NOT NULL DEFAULT 'member'");
   addColumnIfMissing(db, "multiremi_autopilots", "created_by_id TEXT NOT NULL DEFAULT 'local'");
+  // Deprecated: kept for old rows and clients; nothing reads it.
   addColumnIfMissing(db, "multiremi_autopilots", "responsible_member_id TEXT");
   addColumnIfMissing(db, "multiremi_autopilots", "session_policy TEXT NOT NULL DEFAULT 'new'");
   addColumnIfMissing(db, "multiremi_autopilots", "workspace_policy TEXT NOT NULL DEFAULT 'reuse_issue'");

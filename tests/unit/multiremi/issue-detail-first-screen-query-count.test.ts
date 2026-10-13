@@ -1,4 +1,4 @@
-import { createResponsibleTestIssue } from './helpers.js';
+import { createResponsibleTestIssue, testWorkspaceMember } from './helpers.js';
 // MUL-385: guards for the Issue detail first-screen routes.
 //
 // The three routes the detail page fires on open are `GET /api/issues/:id`,
@@ -185,36 +185,68 @@ describe("MUL-385 issue detail first-screen query counts", () => {
     expect([...probe.bySql.keys()].some(sql => sql.includes("multiremi_issue_dependencies"))).toBe(false);
   });
 
-  it("adds only one aggregate query for the pending decision count", async () => {
-    const { store, db, probe } = await createCountedStore();
+  it("counts only this Issue's own human-stage Qs, and nothing pending stays one aggregate statement", async () => {
+    const { store, probe } = await createCountedStore();
     const app = createMultiremiApp({ store, authToken: AUTH_TOKEN });
-    const fixture = seedIssueDetailFirstScreenFixture(store, {
-      run: (sql, params) => { runPinned(db, sql, params); },
-    });
-
-    // #4/#7: count real pending message decisions and Human Requests,
-    // rather than probing the retired notification/decision tables.
-    const session = store.getOrCreateDefaultIssueSession(fixture.issueId);
-    // This historical business decision has no provider wait. It remains part
-    // of the aggregate alongside a current AUQ, without reviving a retired writer.
-    const decision = store.appendConversationLog({ sessionId: session.id, kind: "message", authorType: "member", authorId: "mem_local_local",
-      messageKind: "decision", bodyMd: "Choose the release window", metadata: { decision_record: {
-        issue_id: fixture.issueId, source_issue_id: fixture.issueId, status: "escalated", kind: "question" } } });
-    expect(store.getQuestion(decision.id)?.wait_status).toBe("none");
-    const task = store.createTask({agentId: "agt_mul385", issueId: fixture.issueId, prompt: "Pending question"});
-    store.createTaskHumanRequest({taskId: task.id, kind: "question", payload: {message: "Pick a date"}});
-
-    probe.reset();
-    const response = await app.request(`/api/issues/${fixture.issueId}`, { headers: AUTH_HEADERS });
-    expect(response.status).toBe(200);
-    expect((await response.json()).pending_decision_count).toBe(2);
-
-    // The original four reads remain; S4 adds one aggregate over escalated
-    // decisions and pending human requests on this Issue and direct children.
+    const owner = store.createAgent({ name: "Count root owner", provider: "codex" });
+    const worker = store.createAgent({ name: "Count child owner", provider: "codex" });
+    const root = store.createIssue({ title: "Count root", assigneeType: "agent", assigneeId: owner.id });
+    const child = store.createIssue({ title: "Count child", parentIssueId: root.id, assigneeType: "agent", assigneeId: worker.id });
+    const member = testWorkspaceMember(store, root.workspaceId);
+    const aggregate = (sql: string) => sql.includes("message_kind = 'decision'") && sql.includes("resolved_at IS NULL");
+    const count = async (issueId: string) => {
+      probe.reset();
+      const response = await app.request(`/api/issues/${issueId}`, { headers: AUTH_HEADERS });
+      expect(response.status).toBe(200);
+      const pending = (await response.json() as { pending_decision_count: number }).pending_decision_count;
+      expect([...probe.bySql.entries()].filter(([sql]) => aggregate(sql)).reduce((sum, [, n]) => sum + n, 0)).toBe(1);
+      expect([...probe.bySql.keys()].some((sql) => sql.includes("SELECT * FROM multiremi_tasks"))).toBe(false);
+      return pending;
+    };
+    // D10: with nothing pending the first-screen budget is unchanged — four reads plus one aggregate.
+    expect(await count(root.id)).toBe(0);
     expect(probe.statements).toBe(5);
-    expect([...probe.bySql.keys()].filter((sql) => sql.includes("multiremi_message_decision_records"))).toHaveLength(1);
-    expect([...probe.bySql.keys()].some((sql) => sql.includes("SELECT * FROM multiremi_tasks"))).toBe(false);
-    expect([...probe.bySql.keys()].some((sql) => sql.includes("multiremi_issue_dependencies"))).toBe(false);
+
+    // The child owner's native question climbs to the parent owner first: an Agent stage counts nowhere.
+    const runtime = store.registerRuntime({ name: "Count native host", provider: "codex", daemonId: "count-native" });
+    const task = store.createTask({ issueId: child.id, agentId: worker.id, prompt: "Ask the parent" });
+    expect(store.claimTask(runtime.id)?.id).toBe(task.id);
+    store.startTask(task.id);
+    const turn = store.getTurnForAttempt(task.id)!;
+    const created = store.getDaemonTurnBridge().rpc("turn.decision", { turn_id: turn.id, attempt_id: task.id,
+      wait_id: "count-native-wait", dedupe_key: "count-native-question", body_md: "Which release window?", options: [],
+      metadata: { kind: "question", questions: [{ question: "Which release window?" }] } },
+      { runtimeId: runtime.id, daemonId: "count-native", workspaceId: "local" });
+    expect(created.ok).toBe(true);
+    const questionId = String(created.message_id);
+    expect(store.getQuestion(questionId)).toMatchObject({ stage: "parent_owner", current_handler: { type: "agent", id: owner.id }, source_issue_id: child.id });
+    expect(await count(child.id)).toBe(0);
+    expect(await count(root.id)).toBe(0);
+
+    // With no root owner left the climb stops there and the Q waits at the human stage;
+    // it counts on its own Issue only, never on the parent it climbed through.
+    store.updateIssue(root.id, { assigneeType: null, assigneeId: null, actorType: "member", actorId: member.id });
+    expect(store.getQuestion(questionId)).toMatchObject({ stage: "human", current_handler: null, route_reason: `${root.id}:execution_owner_missing` });
+    expect(await count(child.id)).toBe(1);
+    expect(await count(root.id)).toBe(0);
+
+    // Historical records that only members ever answered stay at the human stage and count on the root:
+    // an escalated business decision with no provider wait, and a legacy Human Request.
+    const session = store.getOrCreateDefaultIssueSession(root.id);
+    const decision = store.appendConversationLog({ sessionId: session.id, kind: "message", authorType: "member", authorId: member.id,
+      messageKind: "decision", bodyMd: "Choose the release window", metadata: { decision_record: {
+        issue_id: root.id, source_issue_id: root.id, status: "escalated", kind: "question" } } });
+    expect(store.getQuestion(decision.id)?.wait_status).toBe("none");
+    const legacyTask = store.createTask({ agentId: owner.id, issueId: root.id, prompt: "Pending question" });
+    store.createTaskHumanRequest({ taskId: legacyTask.id, kind: "question", payload: { message: "Pick a date" } });
+    expect(await count(root.id)).toBe(2);
+
+    // An answered Q drops out of the count.
+    store.answerMessageDecision(questionId, { sender: { type: "member", id: member.id },
+      expected_route_revision: store.getQuestion(questionId)!.route_revision, body_md: "Next Tuesday",
+      response: { answers: { "Which release window?": "Next Tuesday" } } });
+    expect(await count(child.id)).toBe(0);
+    expect(await count(root.id)).toBe(2);
   });
 
   it("keeps /sessions query count constant as session count grows", async () => {

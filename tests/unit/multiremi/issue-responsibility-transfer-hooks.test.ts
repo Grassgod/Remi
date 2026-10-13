@@ -8,7 +8,7 @@ function setup(f: PendingTurnTestFixture) {
   const owner=store.createAgent({name:'Current owner',provider:'codex'});
   const next=store.createAgent({name:'Next owner',provider:'codex'});
   const worker=store.createAgent({name:'Question source',provider:'codex'});
-  const root=store.createIssue({title:'Root',responsibleMemberId:'mem_local_local',assigneeType:'agent',assigneeId:owner.id});
+  const root=store.createIssue({title:'Root',assigneeType:'agent',assigneeId:owner.id});
   const task=store.createTask({agentId:worker.id,issueId:root.id,prompt:'Ask'});
   expect(store.claimTask(runtime.id)?.id).toBe(task.id);store.startTask(task.id);
   const turn=store.getTurnForAttempt(task.id)!;
@@ -22,7 +22,7 @@ pendingTurnBackendTests('explicit responsibility mutation hooks',fixture => {
   it('reassigns a deep child with an escalated pending Q atomically and preserves the parent handler',async()=>{
     const f=setup(fixture());
     const parentOwner=f.store.createAgent({name:'Parent execution',provider:'codex'});
-    const grand=f.store.createIssue({id:'a_deep_root',title:'Grand root',responsibleMemberId:'mem_local_local',assigneeType:'agent',assigneeId:parentOwner.id});
+    const grand=f.store.createIssue({id:'a_deep_root',title:'Grand root',assigneeType:'agent',assigneeId:parentOwner.id});
     const parent=f.store.createIssue({id:'b_deep_parent',title:'Direct parent',parentIssueId:grand.id,assigneeType:'agent',assigneeId:parentOwner.id});
     f.store.updateIssue(f.root.id,{parentIssueId:parent.id,actorType:'member',actorId:'mem_local_local'});
     const ownerTurn=f.db.query("SELECT id FROM multiremi_turns WHERE agent_id=? AND status='pending' ORDER BY created_at DESC LIMIT 1").get(f.owner.id)!;
@@ -66,45 +66,50 @@ pendingTurnBackendTests('explicit responsibility mutation hooks',fixture => {
     expect(f.store.getQuestion(f.id)?.route_revision).toBe(before+1);
     expect(f.store.getMessage(f.id)?.to_agent_id).toBe(f.owner.id);
   });
-  it('routes unavailable execution responsibility to the explicit human and re-routes on restore',()=>{
+  it('hands the Q to the human stage when the execution owner becomes unavailable and re-routes on restore',()=>{
     const f=setup(fixture());
     f.store.archiveAgent(f.owner.id);
-    expect(f.store.getQuestion(f.id)?.current_handler).toEqual({type:'member',id:'mem_local_local'});
+    expect(f.store.getQuestion(f.id)).toMatchObject({stage:'human',current_handler:null,route_reason:`${f.root.id}:agent_unavailable`,route_revision:2});
     expect(f.store.resolveIssueResponsibility(f.root.id).unresolved).toContainEqual({issueId:f.root.id,reason:'agent_unavailable'});
     f.store.restoreAgent(f.owner.id);
     expect(f.store.getQuestion(f.id)?.current_handler?.id).toBe(f.owner.id);
     expect(f.store.getQuestion(f.id)?.route_revision).toBe(3);
   });
-  it('moves human-required pending Q to the new explicit root human',()=>{
-    const f=setup(fixture());const human=f.store.createWorkspaceMember({id:'new-root-human',name:'New human'});
+  it('keeps an escalated Q at the human stage and ignores a deprecated responsible member',()=>{
+    const f=setup(fixture());const human=f.store.createWorkspaceMember({id:'ignored-root-human',name:'Ignored human'});
     const ownerTurn=f.db.query("SELECT id FROM multiremi_turns WHERE agent_id=? AND status='pending' ORDER BY created_at DESC LIMIT 1").get(f.owner.id)!;
     f.db.run("UPDATE multiremi_turns SET status='running' WHERE id=?",[ownerTurn.id]);
-    f.store.escalateQuestion(f.id,{expected_route_revision:1,reason:'Need human'},{type:'agent',id:f.owner.id},String(ownerTurn.id));
+    f.store.escalateQuestion(f.id,{expected_route_revision:1,reason:'Need a member'},{type:'agent',id:f.owner.id},String(ownerTurn.id));
+    expect(f.store.getQuestion(f.id)).toMatchObject({stage:'human',current_handler:null,route_revision:2});
     f.store.updateIssue(f.root.id,{responsibleMemberId:human.id,actorType:'member',actorId:'mem_local_local'});
+    // The deprecated field is neither stored nor a responsibility fact.
+    expect(f.db.query('SELECT responsible_member_id FROM multiremi_issues WHERE id=?').get(f.root.id)?.responsible_member_id).toBeNull();
+    expect(f.store.getQuestion(f.id)?.route_revision).toBe(2);
+    // An execution-owner change re-routes, and the explicit escalation keeps the human stage.
+    f.store.updateIssue(f.root.id,{assigneeType:'agent',assigneeId:f.next.id,actorType:'member',actorId:'mem_local_local'});
     const q=f.store.getQuestion(f.id)!;
-    // Transfer re-evaluates the existing Q against the current responsibility facts.
-    expect(q.current_handler).toEqual({type:'member',id:human.id});
+    expect(q).toMatchObject({stage:'human',current_handler:null,route_revision:3});
     expect(q.history.filter(event=>event.type==='transfer' && event.reason === 'issue_responsibility_transferred')).toHaveLength(1);
-    expect(q.route_revision).toBe(3);
+    expect(q.actions.allowed).toEqual([]);
+    expect(f.store.getQuestion(f.id,{type:'member',id:human.id})?.actions.allowed).toEqual(['answer','close']);
   });
   it('does not rotate a Q for unchanged responsibility and rotates once when the same Agent owns two ancestors',()=>{
     const f=setup(fixture());
     f.store.updateIssue(f.root.id,{responsibleMemberId:'mem_local_local',assigneeType:'agent',assigneeId:f.owner.id,actorType:'member',actorId:'mem_local_local'});
     expect(f.store.getQuestion(f.id)?.route_revision).toBe(1);
-    const ancestor=f.store.createIssue({title:'Ancestor',responsibleMemberId:'mem_local_local',assigneeType:'agent',assigneeId:f.owner.id});
+    const ancestor=f.store.createIssue({title:'Ancestor',assigneeType:'agent',assigneeId:f.owner.id});
     f.store.updateIssue(f.root.id,{parentIssueId:ancestor.id,actorType:'member',actorId:'mem_local_local'});
     const before=f.store.getQuestion(f.id)!.route_revision;
     f.store.archiveAgent(f.owner.id);
     expect(f.store.getQuestion(f.id)?.route_revision).toBe(before+1);
   });
-  it('makes an archived root human visibly unavailable without substituting a workspace owner',()=>{
-    const f=setup(fixture());const human=f.store.createWorkspaceMember({id:'human-to-archive',name:'Specific human'});
-    f.store.updateIssue(f.root.id,{responsibleMemberId:human.id,actorType:'member',actorId:'mem_local_local'});
+  it('does not re-route Issue Qs when a workspace member is archived',()=>{
+    const f=setup(fixture());const human=f.store.createWorkspaceMember({id:'member-to-archive',name:'Specific member'});
     f.store.archiveWorkspaceMember(human.id);
     const responsibility=f.store.resolveIssueResponsibility(f.root.id);
-    expect(responsibility.rootHuman).toBeNull();
-    expect(responsibility.unresolved).toContainEqual({issueId:f.root.id,reason:'human_unavailable'});
-    expect(f.store.getQuestion(f.id)?.route_revision).toBe(3);
-    expect(f.db.query('SELECT card_token_hash FROM multiremi_conversation_log WHERE id=?').get(f.id)?.card_token_hash).toBeNull();
+    expect(responsibility).not.toHaveProperty('rootHuman');
+    expect(responsibility.unresolved).toEqual([]);
+    expect(f.store.getQuestion(f.id)?.route_revision).toBe(1);
+    expect(f.db.query('SELECT card_token_hash FROM multiremi_conversation_log WHERE id=?').get(f.id)?.card_token_hash).toBe('old-token');
   });
 });

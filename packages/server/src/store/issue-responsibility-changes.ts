@@ -2,13 +2,11 @@ import type { StoreContext, CommitEventQueue } from './context.js';
 import { refreshIssueQuestionsAfterResponsibilityChangeWithinTransaction, refreshChatQuestionsAfterResponsibilityChangeWithinTransaction } from './inbox/questions.js';
 import { createCommitEventQueue } from './context.js';
 import { afterCommit } from './db/postgres.js';
-import { invalidatePendingIssueDeliveriesWithinTransaction } from './issue-deliveries.js';
 
 /** Call after a responsibility fact changes, inside its owning W-locked transaction. */
 export function refreshResponsibilityQuestions(ctx: StoreContext, issueId: string, events: CommitEventQueue,
   actorType?: string, actorId?: string | null, reason = 'issue_responsibility_transferred'): void {
   const actor: import('@multiremi/contracts').QuestionActor | undefined = actorId && (actorType === 'agent' || actorType === 'member') ? {type:actorType,id:actorId} : undefined;
-  invalidatePendingIssueDeliveriesWithinTransaction(ctx,issueId,events,reason);
   refreshIssueQuestionsAfterResponsibilityChangeWithinTransaction(ctx,issueId,events,actor,reason);
 }
 
@@ -25,8 +23,8 @@ export function refreshResponsibilityEntity(ctx: StoreContext, kind: 'agent' | '
 }
 
 function affectedIssues(ctx: StoreContext, kind: 'agent' | 'squad' | 'member', id: string) {
-  return kind === 'member'
-    ? ctx.db.query('SELECT id FROM multiremi_issues WHERE responsible_member_id=? ORDER BY id').all(id)
+  // Issue responsibility never names a member: a member change re-routes only Chat Qs.
+  return kind === 'member' ? []
     : kind === 'squad' ? ctx.db.query("SELECT id FROM multiremi_issues WHERE assignee_type='squad' AND assignee_id=? ORDER BY id").all(id)
     : ctx.db.query(`SELECT id FROM multiremi_issues WHERE (assignee_type='agent' AND assignee_id=?)
       OR (assignee_type='squad' AND assignee_id IN (SELECT id FROM multiremi_squads WHERE leader_id=?)) ORDER BY id`).all(id,id);

@@ -116,7 +116,7 @@
       "reconnecting": "Reconnecting",
       "queued": "Queued",
       "waiting_local_directory": "Waiting for local directory",
-      "awaiting_human": "Waiting for approval",
+      "awaiting_human": "Waiting for an answer",
       "starting_up": "Starting up",
       "thinking": "Thinking",
       "typing": "Typing"

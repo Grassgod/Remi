@@ -15,10 +15,11 @@
  *     --baseline --out tests/fixtures/multiremi/first-screen-hotspots-golden.json
  *
  * The response bodies are the contract of the pre-optimization implementation,
- * but they are recorded *after* merging main, so each issue carries the
- * `parent_done_grant_at/by/agent_id` fields MUL-457 added to the response. The
- * capture therefore has to happen on the merge state, not on the pre-MUL-473
- * commit on its own: that commit's responses predate those three fields.
+ * re-recorded after later response-shape changes: Issues no longer carry the
+ * `parent_done_grant_at/by/agent_id` fields MUL-457 added, nor the deprecated
+ * `responsible_member_id` (the designated root human was removed), so the
+ * capture has to happen on a revision with that Issue shape, not on the
+ * pre-MUL-473 commit on its own.
  * `--source <label>` overrides the header label when capturing anywhere else.
  *
  * The golden records only the routes PR1 touches. `GET /api/inbox/summary` and
@@ -46,7 +47,8 @@ const AUTH_TOKEN = "mul473-hotspot-token";
  */
 const FIRST_SCREEN_GOLDEN_SOURCE =
   "pre-optimization implementation (593ff2ba) re-captured after merging origin/main d6714966 "
-  + "(MUL-457 added the parent_done_grant_* fields)";
+  + "(MUL-457 added the parent_done_grant_* fields), then re-captured once Issues dropped "
+  + "parent_done_grant_* and responsible_member_id";
 
 export interface FirstScreenHotspotGolden {
   name: string;

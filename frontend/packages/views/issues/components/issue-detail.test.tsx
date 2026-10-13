@@ -225,6 +225,8 @@ vi.mock("../../runtimes/components/runtime-workspace-picker", () => ({
 // Mock api
 const mockApiObj = vi.hoisted(() => ({
   getIssue: vi.fn(),
+  getQuestion: vi.fn(),
+  listIssueQuestions: vi.fn().mockResolvedValue([]),
   listIssueSessions: vi.fn().mockResolvedValue([{
     id: "session-main",
     issue_id: "issue-1",
@@ -958,8 +960,8 @@ describe("IssueDetail (shared)", () => {
     });
   });
 
-  it("does not equate a completed task with formal issue acceptance", async () => {
-    mockApiObj.getIssue.mockResolvedValue({ ...mockIssue, status: "in_review" });
+  it("keeps a finished round in review with only its properties in the sidebar", async () => {
+    mockApiObj.getIssue.mockResolvedValue({ ...mockIssue, status: "in_review", pending_decision_count: 0 });
     mockApiObj.listTasksByIssue.mockResolvedValue([
       {
         id: "task-completed",
@@ -978,9 +980,40 @@ describe("IssueDetail (shared)", () => {
     ]);
     renderIssueDetail();
 
-    await screen.findByRole("button", { name: "Questions and history" });
+    await screen.findByText("Properties");
+    expect(screen.getByRole("button", { name: "In Review" })).toBeInTheDocument();
+    // No responsibility section, question history entry, delivery card, root human or done grant.
+    expect(document.querySelector("[data-issue-responsibility], [data-issue-delivery], [data-parent-done-grant]")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Questions and history" })).toBeNull();
+    expect(screen.queryByText(/Responsibility and delivery|Designated human|Result reviewer|Accept delivery/)).toBeNull();
+    expect(document.querySelector("[data-issue-notice-slot]")).toBeNull();
     expect(screen.queryByRole("button", { name: "Complete issue" })).toBeNull();
     expect(mockApiObj.updateIssue).not.toHaveBeenCalled();
+  });
+
+  it("sets an issue to done straight from the status picker", async () => {
+    mockApiObj.getIssue.mockResolvedValue({ ...mockIssue, status: "in_review" });
+    mockApiObj.updateIssue.mockResolvedValue({ ...mockIssue, status: "done" });
+    renderIssueDetail();
+
+    fireEvent.click(await screen.findByRole("button", { name: "In Review" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Done" }));
+
+    await waitFor(() => expect(mockApiObj.updateIssue).toHaveBeenCalledWith("issue-1", { status: "done" }));
+    expect(mockApiObj.updateIssue).toHaveBeenCalledTimes(1);
+    expect(mockToast.error).not.toHaveBeenCalled();
+  });
+
+  it("shows the server's refusal when an agent-only closure rule rejects done", async () => {
+    mockApiObj.getIssue.mockResolvedValue({ ...mockIssue, status: "in_review" });
+    mockApiObj.updateIssue.mockRejectedValue(new ApiError("Only the parent issue's execution owner can set this issue to done", 403, "Forbidden",
+      { code: "issue_done_requires_parent_owner" }));
+    renderIssueDetail();
+
+    fireEvent.click(await screen.findByRole("button", { name: "In Review" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Done" }));
+
+    await waitFor(() => expect(mockToast.error).toHaveBeenCalledWith("Only the parent issue's execution owner can set this issue to done"));
   });
 
   it("does not offer result acceptance while the latest agent task is active", async () => {
@@ -1819,7 +1852,8 @@ describe("IssueDetail (shared)", () => {
 
     // Core rows — always rendered regardless of whether the issue has a value.
     expect(screen.getByText("Status")).toBeInTheDocument();
-    expect(screen.getByText("Execution coordinator")).toBeInTheDocument();
+    expect(screen.getByText("Execution owner")).toBeInTheDocument();
+    expect(screen.queryByText("Execution coordinator")).not.toBeInTheDocument();
     // "Project" appears twice (row label + picker stub), so disambiguate by id.
     expect(screen.getByTestId("project-picker")).toBeInTheDocument();
     // priority="high" + due_date are set in the fixture, so both optional rows show.
@@ -1834,6 +1868,13 @@ describe("IssueDetail (shared)", () => {
     // The "+ Add property" affordance is always offered while any
     // optional field is still hidden.
     expect(screen.getByText("Add property")).toBeInTheDocument();
+  });
+
+  it("labels the execution assignment 执行负责人 in Chinese", async () => {
+    renderIssueDetail("issue-1", undefined, undefined, "zh-Hans");
+
+    expect(await screen.findByText("执行负责人")).toBeInTheDocument();
+    expect(screen.queryByText("本单执行统筹")).not.toBeInTheDocument();
   });
 
   it("hides every optional property row when none are set", async () => {
@@ -2045,7 +2086,7 @@ describe("IssueDetail (shared)", () => {
         author_type: "system", body_md: "Event " + seq, body_html: null, render_version: "test", metadata: {}, ...extra });
     }
     function renderActivityRows(entries: SessionLogRow[], userId: string, options: { target?: string; missing?: string; ssr?: boolean;
-      activities?: IssueActivityEntry[]; truncated?: boolean; side?: boolean } = {}) {
+      activities?: IssueActivityEntry[]; truncated?: boolean; side?: boolean; members?: unknown[] } = {}) {
       const queryClient = createTestQueryClient();
       // Match the SSR task seed; these cases isolate log display preferences.
       queryClient.setQueryData(issueKeys.tasks(mockIssue.id), []);
@@ -2056,7 +2097,7 @@ describe("IssueDetail (shared)", () => {
       const makeView = () => <I18nProvider locale="en" resources={TEST_RESOURCES}>
         <QueryClientProvider client={queryClient}>
           <IssueActivitySection issueId={mockIssue.id} issueTitle={mockIssue.title} projectId={null}
-            members={[]} agents={[{ id: "agent-1", name: "QA" } as any]} currentUserId={userId}
+            members={(options.members ?? []) as any} agents={[{ id: "agent-1", name: "QA" } as any]} currentUserId={userId}
             canModerateComments={false} activeIssueSessionId="session-main" activeIssueSession={options.activities
               ? { id: "session-main", is_default: !options.side } as any : null}
             sessionsPending={false} sessionsFetching={false} onRetrySessions={vi.fn()} scrollContainerEl={null}
@@ -2155,6 +2196,37 @@ describe("IssueDetail (shared)", () => {
       expect(server.querySelector("[data-tab-scroll-root]")).toHaveAttribute("data-ssr-display-ready", "0");
       await act(async () => {});
       expect(view.container.querySelector("[data-tab-scroll-root]")).toHaveAttribute("data-ssr-display-ready", "1");
+    });
+
+    it("renders a member reminder only for the member it reached and only when its original Q is in another session", async () => {
+      const view = (id: string) => ({ kind: "question", id, session_id: id === "row-1" ? "session-main" : "session-side", workspace_id: "ws-1", source_issue_id: mockIssue.id, source_agent_id: "agent-1",
+        source_turn_id: null, source_attempt_id: null, original_questions: [], original_message: id === "row-1" ? "Retire the v1 endpoint?" : "Which side branch?", options: null, summary: null,
+        current_handler: null, stage: "human", route_revision: 2, route_reason: null, answer_revision: 0, status: "pending", wait_status: "waiting", wait_reason: null,
+        answer: null, history: [], actions: { allowed: ["answer"] } });
+      mockApiObj.getQuestion.mockImplementation(async (id: string) => view(id));
+      const reminder = (seq: number, original: string, to: Partial<SessionLogRow>, source?: string) => activityRow(seq, "message", { sender_type: "system", message_kind: "request",
+        body_md: "A question is waiting", metadata: { question_notification: true, root_question_id: original, ...(source ? { source_question_session_id: source } : {}) }, ...to });
+      const rows = [activityRow(0, "head"),
+        activityRow(1, "message", { author_type: "agent", author_id: "agent-1", sender_type: "agent", message_kind: "decision", body_md: "Retire the v1 endpoint?", metadata: { question: { status: "pending" } } }),
+        // The original row above already shows this Q to everyone, the reader included.
+        reminder(2, "row-1", { to_type: "member", to_member_id: "member-me" }, "session-main"),
+        // A Q asked in a side session reaches this log only through its reminder.
+        reminder(3, "q-side", { to_type: "member", to_member_id: "member-me" }, "session-side"),
+        reminder(4, "q-side", { to_type: "member", to_member_id: "member-other" }, "session-side"),
+        reminder(5, "q-side", { to_type: "member", to_ref: "member-other" }),
+        reminder(6, "row-1", { to_type: "agent", to_agent_id: "agent-1", to_ref: "agent-1" }),
+        // An older recovery notice has no source session; its loaded original row decides.
+        reminder(7, "row-1", { to_type: "member", to_member_id: "member-me" })];
+      // The reader is a member whose member id differs from the user id the page knows.
+      const mounted = renderActivityRows(rows, "user-me", { members: [{ id: "member-me", user_id: "user-me", name: "Me", role: "member" }] });
+      await waitFor(() => expect(mounted.container.querySelectorAll("[data-question-tag]")).toHaveLength(3));
+      expect(document.getElementById("comment-row-1")?.querySelector("[data-question-summary]")).toHaveTextContent("Retire the v1 endpoint?");
+      expect(document.getElementById("comment-row-3")?.querySelector("[data-question-summary]")).toHaveTextContent("Which side branch?");
+      expect(document.getElementById("comment-row-6")?.querySelector("[data-question-summary]")).not.toBeNull();
+      for (const hidden of ["row-2", "row-4", "row-5", "row-7"]) expect(document.getElementById(`comment-${hidden}`)).toBeNull();
+      expect(mockApiObj.getQuestion).toHaveBeenCalledWith("row-1");
+      expect(mockApiObj.getQuestion).toHaveBeenCalledWith("q-side");
+      expect(mockApiObj.getQuestion).not.toHaveBeenCalledWith("row-2");
     });
 
     it("filters side-session activities and toggles third-layer audits while showing the cap hint", async () => {
@@ -2820,6 +2892,50 @@ describe("IssueDetail (shared)", () => {
 
       await waitFor(() => expect(mockApiObj.getIssue).toHaveBeenCalledWith("issue-1"));
       expect(mockApiObj.listIssues).not.toHaveBeenCalled();
+    });
+
+    it("seeds the detail from a cached row that carries this issue's human-stage count", async () => {
+      mockApiObj.getIssue.mockReturnValue(new Promise(() => {}));
+      const queryClient = createTestQueryClient();
+      queryClient.setQueryData(["issues", "ws-1", "list", {}], {
+        byStatus: {
+          in_progress: { issues: [{ ...mockIssue, pending_decision_count: 1 }], total: 1 },
+        },
+      });
+
+      render(
+        <I18nProvider locale="en" resources={TEST_RESOURCES}>
+          <QueryClientProvider client={queryClient}>
+            <IssueDetail issueId="issue-1" />
+          </QueryClientProvider>
+        </I18nProvider>,
+      );
+
+      // The detail request never answers here; the seed alone paints the title and the bar.
+      expect(await screen.findByRole("button", { name: "Implement authentication" })).toBeInTheDocument();
+      expect(document.querySelector("[data-issue-decision-banner]")).toHaveTextContent("1 question awaiting an answer");
+      expect(mockApiObj.getIssue).toHaveBeenCalledWith("issue-1");
+      expect(mockApiObj.listIssues).not.toHaveBeenCalled();
+    });
+
+    it("waits for the detail when the cached row lacks the detail-only count", async () => {
+      mockApiObj.getIssue.mockReturnValue(new Promise(() => {}));
+      const queryClient = createTestQueryClient();
+      queryClient.setQueryData(["issues", "ws-1", "list", {}], {
+        byStatus: { in_progress: { issues: [mockIssue], total: 1 } },
+      });
+
+      render(
+        <I18nProvider locale="en" resources={TEST_RESOURCES}>
+          <QueryClientProvider client={queryClient}>
+            <IssueDetail issueId="issue-1" />
+          </QueryClientProvider>
+        </I18nProvider>,
+      );
+
+      await act(async () => {});
+      expect(screen.queryByRole("button", { name: "Implement authentication" })).toBeNull();
+      expect(screen.getAllByRole("generic").some((el) => el.getAttribute("data-slot") === "skeleton")).toBe(true);
     });
 
     it("still issues no list request when the issue has a parent to resolve", async () => {

@@ -149,7 +149,8 @@ describe("v2 runtime capability advertisement", () => {
     h.db.run('UPDATE multiremi_users SET feishu_union_id=? WHERE id=?', ['on_capability_fixture', user.id]);
     const seen = new Date().toISOString();
     h.db.run("INSERT INTO multiremi_feishu_bot_senders(id,workspace_id,app_id,open_id,union_id,display_name,allowed,first_seen_at,last_seen_at) VALUES('fbs_capability','local','capability_fixture','ou_capability_fixture','on_capability_fixture','Human',1,?,?)", [seen, seen]);
-    const parent = createResponsibleTestIssue(h.store, { title: "Capability parent", workspaceId: "local", assigneeType: "agent", assigneeId: agent.id, responsibleMemberId: member.id });
+    // A human-stage card goes to the root creator, so the card recipient creates the root.
+    const parent = createResponsibleTestIssue(h.store, { title: "Capability parent", workspaceId: "local", assigneeType: "agent", assigneeId: agent.id, createdBy: user.id });
     h.store.prepareFeishuIssueTopicWithinTransaction(parent);
     const root = h.store.claimFeishuBotOutbound("local", id)!;
     h.store.reportFeishuBotOutbound("local", id, root.id, {

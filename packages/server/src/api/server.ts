@@ -9,6 +9,7 @@ import { SkillImportError } from "@daemon/agent-runtime/skills/skill-import.js";
 import { MultiremiStore } from "@multiremi/store/store.js";
 import { AgentPluginStoreError } from "@multiremi/store/repos/agent-plugins-repo.js";
 import { BatchParentStatusGuardError, ParentStatusGuardError } from "@multiremi/store/repos/issues-repo.js";
+import { IssueResponsibilityError } from "@multiremi/store/issue-responsibility.js";
 import {
   DaemonIdentityOwnerConflictError,
   DaemonRetiredError,
@@ -715,25 +716,17 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
       const rejected = err instanceof BatchParentStatusGuardError
         ? { rejected_issue_ids: err.rejectedIssueIds }
         : {};
-      if (err.code === "parent_done_requires_member") {
-        return c.json({ error: err.message, code: err.code, reason: err.details.reason ?? "grant_missing", ...rejected }, 403);
-      }
       return c.json({
         error: err.message,
         code: err.code,
-        reason: err.details.reason ?? (err.code === "final_summary_missing" ? "final_summary_missing" : "children_open"),
+        reason: err.details.reason ?? "children_open",
         open_children: err.details.openChildren ?? 0,
-        // MUL-400 S1c (QA round 1): the guard's machine-readable details live
-        // under `data`, matching the activity envelope this repo already uses
-        // for structured payloads (`entry.details` on the timeline). Only the
-        // newer `lastChildClosedAt` moves; `reason`/`open_children` keep their
-        // existing top-level names for compatibility.
-        ...(err.details.lastChildClosedAt !== undefined
-          ? { data: { lastChildClosedAt: err.details.lastChildClosedAt } }
-          : {}),
         ...rejected,
       }, 409);
     }
+    // The done rule and execution-owner refusals carry their own status; a route
+    // that does not map them itself must still surface the decision, not a 500.
+    if (err instanceof IssueResponsibilityError) return c.json({ error: err.message, code: err.code }, err.status);
     if (err instanceof RuntimeWorkspaceError) return c.json({ error: err.message, code: "runtime_workspace_error" }, err.status);
     if (err instanceof RuntimeLocalSkillRequestError) return c.json({ error: err.message }, 400);
     if (err instanceof RuntimeRegistrationIdentityConflictError) {

@@ -69,7 +69,8 @@ export function createPrefixRefresh({ qc, authStore }: SyncContext): {
       const wsId = getCurrentWsId();
       if (wsId) {
         qc.invalidateQueries({ queryKey: workspaceKeys.agents(wsId) });
-        qc.invalidateQueries({ queryKey: [...issueKeys.all(wsId), "responsibility"] });
+        // An execution owner's availability re-routes the questions it holds.
+        qc.invalidateQueries({ queryKey: [...issueKeys.all(wsId), "questions"] });
         qc.invalidateQueries({ queryKey: ["question", wsId] });
         qc.invalidateQueries({ queryKey: agentPluginKeys.all(wsId) });
         // Squad members status is derived per agent, so any agent
@@ -83,7 +84,7 @@ export function createPrefixRefresh({ qc, authStore }: SyncContext): {
       const wsId = getCurrentWsId();
       if (wsId) {
         qc.invalidateQueries({ queryKey: workspaceKeys.members(wsId) });
-        qc.invalidateQueries({ queryKey: [...issueKeys.all(wsId), "responsibility"] });
+        // Membership decides who may act at a question's human stage.
         qc.invalidateQueries({ queryKey: ["question", wsId] });
       }
     },
@@ -220,6 +221,8 @@ export function createPrefixRefresh({ qc, authStore }: SyncContext): {
   return {
     onAny: (msg) => {
       if (msg.type === "agent:archived" || msg.type === "agent:restored") {
+        // A re-routed question can enter or leave the human stage, which is
+        // what the detail's pending_decision_count counts.
         const wsId = getCurrentWsId();
         if (wsId) void qc.invalidateQueries({ queryKey: issueKeys.detailAll(wsId) });
       }

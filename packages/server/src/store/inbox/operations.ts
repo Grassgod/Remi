@@ -53,8 +53,7 @@ export class InboxOperations {
   private assertUnread(message:UnifiedMessage):void {
       if (message.metadata.question || message.metadata.human_request || message.metadata.decision_record)
         throw new IssueDecisionError(409,'Original questions and their history are immutable; use question close');
-      if(message.metadata.issue_delivery || message.metadata.issue_delivery_response)
-        throw new IssueDecisionError(409,'Formal deliveries and acceptance records are immutable; submit a new delivery');
+      // Historical issue_delivery metadata is an ordinary message now.
       if(this.ctx.db.query(`SELECT 1 FROM multiremi_turns WHERE session_id=? AND input_to_seq>=? LIMIT 1`).get(message.session_id,message.seq)
         ||this.ctx.db.query(`SELECT 1 FROM multiremi_session_lanes WHERE session_id=? AND reader_type='agent'
           AND (cursor_seq>=? OR cursor_seq=? AND cursor_offset>0) LIMIT 1`).get(message.session_id,message.seq,message.seq-1))throw new Error('A consumed message cannot be edited or deleted');
@@ -302,6 +301,8 @@ export class InboxOperations {
       if(!changed.changes)throw new Error('Decision is settled');return token;});
   }
   answerMessageDecision(id:string,input:{sender:SendMessageInput['sender'];body_md:string;credential?:QuestionCardCredential;response?:Record<string,unknown>;source_turn_id?:string;expected_route_revision?:number;expected_answer_revision?:number;revise?:boolean;reason?:string}) {
+    // A stale route re-routes in its own commit before this answer transaction opens.
+    new Questions(this.ctx).refreshIfStale(id);
     return this.transaction(events=>{const message=getMessage(this.ctx,id);if(!message||message.message_kind!=='decision')throw new Error('Decision not found');this.lockMessage(message);
       if (message.metadata.question || message.metadata.human_request || isHistoricalIssueQuestionRecord(message.metadata.decision_record)) return new Questions(this.ctx).answer(id, { expected_route_revision: input.expected_route_revision!, response: input.response ?? { answer: input.body_md }, body_md: input.body_md, revise: input.revise, reason: input.reason, expected_answer_revision: input.expected_answer_revision }, input.sender, input.source_turn_id, input.credential);
       // Retain the carrier of old status-only choices without inventing a Q.

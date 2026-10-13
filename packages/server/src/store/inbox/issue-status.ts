@@ -23,8 +23,12 @@ export function deriveIssueStatusWithinTransaction(ctx:StoreContext,issueId:stri
       WHERE r.reply_to_id=d.id AND r.message_kind='reply' AND r.deleted_at IS NULL) LIMIT 1`).get(issueId,owner.id):null;
   let status:string|null=null;
   let last=turns[0];
+  // in_review means a human must act or read: a question at the human stage, or a finished round.
+  const humanQuestion=!active.some(t=>t.status==='running')&&ctx.issues().countPendingIssueDecisions(issueId)>0;
   if(active.some(t=>t.status==='running'))status='in_progress';
-  else if(active.some(t=>t.status==='awaiting_human')||decision)status='in_review';
+  else if(humanQuestion)status='in_review';
+  // A question still waiting on a Leader is execution, not review.
+  else if(active.some(t=>t.status==='awaiting_human')||decision)status='in_progress';
   else if(active.some(t=>t.status==='pending')){
     if(active.some(t=>Number(t.merged_work_triggers)>0||t.trigger_sender==='member'||t.trigger_reason==='agent_dispatch'||['human_sender','agent_dispatch'].includes(t.wake_source)))status='todo';
   }else{
@@ -34,10 +38,11 @@ export function deriveIssueStatusWithinTransaction(ctx:StoreContext,issueId:stri
       : turns.find(t=>t.agent_id===owner?.id);
     if(issue.issueKind==='intake')last=latest??last;
     status=latest?.status==='completed'?'in_review':latest?.status==='failed'?'blocked':latest?.status==='cancelled'?'todo':null;
-    // Turn/intake completion is delivery evidence, never the designated reviewer's acceptance.
+    // A finished round derives only in_review; closing it follows the done rule.
   }
   if(!status)return {changed:false,previousStatus:issue.status};
-  status=ctx.issues().holdParentStatusForOpenChildren(issueId,status,{exempt:active.some(t=>t.status==='awaiting_human')||!!decision,deferredEvents:events});
+  // A parent legitimately parks at in_review while a human answers, even with open children.
+  status=ctx.issues().holdParentStatusForOpenChildren(issueId,status,{exempt:humanQuestion,deferredEvents:events});
   if(status===issue.status)return {changed:false,previousStatus:issue.status};
   const at=nowIso();
   const completedAt=status==='done'?at:null;

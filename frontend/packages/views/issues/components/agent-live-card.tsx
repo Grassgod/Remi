@@ -53,9 +53,15 @@ export function AgentLiveCard({ issueId, issueSessionId, onInitialReconcile, rec
   ));
   // AskUser requests belong to the Issue, not to whichever product Session is
   // currently selected in the right panel. Keep this issue-wide view separate
-  // from the Session-filtered activity banner.
-  const [humanRequestTasks, setHumanRequestTasks] = useState<AgentTask[]>(() =>
-    (qc.getQueryData<AgentTask[]>(issueKeys.tasks(issueId)) ?? []).filter(task => task.status === "awaiting_human"));
+  // from the Session-filtered activity banner. A task that asked keeps its
+  // dock while it stays active, so an answered line (and its open drawer)
+  // does not vanish the moment the task resumes.
+  const askedTaskIds = useRef(new Set<string>());
+  const [humanRequestTasks, setHumanRequestTasks] = useState<AgentTask[]>(() => {
+    const asked = (qc.getQueryData<AgentTask[]>(issueKeys.tasks(issueId)) ?? []).filter(task => task.status === "awaiting_human");
+    for (const task of asked) askedTaskIds.current.add(task.id);
+    return asked;
+  });
   // Cancel confirmation is hoisted here (not per-card) so a single dialog
   // serves both the inline single banner and the multi-agent popover. A
   // confirm dialog living inside the popover would be torn down the moment
@@ -100,7 +106,8 @@ export function AgentLiveCard({ issueId, issueSessionId, onInitialReconcile, rec
       // resolution order. Without this guard, a slow A then a fast B can
       // resolve in B-then-A order and A re-adds tasks B already cleared.
       if (mySeq !== reconcileSeq.current) return;
-      setHumanRequestTasks(issueTasks.filter((task) => task.status === "awaiting_human"));
+      for (const task of issueTasks) if (task.status === "awaiting_human") askedTaskIds.current.add(task.id);
+      setHumanRequestTasks(issueTasks.filter((task) => askedTaskIds.current.has(task.id)));
       setTaskStates(new Map(tasks.map((task) => [task.id, { task }])));
       onInitialReconcile?.();
     }).catch(error => {
@@ -133,6 +140,7 @@ export function AgentLiveCard({ issueId, issueSessionId, onInitialReconcile, rec
       next.delete(p.task_id);
       return next;
     });
+    askedTaskIds.current.delete(p.task_id);
     setHumanRequestTasks((prev) => prev.filter((task) => task.id !== p.task_id));
     reconcile();
   }, [issueId, reconcile]);
@@ -288,7 +296,7 @@ export function AgentLiveCard({ issueId, issueSessionId, onInitialReconcile, rec
           />
         ))}
         {humanRequestTasks.map((task) => (
-          <HumanRequestDock key={task.id} taskId={task.id} sessionId={task.issue_session_id} turnId={task.turn_id} />
+          <HumanRequestDock key={task.id} taskId={task.id} sessionId={task.issue_session_id} turnId={task.turn_id} getActorName={getActorName} />
         ))}
       </div>
       <TerminateTaskConfirmDialog

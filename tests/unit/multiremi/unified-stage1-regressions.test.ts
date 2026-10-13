@@ -16,7 +16,7 @@ pendingTurnBackendTests("MUL-508 stage 1 regressions", (fixture) => {
     const user = store.getOrCreateUser({ externalId: "stage1-member", name: "Member" });
     store.createWorkspaceMember({ userId: user.id, name: user.name, role: "member" });
     const agent = store.createAgent({ name: "Private", provider: "codex", visibility: "private", ownerId: "local" });
-    const issue = createResponsibleTestIssue(store, { title: "Stage 1", assigneeType: "agent", assigneeId: agent.id, responsibleMemberId: "mem_local_local" });
+    const issue = createResponsibleTestIssue(store, { title: "Stage 1", assigneeType: "agent", assigneeId: agent.id });
     const session = store.getOrCreateDefaultIssueSession(issue.id);
     const token = await store.createAccessToken({ type: "pat", name: "Member", userId: user.id, workspaceId: "local" });
     const app = createMultiremiApp({ store, authToken: "stage1-master" });
@@ -110,28 +110,31 @@ pendingTurnBackendTests("MUL-508 stage 1 regressions", (fixture) => {
     expect((await f.request(f.path)).data.messages.some((m: any) => m.reply_to_id === q.request.id)).toBe(false);
   });
 
-  it("B2: shared-agent visibility does not authorize a different member to answer the specified human's Q", async () => {
+  it("B2: with a shared Agent any active member answers its human-stage Q once through a reply", async () => {
     const f = await scaffold(); f.store.updateAgent(f.agent.id, { visibility: "workspace" });
     const q = runningRequest(f.store, f.db, f.agent.id, f.issue.id, "question", question);
+    // The asker executes this root: nobody is designated, the Q waits for any active member.
+    expect(f.store.getQuestion(q.request.id)).toMatchObject({ stage: "human", current_handler: null });
     expect((await f.request(`/api/messages/${q.request.id}`)).status).toBe(200);
+    const member = f.store.findWorkspaceMemberForUser(f.user.id, "local")!;
     expect((await f.request(f.path, "POST", { reply_to_id: q.request.id, expected_route_revision: q.revision,
-      metadata: { selected_options: ["Yes"] } })).status).toBe(403);
-    expect(f.store.getTaskHumanRequest(q.request.id)?.status).toBe("pending");
-    expect(f.store.getTurn(q.turn.id)?.status).toBe("awaiting_human");
+      metadata: { selected_options: ["Yes"] } })).status).toBe(200);
+    expect(f.store.getTaskHumanRequest(q.request.id)?.response).toMatchObject({ answers: { "Continue?": "Yes" } });
+    expect(f.store.getQuestion(q.request.id)?.answer?.actor).toEqual({ type: "member", id: member.id });
+    // A second member's plain answer does not overwrite the first.
     expect((await f.request(f.path, "POST", { reply_to_id: q.request.id, expected_route_revision: q.revision,
-      metadata: { selected_options: ["Yes"] } }, f.owner)).status).toBe(200);
+      metadata: { selected_options: ["No"] } }, f.owner)).status).toBe(409);
     expect(f.store.getTaskHumanRequest(q.request.id)?.response).toMatchObject({ answers: { "Continue?": "Yes" } });
   });
 
-  for (const kind of ["permission", "question"] as const) it(`B2: the specified human can read and answer private ${kind} only through the original Q surface`, async () => {
+  for (const kind of ["permission", "question"] as const) it(`B2: any active member reads and answers a private ${kind} only through the original Q surface`, async () => {
     const f = await scaffold(), member = f.store.findWorkspaceMemberForUser(f.user.id, "local")!;
-    f.store.updateIssue(f.issue.id, { responsibleMemberId: member.id, actorType: "member", actorId: "mem_local_local" });
     const q = runningRequest(f.store, f.db, f.agent.id, f.issue.id, kind, kind === "permission" ? permission : question);
     expect((await f.request(`/api/messages/${q.request.id}`)).status).toBe(404);
     expect((await f.request(`/api/turns/${q.turn.id}`)).status).toBe(404);
     expect((await f.request(`/api/turns/${q.turn.id}/trace`)).status).toBe(404);
     const view = await f.request(`/api/messages/${q.request.id}/question`);
-    expect(view.status).toBe(200); expect(view.data.question.current_handler).toEqual({ type: "member", id: member.id });
+    expect(view.status).toBe(200); expect(view.data.question).toMatchObject({ stage: "human", current_handler: null });
     const response = kind === "permission" ? { option_id: "allow_once" } : { answers: { "Continue?": "Yes" } };
     expect((await f.request(`/api/messages/${q.request.id}/question/answer`, "POST",
       { expected_route_revision: q.revision, response })).status).toBe(200);

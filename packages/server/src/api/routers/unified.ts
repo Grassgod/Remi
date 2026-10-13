@@ -224,11 +224,13 @@ export function registerUnifiedRoutes(app: Hono, deps: RouterDeps): void {
     return actor instanceof Response ? actor : actor.type === 'member' || actor.type === 'agent' ? actor as QuestionActor : undefined;
   };
   // A routed Q grants access to this original question only. It never grants
-  // access to the source Agent's private message history, Chat or trace.
+  // access to the source Agent's private message history, Chat or trace. The
+  // Issue human stage names nobody (no current handler): any active member reads it.
   const routedQuestionAccess = (c: Context, q: NonNullable<ReturnType<typeof store.getQuestion>>, actor: QuestionActor | undefined) => !!actor
     && (actor.type === 'agent' ? store.canAccessQuestionFromTurn(q.id, actor.id, callerTurn(c))
       : q.current_handler?.type === actor.type && q.current_handler.id === actor.id
-      || q.actions.allowed.some(action => ['present', 'close', 'revise'].includes(action)));
+      || q.stage === 'human' && !q.current_handler
+      || q.actions.allowed.some(action => ['answer', 'present', 'close', 'revise', 'continue'].includes(action)));
   const loadQuestion = (c: Context) => {
     const message = store.getMessage(c.req.param('id')!);
     if (!message || message.visibility !== 'shown') return c.json({ error: 'question not found' }, 404);
@@ -267,7 +269,8 @@ export function registerUnifiedRoutes(app: Hono, deps: RouterDeps): void {
     const loaded = loadQuestion(c); if (loaded instanceof Response) return loaded;
     return c.json({ question: loaded.question });
   });
-  for (const operation of ['answer', 'escalate', 'transfer', 'present', 'continue', 'close'] as const) app.post(`/api/messages/:id/question/${operation}`, async c => {
+  // Responsibility changes re-route a Q automatically; the retired transfer route answers 410.
+  for (const operation of ['answer', 'escalate', 'present', 'continue', 'close'] as const) app.post(`/api/messages/:id/question/${operation}`, async c => {
     const loaded = loadQuestion(c); if (loaded instanceof Response) return loaded;
     const actor = loaded.actor;
     if (!actor) return c.json({ error: 'question actor required' }, 403);
@@ -283,7 +286,6 @@ export function registerUnifiedRoutes(app: Hono, deps: RouterDeps): void {
         return { ...result, message: publicMessage(result.message) };
       }
       const question = operation === 'escalate' ? store.escalateQuestion(loaded.message.id, mutation, actor, callerTurn(c))
-        : operation === 'transfer' ? store.transferQuestion(loaded.message.id, mutation, actor, callerTurn(c))
         : operation === 'present' ? store.presentQuestion(loaded.message.id, { ...mutation, summary: input.summary }, actor, callerTurn(c))
         : operation === 'close' ? store.closeQuestion(loaded.message.id, mutation, actor, callerTurn(c))
         : store.continueQuestion(loaded.message.id, mutation, actor);
