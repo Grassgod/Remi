@@ -1,4 +1,4 @@
-import { createResponsibleTestIssue, createHistoricalTestIssue, seedHistoricalIssueFacts, acceptTestIssueDelivery, prepareTestIssueDelivery } from './helpers.js';
+import { createResponsibleTestIssue, createHistoricalTestIssue, seedHistoricalIssueFacts, acceptTestIssueDelivery, testWorkspaceMember } from './helpers.js';
 import { runTurnExecutionMutation } from '@multiremi/store/turn-execution-records.js';
 import type { SqlDatabase as UnifiedFixtureDatabase } from '@multiremi/store/db/postgres.js';
 /**
@@ -139,14 +139,14 @@ describe("MUL-400 S1 transaction depth — issue write paths", () => {
         assigneeId: agent.id,
       });
       const child = createResponsibleTestIssue(store, { assigneeType:'agent',assigneeId:store.createAgent({name:'Explicit execution fixture',provider:'codex'}).id, title: `Child ${status}`, parentIssueId: parent.id, status: "in_progress" });
-      const prepared=status==='done'?prepareTestIssueDelivery(store,child.id):null;
+      // A member closes the child; blocked/cancelled are ordinary status writes.
+      const member = testWorkspaceMember(store, "local");
       const counter = wrapStore(store);
       counter.reset();
-      if(prepared)store.respondIssueDelivery(child.id,prepared.delivery.id,{action:'accept',revision:prepared.delivery.responsibilityRevision},prepared.actor);
-      else store.updateIssue(child.id, { status });
+      store.updateIssue(child.id, { status, ...(status === "done" ? { actorType: "member" as const, actorId: member.id } : {}) });
       expect(counter.maxTopLevel).toBe(1);
       expect(counter.maxNested).toBe(0);
-      expect(counter.taskInserts).toEqual(prepared ? [] : [{ depth: 1, inTransaction: true }]);
+      expect(counter.taskInserts).toEqual([{ depth: 1, inTransaction: true }]);
       expect(counter.maxTopLevel + counter.maxNested).toBe(1);
       // The report still landed as exactly one queued round.
       expect(store.listTasksForIssue(parent.id).filter((task) => task.status === "queued")).toHaveLength(1);
@@ -156,13 +156,12 @@ describe("MUL-400 S1 transaction depth — issue write paths", () => {
       const { store, agent } = setupDepthStore();
       const parent = busyParent(store, agent.id, `Busy parent ${status}`);
       const child = createResponsibleTestIssue(store, { assigneeType:'agent',assigneeId:store.createAgent({name:'Explicit execution fixture',provider:'codex'}).id, title: `Busy child ${status}`, parentIssueId: parent.id, status: "in_progress" });
-      const prepared=status==='done'?prepareTestIssueDelivery(store,child.id):null;
+      const member = testWorkspaceMember(store, "local");
       const commentsBefore=store.listIssueComments(parent.id).filter(comment=>comment.authorType==='system').map(comment=>comment.id);
       const deliveredBefore=store.listIssueActivity(parent.id).filter(entry=>entry.type==='message_delivered_running').length;
       const counter = wrapStore(store);
       counter.reset();
-      if(prepared)store.respondIssueDelivery(child.id,prepared.delivery.id,{action:'accept',revision:prepared.delivery.responsibilityRevision},prepared.actor);
-      else store.updateIssue(child.id, { status });
+      store.updateIssue(child.id, { status, ...(status === "done" ? { actorType: "member" as const, actorId: member.id } : {}) });
       expect(counter.maxTopLevel).toBe(1);
       expect(counter.maxNested).toBe(0);
       expect(counter.taskInserts).toEqual([]);
@@ -327,7 +326,7 @@ describe("MUL-400 S1 transaction depth — task terminal paths", () => {
     const { store, runtime, agent } = setupDepthStore();
     const counter = wrapStore(store);
 
-    // createTaskHumanRequest parks the Issue at in_review (guard B exempt).
+    // createTaskHumanRequest parks the Issue in review while a human answers.
     const askParent = createResponsibleTestIssue(store, {
       title: "Ask parent",
       status: "in_progress",
@@ -353,10 +352,12 @@ describe("MUL-400 S1 transaction depth — task terminal paths", () => {
     expect(native.ok).toBeTrue();
     const request=store.getTaskHumanRequest(String(native.message_id))!;
     expect(counter.max, "createTaskHumanRequest").toBe(1);
+    // Both levels are the asker, so the Q reaches the human stage: in review.
     expect(store.getIssue(askChild.id)?.status).toBe("in_review");
 
     counter.reset();
-    store.respondTaskHumanRequest(request.id, { response: { answer: "that one" },respondedBy:store.resolveIssueResponsibility(askChild.id).rootHuman!.id,
+    // At the human stage any active member answers.
+    store.respondTaskHumanRequest(request.id, { response: { answer: "that one" },respondedBy:'mem_local_local',
       expectedRouteRevision:store.getQuestion(request.id)!.route_revision });
     expect(counter.max, "respondTaskHumanRequest").toBe(1);
 
@@ -574,7 +575,7 @@ describe("MUL-400 S1 transaction depth — SCM merge completion", () => {
     });
   }
 
-  it("keeps the held branch (children still open) at depth 1", () => {
+  it("keeps a merge on a parent with open children at depth 1, recorded without a hold", () => {
     const { store } = setupDepthStore();
     const connection = seedScm(store);
     const parent = createResponsibleTestIssue(store, { assigneeType:'agent',assigneeId:store.createAgent({name:'Explicit execution fixture',provider:'codex'}).id, title: "SCM held parent", workspaceId: "local" });
@@ -585,26 +586,30 @@ describe("MUL-400 S1 transaction depth — SCM merge completion", () => {
     const counter = wrapStore(store);
     counter.reset();
     recordMerge(store, connection.id, "change.merged:42:depth-held");
-    expect(counter.max, "held merge").toBe(1);
+    expect(counter.max, "recorded merge").toBe(1);
     expect(store.getIssue(parent.id)?.status).toBe("in_progress");
-    expect(store.listIssueActivity(parent.id).filter((entry) => entry.type === "parent_status_held"))
-      .toHaveLength(1);
+    expect(store.listIssueActivity(parent.id).filter((entry) => entry.type === "parent_status_held")).toHaveLength(0);
+    expect(store.listIssueActivity(parent.id).filter((entry) => entry.type === "scm_merge_completed")).toHaveLength(1);
   });
 
-  it("rolls the SCM hold audit and effect mark back on failure without using a legacy grant", () => {
-    const { store, agent } = setupDepthStore();
-    const connection = seedScm(store);
+  function finishedParent(store: Store, agentId: string, title: string) {
     const parent = createResponsibleTestIssue(store, {
-      title: "SCM atomic parent", workspaceId: "local", status: "in_progress",
-      assigneeType: "agent", assigneeId: agent.id,
+      title, workspaceId: "local", status: "in_progress",
+      assigneeType: "agent", assigneeId: agentId,
     });
     acceptTestIssueDelivery(store, createResponsibleTestIssue(store, { assigneeType:'agent',assigneeId:store.createAgent({name:'Explicit execution fixture',provider:'codex'}).id,
-      title: "SCM finished child",
+      title: `${title} child`,
       parentIssueId: parent.id,
       status: "in_progress",
     }).id);
-    store.grantParentDone(parent.id, "local");
-    store.createIssueComment(parent.id, { body: "SCM summary", authorType: "agent", authorId: agent.id });
+    store.createIssueComment(parent.id, { body: "All child work delivered", authorType: "agent", authorId: agentId });
+    return parent;
+  }
+
+  it("rolls the SCM merge record and effect mark back on failure, then settles it once on retry", () => {
+    const { store, agent } = setupDepthStore();
+    const connection = seedScm(store);
+    const parent = finishedParent(store, agent.id, "SCM atomic parent");
     projectChangeRequest(store, connection.id, `${parent.key} atomic delivery`);
 
     const events: string[] = [];
@@ -621,9 +626,9 @@ describe("MUL-400 S1 transaction depth — SCM merge completion", () => {
       ...rest: unknown[]
     ) {
       original.call(this, issueId, input as never, ...rest as [never]);
-      if (input.type === "parent_status_held") {
+      if (input.type === "scm_merge_completed") {
         injected = true;
-        throw new Error("scm hold injection");
+        throw new Error("scm record injection");
       }
     } as typeof StoreContext.prototype.appendIssueActivity;
     try {
@@ -634,46 +639,33 @@ describe("MUL-400 S1 transaction depth — SCM merge completion", () => {
     }
     expect(injected).toBe(true);
     // The injected failure is caught by the effect loop and recorded as a retry
-    // reason: the parent must NOT be done and no audit row may survive.
+    // reason: no record survives and the status never moves.
     expect(store.getIssue(parent.id)?.status).toBe("in_progress");
     const types = store.listIssueActivity(parent.id).map((entry) => entry.type);
-    expect(types).not.toContain("issue_delivery_accepted");
     expect(types).not.toContain("scm_merge_completed");
     expect(types).not.toContain('parent_status_held');
-    expect(events.filter((action) => action === "issue_updated" || action === "parent_status_held"))
-      .toHaveLength(0);
+    expect(events.filter((action) => action === "scm_merge_completed")).toHaveLength(0);
     const pending = db!.query(
       "SELECT status, last_error FROM multiremi_scm_effects WHERE issue_id = ? ORDER BY created_at DESC LIMIT 1",
     ).get(parent.id) as { status?: string; last_error?: string | null } | null;
     expect(pending?.status).toBe("pending");
-    expect(String(pending?.last_error ?? "")).toContain("scm hold injection");
+    expect(String(pending?.last_error ?? "")).toContain("scm record injection");
 
-    // Retrying the same dispatch settles it exactly once.
+    // Retrying the same dispatch settles it exactly once, still without closing.
     recordMerge(store, connection.id, "change.merged:42:scm-atomic");
     expect(store.getIssue(parent.id)?.status).toBe("in_progress");
-    expect(store.listIssueActivity(parent.id).filter((e) => e.type === "parent_done_grant_used")).toHaveLength(0);
-    expect(store.listIssueActivity(parent.id).filter((e) => e.type === "parent_status_held")).toHaveLength(1);
-    expect(store.listIssueActivity(parent.id).filter((e) => e.type === "scm_merge_completed")).toHaveLength(0);
+    expect(store.listIssueActivity(parent.id).filter((e) => e.type === "parent_status_held")).toHaveLength(0);
+    expect(store.listIssueActivity(parent.id).filter((e) => e.type === "scm_merge_completed")).toHaveLength(1);
     const settled = db!.query(
       "SELECT status FROM multiremi_scm_effects WHERE issue_id = ? ORDER BY created_at DESC LIMIT 1",
     ).get(parent.id) as { status?: string } | null;
     expect(settled?.status).toBe("applied");
   });
 
-  it("emits the SCM receipt-required hold exactly once and only after COMMIT", () => {
+  it("emits the SCM merge record exactly once and only after COMMIT", () => {
     const { store, agent } = setupDepthStore();
     const connection = seedScm(store);
-    const parent = createResponsibleTestIssue(store, {
-      title: "SCM event parent", workspaceId: "local", status: "in_progress",
-      assigneeType: "agent", assigneeId: agent.id,
-    });
-    acceptTestIssueDelivery(store, createResponsibleTestIssue(store, { assigneeType:'agent',assigneeId:store.createAgent({name:'Explicit execution fixture',provider:'codex'}).id,
-      title: "SCM event child",
-      parentIssueId: parent.id,
-      status: "in_progress",
-    }).id);
-    store.grantParentDone(parent.id, "local");
-    store.createIssueComment(parent.id, { body: "SCM summary", authorType: "agent", authorId: agent.id });
+    const parent = finishedParent(store, agent.id, "SCM event parent");
     projectChangeRequest(store, connection.id, `${parent.key} event delivery`);
     const events: Array<{ action: string; inTransaction: boolean }> = [];
     const unsubscribe = store.onWorkspaceEvent((event) => {
@@ -687,51 +679,38 @@ describe("MUL-400 S1 transaction depth — SCM merge completion", () => {
       unsubscribe();
     }
     expect(store.getIssue(parent.id)?.status).toBe("in_progress");
-    expect(events.filter((event) => event.action === "parent_status_held")).toHaveLength(1);
-    expect(events.filter((event) => event.action === "parent_done_grant_used")).toHaveLength(0);
+    expect(events.filter((event) => event.action === "scm_merge_completed")).toHaveLength(1);
+    expect(events.filter((event) => event.action === "parent_status_held")).toHaveLength(0);
     expect(events.filter((event) => event.inTransaction)).toHaveLength(0);
   });
 
-  it("keeps the granted and summarized receipt-required hold at depth 1", () => {
+  it("keeps a merge on a finished and summarized parent at depth 1 without closing it", () => {
     const { store, agent } = setupDepthStore();
     const connection = seedScm(store);
-    const parent = createResponsibleTestIssue(store, {
-      title: "SCM done parent", workspaceId: "local", status: "in_progress",
-      assigneeType: "agent", assigneeId: agent.id,
-    });
-    acceptTestIssueDelivery(store, createResponsibleTestIssue(store, { assigneeType:'agent',assigneeId:store.createAgent({name:'Explicit execution fixture',provider:'codex'}).id,
-      title: "Finished child",
-      parentIssueId: parent.id,
-      status: "in_progress",
-    }).id);
-    store.grantParentDone(parent.id, "local");
-    store.createIssueComment(parent.id, { body: "All child work delivered", authorType: "agent", authorId: agent.id });
+    const parent = finishedParent(store, agent.id, "SCM done parent");
     projectChangeRequest(store, connection.id, `${parent.key} final delivery`);
 
     const counter = wrapStore(store);
     counter.reset();
     recordMerge(store, connection.id, "change.merged:42:depth-done");
-    expect(counter.max, "closed merge").toBe(1);
+    expect(counter.max, "recorded merge").toBe(1);
     expect(store.getIssue(parent.id)?.status).toBe("in_progress");
-    expect(store.listIssueActivity(parent.id).filter(entry=>entry.type==='parent_status_held')).toHaveLength(1);
+    expect(store.listIssueActivity(parent.id).filter(entry=>entry.type==='parent_status_held')).toHaveLength(0);
     expect(store.listIssueActivity(parent.id).filter((entry) => entry.type === "issue_status_forced"))
       .toHaveLength(0);
   });
 });
 
-describe("MUL-457 — grant use is atomic with the parent status", () => {
+describe("MUL-457 — a done write is atomic with its audit row and events", () => {
   /**
-   * QA round 1, blocker 1: the API path wrote `issue_updated` and
-   * `parent_done_grant_used` after the status transaction committed, and the SCM
-   * path marked its effect `applied` even later. Injecting a failure at the
-   * grant-used INSERT therefore left the parent `done` with the audit rows
-   * already visible. Both paths now write status + audit + effect in one
-   * transaction, so the injected failure must roll all of it back and the SCM
-   * effect must still be retryable.
+   * QA round 1, blocker 1, restated for the done rule: the status, its
+   * `issue_updated` audit row and every realtime event commit together. An
+   * injected failure at the audit INSERT must roll all of it back, and a retry
+   * must settle exactly once.
    */
-  function grantedParentCase(store: Store, agentId: string) {
+  function finishedParentCase(store: Store, agentId: string) {
     const parent = createResponsibleTestIssue(store, {
-      title: "Granted parent",
+      title: "Finished parent",
       status: "in_progress",
       assigneeType: "agent",
       assigneeId: agentId,
@@ -742,28 +721,22 @@ describe("MUL-457 — grant use is atomic with the parent status", () => {
       status: "in_progress",
     });
     acceptTestIssueDelivery(store, child.id);
-    store.grantParentDone(parent.id, "local");
-    store.createIssueComment(parent.id, { body: "All child work delivered", authorType: "agent", authorId: agentId });
-    const prepared=prepareTestIssueDelivery(store,parent.id);
-    store.authorizeIssueDelivery(parent.id,prepared.delivery.id,agentId,prepared.delivery.responsibilityRevision,
-      {type:'member',id:store.resolveIssueResponsibility(parent.id).rootHuman!.id});
-    return { parent, child,delivery:prepared.delivery,
-      actor:{type:'agent' as const,id:agentId,taskId:prepared.executionTask.id} };
+    return { parent, child, member: testWorkspaceMember(store, "local") };
   }
 
-  function failOnGrantUsedOnce(): { restore(): void; fired(): boolean } {
+  function failOnAuditOnce(issueId: string): { restore(): void; fired(): boolean } {
     const original = StoreContext.prototype.appendIssueActivity;
     let fired = false;
     StoreContext.prototype.appendIssueActivity = function patched(
       this: StoreContext,
-      issueId: string,
+      target: string,
       input: { type: string },
       ...rest: unknown[]
     ) {
-      original.call(this, issueId, input as never, ...rest as [never]);
-      if (input.type === "issue_delivery_accepted") {
+      original.call(this, target, input as never, ...rest as [never]);
+      if (!fired && target === issueId && input.type === "issue_updated") {
         fired = true;
-        throw new Error("grant-used injection");
+        throw new Error("done audit injection");
       }
     } as typeof StoreContext.prototype.appendIssueActivity;
     return {
@@ -772,19 +745,19 @@ describe("MUL-457 — grant use is atomic with the parent status", () => {
     };
   }
 
-  it("rolls the API status, both audit rows and every event back on a grant-used failure", () => {
+  it("rolls the done status, its audit row and every event back when the audit write fails", () => {
     const { store, agent } = setupDepthStore();
-    const { parent,delivery,actor } = grantedParentCase(store, agent.id);
-    const activityBefore=store.listIssueActivity(parent.id);
+    const { parent, member } = finishedParentCase(store, agent.id);
+    const activityBefore = store.listIssueActivity(parent.id);
     const events: string[] = [];
     const unsubscribe = store.onWorkspaceEvent((event) => {
       const entry = (event.payload as { entry?: { action?: string } } | undefined)?.entry;
       if (event.type === "activity:created") events.push(entry?.action ?? "");
     });
-    const injection = failOnGrantUsedOnce();
+    const injection = failOnAuditOnce(parent.id);
     let thrown: Error | null = null;
     try {
-      store.respondIssueDelivery(parent.id,delivery.id,{action:'accept',revision:delivery.responsibilityRevision},actor);
+      store.updateIssue(parent.id, { status: "done", actorType: "member", actorId: member.id });
     } catch (err) {
       thrown = err as Error;
     } finally {
@@ -792,25 +765,21 @@ describe("MUL-457 — grant use is atomic with the parent status", () => {
       unsubscribe();
     }
     expect(injection.fired()).toBe(true);
-    expect(thrown?.message).toBe("grant-used injection");
-    expect(store.getIssue(parent.id)?.status).toBe("in_review");
-    const types = store.listIssueActivity(parent.id).map((entry) => entry.type);
+    expect(thrown?.message).toBe("done audit injection");
+    expect(store.getIssue(parent.id)?.status).toBe("in_progress");
     expect(store.listIssueActivity(parent.id)).toEqual(activityBefore);
-    expect(store.listIssueDeliveries(parent.id)[0]).toMatchObject({status:'pending',responseMessageId:null});
-    expect(types).not.toContain("parent_done_grant_used");
     expect(events).toHaveLength(0);
 
     // Retrying after the injected failure settles exactly once.
-    store.respondIssueDelivery(parent.id,delivery.id,{action:'accept',revision:delivery.responsibilityRevision},actor);
+    store.updateIssue(parent.id, { status: "done", actorType: "member", actorId: member.id });
     expect(store.getIssue(parent.id)?.status).toBe("done");
-    expect(store.listIssueActivity(parent.id).filter((e) => e.type === "issue_updated")).toHaveLength(activityBefore.filter(e=>e.type==='issue_updated').length+1);
-    expect(store.listIssueActivity(parent.id).filter((e) => e.type === "issue_delivery_accepted")).toHaveLength(1);
-    expect(store.listIssueActivity(parent.id).filter((e) => e.type === "parent_done_grant_used")).toHaveLength(1);
+    expect(store.listIssueActivity(parent.id).filter((e) => e.type === "issue_updated"))
+      .toHaveLength(activityBefore.filter(e => e.type === 'issue_updated').length + 1);
   });
 
-  it("emits the API grant-used events exactly once and only after COMMIT", () => {
+  it("emits the done write's events exactly once and only after COMMIT", () => {
     const { store, agent } = setupDepthStore();
-    const { parent,delivery,actor } = grantedParentCase(store, agent.id);
+    const { parent, member } = finishedParentCase(store, agent.id);
     const events: Array<{ action: string; inTransaction: boolean }> = [];
     const unsubscribe = store.onWorkspaceEvent((event) => {
       if (event.type !== "activity:created") return;
@@ -818,14 +787,12 @@ describe("MUL-457 — grant use is atomic with the parent status", () => {
       events.push({ action: entry?.action ?? "", inTransaction: db!.inTransaction });
     });
     try {
-      store.respondIssueDelivery(parent.id,delivery.id,{action:'accept',revision:delivery.responsibilityRevision},actor);
+      store.updateIssue(parent.id, { status: "done", actorType: "member", actorId: member.id });
     } finally {
       unsubscribe();
     }
     expect(store.getIssue(parent.id)?.status).toBe("done");
     expect(events.filter((event) => event.action === "issue_updated")).toHaveLength(1);
-    expect(events.filter((event) => event.action === "issue_delivery_accepted")).toHaveLength(1);
-    expect(events.filter((event) => event.action === "parent_done_grant_used")).toHaveLength(1);
     expect(events.filter((event) => event.inTransaction)).toHaveLength(0);
   });
 });
@@ -837,7 +804,7 @@ describe("MUL-400 S1 — the replay walks the whole ancestor chain", () => {
    * grandparent <- parent <- child, all agent-owned with a still-open sibling,
    * and each entry point that ends the child must walk both hops.
    */
-  function threeLayerChain(store: Store, agentId: string, prepare=false) {
+  function threeLayerChain(store: Store, agentId: string) {
     const grandparent = createResponsibleTestIssue(store, {
       title: "Grandparent",
       status: "in_progress",
@@ -865,12 +832,12 @@ describe("MUL-400 S1 — the replay walks the whole ancestor chain", () => {
     // is E1 working), which would collapse the chain before the probe starts.
     createResponsibleTestIssue(store, { assigneeType:'agent',assigneeId:store.createAgent({name:'Explicit execution fixture',provider:'codex'}).id, title: "Sibling gp", parentIssueId: grandparent.id, status: "in_progress" });
     createResponsibleTestIssue(store, { assigneeType:'agent',assigneeId:store.createAgent({name:'Explicit execution fixture',provider:'codex'}).id, title: "Sibling p", parentIssueId: parent.id, status: "in_progress" });
-    const prepared=prepare?prepareTestIssueDelivery(store,child.id):null;
+    testWorkspaceMember(store, "local");
     store.updateIssue(parent.id, { status: "in_review", force: true });
     store.updateIssue(grandparent.id, { status: "in_review", force: true });
     expect(store.getIssue(parent.id)?.status).toBe("in_review");
     expect(store.getIssue(grandparent.id)?.status).toBe("in_review");
-    return { grandparent, parent, child,prepared };
+    return { grandparent, parent, child };
   }
 
   function assertChainWalked(store: Store, chain: ReturnType<typeof threeLayerChain>) {
@@ -884,10 +851,10 @@ describe("MUL-400 S1 — the replay walks the whole ancestor chain", () => {
 
   it("walks child -> parent -> grandparent on updateIssue", () => {
     const { store, agent } = setupDepthStore();
-    const chain = threeLayerChain(store, agent.id,true);
+    const chain = threeLayerChain(store, agent.id);
     const counter = wrapStore(store);
     counter.reset();
-    store.respondIssueDelivery(chain.child.id,chain.prepared!.delivery.id,{action:'accept',revision:chain.prepared!.delivery.responsibilityRevision},chain.prepared!.actor);
+    acceptTestIssueDelivery(store, chain.child.id);
     expect(counter.max, "updateIssue chain depth").toBe(1);
     assertChainWalked(store, chain);
   });
@@ -904,7 +871,7 @@ describe("MUL-400 S1 — the replay walks the whole ancestor chain", () => {
     assertChainWalked(store, chain);
   });
 
-  it("walks child -> parent -> grandparent on an SCM merge", () => {
+  it("walks nothing on an SCM merge, and the chain on the member's close that follows", () => {
     const { store, agent } = setupDepthStore();
     process.env.MULTIREMI_SCM_ENCRYPTION_KEY = Buffer.alloc(32, 7).toString("base64");
     store.updateWorkspace("local", {
@@ -958,10 +925,12 @@ describe("MUL-400 S1 — the replay walks the whole ancestor chain", () => {
       evidence: { source: "poll", dedupeKey: "poll:change.merged:77", providerEventId: null },
     });
     expect(counter.max, "scm merge chain depth").toBe(1);
+    // The merge only records itself on the child; nothing above it moves.
     expect(store.getIssue(chain.child.id)?.status).toBe("in_progress");
     expect(store.getIssue(chain.parent.id)?.status).toBe('in_review');
     expect(store.getIssue(chain.grandparent.id)?.status).toBe('in_review');
-    expect(store.listIssueActivity(chain.child.id).filter(entry=>entry.type==='parent_status_held')).toHaveLength(1);
+    expect(store.listIssueActivity(chain.child.id).filter(entry=>entry.type==='parent_status_held')).toHaveLength(0);
+    expect(store.listIssueActivity(chain.child.id).filter(entry=>entry.type==='scm_merge_completed')).toHaveLength(1);
     acceptTestIssueDelivery(store,chain.child.id);
     assertChainWalked(store,chain);
   });
@@ -1000,7 +969,7 @@ describe("MUL-400 S1 — the replay walks the whole ancestor chain", () => {
     for (const holder of [top, mid, low]) {
       createResponsibleTestIssue(store, { assigneeType:'agent',assigneeId:store.createAgent({name:'Explicit execution fixture',provider:'codex'}).id, title: `Sibling ${holder.id}`, parentIssueId: holder.id, status: "in_progress" });
     }
-    const prepared=prepareTestIssueDelivery(store,leaf.id);
+    testWorkspaceMember(store, "local");
     for (const holder of [low, mid, top]) {
       store.updateIssue(holder.id, { status: "in_review", force: true });
       expect(store.getIssue(holder.id)?.status).toBe("in_review");
@@ -1015,7 +984,7 @@ describe("MUL-400 S1 — the replay walks the whole ancestor chain", () => {
     const counter = wrapStore(store);
     counter.reset();
     try {
-      store.respondIssueDelivery(leaf.id,prepared.delivery.id,{action:'accept',revision:prepared.delivery.responsibilityRevision},prepared.actor);
+      acceptTestIssueDelivery(store, leaf.id);
     } finally {
       unsubscribe();
     }
@@ -1025,9 +994,7 @@ describe("MUL-400 S1 — the replay walks the whole ancestor chain", () => {
     // hops moved in_review -> in_progress, which is a derivation, not a child
     // terminal outcome, so they must NOT file a notification round.
     expect(events.filter((action) => action === "parent_status_derived")).toHaveLength(3);
-    // Three ancestor reports plus the referenced acceptance reply to the leaf owner.
-    expect(events.filter((action) => action === "inbox:new")).toHaveLength(4);
-    expect(store.listIssueDeliveries(leaf.id)[0]).toMatchObject({status:'accepted',responseMessageId:expect.any(String)});
+    expect(events.filter((action) => action === "inbox:new")).toHaveLength(3);
     for (const holder of [low, mid, top]) {
       expect(store.getIssue(holder.id)?.status).toBe("in_progress");
       expect(store.listIssueActivity(holder.id).filter((e) => e.type === "parent_status_derived"))
@@ -1037,14 +1004,14 @@ describe("MUL-400 S1 — the replay walks the whole ancestor chain", () => {
 
   it("emits every chain event after the commit, and reports one line per level", () => {
     const { store, agent } = setupDepthStore();
-    const chain = threeLayerChain(store, agent.id,true);
+    const chain = threeLayerChain(store, agent.id);
     const events: Array<{ type: string; action: string; inTransaction: boolean }> = [];
     const unsubscribe = store.onWorkspaceEvent((event) => {
       const entry = (event.payload as { entry?: { action?: string } } | undefined)?.entry;
       events.push({ type: event.type, action: entry?.action ?? "", inTransaction: db!.inTransaction });
     });
     try {
-      store.respondIssueDelivery(chain.child.id,chain.prepared!.delivery.id,{action:'accept',revision:chain.prepared!.delivery.responsibilityRevision},chain.prepared!.actor);
+      acceptTestIssueDelivery(store, chain.child.id);
     } finally {
       unsubscribe();
     }
@@ -1053,11 +1020,10 @@ describe("MUL-400 S1 — the replay walks the whole ancestor chain", () => {
     // Each level reports its own derivation; the round is queued once per level
     // that had a report to deliver.
     expect(events.filter((event) => event.action === "parent_status_derived")).toHaveLength(2);
-    expect(events.filter((event) => event.type === "inbox:new")).toHaveLength(3);
-    expect(store.listIssueDeliveries(chain.child.id)[0]).toMatchObject({status:'accepted',responseMessageId:expect.any(String)});
+    expect(events.filter((event) => event.type === "inbox:new")).toHaveLength(2);
     // One `issue:updated` realtime patch per derived level, plus the child's own
     // PATCH audit line.
-    expect(events.filter((event) => event.type === "issue:updated")).toHaveLength(3);
+    expect(events.filter((event) => event.type === "issue:updated")).toHaveLength(2);
     expect(events.filter((event) => event.action === "issue_updated")).toHaveLength(1);
   });
 });

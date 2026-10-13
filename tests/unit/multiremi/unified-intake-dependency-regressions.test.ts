@@ -1,4 +1,4 @@
-import { createResponsibleTestIssue } from './helpers.js';
+import { acceptTestIssueDelivery, createResponsibleTestIssue } from './helpers.js';
 import { expect, it, setSystemTime, spyOn } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { IssuesRepo } from "@multiremi/store/repos/issues-repo.js";
@@ -35,12 +35,9 @@ pendingTurnBackendTests("MUL-508 C1/C2", (fixture) => {
     return { ...f, runtime, agent, issue, session, sent, attempt, bridge, scope, completion };
   }
 
-  function acceptCompletedIntake(f: ReturnType<typeof intake>, sourceTaskId=f.attempt.id) {
-    if(!f.store.getIssue(f.issue.id)!.assigneeId)f.store.updateIssue(f.issue.id,{assigneeType:'agent',assigneeId:f.agent.id});
-    const delivery=f.store.submitIssueDelivery(f.issue.id,{summary:'Generated intake work verified'},{type:'agent',id:f.agent.id,taskId:sourceTaskId});
-    const human=f.store.resolveIssueResponsibility(f.issue.id).rootHuman!;
-    f.store.authorizeIssueDelivery(f.issue.id,delivery.id,f.agent.id,delivery.responsibilityRevision,{type:'member',id:human.id});
-    f.store.respondIssueDelivery(f.issue.id,delivery.id,{action:'accept',revision:delivery.responsibilityRevision},{type:'agent',id:f.agent.id,taskId:sourceTaskId});
+  /** A finished intake round only reaches review; a member closes the root intake. */
+  function acceptCompletedIntake(f: ReturnType<typeof intake>) {
+    acceptTestIssueDelivery(f.store, f.issue.id);
     expect(f.store.getIssue(f.issue.id)?.status).toBe('done');
   }
 
@@ -60,7 +57,8 @@ pendingTurnBackendTests("MUL-508 C1/C2", (fixture) => {
       else expect(issue.completedAt).toBeNull();
       const events = f.db.query("SELECT id FROM multiremi_system_events WHERE resource_id=? AND event='dependency_auto_start_check'").all(issue.id);
       expect(events).toHaveLength(generated ? 1 : 0);
-      if (generated) expect(f.store.getSystemEvent(events[0]!.id)?.payload.automation_source_task_id).toBe(f.attempt.id);
+      // A member's close carries no automation source task.
+      if (generated) expect(f.store.getSystemEvent(events[0]!.id)?.payload.automation_source_task_id ?? null).toBeNull();
       expect(f.bridge.complete(input, f.scope).ok).toBe(true);
       expect(f.store.getIssue(f.issue.id)).toEqual(issue);
       expect(f.db.query("SELECT id FROM multiremi_system_events WHERE resource_id=? AND event='dependency_auto_start_check'").all(issue.id)).toEqual(events);
@@ -92,7 +90,7 @@ pendingTurnBackendTests("MUL-508 C1/C2", (fixture) => {
     f.store.startTask(replacement.id);
     expect(f.bridge.complete(f.completion(replacement.id), f.scope).ok).toBe(true);
     expect(f.store.getIssue(f.issue.id)?.status).toBe('in_review');
-    acceptCompletedIntake(f,replacement.id);
+    acceptCompletedIntake(f);
     expect(f.store.getIssue(f.issue.id)?.status).toBe("done");
   });
 
@@ -122,7 +120,7 @@ pendingTurnBackendTests("MUL-508 C1/C2", (fixture) => {
     expect(f.store.listIssueActivity(f.issue.id).some(event => event.type === "parent_status_held")).toBe(true);
   });
 
-  it("C1: the last finished round supplies status and dependency-check lineage", () => {
+  it("C1: the last finished round supplies the review status; a member's close supplies no automation lineage", () => {
     const f = intake();
     const secondAgent = f.store.createAgent({ name: "Later worker", provider: "codex", runtimeId: f.runtime.id });
     const second = f.store.createTask({ agentId: secondAgent.id, issueId: f.issue.id, prompt: "Check generated work", holdsWorkspace: false });
@@ -138,7 +136,7 @@ pendingTurnBackendTests("MUL-508 C1/C2", (fixture) => {
       expect(f.store.getIssue(f.issue.id)?.status).toBe("done");
       const events = f.db.query("SELECT id FROM multiremi_system_events WHERE resource_id=? AND event='dependency_auto_start_check'").all(f.issue.id);
       expect(events).toHaveLength(1);
-      expect(f.store.getSystemEvent(events[0]!.id)?.payload.automation_source_task_id).toBe(f.attempt.id);
+      expect(f.store.getSystemEvent(events[0]!.id)?.payload.automation_source_task_id ?? null).toBeNull();
     } finally { setSystemTime(); }
   });
 

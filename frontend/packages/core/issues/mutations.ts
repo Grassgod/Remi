@@ -352,28 +352,6 @@ export function useUpdateIssue() {
   });
 }
 
-export function useGrantParentDone() {
-  const qc = useQueryClient();
-  const wsId = useWorkspaceId();
-  return useMutation({
-    mutationFn: (issueId: string) => api.grantParentDone(issueId),
-    onSuccess: (_grant, issueId) => {
-      qc.invalidateQueries({ queryKey: issueKeys.detail(wsId, issueId) });
-    },
-  });
-}
-
-export function useRevokeParentDone() {
-  const qc = useQueryClient();
-  const wsId = useWorkspaceId();
-  return useMutation({
-    mutationFn: (issueId: string) => api.revokeParentDone(issueId),
-    onSuccess: (_grant, issueId) => {
-      qc.invalidateQueries({ queryKey: issueKeys.detail(wsId, issueId) });
-    },
-  });
-}
-
 export function useRestoreIssue() {
   const qc = useQueryClient();
   const wsId = useWorkspaceId();

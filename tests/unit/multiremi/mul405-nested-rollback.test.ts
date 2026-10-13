@@ -586,7 +586,7 @@ describe("MUL-405 nested transaction rollback", () => {
           }
           injection.disarm();
           expect(innerFailed).toBe(true);
-          return store.createIssue({ title: "Committed after inner failure", workspaceId, responsibleMemberId: autopilot.responsibleMemberId }, {
+          return store.createIssue({ title: "Committed after inner failure", workspaceId }, {
             childStatusChanges: [], deferredEvents: createCommitEventQueue(),
           });
         })();

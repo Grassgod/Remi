@@ -78,8 +78,7 @@ export const issueKeys = {
     [...issueKeys.all(wsId), "decisions", id] as const,
   decisionsAll: (wsId: string) =>
     [...issueKeys.all(wsId), "decisions"] as const,
-  responsibility: (wsId: string, id: string) => [...issueKeys.all(wsId), "responsibility", id] as const,
-  deliveries: (wsId: string, id: string) => [...issueKeys.all(wsId), "deliveries", id] as const,
+  /** The Issue subtree's questions, as the Issue question drawer lists them. */
   questions: (wsId: string, id: string) => [...issueKeys.all(wsId), "questions", id] as const,
   generated: (wsId: string, id: string) =>
     [...issueKeys.all(wsId), "generated", id] as const,
@@ -560,14 +559,6 @@ export function issueDetailOptions(wsId: string, id: string) {
 
 export function issueQuestionsOptions(wsId: string, id: string) {
   return queryOptions({ queryKey: issueKeys.questions(wsId, id), queryFn: () => api.listIssueQuestions(id) });
-}
-
-export function issueResponsibilityOptions(wsId: string, id: string) {
-  return queryOptions({ queryKey: issueKeys.responsibility(wsId, id), queryFn: () => api.getIssueResponsibility(id) });
-}
-
-export function issueDeliveriesOptions(wsId: string, id: string) {
-  return queryOptions({ queryKey: issueKeys.deliveries(wsId, id), queryFn: () => api.listIssueDeliveries(id) });
 }
 
 export function generatedIssuesOptions(wsId: string, id: string) {

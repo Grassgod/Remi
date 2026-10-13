@@ -310,6 +310,14 @@ describe("formatActivity", () => {
       .toBe('activity.parent_status_held_grant_missing {"status":"status.done"}');
     expect(formatActivity(activity("parent_status_held", { details: { reason: "final_summary_missing", requested: "done" } }), t))
       .toBe('activity.parent_status_held_final_summary_missing {"status":"status.done"}');
+    expect(formatActivity(activity("parent_status_held", { details: { reason: "children_open", requested: "in_review" } }), t))
+      .toBe('activity.parent_status_held {"status":"status.in_review"}');
+    // A retired merge hold on a leaf Issue never claims unfinished children.
+    expect(formatActivity(activity("parent_status_held", { details: { reason: "issue_delivery_acceptance_required", requested: "done" } }), t))
+      .toBe('activity.parent_status_held_merge {"status":"status.done"}');
+    expect(formatActivity(activity("parent_status_held", { details: { reason: "future_reason", requested: "done" } }), t))
+      .toBe('activity.parent_status_held_unchanged {"status":"status.done"}');
+    // Historical rows only: the parent-done grant is retired but its old activities still read.
     expect(formatActivity(activity("parent_done_grant_created", { details: { agentId: "agt_owner" } }), t, () => "Owner"))
       .toBe('activity.parent_done_grant_created {"agent":"Owner"}');
     expect(formatActivity(activity("parent_done_grant_revoked"), t)).toBe("activity.parent_done_grant_revoked");
@@ -405,6 +413,24 @@ describe("formatActivity", () => {
     expect(formatActivity(activity("dispatch_skipped", { details: {} }), t)).toBe(
       "activity.dispatch_skipped",
     );
+  });
+
+  it("records a merged change request with its number and reads the responsibility audit", async () => {
+    expect(formatActivity(activity("scm_merge_completed", { actor_type: "system", details: { number: 12, url: "https://example.invalid/pull/12" } }), t))
+      .toBe('activity.scm_merge_completed {"number":"12"}');
+    expect(formatActivity(activity("scm_merge_completed", { details: { number: null } }), t)).toBe("activity.scm_merge_completed_unknown");
+    expect(formatActivity(activity("issue_responsibility_transferred", { details: { previous: {}, current: {} } }), t)).toBe("activity.issue_responsibility_transferred");
+    const bundles = await Promise.all([
+      import("../../locales/zh-Hans/issues.json"), import("../../locales/en/issues.json"),
+      import("../../locales/ja/issues.json"), import("../../locales/ko/issues.json"),
+    ]);
+    for (const bundle of bundles) {
+      const copy = bundle.default.activity as Record<string, string>;
+      for (const key of ["scm_merge_completed", "scm_merge_completed_unknown", "parent_status_held_merge", "parent_status_held_unchanged", "issue_responsibility_transferred"]) {
+        expect(copy[key]).toBeTruthy();
+      }
+      expect(copy.scm_merge_completed).toContain("{{number}}");
+    }
   });
 
   it("echoes an unknown action instead of rendering a missing key", () => {

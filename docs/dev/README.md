@@ -30,11 +30,11 @@ summary: 按任务定位当前实现、约束和验证命令。
 | 修改云友模板或 Skill | [Agent 配置规范](../agent-config-spec.md) | 提示词结构、字段和元信息检查 |
 | 改工作台与通知 | [工作台/收件箱边界](../inbox-workbench-boundary.md) | 通知的触发条件与状态归属 |
 | 改 daemon 轮询节奏、心跳 ack 或插件 desired 协议 | [ADR 0001](../adr/0001-daemon-poll-cadence-and-desired-revision.md) | 已定的取舍、被否决的替代方案和回到源码的位置 |
-| 改父 issue 状态推导、子 issue 结束通知或 `force` | [ADR 0003](../adr/0003-parent-status-derived-from-children.md) | 守卫 A/B、再推导、A1/A4 判定和排一轮合并的取舍 |
-| 改 Issue 责任、正式交付、根人类或关闭权限 | [Issue 责任与正式交付](issue-responsibility.md) | 统一 resolver、未知历史责任、具体交付验收与代理授权 |
+| 改父 issue 状态推导、子 issue 结束通知或 `force` | [ADR 0003](../adr/0003-parent-status-derived-from-children.md) | 守卫 A/B、再推导和排一轮合并的取舍；关单规则由 ADR 0017 修订 |
+| 改执行负责人、问题上交或关单（`done`）规则 | [Issue 执行与上交](issue-responsibility.md)、[ADR 0017](../adr/0017-issue-execution-and-escalation.md) | 统一 resolver、上交链与人工阶段、done 规则、等待答案时的状态与退役接口 |
 | 改系统收件箱、平台待处理轮或唤醒事务 | [统一收件箱 Store](inbox-store.md)、[Message HTTP 接口](message-api.md)、[ADR 0016](../adr/0016-unified-message-inbox-and-turn.md) | 唯一入口、叫醒降级、合并/插话/补铃、member 游标与页面接口 |
 | 改提问卡片答复鉴权、令牌轮换或宿主重启恢复 | [ADR 0011](../adr/0011-question-card-one-time-token.md) | 服务端一次性令牌、收件人绑定与成员映射的边界 |
-| 改 AUQ 责任路由、同 Q 总结、答复或续接 | [统一问题](questions.md) | 原会话、路由/改答版本、provider 等待与实际消费边界 |
+| 改 AUQ 上交路由、同 Q 总结、答复或续接 | [统一问题](questions.md) | 原会话、上交链与人工阶段、自动重新路由、路由/改答版本、provider 等待与实际消费边界 |
 | 改 issue 依赖、`blocked_by` 语义、依赖闸门或自动开工 | [ADR 0004](../adr/0004-issue-dependency-semantics.md) | 单向存储、满足判定、闸门位置、自动开工与失败报告的取舍 |
 | 改 agent 派活、来回上限、委派回叫或 `wake_source` | [ADR 0014](../adr/0014-every-agent-dispatch-is-a-delegation.md)、[ADR 0005](../adr/0005-cross-issue-delegation-return.md) | 通用派活入口、来源会话、谱系计数降级、D4 去重和回程血缘 |
 | 改任务结果、门铃正文、未读输入或 Wiki 下载 | [ADR 0013](../adr/0013-deliverable-is-comment-wakeup-is-doorbell.md)、[daemon 协议](../daemon-protocol-v2.md) | 最后顶层消息、事务内结论评论、完整范围读取、Wiki 缓存与派单预算 |

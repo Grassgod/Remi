@@ -5,59 +5,58 @@ and execution uses `remi turn`. Issue, Chat and Autopilot remain conversation co
 An ordinary decision is a message with options and a same-session reply. A persisted
 business question uses the versioned `message question` actions below.
 
-Issue responsibility is resolved with `remi issue responsibility <issue>`: the
-execution coordinator belongs to the Issue, the direct parent coordinator reviews
-child results, and the root explicitly designates a human. Create/update accepts
-`--responsible-member <workspace-member-id>`; `remi issue responsible set <root>
---member <member-id>` explicitly transfers it and preserves ownership audit.
-Children inherit the root human and never persist an independent copy. New execution
+Issue execution is resolved with `remi issue responsibility <issue>`: each Issue's
+execution owner is its assigned Agent or the assigned team's available Leader, and
+the response lists the owner chain to the root with any unavailable reasons. No
+Issue designates a human; above the root are the workspace members. New execution
 assignees use `agent` or `squad`; historical member assignments remain visible as
-needing configuration and are not valid execution coordinators.
+needing configuration and are not valid execution owners. Create, update and
+quick-create keep `--responsible-member` (JSON `responsible_member_id`) only as a
+deprecated no-op: the CLI no longer sends it and the server ignores it.
 
-`remi issue delivery list|submit <issue>` reads or submits formal delivery evidence;
-submit requires the execution coordinator's identity and `--summary` or JSON input.
-Delivery list takes `--limit 1..100` and `--cursor <nextCursor>` for older pages.
-`remi issue delivery accept|return <issue> <delivery> --revision <responsibilityRevision>`
-reviews that exact delivery (`return` requires `--reason`). The designated human can
-use `remi issue delivery authorize <issue> <delivery> --revision <revision> --agent
-<execution-owner>` or `--revoke`; this authorization applies only to that delivery
-and ownership version. Task completion and ordinary parent-done grants do not
-replace formal acceptance.
+An execution owner's final reply of a round is its summary. When that round ends
+the Issue derives `in_review`; while a question waits for its answer it stays
+`in_progress`. Closing is an ordinary status change such as
+`remi issue status <issue> done`. A member may close any Issue; an Agent task
+credential closes only a direct child of an Issue it executes, never its own Issue
+or a root. `--force` stays a member-only override of the unfinished-child and
+dependency guards. An SCM merge only records activity and closes nothing.
 
 `remi issue question list <issue>` and `remi message question get <Q>` expose the
 one original question, unchanged options, separate Remi summary, current handler,
-routing/answer history and actual consumption state. Actions use
-`remi message question answer|escalate|transfer|present|continue|close <Q> --revision
-<route_revision>`. Answer takes `--data '{"response":{"answers":{"question":"answer"}}}'`;
-escalate/transfer/close require `--reason`, and present requires `--summary`. Close
-preserves the original question and history instead of deleting it. Explicit
-human revisions additionally require `--revise --answer-revision <answer_revision>
---reason <reason>`. Continue is an exceptional human authorization for detached
+routing/answer history and actual consumption state. A Q, permission requests
+included, climbs from its Issue's execution owner through each parent's to the
+root's, skipping the asker and repeated owners, and then reaches the workspace
+members. A level without an available owner, or a broken parent chain, hands the
+Q to the members right there and records `route_reason`. Actions use
+`remi message question answer|escalate|present|continue|close <Q> --revision
+<route_revision>`. Answer takes `--data '{"response":{"answers":{"question":"answer"}}}'`
+or `--data '{"response":{"selected_options":["<options[].value>"]}}'`; a permission
+request's option value is its `option_id`, which `{"response":{"option_id":"<id>"}}`
+also accepts. Escalate/close require `--reason`, and present requires `--summary`.
+Close preserves the original question and history instead of deleting it. Explicit
+member revisions additionally require `--revise --answer-revision <answer_revision>
+--reason <reason>`. Continue is an exceptional member authorization for detached
 calls, not an extra button required after ordinary answers. All replies return to
-the original Q session; a parent/Remi notification references its Q ID.
-Delivery submission, Q escalation and Remi presentation require task credentials;
-root-human configuration, migration mapping, delivery proxy authorization and Q
-continuation require human credentials. The server still checks the exact role,
+the original Q session; a parent/Remi notification references its Q ID. A
+responsibility change re-routes a pending Q automatically; there is no transfer
+action, and a client holding the old route revision gets one 409
+`question_route_changed` and reloads.
+Q escalation and Remi presentation require task credentials; Q continuation
+requires human credentials. The server still checks the exact role,
 notification lane and current responsibility revision for every action.
 `message send --reply-to <Q>` also requires the explicitly read `--revision`;
 answer changes additionally require `--revise --answer-revision --reason`.
 Ordinary message replies do not require a question revision.
 
-`remi issue responsibility-unassigned list <workspace> --limit 100 --offset 0`
-shows original ownership, creator facts, unconfirmed candidates and the current
-responsibility revision. Workspace administrators apply explicit selections with
-`remi issue responsibility-unassigned map <workspace> --reason <reason> --data
-'{"mappings":[{"issueId":"root","memberId":"human","revision":"current"}]}'`.
-No candidate is automatically selected or promoted into responsibility.
-`remi autopilot responsible set <autopilot> --member <member>` configures future
-automatic root issues; create/update JSON uses `responsible_member_id`.
-Feishu bot configuration JSON uses the same field.
-`workspace feishu-bot set --responsible-member <member>` explicitly configures
-the bot human, while `--clear-responsible` leaves new automatic roots unconfigured.
-Topic configuration accepts
-`workspace issue-topics set --responsible-member <member>` or
-`--inherit-bot-responsible` to clear its override. Missing explicit bot/automation
-configuration blocks automatic root creation while preserving incoming Chat.
+Feishu bot configuration keeps `responsible_member_id` for Chats without an Issue:
+`workspace feishu-bot set --responsible-member <member>` names the member who
+answers their questions, and `--clear-responsible` leaves such Chat questions
+without a handler. It never gates Issue creation. Topic configuration
+(`workspace issue-topics set --responsible-member` or `--inherit-bot-responsible`)
+and Autopilot JSON `responsible_member_id` are deprecated no-ops: topic and
+automatic Issues are created without a human. Removed commands are listed under
+[the execution owner release](#retired-in-the-execution-owner-release-adr-0017).
 
 Unified usage uses `remi dashboard usage report` with `--days n|all`,
 `--since`, `--until`, `--tz`, `--project` and `--runtime`.
@@ -626,13 +625,13 @@ they cannot become undocumented bypasses.
 
 Prompts and durable examples use message / inbox / turn commands. Folded messages
 expand with `remi message get <message>`. Delegation is a directed request, progress
-is a report. New responsibility questions originate only from native
-AskUserQuestion, retain one original Q and use the versioned `remi message question`
-actions above. Read responsibility with `remi issue responsibility <issue>`;
-the CLI does not create a replacement Q. Ordinary decision messages use
-`--kind decision --option ...` and same-session `--reply-to <message>` replies;
-they do not enter the responsibility question chain. Consulting a Senior remains
-ordinary collaboration through directed messages.
+is a report. Questions originate only from native AskUserQuestion, retain one
+original Q, climb the execution owner chain and use the versioned
+`remi message question` actions above. Read the chain with
+`remi issue responsibility <issue>`; the CLI does not create a replacement Q.
+Ordinary decision messages use `--kind decision --option ...` and same-session
+`--reply-to <message>` replies; they do not enter the question chain. Consulting a
+Senior remains ordinary collaboration through directed messages.
 Use `remi turn get --input --attempts` for
 execution evidence. Session result publishing and project knowledge commands retain
 their separate responsibilities.
@@ -735,3 +734,27 @@ serve the new message and cursor contract. Old item IDs are rejected locally.
 | `remi issue comment resolve` | `remi message resolve <message>` |
 | `remi issue comment unresolve` | `remi message resolve <message> --no-resolved` |
 | `remi inbox read <inb_item>` | `remi inbox read <conversation> [--to <seq>]` |
+
+## Retired in the execution owner release (ADR 0017)
+
+Issues no longer designate a human, formal delivery and the parent-done grant are
+gone, and a responsibility change re-routes a Q by itself; see
+[ADR 0017](adr/0017-issue-execution-and-escalation.md). Each entry below remains in
+Registry and `cli-capabilities.json.retired` and raises one removal error before
+any network request. Its old API routes return 410 with `code: route_retired` and
+a replacement.
+
+| Retired command | Replacement |
+| --- | --- |
+| `remi issue delivery list` | `remi issue get <issue>`; the execution owner's final reply of a round is its summary |
+| `remi issue delivery submit` | Nothing to submit: the final reply of a round is its summary, and the round's end derives `in_review` |
+| `remi issue delivery accept` | `remi issue status <issue> done`; request changes with `remi message send <conversation> --to issue-owner --kind request` |
+| `remi issue delivery return` | `remi issue status <issue> done`; request changes with `remi message send <conversation> --to issue-owner --kind request` |
+| `remi issue delivery authorize` | The parent's execution owner runs `remi issue status <child> done` itself |
+| `remi issue responsibility-unassigned list` | `remi issue responsibility <issue>`; Issues no longer configure a human |
+| `remi issue responsibility-unassigned map` | `remi issue assign <issue> --to <agent\|squad>` configures the execution owner |
+| `remi issue responsible set` | `remi issue assign <issue> --to <agent\|squad>`; Issues no longer designate a human |
+| `remi autopilot responsible set` | `remi autopilot update <autopilot>`; automatic Issues no longer need a human |
+| `remi issue done-grant add` | `remi issue status <child> done` by the parent's execution owner; members close any Issue |
+| `remi issue done-grant remove` | `remi issue status <child> done` by the parent's execution owner; members close any Issue |
+| `remi message question transfer` | Automatic re-routing; `remi message question get <question>` shows the current handler |

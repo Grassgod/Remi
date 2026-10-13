@@ -10,7 +10,7 @@ import enIssues from "../../locales/en/issues.json";
 type MemberRole = "owner" | "admin" | "member" | "guest";
 
 const membersRef = vi.hoisted(() => ({
-  current: [{ user_id: "user-1", role: "owner" as MemberRole }],
+  current: [{ user_id: "user-1", role: "owner" as MemberRole }] as Array<{ user_id: string; role: MemberRole; id?: string; name?: string }>,
 }));
 const botRef = vi.hoisted(() => ({ current: undefined as unknown }));
 const statusRef = vi.hoisted(() => ({ current: undefined as unknown }));
@@ -289,13 +289,46 @@ describe("FeishuBotSection (admin form)", () => {
   it("shows the Agent name and machine name without exposing provider engines", () => {
     renderSection();
     expect(screen.getByText("Default Agent")).toBeInTheDocument();
-    const selectors = screen.getAllByRole("combobox").filter(element => element.getAttribute("aria-label") !== "Designated human");
+    // The native Chat question handler select is its own control, covered below.
+    const selectors = screen.getAllByRole("combobox").filter(element => element.id !== "feishu-bot-chat-question-handler");
     expect(selectors[0]).toHaveTextContent("Remi");
     expect(selectors[1]).toHaveTextContent("mac-mini");
     expect(selectors[1]).not.toHaveTextContent(/claude|codex/i);
     for (const selector of selectors) {
       expect(selector).toHaveClass("w-full", "min-w-0");
     }
+  });
+
+  it("offers the bot's member as the Chat question handler and saves a pick", async () => {
+    membersRef.current = [
+      { user_id: "user-1", role: "owner", id: "member-1", name: "Ada" },
+      { user_id: "user-2", role: "member", id: "member-2", name: "Grace" },
+    ];
+    const user = userEvent.setup();
+    renderSection();
+    const handler = screen.getByRole("combobox", { name: "Chat question handler" });
+    expect(handler).toHaveValue("");
+    expect(within(handler).getAllByRole("option").map(option => option.textContent)).toEqual(["Not set", "Ada", "Grace"]);
+    expect(screen.getByText(enIssues.responsibility.chat_handler_hint)).toBeInTheDocument();
+    expect(screen.queryByText(/Designated human/)).not.toBeInTheDocument();
+
+    await user.selectOptions(handler, "member-2");
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(mockSave).toHaveBeenCalledTimes(1));
+    expect(mockSave.mock.calls[0]?.[0]).toMatchObject({ responsible_member_id: "member-2" });
+  });
+
+  it("keeps a stored handler who left the member list visible and can clear it", async () => {
+    botRef.current = { ...CONFIGURED, config: { ...CONFIGURED.config, responsible_member_id: "member-gone" } };
+    const user = userEvent.setup();
+    renderSection();
+    const handler = screen.getByRole("combobox", { name: "Chat question handler" });
+    expect(handler).toHaveValue("member-gone");
+
+    await user.selectOptions(handler, "");
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(mockSave).toHaveBeenCalledTimes(1));
+    expect(mockSave.mock.calls[0]?.[0]).toMatchObject({ responsible_member_id: null });
   });
 
   it("keeps the stored secret and the enabled state when only the App ID changes", async () => {

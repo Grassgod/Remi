@@ -83,7 +83,8 @@ for (const backend of ["SQLite", "PostgreSQL"] as const) {
         ...store.getWorkspace(workspaceId)!.settings,
         issueTopics: { enabled: true, chatId: `oc_${tag}`, notifyMode: "person", notifyOpenId: openId },
       } });
-      const parent = createResponsibleTestIssue(store, { workspaceId, title: `Target ${tag}`, responsibleMemberId: member.id });
+      // The card member created the root: a human-stage card goes to the root creator.
+      const parent = createResponsibleTestIssue(store, { workspaceId, title: `Target ${tag}`, createdBy: user.id });
       store.prepareFeishuIssueTopicWithinTransaction(parent);
       const root = store.claimFeishuBotOutbound(workspaceId, runtimeId)!;
       expect(root).toBeTruthy();
@@ -98,7 +99,7 @@ for (const backend of ["SQLite", "PostgreSQL"] as const) {
         .get(decision.id) as { id: string; binding_id: string };
       expect(delivery).toBeTruthy();
       // A same-workspace Issue with no part in the decision, for rows that name the wrong one.
-      const other = createResponsibleTestIssue(store, { workspaceId, title: `Other ${tag}`, responsibleMemberId: member.id });
+      const other = createResponsibleTestIssue(store, { workspaceId, title: `Other ${tag}`, createdBy: user.id });
       const daemon = await store.createAccessToken({ workspaceId, daemonId, type: "daemon", name: "Card host" });
       const app = createMultiremiApp({ store, authToken: "mul476-card-root" });
       const path = `/api/daemon/messages/${decision.id}`;
@@ -307,10 +308,8 @@ for (const backend of ["SQLite", "PostgreSQL"] as const) {
           send(f);
           // Relations block a move, so the child leaves its parent first; after
           // that the store lets either Issue go, and the decision row stays put.
-          store.updateIssue(f.child.id, { parent_issue_id: null, responsibleMemberId: f.member.id,
-            actorType: 'member', actorId: f.member.id });
+          store.updateIssue(f.child.id, { parent_issue_id: null, actorType: 'member', actorId: f.member.id });
           store.updateIssue(endpoint === "source" ? f.child.id : f.parent.id, { workspaceId: f.foreignId,
-            responsibleMemberId: store.listWorkspaceMembers(f.foreignId).find(member => member.role === 'owner')!.id,
             actorType: 'member', actorId: f.member.id });
           expect(store.getIssueDecisionAnywhere(f.decision.id)).toBeNull();
           expect(store.getFeishuIssueDecisionCardContext(f.workspaceId, f.decision.id)).toBeNull();

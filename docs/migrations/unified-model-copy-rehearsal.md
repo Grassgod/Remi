@@ -85,11 +85,11 @@ Issue 状态迁移时保留旧值，状态推导仍由业务事件触发。`issu
 | 抽样输入 | 应核对的推导 |
 |---|---|
 | 人或 agent 派活触发的 pending turn | todo；平台通知 pending 本身不足以改状态 |
-| awaiting_human 或 owner 的未答决定 | in_review；非 owner 的决定不能替代 owner 判断 |
+| awaiting_human 或 owner 的未答决定 | 问题停在人工阶段为 in_review，仍在等 Leader 回答为 in_progress；非 owner 的决定不能替代 owner 判断 |
 | owner 最新 completed / failed / cancelled turn | 分别 in_review / blocked / todo，且没有优先级更高的活跃 turn |
 | 基础重试、redispatch/recovery 多 attempt | 仍是一轮，不因 attempt 数量改变 Issue 状态；显式 continuation 是另一个 turn |
 | Chat turn、非 owner turn、平台通知 | 按实际排除/触发规则核对，不以任意一次执行状态覆盖 Issue |
-| done/cancelled 单、仍有 open child 的父单 | 终态保护与父单 hold/exempt 守卫保持；手动终态及父子关系不被迁移改写 |
+| done/cancelled 单、仍有 open child 的父单 | 终态保护与父单 hold 守卫保持，没有 exempt 豁免；手动终态及父子关系不被迁移改写 |
 
 四项预检阻止真实 running/awaiting_human 历史快照通过，因此本次副本中缺少这些状态的迁移样本是正常的；动态推导行为由 QA 在独立合成环境覆盖，不能在真实历史副本上造状态以伪称真实数据验证。
 

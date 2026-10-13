@@ -119,6 +119,10 @@ describe("Multiremi API — issue endpoints", () => {
     const first = await createFromChat("Created from Chat");
     expect(first.status).toBe(201);
     const firstBody = await first.json();
+    // An Agent creates a root Issue with its task credential: no designated human is needed or recorded.
+    expect(firstBody.parent_issue_id).toBeNull();
+    expect(firstBody).not.toHaveProperty("responsible_member_id");
+    expect(db!.query("SELECT responsible_member_id FROM multiremi_issues WHERE id=?").get(firstBody.id)).toEqual({ responsible_member_id: null });
     expect(firstBody.chat_issue_binding).toBeUndefined();
     expect(firstBody.chat_issue_binding_hint).toBeUndefined();
     expect(store.getChatSession(chat.id)).not.toHaveProperty("issueId");
@@ -137,6 +141,9 @@ describe("Multiremi API — issue endpoints", () => {
 
     const issueSession = store.getOrCreateDefaultIssueSession(firstBody.id);
     store.updateIssue(firstBody.id,{assigneeType:'agent',assigneeId:agent.id});
+    // Legacy data may still carry the deprecated column on the source Issue.
+    const legacyHuman = store.listWorkspaceMembers("local")[0]!;
+    db!.run("UPDATE multiremi_issues SET responsible_member_id=? WHERE id=?", [legacyHuman.id, firstBody.id]);
     const issueTask = store.createSessionTask(issueSession.id, {
       agentId: agent.id,
       prompt: "Create a child Issue",
@@ -151,7 +158,11 @@ describe("Multiremi API — issue endpoints", () => {
       body: JSON.stringify({ title: "Created from Issue lane" }),
     });
     expect(issueLaneCreate.status).toBe(201);
-    expect((await issueLaneCreate.json()).chat_issue_binding).toBeUndefined();
+    const laneBody = await issueLaneCreate.json();
+    expect(laneBody.chat_issue_binding).toBeUndefined();
+    // An Issue task's new root inherits no human from the Issue it came from.
+    expect(laneBody.parent_issue_id).toBeNull();
+    expect(db!.query("SELECT responsible_member_id FROM multiremi_issues WHERE id=?").get(laneBody.id)).toEqual({ responsible_member_id: null });
     expect(store.getChatSession(chat.id)).not.toHaveProperty("issueId");
   });
 
@@ -568,14 +579,7 @@ describe("Multiremi API — issue endpoints", () => {
     expect(await camelBatchUpdates.json()).toEqual({ updated: 0 });
     expect(store.getIssue(first.id)?.assigneeId).toBe(agent.id);
 
-    const refused = await app.request("/api/issues/batch-update", {
-      method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({issue_ids:[first.id,second.id],updates:{status:'done',priority:'urgent'}}),
-    });
-    expect(refused.status).toBe(409);
-    expect(store.getIssue(first.id)?.priority).toBe('low');expect(store.getIssue(second.id)?.priority).toBe('medium');
-    store.updateIssue(second.id,{assigneeType:'agent',assigneeId:agent.id});
-    acceptTestIssueDelivery(store,first.id);acceptTestIssueDelivery(store,second.id);
+    // A member may close any Issue, so a member batch closes both rows.
     const updated = await app.request("/api/issues/batch-update", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -1078,7 +1082,8 @@ describe("Multiremi API — issue endpoints", () => {
     expect(created.status).toBe(201);
     const createdBody = await created.json();
     expect(createdBody.issue.assigneeType).toBeNull();
-    expect(createdBody.issue.responsibleMemberId).toBe(member.id);
+    // The deprecated field is accepted and ignored.
+    expect(createdBody.issue).not.toHaveProperty("responsibleMemberId");
     expect(createdBody.task).toBeNull();
 
     const assigned = await app.request(`/api/multiremi/issues/${createdBody.issue.id}/assign`, {
@@ -1116,7 +1121,8 @@ describe("Multiremi API — issue endpoints", () => {
       body:JSON.stringify({assignee_type:'agent',assignee_id:'Grace executor'})});
     expect(valid.status).toBe(200);
     expect(await valid.json()).toMatchObject({assignee_type:'agent',assignee_id:next.id});
-    expect(store.getIssue(createdBody.issue.id)?.responsibleMemberId).toBe(member.id);
+    // Issues no longer designate a human; the deprecated field is neither stored nor projected.
+    expect(store.getIssue(createdBody.issue.id)).not.toHaveProperty('responsibleMemberId');
   });
 
   it("serves issue metadata endpoints", async () => {

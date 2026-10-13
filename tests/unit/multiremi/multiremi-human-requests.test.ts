@@ -43,7 +43,7 @@ function answerHumanRequest(store: MultiremiStore, id: string,
 }
 
 describe("task human requests (store)", () => {
-  it("keeps an issue in sync through queue, work, review, resume, and acceptance", () => {
+  it("keeps an issue in sync through queue, work, waiting, resume, review and a member's close", () => {
     const store = createStore();
     const runtime = store.registerRuntime({
       id: "rt_issue_flow", daemonId: "human-request-issue",
@@ -68,16 +68,19 @@ describe("task human requests (store)", () => {
       kind: "permission",
       payload: { title: "Approve changes", options: [{ optionId: 'approve', name: 'Approve', kind: 'allow_once' }] },
     });
+    // A question at the human stage parks the Issue in review until someone answers.
     expect(store.getIssue(issue.id)?.status).toBe("in_review");
+    // The asking owner of a root is skipped: any active member answers at the human stage.
+    expect(store.getQuestion(request.id)).toMatchObject({ stage: "human", current_handler: null });
 
     answerHumanRequest(store, request.id, {
       response: { option_id: "approve" },
-      respondedBy: store.resolveIssueResponsibility(issue.id).rootHuman!.id,
+      respondedBy: "mem_local_local",
     });
     expect(store.getIssue(issue.id)?.status).toBe("in_progress");
 
     store.buildTaskSessionProjection(task.id);
-    store.completeTask(task.id, { output: "Ready for acceptance" });
+    store.completeTask(task.id, { output: "Ready for review" });
     expect(store.getIssue(issue.id)?.status).toBe("in_review");
 
     acceptTestIssueDelivery(store, issue.id);
@@ -170,6 +173,7 @@ describe("task human requests (store)", () => {
 
     expect(store.getTaskStatus(task.id)).toBe('failed');
     expect(store.getQuestion(request.id)).toMatchObject({ status: 'pending', wait_status: 'detached' });
+    // The owner's question still waits at the human stage, so the Issue stays in review.
     expect(store.getIssue(issue.id)?.status).toBe("in_review");
   });
 
@@ -217,12 +221,7 @@ describe("task human requests (store)", () => {
       const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "Run" });
       expect(store.claimTask(runtime.id)?.id).toBe(task.id);
       store.startTask(task.id);
-      if (terminalStatus === "done") {
-        const delivery = store.submitIssueDelivery(issue.id, { summary: 'Reviewed result from this running task' },
-          { type: 'agent', id: agent.id, taskId: task.id });
-        store.respondIssueDelivery(issue.id, delivery.id, { action: 'accept', revision: delivery.responsibilityRevision },
-          { type: 'member', id: store.resolveIssueResponsibility(issue.id).rootHuman!.id });
-      }
+      if (terminalStatus === "done") acceptTestIssueDelivery(store, issue.id);
       else store.updateIssue(issue.id, { status: terminalStatus });
       store.completeTask(task.id, { output: "Late completion" });
       expect(store.getIssue(issue.id)?.status).toBe(terminalStatus);

@@ -8,7 +8,7 @@ pendingTurnBackendTests('explicit Issue workspace Main rotation', (fixture, back
     it(`${prefix} preserves source history, creates a target Main and rolls back a failed dispatch`, async () => {
       const { store, db } = fixture();
       const sourceAgent = store.createAgent({ name: 'Source execution', provider: 'codex' });
-      const issue = store.createIssue({ title: 'Movable Issue', responsibleMemberId: 'mem_local_local', assigneeType: 'agent', assigneeId: sourceAgent.id });
+      const issue = store.createIssue({ title: 'Movable Issue', assigneeType: 'agent', assigneeId: sourceAgent.id });
       const sourceMain = store.getOrCreateDefaultIssueSession(issue.id);
       const oldComment = store.createIssueComment(issue.id, { body: 'SOURCE_ONLY_PRIVATE_HISTORY' });
       const runtime = store.registerRuntime({ name: 'Source Q Runtime', provider: 'codex', daemonId: 'rotation-source', maxConcurrency: 8 });
@@ -22,8 +22,10 @@ pendingTurnBackendTests('explicit Issue workspace Main rotation', (fixture, back
       }, { runtimeId: runtime.id, daemonId: 'rotation-source', workspaceId: 'local' });
       expect(decision.ok).toBeTrue();
       const questionId = String(decision.message_id);
-      const oldDelivery = store.submitIssueDelivery(issue.id, { summary: 'SOURCE_ONLY_PRIVATE_FORMAL_DELIVERY' },
-        { type: 'agent', id: sourceAgent.id, taskId: sourceTask.id });
+      // A historical formal-delivery report stays an ordinary message of the source history.
+      const oldDelivery = store.sendMessage({ session_id: sourceMain.id, sender: { type: 'agent', id: sourceAgent.id }, source_turn_id: sourceTurn.id,
+        to: { type: 'none' }, message_kind: 'report', wake_requested: 'inbox_only', body_md: 'SOURCE_ONLY_PRIVATE_FORMAL_DELIVERY',
+        metadata: { issue_delivery: { issueId: issue.id, status: 'pending', summary: 'SOURCE_ONLY_PRIVATE_FORMAL_DELIVERY' } } }).message;
       // Cancellation can append a detached-Q status notification after the
       // first task snapshot. Stop that real notification too before moving.
       for (let pass = 0; pass < 3; pass++) for (const task of store.listTasksForIssue(issue.id)) {
@@ -32,11 +34,11 @@ pendingTurnBackendTests('explicit Issue workspace Main rotation', (fixture, back
       expect(store.listTasksForIssue(issue.id).every(task => ['completed', 'failed', 'cancelled'].includes(task.status))).toBeTrue();
       const target = store.createWorkspace({ name: 'Target workspace', slug: `main-rotation-${prefix.includes('multiremi') ? 'native' : 'compat'}` });
       const targetUser = store.getOrCreateUser({ externalId: 'main-rotation-target-user', name: 'Target reader' });
-      const targetHuman = store.createWorkspaceMember({ workspaceId: target.id, userId: targetUser.id, name: 'Target reader', role: 'owner' });
+      store.createWorkspaceMember({ workspaceId: target.id, userId: targetUser.id, name: 'Target reader', role: 'owner' });
       const targetAgent = store.createAgent({ name: 'Target execution', provider: 'codex', workspaceId: target.id });
       const app = createMultiremiApp({ store, authToken: 'MASTER', shareSecret: 'main-rotation-share' });
       const move = () => app.request(`${prefix}/${issue.id}`, { method: 'PATCH', headers: { Authorization: 'Bearer MASTER', 'Content-Type': 'application/json' },
-        body: JSON.stringify({ workspace_id: target.id, responsible_member_id: targetHuman.id, assignee_type: 'agent', assignee_id: targetAgent.id }) });
+        body: JSON.stringify({ workspace_id: target.id, assignee_type: 'agent', assignee_id: targetAgent.id }) });
       const oldQuestion = store.getMessage(questionId)!;
       const beforeMove = store.getIssue(issue.id)!;
       const beforeMain = store.getIssueSession(sourceMain.id)!;
@@ -71,7 +73,6 @@ pendingTurnBackendTests('explicit Issue workspace Main rotation', (fixture, back
       expect(store.getMessage(oldComment.id)?.body_md).toBe('SOURCE_ONLY_PRIVATE_HISTORY');
       expect(store.getMessage(questionId)?.session_id).toBe(sourceMain.id);
       expect(store.getMessage(oldDelivery.id)?.body_md).toBe('SOURCE_ONLY_PRIVATE_FORMAL_DELIVERY');
-      expect(store.listIssueDeliveries(issue.id)).toEqual([]);
       expect(store.getTask(sourceTask.id)).toMatchObject({ workspaceId: 'local', issueSessionId: sourceMain.id, status: 'cancelled' });
       expect(store.listTasksForIssue(issue.id)).toHaveLength(1);
       expect(store.listTasksForIssue(issue.id)[0]).toMatchObject({ agentId: targetAgent.id, workspaceId: target.id, issueSessionId: main.id });
@@ -79,7 +80,7 @@ pendingTurnBackendTests('explicit Issue workspace Main rotation', (fixture, back
       const targetToken = await store.createAccessToken({ type: 'pat', name: 'Target reader PAT', workspaceId: target.id, userId: targetUser.id });
       const targetHeaders = { Authorization: `Bearer ${targetToken.token}` };
       for (const path of [`/api/multiremi/issues/${issue.id}`, `/api/issues/${issue.id}/sessions?include_archived=true`,
-        `/api/issues/${issue.id}/timeline`, `/api/issues/${issue.id}/timeline?limit=100`, `/api/issues/${issue.id}/deliveries`]) {
+        `/api/issues/${issue.id}/timeline`, `/api/issues/${issue.id}/timeline?limit=100`]) {
         const response = await app.request(path, { headers: targetHeaders });
         expect(response.status, path).toBe(200);
         expect(await response.text(), path).not.toContain('SOURCE_ONLY_PRIVATE');

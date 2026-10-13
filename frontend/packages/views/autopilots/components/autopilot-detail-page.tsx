@@ -1030,7 +1030,6 @@ export function AutopilotDetailPage({ autopilotId }: { autopilotId: string }) {
             project_id: autopilot.project_id ?? null,
             assignee_type: autopilot.assignee_type,
             assignee_id: autopilot.assignee_id,
-            responsible_member_id: autopilot.responsible_member_id ?? null,
             execution_mode: autopilot.execution_mode as AutopilotExecutionMode,
             session_policy: autopilot.session_policy ?? "new",
             workspace_policy: autopilot.workspace_policy ?? "reuse_issue",

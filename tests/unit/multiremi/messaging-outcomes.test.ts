@@ -247,6 +247,23 @@ describe("messaging outcomes", () => {
       .toThrow("Proposal not found");
   });
 
+  it("creates an Issue from a message, directly or by approval, without a designated human", () => {
+    const { store, ownerId } = seed();
+    const responsible = (issueId: string) => db!.query("SELECT responsible_member_id FROM multiremi_issues WHERE id=?").get(issueId);
+    // The routes' human-approver rule decides who may create; the store needs no human creator.
+    const direct = store.messagingOutcomes.createIssue(REF, { workspaceId: "local", title: "From a message" });
+    expect(direct.created).toBe(true);
+    expect(direct.issue).toMatchObject({ parentIssueId: null, workspaceId: "local" });
+    expect(responsible(direct.issue.id)).toEqual({ responsible_member_id: null });
+    store.messaging.ingestMessages({ connectionId: REF.connectionId, sourceId: "msrc_test", messages: [message({ externalMessageId: "external_2" })] });
+    const proposal = store.messagingOutcomes.proposeIssue({ connectionId: REF.connectionId, externalMessageId: "external_2" }, {
+      workspaceId: "local", recipientId: ownerId, actorType: "member", actorId: ownerId, title: "Approved from a message",
+    });
+    const approved = store.messagingOutcomes.approveProposal(proposal.outcome.id, { workspaceId: "local", approvedBy: ownerId });
+    expect(approved.created).toBe(true);
+    expect(responsible(approved.issue!.id)).toEqual({ responsible_member_id: null });
+  });
+
   it("creates an Issue directly, and does not create a second one on a repeat", () => {
     const { store, ownerId } = seed();
     const first = store.messagingOutcomes.createIssue(REF, {

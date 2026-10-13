@@ -22,7 +22,7 @@ import { getSessionDisplayName } from "../utils/session-display";
 import { quotePreview } from "../utils/quote-preview";
 import { formatActivity } from "../utils/format-activity";
 import { MessageHeader } from "../../common/message-header";
-import { LinkedQuestion, linkedQuestionId, QuestionReplyReference } from "../../common/linked-question";
+import { isRedundantQuestionReminder, LinkedQuestion, linkedQuestionId, QuestionReplyReference } from "../../common/linked-question";
 import { questionReplyText } from "../../common/question-answer";
 import { CommentCard } from "./comment-card";
 import { CommentInput, type ReplyTarget } from "./comment-input";
@@ -182,8 +182,10 @@ export function IssueActivitySection({ issueId, issueTitle, projectId, members, 
   const revealedGroups = useRef(new Set<string>());
   const [groupVersion, setGroupVersion] = useState(0);
   const trailSignatures = useRef(new TrailSignatureCache());
+  const currentMemberId = members.find(member => member.user_id === currentUserId)?.id ?? currentUserId;
   const presentation = useMemo(() => {
-    const rows = rowModel.rows;
+    const rowIds = new Set(rowModel.rows.map(row => row.id));
+    const rows = rowModel.rows.filter(row => !isRedundantQuestionReminder(row, currentMemberId, sessionId, rowIds));
     const view = activityTrails(groupEvents(placeActivities(rows, withActivity ? replica.window?.activities ?? [] : [], showSystemDetails)));
     for (const groups of view.trailers.values()) for (const group of groups) {
       const key = `${sessionId}:${group.id}`;
@@ -196,7 +198,7 @@ export function IssueActivitySection({ issueId, issueTitle, projectId, members, 
       }
     }
     return view;
-  }, [rowModel, replica, withActivity, showSystemDetails, sessionId, activeCommentId, displayVisit, groupVersion]);
+  }, [rowModel, currentMemberId, replica, withActivity, showSystemDetails, sessionId, activeCommentId, displayVisit, groupVersion]);
   const transformedEntries = useMemo(() => {
     trailSignatures.current.retain(new Set(presentation.entries.map(entry => `${sessionId}:${entry.id}`)));
     return presentation.entries.map(entry => {
@@ -207,6 +209,8 @@ export function IssueActivitySection({ issueId, issueTitle, projectId, members, 
       // borders/padding. Never reserve heights captured by the old flat layout.
       entry = { ...entry, render_version: `${entry.render_version ?? ""}:issue-cards-v2${signature}${capSignature}` };
       if (entry.seq > 0 && (entry.kind !== "message" || isSystemDetail(entry))) return eventLayoutEntry(entry);
+      // Q rows became one fixed-height summary line; never reserve the old button height.
+      if (linkedQuestionId(entry.id, entry.metadata)) return { ...entry, render_version: `${entry.render_version ?? ""}:question-line-v1` };
       return responseTurns.has(entry.id) ? { ...entry, render_version: `${entry.render_version ?? ""}:issue-response-v1` } : entry;
     });
   }, [presentation, responseTurns, sessionId, replica]);
@@ -219,7 +223,6 @@ export function IssueActivitySection({ issueId, issueTitle, projectId, members, 
   const { mutateAsync: remove } = useDeleteComment(issueId, sessionId);
   const { mutateAsync: resolve } = useResolveComment(issueId, sessionId);
   const { mutateAsync: reaction } = useToggleCommentReaction(issueId, sessionId);
-  const currentMemberId = members.find(member => member.user_id === currentUserId)?.id ?? currentUserId;
   const refresh = useCallback(() => { void replica.refreshVisible().catch(() => {}); }, [replica]);
   useEffect(() => {
     if ((!sessionId && !sessionsPending) || (error && !snapshot.ready)

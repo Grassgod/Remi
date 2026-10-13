@@ -81,7 +81,6 @@ vi.mock("../../navigation", () => ({
 vi.mock("./delete-workspace-dialog", () => ({
   DeleteWorkspaceDialog: () => null,
 }));
-vi.mock("./issue-responsibility-migration-section", () => ({ IssueResponsibilityMigrationSection: () => null }));
 
 vi.mock("sonner", () => ({
   toast: { success: vi.fn(), error: vi.fn() },
@@ -234,5 +233,19 @@ describe("WorkspaceTab — issue prefix editing", () => {
     membersRef.current = [{ user_id: "user-1", role: "member" }];
     render(<WorkspaceTab />, { wrapper: I18nWrapper });
     expect(screen.getByPlaceholderText("TES")).toBeDisabled();
+  });
+});
+
+describe("WorkspaceTab — issue responsibility", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    membersRef.current = [{ user_id: "user-1", role: "owner" }];
+  });
+
+  // Issues no longer designate a human, so there is no historical mapping to resolve.
+  it("shows admins no historical responsibility mapping", () => {
+    const view = render(<WorkspaceTab />, { wrapper: I18nWrapper });
+    expect(screen.getByPlaceholderText("TES")).toBeInTheDocument();
+    expect(view.container).not.toHaveTextContent(/historical responsibility|responsibility mapping|designated human/i);
   });
 });

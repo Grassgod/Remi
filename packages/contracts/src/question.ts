@@ -8,9 +8,15 @@ export function isHistoricalIssueQuestionRecord(value: unknown): value is Record
 }
 
 export interface QuestionActor { type: 'agent' | 'member'; id: string }
+/**
+ * Issue Qs climb the execution-owner chain, then reach `human`. That Issue human
+ * stage names nobody: any active real member of the frozen source workspace acts.
+ * Chat Qs without an Issue keep one explicit member at `human`.
+ */
 export type QuestionStage = 'issue_owner' | 'parent_owner' | 'human' | 'unavailable';
 export type QuestionWaitStatus = 'waiting' | 'detached' | 'consumed' | 'continuation_pending' | 'continuation_consumed' | 'none';
-export type QuestionAction = 'answer' | 'escalate' | 'transfer' | 'present' | 'revise' | 'continue' | 'close';
+/** Responsibility changes re-route a Q automatically; there is no explicit transfer action. */
+export type QuestionAction = 'answer' | 'escalate' | 'present' | 'revise' | 'continue' | 'close';
 export interface QuestionAnswer {
   response: Record<string, unknown>;
   body_md: string;
@@ -19,12 +25,14 @@ export interface QuestionAnswer {
   reply_message_id: string;
 }
 export interface QuestionHistoryEvent {
+  /** `transfer` records a system re-route after responsibility facts changed. */
   type: 'created' | 'escalate' | 'transfer' | 'present' | 'answer' | 'revise' | 'detach' | 'continue' | 'consume' | 'close' | 'notify';
   at: string;
   actor: QuestionActor | null;
   route_revision: number;
   reason?: string;
   overturn?: string | null;
+  /** Null when the step is the Issue human stage, which names no member. */
   handler?: QuestionActor | null;
   answer?: QuestionAnswer;
   source_message_id?: string;
@@ -45,9 +53,15 @@ export interface QuestionView {
   original_context: { text: string; truncated?: boolean } | null;
   options: DecisionOption[] | null;
   summary: { body_md: string; agent_id: string; at: string } | null;
+  /** Null at the Issue `human` stage (any active member acts) and when `stage` is `unavailable`. */
   current_handler: QuestionActor | null;
   stage: QuestionStage;
   route_revision: number;
+  /**
+   * Why an Issue Q reached `human` before the chain's root, as comma-joined
+   * `<issueId>:<IssueResponsibilityFailure>` entries; `source_workspace_changed`
+   * freezes the Q. Historical rows may keep older free-form values.
+   */
   route_reason: string | null;
   status: 'pending' | 'answered' | 'closed';
   wait_status: QuestionWaitStatus;

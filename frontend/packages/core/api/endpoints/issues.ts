@@ -10,7 +10,6 @@ import type {
   ListIssuesResponse,
   ListIssueStatusPagesParams,
   IssueStatusPagesResponse,
-  MultiremiIssueParentDoneGrant,
   SearchIssuesResponse,
   SearchProjectsResponse,
   UpdateIssueRequest,
@@ -29,7 +28,6 @@ import {
   GroupedIssuesResponseSchema,
   IssueDetailSchema,
   IssueSchema,
-  IssueParentDoneGrantMutationResponseSchema,
   QuickCreateIssueResponseSchema,
   IssueRetitleResponseSchema,
   IssueWorkspaceResponseSchema,
@@ -198,50 +196,6 @@ export class IssuesEndpoints {
     });
   }
 
-  async grantParentDone(id: string): Promise<MultiremiIssueParentDoneGrant> {
-    const raw = await this.http.fetch<unknown>(
-      `/api/multiremi/issues/${id}/parent-done-grant`,
-      { method: "POST" },
-    );
-    const parsed = parseStrictResponse<{
-      issue: unknown;
-      parent_done_grant: MultiremiIssueParentDoneGrant | null;
-    }>(
-      raw,
-      IssueParentDoneGrantMutationResponseSchema,
-      { endpoint: "POST /api/multiremi/issues/:id/parent-done-grant" },
-    );
-    if (!parsed.parent_done_grant) {
-      throw new ApiContractError(
-        "POST /api/multiremi/issues/:id/parent-done-grant",
-        "Server did not return the created parent done grant",
-      );
-    }
-    return parsed.parent_done_grant;
-  }
-
-  async revokeParentDone(id: string): Promise<null> {
-    const raw = await this.http.fetch<unknown>(
-      `/api/multiremi/issues/${id}/parent-done-grant`,
-      { method: "DELETE" },
-    );
-    const parsed = parseStrictResponse<{
-      issue: unknown;
-      parent_done_grant: MultiremiIssueParentDoneGrant | null;
-    }>(
-      raw,
-      IssueParentDoneGrantMutationResponseSchema,
-      { endpoint: "DELETE /api/multiremi/issues/:id/parent-done-grant" },
-    );
-    if (parsed.parent_done_grant !== null) {
-      throw new ApiContractError(
-        "DELETE /api/multiremi/issues/:id/parent-done-grant",
-        "Server retained the revoked parent done grant",
-      );
-    }
-    return null;
-  }
-
   async getIssueWorkspace(id: string): Promise<{ workspace: IssueWorkspace | null }> {
     const raw = await this.http.fetch<unknown>(`/api/issues/${id}/workspace`);
     return parseWithFallback(
@@ -261,7 +215,6 @@ export class IssuesEndpoints {
   }
 
   async quickCreateIssue(data: {
-    responsible_member_id?: string | null;
     runtime_workspace_id?: string | null;
     agent_id?: string;
     squad_id?: string;

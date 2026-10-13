@@ -243,7 +243,7 @@ describe.skipIf(!pgAvailable)("MUL-448 credential identity on PostgreSQL", () =>
       expect(decoyIssue.sourceIssueId, spelling).toBeNull();
       expect(decoyIssue.createdBy, spelling).toBe(fixture.ownerId);
       expect(decoyIssue.createdBy, spelling).not.toBe("someone-else");
-      expect(decoyIssue.responsibleMemberId, spelling).toBe(fixture.memberId);
+      expect(decoyIssue, spelling).not.toHaveProperty('responsibleMemberId');
       const subscribers = store.listIssueSubscribers(decoyIssue.id);
       expect(subscribers, spelling).toHaveLength(1);
       expect(subscribers[0]!.memberId, spelling).toBe(fixture.memberId);

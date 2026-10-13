@@ -32,7 +32,8 @@ vi.mock("@multiremi/core/paths", async importOriginal => {
 vi.mock("../../common/markdown", () => ({
   Markdown: ({ children }: { children: string }) => <span>{children}</span>,
 }));
-vi.mock("../../common/question-card", () => ({
+vi.mock("../../common/question-card", async importOriginal => ({
+  ...await importOriginal<typeof import("../../common/question-card")>(),
   UnifiedQuestionCard: ({ question }: { question: { id: string } }) => <div data-testid="original-question-card">Original question {question.id}</div>,
 }));
 vi.mock("../../navigation", () => ({ AppLink: ({ children, ...props }: React.AnchorHTMLAttributes<HTMLAnchorElement>) => <a {...props}>{children}</a> }));
@@ -49,7 +50,10 @@ import { ChatMessageList } from "./chat-message-list";
 
 describe("cached message observer visibility", () => {
   it("renders one original Q, retains its answer body and source link, and renders an explicit cross-session notification", async () => {
-    const getQuestion = vi.fn(async (id: string) => ({ id }));
+    const getQuestion = vi.fn(async (id: string) => ({ kind: "question", id, session_id: "cs-1", workspace_id: "ws-1", source_issue_id: null, source_agent_id: "agent-1",
+      source_turn_id: null, source_attempt_id: null, original_questions: [], original_message: "Native original question", options: null, summary: null,
+      current_handler: { type: "member", id: "member-1" }, stage: "human", route_revision: 1, route_reason: null, answer_revision: 0, status: "pending",
+      wait_status: "waiting", wait_reason: null, answer: null, history: [], actions: { allowed: ["answer"] } }));
     setApiInstance({ getQuestion } as never);
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     const rows = [
@@ -59,8 +63,11 @@ describe("cached message observer visibility", () => {
     const replica = new MemorySessionReplica({ "cs-1": { entries: rows } });
     const view = render(<QueryClientProvider client={client}><ChatMessageList sessionId="cs-1" replica={replica} optimisticRows={[]} pendingTask={null} availability={undefined} /></QueryClientProvider>);
     try {
+      // The summary line loads its Q on mount; the full card stays in the drawer.
+      await waitFor(() => expect(view.container.querySelector('[data-question-summary="q_original"] [data-question-tag]')).not.toBeNull());
+      expect(view.container.querySelectorAll("[data-question-summary]")).toHaveLength(1);
       expect(screen.queryByTestId("original-question-card")).toBeNull();
-      expect(getQuestion).not.toHaveBeenCalled();
+      expect(getQuestion).toHaveBeenCalledWith("q_original");
       fireEvent.click(view.container.querySelector<HTMLButtonElement>('button[aria-haspopup="dialog"]')!);
       await waitFor(() => expect(screen.getAllByTestId("original-question-card")).toHaveLength(1));
       expect(screen.getByText("Continue with the accepted answer")).toBeTruthy();
@@ -72,10 +79,30 @@ describe("cached message observer visibility", () => {
     const noticeView = render(<QueryClientProvider client={noticeClient}><ChatMessageList sessionId="cs-notice" replica={notice} optimisticRows={[]} pendingTask={null} availability={undefined} /></QueryClientProvider>);
     try {
       expect(screen.queryByTestId("original-question-card")).toBeNull();
+      await waitFor(() => expect(noticeView.container.querySelector('[data-question-summary="q_original"] [data-question-tag]')).not.toBeNull());
       fireEvent.click(noticeView.container.querySelector<HTMLButtonElement>('button[aria-haspopup="dialog"]')!);
       await waitFor(() => expect(screen.getAllByTestId("original-question-card")).toHaveLength(1));
     }
     finally { noticeView.unmount(); noticeClient.clear(); }
+  });
+
+  it("never repeats a Chat Q through a member reminder that sits beside it", async () => {
+    const getQuestion = vi.fn(async () => { throw new Error("not needed"); });
+    setApiInstance({ getQuestion } as never);
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const rows = [
+      { id: "plain", seq: 1, sender_type: "agent", message_kind: "message", body_md: "Ordinary agent message", metadata: {} },
+      { id: "reminder", seq: 2, sender_type: "system", message_kind: "request", body_md: "Reminder body", to_type: "member", to_member_id: "member-1",
+        metadata: { root_question_id: "q_original", question_notification: true } },
+    ].map(row => ({ session_id: "cs-1", revision: 1, kind: "message", body_html: null, render_version: null, ...row })) as SessionLogEntry[];
+    const replica = new MemorySessionReplica({ "cs-1": { entries: rows } });
+    const view = render(<QueryClientProvider client={client}><ChatMessageList sessionId="cs-1" replica={replica} optimisticRows={[]} pendingTask={null} availability={undefined} /></QueryClientProvider>);
+    try {
+      await waitFor(() => expect(screen.getByText("Ordinary agent message")).toBeTruthy());
+      expect(view.container.querySelector("[data-question-summary]")).toBeNull();
+      expect(screen.queryByText("Reminder body")).toBeNull();
+      expect(getQuestion).not.toHaveBeenCalled();
+    } finally { view.unmount(); client.clear(); }
   });
   it("keeps a pinned Chat at the bottom when an availability banner changes layout, but leaves released scrolling alone", () => {
     const client = new QueryClient();

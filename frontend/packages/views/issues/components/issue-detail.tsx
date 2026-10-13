@@ -203,14 +203,12 @@ export function IssueDetail({
 
   // Issue data from TQ. A list row is not a valid detail seed: the global query
   // staleTime is infinite, so accepting one would suppress the detail request
-  // that carries pending_decision_count and the server-derived grant state.
+  // that carries pending_decision_count.
   const { data: issue = null, isLoading: issueLoading } = useQuery({
     ...issueDetailOptions(wsId, id),
     initialData: () => {
       const cached = findCachedIssue(queryClient, wsId, id);
-      return cached?.description != null
-        && cached.pending_decision_count !== undefined
-        && Object.prototype.hasOwnProperty.call(cached, "parent_done_grant")
+      return cached?.description != null && cached.pending_decision_count !== undefined
         ? cached
         : undefined;
     },
@@ -368,7 +366,6 @@ export function IssueDetail({
       issueSessions={sessions.list}
       usage={usage}
       canManageArchives={canModerateComments}
-      isMember={isMember}
       childIssues={childIssues}
       onCreateSubIssue={actions.openCreateSubIssue}
     />

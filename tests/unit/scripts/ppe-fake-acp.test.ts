@@ -19,7 +19,7 @@ async function world(kind: "chat" | "issue", pause = "") {
   const runtime = store.registerRuntime({ id: "rt_ppe_fixture", name: "PPE", provider: "codex", daemonId: "ppe-fixture-daemon" });
   const agent = store.createAgent({ name: "PPE", provider: "codex", runtimeId: runtime.id });
   const session = kind === "chat" ? store.createChatSession({ agentId: agent.id })
-    : store.getOrCreateDefaultIssueSession(createResponsibleTestIssue(store, { title: "PPE", assigneeType: "agent", assigneeId: agent.id, responsibleMemberId: "mem_local_local" }).id);
+    : store.getOrCreateDefaultIssueSession(createResponsibleTestIssue(store, { title: "PPE", assigneeType: "agent", assigneeId: agent.id }).id);
   const marker = `MUL-493/PROBE/${kind}-first`;
   const send = (text: string) => store.sendMessage({ session_id: session.id, sender: { type: "member", id: "mem_local_local" },
     to: { type: "agent", ref: agent.id }, message_kind: "request", wake_requested: "now", body_md: text });
@@ -161,7 +161,7 @@ test("PPE ASK waits for a real elicitation answer and records the original busin
   } finally { await f.close(); }
 }, 20_000);
 
-test("PPE actual daemon Bootstrap reads its range, consumes a normalized native Q and submits formal delivery", async () => {
+test("PPE actual daemon Bootstrap reads its range and consumes a normalized native Q answered by a member", async () => {
   let evidenceDirectory: string;
   const h = await DaemonProtocolHarness.create({ database: "sqlite", providerFactory: options => new AcpProvider({
     ...options, executable: process.execPath, args: [join(root, "deploy/zadig/ppe/fake-acp.ts")], privateTmpDirectory: undefined,
@@ -172,7 +172,7 @@ test("PPE actual daemon Bootstrap reads its range, consumes a normalized native 
     await h.startDaemon(); await h.settleHeartbeat();
     const runtimeId = h.ledger.find(entry => entry.type === "hello")!.frame.p.runtimes[0].runtime_id;
     const agent = h.store.createAgent({ name: "Actual PPE responsibility execution", provider: "claude", runtimeId });
-    const issue = createResponsibleTestIssue(h.store, { title: "PR404/RESP/ASK PR404/RESP/SUBMIT — native answer and acceptance", assigneeType: "agent", assigneeId: agent.id, responsibleMemberId: "mem_local_local" });
+    const issue = createResponsibleTestIssue(h.store, { title: "PR404/RESP/ASK — native answer", assigneeType: "agent", assigneeId: agent.id });
     const session = h.store.getOrCreateDefaultIssueSession(issue.id);
     const sent = h.store.sendMessage({ session_id: session.id, sender: { type: "member", id: "mem_local_local" }, to: { type: "agent", ref: agent.id }, message_kind: "request", wake_requested: "now", body_md: issue.title });
     await waitFor(() => h.store.listIssueQuestions(issue.id).length === 1, "actual native elicitation", 20_000);
@@ -183,37 +183,35 @@ test("PPE actual daemon Bootstrap reads its range, consumes a normalized native 
     expect(prompt.prompt).toContain(`Turn: ${sent.turn_id}; attempt: ${attemptId};`);
     expect(question.original_message).toBe("PR404/RESP/ASK: Should this PPE Issue continue?\n\nPR404/RESP/ASK: Should this PPE Issue continue?");
     expect(question.wait_status).toBe("waiting");
-    expect(h.store.listIssueDeliveries(issue.id)).toHaveLength(0);
+    // The asking execution owner of a root is skipped: the Q waits at the human stage.
+    expect(question).toMatchObject({ stage: "human", current_handler: null });
+    expect(h.store.getIssue(issue.id)?.status).toBe("in_review");
     h.store.answerQuestion(question.id, { expected_route_revision: question.route_revision, response: { answers: { "PR404/RESP/ASK: Should this PPE Issue continue?": "Continue" } } }, { type: "member", id: "mem_local_local" });
-    await waitFor(() => ["completed", "failed"].includes(h.store.getTurn(sent.turn_id!)?.status ?? ""), "native answer and formal submit", 20_000);
+    await waitFor(() => ["completed", "failed"].includes(h.store.getTurn(sent.turn_id!)?.status ?? ""), "native answer consumed", 20_000);
     const turn = h.store.getTurn(sent.turn_id!)!;
     expect({ status: turn.status, error: h.store.getTask(attemptId)?.error }).toEqual({ status: "completed", error: null });
     expect(h.store.getQuestion(question.id)).toMatchObject({ status: "answered", wait_status: "consumed", recovery: { consumer_turn_id: turn.id, consumer_attempt_id: attemptId } });
-    expect(h.store.listIssueDeliveries(issue.id)).toHaveLength(1);
-    const delivery = h.store.listIssueDeliveries(issue.id)[0]!;
-    expect(delivery).toMatchObject({ issueId: issue.id, status: "pending", sourceSessionId: session.id, submittedBy: { type: "agent", id: agent.id } });
+    // The round's last reply is its summary; the round end derives in_review.
+    expect(h.store.getIssue(issue.id)?.status).toBe("in_review");
     const receipt = h.db.query('SELECT input_read_seq,input_read_offset FROM multiremi_turn_attempts WHERE id=?').get(attemptId)!;
     expect(receipt.input_read_seq).toBeGreaterThanOrEqual(sent.message.seq); expect(receipt.input_read_offset).toBe(0);
     await h.settleHeartbeat();
     expect(h.db.query('SELECT id FROM multiremi_turns WHERE issue_id=? AND agent_id=?').all(issue.id, agent.id)).toEqual([{ id: turn.id }]);
     expect(h.store.listTurnAttempts(turn.id)).toHaveLength(1);
-    expect(h.store.listIssueDeliveries(issue.id)).toHaveLength(1);
     const evidence = readFileSync(join(evidenceDirectory, `${attemptId}-responsibility.jsonl`), "utf8");
-    expect(evidence).toContain('"event":"responsibility_input_read"'); expect(evidence).toContain('"event":"responsibility_answer_observed"'); expect(evidence).toContain('"event":"responsibility_submitted"');
+    expect(evidence).toContain('"event":"responsibility_input_read"'); expect(evidence).toContain('"event":"responsibility_answer_observed"'); expect(evidence).not.toContain('"event":"responsibility_submitted"');
     expect(evidence).not.toContain("Bearer");
   } finally { await h.dispose(); }
 }, 45_000);
 
-test("PPE SUBMIT invokes the real task-authenticated formal delivery CLI", async () => {
+test("PPE retired SUBMIT marker takes the ordinary smoke path and submits nothing", async () => {
   const f = await world("issue");
   try {
-    f.send("PR404/RESP/SUBMIT"); f.bridge.offerInput(f.store.getTaskWithAgent(f.task.id)!);
     expect(await f.prompt("PR404/RESP/SUBMIT")).toMatchObject({ result: { stopReason: "end_turn" } });
-    const deliveries = f.store.listIssueDeliveries(f.task.issueId!);
-    expect(deliveries).toHaveLength(1);
-    expect(deliveries[0]).toMatchObject({ issueId: f.task.issueId, status: "pending", submittedBy: { type: "agent", id: f.task.agentId } });
-    expect(f.diagnostics.find(event => event.event === "responsibility_submitted"))
-      .toMatchObject({ issue_id: f.task.issueId, delivery_id: deliveries[0]!.id });
+    expect(f.frames.filter(e => e.method === "session/update").map(e => e.params.update.content.text))
+      .toEqual(["PPE daemon ACP smoke test completed."]);
+    expect(f.diagnostics.filter(event => String(event.event ?? "").startsWith("responsibility_"))).toHaveLength(0);
+    expect(readdirSync(f.dir)).toHaveLength(0);
   } finally { await f.close(); }
 }, 20_000);
 
@@ -229,7 +227,7 @@ test("PPE cancellation releases an unanswered provider RPC without a successful 
   } finally { await f.close(); }
 }, 20_000);
 
-for (const prompt of ["PR404/RESP/PRESENTER", "PR404/RESP/ASK PR404/RESP/SUBMIT PR404/RESP/PRESENTER"]) test(`PPE PRESENTER summarizes its authorized original Q without submitting (${prompt})`, async () => {
+for (const prompt of ["PR404/RESP/PRESENTER", "PR404/RESP/ASK PR404/RESP/PRESENTER"]) test(`PPE PRESENTER summarizes its authorized original Q without answering it (${prompt})`, async () => {
   const f = await world("issue");
   const previousKey = process.env.MULTIREMI_FEISHU_BOT_ENCRYPTION_KEY;
   process.env.MULTIREMI_FEISHU_BOT_ENCRYPTION_KEY = Buffer.alloc(32, 7).toString("base64");
@@ -255,7 +253,6 @@ for (const prompt of ["PR404/RESP/PRESENTER", "PR404/RESP/ASK PR404/RESP/SUBMIT 
       .toMatchObject({ question_id: created.message_id, route_revision: 1 });
     expect(f.frames.filter(frame => frame.method === "elicitation/create")).toHaveLength(0);
     expect(f.diagnostics.filter(event => event.event === "responsibility_submitted")).toHaveLength(0);
-    expect(f.store.listIssueDeliveries(f.task.issueId!)).toHaveLength(0);
   } finally {
     if (previousKey === undefined) delete process.env.MULTIREMI_FEISHU_BOT_ENCRYPTION_KEY; else process.env.MULTIREMI_FEISHU_BOT_ENCRYPTION_KEY = previousKey;
     await f.close();

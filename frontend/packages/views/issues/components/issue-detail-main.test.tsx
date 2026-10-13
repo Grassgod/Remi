@@ -15,7 +15,7 @@ import { AFTER_FIRST_SCREEN_CONTENT_FALLBACK_MS, isRouteContentReadyForTest, res
 const activityCallbacks = vi.hoisted(() => ({ current: [] as Array<() => void> }));
 const update = vi.hoisted(() => vi.fn());
 vi.mock("@multiremi/core/api", () => ({ api: {
-  listIssueDependencies: vi.fn(), listMessages: vi.fn(),
+  listIssueDependencies: vi.fn(), listMessages: vi.fn(), listIssueQuestions: vi.fn(async () => []),
 } }));
 
 vi.mock("@multiremi/core/hooks", () => ({ useWorkspaceId: () => "ws-1" }));
@@ -206,8 +206,21 @@ describe("MUL-496 first-screen notices", () => {
     renderMain(false, vi.fn(), false, { issue: { pending_decision_count: 2,
       status: "backlog", parent_issue_id: "parent", blocked_by: ["MUL-1"] } });
     expect(document.querySelector("[data-issue-notice-slot]")).toHaveClass("h-10");
-    expect(document.querySelector("[data-issue-decision-banner]")).toHaveTextContent("Pending questions · 2");
+    expect(document.querySelector("[data-issue-decision-banner]")).toHaveTextContent("2 questions awaiting an answer");
+    expect(screen.getByRole("button", { name: "Answer" })).toHaveAttribute("aria-haspopup", "dialog");
     expect(screen.queryByText(/Waiting for MUL-1/)).toBeNull();
+  });
+
+  it("opens the question drawer from the bar and keeps it open after the last answer hides the bar", async () => {
+    const questions = vi.spyOn(api, "listIssueQuestions");
+    const { rerenderMain } = renderMain(false, vi.fn(), false, { issue: { pending_decision_count: 1 } });
+    expect(questions).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Answer" }));
+    expect(await screen.findByRole("dialog")).toHaveAttribute("data-side", "right");
+    await waitFor(() => expect(questions).toHaveBeenCalledWith("issue-1"));
+    rerenderMain({ issue: { pending_decision_count: 0 } });
+    expect(document.querySelector("[data-issue-notice-slot]")).toBeNull();
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
   });
 
   it("shows backlog prerequisites immediately and hides them after starting", () => {

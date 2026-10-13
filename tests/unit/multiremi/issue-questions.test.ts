@@ -2,19 +2,21 @@ import { expect, it } from 'bun:test';
 import { pendingTurnBackendTests, type PendingTurnTestFixture } from './pending-turn-test-backends.js';
 import { StoreContext, createCommitEventQueue } from '@multiremi/store/context.js';
 import { Questions, refreshIssueQuestionsAfterResponsibilityChangeWithinTransaction } from '@multiremi/store/inbox/questions.js';
+import { deriveIssueStatusWithinTransaction } from '@multiremi/store/inbox/issue-status.js';
 import { MultiremiStore } from '@multiremi/store.js';
 import { decodeDecisionCardBody, questionCardAction, interactionMarker } from '@shared/feishu-task-card.js';
 import { handleTaskInteractionEvent, registerQuestionCardClient } from '@connectors/feishu/task-interaction.js';
 import { createMultiremiApp } from '@multiremi/api.js';
 import { MultiremiDaemonClient } from '@multiremi/worker/client.js';
 
-function setup(f: PendingTurnTestFixture, sameOwner = false, busyOwner = false, kind = 'question') {
+type PermissionOption = { optionId: string; name: string; kind: string };
+function setup(f: PendingTurnTestFixture, sameOwner = false, busyOwner = false, kind = 'question', permission?: PermissionOption[]) {
   const { store, db } = f;
   const runtime = store.registerRuntime({ name: 'questions host', provider: 'codex', daemonId: 'questions-daemon', maxConcurrency: 8 });
   const leader = store.createAgent({ name: 'Issue leader', provider: 'codex', maxConcurrentTasks: busyOwner ? 1 : 8 });
   const parentLeader = sameOwner ? leader : store.createAgent({ name: 'Parent leader', provider: 'codex', maxConcurrentTasks: 8 });
   const worker = store.createAgent({ name: 'Worker', provider: 'codex', maxConcurrentTasks: 8 });
-  const parent = store.createIssue({ title: 'Root', assigneeType: 'agent', assigneeId: parentLeader.id, responsibleMemberId: 'mem_local_local' });
+  const parent = store.createIssue({ title: 'Root', assigneeType: 'agent', assigneeId: parentLeader.id });
   const issue = store.createIssue({ title: 'Child', parentIssueId: parent.id, assigneeType: 'agent', assigneeId: leader.id });
   const leaderRuntime = busyOwner ? store.registerRuntime({ name: 'Busy Leader host', provider: 'codex', daemonId: 'busy-leader-daemon', maxConcurrency: 8 }) : null;
   if (leaderRuntime) {
@@ -29,8 +31,10 @@ function setup(f: PendingTurnTestFixture, sameOwner = false, busyOwner = false, 
   const bridge = store.getDaemonTurnBridge();
   const scope = { runtimeId: runtime.id, daemonId: 'questions-daemon', workspaceId: 'local' };
   const result = bridge.rpc('turn.decision', { turn_id: turn.id, attempt_id: task.id, dedupe_key: `question:${task.id}`,
-    wait_id: `wait_nonce_${task.id}`, body_md: 'Which approach?', options: [{ label: 'A', value: 'A' }, { label: 'B', value: 'B' }],
-    metadata: { kind, questions: [{ fieldKey: 'approach', question: { question: 'Which approach?', options: [{ label: 'A' }, { label: 'B' }] } }] }, timeout_ms: 50 }, scope);
+    wait_id: `wait_nonce_${task.id}`, body_md: permission ? 'Allow Write?' : 'Which approach?',
+    options: permission ? permission.map(option => ({ label: option.name, value: option.optionId })) : [{ label: 'A', value: 'A' }, { label: 'B', value: 'B' }],
+    metadata: permission ? { kind: 'permission', options: permission }
+      : { kind, questions: [{ fieldKey: 'approach', question: { question: 'Which approach?', options: [{ label: 'A' }, { label: 'B' }] } }] }, timeout_ms: 50 }, scope);
   expect(result.ok).toBeTrue();
   const q = store.getQuestion(String(result.message_id))!;
   const agentTurn = (id: string) => {
@@ -39,10 +43,40 @@ function setup(f: PendingTurnTestFixture, sameOwner = false, busyOwner = false, 
     db.run("UPDATE multiremi_turns SET status='running' WHERE id=?", [t.id]);
     return t.id as string;
   };
-  return { ...f, runtime, leader, parentLeader, worker, parent, issue, task, busyTask, turn, bridge, scope, q, agentTurn };
+  const toHuman = () => {
+    store.escalateQuestion(q.id, { expected_route_revision: 1, reason: 'Need parent' }, { type: 'agent', id: leader.id }, agentTurn(leader.id));
+    if (!sameOwner) store.escalateQuestion(q.id, { expected_route_revision: 2, reason: 'Need a member' }, { type: 'agent', id: parentLeader.id }, agentTurn(parentLeader.id));
+    return store.getQuestion(q.id)!;
+  };
+  const refresh = (issueId: string) => {
+    const ctx = new StoreContext(db, () => store), events = createCommitEventQueue();
+    db.transaction(() => refreshIssueQuestionsAfterResponsibilityChangeWithinTransaction(ctx, issueId, events))();
+    return store.getQuestion(q.id)!;
+  };
+  const member = (name: string) => {
+    const user = store.getOrCreateUser({ externalId: `question_${name.toLowerCase().replaceAll(' ', '_')}`, name });
+    return store.createWorkspaceMember({ workspaceId: 'local', userId: user.id, name, role: 'member' });
+  };
+  return { ...f, runtime, leader, parentLeader, worker, parent, issue, task, busyTask, turn, bridge, scope, q, agentTurn, toHuman, refresh, member };
 }
 
 pendingTurnBackendTests('one question through the responsibility chain', fixture => {
+  it('keeps the source Issue in_progress while Leaders hold the question and parks it in_review at the human stage', () => {
+    const h = setup(fixture());
+    expect(h.store.getQuestion(h.q.id)).toMatchObject({ stage: 'issue_owner', current_handler: { type: 'agent', id: h.leader.id } });
+    expect(h.store.getIssue(h.issue.id)?.status).toBe('in_progress');
+    const human = h.toHuman();
+    expect(human).toMatchObject({ stage: 'human', current_handler: null });
+    // The Leaders' notification rounds end after escalating; only the worker still waits, now on a human.
+    h.db.run("UPDATE multiremi_turns SET status='completed' WHERE agent_id IN (?,?) AND status='running'", [h.leader.id, h.parentLeader.id]);
+    const ctx = new StoreContext(h.db, () => h.store), events = createCommitEventQueue();
+    h.db.transaction(() => deriveIssueStatusWithinTransaction(ctx, h.issue.id, events))();
+    expect(h.store.getIssue(h.issue.id)?.status).toBe('in_review');
+    h.store.answerQuestion(h.q.id, { expected_route_revision: human.route_revision, response: { answer: 'A' } }, { type: 'member', id: 'mem_local_local' });
+    expect(h.store.getTurn(h.turn.id)?.status).toBe('running');
+    expect(h.store.getIssue(h.issue.id)?.status).toBe('in_progress');
+  });
+
   it('ordinary choices are excluded before the Question page limit without rewriting historical rows', () => {
     const h = setup(fixture());
     const original = h.store.getMessage(h.q.id)!;
@@ -72,8 +106,7 @@ pendingTurnBackendTests('one question through the responsibility chain', fixture
     const firstSquad = store.createSquad({ name: 'First membership', leaderId: first.id, memberIds: [worker.id] });
     const assignedSquad = store.createSquad({ name: 'Explicit assignment', leaderId: second.id, memberIds: [worker.id] });
     expect(firstSquad.id).not.toBe(assignedSquad.id);
-    const issue = store.createIssue({ title: 'Second Squad owns this work', assigneeType: 'squad', assigneeId: assignedSquad.id,
-      responsibleMemberId: 'mem_local_local' });
+    const issue = store.createIssue({ title: 'Second Squad owns this work', assigneeType: 'squad', assigneeId: assignedSquad.id });
     const session = store.createIssueSession(issue.id, { title: 'Original private Worker lane', holdsWorkspace: false });
     const task = store.createTask({ agentId: worker.id, issueId: issue.id, issueSessionId: session.id, prompt: 'Ask the actual Issue owner', priority: 200 });
     expect(store.claimTask(runtime.id)?.id).toBe(task.id); store.startTask(task.id);
@@ -123,16 +156,15 @@ pendingTurnBackendTests('one question through the responsibility chain', fixture
     for (const task of h.store.listTasksForIssue(h.issue.id)) if (!['completed', 'failed', 'cancelled'].includes(task.status)) h.store.cancelTask(task.id);
     expect(h.store.getQuestion(h.q.id)).toMatchObject({ status: 'pending', wait_status: 'detached' });
     const foreign = h.store.createWorkspace({ name: 'Moved Q source', slug: 'moved-q-source' });
-    const human = h.store.listWorkspaceMembers(foreign.id).find(member => member.role === 'owner')!;
     const agent = h.store.createAgent({ name: 'Moved execution owner', provider: 'codex', workspaceId: foreign.id });
     const detached = await api.request(`/api/issues/${h.issue.id}`, { method: 'PATCH', headers,
-      body: JSON.stringify({ parent_issue_id: null, responsible_member_id: 'mem_local_local' }) });
+      body: JSON.stringify({ parent_issue_id: null }) });
     expect(detached.status).toBe(200);
-    // Responsibility handoff emits a fresh Q notification; stop that newly
-    // queued handler execution as well before the guarded workspace move.
+    // The re-route emits a fresh Q notification; stop that newly queued
+    // handler execution as well before the guarded workspace move.
     for (const task of h.store.listTasksForIssue(h.issue.id)) if (!['completed', 'failed', 'cancelled'].includes(task.status)) h.store.cancelTask(task.id);
     const moved = await api.request(`/api/issues/${h.issue.id}`, { method: 'PATCH', headers,
-      body: JSON.stringify({ workspace_id: foreign.id, responsible_member_id: human.id, assignee_type: 'agent', assignee_id: agent.id }) });
+      body: JSON.stringify({ workspace_id: foreign.id, assignee_type: 'agent', assignee_id: agent.id }) });
     expect(moved.status, JSON.stringify(await moved.clone().json())).toBe(200);
     expect(h.store.getIssue(h.issue.id)?.workspaceId).toBe(foreign.id);
     expect((await read()).status).toBe(404);
@@ -149,14 +181,32 @@ pendingTurnBackendTests('one question through the responsibility chain', fixture
   });
 
   for (const kind of ['production_change', 'merge']) {
-    it(`${kind} authorization bypasses Agent handlers and requires the explicitly responsible human`, () => {
+    it(`${kind} requests climb the execution-owner chain like any question`, () => {
       const h = setup(fixture(), false, false, kind);
-      expect(h.store.getQuestion(h.q.id)).toMatchObject({ stage: 'human', current_handler: { type: 'member', id: 'mem_local_local' } });
-      // A real execution turn belongs to the source Agent; it still cannot grant human authority.
-      expect(() => h.store.answerQuestion(h.q.id, { expected_route_revision: 1, response: { answer: 'A' } }, { type: 'agent', id: h.worker.id }, h.turn.id)).toThrow('question_handler_required');
-      expect(h.store.answerQuestion(h.q.id, { expected_route_revision: 1, response: { answer: 'A' } }, { type: 'member', id: 'mem_local_local' }).question.answer?.actor).toEqual({ type: 'member', id: 'mem_local_local' });
+      expect(h.store.getQuestion(h.q.id)).toMatchObject({ stage: 'issue_owner', current_handler: { type: 'agent', id: h.leader.id }, route_reason: null });
+      expect((h.store.getMessage(h.q.id)!.metadata.question as any).human_required).toBe(false);
+      expect(() => h.store.answerQuestion(h.q.id, { expected_route_revision: 1, response: { answer: 'A' } }, { type: 'member', id: 'mem_local_local' })).toThrow('question_handler_required');
+      expect(h.store.answerQuestion(h.q.id, { expected_route_revision: 1, response: { answer: 'A' } }, { type: 'agent', id: h.leader.id }, h.agentTurn(h.leader.id)).question.answer?.actor)
+        .toEqual({ type: 'agent', id: h.leader.id });
     });
   }
+  for (const response of [{ selected_options: ['allow'] }, { option_id: 'allow' }]) it(`the Leader answers a permission request with ${Object.keys(response)[0]} and the reply carries option_id`, () => {
+    const h = setup(fixture(), false, false, 'permission', [{ optionId: 'allow', name: 'Allow', kind: 'allow_once' }, { optionId: 'deny', name: 'Deny', kind: 'reject_once' }]);
+    const id = h.q.id;
+    expect(h.store.getQuestion(id)).toMatchObject({ kind: 'permission', stage: 'issue_owner', current_handler: { type: 'agent', id: h.leader.id }, wait_status: 'waiting' });
+    const notification = h.store.listMessages(h.store.getOrCreateDefaultIssueSession(h.issue.id).id)
+      .find(message => message.metadata.root_question_id === id && message.metadata.question_notification === true)!;
+    expect(notification.to_agent_id).toBe(h.leader.id);
+    expect(notification.body_md).toContain('selected_options');
+    expect(notification.body_md).toContain('option_id');
+    expect(notification.body_md).toContain(`remi message question escalate ${id}`);
+    const leaderTurn = h.agentTurn(h.leader.id);
+    expect(() => h.store.answerQuestion(id, { expected_route_revision: 1, response: { option_id: 'missing' } }, { type: 'agent', id: h.leader.id }, leaderTurn)).toThrow('invalid human response');
+    const answered = h.store.answerQuestion(id, { expected_route_revision: 1, response }, { type: 'agent', id: h.leader.id }, leaderTurn);
+    expect(JSON.parse(answered.message.body_md)).toMatchObject({ option_id: 'allow' });
+    expect(answered.message).toMatchObject({ reply_to_id: id, to_agent_id: h.worker.id, wake_applied: 'now' });
+    expect(answered.question).toMatchObject({ status: 'answered', answer: { actor: { type: 'agent', id: h.leader.id }, response: { option_id: 'allow' } } });
+  });
   it('keeps a capacity-busy Leader responsible and delivers Q into its existing coordination turn', () => {
     const h = setup(fixture(), false, true);
     expect(h.store.getQuestion(h.q.id)).toMatchObject({ current_handler: { type: 'agent', id: h.leader.id }, stage: 'issue_owner' });
@@ -205,7 +255,7 @@ pendingTurnBackendTests('one question through the responsibility chain', fixture
     const leaderToken = await agentToken(h.leader.id);
     const wrongLaneTokens = async (actorId: string, issueId: string, notifiedSessionId: string) => {
       const side = h.store.createIssueSession(issueId, { title: 'Unnotified inherited side', parentSessionId: notifiedSessionId, inheritMode: 'follow' });
-      const otherIssue = h.store.createIssue({ title: 'Unrelated responsibility', assigneeType: 'agent', assigneeId: actorId, responsibleMemberId: 'mem_local_local' });
+      const otherIssue = h.store.createIssue({ title: 'Unrelated responsibility', assigneeType: 'agent', assigneeId: actorId });
       const lanes = [
         { issueId, issueSessionId: side.id },
         { issueId, issueSessionId: notifiedSessionId, execution_scope: `unnotified:${h.q.id}` },
@@ -238,27 +288,36 @@ pendingTurnBackendTests('one question through the responsibility chain', fixture
     const parentToken = await agentToken(h.parentLeader.id);
     expect((await request(parentToken, `/api/messages/${h.q.id}/question`)).status).toBe(200);
     expect((await request(leaderToken, `/api/messages/${h.q.id}/question`)).status).toBe(403);
-    expect((await request(parentToken, `/api/messages/${h.q.id}/question/escalate`, { expected_route_revision: 2, reason: 'Explicit human' })).status).toBe(200);
     const previous = process.env.MULTIREMI_FEISHU_BOT_ENCRYPTION_KEY;
     process.env.MULTIREMI_FEISHU_BOT_ENCRYPTION_KEY = Buffer.alloc(32, 11).toString('base64');
     try {
       const remi = h.store.createAgent({ name: 'Remi', provider: 'codex' });
       h.store.heartbeatRuntime(h.runtime.id, { supportsFeishuBotConfig: true, supportsDecisionCard: true });
       h.store.upsertFeishuBotConfig('local', { agentId: remi.id, runtimeId: h.runtime.id, appId: 'cli_question_private', appSecretOp: 'set', appSecret: 'synthetic', enabled: true, domain: 'feishu' });
-      h.store.transferQuestion(h.q.id, { expected_route_revision: 3, reason: 'Route presentation through configured Remi' }, { type: 'member', id: 'mem_local_local' });
+      // Reaching the human stage asks the configured Remi to present the same Q in the source Issue's Main.
+      expect((await request(parentToken, `/api/messages/${h.q.id}/question/escalate`, { expected_route_revision: 2, reason: 'Ask a member' })).status).toBe(200);
+      expect(h.store.getQuestion(h.q.id)).toMatchObject({ stage: 'human', current_handler: null, route_revision: 3 });
+      const sourceMain = h.store.getOrCreateDefaultIssueSession(h.issue.id).id;
+      expect(h.store.listMessages(sourceMain).filter(message => message.metadata.question_present_request === true && message.metadata.root_question_id === h.q.id)
+        .map(message => [message.to_agent_id, message.metadata.question_route_revision])).toEqual([[remi.id, 3]]);
       const remiToken = await agentToken(remi.id);
-      for (const token of await wrongLaneTokens(remi.id, h.parent.id, h.store.getOrCreateDefaultIssueSession(h.parent.id).id)) {
+      for (const token of await wrongLaneTokens(remi.id, h.issue.id, sourceMain)) {
         expect((await request(token, `/api/messages/${h.q.id}/question`)).status).toBe(403);
-        expect((await request(token, `/api/messages/${h.q.id}/question/present`, { expected_route_revision: 4, summary: 'Unnotified context' })).status).toBe(403);
+        expect((await request(token, `/api/messages/${h.q.id}/question/present`, { expected_route_revision: 3, summary: 'Unnotified context' })).status).toBe(403);
       }
       expect((await request(remiToken, `/api/messages/${h.q.id}/question`)).status).toBe(200);
       expect((await request(remiToken, `/api/messages/${h.q.id}`)).status).toBe(404);
-      expect((await request(remiToken, `/api/messages/${h.q.id}/question/present`, { expected_route_revision: 4, summary: 'Same original private question summary' })).status).toBe(200);
-      expect((await request(remiToken, `/api/messages/${h.q.id}/question/answer`, { expected_route_revision: 4, response: { answer: 'A' } })).status).toBe(403);
+      expect((await request(remiToken, `/api/messages/${h.q.id}/question/present`, { expected_route_revision: 3, summary: 'Same original private question summary' })).status).toBe(200);
+      expect((await request(remiToken, `/api/messages/${h.q.id}/question/answer`, { expected_route_revision: 3, response: { answer: 'A' } })).status).toBe(403);
+      // The retired transfer route explains its replacement instead of mutating the Q.
+      const transfer = await api.request(`/api/messages/${h.q.id}/question/transfer`, { method: 'POST', headers: { Authorization: 'Bearer MASTER', 'content-type': 'application/json' },
+        body: JSON.stringify({ expected_route_revision: 3, reason: 'Retired' }) });
+      expect(transfer.status).toBe(410);
+      expect(await transfer.json()).toMatchObject({ code: 'route_retired' });
+      expect(h.store.getQuestion(h.q.id)?.route_revision).toBe(3);
       const foreign = h.store.createWorkspace({ name: 'Foreign question HTTP', slug: 'foreign-question-http' });
       const foreignAgent = h.store.createAgent({ name: 'Foreign actor', provider: 'codex', workspaceId: foreign.id });
-      const human = h.store.listWorkspaceMembers(foreign.id).find(member => member.role === 'owner')!;
-      const foreignIssue = h.store.createIssue({ title: 'Foreign', workspaceId: foreign.id, responsibleMemberId: human.id });
+      const foreignIssue = h.store.createIssue({ title: 'Foreign', workspaceId: foreign.id });
       const foreignTask = h.store.createTask({ agentId: foreignAgent.id, issueId: foreignIssue.id, prompt: 'Other work' });
       const foreignToken = (await h.store.createTaskAccessToken(foreignTask, 'local')).token;
       expect((await request(foreignToken, `/api/messages/${h.q.id}/question`)).status).toBe(404);
@@ -285,28 +344,41 @@ pendingTurnBackendTests('one question through the responsibility chain', fixture
     const consumer = h.store.getTurn((h.store.getMessage(h.q.id)!.metadata.question as any).wait.consumer_turn_id)!;
     expect(consumer.agent_id).toBe(h.worker.id);
   });
-  it('hands off saved answers that still await recovery to a changed root human without asking Agents again', () => {
+  it('re-routes a saved answer awaiting recovery without asking Agents again and lets any active member continue it', () => {
     const h = setup(fixture());
     h.bridge.rpc('turn.decision.expire', { turn_id: h.turn.id, attempt_id: h.task.id, message_id: h.q.id, status: 'timeout' }, h.scope);
     h.store.archiveAgent(h.worker.id);
     const saved = h.store.answerQuestion(h.q.id, { expected_route_revision: 1, response: { answer: 'A' } }, { type: 'agent', id: h.leader.id }, h.agentTurn(h.leader.id));
     expect(saved.question.wait_status).toBe('detached');
-    const user = h.store.getOrCreateUser({ externalId: 'question_new_recovery_human', name: 'New recovery human' });
-    const human = h.store.createWorkspaceMember({ workspaceId: 'local', userId: user.id, name: 'New recovery human', role: 'member' });
-    const beforeNotifications = h.db.query("SELECT COUNT(*) AS count FROM multiremi_conversation_log WHERE to_agent_id=? AND dedupe_key LIKE 'question-route:%'").get(h.leader.id).count;
-    h.store.updateIssue(h.parent.id, { responsibleMemberId: human.id, actorType: 'member', actorId: 'mem_local_local' });
-    const moved = h.store.getQuestion(h.q.id, { type: 'member', id: human.id })!;
-    expect(moved).toMatchObject({ status: 'answered', wait_status: 'detached', route_revision: 2, answer_revision: 1, answer: saved.question.answer });
-    expect(moved.actions.allowed).toContain('continue');
-    expect(h.db.query("SELECT COUNT(*) AS count FROM multiremi_conversation_log WHERE to_agent_id=? AND dedupe_key LIKE 'question-route:%'").get(h.leader.id).count).toBe(beforeNotifications);
-    const notice = h.db.query('SELECT * FROM multiremi_conversation_log WHERE dedupe_key=?').get(`question-recovery-route:${h.q.id}:2`);
-    expect(notice.to_member_id).toBe(human.id); expect(notice.session_id).not.toBe(h.q.session_id); expect(notice.reply_to_id).toBeNull();
-    expect(JSON.parse(notice.metadata).root_question_id).toBe(h.q.id);
-    expect(() => h.store.continueQuestion(h.q.id, { expected_route_revision: 2 }, { type: 'member', id: 'mem_local_local' })).toThrow('question_continuation_human_required');
+    const creator = h.member('Root creator'), subscriber = h.member('Child subscriber'), other = h.member('Unreminded member');
+    h.db.run('UPDATE multiremi_issues SET created_by=? WHERE id=?', [creator.userId, h.parent.id]);
+    h.store.addIssueSubscriber(h.issue.id, subscriber.id);
+    const next = h.store.createAgent({ name: 'Next child owner', provider: 'codex' });
+    const beforeNotifications = h.db.query("SELECT COUNT(*) AS count FROM multiremi_conversation_log WHERE dedupe_key LIKE 'question-route:%' AND to_agent_id IS NOT NULL").get().count;
+    h.store.updateIssue(h.issue.id, { assigneeType: 'agent', assigneeId: next.id, actorType: 'member', actorId: 'mem_local_local' });
+    const moved = h.store.getQuestion(h.q.id, { type: 'member', id: other.id })!;
+    expect(moved).toMatchObject({ status: 'answered', wait_status: 'detached', route_revision: 2, answer_revision: 1, answer: saved.question.answer,
+      stage: 'issue_owner', current_handler: { type: 'agent', id: next.id } });
+    // Continuation authority belongs to the human stage, whichever stage holds the Q.
+    expect(moved.actions.allowed).toEqual(['continue']);
+    expect(h.db.query("SELECT COUNT(*) AS count FROM multiremi_conversation_log WHERE dedupe_key LIKE 'question-route:%' AND to_agent_id IS NOT NULL").get().count).toBe(beforeNotifications);
+    const notices = h.db.query("SELECT * FROM multiremi_conversation_log WHERE dedupe_key LIKE ? ORDER BY seq").all(`question-recovery-route:${h.q.id}:2:%`);
+    expect(notices.map(notice => [notice.to_member_id, notice.dedupe_key])).toEqual([
+      [creator.id, `question-recovery-route:${h.q.id}:2:${creator.id}`], [subscriber.id, `question-recovery-route:${h.q.id}:2:${subscriber.id}`]]);
+    for (const notice of notices) {
+      expect(notice.session_id).toBe(h.store.getOrCreateDefaultIssueSession(h.issue.id).id);
+      expect(notice.reply_to_id).toBeNull(); expect(notice.wake_requested).toBe('inbox_only');
+      // Timelines drop a notice whose original Q row lives in the same session.
+      expect(JSON.parse(notice.metadata)).toMatchObject({ root_question_id: h.q.id, source_question_session_id: h.q.session_id });
+    }
+    // Continuation is a member decision: an Agent has no current-turn path into it.
+    expect(() => h.store.continueQuestion(h.q.id, { expected_route_revision: 2 }, { type: 'agent', id: next.id })).toThrow('question_agent_current_turn_required');
+    h.store.archiveWorkspaceMember(subscriber.id);
+    expect(() => h.store.continueQuestion(h.q.id, { expected_route_revision: 2 }, { type: 'member', id: subscriber.id })).toThrow('question_actor_workspace_mismatch');
     h.store.restoreAgent(h.worker.id);
-    const resumed = h.store.continueQuestion(h.q.id, { expected_route_revision: 2 }, { type: 'member', id: human.id });
+    const resumed = h.store.continueQuestion(h.q.id, { expected_route_revision: 2 }, { type: 'member', id: other.id });
     expect(resumed.wait_status).toBe('continuation_pending'); expect(resumed.answer_revision).toBe(1);
-    h.store.continueQuestion(h.q.id, { expected_route_revision: 2 }, { type: 'member', id: human.id });
+    h.store.continueQuestion(h.q.id, { expected_route_revision: 2 }, { type: 'member', id: creator.id });
     expect(h.db.query('SELECT id FROM multiremi_conversation_log WHERE dedupe_key=?').all(`question-continuation:${h.q.id}`)).toHaveLength(1);
   });
   it('real Feishu host callback rejects wrong operators and rotated cards then consumes the current same-Q answer once', async () => {
@@ -317,6 +389,8 @@ pendingTurnBackendTests('one question through the responsibility chain', fixture
     try {
       const remi = h.store.createAgent({ name: 'Remi', provider: 'codex' });
       const member = h.store.getWorkspaceMember('mem_local_local')!;
+      // The card goes to the root creator, who maps to exactly one open_id.
+      h.db.run('UPDATE multiremi_issues SET created_by=? WHERE id=?', [member.userId, h.parent.id]);
       h.db.run('UPDATE multiremi_users SET feishu_union_id=? WHERE id=?', ['on_question_human', member.userId]);
       const at = new Date().toISOString();
       h.db.run("INSERT INTO multiremi_feishu_bot_senders(id,workspace_id,app_id,open_id,union_id,display_name,allowed,first_seen_at,last_seen_at) VALUES('fbs_question','local','cli_question_host','ou_question_human','on_question_human','Human',1,?,?)", [at, at]);
@@ -349,7 +423,11 @@ pendingTurnBackendTests('one question through the responsibility chain', fixture
       });
       expect((await click(oldAction, 'ou_stranger'))?.toast).toMatchObject({ type: 'error' });
       expect(h.store.getQuestion(h.q.id)?.status).toBe('pending');
-      h.store.transferQuestion(h.q.id, { expected_route_revision: 3, reason: 'Reconfirm responsibility' }, { type: 'member', id: member.id });
+      // An execution-owner change re-routes the escalated Q at the human stage and rotates its card.
+      h.store.updateIssue(h.parent.id, { assigneeType: 'agent', assigneeId: h.store.createAgent({ name: 'Replacement root owner', provider: 'codex' }).id,
+        actorType: 'member', actorId: member.id });
+      expect(h.store.getQuestion(h.q.id)).toMatchObject({ stage: 'human', current_handler: null, route_revision: 4 });
+      expect(h.store.getMessage(h.q.id)?.card_token_hash).toBeNull();
       expect((await click(oldAction))?.toast).toMatchObject({ type: 'error' });
       h.store.presentQuestion(h.q.id, { expected_route_revision: 4, summary: 'Updated Remi summary' }, { type: 'agent', id: remi.id }, h.agentTurn(remi.id));
       const current = h.store.claimFeishuBotOutbound('local', h.runtime.id)!;
@@ -463,7 +541,7 @@ pendingTurnBackendTests('one question through the responsibility chain', fixture
   });
   it('bounds SQL pages and responsibility refresh to related Issues', () => {
     const h = setup(fixture());
-    const unrelated = h.store.createIssue({ title: 'Unrelated', responsibleMemberId: 'mem_local_local' });
+    const unrelated = h.store.createIssue({ title: 'Unrelated' });
     const otherSession = h.store.getOrCreateDefaultIssueSession(unrelated.id);
     const unrelatedQ = h.store.sendMessage({ session_id: otherSession.id, sender: { type: 'platform', id: null }, to: { type: 'none' },
       message_kind: 'decision', wake_requested: 'inbox_only', body_md: 'Must not resolve', metadata: { human_request: { kind: 'question', status: 'pending', payload: { message: 'Must not resolve' } } } }).message;
@@ -482,19 +560,67 @@ pendingTurnBackendTests('one question through the responsibility chain', fixture
     h.db.transaction(() => refreshIssueQuestionsAfterResponsibilityChangeWithinTransaction(ctx, h.issue.id, events))();
     expect(h.store.getMessage(unrelatedQ.id)?.metadata.question).toBeUndefined();
   });
-  it('fails closed for invalid ancestry, missing root human and moved source workspace', () => {
+  for (const failure of ['parent_missing', 'parent_cycle', 'workspace_mismatch'] as const) it(`a ${failure} parent chain hands the Q to the human stage at the break`, () => {
     const h = setup(fixture());
-    h.db.run('UPDATE multiremi_issues SET responsible_member_id=NULL WHERE id=?', [h.parent.id]);
-    const ctx = new StoreContext(h.db, () => h.store), events = createCommitEventQueue();
-    h.db.transaction(() => refreshIssueQuestionsAfterResponsibilityChangeWithinTransaction(ctx, h.parent.id, events))();
-    expect(h.store.getQuestion(h.q.id)).toMatchObject({ current_handler: null, stage: 'unavailable' });
-    expect(h.store.getQuestion(h.q.id)?.route_reason).toContain('human_missing');
+    const other = h.store.createWorkspace({ name: `Broken chain ${failure}`, slug: `broken-chain-${failure.replaceAll('_', '-')}` });
+    if (failure === 'parent_missing') h.db.run('UPDATE multiremi_issues SET parent_issue_id=? WHERE id=?', ['iss_missing_question_parent', h.issue.id]);
+    if (failure === 'parent_cycle') h.db.run('UPDATE multiremi_issues SET parent_issue_id=? WHERE id=?', [h.issue.id, h.parent.id]);
+    if (failure === 'workspace_mismatch') h.db.run('UPDATE multiremi_issues SET workspace_id=? WHERE id=?', [other.id, h.parent.id]);
+    const reason = failure === 'parent_missing' ? 'iss_missing_question_parent:parent_missing'
+      : failure === 'parent_cycle' ? `${h.issue.id}:parent_cycle` : `${h.parent.id}:workspace_mismatch`;
+    // The owners before the break still answer in order; the break itself hands over to a member.
+    const owners = failure === 'parent_cycle' ? [h.leader.id, h.parentLeader.id] : [h.leader.id];
+    const q = h.refresh(h.issue.id);
+    expect(q).toMatchObject({ stage: 'issue_owner', current_handler: { type: 'agent', id: h.leader.id }, route_reason: reason, route_revision: 2 });
+    expect((h.store.getMessage(h.q.id)!.metadata.question as any).route.map((step: any) => step.handler?.id ?? step.stage)).toEqual([...owners, 'human']);
+    let revision = 2;
+    for (const owner of owners) h.store.escalateQuestion(h.q.id, { expected_route_revision: revision++, reason: 'Cannot decide here' }, { type: 'agent', id: owner }, h.agentTurn(owner));
+    const human = h.store.getQuestion(h.q.id, { type: 'member', id: 'mem_local_local' })!;
+    expect(human).toMatchObject({ stage: 'human', current_handler: null, route_reason: reason, actions: { allowed: ['answer', 'close'] } });
+    expect(h.store.answerQuestion(h.q.id, { expected_route_revision: revision, response: { answer: 'A' } }, { type: 'member', id: 'mem_local_local' }).question.status).toBe('answered');
+  });
+  it('hands the Q to the human stage when a level has no execution owner, without skipping it', () => {
+    const h = setup(fixture());
+    h.db.run('UPDATE multiremi_issues SET assignee_type=NULL,assignee_id=NULL WHERE id=?', [h.parent.id]);
+    const q = h.refresh(h.parent.id);
+    expect(q).toMatchObject({ stage: 'issue_owner', current_handler: { id: h.leader.id }, route_reason: `${h.parent.id}:execution_owner_missing` });
+    const human = h.store.escalateQuestion(h.q.id, { expected_route_revision: 2, reason: 'Parent has no owner' }, { type: 'agent', id: h.leader.id }, h.agentTurn(h.leader.id));
+    expect(human).toMatchObject({ stage: 'human', current_handler: null, route_revision: 3, route_reason: `${h.parent.id}:execution_owner_missing` });
+    // Configuring the missing owner does not pull an explicit escalation back to the Agents.
+    h.store.updateIssue(h.parent.id, { assigneeType: 'agent', assigneeId: h.parentLeader.id, actorType: 'member', actorId: 'mem_local_local' });
+    expect(h.store.getQuestion(h.q.id)).toMatchObject({ stage: 'human', current_handler: null, route_revision: 4, route_reason: null });
+  });
+  it('starts a Q of a team without a Leader at the human stage and returns it to the Leader once configured', () => {
+    const { store, db } = fixture();
+    const runtime = store.registerRuntime({ name: 'Leaderless host', provider: 'codex', daemonId: 'leaderless-daemon', maxConcurrency: 8 });
+    const lead = store.createAgent({ name: 'Leader to remove', provider: 'codex' });
+    const worker = store.createAgent({ name: 'Leaderless worker', provider: 'codex', runtimeId: runtime.id });
+    const team = store.createSquad({ name: 'Leaderless team', leaderId: lead.id, memberIds: [worker.id] });
+    const issue = store.createIssue({ title: 'Team work', assigneeType: 'squad', assigneeId: team.id });
+    db.run('UPDATE multiremi_squads SET leader_id=NULL WHERE id=?', [team.id]);
+    const task = store.createTask({ agentId: worker.id, issueId: issue.id, prompt: 'Ask the team' });
+    expect(store.claimTask(runtime.id)?.id).toBe(task.id); store.startTask(task.id);
+    const turn = store.getTurnForAttempt(task.id)!;
+    const created = store.getDaemonTurnBridge().rpc('turn.decision', { turn_id: turn.id, attempt_id: task.id, dedupe_key: `leaderless:${task.id}`, wait_id: `leaderless:${task.id}`,
+      body_md: 'Which team decision?', options: [{ label: 'A', value: 'A' }], metadata: { kind: 'question', questions: [{ question: 'Which team decision?', options: [{ label: 'A' }] }] } },
+      { runtimeId: runtime.id, daemonId: 'leaderless-daemon', workspaceId: 'local' });
+    const id = String(created.message_id);
+    // No member of the team stands in for its missing Leader.
+    expect(store.getQuestion(id)).toMatchObject({ stage: 'human', current_handler: null, route_reason: `${issue.id}:leader_missing`, route_revision: 1 });
+    expect(store.getMessage(id)?.to_agent_id).toBeNull();
+    store.updateSquad(team.id, { leaderId: lead.id });
+    expect(store.getQuestion(id)).toMatchObject({ stage: 'issue_owner', current_handler: { type: 'agent', id: lead.id }, route_reason: null, route_revision: 2 });
+  });
+  it('keeps a Q whose source moved to another workspace frozen for every actor', () => {
+    const h = setup(fixture());
     const other = h.store.createWorkspace({ name: 'Other', slug: 'question-other' });
     const agent = h.store.createAgent({ name: 'Foreign actor', provider: 'codex', workspaceId: other.id });
-    expect(() => h.store.answerQuestion(h.q.id, { expected_route_revision: 2, response: { answer: 'A' } }, { type: 'agent', id: agent.id })).toThrow('question_actor_workspace_mismatch');
+    expect(() => h.store.answerQuestion(h.q.id, { expected_route_revision: 1, response: { answer: 'A' } }, { type: 'agent', id: agent.id })).toThrow('question_actor_workspace_mismatch');
     h.db.run('UPDATE multiremi_issues SET workspace_id=? WHERE id=?', [other.id, h.issue.id]);
-    expect(h.store.getQuestion(h.q.id, { type: 'member', id: 'mem_local_local' })).toMatchObject({ current_handler: null, route_reason: 'source_workspace_changed', actions: { allowed: [] } });
-    expect(() => h.store.answerQuestion(h.q.id, { expected_route_revision: 2, response: { answer: 'A' } }, { type: 'member', id: 'mem_local_local' })).toThrow('question_source_workspace_changed');
+    expect(h.store.getQuestion(h.q.id, { type: 'member', id: 'mem_local_local' })).toMatchObject({ current_handler: null, stage: 'unavailable', route_reason: 'source_workspace_changed', actions: { allowed: [] } });
+    expect(() => h.store.answerQuestion(h.q.id, { expected_route_revision: 1, response: { answer: 'A' } }, { type: 'member', id: 'mem_local_local' })).toThrow('question_source_workspace_changed');
+    expect(() => h.store.answerQuestion(h.q.id, { expected_route_revision: 1, response: { answer: 'A' } }, { type: 'agent', id: h.leader.id }, h.agentTurn(h.leader.id))).toThrow('question_source_workspace_changed');
+    expect(h.refresh(h.issue.id)).toMatchObject({ stage: 'unavailable', route_revision: 1 });
   });
   it('worker routes from the Issue, retains original Q and writes the owner answer to its source session', () => {
     const h = setup(fixture());
@@ -508,18 +634,188 @@ pendingTurnBackendTests('one question through the responsibility chain', fixture
     expect(h.store.getQuestion(h.q.id)?.wait_status).toBe('consumed');
     expect(() => h.store.answerQuestion(h.q.id, { expected_route_revision: 1, response: { answer: 'B' } }, actor, h.agentTurn(h.leader.id))).toThrow('question_already_settled');
   });
-  it('escalates the same Q through parent to explicit human, retaining options and refusing stale handlers', () => {
+  it('escalates the same Q through the parent owner to the human stage, retaining options and refusing stale handlers', () => {
     const h = setup(fixture());
+    expect((h.store.getMessage(h.q.id)!.metadata.question as any).route).toEqual([
+      { handler: { type: 'agent', id: h.leader.id }, issue_id: h.issue.id, stage: 'issue_owner' },
+      { handler: { type: 'agent', id: h.parentLeader.id }, issue_id: h.parent.id, stage: 'parent_owner' },
+      { handler: null, issue_id: h.parent.id, stage: 'human' }]);
     const first = h.store.escalateQuestion(h.q.id, { expected_route_revision: 1, reason: 'Need parent decision' }, { type: 'agent', id: h.leader.id }, h.agentTurn(h.leader.id));
     expect(first).toMatchObject({ id: h.q.id, current_handler: { id: h.parentLeader.id }, route_revision: 2, stage: 'parent_owner' });
     expect(() => h.store.answerQuestion(h.q.id, { expected_route_revision: 1, response: { answer: 'A' } }, { type: 'agent', id: h.leader.id }, h.agentTurn(h.leader.id))).toThrow('question_route_changed');
-    const human = h.store.escalateQuestion(h.q.id, { expected_route_revision: 2, reason: 'Need human' }, { type: 'agent', id: h.parentLeader.id }, h.agentTurn(h.parentLeader.id));
-    expect(human).toMatchObject({ id: h.q.id, current_handler: { type: 'member', id: 'mem_local_local' }, route_revision: 3, stage: 'human' });
+    const human = h.store.escalateQuestion(h.q.id, { expected_route_revision: 2, reason: 'Need a member' }, { type: 'agent', id: h.parentLeader.id }, h.agentTurn(h.parentLeader.id));
+    expect(human).toMatchObject({ id: h.q.id, current_handler: null, route_revision: 3, stage: 'human', route_reason: null });
     expect(human.options).toEqual(h.q.options); expect(human.original_questions).toEqual(h.q.original_questions);
+    expect(human.history.at(-1)).toMatchObject({ type: 'transfer', actor: null, handler: null, source_session_id: h.store.getOrCreateDefaultIssueSession(h.issue.id).id });
     const notifications = h.db.query("SELECT session_id,reply_to_id,metadata FROM multiremi_conversation_log WHERE message_kind='request'").all().filter(m => JSON.parse(m.metadata ?? '{}').root_question_id === h.q.id);
     expect(notifications.some(m => m.session_id !== h.q.session_id)).toBeTrue();
     expect(notifications.every(m => m.reply_to_id === null)).toBeTrue();
+    // Nobody created the root as a member and nobody subscribed: the Q waits without a reminder.
+    expect(h.db.query('SELECT id FROM multiremi_conversation_log WHERE dedupe_key LIKE ?').all(`question-route:${h.q.id}:3:%`)).toEqual([]);
     expect(Number(h.db.query("SELECT COUNT(*) AS n FROM multiremi_conversation_log WHERE message_kind='decision'").get().n)).toBe(1);
+    expect(() => h.store.escalateQuestion(h.q.id, { expected_route_revision: 3, reason: 'Nobody above' }, { type: 'agent', id: h.parentLeader.id }, h.agentTurn(h.parentLeader.id))).toThrow();
+  });
+  it('lets any active member of the workspace answer, revise or close at the human stage, and nobody else', async () => {
+    const h = setup(fixture());
+    h.toHuman();
+    const first = h.member('First member'), second = h.member('Second member'), archived = h.member('Archived member');
+    h.store.archiveWorkspaceMember(archived.id);
+    const foreign = h.store.createWorkspace({ name: 'Foreign members', slug: 'question-foreign-members' });
+    const foreignOwner = h.store.listWorkspaceMembers(foreign.id).find(member => member.role === 'owner')!;
+    expect(h.store.getQuestion(h.q.id, { type: 'member', id: first.id })?.actions.allowed).toEqual(['answer', 'close']);
+    expect(h.store.getQuestion(h.q.id, { type: 'member', id: archived.id })?.actions.allowed).toEqual([]);
+    expect(h.store.getQuestion(h.q.id, { type: 'member', id: foreignOwner.id })?.actions.allowed).toEqual([]);
+    expect(h.store.getQuestion(h.q.id, { type: 'agent', id: h.parentLeader.id })?.actions.allowed).toEqual([]);
+    const answer = (sender: { type: 'member' | 'agent' | 'platform'; id: string | null }, turnId?: string) =>
+      () => h.store.answerQuestion(h.q.id, { expected_route_revision: 3, response: { answer: 'A' } }, sender as any, turnId);
+    expect(answer({ type: 'member', id: archived.id })).toThrow('question_actor_workspace_mismatch');
+    expect(answer({ type: 'member', id: foreignOwner.id })).toThrow('question_actor_workspace_mismatch');
+    expect(answer({ type: 'platform', id: null })).toThrow('question_actor_required');
+    // The source Agent's own task credential reads its lane but holds no member authority.
+    expect(answer({ type: 'agent', id: h.worker.id }, h.turn.id)).toThrow('question_handler_required');
+    expect(answer({ type: 'agent', id: h.parentLeader.id }, h.agentTurn(h.parentLeader.id))).toThrow();
+    const answered = h.store.answerQuestion(h.q.id, { expected_route_revision: 3, response: { answers: { 'Which approach?': 'A' } } }, { type: 'member', id: first.id });
+    expect(answered.question).toMatchObject({ status: 'answered', answer: { actor: { type: 'member', id: first.id } } });
+    expect(h.store.getQuestion(h.q.id, { type: 'member', id: second.id })?.actions.allowed).toEqual(['revise']);
+    expect(() => h.store.answerQuestion(h.q.id, { expected_route_revision: 3, expected_answer_revision: 1, revise: true, reason: 'Archived',
+      response: { answers: { 'Which approach?': 'B' } } }, { type: 'member', id: archived.id })).toThrow('question_actor_workspace_mismatch');
+    const revised = h.store.answerQuestion(h.q.id, { expected_route_revision: 3, expected_answer_revision: 1, revise: true, reason: 'B is safer',
+      response: { answers: { 'Which approach?': 'B' } } }, { type: 'member', id: second.id });
+    expect(revised.question).toMatchObject({ answer_revision: 2, answer: { actor: { type: 'member', id: second.id }, response: { answers: { 'Which approach?': 'B' } } } });
+    expect(h.store.listMessages(h.q.session_id).find(message => message.dedupe_key === `question-revision:${h.q.id}:${revised.message.id}`)?.body_md).toStartWith('成员修订了问题');
+  });
+  it('lets any active member close a Q at the human stage', () => {
+    const h = setup(fixture());
+    h.toHuman();
+    const archived = h.member('Archived closer');
+    h.store.archiveWorkspaceMember(archived.id);
+    expect(() => h.store.closeQuestion(h.q.id, { expected_route_revision: 3, reason: 'No longer needed' }, { type: 'agent', id: h.parentLeader.id }, h.agentTurn(h.parentLeader.id))).toThrow();
+    expect(() => h.store.closeQuestion(h.q.id, { expected_route_revision: 3, reason: 'No longer needed' }, { type: 'member', id: archived.id })).toThrow('question_actor_workspace_mismatch');
+    const closer = h.member('Closing member');
+    expect(h.store.closeQuestion(h.q.id, { expected_route_revision: 3, reason: 'No longer needed' }, { type: 'member', id: closer.id })).toMatchObject({ status: 'closed', wait_status: 'detached' });
+    // The live provider call is released with a cancellation, never an answer.
+    expect(h.store.listMessages(h.q.session_id).find(message => message.reply_to_id === h.q.id)?.metadata).toMatchObject({ question_closed: true, human_response: { cancelled: true } });
+  });
+  it('keeps an Agent-stage Q read-only for members, including after the Agent answers', () => {
+    const h = setup(fixture());
+    const reader = h.member('Agent stage reader');
+    expect(h.store.getQuestion(h.q.id, { type: 'member', id: reader.id })).toMatchObject({ stage: 'issue_owner', actions: { allowed: [] } });
+    expect(() => h.store.answerQuestion(h.q.id, { expected_route_revision: 1, response: { answer: 'A' } }, { type: 'member', id: reader.id })).toThrow('question_handler_required');
+    expect(() => h.store.closeQuestion(h.q.id, { expected_route_revision: 1, reason: 'Members do not close Agent-stage Qs' }, { type: 'member', id: reader.id })).toThrow('question_close_authority_required');
+    h.store.answerQuestion(h.q.id, { expected_route_revision: 1, response: { answer: 'A' } }, { type: 'agent', id: h.leader.id }, h.agentTurn(h.leader.id));
+    expect(h.store.getQuestion(h.q.id, { type: 'member', id: reader.id })?.actions.allowed).toEqual([]);
+    expect(() => h.store.answerQuestion(h.q.id, { expected_route_revision: 1, expected_answer_revision: 1, revise: true, reason: 'Override',
+      response: { answer: 'B' } }, { type: 'member', id: reader.id })).toThrow('question_revision_human_required');
+  });
+  it('keeps a member answer revisable when configuring the missing owner moves its detached Q back to the Agent', () => {
+    const { store, db } = fixture();
+    const runtime = store.registerRuntime({ name: 'Unowned root host', provider: 'codex', daemonId: 'unowned-root-daemon', maxConcurrency: 8 });
+    const worker = store.createAgent({ name: 'Unowned root worker', provider: 'codex', runtimeId: runtime.id });
+    const owner = store.createAgent({ name: 'Configured later', provider: 'codex' });
+    const issue = store.createIssue({ title: 'Root without an owner' });
+    const task = store.createTask({ agentId: worker.id, issueId: issue.id, prompt: 'Ask before an owner exists' });
+    expect(store.claimTask(runtime.id)?.id).toBe(task.id); store.startTask(task.id);
+    const turn = store.getTurnForAttempt(task.id)!;
+    const scope = { runtimeId: runtime.id, daemonId: 'unowned-root-daemon', workspaceId: 'local' };
+    const bridge = store.getDaemonTurnBridge();
+    const id = String(bridge.rpc('turn.decision', { turn_id: turn.id, attempt_id: task.id, dedupe_key: `unowned-root:${task.id}`, wait_id: `unowned-root:${task.id}`,
+      body_md: 'Which root decision?', options: [{ label: 'A', value: 'A' }, { label: 'B', value: 'B' }],
+      metadata: { kind: 'question', questions: [{ question: 'Which root decision?', options: [{ label: 'A' }, { label: 'B' }] }] } }, scope).message_id);
+    expect(store.getQuestion(id)).toMatchObject({ stage: 'human', current_handler: null, route_reason: `${issue.id}:execution_owner_missing`, route_revision: 1 });
+    bridge.rpc('turn.decision.expire', { turn_id: turn.id, attempt_id: task.id, message_id: id, status: 'cancelled' }, scope);
+    store.answerQuestion(id, { expected_route_revision: 1, response: { answer: 'A' } }, { type: 'member', id: 'mem_local_local' });
+    store.updateIssue(issue.id, { assigneeType: 'agent', assigneeId: owner.id, actorType: 'member', actorId: 'mem_local_local' });
+    const user = store.getOrCreateUser({ externalId: 'question_unowned_reviser', name: 'Unowned reviser' });
+    const reviser = store.createWorkspaceMember({ workspaceId: 'local', userId: user.id, name: user.name, role: 'member' });
+    // The re-route moved the current step to the new owner; the saved answer still came from the human stage.
+    expect(store.getQuestion(id, { type: 'member', id: reviser.id })).toMatchObject({ status: 'answered', wait_status: 'detached', stage: 'issue_owner',
+      current_handler: { type: 'agent', id: owner.id }, route_revision: 2, actions: { allowed: ['revise', 'continue'] } });
+    expect(store.getQuestion(id, { type: 'agent', id: owner.id })?.actions.allowed).toEqual([]);
+    const revised = store.answerQuestion(id, { expected_route_revision: 2, expected_answer_revision: 1, revise: true, reason: 'B fits the owner',
+      response: { answer: 'B' } }, { type: 'member', id: reviser.id });
+    expect(revised.question).toMatchObject({ answer_revision: 2, answer: { actor: { type: 'member', id: reviser.id }, response: { answer: 'B' } } });
+    expect(Number(db.query("SELECT COUNT(*) AS n FROM multiremi_conversation_log WHERE dedupe_key LIKE ?").get(`question-revision:${id}:%`).n)).toBe(1);
+  });
+  it('keeps an Agent answer unrevisable when unassigning its level moves the detached Q to the human stage', () => {
+    const h = setup(fixture());
+    h.bridge.rpc('turn.decision.expire', { turn_id: h.turn.id, attempt_id: h.task.id, message_id: h.q.id, status: 'cancelled' }, h.scope);
+    h.store.escalateQuestion(h.q.id, { expected_route_revision: 1, reason: 'Need parent' }, { type: 'agent', id: h.leader.id }, h.agentTurn(h.leader.id));
+    h.store.answerQuestion(h.q.id, { expected_route_revision: 2, response: { answer: 'A' } }, { type: 'agent', id: h.parentLeader.id }, h.agentTurn(h.parentLeader.id));
+    h.db.run('UPDATE multiremi_issues SET assignee_type=NULL,assignee_id=NULL WHERE id=?', [h.parent.id]);
+    const reader = h.member('Agent answer reader');
+    expect(h.refresh(h.parent.id)).toMatchObject({ status: 'answered', wait_status: 'detached', stage: 'human', current_handler: null, route_revision: 3,
+      answer: { actor: { type: 'agent', id: h.parentLeader.id } } });
+    // Continuation stays a member decision; the Agent's answer stays as given.
+    expect(h.store.getQuestion(h.q.id, { type: 'member', id: reader.id })?.actions.allowed).toEqual(['continue']);
+    expect(() => h.store.answerQuestion(h.q.id, { expected_route_revision: 3, expected_answer_revision: 1, revise: true, reason: 'Override',
+      response: { answer: 'B' } }, { type: 'member', id: reader.id })).toThrow('question_revision_human_required');
+  });
+  it('reminds the root creator and the source Issue member subscribers at the human stage without limiting who acts', () => {
+    const h = setup(fixture());
+    const creator = h.member('Root creator'), subscriber = h.member('Child subscriber'), gone = h.member('Archived subscriber'), other = h.member('Unreminded member');
+    h.db.run('UPDATE multiremi_issues SET created_by=? WHERE id=?', [creator.userId, h.parent.id]);
+    h.store.addIssueSubscriber(h.issue.id, subscriber.id); h.store.addIssueSubscriber(h.issue.id, gone.id); h.store.addIssueSubscriber(h.issue.id, creator.id);
+    h.store.archiveWorkspaceMember(gone.id);
+    const human = h.toHuman();
+    const sourceMain = h.store.getOrCreateDefaultIssueSession(h.issue.id).id;
+    const reminders = h.db.query('SELECT * FROM multiremi_conversation_log WHERE dedupe_key LIKE ? ORDER BY seq').all(`question-route:${h.q.id}:3:%`);
+    expect(reminders.map(row => [row.to_member_id, row.dedupe_key])).toEqual([
+      [creator.id, `question-route:${h.q.id}:3:${creator.id}`], [subscriber.id, `question-route:${h.q.id}:3:${subscriber.id}`]]);
+    for (const row of reminders) {
+      expect(row).toMatchObject({ session_id: sourceMain, message_kind: 'request', wake_requested: 'inbox_only', to_agent_id: null, reply_to_id: null });
+      expect(JSON.parse(row.metadata)).toMatchObject({ root_question_id: h.q.id, question_notification: true, question_route_revision: 3 });
+    }
+    expect(human.history.at(-1)).toMatchObject({ type: 'transfer', handler: null, source_message_id: reminders[0]!.id, source_session_id: sourceMain });
+    expect(h.store.answerQuestion(h.q.id, { expected_route_revision: 3, response: { answer: 'A' } }, { type: 'member', id: other.id }).question.answer?.actor.id).toBe(other.id);
+  });
+  it('upgrades a stored designated-human route on read and re-routes it once before the first mutation', () => {
+    const h = setup(fixture());
+    h.toHuman();
+    const stored = structuredClone(h.store.getMessage(h.q.id)!.metadata) as Record<string, any>;
+    // A record written before this change names the root human and hashes it into its revision.
+    stored.question.route = stored.question.route.map((step: any) => step.stage === 'human' ? { ...step, handler: { type: 'member', id: 'mem_local_local' } } : step);
+    stored.question.responsibility_revision = 'designated-human-revision';
+    stored.question.route_reason = `${h.parent.id}:human_unavailable`;
+    h.db.run('UPDATE multiremi_conversation_log SET metadata=? WHERE id=?', [JSON.stringify(stored), h.q.id]);
+    const before = h.store.getMessage(h.q.id)!;
+    const reader = h.member('Legacy reader');
+    expect(h.store.getQuestion(h.q.id, { type: 'member', id: reader.id })).toMatchObject({ stage: 'human', current_handler: null, route_reason: null, route_revision: 3,
+      actions: { allowed: ['answer', 'close'] } });
+    // A read never writes the upgrade.
+    expect(h.store.getMessage(h.q.id)!.revision).toBe(before.revision);
+    expect(() => h.store.answerQuestion(h.q.id, { expected_route_revision: 3, response: { answer: 'A' } }, { type: 'member', id: reader.id })).toThrow('question_route_changed');
+    const rerouted = h.store.getQuestion(h.q.id, { type: 'member', id: reader.id })!;
+    expect(rerouted).toMatchObject({ stage: 'human', current_handler: null, route_revision: 4, status: 'pending' });
+    expect(rerouted.history.at(-2)).toMatchObject({ type: 'transfer', actor: null, reason: 'responsibility_revision_stale' });
+    expect((h.store.getMessage(h.q.id)!.metadata.question as any)).toMatchObject({ human_required: true, route: [{}, {}, { handler: null, stage: 'human' }] });
+    expect(h.store.answerQuestion(h.q.id, { expected_route_revision: 4, response: { answer: 'A' } }, { type: 'member', id: reader.id }).question.status).toBe('answered');
+  });
+  it('upgrades a stored designated-human route still at an Agent step without pinning it to the human stage', () => {
+    const h = setup(fixture());
+    const stored = structuredClone(h.store.getMessage(h.q.id)!.metadata) as Record<string, any>;
+    stored.question.route = stored.question.route.map((step: any) => step.stage === 'human' ? { ...step, handler: { type: 'member', id: 'mem_local_local' } } : step);
+    stored.question.responsibility_revision = 'designated-human-revision';
+    h.db.run('UPDATE multiremi_conversation_log SET metadata=? WHERE id=?', [JSON.stringify(stored), h.q.id]);
+    expect(h.store.getQuestion(h.q.id)).toMatchObject({ stage: 'issue_owner', current_handler: { type: 'agent', id: h.leader.id } });
+    h.db.run('UPDATE multiremi_issues SET assignee_type=NULL,assignee_id=NULL WHERE id=?', [h.issue.id]);
+    expect(h.refresh(h.issue.id)).toMatchObject({ stage: 'human', current_handler: null, route_reason: `${h.issue.id}:execution_owner_missing` });
+    expect((h.store.getMessage(h.q.id)!.metadata.question as any).human_required).toBe(false);
+    // Configuring an owner returns it to the Agent, exactly like a Q written after the change.
+    const next = h.store.createAgent({ name: 'Configured child owner', provider: 'codex' });
+    h.store.updateIssue(h.issue.id, { assigneeType: 'agent', assigneeId: next.id, actorType: 'member', actorId: 'mem_local_local' });
+    expect(h.store.getQuestion(h.q.id)).toMatchObject({ stage: 'issue_owner', current_handler: { type: 'agent', id: next.id }, route_reason: null });
+  });
+  it('upgrades a frozen Q of a root without a designated human to the human stage', () => {
+    const h = setup(fixture());
+    h.toHuman();
+    const stored = structuredClone(h.store.getMessage(h.q.id)!.metadata) as Record<string, any>;
+    stored.question.route = stored.question.route.filter((step: any) => step.stage !== 'human');
+    stored.question.route_index = stored.question.route.length;
+    stored.question.route_reason = `${h.parent.id}:human_missing`;
+    h.db.run('UPDATE multiremi_conversation_log SET metadata=? WHERE id=?', [JSON.stringify(stored), h.q.id]);
+    expect(h.store.getQuestion(h.q.id, { type: 'member', id: 'mem_local_local' })).toMatchObject({ stage: 'human', current_handler: null, route_reason: null,
+      actions: { allowed: ['answer', 'close'] } });
+    expect(h.store.answerQuestion(h.q.id, { expected_route_revision: 3, response: { answer: 'A' } }, { type: 'member', id: 'mem_local_local' }).question.status).toBe('answered');
   });
   it('skips the same agent across adjacent responsibility levels and never asks the source agent', () => {
     const h = setup(fixture(), true);
@@ -553,7 +849,7 @@ pendingTurnBackendTests('one question through the responsibility chain', fixture
     expect(reply.question.wait_status).toBe('continuation_pending');
     expect(reply.message.to_agent_id).toBeNull();
   });
-  it('explicit transfer invalidates old tokens and route revisions without rewriting frozen recipients', () => {
+  it('a responsibility re-route invalidates old tokens and route revisions without rewriting frozen recipients', () => {
     const h = setup(fixture());
     const token = h.store.issueMessageCardToken(h.q.id, 'ou_previous');
     const oldRecipient = h.store.getMessage(h.q.id)!.to_agent_id;

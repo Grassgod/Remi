@@ -663,7 +663,6 @@ export function issueDraft(body: IssueBody): MessageIssueInput {
     projectId: body.projectId ?? null,
     assigneeType: body.assigneeType ?? null,
     assigneeId: body.assigneeId ?? null,
-    responsibleMemberId:body.responsibleMemberId??null,
   };
 }
 
@@ -720,7 +719,6 @@ interface IssueBody {
   projectId?: string | null;
   assigneeType?: MultiremiAssigneeType | null;
   assigneeId?: string | null;
-  responsibleMemberId?:string|null;
 }
 
 function connectionIdentity(connection: MessageConnection): {

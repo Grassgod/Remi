@@ -237,15 +237,12 @@ for (const backend of ["sqlite", "postgres"] as const) {
       const f=fixture(store),child=await dispatch(store,f.leaderTask,f.child,f.worker.id);
       finishLeaderRound(store,f);expect(store.claimTask(f.workerRuntime.id)?.id).toBe(child.id);
       store.buildTaskSessionProjection(child.id);store.startTask(child.id);
-      const delivery = store.submitIssueDelivery(f.child.id, { summary: "Child implementation complete" },
-        { type: "agent", id: f.worker.id, taskId: child.id });
+      // The parent's execution owner closes its direct child (the done rule).
+      store.updateIssue(f.child.id,{status:"done",parentTaskId:f.leaderTask.id,actorType:"agent",actorId:f.leader.id});
+      expect(store.getIssue(f.child.id)?.status).toBe("done");
       const owner=store.getOrCreateDefaultIssueSession(f.parent.id);
       const statusTurn=store.listTasksForIssue(f.parent.id).find(task=>task.status==="queued"&&task.issueSessionId===owner.id)!;
       expect(statusTurn).toBeDefined();expect(owner.id).not.toBe(f.leaderSession.id);
-      store.respondIssueDelivery(f.child.id, delivery.id,
-        { action: "accept", revision: delivery.responsibilityRevision },
-        { type: "agent", id: f.leader.id, taskId: statusTurn.id });
-      expect(store.getIssue(f.child.id)?.status).toBe("done");
       store.completeTask(child.id,{output:"Finished after closing the child."});
       const returned=store.getTurn(store.getTask(child.id)!.delegationReturnTaskId!)!;
       expect(returned).toMatchObject({session_id:f.leaderSession.id,status:"pending"});
@@ -295,13 +292,10 @@ for (const backend of ["sqlite", "postgres"] as const) {
       expect(store.claimTask(f.workerRuntime.id)?.id).toBe(childTask.id);
       store.buildTaskSessionProjection(childTask.id);
       store.startTask(childTask.id);
-      const delivery = store.submitIssueDelivery(f.child.id, { summary: "Child implementation complete" },
-        { type: "agent", id: f.worker.id, taskId: childTask.id });
-      const e2Round = store.listTasksForIssue(f.parent.id).find((task) => task.status === "queued" && task.issueSessionId === store.getOrCreateDefaultIssueSession(f.parent.id).id)!;
-      store.respondIssueDelivery(f.child.id, delivery.id,
-        { action: "accept", revision: delivery.responsibilityRevision },
-        { type: "agent", id: f.leader.id, taskId: e2Round.id });
+      store.updateIssue(f.child.id, { status: "done", parentTaskId: f.leaderTask.id,
+        actorType: "agent", actorId: f.leader.id });
       expect(store.getIssue(f.child.id)?.status).toBe("done");
+      const e2Round = store.listTasksForIssue(f.parent.id).find((task) => task.status === "queued" && task.issueSessionId === store.getOrCreateDefaultIssueSession(f.parent.id).id)!;
       store.updateWorkspace("local", { settings: { organizer: { mode: "act" } } });
       const supervisor = store.createAgent({ name: "Supervisor", provider: "claude", role: "supervisor" });
       const supervisorTask = store.createTask({ agentId: supervisor.id, issueId: f.parent.id, prompt: "Supervise" });

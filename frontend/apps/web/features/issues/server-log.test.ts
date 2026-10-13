@@ -48,7 +48,7 @@ describe("Issue SSR missing-comment fallback", () => {
   const issue = IssueDetailSchema.parse({ id: "issue", workspace_id: "w", number: 1, identifier: "MUL-1",
     title: "Synthetic issue", description: "", status: "todo", priority: "medium", assignee_type: null, assignee_id: null,
     creator_type: "member", creator_id: "u", parent_issue_id: null, project_id: null, position: 0,
-    start_date: null, due_date: null, created_at: "", updated_at: "", pending_decision_count: 0, parent_done_grant: null });
+    start_date: null, due_date: null, created_at: "", updated_at: "", pending_decision_count: 0 });
   const sessions = ["side", "main"].map(id => IssueSessionSchema.parse({ id, issue_id: "issue", workspace_id: "w",
     title: id, status: "active", is_default: id === "main", created_at: "", updated_at: "" }));
   const row = (id: string, seq: number) => SessionLogEntrySchema.parse({ id, seq, session_id: "main", revision: 1,

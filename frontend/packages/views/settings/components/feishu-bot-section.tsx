@@ -52,7 +52,6 @@ import {
 } from "@multiremi/ui/components/ui/alert-dialog";
 import { cn } from "@multiremi/ui/lib/utils";
 import { useT } from "../../i18n";
-import { RootHumanPicker } from "../../issues/components/root-human-picker";
 import { useTimeAgo } from "../../i18n/use-time-ago";
 import { FeishuBotRegistrationDialog, type ClaimedRegistration } from "./feishu-bot-registration-dialog";
 import { FeishuBotRoutes } from "./feishu-bot-routes";
@@ -143,6 +142,7 @@ function SectionHeader() {
 }
 
 interface Draft {
+  /** Answers Agent questions from Feishu Chats without an Issue; Issues never read it. */
   responsibleMemberId: string | null;
   agentId: string;
   runtimeId: string;
@@ -162,6 +162,31 @@ const EMPTY_DRAFT: Draft = {
   appSecret: "",
   registration: null,
 };
+
+/** Feishu transport Chats have no Issue chain to climb, so their questions go to this one member. */
+function ChatQuestionHandlerPicker({ workspaceId, value, onChange, disabled }: {
+  workspaceId: string; value: string | null; onChange: (id: string | null) => void; disabled: boolean;
+}) {
+  const { t } = useT("issues");
+  const { data: members = [] } = useQuery(memberListOptions(workspaceId));
+  return (
+    <div className="space-y-1.5">
+      <Label htmlFor="feishu-bot-chat-question-handler">{t(($) => $.responsibility.chat_handler)}</Label>
+      <select
+        id="feishu-bot-chat-question-handler"
+        className="h-8 w-full min-w-0 rounded-md border bg-background px-2 text-sm sm:max-w-xs"
+        value={value ?? ""}
+        disabled={disabled}
+        onChange={(event) => onChange(event.target.value || null)}
+      >
+        <option value="">{t(($) => $.responsibility.chat_handler_none)}</option>
+        {value && !members.some((member) => member.id === value) && <option value={value}>{value}</option>}
+        {members.map((member) => <option key={member.id} value={member.id}>{member.name}</option>)}
+      </select>
+      <p className="text-xs text-muted-foreground">{t(($) => $.responsibility.chat_handler_hint)}</p>
+    </div>
+  );
+}
 
 function draftFromConfig(config: FeishuBotConfig | null): Draft {
   if (!config?.configured) return EMPTY_DRAFT;
@@ -321,7 +346,8 @@ function FeishuBotAdminPanel({
 
       <Card>
         <CardContent className="space-y-4">
-          <RootHumanPicker value={draft.responsibleMemberId} onChange={id => edit({ responsibleMemberId: id })} onClear={() => edit({ responsibleMemberId: null })} disabled={busy} automation />
+          <ChatQuestionHandlerPicker workspaceId={workspaceId} value={draft.responsibleMemberId}
+            onChange={(id) => edit({ responsibleMemberId: id })} disabled={busy} />
           <div className="grid gap-4 sm:grid-cols-2">
             <div className="space-y-1.5">
               <Label>{t(($) => $.feishu.concierge.agent_label)}</Label>

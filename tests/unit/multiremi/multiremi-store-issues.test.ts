@@ -16,7 +16,7 @@ import { createStore, db, resetMultiremiTestEnv, readyArchiveBinding } from "./h
 afterEach(resetMultiremiTestEnv);
 
 describe("Multiremi store — issues, comments, labels, and inbox", () => {
-  it("keeps human responsibility separate and assigns execution to agents and squads", () => {
+  it("ignores a deprecated responsible member and assigns execution only to agents and squads", () => {
     const store = createStore();
     const codex = store.createAgent({ name: "Codex", provider: "codex" });
     const leader = store.createAgent({ name: "Squad lead", provider: "claude" });
@@ -25,8 +25,9 @@ describe("Multiremi store — issues, comments, labels, and inbox", () => {
     const issue = createResponsibleTestIssue(store, { title: "Implement assignment" });
 
     expect(()=>store.assignIssue(issue.id, { assigneeType: "member", assigneeId: member.id })).toThrow('Agent or team Leader');
+    // A deprecated responsible member is accepted and ignored: it is no execution owner.
     const humanResponsible=store.updateIssue(issue.id,{responsibleMemberId:member.id,actorType:'member',actorId:member.id});
-    expect(humanResponsible.responsibleMemberId).toBe(member.id);
+    expect(humanResponsible).not.toHaveProperty('responsibleMemberId');
     expect(humanResponsible.assigneeType).toBeNull();
     expect(store.listTasksForIssue(issue.id)).toHaveLength(0);
 
@@ -42,7 +43,7 @@ describe("Multiremi store — issues, comments, labels, and inbox", () => {
 
     expect(()=>createResponsibleTestIssue(store, { title: "Reject human execution by fuzzy refs", assigneeId: "human@example.com" })).toThrow('Agent or team Leader');
     const fuzzyIssue = createResponsibleTestIssue(store, { title: "Assign by fuzzy refs",responsibleMemberId:member.id });
-    expect(fuzzyIssue.responsibleMemberId).toBe(member.id);
+    expect(fuzzyIssue).not.toHaveProperty('responsibleMemberId');
     expect(fuzzyIssue.assigneeType).toBeNull();
     const fuzzyAgent = store.assignIssue(fuzzyIssue.id, { assigneeId: "cod", prompt: "Run fuzzy Codex" });
     expect(fuzzyAgent.issue.assigneeType).toBe("agent");

@@ -1,5 +1,5 @@
 import { createResponsibleTestAutopilot } from './helpers.js';
-import { createResponsibleTestIssue } from './helpers.js';
+import { acceptTestIssueDelivery, createResponsibleTestIssue } from './helpers.js';
 import { turnApiPath, mutateExecutionFixture } from "./unified-test-paths.js";
 import { taskOfferResponse, reconcileRuntimeReady } from "../../fixtures/task-offer.js";
 import { requestRuntimeRpc } from "../../fixtures/runtime-downlinks.js";
@@ -1423,11 +1423,7 @@ describe("Multiremi API — daemon endpoints", () => {
       issueId: completedIssueWithQueuedTask.id,
       prompt: "Maintain Wiki before GC",
     });
-    const gcDelivery = store.submitIssueDelivery(completedIssueWithQueuedTask.id, { summary: 'GC fixture verified' },
-      { type: 'agent', id: agent.id, taskId: queuedIssueTask.id });
-    store.respondIssueDelivery(completedIssueWithQueuedTask.id, gcDelivery.id,
-      { action: 'accept', revision: gcDelivery.responsibilityRevision },
-      { type: 'member', id: completedIssueWithQueuedTask.responsibleMemberId! });
+    acceptTestIssueDelivery(store, completedIssueWithQueuedTask.id);
     const gcOptions = { headers: daemonHeaders, authToken: "root-secret", runtimeId: runtime.id };
     const heldGc = await reportFrame(store, "gc.check_issue", { issue_id: completedIssueWithQueuedTask.id }, gcOptions);
     expect(heldGc.status).toBe("active");

@@ -67,7 +67,7 @@ for (const backend of ["SQLite", "PostgreSQL"] as const) {
     function envelopes(f: InboxFlowFixture) {
       return db.query("SELECT id, seq, body_md, metadata, to_agent_id FROM multiremi_conversation_log WHERE session_id = ? ORDER BY seq")
         .all(f.issueSessionId).map(row => ({ ...row, metadata: JSON.parse(String(row.metadata)) }))
-        .filter(row => row.to_agent_id === f.agentId && !f.preparedMessageIds?.includes(String(row.id)));
+        .filter(row => row.to_agent_id === f.agentId);
     }
     function spawn(f: InboxFlowFixture, phase: string, ordinal = 0) {
       const file = join(directory, `fixture-${ordinal}.json`);

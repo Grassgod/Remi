@@ -50,7 +50,7 @@ import { buildFeishuTaskResult } from "@multiremi/feishu-bot/result-card.js";
 import { isFeishuOpenId, parseOutboundMention } from "@shared/feishu-mention.js";
 import { hashQuestionCardToken } from "@multiremi/store/question-card-token.js";
 import { Questions, refreshChatQuestionsAfterResponsibilityChangeWithinTransaction } from '../inbox/questions.js';
-import { getMessage, sendMessageWithinTransaction } from '../inbox/send-message.js';
+import { getMessage } from '../inbox/send-message.js';
 import type { EnvelopeDelivery } from "./inbox-repo.js";
 import {
   buildCardHeader,
@@ -896,17 +896,13 @@ export class FeishuBotRepo {
         `SELECT * FROM multiremi_feishu_bot_chat_bindings
           WHERE workspace_id = ? AND app_id = ? AND agent_id = ? AND external_session_key = ?`,
       ).get(workspaceId, config.appId, routeAgent.agentId, externalSessionKey) as Row | null;
-      const groupIssueRequested = sender.allowed
+      // The Issue topic group creates Issues for allowed senders; no human is designated.
+      const autoCreateGroupIssue = sender.allowed
         && !this.ctx.agents().getAgent(routeAgent.agentId)?.issueCreationRequiresProposal
         && chatType === "group"
         && Boolean(chatId)
         && topicConfig?.enabled === true
         && topicConfig.chatId === chatId;
-      const configuredHumanId=topicConfig?.responsibleMemberId??config.responsibleMemberId;
-      const configuredHuman=configuredHumanId?this.ctx.workspaces().getWorkspaceMember(configuredHumanId):null;
-      const humanAvailable=!!configuredHuman&&!configuredHuman.archivedAt&&configuredHuman.workspaceId===workspaceId;
-      const autoCreateGroupIssue=groupIssueRequested&&humanAvailable;
-      const responsibilityUnavailableReason=groupIssueRequested&&!humanAvailable?'Configure an active root human in Feishu bot or Issue topic settings before automatically creating an Issue':null;
       const createGroupIssue = () => this.ctx.issues().createIssueWithinTransaction({
         title: issueTitleFromFeishuMessage(text),
         description: text,
@@ -916,7 +912,6 @@ export class FeishuBotRepo {
         assigneeType: "agent",
         assigneeId: routeAgent.agentId,
         createdBy: sender.actorId,
-        responsibleMemberId:configuredHuman!.id,
         contextRefs: [{
           type: "feishu_bot_message",
           message_id: externalMessageId,
@@ -1024,9 +1019,6 @@ export class FeishuBotRepo {
       );
 
       const chatSessionId = String(binding.chat_session_id);
-      if(responsibilityUnavailableReason)sendMessageWithinTransaction(this.ctx,{session_id:chatSessionId,sender:{type:'platform',id:null},
-        to:{type:'none'},message_kind:'status',wake_requested:'inbox_only',body_md:responsibilityUnavailableReason,
-        metadata:{issue_responsibility_unresolved:true,reason:'explicit_root_human_required',external_message_id:externalMessageId}},submitEvents);
       const activeTask = this.ctx.chat().getPendingChatTask(chatSessionId);
       let task;
       let steered = false;
@@ -1122,7 +1114,6 @@ export class FeishuBotRepo {
         steered,
         ...(input.deliveryMode === "native_cot_v1" && chatId ? { deliveryQueued: true } : {}),
         senderAllowed: sender.allowed,
-        ...(responsibilityUnavailableReason?{responsibilityUnavailableReason}:{}),
       };
     })();
     if (enqueuedTask) this.ctx.notifyTaskEnqueued(enqueuedTask);
@@ -1666,9 +1657,10 @@ export class FeishuBotRepo {
       const metadata = getMessage(this.ctx, decisionId)?.metadata.question as { summary_wait_until?: string | null } | undefined;
       const config = this.getConfig(String(row.workspace_id));
       const operator = recipientOpenId && config ? this.resolveIssueDecisionOperatorMember(String(row.workspace_id), config.appId, recipientOpenId) : null;
+      // The Issue human stage names nobody; the token still binds this card to its recipient.
       if (!question || question.stage !== 'human' || question.status !== 'pending'
         || (!question.summary && Date.now() < Date.parse(metadata?.summary_wait_until ?? ''))
-        || operator?.status !== 'resolved' || question.current_handler?.id !== operator.member.id) return null;
+        || operator?.status !== 'resolved' || question.current_handler && question.current_handler.id !== operator.member.id) return null;
       return buildIssueDecisionCard(decision, { header,
         routeRevision: question.route_revision, summary: question.summary?.body_md,
         token: this.rotateQuestionCardToken("multiremi_message_decision_records", decisionId, recipientOpenId),
@@ -1684,7 +1676,7 @@ export class FeishuBotRepo {
       if (!question.summary && Date.now() < deadline) return null;
       const config = this.getConfig(question.workspace_id);
       const operator = recipientOpenId && config ? this.resolveIssueDecisionOperatorMember(question.workspace_id, config.appId, recipientOpenId) : null;
-      if (question.stage !== 'human' || operator?.status !== 'resolved' || question.current_handler?.id !== operator.member.id) return null;
+      if (question.stage !== 'human' || operator?.status !== 'resolved' || question.current_handler && question.current_handler.id !== operator.member.id) return null;
     }
     return buildTaskInteractionCard(request, { header,
       token: this.rotateQuestionCardToken("multiremi_message_question_records", request.id, recipientOpenId),
@@ -2850,10 +2842,10 @@ export class FeishuBotRepo {
       if (decision) this.deferOutboundOperation(decision.workspaceId, id, { kind: 'issue_decision', questionId: id });
     }
   }
+  /** A Chat Q's member, or an Issue root's creator; otherwise the text card points everyone to the workbench. */
   private questionRecipient(id: string, appId: string, workspaceId: string): DecisionRecipientResolution {
-    const question = new Questions(this.ctx).get(id);
-    const member = question?.current_handler?.type === 'member' ? this.ctx.workspaces().getWorkspaceMember(question.current_handler.id) : null;
-    if (!member || question?.stage !== 'human' || member.archivedAt || member.workspaceId !== workspaceId || !member.userId)
+    const member = new Questions(this.ctx).humanCardMember(id);
+    if (!member || member.workspaceId !== workspaceId || !member.userId)
       return { kind: 'degraded', reason: 'unresolved_recipient', degraded: true };
     const rows = this.ctx.db.query(`SELECT DISTINCT s.open_id FROM multiremi_feishu_bot_senders s JOIN multiremi_users u ON u.feishu_union_id=s.union_id
       WHERE s.workspace_id=? AND s.app_id=? AND u.id=?`).all(workspaceId, appId, member.userId);
@@ -4480,7 +4472,7 @@ export function decisionCardTextBody(input: {
       ? "任务在等你确认一项操作，需要你在 Remi 里点一下。"
       : "任务在等你回答一个问题，需要你在 Remi 里点一下。",
   ];
-  if (typeof payload.root_question_id === 'string') lines.push('', `原问题 Q：${payload.root_question_id}（路由版本 ${payload.route_revision}）。请由当前指定责任人在 Remi 原问题卡中回答。`);
+  if (typeof payload.root_question_id === 'string') lines.push('', `原问题 Q：${payload.root_question_id}（路由版本 ${payload.route_revision}）。请在 Remi 工作台打开原问题回答。`);
   if (typeof payload.question_summary === 'string' && payload.question_summary.trim()) lines.push('', '**Remi 总结**', payload.question_summary);
   const message = cleanOptionalString(payload.message);
   if (message) lines.push("", message);

@@ -240,8 +240,11 @@ describe("Feishu sender allowlist Issue authorization", () => {
   it("preserves dynamic sender authority through queued system-event tasks", async () => {
     const fixture = await allowlistFixture();
     fixture.allow(true);
+    const parent = createResponsibleTestIssue(fixture.store, { title: "Source parent", workspaceId: "local", status: "in_progress",
+      assigneeType: 'agent', assigneeId: fixture.worker.id });
+    const childOwner = fixture.store.createAgent({ name: "Source child owner", provider: "codex" });
     const issue = createResponsibleTestIssue(fixture.store, { title: "Source work", workspaceId: "local", status: "todo",
-      assigneeType: 'agent', assigneeId: fixture.worker.id, responsibleMemberId: 'mem_local_local' });
+      parentIssueId: parent.id, assigneeType: 'agent', assigneeId: childOwner.id });
     const autopilot = createResponsibleTestAutopilot(fixture.store, {
       title: "Follow up source Issue", assigneeId: fixture.worker.id, executionMode: "trigger_issue",
     });
@@ -252,17 +255,15 @@ describe("Feishu sender allowlist Issue authorization", () => {
         conditions: [{ field: "status", operator: "becomes", value: "done" }],
       },
     });
-    const source = fixture.store.createTask({ agentId: fixture.worker.id, issueId: issue.id, prompt: 'Deliver the original request',
+    // The parent's execution owner closes its direct child from a round that
+    // carries the inbound sender's lineage.
+    const source = fixture.store.createTask({ agentId: fixture.worker.id, issueId: parent.id, prompt: 'Review the original request',
       parentTaskId: fixture.inbound.taskId, assignmentAuthorType: 'system' });
-    const delivery = fixture.store.submitIssueDelivery(issue.id, { summary: 'Source result ready for human-authorized acceptance' },
-      { type: 'agent', id: fixture.worker.id, taskId: source.id });
-    fixture.store.authorizeIssueDelivery(issue.id, delivery.id, fixture.worker.id, delivery.responsibilityRevision,
-      { type: 'member', id: 'mem_local_local' });
-    const changed = await fixture.app.request(`/api/issues/${issue.id}/deliveries/${delivery.id}/respond`, {
-      method: "POST", headers: await taskHeaders(fixture.store, source.id),
-      body: JSON.stringify({ action: 'accept', revision: delivery.responsibilityRevision }),
+    const changed = await fixture.app.request(`/api/issues/${issue.id}`, {
+      method: "PATCH", headers: await taskHeaders(fixture.store, source.id), body: JSON.stringify({ status: "done" }),
     });
     expect(changed.status).toBe(200);
+    expect(fixture.store.getIssue(issue.id)?.status).toBe("done");
 
     fixture.allow(false);
     const runs = fixture.store.dispatchPendingSystemEvents();
@@ -272,10 +273,10 @@ describe("Feishu sender allowlist Issue authorization", () => {
     });
     const eventTaskHeaders = await taskHeaders(fixture.store, runs[0]!.taskId!);
     await expectApprovalRequired(await createIssue(fixture, eventTaskHeaders));
-    expect(fixture.store.listIssues({ workspaceId: "local" })).toHaveLength(1);
+    expect(fixture.store.listIssues({ workspaceId: "local" })).toHaveLength(2);
     fixture.allow(true);
     expect((await createIssue(fixture, eventTaskHeaders)).status).toBe(201);
-    expect(fixture.store.listIssues({ workspaceId: "local" })).toHaveLength(2);
+    expect(fixture.store.listIssues({ workspaceId: "local" })).toHaveLength(3);
   });
 
   it("checks the source task again at Autopilot Issue creation instead of trusting its original approval", async () => {

@@ -4,7 +4,7 @@ import { createInterface } from "node:readline";
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
-const responsibilityMarker = (prompt: string): boolean => /PR404\/RESP\/(ASK|SUBMIT|PRESENTER)(?:\b|\/)/.test(prompt);
+const responsibilityMarker = (prompt: string): boolean => /PR404\/RESP\/(ASK|PRESENTER)(?:\b|\/)/.test(prompt);
 type Dependencies = {
   cli(args: string[]): Promise<any>;
   request(method: string, params: Record<string, unknown>): Promise<any>;
@@ -43,6 +43,7 @@ async function responsibilityProbe(prompt: string, dependencies: Dependencies): 
     input_read_seq: receipt.input_read_seq, input_read_offset: receipt.input_read_offset });
   assertActive();
   const actions: Array<Record<string, unknown>> = [];
+  // The presenter inherits the source Issue's ASK marker; it only presents that same Q.
   const presenter = prompt.includes("PR404/RESP/PRESENTER");
   if (presenter) {
     const notifications = entries.filter((value: any) => value.metadata?.question_present_request === true);
@@ -57,7 +58,7 @@ async function responsibilityProbe(prompt: string, dependencies: Dependencies): 
         record("responsibility_presentation_stale", { question_id: questionId }); continue;
       }
       const presented = await cli(["message", "question", "present", questionId, "--revision", String(question.route_revision),
-        "--summary", "PPE责任验收：请查看同一问题的原题、原选项与上下文，再作答。此总结不代替人类授权。"]);
+        "--summary", "PPE问题呈现：请查看同一问题的原题、原选项与上下文，再作答。此总结不代替作答。"]);
       const result = presented.question;
       if (result?.id !== questionId || result.summary?.agent_id !== turn.agent_id) throw new Error("ppe_presentation_not_saved");
       const action = { question_id: questionId, route_revision: result.route_revision, action: "present" };
@@ -94,18 +95,6 @@ async function responsibilityProbe(prompt: string, dependencies: Dependencies): 
       const action = { question_id: original.id, action: "answer_observed", answer_revision: view.question.answer_revision };
       actions.push(action); record("responsibility_answer_observed", action);
     }
-  }
-  // The presenter inherits the source Issue's ASK/SUBMIT markers. Its role
-  // ends after presenting that same Q; only the source execution submits.
-  if (!presenter && prompt.includes("PR404/RESP/SUBMIT")) {
-    assertActive();
-    if (!turn.issue_id) throw new Error("ppe_delivery_issue_required");
-    const submitted = await cli(["issue", "delivery", "submit", turn.issue_id, "--session", turn.session_id,
-      "--dedupe-key", `ppe-responsibility:${attemptId}`, "--summary", "PR404/RESP/SUBMIT: PPE synthetic formal delivery, ready for responsible review."]);
-    const delivery = submitted.delivery;
-    if (!delivery?.id || delivery.issueId !== turn.issue_id) throw new Error("ppe_delivery_not_saved");
-    const action = { issue_id: turn.issue_id, delivery_id: delivery.id, action: "submit" };
-    actions.push(action); record("responsibility_submitted", action);
   }
   return `PPE_RESPONSIBILITY_EVIDENCE ${JSON.stringify({ turn_id: turnId, attempt_id: attemptId, actions, evidence_file: file })}`;
 }

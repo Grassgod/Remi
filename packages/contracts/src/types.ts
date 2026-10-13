@@ -1980,8 +1980,6 @@ export interface MultiremiIssue {
   projectId: string | null;
   parentIssueId: string | null;
   issueKind: MultiremiIssueKind;
-  /** Persisted only on roots. Null explicitly identifies unresolved legacy ownership. */
-  responsibleMemberId?: string | null;
   sourceIssueId: string | null;
   assigneeType: MultiremiAssigneeType | null;
   assigneeId: string | null;
@@ -1994,40 +1992,11 @@ export interface MultiremiIssue {
   labels: MultiremiLabel[];
   /** Included on daemon task claims so prompts can make issue attachments directly discoverable. */
   attachments?: MultiremiAttachment[];
-  /**
-   * MUL-400 S1c (A4): the raw `parent_done_grant` columns. All three are null
-   * when no member has authorized the owner agent, which is the default for
-   * every existing row. The derived shape the detail routes expose is
-   * {@link MultiremiIssueParentDoneGrant}.
-   */
-  parentDoneGrantAt: string | null;
-  parentDoneGrantBy: string | null;
-  parentDoneGrantAgentId: string | null;
   createdBy: string | null;
   completedAt: string | null;
   archivedAt: string | null;
   createdAt: string;
   updatedAt: string;
-}
-
-/**
- * MUL-400 S1c (A4): why a stored grant does or does not authorize the CURRENT
- * owner agent to close the parent. `grant_missing` is "nobody granted";
- * `assignee_changed` is "the grant still names a different agent" (D1: a grant
- * never follows a re-assignment); `owner_not_agent` is "the owner resolves to no
- * runnable agent at all", which is also what a member-owned parent reports.
- */
-export type MultiremiIssueParentDoneGrantIneffectiveReason =
-  | "grant_missing"
-  | "assignee_changed"
-  | "owner_not_agent";
-
-export interface MultiremiIssueParentDoneGrant {
-  granted_at: string;
-  granted_by: string;
-  agent_id: string;
-  effective: boolean;
-  ineffective_reason: MultiremiIssueParentDoneGrantIneffectiveReason | null;
 }
 
 export interface MultiremiIssueWithTasks extends MultiremiIssue {
@@ -2404,11 +2373,9 @@ export interface MultiremiTimelinePage {
 }
 
 export interface CreateIssueInput {
-  /** Server-internal creation audit only; HTTP callers cannot supply trusted provenance. */
-  responsibilitySourceAudit?: {
-    kind: 'autopilot_run'; taskId: string; runId: string; autopilotId: string; responsibleMemberId: string;
-  } | null;
+  /** @deprecated Accepted for old clients and fixtures; ignored, never validated or persisted. */
   responsibleMemberId?: string | null;
+  /** @deprecated Accepted for old clients and fixtures; ignored, never validated or persisted. */
   responsible_member_id?: string | null;
   /**
    * MUL-400 E3: prerequisite issues this one waits on, as keys or ids. Created
@@ -2459,7 +2426,9 @@ export interface CreateIssueWithTaskInput extends CreateIssueInput {
 }
 
 export interface UpdateIssueInput {
+  /** @deprecated Accepted for old clients and fixtures; ignored, never validated or persisted. */
   responsibleMemberId?: string | null;
+  /** @deprecated Accepted for old clients and fixtures; ignored, never validated or persisted. */
   responsible_member_id?: string | null;
   runtimeWorkspaceId?: string | null;
   runtime_workspace_id?: string | null;
@@ -2506,17 +2475,14 @@ export interface UpdateIssueInput {
 /**
  * Server-internal options for {@link UpdateIssueInput} writes. These deliberately
  * live OUTSIDE the input object: the wire layer builds `UpdateIssueInput` straight
- * from the request body, so anything on that shape is client-reachable. The SCM
- * merge effect is the only caller and passes this positionally on the server.
+ * from the request body, so anything on that shape is client-reachable. Only
+ * server writers pass this positionally.
  */
 export interface UpdateIssueOptions {
-  /** Server-owned, set only by the atomic designated-reviewer delivery acceptance. */
-  acceptedDeliveryId?: string;
   /**
-   * Skip guard A (A1 and A4 included). Only the merge effect uses it: closing an
-   * Issue after a merge that already required a human authorization carries the
-   * same decision the guard exists to protect. A parent with unfinished children
-   * is still held — the effect handles that itself, with `parent_status_held`.
+   * Skip guard A's unfinished-child check for a server-owned writer. It never
+   * bypasses the done rule: a member may close any Issue, while an Agent closes
+   * only a direct child of an Issue it executes.
    */
   allowParentStatusGuardBypass?: boolean;
   /** Record `parent_status_held` instead of applying the requested status. */
@@ -2532,16 +2498,6 @@ export interface UpdateIssueOptions {
    * reads it.
    */
   parentStatusForce?: boolean;
-  /**
-   * MUL-400 S1c (QA round 1): where the `parent_done_grant_used` audit row came
-   * from. The SCM merge effect closes the parent through the same in-transaction
-   * writer as the API, so the row must still distinguish the two. Server-only —
-   * `UpdateIssueOptions` is passed positionally by the store and is never built
-   * from the request body.
-   */
-  parentDoneGrantSource?: "api" | "scm_merge";
-  /** Extra audit fields for the merge-sourced grant use (PR number and URL). */
-  parentDoneGrantData?: Record<string, unknown> | null;
 }
 
 /**
@@ -2629,11 +2585,11 @@ export interface AssignIssueResult {
 }
 
 export interface QuickCreateIssueInput {
-  /** Server-internal creation audit, derived from the verified requesting Task. */
-  responsibilitySourceAudit?: CreateIssueInput['responsibilitySourceAudit'];
   parentIssueId?: string | null;
   parent_issue_id?: string | null;
+  /** @deprecated Accepted for old clients and fixtures; ignored, never validated or persisted. */
   responsibleMemberId?: string | null;
+  /** @deprecated Accepted for old clients and fixtures; ignored, never validated or persisted. */
   responsible_member_id?: string | null;
   runtimeWorkspaceId?: string | null;
   runtime_workspace_id?: string | null;
@@ -4126,8 +4082,6 @@ export interface MultiremiAutopilot {
   workspace_id?: string;
   title: string;
   description: string | null;
-  responsibleMemberId?: string | null;
-  responsible_member_id?: string | null;
   projectId: string | null;
   project_id?: string | null;
   assigneeType: MultiremiAutopilotAssigneeType;
@@ -4217,7 +4171,9 @@ export interface MultiremiAutopilotRun {
 export interface CreateAutopilotInput {
   id?: string;
   title: string;
+  /** @deprecated Accepted for old clients and fixtures; ignored, never validated or persisted. */
   responsibleMemberId?: string | null;
+  /** @deprecated Accepted for old clients and fixtures; ignored, never validated or persisted. */
   responsible_member_id?: string | null;
   description?: string | null;
   projectId?: string | null;
@@ -4296,7 +4252,9 @@ export interface UpdateAutopilotTriggerInput {
 
 export interface UpdateAutopilotInput {
   title?: string;
+  /** @deprecated Accepted for old clients and fixtures; ignored, never validated or persisted. */
   responsibleMemberId?: string | null;
+  /** @deprecated Accepted for old clients and fixtures; ignored, never validated or persisted. */
   responsible_member_id?: string | null;
   description?: string | null;
   projectId?: string | null;
@@ -4532,7 +4490,6 @@ export type IssueTopicNotifyMode = "group_owner" | "person" | "none";
 export interface IssueTopicConfig {
   enabled: boolean;
   chatId: string;
-  responsibleMemberId?: string | null;
   /** Omitted means every project, including projectless Issues. */
   projectIds?: string[];
   notifyMode?: IssueTopicNotifyMode;
@@ -4737,6 +4694,7 @@ export interface MultiremiFeishuBotConfig {
   domain: FeishuBotDomain;
   enabled: boolean;
   senderAccessPolicy: "agent" | "allowlist";
+  /** Member who answers questions from Feishu transport Chats without an Issue; never an Issue creation requirement. */
   responsibleMemberId?: string | null;
   /** Bumped on every mutation; daemons refetch when their applied revision lags. */
   revision: number;
@@ -4758,6 +4716,7 @@ export interface MultiremiFeishuBotConfig {
  * short hint; the plaintext never leaves the server.
  */
 export interface FeishuBotConfigView {
+  /** Member who answers questions from Feishu transport Chats without an Issue. */
   responsible_member_id?: string | null;
   configured: boolean;
   workspace_id: string;
@@ -4827,6 +4786,7 @@ export interface UpsertFeishuBotConfigInput {
   domain: FeishuBotDomain;
   enabled: boolean;
   senderAccessPolicy?: "agent" | "allowlist";
+  /** Member who answers questions from Feishu transport Chats without an Issue. */
   responsibleMemberId?: string | null;
   appSecretOp: FeishuBotSecretOp;
   appSecret?: string;
@@ -4917,7 +4877,6 @@ export interface SubmitFeishuBotMessageInput {
 
 /** The canonical Chat/Task lineage selected for an inbound Feishu event. */
 export interface SubmitFeishuBotMessageResult {
-  responsibilityUnavailableReason?: string;
   chatSessionId: string;
   taskId: string;
   agentId: string;

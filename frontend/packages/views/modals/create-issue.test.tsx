@@ -67,8 +67,6 @@ vi.mock("@multiremi/core/paths", () => ({
 vi.mock("@multiremi/core/hooks", () => ({
   useWorkspaceId: () => "ws-test",
 }));
-vi.mock("@multiremi/core/auth", () => ({ useAuthStore: (selector: (state: { user: { id: string } }) => unknown) => selector({ user: { id: "user-human" } }) }));
-vi.mock("@multiremi/core/workspace/queries", () => ({ memberListOptions: () => ({ queryKey: ["members", "ws-test"], queryFn: async () => [{ id: "member-human", user_id: "user-human", name: "Human" }] }) }));
 
 vi.mock("@multiremi/core/issues/queries", () => ({
   issueDetailOptions: (wsId: string, id: string) => ({
@@ -412,7 +410,6 @@ describe("CreateIssueModal", () => {
         due_date: undefined,
         attachment_ids: undefined,
         parent_issue_id: undefined,
-        responsible_member_id: "member-human",
         project_id: null,
         runtime_workspace_id: null,
       });
@@ -461,7 +458,6 @@ describe("CreateIssueModal", () => {
         due_date: undefined,
         attachment_ids: undefined,
         parent_issue_id: undefined,
-        responsible_member_id: "member-human",
         project_id: null,
         runtime_workspace_id: null,
       });
@@ -753,7 +749,18 @@ describe("CreateIssueModal", () => {
     await waitFor(() => expect(screen.getByTestId("assignee-picker").dataset.assigneeType).toBe(""));
     fireEvent.change(screen.getByPlaceholderText("Issue title"), { target: { value: "Configure execution later" } });
     await user.click(screen.getByRole("button", { name: "Create Issue" }));
-    await waitFor(() => expect(mockCreateIssue).toHaveBeenCalledWith(expect.objectContaining({ assignee_type: null, assignee_id: null, responsible_member_id: "member-human" })));
+    await waitFor(() => expect(mockCreateIssue).toHaveBeenCalledWith(expect.objectContaining({ assignee_type: null, assignee_id: null })));
+  });
+
+  it("creates a root issue without asking for a designated human", async () => {
+    const user = userEvent.setup();
+    renderModal(<CreateIssueModal onClose={vi.fn()} data={{ responsible_member_id: "member-legacy" }} />);
+    expect(screen.queryByRole("combobox", { name: /human/i })).toBeNull();
+    expect(screen.queryByText(/Designated human|Choose a human/)).toBeNull();
+    fireEvent.change(screen.getByPlaceholderText("Issue title"), { target: { value: "No root human" } });
+    await user.click(screen.getByRole("button", { name: "Create Issue" }));
+    await waitFor(() => expect(mockCreateIssue).toHaveBeenCalledTimes(1));
+    expect(mockCreateIssue.mock.calls[0]?.[0]).not.toHaveProperty("responsible_member_id");
   });
 
   it("prefills the assignee from the picked project's bound default", async () => {

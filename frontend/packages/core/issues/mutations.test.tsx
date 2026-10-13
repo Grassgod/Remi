@@ -12,9 +12,8 @@ import {
   useLoadMoreArchivedIssues,
   useLoadMoreByAssigneeGroup,
   useLoadMoreByStatus,
-  useGrantParentDone,
-  useRevokeParentDone,
   useRestoreIssue,
+  useUpdateIssue,
 } from "./mutations";
 import {
   issueKeys,
@@ -414,22 +413,11 @@ describe("archived issue mutations", () => {
   });
 });
 
-describe("parent done grant mutations", () => {
+describe("closing an issue", () => {
   let qc: QueryClient;
-  let grantParentDone: ReturnType<typeof vi.fn>;
-  let revokeParentDone: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
     qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    grantParentDone = vi.fn().mockResolvedValue({
-      granted_at: "2026-09-28T00:00:00.000Z",
-      granted_by: "member-1",
-      agent_id: "agent-1",
-      effective: true,
-      ineffective_reason: null,
-    });
-    revokeParentDone = vi.fn().mockResolvedValue(null);
-    setApiInstance({ grantParentDone, revokeParentDone } as unknown as ApiClient);
   });
 
   afterEach(() => {
@@ -437,29 +425,39 @@ describe("parent done grant mutations", () => {
     vi.restoreAllMocks();
   });
 
-  it("grants and invalidates the server-derived detail state", async () => {
+  it("sets done as an ordinary status update, without a delivery or grant call", async () => {
+    const done = makeIssue(1, { status: "done", parent_issue_id: "issue-9" });
+    const updateIssue = vi.fn().mockResolvedValue(done);
+    setApiInstance({ updateIssue } as unknown as ApiClient);
     const detailKey = issueKeys.detail(WS_ID, "issue-1");
-    qc.setQueryData(detailKey, makeIssue(1));
-    const { result } = renderHook(() => useGrantParentDone(), {
+    const childrenKey = issueKeys.children(WS_ID, "issue-9");
+    qc.setQueryData(detailKey, makeIssue(1, { status: "in_review", parent_issue_id: "issue-9" }));
+    qc.setQueryData(childrenKey, [makeIssue(1, { status: "in_review", parent_issue_id: "issue-9" })]);
+    const { result } = renderHook(() => useUpdateIssue(), {
       wrapper: createWrapper(qc),
     });
 
-    await act(async () => result.current.mutateAsync("issue-1"));
+    await act(async () => result.current.mutateAsync({ id: "issue-1", status: "done" }));
 
-    expect(grantParentDone).toHaveBeenCalledWith("issue-1");
+    expect(updateIssue).toHaveBeenCalledExactlyOnceWith("issue-1", { status: "done" });
+    expect(qc.getQueryData<Issue>(detailKey)?.status).toBe("done");
+    expect(qc.getQueryData<Issue[]>(childrenKey)?.[0]?.status).toBe("done");
     expect(qc.getQueryState(detailKey)?.isInvalidated).toBe(true);
   });
 
-  it("revokes and invalidates the server-derived detail state", async () => {
+  it("restores the cached status when the server refuses the closure", async () => {
+    const updateIssue = vi.fn().mockRejectedValue(new Error("issue_done_requires_parent_owner"));
+    setApiInstance({ updateIssue } as unknown as ApiClient);
     const detailKey = issueKeys.detail(WS_ID, "issue-1");
-    qc.setQueryData(detailKey, makeIssue(1));
-    const { result } = renderHook(() => useRevokeParentDone(), {
+    qc.setQueryData(detailKey, makeIssue(1, { status: "in_review" }));
+    const { result } = renderHook(() => useUpdateIssue(), {
       wrapper: createWrapper(qc),
     });
 
-    await act(async () => result.current.mutateAsync("issue-1"));
+    await act(async () => {
+      await expect(result.current.mutateAsync({ id: "issue-1", status: "done" })).rejects.toThrow("issue_done_requires_parent_owner");
+    });
 
-    expect(revokeParentDone).toHaveBeenCalledWith("issue-1");
-    expect(qc.getQueryState(detailKey)?.isInvalidated).toBe(true);
+    expect(qc.getQueryData<Issue>(detailKey)?.status).toBe("in_review");
   });
 });

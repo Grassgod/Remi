@@ -16,7 +16,7 @@ import type { UseIssueActionsResult } from "../actions";
 import type { IssueSessionSelection } from "../hooks/use-issue-session-selection";
 import { IssueActivitySection } from "./issue-activity-section";
 import { IssueDetailHeader } from "./issue-detail-header";
-import { IssueDecisionPanel } from "./issue-decision-panel";
+import { IssueDecisionBanner, IssueDecisionDrawer } from "./issue-decision-panel";
 import { IssueSessionList } from "./issue-session-list";
 import { Sheet, SheetContent } from "@multiremi/ui/components/ui/sheet";
 import { useT } from "../../i18n";
@@ -119,9 +119,12 @@ export function IssueDetailMain({
   const queryClient = useQueryClient();
   const updateIssue = useUpdateIssue();
   const waitingOn = issue.blocked_by ?? [];
+  // Only this Issue's human-stage questions raise the bar; Agent-held ones never do.
   const showDecisions = (issue.pending_decision_count ?? 0) > 0;
   const showWaiting = !showDecisions && issue.parent_issue_id !== null
     && issue.status === "backlog" && waitingOn.length > 0;
+  // Lives outside the notice slot: answering the last question hides the bar, not the drawer.
+  const [decisionsOpen, setDecisionsOpen] = useState(false);
   const [forceStartOpen, setForceStartOpen] = useState(false);
   const [forceStartError, setForceStartError] = useState("");
   const getDecisionActorName = useCallback((type: string, id: string) => {
@@ -184,12 +187,7 @@ export function IssueDetailMain({
         data-issue-notice-slot
       >
         {showDecisions && (
-          <IssueDecisionPanel
-            issueId={issueId}
-            pendingCount={issue.pending_decision_count ?? 0}
-            canAnswer={canForceStart}
-            getActorName={getDecisionActorName}
-          />
+          <IssueDecisionBanner count={issue.pending_decision_count ?? 0} onOpen={() => setDecisionsOpen(true)} />
         )}
         {showWaiting && (
           <div className="flex min-w-0 w-full items-center gap-2 text-xs text-amber-800 dark:text-amber-300">
@@ -210,6 +208,8 @@ export function IssueDetailMain({
           </div>
         )}
       </div>}
+      <IssueDecisionDrawer issueId={issueId} open={decisionsOpen} onOpenChange={setDecisionsOpen}
+        pendingCount={issue.pending_decision_count ?? 0} getActorName={getDecisionActorName} />
 
       <AlertDialog open={forceStartOpen} onOpenChange={setForceStartOpen}>
         <AlertDialogContent className="max-w-[390px]">

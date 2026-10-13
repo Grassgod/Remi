@@ -61,6 +61,7 @@ import type {
   MultiremiIssueComment,
   MultiremiIssue,
   MultiremiIssueDependencyView,
+  MultiremiIssueSubscriber,
   MultiremiKnowledgeSubmission,
   MultiremiIssueSession,
   MultiremiIssueWaitingOn,
@@ -307,6 +308,8 @@ export interface IssuesSurface {
   ): MultiremiIssueComment;
   getIssue(id: string): MultiremiIssue | null;
   hasIssue(id: string): boolean;
+  /** Throws for an unknown Issue; Q notifications read member subscribers of the source Issue. */
+  listIssueSubscribers(issueId: string): MultiremiIssueSubscriber[];
   getIssueByRef(ref: string, workspaceId?: string | null): MultiremiIssue | null;
   getIssueComment(id: string): MultiremiIssueComment | null;
   getAttachment(id: string): MultiremiAttachment | null;
@@ -321,9 +324,9 @@ export interface IssuesSurface {
   updateIssue(id: string, input: UpdateIssueInput, options?: UpdateIssueOptions): MultiremiIssue;
   /**
    * MUL-400 S1c (QA round 1): the same write as {@link updateIssue} but owned by
-   * the caller's transaction. The status row, its audit activities and (for the
-   * SCM merge effect) the effect's own bookkeeping commit together; every
-   * outbound event goes on `deferredEvents` and only flushes after COMMIT.
+   * the caller's transaction. The status row, its audit activities and the
+   * caller's own bookkeeping commit together; every outbound event goes on
+   * `deferredEvents` and only flushes after COMMIT.
    */
   updateIssueWithinTransaction(
     id: string,
@@ -352,31 +355,20 @@ export interface IssuesSurface {
     deferredEvents: CommitEventQueue,
   ): void;
   hasChildIssues(issueId: string): boolean;
-  parentDoneGrantStatus(issue: MultiremiIssue): {
-    granted: boolean;
-    grantedAt: string | null;
-    grantedBy: string | null;
-    agentId: string | null;
-    ownerAgentId: string | null;
-    effective: boolean;
-    reason: import("./repos/issues-repo.js").ParentDoneGrantRefusalReason | null;
-  };
-  finalSummaryAfterLastChild(parentIssueId: string, options?: { acceptCommentBy?: string | null }): {
-    satisfied: boolean;
-    lastChildClosedAt: string | null;
-  };
   /** MUL-400 E1: children that still count as unfinished (not done/cancelled). */
   countOpenChildIssues(parentIssueId: string): number;
   /**
    * MUL-400 E1 guard B: hold a parent at in_progress while children are open.
-   * `exempt` is for transitions the guard deliberately leaves alone (the
-   * human-request `in_review` transient).
+   * `exempt` lets a caller apply the requested status unguarded; derivation
+   * uses it while a question of this Issue waits at the human stage.
    */
   holdParentStatusForOpenChildren(
     issueId: string,
     requested: string,
     options: { exempt?: boolean; deferredEvents: CommitEventQueue },
   ): string;
+  /** This Issue's own pending questions at the human stage (any member may answer). */
+  countPendingIssueDecisions(issueId: string): number;
   /** MUL-400 E3: direct prerequisites of an issue that are not `done` yet. */
   listUnmetPrerequisites(issueId: string): import("./repos/issue-dependencies.js").IssueDependencyUnmetRef[];
   replayDependencyAutoStart(event: MultiremiSystemEvent): void;

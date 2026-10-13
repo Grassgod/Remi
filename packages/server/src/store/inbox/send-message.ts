@@ -77,13 +77,14 @@ export function sendMessageWithinTransaction(ctx:StoreContext,input:SendMessageI
   let recipientType:'agent'|'member'|'none'='none',recipientId:string|null=null;
   let targetIssue=issue;
   let roleScope:string|undefined;
+  // A role reaches only the Issue's execution owner. Without one the message stays
+  // readable without a recipient; it never falls back to a guessed person.
   const owner=(ownerIssue:typeof issue)=>{
     if(!ownerIssue)return;
     const responsibility=ctx.resolveIssueResponsibility(ownerIssue.id);
-    if(!responsibility.unresolved.length && responsibility.executionOwner){recipientType='agent';recipientId=responsibility.executionOwner.id;return;}
+    if(responsibility.executionOwner){recipientType='agent';recipientId=responsibility.executionOwner.id;return;}
+    recipientType='none';recipientId=null;
     input={...input,metadata:{...input.metadata,responsibility_unresolved:responsibility.unresolved}};
-    if(responsibility.rootHuman){recipientType='member';recipientId=responsibility.rootHuman.id;return;}
-    throw new Error('Issue owner responsibility is unresolved; configure its execution owner and root human');
   };
   if(input.to.type==='agent'||input.to.type==='member'){recipientType=input.to.type;recipientId=input.to.ref;}
   else if(input.to.type==='role'){
@@ -92,11 +93,6 @@ export function sendMessageWithinTransaction(ctx:StoreContext,input:SendMessageI
       targetIssue=issue?.parentIssueId?ctx.issues().getIssue(issue.parentIssueId):null;
       if(!targetIssue||targetIssue.workspaceId!==workspaceId)throw new Error('Parent issue not found');
       owner(targetIssue);
-      if (!recipientId) {
-        const responsibility=ctx.resolveIssueResponsibility(targetIssue.id);
-        if (responsibility.rootHuman) {recipientType='member';recipientId=responsibility.rootHuman.id;}
-        input={...input,metadata:{...input.metadata,responsibility_unresolved:responsibility.unresolved}};
-      }
       sessionId=ctx.issueSessions().getOrCreateDefaultIssueSessionWithinTransaction(targetIssue.id).id;
     } else if(input.to.ref==='delegator'){
       const dispatch=source?.trigger_message_id?getMessage(ctx,source.trigger_message_id):null;
@@ -149,8 +145,8 @@ export function sendMessageWithinTransaction(ctx:StoreContext,input:SendMessageI
   const hops=source&&recipientId?countMessageDelegationPairHops(ctx,source.id,recipientId,limit):0;
   const isLeader=recipientId&&input.sender.id?!!ctx.db.query(`SELECT 1 FROM multiremi_squads s JOIN multiremi_squad_members m ON m.squad_id=s.id
     WHERE s.leader_id=? AND m.member_id=? AND m.member_type='agent' AND s.workspace_id=? AND s.archived_at IS NULL`).get(recipientId,input.sender.id,workspaceId):false;
-  const responsibility=issue?ctx.resolveIssueResponsibility(issue.id):null;
-  const parentAgent=responsibility && !responsibility.unresolved.length && responsibility.reviewOwner?.type==='agent' ? responsibility.reviewOwner : null;
+  // The direct parent's execution owner, whatever the rest of the chain resolves to.
+  const parentAgent=issue?ctx.resolveIssueResponsibility(issue.id).chain[1]?.executionOwner??null:null;
   const policy=resolveWake(input.sender,input.to,input.wake_requested,input.message_kind,{
     recipientType,recipientId,recipientAvailable:recipientType==='agent'?!!targetAgent&&!targetAgent.archivedAt:recipientType==='member'?!!member&&!member.archivedAt:false,
     // Structural platform reports retain main's dependency exemption. Agent

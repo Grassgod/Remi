@@ -24,16 +24,30 @@ describe("cursor inbox", () => {
     mock.getMessage.mockRejectedValue(new Error("Raw private source forbidden"));
     mock.getQuestion.mockResolvedValue({ id: "q-private", kind: "question", workspace_id: "ws-1", session_id: "private-session", source_issue_id: "private-child", source_agent_id: "worker", source_turn_id: null, source_attempt_id: null,
       original_questions: [], original_message: "Private original question", original_context: { text: "Original context" }, options: null, summary: { body_md: "Separate Remi summary", agent_id: "remi", at: "now" },
-      current_handler: { type: "member", id: "designated-human" }, stage: "human", route_revision: 2, answer_revision: 1, status: "answered", wait_status: "none", wait_reason: null, answer: null,
+      current_handler: null, stage: "human", route_revision: 2, answer_revision: 1, status: "answered", wait_status: "none", wait_reason: null, answer: null,
       history: [{ type: "notify", at: "now", actor: null, route_revision: 2, reason: "historical_source_notified", source_message_id: "result-private", source_session_id: "source-private" }], actions: { allowed: [] } });
     mount();
     expect(await screen.findByText("Private original question")).toBeInTheDocument();
     expect(screen.getByText("Separate Remi summary")).toBeInTheDocument();
+    // The Issue human stage names nobody; the card shows how the Q ended instead.
+    expect(document.querySelector("[data-question-tag]")).toHaveTextContent("Answered");
     expect(screen.getByRole("link", { name: "Source · result-private" })).toHaveAttribute("href", "/ws/inbox?item=q-private&question=q-private&question_source=result-private");
     expect(mock.getQuestion).toHaveBeenCalledWith("q-private");
     expect(mock.getMessage).not.toHaveBeenCalled();
     expect(mock.markInboxRead).not.toHaveBeenCalled();
     expect(screen.queryByRole("button", { name: /Read through/ })).toBeNull();
+  });
+  it("lets any member answer an Issue Q that reached the human stage from a reminder link", async () => {
+    mock.searchParams = new URLSearchParams("item=q-human&question=q-human");
+    mock.getQuestion.mockResolvedValue({ id: "q-human", kind: "question", workspace_id: "ws-1", session_id: "issue-session", source_issue_id: "issue-1", source_agent_id: "worker", source_turn_id: null, source_attempt_id: null,
+      original_questions: [], original_message: "Retire the v1 endpoint?", original_context: null, options: [{ label: "Retire", value: "retire" }], summary: null,
+      current_handler: null, stage: "human", route_revision: 3, route_reason: null, answer_revision: 0, status: "pending", wait_status: "waiting", wait_reason: null, answer: null,
+      history: [], actions: { allowed: ["answer", "close"] } });
+    mount();
+    expect(await screen.findByText("Retire the v1 endpoint?")).toBeInTheDocument();
+    expect(document.querySelector("[data-question-tag]")).toHaveTextContent("Awaiting answer");
+    expect(screen.getByRole("button", { name: "Retire" })).toBeEnabled();
+    expect(screen.queryByText(/designated|Waiting for designated/i)).toBeNull();
   });
   it.each(["question_not_found", "question_access_denied"])("shows dedicated Q access failure %s without falling back to private message reads", async reason => {
     mock.searchParams = new URLSearchParams("item=q-private&question=q-private");

@@ -1,6 +1,6 @@
 import { createResponsibleTestAutopilot } from './helpers.js';
 import { createResponsibleTestIssue } from './helpers.js';
-import { prepareTestIssueDelivery } from './helpers.js';
+import { acceptTestIssueDelivery, testWorkspaceMember } from './helpers.js';
 /**
  * MUL-405 (QA round 2, item 2): every real path that can take more than one of
  * the three lock classes must take them in the contract order
@@ -654,36 +654,6 @@ describe("MUL-405 per-path lock order", () => {
     expect(recorder.trace.some((entry) => entry.cls === "N")).toBe(false);
   });
 
-  it("grantParentDone: W (via the issue lock) then issue row, no number lock", () => {
-    const { store, recorder, agentId } = freshStoreWithAgent();
-    const issue = createResponsibleTestIssue(store, {
-      title: "Parent-done target", workspaceId: "local",
-      assigneeType: "agent", assigneeId: agentId,
-    });
-    clear(recorder);
-    store.grantParentDone(issue.id, "local");
-    // The `UPDATE ... SET id = id` row lock is the first acquisition; this path
-    // does not write the Feishu audit trail or create a child Issue, so N must
-    // not appear.
-    assertPath("grantParentDone", recorder, ["D"]);
-    expect(recorder.trace.some((entry) => entry.cls === "N")).toBe(false);
-    expect(recorder.trace.some((entry) => entry.cls === "W")).toBe(false);
-  });
-
-  it("revokeParentDone: issue row lock only, no number lock", () => {
-    const { store, recorder, agentId } = freshStoreWithAgent();
-    const issue = createResponsibleTestIssue(store, {
-      title: "Parent-done revoke target", workspaceId: "local",
-      assigneeType: "agent", assigneeId: agentId,
-    });
-    store.grantParentDone(issue.id, "local");
-    clear(recorder);
-    store.revokeParentDone(issue.id, "local");
-    assertPath("revokeParentDone", recorder, ["D"]);
-    expect(recorder.trace.some((entry) => entry.cls === "N")).toBe(false);
-    expect(recorder.trace.some((entry) => entry.cls === "W")).toBe(false);
-  });
-
   // ── MUL-409 (main bbc964c9): the dependency gate's new transaction paths ──
   //
   // Each one is checked for a number lock before it is classified: none of them
@@ -715,9 +685,10 @@ describe("MUL-405 per-path lock order", () => {
       assigneeType: "agent", assigneeId: agentId,
       blockedBy: [prereq.id],
     });
-    const prepared=prepareTestIssueDelivery(store,prereq.id);
+    testWorkspaceMember(store, "local");
     clear(recorder);
-    store.respondIssueDelivery(prereq.id,prepared.delivery.id,{action:'accept',revision:prepared.delivery.responsibilityRevision},prepared.actor);
+    // A member closes the prerequisite; the auto-start follows in its own frame.
+    acceptTestIssueDelivery(store, prereq.id);
     expect(store.getIssue(dependent.id)!.status).toBe("todo");
     expect(store.listTasksForIssue(dependent.id)).toHaveLength(1);
     assertFrames("MUL-409 automatic start", recorder, [["W", "D"], ["W", "D"]]);
@@ -815,10 +786,10 @@ it.skipIf(!process.env.MULTIREMI_TEST_POSTGRES_URL)("MUL-409 real PG: automatic 
     expect(pg.maxTransactionDepth).toBe(1);
     console.info("MUL-409 PG dependency frames", JSON.stringify(recorder.frames.map(firstAcquisitions)));
 
-    const prepared=prepareTestIssueDelivery(store,prerequisite.id);
+    testWorkspaceMember(store, "local");
     clear(recorder);
     pg.resetTransactionDepthStats();
-    store.respondIssueDelivery(prerequisite.id,prepared.delivery.id,{action:'accept',revision:prepared.delivery.responsibilityRevision},prepared.actor);
+    acceptTestIssueDelivery(store, prerequisite.id);
     assertFrames("PG automatic start", recorder, [["W", "D"], ["W", "D"]]);
     expect(pg.maxTransactionDepth).toBe(1);
     expect(store.getIssue(dependent.id)!.status).toBe("todo");

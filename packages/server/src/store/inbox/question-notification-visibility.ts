@@ -3,7 +3,13 @@ import { questionMetadataText } from './question-indexes.js';
 import type { InboxAccess } from './inbox-visibility.js';
 type NotificationEntry = { id?: string; kind?: string; session_id?: string; metadata: Record<string, any>;
   to_agent_id?: string | null; visibility?: string; deleted_at?: string | null };
-type NotificationIdentity = { workspaceId: string; sourceIssueId: string | null; originalSession: string; humanId: string };
+/**
+ * `humanId` is null for an Issue Q: its human stage names nobody, so any active
+ * member reads the notices not addressed to an Agent (human-stage reminders and
+ * recovery notices). An Agent's notice stays with its lane; members read that Q
+ * through its original conversation.
+ */
+type NotificationIdentity = { workspaceId: string; sourceIssueId: string | null; originalSession: string; humanId: string | null };
 
 export function questionNotificationIdentity(entry: NotificationEntry, original: NotificationEntry | undefined | null): NotificationIdentity | null {
   const q = original?.metadata.question;
@@ -15,8 +21,11 @@ export function questionNotificationIdentity(entry: NotificationEntry, original:
     || q?.version !== 1 || typeof q.workspace_id !== 'string' || !q.workspace_id
     || q.source_issue_id !== null && (typeof q.source_issue_id !== 'string' || !q.source_issue_id)
     || !Number.isSafeInteger(q.route_revision) || q.route_revision < 1 || q.route_revision !== entry.metadata.question_route_revision
-    || human?.stage !== 'human' || human.handler?.type !== 'member' || typeof human.handler.id !== 'string') return null;
-  return { workspaceId: q.workspace_id, sourceIssueId: q.source_issue_id, originalSession: original.session_id, humanId: human.handler.id };
+    || human?.stage !== 'human') return null;
+  // A stored member on an Issue Q is the retired designated human; it grants nothing extra.
+  if (q.source_issue_id) return { workspaceId: q.workspace_id, sourceIssueId: q.source_issue_id, originalSession: original.session_id, humanId: null };
+  if (human.handler?.type !== 'member' || typeof human.handler.id !== 'string') return null;
+  return { workspaceId: q.workspace_id, sourceIssueId: null, originalSession: original.session_id, humanId: human.handler.id };
 }
 
 /** Plain columns keep the async read pool within its existing function gate. */
@@ -26,6 +35,8 @@ export function questionNotificationFactsSql(identity: NotificationIdentity, ent
     human.archived_at AS human_archived,human.user_id AS human_user,
     EXISTS (SELECT 1 FROM multiremi_workspace_members admin WHERE admin.workspace_id=? AND admin.archived_at IS NULL
       AND admin.role IN ('owner','admin') AND (admin.user_id=? OR admin.id=?)) AS administrator,
+    EXISTS (SELECT 1 FROM multiremi_workspace_members reader WHERE reader.workspace_id=? AND reader.archived_at IS NULL
+      AND (reader.user_id=? OR reader.id=?)) AS member_reader,
     own.current_attempt_id AS own_attempt,own.agent_id AS own_agent,own.workspace_id AS own_workspace,
     own.status AS own_status,own.session_id AS own_session,own.execution_scope AS own_scope,
     ag.workspace_id AS agent_workspace,ag.archived_at AS agent_archived
@@ -35,21 +46,22 @@ export function questionNotificationFactsSql(identity: NotificationIdentity, ent
     LEFT JOIN multiremi_workspace_members human ON human.id=?
     LEFT JOIN multiremi_turns own ON own.current_attempt_id=?
     LEFT JOIN multiremi_agents ag ON ag.id=own.agent_id WHERE h.session_id=?`,
-    params: [identity.workspaceId, access.userId, access.userId, entry.session_id, identity.sourceIssueId, identity.humanId,
-      access.attemptId ?? null, identity.originalSession] };
+    params: [identity.workspaceId, access.userId, access.userId, identity.workspaceId, access.userId, access.userId,
+      entry.session_id, identity.sourceIssueId, identity.humanId, access.attemptId ?? null, identity.originalSession] };
 }
 
 export function canReadQuestionNotificationFacts(identity: NotificationIdentity, entry: NotificationEntry,
   access: InboxAccess, facts: Record<string, any> | null | undefined): boolean {
   if (!facts || facts.original_workspace !== identity.workspaceId || facts.notification_workspace !== identity.workspaceId
     || identity.sourceIssueId && facts.source_workspace !== identity.workspaceId
-    || facts.human_id !== identity.humanId || facts.human_workspace !== identity.workspaceId || facts.human_archived) return false;
+    || identity.humanId && (facts.human_id !== identity.humanId || facts.human_workspace !== identity.workspaceId || facts.human_archived)) return false;
   if (access.attemptId) return facts.own_attempt === access.attemptId && ['running', 'awaiting_human'].includes(facts.own_status)
     && facts.own_workspace === identity.workspaceId && facts.agent_workspace === identity.workspaceId && !facts.agent_archived
     && facts.own_agent === entry.to_agent_id && facts.own_session === entry.session_id
     && String(facts.own_scope ?? '') === String(entry.metadata.execution_scope ?? '');
   return !access.userId || access.admin || facts.administrator === true || facts.administrator === 1
-    || facts.human_user === access.userId || facts.human_id === access.userId;
+    || (identity.humanId ? facts.human_user === access.userId || facts.human_id === access.userId
+      : !entry.to_agent_id && (facts.member_reader === true || facts.member_reader === 1));
 }
 
 /** The Q grant applies only to this notification, never to its whole lane. */
@@ -64,6 +76,7 @@ export function questionNotificationVisibilitySql(db: Pick<SqlDatabase, 'dialect
     : `(CASE WHEN json_valid(${route}) THEN ${route} ELSE '[]' END)`;
   const rootText = (path: string) => db.dialect === 'postgres' ? `${root} #>> '{${path.replaceAll('.', ',')}}'`
     : `json_extract(${root},'$[#-1].${path}')`;
+  const sourceIssue = text('q', 'question.source_issue_id');
   const params: unknown[] = [];
   let actor: string;
   if (access.attemptId) {
@@ -75,8 +88,11 @@ export function questionNotificationVisibilitySql(db: Pick<SqlDatabase, 'dialect
       AND COALESCE(own.execution_scope,'')=COALESCE(${text(alias, 'execution_scope')},''))`;
   } else if (!access.userId || access.admin) actor = '1=1';
   else {
-    params.push(access.userId, access.userId, access.userId, access.userId);
-    actor = `(human.user_id=? OR human.id=? OR EXISTS (SELECT 1 FROM multiremi_workspace_members admin
+    params.push(access.userId, access.userId, access.userId, access.userId, access.userId, access.userId);
+    // An Issue Q's human stage names nobody: every active member reads its notices not addressed to an Agent.
+    actor = `(${sourceIssue} IS NOT NULL AND ${alias}.to_agent_id IS NULL AND EXISTS (SELECT 1 FROM multiremi_workspace_members reader
+      WHERE reader.workspace_id=${workspace} AND reader.archived_at IS NULL AND (reader.user_id=? OR reader.id=?))
+      OR human.user_id=? OR human.id=? OR EXISTS (SELECT 1 FROM multiremi_workspace_members admin
       WHERE admin.workspace_id=${workspace} AND admin.archived_at IS NULL AND admin.role IN ('owner','admin')
       AND (admin.user_id=? OR admin.id=?)))`;
   }
@@ -85,14 +101,14 @@ export function questionNotificationVisibilitySql(db: Pick<SqlDatabase, 'dialect
   const where = `(CASE WHEN COALESCE(${notification},FALSE) THEN EXISTS (
     SELECT 1 FROM multiremi_conversation_log q
     JOIN multiremi_conversation_heads qh ON qh.session_id=q.session_id
-    JOIN multiremi_workspace_members human ON human.id=${rootText('handler.id')}
+    LEFT JOIN multiremi_workspace_members human ON ${sourceIssue} IS NULL AND human.id=${rootText('handler.id')}
       AND human.workspace_id=${workspace} AND human.archived_at IS NULL
-    LEFT JOIN multiremi_issues source ON source.id=${text('q', 'question.source_issue_id')}
+    LEFT JOIN multiremi_issues source ON source.id=${sourceIssue}
     WHERE q.id=${text(alias, 'root_question_id')} AND q.kind='message' AND q.visibility='shown' AND q.deleted_at IS NULL
       AND CAST(${text('q', 'question.version')} AS TEXT)='1'
       AND ${text('q', 'question.workspace_id')}=${workspace} AND qh.workspace_id=${workspace}
-      AND (${text('q', 'question.source_issue_id')} IS NULL OR source.workspace_id=${workspace})
-      AND ${rootText('stage')}='human' AND ${rootText('handler.type')}='member'
+      AND (${sourceIssue} IS NULL OR source.workspace_id=${workspace})
+      AND ${rootText('stage')}='human' AND (${sourceIssue} IS NOT NULL OR ${rootText('handler.type')}='member' AND human.id IS NOT NULL)
       AND CAST(${text('q', 'question.route_revision')} AS TEXT)=CAST(${text(alias, 'question_route_revision')} AS TEXT)
       AND ${actor}) ELSE TRUE END)`;
   return { where, params };

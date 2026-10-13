@@ -212,14 +212,30 @@ export function formatActivity(
       return t(($) => $.activity.child_done_parent_triggered);
     case "child_status_parent_coalesced":
       return t(($) => $.activity.child_status_parent_coalesced);
-    case "parent_status_held":
-      return t(($) => details.reason === "grant_missing"
-        ? $.activity.parent_status_held_grant_missing
-        : details.reason === "final_summary_missing"
-          ? $.activity.parent_status_held_final_summary_missing
-          : $.activity.parent_status_held, {
+    case "parent_status_held": {
+      // Only open children hold a status now; older rows also carry retired merge-hold reasons.
+      const reason = details.reason;
+      return t(($) => reason == null || reason === "children_open"
+        ? $.activity.parent_status_held
+        : reason === "grant_missing"
+          ? $.activity.parent_status_held_grant_missing
+          : reason === "final_summary_missing"
+            ? $.activity.parent_status_held_final_summary_missing
+            : reason === "issue_delivery_acceptance_required"
+              ? $.activity.parent_status_held_merge
+              : $.activity.parent_status_held_unchanged, {
         status: statusLabel(details.requested ?? details.status ?? "?", t),
       });
+    }
+    case "scm_merge_completed": {
+      // A merged change request is only recorded; the Issue status stays put.
+      const number = (entry.details as Record<string, unknown> | undefined)?.number;
+      return typeof number === "number" || (typeof number === "string" && number.trim())
+        ? t(($) => $.activity.scm_merge_completed, { number: String(number) })
+        : t(($) => $.activity.scm_merge_completed_unknown);
+    }
+    case "issue_responsibility_transferred":
+      return t(($) => $.activity.issue_responsibility_transferred);
     case "parent_done_grant_created":
       return t(($) => $.activity.parent_done_grant_created, {
         agent: details.agentId && resolveActorName ? resolveActorName("agent", details.agentId) : details.agentId ?? "?",

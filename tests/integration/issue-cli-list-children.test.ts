@@ -75,12 +75,13 @@ test("issue CLI filters assignee types and resolves a parent key over local HTTP
     expect(rejectedError).toContain("Execution assignee must be an Agent or Squad");
     expect(store.getIssue(parent.id)?.assigneeType).toBeNull();
     expect(requests.some(url => url.pathname === `/api/issues/${parent.id}`)).toBe(false);
-    const humanSubmit = Bun.spawn([process.execPath, "run", "apps/remi/main.ts", "issue", "delivery", "submit", parent.id, "--summary", "Human cannot impersonate execution coordinator", "--server", server.url.toString(), "--workspace", "local", "--output", "json"], {
+    const humanSubmit = Bun.spawn([process.execPath, "run", "apps/remi/main.ts", "issue", "delivery", "submit", parent.id, "--summary", "Formal delivery is retired", "--server", server.url.toString(), "--workspace", "local", "--output", "json"], {
       cwd: root, env, stdout: "pipe", stderr: "pipe", timeout: 10_000,
     });
     const [submitError, submitCode] = await Promise.all([new Response(humanSubmit.stderr).text(), humanSubmit.exited]);
-    expect(submitCode).not.toBe(0);
-    expect(submitError).toContain("current credential cannot run issue.delivery.submit");
+    // Formal delivery is retired: the command exits locally with its replacement and sends nothing.
+    expect(submitCode).toBe(1);
+    expect(submitError).toContain("已移除：改用 这一轮的最后一条回复就是总结；本轮结束后 Issue 自动进入 in_review");
     expect(requests.some(url => url.pathname === `/api/issues/${parent.id}/deliveries`)).toBe(false);
     for (const [index, { type }] of assignments.entries()) {
       const result = await runCli(["issue", "list", "--assignee-type", type]);

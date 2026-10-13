@@ -1,4 +1,4 @@
-import { createResponsibleTestIssue, prepareTestIssueDelivery, seedHistoricalIssueFacts } from './helpers.js';
+import { acceptTestIssueDelivery, createResponsibleTestIssue, seedHistoricalIssueFacts, testWorkspaceMember } from './helpers.js';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
 import type { Database } from "bun:sqlite";
 import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
@@ -85,15 +85,14 @@ function registerTaskWakeupContract(label: string, currentStore: () => Store): v
       assigneeType: "agent",
       assigneeId: owner.id,
     });
-    const prepared = prepareTestIssueDelivery(store, prerequisite.id);
+    testWorkspaceMember(store, prerequisite.workspaceId);
     const wakeups: Array<{ id: string; inTransaction: boolean }> = [];
     const unsubscribe = store.onTaskEnqueued((task) => {
       wakeups.push({ id: task.id, inTransaction: inTransaction(store) });
     });
 
     try {
-      store.respondIssueDelivery(prerequisite.id, prepared.delivery.id,
-        { action: "accept", revision: prepared.delivery.responsibilityRevision }, prepared.actor);
+      acceptTestIssueDelivery(store, prerequisite.id);
     } finally {
       unsubscribe();
     }
@@ -118,7 +117,7 @@ function registerTaskWakeupContract(label: string, currentStore: () => Store): v
       assigneeType: "agent",
       assigneeId: owner.id,
     });
-    const prepared = kind === "auto" ? prepareTestIssueDelivery(store, prerequisite.id) : null;
+    if (kind === "auto") testWorkspaceMember(store, prerequisite.workspaceId);
     const wakeups: string[] = [];
     const unsubscribe = store.onTaskEnqueued((task) => wakeups.push(task.id));
     const original = StoreContext.prototype.appendIssueActivity;
@@ -141,8 +140,7 @@ function registerTaskWakeupContract(label: string, currentStore: () => Store): v
           status: "todo", force: true, actorType: "member", actorId: "mem_local",
         })).toThrow(`injected ${kind} rollback after task insert`);
       } else {
-        store.respondIssueDelivery(prerequisite.id, prepared!.delivery.id,
-          { action: "accept", revision: prepared!.delivery.responsibilityRevision }, prepared!.actor);
+        acceptTestIssueDelivery(store, prerequisite.id);
       }
     } finally {
       StoreContext.prototype.appendIssueActivity = original;

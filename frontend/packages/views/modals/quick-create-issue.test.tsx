@@ -53,7 +53,7 @@ vi.mock("@tanstack/react-query", () => ({
     }
     switch (queryKey[0]) {
       case "members":
-        return { data: [{ id: "member-human", user_id: "user-1", name: "Human", role: "admin" }] };
+        return { data: [{ user_id: "user-1", role: "admin" }] };
       case "agents":
         return {
           data: [
@@ -361,7 +361,6 @@ describe("AgentCreatePanel", () => {
       expect(mockQuickCreateIssue).toHaveBeenCalledWith({
         agent_id: "agent-1",
         prompt: "New agent prompt",
-        responsible_member_id: "member-human",
         project_id: null,
         runtime_workspace_id: null,
       });
@@ -402,7 +401,6 @@ describe("AgentCreatePanel", () => {
     await waitFor(() => {
       expect(mockQuickCreateIssue).toHaveBeenCalledWith({
         squad_id: "squad-1",
-        responsible_member_id: "member-human",
         prompt: "Investigate the regression",
         project_id: null,
         runtime_workspace_id: null,
@@ -510,7 +508,6 @@ describe("AgentCreatePanel", () => {
       expect(mockQuickCreateIssue).toHaveBeenCalledWith({
         agent_id: "agent-2",
         prompt: "Create the issue",
-        responsible_member_id: "member-human",
         project_id: "proj-a",
         runtime_workspace_id: null,
       });
@@ -582,5 +579,19 @@ describe("AgentCreatePanel", () => {
   it("does not render the sub-issue chip when no parent is seeded", () => {
     renderPanel({ onClose: vi.fn(), isExpanded: false, setIsExpanded: vi.fn() });
     expect(screen.queryByTestId("agent-sub-issue-chip")).toBeNull();
+  });
+
+  // Root issues no longer designate a human; a draft seeded by an older
+  // caller with `responsible_member_id` must not resurrect the field.
+  it("creates a root issue without a designated-human picker or field", async () => {
+    const user = userEvent.setup();
+    renderPanel({ onClose: vi.fn(), isExpanded: false, setIsExpanded: vi.fn(), data: { responsible_member_id: "member-legacy" } });
+    expect(screen.queryByRole("combobox")).toBeNull();
+    expect(screen.queryByText(/Designated human|Choose a human/)).toBeNull();
+
+    await user.click(screen.getByRole("button", { name: /^Let agent create \(/i }));
+
+    await waitFor(() => expect(mockQuickCreateIssue).toHaveBeenCalledTimes(1));
+    expect(mockQuickCreateIssue.mock.calls[0]?.[0]).not.toHaveProperty("responsible_member_id");
   });
 });
