@@ -1,3 +1,4 @@
+import { readMessageTriggerFacts, type TriggerEntry } from './message-trigger-source.js';
 import { isRelatedTurnController } from './turn-controls.js';
 import { DaemonTurnBridge } from './inbox/daemon-turn-bridge.js';
 import { questionNotificationIdentity, questionNotificationFactsSql, canReadQuestionNotificationFacts } from './inbox/question-notification-visibility.js';
@@ -4348,6 +4349,10 @@ runMigrations(this.db);
 
   getConversationLogEntry(sessionId: string, seq: number, query?: ConversationLogQuery | null): ConversationLogEntry | null {
     return this.conversationLog.getEntry(sessionId, seq, query);
+  }
+
+  readMessageTriggerFacts(entries: readonly TriggerEntry[]) {
+    return readMessageTriggerFacts(this.db, entries);
   }
 
   getConversationLogEntryById(id: string): ConversationLogEntry | null {

@@ -18,7 +18,7 @@ Issue 决定及其答复在消息、日志和收件箱读取中统一检查来�
 
 没有来源轮的普通成员 decision，其选项和结构化 response 答复按会话权限可见。`metadata.human_response` 本身不代表私有 task 来源；答复关联的原提问有来源任务时仍沿来源鉴权，受保护来源无法解析时仍隐藏。
 
-消息响应为 UnifiedMessage 的字段，加 `attachments` 和 `reactions`；不返回任何 `card_token_*` 字段。附件与反应沿用 Store 的 camelCase 对象，附件下载使用 `/api/attachments/:id/download`，内联内容使用 `/api/attachments/:id/content`。`task_id` 是统一轮 ID，执行 trace 使用 attempt ID。失败返回 `{error}`，参数错误 400，权限错误 403，不可见或不存在 404，已消费编辑、普通 decision 或 human request 的重复回答和非法轮状态 409。
+消息响应为 UnifiedMessage 的字段，加 `attachments`、`reactions` 和只读 `trigger_source`；后者由 agent 输出关联执行轮的原始触发消息批量解析，包含来源 actor、message/session/Issue ID、Issue key 和 parent_issue。来源须通过当前调用者的会话及消息权限，缺失、删除或不可访问时返回 null；成员消息不展示来源。日志窗口和浏览器实时 entry 帧沿用同一投影，不按当前负责人或最新输入推断。不返回任何 `card_token_*` 字段。附件与反应沿用 Store 的 camelCase 对象，附件下载使用 `/api/attachments/:id/download`，内联内容使用 `/api/attachments/:id/content`。`task_id` 是统一轮 ID，执行 trace 使用 attempt ID。失败返回 `{error}`，参数错误 400，权限错误 403，不可见或不存在 404，已消费编辑、普通 decision 或 human request 的重复回答和非法轮状态 409。
 
 task token 在统一鉴权入口核对绑定的 attempt 是否仍是所属轮的 current_attempt_id，并核对 agent 和工作区；替换 attempt 时在同一事务撤销旧 token，旧 token 的所有入口返回 401。parent_owner 只解析同工作区父单；最终会话或 Issue 不属于发送工作区时拒绝并回滚全部写入。
 

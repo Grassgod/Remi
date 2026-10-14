@@ -164,6 +164,19 @@ export interface ConversationLogTurnMetadata extends ConversationLogEntryMetadat
   failure_reason?: string | null;
 }
 
+/** Source of the execution that produced an agent message; display projection only. */
+export interface MessageTriggerSource {
+  actor_type: string;
+  actor_id: string | null;
+  actor_name: string | null;
+  message_id: string;
+  session_id: string;
+  issue_id: string | null;
+  issue_key: string | null;
+  parent_issue: boolean;
+  parent_issue_key: string | null;
+}
+
 /**
  * One row of `multiremi_conversation_log`, keyed by `(session_id, seq)`.
  *
@@ -174,6 +187,7 @@ export interface ConversationLogTurnMetadata extends ConversationLogEntryMetadat
  * deep links working.
  */
 export interface ConversationLogEntry {
+  trigger_source?: MessageTriggerSource | null;
   session_id: string;
   seq: number;
   id: string;

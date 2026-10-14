@@ -207,7 +207,7 @@ export function IssueActivitySection({ issueId, issueTitle, projectId, members, 
       const capSignature = entry.seq === 0 ? `:activity-cap:${Boolean(replica.window?.activities_truncated)}` : "";
       // Head chrome moved outside its measured row and comments regained their
       // borders/padding. Never reserve heights captured by the old flat layout.
-      entry = { ...entry, render_version: `${entry.render_version ?? ""}:issue-cards-v2${signature}${capSignature}` };
+      entry = { ...entry, render_version: `${entry.render_version ?? ""}:issue-cards-v3${signature}${capSignature}` };
       if (entry.seq > 0 && (entry.kind !== "message" || isSystemDetail(entry))) return eventLayoutEntry(entry);
       // Q rows became one fixed-height summary line; never reserve the old button height.
       if (linkedQuestionId(entry.id, entry.metadata)) return { ...entry, render_version: `${entry.render_version ?? ""}:question-line-v1` };
@@ -280,11 +280,11 @@ export function IssueActivitySection({ issueId, issueTitle, projectId, members, 
       }
       const comment = commentsById.get(row.id)!;
       const questionId = linkedQuestionId(row.id, row.metadata);
-      if (questionId) return <div><MessageHeader message={row} getActorName={getActorName} /><LinkedQuestion id={questionId} getActorName={getActorName} /></div>;
+      if (questionId) return <div><MessageHeader message={row} /><LinkedQuestion id={questionId} getActorName={getActorName} /></div>;
       if (row.resolved_at && !resolved.expanded.has(row.id)) return <ResolvedThreadBar entry={comment} onExpand={() => resolved.toggle(row.id, true)} />;
       const parentId = row.reply_to_id ?? row.parent_id;
       const parentRow = parentId ? rowModel.byId.get(parentId) : null;
-      return <div><MessageHeader message={row} getActorName={getActorName} /><CommentCard issueId={issueId} entry={comment} bodyHtml={row.body_html} currentUserId={currentMemberId}
+      return <div><MessageHeader message={row} /><CommentCard issueId={issueId} entry={comment} bodyHtml={row.body_html} currentUserId={currentMemberId}
         canModerate={canModerateComments} onStartReply={setReplyTo}
         assignmentRef={responseTurns.has(row.id) ? { title: eventSummary(responseTurns.get(row.id)!.body_md), onOpen: () => setPromptRow(responseTurns.get(row.id)!) } : undefined}
         parentRef={parentRow ? { id: parentRow.id, actorType: parentRow.author_type, actorId: parentRow.author_id ?? "", preview: quotePreview(parentRow.body_md) } : undefined}

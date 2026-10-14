@@ -68,5 +68,15 @@
   "load_more": "加载更多",
   "retry_load": "重新加载",
   "consumed_draft": "消息已被读到或删除。草稿保留在这里，可以复制后重新发送。",
-  "consumed_message": "消息已被 agent 读取，无法再编辑或删除。"
+  "consumed_message": "消息已被 agent 读取，无法再编辑或删除。",
+  "trigger": {
+    "unknown": "触发来源未记录",
+    "unknown_actor": "未知触发者",
+    "timer": "定时任务",
+    "system": "系统",
+    "parent_actor": "{{name}}（父 Issue {{issue}}）",
+    "scheduled": "由{{name}}触发（定时）",
+    "comment": "由{{name}}的评论触发",
+    "by": "由{{name}}触发"
+  }
 }

@@ -66,7 +66,7 @@ export function InboxPage() {
         : !items.length ? <div className="flex flex-col items-center gap-3 py-16 text-sm text-muted-foreground"><Inbox />{t($ => $.list.empty)}</div>
         : items.map(item => <button key={item.id} type="button" aria-pressed={active?.id === item.id} data-perf-item="inbox" data-perf-key={item.id}
           onClick={() => { setSelected({ wsId, id: item.id, sourceItem: searchParams.get("item") }); setDismissed(null); const params = new URLSearchParams(searchParams); params.set("item", item.id); replace(`${pathname}?${params}`); }} className={`block w-full min-w-0 border-b px-4 py-3 text-left hover:bg-muted/50 ${active?.id === item.id ? "bg-muted" : ""}`}>
-          <MessageHeader message={item} getActorName={getActorName} />
+          <MessageHeader message={item} />
           <p className="line-clamp-2 break-words text-sm">{item.body_md}</p>
           <time className="mt-1 block text-xs text-muted-foreground" dateTime={item.created_at}>{timeAgo(item.created_at)}</time>
         </button>)}
@@ -81,7 +81,7 @@ export function InboxPage() {
     {error && isMobile && <p role="alert" className="mb-3 text-xs text-destructive">{error.message}</p>}
     <div id={`inbox-message-${active.id}`} data-inbox-message={active.id} data-perf-item="message" data-perf-key={active.id}>
     {active.message_kind === "decision" ? <MessageDecisionCard message={active} canAnswer getActorName={getActorName} /> : <>
-      <MessageHeader message={active} getActorName={getActorName} />
+      <MessageHeader message={active} />
       <Markdown attachments={active.attachments}>{active.body_md}</Markdown>
       <AttachmentList attachments={active.attachments} content={active.body_md} />
     </>}

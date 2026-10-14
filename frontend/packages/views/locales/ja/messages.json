@@ -68,5 +68,15 @@
   "load_more": "さらに読み込む",
   "retry_load": "再読み込み",
   "consumed_draft": "メッセージは既読または削除済みです。コピーできるよう下書きを保持しています。",
-  "consumed_message": "このメッセージはエージェントが既に読み取っています。編集や削除はできません。"
+  "consumed_message": "このメッセージはエージェントが既に読み取っています。編集や削除はできません。",
+  "trigger": {
+    "unknown": "起動元の記録なし",
+    "unknown_actor": "不明な起動者",
+    "timer": "定期タスク",
+    "system": "システム",
+    "parent_actor": "{{name}}（親 Issue {{issue}}）",
+    "scheduled": "{{name}} により起動（定期）",
+    "comment": "{{name}} のコメントにより起動",
+    "by": "{{name}} により起動"
+  }
 }
