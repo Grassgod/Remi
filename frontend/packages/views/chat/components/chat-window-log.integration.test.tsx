@@ -55,7 +55,7 @@ import { ChatWindow } from "./chat-window";
 
 const session: ChatSession = {
   id: "chat-a", workspace_id: "workspace-a", agent_id: "agent-a", creator_id: "user-a",
-  project_id: null, title: "Chat", status: "active", has_unread: false, pinned: false,
+  project_id: null, title: "Chat", status: "active", has_unread: false, pinned: false, origin: null,
   unread_count: 0, last_message: null, created_at: "2026-10-06", updated_at: "2026-10-06",
 };
 const memoryEnv = { hasOpfs: false };

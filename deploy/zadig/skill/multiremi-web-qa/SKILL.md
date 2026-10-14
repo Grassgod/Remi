@@ -82,7 +82,7 @@ if (!token) throw new Error("缺少可用的浏览器登录凭证");
 
 - 生产环境默认只做只读冒烟；不得直接运行会写数据库的完整 `frontend/e2e`。
 - PPE 可按 Issue 验收目标创建测试数据，但不得连接生产 PostgreSQL、OpenViking、Secret、
-  上传目录、Runtime 或 session archive。
+  上传目录或 Runtime。
 - Console 和网络证据只记录 Method、脱敏 Path、Status 和错误类别，不记录 Header、Cookie、
   Authorization 或敏感 Body。
 - 桌面访问失败时不得降级为 headless 后声称桌面验收通过。

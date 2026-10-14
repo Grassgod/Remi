@@ -1,16 +1,15 @@
 /**
  * Ephemeral agent-runtime context writers.
  *
- * Per-task workdir preparation for Multiremi tasks: serialize task / GC /
+ * Per-task workdir preparation for Multiremi tasks: serialize task /
  * project-resource metadata and materialize the agent's skills into the skill
  * root its runtime reads (`.claude/skills` for claude, `.agents/skills` for
  * codex) before the agent runs. Extracted from src/multiremi/daemon.ts in D6.
  */
 
 import { join } from "node:path";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import type { AgentTask } from "@daemon/contracts/types.js";
-import { ISSUE_SESSION_ARCHIVE_RECEIPT_FILE } from "@daemon/agent-runtime/workspace/session-archive.js";
 
 export function writeTaskContext(workDir: string, task: AgentTask): void {
   const dir = join(workDir, ".multiremi");
@@ -64,50 +63,6 @@ function readTopicBinding(taskPath: string): Record<string, unknown> | null {
   } catch {
     return null;
   }
-}
-
-export function writeTaskGcContext(
-  workDir: string,
-  task: AgentTask,
-  options: { localDirectory?: boolean; kind?: "issue_runtime" } = {},
-): void {
-  const dir = join(workDir, ".multiremi");
-  mkdirSync(dir, { recursive: true });
-  const discussionIssue = Boolean(
-    task.issueId
-    && (task.holdsWorkspace === false || task.holds_workspace === false),
-  );
-  // A new Issue task can append provider history after an earlier terminal
-  // snapshot. Force the next terminal sweep to verify a fresh archive.
-  if (task.issueId && !discussionIssue) {
-    rmSync(join(dir, ISSUE_SESSION_ARCHIVE_RECEIPT_FILE), { force: true });
-  }
-  // An Issue owns its stable workspace for the full lifecycle. Automation
-  // tasks can carry both issueId and autopilotRunId; letting the run win here
-  // would replace the Issue GC policy and bypass its dirty/unpushed Git guard.
-  const kind = options.kind ?? (discussionIssue
-    ? "discussion_issue"
-    : task.issueId
-      ? "issue"
-      : task.chatSessionId
-        ? "chat"
-        : task.autopilotRunId
-          ? "autopilot_run"
-          : "quick_create");
-  const payload = {
-    version: task.issueId && !discussionIssue ? 2 : 1,
-    kind,
-    workspace_id: task.workspaceId,
-    task_id: task.id,
-    issue_id: task.issueId,
-    issue_session_id: task.issueSessionId ?? task.issue_session_id,
-    chat_session_id: task.chatSessionId,
-    autopilot_run_id: task.autopilotRunId,
-    completed_at: task.completedAt,
-    created_at: task.createdAt,
-    local_directory: options.localDirectory || undefined,
-  };
-  writeFileSync(join(dir, "gc.json"), JSON.stringify(payload, null, 2), { mode: 0o644 });
 }
 
 export function writeProjectResourceContext(workDir: string, task: AgentTask): void {

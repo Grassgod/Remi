@@ -730,7 +730,9 @@ describe("Multiremi store — Go daemon wire shapes", () => {
 
     expect(byId.get(run.taskId!)).toMatchObject({
       attempt_id: run.taskId,
-      kind: "autopilot",
+      // A run_only run executes in a Chat of its own, so it claims like any Chat task.
+      kind: "chat",
+      chat_session_id: run.chatSessionId,
       autopilot_run_id: run.id,
       autopilot_id: autopilot.id,
       autopilot_source: "scm_event",
@@ -1109,7 +1111,8 @@ describe("Multiremi store — Go daemon wire shapes", () => {
     expect(byId.get(autopilotTask.id)).toMatchObject({
       id: autopilotTask.id,
       autopilot_run_id: run.id,
-      kind: "autopilot",
+      chat_session_id: run.chatSessionId,
+      kind: "chat",
       issue_id: "",
     });
   });

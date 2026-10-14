@@ -68,7 +68,14 @@ export interface EphemeralContext {
   kind: "ephemeral";
   task: AgentTask;
   daemonOptions: EphemeralDaemonOptions;
+  /** The directory the agent starts in. */
   workDir: string;
+  /**
+   * The subject's shared workspace (repositories and the Wiki working copy),
+   * exposed to the agent as `MULTIREMI_WORKSPACE_ROOT`. It differs from
+   * `workDir` only for an Issue holder, which starts in its lane's private directory.
+   */
+  workspaceDir: string;
   signal: AbortSignal;
   /** "ask" surfaces permission prompts to a human via the server; default is self-approved. */
   approvalMode?: "auto" | "ask";

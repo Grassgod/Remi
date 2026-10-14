@@ -286,11 +286,13 @@ it("lets the addressed agent answer a decision once through its authenticated me
   expect(store.getMessage(question.id)?.resolved_at).toBeTruthy();
   expect((await request(path(), "POST", { reply_to_id: question.id, expected_route_revision: question.route_revision, body_md: "replay" }, headers)).status).toBe(409);
 });
-it("run-now leaves a request in auto conversation with an execution turn", async () => {
+it("run-now leaves a trigger in the auto conversation and an execution turn in the run Chat", async () => {
   const auto = store.createAutopilot({ title: "Manual", assigneeId: agent.id, executionMode: "run_only", description: "Run" });
   expect((await request(`/api/autopilots/${auto.id}/trigger`, "POST", {})).status).toBe(200);
   const messages = await request(`/api/sessions/auto_${auto.id}/messages`);
   expect(messages.status).toBe(200); expect(messages.data.messages.filter((m: any) => m.message_kind === "request")).toHaveLength(1);
-  expect((await request(`/api/turns?session_id=auto_${auto.id}`)).data.turns).toHaveLength(1);
+  expect((await request(`/api/turns?session_id=auto_${auto.id}`)).data.turns).toHaveLength(0);
+  const chatId = store.listAutopilotRuns(auto.id)[0]!.chatSessionId!;
+  expect((await request(`/api/turns?session_id=${chatId}`)).data.turns).toHaveLength(1);
 });
 });

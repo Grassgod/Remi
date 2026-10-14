@@ -20,8 +20,10 @@ import { basename, dirname, isAbsolute, join, relative, resolve } from "node:pat
 import * as sessions from "@shared/db/sessions.js";
 import { createLogger } from "@shared/logger.js";
 import type { IssueWorkspaceLifecycleLocker } from "./lifecycle-lock.js";
+import { TOPICS_DIRECTORY, topicsRoot, workDirectory } from "./layout.js";
+import { listLinkedWorktrees, repairCopiedWorktrees, repairMovedWorktrees } from "./repo-inspection.js";
 
-export const TOPIC_WORKSPACE_ROOT = "_topics";
+export const TOPIC_WORKSPACE_ROOT = TOPICS_DIRECTORY;
 export const TOPIC_MIGRATION_INTENT = ".migration-intent.json";
 export const TOPIC_TASK_DOSSIER = join(".multiremi", "task.json");
 const PREPARED_INTENT_STALE_MS = 10 * 60 * 1000;
@@ -56,6 +58,11 @@ export interface TopicWorkspaceLifecycleOptions {
   root: string;
   locker: IssueWorkspaceLifecycleLocker;
   assertRootOwner?: () => void;
+  /**
+   * Called once a migration is committed, so the Issue's new `work/<issue>`
+   * directory is known to reclaim even if no execution has run in it yet.
+   */
+  recordMigration?: (migration: CommittedTopicMigration) => void;
   renameDirectory?: (source: string, target: string) => void;
   removeDirectory?: (path: string) => void;
   beforeSessionCommit?: () => void;
@@ -87,6 +94,7 @@ export class TopicWorkspaceLifecycle {
   readonly topicsRoot: string;
   private readonly locker: IssueWorkspaceLifecycleLocker;
   private readonly assertRootOwner: () => void;
+  private readonly recordMigration?: (migration: CommittedTopicMigration) => void;
   private readonly renameDirectory: (source: string, target: string) => void;
   private readonly removeDirectory: (path: string) => void;
   private readonly beforeSessionCommit?: () => void;
@@ -94,9 +102,10 @@ export class TopicWorkspaceLifecycle {
 
   constructor(options: TopicWorkspaceLifecycleOptions) {
     this.root = resolve(options.root);
-    this.topicsRoot = join(this.root, TOPIC_WORKSPACE_ROOT);
+    this.topicsRoot = topicsRoot(this.root);
     this.locker = options.locker;
     this.assertRootOwner = options.assertRootOwner ?? (() => {});
+    this.recordMigration = options.recordMigration;
     this.renameDirectory = options.renameDirectory ?? renameSync;
     this.removeDirectory = options.removeDirectory
       ?? ((path) => rmSync(path, { recursive: true, force: false }));
@@ -185,7 +194,7 @@ export class TopicWorkspaceLifecycle {
     const issueKey = safeSegment(input.issueKey, "issue key");
     const topic = this.topicFromCwd(input.cwd);
     if (!topic) throw new Error(`Current directory is not a topic workspace: ${input.cwd}`);
-    const issueCwd = join(this.root, issueKey);
+    const issueCwd = workDirectory(this.root, { kind: "issue", id: issueId });
     if (!existsSync(topic.cwd) && existsSync(issueCwd)) {
       return this.locker.runExclusive(issueId, () =>
         this.locker.runExclusive(topicLifecycleKey(topic.topicId), async () => {
@@ -289,32 +298,19 @@ export class TopicWorkspaceLifecycle {
       // Issue-side source behind. Reconcile from the complete topic copy before
       // trusting the old dossier and committing the session binding.
       if (existsSync(topic.cwd)) {
-        mergeTopicIntoExistingIssue(topic.cwd, issueCwd, intent.migration_id);
+        await this.mergeIntoExistingIssue(topic.cwd, issueCwd, intent.migration_id);
       }
       return this.finishRecoveredMigration(issueCwd, existingDossier, topic.cwd);
     }
-
-    writeJsonDurably(join(topic.cwd, ".multiremi", "gc.json"), {
-      version: 2,
-      kind: "issue",
-      issue_id: intent.issue_id,
-      task_id: null,
-    });
 
     let ownershipLost = false;
     let sessionCommitted = false;
     let targetCreated = false;
     try {
       if (issueExisted) {
-        mergeTopicIntoExistingIssue(topic.cwd, issueCwd, intent.migration_id);
+        await this.mergeIntoExistingIssue(topic.cwd, issueCwd, intent.migration_id);
       } else {
-        moveDirectoryDurably(
-          this.root,
-          topic.cwd,
-          issueCwd,
-          this.renameDirectory,
-          this.removeDirectory,
-        );
+        await this.moveWorkspace(topic.cwd, issueCwd);
         targetCreated = true;
       }
       const dossier = dossierFromIntent(intent);
@@ -333,7 +329,7 @@ export class TopicWorkspaceLifecycle {
       this.runAfterSessionCommitBestEffort(intent.issue_key);
       this.removeIntentBestEffort(issueCwd);
       this.cleanupPublishedSourceBestEffort(topic.cwd, intent);
-      return migrationResult(dossier);
+      return this.publishMigration(dossier);
     } catch (error) {
       if (!sessionCommitted && !ownershipLost) {
         try {
@@ -344,15 +340,8 @@ export class TopicWorkspaceLifecycle {
       }
       if (!sessionCommitted && !ownershipLost && targetCreated && existsSync(issueCwd) && !existsSync(topic.cwd)) {
         try {
-          moveDirectoryDurably(
-            this.root,
-            issueCwd,
-            topic.cwd,
-            this.renameDirectory,
-            this.removeDirectory,
-          );
+          await this.moveWorkspace(issueCwd, topic.cwd);
           removeDossierBinding(topic.cwd);
-          rmSync(join(topic.cwd, ".multiremi", "gc.json"), { force: true });
         } catch (rollbackError) {
           log.warn(
             `Topic migration rollback for ${intent.issue_key} remains journaled: ${errorMessage(rollbackError)}`,
@@ -405,6 +394,8 @@ export class TopicWorkspaceLifecycle {
       });
       return true;
     }
+    // The move may have been interrupted before the repositories were told where their worktrees stand now.
+    await repairMovedWorktrees(await listLinkedWorktrees(topicCwd), topicCwd);
     await this.finalizeReturnedTopic(topicCwd, intent);
     return false;
   }
@@ -415,11 +406,11 @@ export class TopicWorkspaceLifecycle {
     return this.locker.runExclusive(topicLifecycleKey(intent.topic_id), async () => {
       this.assertRootOwner();
       if (existsSync(intent.topic_cwd)) {
-        mergeTopicIntoExistingIssue(intent.topic_cwd, issueCwd, intent.migration_id);
+        await this.mergeIntoExistingIssue(intent.topic_cwd, issueCwd, intent.migration_id);
       }
       const dossier = dossierFromIntent(intent);
       writeDossier(issueCwd, dossier);
-      this.finishRecoveredMigration(issueCwd, dossier, intent.topic_cwd);
+      await this.finishRecoveredMigration(issueCwd, dossier, intent.topic_cwd);
       return true;
     });
   }
@@ -441,7 +432,7 @@ export class TopicWorkspaceLifecycle {
       return this.commitMigration({ cwd, migrationId: prepared.migration_id, issueId, issueKey });
     }
 
-    const issueCwd = join(this.root, issueKey);
+    const issueCwd = workDirectory(this.root, { kind: "issue", id: issueId });
     if (!existsSync(issueCwd)) {
       throw new Error(`No pending topic migration was found for Issue ${issueKey}`);
     }
@@ -499,13 +490,7 @@ export class TopicWorkspaceLifecycle {
       let moved = false;
       let ownershipLost = false;
       try {
-        moveDirectoryDurably(
-          this.root,
-          issueCwd,
-          topicCwd,
-          this.renameDirectory,
-          this.removeDirectory,
-        );
+        await this.moveWorkspace(issueCwd, topicCwd);
         moved = true;
         try {
           this.assertRootOwner();
@@ -520,13 +505,7 @@ export class TopicWorkspaceLifecycle {
           try { this.assertRootOwner(); } catch { ownershipLost = true; }
         }
         if (!ownershipLost && moved && existsSync(topicCwd) && !existsSync(issueCwd)) {
-          moveDirectoryDurably(
-            this.root,
-            topicCwd,
-            issueCwd,
-            this.renameDirectory,
-            this.removeDirectory,
-          );
+          await this.moveWorkspace(topicCwd, issueCwd);
         }
         throw error;
       }
@@ -534,6 +513,31 @@ export class TopicWorkspaceLifecycle {
       try { await this.finalizeReturnedTopic(topicCwd, intent); } catch {}
       return true;
     });
+  }
+
+  /**
+   * Move a workspace between the topic and the Issue. The linked worktrees in it keep their link to the
+   * shared repository, but the repository records where each stands: renewed right after the move, before
+   * anything prunes the records of worktrees whose directory seems to be gone.
+   */
+  private async moveWorkspace(source: string, target: string): Promise<void> {
+    const linked = await listLinkedWorktrees(source);
+    moveDirectoryDurably(this.root, source, target, this.renameDirectory, this.removeDirectory);
+    await repairMovedWorktrees(linked, target);
+  }
+
+  /**
+   * Copy a topic's entries into an Issue workspace that already exists. A linked worktree among them is a
+   * copy: its repository still records the topic's directory, which is about to be removed and which the next
+   * prune would then drop along with the worktree. Renewed right after the copy, before the source goes.
+   * Only a worktree that stands in the Issue workspace as a copy of the topic's is touched. Where the Issue
+   * has an entry of its own at the same path nothing is copied as a worktree: worktrees are merged file by file
+   * without the topic's `.git` pointer, a clone is kept whole among the artifacts (`mergeTopicIntoExistingIssue`).
+   */
+  private async mergeIntoExistingIssue(source: string, target: string, migrationId: string): Promise<void> {
+    const linked = await listLinkedWorktrees(source);
+    mergeTopicIntoExistingIssue(source, target, migrationId);
+    await repairCopiedWorktrees(linked, source, target);
   }
 
   isTopicWorkspaceBound(topicCwd: string): boolean {
@@ -544,11 +548,13 @@ export class TopicWorkspaceLifecycle {
     return owners.length === 1 && owners[0]!.status === "active";
   }
 
-  private finishRecoveredMigration(
+  private async finishRecoveredMigration(
     issueCwd: string,
     dossier: TopicTaskDossier,
     topicCwd: string,
-  ): CommittedTopicMigration {
+  ): Promise<CommittedTopicMigration> {
+    // The move may have been interrupted before the repositories were told where their worktrees stand now.
+    await repairMovedWorktrees(await listLinkedWorktrees(issueCwd), issueCwd);
     const row = sessions.getSession(dossier.session_key);
     if (row?.cwd === dossier.topic_cwd) {
       this.assertRootOwner();
@@ -560,7 +566,17 @@ export class TopicWorkspaceLifecycle {
     this.runAfterSessionCommitBestEffort(dossier.issue_key);
     this.removeIntentBestEffort(issueCwd);
     this.cleanupPublishedSourceBestEffort(topicCwd, intentFromDossier(dossier, "source_cleanup"));
-    return migrationResult(dossier);
+    return this.publishMigration(dossier);
+  }
+
+  private publishMigration(dossier: TopicTaskDossier): CommittedTopicMigration {
+    const migration = migrationResult(dossier);
+    try {
+      this.recordMigration?.(migration);
+    } catch (error) {
+      log.warn(`Could not record migrated Issue ${dossier.issue_key}: ${errorMessage(error)}`);
+    }
+    return migration;
   }
 
   private findPendingMigration(
@@ -622,7 +638,6 @@ export class TopicWorkspaceLifecycle {
       sessions.returnSessionToTopic(intent.session_key, issueCwd, topicCwd);
     }
     removeDossierBinding(topicCwd);
-    removeFileDurably(join(topicCwd, ".multiremi", "gc.json"));
     removeFileDurably(join(topicCwd, TOPIC_MIGRATION_INTENT));
   }
 
@@ -639,6 +654,8 @@ export class TopicWorkspaceLifecycle {
 export function topicLifecycleKey(topicId: string): string {
   return `topic:${safeSegment(topicId, "topic id")}`;
 }
+
+export { readIntent as readTopicMigrationIntent };
 
 export function readTopicTaskDossier(workspaceDir: string): TopicTaskDossier | null {
   return readDossier(workspaceDir);
@@ -698,24 +715,25 @@ export function moveDirectoryDurably(
 function mergeTopicIntoExistingIssue(source: string, target: string, migrationId: string): void {
   const conflictRoot = join(target, ".multiremi", "topic-artifacts", migrationId);
   const mergeEntry = (sourcePath: string, targetPath: string, rel: string): void => {
-    if (
-      rel === TOPIC_MIGRATION_INTENT
-      || rel === ".multiremi/gc.json"
-      || rel === ".multiremi/task.json"
-    ) return;
+    if (rel === TOPIC_MIGRATION_INTENT || rel === ".multiremi/task.json") return;
     if (!existsSync(targetPath)) {
       copyEntryAtomically(sourcePath, targetPath);
       return;
     }
     const sourceInfo = lstatSync(sourcePath);
     const targetInfo = lstatSync(targetPath);
-    if (sourceInfo.isDirectory() && targetInfo.isDirectory()) {
+    // A repository is not merged file by file: its `.git` would be grafted onto the Issue's own, and the rest
+    // of it, among the artifacts, could not be opened. It is kept whole among them (below), unless it is the same.
+    if (sourceInfo.isDirectory() && targetInfo.isDirectory() && !isRepositoryRoot(sourcePath)) {
       for (const entry of readdirSync(sourcePath, { withFileTypes: true })) {
         mergeEntry(join(sourcePath, entry.name), join(targetPath, entry.name), rel ? `${rel}/${entry.name}` : entry.name);
       }
       return;
     }
     if (treeManifest(sourcePath) === treeManifest(targetPath)) return;
+    // The `.git` file of a worktree only points into its repository. Kept among the artifacts it would name a worktree
+    // that is pruned with the topic, a repository nobody can open, and every inspection of the Issue would fail on it.
+    if (sourceInfo.isFile() && basename(sourcePath) === ".git") return;
     copyEntryAtomically(sourcePath, join(conflictRoot, rel));
     log.warn(`Preserved conflicting topic artifact at ${join(conflictRoot, rel)}`);
   };
@@ -724,6 +742,13 @@ function mergeTopicIntoExistingIssue(source: string, target: string, migrationId
     mergeEntry(join(source, entry.name), join(target, entry.name), entry.name);
   }
   fsyncDirectory(target);
+}
+
+/** A clone (it holds a `.git` directory) or a bare repository. Not a worktree: its `.git` is a file pointing into a repository that lives elsewhere. */
+function isRepositoryRoot(directory: string): boolean {
+  const entry = (name: string) => lstatSync(join(directory, name), { throwIfNoEntry: false });
+  return entry(".git")?.isDirectory() === true
+    || (entry("HEAD")?.isFile() === true && entry("objects")?.isDirectory() === true && entry("refs")?.isDirectory() === true);
 }
 
 function copyEntryAtomically(source: string, target: string): void {

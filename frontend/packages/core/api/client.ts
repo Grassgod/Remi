@@ -31,7 +31,7 @@ import { LarkEndpoints } from "./endpoints/lark";
 import { RepositoriesEndpoints } from "./endpoints/repositories";
 import { PluginsEndpoints } from "./endpoints/plugins";
 import { IssueSharesEndpoints } from "./endpoints/issue-shares";
-import { SessionArchivesEndpoints } from "./endpoints/session-archives";
+import { StorageEndpoints } from "./endpoints/storage";
 import { ScmEndpoints } from "./endpoints/scm";
 import { PlatformEndpoints } from "./endpoints/platform";
 import { FeishuEndpoints } from "./endpoints/feishu";
@@ -92,7 +92,7 @@ export const ENDPOINT_FACTORIES: ReadonlyArray<(http: HttpClient) => object> = [
   (http: HttpClient) => new RepositoriesEndpoints(http),
   (http: HttpClient) => new PluginsEndpoints(http),
   (http: HttpClient) => new IssueSharesEndpoints(http),
-  (http: HttpClient) => new SessionArchivesEndpoints(http),
+  (http: HttpClient) => new StorageEndpoints(http),
   (http: HttpClient) => new ScmEndpoints(http),
   (http: HttpClient) => new PlatformEndpoints(http),
   (http: HttpClient) => new FeishuEndpoints(http),
@@ -144,7 +144,7 @@ export interface ApiClient extends
     RepositoriesEndpoints,
     PluginsEndpoints,
     IssueSharesEndpoints,
-    SessionArchivesEndpoints,
+    StorageEndpoints,
     ScmEndpoints,
     PlatformEndpoints,
     FeishuEndpoints,

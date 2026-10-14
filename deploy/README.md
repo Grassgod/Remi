@@ -124,7 +124,7 @@ startup cutover marker. The first new startup detects JSON/time changes made by
 old servers after preparation, replaces only its provisional legacy aggregate,
 and preserves modern live runs and evidence-verified recovered facts. Totals with
 ambiguous semantics remain reported evidence, without invented actual/context
-tokens. Startup never scans archives or raw telemetry; normal reports read only
+tokens. Startup never scans raw telemetry; normal reports read only
 the canonical ledger. See the [usage contract](../docs/usage-accounting.md).
 
 Keep the updater's drain-protected switch: stop the old API writers before
@@ -237,16 +237,15 @@ When PostgreSQL and OpenViking already run in Docker, use
 `compose.application.yml` first. It owns only API/Web and joins the existing
 data-service networks; it never creates, replaces, or deletes data containers.
 
-1. Back up PostgreSQL, OpenViking, uploads, session archives, and SSH Mesh state.
+1. Back up PostgreSQL, OpenViking, uploads, and SSH Mesh state.
 2. Copy `deploy/docker/api.env.example` to an API env file outside Git, replace
    its required placeholders, set mode `0600`, and change the database hostname
    to the existing network alias (`postgres` by default). Do not copy secrets
    into the Compose env file. Create a separate control-plane env file whose database
    URL uses the host-published PostgreSQL address (`127.0.0.1` by default).
 3. Create a persistent service home owned by the runtime user and bind it with
-   `REMI_HOME_DIR`. Bind the existing uploads, session archives, and SSH Mesh
-   directories beneath it with `REMI_UPLOAD_DIR`, `REMI_SESSION_ARCHIVE_ROOT`,
-   and `REMI_SSH_MESH_ROOT`. Set `REMI_RUNTIME_UID` and `REMI_RUNTIME_GID` to
+   `REMI_HOME_DIR`. Bind the existing uploads and SSH Mesh directories beneath
+   it with `REMI_UPLOAD_DIR` and `REMI_SSH_MESH_ROOT`. Set `REMI_RUNTIME_UID` and `REMI_RUNTIME_GID` to
    their owner. SSH Mesh rejects a root-owned service home. Bind the host
    account's `.ssh` directory with `REMI_SSH_HOME_DIR` and set its login name in
    `REMI_SSH_USER`.
@@ -305,169 +304,6 @@ before it replaces the API container, and leaves its named data volumes alone.
 See [`docs/feishu-message-ingestion.md`](../docs/feishu-message-ingestion.md)
 for the connection model, the rollout runbook, and rollback.
 
-## Session Archive v2
-
-Session Archive content is a standard ZIP (`multiremi.session-archive.v2`). Each
-member is deflated independently at level 6 and ends with a data descriptor, and
-`index.json` — the last member — records every member's offsets, sizes and
-sha256. Reading one task's trace therefore costs one `pread` of that member plus
-one inflate, instead of unpacking the whole archive. Zip64 covers members above
-4 GiB and archives above 65535 members.
-
-Members are `manifest.json`, `traces/<task_id>.jsonl`, `sessions/<session_id>/…`
-(provider-native history, minus the credential/config exclusion list) and the
-trailing `index.json`. A trace member's entry also records `head` (the largest
-event seq), `event_count` and `closed`, so a pointer write needs no extra
-inflate. A trace file's first and last lines are structural — they carry no
-`seq`; events start at seq 1, a repeated seq is corruption and the first
-occurrence wins, and a final line without a newline is a crash-truncated append
-that readers drop. `manifest.json` digests the content, so
-`source_revision` is unchanged by the compression; the archive `sha256` stays
-the digest of the whole blob. The GC barrier and the hard-delete barrier key on
-those two values and did not change.
-
-An archive belongs to one subject: an `issue`, a `chat` session, or a one-shot
-`task`. Issue subjects keep the historical `issue_id`; chat and task subjects
-have none, so the ack binding for those is the Runtime that owns the subject's
-provider session.
-
-An archive's trace pointers are only moved forward, and only within their
-source: a pointer that already reads from a daemon archive is replaced only by
-another daemon archive whose member's `head` is at least the old `head_seq`. A
-daemon archive replaces a pointer that reads from a backfilled archive
-(`metadata.kind = "trace_backfill"`) whatever the heads, and a backfilled
-archive never replaces a daemon one, because old-table seqs and daemon trace
-seqs are not comparable. A partial or stale archive still becomes `ready`, but
-it never takes a pointer away from a longer trace of its source; the server log
-names each pointer it kept. The pointer table records `head_seq`, `closed` and
-the pointer's `source` alongside the byte range.
-
-Uploads are served per subject: `/api/daemon/runtimes/:runtimeId/issues/:issueId/…`,
-`…/chats/:sessionId/…` and `…/tasks/:taskId/…` speak the same protocol over that
-subject's ownership rule (the Issue workspace row, `chat_sessions.session_runtime_id`
-or `tasks.runtime_id`). A daemon uploads a Chat or one-shot Task archive to its own
-route; a Runtime that does not own the subject is refused.
-
-The server refuses new non-v2 uploads before any attempt is claimed and answers
-`session_archive_format_unsupported`. The check reads the request the client
-actually sends: an upgraded daemon names the v2 format in `metadata.format`, and
-anything else is treated as the legacy container. Existing v1 rows and their files are left
-untouched, so an installation upgrading from v1 keeps its bound archives
-readable and its hard-delete barrier intact; only a v1 daemon that still has not
-upgraded sees the rejection.
-
-## Direct Session Archive uploads (MUL-144)
-
-Session Archive content is a potentially large binary PUT. It must enter the
-API directly instead of passing through the Web container's Next.js
-`/api/:path*` compatibility rewrite. Keep that rewrite for normal API traffic
-and installations that have not enabled the direct path; do not use it for
-large archive bodies.
-
-The API and daemon recognize these settings:
-
-- `MULTIREMI_DAEMON_DIRECT_BASE_URL` (API): public API origin advertised in the
-  archive init response, for example `https://remi.example.com`. It must be an
-  `http(s)` origin with no credentials, path, query, or fragment. When unset,
-  init keeps returning the legacy relative upload URL.
-- `MULTIREMI_ARCHIVE_UPLOAD_BASE_URL` (daemon): operator-trusted API origin that
-  overrides the advertised origin for archive content only. Use it as a
-  temporary escape hatch or when the direct API uses a different hostname.
-- `MULTIREMI_ARCHIVE_PROXY_MAX_BYTES` (daemon): maximum archive size allowed
-  through a relative control-plane/Next.js fallback. The default is 8 MiB.
-  Larger archives fail before PUT and persist an actionable `last_error` that
-  names the direct-upload settings; smaller archives remain backward
-  compatible.
-- `MULTIREMI_ARCHIVE_DIRECT_PROBE_TTL_MS` (daemon): TTL for positive and
-  negative direct-route HEAD attestations. The default is 5 minutes.
-- `MULTIREMI_ARCHIVE_DIRECT_PROBE_TIMEOUT_MS` (daemon): maximum HEAD
-  attestation duration. The default is 10 seconds; a failure or missing marker
-  is treated as an unconfigured direct route.
-- `MULTIREMI_ARCHIVE_UPLOAD_TIMEOUT_MS` (daemon): total timeout for one archive
-  PUT. The default is 15 minutes, matching the Nginx sample. Increase it for
-  exceptionally slow links rather than removing the bound.
-- `MULTIREMI_ARCHIVE_FAILURE_REPORT_TIMEOUT_MS` (daemon): timeout for the
-  best-effort `last_error` callback after a failed upload. The default is 10
-  seconds.
-
-An absolute URL advertised by the authenticated API is accepted without daemon
-configuration only when its hostname matches `MULTIREMI_SERVER_URL`; a daemon
-override explicitly trusts a different hostname. HTTPS control-plane URLs
-cannot be downgraded by the server response. In all cases the daemon verifies
-the exact archive pathname and attempt query, rejects credentials/fragments,
-and refuses redirects before attaching its Bearer token. An absolute URL is
-only a direct-route candidate: before PUT, the daemon sends an authenticated
-HEAD request to the same content URL. Only a `204` response carrying
-`X-Remi-Archive-Direct: 1` proves that Nginx selected the direct API location.
-The direct Nginx location injects `X-Remi-Archive-Direct-Route: 1` into the
-upstream request. The API emits the response marker only when that route proof
-is present and the request `Host` authority (including a non-default port)
-matches `MULTIREMI_DAEMON_DIRECT_BASE_URL`. The Next.js compatibility rewrite
-does not inject the route proof, so it cannot attest itself even if it preserves
-the public `Host`; response-header passthrough therefore cannot create a false
-positive. Results are cached by target origin for the configured finite TTL.
-
-The route proof is only as trustworthy as the edge that injects it. Nginx must
-also clear a client-supplied `X-Remi-Archive-Direct-Route` on every other path,
-otherwise a caller can send the header itself and reach the API through the
-Next.js rewrite. The authority check does not cover this on its own: it compares
-the request `Host` to `MULTIREMI_DAEMON_DIRECT_BASE_URL`, so it is a no-op
-whenever the direct route shares the public host and port, which is the topology
-the sample configuration describes. Add
-`proxy_set_header X-Remi-Archive-Direct-Route "";` to the enclosing server block
-so only the direct location supplies the proof.
-
-The default 8 MiB fallback rejects larger archives unless a direct route is
-attested. Operators may configure `MULTIREMI_ARCHIVE_PROXY_MAX_BYTES`, but a
-larger limit does not establish the capacity of their proxy. Validate the actual
-deployment route and upload behavior before changing it.
-
-Use [`nginx/session-archive-direct.conf`](nginx/session-archive-direct.conf) in
-the public server block. It disables request/response buffering, allows bodies
-up to 1 GiB, gives a streaming upload 15 minutes, preserves the public `Host`,
-and injects the direct-route proof consumed by the API. Replace its sample
-`16120` upstream port with the host's effective `REMI_API_BIND_PORT`, and add the
-server-level `proxy_set_header X-Remi-Archive-Direct-Route "";` documented in the
-file header. Keep the API container bound to loopback; Nginx is the external
-network path.
-
-Audit the complete effective configuration with `nginx -T`. Ordinary prefix
-location order does not decide this match. A broader regex declared earlier can
-win, and a covering `^~` prefix such as `^~ /api/` prevents regex locations from
-being evaluated at all. Place this regex before broader matching regexes and
-remove or narrow any covering `^~` prefix. Inspect the target deployment's
-effective configuration; a configuration checked on another host or release
-does not establish the current route.
-
-When enabling direct uploads on a deployment, perform these checks:
-
-1. Read the deployment's Compose env and confirm the effective host API port;
-   do not assume the sample port.
-2. Inspect `nginx -T` for earlier matching regexes and covering `^~` prefixes,
-   then add the direct location, run `nginx -t`, and reload Nginx. Its position
-   relative to an ordinary Web catch-all is irrelevant.
-3. Add `MULTIREMI_DAEMON_DIRECT_BASE_URL=https://<public-api-host>` to the
-   API secret env file and redeploy through the normal release/updater flow.
-4. Upgrade Runtime daemon CLIs through their normal release flow to obtain
-   streaming uploads, URL validation, the proxy-size guard, and durable upload
-   failure reporting. Platform deployment does not upgrade Runtime CLIs.
-5. Initialize a disposable archive attempt and send an authenticated HEAD to
-   its exact `upload_url`. Confirm a `204` response with
-   `X-Remi-Archive-Direct: 1`; a missing marker means the route is not active.
-   Keep daemon tokens out of shell history and logs.
-6. Retry failed archives, then verify API access logs receive the content PUTs,
-   Web/Next.js logs do not, and each archive becomes `ready` with its declared
-   size and SHA-256. Check Web process memory/event-loop health during the run.
-
-`remi session archive retry <issue> <archive-id>` also accepts an exhausted failed archive. It
-resets the attempt count, error, backoff timestamp, and exhaustion timestamp,
-returning the row to `pending` with `retry_state=eligible`. Run it once per
-failed archive only after the direct route and API setting pass the HEAD check;
-the daemon will claim and upload the recovered attempt on its next archive run.
-
-Do not expose the API container port directly to the network and do not place
-daemon tokens in Nginx configuration or logs.
-
 ## Split API roles
 
 A deployment can run the browser surface and the daemon surface in two API
@@ -509,7 +345,6 @@ COMPOSE_ENV="$COMPOSE_DIR/application.env"
 COMPOSE_FILE="$COMPOSE_DIR/compose.application.yml"
 NGINX_MAIN=/etc/nginx/nginx.conf
 NGINX_SITE=/etc/nginx/sites-enabled/remi
-NGINX_ARCHIVE=/etc/nginx/snippets/session-archive-direct.conf
 ```
 
 so the canonical invocation is
@@ -522,13 +357,6 @@ and a command that addresses `api-runtime` adds `--profile split` immediately
 after `docker compose`. `$COMPOSE_ENV` is the file the host updater is
 configured with (`MULTIREMI_PLATFORM_COMPOSE_ENV_FILE`) and `$COMPOSE_FILE` is
 its `MULTIREMI_PLATFORM_COMPOSE_FILE`.
-
-`$NGINX_ARCHIVE` is the include that carries the archive-upload `location`. It is
-a separate file on this host; if the path differs, find it with
-`nginx -T | grep -n session-archives`. If your layout instead keeps every
-`location` inside the site file, then `$NGINX_SITE` is the only Nginx file to
-back up and restore, and the two mentions of `$NGINX_ARCHIVE` below collapse
-into it.
 
 ### Where each variable lives
 
@@ -695,7 +523,6 @@ rollback below:
   ```bash
   mkdir -p "$COMPOSE_DIR/backups/<date>"
   cp "$NGINX_SITE"    "$COMPOSE_DIR/backups/<date>/nginx-site.conf.orig"
-  cp "$NGINX_ARCHIVE" "$COMPOSE_DIR/backups/<date>/nginx-session-archive-direct.conf.orig"
   cp "$NGINX_MAIN"    "$COMPOSE_DIR/backups/<date>/nginx.conf.orig"
   cp "$COMPOSE_FILE"  "$COMPOSE_DIR/backups/<date>/compose.application.yml.orig"
   cp "$COMPOSE_ENV"   "$COMPOSE_DIR/backups/<date>/application.env.orig"
@@ -704,8 +531,7 @@ rollback below:
   ```
 
   Stage A changes `$COMPOSE_FILE`, `$COMPOSE_ENV`, `$NGINX_MAIN` (only if the
-  `upstream` include goes there), `$NGINX_SITE`, `$NGINX_ARCHIVE`, and the
-  updater env. Stage B changes `$COMPOSE_ENV` again. Which rollback restores
+  `upstream` include goes there), `$NGINX_SITE`, and the updater env. Stage B changes `$COMPOSE_ENV` again. Which rollback restores
   which file is tabulated under "Rollback".
 
 ### Stage A: route the traffic
@@ -753,29 +579,32 @@ Compose files (steps 2, 3, 4, 5 and 7).
    This recreates `api` once (the same short outage as a normal release). Both
    calls answer on the loopback ports; neither endpoint is reachable from the
    public server, which step 5 pins down.
-5. **Nginx.** Two files, two contexts, plus the archive include:
+5. **Nginx.** Two files, two contexts:
    - [`nginx/api-runtime-split-upstream.conf`](nginx/api-runtime-split-upstream.conf)
      defines `upstream multica_api_runtime`. It belongs in the **`http`**
      context, because `upstream` is only valid there. Include it from the
      `http` block of `$NGINX_MAIN`, or copy the `upstream` line into it.
    - [`nginx/api-runtime-split-locations.conf`](nginx/api-runtime-split-locations.conf)
      contains only `location` blocks. Include it in **each public `server`
-     block** (the :80 and the :443 one), next to the archive include. Both
-     blocks need it: the two listen on the same host, and an include in only one
+     block** (the :80 and the :443 one). Both blocks need it: the two listen on the same host, and an include in only one
      of them would leave the other public path different. The file also carries
      `location /internal/ { return 404; }` so the peer endpoints
      (`/internal/peer/events`, `/internal/peer/health`) can never be reached
      from the public server. Those are container-to-container calls; today's
      rewrite and catch-all already leave them unreachable, and the explicit rule
      keeps that true through later routing changes.
-   - Point the archive-upload `location` in `$NGINX_ARCHIVE` at
-     `multica_api_runtime` as well, so large archive bodies keep going straight
-     to the runtime process.
+   - Hosts that applied stage A before ADR 0017 still carry the retired
+     `session-archive-direct` include and a server-level
+     `proxy_set_header X-Remi-Archive-Direct-Route` line. Session archives no
+     longer exist, so remove both from the live Nginx files once, run
+     `nginx -t`, then reload. Do the same in any backed-up copy you may restore
+     during the stage A rollback, otherwise the restored config keeps proxying
+     the dead archive route to `multica_api_runtime`.
 
    Putting the `upstream` line inside a `server` block is the mistake this split
    exists to prevent: `nginx -t` fails with
-   `"upstream" directive is not allowed here`. Both files explain why the daemon
-   location must be an ordinary prefix and must keep its trailing slash. Then:
+   `"upstream" directive is not allowed here`. The locations file explains why the
+   daemon location must keep its trailing slash. Then:
 
    ```bash
    nginx -t && systemctl reload nginx
@@ -880,40 +709,39 @@ is left pointing at a process that is about to disappear:
 | File | Changed by | Restored by |
 |---|---|---|
 | `$NGINX_SITE` | A step 5 (two `location` includes) | Stage A rollback |
-| `$NGINX_ARCHIVE` | A step 5 (archive `proxy_pass`) | Stage A rollback |
 | `$NGINX_MAIN` (only if the `upstream` include went there) | A step 5 | Stage A rollback |
 | `$COMPOSE_FILE` | A step 2 (`api-runtime` service + two `api` env lines) | Full return |
 | `$COMPOSE_ENV` | A step 2 (peer URL, runtime port), B step 1 (role) | Stage B rollback (role) and Full return (stage A lines, by deletion) |
 | `/etc/multiremi/platform-updater.env` | A step 7 (list, health URL, profile) | Full return |
 
-**Stage A rollback: 2-3 file restores + 2 commands, no container recreated.**
-Restoring `$NGINX_SITE` alone is not enough: the archive include is a separate
-file, and leaving it pointed at `api-runtime` keeps large archive uploads on a
-process that Full return is about to stop.
+**Stage A rollback: 1-2 file restores + 2 commands, no container recreated.**
+Restore `$NGINX_MAIN` together with `$NGINX_SITE` whenever A step 5 edited it:
+the site file's locations name the `multica_api_runtime` upstream that
+`$NGINX_MAIN` defines, so restoring only the upstream side breaks `nginx -t`.
+A backup taken before ADR 0017 may still contain the retired `session-archive-direct`
+include, which also names that upstream; strip it from the restored file (A step 5)
+before running `nginx -t`.
 
 ```bash
 cp "$COMPOSE_DIR/backups/<date>/nginx-site.conf.orig" "$NGINX_SITE"
-cp "$COMPOSE_DIR/backups/<date>/nginx-session-archive-direct.conf.orig" "$NGINX_ARCHIVE"
 cp "$COMPOSE_DIR/backups/<date>/nginx.conf.orig" "$NGINX_MAIN"   # only if A step 5 edited it
 nginx -t
 systemctl reload nginx
 ```
 
-Then confirm both public server blocks serve the daemon surface and the archive
-path from `api` again:
+Then confirm both public server blocks serve the daemon surface from `api` again:
 
 ```bash
-# 1. Gate on the exit code FIRST. If $NGINX_ARCHIVE was not restored, the
-#    `multica_api_runtime` upstream no longer exists after $NGINX_MAIN goes back,
-#    so `nginx -t` fails outright. Checking the count first would be misleading:
+# 1. Gate on the exit code FIRST. If $NGINX_SITE was not restored, its locations
+#    still name the `multica_api_runtime` upstream, which no longer exists after
+#    $NGINX_MAIN goes back, so `nginx -t` fails outright. Checking the count first would be misleading:
 #    `nginx -T | grep -c` prints 0 (and exits 1) both when the config is clean and
 #    when it is broken, so the number alone cannot tell the two apart.
 if ! nginx -t; then echo 'NOT RESTORED: nginx config does not parse'; fi
 # 2. Only after that, count the references in the fully expanded config:
 nginx -T | grep -c multica_api_runtime || true   # 0 = no runtime references left
 
-# 3. The two file-level checks, which name the offending file directly:
-grep -n 'proxy_pass' "$NGINX_ARCHIVE"      # -> proxy_pass http://multica_api;
+# 3. The file-level check, which names the offending file directly:
 grep -n 'multica_api_runtime' "$NGINX_SITE" || echo 'site file clean'
 ```
 
@@ -922,17 +750,9 @@ harmless: with daemon traffic back on `api`, the runtime container keeps its pee
 channel open and simply reports no traffic. The Compose file is deliberately
 **not** restored here — see Full return for why.
 
-Measured in a local sandbox on nginx 1.22.1, with the snippets assembled as step
-5 describes and the archive `location` in its own include file (the layout the
-previous version of this runbook restored incompletely): the three restores plus
-`nginx -t` plus reload take about 0.015 s, and both the daemon path and the
-archive path are served by `api` again within 0.15 s across ten runs (0.03-0.14 s
-of wall time, the spread being nginx's reload window).
-Restoring only the site file, by contrast, leaves the archive path on
-`api-runtime` while the daemon path is already back on `api` - which is exactly
-the half-rolled-back state the per-file table above prevents. The one-minute
-budget is therefore dominated by the operator, not by the reload. The full
-host-level rehearsal and the formal timing are MUL-463 stage 2.
+The one-minute budget is dominated by the operator, not by the nginx reload,
+which completes well under a second. The full host-level rehearsal and the
+formal timing are MUL-463 stage 2.
 
 **Stage B rollback: 1 edit + 2 commands**, in this order.
 
@@ -1029,7 +849,7 @@ docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' \
 # Anything else is a failure: `peer: SET=<url>` means the peer channel is still
 # pointed at a container that should no longer exist.
 
-# 4. Both public server blocks route the daemon surface and the archive path to
+# 4. Both public server blocks route the daemon surface to
 #    `api` (see the stage A rollback checks above, including the nginx -t
 #    exit-code gate), and:
 docker compose --env-file "$COMPOSE_ENV" -f "$COMPOSE_FILE" --profile split \

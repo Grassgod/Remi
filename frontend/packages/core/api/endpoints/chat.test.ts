@@ -6,7 +6,7 @@ import { messageFixture, turnFixture } from "../unified.fixture";
 
 const session = {
   id: "chat-1", workspace_id: "ws-1", agent_id: "agent-1", creator_id: "user-1",
-  title: "Chat", status: "active", has_unread: true, pinned: false, unread_count: 2,
+  title: "Chat", status: "active", has_unread: true, pinned: false, origin: null, unread_count: 2,
   last_message: { content: "reply", role: "assistant", created_at: "2026-09-11T00:00:00Z" },
   created_at: "2026-09-11T00:00:00Z", updated_at: "2026-09-11T00:00:00Z",
 };
@@ -58,6 +58,22 @@ describe("ChatEndpoints contracts", () => {
     const api = endpointsWithResponse([{ ...session, status: "future-status", last_message: { ...session.last_message, role: "future-role" } }]);
     const sessions = await api.listChatSessions({ status: "all" });
     expect(sessions[0]).toMatchObject({ status: "future-status", unread_count: 2, last_message: { role: "future-role" } });
+  });
+
+  it("asks for a chat origin and reads which automation run opened a chat", async () => {
+    const origin = { autopilot_id: "ap-1", run_id: "run-1" };
+    const api = endpointsWithResponse([{ ...session, origin }]);
+    const sessions = await api.listChatSessions({ status: "all", origin: "automation" });
+    expect(sessions[0]?.origin).toEqual(origin);
+    expect(fetch).toHaveBeenCalledWith("https://api.example.test/api/chat/sessions?status=all&origin=automation", expect.anything());
+    await expect(endpointsWithResponse([{ ...session, origin: { autopilot_id: 1 } }]).listChatSessions()).rejects.toBeInstanceOf(ApiContractError);
+  });
+
+  it("treats a chat without an origin as the user's own", async () => {
+    const { origin: _origin, ...withoutOrigin } = session;
+    const sessions = await endpointsWithResponse([withoutOrigin]).listChatSessions();
+    expect(sessions[0]?.origin).toBeNull();
+    expect(fetch).toHaveBeenCalledWith("https://api.example.test/api/chat/sessions", expect.anything());
   });
 
   it("rejects wrong summary field types", async () => {

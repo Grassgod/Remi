@@ -155,6 +155,7 @@
       "links": "관련 링크",
       "open_issue": "Issue 열기",
       "open_session": "Agent 세션 열기",
+      "open_chat": "채팅 열기",
       "open_autopilot": "자동화 열기",
       "group_title": "실행 요약",
       "group_runs": "같은 날 성공 실행 {{count}}개",

@@ -7,7 +7,7 @@ import { deserializeSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { deviceRoutingRepair, placementWaitReason } from "@multiremi/store/task-wait-reason.js";
 import { canRepoolQueuedTaskPin, REPOOLABLE_QUEUED_TASK_SQL } from "@multiremi/store/repos/tasks-repo.js";
-import { createLocalStore, db, readyArchiveBinding, resetMultiremiTestEnv } from "./helpers.js";
+import { createLocalStore, db, resetMultiremiTestEnv } from "./helpers.js";
 
 afterEach(resetMultiremiTestEnv);
 
@@ -1342,9 +1342,7 @@ describe("queued task model capability waits", () => {
     const side = store.createIssueSession(issue.id, {
       title: "Side", parentSessionId: parent.id, withCode: true, holdsWorkspace: false,
     });
-    store.markIssueWorkspaceCleaned({
-      issueId: issue.id, runtimeId: a.id, ...readyArchiveBinding(store, issue.id, a.id),
-    });
+    store.reportSubjectReclaimed(a.id, { subject: { kind: "issue", id: issue.id }, snapshot: null, unsavedWork: false });
     store.reportIssueWorkspace({
       issueId: issue.id, runtimeId: b.id, rootPath: "/tmp/MUL-1", branchName: "agent/MUL-1", status: "ready", repos: [],
     });

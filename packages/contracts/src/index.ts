@@ -11,7 +11,7 @@ export * from "./messaging.js";
 export * from "./wiki-links.js";
 export * from "./model-thinking.js";
 export * from "./codex-model-catalog.js";
-export * from "./session-archive.js";
+export * from "./storage.js";
 export * from "./conversation-log.js";
 export * from "./unified-model.js";
 export * from "./issue-activity.js";

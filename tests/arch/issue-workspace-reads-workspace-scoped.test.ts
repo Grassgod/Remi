@@ -20,11 +20,9 @@ it("Issue-keyed workspace SQL has an explicit ownership predicate or a locked li
     "issue-workspaces-repo.ts:markCleanedWithinLifecycleLock": /SET status = 'cleaned'/,
     // Raw records must block moves even when their workspace is foreign (hidden).
     "issues-repo.ts:assertIssueWorkspaceMoveAllowed": /SELECT workspace_id, status, runtime_id/,
-    "issues-repo.ts:issueDeletionBlockWithinLifecycleLock": /WHERE issue_id = \? AND workspace_id = \?/,
     "issues-repo.ts:updateIssueWithinTransaction": /WHERE issue_id = \? AND status = 'cleaned'/,
-    // The hard-delete sweep follows global archive verification, not a content read.
+    // The hard-delete sweep follows the no-active-task check, not a content read.
     "issues-repo.ts:deleteIssueRowsWithinLifecycleLock": /DELETE FROM multiremi_issue_workspaces WHERE issue_id = \?/,
-    "session-archives-repo.ts:withWritableSubjectArchive": /WHERE i\.id = \? AND i\.workspace_id = \?/,
     "tasks-repo.ts:placementIssueWorkspaceSql": /issue_workspace\.workspace_id = t\.workspace_id/g,
     "tasks-repo.ts:liveIssueWorkspaceMachines": /i\.workspace_id = iw\.workspace_id/,
   };

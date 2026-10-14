@@ -8,6 +8,7 @@ import { syncRuntimeExecutionGroups, runtimeExecutionGroupId } from "@multiremi/
 import { numberAllocationLockKey } from "@multiremi/store/advisory-locks.js";
 import { advisoryXactLock } from "@multiremi/store/db/postgres.js";
 import { WorkspacesRepo } from "@multiremi/store/repos/workspaces-repo.js";
+import type { GcRunMode, GcRunRequest, GcRunStatus, StorageReport } from "@multiremi/contracts/storage.js";
 // Runtimes domain (runtime registration/lifecycle, models, and the five daemon async-request
 // families: model list, directory scan, update, local-skill list, local-skill import), extracted
 // verbatim from MultiremiStore (the facade delegates every public method here).
@@ -119,10 +120,11 @@ type PendingRequestFamily =
   | "bot_menu"
   | "local_skills"
   | "directory_scan"
+  | "gc_run"
   | "local_skill_import";
 
 const PENDING_REQUEST_FAMILIES: ReadonlySet<string> = new Set([
-  "update", "model_list", "command", "bot_menu", "local_skills", "directory_scan", "local_skill_import",
+  "update", "model_list", "command", "bot_menu", "local_skills", "directory_scan", "gc_run", "local_skill_import",
 ]);
 
 function isPendingRequestFamily(value: string): value is PendingRequestFamily {
@@ -201,6 +203,9 @@ const RUNTIME_LOCAL_SKILL_RUNNING_TIMEOUT_MS = 60 * 1000;
 const SKILL_DIRECTORY_UNSUPPORTED_ERROR = "custom skill directories are not supported; upgrade the runtime daemon";
 const RUNTIME_DIRECTORY_SCAN_PENDING_TIMEOUT_MS = 3 * 60 * 1000;
 const RUNTIME_DIRECTORY_SCAN_RUNNING_TIMEOUT_MS = 60 * 1000;
+// A reclaim round deletes whole workspaces and measures disk usage; ten minutes covers a large machine.
+const RUNTIME_GC_RUN_PENDING_TIMEOUT_MS = 10 * 60 * 1000;
+const RUNTIME_GC_RUN_RUNNING_TIMEOUT_MS = 10 * 60 * 1000;
 
 // ── async-request family specs ────────────────────────────────────────────────
 // The five knobs the shared queue template needs. Row mappers are hoisted function declarations
@@ -223,6 +228,16 @@ const DIRECTORY_SCAN_REQUESTS: RuntimeRequestSpec<MultiremiRuntimeDirectoryScanR
   pendingTimeoutError: "daemon did not respond within 3 minutes; the runtime daemon may need updating",
   runningTimeoutError: "daemon did not finish within 60 seconds",
   hydrate: toRuntimeDirectoryScanRequest,
+};
+
+const GC_RUN_REQUESTS: RuntimeRequestSpec<GcRunRequest> = {
+  table: "multiremi_runtime_gc_run_requests",
+  idPrefix: "rgc",
+  pendingTimeoutMs: RUNTIME_GC_RUN_PENDING_TIMEOUT_MS,
+  runningTimeoutMs: RUNTIME_GC_RUN_RUNNING_TIMEOUT_MS,
+  pendingTimeoutError: "daemon did not respond within 10 minutes",
+  runningTimeoutError: "daemon did not finish the reclaim round within 10 minutes",
+  hydrate: toRuntimeGcRunRequest,
 };
 
 const UPDATE_REQUESTS: RuntimeRequestSpec<MultiremiRuntimeUpdateRequest> = {
@@ -285,6 +300,7 @@ const BOT_MENU_PUBLISH_REQUESTS: RuntimeRequestSpec<MultiremiBotMenuPublishReque
 export class RuntimesRepo {
   private readonly modelListQueue: RuntimeRequestQueue<MultiremiRuntimeModelListRequest>;
   private readonly directoryScanQueue: RuntimeRequestQueue<MultiremiRuntimeDirectoryScanRequest>;
+  private readonly gcRunQueue: RuntimeRequestQueue<GcRunRequest>;
   private readonly updateQueue: RuntimeRequestQueue<MultiremiRuntimeUpdateRequest>;
   private readonly localSkillListQueue: RuntimeRequestQueue<MultiremiRuntimeLocalSkillListRequest>;
   private readonly localSkillImportQueue: RuntimeRequestQueue<MultiremiRuntimeLocalSkillImportRequest>;
@@ -293,6 +309,7 @@ export class RuntimesRepo {
   constructor(private ctx: StoreContext) {
     this.modelListQueue = new RuntimeRequestQueue(ctx.db, MODEL_LIST_REQUESTS);
     this.directoryScanQueue = new RuntimeRequestQueue(ctx.db, DIRECTORY_SCAN_REQUESTS);
+    this.gcRunQueue = new RuntimeRequestQueue(ctx.db, GC_RUN_REQUESTS);
     this.updateQueue = new RuntimeRequestQueue(ctx.db, UPDATE_REQUESTS);
     this.localSkillListQueue = new RuntimeRequestQueue(ctx.db, LOCAL_SKILL_LIST_REQUESTS);
     this.localSkillImportQueue = new RuntimeRequestQueue(ctx.db, LOCAL_SKILL_IMPORT_REQUESTS);
@@ -780,6 +797,7 @@ export class RuntimesRepo {
     // PostgreSQL intentionally has no FK cascades, and SQLite tests may have
     // FK enforcement disabled. Keep every runtime reference explicit here so
     // all delete paths have identical behavior.
+    this.ctx.taskTraces().markTaskTracesLostForRuntimes([id]);
     if (options.abandonIssueWorkspaces) {
       this.ctx.db.run(
         `UPDATE multiremi_issue_workspaces
@@ -1212,6 +1230,7 @@ export class RuntimesRepo {
         "UPDATE multiremi_issue_workspaces SET runtime_id = ?, updated_at = ? WHERE runtime_id = ?",
         [newRuntimeId, now, oldRuntimeId],
       );
+      this.ctx.taskTraces().moveTaskTracesToRuntime(oldRuntimeId, newRuntimeId);
 
       // The newly registered Runtime is authoritative for duplicate model ids;
       // preserve every non-conflicting model learned under the legacy id.
@@ -1456,6 +1475,53 @@ export class RuntimesRepo {
       );
     }
     return this.getRuntimeDirectoryScanRequest(runtimeId, requestId)!;
+  }
+
+  createRuntimeGcRunRequest(runtimeId: string, input: { mode: GcRunMode; requestedBy: string | null }): GcRunRequest {
+    return this.withPendingRequest(runtimeId, (runtime) => {
+      this.assertRuntimeOnline(runtime);
+      const id = this.gcRunQueue.nextId();
+      const now = nowIso();
+      this.ctx.db.run(
+        `INSERT INTO multiremi_runtime_gc_run_requests (
+          id, runtime_id, daemon_id, mode, status, requested_by, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, 'pending', ?, ?, ?)`,
+        [id, runtimeId, runtime.daemonId, input.mode, input.requestedBy, now, now],
+      );
+      return this.getRuntimeGcRunRequest(runtimeId, id)!;
+    });
+  }
+
+  getRuntimeGcRunRequest(runtimeId: string, requestId: string): GcRunRequest | null {
+    return this.gcRunQueue.get(runtimeId, requestId);
+  }
+
+  reportRuntimeGcRunResult(
+    runtimeId: string,
+    requestId: string,
+    input: { status: "completed" | "failed"; report: StorageReport | null; error: string | null },
+  ): GcRunRequest {
+    const current = this.getRuntimeGcRunRequest(runtimeId, requestId);
+    if (!current) throw new Error("request not found");
+    // A late result replaces a timeout: the round ran to the end and its plan is worth showing.
+    if (current.status === "completed" || current.status === "failed") return current;
+    const now = nowIso();
+    if (input.status === "completed") {
+      this.ctx.db.run(
+        `UPDATE multiremi_runtime_gc_run_requests
+         SET status = 'completed', report = ?, error = NULL, updated_at = ?
+         WHERE id = ?`,
+        [toJson(input.report), now, requestId],
+      );
+    } else {
+      this.ctx.db.run(
+        `UPDATE multiremi_runtime_gc_run_requests
+         SET status = 'failed', report = ?, error = ?, updated_at = ?
+         WHERE id = ?`,
+        [input.report ? toJson(input.report) : null, input.error ?? "reclaim round failed", now, requestId],
+      );
+    }
+    return this.getRuntimeGcRunRequest(runtimeId, requestId)!;
   }
 
   createRuntimeUpdateRequest(runtimeId: string, input: CreateRuntimeUpdateInput): MultiremiRuntimeUpdateRequest {
@@ -2028,6 +2094,8 @@ export class RuntimesRepo {
       { id: request.id, ...(request.root ? { root: request.root } : {}) });
     for (const request of this.directoryScanQueue.pending(runtimeId)) add("directory_scan", request.id,
       { id: request.id, root: request.params.root, max_depth: request.params.maxDepth, mode: request.params.mode });
+    for (const request of this.gcRunQueue.pending(runtimeId)) add("gc_run", request.id,
+      { id: request.id, mode: request.mode });
     for (const request of this.localSkillImportQueue.pending(runtimeId, 10)) add("local_skill_import", request.id,
       { id: request.id, skill_key: request.skillKey, ...(request.root ? { root: request.root } : {}) });
     for (const request of this.commandQueue.pending(runtimeId)) add("command", request.id,
@@ -2043,6 +2111,7 @@ export class RuntimesRepo {
       case "model_list": return this.modelListQueue;
       case "local_skills": return this.localSkillListQueue;
       case "directory_scan": return this.directoryScanQueue;
+      case "gc_run": return this.gcRunQueue;
       case "local_skill_import": return this.localSkillImportQueue;
       case "command": return this.commandQueue;
       case "bot_menu": return this.botMenuPublishQueue;
@@ -2260,6 +2329,7 @@ export class RuntimesRepo {
       ["command", COMMAND_REQUESTS as RuntimeRequestSpec<unknown>],
       ["local_skills", LOCAL_SKILL_LIST_REQUESTS as RuntimeRequestSpec<unknown>],
       ["local_skill_import", LOCAL_SKILL_IMPORT_REQUESTS as RuntimeRequestSpec<unknown>],
+      ["gc_run", GC_RUN_REQUESTS as RuntimeRequestSpec<unknown>],
     ];
     if (options.supportsBotMenu) families.push(["bot_menu", BOT_MENU_PUBLISH_REQUESTS as RuntimeRequestSpec<unknown>]);
     if (options.supportsDirectoryScan) families.push(["directory_scan", DIRECTORY_SCAN_REQUESTS as RuntimeRequestSpec<unknown>]);
@@ -2833,6 +2903,22 @@ function toRuntimeDirectoryScanRequest(row: Row): MultiremiRuntimeDirectoryScanR
     runStartedAt: nullableString(row.run_started_at),
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at),
+  };
+}
+
+function toRuntimeGcRunRequest(row: Row): GcRunRequest {
+  const status = String(row.status) as GcRunStatus;
+  return {
+    id: String(row.id),
+    runtime_id: String(row.runtime_id),
+    daemon_id: nullableString(row.daemon_id),
+    mode: row.mode === "run" ? "run" : "dry_run",
+    status,
+    requested_by: nullableString(row.requested_by),
+    created_at: String(row.created_at),
+    completed_at: isTerminalRuntimeRequestStatus(status) ? String(row.updated_at) : null,
+    error: nullableString(row.error),
+    report: parseJson<StorageReport | null>(row.report, null),
   };
 }
 

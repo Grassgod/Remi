@@ -161,7 +161,6 @@ const FOCUSED_PROBES: Probe[] = [
   { router: "remi-releases", method: "GET", path: () => "/api/remi/releases/latest/version", representative: true },
   { router: "runtimes", method: "GET", path: () => "/api/multiremi/runtimes", representative: true },
   { router: "scm", method: "GET", path: () => "/api/workspaces/local/scm/connections", representative: true },
-  { router: "session-archives", method: "GET", path: (r) => `/api/issues/${r.issueId}/session-archives`, representative: true },
   { router: "skills", method: "GET", path: () => "/api/multiremi/skills?workspaceId=local", representative: true },
   { router: "squads", method: "GET", path: () => "/api/multiremi/squads?workspaceId=local", representative: true },
   { router: "tasks", method: "GET", path: () => "/api/multiremi/tasks", representative: true },

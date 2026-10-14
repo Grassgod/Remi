@@ -543,6 +543,24 @@ describe("native collaboration CLI contracts", () => {
     expect(requests).toBe(0);
   });
 
+  it("lists user chats by default and forwards the requested chat origin", async () => {
+    useCliEnv();
+    const spec = specById("chat.list");
+    const queries: Array<Record<string, string>> = [];
+    globalThis.fetch = capabilityFetch(spec.id, (request) => {
+      const url = new URL(request.url);
+      expect(url.pathname).toBe("/api/chat/sessions");
+      queries.push(Object.fromEntries(url.searchParams));
+      return Response.json({ sessions: [{ id: "chat_auto", title: "Daily report · 09:00", origin: { autopilot_id: "apt_1", run_id: "run_1" } }] });
+    });
+    expect(registryFor([spec]).renderHelp(spec.path)).toContain("--origin <user|automation|all>");
+
+    await capture(() => registryFor([spec]).execute([...spec.path, "--json"]));
+    await capture(() => registryFor([spec]).execute([...spec.path, "--origin", "automation", "--json"]));
+    expect(queries[0]).not.toHaveProperty("origin");
+    expect(queries[1]).toMatchObject({ workspace_id: "ws_1", origin: "automation" });
+  });
+
   it("advertises the Project flag only for creation and rejects empty Project values", async () => {
     useCliEnv();
     let requests = 0;

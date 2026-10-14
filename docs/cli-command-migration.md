@@ -312,6 +312,30 @@ reviewing the affected Issue list. For historical records with no Runtime,
 retains local files. Records still attached to a Runtime must use deletion or
 retirement instead. `remi issue workspace <issue>` remains the read command.
 
+Daemon storage retention ([ADR 0017](adr/0017-local-records-and-recyclable-workspaces.md),
+[storage and retention](dev/storage-retention.md)) is managed with:
+
+```text
+remi workspace storage get <workspace>
+remi workspace storage set <workspace> [--ttl-ms <ms>] [--automation-ttl-ms <ms>] [--max-retained <n>]
+    [--orphan-ttl-ms <ms>] [--snapshot-max-bytes <bytes>] [--chat-idle-days <days>] [--reset <option>]
+remi runtime storage <runtime>
+remi runtime gc <runtime> [--dry-run] [--wait] [--yes]
+remi runtime gc-status <runtime> <request>
+remi automation quiet [--turn <turn>]
+```
+
+`workspace storage get` shows the effective policy and which values the workspace
+overrides; `set` sends only the options given and `--reset <option>` (repeatable)
+restores the default. `runtime storage` prints the latest storage report of the
+daemon that hosts the Runtime. `runtime gc` queues a reclaim round on that daemon:
+`--dry-run` only reports the plan, a real round requires `--yes`, and `--wait`
+polls until the round finishes and prints its report. `runtime gc-status` reads a
+request created without `--wait`. `remi automation quiet` is
+task-scoped: it marks the automation run of `MULTIREMI_TURN_ID` (or `--turn`) quiet,
+so its Chat is archived when the run completes. `remi chat list --origin
+user|automation|all` selects which Chats are listed (default: user conversations).
+
 `remi runtime prepare [--provider claude|codex]` installs this release's fixed ACP
 and Agent dependencies, verifying executables and ACP initialization without
 switching a running daemon. Without `--provider` it prepares the configured or
@@ -593,10 +617,6 @@ to remain clean, and a separately approved release change. Commands explicitly r
 | `remi issue session list` | `remi session list` | One-release compatibility alias |
 | `remi issue session result list` | `remi session result list` | One-release compatibility alias |
 | `remi issue session result publish` | `remi session result publish` | One-release compatibility alias |
-| `remi issue archive list` | `remi session archive list` | One-release compatibility alias |
-| `remi issue archive status` | `remi session archive status` | One-release compatibility alias |
-| `remi issue archive verify` | `remi session archive verify` | One-release compatibility alias |
-| `remi issue archive retry` | `remi session archive retry` | One-release compatibility alias |
 | `remi issue attachment download` | `remi attachment download` | One-release compatibility alias |
 | `remi multiremi agent list` | `remi agent list` | One-release compatibility alias |
 | `remi multiremi agent get` | `remi agent get` | One-release compatibility alias |
@@ -657,6 +677,19 @@ shapes, authenticated identities, pagination and decision replies.
 instruction changes. Execute only after reviewing its entity / field / original /
 replacement output; optimistic locking protects concurrent edits and successful
 writes record an activity. This operator script never runs at startup.
+
+## Retired in the local records release (ADR 0017)
+
+Session archives no longer exist: execution records stay on the daemon and the
+server keeps only a pointer to them. The commands below keep their Registry entries
+and raise one removal error before any network request; the matching routes
+(`/api/issues/:id/session-archives*`, `/api/workspaces/:id/session-archive`) are gone.
+
+| Retired command | Replacement |
+| --- | --- |
+| `remi session archive` (`list`, `status`, `verify`, `retry`) | `remi runtime storage <runtime>（Session 归档已取消，执行记录留在 daemon 本机）` |
+| `remi issue archive` (`list`, `status`, `verify`, `retry`) | `remi runtime storage <runtime>（Session 归档已取消，执行记录留在 daemon 本机）` |
+| `remi session config` (`get`, `update`) | `remi workspace storage get\|set <workspace>（Session 归档设置已取消，存储策略见 workspace storage）` |
 
 ## Retired in the unified model release (MUL-493)
 

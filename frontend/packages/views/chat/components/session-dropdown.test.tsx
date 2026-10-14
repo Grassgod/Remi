@@ -14,6 +14,9 @@ import enIssues from "../../locales/en/issues.json";
 
 const state = vi.hoisted(() => ({
   tasks: [] as unknown[],
+  automationSessions: undefined as unknown[] | undefined,
+  automationError: false,
+  refetch: vi.fn(),
   update: vi.fn(),
   remove: vi.fn(),
   select: vi.fn(),
@@ -33,7 +36,15 @@ vi.mock("@multiremi/core/hooks", () => ({
 vi.mock("@tanstack/react-query", () => ({
   queryOptions: (options: unknown) => options,
   infiniteQueryOptions: (options: unknown) => options,
-  useQuery: () => ({ data: { tasks: state.tasks } }),
+  useQuery: (options: { queryKey?: unknown[] }) =>
+    options.queryKey?.[2] === "sessions" && options.queryKey[4] !== undefined
+      ? {
+          data: state.automationSessions,
+          isPending: state.automationSessions === undefined && !state.automationError,
+          isError: state.automationError,
+          refetch: state.refetch,
+        }
+      : { data: { tasks: state.tasks } },
   useInfiniteQuery: () => ({ data: undefined }),
   useQueryClient: () => ({
     setQueryData: vi.fn(),
@@ -105,6 +116,7 @@ function renderDropdown(sessions: ChatSession[]) {
         sessions={sessions}
         agents={[agent]}
         activeSessionId={null}
+        activeSession={null}
         onSelectSession={vi.fn()}
       />
     </I18nProvider>,
@@ -116,6 +128,7 @@ function renderDropdown(sessions: ChatSession[]) {
           sessions={next}
           agents={[agent]}
           activeSessionId={null}
+          activeSession={null}
           onSelectSession={vi.fn()}
         />
       </I18nProvider>,
@@ -130,6 +143,8 @@ function openHistory() {
 describe("SessionDropdown history row", () => {
   beforeEach(() => {
     state.tasks = [];
+    state.automationSessions = undefined;
+    state.automationError = false;
     state.update.mockReset();
     state.remove.mockReset();
     state.select.mockReset();
@@ -175,6 +190,8 @@ describe("SessionDropdown history row", () => {
 describe("SessionDropdown management", () => {
   beforeEach(() => {
     state.tasks = [];
+    state.automationSessions = undefined;
+    state.automationError = false;
     state.update.mockReset();
     state.remove.mockReset();
     state.select.mockReset();
@@ -216,6 +233,7 @@ describe("SessionDropdown management", () => {
           sessions={[makeSession()]}
           agents={[agent]}
           activeSessionId="session-1"
+          activeSession={makeSession()}
           onSelectSession={vi.fn()}
         />
       </I18nProvider>,
@@ -245,6 +263,7 @@ it("keeps a newer selection when deletion of another conversation completes", ()
         sessions={[makeSession()]}
         agents={[agent]}
         activeSessionId="session-1"
+        activeSession={makeSession()}
         onSelectSession={vi.fn()}
         onSessionDeleted={onSessionDeleted}
       />
@@ -282,4 +301,75 @@ it("allows archiving and pinning a running conversation and displays unread coun
     expect.any(Object),
   );
   expect(screen.getByText("3")).toBeInTheDocument();
+});
+
+describe("SessionDropdown origin filter", () => {
+  beforeEach(() => {
+    state.tasks = [];
+    state.automationSessions = undefined;
+    state.automationError = false;
+    state.refetch.mockReset();
+    state.update.mockReset();
+  });
+  const automationChat = () =>
+    makeSession({
+      id: "chat-auto",
+      title: "Nightly digest",
+      origin: { autopilot_id: "ap-1", run_id: "run-1" },
+    });
+
+  it("lists only the user's own chats by default", () => {
+    renderDropdown([makeSession()]);
+    openHistory();
+    expect(screen.getByRole("button", { name: "My chats" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByText("Ship the release")).toBeInTheDocument();
+    expect(screen.queryByText("Nightly digest")).toBeNull();
+  });
+
+  it("switches to automation chats and marks them", () => {
+    state.automationSessions = [automationChat()];
+    renderDropdown([makeSession()]);
+    openHistory();
+    fireEvent.click(screen.getByRole("button", { name: "Automations" }));
+    expect(screen.getByText("Nightly digest")).toBeInTheDocument();
+    expect(screen.queryByText("Ship the release")).toBeNull();
+    expect(screen.getByLabelText("Automation")).toBeInTheDocument();
+  });
+
+  it("flags unread automation chats on the Automations filter even while viewing My chats", () => {
+    state.automationSessions = [{ ...automationChat(), has_unread: true }];
+    renderDropdown([makeSession()]);
+    openHistory();
+    expect(screen.getByRole("img", { name: "1 unread automation chat" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Automations/ })).toHaveAttribute("aria-pressed", "false");
+  });
+
+  it("does not flag automation chats that are read", () => {
+    state.automationSessions = [automationChat()];
+    renderDropdown([makeSession()]);
+    openHistory();
+    expect(screen.queryByRole("img", { name: /unread automation/ })).toBeNull();
+  });
+
+  it("skips the request when an automation chat is renamed to its current title", () => {
+    state.automationSessions = [automationChat()];
+    renderDropdown([makeSession()]);
+    openHistory();
+    fireEvent.click(screen.getByRole("button", { name: "Automations" }));
+    fireEvent.click(screen.getByRole("button", { name: "Rename chat session" }));
+    fireEvent.keyDown(screen.getByDisplayValue("Nightly digest"), { key: "Enter" });
+    expect(state.update).not.toHaveBeenCalled();
+  });
+
+  it("shows loading and a retry when the automation list cannot be read", () => {
+    renderDropdown([makeSession()]);
+    openHistory();
+    fireEvent.click(screen.getByRole("button", { name: "All" }));
+    expect(screen.getByText("Loading chats…")).toBeInTheDocument();
+    state.automationError = true;
+    fireEvent.click(screen.getByRole("button", { name: "Automations" }));
+    expect(screen.getByRole("alert")).toHaveTextContent("Could not load chats.");
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(state.refetch).toHaveBeenCalled();
+  });
 });

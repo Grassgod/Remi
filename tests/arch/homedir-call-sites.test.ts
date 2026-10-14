@@ -28,7 +28,6 @@ const HOME_CALL_LIMITS: Readonly<Record<string, number>> = {
   "packages/remi/src/core.ts": 1,
   "packages/server/src/api/helpers/uploads.ts": 1,
   "packages/server/src/config.ts": 1,
-  "packages/server/src/session-archive/service.ts": 1,
   "packages/server/src/ssh-mesh/control-plane.ts": 2,
   "packages/server/src/worker/daemon.ts": 6,
   "packages/server/src/worker/local-skills.ts": 8,

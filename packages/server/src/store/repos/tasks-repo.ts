@@ -1750,7 +1750,7 @@ export class TasksRepo {
     input={...input,id:requestId,workspaceId:agent.workspaceId};
     const sessionId=input.conversationSessionId??input.issueSessionId??input.issue_session_id??input.chatSessionId
       ??(issueId?this.ctx.issueSessions().getOrCreateDefaultIssueSessionWithinTransaction(issueId).id:null)
-      ??this.ctx.db.query('SELECT a.session_id FROM multiremi_autopilots a JOIN multiremi_autopilot_runs r ON r.autopilot_id=a.id WHERE r.turn_id=?').get(input.id)?.session_id??`auto_orphan_${requestId}`;
+      ??`auto_orphan_${requestId}`;
     if(!sessionId)throw new Error('A request must name an Issue, Chat or automation conversation');
     const issueSession=this.ctx.issueSessions().getIssueSession(sessionId);
     if((input.runtimeWorkspaceId??input.runtime_workspace_id)&&issueSession&&!issueSession.holdsWorkspace)
@@ -6463,6 +6463,8 @@ ${placementAfter.sql}
         }
         for (const recipientId of recipients) {
           if (runStatus === "completed") {
+            // A quiet run has nothing to report: its Chat is archived read instead of notifying.
+            if (run.quiet) continue;
             const outcome = wikiOutcome ? {
               kind: wikiOutcome.status === "noop" ? "no_change" as const : "changes" as const,
               headline: `Wiki ${wikiOutcome.status}`, text: wikiOutcome.reason, links: [], counts: null,
@@ -6489,6 +6491,7 @@ ${placementAfter.sql}
                 duration_seconds: durationSeconds,
                 issue_id: run.issueId,
                 issue_session_id: run.issueSessionId,
+                chat_session_id: run.chatSessionId,
                 trigger_object: triggerObject,
                 outcome,
                 ...(wikiOutcome ? { knowledge_outcome: wikiOutcome } : {}),
@@ -6519,6 +6522,7 @@ ${placementAfter.sql}
                 duration_seconds: durationSeconds,
                 issue_id: run.issueId,
                 issue_session_id: run.issueSessionId,
+                chat_session_id: run.chatSessionId,
                 trigger_object: triggerObject,
                 outcome,
                 ...(wikiOutcome ? { knowledge_outcome: wikiOutcome } : {}),
@@ -6529,6 +6533,7 @@ ${placementAfter.sql}
           }
         }
       }
+      this.ctx.autopilots().settleQuietRunWithinTransaction(runRow.id);
     }
     return { retry, delegationReturns, roundPushTasks };
   }

@@ -146,6 +146,7 @@
   "run": {
     "issue_linked": "イシューをリンク済み",
     "session_linked": "Issue Session をリンク済み",
+    "chat_linked": "チャットを開きました",
     "view_log": "実行ログを表示",
     "skipped_group": {
       "label": "スキップ済み",

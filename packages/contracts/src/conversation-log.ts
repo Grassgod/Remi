@@ -157,7 +157,7 @@ export interface ConversationLogTurnMetadata extends ConversationLogEntryMetadat
   type_histogram?: ConversationLogTypeHistogramBucket[] | null;
   usage?: TaskUsageEntry[] | null;
   model?: ConversationLogModel | null;
-  /** Pointer to the trace while it is on a daemon or inside a session archive. */
+  /** Pointer to the trace on the daemon that ran the turn. */
   trace_ref?: TraceRef | null;
   status?: MultiremiTaskStatus | null;
   elapsed_ms?: number | null;

@@ -13,6 +13,7 @@ import {
   Minimize2,
   Plus,
   LoaderCircle,
+  Zap,
 } from "lucide-react";
 import { Button } from "@multiremi/ui/components/ui/button";
 import {
@@ -38,6 +39,7 @@ import { OfflineBanner } from "./offline-banner";
 import { HumanRequestDock } from "./human-request-dock";
 import { NoAgentBanner } from "./no-agent-banner";
 import {
+  chatSessionOptions,
   chatSessionsOptions,
   pendingChatTaskOptions,
   chatKeys,
@@ -72,7 +74,7 @@ import type {
   Attachment,
 } from "@multiremi/core/types";
 import { useT } from "../../i18n";
-import { useNavigation } from "../../navigation";
+import { AppLink, useNavigation } from "../../navigation";
 import { useWorkspacePaths } from "@multiremi/core/paths";
 import { getCurrentWsId } from "@multiremi/core/platform";
 import { createSafeId } from "@multiremi/core/utils";
@@ -196,10 +198,17 @@ export function ChatWindow({
   );
   const pendingTaskId = pendingTask?.task_id ?? null;
 
-  // Archived sessions remain readable; restore them before sending.
-  const currentSession = activeSessionId
+  // Archived sessions remain readable; restore them before sending. The list
+  // holds only the user's own chats, so a chat opened by an automation run
+  // (reached from a run row or a shared link) is read by id instead.
+  const listedSession = activeSessionId
     ? sessions.find((s) => s.id === activeSessionId)
-    : null;
+    : undefined;
+  const { data: fetchedSession } = useQuery({
+    ...chatSessionOptions(wsId, activeSessionId ?? ""),
+    enabled: chatVisible && !!activeSessionId && !sessionsLoading && !listedSession,
+  });
+  const currentSession = listedSession ?? fetchedSession ?? null;
   const isSessionArchived = currentSession?.status === "archived";
 
   // New chats keep the picker: it is the only chance to choose where the
@@ -298,8 +307,7 @@ export function ChatWindow({
   // has_unread comes from the list query; WS handlers invalidate it on
   // chat:done so a reply arriving while the user watches triggers this
   // effect again and is instantly cleared.
-  const currentHasUnread =
-    sessions.find((s) => s.id === activeSessionId)?.has_unread ?? false;
+  const currentHasUnread = currentSession?.has_unread ?? false;
   useEffect(() => {
     if ((isPage ? showList : !isOpen) || !activeSessionId) return;
     if (!currentHasUnread) return;
@@ -582,6 +590,7 @@ export function ChatWindow({
             // sessions can still resolve their avatar.
             agents={agents}
             activeSessionId={activeSessionId}
+            activeSession={currentSession}
             onSelectSession={handleSelectSession}
             onSessionDeleted={() => setActiveSession(null)}
           />
@@ -640,6 +649,19 @@ export function ChatWindow({
           </div>
         )}
       </div>
+
+      {currentSession?.origin && (
+        <div className="flex min-w-0 items-center gap-2 border-b px-4 py-1.5 text-xs text-muted-foreground">
+          <Zap className="size-3.5 shrink-0" />
+          <span className="min-w-0 flex-1 truncate">{t(($) => $.window.automation_origin)}</span>
+          <AppLink
+            href={workspacePaths.autopilotDetail(currentSession.origin.autopilot_id)}
+            className="shrink-0 text-foreground underline underline-offset-2"
+          >
+            {t(($) => $.window.view_automation)}
+          </AppLink>
+        </div>
+      )}
 
       {showLocationStrip && (
         <div className="flex min-w-0 items-center border-b px-4 py-1.5">
@@ -832,6 +854,7 @@ export function ChatWindow({
                   sessions={sessions}
                   agents={agents}
                   activeSessionId={activeSessionId}
+                  activeSession={currentSession}
                   onSelectSession={handleSelectSession}
                   onSessionDeleted={() => setActiveSession(null)}
                 />

@@ -34,8 +34,10 @@ import {
   meetsDaemonMinCliVersion,
 } from "@multiremi/contracts/daemon-protocol.js";
 import type {
-  DaemonArchiveSessionsResultPayload,
-  DaemonArchiveSubject,
+  DaemonGcCheckChatSessionReply,
+  DaemonGcRunPayload,
+  DaemonGcRunResultPayload,
+  DaemonGcSubjectReclaimedPayload,
   DaemonTaskCompletionTrace,
   DaemonTraceAppendPayload,
   DaemonTracePushPayload,
@@ -186,25 +188,38 @@ describe("daemon protocol frame inventory", () => {
   });
 
   it("moves the periodic maintenance polls onto RPC frames", () => {
-    for (const name of ["gc.check_issue", "gc.check_chat_session", "gc.check_autopilot_run", "gc.check_task", "gc.workspace_cleaned"]) {
+    for (const name of ["gc.check_issue", "gc.check_chat_session", "gc.check_task", "gc.subject_reclaimed"]) {
       expect(DAEMON_UPLINK_RPC_FRAMES).toContain(name as never);
+    }
+    // Autopilot runs are Chats now, and cleanup is reported per subject.
+    for (const name of ["gc.check_autopilot_run", "gc.workspace_cleaned"]) {
+      expect(DAEMON_UPLINK_RPC_FRAMES).not.toContain(name as never);
     }
   });
 
-  it("moves session archiving onto a typed frame pair, not the shell channel", () => {
-    expect(DAEMON_DOWNLINK_EVENT_FRAMES).toContain("runtime.archive_sessions");
-    expect(DAEMON_UPLINK_EVENT_FRAMES).toContain("runtime.archive_sessions_result");
-    // The generic shell channel keeps its own frames, and archiving must not be
+  it("moves on-demand storage reclaim onto a typed frame pair, not the shell channel", () => {
+    expect(DAEMON_DOWNLINK_EVENT_FRAMES).toContain("runtime.gc_run");
+    expect(DAEMON_UPLINK_EVENT_FRAMES).toContain("runtime.gc_run_result");
+    // The generic shell channel keeps its own frames, and a reclaim run must not be
     // carried by them: `runtime.command` takes `{command, args, timeout_ms}` and
-    // the daemon executes it directly, so routing a structured archive request
-    // through it would mean remote shell execution.
+    // the daemon executes it directly, so routing a structured request through it
+    // would mean remote shell execution.
     expect(DAEMON_DOWNLINK_EVENT_FRAMES).toContain("runtime.command");
     expect(DAEMON_UPLINK_EVENT_FRAMES).toContain("runtime.command_result");
     expect(DAEMON_DOWNLINK_EVENT_FRAMES).not.toContain("pending_command" as never);
     // It is a reliable event on both sides, so it is replayed by entity id.
-    expect(daemonFrameIsReliable("runtime.archive_sessions")).toBe(true);
-    expect(daemonFrameIsReliable("runtime.archive_sessions_result")).toBe(true);
-    expect(daemonFrameUsesSeq("runtime.archive_sessions")).toBe(true);
+    expect(daemonFrameIsReliable("runtime.gc_run")).toBe(true);
+    expect(daemonFrameIsReliable("runtime.gc_run_result")).toBe(true);
+    expect(daemonFrameUsesSeq("runtime.gc_run")).toBe(true);
+  });
+
+  it("sends the storage report best effort and drops the archive frames", () => {
+    expect(DAEMON_UPLINK_BEST_EFFORT_FRAMES).toContain("gc.storage_report");
+    expect(daemonFrameCategory("gc.storage_report")).toBe("best_effort");
+    expect(daemonFrameIsReliable("gc.storage_report")).toBe(false);
+    expect(daemonFrameCategory("gc.subject_reclaimed")).toBe("rpc");
+    expect(ALL_FRAME_NAMES).not.toContain("runtime.archive_sessions" as never);
+    expect(ALL_FRAME_NAMES).not.toContain("runtime.archive_sessions_result" as never);
   });
 
   it("keeps the upgrade channel free of task traffic", () => {
@@ -327,7 +342,7 @@ describe("meetsDaemonMinCliVersion", () => {
 /**
  * The payload types are compile-time contracts, but a few of their shape rules are
  * behavioural claims that belong in a test: `closed` is always true on a completion
- * block, the histogram carries a null tool for non-tool frames, and the archive
+ * block, the histogram carries a null tool for non-tool frames, and the GC run
  * result can express failure.
  *
  * These are typed literals assembled here rather than parsed, so a field rename in
@@ -351,20 +366,18 @@ describe("payload contracts", () => {
     expect(trace.head).toBe(trace.event_count);
   });
 
-  it("expresses a failure archive result with an optional error", () => {
-    const failed: DaemonArchiveSessionsResultPayload = {
+  it("expresses a failed GC run with a null report and a reason", () => {
+    const failed: DaemonGcRunResultPayload = {
       request_id: "req_1",
+      runtime_id: "rt_1",
       status: "failed",
-      archive_ids: [],
-      error: "upload rejected",
+      report: null,
+      error: "root ownership lost",
     };
-    const ok: DaemonArchiveSessionsResultPayload = {
-      request_id: "req_1",
-      status: "completed",
-      archive_ids: ["arc_1"],
-    };
-    expect(failed.error).toBe("upload rejected");
-    expect(ok.error).toBeUndefined();
+    const request: DaemonGcRunPayload = { id: "req_1", mode: "dry_run" };
+    expect(failed.report).toBeNull();
+    expect(failed.error).toBe("root ownership lost");
+    expect(request.mode).toBe("dry_run");
   });
 
   it("carries closed on the trace frames so completeness is never inferred", () => {
@@ -379,12 +392,21 @@ describe("payload contracts", () => {
     expect([push.closed, append.closed, reply.closed, subscribe.closed]).toEqual([false, true, true, false]);
   });
 
-  it("types the archive subject kinds as the three the request table stores", () => {
-    const subjects: DaemonArchiveSubject[] = [
-      { kind: "issue", id: "i1" },
-      { kind: "chat", id: "c1" },
-      { kind: "task", id: "t1" },
+  it("types the reclaimed subject kinds and the chat check fields the daemon retains by", () => {
+    const reclaimed: DaemonGcSubjectReclaimedPayload[] = [
+      { runtime_id: "rt_1", subject: { kind: "issue", id: "iss_1" }, snapshot: null, unsaved_work: false, freed_bytes: 1 },
+      { runtime_id: "rt_1", subject: { kind: "chat", id: "chat_1" }, snapshot: null, unsaved_work: false, freed_bytes: 2 },
+      { runtime_id: "rt_1", subject: { kind: "task", id: "tsk_1" }, snapshot: null, unsaved_work: false, freed_bytes: 3 },
     ];
-    expect(subjects.map((subject) => subject.kind)).toEqual(["issue", "chat", "task"]);
+    expect(reclaimed.map((payload) => payload.subject.kind)).toEqual(["issue", "chat", "task"]);
+    const check: DaemonGcCheckChatSessionReply = {
+      ok: true,
+      status: "active",
+      updated_at: "2026-10-13T00:00:00.000Z",
+      pinned: true,
+      origin: { autopilot_id: "ap_1", run_id: "apr_1" },
+      last_activity_at: null,
+    };
+    expect(check.origin?.autopilot_id).toBe("ap_1");
   });
 });

@@ -22,7 +22,7 @@ import { registerWebhookRoutes } from "./routers/webhooks.js";
 import { registerScmWebhookRoutes } from "@multiremi/scm/router.js";
 import { registerRemiReleaseRoutes } from "./routers/remi-releases.js";
 import { registerDaemonRoutes } from "./routers/daemon.js";
-import { registerSessionArchiveRoutes } from "./routers/session-archives.js";
+import { registerStorageRoutes } from "./routers/storage.js";
 import { registerCloudRuntimeRoutes } from "./routers/cloud-runtime.js";
 import { registerCloudBillingRoutes } from "./routers/cloud-billing.js";
 import { registerMeRoutes } from "./routers/me.js";
@@ -119,7 +119,6 @@ import {
   createFeedbackOrApiError,
   createWebhookRateLimiter,
   denyCurrentUserWorkspaceAccess,
-  denyDaemonTokenAutopilotRunWorkspace,
   denyDaemonTokenChatSessionWorkspace,
   denyDaemonTokenIssueWorkspace,
   denyNonDaemonOperationalAccess,
@@ -136,8 +135,6 @@ import {
   verifyJwtToken,
   withFeedbackRequestMetadata,
 } from "./helpers.js";
-import { SessionArchiveService } from "@multiremi/session-archive/service.js";
-import { SessionArchiveReader } from "@multiremi/session-archive/reader.js";
 import { TraceReader } from "@multiremi/trace/trace-reader.js";
 import { organizerTurnStats } from "./helpers/organizer.js";
 import {
@@ -169,7 +166,6 @@ import { registerTaskInputRpcs } from "./daemon-protocol/task-input-rpcs.js";
 import { runtimeInputSnapshot } from "./daemon-protocol/runtime-input-snapshot.js";
 import { wsFrameMetricsFromHttp } from "./daemon-protocol/metrics.js";
 import { registerDaemonReportHandlers, registerDaemonMaintenanceHandlers } from "./daemon-protocol/report-handlers.js";
-import { registerSessionArchiveRequestHandlers, sessionArchiveRequestSnapshot } from "./daemon-protocol/session-archive-requests.js";
 import type { DaemonProtocolSession } from "./daemon-protocol/session.js";
 import { withRequestReadCache } from "@multiremi/store/request-read-cache.js";
 import { ScmPollingScheduler } from "@multiremi/scm/poller.js";
@@ -336,10 +332,9 @@ export interface MultiremiApiOptions {
   resolveAgentPluginGitSource?: AgentPluginGitSourceResolver;
   projectKnowledge?: ProjectKnowledgeServiceContract;
   repositoryWiki?: RepositoryWikiServiceContract;
-  sessionArchives?: SessionArchiveService;
   daemonTraceReader?: import("./trace/daemon-trace-reader.js").DaemonTraceReader;
   getOrganizerTurnStats?: (taskId: string) => import("./helpers/organizer.js").OrganizerTurnStats | null;
-  /** Absolute API origin advertised to daemons for direct archive uploads. */
+  /** Absolute API origin advertised to daemons for direct connections. */
   daemonDirectBaseUrl?: string | null;
   /** Undefined enables server-owned API polling; null explicitly disables it. */
   scmPolling?: ScmPollingScheduler | null;
@@ -467,13 +462,11 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
   const app = new Hono();
   const projectKnowledge = options.projectKnowledge ?? createProjectKnowledgeServiceFromEnv(store);
   const repositoryWiki = options.repositoryWiki ?? createRepositoryWikiServiceFromEnv(store);
-  const sessionArchives = options.sessionArchives ?? new SessionArchiveService(store);
   const traceReader = new TraceReader({
     store,
     daemon: options.daemonTraceReader ?? {
       read: async ({ runtimeId }) => ({ ok: false, code: "daemon_unreachable", runtime_id: runtimeId }),
     },
-    archive: new SessionArchiveReader({ store, root: sessionArchives.config.root }),
   });
   const messagingProviders = options.messagingProviders ?? createMessageProviderRegistry();
   // MUL-461: the process's ONE effective role. The guard middleware, the health
@@ -538,11 +531,11 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
         ?? createScmAuthenticatedAgentPluginGitSourceResolver(store, resolveAgentPluginGitSource),
     projectKnowledge,
     repositoryWiki,
-    sessionArchives,
     traceReader,
     getOrganizerTurnStats: options.getOrganizerTurnStats ?? ((taskId) => organizerTurnStats(store, taskId)),
     messagingProviders,
     daemonDirectBaseUrl,
+    startupDegradations: evaluateStartupEnv(process.env, roleConfiguration).degradations,
     verifyScmConnection: options.verifyScmConnection ?? createScmConnectionVerifier(),
     issueRetitle: options.issueRetitle ?? retitleIssue,
   };
@@ -864,15 +857,8 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
     if (denied) return denied;
     await next();
   });
-  app.use("/api/daemon/autopilot-runs/:runId/*", async (c, next) => {
-    const denied = denyDaemonTokenAutopilotRunWorkspace(c, store, c.req.param("runId"), {
-      hideForbiddenAsNotFound: isDaemonGcCheckRequest(c),
-    });
-    if (denied) return denied;
-    await next();
-  });
   registerDaemonRoutes(app, deps);
-  registerSessionArchiveRoutes(app, deps);
+  registerStorageRoutes(app, deps);
   app.get("/api/daemon/ws", (c) => c.json({
     error: "websocket upgrade required",
     enabled: realtimeState.enabled,
@@ -1125,9 +1111,6 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
   bodyHtmlBackfill?.start();
   const realtimeState = options.realtimeState ?? { enabled: true, connections: 0 };
   const authToken = options.authToken ?? process.env["MULTIREMI_TOKEN"] ?? "";
-  const sessionArchives = options.sessionArchives ?? new SessionArchiveService(store);
-  if (backgroundJobs) sessionArchives.startIssueArchivePurgeRecovery();
-  if (backgroundJobs) sessionArchives.startOrphanedArchiveFileSweep();
   const repositoryWiki = options.repositoryWiki ?? createRepositoryWikiServiceFromEnv(store);
   if (backgroundJobs) repositoryWiki.startStorageWorker?.();
   // Reads no longer probe (MUL-338 round C), so the one legacy snapshot shape that
@@ -1150,7 +1133,6 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
     liveHub,
     scheduler,
     realtimeState,
-    sessionArchives,
     messagingProviders,
     repositoryWiki,
     requestMetrics: requestMetricsOptions,
@@ -1184,8 +1166,7 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
     snapshot: function* (rt, session, activeIds, mode) {
       yield* withRequestReadCache(() => taskInputSnapshot(store, rt, session.daemonId, activeIds,
         id => downlinks.forgetTask(rt, id), daemonTurnBridge));
-      yield* withRequestReadCache(() => [...runtimeInputSnapshot(store, rt, session, mode),
-        ...sessionArchiveRequestSnapshot(store, rt)]);
+      yield* withRequestReadCache(() => runtimeInputSnapshot(store, rt, session, mode));
     } });
   registerTaskInputRpcs(daemonProtocol, store, rt => downlinks.kick(rt), daemonTurnBridge);
   const browserWebSockets: BrowserWebSocketRegistry = new Map();
@@ -1193,8 +1174,7 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
     effectiveApiRole !== "ui" && options.liveHub === undefined && options.hub === undefined
       ? createHubTraceSink(liveHub as HubImpl) : undefined);
   registerDaemonReportHandlers(daemonProtocol, store, (taskId, head, runtimeId) => daemonTrace.close(taskId, head, runtimeId), daemonTurnBridge);
-  registerDaemonMaintenanceHandlers(daemonProtocol, store, sessionArchives);
-  registerSessionArchiveRequestHandlers(daemonProtocol, store);
+  registerDaemonMaintenanceHandlers(daemonProtocol, store);
   options.onDaemonProtocol?.(daemonProtocol);
   const browserUserWebSockets: BrowserUserWebSocketRegistry = new Map();
   const streamAuth: StreamAuthReader = options.streamAuth
@@ -1447,8 +1427,6 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
     daemonProtocol.closeAll();
     daemonProtocol.stop();
     if (backgroundJobs) repositoryWiki.stopStorageWorker?.();
-    if (backgroundJobs) sessionArchives.stopIssueArchivePurgeRecovery();
-    if (backgroundJobs) sessionArchives.stopOrphanedArchiveFileSweep();
     controlPlaneSshMesh?.stop();
     // Closes the four store subscriptions and the peer channel (queue flush +
     // its timers), so a stopped server stops POSTing to its peer.

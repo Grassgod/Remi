@@ -50,6 +50,19 @@ export function formatLastSeen(lastSeenAt: string | null): string {
   return h > 0 ? `${days}d ${h}h ago` : `${days}d ago`;
 }
 
+// Binary-unit byte size for disk usage ("0 B", "512 KB", "12.5 GB").
+export function formatBytes(value: number): string {
+  if (!Number.isFinite(value) || value < 1024) return `${Math.max(0, Math.round(value || 0))} B`;
+  let scaled = value;
+  let unit = "B";
+  for (const next of ["KB", "MB", "GB", "TB"]) {
+    scaled /= 1024;
+    unit = next;
+    if (scaled < 1024) break;
+  }
+  return `${scaled >= 10 ? scaled.toFixed(0) : scaled.toFixed(1)} ${unit}`;
+}
+
 // Turns the back-end's `device_info` string ("MacBook-Pro · darwin-amd64",
 // "some-host · linux-amd64") into something humans recognise. We don't have
 // hardware model or geo data on the wire today, so we settle for an OS-aware

@@ -70,6 +70,7 @@ export interface InboxItemDetails extends Record<string, unknown> {
   agent_id?: string;
   autopilot_id?: string;
   autopilot_title?: string;
+  chat_session_id?: string | null;
   comment_id?: string;
   duration_seconds?: number;
   emoji?: string;

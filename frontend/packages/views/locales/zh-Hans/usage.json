@@ -175,7 +175,6 @@
     "scope_live": "执行记录归属",
     "scope_task_record": "历史任务记录归属",
     "scope_trace_owner": "已保存 Trace 归属",
-    "scope_archive": "Archive manifest 归属",
     "scope_unknown": "执行归属未知",
     "scope_mixed": "混合归属证据",
     "export_csv": "导出 CSV",

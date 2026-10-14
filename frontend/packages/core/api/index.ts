@@ -29,13 +29,6 @@ export type {
   RelayReasoningLevelSaveResult,
 } from "./schemas";
 export type {
-  IssueSessionArchivesResponse,
-  SessionArchive,
-  SessionArchiveRetryResponse,
-  SessionArchiveVerifyResponse,
-  WorkspaceSessionArchiveStatus,
-} from "./schemas/session-archives";
-export type {
   TaskSteerListResponse,
   TaskSteerMessage,
   TaskSteerResponse,

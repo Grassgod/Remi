@@ -2,6 +2,7 @@ import { nowIso } from "@multiremi/ids.js";
 import { nullableString, parseJson, toJson } from "@multiremi/store/helpers.js";
 import type { StoreContext } from "@multiremi/store/context.js";
 import { runtimesShareDaemon } from "@multiremi/store/runtime-affinity.js";
+import type { SubjectSnapshot } from "@multiremi/contracts/storage.js";
 import type {
   MarkIssueWorkspaceCleanedInput,
   MultiremiIssueWorkspace,
@@ -35,10 +36,22 @@ export class IssueWorkspacesRepo {
     return row ? toIssueWorkspace(row) : null;
   }
 
+  /**
+   * True when a task of the Issue ran on a runtime of the daemon. An Issue moved to another workspace
+   * keeps its tasks, so this stays the evidence that the daemon holds records for it.
+   */
+  ranOnDaemon(issueId: string, daemonId: string): boolean {
+    return this.ctx.db.query(
+      `SELECT 1 FROM multiremi_turn_execution_records t
+       JOIN multiremi_runtimes r ON r.id = t.runtime_id
+       WHERE t.issue_id = ? AND r.daemon_id = ? LIMIT 1`,
+    ).get(issueId, daemonId) != null;
+  }
+
   abandon(issueId: string, workspaceId: string): AbandonIssueWorkspaceResult {
     return this.ctx.db.transaction((): AbandonIssueWorkspaceResult => {
       this.ctx.lockWorkspaceRuntimeLifecycle(workspaceId);
-      this.ctx.lockIssueArchiveLifecycle(issueId);
+      this.ctx.lockIssueLifecycle(issueId);
       const issue = this.ctx.db.query(
         "SELECT workspace_id FROM multiremi_issues WHERE id = ?",
       ).get(issueId) as Row | null;
@@ -69,7 +82,7 @@ export class IssueWorkspacesRepo {
     const workspaceId = String(initialIssue.workspace_id ?? "local");
     const tx = this.ctx.db.transaction(() => {
       this.ctx.lockWorkspaceRuntimeLifecycle(workspaceId);
-      this.ctx.lockIssueArchiveLifecycle(input.issueId);
+      this.ctx.lockIssueLifecycle(input.issueId);
       return this.reportWithinLifecycleLock(input, workspaceId);
     });
     return tx();
@@ -85,12 +98,6 @@ export class IssueWorkspacesRepo {
     ).get(input.issueId) as Row | null;
     if (!issue || String(issue.workspace_id ?? "local") !== workspaceId) {
       throw new Error(`Issue not found: ${input.issueId}`);
-    }
-    const lifecycle = this.ctx.db.query(
-      "SELECT lifecycle_state FROM multiremi_issues WHERE id = ?",
-    ).get(input.issueId) as Row | null;
-    if (String(lifecycle?.lifecycle_state ?? "active") !== "active") {
-      throw new Error("issue workspace lifecycle is not writable");
     }
     const runtime = this.ctx.runtimes().getRuntime(input.runtimeId);
     if (!runtime) throw new Error(`Runtime not found: ${input.runtimeId}`);
@@ -139,9 +146,9 @@ export class IssueWorkspacesRepo {
          repos = excluded.repos,
          last_task_id = excluded.last_task_id,
          cleaned_at = excluded.cleaned_at,
-         cleaned_archive_id = NULL,
-         cleaned_archive_source_revision = NULL,
-         cleaned_archive_sha256 = NULL,
+         snapshot_json = NULL,
+         snapshot_at = NULL,
+         unsaved_work = 0,
          updated_at = excluded.updated_at`,
       [
         input.issueId,
@@ -161,12 +168,17 @@ export class IssueWorkspacesRepo {
     return this.get(input.issueId)!;
   }
 
-  markCleaned(input: MarkIssueWorkspaceCleanedInput): MultiremiIssueWorkspace {
+  /**
+   * The daemon reclaimed the Issue's workspace. Returns null when no workspace
+   * record of this daemon exists, which is not an error: the daemon may hold a
+   * workspace the control plane never saw.
+   */
+  markCleaned(input: MarkIssueWorkspaceCleanedInput): MultiremiIssueWorkspace | null {
     const initial = this.get(input.issueId);
-    if (!initial) throw new Error(`Issue workspace not found: ${input.issueId}`);
+    if (!initial) return null;
     const tx = this.ctx.db.transaction(() => {
       this.ctx.lockWorkspaceRuntimeLifecycle(initial.workspaceId);
-      this.ctx.lockIssueArchiveLifecycle(input.issueId);
+      this.ctx.lockIssueLifecycle(input.issueId);
       return this.markCleanedWithinLifecycleLock(input, initial.workspaceId);
     });
     return tx();
@@ -176,45 +188,23 @@ export class IssueWorkspacesRepo {
   private markCleanedWithinLifecycleLock(
     input: MarkIssueWorkspaceCleanedInput,
     workspaceId: string,
-  ): MultiremiIssueWorkspace {
+  ): MultiremiIssueWorkspace | null {
     const current = this.get(input.issueId);
-    if (!current || current.workspaceId !== workspaceId) {
-      throw new Error(`Issue workspace not found: ${input.issueId}`);
-    }
-    if (!current.runtimeId || current.runtimeId !== input.runtimeId) {
-      throw new Error("runtime does not own issue workspace");
-    }
-    const lifecycle = this.ctx.db.query(
-      "SELECT lifecycle_state FROM multiremi_issues WHERE id = ?",
-    ).get(input.issueId) as Row | null;
-    if (String(lifecycle?.lifecycle_state ?? "active") !== "active") {
-      throw new Error("issue workspace lifecycle is not writable");
-    }
-    const exactReady = this.ctx.db.query(
-      `SELECT id FROM multiremi_session_archives
-       WHERE id = ? AND issue_id = ? AND source_revision = ? AND sha256 = ?
-         AND status = 'ready'`,
-    ).get(
-      input.archiveId,
-      input.issueId,
-      input.sourceRevision,
-      input.sha256.toLowerCase(),
-    ) as Row | null;
-    if (!exactReady) {
-      throw new Error("cleaned workspace requires the exact ready session archive");
+    if (!current || current.workspaceId !== workspaceId || !current.runtimeId) return null;
+    if (current.runtimeId !== input.runtimeId && !this.runtimesShareDaemon(current.runtimeId, input.runtimeId)) {
+      return null;
     }
     const now = nowIso();
     this.ctx.db.run(
       `UPDATE multiremi_issue_workspaces
        SET status = 'cleaned', repos = '[]', cleaned_at = ?,
-           cleaned_archive_id = ?, cleaned_archive_source_revision = ?,
-           cleaned_archive_sha256 = ?, updated_at = ?
+           snapshot_json = ?, snapshot_at = ?, unsaved_work = ?, updated_at = ?
        WHERE issue_id = ?`,
       [
         now,
-        input.archiveId,
-        input.sourceRevision,
-        input.sha256.toLowerCase(),
+        input.snapshot ? toJson(input.snapshot) : null,
+        input.snapshot ? now : null,
+        input.unsavedWork ? 1 : 0,
         now,
         input.issueId,
       ],
@@ -248,9 +238,9 @@ function toIssueWorkspace(row: Row): MultiremiIssueWorkspace {
     repos: parseJson<MultiremiIssueWorkspaceRepo[]>(row.repos, []),
     lastTaskId: nullableString(row.last_task_id),
     cleanedAt: nullableString(row.cleaned_at),
-    cleanedArchiveId: nullableString(row.cleaned_archive_id),
-    cleanedArchiveSourceRevision: nullableString(row.cleaned_archive_source_revision),
-    cleanedArchiveSha256: nullableString(row.cleaned_archive_sha256),
+    snapshot: parseJson<SubjectSnapshot | null>(row.snapshot_json, null),
+    snapshotAt: nullableString(row.snapshot_at),
+    unsavedWork: Number(row.unsaved_work ?? 0) === 1,
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at),
   };

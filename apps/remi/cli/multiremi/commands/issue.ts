@@ -142,10 +142,6 @@ export async function issue(positional: string[], options: CliOptions): Promise<
     await issueSession(positional.slice(1), options);
     return;
   }
-  if (action === "archive") {
-    await issueArchive(positional.slice(1), options);
-    return;
-  }
   if (action === "metadata") {
     await issueMetadata(positional.slice(1), options);
     return;
@@ -210,7 +206,7 @@ export async function issue(positional: string[], options: CliOptions): Promise<
     printIssueSearch(await multiremiApiRequest("GET", `/api/issues/search?${params.toString()}`, undefined, options), options);
     return;
   }
-  throw new Error("usage: multiremi issue list|get|create|bind-topic|update|assign|status|delete|search|runs|run-messages|rerun|retitle|cancel-task|task|comment|session|archive|subscriber|metadata ...");
+  throw new Error("usage: multiremi issue list|get|create|bind-topic|update|assign|status|delete|search|runs|run-messages|rerun|retitle|cancel-task|task|comment|session|subscriber|metadata ...");
 }
 
 /**
@@ -245,75 +241,6 @@ export async function issueTask(positional: string[], options: CliOptions): Prom
     return;
   }
   throw new Error("usage: multiremi issue task steer|steers <task-id> ...");
-}
-
-export async function issueArchive(positional: string[], options: CliOptions): Promise<void> {
-  const action = positional[0] ?? "";
-  const issueId = positional[1]?.trim();
-  if (!issueId) {
-    throw new Error("usage: multiremi issue archive <status|list|verify|retry> <issue-id> [archive-id]");
-  }
-
-  const list = async () => multiremiApiRequest(
-    "GET",
-    `/api/issues/${encodeURIComponent(issueId)}/session-archives`,
-    undefined,
-    options,
-  );
-
-  if (action === "list") {
-    printJson(await list());
-    return;
-  }
-
-  if (action === "status") {
-    const response = await list();
-    const archives = extractList(response, "archives");
-    printJson({
-      issue_id: issueId,
-      total: archives.length,
-      ready: archives.filter((archive) => field(archive, "status") === "ready").length,
-      pending: archives.filter((archive) => field(archive, "status") === "pending").length,
-      uploading: archives.filter((archive) => field(archive, "status") === "uploading").length,
-      failed: archives.filter((archive) => field(archive, "status") === "failed").length,
-      superseded: archives.filter((archive) => field(archive, "status") === "superseded").length,
-      latest: isRecord(response) ? response.latest ?? null : null,
-      latest_ready: isRecord(response) ? response.latest_ready ?? null : null,
-    });
-    return;
-  }
-
-  if (action === "verify" || action === "retry") {
-    let archiveId = positional[2]?.trim() ?? "";
-    if (!archiveId) {
-      const response = await list();
-      if (action === "retry") {
-        const failed = extractList(response, "archives").find(
-          (archive) => field(archive, "status") === "failed",
-        );
-        archiveId = String(field(failed ?? {}, "id") ?? "");
-      } else if (isRecord(response)) {
-        const candidate = isRecord(response.latest_ready) ? response.latest_ready : null;
-        archiveId = candidate ? String(field(candidate, "id") ?? "") : "";
-      }
-    }
-    if (!archiveId) {
-      throw new Error(
-        action === "retry"
-          ? `no failed session archive found for ${issueId}`
-          : `no ready session archive found for ${issueId}`,
-      );
-    }
-    printJson(await multiremiApiRequest(
-      "POST",
-      `/api/issues/${encodeURIComponent(issueId)}/session-archives/${encodeURIComponent(archiveId)}/${action}`,
-      {},
-      options,
-    ));
-    return;
-  }
-
-  throw new Error("usage: multiremi issue archive <status|list|verify|retry> <issue-id> [archive-id]");
 }
 
 export async function issueSession(positional: string[], options: CliOptions): Promise<void> {

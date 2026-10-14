@@ -1,14 +1,16 @@
 /**
  * Persistent workspace path resolution.
  *
- * Computes the stable daemon-owned working directory for every Task surface.
- * Chat paths inherited from a provider must remain inside the daemon root.
- * Current local_directory assignments are resolved and locked separately.
+ * Computes the stable daemon-owned working directory for every Task surface:
+ * `work/<subject>` for the execution that holds the subject's workspace, and
+ * the lane generation's private work set for an Issue discussion execution. Current
+ * local_directory assignments are resolved and locked separately.
  */
 
 import { homedir } from "node:os";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { AgentTask } from "@daemon/contracts/types.js";
+import { laneForTask, laneWorkDirectory, subjectForTask, usesSharedWorkspace, workDirectory } from "./layout.js";
 
 /**
  * `ensureDir` marks a directory the daemon owns and may create.
@@ -22,35 +24,15 @@ export function resolveWorkDir(
   task: AgentTask,
   workspacesRoot = join(homedir(), ".remi", "multiremi", "workspaces"),
 ): ResolvedWorkDir {
-  if (task.chatSessionId) {
-    return {
-      workDir: task.workDir && isPathWithinWorkspacesRoot(task.workDir, workspacesRoot) ? task.workDir : join(
-        workspacesRoot,
-        "chats",
-        safePathSegment(task.chatSessionId, "chat session id"),
-      ),
-      ensureDir: true,
-    };
+  if (usesSharedWorkspace(task)) {
+    return { workDir: workDirectory(workspacesRoot, subjectForTask(task)), ensureDir: true };
   }
-  if (task.issue?.key) {
-    const issueKey = safePathSegment(task.issue.key, "issue key");
-    if (task.holdsWorkspace === false || task.holds_workspace === false) {
-      const issueSessionId = task.issueSessionId ?? task.issue_session_id;
-      if (!issueSessionId) throw new Error("discussion task requires an issue session id");
-      return {
-        workDir: join(
-          workspacesRoot,
-          "discussions",
-          issueKey,
-          safePathSegment(issueSessionId, "issue session id"),
-        ),
-        ensureDir: true,
-      };
-    }
-    return { workDir: join(workspacesRoot, "issues", issueKey), ensureDir: true };
+  const lane = laneForTask(task);
+  if (!lane) throw new Error("discussion task requires an agent");
+  if (lane.subject.kind === "issue" && !(task.issueSessionId ?? task.issue_session_id)) {
+    throw new Error("discussion task requires an issue session id");
   }
-  if (task.workDir) return { workDir: task.workDir, ensureDir: true };
-  return { workDir: join(workspacesRoot, "tasks", safePathSegment(task.id, "task id")), ensureDir: true };
+  return { workDir: laneWorkDirectory(workspacesRoot, lane), ensureDir: true };
 }
 
 /** Lexical guard; the execution resolver also checks real paths and ownership. */
@@ -58,10 +40,4 @@ export function isPathWithinWorkspacesRoot(path: string, workspacesRoot: string)
   if (!isAbsolute(path)) return false;
   const child = relative(resolve(workspacesRoot), resolve(path));
   return Boolean(child) && child !== ".." && !child.startsWith(`..${sep}`) && !isAbsolute(child);
-}
-
-function safePathSegment(value: string, label: string): string {
-  const key = value.trim().replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "");
-  if (!key || key === "." || key === "..") throw new Error(`invalid ${label} for workspace path: ${JSON.stringify(value)}`);
-  return key;
 }

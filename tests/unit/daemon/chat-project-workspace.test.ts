@@ -4,8 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentTask } from "@daemon/contracts/types.js";
 import { LocalPathLocker, resolveTaskWorkDir } from "@daemon/agent-runtime/workspace/ephemeral.js";
-import { runWorkspaceGcOnce } from "@daemon/agent-runtime/workspace/gc.js";
-import { writeTaskGcContext } from "@daemon/agent-runtime/skills/ephemeral.js";
+import { upsertSubjectRecord } from "@daemon/agent-runtime/workspace/registry.js";
 
 const roots: string[] = [];
 
@@ -56,8 +55,7 @@ describe("Project-bound Chat workspaces", () => {
     const { root, task, options } = fixture();
     const userRoot = mkdtempSync(join(tmpdir(), "remi-chat-unselected-"));
     roots.push(userRoot);
-    writeTaskGcContext(userRoot, task, { localDirectory: true });
-    const before = readFileSync(join(userRoot, ".multiremi", "gc.json"), "utf8");
+    writeFileSync(join(userRoot, "code.txt"), "keep");
     task.workDir = userRoot;
     task.sessionId = "old-provider";
     task.projectResources = [
@@ -67,10 +65,11 @@ describe("Project-bound Chat workspaces", () => {
         resourceRef: { local_path: userRoot, daemon_id: "daemon_owner" } },
     ];
     expect(await resolveTaskWorkDir(task, options)).toEqual({
-      workDir: join(root, "chats", task.chatSessionId!), localDirectory: false,
+      workDir: join(root, "work", task.chatSessionId!), localDirectory: false,
       ensureDir: true, resetSession: true,
     });
-    expect(readFileSync(join(userRoot, ".multiremi", "gc.json"), "utf8")).toBe(before);
+    expect(readFileSync(join(userRoot, "code.txt"), "utf8")).toBe("keep");
+    expect(existsSync(join(userRoot, ".multiremi"))).toBe(false);
     expect(existsSync(join(userRoot, "wiki"))).toBe(false);
     expect(existsSync(join(userRoot, ".multiremi", "wiki-base"))).toBe(false);
   });
@@ -127,7 +126,7 @@ describe("Project-bound Chat workspaces", () => {
           daemon_id: change === "daemon" ? "another-daemon" : "daemon_owner" },
       }];
       expect(await resolveTaskWorkDir(task, options)).toEqual({
-        workDir: join(root, "chats", task.chatSessionId!), localDirectory: false,
+        workDir: join(root, "work", task.chatSessionId!), localDirectory: false,
         ensureDir: true, resetSession: true,
       });
       expect(readFileSync(join(userRoot, "code.txt"), "utf8")).toBe("keep");
@@ -151,18 +150,36 @@ describe("Project-bound Chat workspaces", () => {
     resolved.release?.();
   });
 
-  it("does not adopt a marked user directory just because it lies below the daemon root", async () => {
+  it("does not adopt a user directory just because it lies below the daemon root", async () => {
     const { root, task, options } = fixture();
     const userPath = join(root, "user-directory");
     mkdirSync(userPath);
-    writeTaskGcContext(userPath, task, { localDirectory: true });
-    const before = readFileSync(join(userPath, ".multiremi", "gc.json"), "utf8");
+    writeFileSync(join(userPath, "code.txt"), "keep");
     task.workDir = userPath;
     expect(await resolveTaskWorkDir(task, options)).toMatchObject({
-      workDir: join(root, "chats", task.chatSessionId!), localDirectory: false,
+      workDir: join(root, "work", task.chatSessionId!), localDirectory: false,
       ensureDir: true, resetSession: true,
     });
-    expect(readFileSync(join(userPath, ".multiremi", "gc.json"), "utf8")).toBe(before);
+    expect(readFileSync(join(userPath, "code.txt"), "utf8")).toBe("keep");
+    expect(existsSync(join(userPath, ".multiremi"))).toBe(false);
+  });
+
+  it("does not adopt a directory under an old layout name either", async () => {
+    const { root, task, options } = fixture();
+    task.workDir = join(root, "chats", task.chatSessionId!);
+    expect(await resolveTaskWorkDir(task, options)).toMatchObject({
+      workDir: join(root, "work", task.chatSessionId!), resetSession: true,
+    });
+    expect(existsSync(join(root, "chats"))).toBe(false);
+  });
+
+  it("keeps the session when the inherited directory is the Chat's own", async () => {
+    const { root, task, options } = fixture();
+    task.workDir = join(root, "work", task.chatSessionId!);
+    task.sessionId = "existing-provider";
+    const resolved = await resolveTaskWorkDir(task, options);
+    expect(resolved).toEqual({ workDir: task.workDir, localDirectory: false, ensureDir: true });
+    expect(resolved.resetSession).toBeUndefined();
   });
 
   it("rejects inherited symlinks escaping the daemon root before creating any files", async () => {
@@ -172,52 +189,53 @@ describe("Project-bound Chat workspaces", () => {
     symlinkSync(userRoot, join(root, "alias"));
     task.workDir = join(root, "alias", "missing-child");
     expect(await resolveTaskWorkDir(task, options)).toMatchObject({
-      workDir: join(root, "chats", task.chatSessionId!), localDirectory: false,
+      workDir: join(root, "work", task.chatSessionId!), localDirectory: false,
       resetSession: true,
     });
     expect(existsSync(join(userRoot, "missing-child"))).toBe(false);
   });
 
-  it("fails closed when the fallback Chat directory is itself a user directory", async () => {
+  it("fails closed when the fallback Chat directory is itself a recorded user directory", async () => {
     const { root, task, options } = fixture();
-    const fallback = join(root, "chats", task.chatSessionId!);
+    const fallback = join(root, "work", task.chatSessionId!);
     mkdirSync(fallback, { recursive: true });
-    writeTaskGcContext(fallback, task, { localDirectory: true });
-    const before = readFileSync(join(fallback, ".multiremi", "gc.json"), "utf8");
+    writeFileSync(join(fallback, "user-code.txt"), "keep");
+    upsertSubjectRecord(root, {
+      subject: { kind: "chat", id: task.chatSessionId! }, workspace_id: "local", external_work_dir: fallback,
+    });
     task.workDir = "/old-user-directory";
     await expect(resolveTaskWorkDir(task, options)).rejects.toThrow("not daemon-owned");
-    expect(readFileSync(join(fallback, ".multiremi", "gc.json"), "utf8")).toBe(before);
+    expect(readFileSync(join(fallback, "user-code.txt"), "utf8")).toBe("keep");
+    expect(existsSync(join(fallback, ".multiremi"))).toBe(false);
   });
 
-  it("does not create a fallback below a root marked as a user directory", async () => {
+  it("keeps working when the subject record is unreadable", async () => {
     const { root, task, options } = fixture();
-    writeTaskGcContext(root, task, { localDirectory: true });
-    const before = readFileSync(join(root, ".multiremi", "gc.json"), "utf8");
-    task.workDir = root;
-    await expect(resolveTaskWorkDir(task, options)).rejects.toThrow("not daemon-owned");
-    expect(existsSync(join(root, "chats"))).toBe(false);
-    expect(readFileSync(join(root, ".multiremi", "gc.json"), "utf8")).toBe(before);
+    mkdirSync(join(root, "registry"), { recursive: true });
+    writeFileSync(join(root, "registry", `${task.chatSessionId}.json`), "{");
+    expect(await resolveTaskWorkDir(task, options)).toEqual({
+      workDir: join(root, "work", task.chatSessionId!), localDirectory: false, ensureDir: true,
+    });
   });
 
-  it("rejects linked metadata before it can overwrite a user directory's GC marker", async () => {
+  it("does not adopt inherited metadata that links out of the daemon root", async () => {
     const { root, task, options } = fixture();
     const userRoot = mkdtempSync(join(tmpdir(), "remi-chat-user-"));
     roots.push(userRoot);
     const inherited = join(root, "inherited");
     mkdirSync(inherited);
-    writeFileSync(join(userRoot, "gc.json"), '{"local_directory":false}');
     symlinkSync(userRoot, join(inherited, ".multiremi"));
     task.workDir = inherited;
     expect(await resolveTaskWorkDir(task, options)).toMatchObject({
-      workDir: join(root, "chats", task.chatSessionId!), resetSession: true,
+      workDir: join(root, "work", task.chatSessionId!), resetSession: true,
     });
-    expect(readFileSync(join(userRoot, "gc.json"), "utf8")).toBe('{"local_directory":false}');
+    expect(existsSync(join(userRoot, "task.json"))).toBe(false);
   });
 
   it("keeps the stable Chat directory when the Project has no local directory", async () => {
     const { root, task, options } = fixture();
     expect(await resolveTaskWorkDir(task, options)).toEqual({
-      workDir: join(root, "chats", "chat_project"),
+      workDir: join(root, "work", "chat_project"),
       localDirectory: false,
       ensureDir: true,
     });
@@ -235,7 +253,7 @@ describe("Project-bound Chat workspaces", () => {
     try {
       expect(resolved).toMatchObject({ workDir: localPath, localDirectory: true, ensureDir: false });
       expect(resolved.release).toBeFunction();
-      expect(existsSync(join(root, "chats", task.chatSessionId!))).toBe(false);
+      expect(existsSync(join(root, "work", task.chatSessionId!))).toBe(false);
     } finally {
       resolved.release?.();
     }
@@ -292,12 +310,12 @@ describe("Project-bound Chat workspaces", () => {
       resourceRef: { local_path: join(root, "missing"), daemon_id: "daemon_owner" },
     }];
     await expect(resolveTaskWorkDir(task, options)).rejects.toThrow("path does not exist");
-    expect(existsSync(join(root, "chats", task.chatSessionId!))).toBe(false);
+    expect(existsSync(join(root, "work", task.chatSessionId!))).toBe(false);
   });
 
-  it("preserves a user directory during GC even if it lies under the Chat root and the Chat was archived", async () => {
+  it("never treats a Project directory under the Chat's own path as daemon-owned afterwards", async () => {
     const { root, task, options } = fixture();
-    const localPath = join(root, "chats", task.chatSessionId!);
+    const localPath = join(root, "work", task.chatSessionId!);
     mkdirSync(localPath, { recursive: true });
     writeFileSync(join(localPath, "user-code.txt"), "keep this code");
     task.projectResources = [{
@@ -306,26 +324,16 @@ describe("Project-bound Chat workspaces", () => {
     }];
     const resolved = await resolveTaskWorkDir(task, options);
     try {
-      writeTaskGcContext(localPath, task, { localDirectory: resolved.localDirectory });
-      let chatChecks = 0;
-      const terminal = async () => ({ status: "completed", updated_at: "2000-01-01T00:00:00.000Z" });
-      const result = await runWorkspaceGcOnce({
-        root, ttlMs: 0, orphanTtlMs: 0,
-        client: {
-          getIssueGcCheck: terminal,
-          getTaskGcCheck: terminal,
-          getAutopilotRunGcCheck: terminal,
-          getChatSessionGcCheck: async () => {
-            chatChecks++;
-            return { status: "archived", updated_at: "2000-01-01T00:00:00.000Z" };
-          },
-        },
+      expect(resolved).toMatchObject({ workDir: localPath, localDirectory: true, ensureDir: false });
+      upsertSubjectRecord(root, {
+        subject: { kind: "chat", id: task.chatSessionId! }, workspace_id: "local", external_work_dir: localPath,
       });
-      expect(result).toEqual({ cleaned: 0, orphaned: 0, skipped: 1 });
-      expect(chatChecks).toBe(0);
-      expect(readFileSync(join(localPath, "user-code.txt"), "utf8")).toBe("keep this code");
     } finally {
       resolved.release?.();
     }
+    task.projectResources = [];
+    task.workDir = localPath;
+    await expect(resolveTaskWorkDir(task, options)).rejects.toThrow("not daemon-owned");
+    expect(readFileSync(join(localPath, "user-code.txt"), "utf8")).toBe("keep this code");
   });
 });

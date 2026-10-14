@@ -1,11 +1,10 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { mkdtempSync, mkdirSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdtempSync, mkdirSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { TraceFileStore, TRACE_FILE_MAX_EVENT_BYTES } from "@multiremi/worker/trace-file-store.js";
 import { DAEMON_WS_MAX_PAYLOAD_BYTES } from "@multiremi/contracts/daemon-protocol.js";
 import { encodeDaemonProtocolFrame, daemonFrameByteLimit } from "@multiremi/api/daemon-protocol/frames.js";
-import { prepareSessionArchive, removePreparedSessionArchive } from "@daemon/agent-runtime/workspace/session-archive.js";
 import { InMemoryTraceStore, traceEventBytes, sanitizeStoredEvent } from "@multiremi/worker/trace-store.js";
 import type { TraceEventInput } from "@multiremi/contracts/trace.js";
 import { TRACE_FILE_FORMAT } from "@multiremi/contracts/trace-file.js";
@@ -16,17 +15,18 @@ const NOW = "2026-09-27T00:00:00.000Z";
 const roots: string[] = [];
 afterEach(() => { while (roots.length) rmSync(roots.pop()!, { recursive: true, force: true }); });
 
-function fixture(sessionId: string | null = "ises_one") {
+function fixture(sessionId: string | null = "ises_one", subjectId = sessionId ? "iss_one" : "tsk_one") {
   const root = mkdtempSync(join(tmpdir(), "trace-file-store-"));
   roots.push(root);
   const warnings: string[] = [];
-  const make = () => new TraceFileStore({
+  const make = (extra: { residentClosedLimit?: number; onReadBytes?: (bytes: number) => void } = {}) => new TraceFileStore({
     workspacesRoot: root,
-    resolveTask: () => ({ sessionId, agentId: "agt_one", provider: "codex", startedAt: NOW }),
+    resolveTask: () => ({ sessionId, subjectId, agentId: "agt_one", provider: "codex", startedAt: NOW }),
     now: () => NOW,
     onWarning: (_path, reason) => warnings.push(reason),
+    ...extra,
   });
-  const path = join(root, ".runtime", sessionId ?? "tsk_one", "traces", "tsk_one.jsonl");
+  const path = join(root, "traces", subjectId, "tsk_one.jsonl");
   return { root, path, make, warnings };
 }
 
@@ -72,8 +72,8 @@ describe("TraceFileStore", () => {
     expect(store.read("tsk_one", 10).events).toHaveLength(6);
   });
 
-  it("canonicalizes recovered duplicates before closing, restarting and archiving", async () => {
-    const { make, path, root } = fixture();
+  it("canonicalizes recovered duplicates before closing and restarting", () => {
+    const { make, path } = fixture();
     const store = make(); store.append("tsk_one", [row("first"), row("second")]);
     const duplicate = { ...store.read("tsk_one").events[0], content: "duplicate" };
     writeFileSync(path, `${readFileSync(path, "utf8")}${JSON.stringify(duplicate)}\n{"seq":3`);
@@ -82,12 +82,9 @@ describe("TraceFileStore", () => {
     const next = make();
     expect(next.head("tsk_one")).toEqual({ head: 3, closed: true });
     expect(next.read("tsk_one").events.map(event => event.content)).toEqual(["first", "second", "third"]);
-    const sessionRoot = join(root, ".runtime", "ises_one");
-    mkdirSync(join(sessionRoot, ".multiremi"));
-    const prepared = await prepareSessionArchive(sessionRoot, { subject: { kind: "task", id: "tsk_one" },
-      providerRoots: [{ sessionId: "ises_one", root: sessionRoot }], storageBoundary: root });
-    expect(prepared.traceCount).toBe(1);
-    await removePreparedSessionArchive(prepared.archivePath);
+    const lines = readFileSync(path, "utf8").trimEnd().split("\n");
+    expect(lines).toHaveLength(5);
+    expect(lines.map((line) => JSON.parse(line)).filter((row) => row.seq !== undefined).map((row) => row.seq)).toEqual([1, 2, 3]);
   });
 
   it("recovers normalized strings whose JSON escaping expands beyond two MiB", () => {
@@ -113,13 +110,13 @@ describe("TraceFileStore", () => {
     const { root } = fixture();
     let bytesRead = 0;
     const make = () => new TraceFileStore({ workspacesRoot: root,
-      resolveTask: () => ({ sessionId: "ises_large", agentId: "agt", provider: "codex", runtimeId: "rt_large", startedAt: NOW }),
+      resolveTask: () => ({ sessionId: "ises_large", subjectId: "iss_large", agentId: "agt", provider: "codex", runtimeId: "rt_large", startedAt: NOW }),
       onReadBytes: bytes => { bytesRead += bytes; } });
     const original = make();
     for (let batch = 0; batch < 100; batch++) original.append("tsk_large", Array.from({ length: 100 }, () => row("x".repeat(1024))));
     original.close("tsk_large", { status: "completed", ended_at: NOW });
     const recovered = make();
-    expect(recovered.ownership().get("tsk_large")).toBe("rt_large");
+    expect(recovered.owner("tsk_large")).toBe("rt_large");
     bytesRead = 0;
     expect(recovered.read("tsk_large", 9990, 2, 4096).events.map(event => event.seq)).toEqual([9991, 9992]);
     expect(bytesRead).toBeLessThanOrEqual(64 * 1024);
@@ -222,7 +219,7 @@ describe("TraceFileStore", () => {
   it("skips corrupt files during index recovery without losing healthy tasks", () => {
     const { root, make, warnings } = fixture();
     make().append("tsk_one", [row("healthy")]);
-    const bad = join(root, ".runtime", "ises_other", "traces");
+    const bad = join(root, "traces", "iss_other");
     mkdirSync(bad, { recursive: true });
     writeFileSync(join(bad, "tsk_bad.jsonl"), "invalid header\n");
     const recovered = make();
@@ -251,7 +248,7 @@ describe("TraceFileStore", () => {
       store.append("tsk_one", [row("first")]);
       const outside = mkdtempSync(join(tmpdir(), "trace-outside-"));
       roots.push(outside);
-      const traces = join(root, ".runtime", "ises_one", "traces");
+      const traces = join(root, "traces", "iss_one");
       renameSync(traces, join(outside, "traces"));
       symlinkSync(join(outside, "traces"), traces);
       const outsideFile = join(outside, "traces", "tsk_one.jsonl");
@@ -278,6 +275,131 @@ describe("TraceFileStore", () => {
     expect(recovered.read("tsk_one").events.map((event) => event.content)).toEqual(["done"]);
     expect(JSON.parse(readFileSync(path, "utf8").trimEnd().split("\n").at(-1)!)).toEqual({
       end: { status: "completed", head: 1, event_count: 1, ended_at: NOW },
+    });
+  });
+
+  describe("lazy index", () => {
+    function writeClosedTraces(make: ReturnType<typeof fixture>["make"], count: number) {
+      const writer = make();
+      for (let i = 0; i < count; i++) {
+        writer.append(`tsk_${i}`, [row(`event ${i}`)]);
+        writer.close(`tsk_${i}`, { status: "completed", ended_at: NOW });
+      }
+    }
+
+    it("starting the store lists trace files without opening any of them", () => {
+      const { make } = fixture();
+      writeClosedTraces(make, 5);
+      let bytesRead = 0;
+      const recovered = make({ onReadBytes: (bytes) => { bytesRead += bytes; } });
+      expect(bytesRead).toBe(0);
+      expect(recovered.ownership().size).toBe(0);
+    });
+
+    it("indexes a trace the first time it is read, appended to or asked about", () => {
+      const { make } = fixture();
+      writeClosedTraces(make, 3);
+      let bytesRead = 0;
+      const recovered = make({ onReadBytes: (bytes) => { bytesRead += bytes; } });
+      expect(recovered.head("tsk_1")).toEqual({ head: 1, closed: true });
+      expect(bytesRead).toBeGreaterThan(0);
+      const afterOne = bytesRead;
+      expect(recovered.read("tsk_1").events.map((event) => event.content)).toEqual(["event 1"]);
+      expect(recovered.head("tsk_1")).toEqual({ head: 1, closed: true });
+      expect(bytesRead).toBeGreaterThanOrEqual(afterOne);
+      expect(recovered.head("never_written")).toBeNull();
+      expect(recovered.append("tsk_2", [row("late")])).toEqual({ head: 1, events: [] });
+    });
+
+    it("keeps only the most recently used closed indexes resident and re-reads an evicted one", () => {
+      const { make } = fixture();
+      writeClosedTraces(make, 5);
+      let bytesRead = 0;
+      const recovered = make({ residentClosedLimit: 2, onReadBytes: (bytes) => { bytesRead += bytes; } });
+      for (let i = 0; i < 5; i++) recovered.head(`tsk_${i}`);
+      expect(recovered.ownership().size).toBeLessThanOrEqual(2);
+      bytesRead = 0;
+      recovered.head("tsk_4");
+      expect(bytesRead).toBe(0);
+      recovered.head("tsk_0");
+      expect(bytesRead).toBeGreaterThan(0);
+      expect(recovered.read("tsk_0").events.map((event) => event.content)).toEqual(["event 0"]);
+    });
+
+    it("never evicts an open trace, however many closed ones come and go", () => {
+      const { make } = fixture();
+      writeClosedTraces(make, 4);
+      const store = make({ residentClosedLimit: 1 });
+      store.registerTask("tsk_open", { sessionId: "ises_one", subjectId: "iss_one", agentId: "agt", provider: "codex", startedAt: NOW, runtimeId: "rt_open" });
+      store.append("tsk_open", [row("live")]);
+      for (let i = 0; i < 4; i++) store.head(`tsk_${i}`);
+      expect(store.ownership().get("tsk_open")).toBe("rt_open");
+      expect(store.append("tsk_open", [row("still live")]).events.map((event) => event.seq)).toEqual([2]);
+    });
+
+    it("closing a trace makes its index evictable", () => {
+      const { make } = fixture();
+      const store = make({ residentClosedLimit: 0 });
+      store.registerTask("tsk_a", { sessionId: "ises_one", subjectId: "iss_one", agentId: "agt", provider: "codex", startedAt: NOW, runtimeId: "rt_a" });
+      store.append("tsk_a", [row("a")]);
+      expect(store.ownership().size).toBe(1);
+      store.close("tsk_a", { status: "completed", ended_at: NOW });
+      expect(store.ownership().size).toBe(0);
+      expect(store.read("tsk_a").events.map((event) => event.content)).toEqual(["a"]);
+    });
+
+    it("finds the traces a crash left open from the end of each file, indexing only those", async () => {
+      const { root, make } = fixture();
+      writeClosedTraces(make, 4);
+      const writer = make();
+      writer.registerTask("tsk_open", { sessionId: "ises_one", subjectId: "iss_one", agentId: "agt", provider: "codex", startedAt: NOW, runtimeId: "rt_open" });
+      writer.append("tsk_open", [row("live"), row("more")]);
+      // An interrupted final line is not part of the trace.
+      appendFileSync(join(root, "traces", "iss_one", "tsk_open.jsonl"), '{"seq":3,"type":"te');
+      let bytesRead = 0;
+      const recovered = make({ onReadBytes: (bytes) => { bytesRead += bytes; } });
+
+      expect([...await recovered.findUnclosed()]).toEqual([["tsk_open", "rt_open"]]);
+
+      // The closed history stayed unindexed: only the open trace was read in full.
+      expect(recovered.ownership().size).toBe(1);
+      expect(bytesRead).toBeLessThan(2048);
+      expect(recovered.append("tsk_open", [row("resumed")]).events.map((event) => event.seq)).toEqual([3]);
+    });
+
+    it("prunes the paths of files removed from disk, indexed or not", () => {
+      const { root, make } = fixture();
+      writeClosedTraces(make, 3);
+      const store = make();
+      store.head("tsk_0");
+      rmSync(join(root, "traces", "iss_one", "tsk_0.jsonl"));
+      rmSync(join(root, "traces", "iss_one", "tsk_1.jsonl"));
+      expect(store.pruneMissing().sort()).toEqual(["tsk_0", "tsk_1"]);
+      expect(store.head("tsk_0")).toBeNull();
+      expect(store.head("tsk_1")).toBeNull();
+      expect(store.head("tsk_2")).toEqual({ head: 1, closed: true });
+      expect(store.pruneMissing()).toEqual([]);
+    });
+
+    it("warns about and ignores a task id found under two subjects", () => {
+      const { root, path, make, warnings } = fixture();
+      make().append("tsk_one", [row("original")]);
+      const other = join(root, "traces", "iss_other");
+      mkdirSync(other);
+      writeFileSync(join(other, "tsk_one.jsonl"), readFileSync(path, "utf8"));
+      const recovered = make();
+      expect(warnings.some((warning) => warning.includes("duplicate task id"))).toBe(true);
+      expect(recovered.read("tsk_one").events.map((event) => event.content)).toEqual(["original"]);
+    });
+
+    it("creates traces below the subject directory and refuses an unsafe subject id", () => {
+      const { root, make } = fixture();
+      const store = make();
+      store.registerTask("tsk_x", { sessionId: "chat_1", subjectId: "chat_1", agentId: "agt", provider: "claude", startedAt: NOW });
+      store.append("tsk_x", [row("x")]);
+      expect(readFileSync(join(root, "traces", "chat_1", "tsk_x.jsonl"), "utf8")).toContain('"session_id":"chat_1"');
+      store.registerTask("tsk_y", { sessionId: "chat_1", subjectId: "../escape", agentId: "agt", provider: "claude", startedAt: NOW });
+      expect(() => store.append("tsk_y", [row("y")])).toThrow("Invalid trace subject id");
     });
   });
 });

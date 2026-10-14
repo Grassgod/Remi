@@ -471,7 +471,7 @@ describe("MultiremiTaskReportOutbox", () => {
   it("never evicts other reliable kinds or a final progress row under capacity pressure", async () => {
     const kinds: MultiremiOutboxKind[] = ["start", "prompt", "usage", "messages", "complete", "fail",
       "runtime.update_result", "runtime.command_result", "runtime.model_list_result", "runtime.local_skills_result",
-      "runtime.directory_scan_result", "runtime.local_skill_import_result", "runtime.bot_menu_result",
+      "runtime.directory_scan_result", "runtime.gc_run_result", "runtime.local_skill_import_result", "runtime.bot_menu_result",
       "feishu.outbound_result", "plugin.state"];
     let online = false;
     const delivered: MultiremiOutboxRecord[] = [];

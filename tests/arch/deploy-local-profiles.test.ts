@@ -65,7 +65,7 @@ describe("local stable and dev isolation", () => {
     expect(api.environment.MULTIREMI_DAEMON_DIRECT_BASE_URL).toContain("${REMI_DAEMON_SERVER_URL:?");
     expect(api.environment.MULTIREMI_ALLOW_PASSWORD_LOGIN).toBe("1");
     expect(api.environment.MULTIREMI_ALLOW_EMAIL_CODE_LOGIN).toBe("0");
-    for (const key of ["HOME", "MULTIREMI_UPLOAD_DIR", "MULTIREMI_SESSION_ARCHIVE_ROOT", "MULTIREMI_SSH_MESH_CONTROL_PLANE_ROOT"]) {
+    for (const key of ["HOME", "MULTIREMI_UPLOAD_DIR", "MULTIREMI_SSH_MESH_CONTROL_PLANE_ROOT"]) {
       expect(api.environment[key]).toMatch(/^\/srv\/multiremi(?:\/|$)/u);
     }
     expect(dev.services.api!.environment.MULTIREMI_BACKGROUND_JOBS).toBe("${REMI_BACKGROUND_JOBS:-0}");

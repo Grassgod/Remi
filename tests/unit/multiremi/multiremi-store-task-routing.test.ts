@@ -9,7 +9,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from "bun:test";
 import type { Database } from "bun:sqlite";
 import { MultiremiStore } from "@multiremi/store/store.js";
 import { type SqlDatabase } from "@multiremi/store/db/postgres.js";
-import { createLocalStore as createStore, createLocalStore, db, readyArchiveBinding, resetMultiremiTestEnv } from "./helpers.js";
+import { createLocalStore as createStore, createLocalStore, db, resetMultiremiTestEnv } from "./helpers.js";
 import { prepareFeishuIssueTopic } from "../../fixtures/multiremi-feishu-topic.js";
 import { MUL449_CLAIM_SQL_GOLDEN } from "../../fixtures/mul449-claim-sql-golden.js";
 import { bootstrapPreUnifiedSchema } from "@multiremi/store/migrations.js";
@@ -641,7 +641,7 @@ describe("Multiremi store — task claim, routing, and workspace scoping", () =>
     expect(store.claimTask(b.id)?.id).toBe(second.id);
   });
 
-  it("keeps normal lane inheritance when the Issue workspace was cleaned", () => {
+  it("starts the lane over, without a machine constraint, when the Issue workspace was reclaimed", () => {
     const { store, a, b, agent, issue, session } = workspaceConflictFixture(["dev-wsconf-a", "dev-wsconf-b"]);
     const first = store.createTask({
       agentId: agent.id, issueId: issue.id, issueSessionId: session.id, prompt: "first",
@@ -652,25 +652,20 @@ describe("Multiremi store — task claim, routing, and workspace scoping", () =>
     expect(store.claimTask(a.id)?.id).toBe(first.id);
     store.startTask(first.id);
     store.completeTask(first.id, { output: "ok", sessionId: "sess_wsconf_cleaned" });
-    store.markIssueWorkspaceCleaned({
-      issueId: issue.id, runtimeId: a.id, ...readyArchiveBinding(store, issue.id, a.id),
-    });
+    store.reportSubjectReclaimed(a.id, { subject: { kind: "issue", id: issue.id }, snapshot: null, unsavedWork: false });
 
-    // With no live workspace there is no machine constraint, so the lane is
-    // still resumable and must not be reset.
+    // The daemon deleted the provider home with the workspace: the lane's native
+    // session is void, and with no live workspace nothing pins the next turn to A.
+    expect(store.getSessionAgentLane(session.id, agent.id)).toMatchObject({ providerSessionId: null, generation: 2 });
     const second = store.createTask({
       agentId: agent.id, issueId: issue.id, issueSessionId: session.id, prompt: "second",
     });
-    expect(store.getTask(second.id)).toMatchObject({
-      runtimeId: a.id, sessionId: "sess_wsconf_cleaned",
-    });
+    expect(store.getTask(second.id)).toMatchObject({ runtimeId: null, sessionId: null });
     const now = Date.now();
     runTurnExecutionMutation(db!, "UPDATE multiremi_turn_execution_records SET created_at = ? WHERE id = ?", [new Date(now - 200_000).toISOString(), second.id]);
     expect(store.refreshQueuedCapabilityWaitReasons(now)).toEqual({ updated: 0, alerted: 0 });
     expect(store.getTask(second.id)?.waitReason).toBeNull();
-    expect(store.claimTask(a.id)?.id).toBe(second.id);
-    // B remains a valid fallback for later turns.
-    expect(store.getTask(second.id)?.runtimeId).not.toBe(b.id);
+    expect(store.claimTask(b.id)?.id).toBe(second.id);
   });
 
   it("does not inherit a lane that sits off the machine holding the Issue workspace", () => {
@@ -688,9 +683,7 @@ describe("Multiremi store — task claim, routing, and workspace scoping", () =>
     expect(store.getSessionAgentLane(session.id, agent.id)).toMatchObject({ runtimeId: a.id });
 
     // The workspace migrates to B: A's row is cleaned, B reports a live one.
-    store.markIssueWorkspaceCleaned({
-      issueId: issue.id, runtimeId: a.id, ...readyArchiveBinding(store, issue.id, a.id),
-    });
+    store.reportSubjectReclaimed(a.id, { subject: { kind: "issue", id: issue.id }, snapshot: null, unsavedWork: false });
     store.reportIssueWorkspace({
       issueId: issue.id, runtimeId: b.id, rootPath: "/tmp/MUL-1", branchName: "agent/MUL-1", status: "ready", repos: [],
     });
@@ -724,9 +717,7 @@ describe("Multiremi store — task claim, routing, and workspace scoping", () =>
       agentId: agent.id, issueId: issue.id, issueSessionId: session.id, prompt: "second",
     });
     expect(store.getTask(second.id)).toMatchObject({ runtimeId: a.id, sessionId: "sess_wsconf_q" });
-    store.markIssueWorkspaceCleaned({
-      issueId: issue.id, runtimeId: a.id, ...readyArchiveBinding(store, issue.id, a.id),
-    });
+    store.reportSubjectReclaimed(a.id, { subject: { kind: "issue", id: issue.id }, snapshot: null, unsavedWork: false });
     store.reportIssueWorkspace({
       issueId: issue.id, runtimeId: b.id, rootPath: "/tmp/MUL-1", branchName: "agent/MUL-1", status: "ready", repos: [],
     });
@@ -1851,14 +1842,11 @@ describe("Multiremi store — task claim, routing, and workspace scoping", () =>
       repos: [],
     });
     expect(store.getIssueWorkspace(issue.id)?.runtimeId).toBe(codex.id);
-    expect(store.markIssueWorkspaceCleaned({
-      issueId: issue.id,
-      runtimeId: codex.id,
-      ...readyArchiveBinding(store, issue.id, codex.id),
-    }).status).toBe("cleaned");
+    store.reportSubjectReclaimed(codex.id, { subject: { kind: "issue", id: issue.id }, snapshot: null, unsavedWork: false });
+    expect(store.getIssueWorkspace(issue.id)?.status).toBe("cleaned");
   });
 
-  it("rejects Issue workspace reports and cleanup from a different daemon", () => {
+  it("rejects Issue workspace reports from a different daemon and ignores its cleanup", () => {
     const store = createStore();
     const owner = store.registerRuntime({
       id: "rt_workspace_owner",
@@ -1890,13 +1878,8 @@ describe("Multiremi store — task claim, routing, and workspace scoping", () =>
       status: "in_use",
       repos: [],
     })).toThrow("runtime does not own active issue workspace");
-    const binding = readyArchiveBinding(store, issue.id, owner.id);
-    expect(() => store.markIssueWorkspaceCleaned({
-      issueId: issue.id,
-      runtimeId: foreign.id,
-      ...binding,
-    }))
-      .toThrow("runtime does not own issue workspace");
+    store.reportSubjectReclaimed(foreign.id, { subject: { kind: "issue", id: issue.id }, snapshot: null, unsavedWork: false });
+    expect(store.getIssueWorkspace(issue.id)).toMatchObject({ status: "ready", runtimeId: owner.id });
   });
 
   it("keeps Issue tasks off legacy runtimes without blocking ordinary tasks", () => {
@@ -2459,6 +2442,7 @@ describe("Multiremi store — task claim, routing, and workspace scoping", () =>
     const skillListRequest = store.createRuntimeLocalSkillListRequest(oldRuntime.id);
     const skillImportRequest = store.createRuntimeLocalSkillImportRequest(oldRuntime.id, { skillKey: "legacy-skill" });
     const directoryScanRequest = store.createRuntimeDirectoryScanRequest(oldRuntime.id, { root: "/tmp" });
+    store.markTaskTraceDaemon(task.id, oldRuntime.id);
     // Merge the old runtime id into a new one; the session metadata follows.
     const newRuntime = store.registerRuntime({
       id: "rt_merge_new",
@@ -2472,6 +2456,7 @@ describe("Multiremi store — task claim, routing, and workspace scoping", () =>
     });
     store.mergeRuntimeInto(oldRuntime.id, newRuntime.id);
     expect(store.getChatSession(session.id)?.sessionRuntimeId).toBe(newRuntime.id);
+    expect(store.getTaskTrace(task.id)).toMatchObject({ location: "daemon", runtimeId: newRuntime.id });
     expect(store.getSessionAgentLane(issueSession.id, agent.id)?.runtimeId).toBe(newRuntime.id);
     expect(store.getIssueWorkspace(issue.id)).toMatchObject({ runtimeId: newRuntime.id, status: "ready" });
     expect(store.listRuntimeModels(newRuntime.id).map((model) => ({

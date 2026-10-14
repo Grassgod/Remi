@@ -383,7 +383,9 @@ export function daemonTaskClaimResponse(
   // Re-check the live destination even when the caller retained an earlier
   // hydrated claim. Stale or unavailable bindings must not retain Project or Issue context.
   const ordinaryChat = Boolean(task.chatSessionId && store.getTaskChatExecutionKind(task) === "ordinary");
-  if (ordinaryChat) {
+  // A run_only automation's Chat keeps the scope its run was started with (a scheduled
+  // Project, a Repository Wiki build); a person's Chat only keeps its own Project.
+  if (ordinaryChat && !task.autopilotRunId) {
     const chat = store.getChatSession(task.chatSessionId!);
     const currentProject = chat?.projectId ? store.getProject(chat.projectId) : null;
     // A claim payload may have been retained across a resource mutation. Read

@@ -181,7 +181,7 @@ describe("Zadig PPE deployment", () => {
     const pod = api.spec.template.spec;
     const container = pod.containers.find(candidate => candidate.name === 'api')!;
     const paths = ['MULTIREMI_STATE_DIR', 'MULTIREMI_CONFIG', 'MULTIREMI_MIGRATION_REPORT_DIR',
-      'MULTIREMI_UPLOAD_DIR', 'MULTIREMI_SESSION_ARCHIVE_ROOT'];
+      'MULTIREMI_UPLOAD_DIR'];
     for (const name of paths) {
       const path = container.env.find(variable => variable.name === name)?.value;
       expect(path, name).toMatch(/^\/srv\/multiremi\//);

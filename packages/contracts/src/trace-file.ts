@@ -1,17 +1,12 @@
 /**
- * Contract for B's trace ownership: the on-disk per-task trace file, the server
- * pointer that says which copy is readable, and the archive request row that
- * asks a daemon to hand its copy over (MUL-402, message architecture v2-B;
- * ADR 0006).
+ * Contract for trace ownership: the on-disk per-task trace file and the server
+ * pointer that says whether it is readable (ADR 0006, ADR 0017).
  *
- * A trace has exactly one owner at a time. While hot it is a JSONL file on the
- * daemon; after archiving it lives only inside a session archive on the server
- * disk. `TraceRef` is what both the page read and the agent projects route on,
- * so the pointer states are part of the wire contract. The event schema itself
- * is `TraceEvent` in `./trace.js` (owned by MUL-401 / A-0); the file validator
+ * A trace lives only on the daemon that ran the task; the server keeps a pointer
+ * and reads through the daemon. `TraceRef` is what both the page read and the
+ * agent projects route on, so the pointer states are part of the wire contract.
+ * The event schema itself is `TraceEvent` in `./trace.js`; the file validator
  * uses that type without redefining its event fields.
- *
- * The writer lands in B3, the archive container in B4, the read routes in B5.
  */
 
 import type { TraceEvent } from "./trace.js";
@@ -22,50 +17,44 @@ export const TRACE_FILE_FORMAT = "multiremi.trace.v1";
 /**
  * Where the readable copy of a task's trace is.
  *
- * - `daemon`: hot on `runtime_id`; readable only while that daemon is online.
- * - `archive`: a member of `archive_id`, addressed by `member_path` and offset.
+ * - `daemon`: a file on `runtime_id`; readable only while that daemon is online.
  * - `none`: the task produced no process events at all, so there is nothing to read.
- * - `lost`: the daemon was retired or abandoned before archiving; unrecoverable.
- * - `backfilling`: the historical backfill has not produced the archive member yet.
+ * - `lost`: the daemon was retired or its runtime deleted; unrecoverable.
  */
-export type TraceRefLocation = "daemon" | "archive" | "none" | "lost" | "backfilling";
+export type TraceRefLocation = "daemon" | "none" | "lost";
 
-export const TRACE_REF_LOCATIONS = [
-  "daemon",
-  "archive",
-  "none",
-  "lost",
-  "backfilling",
-] as const;
+export const TRACE_REF_LOCATIONS = ["daemon", "none", "lost"] as const;
 
 /**
  * The wire shape of one `multiremi_task_traces` row.
  *
- * The archive fields are meaningful only for `location = "archive"`, and
- * `runtime_id` only for `location = "daemon"`; both are kept nullable rather
- * than modelled as a discriminated union because the row is written field by
- * field as the trace moves between owners.
+ * `runtime_id` names the daemon that holds the file and stays populated on
+ * `lost` rows so usage accounting can still attribute the task.
  */
 export interface TraceRef {
   location: TraceRefLocation;
-  /** Daemon that holds the hot copy, for `location = "daemon"`. */
   runtime_id: string | null;
-  /** Session archive row that holds the archived member, for `location = "archive"`. */
-  archive_id: string | null;
-  /** Member path inside the archive, e.g. `traces/<task_id>.jsonl`. */
-  member_path: string | null;
-  data_offset: number | null;
-  compressed_size: number | null;
-  uncompressed_size: number | null;
-  sha256: string | null;
-  /** Highest event seq in the member, from the trailer or the archive index. */
+  /** Highest event seq in the trace, from the trailer or the append stream. */
   head_seq: number | null;
   event_count: number | null;
   /** True once the trailer line exists; a hot or interrupted trace is not closed. */
   closed: boolean;
 }
 
-/** First line of `<workspacesRoot>/.runtime/<session_id>/traces/<task_id>.jsonl`. */
+/** Store form of a `TraceRef`: one `multiremi_task_traces` row. */
+export interface MultiremiTaskTrace {
+  taskId: string;
+  location: TraceRefLocation;
+  runtimeId: string | null;
+  eventCount: number | null;
+  /** Largest event seq in the trace; null when unknown. */
+  headSeq: number | null;
+  /** Whether the trace was sealed; null when unknown. */
+  closed: boolean | null;
+  updatedAt: string;
+}
+
+/** First line of `<workspacesRoot>/traces/<subject>/<task_id>.jsonl`. */
 export interface TraceFileHeader {
   format: typeof TRACE_FILE_FORMAT;
   task_id: string;
@@ -82,7 +71,7 @@ export interface TraceFileHeader {
  *
  * Header and trailer carry no `seq`: they are file framing, not events. A
  * reader treats a line with an integer `seq >= 1` as an event, so the two
- * framing lines never enter the seq axis, the live stream or the archive index.
+ * framing lines never enter the seq axis, the live stream or the trace index.
  */
 export interface TraceFileTrailer {
   end: {
@@ -199,38 +188,4 @@ export function checkTraceFileLines(
     eventCount++;
   }
   return { ok: true, value: { head, event_count: eventCount, closed, duplicate_seqs: duplicateSeqs } };
-}
-
-/**
- * Wire shape of one `multiremi_session_archive_requests` row (ADR 0006 Decision 8).
- *
- * The server writes a row when a session must be archived before its daemon copy
- * is deleted (daemon retirement, chat and one-shot task GC). The request travels
- * to the daemon as a typed WebSocket frame and the row follows the same states
- * here; `created_by` records the actor that asked, never a credential.
- */
-export type SessionArchiveRequestStatus = "pending" | "sent" | "acked" | "completed" | "failed";
-
-export const SESSION_ARCHIVE_REQUEST_STATUSES = [
-  "pending",
-  "sent",
-  "acked",
-  "completed",
-  "failed",
-] as const;
-
-/** What a request asks a daemon to archive, matching the archive subject kinds. */
-export type SessionArchiveSubjectKind = "issue" | "chat" | "task";
-
-export const SESSION_ARCHIVE_SUBJECT_KINDS = ["issue", "chat", "task"] as const;
-
-export interface SessionArchiveRequest {
-  id: string;
-  runtime_id: string;
-  subject_kind: SessionArchiveSubjectKind;
-  subject_id: string;
-  status: SessionArchiveRequestStatus;
-  created_by: string;
-  created_at: string;
-  updated_at: string;
 }

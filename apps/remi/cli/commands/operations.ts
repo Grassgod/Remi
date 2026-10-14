@@ -16,6 +16,7 @@ import {
   type CommandSpec,
 } from "../core/index.js";
 import { formatRuntimeProtocol, type RuntimeProtocolStatus } from "@multiremi/contracts/runtime-protocol";
+import type { GcRunRequest, StoragePlanItem, StorageReport, WorkspaceStorageDaemonsResponse } from "@multiremi/contracts/storage.js";
 import type { UsageReport, UsageMetrics } from "@multiremi/contracts/usage-accounting";
 import {
   INPUT_OPTIONS,
@@ -43,6 +44,7 @@ const HUMAN: readonly CliIdentity[] = ["human"];
 const HUMAN_TASK: readonly CliIdentity[] = ["human", "task"];
 const HUMAN_DAEMON: readonly CliIdentity[] = ["human", "daemon"];
 const DEPRECATED_SINCE = "0.3.0";
+const GC_RUN_WAIT_MS = 21 * 60_000;
 const ABANDON_ISSUE_WORKSPACES_OPTION: CliOptionSpec = {
   name: "abandon-issue-workspaces", type: "boolean",
   description: "Explicitly abandon active Issue workspaces and retain their local files",
@@ -73,6 +75,7 @@ export function operationsCommandSpecs(): CommandSpec[] {
     ...runtimeSpecs(),
     ...daemonSpecs(),
     ...autopilotSpecs(),
+    ...automationSpecs(),
     ...scmSpecs(),
     ...messagingSpecs(),
     ...feishuSpecs(),
@@ -138,6 +141,9 @@ function runtimeSpecs(): CommandSpec[] {
     op({ id: "runtime.release.start", path: ["runtime", "release", "start"], description: "Start a runtime update", method: "POST", apiPath: runtime("/update"), mutation: "write", auth: HUMAN, positionals: [ref("runtime")], options: INPUT_OPTIONS }),
     op({ id: "runtime.release.status", path: ["runtime", "release", "status"], description: "Get a runtime update request", method: "GET", apiPath: async (i, c) => `${await runtime("/update")(i, c)}/${encodePath(positional(i, 1, "update"))}`, auth: HUMAN_DAEMON, positionals: [ref("runtime"), ref("update")] }),
     runtimeCommandRunSpec(),
+    runtimeStorageSpec(),
+    runtimeGcSpec(),
+    runtimeGcStatusSpec(),
     op({ id: "runtime.skill.scan", path: ["runtime", "skill", "scan"], description: "Discover skills in a directory on the runtime machine", method: "POST", apiPath: runtime("/local-skills"), mutation: "write", auth: HUMAN, positionals: [ref("runtime")],
       options: [...INPUT_OPTIONS, { name: "root", type: "string", valueName: "directory", description: "Absolute or ~/ directory on the runtime; defaults to the provider's skill directory" }],
       body: i => requestBody(i, { root: stringOption(i, "root") ?? undefined }) }),
@@ -243,6 +249,161 @@ function runtimeSpecs(): CommandSpec[] {
       },
     };
   }
+}
+
+function runtimeStorageSpec(): CommandSpec {
+  return {
+    id: "runtime.storage",
+    path: ["runtime", "storage"],
+    description: "Show the latest storage report of the daemon hosting a runtime",
+    capability: "runtime.storage",
+    auth: HUMAN,
+    mutation: "read",
+    outputs: ["table", "json", "jsonl"],
+    positionals: [ref("runtime")],
+    options: commandOptions(PAGE_OPTIONS),
+    run: async (invocation) => {
+      const client = await clientFor(invocation);
+      const runtimeId = await resolveRuntimeId(client, invocation, positional(invocation, 0, "runtime"));
+      const response = await client.request<WorkspaceStorageDaemonsResponse>({
+        method: "GET",
+        path: `/api/workspaces/${encodePath(requiredWorkspace(invocation))}/storage/daemons`,
+      });
+      const daemon = response.data.daemons.find((entry) => entry.runtime_ids.includes(runtimeId));
+      if (!daemon) throw new CliError("not_found", `no daemon reports storage for runtime ${runtimeId}`);
+      if (outputMode(invocation) !== "table") {
+        new CliRenderer().render(daemon, { mode: outputMode(invocation) });
+        return;
+      }
+      console.log(`Daemon: ${daemon.name} (${daemon.daemon_id}) ${daemon.online ? "online" : "offline"}`);
+      if (!daemon.report) {
+        console.log("No storage report yet.");
+        return;
+      }
+      console.log(`Reported: ${daemon.reported_at ?? "-"}`);
+      renderStorageReport(daemon.report);
+    },
+  };
+}
+
+function runtimeGcSpec(): CommandSpec {
+  return {
+    id: "runtime.gc",
+    path: ["runtime", "gc"],
+    description: "Run a storage reclaim round on the daemon hosting a runtime; --dry-run only reports the plan",
+    capability: "runtime.gc",
+    auth: HUMAN,
+    mutation: "write",
+    outputs: ["table", "json", "jsonl"],
+    positionals: [ref("runtime")],
+    options: commandOptions([
+      { name: "dry-run", type: "boolean", description: "Report what would be reclaimed without changing anything" },
+      { name: "wait", type: "boolean", description: "Wait for the round to finish and print its report" },
+    ], [YES_OPTION]),
+    run: async (invocation) => {
+      const dryRun = booleanOption(invocation, "dry-run") === true;
+      if (!dryRun && invocation.options.yes !== true) {
+        throw new CliError("usage", "runtime gc reclaims ended workspaces; pass --dry-run to preview or --yes to confirm");
+      }
+      const client = await clientFor(invocation);
+      const runtimeId = await resolveRuntimeId(client, invocation, positional(invocation, 0, "runtime"));
+      const base = `/api/runtimes/${encodePath(runtimeId)}/gc-runs`;
+      const created = (await client.request<{ request: GcRunRequest }>({
+        method: "POST",
+        path: base,
+        body: { mode: dryRun ? "dry_run" : "run" },
+      })).data.request;
+      if (booleanOption(invocation, "wait") !== true) {
+        renderGcRun(invocation, created);
+        return;
+      }
+      const controller = new AsyncOperationController<GcRunRequest>({
+        status: async (id) => (await client.request<{ request: GcRunRequest }>({
+          method: "GET",
+          path: `${base}/${encodePath(id)}`,
+        })).data.request,
+        cancel: async () => {
+          throw new CliError("usage", "storage GC runs cannot be cancelled from this CLI version");
+        },
+        state: (request) => request.status,
+        terminalStates: ["completed", "failed", "timeout"],
+        successStates: ["completed"],
+        failureDetails: (request) => request,
+      });
+      // The server times out a request after ten minutes pending plus ten minutes running; wait slightly longer to read that verdict.
+      renderGcRun(invocation, await controller.wait(created.id, { timeoutMs: GC_RUN_WAIT_MS, pollIntervalMs: 1_000 }));
+    },
+  };
+}
+
+function runtimeGcStatusSpec(): CommandSpec {
+  return {
+    id: "runtime.gc-status",
+    path: ["runtime", "gc-status"],
+    description: "Show a storage reclaim request created by runtime gc",
+    capability: "runtime.gc-status",
+    auth: HUMAN,
+    mutation: "read",
+    outputs: ["table", "json", "jsonl"],
+    positionals: [ref("runtime"), ref("request")],
+    options: commandOptions(PAGE_OPTIONS),
+    run: async (invocation) => {
+      const client = await clientFor(invocation);
+      const runtimeId = await resolveRuntimeId(client, invocation, positional(invocation, 0, "runtime"));
+      const response = await client.request<{ request: GcRunRequest }>({
+        method: "GET",
+        path: `/api/runtimes/${encodePath(runtimeId)}/gc-runs/${encodePath(positional(invocation, 1, "request"))}`,
+      });
+      renderGcRun(invocation, response.data.request);
+    },
+  };
+}
+
+function renderGcRun(invocation: CommandInvocation, request: GcRunRequest): void {
+  if (outputMode(invocation) !== "table") {
+    new CliRenderer().render(request, { mode: outputMode(invocation) });
+    return;
+  }
+  console.log(`GC run ${request.id}: ${request.mode} ${request.status}`);
+  if (request.report) renderStorageReport(request.report);
+}
+
+function renderStorageReport(report: StorageReport): void {
+  console.log(`Root: ${report.root}`);
+  console.log(`Round: ${report.mode} at ${report.generated_at}`);
+  const { bytes, subjects } = report;
+  console.log(bytes
+    ? `Disk: work ${formatBytes(bytes.work)}, env ${formatBytes(bytes.env)}, traces ${formatBytes(bytes.traces)}, shared ${formatBytes(bytes.shared)}, legacy ${formatBytes(bytes.legacy)} (measured ${report.bytes_measured_at ?? "at an unknown time"})`
+    : "Disk: not measured yet");
+  console.log(`Subjects: ${subjects.total} total, ${subjects.active} active, ${subjects.ended} ended, ${subjects.reclaimed} reclaimed`);
+  const retained = Object.entries(report.retained).map(([reason, count]) => `${reason} ${count}`).join(", ");
+  if (retained) console.log(`Retained: ${retained}`);
+  console.log(`This round: reclaimed ${report.reclaimed_this_round}, forgotten ${report.forgotten_this_round}, freed ${formatBytes(report.freed_bytes)}`);
+  for (const error of report.errors) console.log(`Error: ${error.subject_id ?? "-"}: ${error.message}`);
+  if (!report.plan.length) return;
+  console.log("");
+  new CliRenderer().render<StoragePlanItem>(report.plan, {
+    mode: "table",
+    columns: [
+      { header: "SUBJECT", value: (item) => item.subject.id, maxWidth: 40 },
+      { header: "KIND", value: (item) => item.subject.kind },
+      { header: "ACTION", value: (item) => item.action },
+      { header: "REASON", value: (item) => item.reason },
+      { header: "SIZE", value: (item) => item.bytes === null ? null : formatBytes(item.bytes) },
+      { header: "UNSAVED", value: (item) => item.unsaved_work ? "yes" : "no" },
+    ],
+  });
+}
+
+function formatBytes(bytes: number): string {
+  const units = ["B", "KiB", "MiB", "GiB", "TiB"];
+  let value = bytes;
+  let unit = 0;
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024;
+    unit += 1;
+  }
+  return `${unit === 0 ? value : value.toFixed(1)} ${units[unit]}`;
 }
 
 function daemonSpecs(): CommandSpec[] {
@@ -351,6 +512,28 @@ function autopilotSpecs(): CommandSpec[] {
     op({ id: "autopilot.trigger.set-secret", path: ["autopilot", "trigger", "set-secret"], description: "Set a webhook signing secret", method: "PUT", apiPath: async (i, c) => `${await base(i, c)}/triggers/${encodePath(positional(i, 1, "trigger"))}/signing-secret`, mutation: "write", auth: HUMAN, positionals: [ref("autopilot"), ref("trigger")], options: INPUT_OPTIONS }),
     op({ id: "autopilot.scheduler", path: ["autopilot", "scheduler"], description: "Get scheduler state", method: "GET", apiPath: "/api/multiremi/scheduler", auth: HUMAN }),
   ];
+}
+
+function automationSpecs(): CommandSpec[] {
+  return [
+    group("automation", "Report the outcome of the automation run this task belongs to"),
+    op({
+      id: "automation.quiet",
+      path: ["automation", "quiet"],
+      description: "Mark this automation run quiet when it has nothing worth reporting; its Chat is archived once the run completes",
+      method: "POST",
+      apiPath: (i) => `/api/turns/${encodePath(quietTurnId(i))}/automation/quiet`,
+      mutation: "write",
+      auth: HUMAN_TASK,
+      options: [{ name: "turn", type: "string", valueName: "turn", description: "Turn of the automation run; defaults to MULTIREMI_TURN_ID" }],
+    }),
+  ];
+}
+
+function quietTurnId(invocation: CommandInvocation): string {
+  const turn = stringOption(invocation, "turn") ?? process.env.MULTIREMI_TURN_ID?.trim();
+  if (!turn) throw new CliError("usage", "automation quiet needs MULTIREMI_TURN_ID (set inside a task run) or --turn <turn>");
+  return turn;
 }
 
 /**

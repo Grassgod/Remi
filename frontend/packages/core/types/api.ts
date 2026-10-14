@@ -309,8 +309,8 @@ export interface SharedTaskTracePage {
   head: number;
   eof: boolean;
   closed: boolean;
-  source: "daemon" | "archive" | null;
-  state: "ok" | "unreachable" | "not_found" | "backfilling" | "lost";
+  source: "daemon" | null;
+  state: "ok" | "unreachable" | "not_found" | "lost";
   runtime_name?: string | null;
   reason?: string;
   retryable?: boolean;

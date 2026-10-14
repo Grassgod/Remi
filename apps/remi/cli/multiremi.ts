@@ -447,7 +447,7 @@ export function instantiateCoResidentWorkerDaemons(
   options: MultiremiDaemonOptions[],
 ): MultiremiDaemon[] {
   // Claude and Codex are separate daemon instances but their provider
-  // lifecycle and GC must cross the same archive-and-delete barrier.
+  // lifecycle and reclaim must cross the same workspace lifecycle barrier.
   const issueWorkspaceLifecycleLocker = options[0]?.issueWorkspaceLifecycleLocker
     ?? new IssueWorkspaceLifecycleLocker();
   const cliUpdateCoordinator = options.length > 1
@@ -476,7 +476,7 @@ export function instantiateCoResidentWorkerDaemons(
       issueWorkspaceLifecycleLocker,
       ...(cliUpdateCoordinator ? { cliUpdateCoordinator } : {}),
       // Provider lanes share one Issue workspace tree. A single lane owns its
-      // periodic GC so Claude and Codex cannot duplicate the same archive and
+      // periodic GC so Claude and Codex cannot duplicate the same reclaim and
       // repository maintenance pass inside one Bun process.
       gcEnabled: index === gcLeaderIndex ? daemonOptions.gcEnabled : false,
       supervisorReady: () =>
@@ -586,7 +586,7 @@ async function runDaemonForeground(options: CliOptions, programName: string): Pr
       await Promise.all(running);
     } catch (error) {
       // Promise.all returns on the first provider failure. Keep ownership until
-      // every co-resident provider has drained its tasks and archive/GC pass.
+      // every co-resident provider has drained its tasks and reclaim/GC pass.
       stopAll();
       await Promise.allSettled(running);
       throw error;

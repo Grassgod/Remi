@@ -107,6 +107,7 @@
       "impact_tasks_other": "{{count}} 件の待機中 task を共有プールに戻す",
       "impact_sessions_other": "{{count}} 個の provider セッションをリセットし、次回実行時に再作成",
       "impact_tokens_other": "{{count}} 個の daemon token を失効",
+      "impact_traces_other": "{{count}} 件の試行の実行記録が閲覧できなくなります",
       "runtimes_title": "ホスト中のランタイム",
       "acknowledge": "この daemon ID とアクセストークンが無効になり、対象マシン上の daemon プロセスも停止する必要があることを理解しました。",
       "plan_changed": "daemon の作業状況が変わりました。更新された影響を確認してから再度承認してください。",
@@ -716,5 +717,90 @@
     "save": "保存",
     "saved": "実行グループを更新しました",
     "failed": "実行グループを更新できませんでした"
+  },
+  "storage": {
+    "card_aria": "{{name}} のストレージ",
+    "online": "オンライン",
+    "offline": "オフライン",
+    "reported_at": "{{time}}に報告",
+    "no_report": "このマシンからはまだストレージレポートが届いていません。",
+    "not_measured": "ディスク使用量はまだ計測されていません。",
+    "bytes_measured": "{{time}}に計測",
+    "bytes_title": "ディスク使用量",
+    "bytes": {
+      "work": "ワークスペース",
+      "env": "実行環境",
+      "traces": "記録",
+      "shared": "共有キャッシュ",
+      "legacy": "旧レイアウト"
+    },
+    "subjects_title": "Issue とチャット",
+    "subjects": {
+      "total": "合計",
+      "active": "アクティブ",
+      "ended": "終了",
+      "reclaimed": "回収済み"
+    },
+    "retained_title": "保持されている理由",
+    "reasons": {
+      "running": "実行中",
+      "pinned": "ピン留め",
+      "not_ended": "未終了",
+      "within_ttl": "保持期間内",
+      "external_dir": "ローカルディレクトリ",
+      "snapshot_failed": "スナップショット失敗",
+      "git_check_failed": "Git 確認に失敗",
+      "server_unreachable": "サーバーに到達できません",
+      "legacy_retained": "旧レイアウトの worktree",
+      "error": "エラー",
+      "ended_ttl": "保持期間超過",
+      "over_cap": "保持数の上限超過",
+      "orphan": "サーバーで削除済み"
+    },
+    "last_round": "直近のラウンド",
+    "modes": {
+      "periodic": "定期",
+      "dry_run": "ドライラン",
+      "run": "回収"
+    },
+    "last_round_summary": "解放 {{size}} · 回収 {{reclaimed}} 件 · 破棄 {{forgotten}} 件",
+    "errors_title_other": "{{count}} 件のエラー",
+    "dry_run": "ドライラン",
+    "running_dry_run": "ドライラン中…",
+    "reclaim_now": "今すぐ回収",
+    "running_reclaim": "回収中…",
+    "offline_hint": "ストレージ保守を実行するにはマシンがオンラインである必要があります。",
+    "run_failed": "ストレージの実行に失敗しました",
+    "reclaim_confirm_title": "{{name}} のストレージを回収しますか？",
+    "reclaim_confirm_description": "保持期間を過ぎた終了済みの Issue とチャットのワークスペースを削除します。未保存の作業は先にスナップショットとして保存され、再開時に復元されます。サーバー上で既に削除された Issue とチャットのデータは、実行記録を含めて一緒に削除されます。",
+    "cancel": "キャンセル",
+    "plan_title": {
+      "periodic": "直近のラウンドの項目",
+      "dry_run": "ドライラン: 回収で行われる内容",
+      "run": "回収結果"
+    },
+    "plan": {
+      "subject": "項目",
+      "action": "操作",
+      "reason": "理由",
+      "size": "サイズ",
+      "unsaved": "未保存の作業",
+      "unsaved_saved": "スナップショットに保存",
+      "unsaved_will_save": "スナップショットに保存予定",
+      "unsaved_kept": "そのまま保持",
+      "truncated": "{{total}} 件中、先頭の {{count}} 件を表示しています。"
+    },
+    "actions": {
+      "reclaim": "回収",
+      "forget": "破棄",
+      "keep": "保持"
+    },
+    "subject_kinds": {
+      "issue": "Issue",
+      "chat": "チャット",
+      "task": "タスク"
+    },
+    "load_failed": "ストレージレポートを読み込めませんでした",
+    "retry": "再試行"
   }
 }

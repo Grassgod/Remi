@@ -60,7 +60,6 @@ export function unifiedModelPreflight(db: SqlDatabase): UnifiedMigrationCheck[] 
     ["unconsumed_steer", "multiremi_task_steer_messages", `consumed_at IS NULL AND NOT EXISTS
       (SELECT 1 FROM multiremi_tasks t WHERE t.id=multiremi_task_steer_messages.task_id
         AND t.status IN ('completed','failed','cancelled'))`],
-    ["running_trace_backfill_groups", "multiremi_trace_backfill_progress", "status = 'running'"],
     ["undrained_tasks", "multiremi_tasks", "status IN ('running', 'dispatched')"],
   ].map(([name, table, where]) => {
     const n = count(db, table!, where!);

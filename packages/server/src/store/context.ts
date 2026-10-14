@@ -19,12 +19,7 @@ import { cleanOptionalString, nullableString, parseJson, toJson } from "@multire
 import { createLogger } from "@shared/logger.js";
 import { INBOX_ROUTING, inboxRouteFor } from "@multiremi/store/inbox-routing.js";
 import { markRequestReadCacheLockTaken } from "@multiremi/store/request-read-cache.js";
-import type { MultiremiTaskTrace } from "@multiremi/contracts/session-archive.js";
-import type {
-  TaskTraceArchivePointer,
-  TaskTracePointerSource,
-  TaskTracePointerWriteResult,
-} from "@multiremi/store/repos/task-traces-repo.js";
+import type { MultiremiTaskTrace } from "@multiremi/contracts/trace-file.js";
 import type { TaskMessageFanoutSubject } from "@multiremi/contracts/task-message-fanout.js";
 export type { TaskMessageFanoutSubject } from "@multiremi/contracts/task-message-fanout.js";
 import type {
@@ -563,7 +558,8 @@ export interface AutopilotsSurface {
   getAutopilot(id: string): MultiremiAutopilot | null;
   listAutopilots(workspaceId?: string | null): MultiremiAutopilot[];
   listAutopilotTriggers(autopilotId: string): MultiremiAutopilotTrigger[];
-  getAutopilotRun(id: string): MultiremiAutopilotRun | null;
+  getAutopilotRun(id: string): import("@multiremi/store/repos/autopilots-repo.js").MultiremiAutopilotRunRecord | null;
+  settleQuietRunWithinTransaction(runId: string): void;
   runAutopilot(autopilotId: string, input?: import("@multiremi/contracts/types.js").RunAutopilotInput): MultiremiAutopilotRun;
   enqueueIssueStatusChangedEvent(input: {
     issue: MultiremiIssue;
@@ -677,6 +673,7 @@ export interface ChatSurface {
   createChatSessionWithinTransaction(input: CreateChatSessionInput): MultiremiChatSession;
   getChatSession(id: string): MultiremiChatSession | null;
   updateChatSession(id: string, input: UpdateChatSessionInput): MultiremiChatSession;
+  markChatSessionRead(id: string): void;
   getChatMessage(id: string): MultiremiChatMessage | null;
   getPendingChatTask(chatSessionId: string): MultiremiTask | null;
   /**
@@ -1002,12 +999,10 @@ export interface TaskTracesSurface {
   markTaskTraceDaemon(taskId: string, runtimeId: string): void;
   markTaskTraceNone(taskId: string): void;
   markTaskTraceLost(taskId: string): void;
-  /** Must be called inside the caller's transaction. */
-  writeTaskTraceArchivePointers(
-    pointers: readonly TaskTraceArchivePointer[],
-    source: TaskTracePointerSource,
-  ): TaskTracePointerWriteResult;
-  clearTaskTraceArchivePointers(archiveId: string): number;
+  /** Marks every `daemon` pointer held by the Runtimes `lost`; returns how many changed. */
+  markTaskTracesLostForRuntimes(runtimeIds: readonly string[]): number;
+  /** A merged legacy Runtime hands its trace pointers to its successor. */
+  moveTaskTracesToRuntime(fromRuntimeId: string, toRuntimeId: string): void;
 }
 
 export interface StoreContextHost extends TaskTracesSurface, AgentsSurface, AgentPluginsSurface, IssuesSurface, WorkspacesSurface, NotificationChannelsSurface, SquadsSurface, ProjectsSurface, TasksSurface, RuntimesSurface, ChatSurface, IssueSessionsSurface, ConversationLogSurface, AutopilotsSurface, AccessTokensSurface, FeishuBotSurface, KnowledgeSurface, InboxSurface {}
@@ -1083,8 +1078,8 @@ export class StoreContext {
     );
   }
 
-  /** Caller holds the workspace lifecycle lock and is inside a transaction. */
-  lockIssueArchiveLifecycle(issueId: string): void {
+  /** Serialize writers of one Issue's workspace. Caller holds the workspace lifecycle lock and is inside a transaction. */
+  lockIssueLifecycle(issueId: string): void {
     this.db.run(
       "UPDATE multiremi_issues SET lifecycle_state = lifecycle_state WHERE id = ?",
       [issueId],
@@ -1146,10 +1141,7 @@ export class StoreContext {
     return this.resolveHost();
   }
 
-  /**
-   * Task trace pointers. Resolved through `resolveHost` like the other carved
-   * repos, since the archive repo needs them inside its own transaction.
-   */
+  /** Task trace pointers, resolved through `resolveHost` like the other carved repos. */
   taskTraces(): TaskTracesSurface {
     return this.resolveHost();
   }

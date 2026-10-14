@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { mkdtempSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdtempSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { TraceFileStore } from "@multiremi/worker/trace-file-store.js";
@@ -21,17 +21,25 @@ function peer() {
     } };
 }
 
+async function waitUntil(condition: () => boolean, timeoutMs = 2000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!condition()) {
+    if (Date.now() > deadline) throw new Error("timed out waiting for the condition");
+    await Bun.sleep(5);
+  }
+}
+
 describe("daemon trace transport ownership and completion", () => {
   it("answers unavailable files immediately and leaves healthy traces readable", async () => {
     const root = mkdtempSync(join(tmpdir(), "trace-read-gc-"));
     const store = new TraceFileStore({ workspacesRoot: root, resolveTask: () => ({
-      sessionId: "ises_read", agentId: "agent", provider: "codex", runtimeId: "rt", startedAt: "2026-09-28T12:00:00Z" }) });
+      sessionId: "ises_read", subjectId: "iss_read", agentId: "agent", provider: "codex", runtimeId: "rt", startedAt: "2026-09-28T12:00:00Z" }) });
     const p = peer(); const errors: unknown[] = [];
     const trace = new DaemonTraceTransport(p.client, store, undefined, error => errors.push(error));
     try {
       for (const id of ["gone", "corrupt", "healthy"]) trace.append(id, "rt", [{ type: "text", content: id }]);
-      unlinkSync(join(root, ".runtime", "ises_read", "traces", "gone.jsonl"));
-      writeFileSync(join(root, ".runtime", "ises_read", "traces", "corrupt.jsonl"), "broken\n");
+      unlinkSync(join(root, "traces", "iss_read", "gone.jsonl"));
+      writeFileSync(join(root, "traces", "iss_read", "corrupt.jsonl"), "broken\n");
       for (const id of ["gone", "corrupt"]) {
         expect(() => p.read("rt", id)).not.toThrow();
         expect(p.replies.at(-1)!.p).toEqual({ ok: false, code: "trace_not_hot", retryable: false });
@@ -64,7 +72,7 @@ describe("daemon trace transport ownership and completion", () => {
   });
   it("does not replay closed history on fresh transport boot", async () => {
     const root = mkdtempSync(join(tmpdir(), "trace-closed-restart-"));
-    const make = () => new TraceFileStore({ workspacesRoot: root, resolveTask: () => ({ sessionId: "ises_history",
+    const make = () => new TraceFileStore({ workspacesRoot: root, resolveTask: () => ({ sessionId: "ises_history", subjectId: "iss_history",
       agentId: "agent", provider: "codex", runtimeId: "rt", startedAt: "2026-09-28T12:00:00Z" }) });
     const store = make();
     for (let i = 0; i < 100; i++) {
@@ -80,7 +88,30 @@ describe("daemon trace transport ownership and completion", () => {
       expect(calls).toBe(0);
       p.read("rt", "task_50");
       expect(p.replies.at(-1)!.p).toMatchObject({ ok: true, head: 1, closed: true });
-      expect(recovered.ownership().size).toBe(100);
+      // Nothing is indexed or tracked at boot; the owner comes from the file on first use.
+      expect(recovered.ownership().size).toBe(0);
+    } finally { await recovered.stop(); rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it("resumes only the traces a crash left open, without indexing the closed history", async () => {
+    const root = mkdtempSync(join(tmpdir(), "trace-open-restart-"));
+    const make = () => new TraceFileStore({ workspacesRoot: root, resolveTask: () => ({ sessionId: "ises_history", subjectId: "iss_history",
+      agentId: "agent", provider: "codex", runtimeId: "rt", startedAt: "2026-09-28T12:00:00Z" }) });
+    const store = make();
+    for (let i = 0; i < 50; i++) {
+      store.append(`task_${i}`, [{ type: "text", content: "history" }]);
+      store.close(`task_${i}`, { status: "completed", ended_at: "2026-09-28T12:00:01Z" });
+    }
+    store.append("task_open", [{ type: "text", content: "unfinished" }]);
+    // The crash also cut the last line short.
+    appendFileSync(join(root, "traces", "iss_history", "task_open.jsonl"), '{"seq":2,"type":"te');
+    const p = peer(); let calls = 0;
+    Object.assign(p.client, { connectionState: () => "connected", uplinkPaused: () => false,
+      rpc: async () => { calls++; return { hub_head: 0 }; } });
+    const recovered = new DaemonTraceTransport(p.client, make());
+    try {
+      await waitUntil(() => recovered.ownership().size > 0 && calls > 0);
+      expect([...recovered.ownership()]).toEqual([["task_open", "rt"]]);
     } finally { await recovered.stop(); rmSync(root, { recursive: true, force: true }); }
   });
 
@@ -107,7 +138,7 @@ describe("daemon trace transport ownership and completion", () => {
   it("recovers two runtime owners in a fresh file store and transport", async () => {
     const root = mkdtempSync(join(tmpdir(), "trace-transport-restart-"));
     const make = () => new TraceFileStore({ workspacesRoot: root, resolveTask: taskId => ({
-      sessionId: "ises_shared", agentId: "agent", provider: "codex", runtimeId: taskId === "task_one" ? "rt_one" : "rt_two",
+      sessionId: "ises_shared", subjectId: "iss_shared", agentId: "agent", provider: "codex", runtimeId: taskId === "task_one" ? "rt_one" : "rt_two",
       startedAt: "2026-09-28T12:00:00Z" }) });
     const p = peer();
     const first = new DaemonTraceTransport(p.client, make());
@@ -145,7 +176,7 @@ describe("daemon trace transport ownership and completion", () => {
     } finally { await trace.stop(); }
   });
 
-  it("reads an empty closed turn while rejecting another runtime and an archived turn", async () => {
+  it("reads an empty closed turn while rejecting another runtime and a forgotten turn", async () => {
     const p = peer(); const trace = new DaemonTraceTransport(p.client);
     try {
       trace.track("empty", "rt"); trace.close("empty", "failed");

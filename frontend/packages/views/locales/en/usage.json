@@ -175,7 +175,6 @@
     "scope_live": "Live execution record",
     "scope_task_record": "Recorded task owner (historical)",
     "scope_trace_owner": "Saved trace owner",
-    "scope_archive": "Archive manifest owner",
     "scope_unknown": "Execution owner unknown",
     "scope_mixed": "Mixed ownership evidence",
     "export_csv": "Export CSV",

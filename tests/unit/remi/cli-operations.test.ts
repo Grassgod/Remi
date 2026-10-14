@@ -294,6 +294,7 @@ describe("operations CLI contracts", () => {
     for (const id of [
       "runtime.list",
       "runtime.update",
+      "automation.quiet",
       "autopilot.list",
       "autopilot.update",
       "platform.feedback.create",
@@ -310,6 +311,7 @@ describe("operations CLI contracts", () => {
       "runtime.archive-agents-and-delete",
       "runtime.release.start",
       "runtime.command.run",
+      "runtime.gc",
       "runtime.cloud.status",
       "billing.balance",
       "platform.settings.update",
@@ -495,6 +497,142 @@ describe("operations CLI contracts", () => {
     expect(output.stderr).toContain("stderr-value");
   });
 
+  it("shows the latest storage report of the daemon that hosts the runtime", async () => {
+    useCliEnv();
+    const spec = specById("runtime.storage");
+    const report = storageReport("dry_run");
+    globalThis.fetch = capabilityFetch(spec.id, (request) => {
+      const path = new URL(request.url).pathname;
+      if (path === "/api/runtimes") return Response.json([{ id: "rt_codex", name: "Builder codex" }]);
+      expect(request.method).toBe("GET");
+      expect(path).toBe("/api/workspaces/ws_1/storage/daemons");
+      return Response.json({
+        daemons: [
+          { daemon_id: "dmn_other", name: "other", runtime_ids: ["rt_other"], online: true, report: null, reported_at: null },
+          { daemon_id: "dmn_1", name: "n37-066-008", runtime_ids: ["rt_claude", "rt_codex"], online: true, report, reported_at: "2026-10-13T08:00:01.000Z" },
+        ],
+      });
+    });
+
+    const table = await capture(() => registryFor([spec]).execute(["runtime", "storage", "Builder codex"]));
+    expect(table.stdout).toContain("Daemon: n37-066-008 (dmn_1) online");
+    expect(table.stdout).toContain("Disk: work 12.0 GiB, env 2.0 GiB, traces 300.0 MiB, shared 22.0 GiB, legacy 0 B (measured 2026-10-13T07:30:00.000Z)");
+    expect(table.stdout).toContain("Subjects: 4 total, 1 active, 3 ended, 1 reclaimed");
+    expect(table.stdout).toContain("Retained: within_ttl 1");
+    expect(table.stdout).toMatch(/iss_old\s+issue\s+reclaim\s+ended_ttl\s+1\.5 GiB\s+yes/);
+
+    const json = await capture(() => registryFor([spec]).execute(["runtime", "storage", "rt_codex", "--json"]));
+    expect(JSON.parse(json.stdout)).toMatchObject({ daemon_id: "dmn_1", report: { mode: "dry_run", freed_bytes: 0 } });
+  });
+
+  it("reports a runtime whose daemon never sent a storage report, and a runtime no daemon hosts", async () => {
+    useCliEnv();
+    const spec = specById("runtime.storage");
+    globalThis.fetch = capabilityFetch(spec.id, (request) => {
+      const path = new URL(request.url).pathname;
+      if (path === "/api/runtimes") return Response.json([{ id: "rt_a", name: "A" }, { id: "rt_b", name: "B" }]);
+      return Response.json({ daemons: [{ daemon_id: "dmn_1", name: "quiet", runtime_ids: ["rt_a"], online: false, report: null, reported_at: null }] });
+    });
+    const quiet = await capture(() => registryFor([spec]).execute(["runtime", "storage", "rt_a"]));
+    expect(quiet.stdout).toContain("quiet (dmn_1) offline");
+    expect(quiet.stdout).toContain("No storage report yet.");
+    await expect(registryFor([spec]).execute(["runtime", "storage", "rt_b"])).rejects.toThrow("no daemon reports storage for runtime rt_b");
+  });
+
+  it("previews a reclaim round without confirmation and waits for its plan", async () => {
+    useCliEnv();
+    const spec = specById("runtime.gc");
+    const bodies: unknown[] = [];
+    let polls = 0;
+    globalThis.fetch = capabilityFetch(spec.id, async (request) => {
+      const path = new URL(request.url).pathname;
+      if (path === "/api/runtimes") return Response.json([{ id: "rt_1", name: "Builder" }]);
+      if (request.method === "POST") {
+        expect(path).toBe("/api/runtimes/rt_1/gc-runs");
+        bodies.push(await request.json());
+        return Response.json({ request: gcRun("pending", null) }, { status: 201 });
+      }
+      expect(path).toBe("/api/runtimes/rt_1/gc-runs/gcr_1");
+      polls += 1;
+      return Response.json({ request: polls < 2 ? gcRun("running", null) : gcRun("completed", storageReport("dry_run")) });
+    });
+
+    const detached = await capture(() => registryFor([spec]).execute(["runtime", "gc", "Builder", "--dry-run"]));
+    expect(bodies).toEqual([{ mode: "dry_run" }]);
+    expect(detached.stdout).toBe("GC run gcr_1: dry_run pending");
+    expect(polls).toBe(0);
+
+    const waited = await capture(() => registryFor([spec]).execute(["runtime", "gc", "Builder", "--dry-run", "--wait"]));
+    expect(polls).toBe(2);
+    expect(waited.stdout).toContain("GC run gcr_1: dry_run completed");
+    expect(waited.stdout).toMatch(/iss_old\s+issue\s+reclaim\s+ended_ttl/);
+    expect(waited.stdout).toMatch(/chat_busy\s+chat\s+keep\s+within_ttl\s+-\s+no/);
+  });
+
+  it("reads a reclaim request created without --wait", async () => {
+    useCliEnv();
+    const spec = specById("runtime.gc-status");
+    globalThis.fetch = capabilityFetch(spec.id, async (request) => {
+      const path = new URL(request.url).pathname;
+      if (path === "/api/runtimes") return Response.json([{ id: "rt_1", name: "Builder" }]);
+      expect(request.method).toBe("GET");
+      expect(path).toBe("/api/runtimes/rt_1/gc-runs/gcr_1");
+      return Response.json({ request: gcRun("completed", storageReport("dry_run")) });
+    });
+
+    const result = await capture(() => registryFor([spec]).execute(["runtime", "gc-status", "Builder", "gcr_1"]));
+    expect(result.stdout).toContain("GC run gcr_1: dry_run completed");
+    expect(result.stdout).toMatch(/iss_old\s+issue\s+reclaim\s+ended_ttl/);
+  });
+
+  it("requires --yes before a real reclaim round and surfaces a failed round", async () => {
+    useCliEnv();
+    const spec = specById("runtime.gc");
+    const bodies: unknown[] = [];
+    globalThis.fetch = capabilityFetch(spec.id, async (request) => {
+      const path = new URL(request.url).pathname;
+      if (path === "/api/runtimes") return Response.json([{ id: "rt_1", name: "Builder" }]);
+      if (request.method === "POST") {
+        bodies.push(await request.json());
+        return Response.json({ request: gcRun("pending", null) }, { status: 201 });
+      }
+      return Response.json({ request: { ...gcRun("failed", null), mode: "run", error: "daemon lost root ownership" } });
+    });
+
+    await expect(registryFor([spec]).execute(["runtime", "gc", "Builder"])).rejects.toThrow("pass --dry-run to preview or --yes to confirm");
+    expect(bodies).toEqual([]);
+
+    await expect(registryFor([spec]).execute(["runtime", "gc", "Builder", "--yes", "--wait"])).rejects.toThrow("operation gcr_1 ended in failed");
+    expect(bodies).toEqual([{ mode: "run" }]);
+  });
+
+  it("marks the automation run of the current turn quiet", async () => {
+    useCliEnv();
+    const spec = specById("automation.quiet");
+    const savedTurn = process.env.MULTIREMI_TURN_ID;
+    const requests: Array<{ method: string; path: string; body: unknown }> = [];
+    globalThis.fetch = capabilityFetch(spec.id, async (request) => {
+      requests.push({ method: request.method, path: new URL(request.url).pathname, body: await request.json() });
+      return Response.json({ ok: true });
+    });
+    try {
+      process.env.MULTIREMI_TURN_ID = "turn_env";
+      const output = await capture(() => registryFor([spec]).execute(["automation", "quiet", "--json"]));
+      expect(JSON.parse(output.stdout)).toEqual({ ok: true });
+      await capture(() => registryFor([spec]).execute(["automation", "quiet", "--turn", "turn_flag", "--json"]));
+      expect(requests).toEqual([
+        { method: "POST", path: "/api/turns/turn_env/automation/quiet", body: {} },
+        { method: "POST", path: "/api/turns/turn_flag/automation/quiet", body: {} },
+      ]);
+
+      delete process.env.MULTIREMI_TURN_ID;
+      await expect(registryFor([spec]).execute(["automation", "quiet"])).rejects.toThrow("MULTIREMI_TURN_ID");
+      expect(requests).toHaveLength(2);
+    } finally {
+      restoreEnv("MULTIREMI_TURN_ID", savedTurn);
+    }
+  });
+
   it("reviews the daemon retirement snapshot and sends the exact confirmed snapshot", async () => {
     useCliEnv();
     const spec = specById("daemon.retire");
@@ -587,10 +725,10 @@ describe("operations CLI contracts", () => {
       expect(request.headers.get("Authorization")).toBe("Bearer test-token");
       return Response.json({
         degradations: [{
-          id: "session_archive_direct_upload",
+          id: "api_role_split_store",
           status: "disabled",
-          effectiveValue: null,
-          detail: "Session Archive direct upload disabled, falling back to 8 MiB proxy limit",
+          effectiveValue: "runtime",
+          detail: "split roles require MULTIREMI_DATABASE_URL so both processes share one database",
         }],
       });
     });
@@ -598,11 +736,35 @@ describe("operations CLI contracts", () => {
     const output = await capture(() => registryFor([spec]).execute([
       "platform", "config", "--output", "json",
     ]));
-    expect(output.stdout).toContain("session_archive_direct_upload");
+    expect(output.stdout).toContain("api_role_split_store");
     expect(output.stdout).toContain("disabled");
-    expect(output.stdout).toContain("8 MiB");
+    expect(output.stdout).toContain("share one database");
   });
 });
+
+function gcRun(status: string, report: unknown): Record<string, unknown> {
+  return {
+    id: "gcr_1", runtime_id: "rt_1", daemon_id: "dmn_1", mode: "dry_run", status, requested_by: "mem_1",
+    created_at: "2026-10-13T08:00:00.000Z", completed_at: null, error: null, report,
+  };
+}
+
+function storageReport(mode: string): Record<string, unknown> {
+  const GIB = 1024 ** 3;
+  return {
+    version: 1, generated_at: "2026-10-13T08:00:00.000Z", mode, root: "/data/workspaces",
+    bytes: { work: 12 * GIB, env: 2 * GIB, traces: 300 * 1024 ** 2, shared: 22 * GIB, legacy: 0 },
+    bytes_measured_at: "2026-10-13T07:30:00.000Z",
+    subjects: { total: 4, active: 1, ended: 3, reclaimed: 1 },
+    retained: { within_ttl: 1 },
+    reclaimed_this_round: 0, forgotten_this_round: 0, freed_bytes: 0,
+    plan: [
+      { subject: { kind: "issue", id: "iss_old" }, action: "reclaim", reason: "ended_ttl", bytes: 1.5 * GIB, unsaved_work: true },
+      { subject: { kind: "chat", id: "chat_busy" }, action: "keep", reason: "within_ttl", bytes: null, unsaved_work: false },
+    ],
+    errors: [],
+  };
+}
 
 function specById(id: string): CommandSpec {
   const spec = specs.find((candidate) => candidate.id === id);

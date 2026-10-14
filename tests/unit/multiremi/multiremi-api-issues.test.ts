@@ -1,6 +1,4 @@
-import { createResponsibleTestIssue, createHistoricalTestIssue, acceptTestIssueDelivery, useUploadDir } from './helpers.js';
-import { SessionArchiveService } from '@multiremi/session-archive/service.js';
-import { buildArchiveFixture, traceFileBody } from './session-archive-fixtures.js';
+import { createResponsibleTestIssue, createHistoricalTestIssue, acceptTestIssueDelivery } from './helpers.js';
 import { mutateExecutionFixture } from "./unified-test-paths.js";
 // Issues as first-class records plus the compatibility list/grouped/batch,
 // quick-create, hierarchy/planning, dependency, assignment, metadata and label routes.
@@ -313,28 +311,59 @@ describe("Multiremi API — issue endpoints", () => {
     expect(store.getIssue(remote.id)?.id).toBe(remote.id);
   });
 
-  it("preflights batch lifecycle fences before deleting any Issue", async () => {
+  it("blocks a batch delete on an active task without deleting any Issue", async () => {
     const store = createStore();
     store.ensureLocalWorkspace();
+    const agent = store.createAgent({ name: "Batch blocker", provider: "codex" });
     const deletable = createResponsibleTestIssue(store, { title: "Batch deletable", workspaceId: "local" });
     const materialized = createResponsibleTestIssue(store, { title: "Batch materialized", workspaceId: "local" });
     store.createIssueSession(materialized.id, { title: "Materialized session" });
+    const busy = createResponsibleTestIssue(store, { title: "Batch busy", workspaceId: "local" });
+    const task = store.createTask({ agentId: agent.id, issueId: busy.id, prompt: "still running" });
+    const runtime = store.registerRuntime({ name: "Batch workspace host", provider: "codex", daemonId: "batch-delete" });
+    store.reportIssueWorkspace({ issueId: deletable.id, runtimeId: runtime.id, rootPath: "/synthetic/deletable", branchName: `agent/${deletable.key}`, status: "ready" });
     const app = createMultiremiApp({ store, authToken: "root-secret" });
-
-    const response = await app.request("/api/issues/batch-delete", {
+    const batch = () => app.request("/api/issues/batch-delete", {
       method: "POST",
-      headers: {
-        Authorization: "Bearer root-secret",
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ issue_ids: [deletable.id, materialized.id] }),
+      headers: { Authorization: "Bearer root-secret", "Content-Type": "application/json" },
+      body: JSON.stringify({ issue_ids: [deletable.id, materialized.id, busy.id] }),
     });
-    expect(response.status).toBe(409);
-    expect(await response.json()).toMatchObject({ code: "issue_workspace_not_cleaned" });
-    expect(store.getIssue(deletable.id)?.id).toBe(deletable.id);
-    expect(store.getIssue(materialized.id)?.id).toBe(materialized.id);
-    expect(store.beginIssueDeletion(deletable.id)).toEqual({ ok: true });
-    store.abortIssueDeletion(deletable.id);
+
+    const blocked = await batch();
+    expect(blocked.status).toBe(409);
+    expect(await blocked.json()).toMatchObject({ code: "issue_has_active_tasks" });
+    for (const issue of [deletable, materialized, busy]) expect(store.getIssue(issue.id)?.id).toBe(issue.id);
+    expect(store.getIssueWorkspace(deletable.id)).not.toBeNull();
+
+    store.cancelTask(task.id);
+    const deleted = await batch();
+    expect(deleted.status).toBe(200);
+    expect(await deleted.json()).toEqual({ deleted: 3 });
+    for (const issue of [deletable, materialized, busy]) expect(store.getIssue(issue.id)).toBeNull();
+    expect(db!.query("SELECT COUNT(*) AS count FROM multiremi_issue_workspaces WHERE issue_id = ?").get(deletable.id)).toEqual({ count: 0 });
+  });
+
+  it("hard-deletes an Issue whose workspace was never cleaned, 409 only for active tasks", async () => {
+    const store = createStore();
+    store.ensureLocalWorkspace();
+    const agent = store.createAgent({ name: "Delete blocker", provider: "codex" });
+    const runtime = store.registerRuntime({ name: "Delete workspace host", provider: "codex", daemonId: "single-delete" });
+    const app = createMultiremiApp({ store, authToken: "root-secret" });
+    const headers = { Authorization: "Bearer root-secret" };
+    const busy = createResponsibleTestIssue(store, { title: "Delete busy", workspaceId: "local" });
+    const task = store.createTask({ agentId: agent.id, issueId: busy.id, prompt: "still running" });
+    const conflict = await app.request(`/api/issues/${busy.id}`, { method: "DELETE", headers });
+    expect(conflict.status).toBe(409);
+    expect(await conflict.json()).toMatchObject({ code: "issue_has_active_tasks" });
+    store.cancelTask(task.id);
+
+    const idle = createResponsibleTestIssue(store, { title: "Delete idle", workspaceId: "local" });
+    store.reportIssueWorkspace({ issueId: idle.id, runtimeId: runtime.id, rootPath: "/synthetic/idle", branchName: `agent/${idle.key}`, status: "in_use" });
+    expect((await app.request(`/api/issues/${idle.id}`, { method: "DELETE", headers })).status).toBe(204);
+    expect((await app.request(`/api/multiremi/issues/${busy.id}`, { method: "DELETE", headers })).status).toBe(200);
+    expect(store.getIssue(idle.id)).toBeNull();
+    expect(store.getIssue(busy.id)).toBeNull();
+    expect((await app.request(`/api/issues/${idle.id}`, { method: "DELETE", headers })).status).toBe(404);
   });
 
   it("serves issues as first-class records with linked tasks", async () => {
@@ -375,8 +404,7 @@ describe("Multiremi API — issue endpoints", () => {
     const agent = store.createAgent({ name: "Codex", provider: "codex" });
     const member = store.createWorkspaceMember({ name: "Issue owner" });
     const project = store.createProject({ title: "Batch project" });
-    const sessionArchives = new SessionArchiveService(store, { root: useUploadDir(), minFreeBytes: 0 });
-    const app = createMultiremiApp({ store, sessionArchives });
+    const app = createMultiremiApp({ store });
     const events: Array<{ type: string; workspaceId: string; payload: Record<string, unknown>; actorId?: string | null; actorType?: string }> = [];
     store.onWorkspaceEvent((event) => events.push(event));
 
@@ -599,18 +627,6 @@ describe("Multiremi API — issue endpoints", () => {
 
     for (const id of [first.id, second.id]) for (const task of store.listTasksForIssue(id)) {
       if (['queued', 'running', 'awaiting_human', 'dispatched'].includes(task.status)) store.cancelTask(task.id);
-    }
-    const daemonId = 'batch-cleanup';
-    const cleanupRuntime = store.registerRuntime({ name: 'Batch deletion cleanup fixture', provider: 'codex', daemonId });
-    for (const id of [first.id, second.id]) {
-      store.reportIssueWorkspace({ issueId: id, runtimeId: cleanupRuntime.id, rootPath: `/synthetic/${id}`, branchName: `agent/${store.getIssue(id)!.key}`, status: 'ready' });
-      const archiveTaskId = `tsk_archive_${id}`;
-      const fixture = await buildArchiveFixture({ subject: { kind: 'issue', id }, traces: { [archiveTaskId]: traceFileBody({ events: 1, taskId: archiveTaskId }) } });
-      const archive = sessionArchives.initialize({ workspaceId: 'local', subjectKind: 'issue', subjectId: id, issueId: id, runtimeId: cleanupRuntime.id, daemonId, sourceRevision: fixture.sourceRevision, sha256: fixture.sha256, sizeBytes: fixture.sizeBytes }).archive;
-      const claimed = await sessionArchives.claimUploadAttempt(cleanupRuntime.id, id, archive.id);
-      await sessionArchives.upload(cleanupRuntime.id, id, archive.id, claimed.uploadAttempt!, new Response(fixture.bytes.buffer.slice(fixture.bytes.byteOffset, fixture.bytes.byteOffset + fixture.bytes.byteLength) as ArrayBuffer).body);
-      const ready = await sessionArchives.complete(cleanupRuntime.id, id, archive.id, claimed.uploadAttempt!);
-      store.markIssueWorkspaceCleaned({ issueId: id, runtimeId: cleanupRuntime.id, archiveId: ready.id, sourceRevision: ready.sourceRevision, sha256: ready.sha256 });
     }
     const deleted = await app.request("/api/issues/batch-delete", {
       method: "POST",

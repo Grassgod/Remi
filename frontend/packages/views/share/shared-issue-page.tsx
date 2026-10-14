@@ -346,7 +346,6 @@ export function SharedTask({
   const stateText = state === "unreachable"
     ? t(($) => $.share.trace_unreachable, { name: trace.data?.runtimeName ?? "?" })
     : state === "lost" ? t(($) => $.share.trace_lost)
-    : state === "backfilling" ? t(($) => $.share.trace_backfilling)
     : null;
   return (
     <details className="border-y py-2 text-sm" onToggle={(event) => {

@@ -57,7 +57,7 @@ daemon 只校验本机是否持有所选目录，不能跳过首项改用列表�
 `position` 与 `created_at` 完全相同时，以唯一资源 `id` 升序打破并列，保证重复查询的选择稳定；
 调用方保持此顺序，不增加另一套排序规则。
 
-其他绑定 Project 的 Chat 在 daemon 的 `workspaces/chats/<chat_session_id>` 目录运行。
+其他绑定 Project 的 Chat 在 daemon 的 `work/<chat_session_id>` 目录运行（位于 `MULTIREMI_WORKSPACES_ROOT` 下，见[存储与保留](dev/storage-retention.md)）。
 首次使用时自动拉取 Project 显式声明的 `github_repo`（包括 `project_ref` 引用），
 不会因 Project 未声明仓库而自动拉取整个 workspace 的目录清单。
 工作分支为 `chat/<chat_session_id>`；已有 worktree 后续轮次直接复用，保留本地改动，不重复 fetch。
@@ -107,6 +107,13 @@ Chat 列表的未读计数使用同一 member lane；读到较早消息保留最
 服务端数据由 Query cache 管理，草稿和选择由工作区分区的 store 管理。WS 更新保持当前执行任务与后续队列分离，
 取消某条排队消息不能清除另一条正在执行任务的状态。
 已上传附件的草稿绑定与文本一起按工作区保存，切换浮窗、独立页或会话后仍可发送。
+
+## 归档、来源与自动化 Chat
+
+Chat 是 daemon 存储模型里的一类主体（见[存储与保留](dev/storage-retention.md)）：被归档即视为结束，工作区按保留期回收，置顶的 Chat 不回收。
+活跃 Chat 超过工作区设置 `chat_idle_days`（默认 14 天，0 为不自动归档）没有新消息会被自动归档；归档的 Chat 收到新消息（成员、飞书或自动化续接）自动恢复活跃。
+`run_only` 自动化每次运行新开一个 Chat，带 `origin: { autopilot_id, run_id }`；agent 判断没有值得报告的内容时执行 `remi automation quiet`，运行完成后该 Chat 自动归档，否则保持活跃并带未读。
+Chat 列表默认只显示用户的对话，`origin=automation|all` 或 `remi chat list --origin automation|all` 查看自动化开的 Chat。
 
 ## CLI 与验证入口
 

@@ -1,10 +1,11 @@
 import { createHash } from "node:crypto";
+import { join } from "node:path";
 import { attachmentIdsFromText } from "@multiremi/contracts/attachments.js";
 import { CHAT_ARTIFACT_DELIVERY_CONTRACT } from "@multiremi/contracts/artifact-delivery.js";
 import type { AgentTask } from "@daemon/contracts/types.js";
 import { hasReadOnlyCodeSnapshot, isSideConversation, SIDE_CONVERSATION_INSTRUCTIONS } from "./side-conversation.js";
 
-/** A repo the daemon pre-checked-out into the task workDir before the run. */
+/** A repo the daemon pre-checked-out into the subject workspace before the run; `path` is absolute. */
 export interface TaskRepoCheckout {
   repoUrl: string;
   path: string;
@@ -30,7 +31,11 @@ export interface BuildTaskPromptOptions {
   repoWarnings?: TaskRepoWarning[];
   platform?: NodeJS.Platform;
   sessionHistoryPaths?: string[];
-  issueWorkspacePath?: string;
+  /**
+   * The subject's shared workspace, the value of `$MULTIREMI_WORKSPACE_ROOT`: repositories and the
+   * Wiki working copy live here, which can differ from the directory the agent starts in.
+   */
+  workspacePath?: string;
   /** Actual workspace preparation result; false means Wiki is available through CLI only. */
   wikiMaterialized?: boolean;
   /** Actual workspace preparation mode; true only for eligible daemon-owned Project Chat workspaces. */
@@ -109,7 +114,7 @@ export function buildTaskPromptArtifact(task: AgentTask, opts: BuildTaskPromptOp
   if (!privateChat || task.project) appendRepositoryWarnings(sections, opts.repoWarnings ?? [], privateChat);
   appendKnowledgeAvailabilityWarnings(sections, task);
 
-  appendProjectPromptSections(sections, task, mode, task.runtimeWorkspaceId ? false : opts.wikiMaterialized);
+  appendProjectPromptSections(sections, task, mode, task.runtimeWorkspaceId ? false : opts.wikiMaterialized, opts.workspacePath);
   if (mode === "bootstrap" && task.issue) appendProjectDiscoverySection(sections);
 
   if (hasReadOnlyCodeSnapshot(task)) {
@@ -147,7 +152,7 @@ export function buildTaskPromptArtifact(task: AgentTask, opts: BuildTaskPromptOp
   if (task.issue && taskHoldsWorkspace(task)) {
     sections.push("", "## Shared Workspace Coordination",
       "Other Agents may run concurrently in the same repository checkouts. Your execution directory contains private task configuration, not a separate code checkout. Use the reported repository paths, coordinate overlapping edits, preserve others' changes, and never switch the shared branch. Do not assume another Agent has finished just because one task completed.");
-    if (opts.issueWorkspacePath) sections.push(`Shared code root: \`${opts.issueWorkspacePath}\`. Run repository checkout commands from this root, not your private execution directory. Read each repository's AGENTS.md and directory instructions before editing it.`);
+    if (opts.workspacePath) sections.push(`Shared code root: \`${opts.workspacePath}\` (\`$MULTIREMI_WORKSPACE_ROOT\`). Run repository checkout commands from this root, not your private execution directory. Read each repository's AGENTS.md and directory instructions before editing it.`);
   }
   appendSquadContextSection(sections, task);
   if (task.issue) {
@@ -246,7 +251,13 @@ function appendWorkspacePromptSection(sections: string[], task: AgentTask, mode:
   sections.push(prompt);
 }
 
-function appendProjectPromptSections(sections: string[], task: AgentTask, mode: TaskPromptMode, wikiMaterialized?: boolean): void {
+function appendProjectPromptSections(
+  sections: string[],
+  task: AgentTask,
+  mode: TaskPromptMode,
+  wikiMaterialized?: boolean,
+  workspacePath?: string,
+): void {
   if (!task.project) return;
   if (mode === "delta") {
     const deltaInstructions = task.project.deltaInstructions?.trim()
@@ -277,7 +288,7 @@ function appendProjectPromptSections(sections: string[], task: AgentTask, mode: 
     sections.push("## Project Instructions");
     sections.push(projectInstructions);
   }
-  appendProjectKnowledgeSections(sections, task.project.id, wikiMaterialized);
+  appendProjectKnowledgeSections(sections, task.project.id, wikiMaterialized, workspacePath);
 }
 
 function appendProjectDiscoverySection(sections: string[]): void {
@@ -437,6 +448,12 @@ function appendClaimContextSections(sections: string[], task: AgentTask, mode: T
       sections.push("Trigger payload:");
       sections.push(formatJsonBlock(autopilotPayload));
     }
+  }
+
+  if (task.autopilotRunId && task.chatSessionId) {
+    sections.push("");
+    sections.push("## Automation Run");
+    sections.push("A schedule or event started this run; nobody is waiting on the screen. If it has nothing worth reporting, run `remi automation quiet` before finishing and the conversation is archived instead of notifying anyone. A run that fails always stays visible.");
   }
 
   const quickCreatePrompt = stringField(task, "quickCreatePrompt", "quick_create_prompt");
@@ -818,7 +835,9 @@ function appendBoundIssueFollowupSection(sections: string[], issueId: string): v
   sections.push("After a verified handoff, finish this Chat turn. Do not wait or poll until the work finishes; once no other Issue task is active, the reporting path brings the terminal round (completed, failed, or cancelled) back to this topic. Do not issue an unsolicited follow-up task while summarizing a report.");
 }
 
-function appendProjectKnowledgeSections(sections: string[], projectId: string, wikiMaterialized?: boolean): void {
+function appendProjectKnowledgeSections(sections: string[], projectId: string, wikiMaterialized?: boolean, workspacePath?: string): void {
+  // The agent may start outside the workspace, so the Wiki is addressed through the workspace root, never `./wiki`.
+  const wiki = "$MULTIREMI_WORKSPACE_ROOT/wiki";
   sections.push("");
   sections.push("## Project Knowledge");
   sections.push("Project Memory is not embedded in this prompt. Use the `remi memory` CLI only: first run `remi memory search \"<query>\"`, then `remi memory get <slug-or-id>` for relevant hits before relying on them.");
@@ -827,13 +846,13 @@ function appendProjectKnowledgeSections(sections: string[], projectId: string, w
   if (wikiMaterialized === false) {
     sections.push("Project Wiki has not been materialized in this working directory. Use `remi wiki search` and `remi wiki get` to read the current project's Wiki through the CLI. Use `remi wiki --help` to discover supported write commands.");
   } else {
-    sections.push("Project Wiki is materialized in `./wiki`. Repository code facts are materialized in `./wiki/repositories/<repository>/`. Edit files only below `./wiki`; `.multiremi/wiki-base` is a read-only merge baseline and must not be edited.");
+    sections.push(`Project Wiki is materialized in \`${wiki}\`${workspacePath ? ` (absolute path \`${join(workspacePath, "wiki")}\`)` : ""}. Repository code facts are materialized in \`${wiki}/repositories/<repository>/\`. Edit files only below \`${wiki}\`; \`$MULTIREMI_WORKSPACE_ROOT/.multiremi/wiki-base\` is a read-only merge baseline and must not be edited.`);
   }
   sections.push("Repository Wiki is shared by every Project that references the same repository. Keep code-level facts there; keep cross-repository decisions and synthesis in the Project Wiki.");
   sections.push("For every non-empty Wiki, maintain a non-empty root `index.md` as its curated reading map and append every publication to a non-empty root `log.md` without rewriting earlier entries. Beyond those two root files, let project and repository semantics choose the directory names; do not impose a fixed vocabulary, per-directory overview pages, or nesting that mirrors the source tree.");
   sections.push("Directory names are free, but size is not: keep at most 20 body pages directly inside any one directory, at most 5 non-index body pages at the root, and at most 4 levels of nesting. When a directory exceeds 20, split it into subdirectories by subsystem or functional domain — grouping inside `index.md` does not count. A single directory holding 100 pages reads exactly like a flat Wiki in the sidebar, which is what this rule exists to prevent.");
   sections.push("Search before creating a page. When facts overlap across pages, merge them into the authoritative page with all source references preserved instead of adding another near-duplicate page.");
-  if (wikiMaterialized !== false) sections.push("Before finishing, run `remi wiki status` and `remi wiki push`. Push performs a three-way merge; resolve any reported conflicts in `./wiki`, then retry the push.");
+  if (wikiMaterialized !== false) sections.push(`Before finishing, run \`remi wiki status\` and \`remi wiki push\`. Push performs a three-way merge; resolve any reported conflicts in \`${wiki}\`, then retry the push.`);
   sections.push(`When durable Memory changes, search before writing and update an existing entry instead of creating a duplicate. Use \`remi memory create|update\` (project ${projectId}), cite \`issue:\`/\`task:\`/\`url:\` provenance, and skip one-off details.`);
 }
 

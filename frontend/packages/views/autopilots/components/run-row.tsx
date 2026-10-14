@@ -154,6 +154,15 @@ export function RunRow({ run, agentId, agentName }: { run: AutopilotRun; agentId
           run.issue_session_id
             ? t(($) => $.run.session_linked)
             : t(($) => $.run.issue_linked)
+        ) : run.chat_session_id ? (
+          run.failure_reason ? (
+            <span title={run.failure_reason}>
+              {t(($) => $.run.chat_linked)}
+              <span className="text-destructive"> · {run.failure_reason}</span>
+            </span>
+          ) : (
+            t(($) => $.run.chat_linked)
+          )
         ) : run.failure_reason ? (
           // Concise, truncated summary here — the full reason lives in the
           // execution transcript / hover title.
@@ -165,7 +174,9 @@ export function RunRow({ run, agentId, agentName }: { run: AutopilotRun; agentId
       <span className="w-32 shrink-0 text-right text-xs text-muted-foreground tabular-nums">
         {formatDate(summary?.occurred_at || run.triggered_at || run.created_at)}
       </span>
-      {syntheticTask && !run.issue_id && (
+      {/* A chat-linked run keeps the button only for webhook runs: the list
+          omits trigger_payload, so the log dialog is where it can be read. */}
+      {syntheticTask && !run.issue_id && (!run.chat_session_id || run.source === "webhook") && (
         <TranscriptButton
           task={syntheticTask}
           agentName={agentName}
@@ -183,8 +194,8 @@ export function RunRow({ run, agentId, agentName }: { run: AutopilotRun; agentId
 
   const rowClass = "flex items-center gap-3 px-4 py-2.5 text-sm hover:bg-accent/30 transition-colors";
 
-  if (run.issue_id) {
-    const href = getAutopilotRunHref(wsPaths, run)!;
+  const href = getAutopilotRunHref(wsPaths, run);
+  if (href) {
     return (
       <AppLink href={href} className={cn(rowClass, "cursor-pointer")}>
         {content}

@@ -38,7 +38,7 @@
       "integrations": "連携",
       "feishu_messages": "Feishu メッセージ",
       "model_gateway": "モデルゲートウェイ",
-      "storage_cleanup": "ストレージとクリーンアップ",
+      "storage": "ストレージ",
       "labs": "ラボ",
       "members": "メンバー",
       "platform": "バージョンとサービス"
@@ -473,46 +473,58 @@
       }
     }
   },
-  "storageCleanup": {
-    "description": "完了した Issue のワークスペースを削除する前に、プロバイダー固有のセッション履歴をアーカイブします。",
-    "storage_title": "アーカイブストレージ",
-    "backend": "バックエンド",
-    "local_disk": "ローカルディスク",
-    "root_hint": "アーカイブ先",
-    "archive_gate": "検証済みアーカイブがワークスペース削除の必須条件",
-    "required": "必須",
-    "unknown": "未報告",
-    "max_archive_size": "最大アーカイブサイズ",
-    "min_free_space": "最小空きディスク容量",
-    "usage_title": "使用状況",
-    "total": "合計",
-    "ready": "準備完了",
-    "pending": "保留中",
-    "failed": "失敗",
-    "exhausted": "自動再試行を停止済み",
-    "space_used": "使用容量",
-    "last_failure": "最新のアーカイブ失敗",
-    "cleanup_title": "ワークスペースのクリーンアップ",
-    "cleanup_description": "完了した Issue のワークスペースを指定時間保持します。セッションアーカイブの検証前には削除されません。",
-    "workspace_ttl": "ワークスペース保持期間",
-    "gc_interval": "クリーンアップ間隔",
-    "hours": "時間",
-    "minutes": "分",
+  "storage": {
+    "description": "終了した Issue とチャットは、保持期間を過ぎるとコードディレクトリと実行環境を解放します。未保存の作業は先にスナップショットとして保存され、Issue やチャットを再開すると復元されます。実行記録は常にマシン上に残ります。",
+    "machines_title": "マシン",
+    "no_machines": "このワークスペースに接続したマシンはまだありません。",
+    "policy_title": "保持ポリシー",
+    "policy_description": "このワークスペースのすべてのマシンに適用されます。各マシンの環境変数でローカルに上書きできます。",
+    "fields": {
+      "ttl_ms": {
+        "label": "保持期間",
+        "hint": "終了した Issue またはチャットがワークスペースを保持してから回収されるまでの期間。"
+      },
+      "automation_ttl_ms": {
+        "label": "自動化チャットの保持期間",
+        "hint": "自動化の実行で開かれたチャットに適用される保持期間。"
+      },
+      "max_retained": {
+        "label": "保持ワークスペース数の上限",
+        "hint": "マシンごとに保持する終了済みワークスペースの数。超えた分は最も長く使われていないものから回収します。0 は無制限です。"
+      },
+      "orphan_ttl_ms": {
+        "label": "孤立データの保持期間",
+        "hint": "サーバー上で削除された Issue やチャットのデータをマシンが保持する期間。"
+      },
+      "snapshot_max_bytes": {
+        "label": "スナップショットの上限サイズ",
+        "hint": "スナップショットに保存できる未保存作業の最大サイズ。超えるとワークスペースは回収されず保持されます。"
+      },
+      "chat_idle_days": {
+        "label": "チャットの自動アーカイブ",
+        "hint": "アクティブなチャットが操作されないまま自動アーカイブされるまでの日数。0 は自動アーカイブしません。"
+      }
+    },
+    "units": {
+      "hours": "時間",
+      "mb": "MB",
+      "days": "日",
+      "count": "件"
+    },
+    "default_value": "既定: {{value}} {{unit}}",
+    "validation": {
+      "required": "数値を入力してください。",
+      "integer": "整数を入力してください。",
+      "range": "{{min}} から {{max}} {{unit}}の範囲で入力してください。"
+    },
+    "reset_default": "既定値に戻す",
     "save": "保存",
     "saving": "保存中…",
-    "saved": "ストレージとクリーンアップの設定を保存しました",
-    "save_failed": "ストレージとクリーンアップの設定を保存できませんでした",
-    "load_failed": "ストレージとクリーンアップの設定を読み込めませんでした",
+    "saved": "ストレージ設定を保存しました",
+    "save_failed": "ストレージ設定を保存できませんでした",
+    "load_failed": "ストレージ情報を読み込めませんでした",
     "retry_load": "再試行",
-    "insufficient": "ワークスペースのオーナーと管理者のみが管理できます。",
-    "validation": {
-      "ttl_required": "保持時間を整数で入力してください。",
-      "ttl_min": "ワークスペースの保持期間は 1 時間以上必要です。",
-      "ttl_max": "ワークスペースの保持期間は 365 日を超えられません。",
-      "interval_required": "スキャン間隔を整数で入力してください。",
-      "interval_min": "スキャン間隔は 1 分以上必要です。",
-      "interval_gt_ttl": "スキャン間隔はワークスペースの保持期間を超えられません。"
-    }
+    "read_only": "ストレージ設定を変更できるのはワークスペースのオーナーと管理者のみです。"
   },
   "platform": {
     "title": "バージョンとサービス",

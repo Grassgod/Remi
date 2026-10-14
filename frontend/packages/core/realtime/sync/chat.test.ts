@@ -11,7 +11,7 @@ vi.mock("../../chat", () => ({ useChatStore: { getState: () => ({ activeSessionI
 
 const session: ChatSession = {
   id: "chat-1", workspace_id: "ws-1", creator_id: "user-1", agent_id: "agent-1",
-  title: "Chat", status: "active", pinned: false, has_unread: false, unread_count: 0,
+  title: "Chat", status: "active", pinned: false, origin: null, has_unread: false, unread_count: 0,
   last_message: null, created_at: "2026-09-11T00:00:00Z", updated_at: "2026-09-11T00:00:00Z",
 };
 let qc: QueryClient;

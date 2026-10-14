@@ -7,7 +7,7 @@ import { ApiContractError } from "../schema";
 afterEach(() => vi.unstubAllGlobals());
 describe("turn trace and issue projection", () => {
   it("keeps the chosen historical attempt when opening a turn trace", async () => {
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json({ events: [], next_after_seq: 0, head: 0, eof: true, closed: true, source: "archive", state: "ok" })));
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json({ events: [], next_after_seq: 0, head: 0, eof: true, closed: true, source: "daemon", state: "ok" })));
     await new ApiClient("https://api.example.test").getTaskTrace("attempt_1", 10, 50, "turn_1");
     expect(fetch).toHaveBeenCalledWith("https://api.example.test/api/turns/turn_1/trace?after_seq=10&limit=50&attempt_id=attempt_1", expect.anything());
   });

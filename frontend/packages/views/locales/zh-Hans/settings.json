@@ -38,7 +38,7 @@
       "integrations": "集成",
       "feishu_messages": "飞书消息",
       "model_gateway": "模型网关",
-      "storage_cleanup": "存储与清理",
+      "storage": "存储",
       "labs": "实验室",
       "members": "成员",
       "platform": "版本与服务"
@@ -473,46 +473,58 @@
       }
     }
   },
-  "storageCleanup": {
-    "description": "在清理已完成 Issue 的工作目录前，归档 Claude/Codex 的原生会话记录。",
-    "storage_title": "归档存储",
-    "backend": "存储后端",
-    "local_disk": "本地磁盘",
-    "root_hint": "归档位置",
-    "archive_gate": "工作目录清理前必须完成并校验归档",
-    "required": "强制",
-    "unknown": "未上报",
-    "max_archive_size": "单个归档上限",
-    "min_free_space": "最低磁盘剩余空间",
-    "usage_title": "使用情况",
-    "total": "全部",
-    "ready": "已就绪",
-    "pending": "等待中",
-    "failed": "失败",
-    "exhausted": "已停止自动重试",
-    "space_used": "占用空间",
-    "last_failure": "最近一次归档失败",
-    "cleanup_title": "工作目录清理",
-    "cleanup_description": "已完成 Issue 的工作目录会保留指定时间。会话归档校验成功前，清理任务不会删除工作目录。",
-    "workspace_ttl": "工作目录保留时间",
-    "gc_interval": "清理扫描周期",
-    "hours": "小时",
-    "minutes": "分钟",
+  "storage": {
+    "description": "已结束的 Issue 和对话在保留期过后会释放代码目录和运行环境。未保存的工作会先保存为快照，Issue 或对话重新打开时恢复；执行记录始终保留在机器上。",
+    "machines_title": "机器",
+    "no_machines": "还没有机器连接到此工作区。",
+    "policy_title": "保留策略",
+    "policy_description": "适用于此工作区的所有机器。每台机器可用环境变量在本地覆盖。",
+    "fields": {
+      "ttl_ms": {
+        "label": "保留时长",
+        "hint": "已结束的 Issue 或对话保留工作区多久后被回收。"
+      },
+      "automation_ttl_ms": {
+        "label": "自动化对话保留时长",
+        "hint": "自动化运行所开对话的保留时长。"
+      },
+      "max_retained": {
+        "label": "保留工作区数量上限",
+        "hint": "每台机器保留的已结束工作区数量，超出时先回收最久未使用的。0 表示不限制。"
+      },
+      "orphan_ttl_ms": {
+        "label": "孤立数据保留时长",
+        "hint": "机器保留服务端已删除的 Issue 或对话数据的时长。"
+      },
+      "snapshot_max_bytes": {
+        "label": "快照大小上限",
+        "hint": "快照可保存的未保存工作的最大体积；超出则保留工作区而不回收。"
+      },
+      "chat_idle_days": {
+        "label": "对话自动归档",
+        "hint": "活跃对话无活动多少天后自动归档。0 表示不自动归档。"
+      }
+    },
+    "units": {
+      "hours": "小时",
+      "mb": "MB",
+      "days": "天",
+      "count": "个"
+    },
+    "default_value": "默认：{{value}} {{unit}}",
+    "validation": {
+      "required": "请输入数字。",
+      "integer": "请输入整数。",
+      "range": "须在 {{min}} 到 {{max}} {{unit}}之间。"
+    },
+    "reset_default": "恢复默认",
     "save": "保存",
     "saving": "保存中…",
-    "saved": "已保存存储与清理设置",
-    "save_failed": "保存存储与清理设置失败",
-    "load_failed": "无法加载存储与清理设置",
+    "saved": "存储设置已保存",
+    "save_failed": "保存存储设置失败",
+    "load_failed": "无法加载存储信息",
     "retry_load": "重试",
-    "insufficient": "仅工作区所有者和管理员可管理存储与清理。",
-    "validation": {
-      "ttl_required": "请输入整数小时。",
-      "ttl_min": "工作目录至少保留 1 小时。",
-      "ttl_max": "工作目录最多保留 365 天。",
-      "interval_required": "请输入整数分钟。",
-      "interval_min": "清理扫描周期至少为 1 分钟。",
-      "interval_gt_ttl": "清理扫描周期不能超过工作目录保留时间。"
-    }
+    "read_only": "仅工作区所有者和管理员可修改存储设置。"
   },
   "platform": {
     "title": "版本与服务",

@@ -224,6 +224,29 @@ describe("retired commands never negotiate capabilities or touch the network", (
     await expect(runMultiremi(args)).rejects.toThrow(`已移除：改用 ${replacement}`);
     expect(requests).toEqual([]); expect(output).toEqual([]); expect(warnings).toEqual([]);
   });
+  it("points the removed Session archive and archive settings commands at storage retention", async () => {
+    setup();
+    for (const args of [
+      ["session", "archive", "status", "MUL-1"],
+      ["session", "archive", "verify", "MUL-1", "sar_1"],
+      ["issue", "archive", "list", "MUL-1"],
+      ["issue", "archive", "retry", "MUL-1"],
+    ]) {
+      await expect(dispatch(args)).rejects.toThrow("已移除：改用 remi runtime storage <runtime>");
+      await expect(runMultiremi(args)).rejects.toThrow("已移除：改用 remi runtime storage <runtime>");
+    }
+    for (const args of [["session", "config", "get", "ws_1"], ["session", "config", "update", "ws_1", "--data", "{}"]]) {
+      await expect(dispatch(args)).rejects.toThrow("已移除：改用 remi workspace storage get|set <workspace>");
+    }
+    const inventory = cliCommandInventory();
+    for (const path of ["session archive", "issue archive", "session config"]) {
+      const retired = inventory.find((entry) => entry.path.join(" ") === path);
+      expect(retired?.retired?.replacement).toBe(RETIRED_CLI_COMMANDS[path]);
+      expect(retired?.capability).toBeNull();
+    }
+    expect(inventory.some((entry) => entry.id.startsWith("session.archive.") || entry.id.startsWith("session.config."))).toBe(false);
+    expect(requests).toEqual([]);
+  });
   it("covers the union of old specs and aliases in the visible dispatcher inventory", () => {
     const inventory = cliCommandInventory();
     for (const spec of [...collaborationCommandSpecs(), ...operationsCommandSpecs()]) {

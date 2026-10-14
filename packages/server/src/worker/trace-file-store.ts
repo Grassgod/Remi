@@ -1,8 +1,10 @@
 import { closeSync, constants, existsSync, fstatSync, fsyncSync, ftruncateSync, lstatSync, mkdirSync, openSync, readSync, readdirSync, renameSync, unlinkSync, writeFileSync, writeSync, type Stats } from "node:fs";
 import { randomUUID } from "node:crypto";
+import { open as openFile } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
 import { checkTraceFileLines, isTraceFileEvent, isTraceFileTrailer, TRACE_FILE_FORMAT, type TraceFileHeader, type TraceFileTrailer } from "@multiremi/contracts/trace-file.js";
 import { assertRealDirectoryPath } from "@daemon/agent-runtime/workspace/safe-remove.js";
+import { TRACES_DIRECTORY, traceDirectory, tracePath, tracesRoot } from "@daemon/agent-runtime/workspace/layout.js";
 import { createLogger } from "@shared/logger.js";
 import {
   sanitizeStoredEvent,
@@ -22,16 +24,21 @@ export const TRACE_FILE_MAX_LINE_BYTES = 4 * 1024 * 1024;
 /** Leave room for task/runtime ids and the trace RPC/push envelope. */
 export const TRACE_FILE_MAX_EVENT_BYTES = TRACE_FILE_MAX_LINE_BYTES - 8 * 1024;
 
+/** Closed traces whose offset index stays resident; open traces are never evicted. */
+export const TRACE_FILE_RESIDENT_CLOSED_LIMIT = 256;
+/** A trailer is a short final line; this much of a file's end is enough to recognize one. */
+const TRACE_TAIL_BYTES = 8 * 1024;
+const TRACE_TAIL_CONCURRENCY = 32;
+
 export interface TraceTaskContext {
-  /** Issue/chat Session id; omitted for a one-shot task. */
+  /** Conversation (Issue session / Chat) that wrote the trace; omitted for a one-shot task. */
   sessionId?: string | null;
+  /** Subject whose `traces/<subject>/` directory holds the file. */
+  subjectId: string;
   agentId: string;
   provider: string;
   startedAt: string;
   runtimeId?: string;
-  issueId?: string | null;
-  /** Production subject identity for archive-gated collection of early failures. */
-  subjectKind?: "chat" | "task";
 }
 
 export interface TraceFileStoreOptions {
@@ -41,6 +48,8 @@ export interface TraceFileStoreOptions {
   onWarning?: (path: string, reason: string) => void;
   /** Diagnostics: bytes physically read, including bounded chunk read-ahead. */
   onReadBytes?: (bytes: number) => void;
+  /** How many closed traces keep their offset index in memory. */
+  residentClosedLimit?: number;
 }
 
 interface IndexedTrace {
@@ -73,6 +82,10 @@ function realDirectory(path: string): boolean {
   return true;
 }
 
+function byName(left: { name: string }, right: { name: string }): number {
+  return left.name < right.name ? -1 : left.name > right.name ? 1 : 0;
+}
+
 function ensureDirectory(path: string): void {
   if (!realDirectory(path)) mkdirSync(path, { mode: 0o700 });
 }
@@ -86,6 +99,28 @@ function writeLine(fd: number, line: string): number {
     written += size;
   }
   return buffer.length;
+}
+
+/** Whether the last complete line of a trace file is its trailer; any doubt reads as "not closed". */
+async function endsWithTrailer(path: string): Promise<boolean> {
+  const file = await openFile(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+  try {
+    const { size } = await file.stat();
+    const length = Math.min(size, TRACE_TAIL_BYTES);
+    const tail = Buffer.allocUnsafe(length);
+    const { bytesRead } = await file.read(tail, 0, length, size - length);
+    const text = tail.subarray(0, bytesRead).toString("utf8");
+    // An interrupted final line has no newline and is ignored, as in a full index.
+    const end = text.lastIndexOf("\n");
+    if (end < 0) return false;
+    const line = text.slice(text.lastIndexOf("\n", end - 1) + 1, end);
+    return isTraceFileTrailer(JSON.parse(line));
+  } catch (error) {
+    if (error instanceof SyntaxError) return false;
+    throw error;
+  } finally {
+    await file.close();
+  }
 }
 
 function* completeLines(fd: number, start: number, end: number, onRead?: (bytes: number) => void): Generator<{ line: string; offset: number; end: number }> {
@@ -114,30 +149,73 @@ function* completeLines(fd: number, start: number, end: number, onRead?: (bytes:
   }
 }
 
-/** Durable, per-task JSONL implementation of A-0's TraceStore. */
+/**
+ * Durable, per-task JSONL implementation of A-0's TraceStore.
+ *
+ * Starting the store only lists `traces/<subject>/<task>.jsonl` paths. A trace
+ * is indexed the first time it is read or appended to, and the resident indexes
+ * of closed traces are capped (least recently used first), so a daemon with
+ * years of history starts and runs in constant memory.
+ */
 export class TraceFileStore implements TraceStore {
   private readonly root: string;
+  /** Every known trace file, indexed or not. */
+  private readonly paths = new Map<string, string>();
+  /** Resident indexes in recency order (oldest first). */
   private readonly index = new Map<string, IndexedTrace>();
   private readonly now: TraceClock;
   private readonly contexts = new Map<string, TraceTaskContext>();
+  private readonly residentClosedLimit: number;
 
   constructor(private readonly options: TraceFileStoreOptions) {
     this.root = resolve(options.workspacesRoot);
     this.now = options.now ?? (() => new Date().toISOString());
-    this.rebuildIndex();
+    this.residentClosedLimit = Math.max(0, options.residentClosedLimit ?? TRACE_FILE_RESIDENT_CLOSED_LIMIT);
+    this.listTraces();
   }
 
   registerTask(taskId: string, context: TraceTaskContext): void {
-    const previous = this.index.get(taskId)?.context ?? this.contexts.get(taskId);
+    const previous = this.entry(taskId)?.context ?? this.contexts.get(taskId);
     if (previous?.runtimeId && previous.runtimeId !== context.runtimeId) throw new Error("trace runtime ownership changed");
     this.contexts.set(taskId, context);
   }
 
   registerRuntime(taskId: string, runtimeId: string): void {
-    const context = this.index.get(taskId)?.context ?? this.contexts.get(taskId) ?? this.options.resolveTask(taskId);
+    const context = this.entry(taskId)?.context ?? this.contexts.get(taskId) ?? this.options.resolveTask(taskId);
     this.registerTask(taskId, { ...context, runtimeId });
   }
 
+  /** Runtime that owns a trace, from its header; indexes the trace on first use. */
+  owner(taskId: string): string | undefined {
+    return this.entry(taskId)?.context.runtimeId;
+  }
+
+  /**
+   * Traces a crash left without their trailer, by runtime owner. Only the end
+   * of each listed file is read, in the background, so a root with years of
+   * closed history costs no index; the few open traces are then indexed fully.
+   */
+  async findUnclosed(): Promise<Map<string, string>> {
+    const unclosed = new Map<string, string>();
+    const candidates = [...this.paths].filter(([taskId]) => !this.index.has(taskId));
+    let next = 0;
+    const scan = async () => {
+      for (let index = next++; index < candidates.length; index = next++) {
+        const [taskId, path] = candidates[index]!;
+        try {
+          if (await endsWithTrailer(path)) continue;
+          const entry = this.entry(taskId);
+          if (entry && !entry.closed && entry.context.runtimeId) unclosed.set(taskId, entry.context.runtimeId);
+        } catch (error) {
+          this.warn(path, error instanceof Error ? error.message : String(error));
+        }
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(TRACE_TAIL_CONCURRENCY, candidates.length) }, scan));
+    return unclosed;
+  }
+
+  /** Owners of the traces whose index is resident right now. */
   ownership(): ReadonlyMap<string, string> {
     return new Map([...this.index].flatMap(([taskId, entry]) => entry.context.runtimeId ? [[taskId, entry.context.runtimeId] as const] : []));
   }
@@ -148,13 +226,12 @@ export class TraceFileStore implements TraceStore {
   }
 
   private directoryChain(path: string): Array<{ path: string; info: Stats }> {
-    const traces = dirname(path);
-    const session = dirname(traces);
-    const runtime = dirname(session);
-    if (dirname(runtime) !== this.root || basename(runtime) !== ".runtime" || basename(traces) !== "traces") {
+    const subject = dirname(path);
+    const traces = dirname(subject);
+    if (dirname(traces) !== this.root || basename(traces) !== TRACES_DIRECTORY) {
       throw new Error(`Trace path is outside owned root: ${path}`);
     }
-    return [this.root, runtime, session, traces].map((part) => {
+    return [this.root, traces, subject].map((part) => {
       const info = lstatSync(part);
       assertRealDirectoryPath(part, info, "trace directory");
       return { path: part, info };
@@ -171,7 +248,7 @@ export class TraceFileStore implements TraceStore {
     }
   }
 
-  private inspect(path: string, taskId: string, sessionId: string): IndexedTrace {
+  private inspect(path: string, taskId: string): IndexedTrace {
     const directories = this.directoryChain(path);
     const stat = lstatSync(path);
     if (!stat.isFile() || stat.isSymbolicLink()) throw new Error("not a regular trace file");
@@ -188,7 +265,7 @@ export class TraceFileStore implements TraceStore {
       if (stat.dev !== opened.dev || stat.ino !== opened.ino) throw new Error("trace file changed during inspection");
       for (const record of completeLines(fd, 0, opened.size, this.options.onReadBytes)) {
         if (!header) {
-          const checked = checkTraceFileLines([record.line], { taskId, sessionId });
+          const checked = checkTraceFileLines([record.line], { taskId });
           if (!checked.ok) throw new Error(checked.reason);
           header = JSON.parse(record.line);
           if (header!.runtime_id !== undefined && (typeof header!.runtime_id !== "string" || !header!.runtime_id)) throw new Error("invalid runtime owner");
@@ -217,37 +294,73 @@ export class TraceFileStore implements TraceStore {
     for (const directory of directories) assertRealDirectoryPath(directory.path, directory.info, "trace directory");
     return { path, directories, dev: stat.dev, ino: stat.ino, head,
       eventCount: offsets.length, closed, completeBytes, offsets, duplicates,
-      context: { sessionId: header.session_id, agentId: header.agent_id, provider: header.provider,
-        startedAt: header.started_at, runtimeId: header.runtime_id } };
+      context: { sessionId: header.session_id, subjectId: basename(dirname(path)), agentId: header.agent_id,
+        provider: header.provider, startedAt: header.started_at, runtimeId: header.runtime_id } };
   }
 
-  rebuildIndex(): void {
-    this.index.clear();
-    const runtimeRoot = join(this.root, ".runtime");
-    if (!realDirectory(runtimeRoot)) return;
-    for (const session of readdirSync(runtimeRoot, { withFileTypes: true })) {
-      if (!session.isDirectory() || !safeId(session.name)) continue;
-      const sessionRoot = join(runtimeRoot, session.name);
+  /** Record the path of every trace file on disk. Nothing is opened. */
+  private listTraces(): void {
+    this.paths.clear();
+    const traces = tracesRoot(this.root);
+    if (!realDirectory(traces)) return;
+    for (const subject of readdirSync(traces, { withFileTypes: true }).sort(byName)) {
+      if (!subject.isDirectory() || !safeId(subject.name)) continue;
+      const subjectRoot = join(traces, subject.name);
       try {
-        if (!realDirectory(sessionRoot)) continue;
-        const traces = join(sessionRoot, "traces");
-        if (!realDirectory(traces)) continue;
-        for (const file of readdirSync(traces, { withFileTypes: true })) {
+        if (!realDirectory(subjectRoot)) continue;
+        for (const file of readdirSync(subjectRoot, { withFileTypes: true }).sort(byName)) {
           if (!file.name.endsWith(".jsonl")) continue;
           const taskId = file.name.slice(0, -6);
-          const path = join(traces, file.name);
-          try {
-            if (!safeId(taskId) || !file.isFile()) throw new Error("invalid trace filename or file type");
-            const entry = this.inspect(path, taskId, session.name);
-            if (this.index.has(taskId)) throw new Error("duplicate task id in another session");
-            this.index.set(taskId, entry);
-          } catch (error) {
-            this.warn(path, error instanceof Error ? error.message : String(error));
-          }
+          const path = join(subjectRoot, file.name);
+          if (!safeId(taskId) || !file.isFile()) this.warn(path, "invalid trace filename or file type");
+          else if (this.paths.has(taskId)) this.warn(path, "duplicate task id in another subject");
+          else this.paths.set(taskId, path);
         }
       } catch (error) {
-        this.warn(sessionRoot, error instanceof Error ? error.message : String(error));
+        this.warn(subjectRoot, error instanceof Error ? error.message : String(error));
       }
+    }
+  }
+
+  /**
+   * The resident index of a trace, building it from disk on first use. A file
+   * that fails its integrity checks is reported and treated as absent.
+   */
+  private entry(taskId: string): IndexedTrace | undefined {
+    const resident = this.index.get(taskId);
+    if (resident) {
+      this.index.delete(taskId);
+      this.index.set(taskId, resident);
+      return resident;
+    }
+    const path = this.paths.get(taskId);
+    if (!path) return undefined;
+    try {
+      return this.remember(taskId, this.inspect(path, taskId));
+    } catch (error) {
+      this.paths.delete(taskId);
+      this.warn(path, error instanceof Error ? error.message : String(error));
+      return undefined;
+    }
+  }
+
+  private remember(taskId: string, entry: IndexedTrace): IndexedTrace {
+    this.index.delete(taskId);
+    this.index.set(taskId, entry);
+    this.paths.set(taskId, entry.path);
+    this.evictClosed();
+    return entry;
+  }
+
+  /** Drop the least recently used closed indexes beyond the limit; open traces stay. */
+  private evictClosed(): void {
+    let closed = 0;
+    for (const entry of this.index.values()) if (entry.closed) closed++;
+    for (const [taskId, entry] of this.index) {
+      if (closed <= this.residentClosedLimit) break;
+      if (!entry.closed) continue;
+      this.index.delete(taskId);
+      closed--;
     }
   }
 
@@ -256,40 +369,12 @@ export class TraceFileStore implements TraceStore {
     const context = this.contexts.get(taskId) ?? this.options.resolveTask(taskId);
     const sessionId = context.sessionId ?? taskId;
     if (!safeId(sessionId)) throw new Error(`Invalid trace session id: ${sessionId}`);
+    if (!safeId(context.subjectId)) throw new Error(`Invalid trace subject id: ${context.subjectId}`);
     ensureDirectory(this.root);
-    const runtimeRoot = join(this.root, ".runtime");
-    ensureDirectory(runtimeRoot);
-    const sessionRoot = join(runtimeRoot, sessionId);
-    ensureDirectory(sessionRoot);
-    if (context.issueId || context.subjectKind) {
-      // A preparation failure can emit a trace before provider-home setup
-      // writes GC metadata. The canonical Issue archive root enumerator must
-      // still discover this Session and retain its process history.
-      const metadata = join(sessionRoot, ".multiremi");
-      ensureDirectory(metadata);
-      const gcPath = join(metadata, "gc.json");
-      if (!existsSync(gcPath)) {
-        const fd = openSync(gcPath, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
-        const metadata = context.issueId
-          ? { version: 2, kind: "issue_runtime", issue_id: context.issueId }
-          : context.subjectKind === "chat"
-            ? { version: 1, kind: "chat", chat_session_id: sessionId, task_id: taskId }
-            : { version: 1, kind: "quick_create", task_id: taskId };
-        try { writeFileSync(fd, JSON.stringify(metadata)); fsyncSync(fd); }
-        finally { closeSync(fd); }
-      } else {
-        const info = lstatSync(gcPath);
-        if (!info.isFile() || info.isSymbolicLink()) throw new Error("unsafe trace Session GC metadata");
-      }
-    }
-    const traces = join(sessionRoot, "traces");
-    ensureDirectory(traces);
-    const path = join(traces, `${taskId}.jsonl`);
-    if (existsSync(path)) {
-      const entry = this.inspect(path, taskId, sessionId);
-      this.index.set(taskId, entry);
-      return entry;
-    }
+    ensureDirectory(tracesRoot(this.root));
+    ensureDirectory(traceDirectory(this.root, context.subjectId));
+    const path = tracePath(this.root, context.subjectId, taskId);
+    if (existsSync(path)) return this.remember(taskId, this.inspect(path, taskId));
     const header: TraceFileHeader = {
       format: TRACE_FILE_FORMAT,
       task_id: taskId,
@@ -302,14 +387,12 @@ export class TraceFileStore implements TraceStore {
     const fd = openSync(path, "wx", 0o600);
     try { writeFileSync(fd, `${JSON.stringify(header)}\n`); fsyncSync(fd); } finally { closeSync(fd); }
     const stat = lstatSync(path);
-    const entry: IndexedTrace = { path, directories: this.directoryChain(path), dev: stat.dev, ino: stat.ino,
-      head: 0, eventCount: 0, closed: false, completeBytes: stat.size, offsets: [], context };
-    this.index.set(taskId, entry);
-    return entry;
+    return this.remember(taskId, { path, directories: this.directoryChain(path), dev: stat.dev, ino: stat.ino,
+      head: 0, eventCount: 0, closed: false, completeBytes: stat.size, offsets: [], context });
   }
 
   append(taskId: string, events: TraceEventInput[]): TraceAppendResult {
-    const entry = this.index.get(taskId) ?? this.create(taskId);
+    const entry = this.entry(taskId) ?? this.create(taskId);
     this.assertOwned(entry);
     if (entry.closed || events.length === 0) return { head: entry.head, events: [] };
     const stored = events.map((event, offset): TraceEvent => ({
@@ -348,7 +431,7 @@ export class TraceFileStore implements TraceStore {
   }
 
   read(taskId: string, afterSeq = 0, limit = TRACE_READ_DEFAULT_LIMIT, maxBytes?: number): TraceReadResult {
-    const entry = this.index.get(taskId);
+    const entry = this.entry(taskId);
     if (!entry) return { events: [], head: 0, eof: true };
     const args = normalizeTraceReadArgs(afterSeq, limit, maxBytes);
     const events: TraceEvent[] = [];
@@ -389,17 +472,21 @@ export class TraceFileStore implements TraceStore {
   }
 
   head(taskId: string): TraceStoreHead | null {
-    const entry = this.index.get(taskId);
+    const entry = this.entry(taskId);
     return entry ? { head: entry.head, closed: entry.closed } : null;
   }
 
-  /** Release metadata only for files definitively removed by workspace GC. */
+  /** Release metadata only for files definitively removed by workspace reclaim. */
   pruneMissing(): string[] {
     const removed: string[] = [];
-    for (const [taskId, entry] of this.index) {
-      try { this.assertOwned(entry); }
-      catch (error) {
+    for (const [taskId, path] of this.paths) {
+      const resident = this.index.get(taskId);
+      try {
+        if (resident) this.assertOwned(resident);
+        else lstatSync(path);
+      } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== "ENOENT") continue;
+        this.paths.delete(taskId);
         this.index.delete(taskId);
         this.contexts.delete(taskId);
         removed.push(taskId);
@@ -437,7 +524,7 @@ export class TraceFileStore implements TraceStore {
       this.assertOwned(entry);
       renameSync(partialPath, entry.path);
       published = true;
-      Object.assign(entry, this.inspect(entry.path, taskId, entry.context.sessionId ?? taskId));
+      Object.assign(entry, this.inspect(entry.path, taskId));
     } finally {
       closeSync(source);
       if (target !== undefined) closeSync(target);
@@ -451,11 +538,11 @@ export class TraceFileStore implements TraceStore {
   }
 
   close(taskId: string, end: TraceCloseInput): void {
-    const entry = this.index.get(taskId) ?? this.create(taskId);
+    const entry = this.entry(taskId) ?? this.create(taskId);
     this.assertOwned(entry);
     if (entry.closed) return;
     // A recovered append-only duplicate cannot remain before a trailer: the
-    // archive contract deliberately rejects ambiguous completed files.
+    // trace contract deliberately rejects ambiguous completed files.
     this.canonicalizeDuplicates(taskId, entry);
     const trailer: TraceFileTrailer = { end: {
       status: end.status,
@@ -475,10 +562,11 @@ export class TraceFileStore implements TraceStore {
     }
     finally { closeSync(fd); }
     entry.closed = true;
+    this.evictClosed();
   }
 
   forget(taskId: string): void {
-    const entry = this.index.get(taskId);
+    const entry = this.entry(taskId);
     if (!entry) return;
     try {
       this.assertOwned(entry);
@@ -497,6 +585,7 @@ export class TraceFileStore implements TraceStore {
             : entry.path;
           unlinkSync(target);
           this.index.delete(taskId);
+          this.paths.delete(taskId);
         } finally { closeSync(fd); }
       } finally { closeSync(parentFd); }
     } catch (error) {

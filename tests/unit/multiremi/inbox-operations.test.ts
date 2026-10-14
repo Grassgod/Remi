@@ -52,11 +52,14 @@ pendingTurnBackendTests('MUL-506 message operations and dispatch',fixture=>{
   it('Autopilot inputs use one canonical message and independent run lanes',()=>{const f=setup();
     const auto=createResponsibleTestAutopilot(f.store, {title:'Runs',assigneeId:f.a.id,executionMode:'run_only'});
     const one=f.store.runAutopilot(auto.id,{prompt:'one'}),two=f.store.runAutopilot(auto.id,{prompt:'two'});
-    const turns=f.store.listTurns({workspace_id:'local',session_id:`auto_${auto.id}`});
-    expect(turns).toHaveLength(2);expect(new Set(turns.map(t=>t.execution_scope)).size).toBe(2);
+    // Each run_only run executes in a Chat of its own; the automation log keeps only the triggers.
+    expect(one.chatSessionId).toBeTruthy();expect(two.chatSessionId).not.toBe(one.chatSessionId);
     expect(f.store.listMessages(`auto_${auto.id}`).filter(m=>m.message_kind==='request').map(m=>m.body_md)).toEqual(['one','two']);
+    expect(f.store.listTurns({workspace_id:'local',session_id:`auto_${auto.id}`})).toHaveLength(0);
     for(const run of [one,two]){const task=f.store.getTask(run.taskId!)!;
-      expect(turns.find(t=>t.current_attempt_id===task.id)?.trigger_message_id).toBeTruthy();}
+      const turn=f.store.listTurns({workspace_id:'local',session_id:run.chatSessionId!}).find(t=>t.current_attempt_id===task.id);
+      expect(turn?.trigger_message_id).toBeTruthy();
+      expect(f.store.listMessages(run.chatSessionId!).filter(m=>m.message_kind==='request').map(m=>m.body_md)).toEqual([run===one?'one':'two']);}
     const issueAuto=createResponsibleTestAutopilot(f.store, {title:'Issue run',assigneeId:f.b.id,executionMode:'create_issue'}),run=f.store.runAutopilot(issueAuto.id,{prompt:'Issue request'});
     expect(f.store.listMessages(f.store.getOrCreateDefaultIssueSession(run.issueId!).id)).toHaveLength(1);
     expect(f.store.listMessages(`auto_${issueAuto.id}`)[0]?.message_kind).toBe('request');

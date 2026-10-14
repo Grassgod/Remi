@@ -117,6 +117,8 @@
       "impact_sessions_other": "provider 세션 {{count}}개 초기화 후 다음 실행에서 새로 생성",
       "impact_tokens_one": "daemon token {{count}}개 폐기",
       "impact_tokens_other": "daemon token {{count}}개 폐기",
+      "impact_traces_one": "시도 {{count}}개의 실행 기록을 볼 수 없게 됩니다",
+      "impact_traces_other": "시도 {{count}}개의 실행 기록을 볼 수 없게 됩니다",
       "runtimes_title": "호스팅 중인 런타임",
       "acknowledge": "이 daemon ID와 액세스 token이 더 이상 동작하지 않으며 해당 기기의 daemon 프로세스도 중지해야 함을 이해합니다.",
       "plan_changed": "daemon의 작업 상태가 변경되었습니다. 갱신된 영향을 확인하고 다시 승인하세요.",
@@ -740,5 +742,91 @@
     "save": "저장",
     "saved": "실행 그룹이 업데이트되었습니다",
     "failed": "실행 그룹을 업데이트하지 못했습니다"
+  },
+  "storage": {
+    "card_aria": "{{name}} 저장소",
+    "online": "온라인",
+    "offline": "오프라인",
+    "reported_at": "{{time}} 보고",
+    "no_report": "이 머신은 아직 저장소 보고서를 보내지 않았습니다.",
+    "not_measured": "디스크 사용량을 아직 측정하지 않았습니다.",
+    "bytes_measured": "{{time}} 측정",
+    "bytes_title": "디스크 사용량",
+    "bytes": {
+      "work": "워크스페이스",
+      "env": "실행 환경",
+      "traces": "기록",
+      "shared": "공유 캐시",
+      "legacy": "이전 레이아웃"
+    },
+    "subjects_title": "Issue 및 채팅",
+    "subjects": {
+      "total": "전체",
+      "active": "활성",
+      "ended": "종료됨",
+      "reclaimed": "회수됨"
+    },
+    "retained_title": "유지 사유",
+    "reasons": {
+      "running": "실행 중",
+      "pinned": "고정됨",
+      "not_ended": "종료되지 않음",
+      "within_ttl": "보존 기간 내",
+      "external_dir": "로컬 디렉터리",
+      "snapshot_failed": "스냅샷 실패",
+      "git_check_failed": "Git 확인 실패",
+      "server_unreachable": "서버에 연결할 수 없음",
+      "legacy_retained": "이전 레이아웃 worktree",
+      "error": "오류",
+      "ended_ttl": "보존 기간 초과",
+      "over_cap": "보존 수 상한 초과",
+      "orphan": "서버에서 삭제됨"
+    },
+    "last_round": "최근 라운드",
+    "modes": {
+      "periodic": "정기",
+      "dry_run": "드라이런",
+      "run": "회수"
+    },
+    "last_round_summary": "해제 {{size}} · 회수 {{reclaimed}}개 · 폐기 {{forgotten}}개",
+    "errors_title_one": "오류 {{count}}개",
+    "errors_title_other": "오류 {{count}}개",
+    "dry_run": "드라이런",
+    "running_dry_run": "드라이런 중…",
+    "reclaim_now": "지금 회수",
+    "running_reclaim": "회수 중…",
+    "offline_hint": "저장소 정리를 실행하려면 머신이 온라인이어야 합니다.",
+    "run_failed": "저장소 작업에 실패했습니다",
+    "reclaim_confirm_title": "{{name}}의 저장소를 회수할까요?",
+    "reclaim_confirm_description": "보존 기간이 지난 종료된 Issue와 채팅의 워크스페이스를 삭제합니다. 저장되지 않은 작업은 먼저 스냅샷으로 저장되고 다시 열 때 복원됩니다. 서버에서 이미 삭제된 Issue와 채팅의 데이터는 실행 기록을 포함해 함께 삭제됩니다.",
+    "cancel": "취소",
+    "plan_title": {
+      "periodic": "최근 라운드 항목",
+      "dry_run": "드라이런: 회수 시 수행될 작업",
+      "run": "회수 결과"
+    },
+    "plan": {
+      "subject": "항목",
+      "action": "작업",
+      "reason": "사유",
+      "size": "크기",
+      "unsaved": "저장되지 않은 작업",
+      "unsaved_saved": "스냅샷에 저장됨",
+      "unsaved_will_save": "스냅샷에 저장 예정",
+      "unsaved_kept": "그대로 유지됨",
+      "truncated": "전체 {{total}}개 중 처음 {{count}}개를 표시합니다."
+    },
+    "actions": {
+      "reclaim": "회수",
+      "forget": "폐기",
+      "keep": "유지"
+    },
+    "subject_kinds": {
+      "issue": "Issue",
+      "chat": "채팅",
+      "task": "작업"
+    },
+    "load_failed": "저장소 보고서를 불러오지 못했습니다",
+    "retry": "다시 시도"
   }
 }

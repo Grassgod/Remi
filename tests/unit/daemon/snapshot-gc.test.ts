@@ -10,6 +10,7 @@ import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { MultiremiRepoCache, withRepoCacheLock } from "@daemon/agent-runtime/repo/checkout.js";
 import { runSnapshotGcOnce, type RunSnapshotGcOnceOptions } from "@daemon/agent-runtime/repo/snapshot-gc.js";
+import { codeViewsRoot, sharedReposRoot } from "@daemon/agent-runtime/workspace/layout.js";
 import { OWNED_DIRECTORY_QUARANTINE } from "@daemon/agent-runtime/workspace/safe-remove.js";
 import { MultiremiDaemon } from "@multiremi/daemon.js";
 
@@ -229,14 +230,11 @@ describe("snapshot TTL GC", () => {
     expect(statSync(sentinel).mode).toBe(fileMode);
   });
 
-  it("skips files and quarantine names at every level", async () => {
+  it("skips files at every level", async () => {
     const f = fixture();
     f.tree("old", f.now - ttlMs - 1);
-    for (const parent of [f.snapshotsRoot, f.wsDir, f.repoDir]) {
-      mkdirSync(join(parent, OWNED_DIRECTORY_QUARANTINE));
-      writeFileSync(join(parent, "file"), "keep");
-    }
-    expect(await runSnapshotGcOnce(f.options)).toEqual({ removed: 1, retained: 0, skipped: 6 });
+    for (const parent of [f.snapshotsRoot, f.wsDir, f.repoDir]) writeFileSync(join(parent, "file"), "keep");
+    expect(await runSnapshotGcOnce(f.options)).toEqual({ removed: 1, retained: 0, skipped: 3 });
     expect(existsSync(f.repoDir)).toBe(true);
   });
 
@@ -304,7 +302,7 @@ describe("snapshot TTL GC", () => {
     expect((await f.create()).created).toBe(false);
   });
 
-  it("runs snapshot collection from daemon GC without changing the workspace summary", async () => {
+  it("runs snapshot collection from daemon GC over the shared code views", async () => {
     const f = fixture();
     const expired = f.tree("old", Date.now() - ttlMs * 2);
     const daemon = new MultiremiDaemon({
@@ -314,7 +312,7 @@ describe("snapshot TTL GC", () => {
       repoCacheRoot: f.repoCacheRoot,
       snapshotTtlMs: ttlMs,
     });
-    expect(await daemon.runGcOnce()).toEqual({ cleaned: 0, orphaned: 0, skipped: 0 });
+    await daemon.runGcOnce();
     expect(existsSync(expired)).toBe(false);
   });
 });
@@ -322,8 +320,8 @@ describe("snapshot TTL GC", () => {
 function fixture() {
   const root = mkdtempSync(join(tmpdir(), "multiremi-snapshot-gc-"));
   roots.push(root);
-  const snapshotsRoot = join(root, ".snapshots");
-  const repoCacheRoot = join(root, ".repos");
+  const snapshotsRoot = codeViewsRoot(root);
+  const repoCacheRoot = sharedReposRoot(root);
   const wsDir = join(snapshotsRoot, "workspace");
   const repoDir = join(wsDir, "repo.git");
   const barePath = join(repoCacheRoot, "workspace", "repo.git");

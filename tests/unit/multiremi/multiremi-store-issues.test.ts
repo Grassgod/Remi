@@ -11,7 +11,7 @@ import { runMigrations } from "@multiremi/store/migrations.js";
 import { INBOX_ROUTING } from "@multiremi/store/inbox-routing.js";
 import type { StoreContext } from '@multiremi/store/context.js';
 import { inboxReportBody } from "./inbox-test-assertions.js";
-import { createStore, db, resetMultiremiTestEnv, readyArchiveBinding } from "./helpers.js";
+import { createStore, db, resetMultiremiTestEnv } from "./helpers.js";
 
 afterEach(resetMultiremiTestEnv);
 

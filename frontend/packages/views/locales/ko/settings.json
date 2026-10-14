@@ -38,7 +38,7 @@
       "integrations": "연동",
       "feishu_messages": "Feishu 메시지",
       "model_gateway": "모델 게이트웨이",
-      "storage_cleanup": "저장소 및 정리",
+      "storage": "저장소",
       "labs": "실험실",
       "members": "멤버",
       "platform": "버전 및 서비스"
@@ -473,46 +473,58 @@
     "install_error_forbidden": "이 워크스페이스에 Lark 봇을 설치할 권한이 더 이상 없어요. 워크스페이스 관리자에게 문의하세요.",
     "install_error_generic": "설치에 실패했어요. 다시 시도하세요."
   },
-  "storageCleanup": {
-    "description": "완료된 Issue 작업 공간을 삭제하기 전에 공급자 원본 세션 기록을 보관합니다.",
-    "storage_title": "아카이브 저장소",
-    "backend": "백엔드",
-    "local_disk": "로컬 디스크",
-    "root_hint": "아카이브 위치",
-    "archive_gate": "검증된 아카이브가 작업 공간 정리의 필수 조건",
-    "required": "필수",
-    "unknown": "보고되지 않음",
-    "max_archive_size": "최대 아카이브 크기",
-    "min_free_space": "최소 여유 디스크 공간",
-    "usage_title": "사용량",
-    "total": "전체",
-    "ready": "준비됨",
-    "pending": "대기 중",
-    "failed": "실패",
-    "exhausted": "자동 재시도 중지됨",
-    "space_used": "사용 공간",
-    "last_failure": "최근 아카이브 실패",
-    "cleanup_title": "작업 공간 정리",
-    "cleanup_description": "완료된 Issue 작업 공간을 지정한 시간 동안 유지합니다. 세션 아카이브가 검증되기 전에는 삭제하지 않습니다.",
-    "workspace_ttl": "작업 공간 보존 기간",
-    "gc_interval": "정리 검사 간격",
-    "hours": "시간",
-    "minutes": "분",
+  "storage": {
+    "description": "종료된 Issue와 채팅은 보존 기간이 지나면 코드 디렉터리와 실행 환경을 반환합니다. 저장되지 않은 작업은 먼저 스냅샷으로 저장되며 Issue나 채팅을 다시 열면 복원됩니다. 실행 기록은 항상 머신에 남습니다.",
+    "machines_title": "머신",
+    "no_machines": "이 워크스페이스에 연결된 머신이 아직 없습니다.",
+    "policy_title": "보존 정책",
+    "policy_description": "이 워크스페이스의 모든 머신에 적용됩니다. 각 머신의 환경 변수로 로컬에서 덮어쓸 수 있습니다.",
+    "fields": {
+      "ttl_ms": {
+        "label": "보존 기간",
+        "hint": "종료된 Issue 또는 채팅이 워크스페이스를 유지한 뒤 회수되기까지의 기간입니다."
+      },
+      "automation_ttl_ms": {
+        "label": "자동화 채팅 보존 기간",
+        "hint": "자동화 실행으로 열린 채팅에 적용되는 보존 기간입니다."
+      },
+      "max_retained": {
+        "label": "보존 워크스페이스 수 상한",
+        "hint": "머신마다 유지하는 종료된 워크스페이스 수입니다. 초과하면 가장 오래 사용하지 않은 것부터 회수합니다. 0은 제한 없음입니다."
+      },
+      "orphan_ttl_ms": {
+        "label": "고아 데이터 보존 기간",
+        "hint": "서버에서 삭제된 Issue나 채팅의 데이터를 머신이 유지하는 기간입니다."
+      },
+      "snapshot_max_bytes": {
+        "label": "스냅샷 최대 크기",
+        "hint": "스냅샷에 담을 수 있는 저장되지 않은 작업의 최대 크기입니다. 초과하면 워크스페이스를 회수하지 않고 유지합니다."
+      },
+      "chat_idle_days": {
+        "label": "채팅 자동 보관",
+        "hint": "활성 채팅이 활동 없이 자동으로 보관되기까지의 일수입니다. 0은 자동 보관하지 않습니다."
+      }
+    },
+    "units": {
+      "hours": "시간",
+      "mb": "MB",
+      "days": "일",
+      "count": "개"
+    },
+    "default_value": "기본값: {{value}} {{unit}}",
+    "validation": {
+      "required": "숫자를 입력하세요.",
+      "integer": "정수를 입력하세요.",
+      "range": "{{min}}~{{max}} {{unit}} 사이여야 합니다."
+    },
+    "reset_default": "기본값으로 되돌리기",
     "save": "저장",
     "saving": "저장 중…",
-    "saved": "저장소 및 정리 설정을 저장했습니다",
-    "save_failed": "저장소 및 정리 설정을 저장하지 못했습니다",
-    "load_failed": "저장소 및 정리 설정을 불러오지 못했습니다",
+    "saved": "저장소 설정을 저장했습니다",
+    "save_failed": "저장소 설정을 저장하지 못했습니다",
+    "load_failed": "저장소 정보를 불러오지 못했습니다",
     "retry_load": "다시 시도",
-    "insufficient": "워크스페이스 소유자와 관리자만 관리할 수 있습니다.",
-    "validation": {
-      "ttl_required": "보존 시간을 정수로 입력하세요.",
-      "ttl_min": "작업 공간 보존 기간은 최소 1시간이어야 합니다.",
-      "ttl_max": "작업 공간 보존 기간은 365일을 초과할 수 없습니다.",
-      "interval_required": "검사 간격을 정수로 입력하세요.",
-      "interval_min": "검사 간격은 최소 1분이어야 합니다.",
-      "interval_gt_ttl": "검사 간격은 작업 공간 보존 기간을 초과할 수 없습니다."
-    }
+    "read_only": "저장소 설정은 워크스페이스 소유자와 관리자만 변경할 수 있습니다."
   },
   "platform": {
     "title": "버전 및 서비스",

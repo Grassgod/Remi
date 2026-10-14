@@ -155,6 +155,7 @@
       "links": "关联入口",
       "open_issue": "打开 Issue",
       "open_session": "打开 Agent 会话",
+      "open_chat": "打开对话",
       "open_autopilot": "打开自动化",
       "group_title": "运行汇总",
       "group_runs": "当日 {{count}} 次成功运行",

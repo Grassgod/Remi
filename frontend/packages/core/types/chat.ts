@@ -1,3 +1,12 @@
+/** Which chats a list shows: the user's own, those opened by automation runs, or both. */
+export type ChatOriginFilter = "user" | "automation" | "all";
+
+/** The automation run that opened a chat. */
+export interface ChatOrigin {
+  autopilot_id: string;
+  run_id: string;
+}
+
 export interface ChatSession {
   runtime_workspace_id?: string | null;
   id: string;
@@ -10,6 +19,8 @@ export interface ChatSession {
   /** True when the session has any unread assistant replies. List-only. */
   has_unread: boolean;
   pinned: boolean;
+  /** Set for chats opened by an automation run; null for the user's own. */
+  origin: ChatOrigin | null;
   unread_count: number;
   last_message: { content: string; role: "user" | "assistant"; created_at: string } | null;
   created_at: string;

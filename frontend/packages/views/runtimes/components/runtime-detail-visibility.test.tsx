@@ -138,6 +138,11 @@ vi.mock("./update-section", () => ({
   ),
 }));
 vi.mock("./usage-section", () => ({ UsageSection: () => null }));
+vi.mock("./daemon-storage-card", () => ({
+  RuntimeStorageCard: ({ daemonId, canManage }: { daemonId: string; canManage: boolean }) => (
+    <div data-testid="runtime-storage-card">{`${daemonId}:${canManage ? "manage" : "view"}`}</div>
+  ),
+}));
 vi.mock("./runtime-plugins-tab", () => ({
   RuntimePluginsTab: () => <div>runtime-plugins-tab</div>,
 }));
@@ -190,6 +195,14 @@ function renderDetail(runtime: AgentRuntime) {
 
 describe("RuntimeDetail visibility section", () => {
   beforeEach(() => vi.clearAllMocks());
+
+  it("shows the machine's storage card only for a runtime that belongs to a daemon", () => {
+    const { unmount } = renderDetail(makeRuntime({ daemon_id: "daemon-1" }));
+    expect(screen.getByTestId("runtime-storage-card")).toHaveTextContent("daemon-1:view");
+    unmount();
+    renderDetail(makeRuntime({ daemon_id: null }));
+    expect(screen.queryByTestId("runtime-storage-card")).toBeNull();
+  });
 
   it("shows owner-editable visibility choices when the caller owns the runtime", () => {
     renderDetail(makeRuntime({ owner_id: "user-me" }));

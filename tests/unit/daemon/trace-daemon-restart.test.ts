@@ -10,7 +10,7 @@ import { disabledSshMeshRuntime } from "../../helpers/ssh-mesh-isolation.js";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
-it("a fresh daemon process reads the previous process's trace and runtime ACL", () => {
+it("a fresh daemon process reads the previous process's trace and runtime owner", () => {
   const root = mkdtempSync(join(tmpdir(), "trace-daemon-process-restart-"));
   const code = String.raw`
     import { MultiremiDaemon } from "./packages/server/src/worker/daemon.ts";
@@ -21,12 +21,12 @@ it("a fresh daemon process reads the previous process's trace and runtime ACL", 
       sshMeshManager: disabledSshMeshRuntime(), gcEnabled: false });
     const trace = daemon.ensureTrace();
     if (process.env.MULTIREMI_TEST_TRACE_MODE === "write") {
-      trace.store.registerTask("tsk_process", { sessionId: "ises_process", agentId: "agt_process", provider: "codex",
+      trace.store.registerTask("tsk_process", { sessionId: "ises_process", subjectId: "iss_process", agentId: "agt_process", provider: "codex",
         runtimeId: "rt_process", startedAt: "2026-10-05T00:00:00Z" });
       trace.append("tsk_process", "rt_process", [{ type: "tool_use", tool: "Bash", toolCallId: "call_process", input: { command: "pwd" } }]);
       trace.close("tsk_process", "completed");
     }
-    console.log(JSON.stringify({ head: trace.store.head("tsk_process"), owner: trace.ownership().get("tsk_process"),
+    console.log(JSON.stringify({ head: trace.store.head("tsk_process"), owner: trace.store.owner("tsk_process"),
       events: trace.store.read("tsk_process").events }));
     daemon.stop(); await releaseDaemonTrace(daemon.protocolClient);
   `;
@@ -53,7 +53,7 @@ it("production daemon construction recovers normalized trace rows after process 
   const first = make();
   const trace = (first as unknown as Internal).ensureTrace();
   expect(trace.store).toBeInstanceOf(TraceFileStore);
-  (trace.store as TraceFileStore).registerTask("tsk_restart", { sessionId: "ises_restart", agentId: "agt_restart",
+  (trace.store as TraceFileStore).registerTask("tsk_restart", { sessionId: "ises_restart", subjectId: "iss_restart", agentId: "agt_restart",
     provider: "codex", runtimeId: "rt_restart", startedAt: "2026-10-05T00:00:00Z" });
   trace.append("tsk_restart", "rt_restart", [{ type: "tool_use", tool: "Read", input: { path: "README.md" }, toolCallId: "tool_1" },
     { type: "text", content: "Recovered answer", meta: { phase: "final" } }]);
@@ -63,7 +63,7 @@ it("production daemon construction recovers normalized trace rows after process 
   const second = make();
   const recovered = (second as unknown as Internal).ensureTrace();
   try {
-    expect(recovered.ownership().get("tsk_restart")).toBe("rt_restart");
+    expect((recovered.store as TraceFileStore).owner("tsk_restart")).toBe("rt_restart");
     expect(second.traceStore().head("tsk_restart")).toEqual({ head: 2, closed: true });
     expect(second.traceStore().read("tsk_restart", 0, 1).events[0]).toMatchObject({ tool: "Read", input: { path: "README.md" }, tool_call_id: "tool_1" });
     expect(recovered.completion("tsk_restart")).toMatchObject({ final_reply_md: "Recovered answer", trace: { tool_call_count: 1 } });

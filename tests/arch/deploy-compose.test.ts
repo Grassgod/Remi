@@ -95,10 +95,10 @@ describe("application compose stack", () => {
       // Download hits never replace a frozen install for a relevant job.
       expect(job.steps[install].if ?? "").not.toContain("cache-hit");
       for (const step of job.steps.filter((step: any) => step.uses === "actions/cache/save@v4")) {
-        expect(["guards", "session-archive-platform"]).toContain(jobName);
+        expect(["guards", "runtime-platform"]).toContain(jobName);
         expect(step.if).toContain("github.ref == 'refs/heads/main'");
         expect(step.if).toContain("github.event_name != 'pull_request'");
-        if (jobName === "session-archive-platform") expect(step.if).toContain("matrix.os == 'macos-latest'");
+        if (jobName === "runtime-platform") expect(step.if).toContain("matrix.os == 'macos-latest'");
       }
     }
   });
@@ -215,11 +215,8 @@ describe("application compose stack", () => {
     expect(splitUpstream).not.toMatch(/^\s*location /mu);
     expect(splitLocations).toMatch(/^location \/api\/daemon\/ \{/mu);
     expect(splitLocations).not.toMatch(/^\s*upstream /mu);
-    // The prefix must stay an ordinary prefix with a trailing slash: `^~` would
-    // stop the archive-upload regex below it from ever being evaluated, and
-    // without the trailing slash `/api/daemons/:id` (a browser route) would be
-    // captured too.
-    expect(splitLocations).not.toMatch(/\^~\s*\/api\/daemon\//u);
+    // The prefix needs its trailing slash: without it `/api/daemons/:id` (a
+    // browser route) would be captured too.
     expect(splitLocations).not.toMatch(/location \/api\/daemon[^/\s]/u);
     // MUL-462's peer endpoints (`/internal/peer/events`, `/internal/peer/health`)
     // are for container-to-container traffic only. Today nothing routes them
@@ -230,28 +227,26 @@ describe("application compose stack", () => {
   });
 
   test("the split runbook restores every file stage A changes", () => {
-    // MUL-464 QA: stage A changes three Nginx files (the site, the archive
-    // include, and possibly nginx.conf for the http-level upstream) plus the
-    // host Compose file and env. The first runbook restored only the site file,
-    // so a rollback left large archive uploads pointed at a container that Full
-    // return was about to stop. Each changed file must be named in the backup
-    // block, covered by the per-file table, and restored by a rollback.
+    // MUL-464 QA: stage A changes the Nginx site file (and possibly nginx.conf
+    // for the http-level upstream) plus the host Compose file and env. Each
+    // changed file must be named in the backup block, covered by the per-file
+    // table, and restored by a rollback.
     for (const file of [
       "nginx-site.conf.orig",
-      "nginx-session-archive-direct.conf.orig",
       "nginx.conf.orig",
       "compose.application.yml.orig",
       "application.env.orig",
     ]) {
       expect(deployReadme, `backup for ${file}`).toContain(file);
     }
-    // The archive include must be restored by the stage A rollback, not only
-    // backed up: name it in the rollback block as well.
+    // The stage A rollback restores the site file and, when step 5 edited it,
+    // nginx.conf: name both in the rollback block, not only in the backup.
     const rollback = splitSection(deployReadme).slice(splitSection(deployReadme).indexOf("### Rollback"));
-    expect(rollback).toContain("nginx-session-archive-direct.conf.orig");
-    // And the rollback must verify both routes came back, which is the check
-    // that catches a half-restored host.
-    expect(rollback).toMatch(/archive path/);
+    expect(rollback).toContain("nginx-site.conf.orig");
+    expect(rollback).toContain("nginx.conf.orig");
+    // And the rollback must verify the daemon surface came back, which is the
+    // check that catches a half-restored host.
+    expect(rollback).toMatch(/serve the daemon surface from `api` again/);
   });
 
   test("the split runbook deletes the stage A Compose lines instead of restoring the env backup", () => {
@@ -325,7 +320,7 @@ describe("application compose stack", () => {
   });
 
   test("stage A rollback gates on the nginx -t exit code before counting references", () => {
-    // MUL-464 QA r3: with the archive include left pointing at the removed
+    // MUL-464 QA r3: with the site file left pointing at the removed
     // upstream, `nginx -T | grep -c multica_api_runtime` prints 0 while nginx
     // itself fails to parse, so a count-only check reports "restored" on a
     // broken config. The exit code has to be judged first.

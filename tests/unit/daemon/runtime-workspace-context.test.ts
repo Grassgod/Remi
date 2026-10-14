@@ -75,7 +75,7 @@ describe("Runtime workspace local execution", () => {
 
   it("loads parent and user context locally without embedding file contents in the server prompt", async () => {
     const { base, root, cwd, baseHome, task, options } = fixture();
-    const home = resolveTaskProviderHome(task, options.workspacesRoot, options.workspacesRoot)!;
+    const home = resolveTaskProviderHome(task, options.workspacesRoot)!;
     await prepareIssueSessionProviderHome(home, { baseCodexHome: baseHome, linkCodexAuth: false });
     const env = prepareRuntimeWorkspaceContext(task, home, cwd, { baseHome, userHome: join(base, "user-home") });
     const instructions = readFileSync(join(home.home, "AGENTS.md"), "utf8");

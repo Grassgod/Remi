@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { MultiremiDaemon } from "@multiremi/daemon.js";
 import { MultiremiRepoCache } from "@multiremi/repo-cache.js";
+import { IssueWorkspaceLifecycleLocker } from "@daemon/agent-runtime/workspace/lifecycle-lock.js";
 
 const roots: string[] = [];
 
@@ -84,7 +85,8 @@ async function fixture() {
   await repoCache.sync("local", [{ url: repoUrl }]);
   const reports: any[] = [];
   const daemon = Object.assign(Object.create(MultiremiDaemon.prototype), {
-    repoCache, options: {}, terminalAuthorityMode: false,
+    repoCache, options: { workspacesRoot: join(root, "workspaces") }, terminalAuthorityMode: false,
+    issueWorkspaceLifecycleLocks: new IssueWorkspaceLifecycleLocker(),
     ensureRepoReady: async () => {}, assertWorkspaceRootOwner: () => {},
     workspaceCoAuthoredByEnabled: () => false,
     enqueueTaskReport: (_taskId: string, _kind: string, report: unknown) => reports.push(report),

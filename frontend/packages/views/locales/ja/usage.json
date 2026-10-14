@@ -175,7 +175,6 @@
     "scope_live": "実行記録の所属",
     "scope_task_record": "履歴タスク記録の所属",
     "scope_trace_owner": "保存済み Trace の所属",
-    "scope_archive": "Archive manifest の所属",
     "scope_unknown": "実行所属不明",
     "scope_mixed": "複数の所属証拠",
     "export_csv": "CSV を出力",

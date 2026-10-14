@@ -480,8 +480,8 @@ for (const backend of ['sqlite','postgres'] as const) describe.skipIf(backend ==
     store.updateAutopilot(automation.id,{status:'paused'});
     expect((await app.request('/api/issues',{method:'POST',headers,body:JSON.stringify({title:'Inactive source'})})).status).toBe(409);
     store.updateAutopilot(automation.id,{status:'active'});
-    db.run('UPDATE multiremi_turns SET execution_scope=? WHERE current_attempt_id=?',['unrelated-scope',task.id]);
-    expect((await app.request('/api/issues',{method:'POST',headers,body:JSON.stringify({title:'Wrong run scope'})})).status).toBe(409);
+    db.run('UPDATE multiremi_autopilot_runs SET chat_session_id=? WHERE id=?',[store.createChatSession({agentId:f.worker.id}).id,scheduled.id]);
+    expect((await app.request('/api/issues',{method:'POST',headers,body:JSON.stringify({title:'Wrong run chat'})})).status).toBe(409);
   }));
   it('preserves verified formal Agent source taint through HTTP acceptance and system-event dispatch', () => run(async (store,db) => {
     const human=store.findWorkspaceMemberForUser('local','local')!;

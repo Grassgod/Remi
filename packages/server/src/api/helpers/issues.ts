@@ -69,15 +69,16 @@ export function taskIssueResponsibleMember(c: Context, store: MultiremiStore): s
     const responsibility = store.resolveIssueResponsibility(task.issueId);
     return responsibility.unresolved.length ? null : responsibility.rootHuman?.id ?? null;
   }
-  if (!task.chatSessionId && task.autopilotRunId) {
+  if (task.autopilotRunId) {
     // task.autopilotRunId is projected from the persisted run's current TurnAttempt,
     // never a request body. Recheck both sides before trusting its explicit configuration.
     const run = store.getAutopilotRun(task.autopilotRunId);
     const turn = store.getTurnForAttempt(task.id);
     const automation = run ? store.getAutopilot(run.autopilotId) : null;
+    const chat = task.chatSessionId ? store.getChatSession(task.chatSessionId) : null;
     if (!run || run.taskId !== task.id || !turn || turn.current_attempt_id !== task.id
-      || turn.workspace_id !== task.workspaceId || turn.execution_scope !== `auto:${run.id}`
-      || turn.session_id !== `auto_${run.autopilotId}`
+      || turn.workspace_id !== task.workspaceId
+      || !chat || run.chatSessionId !== chat.id || turn.session_id !== chat.id || chat.origin?.autopilot_id !== run.autopilotId
       || !automation || automation.workspaceId !== task.workspaceId || automation.status !== 'active') return null;
     const human = automation.responsibleMemberId ? store.getWorkspaceMember(automation.responsibleMemberId) : null;
     return human && !human.archivedAt && human.workspaceId === task.workspaceId ? human.id : null;
@@ -100,7 +101,7 @@ export function taskIssueResponsibleMember(c: Context, store: MultiremiStore): s
 export function taskIssueResponsibilitySourceAudit(c: Context, store: MultiremiStore): CreateIssueInput['responsibilitySourceAudit'] {
   const id=currentTaskAccessToken(c)?.taskId;
   const task=id?store.getTask(id):null;
-  if(!task || task.issueId || task.chatSessionId || !task.autopilotRunId)return null;
+  if(!task || task.issueId || !task.autopilotRunId)return null;
   const human=taskIssueResponsibleMember(c,store);
   const run=human?store.getAutopilotRun(task.autopilotRunId):null;
   return run && human ? {kind:'autopilot_run',taskId:task.id,runId:run.id,autopilotId:run.autopilotId,responsibleMemberId:human} : null;

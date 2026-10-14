@@ -24,11 +24,6 @@ const rules: Array<[RegExp, Audit]> = [
     shape: "issue decision 集合无 LIMIT；human-request payload 集合辅助读取",
     caller: "issues.ts → IssuesRepo.listIssueDecisions",
   }],
-  [/session-archives|session-archive$/, {
-    tables: "multiremi_session_archives: metadata, last_error; workspace archive metadata",
-    shape: "list SELECT * 无 LIMIT；get/init/verify/upload 回读单行；metadata 无字节 cap；归档文件正文在外部存储",
-    caller: "session-archives.ts → SessionArchivesRepo.list/get/init/withWritableIssueArchive",
-  }],
   [/\/dashboard\//, {
     tables: "multiremi_tasks t.*: usage, prompt, result, error；runtime/agent 关联标量",
     shape: "filteredUsageTaskRows 按时间/工作区筛选，无行 LIMIT；TS 聚合发生在全行读取之后",
@@ -232,9 +227,9 @@ const report = `# MUL-398 C-1 最终例外逐条审计
 |---|---|---|---|---|---|
 ${rows.join("\n")}
 
-## Trace / 归档区别
+## Trace
 
-本地/provider trace 与 session archive 文件正文走文件/对象存储，没有定位到一张承载 trace 正文的 PG 全量表。\`SessionArchivesRepo.list\` 仍全行返回 \`metadata\`，init 接受 metadata object 而未设置字节 cap，所以相关归档路由纳入例外；没有拿「正文在外部」推导 SQL metadata 安全。
+trace 文件在 daemon 本地，服务端只持有指针行（\`multiremi_task_traces\`），没有承载 trace 正文的 PG 全量表。
 
 ## 64 MiB 边界
 

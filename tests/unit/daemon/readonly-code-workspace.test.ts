@@ -1,13 +1,13 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import type { AgentTask } from "@daemon/contracts/types.js";
 import { MultiremiDaemon } from "@multiremi/daemon.js";
 import { MultiremiRepoCache } from "@daemon/agent-runtime/repo/checkout.js";
 import { prepareReadOnlyCodeWorkspace } from "@daemon/agent-runtime/workspace/readonly-code.js";
-import { runWorkspaceGcOnce } from "@daemon/agent-runtime/workspace/gc.js";
+import { resolveWorkDir } from "@daemon/agent-runtime/workspace/persistent.js";
 
 const roots: string[] = [];
 afterEach(() => {
@@ -35,9 +35,6 @@ describe("discussion code snapshots", () => {
     expect(readFileSync(join(snapshotPath, "README.md"), "utf8")).toBe("parent committed\n");
     expect(git(snapshotPath, ["rev-parse", "--abbrev-ref", "HEAD"])).toBe("HEAD");
     expect(git(snapshotPath, ["log", "-1", "--format=%s"])).toBe("parent committed");
-    expect(JSON.parse(readFileSync(join(f.workDir, ".multiremi", "gc.json"), "utf8"))).toMatchObject({
-      kind: "discussion_issue", issue_id: "issue", issue_session_id: "side",
-    });
     writeFileSync(join(f.parentPath, "README.md"), "later parent commit\n");
     git(f.parentPath, ["commit", "-am", "later"]);
     const next = await prepareReadOnlyCodeWorkspace(f.workDir, f.task, f.cache);
@@ -79,42 +76,28 @@ describe("discussion code snapshots", () => {
     expect(existsSync(f.workDir)).toBe(false);
   });
 
-  it("refuses symlinked discussion roots and metadata before writing GC state", async () => {
+  it("refuses symlinked discussion roots and metadata before writing anything", async () => {
     const f = await fixture();
     const outside = join(f.root, "outside");
     mkdirSync(outside);
-    mkdirSync(join(f.workspacesRoot, "discussions", "MUL-324"), { recursive: true });
+    mkdirSync(dirname(f.workDir), { recursive: true });
     symlinkSync(outside, f.workDir, "dir");
     await expect(prepareReadOnlyCodeWorkspace(f.workDir, f.task, f.cache)).rejects.toThrow("Unsafe read-only discussion workspace");
-    expect(existsSync(join(outside, ".multiremi"))).toBe(false);
+    expect(readdirSync(outside)).toEqual([]);
     rmSync(f.workDir);
     mkdirSync(f.workDir);
     symlinkSync(outside, join(f.workDir, ".multiremi"), "dir");
     await expect(prepareReadOnlyCodeWorkspace(f.workDir, f.task, f.cache)).rejects.toThrow("Unsafe read-only discussion workspace");
-    expect(existsSync(join(outside, "gc.json"))).toBe(false);
+    expect(readdirSync(outside)).toEqual([]);
+    expect(readdirSync(f.workDir)).toEqual([".multiremi"]);
   });
 
-  it("retains active snapshots and deletes terminal snapshots through existing discussion GC", async () => {
+  it("keeps the snapshot work set in the lane generation, apart from the parent Issue workspace", async () => {
     const f = await fixture();
     await prepareReadOnlyCodeWorkspace(f.workDir, f.task, f.cache);
-    let status = "in_progress";
-    const gcOptions = {
-      root: f.workspacesRoot, ttlMs: 0, orphanTtlMs: 0, now: Date.now() + 1_000,
-      client: {
-        getIssueGcCheck: async () => ({ status, updated_at: "2000-01-01T00:00:00.000Z" }),
-        getChatSessionGcCheck: async () => { throw new Error("unexpected Chat GC"); },
-        getAutopilotRunGcCheck: async () => { throw new Error("unexpected Autopilot GC"); },
-        getTaskGcCheck: async () => { throw new Error("unexpected Task GC"); },
-        reportIssueWorkspaceCleaned: async () => { throw new Error("must not report the parent workspace cleaned"); },
-      },
-      requireIssueSessionArchive: true,
-      ensureIssueSessionArchive: async () => { throw new Error("must not archive a discussion snapshot"); },
-      hasDirtyGitWorktree: async () => { throw new Error("must not inspect detached snapshot dirtiness"); },
-    };
-    expect(await runWorkspaceGcOnce(gcOptions)).toEqual({ cleaned: 0, orphaned: 0, skipped: 1 });
-    status = "done";
-    expect(await runWorkspaceGcOnce(gcOptions)).toEqual({ cleaned: 1, orphaned: 0, skipped: 0 });
-    expect(existsSync(f.workDir)).toBe(false);
+    expect(f.workDir).toBe(join(f.workspacesRoot, "env", "issue", "side", "agt_1", "main", "1", "work"));
+    expect(existsSync(join(f.workDir, "source", ".git"))).toBe(true);
+    expect(existsSync(join(f.workspacesRoot, "work", "issue"))).toBe(false);
     expect(existsSync(f.parentPath)).toBe(true);
   });
 });
@@ -144,13 +127,13 @@ async function fixture() {
   const parentCommit = git(parent.path, ["rev-parse", "HEAD"]);
   writeFileSync(join(parent.path, "README.md"), "parent uncommitted\n");
   const workspacesRoot = join(root, "workspaces");
-  const workDir = join(workspacesRoot, "discussions", "MUL-324", "side");
   const task = {
-    id: "task", workspaceId: "local", issueId: "issue", issueSessionId: "side",
+    id: "task", workspaceId: "local", issueId: "issue", issueSessionId: "side", agent: { id: "agt_1" },
     holdsWorkspace: false, issue: { id: "issue", key: "MUL-324" },
     issueSession: { id: "side", title: "Side", parentSessionId: "parent", inheritMode: "follow", withCode: true },
     repos: [{ url: source }],
   } as AgentTask;
+  const workDir = resolveWorkDir(task, workspacesRoot).workDir;
   return { root, source, cache, parentPath: parent.path, parentCommit, workspacesRoot, workDir, task };
 }
 

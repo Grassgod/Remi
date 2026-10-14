@@ -44,7 +44,6 @@ services:
       MULTIREMI_ALLOW_EMAIL_CODE_LOGIN: "0"
       MULTIREMI_PROJECT_KNOWLEDGE_MODE: sql
       MULTIREMI_UPLOAD_DIR: /srv/multiremi/uploads
-      MULTIREMI_SESSION_ARCHIVE_ROOT: /srv/multiremi/session-archives
       MULTIREMI_BACKGROUND_JOBS: ${REMI_BACKGROUND_JOBS:-1}
       MULTIREMI_SSH_MESH_CONTROL_PLANE: "0"
       MULTIREMI_SSH_MESH_CONTROL_PLANE_ROOT: /srv/multiremi/ssh-mesh
@@ -56,8 +55,8 @@ services:
       - /bin/sh
       - -ec
       - |
-        mkdir -p /srv/multiremi/uploads /srv/multiremi/session-archives /srv/multiremi/ssh-mesh
-        chown 1000:1000 /srv/multiremi /srv/multiremi/uploads /srv/multiremi/session-archives /srv/multiremi/ssh-mesh
+        mkdir -p /srv/multiremi/uploads /srv/multiremi/ssh-mesh
+        chown 1000:1000 /srv/multiremi /srv/multiremi/uploads /srv/multiremi/ssh-mesh
         exec /app/deploy/docker/api-entrypoint.sh "$$@"
       - remi-local-api
     command: ["bun", "run", "apps/server/main.ts", "serve"]

@@ -113,6 +113,18 @@ remi runtime directory status <runtime-id> <request-id> --json
 
 项目与本地目录是 Issue / Chat 工作位置的两个互斥选项，按本次任务选择，不写成 Agent 永久默认。同时传 `--project` 和 `--runtime-workspace` 会被拒绝。已有任务的执行绑定不能随意更换；Chat 换目录时创建新的 Chat。
 
+## 磁盘占用与回收
+
+daemon 上的代码目录和运行环境是缓存：Issue 或 Chat 结束后超过保留期被回收，回收前为未保存的工作打快照，重开时恢复；trace 与原生会话历史不回收。保留策略是工作区设置（见 [工作区与项目](workspaces-and-projects.md)），本节命令查看和触发回收。
+
+```sh
+remi runtime storage <runtime-id>
+remi runtime gc <runtime-id> --dry-run --wait
+remi runtime gc-status <runtime-id> <request-id>   # 读取未带 --wait 创建的回收请求
+```
+
+`runtime storage` 读该 Runtime 所在 daemon 最近一份存储报告：占用（daemon 后台每小时测一次，行尾标出测量时间）、主体数、保留原因、上一轮释放量；daemon 从未上报时没有报告。`runtime gc --dry-run --wait` 只生成计划，列出每个主体将被回收还是保留及原因。`runtime gc`（含 `--dry-run`）都会创建回收请求，需要人类 owner/admin 凭据，任务凭据会被拒绝，任务内只能读 `runtime storage`。不带 `--dry-run` 的 `runtime gc <runtime-id> --yes --wait` 真正回收一轮，只在用户要求释放磁盘并看过预演清单后由人类执行。出现 `snapshot_failed` 等保留原因说明有需要人工处理的未保存工作，不要强行清理目录；`legacy_retained` 是升级清扫留在 `legacy-<日期>/retained/` 的旧 worktree 个数，由运维核对后手工删除，daemon 不会自动清。
+
 ## 离线排查边界
 
 Runtime 在线只证明近期登记状态；目录请求和 provider 执行仍需独立检查。daemon 本机生命周期、后台服务环境、SSH 临时恢复与平台升级见 [运行维护](maintenance.md)，不要从某个 Runtime 离线直接推断整个平台需要重启。

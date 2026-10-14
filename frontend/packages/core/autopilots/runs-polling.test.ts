@@ -20,6 +20,7 @@ function run(overrides: Partial<AutopilotRun> = {}): AutopilotRun {
     status: "completed",
     issue_id: null,
     issue_session_id: null,
+    chat_session_id: null,
     task_id: null,
     triggered_at: "2026-08-24T00:00:00Z",
     completed_at: null,

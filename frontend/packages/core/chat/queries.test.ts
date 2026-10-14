@@ -16,6 +16,16 @@ describe("pending chat task polling", () => {
     expect(chatSessionsOptions("ws-1", "archived").queryKey).not.toEqual(chatSessionsOptions("ws-2", "archived").queryKey);
   });
 
+  it("keeps the user's own list under the sessions prefix and separates the other origins", () => {
+    expect(chatSessionsOptions("ws-1", "all", {}, "user").queryKey).toEqual(chatKeys.sessions("ws-1"));
+    const automation = chatSessionsOptions("ws-1", "all", {}, "automation").queryKey;
+    const all = chatSessionsOptions("ws-1", "all", {}, "all").queryKey;
+    expect(automation).not.toEqual(all);
+    expect(automation).not.toEqual(chatKeys.sessions("ws-1"));
+    expect(automation.slice(0, 3)).toEqual(chatKeys.sessions("ws-1"));
+    expect(chatKeys.sessionList("ws-1", "archived", "automation")).toEqual([...chatKeys.sessions("ws-1"), "archived", "automation"]);
+  });
+
   it("polls only while a per-session task is pending", () => {
     expect(pendingChatTaskRefetchInterval({ state: { data: { task_id: "tsk_1", status: "queued" } } }))
       .toBe(CHAT_PENDING_REFETCH_INTERVAL_MS);

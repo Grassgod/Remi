@@ -38,7 +38,7 @@ function childEnv(home: string, cacheRoot: string): NodeJS.ProcessEnv {
   return env;
 }
 
-it("leaves the entire startup home untouched after daemon and archive tests", async () => {
+it("leaves the entire startup home untouched after daemon tests", async () => {
   const root = mkdtempSync(join(tmpdir(), "daemon-real-home-isolation-"));
   const home = join(root, "home");
   const meshRoot = join(home, ".multiremi", "ssh");
@@ -56,7 +56,6 @@ it("leaves the entire startup home untouched after daemon and archive tests", as
     ].join("\n"),
     [join(home, ".ssh", "authorized_keys")]: `ssh-ed25519 ${"A".repeat(64)} personal\n`,
     [join(home, ".multiremi", "outbox", "sentinel")]: "preserve outbox\n",
-    [join(home, ".remi", "multiremi", "session-archives", "sentinel")]: "preserve archives\n",
     [join(home, ".remi", "multiremi", "workspaces", "sentinel")]: "preserve workspaces\n",
   };
   try {
@@ -78,7 +77,7 @@ it("leaves the entire startup home untouched after daemon and archive tests", as
     }, 90_000);
     try {
       const runChild = async (file: string) => {
-        if (budgetExpired) throw new Error("Daemon/archive children exceeded the shared 90s budget");
+        if (budgetExpired) throw new Error("Daemon children exceeded the shared 90s budget");
         const startedAt = performance.now();
         const child = Bun.spawn([process.execPath, "test", file], {
           cwd: REPO_ROOT, env: childEnv(home, join(root, "cache")),
@@ -92,7 +91,7 @@ it("leaves the entire startup home untouched after daemon and archive tests", as
         return { file, exitCode, stdout, stderr };
       };
       const results = await Promise.all(files.map(runChild));
-      if (budgetExpired) throw new Error("Daemon/archive children exceeded the shared 90s budget");
+      if (budgetExpired) throw new Error("Daemon children exceeded the shared 90s budget");
       const failures = results.filter(result => result.exitCode !== 0);
       if (failures.length) throw new Error(failures.map(result =>
         `${result.file} exited ${result.exitCode}\n${result.stdout}\n${result.stderr}`).join("\n"));

@@ -7,6 +7,7 @@ const pendingFields = {
   "runtime.model_list": "pending_model_list",
   "runtime.local_skills": "pending_local_skills",
   "runtime.directory_scan": "pending_directory_scan",
+  "runtime.gc_run": "pending_gc_run",
   "runtime.local_skill_import": "pending_local_skill_import",
   "runtime.bot_menu": "pending_bot_menu",
   "feishu.outbound": "pending_feishu_outbound",

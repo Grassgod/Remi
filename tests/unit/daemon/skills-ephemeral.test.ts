@@ -13,8 +13,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { writeAgentSkillContext, writeTaskContext, writeTaskGcContext } from "@daemon/agent-runtime/skills/ephemeral.js";
-import { ISSUE_SESSION_ARCHIVE_RECEIPT_FILE } from "@daemon/agent-runtime/workspace/session-archive.js";
+import { writeAgentSkillContext, writeTaskContext } from "@daemon/agent-runtime/skills/ephemeral.js";
 import type { AgentTask } from "@daemon/contracts/types.js";
 
 function taskWithSkill(provider: string): AgentTask {
@@ -123,48 +122,5 @@ test("task context refresh preserves a Feishu topic binding dossier", () => {
   expect(JSON.parse(readFileSync(join(metadataDir, "task.json"), "utf8"))).toMatchObject({
     task_id: "tsk_1",
     topic_binding: topicBinding,
-  });
-});
-
-test("a new Issue task invalidates the previous Session archive receipt", () => {
-  const workDir = workspace();
-  const metadataDir = join(workDir, ".multiremi");
-  mkdirSync(metadataDir, { recursive: true });
-  const receipt = join(metadataDir, ISSUE_SESSION_ARCHIVE_RECEIPT_FILE);
-  writeFileSync(receipt, "stale\n");
-
-  writeTaskGcContext(workDir, {
-    id: "tsk_1",
-    workspaceId: "ws_1",
-    issueId: "iss_1",
-  } as unknown as AgentTask);
-
-  expect(existsSync(receipt)).toBe(false);
-  expect(JSON.parse(readFileSync(join(metadataDir, "gc.json"), "utf8"))).toMatchObject({
-    kind: "issue",
-    issue_id: "iss_1",
-  });
-});
-
-test("a discussion task writes private Session GC metadata without archive state", () => {
-  const workDir = workspace();
-  const metadataDir = join(workDir, ".multiremi");
-  mkdirSync(metadataDir, { recursive: true });
-  const receipt = join(metadataDir, ISSUE_SESSION_ARCHIVE_RECEIPT_FILE);
-  writeFileSync(receipt, "unrelated\n");
-
-  writeTaskGcContext(workDir, {
-    id: "tsk_discussion",
-    workspaceId: "ws_1",
-    issueId: "iss_1",
-    issueSessionId: "ises_discussion",
-    holdsWorkspace: false,
-  } as unknown as AgentTask);
-
-  expect(existsSync(receipt)).toBe(true);
-  expect(JSON.parse(readFileSync(join(metadataDir, "gc.json"), "utf8"))).toMatchObject({
-    kind: "discussion_issue",
-    issue_id: "iss_1",
-    issue_session_id: "ises_discussion",
   });
 });

@@ -19,7 +19,7 @@
  *    directory verified below the owned root; a mismatch aborts without
  *    deleting and restores the entry. The worst case is deleting the intended
  *    inode through a linked ancestor.
- * 2. *Quarantine parent swap*: `<root>/.multiremi-delete-quarantine` may be
+ * 2. *Quarantine parent swap*: `<root>/.daemon/quarantine` may be
  *    replaced between its validation and the rename or the recursive rm. The
  *    post-rename check on the quarantine's identity closes the rename half; the
  *    rm half requires the attacker to pre-create our random UUID name under the
@@ -62,9 +62,12 @@ import {
   statSync,
   type Stats,
 } from "node:fs";
+import { chmod, lstat, readdir, rm } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
+import { DAEMON_DIRECTORY, QUARANTINE_DIRECTORY } from "./layout.js";
 
-export const OWNED_DIRECTORY_QUARANTINE = ".multiremi-delete-quarantine";
+/** Root-relative path of the deletion quarantine, a child of the daemon state directory. */
+export const OWNED_DIRECTORY_QUARANTINE = join(DAEMON_DIRECTORY, QUARANTINE_DIRECTORY);
 
 /**
  * How a platform addresses the directories it is about to delete: through held
@@ -152,28 +155,11 @@ export function removeOwnedDirectorySync(
   target: string,
   options: RemoveOwnedDirectoryOptions = {},
 ): boolean {
-  const platform = options.platform ?? process.platform;
-  const strategy = removalStrategy(platform);
-  const rootPath = resolve(root);
-  const targetPath = resolve(target);
-  const rel = relative(rootPath, targetPath);
-  if (!rel || rel === "." || rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) {
-    throw new Error(`refusing to remove path outside owned root: ${target}`);
-  }
-  if (rel.split(sep).includes(OWNED_DIRECTORY_QUARANTINE)) {
-    throw new Error(`refusing to remove the owned-directory quarantine: ${target}`);
-  }
-
+  const request = validateRemoval(root, target, options);
   options.assertRootOwner?.();
-  const rootFd = openRealDirectory(rootPath, "owned root");
+  const rootFd = openRealDirectory(request.rootPath, "owned root");
   try {
-    const rootInfo = fstatSync(rootFd);
-    if (!strategy) {
-      throw new Error(
-        `safe owned directory removal is unsupported on ${platform}; refusing to remove ${targetPath}`,
-      );
-    }
-    const prepared = prepareRemoval(rootPath, rootFd, rootInfo, rel, strategy, platform);
+    const prepared = prepareRemovalOf(request, rootFd);
     if (prepared === null) return false;
     try {
       return quarantineAndRemove(prepared, options);
@@ -183,6 +169,73 @@ export function removeOwnedDirectorySync(
   } finally {
     closeSync(rootFd);
   }
+}
+
+/**
+ * `removeOwnedDirectorySync` for trees that may be huge. The verified
+ * quarantine rename is the same synchronous step, but the quarantined bytes are
+ * removed asynchronously, so a `node_modules` forest or a whole legacy layout
+ * never stalls the daemon's event loop (heartbeats, sockets, running tasks).
+ */
+export async function removeOwnedDirectory(
+  root: string,
+  target: string,
+  options: RemoveOwnedDirectoryOptions = {},
+): Promise<boolean> {
+  const request = validateRemoval(root, target, options);
+  options.assertRootOwner?.();
+  const rootFd = openRealDirectory(request.rootPath, "owned root");
+  try {
+    const prepared = prepareRemovalOf(request, rootFd);
+    if (prepared === null) return false;
+    try {
+      const deletingPath = quarantineDirectory(prepared, options);
+      await makeQuarantinedTreeWritableAsync(deletingPath);
+      options.assertRootOwner?.();
+      verifyQuarantinedTree(prepared, deletingPath);
+      await rm(deletingPath, { recursive: true, force: true });
+      return true;
+    } finally {
+      prepared.close();
+    }
+  } finally {
+    closeSync(rootFd);
+  }
+}
+
+interface RemovalRequest {
+  platform: NodeJS.Platform;
+  strategy: RemovalStrategy | null;
+  rootPath: string;
+  targetPath: string;
+  relativeTarget: string;
+}
+
+function validateRemoval(root: string, target: string, options: RemoveOwnedDirectoryOptions): RemovalRequest {
+  const platform = options.platform ?? process.platform;
+  const rootPath = resolve(root);
+  const targetPath = resolve(target);
+  const relativeTarget = relative(rootPath, targetPath);
+  if (!relativeTarget || relativeTarget === "." || relativeTarget === ".."
+    || relativeTarget.startsWith(`..${sep}`) || isAbsolute(relativeTarget)) {
+    throw new Error(`refusing to remove path outside owned root: ${target}`);
+  }
+  if (touchesOwnedDirectoryState(relativeTarget)) {
+    throw new Error(`refusing to remove the owned-directory quarantine: ${target}`);
+  }
+  return { platform, strategy: removalStrategy(platform), rootPath, targetPath, relativeTarget };
+}
+
+/** Open and verify the removal target below an already opened root; null when it does not exist. */
+function prepareRemovalOf(request: RemovalRequest, rootFd: number): PreparedRemoval | null {
+  const { platform, strategy, rootPath, targetPath, relativeTarget } = request;
+  const rootInfo = fstatSync(rootFd);
+  if (!strategy) {
+    throw new Error(
+      `safe owned directory removal is unsupported on ${platform}; refusing to remove ${targetPath}`,
+    );
+  }
+  return prepareRemoval(rootPath, rootFd, rootInfo, relativeTarget, strategy, platform);
 }
 
 /**
@@ -371,6 +424,15 @@ function quarantineAndRemove(
   prepared: PreparedRemoval,
   options: RemoveOwnedDirectoryOptions,
 ): boolean {
+  const deletingPath = quarantineDirectory(prepared, options);
+  makeQuarantinedTreeWritable(deletingPath);
+  verifyQuarantinedTree(prepared, deletingPath);
+  rmSync(deletingPath, { recursive: true, force: true });
+  return true;
+}
+
+/** Everything before the bytes go: returns the verified `.deleting` path. */
+function quarantineDirectory(prepared: PreparedRemoval, options: RemoveOwnedDirectoryOptions): string {
   const { strategy, sourcePath, targetFd, targetInfo, quarantinePath, quarantineInfo } = prepared;
   // `/proc/self/fd/N` is a procfs magic link, so a descriptor anchor is
   // re-checked with `stat` while a path anchor is re-checked with `lstat`.
@@ -414,11 +476,12 @@ function quarantineAndRemove(
   // is named `.deleting` and before any bytes are removed.
   options.assertRootOwner?.();
   assertSameFile(targetInfo, fstatSync(targetFd), "opened deletion target identity changed");
-  makeQuarantinedTreeWritable(deletingPath);
+  return deletingPath;
+}
+
+function verifyQuarantinedTree(prepared: PreparedRemoval, deletingPath: string): void {
   prepared.verifyQuarantine();
-  assertSameFile(targetInfo, lstatSync(deletingPath), "quarantined directory was replaced during cleanup");
-  rmSync(deletingPath, { recursive: true, force: true });
-  return true;
+  assertSameFile(prepared.targetInfo, lstatSync(deletingPath), "quarantined directory was replaced during cleanup");
 }
 
 /**
@@ -512,7 +575,7 @@ function openRecoveryQuarantine(
       }
       return null;
     }
-    const fd = openOptionalRealDirectory(join(rootAlias, OWNED_DIRECTORY_QUARANTINE), "owned deletion quarantine");
+    const fd = openOptionalQuarantineBelow(rootAlias, platform);
     if (fd === null) return null;
     let info: Stats;
     let alias: string | null;
@@ -562,6 +625,19 @@ function openRecoveryQuarantine(
     },
     close: () => closeSync(anchor.fd),
   };
+}
+
+/** Open `.daemon/quarantine` through a held descriptor of `.daemon`, so neither level can be a link. */
+function openOptionalQuarantineBelow(rootAlias: string, platform: NodeJS.Platform): number | null {
+  const stateFd = openOptionalRealDirectory(join(rootAlias, DAEMON_DIRECTORY), "owned daemon state directory");
+  if (stateFd === null) return null;
+  try {
+    const stateAlias = descriptorDirectoryPath(stateFd, fstatSync(stateFd), platform);
+    if (!stateAlias) throw new Error("directory descriptor path unavailable for owned daemon state directory");
+    return openOptionalRealDirectory(join(stateAlias, baseName(OWNED_DIRECTORY_QUARANTINE)), "owned deletion quarantine");
+  } finally {
+    closeSync(stateFd);
+  }
 }
 
 function openPathQuarantine(rootPath: string): OpenedAnchor & { reference: string } {
@@ -644,12 +720,11 @@ export function assertRealDirectoryPath(path: string, expected: Stats, label: st
 }
 
 function ensureQuarantine(rootReference: string): string {
+  const stateDirectory = join(rootReference, DAEMON_DIRECTORY);
+  mkdirPrivate(stateDirectory);
+  assertRealDirectory(stateDirectory, "owned daemon state directory");
   const path = join(rootReference, OWNED_DIRECTORY_QUARANTINE);
-  try {
-    mkdirSync(path, { mode: 0o700 });
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-  }
+  mkdirPrivate(path);
   const info = assertRealDirectory(path, "owned deletion quarantine");
   // Report the caller-facing path even when `path` is a `/proc/self/fd` alias,
   // so the message names a directory an operator can act on.
@@ -657,6 +732,14 @@ function ensureQuarantine(rootReference: string): string {
   // The quarantine is daemon-private so no untrusted process can replace a
   // verified entry between identity validation and recursive removal.
   return path;
+}
+
+function mkdirPrivate(path: string): void {
+  try {
+    mkdirSync(path, { mode: 0o700 });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+  }
 }
 
 function assertRealDirectory(path: string, label: string): Stats {
@@ -766,8 +849,28 @@ function makeQuarantinedTreeWritable(path: string): void {
   }
 }
 
+/**
+ * `makeQuarantinedTreeWritable` without blocking: unlinking an entry needs
+ * write access to its directory, not to the entry, so only directories change.
+ */
+async function makeQuarantinedTreeWritableAsync(path: string): Promise<void> {
+  const info = await lstat(path);
+  if (!info.isDirectory()) return;
+  await chmod(path, info.mode | 0o700);
+  for (const entry of await readdir(path, { withFileTypes: true })) {
+    if (entry.isDirectory()) await makeQuarantinedTreeWritableAsync(join(path, entry.name));
+  }
+}
+
 function isNotFound(error: unknown): boolean {
   return (error as NodeJS.ErrnoException | undefined)?.code === "ENOENT";
+}
+
+/** The daemon state directory itself and its quarantine are never removal targets. */
+function touchesOwnedDirectoryState(relativePath: string): boolean {
+  return relativePath === DAEMON_DIRECTORY
+    || relativePath === OWNED_DIRECTORY_QUARANTINE
+    || relativePath.startsWith(`${OWNED_DIRECTORY_QUARANTINE}${sep}`);
 }
 
 function pathExists(path: string): boolean {

@@ -61,6 +61,8 @@ function createLoopDaemon(options: {
   Object.assign(daemon, {
     stopped: false,
     ready: false,
+    // The workspace layout is not what these tests are about.
+    sweepLegacyLayout: async () => {},
     startedAt: new Date(),
     pollAbort: new AbortController(),
     activeTaskCount: 0,

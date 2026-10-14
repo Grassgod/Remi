@@ -314,8 +314,9 @@ export function AutopilotRunReport({
           : CheckCircle2;
   const issueId = item.issue_id ?? details.issue_id ?? null;
   const sessionId = details.issue_session_id ?? null;
+  const chatSessionId = details.chat_session_id ?? null;
   const primaryRunHref = issueId
-    ? getAutopilotRunHref(wsPaths, { issue_id: issueId, issue_session_id: sessionId })
+    ? getAutopilotRunHref(wsPaths, { issue_id: issueId, issue_session_id: sessionId, chat_session_id: null })
     : null;
   const locale = i18n.resolvedLanguage ?? i18n.language;
   const triggerLabel = getAutopilotTriggerObjectLabel(item, {
@@ -436,6 +437,12 @@ export function AutopilotRunReport({
           {sessionId && primaryRunHref && (
             <AppLink href={primaryRunHref} className="inline-flex items-center gap-1 text-sm underline underline-offset-2">
               {t(($) => $.autopilot.report.open_session)}
+              <ExternalLink className="h-3.5 w-3.5" />
+            </AppLink>
+          )}
+          {chatSessionId && (
+            <AppLink href={wsPaths.chat(chatSessionId)} className="inline-flex items-center gap-1 text-sm underline underline-offset-2">
+              {t(($) => $.autopilot.report.open_chat)}
               <ExternalLink className="h-3.5 w-3.5" />
             </AppLink>
           )}

@@ -10,6 +10,7 @@ describe("getAutopilotRunHref", () => {
       getAutopilotRunHref(wsPaths, {
         issue_id: "issue-1",
         issue_session_id: "session-1",
+        chat_session_id: null,
       }),
     ).toBe("/acme/issues/issue-1?session=session-1");
   });
@@ -19,8 +20,19 @@ describe("getAutopilotRunHref", () => {
       getAutopilotRunHref(wsPaths, {
         issue_id: "issue-1",
         issue_session_id: null,
+        chat_session_id: null,
       }),
     ).toBe("/acme/issues/issue-1");
+  });
+
+  it("links a run-only run to the chat it opened", () => {
+    expect(
+      getAutopilotRunHref(wsPaths, {
+        issue_id: null,
+        issue_session_id: null,
+        chat_session_id: "chat_1",
+      }),
+    ).toBe("/acme/chat?session=chat_1");
   });
 
   it("does not create a link for a standalone run", () => {
@@ -28,6 +40,7 @@ describe("getAutopilotRunHref", () => {
       getAutopilotRunHref(wsPaths, {
         issue_id: null,
         issue_session_id: null,
+        chat_session_id: null,
       }),
     ).toBeNull();
   });

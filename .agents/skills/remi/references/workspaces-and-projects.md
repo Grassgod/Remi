@@ -24,6 +24,8 @@ remi workspace prompt update --help
 | 飞书工作区 bot | `remi workspace feishu-bot set --help` | 配置读回、测试及 deploy/status 是不同阶段 |
 | 消息来源白名单 | `remi feishu source update --help` | `source get/status`；空白名单不代表接收所有来源 |
 
+存储保留策略用 `remi workspace storage get <workspace-id> --json` 读取有效值和工作区覆盖项，`remi workspace storage set <workspace-id> --ttl-ms <ms>` 修改（可用 `--automation-ttl-ms`、`--max-retained`、`--orphan-ttl-ms`、`--snapshot-max-bytes`、`--chat-idle-days`，`--reset <选项>` 恢复默认）。只改被要求的项并读回核验；缩短保留期会让下一轮回收更早清理已结束的工作区。
+
 环境变量 update 是映射替换，保留其他键后再写。`workspace relay reveal` 会取出敏感内容，不把它当作例行只读探测。只配置一个 Runtime 的模型时，使用它的 profile；不要顺手改整个工作区网关。
 
 ## 项目和仓库资源

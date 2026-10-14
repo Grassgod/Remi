@@ -647,7 +647,6 @@ export function AgentTranscriptDialog({
               {traceError ? t(($) => $.transcript.trace_failed) : traceLoading && !traceResult ? t(($) => $.transcript.trace_loading)
                 : traceResult?.state === "unreachable"
                   ? t(($) => $.transcript.trace_unreachable, { name: traceResult.runtime_name ?? traceResult.runtime_id ?? "" })
-                  : traceResult?.state === "backfilling" ? t(($) => $.transcript.trace_backfilling)
                   : traceResult?.state === "lost" ? t(($) => $.transcript.trace_lost)
                   : traceResult?.state === "not_found" ? t(($) => $.transcript.trace_not_found)
                   : traceResult?.closed ? t(($) => $.transcript.trace_finished, { count: items.length })

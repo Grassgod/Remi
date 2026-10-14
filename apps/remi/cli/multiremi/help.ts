@@ -49,10 +49,6 @@ Commands:
   issue session result list <id> List explicitly published cross-Session results
   issue session result publish <id> Publish a reusable result from one Session
                          [--type mr|report|deploy|decision|doc|other] [--ref <type>:<value>]
-  issue archive status <id> Show archive readiness for an issue
-  issue archive list <id> List provider-native session archives
-  issue archive verify <id> [archive-id] Verify an archive (defaults to latest ready)
-  issue archive retry <id> [archive-id] Retry a failed archive
   issue subscriber list <id>
   issue subscriber add <id> [--user-id <member-id>]
   issue subscriber remove <id> [--user-id <member-id>]

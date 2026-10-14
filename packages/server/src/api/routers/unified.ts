@@ -119,9 +119,7 @@ export function registerUnifiedRoutes(app: Hono, deps: RouterDeps): void {
   app.post("/api/sessions/:sessionId/messages", async (c) => {
     const conversation = loadConversation(c, store, c.req.param("sessionId"));
     if (conversation instanceof Response) return conversation;
-    if (conversation.chatId && store.getChatSession(conversation.chatId)?.status === "archived") {
-      return c.json({error:"Chat session is archived"},409);
-    }
+    const archivedChat = conversation.chatId ? store.getChatSession(conversation.chatId)?.status === "archived" : false;
     return action(c, async () => {
       let sender: SendMessageInput['sender'];
       let input: Record<string, any>, files: File[] = [];
@@ -144,6 +142,8 @@ export function registerUnifiedRoutes(app: Hono, deps: RouterDeps): void {
         if (actor instanceof Response) return actor;
         sender = actor;
       }
+      // A member writing into an archived Chat reopens it; other senders may not.
+      if (archivedChat && sender.type !== "member") return c.json({ error: "Chat session is archived" }, 409);
       const kind = input.message_kind ?? (input.reply_to_id ? "reply" : "request"), wake = input.wake_requested ?? "now";
       if (!MESSAGE_KINDS.includes(kind) || !["now", "next_turn", "inbox_only"].includes(wake)) throw new InputError("invalid kind or wake");
       if (input.body_md != null && typeof input.body_md !== "string") throw new InputError("body_md must be a string");
@@ -441,6 +441,18 @@ export function registerUnifiedRoutes(app: Hono, deps: RouterDeps): void {
       }
       return { turn: operation === "cancel" ? store.cancelTurn(turn.id) : store.wrapUpTurn(turn.id) };
     });
+  });
+  // `remi automation quiet`: the run found nothing worth reporting. A completed
+  // quiet run archives its Chat; a failed run stays visible whatever was said.
+  app.post("/api/turns/:id/automation/quiet", c => {
+    const turn = loadTurn(c);
+    if (turn instanceof Response) return turn;
+    const token = currentTaskAccessToken(c);
+    if (token && store.getTurnForAttempt(token.taskId ?? "")?.id !== turn.id) {
+      return c.json({ error: "only an attempt of this turn may mark its run quiet" }, 403);
+    }
+    if (!store.markAutopilotRunQuiet(turn.id)) return c.json({ error: "turn is not an automation run" }, 404);
+    return c.json({ ok: true });
   });
   app.get("/api/turns/:id/trace", async c => {
     const turn = loadTurn(c);

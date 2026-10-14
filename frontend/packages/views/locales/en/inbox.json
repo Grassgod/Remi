@@ -157,6 +157,7 @@
       "links": "Related links",
       "open_issue": "Open Issue",
       "open_session": "Open Agent session",
+      "open_chat": "Open chat",
       "open_autopilot": "Open automation",
       "group_title": "Run summary",
       "group_runs": "{{count}} successful runs",

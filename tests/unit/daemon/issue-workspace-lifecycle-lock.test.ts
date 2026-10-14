@@ -46,4 +46,49 @@ describe("IssueWorkspaceLifecycleLocker", () => {
     expect(secondRan).toBe(true);
     releaseFirst();
   });
+
+  describe("tryAcquire", () => {
+    it("takes a free key exclusively and frees it on release", async () => {
+      const locker = new IssueWorkspaceLifecycleLocker();
+      const release = locker.tryAcquire("iss_1");
+      expect(release).not.toBeNull();
+      expect(locker.tryAcquire("iss_1")).toBeNull();
+      let shared = false;
+      const waiting = locker.acquireShared("iss_1").then((done) => { shared = true; done(); });
+      await Promise.resolve();
+      expect(shared).toBe(false);
+
+      release!();
+      release!();
+      await waiting;
+      expect(shared).toBe(true);
+      expect(locker.tryAcquire("iss_1")).not.toBeNull();
+    });
+
+    it("never queues behind a running execution or a waiting writer", async () => {
+      const locker = new IssueWorkspaceLifecycleLocker();
+      const execution = await locker.acquireShared("iss_1");
+      expect(locker.tryAcquire("iss_1")).toBeNull();
+      execution();
+
+      const writer = await locker.acquire("iss_1");
+      const queued = locker.acquireShared("iss_1");
+      writer();
+      const reader = await queued;
+      expect(locker.tryAcquire("iss_1")).toBeNull();
+      reader();
+      expect(locker.tryAcquire("iss_1")).not.toBeNull();
+    });
+
+    it("leaves other keys alone", async () => {
+      const locker = new IssueWorkspaceLifecycleLocker();
+      const held = await locker.acquireShared("iss_1");
+      expect(locker.tryAcquire("iss_2")).not.toBeNull();
+      held();
+    });
+
+    it("rejects an empty key", () => {
+      expect(() => new IssueWorkspaceLifecycleLocker().tryAcquire(" ")).toThrow("ownership key");
+    });
+  });
 });

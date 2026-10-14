@@ -180,13 +180,13 @@ describe("v2 report reconciliation with real sockets and DB", () => {
     const h = await fixture(); await h.startDaemon();
     const box = outbox(h);
     const purge = spyOn(box, "purgeTask");
-    const client = (h.daemon as any).client as MultiremiDaemonClient;
     try {
-      await expect(client.reportIssueWorkspaceCleaned("deleted-issue", runtime(h), {
-        archiveId: "archive", sourceRevision: "revision", sha256: "a".repeat(64),
-      })).rejects.toMatchObject({ name: "MultiremiDaemonHttpError", status: 404, code: "issue_not_found" });
+      await expect(h.client.rpc("gc.subject_reclaimed", {
+        runtime_id: runtime(h), subject: { kind: "issue", id: "deleted-issue" },
+        snapshot: null, unsaved_work: false, freed_bytes: 0,
+      })).rejects.toMatchObject({ code: "task_not_found", operationError: { status: 404, code: "issue_not_found" } });
       expect(purge).not.toHaveBeenCalled();
-      expect(h.ledger.some(entry => entry.type === "gc.workspace_cleaned" && entry.seq === null)).toBe(true);
+      expect(h.ledger.some(entry => entry.type === "gc.subject_reclaimed" && entry.seq === null)).toBe(true);
       expect(h.client.connectionState()).toBe("connected");
     } finally { purge.mockRestore(); }
   });

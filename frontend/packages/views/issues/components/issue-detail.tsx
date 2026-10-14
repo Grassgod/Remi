@@ -367,7 +367,6 @@ export function IssueDetail({
       getActorName={getActorName}
       issueSessions={sessions.list}
       usage={usage}
-      canManageArchives={canModerateComments}
       isMember={isMember}
       childIssues={childIssues}
       onCreateSubIssue={actions.openCreateSubIssue}
