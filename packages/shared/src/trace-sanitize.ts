@@ -16,7 +16,15 @@
  * store both need it and neither may depend on the other.
  */
 
-import { TRACE_EVENT_STATUSES } from "@multiremi/contracts/trace.js";
+import {
+  TRACE_EVENT_STATUSES,
+  type FileChange,
+  type TraceEventBody,
+  type TraceItem,
+} from "@multiremi/contracts/trace.js";
+import { utf8ByteLength } from "./utf8.js";
+
+export { utf8ByteLength };
 
 /** Byte caps, in bytes. Not code points: the DB and the wire both count bytes. */
 export const TRACE_TOOL_MAX_BYTES = 512;
@@ -179,4 +187,254 @@ export function parseStoredTraceJson<T>(stored: string | null): T | null {
   } catch {
     return null;
   }
+}
+
+// ── Item caps (turn + items traces, PR 2) ───────────────────────────────────
+//
+// Applied by the daemon translator when it builds an item and re-checked by the
+// store before a write, so the file, the frame and every reader see the same
+// bounded item. The byte caps above stay for the fragment events until P2
+// removes them.
+
+/** `agent_message` / `user_message` text. */
+export const TRACE_ITEM_TEXT_MAX_BYTES = 256 * 1024;
+/** `reasoning` text. */
+export const TRACE_ITEM_REASONING_MAX_BYTES = 64 * 1024;
+/** Tool `output`: the first 16 KiB and the last 48 KiB are kept around the marker. */
+export const TRACE_ITEM_OUTPUT_HEAD_BYTES = 16 * 1024;
+export const TRACE_ITEM_OUTPUT_TAIL_BYTES = 48 * 1024;
+export const TRACE_ITEM_OUTPUT_MAX_BYTES = TRACE_ITEM_OUTPUT_HEAD_BYTES + TRACE_ITEM_OUTPUT_TAIL_BYTES;
+/** Tool `input`, as serialized JSON after `sanitizeTraceJson`. */
+export const TRACE_ITEM_INPUT_MAX_BYTES = 16 * 1024;
+/** `FileChange.diff`, per change and per item. */
+export const TRACE_ITEM_DIFF_MAX_BYTES = 64 * 1024;
+export const TRACE_ITEM_DIFFS_MAX_BYTES = 256 * 1024;
+/** `title` / `tool` labels. */
+export const TRACE_ITEM_LABEL_MAX_BYTES = 512;
+/** One serialized event; over it, the largest fields are dropped. */
+export const TRACE_EVENT_MAX_BYTES = 1024 * 1024;
+
+const utf8Encoder = new TextEncoder();
+const utf8Decoder = new TextDecoder("utf-8", { fatal: false });
+
+/** The first `maxBytes` bytes, cut back to a character boundary. */
+function utf8Head(bytes: Uint8Array, maxBytes: number): string {
+  let end = Math.min(maxBytes, bytes.length);
+  while (end > 0 && end < bytes.length && (bytes[end]! & 0xc0) === 0x80) end--;
+  return utf8Decoder.decode(bytes.subarray(0, end));
+}
+
+/** The last `maxBytes` bytes, moved forward to a character boundary. */
+function utf8Tail(bytes: Uint8Array, maxBytes: number): string {
+  let start = Math.max(0, bytes.length - maxBytes);
+  while (start < bytes.length && (bytes[start]! & 0xc0) === 0x80) start++;
+  return utf8Decoder.decode(bytes.subarray(start));
+}
+
+export interface CappedValue<T> {
+  value: T;
+  truncated: boolean;
+}
+
+/** Cut text to `maxBytes` (character-safe) and append the marker. */
+export function capItemText(text: string, maxBytes: number = TRACE_ITEM_TEXT_MAX_BYTES): CappedValue<string> {
+  if (utf8ByteLength(text) <= maxBytes) return { value: text, truncated: false };
+  return { value: utf8Head(utf8Encoder.encode(text), maxBytes) + TRACE_TRUNCATION_MARKER, truncated: true };
+}
+
+/**
+ * Keep the head and the tail of a long output, which is where commands print
+ * what they are doing and how they ended, with the marker on its own line.
+ */
+export function capOutput(
+  output: string | null,
+  headBytes: number = TRACE_ITEM_OUTPUT_HEAD_BYTES,
+  tailBytes: number = TRACE_ITEM_OUTPUT_TAIL_BYTES,
+): CappedValue<string | null> {
+  if (output === null || utf8ByteLength(output) <= headBytes + tailBytes) return { value: output, truncated: false };
+  const bytes = utf8Encoder.encode(output);
+  return {
+    value: `${utf8Head(bytes, headBytes)}\n${TRACE_TRUNCATION_MARKER}\n${utf8Tail(bytes, tailBytes)}`,
+    truncated: true,
+  };
+}
+
+/** `title` / `tool` labels: 512 bytes. */
+export function capLabel<T extends string | null>(value: T): T {
+  return (value === null ? null : truncateUtf8(value, TRACE_ITEM_LABEL_MAX_BYTES)) as T;
+}
+
+function mapStrings(value: unknown, fn: (s: string) => string): unknown {
+  if (typeof value === "string") return fn(value);
+  if (Array.isArray(value)) return value.map((entry) => mapStrings(entry, fn));
+  if (value && typeof value === "object") {
+    const out: Record<string, unknown> = {};
+    for (const [key, entry] of Object.entries(value as Record<string, unknown>)) out[key] = mapStrings(entry, fn);
+    return out;
+  }
+  return value;
+}
+
+/**
+ * Tool input: `sanitizeTraceJson`, then at most `maxBytes` of JSON. Over the cap,
+ * long string values are shortened step by step so the keys survive (a Write
+ * tool keeps its path, not its whole content); input that still does not fit is
+ * dropped to null.
+ */
+export function capItemInput(
+  input: Record<string, unknown> | null,
+  maxBytes: number = TRACE_ITEM_INPUT_MAX_BYTES,
+): CappedValue<Record<string, unknown> | null> {
+  if (input === null) return { value: null, truncated: false };
+  const sanitized = sanitizeTraceJson(input) as Record<string, unknown>;
+  const fits = (value: unknown) => utf8ByteLength(JSON.stringify(value)) <= maxBytes;
+  // `truncated` also reports what `sanitizeTraceJson` elided (depth, width, base64).
+  if (fits(sanitized)) return { value: sanitized, truncated: JSON.stringify(sanitized) !== JSON.stringify(input) };
+  for (const limit of [4096, 1024, 256, 64]) {
+    const shortened = mapStrings(sanitized, (s) => truncateUtf8(s, limit) ?? s) as Record<string, unknown>;
+    if (fits(shortened)) return { value: shortened, truncated: true };
+  }
+  return { value: null, truncated: true };
+}
+
+/**
+ * Diffs: 64 KiB per change, 256 KiB per item. A change over its cap keeps its
+ * head; once the item budget is spent, later diffs are dropped. Both set
+ * `diff_truncated`; `added` / `removed` keep the full counts.
+ */
+export function capFileChanges(changes: readonly FileChange[]): CappedValue<FileChange[]> {
+  let budget = TRACE_ITEM_DIFFS_MAX_BYTES;
+  let truncated = false;
+  const value = changes.map((change) => {
+    if (change.diff === null) return change;
+    const limit = Math.min(TRACE_ITEM_DIFF_MAX_BYTES, budget);
+    // Charge kept content only, never the marker, so re-capping a capped item is a no-op.
+    const diff = limit > 0 ? capItemText(change.diff, limit).value : null;
+    budget -= Math.min(utf8ByteLength(change.diff), Math.max(limit, 0));
+    if (diff === change.diff) return change;
+    truncated = true;
+    return { ...change, diff, diff_truncated: true as const };
+  });
+  return { value, truncated };
+}
+
+/** Apply every item cap for the item's type. Returns the same object when nothing changed. */
+export function capTraceItem<T extends TraceItem>(item: T): T {
+  const next = { ...item } as TraceItem;
+  let changed = false;
+  const text = (maxBytes: number) => {
+    const target = next as { text: string; truncated?: true };
+    const capped = capItemText(target.text, maxBytes);
+    if (capped.truncated) { target.text = capped.value; target.truncated = true; changed = true; }
+  };
+  const output = (flag: boolean) => {
+    const target = next as { output: string | null; output_truncated?: true };
+    const capped = capOutput(target.output);
+    if (capped.truncated) {
+      target.output = capped.value;
+      if (flag) target.output_truncated = true;
+      changed = true;
+    }
+  };
+  const label = <K extends string>(key: K) => {
+    const target = next as unknown as Record<K, string | null>;
+    const capped = capLabel(target[key]);
+    if (capped !== target[key]) { target[key] = capped; changed = true; }
+  };
+  switch (next.type) {
+    case "user_message":
+    case "agent_message":
+      text(TRACE_ITEM_TEXT_MAX_BYTES);
+      break;
+    case "reasoning":
+      text(TRACE_ITEM_REASONING_MAX_BYTES);
+      break;
+    case "command":
+      label("tool");
+      output(true);
+      break;
+    case "file_change": {
+      label("tool");
+      output(false);
+      const capped = capFileChanges(next.changes);
+      if (capped.truncated) { next.changes = capped.value; changed = true; }
+      break;
+    }
+    case "web_search":
+      label("tool");
+      output(false);
+      break;
+    case "tool": {
+      label("tool");
+      label("title");
+      output(true);
+      const capped = capItemInput(next.input);
+      if (capped.truncated) { next.input = capped.value; changed = true; }
+      break;
+    }
+    case "subagent":
+      label("tool");
+      label("title");
+      output(false);
+      break;
+    case "permission":
+    case "notice":
+      label("title");
+      break;
+    default:
+      break;
+  }
+  return (changed ? next : item) as T;
+}
+
+/** Largest-first fields an oversized event may lose, per item type. */
+function dropOversizedFields(item: TraceItem): TraceItem | null {
+  const next = { ...item } as Record<string, unknown>;
+  const candidates: Array<[string, () => void]> = [];
+  if (typeof next.output === "string") {
+    candidates.push(["output", () => {
+      next.output = null;
+      if (item.type === "command" || item.type === "tool") next.output_truncated = true;
+    }]);
+  }
+  if (typeof next.text === "string") candidates.push(["text", () => { next.text = ""; next.truncated = true; }]);
+  if (next.input && typeof next.input === "object") candidates.push(["input", () => { next.input = null; }]);
+  if (Array.isArray(next.changes)) {
+    candidates.push(["changes", () => {
+      next.changes = (next.changes as FileChange[]).map((change) => change.diff === null ? change : { ...change, diff: null, diff_truncated: true });
+    }]);
+  }
+  for (const key of ["prompt", "summary", "description", "message"]) {
+    if (typeof next[key] === "string") candidates.push([key, () => { next[key] = item.type === "question" && key === "message" ? "" : null; }]);
+  }
+  if (Array.isArray(next.questions)) candidates.push(["questions", () => { next.questions = []; }]);
+  if (Array.isArray(next.entries)) candidates.push(["entries", () => { next.entries = []; }]);
+  candidates.sort(([a], [b]) => utf8ByteLength(JSON.stringify(item[b as keyof TraceItem] ?? null))
+    - utf8ByteLength(JSON.stringify(item[a as keyof TraceItem] ?? null)));
+  for (const [, drop] of candidates) {
+    drop();
+    if (utf8ByteLength(JSON.stringify(next)) <= TRACE_EVENT_MAX_BYTES) return next as unknown as TraceItem;
+  }
+  return null;
+}
+
+/**
+ * Field caps plus the per-event ceiling: an `item.*` event whose item still
+ * serializes over 1 MiB loses its largest fields (with `*_truncated` set where the
+ * type has one). Returns null only for an event that cannot be brought under the
+ * ceiling, which the caller drops.
+ */
+export function capTraceEvent<T extends TraceEventBody>(body: T): T | null {
+  if (body.type === "item.started" || body.type === "item.updated" || body.type === "item.completed") {
+    const item = capTraceItem(body.item);
+    const capped = item === body.item ? body : { ...body, item };
+    if (utf8ByteLength(JSON.stringify(capped)) <= TRACE_EVENT_MAX_BYTES) return capped;
+    const reduced = dropOversizedFields(item);
+    return reduced ? { ...body, item: reduced } : null;
+  }
+  if (body.type === "item.delta") {
+    if (utf8ByteLength(body.delta) <= TRACE_ITEM_OUTPUT_MAX_BYTES) return body;
+    return { ...body, delta: utf8Head(utf8Encoder.encode(body.delta), TRACE_ITEM_OUTPUT_MAX_BYTES) };
+  }
+  return utf8ByteLength(JSON.stringify(body)) <= TRACE_EVENT_MAX_BYTES ? body : null;
 }

@@ -37,7 +37,7 @@
  */
 
 import type { GcRunMode, StorageReport, StorageSubjectRef, SubjectSnapshot } from "./storage.js";
-import type { TraceEvent } from "./trace.js";
+import type { TraceContextUsage, TraceEvent, TraceEventPage, TraceTurnPage } from "./trace.js";
 import type { MultiremiChatSessionStatus, MultiremiDaemonHeartbeatAck, MultiremiDaemonSshMeshStatus } from "./types.js";
 import type { UnifiedMessage, DecisionOption } from "./unified-model.js";
 
@@ -424,6 +424,19 @@ export interface DaemonTaskCompletionFields {
   final_reply_md: string | null;
   /** From the last `execution` event's meta, or null when unknown. */
   model: DaemonTaskCompletionModel | null;
+  /**
+   * Turn + items traces (PR 2) add the three fields below; they also ride on
+   * `task.fail`. Optional until the daemon switches (P2), which makes them
+   * required. A receiver treats a malformed value as null and never blocks the
+   * terminal report on it.
+   *
+   * Last context-window occupancy the bridge reported for the turn.
+   */
+  context_usage?: TraceContextUsage | null;
+  /** `final_started_at - started_at` of the trace turn ("Worked for"), or null. */
+  worked_ms?: number | null;
+  /** Top-level items other than user_message and the final agent_message. */
+  process_item_count?: number | null;
 }
 
 /** Turn input travels as messages; attempt ids remain trace/outbox keys. */
@@ -626,6 +639,39 @@ export interface DaemonTraceReadReplyPayload {
   eof: boolean;
   closed: boolean;
 }
+
+/**
+ * `trace.read` request once traces are turn + items (PR 2): the server picks a
+ * view. `turn` pages the fold (running) or the persisted snapshot (closed) from
+ * `item_cursor`; `events` pages raw stored lines after `after_seq`, which is also
+ * the only view of a v1 file. P2 replaces {@link DaemonTraceReadPayload} with
+ * this union; nothing sends it yet.
+ */
+export type DaemonTraceReadViewPayload = DaemonTraceReadTurnViewPayload | DaemonTraceReadEventsViewPayload;
+
+export interface DaemonTraceReadTurnViewPayload {
+  task_id: string;
+  view: "turn";
+  /** Index of the first item to return; 0 for the first page. */
+  item_cursor: number;
+  /** At most this many items. */
+  limit: number;
+  /** Serialized-size budget for the page; at least one item is always returned. */
+  max_bytes: number;
+}
+
+export interface DaemonTraceReadEventsViewPayload {
+  task_id: string;
+  view: "events";
+  after_seq: number;
+  limit: number;
+  max_bytes: number;
+}
+
+/** `trace.read` success reply for {@link DaemonTraceReadViewPayload}, shaped by its `view`. */
+export type DaemonTraceReadViewReplyPayload =
+  | ({ ok: true } & TraceTurnPage)
+  | ({ ok: true } & TraceEventPage);
 
 /** `trace.fetch` request, daemon -> server: fill a gap from the server's copy. */
 export interface DaemonTraceFetchPayload {

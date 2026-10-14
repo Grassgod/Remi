@@ -31,6 +31,12 @@ const A0_MODULES = [
   // A-6 wires sanitize into TraceStore and derive into terminal reports.
   { specifier: "@shared/trace-sanitize", wired: true },
   { specifier: "@shared/trace-derive", wired: true },
+  // PR 2 P1 adds the turn + items libraries without wiring them (no behaviour
+  // change). P2 flips them as the daemon, server and CLI switch over.
+  { specifier: "@shared/turn-trace", wired: false },
+  { specifier: "@shared/command-parse", wired: false },
+  { specifier: "@shared/trace-step-copy", wired: false },
+  { specifier: "@shared/trace-file-change", wired: false },
 ] as const;
 
 /** The one file allowed to import a not-yet-wired module: this guard's own subject list. */
@@ -100,6 +106,10 @@ const A0_SOURCES = new Set([
   join(REPO_ROOT, "packages/server/src/api/trace/daemon-trace-reader.ts"),
   join(REPO_ROOT, "packages/shared/src/trace-sanitize.ts"),
   join(REPO_ROOT, "packages/shared/src/trace-derive.ts"),
+  join(REPO_ROOT, "packages/shared/src/turn-trace.ts"),
+  join(REPO_ROOT, "packages/shared/src/command-parse.ts"),
+  join(REPO_ROOT, "packages/shared/src/trace-step-copy.ts"),
+  join(REPO_ROOT, "packages/shared/src/trace-file-change.ts"),
 ]);
 
 /** Notes on who will consume each module once it is wired. */
@@ -110,6 +120,10 @@ const WIRING_OWNER = new Map<string, string>([
   ["@multiremi/api/trace/daemon-trace-reader", "B5 trace reader uses the daemon trace interface"],
   ["@shared/trace-sanitize", "A-6 wires it into the daemon write path; today only tests call it"],
   ["@shared/trace-derive", "A-5/A-8 wire it into completion and the backfill"],
+  ["@shared/turn-trace", "PR 2 P2: the daemon transport fold and completion fields"],
+  ["@shared/command-parse", "PR 2 P2: the daemon trace translator"],
+  ["@shared/trace-step-copy", "PR 2 P3/P4: Chat steps and Feishu CoT copy"],
+  ["@shared/trace-file-change", "PR 2 P2: the daemon trace translator's file_change diffs"],
 ]);
 
 const IMPORT_RE = /(?:from|import)\s*\(?\s*["']([^"']+)["']/g;

@@ -198,6 +198,12 @@ function producerEventTypes(): ReadonlyMap<string, readonly string[]> {
         && node.expression.name.text === "queueInput") {
         for (const argument of node.arguments) controls.push([argument.getStart(source), argument.end]);
       }
+      // Type declarations describe shapes and emit nothing. The turn + items
+      // contract (PR 2) declares its discriminants next to the fragment event.
+      if (ts.isInterfaceDeclaration(node) || ts.isTypeAliasDeclaration(node)) {
+        controls.push([node.getStart(source), node.end]);
+        return;
+      }
       ts.forEachChild(node, visit);
     };
     visit(source);
