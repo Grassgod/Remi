@@ -29,6 +29,7 @@ import { Command as CommandPrimitive } from "cmdk";
 import { useQueries, useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import type {
+  ChatSession,
   MemberWithUser,
   SearchIssueResult,
   SearchProjectResult,
@@ -45,11 +46,15 @@ import { useWorkspacePaths } from "@multiremi/core/paths";
 import type { WorkspacePaths } from "@multiremi/core/paths";
 import { useModalStore } from "@multiremi/core/modals";
 import { memberListOptions } from "@multiremi/core/workspace/queries";
+import { chatSessionsOptions } from "@multiremi/core/chat/queries";
+import { projectListOptions } from "@multiremi/core/projects/queries";
+import { runtimeWorkspacesOptions } from "@multiremi/core/runtimes/workspaces";
 import { resolvePublicFileUrl } from "@multiremi/core/workspace/avatar-url";
 import { StatusIcon } from "../issues/components";
 import { ProjectIcon } from "../projects/components/project-icon";
 import { STATUS_CONFIG } from "@multiremi/core/issues/config";
 import { ActorAvatar as ActorAvatarBase } from "@multiremi/ui/components/common/actor-avatar";
+import { ActorAvatar } from "../common/actor-avatar";
 import {
   Dialog,
   DialogContent,
@@ -108,6 +113,24 @@ function matchesMember(member: MemberWithUser, query: string) {
   );
 }
 
+/** Chat results share the palette with issues and projects; Codex caps them at 9. */
+export const CHAT_RESULT_LIMIT = 9;
+
+/**
+ * Chats whose title contains the query, case-insensitively (titles only for
+ * now). Active chats come before archived ones, newest first within each.
+ */
+export function matchChatSessions(sessions: readonly ChatSession[], query: string): ChatSession[] {
+  const q = query.trim().toLocaleLowerCase();
+  if (!q) return [];
+  return sessions
+    .filter((session) => (session.title ?? "").toLocaleLowerCase().includes(q))
+    .sort((a, b) =>
+      Number(a.status === "archived") - Number(b.status === "archived") ||
+      b.updated_at.localeCompare(a.updated_at))
+    .slice(0, CHAT_RESULT_LIMIT);
+}
+
 interface CommandItem {
   key: string;
   label: string;
@@ -151,6 +174,8 @@ export function SearchCommand() {
   const p: WorkspacePaths = useWorkspacePaths();
   const { theme, setTheme } = useTheme();
   const { data: members = [] } = useQuery(memberListOptions(wsId));
+  // MUL-472: the chat list is read only while the palette is open.
+  const { data: chatSessions = [] } = useQuery(chatSessionsOptions(wsId, "all", { enabled: open }));
 
   // Resolve each recent issue via its cached detail entry. Recent items are
   // typically already in the detail cache because the user has opened them;
@@ -328,10 +353,28 @@ export function SearchCommand() {
       .slice(0, 10);
   }, [members, query]);
 
+  const filteredChats = useMemo(() => matchChatSessions(chatSessions, query), [chatSessions, query]);
+  // Location labels are read only for the chats on screen that have one.
+  const { data: chatProjects } = useQuery({
+    ...projectListOptions(wsId),
+    enabled: open && filteredChats.some((session) => !!session.project_id),
+  });
+  const { data: chatDirectories } = useQuery({
+    ...runtimeWorkspacesOptions(wsId),
+    enabled: open && Boolean(wsId) && filteredChats.some((session) => !!session.runtime_workspace_id),
+  });
+  const chatLocation = useCallback((session: ChatSession) => {
+    if (session.project_id) return chatProjects?.find((project) => project.id === session.project_id)?.title ?? "";
+    if (session.runtime_workspace_id)
+      return chatDirectories?.find((directory) => directory.id === session.runtime_workspace_id)?.name ?? "";
+    return "";
+  }, [chatProjects, chatDirectories]);
+
   const hasResults =
     results.issues.length > 0 ||
     results.projects.length > 0 ||
-    filteredMembers.length > 0;
+    filteredMembers.length > 0 ||
+    filteredChats.length > 0;
 
   // Global Cmd+K / Ctrl+K shortcut
   useEffect(() => {
@@ -520,6 +563,14 @@ export function SearchCommand() {
     [push, setOpen, p],
   );
 
+  const handleChatSelect = useCallback(
+    (sessionId: string) => {
+      setOpen(false);
+      push(p.chat(sessionId));
+    },
+    [push, setOpen, p],
+  );
+
   const handleMemberSelect = useCallback(
     (userId: string) => {
       push(p.memberDetail(userId));
@@ -637,6 +688,35 @@ export function SearchCommand() {
                     </div>
                   </CommandPrimitive.Item>
                 ))}
+              </CommandPrimitive.Group>
+            )}
+
+            {filteredChats.length > 0 && (
+              <CommandPrimitive.Group className="p-2">
+                <div className="px-3 py-1.5 text-xs font-medium text-muted-foreground">
+                  {t(($) => $.groups.chats)}
+                </div>
+                {filteredChats.map((session) => {
+                  const location = chatLocation(session);
+                  return (
+                    <CommandPrimitive.Item
+                      key={`chat:${session.id}`}
+                      value={`chat:${session.id}`}
+                      onSelect={() => handleChatSelect(session.id)}
+                      className="flex cursor-default select-none items-center gap-2.5 rounded-lg px-3 py-2.5 text-sm outline-none data-[disabled=true]:pointer-events-none data-[disabled=true]:opacity-50 data-selected:bg-accent"
+                    >
+                      <ActorAvatar actorType="agent" actorId={session.agent_id} size={20} profileLink={false} />
+                      <span className="min-w-0 flex-1 truncate">
+                        <HighlightText text={session.title} query={query} />
+                      </span>
+                      {location && (
+                        <span className="w-24 shrink-0 truncate text-right text-xs text-muted-foreground">
+                          {location}
+                        </span>
+                      )}
+                    </CommandPrimitive.Item>
+                  );
+                })}
               </CommandPrimitive.Group>
             )}
 

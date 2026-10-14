@@ -492,3 +492,144 @@ describe("canonical turn projection", () => {
     view.unmount(); client.clear();
   });
 });
+
+describe("Chat rows without the envelope header or attempts list", () => {
+  const render2 = (rows: Record<string, unknown>[]) => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+    const entries = rows.map(row => SessionLogEntrySchema.parse({ session_id: "cs-1", revision: 1, body_html: null, render_version: null, ...row }));
+    const view = render(<QueryClientProvider client={client}><ChatMessageList sessionId="cs-1"
+      replica={new MemorySessionReplica({ "cs-1": { entries } })} optimisticRows={[]} pendingTask={null} availability={undefined} /></QueryClientProvider>);
+    return { view, client };
+  };
+
+  it("drops the envelope header and keeps one hint only for a message that did not wake the agent", () => {
+    setApiInstance({ getTurn: vi.fn() } as never);
+    const { view, client } = render2([
+      { seq: 1, id: "woke", kind: "message", sender_type: "member", sender_id: "user", message_kind: "request",
+        to_type: "agent", to_ref: "agent-1", wake_applied: "now", wake_reason: "human_sender", body_md: "Woke the agent" },
+      { seq: 2, id: "queued", kind: "message", sender_type: "member", sender_id: "user", message_kind: "request",
+        to_type: "agent", to_ref: "agent-1", wake_applied: "next_turn", wake_reason: "requested_next_turn", body_md: "Waits for the next turn" },
+    ]);
+    try {
+      expect(view.container).toHaveTextContent("Woke the agent");
+      expect(view.container).toHaveTextContent("Waits for the next turn");
+      expect(view.container.querySelector("[data-message-header]")).toBeNull();
+      const hints = view.container.querySelectorAll("[data-wake-hint]");
+      expect(hints).toHaveLength(1);
+      expect(hints[0]).toHaveAttribute("data-wake-hint", "next_turn");
+      expect(hints[0]!.closest('[data-perf-key="queued"]')).not.toBeNull();
+    } finally { view.unmount(); client.clear(); }
+  });
+
+  it("renders a failed turn as a notice with warm and cold retry and a lazy execution log", async () => {
+    const getTaskTrace = vi.fn(); const getTurn = vi.fn(); const getTask = vi.fn();
+    const retryTurn = vi.fn().mockResolvedValue({ turn: { id: "turn_1" } });
+    setApiInstance({ getTaskTrace, getTurn, getTask, retryTurn } as never);
+    const { view, client } = render2([
+      { seq: 1, id: "turn_1", kind: "turn", task_id: "attempt_1", body_md: "",
+        metadata: { turn_id: "turn_1", status: "failed", failure_reason: "agent_error", final_reply_md: "Provider rejected the prompt" } },
+    ]);
+    try {
+      const notice = view.container.querySelector('[data-turn-notice="failed"]')!;
+      expect(notice).not.toBeNull();
+      // No attempts list: the turn detail is never read for display.
+      expect(getTurn).not.toHaveBeenCalled();
+      expect(notice.querySelector("[data-chat-trace]")).not.toBeNull();
+      fireEvent.click(notice.querySelector<HTMLButtonElement>('[data-turn-retry="warm"]')!);
+      await waitFor(() => expect(retryTurn).toHaveBeenCalledWith("turn_1", false));
+      fireEvent.click(notice.querySelector<HTMLButtonElement>('[data-turn-retry="cold"]')!);
+      await waitFor(() => expect(retryTurn).toHaveBeenCalledWith("turn_1", true));
+      // Raw details stay one click away and need no trace.
+      fireEvent.click(notice.querySelector<HTMLButtonElement>('[data-slot="collapsible-trigger"]')!);
+      expect(screen.getByText("Provider rejected the prompt")).toBeInTheDocument();
+      expect(getTaskTrace).not.toHaveBeenCalled();
+      expect(getTask).not.toHaveBeenCalled();
+    } finally { view.unmount(); client.clear(); }
+  });
+
+  it("shows a failed turn's outcome once, on its reply row", () => {
+    setApiInstance({ getTaskTrace: vi.fn(), getTurn: vi.fn() } as never);
+    const { view, client } = render2([
+      { seq: 1, id: "turn_6", kind: "turn", task_id: "attempt_6", body_md: "Provider rejected the prompt",
+        metadata: { turn_id: "turn_6", status: "failed", failure_reason: "agent_error", final_entry_id: "msg_failed", final_reply_md: "Provider rejected the prompt" } },
+      { seq: 2, id: "msg_failed", kind: "message", sender_type: "agent", message_kind: "reply", task_id: "turn_6",
+        body_md: "Provider rejected the prompt", metadata: { failure_reason: "agent_error", elapsed_ms: 1200 } },
+    ]);
+    try {
+      const notices = view.container.querySelectorAll('[data-turn-notice="failed"]');
+      expect(notices).toHaveLength(1);
+      expect(notices[0]!.closest('[data-perf-key="msg_failed"]')).not.toBeNull();
+      expect(view.container.querySelector('[data-perf-key="turn_6"]')).toBeNull();
+      expect(view.container.querySelectorAll("[data-turn-retry]")).toHaveLength(2);
+      fireEvent.click(notices[0]!.querySelector<HTMLButtonElement>('[data-slot="collapsible-trigger"]')!);
+      expect(screen.getAllByText("Provider rejected the prompt")).toHaveLength(1);
+    } finally { view.unmount(); client.clear(); }
+  });
+
+  it("marks a cancelled turn without a failure body and still offers retry", () => {
+    setApiInstance({ getTaskTrace: vi.fn(), getTurn: vi.fn() } as never);
+    const { view, client } = render2([
+      { seq: 1, id: "turn_2", kind: "turn", task_id: "attempt_2", body_md: "", metadata: { turn_id: "turn_2", status: "cancelled", failure_reason: null } },
+    ]);
+    try {
+      const notice = view.container.querySelector('[data-turn-notice="cancelled"]')!;
+      expect(notice).not.toBeNull();
+      expect(notice.querySelectorAll("[data-turn-retry]")).toHaveLength(2);
+      expect(notice.querySelector('[data-slot="collapsible-trigger"]')).toBeNull();
+    } finally { view.unmount(); client.clear(); }
+  });
+
+  it("shows a finished turn's reply with no status text and a quiet execution log that loads only on click", async () => {
+    const getTaskTrace = vi.fn().mockResolvedValue({ events: [], head: 0, next_after_seq: 0, eof: true, closed: true, source: "daemon", state: "ok" });
+    const getTurn = vi.fn();
+    const getTask = vi.fn().mockResolvedValue({ id: "attempt_3", agent_id: "", runtime_id: "", issue_id: "", status: "completed",
+      priority: 0, created_at: "2026-10-05T00:00:00Z", started_at: null, dispatched_at: null, completed_at: null, result: null, error: null });
+    setApiInstance({ getTaskTrace, getTurn, getTask, getTaskPrompt: vi.fn().mockRejectedValue({ status: 404 }) } as never);
+    const { view, client } = render2([
+      { seq: 1, id: "turn_3", kind: "turn", task_id: "attempt_3", body_md: "Finished answer",
+        metadata: { turn_id: "turn_3", status: "completed", final_reply_md: "Finished answer", elapsed_ms: 1000 } },
+      { seq: 2, id: "turn_4", kind: "turn", task_id: "attempt_4", body_md: "",
+        metadata: { turn_id: "turn_4", status: "completed", final_entry_id: "msg_reply" } },
+      { seq: 3, id: "msg_reply", kind: "message", sender_type: "agent", message_kind: "reply", task_id: "turn_4", body_md: "Separate reply" },
+    ]);
+    try {
+      expect(screen.getByText("Finished answer")).toBeInTheDocument();
+      expect(screen.getAllByText("Separate reply")).toHaveLength(1);
+      expect(view.container).not.toHaveTextContent("completed");
+      expect(view.container.querySelector("[data-turn-notice]")).toBeNull();
+      // The card of a turn whose reply is loaded leaves no empty row above the reply.
+      expect(view.container.querySelector('[data-perf-key="turn_4"]')).toBeNull();
+      const logs = view.container.querySelectorAll<HTMLButtonElement>("[data-chat-trace]");
+      expect(logs).toHaveLength(2);
+      // The reply row carries its card's execution log.
+      expect(logs[1]!.closest('[data-perf-key="msg_reply"]')).not.toBeNull();
+      // Hidden until the row is hovered or focused, but still in the tab order.
+      for (const log of logs) expect(log.className).toContain("opacity-0");
+      expect(getTaskTrace).not.toHaveBeenCalled();
+      expect(getTask).not.toHaveBeenCalled();
+      expect(getTurn).not.toHaveBeenCalled();
+      fireEvent.click(logs[0]!);
+      await waitFor(() => expect(getTask).toHaveBeenCalledWith("attempt_3", "turn_3"));
+      fireEvent.click(logs[1]!);
+      await waitFor(() => expect(getTask).toHaveBeenCalledWith("attempt_4", "turn_4"));
+      expect(getTurn).not.toHaveBeenCalled();
+    } finally { view.unmount(); client.clear(); }
+  });
+
+  it("swaps the copy icon to a check for 1.5s after a successful copy", async () => {
+    copiedText.mockClear();
+    setApiInstance({ getTaskTrace: vi.fn() } as never);
+    const { view, client } = render2([
+      { seq: 1, id: "turn_5", kind: "turn", task_id: "attempt_5", body_md: "Copy me",
+        metadata: { turn_id: "turn_5", status: "completed", final_reply_md: "Copy me" } },
+    ]);
+    try {
+      const copy = view.container.querySelector<HTMLButtonElement>("[data-chat-copy]")!;
+      expect(copy.className).toContain("opacity-0");
+      fireEvent.click(copy);
+      await waitFor(() => expect(view.container.querySelector('[data-chat-copy="copied"]')).not.toBeNull());
+      expect(copiedText).toHaveBeenCalledWith("Copy me");
+      await waitFor(() => expect(view.container.querySelector('[data-chat-copy="copied"]')).toBeNull(), { timeout: 2500 });
+    } finally { view.unmount(); client.clear(); }
+  });
+});

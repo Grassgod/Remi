@@ -39,6 +39,9 @@ const {
   mockOpenModal,
   mockToastSuccess,
   mockClipboardWrite,
+  mockChats,
+  mockProjects,
+  mockChatQueryEnabled,
 } = vi.hoisted(() => ({
   mockPush: vi.fn(),
   mockSearchIssues: vi.fn(),
@@ -65,6 +68,9 @@ const {
   mockOpenModal: vi.fn(),
   mockToastSuccess: vi.fn(),
   mockClipboardWrite: vi.fn(() => Promise.resolve()),
+  mockChats: { current: [] as Array<Record<string, unknown>> },
+  mockProjects: { current: [] as Array<Record<string, unknown>> },
+  mockChatQueryEnabled: vi.fn(),
 }));
 
 vi.mock("@multiremi/core/api", () => ({
@@ -111,6 +117,7 @@ vi.mock("@multiremi/core/paths", () => ({
     skills: () => "/ws-test/skills",
     settings: () => "/ws-test/settings",
     issueDetail: (id: string) => `/ws-test/issues/${id}`,
+    chat: (sessionId?: string) => `/ws-test/chat${sessionId ? `?session=${sessionId}` : ""}`,
     memberDetail: (id: string) => `/ws-test/members/${id}`,
     projectDetail: (id: string) => `/ws-test/projects/${id}`,
   }),
@@ -141,11 +148,23 @@ function resolveIssue(key: readonly unknown[]) {
   return undefined;
 }
 
+vi.mock("../common/actor-avatar", () => ({
+  ActorAvatar: ({ actorId }: { actorId: string }) => <span data-testid={`chat-avatar-${actorId}`} />,
+}));
+
 vi.mock("@tanstack/react-query", () => ({
+  queryOptions: (options: unknown) => options,
   useQuery: (opts: { queryKey: readonly unknown[]; enabled?: boolean }) => {
     const key = opts.queryKey;
     if (key[0] === "workspaces" && key[2] === "members") {
       return { data: mockMembers.current };
+    }
+    if (key[0] === "chat" && key[2] === "sessions") {
+      mockChatQueryEnabled(opts.enabled ?? true);
+      return { data: opts.enabled === false ? undefined : mockChats.current };
+    }
+    if (key[0] === "projects") {
+      return { data: opts.enabled === false ? undefined : mockProjects.current };
     }
     if (opts.enabled === false) return { data: undefined };
     return { data: resolveIssue(key) };
@@ -190,6 +209,9 @@ describe("SearchCommand", () => {
     mockToastSuccess.mockReset();
     mockClipboardWrite.mockReset().mockResolvedValue(undefined);
     mockRecentQueryEnabledCalls.mockReset();
+    mockChats.current = [];
+    mockProjects.current = [];
+    mockChatQueryEnabled.mockReset();
 
     // cmdk calls scrollIntoView on the first selected item, which jsdom doesn't implement
     Element.prototype.scrollIntoView = vi.fn();
@@ -662,5 +684,72 @@ describe("SearchCommand", () => {
         el?.tagName === "SPAN",
       ),
     ).toBeInTheDocument();
+  });
+
+  it("reads the chat list only while the palette is open (MUL-472)", () => {
+    act(() => {
+      useSearchStore.setState({ open: false });
+    });
+    const closed = render(<SearchCommand />, { wrapper: I18nWrapper });
+    expect(mockChatQueryEnabled).toHaveBeenCalled();
+    expect(mockChatQueryEnabled.mock.calls.every(([enabled]) => enabled === false)).toBe(true);
+    closed.unmount();
+
+    mockChatQueryEnabled.mockClear();
+    act(() => {
+      useSearchStore.setState({ open: true });
+    });
+    renderSearch();
+    expect(mockChatQueryEnabled.mock.calls.every(([enabled]) => enabled === true)).toBe(true);
+  });
+
+  it("lists chats whose title matches, active before archived, at most nine, and opens the chat", async () => {
+    const user = userEvent.setup();
+    const chat = (id: string, title: string, extra: Record<string, unknown> = {}) => ({
+      id, title, agent_id: `agent-${id}`, status: "active", project_id: null, runtime_workspace_id: null,
+      pinned: false, has_unread: false, created_at: "2026-10-01T00:00:00Z", updated_at: "2026-10-01T00:00:00Z", ...extra,
+    });
+    mockProjects.current = [{ id: "project-1", title: "Remi" }];
+    mockChats.current = [
+      chat("archived", "Deploy notes archived", { status: "archived", updated_at: "2026-10-09T00:00:00Z" }),
+      chat("older", "deploy checklist", { updated_at: "2026-10-02T00:00:00Z", project_id: "project-1" }),
+      chat("newer", "DEPLOY rollback plan", { updated_at: "2026-10-05T00:00:00Z" }),
+      chat("other", "Weekly report"),
+      ...Array.from({ length: 10 }, (_, index) => chat(`bulk-${index}`, `Bulk deploy ${index}`)),
+    ];
+    renderSearch();
+
+    const input = screen.getByPlaceholderText("Type a command or search...");
+    await user.type(input, "deploy");
+
+    expect(await screen.findByText("Chats")).toBeInTheDocument();
+    const options = screen.getAllByRole("option").filter((option) => option.querySelector("[data-testid^='chat-avatar-']"));
+    // Titles only, case-insensitive; the palette caps chats at nine.
+    expect(options).toHaveLength(9);
+    expect(options[0]).toHaveTextContent("DEPLOY rollback plan");
+    expect(options[1]).toHaveTextContent("deploy checklist");
+    expect(options[1]).toHaveTextContent("Remi");
+    expect(screen.queryByText("Weekly report")).not.toBeInTheDocument();
+    // Ten active matches fill the cap before the archived one.
+    expect(options.some((option) => option.textContent?.includes("Deploy notes archived"))).toBe(false);
+
+    await user.click(options[1]!);
+    expect(mockPush).toHaveBeenCalledWith("/ws-test/chat?session=older");
+    expect(useSearchStore.getState().open).toBe(false);
+  });
+
+  it("puts an archived chat after the active matches", async () => {
+    const user = userEvent.setup();
+    mockChats.current = [
+      { id: "archived", title: "Release archived", agent_id: "agent-a", status: "archived", updated_at: "2026-10-09T00:00:00Z" },
+      { id: "active", title: "Release active", agent_id: "agent-b", status: "active", updated_at: "2026-10-01T00:00:00Z" },
+    ];
+    renderSearch();
+    await user.type(screen.getByPlaceholderText("Type a command or search..."), "release");
+    await screen.findByText("Chats");
+    const titles = screen.getAllByRole("option")
+      .filter((option) => option.querySelector("[data-testid^='chat-avatar-']"))
+      .map((option) => option.textContent);
+    expect(titles).toEqual(["Release active", "Release archived"]);
   });
 });

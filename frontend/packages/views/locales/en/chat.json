@@ -26,8 +26,11 @@
     "process_steps_one": "{{count}} step",
     "process_steps_other": "{{count}} steps",
     "copy_action": "Copy",
-    "copied_toast": "Copied",
     "copy_failed_toast": "Copy failed",
+    "view_execution_log": "View execution log",
+    "not_woken": "Did not wake the agent · {{reason}}",
+    "turn_retry": "Retry",
+    "turn_retry_new_session": "Retry in new session",
     "loading_older": "Loading older messages…",
     "expand_older": "Show 30 earlier messages",
     "earliest": "Start of chat",
@@ -146,12 +149,11 @@
     "retry": "Retry"
   },
   "page": {
-    "title": "Chat",
-    "private": "Private conversations with your agents",
     "open": "Open Chat page",
     "history": "Chat history",
     "back": "Back to conversation",
     "loading": "Loading chats…",
+    "loading_conversation": "Loading conversation…",
     "load_failed": "Unable to load this conversation.",
     "retry": "Retry"
   },
@@ -176,6 +178,59 @@
     "loading": "Loading chats…",
     "load_failed": "Could not load chats.",
     "retry": "Retry"
+  },
+  "sidebar": {
+    "new_chat": "New chat",
+    "search": "Search",
+    "pinned": "Pinned",
+    "projects": "Projects",
+    "recent": "Recent",
+    "show_more": "Show more",
+    "new_chat_in": "Start new chat in {{name}}",
+    "automations": "Automations",
+    "archived": "Archived",
+    "back": "Back",
+    "empty": "No chats yet",
+    "automations_empty": "No automation chats",
+    "archived_empty": "No archived chats",
+    "directory_unavailable": "Local directory unavailable",
+    "status": {
+      "running": "Running",
+      "needs_answer": "Needs answer",
+      "unread": "New reply"
+    },
+    "more_actions": "More actions",
+    "menu": {
+      "rename": "Rename…",
+      "pin": "Pin",
+      "unpin": "Unpin",
+      "stop": "Stop run",
+      "archive": "Archive",
+      "restore": "Restore",
+      "delete": "Delete…"
+    },
+    "rename_dialog": {
+      "title": "Rename chat",
+      "description": "Keep it short and recognizable.",
+      "placeholder": "Add a title…",
+      "cancel": "Cancel",
+      "save": "Save"
+    },
+    "archive_dialog": {
+      "title": "Stop and archive this chat?",
+      "description": "The reply in progress will be stopped. You can restore the chat from Archived.",
+      "cancel": "Cancel",
+      "confirm": "Stop and archive"
+    },
+    "delete_dialog": {
+      "title": "Delete this chat?",
+      "description": "This permanently deletes the chat and its messages. This can't be undone.",
+      "cancel": "Cancel",
+      "confirm": "Delete",
+      "confirming": "Deleting…"
+    },
+    "archived_toast": "Archived “{{title}}”",
+    "undo": "Undo"
   },
   "queue": {
     "title": "Queued messages",
@@ -203,6 +258,7 @@
     "new_messages_one": "{{count}} new message",
     "new_messages_other": "{{count}} new messages",
     "new_messages_overflow": "99+ new messages",
-    "new_messages_jump": "Jump to the end, {{count}} new messages"
+    "new_messages_jump": "Jump to the end, {{count}} new messages",
+    "scroll_to_bottom": "Scroll to bottom"
   }
 }
