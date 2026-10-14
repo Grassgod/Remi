@@ -1,6 +1,6 @@
 import { ensureTurnListIndexes } from './turn-list-indexes.js';
 import { ensureQuestionQueryIndexes } from './inbox/question-indexes.js';
-import { openSqliteDatabase } from './db/sqlite.js';
+import { openSqliteDatabase, withModernSqliteAlterTable } from './db/sqlite.js';
 import { widenAttemptCounters,separateLaneProviderProgress } from './inbox/attempt-counters.js';
 import { migrateAttemptInput } from './inbox/attempt-input.js';
 import { createMemberInboxReadProjection } from './inbox/member-records.js';
@@ -71,7 +71,7 @@ export function runMigrations(db: SqlDatabase, options: { dialect?: SqlDatabaseD
   // a finished migration or proceeds exactly as before (SQLite, where the lock
   // is a no-op). It releases on throw as well as on return, so a failed
   // migration cannot strand it.
-  const migrate = () => advisoryLock(db, MIGRATION_ADVISORY_LOCK_KEY, () => {
+  const migrate = () => withModernSqliteAlterTable(db, resolveSqlDialect(db, options.dialect), () => advisoryLock(db, MIGRATION_ADVISORY_LOCK_KEY, () => {
     // The directory may have become unwritable while waiting for the lock.
     prepareMigrationReportDirectory(reportDir);
     const tables=existingTableNames(db);
@@ -95,7 +95,7 @@ export function runMigrations(db: SqlDatabase, options: { dialect?: SqlDatabaseD
     runMigrationsForDialect(db,resolveSqlDialect(db,options.dialect));
     runUnifiedModelMigration(db,{reportDir:process.env.MULTIREMI_MIGRATION_REPORT_DIR});
     separateLaneProviderProgress(db);foldAgentReadState(db);createMemberInboxReadProjection(db);foldDecisionRecords(db);createDecisionReadProjections(db);migrateAttemptInput(db);widenAttemptCounters(db);ensureTurnListIndexes(db);ensureQuestionQueryIndexes(db);ensureUsageAccountingSchema(db);migrateLocalRecords(db);
-  });
+  }));
   // SQLite schema rebuilds toggle foreign_keys outside their transactions.
   // Hold a separate SQLite writer lock across that entire sequence so another
   // startup cannot inspect a half-migrated schema. SQLite releases it on exit.
@@ -112,7 +112,7 @@ export function runMigrations(db: SqlDatabase, options: { dialect?: SqlDatabaseD
 }
 
 /** Historical schema bootstrap used by offline migration fixtures, never a runtime read path. */
-export function bootstrapPreUnifiedSchema(db:SqlDatabase):void { runMigrationsForDialect(db,resolveSqlDialect(db,db.dialect)); }
+export function bootstrapPreUnifiedSchema(db:SqlDatabase):void { const dialect=resolveSqlDialect(db,db.dialect); withModernSqliteAlterTable(db,dialect,()=>runMigrationsForDialect(db,dialect)); }
 
 /**
  * The migration body. The dialect is resolved once, up front, from declared

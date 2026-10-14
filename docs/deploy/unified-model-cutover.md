@@ -85,7 +85,7 @@
 
 | 场景 | 预期 |
 |---|---|
-| SQLite / 真 PG，空库与历史库 | 启动切换一次完成，再次启动幂等 |
+| SQLite / 真 PG，空库与历史库 | 启动切换一次完成，再次启动幂等；SQLite 迁移期间固定 `legacy_alter_table=OFF`，macOS 系统 SQLite（默认开启）与 Linux、Homebrew 构建结果一致 |
 | task 重试链、显式 continuation | 重试链一轮多尝试；continuation 是另一轮；tsk_ 不变 |
 | 无产品对话的历史执行 | 进入 auto_*，历史输入可追溯 |
 | envelope、system、delegation_report | 消息头为列；系统消息与可见 report 使用 message 行 |
