@@ -46,7 +46,7 @@ vi.mock("./source-control-tab", () => ({ SourceControlTab: () => <div /> }));
 vi.mock("./integrations-tab", () => ({ IntegrationsTab: () => <div /> }));
 vi.mock("./model-gateway-tab", () => ({ ModelGatewayTab: () => <div /> }));
 vi.mock("./labs-tab", () => ({ LabsTab: () => <div /> }));
-vi.mock("./storage-cleanup-tab", () => ({ StorageCleanupTab: () => <div /> }));
+vi.mock("./storage-tab", () => ({ StorageTab: () => <div /> }));
 vi.mock("./platform-tab", () => ({ PlatformTab: () => <div /> }));
 
 import { SettingsPage } from "./settings-page";

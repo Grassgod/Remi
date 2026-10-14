@@ -86,7 +86,9 @@
     "others": "Others",
     "no_agents": "No agents",
     "history_group": "Chat history",
-    "agent_filter_placeholder": "Search agents..."
+    "agent_filter_placeholder": "Search agents...",
+    "automation_origin": "Opened by an automation run",
+    "view_automation": "View automation"
   },
   "empty_state": {
     "first_time_title": "Chat with your agents",
@@ -161,7 +163,19 @@
     "active": "Active",
     "archived": "Archived",
     "search": "Search chats…",
-    "failed": "Action failed. Please try again."
+    "failed": "Action failed. Please try again.",
+    "origin_filter": "Filter chats by origin",
+    "origin": {
+      "user": "My chats",
+      "automation": "Automations",
+      "all": "All"
+    },
+    "automation": "Automation",
+    "automation_unread_one": "{{count}} unread automation chat",
+    "automation_unread_other": "{{count}} unread automation chats",
+    "loading": "Loading chats…",
+    "load_failed": "Could not load chats.",
+    "retry": "Retry"
   },
   "queue": {
     "title": "Queued messages",

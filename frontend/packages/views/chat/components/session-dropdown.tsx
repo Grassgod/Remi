@@ -13,6 +13,7 @@ import {
   PinOff,
   Square,
   Trash2,
+  Zap,
 } from "lucide-react";
 import { cn } from "@multiremi/ui/lib/utils";
 import {
@@ -25,6 +26,7 @@ import { useWorkspaceId } from "@multiremi/core/hooks";
 import { createLogger } from "@multiremi/core/logger";
 import {
   chatKeys,
+  chatSessionsOptions,
   pendingChatTasksOptions,
 } from "@multiremi/core/chat/queries";
 import {
@@ -36,6 +38,7 @@ import { getCurrentWsId } from "@multiremi/core/platform";
 import { useAfterFirstScreen } from "@multiremi/core/platform/use-after-first-screen";
 import type {
   Agent,
+  ChatOriginFilter,
   ChatSession,
   PendingChatTasksResponse,
 } from "@multiremi/core/types";
@@ -57,14 +60,18 @@ export function SessionDropdown({
   sessions,
   agents,
   activeSessionId,
+  activeSession,
   onSelectSession,
   presentation = "dropdown",
   chatVisible = true,
   onSessionDeleted,
 }: {
+  /** The user's own chats; the automation and all-chats views are fetched here. */
   sessions: ChatSession[];
   agents: Agent[];
   activeSessionId: string | null;
+  /** Resolved by the caller because the active chat may be one the lists here do not hold. */
+  activeSession: ChatSession | null;
   onSelectSession: (session: ChatSession) => void;
   presentation?: "dropdown" | "list";
   chatVisible?: boolean;
@@ -76,18 +83,35 @@ export function SessionDropdown({
     () => new Map(agents.map((a) => [a.id, a])),
     [agents],
   );
-  const activeSession = sessions.find((s) => s.id === activeSessionId);
   const title = activeSession?.title?.trim() || t(($) => $.window.untitled);
   const triggerAgent = activeSession
     ? (agentById.get(activeSession.agent_id) ?? null)
     : null;
 
   const [showArchived, setShowArchived] = useState(false);
+  const [originFilter, setOriginFilter] = useState<ChatOriginFilter>("user");
   const [search, setSearch] = useState("");
   const [actionError, setActionError] = useState(false);
+  const [isHistoryOpen, setIsHistoryOpen] = useState(false);
+  // The user's own chats are already loaded by the caller; the other views read
+  // their own list so automation runs never crowd the default one. The
+  // automation list is read whenever the history is on screen so its unread
+  // replies can be flagged on the filter; a closed dropdown adds no request.
+  const historyShown = presentation === "list" || isHistoryOpen;
+  const automationList = useQuery(
+    chatSessionsOptions(wsId, "all", { enabled: chatVisible && historyShown }, "automation"),
+  );
+  const allList = useQuery(
+    chatSessionsOptions(wsId, "all", { enabled: chatVisible && originFilter === "all" }, "all"),
+  );
+  const otherOrigin = originFilter === "automation" ? automationList : allList;
+  const listedSessions = originFilter === "user" ? sessions : otherOrigin.data;
+  const automationUnreadCount = (automationList.data ?? []).filter(
+    (s) => s.has_unread && s.status !== "archived" && s.id !== activeSessionId,
+  ).length;
   const historySessions = useMemo(
     () =>
-      sessions
+      (listedSessions ?? [])
         .filter((s) => (s.status === "archived") === showArchived)
         .filter((s) =>
           `${s.title} ${s.last_message?.content ?? ""}`
@@ -99,10 +123,9 @@ export function SessionDropdown({
             Number(b.pinned) - Number(a.pinned) ||
             b.updated_at.localeCompare(a.updated_at),
         ),
-    [sessions, showArchived, search],
+    [listedSessions, showArchived, search],
   );
 
-  const [isHistoryOpen, setIsHistoryOpen] = useState(false);
   const [confirmingDeleteId, setConfirmingDeleteId] = useState<string | null>(
     null,
   );
@@ -229,7 +252,7 @@ export function SessionDropdown({
 
   const handleSubmitRename = (sessionId: string, raw: string) => {
     const trimmed = raw.trim();
-    const current = sessions.find((s) => s.id === sessionId);
+    const current = listedSessions?.find((s) => s.id === sessionId);
     setRenamingId(null);
     // No-op submits (unchanged or blank) skip the network round-trip — the
     // server would reject a blank title anyway, and an unchanged title would
@@ -376,6 +399,12 @@ export function SessionDropdown({
             >
               {session.pinned && (
                 <Pin className="mr-1 inline size-3 text-muted-foreground" />
+              )}
+              {session.origin && (
+                <Zap
+                  aria-label={t(($) => $.sessions.automation)}
+                  className="mr-1 inline size-3 text-muted-foreground"
+                />
               )}
               {titleText}
             </div>
@@ -623,6 +652,33 @@ export function SessionDropdown({
           onChange={(event) => setSearch(event.target.value)}
           className="h-8 w-full rounded-md border bg-background px-2 text-sm"
         />
+        <div
+          role="group"
+          aria-label={t(($) => $.sessions.origin_filter)}
+          className="flex gap-1"
+        >
+          {(["user", "automation", "all"] as const).map((origin) => (
+            <button
+              key={origin}
+              type="button"
+              aria-pressed={originFilter === origin}
+              className={cn(
+                "flex-1 rounded px-2 py-1 text-xs",
+                originFilter === origin && "bg-accent font-medium",
+              )}
+              onClick={() => setOriginFilter(origin)}
+            >
+              {t(($) => $.sessions.origin[origin])}
+              {origin === "automation" && automationUnreadCount > 0 && (
+                <span
+                  role="img"
+                  aria-label={t(($) => $.sessions.automation_unread, { count: automationUnreadCount })}
+                  className="ml-1 inline-block size-1.5 rounded-full bg-brand align-middle"
+                />
+              )}
+            </button>
+          ))}
+        </div>
         <div className="flex gap-1">
           <button
             type="button"
@@ -653,7 +709,22 @@ export function SessionDropdown({
           {t(($) => $.sessions.failed)}
         </p>
       )}
-      {historySessions.length === 0 ? (
+      {originFilter !== "user" && otherOrigin.isError ? (
+        <div role="alert" className="flex items-center gap-2 px-3 py-4 text-xs text-destructive">
+          <span className="min-w-0 flex-1">{t(($) => $.sessions.load_failed)}</span>
+          <button
+            type="button"
+            className="shrink-0 underline underline-offset-2"
+            onClick={() => void otherOrigin.refetch()}
+          >
+            {t(($) => $.sessions.retry)}
+          </button>
+        </div>
+      ) : originFilter !== "user" && otherOrigin.isPending ? (
+        <p className="px-3 py-4 text-xs text-muted-foreground">
+          {t(($) => $.sessions.loading)}
+        </p>
+      ) : historySessions.length === 0 ? (
         <p className="px-3 py-4 text-xs text-muted-foreground">
           {t(($) => $.window.no_previous)}
         </p>

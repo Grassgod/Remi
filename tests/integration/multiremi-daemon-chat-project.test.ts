@@ -10,6 +10,7 @@ import { startMultiremiServer as startServer } from "../fixtures/daemon-protocol
 import type { MultiremiDaemonOptions } from "@multiremi/daemon.js";
 import { TestMultiremiDaemon } from "../fixtures/daemon-protocol.js";
 import { MultiremiStore } from "@multiremi/store.js";
+import { workDirectory, workRoot } from "@daemon/agent-runtime/workspace/layout.js";
 
 const roots: string[] = [];
 const databases: Database[] = [];
@@ -125,7 +126,7 @@ describe("Project-bound Chat daemon startup", () => {
           expect(prompt).toContain("run `remi repo checkout <repo-id>` explicitly");
         }
         expect(envProject).toBe(project.id);
-        expect(cwd).toBe(localDirectory ? localPath : join(root, "workspaces", "chats", chat.id));
+        expect(cwd).toBe(localDirectory ? localPath : workDirectory(join(root, "workspaces"), { kind: "chat", id: chat.id }));
         expect(prompt).toContain("This Chat is bound to project: Selected Chat Project");
         expect(prompt).toContain("Follow these Chat Project instructions.");
         expect(prompt).toContain("## Available Repositories");
@@ -139,9 +140,9 @@ describe("Project-bound Chat daemon startup", () => {
           expect(existsSync(join(cwd, ".multiremi", "wiki-base"))).toBe(false);
           expect(existsSync(join(cwd, ".multiremi", "chat-repos.json"))).toBe(false);
           expect(existsSync(join(cwd, "catalog-only-repo"))).toBe(false);
-          expect(JSON.parse(readFileSync(join(cwd, ".multiremi", "gc.json"), "utf8")).local_directory).toBe(true);
+          expect(existsSync(join(cwd, ".multiremi", "gc.json"))).toBe(false);
         } else {
-          expect(prompt).toContain("Project Wiki is materialized in `./wiki`");
+          expect(prompt).toContain("Project Wiki is materialized in `$MULTIREMI_WORKSPACE_ROOT/wiki`");
           expect(readFileSync(join(cwd, "wiki", "guide.md"), "utf8")).toBe("Current Project Wiki.\n");
         }
       } finally {
@@ -190,7 +191,7 @@ describe("Project-bound Chat daemon startup", () => {
     const chat = store.createChatSession({ agentId: agent.id, projectId: project.id });
     const credential = await store.createAccessToken({ name: "Chat repo daemon", type: "daemon", workspaceId: "local", daemonId });
     const server = startMultiremiServer({ store, scheduler: null, authToken: "chat-repo-test", hostname: "127.0.0.1", port: 0 });
-    const chatPath = join(root, "workspaces", "chats", chat.id);
+    const chatPath = workDirectory(join(root, "workspaces"), { kind: "chat", id: chat.id });
     const repoPath = join(chatPath, "explicit-chat-repo");
     const prompts: string[] = [];
     const cwds: string[] = [];
@@ -316,7 +317,7 @@ describe("Project-bound Chat daemon startup", () => {
         const chat = store.createChatSession({ agentId: agent.id, projectId: project.id });
         const credential = await store.createAccessToken({ name: "Preserved Chat daemon", type: "daemon", workspaceId: "local", daemonId });
         const server = startMultiremiServer({ store, scheduler: null, authToken: "preserved-chat-test", hostname: "127.0.0.1", port: 0 });
-        const chatPath = join(root, "workspaces", "chats", chat.id);
+        const chatPath = workDirectory(join(root, "workspaces"), { kind: "chat", id: chat.id });
         const originalPath = localDirectory ? sourcePath : join(chatPath, "preserved-chat-repo");
         const seen: Array<{ cwd: string; sessionId: string | null; projectId: string | undefined; prompt: string }> = [];
         const runTurn = async (turn: number) => {
@@ -366,7 +367,7 @@ describe("Project-bound Chat daemon startup", () => {
           const repoMetadata = localDirectory ? null : readFileSync(join(chatPath, ".multiremi", "chat-repos.json"), "utf8");
           const wikiBefore = localDirectory ? null : directoryContents(join(chatPath, "wiki"));
           if (localDirectory) {
-            expect(JSON.parse(readFileSync(join(sourcePath, ".multiremi", "gc.json"), "utf8")).local_directory).toBe(true);
+            expect(existsSync(join(sourcePath, ".multiremi", "gc.json"))).toBe(false);
             expect(existsSync(join(sourcePath, "wiki"))).toBe(false);
           }
           if (unavailable === "archived") store.archiveProject(project.id);
@@ -384,8 +385,8 @@ describe("Project-bound Chat daemon startup", () => {
             expect(readFileSync(join(originalPath, "uncommitted.txt"), "utf8")).toBe("Preserve this unpublished work.\n");
             if (localDirectory) {
               // Compare the entire user directory, including Git files and
-              // platform metadata. The old local-directory GC marker stays true.
-              expect(JSON.parse(readFileSync(join(sourcePath, ".multiremi", "gc.json"), "utf8")).local_directory).toBe(true);
+              // platform metadata; the daemon never writes its own into it.
+              expect(existsSync(join(sourcePath, ".multiremi", "gc.json"))).toBe(false);
               expect(existsSync(join(chatPath, "wiki"))).toBe(false);
             } else {
               expect(readFileSync(join(chatPath, ".multiremi", "chat-repos.json"), "utf8")).toBe(repoMetadata!);
@@ -445,7 +446,7 @@ describe("Project-bound Chat local-directory assignment changes", () => {
     const resourceB = store.listProjectResources(project.id)[1]!;
     const agent = store.createAgent({ name: "Ordered directory worker", provider: "claude" });
     const chat = store.createChatSession({ agentId: agent.id, projectId: project.id });
-    const chatPath = join(workspacesRoot, "chats", chat.id);
+    const chatPath = workDirectory(workspacesRoot, { kind: "chat", id: chat.id });
     const server = startMultiremiServer({ store, scheduler: null, authToken: "directory-order-test", hostname: "127.0.0.1", port: 0 });
     const runTurn = async (chatId: string, turn: number) => {
       const sent = store.sendChatMessage(chatId, { body: `Run ordered directory turn ${turn}.` });
@@ -491,7 +492,7 @@ describe("Project-bound Chat local-directory assignment changes", () => {
       expect(first).toMatchObject({ cwd: directoryA, sessionId: null, runtimeId: hosts[0]!.runtimeId });
       expect(first.lockPaths).toEqual([directoryA]);
       expect(store.getChatSession(chat.id)).toMatchObject({ sessionId: "ordered-local-provider", workDir: directoryA });
-      expect(JSON.parse(readFileSync(join(directoryA, ".multiremi", "gc.json"), "utf8")).local_directory).toBe(true);
+      expect(existsSync(join(directoryA, ".multiremi", "gc.json"))).toBe(false);
       const beforeA = directoryContents(directoryA);
       const beforeB = directoryContents(directoryB);
       store.updateProjectResource(project.id, resourceB.id, { position: 0 });
@@ -510,7 +511,7 @@ describe("Project-bound Chat local-directory assignment changes", () => {
           expect(existsSync(join(directory, "wiki"))).toBe(false);
           expect(existsSync(join(directory, ".multiremi", "wiki-base"))).toBe(false);
         }
-        expect(JSON.parse(readFileSync(join(directoryA, ".multiremi", "gc.json"), "utf8")).local_directory).toBe(true);
+        expect(existsSync(join(directoryA, ".multiremi", "gc.json"))).toBe(false);
         expect(store.getChatSession(chat.id)).toMatchObject({ workDir: chatPath, sessionId: "ordered-managed-provider" });
       }
 
@@ -520,7 +521,7 @@ describe("Project-bound Chat local-directory assignment changes", () => {
       const newFirst = await runTurn(newChat.id, 0);
       expect(newFirst).toMatchObject({ cwd: directoryB, sessionId: null, runtimeId: hosts[1]!.runtimeId });
       expect(newFirst.lockPaths).toEqual([directoryB]);
-      expect(JSON.parse(readFileSync(join(directoryB, ".multiremi", "gc.json"), "utf8")).local_directory).toBe(true);
+      expect(existsSync(join(directoryB, ".multiremi", "gc.json"))).toBe(false);
       expect(existsSync(join(directoryB, "wiki"))).toBe(false);
       expect(existsSync(join(directoryB, ".multiremi", "wiki-base"))).toBe(false);
       expect(directoryContents(directoryA)).toEqual(beforeA);
@@ -542,7 +543,7 @@ describe("Project-bound Chat local-directory assignment changes", () => {
         store.ensureLocalWorkspace();
         store.updateWorkspace("local", { settings: { github_enabled: false }, repos: [] });
         const workspacesRoot = join(root, "workspaces");
-        const userPath = join(insideWorkspacesRoot ? workspacesRoot : root, "user-owned-directory");
+        const userPath = join(insideWorkspacesRoot ? workRoot(workspacesRoot) : root, "user-owned-directory");
         const replacementPath = join(root, "replacement-user-directory");
         mkdirSync(userPath, { recursive: true });
         mkdirSync(replacementPath);
@@ -564,7 +565,7 @@ describe("Project-bound Chat local-directory assignment changes", () => {
         const resource = store.listProjectResources(project.id).find((entry) => entry.resourceType === "local_directory")!;
         const agent = store.createAgent({ name: "Directory transition worker", provider: "claude" });
         const chat = store.createChatSession({ agentId: agent.id, projectId: project.id });
-        const chatPath = join(workspacesRoot, "chats", chat.id);
+        const chatPath = workDirectory(workspacesRoot, { kind: "chat", id: chat.id });
         const credential = await store.createAccessToken({ name: "Directory transition daemon", type: "daemon", workspaceId: "local", daemonId });
         const server = startMultiremiServer({ store, scheduler: null, authToken: "directory-transition-test", hostname: "127.0.0.1", port: 0 });
         const seen: Array<{ cwd: string; sessionId: string | null; projectId: string | undefined; prompt: string }> = [];
@@ -607,7 +608,7 @@ describe("Project-bound Chat local-directory assignment changes", () => {
           await runTurn(0);
           expect(seen[0]).toMatchObject({ cwd: userPath, sessionId: null });
           expect(store.getChatSession(chat.id)).toMatchObject({ sessionId: "local-directory-provider", workDir: userPath });
-          expect(JSON.parse(readFileSync(join(userPath, ".multiremi", "gc.json"), "utf8")).local_directory).toBe(true);
+          expect(existsSync(join(userPath, ".multiremi", "gc.json"))).toBe(false);
           expect(existsSync(join(userPath, "wiki"))).toBe(false);
           expect(existsSync(join(userPath, ".multiremi", "wiki-base"))).toBe(false);
           const userBefore = directoryContents(userPath);
@@ -628,7 +629,7 @@ describe("Project-bound Chat local-directory assignment changes", () => {
             // targets and structure. Never traverse a user-owned symlink.
             expect(directoryContents(userPath)).toEqual(userBefore);
             expect(directoryContents(replacementPath)).toEqual(replacementBefore);
-            expect(JSON.parse(readFileSync(join(userPath, ".multiremi", "gc.json"), "utf8")).local_directory).toBe(true);
+            expect(existsSync(join(userPath, ".multiremi", "gc.json"))).toBe(false);
             expect(existsSync(join(userPath, "wiki"))).toBe(false);
             expect(existsSync(join(userPath, ".multiremi", "wiki-base"))).toBe(false);
             expect(store.getChatSession(chat.id)).toMatchObject({ projectId: project.id, workDir: chatPath, sessionId: "managed-directory-provider" });
@@ -656,8 +657,7 @@ describe("Daemon-only inherited Chat path rejection", () => {
       store.updateWorkspace("local", { settings: { github_enabled: false }, repos: [] });
       const workspacesRoot = join(root, "workspaces");
       const userPath = join(root, "private-user-directory");
-      mkdirSync(join(userPath, ".multiremi"), { recursive: true });
-      writeFileSync(join(userPath, ".multiremi", "gc.json"), JSON.stringify({ local_directory: true }));
+      mkdirSync(userPath);
       writeFileSync(join(userPath, "unpublished.bin"), Buffer.from([0, 255, 23, 128, 10]));
       symlinkSync("unpublished.bin", join(userPath, "unpublished-link"));
       const userBefore = directoryContents(userPath);
@@ -668,7 +668,7 @@ describe("Daemon-only inherited Chat path rejection", () => {
       const instructions = "Use these original agent instructions after a workspace recovery.";
       const agent = store.createAgent({ name: "Unsafe delta worker", provider: "claude", instructions });
       const chat = store.createChatSession({ agentId: agent.id, projectId: project.id });
-      const chatPath = join(workspacesRoot, "chats", chat.id);
+      const chatPath = workDirectory(workspacesRoot, { kind: "chat", id: chat.id });
       const credential = await store.createAccessToken({ name: "Unsafe delta daemon", type: "daemon", workspaceId: "local", daemonId });
       const server = startMultiremiServer({ store, scheduler: null, authToken: "unsafe-delta-test", hostname: "127.0.0.1", port: 0 });
       const seen: Array<{ cwd: string; sessionId: string | null; prompt: string }> = [];
@@ -774,7 +774,7 @@ describe("Daemon-only inherited Chat path rejection", () => {
         expect(seen[2]!.prompt).toStartWith("# Delta Prompt");
         expect(seen[2]!.prompt).toContain(`remi message list ${chat.id} --from ${recoveredReadSeq} --to`);
         expect(directoryContents(userPath)).toEqual(userBefore);
-        expect(JSON.parse(readFileSync(join(userPath, ".multiremi", "gc.json"), "utf8")).local_directory).toBe(true);
+        expect(existsSync(join(userPath, ".multiremi", "gc.json"))).toBe(false);
         expect(existsSync(join(userPath, "wiki"))).toBe(false);
         expect(existsSync(join(userPath, ".multiremi", "wiki-base"))).toBe(false);
       } finally {

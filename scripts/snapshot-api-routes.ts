@@ -156,7 +156,6 @@ function installDeterminism(): () => void {
   setEnv("NODE_ENV", "test");
   setEnv("MULTIREMI_STATE_DIR", join(SNAPSHOT_TMP, "state"));
   setEnv("MULTIREMI_UPLOAD_DIR", UPLOAD_DIR);
-  setEnv("MULTIREMI_SESSION_ARCHIVE_ROOT", join(SNAPSHOT_TMP, "session-archives"));
   setEnv("MULTIREMI_RELEASE_DIR", RELEASE_DIR);
   setEnv("MULTIREMI_SCRIPTS_DIR", SCRIPTS_DIR);
   setEnv("MULTIREMI_RELEASE_REPO", "Grassgod/remi");
@@ -491,6 +490,7 @@ export interface SeedRefs {
   decisionId: string;
   runtimeModelRequestId: string;
   dirScanRequestId: string;
+  gcRunRequestId: string;
   localSkillListRequestId: string;
   localSkillImportRequestId: string;
   runtimeUpdateRequestId: string;
@@ -813,6 +813,7 @@ async function seedStore(store: MultiremiStore, db: Database): Promise<SeedRefs>
 
   const modelRequest = store.createRuntimeModelListRequest(runtime.id);
   const dirScan = store.createRuntimeDirectoryScanRequest(runtime.id, { root: "/snapshot", maxDepth: 2, mode: "scan" });
+  const gcRun = store.createRuntimeGcRunRequest(runtime.id, { mode: "dry_run", requestedBy: member.userId ?? member.id });
   const localSkillList = store.createRuntimeLocalSkillListRequest(runtime.id);
   const localSkillImport = store.createRuntimeLocalSkillImportRequest(runtime.id, { skillKey: "snapshot-skill", name: "Snapshot skill" });
   const runtimeUpdate = store.createRuntimeUpdateRequest(runtime.id, { targetVersion: "9.9.9", scope: "agent" as any });
@@ -923,6 +924,7 @@ async function seedStore(store: MultiremiStore, db: Database): Promise<SeedRefs>
     decisionId,
     runtimeModelRequestId: (modelRequest as any).id ?? (modelRequest as any).requestId,
     dirScanRequestId: (dirScan as any).id ?? (dirScan as any).requestId,
+    gcRunRequestId: gcRun.id,
     localSkillListRequestId: (localSkillList as any).id ?? (localSkillList as any).requestId,
     localSkillImportRequestId: (localSkillImport as any).id ?? (localSkillImport as any).requestId,
     runtimeUpdateRequestId: (runtimeUpdate as any).id ?? (runtimeUpdate as any).requestId,
@@ -1041,8 +1043,6 @@ function resolveParam(pattern: string, name: string, refs: SeedRefs): string {
       return "agent";
     case "participantId":
       return refs.agentId;
-    case "archiveId":
-      return "sar_snapshot";
     case "requestId":
       if (pattern.includes("/human-requests/")) return refs.humanRequestId;
       if (pattern.includes("/bot-menu/")) return refs.botMenuRequestId;
@@ -1050,6 +1050,7 @@ function resolveParam(pattern: string, name: string, refs: SeedRefs): string {
       if (pattern.includes("/local-skills/import/")) return refs.localSkillImportRequestId;
       if (pattern.includes("/local-skills/")) return refs.localSkillListRequestId;
       if (pattern.includes("/directory-scans/")) return refs.dirScanRequestId;
+      if (pattern.includes("/gc-runs/")) return refs.gcRunRequestId;
       if (pattern.includes("/models/")) return refs.runtimeModelRequestId;
       break;
     case "sessionId":
@@ -1720,6 +1721,8 @@ flow("runtimes", async (rec, refs) => {
     timeout_ms: 1_000,
   });
   await rec.call("GET", `/api/runtimes/${id}/commands/${command.body?.id ?? refs.runtimeCommandRequestId}`);
+  const gcRun = await rec.json("POST", `/api/runtimes/${id}/gc-runs`, { mode: "run" });
+  await rec.call("GET", `/api/runtimes/${id}/gc-runs/${gcRun.body?.request?.id ?? refs.gcRunRequestId}`);
   await rec.json("POST", `/api/runtimes/${id}/archive-agents-and-delete`, {});
   await rec.call("DELETE", `/api/runtimes/${refs.runtimeId}`);
 });
@@ -1736,6 +1739,12 @@ flow("daemon-retirement", async (rec, refs) => {
 });
 
 // -- daemon -----------------------------------------------------------------
+const SNAPSHOT_STORAGE_REPORT = {
+  version: 1, generated_at: "2026-01-01T00:00:00.000Z", mode: "dry_run", root: "/snapshot", bytes: null, bytes_measured_at: null,
+  subjects: { total: 0, active: 0, ended: 0, reclaimed: 0 }, retained: {}, reclaimed_this_round: 0,
+  forgotten_this_round: 0, freed_bytes: 0, plan: [], errors: [],
+};
+
 flow("daemon", async (rec, refs, store) => {
   await rec.json("POST", "/api/daemon/register", {
     workspace_id: refs.workspaceId,
@@ -1757,6 +1766,10 @@ flow("daemon", async (rec, refs, store) => {
   await rec.report("runtime.directory_scan_result", { runtime_id: refs.runtimeId, request_id: refs.dirScanRequestId, status: "completed",
     entries: [{ path: "/snapshot/project", name: "project", is_git_repo: true }],
   });
+  await rec.report("runtime.gc_run_result", { runtime_id: refs.runtimeId, request_id: refs.gcRunRequestId, status: "completed",
+    report: SNAPSHOT_STORAGE_REPORT,
+  });
+  await reportFrame(store, "gc.storage_report", { runtime_id: refs.runtimeId, report: SNAPSHOT_STORAGE_REPORT });
   await rec.json("POST", `/api/daemon/runtimes/${refs.runtimeId}/local-skills/claim`, {});
   await rec.report("runtime.local_skills_result", { runtime_id: refs.runtimeId, request_id: refs.localSkillListRequestId, status: "completed",
     skills: [{ key: "snapshot-skill", name: "Snapshot skill" }],
@@ -1919,6 +1932,9 @@ flow("workspaces", async (rec, refs) => {
   await rec.json("PUT", `/api/workspaces/${id}/relay-config/claude`, { baseUrl: "https://relay.invalid", token: "relay-token" });
   await rec.json("POST", `/api/workspaces/${id}/relay-config/claude/reveal`, {});
   await rec.json("PUT", `/api/workspaces/${id}/relay-config/discovery`, { enabled: true });
+  await rec.call("GET", `/api/workspaces/${id}/storage`);
+  await rec.json("PUT", `/api/workspaces/${id}/storage`, { ttl_ms: 7_200_000, max_retained: null });
+  await rec.call("GET", `/api/workspaces/${id}/storage/daemons`);
   await rec.json("POST", `/api/workspaces/${id}/lark/install/begin`, {});
   await rec.call("DELETE", `/api/workspaces/${id}/lark/installations/inst_snapshot`);
   await rec.json("POST", `/api/workspaces/${id}/leave`, {});

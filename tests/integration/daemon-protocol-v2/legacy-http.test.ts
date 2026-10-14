@@ -17,6 +17,20 @@ const removedBy493 = [
   "POST /api/daemon/tasks/:taskId/human-requests/:requestId/respond",
 ];
 
+// ADR 0018 deleted the Session Archive and the workspace-cleanup reports: no daemon
+// of any protocol version has these routes any more, so they are plainly absent.
+const removedByAdr0018 = [
+  "GET /api/daemon/autopilot-runs/:runId/gc-check",
+  "GET /api/daemon/runtimes/:runtimeId/issues/:issueId/session-archives/:archiveId/content",
+  "GET /api/daemon/runtimes/:runtimeId/issues/:issueId/session-archives/status",
+  "POST /api/daemon/issues/:issueId/workspace/cleaned",
+  "POST /api/daemon/runtimes/:runtimeId/issues/:issueId/session-archives/:archiveId/complete",
+  "POST /api/daemon/runtimes/:runtimeId/issues/:issueId/session-archives/:archiveId/failure",
+  "POST /api/daemon/runtimes/:runtimeId/issues/:issueId/session-archives/failure",
+  "POST /api/daemon/runtimes/:runtimeId/issues/:issueId/session-archives/init",
+  "PUT /api/daemon/runtimes/:runtimeId/issues/:issueId/session-archives/:archiveId/content",
+];
+
 const removedBy421 = [
   "GET /api/daemon/runtimes/:runtimeId/tasks/pending",
   "GET /api/daemon/tasks/:taskId/human-requests/:requestId",
@@ -50,7 +64,7 @@ it("keeps the retired method + path table equal to v1 minus live routes", () => 
   const retired = RETIRED_DAEMON_HTTP_ROUTES.map(({ method, path }) => `${method} ${path}`);
   expect(retired).toHaveLength(new Set(retired).size);
   expect(retired.toSorted()).toEqual(removedBy421.toSorted());
-  expect([...retired, ...removedBy493].toSorted()).toEqual(baseline.routes.filter(route => !liveRoutes.has(route)).toSorted());
+  expect([...retired, ...removedBy493, ...removedByAdr0018].toSorted()).toEqual(baseline.routes.filter(route => !liveRoutes.has(route)).toSorted());
 });
 
 it.each(["empty", "nonempty"] as const)("keeps reconciled v1 desired state unchanged at the same write cost as plugin.desired RPC (%s)", async scenario => {
@@ -248,7 +262,7 @@ it.each(["all", "runtime"] as const)("automatically rejects removed snapshot rou
       const path = pattern!.replace(/:runtimeId\b/g, runtime.id).replace(/:taskId\b/g, task.id)
         .replace(/:issueId\b/g, issue.id).replace(/:[A-Za-z_][A-Za-z_0-9]*/g, "legacy-fixture");
       const response = await fetch(`http://127.0.0.1:${server.port}${path}`, { method, headers: { Authorization: `Bearer ${authToken}` } });
-      const deleted = removedBy493.includes(route);
+      const deleted = removedBy493.includes(route) || removedByAdr0018.includes(route);
       expect(response.status, route).toBe(deleted ? 404 : 426);
       if (deleted) expect(await response.text(), route).toBe("404 Not Found");
       else expect(await response.json(), route).toEqual(upgradeRequired);

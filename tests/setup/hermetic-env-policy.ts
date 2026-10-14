@@ -101,7 +101,6 @@ export const HERMETIC_ENV_DEFAULTS: Readonly<Record<string, string>> = {
 export const HERMETIC_ENV_RUN_ROOT_PATHS: Readonly<Record<string, string>> = {
   MULTIREMI_STATE_DIR: "state",
   MULTIREMI_WORKSPACES_ROOT: "workspaces",
-  MULTIREMI_SESSION_ARCHIVE_ROOT: "session-archives",
   MULTIREMI_PLUGIN_CACHE_ROOT: "plugin-cache",
   MULTIREMI_UPLOAD_DIR: "uploads",
   MULTIREMI_MIGRATION_REPORT_DIR: "reports/migrations",

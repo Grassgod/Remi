@@ -4,6 +4,7 @@ import { InboxEndpoints } from "./inbox";
 import { TurnDetailSchema } from "../schemas/messages";
 import type {
   CreateChatSessionInput,
+  ChatOriginFilter,
   ChatPendingTask,
   ChatSession,
   PendingChatTasksResponse,
@@ -20,8 +21,11 @@ export class ChatEndpoints {
   constructor(readonly http: HttpClient) {}
 
   // Chat Sessions
-  async listChatSessions(params?: { status?: string }): Promise<ChatSession[]> {
-    const query = params?.status ? `?status=${params.status}` : "";
+  async listChatSessions(params?: { status?: string; origin?: ChatOriginFilter }): Promise<ChatSession[]> {
+    const search = new URLSearchParams();
+    if (params?.status) search.set("status", params.status);
+    if (params?.origin) search.set("origin", params.origin);
+    const query = search.toString() ? `?${search}` : "";
     const raw = await this.http.fetch<unknown>(`/api/chat/sessions${query}`);
     return parseStrictResponse<ChatSession[]>(raw, ChatSessionListSchema, { endpoint: "GET /api/chat/sessions" });
   }

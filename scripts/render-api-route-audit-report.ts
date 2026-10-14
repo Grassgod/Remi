@@ -83,7 +83,6 @@ const unbounded = [
   ["autopilots", "GET autopilots/deliveries", "autopilots-repo.ts:227 / :1392", "workspace autopilots、delivery 列表无分页", "autopilots/deliveries per workspace"],
   ["labels/inbox", "GET labels / inbox", "issues-repo.ts:1942 / :2060", "workspace labels/member inbox 全量", "labels per workspace / inbox over time"],
   ["sessions", "sessions/participants/events/results", "issue-sessions-repo.ts:121 / :199 / :250 / :384", "产品 session 四层列表均无 page size", "sessions per issue and events over time"],
-  ["archives", "GET issue session archives", "session-archives-repo.ts:90", "issue archives 全量", "archives per issue over time"],
   ["runtimes", "GET runtimes/models", "runtimes-repo.ts:324 / :863", "runtimes 全局列表、models per runtime 无分页", "global runtimes / models per runtime"],
   ["squads", "GET squads", "squads-repo.ts:78", "workspace squads 全量", "squads per workspace"],
   ["pins", "GET pins", "projects-repo.ts:318", "user/workspace pins 全量", "pins per user/workspace"],

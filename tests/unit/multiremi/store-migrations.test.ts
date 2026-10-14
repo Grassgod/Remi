@@ -8,6 +8,7 @@ import type { Database } from "bun:sqlite";
 import { openSqliteDatabase, deserializeSqliteDatabase, markSqliteDialect } from "@multiremi/store/db/sqlite.js";
 import { resolveSqlDialect, runMigrations, bootstrapPreUnifiedSchema } from "@multiremi/store/migrations.js";
 import type { SqlDatabase } from "@multiremi/store/db/postgres.js";
+import { expectArchiveEraMigrated, installArchiveEraSchema } from "./archive-era-schema.js";
 
 import {
   CHAT_ISSUE_CLASSIFICATION_CASES, classificationChatId, CHAT_ISSUE_MIGRATION,
@@ -134,7 +135,6 @@ describe("store migrations", () => {
       "multiremi_chat_sessions",
       "multiremi_feedback",
       "multiremi_access_tokens",
-      "multiremi_session_archives",
       "multiremi_schema_migrations",
       "multiremi_message_connections",
       "multiremi_message_sources",
@@ -145,6 +145,9 @@ describe("store migrations", () => {
       expect(tables).toContain(table);
     }
     expect(tables.some((name) => name.startsWith("multica_"))).toBe(false);
+    for (const table of ["multiremi_session_archives", "multiremi_session_archive_requests", "multiremi_trace_backfill_progress"]) {
+      expect(tables).not.toContain(table);
+    }
     expect(tables).not.toContain("multiremi_github_settings");
     expect(tables).not.toContain("multiremi_github_pull_requests");
     expect(indexNames(database)).toEqual(expect.arrayContaining([
@@ -186,9 +189,10 @@ describe("store migrations", () => {
     expect(columnNames(database, "multiremi_issues")).toEqual(expect.arrayContaining([
       "issue_kind", "source_issue_id", "lifecycle_state", "completed_at", "archived_at",
     ]));
-    expect(columnNames(database, "multiremi_issue_workspaces")).toEqual(expect.arrayContaining([
-      "cleaned_archive_id", "cleaned_archive_source_revision", "cleaned_archive_sha256",
-    ]));
+    expect(columnNames(database, "multiremi_issue_workspaces")).not.toContain("cleaned_archive_id");
+    expect(columnNames(database, "multiremi_task_traces")).toEqual([
+      "task_id", "location", "runtime_id", "event_count", "head_seq", "closed", "updated_at",
+    ]);
     expect(columnNames(database, "multiremi_agent_plugin_bindings")).not.toContain("task_kind");
     expect(columnNames(database, "multiremi_project_docs")).toEqual(expect.arrayContaining([
       "path", "storage_backend", "content_uri", "content_sha256", "sync_status", "sync_error", "snapshot_oid",
@@ -210,9 +214,6 @@ describe("store migrations", () => {
       "updated_by",
       "updated_at",
     ]);
-    expect(columnNames(database, "multiremi_session_archives")).toEqual(expect.arrayContaining([
-      "source_revision", "sha256", "relative_path", "status", "uploaded_size_bytes",
-    ]));
     expect(columnNames(database, "multiremi_notification_deliveries")).toEqual(expect.arrayContaining([
       "claim_seq", "leased_until",
     ]));
@@ -665,83 +666,6 @@ describe("store migrations", () => {
     expect(database.query(
       "SELECT auto_update_time, auto_update_timezone FROM multiremi_platform_state WHERE id = 'platform'",
     ).get()).toEqual({ auto_update_time: "05:00", auto_update_timezone: "Asia/Shanghai" });
-  });
-
-  it("backfills retry budgets for legacy failures and stalled uploads", () => {
-    const database = freshDb();
-    database.exec(`
-      CREATE TABLE multiremi_session_archives (
-        id TEXT PRIMARY KEY,
-        workspace_id TEXT NOT NULL DEFAULT 'local',
-        issue_id TEXT NOT NULL,
-        runtime_id TEXT NOT NULL,
-        daemon_id TEXT NOT NULL,
-        source_revision TEXT NOT NULL,
-        sha256 TEXT NOT NULL,
-        size_bytes BIGINT NOT NULL,
-        uploaded_size_bytes BIGINT NOT NULL DEFAULT 0,
-        file_count INTEGER,
-        status TEXT NOT NULL DEFAULT 'pending',
-        relative_path TEXT NOT NULL,
-        metadata TEXT NOT NULL DEFAULT '{}',
-        attempt_count INTEGER NOT NULL DEFAULT 0,
-        last_error TEXT,
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL,
-        completed_at TEXT,
-        UNIQUE(issue_id, source_revision, sha256)
-      );
-      INSERT INTO multiremi_session_archives (
-        id, issue_id, runtime_id, daemon_id, source_revision, sha256,
-        size_bytes, status, relative_path, attempt_count, last_error,
-        created_at, updated_at
-      ) VALUES
-        ('sar_failed', 'iss_failed', 'rt_1', 'dmn_1', 'rev-failed', '${"1".repeat(64)}',
-         1, 'failed', 'failed/sessions.tar.gz', 6, 'network failed',
-         '2000-01-01T00:00:00.000Z', '2000-01-01T00:00:00.000Z'),
-        ('sar_stalled', 'iss_stalled', 'rt_1', 'dmn_1', 'rev-stalled', '${"2".repeat(64)}',
-         1, 'uploading', 'stalled/sessions.tar.gz', 2, NULL,
-         '2000-01-01T00:00:00.000Z', '2000-01-01T00:00:00.000Z'),
-        ('sar_active', 'iss_active', 'rt_1', 'dmn_1', 'rev-active', '${"3".repeat(64)}',
-         1, 'uploading', 'active/sessions.tar.gz', 1, NULL,
-         '2999-01-01T00:00:00.000Z', '2999-01-01T00:00:00.000Z');
-    `);
-
-    migrate(database);
-
-    expect(columnNames(database, "multiremi_session_archives")).toEqual(expect.arrayContaining([
-      "next_retry_at", "retry_exhausted_at",
-    ]));
-    const rows = database.query(
-      `SELECT id, status, attempt_count, last_error, next_retry_at, retry_exhausted_at
-       FROM multiremi_session_archives ORDER BY id`,
-    ).all() as Array<Record<string, unknown>>;
-    expect(rows).toEqual([
-      {
-        id: "sar_active",
-        status: "uploading",
-        attempt_count: 1,
-        last_error: null,
-        next_retry_at: null,
-        retry_exhausted_at: null,
-      },
-      {
-        id: "sar_failed",
-        status: "failed",
-        attempt_count: 6,
-        last_error: "network failed",
-        next_retry_at: expect.any(String),
-        retry_exhausted_at: expect.any(String),
-      },
-      {
-        id: "sar_stalled",
-        status: "failed",
-        attempt_count: 2,
-        last_error: "upload stalled",
-        next_retry_at: expect.any(String),
-        retry_exhausted_at: null,
-      },
-    ]);
   });
 
   it("adds the notification delivery lease to a pre-lease table", () => {
@@ -3008,5 +2932,108 @@ describe("MUL-407 human-request push table rebuild", () => {
     ).all() as Array<{ name: string; notnull: number }>;
     expect(columns.find((column) => column.name === "wake_task_id")?.notnull).toBe(0);
     expect(columns.find((column) => column.name === "delivery_id")).toBeTruthy();
+  });
+});
+
+describe("ADR 0018 local records migration", () => {
+  const run = (database: Database) => runMigrations(database as unknown as SqlDatabase);
+  const sql = (database: Database) => database as unknown as SqlDatabase;
+  const schema = (database: Database) => {
+    const out: Record<string, string[]> = {};
+    for (const table of tableNames(database)) {
+      if (table.startsWith("multiremi_legacy_") || table.startsWith("sqlite_")) continue;
+      out[table] = columnNames(database, table).sort();
+    }
+    return out;
+  };
+  const LOCAL_RECORDS = "20261013_local_records_recyclable_workspaces";
+
+  function upgraded(): Database {
+    const database = freshDb();
+    bootstrapPreUnifiedSchema(sql(database));
+    installArchiveEraSchema(sql(database));
+    run(database);
+    return database;
+  }
+
+  it("turns an archive-era database into the local-records schema and keeps the legacy tables", () => {
+    const database = upgraded();
+    expectArchiveEraMigrated(sql(database));
+    expect(database.query("SELECT id FROM multiremi_schema_migrations WHERE id = ?").get(LOCAL_RECORDS)).toEqual({ id: LOCAL_RECORDS });
+  });
+
+  it("ends a fresh database and an upgraded one in the same schema", () => {
+    const fresh = freshDb();
+    run(fresh);
+    expect(schema(upgraded())).toEqual(schema(fresh));
+    expect(tableNames(fresh).filter((name) => name.startsWith("multiremi_legacy_"))).toEqual([]);
+    const indexes = (database: Database) => (database.query("SELECT name FROM sqlite_master WHERE type = 'index' AND name LIKE 'idx_%'").all() as Array<{ name: string }>)
+      .map((row) => row.name).sort();
+    expect(indexes(upgraded())).toEqual(indexes(fresh));
+  });
+
+  it("resets native sessions exactly once", () => {
+    const database = upgraded();
+    const lane = (reader: string, type: string, providerSession: string | null, generation: number) => database.run(
+      `INSERT INTO multiremi_session_lanes (session_id, reader_type, reader_id, execution_scope, provider_session_id, runtime_id, provider,
+         work_dir, provider_cursor_seq, parent_cursor_seq, generation, last_attempt_id, created_at, updated_at)
+       VALUES ('ises_1', ?, ?, '', ?, ?, ?, ?, 7, 3, ?, ?, '2026-10-01T00:00:00.000Z', '2026-10-01T00:00:00.000Z')`,
+      [type, reader, providerSession, providerSession ? "rt_1" : null, providerSession ? "claude" : null,
+        providerSession ? "/work" : null, generation, providerSession ? "tsk_last" : null]);
+    const seed = () => {
+      database.run("DELETE FROM multiremi_session_lanes");
+      lane("agt_live", "agent", "provider-session", 2);
+      lane("agt_cold", "agent", null, 5);
+      database.run("INSERT INTO multiremi_chat_sessions (id, workspace_id, agent_id, title, status, session_id, work_dir, session_runtime_id, session_provider, session_execution_fingerprint, created_at, updated_at) VALUES ('chat_1', 'local', 'agt_live', 'Chat', 'active', 'native', '/w', 'rt_1', 'claude', 'fp', '2026-10-01T00:00:00.000Z', '2026-10-01T00:00:00.000Z') ON CONFLICT(id) DO UPDATE SET session_id = 'native', work_dir = '/w', session_runtime_id = 'rt_1', session_provider = 'claude', session_execution_fingerprint = 'fp'");
+    };
+    const read = () => ({
+      lanes: database.query("SELECT reader_id, provider_session_id, runtime_id, work_dir, provider_cursor_seq, parent_cursor_seq, generation, last_attempt_id FROM multiremi_session_lanes ORDER BY reader_id").all(),
+      chat: database.query("SELECT session_id, work_dir, session_runtime_id, session_provider, session_execution_fingerprint, updated_at FROM multiremi_chat_sessions WHERE id = 'chat_1'").get(),
+    });
+
+    seed();
+    database.run("DELETE FROM multiremi_schema_migrations WHERE id = ?", [LOCAL_RECORDS]);
+    run(database);
+    expect(read()).toEqual({
+      lanes: [
+        { reader_id: "agt_cold", provider_session_id: null, runtime_id: null, work_dir: null, provider_cursor_seq: 7, parent_cursor_seq: 3, generation: 5, last_attempt_id: null },
+        { reader_id: "agt_live", provider_session_id: null, runtime_id: null, work_dir: null, provider_cursor_seq: 0, parent_cursor_seq: 0, generation: 3, last_attempt_id: null },
+      ],
+      chat: { session_id: null, work_dir: null, session_runtime_id: null, session_provider: null, session_execution_fingerprint: null, updated_at: "2026-10-01T00:00:00.000Z" },
+    });
+
+    // A later restart must not void the sessions the new generation has since started.
+    seed();
+    const live = read();
+    run(database);
+    run(database);
+    expect(read()).toEqual(live);
+  });
+
+  it("voids the session of an attempt queued before the upgrade and clears a leftover deletion fence", () => {
+    const database = upgraded();
+    const at = "2026-10-01T00:00:00.000Z";
+    for (const [turn, attempt, status] of [["trn_queued", "tsk_queued", "offered"], ["trn_running", "tsk_running", "running"]] as const) {
+      database.run(
+        "INSERT INTO multiremi_turns (id, session_id, seq, agent_id, status, workspace_id, created_at) VALUES (?, 'chat_1', ?, 'agt_1', ?, 'local', ?)",
+        [turn, turn === "trn_queued" ? 1 : 2, turn === "trn_queued" ? "pending" : "running", at],
+      );
+      database.run(
+        `INSERT INTO multiremi_turn_attempts (id, turn_id, attempt_no, status, session_id, work_dir, created_at, updated_at)
+         VALUES (?, ?, 1, ?, 'old-native', '/old/layout', ?, ?)`,
+        [attempt, turn, status, at, at],
+      );
+    }
+    database.run("UPDATE multiremi_issues SET lifecycle_state = 'deleting' WHERE id = 'iss_1'");
+    database.run("DELETE FROM multiremi_schema_migrations WHERE id = ?", [LOCAL_RECORDS]);
+    run(database);
+
+    expect(database.query("SELECT id, session_id, work_dir FROM multiremi_turn_attempts ORDER BY id").all()).toEqual([
+      { id: "tsk_queued", session_id: null, work_dir: null },
+      { id: "tsk_running", session_id: "old-native", work_dir: "/old/layout" },
+    ]);
+    expect(database.query("SELECT lifecycle_state FROM multiremi_issues WHERE id = 'iss_1'").get()).toEqual({ lifecycle_state: "active" });
+    expect(database.query("SELECT name FROM sqlite_master WHERE name = 'idx_multiremi_autopilot_runs_chat'").get())
+      .toEqual({ name: "idx_multiremi_autopilot_runs_chat" });
   });
 });

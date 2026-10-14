@@ -16,17 +16,58 @@ import {
 } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
-import { basename, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import {
   OWNED_DIRECTORY_QUARANTINE,
   ownedDirectoryRemovalSupport,
   recoverOwnedDirectoryQuarantineSync,
+  removeOwnedDirectory,
   removeOwnedDirectorySync,
 } from "@daemon/agent-runtime/workspace/safe-remove.js";
 
 // CI only runs Linux, so both addressing strategies are exercised there. A
 // darwin host can only run the path-anchored leg: `/proc/self/fd` is missing.
 const PLATFORMS = (process.platform === "linux" ? ["linux", "darwin"] : ["darwin"]) as NodeJS.Platform[];
+
+/**
+ * Runs `attempt` `attempts` times and checks that it never leaks a descriptor:
+ * every run opens the same number of descriptors, and all of them are closed
+ * when it returns. How many a run opens depends on the strategy (the
+ * descriptor strategy holds the daemon state directory open while it walks to
+ * the quarantine, the path strategy does not), so the count is not fixed here.
+ * Only descriptors that were actually opened count: a probe on a missing path
+ * throws out of `openSync`, and nothing leaks by failing to open.
+ */
+function expectNoDescriptorLeak(attempts: number, attempt: () => void): number {
+  const originalOpen = fs.openSync;
+  const originalClose = fs.closeSync;
+  let opened = 0;
+  let closed = 0;
+  const open = spyOn(fs, "openSync").mockImplementation((...args: Parameters<typeof originalOpen>) => {
+    const fd = originalOpen(...args);
+    opened++;
+    return fd;
+  });
+  const close = spyOn(fs, "closeSync").mockImplementation((...args: Parameters<typeof originalClose>) => {
+    closed++;
+    return originalClose(...args);
+  });
+  try {
+    let perAttempt: number | null = null;
+    for (let index = 0; index < attempts; index++) {
+      const before = opened;
+      attempt();
+      perAttempt ??= opened - before;
+      // The same work costs the same every time, so a descriptor left open shows up as growth.
+      expect(opened - before).toBe(perAttempt);
+      expect(closed).toBe(opened);
+    }
+    return perAttempt ?? 0;
+  } finally {
+    open.mockRestore();
+    close.mockRestore();
+  }
+}
 
 describe.each(PLATFORMS)("anchored owned directory removal (%s)", (platform) => {
   const roots: string[] = [];
@@ -70,6 +111,37 @@ describe.each(PLATFORMS)("anchored owned directory removal (%s)", (platform) => 
     expect(readdirSync(join(root, OWNED_DIRECTORY_QUARANTINE))).toEqual([]);
   });
 
+  it("keeps the quarantine below .daemon and refuses to remove the daemon state directory", () => {
+    const root = tempRoot(roots);
+    const target = join(root, "env", "iss_1", "tmp", "tsk_1-abc");
+    const probe = join(root, ".daemon", "probe", "claude-1");
+    mkdirSync(target, { recursive: true });
+    mkdirSync(probe, { recursive: true });
+
+    expect(removeOwnedDirectorySync(root, target, { platform })).toBe(true);
+    expect(OWNED_DIRECTORY_QUARANTINE).toBe(join(".daemon", "quarantine"));
+    expect(readdirSync(join(root, ".daemon")).sort()).toEqual(["probe", "quarantine"]);
+    for (const refused of [join(root, ".daemon"), join(root, OWNED_DIRECTORY_QUARANTINE), join(root, OWNED_DIRECTORY_QUARANTINE, "x")]) {
+      expect(() => removeOwnedDirectorySync(root, refused, { platform })).toThrow("owned-directory quarantine");
+    }
+    // The rest of the daemon state is ordinary owned data.
+    expect(removeOwnedDirectorySync(root, probe, { platform })).toBe(true);
+    expect(existsSync(probe)).toBe(false);
+  });
+
+  it("refuses a symlinked .daemon directory before quarantining anything", () => {
+    const root = tempRoot(roots);
+    const outside = tempRoot(roots);
+    const target = join(root, "work", "chat_1");
+    mkdirSync(target, { recursive: true });
+    writeFileSync(join(target, "keep.txt"), "keep\n");
+    symlinkSync(outside, join(root, ".daemon"), "dir");
+
+    expect(() => removeOwnedDirectorySync(root, target, { platform })).toThrow("real directory");
+    expect(readFileSync(join(target, "keep.txt"), "utf8")).toBe("keep\n");
+    expect(readdirSync(outside)).toEqual([]);
+  });
+
   it("refuses a symlinked root or parent without touching the outside directory", () => {
     const outside = tempRoot(roots);
     const victim = join(outside, "task-1");
@@ -95,6 +167,7 @@ describe.each(PLATFORMS)("anchored owned directory removal (%s)", (platform) => 
     mkdirSync(target);
     writeFileSync(join(target, "keep.txt"), "keep\n");
     chmodSync(target, 0o555);
+    mkdirSync(dirname(quarantine), { mode: 0o700 });
     mkdirSync(quarantine, { mode: 0o500 });
     const renameError: NodeJS.ErrnoException = Object.assign(
       new Error("EACCES: permission denied, rename"),
@@ -156,36 +229,15 @@ describe.each(PLATFORMS)("anchored owned directory removal (%s)", (platform) => 
     const present = join(root, ".task-runtime", "task-1");
     mkdirSync(join(root, ".task-runtime"), { recursive: true });
     mkdirSync(present);
-    // Count only descriptors that were actually opened: a probe on a missing
-    // path throws out of openSync, and nothing leaks by failing to open.
-    const originalOpen = fs.openSync;
-    const originalClose = fs.closeSync;
-    let opened = 0;
-    let closed = 0;
-    const open = spyOn(fs, "openSync").mockImplementation((...args: Parameters<typeof originalOpen>) => {
-      const fd = originalOpen(...args);
-      opened++;
-      return fd;
+    const perAttempt = expectNoDescriptorLeak(25, () => {
+      // Deep path whose middle component exists but whose target is gone.
+      expect(removeOwnedDirectorySync(root, join(root, ".task-runtime", "missing-target"), { platform }))
+        .toBe(false);
+      // Deep path whose intermediate ancestor is gone.
+      expect(removeOwnedDirectorySync(root, join(root, ".missing-runtime", "missing-target"), { platform }))
+        .toBe(false);
     });
-    const close = spyOn(fs, "closeSync").mockImplementation((...args: Parameters<typeof originalClose>) => {
-      closed++;
-      return originalClose(...args);
-    });
-    try {
-      for (let attempt = 0; attempt < 25; attempt++) {
-        // Deep path whose middle component exists but whose target is gone.
-        expect(removeOwnedDirectorySync(root, join(root, ".task-runtime", "missing-target"), { platform }))
-          .toBe(false);
-        // Deep path whose intermediate ancestor is gone.
-        expect(removeOwnedDirectorySync(root, join(root, ".missing-runtime", "missing-target"), { platform }))
-          .toBe(false);
-      }
-      expect(opened).toBe(75);
-      expect(closed).toBe(opened);
-    } finally {
-      open.mockRestore();
-      close.mockRestore();
-    }
+    expect(perAttempt).toBeGreaterThan(0);
     // The fixtures are untouched, so no path leaked into a deletion.
     expect(existsSync(present)).toBe(true);
     expect(existsSync(join(root, OWNED_DIRECTORY_QUARANTINE))).toBe(false);
@@ -194,34 +246,16 @@ describe.each(PLATFORMS)("anchored owned directory removal (%s)", (platform) => 
   it("releases every descriptor when recovery refuses a non-private quarantine", () => {
     const root = tempRoot(roots);
     const quarantine = join(root, OWNED_DIRECTORY_QUARANTINE);
+    mkdirSync(dirname(quarantine), { mode: 0o700 });
     mkdirSync(quarantine);
     chmodSync(quarantine, 0o755);
     // Workspace GC reports this refusal and retries every round, so any
     // descriptor left open here accumulates for the daemon's lifetime.
-    const originalOpen = fs.openSync;
-    const originalClose = fs.closeSync;
-    let opened = 0;
-    let closed = 0;
-    const open = spyOn(fs, "openSync").mockImplementation((...args: Parameters<typeof originalOpen>) => {
-      const fd = originalOpen(...args);
-      opened++;
-      return fd;
+    const perAttempt = expectNoDescriptorLeak(10, () => {
+      expect(() => recoverOwnedDirectoryQuarantineSync(root, { platform }))
+        .toThrow("must not be accessible by group or other users");
     });
-    const close = spyOn(fs, "closeSync").mockImplementation((...args: Parameters<typeof originalClose>) => {
-      closed++;
-      return originalClose(...args);
-    });
-    try {
-      for (let attempt = 0; attempt < 10; attempt++) {
-        expect(() => recoverOwnedDirectoryQuarantineSync(root, { platform }))
-          .toThrow("must not be accessible by group or other users");
-      }
-      expect(opened).toBe(20);
-      expect(closed).toBe(opened);
-    } finally {
-      open.mockRestore();
-      close.mockRestore();
-    }
+    expect(perAttempt).toBeGreaterThan(0);
   });
 
   it("retains a verified quarantine generation when the root fence is lost", () => {
@@ -290,6 +324,96 @@ describe.each(PLATFORMS)("anchored owned directory removal (%s)", (platform) => 
     expect(statSync(outsideFile).mode & 0o444).toBe(0o444);
     expect(readFileSync(outsideFile, "utf8")).toBe("external data\n");
   });
+});
+
+describe.each(PLATFORMS)("asynchronous owned directory removal (%s)", (platform) => {
+  const roots: string[] = [];
+
+  afterEach(() => {
+    for (const root of roots.splice(0)) {
+      restoreFixturePermissions(root);
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("removes a read-only tree through the quarantine without following links", async () => {
+    const root = tempRoot(roots);
+    const target = join(root, "work", "iss_1");
+    const nested = join(target, "repo", "src");
+    const outside = tempRoot(roots);
+    const outsideFile = join(outside, "keep.txt");
+    mkdirSync(nested, { recursive: true });
+    writeFileSync(join(nested, "code.ts"), "export const value = 1;\n", { mode: 0o444 });
+    writeFileSync(outsideFile, "external data\n", { mode: 0o444 });
+    symlinkSync(outside, join(nested, "linked-dir"), "dir");
+    for (const path of [nested, join(target, "repo"), target, outside]) chmodSync(path, 0o555);
+
+    expect(await removeOwnedDirectory(root, target, { platform })).toBe(true);
+
+    expect(existsSync(target)).toBe(false);
+    expect(readdirSync(join(root, OWNED_DIRECTORY_QUARANTINE))).toEqual([]);
+    expect(statSync(outside).mode & 0o777).toBe(0o555);
+    expect(readFileSync(outsideFile, "utf8")).toBe("external data\n");
+  });
+
+  it("answers false for a directory that is gone and refuses what the sync removal refuses", async () => {
+    const root = tempRoot(roots);
+    mkdirSync(root, { recursive: true });
+
+    expect(await removeOwnedDirectory(root, join(root, "missing"), { platform })).toBe(false);
+    await expect(removeOwnedDirectory(root, join(root, ".daemon"), { platform })).rejects.toThrow("owned-directory quarantine");
+    await expect(removeOwnedDirectory(root, tempRoot(roots), { platform })).rejects.toThrow("outside owned root");
+  });
+
+  it("keeps the verified bytes for recovery when ownership is lost before they go", async () => {
+    const root = tempRoot(roots);
+    const target = join(root, "legacy-20260101");
+    mkdirSync(join(target, "deep"), { recursive: true });
+    writeFileSync(join(target, "deep", "data"), "durable\n");
+    let fences = 0;
+
+    await expect(removeOwnedDirectory(root, target, {
+      platform,
+      assertRootOwner: () => {
+        if (++fences === 4) throw new Error("ownership lost");
+      },
+    })).rejects.toThrow("ownership lost");
+
+    expect(existsSync(target)).toBe(false);
+    const quarantined = readdirSync(join(root, OWNED_DIRECTORY_QUARANTINE));
+    expect(quarantined).toHaveLength(1);
+    expect(quarantined[0]).toMatch(/\.deleting$/);
+    expect(recoverOwnedDirectoryQuarantineSync(root, { platform })).toEqual({ recovered: 1, retained: [] });
+  });
+
+  it("keeps the event loop running while a large tree goes", async () => {
+    const root = tempRoot(roots);
+    const target = join(root, "legacy-20260101");
+    for (let directory = 0; directory < 20; directory++) {
+      const path = join(target, `d${directory}`, "node_modules", "pkg");
+      mkdirSync(path, { recursive: true });
+      for (let file = 0; file < 50; file++) writeFileSync(join(path, `f${file}.js`), "x");
+    }
+    let ticks = 0;
+    let longestGap = 0;
+    let last = performance.now();
+    const timer = setInterval(() => {
+      const now = performance.now();
+      longestGap = Math.max(longestGap, now - last);
+      last = now;
+      ticks++;
+    }, 2);
+
+    const started = performance.now();
+    await removeOwnedDirectory(root, target, { platform });
+    const elapsed = performance.now() - started;
+    clearInterval(timer);
+
+    expect(existsSync(target)).toBe(false);
+    // A synchronous removal of the same tree would be one gap as long as the whole call.
+    expect(ticks).toBeGreaterThan(2);
+    expect(longestGap).toBeLessThan(elapsed * 0.6);
+  }, 120_000);
 });
 
 describe("path-anchored removal on darwin (injected on Linux CI)", () => {

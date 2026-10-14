@@ -1,5 +1,5 @@
 import { pendingTurnBackendTests } from "./pending-turn-test-backends.js";
-import { requestMessageBody, mutateExecutionFixture } from "./unified-test-paths.js";
+import { mutateExecutionFixture } from "./unified-test-paths.js";
 import { afterEach, describe, expect, it } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { MultiremiStore } from "@multiremi/store.js";
@@ -107,8 +107,6 @@ describe("Chat queues", () => {
     expect(store.getTask(second.task.id)?.status).toBe("cancelled");
     expect(store.claimTask(runtime.id)).toBeNull();
     const app = createMultiremiApp({ store });
-    const rejected = await app.request(`/api/sessions/${chat.id}/messages`, { method: "POST", headers: jsonHeaders, body: JSON.stringify(requestMessageBody(store, { content: "no" }, { type: "agent", ref: store.getChatSession(chat.id)!.agentId })) });
-    expect(rejected.status).toBe(409);
     const archived = await app.request("/api/chat/sessions?status=archived");
     expect((await archived.json()).map((entry: any) => entry.id)).toEqual([chat.id]);
     expect(await (await app.request("/api/chat/sessions?status=active")).json()).toEqual([]);

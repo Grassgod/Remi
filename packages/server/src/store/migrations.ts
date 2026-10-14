@@ -4,6 +4,7 @@ import { openSqliteDatabase } from './db/sqlite.js';
 import { widenAttemptCounters,separateLaneProviderProgress } from './inbox/attempt-counters.js';
 import { migrateAttemptInput } from './inbox/attempt-input.js';
 import { createMemberInboxReadProjection } from './inbox/member-records.js';
+import { createAutopilotRunReadProjection } from './autopilot-run-records.js';
 import { runUnifiedModelMigration, unifiedModelPreflight, UnifiedModelPreflightError, collectUnifiedBeforeReport, writeUnifiedModelReport } from "./unified-model-migration.js";
 import { UNIFIED_LANE_SWEEP_INDEX, UNIFIED_MODEL_MIGRATION } from "./unified-model-schema.js";
 import { prepareMigrationReportDirectory, resolveMigrationReportDirectory } from "./migration-report-directory.js";
@@ -16,17 +17,10 @@ import { syncRuntimeExecutionGroups } from "@multiremi/store/execution-groups.js
 import { createHash } from "node:crypto";
 import { attachmentIdsFromText } from "@multiremi/contracts/attachments.js";
 import { type SqlDatabase, type SqlDatabaseDialect } from "@multiremi/store/db/postgres.js";
-import {
-  isSessionArchiveRetryExhausted,
-  nextSessionArchiveRetryAt,
-  resolveSessionArchiveRetryPolicy,
-  resolveSessionArchiveUploadStallMs,
-} from "@multiremi/session-archive/retry-policy.js";
 import { createLogger } from "@shared/logger.js";
 import { canonicalizeDaemonRoutingWithinTransaction } from "@multiremi/store/daemon-routing.js";
 import { advisoryLock, isPostgresConfigured } from "@multiremi/store/db/postgres.js";
 import { MIGRATION_ADVISORY_LOCK_KEY } from "@multiremi/store/advisory-locks.js";
-import { SESSION_ARCHIVE_FORMAT_V1 } from "@multiremi/contracts/session-archive.js";
 import { backfillConversationLogWithinTransaction, CONVERSATION_LOG_BACKFILL_MIGRATION } from "@multiremi/store/conversation-log-backfill.js";
 import { executionScopeSql, TASK_EXECUTION_SCOPE_MIGRATION, PENDING_TURN_MIGRATION, preparePendingTurnConstraintsWithinTransaction } from "@multiremi/store/pending-turns.js";
 
@@ -36,7 +30,6 @@ const SCM_DEFAULT_SCOPE_MIGRATION = "20260822_scm_default_repository_scope";
 const FEISHU_INGEST_V2_MIGRATION = "20260825_feishu_ingest_v2";
 const FEISHU_INGEST_ALERT_DELIVERY_V3_MIGRATION = "20260825_feishu_ingest_alert_delivery_v3";
 const CODEBASE_CHANGE_REQUEST_CURSOR_RESET_MIGRATION = "20260825_codebase_change_request_cursor_reset";
-const SESSION_ARCHIVE_RETRY_BUDGET_MIGRATION = "20260826_session_archive_retry_budget";
 const FEISHU_ISSUE_PROPOSALS_V4_MIGRATION = "20260826_feishu_issue_proposals_v4";
 const MESSAGING_CORE_V1_MIGRATION = "20260831_messaging_core_v1";
 const MESSAGING_MIGRATION_BATCH_SIZE = 500;
@@ -59,11 +52,11 @@ const TASK_FALLBACK_MODEL_MIGRATION = "20260919_task_fallback_model";
 const GATEWAY_MODEL_REASONING_MIGRATION = "20260919_gateway_model_reasoning";
 const GATEWAY_MODEL_CONTEXT_MIGRATION = "20260928_gateway_model_context";
 const TASK_LIST_PAGINATION_INDEXES_MIGRATION = "20260921_task_list_pagination_indexes";
-const SESSION_ARCHIVE_SUBJECT_V2_MIGRATION = "20260927_session_archive_subject_v2";
 const TASK_TRACE_POINTERS_MIGRATION = "20260927_task_trace_pointers";
 const ISSUE_NUMBER_UNIQUE_INDEX = "idx_multiremi_issues_workspace_number";
 const PROJECT_DOC_CONTENT_URI_INDEX_MIGRATION = "20260926_project_doc_content_uri_index";
 const CONVERSATION_LOG_MIGRATION = "20260927_conversation_log";
+const LOCAL_RECORDS_MIGRATION = "20261013_local_records_recyclable_workspaces";
 
 // Stable Feishu open_id of the deployment owner (hehuajie / 贺华杰). The seed
 // `local` user is tagged with this on migration so SSO login re-binds to it
@@ -92,7 +85,7 @@ export function runMigrations(db: SqlDatabase, options: { dialect?: SqlDatabaseD
     if(tables.has('multiremi_issues'))addColumnIfMissing(db,'multiremi_issues','responsible_member_id TEXT');
     if(tables.has('multiremi_autopilots'))addColumnIfMissing(db,'multiremi_autopilots','responsible_member_id TEXT');
     if(tables.has('multiremi_issue_activity'))addColumnIfMissing(db,'multiremi_issue_activity','workspace_id TEXT');
-    if(tables.has('multiremi_schema_migrations') && db.query('SELECT id FROM multiremi_schema_migrations WHERE id=?').get(UNIFIED_MODEL_MIGRATION)){runUnifiedModelMigration(db,{reportDir:process.env.MULTIREMI_MIGRATION_REPORT_DIR});separateLaneProviderProgress(db);foldAgentReadState(db);createMemberInboxReadProjection(db);foldDecisionRecords(db);createDecisionReadProjections(db);migrateAttemptInput(db);widenAttemptCounters(db);ensureTurnListIndexes(db);ensureQuestionQueryIndexes(db);db.exec(UNIFIED_LANE_SWEEP_INDEX);ensureUsageAccountingSchema(db);return;}
+    if(tables.has('multiremi_schema_migrations') && db.query('SELECT id FROM multiremi_schema_migrations WHERE id=?').get(UNIFIED_MODEL_MIGRATION)){runUnifiedModelMigration(db,{reportDir:process.env.MULTIREMI_MIGRATION_REPORT_DIR});separateLaneProviderProgress(db);foldAgentReadState(db);createMemberInboxReadProjection(db);foldDecisionRecords(db);createDecisionReadProjections(db);migrateAttemptInput(db);widenAttemptCounters(db);ensureTurnListIndexes(db);ensureQuestionQueryIndexes(db);db.exec(UNIFIED_LANE_SWEEP_INDEX);ensureUsageAccountingSchema(db);migrateLocalRecords(db);return;}
     // Inspect the existing snapshot before bootstrap migrations can touch it.
     const checks=unifiedModelPreflight(db);
     if(checks.some(c=>!c.ok)){
@@ -101,7 +94,7 @@ export function runMigrations(db: SqlDatabase, options: { dialect?: SqlDatabaseD
     }
     runMigrationsForDialect(db,resolveSqlDialect(db,options.dialect));
     runUnifiedModelMigration(db,{reportDir:process.env.MULTIREMI_MIGRATION_REPORT_DIR});
-    separateLaneProviderProgress(db);foldAgentReadState(db);createMemberInboxReadProjection(db);foldDecisionRecords(db);createDecisionReadProjections(db);migrateAttemptInput(db);widenAttemptCounters(db);ensureTurnListIndexes(db);ensureQuestionQueryIndexes(db);ensureUsageAccountingSchema(db);
+    separateLaneProviderProgress(db);foldAgentReadState(db);createMemberInboxReadProjection(db);foldDecisionRecords(db);createDecisionReadProjections(db);migrateAttemptInput(db);widenAttemptCounters(db);ensureTurnListIndexes(db);ensureQuestionQueryIndexes(db);ensureUsageAccountingSchema(db);migrateLocalRecords(db);
   });
   // SQLite schema rebuilds toggle foreign_keys outside their transactions.
   // Hold a separate SQLite writer lock across that entire sequence so another
@@ -2652,9 +2645,6 @@ function runMigrationsForDialect(db: SqlDatabase, dialect: SqlDatabaseDialect): 
       repos TEXT NOT NULL DEFAULT '[]',
       last_task_id TEXT,
       cleaned_at TEXT,
-      cleaned_archive_id TEXT,
-      cleaned_archive_source_revision TEXT,
-      cleaned_archive_sha256 TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
       FOREIGN KEY(issue_id) REFERENCES multiremi_issues(id) ON DELETE CASCADE,
@@ -2662,38 +2652,6 @@ function runMigrationsForDialect(db: SqlDatabase, dialect: SqlDatabaseDialect): 
     );
     CREATE INDEX IF NOT EXISTS idx_multiremi_issue_workspaces_runtime
       ON multiremi_issue_workspaces(runtime_id, status, updated_at);
-  `);
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS multiremi_session_archives (
-      id TEXT PRIMARY KEY,
-      workspace_id TEXT NOT NULL DEFAULT 'local',
-      issue_id TEXT NOT NULL,
-      runtime_id TEXT NOT NULL,
-      daemon_id TEXT NOT NULL,
-      source_revision TEXT NOT NULL,
-      sha256 TEXT NOT NULL,
-      size_bytes BIGINT NOT NULL,
-      uploaded_size_bytes BIGINT NOT NULL DEFAULT 0,
-      file_count INTEGER,
-      status TEXT NOT NULL DEFAULT 'pending',
-      relative_path TEXT NOT NULL,
-      metadata TEXT NOT NULL DEFAULT '{}',
-      attempt_count INTEGER NOT NULL DEFAULT 0,
-      last_error TEXT,
-      next_retry_at TEXT,
-      retry_exhausted_at TEXT,
-      created_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL,
-      completed_at TEXT,
-      UNIQUE(issue_id, source_revision, sha256),
-      FOREIGN KEY(issue_id) REFERENCES multiremi_issues(id) ON DELETE CASCADE
-    );
-    CREATE INDEX IF NOT EXISTS idx_multiremi_session_archives_issue
-      ON multiremi_session_archives(issue_id, created_at);
-    CREATE INDEX IF NOT EXISTS idx_multiremi_session_archives_workspace_status
-      ON multiremi_session_archives(workspace_id, status, updated_at);
-    CREATE INDEX IF NOT EXISTS idx_multiremi_session_archives_runtime
-      ON multiremi_session_archives(runtime_id, status, updated_at);
   `);
   db.exec(`
     DELETE FROM multiremi_task_messages
@@ -2884,10 +2842,6 @@ function runMigrationsForDialect(db: SqlDatabase, dialect: SqlDatabaseDialect): 
   addColumnIfMissing(db, "multiremi_issues", "due_date TEXT");
   addColumnIfMissing(db, "multiremi_issues", "acceptance_criteria TEXT NOT NULL DEFAULT '[]'");
   addColumnIfMissing(db, "multiremi_issues", "context_refs TEXT NOT NULL DEFAULT '[]'");
-  // Hard deletion spans a database commit and durable archive cleanup. Keep a
-  // persisted fence on the Issue so daemon archive writers cannot race a
-  // purge snapshot or resurrect archive bytes after the control-plane row is
-  // removed.
   addColumnIfMissing(db, "multiremi_issues", "lifecycle_state TEXT NOT NULL DEFAULT 'active'");
   // MUL-400 S1c (A4): the retired parent-done grant. Three nullable columns,
   // add-only, kept for old rows; the done rule replaced the grant and nothing
@@ -2899,25 +2853,9 @@ function runMigrationsForDialect(db: SqlDatabase, dialect: SqlDatabaseDialect): 
   addColumnIfMissing(db, "multiremi_issues", "parent_done_grant_agent_id TEXT");
   const issueCompletedAtAdded = addColumnIfMissing(db, "multiremi_issues", "completed_at TEXT");
   addColumnIfMissing(db, "multiremi_issues", "archived_at TEXT");
-  addColumnIfMissing(db, "multiremi_issue_workspaces", "cleaned_archive_id TEXT");
-  addColumnIfMissing(db, "multiremi_issue_workspaces", "cleaned_archive_source_revision TEXT");
-  addColumnIfMissing(db, "multiremi_issue_workspaces", "cleaned_archive_sha256 TEXT");
-  addColumnIfMissing(db, "multiremi_session_archives", "next_retry_at TEXT");
-  addColumnIfMissing(db, "multiremi_session_archives", "retry_exhausted_at TEXT");
-  runMigrationOnce(db, SESSION_ARCHIVE_RETRY_BUDGET_MIGRATION, () => {
-    backfillSessionArchiveRetryBudget(db);
-  });
-  runMigrationOnce(db, SESSION_ARCHIVE_SUBJECT_V2_MIGRATION, () => {
-    migrateSessionArchiveSubjectsV2(db);
-  });
-  addColumnIfMissing(db, "multiremi_session_archives", "retry_budget_base_attempt INTEGER NOT NULL DEFAULT 0");
   runMigrationOnce(db, TASK_TRACE_POINTERS_MIGRATION, () => {
     createTaskTracePointers(db);
   });
-  // MUL-432 P1: which writer produced an archive pointer ('daemon' or
-  // 'trace_backfill'); the swap rule only compares head_seq within one source.
-  // NULL on an existing archive pointer means daemon, the only writer before this.
-  addColumnIfMissing(db, "multiremi_task_traces", "source TEXT");
   addColumnIfMissing(db, "multiremi_issue_comments", "parent_id TEXT");
   addColumnIfMissing(db, "multiremi_issue_comments", "type TEXT NOT NULL DEFAULT 'comment'");
   addColumnIfMissing(db, "multiremi_issue_comments", "resolved_at TEXT");
@@ -3508,14 +3446,11 @@ function runMigrationsForDialect(db: SqlDatabase, dialect: SqlDatabaseDialect): 
   runMigrationOnce(db, CONVERSATION_LOG_BACKFILL_MIGRATION, () => {
     backfillConversationLogWithinTransaction(db);
   });
-  // MUL-432 (ADR 0006 decision 9): per-subject progress and per-task digests of
-  // the task_messages trace backfill. Plain idempotent DDL rather than
+  // MUL-432 (ADR 0006 decision 9): per-task digests of the task_messages trace
+  // backfill, still joined by usage accounting. Plain idempotent DDL rather than
   // `runMigrationOnce`, for the same clock-read reason as the MUL-407 (E5) block
   // above. Ordered after the MUL-427 conversation backfill.
-  createTraceBackfillProgress(db);
-  // MUL-432 segment 2 (ADR 0006 decision 8): on-demand session archive
-  // requests. Plain idempotent DDL, same reason as above.
-  createSessionArchiveRequests(db);
+  createTraceBackfillTasks(db);
   migrateTaskExecutionScope(db);
   runMigrationOnce(db, "20260929_relay_issue_log_to_seq", () => {
     addColumnIfMissing(db, "multiremi_tasks", "bound_issue_log_to_seq INTEGER");
@@ -5873,203 +5808,13 @@ function backfillFeishuBotReplyDestinations(db: SqlDatabase): void {
   }
 }
 
-function backfillSessionArchiveRetryBudget(db: SqlDatabase): void {
-  const now = new Date();
-  const nowIso = now.toISOString();
-  const stallBefore = new Date(now.getTime() - resolveSessionArchiveUploadStallMs()).toISOString();
-  const policy = resolveSessionArchiveRetryPolicy();
-  const hasBudgetBase = (db.query("PRAGMA table_info(multiremi_session_archives)").all() as Array<{ name: string }>)
-    .some((column) => column.name === "retry_budget_base_attempt");
-  const rows = db.query(
-    `SELECT id, status, attempt_count, updated_at,
-            ${hasBudgetBase ? "retry_budget_base_attempt" : "0 AS retry_budget_base_attempt"}
-     FROM multiremi_session_archives
-     WHERE status = 'failed'
-        OR (status = 'uploading' AND updated_at <= ?)`,
-  ).all(stallBefore) as Array<{
-    id: string;
-    status: string;
-    attempt_count: number;
-    updated_at: string;
-    retry_budget_base_attempt: number;
-  }>;
-  for (const row of rows) {
-    const attemptCount = Number(row.attempt_count ?? 0);
-    const base = Number(row.retry_budget_base_attempt ?? 0);
-    const exhausted = isSessionArchiveRetryExhausted(attemptCount, policy, base);
-    const nextRetryAt = nextSessionArchiveRetryAt(row.id, attemptCount, policy, now, base);
-    db.run(
-      `UPDATE multiremi_session_archives
-       SET status = 'failed',
-           last_error = CASE
-             WHEN status = 'uploading' THEN 'upload stalled'
-             ELSE last_error
-           END,
-           next_retry_at = COALESCE(next_retry_at, ?),
-           retry_exhausted_at = COALESCE(retry_exhausted_at, ?),
-           updated_at = CASE WHEN status = 'uploading' THEN ? ELSE updated_at END,
-           completed_at = NULL
-       WHERE id = ?`,
-      [nextRetryAt, exhausted ? nowIso : null, nowIso, row.id],
-    );
-  }
-}
-
-/**
- * Session Archive v2 schema: subject columns and the task trace pointer table.
- *
- * Every pre-existing row is an Issue archive written by the v1 writer, so it is
- * relabelled `subject_kind = 'issue'`, `subject_id = issue_id`,
- * `format = multiremi.issue-sessions.v1`. Those rows keep their bytes and their
- * `ready` state: the hard-delete barrier requires the exact bound row to stay
- * `ready`, so v1 history is never rewritten by this migration.
- */
-function migrateSessionArchiveSubjectsV2(db: SqlDatabase): void {
-  addColumnIfMissing(db, "multiremi_session_archives", "subject_kind TEXT");
-  addColumnIfMissing(db, "multiremi_session_archives", "subject_id TEXT");
-  addColumnIfMissing(db, "multiremi_session_archives", "format TEXT");
-  const before = db.query(
-    "SELECT COUNT(*) AS count FROM multiremi_session_archives",
-  ).get() as { count: number } | null;
-  const beforeCount = Number(before?.count ?? 0);
-
-  db.run(
-    `UPDATE multiremi_session_archives
-        SET subject_kind = COALESCE(subject_kind, 'issue'),
-            subject_id = COALESCE(subject_id, issue_id),
-            format = COALESCE(format, ?)
-      WHERE subject_kind IS NULL OR subject_id IS NULL OR format IS NULL`,
-    [SESSION_ARCHIVE_FORMAT_V1],
-  );
-
-  const after = db.query(
-    `SELECT COUNT(*) AS count,
-            SUM(CASE WHEN subject_kind = 'issue' THEN 1 ELSE 0 END) AS issue_subjects,
-            SUM(CASE WHEN subject_id IS NULL OR subject_id = '' THEN 1 ELSE 0 END) AS missing_subjects
-     FROM multiremi_session_archives`,
-  ).get() as { count: number; issue_subjects: number | null; missing_subjects: number | null } | null;
-  const afterCount = Number(after?.count ?? 0);
-  const issueSubjects = Number(after?.issue_subjects ?? 0);
-  const missingSubjects = Number(after?.missing_subjects ?? 0);
-  // The backfill is a relabel: no row may appear, disappear, or lose its subject.
-  if (afterCount !== beforeCount || issueSubjects !== afterCount || missingSubjects !== 0) {
-    throw new Error(
-      "Session archive subject migration changed the row set: "
-      + `${beforeCount} -> ${afterCount} rows, ${issueSubjects} issue subjects, ${missingSubjects} unlabelled`,
-    );
-  }
-
-  const expectedRows = afterCount;
-  allowNullableSessionArchiveIssueId(db, expectedRows);
-  db.exec(`
-    CREATE UNIQUE INDEX IF NOT EXISTS idx_multiremi_session_archives_subject_revision
-      ON multiremi_session_archives(subject_kind, subject_id, source_revision, sha256);
-    CREATE INDEX IF NOT EXISTS idx_multiremi_session_archives_subject
-      ON multiremi_session_archives(subject_kind, subject_id, status, updated_at);
-    CREATE INDEX IF NOT EXISTS idx_multiremi_session_archives_issue
-      ON multiremi_session_archives(issue_id, created_at);
-    CREATE INDEX IF NOT EXISTS idx_multiremi_session_archives_workspace_status
-      ON multiremi_session_archives(workspace_id, status, updated_at);
-    CREATE INDEX IF NOT EXISTS idx_multiremi_session_archives_runtime
-      ON multiremi_session_archives(runtime_id, status, updated_at);
-  `);
-}
-
-/**
- * Drop `NOT NULL` from `multiremi_session_archives.issue_id`.
- *
- * Chat and one-shot Task subjects have no Issue, so the column has to accept
- * NULL. SQLite cannot drop a column constraint in place; the table is rebuilt
- * the way `allowNullableFeishuOutboundReplyToMessageId` already does it, and
- * Postgres gets a plain `ALTER COLUMN ... DROP NOT NULL`.
- */
-function allowNullableSessionArchiveIssueId(db: SqlDatabase, expectedRows: number): void {
-  const column = (db.query("PRAGMA table_info(multiremi_session_archives)").all() as Array<{
-    name: string;
-    notnull: number;
-  }>).find((entry) => entry.name === "issue_id");
-  if (!column || Number(column.notnull) === 0) return;
-  if (isPostgresConfigured()) {
-    db.exec("ALTER TABLE multiremi_session_archives ALTER COLUMN issue_id DROP NOT NULL");
-    return;
-  }
-
-  // The rebuilt table carries the subject uniqueness key instead of
-  // UNIQUE(issue_id, source_revision, sha256): issue_id is NULL for Chat and
-  // Task rows, and NULLs compare distinct in a unique index on both engines.
-  db.exec(`
-    CREATE TABLE multiremi_session_archives_v2 (
-      id TEXT PRIMARY KEY,
-      workspace_id TEXT NOT NULL DEFAULT 'local',
-      issue_id TEXT,
-      subject_kind TEXT NOT NULL DEFAULT 'issue',
-      subject_id TEXT NOT NULL DEFAULT '',
-      format TEXT NOT NULL DEFAULT 'multiremi.session-archive.v2',
-      runtime_id TEXT NOT NULL,
-      daemon_id TEXT NOT NULL,
-      source_revision TEXT NOT NULL,
-      sha256 TEXT NOT NULL,
-      size_bytes BIGINT NOT NULL,
-      uploaded_size_bytes BIGINT NOT NULL DEFAULT 0,
-      file_count INTEGER,
-      status TEXT NOT NULL DEFAULT 'pending',
-      relative_path TEXT NOT NULL,
-      metadata TEXT NOT NULL DEFAULT '{}',
-      attempt_count INTEGER NOT NULL DEFAULT 0,
-      last_error TEXT,
-      next_retry_at TEXT,
-      retry_exhausted_at TEXT,
-      created_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL,
-      completed_at TEXT,
-      UNIQUE(subject_kind, subject_id, source_revision, sha256),
-      FOREIGN KEY(issue_id) REFERENCES multiremi_issues(id) ON DELETE CASCADE
-    );
-    INSERT INTO multiremi_session_archives_v2 (
-      id, workspace_id, issue_id, subject_kind, subject_id, format,
-      runtime_id, daemon_id, source_revision, sha256, size_bytes,
-      uploaded_size_bytes, file_count, status, relative_path, metadata,
-      attempt_count, last_error, next_retry_at, retry_exhausted_at,
-      created_at, updated_at, completed_at
-    )
-    SELECT
-      id, workspace_id, issue_id,
-      COALESCE(subject_kind, 'issue'), COALESCE(subject_id, issue_id),
-      COALESCE(format, 'multiremi.issue-sessions.v1'),
-      runtime_id, daemon_id, source_revision, sha256, size_bytes,
-      uploaded_size_bytes, file_count, status, relative_path, metadata,
-      attempt_count, last_error, next_retry_at, retry_exhausted_at,
-      created_at, updated_at, completed_at
-    FROM multiremi_session_archives;
-    DROP TABLE multiremi_session_archives;
-    ALTER TABLE multiremi_session_archives_v2 RENAME TO multiremi_session_archives;
-  `);
-  // The rebuild is a copy, not a filter: a mismatch here means rows were lost
-  // while relocating the table, which would silently orphan archive bytes.
-  const rebuilt = db.query(
-    "SELECT COUNT(*) AS count FROM multiremi_session_archives",
-  ).get() as { count: number } | null;
-  const rebuiltCount = Number(rebuilt?.count ?? 0);
-  if (rebuiltCount !== expectedRows) {
-    throw new Error(
-      `Session archive table rebuild lost rows: expected ${expectedRows}, found ${rebuiltCount}`,
-    );
-  }
-}
-
-/** `multiremi_task_traces`: one row per task, pointing at wherever its trace lives. */
+/** `multiremi_task_traces`: one row per task, pointing at the daemon that holds its trace. */
 function createTaskTracePointers(db: SqlDatabase): void {
   db.exec(`
     CREATE TABLE IF NOT EXISTS multiremi_task_traces (
       task_id TEXT PRIMARY KEY,
       location TEXT NOT NULL,
       runtime_id TEXT,
-      archive_id TEXT,
-      member_path TEXT,
-      data_offset INTEGER,
-      compressed_size INTEGER,
-      uncompressed_size INTEGER,
-      sha256 TEXT,
       event_count INTEGER,
       head_seq INTEGER,
       closed INTEGER,
@@ -6077,34 +5822,16 @@ function createTaskTracePointers(db: SqlDatabase): void {
     );
     CREATE INDEX IF NOT EXISTS idx_multiremi_task_traces_location
       ON multiremi_task_traces(location, updated_at);
-    CREATE INDEX IF NOT EXISTS idx_multiremi_task_traces_archive
-      ON multiremi_task_traces(archive_id);
   `);
 }
 
 /**
- * One row per backfilled subject. `running` marks a subject whose archive is
- * being built, so a restart knows to discard its staging files and redo it;
- * `done` is written in the transaction that makes the archive `ready`.
- *
  * `multiremi_trace_backfill_tasks` holds the per-task digests of the last
- * completed run, replaced in that same transaction; `cross_switch` marks the
- * tasks that run acknowledged as cross-switch (MUL-432 P1).
+ * completed trace backfill; `cross_switch` marks the tasks that run
+ * acknowledged as cross-switch (MUL-432 P1). Usage accounting still joins it.
  */
-function createTraceBackfillProgress(db: SqlDatabase): void {
+function createTraceBackfillTasks(db: SqlDatabase): void {
   db.exec(`
-    CREATE TABLE IF NOT EXISTS multiremi_trace_backfill_progress (
-      subject_kind TEXT NOT NULL,
-      subject_id TEXT NOT NULL,
-      status TEXT NOT NULL,
-      task_count INTEGER NOT NULL DEFAULT 0,
-      row_count BIGINT NOT NULL DEFAULT 0,
-      digest TEXT,
-      archive_id TEXT,
-      updated_at TEXT NOT NULL,
-      PRIMARY KEY(subject_kind, subject_id)
-    );
-
     CREATE TABLE IF NOT EXISTS multiremi_trace_backfill_tasks (
       task_id TEXT PRIMARY KEY,
       subject_kind TEXT NOT NULL,
@@ -6123,28 +5850,145 @@ function createTraceBackfillProgress(db: SqlDatabase): void {
 }
 
 /**
- * One row per request asking a daemon to archive one session subject, delivered
- * as the `runtime.archive_sessions` frame. `status` only moves forward:
- * pending → sent → acked → completed | failed.
+ * ADR 0018: traces and workspaces live on the daemon, so everything the server
+ * kept for session archives goes, and every native session id it held is void.
+ *
+ * Runs once. It follows the unified model migration (lanes and the run view must
+ * exist), on a fresh database as well as an upgraded one, so both end in the same
+ * schema. The legacy archive tables are renamed rather than dropped: nothing
+ * reads them, but the ZIP files they index can be recovered from them later.
  */
-function createSessionArchiveRequests(db: SqlDatabase): void {
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS multiremi_session_archive_requests (
-      id TEXT PRIMARY KEY,
-      runtime_id TEXT NOT NULL,
-      subject_kind TEXT NOT NULL,
-      subject_id TEXT NOT NULL,
-      status TEXT NOT NULL,
-      created_by TEXT NOT NULL,
-      created_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL
+function migrateLocalRecords(db: SqlDatabase): void {
+  runMigrationOnce(db, LOCAL_RECORDS_MIGRATION, () => {
+    const now = new Date().toISOString();
+    const objects = db.query("SELECT name, type FROM sqlite_master WHERE type IN ('table', 'index')")
+      .all() as Array<{ name: string; type: string }>;
+    const tables = new Set(objects.filter((object) => object.type === "table").map((object) => object.name));
+    const columns = (table: string) => new Set(
+      (db.query(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>).map((column) => column.name),
     );
 
-    CREATE INDEX IF NOT EXISTS idx_multiremi_session_archive_requests_runtime
-      ON multiremi_session_archive_requests(runtime_id, status);
-    CREATE INDEX IF NOT EXISTS idx_multiremi_session_archive_requests_subject
-      ON multiremi_session_archive_requests(runtime_id, subject_kind, subject_id);
-  `);
+    if (tables.has("multiremi_session_archives") && !tables.has("multiremi_legacy_session_archives")) {
+      db.exec("ALTER TABLE multiremi_session_archives RENAME TO multiremi_legacy_session_archives");
+      // Index names are schema-global; the renamed table must not keep the old table's.
+      for (const { name, type } of objects) {
+        if (type === "index" && name.startsWith("idx_multiremi_session_archives_")) db.exec(`DROP INDEX IF EXISTS ${name}`);
+      }
+    }
+
+    // Trace pointers keep only where the daemon's file is. Every pointer that
+    // named a daemon or an archive is void: daemon-side state is not migrated.
+    const traceColumns = columns("multiremi_task_traces");
+    if (traceColumns.has("archive_id")) {
+      if (!tables.has("multiremi_legacy_trace_pointers")) {
+        db.exec(`CREATE TABLE multiremi_legacy_trace_pointers AS
+          SELECT task_id, archive_id, member_path, data_offset, compressed_size, uncompressed_size, sha256, head_seq, event_count
+          FROM multiremi_task_traces WHERE location = 'archive'`);
+      }
+      db.exec("DROP INDEX IF EXISTS idx_multiremi_task_traces_archive");
+    }
+    for (const column of ["archive_id", "member_path", "data_offset", "compressed_size", "uncompressed_size", "sha256", "source"]) {
+      dropColumnIfExists(db, "multiremi_task_traces", column);
+    }
+    db.run("UPDATE multiremi_task_traces SET location = 'lost', updated_at = ? WHERE location <> 'none'", [now]);
+
+    db.exec("DROP TABLE IF EXISTS multiremi_session_archive_requests");
+    db.exec("DROP TABLE IF EXISTS multiremi_trace_backfill_progress");
+
+    db.run(
+      `UPDATE multiremi_session_lanes
+       SET provider_session_id = NULL, runtime_id = NULL, provider = NULL, execution_fingerprint = NULL,
+           work_dir = NULL, provider_cursor_seq = 0, parent_cursor_seq = 0,
+           generation = generation + 1, last_attempt_id = NULL
+       WHERE reader_type = 'agent' AND provider_session_id IS NOT NULL`,
+    );
+    db.run(
+      `UPDATE multiremi_chat_sessions
+       SET session_id = NULL, work_dir = NULL, session_runtime_id = NULL,
+           session_provider = NULL, session_execution_fingerprint = NULL
+       WHERE session_id IS NOT NULL OR work_dir IS NOT NULL OR session_runtime_id IS NOT NULL
+          OR session_provider IS NOT NULL OR session_execution_fingerprint IS NOT NULL`,
+    );
+    // An attempt queued before the upgrade would otherwise claim with the voided session and the old layout's directory.
+    db.run(
+      `UPDATE multiremi_turn_attempts
+       SET session_id = NULL, work_dir = NULL, updated_at = ?
+       WHERE status = 'offered' AND (session_id IS NOT NULL OR work_dir IS NOT NULL)`,
+      [now],
+    );
+    // The only writer of a non-active Issue lifecycle was the archive-era hard delete.
+    db.run("UPDATE multiremi_issues SET lifecycle_state = 'active' WHERE lifecycle_state <> 'active'");
+
+    addColumnIfMissing(db, "multiremi_issue_workspaces", "snapshot_json TEXT");
+    addColumnIfMissing(db, "multiremi_issue_workspaces", "snapshot_at TEXT");
+    addColumnIfMissing(db, "multiremi_issue_workspaces", "unsaved_work INTEGER NOT NULL DEFAULT 0");
+    db.run(
+      `UPDATE multiremi_issue_workspaces
+       SET status = 'cleaned', repos = '[]', cleaned_at = COALESCE(cleaned_at, ?), updated_at = ?
+       WHERE status <> 'cleaned'`,
+      [now, now],
+    );
+    for (const column of ["cleaned_archive_id", "cleaned_archive_source_revision", "cleaned_archive_sha256"]) {
+      dropColumnIfExists(db, "multiremi_issue_workspaces", column);
+    }
+
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS multiremi_daemon_storage_reports (
+        workspace_id TEXT NOT NULL,
+        daemon_id TEXT NOT NULL,
+        runtime_id TEXT NOT NULL,
+        report TEXT NOT NULL,
+        reported_at TEXT NOT NULL,
+        PRIMARY KEY (workspace_id, daemon_id)
+      );
+
+      CREATE TABLE IF NOT EXISTS multiremi_runtime_gc_run_requests (
+        id TEXT PRIMARY KEY,
+        runtime_id TEXT NOT NULL,
+        daemon_id TEXT,
+        mode TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'pending',
+        requested_by TEXT,
+        report TEXT,
+        error TEXT,
+        run_started_at TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY(runtime_id) REFERENCES multiremi_runtimes(id) ON DELETE CASCADE
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_multiremi_runtime_gc_run_runtime
+        ON multiremi_runtime_gc_run_requests(runtime_id, status, created_at);
+    `);
+
+    addColumnIfMissing(db, "multiremi_chat_sessions", "origin_autopilot_id TEXT");
+    addColumnIfMissing(db, "multiremi_chat_sessions", "origin_run_id TEXT");
+    addColumnIfMissing(db, "multiremi_autopilot_runs", "chat_session_id TEXT");
+    addColumnIfMissing(db, "multiremi_autopilot_runs", "quiet INTEGER NOT NULL DEFAULT 0");
+    // Deleting a Chat clears this column on its runs.
+    db.exec("CREATE INDEX IF NOT EXISTS idx_multiremi_autopilot_runs_chat ON multiremi_autopilot_runs(chat_session_id)");
+    // The run view lists the table's columns as they were when it was created.
+    db.exec("DROP VIEW IF EXISTS multiremi_autopilot_run_records");
+    createAutopilotRunReadProjection(db);
+
+    const workspaces = db.query("SELECT id, settings FROM multiremi_workspaces").all() as Array<{ id: string; settings: unknown }>;
+    for (const workspace of workspaces) {
+      const settings = parseSettingsObject(workspace.settings);
+      if (!settings || !("session_archive" in settings)) continue;
+      delete settings.session_archive;
+      db.run("UPDATE multiremi_workspaces SET settings = ? WHERE id = ?", [JSON.stringify(settings), workspace.id]);
+    }
+  });
+}
+
+function parseSettingsObject(value: unknown): Record<string, unknown> | null {
+  if (typeof value !== "string") return null;
+  try {
+    const parsed: unknown = JSON.parse(value);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Record<string, unknown> : null;
+  } catch {
+    return null;
+  }
 }
 
 function nextIssueNumber(db: SqlDatabase, workspaceId: string): number {

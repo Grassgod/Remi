@@ -431,7 +431,6 @@
     "trace_finished": "执行已结束 · {{count}} 条事件",
     "trace_unreachable": "执行机 {{name}} 离线，过程记录暂时无法读取",
     "trace_last_seen": "最近在线 {{time}}",
-    "trace_backfilling": "执行过程正在回填",
     "trace_lost": "执行过程已丢失",
     "trace_not_found": "暂无执行过程记录",
     "trace_failed": "执行过程载入失败",

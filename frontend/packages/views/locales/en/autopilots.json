@@ -146,6 +146,7 @@
   "run": {
     "issue_linked": "Issue linked",
     "session_linked": "Issue Session linked",
+    "chat_linked": "Chat opened",
     "view_log": "View execution log",
     "skipped_group": {
       "label": "Skipped",

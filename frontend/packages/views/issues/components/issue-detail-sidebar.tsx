@@ -40,7 +40,6 @@ import { IssueKeyResultsSection } from "./issue-key-results-section";
 import { ExecutionLogSection } from "./execution-log-section";
 import { ChangeRequestList } from "./change-request-list";
 import { IssueCodeWorkspaceSection } from "./issue-code-workspace-section";
-import { IssueSessionArchivesSection } from "./issue-session-archives-section";
 import { IssueSubIssuesSummary } from "./issue-sub-issues-summary";
 import { IssueDependencyEditor } from "./issue-dependency-editor";
 
@@ -62,7 +61,6 @@ interface IssueDetailSidebarProps {
   getActorName: (type: string, id: string) => string;
   issueSessions: IssueSession[];
   usage: IssueUsageSummary | undefined;
-  canManageArchives: boolean;
   childIssues: Issue[];
   onCreateSubIssue: () => void;
 }
@@ -86,7 +84,6 @@ export function IssueDetailSidebar({
   getActorName,
   issueSessions,
   usage,
-  canManageArchives,
   childIssues,
   onCreateSubIssue,
 }: IssueDetailSidebarProps) {
@@ -321,13 +318,6 @@ export function IssueDetailSidebar({
           owns its own collapse state and WS subscriptions. Hides itself
           when there are no runs to show. */}
       <ExecutionLogSection issueId={issueId} />
-
-      <IssueSessionArchivesSection
-        enabled={queriesEnabled}
-        issueId={issue.id}
-        issueStatus={issue.status}
-        canManage={canManageArchives}
-      />
 
       {/* Token usage */}
       {usage && usage.task_count > 0 && (

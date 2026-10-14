@@ -36,8 +36,9 @@
  * from the event sequence and window, so the classification lives here as data.
  */
 
+import type { GcRunMode, StorageReport, StorageSubjectRef, SubjectSnapshot } from "./storage.js";
 import type { TraceEvent } from "./trace.js";
-import type { MultiremiDaemonHeartbeatAck, MultiremiDaemonSshMeshStatus } from "./types.js";
+import type { MultiremiChatSessionStatus, MultiremiDaemonHeartbeatAck, MultiremiDaemonSshMeshStatus } from "./types.js";
 import type { UnifiedMessage, DecisionOption } from "./unified-model.js";
 
 export const DAEMON_PROTOCOL_VERSION = 2;
@@ -98,7 +99,7 @@ export const DAEMON_UPLINK_EVENT_FRAMES = [
   "runtime.bot_menu_result",
   "feishu.outbound_result",
   "plugin.state",
-  "runtime.archive_sessions_result",
+  "runtime.gc_run_result",
 ] as const;
 
 /**
@@ -118,6 +119,7 @@ export const DAEMON_UPLINK_TRACE_FRAMES = [
 export const DAEMON_UPLINK_BEST_EFFORT_FRAMES = [
   "runtime.ready",
   "concierge.status",
+  "gc.storage_report",
 ] as const;
 
 /** Non-trace-stream daemon -> server RPC requests, paired with a `res` by `id`. */
@@ -135,9 +137,8 @@ export const DAEMON_UPLINK_RPC_FRAMES = [
   "trace.fetch",
   "gc.check_issue",
   "gc.check_chat_session",
-  "gc.check_autopilot_run",
   "gc.check_task",
-  "gc.workspace_cleaned",
+  "gc.subject_reclaimed",
 ] as const;
 
 /**
@@ -165,7 +166,7 @@ export const DAEMON_DOWNLINK_EVENT_FRAMES = [
   "platform.drain",
   "plugin.desired_revision",
   "workspace.settings",
-  "runtime.archive_sessions",
+  "runtime.gc_run",
 ] as const;
 
 /** server -> daemon RPC requests, paired with a `res` by `id`. */
@@ -472,38 +473,61 @@ export interface DaemonTurnDecisionPayload {
 }
 
 /**
- * `runtime.archive_sessions`, server -> daemon.
- *
- * Replaces the plan to reuse the heartbeat's `pending_command`: that field is a
- * general shell channel (`{ command, args, timeout_ms }` executed directly), so
- * archiving through it would mean remote shell execution for a structured request.
- * The entity id (and so the dedupe key) is `request_id`, and the backing table is
- * MUL-402's `multiremi_session_archive_requests`.
+ * `gc.check_chat_session` reply on success. The daemon decides whether a Chat
+ * has ended and how long to keep its workspace from these fields.
  */
-export interface DaemonArchiveSessionsPayload {
-  request_id: string;
-  subjects: DaemonArchiveSubject[];
-}
-
-export interface DaemonArchiveSubject {
-  kind: "issue" | "chat" | "task";
-  id: string;
+export interface DaemonGcCheckChatSessionReply {
+  ok: true;
+  status: MultiremiChatSessionStatus;
+  updated_at: string;
+  pinned: boolean;
+  /** Set for Chats opened by an automation run; those use the shorter retention. */
+  origin: { autopilot_id: string; run_id: string } | null;
+  last_activity_at: string | null;
 }
 
 /**
- * `runtime.archive_sessions_result`, daemon -> server, partitioned under `rt:<id>`.
- *
- * The upload itself still travels over HTTP; this frame only reports the outcome.
+ * `gc.subject_reclaimed`, daemon -> server RPC: the daemon deleted a subject's
+ * workspace. The server records the snapshot and resets the subject's native
+ * sessions on this daemon so the next execution starts a fresh generation.
+ * The reply is `{ ok: true }`.
  */
-export interface DaemonArchiveSessionsResultPayload {
-  request_id: string;
-  status: DaemonArchiveSessionsResultStatus;
-  archive_ids: string[];
-  /** Present when `status` is `failed`. */
-  error?: string;
+export interface DaemonGcSubjectReclaimedPayload {
+  runtime_id: string;
+  subject: StorageSubjectRef;
+  snapshot: SubjectSnapshot | null;
+  unsaved_work: boolean;
+  /** Free space the workspaces filesystem gained while this subject was reclaimed. */
+  freed_bytes: number;
 }
 
-export type DaemonArchiveSessionsResultStatus = "completed" | "failed";
+/**
+ * `gc.storage_report`, daemon -> server, best effort: the report of a periodic round (also one that only
+ * plans, under `MULTIREMI_GC_DRY_RUN`). An operator's dry run answers through `runtime.gc_run_result`
+ * instead. The report's lists are bounded to fit one frame.
+ */
+export interface DaemonGcStorageReportPayload {
+  runtime_id: string;
+  report: StorageReport;
+}
+
+/**
+ * `runtime.gc_run`, server -> daemon, pending-request mechanics of
+ * `runtime.directory_scan`: the daemon runs one reclaim round in `mode`.
+ */
+export interface DaemonGcRunPayload {
+  id: string;
+  mode: GcRunMode;
+}
+
+/** `runtime.gc_run_result`, daemon -> server, partitioned under `rt:<id>`. */
+export interface DaemonGcRunResultPayload {
+  request_id: string;
+  runtime_id: string;
+  status: "completed" | "failed";
+  report: StorageReport | null;
+  error: string | null;
+}
 
 /**
  * `trace.append`, daemon -> server.

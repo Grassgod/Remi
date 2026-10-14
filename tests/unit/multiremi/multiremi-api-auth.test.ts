@@ -794,8 +794,8 @@ describe("Multiremi API — authentication and token scoping", () => {
     expect(crossDaemonWorkspaceReport).toEqual({ ok: false, code: "authority_revoked", retryable: false });
     expect(store.getIssueWorkspace(otherDaemonIssue.id)).toBeNull();
 
-    const crossDaemonWorkspaceCleanup = await reportFrame(store, "gc.workspace_cleaned", {
-      issue_id: otherDaemonIssue.id, runtime_id: otherDaemonRuntime.id,
+    const crossDaemonWorkspaceCleanup = await reportFrame(store, "gc.subject_reclaimed", {
+      runtime_id: otherDaemonRuntime.id, subject: { kind: "issue", id: otherDaemonIssue.id }, snapshot: null, unsaved_work: false, freed_bytes: 0,
     }, { headers: { Authorization: `Bearer ${daemonBody.token.token}` }, authToken: "root-secret" });
     expect(crossDaemonWorkspaceCleanup).toEqual({ ok: false, code: "authority_revoked", message: "authority_revoked", retryable: false,
       operation_error: { status: 403, code: null, message: "authority_revoked" } });

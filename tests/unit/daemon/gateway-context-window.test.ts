@@ -30,7 +30,7 @@ describe("daemon gateway context declarations", () => {
     state.runtimeProfileKey = async () => "fixture-key";
     state.assertWorkspaceRootOwner = () => {};
     state.registerTaskRepos = async () => [];
-    state.prepareTaskWorkspace = async () => ({});
+    state.prepareTaskWorkspace = async () => ({ checkouts: [], repos: [], warnings: [] });
     state.enqueueTaskReport = () => {};
     const task = {
       id: "context-test", workspaceId: "local", repos: [], projectResources: [], holdsWorkspace: false,

@@ -13,7 +13,6 @@ import {
 import { constants as fsConstants } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import type { AgentTask } from "@daemon/contracts/types.js";
-import { removeOwnedDirectorySync } from "../workspace/safe-remove.js";
 import type { AgentPluginCache } from "./cache.js";
 import { normalizeSha256Digest } from "./cache.js";
 import type {
@@ -31,10 +30,10 @@ const marketplaceFlights = new Map<string, Promise<{ name: string; pluginNames: 
 export interface MaterializeTaskPluginsOptions {
   signal?: AbortSignal;
   /**
-   * Directory that owns `.remi-runtime`. Required for non-Issue tasks so a
-   * user's Git cwd is never polluted with Runtime state.
+   * Directory that owns `.remi-runtime`: the lane generation directory, so the
+   * Git cwd is never polluted with Runtime state.
    */
-  runtimeBase?: string;
+  runtimeBase: string;
   /** Session-scoped CODEX_HOME. When present, native Plugin installation and
    * provider JSONL share this one home instead of creating a second runtime home. */
   codexHome?: string;
@@ -108,7 +107,7 @@ export async function materializeTaskPlugins(
   task: AgentTask,
   workDir: string,
   cache: AgentPluginCache,
-  options: MaterializeTaskPluginsOptions = {},
+  options: MaterializeTaskPluginsOptions,
 ): Promise<PreparedAgentPluginRuntime> {
   const snapshots = resolveTaskPluginSnapshot(task);
   const provider = normalizeProvider(task.agent?.provider);
@@ -126,10 +125,10 @@ export async function materializeTaskPlugins(
   const executionFingerprint = cleanString(task.executionFingerprint ?? task.execution_fingerprint)
     ?? pluginFingerprint;
   const fingerprintSegment = safeFingerprintSegment(executionFingerprint);
-  const runtimeBase = resolveRuntimeBase(task, workDir, options.runtimeBase);
+  const runtimeBase = resolveRuntimeBase(workDir, options.runtimeBase);
   const ownerRuntimeRoot = join(runtimeBase, RUNTIME_DIR);
   // Plugin payloads and generated marketplaces are execution-private. The
-  // surrounding Issue/session runtime remains the GC boundary, but one task
+  // surrounding lane generation remains the reclaim boundary, but one task
   // can never persist mutations into a later task's provider inputs.
   const runtimeRoot = join(ownerRuntimeRoot, "executions", safePathSegment(task.id));
   const pluginsRoot = join(runtimeRoot, "plugins");
@@ -202,56 +201,6 @@ export async function materializeTaskPlugins(
     codexMarketplaceName,
     codexPluginNames,
   };
-}
-
-/** Explicit cleanup hook; normal Issue GC also removes this child directory. */
-export async function cleanupTaskPluginRuntime(workDir: string): Promise<void> {
-  const workspace = resolve(workDir);
-  const runtimeRoot = resolve(workspace, RUNTIME_DIR);
-  assertDirectChild(workspace, runtimeRoot, RUNTIME_DIR);
-  removeOwnedDirectorySync(workspace, runtimeRoot);
-}
-
-/** Remove the whole daemon-owned non-Issue task directory, including empty parents. */
-export async function cleanupNonIssueTaskPluginRuntime(
-  task: AgentTask,
-  workspacesRoot: string,
-  assertRootOwner?: () => void,
-): Promise<void> {
-  if (task.issueId ?? task.issue_id) {
-    throw new AgentPluginError(
-      "Issue Plugin runtimes are reclaimed by workspace GC",
-      "plugin_runtime_cleanup_invalid",
-      "blocked",
-    );
-  }
-  if (task.chatSessionId) {
-    throw new AgentPluginError(
-      "Chat Plugin runtimes are retained until session GC",
-      "plugin_runtime_cleanup_invalid",
-      "blocked",
-    );
-  }
-  const owner = resolve(workspacesRoot, ".runtime");
-  const taskRoot = resolveTaskPluginRuntimeBase(task, workspacesRoot, workspacesRoot);
-  assertDirectChild(owner, taskRoot, safePathSegment(task.id));
-  removeOwnedDirectorySync(workspacesRoot, taskRoot, { assertRootOwner });
-}
-
-/**
- * Worker helper: all Plugin materialization shares the canonical product
- * Session runtime root while ACP cwd remains independent.
- */
-export function resolveTaskPluginRuntimeBase(
-  task: AgentTask,
-  issueWorkDir: string,
-  workspacesRoot: string,
-): string {
-  if (task.issueId ?? task.issue_id) return resolve(issueWorkDir);
-  if (task.chatSessionId) {
-    return join(resolve(workspacesRoot), ".runtime", safePathSegment(task.chatSessionId));
-  }
-  return join(resolve(workspacesRoot), ".runtime", safePathSegment(task.id));
 }
 
 async function materializeOne(source: string, destination: string, digest: string): Promise<void> {
@@ -642,27 +591,17 @@ function assertDirectChild(parent: string, child: string, expectedBasename: stri
   }
 }
 
-function resolveRuntimeBase(task: AgentTask, workDir: string, explicit: string | undefined): string {
-  if (explicit?.trim()) {
-    const base = resolve(explicit);
-    if (!(task.issueId ?? task.issue_id)) {
-      const rel = relative(resolve(workDir), base);
-      if (!rel || rel === "." || (!rel.startsWith("../") && rel !== ".." && !isAbsolute(rel))) {
-        throw new AgentPluginError(
-          "Non-Issue Agent Plugin runtime must be outside the task Git cwd",
-          "plugin_runtime_base_invalid",
-          "blocked",
-        );
-      }
-    }
-    return base;
+function resolveRuntimeBase(workDir: string, explicit: string): string {
+  const base = resolve(explicit);
+  const rel = relative(resolve(workDir), base);
+  if (!rel || rel === "." || (!rel.startsWith("../") && rel !== ".." && !isAbsolute(rel))) {
+    throw new AgentPluginError(
+      "Agent Plugin runtime must be outside the task Git cwd",
+      "plugin_runtime_base_invalid",
+      "blocked",
+    );
   }
-  if (task.issueId ?? task.issue_id) return resolve(workDir);
-  throw new AgentPluginError(
-    "Non-Issue Agent Plugin execution requires a daemon-owned runtimeBase",
-    "plugin_runtime_base_required",
-    "setup_required",
-  );
+  return base;
 }
 
 function cleanString(value: unknown): string | null {

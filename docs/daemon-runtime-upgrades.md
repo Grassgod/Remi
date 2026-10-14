@@ -55,19 +55,27 @@ daemon 由 systemd 托管时，重启交给 `systemctl --user restart --no-block
 
 ## Trace 持久化升级边界
 
-本版本 daemon 将规范化过程记录写入 `<workspacesRoot>/.runtime/<session_id>/traces/<task_id>.jsonl`。
+本版本 daemon 将规范化过程记录写入 `<workspacesRoot>/traces/<主体>/<task_id>.jsonl`。
 保留同一工作区根与 Runtime 身份重启时，恢复文件的 head、closed 和读取归属；已关闭历史按需读取，
 未结束任务按 Hub head 续传。这只保证本版本已写入文件的记录，活跃追加未逐条 fsync，不承诺断电尾部保留。
 
 旧版本只有进程内存中的 trace，新进程不能自动找回；原始 provider 日志也不能可靠重建全部 Remi 事件。
-旧 daemon 停止前，需通过现有 `trace.read` 分页保存仍需保留的记录，或确认对应 Session Archive 已达到 ready 后再交接。
+旧 daemon 停止前，需通过现有 `trace.read` 分页保存仍需保留的记录后再交接。
 保存的导出只是人工备份：本 PR 不提供导入命令，也不保证把它自动恢复到新 daemon 的热指针。
-已停止且没有归档/备份的旧内存记录不可恢复，不能把升级后的空或不可达历史解释为本版本恢复成功。
+已停止且没有备份的旧内存记录不可恢复，不能把升级后的空或不可达历史解释为本版本恢复成功。
 
-新文件头保存 `runtime_id`；缺少该字段的旧文件不猜测热读权限，可继续走已有归档流程。
-一次性任务的后台归档意图也保存在该 Runtime 的 `.runtime` root，上传失败或重启不会授权提前删除源文件；
-GC 仍需 ready archive 和删除前物理验证。停止会取消后台上传并最多等待 5 秒，下一进程按持久意图重试；
-被取消的 staging 留在排除目录，旧实例不在所有权交接后继续清理。实现及读页上限见 [daemon 协议 v2](daemon-protocol-v2.md)。
+新文件头保存 `runtime_id`；缺少该字段的旧文件不猜测热读权限，文件保留在磁盘上。
+服务端不再保存 trace 副本，Runtime 下线或删除后指向它的指针标 `lost`。
+
+## 存储布局升级边界
+
+本版本改变 daemon 根目录布局（见[存储与保留](dev/storage-retention.md)）。升级后首次启动、领取任务之前，daemon 执行一次旧布局清扫：
+有未保存工作的旧 worktree 先打快照 ref，`.repos` 与 `.snapshots` 改名为 `shared/repos` 与 `shared/code-views`，其余旧条目整体移入
+`legacy-<日期>/`，保留 `MULTIREMI_LEGACY_KEEP_DAYS`（默认 7）天后由回收轮次删除，期间不删除任何用户数据。
+历史 Issue 与 Chat 在 daemon 上的原生会话和 trace 作废，不迁移；服务端迁移同时把所有会话线置为新一代，
+重开历史主体时从分支新建工作区、从对话日志重建上下文。旧 daemon 在升级窗口内调用已删除的 RPC 得到 404，按既有逻辑跳过清理。
+此前用 systemd 覆盖文件设置 `MULTIREMI_GC_ENABLED=false` 的 daemon，在预演清单核对无误后删除该覆盖文件并重启，周期回收才会开启。
+实现及读页上限见 [daemon 协议 v2](daemon-protocol-v2.md)。
 
 ## 本地准备与验证
 

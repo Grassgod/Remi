@@ -3,7 +3,6 @@ import type { MultiremiStore } from "@multiremi/store.js";
 import type { MultiremiAccessToken } from "@multiremi/contracts/types.js";
 import { DaemonProtocolLayer } from "@multiremi/api/daemon-protocol/index.js";
 import { registerDaemonReportHandlers, registerDaemonMaintenanceHandlers } from "@multiremi/api/daemon-protocol/report-handlers.js";
-import { SessionArchiveService } from "@multiremi/session-archive/service.js";
 import type { MultiremiDaemonClient } from "@multiremi/client.js";
 import { DaemonProtocolRpcError } from "@multiremi/worker/daemon-protocol-client.js";
 import { InMemoryTraceSink } from "@multiremi/api/trace/trace-sink.js";
@@ -51,7 +50,7 @@ export function captureReports(client: MultiremiDaemonClient, reply: (type: stri
 /** Unit-level real frame dispatch and Store effects, without an HTTP report adapter. */
 export async function reportFrame(
   store: MultiremiStore, type: string, payload: Record<string, unknown> = {},
-  options: { runtimeId?: string; token?: MultiremiAccessToken | null; seq?: number; archives?: SessionArchiveService;
+  options: { runtimeId?: string; token?: MultiremiAccessToken | null; seq?: number;
     headers?: HeadersInit; authToken?: string; rawPayload?: string; beforeFrame?: () => void;
     capabilities?: DaemonRuntimeCapabilities;
     turns?: DaemonTurnBridge;
@@ -83,7 +82,7 @@ export async function reportFrame(
     trace.close(taskId, head, rt);
   }, options.turns);
   registerTaskInputRpcs(layer, store, () => {}, options.turns);
-  registerDaemonMaintenanceHandlers(layer, store, options.archives ?? new SessionArchiveService(store));
+  registerDaemonMaintenanceHandlers(layer, store);
   const frames: Array<Record<string, any>> = [];
   let closed: number | undefined;
   const session = layer.openSession({

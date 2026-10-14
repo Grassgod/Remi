@@ -83,7 +83,9 @@
     "others": "其他",
     "no_agents": "暂无智能体",
     "history_group": "历史对话",
-    "agent_filter_placeholder": "搜索智能体..."
+    "agent_filter_placeholder": "搜索智能体...",
+    "automation_origin": "由自动化运行创建",
+    "view_automation": "查看自动化"
   },
   "empty_state": {
     "first_time_title": "和你的智能体对话",
@@ -158,7 +160,18 @@
     "active": "进行中",
     "archived": "已归档",
     "search": "搜索对话…",
-    "failed": "操作失败，请重试。"
+    "failed": "操作失败，请重试。",
+    "origin_filter": "按来源筛选对话",
+    "origin": {
+      "user": "我的对话",
+      "automation": "自动化",
+      "all": "全部"
+    },
+    "automation": "自动化",
+    "automation_unread_other": "{{count}} 个自动化对话有未读",
+    "loading": "正在加载对话…",
+    "load_failed": "无法加载对话。",
+    "retry": "重试"
   },
   "queue": {
     "title": "待发送消息",

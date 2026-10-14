@@ -55,7 +55,8 @@ describe("Chat Project prompts", () => {
       expect(prompt).toContain("https://github.com/example/bound-project");
       expect(prompt).toContain("remi memory search");
       expect(prompt).toContain("remi memory get");
-      expect(prompt).toContain("Project Wiki is materialized in `./wiki`");
+      expect(prompt).toContain("Project Wiki is materialized in `$MULTIREMI_WORKSPACE_ROOT/wiki`");
+      expect(prompt).not.toContain("`./wiki`");
       expect(prompt).toContain("Selected Project Wiki warning");
       expect(prompt).not.toContain("This issue belongs to project");
       expect(prompt).not.toContain("## Issue");
@@ -177,7 +178,7 @@ describe("Chat Project prompts", () => {
     expect(prompt).toContain("Inspect existing files directly");
     expect(prompt).not.toContain("New worktrees use the Chat session branch");
     expect(prompt).not.toContain("already checked out");
-    expect(prompt).not.toContain("Wiki is materialized in `./wiki`");
+    expect(prompt).not.toContain("Wiki is materialized in");
   });
 
   it("keeps bound Project delta instructions without repeating bootstrap context", () => {
@@ -190,11 +191,24 @@ describe("Chat Project prompts", () => {
     expect(prompt).not.toContain("## Available Repositories");
   });
 
+  it("addresses the materialized Wiki through the workspace root, with its absolute path when the workspace is known", () => {
+    const task = chatTask({ ...projectContext, chatProjectId: project.id });
+    const known = buildTaskPrompt(task, { wikiMaterialized: true, workspacePath: "/data/work/chat_project" });
+    expect(known).toContain("Project Wiki is materialized in `$MULTIREMI_WORKSPACE_ROOT/wiki` (absolute path `/data/work/chat_project/wiki`)");
+    expect(known).toContain("`$MULTIREMI_WORKSPACE_ROOT/wiki/repositories/<repository>/`");
+    expect(known).toContain("`$MULTIREMI_WORKSPACE_ROOT/.multiremi/wiki-base` is a read-only merge baseline");
+    expect(known).toContain("resolve any reported conflicts in `$MULTIREMI_WORKSPACE_ROOT/wiki`");
+    const unknown = buildTaskPrompt(task, { wikiMaterialized: true });
+    expect(unknown).toContain("Project Wiki is materialized in `$MULTIREMI_WORKSPACE_ROOT/wiki`.");
+    expect(unknown).not.toContain("absolute path");
+    for (const prompt of [known, unknown]) expect(prompt).not.toContain("./wiki");
+  });
+
   it("uses Wiki CLI guidance when workspace preparation did not materialize Wiki", () => {
     const prompt = buildTaskPrompt(chatTask({ ...projectContext, chatProjectId: project.id }), { wikiMaterialized: false });
     expect(prompt).toContain("Project Wiki has not been materialized in this working directory");
     expect(prompt).toContain("`remi wiki search` and `remi wiki get`");
-    expect(prompt).not.toContain("Wiki is materialized in `./wiki`");
+    expect(prompt).not.toContain("Wiki is materialized in");
     expect(prompt).not.toContain("`remi wiki status` and `remi wiki push`");
   });
 });

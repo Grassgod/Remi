@@ -11,8 +11,6 @@ import {
 } from "@multiremi/contracts/conversation-log";
 import type { MultiremiIssueComment } from "@multiremi/contracts/types";
 import {
-  SESSION_ARCHIVE_REQUEST_STATUSES,
-  SESSION_ARCHIVE_SUBJECT_KINDS,
   TRACE_END_STATUSES,
   TRACE_FILE_FORMAT,
   TRACE_REF_LOCATIONS,
@@ -201,13 +199,7 @@ describe("trace file and archive request contract", () => {
 
   it("pins the trace file format and pointer states", () => {
     expect(TRACE_FILE_FORMAT).toBe("multiremi.trace.v1");
-    expect([...TRACE_REF_LOCATIONS]).toEqual([
-      "daemon",
-      "archive",
-      "none",
-      "lost",
-      "backfilling",
-    ]);
+    expect([...TRACE_REF_LOCATIONS]).toEqual(["daemon", "none", "lost"]);
   });
 
   it("pins the trailer status vocabulary and never borrows the event one", () => {
@@ -249,16 +241,5 @@ describe("trace file and archive request contract", () => {
     expect("seq" in trailer).toBe(false);
     expect("seq" in trailer.end).toBe(false);
     expect(trailer.end.status).toBe("completed");
-  });
-
-  it("pins the archive request state machine and its subjects", () => {
-    expect([...SESSION_ARCHIVE_REQUEST_STATUSES]).toEqual([
-      "pending",
-      "sent",
-      "acked",
-      "completed",
-      "failed",
-    ]);
-    expect([...SESSION_ARCHIVE_SUBJECT_KINDS]).toEqual(["issue", "chat", "task"]);
   });
 });

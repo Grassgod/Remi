@@ -99,6 +99,7 @@ describe("remi CLI dispatcher", () => {
       "runtime",
       "daemon",
       "autopilot",
+      "automation",
       "scm",
       "messaging",
       "feishu",

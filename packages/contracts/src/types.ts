@@ -7,6 +7,7 @@
 import type { RuntimeCodexProfile } from "./codex-profile.js";
 import type { RuntimeClaudeProfile } from "./claude-profile.js";
 import type { RuntimeProtocolStatus } from "./runtime-protocol.js";
+import type { GcRunMode, SubjectSnapshot } from "./storage.js";
 
 export type MultiremiAgentProvider = "claude" | "codex" | string;
 
@@ -919,6 +920,10 @@ export interface MultiremiDaemonRuntimeInput {
     root?: string;
     max_depth?: number;
     mode?: string;
+  };
+  pending_gc_run?: {
+    id: string;
+    mode: GcRunMode;
   };
   pending_local_skill_import?: {
     id: string;
@@ -2060,95 +2065,13 @@ export interface MultiremiIssueWorkspace {
   repos: MultiremiIssueWorkspaceRepo[];
   lastTaskId: string | null;
   cleanedAt: string | null;
-  cleanedArchiveId: string | null;
-  cleanedArchiveSourceRevision: string | null;
-  cleanedArchiveSha256: string | null;
+  /** What the daemon saved when it reclaimed the workspace; null when nothing needed saving. */
+  snapshot: SubjectSnapshot | null;
+  snapshotAt: string | null;
+  /** True when the reclaimed workspace held unsaved work that the snapshot preserves. */
+  unsavedWork: boolean;
   createdAt: string;
   updatedAt: string;
-}
-
-export interface MultiremiIssueWorkspaceArchiveBinding {
-  archiveId: string;
-  sourceRevision: string;
-  sha256: string;
-}
-
-export type MultiremiSessionArchiveStatus =
-  | "pending"
-  | "uploading"
-  | "ready"
-  | "failed"
-  | "superseded";
-
-/** What an archive covers: one Issue, one Chat Session, or one one-shot Task. */
-export type MultiremiSessionArchiveSubjectKind = "issue" | "chat" | "task";
-
-export const MULTIREMI_SESSION_ARCHIVE_MIN_TTL_MS = 60 * 60 * 1000;
-export const MULTIREMI_SESSION_ARCHIVE_MAX_TTL_MS = 365 * 24 * 60 * 60 * 1000;
-export const MULTIREMI_SESSION_ARCHIVE_MIN_GC_INTERVAL_MS = 60 * 1000;
-export const MULTIREMI_SESSION_ARCHIVE_PREPARATION_FAILURE_REVISION = "preparation-failed";
-
-/**
- * Control-plane metadata for one Session Archive.
- *
- * `subjectKind` is `issue`, `chat` or `task`; `issueId` is only set for Issue
- * subjects. Archive bytes live in SessionArchiveStore, never in SQL.
- */
-export interface MultiremiSessionArchive {
-  id: string;
-  workspaceId: string;
-  subjectKind: MultiremiSessionArchiveSubjectKind;
-  subjectId: string;
-  /** Container format; v1 rows stay readable, new uploads are always v2. */
-  format: string;
-  issueId: string | null;
-  runtimeId: string;
-  daemonId: string;
-  sourceRevision: string;
-  sha256: string;
-  sizeBytes: number;
-  uploadedSizeBytes: number;
-  fileCount: number | null;
-  status: MultiremiSessionArchiveStatus;
-  relativePath: string;
-  metadata: Record<string, unknown>;
-  attemptCount: number;
-  /** Attempt number at the last manual retry; budget and display use the difference. */
-  retryBudgetBaseAttempt: number;
-  lastError: string | null;
-  nextRetryAt: string | null;
-  retryExhaustedAt: string | null;
-  createdAt: string;
-  updatedAt: string;
-  completedAt: string | null;
-}
-
-export interface InitSessionArchiveInput {
-  workspaceId: string;
-  subjectKind: MultiremiSessionArchiveSubjectKind;
-  subjectId: string;
-  /** Only Issue subjects carry an Issue id. */
-  issueId?: string | null;
-  runtimeId: string;
-  daemonId: string;
-  /** Container format; v2 uploads carry the v2 format string. */
-  format?: string;
-  sourceRevision: string;
-  sha256: string;
-  sizeBytes: number;
-  fileCount?: number | null;
-  metadata?: Record<string, unknown>;
-}
-
-export interface ReportSessionArchiveFailureInput {
-  workspaceId: string;
-  subjectKind: MultiremiSessionArchiveSubjectKind;
-  subjectId: string;
-  issueId?: string | null;
-  runtimeId: string;
-  daemonId: string;
-  stage: "prepare";
-  error: string;
 }
 
 export interface ReportIssueWorkspaceInput {
@@ -2162,9 +2085,11 @@ export interface ReportIssueWorkspaceInput {
   cleanedAt?: string | null;
 }
 
-export interface MarkIssueWorkspaceCleanedInput extends MultiremiIssueWorkspaceArchiveBinding {
+export interface MarkIssueWorkspaceCleanedInput {
   issueId: string;
   runtimeId: string;
+  snapshot: SubjectSnapshot | null;
+  unsavedWork: boolean;
 }
 
 export interface MultiremiIssueAssigneeGroup {
@@ -4160,6 +4085,8 @@ export interface MultiremiAutopilotRun {
   triggerId: string | null;
   eventId: string | null;
   issueSessionId: string | null;
+  /** Chat opened for a `run_only` run. */
+  chatSessionId: string | null;
   triggeredAt: string;
   completedAt: string | null;
   failureReason: string | null;
@@ -5245,6 +5172,8 @@ export interface MultiremiChatSession {
   unreadSince: string | null;
   hasUnread: boolean;
   pinned: boolean;
+  /** Set for Chats opened by an automation run. */
+  origin: { autopilot_id: string; run_id: string } | null;
   unreadCount: number;
   lastMessage: { content: string; role: MultiremiChatMessageRole; createdAt: string } | null;
   createdAt: string;

@@ -31,7 +31,7 @@ function renderTask() {
 function page(overrides: Partial<SharedTaskTracePage> = {}): SharedTaskTracePage {
   return {
     events: [], next_after_seq: 0, head: 0, eof: true, closed: true,
-    source: "archive", state: "ok", ...overrides,
+    source: "daemon", state: "ok", ...overrides,
   };
 }
 
@@ -60,8 +60,7 @@ describe("SharedTask trace expansion", () => {
 
   it.each([
     ["unreachable", "daemon〈Desk〉当前离线", "Desk"],
-    ["lost", "已随 daemon 退役丢失", undefined],
-    ["backfilling", "归档回填中", undefined],
+    ["lost", "此执行过程已不可查看", undefined],
     ["not_found", null, undefined],
   ] as const)("renders %s without trace events", async (state, expected, runtimeName) => {
     const user = userEvent.setup();

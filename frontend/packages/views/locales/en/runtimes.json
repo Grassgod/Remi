@@ -117,6 +117,8 @@
       "impact_sessions_other": "Reset {{count}} provider sessions; the next runs start fresh",
       "impact_tokens_one": "Revoke {{count}} daemon token",
       "impact_tokens_other": "Revoke {{count}} daemon tokens",
+      "impact_traces_one": "{{count}} attempt's execution trace will become unavailable",
+      "impact_traces_other": "{{count}} attempts' execution traces will become unavailable",
       "runtimes_title": "Hosted runtimes",
       "acknowledge": "I understand this daemon ID and its access tokens will stop working. The daemon process on that computer must also be stopped.",
       "plan_changed": "The daemon's workload changed. Review the updated impact before confirming again.",
@@ -740,5 +742,91 @@
     "save": "Save",
     "saved": "Execution group updated",
     "failed": "Could not update execution group"
+  },
+  "storage": {
+    "card_aria": "Storage on {{name}}",
+    "online": "Online",
+    "offline": "Offline",
+    "reported_at": "Reported {{time}}",
+    "no_report": "This machine has not sent a storage report yet.",
+    "not_measured": "Disk usage has not been measured yet.",
+    "bytes_measured": "Measured {{time}}",
+    "bytes_title": "Disk usage",
+    "bytes": {
+      "work": "Workspaces",
+      "env": "Runtime environments",
+      "traces": "Records",
+      "shared": "Shared cache",
+      "legacy": "Previous layout"
+    },
+    "subjects_title": "Issues and chats",
+    "subjects": {
+      "total": "Total",
+      "active": "Active",
+      "ended": "Ended",
+      "reclaimed": "Reclaimed"
+    },
+    "retained_title": "Kept because",
+    "reasons": {
+      "running": "Running",
+      "pinned": "Pinned",
+      "not_ended": "Not ended",
+      "within_ttl": "Within retention",
+      "external_dir": "Local directory",
+      "snapshot_failed": "Snapshot failed",
+      "git_check_failed": "Git check failed",
+      "server_unreachable": "Server unreachable",
+      "legacy_retained": "Old layout worktree",
+      "error": "Error",
+      "ended_ttl": "Past retention",
+      "over_cap": "Over the retained limit",
+      "orphan": "Deleted on the server"
+    },
+    "last_round": "Last round",
+    "modes": {
+      "periodic": "Scheduled",
+      "dry_run": "Dry run",
+      "run": "Reclaim"
+    },
+    "last_round_summary": "Freed {{size}} · reclaimed {{reclaimed}} · forgotten {{forgotten}}",
+    "errors_title_one": "{{count}} error",
+    "errors_title_other": "{{count}} errors",
+    "dry_run": "Dry run",
+    "running_dry_run": "Running dry run…",
+    "reclaim_now": "Reclaim now",
+    "running_reclaim": "Reclaiming…",
+    "offline_hint": "The machine must be online to run storage maintenance.",
+    "run_failed": "Storage run failed",
+    "reclaim_confirm_title": "Reclaim storage on {{name}}?",
+    "reclaim_confirm_description": "Workspaces of ended Issues and chats past their retention are deleted. Unsaved work is snapshotted first and restored when the Issue or chat reopens. Data of Issues and chats already deleted on the server, including their execution records, is removed too.",
+    "cancel": "Cancel",
+    "plan_title": {
+      "periodic": "Items from the last round",
+      "dry_run": "Dry run: what a reclaim would do",
+      "run": "Reclaim result"
+    },
+    "plan": {
+      "subject": "Item",
+      "action": "Action",
+      "reason": "Reason",
+      "size": "Size",
+      "unsaved": "Unsaved work",
+      "unsaved_saved": "Saved to snapshot",
+      "unsaved_will_save": "Will be snapshotted",
+      "unsaved_kept": "Kept in place",
+      "truncated": "Showing the first {{count}} of {{total}} items."
+    },
+    "actions": {
+      "reclaim": "Reclaim",
+      "forget": "Forget",
+      "keep": "Keep"
+    },
+    "subject_kinds": {
+      "issue": "Issue",
+      "chat": "Chat",
+      "task": "Task"
+    },
+    "load_failed": "Couldn't load storage reports",
+    "retry": "Retry"
   }
 }

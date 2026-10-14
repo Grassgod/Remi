@@ -30,14 +30,12 @@ import { join } from "node:path";
 import { MultiremiStore } from "@multiremi/store.js";
 import { bootstrapPreUnifiedSchema } from "@multiremi/store/migrations.js";
 import { historicalWriters } from "./unified-model-test-backends.js";
-import { createId } from "@multiremi/ids.js";
 import { createCommitEventQueue, type StoreContext } from '@multiremi/store/context.js';
 import type {
   MultiremiAgent,
   MultiremiAgentPlugin,
   MultiremiAutopilot,
   MultiremiAutopilotTrigger,
-  MultiremiIssueWorkspaceArchiveBinding,
   CreateIssueInput,
   CreateAutopilotInput,
   MultiremiIssue,
@@ -279,53 +277,6 @@ export function configureRepositoryWikiAutomation(
     });
   }
   return { agent, plugin, autopilot, trigger };
-}
-
-export function readyArchiveBinding(
-  store: MultiremiStore,
-  issueId: string,
-  runtimeId: string,
-): MultiremiIssueWorkspaceArchiveBinding {
-  const existing = store.getSessionArchiveStatus(issueId).latestReady;
-  if (existing) {
-    return {
-      archiveId: existing.id,
-      sourceRevision: existing.sourceRevision,
-      sha256: existing.sha256,
-    };
-  }
-  const runtime = store.getRuntime(runtimeId);
-  if (!runtime) throw new Error(`Runtime not found: ${runtimeId}`);
-  const archiveId = createId("sar");
-  const sourceRevision = `test-${archiveId}`;
-  const sha256 = createHash("sha256").update(archiveId).digest("hex");
-  const initialized = store.initSessionArchive({
-    workspaceId: runtime.workspaceId ?? "local",
-    subjectKind: "issue",
-    subjectId: issueId,
-    issueId,
-    runtimeId,
-    daemonId: runtime.daemonId ?? "test-daemon",
-    sourceRevision,
-    sha256,
-    sizeBytes: 0,
-  }, archiveId, `tests/${archiveId}/sessions.zip`).archive;
-  const claimed = store.claimSessionArchiveUploadAttempt(initialized.id, runtimeId);
-  if (!claimed) throw new Error("Failed to claim test Session archive");
-  const uploading = store.beginSessionArchiveUploadAttempt(
-    claimed.id,
-    runtimeId,
-    claimed.attemptCount,
-  );
-  if (!uploading) throw new Error("Failed to begin test Session archive upload");
-  const ready = store.markSessionArchiveReadyAttempt(
-    uploading.id,
-    runtimeId,
-    uploading.attemptCount,
-    0,
-  );
-  if (!ready) throw new Error("Failed to complete test Session archive");
-  return { archiveId: ready.id, sourceRevision: ready.sourceRevision, sha256: ready.sha256 };
 }
 
 /**

@@ -440,7 +440,6 @@
     "trace_finished": "실행 종료 · 이벤트 {{count}}개",
     "trace_unreachable": "실행 환경 {{name}}이 오프라인입니다. 기록을 일시적으로 읽을 수 없습니다",
     "trace_last_seen": "마지막 접속 {{time}}",
-    "trace_backfilling": "실행 기록을 복원하는 중",
     "trace_lost": "실행 기록이 손실되었습니다",
     "trace_not_found": "사용 가능한 실행 기록이 없습니다",
     "trace_failed": "실행 기록을 불러오지 못했습니다",

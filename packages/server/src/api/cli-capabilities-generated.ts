@@ -693,6 +693,31 @@ export const CLI_CAPABILITIES_RUNTIME = {
         "jsonl"
       ]
     },
+    "workspace.storage.get": {
+      "command": "remi workspace storage get",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "workspace.storage.get",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "workspace.storage.set": {
+      "command": "remi workspace storage set",
+      "auth": [
+        "human"
+      ],
+      "capability": "workspace.storage.set",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
     "member.list": {
       "command": "remi member list",
       "auth": [
@@ -2120,84 +2145,6 @@ export const CLI_CAPABILITIES_RUNTIME = {
         "task"
       ],
       "capability": "session.result.publish",
-      "output": [
-        "table",
-        "json",
-        "jsonl"
-      ]
-    },
-    "session.archive.list": {
-      "command": "remi session archive list",
-      "auth": [
-        "human",
-        "task"
-      ],
-      "capability": "session.archive.list",
-      "output": [
-        "table",
-        "json",
-        "jsonl"
-      ]
-    },
-    "session.archive.status": {
-      "command": "remi session archive status",
-      "auth": [
-        "human",
-        "task"
-      ],
-      "capability": "session.archive.status",
-      "output": [
-        "table",
-        "json",
-        "jsonl"
-      ]
-    },
-    "session.archive.verify": {
-      "command": "remi session archive verify",
-      "auth": [
-        "human",
-        "task"
-      ],
-      "capability": "session.archive.verify",
-      "output": [
-        "table",
-        "json",
-        "jsonl"
-      ]
-    },
-    "session.archive.retry": {
-      "command": "remi session archive retry",
-      "auth": [
-        "human",
-        "task"
-      ],
-      "capability": "session.archive.retry",
-      "output": [
-        "table",
-        "json",
-        "jsonl"
-      ]
-    },
-    "session.config.get": {
-      "command": "remi session config get",
-      "auth": [
-        "human",
-        "task"
-      ],
-      "capability": "session.config.get",
-      "output": [
-        "table",
-        "json",
-        "jsonl"
-      ]
-    },
-    "session.config.update": {
-      "command": "remi session config update",
-      "auth": [
-        "human",
-        "task"
-      ],
-      "capability": "session.config.update",
       "output": [
         "table",
         "json",
@@ -4026,6 +3973,44 @@ export const CLI_CAPABILITIES_RUNTIME = {
         "jsonl"
       ]
     },
+    "runtime.storage": {
+      "command": "remi runtime storage",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "runtime.storage",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "runtime.gc": {
+      "command": "remi runtime gc",
+      "auth": [
+        "human"
+      ],
+      "capability": "runtime.gc",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "runtime.gc-status": {
+      "command": "remi runtime gc-status",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "runtime.gc-status",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
     "runtime.skill.scan": {
       "command": "remi runtime skill scan",
       "auth": [
@@ -4612,6 +4597,19 @@ export const CLI_CAPABILITIES_RUNTIME = {
         "task"
       ],
       "capability": "autopilot.scheduler",
+      "output": [
+        "table",
+        "json",
+        "jsonl"
+      ]
+    },
+    "automation.quiet": {
+      "command": "remi automation quiet",
+      "auth": [
+        "human",
+        "task"
+      ],
+      "capability": "automation.quiet",
       "output": [
         "table",
         "json",

@@ -65,6 +65,9 @@ const retiredCommands: Record<string, string> = {
   "issue active-task": "remi turn list --issue <issue>",
   "issue cancel-task": "remi turn cancel <turn>",
   "session task list": "remi turn list --session <conversation>",
+  "session archive": "remi runtime storage <runtime>（Session 归档已取消，执行记录留在 daemon 本机）",
+  "issue archive": "remi runtime storage <runtime>（Session 归档已取消，执行记录留在 daemon 本机）",
+  "session config": "remi workspace storage get|set <workspace>（Session 归档设置已取消，存储策略见 workspace storage）",
   // ADR 0017: no designated human, formal delivery or parent-done grant remains.
   "issue delivery list": "remi issue get <issue>（正式交付已移除；执行负责人这一轮的最后一条回复就是总结）",
   "issue delivery submit": "这一轮的最后一条回复就是总结；本轮结束后 Issue 自动进入 in_review",

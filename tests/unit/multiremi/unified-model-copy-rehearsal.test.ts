@@ -82,7 +82,7 @@ unifiedModelBackendTests("MUL-493 offline copy rehearsal", fixture => {
       .every((row: any) => row.cursor_seq === row.head_seq)).toBe(true);
     expect(result.issue_sampling).toBe("manual review required");
     expect(db.query("SELECT cursor_seq,cursor_offset,provider_cursor_seq,parent_cursor_seq,provider_session_id FROM multiremi_session_lanes WHERE reader_type='agent' AND reader_id=?").get(agent.id))
-      .toEqual({ cursor_seq: 1, cursor_offset: 17, provider_cursor_seq: 2, parent_cursor_seq: 1, provider_session_id: "checkpoint" });
+      .toEqual({ cursor_seq: 1, cursor_offset: 17, provider_cursor_seq: 0, parent_cursor_seq: 0, provider_session_id: null });
     const report = JSON.parse(readFileSync(join(dir, "copy-reconciliation.json"), "utf8"));
     expect(report.issue_samples[0].turns[0].attempts).toBe(2);
     expect(report.issue_samples[0].status).toBe("backlog");

@@ -107,6 +107,7 @@
       "impact_tasks_other": "将 {{count}} 个排队中的 task 放回公共池",
       "impact_sessions_other": "重置 {{count}} 个 provider 会话，下次运行将重新创建",
       "impact_tokens_other": "吊销 {{count}} 个 daemon token",
+      "impact_traces_other": "{{count}} 个尝试的执行过程将不可查看",
       "runtimes_title": "托管的运行时",
       "acknowledge": "我已了解：这个 daemon ID 和访问 token 将失效，并且还需要停止对应机器上的 daemon 进程。",
       "plan_changed": "daemon 的工作负载发生了变化，请重新检查影响范围后再次确认。",
@@ -716,5 +717,90 @@
     "save": "保存",
     "saved": "执行能力组已更新",
     "failed": "执行能力组更新失败"
+  },
+  "storage": {
+    "card_aria": "{{name}} 的存储",
+    "online": "在线",
+    "offline": "离线",
+    "reported_at": "{{time}}上报",
+    "no_report": "这台机器还没有上报存储情况。",
+    "not_measured": "尚未统计磁盘占用。",
+    "bytes_measured": "统计于{{time}}",
+    "bytes_title": "磁盘占用",
+    "bytes": {
+      "work": "工作区",
+      "env": "运行环境",
+      "traces": "记录",
+      "shared": "共享缓存",
+      "legacy": "旧布局"
+    },
+    "subjects_title": "Issue 与对话",
+    "subjects": {
+      "total": "总数",
+      "active": "活跃",
+      "ended": "已结束",
+      "reclaimed": "已回收"
+    },
+    "retained_title": "保留原因",
+    "reasons": {
+      "running": "运行中",
+      "pinned": "已置顶",
+      "not_ended": "未结束",
+      "within_ttl": "在保留期内",
+      "external_dir": "本地目录",
+      "snapshot_failed": "快照失败",
+      "git_check_failed": "Git 检查失败",
+      "server_unreachable": "服务端不可达",
+      "legacy_retained": "旧布局的 worktree",
+      "error": "出错",
+      "ended_ttl": "已过保留期",
+      "over_cap": "超出保留数量",
+      "orphan": "服务端已删除"
+    },
+    "last_round": "最近一轮",
+    "modes": {
+      "periodic": "定期",
+      "dry_run": "预演",
+      "run": "回收"
+    },
+    "last_round_summary": "释放 {{size}} · 回收 {{reclaimed}} 个 · 遗忘 {{forgotten}} 个",
+    "errors_title_other": "{{count}} 个错误",
+    "dry_run": "预演一轮",
+    "running_dry_run": "预演中…",
+    "reclaim_now": "立即回收",
+    "running_reclaim": "回收中…",
+    "offline_hint": "机器在线时才能执行存储维护。",
+    "run_failed": "存储任务失败",
+    "reclaim_confirm_title": "回收 {{name}} 上的存储？",
+    "reclaim_confirm_description": "已结束且超过保留期的 Issue 和对话工作区会被删除。未保存的工作会先保存为快照，重新打开时恢复；服务端已删除的 Issue 和对话，其数据（含执行记录）也会一并清除。",
+    "cancel": "取消",
+    "plan_title": {
+      "periodic": "最近一轮的条目",
+      "dry_run": "预演：回收会做什么",
+      "run": "回收结果"
+    },
+    "plan": {
+      "subject": "条目",
+      "action": "操作",
+      "reason": "原因",
+      "size": "大小",
+      "unsaved": "未保存的工作",
+      "unsaved_saved": "已存入快照",
+      "unsaved_will_save": "将存入快照",
+      "unsaved_kept": "原地保留",
+      "truncated": "仅显示前 {{count}} 项，共 {{total}} 项。"
+    },
+    "actions": {
+      "reclaim": "回收",
+      "forget": "遗忘",
+      "keep": "保留"
+    },
+    "subject_kinds": {
+      "issue": "Issue",
+      "chat": "对话",
+      "task": "任务"
+    },
+    "load_failed": "无法加载存储报告",
+    "retry": "重试"
   }
 }

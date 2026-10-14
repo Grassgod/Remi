@@ -50,7 +50,7 @@ async function output(command: string, args: string[]): Promise<string> {
 interface BaselineJob { name: string; conclusion: string; steps?: { name: string; conclusion: string }[] }
 export function verifyShardedJobs(plan: Plan, reports: Report[], jobs: BaselineJob[]): string[] {
   verifyReports(plan, reports, "completed-test-failure");
-  const required = ["guards", "frontend-types", "frontend-tests", "cli-build", "api-build", "web-build", "session-archive-platform (ubuntu-latest)", "session-archive-platform (macos-latest)", "frontend-zero-jump", "frontend-replica", "backend-plan", "backend-evidence", "backend-retry", "build", ...plan.shards.map(s => `backend (${s.index})`)];
+  const required = ["guards", "frontend-types", "frontend-tests", "cli-build", "api-build", "web-build", "runtime-platform (ubuntu-latest)", "runtime-platform (macos-latest)", "frontend-zero-jump", "frontend-replica", "backend-plan", "backend-evidence", "backend-retry", "build", ...plan.shards.map(s => `backend (${s.index})`)];
   if (new Set(jobs.map(job => job.name)).size !== jobs.length || required.some(name => !jobs.some(job => job.name === name))) throw new Error("Missing or duplicate baseline jobs");
   const get = (name: string) => jobs.find(job => job.name === name)!;
   for (const job of jobs) {

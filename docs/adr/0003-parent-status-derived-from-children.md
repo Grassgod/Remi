@@ -140,7 +140,7 @@ dropped (`active_task_exists`), so a parent could lose reports entirely.
    transaction owner rolls back and retries once with a
    fresh set; a second miss, or a caller-owned transaction, raises 409
    `issue_relation_changed`. A late lock is never taken.
-   `lockIssueArchiveLifecycle` and `lockIssueRowWithinTransaction` take the same
+   `lockIssueLifecycle` and `lockIssueRowWithinTransaction` take the same
    Issue row lock; workspace reports, abandonment and cleanup serialize with moves.
    A parent's guarded decision still reads children without locking their rows. A write serialized after parent closure may still introduce an
    unfinished child under that closed parent; the closed-parent policy above

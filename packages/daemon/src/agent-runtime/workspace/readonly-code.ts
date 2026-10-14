@@ -4,9 +4,8 @@ import { join } from "node:path";
 import { hasReadOnlyCodeSnapshot } from "../prompts/side-conversation.js";
 import type { TaskRepoSnapshot } from "../prompts/ephemeral.js";
 import { MultiremiRepoCache, normalizeRepoList } from "../repo/checkout.js";
-import { writeTaskGcContext } from "../skills/ephemeral.js";
 
-/** Prepare a frozen, local-only view without registering a shared Issue workspace. */
+/** Prepare a frozen, local-only view in the lane's work set, without touching the Issue workspace. */
 export async function prepareReadOnlyCodeWorkspace(
   workDir: string,
   task: AgentTask,
@@ -24,9 +23,6 @@ export async function prepareReadOnlyCodeWorkspace(
       throw new Error(`Unsafe read-only discussion workspace: ${path}`);
     }
   }
-  // This is the discussion root, not the provider's private .runtime/.../work cwd.
-  // Mark it before Git creates anything so partial preparation is collectible too.
-  writeTaskGcContext(workDir, task);
   const snapshots: TaskRepoSnapshot[] = [];
   for (const repo of normalizeRepoList(task.repos)) {
     signal?.throwIfAborted();

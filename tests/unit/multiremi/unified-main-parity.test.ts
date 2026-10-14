@@ -185,13 +185,18 @@ pendingTurnBackendTests('MUL-508 main parity', fixture => {
     expect(f.store.getIssue(waiting.id)?.status).toBe('todo');
   });
 
-  it('#6/#8: archived Chat rejects writes before attachment or delivery side effects',async()=>{
+  it('#6/#8: archived Chat rejects agent writes before side effects and reopens for a member write',async()=>{
     const f=await scaffold();const chat=f.store.createChatSession({agentId:f.worker.id,creatorId:'local'});
     f.store.updateChatSession(chat.id,{status:'archived'});
     const before=f.store.getConversationLogHead(chat.id)!.headSeq;
-    const result=await f.request(`/api/sessions/${chat.id}/messages`,{body_md:'Rejected',to:{type:'agent',ref:f.worker.id}},'parity-master');
-    expect(result.status).toBe(409);expect(f.store.getConversationLogHead(chat.id)?.headSeq).toBe(before);
+    const body=JSON.stringify({body_md:'Rejected',to:{type:'agent',ref:f.worker.id}});
+    const agent=await f.app.request(`/api/sessions/${chat.id}/messages`,{method:'POST',headers:{Authorization:'Bearer parity-master','Content-Type':'application/json','X-Agent-ID':f.controller.id},body});
+    expect(agent.status).toBe(409);expect(f.store.getConversationLogHead(chat.id)?.headSeq).toBe(before);
     expect(f.store.listMessages(chat.id)).toEqual([]);expect(f.store.listTasks().filter(task=>task.chatSessionId===chat.id)).toEqual([]);
+    expect(f.store.getChatSession(chat.id)?.status).toBe('archived');
+    const member=await f.request(`/api/sessions/${chat.id}/messages`,{body_md:'Welcome back',to:{type:'agent',ref:f.worker.id}},'parity-master');
+    expect(member.status).toBe(200);expect(f.store.getChatSession(chat.id)?.status).toBe('active');
+    expect(f.store.listTasks().filter(task=>task.chatSessionId===chat.id)).toHaveLength(1);
   });
 
   it('#8: attachment size boundaries preserve 413 and reject empty files atomically',async()=>{

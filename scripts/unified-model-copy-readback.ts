@@ -40,19 +40,40 @@ export function copyReadPositions(baseline: CopyBaseline) {
   return positions;
 }
 
+/**
+ * What the ADR 0018 migration leaves of a lane checkpoint. A lane that held a
+ * native session starts a new generation without it; the read positions stay.
+ */
+function checkpointAfterLocalRecords(checkpoint: Row): Row {
+  if (checkpoint.provider_session_id == null) return { ...checkpoint, provider_cursor_seq: checkpoint.cursor_seq };
+  return {
+    ...checkpoint,
+    provider_session_id: null,
+    work_dir: null,
+    parent_cursor_seq: 0,
+    provider_cursor_seq: 0,
+    generation: Number(checkpoint.generation) + 1,
+  };
+}
+
 /** Shared by each child's ready boundary and the final parent reconciliation. */
 export function reconcileCopyReadback(db: SqlDatabase, before: UnifiedModelReport, original: CopyBaseline) {
   const readPositions = copyReadPositions(original);
-  const report = reconcileUnifiedModel(db, before);
+  const voided = new Set(original.checkpoints.filter(checkpoint => checkpoint.provider_session_id != null).map(laneKey));
+  const report = reconcileUnifiedModel(db, {
+    ...before,
+    lane_cursors: before.lane_cursors.map(lane => voided.has(laneKey(lane)) ? { ...lane, parent_cursor_seq: 0 } : lane),
+  });
   const lanes = pages(db, "SELECT * FROM multiremi_session_lanes WHERE reader_type='agent' ORDER BY session_id,reader_id,execution_scope");
   const byKey = new Map(lanes.map(lane => [laneKey(lane), lane]));
   const mismatches = [...report.mismatches];
-  for (const checkpoint of original.checkpoints) {
+  for (const recorded of original.checkpoints) {
+    const checkpoint = checkpointAfterLocalRecords(recorded);
     const actual = byKey.get(laneKey(checkpoint));
     for (const key of ['parent_cursor_seq', 'wake_hint_seq', 'swept_to_seq', 'provider_session_id', 'work_dir', 'generation']) {
-      if (!actual || actual[key] !== checkpoint[key]) mismatches.push(`checkpoint ${key}: ${laneKey(checkpoint)}`);
+      if (!actual || String(actual[key] ?? null) !== String(checkpoint[key] ?? null)) mismatches.push(`checkpoint ${key}: ${laneKey(checkpoint)}`);
     }
-    if (Number(actual?.provider_cursor_seq) !== Number(checkpoint.cursor_seq)) mismatches.push(`provider cursor: ${laneKey(checkpoint)}`);
+    if (Number(actual?.provider_cursor_seq) !== Number(checkpoint.provider_cursor_seq)) mismatches.push(`provider cursor: ${laneKey(checkpoint)}`);
   }
   for (const [key, position] of readPositions) {
     const actual = byKey.get(key);

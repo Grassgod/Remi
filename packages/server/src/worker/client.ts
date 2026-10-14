@@ -1,13 +1,10 @@
-import { createReadStream } from "node:fs";
 import { DaemonProtocolRpcError } from "./daemon-protocol-client.js";
-import { SESSION_ARCHIVE_FORMAT_V2 } from "@multiremi/contracts/session-archive.js";
+import type { DaemonGcSubjectReclaimedPayload } from "@multiremi/contracts/daemon-protocol.js";
+import type { StorageReport } from "@multiremi/contracts/storage.js";
 import type { TaskUsageSnapshot } from "@multiremi/contracts/usage-accounting.js";
-import type { MultiremiSessionArchiveSubjectKind } from "@multiremi/contracts/types.js";
-import type { DaemonArchiveSessionsResultPayload } from "@multiremi/contracts/daemon-protocol.js";
 import { parseRuntimeCodexProfile, type RuntimeCodexProfile } from "@multiremi/contracts/codex-profile";
 import { parseRuntimeClaudeProfile, type RuntimeClaudeProfile } from "@multiremi/contracts/claude-profile";
 import { parseFeishuPresentation } from "@multiremi/contracts/feishu-presentation.js";
-import { stat } from "node:fs/promises";
 import { normalizeRepoList } from "@daemon/agent-runtime/repo/checkout.js";
 import { CHAT_ATTACHMENT_MAX_BYTES, readChatAttachmentBytes } from "@daemon/agent-runtime/workspace/chat-attachments.js";
 import { isFeishuOpenId, parseOutboundMention } from "@shared/feishu-mention.js";
@@ -29,7 +26,6 @@ import type {
   TaskUsageEntry,
   MultiremiIssueWorkspaceRepo,
   MultiremiIssueWorkspaceStatus,
-  MultiremiIssueWorkspaceArchiveBinding,
   MultiremiIssueDecision,
   MultiremiDaemonSshMeshConfig,
   MultiremiDaemonSshMeshStatus,
@@ -125,43 +121,15 @@ export interface MultiremiDaemonGcStatus {
   status: string;
   updated_at?: string | null;
   completed_at?: string | null;
-}
-
-export interface MultiremiDaemonSessionArchiveWire {
-  id: string;
-  status: "pending" | "uploading" | "ready" | "failed" | "superseded";
-  source_revision: string;
-  sha256: string;
-  size_bytes: number;
-  attempt_count?: number;
-  last_error?: string | null;
-  next_retry_at?: string | null;
-  retry_exhausted_at?: string | null;
-  retry_state?: "eligible" | "backoff" | "exhausted";
-}
-
-export interface MultiremiDaemonSessionArchiveStatus {
-  latest: MultiremiDaemonSessionArchiveWire | null;
-  latest_ready: MultiremiDaemonSessionArchiveWire | null;
-  requested_ready: MultiremiDaemonSessionArchiveWire | null;
-  gc_ready: boolean;
-}
-
-export interface MultiremiDaemonSessionArchiveInitResponse {
-  archive: MultiremiDaemonSessionArchiveWire;
-  upload_attempt: number | null;
-  upload_url: string | null;
+  /** Chat checks only. */
+  pinned?: boolean;
+  origin?: { autopilot_id: string; run_id: string } | null;
+  last_activity_at?: string | null;
 }
 
 export interface MultiremiDaemonClientOptions {
   /** Deadline for a control-plane JSON request, including response body reads. */
   requestTimeoutMs?: number;
-  sessionArchiveUploadBaseUrl?: string | null;
-  sessionArchiveProxyMaxBytes?: number;
-  sessionArchiveDirectProbeTtlMs?: number;
-  sessionArchiveDirectProbeTimeoutMs?: number;
-  sessionArchiveUploadTimeoutMs?: number;
-  sessionArchiveFailureReportTimeoutMs?: number;
 }
 
 export interface MultiremiRecoverOrphansResult {
@@ -189,6 +157,26 @@ export class MultiremiDaemonHttpError extends Error {
 }
 
 export const DEFAULT_DAEMON_REQUEST_TIMEOUT_MS = 30_000;
+
+/**
+ * Every storage report leaves the daemon in a frame limited to 1 MiB (a run result through the durable
+ * outbox, a periodic report as a best-effort frame), so the lists in it are bounded.
+ */
+const GC_RESULT_MAX_PLAN_ITEMS = 2000;
+const GC_RESULT_MAX_ERRORS = 100;
+const GC_RESULT_MAX_ERROR_CHARS = 1000;
+
+/** Keeps every item that changes something, then the largest of the rest. */
+export function boundStorageReport(report: StorageReport): StorageReport {
+  const plan = report.plan.length <= GC_RESULT_MAX_PLAN_ITEMS
+    ? report.plan
+    : [...report.plan]
+      .sort((left, right) => Number(right.action !== "keep") - Number(left.action !== "keep") || (right.bytes ?? 0) - (left.bytes ?? 0))
+      .slice(0, GC_RESULT_MAX_PLAN_ITEMS);
+  const errors = report.errors.slice(0, GC_RESULT_MAX_ERRORS)
+    .map((error) => ({ ...error, message: error.message.slice(0, GC_RESULT_MAX_ERROR_CHARS) }));
+  return { ...report, plan, errors };
+}
 
 export class MultiremiDaemonRequestTimeoutError extends Error {
   constructor(
@@ -236,14 +224,6 @@ export class MultiremiDaemonClient {
   private baseUrl: string;
   private token: string | null;
   private readonly requestTimeoutMs: number;
-  private sessionArchiveUploadBaseUrl: URL | null;
-  private sessionArchiveProxyMaxBytes: number;
-  private sessionArchiveDirectProbeTtlMs: number;
-  private sessionArchiveDirectProbeTimeoutMs: number;
-  private sessionArchiveUploadTimeoutMs: number;
-  private sessionArchiveFailureReportTimeoutMs: number;
-  private sessionArchiveDirectRoutes = new Map<string, { direct: boolean; expiresAt: number }>();
-  private sessionArchiveUploadAttempts = new Map<string, { attempt: number; uploadUrl: string | null }>();
 
   constructor(baseUrl: string, token?: string | null, options: MultiremiDaemonClientOptions = {}) {
     this.baseUrl = baseUrl.replace(/\/+$/, "");
@@ -252,32 +232,6 @@ export class MultiremiDaemonClient {
     if (!Number.isSafeInteger(this.requestTimeoutMs) || this.requestTimeoutMs < 1 || this.requestTimeoutMs > 2_147_483_647) {
       throw new Error("requestTimeoutMs must be a positive integer no greater than 2147483647");
     }
-    this.sessionArchiveUploadBaseUrl = normalizeSessionArchiveUploadBaseUrl(
-      options.sessionArchiveUploadBaseUrl,
-    );
-    this.sessionArchiveProxyMaxBytes = normalizeSessionArchiveProxyMaxBytes(
-      options.sessionArchiveProxyMaxBytes,
-    );
-    this.sessionArchiveDirectProbeTtlMs = normalizeSessionArchiveDurationMs(
-      options.sessionArchiveDirectProbeTtlMs,
-      5 * 60 * 1_000,
-      "MULTIREMI_ARCHIVE_DIRECT_PROBE_TTL_MS",
-    );
-    this.sessionArchiveDirectProbeTimeoutMs = normalizeSessionArchiveDurationMs(
-      options.sessionArchiveDirectProbeTimeoutMs,
-      10_000,
-      "MULTIREMI_ARCHIVE_DIRECT_PROBE_TIMEOUT_MS",
-    );
-    this.sessionArchiveUploadTimeoutMs = normalizeSessionArchiveDurationMs(
-      options.sessionArchiveUploadTimeoutMs,
-      15 * 60 * 1_000,
-      "MULTIREMI_ARCHIVE_UPLOAD_TIMEOUT_MS",
-    );
-    this.sessionArchiveFailureReportTimeoutMs = normalizeSessionArchiveDurationMs(
-      options.sessionArchiveFailureReportTimeoutMs,
-      10_000,
-      "MULTIREMI_ARCHIVE_FAILURE_REPORT_TIMEOUT_MS",
-    );
   }
 
   setReportTransport(transport: import("./report-transport.js").DaemonReportTransport): void {
@@ -971,14 +925,6 @@ export class MultiremiDaemonClient {
     await this.report("runtime.command_result", `rt:${runtimeId}`, { ...result, request_id: requestId, runtime_id: runtimeId });
   }
 
-  async reportSessionArchiveRequestResult(
-    runtimeId: string,
-    requestId: string,
-    result: Omit<DaemonArchiveSessionsResultPayload, "request_id">,
-  ): Promise<void> {
-    await this.report("runtime.archive_sessions_result", `rt:${runtimeId}`, { ...result, request_id: requestId, runtime_id: runtimeId });
-  }
-
   async reportRuntimeModelListResult(runtimeId: string, requestId: string, result: {
     status: string;
     models?: MultiremiRuntimeModel[];
@@ -1019,6 +965,15 @@ export class MultiremiDaemonClient {
     resolvedRoot?: string;
   }): Promise<void> {
     await this.report("runtime.directory_scan_result", `rt:${runtimeId}`, { ...result, request_id: requestId, runtime_id: runtimeId });
+  }
+
+  async reportGcRunResult(runtimeId: string, requestId: string, result: {
+    status: "completed" | "failed";
+    report: StorageReport | null;
+    error: string | null;
+  }): Promise<void> {
+    const report = result.report ? boundStorageReport(result.report) : null;
+    await this.report("runtime.gc_run_result", `rt:${runtimeId}`, { ...result, report, request_id: requestId, runtime_id: runtimeId });
   }
 
   async reportRuntimeLocalSkillImportResult(runtimeId: string, requestId: string, result: {
@@ -1248,302 +1203,21 @@ export class MultiremiDaemonClient {
     return this.maintenanceRpc("gc.check_issue", { issue_id: issueId });
   }
 
-  /**
-   * Session Archive upload protocol, for any subject.
-   *
-   * Issues, Chats and one-shot Tasks differ only in the route path segment and
-   * the subject id, so one implementation serves all three. The client names the
-   * v2 format itself: the server refuses an upload that does not, which is how an
-   * un-upgraded daemon is stopped before it claims an attempt.
-   */
-  private sessionArchiveSubjectBase(
-    runtimeId: string,
-    subject: SessionArchiveClientSubject,
-  ): string {
-    return `/api/daemon/runtimes/${encodeURIComponent(runtimeId)}`
-      + `/${SESSION_ARCHIVE_SUBJECT_PATH_SEGMENT[subject.kind]}`
-      + `/${encodeURIComponent(subject.id)}/session-archives`;
-  }
-
-  async getSessionArchiveStatus(
-    runtimeId: string,
-    subject: SessionArchiveClientSubject,
-    sourceRevision?: string,
-    sha256?: string,
-    verifyReady = false,
-  ): Promise<MultiremiDaemonSessionArchiveStatus> {
-    const query = new URLSearchParams();
-    if (sourceRevision) query.set("source_revision", sourceRevision);
-    if (sha256) query.set("sha256", sha256);
-    if (verifyReady) query.set("verify_ready", "1");
-    const suffix = query.size ? `?${query}` : "";
-    return this.get<MultiremiDaemonSessionArchiveStatus>(
-      `${this.sessionArchiveSubjectBase(runtimeId, subject)}/status${suffix}`,
-    );
-  }
-
-  async initSessionArchive(
-    runtimeId: string,
-    subject: SessionArchiveClientSubject,
-    input: {
-      sourceRevision: string;
-      sha256: string;
-      sizeBytes: number;
-      fileCount?: number | null;
-      metadata?: Record<string, unknown>;
-    },
-  ): Promise<MultiremiDaemonSessionArchiveInitResponse> {
-    const response = await this.post<MultiremiDaemonSessionArchiveInitResponse>(
-      `${this.sessionArchiveSubjectBase(runtimeId, subject)}/init`,
-      {
-        source_revision: input.sourceRevision,
-        sha256: input.sha256,
-        size_bytes: input.sizeBytes,
-        file_count: input.fileCount ?? null,
-        // The format marker is what tells the server this is a v2 container.
-        metadata: { ...(input.metadata ?? {}), format: SESSION_ARCHIVE_FORMAT_V2 },
-      },
-    );
-    const key = sessionArchiveAttemptKey(runtimeId, subject, response.archive.id);
-    if (Number.isSafeInteger(response.upload_attempt) && Number(response.upload_attempt) > 0) {
-      this.sessionArchiveUploadAttempts.set(key, {
-        attempt: Number(response.upload_attempt),
-        uploadUrl: typeof response.upload_url === "string" && response.upload_url.trim()
-          ? response.upload_url.trim()
-          : null,
-      });
-    } else {
-      this.sessionArchiveUploadAttempts.delete(key);
-    }
-    return response;
-  }
-
-  async reportSessionArchiveFailure(
-    runtimeId: string,
-    subject: SessionArchiveClientSubject,
-    input: { stage: "prepare"; error: string },
-  ): Promise<MultiremiDaemonSessionArchiveWire> {
-    const response = await this.post<{ archive: MultiremiDaemonSessionArchiveWire }>(
-      `${this.sessionArchiveSubjectBase(runtimeId, subject)}/failure`,
-      input,
-    );
-    return response.archive;
-  }
-
-  async uploadSessionArchive(
-    runtimeId: string,
-    subject: SessionArchiveClientSubject,
-    archiveId: string,
-    archivePath: string,
-    signal?: AbortSignal,
-  ): Promise<MultiremiDaemonSessionArchiveWire> {
-    signal?.throwIfAborted();
-    const claim = this.requireSessionArchiveUploadAttempt(runtimeId, subject, archiveId);
-    const path = sessionArchiveUploadPath(runtimeId, subject, archiveId, claim.attempt);
-    try {
-      const target = this.resolveSessionArchiveUploadTarget(path, claim.uploadUrl);
-      const archiveStat = await stat(archivePath);
-      if (!archiveStat.isFile()) throw new Error(`Session archive is not a regular file: ${archivePath}`);
-      const direct = target.directCandidate
-        ? await this.hasAttestedSessionArchiveDirectRoute(target.url)
-        : false;
-      signal?.throwIfAborted();
-      if (!direct && archiveStat.size > this.sessionArchiveProxyMaxBytes) {
-        throw new Error(
-          `Session archive is ${archiveStat.size} bytes, exceeding the ${this.sessionArchiveProxyMaxBytes}-byte proxy fallback limit. `
-          + "Configure MULTIREMI_DAEMON_DIRECT_BASE_URL on the API or MULTIREMI_ARCHIVE_UPLOAD_BASE_URL on the daemon, "
-          + "and ensure the direct route returns X-Remi-Archive-Direct: 1 to its HEAD preflight.",
-        );
-      }
-
-      // Bun 1.3.14 can crash when Bun.file is used as a fetch body in the co-resident ACP daemon.
-      // A Node ReadStream stays incremental without entering that Bun.file native path.
-      const archive = createReadStream(archivePath);
-      try {
-        const headers = new Headers(this.headers("application/octet-stream"));
-        headers.set("Content-Length", String(archiveStat.size));
-        const request: RequestInit & { duplex: "half" } = {
-          method: "PUT",
-          headers,
-          body: archive as unknown as BodyInit,
-          duplex: "half",
-          redirect: "error",
-          signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(this.sessionArchiveUploadTimeoutMs)]) : AbortSignal.timeout(this.sessionArchiveUploadTimeoutMs),
-        };
-        let resp: Response;
-        try {
-          resp = await fetch(target.url, request);
-        } catch (error) {
-          signal?.throwIfAborted();
-          if (request.signal?.aborted) {
-            throw new Error(
-              `Session archive upload timed out after ${this.sessionArchiveUploadTimeoutMs}ms`,
-              { cause: error },
-            );
-          }
-          throw error;
-        }
-        return (await parseResponse<{ archive: MultiremiDaemonSessionArchiveWire }>(resp, "PUT", path)).archive;
-      } finally {
-        archive.destroy();
-      }
-    } catch (error) {
-      // A replacement process retries the durable intent. Do not start a new
-      // failure-report request while the owner is shutting down.
-      signal?.throwIfAborted();
-      const message = error instanceof Error ? error.message : String(error);
-      try {
-        await this.post(
-          `${this.sessionArchiveSubjectBase(runtimeId, subject)}/${encodeURIComponent(archiveId)}`
-          + `/failure?attempt=${claim.attempt}`,
-          { error: message },
-          undefined,
-          AbortSignal.timeout(this.sessionArchiveFailureReportTimeoutMs),
-        );
-        this.sessionArchiveUploadAttempts.delete(sessionArchiveAttemptKey(runtimeId, subject, archiveId));
-      } catch (reportError) {
-        if (
-          reportError instanceof MultiremiDaemonHttpError
-          && reportError.status === 409
-          && reportError.code === "session_archive_attempt_conflict"
-        ) {
-          this.sessionArchiveUploadAttempts.delete(sessionArchiveAttemptKey(runtimeId, subject, archiveId));
-          throw error;
-        }
-        const reportMessage = reportError instanceof Error ? reportError.message : String(reportError);
-        throw new Error(`${message}; additionally failed to persist archive upload failure: ${reportMessage}`, {
-          cause: error,
-        });
-      }
-      throw error;
-    }
-  }
-
-  async completeSessionArchive(
-    runtimeId: string,
-    subject: SessionArchiveClientSubject,
-    archiveId: string,
-  ): Promise<MultiremiDaemonSessionArchiveWire> {
-    const { attempt } = this.requireSessionArchiveUploadAttempt(runtimeId, subject, archiveId);
-    const key = sessionArchiveAttemptKey(runtimeId, subject, archiveId);
-    const response = await this.post<{ archive: MultiremiDaemonSessionArchiveWire }>(
-      `${this.sessionArchiveSubjectBase(runtimeId, subject)}/${encodeURIComponent(archiveId)}`
-      + `/complete?attempt=${attempt}`,
-      {},
-    );
-    if (response.archive.status === "ready") this.sessionArchiveUploadAttempts.delete(key);
-    return response.archive;
-  }
-
-  private requireSessionArchiveUploadAttempt(
-    runtimeId: string,
-    subject: SessionArchiveClientSubject,
-    archiveId: string,
-  ): { attempt: number; uploadUrl: string | null } {
-    const claim = this.sessionArchiveUploadAttempts.get(
-      sessionArchiveAttemptKey(runtimeId, subject, archiveId),
-    );
-    if (!claim) throw new Error("Session archive must be initialized before upload or completion");
-    return claim;
-  }
-
-  private resolveSessionArchiveUploadTarget(
-    expectedPath: string,
-    advertisedUploadUrl: string | null,
-  ): { url: URL; directCandidate: boolean } {
-    const controlBase = new URL(`${this.baseUrl}/`);
-    const advertised = advertisedUploadUrl ?? expectedPath;
-    let target: URL;
-    try {
-      target = new URL(advertised, controlBase);
-    } catch {
-      throw new Error("Session archive upload_url is not a valid URL");
-    }
-    const expected = new URL(expectedPath, controlBase);
-    if (
-      (target.protocol !== "http:" && target.protocol !== "https:")
-      || target.username
-      || target.password
-      || target.hash
-      || target.pathname !== expected.pathname
-      || target.search !== expected.search
-    ) {
-      throw new Error("Session archive upload_url does not match the initialized archive attempt");
-    }
-
-    if (this.sessionArchiveUploadBaseUrl) {
-      return {
-        url: new URL(expectedPath, this.sessionArchiveUploadBaseUrl),
-        directCandidate: true,
-      };
-    }
-
-    const absoluteAdvertised = /^[a-zA-Z][a-zA-Z\d+.-]*:/.test(advertised)
-      || advertised.startsWith("//");
-    if (!absoluteAdvertised) return { url: expected, directCandidate: false };
-    if (target.hostname !== controlBase.hostname) {
-      throw new Error(
-        `Refusing Session Archive upload_url for unexpected host ${target.hostname}; `
-        + "set MULTIREMI_ARCHIVE_UPLOAD_BASE_URL to explicitly trust a different API host.",
-      );
-    }
-    if (controlBase.protocol === "https:" && target.protocol !== "https:") {
-      throw new Error("Refusing Session Archive upload_url that downgrades the HTTPS control-plane connection");
-    }
-    return { url: target, directCandidate: true };
-  }
-
-  private async hasAttestedSessionArchiveDirectRoute(target: URL): Promise<boolean> {
-    const cacheKey = target.origin;
-    const now = Date.now();
-    const cached = this.sessionArchiveDirectRoutes.get(cacheKey);
-    if (cached && cached.expiresAt > now) return cached.direct;
-
-    let direct = false;
-    try {
-      const resp = await fetch(target, {
-        method: "HEAD",
-        headers: this.headers(),
-        redirect: "error",
-        signal: AbortSignal.timeout(this.sessionArchiveDirectProbeTimeoutMs),
-      });
-      direct = resp.status === 204
-        && resp.headers.get("X-Remi-Archive-Direct")?.trim() === "1";
-      await resp.body?.cancel().catch(() => undefined);
-    } catch {
-      direct = false;
-    }
-    this.sessionArchiveDirectRoutes.set(cacheKey, {
-      direct,
-      expiresAt: now + this.sessionArchiveDirectProbeTtlMs,
-    });
-    return direct;
-  }
-
-  async reportIssueWorkspaceCleaned(
-    issueId: string,
-    runtimeId: string,
-    archive: MultiremiIssueWorkspaceArchiveBinding,
-  ): Promise<void> {
-    await this.maintenanceRpc("gc.workspace_cleaned", {
-      issue_id: issueId,
-      runtime_id: runtimeId,
-      archive_id: archive.archiveId,
-      source_revision: archive.sourceRevision,
-      sha256: archive.sha256,
-    });
-  }
-
   async getChatSessionGcCheck(sessionId: string): Promise<MultiremiDaemonGcStatus> {
     return this.maintenanceRpc("gc.check_chat_session", { session_id: sessionId });
   }
 
-  async getAutopilotRunGcCheck(runId: string): Promise<MultiremiDaemonGcStatus> {
-    return this.maintenanceRpc("gc.check_autopilot_run", { run_id: runId });
-  }
-
   async getTaskGcCheck(taskId: string): Promise<MultiremiDaemonGcStatus> {
     return this.maintenanceRpc("gc.check_task", { task_id: taskId });
+  }
+
+  async reportSubjectReclaimed(payload: DaemonGcSubjectReclaimedPayload): Promise<void> {
+    await this.maintenanceRpc("gc.subject_reclaimed", { ...payload });
+  }
+
+  /** Best effort: the next round's report replaces one that is lost. */
+  reportStorageReport(runtimeId: string, report: StorageReport): void {
+    this.reportTransport?.bestEffort("gc.storage_report", { runtime_id: runtimeId, report: boundStorageReport(report) });
   }
 
   private async get<T>(path: string, signal?: AbortSignal): Promise<T> {
@@ -1619,85 +1293,6 @@ export class MultiremiDaemonClient {
     if (token) headers.Authorization = `Bearer ${token}`;
     return headers;
   }
-}
-
-/**
- * One archive upload subject: an Issue, a Chat session, or a one-shot Task.
- *
- * The kind picks the route segment; the id is the subject itself. Keeping them
- * together means a caller cannot mix an id with the wrong ownership rule.
- */
-export interface SessionArchiveClientSubject {
-  kind: MultiremiSessionArchiveSubjectKind;
-  id: string;
-}
-
-/** Route segment per subject kind, shared by the client and the router. */
-export const SESSION_ARCHIVE_SUBJECT_PATH_SEGMENT: Record<MultiremiSessionArchiveSubjectKind, string> = {
-  issue: "issues",
-  chat: "chats",
-  task: "tasks",
-};
-
-function sessionArchiveAttemptKey(
-  runtimeId: string,
-  subject: SessionArchiveClientSubject,
-  archiveId: string,
-): string {
-  return [runtimeId, subject.kind, subject.id, archiveId].join(":");
-}
-
-function sessionArchiveUploadPath(
-  runtimeId: string,
-  subject: SessionArchiveClientSubject,
-  archiveId: string,
-  attempt: number,
-): string {
-  return `/api/daemon/runtimes/${encodeURIComponent(runtimeId)}`
-    + `/${SESSION_ARCHIVE_SUBJECT_PATH_SEGMENT[subject.kind]}/${encodeURIComponent(subject.id)}`
-    + `/session-archives/${encodeURIComponent(archiveId)}/content?attempt=${attempt}`;
-}
-
-function normalizeSessionArchiveUploadBaseUrl(value: string | null | undefined): URL | null {
-  const raw = value?.trim();
-  if (!raw) return null;
-  let url: URL;
-  try {
-    url = new URL(raw);
-  } catch {
-    throw new Error("MULTIREMI_ARCHIVE_UPLOAD_BASE_URL must be an absolute http(s) URL");
-  }
-  if (
-    (url.protocol !== "http:" && url.protocol !== "https:")
-    || url.username
-    || url.password
-    || url.search
-    || url.hash
-    || (url.pathname !== "/" && url.pathname !== "")
-  ) {
-    throw new Error("MULTIREMI_ARCHIVE_UPLOAD_BASE_URL must be an http(s) origin without credentials, path, query, or fragment");
-  }
-  return url;
-}
-
-function normalizeSessionArchiveProxyMaxBytes(value: number | undefined): number {
-  if (value === undefined) return 8 * 1024 * 1024;
-  if (!Number.isSafeInteger(value) || value < 0) {
-    throw new Error("MULTIREMI_ARCHIVE_PROXY_MAX_BYTES must be a non-negative safe integer");
-  }
-  return value;
-}
-
-function normalizeSessionArchiveDurationMs(
-  value: number | undefined,
-  fallback: number,
-  environmentName: string,
-): number {
-  const duration = value ?? fallback;
-  if (!Number.isSafeInteger(duration) || duration < 1) {
-    throw new Error(`${environmentName} must be a positive safe integer`);
-  }
-  return duration;
 }
 
 async function parseResponse<T>(resp: Response, method: string, path: string): Promise<T> {

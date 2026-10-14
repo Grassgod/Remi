@@ -21,6 +21,7 @@ export function chatSessionCompatibilityResponse(session: MultiremiChatSession):
   status: string;
   has_unread: boolean;
   pinned: boolean;
+  origin: { autopilot_id: string; run_id: string } | null;
   unread_count: number;
   last_message: { content: string; role: string; created_at: string } | null;
   created_at: string;
@@ -37,6 +38,7 @@ export function chatSessionCompatibilityResponse(session: MultiremiChatSession):
     status: session.status,
     has_unread: session.hasUnread,
     pinned: session.pinned,
+    origin: session.origin,
     unread_count: session.unreadCount,
     last_message: session.lastMessage ? { content: session.lastMessage.content, role: session.lastMessage.role, created_at: session.lastMessage.createdAt } : null,
     created_at: session.createdAt,

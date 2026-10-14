@@ -44,10 +44,10 @@ store 的四路实时事件由 [realtime-fanout](../packages/server/src/api/real
 
 当前工作树已经使用服务端 `task.offer` / accept / reject，不再发 HTTP claim 或 dispatch-lease。
 过程消息经 `TaskMessageBatcher` 合并后，由 [TraceFileStore](../packages/server/src/worker/trace-file-store.ts)
-写入 `<workspacesRoot>/.runtime/<session_id>/traces/<task_id>.jsonl`；写入完成后才公布连续 seq。
+写入 `<workspacesRoot>/traces/<主体>/<task_id>.jsonl`；写入完成后才公布连续 seq。
 [TraceStreamer](../packages/server/src/worker/trace-streamer.ts)按游标将规范化事件推给 Live Hub，
 过程事件不再写消息表或 outbox；`trace.read` 反向 RPC 按持久化 Runtime 归属读取有界页。
-daemon 重启会从文件恢复索引与归属，已关闭历史仅按需读取，活跃 trace 按 Hub head 续传。
+daemon 启动只登记 trace 文件路径，首次读取或追加时才建索引，常驻索引按 LRU 限量；已关闭历史仅按需读取，活跃 trace 按 Hub head 续传。服务端只保存指向 daemon 的指针，不再归档或回填 trace。
 **A-2 连接层已接线**：[客户端](../packages/server/src/worker/daemon-protocol-client.ts)每进程一条 socket，
 `hello` 汇总所有 provider lane，`hb` 每 15 秒一次，ack 独立调度。主循环不再发 HTTP 心跳；
 4426、HTTP 426 或 v1 `ready` 会暂停全部 lane 接单，改走每 60 秒一次的 HTTP 升级探测。
@@ -58,13 +58,15 @@ HTTP 心跳 ack 只保留升级请求和 drain，不添加 v1 业务兼容层。
 [daemon 协议 v2](daemon-protocol-v2.md)，取舍见 [ADR 0012](adr/0012-daemon-protocol-v2-single-socket-and-db-derived-downlink.md)。
 任务开始、usage、终态等可靠报告由 [report transport](../packages/server/src/worker/report-transport.ts)
 持久化到本地 outbox，经同一 socket 按任务顺序发送和重试。完成摘要随追加增量计算，
-恢复后的历史任务只在首次需要摘要时分页重建。一次性任务的 Session Archive 上传由持久化后台队列处理，
-不等待上传释放任务；GC 仍须通过现有 ready archive 与物理验证屏障后才能删除目录。
+恢复后的历史任务只在首次需要摘要时分页重建。执行记录（trace、原生会话历史）永久留在 daemon；
+代码目录和运行环境只是缓存，主体（Issue 或 Chat）结束后由 `reclaim.ts`（`packages/daemon/src/agent-runtime/workspace/`）
+按保留期回收，删前对未保存的工作打快照，重开时恢复。布局、生命周期、策略和运维入口见[存储与保留](dev/storage-retention.md)，
+取舍见 [ADR 0018](adr/0018-local-records-and-recyclable-workspaces.md)。
 文件恢复与旧内存版本的升级边界见 [Daemon 升级](daemon-runtime-upgrades.md)。
 
 Runtime 可持有独立的[持久化工作区](dev/runtime-workspaces.md)：绑定 daemon 的已有目录。任务和聊天通过统一的「工作位置」选择项目或本机目录，二者互斥；Agent 可在不同任务中选择不同位置。目录绑定只能在所属机器执行；未指定位置时沿用自动任务目录。
 
-Chat 与 Issue 独立，Chat 创建时保存项目或本机目录选择；Runtime 本机目录不附加项目仓库；项目聊天优先采用项目所选的 `local_directory`，否则在托管 Chat 目录自动准备项目显式声明的仓库，后续复用已有 worktree。未选工作位置时使用自动 Chat 目录。在 Chat 中创建 Issue 不绑定会话，也不继承新 Issue 的上下文；普通私聊不接收 Issue 播报。飞书群 Issue 话题的归属由 [FeishuBotRepo](../packages/server/src/store/repos/feishu-bot-repo.ts)维护，投递和任务领取检查绑定、Issue、工作区、Chat 与 Agent 一致性；归属不明的旧关联按[迁移手册](migrations/chat-issue-decoupling.md)审计恢复。[claim wire](../packages/server/src/api/wire/tasks.ts)保留有预算的会话 projection，仅向已确认的 Issue 话题附加按 `relay:<chat_session_id>` 游标读取的 Issue 日志（最多 100 条，并给出续读位置）；转述任务完成才推进游标。详见 [Chat 契约](chat.md)。
+Chat 与 Issue 独立，Chat 创建时保存项目或本机目录选择；Runtime 本机目录不附加项目仓库；项目聊天优先采用项目所选的 `local_directory`，否则在托管 Chat 目录自动准备项目显式声明的仓库，后续复用已有 worktree。未选工作位置时使用自动 Chat 目录。`run_only` 自动化每次运行新开一个带来源（`origin`）的 Chat，运行判断无需报告时执行 `remi automation quiet`，完成后该 Chat 自动归档；列表默认只显示用户的对话。在 Chat 中创建 Issue 不绑定会话，也不继承新 Issue 的上下文；普通私聊不接收 Issue 播报。飞书群 Issue 话题的归属由 [FeishuBotRepo](../packages/server/src/store/repos/feishu-bot-repo.ts)维护，投递和任务领取检查绑定、Issue、工作区、Chat 与 Agent 一致性；归属不明的旧关联按[迁移手册](migrations/chat-issue-decoupling.md)审计恢复。[claim wire](../packages/server/src/api/wire/tasks.ts)保留有预算的会话 projection，仅向已确认的 Issue 话题附加按 `relay:<chat_session_id>` 游标读取的 Issue 日志（最多 100 条，并给出续读位置）；转述任务完成才推进游标。详见 [Chat 契约](chat.md)。
 
 **飞书聊天**：[controlPlaneConciergeHost / createFeishuTaskHandler](../apps/remi/cli/multiremi.ts)启动 connector；普通消息经 daemon client 提交平台 Chat/Task，再走上面的任务执行链。connector 从 task 事件流回复；去重、运行中 steering、取消与人工请求也使用平台 task。当前 foreground 不实例化 `packages/remi` 的 `Remi` core，不能以该库的 `_process()` 作为当前 bot 入口。
 工作区的 [Feishu bot 配置](../packages/server/src/store/repos/feishu-bot-repo.ts)指定 Agent 和 Runtime；

@@ -1055,21 +1055,3 @@ export function denyDaemonTokenChatSessionWorkspace(
   if (!session) return c.json({ error: "chat session not found" }, 404);
   return denyDaemonTokenWorkspace(c, session.workspaceId, options);
 }
-
-export function denyDaemonTokenAutopilotRunWorkspace(
-  c: Context,
-  store: MultiremiStore,
-  runId: string,
-  options: DaemonWorkspaceDenyOptions = {},
-): Response | null {
-  if (currentAccessToken(c)?.type !== "daemon") return null;
-  const run = store.getAutopilotRun(runId);
-  if (!run) return c.json({ error: "autopilot run not found" }, 404);
-  const task = run.taskId ? store.getTask(run.taskId) : null;
-  if (task) return denyDaemonTokenWorkspace(c, task.workspaceId, options);
-  const issue = run.issueId ? store.getIssue(run.issueId) : null;
-  if (issue) return denyDaemonTokenWorkspace(c, issue.workspaceId, options);
-  const autopilot = store.getAutopilot(run.autopilotId);
-  if (!autopilot) return c.json({ error: "autopilot not found" }, 404);
-  return denyDaemonTokenWorkspace(c, autopilot.workspaceId, options);
-}

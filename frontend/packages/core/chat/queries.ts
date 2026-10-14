@@ -1,6 +1,6 @@
 import { queryOptions } from "@tanstack/react-query";
 import { api } from "../api";
-import type { ChatPendingTask, PendingChatTasksResponse } from "../types";
+import type { ChatOriginFilter, ChatPendingTask, PendingChatTasksResponse } from "../types";
 
 // NOTE on workspace scoping:
 // `wsId` is used only as part of queryKey for cache isolation per workspace.
@@ -11,10 +11,17 @@ import type { ChatPendingTask, PendingChatTasksResponse } from "../types";
 
 export const chatKeys = {
   all: (wsId: string) => ["chat", wsId] as const,
-  /** Full sessions list (active + archived); the dropdown splits locally. */
+  /** The user's own sessions, active + archived; the dropdown splits locally. Prefix of every list below. */
   sessions: (wsId: string) => [...chatKeys.all(wsId), "sessions"] as const,
-  sessionList: (wsId: string, status: "all" | "active" | "archived" = "all") =>
-    status === "all" ? chatKeys.sessions(wsId) : [...chatKeys.sessions(wsId), status] as const,
+  /** Position 3 is the status filter and position 4 the origin filter; absent means "all" and "user". */
+  sessionList: (
+    wsId: string,
+    status: "all" | "active" | "archived" = "all",
+    origin: ChatOriginFilter = "user",
+  ) =>
+    origin !== "user"
+      ? [...chatKeys.sessions(wsId), status, origin] as const
+      : status === "all" ? chatKeys.sessions(wsId) : [...chatKeys.sessions(wsId), status] as const,
   session: (wsId: string, id: string) => [...chatKeys.all(wsId), "session", id] as const,
   pendingTask: (sessionId: string) => ["chat", "pending-task", sessionId] as const,
   /** Aggregate of in-flight chat tasks for the current user — FAB reads this. */
@@ -55,10 +62,11 @@ export function chatSessionsOptions(
   status: "all" | "active" | "archived" = "all",
   /** MUL-472 b: the minimised chat window keeps cached sessions but stops fetching. */
   options: { enabled?: boolean } = {},
+  origin: ChatOriginFilter = "user",
 ) {
   return queryOptions({
-    queryKey: chatKeys.sessionList(wsId, status),
-    queryFn: () => api.listChatSessions({ status }),
+    queryKey: chatKeys.sessionList(wsId, status, origin),
+    queryFn: () => api.listChatSessions({ status, origin }),
     enabled: options.enabled ?? true,
     staleTime: Infinity,
   });

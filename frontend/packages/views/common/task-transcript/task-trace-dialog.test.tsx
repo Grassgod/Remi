@@ -272,7 +272,6 @@ describe("task trace dialog", () => {
   });
 
   it.each([
-    ["backfilling", "Execution trace is being restored"],
     ["lost", "Execution trace was lost"],
     ["not_found", "No execution trace is available"],
   ])("shows the %s state", async (state, label) => {

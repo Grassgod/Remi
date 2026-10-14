@@ -499,7 +499,6 @@ export const DB_REPLY_TRANSITION_EXCEPTIONS: ReadonlySet<string> = new Set([
   "GET /api/autopilots/:id/runs/:runId",
   "GET /api/multiremi/autopilots/:id/runs",
   "GET /api/multiremi/autopilots/:id",
-  "GET /api/daemon/autopilot-runs/:runId/gc-check",
   "GET /api/cli/context", // Task scope resolves a full run and prompt context.
   "GET /api/autopilots", // Autopilot prompt/compiled_prompt collection.
   "GET /api/autopilots/:id", // Full prompt and trigger payload/templates.
@@ -556,21 +555,6 @@ export const DB_REPLY_TRANSITION_EXCEPTIONS: ReadonlySet<string> = new Set([
   "POST /api/workspaces/:id/repos/:repositoryId/wiki/repair-log",
   "POST /api/workspaces/:id/repos/:repositoryId/wiki/outcome",
   "POST /api/workspaces/:id/repos/:repositoryId/wiki/build", // advanceScheduledTargetRuns; C-2 bounded queued reads/data.
-
-  // Audit: archive bytes are external, but SQL metadata has no byte cap.
-  // C-2 requires bounded metadata reads and per-route single-reply evidence.
-  "GET /api/issues/:issueId/session-archives",
-  "POST /api/issues/:issueId/session-archives/:archiveId/verify",
-  "POST /api/issues/:issueId/session-archives/:archiveId/retry",
-  "GET /api/workspaces/:id/session-archive",
-  "PUT /api/workspaces/:id/session-archive",
-  "GET /api/daemon/runtimes/:runtimeId/issues/:issueId/session-archives/status",
-  "POST /api/daemon/runtimes/:runtimeId/issues/:issueId/session-archives/init",
-  "POST /api/daemon/runtimes/:runtimeId/issues/:issueId/session-archives/failure",
-  "GET /api/daemon/runtimes/:runtimeId/issues/:issueId/session-archives/:archiveId/content",
-  "PUT /api/daemon/runtimes/:runtimeId/issues/:issueId/session-archives/:archiveId/content",
-  "POST /api/daemon/runtimes/:runtimeId/issues/:issueId/session-archives/:archiveId/failure",
-  "POST /api/daemon/runtimes/:runtimeId/issues/:issueId/session-archives/:archiveId/complete",
 
   // Audit: even a capped 2-MiB prompt may expand beyond 8 MiB in JSON. C-2/data.
   "GET /api/tasks/:taskId/prompt",
@@ -739,7 +723,6 @@ export const DB_REPLY_TRANSITION_EXCEPTIONS: ReadonlySet<string> = new Set([
   "POST /api/chat/sessions/:sessionId/read", // chat.ts:223; large-column caller.
   "POST /api/comments/:id/reactions", // comments.ts:98; large-column caller.
   "POST /api/comments/:id/resolve", // comments.ts:78; large-column caller.
-  "POST /api/daemon/issues/:issueId/workspace/cleaned", // daemon.ts:1358; large-column caller.
   "POST /api/daemon/scm/git-credentials", // daemon.ts:159; large-column caller.
   "POST /api/daemon/tasks/:taskId/steer/consume", // daemon.ts:1339; large-column caller.
   "POST /api/issues", // issues.ts:791; large-column caller.

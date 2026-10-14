@@ -252,6 +252,7 @@ describe("RuntimesEndpoints daemon retirement", () => {
             local_path: "/private/path",
           }],
           issue_workspaces: [],
+          traces_to_lose: 4,
           impact: {
             runtimes_removed: 2,
             agents_detached: 0,
@@ -278,6 +279,7 @@ describe("RuntimesEndpoints daemon retirement", () => {
       queued_tasks: [{ issue_id: null }],
       local_directory_resources: [{ label: null }],
       runtimes: [],
+      traces_to_lose: 4,
       impact: { runtimes_removed: 2, agents_detached: 0 },
     });
     expect(fetchMock.mock.calls[0]?.[0]).toBe(

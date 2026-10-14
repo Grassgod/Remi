@@ -83,9 +83,9 @@ const proxy = Bun.serve({ hostname: "127.0.0.1", port: proxyPort, fetch(request)
 let web: ReturnType<typeof Bun.spawn> | undefined;
 let browser: Awaited<ReturnType<typeof launchBrowser>> | undefined;
 let logs = "";
-const states = ["ok", "backfilling", "unreachable", "lost", "not_found"] as const;
+const states = ["ok", "unreachable", "lost", "not_found"] as const;
 const expectedText: Record<typeof states[number], string> = {
-  ok: "Live updates", backfilling: "Execution trace is being restored",
+  ok: "Live updates",
   unreachable: "Runtime rt_trace_fixture is offline",
   lost: "Execution trace was lost", not_found: "No execution trace is available",
 };

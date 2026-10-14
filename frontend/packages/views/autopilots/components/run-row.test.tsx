@@ -12,6 +12,7 @@ vi.mock("@multiremi/core/paths", () => ({
   useWorkspacePaths: () => ({
     issueDetail: (id: string) => `/issues/${id}`,
     issueSession: (id: string, sessionId: string) => `/issues/${id}/sessions/${sessionId}`,
+    chat: (sessionId: string) => `/chat?session=${sessionId}`,
   }),
 }));
 
@@ -38,6 +39,7 @@ function makeRun(overrides: Partial<AutopilotRun> = {}): AutopilotRun {
     status: "completed",
     issue_id: null,
     issue_session_id: null,
+    chat_session_id: null,
     task_id: null,
     triggered_at: "2026-08-24T10:00:00Z",
     completed_at: null,
@@ -163,6 +165,37 @@ describe("RunRow SCM details", () => {
       trigger_summary: makeSummary({ wiki_build: true }),
     }));
     expect(screen.getByRole("button", { name: "View execution log" })).toBeInTheDocument();
+  });
+});
+
+describe("RunRow links", () => {
+  it("links a run-only run to the chat it opened and drops the transcript button", () => {
+    renderRun(makeRun({ source: "schedule", task_id: "task-1", chat_session_id: "chat_1" }));
+    expect(screen.getByRole("link")).toHaveAttribute("href", "/chat?session=chat_1");
+    expect(screen.getByText("Chat opened")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "View execution log" })).toBeNull();
+  });
+
+  it("keeps the failure reason next to the chat label", () => {
+    renderRun(makeRun({ source: "schedule", status: "failed", task_id: "task-1", chat_session_id: "chat_1", failure_reason: "agent crashed" }));
+    expect(screen.getByText("Chat opened")).toBeInTheDocument();
+    expect(screen.getByText(/agent crashed/)).toBeInTheDocument();
+  });
+
+  it("keeps the log button on a chat-linked webhook run so its payload stays readable", () => {
+    renderRun(makeRun({ source: "webhook", task_id: "task-1", chat_session_id: "chat_1" }));
+    expect(screen.getByRole("button", { name: "View execution log" })).toBeInTheDocument();
+  });
+
+  it("keeps the transcript button for an older run-only run without a chat", () => {
+    renderRun(makeRun({ source: "schedule", task_id: "task-1" }));
+    expect(screen.queryByRole("link")).toBeNull();
+    expect(screen.getByRole("button", { name: "View execution log" })).toBeInTheDocument();
+  });
+
+  it("prefers the Issue link when a run created an Issue", () => {
+    renderRun(makeRun({ issue_id: "issue-1", issue_session_id: "session-1", chat_session_id: null }));
+    expect(screen.getByRole("link")).toHaveAttribute("href", "/issues/issue-1/sessions/session-1");
   });
 });
 

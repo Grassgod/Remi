@@ -35,7 +35,7 @@ describe("release workflows", () => {
     const ci = readWorkflow("release-build-check.yml");
     expect(JSON.stringify(ci.jobs.guards.steps)).toContain("release:check --base-ref");
     expect(ci.jobs.guards.steps[0].with["fetch-depth"]).toBe(0);
-    expect(ci.jobs["session-archive-platform"].strategy.matrix.os).toEqual(["ubuntu-latest", "macos-latest"]);
+    expect(ci.jobs["runtime-platform"].strategy.matrix.os).toEqual(["ubuntu-latest", "macos-latest"]);
     expect(JSON.stringify(ci)).toContain("runtime prepare --provider claude --provider codex");
   });
 

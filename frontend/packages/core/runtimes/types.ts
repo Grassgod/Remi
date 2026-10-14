@@ -176,6 +176,8 @@ export interface DaemonRetirementPlan {
   queued_tasks: DaemonRetirementTask[];
   local_directory_resources: DaemonRetirementLocalDirectory[];
   issue_workspaces: DaemonRetirementIssueWorkspace[];
+  /** Attempts whose execution trace lives only on this daemon and becomes unreadable. */
+  traces_to_lose: number;
   impact: DaemonRetirementImpact;
 }
 

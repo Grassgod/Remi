@@ -255,14 +255,13 @@ unifiedModelBackendTests("MUL-505 normalized model migration", fixture => {
     expect(runUnifiedModelMigration(db,{reportDir:dir}).mismatches).toEqual([]);
   });
 
-  for (const shape of ["awaiting_human","steer","backfill","undrained"] as const) {
+  for (const shape of ["awaiting_human","steer","undrained"] as const) {
     it(`refuses ${shape} before model mutation`, () => {
       const {db,store}=fixture();
       const agent=store.createAgent({name:"precheck",provider:"codex"});
       const task=store.createTask({agentId:agent.id,prompt:"queued"});
       if (shape==="awaiting_human" || shape==="undrained") db.run("UPDATE multiremi_tasks SET status=? WHERE id=?",[shape==="undrained"?"dispatched":"awaiting_human",task.id]);
       if (shape==="steer") db.run(`INSERT INTO multiremi_task_steer_messages(id,task_id,content,created_at) VALUES ('str_history',?,'unconsumed',?)`,[task.id,task.createdAt]);
-      if (shape==="backfill") db.run(`INSERT INTO multiremi_trace_backfill_progress(subject_kind,subject_id,status,updated_at) VALUES ('task','legacy','running',?)`,[task.createdAt]);
       const before=db.query("SELECT * FROM multiremi_tasks ORDER BY id").all();
       const dir=reportDir();
       expect(()=>runUnifiedModelMigration(db,{reportDir:dir})).toThrow(UnifiedModelPreflightError);

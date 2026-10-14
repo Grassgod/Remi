@@ -155,6 +155,7 @@
       "links": "関連リンク",
       "open_issue": "Issueを開く",
       "open_session": "Agentセッションを開く",
+      "open_chat": "チャットを開く",
       "open_autopilot": "自動化を開く",
       "group_title": "実行サマリー",
       "group_runs": "同日の成功実行 {{count}}件",

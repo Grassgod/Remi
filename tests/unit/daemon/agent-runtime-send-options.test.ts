@@ -40,6 +40,7 @@ function ephemeralContext(agent: Partial<NonNullable<AgentTask["agent"]>>, task:
     } as unknown as AgentTask,
     daemonOptions: { daemonPort: 0, serverUrl: "http://127.0.0.1:1", workspacesRoot: "/tmp" },
     workDir: "/tmp/work",
+    workspaceDir: "/tmp/work",
     signal: new AbortController().signal,
   };
 }
@@ -116,6 +117,32 @@ async function runOnce(config: AgentSessionConfig): Promise<SendOptions> {
   while (!(await iter.next()).done) { /* drain */ }
   return seen[0]!;
 }
+
+// A1: an Issue holder starts in its lane's private directory while repositories and the
+// Wiki working copy stay in the Issue's shared workspace.
+test("an execution outside the shared workspace still exposes the workspace as MULTIREMI_WORKSPACE_ROOT", () => {
+  const context = { ...ephemeralContext({}), workDir: "/data/env/iss_1/ises_1/agt_1/main/1/work", workspaceDir: "/data/work/iss_1" };
+  const config = new AgentRuntime().assemble(context);
+  expect(config.cwd).toBe("/data/env/iss_1/ises_1/agt_1/main/1/work");
+  expect(config.env?.MULTIREMI_WORKSPACE_ROOT).toBe("/data/work/iss_1");
+  // Only Antigravity is confined to the directories it is given.
+  expect(config.addDirs).toBeUndefined();
+});
+
+test("a Chat starts in the workspace itself", () => {
+  const config = new AgentRuntime().assemble(ephemeralContext({}));
+  expect(config.cwd).toBe("/tmp/work");
+  expect(config.env?.MULTIREMI_WORKSPACE_ROOT).toBe("/tmp/work");
+  expect(config.addDirs).toBeUndefined();
+});
+
+test("Antigravity is given the shared workspace when it starts elsewhere", () => {
+  const privateDirectory = { workDir: "/data/env/iss_1/ises_1/agt_1/main/1/work", workspaceDir: "/data/work/iss_1" };
+  const away = new AgentRuntime().assemble({ ...ephemeralContext({ provider: "antigravity" }), ...privateDirectory });
+  expect(away.addDirs).toEqual(["/data/work/iss_1"]);
+  const inside = new AgentRuntime().assemble(ephemeralContext({ provider: "antigravity" }));
+  expect(inside.addDirs).toBeUndefined();
+});
 
 test("ephemeral identity turns the agent's thinking_level into an effort override", () => {
   const config = new AgentRuntime().assemble(ephemeralContext({ thinkingLevel: "xhigh" }));

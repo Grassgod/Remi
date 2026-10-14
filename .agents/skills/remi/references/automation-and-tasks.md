@@ -31,6 +31,8 @@ remi autopilot trigger create --help
 
 `assignee_type` 为 `agent` 或 `squad`；`execution_mode` 为 `create_issue`、`run_only` 或 `trigger_issue`；`status` 为 `active`、`paused` 或 `archived`。让已有自动化只运行任务时选择 `run_only`，需要形成新 Issue 时选择 `create_issue`；`trigger_issue` 的触发配置另有约束，不能当作通用定时执行模式。启用定时任务需要自动化 active、触发器 enabled 且调度器正常；只保存了 cron 表达式不等于会执行。
 
+`run_only` 每次运行新开一个 Chat（记录来源自动化，运行记录的 `chat_session_id` 指向它；`session_policy=reuse_latest` 时在上一次运行的 Chat 里继续）。在自动化运行里，agent 判断本次没有值得报告的内容时，结束前执行 `remi automation quiet`：运行完成后该 Chat 自动归档；失败的运行不算安静。其余情况 Chat 保持活跃并带未读，作为通知。`remi chat list` 默认只列用户的对话，查看自动化开的 Chat 用 `--origin automation`（或 `--origin all`）。
+
 对于现有自动化，增加定时触发器的 JSON 示例：
 
 ```json

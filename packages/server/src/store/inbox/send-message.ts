@@ -2,7 +2,7 @@ import type { MessageHeader, SendMessageInput, SendMessageResult, UnifiedMessage
 import { isHistoricalIssueQuestionRecord } from '@multiremi/contracts';
 import type { CreateTaskInput } from '@multiremi/contracts/types.js';
 import type { CommitEventQueue, StoreContext } from '../context.js';
-import { createId } from '@multiremi/ids.js';
+import { createId, nowIso } from '@multiremi/ids.js';
 import { clampEnvelopeBody } from '../envelope-body.js';
 import { countDelegationPairHops, pairRoundTripLimit, DelegationRoundTripLimitError } from '../repos/tasks-repo.js';
 import { resolveWake } from './wake-policy.js';
@@ -129,6 +129,13 @@ export function sendMessageWithinTransaction(ctx:StoreContext,input:SendMessageI
   if(duplicate){const message=getMessage(ctx,duplicate.id)!;const delivery=message.metadata.delivery_turn_id;
     const turn=ctx.db.query('SELECT id FROM multiremi_turns WHERE id=? OR trigger_message_id=?').get(typeof delivery==='string'?delivery:null,message.id);
     return {message,wake_applied:message.wake_applied,wake_reason:message.wake_reason,...(turn?{turn_id:turn.id}:{})};}
+  // A person or timer writing into an archived Chat reopens it in the same transaction as the message.
+  if(originalChat?.status==='archived'&&sessionId===input.session_id&&(input.sender.type==='member'||input.sender.type==='timer')){
+    ctx.db.run("UPDATE multiremi_chat_sessions SET status='active',updated_at=? WHERE id=? AND status='archived'",[nowIso(),sessionId]);
+    const reopened=ctx.chat().getChatSession(sessionId)!;
+    ctx.emitChatEvent(reopened,'chat:session_updated',{title:reopened.title,status:reopened.status,pinned:reopened.pinned,
+      project_id:reopened.projectId,updated_at:reopened.updatedAt});
+  }
   const decisionTurn=input.message_kind==='reply'&&reply?.message_kind==='decision'&&reply.task_id
     ?ctx.db.query("SELECT * FROM multiremi_turns WHERE id=? AND status IN ('running','awaiting_human')").get(reply.task_id):null;
   const unmet=dependencyGateEnabled()&&targetIssue?.status==='backlog'?ctx.issues().listUnmetPrerequisites(targetIssue.id):[];

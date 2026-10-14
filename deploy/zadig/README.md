@@ -96,8 +96,8 @@ are `http://10.37.117.209:32101` through `:32106`; PPE intentionally has no
 Feishu SSO, needs no custom Header, and must never receive a production Web token.
 
 The all-role API uses `Recreate` so the old single hub owner exits before its
-replacement starts. Its state, config, migration reports, uploads and Session
-Archives have explicit paths under `/srv/multiremi`, mounted from the slot's
+replacement starts. Its state, config, migration reports and uploads have
+explicit paths under `/srv/multiremi`, mounted from the slot's
 `multiremi-data` PVC. Setting `HOME` alone does not establish the OS home path
 used by Bun. Pod replacement preserves the original migration reports beside
 the retained PostgreSQL database; missing reports still fail the migration

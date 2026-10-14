@@ -361,18 +361,6 @@ export interface AnswerIssueDecisionOptions {
   cardCredential?: QuestionCardCredential;
 }
 
-export type IssueDeletionBlockCode =
-  | "issue_not_found"
-  | "issue_has_active_tasks"
-  | "issue_workspace_not_cleaned"
-  | "issue_workspace_archive_invalid"
-  | "issue_deletion_conflict";
-
-export type BeginIssueDeletionResult =
-  | { ok: true }
-  | { ok: false; code: IssueDeletionBlockCode; error: string };
-type IssueDeletionBlockedResult = Extract<BeginIssueDeletionResult, { ok: false }>;
-
 // ── reactions ─────────────────────────────────────────────────────────────────
 // Issue reactions and comment reactions are the same table shape hung off two different parents,
 // so the list/add/remove bodies live once on the repo and are configured by these two specs. Only
@@ -1300,21 +1288,20 @@ export class IssuesRepo {
     const deferredEvents = createCommitEventQueue();
     const deleted = this.ctx.db.transaction(() => {
       this.ctx.lockWorkspaceRuntimeLifecycle(issue.workspaceId);
-      this.ctx.lockIssueArchiveLifecycle(id);
+      this.ctx.lockIssueLifecycle(id);
       const current = this.getIssue(id);
       if (!current || current.workspaceId !== issue.workspaceId) return false;
-      if (this.issueDeletionBlockWithinLifecycleLock(id)) return false;
-      this.ctx.db.run(
-        "UPDATE multiremi_issues SET lifecycle_state = 'deleting' WHERE id = ?",
-        [id],
-      );
+      if (this.hasActiveIssueTasks(id)) return false;
       return this.deleteIssueRowsWithinLifecycleLock(current, deferredEvents);
     })();
     this.ctx.emitCommitEvents(deferredEvents);
     return deleted;
   }
 
-  /** Delete every fenced Issue in one control-plane transaction. */
+  /**
+   * Delete the Issues in one control-plane transaction. An Issue with an active
+   * task blocks the whole batch, so a late task start never leaves it half applied.
+   */
   deleteIssuesAtomically(ids: string[]): { deleted: number } {
     const uniqueIds = [...new Set(ids)].sort();
     if (uniqueIds.length === 0) return { deleted: 0 };
@@ -1326,17 +1313,15 @@ export class IssuesRepo {
       for (const workspaceId of [...new Set(initial.map((issue) => issue.workspaceId))].sort()) {
         this.ctx.lockWorkspaceRuntimeLifecycle(workspaceId);
       }
-      for (const id of uniqueIds) this.ctx.lockIssueArchiveLifecycle(id);
+      for (const id of uniqueIds) this.ctx.lockIssueLifecycle(id);
 
       const current: MultiremiIssue[] = [];
       for (const id of uniqueIds) {
         const issue = this.getIssue(id);
         if (!issue) continue;
-        const block = this.issueDeletionBlockWithinLifecycleLock(id);
-        if (block) throw Object.assign(new Error(block.error), { code: block.code, issueId: id });
-        if (this.issueLifecycleState(id) !== "deleting") {
-          throw Object.assign(new Error("Issue deletion was not fenced"), {
-            code: "issue_deletion_conflict",
+        if (this.hasActiveIssueTasks(id)) {
+          throw Object.assign(new Error("active Issue tasks must finish before hard deletion"), {
+            code: "issue_has_active_tasks",
             issueId: id,
           });
         }
@@ -1363,9 +1348,8 @@ export class IssuesRepo {
     runAutopilotRunMutation(this.ctx.db, "UPDATE multiremi_autopilot_run_records SET issue_id = NULL WHERE issue_id = ?", [id]);
     // PostgreSQL intentionally does not rely on FK cascades and SQLite tests
     // may run with them disabled. Remove the machine-local checkout record
-    // and archive control-plane rows explicitly so deleting an Issue cannot
-    // leave a retirement blocker or orphaned archive metadata.
-    this.ctx.db.run("DELETE FROM multiremi_session_archives WHERE issue_id = ?", [id]);
+    // explicitly so deleting an Issue cannot leave a retirement blocker. The
+    // daemon forgets the workspace on its own when the server stops knowing the Issue.
     this.ctx.db.run("DELETE FROM multiremi_issue_workspaces WHERE issue_id = ?", [id]);
     const removed = this.ctx.db.run("DELETE FROM multiremi_issues WHERE id = ?", [id]);
     if (issue.projectId) {
@@ -1374,134 +1358,8 @@ export class IssuesRepo {
     return removed.changes === 1;
   }
 
-  /**
-   * Persist the hard-delete fence before archive paths are snapshotted.
-   * Re-entering an already deleting Issue is intentional: a process may stop
-   * after writing the durable purge receipt and the next request must be able
-   * to resume the same deletion.
-   */
-  beginIssueDeletion(id: string): BeginIssueDeletionResult {
-    const issue = this.getIssue(id);
-    if (!issue) {
-      return { ok: false, code: "issue_not_found", error: "issue not found" };
-    }
-    return this.ctx.db.transaction(() => {
-      this.ctx.lockWorkspaceRuntimeLifecycle(issue.workspaceId);
-      this.ctx.lockIssueArchiveLifecycle(id);
-      const current = this.getIssue(id);
-      if (!current || current.workspaceId !== issue.workspaceId) {
-        return { ok: false, code: "issue_not_found", error: "issue not found" } as const;
-      }
-      const block = this.issueDeletionBlockWithinLifecycleLock(id);
-      if (block) return block;
-      const state = this.issueLifecycleState(id);
-      if (state !== "active" && state !== "deleting") {
-        return {
-          ok: false,
-          code: "issue_deletion_conflict",
-          error: "issue deletion lifecycle is not writable",
-        } as const;
-      }
-      this.ctx.db.run(
-        "UPDATE multiremi_issues SET lifecycle_state = 'deleting' WHERE id = ?",
-        [id],
-      );
-      return { ok: true } as const;
-    })();
-  }
-
-  abortIssueDeletion(id: string): void {
-    const issue = this.getIssue(id);
-    if (!issue) return;
-    this.ctx.db.transaction(() => {
-      this.ctx.lockWorkspaceRuntimeLifecycle(issue.workspaceId);
-      this.ctx.lockIssueArchiveLifecycle(id);
-      this.ctx.db.run(
-        "UPDATE multiremi_issues SET lifecycle_state = 'active' WHERE id = ? AND lifecycle_state = 'deleting'",
-        [id],
-      );
-    })();
-  }
-
-  deletionLifecycleState(id: string): string | null {
-    return this.getIssue(id) ? this.issueLifecycleState(id) : null;
-  }
-
-  private issueDeletionBlockWithinLifecycleLock(id: string): IssueDeletionBlockedResult | null {
-    if (this.ctx.tasks().listTasksForIssue(id).some((task) => isActiveTaskStatus(task.status))) {
-      return {
-        ok: false,
-        code: "issue_has_active_tasks",
-        error: "active Issue tasks must finish before hard deletion",
-      };
-    }
-    const workspace = this.ctx.db.query(
-      `SELECT status, cleaned_archive_id, cleaned_archive_source_revision,
-              cleaned_archive_sha256
-       FROM multiremi_issue_workspaces WHERE issue_id = ? AND workspace_id = ?`,
-    ).get(id, this.getIssue(id)!.workspaceId) as { status?: unknown } | null;
-    if (workspace) {
-      if (String(workspace.status) !== "cleaned") {
-        return {
-          ok: false,
-          code: "issue_workspace_not_cleaned",
-          error: "issue workspace must be archived and cleaned before hard deletion",
-        };
-      }
-      const archiveId = String((workspace as Row).cleaned_archive_id ?? "");
-      const sourceRevision = String((workspace as Row).cleaned_archive_source_revision ?? "");
-      const sha256 = String((workspace as Row).cleaned_archive_sha256 ?? "");
-      const exactReady = archiveId && sourceRevision && sha256
-        ? this.ctx.db.query(
-          `SELECT 1 AS present FROM multiremi_session_archives
-           WHERE id = ? AND issue_id = ? AND source_revision = ? AND sha256 = ?
-             AND status = 'ready'`,
-        ).get(archiveId, id, sourceRevision, sha256)
-        : null;
-      return exactReady
-        ? null
-        : {
-          ok: false,
-          code: "issue_workspace_archive_invalid",
-          error: "cleaned Issue workspace is not bound to an exact ready session archive",
-        };
-    }
-    // Missing workspace state is safe only for an Issue that was never
-    // materialized. Any task/session/archive proves a Runtime touched it, so
-    // absence of the cleanup acknowledgement must fail closed.
-    // cmt_v70r9qrr49uc: global evidence keeps the deletion gate unchanged by a move.
-    const hasTask = Boolean(this.ctx.db.query(
-      "SELECT 1 AS present FROM multiremi_turn_execution_records WHERE issue_id = ? LIMIT 1",
-    ).get(id));
-    const hasArchive = Boolean(this.ctx.db.query(
-      "SELECT 1 AS present FROM multiremi_session_archives WHERE issue_id = ? LIMIT 1",
-    ).get(id));
-    const hasMaterializedSession = Boolean(this.ctx.db.query(
-      `SELECT 1 AS present
-       FROM multiremi_issue_sessions s
-       WHERE s.issue_id = ? AND (
-         s.is_default = 0
-         OR EXISTS (SELECT 1 FROM multiremi_conversation_log e WHERE e.session_id = s.id AND e.kind <> 'head' AND e.seq > 0)
-         OR EXISTS (SELECT 1 FROM multiremi_session_participants p WHERE p.session_id = s.id)
-         OR EXISTS (SELECT 1 FROM multiremi_agent_lane_records l WHERE l.session_id = s.id)
-       )
-       LIMIT 1`,
-    ).get(id));
-    const hasRuntimeEvidence = hasTask || hasArchive || hasMaterializedSession;
-    return hasRuntimeEvidence
-      ? {
-        ok: false,
-        code: "issue_workspace_not_cleaned",
-        error: "issue workspace cleanup state is missing for a materialized Issue",
-      }
-      : null;
-  }
-
-  private issueLifecycleState(id: string): string {
-    const row = this.ctx.db.query(
-      "SELECT lifecycle_state FROM multiremi_issues WHERE id = ?",
-    ).get(id) as { lifecycle_state?: unknown } | null;
-    return String(row?.lifecycle_state ?? "active");
+  private hasActiveIssueTasks(id: string): boolean {
+    return this.ctx.tasks().listTasksForIssue(id).some((task) => isActiveTaskStatus(task.status));
   }
 
   batchDeleteIssues(input: BatchDeleteIssuesInput): { deleted: number } {
@@ -2459,7 +2317,8 @@ export class IssuesRepo {
       this.ctx.db.run(
         `UPDATE multiremi_issue_workspaces
          SET workspace_id = ?, issue_key = ?, runtime_id = NULL, root_path = '', branch_name = '',
-             repos = '[]', last_task_id = NULL, updated_at = ?
+             repos = '[]', last_task_id = NULL, snapshot_json = NULL, snapshot_at = NULL, unsaved_work = 0,
+             updated_at = ?
          WHERE issue_id = ? AND status = 'cleaned'`,
         [nextWorkspaceId, formatIssueKey(movedNumber!), updatedAt, id],
       );

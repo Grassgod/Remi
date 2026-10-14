@@ -37,7 +37,7 @@ Multiremi 的自动回写。
 - 工作流根据 `ISSUE_KEY` 原子分配空闲 slot。同一 Issue 重试会复用原租约；不要自行挑选、抢占或删除 namespace。
 - 每个 PPE 自部署成功起保留 24 小时，到期由平台自动回收。TTL 是异常兜底，正常验收完成后仍应主动释放。
 - 全局最多并发执行 3 条 PPE 工作流。已有 3 条在运行时等待，不得绕过并发限制。
-- PPE 只承载测试数据，不得连接或复制生产 PostgreSQL、OpenViking、Secret、上传目录或 session archive。
+- PPE 只承载测试数据，不得连接或复制生产 PostgreSQL、OpenViking、Secret、上传目录。
 - 不得调用生产 Platform Updater、发布正式版本、打 Tag、升级 daemon 或修改生产 Nginx。
 
 ## 选择测试模式

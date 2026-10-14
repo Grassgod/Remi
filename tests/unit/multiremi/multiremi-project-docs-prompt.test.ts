@@ -166,7 +166,7 @@ describe("bootstrap and delta task prompts", () => {
     expect(artifact.prompt).toContain('remi memory search "<query>"');
     expect(artifact.prompt).toContain("remi memory get <slug-or-id>");
     expect(artifact.prompt).not.toMatch(/remi (?:issue (?:comment|session)|memory (?:recall|read|remember|forget)|wiki (?:read|history))\b/);
-    expect(artifact.prompt).toContain("Wiki is materialized in `./wiki`");
+    expect(artifact.prompt).toContain("Wiki is materialized in `$MULTIREMI_WORKSPACE_ROOT/wiki`");
     expect(artifact.prompt).toContain("`./.multiremi/sessions/`");
     expect(artifact.prompt).toContain("`remi wiki status`");
     expect(artifact.prompt).toContain("`remi wiki push`");
@@ -322,6 +322,15 @@ describe("bootstrap and delta task prompts", () => {
     expect(prompt).toContain(`## Current Request\n${runbook}`);
     expect(prompt.match(new RegExp(runbook.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "g"))).toHaveLength(1);
     expect(prompt).toContain("## Autopilot Context");
+  });
+
+  it("tells an automation run's agent how to stay quiet only when the run has a Chat", () => {
+    const store = createSnapshotStore();
+    const { task } = createProjectTask(store);
+    const run = { ...task, autopilotRunId: "run_1", autopilotTitle: "Nightly", autopilotSource: "schedule" } as any;
+
+    expect(buildTaskPrompt({ ...run, chatSessionId: "chat_1" })).toContain("remi automation quiet");
+    expect(buildTaskPrompt({ ...run, chatSessionId: null })).not.toContain("remi automation quiet");
   });
 
   it("does not advertise provider history without an Issue Session workspace", () => {

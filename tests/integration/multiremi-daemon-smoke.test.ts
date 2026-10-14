@@ -5,17 +5,16 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, spyOn } from "bun
 import type { Database } from "bun:sqlite";
 import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { createHash } from "node:crypto";
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import * as os from "node:os";
-import { isAbsolute, join } from "node:path";
+import { dirname, isAbsolute, join } from "node:path";
 import type { AcpProviderOptions } from "@acp/index.js";
 import type { MultiremiRuntimeModel } from "@multiremi/contracts/types.js";
 import type { AgentResponse, SendOptions } from "@shared/contracts/provider-types.js";
 import * as relayHttp from "@shared/relay-http.js";
 import { startMultiremiServer as startFixtureServer, TestMultiremiDaemon } from "../fixtures/daemon-protocol.js";
-import { bindReportFrames } from "../fixtures/report-session.js";
 import type { MultiremiDaemonOptions } from "@multiremi/daemon.js";
 import type { DaemonProtocolLayer } from "@multiremi/api/daemon-protocol/index.js";
 import {
@@ -161,7 +160,7 @@ describe("Bun Multiremi daemon smoke", () => {
       const sideIssue = createResponsibleTestIssue(store, { title: "Discuss outside the user directory", runtime_workspace_id: workspace.id });
       const parent = store.getOrCreateDefaultIssueSession(sideIssue.id);
       const side = store.createIssueSession(sideIssue.id, { title: "Side", parentSessionId: parent.id });
-      sideWorkDir = join(daemonState, ".runtime", side.id, agent.id, "1", "work");
+      sideWorkDir = join(daemonState, "env", sideIssue.id, side.id, agent.id, "main", "1", "work");
       // Emulate an older server returning the parent directory in a side claim.
       const client = (daemon as any).client;
       const claim = client.claimTask.bind(client);
@@ -416,16 +415,16 @@ describe("Bun Multiremi daemon smoke", () => {
 
       const claudeOptions = captured.get("claude")!;
       const codexOptions = captured.get("codex")!;
-      expect(claudeOptions.cwd).toStartWith(join(workspacesRoot, ".runtime-probe"));
-      expect(codexOptions.cwd).toStartWith(join(workspacesRoot, ".runtime-probe"));
+      expect(claudeOptions.cwd).toStartWith(join(workspacesRoot, ".daemon", "probe"));
+      expect(codexOptions.cwd).toStartWith(join(workspacesRoot, ".daemon", "probe"));
       expect(claudeOptions.env).toMatchObject({
         ANTHROPIC_API_KEY: "",
         ANTHROPIC_AUTH_TOKEN: "claude-probe-secret",
         ANTHROPIC_BASE_URL: "https://gateway-claude.example",
       });
       expect(codexOptions.env).toMatchObject({ OPENAI_API_KEY: "codex-probe-secret" });
-      expect(claudeOptions.env?.CLAUDE_CONFIG_DIR).toStartWith(join(workspacesRoot, ".runtime-probe"));
-      expect(codexOptions.env?.CODEX_HOME).toStartWith(join(workspacesRoot, ".runtime-probe"));
+      expect(claudeOptions.env?.CLAUDE_CONFIG_DIR).toStartWith(join(workspacesRoot, ".daemon", "probe"));
+      expect(codexOptions.env?.CODEX_HOME).toStartWith(join(workspacesRoot, ".daemon", "probe"));
       const claudeSettings = readFileSync(join(claudeOptions.env!.CLAUDE_CONFIG_DIR!, "settings.json"), "utf8");
       const codexConfig = readFileSync(join(codexOptions.env!.CODEX_HOME!, "config.toml"), "utf8");
       expect(claudeSettings).toContain("https://gateway-claude.example");
@@ -887,18 +886,15 @@ describe("Bun Multiremi daemon smoke", () => {
       });
 
       daemonRun = daemon.start();
-      // The task-subject archive runs in the daemon's `finally`, after the
-      // completion frame is acknowledged, so wait for it too.
       await waitForCondition(() => store.getTask(task.id)?.status === "completed"
-        && daemonTraceService(smokeLayer).sink.head(task.id) === 7
-        && store.listSessionArchivesForSubject("task", task.id).some(archive => archive.status === "ready"), 5_000);
+        && daemonTraceService(smokeLayer).sink.head(task.id) === 7, 5_000);
 
       const completed = store.getTask(task.id)!;
       expect(completed.status).toBe("completed");
       expect(completed.runtimeId).toBe(expectedRuntimeId);
       expect(completed.result).toBe("Smoke completed");
       expect(completed.sessionId).toBe("sess-smoke");
-      const expectedWorkDir = join(workspacesRoot, "tasks", task.id);
+      const expectedWorkDir = join(workspacesRoot, "work", task.id);
       expect(completed.workDir).toBe(expectedWorkDir);
       expect(store.getRuntime(expectedRuntimeId)?.daemonId).toBe("daemon-smoke");
       expect(providerOptions).toHaveLength(1);
@@ -916,24 +912,25 @@ describe("Bun Multiremi daemon smoke", () => {
       });
       const temporaryProviderHome = join(
         workspacesRoot,
-        ".runtime",
+        "env",
+        task.id,
         task.id,
         agent.id,
+        "main",
         "1",
         "home",
       );
       expect(providerOptions[0]?.env?.CLAUDE_CONFIG_DIR).toBe(temporaryProviderHome);
-      // The one-shot runtime root stays for archive-backed GC; reaching the
-      // terminal state archives it exactly once under the task subject.
+      // The one-shot task's environment and record stay on the daemon; its
+      // private temp is gone with the execution.
       expect(existsSync(temporaryProviderHome)).toBe(true);
-      expect(store.listSessionArchivesForSubject("task", task.id)).toMatchObject([{
-        subjectKind: "task",
-        subjectId: task.id,
-        issueId: null,
-        runtimeId: expectedRuntimeId,
-        status: "ready",
-        metadata: { source: ".runtime" },
-      }]);
+      expect(readdirSync(join(workspacesRoot, "env", task.id, "tmp"))).toEqual([]);
+      expect(JSON.parse(readFileSync(join(workspacesRoot, "registry", `${task.id}.json`), "utf8"))).toMatchObject({
+        subject: { kind: "task", id: task.id }, workspace_id: "local", state: "active", external_work_dir: null,
+      });
+      expect(existsSync(join(workspacesRoot, "traces", task.id, `${task.id}.jsonl`))).toBe(true);
+      expect(existsSync(join(workspacesRoot, ".runtime"))).toBe(false);
+      expect(existsSync(join(workspacesRoot, "registry", ".layout-v1"))).toBe(true);
       const injectedToken = providerOptions[0].env?.MULTIREMI_TOKEN;
       expect(injectedToken).toStartWith("mat_");
       expect(injectedToken).not.toBe(daemonToken.token);
@@ -1101,7 +1098,7 @@ describe("Bun Multiremi daemon smoke", () => {
       .toEqual([{ type: "execution", meta: { agentName: "Claude ordinary-empty", provider: "claude" } }]);
   });
 
-  it("reconciles, materializes and retains a direct task Agent Plugin runtime for archive-backed GC", async () => {
+  it("reconciles, materializes and retains a direct task Agent Plugin runtime in its lane generation", async () => {
     const { store, workDir: root } = daemonTestBed("multiremi-daemon-plugin-");
     const userRepo = join(root, "user-repo");
     const workspacesRoot = join(root, "workspaces");
@@ -1147,7 +1144,6 @@ describe("Bun Multiremi daemon smoke", () => {
         repoCacheRoot: join(root, ".repo-cache"),
         pluginCacheRoot: join(root, ".plugin-cache"),
         gcEnabled: false,
-        gcTtlMs: 0,
         agentPluginProviderPreflight: async () => {},
         providerFactory: (options) => {
           providerPluginPaths = options.pluginPaths ?? [];
@@ -1178,8 +1174,7 @@ describe("Bun Multiremi daemon smoke", () => {
 
       void daemon.start();
       await waitForCondition(() => store.getTask(task.id)?.status === "completed"
-        && store.listAgentPluginRuntimeStates({ runtimeId: expectedRuntimeId }).some(state => state.status === "ready")
-        && store.listSessionArchivesForSubject("task", task.id).some(archive => archive.status === "ready"), 5_000);
+        && store.listAgentPluginRuntimeStates({ runtimeId: expectedRuntimeId }).some(state => state.status === "ready"), 5_000);
       await daemon.stopAndDrainTestWork();
       expect(store.getTask(task.id)).toMatchObject({ status: "completed", result: "Plugin completed" });
       expect(store.listAgentPluginRuntimeStates({ runtimeId: expectedRuntimeId })).toMatchObject([{
@@ -1190,14 +1185,11 @@ describe("Bun Multiremi daemon smoke", () => {
       expect(sendPluginFingerprint).toBe(store.getTask(task.id)?.executionFingerprint!);
       expect(pluginBody).toBe("# Runtime proof\n");
       expect(existsSync(join(userRepo, ".remi-runtime"))).toBe(false);
-      expect(existsSync(join(workspacesRoot, ".runtime", task.id))).toBe(true);
-      expect(store.listSessionArchivesForSubject("task", task.id)).toMatchObject([{ status: "ready" }]);
+      // The Plugin runtime sits in the lane generation of the task's environment, not in its cwd.
+      const laneGeneration = join(workspacesRoot, "env", task.id, task.id, agent.id, "main", "1");
+      expect(existsSync(join(laneGeneration, ".remi-runtime", "executions", task.id))).toBe(true);
+      expect(existsSync(join(workspacesRoot, "work", task.id, ".remi-runtime"))).toBe(false);
       expect(existsSync(join(root, ".plugin-cache", plugin.activeVersion!.artifactDigest, "payload"))).toBe(true);
-      // Workspace GC, not task completion, reclaims the terminal task's runtime.
-      // The daemon is stopped, so its GC checks go through the report frames.
-      bindReportFrames((daemon as any).client, store);
-      expect(await daemon.runGcOnce()).toMatchObject({ cleaned: 2, orphaned: 0 });
-      expect(existsSync(join(workspacesRoot, ".runtime", task.id))).toBe(false);
     } finally {
       await pluginDaemon?.stopAndDrainTestWork();
       server.stop(true);
@@ -1353,56 +1345,111 @@ describe("Bun Multiremi daemon smoke", () => {
     }
   });
 
-  it("runs independent delegations in one Issue concurrently without overwriting task context", async () => {
+  it("runs independent delegations in one Issue concurrently in private directories over one shared repository and Wiki", async () => {
     const { store, workDir } = daemonTestBed("multiremi-issue-parallel-");
+    const sourceRepo = createSourceRepo(join(workDir, "_source", "repo"));
+    store.updateWorkspace("local", {
+      settings: { github_enabled: false, co_authored_by_enabled: false },
+      repos: [{ url: sourceRepo, description: "shared repository" }],
+    });
+    const project = store.createProject({ title: "Parallel Project" });
+    store.createProjectDoc(project.id, { kind: "wiki", title: "Guide", path: "guide.md", body: "Shared Wiki page." });
+    const skill = store.createSkill({ name: "Parallel Skill", content: "# Parallel Skill\n" });
     const leader = store.createAgent({ name: "Leader", provider: "claude" });
     const worker = store.createAgent({ name: "Worker", provider: "claude" });
-    const issue = createResponsibleTestIssue(store, { title: "Parallel Issue" });
+    store.setAgentSkills(worker.id, { skill_ids: [skill.id!] });
+    const issue = createResponsibleTestIssue(store, { title: "Parallel Issue", project_id: project.id });
     const tasks = ["one", "two"].map((scope) => store.createTask({
       agentId: worker.id, issueId: issue.id, prompt: scope,
       delegatedByAgentId: leader.id, delegationId: `dlg_${scope}`,
     }));
     const credential = await store.createAccessToken({ name: "Parallel daemon", type: "daemon", workspaceId: "local" });
     const server = startMultiremiServer({ store, scheduler: null, authToken: "parallel-test", hostname: "127.0.0.1", port: 0 });
+    const workspaces = join(workDir, "workspaces");
+    const workspace = join(workspaces, "work", issue.id);
     const release = deferred<void>();
     const bothStarted = deferred<void>();
-    const contexts = new Map<string, string>();
+    const executions: Array<{ cwd: string; workspaceRoot: string | undefined; prompt: string; context: string }> = [];
     const homes = new Set<string>();
     const daemon = new MultiremiDaemon({
       sshMeshManager: disabledSshMeshRuntime(),
       serverUrl: `http://127.0.0.1:${server.port}`, token: credential.token,
       runtimeName: "parallel", provider: "claude", workspaceId: "local", daemonPort: 0,
-      workspacesRoot: join(workDir, "workspaces"), repoCacheRoot: join(workDir, ".repo-cache"),
+      workspacesRoot: workspaces, repoCacheRoot: join(workDir, ".repo-cache"),
       pollIntervalMs: 25, maxConcurrency: 2,
       providerFactory: (options) => messageProviderFactory({
         text: "done", sessionId: options.cwd!, requestId: "parallel",
-        onSend: async () => {
+        onSend: async (prompt) => {
           const contextPath = join(options.cwd!, ".multiremi", "task.json");
           const context = readFileSync(contextPath, "utf8");
-          contexts.set(contextPath, context);
+          executions.push({ cwd: options.cwd!, workspaceRoot: options.env!.MULTIREMI_WORKSPACE_ROOT, prompt, context });
           homes.add(options.env!.CLAUDE_CONFIG_DIR!);
-          if (contexts.size === 2) bothStarted.resolve();
+          if (executions.length === 2) bothStarted.resolve();
           const read = await fetch(`http://127.0.0.1:${server.port}/api/sessions/${tasks[0]!.issueSessionId}/messages?from=0&to=${store.getConversationLogHead(tasks[0]!.issueSessionId!)!.headSeq}`, {
             headers: { Authorization: `Bearer ${options.env!.MULTIREMI_TOKEN}` },
           });
           expect(read.status).toBe(200);
           await release.promise;
+          // A concurrent holder never rewrites this execution's task context.
           expect(readFileSync(contextPath, "utf8")).toBe(context);
         },
       })(options),
     });
+    // Preparing the shared workspace (repositories and the Wiki working copy) is one execution at a time.
+    let preparing = 0;
+    let preparedConcurrently = 0;
+    let prepared = 0;
+    const prepareTaskWorkspace = (daemon as any).prepareTaskWorkspace.bind(daemon);
+    (daemon as any).prepareTaskWorkspace = async (...args: unknown[]) => {
+      preparedConcurrently = Math.max(preparedConcurrently, ++preparing);
+      try {
+        await Bun.sleep(40);
+        return await prepareTaskWorkspace(...args);
+      } finally {
+        preparing--;
+        prepared++;
+      }
+    };
     const running = daemon.start();
     try {
-      await withTimeout(bothStarted.promise, 5_000, "Issue delegations serialized in daemon");
+      await withTimeout(bothStarted.promise, 10_000, "Issue delegations serialized in daemon");
       expect(homes.size).toBe(2);
       // `dispatched -> running` is written back asynchronously by the daemon, so poll instead of
       // reading the status right after both providers started.
       await waitForCondition(() => tasks.every((task) => store.getTask(task.id)?.status === "running"), 5_000);
-      for (const task of tasks) expect([...contexts.values()].some((value) => value.includes(task.id))).toBe(true);
-      expect(store.getIssueWorkspace(issue.id)?.rootPath).toBe(join(workDir, "workspaces", "issues", issue.key));
+      expect(prepared).toBe(2);
+      expect(preparedConcurrently).toBe(1);
+
+      // Each execution starts in the private work directory of its own lane, with its own task context and skills.
+      const cwds = executions.map((execution) => execution.cwd);
+      expect(new Set(cwds).size).toBe(2);
+      for (const cwd of cwds) {
+        expect(cwd).toStartWith(join(workspaces, "env", issue.id));
+        expect(cwd.endsWith(`${join("1", "work")}`)).toBe(true);
+        expect(readFileSync(join(cwd, ".claude", "skills", "parallel-skill", "SKILL.md"), "utf8")).toContain("# Parallel Skill");
+      }
+      expect(executions.map((execution) => JSON.parse(execution.context).task_id).sort()).toEqual(tasks.map((task) => task.id).sort());
+      // Nothing per-execution lives in the workspace the holders share.
+      expect(existsSync(join(workspace, ".multiremi", "task.json"))).toBe(false);
+      expect(existsSync(join(workspace, ".claude"))).toBe(false);
+
+      // Both reach the same repository checkout and Wiki working copy, by absolute path.
+      const branch = `agent/${issue.key}`;
+      expect(gitOutput(join(workspace, "repo"), ["branch", "--show-current"])).toBe(branch);
+      expect(readFileSync(join(workspace, "wiki", "guide.md"), "utf8")).toBe("Shared Wiki page.\n");
+      for (const execution of executions) {
+        expect(execution.workspaceRoot).toBe(workspace);
+        expect(existsSync(join(execution.cwd, "repo"))).toBe(false);
+        expect(existsSync(join(execution.cwd, "wiki"))).toBe(false);
+        expect(execution.prompt).toContain(`at \`${join(workspace, "repo")}\` on branch \`${branch}\``);
+        expect(execution.prompt).toContain(`Shared code root: \`${workspace}\``);
+        expect(execution.prompt).toContain(`Project Wiki is materialized in \`$MULTIREMI_WORKSPACE_ROOT/wiki\` (absolute path \`${join(workspace, "wiki")}\`)`);
+        expect(execution.prompt).not.toContain("`./wiki`");
+      }
+      expect(store.getIssueWorkspace(issue.id)?.rootPath).toBe(workspace);
       release.resolve();
       await waitForCondition(() => tasks.every((task) => store.getTask(task.id)?.status === "completed"), 5_000);
-      expect(store.getIssueWorkspace(issue.id)?.rootPath).toBe(join(workDir, "workspaces", "issues", issue.key));
+      expect(store.getIssueWorkspace(issue.id)?.rootPath).toBe(workspace);
     } finally {
       release.resolve();
       daemon.stop();
@@ -1863,7 +1910,7 @@ describe("Bun Multiremi daemon smoke", () => {
       await daemon.start();
 
       expect(store.getTask(task.id)?.status).toBe("completed");
-      const worktree = join(workDir, "workspaces", "issues", issue.key, "repo");
+      const worktree = join(workDir, "workspaces", "work", issue.id, "repo");
       expect(existsSync(join(worktree, "README.md"))).toBe(true);
       const branch = gitOutput(worktree, ["branch", "--show-current"]);
       expect(branch).toBe(`agent/${issue.key}`);
@@ -1874,7 +1921,7 @@ describe("Bun Multiremi daemon smoke", () => {
       expect(store.listIssueSessionResults(issue.id)).toHaveLength(0);
       expect(store.getIssueWorkspace(issue.id)).toMatchObject({
         issueId: issue.id,
-        rootPath: join(workDir, "workspaces", "issues", issue.key),
+        rootPath: join(workDir, "workspaces", "work", issue.id),
         branchName: branch,
         status: "ready",
         repos: [{ repoName: "repo", worktreePath: worktree, branchName: branch }],
@@ -2064,11 +2111,14 @@ describe("Bun Multiremi daemon smoke", () => {
         try { await daemon.start(); }
         finally { await daemon.stopAndDrainTestWork(); }
         expect(store.getTask(task.id)).toMatchObject({ status: "completed", sessionId: "bound-chat-provider",
-          workDir: join(workspacesRoot, "chats", chat.id) });
+          workDir: join(workspacesRoot, "work", chat.id) });
       }
       expect(sends[1]?.sessionId).toBe("bound-chat-provider");
       expect(store.listIssueSessions(issue.id).map(session => session.id)).toEqual(originalIssueSessions);
-      expect(existsSync(join(workspacesRoot, "issues", issue.key))).toBe(false);
+      expect(existsSync(join(workspacesRoot, "work", issue.id))).toBe(false);
+      expect(JSON.parse(readFileSync(join(workspacesRoot, "registry", `${chat.id}.json`), "utf8")))
+        .toMatchObject({ subject: { kind: "chat", id: chat.id }, issue_key: null });
+      expect(existsSync(join(workspacesRoot, "registry", `${issue.id}.json`))).toBe(false);
     } finally { server.stop(true); }
   });
 
@@ -2176,7 +2226,7 @@ describe("Bun Multiremi daemon smoke", () => {
 
     try {
       await runDaemonOnce();
-      const chatWorkDir = join(workspacesRoot, "chats", session.id);
+      const chatWorkDir = join(workspacesRoot, "work", session.id);
 
       expect(store.getTask(first.task.id)?.status).toBe("completed");
       expect(store.getChatSession(session.id)).toMatchObject({
@@ -2211,22 +2261,21 @@ describe("Bun Multiremi daemon smoke", () => {
       expect(providerCwds).toEqual([chatWorkDir, chatWorkDir]);
       const chatProviderHome = join(
         workspacesRoot,
-        ".runtime",
+        "env",
+        session.id,
         session.id,
         agent.id,
+        "main",
         "1",
         "home",
       );
       expect(providerHomes).toEqual([chatProviderHome, chatProviderHome]);
       expect(existsSync(chatProviderHome)).toBe(true);
-      expect(JSON.parse(readFileSync(
-        join(workspacesRoot, ".runtime", session.id, ".multiremi", "gc.json"),
-        "utf8",
-      ))).toMatchObject({
-        kind: "chat",
-        chat_session_id: session.id,
-        task_id: second.task.id,
+      expect(JSON.parse(readFileSync(join(workspacesRoot, "registry", `${session.id}.json`), "utf8"))).toMatchObject({
+        subject: { kind: "chat", id: session.id }, workspace_id: "local", state: "active", external_work_dir: null,
       });
+      expect(existsSync(join(workspacesRoot, "traces", session.id, `${first.task.id}.jsonl`))).toBe(true);
+      expect(existsSync(join(workspacesRoot, "traces", session.id, `${second.task.id}.jsonl`))).toBe(true);
       // The continued turn re-sends everything session/resume needs: the agent's
       // model + thinking_level (claim → SendOptions) and the MCP servers, in the
       // ACP wire shape (args/env required, env an EnvVariable[]).
@@ -2400,10 +2449,14 @@ describe("Bun Multiremi daemon smoke", () => {
       await daemon.start();
 
       const completed = store.getTask(task.id)!;
-      const issueWorkDir = join(workDir, "workspaces", "issues", issue.key);
-      const executionWorkDir = join(workDir, "workspaces", ".runtime", completed.issueSessionId!, agent.id,
-        String(completed.issueSessionGeneration), "work");
-      expect(providerCwd).toBe(executionWorkDir);
+      const issueWorkDir = join(workDir, "workspaces", "work", issue.id);
+      const laneGeneration = completed.issueSessionGeneration ?? completed.issue_session_generation;
+      // The holder starts in the private work directory of its lane; the Issue's workspace is reached through the environment.
+      const laneWorkDir = join(
+        workDir, "workspaces", "env", issue.id, completed.issueSessionId!, agent.id, "main", String(laneGeneration), "work",
+      );
+      expect(providerCwd).toBe(laneWorkDir);
+      expect((providerOptions as AcpProviderOptions | null)?.env?.MULTIREMI_WORKSPACE_ROOT).toBe(issueWorkDir);
       expect(workspaceAtProviderStart).toMatchObject({
         issueId: issue.id,
         rootPath: issueWorkDir,
@@ -2411,14 +2464,15 @@ describe("Bun Multiremi daemon smoke", () => {
         repos: [],
       });
       expect(completed.status).toBe("completed");
-      expect(completed.workDir).toBe(executionWorkDir);
-      const laneGeneration = completed.issueSessionGeneration ?? completed.issue_session_generation;
+      expect(completed.workDir).toBe(laneWorkDir);
       const expectedProviderHome = join(
         workDir,
         "workspaces",
-        ".runtime",
+        "env",
+        issue.id,
         completed.issueSessionId!,
         agent.id,
+        "main",
         String(laneGeneration),
         "home",
       );
@@ -2430,13 +2484,12 @@ describe("Bun Multiremi daemon smoke", () => {
       expect(existsSync(join(expectedProviderHome, ".multiremi-session-home.json"))).toBe(true);
       expect(providerPrompt).not.toContain(localDir);
       expect(existsSync(join(localDir, ".multiremi"))).toBe(false);
-      expect(JSON.parse(readFileSync(join(issueWorkDir, ".multiremi", "gc.json"), "utf8"))).toMatchObject({
-        kind: "issue",
-        task_id: task.id,
-        issue_id: issue.id,
-        version: 2,
+      expect(existsSync(join(issueWorkDir, ".multiremi", "gc.json"))).toBe(false);
+      expect(existsSync(join(laneWorkDir, ".multiremi", "gc.json"))).toBe(false);
+      expect(JSON.parse(readFileSync(join(workDir, "workspaces", "registry", `${issue.id}.json`), "utf8"))).toMatchObject({
+        subject: { kind: "issue", id: issue.id }, issue_key: issue.key, state: "active", external_work_dir: null,
       });
-      expect(JSON.parse(readFileSync(join(executionWorkDir, ".multiremi", "project", "resources.json"), "utf8")).resources).toEqual([]);
+      expect(JSON.parse(readFileSync(join(laneWorkDir, ".multiremi", "project", "resources.json"), "utf8")).resources).toEqual([]);
     } finally {
       if (previousSummaryDisabled === undefined) delete process.env.MULTIREMI_PROGRESS_SUMMARY_DISABLED;
       else process.env.MULTIREMI_PROGRESS_SUMMARY_DISABLED = previousSummaryDisabled;
@@ -2536,9 +2589,11 @@ describe("Bun Multiremi daemon smoke", () => {
         .toContain("/backend-api/codex/models");
       const expectedHome = join(
         workspacesRoot,
-        ".runtime",
+        "env",
+        issue.id,
         completed.issueSessionId!,
         agent.id,
+        "main",
         String(completed.issueSessionGeneration ?? completed.issue_session_generation),
         "executions",
         completed.executionFingerprint!,
@@ -2558,203 +2613,28 @@ describe("Bun Multiremi daemon smoke", () => {
     }
   });
 
-  it("reclaims daemon-owned workspace dirs from gc metadata", async () => {
-    const { store, workDir } = daemonTestBed("multiremi-daemon-gc-");
+  it("records a run-only automation run as a Chat subject with a daemon-owned work dir", async () => {
+    const { store, workDir } = daemonTestBed("multiremi-daemon-autopilot-subject-");
     const workspacesRoot = join(workDir, "workspaces");
     const agent = store.createAgent({
-      name: "GC Claude",
-      provider: "claude",
-    });
-    const completedIssue = createResponsibleTestIssue(store, { title: "GC completed issue", workspaceId: "local" });
-    const completedTask = store.createTask({
-      agentId: agent.id,
-      issueId: completedIssue.id,
-      workspaceId: "local",
-      prompt: "Create a daemon-owned directory",
-    });
-    const activeIssue = createResponsibleTestIssue(store, { title: "GC active issue", workspaceId: "local" });
-    const deletedChat = store.createChatSession({ agentId: agent.id, workspaceId: "local", title: "Deleted GC chat" });
-    const daemonToken = await store.createAccessToken({
-      name: "GC daemon",
-      type: "daemon",
-      workspaceId: "local",
-    });
-    const server = startMultiremiServer({
-      store,
-      scheduler: null,
-      authToken: "root-gc-secret",
-      hostname: "127.0.0.1",
-      port: 0,
-    });
-
-    try {
-      const daemon = new MultiremiDaemon({
-        sshMeshManager: disabledSshMeshRuntime(),
-        serverUrl: `http://127.0.0.1:${server.port}`,
-        token: daemonToken.token,
-        runtimeName: "gc-runtime",
-        provider: "claude",
-        workspaceId: "local",
-        once: true,
-        daemonPort: 0,
-        workspacesRoot,
-        repoCacheRoot: join(workDir, ".repo-cache"),
-        gcEnabled: false,
-        gcTtlMs: 0,
-        gcOrphanTtlMs: 1,
-        providerFactory: messageProviderFactory({
-          text: "GC completed",
-          sessionId: "sess-gc",
-          requestId: "req-gc",
-        }),
-      });
-
-      await daemon.start();
-
-      const completedDir = join(workspacesRoot, "issues", completedIssue.key);
-      expect(existsSync(completedDir)).toBe(true);
-      expect(JSON.parse(readFileSync(join(completedDir, ".multiremi", "gc.json"), "utf8"))).toMatchObject({
-        kind: "issue",
-        task_id: completedTask.id,
-        issue_id: completedIssue.id,
-        workspace_id: "local",
-      });
-
-      const oldIso = new Date(Date.now() - 10_000).toISOString();
-      db!.run("UPDATE multiremi_issues SET status = 'done', updated_at = ? WHERE id = ?", [oldIso, completedIssue.id]);
-
-      const activeDir = join(workspacesRoot, "issues", "active-issue");
-      writeGcFixture(activeDir, {
-        kind: "issue",
-        task_id: "task-active",
-        issue_id: activeIssue.id,
-        workspace_id: "local",
-      });
-
-      const chatDir = join(workspacesRoot, "chats", "deleted-chat");
-      writeGcFixture(chatDir, {
-        kind: "chat",
-        task_id: "task-chat",
-        chat_session_id: deletedChat.id,
-        workspace_id: "local",
-      });
-      db!.run("DELETE FROM multiremi_chat_sessions WHERE id = ?", [deletedChat.id]);
-
-      const orphanDir = join(workspacesRoot, "tasks", "old-orphan");
-      mkdirSync(orphanDir, { recursive: true });
-      writeFileSync(join(orphanDir, "note.txt"), "stale orphan\n");
-      const oldDate = new Date(Date.now() - 10_000);
-      utimesSync(orphanDir, oldDate, oldDate);
-      // A Chat the server no longer knows is an orphan: removed only past the orphan TTL.
-      utimesSync(chatDir, oldDate, oldDate);
-
-      bindReportFrames((daemon as any).client, store);
-      expect(await daemon.runGcOnce()).toEqual({ cleaned: 1, orphaned: 2, skipped: 1 });
-      expect(existsSync(completedDir)).toBe(false);
-      expect(existsSync(chatDir)).toBe(false);
-      expect(existsSync(orphanDir)).toBe(false);
-      expect(existsSync(activeDir)).toBe(true);
-    } finally {
-      server.stop(true);
-    }
-  });
-
-  it("archives an archived Chat's .runtime history under the chat subject before GC reclaims it", async () => {
-    const { store, workDir } = daemonTestBed("multiremi-daemon-chat-gc-");
-    const workspacesRoot = join(workDir, "workspaces");
-    const agent = store.createAgent({ name: "Chat GC Claude", provider: "claude" });
-    const chat = store.createChatSession({ agentId: agent.id, workspaceId: "local", title: "Archived GC chat" });
-    const daemonToken = await store.createAccessToken({
-      name: "Chat GC daemon",
-      type: "daemon",
-      workspaceId: "local",
-    });
-    const server = startMultiremiServer({
-      store,
-      scheduler: null,
-      authToken: "root-chat-gc-secret",
-      hostname: "127.0.0.1",
-      port: 0,
-    });
-    const runtimeId = daemonRuntimeIdForTest("daemon-chat-gc", "claude");
-
-    try {
-      const daemon = new MultiremiDaemon({
-        sshMeshManager: disabledSshMeshRuntime(),
-        serverUrl: `http://127.0.0.1:${server.port}`,
-        token: daemonToken.token,
-        daemonId: "daemon-chat-gc",
-        runtimeName: "chat-gc-runtime",
-        provider: "claude",
-        workspaceId: "local",
-        once: true,
-        daemonPort: 0,
-        workspacesRoot,
-        repoCacheRoot: join(workDir, ".repo-cache"),
-        gcEnabled: false,
-        gcTtlMs: 0,
-        providerFactory: messageProviderFactory({
-          text: "Chat GC completed",
-          sessionId: "sess-chat-gc",
-          requestId: "req-chat-gc",
-        }),
-      });
-
-      await daemon.start();
-
-      const meta = { kind: "chat", task_id: "task-chat-gc", chat_session_id: chat.id, workspace_id: "local" };
-      const chatDir = join(workspacesRoot, "chats", chat.id);
-      const runtimeRoot = join(workspacesRoot, ".runtime", chat.id);
-      writeGcFixture(chatDir, meta);
-      writeGcFixture(runtimeRoot, meta);
-      mkdirSync(join(runtimeRoot, agent.id, "1", "home"), { recursive: true });
-      writeFileSync(join(runtimeRoot, agent.id, "1", "home", "history.jsonl"), "{}\n");
-      db!.run(
-        "UPDATE multiremi_chat_sessions SET status = 'archived', session_runtime_id = ?, updated_at = ? WHERE id = ?",
-        [runtimeId, new Date(Date.now() - 10_000).toISOString(), chat.id],
-      );
-      expect(store.listSessionArchivesForSubject("chat", chat.id)).toEqual([]);
-
-      // Past TTL with no archive yet: GC archives `.runtime/<chat id>` under the
-      // chat subject first and only then reclaims both directories.
-      bindReportFrames((daemon as any).client, store);
-      expect(await daemon.runGcOnce()).toEqual({ cleaned: 2, orphaned: 0, skipped: 0 });
-      expect(existsSync(chatDir)).toBe(false);
-      expect(existsSync(runtimeRoot)).toBe(false);
-      expect(store.listSessionArchivesForSubject("chat", chat.id)).toMatchObject([{
-        subjectKind: "chat",
-        subjectId: chat.id,
-        runtimeId,
-        status: "ready",
-        metadata: { source: ".runtime" },
-      }]);
-    } finally {
-      server.stop(true);
-    }
-  });
-
-  it("writes autopilot run metadata and reclaims terminal autopilot workdirs", async () => {
-    const { store, workDir } = daemonTestBed("multiremi-daemon-autopilot-gc-");
-    const workspacesRoot = join(workDir, "workspaces");
-    const agent = store.createAgent({
-      name: "Autopilot GC Claude",
+      name: "Autopilot Claude",
       provider: "claude",
     });
     const autopilot = store.createAutopilot({
-      title: "Autopilot GC",
+      title: "Autopilot subject",
       assigneeId: agent.id,
       executionMode: "run_only",
     });
     const run = store.runAutopilot(autopilot.id);
     const daemonToken = await store.createAccessToken({
-      name: "Autopilot GC daemon",
+      name: "Autopilot daemon",
       type: "daemon",
       workspaceId: "local",
     });
     const server = startMultiremiServer({
       store,
       scheduler: null,
-      authToken: "root-autopilot-gc-secret",
+      authToken: "root-autopilot-subject-secret",
       hostname: "127.0.0.1",
       port: 0,
     });
@@ -2764,7 +2644,7 @@ describe("Bun Multiremi daemon smoke", () => {
         sshMeshManager: disabledSshMeshRuntime(),
         serverUrl: `http://127.0.0.1:${server.port}`,
         token: daemonToken.token,
-        runtimeName: "autopilot-gc-runtime",
+        runtimeName: "autopilot-subject-runtime",
         provider: "claude",
         workspaceId: "local",
         once: true,
@@ -2772,35 +2652,82 @@ describe("Bun Multiremi daemon smoke", () => {
         workspacesRoot,
         repoCacheRoot: join(workDir, ".repo-cache"),
         gcEnabled: false,
-        gcTtlMs: 0,
         providerFactory: messageProviderFactory({
-          text: "Autopilot GC completed",
-          sessionId: "sess-autopilot-gc",
-          requestId: "req-autopilot-gc",
+          text: "Autopilot completed",
+          sessionId: "sess-autopilot-subject",
+          requestId: "req-autopilot-subject",
         }),
       });
 
       await daemon.start();
 
-      const taskDir = join(workspacesRoot, "tasks", run.taskId!);
-      expect(existsSync(taskDir)).toBe(true);
-      expect(JSON.parse(readFileSync(join(taskDir, ".multiremi", "gc.json"), "utf8"))).toMatchObject({
-        kind: "autopilot_run",
-        task_id: run.taskId,
-        autopilot_run_id: run.id,
+      // A run-only automation run is a Chat of its own, so the Chat is the subject.
+      const chatId = store.getTask(run.taskId!)!.chatSessionId!;
+      expect(chatId).toStartWith("chat_");
+      const chatDir = join(workspacesRoot, "work", chatId);
+      expect(existsSync(chatDir)).toBe(true);
+      expect(existsSync(join(workspacesRoot, "work", run.taskId!))).toBe(false);
+      expect(existsSync(join(chatDir, ".multiremi", "gc.json"))).toBe(false);
+      expect(JSON.parse(readFileSync(join(workspacesRoot, "registry", `${chatId}.json`), "utf8"))).toMatchObject({
+        subject: { kind: "chat", id: chatId },
         workspace_id: "local",
+        state: "active",
+      });
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  it("sweeps an older workspace layout aside before claiming work and then runs in the new one", async () => {
+    const { store, workDir } = daemonTestBed("multiremi-daemon-layout-sweep-");
+    const workspacesRoot = join(workDir, "workspaces");
+    for (const [path, contents] of [
+      ["issues/MUL-9/note.txt", "old issue\n"],
+      ["chats/chat_old/note.txt", "old chat\n"],
+      [".runtime/ises_old/agt_old/1/home/projects/history.jsonl", "{}\n"],
+      [".repos/local/cached.git/HEAD", "ref: refs/heads/main\n"],
+      [".snapshots/local/view/file.txt", "view\n"],
+    ] as const) {
+      mkdirSync(dirname(join(workspacesRoot, path)), { recursive: true });
+      writeFileSync(join(workspacesRoot, path), contents);
+    }
+    mkdirSync(join(workspacesRoot, "_topics", "om_topic"), { recursive: true });
+    const agent = store.createAgent({ name: "Sweep Claude", provider: "claude" });
+    const task = store.createTask({ agentId: agent.id, prompt: "Run after the sweep" });
+    const daemonToken = await store.createAccessToken({ name: "Sweep daemon", type: "daemon", workspaceId: "local" });
+    const server = startMultiremiServer({ store, scheduler: null, authToken: "root-sweep-secret", hostname: "127.0.0.1", port: 0 });
+    let sweptBeforeProvider = false;
+    try {
+      const daemon = new MultiremiDaemon({
+        sshMeshManager: disabledSshMeshRuntime(),
+        serverUrl: `http://127.0.0.1:${server.port}`,
+        token: daemonToken.token,
+        runtimeName: "sweep-runtime",
+        provider: "claude",
+        workspaceId: "local",
+        once: true,
+        daemonPort: 0,
+        workspacesRoot,
+        repoCacheRoot: join(workspacesRoot, "shared", "repos"),
+        gcEnabled: false,
+        providerFactory: messageProviderFactory({
+          text: "Swept", sessionId: "sess-sweep", requestId: "req-sweep",
+          onSend: () => { sweptBeforeProvider = existsSync(join(workspacesRoot, "registry", ".layout-v1")); },
+        }),
       });
 
-      const oldIso = new Date(Date.now() - 10_000).toISOString();
-      db!.run("UPDATE multiremi_autopilot_runs SET completed_at = ? WHERE id = ?", [oldIso, run.id]);
+      await daemon.start();
 
-      // The run's work dir and its task's `.runtime/<task id>` both wait for the
-      // task's archive barrier.
-      bindReportFrames((daemon as any).client, store);
-      expect(await daemon.runGcOnce()).toEqual({ cleaned: 2, orphaned: 0, skipped: 0 });
-      expect(existsSync(taskDir)).toBe(false);
-      expect(existsSync(join(workspacesRoot, ".runtime", run.taskId!))).toBe(false);
-      expect(store.listSessionArchivesForSubject("task", run.taskId!)).toMatchObject([{ status: "ready" }]);
+      expect(store.getTask(task.id)).toMatchObject({ status: "completed", workDir: join(workspacesRoot, "work", task.id) });
+      expect(sweptBeforeProvider).toBe(true);
+      const [legacy] = readdirSync(workspacesRoot).filter((name) => name.startsWith("legacy-"));
+      expect(legacy).toBeDefined();
+      expect(readdirSync(join(workspacesRoot, legacy!)).sort()).toEqual([".runtime", "chats", "issues"]);
+      expect(readFileSync(join(workspacesRoot, legacy!, "issues", "MUL-9", "note.txt"), "utf8")).toBe("old issue\n");
+      expect(readFileSync(join(workspacesRoot, "shared", "repos", "local", "cached.git", "HEAD"), "utf8")).toContain("refs/heads/main");
+      expect(readFileSync(join(workspacesRoot, "shared", "code-views", "local", "view", "file.txt"), "utf8")).toBe("view\n");
+      expect(existsSync(join(workspacesRoot, "_topics", "om_topic"))).toBe(true);
+      for (const old of ["issues", "chats", ".runtime", ".repos", ".snapshots"]) expect(existsSync(join(workspacesRoot, old))).toBe(false);
     } finally {
       server.stop(true);
     }
@@ -3966,24 +3893,18 @@ async function runProviderHomeSymlinkProof(kind: "quick" | "chat" | "issue"): Pr
   const outside = join(root, "outside");
   mkdirSync(workspacesRoot, { recursive: true });
   mkdirSync(outside, { recursive: true });
-  symlinkSync(outside, join(workspacesRoot, ".runtime"), "dir");
+  symlinkSync(outside, join(workspacesRoot, "traces"), "dir");
   const agent = store.createAgent({ name: `${kind} symlink proof`, provider: "claude" });
   let task: ReturnType<typeof store.createTask>;
-  let externalGc: string;
-  let receipt: string | null = null;
   if (kind === "quick") {
-    task = store.createTask({ agentId: agent.id, prompt: "must fail before GC" });
-    externalGc = join(workspacesRoot, "tasks", task.id, ".multiremi", "gc.json");
+    task = store.createTask({ agentId: agent.id, prompt: "must fail before reclaim" });
   } else if (kind === "chat") {
     const session = store.createChatSession({ agentId: agent.id, title: "Symlink proof" });
-    task = store.sendChatMessage(session.id, { body: "must fail before GC" }).task;
-    externalGc = join(workspacesRoot, "chats", session.id, ".multiremi", "gc.json");
+    task = store.sendChatMessage(session.id, { body: "must fail before reclaim" }).task;
   } else {
     const issue = createResponsibleTestIssue(store, { title: "Issue symlink proof", workspaceId: "local" });
-    receipt = join(outside, "session-archive-receipt.json");
-    writeFileSync(receipt, "keep-receipt\n");
-    task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "must fail before GC" });
-    externalGc = join(workspacesRoot, "issues", issue.key, ".multiremi", "gc.json");
+    writeFileSync(join(outside, "keep"), "keep\n");
+    task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "must fail before reclaim" });
   }
   const daemonId = `daemon-${kind}-provider-symlink`;
   const daemonToken = await store.createAccessToken({
@@ -4016,11 +3937,10 @@ async function runProviderHomeSymlinkProof(kind: "quick" | "chat" | "issue"): Pr
       providerFactory: () => {
         throw new Error("symlinked Provider Home must fail before provider creation");
       },
-    })).toThrow(`Unsafe trace directory: ${join(workspacesRoot, ".runtime")}`);
+    })).toThrow(`Unsafe trace directory: ${join(workspacesRoot, "traces")}`);
 
     expect(store.getTask(task.id)?.status).toBe("queued");
-    expect(existsSync(externalGc)).toBe(false);
-    if (receipt) expect(readFileSync(receipt, "utf8")).toBe("keep-receipt\n");
+    expect(readdirSync(outside).sort()).toEqual(kind === "issue" ? ["keep"] : []);
   } finally {
     server.stop(true);
   }
@@ -4113,11 +4033,6 @@ function gitOutput(cwd: string, args: string[]): string {
 function prepareCommitMsgHookPath(worktreePath: string): string {
   const commonDir = gitOutput(worktreePath, ["rev-parse", "--git-common-dir"]);
   return join(isAbsolute(commonDir) ? commonDir : join(worktreePath, commonDir), "hooks", "prepare-commit-msg");
-}
-
-function writeGcFixture(dir: string, payload: Record<string, unknown>): void {
-  mkdirSync(join(dir, ".multiremi"), { recursive: true });
-  writeFileSync(join(dir, ".multiremi", "gc.json"), JSON.stringify({ version: 1, ...payload }, null, 2));
 }
 
 async function waitForLocalPort(daemon: MultiremiDaemon): Promise<number> {

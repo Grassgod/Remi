@@ -18,8 +18,11 @@ summary: 说明 daemon 进程配置、工作区 bot 的控制面分配、凭据�
 | `MULTIREMI_PROVIDER` | 可选，指定 provider；未指定时探测本机健康 provider。至少一个 provider 可执行且已认证，前台 daemon 才能启动。 |
 | `MULTIREMI_WORKSPACES_ROOT` | 工作目录根，默认 `~/.remi/multiremi/workspaces`；不要放在临时发版 checkout 中。 |
 | `MULTIREMI_DAEMON_PORT` | 本机 daemon 控制端口，默认 6131；多 provider 时分配相邻端口。 |
-| `MULTIREMI_GC_ENABLED` | 默认 true；是否运行周期性 workspace GC。 |
-| `MULTIREMI_GC_INTERVAL_MS` / `MULTIREMI_GC_TTL_MS` | 启动默认分别为 900000 / 259200000 ms。工作区 `settings.session_archive` 可覆盖有效间隔和 TTL，见[GC policy](../../packages/daemon/src/agent-runtime/workspace/gc-policy.ts)。 |
+| `MULTIREMI_GC_ENABLED` | 默认 true；是否运行周期性存储回收。关闭后工作区和运行环境不再回收。 |
+| `MULTIREMI_GC_INTERVAL_MS` | 回收轮次间隔，默认 900000 ms（15 分钟）。 |
+| `MULTIREMI_GC_DRY_RUN` | 默认 false；为 true 时每轮只生成计划和报告，不删除任何内容。 |
+| `MULTIREMI_LEGACY_KEEP_DAYS` | 默认 7；升级清扫移入 `legacy-<日期>/` 的旧布局保留天数，到期由回收轮次删除；快照失败的旧 worktree 所在的 `retained/` 与 `retained.json` 不删，存储报告以 `legacy_retained` 计数，由运维核对后手工删除。 |
+| `MULTIREMI_GC_TTL_MS` / `MULTIREMI_GC_AUTOMATION_TTL_MS` / `MULTIREMI_GC_MAX_RETAINED` / `MULTIREMI_GC_ORPHAN_TTL_MS` / `MULTIREMI_GC_SNAPSHOT_MAX_BYTES` | 单机覆盖。策略由工作区设置 `settings.storage` 统一管理并经 `workspace.settings` 下发，这些变量只在需要对某台机器单独覆盖时设置；默认值与范围见[存储与保留](../dev/storage-retention.md#策略)和[契约](../../packages/contracts/src/storage.ts)。 |
 | `MULTIREMI_HEARTBEAT_INTERVAL_MS` | v2 不再读取；进程级 `hb` 固定每 15000 ms，所有 provider 与 concierge 共用这条连接。 |
 | `MULTIREMI_CLAIM_IDLE_MAX_MS` | 空闲 claim 的退避上限，默认 30000 ms；退避从 3000 ms 起翻倍到该值。 |
 | `MULTIREMI_PLUGIN_DESIRED_REFRESH_MS` | A-2 过渡期的 Plugin desired HTTP 兜底刷新间隔，默认 30000 ms；由 MUL-419 后续接入 RPC 与 revision 推送。 |
@@ -47,8 +50,7 @@ The [daemon client](../../packages/server/src/worker/client.ts) applies a defaul
 30-second deadline to control-plane JSON requests, including connection setup,
 response headers, and body reads for both successful and error responses. This
 bounds heartbeat, plugin configuration, and task claim requests that would
-otherwise block subsequent polling. Archive content uploads retain their
-separate timeout budget.
+otherwise block subsequent polling.
 
 The running [poll loop](../../packages/server/src/worker/daemon.ts) logs transient
 failures and retries at the heartbeat interval. Timeout errors identify the
@@ -168,7 +170,7 @@ v2 Runtime 从 [配置快照](../../packages/server/src/api/daemon-protocol/runt
 
 ## 升级条件与检查
 
-仅当旧安装仍有本地 bot-menu 数据时，按[菜单迁移](../migrations/remi-bot-menu-to-workspace-settings.md)审阅并转换；不要把迁移步骤当作新部署启动前置条件。GC 间隔决定检查频率，不保证固定时间内完成归档或清理；检查有效工作区 policy、归档状态和 daemon 日志。
+仅当旧安装仍有本地 bot-menu 数据时，按[菜单迁移](../migrations/remi-bot-menu-to-workspace-settings.md)审阅并转换；不要把迁移步骤当作新部署启动前置条件。GC 间隔决定检查频率，不保证固定时间内完成清理；排查时检查工作区 `settings.storage`、`remi runtime storage <runtime>` 的最近报告和 daemon 日志。
 
 ```bash
 bun test tests/unit/multiremi/multiremi-feishu-bot-config.test.ts tests/unit/multiremi/multiremi-feishu-bot-daemon.test.ts

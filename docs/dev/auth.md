@@ -45,9 +45,9 @@ Remi 当前使用独立用户、工作区成员关系和分类型访问凭据。
 
 移动到另一个工作区时，Issue 在目标工作区取下一个号（目标的最大号加 1），`number` 与 `key` 一起改变；MUL-405 的 `(workspace_id, issue_number)` 唯一索引不允许沿用原号，这也是 MUL-476 的 API 行为变化。原 key 此后不再指向该 Issue，评论、分支名等外部写下的旧 key 不会随之更新；源工作区的这个号只有在它是当前最大号时才会被新建 Issue 再次使用。取号先拿目标工作区的编号锁，再拿 Issue 行锁；批量移动逐行取号。
 
-未清理的 Issue 工作区记录（`status != 'cleaned'`）同样阻止移动；`relations.issue_workspace` 只返回本工作区记录的 `status` 与 `runtime_id`，外部记录仅计入 `hidden`，仍然阻止移动。必须先清理或放弃记录：附着 Runtime 的记录由 daemon GC 归档清理，或管理员删除/退役 Runtime 时显式放弃；`runtime_id` 为空的孤儿记录可用 `remi issue workspace abandon`。已清理的记录随移动改到目标工作区，Runtime、路径、分支、仓库、最后任务清空，清理时间与归档绑定保留。硬删门禁的答案不因移动改变：有精确归档的可删并清除留在源工作区的归档，无归档的仍返回 `409 issue_workspace_archive_invalid`，无记录但有运行证据的仍返回 `409 issue_workspace_not_cleaned`；三类运行证据（任务、归档、物化会话）按 Issue ID 全局核验。
+未清理的 Issue 工作区记录（`status != 'cleaned'`）同样阻止移动；`relations.issue_workspace` 只返回本工作区记录的 `status` 与 `runtime_id`，外部记录仅计入 `hidden`，仍然阻止移动。必须先清理或放弃记录：附着 Runtime 的记录由 daemon 回收后标为 `cleaned`，或管理员删除/退役 Runtime 时显式放弃；`runtime_id` 为空的孤儿记录可用 `remi issue workspace abandon`。已清理的记录随移动改到目标工作区，Runtime、路径、分支、仓库、最后任务清空，清理时间保留。硬删除只要求没有活动任务（[ADR 0018](../adr/0018-local-records-and-recyclable-workspaces.md)），不再检查工作区是否已清理或是否有归档；移动不改变这个答案。daemon 收到服务端 404 后自行遗忘该主体的本机数据。
 
-存量错位记录按 Issue 读取时视为不存在，详情、`GET /workspace`、分享、归档写入及任务派发均要求记录与 Issue 同工作区。源 Runtime 删除的影响清单只显示记录自己的旧 key 与记录状态，不连接已移走 Issue 的标题或状态。目标 Runtime 首次 report 可以接管旧记录并刷新工作区与 key；源 Runtime 的后续 report/cleaned 不能写入目标工作区。不迁移存量数据，源机器残留目录需人工清理或随 Runtime 删除/退役处理。
+存量错位记录按 Issue 读取时视为不存在，详情、`GET /workspace`、分享及任务派发均要求记录与 Issue 同工作区。源 Runtime 删除的影响清单只显示记录自己的旧 key 与记录状态，不连接已移走 Issue 的标题或状态。目标 Runtime 首次 report 可以接管旧记录并刷新工作区与 key；源 Runtime 的后续 report/cleaned 不能写入目标工作区。不迁移存量数据，源机器残留目录需人工清理或随 Runtime 删除/退役处理。
 
 批量在写入前预检全部 Issue，发现关系冲突则整批拒绝并返回 `issue_ids`。逐行写入仍各自提交；预检后并发新增关系可能使后续行拒绝，先前行不会回滚。该并发边界不允许形成跨工作区关系，也不代表批量具备整批事务原子性。
 
@@ -57,7 +57,7 @@ Remi 当前使用独立用户、工作区成员关系和分类型访问凭据。
 
 Runtime 的 Codex / Claude Code 自定义连接 GET/PUT 使用 Runtime 可见性/编辑权限，task token 对整个配置路由为 hard deny；直接填写的 API Key 经服务端 AES-256-GCM 加密并版本化。只允许绑定机器身份的 daemon token 从专用 `codex-profile-key` / `claude-profile-key` 路由读取对应 Runtime 的凭据，浏览器响应和任务公共响应不含密钥。加密配置、轮换和执行快照见 [Codex Runtime](../design/acp-codex-via-codex-acp.md#runtime-自定义连接)，Claude 的字段和请求头见 [Claude Code Runtime](../design/acp-claude-via-claude-agent-acp.md)，权限回归见 [runtime-codex-profile.test.ts](../../tests/unit/multiremi/runtime-codex-profile.test.ts)。
 
-本机 profile 可按[部署说明](../deploy/local-profiles.md#stable-内网访问)将 stable 的 Web/API 对内网开放。密码登录页在显式 stable 构建的配置主机名显示；`MULTIREMI_DAEMON_DIRECT_BASE_URL` 同时通过 `/api/config.daemon_server_url` 和 daemon 安装说明公布可连接的 API origin，避免远程机器误连自身 loopback。监听 `0.0.0.0` 与客户端连接地址是不同设置，不改变服务端原有鉴权。
+本机 profile 可按[部署说明](../deploy/local-profiles.md#stable-内网访问)将 stable 的 Web/API 对内网开放。密码登录页在显式 stable 构建的配置主机名显示；`MULTIREMI_DAEMON_DIRECT_BASE_URL` 通过 `/api/config.daemon_server_url` 和 daemon 安装说明公布可连接的 API origin，避免远程机器误连自身 loopback。监听 `0.0.0.0` 与客户端连接地址是不同设置，不改变服务端原有鉴权。
 
 [startMultiremiServer](../../packages/server/src/api/server.ts)调用 [evaluateStartupEnv](../../packages/server/src/config/startup-env.ts)：生产模式要求 `MULTIREMI_DATABASE_URL`、`MULTIREMI_TOKEN`、`JWT_SECRET`，缺项会拒绝启动。显式 development/test 作为本地模式；否则 production 或已配置数据库 URL 会触发生产要求。
 

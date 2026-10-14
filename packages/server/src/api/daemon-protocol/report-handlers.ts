@@ -10,9 +10,11 @@ import { FEISHU_DECISION_DEGRADE_REASONS } from "@multiremi/contracts/types.js";
 import { parseFeishuPresentation } from "@multiremi/contracts/feishu-presentation.js";
 import { isFeishuOpenId } from "@shared/feishu-mention.js";
 import { normalizeFeishuBotErrorCode, redactFeishuBotError } from "@multiremi/feishu-bot/diagnostics.js";
-import type { SessionArchiveService } from "@multiremi/session-archive/service.js";
-import { SessionArchiveError } from "@multiremi/session-archive/service.js";
-import type { DaemonGcErrorReply, DaemonFeishuOutboundOkReply, DaemonTaskCompletionFields } from "@multiremi/contracts/daemon-protocol.js";
+import type { StorageReport, SubjectSnapshot } from "@multiremi/contracts/storage.js";
+import { STORAGE_SUBJECT_KINDS, type StorageSubjectKind } from "@multiremi/contracts/storage.js";
+import type {
+  DaemonGcCheckChatSessionReply, DaemonGcErrorReply, DaemonFeishuOutboundOkReply, DaemonTaskCompletionFields,
+} from "@multiremi/contracts/daemon-protocol.js";
 import { createLogger } from "@shared/logger.js";
 import { log as apiLog } from "../helpers/common.js";
 import { daemonTaskUsageEntries, daemonLocalSkillListReportBody, daemonLocalSkillImportReportBody } from "../helpers.js";
@@ -283,6 +285,17 @@ export function registerDaemonReportHandlers(layer: DaemonProtocolLayer, store: 
           if (!["completed", "failed"].includes(string(result.status))) reject();
           store.reportRuntimeDirectoryScanResult(runtimeId, requestId, result as unknown as ReportRuntimeDirectoryScanInput);
           break;
+        case "runtime.gc_run_result":
+          // A round that outlives the request timeout still reports its plan; the late result replaces the timeout.
+          if (exists(store.getRuntimeGcRunRequest(runtimeId, requestId), true)) break;
+          if (!["completed", "failed"].includes(string(result.status))) reject();
+          if (result.status === "completed" && !storageReport(result.report)) reject();
+          store.reportRuntimeGcRunResult(runtimeId, requestId, {
+            status: result.status as "completed" | "failed",
+            report: storageReport(result.report),
+            error: nullable(result.error),
+          });
+          break;
         case "runtime.local_skill_import_result":
           if (exists(store.getRuntimeLocalSkillImportRequest(runtimeId, requestId))) break;
           if (!["completed", "failed"].includes(string(result.status))) reject();
@@ -340,6 +353,13 @@ export function registerDaemonReportHandlers(layer: DaemonProtocolLayer, store: 
           }
           break;
         }
+        case "gc.storage_report": {
+          const report = storageReport(p.report);
+          if (!report) reject();
+          const runtime = store.getRuntimeLite(runtimeId)!;
+          store.saveDaemonStorageReport(runtime.daemonId ?? session.daemonId, runtimeId, report);
+          break;
+        }
         case "concierge.status":
         case "concierge.status_report": {
           if (!["stopped", "starting", "online", "failed"].includes(string(p.state))) reject();
@@ -362,13 +382,37 @@ export function registerDaemonReportHandlers(layer: DaemonProtocolLayer, store: 
   };
   for (const type of ["task.start", "task.prompt", "task.session_pin", "task.progress", "task.usage", "task.workspace", "task.complete", "turn.complete", "task.fail",
     "runtime.update_result", "runtime.command_result", "runtime.model_list_result", "runtime.local_skills_result", "runtime.directory_scan_result",
-    "runtime.local_skill_import_result", "runtime.bot_menu_result", "feishu.outbound_result", "plugin.state"]) layer.registerEventHandler(type, handle);
+    "runtime.gc_run_result", "runtime.local_skill_import_result", "runtime.bot_menu_result", "feishu.outbound_result", "plugin.state"]) layer.registerEventHandler(type, handle);
   layer.registerBestEffortHandler("concierge.status", handle);
+  // A lost report is replaced by the next round's; it never needs a retry.
+  layer.registerBestEffortHandler("gc.storage_report", handle);
   // Keep the legacy best-effort frame for older daemons during a rolling upgrade.
   layer.registerRpcHandler("concierge.status_report", handle);
 }
 
-export function registerDaemonMaintenanceHandlers(layer: DaemonProtocolLayer, store: MultiremiStore, archives: SessionArchiveService): void {
+/** A daemon storage report is stored as sent; only its envelope is checked. */
+function storageReport(value: unknown): StorageReport | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const report = value as Partial<StorageReport>;
+  return report.version === 1 && Array.isArray(report.plan) && Array.isArray(report.errors)
+    && typeof report.generated_at === "string" ? report as StorageReport : null;
+}
+
+function subjectSnapshot(value: unknown): SubjectSnapshot | null | undefined {
+  if (value === null) return null;
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const snapshot = value as Partial<SubjectSnapshot>;
+  if (typeof snapshot.created_at !== "string" || !Array.isArray(snapshot.git)
+    || !Number.isSafeInteger(snapshot.wiki_files) || (snapshot.wiki_files as number) < 0) return undefined;
+  const git = snapshot.git.map((entry) => entry as Partial<SubjectSnapshot["git"][number]>);
+  if (!git.every((entry) => typeof entry.repo_url === "string" && typeof entry.ref === "string"
+    && typeof entry.commit === "string" && typeof entry.head === "string"
+    && (entry.branch === null || typeof entry.branch === "string")
+    && typeof entry.dir === "string")) return undefined;
+  return { created_at: snapshot.created_at, git: git as SubjectSnapshot["git"], wiki_files: snapshot.wiki_files as number };
+}
+
+export function registerDaemonMaintenanceHandlers(layer: DaemonProtocolLayer, store: MultiremiStore): void {
   const handle = async (frame: DaemonParsedFrame, session: DaemonProtocolSession) => {
     try {
       const p = frame.payload;
@@ -379,61 +423,60 @@ export function registerDaemonMaintenanceHandlers(layer: DaemonProtocolLayer, st
         if (!value || (value.workspaceId ?? "local") !== workspaceId) throw new GcRejection(404, code, message);
         return value;
       };
+      const scopedTask = (taskId: string) => {
+        const task = scoped(store.getTask(taskId), "task not found");
+        if (!task.runtimeId || !session.runtimeIds.includes(task.runtimeId)) throw new GcRejection(404, null, "task not found");
+        authorizeReportRuntime(store, session, task.runtimeId);
+        return task;
+      };
       switch (frame.type) {
         case "gc.check_issue": {
-          const issue = scoped(store.getIssueByRef(string(p.issue_id)), "issue not found");
+          const issueId = string(p.issue_id);
+          const found = store.getIssueByRef(issueId);
+          // A cleaned Issue can move to another workspace. The daemon keeps its records (traces, session
+          // history) for it, so this must not look like the 404 that tells a daemon the Issue was deleted.
+          // Only a daemon that ran a task of the Issue is told; everyone else still gets the 404.
+          const daemonId = store.getRuntimeLite(runtimeId)?.daemonId;
+          if (found && found.id === issueId && (found.workspaceId ?? "local") !== workspaceId
+            && daemonId && store.issueRanOnDaemon(found.id, daemonId)) {
+            return { ok: true, status: "moved" };
+          }
+          const issue = scoped(found, "issue not found");
           const active = store.listTasksForIssue(issue.id).some(task => !terminal(task.status));
           return { ok: true, status: active ? "active" : issue.status, updated_at: issue.updatedAt };
         }
         case "gc.check_chat_session": {
           const chat = scoped(store.getChatSession(string(p.session_id)), "chat session not found");
-          return { ok: true, status: chat.status, updated_at: chat.updatedAt };
-        }
-        case "gc.check_autopilot_run": {
-          const run = store.getAutopilotRun(string(p.run_id));
-          if (!run) throw new GcRejection(404, null, "autopilot run not found");
-          scoped(store.getAutopilot(run.autopilotId), "autopilot run not found");
-          return { ok: true, status: run.status, completed_at: run.completedAt };
+          return {
+            ok: true, status: chat.status, updated_at: chat.updatedAt, pinned: chat.pinned, origin: chat.origin,
+            last_activity_at: chat.lastMessage?.createdAt ?? null,
+          } satisfies DaemonGcCheckChatSessionReply;
         }
         case "gc.check_task": {
-          const task = scoped(store.getTask(string(p.task_id)), "task not found");
-          if (!task.runtimeId || !session.runtimeIds.includes(task.runtimeId)) throw new GcRejection(404, null, "task not found");
-          authorizeReportRuntime(store, session, task.runtimeId);
+          const task = scopedTask(string(p.task_id));
           return { ok: true, status: task.status, completed_at: task.completedAt };
         }
-        case "gc.workspace_cleaned": {
-          const issueId = string(p.issue_id);
-          const archiveId = string(p.archive_id).trim();
-          const sourceRevision = string(p.source_revision).trim();
-          const sha256 = string(p.sha256).trim().toLowerCase();
-          if (!archiveId || !sourceRevision || !/^[a-f0-9]{64}$/.test(sha256)) {
-            throw new GcRejection(400, null, "archive_id, source_revision and a 64-character sha256 are required");
+        case "gc.subject_reclaimed": {
+          const subject = p.subject as { kind?: unknown; id?: unknown } | null | undefined;
+          const kind = subject?.kind as StorageSubjectKind;
+          const id = typeof subject?.id === "string" ? subject.id.trim() : "";
+          const snapshot = subjectSnapshot(p.snapshot);
+          if (!STORAGE_SUBJECT_KINDS.includes(kind) || !id || snapshot === undefined || typeof p.unsaved_work !== "boolean") {
+            throw new GcRejection(400, null, "subject, snapshot and unsaved_work are required");
           }
-          scoped(store.getIssue(issueId), "issue not found", "issue_not_found");
-          const current = store.getIssueWorkspace(issueId);
-          if (!current) throw new GcRejection(404, "issue_workspace_not_found", "issue workspace not found");
-          if (current.runtimeId !== runtimeId) throw new GcRejection(404, "issue_workspace_runtime_mismatch", "runtime does not own issue workspace");
-          try {
-            const verified = await archives.verify(archiveId);
-            if (!verified.valid || verified.archive.issueId !== issueId || verified.archive.sourceRevision !== sourceRevision || verified.archive.sha256 !== sha256) {
-              throw new GcRejection(409, "issue_workspace_archive_invalid", "workspace cleanup archive is missing, corrupt, or does not match the exact snapshot");
-            }
-            const workspace = store.markIssueWorkspaceCleaned({ issueId, runtimeId, archiveId, sourceRevision, sha256 });
-            return { ok: true, issue_id: workspace.issueId, status: workspace.status, cleaned_at: workspace.cleanedAt,
-              archive_id: workspace.cleanedArchiveId, source_revision: workspace.cleanedArchiveSourceRevision, sha256: workspace.cleanedArchiveSha256 };
-          } catch (error) {
-            if (error instanceof GcRejection || error instanceof SessionArchiveError) throw error;
-            const message = error instanceof Error ? error.message : String(error);
-            throw new GcRejection(message.includes("exact ready") ? 409 : 400, null, message);
-          }
+          if (kind === "issue") scoped(store.getIssue(id), "issue not found", "issue_not_found");
+          else if (kind === "chat") scoped(store.getChatSession(id), "chat session not found");
+          else scopedTask(id);
+          store.reportSubjectReclaimed(runtimeId, { subject: { kind, id }, snapshot, unsavedWork: p.unsaved_work });
+          return { ok: true };
         }
         default: return null;
       }
     } catch (error) {
-      if (error instanceof GcRejection || error instanceof SessionArchiveError) return gcError(error.status, error.code, error.message);
+      if (error instanceof GcRejection) return gcError(error.status, error.code, error.message);
       if (error instanceof ReportRejection) return gcError(error.code === "task_not_found" ? 404 : error.code === "authority_revoked" ? 403 : 400, null, error.message);
       throw error;
     }
   };
-  for (const type of ["gc.check_issue", "gc.check_chat_session", "gc.check_autopilot_run", "gc.check_task", "gc.workspace_cleaned"]) layer.registerRpcHandler(type, handle);
+  for (const type of ["gc.check_issue", "gc.check_chat_session", "gc.check_task", "gc.subject_reclaimed"]) layer.registerRpcHandler(type, handle);
 }

@@ -339,6 +339,51 @@ describe("native CLI resource contracts", () => {
     expect(body).toMatchObject({ version_check: false });
   });
 
+  it("reads the effective storage policy and marks which values the workspace overrides", async () => {
+    useCliEnv();
+    const spec = specById("workspace.storage.get");
+    const settings = { ttl_ms: 86_400_000, automation_ttl_ms: 86_400_000, max_retained: 50, orphan_ttl_ms: 259_200_000, snapshot_max_bytes: 268_435_456, chat_idle_days: 14 };
+    globalThis.fetch = mockFetch(spec.id, [], (request) => {
+      const path = new URL(request.url).pathname;
+      if (path === "/api/workspaces/ws_1") return Response.json({ id: "ws_1", name: "Workspace" });
+      expect(request.method).toBe("GET");
+      expect(path).toBe("/api/workspaces/ws_1/storage");
+      return Response.json({ settings, overrides: { ttl_ms: 86_400_000 } });
+    });
+
+    const table = await execute(spec, ["ws_1"]);
+    expect(table).toMatch(/ttl_ms\s+86400000\s+workspace\s+259200000/);
+    expect(table).toMatch(/max_retained\s+50\s+default\s+50/);
+    expect(table.split("\n")).toHaveLength(7);
+    expect(JSON.parse(await execute(spec, ["ws_1", "--output", "json"]))).toEqual({ settings, overrides: { ttl_ms: 86_400_000 } });
+  });
+
+  it("sends only the storage options that were set, resets others with null, and rejects empty updates", async () => {
+    useCliEnv();
+    const spec = specById("workspace.storage.set");
+    const bodies: unknown[] = [];
+    const settings = { ttl_ms: 7_200_000, automation_ttl_ms: 86_400_000, max_retained: 0, orphan_ttl_ms: 259_200_000, snapshot_max_bytes: 268_435_456, chat_idle_days: 14 };
+    globalThis.fetch = mockFetch(spec.id, [], async (request) => {
+      const path = new URL(request.url).pathname;
+      if (path === "/api/workspaces/ws_1") return Response.json({ id: "ws_1", name: "Workspace" });
+      expect(request.method).toBe("PUT");
+      expect(path).toBe("/api/workspaces/ws_1/storage");
+      bodies.push(await request.json());
+      return Response.json({ settings, overrides: { ttl_ms: 7_200_000, max_retained: 0 } });
+    });
+
+    await execute(spec, ["ws_1", "--ttl-ms", "7200000", "--max-retained", "0", "--reset", "chat-idle-days", "--reset", "snapshot-max-bytes", "--output", "json"]);
+    expect(bodies).toEqual([{ ttl_ms: 7_200_000, max_retained: 0, chat_idle_days: null, snapshot_max_bytes: null }]);
+
+    await execute(spec, ["ws_1", "--data", '{"orphan_ttl_ms":3600000}', "--chat-idle-days", "30", "--output", "json"]);
+    expect(bodies.at(-1)).toEqual({ orphan_ttl_ms: 3_600_000, chat_idle_days: 30 });
+
+    await expect(execute(spec, ["ws_1"])).rejects.toThrow("requires an option, --reset or input JSON");
+    await expect(execute(spec, ["ws_1", "--ttl-ms", "7200000", "--reset", "ttl-ms"])).rejects.toThrow("--ttl-ms conflicts with --reset ttl-ms");
+    await expect(execute(spec, ["ws_1", "--reset", "session-archive"])).rejects.toThrow("--reset expects one of ttl-ms");
+    expect(bodies).toHaveLength(2);
+  });
+
   it("updates workspace prompts and issue archive settings through explicit commands", async () => {
     useCliEnv();
     const bodies = new Map<string, unknown>();

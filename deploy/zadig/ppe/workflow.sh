@@ -696,7 +696,6 @@ spec:
         - { name: MULTIREMI_CONFIG, value: /srv/multiremi/.multiremi/config.json }
         - { name: MULTIREMI_MIGRATION_REPORT_DIR, value: /srv/multiremi/reports/migrations }
         - { name: MULTIREMI_UPLOAD_DIR, value: /srv/multiremi/.remi/multiremi/uploads }
-        - { name: MULTIREMI_SESSION_ARCHIVE_ROOT, value: /srv/multiremi/.remi/multiremi/session-archives }
         - { name: NODE_ENV, value: development }
         - { name: MULTIREMI_HOST, value: 0.0.0.0 }
         - { name: MULTIREMI_PORT, value: "6120" }

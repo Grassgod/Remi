@@ -278,6 +278,7 @@ export function autopilotRunCompatibilityResponse(
     status: run.status,
     issue_id: run.issueId,
     issue_session_id: run.issueSessionId,
+    chat_session_id: run.chatSessionId,
     task_id: run.taskId,
     triggered_at: run.triggeredAt,
     completed_at: run.completedAt,

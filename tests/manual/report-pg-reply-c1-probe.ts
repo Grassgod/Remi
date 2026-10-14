@@ -49,7 +49,6 @@ const readers: Record<string, string> = {
   multiremi_webhook_deliveries: "AutopilotsRepo.getWebhookDelivery/listWebhookDeliveries",
   multiremi_platform_operations: "PlatformOperationsRepo.list/get",
   multiremi_attachments: "IssuesRepo.getAttachment/listAttachmentsForIssue",
-  multiremi_session_archives: "SessionArchivesRepo.list/get",
   multiremi_squads: "SquadsRepo.getSquad/listSquads",
   multiremi_message_connections: "MessagingRepo.getConnection/listConnections",
 };

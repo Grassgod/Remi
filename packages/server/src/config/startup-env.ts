@@ -27,21 +27,11 @@ export interface StartupEnvResult {
   effective: StartupEffectiveConfig;
 }
 
-export interface ObservableConfigurationItem {
-  id: string;
-  status: "enabled" | "disabled";
-  effectiveValue: string | null;
-  detail: string;
-}
-
 const PRODUCTION_REQUIRED = [
   "MULTIREMI_DATABASE_URL",
   "MULTIREMI_TOKEN",
   "JWT_SECRET",
 ] as const;
-
-export const SESSION_ARCHIVE_DEGRADATION_MESSAGE =
-  "Session Archive direct upload disabled, falling back to 8 MiB proxy limit";
 
 /**
  * MUL-461: SQLite cannot back a split deployment.
@@ -69,14 +59,7 @@ export function evaluateStartupEnv(env: StartupEnvironment, apiRole?: ApiRoleCon
   const missingRequired = production
     ? PRODUCTION_REQUIRED.filter((key) => !clean(env[key]))
     : [];
-  const degradations: StartupDegradation[] = daemonDirectBaseUrl
-    ? []
-    : [{
-        id: "session_archive_direct_upload",
-        status: "disabled",
-        effectiveValue: null,
-        message: SESSION_ARCHIVE_DEGRADATION_MESSAGE,
-      }];
+  const degradations: StartupDegradation[] = [];
   if (resolvedApiRole.role !== "all" && !isPostgresDatabaseUrl(env.MULTIREMI_DATABASE_URL)) {
     degradations.push({
       id: "api_role_split_store",
@@ -174,17 +157,6 @@ export function normalizeDaemonDirectBaseUrl(value: string | null | undefined): 
     throw new Error("MULTIREMI_DAEMON_DIRECT_BASE_URL must be an http(s) origin without credentials, path, query, or fragment");
   }
   return url.origin;
-}
-
-export function observableConfiguration(daemonDirectBaseUrl: string | null): ObservableConfigurationItem[] {
-  return [{
-    id: "session_archive_direct_upload",
-    status: daemonDirectBaseUrl ? "enabled" : "disabled",
-    effectiveValue: daemonDirectBaseUrl,
-    detail: daemonDirectBaseUrl
-      ? "Session Archive content uploads use the direct API origin"
-      : SESSION_ARCHIVE_DEGRADATION_MESSAGE,
-  }];
 }
 
 function clean(value: string | null | undefined): string | null {

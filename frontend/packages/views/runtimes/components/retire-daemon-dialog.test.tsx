@@ -57,6 +57,7 @@ function makePlan(overrides: Partial<DaemonRetirementPlan> = {}): DaemonRetireme
     queued_tasks: [],
     local_directory_resources: [],
     issue_workspaces: [],
+    traces_to_lose: 0,
     impact: {
       runtimes_removed: 1,
       agents_detached: 0,
@@ -261,22 +262,31 @@ describe("RetireDaemonDialog", () => {
     }));
   });
 
-  it.each([
-    ["alongside an Issue workspace", [{ issue_id: "issue-stale", status: "runtime_offline",
-      runtime_id: "runtime-1", root_path: "/work/stale" }], ["active_issue_workspaces", "unarchived_hot_traces"]],
-    ["without an Issue workspace", [], ["unarchived_hot_traces"]],
-  ])("does not offer abandon for hot traces %s", async (_name, issueWorkspaces, blockingReasons) => {
+  it("does not offer abandon when another blocker accompanies the Issue workspaces", async () => {
     fetchPlan.mockResolvedValue(makePlan({
       can_retire: false,
       can_abandon_issue_workspaces: true,
-      blocking_reasons: blockingReasons,
-      issue_workspaces: issueWorkspaces,
+      blocking_reasons: ["active_issue_workspaces", "active_tasks"],
+      issue_workspaces: [{ issue_id: "issue-stale", status: "runtime_offline",
+        runtime_id: "runtime-1", root_path: "/work/stale" }],
     }));
     renderDialog();
     const submit = await screen.findByRole("button", { name: "Deactivate and remove" });
     expect(screen.queryByRole("checkbox", { name: /Abandon these issue workspace records/ })).toBeNull();
     expect(submit).toBeDisabled();
     expect(retireDaemon).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [0, null],
+    [1, "1 attempt's execution trace will become unavailable"],
+    [3, "3 attempts' execution traces will become unavailable"],
+  ])("warns about %i lost execution traces", async (count, warning) => {
+    fetchPlan.mockResolvedValue(makePlan({ traces_to_lose: count }));
+    renderDialog();
+    await screen.findByText(/I understand this daemon ID and its access tokens/);
+    if (warning) expect(screen.getByText(warning)).toBeInTheDocument();
+    else expect(screen.queryByText(/execution traces? will become unavailable/)).toBeNull();
   });
 
   it("rejects a conflict plan for another daemon", async () => {

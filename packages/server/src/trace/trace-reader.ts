@@ -1,21 +1,20 @@
 import type { TraceEvent } from "@multiremi/contracts/trace.js";
-import type { MultiremiTaskTrace } from "@multiremi/contracts/session-archive.js";
+import type { MultiremiTaskTrace } from "@multiremi/contracts/trace-file.js";
 import type { MultiremiStore } from "@multiremi/store/store.js";
 import type { DaemonTraceReader } from "@multiremi/api/trace/daemon-trace-reader.js";
-import { SessionArchiveReader } from "@multiremi/session-archive/reader.js";
 
 export const TRACE_READ_DEFAULT_LIMIT = 200;
 export const TRACE_READ_MAX_LIMIT = 500;
 export const TRACE_READ_MAX_BYTES = 1024 * 1024;
 
-export type TraceReadState = "ok" | "unreachable" | "not_found" | "backfilling" | "lost";
+export type TraceReadState = "ok" | "unreachable" | "not_found" | "lost";
 export interface TraceReadResult {
   events: TraceEvent[];
   next_after_seq: number;
   head: number;
   eof: boolean;
   closed: boolean;
-  source: "daemon" | "archive" | null;
+  source: "daemon" | null;
   state: TraceReadState;
   reason?: string;
   retryable?: boolean;
@@ -27,7 +26,6 @@ export interface TraceReadResult {
 export interface TraceReaderOptions {
   store: MultiremiStore;
   daemon: DaemonTraceReader;
-  archive: SessionArchiveReader;
   /** The store's pointer repo uses an injectable query(sql, params) callback. */
   getPointer?: (taskId: string) => MultiremiTaskTrace | null;
 }
@@ -54,11 +52,8 @@ export class TraceReader {
         } : {}),
       };
     }
-    if (pointer.location === "lost" || pointer.location === "backfilling") {
-      return empty(afterSeq, pointer.location, null);
-    }
+    if (pointer.location === "lost") return empty(afterSeq, "lost", null);
     if (pointer.location === "none") return empty(afterSeq, "not_found", null, "no_events");
-    if (pointer.location === "archive") return this.readArchive(pointer, afterSeq, pageLimit, byteLimit);
     if (!pointer.runtimeId) return empty(afterSeq, "unreachable", "daemon", "runtime_missing");
 
     const runtime = this.options.store.getRuntime(pointer.runtimeId);
@@ -69,8 +64,6 @@ export class TraceReader {
       });
       if (!result.ok) {
         if (result.code === "trace_not_hot") {
-          const latest = this.pointer(taskId);
-          if (latest?.location === "archive") return this.readArchive(latest, afterSeq, pageLimit, byteLimit);
           return { ...empty(afterSeq, "not_found", "daemon", "trace_not_hot"), ...location };
         }
         return {
@@ -88,18 +81,9 @@ export class TraceReader {
     return this.options.getPointer ? this.options.getPointer(taskId) : this.options.store.getTaskTrace(taskId);
   }
 
-  private async readArchive(pointer: MultiremiTaskTrace, afterSeq: number, limit: number, maxBytes: number): Promise<TraceReadResult> {
-    try {
-      const window = await this.options.archive.readTraceLines(pointer, afterSeq, limit);
-      return this.bounded(window.events as unknown as TraceEvent[], afterSeq, window.head, window.complete, window.closed, "archive", maxBytes);
-    } catch {
-      return { ...empty(afterSeq, "unreachable", "archive", "archive_read_failed"), retryable: true };
-    }
-  }
-
   private bounded(
     events: TraceEvent[], afterSeq: number, head: number, eof: boolean, closed: boolean,
-    source: "daemon" | "archive", maxBytes: number,
+    source: "daemon", maxBytes: number,
     location: Pick<TraceReadResult, "runtime_id" | "runtime_name"> = {},
   ): TraceReadResult {
     const page: TraceEvent[] = [];

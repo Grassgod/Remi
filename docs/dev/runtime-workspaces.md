@@ -101,7 +101,7 @@ Project 设备绑定（含独享设备）是放置约束，任何亲和都不能
 `issue_workspace_runtime_attached`，须走删除或退役流程。
 重复放弃已 cleaned 且 Runtime 为空的记录返回计数 0。
 放弃保留本地文件与目录记录，解除任务领取的旧工作区亲和；其他设备、Agent 和快照约束仍适用。
-它不生成归档绑定，也不代表工作区文件已物理清理。
+它不代表工作区文件已物理清理。
 
 验证入口：`tests/unit/multiremi/runtime-issue-workspace-deletion.test.ts` 同时覆盖 SQLite
 与 `MULTIREMI_TEST_POSTGRES_URL` 指向的真实 PostgreSQL；显式配置 PG 连接失败会报错。
@@ -113,11 +113,11 @@ SAVEPOINT 回滚。
 
 ## 任务私有 /tmp
 
-每个任务执行前，daemon 在本次执行的 provider home 下分配一个独占目录（`task-tmp/<task>-XXXXXX`，0700），执行结束后删除。Linux 把它挂载为进程树的字面 `/tmp`（[实现](../../packages/acp/src/private-tmp.ts)），因此同一个任务里的 shell、子进程和 ACP 文件工具看到同一份 `/tmp`，不同任务互不可见。namespace 不可用时 fail-closed：任务以 `private_tmp_isolation_unavailable` 失败，不退回共享 `/tmp`。
+每个任务执行前，daemon 在 `env/<主体>/tmp/` 下分配一个独占目录（`<task>-XXXXXX`，0700），执行结束后删除；每轮 GC 还会清掉不在运行的执行留下的残留。Linux 把它挂载为进程树的字面 `/tmp`（[实现](../../packages/acp/src/private-tmp.ts)），因此同一个任务里的 shell、子进程和 ACP 文件工具看到同一份 `/tmp`，不同任务互不可见。namespace 不可用时 fail-closed：任务以 `private_tmp_isolation_unavailable` 失败，不退回共享 `/tmp`。
 
 macOS 是有意降级（MUL-449）：内核没有 user / mount namespace，无法按任务替换字面 `/tmp`。darwin 上不套 `unshare`，改为把 `TMPDIR` / `TMP` / `TEMP` 指向该任务的私有目录，并接受字面 `/tmp` 与主机共享；`mapPrivateTmpPath` / `privateTmpVisiblePath` 在 darwin 上恒等，保证文件工具与 shell 解析同一路径（包括 antigravity 的 `--log-file`）。其他非 Linux 平台（win32 等）仍然报错。平台参数只为单测模拟 darwin，不影响 Linux 行为。
 
-macOS 的 socket 路径上限是 104 字节（`sun_path`），而真实私有目录在 provider home 下，委派任务的路径可超过 220 字节，所以在 TMPDIR 里建 socket 的工具（MCP/IDE 的 IPC、git credential cache、tmux 等）会失败。darwin 上因此额外为每次执行创建一个 `/tmp/remi-XXXXXXXX` 短别名（`symlink()` 原子创建，随机名字，EEXIST 就换名重试，有次数上限；建好后 `lstat` 校验确实是自己建的链接并指向本次真实目录），`TMPDIR` / `TMP` / `TEMP` 指向别名，真实目录仍在 `task-tmp` 下。别名创建失败（例如 `/tmp` 不可写）只记一条 warn 并退回长路径，任务照常执行。执行结束时先校验「是符号链接」且「readlink 等于本次真实目录」，两项都满足才 `unlink` 别名，绝不经由别名递归删除；真实目录仍由 `cleanupTaskPrivateTempDirectory` 按 storage 边界删除。daemon 崩溃留下的悬空别名不做启动清扫：macOS 会定期清理 `/tmp`，且残留链接指向已删除的目录，只占名字不占数据。`isolateProcessTmp` 的 darwin 分支因此保留传入路径原样（不做 realpath），否则别名会被展开回长路径。
+macOS 的 socket 路径上限是 104 字节（`sun_path`），而真实私有目录在 `env/` 的深层路径下，委派任务的路径可超过 220 字节，所以在 TMPDIR 里建 socket 的工具（MCP/IDE 的 IPC、git credential cache、tmux 等）会失败。darwin 上因此额外为每次执行创建一个 `/tmp/remi-XXXXXXXX` 短别名（`symlink()` 原子创建，随机名字，EEXIST 就换名重试，有次数上限；建好后 `lstat` 校验确实是自己建的链接并指向本次真实目录），`TMPDIR` / `TMP` / `TEMP` 指向别名，真实目录仍在 `env/<主体>/tmp/` 下。别名创建失败（例如 `/tmp` 不可写）只记一条 warn 并退回长路径，任务照常执行。执行结束时先校验「是符号链接」且「readlink 等于本次真实目录」，两项都满足才 `unlink` 别名，绝不经由别名递归删除；真实目录仍由 `cleanupTaskPrivateTempDirectory` 按 storage 边界删除。daemon 崩溃留下的悬空别名不做启动清扫：macOS 会定期清理 `/tmp`，且残留链接指向已删除的目录，只占名字不占数据。`isolateProcessTmp` 的 darwin 分支因此保留传入路径原样（不做 realpath），否则别名会被展开回长路径。
 
 ## 本地上下文
 
@@ -129,19 +129,36 @@ Skill 索引包含名称、触发描述和绝对 `SKILL.md` 路径，支持文�
 
 `env_file` 使用 dotenv 格式，不执行 shell。注入顺序：机器环境 → 团队环境 → Agent 环境 → 本地环境文件 → provider 路由/认证 → Task 坐标。本地文件不能覆盖 `MULTIREMI_*`、`CODEX_HOME`、`CLAUDE_CONFIG_DIR`、`OPENAI_*`、`ANTHROPIC_*`。其他 provider 配置继续沿用现有筛选、插件和 relay 机制，不共享完整 native home。
 
-这些文件无需纳入云端 Git。注册不上传文件内容，服务端 Task prompt 仅描述路径；执行 agent 及其模型服务仍可能读取文件，任务输出和会话归档仍按现有机制处理。跨 Chat 的原生历史不会自动合并；跨任务记忆可保存在工作区文件中。
+这些文件无需纳入云端 Git。注册不上传文件内容，服务端 Task prompt 仅描述路径；执行 agent 及其模型服务仍可能读取文件，任务输出和会话历史仍按现有机制处理。跨 Chat 的原生历史不会自动合并；跨任务记忆可保存在工作区文件中。
 
-原目录不写入 `.multiremi` 任务元数据。Issue 的 provider / archive 状态保存在 daemon 管理的目录；旧 Issue workspace 上报只指向该状态目录，不把注册目录交给 Issue GC。
+原目录不写入 `.multiremi` 任务元数据，也永不被回收：登记里记为 `external_work_dir`，回收只清理该主体的运行环境（provider home、私有临时目录等），不碰用户目录。
 
-Session Archive v2 的容器与遍历策略：包体是标准 ZIP（`multiremi.session-archive.v2`），每个成员单独 deflate（level 6）+ data descriptor，末尾 `index.json` 记录每个成员的 `local_header_offset`、`data_offset`、压缩/原始大小和 sha256，所以读单个 task 的 trace 只解压一个成员。成员布局为 `manifest.json`、`traces/<task_id>.jsonl`、`sessions/<session_id>/...` 与末尾 `index.json`；主体可以是 issue、chat 或一次性 task。`source_revision` 仍是内容清单的 sha256（与压缩方式无关），归档 `sha256` 仍是整包哈希，GC 屏障与硬删屏障不变。
+## daemon 存储布局
 
-服务端逐个校验 trace 成员：Issue 包只收该 Issue 的 task，Chat 包只收该 Chat 的 task，一次性包只收同 id 且没有 Issue/Chat 绑定的 task；所有成员都须属于同一 workspace。执行 Runtime 可以等于归档 Runtime，也可以是同一 daemon 的另一个 Runtime（两行都存在且 `daemon_id` 非空且相同）。这与 daemon 按主体收集本机 session 根、上传路由按 daemon 身份鉴权一致；预校验和 ready 事务内复核使用同一规则。提升后的失败只清理由该 attempt 写入的最终文件与 manifest，按 attempt 编号及文件身份隔离较新的 attempt。
+daemon 的根目录是 `MULTIREMI_WORKSPACES_ROOT`（默认 `~/.remi/multiremi/workspaces`）。所有路径由 `packages/daemon/src/agent-runtime/workspace/layout.ts` 构造，其他模块不再手写拼接。决策与取舍见 [ADR 0018](../adr/0018-local-records-and-recyclable-workspaces.md)，生命周期、策略和运维见[存储与保留](storage-retention.md)。
 
-归档遍历不再依赖 `/proc/self/fd`：写入器逐级 `lstat`，拒绝符号链接，并在扫描前后比对 dev/ino/size/mtime，成员读取用 `O_NOFOLLOW` 打开。这样 macOS daemon 也能归档（Linux 上过去只有描述符路径可用）。Windows 仍被拒绝，因为 `lstat` 不把 junction 报告为符号链接，无法保证「不逃出会话根」。
+```text
+registry/<主体>.json                    主体登记：归属、仓库、分支、状态、快照（原子写入）
+registry/<主体>.snapshot/wiki/          wiki 快照
+work/<主体>/                            共享工作区：<repo>/ worktree、wiki/、.multiremi/wiki-base/；Chat 的 cwd；MULTIREMI_WORKSPACE_ROOT
+env/<主体>/<对话>/<agent>/<范围>/<代>/    [executions/<执行身份>/]home/、work/（讨论会话）、.remi-runtime/
+env/<主体>/tmp/<tsk>-XXXXXX/            执行私有临时目录
+traces/<主体>/<tsk>.jsonl               trace（multiremi.trace.v1）
+shared/repos/                           共享 bare 仓库，快照 ref 在此
+shared/code-views/                      只读代码视图
+.daemon/                                探测、删除隔离区、待上报队列、disk-usage.json（占用测量缓存）
+_topics/<话题>/                         飞书话题工作区，位置不变；立单时迁入 work/<iss_*>/
+legacy-<日期>/                          升级时移入的旧布局，保留 MULTIREMI_LEGACY_KEEP_DAYS 天；retained/ 与 retained.json 不随过期删除
+```
 
-daemon 的规范化过程记录按 task 写在 `<workspacesRoot>/.runtime/<session_id>/traces/<task_id>.jsonl`；一次性 task 以 task id 代替 session id。文件首尾行是无 seq 的框架行，事件从 seq 1 连续追加。启动时扫描这些 daemon 管理目录重建索引。文件索引与 GC 共用完整性判定：校验头行、事件 seq 顺序及尾行的状态、时间和计数；未封口文件中的重复 seq 取首条、末尾半行忽略以便恢复；带尾行但仍有这些歧义的文件不进入索引。GC 对无法确认完好且已封口的 trace 保留目录并记录路径。
+- 主体是 Chat（`chat_*`）或 Issue（`iss_*`），顺序为 Chat、Issue、任务本身：同时带 Chat 与 Issue 的执行（话题转发、项目绑定的 Chat）归 Chat；既无 Issue 也无 Chat 的执行按兜底主体 `tsk_*` 处理。对话目录名是 Issue 会话 `ises_*`、Chat `chat_*` 或任务 id；范围目录名是 `main`（无委派）或委派 id。
+- Chat 的 cwd 是 `work/<chat>/`（单条会话线、执行串行），`task.json` 与 skills 也放在这里。Issue 持有者（`holds_workspace` 不为 false 的执行）可以并发（生命周期锁以共享模式持有），所以 cwd 是各自会话线私有的 `env/<iss>/<对话>/<agent>/<范围>/<代>/work/`，只放 `task.json`、skills 和附件；仓库与 wiki 用 `work/<iss>/` 下的绝对路径访问。持有者的每次执行都设置 `MULTIREMI_WORKSPACE_ROOT=<根>/work/<主体>`，`remi wiki` 以它定位 wiki 工作副本，同一主体的 wiki 物化由 daemon 的主体级排他锁串行化。讨论会话（非持有者）使用 `env/` 下的一次性工作集：只读 detached worktree 和 `task.json`，没有 wiki，`MULTIREMI_WORKSPACE_ROOT` 指向这个工作集。这些私有 `work/`（连同这一代的 provider home 和插件运行目录，保留的原生会话历史和 provider 在 home 里自己维护的 `.tmp`、`plugins`、`skills`、`cache` 等目录除外）在回收和旧一代清理前同样检查仓库（规则见[存储与保留](storage-retention.md#生命周期)）：agent 在里面自建的 worktree 有未保存工作会被快照，独立克隆或裸仓库里的未保存工作使这一代或整个主体保留。
+- 每次执行开始都会更新主体登记（`last_used_at`、仓库、`external_work_dir`）；GC 只读 `registry/`，不遍历目录树。
+- 执行私有 `/tmp` 的挂载与 macOS 别名行为见上一节，目录位置改为 `env/<主体>/tmp/`。
 
-[GC 安全删除实现](../../packages/daemon/src/agent-runtime/workspace/safe-remove.ts) 有两种寻址策略：Linux 用 `/proc/self/fd` 描述符锚定，macOS 用逐级 `lstat` 校验 + 隔离区重命名（`rename` 前后比对 dev/ino，校验通过才改名 `.deleting` 并递归删除）。两种策略都先移入 root 下 0700 的 `.multiremi-delete-quarantine`，不跟随符号链接，也不删除 owned root 之外的内容。Windows 没有可用策略，`ownedDirectoryRemovalSupport()` 仍报 blocked 并拒绝删除，daemon 管理的旧状态清理可能保留目录；Runtime 工作区注册、执行和归档均不依赖删除用户目录。
+daemon 的规范化过程记录按 task 写在 `traces/<主体>/<task_id>.jsonl`。文件首尾行是无 seq 的框架行，事件从 seq 1 连续追加。启动只登记这些路径，首次读取或追加时才建索引，常驻索引按 LRU 限量（默认保留 256 个已封口 trace，未封口的始终常驻）。完整性判定不变：校验头行、事件 seq 顺序及尾行的状态、时间和计数；未封口文件中的重复 seq 取首条、末尾半行忽略以便恢复；带尾行但仍有这些歧义的文件不进入索引。
+
+[安全删除实现](../../packages/daemon/src/agent-runtime/workspace/safe-remove.ts) 有两种寻址策略：Linux 用 `/proc/self/fd` 描述符锚定，macOS 用逐级 `lstat` 校验 + 隔离区重命名（`rename` 前后比对 dev/ino，校验通过才改名 `.deleting` 并递归删除）。两种策略都先移入 root 下 0700 的 `.daemon/quarantine`，不跟随符号链接，也不删除 owned root 之外的内容。Windows 没有可用策略，`ownedDirectoryRemovalSupport()` 仍报 blocked 并拒绝删除，回收会保留目录并在存储报告中给出错误；Runtime 工作区注册和执行均不依赖删除用户目录。
 
 ## 实现和验证
 

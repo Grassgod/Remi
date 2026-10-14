@@ -23,11 +23,8 @@ import {
   pluginSetupRequired,
 } from "@daemon/agent-runtime/agent-plugins/reconciler.js";
 import {
-  cleanupNonIssueTaskPluginRuntime,
-  cleanupTaskPluginRuntime,
   materializeTaskPlugins,
   prepareCodexPluginReadinessRuntime,
-  resolveTaskPluginRuntimeBase,
 } from "@daemon/agent-runtime/agent-plugins/materialize.js";
 import {
   installCodexPluginHome,
@@ -35,6 +32,7 @@ import {
   type CodexPluginCommand,
 } from "@daemon/agent-runtime/agent-plugins/codex-home.js";
 import type { AgentPluginSnapshot, RuntimePluginState } from "@daemon/agent-runtime/agent-plugins/types.js";
+import { laneForTask, pluginRuntimeBaseDirectory } from "@daemon/agent-runtime/workspace/layout.js";
 import type { AgentTask } from "@daemon/contracts/types.js";
 import {
   agentPluginArtifactSpecFromWire,
@@ -691,7 +689,7 @@ describe("AgentPluginRuntimeReconciler", () => {
 });
 
 describe("task-private Agent Plugin runtime", () => {
-  it("materializes beside Issue worktrees without fetching and cleans as one directory", async () => {
+  it("materializes in the lane runtime base, never in the Issue worktrees, without fetching", async () => {
     const root = tempRoot();
     const artifact = makeArtifact("claude");
     let fetches = 0;
@@ -708,22 +706,21 @@ describe("task-private Agent Plugin runtime", () => {
     mkdirSync(join(issueRoot, "remi", ".git"), { recursive: true });
     const task = makeTask("claude", snapshot, { issueId: "iss_42", issueKey: "MUL-42" });
 
-    const prepared = await materializeTaskPlugins(task, issueRoot, cache);
+    const runtimeBase = join(root, "lane");
 
-    expect(prepared.runtimeRoot).toBe(join(issueRoot, ".remi-runtime", "executions", task.id));
+    const prepared = await materializeTaskPlugins(task, issueRoot, cache, { runtimeBase });
+
+    expect(prepared.runtimeRoot).toBe(join(runtimeBase, ".remi-runtime", "executions", task.id));
     expect(prepared.pluginPaths[0]).toBe(
-      join(issueRoot, ".remi-runtime", "executions", task.id, "plugins", artifact.digest),
+      join(runtimeBase, ".remi-runtime", "executions", task.id, "plugins", artifact.digest),
     );
+    expect(existsSync(join(issueRoot, ".remi-runtime"))).toBe(false);
     expect(existsSync(join(issueRoot, "remi", ".remi-runtime"))).toBe(false);
     expect(readFileSync(join(prepared.pluginPaths[0]!, "skills", "demo", "SKILL.md"), "utf8")).toBe("# Demo\n");
     const execution = readFileSync(join(prepared.runtimeRoot, "execution.json"), "utf8");
     expect(execution).not.toContain("must-not-be-written");
     expect(execution).toContain("configDigest");
     expect(fetches).toBe(1);
-
-    await cleanupTaskPluginRuntime(issueRoot);
-    expect(existsSync(prepared.runtimeRoot)).toBe(false);
-    expect(existsSync(join(issueRoot, "remi"))).toBe(true);
   });
 
   it("publishes concurrent calls for one task once and isolates later tasks using the same digest", async () => {
@@ -749,23 +746,24 @@ describe("task-private Agent Plugin runtime", () => {
     mkdirSync(issueRoot);
     const task = makeTask("claude", snapshot, { issueId: "iss_44", issueKey: "MUL-44" });
 
+    const runtimeBase = join(root, "lane");
     const [first, duplicate] = await Promise.all([
-      materializeTaskPlugins(task, issueRoot, cache),
-      materializeTaskPlugins(task, issueRoot, cache),
+      materializeTaskPlugins(task, issueRoot, cache, { runtimeBase }),
+      materializeTaskPlugins(task, issueRoot, cache, { runtimeBase }),
     ]);
 
     expect(first.pluginPaths).toEqual(duplicate.pluginPaths);
     expect(readFileSync(join(first.pluginPaths[0]!, "skills", "demo", "SKILL.md"), "utf8")).toBe("# Demo\n");
     writeFileSync(join(first.pluginPaths[0]!, "injected.txt"), "must not persist\n");
 
-    const second = await materializeTaskPlugins({ ...task, id: "task_2" }, issueRoot, cache);
+    const second = await materializeTaskPlugins({ ...task, id: "task_2" }, issueRoot, cache, { runtimeBase });
 
     expect(second.pluginPaths).not.toEqual(first.pluginPaths);
     expect(existsSync(join(second.pluginPaths[0]!, "injected.txt"))).toBe(false);
     expect(readFileSync(join(second.pluginPaths[0]!, "skills", "demo", "SKILL.md"), "utf8")).toBe("# Demo\n");
   });
 
-  it("requires daemon-owned runtimeBase for non-Issue tasks and leaves ACP cwd untouched", async () => {
+  it("refuses a runtime base inside the task cwd and leaves the cwd untouched", async () => {
     const root = tempRoot();
     const artifact = makeArtifact("claude");
     const cache = new AgentPluginCache({
@@ -778,17 +776,17 @@ describe("task-private Agent Plugin runtime", () => {
     mkdirSync(userRepo);
     const task = makeTask("claude", snapshot);
 
-    await expect(materializeTaskPlugins(task, userRepo, cache)).rejects.toMatchObject({
-      code: "plugin_runtime_base_required",
-    });
-    const runtimeBase = resolveTaskPluginRuntimeBase(task, userRepo, join(root, "workspaces"));
+    for (const runtimeBase of [userRepo, join(userRepo, "nested")]) {
+      await expect(materializeTaskPlugins(task, userRepo, cache, { runtimeBase })).rejects.toMatchObject({
+        code: "plugin_runtime_base_invalid",
+      });
+    }
+    const runtimeBase = pluginRuntimeBaseDirectory(join(root, "workspaces"), laneForTask(task)!);
     const prepared = await materializeTaskPlugins(task, userRepo, cache, { runtimeBase });
     expect(prepared.runtimeRoot).toBe(
-      join(root, "workspaces", ".runtime", task.id, ".remi-runtime", "executions", task.id),
+      join(root, "workspaces", "env", task.id, task.id, "agent_1", "main", "1", ".remi-runtime", "executions", task.id),
     );
     expect(existsSync(join(userRepo, ".remi-runtime"))).toBe(false);
-    await cleanupNonIssueTaskPluginRuntime(task, join(root, "workspaces"));
-    expect(existsSync(runtimeBase)).toBe(false);
   });
 
   it("uses a stable chat runtime and Codex home until the execution fingerprint changes", async () => {
@@ -812,15 +810,16 @@ describe("task-private Agent Plugin runtime", () => {
       pluginSnapshot: [{ ...snapshot, config: { scope: "changed" } }],
     };
 
-    const firstBase = resolveTaskPluginRuntimeBase(firstTask, userRepo, workspacesRoot);
-    const secondBase = resolveTaskPluginRuntimeBase(secondTask, userRepo, workspacesRoot);
-    const changedBase = resolveTaskPluginRuntimeBase(changedTask, userRepo, workspacesRoot);
+    const baseOf = (task: AgentTask) => pluginRuntimeBaseDirectory(workspacesRoot, laneForTask(task)!);
+    const firstBase = baseOf(firstTask);
+    const secondBase = baseOf(secondTask);
+    const changedBase = baseOf(changedTask);
     const first = await materializeTaskPlugins(firstTask, userRepo, cache, { runtimeBase: firstBase });
     writeFileSync(join(first.codexMarketplaceRoot!, "injected.txt"), "must not persist\n");
     const second = await materializeTaskPlugins(secondTask, userRepo, cache, { runtimeBase: secondBase });
     const changed = await materializeTaskPlugins(changedTask, userRepo, cache, { runtimeBase: changedBase });
 
-    expect(firstBase).toBe(join(workspacesRoot, ".runtime", "chat_1"));
+    expect(firstBase).toBe(join(workspacesRoot, "env", "chat_1", "chat_1", "agent_1", "main", "1"));
     expect(secondBase).toBe(firstBase);
     expect(changedBase).toBe(firstBase);
     expect(second.codexHome).toBe(first.codexHome);
@@ -845,7 +844,7 @@ describe("task-private Agent Plugin runtime", () => {
       makeTask("codex", snapshot, { issueId: "iss_43", issueKey: "MUL-43" }),
       issueRoot,
       cache,
-      { codexHome: sessionCodexHome },
+      { codexHome: sessionCodexHome, runtimeBase: join(root, "lane") },
     );
     const baseHome = join(root, "base-codex");
     mkdirSync(join(baseHome, "plugins", "cache"), { recursive: true });
@@ -913,6 +912,7 @@ describe("task-private Agent Plugin runtime", () => {
       makeTask("codex", snapshot, { issueId: "iss_45", issueKey: "MUL-45" }),
       issueRoot,
       cache,
+      { runtimeBase: join(root, "lane") },
     );
     let commands = 0;
     const options = {

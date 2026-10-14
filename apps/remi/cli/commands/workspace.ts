@@ -1,3 +1,4 @@
+import { STORAGE_SETTINGS_DEFAULTS, STORAGE_SETTINGS_KEYS, type WorkspaceStorageResponse } from "@multiremi/contracts/storage.js";
 import {
   CliError,
   CliRenderer,
@@ -67,6 +68,16 @@ const FEISHU_BOT_FIELDS: readonly CliOptionSpec[] = [
   { name: "domain", type: "string", valueName: "feishu|lark|bytedance", description: "Open platform domain" },
   { name: "enabled", type: "boolean", description: "Run after saving; requires an online Runtime with concierge support" },
   { name: "disabled", type: "boolean", description: "Save without running; permits an offline Runtime or one without concierge support" },
+];
+
+const STORAGE_FIELDS: readonly CliOptionSpec[] = [
+  { name: "ttl-ms", type: "integer", valueName: "ms", description: "Retention after an Issue or Chat ends before its workspace is reclaimed" },
+  { name: "automation-ttl-ms", type: "integer", valueName: "ms", description: "Same as --ttl-ms for Chats opened by automation runs" },
+  { name: "max-retained", type: "integer", valueName: "n", description: "Ended subjects allowed to keep a workspace; 0 means no cap" },
+  { name: "orphan-ttl-ms", type: "integer", valueName: "ms", description: "How long a daemon keeps data of a subject the server no longer knows" },
+  { name: "snapshot-max-bytes", type: "integer", valueName: "bytes", description: "Largest unsaved work a reclaim snapshot may capture" },
+  { name: "chat-idle-days", type: "integer", valueName: "days", description: "Days without activity before an active Chat is archived; 0 means never" },
+  { name: "reset", type: "string", valueName: "option", repeatable: true, description: "Reset an option to its default, for example --reset ttl-ms" },
 ];
 
 export function workspaceCommandSpecs(): CommandSpec[] {
@@ -331,6 +342,19 @@ export function workspaceCommandSpecs(): CommandSpec[] {
       { name: "ttl-ms", type: "integer", valueName: "ms", description: "Archive retention duration" },
       { name: "sweep-interval-ms", type: "integer", valueName: "ms", description: "Archive sweep interval" },
     ], issueArchiveBody),
+    readSpec("workspace.storage.get", ["workspace", "storage", "get"], "Read the daemon storage retention policy", [refPositional("workspace")], async (invocation) => {
+      const client = await clientFor(invocation);
+      const workspace = await resolveWorkspace(client, positional(invocation, 0, "workspace"));
+      const response = await client.request({ method: "GET", path: `/api/workspaces/${encodePath(String(workspace.id))}/storage` });
+      renderStorageSettings(invocation, response.data);
+    }),
+    writeSpec("workspace.storage.set", ["workspace", "storage", "set"], "Update the daemon storage retention policy", [refPositional("workspace")], STORAGE_FIELDS, async (invocation) => {
+      const client = await clientFor(invocation);
+      const workspace = await resolveWorkspace(client, positional(invocation, 0, "workspace"));
+      const body = await storageBody(invocation);
+      const response = await client.request({ method: "PUT", path: `/api/workspaces/${encodePath(String(workspace.id))}/storage`, body });
+      renderStorageSettings(invocation, response.data);
+    }),
   ];
 }
 
@@ -656,6 +680,47 @@ async function issueArchiveBody(invocation: CommandInvocation): Promise<Record<s
     throw new CliError("usage", "workspace issue-archive update requires --ttl-ms and --sweep-interval-ms or input JSON");
   }
   return body;
+}
+
+/** Every option name is its setting key with dashes; `--reset` sends null so the server falls back to the default. */
+async function storageBody(invocation: CommandInvocation): Promise<Record<string, unknown>> {
+  const explicit: Record<string, number | null> = {};
+  for (const key of STORAGE_SETTINGS_KEYS) {
+    const value = integerOption(invocation, key.replaceAll("_", "-"));
+    if (value !== null) explicit[key] = value;
+  }
+  for (const name of stringOptions(invocation, "reset")) {
+    const key = name.replaceAll("-", "_");
+    if (!(STORAGE_SETTINGS_KEYS as readonly string[]).includes(key)) {
+      throw new CliError("usage", `--reset expects one of ${STORAGE_SETTINGS_KEYS.map((entry) => entry.replaceAll("_", "-")).join(", ")}`);
+    }
+    if (key in explicit) throw new CliError("usage", `--${key.replaceAll("_", "-")} conflicts with --reset ${name}`);
+    explicit[key] = null;
+  }
+  const body = await requestBody(invocation, explicit);
+  if (!Object.keys(body).length) throw new CliError("usage", "workspace storage set requires an option, --reset or input JSON");
+  return body;
+}
+
+function renderStorageSettings(invocation: CommandInvocation, value: unknown): void {
+  new CliRenderer().render<{ key: string; value: number; source: string; default: number }>(value, {
+    mode: outputMode(invocation),
+    rows: (input) => {
+      const { settings, overrides } = input as WorkspaceStorageResponse;
+      return STORAGE_SETTINGS_KEYS.map((key) => ({
+        key,
+        value: settings[key],
+        source: key in overrides ? "workspace" : "default",
+        default: STORAGE_SETTINGS_DEFAULTS[key],
+      }));
+    },
+    columns: [
+      { header: "SETTING", value: (row) => row.key },
+      { header: "VALUE", value: (row) => row.value },
+      { header: "SOURCE", value: (row) => row.source },
+      { header: "DEFAULT", value: (row) => row.default },
+    ],
+  });
 }
 
 async function organizerBody(invocation: CommandInvocation): Promise<Record<string, unknown>> {

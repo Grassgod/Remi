@@ -16,7 +16,6 @@ services:
       MULTIREMI_PORT: 6120
       MULTIREMI_OPENVIKING_URL: http://openviking:1933
       MULTIREMI_UPLOAD_DIR: /srv/multiremi/uploads
-      MULTIREMI_SESSION_ARCHIVE_ROOT: /srv/multiremi/session-archives
       MULTIREMI_BACKGROUND_JOBS: ${REMI_BACKGROUND_JOBS:-0}
       MULTIREMI_SSH_MESH_CONTROL_PLANE: 0
       MULTIREMI_SSH_MESH_CONTROL_PLANE_ROOT: /srv/multiremi/ssh-mesh
@@ -30,7 +29,6 @@ services:
     volumes:
       - ${REMI_HOME_DIR:?set REMI_HOME_DIR}:/srv/multiremi
       - ${REMI_UPLOAD_DIR:?set REMI_UPLOAD_DIR}:/srv/multiremi/uploads
-      - ${REMI_SESSION_ARCHIVE_ROOT:?set REMI_SESSION_ARCHIVE_ROOT}:/srv/multiremi/session-archives
       - ${REMI_SSH_MESH_ROOT:?set REMI_SSH_MESH_ROOT}:/srv/multiremi/ssh-mesh
     networks:
       - app
@@ -65,7 +63,6 @@ services:
       MULTIREMI_PORT: 6120
       MULTIREMI_OPENVIKING_URL: http://openviking:1933
       MULTIREMI_UPLOAD_DIR: /srv/multiremi/uploads
-      MULTIREMI_SESSION_ARCHIVE_ROOT: /srv/multiremi/session-archives
       # Explicit "0": an unset value enables background jobs, which would make
       # this container a second scheduler.
       MULTIREMI_BACKGROUND_JOBS: "0"
@@ -78,7 +75,6 @@ services:
     volumes:
       - ${REMI_HOME_DIR:?set REMI_HOME_DIR}:/srv/multiremi
       - ${REMI_UPLOAD_DIR:?set REMI_UPLOAD_DIR}:/srv/multiremi/uploads
-      - ${REMI_SESSION_ARCHIVE_ROOT:?set REMI_SESSION_ARCHIVE_ROOT}:/srv/multiremi/session-archives
       - ${REMI_SSH_MESH_ROOT:?set REMI_SSH_MESH_ROOT}:/srv/multiremi/ssh-mesh
     networks:
       - app

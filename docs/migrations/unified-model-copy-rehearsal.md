@@ -11,7 +11,7 @@ Remi-CC 将以下具体内容提交给贺华杰，批准后把评论 ID 保存�
 - 副本来源、快照时间、脱敏范围、备份校验值；源副本必须是 v0.2.87/#384 用量启动已完成、统一模型尚未迁移的状态：有 `20261006_usage_accounting_v2` 和 `20261006_usage_accounting_startup_v1` 两个标记，尚未应用 `20261004_unified_message_turn_lane`。旧镜像及回滚点须匹配快照版本，不能用 v0.2.86 或已迁移的草稿库代替。
 - 候选完整 SHA、API 镜像 digest 和 OCI revision；旧版完整 SHA、可恢复的旧 API 镜像 digest；PG 服务端主版本和匹配的工具镜像 digest。镜像在执行前由负责人准备并加载，脚本不拉取镜像、不构建或发版。
 - 209 上全新演练目录、所需磁盘空间（源备份、工作副本、回滚备份、两个 api-home 和报告）、时间预算及操作者 Remi-CC 的宿主 UID/GID。执行必须使用非 root 账号；目录不位于生产数据卷或部署目录内。
-- 副本四项阻塞预检均为 0 的证据。若原快照有 awaiting_human、所属任务未结束（或任务缺失）的未消费 steer、running 回填组或 running/dispatched task，脚本拒绝；先申请新的、正常 drain 后取得的副本，不删行、不改状态来造绿。所属任务为 completed/failed/cancelled 的未消费 steer 不阻塞，单独报告数量、ID、任务状态和正文摘要，原行与 consumed_at 保持不变。
+- 副本三项阻塞预检均为 0 的证据。若原快照有 awaiting_human、所属任务未结束（或任务缺失）的未消费 steer 或 running/dispatched task，脚本拒绝；先申请新的、正常 drain 后取得的副本，不删行、不改状态来造绿。所属任务为 completed/failed/cancelled 的未消费 steer 不阻塞，单独报告数量、ID、任务状态和正文摘要，原行与 consumed_at 保持不变。
 - 需抽样的 Issue 和读进度类型、负责人、缺失覆盖如何补充。没有部分消费记录时明确记为“真实副本无此样本”，不能写成通过。
 
 不使用生产 `api.env` / `application.env`、生产 URL、Docker Compose 名称、既有卷或网络。备份输入为已验证的**数据副本**导出目录，含 `platform.pgdump`、脱敏 `api-home.tar.gz` 和 `SHA256SUMS`。api-home 副本不携带 bot/provider/SSH/SSO 凭据；消息正文、数据库备份和诊断保存在私有目录，不直接贴评论。备份生成与校验方式参考[切换手册第 3 步](../deploy/unified-model-cutover.md#切换顺序)，其数据库环境只能指向另行隔离的数据副本。
@@ -60,7 +60,7 @@ bash scripts/rehearse-unified-model-copy.sh \
 | `rollback.pgdump`、`rollback-api-home.tar.gz`、恢复清单和校验文件 | 工作副本的回滚点及恢复验证 |
 | `durations-ms.tsv` | 源副本恢复、旧代码启动、副本备份、候选容器、回滚数据库和 home 恢复、旧版重启分别耗时 |
 | `source-copy-data.sha256`、`pre-cutover-data.sha256`、`restored-data.sha256`、`old-restart-data.sha256` | 原副本、旧启动、恢复及旧版重新启动后的完整 schema/data 一致性 |
-| `migrations/preflight.json`、`copy-baseline.json` | 四项预检、全表行数、原 Issue 状态、agent checkpoint、实际读进度 |
+| `migrations/preflight.json`、`copy-baseline.json` | 三项预检、全表行数、原 Issue 状态、agent checkpoint、实际读进度 |
 | `migrations/20261004_unified_message_turn_lane-before.json`、`-after.json` | 核心统一模型迁移报告，含 `orphan_steer.count/ids/by_task_status/entries/body_location`，正文不写入报告 |
 | `migrations/copy-usage-before.json`、`copy-usage-reconciliation.json` | 两个 #384 标记、全部 usage 表的列/行数/完整内容 SHA256、attempt 归属孤儿计数、actual/context/unknown/金额/覆盖状态证据；迁移后及四次角色启动的前后对账 |
 | `migrations/copy-startup.json` | 四个离线进程的 role/phase/sample、子/父 PID、完整 SHA/digest、unit=ms、启动/ready 时间、`startup_total_ms`、`attempt_total_ms`、`steps_ms`、单列 `database_total_ms`、success/not_ready 和失败阶段；失败也保留已测步骤 |
@@ -91,7 +91,7 @@ Issue 状态迁移时保留旧值，状态推导仍由业务事件触发。`issu
 | Chat turn、非 owner turn、平台通知 | 按实际排除/触发规则核对，不以任意一次执行状态覆盖 Issue |
 | done/cancelled 单、仍有 open child 的父单 | 终态保护与父单 hold 守卫保持，没有 exempt 豁免；手动终态及父子关系不被迁移改写 |
 
-四项预检阻止真实 running/awaiting_human 历史快照通过，因此本次副本中缺少这些状态的迁移样本是正常的；动态推导行为由 QA 在独立合成环境覆盖，不能在真实历史副本上造状态以伪称真实数据验证。
+三项预检阻止真实 running/awaiting_human 历史快照通过，因此本次副本中缺少这些状态的迁移样本是正常的；动态推导行为由 QA 在独立合成环境覆盖，不能在真实历史副本上造状态以伪称真实数据验证。
 
 ## 时间预算、失败与回滚
 

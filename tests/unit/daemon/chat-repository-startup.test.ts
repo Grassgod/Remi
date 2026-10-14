@@ -15,7 +15,7 @@ function git(cwd: string, ...args: string[]) {
 function fixture() {
   const root = mkdtempSync(join(tmpdir(), "chat-repository-startup-"));
   roots.push(root);
-  const workDir = join(root, "chats", "chat_test");
+  const workDir = join(root, "work", "chat_test");
   mkdirSync(workDir, { recursive: true });
   const repoCache = new MultiremiRepoCache(join(root, "cache"));
   const daemon = Object.assign(Object.create(MultiremiDaemon.prototype), {

@@ -20,7 +20,6 @@ import { isValidDailyScheduleTime, isValidIanaTimezone } from "@multiremi/store/
 import { loadCurrentWorkspaceRole, readJson } from "../helpers.js";
 import { currentRequestUserId } from "../wire/index.js";
 import type { RouterDeps } from "./deps.js";
-import { observableConfiguration } from "../../config/startup-env.js";
 
 const OPERATION_KINDS = new Set<MultiremiPlatformOperationKind>([
   "check_updates", "restart", "update", "rollback",
@@ -40,7 +39,7 @@ export function registerPlatformRoutes(app: Hono, deps: RouterDeps): void {
   app.get("/api/multiremi/platform/config", (c) => {
     const requester = loadCurrentWorkspaceRole(c, store, "local", ["owner", "admin"]);
     if (requester instanceof Response) return requester;
-    return c.json({ degradations: observableConfiguration(deps.daemonDirectBaseUrl) });
+    return c.json({ degradations: deps.startupDegradations });
   });
 
   app.get("/api/multiremi/platform/status", (c) => {

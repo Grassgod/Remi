@@ -33,6 +33,7 @@ export type MultiremiOutboxKind =
   | "runtime.model_list_result"
   | "runtime.local_skills_result"
   | "runtime.directory_scan_result"
+  | "runtime.gc_run_result"
   | "runtime.local_skill_import_result"
   | "runtime.bot_menu_result"
   | "feishu.outbound_result"

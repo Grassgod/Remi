@@ -119,7 +119,6 @@ try {
     ["multiremi_webhook_deliveries", { id: "delivery_c1", workspace_id: "local", autopilot_id: "ap_c1", trigger_id: "fixture", provider: "fixture", event: "fixture", status: "completed", raw_body: "fixture", received_at: now, last_attempt_at: now, created_at: now }],
     ["multiremi_platform_operations", { id: "operation_c1", kind: "update", status: "completed", driver: "systemd_release", requested_by: "local", output: "fixture", created_at: now, updated_at: now }],
     ["multiremi_attachments", { id: "attachment_c1", workspace_id: "local", issue_id: issue.id, uploader_id: "local", filename: "fixture.txt", url: "https://example.invalid/fixture.txt", content_type: "text/plain", created_at: now }],
-    ["multiremi_session_archives", { id: "archive_c1", workspace_id: "local", issue_id: issue.id, runtime_id: runtime.id, daemon_id: "daemon_c1", source_revision: "fixture", sha256: "fixture", size_bytes: 0, status: "completed", relative_path: "fixture", created_at: now, updated_at: now }],
   ];
   for (const [table, row] of fixtures) {
     const names = Object.keys(row);
@@ -182,7 +181,6 @@ try {
     ["multiremi_webhook_deliveries", "raw_body", "text"],
     ["multiremi_platform_operations", "output", "text"],
     ["multiremi_attachments", "filename", "text"],
-    ["multiremi_session_archives", "metadata", "object"],
     ["multiremi_squads", "instructions", "text"],
     ["multiremi_message_connections", "config", "object"],
     ["multiremi_workspaces", "settings", "object"],

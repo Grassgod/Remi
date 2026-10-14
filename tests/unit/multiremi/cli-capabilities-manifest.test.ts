@@ -199,10 +199,10 @@ describe("CLI capabilities manifest", () => {
 
   it("maps every user route or records a justified exemption and keeps compatibility aliases", () => {
     expect(cliCoverageReport(manifest)).toEqual({
-      mapped: 626,
-      exempt: 175,
+      mapped: 627,
+      exempt: 152,
       missing: 0,
-      total: 801,
+      total: 779,
     });
     for (const [route, command] of Object.entries({
       "POST /api/sessions/:sessionId/messages": "message.send",
@@ -334,7 +334,7 @@ describe("CLI capabilities manifest", () => {
       deprecated_since: "0.3.0",
     });
     expect(Object.values(manifest.routes).filter((route) => "planned_command" in route)).toEqual([]);
-    expect(Object.keys(manifest.aliases)).toHaveLength(40);
+    expect(Object.keys(manifest.aliases)).toHaveLength(36);
     for (const [legacy, alias] of Object.entries(manifest.aliases)) {
       expect(migrationDoc, legacy).toContain(`| \`${legacy}\` | \`${alias.replacement}\` |`);
     }

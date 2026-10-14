@@ -18,7 +18,10 @@ export interface BuildTaskEnvOptions {
   daemonPort: number;
   /** Multiremi server URL forwarded to the agent. */
   serverUrl: string;
-  /** Resolved task workspace, independent of the agent's current repo cwd. */
+  /**
+   * The subject's workspace, exposed as `MULTIREMI_WORKSPACE_ROOT` (`remi wiki`
+   * reads and writes `wiki/` there), independent of the agent's own cwd.
+   */
   workDir?: string;
   /** Issue Session-scoped provider config/history root. */
   providerHome?: IssueSessionProviderHome;

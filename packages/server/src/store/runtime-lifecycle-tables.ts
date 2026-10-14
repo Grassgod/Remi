@@ -4,9 +4,9 @@ export const RUNTIME_REQUEST_TABLES = [
   "multiremi_runtime_local_skill_list_requests",
   "multiremi_runtime_local_skill_import_requests",
   "multiremi_runtime_directory_scan_requests",
+  "multiremi_runtime_gc_run_requests",
   "multiremi_runtime_command_requests",
   "multiremi_bot_menu_publish_requests",
-  "multiremi_session_archive_requests",
 ] as const;
 
 export const RUNTIME_AUXILIARY_TABLES = [

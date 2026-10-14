@@ -667,6 +667,7 @@ export const DaemonRetirementPlanSchema = z
           })
           .loose(),
       ),
+    traces_to_lose: z.number().int().nonnegative().default(0),
     impact: DaemonRetirementImpactSchema,
   })
   .loose();
@@ -690,6 +691,7 @@ export const EMPTY_DAEMON_RETIREMENT_PLAN_RESPONSE: DaemonRetirementPlanResponse
     queued_tasks: [],
     local_directory_resources: [],
     issue_workspaces: [],
+    traces_to_lose: 0,
     impact: {
       runtimes_removed: 0,
       agents_detached: 0,

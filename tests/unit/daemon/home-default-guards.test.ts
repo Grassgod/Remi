@@ -1,13 +1,11 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { homedir } from "node:os";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import { assertNotHomeDefaultInTest, multiremiSharedLockPath, multiremiStateDir } from "@shared/home-paths.js";
 import { acquireWorkspaceSupervisorLease, configuredMultiremiWorkspacesRoot } from "@daemon/agent-runtime/workspace/process-owner.js";
-import { SessionArchiveService, sessionArchiveStorageConfigFromEnv } from "@multiremi/session-archive/service.js";
 import { MultiremiDaemon } from "@multiremi/worker/daemon.js";
-import type { MultiremiStore } from "@multiremi/store/store.js";
 
-const knobs = ["NODE_ENV", "MULTIREMI_STATE_DIR", "MULTIREMI_WORKSPACES_ROOT", "MULTIREMI_SESSION_ARCHIVE_ROOT", "MULTIREMI_TEST_RUN_ROOT"];
+const knobs = ["NODE_ENV", "MULTIREMI_STATE_DIR", "MULTIREMI_WORKSPACES_ROOT", "MULTIREMI_TEST_RUN_ROOT"];
 const previous = Object.fromEntries(knobs.map(name => [name, process.env[name]]));
 afterEach(() => {
   for (const name of knobs) {
@@ -20,8 +18,6 @@ describe("home defaults under test", () => {
   const cases = [
     ["MULTIREMI_STATE_DIR", multiremiStateDir, join(homedir(), ".multiremi")],
     ["MULTIREMI_WORKSPACES_ROOT", configuredMultiremiWorkspacesRoot, join(homedir(), ".remi", "multiremi", "workspaces")],
-    ["MULTIREMI_SESSION_ARCHIVE_ROOT", () => sessionArchiveStorageConfigFromEnv().root,
-      resolve(homedir(), ".remi", "multiremi", "session-archives")],
   ] as const;
 
   for (const [knob, resolveRoot, productionDefault] of cases) {
@@ -38,18 +34,14 @@ describe("home defaults under test", () => {
       process.env.NODE_ENV = "test";
       const root = join(process.env.MULTIREMI_TEST_RUN_ROOT!, "explicit-root");
       process.env[knob] = root;
-      expect(resolveRoot()).toBe(resolveRoot === multiremiStateDir ? root : resolve(root));
+      expect(resolveRoot()).toBe(root);
     });
   }
 
-  it("accepts explicit workspace and archive constructor roots without env knobs", () => {
+  it("accepts an explicit workspace constructor root without the env knob", () => {
     delete process.env.MULTIREMI_WORKSPACES_ROOT;
-    delete process.env.MULTIREMI_SESSION_ARCHIVE_ROOT;
     const root = join(process.env.MULTIREMI_TEST_RUN_ROOT!, "explicit-root");
     expect(configuredMultiremiWorkspacesRoot(root)).toBe(root);
-    expect(sessionArchiveStorageConfigFromEnv(root).root).toBe(resolve(root));
-    const service = new SessionArchiveService({} as MultiremiStore, { root });
-    expect(service.rootHint()).toBe(join("...", "explicit-root"));
   });
 
   it("rejects a daemon without a workspace root when the env knob is removed", () => {

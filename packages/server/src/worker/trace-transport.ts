@@ -18,6 +18,7 @@ export class DaemonTraceTransport {
   private readonly summaries = new Map<string, ReturnType<typeof createTraceSummaryAccumulator>>();
   private readonly completedSummaries = new Map<string, DaemonTaskCompletionFields>();
   private readonly detach: () => void;
+  private stopped = false;
   constructor(private readonly protocol: DaemonProtocolClient, store: TraceStore = new InMemoryTraceStore(),
     reportsHavePriority: () => boolean = () => false, onError: (error: unknown) => void = () => {},
     ownership: ReadonlyMap<string, string> = new Map()) {
@@ -30,12 +31,13 @@ export class DaemonTraceTransport {
       if (!store.head(taskId)?.closed) this.streamer.track(taskId, runtimeId);
     }
     this.subscriptions = new DaemonTraceSubscriptions(protocol, () => undefined, onError);
+    if (store instanceof TraceFileStore) void this.resumeUnclosed(store, onError);
     this.detach = protocol.onFrame(frame => {
       if (frame.type !== "trace.read" || !frame.id) return;
       const p = frame.payload;
       const taskId = typeof p.task_id === "string" ? p.task_id : "";
       const head = store.head(taskId);
-      if (!head || !frame.rt || this.runtimeByTask.get(taskId) !== frame.rt) {
+      if (!head || !frame.rt || this.ownerOf(taskId) !== frame.rt) {
         protocol.send({ t: "res", re: frame.id, p: { ok: false, code: "trace_not_hot", retryable: false } });
         return;
       }
@@ -55,6 +57,24 @@ export class DaemonTraceTransport {
   }
 
   ownership(): ReadonlyMap<string, string> { return this.runtimeByTask; }
+
+  /** Traces a crash left open resume their upload to the hub; closed history is never replayed. */
+  private async resumeUnclosed(store: TraceFileStore, onError: (error: unknown) => void): Promise<void> {
+    try {
+      for (const [taskId, runtimeId] of await store.findUnclosed()) {
+        if (this.stopped || this.runtimeByTask.has(taskId)) continue;
+        this.runtimeByTask.set(taskId, runtimeId);
+        this.streamer.track(taskId, runtimeId);
+      }
+    } catch (error) {
+      onError(error);
+    }
+  }
+
+  /** Owner of a trace; a file nobody touched since the daemon started is indexed on demand. */
+  private ownerOf(taskId: string): string | undefined {
+    return this.runtimeByTask.get(taskId) ?? (this.store instanceof TraceFileStore ? this.store.owner(taskId) : undefined);
+  }
 
   pruneMissing(): void {
     if (!(this.store instanceof TraceFileStore)) return;
@@ -137,6 +157,7 @@ export class DaemonTraceTransport {
   }
 
   async stop(): Promise<void> {
+    this.stopped = true;
     this.detach();
     this.summaries.clear();
     this.completedSummaries.clear();

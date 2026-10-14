@@ -12,6 +12,7 @@ import enRuntimes from "../../locales/en/runtimes.json";
 
 const backend = vi.hoisted(() => ({
   sessions: [] as ChatSession[],
+  byId: {} as Record<string, ChatSession>,
   pending: {} as Record<string, unknown>,
   create: vi.fn(), update: vi.fn(), send: vi.fn(), refresh: vi.fn(), markRead: vi.fn(),
 }));
@@ -38,6 +39,10 @@ vi.mock("@multiremi/core/api", async (importOriginal) => {
     getPendingChatTask: async () => {
       getPendingChatTaskCalls();
       return backend.pending;
+    },
+    getChatSession: async (id: string) => {
+      getChatSessionCalls(id);
+      return backend.byId[id];
     },
     createChatSession: backend.create,
     updateChatSession: backend.update,
@@ -69,9 +74,15 @@ vi.mock("@multiremi/core/session-log/use-issue-log", () => ({ useIssueLog: (sess
   snapshot: { entries: [], head: null, ready: true }, error: false,
   });
 } }));
-vi.mock("@multiremi/core/paths", () => ({ useWorkspacePaths: () => ({ chat: () => "/chat" }) }));
+vi.mock("@multiremi/core/paths", () => ({ useWorkspacePaths: () => ({
+  chat: () => "/chat",
+  autopilotDetail: (id: string) => `/autopilots/${id}`,
+}) }));
 vi.mock("@multiremi/views/issues/components", () => ({ canAssignAgent: () => true }));
-vi.mock("../../navigation", () => ({ useNavigation: () => ({ push: vi.fn() }) }));
+vi.mock("../../navigation", () => ({
+  useNavigation: () => ({ push: vi.fn() }),
+  AppLink: ({ href, children }: { href: string; children: ReactNode }) => <a href={href}>{children}</a>,
+}));
 vi.mock("../../layout/page-header", () => ({ PageHeader: ({ children }: { children: ReactNode }) => <div>{children}</div> }));
 vi.mock("./use-chat-resize", () => ({ useChatResize: () => ({ boundsReady: true }) }));
 vi.mock("./use-chat-context-items", () => ({ useChatContextItems: () => [] }));
@@ -93,6 +104,7 @@ import { ChatWindow } from "./chat-window";
 const listChatSessionsCalls = vi.hoisted(() => vi.fn());
 const listChatMessagesPageCalls = vi.hoisted(() => vi.fn());
 const getPendingChatTaskCalls = vi.hoisted(() => vi.fn());
+const getChatSessionCalls = vi.hoisted(() => vi.fn());
 
 /**
  * MUL-472 b: the floating window must not preload the conversation while it is
@@ -122,7 +134,7 @@ function mountFloatingOpen(open: boolean) {
 
 const session: ChatSession = {
   id: "chat-a", workspace_id: "workspace-a", agent_id: "agent-a", creator_id: "user-a",
-  project_id: "project-a", title: "Chat", status: "active", has_unread: false, pinned: false,
+  project_id: "project-a", title: "Chat", status: "active", has_unread: false, pinned: false, origin: null,
   unread_count: 0, last_message: null, created_at: "2026-09-17", updated_at: "2026-09-17",
 };
 
@@ -150,7 +162,9 @@ beforeEach(() => {
   listChatSessionsCalls.mockReset();
   listChatMessagesPageCalls.mockReset();
   getPendingChatTaskCalls.mockReset();
+  getChatSessionCalls.mockReset();
   backend.sessions = [];
+  backend.byId = {};
   backend.pending = {};
   backend.create.mockReset().mockImplementation(async (data) => {
     const created = { ...session, project_id: null, ...data };
@@ -184,6 +198,30 @@ describe("ChatWindow automatic read", () => {
       await waitFor(() => expect(backend.markRead).toHaveBeenCalledTimes(2));
       await act(async () => { await view.client.invalidateQueries({ queryKey: ["chat"] }); });
       expect(backend.markRead).toHaveBeenCalledTimes(2);
+    } finally { view.unmount(); view.client.clear(); }
+  });
+});
+
+describe("ChatWindow automation origin", () => {
+  const automationChat: ChatSession = { ...session, origin: { autopilot_id: "ap-1", run_id: "run-1" } };
+
+  it("reads an automation chat by id and links back to its automation", async () => {
+    backend.byId = { [session.id]: automationChat };
+    const view = mount(true);
+    try {
+      expect(await screen.findByText("Opened by an automation run")).toBeInTheDocument();
+      expect(screen.getByRole("link", { name: "View automation" })).toHaveAttribute("href", "/autopilots/ap-1");
+      expect(getChatSessionCalls).toHaveBeenCalledWith(session.id);
+    } finally { view.unmount(); view.client.clear(); }
+  });
+
+  it("shows no origin bar and reads no extra session for the user's own chat", async () => {
+    backend.sessions = [session];
+    const view = mount(true);
+    try {
+      expect(await screen.findByRole("button", { name: "Send test message" })).toBeInTheDocument();
+      expect(screen.queryByText("Opened by an automation run")).toBeNull();
+      expect(getChatSessionCalls).not.toHaveBeenCalled();
     } finally { view.unmount(); view.client.clear(); }
   });
 });

@@ -153,6 +153,8 @@ export interface AutopilotRun {
   status: AutopilotRunStatus;
   issue_id: string | null;
   issue_session_id: string | null;
+  /** Chat opened for a `run_only` run. */
+  chat_session_id: string | null;
   task_id: string | null;
   triggered_at: string;
   completed_at: string | null;

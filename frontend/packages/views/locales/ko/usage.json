@@ -175,7 +175,6 @@
     "scope_live": "실행 기록 소유자",
     "scope_task_record": "과거 작업 기록 소유자",
     "scope_trace_owner": "저장된 Trace 소유자",
-    "scope_archive": "Archive manifest 소유자",
     "scope_unknown": "실행 소유자 알 수 없음",
     "scope_mixed": "혼합 소유자 증거",
     "export_csv": "CSV 내보내기",

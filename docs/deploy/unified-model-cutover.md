@@ -55,7 +55,7 @@
    ```
 
    若正式版号不高于拒绝用例中的旧版号，停止填写并核对发布方案，不放宽断言。发布前核对 `package.json`、正式 tag、Release 资产、常量及目标 main SHA；此处定向检查不替代发布负责人确认的发版门禁。
-2. 历史 trace 回填完成，或停在组边界；进度表不能存在 running 组。备份脱敏副本供 QA 演练，不允许开发 agent 连接生产库。[209 数据副本演练步骤与脚本](../migrations/unified-model-copy-rehearsal.md)已准备；本任务不执行。执行须贺华杰批准，由 Remi-CC 完成，取得行数、Issue 抽样、真实读进度和恢复耗时证据后再申请生产窗口。
+2. 备份脱敏副本供 QA 演练，不允许开发 agent 连接生产库。[209 数据副本演练步骤与脚本](../migrations/unified-model-copy-rehearsal.md)已准备；本任务不执行。执行须贺华杰批准，由 Remi-CC 完成，取得行数、Issue 抽样、真实读进度和恢复耗时证据后再申请生产窗口。
 3. Remi-CC 执行数据库与 api-home 备份，保留校验文件和恢复清单。备份脚本需要 Bash、匹配服务端主版本的 pg_dump/pg_restore、tar 和 sha256sum。API 镜像目前没有 pg_dump；由运维选择已具备客户端的 PostgreSQL 工具容器，挂载 api-home 与备份目录，注入已有连接环境变量。不要为执行备份临时修改生产 API 镜像。
 
    ```bash
@@ -63,7 +63,7 @@
    ```
 
    脚本产出 `platform.pgdump`、`api-home.tar.gz`、`restore-list.txt` 与 `SHA256SUMS`。URL 必须来自环境，不放在命令行；失败诊断保存为权限受限文件，不能直接贴到 Issue。恢复时用 pg_restore 先恢复到隔离空库，再校验业务记录与 api-home。
-4. 授权负责人启动 updater drain；核对所有运行任务与 outbox 排空。四项启动预检分别检查 awaiting_human、所属任务未结束（或任务缺失）的未消费 steer、running 回填组、running/dispatched 任务。completed/failed/cancelled 任务的未消费 steer 不阻塞、不消费、不删行，before/after 的 `orphan_steer` 单列数量、ID、终态与正文摘要；迁移追加历史 message，正文可按报告中的 `message_id` 在 `multiremi_conversation_log.body_md` 查到，退休表获批删除后仍保留。必须完成等待人工答复的处理，不能通过删行或改状态绕过门禁。
+4. 授权负责人启动 updater drain；核对所有运行任务与 outbox 排空。三项启动预检分别检查 awaiting_human、所属任务未结束（或任务缺失）的未消费 steer、running/dispatched 任务。completed/failed/cancelled 任务的未消费 steer 不阻塞、不消费、不删行，before/after 的 `orphan_steer` 单列数量、ID、终态与正文摘要；迁移追加历史 message，正文可按报告中的 `message_id` 在 `multiremi_conversation_log.body_md` 查到，退休表获批删除后仍保留。必须完成等待人工答复的处理，不能通过删行或改状态绕过门禁。
 5. updater 切换正式镜像，API 启动执行单事务迁移。报告默认写入 `$HOME/reports/migrations`，生产 `compose.application.yml` / `compose.platform.yml` 的 `api` 与 `api-runtime` 均为 `/srv/multiremi/reports/migrations`，位于 `REMI_HOME_DIR:/srv/multiremi` 持久卷内。读取其中的 `20261004_unified_message_turn_lane-before.json` 和 `-after.json`。预检失败时打印具体名称与数量，按旧镜像回滚；事务中途失败时模型改写回滚。`MULTIREMI_MIGRATION_REPORT_DIR` 可覆盖默认目录，运维应写在 `api.env`，不写在 updater 管理的 `application.env`；对账必须使用同一路径。重启不会重新执行旧结构的 DDL。
 
    切换前由 Remi-CC 检查数据卷归属 `REMI_RUNTIME_UID:GID`，尤其旧报告目录不能是 root 所有。启动会在任何 schema 改写前验证目录创建、文件写入和原子 rename；不满足时明确拒绝，不能靠自动重启修复错误挂载。仓库配置已核对；209 实际挂载与权限本任务未连接核对，需负责人批准后由 Remi-CC 在副本演练及生产窗口确认。
@@ -91,7 +91,7 @@
 | envelope、system、delegation_report | 消息头为列；系统消息与可见 report 使用 message 行 |
 | 未答复决定 | 追加 decision，保留时间、选项和一次性令牌 |
 | agent lane、人 lane | agent 检查点原样；人 cursor 为迁移后 head，不迁历史通知 |
-| 四项预检 | 各项单独失败均拒绝且不改写模型数据 |
+| 三项预检 | 各项单独失败均拒绝且不改写模型数据 |
 | 已结束任务的未消费 steer | 不阻塞；原行不变；历史消息正文/ID/摘要保留，重启不重复追加 |
 | #384 用量启动与对账 | 两角色首启/重启都按 schema → prepare → ensure；全部用量表内容、两个标记、attempt 归属与标量证据不变 |
 | F24 启动耗时范围 | 两角色 ready 前数据库步骤含锁等待；HTTP ready 与并发/生产竞争明确未测 |

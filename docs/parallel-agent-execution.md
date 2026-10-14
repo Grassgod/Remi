@@ -46,18 +46,25 @@ turn does not hide a compatible frozen retry from the same Agent.
 
 ## Shared code, private execution state
 
-Repository checkouts remain under the existing `issues/<issue-key>` root and
-`agent/<issue-key>` branch. This change does not introduce per-task worktrees,
+Repository checkouts live in the subject's single workspace `work/<subject>/`
+(see [storage and retention](dev/storage-retention.md)) on the `agent/<issue-key>`
+branch. This change does not introduce per-task worktrees,
 branches, automatic merges, or a single-writer restriction. Concurrent code
 edits can conflict; Agents must coordinate edits and preserve peers' changes.
 
-Task configuration, skills, Wiki working copies and provider caches use a
-private execution directory under `.runtime/<session>/<agent>/.../work`.
-Delegations add `delegations/<delegation-id>` to the provider generation path.
+Provider homes and plugin runtime files use a private execution directory under
+`env/<subject>/<conversation>/<agent>/<scope>/<generation>/`; discussion sessions
+also get a read-only work set there. An Issue holder starts in its own
+`<generation>/work/` directory, which holds only that execution's
+`.multiremi/task.json`, skill directories and attachments, so concurrent holders
+never overwrite each other. Repositories and the Wiki working copy stay in the
+shared `work/<issue>/` workspace (`MULTIREMI_WORKSPACE_ROOT`), and Wiki
+materialization for one subject is serialized by an exclusive per-subject lock.
+Delegations use their own `<scope>` directory (the delegation ID instead of `main`).
 Prompts report absolute repository and session-history paths; the platform
 continues to report the shared code workspace as the Issue workspace.
 
-Executions hold shared lifecycle locks. Final archive, cleanup and workspace
+Executions hold shared lifecycle locks. Reclaim (cleanup) and workspace
 migration still require exclusive ownership. Only repository preparation is
 serialized briefly; the lock is not held exclusively while the model runs.
 

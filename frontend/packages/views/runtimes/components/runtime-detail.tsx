@@ -57,6 +57,7 @@ import { UpdateSection } from "./update-section";
 import { runtimeMachineId } from "./runtime-machines";
 import { UsageSection } from "./usage-section";
 import { DeleteRuntimeDialog } from "./delete-runtime-dialog";
+import { RuntimeStorageCard } from "./daemon-storage-card";
 import { RetireDaemonDialog } from "./retire-daemon-dialog";
 import { RuntimePluginsTab } from "./runtime-plugins-tab";
 import { RuntimeWorkspacesTab } from "./runtime-workspaces-tab";
@@ -247,6 +248,9 @@ export function RuntimeDetail({ runtime }: { runtime: AgentRuntime }) {
                 canEdit={!!canDelete}
               />
               <UsageSection runtime={runtime} />
+              {runtime.daemon_id ? (
+                <RuntimeStorageCard daemonId={runtime.daemon_id} runtimeId={runtime.id} canManage={isAdmin} />
+              ) : null}
             </div>
 
             <div className="space-y-4">

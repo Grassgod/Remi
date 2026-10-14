@@ -1,9 +1,10 @@
 import { createHash } from "node:crypto";
-import { accessSync, constants, existsSync, mkdirSync, statSync, lstatSync, realpathSync, appendFileSync, chmodSync, copyFileSync, readFileSync, readdirSync, renameSync, rmSync, utimesSync, writeFileSync, type Dirent } from "node:fs";
+import { accessSync, constants, existsSync, mkdirSync, statSync, lstatSync, realpathSync, chmodSync, copyFileSync, readFileSync, readdirSync, renameSync, rmSync, utimesSync, writeFileSync, type Dirent } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import type { RepoSpec } from "@daemon/contracts/types.js";
 import { createLogger } from "@shared/logger.js";
+import { withoutRepositoryEnvironment } from "../workspace/git-ops.js";
 import {
   appendGitCredentialBrokerEnv,
   preferredHttpsCloneUrl,
@@ -106,7 +107,6 @@ export interface ManagedWorktreeParams {
   workDir: string;
 }
 
-const AGENT_GIT_EXCLUDE_PATTERNS = [".agent_context", ".multiremi", "CLAUDE.md", "AGENTS.md", ".claude", ".opencode"];
 const MODERN_FETCH_REFSPEC = "+refs/heads/*:refs/remotes/origin/*";
 const MIRRORED_TAG_FETCH_REFSPEC = "+refs/tags/*:refs/tags/*";
 const DEFAULT_LOCK_TIMEOUT_MS = 60_000;
@@ -429,7 +429,6 @@ export class MultiremiRepoCache {
         throw new Error(`worktree ${worktreePath} is on ${currentBranch}, expected ${requestedBranch}; refusing to switch a persistent workspace`);
       }
       const resolution = resolveBaseRef(barePath, params.ref, params.preferredRef);
-      excludeAgentFiles(worktreePath);
       applyCoAuthoredByHook(worktreePath, params.coAuthoredByEnabled !== false);
       return { path: worktreePath, branch_name: currentBranch, branchName: currentBranch, created: false, ...worktreeBaseResult(worktreePath, resolution) };
     }
@@ -454,7 +453,6 @@ export class MultiremiRepoCache {
       if (requestedBranch && currentBranch !== requestedBranch) {
         throw new Error(`worktree ${worktreePath} is on ${currentBranch}, expected ${requestedBranch}; refusing to switch a persistent workspace`);
       }
-      excludeAgentFiles(worktreePath);
       applyCoAuthoredByHook(worktreePath, params.coAuthoredByEnabled !== false);
       return { path: worktreePath, branch_name: currentBranch, branchName: currentBranch, created: false, ...worktreeBaseResult(worktreePath, resolution) };
     }
@@ -471,7 +469,6 @@ export class MultiremiRepoCache {
     } else {
       git(barePath, ["worktree", "add", "-b", branchName, worktreePath, baseRef]);
     }
-    excludeAgentFiles(worktreePath);
     applyCoAuthoredByHook(worktreePath, params.coAuthoredByEnabled !== false);
     return { path: worktreePath, branch_name: branchName, branchName, created: true, ...worktreeBaseResult(worktreePath, resolution) };
   }
@@ -987,7 +984,8 @@ function ensureRemoteTrackingLayout(barePath: string, env?: NodeJS.ProcessEnv): 
 }
 
 function gitEnv(base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = { ...base, GIT_TERMINAL_PROMPT: "0" };
+  // A daemon started from a git hook must not point the cache's git at another repository.
+  const env: NodeJS.ProcessEnv = { ...withoutRepositoryEnvironment(base), GIT_TERMINAL_PROMPT: "0" };
   const existing = Number.parseInt(env.GIT_CONFIG_COUNT ?? "0", 10);
   const index = Number.isFinite(existing) && existing >= 0 ? existing : 0;
   env.GIT_CONFIG_COUNT = String(index + 1);
@@ -1218,7 +1216,8 @@ function repoNameFromUrl(repoUrl: string): string {
   return safePathPart(rawName.replace(/\.git$/, "")) || "repo";
 }
 
-function worktreeDirectoryName(repoUrl: string): string {
+/** Directory name a repository's worktree gets inside a workspace. */
+export function worktreeDirectoryName(repoUrl: string): string {
   const name = repoNameFromUrl(repoUrl);
   if (!RESERVED_ISSUE_WORKSPACE_DIRECTORIES.has(name.toLowerCase())) return name;
   const digest = createHash("sha256").update(repoUrl.trim()).digest("hex").slice(0, 8);
@@ -1236,15 +1235,6 @@ function sanitizeName(value: string): string {
 function shortId(value: string): string {
   const normalized = safePathPart(value);
   return normalized.length > 12 ? normalized.slice(0, 12) : normalized;
-}
-
-function excludeAgentFiles(worktreePath: string): void {
-  const gitDir = git(worktreePath, ["rev-parse", "--git-dir"]);
-  const excludePath = join(gitDir.startsWith("/") ? gitDir : join(worktreePath, gitDir), "info", "exclude");
-  mkdirSync(dirname(excludePath), { recursive: true });
-  const existing = existsSync(excludePath) ? readFileSync(excludePath, "utf8") : "";
-  const additions = AGENT_GIT_EXCLUDE_PATTERNS.filter((pattern) => !existing.split(/\r?\n/).includes(pattern));
-  if (additions.length) appendFileSync(excludePath, `${additions.join("\n")}\n`);
 }
 
 function applyCoAuthoredByHook(worktreePath: string, enabled: boolean): void {

@@ -107,7 +107,6 @@ import type {
   ListIssuesInput,
   MultiremiIssue,
   MultiremiAssigneeType,
-  MultiremiIssueWorkspaceArchiveBinding,
   PublishSessionResultInput,
   QuickCreateIssueInput,
   UpdateIssueInput,
@@ -242,7 +241,7 @@ function existingIssueDispatchResponse(store: MultiremiStore, issue: MultiremiIs
 }
 
 export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
-  const { store, sessionArchives } = deps;
+  const { store } = deps;
   // The execution-owner chain and its unavailable reasons. Deliveries, the
   // root-human mapping and parent-done grants are retired (see retired-cli-routes).
   app.get('/api/issues/:id/responsibility', (c) => {
@@ -309,70 +308,19 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     return null;
   };
 
-  const beginIssueDeletion = (issueId: string): boolean => {
-    const begun = store.beginIssueDeletion(issueId);
-    if (begun.ok) return true;
-    if (begun.code === "issue_not_found") return false;
-    throw Object.assign(new Error(begun.error), { code: begun.code, issueId });
-  };
-
   const isIssueDeletionConflict = (error: unknown): error is Error & { code: string } =>
     error instanceof Error
     && "code" in error
-    && (
-      error.code === "issue_workspace_not_cleaned"
-      || error.code === "issue_workspace_archive_invalid"
-      || error.code === "issue_has_active_tasks"
-      || error.code === "issue_deletion_conflict"
-    );
+    && error.code === "issue_has_active_tasks";
 
-  const deleteIssueWithArchives = async (
-    issueId: string,
-    options: { deletionBegun?: boolean } = {},
-  ): Promise<boolean> => {
-    if (!options.deletionBegun && !beginIssueDeletion(issueId)) return false;
-    let purgeReceipt: string | null = null;
-    try {
-      const workspace = store.getIssueWorkspace(issueId);
-      if (workspace) {
-        const binding = issueWorkspaceArchiveBinding(workspace);
-        await sessionArchives.verifyIssueDeletionArchive(issueId, binding);
-      }
-      purgeReceipt = await sessionArchives.prepareIssueArchivePurge(issueId);
-      const deleted = store.deleteIssuesAtomically([issueId]).deleted === 1;
-      if (!deleted) {
-        await sessionArchives.abortIssueArchivePurge(purgeReceipt);
-        store.abortIssueDeletion(issueId);
-        return false;
-      }
-      await sessionArchives.completeIssueArchivePurge(purgeReceipt).catch((error) => {
-        log.warn(
-          `Issue ${issueId} was deleted but archive purge will retry: ${error instanceof Error ? error.message : String(error)}`,
-        );
-      });
-      return true;
-    } catch (error) {
-      // A failed DB transaction must leave the archive bytes intact. Once the
-      // Issue is gone the receipt is intentionally retained for recovery.
-      if (store.getIssue(issueId)) {
-        if (purgeReceipt) {
-          await sessionArchives.abortIssueArchivePurge(purgeReceipt).catch(() => undefined);
-        }
-        store.abortIssueDeletion(issueId);
-      }
-      throw error;
-    }
-  };
-
-  const deleteIssueBatch = async (
+  const deleteIssueBatch = (
     c: Context,
     input: BatchDeleteIssuesInput,
-  ): Promise<{ deleted: number } | Response> => {
+  ): { deleted: number } | Response => {
     const issueIds = input.issueIds ?? input.issue_ids ?? [];
     if (issueIds.length === 0) throw new Error("issue_ids is required");
-    // Complete every authorization and lifecycle check before deleting the
-    // first row. A scoped credential must not smuggle another workspace's ID
-    // into a batch which also performs physical archive cleanup.
+    // Complete every authorization check before deleting the first row. A
+    // scoped credential must not smuggle another workspace's ID into a batch.
     const existingIssueIds: string[] = [];
     const seenIssueIds = new Set<string>();
     for (const issueId of issueIds) {
@@ -384,71 +332,7 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
       if (denied) return denied;
       existingIssueIds.push(issueId);
     }
-    const fenced: string[] = [];
-    const receipts: Array<{ issueId: string; receiptId: string }> = [];
-    let databaseCommitted = false;
-    try {
-      // Fence the complete batch before deleting its first row. This keeps a
-      // late workspace/task transition from turning a validation failure into
-      // a partially applied batch.
-      for (const issueId of existingIssueIds) {
-        if (!beginIssueDeletion(issueId)) continue;
-        fenced.push(issueId);
-      }
-      for (const issueId of fenced) {
-        const workspace = store.getIssueWorkspace(issueId);
-        if (workspace) {
-          await sessionArchives.verifyIssueDeletionArchive(
-            issueId,
-            issueWorkspaceArchiveBinding(workspace),
-          );
-        }
-        receipts.push({
-          issueId,
-          receiptId: await sessionArchives.prepareIssueArchivePurge(issueId),
-        });
-      }
-      const result = store.deleteIssuesAtomically(fenced);
-      databaseCommitted = true;
-      for (const receipt of receipts) {
-        await sessionArchives.completeIssueArchivePurge(receipt.receiptId).catch((error) => {
-          log.warn(
-            `Issue ${receipt.issueId} was deleted but archive purge will retry: ${error instanceof Error ? error.message : String(error)}`,
-          );
-        });
-      }
-      return result;
-    } catch (error) {
-      if (!databaseCommitted) {
-        for (const receipt of receipts) {
-          await sessionArchives.abortIssueArchivePurge(receipt.receiptId).catch(() => undefined);
-        }
-        for (const issueId of fenced) store.abortIssueDeletion(issueId);
-      }
-      throw error;
-    }
-  };
-
-  const issueWorkspaceArchiveBinding = (workspace: {
-    cleanedArchiveId: string | null;
-    cleanedArchiveSourceRevision: string | null;
-    cleanedArchiveSha256: string | null;
-  }): MultiremiIssueWorkspaceArchiveBinding => {
-    if (
-      !workspace.cleanedArchiveId
-      || !workspace.cleanedArchiveSourceRevision
-      || !workspace.cleanedArchiveSha256
-    ) {
-      throw Object.assign(
-        new Error("cleaned Issue workspace is missing its exact archive binding"),
-        { code: "issue_workspace_archive_invalid" },
-      );
-    }
-    return {
-      archiveId: workspace.cleanedArchiveId,
-      sourceRevision: workspace.cleanedArchiveSourceRevision,
-      sha256: workspace.cleanedArchiveSha256,
-    };
+    return store.deleteIssuesAtomically(existingIssueIds);
   };
 
   const listIssuesResponse = (query: ListIssuesInput = {}) => {
@@ -757,7 +641,7 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
   app.post("/api/multiremi/issues/batch-delete", async (c) => {
     const body = await readJson<BatchDeleteIssuesInput>(c);
     try {
-      const result = await deleteIssueBatch(c, body);
+      const result = deleteIssueBatch(c, body);
       if (result instanceof Response) return result;
       return c.json(result);
     } catch (error) {
@@ -770,7 +654,7 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
   app.post("/api/issues/batch-delete", async (c) => {
     const body = await readJson<BatchDeleteIssuesInput>(c);
     try {
-      const result = await deleteIssueBatch(c, issueBatchDeleteCompatibilityInput(body));
+      const result = deleteIssueBatch(c, issueBatchDeleteCompatibilityInput(body));
       if (result instanceof Response) return result;
       return c.json(result);
     } catch (err) {
@@ -1083,6 +967,9 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
         })),
         last_task_id: workspace.lastTaskId,
         cleaned_at: workspace.cleanedAt,
+        snapshot: workspace.snapshot,
+        snapshot_at: workspace.snapshotAt,
+        unsaved_work: workspace.unsavedWork,
         created_at: workspace.createdAt,
         updated_at: workspace.updatedAt,
       },
@@ -1464,13 +1351,13 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     publishIssueUpdated(c, store, previous, issue, {}, response);
     return c.json(response);
   });
-  app.delete("/api/multiremi/issues/:id", async (c) => {
+  app.delete("/api/multiremi/issues/:id", (c) => {
     const issue = issueFromParam(store, c);
     if (!issue) return c.json({ error: "issue not found" }, 404);
     const denied = issueDeleteAccess(c, issue.workspaceId);
     if (denied) return denied;
     try {
-      if (!(await deleteIssueWithArchives(issue.id))) return c.json({ error: "issue not found" }, 404);
+      if (store.deleteIssuesAtomically([issue.id]).deleted !== 1) return c.json({ error: "issue not found" }, 404);
       return c.json({ ok: true });
     } catch (error) {
       if (isIssueDeletionConflict(error)) {
@@ -1479,13 +1366,13 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
       throw error;
     }
   });
-  app.delete("/api/issues/:id", async (c) => {
+  app.delete("/api/issues/:id", (c) => {
     const issue = issueFromParam(store, c, "id", "compat");
     if (!issue) return c.json({ error: "issue not found" }, 404);
     const denied = issueDeleteAccess(c, issue.workspaceId);
     if (denied) return denied;
     try {
-      if (!(await deleteIssueWithArchives(issue.id))) return c.json({ error: "issue not found" }, 404);
+      if (store.deleteIssuesAtomically([issue.id]).deleted !== 1) return c.json({ error: "issue not found" }, 404);
       return c.body(null, 204);
     } catch (error) {
       if (isIssueDeletionConflict(error)) {

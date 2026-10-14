@@ -10,6 +10,7 @@ const getRun = vi.hoisted(() => vi.fn());
 vi.mock("@multiremi/core/hooks", () => ({ useWorkspaceId: () => "ws-1" }));
 vi.mock("@multiremi/core/paths", () => ({
   useWorkspacePaths: () => ({
+    chat: (id: string) => `/test/chat?session=${id}`,
     issueDetail: (id: string) => `/test/issues/${id}`,
     issueSession: (id: string, sessionId: string) => `/test/issues/${id}?session=${sessionId}`,
     autopilotDetail: (id: string) => `/test/autopilots/${id}`,
@@ -140,6 +141,13 @@ describe("AutopilotRunReport", () => {
       "href",
       "/test/issues/issue-1?session=session-1",
     );
+  });
+
+  it("links a run-only run to the chat that holds its result", () => {
+    const item = runItem();
+    renderReport({ ...item, issue_id: null, details: { ...item.details, issue_id: null, issue_session_id: undefined, chat_session_id: "chat_1" } });
+    expect(screen.getByRole("link", { name: /Open chat/ })).toHaveAttribute("href", "/test/chat?session=chat_1");
+    expect(screen.queryByRole("link", { name: /Open Issue/ })).toBeNull();
   });
 
   it("fetches and renders the full result only after the output is expanded", async () => {

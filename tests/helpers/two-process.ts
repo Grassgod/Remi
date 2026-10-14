@@ -191,7 +191,6 @@ export class TwoProcessResources {
       MULTIREMI_PEER_SECRET: this.peerSecret,
       MULTIREMI_TOKEN: this.authToken,
       MULTIREMI_BACKGROUND_JOBS: "0",
-      MULTIREMI_SESSION_ARCHIVE_ROOT: join(this.directory, String(port)),
     });
     this.children.add(child);
     return child;

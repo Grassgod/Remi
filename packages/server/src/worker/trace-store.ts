@@ -85,8 +85,8 @@ export interface TraceStore {
    * this the only sanitize point in the trace path.
    *
    * Appending to a closed task is a no-op that returns the existing head and an
-   * empty array: a late frame must not reopen a closed trace, because the archive
-   * that follows assumes the tail it saw is final.
+   * empty array: a late frame must not reopen a closed trace, because readers
+   * that saw the trailer assume the tail they saw is final.
    */
   append(taskId: string, events: TraceEventInput[]): TraceAppendResult;
 

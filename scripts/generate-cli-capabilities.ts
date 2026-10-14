@@ -25,7 +25,7 @@ const DOMAINS = [
   "issue", "comment", "session", "share", "label", "attachment",
   "chat", "task", "message", "turn",
   "agent", "squad", "skill", "plugin",
-  "runtime", "daemon", "autopilot", "scm", "messaging", "feishu",
+  "runtime", "daemon", "autopilot", "automation", "scm", "messaging", "feishu",
   "inbox", "notification", "pin", "dashboard", "platform", "billing", "lark",
 ];
 
@@ -152,6 +152,7 @@ export function classifyRoute(route: string): CliManifestRoute {
     "GET /api/turns": "turn.list", "GET /api/turns/:id": "turn.get",
     "POST /api/turns/:id/cancel": "turn.cancel", "POST /api/turns/:id/wrap-up": "turn.wrap-up",
     "POST /api/turns/:id/retry": "turn.retry", "GET /api/turns/:id/trace": "turn.trace.read",
+    "POST /api/turns/:id/automation/quiet": "automation.quiet",
   };
   if (unified[route]) return { command: unified[route]! };
   const mapped = mappedResourceCommand(route);
@@ -311,6 +312,9 @@ function mappedResourceCommand(route: string): string | null {
     [/^PUT \/api\/workspaces\/:id\/prompts$/, "workspace.prompt.update"],
     [/^GET \/api\/workspaces\/:id\/issue-archive$/, "workspace.issue-archive.get"],
     [/^PUT \/api\/workspaces\/:id\/issue-archive$/, "workspace.issue-archive.update"],
+    [/^GET \/api\/workspaces\/:id\/storage$/, "workspace.storage.get"],
+    [/^PUT \/api\/workspaces\/:id\/storage$/, "workspace.storage.set"],
+    [/^GET \/api\/workspaces\/:id\/storage\/daemons$/, "runtime.storage"],
     [/^GET \/api\/workspaces\/:id\/issue-topics$/, "workspace.issue-topics.get"],
     [/^PUT \/api\/workspaces\/:id\/issue-topics$/, "workspace.issue-topics.set"],
     [/^GET \/api\/workspaces\/:id\/runtime-provisions$/, "workspace.runtime-provision.list"],
@@ -436,11 +440,6 @@ function mappedResourceCommand(route: string): string | null {
     [/^POST \/api\/issues\/:id\/sessions\/:sessionId\/tasks$/, "session.task.create"],
     [/^GET \/api\/issues\/:id\/session-results$/, "session.result.list"],
     [/^POST \/api\/issues\/:id\/sessions\/:sessionId\/results$/, "session.result.publish"],
-    [/^GET \/api\/issues\/:issueId\/session-archives$/, "session.archive.list"],
-    [/^POST \/api\/issues\/:issueId\/session-archives\/:archiveId\/verify$/, "session.archive.verify"],
-    [/^POST \/api\/issues\/:issueId\/session-archives\/:archiveId\/retry$/, "session.archive.retry"],
-    [/^GET \/api\/workspaces\/:id\/session-archive$/, "session.config.get"],
-    [/^PUT \/api\/workspaces\/:id\/session-archive$/, "session.config.update"],
     [/^GET \/api\/issues\/:id\/share$/, "share.get"],
     [/^POST \/api\/issues\/:id\/share$/, "share.create"],
     [/^POST \/api\/issues\/:id\/share\/extend$/, "share.extend"],
@@ -658,6 +657,8 @@ function mappedOperationsCommand(route: string): string | null {
     [/^GET \/api\/(?:multiremi\/)?runtimes\/:id\/local-skills\/:requestId$/, "runtime.skill.status"],
     [/^POST \/api\/(?:multiremi\/)?runtimes\/:id\/local-skills\/import$/, "runtime.skill.import"],
     [/^GET \/api\/(?:multiremi\/)?runtimes\/:id\/local-skills\/import\/:requestId$/, "runtime.skill.import-status"],
+    [/^POST \/api\/runtimes\/:id\/gc-runs$/, "runtime.gc"],
+    [/^GET \/api\/runtimes\/:id\/gc-runs\/:requestId$/, "runtime.gc-status"],
     [/^POST \/api\/(?:multiremi\/)?runtimes\/:id\/directory-scans$/, "runtime.directory.scan"],
     [/^GET \/api\/(?:multiremi\/)?runtimes\/:id\/directory-scans\/:requestId$/, "runtime.directory.status"],
     [/^GET \/api\/(?:multiremi\/)?runtimes\/:id\/usage$/, "runtime.usage"],
@@ -845,7 +846,6 @@ function plannedCommand(route: string): { domain: string; command: string } {
   else if (rawDomain === "workspaces" && segments.includes("feishu")) rawDomain = "feishu";
   else if (rawDomain === "issues" && segments.includes("change-requests")) rawDomain = "scm";
   else if (rawDomain === "workspaces" && segments.includes("lark")) rawDomain = "lark";
-  else if (rawDomain === "workspaces" && segments.includes("session-archive")) rawDomain = "session";
   if (rawDomain === "auth") rawDomain = "context";
   if (rawDomain === "me") rawDomain = "member";
   if (rawDomain === "remi" || rawDomain === "install.sh") rawDomain = "platform";

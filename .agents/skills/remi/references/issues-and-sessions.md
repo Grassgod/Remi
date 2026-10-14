@@ -36,7 +36,7 @@ remi message send <issue-id> --content-file <comment.md> --json
 
 评论、回复、发布成果都是协作写入，沿用用户已有发送授权。`message resolve` 解决一条评论，不代表 Issue 完成。批量修改先列出精确目标 ID 并读当前值；`issue batch-update` / `batch-delete` 的 JSON 不能从单条更新参数推断。`issue delete` 与 `issue restore` 的当前归档/恢复行为以目标版本帮助和返回为准，不能用批量删除整理无关任务。
 
-## Session、成果和归档
+## Session 与成果
 
 ```sh
 remi session list <issue-id> --json
@@ -44,16 +44,15 @@ remi session get <issue-id> <session-id> --json
 remi turn list --session <session-id> --json
 remi session result list <issue-id> --json
 remi session result publish <issue-id> --session <session-id> --type report --title "<result-title>" --content-file <result.md> --json
-remi session archive status <issue-id> --json
 ```
 
-Session get 等命令同时需要 Issue ID 和 Session ID；成果 publish 的 Session 则是选项。成果类型为 `mr|report|deploy|decision|doc|other`，发布可复用结论并附实际证据，不把未完成的运行写成成果。参与者、消息、配置从 `session participant/config` 与 `message` 按需操作。
+Session get 等命令同时需要 Issue ID 和 Session ID；成果 publish 的 Session 则是选项。成果类型为 `mr|report|deploy|decision|doc|other`，发布可复用结论并附实际证据，不把未完成的运行写成成果。参与者从 `remi session participant` 与 `message` 按需操作。
 
 需要基于既有讨论另开侧会话时，用 `remi session create <issue> --from <parent-session> --title <title>`；父会话须属于同一 Issue，侧会话不能继续派生。它冻结创建时的父会话快照，后续父消息不自动进入；继承内容只作参考，当前请求和后续本会话输入才是执行指令。侧会话不占用 Issue 工作区，Agent 不得从其中委派子任务；文件、Git 或配置修改须由用户在该侧会话明确提出。
 
 `remi session show <session>` 查看会话，`remi session inherited-context <session>` 查看最近一次领取记录的继承诊断。事件数量是截断前计数，实际上下文可能受 token 预算截断，尚未领取时不能声称继承内容已全部送入模型。
 
-`session archive verify/retry` 会执行校验或重试归档，不是单纯读取；先看 status 和 list，针对已有失败记录处理。`remi turn trace read <turn> --attempt <attempt>` 查询指定尝试的执行证据。
+`remi turn trace read <turn> --attempt <attempt>` 查询指定尝试的执行证据。执行记录留在 daemon 本机，服务端不再归档：daemon 离线时读取返回不可达，daemon 下线或 Runtime 删除后记录标为丢失。
 
 ## 附件与分享
 

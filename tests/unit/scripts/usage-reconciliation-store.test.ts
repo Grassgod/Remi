@@ -1,10 +1,6 @@
 import { runTurnExecutionMutation } from "@multiremi/store/turn-execution-records.js";
 import { afterEach, describe, expect, it } from "bun:test";
 import { createHash } from "node:crypto";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { ZipStreamWriter } from "../../../packages/shared/src/zip/writer.js";
 import { applyUsageReconciliation, verifyUsageReconciliation } from "../../../scripts/usage-reconciliation-store.js";
 import { migrationBatchSize } from "../../../scripts/migrate-usage-accounting.js";
 import { buildReconcileUsagePlan, type ReconcileUsagePlan } from "../../../scripts/reconcile-task-usage.js";
@@ -23,9 +19,9 @@ function fixture() {
   runTurnExecutionMutation(db!, "UPDATE multiremi_turn_execution_records SET usage=?,provider='claude',status='completed' WHERE workspace_id='local'", [original]);
   migrateLegacyUsage(db!);
   const plan: ReconcileUsagePlan = { version: 2, mode: "read-only", generatedAt: "2026-10-06T00:00:00Z", counts: {
-    tasks: 2, rawEvents: 2, archives: 1, nativeMembers: 1, rejected: 0, replayed: 0, ambiguousRawEvents: 0, ambiguousTaskEvents: 0, archiveReadFailures: 0, bytesRead: 100,
+    tasks: 2, rawEvents: 2, rejected: 0, replayed: 0, ambiguousRawEvents: 0, ambiguousTaskEvents: 0,
   }, limitations: [], tasks: [first, second].map(task => ({ taskId: task.id, expectedLegacyUsageSha256: hash(original), supersedeLegacyRun: false, countedActualTokens: 0,
-    source: "native", coverage: "partial", legacyKnownTokens: 102, knownDeltaTokens: -77, ambiguousRawEvents: 0,
+    source: "raw", coverage: "partial", legacyKnownTokens: 102, knownDeltaTokens: -77, ambiguousRawEvents: 0,
     unrecoverableReason: "partial_evidence_legacy_preserved", actualTokens: 25, snapshot: { version: 2, runId: "historical-evidence-v2", revision: 1, complete: false,
       units: [{ ...actualUnit({ unitId: "request-one", provider: "claude", model: "actual-haiku", scope: "request", source: "provider_request",
         inputTokens: 20, outputTokens: 5, cacheReadTokens: 0, cacheWriteTokens: 0, totalTokens: 25, evidenceRef: "native:sha:line1" }), occurredAt: "2026-10-01T01:00:00.000Z" }] } })) };
@@ -203,52 +199,6 @@ describe("historical reconciliation checkpoints", () => {
     expect(generated.tasks.map(task => task.taskId)).toEqual([second.id]);
     expect(() => applyUsageReconciliation(db!, plan)).toThrow("Historical cohort changed");
     expect((db!.query("SELECT count(*) AS n FROM multiremi_usage_runs WHERE run_id='historical-evidence-v2'").get() as { n: number }).n).toBe(0);
-  });
-
-  it("keeps all shared-session competitors in a --task-id archive scan", async () => {
-    const { store, first, second } = fixture();
-    const chat = store.createChatSession({ agentId: first.agentId, title: "Shared archive" });
-    for (const [index, task] of [first, second].entries()) {
-      const turn = db!.query("SELECT turn_id FROM multiremi_turn_attempts WHERE id=?").get(task.id) as { turn_id: string };
-      db!.run("UPDATE multiremi_conversation_log SET session_id=?,seq=? WHERE id=?", [chat.id, index + 1, turn.turn_id]);
-      db!.run("UPDATE multiremi_turns SET session_id=?,seq=? WHERE id=?", [chat.id, index + 1, turn.turn_id]);
-    }
-    db!.run("UPDATE multiremi_conversation_heads SET head_seq=2 WHERE session_id=?", [chat.id]);
-    runTurnExecutionMutation(db!, "UPDATE multiremi_turn_execution_records SET started_at='2026-10-01T00:00:00Z',completed_at='2026-10-01T02:00:00Z' WHERE workspace_id='local'");
-    const root = mkdtempSync(join(tmpdir(), "usage-ownership-test-"));
-    try {
-      const buffers: Buffer[] = [];
-      const writer = new ZipStreamWriter({ write: chunk => { buffers.push(chunk); } });
-      const body = Buffer.from(JSON.stringify({ type: "assistant", sessionId: "shared-native-session", timestamp: "2026-10-01T01:00:00Z", message: {
-        id: "shared-request", model: "haiku", usage: { input_tokens: 20, output_tokens: 5 },
-      } }) + "\n");
-      const member = await writer.addBuffer("sessions/root/native.jsonl", body, hash(body.toString()));
-      const index = Buffer.from(JSON.stringify({ format: "multiremi.session-archive.v2", subject: { kind: "chat", id: chat.id }, members: [{
-        path: member.path, kind: "provider", local_header_offset: member.localHeaderOffset, data_offset: member.dataOffset,
-        compressed_size: member.compressedSize, uncompressed_size: member.uncompressedSize, sha256: member.sha256,
-      }] }));
-      await writer.addBuffer("index.json", index, hash(index.toString()));
-      await writer.finish();
-      await Bun.write(join(root, "shared.zip"), Buffer.concat(buffers));
-      const sql = { unsafe: async (statement: string, params: any[] = []) => statement.includes("FROM multiremi_session_archives")
-        ? [{ id: "archive", relative_path: "shared.zip", subject_kind: "chat", subject_id: chat.id, format: "multiremi.session-archive.v2" }]
-        : db!.query(statement.replace(/\$\d+/g, "?")).all(...params) } as unknown as Bun.SQL;
-      const full = await buildReconcileUsagePlan(sql, { archiveRoot: root });
-      const filtered = await buildReconcileUsagePlan(sql, { archiveRoot: root, taskId: first.id });
-      expect(full.tasks.map(task => task.taskId).sort()).toEqual([first.id, second.id].sort());
-      expect(full.counts.ambiguousTaskEvents).toBe(1);
-      expect(filtered.tasks).toHaveLength(1);
-      expect(filtered.counts.ambiguousTaskEvents).toBe(1);
-      expect(filtered.tasks[0]!.actualTokens).toBe(0);
-      runTurnExecutionMutation(db!, "UPDATE multiremi_turn_execution_records SET started_at='2026-10-01T01:30:00Z' WHERE id=?", [second.id]);
-      const unambiguous = await buildReconcileUsagePlan(sql, { archiveRoot: root, taskId: first.id });
-      expect(unambiguous.tasks[0]).toMatchObject({ source: "native", actualTokens: 25, countedActualTokens: 0, supersedeLegacyRun: false });
-      applyUsageReconciliation(db!, unambiguous);
-      expect(verifyUsageReconciliation(db!, unambiguous)).toMatchObject({ actualTokens: 0, preservedLegacyTokens: 102, ledgerActualTokens: 102 });
-    } finally {
-      if (!root.startsWith(join(tmpdir(), "usage-ownership-test-"))) throw new Error("Unexpected test fixture path");
-      rmSync(root, { recursive: true });
-    }
   });
 
   it("rejects an older unsafe replacement plan before creating its checkpoint tables", () => {

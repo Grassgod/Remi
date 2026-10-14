@@ -29,7 +29,7 @@ function fixture() {
 }
 
 describe("parallel agent execution", () => {
-  it("migrates existing lane checkpoints once without losing canonical history", () => {
+  it("migrates existing lane checkpoints once, voiding the native session but not the canonical history", () => {
     const legacy = openSqliteDatabase(":memory:");
     try {
     bootstrapPreUnifiedSchema(legacy);
@@ -46,14 +46,14 @@ describe("parallel agent execution", () => {
     const events = legacy.query("SELECT * FROM multiremi_session_events WHERE session_id = ? ORDER BY seq").all(session);
     const upgraded = new MultiremiStore(legacy);
     expect(upgraded.getSessionAgentLane(session, leader.id)).toMatchObject({
-      generation: 1, providerSessionId: "old_provider", workDir: "/tmp/old", cursorSeq: 2,
+      generation: 2, providerSessionId: null, workDir: null, cursorSeq: 2,
     });
     expect(legacy.query("SELECT * FROM multiremi_session_events WHERE session_id = ? ORDER BY seq").all(session)).toEqual(events);
     expect(upgraded.listConversationLogEntries(session).map(row => row.body_md)).toContain("historical answer");
-    expect(upgraded.getTask(queued.id)).toMatchObject({ sessionId: "old_provider", workDir: "/tmp/old", projectionToSeq: null });
+    expect(upgraded.getTask(queued.id)).toMatchObject({ sessionId: null, workDir: null, projectionToSeq: null });
     const scoped = upgraded.getOrCreateSessionAgentLane(session, leader.id, "dlg_parallel");
     runMigrations(legacy);
-    expect(upgraded.getSessionAgentLane(session, leader.id)?.generation).toBe(1);
+    expect(upgraded.getSessionAgentLane(session, leader.id)?.generation).toBe(2);
     expect(upgraded.getSessionAgentLane(session, leader.id, "dlg_parallel")).toEqual(scoped);
     } finally { legacy.close(); }
   });
