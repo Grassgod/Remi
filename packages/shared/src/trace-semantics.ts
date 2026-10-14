@@ -2,6 +2,7 @@
 export interface TraceSemanticEvent {
   type: string;
   content?: string | null;
+  input?: Record<string, unknown> | null;
   meta?: Record<string, unknown> | null;
 }
 
@@ -14,6 +15,15 @@ export function traceTextPhase(event: TraceSemanticEvent): "final" | "commentary
 export function traceParentToolCallId(event: TraceSemanticEvent): string | undefined {
   const parent = event.meta?.parent_tool_call_id;
   return typeof parent === "string" && parent ? parent : undefined;
+}
+
+/**
+ * `permission_request` / `question_request` name their decision message: Task
+ * human-request reads, cards and answers are all keyed by that message ID.
+ */
+export function traceHumanRequestId(event: Pick<TraceSemanticEvent, "input">): string | undefined {
+  const id = event.input?.message_id;
+  return typeof id === "string" && id.trim() ? id.trim() : undefined;
 }
 
 export function isTerminalTraceToolStatus(status: string | null | undefined): boolean {

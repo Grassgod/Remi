@@ -162,7 +162,7 @@ describe("standalone Task interactions", () => {
       }, { appId: "cli_test", idempotencyKey: "delivery", checkpoint: {
         version: "native_cot_v1", startedAt: Date.now(), throughSeq: 0, interactions: { hr_test: { messageId: "om_existing" } },
       }, save: h.save });
-      async function* stream() { yield taskEvent(1, "question_request", { input: { request_id: r.id } }); yield completed; }
+      async function* stream() { yield taskEvent(1, "question_request", { input: { message_id: r.id } }); yield completed; }
       await presentation.consume(stream());
       expect(h.calls.filter(c => c.operation === "patch")).toHaveLength(1);
       expect(h.calls[0]!.input.path.message_id).toBe("om_existing");
@@ -183,7 +183,7 @@ describe("standalone Task interactions", () => {
       version: "native_cot_v1", startedAt: Date.now(), throughSeq: 0, interactionOpenId: "ou_owner",
       interactions: { hr_test: { messageId: "om_request" } },
     }, save: h.save });
-    async function* stream() { yield taskEvent(1, "question_request", { input: { request_id: r.id } }); yield completed; }
+    async function* stream() { yield taskEvent(1, "question_request", { input: { message_id: r.id } }); yield completed; }
     const running = presentation.consume(stream());
     await Bun.sleep(10);
     const response = await handleTaskInteractionEvent("cli_test", action(interactionMarker(r.taskId, r.id),
@@ -217,8 +217,8 @@ describe("standalone Task interactions", () => {
       interactions: { hr_test: { messageId: "om_request", waitingStarted: true, receiptStatus } },
     } });
     async function* stream() {
-      yield taskEvent(1, kind === "permission" ? "permission_request" : "question_request", { input: { request_id: r.id } });
-      yield taskEvent(1, kind === "permission" ? "permission_request" : "question_request", { input: { request_id: r.id } });
+      yield taskEvent(1, kind === "permission" ? "permission_request" : "question_request", { input: { message_id: r.id } });
+      yield taskEvent(1, kind === "permission" ? "permission_request" : "question_request", { input: { message_id: r.id } });
       yield completed;
     }
     await presentation.consume(stream());
@@ -240,7 +240,7 @@ describe("standalone Task interactions", () => {
       taskId: r.taskId, getHumanRequest: async () => r,
       respondHumanRequest: async (_id, response) => { r = answered(r, response); return r; },
     }, { appId: "cli_test", idempotencyKey: "delivery", mentionOpenId: "ou_owner", save: h.save });
-    async function* stream() { yield taskEvent(1, "permission_request", { input: { request_id: r.id } }); yield completed; }
+    async function* stream() { yield taskEvent(1, "permission_request", { input: { message_id: r.id } }); yield completed; }
     const running = presentation.consume(stream());
     try {
       while (!blocked) await Bun.sleep(1);
@@ -266,7 +266,7 @@ describe("standalone Task interactions", () => {
       yield taskEvent(1, "execution", { meta: { agentName: "小助手", provider: "claude" } });
       // The provider session is pinned mid-run, before the request card is sent.
       yield { kind: "snapshot", snapshot: { ...(completed as any).snapshot, status: "running", result: null } } as typeof completed;
-      yield taskEvent(2, "permission_request", { input: { request_id: r.id } });
+      yield taskEvent(2, "permission_request", { input: { message_id: r.id } });
       yield completed;
     }
     const running = presentation.consume(stream());

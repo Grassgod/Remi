@@ -3,7 +3,7 @@ import type { PermissionOption } from "@shared/contracts/acp-protocol.js";
 import type { FeishuStreamingSession } from "../streaming.js";
 import type { ToolEntry } from "../tool-formatters.js";
 import { executionModel, readContextUsage, type ContextUsage } from "@shared/agent-execution.js";
-import { isTerminalTraceToolStatus, traceParentToolCallId, traceTextPhase,
+import { isTerminalTraceToolStatus, traceHumanRequestId, traceParentToolCallId, traceTextPhase,
   TraceFinalReplyAccumulator } from "@shared/trace-semantics.js";
 import { formatCardStats } from "../card-metadata.js";
 import { formatToolInputSummary } from "../tool-formatters.js";
@@ -187,7 +187,7 @@ async function handleHumanRequest(
   input: Record<string, unknown>,
   question: boolean,
 ): Promise<void> {
-  const requestId = String(input.request_id ?? "").trim();
+  const requestId = traceHumanRequestId({ input });
   if (!requestId) return;
   if (meta.isHumanRequestPending && !await meta.isHumanRequestPending(requestId)) return;
   meta.signal?.throwIfAborted();

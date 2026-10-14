@@ -91,12 +91,12 @@ describe("deriveFinalReply matches FeishuCotTimeline.answer", () => {
     ]],
     ["permission_response does NOT break the run", [
       event({ content: "before" }),
-      event({ type: "permission_response", content: "granted", meta: { request_id: "r1" } }),
+      event({ type: "permission_response", content: "granted", input: { message_id: "r1" } }),
       event({ content: "after" }),
     ]],
     ["question_response does NOT break the run", [
       event({ content: "before" }),
-      event({ type: "question_response", content: "answered", meta: { request_id: "r2" } }),
+      event({ type: "question_response", content: "answered", input: { message_id: "r2" } }),
       event({ content: "after" }),
     ]],
     ["thinking breaks the run", [
@@ -106,12 +106,12 @@ describe("deriveFinalReply matches FeishuCotTimeline.answer", () => {
     ]],
     ["permission_request breaks the run", [
       event({ content: "before" }),
-      event({ type: "permission_request", content: "may I?", meta: { request_id: "r1" } }),
+      event({ type: "permission_request", content: "may I?", input: { message_id: "r1" } }),
       event({ content: "after" }),
     ]],
     ["question_request breaks the run", [
       event({ content: "before" }),
-      event({ type: "question_request", content: "which one?", meta: { request_id: "r2" } }),
+      event({ type: "question_request", content: "which one?", input: { message_id: "r2" } }),
       event({ content: "after" }),
     ]],
     ["plan breaks the run", [

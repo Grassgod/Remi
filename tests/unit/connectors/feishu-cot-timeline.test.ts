@@ -263,7 +263,7 @@ describe("semantic native CoT timeline", () => {
   it("closes the preceding paragraph before opening a separate waiting message", () => {
     const timeline = new FeishuCotTimeline("task");
     timeline.accept(message(1, "text", { content: "还需要你确认。", meta: { phase: "commentary" } }));
-    timeline.accept(message(2, "permission_request", { input: { request_id: "approval" } }));
+    timeline.accept(message(2, "permission_request", { input: { message_id: "approval" } }));
     const samples = [...timeline.drain(true).samples, ...timeline.waitForUser("approval", "permission", 2)];
     let open = false;
     for (const [type] of samples) {

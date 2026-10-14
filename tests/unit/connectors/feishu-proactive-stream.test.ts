@@ -38,7 +38,7 @@ describe("durable proactive Task cards", () => {
     const h = harness();
     const checked: string[] = [];
     async function* replay() {
-      yield message(1, "question_request", { input: { request_id: "hr_done" } });
+      yield message(1, "question_request", { input: { message_id: "hr_done" } });
       yield* events();
     }
     await h.channel.handleTaskStream("oc_group", "topic", replay(), { ...meta,
@@ -52,7 +52,7 @@ describe("durable proactive Task cards", () => {
     const h = harness();
     const abort = new AbortController();
     async function* question() {
-      yield message(1, "question_request", { input: { request_id: "hr_live", questions: [{ question: "Continue?", options: [{ label: "Yes" }] }] } });
+      yield message(1, "question_request", { input: { message_id: "hr_live", questions: [{ question: "Continue?", options: [{ label: "Yes" }] }] } });
     }
     const running = h.channel.handleTaskStream("oc_group", "topic", question(), { ...meta, signal: abort.signal,
       isHumanRequestPending: async () => true }, { durable: { idempotencyKey: "delivery_1", messageId: "om_card" } });
@@ -66,7 +66,7 @@ describe("durable proactive Task cards", () => {
     const h = harness();
     let checks = 0;
     async function* question() {
-      yield message(1, "question_request", { input: { request_id: "hr_live", questions: [{ question: "Continue?", options: [{ label: "Yes" }] }] } });
+      yield message(1, "question_request", { input: { message_id: "hr_live", questions: [{ question: "Continue?", options: [{ label: "Yes" }] }] } });
       yield* events();
     }
     await h.channel.handleTaskStream("oc_group", "topic", question(), { ...meta,

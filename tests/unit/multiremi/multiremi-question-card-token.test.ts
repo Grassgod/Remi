@@ -385,7 +385,7 @@ for (const backend of ["SQLite", "Postgres"] as const) {
           { response, cardCredential: credential, respondedBy: f.member.id, expectedRouteRevision: store.getQuestion(f.request.id)!.route_revision })!,
       }, { appId: "cli_mul487", idempotencyKey: "native-token-retry", interactionOpenId: f.recipient, save: h.save });
       async function* stream() {
-        yield taskEvent(1, "question_request", { input: { request_id: f.request.id } });
+        yield taskEvent(1, "question_request", { input: { message_id: f.request.id } });
         yield completed;
       }
       await presentation.consume(stream());

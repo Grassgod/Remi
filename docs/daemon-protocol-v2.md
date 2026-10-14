@@ -668,6 +668,13 @@ C 的 Live Hub 元素都直接用它。谁要加字段，改这一个文件并�
 `execution`、`text`、`thinking`、`compaction`、`usage`、`plan`、`tool_use`、`tool_result`、
 `permission_request`、`permission_response`、`question_request`、`question_response`、`steer`。
 
+人工请求事件以 decision 消息为唯一标识：`permission_request` / `question_request` 的
+`input.message_id` 是 `turn.decision` 返回的 decision 消息 ID，另带 `options` 与 `tool_call`
+或 `questions`；对应 `*_response` 带同一 `message_id`，以及 `reply_message_id`、`option_id` / `answers`
+和 `responded_by`。事件不带 `request_id`。展示方用
+[`traceHumanRequestId`](../packages/shared/src/trace-semantics.ts) 读取该 ID，人工请求的读取、卡片与答复都按它访问
+`/api/daemon/messages/:id`。
+
 **不含 `assistant` 与 `error`。**`assistant` 是已被 e1d88572 删掉的陈旧生产者（mapper 产出 `text`）；
 `error` 只出现在前端展示联合类型和浏览器 socket 的握手帧上，没有任何 daemon 写入者产出它。
 展示层要显示 error 或 assistant 行由它自己派生，不能指望线上出现。历史数据里若出现这两种或任何
