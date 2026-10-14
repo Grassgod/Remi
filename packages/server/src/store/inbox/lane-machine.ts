@@ -9,6 +9,7 @@ import { afterCommit } from '../db/postgres.js';
 import { appendPendingTurnAuditWithinTransaction } from '../pending-turns.js';
 import { notifyTurnChanged } from '../turn-execution-records.js';
 import { RE_RING_SWEEP_PAGE_SQL, reRingSweepEnabled } from '../re-ring-sweep.js';
+import { settleQueueAfterTurnEndWithinTransaction } from './queued-messages.js';
 
 export function lockLane(ctx: StoreContext, sessionId: string, agentId: string, scope = ''): void {
   const at = nowIso();
@@ -79,6 +80,9 @@ export function reRingAfterTurnEnd(ctx: StoreContext, turnId: string, events: Co
   const chat=ctx.chat().getChatSession(turn.session_id);
   if (!agent || agent.archivedAt || session?.status==='archived' || chat?.status==='archived') return;
   lockLane(ctx,turn.session_id,turn.agent_id,turn.execution_scope);
+  // ADR 0020: a completed Chat turn releases the follow-up queue as ordinary now
+  // requests; the scan below then merges them into the same pending turn.
+  if (chat) settleQueueAfterTurnEndWithinTransaction(ctx,turn,events);
   const lane=ctx.db.query(`SELECT cursor_seq FROM multiremi_session_lanes
     WHERE session_id=? AND reader_type='agent' AND reader_id=? AND execution_scope=?`).get(turn.session_id,turn.agent_id,turn.execution_scope)!;
   const scopeSql=ctx.db.dialect==='postgres'?"COALESCE(metadata::jsonb->>'execution_scope','')":"COALESCE(json_extract(metadata,'$.execution_scope'),'')";

@@ -1,22 +1,22 @@
 {
   "meta": {
     "harness": "scripts/snapshot-api-routes.ts",
-    "routeCount": 779,
+    "routeCount": 785,
     "routeCountByPrefix": {
       "native": 212,
-      "compat": 551,
+      "compat": 557,
       "root": 16
     },
-    "getRoutes": 339,
-    "getRoutesWithBody": 335,
+    "getRoutes": 340,
+    "getRoutesWithBody": 336,
     "statusOnlyRoutes": [
       "GET /api/daemon/ws",
       "GET /api/realtime/ws",
       "GET /api/trace/ws",
       "GET /ws"
     ],
-    "mutationRoutes": 440,
-    "mutationRoutesCovered": 290,
+    "mutationRoutes": 445,
+    "mutationRoutesCovered": 295,
     "flows": [
       "agents-compat",
       "agents-native",
@@ -25,6 +25,7 @@
       "autopilots-compat",
       "autopilots-native",
       "chat",
+      "chat-follow-up-queue",
       "cloud",
       "comments-compat",
       "comments-native",
@@ -123,6 +124,7 @@
     "DELETE /api/projects/:id/resources/:resourceId",
     "DELETE /api/runtime-workspaces/:id",
     "DELETE /api/runtimes/:id",
+    "DELETE /api/sessions/:sessionId/queue/:qid",
     "DELETE /api/skills/:id",
     "DELETE /api/skills/:id/files/:fileId",
     "DELETE /api/squads/:id",
@@ -388,6 +390,7 @@
     "GET /api/sessions/:sessionId/log/entry",
     "GET /api/sessions/:sessionId/log/locate",
     "GET /api/sessions/:sessionId/messages",
+    "GET /api/sessions/:sessionId/queue",
     "GET /api/shares/:token",
     "GET /api/shares/:token/attachments/:attachmentId/content",
     "GET /api/shares/:token/tasks/:task_id/trace",
@@ -510,6 +513,7 @@
     "PATCH /api/multiremi/squads/:id/members",
     "PATCH /api/runtime-workspaces/:id",
     "PATCH /api/runtimes/:id",
+    "PATCH /api/sessions/:sessionId/queue/:qid",
     "PATCH /api/skills/:id",
     "PATCH /api/squads/:id/members/role",
     "PATCH /api/usage/prices/:id",
@@ -725,6 +729,9 @@
     "POST /api/runtimes/:id/update",
     "POST /api/runtimes/:id/workspaces",
     "POST /api/sessions/:sessionId/messages",
+    "POST /api/sessions/:sessionId/queue",
+    "POST /api/sessions/:sessionId/queue/:qid/steer",
+    "POST /api/sessions/:sessionId/queue/resume",
     "POST /api/skills",
     "POST /api/skills/import",
     "POST /api/squads",
@@ -895,6 +902,7 @@
     "DELETE /api/projects/:id/docs/:ref",
     "DELETE /api/projects/:id/resources/:resourceId",
     "DELETE /api/runtimes/:id",
+    "DELETE /api/sessions/:sessionId/queue/:qid",
     "DELETE /api/skills/:id",
     "DELETE /api/skills/:id/files/:fileId",
     "DELETE /api/squads/:id",
@@ -1152,6 +1160,7 @@
     "GET /api/sessions/:sessionId/log/entry",
     "GET /api/sessions/:sessionId/log/locate",
     "GET /api/sessions/:sessionId/messages",
+    "GET /api/sessions/:sessionId/queue",
     "GET /api/shares/:token",
     "GET /api/shares/:token/attachments/:attachmentId/content",
     "GET /api/shares/:token/tasks/:task_id/trace",
@@ -1267,6 +1276,7 @@
     "PATCH /api/multiremi/squads/:id",
     "PATCH /api/multiremi/squads/:id/members",
     "PATCH /api/runtimes/:id",
+    "PATCH /api/sessions/:sessionId/queue/:qid",
     "PATCH /api/skills/:id",
     "PATCH /api/squads/:id/members/role",
     "PATCH /api/workspaces/:id",
@@ -1420,6 +1430,9 @@
     "POST /api/runtimes/:id/models",
     "POST /api/runtimes/:id/update",
     "POST /api/sessions/:sessionId/messages",
+    "POST /api/sessions/:sessionId/queue",
+    "POST /api/sessions/:sessionId/queue/:qid/steer",
+    "POST /api/sessions/:sessionId/queue/resume",
     "POST /api/skills",
     "POST /api/skills/import",
     "POST /api/squads",
@@ -2979,6 +2992,215 @@
           "updatedAt": "<timestamp>",
           "updated_at": "<timestamp>"
         }
+      }
+    },
+    {
+      "key": "chat-follow-up-queue#000 POST /api/sessions/:sessionId/queue",
+      "route": "POST /api/sessions/:sessionId/queue",
+      "path": "/api/sessions/cht_snapshot/queue",
+      "status": 200,
+      "body": {
+        "item": {
+          "id": "qmsg_q5010won31uy",
+          "session_id": "cht_snapshot",
+          "body_md": "Queued snapshot",
+          "attachments": [],
+          "client_id": "snapshot-queue-1",
+          "status": "queued",
+          "error": null,
+          "revision": 1,
+          "released_message_id": null,
+          "released_via": null,
+          "released_at": null,
+          "created_at": "<timestamp>",
+          "updated_at": "<timestamp>"
+        },
+        "released": null
+      }
+    },
+    {
+      "key": "chat-follow-up-queue#001 POST /api/sessions/:sessionId/queue",
+      "route": "POST /api/sessions/:sessionId/queue",
+      "path": "/api/sessions/cht_snapshot/queue",
+      "status": 200,
+      "body": {
+        "item": {
+          "id": "qmsg_zsxpe4iu5err",
+          "session_id": "cht_snapshot",
+          "body_md": "Second queued snapshot",
+          "attachments": [],
+          "client_id": "snapshot-queue-2",
+          "status": "queued",
+          "error": null,
+          "revision": 1,
+          "released_message_id": null,
+          "released_via": null,
+          "released_at": null,
+          "created_at": "<timestamp>",
+          "updated_at": "<timestamp>"
+        },
+        "released": null
+      }
+    },
+    {
+      "key": "chat-follow-up-queue#002 GET /api/sessions/:sessionId/queue",
+      "route": "GET /api/sessions/:sessionId/queue",
+      "path": "/api/sessions/cht_snapshot/queue",
+      "status": 200,
+      "body": {
+        "items": [
+          {
+            "id": "qmsg_q5010won31uy",
+            "session_id": "cht_snapshot",
+            "body_md": "Queued snapshot",
+            "attachments": [],
+            "client_id": "snapshot-queue-1",
+            "status": "queued",
+            "error": null,
+            "revision": 1,
+            "released_message_id": null,
+            "released_via": null,
+            "released_at": null,
+            "created_at": "<timestamp>",
+            "updated_at": "<timestamp>"
+          },
+          {
+            "id": "qmsg_zsxpe4iu5err",
+            "session_id": "cht_snapshot",
+            "body_md": "Second queued snapshot",
+            "attachments": [],
+            "client_id": "snapshot-queue-2",
+            "status": "queued",
+            "error": null,
+            "revision": 1,
+            "released_message_id": null,
+            "released_via": null,
+            "released_at": null,
+            "created_at": "<timestamp>",
+            "updated_at": "<timestamp>"
+          }
+        ],
+        "paused": null
+      }
+    },
+    {
+      "key": "chat-follow-up-queue#003 PATCH /api/sessions/:sessionId/queue/:qid",
+      "route": "PATCH /api/sessions/:sessionId/queue/:qid",
+      "path": "/api/sessions/cht_snapshot/queue/qmsg_q5010won31uy",
+      "status": 200,
+      "body": {
+        "item": {
+          "id": "qmsg_q5010won31uy",
+          "session_id": "cht_snapshot",
+          "body_md": "Edited queued snapshot",
+          "attachments": [],
+          "client_id": "snapshot-queue-1",
+          "status": "queued",
+          "error": null,
+          "revision": 2,
+          "released_message_id": null,
+          "released_via": null,
+          "released_at": null,
+          "created_at": "<timestamp>",
+          "updated_at": "<timestamp>"
+        }
+      }
+    },
+    {
+      "key": "chat-follow-up-queue#004 POST /api/sessions/:sessionId/queue/:qid/steer",
+      "route": "POST /api/sessions/:sessionId/queue/:qid/steer",
+      "path": "/api/sessions/cht_snapshot/queue/qmsg_zsxpe4iu5err/steer",
+      "status": 200,
+      "body": {
+        "item": {
+          "id": "qmsg_zsxpe4iu5err",
+          "session_id": "cht_snapshot",
+          "body_md": "Second queued snapshot",
+          "attachments": [],
+          "client_id": "snapshot-queue-2",
+          "status": "released",
+          "error": null,
+          "revision": 2,
+          "released_message_id": "msg_3gdnj5pggzmd",
+          "released_via": "steer",
+          "released_at": "<timestamp>",
+          "created_at": "<timestamp>",
+          "updated_at": "<timestamp>"
+        },
+        "message": {
+          "sender_type": "member",
+          "sender_id": "mem_local_local",
+          "to_type": "agent",
+          "to_ref": "agt_snapshot",
+          "to_agent_id": "agt_snapshot",
+          "to_member_id": null,
+          "message_kind": "request",
+          "wake_requested": "now",
+          "wake_applied": "now",
+          "wake_reason": "human_sender",
+          "dedupe_key": "queue:qmsg_zsxpe4iu5err",
+          "options": null,
+          "reply_to_id": null,
+          "session_id": "cht_snapshot",
+          "seq": 3,
+          "id": "msg_3gdnj5pggzmd",
+          "kind": "message",
+          "visibility": "shown",
+          "task_id": null,
+          "body_md": "Second queued snapshot",
+          "body_html": "<p>Second queued snapshot</p>",
+          "render_version": "md-a9442f26e49a14bc",
+          "resolved_at": null,
+          "resolved_by_type": null,
+          "resolved_by_id": null,
+          "metadata": {
+            "queued_message_id": "qmsg_zsxpe4iu5err",
+            "queued_at": "<timestamp>",
+            "execution_scope": "",
+            "delivery_turn_id": "tsk_1ut6x0i244sp"
+          },
+          "revision": 2,
+          "created_at": "<timestamp>",
+          "updated_at": "<timestamp>",
+          "deleted_at": null,
+          "attachments": [],
+          "reactions": []
+        },
+        "turn_id": "tsk_1ut6x0i244sp"
+      }
+    },
+    {
+      "key": "chat-follow-up-queue#005 DELETE /api/sessions/:sessionId/queue/:qid",
+      "route": "DELETE /api/sessions/:sessionId/queue/:qid",
+      "path": "/api/sessions/cht_snapshot/queue/qmsg_q5010won31uy",
+      "status": 200,
+      "body": {
+        "item": {
+          "id": "qmsg_q5010won31uy",
+          "session_id": "cht_snapshot",
+          "body_md": "Edited queued snapshot",
+          "attachments": [],
+          "client_id": "snapshot-queue-1",
+          "status": "deleted",
+          "error": null,
+          "revision": 3,
+          "released_message_id": null,
+          "released_via": null,
+          "released_at": null,
+          "created_at": "<timestamp>",
+          "updated_at": "<timestamp>"
+        }
+      }
+    },
+    {
+      "key": "chat-follow-up-queue#006 POST /api/sessions/:sessionId/queue/resume",
+      "route": "POST /api/sessions/:sessionId/queue/resume",
+      "path": "/api/sessions/cht_snapshot/queue/resume",
+      "status": 200,
+      "body": {
+        "items": [],
+        "paused": null,
+        "released": []
       }
     },
     {
@@ -20962,6 +21184,16 @@
           }
         ],
         "next_cursor": null
+      }
+    },
+    {
+      "key": "get-sweep GET /api/sessions/:sessionId/queue",
+      "route": "GET /api/sessions/:sessionId/queue",
+      "path": "/api/sessions/cht_snapshot/queue",
+      "status": 200,
+      "body": {
+        "items": [],
+        "paused": null
       }
     },
     {

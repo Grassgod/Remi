@@ -28,6 +28,7 @@
     "./unified-model": "./src/unified-model.ts",
     "./issue-activity": "./src/issue-activity.ts",
     "./question": "./src/question.ts",
+    "./queued-message": "./src/queued-message.ts",
     "./trace-file": "./src/trace-file.ts"
   },
   "dependencies": {}

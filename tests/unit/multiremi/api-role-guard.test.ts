@@ -424,9 +424,9 @@ describe("MUL-461 api role — guard over the full golden route inventory", () =
       expect(status === 421, `${pattern} -> ${status}`).toBe(expectedRefusal("runtime", path));
       if (status === 421) refused += 1;
     }
-    // The merged inventory has 779 routes. Responsibility, delivery and Question
-    // user operations belong to UI; runtime owns daemon/health/peer/trace routes.
-    // It refuses 728 HTTP routes and two browser upgrades.
+    // The merged inventory has 785 routes. Responsibility, delivery, Question and
+    // Chat follow-up queue (ADR 0020) user operations belong to UI; runtime owns
+    // daemon/health/peer/trace routes. It refuses 734 HTTP routes and two browser upgrades.
     // The independent literal oracle checks every route above.
     const mintRoute = "GET /api/daemon/runtimes/:runtimeId/feishu-bot/decision-cards";
     expect(statuses.has(mintRoute)).toBe(true);
@@ -436,8 +436,8 @@ describe("MUL-461 api role — guard over the full golden route inventory", () =
       expect(statuses.has(route), `${route} is registered`).toBe(true);
       expect(statuses.get(route), `${route} belongs to ui`).toBe(421);
     }
-    expect(refused, routeCountHint("runtime")).toBe(728);
-    expect(refused + 2, routeCountHint("runtime")).toBe(730);
+    expect(refused, routeCountHint("runtime")).toBe(734);
+    expect(refused + 2, routeCountHint("runtime")).toBe(736);
   });
 
   it("answers 421 with the misdirected body, the role header, and a real route still reachable", async () => {

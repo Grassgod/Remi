@@ -131,6 +131,11 @@ export function classifyRoute(route: string): CliManifestRoute {
   if (/^GET \/api\/sessions\/:sessionId\/log(?:\/entry|\/locate)?$/.test(route)) return {
     cli_exempt: true, category: "pure_ui", reason: "Read-only SSR and replica display wire (head, turn cards, window and location); CLI reads use message.list/get.",
   };
+  // ADR 0020: no queue CLI. Agents never act on a member's queue; CLI senders choose
+  // the wake directly with `remi message send --wake`.
+  if (/^(?:GET|POST|PATCH|DELETE) \/api\/sessions\/:sessionId\/queue(?:\/resume|\/:qid(?:\/steer)?)?$/.test(route)) return {
+    cli_exempt: true, category: "pure_ui", reason: "Chat composer follow-up queue (member-only Web state, ADR 0020); CLI and agents send directly with message.send --wake.",
+  };
   if (RETIRED_CLI_ROUTES[route]) return {
     cli_exempt: true, category: "retired_route", reason: `已移除：改用 ${RETIRED_CLI_ROUTES[route]}`,
   };

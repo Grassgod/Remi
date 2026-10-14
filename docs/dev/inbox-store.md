@@ -42,13 +42,24 @@ summary: 消息唯一入口、lane 状态机、Issue 推导及 Daemon 和用户�
 | 编辑、删除、解决、反应 | `editMessage(id,{body_md})`、`deleteMessage(id)`、`resolveMessage(id,actor,resolved)`、`reactMessage(id,input)` | 已消费或部分已消费内容不能编辑或删除；删除保留 tombstone；反应幂等 |
 | 人的收件箱 | `listMessageInbox(memberId,workspaceId,{limit})`、`readMessageInbox(memberId,sessionId,toSeq)`、`readAllMessageInbox(memberId,workspaceId)` | member lane，计数不受分页影响；priority≤2 且未解决进入 attention；读到哪只前进 |
 | 轮与尝试 | `getTurn(id)`、`listTurns(input)`、`getTurnInput(id)`、`listTurnAttempts(id)`、`getTurnTrace(id)` | trace 定位 current_attempt_id；历史输入范围保留 legacy_prompt |
-| 轮控制 | `cancelTurn(id)`、`wrapUpTurn(id)`、`retryTurn(id,cold)` | wrap-up 是标记；retry 同轮新 attempt，cold 清 provider 续接缓存，不改变 Issue |
+| 轮控制 | `cancelTurn(id,{byMember?})`、`wrapUpTurn(id)`、`retryTurn(id,cold)` | wrap-up 是标记；retry 同轮新 attempt，cold 清 provider 续接缓存，不改变 Issue；byMember 在有未放行条目时把 Chat 队列暂停为 `interrupted` |
+| Chat 跟进队列 | `listQueuedMessages(sessionId)`、`enqueueQueuedMessage(input)`、`updateQueuedMessage(sessionId,id,memberId,input)`、`deleteQueuedMessage(...)`、`steerQueuedMessage(...)`、`resumeQueuedMessages(sessionId,memberId)` | 仅 Chat；行级操作校验原发送人；错误为带 status/code 的 `QueuedMessageError`；见下文“跟进队列” |
 | 卡片答复 | `issueMessageCardToken(id,recipient)`、`answerMessageDecision(id,input)` | hash/binding/consumed 在消息行，答复 CAS 与 reply 同事务；decision 在发送时持久化 pending，答复绑定来源轮和 scope，跨 Issue 恢复后同事务推导来源 Issue；宿主负责把答复者映射到成员 |
 | Daemon | `getDaemonTurnBridge()` | 下述适配器与 S3 的结构接口一致 |
 
 [DaemonTurnBridge](../../packages/server/src/store/inbox/daemon-turn-bridge.ts) 提供 `offerInput`、`snapshot`、`rpc`、`complete`。所有 RPC 检查 workspace/runtime/daemon/current-attempt 绑定；旧 attempt 无法提交。offer 使用 attempt 自己的确认/正文读取进度和 `taskSessionInput` 的 unread_range；冷 bootstrap 与冷 replacement 的输入范围从 0 开始，包含该轮原始输入。准备或拒绝 offer 保留实际读进度，接受冷 bootstrap 后才清零。暖 replacement 保留同一 provider 的输入回执。新 provider 不能借用旧 attempt 或其它 scope 的正文读取凭据。触发消息正文最多内联 8,000 字，长正文通过 message list 范围读取。正文、HTML、任意 metadata 与卡片凭据不重复塞入输入帧。折叠正文或仅提供范围提示的上下文未完整读取时不能越过它确认输入；带 task token 的范围读取向 `recordSessionAgentRangeRead` 传入当前 attempt ID，绑定到它的 lane 和读取回执。`turn.input` 可省略已经由当前 attempt 完整读取的消息 ID；未读消息仍须按顺序列出，外部、重复或乱序 ID 均拒绝，不能用 lane 或 provider 位置替代读取回执。snapshot 只投递轮开始后当前 lane 的 now 插话与 wrap-up 标记。daemon 收到决策答复的投影通知后，用 `turn.decision.get` 一次读取原始完整 reply；创建时使用 `metadata.kind` 区分 permission/question，permission 的原始 options 保留在 human_request payload，消息 options 使用卡片 label/value 结构。complete 在终态事务内记录业务输入边界、写 reply/final、补铃并推导 Issue 状态，重发返回已提交结果；provider 完成位置只更新 `provider_cursor_seq`，不能替代实际读取的 `cursor_seq/cursor_offset`。
 
 终态事务持有同一 lane 锁时检查已经下发的 now 请求。请求 seq 高于完成报告的 `input_to_seq` 且不超过 attempt 的 `projection_to_seq` 时，拒绝旧结果并返回 `turn_input_pending`；daemon 等待下行消息，在同一 provider 会话消费后重新提交。未下发的请求仍由终态补铃处理，next_turn、已删除、隐藏、其它 agent 或 scope 的消息不会触发该完成屏障。
+
+### 跟进队列
+
+[queued-messages](../../packages/server/src/store/inbox/queued-messages.ts) 实现 [ADR 0020](../adr/0020-chat-follow-up-queue-and-native-steering.md) 的 Chat 跟进队列。条目在 `multiremi_queued_messages`，按 lane（session、agent、execution_scope）分配单调 `seq` 定序；暂停记在 agent lane 的 `queue_paused_at`、`queue_pause_reason`（`interrupted`/`send_failed`/`turn_ended`）。每个操作是一个事务，先取工作区生命周期锁再取 `lockLane`，与发送和完成用同一把 lane 锁；`chat:queue_updated` 推入调用方的 `CommitEventQueue`，提交后才发射。
+
+`releaseQueuedMessagesWithinTransaction(ctx,lane,events,via)` 按 `seq,id` 逐条放行：每条用独立 `CommitEventQueue` 和 `withSavepoint` 调用 `sendMessageWithinTransaction`（成员 request、`wake_requested:"now"`、`dedupe_key:"queue:<id>"`、`metadata.queued_message_id/queued_at`），成功后标 released 并合并事件；失败则回滚到 savepoint，该条标 failed 并记录 error，lane 暂停为 `send_failed`，停止放行。第一条建 pending 轮，后续合并进同一轮；全部是 now，下一次 offer 按 seq 内联正文。同一行重复放行命中 dedupe key，返回原消息，不新增日志行。没有 queued/failed 条目时清除暂停。
+
+钩子：`reRingAfterTurnEnd` 在归档检查和 `lockLane` 之后、未读 now 扫描之前调用 `settleQueueAfterTurnEndWithinTransaction`，只处理 Chat：completed 且未暂停时放行（`via:"turn"`），failed/cancelled 且有未放行条目、未暂停时暂停为 `turn_ended`；随后的扫描把释放的消息合并进同一 pending 轮。Chat 轮的回复先于此写入，日志顺序为回复在前。`cancelTurn(id,{byMember:true})` 在 `lockLane` 之后、`cancelTask` 之前暂停为 `interrupted`，之后终态钩子看到已暂停便不再改写原因。周期扫描不处理队列；归档期间结束的轮直接返回，条目留待 resume。
+
+入队在 lane 无 pending/running/awaiting_human 轮且未暂停时立即放行整条队列；引导（steer）不论 lane 状态只放行该条，交给 `ensurePendingTurn` 插话、合并或建轮；resume 清除暂停、把 failed 重置为 queued，空闲时放行。编辑、删除或成功引导 failed 条目后，若已无 failed 条目且暂停原因是 `send_failed`，自动解除并在空闲时继续放行；其他原因只由 resume 解除。删除 Chat 同事务删除其队列行。旧的 Chat 任务队列 Store 写入口（按排队任务编辑、移除、优先）已删除。
 
 [server 启动](../../packages/server/src/api/server.ts) 默认调用 `Store.getDaemonTurnBridge()`，同一实例用于 offer、下行快照、RPC 和完成报告；测试可用 `daemonTurnBridge` 显式覆盖。传输接入已在此分支完成，生产切换和 212 真机验收另行执行。定向集成验证入口为 `tests/unit/daemon/task-downlinks.test.ts` 的 Store bridge 用例，以及 `decision-callback-integration.test.ts` 的双后端真实 callback、未读范围和附件下载/注入用例。
 
@@ -60,7 +71,7 @@ summary: 消息唯一入口、lane 状态机、Issue 推导及 Daemon 和用户�
 
 依赖闸门遵循 `MULTIREMI_DEPENDENCY_GATE`。成员发给 agent 的 now request 一律由服务端产生 force 标记，同事务保留 `dependency_force_started` 的真实成员、来源、消息/尝试、目标 agent、assigneeDispatched 和前置项审计。实际 rich mention 记录 source=mention，其余统一 request 记录 source=comment；旧 rerun 已迁入 message send，不再从正文推测独立 rerun 意图。HTTP 不接受 force 标记，agent 来信仍降为 next_turn；显式 next_turn/inbox_only 不提升。结构性平台交差绕过依赖门禁，立即叫醒派活人；依赖满足后的自动开工以平台身份发 request，触发消息保留来源轮，避免误判为 agent 自发自收；timer 自动化继续受门禁约束。审计失败回滚消息、轮、状态和事件。Guard A/B、依赖及终态父单边界继续适用；子单状态每次变化向父单负责人发一条 status，已关闭父单只留原状态活动。成员负责人在 member lane 收到 status，失败和阻塞仍显示 warning；无负责人父单保留状态消息及 skip 活动，终态告警仍送给订阅者。
 
-`20261005_separate_lane_provider_progress` 先保留旧 provider 检查点；`20261005_fold_agent_read_state` 再把 head 上的实际 seq/offset 搬到默认 agent lane，不把其它 scope 的检查点当成读取回执。`20261005_fold_decision_records` 将历史提问与决定的状态、选项和一次性令牌搬到消息，消息令牌使用部分唯一索引。领域消费者读取只投影新消息的 question/decision/member-inbox views。`20261005_attempt_input_receipts` 为 attempt 增加确认、正文读取和原始输入确认字段，并补齐历史公共 decision 的持久状态；`20261005_separate_lane_provider_progress` 分开 provider 续接位置；turn 列表在 authoritative turns 表保留 workspace/created_at/id 和 workspace/status/created_at/id 两个索引，权限条件在 LIMIT 前执行；列表不传 legacy_prompt，完整正文通过 get --input 读取。`20261005_attempt_counters_bigint` 将既有 PG attempts 的 event_count/tool_call_count 扩为 BIGINT，新库直接使用 BIGINT，保持 JavaScript 安全整数范围。SQLite 的整数行为不变。原提问、决定、插话表仍留作物理删除的备份窗口，但运行代码不读取它们。退役脚本 mul493 组同时列出 head.agent_read_state，执行前验证折叠迁移已完成。
+`20261005_separate_lane_provider_progress` 先保留旧 provider 检查点；`20261005_fold_agent_read_state` 再把 head 上的实际 seq/offset 搬到默认 agent lane，不把其它 scope 的检查点当成读取回执。`20261005_fold_decision_records` 将历史提问与决定的状态、选项和一次性令牌搬到消息，消息令牌使用部分唯一索引。领域消费者读取只投影新消息的 question/decision/member-inbox views。`20261005_attempt_input_receipts` 为 attempt 增加确认、正文读取和原始输入确认字段，并补齐历史公共 decision 的持久状态；`20261005_separate_lane_provider_progress` 分开 provider 续接位置；turn 列表在 authoritative turns 表保留 workspace/created_at/id 和 workspace/status/created_at/id 两个索引，权限条件在 LIMIT 前执行；列表不传 legacy_prompt，完整正文通过 get --input 读取。`20261005_attempt_counters_bigint` 将既有 PG attempts 的 event_count/tool_call_count 扩为 BIGINT，新库直接使用 BIGINT，保持 JavaScript 安全整数范围。SQLite 的整数行为不变。`20261016_chat_follow_up_queue` 在两条迁移链末尾用 `runMigrationOnce` 创建 `multiremi_queued_messages` 及其 lane 索引，并以 `addColumnIfMissing` 给 `multiremi_session_lanes` 增加 `queue_paused_at`、`queue_pause_reason`，均为加法变更。原提问、决定、插话表仍留作物理删除的备份窗口，但运行代码不读取它们。退役脚本 mul493 组同时列出 head.agent_read_state，执行前验证折叠迁移已完成。
 
 ## Producer 定位
 
@@ -71,6 +82,7 @@ summary: 消息唯一入口、lane 状态机、Issue 推导及 Daemon 和用户�
 | 人的评论及无 @ 负责人响应 | `createIssueCommentWithinTransaction`、`maybeTriggerAssigneeReply` → central writer / task wrapper |
 | rich mention | `triggerCommentMentions` → central writer，原评论重新路由，多收件人追加关联消息 |
 | Chat 输入与回复 | `sendChatMessage`、`appendChatMessageWithinTransaction` → central writer |
+| Chat 跟进队列放行 | `releaseQueuedMessagesWithinTransaction`（入队、引导、resume、终态钩子）→ central writer |
 | 飞书入站 | `submitMessage` → `createTaskWithinTransaction` → central writer |
 | 飞书轮次推送 | `prepareIssueRoundPushesWithinTransaction` → pending adapter → central writer |
 | 飞书提问卡与文本回退 | question/decision metadata 与 message card_token；回退 task wrapper |
@@ -98,4 +110,4 @@ summary: 消息唯一入口、lane 状态机、Issue 推导及 Daemon 和用户�
 
 ## 验证入口
 
-相关文件包括 QA 复现沉淀的 `inbox-qa-regressions`、`inbox-fallback-regressions`、`inbox-attempt-input-regressions`、`inbox-read-progress-regressions`，以及 `inbox-wake-policy`、`inbox-lane-machine`、`inbox-issue-status`、`inbox-operations`、`inbox-daemon-turn-bridge`、`inbox-concurrency-pg`、`inbox-dispatch-entrypoints`、`multiremi-question-card-token`、`turn-card-completion-fields`、`unified-model-migration`。PG 并发用例必须配置本地隔离的 MULTIREMI_TEST_POSTGRES_URL，使用两个独立服务进程；没有配置则未执行，不能以 SQLite 通过代替。`multiremi-daemon-steer` 和 `multiremi-drain-outbox` 的真实 server/daemon 夹具默认用 SQLite；配置该变量后，每个用例通过 `openIntegrationDatabase` 创建并清理独立 PG 数据库，拒绝非本地地址。生产切换与物理删表仍按[切换手册](../deploy/unified-model-cutover.md)操作。
+跟进队列由 `inbox-chat-follow-up-queue`（Store 状态机）、`multiremi-api-chat-queue`（HTTP）和 `inbox-chat-terminal-rering`（与终态补铃的组合）覆盖。相关文件还包括 QA 复现沉淀的 `inbox-qa-regressions`、`inbox-fallback-regressions`、`inbox-attempt-input-regressions`、`inbox-read-progress-regressions`，以及 `inbox-wake-policy`、`inbox-lane-machine`、`inbox-issue-status`、`inbox-operations`、`inbox-daemon-turn-bridge`、`inbox-concurrency-pg`、`inbox-dispatch-entrypoints`、`multiremi-question-card-token`、`turn-card-completion-fields`、`unified-model-migration`。PG 并发用例必须配置本地隔离的 MULTIREMI_TEST_POSTGRES_URL，使用两个独立服务进程；没有配置则未执行，不能以 SQLite 通过代替。`multiremi-daemon-steer` 和 `multiremi-drain-outbox` 的真实 server/daemon 夹具默认用 SQLite；配置该变量后，每个用例通过 `openIntegrationDatabase` 创建并清理独立 PG 数据库，拒绝非本地地址。生产切换与物理删表仍按[切换手册](../deploy/unified-model-cutover.md)操作。
