@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import type * as Lark from "@larksuiteoapi/node-sdk";
 import type { FeishuPresentationCheckpoint, MultiremiTaskHumanRequest } from "@multiremi/contracts/types.js";
-import type { LegacyTraceEvent } from "@multiremi/contracts/trace.js";
+import { isTraceEvent, type TraceEvent, type TracePermissionItem, type TraceQuestionItem } from "@multiremi/contracts/trace.js";
 import type { TaskStreamEvent, TaskStreamMeta } from "../base.js";
 import { FeishuDeliveryError } from "@shared/feishu-delivery-error.js";
 import { buildFinalCard } from "./streaming/card-elements.js";
@@ -11,7 +11,6 @@ import { FeishuCotTransport, feishuTransportError, type CotSample } from "./nati
 import { FeishuCotTimeline } from "./cot-timeline.js";
 import { buildTaskInteractionCard, registerTaskInteraction } from "./task-interaction.js";
 import { questionCardIdempotencyKey } from "@shared/feishu-task-card.js";
-import { traceHumanRequestId } from "@shared/trace-semantics.js";
 import { createFeishuImageResolver } from "./outbound-images.js";
 import { uploadImageFeishu } from "./media.js";
 import { rewriteMarkdownImages } from "@shared/feishu-markdown-images.js";
@@ -19,6 +18,12 @@ import { FeishuLegacyTaskReceipts } from "./legacy-task-receipts.js";
 
 export interface TaskPresentationOptions {
   lane?: "cot";
+  /**
+   * A delivery that already sent a legacy (protocol v4) streaming card: finish
+   * it with the result card only. Its process card stays as it was sent; no
+   * native CoT is opened for it.
+   */
+  finalOnly?: boolean;
   receiptMessageIds?: string[];
   appId: string;
   replyToMessageId?: string;
@@ -30,6 +35,9 @@ export interface TaskPresentationOptions {
   save?: (state: FeishuPresentationCheckpoint) => Promise<void>;
   log?: (message: string) => void;
 }
+
+/** A permission or question item: the decision message in `message_id` keys every read, card and answer. */
+type HumanRequestItem = (TracePermissionItem | TraceQuestionItem) & { message_id: string };
 
 const stableId = (value: string) => createHash("sha256").update(value).digest("hex").slice(0, 32);
 const delay = (ms: number, signal: AbortSignal) => new Promise<void>((resolve, reject) => {
@@ -54,12 +62,19 @@ export class FeishuTaskPresentation {
   private sessionId: string | null | undefined;
   private lastFlush = Date.now();
   private lastBatch = 0;
+  /** Request items already presented by this instance (each has several events). */
+  private readonly requests = new Set<string>();
 
   constructor(private readonly client: Lark.Client, private readonly chatId: string,
     private readonly meta: TaskStreamMeta, private readonly options: TaskPresentationOptions) {
     this.cot = new FeishuCotTransport(client);
     this.state = structuredClone(options.checkpoint ?? { version: "native_cot_v1", startedAt: Date.now(), throughSeq: 0, interactions: {} });
-    this.timeline = new FeishuCotTimeline(meta.taskId, this.state.throughSeq, Date.now, this.state.deferredToolIds);
+    // Tool rows are written whole from `item.completed`, so no invocation waits
+    // for its arguments any more; an older renderer's deferred IDs are obsolete.
+    delete this.state.deferredToolIds;
+    // Persisted with the first checkpoint, so a retried delivery stays final-only.
+    if (options.finalOnly && !this.state.cot) this.state.cot = { status: "disabled", error: "legacy_card_final_only" };
+    this.timeline = new FeishuCotTimeline(meta.taskId, this.state.throughSeq);
     this.state.interactionOpenId ??= options.interactionOpenId ?? options.mentionOpenId;
     this.signal = meta.signal ? AbortSignal.any([meta.signal, this.abortController.signal]) : this.abortController.signal;
     this.metadata = new FeishuTaskMetadata(options.displayName ?? meta.displayName);
@@ -127,7 +142,7 @@ export class FeishuTaskPresentation {
     }
     this.signal.throwIfAborted();
     if (!["completed", "failed", "cancelled"].includes(finalStatus)) throw new Error("Task stream ended before a terminal snapshot");
-    await this.flush(true);
+    await this.flush();
     await this.finishCot(finalStatus);
     if (this.options.lane === "cot") {
       this.active = false;
@@ -157,42 +172,50 @@ export class FeishuTaskPresentation {
     return { messageId: this.state.resultMessageId };
   }
 
-  private async message(message: LegacyTraceEvent): Promise<void> {
-    this.timeline.accept(message);
-    this.metadata.accept(message);
+  private async message(event: TraceEvent): Promise<void> {
+    this.timeline.accept(event);
+    this.metadata.accept(event);
+    const request = this.humanRequest(event);
     // Presentation restart replays the canonical prefix for answer/metadata
     // reconstruction. Its requests and native events are already acknowledged.
-    if (message.seq <= this.state.throughSeq) {
+    if (event.seq <= this.state.throughSeq) {
       // Discard each acknowledged presentation sample as we rebuild state,
       // rather than collecting a whole historical native-event queue.
       this.timeline.drain();
       // The process checkpoint may precede the independent card receipt and
       // waiting-step completion. Resume that existing interaction on replay.
-      const entry = this.state.interactions[traceHumanRequestId(message) ?? ""];
-      if ((message.type === "permission_request" || message.type === "question_request")
-        && entry && (!entry.receiptStatus || (entry.waitingStarted && !entry.waitingFinished))) {
-        await this.interaction(message);
+      const entry = request ? this.state.interactions[request.message_id] : undefined;
+      if (request && entry && (!entry.receiptStatus || (entry.waitingStarted && !entry.waitingFinished))) {
+        await this.interaction(request);
       }
       return;
     }
-    if (message.type === "execution" || message.type === "usage") return;
     if (Date.now() - this.lastFlush >= 500) await this.flush();
-    if (message.type === "permission_request" || message.type === "question_request") {
-      await this.flush(true);
+    if (request) {
+      await this.flush();
       if (this.options.lane === "cot") {
-        await this.waitForInteraction(message);
+        await this.waitForInteraction(request);
         return;
       }
-      await this.interaction(message);
+      await this.interaction(request);
     }
   }
 
-  private async flush(force = false): Promise<void> {
-    const { samples, throughSeq } = this.timeline.drain(force);
+  /** A permission or question item the first time this presentation sees it, if it names its decision message. */
+  private humanRequest(event: TraceEvent): HumanRequestItem | null {
+    if (!isTraceEvent(event) || (event.type !== "item.started" && event.type !== "item.updated" && event.type !== "item.completed")) return null;
+    const item = event.item;
+    if ((item.type !== "permission" && item.type !== "question") || item.parent_id !== null || !item.message_id) return null;
+    if (this.requests.has(item.id)) return null;
+    this.requests.add(item.id);
+    return item as HumanRequestItem;
+  }
+
+  private async flush(): Promise<void> {
+    const { samples, throughSeq } = this.timeline.drain();
     if (!samples.length) {
-      if (throughSeq > this.state.throughSeq || JSON.stringify(this.state.deferredToolIds ?? []) !== JSON.stringify(this.timeline.deferredToolIds)) {
-        this.state.throughSeq = Math.max(this.state.throughSeq, throughSeq);
-        this.state.deferredToolIds = this.timeline.deferredToolIds;
+      if (throughSeq > this.state.throughSeq) {
+        this.state.throughSeq = throughSeq;
         await this.save();
       }
       return;
@@ -224,7 +247,6 @@ export class FeishuTaskPresentation {
       this.state.cot.writePending = false;
     }
     this.state.throughSeq = Math.max(this.state.throughSeq, throughSeq);
-    this.state.deferredToolIds = this.timeline.deferredToolIds;
     await this.save();
   }
 
@@ -254,7 +276,6 @@ export class FeishuTaskPresentation {
       await this.writeProcess(pending, this.state.throughSeq);
       initial = true;
     }
-    this.state.deferredToolIds = this.timeline.deferredToolIds;
     if (this.state.cot?.status !== "active") { await this.save(); return; }
     const ending: CotSample[] = status === "failed"
       ? [["RUN_ERROR", { code: "TASK_FAILED", message: "执行失败，详情见结果卡" }]]
@@ -280,26 +301,23 @@ export class FeishuTaskPresentation {
     await this.save();
   }
 
-  private async waitForInteraction(message: LegacyTraceEvent): Promise<void> {
-    const requestId = traceHumanRequestId(message);
-    if (!requestId) return;
+  private async waitForInteraction(item: HumanRequestItem): Promise<void> {
+    const requestId = item.message_id;
     let request = await this.meta.getHumanRequest?.(requestId);
     if (!request || request.status !== "pending") return;
-    await this.writeProcess(this.timeline.waitForUser(requestId, request.kind, message.seq), message.seq);
+    await this.writeProcess(this.timeline.waitForUser(requestId, request.kind), this.state.throughSeq);
     while (request.status === "pending") {
       await delay(750, this.signal);
       request = await this.meta.getHumanRequest?.(requestId) ?? request;
     }
-    await this.writeProcess(this.timeline.resume(requestId, request.status), message.seq);
+    await this.writeProcess(this.timeline.resume(requestId, request.status), this.state.throughSeq);
   }
 
-  private async interaction(message: LegacyTraceEvent): Promise<void> {
-    const requestId = traceHumanRequestId(message);
-    if (!requestId) return;
+  private async interaction(item: HumanRequestItem): Promise<void> {
+    const requestId = item.message_id;
     let request = await this.meta.getHumanRequest?.(requestId);
     if (this.meta.getHumanRequest && !request) throw new Error("Task human request unavailable");
-    request ??= { id: requestId, taskId: this.meta.taskId, kind: message.type === "question_request" ? "question" : "permission",
-      payload: message.input ?? {}, status: "pending", response: null, respondedBy: null, createdAt: message.ts, respondedAt: null };
+    request ??= fallbackRequest(item, this.meta.taskId);
     if (request.taskId !== this.meta.taskId) throw new Error("Interaction Task mismatch");
     let entry = this.state.interactions[requestId];
     if (!entry && request.status !== "pending") return; // historical request already answered on web
@@ -320,7 +338,7 @@ export class FeishuTaskPresentation {
     const finishWaiting = async () => {
       if (entry!.waitingStarted && !entry!.waitingFinished) {
         entry!.waitingFinished = true;
-        await this.writeProcess(this.timeline.resume(requestId, request!.status), message.seq);
+        await this.writeProcess(this.timeline.resume(requestId, request!.status), this.state.throughSeq);
       }
     };
     if (entry.receiptStatus === request.status) { await finishWaiting(); await this.save(); return; }
@@ -331,7 +349,7 @@ export class FeishuTaskPresentation {
       // a slow CoT update must not leave newly visible buttons unresponsive.
       if (request.status === "pending" && !entry.waitingStarted) {
         entry.waitingStarted = true;
-        await this.writeProcess(this.timeline.waitForUser(requestId, request.kind, message.seq), message.seq);
+        await this.writeProcess(this.timeline.waitForUser(requestId, request.kind), this.state.throughSeq);
         await this.save();
       }
       while (request.status === "pending") {
@@ -375,4 +393,13 @@ export class FeishuTaskPresentation {
       }
     }
   }
+}
+
+/** Without a human-request reader, present the request from its trace item alone. */
+function fallbackRequest(item: HumanRequestItem, taskId: string): MultiremiTaskHumanRequest {
+  const payload: Record<string, unknown> = item.type === "question"
+    ? { message: item.message, questions: item.questions }
+    : { tool_call: { title: item.title }, options: item.options.map(option => ({ optionId: option.option_id, name: option.name, kind: option.kind })) };
+  return { id: item.message_id, taskId, kind: item.type, payload, status: "pending", response: null, respondedBy: null,
+    createdAt: item.started_at, respondedAt: null };
 }

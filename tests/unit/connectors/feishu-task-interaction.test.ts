@@ -4,7 +4,7 @@ import { buildTaskInteractionCard, handleTaskInteractionEvent, interactionMarker
 import { registerTaskInteractionFixture as registerTaskInteraction, resetQuestionCardHostFixtures } from "./question-card-host-fixture.js";
 afterEach(resetQuestionCardHostFixtures);
 import { FeishuTaskPresentation } from "@connectors/feishu/task-presentation.js";
-import { nativeHarness, taskEvent, completed } from "./feishu-native-harness.js";
+import { item, nativeHarness, snapshot, started, terminal, turnStarted } from "./feishu-native-harness.js";
 
 const questions = [
   { question: "Which features?", multiSelect: true, options: [{ label: "A", description: "First" }, { label: "B" }] },
@@ -158,11 +158,11 @@ describe("standalone Task interactions", () => {
       const h = nativeHarness();
       const r = { ...request(), status, response: status === "responded" ? { answers: { "Which features?": "A", "Which environment?": "Staging" } } : null };
       const presentation = new FeishuTaskPresentation(h.client as any, "oc_group", {
-        taskId: r.taskId, getHumanRequest: async () => r, respondHumanRequest: async () => { throw new Error("must not respond"); },
+        taskId: r.taskId, getHumanRequest: async () => r,
       }, { appId: "cli_test", idempotencyKey: "delivery", checkpoint: {
         version: "native_cot_v1", startedAt: Date.now(), throughSeq: 0, interactions: { hr_test: { messageId: "om_existing" } },
       }, save: h.save });
-      async function* stream() { yield taskEvent(1, "question_request", { input: { message_id: r.id } }); yield completed; }
+      async function* stream() { yield started(1, requestItem(r)); yield terminal; }
       await presentation.consume(stream());
       expect(h.calls.filter(c => c.operation === "patch")).toHaveLength(1);
       expect(h.calls[0]!.input.path.message_id).toBe("om_existing");
@@ -178,12 +178,11 @@ describe("standalone Task interactions", () => {
       submit: async response => { r = answered(r, response); return r; } });
     const presentation = new FeishuTaskPresentation(h.client as any, "oc_group", {
       taskId: r.taskId, getHumanRequest: async () => r,
-      respondHumanRequest: async (id, response) => { expect(id).toBe("hr_test"); r = answered(r, response); return r; },
     }, { appId: "cli_test", idempotencyKey: "delivery", checkpoint: {
       version: "native_cot_v1", startedAt: Date.now(), throughSeq: 0, interactionOpenId: "ou_owner",
       interactions: { hr_test: { messageId: "om_request" } },
     }, save: h.save });
-    async function* stream() { yield taskEvent(1, "question_request", { input: { message_id: r.id } }); yield completed; }
+    async function* stream() { yield started(1, requestItem(r)); yield terminal; }
     const running = presentation.consume(stream());
     await Bun.sleep(10);
     const response = await handleTaskInteractionEvent("cli_test", action(interactionMarker(r.taskId, r.id),
@@ -210,16 +209,16 @@ describe("standalone Task interactions", () => {
     const h = nativeHarness();
     const r = answered(request(kind), kind === "permission" ? { option_id: "allow" } : { answers: { "Which features?": "A" } });
     const presentation = new FeishuTaskPresentation(h.client as any, "oc_group", {
-      taskId: r.taskId, getHumanRequest: async () => r, respondHumanRequest: async () => { throw new Error("already answered"); },
+      taskId: r.taskId, getHumanRequest: async () => r,
     }, { appId: "cli_test", idempotencyKey: "delivery", save: h.save, checkpoint: {
       version: "native_cot_v1", startedAt: Date.now(), throughSeq: 1,
       cot: { status: "active", presentation: "semantic_v1", cotId: "cot_1", messageId: "om_cot", runStarted: true },
       interactions: { hr_test: { messageId: "om_request", waitingStarted: true, receiptStatus } },
     } });
     async function* stream() {
-      yield taskEvent(1, kind === "permission" ? "permission_request" : "question_request", { input: { message_id: r.id } });
-      yield taskEvent(1, kind === "permission" ? "permission_request" : "question_request", { input: { message_id: r.id } });
-      yield completed;
+      yield started(1, requestItem(r));
+      yield started(1, requestItem(r));
+      yield terminal;
     }
     await presentation.consume(stream());
     expect(h.events().filter(e => e.event_type === "STEP_STARTED")).toHaveLength(0);
@@ -238,9 +237,8 @@ describe("standalone Task interactions", () => {
       submit: async response => { r = answered(r, response); return r; } });
     const presentation = new FeishuTaskPresentation(h.client as any, "oc_group", {
       taskId: r.taskId, getHumanRequest: async () => r,
-      respondHumanRequest: async (_id, response) => { r = answered(r, response); return r; },
     }, { appId: "cli_test", idempotencyKey: "delivery", mentionOpenId: "ou_owner", save: h.save });
-    async function* stream() { yield taskEvent(1, "permission_request", { input: { message_id: r.id } }); yield completed; }
+    async function* stream() { yield started(1, requestItem(r)); yield terminal; }
     const running = presentation.consume(stream());
     try {
       while (!blocked) await Bun.sleep(1);
@@ -260,14 +258,13 @@ describe("standalone Task interactions", () => {
       submit: async response => { r = answered(r, response); return r; } });
     const presentation = new FeishuTaskPresentation(h.client as any, "oc_group", {
       taskId: r.taskId, displayName: "小助手", sessionId: null, getHumanRequest: async () => r,
-      respondHumanRequest: async (_id, response) => { r = answered(r, response); return r; },
     }, { appId: "cli_test", idempotencyKey: "delivery", mentionOpenId: "ou_owner", save: h.save });
     async function* stream() {
-      yield taskEvent(1, "execution", { meta: { agentName: "小助手", provider: "claude" } });
+      yield turnStarted(1, { agent_name: "小助手", provider: "claude" });
       // The provider session is pinned mid-run, before the request card is sent.
-      yield { kind: "snapshot", snapshot: { ...(completed as any).snapshot, status: "running", result: null } } as typeof completed;
-      yield taskEvent(2, "permission_request", { input: { message_id: r.id } });
-      yield completed;
+      yield snapshot({ status: "running", result: null });
+      yield started(2, requestItem(r));
+      yield terminal;
     }
     const running = presentation.consume(stream());
     while (r.status === "pending") {
@@ -287,3 +284,8 @@ describe("standalone Task interactions", () => {
     expect(JSON.stringify(buildTaskInteractionCard(r, { receipt: true }))).not.toContain("<at ");
   });
 });
+
+/** The daemon's request item for `r`: keyed by its decision message in `message_id`. */
+function requestItem(r: MultiremiTaskHumanRequest) {
+  return item(r.kind, `${r.kind === "question" ? "q" : "perm"}:${r.id}`, { message_id: r.id });
+}

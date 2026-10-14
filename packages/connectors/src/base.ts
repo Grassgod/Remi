@@ -8,7 +8,7 @@ import type {
   FeishuBotTaskSnapshot,
   MultiremiTaskHumanRequest,
 } from "@multiremi/contracts/types.js";
-import type { LegacyTraceEvent } from "@multiremi/contracts/trace.js";
+import type { TraceEvent } from "@multiremi/contracts/trace.js";
 
 /** A message received from any connector. */
 export interface IncomingMessage {
@@ -51,8 +51,14 @@ export type StreamingHandler = (
   consumer: (stream: AsyncIterable<ProviderEvent>, meta: StreamMeta) => Promise<void>,
 ) => Promise<void>;
 
+/**
+ * One item of a Task presentation stream: a stored trace event as the trace
+ * subscription delivers it, or the terminal snapshot read once after `closed`.
+ * The subscription is opaque, so a v1 trace still yields its legacy lines;
+ * readers check each event with `isTraceEvent` and skip what fails.
+ */
 export type TaskStreamEvent =
-  | { kind: "message"; message: LegacyTraceEvent }
+  | { kind: "message"; message: TraceEvent }
   | { kind: "snapshot"; snapshot: FeishuBotTaskSnapshot };
 
 export interface TaskStreamMeta {
@@ -60,14 +66,9 @@ export interface TaskStreamMeta {
   displayName?: string | null;
   sessionId?: string | null;
   signal?: AbortSignal;
-  isHumanRequestPending?: (requestId: string) => Promise<boolean>;
+  /** Read by the decision message ID a permission/question item carries in `message_id`. */
   getHumanRequest?: (requestId: string) => Promise<MultiremiTaskHumanRequest | null>;
   prepareHumanRequestCard?: (requestId: string, recipientOpenId: string) => Promise<Record<string, unknown>>;
-  respondHumanRequest: (
-    requestId: string,
-    response: Record<string, unknown>,
-    credential?: { token: string; operatorOpenId: string },
-  ) => Promise<MultiremiTaskHumanRequest>;
 }
 
 /** Connector bridge for the persisted Multiremi Task event stream. */

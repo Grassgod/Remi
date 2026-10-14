@@ -4,12 +4,11 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { subscribeFeishuTask } from "../../apps/remi/cli/multiremi.js";
 import { FeishuTaskPresentation } from "@connectors/feishu/task-presentation.js";
-// TODO(PR 2 P4): Feishu presentation still consumes legacy fragment events.
-import type { LegacyTraceEvent as TraceEvent } from "@multiremi/contracts/trace.js";
+import type { TraceEvent, TraceEventInput } from "@multiremi/contracts/trace.js";
 import type { DaemonTraceTransport } from "@multiremi/worker/trace-transport.js";
 import { daemonTraceService } from "@multiremi/api/daemon-protocol/trace-handlers.js";
 import { DaemonProtocolHarness, waitFor } from "./daemon-protocol-v2/harness.js";
-import { nativeHarness } from "../unit/connectors/feishu-native-harness.js";
+import { nativeHarness, read, reasoning, running, turn } from "../unit/connectors/feishu-native-harness.js";
 
 it("presents continuous CoT through a real local daemon/API disconnect and resumes at checkpoint + 1", async () => {
   const activeTaskIds: string[] = [];
@@ -53,7 +52,10 @@ it("presents continuous CoT through a real local daemon/API disconnect and resum
     // This manually claimed fixture must be advertised as active on reconnect.
     activeTaskIds.push(task.id);
     const transport = (h.daemon as any).ensureTrace() as DaemonTraceTransport;
-    transport.append(task.id, runtimeId, [{ type: "thinking", content: "consumed 1" }, { type: "thinking", content: "consumed 2" }] as never);
+    const tool = read("toolu_local_read", "/synthetic/source.ts");
+    const append = (events: TraceEventInput[]) => transport.append(task.id, runtimeId, events);
+    append([{ type: "turn.started", turn: turn({ id: task.id, agent_id: agent.id }) },
+      { type: "item.completed", item: reasoning("rsn:consumed", "consumed 2") }]);
     await waitFor(() => daemonTraceService(h.layer).sink.head(task.id) === 2, "checkpoint prefix");
     expect(h.store.getTask(task.id)?.status).toBe("running");
     const checkpoint = { version: "native_cot_v1" as const, startedAt: Date.now(), throughSeq: 2, interactions: {},
@@ -66,21 +68,22 @@ it("presents continuous CoT through a real local daemon/API disconnect and resum
       }
     }
     rendering = new FeishuTaskPresentation(sender.client as any, "oc_local_fixture", {
-      taskId: task.id, signal: controller.signal, respondHumanRequest: async () => { throw new Error("No human request in this CoT fixture"); },
+      taskId: task.id, signal: controller.signal,
     }, { lane: "cot", appId: "cli_local_fixture", idempotencyKey: "mul447-local", checkpoint, save: sender.save }).consume(stream());
     void rendering.catch(() => {});
-    transport.append(task.id, runtimeId, [
-      { type: "thinking", content: "live 3" },
-      { type: "tool_use", tool: "Read", toolCallId: "local-read", input: { path: "/synthetic/source.ts" } },
-    ] as never);
+    append([
+      { type: "item.completed", item: reasoning("rsn:live", "live 3") },
+      { type: "item.started", item: running(tool) },
+    ]);
     await waitFor(() => received.length === 2 && sender.checkpoint?.throughSeq === 4, "CoT checkpoint before disconnect", 5_000);
     expect(http.filter(request => request.path.endsWith(`/tasks/${task.id}/status`))).toEqual([]);
     await h.disconnect();
-    transport.append(task.id, runtimeId, [
-      { type: "tool_result", toolCallId: "local-read", status: "failed", output: "synthetic private stacktrace" },
-      { type: "thinking", content: "recovered 5" },
-      { type: "future.widget", content: "literal future payload", input: { nested: [1, { two: true }] }, meta: { arbitrary: "value" } },
-    ] as never);
+    append([
+      { type: "item.completed", item: { ...tool, status: "failed", output: "synthetic private stacktrace" } },
+      { type: "item.completed", item: reasoning("rsn:recovered", "recovered 6") },
+      // A newer producer's event type: carried through unchanged, skipped by the reader.
+      { type: "future.widget", content: "literal future payload", input: { nested: [1, { two: true }] } } as unknown as TraceEventInput,
+    ]);
     await h.reconnect();
     expect(h.store.getTask(task.id)?.status).toBe("running");
     await waitFor(() => received.length === 5 && sender.checkpoint?.throughSeq === 7, "resumed CoT checkpoint", 5_000);
@@ -90,19 +93,24 @@ it("presents continuous CoT through a real local daemon/API disconnect and resum
     await h.client.event({ t: "turn.complete", seq: 999_447, rt: runtimeId, p: turnCompletion(h.store, task.id, "Synthetic fixture complete", { ...transport.completion(task.id) }) });
     transport.close(task.id, "completed");
     expect(await rendering).toEqual({ messageId: "om_existing" });
-    expect(sender.checkpoint).toMatchObject({ throughSeq: 7, cot: { status: "finished" } });
+    // Closing appends turn.completed (seq 8) before the trailer.
+    expect(received.map(event => event.type).at(-1)).toBe("turn.completed");
+    expect(sender.checkpoint).toMatchObject({ throughSeq: 8, cot: { status: "finished" } });
     const nativeEvents = sender.events();
-    expect(nativeEvents.filter(event => event.event_type === "REASONING_MESSAGE_CONTENT").map(event => JSON.parse(event.content).delta).join("")).toBe("live 3recovered 5");
+    expect(nativeEvents.filter(event => event.event_type === "REASONING_MESSAGE_CONTENT").map(event => JSON.parse(event.content).delta).join("")).toBe("live 3recovered 6");
     const starts = nativeEvents.filter(event => event.event_type === "TOOL_CALL_START");
     const results = nativeEvents.filter(event => event.event_type === "TOOL_CALL_RESULT");
+    // Started before the disconnect, completed after it: written once, from its completion.
     expect(starts).toHaveLength(1);
+    expect(JSON.parse(starts[0]!.content)).toMatchObject({ title: "已读取 source.ts", icon: "read" });
     expect(results).toHaveLength(1);
     expect(JSON.parse(results[0]!.content)).toMatchObject({
       toolCallId: JSON.parse(starts[0]!.content).toolCallId,
       content: JSON.stringify({ type: "text", text: "执行失败" }),
     });
     expect(JSON.stringify(nativeEvents)).not.toContain("synthetic private stacktrace");
-    expect(JSON.parse(nativeEvents.find(event => event.event_type === "future.widget")!.content)).toEqual({ ...received[4]! });
+    expect(received[4]).toMatchObject({ seq: 7, type: "future.widget", content: "literal future payload" });
+    expect(nativeEvents.some(event => event.event_type === "future.widget")).toBe(false);
     expect(nativeEvents.at(-1)).toMatchObject({ event_type: "RUN_FINISHED" });
     expect(sender.calls.filter(call => call.operation === "POST")).toEqual([]);
     expect(http.filter(request => request.path.endsWith(`/tasks/${task.id}/messages`))).toEqual([]);
@@ -115,7 +123,7 @@ it("presents continuous CoT through a real local daemon/API disconnect and resum
         environment: "real local Bun API + real co-resident daemon + temporary SQLite; fake Feishu sender; synthetic trace producer",
         initial_checkpoint: checkpoint.throughSeq, checkpoint_before_disconnect: 4, final_checkpoint: sender.checkpoint?.throughSeq,
         subscribe_from_seq: subscriptions.map(entry => entry.frame.p.from_seq), received_seq: received.map(event => event.seq),
-        closed: true, cross_checkpoint_tool_result: { stable_id_reused: true, start_count: starts.length, result_count: results.length },
+        closed: true, cross_disconnect_tool: { written_on_completion: true, start_count: starts.length, result_count: results.length },
         native_events: nativeEvents, http_requests: http,
         trace_requests: h.ledger.filter(entry => ["trace.subscribe", "trace.fetch", "trace.unsubscribe"].includes(entry.type))
           .map(entry => ({ type: entry.type, task_id: entry.frame.p.task_id, from_seq: entry.frame.p.from_seq, after_seq: entry.frame.p.after_seq })),
@@ -124,7 +132,7 @@ it("presents continuous CoT through a real local daemon/API disconnect and resum
       mkdirSync(dirname(evidencePath), { recursive: true });
       writeFileSync(evidencePath, `${JSON.stringify(evidence, null, 2)}\n`);
       const escaped = JSON.stringify(evidence, null, 2).replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
-      writeFileSync(evidencePath.replace(/\.json$/, ".html"), `<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>MUL-447 local integration evidence</title><style>body{font:15px/1.6 system-ui;margin:24px;max-width:1100px;color:#222}pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#f2f5f3;padding:16px}h1{font-size:24px}p{max-width:900px}</style><h1>MUL-447: local integration evidence</h1><p>Real local daemon/API and temporary SQLite. Feishu sender and trace content are simulated. CoT resumes from 2 to 3, then from 4 to 5 after disconnect, and ends on closed. The tool result after reconnect reuses the earlier tool ID without a second start. One final status read; no messages polling. Human-request 750 ms polling remains pending its cross-process event transport. Independent QA is still required.</p><pre>${escaped}</pre></html>`);
+      writeFileSync(evidencePath.replace(/\.json$/, ".html"), `<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>MUL-447 local integration evidence</title><style>body{font:15px/1.6 system-ui;margin:24px;max-width:1100px;color:#222}pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#f2f5f3;padding:16px}h1{font-size:24px}p{max-width:900px}</style><h1>MUL-447: local integration evidence</h1><p>Real local daemon/API and temporary SQLite. Feishu sender and trace content are simulated. CoT resumes from 2 to 3, then from 4 to 5 after disconnect, and ends on closed. The tool started before the disconnect is written once, from its completion after reconnect. One final status read; no messages polling. Human-request 750 ms polling remains pending its cross-process event transport. Independent QA is still required.</p><pre>${escaped}</pre></html>`);
       console.log(`MUL-447 evidence: ${evidencePath}`);
     }
   } finally {

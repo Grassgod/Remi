@@ -5,9 +5,13 @@ New inbound chats, Issue topic replies and proactive Task reports use
 and human responses remain on the existing Task pipeline.
 
 The co-resident connector consumes `daemon.subscribeTrace(taskId, fromSeq,
-onEvents)`. A new or recovered presentation replays canonical history from zero
-to reconstruct answer text, tool identity and statistics. Its saved
-`presentation_checkpoint.throughSeq` suppresses native events already
+onEvents)`: the turn + items trace (`multiremi.trace.v2`, typed in the
+[trace contract](../packages/contracts/src/trace.ts)), folded by the shared
+reducer in
+[`turn-trace`](../packages/shared/src/turn-trace.ts), the same fold the daemon,
+the web and the CLI use. A new or recovered presentation replays canonical
+history from zero to reconstruct answer text, tool identity and statistics. Its
+saved `presentation_checkpoint.throughSeq` suppresses native events already
 acknowledged; it is not used to skip the state needed to reconstruct the final
 answer. Replay also resumes a saved interaction card whose receipt or waiting
 step is unfinished, without repeating its card or waiting announcement.
@@ -17,24 +21,33 @@ Replay is consumed in bounded pages with consumer backpressure.
 The established subscription still owns cursor-based reconnect replay and gap
 filling. The connector performs no messages or status polling, and reads a final
 display snapshot once after `closed`.
-`FeishuCotTimeline` accepts canonical `TraceEvent`, including `tool_call_id` and
-`ts`; unknown types retain their type and complete payload in the native stream.
-If a tool result arrives after a checkpoint without its earlier invocation,
-`tool_call_id` reconstructs the same display ID. The renderer sends the result
-without re-sending an acknowledged tool start. Unsent placeholder tools are
-recorded separately in the existing checkpoint as `deferredToolIds`, so their
-first complete invocation can still be presented after recovery.
+`FeishuCotTimeline` accepts canonical `TraceEvent`s. The subscription itself is
+opaque, so a v1 trace still delivers its legacy fragment lines; the timeline,
+like the shared reducer, skips those and any unknown event type, and only its
+cursor advances. Every native sample is a pure function of the event prefix and
+every native ID derives from an item ID, so a replay from seq 0 regenerates
+exactly what a checkpoint acknowledged. A tool row is written once, from the
+item's `item.completed`, when its command, actions or changes are final; nothing
+waits for late arguments, so the checkpoint no longer carries `deferredToolIds`
+(a value an earlier renderer saved is dropped on resume). A tool whose start
+preceded a resumed subscription's cursor is still written when it completes.
 An unpinned provider session remains unnamed until the final snapshot arrives.
 
 The independent `result_card` lane reads canonical trace from seq 0 on the host
 to build its footer with `FeishuTaskMetadata`, shared with the bundled renderer.
-Repeated updates to one tool ID count once; child execution/usage cannot replace
-the main execution identity or context snapshot, and billing token totals are
-not context occupancy. The server queues the durable terminal answer without
-reading the legacy Task-message table. The optional metadata read is bounded to
-five seconds, so an offline trace cannot prevent the final answer from being
-sent. This metadata subscription is separate from native CoT and does not
-re-send its process events.
+The agent name, engine and model come from `turn.started` / `turn.updated` /
+`turn.completed`, the context from the turn's `context_usage`, and the tool count
+from `turn.stats.tool_call_count` (tool items at any depth, counted once each);
+until `turn.completed` arrives, unique tool item IDs stand in for it. Subagent
+usage and model reports never reach the turn, and billing token totals are not
+context occupancy. The host read stops at `turn.completed`; a v1 trace, which has
+none, ends at its terminal snapshot. The card's duration is the queued body's
+Task time, else the turn's duration. A host command reply (`/new`, `/stop`, …) is
+a synthetic one-item turn whose provider names no engine. The server queues the
+durable terminal answer without reading the legacy Task-message table. The
+optional metadata read is bounded to five seconds, so an offline trace cannot
+prevent the final answer from being sent. This metadata subscription is separate
+from native CoT and does not re-send its process events.
 
 Human-request updates for the separate interaction lane still use the existing
 750 ms read loop. E5's `subscribeHumanRequests` is API-process local (MUL-436),
@@ -42,12 +55,13 @@ and the daemon's declared `task.human_request.settled` frame currently has no
 producer or receiver. Removing that loop requires the existing event transport
 to be wired into the connector process; this change adds no protocol or contract.
 
-Every presenter (bundled interaction card, split CoT waiting step, replay
-resume and the legacy streaming card) identifies a request by the
-`input.message_id` of its `permission_request` / `question_request` trace event:
-the decision message returned by `turn.decision`. `getHumanRequest`,
-`isHumanRequestPending`, card preparation and answers are keyed by that ID and
-the checkpoint's `interactions` map uses it too. An event without it is not
+Every presenter (bundled interaction card, split CoT waiting step and replay
+resume) identifies a request by the `message_id` of its `permission` /
+`question` item: the decision message returned by `turn.decision`.
+`getHumanRequest`, card preparation and answers are keyed by that ID and the
+checkpoint's `interactions` map uses it too; the item's own ID (`perm:…` /
+`q:…`) is never a request key. A request item is presented once, on the first of
+its events this presentation sees, and an item without `message_id` is not
 presented.
 
 | Stage | Transport | Visible content |
@@ -59,12 +73,14 @@ presented.
 
 Native creation returns both `cot_id` and `message_id`. Updates contain at most
 50 events, each with a JSON-encoded `content` string and decimal millisecond
-`timestamp`. Text chunks are limited to 4096 bytes, and consecutive chunks append
-to the same native text message. The Task event mapper preserves explicit
-`commentary`/`final` phases. For providers without phases, text before a subsequent
-tool/thought is process commentary; the tail is held for the final result.
-Subagent text never replaces the main Agent's answer. A direct answer without
-process events sends only the result, without an empty process placeholder.
+`timestamp`. Text chunks are limited to 4096 bytes; one text item is one native
+text message. The result card's answer is the turn's final item: the
+`agent_message` named by `turn.final_item_id`, else the last top-level one with
+`phase: "final"`, which the daemon's final-reply rule sets for every provider.
+The terminal snapshot's result is only the fallback when the trace has none.
+Subagent text (`parent_id` set) never replaces the main Agent's answer. A direct
+answer without process events sends only the result, without an empty process
+placeholder.
 
 Ordinary private-chat turns send both native process messages and result cards
 to the main chat, without a reply target. When `replyToMessageId` is present
@@ -94,39 +110,51 @@ provider process events; a silent wait is represented by the receipt.
 
 The display follows aiden-bot's native CoT protocol and timeline conventions
 (reviewed at `8c4e7e49b6d1e403b918e2f5068aea330b87f0fb`), adapted to Remi's
-canonical trace events rather than its SDK-specific event feed:
+turn + items trace rather than its SDK-specific event feed. Step text is the
+shared Codex-style copy in
+[`trace-step-copy`](../packages/shared/src/trace-step-copy.ts) (`describeStep`,
+zh table `STEP_COPY_ZH`), so Feishu and the web Chat read alike; the card layout
+is unchanged:
 
-- Narrative uses segmented `REASONING_MESSAGE_*` events. A tool/plan separates
-  the surrounding paragraphs into distinct groups, preserving chronological order.
-  Only provider-exposed process text is consumed; no hidden reasoning is retrieved.
-- Tool titles prefer the supplied description, with semantic read/search/write/
-  skill/task/agent icons. ACP placeholders and subsequent argument updates share
-  one invocation. A shell placeholder waits for usable arguments instead of
-  forcing a generic title after one second. Other process events can proceed;
-  unsent tool IDs are checkpointed with the acknowledged sequence. A later
-  argument update or terminal snapshot emits the invocation once; if parameters
-  never arrive, finishing the turn emits the tool-name fallback. Already-sent
-  native START/ARGS events are not repeated to guess at title-update support;
-  late descriptions use the existing result display.
-  Shell icons use the leading executable of a simple pipeline: `rg`/`grep`/`find`
-  use search, `cat`/`sed`/`head`/`tail` use read, and other commands or compound
-  scripts use bash. A trailing log filter such as `grep -v INFO`, a filename or a
-  quoted argument cannot turn an unrelated operation into search.
-- `TOOL_CALL_END` closes the invocation display, as in aiden-bot; it does not
-  declare the underlying operation complete. Ordinary successful tool logs are
-  omitted. The full transcript remains in the workbench. Failures show a short
-  indication; todo/plan results use native `list` items with explicit status
-  (pending / in progress / completed). Only completed items use the checked
-  `task` icon; other items omit it and the plan heading uses a neutral `doc`
-  icon. The checklist has no `plaintext`
-  code panel or emoji checklist. Long plans show an explicit overflow count
-  and refer to the complete plan in the workbench.
+- Narrative uses segmented `REASONING_MESSAGE_*` events: each `reasoning` item
+  and each commentary `agent_message` is one paragraph, written when the item
+  completes, in trace order. Only provider-exposed process text is consumed; no
+  hidden reasoning is retrieved. An agent message that may still be the answer
+  (`final` or `unknown` phase) is held: a later thought, tool, plan, compaction,
+  human request or reply makes it process text; when the turn ends, every held
+  message but the final item is written as process text.
+- Tool rows come from `item.completed`: one per command action (the daemon
+  parses each shell command once with
+  [`command-parse`](../packages/shared/src/command-parse.ts)), one per changed
+  file, otherwise one per item. Titles are the done-state copy, such as
+  "已读取 app.ts", "已在 src 中搜索“foo”" or "已运行 bun test"; a native title
+  cannot be rewritten, which is why rows wait for the finished item. Icons follow
+  the action: read, search (searches and listings), bash (any other command),
+  write (file changes), search (web), doc/find-app/default for other tools.
+  `TOOL_CALL_ARGS` carries `$ <command>`, else the path, query or URL. A compound
+  or unparsable script stays one `unknown` action, so a trailing filter such as
+  `grep -v INFO` cannot turn an unrelated command into a search.
+- `TOOL_CALL_END` closes the invocation display, as in aiden-bot. Ordinary tool
+  output is omitted; the full transcript remains in the workbench. A row whose
+  copy cannot carry the outcome gets a short result: "执行失败" for a failed
+  command, "已停止" or "已拒绝" where the copy still reads done; a later
+  `item.completed` that changes the status (a refused approval re-closes its
+  tool) adds that result to the written row instead of a second start. The plan
+  item is redrawn from every snapshot whose entries changed, as native `list`
+  items with explicit status (pending / in progress / completed). Only completed
+  items use the checked `task` icon; other items omit it and the plan heading
+  uses a neutral `doc` icon. The checklist has no `plaintext` code panel or emoji
+  checklist. Long plans show an explicit overflow count and refer to the complete
+  plan in the workbench. Closing the turn re-completes the plan unchanged, which
+  draws nothing.
   Native result `content` is itself a JSON string containing the typed text/list object.
-- Subagent invocations and available Codex activity/collaboration updates become
-  named steps. Launch acknowledgments do not imply completion. Nested child prose
-  stays in the workbench. Remi cannot show SDK-specific lifecycle events that the
-  Task transcript does not contain; an unresolved background child is labeled as
-  unresolved when the main turn ends, never fabricated as successful.
+- A `subagent` item is a named step from its start ("正在运行子代理：…") to its
+  end ("子代理已完成：…", "子代理已停止：…", "子代理执行失败：…"). Its child items
+  stay in the workbench. A background launch acknowledgment
+  (`async_launched`) does not imply completion: an unresolved child is labeled
+  as unresolved when the main turn ends, never fabricated as successful. A
+  `compaction` item is a step from "正在压缩上下文" to its outcome, and a `notice`
+  item a step named by its title.
 - Questions and approvals keep the existing cards and callbacks. The same native
   process gets a waiting step, then a matching finish step when the original
   request is answered, expires or is cancelled. Neither process text nor running
@@ -194,12 +222,16 @@ replayed. The outbox stops known permanent refusals immediately and other
 delivery failures after six claims. A CoT rejection cannot block the result.
 
 Deploy the server migration before a protocol-v5 daemon. A v4 daemon cannot
-claim a native checkpoint. Already-sent v4 cards continue on their legacy patch
-path; new deliveries use native CoT. Task/Agent/Session/workspace data does not
-need migration. Rollback daemons leave native deliveries queued for a capable
-daemon instead of rendering a second ordinary process card. The API extensions
-are internal daemon protocol fields on existing CLI-exempt routes; no new user
-API or command is introduced.
+claim a native checkpoint. The v4 streaming-card renderer is gone: a delivery
+that still holds the message ID of an already-sent v4 card but no presentation
+checkpoint finishes through `FeishuTaskPresentation` with the result card only.
+Its old card stays as sent, no native process is opened for it, and its first
+checkpoint records the CoT as disabled (`legacy_card_final_only`), so a retry
+stays final-only. Check the outbox for such rows before deploying.
+Task/Agent/Session/workspace data does not need migration. Rollback daemons
+leave native deliveries queued for a capable daemon instead of rendering a
+second ordinary process card. The API extensions are internal daemon protocol
+fields on existing CLI-exempt routes; no new user API or command is introduced.
 
 The semantic timeline adds optional renderer/waiting markers to that existing
 checkpoint JSON; it requires no SQL or Task/Session migration. If a daemon upgrade
@@ -209,6 +241,11 @@ appending incompatible text IDs to the old message. New deliveries use the
 semantic timeline; existing finished messages are not rewritten.
 
 ## Verification
+
+The live Feishu runs recorded below predate the turn + items trace: they
+exercised the fragment-event renderer it replaced. The item-based presenter is
+covered by the unit and local integration tests only; no live run of it has been
+made yet.
 
 `tests/manual/feishu-cot-thread-probe.ts` checks MUL-311 in an explicitly selected
 ordinary test group. Inject `FEISHU_APP_ID` and `FEISHU_APP_SECRET` securely into
@@ -273,16 +310,20 @@ three messages for inspection. It did not exercise inbound @ handling, an actual
 Agent execution, or client UI rendering; those remain for end-to-end/QA acceptance.
 
 Unit tests cover native POST/PUT payloads and topic origin, direct answers,
-text/final isolation, context and timing, restart checkpoints, result UUIDs,
-approval callbacks, multiple questions/custom answers, identity checks, web
-completion, expiration, lease ownership, protocol compatibility and bounded
-delivery retries.
+text/final isolation and the final-reply rule across steer rounds, rows built
+from item fixtures (actions, file changes, statuses), plan/subagent/compaction
+steps, context and timing from turn events, restart checkpoints, result UUIDs,
+approval callbacks keyed by `message_id`, multiple questions/custom answers,
+identity checks, web completion, expiration, lease ownership, the final-only
+legacy delivery, protocol compatibility and bounded delivery retries.
 
 `tests/manual/feishu-native-task-replay.ts` replays a terminal Task fixture through
-the production presenter with the selected `lark-cli` bot identity. It requires
-explicit `--send`, `--fixture`, `--app-id` and `--chat-id`; use a private test chat
-and mark the fixture text as historical replay. Keep real transcripts and
-credentials outside git. It does not start an Agent or execute recorded tools.
+the production presenter with the selected `lark-cli` bot identity. The fixture
+holds the terminal snapshot and the Task's stored v2 trace lines
+(`{ snapshot, events }`). It requires explicit `--send`, `--fixture`, `--app-id`
+and `--chat-id`; use a private test chat and mark the fixture text as historical
+replay. Keep real transcripts and credentials outside git. It does not start an
+Agent or execute recorded tools.
 
 On 2026-09-12, a completed production Task containing 25 events and three tools
 was replayed to the existing private test chat: native creation, seven native

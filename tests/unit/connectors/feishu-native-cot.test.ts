@@ -1,10 +1,12 @@
 import { describe, expect, it } from "bun:test";
 import { FeishuTaskPresentation } from "@connectors/feishu/task-presentation.js";
 import { cotTextEvents, FeishuCotTransport } from "@connectors/feishu/native-cot.js";
-import { completed, nativeHarness, taskEvent, transcript } from "./feishu-native-harness.js";
+import { singleMessageStream } from "../../../apps/remi/cli/multiremi.js";
+import { agentMessage, command, completed, delta, item, nativeHarness, read, reasoning, snapshot, started, streamedText, terminal,
+  transcript, turnCompleted, turnStarted, turnUpdated, updated } from "./feishu-native-harness.js";
 import type { FeishuPresentationCheckpoint } from "@multiremi/contracts/types.js";
 
-const meta = { taskId: "tsk_test", displayName: "Remi", respondHumanRequest: async () => { throw new Error("Unexpected interaction"); } };
+const meta = { taskId: "tsk_test", displayName: "Remi" };
 function renderer(h: ReturnType<typeof nativeHarness>, extra: Record<string, unknown> = {}) {
   return new FeishuTaskPresentation(h.client as any, "oc_group", meta, {
     appId: "cli_test", replyToMessageId: "om_root", mentionOpenId: "ou_user", idempotencyKey: "delivery",
@@ -13,18 +15,23 @@ function renderer(h: ReturnType<typeof nativeHarness>, extra: Record<string, unk
 }
 
 describe("native CoT Task presentation", () => {
-  it.each([["final", undefined], ["final", true], [undefined, undefined], [undefined, true]] as const)(
-    "restores checkpointed %s answer chunks with waitingFinished=%s without repeating process or request cards", async (phase, waitingFinished) => {
+  it.each([["final", undefined], ["final", true], ["unknown", undefined], ["unknown", true]] as const)(
+    "restores a checkpointed %s answer with waitingFinished=%s without repeating process or request cards", async (phase, waitingFinished) => {
     const h = nativeHarness();
+    const permission = item("permission", "perm:approved", { message_id: "approved", title: "Read", outcome: "selected" });
+    const question = item("question", "q:answered", { message_id: "answered", message: "Which file?" });
+    const answer = agentMessage("msg:answer", "Exact final answer.", phase);
     const prefix = [
-      taskEvent(1, "text", { content: "Checking now.", meta: { phase: "commentary" } }),
-      taskEvent(2, "tool_use", { tool: "Read", toolCallId: "read", input: { file_path: "/source.ts" } }),
-      taskEvent(3, "tool_result", { tool: "Read", toolCallId: "read", status: "completed" }),
-      taskEvent(4, "permission_request", { input: { message_id: "approved" } }),
-      taskEvent(5, "question_request", { input: { message_id: "answered" } }),
-      taskEvent(6, "text", { content: "Exact ", meta: phase ? { phase } : null }),
-      taskEvent(7, "usage", { meta: { used: 100, size: 200 } }),
-      taskEvent(8, "text", { content: "final answer.", meta: phase ? { phase } : null }),
+      turnStarted(1),
+      completed(2, agentMessage("msg:intro", "Checking now.", "commentary")),
+      started(3, read("toolu_read", "/source.ts")),
+      completed(4, read("toolu_read", "/source.ts")),
+      started(5, permission), completed(6, permission),
+      started(7, question), completed(8, question),
+      started(9, { ...answer, text: "" }),
+      delta(10, answer.id, "Exact "),
+      turnUpdated(11, { context_usage: { used: 100, size: 200 } }),
+      delta(12, answer.id, "final answer."),
     ];
     const settledMeta = { ...meta, getHumanRequest: async (requestId: string) => ({
       id: requestId, taskId: meta.taskId, kind: "question" as const, payload: {}, status: "responded" as const,
@@ -38,17 +45,21 @@ describe("native CoT Task presentation", () => {
     await expect(new FeishuTaskPresentation(h.client as any, "oc_group", settledMeta,
       { appId: "cli_test", idempotencyKey: "delivery", save: h.save }).consume(interrupted()))
       .rejects.toThrow("simulated restart");
-    expect(h.checkpoint?.throughSeq).toBe(8);
+    expect(h.checkpoint?.throughSeq).toBe(12);
     const before = h.events().filter(event => !["RUN_STARTED", "RUN_FINISHED"].includes(event.event_type));
     const checkpoint = structuredClone(h.checkpoint!);
     const waiting = waitingFinished ? { waitingStarted: true, waitingFinished } : {};
     checkpoint.interactions = { approved: { messageId: "om_approved", receiptStatus: "responded", ...waiting },
       answered: { messageId: "om_answered", receiptStatus: "responded", ...waiting } };
     let requestReads = 0;
+    const final = { ...answer, phase: "final" as const };
     async function* resumed() {
       // The production presentation restart likewise replays from trace seq 0.
       yield* prefix;
-      yield { ...completed, snapshot: { ...(completed as any).snapshot, result: "Wrong fallback with commentary" } } as typeof completed;
+      // The daemon settles the reply (the final-reply rule) and closes the turn.
+      yield completed(13, final);
+      yield turnCompleted(14, [final]);
+      yield snapshot({ result: "Wrong fallback with commentary" });
     }
     await new FeishuTaskPresentation(h.client as any, "oc_group", { ...meta, getHumanRequest: async () => {
       requestReads += 1;
@@ -64,35 +75,40 @@ describe("native CoT Task presentation", () => {
     expect(card).not.toContain("Wrong fallback");
   });
 
-  it("checkpoints an unsent placeholder without blocking another tool and starts it once after restart", async () => {
+  it("writes a tool interrupted by a restart once it completes, without blocking the tools around it", async () => {
     const h = nativeHarness();
+    const bash = command("toolu_bash", "git status --short");
+    const other = read("toolu_other", "/source.ts");
+    const prefix = [turnStarted(1), started(2, { ...bash, command: null, actions: [] }), started(3, other), completed(4, other)];
     async function* interrupted() {
-      yield taskEvent(1, "tool_use", { tool: "Bash", toolCallId: "late" });
+      yield* prefix.slice(0, 2);
       await new Promise(resolve => setTimeout(resolve, 550));
-      expect(h.checkpoint).toMatchObject({ throughSeq: 1, deferredToolIds: ["late"] });
+      // A running tool waits for its completion without holding the cursor back.
+      expect(h.checkpoint).toMatchObject({ throughSeq: 2 });
       expect(h.events()).toEqual([]);
-      yield taskEvent(2, "tool_use", { tool: "Read", toolCallId: "other", input: { file_path: "/source.ts" } });
+      yield* prefix.slice(2);
+      while (h.checkpoint?.throughSeq !== 4) await Bun.sleep(5);
       throw new Error("simulated restart");
     }
     await expect(new FeishuTaskPresentation(h.client as any, "oc_group", meta,
       { appId: "cli_test", idempotencyKey: "delivery", save: h.save }).consume(interrupted()))
       .rejects.toThrow("simulated restart");
     const checkpoint = structuredClone(h.checkpoint!);
-    expect(checkpoint).toMatchObject({ throughSeq: 2, deferredToolIds: ["late"] });
+    expect(checkpoint.deferredToolIds).toBeUndefined();
+    expect(h.events().filter(event => event.event_type === "TOOL_CALL_START")).toHaveLength(1);
     async function* resumed() {
-      yield taskEvent(3, "tool_use", { tool: "Bash", toolCallId: "late", input: {
-        command: "git status --short", description: "检查仓库状态",
-      } });
-      yield taskEvent(4, "tool_result", { tool: "Bash", toolCallId: "late", status: "completed" });
-      yield completed;
+      yield* prefix;
+      yield updated(5, bash);
+      yield completed(6, bash);
+      yield turnCompleted(7, [bash, other]);
+      yield terminal;
     }
     await new FeishuTaskPresentation(h.client as any, "oc_group", meta,
       { appId: "cli_test", idempotencyKey: "delivery", checkpoint, save: h.save }).consume(resumed());
     const starts = h.events().filter(event => event.event_type === "TOOL_CALL_START").map(event => JSON.parse(event.content));
-    expect(starts).toHaveLength(2);
-    expect(new Set(starts.map(event => event.toolCallId)).size).toBe(2);
-    expect(starts.find(event => event.toolCallName === "Bash")?.title).toBe("检查仓库状态");
-    expect(h.checkpoint?.deferredToolIds).toEqual([]);
+    expect(starts.map(start => start.title)).toEqual(["已读取 source.ts", "已运行 git status --short"]);
+    expect(new Set(starts.map(start => start.toolCallId)).size).toBe(2);
+    expect(JSON.stringify(h.cards())).toContain("2 tools");
   });
 
   it("interrupts an unresponsive native API call on handover without sending a result from the old lease", async () => {
@@ -112,10 +128,12 @@ describe("native CoT Task presentation", () => {
   it("streams consecutive process deltas into one native message and uses Task elapsed time", async () => {
     const h = nativeHarness();
     async function* chunks() {
-      yield taskEvent(1, "thinking", { content: "First " });
-      yield taskEvent(2, "thinking", { content: "thought" });
-      yield taskEvent(3, "text", { content: "final", meta: { phase: "final" } });
-      yield { ...completed, snapshot: { ...(completed as any).snapshot, startedAt: "2026-09-09T00:00:00Z", completedAt: "2026-09-09T00:00:46Z" } } as typeof completed;
+      yield started(1, reasoning("rsn:1", ""));
+      yield delta(2, "rsn:1", "First ");
+      yield delta(3, "rsn:1", "thought");
+      yield completed(4, reasoning("rsn:1", "First thought"));
+      yield* streamedText(5, agentMessage("msg:final", "final", "final"));
+      yield snapshot({ startedAt: "2026-09-09T00:00:00Z", completedAt: "2026-09-09T00:00:46Z" });
     }
     await renderer(h).consume(chunks());
     const events = h.events();
@@ -150,6 +168,7 @@ describe("native CoT Task presentation", () => {
     expect(final).not.toContain("Show 1 steps");
     expect(final).toContain("Remi Claude fable51");
     expect(final).toContain("82k/1M");
+    expect(final).toContain("1 tools");
     expect(final).toContain("<at id=ou_user></at>");
     expect(h.checkpoint?.cot?.status).toBe("finished");
     expect(h.checkpoint?.resultMessageId).toBe("om_1");
@@ -173,9 +192,10 @@ describe("native CoT Task presentation", () => {
     for (const [agentName, expected] of [["Remi", "自由的 Remi·Sciurus"], ["小助手", "自由的 小助手·Sciurus"]] as const) {
       const h = nativeHarness();
       async function* run() {
-        yield taskEvent(1, "execution", { meta: { agentName, provider: "claude", model: "claude-fable-5-1" } });
-        yield taskEvent(2, "text", { content: "Final answer" });
-        yield completed;
+        yield turnStarted(1, { agent_name: agentName, provider: "claude" });
+        yield turnUpdated(2, { model: "claude-fable-5-1" });
+        yield completed(3, agentMessage("msg:answer", "Final answer", "final"));
+        yield terminal;
       }
       await new FeishuTaskPresentation(h.client as any, "oc_group", { ...meta, displayName: agentName, sessionId: null },
         { appId: "cli_test", idempotencyKey: "delivery", save: h.save }).consume(run());
@@ -192,26 +212,26 @@ describe("native CoT Task presentation", () => {
       { ...meta, sessionId: null }, { appId: "cli_test", idempotencyKey: "delivery", save: h.save });
     expect((presentation as any).sessionId).toBeNull();
     async function* run() {
-      yield taskEvent(1, "text", { content: "Working" });
-      yield { kind: "snapshot", snapshot: { ...(completed as any).snapshot, status: "running", result: null, sessionId: "sess_live" } } as typeof completed;
-      yield taskEvent(2, "text", { content: "Final answer" });
-      yield completed;
+      yield completed(1, agentMessage("msg:working", "Working", "commentary"));
+      yield snapshot({ status: "running", result: null, sessionId: "sess_live" });
+      yield completed(2, agentMessage("msg:answer", "Final answer", "final"));
+      yield terminal;
     }
     await presentation.consume(run());
     expect((presentation as any).sessionId).toBe("session_original");
     expect((h.cards()[0] as any).header.title.content).toStartWith("自由的 Remi·Sciurus  ");
   });
 
-  it("keeps command replies on the plain agent name because they carry no session", async () => {
+  it("keeps command replies on the plain agent name because they carry no session or engine", async () => {
     const h = nativeHarness();
-    async function* command() {
-      yield taskEvent(1, "text", { content: "New conversation started." });
-      yield { kind: "snapshot", snapshot: { taskId: "feishu-command", status: "completed",
-        result: "New conversation started.", error: null, sessionId: null, workDir: null, usage: [] } } as typeof completed;
-    }
-    await new FeishuTaskPresentation(h.client as any, "oc_group", { ...meta, sessionId: undefined },
-      { appId: "cli_test", idempotencyKey: "delivery", save: h.save }).consume(command());
-    expect((h.cards()[0] as any).header.title.content).toStartWith("Remi  ");
+    await new FeishuTaskPresentation(h.client as any, "oc_group", { ...meta, taskId: "feishu-command-new", sessionId: undefined },
+      { appId: "cli_test", idempotencyKey: "delivery", save: h.save })
+      .consume(singleMessageStream("New conversation started.", "feishu-command-new"));
+    expect(h.calls.map(call => call.operation)).toEqual(["create"]);
+    const card = h.cards()[0] as any;
+    expect(card.header.title.content).toStartWith("Remi  ");
+    expect(card.header.subtitle.content).toBe("Remi");
+    expect(JSON.stringify(card)).toContain("New conversation started.");
   });
 
   it("omits thread routing without an origin even when the transport caller requests it", async () => {
@@ -230,7 +250,13 @@ describe("native CoT Task presentation", () => {
 
   it("a direct answer creates no process message or placeholder", async () => {
     const h = nativeHarness();
-    async function* simple() { yield taskEvent(1, "text", { content: "Hello" }); yield completed; }
+    async function* simple() {
+      yield turnStarted(1);
+      yield* streamedText(2, agentMessage("msg:hello", "Hello"));
+      yield completed(5, agentMessage("msg:hello", "Hello", "final"));
+      yield turnCompleted(6, [agentMessage("msg:hello", "Hello", "final")]);
+      yield terminal;
+    }
     await renderer(h).consume(simple());
     expect(h.calls.map(c => c.operation)).toEqual(["reply"]);
     expect(JSON.stringify(h.cards())).toContain("Hello");
@@ -240,8 +266,8 @@ describe("native CoT Task presentation", () => {
   for (const status of ["failed", "cancelled"] as const) it(`ends a ${status} run through the appropriate native lifecycle`, async () => {
     const h = nativeHarness();
     async function* stream() {
-      yield taskEvent(1, "thinking", { content: "正在检查。" });
-      yield { kind: "snapshot", snapshot: { ...(completed as any).snapshot, status, error: "example failure" } } as typeof completed;
+      yield completed(1, reasoning("rsn:1", "正在检查。"));
+      yield snapshot({ status, error: "example failure" });
     }
     await renderer(h).consume(stream());
     const completes = h.calls.filter(c => c.input.url?.includes("/complete/"));
@@ -264,8 +290,8 @@ describe("native CoT Task presentation", () => {
       return original(input);
     };
     async function* stream() {
-      yield taskEvent(1, "thinking", { content: "检查。" });
-      yield { kind: "snapshot", snapshot: { ...(completed as any).snapshot, status: "failed", error: "failure" } } as typeof completed;
+      yield completed(1, reasoning("rsn:1", "检查。"));
+      yield snapshot({ status: "failed", error: "failure" });
     }
     await renderer(h).consume(stream());
     expect(h.calls.filter(c => c.input.url?.includes("/complete/"))).toHaveLength(1);
@@ -286,10 +312,10 @@ describe("native CoT Task presentation", () => {
   it("preserves explicit text phases and excludes subagent text from the final answer", async () => {
     const h = nativeHarness();
     async function* phases() {
-      yield taskEvent(1, "text", { content: "progress", meta: { phase: "commentary" } });
-      yield taskEvent(2, "text", { content: "child", meta: { parent_tool_call_id: "tc_child" } });
-      yield taskEvent(3, "text", { content: "final", meta: { phase: "final" } });
-      yield completed;
+      yield completed(1, agentMessage("msg:progress", "progress", "commentary"));
+      yield completed(2, agentMessage("msg:child", "child", "unknown", { parent_id: "toolu_child" }));
+      yield completed(3, agentMessage("msg:final", "final", "final"));
+      yield terminal;
     }
     await renderer(h).consume(phases());
     expect(JSON.stringify(h.events())).toContain("progress");
@@ -302,16 +328,18 @@ describe("native CoT Task presentation", () => {
   it("does not replay acknowledged native events after a daemon restart", async () => {
     const h = nativeHarness();
     async function* interrupted() {
-      yield taskEvent(1, "tool_use", { tool: "Read", toolCallId: "tc", input: { file_path: "/source.ts" } });
-      while (!h.checkpoint?.throughSeq) await Bun.sleep(5);
+      yield started(1, read("toolu_read", "/source.ts"));
+      yield completed(2, read("toolu_read", "/source.ts", { output: "result" }));
+      while (h.checkpoint?.throughSeq !== 2) await Bun.sleep(5);
       throw new Error("disconnect");
     }
     await expect(renderer(h).consume(interrupted())).rejects.toThrow("disconnect");
-    expect(h.checkpoint?.throughSeq).toBe(1);
+    expect(h.checkpoint?.throughSeq).toBe(2);
     async function* resumed() {
-      yield taskEvent(1, "tool_use", { tool: "Read", toolCallId: "tc", input: { file_path: "/source.ts" } });
-      yield taskEvent(2, "tool_result", { toolCallId: "tc", output: "result" });
-      yield taskEvent(3, "text", { content: "Done" }); yield completed;
+      yield started(1, read("toolu_read", "/source.ts"));
+      yield completed(2, read("toolu_read", "/source.ts", { output: "result" }));
+      yield completed(3, agentMessage("msg:done", "Done", "final"));
+      yield terminal;
     }
     await renderer(h).consume(resumed());
     expect(h.calls.filter(c => c.operation === "POST")).toHaveLength(1);
@@ -326,10 +354,10 @@ describe("native CoT Task presentation", () => {
       cot: { status: "active", presentation: "semantic_v1", cotId: "cot_saved", messageId: "om_saved", runStarted: true },
     };
     async function* resumed() {
-      yield taskEvent(1, "thinking", { content: "Acknowledged process." });
-      yield taskEvent(2, "thinking", { content: "Continued process." });
-      yield taskEvent(3, "text", { content: "Resumed answer", meta: { phase: "final" } });
-      yield { ...completed, snapshot: { ...(completed as any).snapshot, status, error: status === "failed" ? "failure" : null } } as typeof completed;
+      yield completed(1, reasoning("rsn:1", "Acknowledged process."));
+      yield completed(2, reasoning("rsn:2", "Continued process."));
+      yield completed(3, agentMessage("msg:answer", "Resumed answer", "final"));
+      yield snapshot({ status, error: status === "failed" ? "failure" : null });
     }
     await renderer(h, { checkpoint }).consume(resumed());
     expect(h.calls.filter(c => c.operation === "POST" && c.input.url === "/open-apis/im/v1/message_cot")).toHaveLength(0);

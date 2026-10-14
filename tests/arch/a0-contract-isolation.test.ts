@@ -31,10 +31,10 @@ const A0_MODULES = [
   { specifier: "@shared/trace-sanitize", wired: true },
   // PR 2: the turn + items libraries. P2a wires the fold (daemon transport and
   // completion fields), the command parser and the file-change diff (the
-  // daemon translator); the step copy waits for the Chat and Feishu readers.
+  // daemon translator); P4 wires the step copy (Feishu native CoT rows).
   { specifier: "@shared/turn-trace", wired: true },
   { specifier: "@shared/command-parse", wired: true },
-  { specifier: "@shared/trace-step-copy", wired: false },
+  { specifier: "@shared/trace-step-copy", wired: true },
   { specifier: "@shared/trace-file-change", wired: true },
 ] as const;
 
@@ -119,7 +119,7 @@ const WIRING_OWNER = new Map<string, string>([
   ["@shared/trace-sanitize", "A-6 wires it into the daemon write path; today only tests call it"],
   ["@shared/turn-trace", "PR 2 P2a: the daemon transport fold and completion fields"],
   ["@shared/command-parse", "PR 2 P2a: the daemon trace translator (via @acp/adapters/trace-vendor)"],
-  ["@shared/trace-step-copy", "PR 2 P3/P4: Chat steps and Feishu CoT copy"],
+  ["@shared/trace-step-copy", "PR 2 P4: Feishu native CoT rows; P3: Chat steps"],
   ["@shared/trace-file-change", "PR 2 P2a: the daemon trace translator's file_change diffs (via trace-vendor)"],
 ]);
 

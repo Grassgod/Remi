@@ -83,9 +83,12 @@ async function run(
   const text: string[] = [];
   await handle(message, sessionKey, async (stream) => {
     for await (const event of stream as AsyncIterable<TaskStreamEvent>) {
-      if (event.kind === "message" && event.message.content) text.push(event.message.content);
+      // A command reply is one final agent message.
+        if (event.kind === "message" && event.message.type === "item.completed" && event.message.item.type === "agent_message") {
+          text.push(event.message.item.text);
+        }
     }
-    meta.push({ taskId: "captured", respondHumanRequest: async () => { throw new Error("not expected"); } });
+    meta.push({ taskId: "captured" });
   });
   return { meta, text };
 }
@@ -276,7 +279,10 @@ describe("Feishu Task command handler", () => {
       `${CHAT}:thread:omt_fail_click`,
       async (stream) => {
         for await (const event of stream as AsyncIterable<TaskStreamEvent>) {
-          if (event.kind === "message" && event.message.content) text.push(event.message.content);
+          // A command reply is one final agent message.
+        if (event.kind === "message" && event.message.type === "item.completed" && event.message.item.type === "agent_message") {
+          text.push(event.message.item.text);
+        }
         }
       },
     );

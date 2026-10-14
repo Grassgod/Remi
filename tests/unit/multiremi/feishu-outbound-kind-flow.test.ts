@@ -8,7 +8,7 @@ import { FeishuDeliveryError } from "@shared/feishu-delivery-error.js";
 import { controlPlaneConciergeHost, sendInteractionCardLane } from "../../../apps/remi/cli/multiremi.js";
 import type { FeishuChannelHandle } from "../../../apps/remi/cli/agent.js";
 import { openRuntimeDownlinks } from "../../fixtures/runtime-downlinks.js";
-import { completed, nativeHarness, transcript } from "../connectors/feishu-native-harness.js";
+import { nativeHarness, terminal, transcript } from "../connectors/feishu-native-harness.js";
 import { configureKindBot } from "./feishu-outbound-kind-fixture.js";
 import { createLocalStore, db, resetMultiremiTestEnv } from "./feishu-host-store-fixture.js";
 
@@ -82,7 +82,7 @@ function flow() {
       callback([], true);
       return async () => {};
     },
-    getFeishuBotTaskSnapshot: async () => completed.kind === "snapshot" ? completed.snapshot : null,
+    getFeishuBotTaskSnapshot: async () => terminal.kind === "snapshot" ? terminal.snapshot : null,
     feishuConcierge: host, client: {
       prepareFeishuBotOutboundMention: async (_rt: string, id: string, token: string, openId: string | null) =>
         f.store.prepareFeishuBotOutboundMention("local", f.runtimeId, id, token, openId)?.openId ?? null,
