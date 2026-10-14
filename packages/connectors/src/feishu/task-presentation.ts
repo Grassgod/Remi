@@ -15,15 +15,16 @@ import { createFeishuImageResolver } from "./outbound-images.js";
 import { uploadImageFeishu } from "./media.js";
 import { rewriteMarkdownImages } from "@shared/feishu-markdown-images.js";
 import { FeishuLegacyTaskReceipts } from "./legacy-task-receipts.js";
+import { FEISHU_COT_PRESENTATION } from "@multiremi/contracts/feishu-presentation.js";
 
 export interface TaskPresentationOptions {
   lane?: "cot";
   /**
-   * A delivery that already sent a legacy (protocol v4) streaming card: finish
-   * it with the result card only. Its process card stays as it was sent; no
-   * native CoT is opened for it.
+   * The streaming card a legacy (protocol v4) delivery already sent: finish
+   * that delivery with the result card only. No native CoT is opened; the old
+   * card is patched once to a closed state so its spinner does not stay.
    */
-  finalOnly?: boolean;
+  legacyCardMessageId?: string;
   receiptMessageIds?: string[];
   appId: string;
   replyToMessageId?: string;
@@ -38,6 +39,10 @@ export interface TaskPresentationOptions {
 
 /** A permission or question item: the decision message in `message_id` keys every read, card and answer. */
 type HumanRequestItem = (TracePermissionItem | TraceQuestionItem) & { message_id: string };
+
+/** Checkpoint markers of a final-only legacy delivery, before and after its old card is closed. */
+const LEGACY_CARD_OPEN = "legacy_card_final_only";
+const LEGACY_CARD_CLOSED = "legacy_card_closed";
 
 const stableId = (value: string) => createHash("sha256").update(value).digest("hex").slice(0, 32);
 const delay = (ms: number, signal: AbortSignal) => new Promise<void>((resolve, reject) => {
@@ -72,8 +77,9 @@ export class FeishuTaskPresentation {
     // Tool rows are written whole from `item.completed`, so no invocation waits
     // for its arguments any more; an older renderer's deferred IDs are obsolete.
     delete this.state.deferredToolIds;
-    // Persisted with the first checkpoint, so a retried delivery stays final-only.
-    if (options.finalOnly && !this.state.cot) this.state.cot = { status: "disabled", error: "legacy_card_final_only" };
+    // A fresh legacy delivery has no checkpoint yet. The marker is persisted
+    // with its first one, so a retried delivery stays final-only.
+    if (options.legacyCardMessageId && !options.checkpoint) this.state.cot = { status: "disabled", error: LEGACY_CARD_OPEN };
     this.timeline = new FeishuCotTimeline(meta.taskId, this.state.throughSeq);
     this.state.interactionOpenId ??= options.interactionOpenId ?? options.mentionOpenId;
     this.signal = meta.signal ? AbortSignal.any([meta.signal, this.abortController.signal]) : this.abortController.signal;
@@ -98,10 +104,11 @@ export class FeishuTaskPresentation {
       // create/write is not replayed: preserve the known handle and final lane.
       this.state.cot = { ...this.state.cot, status: "disabled", writePending: false, error: "unconfirmed_native_write" };
       await this.save();
-    } else if (this.state.cot?.status === "active" && !this.state.cot.presentation) {
-      // An upgrade can resume an older renderer's delivery. Its open text IDs
-      // cannot be reconstructed with the new grouping rules. Close that display
-      // once; preserve the original Task, request cards and final result lane.
+    } else if (this.state.cot?.status === "active" && this.state.cot.presentation !== FEISHU_COT_PRESENTATION) {
+      // An upgrade can resume an older renderer's delivery (untagged, or the
+      // fragment-event `semantic_v1`). Its native IDs and layout cannot be
+      // continued by this renderer. Close that display once; preserve the
+      // original Task, request cards and final result lane.
       const { cotId, messageId } = this.state.cot;
       try { await this.retry(() => this.cot.complete({ cotId: cotId!, messageId: messageId! }, "timeout"), true); }
       catch (error) { this.signal.throwIfAborted(); this.options.log?.(feishuTransportError("Close legacy CoT", error).message); }
@@ -168,8 +175,29 @@ export class FeishuTaskPresentation {
       this.state.resultMessageId = sent.messageId;
       await this.save();
     }
+    await this.closeLegacyCard(finalStatus);
     this.active = false;
     return { messageId: this.state.resultMessageId };
+  }
+
+  /**
+   * Patch a legacy delivery's streaming card once, after its result is sent,
+   * so it stops showing progress. Best effort: the result is already delivered.
+   */
+  private async closeLegacyCard(status: string): Promise<void> {
+    const messageId = this.options.legacyCardMessageId;
+    if (!messageId || this.state.cot?.error !== LEGACY_CARD_OPEN) return;
+    const text = status === "failed" ? "执行失败，详情见下一条消息。"
+      : status === "cancelled" ? "任务已取消。" : "执行过程已结束，结果见下一条消息。";
+    try {
+      await this.retry(() => updateCardFeishu(this.client, messageId, buildFinalCard({ text, sessionId: this.sessionId,
+        agentName: this.metadata.agentName, subtitle: this.metadata.render(0).subtitle })), true);
+    } catch (error) {
+      this.signal.throwIfAborted();
+      this.options.log?.(feishuTransportError("Close legacy card", error).message);
+    }
+    this.state.cot = { ...this.state.cot, status: "disabled", error: LEGACY_CARD_CLOSED };
+    await this.save();
   }
 
   private async message(event: TraceEvent): Promise<void> {
@@ -228,7 +256,7 @@ export class FeishuTaskPresentation {
     if (!samples.length) return;
     if (["disabled", "finished"].includes(this.state.cot?.status ?? "")) return;
     if (!this.state.cot) {
-      this.state.cot = { status: "creating", presentation: "semantic_v1" };
+      this.state.cot = { status: "creating", presentation: FEISHU_COT_PRESENTATION };
       await this.save(); // write-ahead creation intent, even before we know either ID
       let handle;
       try {
@@ -237,7 +265,7 @@ export class FeishuTaskPresentation {
         ), false);
       }
       catch (error) { await this.disableCot(error); return; }
-      this.state.cot = { ...handle, status: "active", presentation: "semantic_v1" };
+      this.state.cot = { ...handle, status: "active", presentation: FEISHU_COT_PRESENTATION };
       await this.save(); // Never let a failed checkpoint get swallowed as an API error.
     }
     if (!this.state.cot.runStarted) samples = [["RUN_STARTED", { threadId: this.chatId, runId: this.meta.taskId }], ...samples];

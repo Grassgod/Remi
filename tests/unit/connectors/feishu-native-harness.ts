@@ -68,6 +68,9 @@ export const command = (id: string, script: string, actions: CommandAction[] = [
 /** Claude's Read tool: a command item with one read action and no command text. */
 export const read = (id: string, path: string, patch: Partial<TraceItemOf<"command">> = {}) => item("command", id, {
   tool: "Read", source: "tool", actions: [{ type: "read", command: null, name: path.split("/").at(-1)!, path }], ...patch });
+/** The turn's input message, as the daemon records it right after `turn.started` (`in:<attempt>`). */
+export const input = (text: string, attempt = "tsk_test") => item("user_message", `in:${attempt}`, {
+  origin: "input", text, message_ids: [`msg_in_${attempt}`] });
 export const plan = (entries: TraceItemOf<"plan">["entries"], patch: Partial<TraceItemOf<"plan">> = {}) =>
   item("plan", "plan", { entries, ...patch });
 
@@ -104,6 +107,7 @@ export function snapshot(patch: Record<string, unknown>): TaskStreamEvent {
 
 /** The items of {@link transcript}, as the transport closes them. */
 export const transcriptItems = {
+  prompt: input("Check the source and answer."),
   intro: agentMessage("msg:intro", "I will inspect the source."),
   read: read("toolu_read", "/source.ts"),
   answer: agentMessage("msg:answer", "Final answer", "final"),
@@ -114,17 +118,18 @@ export const transcriptItems = {
  * answer the final-reply rule promoted, context usage and the closing turn.
  */
 export async function* transcript(): AsyncGenerator<TaskStreamEvent> {
-  const { intro, read: tool, answer } = transcriptItems;
+  const { prompt, intro, read: tool, answer } = transcriptItems;
   yield turnStarted(1);
-  yield turnUpdated(2, { model: "claude-fable-5-1" });
-  yield* streamedText(3, intro);
-  yield started(6, { ...tool, actions: [] });
-  yield updated(7, tool);
-  yield completed(8, tool);
-  yield* streamedText(9, { ...answer, phase: "unknown" });
-  yield turnUpdated(12, { context_usage: { used: 82000, size: 1000000 } });
-  yield completed(13, answer);
-  yield turnCompleted(14, [intro, tool, answer], { model: "claude-fable-5-1", context_usage: { used: 82000, size: 1000000 } });
+  yield completed(2, prompt);
+  yield turnUpdated(3, { model: "claude-fable-5-1" });
+  yield* streamedText(4, intro);
+  yield started(7, { ...tool, actions: [] });
+  yield updated(8, tool);
+  yield completed(9, tool);
+  yield* streamedText(10, { ...answer, phase: "unknown" });
+  yield turnUpdated(13, { context_usage: { used: 82000, size: 1000000 } });
+  yield completed(14, answer);
+  yield turnCompleted(15, [prompt, intro, tool, answer], { model: "claude-fable-5-1", context_usage: { used: 82000, size: 1000000 } });
   yield terminal;
 }
 

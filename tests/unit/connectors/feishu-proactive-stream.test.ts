@@ -118,24 +118,55 @@ describe("durable proactive Task deliveries", () => {
 
   it("finishes a delivery whose legacy streaming card was already sent with the result card only", async () => {
     // R10: a protocol-v4 delivery holds the streaming card's message ID but no
-    // presentation checkpoint. Its card stays as sent; only the result follows.
+    // presentation checkpoint. No native process opens; the result follows and
+    // the old card is closed once so its progress spinner does not stay.
     const h = harness();
     const checkpoints: FeishuPresentationCheckpoint[] = [];
+    const patched: string[] = [];
+    const patch = (h.channel as any)._makeClient().im.message.patch;
+    (h.channel as any)._makeClient().im.message.patch = async (input: any) => { patched.push(input.path.message_id); return patch(input); };
     const result = await h.channel.handleTaskStream("oc_group", "topic", events(), meta, {
       replyToMessageId: "om_root", durable: { idempotencyKey: "delivery_1", messageId: "om_legacy_card" },
       onCheckpoint: async state => { checkpoints.push(structuredClone(state)); } });
     expect(h.native).toEqual([]);
-    expect(h.patches).toEqual([]);
     expect(h.sends).toHaveLength(1);
     expect(h.sends[0].data.content).toContain("Work complete");
     expect(result).toEqual({ messageId: "om_1" });
+    expect(patched).toEqual(["om_legacy_card"]);
+    expect(JSON.stringify(h.patches[0])).toContain("执行过程已结束，结果见下一条消息。");
+    expect(JSON.stringify(h.patches[0])).not.toContain("Work complete");
     const saved = checkpoints.at(-1)!;
-    expect(saved).toMatchObject({ resultMessageId: "om_1", cot: { status: "disabled", error: "legacy_card_final_only" } });
-    // A retry carries the saved checkpoint: it stays final-only and resends nothing.
+    expect(saved).toMatchObject({ resultMessageId: "om_1", cot: { status: "disabled", error: "legacy_card_closed" } });
+    // A retry carries the saved checkpoint: it stays final-only and sends or patches nothing.
     await h.channel.handleTaskStream("oc_group", "topic", events(), meta, {
       durable: { idempotencyKey: "delivery_1", messageId: "om_legacy_card", presentation: saved } });
     expect(h.native).toEqual([]);
     expect(h.sends).toHaveLength(1);
+    expect(patched).toHaveLength(1);
+  });
+
+  it("closes the legacy card on a retry when the result was sent but the card was not yet closed", async () => {
+    const h = harness();
+    const checkpoint: FeishuPresentationCheckpoint = { version: "native_cot_v1", startedAt: Date.now(), throughSeq: 0, interactions: {},
+      resultMessageId: "om_result", cot: { status: "disabled", error: "legacy_card_final_only" } };
+    const saved: FeishuPresentationCheckpoint[] = [];
+    await h.channel.handleTaskStream("oc_group", "topic", events(), meta, {
+      durable: { idempotencyKey: "delivery_1", messageId: "om_legacy_card", presentation: checkpoint },
+      onCheckpoint: async state => { saved.push(state); } });
+    expect(h.sends).toHaveLength(0);
+    expect(h.patches).toHaveLength(1);
+    expect(saved.at(-1)?.cot).toMatchObject({ error: "legacy_card_closed" });
+  });
+
+  it("still finishes a legacy delivery when its old card can no longer be patched", async () => {
+    const h = harness();
+    (h.channel as any)._makeClient().im.message.patch = async () => ({ code: 230031, msg: "card expired" });
+    const logs: string[] = [];
+    await expect(h.channel.handleTaskStream("oc_group", "topic", events(), meta, {
+      durable: { idempotencyKey: "delivery_1", messageId: "om_legacy_card" },
+      log: { info: () => {}, warn: message => logs.push(message), error: () => {}, debug: () => {} } })).resolves.toEqual({ messageId: "om_1" });
+    expect(h.sends).toHaveLength(1);
+    expect(logs).toEqual([expect.stringContaining("230031")]);
   });
 
   it("propagates a refused result card so the delivery can be retried or stopped", async () => {

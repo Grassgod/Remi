@@ -212,7 +212,7 @@ describe("standalone Task interactions", () => {
       taskId: r.taskId, getHumanRequest: async () => r,
     }, { appId: "cli_test", idempotencyKey: "delivery", save: h.save, checkpoint: {
       version: "native_cot_v1", startedAt: Date.now(), throughSeq: 1,
-      cot: { status: "active", presentation: "semantic_v1", cotId: "cot_1", messageId: "om_cot", runStarted: true },
+      cot: { status: "active", presentation: "items_v1", cotId: "cot_1", messageId: "om_cot", runStarted: true },
       interactions: { hr_test: { messageId: "om_request", waitingStarted: true, receiptStatus } },
     } });
     async function* stream() {

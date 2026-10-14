@@ -1,4 +1,9 @@
-import type { FeishuPresentationCheckpoint } from "./types.js";
+import type { FeishuCotPresentation, FeishuPresentationCheckpoint } from "./types.js";
+
+/** Every native CoT renderer tag a stored checkpoint may carry, oldest first. */
+export const FEISHU_COT_PRESENTATIONS: readonly FeishuCotPresentation[] = ["semantic_v1", "items_v1"];
+/** The tag the current (turn + items) renderer writes. */
+export const FEISHU_COT_PRESENTATION: FeishuCotPresentation = "items_v1";
 
 export function parseFeishuPresentation(value: unknown): FeishuPresentationCheckpoint | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
@@ -17,7 +22,8 @@ export function parseFeishuPresentation(value: unknown): FeishuPresentationCheck
   if (p.cot) {
     if (typeof p.cot !== "object" || Array.isArray(p.cot)) return null;
     if (!["creating", "active", "finished", "disabled"].includes(p.cot.status)) return null;
-    if (p.cot.presentation !== undefined && p.cot.presentation !== "semantic_v1") return null;
+    // An earlier renderer's tag still parses, so its active CoT can be closed once.
+    if (p.cot.presentation !== undefined && !(FEISHU_COT_PRESENTATIONS as readonly string[]).includes(p.cot.presentation)) return null;
     if (["active", "finished"].includes(p.cot.status) && (!id(p.cot.cotId) || !id(p.cot.messageId))) return null;
     if (p.cot.cotId !== undefined && !id(p.cot.cotId)) return null;
     if (p.cot.messageId !== undefined && !id(p.cot.messageId)) return null;

@@ -5,6 +5,7 @@ import { singleMessageStream } from "../../../apps/remi/cli/multiremi.js";
 import { agentMessage, command, completed, delta, item, nativeHarness, read, reasoning, snapshot, started, streamedText, terminal,
   transcript, turnCompleted, turnStarted, turnUpdated, updated } from "./feishu-native-harness.js";
 import type { FeishuPresentationCheckpoint } from "@multiremi/contracts/types.js";
+import type { TaskStreamEvent } from "@connectors/base.js";
 
 const meta = { taskId: "tsk_test", displayName: "Remi" };
 function renderer(h: ReturnType<typeof nativeHarness>, extra: Record<string, unknown> = {}) {
@@ -347,11 +348,45 @@ describe("native CoT Task presentation", () => {
     expect(h.events().filter(e => e.event_type === "TOOL_CALL_RESULT")).toHaveLength(0);
   });
 
+  it("closes an active semantic_v1 display over a v1 trace once and answers from the terminal snapshot", async () => {
+    const h = nativeHarness();
+    const checkpoint: FeishuPresentationCheckpoint = { version: "native_cot_v1", startedAt: Date.now(), throughSeq: 4, interactions: {},
+      cot: { status: "active", presentation: "semantic_v1", cotId: "cot_old", messageId: "om_old", runStarted: true } };
+    // A Task the fragment-event renderer was presenting: its trace is v1.
+    const legacy = (seq: number, type: string, fields: Record<string, unknown>) =>
+      ({ kind: "message", message: { seq, ts: "2026-10-01T00:00:00.000Z", type, ...fields } }) as unknown as TaskStreamEvent;
+    async function* v1() {
+      yield legacy(1, "text", { content: "Checking." });
+      yield legacy(2, "tool_use", { tool: "Read", tool_call_id: "tc", input: { file_path: "/a.ts" } });
+      yield legacy(5, "tool_result", { tool_call_id: "tc", status: "completed" });
+      yield legacy(6, "text", { content: "Legacy answer" });
+      yield snapshot({ result: "Legacy answer" });
+    }
+    await renderer(h, { checkpoint }).consume(v1());
+    const completes = h.calls.filter(c => c.input.url?.includes("/complete/"));
+    expect(completes.map(c => [c.input.url, c.input.params])).toEqual([
+      ["/open-apis/im/v1/message_cot/complete/cot_old", { message_id: "om_old", reason: "timeout" }]]);
+    expect(h.calls.filter(c => c.operation === "PUT" || (c.operation === "POST" && c.input.url === "/open-apis/im/v1/message_cot"))).toEqual([]);
+    expect(h.checkpoint?.cot).toMatchObject({ status: "disabled", presentation: "semantic_v1", error: "legacy_cot_closed_on_upgrade" });
+    expect(h.checkpoint?.throughSeq).toBe(6);
+    expect(h.cards()).toHaveLength(1);
+    expect(JSON.stringify(h.cards()[0])).toContain("Legacy answer");
+    // Resumed again, the closed display is not touched a second time.
+    await renderer(h, { checkpoint: h.checkpoint }).consume(v1());
+    expect(h.calls.filter(c => c.input.url?.includes("/complete/"))).toHaveLength(1);
+  });
+
+  it("tags a new native display with the current renderer", async () => {
+    const h = nativeHarness();
+    await renderer(h).consume(transcript());
+    expect(h.checkpoint?.cot).toMatchObject({ status: "finished", presentation: "items_v1" });
+  });
+
   for (const status of ["completed", "failed"] as const) it(`resumes an active thread CoT handle without recreating it when ${status}`, async () => {
     const h = nativeHarness();
     const checkpoint: FeishuPresentationCheckpoint = {
       version: "native_cot_v1", startedAt: Date.now(), throughSeq: 1, interactions: {},
-      cot: { status: "active", presentation: "semantic_v1", cotId: "cot_saved", messageId: "om_saved", runStarted: true },
+      cot: { status: "active", presentation: "items_v1", cotId: "cot_saved", messageId: "om_saved", runStarted: true },
     };
     async function* resumed() {
       yield completed(1, reasoning("rsn:1", "Acknowledged process."));
@@ -385,7 +420,7 @@ describe("native CoT Task presentation", () => {
     const h = nativeHarness();
     const checkpoint: FeishuPresentationCheckpoint = {
       version: "native_cot_v1", startedAt: Date.now(), throughSeq: 7, interactions: {}, resultMessageId: "om_result",
-      cot: { status: "finished", presentation: "semantic_v1", cotId: "cot_saved", messageId: "om_saved", runStarted: true },
+      cot: { status: "finished", presentation: "items_v1", cotId: "cot_saved", messageId: "om_saved", runStarted: true },
     };
     expect(await renderer(h, { checkpoint }).consume(transcript())).toEqual({ messageId: "om_result" });
     expect(h.calls).toHaveLength(0);

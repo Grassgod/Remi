@@ -29,8 +29,8 @@ every native ID derives from an item ID, so a replay from seq 0 regenerates
 exactly what a checkpoint acknowledged. A tool row is written once, from the
 item's `item.completed`, when its command, actions or changes are final; nothing
 waits for late arguments, so the checkpoint no longer carries `deferredToolIds`
-(a value an earlier renderer saved is dropped on resume). A tool whose start
-preceded a resumed subscription's cursor is still written when it completes.
+(a value an earlier renderer saved is dropped on resume). Every presentation
+replays from seq 0, so nothing is inferred about events before its checkpoint.
 An unpinned provider session remains unnamed until the final snapshot arrives.
 
 The independent `result_card` lane reads canonical trace from seq 0 on the host
@@ -119,10 +119,20 @@ is unchanged:
 - Narrative uses segmented `REASONING_MESSAGE_*` events: each `reasoning` item
   and each commentary `agent_message` is one paragraph, written when the item
   completes, in trace order. Only provider-exposed process text is consumed; no
-  hidden reasoning is retrieved. An agent message that may still be the answer
-  (`final` or `unknown` phase) is held: a later thought, tool, plan, compaction,
-  human request or reply makes it process text; when the turn ends, every held
-  message but the final item is written as process text.
+  hidden reasoning is retrieved. A top-level agent message that may still be the
+  answer (`final` or `unknown` phase) is held, following the shared final-reply
+  rule (`selectFinalReply`): it becomes process text when a later message would
+  replace it (any later message for an `unknown` one, only a later `final` for a
+  `final` one), when a tool item or a question follows an `unknown` one (the
+  rule's blockers; Claude's AskUserQuestion raises a question without a tool),
+  or when a steer starts a new round. Reasoning, plan, compaction and notice
+  steps, and tools after a `final` one, wait behind the held message and are
+  written after it once it is process text, or without it when the turn ends
+  and it is the final item.
+  Known limitation: when a turn ends on a tool after its last text ("text →
+  tool → end"), the rule still promotes that text to the answer (decision
+  D-final), but the tool already made it process text, so it shows both in the
+  CoT and in the result card.
 - Tool rows come from `item.completed`: one per command action (the daemon
   parses each shell command once with
   [`command-parse`](../packages/shared/src/command-parse.ts)), one per changed
@@ -149,12 +159,15 @@ is unchanged:
   draws nothing.
   Native result `content` is itself a JSON string containing the typed text/list object.
 - A `subagent` item is a named step from its start ("正在运行子代理：…") to its
-  end ("子代理已完成：…", "子代理已停止：…", "子代理执行失败：…"). Its child items
-  stay in the workbench. A background launch acknowledgment
-  (`async_launched`) does not imply completion: an unresolved child is labeled
-  as unresolved when the main turn ends, never fabricated as successful. A
-  `compaction` item is a step from "正在压缩上下文" to its outcome, and a `notice`
-  item a step named by its title.
+  end ("子代理已完成：…", "子代理已停止：…", "子代理执行失败：…"). Claude's first
+  Agent frame carries only the "Task" placeholder, so the row and step open on
+  the first event with a real title or prompt, else on the first child item or
+  at completion. Its child items stay in the workbench. A background launch
+  acknowledgment (`async_launched`) does not imply completion: an unresolved
+  child is labeled as unresolved when the main turn ends, never fabricated as
+  successful. A `compaction` item is a step from "正在压缩上下文" to its outcome
+  (one reported only once finished still opens it), and a `notice` item a step
+  named by its title.
 - Questions and approvals keep the existing cards and callbacks. The same native
   process gets a waiting step, then a matching finish step when the original
   request is answered, expires or is cancelled. Neither process text nor running
@@ -225,20 +238,25 @@ Deploy the server migration before a protocol-v5 daemon. A v4 daemon cannot
 claim a native checkpoint. The v4 streaming-card renderer is gone: a delivery
 that still holds the message ID of an already-sent v4 card but no presentation
 checkpoint finishes through `FeishuTaskPresentation` with the result card only.
-Its old card stays as sent, no native process is opened for it, and its first
-checkpoint records the CoT as disabled (`legacy_card_final_only`), so a retry
-stays final-only. Check the outbox for such rows before deploying.
+No native process is opened for it, and its first checkpoint records the CoT as
+disabled (`legacy_card_final_only`), so a retry stays final-only. After the
+result is sent, the old card is patched once to a closed state ("执行过程已结束，
+结果见下一条消息。") so its progress spinner does not stay; the marker becomes
+`legacy_card_closed`, and a refused patch is only logged. Check the outbox for
+such rows before deploying.
 Task/Agent/Session/workspace data does not need migration. Rollback daemons
 leave native deliveries queued for a capable daemon instead of rendering a
 second ordinary process card. The API extensions are internal daemon protocol
 fields on existing CLI-exempt routes; no new user API or command is introduced.
 
-The semantic timeline adds optional renderer/waiting markers to that existing
-checkpoint JSON; it requires no SQL or Task/Session migration. If a daemon upgrade
-finds an active process created by the earlier native renderer, it closes that
-display with `reason=timeout` and preserves the request/result lanes. This avoids
-appending incompatible text IDs to the old message. New deliveries use the
-semantic timeline; existing finished messages are not rewritten.
+The renderer tag and waiting markers are optional fields of that existing
+checkpoint JSON; they require no SQL or Task/Session migration. The turn + items
+renderer tags its native process `cot.presentation: "items_v1"`. If a daemon
+upgrade finds an active process with any other tag (the fragment-event
+`semantic_v1`, or none), it closes that display once with `reason=timeout`
+(`legacy_cot_closed_on_upgrade`) and preserves the request/result lanes. This
+avoids appending incompatible native IDs to the old message. New deliveries use
+the current renderer; existing finished messages are not rewritten.
 
 ## Verification
 

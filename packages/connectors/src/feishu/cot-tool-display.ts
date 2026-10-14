@@ -152,9 +152,21 @@ export function cotStepRows(item: CotToolItem): CotStepRow[] {
   return rows;
 }
 
-/** The subagent's own label: its title, else the start of its prompt, else the tool. */
+/** Claude's first Agent frame is titled with the tool name alone; the real description follows. */
+function placeholderTitle(item: TraceSubagentItem): boolean {
+  const title = item.title?.trim();
+  return !title || title === item.tool || /^(task|agent)$/i.test(title);
+}
+
+/** Whether the subagent carries a real description or prompt yet. */
+export function cotSubagentReady(item: TraceSubagentItem): boolean {
+  return !placeholderTitle(item) || !!item.prompt?.trim();
+}
+
+/** The subagent's own label: its real title, else the start of its prompt, else the tool. */
 export function cotSubagentTitle(item: TraceSubagentItem): string {
-  return cotPreview(line(item.title || item.prompt || item.tool || ""), 600) || "子任务";
+  const label = !placeholderTitle(item) ? item.title! : item.prompt?.trim() || item.title || item.tool || "";
+  return cotPreview(line(label), 600) || "子任务";
 }
 
 /** Step name for a subagent: Codex copy while it runs and once it ends. */

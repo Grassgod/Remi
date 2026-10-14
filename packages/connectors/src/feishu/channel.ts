@@ -260,13 +260,13 @@ export class FeishuChannel {
     opts: HandleTaskStreamOpts = {},
   ): Promise<{ messageId: string }> {
     // Every Task, regardless of inbound/proactive origin, uses the native
-    // renderer. A delivery whose legacy streaming card was already sent (a
-    // message ID with no presentation checkpoint) keeps that card as it is and
-    // finishes with the result card only.
-    const finalOnly = opts.lane !== "cot" && Boolean(opts.durable?.messageId) && !opts.durable?.presentation;
+    // renderer. Only a delivery whose legacy streaming card was already sent
+    // carries its message ID: it finishes with the result card only, and its
+    // first checkpoint keeps it final-only on retry.
+    const legacyCard = opts.lane !== "cot" ? opts.durable?.messageId ?? undefined : undefined;
     const presentation = new FeishuTaskPresentation(this._makeClient(), chatId, meta, {
       appId: this._config.appId, replyToMessageId: opts.replyToMessageId,
-      lane: opts.lane, finalOnly,
+      lane: opts.lane, legacyCardMessageId: legacyCard,
       mentionOpenId: opts.mentionOpenId, interactionOpenId: opts.interactionOpenId,
       receiptMessageIds: opts.receiptMessageIds,
       displayName: opts.displayName ?? meta.displayName,
