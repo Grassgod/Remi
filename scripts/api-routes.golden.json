@@ -10723,7 +10723,7 @@
               "json",
               "jsonl"
             ],
-            "allowed": false
+            "allowed": true
           },
           {
             "id": "turn.trace.read",

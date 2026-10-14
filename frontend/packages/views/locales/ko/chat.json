@@ -26,8 +26,11 @@
     "process_steps_one": "단계 {{count}}개",
     "process_steps_other": "단계 {{count}}개",
     "copy_action": "복사",
-    "copied_toast": "복사했습니다",
     "copy_failed_toast": "복사 실패",
+    "view_execution_log": "실행 로그 보기",
+    "not_woken": "에이전트를 깨우지 않음 · {{reason}}",
+    "turn_retry": "재시도",
+    "turn_retry_new_session": "새 세션에서 재시도",
     "loading_older": "이전 메시지를 불러오는 중…",
     "expand_older": "이전 메시지 30개 보기",
     "earliest": "첫 메시지입니다",
@@ -146,12 +149,11 @@
     "retry": "다시 시도"
   },
   "page": {
-    "title": "채팅",
-    "private": "에이전트와의 비공개 대화",
     "open": "채팅 페이지 열기",
     "history": "채팅 기록",
     "back": "대화로 돌아가기",
     "loading": "채팅 불러오는 중…",
+    "loading_conversation": "대화를 불러오는 중…",
     "load_failed": "대화를 불러올 수 없습니다.",
     "retry": "다시 시도"
   },
@@ -176,6 +178,59 @@
     "loading": "채팅을 불러오는 중…",
     "load_failed": "채팅을 불러오지 못했습니다.",
     "retry": "다시 시도"
+  },
+  "sidebar": {
+    "new_chat": "새 채팅",
+    "search": "검색",
+    "pinned": "고정됨",
+    "projects": "프로젝트",
+    "recent": "최근",
+    "show_more": "더 보기",
+    "new_chat_in": "{{name}}에서 새 채팅 시작",
+    "automations": "자동화",
+    "archived": "보관됨",
+    "back": "뒤로",
+    "empty": "아직 채팅이 없습니다",
+    "automations_empty": "자동화 채팅이 없습니다",
+    "archived_empty": "보관된 채팅이 없습니다",
+    "directory_unavailable": "로컬 디렉터리를 사용할 수 없음",
+    "status": {
+      "running": "실행 중",
+      "needs_answer": "답변 필요",
+      "unread": "새 답변"
+    },
+    "more_actions": "더 많은 작업",
+    "menu": {
+      "rename": "이름 바꾸기…",
+      "pin": "고정",
+      "unpin": "고정 해제",
+      "stop": "실행 중지",
+      "archive": "보관",
+      "restore": "복원",
+      "delete": "삭제…"
+    },
+    "rename_dialog": {
+      "title": "채팅 이름 바꾸기",
+      "description": "짧고 알아보기 쉽게 지어 주세요.",
+      "placeholder": "제목 추가…",
+      "cancel": "취소",
+      "save": "저장"
+    },
+    "archive_dialog": {
+      "title": "이 채팅을 중지하고 보관할까요?",
+      "description": "진행 중인 답변이 중지됩니다. 채팅은 ‘보관됨’에서 복원할 수 있습니다.",
+      "cancel": "취소",
+      "confirm": "중지하고 보관"
+    },
+    "delete_dialog": {
+      "title": "이 채팅을 삭제할까요?",
+      "description": "이 채팅과 메시지가 영구적으로 삭제되며 되돌릴 수 없습니다.",
+      "cancel": "취소",
+      "confirm": "삭제",
+      "confirming": "삭제 중…"
+    },
+    "archived_toast": "‘{{title}}’을(를) 보관했습니다",
+    "undo": "실행 취소"
   },
   "queue": {
     "title": "대기 중인 메시지",
@@ -202,6 +257,7 @@
     "copied": "복사됨",
     "new_messages_other": "새 메시지 {{count}}개",
     "new_messages_overflow": "새 메시지 99+개",
-    "new_messages_jump": "끝으로 이동, 새 메시지 {{count}}개"
+    "new_messages_jump": "끝으로 이동, 새 메시지 {{count}}개",
+    "scroll_to_bottom": "맨 아래로 스크롤"
   }
 }

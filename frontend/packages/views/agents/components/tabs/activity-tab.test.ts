@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { AgentTask } from "@multiremi/core/types";
 import {
+  cancelTargetOf,
   deriveAvgDurationLast30d,
   formatDurationMs,
 } from "./activity-tab";
@@ -105,5 +106,14 @@ describe("formatDurationMs", () => {
   it("handles zero / negative defensively", () => {
     expect(formatDurationMs(0)).toBe("—");
     expect(formatDurationMs(-100)).toBe("—");
+  });
+});
+
+describe("cancelTargetOf", () => {
+  it("cancels through the turn, not the attempt", () => {
+    expect(cancelTargetOf(task({ id: "attempt_2", turn_id: "turn_1" }))).toBe("turn_1");
+  });
+  it("falls back to the task id when no turn is known", () => {
+    expect(cancelTargetOf(task({ id: "turn_or_task" }))).toBe("turn_or_task");
   });
 });
