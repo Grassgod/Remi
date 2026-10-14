@@ -1,17 +1,17 @@
 "use client";
 
 import { cn } from "@multiremi/ui/lib/utils";
-import type { TimelineItem } from "./build-timeline";
-import { colorClasses, getEventColor, getEventLabel, type EventColor } from "./event-format";
+import type { TraceItem } from "@multiremi/contracts/trace";
+import { colorClasses, getItemColor, getItemLabel, type EventColor } from "./event-format";
 
 export function TimelineBar({
   items,
-  selectedSeq,
+  selectedId,
   onSegmentClick,
 }: {
-  items: TimelineItem[];
-  selectedSeq: number | null;
-  onSegmentClick: (seq: number) => void;
+  items: readonly TraceItem[];
+  selectedId: string | null;
+  onSegmentClick: (id: string) => void;
 }) {
   const segments: { startIdx: number; endIdx: number; color: EventColor; count: number }[] = [];
   let currentColor: EventColor | null = null;
@@ -19,7 +19,7 @@ export function TimelineBar({
 
   for (let i = 0; i < items.length; i++) {
     const item = items[i]!;
-    const color = getEventColor(item);
+    const color = getItemColor(item);
     if (color !== currentColor) {
       if (currentColor !== null) {
         segments.push({ startIdx: currentStart, endIdx: i - 1, color: currentColor, count: i - currentStart });
@@ -35,7 +35,7 @@ export function TimelineBar({
   return (
     <div className="flex gap-0.5 h-5 rounded overflow-hidden" role="navigation" aria-label="Timeline">
       {segments.map((seg) => {
-        const isSelected = selectedSeq !== null && items.slice(seg.startIdx, seg.endIdx + 1).some((i) => i.seq === selectedSeq);
+        const isSelected = selectedId !== null && items.slice(seg.startIdx, seg.endIdx + 1).some((i) => i.id === selectedId);
         const color = colorClasses[seg.color];
         const widthPercent = (seg.count / items.length) * 100;
 
@@ -49,12 +49,12 @@ export function TimelineBar({
               "min-w-[4px]",
             )}
             style={{ width: `${Math.max(widthPercent, 0.5)}%` }}
-            onClick={() => onSegmentClick(items[seg.startIdx]!.seq)}
-            title={`${getEventLabel(items[seg.startIdx]!)}${seg.count > 1 ? ` (+${seg.count - 1} more)` : ""}`}
+            onClick={() => onSegmentClick(items[seg.startIdx]!.id)}
+            title={`${getItemLabel(items[seg.startIdx]!)}${seg.count > 1 ? ` (+${seg.count - 1} more)` : ""}`}
           >
             <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1 hidden group-hover:block z-10 pointer-events-none">
               <div className="rounded bg-popover border px-2 py-1 text-[10px] text-popover-foreground shadow-md whitespace-nowrap">
-                {getEventLabel(items[seg.startIdx]!)}
+                {getItemLabel(items[seg.startIdx]!)}
                 {seg.count > 1 && <span className="text-muted-foreground ml-1">+{seg.count - 1}</span>}
               </div>
             </div>

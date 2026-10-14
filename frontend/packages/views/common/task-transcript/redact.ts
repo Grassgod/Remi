@@ -80,3 +80,25 @@ export function redactValue<T>(value: T, _depth = 0, _seen = new WeakSet<object>
   }
   return out as unknown as T;
 }
+
+const REDACTED_ITEM_STRINGS = [
+  "text", "output", "command", "cwd", "prompt", "title", "summary", "query", "url", "description", "message", "error",
+] as const;
+
+/**
+ * A trace item ready for display or copy: every free-text field through
+ * {@link redactString}, structured payloads (tool input, questions, answers,
+ * parsed command actions, diffs) through {@link redactValue}. Ids, statuses and
+ * timestamps are left alone so rows keep their identity.
+ */
+export function redactItem<T extends object>(item: T): T {
+  const out: Record<string, unknown> = { ...(item as Record<string, unknown>) };
+  for (const key of REDACTED_ITEM_STRINGS) {
+    const value = out[key];
+    if (typeof value === "string") out[key] = redactString(value);
+  }
+  for (const key of ["input", "questions", "answers", "actions", "changes", "entries"]) {
+    if (out[key] !== null && typeof out[key] === "object") out[key] = redactValue(out[key]);
+  }
+  return out as unknown as T;
+}

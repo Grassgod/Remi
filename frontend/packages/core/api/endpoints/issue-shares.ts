@@ -59,11 +59,12 @@ export class IssueSharesEndpoints {
     }) as SharedIssueBundle;
   }
 
-  async getSharedTaskTrace(token: string, taskId: string, afterSeq = 0): Promise<SharedTaskTracePage> {
-    const query = new URLSearchParams({ after_seq: String(afterSeq) });
+  /** One `view=turn` page of a shared task's trace from `itemCursor`. */
+  async getSharedTaskTrace(token: string, taskId: string, itemCursor = 0): Promise<SharedTaskTracePage> {
+    const query = new URLSearchParams({ view: "turn", item_cursor: String(itemCursor) });
     const raw = await this.http.fetch<unknown>(`/api/shares/${encodeURIComponent(token)}/tasks/${encodeURIComponent(taskId)}/trace?${query}`);
     return parseStrictResponse(raw, SharedTaskTracePageSchema, {
       endpoint: "GET /api/shares/:token/tasks/:task_id/trace",
-    }) as SharedTaskTracePage;
+    });
   }
 }

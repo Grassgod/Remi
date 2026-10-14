@@ -78,30 +78,6 @@ export const CHAT_MIN_H = 480;
 export const CHAT_DEFAULT_W = 380;
 export const CHAT_DEFAULT_H = 600;
 
-/**
- * Kept as a public type because existing consumers (chat-message-list,
- * views/chat types) import it. Items themselves no longer live in the
- * store — they flow through the React Query cache keyed by task id.
- */
-export interface ChatTimelineItem {
-  seq: number;
-  type:
-    | "tool_use"
-    | "tool_result"
-    | "thinking"
-    | "text"
-    | "steer"
-    | "error"
-    | "permission_request"
-    | "permission_response"
-    | "question_request"
-    | "question_response";
-  tool?: string;
-  content?: string;
-  input?: Record<string, unknown>;
-  output?: string;
-}
-
 export interface ChatState {
   isOpen: boolean;
   activeSessionId: string | null;
