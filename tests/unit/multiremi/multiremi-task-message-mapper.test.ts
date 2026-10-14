@@ -61,6 +61,13 @@ describe("daemon task-message mapper", () => {
         .toEqual([expect.objectContaining({ type: "text", meta: expect.objectContaining({ phase: phase === "final_answer" ? "final" : "commentary" }) })]);
     }
   });
+  it("reads the AIR message phase that codex-acp 2.x sends", () => {
+    const map = createEventMapper(createAdapter("codex"));
+    for (const phase of ["commentary", "final_answer"]) {
+      expect(map(event({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: phase }, _meta: { jetbrains: { air: { version: 1, phase } } } })))
+        .toEqual([expect.objectContaining({ type: "text", meta: expect.objectContaining({ phase: phase === "final_answer" ? "final" : "commentary" }) })]);
+    }
+  });
   it("persists selected model metadata separately from token usage", () => {
     const map = createEventMapper(createAdapter("claude"));
     expect(map(event({ sessionUpdate: "config_option_update", id: "model", value: "claude-opus-5" })))
