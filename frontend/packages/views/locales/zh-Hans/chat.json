@@ -23,8 +23,11 @@
     "tool_result_unnamed": "结果：",
     "process_steps_other": "{{count}} 步",
     "copy_action": "复制",
-    "copied_toast": "已复制",
     "copy_failed_toast": "复制失败",
+    "view_execution_log": "查看执行记录",
+    "not_woken": "未唤醒智能体 · {{reason}}",
+    "turn_retry": "重试",
+    "turn_retry_new_session": "在新会话中重试",
     "loading_older": "正在载入更早消息…",
     "expand_older": "展开更早 30 条",
     "earliest": "已到最早消息",
@@ -143,8 +146,6 @@
     "retry": "重试"
   },
   "page": {
-    "title": "对话",
-    "private": "与智能体的私人对话",
     "open": "打开对话页面",
     "history": "对话历史",
     "back": "返回对话",
@@ -173,6 +174,59 @@
     "load_failed": "无法加载对话。",
     "retry": "重试"
   },
+  "sidebar": {
+    "new_chat": "新聊天",
+    "search": "搜索",
+    "pinned": "置顶",
+    "projects": "项目",
+    "recent": "最近",
+    "show_more": "显示更多",
+    "new_chat_in": "在 {{name}} 中开始新聊天",
+    "automations": "自动化",
+    "archived": "已归档",
+    "back": "返回",
+    "empty": "还没有聊天",
+    "automations_empty": "没有自动化聊天",
+    "archived_empty": "没有已归档的聊天",
+    "directory_unavailable": "本机目录不可用",
+    "status": {
+      "running": "运行中",
+      "needs_answer": "待回答",
+      "unread": "有新回复"
+    },
+    "more_actions": "更多",
+    "menu": {
+      "rename": "重命名…",
+      "pin": "置顶",
+      "unpin": "取消置顶",
+      "stop": "停止运行",
+      "archive": "归档",
+      "restore": "恢复",
+      "delete": "删除…"
+    },
+    "rename_dialog": {
+      "title": "重命名聊天",
+      "description": "简短、好认就行。",
+      "placeholder": "添加标题…",
+      "cancel": "取消",
+      "save": "保存"
+    },
+    "archive_dialog": {
+      "title": "停止并归档这个聊天？",
+      "description": "正在进行的回复会被停止，归档后可以在「已归档」里恢复。",
+      "cancel": "取消",
+      "confirm": "停止并归档"
+    },
+    "delete_dialog": {
+      "title": "删除这个聊天？",
+      "description": "会永久删除这个聊天和其中的消息，无法撤销。",
+      "cancel": "取消",
+      "confirm": "删除",
+      "confirming": "删除中…"
+    },
+    "archived_toast": "已归档「{{title}}」",
+    "undo": "撤销"
+  },
   "queue": {
     "title": "待发送消息",
     "add": "加入队列",
@@ -198,6 +252,7 @@
     "copied": "已复制",
     "new_messages_other": "{{count}} 条新消息",
     "new_messages_overflow": "99+ 条新消息",
-    "new_messages_jump": "回到末尾，{{count}} 条新消息"
+    "new_messages_jump": "回到末尾，{{count}} 条新消息",
+    "scroll_to_bottom": "滚动到底部"
   }
 }

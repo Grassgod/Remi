@@ -80,6 +80,17 @@ export interface SessionLogListProps {
   /** What to render before the replica answers at all. */
   renderPending?: () => React.ReactNode;
   className?: string;
+  /**
+   * Width and padding of the centred content column. Issues keep the default;
+   * Chat narrows it to its reading column.
+   */
+  contentClassName?: string;
+  /**
+   * The released-reader affordance. `chip` (default) appears once new rows
+   * arrive; `arrow` is Chat's round scroll-to-bottom button, shown whenever the
+   * reader has left the bottom and badged with the new-message count.
+   */
+  scrollButton?: "chip" | "arrow";
   /** Element carrying the scroll root's data attributes, for tests and probes. */
   testIdPrefix?: string;
   perfScroll?: "session-log" | "issue-detail";
@@ -139,6 +150,43 @@ function NewMessagesChip({
   );
 }
 
+/**
+ * Chat's scroll-to-bottom button: a 32px circle centred 24px above the bottom
+ * edge of the list (the composer sits right below it). Like the chip it is an
+ * overlay, so it never moves a row.
+ */
+function ScrollToBottomButton({
+  count,
+  onReturn,
+  label,
+}: {
+  count: number;
+  onReturn: () => void;
+  label: string;
+}): React.ReactElement {
+  const display = count > NEW_MESSAGE_DISPLAY_CAP ? `${NEW_MESSAGE_DISPLAY_CAP}+` : String(count);
+  return (
+    <button
+      type="button"
+      data-session-log-scroll-bottom=""
+      onClick={onReturn}
+      aria-label={label}
+      title={label}
+      className="absolute bottom-6 left-1/2 z-20 inline-flex size-8 -translate-x-1/2 items-center justify-center rounded-full border bg-background text-muted-foreground shadow-sm transition-colors duration-150 animate-in fade-in-0 hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring motion-reduce:animate-none"
+    >
+      <ArrowDown className="size-4" aria-hidden="true" />
+      {count > 0 && (
+        <span
+          data-session-log-scroll-bottom-count=""
+          className="absolute -top-1.5 -right-2 min-w-4 rounded-full bg-brand px-1 text-center text-[10px] font-medium leading-4 text-brand-foreground tabular-nums"
+        >
+          {display}
+        </span>
+      )}
+    </button>
+  );
+}
+
 export function SessionLogList({
   sessionId,
   replica,
@@ -149,6 +197,8 @@ export function SessionLogList({
   renderEntry,
   renderPending,
   className,
+  contentClassName = "max-w-4xl px-4 py-6",
+  scrollButton = "chip",
   testIdPrefix = "session-log",
   perfScroll = "session-log",
   latestAnchor = "latest-message",
@@ -349,6 +399,9 @@ export function SessionLogList({
   const newMessagesLabel = t(($) => $.session_log.new_messages_jump, {
     count: newMessageCount,
   });
+  const scrollBottomLabel = newMessageCount > 0
+    ? newMessagesLabel
+    : t(($) => $.session_log.scroll_to_bottom);
 
   const handleReturn = useCallback(() => {
     if (onReturnToLatest) { onReturnToLatest(); return; }
@@ -379,7 +432,7 @@ export function SessionLogList({
             `visibility: hidden` rather than unmounting because the hook measures
             real heights to know where "final" is. */}
         <DeferredContentContext.Provider value={contentRevealed}>
-        <div ref={setContentEl} style={initialPositioned ? { visibility: "hidden" } : undefined} className="relative mx-auto w-full max-w-4xl px-4 py-6">
+        <div ref={setContentEl} style={initialPositioned ? { visibility: "hidden" } : undefined} className={`relative mx-auto w-full ${contentClassName}`}>
           {showPendingSkeleton && reveal.state === "pending" && (
             <div
               data-slot="skeleton"
@@ -430,8 +483,11 @@ export function SessionLogList({
         </div>
         </DeferredContentContext.Provider>
       </div>
-      {newMessageCount > 0 && stick.state === "released" && (
+      {scrollButton === "chip" && newMessageCount > 0 && stick.state === "released" && (
         <NewMessagesChip count={newMessageCount} onReturn={handleReturn} label={newMessagesLabel} />
+      )}
+      {scrollButton === "arrow" && stick.state === "released" && (
+        <ScrollToBottomButton count={newMessageCount} onReturn={handleReturn} label={scrollBottomLabel} />
       )}
     </div>
   );

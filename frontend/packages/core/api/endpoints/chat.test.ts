@@ -126,6 +126,16 @@ describe("ChatEndpoints contracts", () => {
     expect(fetch).toHaveBeenCalledTimes(3);
     expect(fetch).not.toHaveBeenCalledWith(expect.stringContaining("pending-task"), expect.anything());
   });
+  it("lists in-flight chat turns with both the attempt and the turn the cancel command addresses", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => {
+      const params = new URL(url).searchParams;
+      return response({ turns: params.get("status") === "awaiting_human" ? [turnFixture({ status: "awaiting_human" })] : [], next_cursor: null });
+    }));
+    const api = new ChatEndpoints(new HttpClient("https://api.example.test"));
+    await expect(api.listPendingChatTasks()).resolves.toEqual({ tasks: [
+      { task_id: "attempt_2", turn_id: "turn_1", status: "awaiting_human", chat_session_id: "chat_1" },
+    ] });
+  });
   it("marks the conversation read through the cursor command and rejects an invalid acknowledgement", async () => {
     await expect(endpointsWithResponse({ session_id: "chat_1", cursor_seq: 5 }).markChatSessionRead("chat_1")).resolves.toBeUndefined();
     expect(fetch).toHaveBeenCalledWith("https://api.example.test/api/inbox/read", expect.objectContaining({ body: JSON.stringify({ session_id: "chat_1" }) }));

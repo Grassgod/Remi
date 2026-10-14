@@ -62,7 +62,6 @@ export function SessionDropdown({
   activeSessionId,
   activeSession,
   onSelectSession,
-  presentation = "dropdown",
   chatVisible = true,
   onSessionDeleted,
 }: {
@@ -73,7 +72,6 @@ export function SessionDropdown({
   /** Resolved by the caller because the active chat may be one the lists here do not hold. */
   activeSession: ChatSession | null;
   onSelectSession: (session: ChatSession) => void;
-  presentation?: "dropdown" | "list";
   chatVisible?: boolean;
   onSessionDeleted?: () => void;
 }) {
@@ -97,9 +95,8 @@ export function SessionDropdown({
   // their own list so automation runs never crowd the default one. The
   // automation list is read whenever the history is on screen so its unread
   // replies can be flagged on the filter; a closed dropdown adds no request.
-  const historyShown = presentation === "list" || isHistoryOpen;
   const automationList = useQuery(
-    chatSessionsOptions(wsId, "all", { enabled: chatVisible && historyShown }, "automation"),
+    chatSessionsOptions(wsId, "all", { enabled: chatVisible && isHistoryOpen }, "automation"),
   );
   const allList = useQuery(
     chatSessionsOptions(wsId, "all", { enabled: chatVisible && originFilter === "all" }, "all"),
@@ -282,7 +279,7 @@ export function SessionDropdown({
     );
 
     api
-      .cancelTaskById(task.task_id)
+      .cancelTaskById(task.turn_id ?? task.task_id)
       .then(
         () =>
           apiLogger.info("cancelTask.success (history row)", {
@@ -409,14 +406,6 @@ export function SessionDropdown({
               {titleText}
             </div>
           )}
-          {!isRenaming &&
-            !isConfirmingAction &&
-            presentation === "list" &&
-            session.last_message && (
-              <p className="mt-0.5 truncate text-xs text-muted-foreground">
-                {session.last_message.content}
-              </p>
-            )}
         </div>
         {!isRenaming &&
           (isConfirmingDelete ? (
@@ -739,8 +728,6 @@ export function SessionDropdown({
       )}
     </div>
   );
-  if (presentation === "list") return history;
-
   return (
     <>
       <Popover open={isHistoryOpen} onOpenChange={setIsHistoryOpen}>
