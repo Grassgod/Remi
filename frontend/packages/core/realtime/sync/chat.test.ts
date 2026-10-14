@@ -149,9 +149,29 @@ describe("chat queue realtime", () => {
     }
   });
 
+  it("refetches the mounted follow-up queue of that chat only", async () => {
+    const getChatQueue = vi.fn(async () => ({ items: [], paused: null }));
+    const other = vi.fn(async () => ({ items: [], paused: null }));
+    const observers = [
+      new QueryObserver(qc, { queryKey: chatKeys.queue("ws-1", "chat-1"), queryFn: getChatQueue, staleTime: Infinity }),
+      new QueryObserver(qc, { queryKey: chatKeys.queue("ws-1", "chat-2"), queryFn: other, staleTime: Infinity }),
+    ];
+    const unsubscribe = observers.map(observer => observer.subscribe(() => {}));
+    try {
+      await vi.waitFor(() => expect(getChatQueue).toHaveBeenCalledTimes(1));
+      await vi.waitFor(() => expect(other).toHaveBeenCalledTimes(1));
+      handlers["chat:queue_updated"]?.({ chat_session_id: "chat-1" });
+      await vi.waitFor(() => expect(getChatQueue).toHaveBeenCalledTimes(2));
+      expect(other).toHaveBeenCalledTimes(1);
+    } finally {
+      unsubscribe.forEach(stop => stop());
+    }
+  });
+
   it("refreshes queue, summaries and detail in the current workspace", () => {
     const invalidate = vi.spyOn(qc, "invalidateQueries");
     handlers["chat:queue_updated"]?.({ chat_session_id: "chat-1" });
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: chatKeys.queue("ws-1", "chat-1") });
     expect(invalidate).toHaveBeenCalledWith({ queryKey: chatKeys.pendingTask("chat-1") });
     expect(invalidate).toHaveBeenCalledWith({ queryKey: chatKeys.pendingTasks("ws-1") });
     expect(invalidate).toHaveBeenCalledWith({ queryKey: chatKeys.session("ws-1", "chat-1") });

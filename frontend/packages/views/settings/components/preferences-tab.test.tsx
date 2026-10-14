@@ -65,7 +65,18 @@ vi.mock("@multiremi/core/auth", async () => {
   return { ...actual, useAuthStore };
 });
 
+import { createChatStore, registerChatStore, useChatStore } from "@multiremi/core/chat";
 import { PreferencesTab } from "./preferences-tab";
+
+const chatStorage = new Map<string, string>();
+beforeEach(() => {
+  chatStorage.clear();
+  registerChatStore(createChatStore({ storage: {
+    getItem: (key) => chatStorage.get(key) ?? null,
+    setItem: (key, value) => { chatStorage.set(key, value); },
+    removeItem: (key) => { chatStorage.delete(key); },
+  } }));
+});
 
 const TEST_RESOURCES = {
   en: { common: enCommon, auth: enAuth, settings: enSettings },
@@ -250,3 +261,29 @@ describe("PreferencesTab — Timezone section", () => {
     });
   }, 20000);
 });
+
+describe("PreferencesTab — Chat section", () => {
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("defaults to steer and saves the follow-up choice", async () => {
+    const user = userEvent.setup();
+    render(<PreferencesTab />, { wrapper: I18nWrapper });
+
+    const group = screen.getByRole("radiogroup", { name: "When you send a message during a run" });
+    const steer = screen.getByRole("radio", { name: "Steer (send into this run)" });
+    const queue = screen.getByRole("radio", { name: "Queue (send after this run ends)" });
+    expect(group).toContainElement(steer);
+    expect(steer).toHaveAttribute("aria-checked", "true");
+    expect(queue).toHaveAttribute("aria-checked", "false");
+    expect(screen.getByText(/to use the other option once/)).toBeInTheDocument();
+
+    await user.click(queue);
+
+    expect(useChatStore.getState().followUpMode).toBe("queue");
+    expect(chatStorage.get("multimira:chat:followUpMode")).toBe("queue");
+    expect(screen.getByRole("radio", { name: "Queue (send after this run ends)" })).toHaveAttribute("aria-checked", "true");
+  });
+});
+

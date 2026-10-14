@@ -1,33 +1,49 @@
 import { Extension } from "@tiptap/core";
 
 /**
+ * `invert` asks the submit handler to use the other of its two submit modes
+ * for this one message. Chat uses it while a run is active to switch between
+ * steering the run and queueing the message; other editors ignore it.
+ */
+export interface SubmitOptions {
+  invert: boolean;
+}
+
+/**
  * `onSubmit` must return true when it actually handled the event and false
  * when there's no submit handler wired up. That lets us fall through to the
  * default Enter behaviour — inserting a newline — when appropriate.
  *
+ * `Mod-Enter` submits; `Mod-Shift-Enter` submits with `invert: true`.
  * `submitOnEnter` — when true, bare Enter also submits (chat-style). When
- * false, only Mod-Enter submits and bare Enter keeps its default (newline).
+ * false, bare Enter keeps its default (newline).
+ *
+ * No shortcut submits while an IME composition is open: `view.composing` is
+ * set by ProseMirror between compositionstart and compositionend, so the
+ * Enter that confirms a pinyin or kana candidate never sends the message.
  */
 export function createSubmitExtension(
-  onSubmit: () => boolean,
+  onSubmit: (options: SubmitOptions) => boolean,
   { submitOnEnter }: { submitOnEnter: boolean },
 ) {
   return Extension.create({
     name: "submitShortcut",
     addKeyboardShortcuts() {
+      const submit = (invert: boolean) => () => {
+        if (this.editor.view.composing) return false;
+        return onSubmit({ invert });
+      };
       const shortcuts: Record<string, () => boolean> = {
-        "Mod-Enter": () => onSubmit(),
+        "Mod-Enter": submit(false),
+        "Mod-Shift-Enter": submit(true),
       };
       if (submitOnEnter) {
         shortcuts.Enter = () => {
           const editor = this.editor;
-          // IME guard — never submit while composing a multi-key input
-          // (Chinese pinyin, Japanese kana, etc). `view.composing` is set
-          // by ProseMirror between compositionstart and compositionend.
           if (editor.view.composing) return false;
           // Let Enter insert a newline inside a code block.
           if (editor.isActive("codeBlock")) return false;
-          return onSubmit();
+          return onSubmit({ invert: false });
         };
       }
       return shortcuts;

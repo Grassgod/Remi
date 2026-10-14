@@ -17,6 +17,7 @@ const backend = vi.hoisted(() => ({
   logReady: true,
   projectsHeld: false,
   create: vi.fn(), update: vi.fn(), send: vi.fn(), refresh: vi.fn(), markRead: vi.fn(),
+  enqueue: vi.fn(), updateQueued: vi.fn(), cancel: vi.fn(),
 }));
 const apiLogger = vi.hoisted(() => ({ error: vi.fn() }));
 vi.mock("@multiremi/core/api", async (importOriginal) => {
@@ -50,6 +51,9 @@ vi.mock("@multiremi/core/api", async (importOriginal) => {
     updateChatSession: backend.update,
     sendChatMessage: backend.send,
     markChatSessionRead: backend.markRead,
+    enqueueChatMessage: backend.enqueue,
+    updateQueuedChatMessage: backend.updateQueued,
+    cancelTaskById: backend.cancel,
   } };
 });
 vi.mock("@multiremi/core/logger", async (importOriginal) => {
@@ -102,11 +106,29 @@ vi.mock("./session-dropdown", () => ({ SessionDropdown: () => <div data-testid="
 vi.mock("../../common/actor-avatar", () => ({
   ActorAvatar: ({ actorId }: { actorId: string }) => <span data-testid={`avatar-${actorId}`} />,
 }));
-vi.mock("./chat-input", () => ({ ChatInput: ({ onSend, disabled }: { onSend: (value: string) => Promise<void>; disabled: boolean }) => (
-  <button disabled={disabled} onClick={() => void onSend("Hello").catch(() => {})}>Send test message</button>
+vi.mock("./chat-input", () => ({ ChatInput: ({ onSend, onSaveQueueEdit, onStop, disabled }: {
+  onSend: (value: string, ids?: string[], local?: unknown[], mode?: string) => Promise<void>;
+  onSaveQueueEdit: (sessionId: string, edit: unknown, content: string, ids: string[]) => Promise<void>;
+  onStop: () => void;
+  disabled: boolean;
+}) => (
+  <>
+    <button disabled={disabled} onClick={() => void onSend("Hello").catch(() => {})}>Send test message</button>
+    <button onClick={() => void onSend("Steer this", undefined, [], "steer").catch(() => {})}>Steer test message</button>
+    <button onClick={() => void onSend("Queue this", ["att-1"], [{ id: "att-1", filename: "a.png", content_type: "image/png", size_bytes: 4 }], "queue")
+      .then(() => sent("resolved"), () => sent("rejected"))}>Queue test message</button>
+    <button onClick={() => void onSaveQueueEdit("chat-a", queueEditFixture, "Edited", [])
+      .then(() => sent("saved"), () => sent("save rejected"))}>Save queued edit</button>
+    <button onClick={onStop}>Stop test run</button>
+  </>
 ) }));
+const sent = vi.hoisted(() => vi.fn());
+const queueEditFixture = vi.hoisted(() => ({ itemId: "qmsg_1", revision: 3, stash: { draft: "my draft", attachments: {} } }));
+const toast = vi.hoisted(() => Object.assign(vi.fn(), { error: vi.fn(), dismiss: vi.fn() }));
+vi.mock("sonner", () => ({ toast }));
 
 import { ApiError } from "@multiremi/core/api";
+import { setCurrentWorkspace } from "@multiremi/core/platform";
 import { ChatWindow } from "./chat-window";
 
 const listChatSessionsCalls = vi.hoisted(() => vi.fn());
@@ -192,6 +214,11 @@ beforeEach(() => {
       ? { ...current, has_unread: false, unread_count: 0 } : current);
   });
   apiLogger.error.mockReset();
+  backend.enqueue.mockReset();
+  backend.updateQueued.mockReset();
+  backend.cancel.mockReset().mockResolvedValue(undefined);
+  sent.mockReset();
+  toast.mockReset();
 });
 
 describe("ChatWindow automatic read", () => {
@@ -532,3 +559,97 @@ describe("ChatWindow page shell", () => {
     expect(await screen.findByRole("status", { name: "Loading conversation…" }, { timeout: 1500 })).toBeInTheDocument();
   });
 });
+
+describe("ChatWindow follow-up delivery", () => {
+  // The queue mutations compare the workspace they started in with the current one.
+  beforeEach(() => setCurrentWorkspace("acme", "workspace-a"));
+  const agentsLoaded = (client: QueryClient) =>
+    waitFor(() => expect(client.getQueryData(["workspaces", "workspace-a", "agents"])).toBeDefined());
+  const queuedRow = { id: "qmsg_1", session_id: "chat-a", body_md: "Queue this", attachments: [], client_id: "x", status: "queued",
+    error: null, revision: 1, released_message_id: null, released_via: null, released_at: null, created_at: "t", updated_at: "t" };
+
+  it("steers through the message route, sent now", async () => {
+    backend.sessions = [session];
+    const { client } = mount(true);
+    await agentsLoaded(client);
+    fireEvent.click(await screen.findByRole("button", { name: "Steer test message" }));
+    await waitFor(() => expect(backend.send).toHaveBeenCalledWith("chat-a", "Steer this", undefined, expect.any(String)));
+    expect(backend.enqueue).not.toHaveBeenCalled();
+  });
+
+  it("queues with a client id and refreshes the log only when the row was released at once", async () => {
+    backend.sessions = [session];
+    backend.enqueue.mockResolvedValueOnce({ item: queuedRow, released: null });
+    const { store, client } = mount(true);
+    await agentsLoaded(client);
+    fireEvent.click(await screen.findByRole("button", { name: "Queue test message" }));
+    await waitFor(() => expect(sent).toHaveBeenCalledWith("resolved"));
+    expect(backend.enqueue).toHaveBeenCalledWith("chat-a", { body_md: "Queue this", attachment_ids: ["att-1"], client_id: expect.any(String) });
+    expect(backend.send).not.toHaveBeenCalled();
+    expect(backend.refresh).not.toHaveBeenCalled();
+    expect(store.getState().queueOutbox).toEqual({});
+
+    backend.enqueue.mockImplementationOnce(async (_id: string, input: { client_id: string }) =>
+      ({ item: { ...queuedRow, client_id: input.client_id, status: "released" }, released: { message: { id: "msg_1" } } }));
+    fireEvent.click(screen.getByRole("button", { name: "Queue test message" }));
+    await waitFor(() => expect(backend.refresh).toHaveBeenCalledOnce());
+  });
+
+  it("hands an unconfirmed enqueue to the queue, but rejects a refused one so the draft stays", async () => {
+    backend.sessions = [session];
+    backend.enqueue.mockRejectedValueOnce(new TypeError("Failed to fetch"));
+    const { store, client } = mount(true);
+    await agentsLoaded(client);
+    fireEvent.click(await screen.findByRole("button", { name: "Queue test message" }));
+    await waitFor(() => expect(sent).toHaveBeenCalledWith("resolved"));
+    expect(store.getState().queueOutbox["chat-a"]).toEqual([expect.objectContaining({
+      body_md: "Queue this", attachment_ids: ["att-1"], state: "unconfirmed",
+      attachments: [{ id: "att-1", filename: "a.png", content_type: "image/png", size: 4 }],
+    })]);
+    backend.enqueue.mockRejectedValueOnce(new ApiError("full", 400, "Bad Request", { error: "full", code: "queue_full" }));
+    fireEvent.click(screen.getByRole("button", { name: "Queue test message" }));
+    await waitFor(() => expect(sent).toHaveBeenCalledWith("rejected"));
+  });
+
+  it("saves an edit with its revision and restores the stashed draft", async () => {
+    backend.sessions = [session];
+    backend.updateQueued.mockResolvedValue({ ...queuedRow, body_md: "Edited", revision: 4 });
+    const { store } = mount(true);
+    act(() => store.getState().setInputDraft("chat-a", "my draft"));
+    act(() => store.getState().startQueueEdit("chat-a", { itemId: "qmsg_1", revision: 3, body_md: "Queue this", attachments: {} }));
+    fireEvent.click(screen.getByRole("button", { name: "Save queued edit" }));
+    await waitFor(() => expect(sent).toHaveBeenCalledWith("saved"));
+    expect(backend.updateQueued).toHaveBeenCalledWith("chat-a", "qmsg_1", { body_md: "Edited", attachment_ids: [], expected_revision: 3 });
+    expect(store.getState().queueEdit).toEqual({});
+    expect(store.getState().inputDrafts["chat-a"]).toBe("my draft");
+  });
+
+  it("keeps the edited text when the row was already sent, and stays in edit mode on other failures", async () => {
+    backend.sessions = [session];
+    const { store } = mount(true);
+    act(() => store.getState().startQueueEdit("chat-a", { itemId: "qmsg_1", revision: 3, body_md: "Queue this", attachments: {} }));
+    backend.updateQueued.mockRejectedValueOnce(new Error("offline"));
+    fireEvent.click(screen.getByRole("button", { name: "Save queued edit" }));
+    await waitFor(() => expect(sent).toHaveBeenCalledWith("save rejected"));
+    expect(store.getState().queueEdit["chat-a"]).toBeDefined();
+    backend.updateQueued.mockRejectedValueOnce(new ApiError("sent", 409, "Conflict", { error: "sent", code: "queued_message_consumed" }));
+    act(() => store.getState().setInputDraft("chat-a", "Edited"));
+    fireEvent.click(screen.getByRole("button", { name: "Save queued edit" }));
+    await waitFor(() => expect(sent).toHaveBeenCalledWith("saved"));
+    expect(store.getState().queueEdit).toEqual({});
+    expect(store.getState().inputDrafts["chat-a"]).toBe("Edited");
+    expect(toast).toHaveBeenCalledWith("This message was already sent and can no longer be changed");
+  });
+
+  it("refreshes the queue after a stop, which pauses it", async () => {
+    backend.sessions = [session];
+    backend.pending = { task_id: "task-a", turn_id: "turn-a", status: "running", supports_queue: true };
+    const { client } = mount(true);
+    await waitFor(() => expect(client.getQueryData(chatKeys.pendingTask("chat-a"))).toMatchObject({ task_id: "task-a" }));
+    client.setQueryData(chatKeys.queue("workspace-a", "chat-a"), { items: [], paused: null });
+    fireEvent.click(screen.getByRole("button", { name: "Stop test run" }));
+    await waitFor(() => expect(backend.cancel).toHaveBeenCalledWith("turn-a"));
+    await waitFor(() => expect(client.getQueryState(chatKeys.queue("workspace-a", "chat-a"))?.isInvalidated).toBe(true));
+  });
+});
+

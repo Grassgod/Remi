@@ -45,7 +45,7 @@ import { CodeBlockView } from "./code-block-view";
 import { PatchedListItem, PatchedTaskItem } from "./list-item";
 import { createMarkdownPasteExtension } from "./markdown-paste";
 import { createMarkdownCopyExtension } from "./markdown-copy";
-import { createSubmitExtension } from "./submit-shortcut";
+import { createSubmitExtension, type SubmitOptions } from "./submit-shortcut";
 import { createBlurShortcutExtension } from "./blur-shortcut";
 import { createFileUploadExtension } from "./file-upload";
 import { FileCardExtension } from "./file-card";
@@ -118,7 +118,7 @@ export const ImageExtension = Image.extend({
 export interface EditorExtensionsOptions {
   placeholder?: string;
   queryClient?: import("@tanstack/react-query").QueryClient;
-  onSubmitRef?: RefObject<(() => void) | undefined>;
+  onSubmitRef?: RefObject<((options: SubmitOptions) => void) | undefined>;
   onUploadFileRef?: RefObject<
     ((file: File) => Promise<UploadResult | null>) | undefined
   >;
@@ -206,10 +206,10 @@ export function createEditorExtensions(
     Placeholder.configure({ placeholder: placeholderText }),
     createMarkdownPasteExtension(),
     createSubmitExtension(
-      () => {
+      (submit) => {
         const fn = options.onSubmitRef?.current;
         if (!fn) return false; // no submit wired — let default Enter insert newline
-        fn();
+        fn(submit);
         return true;
       },
       { submitOnEnter: options.submitOnEnter ?? false },

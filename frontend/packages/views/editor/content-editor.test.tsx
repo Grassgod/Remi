@@ -1,3 +1,4 @@
+import { createRef } from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
 
@@ -69,7 +70,7 @@ vi.mock("@tiptap/react", () => ({
   ),
 }));
 
-import { ContentEditor } from "./content-editor";
+import { ContentEditor, type ContentEditorRef } from "./content-editor";
 
 describe("ContentEditor", () => {
   beforeEach(() => {
@@ -183,5 +184,25 @@ describe("ContentEditor", () => {
     rerender(<ContentEditor defaultValue={"same content\n"} />);
 
     expect(mockSetContent).not.toHaveBeenCalled();
+  });
+
+  it("replaces the document through the ref without emitting onUpdate", () => {
+    vi.useFakeTimers();
+    try {
+      const ref = createRef<ContentEditorRef>();
+      const onUpdate = vi.fn();
+      editorState.markdown = "draft";
+      render(<ContentEditor ref={ref} defaultValue="draft" onUpdate={onUpdate} />);
+
+      ref.current!.setContent("Queued message");
+      expect(mockSetContent).toHaveBeenCalledWith(
+        "Queued message",
+        expect.objectContaining({ emitUpdate: false, contentType: "markdown" }),
+      );
+      vi.runAllTimers();
+      expect(onUpdate).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

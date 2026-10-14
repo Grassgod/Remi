@@ -28,7 +28,6 @@
   "retry": "重试本轮",
   "retry_cold": "新会话重试",
   "retry_failed": "本轮重试失败",
-  "queue": "未读消息",
   "decision_reply": "回复",
   "resolved": "已解决",
   "wake_reasons": {
@@ -65,8 +64,5 @@
   "current_attempt": "当前尝试",
   "attempt_logs": "查看尝试日志",
   "no_attempts": "暂无尝试",
-  "load_more": "加载更多",
-  "retry_load": "重新加载",
-  "consumed_draft": "消息已被读到或删除。草稿保留在这里，可以复制后重新发送。",
-  "consumed_message": "消息已被 agent 读取，无法再编辑或删除。"
+  "retry_load": "重新加载"
 }

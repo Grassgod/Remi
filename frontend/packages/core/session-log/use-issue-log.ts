@@ -47,7 +47,6 @@ export function useIssueLog(sessionId: string, initial?: IssueLogBootstrap, comm
         if (!active) return;
         void qc.invalidateQueries({ queryKey: ["inbox", workspaceId] });
         void qc.invalidateQueries({ queryKey: ["message-detail", workspaceId] });
-        void qc.invalidateQueries({ queryKey: ["chat-unread", workspaceId, sessionId] });
         void qc.invalidateQueries({ queryKey: ["turns", workspaceId] });
         void qc.invalidateQueries({ queryKey: ["issues", workspaceId, "decisions"] });
         void qc.invalidateQueries({ queryKey: ["decision-replies", workspaceId] });
