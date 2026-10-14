@@ -20,6 +20,7 @@ import {
   type ChatQueueEdit,
 } from "@multiremi/core/chat";
 import { toSafeErrorDetails } from "@multiremi/core/api";
+import { QUEUE_MAX_LIVE_ITEMS, queueErrorCode } from "@multiremi/core/chat/queue";
 import { createLogger } from "@multiremi/core/logger";
 import {
   getCurrentWsId,
@@ -42,6 +43,12 @@ const logger = createLogger("chat.ui");
 export type ChatSendMode = "send" | ChatFollowUpMode;
 
 const otherMode = (mode: ChatFollowUpMode): ChatFollowUpMode => mode === "steer" ? "queue" : "steer";
+
+/** Queue refusals with their own copy; anything else keeps the generic one. */
+function errorKind(error: unknown, fallback: "send" | "save"): "send" | "save" | "full" | "archived" {
+  const code = queueErrorCode(error);
+  return code === "queue_full" ? "full" : code === "chat_archived" ? "archived" : fallback;
+}
 
 export function chatSendMode(isRunning: boolean, preference: ChatFollowUpMode, invert: boolean): ChatSendMode {
   if (!isRunning) return "send";
@@ -124,7 +131,8 @@ export function ChatInput({
   const [pendingUploads, setPendingUploads] = useState(0);
   const [isSending, setIsSending] = useState(false);
   const sendingRef = useRef(false);
-  const [sendError, setSendError] = useState<"send" | "save" | null>(null);
+  /** `full` and `archived` are queue refusals with their own copy. */
+  const [sendError, setSendError] = useState<"send" | "save" | "full" | "archived" | null>(null);
   const followUpMode = useChatStore((s) => s.followUpMode);
   const queueEdit = useChatStore((s) =>
     activeSessionId ? s.queueEdit[activeSessionId] : undefined,
@@ -272,7 +280,7 @@ export function ChatInput({
         await onSaveQueueEdit?.(activeSessionId, edit, content, activeIds);
       } catch (error) {
         logger.error("input.save_queued.error", { error: toSafeErrorDetails(error) });
-        if (getCurrentWsId() === workspaceAtSend) setSendError("save");
+        if (getCurrentWsId() === workspaceAtSend) setSendError(errorKind(error, "save"));
       } finally {
         sendingRef.current = false;
         setIsSending(false);
@@ -323,7 +331,7 @@ export function ChatInput({
         editorAtSend
       )
         return;
-      setSendError("send");
+      setSendError(errorKind(error, "send"));
       const currentSession = useChatStore.getState().activeSessionId;
       if (currentSession)
         setInputDraft(
@@ -355,10 +363,14 @@ export function ChatInput({
     isEmpty || !!disabled || !!noAgent || pendingUploads > 0 || isSending;
 
   // Esc leaves the queued-message edit. An open @ or / suggestion keeps the
-  // key: it marks its query with the `.suggestion` decoration.
+  // key: it marks its query with the `.suggestion` decoration. The key stops
+  // here, so the editor's Escape-to-blur does not also run and the composer
+  // keeps focus for the restored draft.
   const handleKeyDownCapture = (event: KeyboardEvent<HTMLDivElement>) => {
     if (event.key !== "Escape" || !queueEdit || event.nativeEvent.isComposing) return;
     if (event.currentTarget.querySelector(".suggestion")) return;
+    event.preventDefault();
+    event.stopPropagation();
     cancelQueueEdit();
   };
 
@@ -386,6 +398,7 @@ export function ChatInput({
           (noAgent || disabled) && "pointer-events-none opacity-60",
         )}
         aria-disabled={noAgent || disabled || undefined}
+        data-chat-composer=""
         onKeyDownCapture={handleKeyDownCapture}
       >
         {queueEdit && (
@@ -418,6 +431,7 @@ export function ChatInput({
               setInputDraft(draftKey, md);
             }}
             onSubmit={(options) => void handleSend(options)}
+            invertibleSubmit
             onUploadFile={uploadEnabled ? handleUpload : undefined}
             debounceMs={100}
             mentionMode={contextItems ? "context" : "default"}
@@ -506,9 +520,13 @@ export function ChatInput({
           role="alert"
           className="mx-auto mt-2 max-w-4xl text-xs text-destructive"
         >
-          {sendError === "save"
-            ? t(($) => $.queue.failed)
-            : t(($) => $.input.send_failed)}
+          {sendError === "full"
+            ? t(($) => $.queue.full, { max: QUEUE_MAX_LIVE_ITEMS })
+            : sendError === "archived"
+              ? t(($) => $.queue.archived)
+              : sendError === "save"
+                ? t(($) => $.queue.failed)
+                : t(($) => $.input.send_failed)}
         </p>
       )}
     </div>

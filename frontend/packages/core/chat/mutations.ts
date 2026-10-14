@@ -6,7 +6,7 @@ import type { ChatQueue, QueuedMessageAttachment } from "../api/schemas/chat-que
 import { useWorkspaceId } from "../hooks";
 import { chatKeys } from "./queries";
 import { createLogger } from "../logger";
-import { getCurrentWsId } from "../platform/workspace-storage";
+import { getCurrentSlug, getCurrentWsId } from "../platform/workspace-storage";
 import type { ChatSession, CreateChatSessionInput, UpdateChatSessionInput } from "../types";
 import { useChatStore } from "./index";
 import { removeChatSessionFromCache, updateChatSessionInCache } from "./session-cache";
@@ -92,6 +92,7 @@ export function useDeleteChatSession() {
       if (getCurrentWsId() !== wsId) return;
       const state = useChatStore.getState?.();
       state?.clearInputDraft(sessionId);
+      state?.clearQueueState(sessionId);
       if (state?.activeSessionId === sessionId) state.setActiveSession(null);
     },
     onError: (err, sessionId) => logger.error("deleteChatSession.error", { sessionId, err }),
@@ -112,6 +113,9 @@ export function useDeleteChatSession() {
 // `useMutationState`, whichever component started the command. The server
 // emits `chat:queue_updated` for every change; the handlers below only write
 // the authoritative answer early and refetch the queue.
+//
+// `networkMode: "always"` sends them even when the browser reports offline:
+// a paused command would hang instead of failing into "unconfirmed".
 // ---------------------------------------------------------------------------
 
 export const CHAT_QUEUE_MUTATION_KEY = ["chat-queue"] as const;
@@ -154,28 +158,33 @@ export function useEnqueueChatMessage() {
   const wsId = useWorkspaceId();
   return useMutation({
     mutationKey: [...CHAT_QUEUE_MUTATION_KEY, "enqueue"],
+    networkMode: "always",
     onMutate: (vars: EnqueueChatMessageVariables) => {
       useChatStore.getState().putQueueOutboxItem(vars.sessionId, {
         client_id: vars.client_id, body_md: vars.body_md, attachment_ids: vars.attachment_ids,
         attachments: vars.attachments, created_at: vars.created_at, state: "sending",
       });
-      return { wsId };
+      return { wsId, slug: getCurrentSlug() };
     },
     mutationFn: (vars: EnqueueChatMessageVariables) => api.enqueueChatMessage(vars.sessionId, {
       body_md: vars.body_md, attachment_ids: vars.attachment_ids, client_id: vars.client_id,
     }),
     onSuccess: (result, vars, context) => {
       qc.setQueryData<ChatQueue>(chatKeys.queue(context.wsId, vars.sessionId), (old) => applyQueueItem(old, result.item));
-      if (getCurrentWsId() === context.wsId) useChatStore.getState().removeQueueOutboxItem(vars.sessionId, vars.client_id);
+      // After a workspace switch the item leaves that workspace's stored outbox.
+      useChatStore.getState().removeQueueOutboxItem(vars.sessionId, vars.client_id, context.slug);
       if (result.released) refreshAfterRelease(qc, context.wsId, vars.sessionId);
     },
     onError: (error, vars, context) => {
       logger.error("enqueueChatMessage.error", { sessionId: vars.sessionId, error: toSafeErrorDetails(error) });
-      // The store now holds another workspace; that one keeps its own outbox.
-      if (context && getCurrentWsId() !== context.wsId) return;
       const store = useChatStore.getState();
-      if (!isQueueDeliveryUnconfirmed(error)) store.removeQueueOutboxItem(vars.sessionId, vars.client_id);
-      else store.putQueueOutboxItem(vars.sessionId, {
+      if (!isQueueDeliveryUnconfirmed(error)) {
+        store.removeQueueOutboxItem(vars.sessionId, vars.client_id, context?.slug);
+        return;
+      }
+      // Another workspace's stored outbox already reads the item back as unconfirmed.
+      if (context && getCurrentWsId() !== context.wsId) return;
+      store.putQueueOutboxItem(vars.sessionId, {
         client_id: vars.client_id, body_md: vars.body_md, attachment_ids: vars.attachment_ids,
         attachments: vars.attachments, created_at: vars.created_at, state: "unconfirmed",
       });
@@ -190,6 +199,7 @@ export function useUpdateQueuedChatMessage() {
   const wsId = useWorkspaceId();
   return useMutation({
     mutationKey: [...CHAT_QUEUE_MUTATION_KEY, "update"],
+    networkMode: "always",
     onMutate: () => ({ wsId }),
     mutationFn: ({ sessionId, itemId, ...input }: QueuedChatMessageVariables & UpdateQueuedChatMessageInput) =>
       api.updateQueuedChatMessage(sessionId, itemId, input),
@@ -206,6 +216,7 @@ export function useDeleteQueuedChatMessage() {
   const wsId = useWorkspaceId();
   return useMutation({
     mutationKey: [...CHAT_QUEUE_MUTATION_KEY, "delete"],
+    networkMode: "always",
     onMutate: () => ({ wsId }),
     mutationFn: ({ sessionId, itemId }: QueuedChatMessageVariables) => api.deleteQueuedChatMessage(sessionId, itemId),
     onSuccess: (item, { sessionId }, { wsId }) => {
@@ -226,6 +237,7 @@ export function useSteerQueuedChatMessage() {
   const wsId = useWorkspaceId();
   return useMutation({
     mutationKey: [...CHAT_QUEUE_MUTATION_KEY, "steer"],
+    networkMode: "always",
     onMutate: () => ({ wsId }),
     mutationFn: ({ sessionId, itemId }: QueuedChatMessageVariables) => api.steerQueuedChatMessage(sessionId, itemId),
     onSuccess: (result, { sessionId }, { wsId }) => {
@@ -247,6 +259,7 @@ export function useResumeChatQueue() {
   const wsId = useWorkspaceId();
   return useMutation({
     mutationKey: [...CHAT_QUEUE_MUTATION_KEY, "resume"],
+    networkMode: "always",
     onMutate: () => ({ wsId }),
     mutationFn: ({ sessionId }: { sessionId: string }) => api.resumeChatQueue(sessionId),
     onSuccess: (result, { sessionId }, { wsId }) => {

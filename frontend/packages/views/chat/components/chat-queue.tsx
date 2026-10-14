@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type MutableRefObject, type ReactNode } from "react";
 import { useMutationState, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { CirclePause, Loader2, MoreHorizontal, Paperclip, Pencil, Trash2, TriangleAlert } from "lucide-react";
@@ -25,6 +25,7 @@ import {
   type QueuedChatMessageVariables,
 } from "@multiremi/core/chat/mutations";
 import {
+  QUEUE_MAX_LIVE_ITEMS,
   isQueueConsumed,
   isQueueDeliveryUnconfirmed,
   queuedAttachmentBindings,
@@ -53,7 +54,26 @@ type Row =
 interface PendingDelete {
   timer: ReturnType<typeof setTimeout>;
   toastId: string | number;
-  commit: () => void;
+  commit: () => Promise<void>;
+}
+
+/** Lets the composer settle deletes still behind their undo before it enqueues. */
+export interface ChatQueueController {
+  flushDeletes: () => Promise<void>;
+}
+
+/**
+ * The text for a refused queue command. Archived Chats and full queues say
+ * what to do; other refusals fall back to the generic failure.
+ */
+export function useQueueRefusalText(): (error: unknown) => string {
+  const { t } = useT("chat");
+  return (error) => {
+    const code = queueErrorCode(error);
+    if (code === "chat_archived") return t(($) => $.queue.archived);
+    if (code === "queue_full") return t(($) => $.queue.full, { max: QUEUE_MAX_LIVE_ITEMS });
+    return t(($) => $.queue.failed);
+  };
 }
 
 /**
@@ -67,15 +87,21 @@ interface PendingDelete {
 export function ChatQueue({
   sessionId,
   pendingTaskId,
+  archived = false,
   onReleased,
+  controllerRef,
 }: {
   sessionId: string;
   /** The running turn; its changes refresh the queue and drive the stalled banner. */
   pendingTaskId: string | null;
+  /** An archived Chat cannot release rows: steer, resume and retry are disabled. */
+  archived?: boolean;
   /** A row became a log message; the caller refreshes the conversation. */
   onReleased?: () => void;
+  controllerRef?: MutableRefObject<ChatQueueController | null>;
 }) {
   const { t } = useT("chat");
+  const refusalText = useQueueRefusalText();
   const wsId = useWorkspaceId();
   const qc = useQueryClient();
   const query = useQuery(chatQueueOptions(wsId, sessionId));
@@ -86,9 +112,9 @@ export function ChatQueue({
   const isRunning = !!pendingTaskId;
 
   const steer = useSteerQueuedChatMessage();
-  const remove = useDeleteQueuedChatMessage();
+  const { mutateAsync: deleteQueued } = useDeleteQueuedChatMessage();
   const resume = useResumeChatQueue();
-  const enqueue = useEnqueueChatMessage();
+  const { mutateAsync: enqueue } = useEnqueueChatMessage();
 
   // Rows with a steer, edit or delete in flight, whichever component sent it.
   const sendingIds = useMutationState({
@@ -101,11 +127,14 @@ export function ChatQueue({
   const sending = useMemo(() => new Set(sendingIds.filter((id): id is string => !!id)), [sendingIds]);
 
   // A turn starting or ending can release or pause the queue. Optimistic
-  // placeholders are skipped: only the server's turn identity matters.
+  // placeholders are skipped: only the server's turn identity matters. The
+  // stalled check waits for an answer read after the change.
   const lastTaskRef = useRef(pendingTaskId);
+  const [taskChangedAt, setTaskChangedAt] = useState(0);
   useEffect(() => {
     if (pendingTaskId?.startsWith("optimistic-") || lastTaskRef.current === pendingTaskId) return;
     lastTaskRef.current = pendingTaskId;
+    setTaskChangedAt(Date.now());
     void qc.invalidateQueries({ queryKey: chatKeys.queue(wsId, sessionId) });
   }, [pendingTaskId, qc, wsId, sessionId]);
 
@@ -115,6 +144,8 @@ export function ChatQueue({
   const [unconfirmed, setUnconfirmed] = useState<ReadonlySet<string>>(() => new Set());
   const pendingDeletes = useRef(new Map<string, PendingDelete>());
   const mounted = useRef(true);
+  const sectionRef = useRef<HTMLElement>(null);
+  const previewRefs = useRef(new Map<string, HTMLElement>());
 
   const setMember = (set: ReadonlySet<string>, key: string, present: boolean): ReadonlySet<string> => {
     if (set.has(key) === present) return set;
@@ -124,13 +155,33 @@ export function ChatQueue({
     return next;
   };
 
-  const flushDelete = useCallback((key: string) => {
+  /** Sends a delete now. Its Undo disappears first, so it can never appear to work afterwards. */
+  const flushDelete = useCallback((key: string): Promise<void> => {
     const pending = pendingDeletes.current.get(key);
-    if (!pending) return;
+    if (!pending) return Promise.resolve();
     clearTimeout(pending.timer);
     pendingDeletes.current.delete(key);
-    pending.commit();
+    toast.dismiss(pending.toastId);
+    return pending.commit();
   }, []);
+
+  /**
+   * Settles every delete still behind its undo. The server still holds those
+   * rows as queued, so anything that releases rows (resume, an enqueue on an
+   * idle lane) must wait for it.
+   */
+  const flushDeletes = useCallback(
+    () => Promise.all([...pendingDeletes.current.keys()].map(flushDelete)).then(() => undefined),
+    [flushDelete],
+  );
+
+  useEffect(() => {
+    if (!controllerRef) return;
+    controllerRef.current = { flushDeletes };
+    return () => {
+      if (controllerRef.current?.flushDeletes === flushDeletes) controllerRef.current = null;
+    };
+  }, [controllerRef, flushDeletes]);
 
   // Leaving the chat (unmount or a session switch, which remounts this list)
   // sends every delete still waiting behind its undo toast.
@@ -139,10 +190,7 @@ export function ChatQueue({
     const deletes = pendingDeletes.current;
     return () => {
       mounted.current = false;
-      for (const [key, pending] of [...deletes]) {
-        toast.dismiss(pending.toastId);
-        flushDelete(key);
-      }
+      for (const key of [...deletes.keys()]) void flushDelete(key);
     };
   }, [flushDelete]);
 
@@ -155,30 +203,30 @@ export function ChatQueue({
     for (const item of outbox) {
       if (serverClientIds.has(item.client_id)) useChatStore.getState().removeQueueOutboxItem(sessionId, item.client_id);
     }
-    // A row released (or deleted elsewhere) before its undo ran out needs no DELETE.
-    for (const [key, pending] of [...pendingDeletes.current]) {
-      if (key.startsWith("server:") && !serverIds.has(key.slice("server:".length))) {
-        clearTimeout(pending.timer);
-        toast.dismiss(pending.toastId);
-        pendingDeletes.current.delete(key);
-      }
+    // A row that left the list during its undo was sent at turn end or
+    // deleted elsewhere. Send the DELETE now: a sent row answers 409, which
+    // tells the user; a deleted one answers quietly.
+    for (const key of [...pendingDeletes.current.keys()]) {
+      if (key.startsWith("server:") && !serverIds.has(key.slice("server:".length))) void flushDelete(key);
     }
     setHidden((current) => {
-      const next = [...current].filter((key) => !key.startsWith("server:") || serverIds.has(key.slice("server:".length)));
+      const next = [...current].filter((key) => !key.startsWith("server:") || serverIds.has(key.slice("server:".length))
+        || pendingDeletes.current.has(key));
       return next.length === current.size ? current : new Set(next);
     });
     setUnconfirmed((current) => {
       const next = [...current].filter((id) => serverIds.has(id));
       return next.length === current.size ? current : new Set(next);
     });
-  }, [query.data, outbox, serverIds, serverClientIds, sessionId]);
+  }, [query.data, outbox, serverIds, serverClientIds, sessionId, flushDelete]);
 
   // The row being edited left the queue (the turn released it, or another tab
-  // deleted it): keep the edited text as an ordinary draft.
+  // deleted it): keep the edited text as an ordinary draft. The list cannot
+  // tell which, so the notice names both.
   useEffect(() => {
     if (!queueEdit || !query.isSuccess || query.isFetching || serverIds.has(queueEdit.itemId)) return;
     useChatStore.getState().finishQueueEdit(sessionId, "keep");
-    toast(t(($) => $.queue.consumed));
+    toast(t(($) => $.queue.left_queue));
   }, [queueEdit, query.isSuccess, query.isFetching, serverIds, sessionId, t]);
 
   const rows: Row[] = [
@@ -200,27 +248,36 @@ export function ChatQueue({
   ];
 
   // Rows wait while the lane is idle and nothing paused it: a release was
-  // missed (for example the Chat was archived mid-run). Offer Resume after a
-  // grace period so a turn that just ended can release its rows first.
-  const stalledCandidate = !paused && !isRunning && !query.isFetching
-    && rows.some((row) => row.kind === "server" && row.item.status === "queued");
-  const [stalled, setStalled] = useState(false);
+  // missed (for example the Chat was archived mid-run). After a grace period
+  // the banner offers Resume. It is latched to the rows, the pause and the
+  // turn, so background refetches of the same answer do not reset it.
+  const queuedIds = rows
+    .filter((row) => row.kind === "server" && row.item.status === "queued")
+    .map((row) => row.key)
+    .join(",");
+  const stalledKey = !paused && !isRunning && queuedIds && query.dataUpdatedAt >= taskChangedAt
+    ? `${pendingTaskId ?? ""}|${queuedIds}`
+    : null;
+  const [stalledShownFor, setStalledShownFor] = useState<string | null>(null);
   useEffect(() => {
-    if (!stalledCandidate) {
-      setStalled(false);
-      return;
-    }
-    const timer = setTimeout(() => setStalled(true), QUEUE_STALLED_GRACE_MS);
+    if (!stalledKey) return;
+    const timer = setTimeout(() => setStalledShownFor(stalledKey), QUEUE_STALLED_GRACE_MS);
     return () => clearTimeout(timer);
-  }, [stalledCandidate]);
+  }, [stalledKey]);
+  const stalled = stalledKey !== null && stalledShownFor === stalledKey;
 
-  const failed = () => toast.error(t(($) => $.queue.failed));
-
-  const runResume = () => {
-    resume.mutate({ sessionId }, {
-      onSuccess: (result) => { if (result.released.length) onReleased?.(); },
-      onError: failed,
-    });
+  const [resuming, setResuming] = useState(false);
+  const runResume = async () => {
+    setResuming(true);
+    try {
+      await flushDeletes();
+      const result = await resume.mutateAsync({ sessionId });
+      if (result.released.length) onReleased?.();
+    } catch (error) {
+      toast.error(refusalText(error));
+    } finally {
+      if (mounted.current) setResuming(false);
+    }
   };
 
   const runSteer = (item: QueuedChatMessage) => {
@@ -231,28 +288,32 @@ export function ChatQueue({
         if (isQueueConsumed(error)) toast(t(($) => $.queue.consumed));
         else if (isQueueDeliveryUnconfirmed(error)) setUnconfirmed((current) => setMember(current, item.id, true));
         // A failed release is written into the row (failed, lane paused).
-        else if (!queueErrorItem(error)) failed();
+        else if (!queueErrorItem(error)) toast.error(refusalText(error));
       },
     });
   };
 
+  /** Text the queue cannot keep goes back into the composer, never lost. */
+  const restoreToDraft = (item: ChatQueueOutboxItem) => {
+    useChatStore.getState().restoreToDraft(sessionId, item.body_md, queuedAttachmentBindings(item.body_md, item.attachments));
+  };
+
   const retryEnqueue = (item: ChatQueueOutboxItem) => {
-    enqueue.mutate({
+    enqueue({
       sessionId, body_md: item.body_md, attachment_ids: item.attachment_ids, attachments: item.attachments,
       client_id: item.client_id, created_at: item.created_at,
-    }, {
-      onSuccess: (result) => { if (result.released) onReleased?.(); },
-      // A row deleted elsewhere just leaves the list; other refusals are explained.
-      onError: (error) => {
-        if (!isQueueDeliveryUnconfirmed(error) && queueErrorCode(error) !== "queued_message_deleted") failed();
-      },
+    }).then((result) => { if (result.released) onReleased?.(); }, (error: unknown) => {
+      // Unconfirmed again: the row stays for another try. A row deleted
+      // elsewhere just leaves the list.
+      if (isQueueDeliveryUnconfirmed(error) || queueErrorCode(error) === "queued_message_deleted") return;
+      restoreToDraft(item);
+      toast.error(refusalText(error), { description: t(($) => $.queue.restored_to_draft) });
     });
   };
 
   const startEdit = (row: Row) => {
-    const store = useChatStore.getState();
     if (row.kind === "server") {
-      store.startQueueEdit(sessionId, {
+      useChatStore.getState().startQueueEdit(sessionId, {
         itemId: row.item.id, revision: row.item.revision, body_md: row.item.body_md,
         attachments: queuedAttachmentBindings(row.item.body_md, row.item.attachments),
       });
@@ -260,12 +321,22 @@ export function ChatQueue({
     }
     // Without a server row there is nothing to save to: the text goes back
     // into the composer as an ordinary draft.
-    const current = store.inputDrafts[sessionId]?.trim() ?? "";
-    store.setInputDraft(sessionId, [current, row.item.body_md].filter(Boolean).join("\n\n"));
-    for (const [url, id] of Object.entries(queuedAttachmentBindings(row.item.body_md, row.item.attachments))) {
-      store.setInputDraftAttachment(sessionId, url, id);
-    }
-    store.removeQueueOutboxItem(sessionId, row.item.client_id);
+    restoreToDraft(row.item);
+    useChatStore.getState().removeQueueOutboxItem(sessionId, row.item.client_id);
+  };
+
+  /** Keyboard focus after a row disappears: the next row, the previous one, or the composer. */
+  const focusAfterRemoval = (key: string) => {
+    const index = rows.findIndex((row) => row.key === key);
+    const neighbour = rows[index + 1] ?? rows[index - 1];
+    // Resolved now: the list unmounts once its last row is hidden.
+    let scope: HTMLElement | null | undefined = sectionRef.current?.parentElement;
+    while (scope && !scope.querySelector("[data-chat-composer]")) scope = scope.parentElement;
+    const composer = scope?.querySelector<HTMLElement>("[data-chat-composer] [contenteditable='true']");
+    setTimeout(() => {
+      const target = neighbour ? previewRefs.current.get(neighbour.key) : null;
+      (target ?? composer)?.focus();
+    }, 0);
   };
 
   const scheduleDelete = (row: Row) => {
@@ -275,17 +346,16 @@ export function ChatQueue({
       useChatStore.getState().finishQueueEdit(sessionId, "restore");
     }
     const commit = row.kind === "server"
-      ? () => {
-          remove.mutateAsync({ sessionId, itemId: row.item.id }).catch((error: unknown) => {
-            if (mounted.current) setHidden((current) => setMember(current, key, false));
-            if (isQueueConsumed(error)) toast(t(($) => $.queue.consumed));
-            else failed();
-          });
-        }
-      : () => {
+      ? () => deleteQueued({ sessionId, itemId: row.item.id }).then(() => undefined, (error: unknown) => {
+          if (mounted.current) setHidden((current) => setMember(current, key, false));
+          if (isQueueConsumed(error)) toast(t(($) => $.queue.sent_before_delete));
+          else toast.error(refusalText(error));
+        })
+      : async () => {
           useChatStore.getState().removeQueueOutboxItem(sessionId, row.item.client_id);
           if (mounted.current) setHidden((current) => setMember(current, key, false));
         };
+    focusAfterRemoval(key);
     setHidden((current) => setMember(current, key, true));
     const toastId = toast(t(($) => $.queue.deleted), {
       duration: QUEUE_DELETE_UNDO_MS,
@@ -293,14 +363,17 @@ export function ChatQueue({
         label: t(($) => $.queue.undo),
         onClick: () => {
           const pending = pendingDeletes.current.get(key);
-          if (!pending) return;
+          if (!pending) {
+            toast(t(($) => $.queue.undo_unavailable));
+            return;
+          }
           clearTimeout(pending.timer);
           pendingDeletes.current.delete(key);
           if (mounted.current) setHidden((current) => setMember(current, key, false));
         },
       },
     });
-    const timer = setTimeout(() => flushDelete(key), QUEUE_DELETE_UNDO_MS);
+    const timer = setTimeout(() => void flushDelete(key), QUEUE_DELETE_UNDO_MS);
     pendingDeletes.current.set(key, { timer, toastId, commit });
   };
 
@@ -310,10 +383,12 @@ export function ChatQueue({
     : paused?.reason === "turn_ended" ? t(($) => $.queue.turn_ended)
       : paused && paused.reason !== "send_failed" ? t(($) => $.queue.stalled)
         : stalled ? t(($) => $.queue.stalled) : null;
+  const archivedHint = archived ? t(($) => $.queue.archived) : null;
 
   return (
     <div className="shrink-0 px-5">
       <section
+        ref={sectionRef}
         aria-label={t(($) => $.queue.title)}
         data-chat-queue=""
         className="mx-auto mb-2 max-h-[30dvh] w-full max-w-4xl overflow-y-auto rounded-lg border bg-card text-sm"
@@ -322,9 +397,9 @@ export function ChatQueue({
           <div role="status" className="flex items-center gap-2 border-b px-3 py-1.5 text-xs text-muted-foreground">
             <CirclePause className="size-3.5 shrink-0" aria-hidden="true" />
             <span className="min-w-0 flex-1">{banner}</span>
-            <Button variant="ghost" size="xs" disabled={resume.isPending} onClick={runResume}>
+            <HintedButton hint={archivedHint} disabled={resume.isPending || resuming} onClick={() => void runResume()}>
               {t(($) => $.queue.resume)}
-            </Button>
+            </HintedButton>
           </div>
         )}
         <ul className="divide-y">
@@ -333,15 +408,21 @@ export function ChatQueue({
               key={row.key}
               row={row}
               position={index + 1}
+              archivedHint={archivedHint}
+              previewRef={(element) => {
+                if (element) previewRefs.current.set(row.key, element);
+                else previewRefs.current.delete(row.key);
+              }}
               onSteer={() => row.kind === "server" && runSteer(row.item)}
               onRetry={() => {
                 if (row.kind === "outbox") retryEnqueue(row.item);
                 else if (row.state === "unconfirmed") runSteer(row.item);
-                else runResume();
+                else void runResume();
               }}
               onEdit={() => startEdit(row)}
               onDelete={() => scheduleDelete(row)}
-              editDisabled={row.kind === "outbox" && !!queueEdit}
+              // One edit at a time: opening another would drop unsaved text.
+              editDisabled={!!queueEdit}
             />
           ))}
         </ul>
@@ -350,9 +431,49 @@ export function ChatQueue({
   );
 }
 
+/**
+ * A small action button. With a `hint` (an archived Chat) it stays focusable
+ * but inert and explains why in a tooltip; a disabled button shows none.
+ */
+function HintedButton({
+  hint,
+  disabled,
+  onClick,
+  label,
+  tooltip,
+  children,
+}: {
+  hint: string | null;
+  disabled?: boolean;
+  onClick: () => void;
+  label?: string;
+  tooltip?: string;
+  children: ReactNode;
+}) {
+  const content = hint ?? tooltip;
+  const props = {
+    variant: "ghost" as const,
+    size: "xs" as const,
+    className: cn("shrink-0", hint && "cursor-not-allowed opacity-50"),
+    "aria-label": label,
+    "aria-disabled": hint ? true : undefined,
+    disabled: !hint && disabled,
+    onClick: () => { if (!hint) onClick(); },
+  };
+  if (!content) return <Button {...props}>{children}</Button>;
+  return (
+    <Tooltip>
+      <TooltipTrigger render={<Button {...props} />}>{children}</TooltipTrigger>
+      <TooltipContent side="top" className="block max-w-xs">{content}</TooltipContent>
+    </Tooltip>
+  );
+}
+
 function QueueRow({
   row,
   position,
+  archivedHint,
+  previewRef,
   onSteer,
   onRetry,
   onEdit,
@@ -361,6 +482,8 @@ function QueueRow({
 }: {
   row: Row;
   position: number;
+  archivedHint: string | null;
+  previewRef: (element: HTMLElement | null) => void;
   onSteer: () => void;
   onRetry: () => void;
   onEdit: () => void;
@@ -376,9 +499,8 @@ function QueueRow({
   const warning = state === "failed"
     ? [t(($) => $.queue.paused_tooltip), t(($) => $.queue.paused_remedy)]
     : state === "unconfirmed" ? [t(($) => $.queue.delivery_unconfirmed)] : null;
-  const more = t(($) => $.queue.more);
-  // Editing hands focus to the composer; the menu must not take it back.
-  const editing = useRef(false);
+  // Edit and delete move focus elsewhere; the menu must not take it back.
+  const focusMovesAway = useRef(false);
 
   return (
     <li
@@ -405,7 +527,18 @@ function QueueRow({
         </Tooltip>
       ) : null}
       <Tooltip>
-        <TooltipTrigger delay={QUEUE_PREVIEW_DELAY_MS} render={<span className="min-w-0 flex-1 truncate" />}>
+        <TooltipTrigger
+          delay={QUEUE_PREVIEW_DELAY_MS}
+          // Focusable so keyboard users can open the full text too.
+          render={
+            <span
+              ref={previewRef}
+              tabIndex={0}
+              data-queue-preview=""
+              className="min-w-0 flex-1 truncate rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            />
+          }
+        >
           {preview}
         </TooltipTrigger>
         <TooltipContent side="top" align="start" className="block max-w-md">
@@ -425,26 +558,31 @@ function QueueRow({
         </span>
       )}
       {state === "failed" || state === "unconfirmed" ? (
-        <Button variant="ghost" size="xs" className="shrink-0" onClick={onRetry}>
+        <HintedButton hint={archivedHint} onClick={onRetry} label={t(($) => $.queue.retry_label, { position })}>
           {t(($) => $.queue.retry)}
-        </Button>
+        </HintedButton>
       ) : row.kind === "server" ? (
-        <Tooltip>
-          <TooltipTrigger
-            render={
-              <Button variant="ghost" size="xs" className="shrink-0" disabled={busy || state === "editing"} onClick={onSteer} />
-            }
-          >
-            {t(($) => $.queue.send_now)}
-          </TooltipTrigger>
-          <TooltipContent side="top">{t(($) => $.queue.send_now_tooltip)}</TooltipContent>
-        </Tooltip>
+        <HintedButton
+          hint={archivedHint}
+          disabled={busy || state === "editing"}
+          onClick={onSteer}
+          label={t(($) => $.queue.send_now_label, { position })}
+          tooltip={t(($) => $.queue.send_now_tooltip)}
+        >
+          {t(($) => $.queue.send_now)}
+        </HintedButton>
       ) : null}
       <DropdownMenu>
         <DropdownMenuTrigger
           disabled={busy}
           render={
-            <Button variant="ghost" size="icon-xs" className="shrink-0 text-muted-foreground" aria-label={more} title={more} />
+            <Button
+              variant="ghost"
+              size="icon-xs"
+              className="shrink-0 text-muted-foreground"
+              aria-label={t(($) => $.queue.more_label, { position })}
+              title={t(($) => $.queue.more)}
+            />
           }
         >
           <MoreHorizontal className="size-3.5" />
@@ -453,22 +591,29 @@ function QueueRow({
           align="end"
           className="w-48"
           finalFocus={() => {
-            const keepComposerFocus = editing.current;
-            editing.current = false;
-            return !keepComposerFocus;
+            const moved = focusMovesAway.current;
+            focusMovesAway.current = false;
+            return !moved;
           }}
         >
           <DropdownMenuItem
-            disabled={editDisabled || state === "editing"}
+            disabled={editDisabled}
             onClick={() => {
-              editing.current = true;
+              focusMovesAway.current = true;
               onEdit();
             }}
           >
             <Pencil />
             {t(($) => $.queue.edit)}
           </DropdownMenuItem>
-          <DropdownMenuItem variant="destructive" disabled={busy} onClick={onDelete}>
+          <DropdownMenuItem
+            variant="destructive"
+            disabled={busy}
+            onClick={() => {
+              focusMovesAway.current = true;
+              onDelete();
+            }}
+          >
             <Trash2 />
             {t(($) => $.queue.delete)}
           </DropdownMenuItem>

@@ -124,6 +124,8 @@ export interface EditorExtensionsOptions {
   >;
   /** When true, bare Enter also submits (chat-style). Default false. */
   submitOnEnter?: boolean;
+  /** When true, Mod-Shift-Enter submits with `invert: true`. Default false. */
+  invertibleSubmit?: boolean;
   /**
    * When true, the `@` suggestion picker is not attached. The mention node
    * type is still registered in the schema so any mention pasted in from
@@ -212,7 +214,7 @@ export function createEditorExtensions(
         fn(submit);
         return true;
       },
-      { submitOnEnter: options.submitOnEnter ?? false },
+      { submitOnEnter: options.submitOnEnter ?? false, invertibleSubmit: options.invertibleSubmit ?? false },
     ),
     createBlurShortcutExtension(),
     createFileUploadExtension(options.onUploadFileRef!),

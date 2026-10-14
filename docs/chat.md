@@ -106,17 +106,17 @@ Project 资源列表变化或项目不可用时，已有工作副本保留。
 排队的条目只有原发送人能改：`PATCH .../queue/:qid` 可带 `expected_revision`，`DELETE` 幂等，`POST .../queue/:qid/steer` 立即放行这一条（改为引导，重复调用返回同一条消息）。
 已被轮放行的条目再改或引导返回 409 `queued_message_consumed`，版本不符返回 409 `revision_conflict`，归档的 Chat 入队、引导和继续返回 409。每个 Chat 最多 50 条未放行条目，每条最多 10 个附件。
 
-队列会暂停，暂停期间轮结束也不放行：
+队列会暂停。`interrupted` 与 `send_failed` 期间轮结束也不放行；`turn_ended` 在该 lane 下一次有轮 completed 时自动解除并放行：
 
 | 原因 | 触发 | 解除 |
 |---|---|---|
-| `interrupted` | 成员停止当前轮（`POST /api/turns/:id/cancel`） | `POST .../queue/resume` |
-| `turn_ended` | 轮 failed，或被成员以外的身份取消 | `POST .../queue/resume` |
+| `interrupted` | 成员停止当前轮（`POST /api/turns/:id/cancel`） | 只由 `POST .../queue/resume` 解除，期间轮 completed 也不放行 |
+| `turn_ended` | 轮 failed，或被成员以外的身份（agent、supervisor 等）取消 | 该 lane 任一轮 completed（包括失败轮重试成功、之后的直接发送完成）时自动解除并放行；或 resume |
 | `send_failed` | 放行某条失败；该条标为 failed，后面的条目不越过它 | resume，或编辑、删除、引导该条后不再有 failed 条目 |
 
 resume 清除暂停、把 failed 条目重置为 queued，lane 空闲时全部放行；队列为空时暂停自动清除。
 归档时被取消的轮既不放行也不暂停；恢复后条目保留，resume、下一次入队或下一轮 completed 时放行。`wake=next_turn` 的含义不变，仍不会单独补铃。
-Web 输入框运行中按偏好（设置 →「偏好」→「聊天」，默认引导）发送，⌘↵ 用默认方式，⌘⇧↵ 这一条换用另一种；空闲时都是普通发送。排队的消息显示在输入框上方的队列里，可逐条引导、编辑（载入输入框，保存时带 `expected_revision`）或删除（5 秒内可撤销）；暂停时显示原因和「继续」。没有 HTTP 应答的排队请求标为无法确认送达，不自动重试。前端实现见[前端开发上下文](dev/frontend.md)。
+Web 输入框运行中按偏好（设置 →「偏好」→「聊天」，默认引导）发送，⌘↵ 用默认方式，⌘⇧↵ 这一条换用另一种；空闲时都是普通发送。排队的消息显示在输入框上方的队列里，可逐条引导、编辑（载入输入框，保存时带 `expected_revision`）或删除（5 秒内可撤销）；暂停时显示原因和「继续」。没有 API 应答（网络错误、超时或网关 408/502/503/504）的排队请求标为无法确认送达，不自动重试。前端实现见[前端开发上下文](dev/frontend.md)。
 
 收尾用 turn wrap-up，取消用 turn cancel，重试在同一轮新增 attempt。取消不撤销已执行的工具操作。
 输入框在发送失败时保留草稿，删除失败时保持会话选择。

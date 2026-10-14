@@ -244,6 +244,9 @@
     "edit": "Edit message",
     "delete": "Delete queued message",
     "more": "Queued message actions",
+    "send_now_label": "Steer queued message {{position}}",
+    "retry_label": "Retry queued message {{position}}",
+    "more_label": "Actions for queued message {{position}}",
     "sending": "Sending",
     "editing": "Editing",
     "retry": "Retry",
@@ -261,7 +264,14 @@
     "undo": "Undo",
     "consumed": "This message was already sent and can no longer be changed",
     "changed": "This queued message changed elsewhere. Your edit stays in the input.",
-    "failed": "Could not update the queue. Please try again."
+    "failed": "Could not update the queue. Please try again.",
+    "deleted_elsewhere": "This queued message was deleted. Your edit stays in the input.",
+    "left_queue": "This queued message was sent or deleted. Your edit stays in the input.",
+    "sent_before_delete": "This message was already sent before it could be deleted",
+    "undo_unavailable": "Already deleted; it can no longer be undone",
+    "archived": "This chat is archived. Restore it to send queued messages.",
+    "full": "The queue is full ({{max}} messages). Steer or delete queued messages first.",
+    "restored_to_draft": "This message could not be queued. Its text is back in the input."
   },
   "project": {
     "label": "Project",

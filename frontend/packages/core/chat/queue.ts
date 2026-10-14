@@ -1,6 +1,9 @@
 import type { QueuedMessageErrorCode } from "@multiremi/contracts/queued-message";
+
+/** Live rows one Chat queue may hold. */
+export { QUEUE_MAX_LIVE_ITEMS } from "@multiremi/contracts/queued-message";
 import { ApiError } from "../api/http";
-import type { ChatQueue, QueuedChatMessage, QueuedMessageAttachment } from "../api/schemas/chat-queue";
+import { QueueErrorBodySchema, type ChatQueue, type QueuedChatMessage, type QueuedMessageAttachment } from "../api/schemas/chat-queue";
 
 export type { ChatQueue, ChatQueuePause, QueuedChatMessage, QueuedMessageAttachment } from "../api/schemas/chat-queue";
 
@@ -12,17 +15,24 @@ export function isLiveQueueStatus(status: string): boolean {
 /** The `code` of a queue route's `{error, code}` body, if the server answered. */
 export function queueErrorCode(error: unknown): QueuedMessageErrorCode | (string & {}) | null {
   if (!(error instanceof ApiError)) return null;
-  const code = (error.body as { code?: unknown } | undefined)?.code;
-  return typeof code === "string" ? code : null;
+  const parsed = QueueErrorBodySchema.safeParse(error.body);
+  return parsed.success ? parsed.data.code : null;
 }
 
 /**
- * A command that failed without an HTTP status (network error, timeout, an
- * unreadable answer) may or may not have been applied. Every queue command is
- * idempotent, so a retry is safe — but it is never automatic.
+ * Gateway and timeout answers come from in front of the API: the command may
+ * have been applied behind them.
+ */
+const UNCONFIRMED_STATUSES = new Set([408, 502, 503, 504]);
+
+/**
+ * A command that failed without an answer from the API (network error,
+ * timeout, a gateway status, an unreadable answer) may or may not have been
+ * applied. Every queue command is idempotent, so a retry is safe — but it is
+ * never automatic. Any other status is a refusal.
  */
 export function isQueueDeliveryUnconfirmed(error: unknown): boolean {
-  return !(error instanceof ApiError);
+  return !(error instanceof ApiError) || UNCONFIRMED_STATUSES.has(error.status);
 }
 
 /** The row was already released (sent) and can no longer change. */
@@ -32,10 +42,9 @@ export function isQueueConsumed(error: unknown): boolean {
 
 /** A failed steer answers 409 with the failed row; the lane is paused. */
 export function queueErrorItem(error: unknown): QueuedChatMessage | null {
-  if (!(error instanceof ApiError) || queueErrorCode(error) !== "queued_message_send_failed") return null;
-  const item = (error.body as { item?: unknown } | undefined)?.item;
-  return item && typeof item === "object" && typeof (item as { id?: unknown }).id === "string"
-    ? item as QueuedChatMessage : null;
+  if (!(error instanceof ApiError)) return null;
+  const parsed = QueueErrorBodySchema.safeParse(error.body);
+  return parsed.success && parsed.data.code === "queued_message_send_failed" ? parsed.data.item ?? null : null;
 }
 
 /** Writes a command's row into the cached queue, or drops it once it left. */

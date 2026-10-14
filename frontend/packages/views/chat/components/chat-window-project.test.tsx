@@ -99,7 +99,11 @@ vi.mock("./chat-message-list", () => ({ ChatMessageList: () => null, ChatMessage
 vi.mock("./human-request-dock", () => ({ HumanRequestDock: () => null }));
 vi.mock("./offline-banner", () => ({ OfflineBanner: () => null }));
 vi.mock("./no-agent-banner", () => ({ NoAgentBanner: () => null }));
-vi.mock("./chat-queue", () => ({ ChatQueue: () => null }));
+const queueFlush = vi.hoisted(() => vi.fn(async () => {}));
+vi.mock("./chat-queue", () => ({ ChatQueue: ({ controllerRef }: { controllerRef?: { current: unknown } }) => {
+  if (controllerRef) controllerRef.current = { flushDeletes: queueFlush };
+  return null;
+} }));
 vi.mock("./chat-empty-state", () => ({ EmptyState: () => null }));
 vi.mock("./agent-dropdown", () => ({ AgentDropdown: () => null }));
 vi.mock("./session-dropdown", () => ({ SessionDropdown: () => <div data-testid="session-dropdown" /> }));
@@ -219,6 +223,7 @@ beforeEach(() => {
   backend.cancel.mockReset().mockResolvedValue(undefined);
   sent.mockReset();
   toast.mockReset();
+  queueFlush.mockClear();
 });
 
 describe("ChatWindow automatic read", () => {
@@ -585,6 +590,8 @@ describe("ChatWindow follow-up delivery", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Queue test message" }));
     await waitFor(() => expect(sent).toHaveBeenCalledWith("resolved"));
     expect(backend.enqueue).toHaveBeenCalledWith("chat-a", { body_md: "Queue this", attachment_ids: ["att-1"], client_id: expect.any(String) });
+    // Deletes still behind their undo go out first: an idle lane releases every queued row.
+    expect(queueFlush.mock.invocationCallOrder[0]).toBeLessThan(backend.enqueue.mock.invocationCallOrder[0]!);
     expect(backend.send).not.toHaveBeenCalled();
     expect(backend.refresh).not.toHaveBeenCalled();
     expect(store.getState().queueOutbox).toEqual({});
@@ -633,12 +640,24 @@ describe("ChatWindow follow-up delivery", () => {
     await waitFor(() => expect(sent).toHaveBeenCalledWith("save rejected"));
     expect(store.getState().queueEdit["chat-a"]).toBeDefined();
     backend.updateQueued.mockRejectedValueOnce(new ApiError("sent", 409, "Conflict", { error: "sent", code: "queued_message_consumed" }));
-    act(() => store.getState().setInputDraft("chat-a", "Edited"));
+    // The stored draft lags the editor by its debounce; the submitted text wins.
+    act(() => store.getState().setInputDraft("chat-a", "Edit"));
     fireEvent.click(screen.getByRole("button", { name: "Save queued edit" }));
     await waitFor(() => expect(sent).toHaveBeenCalledWith("saved"));
     expect(store.getState().queueEdit).toEqual({});
     expect(store.getState().inputDrafts["chat-a"]).toBe("Edited");
     expect(toast).toHaveBeenCalledWith("This message was already sent and can no longer be changed");
+  });
+
+  it("says a row deleted elsewhere was deleted, not sent", async () => {
+    backend.sessions = [session];
+    const { store } = mount(true);
+    act(() => store.getState().startQueueEdit("chat-a", { itemId: "qmsg_1", revision: 3, body_md: "Queue this", attachments: {} }));
+    backend.updateQueued.mockRejectedValueOnce(new ApiError("gone", 404, "Not Found", { error: "gone", code: "queued_message_not_found" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save queued edit" }));
+    await waitFor(() => expect(sent).toHaveBeenCalledWith("saved"));
+    expect(store.getState().queueEdit).toEqual({});
+    expect(toast).toHaveBeenCalledWith("This queued message was deleted. Your edit stays in the input.");
   });
 
   it("refreshes the queue after a stop, which pauses it", async () => {

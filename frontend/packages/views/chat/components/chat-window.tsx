@@ -86,7 +86,7 @@ import { useWorkspacePaths } from "@multiremi/core/paths";
 import { getCurrentWsId } from "@multiremi/core/platform";
 import { createSafeId } from "@multiremi/core/utils";
 import { useFloatingPanelLayout } from "../../layout/floating-panel-layout";
-import { ChatQueue } from "./chat-queue";
+import { ChatQueue, type ChatQueueController } from "./chat-queue";
 
 const uiLogger = createLogger("chat.ui");
 const apiLogger = createLogger("chat.api");
@@ -277,6 +277,7 @@ export function ChatWindow({
   const updateSession = useUpdateChatSession();
   const { mutateAsync: enqueueMessage } = useEnqueueChatMessage();
   const { mutateAsync: updateQueuedMessage } = useUpdateQueuedChatMessage();
+  const queueController = useRef<ChatQueueController | null>(null);
   const [actionError, setActionError] = useState(false);
 
   const currentMember = members.find((m) => m.user_id === user?.id);
@@ -449,6 +450,9 @@ export function ChatWindow({
     if (!sessionId || getCurrentWsId() !== wsId) throw new Error("Chat workspace changed");
     if (mode === "queue") {
       // Queued (排队): the row waits outside the log until this turn completes.
+      // An enqueue on an idle lane releases every queued row, so deletes still
+      // behind their undo are sent first.
+      await queueController.current?.flushDeletes();
       try {
         const result = await enqueueMessage({
           sessionId, body_md: content, attachment_ids: attachmentIds, client_id: createSafeId(),
@@ -492,10 +496,15 @@ export function ChatWindow({
       }
     } catch (error) {
       const code = queueErrorCode(error);
-      if (code !== "queued_message_consumed" && code !== "revision_conflict" && code !== "queued_message_not_found") throw error;
+      const notice = code === "revision_conflict" ? t(($) => $.queue.changed)
+        : code === "queued_message_consumed" ? t(($) => $.queue.consumed)
+          : code === "queued_message_not_found" || code === "queued_message_deleted" ? t(($) => $.queue.deleted_elsewhere)
+            : null;
+      if (!notice) throw error;
       if (useChatStore.getState().queueEdit[sessionId]?.itemId !== edit.itemId) return;
-      useChatStore.getState().finishQueueEdit(sessionId, "keep");
-      toast(code === "revision_conflict" ? t(($) => $.queue.changed) : t(($) => $.queue.consumed));
+      // The submitted text, not the debounced stored draft, so no keystroke is lost.
+      useChatStore.getState().finishQueueEdit(sessionId, "keep", content);
+      toast(notice);
     }
   }, [updateQueuedMessage, t]);
 
@@ -858,7 +867,9 @@ export function ChatWindow({
           key={`${wsId}:${activeSessionId}:${currentSession.agent_id}`}
           sessionId={activeSessionId}
           pendingTaskId={pendingTaskId}
+          archived={isSessionArchived}
           onReleased={() => refreshSession(activeSessionId)}
+          controllerRef={queueController}
         />
       )}
       {actionError && (

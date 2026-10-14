@@ -583,6 +583,20 @@ describe("ChatInput follow-up modes", () => {
     // Only the Mod shortcuts submit; the extension also ignores them while composing.
     expect(editorProps.last?.submitOnEnter).toBeUndefined();
     expect(typeof editorProps.last?.onSubmit).toBe("function");
+    // Chat opts in to Mod-Shift-Enter; other editors leave it unbound.
+    expect(editorProps.last?.invertibleSubmit).toBe(true);
+  });
+
+  it.each([
+    ["queue_full", "The queue is full (50 messages). Steer or delete queued messages first."],
+    ["chat_archived", "This chat is archived. Restore it to send queued messages."],
+  ])("explains a %s refusal and keeps the draft", async (code, copy) => {
+    const onSend = vi.fn().mockRejectedValue(new ApiError(code, code === "queue_full" ? 400 : 409, "x", { error: code, code }));
+    renderInput({ onSend, isRunning: true });
+    fireEvent.change(screen.getByTestId("editor"), { target: { value: "One more" } });
+    pressSubmitShortcut(true);
+    expect(await screen.findByRole("alert")).toHaveTextContent(copy);
+    expect(onSend).toHaveBeenCalledWith("One more", undefined, [], "queue");
   });
 });
 
@@ -623,6 +637,15 @@ describe("ChatInput queued-message edit", () => {
     useChatStore.getState().queueEdit["session-1"] = edit;
     fireEvent.keyDown(screen.getByTestId("editor"), { key: "Escape" });
     expect(useChatStore.getState().finishQueueEdit).toHaveBeenCalledTimes(2);
+  });
+
+  it("stops Esc at the composer so the editor's blur shortcut does not run", () => {
+    editing();
+    const editorKeydown = vi.fn();
+    screen.getByTestId("editor").addEventListener("keydown", editorKeydown);
+    fireEvent.keyDown(screen.getByTestId("editor"), { key: "Escape" });
+    expect(useChatStore.getState().finishQueueEdit).toHaveBeenCalledWith("session-1", "restore");
+    expect(editorKeydown).not.toHaveBeenCalled();
   });
 
   it("keeps Esc for an IME composition or an open suggestion", () => {

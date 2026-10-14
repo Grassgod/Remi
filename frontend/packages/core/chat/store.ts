@@ -236,12 +236,26 @@ export interface ChatState {
   /**
    * `restore` puts the stashed draft back (save or cancel). `keep` leaves the
    * edited text as an ordinary draft, followed by the stashed one, when the
-   * row can no longer be saved.
+   * row can no longer be saved. `keptText` is the text the user submitted;
+   * without it the (debounced) stored draft is kept.
    */
-  finishQueueEdit: (sessionId: string, outcome: "restore" | "keep") => void;
+  finishQueueEdit: (sessionId: string, outcome: "restore" | "keep", keptText?: string) => void;
   /** Adds or replaces the outbox item with the same `client_id`. */
   putQueueOutboxItem: (sessionId: string, item: ChatQueueOutboxItem) => void;
-  removeQueueOutboxItem: (sessionId: string, clientId: string) => void;
+  /**
+   * `workspaceSlug` names the workspace the enqueue started in; when the user
+   * has switched since, the item is removed from that workspace's stored
+   * outbox instead of the current one.
+   */
+  removeQueueOutboxItem: (sessionId: string, clientId: string, workspaceSlug?: string | null) => void;
+  /** Drops the queued-message edit and outbox of a deleted session. */
+  clearQueueState: (sessionId: string) => void;
+  /**
+   * Appends text the queue could not keep to the session's draft, with its
+   * attachment bindings. During a queued-message edit it joins the stashed
+   * draft instead, so the edit being saved does not pick it up.
+   */
+  restoreToDraft: (sessionId: string, body: string, attachments: Record<string, string>) => void;
 }
 
 export interface ChatStoreOptions {
@@ -385,14 +399,14 @@ export function createChatStore(options: ChatStoreOptions) {
       writeDraftAttachments(storage, wsKey(DRAFT_ATTACHMENTS_KEY), inputDraftAttachments);
       set({ queueEdit, inputDrafts, inputDraftAttachments });
     },
-    finishQueueEdit: (sessionId, outcome) => {
+    finishQueueEdit: (sessionId, outcome, keptText) => {
       const state = get();
       const edit = state.queueEdit[sessionId];
       if (!edit) return;
       const queueEdit = { ...state.queueEdit };
       delete queueEdit[sessionId];
       const { draft, attachments } = edit.stash;
-      const current = state.inputDrafts[sessionId] ?? "";
+      const current = keptText ?? state.inputDrafts[sessionId] ?? "";
       const nextDraft = outcome === "restore" ? draft
         : [current.trim(), draft.trim()].filter(Boolean).join("\n\n");
       const nextAttachments = outcome === "restore" ? attachments
@@ -415,7 +429,17 @@ export function createChatStore(options: ChatStoreOptions) {
       writeJsonRecord(storage, wsKey(QUEUE_OUTBOX_KEY), queueOutbox);
       set({ queueOutbox });
     },
-    removeQueueOutboxItem: (sessionId, clientId) => {
+    removeQueueOutboxItem: (sessionId, clientId, workspaceSlug) => {
+      if (workspaceSlug !== undefined && workspaceSlug !== getCurrentSlug()) {
+        const key = workspaceSlug ? `${QUEUE_OUTBOX_KEY}:${workspaceSlug}` : QUEUE_OUTBOX_KEY;
+        const stored = readQueueOutbox(storage, key);
+        const items = (stored[sessionId] ?? []).filter((entry) => entry.client_id !== clientId);
+        if (items.length === (stored[sessionId]?.length ?? 0)) return;
+        if (items.length) stored[sessionId] = items;
+        else delete stored[sessionId];
+        writeJsonRecord(storage, key, stored);
+        return;
+      }
       const current = get().queueOutbox;
       if (!current[sessionId]?.some((entry) => entry.client_id === clientId)) return;
       const items = current[sessionId]!.filter((entry) => entry.client_id !== clientId);
@@ -424,6 +448,37 @@ export function createChatStore(options: ChatStoreOptions) {
       else delete queueOutbox[sessionId];
       writeJsonRecord(storage, wsKey(QUEUE_OUTBOX_KEY), queueOutbox);
       set({ queueOutbox });
+    },
+    restoreToDraft: (sessionId, body, attachments) => {
+      const state = get();
+      const join = (draft: string) => [draft.trim(), body].filter(Boolean).join("\n\n");
+      const edit = state.queueEdit[sessionId];
+      if (edit) {
+        const queueEdit = { ...state.queueEdit, [sessionId]: { ...edit, stash: {
+          draft: join(edit.stash.draft), attachments: { ...edit.stash.attachments, ...attachments },
+        } } };
+        writeJsonRecord(storage, wsKey(QUEUE_EDIT_KEY), queueEdit);
+        set({ queueEdit });
+        return;
+      }
+      const inputDrafts = { ...state.inputDrafts, [sessionId]: join(state.inputDrafts[sessionId] ?? "") };
+      const merged = { ...state.inputDraftAttachments[sessionId], ...attachments };
+      const inputDraftAttachments = { ...state.inputDraftAttachments };
+      if (Object.keys(merged).length) inputDraftAttachments[sessionId] = merged;
+      writeDrafts(storage, wsKey(DRAFTS_KEY), inputDrafts);
+      writeDraftAttachments(storage, wsKey(DRAFT_ATTACHMENTS_KEY), inputDraftAttachments);
+      set({ inputDrafts, inputDraftAttachments });
+    },
+    clearQueueState: (sessionId) => {
+      const state = get();
+      if (!(sessionId in state.queueEdit) && !(sessionId in state.queueOutbox)) return;
+      const queueEdit = { ...state.queueEdit };
+      const queueOutbox = { ...state.queueOutbox };
+      delete queueEdit[sessionId];
+      delete queueOutbox[sessionId];
+      writeJsonRecord(storage, wsKey(QUEUE_EDIT_KEY), queueEdit);
+      writeJsonRecord(storage, wsKey(QUEUE_OUTBOX_KEY), queueOutbox);
+      set({ queueEdit, queueOutbox });
     },
   }));
 

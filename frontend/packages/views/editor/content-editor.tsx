@@ -82,7 +82,7 @@ interface ContentEditorProps {
   placeholder?: string;
   className?: string;
   debounceMs?: number;
-  /** Mod-Enter submits with `invert: false`, Mod-Shift-Enter with `invert: true`. */
+  /** Mod-Enter submits with `invert: false`; see `invertibleSubmit`. */
   onSubmit?: (options: SubmitOptions) => void;
   onBlur?: () => void;
   onUploadFile?: (file: File) => Promise<UploadResult | null>;
@@ -90,6 +90,11 @@ interface ContentEditorProps {
   showBubbleMenu?: boolean;
   /** When true, bare Enter submits (chat-style). Mod-Enter always submits. */
   submitOnEnter?: boolean;
+  /**
+   * When true, Mod-Shift-Enter submits with `invert: true` (Chat's other
+   * follow-up mode). Other editors leave the key unbound. Defaults false.
+   */
+  invertibleSubmit?: boolean;
   /**
    * ID of the issue this editor belongs to. When set, the bubble menu exposes
    * a "Create sub-issue from selection" action that parents the new issue
@@ -153,6 +158,7 @@ const ContentEditor = forwardRef<ContentEditorRef, ContentEditorProps>(
       onUploadFile,
       showBubbleMenu = true,
       submitOnEnter = false,
+      invertibleSubmit = false,
       currentIssueId,
       disableMentions = false,
       mentionMode = "default",
@@ -229,6 +235,7 @@ const ContentEditor = forwardRef<ContentEditorRef, ContentEditorProps>(
         onSubmitRef,
         onUploadFileRef,
         submitOnEnter,
+        invertibleSubmit,
         disableMentions,
         mentionMode,
         getMentionContextItems: () => mentionContextItemsRef.current,

@@ -6,7 +6,7 @@ import { issueKeys } from "../../issues/queries";
 import { applyChatDoneToCache, createChatHandlers } from "./chat";
 
 vi.mock("../../platform/workspace-storage", () => ({ getCurrentWsId: () => "ws-1" }));
-const store = vi.hoisted(() => ({ setActiveSession: vi.fn(), clearInputDraft: vi.fn() }));
+const store = vi.hoisted(() => ({ setActiveSession: vi.fn(), clearInputDraft: vi.fn(), clearQueueState: vi.fn() }));
 vi.mock("../../chat", () => ({ useChatStore: { getState: () => ({ activeSessionId: "chat-1", ...store }) } }));
 
 const session: ChatSession = {
@@ -193,6 +193,7 @@ describe("chat queue realtime", () => {
     expect(qc.getQueryData(chatKeys.session("ws-1", "chat-1"))).toBeUndefined();
     expect(qc.getQueryData(chatKeys.sessionList("ws-1", "active"))).toEqual([]);
     expect(store.clearInputDraft).toHaveBeenCalledWith("chat-1");
+    expect(store.clearQueueState).toHaveBeenCalledWith("chat-1");
     expect(store.setActiveSession).toHaveBeenCalledWith(null);
   });
 });

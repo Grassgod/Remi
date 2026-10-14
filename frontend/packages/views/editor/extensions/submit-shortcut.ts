@@ -14,9 +14,10 @@ export interface SubmitOptions {
  * when there's no submit handler wired up. That lets us fall through to the
  * default Enter behaviour — inserting a newline — when appropriate.
  *
- * `Mod-Enter` submits; `Mod-Shift-Enter` submits with `invert: true`.
- * `submitOnEnter` — when true, bare Enter also submits (chat-style). When
- * false, bare Enter keeps its default (newline).
+ * `Mod-Enter` submits. `invertibleSubmit` also binds `Mod-Shift-Enter` to
+ * submit with `invert: true`; editors without a second mode leave that key
+ * unbound, as before. `submitOnEnter` — when true, bare Enter also submits
+ * (chat-style). When false, bare Enter keeps its default (newline).
  *
  * No shortcut submits while an IME composition is open: `view.composing` is
  * set by ProseMirror between compositionstart and compositionend, so the
@@ -24,7 +25,7 @@ export interface SubmitOptions {
  */
 export function createSubmitExtension(
   onSubmit: (options: SubmitOptions) => boolean,
-  { submitOnEnter }: { submitOnEnter: boolean },
+  { submitOnEnter, invertibleSubmit = false }: { submitOnEnter: boolean; invertibleSubmit?: boolean },
 ) {
   return Extension.create({
     name: "submitShortcut",
@@ -33,10 +34,8 @@ export function createSubmitExtension(
         if (this.editor.view.composing) return false;
         return onSubmit({ invert });
       };
-      const shortcuts: Record<string, () => boolean> = {
-        "Mod-Enter": submit(false),
-        "Mod-Shift-Enter": submit(true),
-      };
+      const shortcuts: Record<string, () => boolean> = { "Mod-Enter": submit(false) };
+      if (invertibleSubmit) shortcuts["Mod-Shift-Enter"] = submit(true);
       if (submitOnEnter) {
         shortcuts.Enter = () => {
           const editor = this.editor;

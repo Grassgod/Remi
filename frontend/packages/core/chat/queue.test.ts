@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { QueuedChatMessage } from "../api/schemas/chat-queue";
-import { applyQueueItem, queuedAttachmentBindings, queuePreviewText, truncatePreview } from "./queue";
+import { ApiError } from "../api/http";
+import { applyQueueItem, isQueueDeliveryUnconfirmed, queueErrorItem, queuedAttachmentBindings, queuePreviewText, truncatePreview } from "./queue";
 
 const row = (fields: Partial<QueuedChatMessage> = {}): QueuedChatMessage => ({
   id: "qmsg_1", session_id: "chat-1", body_md: "Next", attachments: [], client_id: "client-1", status: "queued",
@@ -44,5 +45,20 @@ describe("applying a command's row to the cached queue", () => {
     expect(applyQueueItem(queue, row({ status: "released" }))?.items).toEqual([]);
     expect(applyQueueItem(queue, row({ status: "deleted" }))?.items).toEqual([]);
     expect(applyQueueItem(undefined, row())).toBeUndefined();
+  });
+});
+
+describe("queue error classification", () => {
+  it("treats gateway and timeout answers as unconfirmed and other statuses as refusals", () => {
+    for (const status of [408, 502, 503, 504]) expect(isQueueDeliveryUnconfirmed(new ApiError("x", status, "x"))).toBe(true);
+    for (const status of [400, 403, 404, 409, 500]) expect(isQueueDeliveryUnconfirmed(new ApiError("x", status, "x"))).toBe(false);
+    expect(isQueueDeliveryUnconfirmed(new TypeError("Failed to fetch"))).toBe(true);
+  });
+
+  it("uses only a failed row that parses", () => {
+    const body = (item: unknown) => new ApiError("send failed", 409, "Conflict", { error: "send failed", code: "queued_message_send_failed", item });
+    expect(queueErrorItem(body(row({ status: "failed" })))).toMatchObject({ id: "qmsg_1", status: "failed" });
+    expect(queueErrorItem(body({ id: "qmsg_1" }))).toBeNull();
+    expect(queueErrorItem(new ApiError("sent", 409, "Conflict", { error: "sent", code: "queued_message_consumed", item: row() }))).toBeNull();
   });
 });

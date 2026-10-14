@@ -330,6 +330,7 @@ export function createChatHandlers({ qc }: SyncContext): SyncModule {
 
         const chatState = useChatStore.getState?.();
         chatState?.clearInputDraft(payload.chat_session_id);
+        chatState?.clearQueueState(payload.chat_session_id);
         if (chatState && chatState.activeSessionId === payload.chat_session_id) {
           chatState.setActiveSession(null);
         }

@@ -38,10 +38,18 @@ describe("createSubmitExtension", () => {
     expect(onSubmit).toHaveBeenCalledWith({ invert: false });
   });
 
+  it("leaves Mod-Shift-Enter unbound unless the editor has an inverted mode", () => {
+    const shortcuts = getShortcuts(
+      createSubmitExtension(vi.fn(() => true), { submitOnEnter: false }),
+      baseEditor,
+    );
+    expect(shortcuts["Mod-Shift-Enter"]).toBeUndefined();
+  });
+
   it("Mod-Shift-Enter submits in the inverted mode", () => {
     const onSubmit = vi.fn(() => true);
     const shortcuts = getShortcuts(
-      createSubmitExtension(onSubmit, { submitOnEnter: false }),
+      createSubmitExtension(onSubmit, { submitOnEnter: false, invertibleSubmit: true }),
       baseEditor,
     );
 
@@ -51,7 +59,7 @@ describe("createSubmitExtension", () => {
 
   it("returns false when no submit handler is wired so the key falls through", () => {
     const shortcuts = getShortcuts(
-      createSubmitExtension(() => false, { submitOnEnter: false }),
+      createSubmitExtension(() => false, { submitOnEnter: false, invertibleSubmit: true }),
       baseEditor,
     );
 
@@ -62,7 +70,7 @@ describe("createSubmitExtension", () => {
   it.each(["Mod-Enter", "Mod-Shift-Enter"])("%s is suppressed during IME composition", (key) => {
     const onSubmit = vi.fn(() => true);
     const shortcuts = getShortcuts(
-      createSubmitExtension(onSubmit, { submitOnEnter: false }),
+      createSubmitExtension(onSubmit, { submitOnEnter: false, invertibleSubmit: true }),
       {
         view: { composing: true } as unknown as Editor["view"],
         isActive: () => false,
@@ -136,7 +144,7 @@ describe("createSubmitExtension in a real editor", () => {
     document.body.appendChild(element);
     const editor = new Editor({
       element,
-      extensions: [Document, Paragraph, Text, createSubmitExtension(onSubmit, { submitOnEnter: false })],
+      extensions: [Document, Paragraph, Text, createSubmitExtension(onSubmit, { submitOnEnter: false, invertibleSubmit: true })],
       content: "<p>hello</p>",
     });
     const press = (init: KeyboardEventInit) => {

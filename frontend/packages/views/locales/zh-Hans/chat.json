@@ -240,6 +240,9 @@
     "edit": "编辑消息",
     "delete": "删除排队的消息",
     "more": "排队消息操作",
+    "send_now_label": "引导排队消息 {{position}}",
+    "retry_label": "重试排队消息 {{position}}",
+    "more_label": "排队消息 {{position}} 的操作",
     "sending": "正在发送",
     "editing": "正在编辑",
     "retry": "重试",
@@ -256,7 +259,14 @@
     "undo": "撤销",
     "consumed": "这条消息已发送，无法再修改",
     "changed": "这条排队消息已在别处修改，你的编辑保留在输入框中。",
-    "failed": "更新队列失败，请重试。"
+    "failed": "更新队列失败，请重试。",
+    "deleted_elsewhere": "这条排队消息已被删除，你的编辑保留在输入框中。",
+    "left_queue": "这条排队消息已发送或已删除，你的编辑保留在输入框中。",
+    "sent_before_delete": "这条消息在删除前已经发送",
+    "undo_unavailable": "已经删除，无法撤销",
+    "archived": "此会话已归档，恢复后才能发送排队的消息。",
+    "full": "队列已满（最多 {{max}} 条），请先引导或删除已有的排队消息。",
+    "restored_to_draft": "这条消息无法排队，内容已放回输入框。"
   },
   "project": {
     "label": "项目",

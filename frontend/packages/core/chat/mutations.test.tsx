@@ -14,17 +14,17 @@ import {
 
 const mock = vi.hoisted(() => ({
   wsId: "ws-1", deleteChatSession: vi.fn(), updateChatSession: vi.fn(), markChatSessionRead: vi.fn(),
-  setActiveSession: vi.fn(), clearInputDraft: vi.fn(),
+  setActiveSession: vi.fn(), clearInputDraft: vi.fn(), clearQueueState: vi.fn(), slug: "acme" as string | null,
   enqueueChatMessage: vi.fn(), updateQueuedChatMessage: vi.fn(), deleteQueuedChatMessage: vi.fn(),
   steerQueuedChatMessage: vi.fn(), resumeChatQueue: vi.fn(),
   putQueueOutboxItem: vi.fn(), removeQueueOutboxItem: vi.fn(),
 }));
 vi.mock("../api", () => ({ api: mock }));
 vi.mock("../hooks", () => ({ useWorkspaceId: () => mock.wsId }));
-vi.mock("../platform/workspace-storage", () => ({ getCurrentWsId: () => mock.wsId }));
+vi.mock("../platform/workspace-storage", () => ({ getCurrentWsId: () => mock.wsId, getCurrentSlug: () => mock.slug }));
 vi.mock("./index", () => ({ useChatStore: { getState: () => ({
   activeSessionId: "chat-1", inputDrafts: { "chat-1": "unsent draft" },
-  setActiveSession: mock.setActiveSession, clearInputDraft: mock.clearInputDraft,
+  setActiveSession: mock.setActiveSession, clearInputDraft: mock.clearInputDraft, clearQueueState: mock.clearQueueState,
   putQueueOutboxItem: mock.putQueueOutboxItem, removeQueueOutboxItem: mock.removeQueueOutboxItem,
 }) } }));
 
@@ -41,6 +41,7 @@ function wrapper({ children }: { children: ReactNode }) {
 beforeEach(() => {
   vi.clearAllMocks();
   mock.wsId = "ws-1";
+  mock.slug = "acme";
   qc = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
   qc.setQueryData(chatKeys.sessions("ws-1"), [session]);
   qc.setQueryData(chatKeys.sessionList("ws-1", "active"), [session]);
@@ -91,6 +92,7 @@ describe("chat session mutations", () => {
     expect(qc.getQueryData(chatKeys.session("ws-1", "chat-1"))).toBeUndefined();
     expect(mock.setActiveSession).toHaveBeenCalledWith(null);
     expect(mock.clearInputDraft).toHaveBeenCalledWith("chat-1");
+    expect(mock.clearQueueState).toHaveBeenCalledWith("chat-1");
   });
 
   it("keeps the originating workspace when navigation occurs during an update", async () => {
@@ -153,7 +155,7 @@ describe("chat follow-up queue mutations", () => {
     expect(mock.enqueueChatMessage).toHaveBeenCalledWith("chat-1", { body_md: "Next", attachment_ids: undefined, client_id: "client-1" });
     await act(async () => { resolve({ item: queued(), released: null }); await pending; });
     expect(qc.getQueryData<ChatQueue>(chatKeys.queue("ws-1", "chat-1"))?.items).toEqual([queued()]);
-    expect(mock.removeQueueOutboxItem).toHaveBeenCalledWith("chat-1", "client-1");
+    expect(mock.removeQueueOutboxItem).toHaveBeenCalledWith("chat-1", "client-1", "acme");
   });
 
   it("refreshes the running state when an idle lane releases the row at once", async () => {
@@ -170,7 +172,7 @@ describe("chat follow-up queue mutations", () => {
     mock.enqueueChatMessage.mockRejectedValueOnce(new ApiError("full", 400, "Bad Request", { error: "full", code: "queue_full" }));
     const { result } = renderHook(() => useEnqueueChatMessage(), { wrapper });
     await act(async () => { await expect(result.current.mutateAsync(enqueueVars)).rejects.toBeInstanceOf(ApiError); });
-    expect(mock.removeQueueOutboxItem).toHaveBeenCalledWith("chat-1", "client-1");
+    expect(mock.removeQueueOutboxItem).toHaveBeenCalledWith("chat-1", "client-1", "acme");
     mock.removeQueueOutboxItem.mockClear();
     mock.enqueueChatMessage.mockRejectedValueOnce(new TypeError("Failed to fetch"));
     await act(async () => { await expect(result.current.mutateAsync(enqueueVars)).rejects.toThrow("Failed to fetch"); });
@@ -187,10 +189,52 @@ describe("chat follow-up queue mutations", () => {
     await act(async () => { pending = result.current.mutateAsync(enqueueVars).catch(() => {}); });
     mock.putQueueOutboxItem.mockClear();
     mock.wsId = "ws-2";
+    mock.slug = "other";
     rerender();
     await act(async () => { reject(new TypeError("offline")); await pending; });
     expect(mock.putQueueOutboxItem).not.toHaveBeenCalled();
     expect(mock.removeQueueOutboxItem).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["answered", (resolve: (value: unknown) => void) => resolve({ item: queued(), released: null })],
+    ["refused", (_resolve: unknown, reject: (error: Error) => void) => reject(new ApiError("full", 400, "Bad Request", { error: "full", code: "queue_full" }))],
+  ])("drops an %s enqueue from the workspace it started in after a switch", async (_label, settle) => {
+    let resolve!: (value: unknown) => void;
+    let reject!: (error: Error) => void;
+    mock.enqueueChatMessage.mockReturnValue(new Promise((done, fail) => { resolve = done; reject = fail; }));
+    const { result, rerender } = renderHook(() => useEnqueueChatMessage(), { wrapper });
+    let pending!: Promise<unknown>;
+    await act(async () => { pending = result.current.mutateAsync(enqueueVars).catch(() => {}); });
+    mock.wsId = "ws-2";
+    mock.slug = "other";
+    rerender();
+    await act(async () => { settle(resolve, reject); await pending; });
+    expect(mock.removeQueueOutboxItem).toHaveBeenCalledWith("chat-1", "client-1", "acme");
+  });
+
+  it.each([502, 503, 504, 408])("keeps a gateway answer %s unconfirmed", async (status) => {
+    mock.enqueueChatMessage.mockRejectedValueOnce(new ApiError("gateway", status, "Gateway"));
+    const { result } = renderHook(() => useEnqueueChatMessage(), { wrapper });
+    await act(async () => { await expect(result.current.mutateAsync(enqueueVars)).rejects.toBeInstanceOf(ApiError); });
+    expect(mock.removeQueueOutboxItem).not.toHaveBeenCalled();
+    expect(mock.putQueueOutboxItem).toHaveBeenLastCalledWith("chat-1", expect.objectContaining({ state: "unconfirmed" }));
+  });
+
+  it("sends queue commands even while the browser reports offline", async () => {
+    const { onlineManager } = await import("@tanstack/react-query");
+    onlineManager.setOnline(false);
+    try {
+      mock.enqueueChatMessage.mockRejectedValueOnce(new TypeError("Failed to fetch"));
+      mock.resumeChatQueue.mockResolvedValueOnce({ items: [], paused: null, released: [] });
+      const enqueue = renderHook(() => useEnqueueChatMessage(), { wrapper }).result;
+      const resume = renderHook(() => useResumeChatQueue(), { wrapper }).result;
+      await act(async () => { await expect(enqueue.current.mutateAsync(enqueueVars)).rejects.toThrow("Failed to fetch"); });
+      await act(async () => { await resume.current.mutateAsync({ sessionId: "chat-1" }); });
+      expect(mock.resumeChatQueue).toHaveBeenCalledOnce();
+    } finally {
+      onlineManager.setOnline(true);
+    }
   });
 
   it("saves an edit with its revision and writes the answered row", async () => {
