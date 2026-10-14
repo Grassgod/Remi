@@ -1,4 +1,5 @@
-import { isRelatedTurnController } from './turn-controls.js';
+import { ChatTurnRetryError, isRelatedTurnController } from './turn-controls.js';
+import { lockLane } from './inbox/lane-machine.js';
 import { DaemonTurnBridge } from './inbox/daemon-turn-bridge.js';
 import { questionNotificationIdentity, questionNotificationFactsSql, canReadQuestionNotificationFacts } from './inbox/question-notification-visibility.js';
 import type { InboxAccess } from './inbox/inbox-visibility.js';
@@ -5786,6 +5787,54 @@ runMigrations(this.db);
       this.ctx.emitCommitEvents(deferredEvents);
     });
     return result;
+  }
+
+  /**
+   * The person who created a Chat retries one of its failed or cancelled turns,
+   * warm or cold. It reuses the organizer's redispatch primitive (a new attempt
+   * on the same turn, previous attempt status kept, Chat runtime affinity
+   * re-resolved when cold) but needs no supervisor: the route has already
+   * applied the creator-only Chat access rules, and this re-checks the facts
+   * the retry depends on under the lane lock. Issue turns, including Chats that
+   * carry an Issue, never take this path.
+   */
+  retryChatTurnForCreator(input: { turnId: string; userId: string; cold: boolean }) {
+    const childStatusChanges: import("./repos/tasks-repo.js").ChildStatusChange[] = [];
+    const deferredEvents = createCommitEventQueue();
+    let redispatchResult: ReturnType<TasksRepo["redispatchTaskWithinTransaction"]> | null = null;
+    this.db.transaction(() => {
+      const turn = this.getTurn(input.turnId);
+      if (!turn?.current_attempt_id) throw new ChatTurnRetryError("turn_not_found", "turn not found", 404);
+      this.ctx.lockWorkspaceRuntimeLifecycle(turn.workspace_id);
+      lockLane(this.ctx, turn.session_id, turn.agent_id, turn.execution_scope);
+      const current = this.getTurn(input.turnId)!;
+      const target = current.current_attempt_id ? this.getTask(current.current_attempt_id) : null;
+      const chat = target?.chatSessionId ? this.getChatSession(target.chatSessionId) : null;
+      if (!target || !chat || current.issue_id || target.issueId || current.session_id !== chat.id) {
+        throw new ChatTurnRetryError("chat_turn_required", "only a Chat turn can be retried by its creator", 403);
+      }
+      if ((chat.creatorId ?? "local") !== input.userId) {
+        throw new ChatTurnRetryError("chat_creator_required", "only the Chat's creator can retry its turns", 403);
+      }
+      if (chat.status === "archived") {
+        throw new ChatTurnRetryError("chat_archived", "restore the chat before retrying a turn");
+      }
+      if (!["failed", "cancelled"].includes(current.status) || !["failed", "cancelled"].includes(target.status)) {
+        throw new ChatTurnRetryError("turn_not_retryable", "only a failed or cancelled turn can be retried");
+      }
+      // One active turn per Chat lane: a retry must not run beside a newer turn.
+      const active = this.db.query(`SELECT id FROM multiremi_turns WHERE session_id=? AND agent_id=? AND execution_scope=?
+        AND id<>? AND status NOT IN ('completed','failed','cancelled') LIMIT 1`)
+        .get(current.session_id, current.agent_id, current.execution_scope, current.id);
+      if (active) throw new ChatTurnRetryError("chat_turn_active", "another turn is still active in this chat");
+      redispatchResult = this.tasks.redispatchTaskWithinTransaction(target.id, childStatusChanges, deferredEvents, input.cold);
+    })();
+    afterCommit(this.db, () => {
+      this.tasks.runCollectedChildStatusChanges(childStatusChanges);
+      if (redispatchResult) this.tasks.notifyRedispatchedTask(redispatchResult);
+      this.ctx.emitCommitEvents(deferredEvents);
+    });
+    return this.getTurn(input.turnId)!;
   }
 
   reportProgress(taskId: string, summary: string, step?: number | null, total?: number | null, options?: { allowTerminal?: boolean }): MultiremiTask {

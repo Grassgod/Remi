@@ -155,7 +155,12 @@ describe("groupChatSessions", () => {
   it("does not hide a single item behind Show more, and keeps a requested item visible", () => {
     expect(visibleItems([1, 2, 3, 4, 5, 6], 5)).toHaveLength(6);
     expect(visibleItems([1, 2, 3, 4, 5, 6, 7], 5)).toEqual([1, 2, 3, 4, 5]);
-    expect(visibleItems([1, 2, 3, 4, 5, 6, 7], 5, (n) => n === 7)).toEqual([1, 2, 3, 4, 5, 7]);
+    expect(visibleItems([1, 2, 3, 4, 5, 6, 7, 8], 5, (n) => n === 8)).toEqual([1, 2, 3, 4, 5, 8]);
+  });
+
+  it("counts hidden items after keeping the requested one", () => {
+    // Keeping 7 leaves only 6 hidden: one item is not worth a Show more row.
+    expect(visibleItems([1, 2, 3, 4, 5, 6, 7], 5, (n) => n === 7)).toEqual([1, 2, 3, 4, 5, 6, 7]);
   });
 });
 
@@ -254,6 +259,32 @@ describe("ChatSidebar sections", () => {
     expect(within(row("Unread chat")).getByRole("img", { name: "New reply" })).toBeInTheDocument();
   });
 
+  it("names rows as buttons by title and status, and calls an untitled chat Untitled", () => {
+    mount({
+      sessions: [chat("a", { title: "Running chat" }), chat("b", { title: "  " })],
+      pending: { tasks: [{ task_id: "task-a", chat_session_id: "a", status: "running" }] },
+    });
+    expect(screen.getByRole("button", { name: "Running chat, Running" })).toHaveAttribute("data-chat-session-row", "a");
+    expect(screen.getByRole("button", { name: "Untitled" })).toHaveAttribute("data-chat-session-row", "b");
+    expect(screen.queryByText("New chat", { selector: "[data-chat-row-title]" })).toBeNull();
+  });
+
+  it("shows a loading placeholder, not 'unavailable', while Projects load", () => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    client.setQueryData(chatKeys.sessionList("ws-1", "all", "automation"), []);
+    client.setQueryData(chatKeys.pendingTasks("ws-1"), { tasks: [] });
+    render(
+      <QueryClientProvider client={client}>
+        <I18nProvider locale="en" resources={{ en: { chat: enChat } }}>
+          <ChatSidebar sessions={[chat("p1", { project_id: "project-1" })]} projects={undefined} activeSessionId={null}
+            loading={false} error={false} onRetry={vi.fn()} onSelectSession={vi.fn()} onNewChat={vi.fn()} onSessionDeleted={vi.fn()} />
+        </I18nProvider>
+      </QueryClientProvider>,
+    );
+    expect(within(section("Projects")).getByRole("group", { name: "…" })).toBeInTheDocument();
+    expect(screen.queryByText("Linked project unavailable")).toBeNull();
+  });
+
   it("selects a row by click and by Enter, and marks the active one", () => {
     const onSelectSession = vi.fn();
     mount({ sessions: [chat("a", { title: "First" }), chat("b", { title: "Second" })], activeSessionId: "b", onSelectSession });
@@ -267,7 +298,7 @@ describe("ChatSidebar sections", () => {
 });
 
 describe("ChatSidebar row actions", () => {
-  it("asks before archiving a running chat", async () => {
+  it("asks before archiving a running chat and offers no Undo afterwards", async () => {
     mount({
       sessions: [chat("a", { title: "Running chat" })],
       pending: { tasks: [{ task_id: "task-a", turn_id: "turn-a", chat_session_id: "a", status: "running" }] },
@@ -277,6 +308,9 @@ describe("ChatSidebar row actions", () => {
     expect(state.update).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: "Stop and archive" }));
     await waitFor(() => expect(state.update).toHaveBeenCalledWith({ sessionId: "a", status: "archived" }));
+    // The stopped run cannot come back, so the confirmation is the last word.
+    await waitFor(() => expect(state.toast).toHaveBeenCalledWith("Archived “Running chat”"));
+    expect(state.toast.mock.calls[0]).toHaveLength(1);
   });
 
   it("archives an idle chat at once and offers Undo", async () => {

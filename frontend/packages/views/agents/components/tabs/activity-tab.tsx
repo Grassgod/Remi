@@ -377,7 +377,7 @@ function TaskRow({
     if (cancelling) return;
     setCancelling(true);
     try {
-      await api.cancelTaskById(task.id);
+      await api.cancelTaskById(cancelTargetOf(task));
       // No manual invalidate needed — the task:cancelled WS event flows
       // through useRealtimeSync's `task:` prefix path which already
       // invalidates snapshot + per-agent + per-issue task lists.
@@ -619,6 +619,15 @@ function activeTaskTimeText(task: AgentTask, t: AgentsT, timeAgo: TimeAgoFn): st
  * lands in the last 30 days. Pure function so callers can pass a
  * deterministic `now` in tests.
  */
+/**
+ * Cancel addresses the turn: an attempt id is not a turn id, and the turn
+ * endpoint answers 404 for it. Tasks read before turns existed fall back to
+ * their own id.
+ */
+export function cancelTargetOf(task: Pick<AgentTask, "id" | "turn_id">): string {
+  return task.turn_id ?? task.id;
+}
+
 export function deriveAvgDurationLast30d(
   tasks: readonly AgentTask[],
   now: number,

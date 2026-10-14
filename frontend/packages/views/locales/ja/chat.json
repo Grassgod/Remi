@@ -150,6 +150,7 @@
     "history": "チャット履歴",
     "back": "会話に戻る",
     "loading": "チャットを読み込み中…",
+    "loading_conversation": "会話を読み込み中…",
     "load_failed": "会話を読み込めませんでした。",
     "retry": "再試行"
   },

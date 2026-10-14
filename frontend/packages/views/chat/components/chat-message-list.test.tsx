@@ -547,6 +547,25 @@ describe("Chat rows without the envelope header or attempts list", () => {
     } finally { view.unmount(); client.clear(); }
   });
 
+  it("shows a failed turn's outcome once, on its reply row", () => {
+    setApiInstance({ getTaskTrace: vi.fn(), getTurn: vi.fn() } as never);
+    const { view, client } = render2([
+      { seq: 1, id: "turn_6", kind: "turn", task_id: "attempt_6", body_md: "Provider rejected the prompt",
+        metadata: { turn_id: "turn_6", status: "failed", failure_reason: "agent_error", final_entry_id: "msg_failed", final_reply_md: "Provider rejected the prompt" } },
+      { seq: 2, id: "msg_failed", kind: "message", sender_type: "agent", message_kind: "reply", task_id: "turn_6",
+        body_md: "Provider rejected the prompt", metadata: { failure_reason: "agent_error", elapsed_ms: 1200 } },
+    ]);
+    try {
+      const notices = view.container.querySelectorAll('[data-turn-notice="failed"]');
+      expect(notices).toHaveLength(1);
+      expect(notices[0]!.closest('[data-perf-key="msg_failed"]')).not.toBeNull();
+      expect(view.container.querySelector('[data-perf-key="turn_6"]')).toBeNull();
+      expect(view.container.querySelectorAll("[data-turn-retry]")).toHaveLength(2);
+      fireEvent.click(notices[0]!.querySelector<HTMLButtonElement>('[data-slot="collapsible-trigger"]')!);
+      expect(screen.getAllByText("Provider rejected the prompt")).toHaveLength(1);
+    } finally { view.unmount(); client.clear(); }
+  });
+
   it("marks a cancelled turn without a failure body and still offers retry", () => {
     setApiInstance({ getTaskTrace: vi.fn(), getTurn: vi.fn() } as never);
     const { view, client } = render2([
@@ -578,8 +597,12 @@ describe("Chat rows without the envelope header or attempts list", () => {
       expect(screen.getAllByText("Separate reply")).toHaveLength(1);
       expect(view.container).not.toHaveTextContent("completed");
       expect(view.container.querySelector("[data-turn-notice]")).toBeNull();
+      // The card of a turn whose reply is loaded leaves no empty row above the reply.
+      expect(view.container.querySelector('[data-perf-key="turn_4"]')).toBeNull();
       const logs = view.container.querySelectorAll<HTMLButtonElement>("[data-chat-trace]");
       expect(logs).toHaveLength(2);
+      // The reply row carries its card's execution log.
+      expect(logs[1]!.closest('[data-perf-key="msg_reply"]')).not.toBeNull();
       // Hidden until the row is hovered or focused, but still in the tab order.
       for (const log of logs) expect(log.className).toContain("opacity-0");
       expect(getTaskTrace).not.toHaveBeenCalled();
@@ -587,6 +610,8 @@ describe("Chat rows without the envelope header or attempts list", () => {
       expect(getTurn).not.toHaveBeenCalled();
       fireEvent.click(logs[0]!);
       await waitFor(() => expect(getTask).toHaveBeenCalledWith("attempt_3", "turn_3"));
+      fireEvent.click(logs[1]!);
+      await waitFor(() => expect(getTask).toHaveBeenCalledWith("attempt_4", "turn_4"));
       expect(getTurn).not.toHaveBeenCalled();
     } finally { view.unmount(); client.clear(); }
   });

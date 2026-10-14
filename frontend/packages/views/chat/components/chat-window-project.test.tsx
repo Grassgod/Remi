@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { I18nProvider } from "@multiremi/core/i18n/react";
@@ -15,6 +15,7 @@ const backend = vi.hoisted(() => ({
   byId: {} as Record<string, ChatSession>,
   pending: {} as Record<string, unknown>,
   logReady: true,
+  projectsHeld: false,
   create: vi.fn(), update: vi.fn(), send: vi.fn(), refresh: vi.fn(), markRead: vi.fn(),
 }));
 const apiLogger = vi.hoisted(() => ({ error: vi.fn() }));
@@ -23,7 +24,7 @@ vi.mock("@multiremi/core/api", async (importOriginal) => {
   return { ...actual, api: {
     listAgents: async () => [{ id: "agent-a", name: "Alpha", archived_at: null, owner_id: "user-a" }],
     listMembers: async () => [{ user_id: "user-a", role: "owner" }],
-    listProjects: async () => ({ projects: [
+    listProjects: async () => backend.projectsHeld ? new Promise<never>(() => {}) : ({ projects: [
       { id: "project-a", title: "Remi", archived_at: null, icon: null },
       { id: "project-b", title: "Docs", archived_at: null, icon: null },
     ] }),
@@ -174,6 +175,7 @@ beforeEach(() => {
   backend.byId = {};
   backend.pending = {};
   backend.logReady = true;
+  backend.projectsHeld = false;
   backend.create.mockReset().mockImplementation(async (data) => {
     const created = { ...session, project_id: null, ...data };
     backend.sessions = [created];
@@ -478,9 +480,26 @@ describe("ChatWindow page shell", () => {
     expect(header.querySelectorAll("button")).toHaveLength(1);
   });
 
-  it("shows the untitled copy for a new chat", async () => {
-    mount();
+  it("shows a placeholder, not 'unavailable', while the Project list loads", async () => {
+    backend.sessions = [{ ...session, title: "Release prep" }];
+    backend.projectsHeld = true;
+    mount(true);
+    const header = await waitFor(() => {
+      const element = document.querySelector<HTMLElement>("[data-chat-page-header]");
+      expect(element).toHaveTextContent("Release prep");
+      return element!;
+    });
+    expect(within(header).getByRole("group", { name: "Project: …" })).toBeInTheDocument();
+    expect(header).not.toHaveTextContent("Linked project unavailable");
+  });
+
+  it("calls the unsaved draft New chat and an existing untitled chat Untitled", async () => {
+    const view = mount();
     await waitFor(() => expect(document.querySelector("[data-chat-page-header]")).toHaveTextContent("New chat"));
+    view.unmount();
+    backend.sessions = [{ ...session, title: "" }];
+    mount(true);
+    await waitFor(() => expect(document.querySelector("[data-chat-page-header] h1")).toHaveTextContent("Untitled"));
   });
 
   it("starts a chat bound to a sidebar group's Project", async () => {
@@ -509,7 +528,7 @@ describe("ChatWindow page shell", () => {
     backend.logReady = false;
     mount(true);
     await screen.findByRole("button", { name: "Send test message" });
-    expect(screen.queryByRole("status", { name: "Loading chats…" })).toBeNull();
-    expect(await screen.findByRole("status", { name: "Loading chats…" }, { timeout: 1500 })).toBeInTheDocument();
+    expect(screen.queryByRole("status", { name: "Loading conversation…" })).toBeNull();
+    expect(await screen.findByRole("status", { name: "Loading conversation…" }, { timeout: 1500 })).toBeInTheDocument();
   });
 });

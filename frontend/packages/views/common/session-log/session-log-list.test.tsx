@@ -396,8 +396,11 @@ describe("SessionLogList", () => {
     expect(view.content.className).not.toContain("max-w-4xl");
     expect(view.container.querySelector("[data-session-log-scroll-bottom]")).toBeNull();
 
+    // The reader scrolls up, away from the end the reveal parked them at.
     act(() => {
       fireEvent.wheel(view.root, { deltaY: -120 });
+      view.root.scrollTop = 0;
+      fireEvent.scroll(view.root);
     });
     const button = view.container.querySelector("[data-session-log-scroll-bottom]");
     expect(button).not.toBeNull();
@@ -416,6 +419,20 @@ describe("SessionLogList", () => {
       raf.runFrame();
     });
     expect(view.root.getAttribute("data-stick-state")).toBe("returning");
+    expect(view.container.querySelector("[data-session-log-scroll-bottom]")).toBeNull();
+    view.restore();
+  });
+
+  it("shows no arrow when a wheel-up releases a log that does not overflow", () => {
+    const replica = new MemorySessionReplica({ [SESSION]: { entries: [entry(1)] } });
+    const view = renderList(replica, { scrollButton: "arrow" });
+    // A short chat: everything fits, so the reader is already at the end.
+    Object.defineProperty(view.root, "scrollHeight", { configurable: true, get: () => 400 });
+    reveal();
+    act(() => {
+      fireEvent.wheel(view.root, { deltaY: -120 });
+    });
+    expect(view.root.getAttribute("data-stick-state")).toBe("released");
     expect(view.container.querySelector("[data-session-log-scroll-bottom]")).toBeNull();
     view.restore();
   });

@@ -150,8 +150,8 @@ export function groupChatSessions(sessions: readonly ChatSession[]): ChatSidebar
  * visible). One hidden item is not worth a "Show more" row, so it is shown.
  */
 export function visibleItems<T>(items: readonly T[], limit: number, keep?: (item: T) => boolean): T[] {
-  if (items.length - limit <= 1) return [...items];
-  return items.filter((item, index) => index < limit || keep?.(item));
+  const shown = items.filter((item, index) => index < limit || keep?.(item));
+  return items.length - shown.length <= 1 ? [...items] : shown;
 }
 
 function useMotionTransition(): Transition {
@@ -174,7 +174,8 @@ interface RowActions {
 export interface ChatSidebarProps {
   /** The user's own chats, every status. */
   sessions: ChatSession[];
-  projects: Project[];
+  /** Undefined while the Project list is loading: a missing name is not yet "unavailable". */
+  projects: Project[] | undefined;
   activeSessionId: string | null;
   loading: boolean;
   error: boolean;
@@ -253,17 +254,26 @@ export function ChatSidebar({
   const [confirmArchive, setConfirmArchive] = useState<ChatSession | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<ChatSession | null>(null);
 
-  const titleOf = (session: ChatSession) => session.title?.trim() || t(($) => $.window.untitled);
+  const titleOf = (session: ChatSession) => session.title?.trim() || t(($) => $.session_history.untitled);
   const fail = () => {
     toast.error(t(($) => $.sessions.failed));
   };
 
-  const doArchive = (session: ChatSession) => {
+  /**
+   * Undo is offered only for an idle chat: archiving a running one stopped its
+   * run, which restoring the chat cannot bring back (the user confirmed that).
+   */
+  const doArchive = (session: ChatSession, undoable: boolean) => {
     updateSession.mutateAsync({ sessionId: session.id, status: "archived" }).then(
       () => {
         // Archiving cancels the run server-side; drop its spinner now.
         void queryClient.invalidateQueries({ queryKey: chatKeys.pendingTasks(wsId) });
-        toast(t(($) => $.sidebar.archived_toast, { title: titleOf(session) }), {
+        const message = t(($) => $.sidebar.archived_toast, { title: titleOf(session) });
+        if (!undoable) {
+          toast(message);
+          return;
+        }
+        toast(message, {
           action: {
             label: t(($) => $.sidebar.undo),
             onClick: () => {
@@ -280,7 +290,7 @@ export function ChatSidebar({
     select: onSelectSession,
     // Archiving stops a run and the run cannot be brought back, so a running
     // chat asks first; an idle one archives at once and offers Undo.
-    archive: (session, running) => (running ? setConfirmArchive(session) : doArchive(session)),
+    archive: (session, running) => (running ? setConfirmArchive(session) : doArchive(session, true)),
     restore: (session) => {
       updateSession.mutateAsync({ sessionId: session.id, status: "active" }).catch(fail);
     },
@@ -531,7 +541,7 @@ export function ChatSidebar({
               onClick={() => {
                 const session = confirmArchive;
                 setConfirmArchive(null);
-                if (session) doArchive(session);
+                if (session) doArchive(session, false);
               }}
             >
               {t(($) => $.sidebar.archive_dialog.confirm)}
@@ -714,7 +724,7 @@ function GroupList({
   ...rowProps
 }: {
   groups: ChatSidebarGroup[];
-  projects: Project[];
+  projects: Project[] | undefined;
   directoryNames: ReadonlyArray<readonly [string, string]> | undefined;
   onNewChat: (location?: WorkLocation) => void;
 } & Omit<RowListProps, "sessions" | "limit" | "indent">) {
@@ -728,10 +738,11 @@ function GroupList({
     <>
       {shown.map((group) => {
         const project = group.kind === "project"
-          ? projects.find((item) => item.id === group.id && !item.archived_at)
+          ? projects?.find((item) => item.id === group.id && !item.archived_at)
           : undefined;
+        // "…" while a list loads; "unavailable" only once it has answered.
         const name = group.kind === "project"
-          ? project?.title ?? t(($) => $.project.unavailable)
+          ? projects ? project?.title ?? t(($) => $.project.unavailable) : "…"
           : directoryNames
             ? directoryName.get(group.id) ?? t(($) => $.sidebar.directory_unavailable)
             : "…";
@@ -833,14 +844,21 @@ function SessionRow({
   const needsAnswer = pendingTask?.status === "awaiting_human";
   const unread = session.has_unread && !active;
   const archived = session.status === "archived";
-  const title = session.title?.trim() || t(($) => $.window.untitled);
+  // An existing chat without a title is "Untitled"; "New chat" names the unsaved draft.
+  const title = session.title?.trim() || t(($) => $.session_history.untitled);
   const more = t(($) => $.sidebar.more_actions);
+  const status = needsAnswer ? t(($) => $.sidebar.status.needs_answer)
+    : running ? t(($) => $.sidebar.status.running)
+      : unread ? t(($) => $.sidebar.status.unread) : null;
   const archiveLabel = archived ? t(($) => $.sidebar.menu.restore) : t(($) => $.sidebar.menu.archive);
 
   return (
     <div
       data-chat-session-row={session.id}
       data-perf-chat-session={session.id}
+      role="button"
+      // The row's own name: the title and its status, not the action buttons inside.
+      aria-label={status ? `${title}, ${status}` : title}
       aria-current={active ? "page" : undefined}
       tabIndex={0}
       onClick={() => actions.select(session)}

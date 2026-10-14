@@ -134,7 +134,10 @@ export function ChatWindow({
   const user = useAuthStore((s) => s.user);
   const { data: agents = [] } = useQuery(agentListOptions(wsId, { enabled: chatVisible }));
   const { data: members = [] } = useQuery({ ...memberListOptions(wsId), enabled: chatVisible });
-  const { data: projects = [] } = useQuery({ ...projectListOptions(wsId), enabled: chatVisible });
+  const { data: projectsData, isError: projectsFailed } = useQuery({ ...projectListOptions(wsId), enabled: chatVisible });
+  const projects = projectsData ?? [];
+  // Loading is not "missing": a bound Project reads "…" until the list answers.
+  const loadedProjects = projectsData ?? (projectsFailed ? [] : undefined);
   // Single sessions cache — eliminates the separate active/all queries
   // that used to drift during the WS-invalidate window.
   const {
@@ -231,8 +234,10 @@ export function ChatWindow({
   const boundProjectId = isPage && activeSessionId ? currentSession?.project_id ?? null : null;
   const boundLocation = boundProjectId
     ? (() => {
-        const label = projects.find((project) => project.id === boundProjectId && !project.archived_at)?.title
-          ?? t(($) => $.project.unavailable);
+        const label = loadedProjects
+          ? loadedProjects.find((project) => project.id === boundProjectId && !project.archived_at)?.title
+            ?? t(($) => $.project.unavailable)
+          : "…";
         return { label, name: `${t(($) => $.project.label)}: ${label}`, hint: t(($) => $.project.fixed_hint) };
       })()
     : boundDirectoryId && runtimeWorkspaces
@@ -596,7 +601,9 @@ export function ChatWindow({
             <ActorAvatar actorType="agent" actorId={activeAgent.id} size={20} enableHoverCard showStatusDot />
           )}
           <h1 className="min-w-0 truncate text-sm font-medium">
-            {currentSession?.title?.trim() || t(($) => $.window.untitled)}
+            {/* "New chat" names the unsaved draft; an existing chat without a title is "Untitled". */}
+            {currentSession?.title?.trim()
+              || (activeSessionId ? t(($) => $.session_history.untitled) : t(($) => $.window.untitled))}
           </h1>
           {boundLocation && (
             <span
@@ -744,7 +751,7 @@ export function ChatWindow({
           </Button>
         </div>
       ) : waitingForLog ? (
-        isPage ? <DelayedLoadingIndicator label={t(($) => $.page.loading)} /> : <div className="min-h-0 flex-1" />
+        isPage ? <DelayedLoadingIndicator label={t(($) => $.page.loading_conversation)} /> : <div className="min-h-0 flex-1" />
       ) : hasMessages ? (
         <ChatMessageList
           visible={chatVisible}
@@ -856,7 +863,7 @@ export function ChatWindow({
         >
           <ChatSidebar
             sessions={sessions}
-            projects={projects}
+            projects={loadedProjects}
             activeSessionId={activeSessionId}
             loading={sessionsLoading}
             error={sessionsError}

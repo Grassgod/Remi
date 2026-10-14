@@ -42,6 +42,9 @@ export const SESSION_LOG_DOM_LIMIT = 300;
 /** The chip's visual cap, per the design spec (`99+`). */
 export const NEW_MESSAGE_DISPLAY_CAP = 99;
 
+/** Chat's arrow shows only once the reader is further than this from the end. */
+export const SCROLL_BUTTON_DISTANCE_PX = 24;
+
 /** Stable identity for the empty window, so `useSyncExternalStore` sees no change. */
 const EMPTY_SNAPSHOT = { sessionId: "", entries: [], head: null, fresh: false, ready: false } as const;
 
@@ -312,6 +315,25 @@ export function SessionLogList({
     initialState: anchor.kind === "element" ? "released" : "pinned",
   });
 
+  // A wheel-up on a log that does not overflow releases the stick, and no
+  // scroll event can follow to re-pin it. The arrow therefore also needs the
+  // real distance from the end, re-measured on scroll, resize and release.
+  const [awayFromBottom, setAwayFromBottom] = useState(false);
+  useEffect(() => {
+    if (scrollButton !== "arrow" || !scrollEl) return;
+    const measure = () => setAwayFromBottom(
+      scrollEl.scrollHeight - scrollEl.scrollTop - scrollEl.clientHeight > SCROLL_BUTTON_DISTANCE_PX);
+    measure();
+    scrollEl.addEventListener("scroll", measure, { passive: true });
+    const observer = typeof ResizeObserver === "function" ? new ResizeObserver(measure) : null;
+    observer?.observe(scrollEl);
+    if (contentEl) observer?.observe(contentEl);
+    return () => {
+      scrollEl.removeEventListener("scroll", measure);
+      observer?.disconnect();
+    };
+  }, [scrollButton, scrollEl, contentEl, stick.state]);
+
   // The count is derived rather than stored: `head` minus the newest row the
   // reader was at when they released. Keeping it derived means a re-render, a
   // resize or a remount cannot drift from the replica.
@@ -486,7 +508,7 @@ export function SessionLogList({
       {scrollButton === "chip" && newMessageCount > 0 && stick.state === "released" && (
         <NewMessagesChip count={newMessageCount} onReturn={handleReturn} label={newMessagesLabel} />
       )}
-      {scrollButton === "arrow" && stick.state === "released" && (
+      {scrollButton === "arrow" && stick.state === "released" && awayFromBottom && (
         <ScrollToBottomButton count={newMessageCount} onReturn={handleReturn} label={scrollBottomLabel} />
       )}
     </div>

@@ -4,7 +4,7 @@ import { isMemberQuestionReminder, LinkedQuestion, linkedQuestionId, QuestionRep
 import { questionReplyText } from "../../common/question-answer";
 import { useActorName } from "@multiremi/core/workspace/hooks";
 import { useAfterFirstScreen } from "@multiremi/core/platform/use-after-first-screen";
-import { useCallback, useEffect, useLayoutEffect, useRef, useSyncExternalStore, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useSyncExternalStore, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useWorkspaceId } from "@multiremi/core/hooks";
 import { api, TRACE_LIVE_WINDOW_SIZE } from "@multiremi/core/api";
@@ -54,6 +54,38 @@ const CHAT_CONTENT_CLASS = "max-w-[768px] px-4 py-6";
  */
 const REVEAL_ON_ROW = "opacity-0 transition-opacity group-hover/message:opacity-100 group-focus-within/message:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:opacity-100";
 const COPY_FEEDBACK_MS = 1500;
+
+/** The canonical turn card behind a reply row: the reply owns the turn's outcome. */
+interface TurnCardRef {
+  turnId: string;
+  attemptId: string | null;
+  status: string | null;
+  failureReason: string | null;
+}
+
+const endedBadly = (status: string | null | undefined): status is "failed" | "cancelled" =>
+  status === "failed" || status === "cancelled";
+
+/**
+ * A terminal Chat turn writes a card row and a separate reply message row
+ * (`final_entry_id`). The card comes first, so showing both would put the
+ * outcome above the reply and repeat a failure. Map each reply to its card.
+ */
+function turnCardsByReply(entries: readonly SessionLogEntry[]): Map<string, TurnCardRef> {
+  const cards = new Map<string, TurnCardRef>();
+  for (const entry of entries) {
+    const row = entry as SessionLogEntry & { task_id?: string | null; metadata?: Record<string, unknown> };
+    const metadata = row.metadata;
+    if (row.kind !== "turn" || typeof metadata?.turn_id !== "string" || typeof metadata.final_entry_id !== "string") continue;
+    cards.set(metadata.final_entry_id, {
+      turnId: metadata.turn_id,
+      attemptId: row.task_id ?? null,
+      status: typeof metadata.status === "string" ? metadata.status : null,
+      failureReason: typeof metadata.failure_reason === "string" ? metadata.failure_reason : null,
+    });
+  }
+  return cards;
+}
 
 // ─── Public component ────────────────────────────────────────────────────
 
@@ -123,10 +155,16 @@ export function ChatMessageList({
     }
     if (visible) onLoadOlderMessages?.();
   }, [onLoadOlderMessages, visible]);
-  const transformEntries = useCallback((entries: readonly SessionLogEntry[]) =>
-    mergeOptimisticChatRows(entries.filter(entry => {
+  const transformEntries = useCallback((entries: readonly SessionLogEntry[]) => {
+    const replies = new Set(entries.filter(entry => entry.kind === "message"
+      && !(entry as SessionLogEntry & { deleted_at?: string | null }).deleted_at).map(entry => entry.id));
+    return mergeOptimisticChatRows(entries.filter(entry => {
       const row = entry as SessionLogEntry & { author_type?: string; sender_type?: string; message_kind?: string; deleted_at?: string | null; metadata?: Record<string, unknown>; to_type?: string | null };
       if (row.seq === 0 || row.deleted_at) return false;
+      // A card whose reply row is loaded adds nothing of its own: the reply
+      // row shows the outcome, its retry and the execution log.
+      if (row.kind === "turn" && typeof row.metadata?.turn_id === "string"
+        && typeof row.metadata.final_entry_id === "string" && replies.has(row.metadata.final_entry_id)) return false;
       // A Chat Q's member reminders land in its own session, beside the original
       // Q row, so the Chat never repeats the question for any reader.
       if (isMemberQuestionReminder(row)) return false;
@@ -140,7 +178,9 @@ export function ChatMessageList({
       const question = row.kind === "message" && linkedQuestionId(row.id, row.metadata) ? ":question-line-v1" : "";
       // The Chat column, bubble and turn rows changed size; old cached heights are misses.
       return { ...entry, render_version: `${entry.render_version ?? ""}${question}${CHAT_LAYOUT_VERSION}` };
-    }), optimisticRows), [optimisticRows]);
+    }), optimisticRows);
+  }, [optimisticRows]);
+  const cardsByReply = useMemo(() => turnCardsByReply(snapshot.entries), [snapshot.entries]);
   const entryKey = useCallback((entry: SessionLogEntry) => clientIdOf(entry) ?? entry.id, []);
   const pendingTaskId = pendingTask?.task_id ?? null;
   const pendingAlreadyPersisted = !!pendingTaskId && replica.getSnapshot(sessionId).entries.some((entry) => {
@@ -171,6 +211,7 @@ export function ChatMessageList({
     renderEntry={({ entry }) => {
       const row = entry as SessionLogEntry & {
         author_type?: string; sender_type?: string; task_id?: string | null; created_at?: string;
+        message_kind?: SessionLogRow["message_kind"];
         wake_applied?: SessionLogRow["wake_applied"]; wake_reason?: SessionLogRow["wake_reason"];
         metadata?: Record<string, unknown>;
       };
@@ -189,17 +230,25 @@ export function ChatMessageList({
       const questionId = row.kind === "message" ? linkedQuestionId(row.id, row.metadata) : null;
       const turnId = row.kind === "turn" && typeof row.metadata?.turn_id === "string" ? row.metadata.turn_id : null;
       const turnStatus = turnId && typeof row.metadata?.status === "string" ? row.metadata.status : null;
+      // A reply row carries its turn's outcome; a reply whose card is outside
+      // the window still reaches the log through its own turn id.
+      const card = row.kind === "message" ? cardsByReply.get(row.id) : undefined;
+      const trace = card ? { taskId: card.attemptId ?? card.turnId, turnId: card.turnId }
+        : row.kind === "message" && !isUser && row.message_kind === "reply" && row.task_id ? { taskId: row.task_id, turnId: row.task_id }
+          : null;
       return <div className="group/message">
         {questionId ? <LinkedQuestion id={questionId} getActorName={getActorName} /> : null}
-        {turnId && (turnStatus === "failed" || turnStatus === "cancelled")
-          ? <TurnEndNotice turnId={turnId} attemptId={row.task_id ?? null} status={turnStatus}
-            failureReason={message.failure_reason ?? null} details={message.content} visible={visible} />
-          : row.kind === "turn" && row.metadata?.final_entry_id
-            // The reply is its own message row; the card keeps only the execution log.
-            ? (row.task_id ? <div className="flex h-6 items-center"><ChatTraceButton taskId={row.task_id}
-              turnId={turnId ?? undefined} visible={visible} quiet /></div> : null)
-            : <MessageBubble message={message} isPending={!!pendingTaskId && row.task_id === pendingTaskId}
-              isPush={isPush} visible={visible} />}
+        {card && endedBadly(card.status)
+          ? <TurnEndNotice turnId={card.turnId} attemptId={card.attemptId} status={card.status}
+            failureReason={card.failureReason ?? message.failure_reason ?? null} details={message.content} visible={visible} />
+          : turnId && endedBadly(turnStatus)
+            ? <TurnEndNotice turnId={turnId} attemptId={row.task_id ?? null} status={turnStatus}
+              failureReason={message.failure_reason ?? null} details={message.content} visible={visible} />
+            : row.kind === "turn" && row.metadata?.final_entry_id
+              // The reply row is not loaded; a finished card has nothing of its own to show.
+              ? null
+              : <MessageBubble message={message} isPending={!!pendingTaskId && row.task_id === pendingTaskId}
+                isPush={isPush} visible={visible} trace={trace} />}
         {isUser && <NotWokenHint wakeApplied={row.wake_applied} wakeReason={row.wake_reason} />}
         {row.kind === "message" && !questionId && <QuestionReplyReference metadata={row.metadata} />}
         {isUser && local && <div className="flex justify-end"><SendStatus status={local.status}
@@ -237,7 +286,9 @@ function SendStatus({ status, onRetry }: { status: OptimisticChatRow["status"]; 
 
 // ─── Message bubbles ─────────────────────────────────────────────────────
 
-function MessageBubble({ message, isPending, isPush, visible }: { message: ChatMessage; isPending: boolean; isPush: boolean; visible: boolean }) {
+type TraceRef = { taskId: string; turnId?: string } | null;
+
+function MessageBubble({ message, isPending, isPush, visible, trace = null }: { message: ChatMessage; isPending: boolean; isPush: boolean; visible: boolean; trace?: TraceRef }) {
   if (message.role === "user") {
     const markdown = message.content;
     return (
@@ -261,7 +312,7 @@ function MessageBubble({ message, isPending, isPush, visible }: { message: ChatM
     );
   }
 
-  return <AssistantMessage message={message} isPending={isPending} isPush={isPush} visible={visible} />;
+  return <AssistantMessage message={message} isPending={isPending} isPush={isPush} visible={visible} trace={trace} />;
 }
 
 function AssistantMessage({
@@ -269,13 +320,16 @@ function AssistantMessage({
   isPending,
   isPush,
   visible,
+  trace,
 }: {
   message: ChatMessage;
   isPending: boolean;
   isPush: boolean;
   visible: boolean;
+  trace: TraceRef;
 }) {
   const timeline: ChatTimelineItem[] = [];
+  const traceRef: TraceRef = trace ?? (message.task_id && !isPush ? { taskId: message.task_id, turnId: message.turn_id } : null);
 
   // Legacy failure bubble: an assistant row written by the server's FailTask
   // fallback before turns carried their own status. Canonical failed turns
@@ -288,7 +342,7 @@ function AssistantMessage({
         timeline={timeline}
         elapsedMs={message.elapsed_ms}
       />
-        {message.task_id && !isPush && <ChatTraceButton taskId={message.task_id} turnId={message.turn_id} visible={visible} />}
+        {traceRef && <ChatTraceButton taskId={traceRef.taskId} turnId={traceRef.turnId} visible={visible} />}
       </div>
     );
   }
@@ -307,8 +361,8 @@ function AssistantMessage({
         message={message}
         timeline={timeline}
         isPending={isPending}
-        trace={message.task_id && !isPush
-          ? <ChatTraceButton taskId={message.task_id} turnId={message.turn_id} visible={visible} quiet /> : null}
+        trace={traceRef
+          ? <ChatTraceButton taskId={traceRef.taskId} turnId={traceRef.turnId} visible={visible} quiet /> : null}
       />
     </div>
   );

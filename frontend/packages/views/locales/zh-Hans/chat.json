@@ -150,6 +150,7 @@
     "history": "对话历史",
     "back": "返回对话",
     "loading": "正在加载对话…",
+    "loading_conversation": "正在载入对话…",
     "load_failed": "无法加载对话。",
     "retry": "重试"
   },

@@ -153,6 +153,7 @@
     "history": "Chat history",
     "back": "Back to conversation",
     "loading": "Loading chats…",
+    "loading_conversation": "Loading conversation…",
     "load_failed": "Unable to load this conversation.",
     "retry": "Retry"
   },

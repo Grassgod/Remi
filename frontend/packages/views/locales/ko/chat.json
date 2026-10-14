@@ -153,6 +153,7 @@
     "history": "채팅 기록",
     "back": "대화로 돌아가기",
     "loading": "채팅 불러오는 중…",
+    "loading_conversation": "대화를 불러오는 중…",
     "load_failed": "대화를 불러올 수 없습니다.",
     "retry": "다시 시도"
   },
