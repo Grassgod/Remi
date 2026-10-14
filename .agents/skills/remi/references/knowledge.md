@@ -42,7 +42,7 @@ remi memory publish --help
 
 scope 为 `memory|project_wiki|repository_wiki`，目标选择与项目/仓库一致。记录素材提交 ID、加工运行状态和输出文档；提交成功不代表 Atlas 已加工完成。
 
-publish 是具有知识发布能力的 task 专用流程：当前要求角色至少 maintainer，并绑定启用了允许的 `code-to-wiki` 插件，且任务范围匹配目标。把云友改名为 Atlas、使用人类 token 或普通 Agent 均不会自动获得发布权。具有该能力时按帮助提供 submission、稳定 dedupe-key、action 和内容；授权不满足时提交素材，不能绕过审核直改存储。
+publish 是具有知识发布能力的 task 专用流程：当前要求角色至少 maintainer，并绑定启用了允许的 `code-to-wiki` 插件，且任务范围匹配目标。把 Agent 改名为 Atlas、改用人类 token 或不具备该能力的 Agent 均不会自动获得发布权。具有该能力时按帮助提供 submission、稳定 dedupe-key、action 和内容；授权不满足时提交素材，不能绕过审核直改存储。
 
 ## 任务 Wiki 工作副本
 

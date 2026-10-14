@@ -1,6 +1,6 @@
 # Remi 前端
 
-这里是 Remi / Multiremi 的 Web 控制台：查看任务与执行过程，在工作台处理待验收或待输入任务，管理项目、云友、设备与自动化。
+这里是 Remi / Multiremi 的 Web 控制台：查看任务与执行过程，在工作台处理待验收或待输入任务，管理项目、Agent、设备与自动化。
 
 当前应用入口是 `apps/web/`（Next.js App Router）。业务逻辑、页面和基础组件分别放在 `packages/core/`、`packages/views/`、`packages/ui/`。后端位于仓库根的 `packages/server/`，由 Bun + Hono 提供 API；本目录不单独维护服务端或客户端发布流程。
 

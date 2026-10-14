@@ -63,6 +63,6 @@ remi lark install status --help
 remi lark daemon status --help
 ```
 
-feishu route 管理 concierge 路由到哪个云友，messaging source 管理采集范围，workspace feishu-bot 管理工作区 bot 配置，三者不是同一层。旧 feishu source/messages 命令仍有独立 ID 空间，不能将 ID 与 messaging 任意互换；已有来源先读取原命令的记录。
+feishu route 管理 concierge 路由到哪个 Agent，messaging source 管理采集范围，workspace feishu-bot 管理工作区 bot 配置，三者不是同一层。旧 feishu source/messages 命令仍有独立 ID 空间，不能将 ID 与 messaging 任意互换；已有来源先读取原命令的记录。
 
 Lark 安装、binding redeem 与 daemon install 是不同阶段；按返回的安装会话和绑定信息继续，不凭 installation 记录存在就声称消息已接通。已有 bot 的配置参考 [工作区](workspaces-and-projects.md)，最终以实际路由与用户请求的消息流程核验。

@@ -19,7 +19,7 @@ summary: 按任务定位当前实现、约束和验证命令。
 | 运行测试、验证回归 | [测试](../../TESTING.md) | 测试发现范围与真实服务前提 |
 | 新增 API 或 CLI 能力 | [CLI 命令契约](../cli-command-migration.md) | canonical 命令、注册与能力检查 |
 | 改用量采集、统计报表或模型价格 | [统一用量与价格](../usage-accounting.md)、[公开参考价格导入](../usage-reference-prices.md) | actual/context/unknown、run 幂等、执行归属、双时轴和受控历史迁移 |
-| 通过 CLI 使用、管理或排查 Remi | [Remi Skill](../../.agents/skills/remi/SKILL.md) | 任务协作、项目知识、云友与模型、集成、权限和运行维护 |
+| 通过 CLI 使用、管理或排查 Remi | [Remi Skill](../../.agents/skills/remi/SKILL.md) | 任务协作、项目知识、Agent 与模型、集成、权限和运行维护 |
 | 改 Runtime 工作区、执行目录或本地上下文 | [Runtime 持久化工作区](runtime-workspaces.md) | daemon 归属、绑定、目录和上下文保留、调度约束 |
 | 改 Chat 页面、私聊或消息队列 | [Chat 契约](../chat.md) | 会话管理、工作位置、队列串行和私聊权限 |
 | 改 Agent 并行调度与执行目录 | [并行执行](../parallel-agent-execution.md) | Agent/Session 执行隔离、共享代码和 daemon 协议升级 |
@@ -27,7 +27,7 @@ summary: 按任务定位当前实现、约束和验证命令。
 | 修改 ACP 后端或 token-sync | [Codex 接入](../design/acp-codex-via-codex-acp.md)、[Claude Code 接入](../design/acp-claude-via-claude-agent-acp.md)、[认证插件与同步](../design/1passport-bytedance-sso.md) | 实际启动、认证、会话和凭据隔离边界 |
 | 改 turn 失败检测、备用模型恢复或能力排队切换 | [ADR 0010](../adr/0010-turn-failure-from-bridge-typed-session-failure.md) | AIR 失败 metadata、失败分类、单次切换、5 分钟能力等待与提交后事件 |
 | 修改 Antigravity / agy 执行 | [Antigravity Runtime](../antigravity.md) | 原生 CLI 发现、事件流、续接、旧版恢复和能力边界 |
-| 修改云友模板或 Skill | [Agent 配置规范](../agent-config-spec.md) | 提示词结构、字段和元信息检查 |
+| 修改 Agent 模板或 Skill | [Agent 配置规范](../agent-config-spec.md) | 提示词结构、字段和元信息检查 |
 | 改工作台与通知 | [工作台/收件箱边界](../inbox-workbench-boundary.md) | 通知的触发条件与状态归属 |
 | 改 daemon 轮询节奏、心跳 ack 或插件 desired 协议 | [ADR 0001](../adr/0001-daemon-poll-cadence-and-desired-revision.md) | 已定的取舍、被否决的替代方案和回到源码的位置 |
 | 改父 issue 状态推导、子 issue 结束通知或 `force` | [ADR 0003](../adr/0003-parent-status-derived-from-children.md) | 守卫 A/B、再推导和排一轮合并的取舍；关单规则由 ADR 0017 修订 |

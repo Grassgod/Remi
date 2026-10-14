@@ -33,7 +33,7 @@ RPC、typed 失败对象及其 cause、原生失败压缩工具和旧 bridge 的
 
 Runtime 详情的「Codex 连接」页支持一个自定义 Responses provider：Profile 名称、API 基础地址、模型 ID，以及直接填写 API Key 或引用 Runtime 本机 `REMI_CODEX_*` 环境变量。需先更新并重启 daemon，使注册元数据包含 `codex_profiles: 1`。未启用时沿用工作区 Relay / 原生登录路径；启用后优先于工作区 Relay。接口地址由 Runtime 连接，允许 HTTP(S) 的 loopback / LAN 地址；服务端不会对它做模型发现请求，也不放宽工作区 Relay 的 URL 校验。
 
-- [配置契约](../../packages/contracts/src/codex-profile.ts)只接受结构化路由字段，不接受任意 TOML、命令、URL 内联凭据或查询参数。每个 Runtime 配置一个默认模型；云友可选择此连接的其他模型，不指定时使用默认模型。
+- [配置契约](../../packages/contracts/src/codex-profile.ts)只接受结构化路由字段，不接受任意 TOML、命令、URL 内联凭据或查询参数。每个 Runtime 配置一个默认模型；Agent 可选择此连接的其他模型，不指定时使用默认模型。
 - [注入器](../../packages/daemon/src/agent-runtime/codex-profile.ts)将配置展开为隔离 `CODEX_HOME/config.toml` 的 `model`、`model_provider` 和 `model_providers.remi_custom`；密钥只进入进程环境 `OPENAI_API_KEY`，不写入 config/auth 文件。本机基础 Home 不变。ACP 的 `MODEL_PROVIDER`、`CODEX_CONFIG`、`DEFAULT_AUTH_REQUEST` 环境覆盖也会被明确设置，避免旧机器配置改变路由。
 - 这里的 Profile 是 Remi 的命名连接，不是直接复制本机 `--profile` 配置。Remi 展开有效配置，不依赖本机 profile 文件的布局。
 - [任务快照](../../packages/server/src/store/repos/tasks-repo.ts)在 claim 时冻结连接、所选模型和凭据版本，并把连接纳入执行指纹。修改配置只影响新任务；运行中任务使用原快照，自动重试在原 Runtime 仍兼容当前 Agent 时保留快照。连接或所选模型变化后从产品会话记录重新启动原生会话，不把旧 provider 会话 ID 传给新接口。若 Agent 切换 provider 或原 Runtime 不再兼容，重试清除旧快照，由兼容 Runtime 重新领取。

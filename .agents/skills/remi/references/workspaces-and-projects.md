@@ -10,7 +10,7 @@ remi workspace prompt get <workspace-id> --json
 remi workspace prompt update --help
 ```
 
-工作区命令里的位置参数是被操作的工作区；全局 `--workspace` 是请求上下文，保持二者一致。设置的影响范围大于单个云友，更新时保留没有要求改变的字段。
+工作区命令里的位置参数是被操作的工作区；全局 `--workspace` 是请求上下文，保持二者一致。设置的影响范围大于单个 Agent，更新时保留没有要求改变的字段。
 
 公共提示词有 bootstrap 和 delta 两部分。先 get 得到当前内容及版本，修改对应部分；`workspace prompt update` 支持 `--bootstrap-prompt`、`--delta-prompt`、`--expected-revision` 和 JSON 文件。发生版本冲突时重读并合并，不去掉版本条件覆盖别人刚写的内容。Agent 的个性化 instructions 不应全塞进工作区公共提示词。
 
@@ -53,4 +53,4 @@ remi project update --help
 
 `repo list/get` 查询平台记录，`repo checkout` 会访问 Git 并修改本地检出。只有任务确实需要仓库文件时才检出；不要用 checkout 验证导入记录。默认分支以仓库配置为准，不硬编码 `main`；指定 `--ref` 时失败不能偷偷换分支。
 
-用户要求处理某台机器的已有目录时，转到 [Runtime 工作目录](runtimes.md)，无需先创建项目或导入仓库。选择项目也不意味着每个云友永久绑定同一个工作位置。
+用户要求处理某台机器的已有目录时，转到 [Runtime 工作目录](runtimes.md)，无需先创建项目或导入仓库。选择项目也不意味着每个 Agent 永久绑定同一个工作位置。

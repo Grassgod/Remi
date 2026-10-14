@@ -12,7 +12,7 @@ remi workspace list --json
 
 后续每条命令保留相同的 `--server` / `--workspace`，或在当前执行进程设置 `MULTIREMI_SERVER_URL` / `MULTIREMI_WORKSPACE_ID`。不要只给第一条查询传目标参数，随后把写入发向保存的默认实例。请求 JSON 不应夹带另一个 `workspace_id` / `workspaceId`。
 
-`remi context` 返回 `identity`、`workspace`、`current`、`allowed_operations` 和 `capabilities`。human 身份仍受成员角色与资源归属约束；task、daemon、share 不是管理员的替代身份。在云友任务里保留平台注入的身份与上下文。
+`remi context` 返回 `identity`、`workspace`、`current`、`allowed_operations` 和 `capabilities`。human 身份仍受成员角色与资源归属约束；task、daemon、share 不是管理员的替代身份。在 Agent 任务里保留平台注入的身份与上下文。
 
 需要人类登录时，使用用户提供的登录信息。密码登录支持 JSON 文件或 stdin，并保存 CLI 会话：
 

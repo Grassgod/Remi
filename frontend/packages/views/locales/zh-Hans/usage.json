@@ -5,7 +5,7 @@
     "time": "运行时长",
     "tasks": "任务数",
     "ranking": "排行榜",
-    "agents_count": "{{count}} 个云友",
+    "agents_count": "{{count}} 个智能体",
     "daily": "按天",
     "weekly": "按周",
     "dimension": "维度",
@@ -42,9 +42,9 @@
     "quiet_weekday": "已知费用最低星期",
     "known_total": "区间已知小计",
     "insight_unknown": "无法判断",
-    "by_agent": "按云友",
+    "by_agent": "按智能体",
     "by_model": "按模型",
-    "agent": "云友",
+    "agent": "智能体",
     "daily_detail": "每日明细表",
     "load_more": "加载更多",
     "loaded_only": "当前仅展示已加载明细，不代表全部历史导出。",
@@ -57,7 +57,7 @@
     "average": "每日平均",
     "period_tasks": "{{count}} 个去重任务",
     "failed": "失败 {{count}} 个",
-    "subtitle": "查看当前工作区的 Token 消耗和云友运行情况。",
+    "subtitle": "查看当前工作区的 Token 消耗和智能体运行情况。",
     "partial_rank": "按已知小计排名",
     "model_detail": "模型与连接详情"
   },
@@ -101,7 +101,7 @@
   },
   "views": {
     "daily": "按日期",
-    "agents": "按云友",
+    "agents": "按智能体",
     "models": "按模型",
     "runtimes": "按 Runtime",
     "counts_hint": "每组任务数分别去重。跨日期或跨模型任务可能出现在多组中，任务总数以汇总为准。"

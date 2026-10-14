@@ -42,7 +42,7 @@ Codex 从 `rawResponse/completed` 采集实际逐请求消费，以真实 thread
 
 用量报告按字节与单位数分块，避免长任务超过 daemon 的 1 MiB frame 上限。单个 turn 金额关联的请求列表也可分块：`coverageExpectedCount` 和 `coverageSha256` 固定完整排序列表的数量与 SHA-256（UTF-8 `JSON.stringify(sortedIds)`），各块保留同 unit/revision、金额和不可变事实，仅发送列表子集。同 revision 的列表块幂等追加，更新 revision 清空旧关联；较旧 revision 不回退。数量及哈希验证完成前金额只保留诊断，不能提前计入已知费用或与配置估价相加。所有块持久化后才发送 run 完整标记。采集器在金额观测与 turn settle 时关联覆盖，避免每个请求写入不断增长的完整列表。
 
-单位 `purpose` 默认 `agent`，辅助进度摘要使用 `progress_summary`，与主执行共享已认证的 run 和 ledger。辅助请求保留它真实返回的 provider/model；独立连接未知时不套用主云友连接费率。模型表按 purpose 分组并展示摘要用途，CSV 保留该字段。已有消费与辅助请求尚未结束时不能提前将 run 标为完整。
+单位 `purpose` 默认 `agent`，辅助进度摘要使用 `progress_summary`，与主执行共享已认证的 run 和 ledger。辅助请求保留它真实返回的 provider/model；独立连接未知时不套用主 Agent 连接费率。模型表按 purpose 分组并展示摘要用途，CSV 保留该字段。已有消费与辅助请求尚未结束时不能提前将 run 标为完整。
 
 `provider` 表示调用来源/执行引擎或协议族（如 codex、claude、openai），不代表底层模型厂商；同模型经不同协议和连接调用可有不同计价键。辅助摘要独立连接使用 `runtime:<runtimeId>:progress-summary:<claude|openai>`，只有明确共用 workspace relay 时才复用它原有 engine 的连接标识。
 

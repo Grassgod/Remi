@@ -1,6 +1,6 @@
 # Agent、Skill 与 Plugin
 
-## 云友定义
+## Agent 定义
 
 ```sh
 remi agent list --json
@@ -22,9 +22,9 @@ remi agent get <agent-id> --json
 
 常见请求字段是 `name`、`description`、`instructions`、`provider`、`model`、`thinking_level`、`visibility`、`max_concurrent_tasks`。更新只发送需要改变的字段，不把 get 响应整个回传。新建时显式写 provider；CLI 缺省为 Claude。
 
-云友指令按六个问题组织：身份、职责边界、禁止事项、专属工具约定、交付物、何时需要补充信息。使用真实 Markdown 换行，通常控制在 100–4000 字符；长操作手册放 Skill。`description` 简述职责，`instructions` 不复制平台注入的整个工作流程。长期云友的头像使用 Remi 附件地址 `/api/attachments/<id>/content`；不提供不可信外链。清空头像使用 `avatar_url: ""`，`null` 不表示清空。
+Agent 指令按六个问题组织：身份、职责边界、禁止事项、专属工具约定、交付物、何时需要补充信息。使用真实 Markdown 换行，通常控制在 100–4000 字符；长操作手册放 Skill。`description` 简述职责，`instructions` 不复制平台注入的整个工作流程。长期 Agent 的头像使用 Remi 附件地址 `/api/attachments/<id>/content`；不提供不可信外链。清空头像使用 `avatar_url: ""`，`null` 不表示清空。
 
-`agent default` 可能创建对象，不是只读的“查看默认云友”。角色和 supervisor 权限也不随普通配置自动提升；确实要求调整时再查看 `remi agent role set --help`。
+`agent default` 可能创建对象，不是只读的“查看默认 Agent”。角色和 supervisor 权限也不随普通配置自动提升；确实要求调整时再查看 `remi agent role set --help`。
 
 ## 环境变量
 
