@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import type * as Lark from "@larksuiteoapi/node-sdk";
 import type { FeishuPresentationCheckpoint, MultiremiTaskHumanRequest } from "@multiremi/contracts/types.js";
-import type { TraceEvent } from "@multiremi/contracts/trace.js";
+import type { LegacyTraceEvent } from "@multiremi/contracts/trace.js";
 import type { TaskStreamEvent, TaskStreamMeta } from "../base.js";
 import { FeishuDeliveryError } from "@shared/feishu-delivery-error.js";
 import { buildFinalCard } from "./streaming/card-elements.js";
@@ -157,7 +157,7 @@ export class FeishuTaskPresentation {
     return { messageId: this.state.resultMessageId };
   }
 
-  private async message(message: TraceEvent): Promise<void> {
+  private async message(message: LegacyTraceEvent): Promise<void> {
     this.timeline.accept(message);
     this.metadata.accept(message);
     // Presentation restart replays the canonical prefix for answer/metadata
@@ -280,7 +280,7 @@ export class FeishuTaskPresentation {
     await this.save();
   }
 
-  private async waitForInteraction(message: TraceEvent): Promise<void> {
+  private async waitForInteraction(message: LegacyTraceEvent): Promise<void> {
     const requestId = traceHumanRequestId(message);
     if (!requestId) return;
     let request = await this.meta.getHumanRequest?.(requestId);
@@ -293,7 +293,7 @@ export class FeishuTaskPresentation {
     await this.writeProcess(this.timeline.resume(requestId, request.status), message.seq);
   }
 
-  private async interaction(message: TraceEvent): Promise<void> {
+  private async interaction(message: LegacyTraceEvent): Promise<void> {
     const requestId = traceHumanRequestId(message);
     if (!requestId) return;
     let request = await this.meta.getHumanRequest?.(requestId);

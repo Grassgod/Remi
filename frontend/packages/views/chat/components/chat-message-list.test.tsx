@@ -1,7 +1,7 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { describe, expect, it, vi } from "vitest";
-import type { TraceEvent } from "@multiremi/contracts/trace";
+import type { LegacyTraceEvent } from "@multiremi/contracts/trace";
 import type { Attachment, ChatMessage, ChatPendingTask } from "@multiremi/core/types";
 import { SessionLogEntrySchema } from "@multiremi/core/api/schemas/session-log";
 import { MemorySessionReplica, openBrowserReplica, type SessionLogEntry } from "@multiremi/core/replica";
@@ -172,7 +172,7 @@ describe("cached message observer visibility", () => {
 const TASK_ID = "task_01hzzzzzzzzzzzzzzzzzzzzzzz";
 const TIMELINE_TEXT = "Timeline answer from the task transcript.";
 
-const taskEvents: TraceEvent[] = [
+const taskEvents: LegacyTraceEvent[] = [
   { seq: 1, ts: "2026-09-16T00:00:00Z", type: "text", content: TIMELINE_TEXT },
 ];
 

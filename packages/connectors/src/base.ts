@@ -8,7 +8,7 @@ import type {
   FeishuBotTaskSnapshot,
   MultiremiTaskHumanRequest,
 } from "@multiremi/contracts/types.js";
-import type { TraceEvent } from "@multiremi/contracts/trace.js";
+import type { LegacyTraceEvent } from "@multiremi/contracts/trace.js";
 
 /** A message received from any connector. */
 export interface IncomingMessage {
@@ -52,7 +52,7 @@ export type StreamingHandler = (
 ) => Promise<void>;
 
 export type TaskStreamEvent =
-  | { kind: "message"; message: TraceEvent }
+  | { kind: "message"; message: LegacyTraceEvent }
   | { kind: "snapshot"; snapshot: FeishuBotTaskSnapshot };
 
 export interface TaskStreamMeta {

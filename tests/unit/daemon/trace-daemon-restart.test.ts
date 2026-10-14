@@ -23,7 +23,9 @@ it("a fresh daemon process reads the previous process's trace and runtime owner"
     if (process.env.MULTIREMI_TEST_TRACE_MODE === "write") {
       trace.store.registerTask("tsk_process", { sessionId: "ises_process", subjectId: "iss_process", agentId: "agt_process", provider: "codex",
         runtimeId: "rt_process", startedAt: "2026-10-05T00:00:00Z" });
-      trace.append("tsk_process", "rt_process", [{ type: "tool_use", tool: "Bash", toolCallId: "call_process", input: { command: "pwd" } }]);
+      trace.append("tsk_process", "rt_process", [{ type: "item.completed", item: { id: "call_process", parent_id: null,
+        status: "completed", started_at: "2026-10-05T00:00:00Z", completed_at: "2026-10-05T00:00:01Z", type: "command", tool: "Bash",
+        source: "shell", command: "pwd", cwd: null, actions: [{ type: "unknown", command: "pwd" }], output: "/", exit_code: 0, duration_ms: 1 } }]);
       trace.close("tsk_process", "completed");
     }
     console.log(JSON.stringify({ head: trace.store.head("tsk_process"), owner: trace.store.owner("tsk_process"),
@@ -41,7 +43,7 @@ it("a fresh daemon process reads the previous process's trace and runtime owner"
     const written = run("write");
     expect(run("read")).toEqual(written);
     expect(written).toMatchObject({ head: { head: 1, closed: true }, owner: "rt_process",
-      events: [{ tool: "Bash", tool_call_id: "call_process", input: { command: "pwd" } }] });
+      events: [{ seq: 1, type: "item.completed", item: { id: "call_process", tool: "Bash", command: "pwd" } }] });
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
@@ -55,8 +57,18 @@ it("production daemon construction recovers normalized trace rows after process 
   expect(trace.store).toBeInstanceOf(TraceFileStore);
   (trace.store as TraceFileStore).registerTask("tsk_restart", { sessionId: "ises_restart", subjectId: "iss_restart", agentId: "agt_restart",
     provider: "codex", runtimeId: "rt_restart", startedAt: "2026-10-05T00:00:00Z" });
-  trace.append("tsk_restart", "rt_restart", [{ type: "tool_use", tool: "Read", input: { path: "README.md" }, toolCallId: "tool_1" },
-    { type: "text", content: "Recovered answer", meta: { phase: "final" } }]);
+  const at = "2026-10-05T00:00:00Z";
+  trace.append("tsk_restart", "rt_restart", [
+    { type: "turn.started", turn: { id: "tsk_restart", turn_id: null, agent_id: "agt_restart", agent_name: null, provider: "codex",
+      requested_model: null, model: null, status: "running", error: null, started_at: at, completed_at: null, duration_ms: null,
+      final_item_id: null, final_started_at: null, context_usage: null,
+      stats: { item_count: 0, tool_call_count: 0, process_item_count: 0, type_histogram: [] } } },
+    { type: "item.completed", item: { id: "tool_1", parent_id: null, status: "completed", started_at: at, completed_at: at,
+      type: "command", tool: "Read", source: "tool", command: null, cwd: null,
+      actions: [{ type: "read", command: null, name: "README.md", path: "README.md" }], output: null, exit_code: null, duration_ms: 1 } },
+    { type: "item.completed", item: { id: "msg:final", parent_id: null, status: "completed", started_at: at, completed_at: at,
+      type: "agent_message", text: "Recovered answer", phase: "final" } },
+  ]);
   trace.close("tsk_restart", "completed");
   first.stop();
   await releaseDaemonTrace((first as unknown as Internal).protocolClient);
@@ -64,9 +76,12 @@ it("production daemon construction recovers normalized trace rows after process 
   const recovered = (second as unknown as Internal).ensureTrace();
   try {
     expect((recovered.store as TraceFileStore).owner("tsk_restart")).toBe("rt_restart");
-    expect(second.traceStore().head("tsk_restart")).toEqual({ head: 2, closed: true });
-    expect(second.traceStore().read("tsk_restart", 0, 1).events[0]).toMatchObject({ tool: "Read", input: { path: "README.md" }, tool_call_id: "tool_1" });
-    expect(recovered.completion("tsk_restart")).toMatchObject({ final_reply_md: "Recovered answer", trace: { tool_call_count: 1 } });
+    // turn.started, two items and the turn.completed that close() wrote.
+    expect(second.traceStore().head("tsk_restart")).toEqual({ head: 4, closed: true });
+    expect(second.traceStore().read("tsk_restart", 1, 1).events[0]).toMatchObject({ type: "item.completed", item: { id: "tool_1", tool: "Read" } });
+    expect(second.traceStore().snapshotPart("tsk_restart", 0)).toMatchObject({ head: 4, turn: { status: "completed", final_item_id: "msg:final" } });
+    expect(recovered.completion("tsk_restart")).toMatchObject({ final_reply_md: "Recovered answer",
+      trace: { head: 4, event_count: 4, tool_call_count: 1 }, process_item_count: 1 });
   } finally {
     second.stop(); await releaseDaemonTrace((second as unknown as Internal).protocolClient);
     rmSync(root, { recursive: true, force: true });

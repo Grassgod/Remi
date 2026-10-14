@@ -1,6 +1,6 @@
 import { expect, it } from "bun:test";
 import { FeishuTaskMetadata } from "@connectors/feishu/task-metadata.js";
-import type { TraceEvent } from "@multiremi/contracts/trace.js";
+import type { LegacyTraceEvent as TraceEvent } from "@multiremi/contracts/trace.js";
 
 const event = (seq: number, type: string, patch: Partial<TraceEvent> = {}): TraceEvent =>
   ({ seq, type, ts: "2026-10-04T00:00:00Z", ...patch });

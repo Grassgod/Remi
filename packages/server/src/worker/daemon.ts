@@ -46,11 +46,12 @@ import {
   type MultiremiRelayWire,
   type UploadFeishuBotAttachmentInput,
 } from "./client.js";
-import { createEventMapper, responseToUsageUnits } from "./acp-event-mapper.js";
+import { responseToUsageUnits } from "./usage-units.js";
+import { createTraceTranslator, type TraceTranslator } from "./trace-translator.js";
+import { finalReplyBody } from "@shared/turn-trace.js";
 import { TaskUsageLedger } from "./task-usage-ledger.js";
 import { extractBaseUrl } from "@multiremi/relay/fragment.js";
 import type { TaskUsageSnapshot, TaskUsageUnit } from "@multiremi/contracts/usage-accounting.js";
-import { LastAssistantMessage } from "./last-assistant-message.js";
 import {
   DaemonProtocolClient,
   DaemonProtocolRpcError,
@@ -60,7 +61,7 @@ import {
 import { registerDaemonOfferHandler } from "./daemon-offers.js";
 import { DaemonTaskDownlinks } from "./daemon-downlinks.js";
 import { registerDaemonRuntimeDownlinks } from "./daemon-runtime-downlinks.js";
-import { DAEMON_HEARTBEAT_INTERVAL_MS, type DaemonRuntimeCapabilities } from "@multiremi/contracts/daemon-protocol.js";
+import { DAEMON_HEARTBEAT_INTERVAL_MS, type DaemonRuntimeCapabilities, type DaemonTurnInput } from "@multiremi/contracts/daemon-protocol.js";
 import { FeishuConciergeSupervisor, type FeishuConciergeHost } from "./feishu-concierge.js";
 import { deliverFeishuOutbound } from "./feishu-outbound.js";
 import { redactFeishuBotError } from "@multiremi/feishu-bot/diagnostics.js";
@@ -83,7 +84,6 @@ import {
   type MultiremiOutboxStats,
   type MultiremiOutboxDrainResult,
 } from "./outbox.js";
-import { TaskMessageBatcher } from "./task-message-batcher.js";
 import { probeRuntimeModels } from "./runtime-model-probe.js";
 import {
   browseRuntimeDirectory,
@@ -254,13 +254,22 @@ import {
 // Re-export the per-task context writers (moved to daemon/agent-runtime/skills in D6)
 // so existing `from "../multiremi/daemon.js"` imports keep resolving (铁律#3).
 export { writeTaskContext, writeProjectResourceContext, writeAgentSkillContext };
-// Re-export the ACP-event mapper (moved to ./acp-event-mapper.ts) and the
-// runtime directory scan/browse entry points (moved to ./local-skills.ts) so
-// existing `from "@multiremi/daemon.js"` imports keep resolving.
-export { createEventMapper };
+// Re-export the runtime directory scan/browse entry points (moved to
+// ./local-skills.ts) so existing `from "@multiremi/daemon.js"` imports keep resolving.
 export { browseRuntimeDirectory, scanRuntimeDirectories };
 
 const log = createLogger("multiremi-daemon");
+
+/** `{ id, name }` of the attachments a turn's input carries, for its `user_message` trace item. */
+function traceAttachments(value: unknown): Array<{ id: string; name: string | null }> {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((entry) => {
+    if (!entry || typeof entry !== "object") return [];
+    const row = entry as Record<string, unknown>;
+    if (typeof row.id !== "string") return [];
+    return [{ id: row.id, name: typeof row.filename === "string" ? row.filename : typeof row.name === "string" ? row.name : null }];
+  });
+}
 /** A failed layout sweep is retried with this backoff; the daemon does not register meanwhile. */
 const LEGACY_SWEEP_RETRY_MIN_MS = 1_000;
 const LEGACY_SWEEP_RETRY_MAX_MS = 30_000;
@@ -1165,12 +1174,12 @@ export class MultiremiDaemon {
     this.ensureTrace();
     this.client.setReportTransport(daemonReportTransport(this.protocolClient, () => this.options.runtimeId, () => this.ensureOutbox(),
       this.options.taskDrainTimeoutMs, () => this.pollAbort.signal, {
-        completion: taskId => {
+        completion: (taskId, status) => {
           const trace = this.ensureTrace();
           if (this.options.runtimeId) trace.track(taskId, this.options.runtimeId);
-          return trace.completion(taskId);
+          return trace.completion(taskId, status);
         },
-        close: (taskId, status) => this.ensureTrace().close(taskId, status),
+        close: (taskId, status, error) => this.ensureTrace().close(taskId, status, error),
       }));
   }
 
@@ -2873,10 +2882,25 @@ export class MultiremiDaemon {
    */
   private enqueueTaskReport(taskId: string, kind: MultiremiOutboxKind, payload: Record<string, unknown>): void {
     const terminal = kind === "complete" || kind === "fail";
+    const status = kind === "complete" ? "completed" : "failed";
     if (terminal && this.options.runtimeId) this.ensureTrace().track(taskId, this.options.runtimeId);
+    // The completion fields describe the close that follows the enqueue.
     this.ensureOutbox().enqueue(taskId, kind, { ...payload, runtime_id: payload.runtime_id ?? this.options.runtimeId,
-      ...(terminal ? this.ensureTrace().completion(taskId) : {}) });
-    if (terminal) this.ensureTrace().close(taskId, kind === "complete" ? "completed" : "failed");
+      ...(terminal ? this.ensureTrace().completion(taskId, status) : {}) });
+    if (terminal) {
+      this.ensureTrace().close(taskId, status, typeof payload.error === "string"
+        ? { message: payload.error, reason: typeof payload.failureReason === "string" ? payload.failureReason : null } : null);
+    }
+  }
+
+  /** Seal the trace of a task the server stopped (cancel, or terminal elsewhere); its execution is over. */
+  private closeStoppedTrace(taskId: string, status: "completed" | "failed" | "cancelled"): void {
+    try {
+      const trace = this.ensureTrace();
+      if (trace.store.head(taskId)) trace.close(taskId, status);
+    } catch (err) {
+      log.warn(`Failed to close the trace of stopped task ${taskId}: ${err instanceof Error ? err.message : String(err)}`);
+    }
   }
 
   private ensureTrace(): DaemonTraceTransport {
@@ -2950,9 +2974,10 @@ export class MultiremiDaemon {
   /** Outbox → API dispatch. Each call is idempotent server-side (seq upsert / status guards). */
   private async deliverOutboxRecord(record: MultiremiOutboxRecord): Promise<void> {
     if (record.kind !== "messages") throw new Error("non-message reports use WS");
-    // Only v1 queues can contain these rows. New producers write straight to trace.
-    this.ensureTrace().append(record.taskId, String(record.payload.runtime_id ?? this.options.runtimeId),
-      Array.isArray(record.payload.messages) ? record.payload.messages : []);
+    // Only v1 queues can contain these rows: fragment messages from before
+    // PR 2, which a turn + items trace cannot hold. They are dropped.
+    const count = Array.isArray(record.payload.messages) ? record.payload.messages.length : 0;
+    log.warn(`Dropped a legacy outbox messages row for task ${record.taskId} (${count} fragment message(s)); traces are turn + items since PR 2`);
   }
 
   /** Exposed on the local /health endpoint for observability. */
@@ -3279,6 +3304,9 @@ export class MultiremiDaemon {
       }
       const error = redactTaskError(timedOut ? `Agent timed out after ${timeoutMs}ms` : err instanceof Error ? err.message : String(err));
       if (!timedOut && abort.signal.aborted && serverTerminalStatus) {
+        // The cancel (or server-side terminal) path never sends a terminal
+        // report, so the trace is sealed here (ARCH appendix A item 5).
+        this.closeStoppedTrace(task.id, serverTerminalStatus);
         if (serverTerminalStatus === "cancelled") {
           this.outbox?.purgeTask(task.id, { keepUsage: true });
           // Cancellation drops execution reports, but actual consumption must
@@ -3773,7 +3801,7 @@ export class MultiremiDaemon {
     provider: MultiremiTaskProvider,
     task: MultiremiTaskWithAgent,
     signal: AbortSignal,
-    nextSeq: () => number,
+    trace: TraceTranslator,
   ): () => void {
     let elicitationContextOffset = 0;
     const humanRequestTimeoutMs = task.autopilotRunId
@@ -3808,19 +3836,17 @@ export class MultiremiDaemon {
           const decision = result.message as UnifiedMessage;
           if (!decision?.id || decision.message_kind !== "decision") throw new Error("turn.decision returned no decision message");
           this.taskDownlinks.registerDecision(decision, task.id);
-          await this.reportHumanRequestMessage(task.id, nextSeq(), "permission_request", `Permission requested: ${toolTitle}`, {
-            message_id: decision.id, options: params.options, tool_call: params.toolCall ?? null,
-          });
+          const traceItem = this.recordTrace(task.id, () => trace.permissionRequested({
+            decisionId: decision.id, toolCallId: params.toolCall?.toolCallId ?? null, title: toolTitle, options: params.options,
+          }));
           const reply = await this.awaitDecisionReply(task.id, decision.id, signal, humanRequestTimeoutMs);
           const optionId = reply ? readResponseOptionId(reply.metadata)
             ?? readResponseOptionId(decisionReplyObject(reply)) ?? reply.body_md.trim() : null;
           const chosen = optionId ? params.options.find(option => option.optionId === optionId) ?? null : null;
-          await this.reportHumanRequestMessage(task.id, nextSeq(), "permission_response", chosen
-            ? `Permission ${chosen.kind.startsWith("allow") ? "granted" : "denied"}: ${chosen.name}`
-            : "Permission request cancelled or timed out", {
-              message_id: decision.id, reply_message_id: reply?.id ?? null,
-              option_id: chosen?.optionId ?? null, responded_by: reply?.sender_id ?? null,
-            });
+          if (traceItem) this.recordTrace(task.id, () => trace.permissionResolved(traceItem, {
+            option: chosen, outcome: chosen ? "selected" : reply || signal.aborted ? "cancelled" : "timeout",
+            respondedBy: reply?.sender_id ?? null, replyMessageId: reply?.id ?? null,
+          }));
           if (reply) {
             if (reply.metadata.question_closed !== true) await this.taskDownlinks.rpc('turn.decision.consume', { ...this.taskDownlinks.turnInput(task.id), message_id: decision.id, reply_message_id: reply.id, wait_id: waitId });
             this.taskDownlinks.confirmDecisionReply(task.id, reply);
@@ -3877,19 +3903,18 @@ export class MultiremiDaemon {
         const decision = result.message as UnifiedMessage;
         if (!decision?.id || decision.message_kind !== "decision") throw new Error("turn.decision returned no decision message");
         this.taskDownlinks.registerDecision(decision, task.id);
-        await this.reportHumanRequestMessage(task.id, nextSeq(), "question_request", params.message || "Agent asked a question", {
-          message_id: decision.id,
-          questions,
-        });
+        // Claude routes AskUserQuestion here with its tool call id
+        // (claude-agent-acp 0.89 dist/elicitation.js:162-166); the translator
+        // suppresses that tool call, so the question item stands for it.
+        const traceItem = this.recordTrace(task.id, () => trace.questionRequested({
+          decisionId: decision.id, toolCallId: params.toolCallId ?? null,
+          message: params.message || "Agent asked a question", questions,
+        }));
         const reply = await this.awaitDecisionReply(task.id, decision.id, signal, humanRequestTimeoutMs);
         const answers = reply && reply.metadata.question_closed !== true ? decisionReplyAnswers(reply, questions) : null;
-        await this.reportHumanRequestMessage(
-          task.id,
-          nextSeq(),
-          "question_response",
-          answers ? Object.entries(answers).map(([q, a]) => `${q}: ${a}`).join("; ") : "Question cancelled or timed out",
-          { message_id: decision.id, reply_message_id: reply?.id ?? null, answers, responded_by: reply?.sender_id ?? null },
-        );
+        if (traceItem) this.recordTrace(task.id, () => trace.questionResolved(traceItem, {
+          answers, respondedBy: reply?.sender_id ?? null, replyMessageId: reply?.id ?? null,
+        }));
         if (reply) {
           if (reply.metadata.question_closed !== true) await this.taskDownlinks.rpc('turn.decision.consume', { ...this.taskDownlinks.turnInput(task.id), message_id: decision.id, reply_message_id: reply.id, wait_id: waitId });
           this.taskDownlinks.confirmDecisionReply(task.id, reply);
@@ -3935,11 +3960,16 @@ export class MultiremiDaemon {
     return (expired.reply as UnifiedMessage | undefined) ?? null;
   }
 
-  private async reportHumanRequestMessage(taskId: string, seq: number, type: string, content: string, input: Record<string, unknown>): Promise<void> {
+  /**
+   * Run one translator call for a daemon-internal fact (permission, question).
+   * Trace storage failures never fail the decision flow; they are logged.
+   */
+  private recordTrace<T>(taskId: string, write: () => T): T | null {
     try {
-      this.ensureTrace().append(taskId, this.options.runtimeId!, [{ type, content, input }]);
+      return write();
     } catch (err) {
-      log.warn(`Failed to report ${type} message for task ${taskId}: ${err instanceof Error ? err.message : String(err)}`);
+      log.warn(`Failed to record a trace fact for task ${taskId}: ${err instanceof Error ? err.message : String(err)}`);
+      return null;
     }
   }
 
@@ -4172,18 +4202,25 @@ export class MultiremiDaemon {
     if (!provider.sendStream) {
       throw new Error(`Provider ${agent.provider} does not support streaming`);
     }
-    const output = new LastAssistantMessage();
-    let sawCompaction = false;
-    let seq = 1;
-    const nextSeq = () => seq++;
-    let messageBatcher: TaskMessageBatcher | null = null;
-    const nextExternalSeq = () => {
-      // Human-request and steer messages use a separate producer. Flush ACP
-      // chunks first so their durable record and sequence stay chronological.
-      messageBatcher?.flush();
-      return nextSeq();
-    };
-    const resetElicitationContextOffset = this.attachHumanInputHandlers(provider, task, signal, nextExternalSeq);
+    // One writer per attempt: ACP updates, permissions, questions and steers all
+    // go through the translator, which flushes pending deltas before any other
+    // fact, so the trace keeps their order (PR 2 §2).
+    const trace = createTraceTranslator(createAdapter(config.agentType), (events) => {
+      try {
+        const stored = this.ensureTrace().append(task.id, this.options.runtimeId!, events);
+        progressSummarizer?.onEvents(stored);
+      } catch (err) {
+        log.warn(`Failed to append trace events for task ${task.id}: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }, {
+      // Legacy (untyped) provider failures arrive as message text: keep secrets
+      // out of the trace, and keep the failure its own message for the legacy
+      // failure check below (it reads the round's last item).
+      redactText: (text) => provider.typedSessionFailures === false && classifyLegacyProviderFailure(text)
+        ? redactProviderErrorText(text, failureCredentials) : text,
+      standaloneText: (text) => provider.typedSessionFailures === false && classifyLegacyProviderFailure(text) !== null,
+    });
+    const resetElicitationContextOffset = this.attachHumanInputHandlers(provider, task, signal, trace);
     let finalSessionId: string | null = task.sessionId;
     const ledger = usageLedger ?? new TaskUsageLedger(connectionId, usageRunId);
     const checkpointUsage = (snapshot: TaskUsageSnapshot | null) => {
@@ -4192,13 +4229,6 @@ export class MultiremiDaemon {
       this.enqueueTaskReport(task.id, "usage", { usageSnapshot: snapshot });
     };
     let turnIndex = 0;
-    const toMessages = createEventMapper(createAdapter(config.agentType));
-    messageBatcher = new TaskMessageBatcher({
-      emit: (messages) => {
-        const stored = this.ensureTrace().append(task.id, this.options.runtimeId!, messages);
-        progressSummarizer?.onMessages(stored);
-      },
-    });
 
     // Steer channel: the feed receives pushed user directives; each batch
     // soft-interrupts the streaming turn (ACP session/cancel) and is injected
@@ -4211,7 +4241,13 @@ export class MultiremiDaemon {
 
     try {
       const session = new AgentSession(provider as any, config);
-      messageBatcher.push([{ type: "execution", meta: { agentName: agent.name, provider: config.agentType } }]);
+      const turnInput = task as MultiremiTaskWithAgent & Partial<DaemonTurnInput>;
+      trace.start({
+        attemptId: task.id, turnId: turnInput.turn_id ?? null, agentId: agent.id, agentName: agent.name ?? null,
+        provider: config.agentType, requestedModel: task.claudeProfile?.model ?? config.model ?? null,
+        input: Array.isArray(turnInput.input_messages) ? turnInput.input_messages : [],
+        fallbackText: task.prompt ?? null, attachments: traceAttachments(task.chatMessageAttachments),
+      });
       const promptArtifact = buildTaskPromptArtifact(task, {
         wikiMaterialized,
         repoCheckouts: preparedWorkspace.checkouts,
@@ -4248,15 +4284,7 @@ export class MultiremiDaemon {
         // A reconnect replay of an already-handled id must not re-enqueue
         // them, or the stale duplicate would trip the next turn's interrupt.
         steerFeed.markHandled(messages.map((m) => m.id));
-        for (const message of messages) {
-          await this.reportHumanRequestMessage(task.id, nextExternalSeq(), "steer", message.content, {
-            steer_id: message.id,
-            steer_kind: message.kind,
-            author_type: message.authorType,
-            author_id: message.authorId,
-            injected,
-          });
-        }
+        this.recordTrace(task.id, () => trace.steer(messages, injected));
       };
       const injectSteerBatch = async (messages: MultiremiTaskSteerMessage[]): Promise<void> => {
         if (messages.some((m) => m.kind === "force_answer") && forceAnswerDeadline == null) {
@@ -4268,7 +4296,6 @@ export class MultiremiDaemon {
         );
         prompt = buildSteerInjectionPrompt(preparedMessages);
         await recordSteerBatch(messages, true);
-        output.boundary();
         log.info(`Injected ${messages.length} steer message(s) into task ${task.id}`);
       };
       // The completion transaction remains the authoritative steer barrier.
@@ -4292,7 +4319,6 @@ export class MultiremiDaemon {
         }
         steerFeed.setInterrupt(() => turnAbort.abort());
         let turnError: unknown = null;
-        let lastTurnMessage: { type: string; content?: string | null } | null = null;
         try {
           resetElicitationContextOffset();
           if (turnIndex === 1) {
@@ -4300,37 +4326,27 @@ export class MultiremiDaemon {
             onProviderEntry?.();
           }
           for await (const event of session.run(prompt)) {
+            // Billing stays on `_meta.remiUsageUnits` to the ledger; the trace
+            // keeps only context occupancy (billing-only frames are dropped).
             const usageUnits = (event as { _meta?: Record<string, unknown> })._meta?.remiUsageUnits;
             if (Array.isArray(usageUnits)) checkpointUsage(ledger.observe((usageUnits as TaskUsageUnit[]).map(unit => ({
               ...unit, provider: agent.provider, requestedModel: unit.requestedModel ?? config.model ?? null,
             }))));
-            const emitted = toMessages(event);
-            for (const message of emitted) {
-              if (provider.typedSessionFailures === false && message.type === "text" && message.content
-                && classifyLegacyProviderFailure(message.content)) {
-                message.content = redactProviderErrorText(message.content, failureCredentials);
-              }
-              lastTurnMessage = message;
-              if (message.type === "compaction") sawCompaction = true;
-              output.push(message);
-            }
-            // The front buffer coalesces token chunks for up to 200ms while
-            // tool/lifecycle boundaries flush immediately. Delivery remains
-            // enqueue-only, so a transient API outage never closes the provider.
-            messageBatcher.push(emitted);
+            // Token deltas coalesce for up to 200ms while item boundaries flush
+            // immediately. Delivery remains enqueue-only, so a transient API
+            // outage never closes the provider.
+            trace.acp(event);
           }
         } catch (err) {
           turnError = err;
         } finally {
-          messageBatcher.flush();
+          this.recordTrace(task.id, () => trace.promptEnded());
           steerFeed.setInterrupt(null);
           signal.removeEventListener("abort", onTaskAbort);
           if (graceTimer) clearTimeout(graceTimer);
         }
         const last = provider.getLastResponse?.() as AgentResponse | null | undefined;
-        if (last?.model) {
-          messageBatcher.push([{ type: "execution", meta: { provider: config.agentType, model: last.model, modelName: null } }]);
-        }
+        if (last?.model) this.recordTrace(task.id, () => trace.model(last.model!));
         finalSessionId = last?.sessionId ?? finalSessionId;
         checkpointUsage(ledger.observe(responseToUsageUnits(agent.provider, last, config.model, `turn:${turnIndex}`)));
         // Resume by provider session id if the follow-up turn needs a fresh
@@ -4344,8 +4360,9 @@ export class MultiremiDaemon {
         }
         const steered = steerFeed.take().filter((m) => !recordedSteerIds.has(m.id));
         if (turnError && !turnAbort.signal.aborted) throw turnError;
-        if (!turnAbort.signal.aborted && provider.typedSessionFailures === false && lastTurnMessage?.type === "text") {
-          const error = redactProviderErrorText(lastTurnMessage.content ?? "", failureCredentials);
+        const lastItem = trace.lastItem;
+        if (!turnAbort.signal.aborted && provider.typedSessionFailures === false && lastItem?.type === "agent_message") {
+          const error = redactProviderErrorText(lastItem.text, failureCredentials);
           const failureReason = classifyLegacyProviderFailure(error);
           if (failureReason) {
             await this.client.pinTaskSession(task.id, finalSessionId, workDir);
@@ -4376,7 +4393,9 @@ export class MultiremiDaemon {
         // Finalize while the provider session is still open, so a steer that
         // races completion (completeTask steer barrier → 409 steer_pending)
         // can still be injected as another turn instead of failing the run.
-        if (!output.text && !(last?.text ?? "").trim() && sawCompaction) {
+        // The final reply is decided once per completion attempt (spec §2.4).
+        const settled = this.recordTrace(task.id, () => trace.settle()) ?? { itemId: null, text: null };
+        if (trace.sawCompaction && !settled.text?.trim() && !(last?.text ?? "").trim()) {
           await this.client.pinTaskSession(task.id, finalSessionId, workDir);
           return {
             output: "Agent returned empty output after compaction.",
@@ -4387,7 +4406,7 @@ export class MultiremiDaemon {
             failureReason: TaskFailureReason.AgentEmptyOrUnparseableOutput,
           };
         }
-        const candidate = output.result(last?.text);
+        const candidate = finalReplyBody(settled, trace.items, last?.text);
         if (classifyPoisonedOutput(candidate)) {
           await this.client.pinTaskSession(task.id, finalSessionId, workDir);
           return { output: candidate, sessionId: finalSessionId, workDir, usageSnapshot: ledger.finish(), completed: false };
@@ -4419,6 +4438,9 @@ export class MultiremiDaemon {
           // there and complete once more; a second conflict fails the run
           // loudly rather than looping forever.
           if (fresh.length) await recordSteerBatch(fresh, false);
+          // Steers recorded without injection add no reply, so the pick stands;
+          // settle() is still the one rule before every completion attempt.
+          this.recordTrace(task.id, () => trace.settle());
           await this.client.completeTurn(this.taskDownlinks.turnInput(task.id), candidate, finalSessionId, workDir);
         }
         log.info(`Completed task ${task.id}`);
@@ -4426,7 +4448,7 @@ export class MultiremiDaemon {
       }
     } finally {
       checkpointUsage(ledger.finish());
-      messageBatcher?.close();
+      this.recordTrace(task.id, () => trace.flush());
       steerFeed.stop();
       await this.reportIssueWorkspaceAfterRun(task, workspaceDir, preparedWorkspace.repos).catch((err) => {
         log.warn(`Failed to report final workspace state for ${task.id}: ${err instanceof Error ? err.message : String(err)}`);

@@ -31,7 +31,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expectArchiveEraMigrated, installArchiveEraSchema } from "./archive-era-schema.js";
 import { InMemoryDaemonTraceReader } from "@multiremi/api/trace/daemon-trace-reader.js";
-import { InMemoryTraceStore } from "@multiremi/worker/trace-store.js";
+// TODO(PR 2 P2b): these read-path cases still feed legacy fragment events.
+import { LegacyFragmentTraceStore as InMemoryTraceStore } from "../../helpers/legacy-trace-store.js";
 import { TraceReader } from "@multiremi/trace/trace-reader.js";
 import { daemonTaskClaimResponse } from "@multiremi/api/wire/tasks.js";
 import { createMultiremiApp } from "@multiremi/api.js";

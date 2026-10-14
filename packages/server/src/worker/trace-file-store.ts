@@ -2,12 +2,25 @@ import { closeSync, constants, existsSync, fstatSync, fsyncSync, ftruncateSync, 
 import { randomUUID } from "node:crypto";
 import { open as openFile } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
-import { checkTraceFileLines, isTraceFileEvent, isTraceFileTrailer, TRACE_FILE_FORMAT, type TraceFileHeader, type TraceFileTrailer } from "@multiremi/contracts/trace-file.js";
+import {
+  checkTraceFileLines,
+  isTraceFileEvent,
+  isTraceFileSnapshotLine,
+  isTraceFileTrailer,
+  isTraceFileTrailerV2,
+  TRACE_FILE_FORMAT_V2,
+  type TraceFileFormatVersion,
+  type TraceFileHeaderV2,
+  type TraceFileSnapshotLine,
+  type TraceFileTrailerV2,
+} from "@multiremi/contracts/trace-file.js";
+import type { TraceEvent, TraceEventInput, TraceEventLine } from "@multiremi/contracts/trace.js";
 import { assertRealDirectoryPath } from "@daemon/agent-runtime/workspace/safe-remove.js";
 import { TRACES_DIRECTORY, traceDirectory, tracePath, tracesRoot } from "@daemon/agent-runtime/workspace/layout.js";
 import { createLogger } from "@shared/logger.js";
 import {
   sanitizeStoredEvent,
+  splitTraceSnapshot,
   traceEventBytes,
   normalizeTraceReadArgs,
   TRACE_READ_DEFAULT_LIMIT,
@@ -15,6 +28,7 @@ import {
   type TraceClock,
   type TraceCloseInput,
   type TraceReadResult,
+  type TraceSnapshotPart,
   type TraceStore,
   type TraceStoreHead,
 } from "./trace-store.js";
@@ -60,16 +74,21 @@ interface IndexedTrace {
   head: number;
   eventCount: number;
   closed: boolean;
-  /** Bytes through the last complete line; an interrupted final line is ignored. */
+  /** Header format. A v1 file is read-only: never appended to, closed or resumed. */
+  format: TraceFileFormatVersion;
+  /**
+   * Bytes through the last complete line the store keeps; an interrupted final
+   * line, and the snapshot framing of a close that crashed before its trailer
+   * (decision Q2), lie beyond it and are cut by the next write.
+   */
   completeBytes: number;
   context: TraceTaskContext;
   /** Only sequence/offset pairs are resident; event payloads stay on disk. */
   offsets: Array<{ seq: number; offset: number }>;
+  /** Offsets of the snapshot framing lines of a closed v2 trace, in part order. */
+  snapshotOffsets: number[];
   duplicates?: boolean;
 }
-
-type TraceEvent = TraceAppendResult["events"][number];
-type TraceEventInput = Parameters<TraceStore["append"]>[1][number];
 
 function safeId(id: string): boolean {
   return /^[a-zA-Z0-9_-]+$/.test(id) && id !== "." && id !== "..";
@@ -205,7 +224,8 @@ export class TraceFileStore implements TraceStore {
         try {
           if (await endsWithTrailer(path)) continue;
           const entry = this.entry(taskId);
-          if (entry && !entry.closed && entry.context.runtimeId) unclosed.set(taskId, entry.context.runtimeId);
+          // A v1 file is read-only history: never resumed, even when it was left open.
+          if (entry && entry.format === "v2" && !entry.closed && entry.context.runtimeId) unclosed.set(taskId, entry.context.runtimeId);
         } catch (error) {
           this.warn(path, error instanceof Error ? error.message : String(error));
         }
@@ -254,8 +274,13 @@ export class TraceFileStore implements TraceStore {
     if (!stat.isFile() || stat.isSymbolicLink()) throw new Error("not a regular trace file");
     const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
     const offsets: IndexedTrace["offsets"] = [];
-    let header: TraceFileHeader | undefined;
+    const snapshotOffsets: number[] = [];
+    let header: (TraceFileHeaderV2 | (Omit<TraceFileHeaderV2, "format"> & { format: string })) | undefined;
+    let format: TraceFileFormatVersion = "v2";
     let completeBytes = 0;
+    /** Bytes through the last header or event line: where a crashed close is cut back to. */
+    let eventsEnd = 0;
+    let snapshotParts: number | null = null;
     let head = 0;
     let closed = false;
     let duplicates = false;
@@ -267,17 +292,33 @@ export class TraceFileStore implements TraceStore {
         if (!header) {
           const checked = checkTraceFileLines([record.line], { taskId });
           if (!checked.ok) throw new Error(checked.reason);
+          format = checked.value.format;
           header = JSON.parse(record.line);
           if (header!.runtime_id !== undefined && (typeof header!.runtime_id !== "string" || !header!.runtime_id)) throw new Error("invalid runtime owner");
+          eventsEnd = record.end;
         } else {
           if (closed) throw new Error("trailer is not final line");
           const row: unknown = JSON.parse(record.line);
           if (isTraceFileTrailer(row)) {
             if (row.end.head !== head || row.end.event_count !== offsets.length) throw new Error("trailer counts disagree with events");
             if (duplicates || record.end !== opened.size) throw new Error("ambiguous trailer after recovered events");
+            if (format === "v2") {
+              if (!isTraceFileTrailerV2(row)) throw new Error("v2 trailer without snapshot_parts");
+              if (row.end.snapshot_parts !== snapshotOffsets.length) throw new Error("trailer snapshot_parts disagree with snapshot lines");
+              if (snapshotParts !== null && snapshotParts !== snapshotOffsets.length) throw new Error("snapshot parts incomplete");
+            }
             closed = true;
+          } else if (format === "v2" && isTraceFileSnapshotLine(row)) {
+            const part = row.snapshot;
+            if (part.head !== head) throw new Error("snapshot head disagrees with events");
+            if (part.part !== snapshotOffsets.length || (snapshotParts !== null && part.parts !== snapshotParts)) {
+              throw new Error("snapshot part out of order");
+            }
+            snapshotParts = part.parts;
+            snapshotOffsets.push(record.offset);
           } else {
             if (!isTraceFileEvent(row)) throw new Error("invalid trace event");
+            if (snapshotOffsets.length) throw new Error("event after snapshot");
             if (seen.has(row.seq)) { duplicates = true; this.warn(path, `duplicate seq ${row.seq}; retaining first occurrence`); }
             else {
               if (row.seq < head) throw new Error(`out-of-order seq ${row.seq}`);
@@ -285,6 +326,7 @@ export class TraceFileStore implements TraceStore {
               seen.add(row.seq);
               head = row.seq;
             }
+            eventsEnd = record.end;
           }
         }
         completeBytes = record.end;
@@ -292,8 +334,16 @@ export class TraceFileStore implements TraceStore {
       if (!header) throw new Error("missing complete header");
     } finally { closeSync(fd); }
     for (const directory of directories) assertRealDirectoryPath(directory.path, directory.info, "trace directory");
-    return { path, directories, dev: stat.dev, ino: stat.ino, head,
-      eventCount: offsets.length, closed, completeBytes, offsets, duplicates,
+    if (!closed && snapshotOffsets.length) {
+      // Decision Q2: a crash inside close() left snapshot framing without a
+      // trailer. Cut it (and any partial trailer) back to the last event; the
+      // re-close writes the snapshot again from the fold.
+      this.warn(path, "unsealed snapshot framing; truncating to the last event before re-closing");
+      completeBytes = eventsEnd;
+      snapshotOffsets.length = 0;
+    }
+    return { path, directories, dev: stat.dev, ino: stat.ino, head, format,
+      eventCount: offsets.length, closed, completeBytes, offsets, snapshotOffsets, duplicates,
       context: { sessionId: header.session_id, subjectId: basename(dirname(path)), agentId: header.agent_id,
         provider: header.provider, startedAt: header.started_at, runtimeId: header.runtime_id } };
   }
@@ -375,8 +425,8 @@ export class TraceFileStore implements TraceStore {
     ensureDirectory(traceDirectory(this.root, context.subjectId));
     const path = tracePath(this.root, context.subjectId, taskId);
     if (existsSync(path)) return this.remember(taskId, this.inspect(path, taskId));
-    const header: TraceFileHeader = {
-      format: TRACE_FILE_FORMAT,
+    const header: TraceFileHeaderV2 = {
+      format: TRACE_FILE_FORMAT_V2,
       task_id: taskId,
       session_id: sessionId,
       agent_id: context.agentId,
@@ -388,17 +438,20 @@ export class TraceFileStore implements TraceStore {
     try { writeFileSync(fd, `${JSON.stringify(header)}\n`); fsyncSync(fd); } finally { closeSync(fd); }
     const stat = lstatSync(path);
     return this.remember(taskId, { path, directories: this.directoryChain(path), dev: stat.dev, ino: stat.ino,
-      head: 0, eventCount: 0, closed: false, completeBytes: stat.size, offsets: [], context });
+      head: 0, eventCount: 0, closed: false, format: "v2", completeBytes: stat.size, offsets: [], snapshotOffsets: [], context });
   }
 
   append(taskId: string, events: TraceEventInput[]): TraceAppendResult {
     const entry = this.entry(taskId) ?? this.create(taskId);
     this.assertOwned(entry);
+    if (entry.format === "v1") throw new Error(`v1 trace is read-only: ${entry.path}`);
     if (entry.closed || events.length === 0) return { head: entry.head, events: [] };
-    const stored = events.map((event, offset): TraceEvent => ({
-      ...sanitizeStoredEvent(event, event.ts ?? this.now()),
-      seq: entry.head + offset + 1,
-    }));
+    const stored: TraceEvent[] = [];
+    for (const event of events) {
+      const row = sanitizeStoredEvent(event, this.now());
+      if (row) stored.push({ ...row, seq: entry.head + stored.length + 1 } as TraceEvent);
+    }
+    if (stored.length === 0) return { head: entry.head, events: [] };
     // Reject the whole batch before writing any row that recovery would reject.
     for (const event of stored) {
       if (traceEventBytes(event) > TRACE_FILE_MAX_EVENT_BYTES) throw new Error("trace line exceeds normalized event budget");
@@ -434,7 +487,7 @@ export class TraceFileStore implements TraceStore {
     const entry = this.entry(taskId);
     if (!entry) return { events: [], head: 0, eof: true };
     const args = normalizeTraceReadArgs(afterSeq, limit, maxBytes);
-    const events: TraceEvent[] = [];
+    const events: TraceEventLine[] = [];
     let bytes = 0;
     this.assertOwned(entry);
     // Binary search avoids rescanning the prefix for every page, including
@@ -456,7 +509,7 @@ export class TraceFileStore implements TraceStore {
         for (const record of completeLines(fd, start, entry.completeBytes, this.options.onReadBytes)) {
           // Skip the duplicate physical records excluded by the index.
           if (record.offset !== entry.offsets[low]?.offset) continue;
-          const row: TraceEvent = JSON.parse(record.line);
+          const row: unknown = JSON.parse(record.line);
           if (!isTraceFileEvent(row) || row.seq !== entry.offsets[low]!.seq) throw new Error("trace event changed during read");
           const size = traceEventBytes(row);
           if (events.length > 0 && bytes + size > args.maxBytes) break;
@@ -474,6 +527,30 @@ export class TraceFileStore implements TraceStore {
   head(taskId: string): TraceStoreHead | null {
     const entry = this.entry(taskId);
     return entry ? { head: entry.head, closed: entry.closed } : null;
+  }
+
+  format(taskId: string): TraceFileFormatVersion | null {
+    return this.entry(taskId)?.format ?? null;
+  }
+
+  snapshotPart(taskId: string, part: number): TraceSnapshotPart | null {
+    const entry = this.entry(taskId);
+    if (!entry?.closed || entry.format !== "v2" || !Number.isSafeInteger(part)) return null;
+    const offset = entry.snapshotOffsets[part];
+    if (offset === undefined) return null;
+    this.assertOwned(entry);
+    const fd = openSync(entry.path, constants.O_RDONLY | constants.O_NOFOLLOW);
+    try {
+      const stat = fstatSync(fd);
+      if (stat.dev !== entry.dev || stat.ino !== entry.ino) throw new Error("trace file changed during read");
+      for (const record of completeLines(fd, offset, entry.completeBytes, this.options.onReadBytes)) {
+        const row: unknown = JSON.parse(record.line);
+        if (!isTraceFileSnapshotLine(row) || row.snapshot.part !== part) throw new Error("trace snapshot changed during read");
+        this.assertOwned(entry);
+        return row.snapshot;
+      }
+    } finally { closeSync(fd); }
+    throw new Error("trace snapshot shortened during read");
   }
 
   /** Release metadata only for files definitively removed by workspace reclaim. */
@@ -541,26 +618,38 @@ export class TraceFileStore implements TraceStore {
     const entry = this.entry(taskId) ?? this.create(taskId);
     this.assertOwned(entry);
     if (entry.closed) return;
+    if (entry.format === "v1") throw new Error(`v1 trace is read-only: ${entry.path}`);
     // A recovered append-only duplicate cannot remain before a trailer: the
     // trace contract deliberately rejects ambiguous completed files.
     this.canonicalizeDuplicates(taskId, entry);
-    const trailer: TraceFileTrailer = { end: {
+    const parts = end.snapshot ? splitTraceSnapshot({ ...end.snapshot, head: entry.head, closed: true }) : [];
+    const lines = parts.map((snapshot): string => `${JSON.stringify({ snapshot } satisfies TraceFileSnapshotLine)}\n`);
+    const trailer: TraceFileTrailerV2 = { end: {
       status: end.status,
       head: entry.head,
       event_count: entry.eventCount,
       ended_at: end.ended_at,
+      snapshot_parts: parts.length,
     } };
     const fd = openSync(entry.path, constants.O_WRONLY | constants.O_APPEND | constants.O_NOFOLLOW);
+    const snapshotOffsets: number[] = [];
     try {
       const stat = fstatSync(fd);
       if (stat.dev !== entry.dev || stat.ino !== entry.ino) throw new Error("trace file changed during close");
       this.assertOwned(entry);
+      // Also cuts the framing of an earlier close that crashed before its trailer.
       ftruncateSync(fd, entry.completeBytes);
-      writeFileSync(fd, `${JSON.stringify(trailer)}\n`);
+      let offset = entry.completeBytes;
+      for (const line of lines) {
+        snapshotOffsets.push(offset);
+        offset += writeLine(fd, line);
+      }
+      writeLine(fd, `${JSON.stringify(trailer)}\n`);
       fsyncSync(fd);
       entry.completeBytes = fstatSync(fd).size;
     }
     finally { closeSync(fd); }
+    entry.snapshotOffsets = snapshotOffsets;
     entry.closed = true;
     this.evictClosed();
   }

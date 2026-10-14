@@ -1,5 +1,5 @@
 import type { TaskMessagePayload } from "@multiremi/core/types/events";
-import type { TraceEvent } from "@multiremi/contracts/trace";
+import type { LegacyTraceEvent } from "@multiremi/contracts/trace";
 import { executionModel } from "@multiremi/shared/agent-execution";
 import { canMergeTraceText, isTerminalTraceToolStatus, traceParentToolCallId } from "@multiremi/shared/trace-semantics";
 import { redactString, redactValue } from "./redact";
@@ -62,7 +62,7 @@ export interface ExecutionModelSnapshot {
 }
 
 /** Keep the latest acknowledged main model even after its trace row is evicted. */
-export function extractExecutionModel(events: readonly TraceEvent[], previous: ExecutionModelSnapshot | null = null): ExecutionModelSnapshot | null {
+export function extractExecutionModel(events: readonly LegacyTraceEvent[], previous: ExecutionModelSnapshot | null = null): ExecutionModelSnapshot | null {
   let latest = previous;
   for (const event of events) {
     if (event.type !== "execution" || traceParentToolCallId(event)) continue;
@@ -250,8 +250,8 @@ export interface ContextUsage {
 }
 
 /** Latest context snapshot by trace sequence, including legacy JSON-in-content events. */
-export function extractContextUsage(events: readonly TraceEvent[]): ContextUsage | null {
-  let last: TraceEvent | undefined;
+export function extractContextUsage(events: readonly LegacyTraceEvent[]): ContextUsage | null {
+  let last: LegacyTraceEvent | undefined;
   for (const event of events) {
     if (USAGE_TYPES.has(event.type) && !traceParentToolCallId(event) && (!last || event.seq > last.seq)) last = event;
   }
@@ -342,7 +342,7 @@ export function buildTimeline(msgs: TaskMessagePayload[]): TimelineItem[] {
   })));
 }
 
-export function buildTraceTimeline(events: readonly TraceEvent[]): TimelineItem[] {
+export function buildTraceTimeline(events: readonly LegacyTraceEvent[]): TimelineItem[] {
   return finalizeTimeline(events.map((event) => ({
     seq: event.seq,
     type: event.type as TimelineItem["type"],

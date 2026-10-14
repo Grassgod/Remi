@@ -3,6 +3,7 @@ import type {
   FileChange,
   TraceAgentMessageItem,
   TraceCommandItem,
+  TraceItem,
   TraceReasoningItem,
   TraceToolItem,
 } from "@multiremi/contracts/trace";
@@ -116,7 +117,15 @@ describe("item caps", () => {
     expect(bytes(tool.tool)).toBeLessThanOrEqual(512 + bytes(TRACE_TRUNCATION_MARKER));
     expect(bytes(tool.title!)).toBeLessThanOrEqual(512 + bytes(TRACE_TRUNCATION_MARKER));
     expect(bytes(JSON.stringify(tool.input))).toBeLessThanOrEqual(TRACE_ITEM_INPUT_MAX_BYTES);
-    for (const item of [loud, reply, thought, tool]) {
+    // Decision Q3: every capped field says so.
+    expect((tool as TraceToolItem).input_truncated).toBe(true);
+    const base = { parent_id: null, status: "completed" as const, started_at: NOW, completed_at: NOW, duration_ms: null };
+    const longOutput = "o".repeat(200 * KiB);
+    const edit = capTraceItem({ ...base, id: "f", type: "file_change", tool: "Edit", changes: [], output: longOutput } as TraceItem);
+    const web = capTraceItem({ ...base, id: "w", type: "web_search", tool: "WebFetch", action: "fetch", query: null, url: null, output: longOutput } as TraceItem);
+    const agent = capTraceItem({ ...base, id: "a", type: "subagent", tool: "Task", title: null, prompt: null, output: longOutput } as TraceItem);
+    for (const item of [edit, web, agent]) expect((item as { output_truncated?: true }).output_truncated).toBe(true);
+    for (const item of [loud, reply, thought, tool, edit, web, agent]) {
       expect(isTraceItem(item)).toBe(true);
       expect(capTraceItem(item)).toEqual(item);
     }

@@ -1,4 +1,4 @@
-import type { TraceEvent } from "@multiremi/contracts/trace";
+import type { LegacyTraceEvent } from "@multiremi/contracts/trace";
 
 export const TRACE_VIEW_WINDOW_SIZE = 2_000;
 export const TRACE_LIVE_WINDOW_SIZE = 200;
@@ -6,10 +6,10 @@ export const TRACE_HISTORY_WINDOW_BYTES = 8 * 1024 * 1024;
 export const TRACE_LIVE_WINDOW_BYTES = 2 * 1024 * 1024;
 
 /** Merge by sequence and carry known call context before evicting old rows. */
-export function mergeTraceWindow(current: readonly TraceEvent[], incoming: readonly TraceEvent[], limit = TRACE_VIEW_WINDOW_SIZE, maxBytes = TRACE_HISTORY_WINDOW_BYTES): TraceEvent[] {
+export function mergeTraceWindow(current: readonly LegacyTraceEvent[], incoming: readonly LegacyTraceEvent[], limit = TRACE_VIEW_WINDOW_SIZE, maxBytes = TRACE_HISTORY_WINDOW_BYTES): LegacyTraceEvent[] {
   const bySeq = new Map(current.map((event) => [event.seq, event]));
   for (const event of incoming) bySeq.set(event.seq, event);
-  const calls = new Map<string, TraceEvent>();
+  const calls = new Map<string, LegacyTraceEvent>();
   const events = [...bySeq.values()].sort((a, b) => a.seq - b.seq).map((event) => {
     const id = event.tool_call_id;
     if (!id || (event.type !== "tool_use" && event.type !== "tool_result")) return event;

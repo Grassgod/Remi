@@ -1,4 +1,4 @@
-import type { TraceEvent } from "@multiremi/contracts/trace.js";
+import type { LegacyTraceEvent } from "@multiremi/contracts/trace.js";
 import type { MultiremiTaskTrace } from "@multiremi/contracts/trace-file.js";
 import type { MultiremiStore } from "@multiremi/store/store.js";
 import type { DaemonTraceReader } from "@multiremi/api/trace/daemon-trace-reader.js";
@@ -9,7 +9,7 @@ export const TRACE_READ_MAX_BYTES = 1024 * 1024;
 
 export type TraceReadState = "ok" | "unreachable" | "not_found" | "lost";
 export interface TraceReadResult {
-  events: TraceEvent[];
+  events: LegacyTraceEvent[];
   next_after_seq: number;
   head: number;
   eof: boolean;
@@ -82,11 +82,11 @@ export class TraceReader {
   }
 
   private bounded(
-    events: TraceEvent[], afterSeq: number, head: number, eof: boolean, closed: boolean,
+    events: LegacyTraceEvent[], afterSeq: number, head: number, eof: boolean, closed: boolean,
     source: "daemon", maxBytes: number,
     location: Pick<TraceReadResult, "runtime_id" | "runtime_name"> = {},
   ): TraceReadResult {
-    const page: TraceEvent[] = [];
+    const page: LegacyTraceEvent[] = [];
     let bytes = 2;
     for (const event of events) {
       const size = Buffer.byteLength(JSON.stringify(event), "utf8") + (page.length ? 1 : 0);

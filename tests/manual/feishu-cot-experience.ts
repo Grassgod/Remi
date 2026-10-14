@@ -12,7 +12,7 @@ import { promisify } from "node:util";
 import { createInterface } from "node:readline";
 import type * as Lark from "@larksuiteoapi/node-sdk";
 import type { FeishuPresentationCheckpoint, MultiremiTaskHumanRequest } from "@multiremi/contracts/types.js";
-import type { TraceEvent } from "@multiremi/contracts/trace.js";
+import type { LegacyTraceEvent as TraceEvent } from "@multiremi/contracts/trace.js";
 import type { TaskStreamEvent } from "@connectors/base.js";
 import { FeishuTaskPresentation } from "@connectors/feishu/task-presentation.js";
 import { escapeCardText, handleTaskInteractionEvent } from "@connectors/feishu/task-interaction.js";

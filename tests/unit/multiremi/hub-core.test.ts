@@ -143,7 +143,7 @@ function traceFrame(seq: number): HubFrame {
 }
 
 function traceEvent(seq: number): TraceEvent {
-  return { seq, ts: new Date(1_700_000_000_000 + seq).toISOString(), type: "text", content: `t-${seq}` };
+  return { seq, ts: new Date(1_700_000_000_000 + seq).toISOString(), type: "text", content: `t-${seq}` } as unknown as TraceEvent;
 }
 
 interface Bed {

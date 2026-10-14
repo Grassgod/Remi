@@ -1,9 +1,9 @@
 import { describe, it, expect } from "vitest";
-import type { TraceEvent } from "@multiremi/contracts/trace";
+import type { LegacyTraceEvent } from "@multiremi/contracts/trace";
 import { toChatTimeline } from "./chat-timeline";
 import { splitTimeline } from "./copy-text";
 
-const msg = (seq: number, type: string, content: string): TraceEvent => ({
+const msg = (seq: number, type: string, content: string): LegacyTraceEvent => ({
   seq,
   ts: "2026-09-30T00:00:00Z",
   type,

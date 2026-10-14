@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { isKnownTraceEventType, type TraceEvent } from "@multiremi/contracts/trace.js";
+import { isLegacyTraceEventType, type LegacyTraceEvent } from "@multiremi/contracts/trace.js";
 import { canMergeTraceText, isTerminalTraceToolStatus as terminal, traceParentToolCallId,
   traceTextPhase, TraceFinalReplyAccumulator, type TraceSemanticEvent } from "@shared/trace-semantics.js";
 import { cotTextEvents, type CotSample } from "./native-cot.js";
@@ -39,7 +39,7 @@ export class FeishuCotTimeline {
   }
   answer(fallback: string): string { return this.reply.answer() || fallback.trim(); }
 
-  accept(message: TraceEvent): void {
+  accept(message: LegacyTraceEvent): void {
     if (message.seq <= this.seq) return;
     // Resolve deferred titles using only the acknowledged prefix, before any
     // fresh input can alter it. Reconstruct state, but never resend that prefix.
@@ -49,7 +49,7 @@ export class FeishuCotTimeline {
     }
     this.seq = message.seq;
     this.reply.add(message);
-    if (!isKnownTraceEventType(message.type)) {
+    if (!isLegacyTraceEventType(message.type)) {
       this.queue.push([message.type, { ...message }]);
       return;
     }
@@ -142,7 +142,7 @@ export class FeishuCotTimeline {
     }
   }
 
-  private recordTool(message: TraceEvent, hidden: boolean): Tool {
+  private recordTool(message: LegacyTraceEvent, hidden: boolean): Tool {
     const key = message.tool_call_id || `tool:${message.seq}`;
     let tool = this.tools.get(key);
     if (!tool) {

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import { FeishuCotTimeline } from "@connectors/feishu/cot-timeline.js";
 import { cotPlan, cotToolDisplay, isCotSubagent } from "@connectors/feishu/cot-tool-display.js";
-import type { TraceEvent } from "@multiremi/contracts/trace.js";
+import type { LegacyTraceEvent as TraceEvent } from "@multiremi/contracts/trace.js";
 import { taskEvent } from "./feishu-native-harness.js";
 
 const message = (seq: number, type: string, patch: Record<string, unknown> = {}) =>

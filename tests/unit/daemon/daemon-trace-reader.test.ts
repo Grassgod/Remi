@@ -5,8 +5,12 @@ import type { TraceEventInput } from "@multiremi/contracts/trace.js";
 
 const NOW = "2026-09-27T00:00:00.000Z";
 
-function event(patch: Partial<TraceEventInput> = {}): TraceEventInput {
-  return { type: "text", content: "x", ...patch };
+/**
+ * An opaque event body: the reader and the store never look inside events.
+ * TODO(PR 2 P2b): read turn + items pages through the reader's view=turn path.
+ */
+function event(patch: Record<string, unknown> = {}): TraceEventInput {
+  return { type: "text", content: "x", ...patch } as unknown as TraceEventInput;
 }
 
 function ws(runtimeId: string, stores: Map<string, TraceStore>): InMemoryDaemonTraceReader {

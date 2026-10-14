@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { TraceEvent } from "@multiremi/contracts/trace";
+import type { LegacyTraceEvent } from "@multiremi/contracts/trace";
 import { api, TraceEventSchema, mergeTraceWindow, TRACE_VIEW_WINDOW_SIZE, TRACE_LIVE_WINDOW_SIZE, TRACE_HISTORY_WINDOW_BYTES, TRACE_LIVE_WINDOW_BYTES, type TaskTraceRead } from "@multiremi/core/api";
 import { useTraceStreamSubscription } from "@multiremi/core/realtime";
 import type { AgentTask } from "@multiremi/core/types/agent";
@@ -33,8 +33,8 @@ function TaskTraceDialogView({
   promptFallback,
   initialView,
 }: TaskTraceDialogProps) {
-  const [history, setHistory] = useState<TraceEvent[]>([]);
-  const [liveEvents, setLiveEvents] = useState<TraceEvent[]>([]);
+  const [history, setHistory] = useState<LegacyTraceEvent[]>([]);
+  const [liveEvents, setLiveEvents] = useState<LegacyTraceEvent[]>([]);
   const [executionModel, setExecutionModel] = useState<ExecutionModelSnapshot | null>(null);
   const events = useMemo(() => mergeTraceWindow(history, liveEvents, TRACE_VIEW_WINDOW_SIZE + TRACE_LIVE_WINDOW_SIZE, TRACE_HISTORY_WINDOW_BYTES + TRACE_LIVE_WINDOW_BYTES), [history, liveEvents]);
   const [result, setResult] = useState<TaskTraceRead | null>(null);
@@ -83,7 +83,7 @@ function TaskTraceDialogView({
 
   useTraceStreamSubscription(task.id, {
     onFrames: (frames) => {
-      const incoming: TraceEvent[] = [];
+      const incoming: LegacyTraceEvent[] = [];
       for (const frame of frames) {
         if (frame.kind !== "trace") continue;
         const parsed = TraceEventSchema.safeParse(frame.payload);

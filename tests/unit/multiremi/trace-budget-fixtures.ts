@@ -1,6 +1,9 @@
-import { TRACE_EVENT_STATUSES, type TraceEvent, type TraceEventInput } from "@multiremi/contracts/trace.js";
-import { sanitizeStoredEvent } from "@multiremi/worker/trace-store.js";
+// Legacy (v1 fragment) trace budgets for the server read-path fixtures.
+// TODO(PR 2 P2b): rebase these budgets on turn + items events (1 MiB event ceiling).
+import type { LegacyTraceEvent as TraceEvent, LegacyTraceEventInput as TraceEventInput } from "@multiremi/contracts/trace.js";
 import {
+  LEGACY_TRACE_STATUSES as TRACE_EVENT_STATUSES,
+  sanitizeLegacyTraceEvent as sanitizeStoredEvent,
   TRACE_CONTENT_MAX_BYTES, TRACE_OUTPUT_MAX_BYTES, TRACE_TOOL_MAX_BYTES,
   TRACE_INPUT_MAX_BYTES, TRACE_META_MAX_BYTES, TRACE_TRUNCATION_MARKER,
 } from "@shared/trace-sanitize.js";

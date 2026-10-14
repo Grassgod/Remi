@@ -5,8 +5,9 @@
  * A trace lives only on the daemon that ran the task; the server keeps a pointer
  * and reads through the daemon. `TraceRef` is what both the page read and the
  * agent projects route on, so the pointer states are part of the wire contract.
- * The event schema itself is `TraceEvent` in `./trace.js`; the file validator
- * uses that type without redefining its event fields.
+ * The event schemas themselves are `TraceEvent` (v2) and `LegacyTraceEvent` (v1)
+ * in `./trace.js`; the file validator checks only the framing every line shares
+ * (`seq`, `ts`, `type`) and never redefines their fields.
  *
  * Backend-only: this module value-imports `./trace.js` (the v2 snapshot
  * validators), which the web bundle cannot resolve; the frontend reads it as
@@ -17,7 +18,7 @@ import {
   isTraceItem,
   isTraceTimestamp,
   isTraceTurn,
-  type TraceEvent,
+  type TraceEventLine,
   type TraceItem,
   type TraceTurn,
 } from "./trace.js";
@@ -26,7 +27,7 @@ import {
 export const TRACE_FILE_FORMAT = "multiremi.trace.v1";
 
 /**
- * Format marker of a turn + items trace (PR 2). Events are `TurnTraceEvent`
+ * Format marker of a turn + items trace (PR 2). Events are `TraceEvent`
  * lines; `close()` appends snapshot framing lines before the trailer. A v1 file
  * stays readable (raw lines only) and is never appended to.
  */
@@ -115,10 +116,9 @@ export interface TraceFileTrailer {
 /**
  * The status a trailer records: how the turn that owns the trace ended.
  *
- * This is deliberately NOT `TraceEventStatus`. Event status is the ACP tool
- * lifecycle (`TRACE_EVENT_STATUSES` in `./trace.js`) and stays the sole source
- * for an event's `status` field; a turn's outcome is a different vocabulary
- * (`completed` / `failed` / `cancelled`). `TraceStore.close` also narrows
+ * This is deliberately NOT an item status (`TRACE_ITEM_STATUSES` in
+ * `./trace.js`): a turn's outcome is a different vocabulary (`completed` /
+ * `failed` / `cancelled`), the terminal subset of `TRACE_TURN_STATUSES`. `TraceStore.close` also narrows
  * to these three outcomes,
  * and the contract tests assert both sides stay assignable in both directions,
  * so neither can drift.
@@ -202,7 +202,8 @@ export function isTraceFileSnapshotLine(value: unknown): value is TraceFileSnaps
     && isTraceTurn(row.turn) && Array.isArray(row.items) && row.items.every(isTraceItem);
 }
 
-export function isTraceFileEvent(value: unknown): value is TraceEvent {
+/** An event line of either format: `seq >= 1`, a valid `ts` and a non-empty `type`. */
+export function isTraceFileEvent(value: unknown): value is TraceEventLine {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const event = value as Record<string, unknown>;
   return Number.isSafeInteger(event.seq) && (event.seq as number) >= 1

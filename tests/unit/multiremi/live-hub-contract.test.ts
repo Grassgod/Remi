@@ -66,12 +66,12 @@ function a0TraceEvent(seq: number): TraceEvent {
     ts: new Date(1_700_000_000_000 + seq).toISOString(),
     type: "text",
     content: `event-${seq}`,
-  };
+  } as unknown as TraceEvent;
 }
 
 /** An event whose `type` no enum lists, to prove it passes through verbatim. */
 function unknownTypeEvent(seq: number, type: string): TraceEvent {
-  return { seq, ts: new Date(1_700_000_000_000 + seq).toISOString(), type, content: "x" };
+  return { seq, ts: new Date(1_700_000_000_000 + seq).toISOString(), type, content: "x" } as unknown as TraceEvent;
 }
 
 /** The wiring C1/A-6 use: the hub is handed to a consumer of A-0's `TraceSink`. */
@@ -342,7 +342,7 @@ describe("EmptyLiveHub", () => {
     // are for enumeration and bucketing, not validation, so the hub must not be
     // the layer that drops or rewrites a type it has not seen.
     const exotic = unknownTypeEvent(1, "some_future_type");
-    expect(exotic.type).toBe("some_future_type");
+    expect(exotic.type as string).toBe("some_future_type");
     expect(() => hub.append("task_a", [exotic])).not.toThrow();
   });
 

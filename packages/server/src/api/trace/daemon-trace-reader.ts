@@ -22,7 +22,7 @@
  * five state values; the daemon side never learns about those states.
  */
 
-import type { TraceEvent } from "@multiremi/contracts/trace.js";
+import type { LegacyTraceEvent } from "@multiremi/contracts/trace.js";
 import type { DaemonProtocolErrorCode } from "@multiremi/contracts/daemon-protocol.js";
 import type { TraceStore } from "@multiremi/worker/trace-store.js";
 
@@ -49,7 +49,7 @@ export interface DaemonTraceReadRequest {
 
 export interface DaemonTraceReadSuccess {
   ok: true;
-  events: TraceEvent[];
+  events: LegacyTraceEvent[];
   /** Pass back as `afterSeq` to continue. */
   next_after_seq: number;
   /** Daemon's current head for this task. */

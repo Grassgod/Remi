@@ -1,5 +1,6 @@
 import { createResponsibleTestIssue } from './helpers.js';
-import { InMemoryTraceStore } from "@multiremi/worker/trace-store.js";
+// TODO(PR 2 P2b): these read-path cases still feed legacy fragment events.
+import { LegacyFragmentTraceStore as InMemoryTraceStore } from "../../helpers/legacy-trace-store.js";
 import { InMemoryDaemonTraceReader } from "@multiremi/api/trace/daemon-trace-reader.js";
 import { turnApiPath } from "./unified-test-paths.js";
 import { afterEach, describe, expect, it } from "bun:test";

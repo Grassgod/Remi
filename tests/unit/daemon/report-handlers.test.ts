@@ -204,18 +204,27 @@ describe("v2 reports", () => {
       const trace = new DaemonTraceTransport(peer as unknown as DaemonProtocolClient);
       const received: Array<{ taskId: string; fields: DaemonTaskCompletionFields | null }> = [];
       try {
+        const at = "2026-10-15T00:00:00.000Z";
+        const item = { parent_id: null, status: "completed" as const, started_at: at, completed_at: at };
         trace.append(task.id, runtime.id, [
-          { type: "execution", meta: { provider: "claude", model: "fixture-model" } },
-          { type: "tool_use", tool: "Read" },
-          { type: "text", content: "final **answer**", meta: { phase: "final" } },
+          { type: "turn.started", turn: { id: task.id, turn_id: null, agent_id: "agt", agent_name: null, provider: "claude",
+            requested_model: null, model: null, status: "running", error: null, started_at: at, completed_at: null, duration_ms: null,
+            final_item_id: null, final_started_at: null, context_usage: null,
+            stats: { item_count: 0, tool_call_count: 0, process_item_count: 0, type_histogram: [] } } },
+          { type: "turn.updated", patch: { model: "fixture-model" } },
+          { type: "item.completed", item: { ...item, id: "call_1", type: "command", tool: "Read", source: "tool", command: null,
+            cwd: null, actions: [{ type: "read", command: null, name: "a.ts", path: "a.ts" }], output: null, exit_code: null, duration_ms: 1 } },
+          { type: "item.completed", item: { ...item, id: "msg:final", type: "agent_message", text: "final **answer**", phase: "final" } },
         ]);
         const fields = trace.completion(task.id);
+        expect(fields).toMatchObject({ trace: { head: 5 }, context_usage: null, worked_ms: 0, process_item_count: 1 });
         expect(await sendReport(store, type, { task_id: task.id, output: "answer", error: "failure", ...fields }, {
           runtimeId: runtime.id, onRoundCard: (taskId, fields) => received.push({ taskId, fields }),
         })).toEqual(success(store, type));
+        // TODO(PR 2 P2b): report-handlers validates and forwards context_usage, worked_ms and process_item_count too.
         expect(received).toEqual([{ taskId: task.id, fields: {
-          trace: { head: 3, event_count: 3, closed: true, tool_call_count: 1,
-            type_histogram: [{ type: "execution", tool: null, count: 1 }, { type: "tool_use", tool: "Read", count: 1 }, { type: "text", tool: null, count: 1 }] },
+          trace: { head: 5, event_count: 5, closed: true, tool_call_count: 1,
+            type_histogram: [{ type: "command", tool: "Read", count: 1 }, { type: "agent_message", tool: null, count: 1 }] },
           final_reply_md: "final **answer**", model: { provider: "claude", model: "fixture-model" },
         } }]);
       } finally { await trace.stop(); }

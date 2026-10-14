@@ -16,7 +16,7 @@ import {
   TRACE_REF_LOCATIONS,
 } from "@multiremi/contracts/trace-file";
 import type { TraceEndStatus, TraceFileHeader, TraceFileTrailer } from "@multiremi/contracts/trace-file";
-import { TRACE_EVENT_STATUSES } from "@multiremi/contracts/trace.js";
+import { TRACE_ITEM_STATUSES } from "@multiremi/contracts/trace.js";
 import type { TraceEndStatus as StoreTraceEndStatus } from "@multiremi/worker/trace-store.js";
 
 /**
@@ -208,10 +208,10 @@ describe("trace file and archive request contract", () => {
     // lists must stay different, or the trailer would accept a lifecycle value.
     expect(TRACE_END_STATUSES).not.toContain("pending" as never);
     expect(TRACE_END_STATUSES).not.toContain("in_progress" as never);
-    // Tool cancellation is also an event outcome, but nonterminal event states
-    // must never enter the trailer vocabulary.
+    // Item outcomes (declined, stopped) and nonterminal item states must never
+    // enter the trailer vocabulary.
     expect(
-      TRACE_EVENT_STATUSES.some(
+      TRACE_ITEM_STATUSES.some(
         (status) => !(TRACE_END_STATUSES as readonly string[]).includes(status),
       ),
     ).toBe(true);

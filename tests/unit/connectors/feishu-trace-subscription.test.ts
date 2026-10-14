@@ -1,7 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import { subscribeFeishuTask } from "../../../apps/remi/cli/multiremi.js";
 import type { TaskStreamEvent } from "@connectors/base.js";
-import type { TraceEvent } from "@multiremi/contracts/trace.js";
+import type { LegacyTraceEvent as TraceEvent } from "@multiremi/contracts/trace.js";
 import type { FeishuBotTaskSnapshot } from "@multiremi/contracts/types.js";
 import type { DaemonProtocolClient } from "@multiremi/worker/daemon-protocol-client.js";
 import { DaemonTraceSubscriptions } from "@multiremi/worker/trace-subscriptions.js";
@@ -69,7 +69,7 @@ describe("Feishu trace subscription", () => {
     let released = false;
     let unsubscribed = false;
     const daemon = {
-      subscribeTrace: async (_task: string, _cursor: number, callback: (rows: TraceEvent[], closed: boolean) => void | Promise<void>) => {
+      subscribeTrace: async (_task: string, _cursor: number, callback: (rows: any[], closed: boolean) => void | Promise<void>) => {
         await callback([event(1), event(2)], false);
         released = true;
         return async () => { unsubscribed = true; };
@@ -88,7 +88,7 @@ describe("Feishu trace subscription", () => {
     let consumed = 0;
     let unsubscribed = false;
     const daemon = {
-      subscribeTrace: async (_task: string, cursor: number, callback: (rows: TraceEvent[], closed: boolean) => void | Promise<void>) => {
+      subscribeTrace: async (_task: string, cursor: number, callback: (rows: any[], closed: boolean) => void | Promise<void>) => {
         expect(cursor).toBe(0);
         for (let start = 0; start < 1500; start += 500) {
           await callback(Array.from({ length: 500 }, (_, offset) => event(start + offset + 1)), false);

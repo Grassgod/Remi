@@ -5,9 +5,9 @@ import type {
   TraceEventBody,
   TraceItem,
   TraceTurn,
-  TurnTraceEvent,
+  TraceEvent,
 } from "@multiremi/contracts/trace";
-import { isTraceItem, isTraceTurn, isTurnTraceEvent } from "@multiremi/contracts/trace";
+import { isTraceItem, isTraceTurn, isTraceEvent } from "@multiremi/contracts/trace";
 import {
   EMPTY_TURN_TRACE,
   TurnTraceFold,
@@ -19,6 +19,7 @@ import {
   completeTurn,
   finalItem,
   finalReplyBody,
+  isProcessItem,
   pageTurnTrace,
   processItemCount,
   selectFinalReply,
@@ -66,12 +67,12 @@ const input: TraceItem = {
 };
 
 /** Number a list of bodies from `from`, as the store would. */
-function stored(bodies: TraceEventBody[], from = 1): TurnTraceEvent[] {
-  return bodies.map((body, index) => ({ seq: from + index, ts: at(from + index), ...body }) as TurnTraceEvent);
+function stored(bodies: TraceEventBody[], from = 1): TraceEvent[] {
+  return bodies.map((body, index) => ({ seq: from + index, ts: at(from + index), ...body }) as TraceEvent);
 }
 
 /** A representative running turn: input, streamed reply, a command, a final reply. */
-function scenario(): TurnTraceEvent[] {
+function scenario(): TraceEvent[] {
   return stored([
     { type: "turn.started", turn: turn() },
     { type: "item.completed", item: input },
@@ -91,7 +92,7 @@ function scenario(): TurnTraceEvent[] {
   ]);
 }
 
-function fold(events: readonly TurnTraceEvent[], state: TurnTraceState = EMPTY_TURN_TRACE): TurnTraceState {
+function fold(events: readonly TraceEvent[], state: TurnTraceState = EMPTY_TURN_TRACE): TurnTraceState {
   return applyTurnTraceEvents(state, events);
 }
 
@@ -172,7 +173,7 @@ describe("turn trace reducer", () => {
   });
 
   it("skips unknown event types but still advances the head", () => {
-    const state = fold([...stored([{ type: "turn.started", turn: turn() }]), { seq: 2, ts: at(2), type: "item.future" } as unknown as TurnTraceEvent]);
+    const state = fold([...stored([{ type: "turn.started", turn: turn() }]), { seq: 2, ts: at(2), type: "item.future" } as unknown as TraceEvent]);
     expect(state.head).toBe(2);
     expect(state.items).toEqual([]);
   });
@@ -305,6 +306,25 @@ describe("stats and helpers", () => {
       { type: "command", tool: "Read", count: 1 },
       { type: "reasoning", tool: null, count: 1 },
     ]);
+  });
+
+  it("leaves permissions and questions out of the process count (decision Q1)", () => {
+    const permission: TraceItem = {
+      id: "perm:d1", parent_id: null, status: "completed", started_at: at(2), completed_at: at(3), type: "permission",
+      tool_item_id: "call_1", title: "Run ls", message_id: "d1", options: [], decision: null, outcome: "cancelled",
+      responded_by: null, reply_message_id: null,
+    };
+    const question: TraceItem = {
+      id: "q:d2", parent_id: null, status: "completed", started_at: at(3), completed_at: at(4), type: "question",
+      tool_item_id: null, message: "Which?", message_id: "d2", questions: [], answers: null, responded_by: null,
+      reply_message_id: null,
+    };
+    const stats = turnTraceStats([...items, permission, question]);
+    expect(stats.item_count).toBe(11);
+    expect(stats.process_item_count).toBe(5);
+    expect(isProcessItem(permission)).toBe(false);
+    expect(isProcessItem(question)).toBe(false);
+    expect(isProcessItem(items[1]!)).toBe(true);
   });
 
   it("finds top-level items and the final item", () => {
@@ -460,16 +480,16 @@ describe("final reply rule", () => {
 
 describe("contract validators on reducer output", () => {
   it("accepts every event and item the scenario produces", () => {
-    for (const event of scenario()) expect(isTurnTraceEvent(event), event.type).toBe(true);
+    for (const event of scenario()) expect(isTraceEvent(event), event.type).toBe(true);
     for (const item of fold(scenario()).items) expect(isTraceItem(item), item.id).toBe(true);
   });
 
   it("rejects malformed events", () => {
-    expect(isTurnTraceEvent({ seq: 0, ts: at(0), type: "turn.started", turn: turn() })).toBe(false);
-    expect(isTurnTraceEvent({ seq: 1, ts: "yesterday", type: "turn.started", turn: turn() })).toBe(false);
-    expect(isTurnTraceEvent({ seq: 1, ts: at(1), type: "item.delta", item_id: "x", field: "input", delta: "" })).toBe(false);
-    expect(isTurnTraceEvent({ seq: 1, ts: at(1), type: "turn.updated", patch: { status: "completed" } })).toBe(false);
-    expect(isTurnTraceEvent({ seq: 1, ts: at(1), type: "item.started", item: { ...message("m", "x"), phase: "final_answer" } })).toBe(false);
-    expect(isTurnTraceEvent({ seq: 1, ts: at(1), type: "item.future" })).toBe(false);
+    expect(isTraceEvent({ seq: 0, ts: at(0), type: "turn.started", turn: turn() })).toBe(false);
+    expect(isTraceEvent({ seq: 1, ts: "yesterday", type: "turn.started", turn: turn() })).toBe(false);
+    expect(isTraceEvent({ seq: 1, ts: at(1), type: "item.delta", item_id: "x", field: "input", delta: "" })).toBe(false);
+    expect(isTraceEvent({ seq: 1, ts: at(1), type: "turn.updated", patch: { status: "completed" } })).toBe(false);
+    expect(isTraceEvent({ seq: 1, ts: at(1), type: "item.started", item: { ...message("m", "x"), phase: "final_answer" } })).toBe(false);
+    expect(isTraceEvent({ seq: 1, ts: at(1), type: "item.future" })).toBe(false);
   });
 });

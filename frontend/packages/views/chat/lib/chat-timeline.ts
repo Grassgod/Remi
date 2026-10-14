@@ -1,4 +1,4 @@
-import type { TraceEvent } from "@multiremi/contracts/trace";
+import type { LegacyTraceEvent } from "@multiremi/contracts/trace";
 import type { ChatTimelineItem } from "@multiremi/core/chat";
 import { buildTraceTimeline } from "../../common/task-transcript/build-timeline";
 
@@ -12,7 +12,7 @@ import { buildTraceTimeline } from "../../common/task-transcript/build-timeline"
  * boundary. A run whose last event is a compaction chunk would push the real
  * final answer inside the fold and leave `final` empty.
  */
-export function toChatTimeline(events: readonly TraceEvent[]): ChatTimelineItem[] {
+export function toChatTimeline(events: readonly LegacyTraceEvent[]): ChatTimelineItem[] {
   return buildTraceTimeline(events).filter(
     (item) => item.type !== "compaction",
   ) as ChatTimelineItem[];

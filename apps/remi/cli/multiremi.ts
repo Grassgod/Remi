@@ -17,7 +17,7 @@ import {
   MultiremiStore,
 } from "@multiremi/index.js";
 import type { MultiremiDaemonOptions } from "@multiremi/daemon.js";
-import type { TraceEvent } from "@multiremi/contracts/trace.js";
+import type { LegacyTraceEvent } from "@multiremi/contracts/trace.js";
 import type {
   FeishuBotCancelCandidate,
   FeishuBotCancelResult,
@@ -1449,7 +1449,7 @@ export async function* subscribeFeishuTask(
   signal?: AbortSignal,
   throughSeq = 0,
 ): AsyncGenerator<TaskStreamEvent> {
-  const batches: Array<{ events: TraceEvent[]; closed: boolean; consumed: () => void }> = [];
+  const batches: Array<{ events: LegacyTraceEvent[]; closed: boolean; consumed: () => void }> = [];
   const pendingAcks = new Set<() => void>();
   let wake: (() => void) | undefined;
   let active = true;

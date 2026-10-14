@@ -4,7 +4,8 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { subscribeFeishuTask } from "../../apps/remi/cli/multiremi.js";
 import { FeishuTaskPresentation } from "@connectors/feishu/task-presentation.js";
-import type { TraceEvent } from "@multiremi/contracts/trace.js";
+// TODO(PR 2 P4): Feishu presentation still consumes legacy fragment events.
+import type { LegacyTraceEvent as TraceEvent } from "@multiremi/contracts/trace.js";
 import type { DaemonTraceTransport } from "@multiremi/worker/trace-transport.js";
 import { daemonTraceService } from "@multiremi/api/daemon-protocol/trace-handlers.js";
 import { DaemonProtocolHarness, waitFor } from "./daemon-protocol-v2/harness.js";
@@ -52,7 +53,7 @@ it("presents continuous CoT through a real local daemon/API disconnect and resum
     // This manually claimed fixture must be advertised as active on reconnect.
     activeTaskIds.push(task.id);
     const transport = (h.daemon as any).ensureTrace() as DaemonTraceTransport;
-    transport.append(task.id, runtimeId, [{ type: "thinking", content: "consumed 1" }, { type: "thinking", content: "consumed 2" }]);
+    transport.append(task.id, runtimeId, [{ type: "thinking", content: "consumed 1" }, { type: "thinking", content: "consumed 2" }] as never);
     await waitFor(() => daemonTraceService(h.layer).sink.head(task.id) === 2, "checkpoint prefix");
     expect(h.store.getTask(task.id)?.status).toBe("running");
     const checkpoint = { version: "native_cot_v1" as const, startedAt: Date.now(), throughSeq: 2, interactions: {},
@@ -71,7 +72,7 @@ it("presents continuous CoT through a real local daemon/API disconnect and resum
     transport.append(task.id, runtimeId, [
       { type: "thinking", content: "live 3" },
       { type: "tool_use", tool: "Read", toolCallId: "local-read", input: { path: "/synthetic/source.ts" } },
-    ]);
+    ] as never);
     await waitFor(() => received.length === 2 && sender.checkpoint?.throughSeq === 4, "CoT checkpoint before disconnect", 5_000);
     expect(http.filter(request => request.path.endsWith(`/tasks/${task.id}/status`))).toEqual([]);
     await h.disconnect();
@@ -79,7 +80,7 @@ it("presents continuous CoT through a real local daemon/API disconnect and resum
       { type: "tool_result", toolCallId: "local-read", status: "failed", output: "synthetic private stacktrace" },
       { type: "thinking", content: "recovered 5" },
       { type: "future.widget", content: "literal future payload", input: { nested: [1, { two: true }] }, meta: { arbitrary: "value" } },
-    ]);
+    ] as never);
     await h.reconnect();
     expect(h.store.getTask(task.id)?.status).toBe("running");
     await waitFor(() => received.length === 5 && sender.checkpoint?.throughSeq === 7, "resumed CoT checkpoint", 5_000);

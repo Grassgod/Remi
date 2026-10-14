@@ -12,7 +12,14 @@ import { promisify } from "node:util";
 import type * as Lark from "@larksuiteoapi/node-sdk";
 import type { FeishuBotTaskSnapshot, FeishuPresentationCheckpoint, MultiremiTaskMessage } from "@multiremi/contracts/types.js";
 import type { TaskStreamEvent } from "@connectors/base.js";
-import { taskMessageToTraceEvent } from "@multiremi/contracts/trace.js";
+import type { LegacyTraceEventInput } from "@multiremi/contracts/trace.js";
+import type { TaskMessageInput } from "@multiremi/contracts/types.js";
+
+// TODO(PR 2 P4): replay turn + items fixtures. Legacy rows map field for field.
+function taskMessageToTraceEvent(message: TaskMessageInput, ts: string): LegacyTraceEventInput {
+  return { ts, type: message.type, tool: message.tool ?? null, content: message.content ?? null, input: message.input ?? null,
+    output: message.output ?? null, tool_call_id: message.toolCallId ?? null, status: message.status ?? null, meta: message.meta ?? null };
+}
 import { FeishuTaskPresentation } from "@connectors/feishu/task-presentation.js";
 
 const arg = (name: string) => { const i = process.argv.indexOf(name); return i < 0 ? undefined : process.argv[i + 1]; };

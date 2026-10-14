@@ -2,6 +2,7 @@ import { expect, it } from "bun:test";
 import { readFeishuResultMetadata, sendResultCardLane } from "../../../apps/remi/cli/multiremi.js";
 import type { MultiremiDaemon } from "@multiremi/daemon.js";
 import type { MultiremiFeishuBotOutboundDelivery } from "@multiremi/contracts/types.js";
+import type { TraceEvent } from "@multiremi/contracts/trace.js";
 import type { FeishuChannelHandle } from "../../../apps/remi/cli/agent.js";
 import { completed, transcript } from "../connectors/feishu-native-harness.js";
 
@@ -14,7 +15,8 @@ function reader(unsubscribe = async () => {}): Reader {
   return {
     subscribeTrace: async (_id, afterSeq, callback) => {
       expect(afterSeq).toBe(0);
-      for await (const event of transcript()) if (event.kind === "message") callback([event.message], false);
+      // TODO(PR 2 P4): the Feishu harness still replays legacy fragment events.
+      for await (const event of transcript()) if (event.kind === "message") callback([event.message as unknown as TraceEvent], false);
       callback([], true);
       return unsubscribe;
     },

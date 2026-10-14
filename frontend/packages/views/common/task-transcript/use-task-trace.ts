@@ -2,17 +2,17 @@
 
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMemo, useRef, useState } from "react";
-import type { TraceEvent } from "@multiremi/contracts/trace";
+import type { LegacyTraceEvent } from "@multiremi/contracts/trace";
 import { api, TraceEventSchema, mergeTraceWindow, TRACE_LIVE_WINDOW_SIZE, TRACE_LIVE_WINDOW_BYTES } from "@multiremi/core/api";
 import { useTraceStreamSubscription } from "@multiremi/core/realtime";
 
 /** Bounded recent activity for live cards; complete execution is read in the dialog. */
-export function useTaskTrace(taskId: string | null | undefined, enabled = true, live = false, turnId?: string): TraceEvent[] {
+export function useTaskTrace(taskId: string | null | undefined, enabled = true, live = false, turnId?: string): LegacyTraceEvent[] {
   return useTaskTraceState(taskId, enabled, live, turnId).events;
 }
 
 export function useTaskTraceState(taskId: string | null | undefined, enabled = true, live = false, turnId?: string): {
-  events: TraceEvent[]; closed: boolean; error: boolean;
+  events: LegacyTraceEvent[]; closed: boolean; error: boolean;
 } {
   const qc = useQueryClient();
   const key = useMemo(() => ["task-trace", taskId] as const, [taskId]);
@@ -31,18 +31,18 @@ export function useTaskTraceState(taskId: string | null | undefined, enabled = t
         ? await api.getTaskTrace(taskId, Math.max(0, head.head - TRACE_LIVE_WINDOW_SIZE), TRACE_LIVE_WINDOW_SIZE, turnId)
         : head;
       if (page.closed && currentTask.current === taskId) setTerminal({ taskId, closed: true, error: false });
-      return mergeTraceWindow(page.events, qc.getQueryData<TraceEvent[]>(key) ?? [], TRACE_LIVE_WINDOW_SIZE, TRACE_LIVE_WINDOW_BYTES);
+      return mergeTraceWindow(page.events, qc.getQueryData<LegacyTraceEvent[]>(key) ?? [], TRACE_LIVE_WINDOW_SIZE, TRACE_LIVE_WINDOW_BYTES);
     },
   });
   useTraceStreamSubscription(taskId, {
     onFrames: (frames) => {
-      const incoming: TraceEvent[] = [];
+      const incoming: LegacyTraceEvent[] = [];
       for (const frame of frames) {
         if (frame.kind !== "trace") continue;
         const parsed = TraceEventSchema.safeParse(frame.payload);
         if (parsed.success) incoming.push(parsed.data);
       }
-      if (incoming.length) qc.setQueryData<TraceEvent[]>(key, (current) => mergeTraceWindow(current ?? [], incoming, TRACE_LIVE_WINDOW_SIZE, TRACE_LIVE_WINDOW_BYTES));
+      if (incoming.length) qc.setQueryData<LegacyTraceEvent[]>(key, (current) => mergeTraceWindow(current ?? [], incoming, TRACE_LIVE_WINDOW_SIZE, TRACE_LIVE_WINDOW_BYTES));
     },
     onAck: (ack) => {
       if (ack.closed && ack.head_seq === 0) stop(true, false);

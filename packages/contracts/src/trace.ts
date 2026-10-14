@@ -1,49 +1,24 @@
 /**
- * Canonical task-trace event (MUL-401 §5). This file is the single definition of
- * a trace event: the daemon's trace file, the `trace.append` WebSocket frame, the
- * Live Hub (MUL-403) and the archived conversation log (MUL-402) all carry this
- * exact shape. Nothing may restate it.
+ * Task traces (MUL-401 §5, PR 2). This file is the single definition of a trace
+ * event: the daemon's trace file, the `trace.append` WebSocket frame, the Live
+ * Hub (MUL-403) and every reader carry these exact shapes. Nothing may restate
+ * them.
  *
- * Field-to-field mapping with {@link TaskMessageInput} is intentional and
- * lossless: the backfill of `multiremi_task_messages` (MUL-402) must reproduce
- * every historical row, so the two shapes move together. The one naming
- * difference is `toolCallId` -> `tool_call_id`; every other field keeps its name
- * and nullability.
+ * Since PR 2 a trace is one turn attempt as "turn + items" ({@link TraceEvent},
+ * below). The fragment events that came before survive as
+ * {@link LegacyTraceEvent}: v1 trace files are read-only and still hold them,
+ * and the readers that have not switched yet (frontend, Feishu, server read
+ * path) are typed against them until their own phase rewrites them.
  */
 
-import type { TaskMessageInput } from "./types.js";
+// ── Legacy fragment events (multiremi.trace.v1) ────────────────────────────
 
 /**
- * The event types the daemon produces today, read from the writers rather than
- * inferred from the viewer:
- *
- * - `execution`            daemon.ts (task start / model switch), acp-event-mapper
- * - `text`                 acp-event-mapper: `agent_message_chunk`
- * - `thinking`             acp-event-mapper: `agent_thought_chunk`
- * - `compaction`           acp-event-mapper: bridge compaction banner
- * - `usage`                acp-event-mapper: `usage_update` snapshot
- * - `plan`                 acp-event-mapper: `plan` snapshot
- * - `tool_use`             acp-event-mapper: `tool_call` / `tool_call_update`
- * - `tool_result`          acp-event-mapper: terminal tool frame
- * - `permission_request`   daemon.ts permission handler
- * - `permission_response`  daemon.ts permission handler
- * - `question_request`     daemon.ts elicitation handler
- * - `question_response`    daemon.ts elicitation handler
- * - `steer`                daemon.ts steer feed
- *
- * Deliberately absent: `assistant` and `error`. `assistant` was a stale writer
- * that e1d88572 removed (the mapper emits `text`), and `error` only appears in
- * frontend display unions and on the browser socket's handshake frames — no
- * daemon writer emits either as a task message. A viewer that shows error or
- * assistant rows derives them; it must not expect them on the wire.
- *
- * This list is for enumeration and histogram bucketing ONLY. It is not a
- * validator: {@link TraceEvent.type} is an open string (MUL-402 ruling 1), and an
- * event whose type is not listed here is stored, transmitted and rendered
- * verbatim rather than being rewritten or dropped. Consumers switch on the known
- * values and fall back to a generic row for anything else.
+ * The fragment event types the daemon wrote before PR 2 (`multiremi.trace.v1`).
+ * For enumeration of legacy rows only; nothing produces them any more. The type
+ * stays an open string: an unlisted legacy row is passed through verbatim.
  */
-export const KNOWN_TRACE_EVENT_TYPES = [
+export const LEGACY_TRACE_EVENT_TYPES = [
   "execution",
   "text",
   "thinking",
@@ -59,68 +34,24 @@ export const KNOWN_TRACE_EVENT_TYPES = [
   "steer",
 ] as const;
 
-/**
- * The closed union of the types listed above. Named `Known...` on purpose: it
- * describes the known set, and is never the declared type of a field.
- */
-export type KnownTraceEventType = (typeof KNOWN_TRACE_EVENT_TYPES)[number];
+export type LegacyTraceEventType = (typeof LEGACY_TRACE_EVENT_TYPES)[number];
 
-const KNOWN_TRACE_EVENT_TYPE_SET: ReadonlySet<string> = new Set(KNOWN_TRACE_EVENT_TYPES);
+const LEGACY_TRACE_EVENT_TYPE_SET: ReadonlySet<string> = new Set(LEGACY_TRACE_EVENT_TYPES);
 
-/** Whether this is one of the types the daemon is known to produce today. */
-export function isKnownTraceEventType(value: unknown): value is KnownTraceEventType {
-  return typeof value === "string" && KNOWN_TRACE_EVENT_TYPE_SET.has(value);
+/** Whether this is one of the fragment types a v1 trace can hold. */
+export function isLegacyTraceEventType(value: unknown): value is LegacyTraceEventType {
+  return typeof value === "string" && LEGACY_TRACE_EVENT_TYPE_SET.has(value);
 }
 
 /**
- * Tool statuses the write path accepts; anything else is normalized to null.
+ * One stored fragment event of a v1 trace (`multiremi.trace.v1`).
  *
- * This is the **single source** for the status set, and it lives with the type it
- * constrains: `TraceEvent.status` is a contract field, so the allowed values are
- * part of the wire contract. `@shared/trace-sanitize.js` derives its lookup set
- * from this constant rather than restating it, which makes "a status added here but
- * silently dropped by the sanitizer" impossible by construction — the drift a test
- * would otherwise have to catch.
- *
- * The direction is `shared -> contracts`. It is safe: `packages/contracts` is a
- * runtime leaf (no imports at all after types are erased, and no dependency on
- * `packages/shared`), so there is no cycle, and `@multiremi/contracts/*` subpath
- * imports are explicitly allowed for every package by
- * `tests/arch/package-boundaries.test.ts`.
- *
- * The byte caps and the structured guards are deliberately NOT declared here: they
- * are enforcement policy rather than wire shape, and their single home is
- * `@shared/trace-sanitize.js`.
+ * Field-to-field mapping with the legacy `TaskMessageInput` row (`toolCallId`
+ * -> `tool_call_id`). `seq` is dense per task and `ts` is an ISO 8601 string, as
+ * for {@link TraceEvent}. Readers that still render fragments are typed against
+ * this until PR 2 P3/P4 switch them; the last of those removes it.
  */
-export const TRACE_EVENT_STATUSES = ["pending", "in_progress", "completed", "failed", "cancelled"] as const;
-
-export type TraceEventStatus = (typeof TRACE_EVENT_STATUSES)[number];
-
-/**
- * One stored event.
- *
- * `seq` is dense and per task: it starts at 1 and increases by one for every
- * appended event, so `first_seq .. head` has no holes. It is assigned at the
- * durable write by {@link TraceStore.append} and never rewritten — a rewritten
- * sequence would break the Hub's "drop everything at or below head" rule and the
- * file's append-only invariant. (The legacy `TaskMessageInput.seq` fell out of
- * `TaskMessageBatcher` coalescing, which leaves gaps; that sequence is void in
- * v2.)
- *
- * `ts` is an **ISO 8601 string**, not a number: it is the moment the event was
- * observed, and a backfilled event takes `task_messages.created_at` verbatim so
- * the two can be compared field for field. The numeric `ts` on the frame
- * envelope is a different thing and is unaffected.
- *
- * `type` is an open string. See {@link KNOWN_TRACE_EVENT_TYPES}.
- *
- * The event carries no `task_id`: the container that holds it does — the
- * `trace.append` frame's payload, the trace-file header, the Hub subscription.
- *
- * Runtime/context completeness is carried by `{ head, closed }` rather than by a
- * terminator event: there is no `trace.end` event type (MUL-402 ruling 3).
- */
-export interface TraceEvent {
+export interface LegacyTraceEvent {
   seq: number;
   ts: string;
   type: string;
@@ -133,70 +64,12 @@ export interface TraceEvent {
   meta?: Record<string, unknown> | null;
 }
 
-/**
- * An event as a producer hands it over: no `seq`, and normally no `ts`.
- *
- * `seq` is always the store's to assign. `ts` is too in the live path, where the
- * store stamps the write time, so a producer omits it — but the backfill must
- * supply it, because a reproduced historical turn has to keep the row's original
- * `created_at` rather than the moment of the migration. Hence `ts` is optional
- * here and the store's rule is "use the event's `ts` when it has one, otherwise
- * stamp the clock".
- *
- * (MUL-402's A2 wrote the input as `Omit<TraceEvent, "seq" | "ts">` with the store
- * assigning both. That is the live path and this type is that type plus the
- * backfill's timestamp; without the field there is no way to express
- * `ts = task_messages.created_at`, which ruling 1 requires.)
- */
-export type TraceEventInput = Omit<TraceEvent, "seq" | "ts"> & { ts?: string };
-
-/** `{ task_id }`-scoped container used by frames and file segments. */
-export interface TraceEventBatch {
-  task_id: string;
-  events: TraceEvent[];
-}
-
-/**
- * Lossless `TaskMessageInput` -> trace event, used by the MUL-402 backfill.
- *
- * Unknown type strings pass through **verbatim**; rewriting them would make the
- * backfill lossy. `ts` is the ISO timestamp to stamp the event with — for a
- * backfilled row that is the row's `created_at`.
- */
-export function taskMessageToTraceEvent(message: TaskMessageInput, ts: string): TraceEventInput {
-  return {
-    ts,
-    type: message.type,
-    tool: message.tool ?? null,
-    content: message.content ?? null,
-    input: message.input ?? null,
-    output: message.output ?? null,
-    tool_call_id: message.toolCallId ?? null,
-    status: message.status ?? null,
-    meta: message.meta ?? null,
-  };
-}
-
-/** Lossless trace event -> `TaskMessageInput`, for readers not yet on the Hub. */
-export function traceEventToTaskMessage(event: TraceEvent): TaskMessageInput {
-  return {
-    seq: event.seq,
-    type: event.type,
-    tool: event.tool ?? null,
-    content: event.content ?? null,
-    input: event.input ?? null,
-    output: event.output ?? null,
-    toolCallId: event.tool_call_id ?? null,
-    status: event.status ?? null,
-    meta: event.meta ?? null,
-  };
-}
+/** A legacy fragment as a historical writer handed it over: no `seq`, optional `ts`. */
+export type LegacyTraceEventInput = Omit<LegacyTraceEvent, "seq" | "ts"> & { ts?: string };
 
 // ── Turn + items trace (PR 2) ───────────────────────────────────────────────
 //
-// The types below replace the fragment `TraceEvent` above. They land next to it
-// first (P1, additive); P2 renames the old `TraceEvent` to `LegacyTraceEvent` and
-// `TurnTraceEvent` to `TraceEvent`. Until then nothing writes them.
+// The types below replaced the fragment events above (now `LegacyTraceEvent`).
 //
 // A trace is one turn attempt: a `TraceTurn` plus the `TraceItem`s that happened
 // in it, each a complete record (Codex app-server v2 Turn / Item model). Events
@@ -338,6 +211,7 @@ export interface TraceFileChangeItem extends TraceItemBase {
   tool: string;
   changes: FileChange[];
   output: string | null;
+  output_truncated?: true;
   duration_ms: number | null;
 }
 
@@ -348,6 +222,7 @@ export interface TraceWebSearchItem extends TraceItemBase {
   query: string | null;
   url: string | null;
   output: string | null;
+  output_truncated?: true;
   duration_ms: number | null;
 }
 
@@ -358,6 +233,7 @@ export interface TraceToolItem extends TraceItemBase {
   kind: string | null;
   title: string | null;
   input: Record<string, unknown> | null;
+  input_truncated?: true;
   output: string | null;
   output_truncated?: true;
   duration_ms: number | null;
@@ -369,6 +245,7 @@ export interface TraceSubagentItem extends TraceItemBase {
   title: string | null;
   prompt: string | null;
   output: string | null;
+  output_truncated?: true;
   duration_ms: number | null;
 }
 
@@ -469,19 +346,30 @@ export type TraceEventBody =
   | { type: "item.delta"; item_id: string; field: "text" | "output"; delta: string }
   | { type: "item.completed"; item: TraceItem };
 
-export type TurnTraceEventType = TraceEventBody["type"];
+export type TraceEventType = TraceEventBody["type"];
 
 /**
- * One stored turn-trace event. `seq` is dense per attempt and `ts` is the write
- * time; both are assigned by `TraceStore.append`, exactly as for the fragment
- * events above. P2 renames this to `TraceEvent`.
+ * One stored trace event. `seq` is dense per attempt, from 1, and never
+ * rewritten; `ts` is the ISO 8601 write time. Both are assigned by
+ * `TraceStore.append`, never by a producer. The event carries no `task_id`: the
+ * container that holds it does (the `trace.append` frame, the file header, the
+ * Hub subscription). Completeness is `{ head, closed }`; there is no terminator
+ * event (MUL-402 ruling 3) - `turn.completed` ends the turn, not the stream.
  */
-export type TurnTraceEvent = { seq: number; ts: string } & TraceEventBody;
+export type TraceEvent = { seq: number; ts: string } & TraceEventBody;
 
-/** What a producer hands the store. P2 renames this to `TraceEventInput` (no `ts` override). */
-export type TurnTraceEventInput = TraceEventBody;
+/** What a producer hands the store: the body only. The store assigns `seq` and `ts`. */
+export type TraceEventInput = TraceEventBody;
 
-const TURN_TRACE_EVENT_TYPE_SET: Record<TurnTraceEventType, true> = {
+/**
+ * A stored line of either format, as the transport and the `view=events` read
+ * carry it: v2 lines are {@link TraceEvent}s, v1 lines {@link LegacyTraceEvent}s.
+ * Payloads are opaque at this level; a reader that needs a typed event checks it
+ * with {@link isTraceEvent} and skips what fails.
+ */
+export type TraceEventLine = Record<string, unknown> & { seq: number; ts: string; type: string };
+
+const TRACE_EVENT_TYPE_SET: Record<TraceEventType, true> = {
   "turn.started": true,
   "turn.updated": true,
   "turn.completed": true,
@@ -490,8 +378,8 @@ const TURN_TRACE_EVENT_TYPE_SET: Record<TurnTraceEventType, true> = {
   "item.delta": true,
   "item.completed": true,
 };
-/** Readers skip any other `type` rather than failing. P2 renames this to `KNOWN_TRACE_EVENT_TYPES`. */
-export const KNOWN_TURN_TRACE_EVENT_TYPES = Object.keys(TURN_TRACE_EVENT_TYPE_SET) as ReadonlyArray<TurnTraceEventType>;
+/** The event types; readers skip any other `type` rather than failing. */
+export const KNOWN_TRACE_EVENT_TYPES = Object.keys(TRACE_EVENT_TYPE_SET) as ReadonlyArray<TraceEventType>;
 
 /** The fold at `head`; `closed` once the trailer exists. */
 export interface TraceTurnSnapshot {
@@ -517,7 +405,7 @@ export interface TraceTurnPage {
 export interface TraceEventPage {
   view: "events";
   format: "v2" | "legacy";
-  events: Array<Record<string, unknown> & { seq: number; ts: string; type: string }>;
+  events: TraceEventLine[];
   next_after_seq: number;
   head: number;
   eof: boolean;
@@ -558,8 +446,8 @@ export function isTraceItemType(value: unknown): value is TraceItemType {
   return typeof value === "string" && Object.prototype.hasOwnProperty.call(TRACE_ITEM_TYPE_SET, value);
 }
 
-export function isKnownTurnTraceEventType(value: unknown): value is TurnTraceEventType {
-  return typeof value === "string" && Object.prototype.hasOwnProperty.call(TURN_TRACE_EVENT_TYPE_SET, value);
+export function isKnownTraceEventType(value: unknown): value is TraceEventType {
+  return typeof value === "string" && Object.prototype.hasOwnProperty.call(TRACE_EVENT_TYPE_SET, value);
 }
 
 type Row = Record<string, unknown>;
@@ -692,17 +580,18 @@ export function isTraceItem(value: unknown): value is TraceItem {
         && (v.exit_code === null || Number.isSafeInteger(v.exit_code)) && isNullableNumber(v.duration_ms);
     case "file_change":
       return typeof v.tool === "string" && Array.isArray(v.changes) && v.changes.every(isFileChange)
-        && isNullableString(v.output) && isNullableNumber(v.duration_ms);
+        && isNullableString(v.output) && isOptionalTrue(v.output_truncated) && isNullableNumber(v.duration_ms);
     case "web_search":
       return typeof v.tool === "string" && isOneOf(v.action, ["search", "fetch"]) && isNullableString(v.query)
-        && isNullableString(v.url) && isNullableString(v.output) && isNullableNumber(v.duration_ms);
+        && isNullableString(v.url) && isNullableString(v.output) && isOptionalTrue(v.output_truncated)
+        && isNullableNumber(v.duration_ms);
     case "tool":
       return typeof v.tool === "string" && isNullableString(v.server) && isNullableString(v.kind)
-        && isNullableString(v.title) && (v.input === null || isRow(v.input)) && isNullableString(v.output)
-        && isOptionalTrue(v.output_truncated) && isNullableNumber(v.duration_ms);
+        && isNullableString(v.title) && (v.input === null || isRow(v.input)) && isOptionalTrue(v.input_truncated)
+        && isNullableString(v.output) && isOptionalTrue(v.output_truncated) && isNullableNumber(v.duration_ms);
     case "subagent":
       return typeof v.tool === "string" && isNullableString(v.title) && isNullableString(v.prompt)
-        && isNullableString(v.output) && isNullableNumber(v.duration_ms);
+        && isNullableString(v.output) && isOptionalTrue(v.output_truncated) && isNullableNumber(v.duration_ms);
     case "plan":
       return Array.isArray(v.entries) && v.entries.every((entry) => isRow(entry) && typeof entry.content === "string"
         && isOneOf(entry.status, ["pending", "in_progress", "completed"]) && isNullableString(entry.priority));
@@ -752,7 +641,7 @@ export function isTraceEventBody(value: unknown): value is TraceEventBody {
  * A stored event: `seq >= 1`, a valid `ts` and a well-formed known body. Readers
  * call this per event and skip what fails, so one bad or newer line costs one row.
  */
-export function isTurnTraceEvent(value: unknown): value is TurnTraceEvent {
+export function isTraceEvent(value: unknown): value is TraceEvent {
   return isRow(value) && Number.isSafeInteger(value.seq) && (value.seq as number) >= 1
     && isTraceTimestamp(value.ts) && isTraceEventBody(value);
 }

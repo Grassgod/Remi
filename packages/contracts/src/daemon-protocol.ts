@@ -37,7 +37,7 @@
  */
 
 import type { GcRunMode, StorageReport, StorageSubjectRef, SubjectSnapshot } from "./storage.js";
-import type { TraceContextUsage, TraceEvent, TraceEventPage, TraceTurnPage } from "./trace.js";
+import type { TraceContextUsage, TraceEvent, TraceEventLine, TraceEventPage, TraceTurnPage } from "./trace.js";
 import type { MultiremiChatSessionStatus, MultiremiDaemonHeartbeatAck, MultiremiDaemonSshMeshStatus } from "./types.js";
 import type { UnifiedMessage, DecisionOption } from "./unified-model.js";
 
@@ -395,9 +395,9 @@ export interface DaemonTaskCompletionTrace {
   head: number;
   event_count: number;
   closed: true;
-  /** Count of `tool_use` events. */
+  /** Tool items (`TRACE_TOOL_ITEM_TYPES`) at any depth: the single tool-count rule. */
   tool_call_count: number;
-  /** Bucketed by `(type, tool)`; `tool` is non-null only for tool frames (A11). */
+  /** Bucketed by `(item type, tool)`; `tool` is non-null only for items that name a tool. */
   type_histogram: DaemonTraceHistogramBucket[];
 }
 
@@ -422,13 +422,13 @@ export interface DaemonTaskCompletionFields {
   trace: DaemonTaskCompletionTrace;
   /** Markdown of the turn's final answer, or null when the turn produced none. */
   final_reply_md: string | null;
-  /** From the last `execution` event's meta, or null when unknown. */
+  /** The trace turn's `provider` and last reported `model`, or null when unknown. */
   model: DaemonTaskCompletionModel | null;
   /**
    * Turn + items traces (PR 2) add the three fields below; they also ride on
-   * `task.fail`. Optional until the daemon switches (P2), which makes them
-   * required. A receiver treats a malformed value as null and never blocks the
-   * terminal report on it.
+   * `task.fail`. The daemon always sends them since PR 2 P2a; they stay optional
+   * here until the receiver's validation switches (P2b). A receiver treats a
+   * malformed value as null and never blocks the terminal report on it.
    *
    * Last context-window occupancy the bridge reported for the turn.
    */
@@ -630,10 +630,10 @@ export interface DaemonTraceReadPayload {
   max_bytes: number;
 }
 
-/** `trace.read` / `trace.fetch` reply payload, on success. */
+/** `trace.read` / `trace.fetch` reply payload, on success: raw lines, v1 files included. */
 export interface DaemonTraceReadReplyPayload {
   ok: true;
-  events: TraceEvent[];
+  events: TraceEventLine[];
   next_after_seq: number;
   head: number;
   eof: boolean;
@@ -644,8 +644,9 @@ export interface DaemonTraceReadReplyPayload {
  * `trace.read` request once traces are turn + items (PR 2): the server picks a
  * view. `turn` pages the fold (running) or the persisted snapshot (closed) from
  * `item_cursor`; `events` pages raw stored lines after `after_seq`, which is also
- * the only view of a v1 file. P2 replaces {@link DaemonTraceReadPayload} with
- * this union; nothing sends it yet.
+ * the only view of a v1 file. The daemon answers both since PR 2 P2a and reads a
+ * payload without `view` ({@link DaemonTraceReadPayload}, the server before P2b)
+ * as `events`.
  */
 export type DaemonTraceReadViewPayload = DaemonTraceReadTurnViewPayload | DaemonTraceReadEventsViewPayload;
 

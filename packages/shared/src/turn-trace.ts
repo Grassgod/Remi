@@ -36,7 +36,7 @@ import {
   type TraceTurnSnapshot,
   type TraceTurnStats,
   type TraceTurnStatus,
-  type TurnTraceEvent,
+  type TraceEvent,
 } from "@multiremi/contracts/trace";
 import { utf8ByteLength } from "./utf8";
 
@@ -167,7 +167,7 @@ function appendField(item: TraceItem, field: "text" | "output", delta: string): 
   }
 }
 
-function applyEvent(draft: Draft, event: TurnTraceEvent): void {
+function applyEvent(draft: Draft, event: TraceEvent): void {
   const seq = event.seq;
   if (!Number.isSafeInteger(seq) || seq < 1) return;
   switch (event.type) {
@@ -234,14 +234,14 @@ function applyPage(draft: Draft, page: TraceTurnPage): void {
 // ── Immutable API (web, Feishu presentation) ────────────────────────────────
 
 /** Apply live events in order. Returns `state` itself when nothing changed. */
-export function applyTurnTraceEvents(state: TurnTraceState, events: readonly TurnTraceEvent[]): TurnTraceState {
+export function applyTurnTraceEvents(state: TurnTraceState, events: readonly TraceEvent[]): TurnTraceState {
   if (events.length === 0) return state;
   const draft = openDraft(state);
   for (const event of events) applyEvent(draft, event);
   return closeDraft(state, draft);
 }
 
-export function applyTurnTraceEvent(state: TurnTraceState, event: TurnTraceEvent): TurnTraceState {
+export function applyTurnTraceEvent(state: TurnTraceState, event: TraceEvent): TurnTraceState {
   return applyTurnTraceEvents(state, [event]);
 }
 
@@ -298,7 +298,7 @@ export class TurnTraceFold {
     this.draft = draft;
   }
 
-  apply(events: readonly TurnTraceEvent[]): void {
+  apply(events: readonly TraceEvent[]): void {
     for (const event of events) {
       if (event.seq > this.draft.head) this.applied++;
       applyEvent(this.draft, event);
@@ -369,9 +369,21 @@ function histogramTool(item: TraceItem): string | null {
 }
 
 /**
+ * Item types the Chat fold never renders as process rows: the user's own
+ * message, and the permission / question exchanges (Chat has its own dock and
+ * question UI for those). Decision Q1 of PR 2.
+ */
+const NON_PROCESS_TYPES: ReadonlySet<TraceItem["type"]> = new Set(["user_message", "permission", "question"]);
+
+/** Whether a top-level item is a process step: anything but a final reply, a user message, a permission or a question. */
+export function isProcessItem(item: TraceItem): boolean {
+  return item.parent_id === null && !NON_PROCESS_TYPES.has(item.type) && !isFinalMessage(item);
+}
+
+/**
  * Turn statistics. `tool_call_count` is the single tool-count rule:
- * `TRACE_TOOL_ITEM_TYPES` items at any depth. `process_item_count` is the
- * top-level items other than user messages and final replies. The histogram is
+ * `TRACE_TOOL_ITEM_TYPES` items at any depth. `process_item_count` counts
+ * exactly what the Chat fold renders ({@link isProcessItem}). The histogram is
  * bucketed by `(type, tool)` in first-appearance order.
  */
 export function turnTraceStats(items: readonly TraceItem[]): TraceTurnStats {
@@ -380,7 +392,7 @@ export function turnTraceStats(items: readonly TraceItem[]): TraceTurnStats {
   let processItems = 0;
   for (const item of items) {
     if (isToolItem(item)) toolCalls++;
-    if (item.parent_id === null && item.type !== "user_message" && !isFinalMessage(item)) processItems++;
+    if (isProcessItem(item)) processItems++;
     const tool = histogramTool(item);
     const key = `${item.type}\u0000${tool ?? ""}`;
     const bucket = buckets.get(key);

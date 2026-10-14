@@ -21,6 +21,8 @@ import { FeishuDeliveryError } from "@shared/feishu-delivery-error.js";
 import { DECISION_RECIPIENT_SENTINEL } from "@shared/feishu-task-card.js";
 import { handleTaskInteractionEvent, interactionMarker } from "@connectors/feishu/task-interaction.js";
 import type { MultiremiFeishuBotAssignment } from "@multiremi/worker/client.js";
+// TODO(PR 2 P4): the concierge host replays legacy fragment events.
+import type { TraceEvent } from "@multiremi/contracts/trace.js";
 
 const APP_SECRET = "wJ4tQ7xR2nB8vC5mZ1kL0pS6dF3gH9jA";
 
@@ -327,7 +329,7 @@ describe("control-plane Feishu concierge host", () => {
     Object.assign(fake.daemon, {
       subscribeTrace: async (_id: string, fromSeq: number, onEvents: Parameters<MultiremiDaemon["subscribeTrace"]>[2]) => {
         reads.push(fromSeq);
-        await onEvents([{ seq: 1, ts: "2026-09-28T00:00:00Z", type: "tool_use", tool: "Bash" }], true);
+        await onEvents([{ seq: 1, ts: "2026-09-28T00:00:00Z", type: "tool_use", tool: "Bash" } as unknown as TraceEvent], true);
         return async () => {};
       },
       getFeishuBotTaskSnapshot: async () => ({ taskId: "tsk_live", status: "completed", result: "done", usage: [] }),
@@ -363,7 +365,7 @@ describe("control-plane Feishu concierge host", () => {
     Object.assign(fake.daemon, {
       subscribeTrace: async (_id: string, fromSeq: number, onEvents: Parameters<MultiremiDaemon["subscribeTrace"]>[2]) => {
         cursors.push(fromSeq);
-        await onEvents([{ seq: fromSeq + 1, ts: "2026-09-28T00:00:00Z", type: "thinking", content: "resumed" }], true);
+        await onEvents([{ seq: fromSeq + 1, ts: "2026-09-28T00:00:00Z", type: "thinking", content: "resumed" } as unknown as TraceEvent], true);
         return async () => {};
       },
       getFeishuBotTaskSnapshot: async () => ({ taskId: "tsk_resume", status: "completed", result: "done", usage: [] }),

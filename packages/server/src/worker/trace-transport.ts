@@ -1,58 +1,109 @@
-import type { TaskMessageInput } from "@multiremi/contracts/types.js";
-import { taskMessageToTraceEvent, traceEventToTaskMessage } from "@multiremi/contracts/trace.js";
 import type { DaemonTaskCompletionFields } from "@multiremi/contracts/daemon-protocol.js";
-import { createTraceSummaryAccumulator } from "@shared/trace-derive.js";
+import { DAEMON_TRACE_READ_MAX_BYTES } from "@multiremi/contracts/daemon-protocol.js";
+import {
+  isTraceEvent,
+  type TraceEvent,
+  type TraceEventInput,
+  type TraceItem,
+  type TraceTurn,
+  type TraceTurnPage,
+} from "@multiremi/contracts/trace.js";
+import {
+  closeOpenItems,
+  completeTurn,
+  pageTurnTrace,
+  turnCompletionFields,
+  TurnTraceFold,
+  turnTraceSnapshot,
+  type TurnTraceState,
+} from "@shared/turn-trace.js";
 import { TraceFileStore } from "./trace-file-store.js";
 import { InMemoryTraceStore, type TraceStore, type TraceEndStatus } from "@multiremi/worker/trace-store.js";
-import { DAEMON_TRACE_READ_MAX_BYTES } from "@multiremi/contracts/daemon-protocol.js";
 import type { DaemonProtocolClient } from "./daemon-protocol-client.js";
 import { TraceStreamer } from "./trace-streamer.js";
 import { DaemonTraceSubscriptions } from "./trace-subscriptions.js";
 
-/** Runtime ownership lives outside TraceStore so its A-0/file contract stays small. */
+/** Completion summaries of closed traces kept for a repeated terminal report. */
+const COMPLETED_CACHE_LIMIT = 128;
+/** Per-trace snapshot part sizes kept for `view=turn` paging of closed traces. */
+const SNAPSHOT_INDEX_LIMIT = 128;
+const READ_DEFAULT_LIMIT = 200;
+const READ_MAX_LIMIT = 500;
+
+/** The turn error `close` records: the failure text and its classified reason. */
+export interface TraceCloseError {
+  message: string;
+  reason?: string | null;
+}
+
+interface FoldEntry {
+  fold: TurnTraceFold;
+  /** Event lines stored, valid or not; equals `head` for a dense trace. */
+  eventCount: number;
+}
+
+/**
+ * The daemon's trace owner: appends go to the store and then into one fold per
+ * running attempt (`@shared/turn-trace.js`), which answers `completion()` and
+ * `trace.read view=turn` without reading the file. Runtime ownership lives here
+ * rather than in `TraceStore` so its A-0/file contract stays small.
+ */
 export class DaemonTraceTransport {
   readonly store: TraceStore;
   readonly streamer: TraceStreamer;
   readonly subscriptions: DaemonTraceSubscriptions;
   private readonly runtimeByTask: Map<string, string>;
-  private readonly summaries = new Map<string, ReturnType<typeof createTraceSummaryAccumulator>>();
-  private readonly completedSummaries = new Map<string, DaemonTaskCompletionFields>();
+  private readonly folds = new Map<string, FoldEntry>();
+  private readonly completed = new Map<string, Required<DaemonTaskCompletionFields>>();
+  private readonly snapshotIndex = new Map<string, number[]>();
   private readonly detach: () => void;
   private stopped = false;
   constructor(private readonly protocol: DaemonProtocolClient, store: TraceStore = new InMemoryTraceStore(),
-    reportsHavePriority: () => boolean = () => false, onError: (error: unknown) => void = () => {},
-    ownership: ReadonlyMap<string, string> = new Map()) {
+    reportsHavePriority: () => boolean = () => false, private readonly onError: (error: unknown) => void = () => {},
+    ownership: ReadonlyMap<string, string> = new Map(), private readonly now: () => string = () => new Date().toISOString()) {
     this.store = store;
     this.runtimeByTask = new Map([...(store instanceof TraceFileStore ? store.ownership() : []), ...ownership]);
     this.streamer = new TraceStreamer(protocol, store, reportsHavePriority, (_task, error) => onError(error));
     for (const [taskId, runtimeId] of this.runtimeByTask) {
       // Historical closed traces remain readable without replaying every turn
-      // whenever the process boots. Active turns resume the live pump.
-      if (!store.head(taskId)?.closed) this.streamer.track(taskId, runtimeId);
+      // whenever the process boots, and a v1 trace is read-only history. Active
+      // v2 turns resume the live pump.
+      if (store.format(taskId) === "v2" && !store.head(taskId)?.closed) this.streamer.track(taskId, runtimeId);
     }
     this.subscriptions = new DaemonTraceSubscriptions(protocol, () => undefined, onError);
     if (store instanceof TraceFileStore) void this.resumeUnclosed(store, onError);
     this.detach = protocol.onFrame(frame => {
       if (frame.type !== "trace.read" || !frame.id) return;
+      const requestId = frame.id;
+      const notHot = () => protocol.send({ t: "res", re: requestId, p: { ok: false, code: "trace_not_hot", retryable: false } });
       const p = frame.payload;
       const taskId = typeof p.task_id === "string" ? p.task_id : "";
       const head = store.head(taskId);
       if (!head || !frame.rt || this.ownerOf(taskId) !== frame.rt) {
-        protocol.send({ t: "res", re: frame.id, p: { ok: false, code: "trace_not_hot", retryable: false } });
+        notHot();
         return;
       }
-      const after = typeof p.after_seq === "number" ? Math.max(0, Math.floor(p.after_seq)) : 0;
-      const limit = typeof p.limit === "number" ? Math.max(1, Math.min(500, Math.floor(p.limit))) : 200;
+      const limit = typeof p.limit === "number" ? Math.max(1, Math.min(READ_MAX_LIMIT, Math.floor(p.limit))) : READ_DEFAULT_LIMIT;
       const bytes = typeof p.max_bytes === "number" ? Math.max(1, Math.min(DAEMON_TRACE_READ_MAX_BYTES - 1024, Math.floor(p.max_bytes))) : DAEMON_TRACE_READ_MAX_BYTES - 1024;
-      let page;
-      try { page = store.read(taskId, after, limit, bytes); }
-      catch (error) {
+      let reply: Record<string, unknown>;
+      try {
+        const format = store.format(taskId) === "v1" ? "legacy" : "v2";
+        if (p.view === "turn") {
+          const cursor = typeof p.item_cursor === "number" ? Math.max(0, Math.floor(p.item_cursor)) : 0;
+          reply = { ok: true, ...this.readTurn(taskId, format, cursor, limit, bytes) };
+        } else {
+          // `events` - also a payload without `view` (the server before PR 2 P2b).
+          const after = typeof p.after_seq === "number" ? Math.max(0, Math.floor(p.after_seq)) : 0;
+          const page = store.read(taskId, after, limit, bytes);
+          reply = { ok: true, view: "events", format, ...page,
+            next_after_seq: page.events.at(-1)?.seq ?? after, closed: head.closed };
+        }
+      } catch (error) {
         onError(error);
-        protocol.send({ t: "res", re: frame.id, p: { ok: false, code: "trace_not_hot", retryable: false } });
+        notHot();
         return;
       }
-      protocol.send({ t: "res", re: frame.id, p: { ok: true, ...page,
-        next_after_seq: page.events.at(-1)?.seq ?? after, closed: head.closed } });
+      protocol.send({ t: "res", re: requestId, p: reply });
     });
   }
 
@@ -80,10 +131,15 @@ export class DaemonTraceTransport {
     if (!(this.store instanceof TraceFileStore)) return;
     for (const taskId of this.store.pruneMissing()) {
       this.runtimeByTask.delete(taskId);
-      this.summaries.delete(taskId);
-      this.completedSummaries.delete(taskId);
+      this.forgetCaches(taskId);
       this.streamer.forget(taskId);
     }
+  }
+
+  private forgetCaches(taskId: string): void {
+    this.folds.delete(taskId);
+    this.completed.delete(taskId);
+    this.snapshotIndex.delete(taskId);
   }
 
   track(taskId: string, runtimeId: string): void {
@@ -91,76 +147,181 @@ export class DaemonTraceTransport {
     if (owner && owner !== runtimeId) throw new Error("trace runtime ownership changed");
     if (this.store instanceof TraceFileStore) this.store.registerRuntime(taskId, runtimeId);
     this.runtimeByTask.set(taskId, runtimeId);
+    if (this.store.format(taskId) === "v1") return;
     this.store.append(taskId, []);
     this.streamer.track(taskId, runtimeId);
   }
 
-  append(taskId: string, runtimeId: string, messages: TaskMessageInput[]): TaskMessageInput[] {
+  /** Append bodies, apply what the store kept to the fold, and wake the hub pump. */
+  append(taskId: string, runtimeId: string, events: TraceEventInput[]): TraceEvent[] {
     this.track(taskId, runtimeId);
     if (this.store.head(taskId)?.closed) return [];
-    const summary = this.summary(taskId);
-    const appended = this.store.append(taskId, messages.map(message => {
-      const { ts: _backfillTimestamp, ...event } = taskMessageToTraceEvent(message, "");
-      return event;
-    }));
-    for (const event of appended.events) summary.add(event);
+    const entry = this.fold(taskId);
+    const appended = this.store.append(taskId, events);
+    entry.fold.apply(appended.events);
+    entry.eventCount += appended.events.length;
     this.streamer.wake();
-    return appended.events.map(traceEventToTaskMessage);
+    return appended.events;
   }
 
-  private summary(taskId: string): ReturnType<typeof createTraceSummaryAccumulator> {
-    const existing = this.summaries.get(taskId);
+  /** The fold of a trace, rebuilt from the store once when it is not resident (restart, eviction). */
+  private fold(taskId: string): FoldEntry {
+    const existing = this.folds.get(taskId);
     if (existing) return existing;
-    const summary = createTraceSummaryAccumulator();
-    let after = 0;
-    for (;;) {
-      const page = this.store.read(taskId, after, 500, DAEMON_TRACE_READ_MAX_BYTES);
-      for (const event of page.events) summary.add(event);
-      if (page.eof || !page.events.length) break;
-      after = page.events.at(-1)!.seq;
+    const entry: FoldEntry = { fold: new TurnTraceFold(), eventCount: 0 };
+    if (this.store.format(taskId) !== null) {
+      // Lines that are not v2 events (a v1 file's fragments, a future type) are
+      // counted but not folded.
+      let after = 0;
+      for (;;) {
+        const page = this.store.read(taskId, after, READ_MAX_LIMIT, DAEMON_TRACE_READ_MAX_BYTES);
+        entry.eventCount += page.events.length;
+        entry.fold.apply(page.events.filter(isTraceEvent));
+        if (page.eof || !page.events.length) break;
+        after = page.events.at(-1)!.seq;
+      }
     }
-    this.summaries.set(taskId, summary);
-    return summary;
+    this.folds.set(taskId, entry);
+    return entry;
   }
 
-  completion(taskId: string): DaemonTaskCompletionFields {
-    const cached = this.completedSummaries.get(taskId);
+  /**
+   * `task.complete` / `task.fail` fields (spec §3.5) from the fold. Before the
+   * trace is closed they describe the close that will follow: the open items it
+   * completes and its `turn.completed` are counted in `head` / `event_count`, and
+   * the final item and `worked_ms` are what `turn.completed` will record. The
+   * report is sent before `close()` so a rejected `completeTurn` (steer pending)
+   * can keep appending to the turn.
+   */
+  completion(taskId: string, status: Exclude<TraceEndStatus, "cancelled"> = "completed"): Required<DaemonTaskCompletionFields> {
+    const cached = this.completed.get(taskId);
     if (cached) {
-      this.completedSummaries.delete(taskId);
-      this.completedSummaries.set(taskId, cached);
+      this.completed.delete(taskId);
+      this.completed.set(taskId, cached);
       return cached;
     }
-    const result = this.summary(taskId).completion(this.store.head(taskId)?.head ?? 0);
-    const completion: DaemonTaskCompletionFields = { ...result, trace: { ...result.trace, closed: true } };
-    if (this.store.head(taskId)?.closed) {
-      this.summaries.delete(taskId);
-      this.cacheCompletion(taskId, completion);
+    const entry = this.fold(taskId);
+    const head = this.store.head(taskId);
+    if (head?.closed) {
+      const fields = turnCompletionFields(entry.fold.state(), { eventCount: entry.eventCount });
+      this.cacheCompletion(taskId, fields);
+      this.folds.delete(taskId);
+      return fields;
     }
-    return completion;
+    const closing = this.closingEvents(entry.fold.state(), status);
+    const prospective = { ...closing.state, head: (head?.head ?? 0) + closing.events.length };
+    return turnCompletionFields(prospective, { eventCount: entry.eventCount + closing.events.length });
   }
 
-  private cacheCompletion(taskId: string, completion: DaemonTaskCompletionFields): void {
-    this.completedSummaries.delete(taskId);
-    this.completedSummaries.set(taskId, completion);
-    while (this.completedSummaries.size > 128) this.completedSummaries.delete(this.completedSummaries.keys().next().value!);
+  /** The events `close` appends (open items, then `turn.completed`) and the fold they lead to. */
+  private closingEvents(state: TurnTraceState, status: TraceEndStatus, error?: TraceCloseError | null): {
+    events: TraceEventInput[]; state: Pick<TurnTraceState, "turn" | "items">;
+  } {
+    const at = this.now();
+    const open = closeOpenItems(state.items, status, at);
+    let items: readonly TraceItem[] = state.items;
+    if (open.length) {
+      const replaced = new Map(open.map((body) => [(body as { item: TraceItem }).item.id, (body as { item: TraceItem }).item]));
+      items = state.items.map((item) => replaced.get(item.id) ?? item);
+    }
+    const events: TraceEventInput[] = [...open];
+    let turn: TraceTurn | null = state.turn;
+    if (turn && turn.status === "running") {
+      turn = completeTurn({ turn, items }, {
+        status, completedAt: at, error: error ? { message: error.message, reason: error.reason ?? null } : null,
+      });
+      if (turn) events.push({ type: "turn.completed", turn });
+    }
+    return { events, state: { turn, items } };
   }
 
-  close(taskId: string, status: TraceEndStatus): void {
-    this.store.close(taskId, { status, ended_at: new Date().toISOString() });
-    const summary = this.summaries.get(taskId);
-    if (summary) {
-      const result = summary.completion(this.store.head(taskId)?.head ?? 0);
-      this.cacheCompletion(taskId, { ...result, trace: { ...result.trace, closed: true } });
-      this.summaries.delete(taskId);
+  private cacheCompletion(taskId: string, completion: Required<DaemonTaskCompletionFields>): void {
+    this.completed.delete(taskId);
+    this.completed.set(taskId, completion);
+    while (this.completed.size > COMPLETED_CACHE_LIMIT) this.completed.delete(this.completed.keys().next().value!);
+  }
+
+  /**
+   * Seal a trace (spec §3.1): `item.completed` for every open item, then
+   * `turn.completed`, then the snapshot framing and the trailer. Idempotent; a
+   * v1 trace is read-only history and is left as it is.
+   */
+  close(taskId: string, status: TraceEndStatus, error?: TraceCloseError | null): void {
+    const head = this.store.head(taskId);
+    if (head?.closed || this.store.format(taskId) === "v1") return;
+    const entry = this.fold(taskId);
+    const closing = this.closingEvents(entry.fold.state(), status, error);
+    if (closing.events.length) {
+      const appended = this.store.append(taskId, closing.events);
+      entry.fold.apply(appended.events);
+      entry.eventCount += appended.events.length;
     }
+    const state = entry.fold.state();
+    this.store.close(taskId, { status, ended_at: this.now(), snapshot: turnTraceSnapshot(state, true) });
+    this.cacheCompletion(taskId, turnCompletionFields(state, { eventCount: entry.eventCount }));
+    this.folds.delete(taskId);
     this.streamer.wake();
+  }
+
+  /** One `view=turn` page: the running fold, the closed snapshot, or a legacy (v1) answer. */
+  private readTurn(taskId: string, format: "v2" | "legacy", cursor: number, limit: number, maxBytes: number): TraceTurnPage {
+    const head = this.store.head(taskId) ?? { head: 0, closed: false };
+    if (format === "legacy") {
+      return { view: "turn", format, turn: null, items: [], next_item_cursor: null, head: head.head, closed: head.closed };
+    }
+    if (!head.closed) {
+      return pageTurnTrace({ ...this.fold(taskId).fold.state(), closed: false }, { itemCursor: cursor, limit, maxBytes });
+    }
+    return this.pageSnapshot(taskId, head.head, cursor, limit, maxBytes);
+  }
+
+  /**
+   * Page a closed trace's snapshot parts by global item index. Part item counts
+   * are remembered per trace, so a later page reads only the parts it returns.
+   */
+  private pageSnapshot(taskId: string, head: number, cursor: number, limit: number, maxBytes: number): TraceTurnPage {
+    const sizes = this.snapshotIndex.get(taskId) ?? [];
+    const items: TraceItem[] = [];
+    let turn: TraceTurn | null = null;
+    let parts = Number.POSITIVE_INFINITY;
+    let offset = 0;
+    let bytes = 0;
+    let more = false;
+    for (let part = 0; part < parts && !more; part++) {
+      const known = sizes[part];
+      if (known !== undefined && turn !== null && offset + known <= cursor) {
+        offset += known;
+        continue;
+      }
+      const snapshot = this.store.snapshotPart(taskId, part);
+      if (!snapshot) break;
+      turn = snapshot.turn;
+      parts = snapshot.parts;
+      sizes[part] = snapshot.items.length;
+      for (let i = Math.max(0, cursor - offset); i < snapshot.items.length; i++) {
+        const item = snapshot.items[i]!;
+        const size = Buffer.byteLength(JSON.stringify(item), "utf8");
+        if (items.length >= limit || (items.length > 0 && bytes + size > maxBytes)) {
+          more = true;
+          break;
+        }
+        items.push(item);
+        bytes += size;
+      }
+      offset += snapshot.items.length;
+    }
+    this.snapshotIndex.delete(taskId);
+    this.snapshotIndex.set(taskId, sizes);
+    while (this.snapshotIndex.size > SNAPSHOT_INDEX_LIMIT) this.snapshotIndex.delete(this.snapshotIndex.keys().next().value!);
+    return { view: "turn", format: "v2", turn, items, next_item_cursor: more ? cursor + items.length : null, head, closed: true };
   }
 
   async stop(): Promise<void> {
     this.stopped = true;
     this.detach();
-    this.summaries.clear();
-    this.completedSummaries.clear();
+    this.folds.clear();
+    this.completed.clear();
+    this.snapshotIndex.clear();
     await Promise.all([this.streamer.stop(), this.subscriptions.stop()]);
   }
 }

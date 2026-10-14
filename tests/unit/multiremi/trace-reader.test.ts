@@ -1,8 +1,10 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { InMemoryDaemonTraceReader, type DaemonTraceReader } from "@multiremi/api/trace/daemon-trace-reader.js";
-import { InMemoryTraceStore, sanitizeStoredEvent } from "@multiremi/worker/trace-store.js";
+// TODO(PR 2 P2b): these read-path cases still feed legacy fragment events.
+import { LegacyFragmentTraceStore as InMemoryTraceStore } from "../../helpers/legacy-trace-store.js";
+import { sanitizeLegacyTraceEvent as sanitizeStoredEvent } from "@shared/trace-sanitize.js";
 import { TraceReader, TRACE_READ_MAX_BYTES } from "@multiremi/trace/trace-reader.js";
-import type { TraceEvent } from "@multiremi/contracts/trace.js";
+import type { LegacyTraceEvent as TraceEvent } from "@multiremi/contracts/trace.js";
 import { isTraceFileEvent, type MultiremiTaskTrace } from "@multiremi/contracts/trace-file.js";
 import { createStore, resetMultiremiTestEnv } from "./helpers.js";
 

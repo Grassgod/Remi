@@ -3,7 +3,9 @@ import { turnApiPath, mutateExecutionFixture } from "./unified-test-paths.js";
 import { afterEach, describe, expect, it } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { InMemoryDaemonTraceReader } from "@multiremi/api/trace/daemon-trace-reader.js";
-import { InMemoryTraceStore, sanitizeStoredEvent } from "@multiremi/worker/trace-store.js";
+// TODO(PR 2 P2b): these read-path cases still feed legacy fragment events.
+import { LegacyFragmentTraceStore as InMemoryTraceStore } from "../../helpers/legacy-trace-store.js";
+import { sanitizeLegacyTraceEvent as sanitizeStoredEvent } from "@shared/trace-sanitize.js";
 import { isTraceFileEvent } from "@multiremi/contracts/trace-file.js";
 import { createLocalStore as createStore, db, resetMultiremiTestEnv } from "./helpers.js";
 

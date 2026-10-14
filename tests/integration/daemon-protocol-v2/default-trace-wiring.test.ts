@@ -4,7 +4,7 @@ import { startMultiremiServer } from "@multiremi/api/server.js";
 import type { DaemonProtocolLayer } from "@multiremi/api/daemon-protocol/index.js";
 import { daemonTraceService } from "@multiremi/api/daemon-protocol/trace-handlers.js";
 import { DAEMON_MIN_CLI_VERSION } from "@multiremi/contracts/daemon-protocol.js";
-import type { TraceEvent } from "@multiremi/contracts/trace.js";
+import type { TraceEventLine as TraceEvent } from "@multiremi/contracts/trace.js";
 import { authenticateBrowserWebSocket } from "../../unit/multiremi/helpers.js";
 import { conversationLogPgAdminUrl, withConversationLogStore } from "../../unit/multiremi/fixtures/conversation-log-store.js";
 import { waitFor } from "./harness.js";

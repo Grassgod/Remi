@@ -1,0 +1,425 @@
+/**
+ * Vendor `_meta` reading for the daemon trace translator (PR 2, ARCH §3.2).
+ *
+ * ACP leaves most of what a trace needs to agent-specific `_meta` keys, titles
+ * and kinds. Every such read lives here so the translator
+ * (`packages/server/src/worker/trace-translator.ts`) only maps facts to items.
+ * The shapes are those of the pinned bridges (`runtime-versions.json`):
+ *
+ * - claude-agent-acp 0.89.0 (`CA` = its `dist/`)
+ * - codex-acp 2.2.2 (`CX` = its `dist/index.js`)
+ *
+ * Title parsing is version-pinned on purpose (risk R6): Codex sends single-action
+ * reads, lists and searches with only a title and locations.
+ */
+
+import { basename } from "node:path";
+import type { CommandAction, FileChange, TraceCompactionItem, TraceNoticeItem } from "@multiremi/contracts/trace.js";
+import { shlexJoin, shortDisplayPath } from "@shared/command-parse.js";
+import { fileChangeFromTexts } from "@shared/trace-file-change.js";
+import { capFileChanges } from "@shared/trace-sanitize.js";
+import { airMetadata, record, type AcpSessionFailure } from "../session-failure.js";
+
+export { readSessionFailure, type AcpSessionFailure } from "../session-failure.js";
+
+/** One ACP `session/update` body, read loosely: bridges add fields freely. */
+export type VendorFrame = Record<string, unknown>;
+
+function meta(frame: VendorFrame): Record<string, unknown> | null {
+  return record(frame._meta);
+}
+
+function str(value: unknown): string | null {
+  return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+function num(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+// ── Messages ────────────────────────────────────────────────────────────────
+
+export type MessagePhase = "final" | "commentary" | "unknown";
+
+/**
+ * The phase of an `agent_message_chunk`. codex-acp 2.x sends it only to AIR
+ * clients, as `_meta.jetbrains.air.phase` (CX:29575-29580, 31504-31508); 1.x
+ * used `_meta.codex.phase`; a top-level `phase` is the oldest spelling. Values
+ * are Codex's snake_case `MessagePhase`: `final_answer` is the answer,
+ * `commentary` is a progress note, and `partial_answer` or no phase is left to
+ * the final-reply rule (risk R4).
+ */
+export function messagePhase(frame: VendorFrame): MessagePhase {
+  const raw = airMetadata(frame._meta)?.phase ?? record(meta(frame)?.codex)?.phase ?? frame.phase ?? meta(frame)?.phase;
+  if (raw === "final_answer" || raw === "final") return "final";
+  if (raw === "commentary") return "commentary";
+  return "unknown";
+}
+
+/**
+ * The message id that groups chunks into one item. Claude sends the Anthropic
+ * API message id on message, thought and user chunks only (CA/acp-agent.js:
+ * 8465-8489); Codex sends the item id (CX:29596-29630).
+ */
+export function messageId(frame: VendorFrame): string | null {
+  return str(frame.messageId);
+}
+
+/** Plain text of a content block or a list of them; non-text blocks are skipped. */
+export function contentText(content: unknown): string {
+  const blocks = Array.isArray(content) ? content : content ? [content] : [];
+  let text = "";
+  for (const block of blocks) {
+    if (typeof block === "string") text += block;
+    else if (block && typeof block === "object") {
+      const row = block as Record<string, unknown>;
+      if (row.type === "diff" || row.type === "terminal") continue;
+      if (typeof row.text === "string") text += row.text;
+      else if (row.content !== undefined) text += contentText(row.content);
+    }
+  }
+  return text;
+}
+
+// ── Attribution ─────────────────────────────────────────────────────────────
+
+/**
+ * The subagent tool call a frame belongs to: claude-agent-acp stamps
+ * `_meta.claudeCode.parentToolUseId` on a subagent's chunks and tool calls
+ * (CA/acp-agent.js:502-510, 8599, 8985). Codex stays flat because Remi does not
+ * advertise subagent sessions (CX:39918-39924).
+ */
+export function parentToolUseId(frame: VendorFrame): string | null {
+  return str(record(meta(frame)?.claudeCode)?.parentToolUseId);
+}
+
+// ── Tools ───────────────────────────────────────────────────────────────────
+
+/** The tool name a bridge reports: Claude's `_meta.claudeCode.toolName` or `name`, Codex's `name`. */
+export function toolName(frame: VendorFrame): string | null {
+  return str(record(meta(frame)?.claudeCode)?.toolName) ?? str(frame.name);
+}
+
+/** Tool names that spawn a Claude subagent; `Task` is the legacy name of `Agent`. */
+export const CLAUDE_SUBAGENT_TOOLS: ReadonlySet<string> = new Set(["Agent", "Task"]);
+
+/** Codex collaboration tools (CX:29815-29835, 30016-30061), all subagent steps. */
+const CODEX_COLLAB_TOOLS: ReadonlySet<string> = new Set(["spawnAgent", "sendInput", "resumeAgent", "wait", "closeAgent", "followupTask"]);
+
+/** The parsed `rawInput` of a frame: an object, a JSON object string, or nothing. */
+export function rawInputOf(frame: VendorFrame): Record<string, unknown> | null {
+  const raw = frame.rawInput;
+  if (raw && typeof raw === "object" && !Array.isArray(raw)) return raw as Record<string, unknown>;
+  if (typeof raw === "string") {
+    try {
+      const parsed: unknown = JSON.parse(raw);
+      return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Record<string, unknown> : { value: parsed };
+    } catch {
+      return { value: raw };
+    }
+  }
+  return null;
+}
+
+/** Whether the tool is an MCP call: Claude `mcp__s__t`, Codex `is_mcp_tool_call` / `mcp.s.t` (CX:28236-28238, 29493-29510). */
+export function isMcp(frame: VendorFrame, name: string | null): boolean {
+  if (meta(frame)?.is_mcp_tool_call === true) return true;
+  if (name?.startsWith("mcp__")) return true;
+  const title = str(frame.title);
+  return !!title && /^mcp\.[^.\s]+\.[^\s]+$/.test(title);
+}
+
+/** The MCP server of a call, from its name, its title or its input. */
+export function mcpServer(frame: VendorFrame, name: string | null, input: Record<string, unknown> | null): string | null {
+  const claude = name?.match(/^mcp__(.+?)__/);
+  if (claude) return claude[1]!;
+  const fromInput = str(input?.server);
+  if (fromInput) return fromInput;
+  const title = str(frame.title)?.match(/^mcp\.([^.\s]+)\./);
+  return title ? title[1]! : null;
+}
+
+/** `_meta.terminal_output` / `terminal_output_delta` data: one chunk of a command's output. */
+export function terminalChunk(frame: VendorFrame): string | null {
+  const m = meta(frame);
+  const data = record(m?.terminal_output)?.data ?? record(m?.terminal_output_delta)?.data;
+  return typeof data === "string" ? data : null;
+}
+
+/**
+ * `_meta.terminal_exit.exit_code`, or undefined when the frame has no exit.
+ * Claude AIR reports 1 for any failure or interruption (CA/tool-calls/renderer.js:
+ * 219-227, risk R5).
+ */
+export function terminalExit(frame: VendorFrame): number | null | undefined {
+  const exit = record(meta(frame)?.terminal_exit);
+  if (!exit) return undefined;
+  return Number.isSafeInteger(exit.exit_code) ? exit.exit_code as number : null;
+}
+
+/** `_meta.terminal_info`: present on a command that shows a terminal; Codex adds its cwd. */
+export function terminalInfo(frame: VendorFrame): { cwd: string | null } | null {
+  const info = record(meta(frame)?.terminal_info);
+  return info ? { cwd: str(info.cwd) } : null;
+}
+
+/** Whether the frame carries a `terminal` content block. */
+export function hasTerminalContent(frame: VendorFrame): boolean {
+  return Array.isArray(frame.content) && frame.content.some((block) => record(block)?.type === "terminal");
+}
+
+/** Codex AIR marks a spawned subagent with `_meta.jetbrains.air.subagent` (CX:29830). */
+function isAirSubagent(frame: VendorFrame): boolean {
+  return airMetadata(frame._meta)?.subagent === true;
+}
+
+/** What one tool call becomes in the trace. */
+export type ToolClass =
+  | { type: "command"; source: "shell" | "tool"; command: string | null; cwd: string | null; actions: CommandAction[] | null }
+  | { type: "file_change" }
+  | { type: "web_search"; action: "search" | "fetch"; query: string | null; url: string | null }
+  | { type: "tool"; server: string | null }
+  | { type: "subagent"; prompt: string | null }
+  /** Shown elsewhere (Claude AskUserQuestion is the `question` item). */
+  | { type: "suppress" };
+
+/** Accumulated facts of one tool call across its frames. */
+export interface ToolFacts {
+  name: string | null;
+  kind: string | null;
+  title: string | null;
+  input: Record<string, unknown> | null;
+  locations: string[];
+  /** Any frame carried `_meta.terminal_info` or a terminal content block. */
+  terminal: boolean;
+  terminalCwd: string | null;
+  mcp: boolean;
+  airSubagent: boolean;
+}
+
+/** Fold one frame into the facts of its tool call. Later frames win, input keys merge. */
+export function mergeToolFacts(previous: ToolFacts | null, frame: VendorFrame): ToolFacts {
+  const name = toolName(frame) ?? previous?.name ?? null;
+  const input = rawInputOf(frame);
+  const locations = Array.isArray(frame.locations)
+    ? frame.locations.flatMap((location) => str(record(location)?.path) ?? [])
+    : previous?.locations ?? [];
+  const info = terminalInfo(frame);
+  return {
+    name,
+    kind: str(frame.kind) ?? previous?.kind ?? null,
+    title: str(frame.title) ?? previous?.title ?? null,
+    input: input ? { ...(previous?.input ?? {}), ...input } : previous?.input ?? null,
+    locations,
+    terminal: (previous?.terminal ?? false) || info !== null || hasTerminalContent(frame),
+    terminalCwd: info?.cwd ?? previous?.terminalCwd ?? null,
+    mcp: (previous?.mcp ?? false) || isMcp(frame, name),
+    airSubagent: (previous?.airSubagent ?? false) || isAirSubagent(frame),
+  };
+}
+
+function commandText(value: unknown): string | null {
+  if (typeof value === "string") return value.trim() ? value : null;
+  // Both pinned bridges send a string (decision Q4); an argv still renders.
+  if (Array.isArray(value) && value.length > 0 && value.every((part) => typeof part === "string")) return shlexJoin(value);
+  return null;
+}
+
+function readAction(path: string): CommandAction {
+  return { type: "read", command: null, name: shortDisplayPath(path) || basename(path), path };
+}
+
+/**
+ * The single action a Codex read/search/list title names (CX:28474-28488,
+ * 28509-28514): `Read file '<p>'`, `List files[ in '<p>']`, `Search for '<q>'[ in
+ * <p>]`, `Search in '<p>'`. Null for any other title.
+ */
+export function codexActionFromTitle(title: string | null, locations: readonly string[] = []): CommandAction | null {
+  if (!title) return null;
+  let match = /^Read file '(.*)'$/s.exec(title);
+  if (match) return readAction(locations[0] ?? match[1]!);
+  if (title === "List files") return { type: "list_files", command: null, path: null };
+  match = /^List files in '(.*)'$/s.exec(title);
+  if (match) return { type: "list_files", command: null, path: match[1]! };
+  match = /^Search for '(.*)' in (.+)$/s.exec(title);
+  if (match) return { type: "search", command: null, query: match[1]!, path: match[2]! };
+  match = /^Search for '(.*)'$/s.exec(title);
+  if (match) return { type: "search", command: null, query: match[1]!, path: null };
+  match = /^Search in '(.*)'$/s.exec(title);
+  if (match) return { type: "search", command: null, query: null, path: match[1]! };
+  if (title === "Search") return { type: "search", command: null, query: null, path: null };
+  return null;
+}
+
+function claudeClass(facts: ToolFacts): ToolClass {
+  const name = facts.name ?? "";
+  const input = facts.input;
+  const path = str(input?.file_path) ?? str(input?.path) ?? facts.locations[0] ?? null;
+  switch (name) {
+    case "Bash": {
+      // rawInput is withheld while AIR input streams (CA/tool-calls/renderer.js:
+      // 91-95); the title is the command once known (bash.js:7).
+      const title = facts.title && facts.title !== "Terminal" ? facts.title : null;
+      return { type: "command", source: "shell", command: commandText(input?.command) ?? title, cwd: null, actions: null };
+    }
+    case "Read":
+      return { type: "command", source: "tool", command: null, cwd: null, actions: path ? [readAction(path)] : [] };
+    case "Grep":
+    case "Glob":
+      return { type: "command", source: "tool", command: null, cwd: null,
+        actions: [{ type: "search", command: null, query: str(input?.pattern), path: str(input?.path) ?? str(input?.file_path) }] };
+    case "LS":
+      return { type: "command", source: "tool", command: null, cwd: null, actions: [{ type: "list_files", command: null, path }] };
+    case "Edit":
+    case "Write":
+    case "MultiEdit":
+    case "NotebookEdit":
+      return { type: "file_change" };
+    case "WebSearch":
+      return { type: "web_search", action: "search", query: str(input?.query), url: null };
+    case "WebFetch":
+      return { type: "web_search", action: "fetch", query: str(input?.prompt), url: str(input?.url) };
+    case "Agent":
+    case "Task":
+      return { type: "subagent", prompt: str(input?.prompt) ?? str(input?.description) };
+    case "AskUserQuestion":
+      return { type: "suppress" };
+    default:
+      return { type: "tool", server: facts.mcp ? mcpServer({ title: facts.title }, facts.name, input) : null };
+  }
+}
+
+function codexClass(facts: ToolFacts): ToolClass {
+  const input = facts.input;
+  const title = facts.title;
+  if (facts.mcp) return { type: "tool", server: mcpServer({ title }, facts.name, input) };
+  if (facts.airSubagent || (title !== null && CODEX_COLLAB_TOOLS.has(title))) {
+    return { type: "subagent", prompt: str(input?.prompt) };
+  }
+  switch (facts.kind) {
+    case "execute": {
+      const command = commandText(input?.command);
+      if (command !== null || facts.terminal) {
+        return { type: "command", source: "shell", command, cwd: str(input?.cwd) ?? facts.terminalCwd, actions: null };
+      }
+      return { type: "tool", server: null };
+    }
+    case "read": {
+      // Single-action reads and lists arrive with only a title and locations;
+      // reads send no output (CX:28463-28518).
+      const action = codexActionFromTitle(title, facts.locations);
+      if (action && action.type !== "search") return { type: "command", source: "tool", command: null, cwd: null, actions: [action] };
+      return { type: "tool", server: null };
+    }
+    case "search": {
+      // Web search: kind `search` with `rawInput {query, action}` (CX:29528-29560).
+      const action = record(input?.action);
+      if (action || title?.startsWith("Web search") || title?.startsWith("Open page") || title?.startsWith("Find in page")) {
+        const fetch = action?.type === "openPage" || action?.type === "findInPage"
+          || title?.startsWith("Open page") || title?.startsWith("Find in page");
+        return { type: "web_search", action: fetch ? "fetch" : "search", query: str(input?.query) ?? str(action?.query) ?? str(action?.pattern), url: str(action?.url) };
+      }
+      const parsed = codexActionFromTitle(title, facts.locations);
+      return { type: "command", source: "tool", command: null, cwd: null,
+        actions: [parsed ?? { type: "search", command: null, query: str(input?.query), path: facts.locations[0] ?? null }] };
+    }
+    case "edit":
+      return { type: "file_change" };
+    default:
+      return { type: "tool", server: null };
+  }
+}
+
+/**
+ * The `tool` label of an item: the bridge's own name when it sends one, else a
+ * stable name per class (`resolved` is the adapter's guess from the first
+ * frame), so a histogram buckets by tool rather than by command text.
+ */
+export function toolLabel(facts: ToolFacts, cls: ToolClass, resolved: string | null): string {
+  if (facts.name) return facts.name;
+  if (cls.type === "tool" && facts.mcp && facts.title) return facts.title;
+  if (cls.type === "web_search") return cls.action === "fetch" ? "WebFetch" : "WebSearch";
+  if (cls.type === "subagent") return facts.title ?? resolved ?? "Agent";
+  return resolved && resolved !== "unknown" ? resolved : facts.title ?? "tool";
+}
+
+/** Classify a tool call by the pinned bridge's facts (spec §2.2). */
+export function classifyTool(agentType: string, facts: ToolFacts): ToolClass {
+  return agentType === "claude" ? claudeClass(facts) : codexClass(facts);
+}
+
+/**
+ * `FileChange`s from a frame's ACP `diff` content blocks, or null when it has
+ * none. Codex sends one block per hunk with `_meta.kind` (CX:29118-29233); its
+ * hunks of one path merge into one change. Claude sends `{path, oldText,
+ * newText}`, `oldText: null` for a created file (CA/tool-calls/reporters/
+ * file-edit.js:20-32, 79-97, 108-121). Patch-only blocks (an AIR `diffPatch`
+ * client, which Remi is not) carry no texts and are skipped.
+ */
+export function diffChanges(frame: VendorFrame): FileChange[] | null {
+  if (!Array.isArray(frame.content)) return null;
+  const changes: FileChange[] = [];
+  for (const block of frame.content) {
+    const row = record(block);
+    if (row?.type !== "diff" || typeof row.path !== "string") continue;
+    if (airMetadata(row._meta)?.diffPatch !== undefined) continue;
+    const kind = record(row._meta)?.kind;
+    const change = fileChangeFromTexts(row.path, typeof row.oldText === "string" ? row.oldText : null,
+      typeof row.newText === "string" ? row.newText : null,
+      kind === "add" || kind === "update" || kind === "delete" ? { kind } : {});
+    const previous = changes.at(-1);
+    if (previous && previous.path === change.path && previous.kind === change.kind) {
+      const diff = previous.diff !== null && change.diff !== null ? `${previous.diff}\n${change.diff}` : previous.diff ?? change.diff;
+      changes[changes.length - 1] = { ...previous, diff, added: previous.added + change.added,
+        removed: previous.removed + change.removed,
+        ...(previous.diff_truncated || change.diff_truncated ? { diff_truncated: true as const } : {}) };
+    } else {
+      changes.push(change);
+    }
+  }
+  if (changes.length === 0) return null;
+  return capFileChanges(changes).value;
+}
+
+// ── Compaction and notices ──────────────────────────────────────────────────
+
+/**
+ * Compaction facts from `_meta.jetbrains.air.contextCompaction` (CA/context-
+ * compaction-meta.js; `contextCompactionMetadataFromBoundary` in CA/context-
+ * compaction.js). Missing facts are undefined so a later update can add them.
+ */
+export function compactionFacts(frame: VendorFrame): Partial<Pick<TraceCompactionItem, "trigger" | "pre_tokens" | "post_tokens">> {
+  const facts = record(airMetadata(frame._meta)?.contextCompaction);
+  if (!facts) return {};
+  const trigger = facts.trigger === "automatic" || facts.trigger === "manual" ? facts.trigger : undefined;
+  const pre = num(facts.preTokens);
+  const post = num(facts.postTokens);
+  return {
+    ...(trigger ? { trigger } : {}),
+    ...(pre !== null ? { pre_tokens: pre } : {}),
+    ...(post !== null ? { post_tokens: post } : {}),
+  };
+}
+
+/** The fields of an ACP `notice` update (CA/session-notices.js:6-35; CX:30671-30682). */
+export function noticeFields(frame: VendorFrame): Pick<TraceNoticeItem, "severity" | "title" | "description" | "category" | "error_kind"> {
+  const severity = frame.severity === "warning" || frame.severity === "error" ? frame.severity : "info";
+  return {
+    severity,
+    title: str(frame.title) ?? "Notice",
+    description: str(frame.description),
+    category: str(frame.category),
+    error_kind: null,
+  };
+}
+
+/** The notice fields of an AIR session failure. */
+export function sessionFailureNotice(failure: AcpSessionFailure): Pick<TraceNoticeItem, "severity" | "title" | "description" | "category" | "error_kind"> {
+  return {
+    severity: failure.severity,
+    title: failure.title,
+    description: failure.details ?? null,
+    category: failure.category,
+    error_kind: failure.errorKind ?? null,
+  };
+}

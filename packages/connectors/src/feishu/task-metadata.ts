@@ -1,4 +1,4 @@
-import type { TraceEvent } from "@multiremi/contracts/trace.js";
+import type { LegacyTraceEvent } from "@multiremi/contracts/trace.js";
 import { executionModel, readContextUsage, type AgentExecutionDisplay, type ContextUsage } from "@shared/agent-execution.js";
 import { formatCardStats, formatExecutionSubtitle } from "./card-metadata.js";
 
@@ -11,7 +11,7 @@ export class FeishuTaskMetadata {
   constructor(agentName?: string | null) { this.execution = { agentName }; }
   get agentName() { return this.execution.agentName; }
 
-  accept(event: TraceEvent): void {
+  accept(event: LegacyTraceEvent): void {
     // A resumed bundled stream can start at a result after its invocation was
     // acknowledged. Count that stable ID without counting its later deltas twice.
     if (event.type === "tool_use" || (event.type === "tool_result" && event.tool_call_id)) {

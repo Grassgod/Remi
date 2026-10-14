@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
 import type { TaskMessagePayload } from "@multiremi/core/types/events";
-import type { TraceEvent } from "@multiremi/contracts/trace";
+import type { LegacyTraceEvent } from "@multiremi/contracts/trace";
 import { appendTimelineItem, buildEntries, buildTimeline, buildTraceTimeline, coalesceTimelineItems, countToolCalls, isStepRunning, extractContextUsage, extractUsageFromMessages, nestEntries, type TimelineItem, type TranscriptEntry } from "./build-timeline";
 
-function trace(seq: number, type: string, fields: Partial<TraceEvent> = {}): TraceEvent {
+function trace(seq: number, type: string, fields: Partial<LegacyTraceEvent> = {}): LegacyTraceEvent {
   return { seq, type, ts: "2026-10-04T00:00:00Z", ...fields };
 }
 

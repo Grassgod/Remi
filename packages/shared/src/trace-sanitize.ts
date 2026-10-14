@@ -16,11 +16,12 @@
  * store both need it and neither may depend on the other.
  */
 
-import {
-  TRACE_EVENT_STATUSES,
-  type FileChange,
-  type TraceEventBody,
-  type TraceItem,
+import type {
+  FileChange,
+  LegacyTraceEvent,
+  LegacyTraceEventInput,
+  TraceEventBody,
+  TraceItem,
 } from "@multiremi/contracts/trace.js";
 import { utf8ByteLength } from "./utf8.js";
 
@@ -38,15 +39,13 @@ export const TRACE_JSON_MAX_DEPTH = 8;
 export const TRACE_JSON_MAX_ARRAY = 256;
 
 /**
- * Tool statuses the write path accepts; anything else is dropped to null.
- *
- * Derived from `TRACE_EVENT_STATUSES` in `@multiremi/contracts/trace.js`, which is
- * the single definition: the set is part of the wire contract, and this module is
- * the enforcement of it. Restating the values here would let the two drift
- * silently — a status added to the contract would be normalized away by the
- * sanitizer with nothing failing.
+ * Tool statuses the legacy fragment write path accepts; anything else is dropped
+ * to null. Only the deprecated `multiremi_task_messages` writer (legacy reader
+ * fixtures) still sanitizes fragments; turn + items traces use the item caps
+ * below and `TRACE_ITEM_STATUSES` from the contract.
  */
-export const TRACE_STATUSES: ReadonlySet<string> = new Set(TRACE_EVENT_STATUSES);
+export const LEGACY_TRACE_STATUSES = ["pending", "in_progress", "completed", "failed", "cancelled"] as const;
+export const TRACE_STATUSES: ReadonlySet<string> = new Set(LEGACY_TRACE_STATUSES);
 
 /** A string longer than this that looks like base64 is elided, not stored. */
 const BASE64_LOOKALIKE_MIN_LENGTH = 4096;
@@ -187,6 +186,36 @@ export function parseStoredTraceJson<T>(stored: string | null): T | null {
   } catch {
     return null;
   }
+}
+
+/**
+ * The stored form of one legacy fragment event: the field caps above, with the
+ * serialized structured fields turned back into values. This is what v1 trace
+ * files hold and what the legacy reader fixtures build; no live writer produces
+ * fragments since PR 2.
+ */
+export function sanitizeLegacyTraceEvent(event: LegacyTraceEventInput, ts: string): Omit<LegacyTraceEvent, "seq"> {
+  const fields = sanitizeTraceEventFields({
+    type: typeof event.type === "string" ? event.type : "text",
+    tool: event.tool,
+    content: event.content,
+    input: event.input,
+    output: event.output,
+    tool_call_id: event.tool_call_id,
+    status: event.status,
+    meta: event.meta,
+  });
+  return {
+    ts,
+    type: fields.type,
+    tool: fields.tool,
+    content: fields.content,
+    input: parseStoredTraceJson<Record<string, unknown>>(fields.input),
+    output: fields.output,
+    tool_call_id: cleanTraceField(fields.tool_call_id),
+    status: fields.status,
+    meta: parseStoredTraceJson<Record<string, unknown>>(fields.meta),
+  };
 }
 
 // ── Item caps (turn + items traces, PR 2) ───────────────────────────────────
@@ -332,7 +361,7 @@ export function capTraceItem<T extends TraceItem>(item: T): T {
     const capped = capOutput(target.output);
     if (capped.truncated) {
       target.output = capped.value;
-      if (flag) target.output_truncated = true;
+      if (flag && !target.output_truncated) target.output_truncated = true;
       changed = true;
     }
   };
@@ -355,27 +384,27 @@ export function capTraceItem<T extends TraceItem>(item: T): T {
       break;
     case "file_change": {
       label("tool");
-      output(false);
+      output(true);
       const capped = capFileChanges(next.changes);
       if (capped.truncated) { next.changes = capped.value; changed = true; }
       break;
     }
     case "web_search":
       label("tool");
-      output(false);
+      output(true);
       break;
     case "tool": {
       label("tool");
       label("title");
       output(true);
       const capped = capItemInput(next.input);
-      if (capped.truncated) { next.input = capped.value; changed = true; }
+      if (capped.truncated) { next.input = capped.value; next.input_truncated = true; changed = true; }
       break;
     }
     case "subagent":
       label("tool");
       label("title");
-      output(false);
+      output(true);
       break;
     case "permission":
     case "notice":
@@ -394,11 +423,13 @@ function dropOversizedFields(item: TraceItem): TraceItem | null {
   if (typeof next.output === "string") {
     candidates.push(["output", () => {
       next.output = null;
-      if (item.type === "command" || item.type === "tool") next.output_truncated = true;
+      next.output_truncated = true;
     }]);
   }
   if (typeof next.text === "string") candidates.push(["text", () => { next.text = ""; next.truncated = true; }]);
-  if (next.input && typeof next.input === "object") candidates.push(["input", () => { next.input = null; }]);
+  if (next.input && typeof next.input === "object") {
+    candidates.push(["input", () => { next.input = null; next.input_truncated = true; }]);
+  }
   if (Array.isArray(next.changes)) {
     candidates.push(["changes", () => {
       next.changes = (next.changes as FileChange[]).map((change) => change.diff === null ? change : { ...change, diff: null, diff_truncated: true });

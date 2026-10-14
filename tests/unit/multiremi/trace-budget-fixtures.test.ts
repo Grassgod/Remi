@@ -1,6 +1,6 @@
 import { expect, it } from "bun:test";
 import { isTraceFileEvent } from "@multiremi/contracts/trace-file.js";
-import { sanitizeStoredEvent } from "@multiremi/worker/trace-store.js";
+import { sanitizeLegacyTraceEvent as sanitizeStoredEvent } from "@shared/trace-sanitize.js";
 import {
   maximalNullableTraceInput, TRACE_SANITIZED_EVENT_MAX_BYTES,
   traceFiniteEventBytes, traceJsonBytes,

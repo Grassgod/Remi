@@ -4,7 +4,8 @@ import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { HERMETIC_ENV_RUN_ROOT_PATHS, scrubInheritedEnv } from "../setup/hermetic-env-policy";
-import type { TraceEvent } from "@multiremi/contracts/trace";
+// TODO(PR 2 P3): the transcript dialog still renders legacy fragment events.
+import type { LegacyTraceEvent as TraceEvent } from "@multiremi/contracts/trace";
 
 const root = resolve(import.meta.dir, "../..");
 const output = mkdtempSync(join(tmpdir(), "remi-durable-trace-browser-"));
@@ -35,7 +36,7 @@ const events = new Map<string, TraceEvent[]>([
 ]);
 const closed = new Set<string>();
 const hub = createHub({ transport: createLocalHubTransport() });
-for (const [taskId, frames] of events) hub.append(taskId, frames);
+for (const [taskId, frames] of events) hub.append(taskId, frames as never);
 const reads: { taskId: string; afterSeq: number; limit: number }[] = [];
 const skipBuild = process.argv.includes("--skip-build");
 let apiPort = 0;
@@ -172,13 +173,13 @@ try {
     sockets.find(socket => new URL(socket.url).pathname === "/api/trace/ws" && socket.readyState === WebSocket.OPEN)?.close();
   });
   const recovered: TraceEvent = { seq: 2301, ts: "2026-10-05T00:00:00Z", type: "text", content: "Recovered while disconnected", meta: { phase: "commentary" } };
-  events.get(firstTask.id)!.push(recovered); hub.append(firstTask.id, [recovered]);
+  events.get(firstTask.id)!.push(recovered); hub.append(firstTask.id, [recovered] as never);
   await dialog.getByText("Recovered while disconnected", { exact: true }).waitFor();
   const subscriptionsAfterReconnect = streamActions.filter(action => action.type === "stream.subscribe" && action.id === firstTask.id);
   check("real trace socket reconnect resumes from the delivered sequence", subscriptionsAfterReconnect.length > subscriptionsBeforeReconnect && subscriptionsAfterReconnect.at(-1)?.fromSeq === 2301);
   const last: TraceEvent = { seq: 2302, ts: "2026-10-05T00:00:00Z", type: "text", content: "Live final marker", meta: { phase: "final_answer" } };
   events.get(firstTask.id)!.push(last);
-  hub.append(firstTask.id, [last]);
+  hub.append(firstTask.id, [last] as never);
   await dialog.getByText("Live final marker", { exact: true }).waitFor();
   closed.add(firstTask.id); hub.close(firstTask.id);
   await dialog.getByText(/Execution finished/).waitFor();

@@ -37,7 +37,7 @@ import { createStore, resetMultiremiTestEnv } from "./helpers.js";
 afterEach(resetMultiremiTestEnv);
 
 function traceEvent(seq: number, content = `t-${seq}`): TraceEvent {
-  return { seq, ts: new Date(1_700_000_000_000 + seq).toISOString(), type: "text", content };
+  return { seq, ts: new Date(1_700_000_000_000 + seq).toISOString(), type: "text", content } as unknown as TraceEvent;
 }
 
 async function settle(turns = 6): Promise<void> {

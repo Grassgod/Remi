@@ -3,7 +3,9 @@ import type { Database } from "bun:sqlite";
 import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { MultiremiStore } from "@multiremi/store.js";
-import { InMemoryTraceStore, sanitizeStoredEvent } from "@multiremi/worker/trace-store.js";
+// TODO(PR 2 P2b): these read-path cases still feed legacy fragment events.
+import { LegacyFragmentTraceStore as InMemoryTraceStore } from "../../helpers/legacy-trace-store.js";
+import { sanitizeLegacyTraceEvent as sanitizeStoredEvent } from "@shared/trace-sanitize.js";
 import { InMemoryDaemonTraceReader } from "@multiremi/api/trace/daemon-trace-reader.js";
 import { isTraceFileEvent } from "@multiremi/contracts/trace-file.js";
 import { TRACE_READ_MAX_BYTES } from "@multiremi/trace/trace-reader.js";
