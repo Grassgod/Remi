@@ -78,7 +78,9 @@ and re-create the permanent queueing described above. Levels are validated
 server-side against the engine's enum — Claude `low`/`medium`/`high`/`xhigh`/`max`,
 Codex additionally `minimal` — and an unknown spelling is rejected with a 400
 rather than forwarded to execution, as are a default level outside the declared
-set and a missing model id.
+set and a missing model id. The Antigravity engine has no enum: both
+reasoning-level routes, like the Claude-only context-window route, answer 400 for
+it (see [Antigravity Gateway Engine](#antigravity-gateway-engine)).
 
 A declaration does not depend on discovery ever having succeeded — that is what
 makes it a source rather than a footnote to the snapshot. It applies to any model
@@ -185,3 +187,46 @@ this as a merge of catalog entries or as an already deployed change.
 Disabled plugin bindings remain readable after switching engine and are excluded
 before computing task snapshots. Creating/enabling bindings still validates engine
 compatibility, and cross-workspace bindings remain invalid.
+
+## Antigravity Gateway Engine
+
+Settings > Model gateway also holds an `antigravity` engine beside Claude and
+Codex (`PUT /api/workspaces/:id/relay-config/antigravity`, or
+`remi workspace relay update antigravity`). Its fragment is JSON with only two
+keys, `{"base_url": "https://…", "default_model": "gemini-…"}`
+([validator](../packages/server/src/relay/fragment.ts)). `base_url` passes the
+same public-https check as the other gateways, must not carry a query or
+fragment, and must be the gateway root: a trailing `/v1beta` or `/v1` is
+rejected because the Antigravity server appends `/v1beta/...` itself.
+`default_model` is optional, at most 200 characters, without whitespace. The
+token field holds the gateway API key, and a key still requires a `base_url`.
+The browser projection masks the key exactly like the other engines; reveal and
+probe accept the engine.
+
+Discovery ([discovery.ts](../packages/server/src/relay/discovery.ts)) lists
+`<base_url>/v1beta/models?pageSize=1000` with `Authorization: Bearer <key>` and
+follows `nextPageToken` for at most five pages, as the server does. It applies
+the server's own filter: the `models/` prefix is stripped, an entry whose
+`supportedGenerationMethods` omits `generateContent` is dropped (an entry listing
+no methods is kept, as the server keeps it), and image-generation ids (`imagen*`,
+`dall-e*`, `*-image`, `*_image`, `*image-gen*`, ignoring `-preview`) are
+excluded. `inputTokenLimit` is not stored. Every model carries
+`thinking.status: unsupported`, because the server's gateway path offers no
+`thought_level` selector; the engine's declarable level set is empty and an
+explicit Agent effort is rejected. A failed first page fails the run and keeps
+the last known snapshot; a failed later page keeps the models already listed and
+records the error, so 立即探测 reports `error` with those models.
+
+The catalog overlay treats the engine like Claude without the family inference:
+with discovery on and a key stored, the current-revision snapshot replaces the
+Runtime union in the Antigravity dropdown. The only model marked `default` is
+the fragment's `default_model`; with none configured, nothing is marked.
+
+The daemon wire carries the engine as `relay.antigravity` (fragment, key and
+revision) wherever the relay travels — register, the workspace repository
+refresh and the `workspace.relay` downlink in the heartbeat acknowledgement —
+and, as for the other engines, only to owner/admin daemons. The daemon currently
+receives and ignores it: Antigravity tasks still run through the
+[agy provider](antigravity.md), and nothing yet routes model requests through
+this gateway. Consuming it — the daemon's local gateway shim that holds the key
+and forwards only Antigravity model requests — is follow-up work (PR 4 Task C).

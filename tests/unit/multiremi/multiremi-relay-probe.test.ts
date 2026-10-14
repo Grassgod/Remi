@@ -70,6 +70,49 @@ describe("relay gateway probe", () => {
     expect(result.models[0]?.thinking?.default_level).toBe("high");
   });
 
+  it("projects the Antigravity listing with every model stating no reasoning levels", async () => {
+    const store = createLocalStore();
+    store.setRelayModelDiscovery("local", true);
+    store.upsertRelayConfig("local", "antigravity", {
+      fragment: JSON.stringify({ base_url: "https://ai.openremi.fun/antigravity" }), tokenOp: "set", authToken: "agy-key",
+    });
+    const urls: string[] = [];
+    const httpGet: HttpGet = async (url) => {
+      urls.push(url);
+      return ok({ models: [
+        { name: "models/gemini-3.7-flash", displayName: "Gemini 3.7 Flash", supportedGenerationMethods: ["generateContent"] },
+        { name: "models/text-embedding-005", supportedGenerationMethods: ["embedContent"] },
+      ] });
+    };
+
+    const result = await probeGatewayModels(store, "local", "antigravity", { httpGet });
+
+    expect(urls).toEqual(["https://ai.openremi.fun/antigravity/v1beta/models?pageSize=1000"]);
+    expect(result).toMatchObject({ engine: "antigravity", status: "ready", error: null });
+    expect(result.models).toEqual([{
+      id: "gemini-3.7-flash",
+      label: "Gemini 3.7 Flash",
+      thinking: { supported_levels: [], status: "unsupported" },
+    }]);
+  });
+
+  it("reports a partial Antigravity listing as an error while keeping its models", async () => {
+    const store = createLocalStore();
+    store.setRelayModelDiscovery("local", true);
+    store.upsertRelayConfig("local", "antigravity", {
+      fragment: JSON.stringify({ base_url: "https://ai.openremi.fun" }), tokenOp: "set", authToken: "agy-key",
+    });
+    const httpGet: HttpGet = async (url) => url.includes("pageToken=")
+      ? { status: 503, text: "" }
+      : ok({ models: [{ name: "models/gemini-3.7-flash" }], nextPageToken: "next" });
+
+    const result = await probeGatewayModels(store, "local", "antigravity", { httpGet });
+
+    expect(result.status).toBe("error");
+    expect(result.error).toBe("model list page 2: gateway HTTP 503");
+    expect(result.models.map((model) => model.id)).toEqual(["gemini-3.7-flash"]);
+  });
+
   it("reports a sanitized failure and keeps the last known catalog", async () => {
     const store = createLocalStore();
     store.setRelayModelDiscovery("local", true);
@@ -142,6 +185,25 @@ describe("relay probe route", () => {
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({
       engine: "claude",
+      status: "unknown",
+      error: null,
+      models: [],
+      last_success_at: null,
+    });
+  });
+
+  it("accepts the Antigravity engine", async () => {
+    const { app } = await setup();
+    const res = await app.request("/api/workspaces/local/relay-config/antigravity/probe", {
+      method: "POST",
+      headers: { Authorization: "Bearer MASTER", "content-type": "application/json" },
+      body: "{}",
+    });
+
+    expect(res.status).toBe(200);
+    expect(res.headers.get("Cache-Control")).toBe("no-store");
+    expect(await res.json()).toEqual({
+      engine: "antigravity",
       status: "unknown",
       error: null,
       models: [],

@@ -298,7 +298,10 @@ export function relayForDaemonWire(store: MultiremiStore, workspaceId: string): 
   const claude = engine(config.claude);
   return {
     claude: claude ? { ...claude, one_million_models: store.listGatewayModelContext(workspaceId, "claude").map(row => row.modelId) } : null,
-    codex: engine(config.codex), model_discovery: config.modelDiscovery,
+    codex: engine(config.codex),
+    // Daemons that predate the engine ignore the key.
+    antigravity: engine(config.antigravity),
+    model_discovery: config.modelDiscovery,
   };
 }
 

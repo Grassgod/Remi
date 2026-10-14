@@ -2,7 +2,7 @@ import { loadCodexModelCatalog } from "@daemon/agent-runtime/relay-sync.js";
 import { codexNativeModel } from "../../fixtures/codex-native-catalog.js";
 import { afterEach, describe, expect, it } from "bun:test";
 import { MultiremiStore } from "@multiremi/store.js";
-import { discoverGatewayModels, refreshPreNativeCodexSnapshots, type HttpGet, type HttpResponse } from "@multiremi/relay/discovery.js";
+import { discoverGatewayModels, refreshPreNativeCodexSnapshots, triggerGatewayDiscovery, type HttpGet, type HttpResponse } from "@multiremi/relay/discovery.js";
 import { createLocalStore, resetMultiremiTestEnv } from "./helpers.js";
 
 afterEach(resetMultiremiTestEnv);
@@ -276,5 +276,117 @@ describe("relay model discovery", () => {
     await discoverGatewayModels(store, "local", "claude", s2.get);
     expect(s2.calls).toBe(0); // no token → no request
     expect(store.getGatewayModels("local", "claude")?.models).toEqual([]); // stale catalog dropped
+  });
+});
+
+describe("relay model discovery — Antigravity (Gemini models.list)", () => {
+  const AGY_FRAG = JSON.stringify({ base_url: "https://ai.openremi.fun/antigravity/", default_model: "gemini-3.7-flash" });
+  const FIRST_PAGE = "https://ai.openremi.fun/antigravity/v1beta/models?pageSize=1000";
+  const unsupported = { status: "unsupported" as const, supportedLevels: [] };
+  const gemini = (name: string, extra: Record<string, unknown> = {}) => ({
+    name, displayName: name.replace(/^models\//, "").toUpperCase(),
+    supportedGenerationMethods: ["generateContent", "countTokens"], inputTokenLimit: 1_048_576, ...extra,
+  });
+
+  function configured() {
+    const store = createStore();
+    const revision = store.upsertRelayConfig("local", "antigravity", { fragment: AGY_FRAG, tokenOp: "set", authToken: "agy-key" });
+    return { store, revision };
+  }
+
+  it("lists /v1beta/models with only a Bearer key and applies the server's own model filter", async () => {
+    const { store } = configured();
+    const seen: Array<{ url: string; headers: Record<string, string> }> = [];
+    const s = stub((url, headers) => {
+      seen.push({ url, headers });
+      return ok({ models: [
+        gemini("models/gemini-3.7-flash"),
+        gemini("models/gemini-3.7-flash", { displayName: "duplicate" }),
+        gemini("models/text-embedding-005", { supportedGenerationMethods: ["embedContent"] }),
+        gemini("models/gemini-3.1-flash-image-preview"),
+        gemini("models/imagen-4.0-generate"),
+        gemini("models/gemini-image-gen-1"),
+        // An entry that states no methods at all is offered, as the server does.
+        { name: "models/gateway-alias" },
+        gemini("models/gemini-3.1-pro-preview", { displayName: "Gemini 3.1 Pro" }),
+        { displayName: "no name" },
+        "not-an-object",
+      ] });
+    });
+    await discoverGatewayModels(store, "local", "antigravity", s.get);
+    expect(seen).toEqual([{ url: FIRST_PAGE, headers: { Authorization: "Bearer agy-key" } }]);
+    const snapshot = store.getGatewayModels("local", "antigravity")!;
+    expect(snapshot.models).toEqual([
+      { id: "gemini-3.7-flash", label: "GEMINI-3.7-FLASH", thinking: unsupported },
+      { id: "gateway-alias", label: "gateway-alias", thinking: unsupported },
+      { id: "gemini-3.1-pro-preview", label: "Gemini 3.1 Pro", thinking: unsupported },
+    ]);
+    expect(snapshot.lastError).toBeNull();
+    expect(snapshot.nativeCatalogStatus).toBeUndefined();
+  });
+
+  it("follows nextPageToken for at most five pages", async () => {
+    const { store } = configured();
+    const urls: string[] = [];
+    const s = stub((url) => {
+      urls.push(url);
+      return ok({ models: [gemini(`models/gemini-page-${urls.length}`)], nextPageToken: `token/${urls.length}+=` });
+    });
+    await discoverGatewayModels(store, "local", "antigravity", s.get);
+    expect(urls).toEqual([
+      FIRST_PAGE,
+      `${FIRST_PAGE}&pageToken=${encodeURIComponent("token/1+=")}`,
+      `${FIRST_PAGE}&pageToken=${encodeURIComponent("token/2+=")}`,
+      `${FIRST_PAGE}&pageToken=${encodeURIComponent("token/3+=")}`,
+      `${FIRST_PAGE}&pageToken=${encodeURIComponent("token/4+=")}`,
+    ]);
+    expect(store.getGatewayModels("local", "antigravity")?.models.map(model => model.id))
+      .toEqual(["gemini-page-1", "gemini-page-2", "gemini-page-3", "gemini-page-4", "gemini-page-5"]);
+  });
+
+  it("stops at the last page and keeps what earlier pages listed when a later page fails", async () => {
+    const { store } = configured();
+    const s = stub((url) => {
+      if (url === FIRST_PAGE) return ok({ models: [gemini("models/gemini-3.7-flash")], nextPageToken: "p2" });
+      return { status: 502, text: "agy-key leaked in body" };
+    });
+    await discoverGatewayModels(store, "local", "antigravity", s.get);
+    const snapshot = store.getGatewayModels("local", "antigravity")!;
+    expect(snapshot.models.map(model => model.id)).toEqual(["gemini-3.7-flash"]);
+    expect(snapshot.lastSuccessAt).not.toBeNull();
+    expect(snapshot.lastError).toBe("model list page 2: gateway HTTP 502");
+
+    const done = stub(() => ok({ models: [gemini("models/gemini-3.7-flash")], nextPageToken: "" }));
+    await discoverGatewayModels(store, "local", "antigravity", done.get);
+    expect(done.calls).toBe(1);
+    expect(store.getGatewayModels("local", "antigravity")?.lastError).toBeNull();
+  });
+
+  it("fails the first page without losing the last known catalog or leaking the key", async () => {
+    const { store, revision } = configured();
+    store.saveGatewayModels("local", "antigravity", { sourceRevision: revision, models: [{ id: "gemini-old", label: "Old" }] });
+    for (const response of [
+      { status: 401, text: "denied" },
+      { status: 200, text: "agy-key is not JSON" },
+      ok({ data: [{ id: "openai-shaped" }] }),
+    ]) {
+      await discoverGatewayModels(store, "local", "antigravity", stub(() => response).get);
+      const snapshot = store.getGatewayModels("local", "antigravity")!;
+      expect(snapshot.models.map(model => model.id)).toEqual(["gemini-old"]);
+      expect(snapshot.lastError).toBeTruthy();
+      expect(JSON.stringify(snapshot)).not.toContain("agy-key");
+    }
+    await discoverGatewayModels(store, "local", "antigravity", stub(() => { throw new Error("connect agy-key refused"); }).get);
+    expect(store.getGatewayModels("local", "antigravity")?.lastError).toBe("connect [redacted] refused");
+  });
+
+  it("fans out to the engine when discovery is triggered for the whole workspace", async () => {
+    const { store } = configured();
+    store.saveGatewayModels("local", "antigravity", { sourceRevision: 1, models: [{ id: "gemini-old", label: "Old" }] });
+    // A cleared key empties the snapshot without any network request.
+    store.upsertRelayConfig("local", "antigravity", { fragment: AGY_FRAG, tokenOp: "clear" });
+    triggerGatewayDiscovery(store, "local");
+    await Bun.sleep(0);
+    expect(store.getGatewayModels("local", "antigravity")?.models).toEqual([]);
   });
 });

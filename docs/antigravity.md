@@ -33,7 +33,7 @@ Task instructions, project context and Skills use Remi's existing bootstrap/delt
 
 The native agy OAuth profile and conversation history remain in agy's own data directory. Remi tracks the explicit conversation ID and owns its separate task context; its existing Claude/Codex isolated native-home contract does not apply to agy. A native agy login is required on each machine that executes it.
 
-This integration supports automatic approval. It rejects Remi interactive approval requests, tool allowlists, non-text media, task-scoped MCP configuration and Remi Agent Plugins before starting a task, because the adapter cannot enforce those contracts. Configure machine-level MCP through `agy mcp` if needed. Claude/Codex Relay configuration remains scoped to those two providers.
+This integration supports automatic approval. It rejects Remi interactive approval requests, tool allowlists, non-text media, task-scoped MCP configuration and Remi Agent Plugins before starting a task, because the adapter cannot enforce those contracts. Configure machine-level MCP through `agy mcp` if needed. Workspace Relay configuration for Claude and Codex does not apply to agy. Settings > Model gateway also stores an Antigravity engine (gateway base URL, default model and key; see [its contract](runtime-model-discovery.md#antigravity-gateway-engine)), but this provider does not read it: the daemon receives that configuration and ignores it until its gateway shim lands in a follow-up (PR 4 Task C).
 
 ## Validation
 

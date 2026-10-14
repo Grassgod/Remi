@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { extractBaseUrl, validateRelayFragment } from "@multiremi/relay/fragment.js";
+import { extractAntigravityDefaultModel, extractBaseUrl, validateRelayFragment } from "@multiremi/relay/fragment.js";
 import { MultiremiStore } from "@multiremi/store.js";
 import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { bootstrapPreUnifiedSchema } from "@multiremi/store/migrations.js";
@@ -17,6 +17,7 @@ const CODEX_FRAGMENT = [
   'wire_api = "responses"',
   "requires_openai_auth = true",
 ].join("\n");
+const ANTIGRAVITY_FRAGMENT = JSON.stringify({ base_url: "https://ai.openremi.fun/antigravity", default_model: "gemini-3.7-flash" });
 
 describe("relay config store", () => {
   it("upserts, masks token for browser, reveals plaintext for daemon", () => {
@@ -38,6 +39,32 @@ describe("relay config store", () => {
     expect(daemon.claude?.authToken).toBe("sk-ant-secret");
     expect(daemon.claude?.revision).toBe(1);
     expect(daemon.codex).toBeNull();
+    expect(daemon.antigravity).toBeNull();
+    expect(browser.antigravity).toBeNull();
+  });
+
+  it("stores the Antigravity engine beside the others and masks its gateway key for the browser", () => {
+    const store = createStore();
+    store.upsertRelayConfig("local", "claude", { fragment: CLAUDE_FRAGMENT, tokenOp: "set", authToken: "sk-ant-secret" });
+    const rev = store.upsertRelayConfig("local", "antigravity", {
+      fragment: ANTIGRAVITY_FRAGMENT,
+      tokenOp: "set",
+      authToken: "agy-gateway-secret",
+    });
+    expect(rev).toBe(1);
+
+    const browser = store.getRelayConfigForBrowser("local");
+    expect(browser.antigravity).toEqual({ fragment: ANTIGRAVITY_FRAGMENT, hasToken: true, revision: 1 });
+    expect(JSON.stringify(browser)).not.toContain("agy-gateway-secret");
+
+    const daemon = store.getRelayConfigForDaemon("local");
+    expect(daemon.antigravity).toEqual({ fragment: ANTIGRAVITY_FRAGMENT, authToken: "agy-gateway-secret", revision: 1 });
+    expect(daemon.claude?.authToken).toBe("sk-ant-secret");
+    expect(store.revealRelayToken("local", "antigravity")).toBe("agy-gateway-secret");
+
+    store.upsertRelayConfig("local", "antigravity", { fragment: ANTIGRAVITY_FRAGMENT, tokenOp: "clear" });
+    expect(store.getRelayConfigForBrowser("local").antigravity?.hasToken).toBe(false);
+    expect(store.getRelayConfigForDaemon("local").claude?.authToken).toBe("sk-ant-secret");
   });
 
   it("token op keep preserves, clear removes, revision is monotonic", () => {
@@ -144,7 +171,67 @@ describe("relay fragment validation", () => {
   it("extractBaseUrl reads the gateway URL from stored fragments", () => {
     expect(extractBaseUrl("claude", CLAUDE_FRAGMENT)).toBe("https://ai.openremi.fun");
     expect(extractBaseUrl("codex", CODEX_FRAGMENT)).toBe("https://vip.openremi.fun/v1");
+    expect(extractBaseUrl("antigravity", ANTIGRAVITY_FRAGMENT)).toBe("https://ai.openremi.fun/antigravity");
     expect(extractBaseUrl("claude", "")).toBeNull();
+    expect(extractBaseUrl("antigravity", "")).toBeNull();
+    expect(extractBaseUrl("antigravity", JSON.stringify({ default_model: "gemini-3.7-flash" }))).toBeNull();
+    expect(extractBaseUrl("antigravity", "not json")).toBeNull();
+  });
+
+  it("accepts an Antigravity fragment of base_url and default_model only", () => {
+    const fragment = (value: Record<string, unknown>) => validateRelayFragment("antigravity", JSON.stringify(value));
+    expect(validateRelayFragment("antigravity", ANTIGRAVITY_FRAGMENT)).toEqual({ ok: true });
+    expect(fragment({ base_url: "https://ai.openremi.fun" }).ok).toBe(true);
+    expect(fragment({ base_url: "https://ai.openremi.fun/antigravity/" }).ok).toBe(true);
+    expect(fragment({ default_model: "gemini-3.7-flash" }).ok).toBe(true);
+    expect(fragment({}).ok).toBe(true);
+    expect(validateRelayFragment("antigravity", "").ok).toBe(true);
+
+    for (const value of [
+      { base_url: "https://ai.openremi.fun", api_key: "agy-secret" },
+      { base_url: "https://ai.openremi.fun", headers: { Authorization: "Bearer x" } },
+      { env: { AGY_LLM_GATEWAY_URL: "https://ai.openremi.fun" } },
+    ]) {
+      expect(fragment(value).ok).toBe(false);
+    }
+    expect(validateRelayFragment("antigravity", '{"__proto__":{"base_url":"https://ai.openremi.fun"}}').ok).toBe(false);
+    expect(validateRelayFragment("antigravity", "[]").ok).toBe(false);
+    expect(validateRelayFragment("antigravity", 'base_url = "https://ai.openremi.fun"').ok).toBe(false);
+  });
+
+  it("rejects an Antigravity base_url the server would mis-join or must not reach", () => {
+    const base = (base_url: unknown) => validateRelayFragment("antigravity", JSON.stringify({ base_url }));
+    // The server appends /v1beta/... itself.
+    for (const versioned of [
+      "https://ai.openremi.fun/v1beta",
+      "https://ai.openremi.fun/v1beta/",
+      "https://ai.openremi.fun/antigravity/v1",
+      "https://ai.openremi.fun/V1BETA",
+    ]) {
+      expect(base(versioned)).toEqual({
+        ok: false,
+        error: "base_url must be the gateway root without /v1beta or /v1 (the server appends /v1beta/...)",
+      });
+    }
+    expect(base("https://ai.openremi.fun/v1beta-proxy").ok).toBe(true);
+    expect(base("https://ai.openremi.fun/?key=x").ok).toBe(false);
+    expect(base("https://ai.openremi.fun/#x").ok).toBe(false);
+    expect(base("http://ai.openremi.fun").ok).toBe(false);
+    expect(base("https://169.254.169.254").ok).toBe(false);
+    expect(base("https://localhost/antigravity").ok).toBe(false);
+    expect(base("https://user:pass@ai.openremi.fun").ok).toBe(false);
+    expect(base(42).ok).toBe(false);
+  });
+
+  it("bounds the Antigravity default_model and reads it back", () => {
+    const model = (default_model: unknown) => validateRelayFragment("antigravity", JSON.stringify({ default_model }));
+    expect(model("g".repeat(200)).ok).toBe(true);
+    for (const invalid of ["", "g".repeat(201), "gemini 3", " gemini-3", "gemini\n3", 7, null]) {
+      expect(model(invalid).ok).toBe(false);
+    }
+    expect(extractAntigravityDefaultModel(ANTIGRAVITY_FRAGMENT)).toBe("gemini-3.7-flash");
+    expect(extractAntigravityDefaultModel(JSON.stringify({ base_url: "https://ai.openremi.fun" }))).toBeNull();
+    expect(extractAntigravityDefaultModel("")).toBeNull();
   });
 
   it("enforces codex provider field types and model_provider reference", () => {
@@ -167,5 +254,8 @@ describe("relay config revision", () => {
     expect(store.upsertRelayConfig("local", "claude", { fragment: CLAUDE_FRAGMENT, tokenOp: "keep" })).toBe(3);
     // codex has its own independent counter
     expect(store.upsertRelayConfig("local", "codex", { fragment: CODEX_FRAGMENT, tokenOp: "set", authToken: "b" })).toBe(1);
+    expect(store.upsertRelayConfig("local", "antigravity", { fragment: ANTIGRAVITY_FRAGMENT, tokenOp: "set", authToken: "c" })).toBe(1);
+    expect(store.upsertRelayConfig("local", "antigravity", { fragment: ANTIGRAVITY_FRAGMENT, tokenOp: "keep" })).toBe(2);
+    expect(store.getRelayConfigForDaemon("local").claude?.revision).toBe(3);
   });
 });

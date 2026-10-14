@@ -265,6 +265,74 @@ describe("Multiremi store — fleet engine and model catalog", () => {
     expect(fable.thinking.supported_levels.map((level: any) => level.value).sort()).toEqual(["high", "low"]);
   });
 
+  it("overlays the Antigravity gateway listing with its configured default and no reasoning levels", async () => {
+    const store = createStore();
+    store.ensureLocalWorkspace();
+    store.registerRuntime({
+      id: "rt_antigravity_gateway",
+      name: "antigravity gateway",
+      provider: "antigravity",
+      workspaceId: "local",
+      // The server's own first model is not what an Agent without a model runs.
+      models: [{ id: "gemini-3.7-flash", label: "Runtime label", provider: "google", default: true }],
+    });
+    store.setRelayModelDiscovery("local", true);
+    const revision = store.upsertRelayConfig("local", "antigravity", {
+      fragment: JSON.stringify({ base_url: "https://gateway.example", default_model: "gemini-3.1-pro" }),
+      tokenOp: "set",
+      authToken: "test-token",
+    });
+    const unsupported = { status: "unsupported" as const, supportedLevels: [] };
+    store.saveGatewayModels("local", "antigravity", {
+      sourceRevision: revision,
+      models: [
+        { id: "gemini-3.7-flash", label: "Gemini 3.7 Flash", thinking: unsupported },
+        { id: "gemini-3.1-pro", label: "Gemini 3.1 Pro", thinking: unsupported },
+      ],
+    });
+    const app = createMultiremiApp({ store });
+    const headers = { "Content-Type": "application/json" };
+    const catalog = async () => (await (await app.request("/api/models")).json()).providers
+      .find((entry: any) => entry.provider === "antigravity");
+
+    const antigravity = await catalog();
+    expect(antigravity.online_runtime_count).toBe(1);
+    const noLevels = { supported_levels: [], status: "unsupported" };
+    expect(antigravity.models).toEqual([
+      { id: "gemini-3.7-flash", label: "Gemini 3.7 Flash", provider: "antigravity", thinking: noLevels, thinking_source: "gateway" },
+      { id: "gemini-3.1-pro", label: "Gemini 3.1 Pro", provider: "antigravity", default: true, thinking: noLevels, thinking_source: "gateway" },
+    ]);
+
+    // Gateway models are not reasoning-capable, so an explicit effort is refused.
+    const withEffort = await app.request("/api/agents", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ name: "Gemini effort", provider: "antigravity", model: "gemini-3.1-pro", thinking_level: "high" }),
+    });
+    expect(withEffort.status).toBe(400);
+    const plain = await app.request("/api/agents", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ name: "Gemini", provider: "antigravity", model: "gemini-3.1-pro" }),
+    });
+    expect(plain.status).toBe(201);
+
+    // Without a configured default_model nothing is marked default.
+    store.upsertRelayConfig("local", "antigravity", {
+      fragment: JSON.stringify({ base_url: "https://gateway.example" }), tokenOp: "keep",
+    });
+    store.saveGatewayModels("local", "antigravity", { sourceRevision: revision + 1, models: [
+      { id: "gemini-3.7-flash", label: "Gemini 3.7 Flash", thinking: unsupported },
+    ] });
+    expect((await catalog()).models.map((model: any) => [model.id, model.default ?? false]))
+      .toEqual([["gemini-3.7-flash", false]]);
+
+    // A cleared key hides the snapshot again: back to the Runtime's own report.
+    store.upsertRelayConfig("local", "antigravity", { fragment: JSON.stringify({ base_url: "https://gateway.example" }), tokenOp: "clear" });
+    expect((await catalog()).models.map((model: any) => [model.id, model.label, model.default ?? false]))
+      .toEqual([["gemini-3.7-flash", "Runtime label", true]]);
+  });
+
   it("resolves known Claude families without inventing effort metadata for unrelated models", async () => {
     const store = createStore();
     store.ensureLocalWorkspace();
