@@ -110,7 +110,9 @@ export function createEventMapper(adapter: AgentAdapter): (event: ProviderEvent)
       // `subagent-transcript` client capability) says which Agent call it came
       // from; the frontend nests it under that step.
       const parent = metaParentToolUseId(raw);
-      const rawPhase = raw.phase ?? raw._meta?.phase ?? raw._meta?.codex?.phase;
+      // codex-acp >= 2 sends the phase only to AIR clients, as
+      // `_meta.jetbrains.air.phase`; `_meta.codex.phase` is the 1.x location.
+      const rawPhase = raw.phase ?? raw._meta?.phase ?? raw._meta?.jetbrains?.air?.phase ?? raw._meta?.codex?.phase;
       const phase = rawPhase === "final_answer" || rawPhase === "final" ? "final"
         : rawPhase === "commentary" ? "commentary" : undefined;
       return [{
