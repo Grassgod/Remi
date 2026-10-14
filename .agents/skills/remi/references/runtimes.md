@@ -9,7 +9,7 @@ remi runtime model list <runtime-id> --json
 remi runtime task-activity <runtime-id> --json
 ```
 
-Runtime 是某台 daemon 提供的执行能力，Agent 是工作区里的云友定义。修改云友模型与配置模型提供商连接是不同操作。核对 provider、归属机器、心跳新鲜度和活动任务；仅 `status: online` 或 SSH 可达不能证明目录扫描或执行已经恢复。
+Runtime 是某台 daemon 提供的执行能力，Agent 是工作区里配置的执行者定义。修改 Agent 模型与配置模型提供商连接是不同操作。核对 provider、归属机器、心跳新鲜度和活动任务；仅 `status: online` 或 SSH 可达不能证明目录扫描或执行已经恢复。
 
 ## Codex / Claude 自定义连接
 

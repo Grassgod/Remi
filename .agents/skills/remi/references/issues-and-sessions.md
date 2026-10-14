@@ -15,7 +15,7 @@ remi turn list --issue <issue-id> --json
 
 示例创建未分配的项目 Issue；需要自动分配时按用户意图使用项目默认值或显式 assignee。**省略 assignee 会继承项目默认执行者**，`--no-project-defaults` 才表示不继承。创建响应里的派发结果与实际 Task 状态分别检查。
 
-派给人、云友或团队时明确 `member|agent|squad`，不要仅凭同名对象猜类型。`issue assign` 使用 `--to/--to-type`，`issue create/update` 使用 `--assignee/--assignee-type`。创建、分配、状态变化、发送 request 都可能启动工作；不能将它们当读取探针。
+派给人、Agent 或团队时明确 `member|agent|squad`，不要仅凭同名对象猜类型。`issue assign` 使用 `--to/--to-type`，`issue create/update` 使用 `--assignee/--assignee-type`。创建、分配、状态变化、发送 request 都可能启动工作；不能将它们当读取探针。
 
 工作位置二选一：项目用 `--project`，Runtime 持久目录用 `--runtime-workspace`，详见 [Runtime](runtimes.md)。已执行的目录绑定不可任意移动。`issue status <issue> <status>` 改业务状态，`turn cancel <turn> --yes` 取消执行，二者不能互相代替。
 

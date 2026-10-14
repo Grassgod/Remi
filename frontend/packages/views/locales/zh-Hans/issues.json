@@ -465,7 +465,7 @@
     "envelope_generic": "{{notification}}：有新的系统消息",
     "task_assigned": "{{author}} → {{assignee}} 派活：{{summary}}",
     "task_received": "{{assignee}} 接到任务：{{summary}}",
-    "unknown_agent": "云友",
+    "unknown_agent": "智能体",
     "unknown_author": "派活人",
     "generic": "会话有新进展"
   },

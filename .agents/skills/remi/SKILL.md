@@ -1,6 +1,6 @@
 ---
 name: remi
-description: 通过现有 Remi CLI 使用和管理 Remi 平台；用户要求处理任务与会话、配置云友和模型、维护项目知识、管理协作与集成，或排查 Runtime 和平台运行问题时使用。产品源码开发另按仓库开发规则处理。
+description: 通过现有 Remi CLI 使用和管理 Remi 平台；用户要求处理任务与会话、配置 Agent 和模型、维护项目知识、管理协作与集成，或排查 Runtime 和平台运行问题时使用。产品源码开发另按仓库开发规则处理。
 ---
 
 # 操作 Remi
@@ -11,7 +11,7 @@ description: 通过现有 Remi CLI 使用和管理 Remi 平台；用户要求处
 
 ## 职责边界
 
-覆盖平台日常使用、资源管理、项目知识、集成和 CLI 提供的运行维护。Skill 文件存在于本机，不等于已经进入 Remi Skill 库或绑定了云友；按用户的安装或绑定请求操作。CLI 平台更新与本机 daemon 生命周期也在范围内；源码开发、新建部署和打包发版仍需对应项目的开发或部署说明。
+覆盖平台日常使用、资源管理、项目知识、集成和 CLI 提供的运行维护。Skill 文件存在于本机，不等于已经进入 Remi Skill 库或绑定了 Agent；按用户的安装或绑定请求操作。CLI 平台更新与本机 daemon 生命周期也在范围内；源码开发、新建部署和打包发版仍需对应项目的开发或部署说明。
 
 ## 不得做的事
 
@@ -30,7 +30,7 @@ description: 通过现有 Remi CLI 使用和管理 Remi 平台；用户要求处
 |---|---|
 | 登录、选择实例、在 PowerShell 传 JSON | [连接与 JSON](references/connection.md) |
 | 邀请成员、改角色、个人资料、token 与接入引导 | [成员与访问](references/access.md) |
-| 创建或修改云友、配置环境、导入并绑定 Skill / Plugin | [Agent 与扩展](references/agents-and-skills.md) |
+| 创建或修改 Agent、配置环境、导入并绑定 Skill / Plugin | [Agent 与扩展](references/agents-and-skills.md) |
 | 配 Codex / Claude 自定义模型接口、查 Runtime、注册本地目录 | [Runtime 与模型连接](references/runtimes.md) |
 | 工作区设置、项目、仓库关联、公共提示词 | [工作区与项目](references/workspaces-and-projects.md) |
 | 创建和派发 Issue、依赖、评论、Session 成果、附件与分享 | [Issue 与交付](references/issues-and-sessions.md) |

@@ -28,7 +28,7 @@ Runtime 详情的「Claude Code 连接」支持一个 Anthropic Messages 兼容�
 
 请求头对应 Claude Code 的 `ANTHROPIC_AUTH_TOKEN`（Bearer）或 `ANTHROPIC_API_KEY`（x-api-key），每次仅注入选中的一种。具体协议见 [Claude Code 官方网关接入说明](https://code.claude.com/docs/en/llm-gateway-connect)。这不是 OpenAI Chat Completions/Responses 协议转换器。
 
-需要先更新并重启 daemon，使注册元数据带有 `claude_profiles: 1`。在此 Runtime 执行的 Claude 任务优先使用这条连接，未启用时继承原有工作区 Relay / 本机登录行为。云友可选择此连接的其他模型，留空时使用连接默认模型。
+需要先更新并重启 daemon，使注册元数据带有 `claude_profiles: 1`。在此 Runtime 执行的 Claude 任务优先使用这条连接，未启用时继承原有工作区 Relay / 本机登录行为。Agent 可选择此连接的其他模型，留空时使用连接默认模型。
 
 [模型发现](../../packages/server/src/worker/runtime-profile-models.ts)由 daemon 使用所选鉴权头请求 `/v1/models`，基础地址已以 `/v1` 结尾时不重复追加；按 [Claude Models API](https://platform.claude.com/docs/en/api/models/list) 的 `has_more` / `last_id` 翻页。完整目录保留配置默认模型，探测失败保留上次目录；首次失败仍可使用配置模型。thinking 能力仅按准确模型 ID 合并 ACP 实测结果，目录可读取也不代表模型推理成功。供应商目录不可用但 ACP 探测成功时，保留已有目录（首次使用配置默认模型）并更新已知模型的能力，日志明确记录目录探测失败；不会把 ACP 的官方模型列表当作 custom 供应商目录。平台和 daemon 需同时更新：模型上报携带 `model_profile`，过期或旧 daemon 的无标识上报不能覆盖 custom 目录。
 

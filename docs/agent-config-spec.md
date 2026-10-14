@@ -1,27 +1,27 @@
-# 云友（Agent）配置规范
+# Agent 配置规范
 
-状态：生效（MUL-81 落地）。来源：MUL-73 用户反馈 →「云友之间写的很随意，包括头像、提示词、Skill、Plugin」；MUL-80 审计确认了具体问题。
+状态：生效（MUL-81 落地）。来源：MUL-73 用户反馈各 Agent 的头像、提示词、Skill、Plugin 写法随意；MUL-80 审计确认了具体问题。
 
 适用范围：
 
-- **工作区云友**：Multiremi 里通过 UI/API 配置的 Agent（DB 表 `multiremi_agents`），含 Squad 成员。
+- **工作区 Agent**：Multiremi 里通过 UI/API 配置的 Agent（DB 表 `multiremi_agents`），含 Squad 成员。
 - **内置模板**：`packages/server/src/api/agent-templates/*.json`。
 - **仓库内 Skill**：`.agents/skills/*/SKILL.md`、`.remi/pipeline/skills/*/SKILL.md`、`frontend/.agents/skills/*/SKILL.md`。
 - **Plugin**：`packages/plugin-sdk` manifest 与 Multiremi agent plugin。
 
-自动校验：`bun test tests/arch/agent-config-metadata.test.ts`（CI 由 `release-build-check.yml` 的 tests/arch 整目录覆盖）。DB 里的工作区云友无法用仓库测试兜底，靠本规范 + 变更时人工对照。
+自动校验：`bun test tests/arch/agent-config-metadata.test.ts`（CI 由 `release-build-check.yml` 的 tests/arch 整目录覆盖）。DB 里的工作区 Agent 无法用仓库测试兜底，靠本规范 + 变更时人工对照。
 
 ---
 
 ## 1. 分层：哪句话该写在哪里
 
-一个云友运行时看到的提示词由多层拼装。**每层只写自己的内容，禁止跨层重复**——重复的后果是两处漂移后模型无所适从。
+一个 Agent 运行时看到的提示词由多层拼装。**每层只写自己的内容，禁止跨层重复**——重复的后果是两处漂移后模型无所适从。
 
 | 层 | 载体 | 注入方式 | 该写什么 | 不该写什么 |
 |---|---|---|---|---|
-| 平台公共底座 | daemon ephemeral prompt（`packages/daemon/src/agent-runtime/prompts/ephemeral.ts`） | 平台在 bootstrap 时自动拼装：workspace/issue/env/身份/权限等区块 | 由平台代码维护，云友配置者不用管 | —— |
-| **云友个性** | `multiremi_agents.instructions`（UI「指令」框） | bootstrap 时作为 `## Agent Instructions` 区块注入 | 身份、职责边界、个性化工作方式（见 §2 骨架） | 平台已注入的内容（Issue 流程、workspace 说明）；仓库规则；大段可复用操作手册（应做成 Skill） |
-| 仓库规则 | 各仓库 `AGENTS.md` / `CLAUDE.md` | 编码 CLI 按 cwd 自动读取 | 仓库级开发约定 | 云友人设 |
+| 平台公共底座 | daemon ephemeral prompt（`packages/daemon/src/agent-runtime/prompts/ephemeral.ts`） | 平台在 bootstrap 时自动拼装：workspace/issue/env/身份/权限等区块 | 由平台代码维护，Agent 配置者不用管 | —— |
+| **Agent 个性** | `multiremi_agents.instructions`（UI「指令」框） | bootstrap 时作为 `## Agent Instructions` 区块注入 | 身份、职责边界、个性化工作方式（见 §2 骨架） | 平台已注入的内容（Issue 流程、workspace 说明）；仓库规则；大段可复用操作手册（应做成 Skill） |
+| 仓库规则 | 各仓库 `AGENTS.md` / `CLAUDE.md` | 编码 CLI 按 cwd 自动读取 | 仓库级开发约定 | Agent 人设 |
 | 飞书 Remi 人格 | 工作区 bot 配置所选 Agent 的 `multiremi_agents.instructions` | 控制面按 `multiremi_feishu_bot_configs.agent_id` 绑定 Chat/Task；消息沿 Task → AgentSession → ACP 执行并加载 Agent 指令，见[配置与分配链路](deploy/66-8-remi-environment.md) | 飞书聊天 Remi 的身份、职责与工具约定 | 不另建 `soul.md` 或本地 group 配置；同一 agent row 是唯一来源 |
 | 可复用操作知识 | Skill（`SKILL.md`） | 物化到 workdir + bootstrap prompt 注入 | 有触发条件的操作手册（见 §4） | 人设、一次性任务说明 |
 
@@ -32,9 +32,9 @@
 可复制模板：`docs/templates/agent-prompt.md.example`。按顺序写，允许合并相邻段，但六个问题都要有答案：
 
 1. **身份定位** —— 一句话：你是谁、服务于什么场景。写给模型看，不是简历。
-2. **职责边界** —— 负责什么、明确不负责什么；与相邻云友（如执行者 vs 校验者）的分界。
+2. **职责边界** —— 负责什么、明确不负责什么；与相邻 Agent（如执行者 vs 校验者）的分界。
 3. **禁止事项** —— 具体的「不得」清单：不碰生产、不泄凭据、不越权合入等。写可判定的行为，不写口号。
-4. **工具与 CLI 约定** —— 该用哪些工具/命令、关键参数约定；只写该云友特有的，平台通用工具不用重复。
+4. **工具与 CLI 约定** —— 该用哪些工具/命令、关键参数约定；只写该 Agent 特有的，平台通用工具不用重复。
 5. **交付物形态** —— 完成时输出什么：评论格式、必附证据（测试输出、截图、文件路径）、禁止「只说做完了」。
 6. **何时停下来问人** —— 哪些情况必须停下（缺信息、要动生产、结果与预期矛盾），以及怎么问。
 
@@ -45,18 +45,18 @@
 - **单一主语言**（中文或英文），术语可混用；编号列表必须连续（PM 曾出现两个「1.」的合并草稿事故）。
 - `description` 字段（≤255 码点，服务端强制）写「一句话职责」，供列表页和派单判断用；不要与 instructions 第一句逐字重复。
 - **model 必填**：不显式选择就写明跟随默认的理由；同一 Squad 内除非有意，不要混用差异过大的模型。
-- 不再使用的云友**归档**（archived），不要留空壳（曾有 `codex`、`codex-collab-smoke` 两个空配置残留）。
+- 不再使用的 Agent **归档**（archived），不要留空壳（曾有 `codex`、`codex-collab-smoke` 两个空配置残留）。
 
 ### 2.3 风格基准
 
-`packages/server/src/api/agent-templates/*.json` 的 26 个内置模板是达标线：首句「You <do X>. Reader: <who>」式定位，随后 Defaults/Format 编号清单，结尾禁止事项。新云友先抄模板再个性化，不要从零白写。
+`packages/server/src/api/agent-templates/*.json` 的 26 个内置模板是达标线：首句「You <do X>. Reader: <who>」式定位，随后 Defaults/Format 编号清单，结尾禁止事项。新 Agent 先抄模板再个性化，不要从零白写。
 
 ## 3. 头像规范
 
 - **规格**：512×512 PNG，单文件 ≤300KB。方图，圆形裁切（前端 32px 圆形头像）下核心图形仍可辨识；图上不放文字。
 - **来源**：上传到 workspace 附件（前端头像组件即此路径），`avatar_url` 只允许站内相对路径 `/api/attachments/<id>/content`。**禁止外链 URL**——服务端不校验该字段，外链等于给所有看到头像的人挂追踪像素。
-- **必配**：所有长期云友必须有头像。缺省时前端退化为统一灰底 Bot 图标，多云友场景下不可辨认，属不合格状态。Squad 头像为方形（`rounded-md`），个人为圆形，风格应区分。
-- **同一工作区一套风格**：新增云友的头像跟随已有系列（配色/构图一致，角色特征区分）。
+- **必配**：所有长期 Agent 必须有头像。缺省时前端退化为统一灰底 Bot 图标，多 Agent 场景下不可辨认，属不合格状态。Squad 头像为方形（`rounded-md`），个人为圆形，风格应区分。
+- **同一工作区一套风格**：新增 Agent 的头像跟随已有系列（配色/构图一致，角色特征区分）。
 - **清空语义（现状 API 行为，写代码时注意）**：`PATCH` 更新时传 `avatar_url: ""` 才能清空，传 `null` 会被当作「保持原值」；从模板创建路径则把 `""` 归一为 `null`。前端组件已封装此差异，脚本直调 API 时须知。
 
 ## 4. Skill / Plugin 描述约定
@@ -84,7 +84,7 @@ description 是模型决定「何时触发」的唯一依据，写得随意直�
 ### 4.3 Plugin
 
 - `packages/plugin-sdk` manifest 五个必填字段一个不缺：`id`、`name`、`version`、`description`、`capabilities`（运行期只校验 id/main，缺 description 会被静默加载——不要依赖运行期兜底）。
-- Multiremi agent plugin（挂到云友上的 claude/codex bundle）：`description` 同样按「做什么 + 何时用」写；同名 plugin 会按 provider 各存一份（claude/codex），属正常现象，描述保持一致。
+- Multiremi agent plugin（挂到 Agent 上的 claude/codex bundle）：`description` 同样按「做什么 + 何时用」写；同名 plugin 会按 provider 各存一份（claude/codex），属正常现象，描述保持一致。
 
 ## 5. 目录分层职责（谁放定义、谁放机制）
 
@@ -92,14 +92,14 @@ description 是模型决定「何时触发」的唯一依据，写得随意直�
 |---|---|---|
 | `packages/daemon/src/agent-runtime/skills/` | **机制**：把 DB skill 物化成 workdir 的 SKILL.md；导入 GitHub/skills.sh | ❌ |
 | `packages/daemon/src/agent-runtime/plugins/` | **机制**：Remi host 插件 registry（in-tree 表当前为空） | ❌ |
-| `packages/daemon/src/agent-runtime/agent-plugins/` | **机制**：云友挂载的 provider 原生 bundle 的拉取/物化（与上一行刻意分离） | ❌ |
+| `packages/daemon/src/agent-runtime/agent-plugins/` | **机制**：Agent 挂载的 provider 原生 bundle 的拉取/物化（与上一行刻意分离） | ❌ |
 | `packages/plugin-sdk/` | Remi host 插件的 manifest 类型与 SDK | ❌（只有类型） |
 | `.agents/skills/` | 随仓库维护的开发与平台操作 skill，例如 MR 表述和 [Remi 平台使用与管理](../.agents/skills/remi/SKILL.md)；按触发条件加载 | ✅ |
 | `.remi/pipeline/skills/` | 历史 Remi 流水线 skill 定义（intake/rfc/execute 等 7 个）。MUL-80 审计确认读取链路已删（死目录，待清理单处理）；清理前仍按本规范校验 | ✅（存量） |
 | `frontend/.agents/skills/` | frontend 仓库开发用 skill | ✅ |
-| `packages/server/src/api/agent-templates/*.json` | 云友模板（含内嵌 skill 引用） | ✅ |
+| `packages/server/src/api/agent-templates/*.json` | Agent 模板（含内嵌 skill 引用） | ✅ |
 
-新定义落在上表允许的定义目录，并按仓库级、前端或云友模板的用途选择归属；在机制目录里新增定义文件视为分层违规。
+新定义落在上表允许的定义目录，并按仓库级、前端或 Agent 模板的用途选择归属；在机制目录里新增定义文件视为分层违规。
 
 ## 6. 自动校验范围
 
@@ -108,7 +108,7 @@ description 是模型决定「何时触发」的唯一依据，写得随意直�
 - 模板 JSON：slug/文件名一致、必填字段、description/instructions 长度、category/accent 枚举、icon 非空、skills 子字段。
 - 仓库内全部 SKILL.md：frontmatter 存在、name=目录名、description 必填 + 单行 + 长度。
 
-**无法自动化、靠 review 的**：DB 中工作区云友的 instructions 质量（六段骨架）、头像是否配置、description 语义是否含触发条件。变更工作区云友时以本文档 §2/§3 为 checklist。
+**无法自动化、靠 review 的**：DB 中工作区 Agent 的 instructions 质量（六段骨架）、头像是否配置、description 语义是否含触发条件。变更工作区 Agent 时以本文档 §2/§3 为 checklist。
 
 ## 7. 已知问题（本规范不强做，留待后续单）
 
