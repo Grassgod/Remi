@@ -23,8 +23,11 @@
     "tool_result_unnamed": "結果: ",
     "process_steps_other": "ステップ {{count}}個",
     "copy_action": "コピー",
-    "copied_toast": "コピーしました",
     "copy_failed_toast": "コピーに失敗しました",
+    "view_execution_log": "実行ログを表示",
+    "not_woken": "エージェントを起動していません · {{reason}}",
+    "turn_retry": "再試行",
+    "turn_retry_new_session": "新しいセッションで再試行",
     "loading_older": "古いメッセージを読み込み中…",
     "expand_older": "以前のメッセージを30件表示",
     "earliest": "チャットの開始",
@@ -143,12 +146,11 @@
     "retry": "再試行"
   },
   "page": {
-    "title": "チャット",
-    "private": "エージェントとの非公開の会話",
     "open": "チャットページを開く",
     "history": "チャット履歴",
     "back": "会話に戻る",
     "loading": "チャットを読み込み中…",
+    "loading_conversation": "会話を読み込み中…",
     "load_failed": "会話を読み込めませんでした。",
     "retry": "再試行"
   },
@@ -172,6 +174,59 @@
     "loading": "チャットを読み込み中…",
     "load_failed": "チャットを読み込めませんでした。",
     "retry": "再試行"
+  },
+  "sidebar": {
+    "new_chat": "新規チャット",
+    "search": "検索",
+    "pinned": "固定",
+    "projects": "プロジェクト",
+    "recent": "最近",
+    "show_more": "さらに表示",
+    "new_chat_in": "{{name}} で新規チャットを開始",
+    "automations": "自動化",
+    "archived": "アーカイブ済み",
+    "back": "戻る",
+    "empty": "チャットはまだありません",
+    "automations_empty": "自動化チャットはありません",
+    "archived_empty": "アーカイブ済みのチャットはありません",
+    "directory_unavailable": "ローカルディレクトリを利用できません",
+    "status": {
+      "running": "実行中",
+      "needs_answer": "回答待ち",
+      "unread": "新しい返信"
+    },
+    "more_actions": "その他の操作",
+    "menu": {
+      "rename": "名前を変更…",
+      "pin": "固定",
+      "unpin": "固定を解除",
+      "stop": "実行を停止",
+      "archive": "アーカイブ",
+      "restore": "復元",
+      "delete": "削除…"
+    },
+    "rename_dialog": {
+      "title": "チャット名を変更",
+      "description": "短く、わかりやすい名前にしましょう。",
+      "placeholder": "タイトルを追加…",
+      "cancel": "キャンセル",
+      "save": "保存"
+    },
+    "archive_dialog": {
+      "title": "このチャットを停止してアーカイブしますか？",
+      "description": "進行中の返信は停止されます。チャットは「アーカイブ済み」から復元できます。",
+      "cancel": "キャンセル",
+      "confirm": "停止してアーカイブ"
+    },
+    "delete_dialog": {
+      "title": "このチャットを削除しますか？",
+      "description": "このチャットとメッセージは完全に削除され、元に戻せません。",
+      "cancel": "キャンセル",
+      "confirm": "削除",
+      "confirming": "削除中…"
+    },
+    "archived_toast": "「{{title}}」をアーカイブしました",
+    "undo": "元に戻す"
   },
   "queue": {
     "title": "待機中のメッセージ",
@@ -198,6 +253,7 @@
     "copied": "コピーしました",
     "new_messages_other": "新着メッセージ {{count}} 件",
     "new_messages_overflow": "新着メッセージ 99+ 件",
-    "new_messages_jump": "末尾へ移動、新着メッセージ {{count}} 件"
+    "new_messages_jump": "末尾へ移動、新着メッセージ {{count}} 件",
+    "scroll_to_bottom": "最下部へスクロール"
   }
 }

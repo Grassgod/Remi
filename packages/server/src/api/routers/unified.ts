@@ -1,9 +1,9 @@
-import { isRelatedTurnController } from '../../store/turn-controls.js';
+import { ChatTurnRetryError, isRelatedTurnController } from '../../store/turn-controls.js';
 import type { Context, Hono } from "hono";
 import { unlink } from "node:fs/promises";
 import { MESSAGE_KINDS, TURN_STATUSES, type SendMessageInput, type UnifiedMessage } from "@multiremi/contracts/unified-model.js";
 import { CHAT_ATTACHMENT_MAX_BYTES, chatAttachmentValidationError, sanitizeChatAttachmentFilename } from "@multiremi/contracts/attachments.js";
-import { compatibilityInboxScope, denyAttachmentAccess, denyCurrentUserWorkspaceAccess, canCurrentUserAccessAgent, currentWorkspaceRole } from "../helpers/auth-guards.js";
+import { compatibilityInboxScope, denyAttachmentAccess, denyCurrentUserWorkspaceAccess, canCurrentUserAccessAgent, currentWorkspaceRole, loadChatSessionForCurrentUser } from "../helpers/auth-guards.js";
 import { resolveRequestWorkspaceId } from "../helpers/workspace-context.js";
 import { loadConversation, messageActor, messageResponse, canAccessConversationTask, conversationEntryVisibility } from "../helpers/conversations.js";
 import { persistUploadedAttachments, detectContentTypeFromFilename, safeFilename, uploadedAttachmentPath } from "../helpers/uploads.js";
@@ -65,6 +65,7 @@ async function action(c: Context, run: () => unknown | Promise<unknown>): Promis
     if (error instanceof QuestionError) return c.json({ error: error.message, code: error.code }, error.status);
     if (error instanceof QueuedMessageError) return c.json({ error: error.message, code: error.code }, error.status);
     if (error instanceof OrganizerActionError) return c.json({ error: error.message, code: error.code }, error.status);
+    if (error instanceof ChatTurnRetryError) return c.json({ error: error.message, code: error.code }, error.status);
     if (error instanceof IssueDependencyError) return issueDependencyErrorResponse(c, error)!;
     if (error instanceof Error && /consumed|settled|running turn|retry|terminal|cancelled|pending attempt/i.test(error.message)) return c.json({ error: error.message }, 409);
     if (error instanceof Error && /not found|another workspace|recipient|required|within the log|Reply target|Source turn|Decision requires|attachment/i.test(error.message)) return c.json({ error: error.message }, 400);
@@ -505,6 +506,18 @@ export function registerUnifiedRoutes(app: Hono, deps: RouterDeps): void {
     const target = turn.current_attempt_id ? store.getTask(turn.current_attempt_id) : null;
     if (target && !canAccessConversationTask(c,store,target)) return c.json({error:"turn not found"},404);
     const related = !!token?.agentId && !!target && isRelatedTurnController(store, token.agentId, target);
+    // A person may retry their own Chat's failed or cancelled turn. loadTurn
+    // has applied the creator-only Chat rules and workspace membership; Issue
+    // turns and task credentials keep the supervisor requirement.
+    const creatorRetry = operation === "retry" && !token && !supervisor && !!target?.chatSessionId && !target.issueId && !turn.issue_id;
+    if (creatorRetry) {
+      const chat = loadChatSessionForCurrentUser(c, store, target.chatSessionId!);
+      if (chat instanceof Response) return chat;
+      return action(c, async () => {
+        const input = await body(c);
+        return { turn: store.retryChatTurnForCreator({ turnId: turn.id, userId: currentRequestUserId(c), cold: boolean(input.cold, false) }) };
+      });
+    }
     if (operation === "retry") {
       if (!supervisor && !related) return c.json({ error: "supervisor or related controller task credential required", code: "organizer_supervisor_required" }, 403);
       const controller = supervisor?.task ?? (token?.taskId ? store.getTask(token.taskId) : null);

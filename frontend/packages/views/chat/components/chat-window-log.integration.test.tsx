@@ -28,7 +28,10 @@ vi.mock("@multiremi/core/api", async importOriginal => ({
 }));
 vi.mock("@multiremi/core/hooks", () => ({ useWorkspaceId: () => "workspace-a" }));
 vi.mock("@multiremi/core/auth", () => ({ useAuthStore: (select: (s: unknown) => unknown) => select({ user: { id: "user-a" } }) }));
-vi.mock("@multiremi/core/platform", () => ({ getCurrentWsId: () => "workspace-a" }));
+vi.mock("@multiremi/core/platform", async (importOriginal) => ({
+  ...await importOriginal<typeof import("@multiremi/core/platform")>(),
+  getCurrentWsId: () => "workspace-a",
+}));
 vi.mock("@multiremi/core/agents", () => ({ useWorkspaceAgentAvailability: () => "available", useAgentPresenceDetail: () => "loading" }));
 vi.mock("@multiremi/core/hooks/use-file-upload", () => ({ useFileUpload: () => ({ uploadWithToast: vi.fn() }) }));
 vi.mock("@multiremi/core/workspace/hooks", () => ({ useActorName: () => ({ getActorName: (_type: string, id: string) => id }) }));
@@ -47,6 +50,8 @@ vi.mock("./offline-banner", () => ({ OfflineBanner: () => null }));
 vi.mock("./no-agent-banner", () => ({ NoAgentBanner: () => null }));
 vi.mock("./agent-dropdown", () => ({ AgentDropdown: () => null }));
 vi.mock("./session-dropdown", () => ({ SessionDropdown: () => null }));
+vi.mock("./chat-sidebar", () => ({ ChatSidebar: () => null }));
+vi.mock("../../common/actor-avatar", () => ({ ActorAvatar: () => null }));
 vi.mock("./chat-input", () => ({ ChatInput: () => null }));
 vi.mock("../../common/markdown", () => ({ Markdown: ({ children }: { children: string }) => <span>{children}</span> }));
 vi.mock("../../issues/components/comment-card", () => ({ AttachmentList: () => null }));

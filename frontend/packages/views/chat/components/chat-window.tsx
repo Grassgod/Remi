@@ -1,11 +1,10 @@
 "use client";
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { WorkLocationPicker } from "../../runtimes/components/runtime-workspace-picker";
+import { WorkLocationPicker, type WorkLocation } from "../../runtimes/components/runtime-workspace-picker";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { motion } from "motion/react";
 import {
-  ArrowLeft,
   ExternalLink,
   List,
   Minus,
@@ -30,6 +29,7 @@ import {
 import { canAssignAgent } from "@multiremi/views/issues/components";
 import { api, toSafeErrorDetails } from "@multiremi/core/api";
 import { projectListOptions } from "@multiremi/core/projects/queries";
+import { runtimeWorkspacesOptions } from "@multiremi/core/runtimes/workspaces";
 import {
   useAgentPresenceDetail,
   useWorkspaceAgentAvailability,
@@ -62,6 +62,8 @@ import { ChatInput } from "./chat-input";
 import { AgentDropdown } from "./agent-dropdown";
 import { ProjectDisplay } from "./project-dropdown";
 import { SessionDropdown } from "./session-dropdown";
+import { ChatSidebar } from "./chat-sidebar";
+import { ActorAvatar } from "../../common/actor-avatar";
 import { EmptyState } from "./chat-empty-state";
 import { ChatResizeHandles } from "./chat-resize-handles";
 import { useChatContextItems } from "./use-chat-context-items";
@@ -79,7 +81,6 @@ import { useWorkspacePaths } from "@multiremi/core/paths";
 import { getCurrentWsId } from "@multiremi/core/platform";
 import { createSafeId } from "@multiremi/core/utils";
 import { useFloatingPanelLayout } from "../../layout/floating-panel-layout";
-import { PageHeader } from "../../layout/page-header";
 import { ChatQueue } from "./chat-queue";
 
 const uiLogger = createLogger("chat.ui");
@@ -100,6 +101,7 @@ export function ChatWindow({
   const navigation = useNavigation();
   const workspacePaths = useWorkspacePaths();
   const { t } = useT("chat");
+  const { t: tr } = useT("runtimes");
   const wsId = useWorkspaceId();
   const [runtimeWorkspaceId, setRuntimeWorkspaceId] = useState<string | null>(null);
   useEffect(() => { setRuntimeWorkspaceId(null); }, [wsId]);
@@ -132,7 +134,10 @@ export function ChatWindow({
   const user = useAuthStore((s) => s.user);
   const { data: agents = [] } = useQuery(agentListOptions(wsId, { enabled: chatVisible }));
   const { data: members = [] } = useQuery({ ...memberListOptions(wsId), enabled: chatVisible });
-  const { data: projects = [] } = useQuery({ ...projectListOptions(wsId), enabled: chatVisible });
+  const { data: projectsData, isError: projectsFailed } = useQuery({ ...projectListOptions(wsId), enabled: chatVisible });
+  const projects = projectsData ?? [];
+  // Loading is not "missing": a bound Project reads "…" until the list answers.
+  const loadedProjects = projectsData ?? (projectsFailed ? [] : undefined);
   // Single sessions cache — eliminates the separate active/all queries
   // that used to drift during the WS-invalidate window.
   const {
@@ -213,10 +218,35 @@ export function ChatWindow({
 
   // New chats keep the picker: it is the only chance to choose where the
   // chat runs. An existing chat with neither binding has no location to
-  // report, so the strip would spend a row on the absence of a choice.
+  // report, so the strip would spend a row on the absence of a choice. The
+  // page names an existing chat's location in its header instead.
   const showLocationStrip =
     !activeSessionId ||
-    Boolean(currentSession?.project_id || currentSession?.runtime_workspace_id);
+    (!isPage && Boolean(currentSession?.project_id || currentSession?.runtime_workspace_id));
+
+  // The page header names where an existing chat runs. Directory names are
+  // read only for a chat bound to one.
+  const boundDirectoryId = isPage && activeSessionId ? currentSession?.runtime_workspace_id ?? null : null;
+  const { data: runtimeWorkspaces } = useQuery({
+    ...runtimeWorkspacesOptions(wsId),
+    enabled: chatVisible && Boolean(wsId) && !!boundDirectoryId,
+  });
+  const boundProjectId = isPage && activeSessionId ? currentSession?.project_id ?? null : null;
+  const boundLocation = boundProjectId
+    ? (() => {
+        const label = loadedProjects
+          ? loadedProjects.find((project) => project.id === boundProjectId && !project.archived_at)?.title
+            ?? t(($) => $.project.unavailable)
+          : "…";
+        return { label, name: `${t(($) => $.project.label)}: ${label}`, hint: t(($) => $.project.fixed_hint) };
+      })()
+    : boundDirectoryId && runtimeWorkspaces
+      ? (() => {
+          const label = runtimeWorkspaces.find((workspace) => workspace.id === boundDirectoryId)?.name
+            ?? tr(($) => $.location.directory_missing);
+          return { label, name: `${tr(($) => $.location.label)}: ${label}`, hint: tr(($) => $.location.locked) };
+        })()
+      : null;
 
   const qc = useQueryClient();
   const previousPendingTaskRef = useRef<PendingChatTaskRef>({
@@ -484,13 +514,15 @@ export function ChatWindow({
     ],
   );
 
-  const handleNewChat = useCallback(() => {
+  // A sidebar group's "+" starts the new chat already bound to its Project or
+  // local directory; the location picker keeps the draft until the first send.
+  const handleNewChat = useCallback((location?: WorkLocation) => {
     uiLogger.info("newChat", {
       previousSessionId: activeSessionId,
       previousPendingTask: pendingTaskId,
     });
-    setRuntimeWorkspaceId(null);
-    setDraftProjectId(null);
+    setRuntimeWorkspaceId(location?.runtime_workspace_id ?? null);
+    setDraftProjectId(location?.project_id ?? null);
     setActiveSession(null);
   }, [activeSessionId, pendingTaskId, setActiveSession, setDraftProjectId]);
 
@@ -552,9 +584,10 @@ export function ChatWindow({
 
   const conversation = (
     <>
-      {/* Header — ⊕ new + session dropdown | window tools */}
-      <div className="flex items-center justify-between border-b px-4 py-2.5 gap-2">
-        {isPage && (
+      {isPage ? (
+        // Page header: who and what this chat is. New chat and history live
+        // in the sidebar, so the header carries no session controls.
+        <div data-chat-page-header="" className="flex h-12 shrink-0 items-center gap-2 border-b px-4">
           <Button
             variant="ghost"
             size="icon-sm"
@@ -564,38 +597,57 @@ export function ChatWindow({
           >
             <List />
           </Button>
-        )}
-        <div className="flex items-center gap-1 min-w-0">
-          <Tooltip>
-            <TooltipTrigger
-              render={
-                <Button
-                  variant="ghost"
-                  size="icon-sm"
-                  className="rounded-full text-muted-foreground"
-                  onClick={handleNewChat}
-                />
-              }
+          {activeAgent && (
+            <ActorAvatar actorType="agent" actorId={activeAgent.id} size={20} enableHoverCard showStatusDot />
+          )}
+          <h1 className="min-w-0 truncate text-sm font-medium">
+            {/* "New chat" names the unsaved draft; an existing chat without a title is "Untitled". */}
+            {currentSession?.title?.trim()
+              || (activeSessionId ? t(($) => $.session_history.untitled) : t(($) => $.window.untitled))}
+          </h1>
+          {boundLocation && (
+            <span
+              role="group"
+              aria-label={boundLocation.name}
+              title={boundLocation.hint}
+              className="min-w-0 max-w-[40%] shrink truncate text-sm text-muted-foreground"
             >
-              <Plus />
-            </TooltipTrigger>
-            <TooltipContent side="top">
-              {t(($) => $.window.new_chat_tooltip)}
-            </TooltipContent>
-          </Tooltip>
-          <SessionDropdown
-            chatVisible={chatVisible}
-            sessions={sessions}
-            // Use the full agent list (incl. archived) so historical
-            // sessions can still resolve their avatar.
-            agents={agents}
-            activeSessionId={activeSessionId}
-            activeSession={currentSession}
-            onSelectSession={handleSelectSession}
-            onSessionDeleted={() => setActiveSession(null)}
-          />
+              <span aria-hidden="true">· </span>{boundLocation.label}
+            </span>
+          )}
         </div>
-        {!isPage && (
+      ) : (
+        <div className="flex items-center justify-between border-b px-4 py-2.5 gap-2">
+          <div className="flex items-center gap-1 min-w-0">
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    className="rounded-full text-muted-foreground"
+                    onClick={() => handleNewChat()}
+                  />
+                }
+              >
+                <Plus />
+              </TooltipTrigger>
+              <TooltipContent side="top">
+                {t(($) => $.window.new_chat_tooltip)}
+              </TooltipContent>
+            </Tooltip>
+            <SessionDropdown
+              chatVisible={chatVisible}
+              sessions={sessions}
+              // Use the full agent list (incl. archived) so historical
+              // sessions can still resolve their avatar.
+              agents={agents}
+              activeSessionId={activeSessionId}
+              activeSession={currentSession}
+              onSelectSession={handleSelectSession}
+              onSessionDeleted={() => setActiveSession(null)}
+            />
+          </div>
           <div className="flex items-center gap-0.5 shrink-0">
             <Button
               variant="ghost"
@@ -647,8 +699,8 @@ export function ChatWindow({
               </TooltipContent>
             </Tooltip>
           </div>
-        )}
-      </div>
+        </div>
+      )}
 
       {currentSession?.origin && (
         <div className="flex min-w-0 items-center gap-2 border-b px-4 py-1.5 text-xs text-muted-foreground">
@@ -699,7 +751,7 @@ export function ChatWindow({
           </Button>
         </div>
       ) : waitingForLog ? (
-        <div className="min-h-0 flex-1" />
+        isPage ? <DelayedLoadingIndicator label={t(($) => $.page.loading_conversation)} /> : <div className="min-h-0 flex-1" />
       ) : hasMessages ? (
         <ChatMessageList
           visible={chatVisible}
@@ -805,68 +857,28 @@ export function ChatWindow({
 
   if (isPage)
     return (
-      <div className="flex h-full min-h-0 flex-col">
-        <PageHeader>
-          <h1 className="text-sm font-semibold">{t(($) => $.page.title)}</h1>
-          <span className="ml-3 truncate text-xs text-muted-foreground">
-            {t(($) => $.page.private)}
-          </span>
-        </PageHeader>
-        <div className="flex min-h-0 flex-1">
-          <aside
-            className={`${showList ? "flex" : "hidden"} w-full min-h-0 shrink-0 flex-col border-r bg-sidebar md:flex md:w-80`}
-          >
-            <div className="flex items-center justify-between border-b p-3">
-              <Button variant="outline" size="sm" onClick={handleNewChat}>
-                <Plus className="size-4" />
-                {t(($) => $.window.new_chat_tooltip)}
-              </Button>
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                className="md:hidden"
-                aria-label={t(($) => $.page.back)}
-                onClick={() => setShowList(false)}
-              >
-                <ArrowLeft />
-              </Button>
-            </div>
-            <div className="min-h-0 flex-1 overflow-y-auto">
-              {sessionsLoading ? (
-                <p className="p-4 text-sm text-muted-foreground">
-                  {t(($) => $.page.loading)}
-                </p>
-              ) : sessionsError ? (
-                <div role="alert" className="p-4 text-sm text-destructive">
-                  <p>{t(($) => $.page.load_failed)}</p>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() => void refetchSessions()}
-                  >
-                    {t(($) => $.page.retry)}
-                  </Button>
-                </div>
-              ) : (
-                <SessionDropdown
-                  chatVisible={chatVisible}
-                  presentation="list"
-                  sessions={sessions}
-                  agents={agents}
-                  activeSessionId={activeSessionId}
-                  activeSession={currentSession}
-                  onSelectSession={handleSelectSession}
-                  onSessionDeleted={() => setActiveSession(null)}
-                />
-              )}
-            </div>
-          </aside>
-          <main
-            className={`${showList ? "hidden" : "flex"} min-h-0 min-w-0 flex-1 flex-col md:flex`}
-          >
-            {conversation}
-          </main>
-        </div>
+      <div className="flex h-full min-h-0">
+        <aside
+          className={`${showList ? "flex" : "hidden"} w-full min-h-0 shrink-0 flex-col border-r bg-sidebar md:flex md:w-[300px]`}
+        >
+          <ChatSidebar
+            sessions={sessions}
+            projects={loadedProjects}
+            activeSessionId={activeSessionId}
+            loading={sessionsLoading}
+            error={sessionsError}
+            onRetry={() => void refetchSessions()}
+            onSelectSession={handleSelectSession}
+            onNewChat={handleNewChat}
+            onSessionDeleted={() => setActiveSession(null)}
+            onClose={() => setShowList(false)}
+          />
+        </aside>
+        <main
+          className={`${showList ? "hidden" : "flex"} min-h-0 min-w-0 flex-1 flex-col md:flex`}
+        >
+          {conversation}
+        </main>
       </div>
     );
 
@@ -907,5 +919,26 @@ export function ChatWindow({
       {conversation}
     </motion.div>
     </>
+  );
+}
+
+/**
+ * The first load of a conversation shows nothing for 400ms, then a 28px
+ * spinner: a fast load never flashes one.
+ */
+function DelayedLoadingIndicator({ label }: { label: string }) {
+  const [shown, setShown] = useState(false);
+  useEffect(() => {
+    const timer = setTimeout(() => setShown(true), 400);
+    return () => clearTimeout(timer);
+  }, []);
+  return (
+    <div className="flex min-h-0 flex-1 items-center justify-center">
+      {shown && (
+        <div role="status" aria-label={label} data-chat-log-loading="">
+          <LoaderCircle className="size-7 animate-spin text-muted-foreground" aria-hidden="true" />
+        </div>
+      )}
+    </div>
   );
 }
