@@ -536,7 +536,8 @@ export function registerUnifiedRoutes(app: Hono, deps: RouterDeps): void {
         return { turn: store.getTurn(turn.id), organizer_action: result.audit, comment_id: result.comment.id };
       }
       if (operation === "wrap-up") return { turn: store.wrapUpTurn(turn.id) };
-      // A member's stop pauses the Chat follow-up queue (ADR 0020); agent and supervisor cancels do not.
+      // A member's stop pauses the Chat follow-up queue as `interrupted` (ADR 0020). Agent and
+      // supervisor cancels pause it too, as `turn_ended`, through the turn-end hook.
       const actor = messageActor(c, store, turn.workspace_id);
       return { turn: store.cancelTurn(turn.id, { byMember: !(actor instanceof Response) && actor.type === "member" }) };
     });

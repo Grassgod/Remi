@@ -161,6 +161,28 @@ pendingTurnBackendTests('ADR 0020 Chat follow-up queue API', fixture => {
     expect((await consumed.json()).code).toBe('queued_message_consumed');
   }, 120_000);
 
+  it('answers 404 for a row of another Chat and 409 for a reused deleted client_id', async () => {
+    const f = await setup();
+    await f.running();
+    const other = f.store.createChatSession({ agentId: f.agent.id, creatorId: 'alice' });
+    const foreign = (await (await f.request('POST', `/api/sessions/${other.id}/queue`, { body_md: 'chat B', client_id: 'b-1' })).json()).item;
+    expect(foreign.session_id).toBe(other.id);
+    for (const [method, path, body] of [['PATCH', `${f.base}/${foreign.id}`, { body_md: 'through A' }],
+      ['DELETE', `${f.base}/${foreign.id}`, undefined], ['POST', `${f.base}/${foreign.id}/steer`, {}]] as const) {
+      const response = await f.request(method, path, body);
+      expect(response.status).toBe(404);
+      expect((await response.json()).code).toBe('queued_message_not_found');
+    }
+    // Chat B was idle, so its row released at once; Chat A's URL left it untouched.
+    expect(f.db.query('SELECT status,revision FROM multiremi_queued_messages WHERE id=?').get(foreign.id))
+      .toMatchObject({ status: foreign.status, revision: foreign.revision });
+    const doomed = (await f.enqueue('doomed', 'doomed-client')).item;
+    expect((await f.request('DELETE', `${f.base}/${doomed.id}`)).status).toBe(200);
+    const reused = await f.request('POST', f.base, { body_md: 'again', client_id: 'doomed-client' });
+    expect(reused.status).toBe(409);
+    expect((await reused.json()).code).toBe('queued_message_deleted');
+  }, 120_000);
+
   it('answers 409 with the failed row when a steer cannot be sent', async () => {
     const f = await setup();
     await f.running();

@@ -99,6 +99,10 @@ pendingTurnBackendTests('MUL-493 B4 Chat terminal re-ring', fixture => {
     expect(released.map(message => message.metadata.queued_message_id)).toEqual(queued.map(item => item.id));
     expect(released.every(message => message.seq > f.late.message.seq && message.metadata.delivery_turn_id === successor.id)).toBe(true);
     expect(successor).toMatchObject({ status: 'pending', trigger_message_id: released[0]!.id });
+    // The unread scan joined the turn the queue release created; its audit says so.
+    const rings = fixture().db.query("SELECT payload FROM multiremi_system_events WHERE event='re_ring' AND resource_id=?")
+      .all(successor.id) as Array<{ payload: string }>;
+    expect(rings.map(row => JSON.parse(row.payload).action)).toEqual(['coalesced']);
     const attempt = f.store.claimTask(f.runtime.id)!;
     f.store.startTask(attempt.id);
     const offer = f.bridge.offerInput(f.store.getTaskWithAgent(attempt.id)!);

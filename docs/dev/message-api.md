@@ -72,7 +72,7 @@ Chat 跟进队列（[ADR 0020](../adr/0020-chat-follow-up-queue-and-native-steer
 | HTTP | 输入 | 响应 | 错误 |
 |---|---|---|---|
 | `GET /api/sessions/:sessionId/queue` | 无 | `{items,paused}`；items 为 queued 与 failed 条目，按入队顺序；paused 为 `{reason,at}` 或 null | 400 `not_a_chat` |
-| `POST /api/sessions/:sessionId/queue` | `{body_md,attachment_ids?,client_id}` | `{item,released}`；lane 空闲且未暂停时 released 为 `{message,turn_id?}`，否则 null | 400 正文或附件无效、超过 10 个附件、`queue_full`（50 条）；403；409 `chat_archived` |
+| `POST /api/sessions/:sessionId/queue` | `{body_md,attachment_ids?,client_id}` | `{item,released}`；lane 空闲且未暂停时 released 为 `{message,turn_id?}`，否则 null | 400 正文或附件无效、超过 10 个附件、`queue_full`（50 条）；403；409 `chat_archived` / `queued_message_deleted`（该 `client_id` 的条目已删除） |
 | `PATCH .../queue/:qid` | `{body_md,attachment_ids?,expected_revision?}` | `{item}`；failed 条目重置为 queued | 403；404；409 `queued_message_consumed` / `revision_conflict` |
 | `DELETE .../queue/:qid` | 无 | `{item}`，重复删除幂等 | 403；404；409 `queued_message_consumed` |
 | `POST .../queue/:qid/steer` | `{}` | `{item,message,turn_id?}`；已引导的重复调用返回同一条消息 | 403；404（含已删除）；409 `queued_message_consumed`（已被轮放行）/ `chat_archived` / `queued_message_send_failed`（附带 failed 的 item） |
@@ -80,9 +80,17 @@ Chat 跟进队列（[ADR 0020](../adr/0020-chat-follow-up-queue-and-native-steer
 
 item 为 `{id,session_id,body_md,attachments:[{id,filename,content_type,size}],client_id,status,error,revision,released_message_id,released_via,released_at,created_at,updated_at}`，status 为 queued/failed/released/deleted，released_via 为 `turn`（作为后续轮放行）或 `steer`。错误响应为 `{error,code}`。类型见 [queued-message.ts](../../packages/contracts/src/queued-message.ts)。
 
-鉴权：先走 Chat 的创建人、工作区成员与 Agent 访问规则，再要求当前身份是活跃成员；task token（包括本 Chat 的轮）一律 403 `queue_actor_required`，agent 不操作成员的队列。入队另查 Agent 访问；单条操作要求原发送人，否则 403 `not_queued_message_sender`。附件沿用发送的可访问与同工作区检查，还必须尚未绑定消息，且不在同一 Chat 的另一条未放行条目里。`client_id` 在 Chat 内唯一，重复入队返回原条目（已放行时带原 released）。
+鉴权：先走 Chat 的创建人、工作区成员与 Agent 访问规则，再要求当前身份是活跃成员；task token（包括本 Chat 的轮）一律 403 `queue_actor_required`，agent 不操作成员的队列。入队另查 Agent 访问；单条操作要求原发送人，否则 403 `not_queued_message_sender`。附件沿用发送的可访问与同工作区检查，还必须尚未绑定消息，且不在同一 Chat 的另一条未放行条目里。`client_id` 在 Chat 内唯一，重复入队返回原条目（已放行时带原 released）；原条目已删除时返回 409 `queued_message_deleted`，客户端需换新的 `client_id`。单条操作同样要求发送人仍是活跃成员。
 
-所有写入在同一事务内持有工作区生命周期锁和 lane 锁；每次变更、放行与暂停在提交后发射 `chat:queue_updated`（payload `{chat_session_id}`），回滚不发。成员通过 `POST /api/turns/:id/cancel` 停止轮会暂停队列（`interrupted`）；agent、supervisor 或相关控制者取消不算成员停止，按 `turn_ended` 处理。CLI 不提供队列命令，manifest 按 pure_ui 豁免；CLI 与 agent 直接用 `remi message send --wake` 选择叫醒方式。
+所有写入在同一事务内持有工作区生命周期锁和 lane 锁；每次变更、放行与暂停在提交后发射 `chat:queue_updated`（payload `{chat_session_id}`），回滚不发。成员通过 `POST /api/turns/:id/cancel` 停止轮会暂停队列（`interrupted`）；agent、supervisor 或相关控制者取消不算成员停止，由终态钩子暂停为 `turn_ended`，轮 failed 同样如此。
+
+| 暂停原因 | 解除 |
+|---|---|
+| `turn_ended` | 该 lane 任一轮 completed（包括失败轮重试成功、之后的直接发送完成）时自动解除并放行；或 resume |
+| `interrupted` | 只由 resume 解除，期间轮 completed 也不放行 |
+| `send_failed` | resume；或编辑、删除、引导失败条目后不再有 failed 条目时自动解除，lane 空闲时继续放行 |
+
+归档的 Chat 仍可编辑、删除条目以整理队列：`send_failed` 照常解除，但不放行，Chat 保持归档。放行本身从不重新打开归档的 Chat。CLI 不提供队列命令，manifest 按 pure_ui 豁免；CLI 与 agent 直接用 `remi message send --wake` 选择叫醒方式。
 
 ## Inbox
 

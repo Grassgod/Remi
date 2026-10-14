@@ -103,6 +103,7 @@ export const QUEUED_MESSAGE_ERROR_CODES = [
   "queue_actor_required",
   "not_queued_message_sender",
   "queued_message_not_found",
+  "queued_message_deleted",
   "queued_message_consumed",
   "revision_conflict",
   "queued_message_send_failed",

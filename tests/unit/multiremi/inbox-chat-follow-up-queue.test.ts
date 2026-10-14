@@ -107,7 +107,7 @@ pendingTurnBackendTests('ADR 0020 Chat follow-up queue', fixture => {
     ['a cancelled turn', 'cancel', 'turn_ended'],
     ['a member stop', 'member', 'interrupted'],
   ] as const) {
-    it(`pauses after ${label} and releases nothing until resume`, () => {
+    it(`pauses after ${label}; ${reason === 'turn_ended' ? 'the next completed turn releases' : 'only resume releases'}`, () => {
       const f = setup();
       const events: Array<{ inTransaction: boolean }> = [];
       const first = f.running();
@@ -125,12 +125,18 @@ pendingTurnBackendTests('ADR 0020 Chat follow-up queue', fixture => {
       expect(events.every(event => !event.inTransaction)).toBe(true);
       expect(f.store.listQueuedMessages(f.chat.id).items.map(item => item.id)).toEqual([queued.id]);
       expect(f.turns().filter(turn => turn.status === 'pending')).toEqual([]);
-      // A direct steer still starts work, but its completion leaves the paused queue alone.
+      // A direct steer still starts work. Its completion clears turn_ended and releases;
+      // a member's interrupted pause leaves the queue alone until resume.
       const direct = f.send('Direct message');
       const attempt = f.store.claimTask(f.runtime.id)!;
       expect(attempt.id).toBe(f.store.getTurn(direct.turn_id!)!.current_attempt_id!);
       f.store.startTask(attempt.id);
       f.store.completeTask(attempt.id, { output: 'Direct answer' });
+      if (reason === 'turn_ended') {
+        expect(f.pause()).toBeNull();
+        expect(f.row(queued.id)).toMatchObject({ status: 'released', released_via: 'turn' });
+        return;
+      }
       expect(f.store.listQueuedMessages(f.chat.id).items.map(item => item.status)).toEqual(['queued']);
       expect(f.memberMessages().some(message => message.metadata.queued_message_id)).toBe(false);
       const resumed = f.store.resumeQueuedMessages(f.chat.id, MEMBER);
@@ -140,6 +146,40 @@ pendingTurnBackendTests('ADR 0020 Chat follow-up queue', fixture => {
       expect(f.store.getTurn(resumed.released[0]!.turn_id!)?.status).toBe('pending');
     }, 120_000);
   }
+
+  it('a successful retry of the failed turn clears turn_ended and releases the queue', () => {
+    const f = setup();
+    const first = f.running();
+    const queued = f.enqueue('After the retry').item;
+    f.store.failTask(first.attemptId, { error: 'Non-retryable failure', failureReason: 'agent_error' });
+    expect(f.pause()).toMatchObject({ reason: 'turn_ended' });
+    const retried = f.store.retryChatTurnForCreator({ turnId: first.turnId, userId: 'local', cold: false });
+    expect(retried.current_attempt_id).not.toBe(first.attemptId);
+    const attempt = f.store.claimTask(f.runtime.id)!;
+    expect(attempt.id).toBe(retried.current_attempt_id!);
+    f.store.startTask(attempt.id);
+    expect(f.row(queued.id)).toMatchObject({ status: 'queued' });
+    f.store.completeTask(attempt.id, { output: 'Retried answer' });
+    expect(f.store.getTurn(first.turnId)?.status).toBe('completed');
+    expect(f.pause()).toBeNull();
+    expect(f.row(queued.id)).toMatchObject({ status: 'released', released_via: 'turn' });
+    expect(f.turns().filter(turn => turn.status === 'pending')).toHaveLength(1);
+  }, 120_000);
+
+  it('a completed turn keeps interrupted and send_failed pauses', () => {
+    const f = setup();
+    const first = f.running();
+    const queued = f.enqueue('Still paused').item;
+    f.store.cancelTurn(first.turnId, { byMember: true });
+    const second = f.running('Second request');
+    f.store.completeTask(second.attemptId, { output: 'Answer' });
+    expect(f.pause()).toMatchObject({ reason: 'interrupted' });
+    f.db.run("UPDATE multiremi_session_lanes SET queue_pause_reason='send_failed' WHERE session_id=? AND reader_type='agent'", [f.chat.id]);
+    const third = f.running('Third request');
+    f.store.completeTask(third.attemptId, { output: 'Answer' });
+    expect(f.pause()).toMatchObject({ reason: 'send_failed' });
+    expect(f.row(queued.id)).toMatchObject({ status: 'queued' });
+  }, 120_000);
 
   it('does not pause on a member stop or failure when the queue is empty', () => {
     const f = setup();
@@ -247,6 +287,32 @@ pendingTurnBackendTests('ADR 0020 Chat follow-up queue', fixture => {
     expect(f.row(later.id)).toMatchObject({ status: 'released', released_via: 'turn' });
   }, 120_000);
 
+  it('deleting a failed row in an archived Chat clears send_failed without releasing or reopening the Chat', () => {
+    const f = setup();
+    const first = f.running();
+    const attachment = f.store.createAttachment({ workspaceId: 'local', chatSessionId: f.chat.id, uploaderType: 'member',
+      uploaderId: MEMBER, filename: 'x.txt', url: '/uploads/x.txt', contentType: 'text/plain', sizeBytes: 1 });
+    const broken = f.enqueue('Broken', { attachment_ids: [attachment.id] }).item;
+    const later = f.enqueue('Later').item;
+    const thief = f.send('Steals the attachment');
+    f.db.run('UPDATE multiremi_attachments SET chat_message_id=? WHERE id=?', [thief.message.id, attachment.id]);
+    f.store.completeTask(first.attemptId, { output: 'Answer' });
+    expect(f.pause()).toMatchObject({ reason: 'send_failed' });
+    const successor = f.turns().find(turn => turn.status === 'pending')!;
+    f.store.cancelTurn(successor.id);
+    f.store.updateChatSession(f.chat.id, { status: 'archived' });
+    const before = f.store.listMessages(f.chat.id).length;
+    // Tidying the queue stays allowed in an archived Chat.
+    expect(f.store.deleteQueuedMessage(f.chat.id, broken.id, MEMBER).status).toBe('deleted');
+    expect(f.pause()).toBeNull();
+    expect(f.row(later.id)).toMatchObject({ status: 'queued' });
+    expect(f.store.getChatSession(f.chat.id)?.status).toBe('archived');
+    expect(f.store.listMessages(f.chat.id)).toHaveLength(before);
+    expect(f.turns().filter(turn => turn.status === 'pending')).toEqual([]);
+    expect(f.store.updateQueuedMessage(f.chat.id, later.id, MEMBER, { body_md: 'Edited while archived' }).status).toBe('queued');
+    expect(f.store.getChatSession(f.chat.id)?.status).toBe('archived');
+  }, 120_000);
+
   it('a failed steer keeps the failure and an edit resets the row to queued', () => {
     const f = setup();
     f.running();
@@ -296,6 +362,49 @@ pendingTurnBackendTests('ADR 0020 Chat follow-up queue', fixture => {
     expect(f.store.listQueuedMessages(f.chat.id).items).toHaveLength(QUEUE_MAX_LIVE_ITEMS);
     expect(queueError(() => f.enqueue('One too many'))).toMatchObject({ status: 400, code: 'queue_full' });
     expect(f.store.listQueuedMessages(f.chat.id).items.map(item => item.body_md).slice(0, 2)).toEqual(['Holds attachment', 'Row 1']);
+  }, 120_000);
+
+  it('rejects reuse of a deleted row client_id, inactive members and another Chat attachment', () => {
+    const f = setup();
+    f.running();
+    const item = f.enqueue('Deleted soon', { client_id: 'reused' }).item;
+    f.store.deleteQueuedMessage(f.chat.id, item.id, MEMBER);
+    expect(queueError(() => f.enqueue('Again', { client_id: 'reused' }))).toMatchObject({ status: 409, code: 'queued_message_deleted' });
+    const bob = f.store.createWorkspaceMember({ workspaceId: 'local', userId: 'bob', name: 'Bob', role: 'member' });
+    const bobs = f.store.enqueueQueuedMessage({ session_id: f.chat.id, sender_member_id: bob.id, body_md: 'Bob row', client_id: 'bob' }).item;
+    f.store.archiveWorkspaceMember(bob.id);
+    for (const run of [() => f.store.updateQueuedMessage(f.chat.id, bobs.id, bob.id, { body_md: 'x' }),
+      () => f.store.deleteQueuedMessage(f.chat.id, bobs.id, bob.id), () => f.store.steerQueuedMessage(f.chat.id, bobs.id, bob.id)]) {
+      expect(queueError(run)).toMatchObject({ status: 403, code: 'queue_actor_required' });
+    }
+    const other = f.store.createChatSession({ agentId: f.agent.id });
+    const foreign = f.store.createAttachment({ workspaceId: 'local', chatSessionId: other.id, uploaderType: 'member',
+      uploaderId: MEMBER, filename: 'other.txt', url: '/uploads/other.txt', contentType: 'text/plain', sizeBytes: 1 });
+    expect(queueError(() => f.enqueue('Other Chat file', { attachment_ids: [foreign.id] }))).toMatchObject({ status: 400, code: 'invalid_queue_input' });
+    expect(queueError(() => f.store.updateQueuedMessage(f.chat.id, bobs.id, MEMBER, { body_md: 'x' }))).toMatchObject({ status: 403 });
+    // A row of Chat B is not addressable through Chat A.
+    const otherRow = f.store.enqueueQueuedMessage({ session_id: other.id, sender_member_id: MEMBER, body_md: 'B row', client_id: 'b' }).item;
+    expect(queueError(() => f.store.deleteQueuedMessage(f.chat.id, otherRow.id, MEMBER))).toMatchObject({ status: 404 });
+  }, 120_000);
+
+  it('emits no chat:queue_updated when the transaction throws after queue writes', () => {
+    const f = setup();
+    const events: string[] = [];
+    const unsubscribe = f.store.onWorkspaceEvent(event => { if (event.type === 'chat:queue_updated' || event.type === 'inbox:new') events.push(event.type); });
+    let id = '';
+    try {
+      expect(() => fixture().transaction(() => {
+        // Idle lane: enqueue writes the row, releases it and creates a turn, then a later step fails.
+        const { item, released } = f.enqueue('Rolled back');
+        id = item.id;
+        expect(released).not.toBeNull();
+        f.store.updateQueuedMessage(f.chat.id, item.id, MEMBER, { body_md: 'stale', expected_revision: 1 });
+      })).toThrow();
+    } finally { unsubscribe(); }
+    expect(events).toEqual([]);
+    expect(f.row(id)).toBeNull();
+    expect(f.store.listMessages(f.chat.id)).toEqual([]);
+    expect(f.turns()).toEqual([]);
   }, 120_000);
 
   it('upgrades an existing unified database once on the startup migration chain', () => {
