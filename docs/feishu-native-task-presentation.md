@@ -42,6 +42,14 @@ and the daemon's declared `task.human_request.settled` frame currently has no
 producer or receiver. Removing that loop requires the existing event transport
 to be wired into the connector process; this change adds no protocol or contract.
 
+Every presenter (bundled interaction card, split CoT waiting step, replay
+resume and the legacy streaming card) identifies a request by the
+`input.message_id` of its `permission_request` / `question_request` trace event:
+the decision message returned by `turn.decision`. `getHumanRequest`,
+`isHumanRequestPending`, card preparation and answers are keyed by that ID and
+the checkpoint's `interactions` map uses it too. An event without it is not
+presented.
+
 | Stage | Transport | Visible content |
 | --- | --- | --- |
 | Process | `POST /open-apis/im/v1/message_cot`, then `PUT` on the same resource | Native process text, reasoning events exposed by the provider, tools and terminal state; no result footer or mentions |

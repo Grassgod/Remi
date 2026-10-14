@@ -40,7 +40,7 @@ async function* events(): AsyncGenerator<TaskStreamEvent> {
   }) };
   yield { kind: "message", message: message(5, "permission_request", {
     input: {
-      request_id: "hr_1",
+      message_id: "hr_1",
       tool_call: { title: "Write", rawInput: { file_path: "/repo/app.ts" } },
       options: [
         { optionId: "allow_once", name: "Allow", kind: "allow_once" },
@@ -50,7 +50,7 @@ async function* events(): AsyncGenerator<TaskStreamEvent> {
   }) };
   yield { kind: "message", message: message(6, "question_request", {
     input: {
-      request_id: "hr_2",
+      message_id: "hr_2",
       questions: [{
         fieldKey: "question_0",
         question: {

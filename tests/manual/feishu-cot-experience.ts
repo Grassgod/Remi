@@ -165,7 +165,7 @@ try {
         { question: "展示节奏是否合适？（演示，单选，也可以填写自定义回答）", multiSelect: false,
           options: [{ label: "合适" }, { label: "需要调整" }] },
       ] } });
-    yield event(taskId, "question_request", { input: { request_id: qId } });
+    yield event(taskId, "question_request", { input: { message_id: qId } });
     yield event(taskId, "text", { content: requests.get(qId)?.status === "responded"
       ? replayResponses ? "演示答案已回放，继续展示审批步骤。" : "已收到你提交的体验反馈，继续展示审批步骤。" : "问答演示等待已超时，未代填任何答案。继续展示下一种卡片。", meta: { phase: "commentary" } });
     const pId = `${taskId}_permission`;
@@ -174,7 +174,7 @@ try {
         tool_call: { title: replayResponses ? "审批效果演示：10 秒后自动回放「允许一次」，无需操作，不代表你的真实授权，也不会执行命令。" : "允许继续展示最终结果吗？（仅演示，不执行任何命令；60 秒未操作自动结束等待）", rawInput: {} },
         options: [{ optionId: "allow", name: "允许一次", kind: "allow_once" }, { optionId: "deny", name: "拒绝", kind: "reject_once" }],
       } });
-    yield event(taskId, "permission_request", { input: { request_id: pId } });
+    yield event(taskId, "permission_request", { input: { message_id: pId } });
     yield event(taskId, "plan", { meta: { entries: [
       { content: "检查消息投递与工具展示", status: "completed" }, { content: "展示问答与审批衔接", status: "completed" },
       { content: "输出最终结果", status: "completed" },

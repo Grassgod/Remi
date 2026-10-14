@@ -11,6 +11,7 @@ import { FeishuCotTransport, feishuTransportError, type CotSample } from "./nati
 import { FeishuCotTimeline } from "./cot-timeline.js";
 import { buildTaskInteractionCard, registerTaskInteraction } from "./task-interaction.js";
 import { questionCardIdempotencyKey } from "@shared/feishu-task-card.js";
+import { traceHumanRequestId } from "@shared/trace-semantics.js";
 import { createFeishuImageResolver } from "./outbound-images.js";
 import { uploadImageFeishu } from "./media.js";
 import { rewriteMarkdownImages } from "@shared/feishu-markdown-images.js";
@@ -167,7 +168,7 @@ export class FeishuTaskPresentation {
       this.timeline.drain();
       // The process checkpoint may precede the independent card receipt and
       // waiting-step completion. Resume that existing interaction on replay.
-      const entry = this.state.interactions[String(message.input?.request_id ?? "")];
+      const entry = this.state.interactions[traceHumanRequestId(message) ?? ""];
       if ((message.type === "permission_request" || message.type === "question_request")
         && entry && (!entry.receiptStatus || (entry.waitingStarted && !entry.waitingFinished))) {
         await this.interaction(message);
@@ -280,7 +281,7 @@ export class FeishuTaskPresentation {
   }
 
   private async waitForInteraction(message: TraceEvent): Promise<void> {
-    const requestId = String(message.input?.request_id ?? "");
+    const requestId = traceHumanRequestId(message);
     if (!requestId) return;
     let request = await this.meta.getHumanRequest?.(requestId);
     if (!request || request.status !== "pending") return;
@@ -293,7 +294,7 @@ export class FeishuTaskPresentation {
   }
 
   private async interaction(message: TraceEvent): Promise<void> {
-    const requestId = String(message.input?.request_id ?? "");
+    const requestId = traceHumanRequestId(message);
     if (!requestId) return;
     let request = await this.meta.getHumanRequest?.(requestId);
     if (this.meta.getHumanRequest && !request) throw new Error("Task human request unavailable");

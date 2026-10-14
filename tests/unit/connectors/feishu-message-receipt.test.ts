@@ -218,7 +218,7 @@ describe("persistent Feishu message receipts", () => {
       const request = h.client.request;
       h.client.request = input => input.url.includes("/reactions") ? reactions.client.request(input) : request(input);
       reactions.fail("CROSSMARK", refusal);
-      async function* stream() { yield taskEvent(1, "question_request", { input: { request_id: "hr_1" } }); yield completed; }
+      async function* stream() { yield taskEvent(1, "question_request", { input: { message_id: "hr_1" } }); yield completed; }
       const failure = await new FeishuTaskPresentation(h.client as any, "oc_chat",
         { ...meta, getHumanRequest: async () => { throw original; } },
         { appId: reactions.appId, idempotencyKey: "delivery", receiptMessageIds: ["om_original"], save: h.save,
