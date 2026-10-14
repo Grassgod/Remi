@@ -1,6 +1,6 @@
 /**
  * The git repositories inside a tree the daemon is about to delete or set aside
- * (ADR 0017, amendments A4 and A5).
+ * (ADR 0018, amendments A4 and A5).
  *
  * Reclaim, the cleanup of lane environments, orphan forget, the expiry of topic
  * workspaces and the legacy sweep all delete trees an agent has worked in, and

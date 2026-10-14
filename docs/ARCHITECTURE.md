@@ -61,7 +61,7 @@ HTTP 心跳 ack 只保留升级请求和 drain，不添加 v1 业务兼容层。
 恢复后的历史任务只在首次需要摘要时分页重建。执行记录（trace、原生会话历史）永久留在 daemon；
 代码目录和运行环境只是缓存，主体（Issue 或 Chat）结束后由 `reclaim.ts`（`packages/daemon/src/agent-runtime/workspace/`）
 按保留期回收，删前对未保存的工作打快照，重开时恢复。布局、生命周期、策略和运维入口见[存储与保留](dev/storage-retention.md)，
-取舍见 [ADR 0017](adr/0017-local-records-and-recyclable-workspaces.md)。
+取舍见 [ADR 0018](adr/0018-local-records-and-recyclable-workspaces.md)。
 文件恢复与旧内存版本的升级边界见 [Daemon 升级](daemon-runtime-upgrades.md)。
 
 Runtime 可持有独立的[持久化工作区](dev/runtime-workspaces.md)：绑定 daemon 的已有目录。任务和聊天通过统一的「工作位置」选择项目或本机目录，二者互斥；Agent 可在不同任务中选择不同位置。目录绑定只能在所属机器执行；未指定位置时沿用自动任务目录。
@@ -74,9 +74,10 @@ bot 控制指令携带版本和期望状态。[concierge supervisor](../packages
 
 ## 存储与事务
 
-Issue 责任由 [统一 resolver](../packages/server/src/store/issue-responsibility.ts)根据明确指派和父链解析，
-根单持久化唯一人类。正式交付和验收使用统一消息，同事务保存收据、状态与审计；Task、intake 或
-SCM 完成均不代替 Issue 验收。入口与迁移/授权边界见[责任与正式交付](dev/issue-responsibility.md)。
+Issue 只配置执行负责人：[统一 resolver](../packages/server/src/store/issue-responsibility.ts)按明确指派和父链
+解析指派的 Agent 或团队可用 Leader，不指定人类。来自 Issue 的问题沿执行负责人链从本单交到根单，再交给
+工作区任何有效成员；轮结束只派生 `in_review`，关单是普通状态修改：成员可关任何 Issue，Agent 只能关
+自己作为父单执行负责人的直接子单，SCM merge 只记录 activity。入口与退役接口见[Issue 执行与上交](dev/issue-responsibility.md)。
 
 用量由 [collector](../packages/acp/src/usage-collector.ts) 和可靠 task usage ledger 产生可修订单位，写入 [规范化标量表](../packages/server/src/store/usage-accounting.ts)；[UsageAccountingRepo](../packages/server/src/store/repos/usage-accounting-repo.ts)统一 SQL 聚合及价格版本匹配，Web 与 CLI 共用 report。消费按单位证据时间、任务状态与耗时按独立生命周期时间归属；历史聚合单独标明任务归属日，run 保存执行 Runtime/项目，不从 task 最新绑定改写旧消费。真实请求有跨 task/run 的持久 owner；累计 meter 用已证明的区间认领，重叠或归属竞争保留审计而不叠加，身份事务锁先于 domain 写入。schema migration 只建表，启动随后在全局 schema 锁外执行 bounded/resumable 标量迁移，成功前不开放 HTTP/jobs；未完成切换的 report 返回 503。字段、计价来源和维护命令见[统一用量与价格](usage-accounting.md)。
 

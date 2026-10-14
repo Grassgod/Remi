@@ -41,7 +41,6 @@ import { AvatarUploadButton } from "../../common/avatar-upload-button";
 import { useNavigation } from "../../navigation";
 import { DeleteWorkspaceDialog } from "./delete-workspace-dialog";
 import { WorkspaceEnvSection } from "./workspace-env-section";
-import { IssueResponsibilityMigrationSection } from "./issue-responsibility-migration-section";
 import { useT } from "../../i18n";
 
 export function WorkspaceTab() {
@@ -358,7 +357,7 @@ export function WorkspaceTab() {
           section (rather than render a 403 toast trap) for plain members.
           Gated on membersFetched like Danger Zone so it doesn't flash in. */}
       {membersFetched && canManageWorkspace && (
-        <><WorkspaceEnvSection workspaceId={workspace.id} /><IssueResponsibilityMigrationSection /></>
+        <WorkspaceEnvSection workspaceId={workspace.id} />
       )}
 
       {/* Danger Zone — gated on the member query settling so the owner-only

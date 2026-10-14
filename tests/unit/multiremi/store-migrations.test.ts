@@ -2935,7 +2935,7 @@ describe("MUL-407 human-request push table rebuild", () => {
   });
 });
 
-describe("ADR 0017 local records migration", () => {
+describe("ADR 0018 local records migration", () => {
   const run = (database: Database) => runMigrations(database as unknown as SqlDatabase);
   const sql = (database: Database) => database as unknown as SqlDatabase;
   const schema = (database: Database) => {

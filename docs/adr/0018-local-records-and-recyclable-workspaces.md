@@ -1,4 +1,4 @@
-# ADR 0017: 记录留在 daemon，工作区可回收可恢复，Issue 与 Chat 统一留存模型
+# ADR 0018: 记录留在 daemon，工作区可回收可恢复，Issue 与 Chat 统一留存模型
 
 - 状态：已确认（贺华杰，2026-10-13）：历史 Issue/Chat 的 daemon 侧状态允许作废；一次开发、一次部署。
 - 取代 [ADR 0006](0006-conversation-log-and-daemon-owned-traces.md) 决策 5–9（trace 归档、Session Archive v2、回填、下线前归档）；决策 1–4（对话日志、轮卡片）不变。

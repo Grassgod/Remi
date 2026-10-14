@@ -19,10 +19,13 @@ export function createNativeTestQuestion(store: MultiremiStore, taskId: string, 
   return store.getTaskHumanRequest(String(result.message_id))!;
 }
 
+/** Answer at the human stage: a Chat Q's named member, or any active member of an Issue Q's workspace. */
 export function answerNativeTestQuestion(store: MultiremiStore, id: string, answer = 'Yes') {
   const question = store.getQuestion(id)!;
-  expect(question.current_handler?.type).toBe('member');
-  return store.respondTaskHumanRequest(id, { respondedBy: question.current_handler!.id,
+  expect(question.stage).toBe('human');
+  const respondedBy = question.current_handler?.type === 'member' ? question.current_handler.id
+    : store.listWorkspaceMembers(question.workspace_id).find(member => !member.archivedAt)!.id;
+  return store.respondTaskHumanRequest(id, { respondedBy,
     expectedRouteRevision: question.route_revision,
     response: question.kind === 'permission' ? { option_id: 'allow_once' } : { answers: { 'Continue?': answer } } });
 }

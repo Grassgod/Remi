@@ -18,15 +18,34 @@ const manifest = JSON.parse(readFileSync(resolve(root, "cli-capabilities.json"),
 const migrationDoc = readFileSync(resolve(root, "docs/cli-command-migration.md"), "utf8");
 
 describe("CLI capabilities manifest", () => {
-  it("maps the exact responsibility migration router paths to human commands", () => {
-    for (const [route, command] of [
-      ["GET /api/workspaces/:workspaceId/issue-responsibility-migration", "issue.responsibility-unassigned.list"],
-      ["POST /api/workspaces/:workspaceId/issue-responsibility-migration/map", "issue.responsibility-unassigned.map"],
+  it("retires the designated-human, delivery, transfer and parent-done-grant routes and commands", () => {
+    // The routes stay registered (410 route_retired) and so stay in the golden snapshot;
+    // the commands are hidden retired entries with no capability.
+    for (const [route, path] of [
+      ["GET /api/workspaces/:workspaceId/issue-responsibility-migration", "issue responsibility-unassigned list"],
+      ["POST /api/workspaces/:workspaceId/issue-responsibility-migration/map", "issue responsibility-unassigned map"],
+      ["GET /api/issues/:id/deliveries", "issue delivery list"],
+      ["POST /api/issues/:id/deliveries", "issue delivery submit"],
+      ["POST /api/issues/:id/deliveries/:deliveryId/respond", "issue delivery accept"],
+      ["POST /api/issues/:id/deliveries/:deliveryId/authorize", "issue delivery authorize"],
+      ["POST /api/messages/:id/question/transfer", "message question transfer"],
+      ["POST /api/issues/:id/parent-done-grant", "issue done-grant add"],
+      ["POST /api/multiremi/issues/:id/parent-done-grant", "issue done-grant add"],
+      ["DELETE /api/issues/:id/parent-done-grant", "issue done-grant remove"],
+      ["DELETE /api/multiremi/issues/:id/parent-done-grant", "issue done-grant remove"],
     ] as const) {
       expect(golden.routes).toContain(route);
-      expect(manifest.routes[route]).toEqual({ command });
-      expect(manifest.commands[command]?.auth).toEqual(["human"]);
+      expect(manifest.routes[route]).toEqual({ cli_exempt: true, category: "retired_route", reason: `已移除：改用 ${RETIRED_CLI_ROUTES[route]}` });
+      const retired = manifest.retired[`remi ${path}`]!;
+      expect(retired.replacement).toBe(RETIRED_CLI_COMMANDS[path]);
+      expect(manifest.commands[retired.command]).toMatchObject({ capability: null, aliases: [], hidden: true });
     }
+    for (const path of ["issue delivery return", "issue responsible set", "autopilot responsible set"])
+      expect(manifest.retired[`remi ${path}`]?.replacement).toBe(RETIRED_CLI_COMMANDS[path]);
+    for (const capability of ["issue.delivery.submit", "issue.delivery.accept", "issue.delivery.return", "issue.delivery.authorize",
+      "issue.delivery.list", "issue.done-grant.add", "issue.done-grant.remove", "issue.responsible.set", "autopilot.responsible.set",
+      "issue.responsibility-unassigned.list", "issue.responsibility-unassigned.map", "message.question.transfer"])
+      expect(manifest.commands[capability]).toBeUndefined();
   });
   it("matches golden routes in both directions and Registry commands in both directions", () => {
     expect(validateCliCapabilities(golden.routes, manifest, cliCommandInventory())).toEqual([]);
@@ -180,8 +199,8 @@ describe("CLI capabilities manifest", () => {
 
   it("maps every user route or records a justified exemption and keeps compatibility aliases", () => {
     expect(cliCoverageReport(manifest)).toEqual({
-      mapped: 638,
-      exempt: 141,
+      mapped: 627,
+      exempt: 152,
       missing: 0,
       total: 779,
     });

@@ -20,16 +20,7 @@ export const BatchUpdateIssuesResponseSchema = z.object({
 // to {} so consumers never need to nil-guard `issue.metadata`.
 const IssueMetadataSchema = z.record(z.string(), z.union([z.string(), z.number(), z.boolean()])).default({});
 
-export const IssueParentDoneGrantSchema = z.object({
-  granted_at: z.string(),
-  granted_by: z.string(),
-  agent_id: z.string(),
-  effective: z.boolean(),
-  ineffective_reason: z.enum(["assignee_changed", "owner_not_agent"]).nullable(),
-}).loose();
-
 export const IssueSchema = z.object({
-  responsible_member_id: z.string().nullable().optional(),
   runtime_workspace_id: z.string().nullable().optional(),
   id: z.string(),
   workspace_id: z.string(),
@@ -44,9 +35,6 @@ export const IssueSchema = z.object({
   creator_type: z.string(),
   creator_id: z.string(),
   parent_issue_id: z.string().nullable(),
-  parent_done_grant_at: z.string().nullable().optional(),
-  parent_done_grant_by: z.string().nullable().optional(),
-  parent_done_grant_agent_id: z.string().nullable().optional(),
   blocked_by: z.array(z.string()).optional(),
   issue_kind: z.enum(["execution", "intake"]).default("execution"),
   source_issue_id: z.string().nullable().default(null),
@@ -64,8 +52,8 @@ export const IssueSchema = z.object({
 }).loose();
 
 export const IssueDetailSchema = IssueSchema.extend({
+  /** This Issue's own questions waiting at the human stage; Agent-stage questions are excluded. */
   pending_decision_count: z.number().int().nonnegative(),
-  parent_done_grant: IssueParentDoneGrantSchema.nullable(),
 }).loose();
 
 const IssueDecisionKindSchema = z.enum([
@@ -137,11 +125,6 @@ export const IssueDecisionListSchema = z.object({
 
 export const IssueDecisionMutationResponseSchema = z.object({
   decision: IssueDecisionSchema,
-}).loose();
-
-export const IssueParentDoneGrantMutationResponseSchema = z.object({
-  issue: z.record(z.string(), z.unknown()),
-  parent_done_grant: IssueParentDoneGrantSchema.nullable(),
 }).loose();
 
 export const ListIssuesResponseSchema = z.object({

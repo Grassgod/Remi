@@ -6,11 +6,10 @@
  */
 import { PostgresSyncDatabase } from "@multiremi/store/db/postgres.js";
 import { MultiremiStore } from "@multiremi/store.js";
-import type { IssueDeliveryActor } from "@multiremi/store/issue-deliveries.js";
 
 type WorkerInput =
   | { type: "init"; databaseUrl: string; migrationReportDir: string }
-  | { type: "end"; childIssueId: string; status: string; delivery?: { id: string; revision: string }; actor?: IssueDeliveryActor };
+  | { type: "end"; childIssueId: string; status: string; memberId?: string };
 
 let db: PostgresSyncDatabase | null = null;
 let store: MultiremiStore | null = null;
@@ -26,13 +25,9 @@ self.onmessage = (message: MessageEvent<WorkerInput>) => {
     }
     if (!store) throw new Error("Postgres child-ending worker is not initialized");
     self.postMessage({ phase: "starting", childIssueId: message.data.childIssueId });
-    if (message.data.status === "done") {
-      if (!message.data.delivery || !message.data.actor) throw new Error("Child acceptance requires its exact delivery and reviewer");
-      store.respondIssueDelivery(message.data.childIssueId, message.data.delivery.id,
-        { action: "accept", revision: message.data.delivery.revision }, message.data.actor);
-    } else {
-      store.updateIssue(message.data.childIssueId, { status: message.data.status });
-    }
+    // A real member may close any Issue under the done rule.
+    store.updateIssue(message.data.childIssueId, { status: message.data.status,
+      ...(message.data.memberId ? { actorType: "member", actorId: message.data.memberId } : {}) });
     self.postMessage({ phase: "completed", childIssueId: message.data.childIssueId });
   } catch (error) {
     self.postMessage({ phase: "error", error: error instanceof Error ? error.message : String(error) });

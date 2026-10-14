@@ -42,7 +42,6 @@ import { ChangeRequestList } from "./change-request-list";
 import { IssueCodeWorkspaceSection } from "./issue-code-workspace-section";
 import { IssueSubIssuesSummary } from "./issue-sub-issues-summary";
 import { IssueDependencyEditor } from "./issue-dependency-editor";
-import { IssueResponsibilitySection } from "./issue-responsibility-section";
 
 function shortDate(date: string | null): string {
   if (!date) return "—";
@@ -62,7 +61,6 @@ interface IssueDetailSidebarProps {
   getActorName: (type: string, id: string) => string;
   issueSessions: IssueSession[];
   usage: IssueUsageSummary | undefined;
-  isMember: boolean;
   childIssues: Issue[];
   onCreateSubIssue: () => void;
 }
@@ -109,7 +107,6 @@ export function IssueDetailSidebar({
 
   return (
     <div className="space-y-5">
-      <IssueResponsibilitySection issue={issue} enabled={queriesEnabled} getActorName={getActorName} />
       {/* Properties */}
       <div>
         <button

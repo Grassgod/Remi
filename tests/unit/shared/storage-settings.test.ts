@@ -11,7 +11,7 @@ const HOUR_MS = 60 * 60 * 1000;
 const DAY_MS = 24 * HOUR_MS;
 
 describe("storage settings defaults", () => {
-  it("pins the ADR 0017 defaults and bounds", () => {
+  it("pins the ADR 0018 defaults and bounds", () => {
     expect(STORAGE_SETTINGS_DEFAULTS).toEqual({
       ttl_ms: 72 * HOUR_MS,
       automation_ttl_ms: 24 * HOUR_MS,

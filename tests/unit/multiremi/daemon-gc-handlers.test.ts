@@ -1,4 +1,4 @@
-// ADR 0017: the `gc.*` RPCs a daemon calls while it reclaims workspaces.
+// ADR 0018: the `gc.*` RPCs a daemon calls while it reclaims workspaces.
 import { afterEach, describe, expect, it } from "bun:test";
 import type { SubjectSnapshot } from "@multiremi/contracts/storage.js";
 import { reportFrame } from "../../fixtures/report-session.js";

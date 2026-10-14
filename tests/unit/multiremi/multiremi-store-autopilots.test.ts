@@ -855,7 +855,8 @@ describe("Multiremi store — autopilots, schedules, and webhooks", () => {
     });
     expect(duplicate.id).toBe(runs[0].id);
     expect(store.listAutopilotRuns(autopilot.id)).toHaveLength(1);
-    expect(store.listTasksForIssue(issue.id)).toHaveLength(2);
+    // A member closes the Issue directly (no delivery round), so the run's task is the only one.
+    expect(store.listTasksForIssue(issue.id).map(task => task.id)).toEqual([runs[0].taskId!]);
   });
 
   it("U7 does not match dependency_auto_start_check to a done autopilot", () => {

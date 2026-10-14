@@ -1,4 +1,4 @@
-import { createResponsibleTestIssue, createHistoricalTestIssue, seedHistoricalIssueFacts, acceptTestIssueDelivery, prepareTestIssueDelivery, replayHistoricalTestChildDone } from './helpers.js';
+import { createResponsibleTestIssue, createHistoricalTestIssue, seedHistoricalIssueFacts, acceptTestIssueDelivery, replayHistoricalTestChildDone } from './helpers.js';
 // MUL-400 S1 (E1 + E2): a parent issue's status is derived from its children,
 // and every child ending reports to the parent owner.
 //
@@ -30,9 +30,11 @@ function runTask(store: Store, runtimeId: string, taskId: string) {
   return store.startTask(taskId);
 }
 
+/** Child status notices: the parent_owner role, or a historical member owner addressed directly. */
 function childStatusMessages(store: Store, parentId: string, childId?: string) {
   const session = store.getOrCreateDefaultIssueSession(parentId);
-  return store.listMessages(session.id).filter(message => message.message_kind === "status" && message.to_ref === "parent_owner"
+  return store.listMessages(session.id).filter(message => message.message_kind === "status"
+    && (message.to_ref === "parent_owner" || message.to_type === "member" && typeof message.metadata.child_status === "string")
     && (!childId || message.metadata.child_issue_id === childId));
 }
 
@@ -81,9 +83,9 @@ describe("MUL-400 E1 — parent status derived from children", () => {
 
     for (const status of ["in_review", "done"] as const) {
       const error = catchError(() => store.updateIssue(parent.id, { status }));
-      expect(error.message, status).toContain(status==='done'?"accepting its specific delivery":"unfinished child issue");
-      expect(error.code, status).toBe(status==='done'?"issue_delivery_acceptance_required":"issue_status_held");
-      expect(status==='done'?store.countOpenChildIssues(parent.id):error.details?.openChildren, status).toBe(2);
+      expect(error.message, status).toContain("unfinished child issue");
+      expect(error.code, status).toBe("issue_status_held");
+      expect(error.details?.openChildren, status).toBe(2);
       expect(store.getIssue(parent.id)?.status).toBe("in_progress");
     }
 
@@ -150,7 +152,7 @@ describe("MUL-400 E1 — parent status derived from children", () => {
     }
   });
 
-  it("keeps the auto-retitle and merge-completion paths working on a parent", () => {
+  it("keeps the auto-retitle and server-owned status paths working on a parent", () => {
     const store = createSnapshotStore();
     store.ensureLocalWorkspace();
     const agent = store.createAgent({ name: "System writer owner", provider: "codex" });
@@ -169,7 +171,8 @@ describe("MUL-400 E1 — parent status derived from children", () => {
     expect(retitled.title).toBe("Luna generated title");
     expect(retitled.status).toBe("in_review");
 
-    // A server-only parent guard bypass cannot substitute for a delivery receipt.
+    // A server-owned write may bypass the parent guard; the bypass is a
+    // server-only option (never an input field), so no request can reach it.
     const mergeParent = createResponsibleTestIssue(store, {
       title: "Merge parent",
       status: "in_progress",
@@ -177,8 +180,7 @@ describe("MUL-400 E1 — parent status derived from children", () => {
       assigneeId: agent.id,
     });
     store.updateIssue(mergeParent.id, { status: "in_review", force: true });
-    expect(catchError(()=>store.updateIssue(mergeParent.id,{status:'done'},{allowParentStatusGuardBypass:true})).code).toBe('issue_delivery_acceptance_required');
-    const merged = acceptTestIssueDelivery(store, mergeParent.id);
+    const merged = store.updateIssue(mergeParent.id, { status: "done" }, { allowParentStatusGuardBypass: true });
     expect(merged.status).toBe("done");
     // The arrangement above reached in_review through a member force, which is
     // itself audited; the merge write must not add a second one.
@@ -232,13 +234,12 @@ describe("MUL-400 E1 — parent status derived from children", () => {
     });
     createResponsibleTestIssue(store, { assigneeType:'agent',assigneeId:store.createAgent({name:'Explicit execution fixture',provider:'codex'}).id, title: "Open child", parentIssueId: parent.id, status: "in_progress" });
 
-    // A member force cannot replace specific delivery acceptance, including legacy execution.
-    expect(catchError(() => store.updateIssue(parent.id, { status: "done" })).code).toBe("issue_delivery_acceptance_required");
-    expect(catchError(()=>store.updateIssue(parent.id, { status: "done", force: true })).code).toBe('issue_delivery_acceptance_required');
-    expect(store.getIssue(parent.id)?.status).toBe('in_progress');
+    // The member path succeeds only with force, and leaves an audit record.
+    expect(catchError(() => store.updateIssue(parent.id, { status: "done" })).code).toBe("issue_status_held");
+    expect(store.updateIssue(parent.id, { status: "done", force: true }).status).toBe("done");
     const forced = activityOf(store, parent.id, "issue_status_forced");
-    expect(forced).toHaveLength(0);
-    expect(store.countOpenChildIssues(parent.id)).toBe(1);
+    expect(forced).toHaveLength(1);
+    expect(forced[0]?.data).toMatchObject({ status: "done", openChildren: 1 });
 
     // The same fields through the API: a task identity is refused, a member is not.
     const otherParent = createResponsibleTestIssue(store, { assigneeType:'agent',assigneeId:store.createAgent({name:'Explicit execution fixture',provider:'codex'}).id, title: "Task identity parent", status: "in_progress" });
@@ -263,17 +264,17 @@ describe("MUL-400 E1 — parent status derived from children", () => {
     expect(batch.status).toBe(403);
     expect(store.getIssue(otherParent.id)?.status).toBe("in_progress");
 
-    // A4: without force, a task identity still cannot close a parent with children.
+    // The done rule: without force, a task identity cannot close a root at all.
     const plainDone = await app.request(`/api/issues/${otherParent.id}`, {
       method: "PATCH",
       headers: { Authorization: `Bearer ${credential.token}`, "Content-Type": "application/json" },
       body: JSON.stringify({ status: "done" }),
     });
-    expect(plainDone.status).toBe(409);
-    expect((await plainDone.json()).code).toBe("issue_delivery_acceptance_required");
+    expect(plainDone.status).toBe(403);
+    expect((await plainDone.json()).code).toBe("issue_done_requires_member");
 
-    // A4 through BOTH batch routes: the batch writer now carries the caller's
-    // identity, so a task cannot close a parent by taking the long way round.
+    // Through BOTH batch routes: the batch writer carries the caller's identity,
+    // so a task cannot close a root by taking the long way round.
     for (const path of ["/api/multiremi/issues/batch-update", "/api/issues/batch-update"]) {
       const response = await app.request(path, {
         method: "POST",
@@ -281,7 +282,7 @@ describe("MUL-400 E1 — parent status derived from children", () => {
         body: JSON.stringify({ issue_ids: [otherParent.id], updates: { status: "done" } }),
       });
       expect(response.status, path).toBe(403);
-      expect((await response.json()).code, path).toBe("parent_done_requires_member");
+      expect((await response.json()).code, path).toBe("issue_done_requires_member");
       expect(store.getIssue(otherParent.id)?.status, path).toBe("in_progress");
     }
 
@@ -326,10 +327,9 @@ describe("MUL-400 E1 — parent status derived from children", () => {
       headers: { Authorization: `Bearer ${memberCredential.token}`, "Content-Type": "application/json" },
       body: JSON.stringify({ issue_ids: [otherParent.id], updates: { status: "done", force: true } }),
     });
-    expect(batchForced.status).toBe(409);
-    expect((await batchForced.json()).code).toBe('issue_delivery_acceptance_required');
-    expect(store.getIssue(otherParent.id)?.status).toBe("in_review");
-    expect(activityOf(store, otherParent.id, "issue_status_forced")).toHaveLength(1);
+    expect(batchForced.status).toBe(200);
+    expect(store.getIssue(otherParent.id)?.status).toBe("done");
+    expect(activityOf(store, otherParent.id, "issue_status_forced")).toHaveLength(2);
   });
 
   it("ignores every injected parent-status bypass spelling on all four write routes", async () => {
@@ -353,9 +353,6 @@ describe("MUL-400 E1 — parent status derived from children", () => {
       { holdParentStatus: false, bypass_parent_status_guard: true },
       { options: { allowParentStatusGuardBypass: true } },
       { options: { holdParentStatus: true, allowParentStatusGuardBypass: true } },
-      { acceptedDeliveryId: 'forged-receipt' },
-      { accepted_delivery_id: 'forged-receipt' },
-      { options: { acceptedDeliveryId: 'forged-receipt', allowParentStatusGuardBypass: true } },
     ];
 
     const patchRoutes = ["/api/multiremi/issues", "/api/issues"];
@@ -373,15 +370,15 @@ describe("MUL-400 E1 — parent status derived from children", () => {
       createResponsibleTestIssue(store, { assigneeType:'agent',assigneeId:store.createAgent({name:'Explicit execution fixture',provider:'codex'}).id, title: "Injection child", parentIssueId: parent.id, status: "in_progress" });
       const label = JSON.stringify(injected);
 
-      // The two PATCH routes, task identity: A4 refuses before anything else.
+      // The two PATCH routes, task identity: the done rule refuses before anything else.
       for (const path of patchRoutes) {
         const response = await app.request(`${path}/${parent.id}`, {
           method: "PATCH",
           headers: { Authorization: `Bearer ${credential.token}`, "Content-Type": "application/json" },
           body: JSON.stringify({ status: "done", ...injected }),
         });
-        expect(response.status, `${path} ${label}`).toBe(409);
-        expect((await response.json()).code, `${path} ${label}`).toBe("issue_delivery_acceptance_required");
+        expect(response.status, `${path} ${label}`).toBe(403);
+        expect((await response.json()).code, `${path} ${label}`).toBe("issue_done_requires_member");
         expect(store.getIssue(parent.id)?.status, `${path} ${label}`).toBe("in_progress");
       }
 
@@ -393,43 +390,45 @@ describe("MUL-400 E1 — parent status derived from children", () => {
           body: JSON.stringify({ issue_ids: [parent.id], updates: { status: "done", ...injected } }),
         });
         expect(response.status, `${path} ${label}`).toBe(403);
-        expect((await response.json()).code, `${path} ${label}`).toBe("parent_done_requires_member");
+        expect((await response.json()).code, `${path} ${label}`).toBe("issue_done_requires_member");
         expect(store.getIssue(parent.id)?.status, `${path} ${label}`).toBe("in_progress");
       }
 
       // A member may not take the guard out through the body either. The child
       // here is still open, so the stored decision is refused by the open-children
-      // rule; the A1 variant below covers the closed-children case.
+      // rule; the done-rule variant below covers an Agent's close.
       const memberAttempt = await app.request(`/api/multiremi/issues/${parent.id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ status: "done", ...injected }),
       });
       expect(memberAttempt.status, `member ${label}`).toBe(409);
-      expect((await memberAttempt.json()).code, `member ${label}`).toBe("issue_delivery_acceptance_required");
+      expect((await memberAttempt.json()).code, `member ${label}`).toBe("issue_status_held");
       expect(store.getIssue(parent.id)?.status, `member ${label}`).toBe("in_progress");
       expect(activityOf(store, parent.id, "parent_status_held"), label).toHaveLength(0);
       expect(activityOf(store, parent.id, "issue_status_forced"), label).toHaveLength(0);
 
-      // The other half of QA's finding: an AGENT-owned parent whose children are
-      // all finished but which has no result-bearing round yet. A member request
-      // is refused by A1, and the injected bypass must not lift that either.
-      const agentParent = createResponsibleTestIssue(store, {
-        title: `Injection A1 parent ${index++}`,
+      // The other half: the caller does not execute this child's parent, so the
+      // done rule refuses its close, and the injected bypass must not lift that.
+      const otherOwner = store.createAgent({ name: `Injection parent owner ${index}`, provider: "codex" });
+      const ownedParent = createResponsibleTestIssue(store, {
+        title: `Injection owned parent ${index++}`,
         status: "in_progress",
         assigneeType: "agent",
-        assigneeId: agent.id,
+        assigneeId: otherOwner.id,
       });
-      acceptTestIssueDelivery(store, createResponsibleTestIssue(store, { assigneeType:'agent',assigneeId:store.createAgent({name:'Explicit execution fixture',provider:'codex'}).id, title: "Injection A1 child", parentIssueId: agentParent.id, status: "in_progress" }).id);
-      const memberA1 = await app.request(`/api/multiremi/issues/${agentParent.id}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ status: "done", ...injected }),
-      });
-      expect(memberA1.status, `member A1 ${label}`).toBe(409);
-      expect((await memberA1.json()).code, `member A1 ${label}`).toBe("issue_delivery_acceptance_required");
-      expect(store.getIssue(agentParent.id)?.status, `member A1 ${label}`).toBe("in_progress");
-      expect(activityOf(store, agentParent.id, "issue_status_forced"), `member A1 ${label}`).toHaveLength(0);
+      const ownedChild = createResponsibleTestIssue(store, { assigneeType:'agent',assigneeId:store.createAgent({name:'Explicit execution fixture',provider:'codex'}).id, title: "Injection owned child", parentIssueId: ownedParent.id, status: "in_progress" });
+      for (const path of patchRoutes) {
+        const response = await app.request(`${path}/${ownedChild.id}`, {
+          method: "PATCH",
+          headers: { Authorization: `Bearer ${credential.token}`, "Content-Type": "application/json" },
+          body: JSON.stringify({ status: "done", ...injected }),
+        });
+        expect(response.status, `done rule ${path} ${label}`).toBe(403);
+        expect((await response.json()).code, `done rule ${path} ${label}`).toBe("issue_done_requires_parent_owner");
+      }
+      expect(store.getIssue(ownedChild.id)?.status, `done rule ${label}`).toBe("in_progress");
+      expect(activityOf(store, ownedChild.id, "issue_status_forced"), `done rule ${label}`).toHaveLength(0);
     }
   });
 
@@ -472,9 +471,9 @@ describe("MUL-400 E1 — parent status derived from children", () => {
           body: JSON.stringify({ status: "done", ...forged }),
         });
         // A task identity sending `force` is refused outright by the route (403
-        // `issue_force_requires_member`); without `force` A4 refuses it (403
-        // `parent_done_requires_member`). Either way it is 403, never a write.
-        expect(response.status, `${path} ${label}`).toBe('force' in forged && forged.force ? 403 : 409);
+        // `issue_force_requires_member`); without `force` the done rule refuses
+        // it (403 `issue_done_requires_member`). Either way it is 403, never a write.
+        expect(response.status, `${path} ${label}`).toBe(403);
         expect(store.getIssue(parent.id)?.status, `${path} ${label}`).toBe("in_progress");
       }
 
@@ -535,7 +534,7 @@ describe("MUL-400 E1 — parent status derived from children", () => {
             : { status: "done", ...forged }),
         });
         // The task identity is still refused, so the forgery buys nothing.
-        expect(response.status, `${url} ${JSON.stringify(forged)}`).toBe(route.batch || ('force' in forged && forged.force) ? 403 : 409);
+        expect(response.status, `${url} ${JSON.stringify(forged)}`).toBe(403);
 
         // A member can legitimately force; the audit must name the request's own
         // task (where present) and never the forged one.
@@ -546,10 +545,9 @@ describe("MUL-400 E1 — parent status derived from children", () => {
             ? { issue_ids: [parent.id], updates: { status: "done", force: true, ...forged } }
             : { status: "done", force: true, ...forged }),
         });
-        expect(memberForce.status, `${url} member ${JSON.stringify(forged)}`).toBe(409);
-        expect((await memberForce.json()).code).toBe('issue_delivery_acceptance_required');
+        expect(memberForce.status, `${url} member ${JSON.stringify(forged)}`).toBe(200);
         const forced = activityOf(store, parent.id, "issue_status_forced");
-        expect(forced, url).toHaveLength(0);
+        expect(forced, url).toHaveLength(1);
         expect(forced[0]?.data?.sourceTaskId, `${url} ${JSON.stringify(forged)}`).toBeUndefined();
         expect(forced[0]?.data?.parentTaskId, `${url} ${JSON.stringify(forged)}`).toBeUndefined();
         // ... and the wakeup round the child report queues carries no forged
@@ -560,7 +558,7 @@ describe("MUL-400 E1 — parent status derived from children", () => {
     }
   });
 
-  it("refuses the whole batch without writing any row when one row is guarded", async () => {
+  it("refuses the whole batch without writing any row when one row is guarded or refused", async () => {
     const store = createSnapshotStore();
     store.ensureLocalWorkspace();
     const agent = store.createAgent({ name: "Batch caller", provider: "codex" });
@@ -577,15 +575,27 @@ describe("MUL-400 E1 — parent status derived from children", () => {
       createResponsibleTestIssue(store, { assigneeType:'agent',assigneeId:store.createAgent({name:'Explicit execution fixture',provider:'codex'}).id, title: "Batch parent child", parentIssueId: parent.id, status: "in_progress" });
       const plainB = createHistoricalTestIssue(store, { title: `Batch plain B ${path}`, status: "in_progress", assigneeType: "member", assigneeId: member.id });
 
+      // A member: guard A refuses only the parent, and the batch writes nothing.
       const response = await app.request(path, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ issue_ids: [plainA.id, parent.id, plainB.id], updates: { status: "done" } }),
+      });
+      expect(response.status, path).toBe(409);
+      const body = await response.json();
+      expect(body.code, path).toBe("issue_status_held");
+      expect(body.rejected_issue_ids, path).toEqual([parent.id]);
+      for (const issue of [plainA, parent, plainB]) expect(store.getIssue(issue.id)?.status, path).toBe("in_progress");
+
+      // A task identity: the done rule refuses the roots, again with no row written
+      // and never a silent `updated: 0`.
+      const agentResponse = await app.request(path, {
         method: "POST",
         headers: { Authorization: `Bearer ${credential.token}`, "Content-Type": "application/json" },
         body: JSON.stringify({ issue_ids: [plainA.id, parent.id, plainB.id], updates: { status: "done" } }),
       });
-      expect(response.status, path).toBe(403);
-      const body = await response.json();
-      expect(body.code, path).toBe("parent_done_requires_member");
-      expect(body.rejected_issue_ids, path).toEqual([parent.id]);
+      expect(agentResponse.status, path).toBe(403);
+      expect((await agentResponse.json()).code, path).toBe("issue_done_requires_member");
 
       // All-or-nothing: neither the rows before nor after the refused one moved.
       expect(store.getIssue(plainA.id)?.status, path).toBe("in_progress");
@@ -668,7 +678,7 @@ describe("MUL-400 E1 — parent status derived from children", () => {
     expect(store.listTasksForIssue(parent.id)).toHaveLength(roundsBefore);
   });
 
-  it("does not apply A4 to an agent closing an issue without children", async () => {
+  it("lets an agent close only a direct child of an Issue it executes, never its own Issue or a root", async () => {
     const store = createSnapshotStore();
     store.ensureLocalWorkspace();
     const agent = store.createAgent({ name: "Plain closer", provider: "codex" });
@@ -682,18 +692,37 @@ describe("MUL-400 E1 — parent status derived from children", () => {
     const credential = await store.createTaskAccessToken(callerTask, "local");
     const app = createMultiremiApp({ store });
 
-    const response = await app.request(`/api/issues/${plain.id}`, {
+    const close = (id: string) => app.request(`/api/issues/${id}`, {
       method: "PATCH",
       headers: { Authorization: `Bearer ${credential.token}`, "Content-Type": "application/json" },
       body: JSON.stringify({ status: "done" }),
     });
-    expect(response.status).toBe(409);
-    expect((await response.json()).code).toBe('issue_delivery_acceptance_required');
+    const response = await close(plain.id);
+    expect(response.status).toBe(403);
+    expect((await response.json()).code).toBe("issue_done_requires_member");
     expect(store.getIssue(plain.id)?.status).toBe("in_progress");
-    expect(acceptTestIssueDelivery(store,plain.id).status).toBe('done');
+
+    // A direct child of the Issue the caller executes: the caller closes it.
+    const child = createResponsibleTestIssue(store, { title: "Executed child", parentIssueId: plain.id, status: "in_progress",
+      assigneeType: "agent", assigneeId: store.createAgent({ name: "Child executor", provider: "codex" }).id });
+    const grandchild = createResponsibleTestIssue(store, { title: "Grandchild", parentIssueId: child.id, status: "in_progress" });
+    // Not a grandchild: the rule is the direct parent's execution owner only.
+    const deep = await close(grandchild.id);
+    expect(deep.status).toBe(403);
+    expect((await deep.json()).code).toBe("issue_done_requires_parent_owner");
+    store.updateIssue(grandchild.id, { status: "cancelled" });
+    expect((await close(child.id)).status).toBe(200);
+    expect(store.getIssue(child.id)?.status).toBe("done");
+    // Its own executor is never the closer.
+    const own = createResponsibleTestIssue(store, { title: "Own child", parentIssueId: plain.id, status: "in_progress", assigneeType: "agent", assigneeId: agent.id });
+    const self = await close(own.id);
+    expect(self.status).toBe(403);
+    expect((await self.json()).code).toBe("issue_done_requires_parent_owner");
+    expect(acceptTestIssueDelivery(store, own.id).status).toBe("done");
+    expect(acceptTestIssueDelivery(store, plain.id).status).toBe("done");
   });
 
-  it.each(["/api/issues", "/api/multiremi/issues"])("requires configuration and concrete human acceptance for unassigned parents on %s", async (path) => {
+  it.each(["/api/issues", "/api/multiremi/issues"])("lets members close unassigned parents after all children finish, and refuses an agent, on %s", async (path) => {
     const store = createSnapshotStore();
     store.ensureLocalWorkspace();
     const memberCredential = await store.createAccessToken({ name: "Closing member", type: "pat", workspaceId: "local", userId: "local" });
@@ -703,8 +732,7 @@ describe("MUL-400 E1 — parent status derived from children", () => {
     const app = createMultiremiApp({ store });
 
     for (const batch of [false, true]) {
-      const human = store.findWorkspaceMemberForUser('local','local')!;
-      const parent = createResponsibleTestIssue(store, { title: `Unassigned parent ${batch}`, status: "in_progress", responsibleMemberId:human.id });
+      const parent = createResponsibleTestIssue(store, { title: `Unassigned parent ${batch}`, status: "in_progress" });
       const child = createResponsibleTestIssue(store, { assigneeType:'agent',assigneeId:store.createAgent({name:'Explicit execution fixture',provider:'codex'}).id, title: "Unfinished child", parentIssueId: parent.id, status: "in_progress" });
       const blockedChild = createResponsibleTestIssue(store, { assigneeType:'agent',assigneeId:store.createAgent({name:'Explicit execution fixture',provider:'codex'}).id, title: "Blocked child", parentIssueId: parent.id, status: "blocked" });
       const close = (token: string) => app.request(batch ? `${path}/batch-update` : `${path}/${parent.id}`, {
@@ -715,82 +743,66 @@ describe("MUL-400 E1 — parent status derived from children", () => {
 
       const held = await close(memberCredential.token);
       expect(held.status).toBe(409);
-      expect(await held.json()).toMatchObject(batch ? {code:'issue_status_held',reason:'children_open',open_children:2} : {code:'issue_delivery_acceptance_required'});
+      expect(await held.json()).toMatchObject({ code: "issue_status_held", reason: "children_open", open_children: 2 });
       expect(store.countOpenChildIssues(parent.id)).toBe(2);
-      expect(()=>prepareTestIssueDelivery(store,child.id)).toThrow('complete test Issue responsibility');
-      expect(store.resolveIssueResponsibility(parent.id).executionOwner).toBeNull();
-      store.updateIssue(parent.id,{assigneeType:'agent',assigneeId:agent.id,actorType:'member',actorId:human.id});
       acceptTestIssueDelivery(store, child.id);
       const stillHeld = await close(memberCredential.token);
       expect(stillHeld.status).toBe(409);
-      expect(await stillHeld.json()).toMatchObject(batch ? {code:'issue_status_held',reason:'children_open',open_children:1} : {code:'issue_delivery_acceptance_required'});
-      expect(store.countOpenChildIssues(parent.id)).toBe(1);
+      expect(await stillHeld.json()).toMatchObject({ code: "issue_status_held", reason: "children_open", open_children: 1 });
       store.updateIssue(blockedChild.id, { status: "cancelled" });
 
+      // A root has no parent owner: no Agent may close it.
       const agentAttempt = await close(taskCredential.token);
-      expect(agentAttempt.status).toBe(batch ? 403 : 409);
-      expect(await agentAttempt.json()).toMatchObject({ code: batch ? "parent_done_requires_member" : 'issue_delivery_acceptance_required' });
+      expect(agentAttempt.status).toBe(403);
+      expect(await agentAttempt.json()).toMatchObject({ code: "issue_done_requires_member" });
       expect(store.getIssue(parent.id)?.status).toBe("in_progress");
 
       const completed = await close(memberCredential.token);
-      expect(completed.status).toBe(409);
-      expect((await completed.json()).code).toBe('issue_delivery_acceptance_required');
-      const pending = prepareTestIssueDelivery(store,parent.id);
-      const accepted = await app.request(`/api/issues/${parent.id}/deliveries/${pending.delivery.id}/respond`, {
-        method:'POST',headers:{Authorization:`Bearer ${memberCredential.token}`,'Content-Type':'application/json'},
-        body:JSON.stringify({action:'accept',revision:pending.delivery.responsibilityRevision}),
-      });
-      expect(accepted.status).toBe(200);
-      expect(store.getIssue(parent.id)).toMatchObject({ status: "done", assigneeType:'agent',assigneeId:agent.id });
+      expect(completed.status).toBe(200);
+      expect(store.getIssue(parent.id)).toMatchObject({ status: "done", assigneeType: null, assigneeId: null });
       expect(activityOf(store, parent.id, "issue_status_forced")).toHaveLength(0);
     }
   });
 
-  it("requires formal summaries and keeps legacy member execution unresolved until explicitly configured", () => {
+  it("lets the parent owner close its finished child and a member close the parent, with no summary rule", () => {
     const store = createSnapshotStore();
     store.ensureLocalWorkspace();
     const runtime = store.registerRuntime({ id: "rt_summary", name: "Worker", provider: "claude", maxConcurrency: 4 });
-    const agent = store.createAgent({ name: "Summary owner", provider: "claude", runtimeId: runtime.id });
+    const agent = store.createAgent({ name: "Parent owner", provider: "claude", runtimeId: runtime.id });
+    const worker = store.createAgent({ name: "Child owner", provider: "codex" });
     const parent = createResponsibleTestIssue(store, {
       title: "Summary parent",
       status: "in_progress",
       assigneeType: "agent",
       assigneeId: agent.id,
     });
-    const child = createResponsibleTestIssue(store, { assigneeType:'agent',assigneeId:store.createAgent({name:'Explicit execution fixture',provider:'codex'}).id, title: "Only child", parentIssueId: parent.id, status: "in_progress" });
-    acceptTestIssueDelivery(store, child.id);
+    const child = createResponsibleTestIssue(store, { assigneeType:'agent',assigneeId:worker.id, title: "Only child", parentIssueId: parent.id, status: "in_progress" });
 
-    // No result-bearing round since the child closed: `done` is refused.
-    expect(catchError(() => store.updateIssue(parent.id, { status: "done" })).code).toBe("issue_delivery_acceptance_required");
+    // The child's own execution owner never closes it; its parent's owner does.
+    expect(catchError(() => store.updateIssue(child.id, { status: "done", actorType: "agent", actorId: worker.id })).code).toBe("issue_done_requires_parent_owner");
+    expect(store.updateIssue(child.id, { status: "done", actorType: "agent", actorId: agent.id }).status).toBe("done");
 
-    // Finish the report round E2 queued for the owner; its result is the
-    // "final summary" signal A1 looks for.
-    const round = store.listTasksForIssue(parent.id).find((task) => task.status === "queued")!;
-    runTask(store, runtime.id, round.id);
-    store.completeTask(round.id, { output: "the last child is merged and verified" });
-    expect(catchError(() => store.updateIssue(parent.id, { status: "done" })).code).toBe('issue_delivery_acceptance_required');
-    expect(acceptTestIssueDelivery(store,parent.id,'the last child is merged and verified').status).toBe('done');
+    // The owner of a root never closes it; a member does, with no final-summary rule.
+    expect(catchError(() => store.updateIssue(parent.id, { status: "done", actorType: "agent", actorId: agent.id })).code).toBe("issue_done_requires_member");
+    expect(acceptTestIssueDelivery(store, parent.id).status).toBe("done");
 
-    // A member owner needs no machine-checked summary.
+    // A historical member owner still waits for its children, then a member closes it.
     const member = store.createWorkspaceMember({ name: "Human owner", role: "member" });
     const memberParent = createHistoricalTestIssue(store, {
       title: "Member summary parent",
       status: "in_progress",
       assigneeType: "member",
       assigneeId: member.id,
-      responsibleMemberId:member.id,
     });
     const memberChild = createResponsibleTestIssue(store, { assigneeType:'agent',assigneeId:store.createAgent({name:'Explicit execution fixture',provider:'codex'}).id,
       title: "Member child",
       parentIssueId: memberParent.id,
       status: "in_progress",
     });
-    expect(catchError(() => store.updateIssue(memberParent.id, { status: "done" })).code).toBe("issue_delivery_acceptance_required");
-    expect(()=>prepareTestIssueDelivery(store,memberChild.id)).toThrow('complete test Issue responsibility');
+    expect(catchError(() => store.updateIssue(memberParent.id, { status: "done", actorType: "member", actorId: member.id })).code).toBe("issue_status_held");
     expect(store.resolveIssueResponsibility(memberParent.id).executionOwner).toBeNull();
-    store.updateIssue(memberParent.id,{assigneeType:'agent',assigneeId:agent.id,actorType:'member',actorId:member.id});
     acceptTestIssueDelivery(store, memberChild.id);
-    expect(acceptTestIssueDelivery(store,memberParent.id).status).toBe("done");
+    expect(acceptTestIssueDelivery(store, memberParent.id).status).toBe("done");
   });
 
   it("does not touch done/cancelled parents and writes no held noise on them", () => {
@@ -817,7 +829,7 @@ describe("MUL-400 E1 — parent status derived from children", () => {
     expect(activityOf(store, parent.id, "parent_status_held")).toHaveLength(0);
   });
 
-  it("keeps the human-request in_review transient out of guard B", () => {
+  it("parks a parent waiting for a human answer in review, without a held row", () => {
     const store = createSnapshotStore();
     store.ensureLocalWorkspace();
     const runtime = store.registerRuntime({ id: "rt_ask", name: "Worker", provider: "claude",daemonId:'parent-question-host' });
@@ -840,15 +852,17 @@ describe("MUL-400 E1 — parent status derived from children", () => {
     expect(request.ok).toBeTrue();
     const question = store.getQuestion(String(request.message_id))!;
 
-    // ADR 0003: waiting for an answer legitimately parks the Issue in review.
-    expect(question.status).toBe("pending");
+    // A question at the human stage parks the parent in review even with an open
+    // child: guard B deliberately skips that wait and records no held row.
+    expect(question).toMatchObject({ status: "pending", stage: "human", current_handler: null });
     expect(store.getIssue(parent.id)?.status).toBe("in_review");
     expect(activityOf(store, parent.id, "parent_status_held")).toHaveLength(0);
 
-    // Answering puts it back to in_progress, as the resume path always did.
+    // Any active member answers; the resumed round keeps it in progress.
     store.answerQuestion(question.id,{expected_route_revision:question.route_revision,response:{answer:'that one'}},
-      {type:'member',id:store.resolveIssueResponsibility(parent.id).rootHuman!.id});
+      {type:'member',id:'mem_local_local'});
     expect(store.getIssue(parent.id)?.status).toBe("in_progress");
+    expect(activityOf(store, parent.id, "parent_status_held")).toHaveLength(0);
   });
 
   it("derives an in_review parent when a child is created under it, and when a child is moved away", () => {
@@ -1056,7 +1070,7 @@ describe("MUL-400 E2 — child endings notify the parent owner", () => {
       const before = childStatusMessages(store, parent.id).length;
       testCase.apply();
       const messages = childStatusMessages(store, parent.id);
-      expect(messages.length, testCase.outcome).toBe(before + (['failed','done'].includes(testCase.outcome) ? 3 : 1));
+      expect(messages.length, testCase.outcome).toBe(before + (testCase.outcome === "failed" ? 3 : 1));
       const latest = messages.at(-1)!;
       expect(latest.to_agent_id, testCase.outcome).toBe(agent.id);
       expect(latest.body_md, testCase.outcome).toContain(`mention://agent/${agent.id}`);
@@ -1068,9 +1082,9 @@ describe("MUL-400 E2 — child endings notify the parent owner", () => {
     expect(parentTasks).toHaveLength(1);
     expect(parentTasks[0]).toMatchObject({ agentId: agent.id, status: "queued" });
     expect(activityOf(store, parent.id, "turn_created")).toHaveLength(1);
-    expect(activityOf(store, parent.id, "turn_merged")).toHaveLength(8);
+    expect(activityOf(store, parent.id, "turn_merged")).toHaveLength(5);
     const reports = childStatusMessages(store, parent.id);
-    expect(reports).toHaveLength(8);
+    expect(reports).toHaveLength(6);
     expect(reports.some(message => message.body_md.includes("failed"))).toBeTrue();
     expect(parentTasks[0]?.prompt).toBe(reports[0]!.body_md);
     expect(store.getIssue(parent.id)?.status).toBe("in_progress");
@@ -1082,7 +1096,6 @@ describe("MUL-400 E2 — child endings notify the parent owner", () => {
     const member = store.createWorkspaceMember({ name: "Human owner", role: "member" });
     const parent = createHistoricalTestIssue(store, {
       title: "Human parent",
-      responsibleMemberId:member.id,
       status: "in_progress",
       assigneeType: "member",
       assigneeId: member.id,
@@ -1128,7 +1141,6 @@ describe("MUL-400 E2 — child endings notify the parent owner", () => {
     const member = store.createWorkspaceMember({ name: "Human parent", role: "member" });
     const parent = createHistoricalTestIssue(store, {
       title: "Human failure parent",
-      responsibleMemberId:member.id,
       status: "in_progress",
       assigneeType: "member",
       assigneeId: member.id,
@@ -1243,7 +1255,7 @@ describe("MUL-400 E2 — child endings notify the parent owner", () => {
 
     expect(store.listTasksForIssue(parent.id).filter(task => task.status === "queued")).toHaveLength(0);
     expect(store.getTask(running.id)?.status).toBe("running");
-    expect(activityOf(store, parent.id, "message_delivered_running")).toHaveLength(4);
+    expect(activityOf(store, parent.id, "message_delivered_running")).toHaveLength(1);
     expect(activityOf(store, parent.id, "child_done_parent_skipped")).toHaveLength(0);
 
     for (const child of [children[1]!, blockedChild, children[3]!]) {
@@ -1251,9 +1263,9 @@ describe("MUL-400 E2 — child endings notify the parent owner", () => {
     }
 
     expect(store.listTasksForIssue(parent.id).filter(task => task.status === "queued")).toHaveLength(0);
-    expect(activityOf(store, parent.id, "message_delivered_running")).toHaveLength(7);
+    expect(activityOf(store, parent.id, "message_delivered_running")).toHaveLength(4);
     const notifications = childStatusMessages(store, parent.id);
-    expect(notifications).toHaveLength(6);
+    expect(notifications).toHaveLength(4);
     expect(notifications.every(message => message.to_agent_id === leader.id && message.wake_applied === "now")).toBeTrue();
     expect(notifications.some(message => message.body_md.includes("is blocked"))).toBeTrue();
     // Unacknowledged running input must become exactly one successor turn.
@@ -1262,7 +1274,7 @@ describe("MUL-400 E2 — child endings notify the parent owner", () => {
     expect(queued).toHaveLength(1);
     expect(store.claimTask(runtime.id)?.id).toBe(queued[0]!.id);
     const offered = store.getDaemonTurnBridge().offerInput(store.getTaskWithAgent(queued[0]!.id)!);
-    expect(offered.input_messages.filter(message => message.message_kind === "status")).toHaveLength(6);
+    expect(offered.input_messages.filter(message => message.message_kind === "status")).toHaveLength(4);
 
   });
 

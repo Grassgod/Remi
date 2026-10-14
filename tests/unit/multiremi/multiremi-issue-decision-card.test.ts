@@ -154,10 +154,11 @@ function scaffold(options: {
   return { store, agentId, member };
 }
 
-/** An Issue whose topic root message has been sent, so replies have a seed. */
+/** An Issue whose topic root message has been sent, so replies have a seed.
+ * The card person created the root: a human-stage card goes to the root creator. */
 function issueWithTopic(store: MultiremiStore, title = "Decision parent", assignee?: { type: "agent"; id: string }) {
   const issue = createResponsibleTestIssue(store, {
-    title, workspaceId: "local", responsibleMemberId: "mem_local_local",
+    title, workspaceId: "local", createdBy: store.getWorkspaceMember("mem_local_local")!.userId,
     ...(assignee ? { assigneeType: assignee.type, assigneeId: assignee.id } : {}),
   });
   store.prepareFeishuIssueTopicWithinTransaction(issue);
@@ -220,7 +221,7 @@ function raiseDecision(
   const at = new Date().toISOString();
   const original = store.sendMessage({ session_id: session.id, sender: { type: "agent", id: task.agentId }, source_turn_id: turn.id,
     ...(input.executionScope ? { execution_scope: input.executionScope } : {}),
-    to: human ? { type: "member", ref: parent.responsibleMemberId! } : { type: "none" }, message_kind: "decision", wake_requested: "inbox_only", body_md: `${input.title} context`, options: input.options?.map(label => ({ label, value: label })),
+    to: human ? { type: "member", ref: "mem_local_local" } : { type: "none" }, message_kind: "decision", wake_requested: "inbox_only", body_md: `${input.title} context`, options: input.options?.map(label => ({ label, value: label })),
     metadata: { decision_record: { issue_id: parent.id, source_issue_id: childId, source_task_id: taskId, kind: input.kind, title: input.title, body: `${input.title} context`, options: input.options ?? [],
       status: human ? "escalated" : "pending", created_by_agent_id: task.agentId, owner_agent_id: human ? null : parent.assigneeId, history: [], created_at: at, updated_at: at } } }).message;
   if (!human) store.sendMessage({ session_id: store.getOrCreateDefaultIssueSession(parent.id).id, sender: { type: "platform", id: null }, to: { type: "agent", ref: agentId },
@@ -252,7 +253,7 @@ function sendCard(store: MultiremiStore, messageId = "om_card", openId = CARD_OP
   if (card.kind === "decision_card" && card.decisionId && card.interactionOpenId !== openId) {
     // Explicit pre-upgrade signed-card fixture: old cards could name a topic
     // recipient. Retain that frozen token to test actual identity rejection;
-    // new production dispatch always resolves the designated root human.
+    // new production dispatch always resolves the root Issue's creator.
     const envelope = decodeDecisionCardBody(card.body)!;
     const action = questionCardAction(envelope.card)!;
     action.t = store.issueMessageCardToken(card.decisionId, openId);
@@ -556,28 +557,35 @@ describe("MUL-412 issue decision cards", () => {
     expect(db!.query("SELECT CAST(COUNT(*) AS INTEGER) AS n FROM multiremi_feishu_bot_outbound_deliveries WHERE decision_id = ? AND kind = 'decision_card'").get(decision.id)).toMatchObject({ n: 1 });
   });
 
-  it("issues a current card after an explicit route transfer and rejects the old card and missing revision", async () => {
+  it("issues a current card after an automatic re-route and rejects the old card and missing revision", async () => {
     const { store, agentId, member } = scaffold();
     const parent = issueWithTopic(store, "Versioned historical card", { type: "agent", id: agentId });
     const { child, task } = childWithTask(store, agentId, parent.id);
-    const decision = raiseDecision(store, agentId, child.id, task.id, { kind: "production_change", title: "Current route only", options: ["yes"] });
+    const decision = raiseDecision(store, agentId, child.id, task.id, { kind: "criteria", title: "Current route only", options: ["yes"] });
+    const owner = parentTask(store, agentId, parent.id);
+    escalateDecision(store, parent.id, decision.id, { type: "agent", id: agentId, taskId: owner.id });
+    expect(store.getQuestion(decision.id)).toMatchObject({ stage: "human", current_handler: null, route_revision: 2 });
     const first = sendCard(store, "om_route_one")!;
     const oldAction = questionCardAction(decodeDecisionCardBody(first.body)!.card)!;
+    expect(oldAction).toMatchObject({ message_id: decision.id, route_revision: 2 });
     const host = await daemonToken(store);
     const answer = (body: Record<string, unknown>) => app(store).request(`/api/daemon/messages/${decision.id}/answer`, { method: "POST", headers: { Authorization: `Bearer ${host.token}`, "content-type": "application/json" }, body: JSON.stringify(body) });
     const missingRevision = await answer({ answer: "yes", token: oldAction.t, operator_open_id: CARD_OPEN_ID });
     expect(missingRevision.status).toBe(400);
     expect(await missingRevision.text()).toContain("question_route_revision_required");
-    store.transferQuestion(decision.id, { expected_route_revision: 1, reason: "Explicitly reconfirm current responsibility" }, { type: "member", id: member.id });
+    // The escalated Q follows the parent's new execution owner automatically and stays with members.
+    store.updateIssue(parent.id, { assigneeType: "agent", assigneeId: store.createAgent({ name: "Replacement parent owner", provider: "codex", workspaceId: "local" }).id,
+      actorType: "member", actorId: member.id });
+    expect(store.getQuestion(decision.id)).toMatchObject({ stage: "human", current_handler: null, route_revision: 3 });
     const second = sendCard(store, "om_route_two")!;
     expect(second).toMatchObject({ kind: "decision_card", decisionId: decision.id });
     const currentAction = questionCardAction(decodeDecisionCardBody(second.body)!.card)!;
-    expect(currentAction).toMatchObject({ message_id: decision.id, route_revision: 2 });
+    expect(currentAction).toMatchObject({ message_id: decision.id, route_revision: 3 });
     expect(currentAction.t).not.toBe(oldAction.t);
-    const stale = await answer({ answer: "yes", token: oldAction.t, expected_route_revision: 1, operator_open_id: CARD_OPEN_ID });
+    const stale = await answer({ answer: "yes", token: oldAction.t, expected_route_revision: 2, operator_open_id: CARD_OPEN_ID });
     expect(stale.status).toBe(403);
     expect(store.getQuestion(decision.id)?.status).toBe("pending");
-    const current = await answer({ answer: "yes", token: currentAction.t, expected_route_revision: 2, operator_open_id: CARD_OPEN_ID });
+    const current = await answer({ answer: "yes", token: currentAction.t, expected_route_revision: 3, operator_open_id: CARD_OPEN_ID });
     expect(current.status, await current.clone().text()).toBe(200);
     expect(store.getQuestion(decision.id)?.answer?.actor).toEqual({ type: "member", id: member.id });
   });
@@ -602,7 +610,8 @@ describe("MUL-412 issue decision cards", () => {
     const { store, agentId } = scaffold();
     // No `prepareFeishuIssueTopicWithinTransaction`, so the binding exists
     // without a `reply_to_message_id`: there is no thread to reply into.
-    const parent = createResponsibleTestIssue(store, { title: "Unsown topic", workspaceId: "local", assigneeType: "agent", assigneeId: agentId, responsibleMemberId: "mem_local_local" });
+    const parent = createResponsibleTestIssue(store, { title: "Unsown topic", workspaceId: "local", assigneeType: "agent", assigneeId: agentId,
+      createdBy: store.getWorkspaceMember("mem_local_local")!.userId });
     // Seed the binding (so it is live and active) but leave its thread anchor
     // unset, which is what an Issue created before the topic root went out
     // looks like. The seed delivery itself is drained first so the queue is
@@ -639,7 +648,8 @@ describe("MUL-412 issue decision cards", () => {
     ).get()).toEqual({ n: 0 });
     // Skipped without a card: the skip activity is only for a missing topic.
     expect(store.listIssueActivity(parent.id).filter(entry => entry.type === "decision_card_skipped")).toHaveLength(0);
-    expect(store.getQuestion(decision.id)).toMatchObject({ status: "pending", stage: "human", wait_status: "none", current_handler: { type: "member", id: "mem_local_local" } });
+    // The human stage names nobody: any active member answers on the web.
+    expect(store.getQuestion(decision.id)).toMatchObject({ status: "pending", stage: "human", wait_status: "none", current_handler: null });
   });
 
   it("answers a card click through the same store write as the HTTP answer route", async () => {
@@ -921,7 +931,8 @@ describe("MUL-412 issue decision cards", () => {
        VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)`,
       ["fbs_same_app", "local", "cli_issue_decision", "ou_same_app", "on_same_app", "Sender member", now, now],
     );
-    store.updateIssue(parent.id, { responsibleMemberId: senderMember.id, actorType: "member", actorId: "mem_local_local" });
+    // The sender created the root, so the human-stage card names that member.
+    db!.run("UPDATE multiremi_issues SET created_by = ? WHERE id = ?", [senderUser.id, parent.id]);
     const decision = raiseDecision(store, agentId, child.id, task.id, { kind: "production_change", title: "Deploy?" });
     sendCard(store, "om_same_app", "ou_same_app")!;
     const host = await daemonToken(store);

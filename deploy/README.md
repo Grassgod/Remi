@@ -593,7 +593,7 @@ Compose files (steps 2, 3, 4, 5 and 7).
      from the public server. Those are container-to-container calls; today's
      rewrite and catch-all already leave them unreachable, and the explicit rule
      keeps that true through later routing changes.
-   - Hosts that applied stage A before ADR 0017 still carry the retired
+   - Hosts that applied stage A before ADR 0018 still carry the retired
      `session-archive-direct` include and a server-level
      `proxy_set_header X-Remi-Archive-Direct-Route` line. Session archives no
      longer exist, so remove both from the live Nginx files once, run
@@ -718,7 +718,7 @@ is left pointing at a process that is about to disappear:
 Restore `$NGINX_MAIN` together with `$NGINX_SITE` whenever A step 5 edited it:
 the site file's locations name the `multica_api_runtime` upstream that
 `$NGINX_MAIN` defines, so restoring only the upstream side breaks `nginx -t`.
-A backup taken before ADR 0017 may still contain the retired `session-archive-direct`
+A backup taken before ADR 0018 may still contain the retired `session-archive-direct`
 include, which also names that upstream; strip it from the restored file (A step 5)
 before running `nginx -t`.
 

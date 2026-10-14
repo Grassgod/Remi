@@ -2294,32 +2294,6 @@ export const CLI_CAPABILITIES_RUNTIME = {
         "jsonl"
       ]
     },
-    "issue.done-grant.add": {
-      "command": "remi issue done-grant add",
-      "auth": [
-        "human",
-        "task"
-      ],
-      "capability": "issue.done-grant.add",
-      "output": [
-        "table",
-        "json",
-        "jsonl"
-      ]
-    },
-    "issue.done-grant.remove": {
-      "command": "remi issue done-grant remove",
-      "auth": [
-        "human",
-        "task"
-      ],
-      "capability": "issue.done-grant.remove",
-      "output": [
-        "table",
-        "json",
-        "jsonl"
-      ]
-    },
     "issue.reaction.list": {
       "command": "remi issue reaction list",
       "auth": [
@@ -2864,42 +2838,6 @@ export const CLI_CAPABILITIES_RUNTIME = {
         "jsonl"
       ]
     },
-    "issue.responsibility-unassigned.list": {
-      "command": "remi issue responsibility-unassigned list",
-      "auth": [
-        "human"
-      ],
-      "capability": "issue.responsibility-unassigned.list",
-      "output": [
-        "table",
-        "json",
-        "jsonl"
-      ]
-    },
-    "issue.responsibility-unassigned.map": {
-      "command": "remi issue responsibility-unassigned map",
-      "auth": [
-        "human"
-      ],
-      "capability": "issue.responsibility-unassigned.map",
-      "output": [
-        "table",
-        "json",
-        "jsonl"
-      ]
-    },
-    "autopilot.responsible.set": {
-      "command": "remi autopilot responsible set",
-      "auth": [
-        "human"
-      ],
-      "capability": "autopilot.responsible.set",
-      "output": [
-        "table",
-        "json",
-        "jsonl"
-      ]
-    },
     "issue.responsibility": {
       "command": "remi issue responsibility",
       "auth": [
@@ -2913,18 +2851,6 @@ export const CLI_CAPABILITIES_RUNTIME = {
         "jsonl"
       ]
     },
-    "issue.responsible.set": {
-      "command": "remi issue responsible set",
-      "auth": [
-        "human"
-      ],
-      "capability": "issue.responsible.set",
-      "output": [
-        "table",
-        "json",
-        "jsonl"
-      ]
-    },
     "issue.question.list": {
       "command": "remi issue question list",
       "auth": [
@@ -2932,69 +2858,6 @@ export const CLI_CAPABILITIES_RUNTIME = {
         "task"
       ],
       "capability": "issue.question.list",
-      "output": [
-        "table",
-        "json",
-        "jsonl"
-      ]
-    },
-    "issue.delivery.list": {
-      "command": "remi issue delivery list",
-      "auth": [
-        "human",
-        "task"
-      ],
-      "capability": "issue.delivery.list",
-      "output": [
-        "table",
-        "json",
-        "jsonl"
-      ]
-    },
-    "issue.delivery.authorize": {
-      "command": "remi issue delivery authorize",
-      "auth": [
-        "human"
-      ],
-      "capability": "issue.delivery.authorize",
-      "output": [
-        "table",
-        "json",
-        "jsonl"
-      ]
-    },
-    "issue.delivery.submit": {
-      "command": "remi issue delivery submit",
-      "auth": [
-        "task"
-      ],
-      "capability": "issue.delivery.submit",
-      "output": [
-        "table",
-        "json",
-        "jsonl"
-      ]
-    },
-    "issue.delivery.accept": {
-      "command": "remi issue delivery accept",
-      "auth": [
-        "human",
-        "task"
-      ],
-      "capability": "issue.delivery.accept",
-      "output": [
-        "table",
-        "json",
-        "jsonl"
-      ]
-    },
-    "issue.delivery.return": {
-      "command": "remi issue delivery return",
-      "auth": [
-        "human",
-        "task"
-      ],
-      "capability": "issue.delivery.return",
       "output": [
         "table",
         "json",
@@ -3033,19 +2896,6 @@ export const CLI_CAPABILITIES_RUNTIME = {
         "task"
       ],
       "capability": "message.question.escalate",
-      "output": [
-        "table",
-        "json",
-        "jsonl"
-      ]
-    },
-    "message.question.transfer": {
-      "command": "remi message question transfer",
-      "auth": [
-        "human",
-        "task"
-      ],
-      "capability": "message.question.transfer",
       "output": [
         "table",
         "json",

@@ -1,7 +1,7 @@
 "use client";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ChevronRight, CircleHelp, LoaderCircle } from "lucide-react";
+import { ChevronDown, ChevronRight, CircleHelp, LoaderCircle } from "lucide-react";
 import { api } from "@multiremi/core/api";
 import type { Message } from "@multiremi/core/api/schemas";
 import { parseTaskHumanRequest } from "@multiremi/core/chat/human-requests";
@@ -15,63 +15,70 @@ import { HumanRequestCard } from "../../common/human-request-dock";
 import { MessageHeader } from "../../common/message-header";
 import { Markdown } from "../../common/markdown";
 import { useT } from "../../i18n";
-import { UnifiedQuestionCard } from "../../common/question-card";
+import { UnifiedQuestionCard, questionSection } from "../../common/question-card";
 import { linkedQuestionId } from "../../common/linked-question";
-interface IssueDecisionPanelProps {
-  issueId: string; pendingCount: number; showOwnerOnly?: boolean; canAnswer: boolean;
-  getActorName: (type: string, id: string) => string;
-}
-export function IssueDecisionBanner({
-  count,
-  showOwnerOnly = false,
-  onOpen,
-}: {
-  count: number;
-  showOwnerOnly?: boolean;
-  onOpen: () => void;
-}) {
+
+type ActorName = (type: string, id: string) => string;
+
+/** The notice-slot bar. Only this Issue's questions at the human stage count; Agent-held ones never do. */
+export function IssueDecisionBanner({ count, onOpen }: { count: number; onOpen: () => void }) {
   const { t } = useT("issues");
-  if (count <= 0 && !showOwnerOnly) return null;
+  if (count <= 0) return null;
   return (
-    <button
-      type="button"
-      className="flex h-10 w-full min-w-0 items-center gap-2 text-left text-sm text-blue-700 hover:text-blue-800 dark:text-blue-300 dark:hover:text-blue-200"
-      data-issue-decision-banner
-      onClick={onOpen}
-    >
+    <div className="flex h-10 w-full min-w-0 items-center gap-2 text-sm text-blue-700 dark:text-blue-300" data-issue-decision-banner>
       <CircleHelp className="size-4 shrink-0" />
-      <span className="min-w-0 flex-1 truncate font-medium">
-        {count > 0
-          ? t(($) => $.responsibility.pending, { count })
-          : t(($) => $.responsibility.history)}
-      </span>
-      <ChevronRight className="size-4 shrink-0" />
-    </button>
+      <span className="min-w-0 flex-1 truncate font-medium">{t(($) => $.responsibility.pending, { count })}</span>
+      <Button size="sm" className="h-7 shrink-0" aria-haspopup="dialog" onClick={onOpen}>{t(($) => $.responsibility.answer_action)}</Button>
+    </div>
   );
 }
 
-export function IssueDecisionPanel({ issueId, pendingCount, showOwnerOnly = false, getActorName }: IssueDecisionPanelProps) {
+/**
+ * The Issue's question drawer, over the page rather than in the rail. Its count
+ * matches the banner: this Issue's own questions at the human stage. Those come
+ * first, then sub-issues' human-stage questions, then those Agents still hold;
+ * answered and closed ones stay folded. A question shown as pending keeps its
+ * place while the drawer is open, and callers keep the drawer mounted outside
+ * the notice slot, so answering the last question hides the banner but leaves
+ * its result on screen.
+ */
+export function IssueDecisionDrawer({ issueId, open, onOpenChange, pendingCount = 0, getActorName }: {
+  issueId: string; open: boolean; onOpenChange: (open: boolean) => void; pendingCount?: number; getActorName: ActorName;
+}) {
   const { t } = useT("issues");
   const wsId = useWorkspaceId();
-  const [open, setOpen] = useState(false);
   const query = useQuery({ ...issueQuestionsOptions(wsId, issueId), enabled: open });
-  const pendingQuestions = query.data?.filter(question => question.status === "pending") ?? [];
-  const historyQuestions = query.data?.filter(question => question.status !== "pending") ?? [];
-  return <><IssueDecisionBanner count={pendingCount} showOwnerOnly={showOwnerOnly} onOpen={() => setOpen(true)} />
-    <DecisionPanel open={open} onOpenChange={setOpen} title={t($ => $.responsibility.history)}
-      description={t($ => $.responsibility.pending, { count: query.data?.filter(question => question.status === "pending").length ?? pendingCount })}>
-        {query.isPending ? <DecisionListSkeleton /> : query.isError ? <div className="flex min-h-28 flex-col items-center justify-center gap-2 text-center"><p role="alert" className="text-sm text-destructive">{t($ => $.detail.decision_load_failed)}</p>
-          <Button size="sm" variant="outline" onClick={() => void query.refetch()}>{t($ => $.detail.decision_retry)}</Button></div>
-          : query.data?.length ? <div className="space-y-6">
-            {pendingQuestions.length > 0 && <DecisionSection title={t($ => $.responsibility.pending_section)}>
-              {pendingQuestions.map(question => <UnifiedQuestionCard key={question.id} question={question} getActorName={getActorName} />)}
-            </DecisionSection>}
-            {historyQuestions.length > 0 && <DecisionSection title={t($ => $.responsibility.history_section)}>
-              {historyQuestions.map(question => <UnifiedQuestionCard key={question.id} question={question} getActorName={getActorName} />)}
-            </DecisionSection>}
-          </div>
-          : <p className="text-sm text-muted-foreground">{t($ => $.responsibility.empty)}</p>}
-    </DecisionPanel></>;
+  const [historyOpen, setHistoryOpen] = useState(false);
+  useEffect(() => { if (!open) setHistoryOpen(false); }, [open]);
+  const shown = useRef(new Set<string>());
+  if (!open) shown.current.clear();
+  const questions = query.data ?? [];
+  if (open) for (const question of questions) if (questionSection(question) === "pending") shown.current.add(question.id);
+  const kept = questions.filter(question => shown.current.has(question.id));
+  const own = kept.filter(question => question.source_issue_id === issueId);
+  const subIssues = kept.filter(question => question.source_issue_id !== issueId);
+  const agent = questions.filter(question => !shown.current.has(question.id) && questionSection(question) === "agent");
+  const history = questions.filter(question => !shown.current.has(question.id) && questionSection(question) === "history");
+  const count = query.data ? own.filter(question => question.status === "pending" && question.stage === "human").length : pendingCount;
+  const cards = (list: typeof questions) => list.map(question => <UnifiedQuestionCard key={question.id} question={question} getActorName={getActorName} />);
+  const section = (title: string, list: typeof questions) => list.length > 0 && <DecisionSection title={title}>{cards(list)}</DecisionSection>;
+  const historyTitle = t($ => $.responsibility.history_section);
+  return <DecisionPanel open={open} onOpenChange={onOpenChange} title={t($ => $.responsibility.drawer_title)}
+    description={count > 0 ? t($ => $.responsibility.pending, { count }) : t($ => $.responsibility.pending_none)}>
+    {query.isPending ? <DecisionListSkeleton /> : query.isError ? <div className="flex min-h-28 flex-col items-center justify-center gap-2 text-center"><p role="alert" className="text-sm text-destructive">{t($ => $.detail.decision_load_failed)}</p>
+      <Button size="sm" variant="outline" onClick={() => void query.refetch()}>{t($ => $.detail.decision_retry)}</Button></div>
+      : questions.length ? <div className="space-y-6">
+        {section(t($ => $.responsibility.pending_section), own)}
+        {section(t($ => $.responsibility.sub_issue_pending_section), subIssues)}
+        {section(t($ => $.responsibility.agent_section), agent)}
+        {history.length > 0 && <section className="space-y-2.5" aria-label={historyTitle}>
+          <Button size="xs" variant="ghost" className="-ml-2 text-xs font-semibold text-muted-foreground" aria-expanded={historyOpen}
+            onClick={() => setHistoryOpen(value => !value)}>{historyOpen ? <ChevronDown /> : <ChevronRight />}{historyTitle} ({history.length})</Button>
+          {historyOpen && cards(history)}
+        </section>}
+      </div>
+      : <p className="text-sm text-muted-foreground">{t($ => $.responsibility.empty)}</p>}
+  </DecisionPanel>;
 }
 
 export function MessageDecisionCard(props: { message: Message; canAnswer: boolean; getActorName?: (type: string, id: string) => string }) {

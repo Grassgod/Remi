@@ -108,7 +108,7 @@ Options:
                          use --ref <type>:<value> as a citation; see below)
   --provider <name>      Limit daemon to one provider: claude, codex or antigravity (default: auto-detect)
   --workspace <id>       Workspace id (default: local)
-  --responsible-member <id>  Explicit human responsibility on issue create/update
+  --responsible-member <id>  Deprecated no-op on issue create/update: Issues no longer designate a human
   --runtime-id <id>      Reuse a fixed runtime id
   --daemon-id <id>       Stable daemon id for local directory resources
   --device-name <name>   Device display name (defaults to hostname-user)

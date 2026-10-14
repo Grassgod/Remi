@@ -30,8 +30,7 @@ pendingTurnBackendTests('MUL-508 main parity', fixture => {
     it(`#5: ${relation} retries ${state} work with a stable turn and committed disclosure`,async()=>{
       const f=await scaffold();f.status(state);
       if(relation==='leader'){
-        const human=f.store.resolveIssueResponsibility(f.child.id).rootHuman!;
-        f.store.updateIssue(f.child.id,{parentIssueId:null,responsibleMemberId:human.id,actorType:'member',actorId:human.id});
+        f.store.updateIssue(f.child.id,{parentIssueId:null,actorType:'member',actorId:'mem_local_local'});
         f.store.createSquad({name:'Team',leaderId:f.controller.id,memberIds:[f.worker.id]});
       }
       expect((await f.request(`/api/turns/${f.turn.id}/retry`,{})).data.code).toBe('organizer_report_only');
@@ -264,9 +263,10 @@ pendingTurnBackendTests('MUL-508 main parity', fixture => {
     const parent=createResponsibleTestIssue(store, {title:'Unavailable parent',assigneeType:'agent',assigneeId:agent.id});
     const child=createResponsibleTestIssue(store, {title:'Child',parentIssueId:parent.id,status:'in_progress'});
     store.archiveAgent(agent.id);
-    // An unavailable reviewer cannot accept a new delivery; the supported
-    // blocked report must still retain the same observable routing failure.
-    expect(()=>store.updateIssue(child.id,{status:'done'})).toThrow('Close the Issue by accepting its specific delivery');
+    // An archived parent owner no longer executes the parent, so it cannot close the
+    // child; the supported blocked report still retains the observable routing failure.
+    expect(()=>store.updateIssue(child.id,{status:'done',actorType:'agent',actorId:agent.id})).toThrow('Only the execution owner of the parent Issue, or a member');
+    expect(store.getIssue(child.id)?.status).toBe('in_progress');
     store.updateIssue(child.id,{status:'blocked'});
     expect(store.getIssue(child.id)?.status).toBe('blocked');
     expect(store.listIssueActivity(parent.id).find(row=>row.type==='child_done_parent_skipped')?.data).toMatchObject({reason:'agent_unavailable',outcome:'blocked'});

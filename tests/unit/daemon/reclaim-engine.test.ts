@@ -1801,7 +1801,7 @@ describe("legacy directories", () => {
 
   test("a retained worktree keeps its commits through expiry although the new cache already had its repository", async () => {
     const f = reclaimFixture();
-    // The pre-ADR-0017 cache beside the new one the fixture made: the sweep cannot merge the two.
+    // The pre-ADR-0018 cache beside the new one the fixture made: the sweep cannot merge the two.
     const oldBare = join(f.root, ".repos", "local", "repo-0123456789abcdef.git");
     mkdirSync(dirname(oldBare), { recursive: true });
     git(f.scratch, ["clone", "--bare", join(f.scratch, "origin.git"), oldBare]);

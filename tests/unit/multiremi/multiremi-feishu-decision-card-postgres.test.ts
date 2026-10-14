@@ -102,8 +102,9 @@ describe.skipIf(!available)("Feishu decision cards on Postgres (MUL-407)", () =>
     store.updateWorkspace(workspaceId, {
       settings: { ...workspace.settings, issueTopics: { enabled: true, chatId: "oc_pg" } },
     });
+    // The person created the root: a human-stage card goes to the root creator.
     const issue = createResponsibleTestIssue(store, { title: `PG ${workspaceSeq}`, workspaceId, assigneeType: "agent", assigneeId: agentId,
-      responsibleMemberId: member.id });
+      createdBy: person.id });
     store.prepareFeishuIssueTopicWithinTransaction(issue);
     const root = store.claimFeishuBotOutbound(workspaceId, runtimeId)!;
     store.reportFeishuBotOutbound(workspaceId, runtimeId, root.id, {

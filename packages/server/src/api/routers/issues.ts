@@ -9,8 +9,6 @@ import {
   canCurrentUserAccessAgent,
   canCurrentUserAccessChatTask,
   currentTaskParentId,
-  taskIssueResponsibleMember,
-  taskIssueResponsibilitySourceAudit,
   denyCurrentUserWorkspaceAccess,
   denyRestrictedTaskIssueCreation,
   isActiveTaskStatus,
@@ -33,7 +31,6 @@ import {
   readJson,
   readJsonStrict,
   requireWorkspaceAdmin,
-  requireHumanWorkspaceAdmin,
   safeAssignIssue,
   safeQuickCreateIssue,
   safeRerunIssue,
@@ -92,7 +89,6 @@ import {
   taskPublicResponse,
 } from "../wire/index.js";
 import type { MultiremiStore } from "@multiremi/store/store.js";
-import { ParentDoneGrantOwnerError } from "@multiremi/store/repos/issues-repo.js";
 import { hasAnyField, resolveOptionalStringField } from "@multiremi/store/helpers.js";
 import type {
   AddSessionParticipantInput,
@@ -124,7 +120,6 @@ import {
 import { resolveIssueArchiveSettings } from "@multiremi/store/issue-archive.js";
 import type { RouterDeps } from "./deps.js";
 import { IssueDecisionError } from "@multiremi/store/repos/issues-repo.js";
-import { IssueDeliveryError } from '../../store/issue-deliveries.js';
 
 function decisionActor(c: Context, store: MultiremiStore, workspaceId: string): IssueDecisionActor | null {
   const token = currentTaskAccessToken(c);
@@ -247,113 +242,14 @@ function existingIssueDispatchResponse(store: MultiremiStore, issue: MultiremiIs
 
 export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
   const { store } = deps;
-  const denyTechnicalResponsibilityWrite=(c:Context,input:{responsibleMemberId?:string|null;responsible_member_id?:string|null;parentIssueId?:string|null;parent_issue_id?:string|null},issue?:MultiremiIssue):Response|null=>{
-    const token=currentAccessToken(c);
-    if(token?.type!=='task'&&token?.type!=='daemon')return null;
-    const parentField=hasRequestField(input,'parentIssueId','parent_issue_id');
-    const nextParent=input.parentIssueId??input.parent_issue_id??null;
-    if(parentField && nextParent && (!issue||nextParent!==issue.parentIssueId)) {
-      const parent=store.resolveIssueResponsibility(nextParent);
-      const previous=issue?store.resolveIssueResponsibility(issue.id):null;
-      const source=previous?previous.unresolved.length?null:previous.rootHuman?.id:token.type==='task'?taskIssueResponsibleMember(c,store):null;
-      if(parent.unresolved.length||!source||parent.rootHuman?.id!==source)return c.json({error:'A human must confirm moving work to a different root responsibility',code:'human_issue_responsibility_required'},403);
-    }
-    const explicit=hasRequestField(input,'responsibleMemberId','responsible_member_id');
-    const target=input.responsibleMemberId??input.responsible_member_id??null;
-    if(explicit) {
-      const inherited=issue?.parentIssueId??input.parentIssueId??input.parent_issue_id;
-      const source=issue?issue.responsibleMemberId??null:token.type==='task'?taskIssueResponsibleMember(c,store):null;
-      if((inherited&&target===null)||(token.type==='task'&&target!==null&&target===source))return null;
-      return c.json({error:'A human credential must choose or change root responsibility; Task roots inherit their verified source',code:'human_issue_responsibility_required'},403);
-    }
-    return null;
-  };
-
-  app.get('/api/workspaces/:workspaceId/issue-responsibility-migration',(c)=>{
-    const workspaceId=c.req.param('workspaceId');
-    const denied=denyCurrentUserWorkspaceAccess(c,store,workspaceId)??requireHumanWorkspaceAdmin(c,store,workspaceId);if(denied)return denied;
-    const limit=Number(c.req.query('limit')??50),offset=Number(c.req.query('offset')??0);
-    if(!Number.isInteger(limit)||limit<1||limit>100||!Number.isInteger(offset)||offset<0)return c.json({error:'Use limit 1..100 and a non-negative offset'},400);
-    return c.json(store.listIssueResponsibilityMigration(workspaceId,{limit,offset}));
-  });
-  app.post('/api/workspaces/:workspaceId/issue-responsibility-migration/map',async(c)=>{
-    const workspaceId=c.req.param('workspaceId');
-    const denied=denyCurrentUserWorkspaceAccess(c,store,workspaceId)??requireHumanWorkspaceAdmin(c,store,workspaceId);if(denied)return denied;
-    const actor=decisionActor(c,store,workspaceId);if(!actor||actor.type!=='member')return c.json({error:'A human administrator must confirm the mapping'},403);
-    const input=await readJsonStrict<import('@multiremi/contracts').MapIssueResponsibilityInput>(c);
-    if(isJsonApiError(input))return c.json({error:input.apiError},input.statusCode);
-    try{return c.json(store.mapIssueResponsibility(workspaceId,input,actor));}
-    catch(error){if(error instanceof IssueDeliveryError)return c.json({error:error.message,code:error.code},error.status);throw error;}
-  });
-
+  // The execution-owner chain and its unavailable reasons. Deliveries, the
+  // root-human mapping and parent-done grants are retired (see retired-cli-routes).
   app.get('/api/issues/:id/responsibility', (c) => {
     const issue = issueFromParam(store,c,'id','compat');
     if (!issue) return c.json({error:'issue not found'},404);
     const denied = denyCurrentUserWorkspaceAccess(c,store,issue.workspaceId);
     if (denied) return denied;
     return c.json(store.resolveIssueResponsibility(issue.id));
-  });
-  app.get('/api/issues/:id/deliveries', (c) => {
-    const issue = issueFromParam(store,c,'id','compat');
-    if (!issue) return c.json({error:'issue not found'},404);
-    const denied = denyCurrentUserWorkspaceAccess(c,store,issue.workspaceId);
-    if (denied) return denied;
-    const limit = Number(c.req.query('limit') ?? 50);
-    if (!Number.isInteger(limit) || limit < 1 || limit > 100) return c.json({error:'limit must be an integer from 1 to 100'},400);
-    try {
-      const deliveries=store.listIssueDeliveries(issue.id,{limit:limit+1,before:c.req.query('before')});
-      const hasMore=deliveries.length>limit;
-      if(hasMore)deliveries.pop();
-      return c.json({deliveries,nextCursor:hasMore?deliveries.at(-1)!.id:null});
-    } catch(error) { if(error instanceof IssueDeliveryError)return c.json({error:error.message,code:error.code},error.status);throw error; }
-  });
-  app.post('/api/issues/:id/deliveries', async (c) => {
-    const issue = issueFromParam(store,c,'id','compat');
-    if (!issue) return c.json({error:'issue not found'},404);
-    const denied = denyCurrentUserWorkspaceAccess(c,store,issue.workspaceId);
-    if (denied) return denied;
-    const actor = decisionActor(c,store,issue.workspaceId);
-    if (!actor) return c.json({error:'authenticated responsibility holder required'},403);
-    try {
-      const input = await readJsonStrict<import('@multiremi/contracts').SubmitIssueDeliveryInput>(c);
-      if (isJsonApiError(input)) return c.json({error:input.apiError},input.statusCode);
-      return c.json({delivery:store.submitIssueDelivery(issue.id,input,actor)},201);
-    } catch (error) {
-      if (error instanceof IssueDeliveryError) return c.json({error:error.message,code:error.code},error.status);
-      const response = issueErrorResponse(c,error);
-      if (response) return response;
-      throw error;
-    }
-  });
-  app.post('/api/issues/:id/deliveries/:deliveryId/respond', async (c) => {
-    const issue = issueFromParam(store,c,'id','compat');
-    if (!issue) return c.json({error:'issue not found'},404);
-    const denied = denyCurrentUserWorkspaceAccess(c,store,issue.workspaceId);
-    if (denied) return denied;
-    const actor = decisionActor(c,store,issue.workspaceId);
-    if (!actor) return c.json({error:'authenticated responsibility holder required'},403);
-    try {
-      const input = await readJsonStrict<import('@multiremi/contracts').RespondIssueDeliveryInput>(c);
-      if (isJsonApiError(input)) return c.json({error:input.apiError},input.statusCode);
-      return c.json({delivery:store.respondIssueDelivery(issue.id,c.req.param('deliveryId'),input,actor),issue:store.getIssue(issue.id)});
-    } catch (error) {
-      if (error instanceof IssueDeliveryError) return c.json({error:error.message,code:error.code},error.status);
-      const response = issueErrorResponse(c,error);
-      if (response) return response;
-      throw error;
-    }
-  });
-  app.post('/api/issues/:id/deliveries/:deliveryId/authorize', async (c) => {
-    const issue = issueFromParam(store,c,'id','compat');
-    if (!issue) return c.json({error:'issue not found'},404);
-    const denied = denyCurrentUserWorkspaceAccess(c,store,issue.workspaceId);
-    if (denied) return denied;
-    const actor = decisionActor(c,store,issue.workspaceId);
-    if (!actor) return c.json({error:'authenticated responsible human required'},403);
-    const input = await readJsonStrict<{agentId:string|null;revision:string}>(c);
-    if (isJsonApiError(input)) return c.json({error:input.apiError},input.statusCode);
-    try { return c.json({delivery:store.authorizeIssueDelivery(issue.id,c.req.param('deliveryId'),input.agentId,input.revision,actor)}); }
-    catch (error) { if (error instanceof IssueDeliveryError) return c.json({error:error.message,code:error.code},error.status); throw error; }
   });
 
   const lockAutoTitleAfterHumanEdit = (c: Context, issue: MultiremiIssue, input: UpdateIssueInput): void => {
@@ -682,9 +578,6 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
 
   app.post("/api/multiremi/issues/batch-update", async (c) => {
     const body = await readJson<BatchUpdateIssuesInput>(c);
-    for(const id of body.issueIds??body.issue_ids??[]) {
-      const responsibilityDenied=denyTechnicalResponsibilityWrite(c,body.updates??{},store.getIssue(id)??undefined);if(responsibilityDenied)return responsibilityDenied;
-    }
     // MUL-400 E1: batch update is the third status writer, so it takes the same
     // member-only rule for `force` as the two PATCH routes.
     const forceDenied = denyTaskIdentityIssueForce(c, body.updates ?? {});
@@ -715,9 +608,6 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
   });
   app.post("/api/issues/batch-update", async (c) => {
     const body = await readJson<BatchUpdateIssuesInput>(c);
-    for(const id of body.issueIds??body.issue_ids??[]) {
-      const responsibilityDenied=denyTechnicalResponsibilityWrite(c,body.updates??{},store.getIssue(id)??undefined);if(responsibilityDenied)return responsibilityDenied;
-    }
     try {
       const input = issueBatchUpdateCompatibilityInput(body);
       const forceDenied = denyTaskIdentityIssueForce(c, body.updates ?? {});
@@ -779,13 +669,12 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     const policyDenied = denyRestrictedTaskIssueCreation(c, store);
     if (policyDenied) return policyDenied;
     const body = await readJson<CreateIssueWithTaskInput>(c);
-    const responsibilityDenied=denyTechnicalResponsibilityWrite(c,body);if(responsibilityDenied)return responsibilityDenied;
     const workspaceId = resolveRequestWorkspaceId(c, store, body.workspaceId ?? body.workspace_id);
     if (workspaceId instanceof Response) return workspaceId;
     const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
     if (denied) return denied;
     const assigneeType = body.assigneeType ?? body.assignee_type ?? (body.agentId ? "agent" : null);
-    if(assigneeType==='member')return c.json({error:'Choose an Agent or team Leader for execution; configure the final human through responsible_member_id',code:'issue_execution_owner_required'},409);
+    if(assigneeType==='member')return c.json({error:'Choose an Agent or team Leader as the execution owner',code:'issue_execution_owner_required'},409);
     assertRuntimeWorkspaceAccess(c, store, body.runtimeWorkspaceId ?? body.runtime_workspace_id, workspaceId);
     const assigneeId = body.assigneeId ?? body.assignee_id ?? body.agentId ?? null;
     const dispatchDenied = denySideSessionAssigneeDispatch(c, store, workspaceId, assigneeType, assigneeId);
@@ -796,18 +685,15 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     const sourceStripped = isAnonymousCompatibilityRequest(c)
       ? body
       : stripServerOwnedIssueSourceFields(body);
-    // Creator and implicit human responsibility come from the credential.
-    // Agent-created roots inherit only their actual source Issue's explicit human.
+    // The creator comes from the credential; Task and daemon credentials record
+    // none. No human responsibility is required or inferred.
     let issue: MultiremiIssue;
     try {
       issue = store.createIssue({
         ...stripServerOwnedIssueCreateFields(sourceStripped),
-        responsibilitySourceAudit:taskIssueResponsibilitySourceAudit(c,store),
         blockedBy: body.blockedBy ?? body.blocked_by,
         workspaceId,
         createdBy: currentTaskAccessToken(c) || currentAccessToken(c)?.type==='daemon' ? null : authenticatedRequestUserId(c) ?? currentRequestUserId(c),
-        responsibleMemberId: body.responsibleMemberId ?? body.responsible_member_id
-          ?? (!(body.parentIssueId ?? body.parent_issue_id) && currentTaskAccessToken(c) ? taskIssueResponsibleMember(c,store) : undefined),
         assigneeType: null,
         assignee_type: null,
         assigneeId: null,
@@ -843,7 +729,6 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     const body = await readJsonStrict<CreateIssueWithTaskInput>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
     if (!String(body.title ?? "").trim()) return c.json({ error: "title is required" }, 400);
-    const responsibilityDenied=denyTechnicalResponsibilityWrite(c,body);if(responsibilityDenied)return responsibilityDenied;
     const workspaceId = resolveRequestWorkspaceId(c, store, body.workspace_id ?? c.req.query("workspace_id"));
     if (workspaceId instanceof Response) return workspaceId;
     try {
@@ -946,18 +831,15 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     const policyDenied = denyRestrictedTaskIssueCreation(c, store);
     if (policyDenied) return policyDenied;
     const body = await readJson<QuickCreateIssueInput>(c);
-    const responsibilityDenied=denyTechnicalResponsibilityWrite(c,body);if(responsibilityDenied)return responsibilityDenied;
     const workspaceId = resolveRequestWorkspaceId(c, store, body.workspaceId ?? body.workspace_id);
     if (workspaceId instanceof Response) return workspaceId;
     const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
     if (denied) return denied;
     assertRuntimeWorkspaceAccess(c, store, body.runtimeWorkspaceId ?? body.runtime_workspace_id, workspaceId);
-    // Human responsibility uses the verified requester, never a body-supplied requester.
+    // The requester is the verified credential, never a body-supplied requester.
     const result = safeQuickCreateIssue(store, {
       ...stripServerOwnedQuickCreateFields(body),
-      responsibilitySourceAudit:taskIssueResponsibilitySourceAudit(c,store),
       workspaceId,
-      responsibleMemberId:body.responsibleMemberId??body.responsible_member_id??(!(body.parentIssueId??body.parent_issue_id)&&currentTaskAccessToken(c)?taskIssueResponsibleMember(c,store):undefined),
       requesterId: currentTaskAccessToken(c) || currentAccessToken(c)?.type==='daemon' ? null : authenticatedRequestUserId(c) ?? currentRequestUserId(c),
     });
     if ("error" in result) return c.json({ error: result.error, ...('code' in result ? {code:result.code} : {}) }, 'status' in result ? result.status ?? 400 : 400);
@@ -974,14 +856,11 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     const policyDenied = denyRestrictedTaskIssueCreation(c, store);
     if (policyDenied) return policyDenied;
     const body = await readJson<QuickCreateIssueInput>(c);
-    const responsibilityDenied=denyTechnicalResponsibilityWrite(c,body);if(responsibilityDenied)return responsibilityDenied;
     const workspaceId = resolveRequestWorkspaceId(c, store, body.workspace_id ?? c.req.query("workspace_id"));
     if (workspaceId instanceof Response) return workspaceId;
     const input = {
       ...stripServerOwnedQuickCreateFields(issueQuickCreateCompatibilityInput(body)),
-      responsibilitySourceAudit:taskIssueResponsibilitySourceAudit(c,store),
       workspaceId,
-      responsibleMemberId:body.responsibleMemberId??body.responsible_member_id??(!(body.parentIssueId??body.parent_issue_id)&&currentTaskAccessToken(c)?taskIssueResponsibleMember(c,store):undefined),
       requesterId: currentTaskAccessToken(c) || currentAccessToken(c)?.type==='daemon' ? null : authenticatedRequestUserId(c) ?? currentRequestUserId(c),
     };
     const denied = denyCurrentUserWorkspaceAccess(c, store, input.workspaceId ?? input.workspace_id ?? "local");
@@ -1018,7 +897,6 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
         ...issue,
         tasks,
         child_count: issue.childProgress.total,
-        parent_done_grant: store.issueParentDoneGrantView(issue),
         pending_decision_count: store.countPendingIssueDecisions(issue.id),
         // MUL-400 E3: unmet prerequisites stop dispatch, so the detail surface
         // needs them in the same payload.
@@ -1348,42 +1226,12 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
       throw err;
     }
   });
-  for (const prefix of ["/api/issues/:id", "/api/multiremi/issues/:id"]) {
-    app.post(`${prefix}/parent-done-grant`, (c) => {
-      const issue = issueFromParam(store, c, "id", prefix.startsWith("/api/multiremi") ? undefined : "compat");
-      if (!issue) return c.json({ error: "issue not found" }, 404);
-      const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
-      if (denied) return denied;
-      if (issueMutationActivity(c).actorType !== "member" || currentTaskAccessToken(c)) {
-        return c.json({ error: "Only a member can authorize parent closure", code: "parent_done_grant_requires_member" }, 403);
-      }
-      try {
-        const updated = store.grantParentDone(issue.id, authenticatedRequestUserId(c) ?? currentRequestUserId(c));
-        return c.json({ issue: updated, parent_done_grant: store.issueParentDoneGrantView(updated) });
-      } catch (error) {
-        if (error instanceof ParentDoneGrantOwnerError) return c.json({ error: error.message, code: error.code }, 409);
-        throw error;
-      }
-    });
-    app.delete(`${prefix}/parent-done-grant`, (c) => {
-      const issue = issueFromParam(store, c, "id", prefix.startsWith("/api/multiremi") ? undefined : "compat");
-      if (!issue) return c.json({ error: "issue not found" }, 404);
-      const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
-      if (denied) return denied;
-      if (issueMutationActivity(c).actorType !== "member" || currentTaskAccessToken(c)) {
-        return c.json({ error: "Only a member can revoke parent closure", code: "parent_done_grant_requires_member" }, 403);
-      }
-      const updated = store.revokeParentDone(issue.id, authenticatedRequestUserId(c) ?? currentRequestUserId(c));
-      return c.json({ issue: updated, parent_done_grant: store.issueParentDoneGrantView(updated) });
-    });
-  }
   app.patch("/api/multiremi/issues/:id", async (c) => {
     const issue = issueFromParam(store, c);
     if (!issue) return c.json({ error: "issue not found" }, 404);
     const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
     if (denied) return denied;
     const body = await readJson<UpdateIssueInput>(c);
-    const responsibilityDenied=denyTechnicalResponsibilityWrite(c,body,issue);if(responsibilityDenied)return responsibilityDenied;
     const moveDenied = validateIssueWorkspaceMove(c, issue, body);
     if (moveDenied) return moveDenied;
     // MUL-400 E1: `force` is member-only; a run that sends it is rejected before
@@ -1428,7 +1276,6 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     if (denied) return denied;
     const body = await readJsonStrict<UpdateIssueInput>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
-    const responsibilityDenied=denyTechnicalResponsibilityWrite(c,body,issue);if(responsibilityDenied)return responsibilityDenied;
     const forceDenied = denyTaskIdentityIssueForce(c, body);
     if (forceDenied) return forceDenied;
     const { actorType, actorId } = issueMutationActivity(c);

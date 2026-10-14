@@ -1,5 +1,5 @@
 /**
- * One-time sweep of the pre-ADR-0017 workspace layout (ADR 0017, section 10).
+ * One-time sweep of the pre-ADR-0018 workspace layout (ADR 0018, section 10).
  *
  * Runs once at daemon start, before any task is claimed. It inspects every git
  * repository of the old layout like any tree the daemon deletes

@@ -68,7 +68,6 @@ export type AutopilotEventConfig =
   | AutopilotScmEventConfig;
 
 export interface Autopilot {
-  responsible_member_id?: string | null;
   id: string;
   workspace_id: string;
   title: string;
@@ -168,7 +167,6 @@ export interface AutopilotRun {
 }
 
 export interface CreateAutopilotRequest {
-  responsible_member_id?: string | null;
   title: string;
   description?: string;
   project_id?: string | null;
@@ -183,7 +181,6 @@ export interface CreateAutopilotRequest {
 }
 
 export interface UpdateAutopilotRequest {
-  responsible_member_id?: string | null;
   title?: string;
   description?: string | null;
   project_id?: string | null;

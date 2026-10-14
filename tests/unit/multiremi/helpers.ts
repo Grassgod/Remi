@@ -106,50 +106,37 @@ export function createLocalStore(): MultiremiStore {
   return store;
 }
 
-/** Explicit synthetic-human fixture for new Issues, never a Store default or legacy backfill. */
+/** Fixture Issue creation. Issues no longer designate a human: a deprecated
+ * `responsibleMemberId` is accepted, ignored and never stored. */
 export function createResponsibleTestIssue(store: MultiremiStore, input: CreateIssueInput): MultiremiIssue {
-  const parentId=input.parentIssueId??input.parent_issue_id;
-  if(parentId || Object.hasOwn(input,'responsibleMemberId') || Object.hasOwn(input,'responsible_member_id')) return store.createIssue(input);
-  return store.createIssue({...input,responsibleMemberId:explicitTestHuman(store,input.workspaceId??input.workspace_id??'local').id});
+  return store.createIssue(input);
 }
 
-function explicitTestHuman(store:MultiremiStore,workspaceId:string) {
-  const memberId=`test_root_human_${workspaceId}`;
-  const human=store.getWorkspaceMember(memberId)??store.createWorkspaceMember({id:memberId,name:'Explicit test root human',workspaceId,role:'member'});
-  if(human.archivedAt || human.workspaceId!==workspaceId)throw new Error('Synthetic fixture human is unavailable; configure an explicit fixture responsibility');
-  return human;
-}
-
-/** Explicit automation responsibility configuration, scoped to its actual fixture workspace. */
+/** Fixture Autopilot creation; a deprecated `responsibleMemberId` is accepted and ignored. */
 export function createResponsibleTestAutopilot(store:MultiremiStore,input:CreateAutopilotInput):MultiremiAutopilot {
-  if(Object.hasOwn(input,'responsibleMemberId')||Object.hasOwn(input,'responsible_member_id'))return store.createAutopilot(input);
-  return createResponsibleTestAutopilot(store, {...input,responsibleMemberId:explicitTestHuman(store,input.workspaceId??input.workspace_id??'local').id});
+  return store.createAutopilot(input);
 }
 
-/** Close through the real delivery API. Fixtures must explicitly supply an Agent execution owner. */
-export function prepareTestIssueDelivery(store: MultiremiStore, issueId: string, summary='Verified fixture delivery') {
-  const responsibility=store.resolveIssueResponsibility(issueId);
-  if(responsibility.unresolved.length || !responsibility.executionOwner || !responsibility.reviewOwner)throw new Error('Configure a complete test Issue responsibility before accepting its delivery');
-  const owner=responsibility.executionOwner;
-  const task=store.createTask({agentId:owner.id,issueId:owner.issueId,prompt:summary});
-  const delivery=store.submitIssueDelivery(issueId,{summary},{type:'agent',id:owner.id,taskId:task.id});
-  if(delivery.reviewUnavailableReason)throw new Error('Reopen the parent before preparing its acceptance fixture');
-  const reviewer=responsibility.reviewOwner;
-  const reviewerTask=reviewer.type==='agent'?(store.listTasksForIssue(reviewer.issueId).find(candidate=>
-    candidate.agentId===reviewer.id&&['queued','running','awaiting_human'].includes(candidate.status)&&!candidate.chatSessionId&&
-    !!candidate.issueSessionId&&store.getIssueSession(candidate.issueSessionId)?.isDefault===true&&store.getIssueSession(candidate.issueSessionId)?.inheritMode==='none')
-    ??store.createTask({agentId:reviewer.id,issueId:reviewer.issueId,prompt:'Review fixture delivery'})):null;
-  return {delivery,executionTask:task,actor:{type:reviewer.type,id:reviewer.id,...(reviewerTask?{taskId:reviewerTask.id}:{})}};
+/** An active real member of the fixture workspace, created on first use. */
+export function testWorkspaceMember(store: MultiremiStore, workspaceId: string) {
+  const memberId=`test_member_${workspaceId}`;
+  const member=store.getWorkspaceMember(memberId)??store.createWorkspaceMember({id:memberId,name:'Fixture member',workspaceId,role:'member'});
+  if(member.archivedAt || member.workspaceId!==workspaceId)throw new Error('Fixture member is unavailable; close the Issue with an explicit member');
+  return member;
 }
 
-export function acceptTestIssueDelivery(store: MultiremiStore, issueId: string, summary='Verified fixture delivery'): MultiremiIssue {
-  const {delivery,actor}=prepareTestIssueDelivery(store,issueId,summary);
-  store.respondIssueDelivery(issueId,delivery.id,{action:'accept',revision:delivery.responsibilityRevision},actor);
-  return store.getIssue(issueId)!;
+/** Close the Issue the way a real workspace member does: any member may set any
+ * Issue to done (the unfinished-child guard still applies). The name predates
+ * the removal of formal delivery and acceptance. */
+export function acceptTestIssueDelivery(store: MultiremiStore, issueId: string): MultiremiIssue {
+  const issue=store.getIssue(issueId);
+  if(!issue)throw new Error('Fixture Issue not found');
+  const member=testWorkspaceMember(store,issue.workspaceId);
+  return store.updateIssue(issueId,{status:'done',actorType:'member',actorId:member.id})!;
 }
 
 /** Seed a documented pre-responsibility snapshot, never a current business write.
- * No delivery receipt is invented; consumers must still expose legacy gaps. */
+ * Consumers must still expose legacy gaps. */
 export function seedHistoricalIssueFacts(store: MultiremiStore, issueId: string, facts: {
   status?: MultiremiIssue['status']; assigneeType?: MultiremiIssue['assigneeType']; assigneeId?: string|null;
 }): MultiremiIssue {
@@ -175,7 +162,7 @@ export function createHistoricalTestIssue(store: MultiremiStore,input:CreateIssu
 }
 
 /** Replay a pre-responsibility terminal fact into the notification consumer.
- * This cannot authorize current closure and deliberately creates no delivery receipt. */
+ * This is not a current closure; it bypasses the done rule on purpose. */
 export function replayHistoricalTestChildDone(store: MultiremiStore, issueId:string, statusChangeEventId?:string):void {
   const {db:database,ctx}=store as unknown as {db:import('@multiremi/store/db/postgres.js').SqlDatabase;ctx:StoreContext};
   const previous=store.getIssue(issueId)!;

@@ -1,5 +1,5 @@
 /**
- * Git operations behind workspace reclaim and restore (ADR 0017, section 6).
+ * Git operations behind workspace reclaim and restore (ADR 0018, section 6).
  *
  * Every call is an asynchronous `git` child process with a deadline, so a hung
  * repository can never stall the daemon's event loop. There is no file-count or

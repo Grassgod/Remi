@@ -4522,7 +4522,7 @@ export class MultiremiDaemon {
       this.assertWorkspaceRootOwner();
       await this.ensureRepoReady(workspaceId, repoUrl, request.signal);
       this.assertWorkspaceRootOwner();
-      // A subject's branch is its identity (ADR 0017): an on-demand checkout in its work directory uses
+      // A subject's branch is its identity (ADR 0018): an on-demand checkout in its work directory uses
       // the same branch as the daemon-prepared repositories, so a reclaimed subject's snapshot still
       // sits on the history the checkout starts from.
       const subjectId = subjectIdOfWorkDirectory(this.options.workspacesRoot, workDir);

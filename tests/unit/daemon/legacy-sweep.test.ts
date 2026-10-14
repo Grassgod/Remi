@@ -48,7 +48,7 @@ interface OldLayout {
   marker(directory: string, payload: Record<string, unknown>): void;
 }
 
-/** A workspaces root as the pre-ADR-0017 daemon left it: shared caches in dot directories. */
+/** A workspaces root as the pre-ADR-0018 daemon left it: shared caches in dot directories. */
 function oldLayout(): OldLayout {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "multiremi-legacy-sweep-")));
   roots.push(root);

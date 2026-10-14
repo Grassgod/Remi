@@ -115,7 +115,7 @@
       "reconnecting": "重连中",
       "queued": "排队中",
       "waiting_local_directory": "等待本地目录释放",
-      "awaiting_human": "等待人工审批",
+      "awaiting_human": "等待回答",
       "starting_up": "启动中",
       "thinking": "思考中",
       "typing": "输入中"

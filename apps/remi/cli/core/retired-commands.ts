@@ -68,6 +68,19 @@ const retiredCommands: Record<string, string> = {
   "session archive": "remi runtime storage <runtime>（Session 归档已取消，执行记录留在 daemon 本机）",
   "issue archive": "remi runtime storage <runtime>（Session 归档已取消，执行记录留在 daemon 本机）",
   "session config": "remi workspace storage get|set <workspace>（Session 归档设置已取消，存储策略见 workspace storage）",
+  // ADR 0017: no designated human, formal delivery or parent-done grant remains.
+  "issue delivery list": "remi issue get <issue>（正式交付已移除；执行负责人这一轮的最后一条回复就是总结）",
+  "issue delivery submit": "这一轮的最后一条回复就是总结；本轮结束后 Issue 自动进入 in_review",
+  "issue delivery accept": "remi issue status <issue> done；有问题用 remi message send <conversation> --to issue-owner --kind request",
+  "issue delivery return": "remi issue status <issue> done；有问题用 remi message send <conversation> --to issue-owner --kind request",
+  "issue delivery authorize": "remi issue status <child> done（父单执行负责人直接关闭子单）",
+  "issue responsibility-unassigned list": "remi issue responsibility <issue>（Issue 不再配置指定人类）",
+  "issue responsibility-unassigned map": "remi issue assign <issue> --to <agent|squad>（配置执行负责人）",
+  "issue responsible set": "remi issue assign <issue> --to <agent|squad>（Issue 不再指定人类，只配置执行负责人）",
+  "autopilot responsible set": "remi autopilot update <autopilot>（自动化建单不再需要指定人类）",
+  "issue done-grant add": "remi issue status <child> done（父单执行负责人直接关闭子单；成员可关闭任何 Issue）",
+  "issue done-grant remove": "remi issue status <child> done（父单执行负责人直接关闭子单；成员可关闭任何 Issue）",
+  "message question transfer": "责任变更后问题自动重新路由；remi message question get <question> 查看当前处理者",
 };
 
 // Aliases are separate entries, so no alias warning precedes the removal error.

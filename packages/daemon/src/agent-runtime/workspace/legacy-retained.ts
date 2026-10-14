@@ -1,5 +1,5 @@
 /**
- * Worktrees the legacy sweep could not snapshot (ADR 0017, section 10).
+ * Worktrees the legacy sweep could not snapshot (ADR 0018, section 10).
  *
  * Their unsaved work exists only in the files, so the sweep moves them to
  * `legacy-<date>/retained/<original path>` and lists them in `retained.json`.

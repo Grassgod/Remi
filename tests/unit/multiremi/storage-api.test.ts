@@ -1,4 +1,4 @@
-// ADR 0017: workspace storage policy, the per-daemon storage reports and the
+// ADR 0018: workspace storage policy, the per-daemon storage reports and the
 // on-demand reclaim round (`POST /api/runtimes/:id/gc-runs`).
 import { afterEach, describe, expect, it } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";

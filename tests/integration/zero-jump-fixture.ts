@@ -41,8 +41,7 @@ export interface ZeroJumpFixture {
   f398IssueId: string;
   parentIssueId: string;
   waitingChildIssueId: string;
-  ungrantedParentIssueId: string;
-  ineffectiveParentIssueId: string;
+  reassignedParentIssueId: string;
   disabledParentIssueId: string;
   decisionActivityIssueId: string;
   parentOwnerAgentId: string;
@@ -118,7 +117,6 @@ export async function seedZeroJumpFixture(store: MultiremiStore): Promise<ZeroJu
     description: "Three comments. The smallest detail page the check measures.",
     status: "in_progress",
     priority: "medium",
-    responsibleMemberId: member.id,
   });
   const shortSession = store.getOrCreateDefaultIssueSession(shortIssue.id, user.id);
   for (let i = 1; i <= FIXTURE.shortComments; i += 1) {
@@ -137,7 +135,7 @@ export async function seedZeroJumpFixture(store: MultiremiStore): Promise<ZeroJu
   ).join("\n\n");
   const f398Issue = store.createIssue({
     id: "iss_zerojump_f398", title: "Zero-jump F398 assignment", description: f398Description,
-    status: "in_progress", priority: "medium", responsibleMemberId: member.id,
+    status: "in_progress", priority: "medium",
   });
   const f398Session = store.getOrCreateDefaultIssueSession(f398Issue.id, user.id);
   for (let index = 0; index < FIXTURE.f398Comments; index += 1) {
@@ -193,7 +191,6 @@ export async function seedZeroJumpFixture(store: MultiremiStore): Promise<ZeroJu
     status: "in_progress",
     assigneeType: "agent",
     assigneeId: parentOwner.id,
-    responsibleMemberId: member.id,
   });
   const parentSession = store.getOrCreateDefaultIssueSession(parentIssue.id, user.id);
   store.createIssueComment(parentIssue.id, {
@@ -216,11 +213,9 @@ export async function seedZeroJumpFixture(store: MultiremiStore): Promise<ZeroJu
     assigneeType: "agent",
     assigneeId: sourceAgent.id,
   });
-  const completedChild = store.createIssue({ title: "Completed child", parentIssueId: parentIssue.id, assigneeType: "agent", assigneeId: sourceAgent.id });
-  const completedTask = store.createTask({ agentId: sourceAgent.id, issueId: completedChild.id, prompt: "Completed fixture evidence" });
-  const completedDelivery = store.submitIssueDelivery(completedChild.id, { summary: "Completed child fixture evidence" }, { type: "agent", id: sourceAgent.id, taskId: completedTask.id });
-  const reviewerTask = store.createTask({ agentId: parentOwner.id, issueId: parentIssue.id, issueSessionId: parentSession.id, prompt: "Review completed fixture child" });
-  store.respondIssueDelivery(completedChild.id, completedDelivery.id, { action: "accept", revision: completedDelivery.responsibilityRevision }, { type: "agent", id: parentOwner.id, taskId: reviewerTask.id });
+  const completedChild = store.createIssue({ title: "Completed child", status: "in_progress", parentIssueId: parentIssue.id });
+  // The parent's execution owner closes its direct child (the done rule).
+  store.updateIssue(completedChild.id, { status: "done", actorType: "agent", actorId: parentOwner.id });
   store.createIssueDependency(waitingChild.id, { dependsOnIssueId: activeChild.id, type: "blocked_by" });
 
   const parentOwnerTask = store.createTask({
@@ -247,8 +242,8 @@ export async function seedZeroJumpFixture(store: MultiremiStore): Promise<ZeroJu
     return store.getQuestion(request.id)!;
   };
   const productionQuestion = createQuestion("Approve the production rollout", "May the child deploy the verified image during tonight's maintenance window?", ["Wait", "Approve rollout"]);
-  const productionDecision = store.escalateQuestion(productionQuestion.id, { expected_route_revision: productionQuestion.route_revision, reason: "Production changes need the designated human" }, ownerSender, ownerTurn.id);
-  const answeredDecision = createQuestion("Merge after QA", "The owner answered this first; a member can review and change that answer.", ["Wait", "Merge after QA"]);
+  const productionDecision = store.escalateQuestion(productionQuestion.id, { expected_route_revision: productionQuestion.route_revision, reason: "Production changes need a workspace member" }, ownerSender, ownerTurn.id);
+  const answeredDecision = createQuestion("Merge after QA", "The parent owner answered this first; its answer resumes the asking Agent.", ["Wait", "Merge after QA"]);
   store.answerQuestion(answeredDecision.id, { expected_route_revision: answeredDecision.route_revision, response: { answers: { "Merge after QA": "Merge after QA" } }, body_md: "Merge after QA — all required checks passed" }, ownerSender, ownerTurn.id);
   createQuestion("Confirm the acceptance criteria", "The owner is still reviewing this item.", ["Keep reviewing", "Criteria accepted"]);
   const humanRequestTask = store.createTask({
@@ -276,29 +271,15 @@ export async function seedZeroJumpFixture(store: MultiremiStore): Promise<ZeroJu
       }],
     },
   });
-  store.grantParentDone(parentIssue.id, member.id);
-
-  const ungrantedParent = store.createIssue({
-    id: "iss_zerojump_parent_ungranted",
-    title: "Parent without done authorization",
+  const reassignedParent = store.createIssue({
+    id: "iss_zerojump_parent_reassigned",
+    title: "Parent reassigned with an unfinished child",
     status: "in_progress",
     assigneeType: "agent",
     assigneeId: parentOwner.id,
-    responsibleMemberId: member.id,
   });
-  store.createIssue({ title: "Ungrant parent child", parentIssueId: ungrantedParent.id, status: "in_progress" });
-
-  const ineffectiveParent = store.createIssue({
-    id: "iss_zerojump_parent_ineffective",
-    title: "Parent with expired authorization",
-    status: "in_progress",
-    assigneeType: "agent",
-    assigneeId: parentOwner.id,
-    responsibleMemberId: member.id,
-  });
-  store.createIssue({ title: "Expired grant child", parentIssueId: ineffectiveParent.id, status: "in_progress" });
-  store.grantParentDone(ineffectiveParent.id, member.id);
-  store.updateIssue(ineffectiveParent.id, { assigneeType: "agent", assigneeId: replacementAgent.id });
+  store.createIssue({ title: "Reassigned parent child", parentIssueId: reassignedParent.id, status: "in_progress" });
+  store.updateIssue(reassignedParent.id, { assigneeType: "agent", assigneeId: replacementAgent.id });
 
   const disabledOwner = store.createWorkspaceMember({
     id: "usr_zerojump_member_owner",
@@ -311,10 +292,9 @@ export async function seedZeroJumpFixture(store: MultiremiStore): Promise<ZeroJu
     id: "iss_zerojump_parent_disabled",
     title: "Parent owned by a member",
     status: "in_progress",
-    responsibleMemberId: member.id,
   });
-  // Historical member execution assignments are deliberately retained for
-  // migration UI coverage; the new API forbids creating this invalid ownership.
+  // Historical member execution assignments are deliberately retained for the
+  // historical-assignment display; the new API forbids creating this ownership.
   const legacyDb = (store as unknown as { db: { run: (sql: string, params: unknown[]) => void } }).db;
   legacyDb.run("UPDATE multiremi_issues SET assignee_type='member',assignee_id=? WHERE id=?", [disabledOwner.id, disabledParent.id]);
   store.createIssue({ title: "Member-owned parent child", parentIssueId: disabledParent.id, status: "in_progress" });
@@ -323,7 +303,6 @@ export async function seedZeroJumpFixture(store: MultiremiStore): Promise<ZeroJu
     id: "iss_zerojump_decision_activity",
     title: "Decision activity aggregate timeline fixture",
     status: "in_progress",
-    responsibleMemberId: member.id,
   });
   // Historical activity formatter coverage is independent of the retired
   // IssueDecision writer; active questions above use the original Q API.
@@ -341,7 +320,6 @@ export async function seedZeroJumpFixture(store: MultiremiStore): Promise<ZeroJu
     description: "250 comments with code blocks, images and replies.",
     status: "in_progress",
     priority: "high",
-    responsibleMemberId: member.id,
   });
   const defaultSession = store.getOrCreateDefaultIssueSession(longIssue.id, user.id);
   const longSessionIds = [defaultSession.id];
@@ -420,7 +398,7 @@ export async function seedZeroJumpFixture(store: MultiremiStore): Promise<ZeroJu
 
   // A separate ≥200-row session exercises the HTML preview without changing
   // the long issue used by D0's before/after profile.
-  const xlongIssue = store.createIssue({ id: "iss_zerojump_xlong", title: "Zero-jump extra long HTML issue", description: "200 comments in one session", status: "in_progress", responsibleMemberId: member.id });
+  const xlongIssue = store.createIssue({ id: "iss_zerojump_xlong", title: "Zero-jump extra long HTML issue", description: "200 comments in one session", status: "in_progress" });
   const xlongSession = store.getOrCreateDefaultIssueSession(xlongIssue.id, user.id);
   const htmlAttachment = store.createAttachment({ id: "att_zerojump_html", workspaceId: workspace.id, issueId: xlongIssue.id,
     uploaderType: "member", uploaderId: user.id, filename: "zero-jump.html", url: "/api/attachments/att_zerojump_html/content",
@@ -437,7 +415,6 @@ export async function seedZeroJumpFixture(store: MultiremiStore): Promise<ZeroJu
     description: "Carries a running task with messages.",
     status: "in_progress",
     priority: "medium",
-    responsibleMemberId: member.id,
   });
   const runningSession = store.getOrCreateDefaultIssueSession(runningIssue.id, user.id);
   store.createIssueComment(runningIssue.id, {
@@ -486,8 +463,7 @@ export async function seedZeroJumpFixture(store: MultiremiStore): Promise<ZeroJu
     f398IssueId: f398Issue.id,
     parentIssueId: parentIssue.id,
     waitingChildIssueId: waitingChild.id,
-    ungrantedParentIssueId: ungrantedParent.id,
-    ineffectiveParentIssueId: ineffectiveParent.id,
+    reassignedParentIssueId: reassignedParent.id,
     disabledParentIssueId: disabledParent.id,
     decisionActivityIssueId: decisionActivityIssue.id,
     parentOwnerAgentId: parentOwner.id,

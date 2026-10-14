@@ -45,7 +45,7 @@ Remi 当前使用独立用户、工作区成员关系和分类型访问凭据。
 
 移动到另一个工作区时，Issue 在目标工作区取下一个号（目标的最大号加 1），`number` 与 `key` 一起改变；MUL-405 的 `(workspace_id, issue_number)` 唯一索引不允许沿用原号，这也是 MUL-476 的 API 行为变化。原 key 此后不再指向该 Issue，评论、分支名等外部写下的旧 key 不会随之更新；源工作区的这个号只有在它是当前最大号时才会被新建 Issue 再次使用。取号先拿目标工作区的编号锁，再拿 Issue 行锁；批量移动逐行取号。
 
-未清理的 Issue 工作区记录（`status != 'cleaned'`）同样阻止移动；`relations.issue_workspace` 只返回本工作区记录的 `status` 与 `runtime_id`，外部记录仅计入 `hidden`，仍然阻止移动。必须先清理或放弃记录：附着 Runtime 的记录由 daemon 回收后标为 `cleaned`，或管理员删除/退役 Runtime 时显式放弃；`runtime_id` 为空的孤儿记录可用 `remi issue workspace abandon`。已清理的记录随移动改到目标工作区，Runtime、路径、分支、仓库、最后任务清空，清理时间保留。硬删除只要求没有活动任务（[ADR 0017](../adr/0017-local-records-and-recyclable-workspaces.md)），不再检查工作区是否已清理或是否有归档；移动不改变这个答案。daemon 收到服务端 404 后自行遗忘该主体的本机数据。
+未清理的 Issue 工作区记录（`status != 'cleaned'`）同样阻止移动；`relations.issue_workspace` 只返回本工作区记录的 `status` 与 `runtime_id`，外部记录仅计入 `hidden`，仍然阻止移动。必须先清理或放弃记录：附着 Runtime 的记录由 daemon 回收后标为 `cleaned`，或管理员删除/退役 Runtime 时显式放弃；`runtime_id` 为空的孤儿记录可用 `remi issue workspace abandon`。已清理的记录随移动改到目标工作区，Runtime、路径、分支、仓库、最后任务清空，清理时间保留。硬删除只要求没有活动任务（[ADR 0018](../adr/0018-local-records-and-recyclable-workspaces.md)），不再检查工作区是否已清理或是否有归档；移动不改变这个答案。daemon 收到服务端 404 后自行遗忘该主体的本机数据。
 
 存量错位记录按 Issue 读取时视为不存在，详情、`GET /workspace`、分享及任务派发均要求记录与 Issue 同工作区。源 Runtime 删除的影响清单只显示记录自己的旧 key 与记录状态，不连接已移走 Issue 的标题或状态。目标 Runtime 首次 report 可以接管旧记录并刷新工作区与 key；源 Runtime 的后续 report/cleaned 不能写入目标工作区。不迁移存量数据，源机器残留目录需人工清理或随 Runtime 删除/退役处理。
 

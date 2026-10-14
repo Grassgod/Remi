@@ -1,5 +1,5 @@
 /**
- * Subject registry (ADR 0017): one small JSON record per Issue, Chat or task
+ * Subject registry (ADR 0018): one small JSON record per Issue, Chat or task
  * that owns something on this daemon. It replaces the scattered `gc.json`
  * markers; reclaim reads only this directory and never walks the workspace tree.
  */

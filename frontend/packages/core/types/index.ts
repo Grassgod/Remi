@@ -8,8 +8,6 @@ export type {
   MultiremiIssueDecisionKind,
   MultiremiIssueDecisionList,
   MultiremiIssueDecisionStatus,
-  MultiremiIssueParentDoneGrant,
-  MultiremiIssueParentDoneGrantIneffectiveReason,
 } from "@multiremi/contracts";
 export type {
   Issue,

@@ -68,7 +68,7 @@ async function findExecutionOption(name: string) {
 }
 
 describe("AssigneePicker execution ownership", () => {
-  it("offers Agent and Squad execution ownership, with root humans configured separately", async () => {
+  it("offers only Agent and Squad execution ownership", async () => {
     const { onUpdate } = renderPicker(null);
     fireEvent.click(screen.getByRole("button", { name: "Unassigned" }));
     expect(await findExecutionOption("Execution Squad")).toBeInTheDocument();
@@ -80,7 +80,7 @@ describe("AssigneePicker execution ownership", () => {
   it.each([member.id, member.user_id])("preserves historical member identity %s and makes configuration explicit", async (id) => {
     const { onUpdate } = renderPicker(id);
     expect(screen.getByText("测试用户")).toBeInTheDocument();
-    expect(screen.getByText("Historical human assignment · execution needs configuration")).toBeInTheDocument();
+    expect(screen.getByText("Historical human assignment · execution owner needs configuration")).toBeInTheDocument();
     expect(onUpdate).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: /测试用户/ }));
     expect(screen.getAllByRole("button", { name: /测试用户/ }).filter(button => button.hasAttribute("data-picker-item"))).toHaveLength(0);

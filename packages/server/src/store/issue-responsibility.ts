@@ -2,19 +2,24 @@ import { createHash } from 'node:crypto';
 import type { IssueResponsibility, IssueResponsibleActor } from '@multiremi/contracts';
 import type { StoreContext } from './context.js';
 
-/** The only responsibility resolver: no sender-team, runnable-member or workspace-owner fallback. */
+/** A refused execution-owner or done-rule decision; routes surface `code` with `status`. */
+export class IssueResponsibilityError extends Error {
+  constructor(public code: string, message: string, public status: 403 | 404 | 409 = 409) { super(message); }
+}
+
+/** The only responsibility resolver: no sender-team, runnable-member or workspace-owner fallback, and no designated human. */
 export function resolveIssueResponsibility(ctx: StoreContext, issueId: string): IssueResponsibility {
-  const result: IssueResponsibility = { issueId, workspaceId: null, executionOwner: null, reviewOwner: null,
-    rootHuman: null, rootIssueId: null, chain: [], unresolved: [], revision: '' };
+  const result: IssueResponsibility = { issueId, workspaceId: null, executionOwner: null, rootIssueId: null, chain: [], unresolved: [], revision: '' };
   const facts: unknown[] = [];
   const seen = new Set<string>();
-  // Only current responsibility facts participate. Labels, usage, prompts and
-  // Agent Skills cannot change the route or its revision.
-  type IssueFacts = { id: string; workspaceId: string; parentIssueId: string | null; assigneeType: string | null; assigneeId: string | null; responsibleMemberId: string | null };
+  // Only current execution-owner facts participate. Labels, usage, prompts,
+  // Agent Skills and the deprecated responsible_member_id column cannot change
+  // the route or its revision.
+  type IssueFacts = { id: string; workspaceId: string; parentIssueId: string | null; assigneeType: string | null; assigneeId: string | null };
   const readIssue = (id: string): IssueFacts | null => {
-    const row = ctx.db.query('SELECT id,workspace_id,parent_issue_id,assignee_type,assignee_id,responsible_member_id FROM multiremi_issues WHERE id=?').get(id);
+    const row = ctx.db.query('SELECT id,workspace_id,parent_issue_id,assignee_type,assignee_id FROM multiremi_issues WHERE id=?').get(id);
     return row ? { id: row.id, workspaceId: row.workspace_id, parentIssueId: row.parent_issue_id,
-      assigneeType: row.assignee_type, assigneeId: row.assignee_id, responsibleMemberId: row.responsible_member_id } : null;
+      assigneeType: row.assignee_type, assigneeId: row.assignee_id } : null;
   };
   let issue = readIssue(issueId);
   const fail = (id: string, reason: IssueResponsibility['unresolved'][number]['reason']) => result.unresolved.push({issueId: id, reason});
@@ -40,24 +45,14 @@ export function resolveIssueResponsibility(ctx: StoreContext, issueId: string): 
     seen.add(issue.id);
     result.workspaceId ??= issue.workspaceId;
     if (issue.workspaceId !== result.workspaceId) { fail(issue.id, 'workspace_mismatch'); break; }
-    facts.push(['issue', issue.id, issue.parentIssueId, issue.assigneeType, issue.assigneeId, issue.responsibleMemberId ?? null]);
+    facts.push(['issue', issue.id, issue.parentIssueId, issue.assigneeType, issue.assigneeId]);
     result.chain.push({issueId:issue.id, executionOwner:owner(issue)});
-    if (!issue.parentIssueId) {
-      result.rootIssueId = issue.id;
-      const id = issue.responsibleMemberId;
-      const human = id ? ctx.workspaces().getWorkspaceMember(id) : null;
-      facts.push(['human', id, human?.workspaceId, human?.archivedAt]);
-      if (!id) fail(issue.id, 'human_missing');
-      else if (!human || human.archivedAt || human.workspaceId !== issue.workspaceId) fail(issue.id, 'human_unavailable');
-      else result.rootHuman = {type:'member', id:human.id, issueId:issue.id, name:human.name};
-      break;
-    }
+    if (!issue.parentIssueId) { result.rootIssueId = issue.id; break; }
     const parentId: string = issue.parentIssueId;
     issue = readIssue(parentId);
     if (!issue) fail(parentId, 'parent_missing');
   }
   result.executionOwner = result.chain[0]?.executionOwner ?? null;
-  result.reviewOwner = result.chain.length > 1 ? result.chain[1]!.executionOwner : result.rootHuman;
   result.revision = createHash('sha256').update(JSON.stringify(facts)).digest('hex');
   return result;
 }

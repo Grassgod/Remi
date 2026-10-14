@@ -125,7 +125,7 @@ bun run scripts/reconcile-task-usage.ts --apply-plan=<review-plan.json> --execut
 bun run scripts/reconcile-task-usage.ts --verify-plan=<review-plan.json>
 ```
 
-不带 execute 的 legacy migration 只读计数；raw 恢复先生成只读计划，再按审核过的计划执行。恢复只读取 `multiremi_task_messages` 保留的历史 usage 观测（服务端 Session Archive 已下线，不再读取任何归档，见 [ADR 0017](adr/0017-local-records-and-recyclable-workspaces.md)），按全部竞争任务的时间边界归属，`--task-id` 仅筛选输出。非终态任务不会被修复；已有规范化执行记录的终态任务不进入历史恢复计划。计划摘要列出前后已知消费及无法恢复的原因。计划生成器不再产出 `modernRepairs`（它依赖已下线的原生日志读取）；apply 与 verify 仍接受带有该字段的已审核计划。
+不带 execute 的 legacy migration 只读计数；raw 恢复先生成只读计划，再按审核过的计划执行。恢复只读取 `multiremi_task_messages` 保留的历史 usage 观测（服务端 Session Archive 已下线，不再读取任何归档，见 [ADR 0018](adr/0018-local-records-and-recyclable-workspaces.md)），按全部竞争任务的时间边界归属，`--task-id` 仅筛选输出。非终态任务不会被修复；已有规范化执行记录的终态任务不进入历史恢复计划。计划摘要列出前后已知消费及无法恢复的原因。计划生成器不再产出 `modernRepairs`（它依赖已下线的原生日志读取）；apply 与 verify 仍接受带有该字段的已审核计划。
 
 现代记录修复由 [modern-usage-repair.ts](../scripts/modern-usage-repair.ts)执行，通过 `multiremi_turn_execution_records` 读取轮及尝试，原 task ID 对应尝试 ID。每个待修复尝试必须处于终态、只有一个已完整上报的执行 run，且尝试、原始请求与原生日志的 provider session 身份一致。Claude 仅使用有明确结束原因的最终请求记录更新同一请求；全部相关请求身份匹配、更新增量恰好解释唯一结算差额时，才将对应 `acp_prompt_unattributed_remainder` 退休。原有进度摘要、上下文和其他调用保留；涉及费用覆盖时同时更新原关联，不把修正后的数字再加一份。
 

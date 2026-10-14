@@ -1,5 +1,5 @@
 /**
- * The server schema as the Session Archive era left it, for the ADR 0017
+ * The server schema as the Session Archive era left it, for the ADR 0018
  * migration tests. `bootstrapPreUnifiedSchema` no longer creates the archive
  * tables, so this fixture adds them (and the archive columns) on top of it, the
  * same way on SQLite and Postgres, and `expectArchiveEraMigrated` checks what

@@ -70,6 +70,12 @@ describe("Chat preparation status", () => {
     }
   });
 
+  it("calls a task parked on a question waiting for an answer, not for approval", () => {
+    render(pill({ task_id: "task-1", status: "awaiting_human" }));
+    expect(screen.getByText("Waiting for an answer")).toBeInTheDocument();
+    expect(screen.queryByText(/approval/i)).not.toBeInTheDocument();
+  });
+
   it("uses the normal stage for absent, blank, or malformed optional summaries", () => {
     for (const progress_summary of [null, "   ", 17]) {
       const view = render(pill({ task_id: "task-1", status: "running", progress_summary } as ChatPendingTask));

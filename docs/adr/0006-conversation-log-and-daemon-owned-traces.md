@@ -4,7 +4,7 @@
 
 被 ADR 0013 修订：消息、收件箱与轮的当前模型取代旧命令和任务入口；下文保留决策史实。
 
-决策 5–9 被 [ADR 0017](0017-local-records-and-recyclable-workspaces.md) 取代（trace 归档、Session Archive v2、回填、下线前归档）；决策 1–4 不变。
+决策 5–9 被 [ADR 0018](0018-local-records-and-recyclable-workspaces.md) 取代（trace 归档、Session Archive v2、回填、下线前归档）；决策 1–4 不变。
 
 Proposed (MUL-402, message architecture v2-B). Ships in the same release as
 MUL-401 (daemon protocol v2) and MUL-403 (Live Hub and web). The four legacy

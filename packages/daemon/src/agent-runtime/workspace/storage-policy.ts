@@ -1,5 +1,5 @@
 /**
- * Storage retention policy of a daemon (ADR 0017, section 9).
+ * Storage retention policy of a daemon (ADR 0018, section 9).
  *
  * The workspace setting `settings.storage` is the source of truth, managed from
  * the server. A same-named environment variable overrides one key on this

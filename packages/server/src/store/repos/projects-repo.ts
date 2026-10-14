@@ -58,7 +58,7 @@ export class ProjectExecutionOwnerError extends Error {
   readonly code = "project_execution_owner_required";
 
   constructor() {
-    super("Project default execution assignee must be an Agent or Squad; configure the final human on the root Issue");
+    super("Project default execution assignee must be an Agent or Squad");
     this.name = "ProjectExecutionOwnerError";
   }
 }

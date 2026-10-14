@@ -23,12 +23,12 @@ bun run test tests/arch/
 
 API/store 测试可参考 [issues API 测试](tests/unit/multiremi/multiremi-api-issues.test.ts)的进程内 `app.request()`，共享夹具在 [helpers.ts](tests/unit/multiremi/helpers.ts)。需要真实服务的测试应在自身入口明确配置和隔离方式，不能把本地凭据或生产数据作为普通单测前提。
 
-普通合成根 Issue 使用 `createResponsibleTestIssue(store, input)`，显式建立命名测试人类；
-合成自动化配置使用 `createResponsibleTestAutopilot`，按实际 workspace 建立同样明确的测试人类，
-避免调度、Webhook 或事件派活借 Runtime owner 创建根责任。已给出的责任字段（包括显式 null）保留原事实。
-子单仍继承根责任，显式空责任和生产创建负向用例直接调用原 Store，不能覆盖 Store 方法。
-闭环用例明确配置 Agent/团队执行归属，并用 `acceptTestIssueDelivery` 提交、验收实际交付。
-历史升级 fixture 使用其原表形状和历史 writer，不能借合成工厂提前写入新责任字段或验收收据。
+普通合成根 Issue 使用 `createResponsibleTestIssue(store, input)`；Issue 不再指定人类，保留的
+`responsibleMemberId` 参数可选且被忽略。合成自动化配置使用 `createResponsibleTestAutopilot`，同样不需要测试人类。
+生产创建的负向用例直接调用原 Store，不能覆盖 Store 方法。闭环用例明确配置 Agent/团队执行归属，
+并用 `acceptTestIssueDelivery` 以真实成员身份把 Issue 改成 `done`，走与生产相同的 done 规则；规则本身的用例在
+[issue-done-rule.test.ts](tests/unit/multiremi/issue-done-rule.test.ts)，执行负责人解析在 [issue-responsibility-resolver.test.ts](tests/unit/multiremi/issue-responsibility-resolver.test.ts)。
+历史升级 fixture 使用其原表形状和历史 writer，不能借合成工厂提前写入新字段。
 
 [公开参考价格 PG/CLI 回归](tests/unit/scripts/usage-reference-prices.test.ts)沿用 CI 的 `MULTIREMI_TEST_POSTGRES_URL`；可用 `MULTIREMI_TEST_REFERENCE_DATABASE_URL` 单独覆盖。所选测试连接必须具有创建测试库的权限，两条用例各创建随机命名的独立数据库，所有并发 writer 与 CLI 只连接该库，完成后仅删除本次成功创建的数据库。不要指向生产；连接或清理失败会使测试失败，不会跳过或强制删除公共表。
 
@@ -67,7 +67,7 @@ API/store 测试可参考 [issues API 测试](tests/unit/multiremi/multiremi-api
 | [release-build-check.yml](.github/workflows/release-build-check.yml) | 按路径触发；独立的架构/CLI 守卫、CI 编排小回归、前端类型、前端测试、CLI/API/Web 构建、平台专项和浏览器专项；main push 与手动运行另有四个后端分片及完整覆盖校验 |
 | [release.yml](.github/workflows/release.yml) / [platform-release.yml](.github/workflows/platform-release.yml) | 校验准备快照、tag 版本及同一 main SHA 的成功完整 CI 或严格验证的失败文件补跑；复用符合来源与内容校验的正式 candidate，缺少可用 candidate 时保留原构建路径 |
 
-`build` 保留为分支保护的必需检查，是所有适用 job 的汇总，不再承载串行测试与构建。平台专项 job `session-archive-platform` 已更名为 `runtime-platform`（ubuntu-latest 与 macos-latest 两个矩阵项，仍验证固定的 ACP 桥与内置 agent runtime，归档回归随 ADR 0017 删除）；`build` 的 `needs` 已改用新名。若分支保护的必需检查直接列出了 `session-archive-platform (ubuntu-latest)` / `session-archive-platform (macos-latest)`，需由仓库管理员改为 `runtime-platform (ubuntu-latest)` / `runtime-platform (macos-latest)`，否则旧名永远等不到状态而阻塞合并。它逐项要求预期的 success / skipped；失败、取消、缺少分片报告或非预期 skipped 均不能给出绿灯。PR 跳过后端分片；main push 与默认手动运行要求完整后端覆盖。PR 新提交取消该 PR 的旧运行，main 运行互不取消。两个浏览器专项保留各自的路径检测，路径不相关时跳过专项步骤，job 仍需正常成功。
+`build` 保留为分支保护的必需检查，是所有适用 job 的汇总，不再承载串行测试与构建。平台专项 job `session-archive-platform` 已更名为 `runtime-platform`（ubuntu-latest 与 macos-latest 两个矩阵项，仍验证固定的 ACP 桥与内置 agent runtime，归档回归随 ADR 0018 删除）；`build` 的 `needs` 已改用新名。若分支保护的必需检查直接列出了 `session-archive-platform (ubuntu-latest)` / `session-archive-platform (macos-latest)`，需由仓库管理员改为 `runtime-platform (ubuntu-latest)` / `runtime-platform (macos-latest)`，否则旧名永远等不到状态而阻塞合并。它逐项要求预期的 success / skipped；失败、取消、缺少分片报告或非预期 skipped 均不能给出绿灯。PR 跳过后端分片；main push 与默认手动运行要求完整后端覆盖。PR 新提交取消该 PR 的旧运行，main 运行互不取消。两个浏览器专项保留各自的路径检测，路径不相关时跳过专项步骤，job 仍需正常成功。
 
 [ci-backend.ts](scripts/ci-backend.ts) 从 bunfig 的 test root 自动发现 Bun 支持的 `.test` / `_test` / `.spec` / `_spec` 文件和八种 JS/TS 扩展，排除隐藏目录与 node_modules，隐藏文件名仍按后缀发现；不维护测试文件清单。它按 [历史权重](scripts/ci-backend-weights.json) 做 LPT 分配，新文件使用至少 60 秒或历史 p90 的保守权重。初始权重来自文件中标识的真实 Actions run/job/SHA，按日志文件标题边界计时，包含部分 runner 开销，不能视为当前版本的实测耗时。
 

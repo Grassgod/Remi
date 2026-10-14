@@ -1,6 +1,4 @@
 import { isRelatedTurnController } from './turn-controls.js';
-import { listIssueDeliveries, submitIssueDelivery, respondIssueDelivery, authorizeIssueDelivery, type IssueDeliveryActor } from './issue-deliveries.js';
-import { listIssueResponsibilityMigration, mapIssueResponsibility } from './issue-responsibility-migration.js';
 import { DaemonTurnBridge } from './inbox/daemon-turn-bridge.js';
 import { questionNotificationIdentity, questionNotificationFactsSql, canReadQuestionNotificationFacts } from './inbox/question-notification-visibility.js';
 import type { InboxAccess } from './inbox/inbox-visibility.js';
@@ -3422,19 +3420,6 @@ runMigrations(this.db);
     return this.ctx.resolveIssueResponsibility(issueId);
   }
 
-  listIssueDeliveries(issueId: string, input?: import('@multiremi/contracts').ListIssueDeliveriesInput) { return listIssueDeliveries(this.ctx,issueId,input); }
-  listIssueResponsibilityMigration(workspaceId:string,input?:{limit?:number;offset?:number}) {return listIssueResponsibilityMigration(this.ctx,workspaceId,input);}
-  mapIssueResponsibility(workspaceId:string,input:import('@multiremi/contracts').MapIssueResponsibilityInput,actor:IssueDeliveryActor) {return mapIssueResponsibility(this.ctx,workspaceId,input,actor);}
-  authorizeIssueDelivery(issueId: string, deliveryId: string, agentId: string | null, revision: string, actor: IssueDeliveryActor) {
-    return authorizeIssueDelivery(this.ctx,issueId,deliveryId,agentId,revision,actor);
-  }
-  submitIssueDelivery(issueId: string, input: import('@multiremi/contracts').SubmitIssueDeliveryInput, actor: IssueDeliveryActor) {
-    return submitIssueDelivery(this.ctx,issueId,input,actor);
-  }
-  respondIssueDelivery(issueId: string, deliveryId: string, input: import('@multiremi/contracts').RespondIssueDeliveryInput, actor: IssueDeliveryActor) {
-    return respondIssueDelivery(this.ctx,issueId,deliveryId,input,actor);
-  }
-
   getIssueDecision(issueId: string, decisionId: string): MultiremiIssueDecision | null {
     return this.issues.getIssueDecision(issueId, decisionId);
   }
@@ -3622,18 +3607,6 @@ runMigrations(this.db);
     return this.issues.listIssueDependencies(issueId);
   }
 
-  issueParentDoneGrantView(issue: MultiremiIssue) {
-    return this.issues.issueParentDoneGrantView(issue);
-  }
-
-  grantParentDone(issueId: string, memberId: string): MultiremiIssue {
-    return this.issues.grantParentDone(issueId, memberId);
-  }
-
-  revokeParentDone(issueId: string, memberId: string): MultiremiIssue {
-    return this.issues.revokeParentDone(issueId, memberId);
-  }
-
   createIssueDependency(
     issueId: string,
     input: CreateIssueDependencyInput,
@@ -3752,14 +3725,6 @@ runMigrations(this.db);
 
   hasChildIssues(issueId: string): boolean {
     return this.issues.hasChildIssues(issueId);
-  }
-
-  parentDoneGrantStatus(issue: MultiremiIssue) {
-    return this.issues.parentDoneGrantStatus(issue);
-  }
-
-  finalSummaryAfterLastChild(parentIssueId: string, options?: { acceptCommentBy?: string | null }) {
-    return this.issues.finalSummaryAfterLastChild(parentIssueId, options);
   }
 
   holdParentStatusForOpenChildren(
@@ -5340,7 +5305,6 @@ runMigrations(this.db);
   listIssueQuestions(...args: Parameters<Questions['list']>) { return new Questions(this.ctx).list(...args); }
   answerQuestion(...args: Parameters<Questions['answer']>) { return new Questions(this.ctx).answer(...args); }
   escalateQuestion(...args: Parameters<Questions['escalate']>) { return new Questions(this.ctx).escalate(...args); }
-  transferQuestion(...args: Parameters<Questions['transfer']>) { return new Questions(this.ctx).transfer(...args); }
   presentQuestion(...args: Parameters<Questions['present']>) { return new Questions(this.ctx).present(...args); }
   enqueueQuestionPresentationWithinTransaction(id: string) { return this.feishuBot.enqueueQuestionPresentationWithinTransaction(id); }
   continueQuestion(...args: Parameters<Questions['continue']>) { return new Questions(this.ctx).continue(...args); }

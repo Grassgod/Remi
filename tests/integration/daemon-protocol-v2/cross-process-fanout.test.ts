@@ -127,12 +127,13 @@ describe("MUL-419 ui to runtime fanout across OS processes", () => {
       const workspace = h.store.getWorkspace("local")!;
       h.store.updateWorkspace("local", { settings: { ...workspace.settings,
         issueTopics: { enabled: true, chatId: "oc_settled", notifyMode: "person", notifyOpenId: "ou_recipient" } } });
-      const issue = createResponsibleTestIssue(h.store, { title: "Settle", workspaceId: "local",
-        assigneeType: "agent", assigneeId: agent.id, responsibleMemberId: 'mem_local_local' });
       const recipient = h.store.getOrCreateUser({ externalId: 'ou_recipient', name: 'Explicit question recipient' });
       h.db.run('UPDATE multiremi_workspace_members SET user_id=? WHERE id=?', [recipient.id, 'mem_local_local']);
       h.db.run('UPDATE multiremi_users SET feishu_union_id=? WHERE id=?', ['on_recipient', recipient.id]);
-      const humanAccess = await h.store.createAccessToken({ name: 'Designated question human', type: 'pat', userId: recipient.id, workspaceId: 'local' });
+      // A human-stage card goes to the root creator, so the card recipient creates the Issue.
+      const issue = createResponsibleTestIssue(h.store, { title: "Settle", workspaceId: "local",
+        assigneeType: "agent", assigneeId: agent.id, createdBy: recipient.id });
+      const humanAccess = await h.store.createAccessToken({ name: 'Question recipient', type: 'pat', userId: recipient.id, workspaceId: 'local' });
       const seen = new Date().toISOString();
       h.db.run("INSERT INTO multiremi_feishu_bot_senders(id,workspace_id,app_id,open_id,union_id,display_name,allowed,first_seen_at,last_seen_at) VALUES('fbs_cross_process','local','mul401_settled','ou_recipient','on_recipient','Human',1,?,?)", [seen, seen]);
       h.store.prepareFeishuIssueTopicWithinTransaction(issue);

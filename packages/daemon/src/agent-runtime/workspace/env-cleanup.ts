@@ -1,5 +1,5 @@
 /**
- * Clean the `env/<subject>/` tree down to what cannot be rebuilt (ADR 0017, section 4).
+ * Clean the `env/<subject>/` tree down to what cannot be rebuilt (ADR 0018, section 4).
  *
  * A lane generation keeps only the provider's native session history; the
  * rest of its home, the discussion work set and the plugin runtime are rebuilt

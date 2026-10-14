@@ -35,13 +35,9 @@
     "creator_type": "member",
     "creator_id": "local",
     "parent_issue_id": null,
-    "parent_done_grant_at": null,
-    "parent_done_grant_by": null,
-    "parent_done_grant_agent_id": null,
     "issue_kind": "execution",
     "source_issue_id": null,
     "project_id": null,
-    "responsible_member_id": "mem_local_local",
     "runtime_workspace_id": null,
     "position": 0,
     "start_date": null,
@@ -77,7 +73,6 @@
         "updated_at": "<timestamp>"
       }
     ],
-    "parent_done_grant": null,
     "reactions": [
       {
         "id": "rxn_pwpbbqxz52oy",

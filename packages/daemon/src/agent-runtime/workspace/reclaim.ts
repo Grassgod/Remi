@@ -1,5 +1,5 @@
 /**
- * Workspace reclaim (ADR 0017, section 4).
+ * Workspace reclaim (ADR 0018, section 4).
  *
  * One round walks the subject registry, asks the server whether each Issue,
  * Chat or task has ended, and reclaims what is past its retention: unsaved work
@@ -130,7 +130,7 @@ export interface ReclaimClient {
 export type ReclaimMode = StorageReport["mode"];
 
 /**
- * The Feishu topic workspace lifecycle (ADR 0017, amendment A2). A topic
+ * The Feishu topic workspace lifecycle (ADR 0018, amendment A2). A topic
  * workspace migrated into an Issue returns to `_topics/` when the Issue ends,
  * interrupted migrations are finished, and unbound topic workspaces expire.
  */
@@ -198,7 +198,7 @@ export interface ClassifySubjectInput {
 }
 
 /**
- * The decision table of a round (ADR 0017, section 4): what to do with one
+ * The decision table of a round (ADR 0018, section 4): what to do with one
  * subject given what the server says. Pure; the cap on retained workspaces is
  * applied afterwards across subjects.
  */

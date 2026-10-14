@@ -7,12 +7,13 @@ import { issueKeys } from "./queries";
  * Data layer for the reviewer workbench (工作台) — the triage surface a human
  * uses to find every issue that is waiting on them or needs recovery.
  *
- * The backend keeps `issue.status = "in_review"` in sync for BOTH review
- * situations (see server tasks-repo `syncIssueStatusFromTask`):
- *  - a task finished (`completed`) → the issue parks in `in_review` until a
- *    human accepts or reopens it, and
- *  - a task is blocked on a human (`awaiting_human`, permission/question) →
- *    the issue also moves to `in_review` while the agent waits.
+ * The backend derives `issue.status = "in_review"` whenever a human needs to
+ * act or read (see server `deriveIssueStatusWithinTransaction`):
+ *  - the execution owner's round finished → the issue parks in `in_review`
+ *    until someone sets it to `done` or comments to wake the owner, and
+ *  - a question reached the human stage (`awaiting_human`, permission/question)
+ *    → the issue also moves to `in_review` while the agent waits. A question
+ *    still waiting on a Leader keeps the issue `in_progress`.
  *
  * The `status=in_review` list is the complete "needs me" set, and the
  * workspace agent-task snapshot (which includes every active task) splits it

@@ -1,6 +1,5 @@
 import { createResponsibleTestAutopilot } from './helpers.js';
 import { createResponsibleTestIssue } from './helpers.js';
-import { prepareTestIssueDelivery } from './helpers.js';
 import { issueMessagesPath, requestMessageBody, taskRequestPath, sentTask } from "./unified-test-paths.js";
 import { afterEach, describe, expect, it } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
@@ -315,7 +314,6 @@ describe("agent Issue proposal policy", () => {
     const project = fixture.store.createProject({ title: "Approval policy project" });
     const triggerIssue = createResponsibleTestIssue(fixture.store, {
       title: "Later human event",
-      responsibleMemberId: fixture.human.id,
       assigneeType: 'agent', assigneeId: fixture.ordinary.id,
       workspaceId: "local",
       projectId: project.id,
@@ -342,11 +340,10 @@ describe("agent Issue proposal policy", () => {
     });
     expect(configured.status).toBe(201);
 
-    const prepared=prepareTestIssueDelivery(fixture.store,triggerIssue.id);
-    const changed = await fixture.app.request(`/api/issues/${triggerIssue.id}/deliveries/${prepared.delivery.id}/respond`, {
-      method: "POST",
+    const changed = await fixture.app.request(`/api/issues/${triggerIssue.id}`, {
+      method: "PATCH",
       headers: fixture.humanHeaders,
-      body: JSON.stringify({ action: "accept",revision:prepared.delivery.responsibilityRevision }),
+      body: JSON.stringify({ status: "done" }),
     });
     expect(changed.status).toBe(200);
     const [run] = fixture.store.dispatchPendingSystemEvents();
@@ -363,10 +360,14 @@ describe("agent Issue proposal policy", () => {
   it("uses trusted event and webhook-delivery source tasks as a second inheritance path", async () => {
     const fixture = await policyFixture();
     const project = fixture.store.createProject({ title: "Source lineage project" });
+    // The restricted Agent executes the parent and closes its direct child (the done rule).
+    const eventParent = createResponsibleTestIssue(fixture.store, {
+      title: "Restricted source parent", assigneeType: 'agent', assigneeId: fixture.restricted.id, workspaceId: "local", status: "in_progress",
+    });
     const eventIssue = createResponsibleTestIssue(fixture.store, {
       title: "Restricted source event",
-      responsibleMemberId: fixture.human.id,
-      assigneeType: 'agent', assigneeId: fixture.restricted.id,
+      parentIssueId: eventParent.id,
+      assigneeType: 'agent', assigneeId: fixture.ordinary.id,
       workspaceId: "local",
       projectId: project.id,
       status: "todo",
@@ -386,13 +387,12 @@ describe("agent Issue proposal policy", () => {
         projectId: project.id,
       },
     });
-    const prepared=prepareTestIssueDelivery(fixture.store,eventIssue.id);
-    fixture.store.authorizeIssueDelivery(eventIssue.id,prepared.delivery.id,fixture.restricted.id,prepared.delivery.responsibilityRevision,{type:'member',id:fixture.human.id});
-    const sourceCredential=await fixture.store.createTaskAccessToken(prepared.executionTask,'local');
-    const changed = await fixture.app.request(`/api/issues/${eventIssue.id}/deliveries/${prepared.delivery.id}/respond`, {
-      method: "POST",
+    const reviewTask=fixture.store.createTask({ agentId: fixture.restricted.id, issueId: eventParent.id, prompt: "Review the child" });
+    const sourceCredential=await fixture.store.createTaskAccessToken(reviewTask,'local');
+    const changed = await fixture.app.request(`/api/issues/${eventIssue.id}`, {
+      method: "PATCH",
       headers: {...fixture.restrictedHeaders,Authorization:`Bearer ${sourceCredential.token}`},
-      body: JSON.stringify({ action: "accept",revision:prepared.delivery.responsibilityRevision }),
+      body: JSON.stringify({ status: "done" }),
     });
     expect(changed.status).toBe(200);
     const [eventRun] = fixture.store.dispatchPendingSystemEvents();

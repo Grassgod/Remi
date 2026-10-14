@@ -31,11 +31,15 @@ async function until(predicate: () => boolean) {
     await Bun.sleep(5);
   }
 }
-async function setup({ store }: PendingTurnTestFixture, delegated = false) {
+async function setup({ store }: PendingTurnTestFixture, delegated = false, underParentLeader = false) {
   const rt = "rt_decision_callback", daemonId = "daemon_decision_callback";
   store.registerRuntime({ id: rt, daemonId, name: rt, provider: "claude", workspaceId: "local", metadata: { parallel_agent_execution: 1 } });
   const agent = store.createAgent({ name: "Callback", provider: "claude", runtimeId: rt });
-  const issue = store.createIssue({ title: "Callback", assigneeType: "agent", assigneeId: agent.id, responsibleMemberId: 'mem_local_local' });
+  // Optionally the work is a child of an Issue a team Leader executes: its Qs climb there first.
+  const parentLeader = underParentLeader ? store.createAgent({ name: "Parent Leader", provider: "claude" }) : null;
+  const parent = parentLeader ? store.createIssue({ title: "Callback parent", assigneeType: "squad",
+    assigneeId: store.createSquad({ name: "Callback team", leaderId: parentLeader.id }).id }) : null;
+  const issue = store.createIssue({ title: "Callback", assigneeType: "agent", assigneeId: agent.id, ...(parent ? { parentIssueId: parent.id } : {}) });
   const session = store.getOrCreateDefaultIssueSession(issue.id);
   const send = (body_md: string, wake_requested: "now" | "next_turn" = "now", attachment_ids?: string[]) =>
     store.sendMessage({ session_id: session.id, sender: { type: "member", id: "mem_local_local" },
@@ -85,7 +89,7 @@ async function setup({ store }: PendingTurnTestFixture, delegated = false) {
   await inbox.consumeTaskSteerMessages(attempt.id, offer.input_messages.map(m => m.id));
   expect(store.getTurn(offer.turn_id)?.input_to_seq).toBe(offer.input_to_seq);
   const { token } = await store.createTaskAccessToken(attempt, "local");
-  return { store, rt, agent, issue, session, attempt, offer, dispatch, send, frames, inbox, feed, permission, question, client, lane,
+  return { store, rt, agent, parentLeader, issue, session, attempt, offer, dispatch, send, frames, inbox, feed, permission, question, client, lane,
     serverUrl: `http://127.0.0.1:${server.port}`,
     async readRange(from: number, to: number) {
       const response = await fetch(`http://127.0.0.1:${server.port}/api/sessions/${session.id}/messages?from=${from}&to=${to}`,
@@ -225,6 +229,31 @@ pendingTurnBackendTests("decision callbacks over Store and native WS", fixture =
       expect(h.inbox.pendingTaskSteerMessages(h.attempt.id)).toEqual([]);
       await h.inbox.consumeTaskSteerMessages(h.attempt.id, []);
       expect(h.store.getTurn(h.offer.turn_id)?.input_to_seq).toBe(answer.message.seq);
+    } finally { await h.close(); }
+  }, 120_000);
+
+  for (const response of [{ selected_options: ["allow"] }, { option_id: "deny" }] as Array<{ selected_options: string[] } | { option_id: string }>) it(`the parent Leader answers a live permission request with ${Object.keys(response)[0]} and the provider receives that option`, async () => {
+    const h = await setup(fixture(), false, true);
+    try {
+      const result = h.permission(permissionParams);
+      const decision = await h.decision();
+      const leader = h.parentLeader!;
+      expect(h.store.getQuestion(decision.id)).toMatchObject({ kind: "permission", stage: "parent_owner",
+        current_handler: { type: "agent", id: leader.id }, wait_status: "waiting" });
+      // At the Agent stage members only read: the Leader decides the permission.
+      expect(() => h.store.answerQuestion(decision.id, { expected_route_revision: 1, response: { option_id: "allow" } },
+        { type: "member", id: "mem_local_local" })).toThrow("question_handler_required");
+      const db = fixture().db;
+      const leaderTurn = db.query("SELECT id FROM multiremi_turns WHERE agent_id=? AND status IN ('pending','running') ORDER BY created_at DESC LIMIT 1").get(leader.id) as { id: string };
+      db.run("UPDATE multiremi_turns SET status='running' WHERE id=?", [leaderTurn.id]);
+      const optionId = "option_id" in response ? response.option_id : response.selected_options[0]!;
+      const answered = h.store.answerQuestion(decision.id, { expected_route_revision: 1, response }, { type: "agent", id: leader.id }, leaderTurn.id);
+      expect(JSON.parse(answered.message.body_md)).toMatchObject({ option_id: optionId });
+      expect(answered.message).toMatchObject({ reply_to_id: decision.id, to_agent_id: h.agent.id });
+      expect(await result).toEqual({ outcome: "selected", optionId });
+      expect(h.store.getQuestion(decision.id)).toMatchObject({ status: "answered", wait_status: "consumed",
+        answer: { actor: { type: "agent", id: leader.id }, response: { option_id: optionId } } });
+      expect(h.store.getTaskHumanRequest(decision.id)?.status).toBe("responded");
     } finally { await h.close(); }
   }, 120_000);
 

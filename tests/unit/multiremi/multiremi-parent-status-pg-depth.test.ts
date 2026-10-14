@@ -1,4 +1,4 @@
-import { createResponsibleTestIssue, acceptTestIssueDelivery, prepareTestIssueDelivery, seedHistoricalIssueFacts } from './helpers.js';
+import { createResponsibleTestIssue, acceptTestIssueDelivery, seedHistoricalIssueFacts, testWorkspaceMember } from './helpers.js';
 import { resolveMigrationReportDirectory } from "@multiremi/store/migration-report-directory.js";
 import { issueMessagesPath, requestMessageBody } from "./unified-test-paths.js";
 import { runTurnExecutionMutation } from '@multiremi/store/turn-execution-records.js';
@@ -405,9 +405,10 @@ describe.skipIf(!pgAvailable)("MUL-400 S1 on PostgreSQL", () => {
       status: "in_progress",
     });
 
-    const prepared = prepareTestIssueDelivery(store, child.id);
+    // A member closes the child (the done rule).
+    const member = testWorkspaceMember(store, workspaceId);
     counter.reset();
-    store.respondIssueDelivery(child.id, prepared.delivery.id, { action: "accept", revision: prepared.delivery.responsibilityRevision }, prepared.actor);
+    store.updateIssue(child.id, { status: "done", actorType: "member", actorId: member.id });
     expect(counter.max).toBe(1);
     // #3: a running Turn receives the status message without allocating another Attempt.
     expect(counter.taskInserts).toHaveLength(0);
@@ -435,17 +436,12 @@ describe.skipIf(!pgAvailable)("MUL-400 S1 on PostgreSQL", () => {
       status: "in_progress",
     });
 
+    const member = testWorkspaceMember(store, workspaceId);
     counter.reset();
-    const prepared = prepareTestIssueDelivery(store, child.id);
+    store.updateIssue(child.id, { status: "done", actorType: "member", actorId: member.id });
     expect(counter.max).toBe(1);
-    expect(counter.taskInserts).toHaveLength(2); // Execution plus one parent-review notification.
-    for (const insertion of counter.taskInserts) expect(insertion).toMatchObject({ invocationDepth: 1, callbackDepth: 1, inTransaction: true });
-    const reviewerTask = store.listTasksForIssue(parent.id).find((task) => task.status === "queued")!;
-    counter.reset();
-    store.respondIssueDelivery(child.id, prepared.delivery.id, { action: "accept", revision: prepared.delivery.responsibilityRevision }, prepared.actor);
-    expect(counter.max).toBe(1);
-    expect(counter.taskInserts).toHaveLength(0);
-    expect(store.listTasksForIssue(parent.id).find((task) => task.status === "queued")?.id).toBe(reviewerTask.id);
+    expect(counter.taskInserts).toHaveLength(1);
+    expect(counter.taskInserts[0]).toMatchObject({ invocationDepth: 1, callbackDepth: 1, inTransaction: true });
     expect(store.listTasksForIssue(parent.id).filter((task) => task.status === "queued")).toHaveLength(1);
   });
 
@@ -484,27 +480,21 @@ describe.skipIf(!pgAvailable)("MUL-400 S1 on PostgreSQL", () => {
   }
 
   /**
-   * MUL-457 QA round 1, blocker 1: on real Postgres the status write and its
-   * audit rows were three separate transactions, so an injected failure after
-   * the grant-used INSERT still left the parent `done` and the listeners
-   * notified. Both writers must now roll the whole thing back, and the SCM
-   * effect must stay retryable.
+   * MUL-457 QA round 1, blocker 1, restated for the done rule: on real Postgres
+   * the status write, its audit row and every event must commit together, so an
+   * injected audit failure rolls all of it back and a retry settles once.
    */
-  it("rolls the formal proxy acceptance and audit rows back on a grant-used failure (Postgres)", () => {
+  it("rolls a member's done status, its audit row and every event back on an audit failure (Postgres)", () => {
     const { workspaceId, agent } = freshWorkspace();
     const parent = createResponsibleTestIssue(store, {
-      title: "PG grant parent", workspaceId, status: "in_progress",
+      title: "PG done parent", workspaceId, status: "in_progress",
       assigneeType: "agent", assigneeId: agent,
     });
     acceptTestIssueDelivery(store, createResponsibleTestIssue(store, {
-      title: "PG grant child", workspaceId, parentIssueId: parent.id, status: "in_progress",
-      assigneeType: "agent", assigneeId: store.createAgent({ name: "Grant child executor", provider: "codex", workspaceId }).id,
+      title: "PG done child", workspaceId, parentIssueId: parent.id, status: "in_progress",
+      assigneeType: "agent", assigneeId: store.createAgent({ name: "Done child executor", provider: "codex", workspaceId }).id,
     }).id);
-    store.grantParentDone(parent.id, store.resolveIssueResponsibility(parent.id).rootHuman!.id);
-    store.createIssueComment(parent.id, { body: "PG summary", authorType: "agent", authorId: agent });
-    const prepared = prepareTestIssueDelivery(store, parent.id);
-    store.authorizeIssueDelivery(parent.id, prepared.delivery.id, agent, prepared.delivery.responsibilityRevision, prepared.actor);
-    const actor = { type: "agent" as const, id: agent, taskId: prepared.executionTask.id };
+    const member = testWorkspaceMember(store, workspaceId);
     const activityBefore = store.listIssueActivity(parent.id);
 
     const events: string[] = [];
@@ -521,14 +511,14 @@ describe.skipIf(!pgAvailable)("MUL-400 S1 on PostgreSQL", () => {
       ...rest: unknown[]
     ) {
       original.call(this, issueId, input as never, ...rest as [never]);
-      if (input.type === "issue_delivery_accepted") {
+      if (!injected && issueId === parent.id && input.type === "issue_updated") {
         injected = true;
-        throw new Error("pg grant-used injection");
+        throw new Error("pg done audit injection");
       }
     } as typeof StoreContext.prototype.appendIssueActivity;
     let thrown: Error | null = null;
     try {
-      store.respondIssueDelivery(parent.id, prepared.delivery.id, { action: "accept", revision: prepared.delivery.responsibilityRevision }, actor);
+      store.updateIssue(parent.id, { status: "done", actorType: "member", actorId: member.id });
     } catch (err) {
       thrown = err as Error;
     } finally {
@@ -536,22 +526,19 @@ describe.skipIf(!pgAvailable)("MUL-400 S1 on PostgreSQL", () => {
       unsubscribe();
     }
     expect(injected).toBe(true);
-    expect(thrown?.message).toBe("pg grant-used injection");
-    expect(store.getIssue(parent.id)?.status).toBe("in_review");
-    const types = store.listIssueActivity(parent.id).map((entry) => entry.type);
+    expect(thrown?.message).toBe("pg done audit injection");
+    expect(store.getIssue(parent.id)?.status).toBe("in_progress");
     expect(store.listIssueActivity(parent.id)).toEqual(activityBefore);
-    expect(store.listIssueDeliveries(parent.id)[0]).toMatchObject({ status: "pending", responseMessageId: null });
-    expect(types).not.toContain("parent_done_grant_used");
     expect(events).toHaveLength(0);
 
     // The retry settles exactly once.
-    store.respondIssueDelivery(parent.id, prepared.delivery.id, { action: "accept", revision: prepared.delivery.responsibilityRevision }, actor);
+    store.updateIssue(parent.id, { status: "done", actorType: "member", actorId: member.id });
     expect(store.getIssue(parent.id)?.status).toBe("done");
-    expect(store.listIssueActivity(parent.id).filter((e) => e.type === "issue_delivery_accepted")).toHaveLength(1);
-    expect(store.listIssueActivity(parent.id).filter((e) => e.type === "parent_done_grant_used")).toHaveLength(1);
+    expect(store.listIssueActivity(parent.id).filter((e) => e.type === "issue_updated"))
+      .toHaveLength(activityBefore.filter((e) => e.type === "issue_updated").length + 1);
   });
 
-  it("rejects legacy grants and ordinary done PATCHes on Postgres (both prefixes)", async () => {
+  it("refuses an owner Agent's done PATCH on its root, whatever its legacy grant columns hold, on Postgres (both prefixes)", async () => {
     // HTTP routes resolve the compatibility prefix against `local`, so this
     // case seeds its own agent there instead of a throwaway workspace.
     const agent = store.createAgent({
@@ -568,7 +555,9 @@ describe.skipIf(!pgAvailable)("MUL-400 S1 on PostgreSQL", () => {
       title: "PG 409 child", workspaceId, parentIssueId: parent.id, status: "in_progress",
       assigneeType: "agent", assigneeId: store.createAgent({ name: "HTTP prerequisite executor", provider: "codex", workspaceId }).id,
     }).id);
-    store.grantParentDone(parent.id, store.resolveIssueResponsibility(parent.id).rootHuman!.id);
+    // A retired parent-done grant stays in its columns; nothing reads it.
+    db.run("UPDATE multiremi_issues SET parent_done_grant_at=?,parent_done_grant_by=?,parent_done_grant_agent_id=? WHERE id=?",
+      [new Date().toISOString(), "mem_local_local", agent, parent.id]);
     const task = store.createTask({ agentId: agent, issueId: parent.id, prompt: "PG 409 round" });
     const taskToken = await store.createTaskAccessToken(task, workspaceId);
     const app = createMultiremiApp({ store });
@@ -580,18 +569,16 @@ describe.skipIf(!pgAvailable)("MUL-400 S1 on PostgreSQL", () => {
         headers: { Authorization: `Bearer ${taskToken.token}`, "Content-Type": "application/json" },
         body: JSON.stringify({ status: "done" }),
       });
-      expect(response.status, base).toBe(409);
+      expect(response.status, base).toBe(403);
       const body = await response.json();
-      expect(body, base).toMatchObject({
-        code: "issue_delivery_acceptance_required",
-      });
+      expect(body, base).toMatchObject({ code: "issue_done_requires_member" });
       expect(body.last_child_closed_at, base).toBeUndefined();
       expect(store.getIssue(parent.id), base).toEqual(issueBefore);
       expect(store.listIssueActivity(parent.id), base).toEqual(activityBefore);
     }
   });
 
-  it("rolls the SCM receipt-required hold audit and effect mark back on failure (Postgres)", () => {
+  it("rolls the SCM merge record and effect mark back on failure, never closing the Issue (Postgres)", () => {
     const { workspaceId, agent } = freshWorkspace();
     process.env.MULTIREMI_SCM_ENCRYPTION_KEY = Buffer.alloc(32, 7).toString("base64");
     const repoId = `repo_pg_mul457_${workspaceCounter}`;
@@ -617,7 +604,6 @@ describe.skipIf(!pgAvailable)("MUL-400 S1 on PostgreSQL", () => {
       title: "PG SCM atomic child", workspaceId, parentIssueId: parent.id, status: "in_progress",
       assigneeType: "agent", assigneeId: store.createAgent({ name: "SCM child executor", provider: "codex", workspaceId }).id,
     }).id);
-    store.grantParentDone(parent.id, store.resolveIssueResponsibility(parent.id).rootHuman!.id);
     store.createIssueComment(parent.id, { body: "PG SCM summary", authorType: "agent", authorId: agent });
     const externalId = `77${workspaceCounter}`;
     store.advanceScmEntitySnapshot({
@@ -646,9 +632,9 @@ describe.skipIf(!pgAvailable)("MUL-400 S1 on PostgreSQL", () => {
       ...rest: unknown[]
     ) {
       original.call(this, issueId, input as never, ...rest as [never]);
-      if (input.type === "parent_status_held") {
+      if (input.type === "scm_merge_completed") {
         injected = true;
-        throw new Error("pg scm hold injection");
+        throw new Error("pg scm record injection");
       }
     } as typeof StoreContext.prototype.appendIssueActivity;
     try {
@@ -659,29 +645,27 @@ describe.skipIf(!pgAvailable)("MUL-400 S1 on PostgreSQL", () => {
     expect(injected).toBe(true);
     expect(store.getIssue(parent.id)?.status).toBe("in_progress");
     const types = store.listIssueActivity(parent.id).map((entry) => entry.type);
-    expect(types).not.toContain("parent_done_grant_used");
     expect(types).not.toContain("scm_merge_completed");
+    expect(types).not.toContain("parent_status_held");
     const pending = db.query(
       "SELECT status, last_error FROM multiremi_scm_effects WHERE issue_id = ? ORDER BY created_at DESC LIMIT 1",
     ).get(parent.id) as { status?: string; last_error?: string | null } | null;
     expect(pending?.status).toBe("pending");
-    expect(String(pending?.last_error ?? "")).toContain("pg scm hold injection");
+    expect(String(pending?.last_error ?? "")).toContain("pg scm record injection");
 
     recordMerge(`change.merged:${externalId}:pg-atomic`);
     expect(store.getIssue(parent.id)?.status).toBe("in_progress");
-    expect(store.listIssueActivity(parent.id).filter((e) => e.type === "parent_done_grant_used")).toHaveLength(0);
-    expect(store.listIssueActivity(parent.id).filter((e) => e.type === "parent_status_held")).toHaveLength(1);
-    expect(store.listIssueActivity(parent.id).filter((e) => e.type === "scm_merge_completed")).toHaveLength(0);
+    expect(store.listIssueActivity(parent.id).filter((e) => e.type === "parent_status_held")).toHaveLength(0);
+    expect(store.listIssueActivity(parent.id).filter((e) => e.type === "scm_merge_completed")).toHaveLength(1);
     const settled = db.query(
       "SELECT status FROM multiremi_scm_effects WHERE issue_id = ? ORDER BY created_at DESC LIMIT 1",
     ).get(parent.id) as { status?: string } | null;
     expect(settled?.status).toBe("applied");
     acceptTestIssueDelivery(store, parent.id);
     expect(store.getIssue(parent.id)?.status).toBe("done");
-    expect(store.listIssueActivity(parent.id).filter((e) => e.type === "issue_delivery_accepted")).toHaveLength(1);
   });
 
-  it("keeps forged comments and a legacy grant from replacing formal delivery authorization (Postgres)", async () => {
+  it("keeps forged comments from letting an Agent close its root; a member closes it (Postgres)", async () => {
     const workspaceId = "local";
     const agent = store.createAgent({
       name: `PG forgery owner ${workspaceCounter += 1}`,
@@ -697,7 +681,6 @@ describe.skipIf(!pgAvailable)("MUL-400 S1 on PostgreSQL", () => {
       title: "PG forgery child", workspaceId, parentIssueId: parent.id, status: "in_progress",
       assigneeType: "agent", assigneeId: store.createAgent({ name: "Forgery prerequisite executor", provider: "codex", workspaceId }).id,
     }).id);
-    store.grantParentDone(parent.id, store.resolveIssueResponsibility(parent.id).rootHuman!.id);
     const app = createMultiremiApp({ store });
     const ownerTask = store.createTask({ agentId: agent, issueId: parent.id, prompt: "PG owner round" });
     const ownerToken = (await store.createTaskAccessToken(ownerTask, workspaceId)).token;
@@ -719,12 +702,12 @@ describe.skipIf(!pgAvailable)("MUL-400 S1 on PostgreSQL", () => {
     const agentComment = await forgedByAgent.json();
     expect(store.getIssueComment(agentComment.message.id)?.authorId).toBe(other.id);
 
-    const done = () => app.request(`/api/issues/${parent.id}`, {
+    const done = (token: string) => app.request(`/api/issues/${parent.id}`, {
       method: "PATCH",
-      headers: { Authorization: `Bearer ${ownerToken}`, "Content-Type": "application/json" },
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
       body: JSON.stringify({ status: "done" }),
     });
-    expect((await done()).status).toBe(409);
+    expect((await done(ownerToken)).status).toBe(403);
     // A member PAT forging the same identity stores a member comment instead.
     const forgedByMember = await app.request(issueMessagesPath(store, parent.id), {
       method: "POST",
@@ -737,36 +720,23 @@ describe.skipIf(!pgAvailable)("MUL-400 S1 on PostgreSQL", () => {
     expect(forgedByMember.status).toBe(200);
     const memberComment = await forgedByMember.json();
     expect(store.getIssueComment(memberComment.message.id)).toMatchObject({ authorType: "member" });
-    expect((await done()).status).toBe(409);
-    // Even the owner's authentic comment is not a formal delivery or acceptance.
+    expect((await done(ownerToken)).status).toBe(403);
+    // Even the owner's authentic comment does not let it close its own root.
     await app.request(issueMessagesPath(store, parent.id), {
       method: "POST",
       headers: { Authorization: `Bearer ${ownerToken}`, "Content-Type": "application/json" },
       body: JSON.stringify(requestMessageBody(store, { body: "PG owner summary" }, { type: "role", ref: "issue_owner" })),
     });
-    expect((await done()).status).toBe(409);
-    const forgedDelivery = await app.request(`/api/issues/${parent.id}/deliveries`, {
-      method: "POST", headers: { Authorization: `Bearer ${otherToken}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ summary: "PG forged formal summary", actor_id: agent, task_id: ownerTask.id }),
-    });
-    expect(forgedDelivery.status).toBe(403);
-    expect(store.listIssueDeliveries(parent.id)).toHaveLength(0);
-    const delivery = await app.request(`/api/issues/${parent.id}/deliveries`, {
+    expect((await done(ownerToken)).status).toBe(403);
+    // The retired delivery route explains its replacement.
+    const retired = await app.request(`/api/issues/${parent.id}/deliveries`, {
       method: "POST", headers: { Authorization: `Bearer ${ownerToken}`, "Content-Type": "application/json" },
       body: JSON.stringify({ summary: "PG owner's formal summary" }),
     });
-    expect(delivery.status).toBe(201);
-    const submitted = (await delivery.json()).delivery;
-    const acceptanceRequest = () => app.request(`/api/issues/${parent.id}/deliveries/${submitted.id}/respond`, {
-      method: "POST", headers: { Authorization: `Bearer ${ownerToken}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ action: "accept", revision: submitted.responsibilityRevision }),
-    });
-    expect((await acceptanceRequest()).status).toBe(403);
-    expect(store.listIssueDeliveries(parent.id)[0]?.status).toBe("pending");
-    const human = store.resolveIssueResponsibility(parent.id).rootHuman!;
-    store.authorizeIssueDelivery(parent.id, submitted.id, agent, submitted.responsibilityRevision, { type: "member", id: human.id });
-    const accepted = await acceptanceRequest();
-    expect(accepted.status).toBe(200);
+    expect(retired.status).toBe(410);
+    expect(store.getIssue(parent.id)?.status).not.toBe("done");
+    const closed = await done(memberToken);
+    expect(closed.status).toBe(200);
     expect(store.getIssue(parent.id)?.status).toBe("done");
   });
 
@@ -978,7 +948,7 @@ describe.skipIf(!pgAvailable)("MUL-400 S1 on PostgreSQL", () => {
     });
     createResponsibleTestIssue(store, { title: "PG sibling gp", workspaceId, parentIssueId: grandparent.id, status: "in_progress" });
     createResponsibleTestIssue(store, { title: "PG sibling p", workspaceId, parentIssueId: parent.id, status: "in_progress" });
-    const prepared = prepareTestIssueDelivery(store, child.id);
+    testWorkspaceMember(store, workspaceId);
     store.updateIssue(parent.id, { status: "in_review", force: true });
     store.updateIssue(grandparent.id, { status: "in_review", force: true });
 
@@ -989,7 +959,7 @@ describe.skipIf(!pgAvailable)("MUL-400 S1 on PostgreSQL", () => {
     });
     counter.reset();
     try {
-      store.respondIssueDelivery(child.id, prepared.delivery.id, { action: "accept", revision: prepared.delivery.responsibilityRevision }, prepared.actor);
+      acceptTestIssueDelivery(store, child.id);
     } finally {
       unsubscribe();
     }
@@ -1182,6 +1152,8 @@ describe.skipIf(!pgAvailable)("MUL-400 S1 on PostgreSQL", () => {
     const second = createResponsibleTestIssue(store, { title: "PG second parent", workspaceId, status: "in_review", assigneeType: "agent", assigneeId: agent });
     check("updateIssue re-parent", () => { store.updateIssue(child.id, { parentIssueId: second.id }); });
 
+    // The asking owner skips its own levels: any active member answers at the human stage.
+    const answerer = testWorkspaceMember(store, workspaceId);
     const task = store.createTask({ agentId: agent, issueId: child.id, prompt: "PG ask" });
     let claimed = store.claimTask(runtime);
     while (claimed && claimed.id !== task.id) claimed = store.claimTask(runtime);
@@ -1202,7 +1174,7 @@ describe.skipIf(!pgAvailable)("MUL-400 S1 on PostgreSQL", () => {
       request = ask("PG choice?");
     });
     check("answerQuestion", () => { store.answerQuestion(request!.id, { expected_route_revision: request!.route_revision, response: { answer: "yes" } },
-      { type: "member", id: store.resolveIssueResponsibility(child.id).rootHuman!.id }); });
+      { type: "member", id: answerer.id }); });
     const turn = store.getTurnForAttempt(task.id)!;
     check("consume native question reply", () => {
       const answered = store.getQuestion(request!.id)!;
@@ -1307,7 +1279,7 @@ describe.skipIf(!pgAvailable)("MUL-400 S1 on PostgreSQL", () => {
       assigneeType: "agent",
       assigneeId: store.createAgent({ name: "PG coalesce executor", provider: "codex", workspaceId }).id,
     });
-    const prepared = prepareTestIssueDelivery(store, second.id);
+    const member = testWorkspaceMember(store, workspaceId);
     const previousCommentIds = new Set(store.listIssueComments(parent.id).map(comment => comment.id));
 
     // The worker is a second Postgres connection in its own thread, so the two
@@ -1317,8 +1289,8 @@ describe.skipIf(!pgAvailable)("MUL-400 S1 on PostgreSQL", () => {
     worker.postMessage({ type: "init", databaseUrl: pgDatabaseUrl(TEST_DB), migrationReportDir: resolveMigrationReportDirectory() });
     await ready;
     const finished = waitForWorkerPhase(worker, "completed", 60_000);
-    worker.postMessage({ type: "end", childIssueId: second.id, status: "done",
-      delivery: { id: prepared.delivery.id, revision: prepared.delivery.responsibilityRevision }, actor: prepared.actor });
+    // A member closes the second child from the other connection.
+    worker.postMessage({ type: "end", childIssueId: second.id, status: "done", memberId: member.id });
 
     // The test process ends the other child at the same time.
     try {

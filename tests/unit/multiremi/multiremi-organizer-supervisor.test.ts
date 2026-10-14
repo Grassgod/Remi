@@ -595,7 +595,11 @@ describe("Organizer supervisor privilege layer", () => {
     await setMode(fixture, "act");
 
     // The cancel moves the Issue in_progress -> todo, so the status patch is a
-    // real change and its post-commit emission is observable.
+    // real change and its post-commit emission is observable. A pending question
+    // would keep the Issue in_progress, so a member first closes the fixture's one.
+    const [pendingRequest] = fixture.store.listTaskHumanRequests(fixture.targetTask.id);
+    fixture.store.closeQuestion(pendingRequest!.id, { expected_route_revision: 1, reason: "Not needed for this probe" },
+      { type: "member", id: fixture.owner.id });
     fixture.store.updateIssue(fixture.targetIssue.id, { status: "in_progress" });
     db!.run("UPDATE multiremi_issues SET assignee_type='agent',assignee_id=? WHERE id=?",[fixture.targetAgent.id,fixture.targetIssue.id]);
     db!.run("UPDATE multiremi_turns SET status='running' WHERE id=?",[fixture.store.getTurnForAttempt(fixture.targetTask.id)!.id]);
@@ -619,6 +623,7 @@ describe("Organizer supervisor privilege layer", () => {
     }
 
     expect(fixture.store.getTask(fixture.targetTask.id)?.status).toBe("cancelled");
+    expect(fixture.store.getIssue(fixture.targetIssue.id)?.status).toBe("todo");
     expect(events.filter((event) => event.type === "comment:created")).toHaveLength(1);
     expect(events.filter((event) => event.type === "activity:created" && event.action === "task_cancelled"))
       .toHaveLength(1);

@@ -3198,40 +3198,6 @@
       "hidden": false,
       "migration_status": "native"
     },
-    "issue.done-grant.add": {
-      "command": "remi issue done-grant add",
-      "aliases": [],
-      "auth": [
-        "human",
-        "task"
-      ],
-      "capability": "issue.done-grant.add",
-      "mutation": "write",
-      "output": [
-        "table",
-        "json",
-        "jsonl"
-      ],
-      "hidden": false,
-      "migration_status": "native"
-    },
-    "issue.done-grant.remove": {
-      "command": "remi issue done-grant remove",
-      "aliases": [],
-      "auth": [
-        "human",
-        "task"
-      ],
-      "capability": "issue.done-grant.remove",
-      "mutation": "write",
-      "output": [
-        "table",
-        "json",
-        "jsonl"
-      ],
-      "hidden": false,
-      "migration_status": "native"
-    },
     "issue.reaction.list": {
       "command": "remi issue reaction list",
       "aliases": [],
@@ -3976,54 +3942,6 @@
       "hidden": false,
       "migration_status": "native"
     },
-    "issue.responsibility-unassigned.list": {
-      "command": "remi issue responsibility-unassigned list",
-      "aliases": [],
-      "auth": [
-        "human"
-      ],
-      "capability": "issue.responsibility-unassigned.list",
-      "mutation": "read",
-      "output": [
-        "table",
-        "json",
-        "jsonl"
-      ],
-      "hidden": false,
-      "migration_status": "native"
-    },
-    "issue.responsibility-unassigned.map": {
-      "command": "remi issue responsibility-unassigned map",
-      "aliases": [],
-      "auth": [
-        "human"
-      ],
-      "capability": "issue.responsibility-unassigned.map",
-      "mutation": "write",
-      "output": [
-        "table",
-        "json",
-        "jsonl"
-      ],
-      "hidden": false,
-      "migration_status": "native"
-    },
-    "autopilot.responsible.set": {
-      "command": "remi autopilot responsible set",
-      "aliases": [],
-      "auth": [
-        "human"
-      ],
-      "capability": "autopilot.responsible.set",
-      "mutation": "write",
-      "output": [
-        "table",
-        "json",
-        "jsonl"
-      ],
-      "hidden": false,
-      "migration_status": "native"
-    },
     "issue.responsibility": {
       "command": "remi issue responsibility",
       "aliases": [],
@@ -4041,22 +3959,6 @@
       "hidden": false,
       "migration_status": "native"
     },
-    "issue.responsible.set": {
-      "command": "remi issue responsible set",
-      "aliases": [],
-      "auth": [
-        "human"
-      ],
-      "capability": "issue.responsible.set",
-      "mutation": "write",
-      "output": [
-        "table",
-        "json",
-        "jsonl"
-      ],
-      "hidden": false,
-      "migration_status": "native"
-    },
     "issue.question.list": {
       "command": "remi issue question list",
       "aliases": [],
@@ -4066,89 +3968,6 @@
       ],
       "capability": "issue.question.list",
       "mutation": "read",
-      "output": [
-        "table",
-        "json",
-        "jsonl"
-      ],
-      "hidden": false,
-      "migration_status": "native"
-    },
-    "issue.delivery.list": {
-      "command": "remi issue delivery list",
-      "aliases": [],
-      "auth": [
-        "human",
-        "task"
-      ],
-      "capability": "issue.delivery.list",
-      "mutation": "read",
-      "output": [
-        "table",
-        "json",
-        "jsonl"
-      ],
-      "hidden": false,
-      "migration_status": "native"
-    },
-    "issue.delivery.authorize": {
-      "command": "remi issue delivery authorize",
-      "aliases": [],
-      "auth": [
-        "human"
-      ],
-      "capability": "issue.delivery.authorize",
-      "mutation": "write",
-      "output": [
-        "table",
-        "json",
-        "jsonl"
-      ],
-      "hidden": false,
-      "migration_status": "native"
-    },
-    "issue.delivery.submit": {
-      "command": "remi issue delivery submit",
-      "aliases": [],
-      "auth": [
-        "task"
-      ],
-      "capability": "issue.delivery.submit",
-      "mutation": "write",
-      "output": [
-        "table",
-        "json",
-        "jsonl"
-      ],
-      "hidden": false,
-      "migration_status": "native"
-    },
-    "issue.delivery.accept": {
-      "command": "remi issue delivery accept",
-      "aliases": [],
-      "auth": [
-        "human",
-        "task"
-      ],
-      "capability": "issue.delivery.accept",
-      "mutation": "write",
-      "output": [
-        "table",
-        "json",
-        "jsonl"
-      ],
-      "hidden": false,
-      "migration_status": "native"
-    },
-    "issue.delivery.return": {
-      "command": "remi issue delivery return",
-      "aliases": [],
-      "auth": [
-        "human",
-        "task"
-      ],
-      "capability": "issue.delivery.return",
-      "mutation": "write",
       "output": [
         "table",
         "json",
@@ -4198,23 +4017,6 @@
         "task"
       ],
       "capability": "message.question.escalate",
-      "mutation": "write",
-      "output": [
-        "table",
-        "json",
-        "jsonl"
-      ],
-      "hidden": false,
-      "migration_status": "native"
-    },
-    "message.question.transfer": {
-      "command": "remi message question transfer",
-      "aliases": [],
-      "auth": [
-        "human",
-        "task"
-      ],
-      "capability": "message.question.transfer",
       "mutation": "write",
       "output": [
         "table",
@@ -9827,6 +9629,126 @@
       "hidden": true,
       "migration_status": "native"
     },
+    "retired.issue.delivery.list": {
+      "command": "remi issue delivery list",
+      "aliases": [],
+      "auth": [],
+      "capability": null,
+      "mutation": "read",
+      "output": [],
+      "hidden": true,
+      "migration_status": "native"
+    },
+    "retired.issue.delivery.submit": {
+      "command": "remi issue delivery submit",
+      "aliases": [],
+      "auth": [],
+      "capability": null,
+      "mutation": "read",
+      "output": [],
+      "hidden": true,
+      "migration_status": "native"
+    },
+    "retired.issue.delivery.accept": {
+      "command": "remi issue delivery accept",
+      "aliases": [],
+      "auth": [],
+      "capability": null,
+      "mutation": "read",
+      "output": [],
+      "hidden": true,
+      "migration_status": "native"
+    },
+    "retired.issue.delivery.return": {
+      "command": "remi issue delivery return",
+      "aliases": [],
+      "auth": [],
+      "capability": null,
+      "mutation": "read",
+      "output": [],
+      "hidden": true,
+      "migration_status": "native"
+    },
+    "retired.issue.delivery.authorize": {
+      "command": "remi issue delivery authorize",
+      "aliases": [],
+      "auth": [],
+      "capability": null,
+      "mutation": "read",
+      "output": [],
+      "hidden": true,
+      "migration_status": "native"
+    },
+    "retired.issue.responsibility-unassigned.list": {
+      "command": "remi issue responsibility-unassigned list",
+      "aliases": [],
+      "auth": [],
+      "capability": null,
+      "mutation": "read",
+      "output": [],
+      "hidden": true,
+      "migration_status": "native"
+    },
+    "retired.issue.responsibility-unassigned.map": {
+      "command": "remi issue responsibility-unassigned map",
+      "aliases": [],
+      "auth": [],
+      "capability": null,
+      "mutation": "read",
+      "output": [],
+      "hidden": true,
+      "migration_status": "native"
+    },
+    "retired.issue.responsible.set": {
+      "command": "remi issue responsible set",
+      "aliases": [],
+      "auth": [],
+      "capability": null,
+      "mutation": "read",
+      "output": [],
+      "hidden": true,
+      "migration_status": "native"
+    },
+    "retired.autopilot.responsible.set": {
+      "command": "remi autopilot responsible set",
+      "aliases": [],
+      "auth": [],
+      "capability": null,
+      "mutation": "read",
+      "output": [],
+      "hidden": true,
+      "migration_status": "native"
+    },
+    "retired.issue.done-grant.add": {
+      "command": "remi issue done-grant add",
+      "aliases": [],
+      "auth": [],
+      "capability": null,
+      "mutation": "read",
+      "output": [],
+      "hidden": true,
+      "migration_status": "native"
+    },
+    "retired.issue.done-grant.remove": {
+      "command": "remi issue done-grant remove",
+      "aliases": [],
+      "auth": [],
+      "capability": null,
+      "mutation": "read",
+      "output": [],
+      "hidden": true,
+      "migration_status": "native"
+    },
+    "retired.message.question.transfer": {
+      "command": "remi message question transfer",
+      "aliases": [],
+      "auth": [],
+      "capability": null,
+      "mutation": "read",
+      "output": [],
+      "hidden": true,
+      "migration_status": "native"
+    },
     "retired.issue.comment.list": {
       "command": "remi issue comment list",
       "aliases": [],
@@ -10300,6 +10222,54 @@
       "command": "retired.session.config",
       "replacement": "remi workspace storage get|set <workspace>（Session 归档设置已取消，存储策略见 workspace storage）"
     },
+    "remi issue delivery list": {
+      "command": "retired.issue.delivery.list",
+      "replacement": "remi issue get <issue>（正式交付已移除；执行负责人这一轮的最后一条回复就是总结）"
+    },
+    "remi issue delivery submit": {
+      "command": "retired.issue.delivery.submit",
+      "replacement": "这一轮的最后一条回复就是总结；本轮结束后 Issue 自动进入 in_review"
+    },
+    "remi issue delivery accept": {
+      "command": "retired.issue.delivery.accept",
+      "replacement": "remi issue status <issue> done；有问题用 remi message send <conversation> --to issue-owner --kind request"
+    },
+    "remi issue delivery return": {
+      "command": "retired.issue.delivery.return",
+      "replacement": "remi issue status <issue> done；有问题用 remi message send <conversation> --to issue-owner --kind request"
+    },
+    "remi issue delivery authorize": {
+      "command": "retired.issue.delivery.authorize",
+      "replacement": "remi issue status <child> done（父单执行负责人直接关闭子单）"
+    },
+    "remi issue responsibility-unassigned list": {
+      "command": "retired.issue.responsibility-unassigned.list",
+      "replacement": "remi issue responsibility <issue>（Issue 不再配置指定人类）"
+    },
+    "remi issue responsibility-unassigned map": {
+      "command": "retired.issue.responsibility-unassigned.map",
+      "replacement": "remi issue assign <issue> --to <agent|squad>（配置执行负责人）"
+    },
+    "remi issue responsible set": {
+      "command": "retired.issue.responsible.set",
+      "replacement": "remi issue assign <issue> --to <agent|squad>（Issue 不再指定人类，只配置执行负责人）"
+    },
+    "remi autopilot responsible set": {
+      "command": "retired.autopilot.responsible.set",
+      "replacement": "remi autopilot update <autopilot>（自动化建单不再需要指定人类）"
+    },
+    "remi issue done-grant add": {
+      "command": "retired.issue.done-grant.add",
+      "replacement": "remi issue status <child> done（父单执行负责人直接关闭子单；成员可关闭任何 Issue）"
+    },
+    "remi issue done-grant remove": {
+      "command": "retired.issue.done-grant.remove",
+      "replacement": "remi issue status <child> done（父单执行负责人直接关闭子单；成员可关闭任何 Issue）"
+    },
+    "remi message question transfer": {
+      "command": "retired.message.question.transfer",
+      "replacement": "责任变更后问题自动重新路由；remi message question get <question> 查看当前处理者"
+    },
     "remi issue comment list": {
       "command": "retired.issue.comment.list",
       "replacement": "remi message list <conversation>"
@@ -10593,7 +10563,9 @@
       "command": "issue.metadata.delete"
     },
     "DELETE /api/issues/:id/parent-done-grant": {
-      "command": "issue.done-grant.remove"
+      "cli_exempt": true,
+      "category": "retired_route",
+      "reason": "已移除：改用 remi issue status <child> done（父单执行负责人直接关闭子单；成员可关闭任何 Issue）"
     },
     "DELETE /api/issues/:id/reactions": {
       "command": "issue.reaction.remove"
@@ -10653,7 +10625,9 @@
       "command": "issue.metadata.delete"
     },
     "DELETE /api/multiremi/issues/:id/parent-done-grant": {
-      "command": "issue.done-grant.remove"
+      "cli_exempt": true,
+      "category": "retired_route",
+      "reason": "已移除：改用 remi issue status <child> done（父单执行负责人直接关闭子单；成员可关闭任何 Issue）"
     },
     "DELETE /api/multiremi/issues/:id/reactions": {
       "command": "issue.reaction.remove"
@@ -11047,7 +11021,9 @@
       "reason": "已移除：改用 remi issue question list <issue>"
     },
     "GET /api/issues/:id/deliveries": {
-      "command": "issue.delivery.list"
+      "cli_exempt": true,
+      "category": "retired_route",
+      "reason": "已移除：改用 remi issue get <issue>（正式交付已移除；执行负责人这一轮的最后一条回复就是总结）"
     },
     "GET /api/issues/:id/dependencies": {
       "command": "issue.dependency.list"
@@ -11817,7 +11793,9 @@
       "command": "feishu.source.status"
     },
     "GET /api/workspaces/:workspaceId/issue-responsibility-migration": {
-      "command": "issue.responsibility-unassigned.list"
+      "cli_exempt": true,
+      "category": "retired_route",
+      "reason": "已移除：改用 remi issue responsibility <issue>（Issue 不再配置指定人类）"
     },
     "GET /api/workspaces/:workspaceId/messaging/connections": {
       "command": "messaging.connection.list"
@@ -12308,13 +12286,19 @@
       "reason": "已移除：改用 remi message question close <question> --revision <route_revision> --reason <reason>"
     },
     "POST /api/issues/:id/deliveries": {
-      "command": "issue.delivery.submit"
+      "cli_exempt": true,
+      "category": "retired_route",
+      "reason": "已移除：改用 这一轮的最后一条回复就是总结；本轮结束后 Issue 自动进入 in_review"
     },
     "POST /api/issues/:id/deliveries/:deliveryId/authorize": {
-      "command": "issue.delivery.authorize"
+      "cli_exempt": true,
+      "category": "retired_route",
+      "reason": "已移除：改用 remi issue status <child> done（父单执行负责人直接关闭子单）"
     },
     "POST /api/issues/:id/deliveries/:deliveryId/respond": {
-      "command": "issue.delivery.accept"
+      "cli_exempt": true,
+      "category": "retired_route",
+      "reason": "已移除：改用 remi issue status <issue> done；有问题用 remi message send <conversation> --to issue-owner --kind request"
     },
     "POST /api/issues/:id/dependencies": {
       "command": "issue.dependency.add"
@@ -12323,7 +12307,9 @@
       "command": "issue.label.add"
     },
     "POST /api/issues/:id/parent-done-grant": {
-      "command": "issue.done-grant.add"
+      "cli_exempt": true,
+      "category": "retired_route",
+      "reason": "已移除：改用 remi issue status <child> done（父单执行负责人直接关闭子单；成员可关闭任何 Issue）"
     },
     "POST /api/issues/:id/reactions": {
       "command": "issue.reaction.add"
@@ -12432,7 +12418,9 @@
       "command": "message.question.present"
     },
     "POST /api/messages/:id/question/transfer": {
-      "command": "message.question.transfer"
+      "cli_exempt": true,
+      "category": "retired_route",
+      "reason": "已移除：改用 责任变更后问题自动重新路由；remi message question get <question> 查看当前处理者"
     },
     "POST /api/messages/:id/reactions": {
       "command": "message.react"
@@ -12556,7 +12544,9 @@
       "command": "issue.label.add"
     },
     "POST /api/multiremi/issues/:id/parent-done-grant": {
-      "command": "issue.done-grant.add"
+      "cli_exempt": true,
+      "category": "retired_route",
+      "reason": "已移除：改用 remi issue status <child> done（父单执行负责人直接关闭子单；成员可关闭任何 Issue）"
     },
     "POST /api/multiremi/issues/:id/reactions": {
       "command": "issue.reaction.add"
@@ -12939,7 +12929,9 @@
       "command": "feishu.source.add"
     },
     "POST /api/workspaces/:workspaceId/issue-responsibility-migration/map": {
-      "command": "issue.responsibility-unassigned.map"
+      "cli_exempt": true,
+      "category": "retired_route",
+      "reason": "已移除：改用 remi issue assign <issue> --to <agent|squad>（配置执行负责人）"
     },
     "POST /api/workspaces/:workspaceId/messaging/connections": {
       "command": "messaging.connection.add"

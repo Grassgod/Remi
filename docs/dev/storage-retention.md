@@ -8,7 +8,7 @@ summary: daemon 磁盘布局、工作区回收与恢复、保留策略和运维�
 
 daemon 上的东西分四类：工作区（代码目录）、运行环境（provider home 等）、记录（trace 与原生会话历史）、共享缓存（bare 仓库、代码视图）。
 前两类是缓存，主体（Issue 或 Chat）结束后按保留期回收，删前保存未保存的工作；记录永久留在 daemon，服务端只保存指向它的指针。
-决策与被否决的方案见 [ADR 0017](../adr/0017-local-records-and-recyclable-workspaces.md)（取代 [ADR 0006](../adr/0006-conversation-log-and-daemon-owned-traces.md) 的决策 5–9）。
+决策与被否决的方案见 [ADR 0018](../adr/0018-local-records-and-recyclable-workspaces.md)（取代 [ADR 0006](../adr/0006-conversation-log-and-daemon-owned-traces.md) 的决策 5–9）。
 
 ## 目录布局
 

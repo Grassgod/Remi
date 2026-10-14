@@ -1026,7 +1026,7 @@ for (const backend of ["SQLite", "PostgreSQL"] as const) {
         expect(store.listChildIssueProgress(target)).toEqual([]);
       });
 
-      it(`${direction}: R2 foreign-child closure fails closed and cancellation emits no parent comments, rounds, inbox or workspace events`, async () => {
+      it(`${direction}: R2 closing or cancelling a foreign child emits no parent comments, rounds, inbox or workspace events`, async () => {
         const { target, auth, parent, child } = await legacyTree(reverse);
         const owner = store.createAgent({ name: "Parent owner", provider: "codex", workspaceId: target, ownerId: auth.targetMember });
         db.run("UPDATE multiremi_issues SET assignee_type = 'agent', assignee_id = ? WHERE id = ?", [owner.id, parent.id]);
@@ -1037,9 +1037,10 @@ for (const backend of ["SQLite", "PostgreSQL"] as const) {
         const events: string[] = [];
         const stop = store.onWorkspaceEvent((event) => { if (event.workspaceId === target) events.push(event.type); });
         try {
-          const denied = await auth.request(auth.sourceOnly, `/api/issues/${child.id}`, 'PATCH', { status: 'done' });
-          expect(denied.status).toBe(409);
-          expect(store.getIssue(child.id)?.status).toBe('todo');
+          // A member closes any Issue; the legacy foreign parent is never touched.
+          const closed = await auth.request(auth.sourceOnly, `/api/issues/${child.id}`, 'PATCH', { status: 'done' });
+          expect(closed.status, await closed.clone().text()).toBe(200);
+          expect(store.getIssue(child.id)?.status).toBe('done');
           const response = await auth.request(auth.sourceOnly, `/api/issues/${child.id}`, "PATCH", { status: "cancelled" });
           expect(response.status, await response.clone().text()).toBe(200);
           expect(store.getIssue(child.id)?.status).toBe("cancelled");
@@ -1052,14 +1053,16 @@ for (const backend of ["SQLite", "PostgreSQL"] as const) {
         } finally { stop(); }
       });
 
-      it(`${direction}: R3 a native task question with a legacy foreign parent remains unavailable on its own source issue`, async () => {
+      it(`${direction}: R3 a native task question with a legacy foreign parent stops at the break and stays on its own source workspace`, async () => {
         const { source, target, auth, parent, child, agent, task } = await legacyTree(reverse);
         const events: string[] = [];
         const stop = store.onWorkspaceEvent((event) => { if (event.workspaceId === target) events.push(event.type); });
         try {
           const decision = taskQuestion(task, 'PRIVATE source decision and body');
-          expect(decision).toMatchObject({ workspace_id: source, source_issue_id: child.id, status: 'pending', stage: 'unavailable', current_handler: null });
-          expect(decision.route_reason).not.toBeNull();
+          // The asker owns the child and the parent chain breaks at another workspace: the Q waits at
+          // the human stage of its own workspace, with the break as its reason, and never crosses over.
+          expect(decision).toMatchObject({ workspace_id: source, source_issue_id: child.id, status: 'pending', stage: 'human', current_handler: null,
+            route_reason: `${parent.id}:workspace_mismatch` });
           expect((await read(auth, auth.targetOnly, issueMessagesPath(store, parent.id) + "?message_kind=decision")).messages).toEqual([]);
           expect(store.listTasksForIssue(parent.id)).toEqual([]);
           expect(store.listInboxItems(auth.targetMember, target)).toEqual([]);

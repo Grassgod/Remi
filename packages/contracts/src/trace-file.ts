@@ -1,6 +1,6 @@
 /**
  * Contract for trace ownership: the on-disk per-task trace file and the server
- * pointer that says whether it is readable (ADR 0006, ADR 0017).
+ * pointer that says whether it is readable (ADR 0006, ADR 0018).
  *
  * A trace lives only on the daemon that ran the task; the server keeps a pointer
  * and reads through the daemon. `TraceRef` is what both the page read and the

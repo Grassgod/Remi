@@ -135,7 +135,7 @@ Skill 索引包含名称、触发描述和绝对 `SKILL.md` 路径，支持文�
 
 ## daemon 存储布局
 
-daemon 的根目录是 `MULTIREMI_WORKSPACES_ROOT`（默认 `~/.remi/multiremi/workspaces`）。所有路径由 `packages/daemon/src/agent-runtime/workspace/layout.ts` 构造，其他模块不再手写拼接。决策与取舍见 [ADR 0017](../adr/0017-local-records-and-recyclable-workspaces.md)，生命周期、策略和运维见[存储与保留](storage-retention.md)。
+daemon 的根目录是 `MULTIREMI_WORKSPACES_ROOT`（默认 `~/.remi/multiremi/workspaces`）。所有路径由 `packages/daemon/src/agent-runtime/workspace/layout.ts` 构造，其他模块不再手写拼接。决策与取舍见 [ADR 0018](../adr/0018-local-records-and-recyclable-workspaces.md)，生命周期、策略和运维见[存储与保留](storage-retention.md)。
 
 ```text
 registry/<主体>.json                    主体登记：归属、仓库、分支、状态、快照（原子写入）

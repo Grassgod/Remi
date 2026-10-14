@@ -1,5 +1,5 @@
 /**
- * Wiki working copy snapshot and restore (ADR 0017, section 2).
+ * Wiki working copy snapshot and restore (ADR 0018, section 2).
  *
  * `wiki/` is work product, so reclaim keeps what the user changed: pages that
  * differ from the fetch baseline (`.multiremi/wiki-base`, by manifest hash) are

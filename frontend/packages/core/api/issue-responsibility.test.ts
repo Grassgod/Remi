@@ -1,33 +1,24 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ApiClient } from "./client";
 import { ApiContractError } from "./schema";
-import { IssueDeliverySchema, QuestionViewSchema } from "./schemas/issue-responsibility";
+import { QuestionViewSchema } from "./schemas/issue-responsibility";
+// The Issue human stage names nobody: any active member of the source workspace acts.
 const question = { id: "q1", session_id: "session", workspace_id: "ws", source_issue_id: "issue", source_agent_id: "agent", source_turn_id: null, source_attempt_id: null,
-  original_questions: [], original_message: "Choose?", options: [{ label: "Yes", value: "yes" }], summary: null, current_handler: { type: "member", id: "human" }, stage: "human", route_revision: 3, answer_revision: 0,
-  kind: "question", status: "pending", wait_status: "detached", wait_reason: "provider exited", answer: null, history: [], actions: { allowed: ["answer"] } };
+  original_questions: [], original_message: "Choose?", options: [{ label: "Yes", value: "yes" }], summary: null, current_handler: null, stage: "human", route_revision: 3, answer_revision: 0,
+  route_reason: "parent:leader_missing", kind: "question", status: "pending", wait_status: "detached", wait_reason: "provider exited", answer: null,
+  history: [{ type: "created", at: "now", actor: { type: "agent", id: "agent" }, route_revision: 1, handler: { type: "agent", id: "owner" } },
+    { type: "escalate", at: "later", actor: { type: "agent", id: "owner" }, route_revision: 2, handler: null }], actions: { allowed: ["answer", "close"] } };
 afterEach(() => vi.unstubAllGlobals());
-describe("responsibility API contracts", () => {
-  it("retains unavailable review reasons, tolerates older projections and rejects malformed reasons", () => {
-    const actor = { type: "member", id: "human", issueId: "parent", name: "Human" };
-    const delivery = { id: "delivery", issueId: "issue", sourceSessionId: "session", summary: "Retained evidence", status: "pending", submittedBy: actor, reviewOwner: actor,
-      responsibilityRevision: "v1", responseMessageId: null, createdAt: "now", respondedAt: null };
-    expect(IssueDeliverySchema.parse(delivery).reviewUnavailableReason).toBeUndefined();
-    expect(IssueDeliverySchema.parse(delivery).isLatest).toBeUndefined();
-    expect(IssueDeliverySchema.parse({...delivery,isLatest:false,invalidatedAt:'now',invalidatedReason:'owner_changed'})).toMatchObject({isLatest:false,invalidatedAt:'now'});
-    expect(() => IssueDeliverySchema.parse({...delivery,isLatest:'true'})).toThrow();
-    for (const reason of ["review_issue_closed", "review_issue_archived", "future_unavailable_reason"]) expect(IssueDeliverySchema.parse({ ...delivery, reviewUnavailableReason: reason }).reviewUnavailableReason).toBe(reason);
-    expect(() => IssueDeliverySchema.parse({ ...delivery, reviewUnavailableReason: { reason: "closed" } })).toThrow();
-  });
-  it("reads original migration facts and submits only explicit mappings with their fact revision", async () => {
-    const item = { issueId: "root", key: "ROOT-1", title: "Root", responsibleMemberId: null, revision: "v1", assigneeType: "member", assigneeId: "old-member", createdById: "creator", unresolved: [{ issueId: "root", reason: "root_human_missing" }], candidates: [{ memberId: "human", name: "Human", source: "historical_creator", available: true }] };
-    const fetch = vi.fn().mockResolvedValueOnce(new Response(JSON.stringify({ workspaceId: "ws", total: 1, rootCount: 1, legacyMemberExecutionCount: 1, nextOffset: null, items: [item] }))).mockResolvedValueOnce(new Response(JSON.stringify({ mappedIssueIds: ["root"] })));
-    vi.stubGlobal("fetch", fetch);
-    const client = new ApiClient("https://api.test");
-    expect((await client.listIssueResponsibilityMigration("ws", { limit: 50, offset: 10 })).items[0]).toEqual(item);
-    const body = { reason: "Human confirmed", mappings: [{ issueId: "root", memberId: "human", revision: "v1" }] };
-    expect(await client.mapIssueResponsibility("ws", body)).toEqual({ mappedIssueIds: ["root"] });
-    expect(fetch.mock.calls[0]?.[0]).toBe("https://api.test/api/workspaces/ws/issue-responsibility-migration?limit=50&offset=10");
-    expect(JSON.parse(fetch.mock.calls[1]?.[1].body)).toEqual(body);
+describe("question API contracts", () => {
+  it("parses the Issue human stage without a handler and an Agent stage with one", () => {
+    const human = QuestionViewSchema.parse(question);
+    expect(human.current_handler).toBeNull();
+    expect(human.stage).toBe("human");
+    expect(human.route_reason).toBe("parent:leader_missing");
+    expect(human.history[1]?.handler).toBeNull();
+    const agent = QuestionViewSchema.parse({ ...question, stage: "parent_owner", current_handler: { type: "agent", id: "owner" }, route_reason: null, actions: { allowed: [] } });
+    expect(agent.current_handler).toEqual({ type: "agent", id: "owner" });
+    expect(QuestionViewSchema.parse({ ...question, route_reason: undefined }).route_reason).toBeUndefined();
   });
   it("preserves complete question history across overlapping pages and rejects repeated cursors", async () => {
     const page = (ids: string[], nextCursor: string | null) => new Response(JSON.stringify({ questions: ids.map(id => ({ ...question, id })), nextCursor }));
@@ -39,18 +30,6 @@ describe("responsibility API contracts", () => {
     fetch.mockResolvedValueOnce(page(["recent"], "recent")).mockResolvedValueOnce(page(["older"], "recent"));
     await expect(client.listIssueQuestions("issue")).rejects.toBeInstanceOf(ApiContractError);
   });
-  it("reads older formal delivery pages and rejects a repeating cursor", async () => {
-    const actor = { type: "agent", id: "owner", issueId: "issue", name: "Owner" };
-    const delivery = { id: "recent", issueId: "issue", sourceSessionId: "session", summary: "Evidence", status: "returned", submittedBy: actor, reviewOwner: actor, responsibilityRevision: "v1", responseMessageId: null, responseBody: "Fix", createdAt: "now", respondedAt: "now" };
-    const page = (id: string, nextCursor: string | null) => new Response(JSON.stringify({ deliveries: [{ ...delivery, id }], nextCursor }));
-    const fetch = vi.fn().mockResolvedValueOnce(page("recent", "recent")).mockResolvedValueOnce(page("older", null));
-    vi.stubGlobal("fetch", fetch);
-    const client = new ApiClient("https://api.test");
-    expect((await client.listIssueDeliveries("issue")).map(item => item.id)).toEqual(["recent", "older"]);
-    expect(fetch.mock.calls[1]?.[0]).toBe("https://api.test/api/issues/issue/deliveries?limit=100&before=recent");
-    fetch.mockResolvedValueOnce(page("recent", "recent")).mockResolvedValueOnce(page("older", "recent"));
-    await expect(client.listIssueDeliveries("issue")).rejects.toBeInstanceOf(ApiContractError);
-  });
   it("preserves original payload and detached wait state, including future display enums", () => {
     const value = QuestionViewSchema.parse({ ...question, stage: "future_stage", original_questions: [{ question: { question: "Exact?", options: [] } }] });
     expect(value.original_questions).toEqual([{ question: { question: "Exact?", options: [] } }]);
@@ -58,6 +37,7 @@ describe("responsibility API contracts", () => {
     expect(value.stage).toBe("future_stage");
     expect(() => QuestionViewSchema.parse({ ...question, route_revision: "3" })).toThrow();
     expect(() => QuestionViewSchema.parse({ ...question, actions: undefined })).toThrow();
+    expect(() => QuestionViewSchema.parse({ ...question, current_handler: { type: "member" } })).toThrow();
   });
   it("posts route and answer revisions against the original Q and rejects malformed success", async () => {
     const fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({ question }), { status: 200 }));
@@ -70,6 +50,22 @@ describe("responsibility API contracts", () => {
     fetch.mockResolvedValueOnce(new Response(JSON.stringify({ question: { ...question, id: "other" } }), { status: 200 }));
     await expect(client.getQuestion("q1")).rejects.toBeInstanceOf(ApiContractError);
     fetch.mockResolvedValueOnce(new Response(JSON.stringify({ ok: true }), { status: 200 }));
-    await expect(client.respondIssueDelivery("issue", "delivery", { action: "accept", revision: "v1" })).rejects.toBeInstanceOf(ApiContractError);
+    await expect(client.actOnQuestion("q1", "close", { expected_route_revision: 3, reason: "Obsolete" })).rejects.toBeInstanceOf(ApiContractError);
+  });
+  it("posts every remaining question action to its own route", async () => {
+    const fetch = vi.fn().mockImplementation(async () => new Response(JSON.stringify({ question }), { status: 200 }));
+    vi.stubGlobal("fetch", fetch);
+    const client = new ApiClient("https://api.test");
+    for (const action of ["escalate", "present", "continue", "close"] as const) await client.actOnQuestion("q1", action, { expected_route_revision: 3, reason: "why", summary: action === "present" ? "Summary" : undefined });
+    expect(fetch.mock.calls.map(call => call[0])).toEqual(["escalate", "present", "continue", "close"].map(action => `https://api.test/api/messages/q1/question/${action}`));
+    // Responsibility changes re-route a Q on the server; there is no explicit transfer.
+    // @ts-expect-error transfer is not a question action.
+    const transfer: Parameters<ApiClient["actOnQuestion"]>[1] = "transfer";
+    expect(transfer).toBe("transfer");
+  });
+  it("no longer exposes formal delivery, responsibility mapping or parent-done grant calls", () => {
+    const client = new ApiClient("https://api.test") as unknown as Record<string, unknown>;
+    for (const removed of ["getIssueResponsibility", "listIssueResponsibilityMigration", "mapIssueResponsibility", "listIssueDeliveries",
+      "submitIssueDelivery", "respondIssueDelivery", "authorizeIssueDelivery", "grantParentDone", "revokeParentDone"]) expect(client[removed]).toBeUndefined();
   });
 });

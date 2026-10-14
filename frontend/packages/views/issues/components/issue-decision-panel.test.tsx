@@ -1,11 +1,13 @@
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { I18nProvider } from "@multiremi/core/i18n/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { issueKeys } from "@multiremi/core/issues/queries";
 import { messageFixture } from "../../test/messages";
 import enMessages from "../../locales/en/messages.json";
 import enChat from "../../locales/en/chat.json";
 import enIssues from "../../locales/en/issues.json";
+import zhIssues from "../../locales/zh-Hans/issues.json";
 
 const mockApi = vi.hoisted(() => ({
   listIssueSessions: vi.fn(), listMessages: vi.fn(), sendMessage: vi.fn(), getQuestion: vi.fn(), listIssueQuestions: vi.fn(),
@@ -19,9 +21,12 @@ vi.mock("@multiremi/core/api", async (importOriginal) => ({
 }));
 
 vi.mock("@multiremi/core/hooks", () => ({ useWorkspaceId: () => "ws-1" }));
-vi.mock("../../common/question-card", () => ({ UnifiedQuestionCard: ({ question }: { question: { original_message: string; route_revision: number; wait_status: string } }) => <div>{question.original_message} · revision {question.route_revision} · {question.wait_status}</div> }));
+vi.mock("../../common/question-card", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../common/question-card")>()),
+  UnifiedQuestionCard: ({ question }: { question: { original_message: string; route_revision: number; wait_status: string } }) => <div>{question.original_message} · revision {question.route_revision} · {question.wait_status}</div>,
+}));
 
-import { IssueDecisionBanner, IssueDecisionPanel, MessageDecisionCard } from "./issue-decision-panel";
+import { IssueDecisionBanner, IssueDecisionDrawer, MessageDecisionCard } from "./issue-decision-panel";
 
 function renderBanner(count: number) {
   return render(
@@ -32,38 +37,37 @@ function renderBanner(count: number) {
 }
 
 describe("IssueDecisionBanner", () => {
-  it("loads runtime questions only inside the existing right-side decision panel", async () => {
-    mockApi.listIssueQuestions.mockClear(); mockApi.listIssueSessions.mockClear(); mockApi.listMessages.mockClear();
-    mockApi.listIssueQuestions.mockResolvedValue([
-      { id: "native", status: "pending", original_message: "Runtime question", route_revision: 2, wait_status: "waiting" },
-      { id: "answered", status: "answered", original_message: "Previous question", route_revision: 1, wait_status: "consumed" },
-      { id: "closed", status: "closed", original_message: "Cancelled question", route_revision: 1, wait_status: "detached" },
-    ]);
-    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    render(<QueryClientProvider client={qc}><I18nProvider locale="en" resources={{ en: { issues: enIssues } }}>
-      <IssueDecisionPanel issueId="issue-runtime" pendingCount={1} canAnswer getActorName={(_type, id) => id} />
-    </I18nProvider></QueryClientProvider>);
-    expect(mockApi.listIssueQuestions).not.toHaveBeenCalled();
-    expect(screen.queryByRole("dialog")).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "Pending questions · 1" }));
-    expect(await screen.findByText("Runtime question · revision 2 · waiting")).toBeInTheDocument();
-    const pending = screen.getByRole("region", { name: "Awaiting answers" });
-    const history = screen.getByRole("region", { name: "Answered and closed" });
-    expect(within(pending).getByText("Runtime question · revision 2 · waiting")).toBeInTheDocument();
-    expect(within(history).getByText("Previous question · revision 1 · consumed")).toBeInTheDocument();
-    expect(within(history).getByText("Cancelled question · revision 1 · detached")).toBeInTheDocument();
-    expect(within(pending).queryByText(/Previous question|Cancelled question/)).toBeNull();
-    expect(screen.getByRole("dialog")).toHaveAttribute("data-side", "right");
-    expect(screen.getByRole("dialog")).toHaveAttribute("data-issue-decision-overlay");
-    expect(mockApi.listIssueQuestions).toHaveBeenCalledWith("issue-runtime");
-    expect(mockApi.listIssueSessions).not.toHaveBeenCalled();
-    expect(mockApi.listMessages).not.toHaveBeenCalled();
+  it("counts the questions waiting for an answer and opens the drawer from its button", () => {
+    const onOpen = vi.fn();
+    render(
+      <I18nProvider locale="en" resources={{ en: { issues: enIssues } }}>
+        <IssueDecisionBanner count={2} onOpen={onOpen} />
+      </I18nProvider>,
+    );
+    const banner = document.querySelector("[data-issue-decision-banner]")!;
+    expect(banner.tagName).toBe("DIV");
+    expect(banner).toHaveTextContent("2 questions awaiting an answer");
+    const answer = within(banner as HTMLElement).getByRole("button", { name: "Answer" });
+    expect(answer).toHaveAttribute("aria-haspopup", "dialog");
+    fireEvent.click(answer);
+    expect(onOpen).toHaveBeenCalledOnce();
   });
+
+  it("reads N 个问题待回答 with a 回答问题 action in Chinese", () => {
+    render(
+      <I18nProvider locale="zh-Hans" resources={{ "zh-Hans": { issues: zhIssues } }}>
+        <IssueDecisionBanner count={2} onOpen={vi.fn()} />
+      </I18nProvider>,
+    );
+    expect(document.querySelector("[data-issue-decision-banner]")).toHaveTextContent("2 个问题待回答");
+    expect(screen.getByRole("button", { name: "回答问题" })).toBeInTheDocument();
+  });
+
   it("keeps the same fixed-height element when the count changes", () => {
     const { rerender } = renderBanner(1);
     const first = document.querySelector("[data-issue-decision-banner]");
     expect(first).toHaveClass("h-10");
-    expect(screen.getByText("Pending questions · 1")).toBeInTheDocument();
+    expect(screen.getByText("1 question awaiting an answer")).toBeInTheDocument();
 
     rerender(
       <I18nProvider locale="en" resources={{ en: { issues: enIssues } }}>
@@ -71,34 +75,116 @@ describe("IssueDecisionBanner", () => {
       </I18nProvider>,
     );
     expect(document.querySelector("[data-issue-decision-banner]")).toBe(first);
-    expect(screen.getByText("Pending questions · 27")).toBeInTheDocument();
+    expect(screen.getByText("27 questions awaiting an answer")).toBeInTheDocument();
     expect(first).toHaveClass("h-10");
   });
 
-  it("does not render when there is nothing waiting on a member", () => {
+  it("does not render when nothing waits at the human stage", () => {
     renderBanner(0);
     expect(document.querySelector("[data-issue-decision-banner]")).toBeNull();
+    expect(screen.queryByRole("button")).toBeNull();
+  });
+});
+
+const listed = (id: string, patch: Record<string, unknown>) => ({ id, status: "pending", stage: "human", current_handler: null, source_issue_id: "issue-runtime",
+  original_message: `${id} question`, route_revision: 1, wait_status: "waiting", ...patch });
+function renderDrawer(props: { open: boolean; pendingCount?: number }) {
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const onOpenChange = vi.fn();
+  const view = render(<QueryClientProvider client={qc}><I18nProvider locale="en" resources={{ en: { issues: enIssues } }}>
+    <IssueDecisionDrawer issueId="issue-runtime" onOpenChange={onOpenChange} getActorName={(_type, id) => id} {...props} />
+  </I18nProvider></QueryClientProvider>);
+  return { ...view, onOpenChange, qc };
+}
+
+describe("IssueDecisionDrawer", () => {
+  it("loads the subtree's questions only when opened, in the right-side overlay", async () => {
+    mockApi.listIssueQuestions.mockReset(); mockApi.listIssueSessions.mockClear(); mockApi.listMessages.mockClear();
+    mockApi.listIssueQuestions.mockResolvedValue([listed("native", { route_revision: 2 })]);
+    const closed = renderDrawer({ open: false, pendingCount: 1 });
+    expect(mockApi.listIssueQuestions).not.toHaveBeenCalled();
+    expect(screen.queryByRole("dialog")).toBeNull();
+    closed.unmount();
+
+    renderDrawer({ open: true, pendingCount: 1 });
+    expect(await screen.findByText("native question · revision 2 · waiting")).toBeInTheDocument();
+    expect(screen.getByRole("dialog")).toHaveAttribute("data-side", "right");
+    expect(screen.getByRole("dialog")).toHaveAttribute("data-issue-decision-overlay");
+    expect(within(screen.getByRole("dialog")).getByText("Questions")).toBeInTheDocument();
+    expect(mockApi.listIssueQuestions).toHaveBeenCalledWith("issue-runtime");
+    expect(mockApi.listIssueSessions).not.toHaveBeenCalled();
+    expect(mockApi.listMessages).not.toHaveBeenCalled();
   });
 
-  it("keeps owner decisions accessible without counting them as waiting on a member", () => {
-    render(
-      <I18nProvider locale="en" resources={{ en: { issues: enIssues } }}>
-        <IssueDecisionBanner count={0} showOwnerOnly onOpen={vi.fn()} />
-      </I18nProvider>,
-    );
-    expect(screen.getByRole("button", { name: "Questions and history" })).toHaveClass("h-10");
-    expect(screen.queryByText(/Waiting for your decision/)).not.toBeInTheDocument();
+  it("counts this issue's human-stage questions like the banner, labels sub-issues', and folds settled ones", async () => {
+    mockApi.listIssueQuestions.mockReset();
+    mockApi.listIssueQuestions.mockResolvedValue([
+      listed("child-human", { source_issue_id: "child" }),
+      listed("agent-held", { stage: "parent_owner", current_handler: { type: "agent", id: "lead" } }),
+      listed("own-human", {}),
+      listed("answered", { status: "answered", wait_status: "consumed" }),
+      listed("closed", { status: "closed", wait_status: "detached" }),
+    ]);
+    renderDrawer({ open: true, pendingCount: 1 });
+    await screen.findByText("own-human question · revision 1 · waiting");
+    const pending = screen.getByRole("region", { name: "Awaiting answers" });
+    const subIssues = screen.getByRole("region", { name: enIssues.responsibility.sub_issue_pending_section });
+    const agent = screen.getByRole("region", { name: "Waiting for an Agent" });
+    const history = screen.getByRole("region", { name: "Answered and closed" });
+    expect([...pending.querySelectorAll("div")].map(card => card.textContent)).toEqual(["own-human question · revision 1 · waiting"]);
+    expect([...subIssues.querySelectorAll("div")].map(card => card.textContent)).toEqual(["child-human question · revision 1 · waiting"]);
+    expect(within(agent).getByText("agent-held question · revision 1 · waiting")).toBeInTheDocument();
+    // The banner's scope: one question of this issue, never the sub-issue's or the Agent-held one.
+    expect(within(screen.getByRole("dialog")).getByText("1 question awaiting an answer")).toBeInTheDocument();
+    const toggle = within(history).getByRole("button", { name: "Answered and closed (2)" });
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    expect(within(history).queryByText(/answered question|closed question/)).toBeNull();
+    fireEvent.click(toggle);
+    expect(within(history).getByText("answered question · revision 1 · consumed")).toBeInTheDocument();
+    expect(within(history).getByText("closed question · revision 1 · detached")).toBeInTheDocument();
   });
 
-  it("opens from the whole banner button", () => {
-    const onOpen = vi.fn();
-    render(
-      <I18nProvider locale="en" resources={{ en: { issues: enIssues } }}>
-        <IssueDecisionBanner count={2} onOpen={onOpen} />
-      </I18nProvider>,
-    );
-    fireEvent.click(screen.getByRole("button"));
-    expect(onOpen).toHaveBeenCalledOnce();
+  it("keeps an answered question where it was while the drawer stays open", async () => {
+    mockApi.listIssueQuestions.mockReset();
+    mockApi.listIssueQuestions.mockResolvedValue([listed("own-human", {})]);
+    const view = renderDrawer({ open: true, pendingCount: 1 });
+    await screen.findByText("own-human question · revision 1 · waiting");
+    act(() => view.qc.setQueryData(issueKeys.questions("ws-1", "issue-runtime"), [listed("own-human", { status: "answered", wait_status: "consumed" })]));
+    const answered = await screen.findByText("own-human question · revision 1 · consumed");
+    expect(screen.getByRole("region", { name: "Awaiting answers" })).toContainElement(answered);
+    expect(screen.queryByRole("region", { name: "Answered and closed" })).toBeNull();
+    expect(screen.getByText("No questions awaiting an answer")).toBeInTheDocument();
+  });
+
+  it("says nothing waits once every listed question is settled or held by an Agent", async () => {
+    mockApi.listIssueQuestions.mockReset();
+    mockApi.listIssueQuestions.mockResolvedValue([
+      listed("agent-held", { stage: "issue_owner", current_handler: { type: "agent", id: "owner" } }),
+      listed("answered", { status: "answered", wait_status: "consumed" }),
+    ]);
+    renderDrawer({ open: true, pendingCount: 1 });
+    expect(await screen.findByText("No questions awaiting an answer")).toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "Awaiting answers" })).toBeNull();
+  });
+
+  it("uses the detail count until the list arrives and shows an empty state", async () => {
+    let resolve: (value: unknown[]) => void = () => {};
+    mockApi.listIssueQuestions.mockReset();
+    mockApi.listIssueQuestions.mockReturnValue(new Promise(done => { resolve = done; }));
+    renderDrawer({ open: true, pendingCount: 3 });
+    expect(await screen.findByText("3 questions awaiting an answer")).toBeInTheDocument();
+    resolve([]);
+    expect(await screen.findByText("No questions yet")).toBeInTheDocument();
+    expect(screen.getByText("No questions awaiting an answer")).toBeInTheDocument();
+  });
+
+  it("offers a retry when the questions cannot be loaded", async () => {
+    mockApi.listIssueQuestions.mockReset();
+    mockApi.listIssueQuestions.mockRejectedValueOnce(new Error("offline")).mockResolvedValueOnce([listed("own-human", {})]);
+    renderDrawer({ open: true, pendingCount: 1 });
+    expect(await screen.findByRole("alert")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: enIssues.detail.decision_retry }));
+    expect(await screen.findByText("own-human question · revision 1 · waiting")).toBeInTheDocument();
   });
 });
 

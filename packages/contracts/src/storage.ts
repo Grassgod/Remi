@@ -1,5 +1,5 @@
 /**
- * Storage retention contract (ADR 0017).
+ * Storage retention contract (ADR 0018).
  *
  * Issues and Chats share one retention model on the daemon: the workspace is a
  * cache that is reclaimed after the subject ends and restored from a snapshot
@@ -151,7 +151,7 @@ export type StorageRetainReason =
   | "snapshot_failed"
   | "git_check_failed"
   | "server_unreachable"
-  /** A pre-ADR-0017 worktree whose unsaved work could not be snapshotted, kept below `legacy-<date>/retained/`. */
+  /** A pre-ADR-0018 worktree whose unsaved work could not be snapshotted, kept below `legacy-<date>/retained/`. */
   | "legacy_retained"
   | "error";
 

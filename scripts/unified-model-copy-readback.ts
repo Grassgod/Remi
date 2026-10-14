@@ -41,7 +41,7 @@ export function copyReadPositions(baseline: CopyBaseline) {
 }
 
 /**
- * What the ADR 0017 migration leaves of a lane checkpoint. A lane that held a
+ * What the ADR 0018 migration leaves of a lane checkpoint. A lane that held a
  * native session starts a new generation without it; the read positions stay.
  */
 function checkpointAfterLocalRecords(checkpoint: Row): Row {

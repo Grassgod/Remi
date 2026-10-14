@@ -34,9 +34,9 @@ describe("pickStageKeys", () => {
     ).toEqual({ stageKey: "waiting_local_directory", static: true });
   });
 
-  it("returns awaiting_human as a static stage while a human decides", () => {
-    // Agent is parked on a permission prompt / AskUserQuestion routed through
-    // the server; the interactive card lives in HumanRequestDock.
+  it("returns awaiting_human as a static stage while a question waits for an answer", () => {
+    // Agent is parked on a permission prompt / AskUserQuestion that climbs the
+    // execution-owner chain; its summary line lives in HumanRequestDock.
     expect(pickStageKeys("awaiting_human", [], "online")).toEqual({
       stageKey: "awaiting_human",
       static: true,

@@ -1,6 +1,6 @@
 import { createResponsibleTestAutopilot } from './helpers.js';
 import { createResponsibleTestIssue } from './helpers.js';
-import { acceptTestIssueDelivery, prepareTestIssueDelivery, seedHistoricalIssueFacts } from './helpers.js';
+import { acceptTestIssueDelivery, seedHistoricalIssueFacts, testWorkspaceMember } from './helpers.js';
 import type { CreateIssueInput } from '@multiremi/contracts/types.js';
 import { issueMessagesPath, requestMessageBody, taskRequestPath } from "./unified-test-paths.js";
 // MUL-400 S2 (E3): sibling dependencies actually hold and release work.
@@ -131,11 +131,10 @@ describe("MUL-452 E3 replay", () => {
 
   it("U1 commits a delayed check only for done and never for the auto-start's todo", () => {
     const { store, prerequisite, dependent } = chain();
-    const prepared = prepareTestIssueDelivery(store, prerequisite.id);
+    testWorkspaceMember(store, prerequisite.workspaceId);
     const existingIds = new Set((db!.query("SELECT id FROM multiremi_system_events WHERE resource_id = ?")
       .all(prerequisite.id) as Array<{ id: string }>).map(row => row.id));
-    store.respondIssueDelivery(prerequisite.id, prepared.delivery.id,
-      { action: 'accept', revision: prepared.delivery.responsibilityRevision }, prepared.actor);
+    acceptTestIssueDelivery(store, prerequisite.id);
     const rows = db!.query(
       "SELECT id FROM multiremi_system_events WHERE resource_id = ?",
     ).all(prerequisite.id) as Array<{ id: string }>;
@@ -161,9 +160,12 @@ describe("MUL-452 E3 replay", () => {
     expect(store.getSystemEvent(check.id)?.status).toBe("pending");
   });
 
-  it("U1 writes the check with intake source-task lineage after explicit proxy acceptance", () => {
+  it("U1 writes the check with the closing parent owner's source-task lineage", () => {
     const { store, runtime, agent } = storeWithAgent("Intake replay owner");
-    const prerequisite = createDependencyPrerequisite(store, { title: "Intake prerequisite", status: "todo", issueKind: "intake", assigneeType:'agent', assigneeId:agent.id });
+    const parentOwner = store.createAgent({ name: "Intake parent owner", provider: "claude", runtimeId: runtime.id });
+    const parent = createResponsibleTestIssue(store, { title: "Intake parent", status: "in_progress", assigneeType: "agent", assigneeId: parentOwner.id });
+    const prerequisite = createDependencyPrerequisite(store, { title: "Intake prerequisite", status: "todo", issueKind: "intake",
+      parentIssueId: parent.id, assigneeType:'agent', assigneeId:agent.id });
     createResponsibleTestIssue(store, { title: "Generated work", sourceIssueId: prerequisite.id });
     const dependent = createResponsibleTestIssue(store, {
       title: "Intake dependent", status: "backlog", blockedBy: [prerequisite.id],
@@ -175,29 +177,28 @@ describe("MUL-452 E3 replay", () => {
     const hooks = spyOn(store, "runCollectedChildStatusChanges").mockImplementation(() => {});
     try { store.completeTask(task.id, { output: "Generated work" }); } finally { hooks.mockRestore(); }
     expect(store.getIssue(prerequisite.id)?.status).toBe('in_review');
-    const source = {type:'agent' as const,id:agent.id,taskId:task.id};
-    const delivery = store.submitIssueDelivery(prerequisite.id,{summary:'Generated intake work'},source);
-    store.authorizeIssueDelivery(prerequisite.id,delivery.id,agent.id,delivery.responsibilityRevision,
-      {type:'member',id:store.resolveIssueResponsibility(prerequisite.id).rootHuman!.id});
-    const acceptanceHook = spyOn(issues(store),'runIssueUpdatePostCommit').mockImplementation(() => {});
-    try { store.respondIssueDelivery(prerequisite.id,delivery.id,{action:'accept',revision:delivery.responsibilityRevision},source); }
-    finally { acceptanceHook.mockRestore(); }
+    // The parent's execution owner closes its direct child from its own round.
+    const review = store.listTasksForIssue(parent.id).find(row => row.agentId === parentOwner.id && ['queued', 'running'].includes(row.status))
+      ?? store.createTask({ agentId: parentOwner.id, issueId: parent.id, prompt: "Review the intake" });
+    const closingHook = spyOn(issues(store),'runIssueUpdatePostCommit').mockImplementation(() => {});
+    try { store.updateIssue(prerequisite.id, { status: "done", actorType: "agent", actorId: parentOwner.id, parentTaskId: review.id }); }
+    finally { closingHook.mockRestore(); }
     expect(store.getIssue(prerequisite.id)?.status).toBe("done");
     const check = checkEvent(store, prerequisite.id);
-    expect(check.payload.automation_source_task_id).toBe(task.id);
+    expect(check.payload.automation_source_task_id).toBe(review.id);
     const status = store.getSystemEvent(String(check.payload.status_changed_event_id))!;
-    expect(status.payload).toMatchObject({ status: "done", automation_source_task_id: task.id });
+    expect(status.payload).toMatchObject({ status: "done", automation_source_task_id: review.id });
     store.dispatchPendingSystemEvents(new Date(check.availableAt));
     expect(store.getIssue(dependent.id)?.status).toBe("todo");
     const rounds = store.listTasksForIssue(dependent.id);
     expect(rounds).toHaveLength(1);
     const turn = store.getTurnForAttempt(rounds[0]!.id)!;
-    expect(store.getMessage(turn.trigger_message_id!)?.task_id).toBe(store.getTurnForAttempt(task.id)?.id);
+    expect(store.getMessage(turn.trigger_message_id!)?.task_id).toBe(store.getTurnForAttempt(review.id)?.id);
     expect(allActivityRows(store, dependent.id, "dependency_auto_started")[0]?.data)
       .toMatchObject({ dependency_check_event_id: check.id });
   });
 
-  it("U1 passes the completed intake acceptance check id to the normal post-commit start", () => {
+  it("U1 passes the closed intake check id to the normal post-commit start", () => {
     const { store, runtime, agent } = storeWithAgent("Terminal check owner");
     const prerequisite = createDependencyPrerequisite(store, { title: "Terminal check prerequisite", status: "todo", issueKind: "intake", assigneeType:'agent', assigneeId:agent.id });
     createResponsibleTestIssue(store, { title: "Terminal generated work", sourceIssueId: prerequisite.id });
@@ -208,11 +209,8 @@ describe("MUL-452 E3 replay", () => {
     store.startTask(task.id);
     store.completeTask(task.id, { output: "Generated work" });
     expect(store.getIssue(prerequisite.id)?.status).toBe('in_review');
-    const source = {type:'agent' as const,id:agent.id,taskId:task.id};
-    const delivery = store.submitIssueDelivery(prerequisite.id,{summary:'Generated intake work'},source);
-    store.authorizeIssueDelivery(prerequisite.id,delivery.id,agent.id,delivery.responsibilityRevision,
-      {type:'member',id:store.resolveIssueResponsibility(prerequisite.id).rootHuman!.id});
-    store.respondIssueDelivery(prerequisite.id,delivery.id,{action:'accept',revision:delivery.responsibilityRevision},source);
+    // A member closes the root intake after its owner's round.
+    acceptTestIssueDelivery(store, prerequisite.id);
 
     const check = checkEvent(store, prerequisite.id);
     expect(store.getIssue(prerequisite.id)?.status).toBe("done");
@@ -226,7 +224,7 @@ describe("MUL-452 E3 replay", () => {
 
   it("U1 rolls back done and both outbox rows if writing the delayed check fails", () => {
     const { store, prerequisite } = chain();
-    const prepared = prepareTestIssueDelivery(store, prerequisite.id);
+    testWorkspaceMember(store, prerequisite.workspaceId);
     const before = { issue: store.getIssue(prerequisite.id), events: db!.query("SELECT id FROM multiremi_system_events WHERE resource_id = ?").all(prerequisite.id) };
     const run = db!.run.bind(db!);
     const failure = spyOn(db!, "run").mockImplementation((sql, ...args) => {
@@ -236,13 +234,11 @@ describe("MUL-452 E3 replay", () => {
       return run(sql, ...args);
     });
     try {
-      expect(() => store.respondIssueDelivery(prerequisite.id, prepared.delivery.id,
-        { action: 'accept', revision: prepared.delivery.responsibilityRevision }, prepared.actor)).toThrow("delayed check insert failure");
+      expect(() => acceptTestIssueDelivery(store, prerequisite.id)).toThrow("delayed check insert failure");
     } finally {
       failure.mockRestore();
     }
     expect({ issue: store.getIssue(prerequisite.id), events: db!.query("SELECT id FROM multiremi_system_events WHERE resource_id = ?").all(prerequisite.id) }).toEqual(before);
-    expect(store.listIssueDeliveries(prerequisite.id)[0]?.status).toBe('pending');
   });
 
   it.each(["todo", "reassign", "cancel"])("U2 leaves human-handled dependents unchanged: %s", (action) => {
@@ -1791,7 +1787,7 @@ describe("MUL-400 E3 — fix round 4: atomic automatic start", () => {
     ["while writing dependency_auto_started", "activity", "dependency_auto_started"],
   ] as const)("rolls the whole attempt back when a step fails %s", (_label, kind, type) => {
     const { store, prereq, dependent } = parkedChain(`inj_${type ?? kind}`);
-    const prepared = prepareTestIssueDelivery(store, prereq.id);
+    testWorkspaceMember(store, prereq.workspaceId);
     const target = seams(store);
     const restore = kind === "task"
       ? injectOnce(target.tasks, "createTaskWithinTransaction", () => true)
@@ -1800,8 +1796,7 @@ describe("MUL-400 E3 — fix round 4: atomic automatic start", () => {
 
     let thrown: Error | null = null;
     try {
-      store.respondIssueDelivery(prereq.id, prepared.delivery.id,
-        { action: 'accept', revision: prepared.delivery.responsibilityRevision }, prepared.actor);
+      acceptTestIssueDelivery(store, prereq.id);
     } catch (err) {
       thrown = err as Error;
     }
@@ -1861,10 +1856,9 @@ describe("MUL-400 E3 — fix round 4: atomic automatic start", () => {
     expect(store.getIssue(dependent.id)!.status).toBe("in_progress");
   });
 
-  it("U10 keeps formal acceptance successful after an auto-start write error, then replays it", async () => {
+  it("U10 keeps a member's done PATCH successful after an auto-start write error, then replays it", async () => {
     const { store, prereq, dependent } = parkedChain("patch_write");
     const app = createMultiremiApp({ store });
-    const prepared = prepareTestIssueDelivery(store, prereq.id);
     const run = db!.run.bind(db!);
     let injected = false;
     const failure = spyOn(db!, "run").mockImplementation((sql, ...args) => {
@@ -1876,9 +1870,9 @@ describe("MUL-400 E3 — fix round 4: atomic automatic start", () => {
     });
     const warnings = spyOn(console, "warn").mockImplementation(() => {});
     try {
-      const response = await app.request(`/api/issues/${prereq.id}/deliveries/${prepared.delivery.id}/respond`, {
-        method: "POST", headers: { "content-type": "application/json" },
-        body: JSON.stringify({ action: 'accept', revision: prepared.delivery.responsibilityRevision }),
+      const response = await app.request(`/api/issues/${prereq.id}`, {
+        method: "PATCH", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ status: "done" }),
       });
       expect(response.status).toBe(200);
       expect(store.getIssue(prereq.id)!.status).toBe("done");
@@ -1904,16 +1898,15 @@ describe("MUL-400 E3 — fix round 4: atomic automatic start", () => {
 
   it("U10b rolls back a failed business skip and records one on replay", async () => {
     const { store, agent, prereq, dependent } = parkedChain("patch_skip");
-    const prepared = prepareTestIssueDelivery(store, prereq.id);
     db!.run("UPDATE multiremi_agents SET archived_at = ? WHERE id = ?", [new Date().toISOString(), agent.id]);
     const app = createMultiremiApp({ store });
     const restoreSkip = injectOnce(seams(store).ctx, "appendIssueActivity", (args) =>
       (args[1] as { type?: string })?.type === "dependency_auto_start_skipped");
     const warnings = spyOn(console, "warn").mockImplementation(() => {});
     try {
-      const response = await app.request(`/api/issues/${prereq.id}/deliveries/${prepared.delivery.id}/respond`, {
-        method: "POST", headers: { "content-type": "application/json" },
-        body: JSON.stringify({ action: 'accept', revision: prepared.delivery.responsibilityRevision }),
+      const response = await app.request(`/api/issues/${prereq.id}`, {
+        method: "PATCH", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ status: "done" }),
       });
       expect(response.status).toBe(200);
       expect(warnings.mock.calls).toHaveLength(1);

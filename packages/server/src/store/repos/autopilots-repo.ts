@@ -10,7 +10,6 @@ import { createId, nowIso } from "@multiremi/ids.js";
 import { IssueDependencyError } from "@multiremi/store/repos/issue-dependencies.js";
 import {
   cleanOptionalString,
-  hasAnyField,
   isRecord,
   normalizeOptionalTimezone,
   normalizePositiveInt,
@@ -135,11 +134,6 @@ export interface MultiremiAutopilotFailureThresholdCandidate {
 }
 
 export class AutopilotsRepo {
-  private validateRootResponsibleMember(id:string|null,workspaceId:string):void {
-    if(!id)return;
-    const member=this.ctx.workspaces().getWorkspaceMember(id);
-    if(!member||member.archivedAt||member.workspaceId!==workspaceId)throw new Error('Autopilot responsible_member_id must name an active human in its workspace');
-  }
   constructor(private ctx: StoreContext) {}
 
   createAutopilot(input: CreateAutopilotInput): MultiremiAutopilot {
@@ -171,8 +165,7 @@ export class AutopilotsRepo {
     }
     const createdByType = normalizeAutopilotCreatorType(input.createdByType ?? input.created_by_type);
     const createdById = cleanOptionalString(input.createdById ?? input.created_by_id) ?? "local";
-    const responsibleMemberId=cleanOptionalString(input.responsibleMemberId??input.responsible_member_id);
-    this.validateRootResponsibleMember(responsibleMemberId,workspaceId);
+    // `responsibleMemberId` is deprecated: accepted, never validated or persisted.
     const issueCreationRestricted = Boolean(input.issueCreationRestricted ?? input.issue_creation_restricted);
     const issueCreationRestrictedByTaskId = issueCreationRestricted
       ? cleanOptionalString(input.issueCreationRestrictedByTaskId)
@@ -219,9 +212,8 @@ export class AutopilotsRepo {
     this.ctx.db.run('UPDATE multiremi_autopilots SET session_id=? WHERE id=?',[sessionId,id]);
     this.ctx.conversationLog().ensureSessionHeadWithinTransaction(sessionId,{bodyMd:input.title,title:input.title});
     const autopilot = this.getAutopilot(id)!;
-    this.ctx.db.run('UPDATE multiremi_autopilots SET responsible_member_id=? WHERE id=?',[responsibleMemberId,id]);
     this.ctx.analytics().recordAutopilotCreatedAnalytics(autopilot);
-    return this.getAutopilot(id)!;
+    return autopilot;
   }
 
   /**
@@ -255,12 +247,11 @@ export class AutopilotsRepo {
     this.ctx.db.run('UPDATE multiremi_autopilot_runs SET chat_session_id=? WHERE id=?',[chat.id,runId]);
     return this.ctx.chat().getChatSession(chat.id)!;
   }
-  /** The responsible member, else the member who created the automation, else the workspace owner (as a user id). */
+  /** The member who created the automation, else the workspace owner (as a user id). */
   private runChatCreator(autopilot:MultiremiAutopilot):string {
     const workspaces=this.ctx.workspaces();
-    const member=[autopilot.responsibleMemberId,autopilot.createdByType==='member'?autopilot.createdById:null]
-      .map(ref=>ref?this.ctx.resolveWorkspaceMemberForNotification(autopilot.workspaceId,ref):null)
-      .find(candidate=>candidate&&!candidate.archivedAt)
+    const creator=autopilot.createdByType==='member'?this.ctx.resolveWorkspaceMemberForNotification(autopilot.workspaceId,autopilot.createdById):null;
+    const member=(creator&&!creator.archivedAt?creator:null)
       ??workspaces.listWorkspaceMembers(autopilot.workspaceId).find(candidate=>candidate.role==='owner'&&!candidate.archivedAt);
     if(!member)throw new Error(`Automation ${autopilot.id} has no member to own its Chat`);
     return member.userId??member.id;
@@ -327,8 +318,6 @@ export class AutopilotsRepo {
       if (project.workspaceId !== current.workspaceId) throw new Error("Autopilot project is in a different workspace");
     }
     const nextProjectId = input.projectId === undefined ? current.projectId : input.projectId;
-    const responsibleMemberId=hasAnyField(input,'responsibleMemberId','responsible_member_id')?cleanOptionalString(input.responsibleMemberId??input.responsible_member_id):current.responsibleMemberId??null;
-    this.validateRootResponsibleMember(responsibleMemberId,current.workspaceId);
     const existingTriggers = this.listAutopilotTriggers(id);
     if (nextExecutionMode === "create_issue" && existingTriggers.some((trigger) => trigger.scheduleTargets)) {
       throw new Error("schedule_targets requires run_only or trigger_issue execution");
@@ -360,7 +349,6 @@ export class AutopilotsRepo {
     }
     const now = nowIso();
     this.ctx.db.transaction(() => {
-      this.ctx.db.run('UPDATE multiremi_autopilots SET responsible_member_id=? WHERE id=?',[responsibleMemberId,id]);
       this.ctx.db.run(
         `UPDATE multiremi_autopilots SET
         title = ?,
@@ -1611,8 +1599,7 @@ export class AutopilotsRepo {
           description: autopilot.description,
           workspaceId: autopilot.workspaceId,
           projectId: autopilot.projectId,
-          responsibleMemberId: autopilot.responsibleMemberId??null,
-          // Historical createdBy is attribution, never an implicit root responsibility.
+          // Automation-created Issues infer no human: no creator, no designated person.
           createdBy: null,
           assigneeType:autopilot.assigneeType,
           assigneeId:autopilot.assigneeId,
@@ -2496,8 +2483,6 @@ function toAutopilot(row: Row): MultiremiAutopilot {
     workspace_id: workspaceId,
     title: String(row.title),
     description: nullableString(row.description),
-    responsibleMemberId:nullableString(row.responsible_member_id),
-    responsible_member_id:nullableString(row.responsible_member_id),
     projectId,
     project_id: projectId,
     assigneeType,

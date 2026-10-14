@@ -4,7 +4,11 @@
 
 Accepted (MUL-400 E1, child issue MUL-406). Ships with the S1 PR; S2 (dependency
 gate and automatic promotion) extends the same hook. Amended by MUL-476 (Issue
-row lock order, item 8).
+row lock order, item 8). Amended by
+[ADR 0017](0017-issue-execution-and-escalation.md): the done rule replaces formal
+delivery acceptance, an Issue waits in `in_review` only while its question is at
+the human stage (guard B skips that wait) and stays `in_progress` while a Leader
+answers, and an SCM merge only records activity (items 1, 3, 4, 6, 8, 9 and 10).
 
 ## Context
 
@@ -27,21 +31,21 @@ dropped (`active_task_exists`), so a parent could lose reports entirely.
 
 ## Decision
 
-1. **Parent guards and a universal delivery guard, in the store.** No separate
-   status-machine table. Every Issue, including leaves and intake, requires the
-   designated reviewer's acceptance of a specific delivery before `done`:
+1. **Parent guards and the done rule, in the store.** No separate status-machine
+   table. Every `done` write, from leaves and intake included, goes through the
+   [done rule](0017-issue-execution-and-escalation.md): a member may close any
+   Issue, while an Agent task credential closes only a direct child of an Issue it
+   executes, never its own Issue or a root:
    - **Guard A** runs inside `updateIssueWithOutcome`'s Issue row lock. A target
      of `in_review` or `done` with `open_children > 0` is rejected with 409
-     `issue_status_held` (`reason: children_open`, `open_children: N`). A `done`
-     target requires a current formal delivery receipt, else 409
-     `issue_delivery_acceptance_required`. Members can explicitly override the
-     parent review guard, but `force` never overrides delivery acceptance.
+     `issue_status_held` (`reason: children_open`, `open_children: N`). Members
+     can explicitly override this guard with `force`; the done rule runs before it
+     and is independent of `force`.
    - **Guard B** runs on the task-terminal derivation
      (`syncIssueStatusFromTaskWithinTransaction`). A derived `in_review`/`done`
      with open children is rewritten to `in_progress` and recorded as
-     `parent_status_held`. `createTaskHumanRequest`'s transient `in_review` stays
-     as-is: while an owner waits on a human answer the parked state is correct,
-     and the resume path puts the Issue back.
+     `parent_status_held`. While an owner waits on an answer the Issue stays
+     `in_progress`; only a finished round derives `in_review`.
    - **Re-derivation** happens when a child is created, re-parented or changes
      status: an `in_review` parent with open children returns to `in_progress`
      (`parent_status_derived`). A `done` or `cancelled` parent never moves —
@@ -50,22 +54,21 @@ dropped (`active_task_exists`), so a parent could lose reports entirely.
 2. **`open_children` excludes only `done` and `cancelled`.** `blocked` counts as
    open: a parked child is precisely what a human must rule on, and treating it
    as finished would let the parent close over unresolved work.
-3. **Formal delivery replaces implicit final-summary closure.** Task results
-   and summary comments remain evidence. They cannot close an Issue. Its
-   execution owner submits a message-backed delivery, and its parent execution
-   owner accepts a child delivery. The root's explicitly designated human
-   accepts a root delivery. The response references that delivery, validates
-   the responsibility revision and commits with the receipt and Issue status.
-   The [responsibility contract](../dev/issue-responsibility.md) defines the
-   single resolver, legacy missing-human handling and complete API.
-4. **`force` remains member-only and cannot override formal acceptance.**
-   The old broad parent grant remains readable for audit but does not authorize
-   closure. A root human can grant/revoke proxy acceptance only for one concrete
-   pending delivery, its current execution owner and current responsibility
-   revision. A reassignment or newer delivery invalidates the grant. The
-   universal store guard runs independently of the parent guard's environment
-   switch and rejects PATCH/batch/system closure without the server-owned
-   accepted-delivery receipt. Clients cannot supply that receipt option.
+3. **Closing is an explicit status change by the level above.** Task results and
+   summary comments remain evidence; the execution owner's final reply of a round
+   is its summary, and the round's end derives `in_review`. The parent's execution
+   owner then sets a direct child to `done` or messages the child with what to
+   change; a workspace member sets a root to `done` or comments. The former
+   final-summary signal (A1) and formal delivery acceptance are both retired. The
+   [execution contract](../dev/issue-responsibility.md) defines the single
+   resolver and the complete API.
+4. **`force` remains member-only.** It passes guard A and records
+   `issue_status_forced`; a task identity sending it gets 403. The parent-done
+   grant (A4) is retired: its write routes return 410, its columns and historical
+   activities stay readable for audit, and it never authorizes closure. The done
+   rule runs independently of the parent guard's environment switch and applies
+   the same way to PATCH, compatibility PATCH/PUT and batch writes; the
+   server-only bypass option skips only the unfinished-child check.
 5. **Child endings always notify the parent owner through one hook.**
    `notifyChildStatusChange` is called post-commit by both Issue write paths, so
    `done`, `failed`, `blocked` and `cancelled` all report. Agent and squad owners
@@ -83,24 +86,21 @@ dropped (`active_task_exists`), so a parent could lose reports entirely.
    `child_status_after_parent_closed` activity (child id, key and outcome) and
    nothing else — no comment, no round, no status change. Silence would be the
    one outcome E2 forbids.
-6. **Merge completion is evidence and never substitutes for acceptance.**
-   Both leaves and parents remain open after SCM merge. The effect records
-   `parent_status_held`, with source and change request references; after existing
-   parent checks, the hold reason is `issue_delivery_acceptance_required`.
-   The effect is applied and not retried; the designated reviewer accepts the
-   formal delivery separately. A child's PR naming its parent never supplies
-   the parent's acceptance.
+6. **Merge completion is recorded, never a closure.** Both leaves and parents
+   remain open after SCM merge. The effect appends a `scm_merge_completed`
+   activity with the change request, number, URL, branch, event and attribution,
+   and is marked applied without writing a status or a hold; the status follows
+   the derivation above. A child's PR naming its parent changes neither Issue's
+   status.
 7. **No backfill.** Existing parents are not rewritten in bulk. A parent sitting
    at `in_review` with open children moves the next time a child event fires, and
    each move leaves a `parent_status_derived` record. `MULTIREMI_PARENT_STATUS_GUARD`
    (default on) is the emergency switch.
 
 8. **Guard decisions and child membership writes share the parent row lock.**
-   The API writer locks its Issue before guard A. The SCM effect locks the
-   linked Issue before checking its formal-delivery hold, and retains that lock
-   through the effect transaction. Formal acceptance locks the current
-   responsibility chain and verifies the concrete receipt and unfinished-child
-   count in its transaction. Child
+   The API writer locks its Issue before the done rule and guard A. The SCM
+   effect locks the linked Issue before recording its merge activity, and retains
+   that lock through the effect transaction. Child
    creation, moving an Issue under a new parent (including a terminal child),
    and reopening a `done`/`cancelled` child lock that same parent before writing.
    This also covers Agent assignment's direct terminal-to-`todo` write, whose
@@ -354,8 +354,9 @@ dropped (`active_task_exists`), so a parent could lose reports entirely.
    keep their contracts; a human comment joins queued work only according to
    the Q-B constant defined in ADR 0012.
 9. **A batch update is pre-flighted as a whole, then written row by row.** Before
-   the first write, `batchUpdateIssues` evaluates the parent-status guard
-   for every row and refuses the whole batch if any row would be rejected,
+   the first write, `batchUpdateIssues` evaluates the done rule and the
+   parent-status guard for every row and refuses the whole batch if any row would
+   be rejected,
    returning the refused issue ids in `rejected_issue_ids`. This is what makes
    "refused" and "partially applied" distinguishable. The per-row guard still
    runs during the write, because a concurrent writer can move an Issue into a
@@ -367,9 +368,9 @@ dropped (`active_task_exists`), so a parent could lose reports entirely.
 10. **Unchanged behaviours this ADR pins down.** Two things the second QA round
     raised are deliberate and stay as they are:
     - `batchUpdateIssues` still silently skips a row whose write fails for a
-      reason other than the parent-status guard (a missing or inaccessible
-      Issue, for instance). That is the historic batch contract and the `updated`
-      count is what the caller uses; the guard is the one refusal that must
+      reason other than the parent-status guard or the done rule (a missing or
+      inaccessible Issue, for instance). That is the historic batch contract and
+      the `updated` count is what the caller uses; those two refusals must
       surface. A caller should not read `updated` as "everything else succeeded".
     - `recoverOrphans` only produces an E2 report when the orphan's failure
       actually moves its Issue's status. A failed task whose Issue still has
@@ -405,9 +406,9 @@ dropped (`active_task_exists`), so a parent could lose reports entirely.
 - **Positive:** no migration, no schema change, no affected claim path
   (`claimTask` / `claimNextTaskForRuntime` are untouched).
 - **Negative:** the guards are the first status validation for Issues, so scripts
-  and agents that used to PATCH `done` directly now submit a concrete formal
-  delivery for its designated reviewer to accept. Neither member `force` nor
-  the legacy parent grant substitutes for acceptance.
+  and agents that used to PATCH `done` directly now finish children first or run
+  as a member. An Agent closes only a direct child of an Issue it executes; team
+  tooling that closes roots programmatically needs a member identity.
 - **Negative:** `MULTIREMI_PARENT_STATUS_GUARD` is a behavioural switch inside the
   store; when off, guard A/B and the re-derivation are skipped but E2's
   notifications continue.

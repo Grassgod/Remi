@@ -1,7 +1,7 @@
 "use client";
 
 import { MessageHeader } from "../../common/message-header";
-import { LinkedQuestion, linkedQuestionId, QuestionReplyReference } from "../../common/linked-question";
+import { isMemberQuestionReminder, LinkedQuestion, linkedQuestionId, QuestionReplyReference } from "../../common/linked-question";
 import { questionReplyText } from "../../common/question-answer";
 import { useActorName } from "@multiremi/core/workspace/hooks";
 import { useAfterFirstScreen } from "@multiremi/core/platform/use-after-first-screen";
@@ -116,12 +116,20 @@ export function ChatMessageList({
   }, [onLoadOlderMessages, visible]);
   const transformEntries = useCallback((entries: readonly SessionLogEntry[]) =>
     mergeOptimisticChatRows(entries.filter(entry => {
-      const row = entry as SessionLogEntry & { author_type?: string; sender_type?: string; message_kind?: string; deleted_at?: string | null; metadata?: Record<string, unknown> };
+      const row = entry as SessionLogEntry & { author_type?: string; sender_type?: string; message_kind?: string; deleted_at?: string | null; metadata?: Record<string, unknown>; to_type?: string | null };
       if (row.seq === 0 || row.deleted_at) return false;
+      // A Chat Q's member reminders land in its own session, beside the original
+      // Q row, so the Chat never repeats the question for any reader.
+      if (isMemberQuestionReminder(row)) return false;
       if (row.kind === "message" && (row.message_kind || row.sender_type)) return true;
       if (metadataRecord(row.metadata).envelope) return false;
       if (row.kind === "message" && row.author_type === "system" && !row.sender_type) return false;
       return row.kind === "turn" ? !isInboxTurn(row.body_md) : row.kind === "message";
+    }).map(entry => {
+      // Q rows became one fixed-height summary line; never reserve the old button height.
+      const row = entry as SessionLogEntry & { metadata?: Record<string, unknown> };
+      return row.kind === "message" && linkedQuestionId(row.id, row.metadata)
+        ? { ...entry, render_version: `${entry.render_version ?? ""}:question-line-v1` } : entry;
     }), optimisticRows), [optimisticRows]);
   const entryKey = useCallback((entry: SessionLogEntry) => clientIdOf(entry) ?? entry.id, []);
   const pendingTaskId = pendingTask?.task_id ?? null;

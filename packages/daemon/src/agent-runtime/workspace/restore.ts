@@ -1,5 +1,5 @@
 /**
- * Restore a reclaimed subject's unsaved work when it reopens (ADR 0017, section 2).
+ * Restore a reclaimed subject's unsaved work when it reopens (ADR 0018, section 2).
  *
  * Runs after a holder execution has checked out its repositories and
  * materialized the Wiki working copy. Restore never blocks an execution: every

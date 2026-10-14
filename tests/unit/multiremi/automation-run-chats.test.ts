@@ -28,7 +28,6 @@ pendingTurnBackendTests("automation run Chats", fixture => {
     const runtime = store.registerRuntime({ name: "Automation runtime", provider: "codex", maxConcurrency: 4 });
     const autopilot = createResponsibleTestAutopilot(store, {
       title: "Nightly digest", description: "Summarise the night", assigneeId: agent.id, executionMode,
-      responsibleMemberId: OWNER_MEMBER,
       ...(sessionPolicy ? { sessionPolicy } : {}),
     });
     return { store, agent, runtime, autopilot };
@@ -59,8 +58,8 @@ pendingTurnBackendTests("automation run Chats", fixture => {
       expect(chat.origin).toEqual({ autopilot_id: autopilot.id, run_id: run.id });
       expect(chat.agentId).toBe(agent.id);
       expect(chat.title).toMatch(/^Nightly digest · \d{4}-\d{2}-\d{2} \d{2}:\d{2}$/);
-      const responsible = store.getWorkspaceMember(autopilot.responsibleMemberId!)!;
-      expect(chat.creatorId).toBe(responsible.userId ?? responsible.id);
+      const owner = store.getWorkspaceMember(OWNER_MEMBER)!;
+      expect(chat.creatorId).toBe(owner.userId ?? owner.id);
 
       const task = store.getTask(run.taskId!)!;
       expect(task.chatSessionId).toBe(chat.id);
@@ -75,18 +74,16 @@ pendingTurnBackendTests("automation run Chats", fixture => {
       expect(store.listConversationLogEntries(autopilotSessionId(autopilot.id)).some(entry => entry.kind === "turn")).toBe(false);
     });
 
-    it("gives the Chat to the responsible member, else the creating member, else the workspace owner", () => {
+    it("gives the Chat to the creating member, else the workspace owner", () => {
       const { store, agent, autopilot } = setup();
       const teammate = store.createWorkspaceMember({ id: "mem_teammate", name: "Teammate", workspaceId: "local", role: "member", userId: "usr_teammate" });
       const creatorOf = () => store.getChatSession(store.runAutopilot(autopilot.id).chatSessionId!)!.creatorId;
 
-      fixture().db.run("UPDATE multiremi_autopilots SET responsible_member_id = ? WHERE id = ?", [teammate.id, autopilot.id]);
+      fixture().db.run("UPDATE multiremi_autopilots SET created_by_type = 'member', created_by_id = ? WHERE id = ?", [teammate.id, autopilot.id]);
       expect(creatorOf()).toBe("usr_teammate");
 
-      fixture().db.run("UPDATE multiremi_autopilots SET responsible_member_id = NULL, created_by_type = 'member', created_by_id = ? WHERE id = ?", [teammate.id, autopilot.id]);
-      expect(creatorOf()).toBe("usr_teammate");
-
-      fixture().db.run("UPDATE multiremi_autopilots SET created_by_type = 'agent', created_by_id = ? WHERE id = ?", [agent.id, autopilot.id]);
+      // The deprecated responsible member column is never read.
+      fixture().db.run("UPDATE multiremi_autopilots SET responsible_member_id = ?, created_by_type = 'agent', created_by_id = ? WHERE id = ?", [teammate.id, agent.id, autopilot.id]);
       expect(creatorOf()).toBe("local");
     });
 

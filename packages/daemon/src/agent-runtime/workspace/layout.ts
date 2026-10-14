@@ -1,5 +1,5 @@
 /**
- * Daemon workspace layout (ADR 0017).
+ * Daemon workspace layout (ADR 0018).
  *
  * Every path below the workspaces root is computed here; no other module joins
  * root-relative segments on its own.
@@ -15,7 +15,7 @@
  * shared/repos/  shared/code-views/ rebuildable shared caches
  * .daemon/                          probe, deletion quarantine, pending reports, disk-usage.json
  * _topics/<topic>/                  Feishu topic workspaces
- * legacy-<date>/                    pre-ADR-0017 layout moved aside by the sweep;
+ * legacy-<date>/                    pre-ADR-0018 layout moved aside by the sweep;
  *                                   retained/ + retained.json: worktrees whose unsaved work was not snapshotted
  * ```
  */
@@ -149,7 +149,7 @@ export function registrySnapshotWikiDirectory(root: string, subject: StorageSubj
   return join(registrySnapshotDirectory(root, subject), "wiki");
 }
 
-/** Written once the pre-ADR-0017 layout has been swept aside. */
+/** Written once the pre-ADR-0018 layout has been swept aside. */
 export function layoutMarkerFile(root: string): string {
   return join(registryRoot(root), ".layout-v1");
 }

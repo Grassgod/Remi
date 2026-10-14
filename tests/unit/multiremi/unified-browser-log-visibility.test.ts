@@ -26,7 +26,7 @@ pendingTurnBackendTests("MUL-508 browser log source visibility", fixture => {
     const sourceHuman = store.createWorkspaceMember({ userId: sourceOwner.id, name: sourceOwner.name, role: "member" });
     const agent = store.createAgent({ name: "Source", provider: "codex", visibility: shared ? "workspace" : "private", ownerId: sourceOwner.id });
     const runtime = store.registerRuntime({ name: 'Browser native host', provider: 'codex', daemonId: 'browser-native', maxConcurrency: 16, ownerId: sourceOwner.id });
-    const issue = createResponsibleTestIssue(store, { title: "Browser visibility", assigneeType: "agent", assigneeId: agent.id, responsibleMemberId: sourceHuman.id });
+    const issue = createResponsibleTestIssue(store, { title: "Browser visibility", assigneeType: "agent", assigneeId: agent.id });
     const session = store.getOrCreateDefaultIssueSession(issue.id);
     const member = await store.createAccessToken({ type: "pat", name: "Member", userId: user.id, workspaceId: "local" });
     const owner = await store.createAccessToken({ type: "pat", name: "Source owner", userId: sourceOwner.id, workspaceId: "local" });
@@ -223,23 +223,34 @@ pendingTurnBackendTests("MUL-508 browser log source visibility", fixture => {
     } finally { await f.close(); }
   });
 
-  it('the designated human can read and answer the private native Q while generic messages, trace and replay remain hidden', async () => {
+  it('any active member reads and answers the private native Q at the human stage while generic messages, trace and replay remain hidden', async () => {
     const f = await scaffold();
     try {
-      f.store.updateIssue(f.issue.id, { responsibleMemberId: f.recipient.id, actorType: 'member', actorId: f.sourceHuman.id });
       const q = f.question('permission'); f.start();
+      // The asker executes this root Issue, so nobody above it is an Agent: the Q waits at the shared human stage.
+      expect(f.store.getQuestion(q.request.id)).toMatchObject({ stage: 'human', current_handler: null });
       expect((await f.request(`/api/messages/${q.request.id}/question`, f.member.token)).status).toBe(200);
       await readReply(f, q.request.id, f.member.token, false);
       expect((await f.request(`/api/turns/${q.turn.id}/trace`, f.member.token)).status).toBe(404);
       const browser = await f.connect(f.member.token); await browser.subscribe(); await browser.through(q.row.seq);
       privateRowsHidden(browser.frames(), [q.request.id, q.turn.id, q.task.id]);
       const input = { expected_route_revision: f.store.getQuestion(q.request.id)!.route_revision, response: { option_id: 'allow_once' } };
-      expect((await f.request(`/api/messages/${q.request.id}/question/answer`, f.owner.token, input)).status).toBe(403);
+      // A member who left the workspace no longer acts (nor learns the Q exists).
+      const leftUser = f.store.getOrCreateUser({ externalId: 'ws-left-member', name: 'Left member' });
+      const left = f.store.createWorkspaceMember({ userId: leftUser.id, name: leftUser.name, role: 'member' });
+      const leftToken = await f.store.createAccessToken({ type: 'pat', name: 'Left member', userId: leftUser.id, workspaceId: 'local' });
+      f.store.archiveWorkspaceMember(left.id);
+      expect((await f.request(`/api/messages/${q.request.id}/question/answer`, leftToken.token, input)).status).toBe(404);
       expect(f.store.getQuestion(q.request.id)?.status).toBe('pending');
+      // A member unrelated to the private Agent answers.
       const answer = await f.request(`/api/messages/${q.request.id}/question/answer`, f.member.token, input);
       expect(answer.status, JSON.stringify(answer.data)).toBe(200);
       const replyId = f.store.getQuestion(q.request.id)!.answer!.reply_message_id;
       await readReply(f, replyId, f.member.token, false);
+      // Another active member sees the shared answer and may revise it.
+      const ownerView = await f.request(`/api/messages/${q.request.id}/question`, f.owner.token);
+      expect(ownerView.status).toBe(200);
+      expect(ownerView.data.question.actions.allowed).toContain('revise');
       expect(f.store.getDaemonTurnBridge().rpc('turn.decision.consume', { turn_id: q.turn.id, attempt_id: q.task.id,
         message_id: q.request.id, wait_id: `browser:${q.task.id}`, reply_message_id: replyId },
         { runtimeId: f.runtime.id, daemonId: f.runtime.daemonId!, workspaceId: 'local' }).ok).toBe(true);

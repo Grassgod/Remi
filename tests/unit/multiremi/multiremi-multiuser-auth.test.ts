@@ -294,13 +294,13 @@ describe("Multiremi multi-user auth", () => {
 
     const createdIssue = await app.request("/api/multiremi/issues", {
       method: "POST", headers: jsonAuth(b.token),
-      body: JSON.stringify({ title: "B responsible Issue" }),
+      body: JSON.stringify({ title: "B created Issue" }),
     });
     expect(createdIssue.status).toBe(201);
     const { issue } = await createdIssue.json();
-    const member = store.findWorkspaceMemberForUser(b.userId, workspace.id)!;
-    expect(issue).toMatchObject({ workspaceId: workspace.id, createdBy: b.userId,
-      responsibleMemberId: member.id });
+    // No designated human is recorded or returned; the creator is just the creator.
+    expect(issue).toMatchObject({ workspaceId: workspace.id, createdBy: b.userId });
+    expect(issue).not.toHaveProperty("responsibleMemberId");
     const assigned = await app.request(`/api/multiremi/issues/${issue.id}/assign`, {
       method: "POST",
       headers: jsonAuth(b.token),
@@ -308,7 +308,7 @@ describe("Multiremi multi-user auth", () => {
     });
     expect(assigned.status).toBe(200);
     expect((await assigned.json()).issue).toMatchObject({
-      workspaceId: workspace.id, responsibleMemberId: member.id,
+      workspaceId: workspace.id,
       assigneeType: "agent", assigneeId: createdAgentBody.id,
     });
     const tasksBeforeRejectedAssignment = store.listTasksForIssue(issue.id).map(task => ({ id: task.id, status: task.status }));
@@ -318,8 +318,8 @@ describe("Multiremi multi-user auth", () => {
     });
     expect(memberExecution.status).toBe(409);
     expect(await memberExecution.json()).toMatchObject({ code: "issue_execution_owner_required" });
-    expect(store.getIssue(issue.id)).toMatchObject({ assigneeType: "agent",
-      assigneeId: createdAgentBody.id, responsibleMemberId: member.id });
+    expect(store.getIssue(issue.id)).toMatchObject({ assigneeType: "agent", assigneeId: createdAgentBody.id });
+    const member = store.findWorkspaceMemberForUser(b.userId, workspace.id)!;
     const compatMemberExecution = await app.request(`/api/issues/${issue.id}`, {
       method: "PATCH", headers: jsonAuth(b.token),
       body: JSON.stringify({ assignee_type: "member", assignee_id: member.id }),

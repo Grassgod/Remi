@@ -1,5 +1,5 @@
 /**
- * Reclaim reports the server has not acknowledged (ADR 0017, section 4).
+ * Reclaim reports the server has not acknowledged (ADR 0018, section 4).
  *
  * The workspace is already gone when `gc.subject_reclaimed` fails, so the
  * report is kept in `.daemon/reports/` and sent again at the start of the next

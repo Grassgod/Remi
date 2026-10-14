@@ -18,6 +18,13 @@ describe("Issue activity placement and groups", () => {
     expect(placeActivities([row(0, 0, "head"), row(1, 1), row(2, 1), row(3, 3)], [activity("z", 1), activity("a", 1)], false)
       .map(event => event.entry.id)).toEqual(["row-0", "row-1", "row-2", "a", "z", "row-3"]);
   });
+  it("drops retired formal-delivery activities from older rows but keeps historical done grants as system detail", () => {
+    const retired = ["issue_delivery_submitted", "issue_delivery_accepted", "issue_delivery_returned", "issue_delivery_authorized",
+      "issue_delivery_review_unavailable", "issue_delivery_invalidated"].map((action, n) => activity(`d${n}`, n + 1, action));
+    const grant = activity("grant", 10, "parent_done_grant_created");
+    expect(placeActivities([row(0, 0, "head")], [...retired, grant], true).map(event => event.entry.id)).toEqual(["row-0", "grant"]);
+    expect(placeActivities([row(0, 0, "head")], [...retired, grant], false).map(event => event.entry.id)).toEqual(["row-0"]);
+  });
   it("handles empty windows and activities before the first row or after a tail", () => {
     expect(placeActivities([], [activity("a", 1)], false).map(e => e.entry.id)).toEqual(["a"]);
     expect(placeActivities([row(0, 5, "head"), row(1, 10)], [activity("a", 1), activity("b", 20)], false)

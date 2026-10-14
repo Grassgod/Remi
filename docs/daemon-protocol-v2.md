@@ -245,7 +245,7 @@ connector，下一次心跳重试当前状态。服务端在同一条连接里�
 每天约 13 次/分钟的 `gc-check` 请求）。它们不是等活轮询，但留在 HTTP 上「轮询降到 0」在 nginx
 日志口径就不成立，因此一并改成 RPC；不做批量合并。
 
-回收引擎（ADR 0017）只用三个主体检查和一个回收通知：`gc.check_issue`、`gc.check_chat_session`（应答含 `pinned`、
+回收引擎（ADR 0018）只用三个主体检查和一个回收通知：`gc.check_issue`、`gc.check_chat_session`（应答含 `pinned`、
 `origin: { autopilot_id, run_id } | null` 和 `last_activity_at`，供判断置顶、自动化 Chat 与空闲）、`gc.check_task`；
 回收完成后 `gc.subject_reclaimed { runtime_id, subject: { kind, id }, snapshot, unsaved_work, freed_bytes }` 通知服务端，
 应答 `{ ok: true }`；`snapshot.git[]` 的每个条目带 `dir`（worktree 站的位置，相对 `work/<主体>`，会话线私有 `work/` 里的相对工作区根目录，服务端必须收到字符串），`freed_bytes` 是回收前后文件系统空闲空间之差。服务端据此把 Issue 工作区记录标 `cleaned` 并保存快照信息，重置该主体在这台 daemon 上的会话线

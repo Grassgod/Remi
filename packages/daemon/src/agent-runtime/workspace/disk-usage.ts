@@ -1,5 +1,5 @@
 /**
- * Disk usage of the workspaces root (ADR 0017, section 4 and amendment A3).
+ * Disk usage of the workspaces root (ADR 0018, section 4 and amendment A3).
  *
  * `du` walks every file, and over a production root (hundreds of GB, millions
  * of files) it takes minutes. Measuring therefore never happens inside a

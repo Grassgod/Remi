@@ -88,8 +88,9 @@ for (const backend of ["SQLite", "Postgres"] as const) {
       store.updateWorkspace(workspaceId, { settings: { ...workspace.settings,
         issueTopics: { enabled: true, chatId: `oc_mul487_${n}`, notifyMode: mode, ...(mode === "person" ? { notifyOpenId: recipient } : {}) },
       } });
+      // The recipient created the root: a human-stage card goes to the root creator.
       const issue = createResponsibleTestIssue(store, { title: "Question parent", workspaceId, assigneeType: "agent", assigneeId: agent.id,
-        responsibleMemberId: member.id });
+        createdBy: user.id });
       store.prepareFeishuIssueTopicWithinTransaction(issue);
       const root = store.claimFeishuBotOutbound(workspaceId, runtimeId)!;
       store.reportFeishuBotOutbound(workspaceId, runtimeId, root.id, { claimToken: root.claimToken, status: "sent", externalMessageId: `om_root_${n}` });
@@ -291,7 +292,7 @@ for (const backend of ["SQLite", "Postgres"] as const) {
       });
     }
 
-    it("fr: native stream issuance and retarget rotate tokens and bind the new person", async () => {
+    it("fr: native stream issuance and retarget rotate tokens and bind the new member", async () => {
       const f = await setup("fr");
       const path = `/api/daemon/messages/${f.request.id}/card`;
       const mint = (recipient: string) => f.api.request(path, { method: "POST",
@@ -303,11 +304,14 @@ for (const backend of ["SQLite", "Postgres"] as const) {
       expect(nativeToken === f.token).toBe(false);
       const changedRecipient = "ou_new_addressee";
       const changedUser = store.getOrCreateUser({ externalId: changedRecipient, name: "New addressee" });
-      const changedMember = store.createWorkspaceMember({ workspaceId: f.workspaceId, userId: changedUser.id, name: "New addressee", role: "member" });
-      seedQuestionHumanMapping(db, f.workspaceId, 'cli_mul487', changedUser.id, changedRecipient);
+      // An open_id that maps to no active member of this workspace never gets a card.
       expect((await mint(changedRecipient)).status).toBe(409);
       expect(f.row().token_recipient).toBe(f.recipient);
-      store.updateIssue(f.issue.id, { responsibleMemberId: changedMember.id, actorType: 'member', actorId: f.member.id });
+      store.createWorkspaceMember({ workspaceId: f.workspaceId, userId: changedUser.id, name: "New addressee", role: "member" });
+      seedQuestionHumanMapping(db, f.workspaceId, 'cli_mul487', changedUser.id, changedRecipient);
+      // The Issue human stage names nobody: any active member may be shown the card, and the
+      // token binds it to that member alone.
+      expect(store.getQuestion(f.request.id)).toMatchObject({ stage: 'human', current_handler: null });
       const retargeted = await mint(changedRecipient);
       expect(retargeted.status).toBe(200);
       const newToken = questionCardAction((await retargeted.json()).card)!.t as string;
