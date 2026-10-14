@@ -18,6 +18,7 @@ export { DuplicateIssueErrorBodySchema, IssueStatusHeldErrorSchema } from "./sch
 export type { DuplicateIssueErrorBody } from "./schemas";
 export type {
   RelayConfigResponse,
+  RelayEngine,
   RelayEngineConfig,
   RelayEngineProbe,
   RelayReasoningLevelEffective,
@@ -27,6 +28,7 @@ export type {
   RelayReasoningLevelModel,
   RelayReasoningLevelsResponse,
   RelayReasoningLevelSaveResult,
+  RelayReasoningEngine,
 } from "./schemas";
 export type {
   TaskSteerListResponse,

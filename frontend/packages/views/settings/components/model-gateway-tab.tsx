@@ -26,12 +26,21 @@ import { useCurrentWorkspace } from "@multiremi/core/paths";
 import { runtimeModelsKeys } from "@multiremi/core/runtimes";
 import { memberListOptions, workspaceKeys } from "@multiremi/core/workspace/queries";
 import { api } from "@multiremi/core/api";
-import type { RelayConfigResponse, RelayEngineConfig, RelayEngineProbe, RelayReasoningLevelModel } from "@multiremi/core/api";
+import type {
+  RelayConfigResponse,
+  RelayEngine,
+  RelayEngineConfig,
+  RelayEngineProbe,
+  RelayReasoningEngine,
+  RelayReasoningLevelModel,
+} from "@multiremi/core/api";
 import type { Workspace } from "@multiremi/core/types";
 import { useT } from "../../i18n";
+import { ProviderLogo } from "../../runtimes/components/provider-logo";
 import { ClaudeMark, OpenAIMark } from "./engine-marks";
 
-type Engine = "claude" | "codex";
+type Engine = RelayEngine;
+type ReasoningEngine = RelayReasoningEngine;
 type ProgressSummaryTransport = "auto" | "api" | "cli" | "openai";
 
 interface ProgressSummarySettings {
@@ -48,11 +57,24 @@ interface IssueAutoTitleSettings {
 const ENGINE_PLACEHOLDER: Record<Engine, string> = {
   claude: '{\n  "env": {\n    "ANTHROPIC_BASE_URL": "https://…"\n  }\n}',
   codex: 'model_provider = "OpenAI"\n\n[model_providers.OpenAI]\nbase_url = "https://…/v1"\nwire_api = "responses"\nrequires_openai_auth = true',
+  antigravity: '{\n  "base_url": "https://…",\n  "default_model": "gemini-…"\n}',
 };
+
+const ENGINE_TITLE: Record<Engine, string> = {
+  claude: "Claude",
+  codex: "Codex",
+  antigravity: "Antigravity",
+};
+
+function EngineMark({ engine }: { engine: Engine }) {
+  if (engine === "claude") return <ClaudeMark className="h-4 w-4" />;
+  if (engine === "codex") return <OpenAIMark className="h-4 w-4" />;
+  return <ProviderLogo provider="antigravity" className="h-4 w-4" />;
+}
 
 const relayKeys = {
   config: (wsId: string) => ["relay-config", wsId] as const,
-  reasoningLevels: (wsId: string, engine: Engine) => ["relay-reasoning-levels", wsId, engine] as const,
+  reasoningLevels: (wsId: string, engine: ReasoningEngine) => ["relay-reasoning-levels", wsId, engine] as const,
 };
 
 export function ModelGatewayTab() {
@@ -155,6 +177,12 @@ export function ModelGatewayTab() {
           <EngineSection
             engine="codex"
             config={config.codex ?? null}
+            wsId={wsId}
+            discoveryEnabled={config.modelDiscovery === true}
+          />
+          <EngineSection
+            engine="antigravity"
+            config={config.antigravity ?? null}
             wsId={wsId}
             discoveryEnabled={config.modelDiscovery === true}
           />
@@ -490,7 +518,6 @@ function EngineSection({ engine, config, wsId, discoveryEnabled }: {
   }, [config?.fragment]);
 
   const hasToken = config?.hasToken === true;
-  const Mark = engine === "claude" ? ClaudeMark : OpenAIMark;
 
   async function save() {
     setSaving(true);
@@ -540,8 +567,10 @@ function EngineSection({ engine, config, wsId, discoveryEnabled }: {
       await qc.invalidateQueries({ queryKey: runtimeModelsKeys.fleet(wsId) });
       // A fresh snapshot can list models that were never there before, so the
       // per-model reasoning-level rows reload too. Manual declarations survive
-      // the probe on the server side.
-      await qc.invalidateQueries({ queryKey: relayKeys.reasoningLevels(wsId, engine) });
+      // the probe on the server side. Antigravity has no such rows.
+      if (engine !== "antigravity") {
+        await qc.invalidateQueries({ queryKey: relayKeys.reasoningLevels(wsId, engine) });
+      }
     } catch (e) {
       toast.error(e instanceof Error ? e.message : t(($) => $.modelGateway.probe_failed));
     } finally {
@@ -573,8 +602,8 @@ function EngineSection({ engine, config, wsId, discoveryEnabled }: {
   return (
     <section className="space-y-3">
       <h3 className="text-sm font-semibold flex items-center gap-2">
-        <Mark className="h-4 w-4" />
-        {engine === "claude" ? "Claude" : "Codex"}
+        <EngineMark engine={engine} />
+        {ENGINE_TITLE[engine]}
       </h3>
       <Card>
         <CardContent className="space-y-3">
@@ -612,7 +641,11 @@ function EngineSection({ engine, config, wsId, discoveryEnabled }: {
               </div>
             </div>
             <p className="text-xs text-muted-foreground mt-1">
-              {engine === "claude" ? t(($) => $.modelGateway.claude_hint) : t(($) => $.modelGateway.codex_hint)}
+              {engine === "claude"
+                ? t(($) => $.modelGateway.claude_hint)
+                : engine === "codex"
+                  ? t(($) => $.modelGateway.codex_hint)
+                  : t(($) => $.modelGateway.antigravity_hint)}
             </p>
           </div>
           {probe?.error ? (
@@ -640,7 +673,9 @@ function EngineSection({ engine, config, wsId, discoveryEnabled }: {
           </div>
         </CardContent>
       </Card>
-      <ReasoningLevelsSection engine={engine} wsId={wsId} />
+      {/* The Antigravity gateway path has no reasoning selector, so there is
+          nothing an administrator could declare for its models. */}
+      {engine !== "antigravity" ? <ReasoningLevelsSection engine={engine} wsId={wsId} /> : null}
     </section>
   );
 }
@@ -656,7 +691,7 @@ const REASONING_DEFAULT_NONE = "__none__";
 // a model with no declaration reads as "not declared".
 // ---------------------------------------------------------------------------
 
-function ReasoningLevelsSection({ engine, wsId }: { engine: Engine; wsId: string }) {
+function ReasoningLevelsSection({ engine, wsId }: { engine: ReasoningEngine; wsId: string }) {
   const { t } = useT("settings");
   const { data, isPending, isError, error, refetch } = useQuery({
     queryKey: relayKeys.reasoningLevels(wsId, engine),
@@ -748,7 +783,7 @@ function ReasoningLevelsSection({ engine, wsId }: { engine: Engine; wsId: string
 // model id nobody discovered. Same PUT as a row editor: the server stores the
 // declaration first and reports back whether it can take effect.
 function AddReasoningLevelForm({ engine, wsId, allowedLevels, onDone }: {
-  engine: Engine;
+  engine: ReasoningEngine;
   wsId: string;
   allowedLevels: string[];
   onDone: () => void;
@@ -898,7 +933,7 @@ function ReasoningLevelFields({ idPrefix, allowedLevels, selected, defaultLevel,
 }
 
 function ReasoningLevelRow({ engine, wsId, model, allowedLevels }: {
-  engine: Engine;
+  engine: ReasoningEngine;
   wsId: string;
   model: RelayReasoningLevelModel;
   allowedLevels: string[];

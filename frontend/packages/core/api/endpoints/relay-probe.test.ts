@@ -47,9 +47,55 @@ describe("relay probe endpoint", () => {
     expect(result.status).toBe("unknown");
   });
 
+  it("probes the Antigravity engine and keeps its explicit absence of reasoning levels", async () => {
+    const fetch = vi.fn().mockResolvedValue(response({
+      engine: "antigravity",
+      status: "ready",
+      error: null,
+      models: [{
+        id: "gemini-3.7-flash",
+        label: "Gemini 3.7 Flash",
+        thinking: { status: "unsupported", supported_levels: [] },
+      }],
+      last_success_at: "2026-10-15T06:00:00.000Z",
+    }));
+    vi.stubGlobal("fetch", fetch);
+
+    const result = await api().probeRelayEngine("ws-1", "antigravity");
+
+    expect(fetch.mock.calls[0]![0]).toBe("https://api.example.test/api/workspaces/ws-1/relay-config/antigravity/probe");
+    expect(result.engine).toBe("antigravity");
+    expect(result.models[0]?.thinking).toEqual({ status: "unsupported", supported_levels: [] });
+  });
+
   it("rejects a malformed snapshot instead of reporting zero models as fact", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response({ engine: "claude", status: "ready", models: "none" })));
 
     await expect(api().probeRelayEngine("ws-1", "claude")).rejects.toBeInstanceOf(ApiContractError);
+  });
+});
+
+describe("relay config endpoint", () => {
+  it("reads the Antigravity engine and saves it through its own route", async () => {
+    const config = {
+      claude: null,
+      codex: null,
+      antigravity: { fragment: '{"base_url":"https://ai.openremi.fun/antigravity"}', hasToken: true, revision: 2 },
+      modelDiscovery: true,
+    };
+    const fetch = vi.fn().mockImplementation(async () => response(config));
+    vi.stubGlobal("fetch", fetch);
+
+    expect((await api().getRelayConfig("ws-1")).antigravity).toEqual(config.antigravity);
+    await api().updateRelayConfig("ws-1", "antigravity", { fragment: config.antigravity.fragment, token_op: "keep" });
+
+    expect(fetch.mock.calls[1]![0]).toBe("https://api.example.test/api/workspaces/ws-1/relay-config/antigravity");
+    expect(fetch.mock.calls[1]![1].method).toBe("PUT");
+  });
+
+  it("reads an older server's config without the engine as unconfigured", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response({ claude: null, codex: null, modelDiscovery: false })));
+
+    expect((await api().getRelayConfig("ws-1")).antigravity).toBeNull();
   });
 });
