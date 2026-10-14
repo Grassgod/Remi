@@ -7,7 +7,9 @@ import { runUnifiedModelMigration, reconcileUnifiedModel, retryChains,
   UnifiedModelPreflightError, unifiedModelPreflight } from "@multiremi/store/unified-model-migration.js";
 import { UNIFIED_MODEL_MIGRATION } from "@multiremi/store/unified-model-schema.js";
 import { dropRetiredTables, RETIRED_TABLE_SETS, RETIRED_COLUMN_SETS } from "../../../scripts/drop-retired-tables.js";
-import { unifiedModelBackendTests } from "./unified-model-test-backends.js";
+import { historicalWriters, unifiedModelBackendTests } from "./unified-model-test-backends.js";
+import { bootstrapPreUnifiedSchema } from "@multiremi/store/migrations.js";
+import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { createReplacementAttemptWithinTransaction } from "@multiremi/store/turn-attempts.js";
 import { ensureUsageAccountingSchema } from "@multiremi/store/usage-accounting.js";
 import type { SqlDatabase } from "@multiremi/store/db/postgres.js";
@@ -324,4 +326,23 @@ unifiedModelBackendTests("MUL-505 normalized model migration", fixture => {
 it("rejects cycles and missing retry parents instead of losing historical tasks",()=>{
   expect(()=>retryChains([{id:"tsk_a",parent_task_id:"tsk_b"}])).toThrow("missing retry parent");
   expect(()=>retryChains([{id:"tsk_a",parent_task_id:"tsk_b"},{id:"tsk_b",parent_task_id:"tsk_a"}])).toThrow("cyclic retry chain");
+});
+
+it("cuts over with SQLite's legacy rename semantics on and leaves that setting as it found it", () => {
+  // Apple's system SQLite defaults legacy_alter_table on; Linux CI's bundled build does not.
+  const db = openSqliteDatabase(":memory:") as unknown as SqlDatabase;
+  try {
+    db.exec("PRAGMA legacy_alter_table=ON");
+    bootstrapPreUnifiedSchema(db);
+    const store = historicalWriters(db);
+    const agent = store.createAgent({ name: "Legacy rename", provider: "codex" });
+    const task = store.createTask({ agentId: agent.id, prompt: "historical input" });
+    db.run("INSERT INTO multiremi_task_human_requests(id,task_id,kind,payload,status,created_at) VALUES('hrq_legacy_rename',?,'question','{}','pending',?)",
+      [task.id, task.createdAt]);
+    expect(runUnifiedModelMigration(db, { reportDir: reportDir() }).mismatches).toEqual([]);
+    expect(db.query("PRAGMA foreign_key_check").all()).toEqual([]);
+    expect(String(db.query("SELECT sql FROM sqlite_master WHERE name='multiremi_task_human_requests'").get().sql))
+      .toMatch(/REFERENCES "?multiremi_turn_attempts"?/);
+    expect(Number(db.query("PRAGMA legacy_alter_table").get().legacy_alter_table)).toBe(1);
+  } finally { db.close(); }
 });
