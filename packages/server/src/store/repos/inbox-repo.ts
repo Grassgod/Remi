@@ -1,4 +1,5 @@
 import { InboxOperations } from "../inbox/operations.js";
+import { QueuedMessages } from "../inbox/queued-messages.js";
 import { getMessage, sendMessageWithinTransaction } from "../inbox/send-message.js";
 import { runTurnExecutionMutation } from "@multiremi/store/turn-execution-records.js";
 import { envelopePriority, type Envelope, type EnvelopeMetadata } from "@multiremi/contracts/inbox.js";
@@ -27,7 +28,9 @@ export interface EnvelopeDelivery extends EnsurePendingTurnResult {
 
 export class InboxRepo {
   readonly operations:InboxOperations;
-  constructor(private ctx: StoreContext) { this.operations=new InboxOperations(ctx); }
+  /** ADR 0020 Chat follow-up queue. */
+  readonly queue:QueuedMessages;
+  constructor(private ctx: StoreContext) { this.operations=new InboxOperations(ctx); this.queue=new QueuedMessages(ctx); }
 
   sendEnvelopeWithinTransaction(
     env: Envelope,

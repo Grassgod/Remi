@@ -113,7 +113,7 @@ describe("ChatEndpoints contracts", () => {
     const api = new ChatEndpoints(new HttpClient("https://api.example.test"));
     await expect(api.sendChatMessage("chat_1", "Follow up", undefined, "send-1")).resolves.toMatchObject({ message_id: "msg_1", task_id: "attempt_2", turn_id: "turn_1" });
     expect(fetchMock).toHaveBeenCalledWith("https://api.example.test/api/sessions/chat_1/messages", expect.objectContaining({
-      method: "POST", body: JSON.stringify({ body_md: "Follow up", message_kind: "request", to: { type: "agent", ref: "agent-1" }, dedupe_key: "send-1" }),
+      method: "POST", body: JSON.stringify({ body_md: "Follow up", message_kind: "request", to: { type: "agent", ref: "agent-1" }, wake_requested: "now", dedupe_key: "send-1" }),
     }));
   });
   it("reads the active turn through status-filtered pages, without a legacy queue", async () => {

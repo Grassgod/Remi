@@ -19,6 +19,8 @@ import {
 import { useLocaleAdapter } from "@multiremi/core/i18n/react";
 import { useAuthStore } from "@multiremi/core/auth";
 import { api } from "@multiremi/core/api";
+import { useChatStore, type ChatFollowUpMode } from "@multiremi/core/chat";
+import { enterKey, formatShortcut, modKey, shiftKey } from "@multiremi/core/platform";
 import { browserTimezone, timezoneOptions } from "../../common/timezone-select";
 import { useT } from "../../i18n";
 
@@ -241,8 +243,60 @@ export function PreferencesTab() {
         </div>
       </section>
 
+      <ChatSection />
+
       <TimezoneSection />
     </div>
+  );
+}
+
+/**
+ * How a message sent while the agent is running is delivered (ADR 0020).
+ * The composer swaps to the other mode for one message on Mod-Shift-Enter.
+ */
+function ChatSection() {
+  const { t } = useT("settings");
+  const followUpMode = useChatStore((s) => s.followUpMode);
+  const setFollowUpMode = useChatStore((s) => s.setFollowUpMode);
+  const options: { value: ChatFollowUpMode; label: string }[] = [
+    { value: "steer", label: t(($) => $.preferences.chat.steer) },
+    { value: "queue", label: t(($) => $.preferences.chat.queue) },
+  ];
+
+  return (
+    <section className="space-y-2">
+      <h2 className="text-sm font-semibold">
+        {t(($) => $.preferences.chat.title)}
+      </h2>
+      <p id="chat-follow-up-label" className="text-sm text-muted-foreground">
+        {t(($) => $.preferences.chat.follow_up)}
+      </p>
+      <div className="flex flex-wrap gap-3" role="radiogroup" aria-labelledby="chat-follow-up-label">
+        {options.map((opt) => {
+          const active = followUpMode === opt.value;
+          return (
+            <button
+              type="button"
+              key={opt.value}
+              role="radio"
+              aria-checked={active}
+              onClick={() => setFollowUpMode(opt.value)}
+              className={cn(
+                "rounded-md border px-4 py-2 text-sm transition-colors",
+                active
+                  ? "border-brand bg-brand/10 font-medium text-foreground"
+                  : "border-border text-muted-foreground hover:border-foreground/30"
+              )}
+            >
+              {opt.label}
+            </button>
+          );
+        })}
+      </div>
+      <p className="text-[11px] leading-snug text-muted-foreground">
+        {t(($) => $.preferences.chat.hint, { shortcut: formatShortcut(modKey, shiftKey, enterKey) })}
+      </p>
+    </section>
   );
 }
 

@@ -1060,6 +1060,8 @@ function resolveParam(pattern: string, name: string, refs: SeedRefs): string {
       if (pattern.includes("/lark/install/")) return "lark_snapshot_session";
       if (pattern.includes("/cloud-billing/")) return "cs_snapshot";
       if (pattern.includes("/messaging/")) return "mauth_snapshot";
+      // The follow-up queue exists only in a Chat (ADR 0020).
+      if (pattern.startsWith("/api/sessions/:sessionId/queue")) return refs.chatSessionId;
       if (pattern.includes("/issues/") || pattern.includes("/sessions/")) {
         return pattern.includes("/chat/sessions/") || pattern.includes("/chat-sessions/")
           ? refs.chatSessionId
@@ -1235,6 +1237,20 @@ flow("unified-messages-inbox-turns", async (rec, refs) => {
   await rec.json("POST", `/api/turns/${refs.turnId}/cancel`, {});
   await rec.json("POST", `/api/turns/${refs.turnId}/retry`, { cold: true });
   await rec.call("GET", `/api/turns/${refs.turnId}/trace`);
+});
+
+// ADR 0020: the Chat follow-up queue, on the seeded Chat whose turn is still pending.
+flow("chat-follow-up-queue", async (rec, refs) => {
+  const base = `/api/sessions/${refs.chatSessionId}/queue`;
+  const first = await rec.json("POST", base, { body_md: "Queued snapshot", client_id: "snapshot-queue-1" });
+  const second = await rec.json("POST", base, { body_md: "Second queued snapshot", client_id: "snapshot-queue-2" });
+  const firstId = first.body?.item?.id ?? "qmsg_snapshot";
+  const secondId = second.body?.item?.id ?? "qmsg_snapshot";
+  await rec.call("GET", base);
+  await rec.json("PATCH", `${base}/${firstId}`, { body_md: "Edited queued snapshot", expected_revision: 1 });
+  await rec.json("POST", `${base}/${secondId}/steer`, {});
+  await rec.call("DELETE", `${base}/${firstId}`);
+  await rec.json("POST", `${base}/resume`, {});
 });
 
 // -- agents -----------------------------------------------------------------

@@ -28,7 +28,6 @@
   "retry": "턴 재시도",
   "retry_cold": "새 세션에서 재시도",
   "retry_failed": "재시도에 실패했습니다",
-  "queue": "읽지 않은 메시지",
   "decision_reply": "답장",
   "resolved": "해결됨",
   "wake_reasons": {
@@ -65,8 +64,5 @@
   "current_attempt": "현재 시도",
   "attempt_logs": "시도 로그 보기",
   "no_attempts": "시도 없음",
-  "load_more": "더 보기",
-  "retry_load": "다시 불러오기",
-  "consumed_draft": "메시지가 읽혔거나 삭제되었습니다. 복사할 수 있도록 초안을 유지합니다.",
-  "consumed_message": "에이전트가 이미 읽은 메시지입니다. 더 이상 수정하거나 삭제할 수 없습니다."
+  "retry_load": "다시 불러오기"
 }

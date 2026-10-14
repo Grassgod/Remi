@@ -643,7 +643,7 @@ describe("ApiClient", () => {
       const [url, init] = fetchMock.mock.calls.find(([, init]) => init?.method === "POST")!;
       expect(url).toBe("https://api.example.test/api/sessions/session-1/messages");
       expect(JSON.parse(init?.body as string)).toEqual({
-        body_md: "hello", message_kind: "request", to: { type: "agent", ref: "agent_1" },
+        body_md: "hello", message_kind: "request", to: { type: "agent", ref: "agent_1" }, wake_requested: "now",
         attachment_ids: ["att-1", "att-2"],
       });
     });
@@ -658,8 +658,8 @@ describe("ApiClient", () => {
 
       const sends = fetchMock.mock.calls.filter(([, init]) => init?.method === "POST");
       expect(sends).toHaveLength(2);
-      expect(JSON.parse(sends[0]![1]?.body as string)).toEqual({ body_md: "hello", message_kind: "request", to: { type: "agent", ref: "agent_1" } });
-      expect(JSON.parse(sends[1]![1]?.body as string)).toEqual({ body_md: "again", message_kind: "request", to: { type: "agent", ref: "agent_1" } });
+      expect(JSON.parse(sends[0]![1]?.body as string)).toEqual({ body_md: "hello", message_kind: "request", to: { type: "agent", ref: "agent_1" }, wake_requested: "now" });
+      expect(JSON.parse(sends[1]![1]?.body as string)).toEqual({ body_md: "again", message_kind: "request", to: { type: "agent", ref: "agent_1" }, wake_requested: "now" });
     });
   });
 });

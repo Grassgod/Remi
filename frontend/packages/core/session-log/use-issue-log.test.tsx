@@ -139,7 +139,6 @@ describe("useIssueLog visibility lifecycle", () => {
     });
     await waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: ["inbox", "w"] }));
     expect(invalidate.mock.calls.filter(([options]) => options?.queryKey?.[0] === "inbox")).toHaveLength(1);
-    expect(invalidate).toHaveBeenCalledWith({ queryKey: ["chat-unread", "w", "s"] });
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ["message-detail", "w"] });
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ["turns", "w"] });
     hook.unmount();

@@ -58,6 +58,7 @@
     "./chat/queries": "./chat/queries.ts",
     "./chat/human-requests": "./chat/human-requests.ts",
     "./chat/mutations": "./chat/mutations.ts",
+    "./chat/queue": "./chat/queue.ts",
     "./runtimes": "./runtimes/index.ts",
     "./runtimes/queries": "./runtimes/queries.ts",
     "./runtimes/workspaces": "./runtimes/workspaces.ts",

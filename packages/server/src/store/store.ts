@@ -5166,18 +5166,6 @@ runMigrations(this.db);
     return this.chat.listQueuedChatTasks(chatSessionId);
   }
 
-  updateQueuedChatTask(chatSessionId: string, taskId: string, content: string) {
-    return this.chat.updateQueuedChatTask(chatSessionId, taskId, content);
-  }
-
-  removeQueuedChatTasks(chatSessionId: string, taskId?: string): void {
-    this.chat.removeQueuedChatTasks(chatSessionId, taskId);
-  }
-
-  prioritizeQueuedChatTask(chatSessionId: string, taskId: string) {
-    return this.chat.prioritizeQueuedChatTask(chatSessionId, taskId);
-  }
-
   listPendingChatTasks(workspaceId?: string | null, options: { creatorId?: string | null } = {}): MultiremiTask[] {
     return this.chat.listPendingChatTasks(workspaceId, options);
   }
@@ -5297,6 +5285,12 @@ runMigrations(this.db);
   getTurnTrace(...args: Parameters<InboxRepo["operations"]["getTurnTrace"]>) { return this.inbox.operations.getTurnTrace(...args); }
   getTurnInput(...args: Parameters<InboxRepo["operations"]["getTurnInput"]>) { return this.inbox.operations.getTurnInput(...args); }
   cancelTurn(...args: Parameters<InboxRepo["operations"]["cancelTurn"]>) { return this.inbox.operations.cancelTurn(...args); }
+  listQueuedMessages(...args: Parameters<InboxRepo["queue"]["list"]>) { return this.inbox.queue.list(...args); }
+  enqueueQueuedMessage(...args: Parameters<InboxRepo["queue"]["enqueue"]>) { return this.inbox.queue.enqueue(...args); }
+  updateQueuedMessage(...args: Parameters<InboxRepo["queue"]["update"]>) { return this.inbox.queue.update(...args); }
+  deleteQueuedMessage(...args: Parameters<InboxRepo["queue"]["delete"]>) { return this.inbox.queue.delete(...args); }
+  steerQueuedMessage(...args: Parameters<InboxRepo["queue"]["steer"]>) { return this.inbox.queue.steer(...args); }
+  resumeQueuedMessages(...args: Parameters<InboxRepo["queue"]["resume"]>) { return this.inbox.queue.resume(...args); }
   wrapUpTurn(...args: Parameters<InboxRepo["operations"]["wrapUpTurn"]>) { return this.inbox.operations.wrapUpTurn(...args); }
   retryTurn(...args: Parameters<InboxRepo["operations"]["retryTurn"]>) { return this.inbox.operations.retryTurn(...args); }
   issueMessageCardToken(...args: Parameters<InboxRepo["operations"]["issueMessageCardToken"]>) { return this.inbox.operations.issueMessageCardToken(...args); }

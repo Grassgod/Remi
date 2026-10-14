@@ -10690,6 +10690,11 @@
     "DELETE /api/runtimes/:id": {
       "command": "runtime.delete"
     },
+    "DELETE /api/sessions/:sessionId/queue/:qid": {
+      "cli_exempt": true,
+      "category": "pure_ui",
+      "reason": "Chat composer follow-up queue (member-only Web state, ADR 0020); CLI and agents send directly with message.send --wake."
+    },
     "DELETE /api/skills/:id": {
       "command": "skill.archive"
     },
@@ -11575,6 +11580,11 @@
     "GET /api/sessions/:sessionId/messages": {
       "command": "message.list"
     },
+    "GET /api/sessions/:sessionId/queue": {
+      "cli_exempt": true,
+      "category": "pure_ui",
+      "reason": "Chat composer follow-up queue (member-only Web state, ADR 0020); CLI and agents send directly with message.send --wake."
+    },
     "GET /api/shares/:token": {
       "command": "share.view"
     },
@@ -11966,6 +11976,11 @@
     },
     "PATCH /api/runtimes/:id": {
       "command": "runtime.update"
+    },
+    "PATCH /api/sessions/:sessionId/queue/:qid": {
+      "cli_exempt": true,
+      "category": "pure_ui",
+      "reason": "Chat composer follow-up queue (member-only Web state, ADR 0020); CLI and agents send directly with message.send --wake."
     },
     "PATCH /api/skills/:id": {
       "command": "skill.update"
@@ -12755,6 +12770,21 @@
     },
     "POST /api/sessions/:sessionId/messages": {
       "command": "message.send"
+    },
+    "POST /api/sessions/:sessionId/queue": {
+      "cli_exempt": true,
+      "category": "pure_ui",
+      "reason": "Chat composer follow-up queue (member-only Web state, ADR 0020); CLI and agents send directly with message.send --wake."
+    },
+    "POST /api/sessions/:sessionId/queue/:qid/steer": {
+      "cli_exempt": true,
+      "category": "pure_ui",
+      "reason": "Chat composer follow-up queue (member-only Web state, ADR 0020); CLI and agents send directly with message.send --wake."
+    },
+    "POST /api/sessions/:sessionId/queue/resume": {
+      "cli_exempt": true,
+      "category": "pure_ui",
+      "reason": "Chat composer follow-up queue (member-only Web state, ADR 0020); CLI and agents send directly with message.send --wake."
     },
     "POST /api/skills": {
       "command": "skill.create"

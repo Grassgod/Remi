@@ -329,7 +329,7 @@ pendingTurnBackendTests("MUL-486 relay Issue log", (fixture) => {
       expect(f.db.query("SELECT provider_cursor_seq FROM multiremi_session_lanes WHERE session_id=? AND reader_id=? AND execution_scope=?").get(f.session.id,f.agent.id,`relay:${f.chat.id}`)?.provider_cursor_seq).toBe(log.to_seq);
   }, 30_000);
 
-  it("hides system queue rows from user edits, priority, and removal", () => {
+  it("keeps system queue rows out of the user-visible Chat queue", () => {
     const f = fixture();
     const agent = f.store.createAgent({ name: "Relay queue", provider: "codex", maxConcurrentTasks: 4 });
     const issue = createResponsibleTestIssue(f.store, { title: "Bound", status: "in_progress" });
@@ -347,10 +347,8 @@ pendingTurnBackendTests("MUL-486 relay Issue log", (fixture) => {
     expect(sent.action).toBe("created");
     expect(sent.task?.wakeSource).not.toBeNull();
     expect(f.store.listQueuedChatTasks(chat.id)).toEqual([]);
-    expect(() => f.store.updateQueuedChatTask(chat.id, sent.task!.id, "Tampered")).toThrow();
-    expect(() => f.store.prioritizeQueuedChatTask(chat.id, sent.task!.id)).toThrow();
-    expect(() => f.store.removeQueuedChatTasks(chat.id, sent.task!.id)).toThrow();
-    f.store.removeQueuedChatTasks(chat.id);
+    // The follow-up queue (ADR 0020) holds only member-queued rows, never platform wakes.
+    expect(f.store.listQueuedMessages(chat.id)).toEqual({ items: [], paused: null });
     expect(f.store.getTask(sent.task!.id)?.status).toBe("queued");
   });
 });
