@@ -124,7 +124,7 @@ describe("memory trace over the real protocol", () => {
     expect(snapshot(h, t.id).events.map(textOf)).toEqual(["valid RPC"]);
   });
 
-  it("drops both providers' legacy fragment messages and still completes and seals their traces", async () => {
+  it("drops both providers' legacy fragment messages and still completes their turns", async () => {
     const tasks: string[] = [];
     const providers = ["claude", "codex"];
     const runtimes = ["legacy-claude", "legacy-codex"];
@@ -149,10 +149,11 @@ describe("memory trace over the real protocol", () => {
       && (h.daemon as any).ensureOutbox().stats().pending === 0, "legacy completions");
     for (let i = 0; i < tasks.length; i++) {
       // A turn + items trace cannot hold fragments: the v1 queue's messages row
-      // is dropped (with a warning) and the trace is sealed empty by the replayed completion.
-      expect(h.daemon.traceStore().head(tasks[i]!)).toEqual({ head: 0, closed: true });
+      // is dropped (with a warning), so no trace exists for the task and the
+      // replayed completion still lands.
+      expect(h.daemon.traceStore().head(tasks[i]!)).toBeNull();
       expect(await daemonTraceService(h.layer).reader.read({ runtimeId: runtimes[i]!, taskId: tasks[i]! }))
-        .toMatchObject({ ok: true, head: 0, closed: true, events: [] });
+        .toMatchObject({ ok: false, code: "trace_not_hot" });
     }
     expect(h.errors).toEqual([]);
   });

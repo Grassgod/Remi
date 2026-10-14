@@ -897,7 +897,10 @@ describe("MUL-74 / MUL-197 drain + outbox end to end", () => {
       await until(() => store.getTask(task.id)?.status === "completed", 5_000, "historical terminal replay");
       await until(() => daemon.outboxStats()?.pending === 0, 5_000, "historical report acknowledgement");
       expect(completeAttempts).toBe(1);
-      expect(daemon.traceStore().read(task.id).events).toMatchObject([{ seq: 1, type: "text", content: "last buffered message" }]);
+      // The v1 queue's fragment message cannot enter a turn + items trace: it is
+      // dropped (with a warning), so this daemon never held a trace for the task.
+      expect(daemon.traceStore().head(task.id)).toBeNull();
+      expect(daemon.traceStore().read(task.id).events).toEqual([]);
       expect(store.getTask(task.id)).toMatchObject({
         status: "completed",
         result: "replayed completion",
