@@ -44,8 +44,7 @@ function harness() {
     return session;
   };
   const handler: TaskStreamingHandler = async (_message, _sessionKey, consumer) => {
-    await consumer(events(), { taskId: "tsk_reply", displayName: "Remi",
-      respondHumanRequest: async () => { throw new Error("not expected"); } });
+    await consumer(events(), { taskId: "tsk_reply", displayName: "Remi" });
   };
   const connector = Object.create(FeishuConnector.prototype) as any;
   Object.assign(connector, { _channel: channel, _groupPolicy: { getByChatId: () => null }, _taskStreamHandler: handler });

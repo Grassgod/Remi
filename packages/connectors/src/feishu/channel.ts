@@ -12,8 +12,6 @@ import { startWebSocketListener, setGroupPolicy, flushDedupCacheSync, type Feish
 import { sendMarkdownCardFeishu, sendCardFeishu } from "./send.js";
 import { FeishuStreamingSession, buildFinalCard, type TokenProvider } from "./streaming.js";
 import { handleAgentStream } from "./adapters/stream-handler.js";
-import { handleTaskStream } from "./adapters/task-stream-handler.js";
-import { formatExecutionSubtitle } from "./card-metadata.js";
 import { FeishuTaskPresentation } from "./task-presentation.js";
 import type { FeishuPresentationCheckpoint } from "@multiremi/contracts/types.js";
 import type { TaskStreamEvent, TaskStreamMeta } from "../base.js";
@@ -61,10 +59,12 @@ export interface HandleTaskStreamOpts {
   replyToMessageId?: string;
   mentionOpenId?: string;
   displayName?: string | null;
-  subtitle?: string | null;
   log?: StreamHandlerLog;
+  /**
+   * `messageId` is set only for a delivery an older (protocol v4) daemon
+   * started as a streaming card, before presentation checkpoints existed.
+   */
   durable?: { idempotencyKey: string; messageId?: string | null; presentation?: FeishuPresentationCheckpoint };
-  onStarted?: (messageId: string) => Promise<void>;
   interactionOpenId?: string;
   onCheckpoint?: (state: FeishuPresentationCheckpoint) => Promise<void>;
 }
@@ -259,67 +259,26 @@ export class FeishuChannel {
     meta: TaskStreamMeta,
     opts: HandleTaskStreamOpts = {},
   ): Promise<{ messageId: string }> {
-    // Only already-sent v4 deliveries keep their original card. Every new
-    // Task, regardless of inbound/proactive origin, uses the native renderer.
-    if (!opts.durable?.messageId || opts.durable.presentation) {
-      const presentation = new FeishuTaskPresentation(this._makeClient(), chatId, meta, {
-        appId: this._config.appId, replyToMessageId: opts.replyToMessageId,
-        lane: opts.lane,
-        mentionOpenId: opts.mentionOpenId, interactionOpenId: opts.interactionOpenId,
-        receiptMessageIds: opts.receiptMessageIds,
-        displayName: opts.displayName ?? meta.displayName,
-        idempotencyKey: opts.durable?.idempotencyKey ?? meta.taskId,
-        checkpoint: opts.durable?.presentation, save: opts.onCheckpoint,
-        log: message => log.warn(message),
-      });
-      this._activeSessions.set(sessionKey, presentation);
-      try { return await presentation.consume(stream); }
-      finally {
-        presentation.detach();
-        if (this._activeSessions.get(sessionKey) === presentation) this._activeSessions.delete(sessionKey);
-      }
-    }
-    const slog: StreamHandlerLog = opts.log ?? {
-      info: (message) => log.info(message),
-      warn: (message) => log.warn(message),
-      error: (message) => log.error(message),
-      debug: (message) => log.debug(message),
-    };
-    const session = this.createStream({ logFn: (message) => slog.info(message) });
-    this._activeSessions.set(sessionKey, session);
-    try {
-      await session.start(chatId, "chat_id", {
-        replyToMessageId: opts.replyToMessageId,
-        mentionOpenId: opts.mentionOpenId,
-        sessionId: meta.sessionId,
-        agentName: opts.displayName ?? meta.displayName ?? undefined,
-        subtitle: opts.subtitle ?? formatExecutionSubtitle({ agentName: opts.displayName ?? meta.displayName }),
-        durable: opts.durable,
-      });
-      const messageId = session.getMessageId()!;
-      if (opts.onStarted) await opts.onStarted(messageId);
-      const result = await handleTaskStream(session, stream, chatId, meta);
-      await session.close({
-        finalText: result.contentText || undefined,
-        thinking: result.thinkingText || null,
-        toolEntries: result.toolEntries.length ? result.toolEntries : undefined,
-        toolCount: result.toolCount || undefined,
-        stats: result.stats,
-        sessionId: result.sessionId,
-        agentName: opts.displayName ?? meta.displayName,
-        aborted: result.cancelled,
-      });
-      return { messageId };
-    } catch (error) {
-      slog.error(`handleTaskStream error: ${String(error)}`);
-      if (opts.durable) throw error;
-      if (session.isActive()) {
-        await session.close({ finalText: `Error: ${String(error)}` }).catch(() => {});
-      }
-      return { messageId: session.getMessageId() ?? "" };
-    } finally {
-      session.detach();
-      if (this._activeSessions.get(sessionKey) === session) this._activeSessions.delete(sessionKey);
+    // Every Task, regardless of inbound/proactive origin, uses the native
+    // renderer. Only a delivery whose legacy streaming card was already sent
+    // carries its message ID: it finishes with the result card only, and its
+    // first checkpoint keeps it final-only on retry.
+    const legacyCard = opts.lane !== "cot" ? opts.durable?.messageId ?? undefined : undefined;
+    const presentation = new FeishuTaskPresentation(this._makeClient(), chatId, meta, {
+      appId: this._config.appId, replyToMessageId: opts.replyToMessageId,
+      lane: opts.lane, legacyCardMessageId: legacyCard,
+      mentionOpenId: opts.mentionOpenId, interactionOpenId: opts.interactionOpenId,
+      receiptMessageIds: opts.receiptMessageIds,
+      displayName: opts.displayName ?? meta.displayName,
+      idempotencyKey: opts.durable?.idempotencyKey ?? meta.taskId,
+      checkpoint: opts.durable?.presentation, save: opts.onCheckpoint,
+      log: message => (opts.log ?? log).warn(message),
+    });
+    this._activeSessions.set(sessionKey, presentation);
+    try { return await presentation.consume(stream); }
+    finally {
+      presentation.detach();
+      if (this._activeSessions.get(sessionKey) === presentation) this._activeSessions.delete(sessionKey);
     }
   }
 

@@ -12,7 +12,8 @@ import { promisify } from "node:util";
 import { createInterface } from "node:readline";
 import type * as Lark from "@larksuiteoapi/node-sdk";
 import type { FeishuPresentationCheckpoint, MultiremiTaskHumanRequest } from "@multiremi/contracts/types.js";
-import type { LegacyTraceEvent as TraceEvent } from "@multiremi/contracts/trace.js";
+import type { TraceEvent, TraceEventBody, TraceItem, TraceTurn, TraceTurnStatus } from "@multiremi/contracts/trace.js";
+import { completeTurn } from "@shared/turn-trace.js";
 import type { TaskStreamEvent } from "@connectors/base.js";
 import { FeishuTaskPresentation } from "@connectors/feishu/task-presentation.js";
 import { escapeCardText, handleTaskInteractionEvent } from "@connectors/feishu/task-interaction.js";
@@ -84,13 +85,35 @@ try {
   }).catch(() => { console.log("Demo callback could not be processed"); }); });
 
   const runId = `cot_experience_${Date.now()}`;
+  // Turn + items events as the daemon's trace translator writes them.
   let seq = 0;
-  function event(taskId: string, type: string, patch: Record<string, unknown> = {}): TaskStreamEvent {
-    const n = ++seq;
-    const { toolCallId, ...fields } = patch;
-    return { kind: "message", message: { seq: n, type, tool: null, tool_call_id: toolCallId ?? null,
-      content: null, input: null, output: null, status: null, meta: null, ts: new Date().toISOString(), ...fields } as TraceEvent };
+  let items: TraceItem[] = [];
+  let current: TraceTurn | null = null;
+  const now = () => new Date().toISOString();
+  function emit(body: TraceEventBody): TaskStreamEvent {
+    if (body.type.startsWith("item.") && "item" in body) {
+      items = [...items.filter(row => row.id !== body.item.id), body.item];
+    }
+    return { kind: "message", message: { seq: ++seq, ts: now(), ...body } as TraceEvent };
   }
+  function begin(taskId: string): TaskStreamEvent {
+    items = [];
+    current = { id: taskId, turn_id: null, agent_id: "demo_agent", agent_name: "Remi", provider: "claude", requested_model: null,
+      model: "claude-fable-5-1", status: "running", error: null, started_at: now(), completed_at: null, duration_ms: null,
+      final_item_id: null, final_started_at: null, context_usage: null,
+      stats: { item_count: 0, tool_call_count: 0, process_item_count: 0, type_histogram: [] } };
+    return emit({ type: "turn.started", turn: current });
+  }
+  const end = (status: Exclude<TraceTurnStatus, "running">) =>
+    emit({ type: "turn.completed", turn: completeTurn({ turn: current!, items }, { status, completedAt: now() })! });
+  const base = (id: string) => ({ id, parent_id: null, status: "completed" as const, started_at: now(), completed_at: now() });
+  const text = (id: string, value: string, phase: "commentary" | "final") =>
+    emit({ type: "item.completed", item: { ...base(id), type: "agent_message", text: value, phase } });
+  const plan = (entries: Array<{ content: string; status: "pending" | "in_progress" | "completed" }>, first = false) =>
+    emit({ type: first ? "item.started" : "item.updated", item: { ...base("plan"), status: "in_progress", completed_at: null,
+      type: "plan", entries: entries.map(entry => ({ ...entry, priority: null })) } });
+  const request = (item: TraceItem, done: boolean) =>
+    emit({ type: done ? "item.completed" : "item.started", item: done ? item : { ...item, status: "in_progress", completed_at: null } });
   const outcomes: Array<{ taskId: string; cotMessageId?: string; resultMessageId: string; status?: string }> = [];
   async function run(suffix: string, stream: (taskId: string) => AsyncIterable<TaskStreamEvent>) {
     const taskId = `${runId}_${suffix}`;
@@ -114,13 +137,6 @@ try {
         }
         return requests.get(id) ?? null;
       },
-      respondHumanRequest: async (id, response) => {
-        const r = requests.get(id);
-        if (!r || r.taskId !== taskId || r.status !== "pending") throw new Error("Demo request no longer pending");
-        const updated: MultiremiTaskHumanRequest = { ...r, status: "responded", response,
-          respondedAt: new Date().toISOString(), respondedBy: replayResponses ? "demo-replay" : "feishu-demo" };
-        requests.set(id, updated); return updated;
-      },
     }, { appId: appId!, mentionOpenId: recipient, idempotencyKey: taskId,
       save: async state => { saved = structuredClone(state); Object.entries(state.interactions).forEach(([id, e]) => {
         callbackIds.add(e.messageId); requestCards.set(id, e.messageId);
@@ -133,30 +149,35 @@ try {
   const snapshot = (taskId: string, status: "completed" | "failed" | "cancelled", started: string, error: string | null = null): TaskStreamEvent =>
     ({ kind: "snapshot", snapshot: { taskId, status, result: "", error, sessionId: "demo_only", workDir: null, usage: [],
       startedAt: started, completedAt: new Date().toISOString() } });
-  async function* tool(taskId: string, tool: string, toolCallId: string, input: Record<string, unknown>, output = "演示成功日志") {
-    // Reproduce real ACP delivery: placeholder, args, then description.
-    yield event(taskId, "tool_use", { tool, toolCallId });
-    yield event(taskId, "tool_use", { tool, toolCallId, input });
+  async function* tool(row: TraceItem) {
+    // Reproduce real ACP delivery: the item starts, then completes whole.
+    yield emit({ type: "item.started", item: { ...row, status: "in_progress", completed_at: null } as TraceItem });
     await Bun.sleep(1200);
-    yield event(taskId, "tool_result", { toolCallId, output, status: "completed" });
+    yield emit({ type: "item.completed", item: row });
   }
   await run("full", async function* (taskId) {
     const started = new Date().toISOString();
-    yield event(taskId, "execution", { meta: { agentName: "Remi", provider: "claude", model: "claude-fable-5-1" } });
-    yield event(taskId, "text", { content: "这是新版 CoT 的完整展示回放。任务内容、模型和上下文数字均为演示数据，不会执行真实工具或修改线上任务。先核对消息链路，再展示问答、审批和最终结果。" + (replayResponses ? "问答与审批将在 10 秒后自动回放模拟响应，无需点击，也不代表你的真实决定。" : ""), meta: { phase: "commentary" } });
-    yield event(taskId, "plan", { meta: { entries: [
+    yield begin(taskId);
+    yield text("msg:intro", "这是新版 CoT 的完整展示回放。任务内容、模型和上下文数字均为演示数据，不会执行真实工具或修改线上任务。先核对消息链路，再展示问答、审批和最终结果。" + (replayResponses ? "问答与审批将在 10 秒后自动回放模拟响应，无需点击，也不代表你的真实决定。" : ""), "commentary");
+    yield plan([
       { content: "检查消息投递与工具展示", status: "in_progress" }, { content: "验证问答与审批衔接", status: "pending" },
       { content: "输出最终结果", status: "pending" },
-    ] } });
-    yield* tool(taskId, "Skill", "skill", { skill: "feishu-cot-review" });
-    yield* tool(taskId, "Read", "read", { file_path: "/demo/remi/packages/connectors/src/feishu/task-presentation.ts" });
-    yield* tool(taskId, "Bash", "search", { command: "rg 'message_cot' packages/connectors", description: "搜索原生 CoT 的调用入口" }, '{"raw_log":"这段成功日志不应显示在 CoT 中"}');
-    yield event(taskId, "text", { content: "消息入口已核对。下面将子任务进度展示在同一条过程里，随后保留现有问答卡和审批卡交互。", meta: { phase: "commentary" } });
-    yield* tool(taskId, "Agent", "child", { description: "复核消息完成状态" }, "已完成演示复核");
-    yield event(taskId, "plan", { meta: { entries: [
+    ], true);
+    yield* tool({ ...base("skill"), type: "tool", tool: "Skill", server: null, kind: null, title: "Skill",
+      input: { skill: "feishu-cot-review" }, output: "演示成功日志", duration_ms: 1200 });
+    const path = "/demo/remi/packages/connectors/src/feishu/task-presentation.ts";
+    yield* tool({ ...base("read"), type: "command", tool: "Read", source: "tool", command: null, cwd: null,
+      actions: [{ type: "read", command: null, name: "task-presentation.ts", path }], output: null, exit_code: null, duration_ms: 1200 });
+    yield* tool({ ...base("search"), type: "command", tool: "Bash", source: "shell", command: "rg 'message_cot' packages/connectors", cwd: null,
+      actions: [{ type: "search", command: "rg 'message_cot' packages/connectors", query: "message_cot", path: "packages/connectors" }],
+      output: '{"raw_log":"这段成功日志不应显示在 CoT 中"}', exit_code: 0, duration_ms: 1200 });
+    yield text("msg:middle", "消息入口已核对。下面将子任务进度展示在同一条过程里，随后保留现有问答卡和审批卡交互。", "commentary");
+    yield* tool({ ...base("child"), type: "subagent", tool: "Agent", title: "复核消息完成状态", prompt: null,
+      output: "已完成演示复核", duration_ms: 1200 });
+    yield plan([
       { content: "检查消息投递与工具展示", status: "completed" }, { content: "验证问答与审批衔接", status: "in_progress" },
       { content: "输出最终结果", status: "pending" },
-    ] } });
+    ]);
     const qId = `${taskId}_question`;
     requests.set(qId, { id: qId, taskId, kind: "question", status: "pending", response: null, respondedBy: null, respondedAt: null,
       createdAt: new Date().toISOString(), payload: { questions: [
@@ -165,21 +186,28 @@ try {
         { question: "展示节奏是否合适？（演示，单选，也可以填写自定义回答）", multiSelect: false,
           options: [{ label: "合适" }, { label: "需要调整" }] },
       ] } });
-    yield event(taskId, "question_request", { input: { message_id: qId } });
-    yield event(taskId, "text", { content: requests.get(qId)?.status === "responded"
-      ? replayResponses ? "演示答案已回放，继续展示审批步骤。" : "已收到你提交的体验反馈，继续展示审批步骤。" : "问答演示等待已超时，未代填任何答案。继续展示下一种卡片。", meta: { phase: "commentary" } });
+    const questionItem: TraceItem = { ...base(`q:${qId}`), type: "question", tool_item_id: null, message: "演示问答", message_id: qId,
+      questions: requests.get(qId)!.payload.questions as unknown[], answers: null, responded_by: null, reply_message_id: null };
+    yield request(questionItem, false);
+    yield request({ ...questionItem, status: requests.get(qId)?.status === "responded" ? "completed" : "stopped" }, true);
+    yield text("msg:after-question", requests.get(qId)?.status === "responded"
+      ? replayResponses ? "演示答案已回放，继续展示审批步骤。" : "已收到你提交的体验反馈，继续展示审批步骤。" : "问答演示等待已超时，未代填任何答案。继续展示下一种卡片。", "commentary");
     const pId = `${taskId}_permission`;
     requests.set(pId, { id: pId, taskId, kind: "permission", status: "pending", response: null, respondedBy: null, respondedAt: null,
       createdAt: new Date().toISOString(), payload: {
         tool_call: { title: replayResponses ? "审批效果演示：10 秒后自动回放「允许一次」，无需操作，不代表你的真实授权，也不会执行命令。" : "允许继续展示最终结果吗？（仅演示，不执行任何命令；60 秒未操作自动结束等待）", rawInput: {} },
         options: [{ optionId: "allow", name: "允许一次", kind: "allow_once" }, { optionId: "deny", name: "拒绝", kind: "reject_once" }],
       } });
-    yield event(taskId, "permission_request", { input: { message_id: pId } });
-    yield event(taskId, "plan", { meta: { entries: [
+    const permissionItem: TraceItem = { ...base(`perm:${pId}`), type: "permission", tool_item_id: null, title: "审批效果演示",
+      message_id: pId, options: [{ option_id: "allow", name: "允许一次", kind: "allow_once" }, { option_id: "deny", name: "拒绝", kind: "reject_once" }],
+      decision: null, outcome: null, responded_by: null, reply_message_id: null };
+    yield request(permissionItem, false);
+    yield request({ ...permissionItem, status: requests.get(pId)?.status === "responded" ? "completed" : "stopped" }, true);
+    yield plan([
       { content: "检查消息投递与工具展示", status: "completed" }, { content: "展示问答与审批衔接", status: "completed" },
       { content: "输出最终结果", status: "completed" },
-    ] } });
-    yield event(taskId, "usage", { meta: { used: 82000, size: 1000000 } });
+    ]);
+    yield emit({ type: "turn.updated", patch: { context_usage: { used: 82000, size: 1000000 } } });
     const requestStatus = (id: string) => {
       const r = requests.get(id)!;
       if (r.status !== "responded") return "等待超时，未作答／未授权";
@@ -189,17 +217,21 @@ try {
         : r.response?.option_id === "allow" ? "允许一次" : "拒绝";
       return `${replayResponses ? "模拟回执（非用户决定）：" : ""}${escapeCardText(text)}`;
     };
-    yield event(taskId, "text", { content: `**完整展示回放已结束。**\n\n原生过程消息负责按时间顺序展示文字、工具、待办和等待状态；最终答案独立放在这张结果卡里。\n\n| 检查项 | 本次效果 |\n| --- | --- |\n| 工具 | 描述、分类图标；成功日志不展开 |\n| 过程 | 多段文字与工具组按执行顺序排列 |\n| 交互 | 沿用原有问答／审批卡，提交后保留回执 |\n| 底部 | 完成后才显示 @、耗时、上下文、工具数 |\n\n问答：${requestStatus(qId)}\n\n审批：${requestStatus(pId)}\n\n接下来还有两条简短的失败／取消展示，分别检查错误收尾和中断状态。\n\n*本条为渲染验收演示；未调用模型、未执行真实工具、未变更线上任务。模型与上下文为示例，耗时为本次回放实际耗时。*`, meta: { phase: "final" } });
+    yield text("msg:answer", `**完整展示回放已结束。**\n\n原生过程消息负责按时间顺序展示文字、工具、待办和等待状态；最终答案独立放在这张结果卡里。\n\n| 检查项 | 本次效果 |\n| --- | --- |\n| 工具 | 描述、分类图标；成功日志不展开 |\n| 过程 | 多段文字与工具组按执行顺序排列 |\n| 交互 | 沿用原有问答／审批卡，提交后保留回执 |\n| 底部 | 完成后才显示 @、耗时、上下文、工具数 |\n\n问答：${requestStatus(qId)}\n\n审批：${requestStatus(pId)}\n\n接下来还有两条简短的失败／取消展示，分别检查错误收尾和中断状态。\n\n*本条为渲染验收演示；未调用模型、未执行真实工具、未变更线上任务。模型与上下文为示例，耗时为本次回放实际耗时。*`, "final");
+    yield end("completed");
     yield snapshot(taskId, "completed", started);
   });
   for (const status of ["failed", "cancelled"] as const) await run(status, async function* (taskId) {
     const started = new Date().toISOString();
-    yield event(taskId, "execution", { meta: { agentName: "Remi", provider: "claude", model: "claude-fable-5-1" } });
-    yield event(taskId, "text", { content: status === "failed" ? "失败场景演示：模拟工具返回错误，检查原生过程能否结束等待。" : "取消场景演示：模拟中断任务，检查过程状态与最终结果。", meta: { phase: "commentary" } });
-    yield event(taskId, "tool_use", { tool: "Bash", toolCallId: "check", input: { command: "demo-check", description: "模拟检查任务状态" } });
+    yield begin(taskId);
+    yield text("msg:intro", status === "failed" ? "失败场景演示：模拟工具返回错误，检查原生过程能否结束等待。" : "取消场景演示：模拟中断任务，检查过程状态与最终结果。", "commentary");
+    const check: TraceItem = { ...base("check"), type: "command", tool: "Bash", source: "shell", command: "demo-check", cwd: null,
+      actions: [{ type: "unknown", command: "demo-check" }], output: "演示错误原始日志，不应外显", exit_code: status === "failed" ? 1 : null, duration_ms: 1500 };
+    yield emit({ type: "item.started", item: { ...check, status: "in_progress", completed_at: null, output: null } as TraceItem });
     await Bun.sleep(1500);
-    yield event(taskId, "tool_result", { toolCallId: "check", status, output: "演示错误原始日志，不应外显" });
-    yield event(taskId, "text", { content: "本条为异常状态的展示验收，不代表线上任务失败或被取消。", meta: { phase: "final" } });
+    yield emit({ type: "item.completed", item: { ...check, status: status === "failed" ? "failed" : "stopped" } as TraceItem });
+    yield text("msg:answer", "本条为异常状态的展示验收，不代表线上任务失败或被取消。", "final");
+    yield end(status);
     yield snapshot(taskId, status, started, status === "failed" ? "模拟工具错误（仅演示）" : null);
   });
   await handling;
