@@ -115,9 +115,10 @@ describe("native subagents: Claude 0.90 live captures", () => {
       thread_id: A, background: true,
     });
     expect(agent.prompt).toStartWith("List the files in the current working directory");
-    // U2: the AIR announcement names no type or model.
+    // The unpatched AIR announcement names no type (U2); the model comes from the child's first request,
+    // whose usage (6591 ms) arrives before the child frame that reveals its Agent call (6592 ms).
     expect(agent.agent_type).toBeUndefined();
-    expect(agent.model).toBeUndefined();
+    expect(agent.model).toBe("claude-opus-5-5");
     expect(agent.output).toStartWith("There are 3 files in /work.");
     expect(agent.duration_ms).toBeGreaterThan(0);
     // The child's Bash and its reply are nested; its reply is never final.
@@ -484,5 +485,87 @@ describe("onSubagentCounts (PR 5 §3.8)", () => {
       hook("toolu_1", { status: "async_launched", isAsync: true }),
     ]);
     expect(h.item("toolu_1", "subagent").status).toBe("in_progress");
+  });
+});
+
+describe("native subagents: Remi's Claude bridge patch facts (`_meta.remi`)", () => {
+  const patchedSpawn = (id: string, backgrounded: boolean | null, subagentType: string | null = "general-purpose") =>
+    spawned(id, { _meta: { remi: { backgrounded, subagentType } } });
+  const childUsage = (parent: string, model: string) => ({ sessionUpdate: "usage_update", used: 0, size: 0,
+    _meta: { remiTokenUsage: { id: "msg_child", providerSessionId: "native", providerRequestId: "msg_child", model, parentToolUseId: parent,
+      inputTokens: 1, outputTokens: 1, cachedInputTokens: 0, cacheWriteTokens: 0, totalTokens: 2 } } });
+
+  it("the SDK's `true` is never downgraded; the type fills agent_type", () => {
+    const h = harness("claude").feed([
+      patchedSpawn(B, true),
+      // A 0.89-style foreground hook cannot downgrade it.
+      hook("toolu_B", { status: "completed" }),
+    ]);
+    expect(h.item(`sa:${B}`, "subagent")).toMatchObject({ background: true, agent_type: "general-purpose" });
+    // An unknown verdict leaves inference in charge.
+    const unknown = harness("claude").feed([patchedSpawn(A, null, null), chunk("root keeps talking")]);
+    expect(unknown.item(`sa:${A}`, "subagent").background).toBe(true);
+    expect(unknown.item(`sa:${A}`, "subagent").agent_type).toBeUndefined();
+  });
+
+  it("the race (the child ends before any root output) is owed with the verdict, and lost without it", () => {
+    const race = (spawn: Record<string, unknown>) => harness("claude").round([
+      spawn, ...childBash(A, "toolu_c"), stamped(A, chunk("3 files")), state(A, "completed"),
+      chunk("I started a background agent."), marker("human"),
+    ]);
+    expect(race(patchedSpawn(A, true)).translator.owesAutonomousRound).toBe(true);
+    // Unpatched 0.90: nothing tells it from a foreground child (live 0.89 race recording).
+    expect(race(spawned(A)).translator.owesAutonomousRound).toBe(false);
+  });
+
+  it("a patch `false` is upgraded when the root keeps working while the child runs (moved to the background later)", () => {
+    // The bridge moved the foreground call to the background (task_updated, e.g. to take a steer): no announcement says so.
+    const h = harness("claude").feed([patchedSpawn(A, false, "Explore"), ...childBash(A, "toolu_c")]);
+    expect(h.item(`sa:${A}`, "subagent")).toMatchObject({ background: false, agent_type: "Explore" });
+    h.feed([chunk("root keeps talking")]);
+    expect(h.item(`sa:${A}`, "subagent").background).toBe(true);
+    h.round([state(A, "completed"), marker("human")]);
+    expect(h.translator.owesAutonomousRound).toBe(true);
+    // Reaching the root's result while it runs upgrades it too.
+    const byResult = harness("claude").round([patchedSpawn(A, false), marker("human")]);
+    expect(byResult.item(`sa:${A}`, "subagent").background).toBe(true);
+  });
+
+  it("a foreground child (`false`) with no root output while it runs stays false, and never waits", () => {
+    const h = harness("claude").round([patchedSpawn(A, false), ...childBash(A, "toolu_c"), stamped(A, chunk("child reply")),
+      state(A, "completed"), chunk("done"), marker("human")]);
+    expect(h.item(`sa:${A}`, "subagent").background).toBe(false);
+    expect(h.translator.owesAutonomousRound).toBe(false);
+  });
+
+  it("a foreground child (`false`) never waits", () => {
+    const h = harness("claude").round([patchedSpawn(A, false), ...childBash(A, "toolu_c"), state(A, "completed"),
+      chunk("done"), marker("human")]);
+    expect(h.translator.owesAutonomousRound).toBe(false);
+  });
+
+  it("a resumed generation keeps the verdict the patch sends for it", () => {
+    const h = harness("claude").round([patchedSpawn(A, false), state(A, "completed"),
+      spawned(`${A}:generation:2`, { prompt: "again", _meta: { remi: { backgrounded: true, subagentType: "general-purpose" } } })]);
+    expect(h.item(`sa:${A}`, "subagent")).toMatchObject({ status: "in_progress", background: true });
+  });
+
+  it("fills the model from the child's first request, even before its Agent call is known, and keeps it", () => {
+    const h = harness("claude").feed([spawned(A), childUsage("toolu_01", "claude-haiku-5")]);
+    expect(h.item(`sa:${A}`, "subagent").model).toBeUndefined();
+    h.feed([...childBash(A, "toolu_c"), childUsage("toolu_01", "claude-other")]);
+    expect(h.item(`sa:${A}`, "subagent").model).toBe("claude-haiku-5");
+    // The root's own requests (no Agent call) name no subagent.
+    h.feed([{ sessionUpdate: "usage_update", used: 0, size: 0, _meta: { remiTokenUsage: { id: "r", model: "root-model" } } }, spawned(B)]);
+    expect(h.item(`sa:${B}`, "subagent").model).toBeUndefined();
+  });
+
+  it("Codex: a child thread's request names its model", () => {
+    const h = harness("codex").feed([
+      spawned("thread-1", { task: "Delegated task for Count files", prompt: undefined }),
+      { sessionUpdate: "usage_update", used: 0, size: 0, _meta: { remiTokenUsage: { id: "resp_1", providerSessionId: "thread-1",
+        providerRequestId: "resp_1", model: "gpt-6.1-sol", inputTokens: 1, outputTokens: 1, cachedInputTokens: 0, totalTokens: 2 } } },
+    ]);
+    expect(h.item("sa:thread-1", "subagent").model).toBe("gpt-6.1-sol");
   });
 });

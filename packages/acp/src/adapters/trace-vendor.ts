@@ -141,6 +141,33 @@ export function isNativeAgentHook(frame: VendorFrame): boolean {
 }
 
 /**
+ * Remi's claude-agent-acp patch facts on a `subagent_spawned`
+ * (`_meta.remi`, usage-bridge-patches.ts `claudeSubagentPatch`): whether the
+ * SDK registered the agent in the background, and its type. Null when absent.
+ */
+export function nativeAgentFacts(frame: VendorFrame): { background: boolean | null; agentType: string | null } {
+  const remi = record(meta(frame)?.remi);
+  return {
+    background: typeof remi?.backgrounded === "boolean" ? remi.backgrounded : null,
+    agentType: str(remi?.subagentType),
+  };
+}
+
+/**
+ * Who made the request a billing `usage_update` reports, and its model
+ * (`_meta.remiTokenUsage`, Remi's usage patches): Claude stamps a subagent's
+ * requests with the Agent call (`parentToolUseId`); Codex names the child
+ * thread (`providerSessionId`).
+ */
+export function requestUsageOwner(frame: VendorFrame): { parentToolUseId: string | null; providerSessionId: string | null; model: string | null } | null {
+  const usage = record(meta(frame)?.remiTokenUsage);
+  if (!usage) return null;
+  const model = str(usage.model);
+  return { parentToolUseId: str(usage.parentToolUseId), providerSessionId: str(usage.providerSessionId),
+    model: model && model !== "<synthetic>" ? model : null };
+}
+
+/**
  * The prompt of a native child (PR 5 §3.2): `prompt`, else `task`, but not
  * codex-acp's stand-in for a prompt it cannot read ("Delegated task", or
  * "Delegated task for {name}", CX:30044, 30191): the v2 spawn message is

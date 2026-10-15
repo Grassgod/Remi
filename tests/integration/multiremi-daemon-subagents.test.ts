@@ -253,6 +253,39 @@ describe("Bun Multiremi daemon native subagents", () => {
     await waitFor(() => requestUnits(task.id) === 3, "the prompt's and the follow-up's requests billed");
   }, 30_000);
 
+  /** The 0.89 race where the root says nothing while the child runs: only the patched verdict can tell. */
+  const SILENT_RACE = (backgrounded: boolean): FakeSubagentStep[] => [
+    { update: { sessionUpdate: "subagent_spawned", subagentSessionId: CHILD, name: "Count files", task: "List the files",
+      prompt: "List the files", capabilities: {}, _meta: { remi: { backgrounded, subagentType: "general-purpose" } } } },
+    { session: CHILD, update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "There are 3 files." },
+      _meta: { claudeCode: { parentToolUseId: "toolu_01" } } } },
+    ended(CHILD),
+    chunk(backgrounded ? "I started a background agent; I'll reply once it reports back." : "3 files."),
+    { billing: { origin: "human" } },
+    { resolve: "end_turn" },
+    ...(backgrounded ? [{ delayMs: 300, ...chunk("3") }, { billing: { origin: "task-notification" } }] as FakeSubagentStep[] : []),
+  ];
+
+  it("the race with the bridge patch's verdict: the late answer is still the turn's reply", async () => {
+    const { store, task, daemon } = await bed("silent-race");
+    const logPath = join(workDir!, "agent.jsonl");
+    const run = daemon(scriptedAcp({ prompts: [SILENT_RACE(true)] }, logPath, "claude"), { autonomousIdleMs: 5_000 });
+    await run.start();
+    expect(store.getTask(task.id)).toMatchObject({ status: "completed", result: "3" });
+    const agent = traceItems(run.traceStore().read(task.id).events).find((item) => item.id === `sa:${CHILD}`);
+    expect(agent).toMatchObject({ background: true, agent_type: "general-purpose", status: "completed" });
+  }, 30_000);
+
+  it("a foreground child with the verdict `false` completes without waiting", async () => {
+    const { store, task, daemon } = await bed("silent-foreground");
+    const logPath = join(workDir!, "agent.jsonl");
+    const run = daemon(scriptedAcp({ prompts: [SILENT_RACE(false)] }, logPath, "claude"), { autonomousIdleMs: 20_000 });
+    await run.start();
+    expect(store.getTask(task.id)).toMatchObject({ status: "completed", result: "3 files." });
+    const resolvedAt = agentLog(logPath).find((entry) => entry.kind === "resolved")!.at;
+    expect(Date.now() - resolvedAt).toBeLessThan(5_000);
+  }, 30_000);
+
   it("(2) with no follow-up the wait ends at idleMs and the turn completes with the original reply", async () => {
     const { store, task, daemon } = await bed("no-follow-up");
     const logPath = join(workDir!, "agent.jsonl");

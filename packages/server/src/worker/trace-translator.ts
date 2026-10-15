@@ -25,6 +25,7 @@ import {
   mergeToolFacts,
   messageId as frameMessageId,
   messagePhase,
+  nativeAgentFacts,
   nativeAgentId,
   nativeAgentItemId,
   nativeAgentPrompt,
@@ -32,6 +33,7 @@ import {
   parentToolUseId,
   toolLabel,
   readSessionFailure,
+  requestUsageOwner,
   sessionFailureNotice,
   terminalChunk,
   terminalExit,
@@ -386,6 +388,14 @@ interface NativeAgent {
   item: TraceSubagentItem;
   /** A hook marker (or the alias of its call) linked the agent to its Agent call. */
   linked: boolean;
+  /**
+   * The bridge patch's `_meta.remi` said `backgrounded: true` (the SDK's own
+   * registration): nothing downgrades it. A patch `false` stays open to the
+   * upgrade by inference: a foreground child blocks its caller, so a caller
+   * that keeps working while it runs had it moved to the background
+   * (`task_updated`, e.g. to take a steer), which no announcement reports.
+   */
+  authoritative: boolean;
   spawnOrder: number;
   /** Frame order of the state update that ended it last; null while it runs. */
   endedOrder: number | null;
@@ -518,6 +528,8 @@ export function createTraceTranslator(
   const alias = new Map<string, NativeAgent>();
   /** Orphan hook markers waiting for the alias of their call (§3.3). */
   const pendingHooks = new Map<string, boolean>();
+  /** A child's request model, by its Agent call, until a child frame reveals the alias (the usage can come first). */
+  const pendingModels = new Map<string, string>();
   let spawnCounter = 0;
   /** Order of ACP frames, for the autonomous-round rule (§2.4). */
   let frameOrder = 0;
@@ -629,10 +641,35 @@ export function createTraceTranslator(
 
   const learnAlias = (toolCallId: string, agent: NativeAgent): void => {
     alias.set(toolCallId, agent);
+    const model = pendingModels.get(toolCallId);
+    if (model !== undefined) {
+      pendingModels.delete(toolCallId);
+      applyModel(agent, model);
+    }
     const marker = pendingHooks.get(toolCallId);
     if (marker === undefined) return;
     pendingHooks.delete(toolCallId);
     applyHook(agent, marker);
+  };
+
+  /** The model of the child's first request names the agent's model; it never changes it later. */
+  const applyModel = (agent: NativeAgent, model: string): void => {
+    if (!agent.item.model) rewriteAgent(agent, { model });
+  };
+
+  /**
+   * A root billing frame for a subagent's request (Remi's usage patches): its
+   * model fills the agent's `model` (the AIR announcement names none, U2).
+   * Claude names the Agent call, whose alias may come with the child's next
+   * frame; Codex names the child thread.
+   */
+  const noteRequestModel = (frame: VendorFrame): void => {
+    if (!natives.size || frame.sessionUpdate !== "usage_update") return;
+    const owner = requestUsageOwner(frame);
+    if (!owner?.model) return;
+    const agent = owner.parentToolUseId ? alias.get(owner.parentToolUseId) : agentOfSession(owner.providerSessionId);
+    if (agent) applyModel(agent, owner.model);
+    else if (owner.parentToolUseId && !pendingModels.has(owner.parentToolUseId)) pendingModels.set(owner.parentToolUseId, owner.model);
   };
 
   /** Re-emit an agent's item with `patch`, keeping its lifecycle event (started/updated vs completed). */
@@ -644,7 +681,7 @@ export function createTraceTranslator(
   /** The hook's launch marker sets `background` (§3.3); the agent is linked to its call from now on. */
   const applyHook = (agent: NativeAgent, background: boolean): void => {
     agent.linked = true;
-    if (agent.item.background !== background) rewriteAgent(agent, { background });
+    if (!agent.authoritative && agent.item.background !== background) rewriteAgent(agent, { background });
   };
 
   /**
@@ -690,7 +727,8 @@ export function createTraceTranslator(
     }
     const caller = agentOfSession(frameSession(frame))?.id ?? null;
     for (const agent of natives.values()) {
-      if (agent.parentId === caller && agent.item.status === "in_progress" && agent.item.background == null) {
+      // Only ever upgraded: unknown (or the patch's `false`) to true.
+      if (agent.parentId === caller && agent.item.status === "in_progress" && agent.item.background !== true && !agent.authoritative) {
         rewriteAgent(agent, { background: true });
       }
     }
@@ -722,14 +760,18 @@ export function createTraceTranslator(
     const id = nativeAgentItemId(baseId);
     usedIds.add(id);
     const name = typeof frame.name === "string" && frame.name.trim() ? frame.name : null;
-    // `agent_type` and `model` are not on the AIR-form announcement (U2); `background` comes from the hook or inference.
+    // The AIR-form announcement names no type or model; Remi's Claude bridge patch adds the
+    // SDK's background verdict and type (`_meta.remi`, authoritative). Else `background` comes
+    // from the hook or inference, and `model` from the child's first request.
+    const facts = nativeAgentFacts(frame);
     const item: TraceSubagentItem = {
       id, parent_id: parentId, status: "in_progress", started_at: now(), completed_at: null, type: "subagent",
       tool: agentType === "codex" ? "spawnAgent" : "Agent", title: name, name, prompt: nativeAgentPrompt(frame),
       output: null, duration_ms: null, thread_id: baseId,
+      ...(facts.agentType ? { agent_type: facts.agentType } : {}), ...(facts.background !== null ? { background: facts.background } : {}),
     };
-    const agent: NativeAgent = { id, parentId, startedMs: nowMs(), item, linked: false, spawnOrder: ++spawnCounter, endedOrder: null,
-      endedRound: -1 };
+    const agent: NativeAgent = { id, parentId, startedMs: nowMs(), item, linked: false, authoritative: facts.background === true,
+      spawnOrder: ++spawnCounter, endedOrder: null, endedRound: -1 };
     natives.set(baseId, agent);
     nativeById.set(id, agent);
     sessionAgent.set(sessionId, agent);
@@ -743,11 +785,15 @@ export function createTraceTranslator(
    */
   const reopenAgent = (agent: NativeAgent, sessionId: string, frame: VendorFrame): void => {
     sessionAgent.set(sessionId, agent);
+    const facts = nativeAgentFacts(frame);
+    if (facts.background === true) agent.authoritative = true;
     if (agent.item.status !== "in_progress") {
       agent.endedOrder = null;
       // Claude Code resumes a subagent in the background (CA/acp-agent.js "always resumes … in the background").
+      const background = facts.background ?? (agentType === "claude" ? true : undefined);
       rewriteAgent(agent, { status: "in_progress", completed_at: null, duration_ms: null,
-        ...(agentType === "claude" ? { background: true } : {}) });
+        ...(background !== undefined ? { background } : {}),
+        ...(facts.agentType && !agent.item.agent_type ? { agent_type: facts.agentType } : {}) });
     }
     const prompt = typeof frame.prompt === "string" && frame.prompt.trim() ? frame.prompt : null;
     if (!prompt) return;
@@ -1219,6 +1265,7 @@ export function createTraceTranslator(
         if (!sawStampedParent && parentToolUseId(frame) !== null) sawStampedParent = true;
         frameOrder++;
         onAutonomousMarker(frame);
+        noteRequestModel(frame);
         inferBackground(frame);
         switch (frame.sessionUpdate) {
           case "agent_message_chunk":
