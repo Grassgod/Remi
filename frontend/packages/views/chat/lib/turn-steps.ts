@@ -46,7 +46,8 @@ import {
  *   compaction, subagents (one-line rows that open the subagent panel), the
  *   plan and notices are breaker blocks.
  * - Groups: two or more consecutive step rows share one collapsed summary row;
- *   a single row stands alone. Reasoning does not break a run, a breaker does.
+ *   a single row stands alone. Reasoning does not break a run, a breaker does;
+ *   a launch row of a background task stands alone and splits a run.
  *
  * Pure: the components in `turn-step-list.tsx` / `turn-steps-fold.tsx` render it.
  */
@@ -239,7 +240,16 @@ function isSilent(item: TraceItem): boolean {
 
 const isBackgroundSubagent = (item: TraceItem): boolean => item.type === "subagent" && item.background === true;
 
-/** Fold rows into blocks: runs of two or more step rows become a group. */
+/** A launch row reads as its background task (PR 6), whose state outlives the call. */
+export function isLaunchRow(row: StepRow): boolean {
+  return row.descriptor.key.startsWith("background_");
+}
+
+/**
+ * Fold rows into blocks: runs of two or more step rows become a group. A
+ * launch row stands alone, so its task's state (「… 仍在后台运行」) shows
+ * without opening a group.
+ */
 export function groupSteps(entries: ReadonlyArray<StepRow | { breaker: BreakerItem }>, resolveAgent?: AgentResolver): StepBlock[] {
   const blocks: StepBlock[] = [];
   let run: StepRow[] = [];
@@ -253,6 +263,9 @@ export function groupSteps(entries: ReadonlyArray<StepRow | { breaker: BreakerIt
       flush();
       const item = entry.breaker;
       blocks.push({ kind: "breaker", key: `item:${item.id}`, item, descriptor: describeStep(item, undefined, resolveAgent), icon: breakerIcon(item) });
+    } else if (isLaunchRow(entry)) {
+      flush();
+      blocks.push({ kind: "row", key: `row:${entry.key}`, row: entry });
     } else {
       run.push(entry);
     }

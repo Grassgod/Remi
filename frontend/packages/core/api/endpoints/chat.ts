@@ -4,6 +4,7 @@ import { InboxEndpoints } from "./inbox";
 import { TurnDetailSchema } from "../schemas/messages";
 import type {
   ChatBackgroundStopTarget,
+  ChatBackgroundTask,
   ChatBackgroundTasksSnapshot,
   CreateChatSessionInput,
   ChatOriginFilter,
@@ -17,7 +18,7 @@ import type { HttpClient } from "../http";
 import { ApiContractError, parseStrictResponse } from "../schema";
 import {
   ChatSessionSchema, ChatSessionListSchema, ChatSessionUpdateResponseSchema, ChatNoContentSchema,
-  ChatBackgroundTasksSnapshotSchema,
+  ChatBackgroundTasksSnapshotSchema, parseChatBackgroundTasks,
 } from "../schemas/chat";
 
 export class ChatEndpoints {
@@ -127,14 +128,17 @@ export class ChatEndpoints {
 
   /**
    * Asks the chat's computer to stop one background task or all of them
-   * (PR 6 §6.1). Accepted with 202; the rows change when the daemon answers.
-   * A 409 says why not: `task_not_running` or `runtime_offline`.
+   * (PR 6 §6.1). Accepted with 202 `{requested_at, rows}`: the rows it marked
+   * as stopping (well-formed ones; none when the answer has no body). They
+   * end when the daemon answers. A 409 says why not: `task_not_running` or
+   * `runtime_offline`.
    */
-  async stopChatBackgroundTasks(sessionId: string, target: ChatBackgroundStopTarget): Promise<void> {
+  async stopChatBackgroundTasks(sessionId: string, target: ChatBackgroundStopTarget): Promise<ChatBackgroundTask[]> {
     const path = `/api/chat/sessions/${encodeURIComponent(sessionId)}/background-tasks/stop`;
-    // Any 2xx accepts the stop; its body (often none with 202) carries nothing the client needs.
     const res = await this.http.fetchRaw(path, { method: "POST", body: JSON.stringify(target), extraHeaders: { "Content-Type": "application/json" } });
-    await res.body?.cancel().catch(() => {});
+    // Any 2xx accepts the stop; the marked rows are a bonus, not a contract.
+    const body = await res.json().catch(() => null) as { rows?: unknown } | null;
+    return parseChatBackgroundTasks(body?.rows).filter((row) => row.session_id === sessionId);
   }
 
   async markChatSessionRead(sessionId: string): Promise<void> {

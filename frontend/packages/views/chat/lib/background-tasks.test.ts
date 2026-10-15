@@ -159,6 +159,14 @@ describe("launch rows (PR 6 §8.1 Steps)", () => {
     expect(backgroundLaunchResolver([command("cmd:3", [unknown("ls")])], [bgTask("t1")], "att_1", true)).toBeUndefined();
   });
 
+  it("keeps every launch row out of groups, so the task's state shows without opening one", () => {
+    const all = [command("cmd:a", [unknown("ls")]), command("cmd:b", [unknown("npm run dev")]), bgItem("b1", "cmd:b"),
+      command("cmd:c", [unknown("cat x")]), command("cmd:d", [unknown("cat y")])];
+    const steps = buildTurnSteps(all, { resolveBackgroundTask: backgroundLaunchResolver(all, null, "att_1", false) });
+    expect(steps.blocks.map((block) => block.kind === "group" ? block.rows.map((row) => row.key) : block.kind === "row" ? block.row.key : block.kind))
+      .toEqual(["cmd:a:0", "cmd:b:0", ["cmd:c:0", "cmd:d:0"]]);
+  });
+
   it("hides a task inside a subagent as a breaker and reads its launch row as the task", () => {
     const child = command("cmd:c", [unknown("pytest -x")], { parent_id: "sa:1" });
     const all = [child, bgItem("c1", "cmd:c", { parent_id: "sa:1", status: "completed", handed_off: true })];

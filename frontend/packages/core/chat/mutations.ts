@@ -14,7 +14,12 @@ import type {
   CreateChatSessionInput,
   UpdateChatSessionInput,
 } from "../types";
-import { backgroundStopErrorCode, markBackgroundStopRequested, restoreBackgroundStopMarks } from "./background-tasks";
+import {
+  backgroundStopErrorCode,
+  markBackgroundStopRequested,
+  mergeBackgroundTaskRows,
+  restoreBackgroundStopMarks,
+} from "./background-tasks";
 import { useChatStore } from "./index";
 import { removeChatSessionFromCache, updateChatSessionInCache } from "./session-cache";
 import { applyQueueItem, isQueueDeliveryUnconfirmed, queueErrorItem } from "./queue";
@@ -299,6 +304,12 @@ export function useStopChatBackgroundTasks(sessionId: string | null) {
     mutationFn: (target: ChatBackgroundStopTarget) => {
       if (!sessionId) throw new Error("No chat to stop background tasks in");
       return api.stopChatBackgroundTasks(sessionId, target);
+    },
+    // The rows the server marked carry its own request time; merge them now.
+    onSuccess: (rows, _target, context) => {
+      if (!sessionId || !context || !rows?.length) return;
+      qc.setQueryData<ChatBackgroundTasksSnapshot>(chatKeys.backgroundTasks(context.wsId, sessionId),
+        (old) => old ? mergeBackgroundTaskRows(old, { session_id: sessionId, rows }) : old);
     },
     onError: (err, target, context) => {
       logger.error("stopChatBackgroundTasks.error", { sessionId, target, err: toSafeErrorDetails(err) });

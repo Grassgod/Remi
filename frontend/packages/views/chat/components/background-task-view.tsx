@@ -314,6 +314,8 @@ function BackgroundTaskRow({ row, now, currentAttemptId, failure, stopDisabled, 
           </span>
         )}
       </button>
+      {/* Ended rows keep the ■ column empty, so every status lines up. */}
+      {!(onStop && live) && <span aria-hidden="true" className="mr-1 size-7 shrink-0" />}
       {onStop && live && (
         <button type="button" data-bg-task-stop={row.id} onClick={onStop} disabled={!stoppable || stopDisabled}
           aria-label={t(($) => $.bg_tasks.stop, { name })} title={t(($) => $.bg_tasks.stop, { name })}

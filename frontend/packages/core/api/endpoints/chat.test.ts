@@ -184,12 +184,19 @@ describe("ChatEndpoints contracts", () => {
   it("asks to stop one background task or all of them (PR 6 §6.1)", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => new Response(null, { status: 202 })));
     const api = new ChatEndpoints(new HttpClient("https://api.example.test"));
-    await expect(api.stopChatBackgroundTasks("chat-1", { task_id: "t1" })).resolves.toBeUndefined();
+    await expect(api.stopChatBackgroundTasks("chat-1", { task_id: "t1" })).resolves.toEqual([]);
     expect(fetch).toHaveBeenCalledWith("https://api.example.test/api/chat/sessions/chat-1/background-tasks/stop", expect.objectContaining({
       method: "POST", body: JSON.stringify({ task_id: "t1" }),
     }));
     await api.stopChatBackgroundTasks("chat-1", { all: true });
     expect(fetch).toHaveBeenLastCalledWith(expect.any(String), expect.objectContaining({ body: JSON.stringify({ all: true }) }));
+    // The rows the server marked come back, well-formed ones of this chat only.
+    const marked = { id: "row-1", session_id: "chat-1", task_id: "t1", started_at: "2026-10-16T00:00:00Z", status: "running",
+      stop_requested_at: "2026-10-16T00:01:00Z", stop_requested_by: "member-1", stop_outcome: "pending" };
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ requested_at: "2026-10-16T00:01:00Z",
+      rows: [marked, { ...marked, id: "row-x", session_id: "chat-2" }, { id: "bad" }] }), { status: 202 })));
+    await expect(new ChatEndpoints(new HttpClient("https://api.example.test")).stopChatBackgroundTasks("chat-1", { task_id: "t1" }))
+      .resolves.toMatchObject([{ id: "row-1", stop_requested_by: "member-1", stop_outcome: "pending" }]);
     // A refusal keeps its code for the caller.
     vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ error: "offline", code: "runtime_offline" }), { status: 409 })));
     await expect(new ChatEndpoints(new HttpClient("https://api.example.test")).stopChatBackgroundTasks("chat-1", { all: true }))
