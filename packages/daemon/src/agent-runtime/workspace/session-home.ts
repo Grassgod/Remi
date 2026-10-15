@@ -10,6 +10,7 @@ import { AgentPluginError } from "../agent-plugins/types.js";
 import { sanitizeProviderConfigValue } from "../provider-config-sanitize.js";
 import { loadCodexModelCatalog, mergeClaudeSettings, mergeCodexSessionConfig, type CodexModelCatalogState } from "../relay-sync.js";
 import type { RelayHttpRequest } from "@shared/relay-http.js";
+import { antigravityHomeFiles } from "@acp/access/antigravity.js";
 import {
   envDirectory,
   laneForTask,
@@ -281,8 +282,9 @@ export async function prepareIssueSessionProviderHome(
   // a link. Validate the whole path before reading its marker or reconciling.
   await ensureOwnedDirectory(resolvedHome.storageRoot, resolvedHome.home, "Provider Home");
   if (resolvedHome.provider === "antigravity") {
-    // agy owns its native OAuth/history directory; this home owns only Remi
-    // task context. Never seed it with Claude/Codex credentials.
+    // GEMINI_HOME: the server's native transcripts plus Remi task context. It
+    // never holds credentials (gateway auth goes through the daemon shim); its
+    // settings are seeded per spawn by seedIssueSessionAntigravityHome.
     await ensureOwnedDirectory(resolvedHome.storageRoot, resolvedHome.home, "Antigravity context");
     await writeFile(join(resolvedHome.root, "meta.json"), JSON.stringify({
       schemaVersion: 1, provider: "antigravity", sessionId: resolvedHome.sessionId,
@@ -365,6 +367,24 @@ export async function prepareIssueSessionProviderHome(
     providerHome: "home",
   }, null, 2)}\n`, { mode: 0o600 });
   return codexModelCatalog ? { codexModelCatalog } : {};
+}
+
+/**
+ * Seed `GEMINI_HOME/antigravity-acp/` before an Antigravity server starts
+ * (PR 4 §2): gateway auth selected in `settings.json`, and the run's cwd and
+ * workspace marked untrusted in `trusted_workspaces.json`, so repository hooks
+ * stay off and no trust prompt is asked. Rewritten on every start because the
+ * run's directories change; a linked or replaced file fails closed.
+ */
+export async function seedIssueSessionAntigravityHome(
+  resolvedHome: IssueSessionProviderHome,
+  directories: { cwd: string; workspaceDir?: string | null },
+): Promise<void> {
+  if (resolvedHome.provider !== "antigravity") return;
+  await ensureOwnedDirectory(resolvedHome.storageRoot, join(resolvedHome.home, "antigravity-acp"), "Antigravity settings");
+  for (const file of antigravityHomeFiles(directories)) {
+    await writePrivateFileIfChanged(join(resolvedHome.home, file.path), file.content);
+  }
 }
 
 /**

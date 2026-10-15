@@ -288,7 +288,11 @@ export class Remi {
   private static _buildProvider(agent: MultiremiAgent, runtimeEnv: Record<string, string> = {}) {
     const rawType = agent.provider;
     const type = rawType.startsWith("acp:") ? rawType.slice("acp:".length) : rawType;
-    if (!["claude", "codex", "antigravity"].includes(type)) {
+    if (type === "antigravity") {
+      // Antigravity needs the daemon's per-run gateway shim and session homes.
+      throw new Error("Persistent Remi cannot run Antigravity; run Antigravity through the daemon");
+    }
+    if (!["claude", "codex"].includes(type)) {
       throw new Error(`Unknown runtime provider: ${rawType}`);
     }
     return createRuntimeProvider({

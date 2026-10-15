@@ -1,0 +1,28 @@
+[
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "32c717b6-abe8-408f-9b88-6b036b894348",
+      "update": {
+        "used": 1200,
+        "size": 1048576,
+        "sessionUpdate": "usage_update"
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "32c717b6-abe8-408f-9b88-6b036b894348",
+      "update": {
+        "content": {
+          "text": "Agent execution error: 401 Unauthorized: API key not valid. Please pass a valid API key.",
+          "type": "text"
+        },
+        "sessionUpdate": "agent_message_chunk"
+      }
+    }
+  }
+]

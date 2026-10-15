@@ -6,7 +6,7 @@
 
 import { accessSync, constants } from "node:fs";
 import { delimiter, join } from "node:path";
-import { createRuntimeProvider, resolveAntigravityExecutable } from "@acp/index.js";
+import { createRuntimeProvider, installedAntigravity } from "@acp/index.js";
 
 export const SUPPORTED_DAEMON_PROVIDERS = ["claude", "codex", "antigravity"] as const;
 
@@ -125,19 +125,19 @@ export function detectMultiremiProviders(options: {
   pathEnv?: string;
   pathExt?: string;
   canExecute?: (path: string) => boolean;
+  /** Antigravity is opt-in: a candidate only when the release's pinned server is installed. */
+  antigravityInstalled?: () => boolean;
 } = {}): SupportedDaemonProvider[] {
   const pathEnv = options.pathEnv ?? process.env.PATH ?? "";
   const canExecute = options.canExecute ?? isExecutable;
   const paths = pathEnv.split(delimiter).filter(Boolean);
   const extensions = executableExtensions(options.pathExt);
   return SUPPORTED_DAEMON_PROVIDERS.filter((provider) => {
-    if (provider === "antigravity") {
-      const executable = resolveAntigravityExecutable();
-      if (executable !== "agy" && canExecute(executable)) return true;
-    }
+    // Never `agy` on PATH: that CLI integration is retired.
+    if (provider === "antigravity") return (options.antigravityInstalled ?? (() => installedAntigravity() !== null))();
     const commands = provider === "claude"
       ? ["remi-claude-agent-acp", "claude-agent-acp", "claude"]
-      : provider === "codex" ? ["codex-acp", "codex"] : ["agy"];
+      : ["codex-acp", "codex"];
     return paths.some((dir) => commands.some((command) => {
       return extensions.some((extension) => canExecute(join(dir, `${command}${extension}`)));
     }));

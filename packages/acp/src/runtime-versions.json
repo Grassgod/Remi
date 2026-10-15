@@ -11,5 +11,37 @@
     "acp": "2.2.2",
     "sdk": "0.162.1",
     "executable": "0.162.1"
+  },
+  "antigravity": {
+    "server": "1.4.0",
+    "terms": "https://antigravity.google/terms",
+    "artifacts": {
+      "darwin-arm64": {
+        "url": "https://dl.google.com/agy-extensions/releases/macos/agy-acp-server-1.4.0-darwin-arm64.zip",
+        "sha256": "21a32eeab85b394a515510c84539bda4b2504bf2917e0a201f5c4130b13581a5",
+        "bytes": 112734313
+      },
+      "darwin-x64": {
+        "url": "https://dl.google.com/agy-extensions/releases/macos/agy-acp-server-1.4.0-darwin-x86_64.zip",
+        "sha256": "407b6b8ef167bb207d1effdbd488bacf63ba7dab2b47d4a47d8ea3710a8c0f55",
+        "bytes": 118343529
+      },
+      "linux-x64": {
+        "url": "https://dl.google.com/agy-extensions/releases/linux/agy-acp-server-1.4.0-linux-x86_64.zip",
+        "sha256": "fbb2d54dd94fb897845308d3b6b46187c627f1c60078ded81adeeaf8b90c5d7a",
+        "bytes": 336175910,
+        "args": [
+          "--uid="
+        ]
+      },
+      "linux-arm64": {
+        "url": "https://dl.google.com/agy-extensions/releases/linux/agy-acp-server-1.4.0-linux-arm64.zip",
+        "sha256": "3dc43a21f5402b23a4dba7b320a6745e9dbf4b6ead912ce9fc76011ea3a08a7e",
+        "bytes": 321912925,
+        "args": [
+          "--uid="
+        ]
+      }
+    }
   }
 }

@@ -69,7 +69,7 @@ describe("gateway context declarations", () => {
 
   it("rejects other engines and malformed JSON", async () => {
     const { app } = setup();
-    for (const engine of ["codex", "invalid"]) {
+    for (const engine of ["codex", "antigravity", "invalid"]) {
       expect((await app.request(path.replace("claude", engine), {
         method: "PUT", headers, body: JSON.stringify({ model: "m", one_million: true }),
       })).status).toBe(400);

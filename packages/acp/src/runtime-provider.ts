@@ -1,6 +1,6 @@
 import { AcpProvider, type AcpProviderOptions } from "./provider.js";
-import { AntigravityProvider } from "./antigravity.js";
 
+/** Every runtime provider speaks ACP; agent differences live in adapters and access configs. */
 export function createRuntimeProvider(options: AcpProviderOptions = {}) {
-  return options.agentType === "antigravity" ? new AntigravityProvider(options) : new AcpProvider(options);
+  return new AcpProvider(options);
 }

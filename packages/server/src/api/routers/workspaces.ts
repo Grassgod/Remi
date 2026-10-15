@@ -99,6 +99,7 @@ import {
 } from "@multiremi/relay/discovery.js";
 import {
   extractBaseUrl,
+  isRelayEngine,
   validateRelayFragment,
 } from "@multiremi/relay/fragment.js";
 import type { RouterDeps } from "./deps.js";
@@ -1237,7 +1238,7 @@ export function registerWorkspaceRoutes(app: Hono, deps: RouterDeps): void {
   app.put("/api/workspaces/:id/relay-config/:engine", async (c) => {
     const workspaceId = c.req.param("id");
     const engine = c.req.param("engine");
-    if (engine !== "claude" && engine !== "codex") return c.json({ error: "invalid engine" }, 400);
+    if (!isRelayEngine(engine)) return c.json({ error: "invalid engine" }, 400);
     const denied = requireWorkspaceAdmin(c, store, workspaceId);
     if (denied) return denied;
     const body = await readJsonStrict<{ fragment?: string; token_op?: string; auth_token?: string }>(c);
@@ -1276,7 +1277,7 @@ export function registerWorkspaceRoutes(app: Hono, deps: RouterDeps): void {
   app.post("/api/workspaces/:id/relay-config/:engine/reveal", (c) => {
     const workspaceId = c.req.param("id");
     const engine = c.req.param("engine");
-    if (engine !== "claude" && engine !== "codex") return c.json({ error: "invalid engine" }, 400);
+    if (!isRelayEngine(engine)) return c.json({ error: "invalid engine" }, 400);
     const denied = requireWorkspaceAdmin(c, store, workspaceId);
     if (denied) return denied;
     c.header("Cache-Control", "no-store");
@@ -1288,7 +1289,7 @@ export function registerWorkspaceRoutes(app: Hono, deps: RouterDeps): void {
   app.post("/api/workspaces/:id/relay-config/:engine/probe", async (c) => {
     const workspaceId = c.req.param("id");
     const engine = c.req.param("engine");
-    if (engine !== "claude" && engine !== "codex") return c.json({ error: "invalid engine" }, 400);
+    if (!isRelayEngine(engine)) return c.json({ error: "invalid engine" }, 400);
     const denied = requireWorkspaceAdmin(c, store, workspaceId);
     if (denied) return denied;
     c.header("Cache-Control", "no-store");
@@ -1303,7 +1304,7 @@ export function registerWorkspaceRoutes(app: Hono, deps: RouterDeps): void {
   app.get("/api/workspaces/:id/relay-config/:engine/reasoning-levels", (c) => {
     const workspaceId = c.req.param("id");
     const engine = c.req.param("engine");
-    if (engine !== "claude" && engine !== "codex") return c.json({ error: "invalid engine" }, 400);
+    if (engine !== "claude" && engine !== "codex") return c.json({ error: reasoningEngineError(engine) }, 400);
     const denied = requireWorkspaceAdmin(c, store, workspaceId);
     if (denied) return denied;
     c.header("Cache-Control", "no-store");
@@ -1312,7 +1313,7 @@ export function registerWorkspaceRoutes(app: Hono, deps: RouterDeps): void {
   app.put("/api/workspaces/:id/relay-config/:engine/reasoning-levels", async (c) => {
     const workspaceId = c.req.param("id");
     const engine = c.req.param("engine");
-    if (engine !== "claude" && engine !== "codex") return c.json({ error: "invalid engine" }, 400);
+    if (engine !== "claude" && engine !== "codex") return c.json({ error: reasoningEngineError(engine) }, 400);
     const denied = requireWorkspaceAdmin(c, store, workspaceId);
     if (denied) return denied;
     c.header("Cache-Control", "no-store");
@@ -1394,6 +1395,15 @@ export function registerWorkspaceRoutes(app: Hono, deps: RouterDeps): void {
     session_id: c.req.param("sessionId"),
   }));
   app.delete("/api/workspaces/:id/lark/installations/:installationId", (c) => c.body(null, 204));
+}
+
+/**
+ * Reasoning-level declarations exist for Claude and Codex only. Antigravity's
+ * gateway path offers no `thought_level` selector at all, so a declared level
+ * would route and then be rejected by the engine; say so instead of "invalid".
+ */
+function reasoningEngineError(engine: string): string {
+  return engine === "antigravity" ? "reasoning levels are not supported for antigravity" : "invalid engine";
 }
 
 function hasOwn(value: unknown, key: string): boolean {

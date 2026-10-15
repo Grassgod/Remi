@@ -9,12 +9,21 @@
  *   SendOptions          — send/sendStream options
  *   MediaAttachment      — connector→provider media type
  *   SessionUpdate + all ACP protocol types
- *   ClaudeAdapter / CodexAdapter / createAdapter
+ *   ClaudeAdapter / CodexAdapter / AntigravityAdapter / createAdapter
  */
 
 // ── Provider ──────────────────────────────────────────────────
-export { AntigravityProvider, resolveAntigravityExecutable } from "./antigravity.js";
 export { createRuntimeProvider } from "./runtime-provider.js";
+export {
+  ANTIGRAVITY_PREPARE_COMMAND,
+  AntigravityInstallError,
+  antigravityHealthProblem,
+  ensureAntigravityServer,
+  installedAntigravity,
+  resolveAntigravityServer,
+} from "./antigravity-install.js";
+export { accessConfigFor, buildAntigravityEnv, seedAntigravityHome } from "./access/index.js";
+export type { AcpAccessConfig, GatewayShimChannel, GatewayShimEvent, GatewayShimHost } from "./access/index.js";
 export { AcpSessionFailureError, AcpRpcError, redactProviderErrorText } from "./session-failure.js";
 export {
   AcpProvider,
@@ -86,7 +95,7 @@ export { elicitationToQuestions, answersToElicitationContent } from "@shared/con
 export type { ElicitationQuestion } from "@shared/contracts/acp-elicitation.js";
 
 // ── Adapters ──────────────────────────────────────────────────
-export { ClaudeAdapter, CodexAdapter, createAdapter } from "./adapters/index.js";
+export { AntigravityAdapter, ClaudeAdapter, CodexAdapter, createAdapter } from "./adapters/index.js";
 export type { AgentAdapter, AskUserQuestionData, AgentSessionOptions } from "@shared/contracts/acp-protocol.js";
 
 // ── Streaming meta types (used by connector stream handlers) ──

@@ -4006,6 +4006,7 @@
         "relay": {
           "claude": null,
           "codex": null,
+          "antigravity": null,
           "model_discovery": false
         }
       }
@@ -12298,6 +12299,7 @@
         "relay": {
           "claude": null,
           "codex": null,
+          "antigravity": null,
           "model_discovery": false
         }
       }
@@ -22422,6 +22424,7 @@
       "body": {
         "claude": null,
         "codex": null,
+        "antigravity": null,
         "modelDiscovery": false
       }
     },
@@ -30103,6 +30106,7 @@
           "revision": 1
         },
         "codex": null,
+        "antigravity": null,
         "modelDiscovery": false
       }
     },

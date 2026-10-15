@@ -78,7 +78,8 @@ export function runtimeBundleManifest(provider: RuntimeProvider, versions = rele
   };
 }
 
-function acquireInstallLock(lock: string): void {
+/** Directory lock with a pid owner; a dead or stale owner is reclaimed. */
+export function acquireInstallLock(lock: string): void {
   if (existsSync(lock)) {
     let dead = false;
     try {
