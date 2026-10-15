@@ -474,6 +474,7 @@
     "plan": "計画",
     "nested_steps_other": "{{count}} ステップ",
     "step_not_finished": "未完了",
+    "steer_not_delivered": "未配信",
     "human_answer_label": "回答：",
     "human_status": "ステータス：{{value}}",
     "human_responded_by": "応答者：{{value}}"

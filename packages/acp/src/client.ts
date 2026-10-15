@@ -37,6 +37,9 @@ import type {
   CloseSessionParams,
   McpServerConfig,
   PromptContent,
+  AgentSteering,
+  SteerParams,
+  SteerResponse,
 } from "@shared/contracts/acp-protocol.js";
 
 export interface AcpClientOptions {
@@ -124,6 +127,16 @@ export class AcpClient {
   /** The agent's `initialize` response (protocol version + advertised capabilities). */
   get initializeResult(): InitializeResult | null {
     return this._initializeResult;
+  }
+
+  /**
+   * Native steering, advertised as top-level `InitializeResponse._meta.steering
+   * .supported: true` by both pinned bridges (claude-agent-acp 0.90
+   * dist/acp-agent.js:1427-1429; codex-acp 2.2.2 dist/index.js:42474-42477).
+   */
+  get steeringSupported(): boolean {
+    const steering = this._initializeResult?._meta?.steering;
+    return !!steering && typeof steering === "object" && (steering as { supported?: unknown }).supported === true;
   }
 
   get typedSessionFailures(): boolean {
@@ -579,6 +592,20 @@ export class AcpClient {
 
     const params: PromptParams = { sessionId, prompt };
     return this._request<PromptResult>("session/prompt", params);
+  }
+
+  /**
+   * Inject `text` into the session's running turn (ADR 0020). With the idle
+   * opt-in, an idle Claude session answers `promptRequired` and leaves the text
+   * to us; codex-acp has no opt-in and drops `_meta` (dist/index.js:43989-43998).
+   */
+  async steer(sessionId: string, text: string, steering: AgentSteering): Promise<SteerResponse> {
+    const params: SteerParams = {
+      sessionId,
+      prompt: [{ type: "text", text }],
+      ...(steering.idleOptIn ? { _meta: { steering: { idleBehavior: "promptRequired" as const } } } : {}),
+    };
+    return this._request<SteerResponse>(steering.method, params);
   }
 
   async setMode(sessionId: string, modeId: string): Promise<void> {

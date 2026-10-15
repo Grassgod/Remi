@@ -1,7 +1,11 @@
 import type { AgentAdapter } from "@shared/contracts/acp-protocol.js";
 import { canonicalToolName } from "./tool-name.js";
 
-/** Formats native agy tool events after normalization to Remi's event contract. */
+/**
+ * Formats native agy tool events after normalization to Remi's event contract.
+ * No `steering`: agy advertises none, so a steer always interrupts and
+ * re-prompts (ADR 0020).
+ */
 export const antigravityAdapter: AgentAdapter = {
   agentType: "antigravity",
   promptUsageSettleScope: "turn",

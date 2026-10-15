@@ -109,6 +109,30 @@ export interface FileChange {
   diff_truncated?: true;
 }
 
+/**
+ * What a bridge's native steer call answered (ACP `_session/steering`, ADR 0020).
+ * `SteerOutcome` in `provider-types.ts` is this type; it lives here so the trace
+ * stays a runtime leaf.
+ */
+export const TRACE_STEER_OUTCOMES = ["injected", "promptRequired", "startedNewTurn", "failed", "unsupported"] as const;
+export type TraceSteerOutcome = (typeof TRACE_STEER_OUTCOMES)[number];
+
+/**
+ * How a steer reached the agent (ADR 0020 "Native steering"):
+ * - `native`: injected into the running prompt by the bridge;
+ * - `reprompt`: sent as the next prompt of the same provider session, after the
+ *   native call answered `native_outcome` (null when none was made);
+ * - `none`: recorded without delivery, after the force-answer grace expired.
+ */
+export const TRACE_STEER_DELIVERIES = ["native", "reprompt", "none"] as const;
+export type TraceSteerDelivery = (typeof TRACE_STEER_DELIVERIES)[number];
+
+export interface TraceSteerResult {
+  via: TraceSteerDelivery;
+  native_outcome: TraceSteerOutcome | null;
+  error: string | null;
+}
+
 export interface TraceUserMessageItem extends TraceItemBase {
   type: "user_message";
   origin: "input" | "steer";
@@ -118,9 +142,12 @@ export interface TraceUserMessageItem extends TraceItemBase {
   steer: {
     steer_id: string;
     kind: string;
+    /** `result.via !== "none"`. */
     injected: boolean;
     author_type: string | null;
     author_id: string | null;
+    /** Absent on traces recorded before native steering (PR 3 Phase B). */
+    result?: TraceSteerResult;
   } | null;
   truncated?: true;
 }
@@ -538,6 +565,12 @@ export function isFileChange(value: unknown): value is FileChange {
     && isCount(value.added) && isCount(value.removed) && isOptionalTrue(value.diff_truncated);
 }
 
+export function isTraceSteerResult(value: unknown): value is TraceSteerResult {
+  return isRow(value) && isOneOf(value.via, TRACE_STEER_DELIVERIES)
+    && (value.native_outcome === null || isOneOf(value.native_outcome, TRACE_STEER_OUTCOMES))
+    && isNullableString(value.error);
+}
+
 function isDecisionOption(value: unknown): boolean {
   return isRow(value) && typeof value.option_id === "string" && typeof value.name === "string" && typeof value.kind === "string";
 }
@@ -558,7 +591,8 @@ export function isTraceItem(value: unknown): value is TraceItem {
         && Array.isArray(v.attachments)
         && v.attachments.every((a) => isRow(a) && typeof a.id === "string" && isNullableString(a.name))
         && (steer === null || (isRow(steer) && typeof steer.steer_id === "string" && typeof steer.kind === "string"
-          && typeof steer.injected === "boolean" && isNullableString(steer.author_type) && isNullableString(steer.author_id)))
+          && typeof steer.injected === "boolean" && isNullableString(steer.author_type) && isNullableString(steer.author_id)
+          && (steer.result === undefined || isTraceSteerResult(steer.result))))
         && isOptionalTrue(v.truncated);
     }
     case "agent_message":

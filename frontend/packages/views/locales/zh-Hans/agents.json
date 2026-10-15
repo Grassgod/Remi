@@ -474,6 +474,7 @@
     "plan": "计划",
     "nested_steps_other": "{{count}} 个步骤",
     "step_not_finished": "未完成",
+    "steer_not_delivered": "未送达",
     "human_answer_label": "回答：",
     "human_status": "状态：{{value}}",
     "human_responded_by": "响应人：{{value}}"

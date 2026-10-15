@@ -4,8 +4,29 @@
  */
 
 import type { SessionUpdate, MediaAttachment } from "./acp-protocol.js";
+import type { TraceSteerOutcome } from "./trace.js";
 
 export type ProviderEvent = SessionUpdate;
+
+/**
+ * What a native steer call answered (ACP `_session/steering`, ADR 0020):
+ * - `injected`: the text joined the running prompt, which keeps running;
+ * - `promptRequired`: no prompt is running; nothing was sent, re-prompt instead;
+ * - `startedNewTurn`: the bridge started a turn of its own (Codex, idle race);
+ *   the provider has already cancelled it and waited for it to go quiet;
+ * - `failed`: the call threw, timed out or the bridge could not apply it;
+ * - `unsupported`: the agent does not advertise native steering.
+ * Defined with the trace (a runtime leaf) because the trace records it verbatim.
+ */
+export type SteerOutcome = TraceSteerOutcome;
+
+export interface SteerResult {
+  outcome: SteerOutcome;
+  /** Bridge or provider detail, e.g. `noRunningTurn` / `noActivePrompt`. */
+  reason?: string;
+  /** Redacted error text for `failed`. */
+  error?: string;
+}
 
 export interface AgentResponse {
   text: string;
@@ -44,12 +65,23 @@ export interface SendOptions {
   deadlineMs?: number;
   traceId?: string;
   signal?: AbortSignal;
+  /**
+   * Fires once the provider has sent this stream's prompt to the agent, so a
+   * native steer has a running prompt to join (ADR 0020).
+   */
+  onPromptStarted?: () => void;
 }
 
 export interface Provider {
   readonly name: string;
   send(message: string, options?: SendOptions): Promise<AgentResponse>;
   sendStream?(message: string, options?: SendOptions): AsyncGenerator<ProviderEvent>;
+  /**
+   * Inject `text` into the prompt currently streaming for `chatId` (native
+   * steering). Never throws: every failure is an outcome. Absent when the
+   * provider cannot steer; callers then interrupt and re-prompt.
+   */
+  steer?(text: string, options: { chatId?: string | null }): Promise<SteerResult>;
   getLastResponse?(): AgentResponse | null;
   healthCheck(): Promise<boolean>;
 }

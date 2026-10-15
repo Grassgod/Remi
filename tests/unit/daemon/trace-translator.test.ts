@@ -9,6 +9,7 @@ import {
   type TraceEventInput,
   type TraceItem,
   type TraceItemOf,
+  type TraceSteerResult,
 } from "@multiremi/contracts/trace.js";
 import { EMPTY_TURN_TRACE, applyTurnTraceEvents, closeOpenItems, finalItem, turnTraceStats, type TurnTraceState } from "@shared/turn-trace.js";
 import {
@@ -30,6 +31,7 @@ import {
 } from "@multiremi/worker/trace-translator.js";
 
 const T0 = Date.parse("2026-10-15T08:00:00.000Z");
+const REPROMPTED: TraceSteerResult = { via: "reprompt", native_outcome: null, error: null };
 const FIXTURES = new URL("../../fixtures/acp/", import.meta.url);
 
 function frames(name: string): ProviderEvent[] {
@@ -201,7 +203,7 @@ describe("trace translator: final reply (settle)", () => {
 
     // A steer re-prompts the same turn; the next settle picks the new answer and demotes the old.
     h.translator.steer([{ id: "st_1", taskId: "tsk_attempt", kind: "steer", content: "also check b.ts", authorType: "user",
-      authorId: "mem_1", createdAt: new Date(T0).toISOString(), consumedAt: null }], true);
+      authorId: "mem_1", createdAt: new Date(T0).toISOString(), consumedAt: null }], REPROMPTED);
     h.feed([chunk("Answer two.", { messageId: "m3" })]);
     h.translator.promptEnded();
     expect(h.translator.settle()).toEqual({ itemId: "msg:m3", text: "Answer two." });
@@ -224,7 +226,7 @@ describe("trace translator: final reply (settle)", () => {
 
     // A steer round with a new reply moves the fallback pick like a rule-2 pick.
     h.translator.steer([{ id: "st_1", taskId: "tsk_attempt", kind: "steer", content: "go on", authorType: "user",
-      authorId: "mem_1", createdAt: new Date(T0).toISOString(), consumedAt: null }], true);
+      authorId: "mem_1", createdAt: new Date(T0).toISOString(), consumedAt: null }], REPROMPTED);
     h.feed([chunk("Done.", { messageId: "m2" })]);
     h.translator.promptEnded();
     expect(h.translator.settle()).toEqual({ itemId: "msg:m2", text: "Done." });
@@ -934,6 +936,56 @@ describe("trace translator: every recorded fixture", () => {
       expect(new Set(ids).size).toBe(ids.length);
     });
   }
+});
+
+describe("trace translator: steer results (ADR 0020)", () => {
+  const steerMessage = (id: string, kind: "steer" | "force_answer" = "steer") => ({ id, taskId: "tsk_attempt", kind,
+    content: kind === "steer" ? `steer ${id}` : "", authorType: "user", authorId: "mem_1",
+    createdAt: new Date(T0).toISOString(), consumedAt: null });
+
+  it("records how each steer was delivered, and the record round-trips", () => {
+    const h = harness("claude").start().feed([chunk("Working on it.", { messageId: "m1" })]);
+    // Native: injected mid-stream, between the reply it cut short and the one answering it.
+    h.translator.steer([steerMessage("st_native")], { via: "native", native_outcome: "injected", error: null });
+    h.feed([chunk("Steered answer.", { messageId: "m2" })]);
+    h.translator.promptEnded();
+    h.translator.steer([steerMessage("st_re")], { via: "reprompt", native_outcome: "failed", error: "x".repeat(2_000) });
+    h.translator.steer([steerMessage("wrap_up:1", "force_answer")], { via: "none", native_outcome: null, error: null });
+    h.translator.settle();
+
+    expect(h.state.items.map((item) => item.id)).toEqual(["in:tsk_attempt", "msg:m1", "steer:st_native", "msg:m2",
+      "steer:st_re", "steer:wrap_up:1"]);
+    expect(h.item("steer:st_native", "user_message")).toMatchObject({ origin: "steer", status: "completed", text: "steer st_native",
+      steer: { steer_id: "st_native", kind: "steer", injected: true, author_type: "user", author_id: "mem_1",
+        result: { via: "native", native_outcome: "injected", error: null } } });
+    const reprompted = h.item("steer:st_re", "user_message").steer!;
+    expect(reprompted).toMatchObject({ injected: true, result: { via: "reprompt", native_outcome: "failed" } });
+    // A diagnostic, label-sized.
+    expect(reprompted.result!.error!.length).toBeLessThan(600);
+    expect(h.item("steer:wrap_up:1", "user_message").steer).toMatchObject({ kind: "force_answer", injected: false,
+      result: { via: "none", native_outcome: null, error: null } });
+    expect(finalItem(h.state.items)?.id).toBe("msg:m2");
+
+    // Each steer is one item.completed, and the stored form validates after JSON.
+    const steerEvents = h.events.filter((event) => event.type === "item.completed" && event.item.type === "user_message"
+      && event.item.origin === "steer");
+    expect(steerEvents).toHaveLength(3);
+    for (const event of h.events) expect(isTraceEventBody(JSON.parse(JSON.stringify(event)))).toBe(true);
+    const folded = applyTurnTraceEvents(EMPTY_TURN_TRACE, JSON.parse(JSON.stringify(h.events)) as TraceEvent[]);
+    expect(folded.items.find((item) => item.id === "steer:st_re")).toEqual(h.item("steer:st_re"));
+  });
+
+  it("reads steers recorded before the result field, and rejects a malformed result", () => {
+    const h = harness("claude").start();
+    h.translator.steer([steerMessage("st_1")], { via: "reprompt", native_outcome: null, error: null });
+    const item = h.item("steer:st_1", "user_message");
+    const { result: _result, ...legacySteer } = item.steer!;
+    expect(isTraceItem({ ...item, steer: legacySteer })).toBe(true);
+    expect(isTraceItem(item)).toBe(true);
+    expect(isTraceItem({ ...item, steer: { ...item.steer, result: { via: "later", native_outcome: null, error: null } } })).toBe(false);
+    expect(isTraceItem({ ...item, steer: { ...item.steer, result: { via: "native", native_outcome: "queued", error: null } } })).toBe(false);
+    expect(isTraceItem({ ...item, steer: { ...item.steer, result: { via: "native", native_outcome: "injected" } } })).toBe(false);
+  });
 });
 
 /** Keep the public surface typed for callers that hold the interface. */
