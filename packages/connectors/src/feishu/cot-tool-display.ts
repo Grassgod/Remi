@@ -133,9 +133,16 @@ function statusNote(item: CotToolItem, key: string): string | undefined {
   }
 }
 
-/** Native rows for a finished tool item: one per command action, one per changed file, else one. */
+/**
+ * Native rows for a finished tool item: one per command action, one per changed
+ * file, else one. A command the model labelled (Claude's Bash description,
+ * `command.title`) is one row under that label, as in Chat; its command stays
+ * in the row's args.
+ */
 export function cotStepRows(item: CotToolItem): CotStepRow[] {
-  const parts: Array<CommandAction | FileChange | undefined> = item.type === "command" && item.actions.length > 1
+  const titled = item.type === "command" && !!item.title?.trim();
+  const parts: Array<CommandAction | FileChange | undefined> = titled ? [undefined]
+    : item.type === "command" && item.actions.length > 1
     ? item.actions
     : item.type === "file_change" && item.changes.length > 1 ? item.changes
       : [item.type === "command" ? item.actions[0] : item.type === "file_change" ? item.changes[0] : undefined];

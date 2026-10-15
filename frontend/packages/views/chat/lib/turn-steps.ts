@@ -27,7 +27,8 @@ import {
  *   message, dock and question UI). The card's `process_item_count` counts the
  *   same items minus reasoning, which draws no row (spec §10 D-count), so the
  *   finished fold renders exactly when it has rows.
- * - Rows: a command gives one row per parsed action (`${id}:${i}`), a file
+ * - Rows: a command gives one row per parsed action (`${id}:${i}`), or one row
+ *   under its own label when the model wrote one (`command.title`); a file
  *   change one row per file, web searches and other tools one row each.
  *   Reasoning gives no row; it only feeds the live label. Commentary, context
  *   compaction, subagents, the plan and notices are breaker blocks.
@@ -120,10 +121,12 @@ function row(item: StepItem, key: string, part?: CommandAction | FileChange): St
   switch (item.type) {
     case "command":
       // Runs (including a refused read: Codex sends declined to the command
-      // branch) use the terminal glyph, or the stop glyph once interrupted.
-      icon = descriptor.key.startsWith("run_")
-        ? (item.status === "stopped" ? "stopped" : "command")
-        : actionIcon(part as CommandAction | undefined);
+      // branch) use the terminal glyph, or the stop glyph once interrupted. A
+      // titled command keeps its single action's glyph.
+      if (descriptor.key.startsWith("run_")) icon = item.status === "stopped" ? "stopped" : "command";
+      else if (descriptor.key.startsWith("titled_")) {
+        icon = item.status === "stopped" ? "stopped" : actionIcon(item.actions.length === 1 ? item.actions[0] : undefined);
+      } else icon = actionIcon(part as CommandAction | undefined);
       break;
     case "file_change": icon = "edit"; break;
     case "web_search": icon = "web"; break;
@@ -136,6 +139,9 @@ function row(item: StepItem, key: string, part?: CommandAction | FileChange): St
 export function stepRows(item: TraceItem): StepRow[] {
   switch (item.type) {
     case "command": {
+      // A command the model labelled (Claude's Bash description) is one row
+      // under that label, with the whole command in its detail (PR 2 §13).
+      if (item.title?.trim()) return [row(item, `${item.id}:0`)];
       // A refused command is one row; so is a command whose text is not parsed yet.
       if (item.status === "declined" || item.actions.length <= 1) return [row(item, `${item.id}:0`, item.actions[0])];
       return item.actions.map((action, index) => row(item, `${item.id}:${index}`, action));

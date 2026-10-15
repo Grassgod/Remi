@@ -34,8 +34,6 @@ const RULE2_BLOCKERS: ReadonlySet<TraceItem["type"]> = new Set([...TRACE_TOOL_IT
 const ROW_TYPES: ReadonlySet<TraceItem["type"]> = new Set(["command", "file_change", "web_search", "tool"]);
 /** What a written row's result says when its item later ends another way. */
 const STATUS_NOTES: Partial<Record<TraceItem["status"], string>> = { failed: "执行失败", stopped: "已停止", declined: "已拒绝" };
-/** An async subagent launch only acknowledges the child; its outcome is not in this turn. */
-const BACKGROUND_LAUNCH = /async_launched|background_task_id/;
 
 interface OpenStep { stepId: string; kind: "subagent" | "compaction"; item: TraceItem }
 
@@ -219,7 +217,10 @@ export class FeishuCotTimeline {
       if (cotSubagentReady(item) || done) this.openSubagent(item);
       else this.unopened.add(item.id);
     }
-    if (done && this.steps.has(item.id) && !BACKGROUND_LAUNCH.test(item.output ?? "")) this.finishStep(item.id, cotSubagentStep(item));
+    // A background subagent (`background: true`) stays in progress after its
+    // launch is acknowledged and completes when the turn closes (spec §13), so
+    // its completion is the child's real end, never the launch.
+    if (done && this.steps.has(item.id)) this.finishStep(item.id, cotSubagentStep(item));
     else if (this.steps.has(item.id)) this.steps.set(item.id, { ...this.steps.get(item.id)!, item });
   }
 

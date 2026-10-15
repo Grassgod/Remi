@@ -3,7 +3,7 @@ import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import type { TraceItem } from "@multiremi/contracts/trace";
 import { renderWithI18n } from "../../test/i18n";
 import {
-  change, command, fileChange, message, notice, read, search, subagent, unknown, webSearch,
+  change, command, fileChange, listFiles, message, notice, read, search, subagent, unknown, webSearch,
 } from "../../test/trace-fixtures";
 import { displayCommand } from "../../common/task-transcript/trace-item-detail";
 import { buildTurnSteps } from "../lib/turn-steps";
@@ -74,6 +74,11 @@ describe("steps", () => {
     expect(screen.getByText("Loader is in config.ts")).toBeInTheDocument();
   });
 
+  it("shows a background subagent as running in the background (spec §13)", () => {
+    renderSteps([subagent("sub_bg", "Count files", { status: "in_progress", completed_at: null, background: true })]);
+    expect(document.querySelector('[data-step-breaker="sub_bg"]')).toHaveTextContent("后台运行中：Count files");
+  });
+
   it("marks an error notice", () => {
     renderSteps([notice("ntc:1", "Rate limited", "error")]);
     expect(trigger(document.querySelector('[data-step-breaker="ntc:1"]')!).className).toContain("text-destructive");
@@ -111,6 +116,16 @@ describe("command detail", () => {
     if (overrides.status === "failed") expect(row("cmd_1:0")).toHaveTextContent("已运行 bun test");
     fireEvent.click(trigger(row("cmd_1:0")));
     expect(document.querySelector("[data-command-status]")).toHaveTextContent(footer);
+  });
+
+  it("labels a titled command with its title and keeps the whole command in the detail (spec §13)", () => {
+    renderSteps([command("cmd_t", [unknown("sleep 25"), listFiles("/w")], { title: "Sleep 25s then list directory", output: "a.txt" })], "en");
+    expect(row("cmd_t:0")).toHaveTextContent("Sleep 25s then list directory");
+    expect(document.querySelector('[data-step-row="cmd_t:1"]')).toBeNull();
+    fireEvent.click(trigger(row("cmd_t:0")));
+    const detail = document.querySelector<HTMLElement>("[data-command-detail]")!;
+    expect(detail.querySelector("[data-command-text]")).toHaveTextContent("sleep 25 && ls");
+    expect(detail.querySelector("[data-command-output]")).toHaveTextContent("a.txt");
   });
 
   it("says 无输出 and copies the command and the output separately", async () => {

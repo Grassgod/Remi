@@ -95,6 +95,30 @@ describe("rows", () => {
     expect([stopped.descriptor.key, stopped.icon]).toEqual(["run_stopped", "stopped"]);
   });
 
+  it("gives a command the model titled one row under its title (spec §13)", () => {
+    const titled = command("cmd_t", [unknown("sleep 25"), listFiles("/w")], { title: "Sleep 25s then list directory" });
+    const rows = stepRows(titled);
+    expect(rows.map((r) => [r.key, r.descriptor.key, r.descriptor.args.title, r.icon, r.category, r.part])).toEqual([
+      ["cmd_t:0", "titled_done", "Sleep 25s then list directory", "command", "command", undefined],
+    ]);
+    // A single parsed read keeps its glyph and category; an interrupted one shows stopped.
+    expect(stepRows(command("cmd_r", [read("a.ts")], { title: "Read the config" })).map((r) => [r.icon, r.category]))
+      .toEqual([["read", "explore"]]);
+    const stopped = stepRows({ ...titled, status: "stopped" })[0]!;
+    expect([stopped.descriptor.key, stopped.icon]).toEqual(["titled_stopped", "stopped"]);
+    expect(stepRows(command("cmd_n", [read("a.ts"), read("b.ts")], { title: " " }))).toHaveLength(2);
+  });
+
+  it("names a running background subagent and keeps the label quiet under it (spec §13)", () => {
+    const steps = buildTurnSteps([subagent("sub_bg", "Count files", { ...running, background: true })]);
+    const [block] = steps.blocks;
+    expect(block).toMatchObject({ kind: "breaker", descriptor: { key: "subagent_background", args: { title: "Count files" }, state: "active" } });
+    expect(steps.breakerRunning).toBe(true);
+    expect(liveLabel(steps).kind).toBe("quiet");
+    expect(buildTurnSteps([subagent("sub_bg", "Count files", { background: true })]).blocks[0])
+      .toMatchObject({ descriptor: { key: "subagent_done" } });
+  });
+
   it("folds a declined multi-action command into one refused run", () => {
     const rows = stepRows(command("cmd_1", [read("a.ts"), read("b.ts")], { status: "declined" }));
     expect(rows.map((r) => r.descriptor.key)).toEqual(["run_declined"]);

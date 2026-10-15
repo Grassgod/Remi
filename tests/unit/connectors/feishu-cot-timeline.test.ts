@@ -29,6 +29,16 @@ describe("native CoT rows from finished items", () => {
     expect(row).toEqual({ key: "tc:0", title, icon, args });
   });
 
+  it("titles a command the model labelled with its label, one row with the command as args (spec §13)", () => {
+    const titled = command("tc", "sleep 25; ls -A /w", [
+      { type: "unknown", command: "sleep 25" }, { type: "list_files", command: "ls -A /w", path: "/w" },
+    ], { title: "Sleep 25s then list directory" });
+    expect(cotStepRows(titled)).toEqual([{ key: "tc:0", title: "Sleep 25s then list directory", icon: "bash", args: "$ sleep 25; ls -A /w" }]);
+    expect(cotStepRows({ ...titled, status: "stopped" })[0]).toMatchObject({ title: "已停止 Sleep 25s then list directory" });
+    expect(cotStepRows({ ...titled, status: "stopped" })[0]?.note).toBeUndefined();
+    expect(cotStepRows({ ...titled, status: "failed", exit_code: 1 })[0]).toMatchObject({ title: "Sleep 25s then list directory", note: "执行失败" });
+  });
+
   it("writes one row per action of a compound command and one per changed file", () => {
     const rows = cotStepRows(command("tc", "cat a.ts && rg foo src", [
       { type: "read", command: "cat a.ts", name: "a.ts", path: "a.ts" },
@@ -271,11 +281,25 @@ describe("semantic native CoT timeline", () => {
       expect(of(timeline.drain().samples, "STEP_FINISHED")[0]?.stepName).toBe(name);
     });
 
+  it("keeps a background subagent's step open until the turn closes it (spec §13)", () => {
+    const timeline = new FeishuCotTimeline("task");
+    const agent = item("subagent", "toolu_agent", { title: "核对文档", background: true, output: null });
+    // The translator keeps an async launch in progress: its children run, it never completes on the launch.
+    feed(timeline, [started(1, agent), completed(2, command("toolu_child", "rg api", undefined, { parent_id: agent.id }))]);
+    const opening = timeline.drain().samples;
+    expect(of(opening, "STEP_STARTED")[0]?.stepName).toBe("后台运行中：核对文档");
+    expect(of(opening, "STEP_FINISHED")).toEqual([]);
+    // Closing the turn completes it; that is the child's real end.
+    feed(timeline, [completed(3, { ...agent, status: "completed" })]);
+    expect(of(timeline.drain().samples, "STEP_FINISHED")).toEqual([{ stepId: of(opening, "STEP_STARTED")[0]!.stepId, stepName: "子代理已完成：核对文档" }]);
+    expect(of(timeline.finish("completed"), "STEP_FINISHED")).toEqual([]);
+  });
+
   it.each([["completed", "核对文档 · 本轮已结束，子任务结果见工作台"], ["cancelled", "核对文档 · 本轮已中断"]] as const)(
-    "does not equate a background launch with child completion when the run is %s", (status, name) => {
+    "closes a subagent step still open when the run ends %s", (status, name) => {
       const timeline = new FeishuCotTimeline("task");
-      const agent = item("subagent", "toolu_agent", { title: "核对文档" });
-      feed(timeline, [started(1, agent), completed(2, { ...agent, output: '{"status":"async_launched"}' })]);
+      const agent = item("subagent", "toolu_agent", { title: "核对文档", background: true });
+      feed(timeline, [started(1, agent)]);
       expect(of(timeline.drain().samples, "STEP_FINISHED")).toEqual([]);
       expect(of(timeline.finish(status), "STEP_FINISHED")[0]?.stepName).toBe(name);
     });

@@ -143,7 +143,10 @@ is unchanged:
   write (file changes), search (web), doc/find-app/default for other tools.
   `TOOL_CALL_ARGS` carries `$ <command>`, else the path, query or URL. A compound
   or unparsable script stays one `unknown` action, so a trailing filter such as
-  `grep -v INFO` cannot turn an unrelated command into a search.
+  `grep -v INFO` cannot turn an unrelated command into a search. A command the
+  model labelled (`command.title`, Claude's Bash description) is one row titled
+  with that label ("已停止 <label>" once stopped), its command still in the args,
+  as in Chat.
 - `TOOL_CALL_END` closes the invocation display, as in aiden-bot. Ordinary tool
   output is omitted; the full transcript remains in the workbench. A row whose
   copy cannot carry the outcome gets a short result: "执行失败" for a failed
@@ -162,10 +165,12 @@ is unchanged:
   end ("子代理已完成：…", "子代理已停止：…", "子代理执行失败：…"). Claude's first
   Agent frame carries only the "Task" placeholder, so the row and step open on
   the first event with a real title or prompt, else on the first child item or
-  at completion. Its child items stay in the workbench. A background launch
-  acknowledgment (`async_launched`) does not imply completion: an unresolved
-  child is labeled as unresolved when the main turn ends, never fabricated as
-  successful. A `compaction` item is a step from "正在压缩上下文" to its outcome
+  at completion. Its child items stay in the workbench. A background subagent
+  (`background: true`) is named "后台运行中：…" while it runs. The daemon keeps
+  an async launch in progress past the launch acknowledgment and completes it
+  when the turn closes (ADR 0019 decision 10), so its completion is the child's
+  real end; a subagent step still open when the presentation finishes is
+  labeled as unresolved, never fabricated as successful. A `compaction` item is a step from "正在压缩上下文" to its outcome
   (one reported only once finished still opens it), and a `notice` item a step
   named by its title.
 - Questions and approvals keep the existing cards and callbacks. The same native
