@@ -1,5 +1,5 @@
 import { DaemonProtocolRpcError } from "./daemon-protocol-client.js";
-import type { DaemonGcSubjectReclaimedPayload } from "@multiremi/contracts/daemon-protocol.js";
+import type { DaemonGcSubjectReclaimedPayload, DaemonTaskActivityPayload } from "@multiremi/contracts/daemon-protocol.js";
 import type { StorageReport } from "@multiremi/contracts/storage.js";
 import type { TaskUsageSnapshot } from "@multiremi/contracts/usage-accounting.js";
 import { parseRuntimeCodexProfile, type RuntimeCodexProfile } from "@multiremi/contracts/codex-profile";
@@ -1220,6 +1220,18 @@ export class MultiremiDaemonClient {
   /** Best effort: the next round's report replaces one that is lost. */
   reportStorageReport(runtimeId: string, report: StorageReport): void {
     this.reportTransport?.bestEffort("gc.storage_report", { runtime_id: runtimeId, report: boundStorageReport(report) });
+  }
+
+  /**
+   * Best effort (PR 5 §4.4): a running attempt's open subagents. The next
+   * change, the periodic refresh or the reconnect resend replaces a lost one;
+   * a server without a handler ignores the frame.
+   */
+  reportTaskActivity(taskId: string, runningSubagents: number, runtimeId?: string | null): void {
+    const payload: DaemonTaskActivityPayload = {
+      task_id: taskId, ...(runtimeId ? { runtime_id: runtimeId } : {}), running_subagents: runningSubagents,
+    };
+    this.reportTransport?.bestEffort("task.activity", { ...payload });
   }
 
   private async get<T>(path: string, signal?: AbortSignal): Promise<T> {

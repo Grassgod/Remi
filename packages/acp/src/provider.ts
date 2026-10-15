@@ -119,6 +119,15 @@ export interface AcpProviderOptions {
    * are passed on stamped with `_meta.remiSessionId`. Default off.
    */
   nativeSubagentSessions?: boolean;
+  /**
+   * Keep every frame that arrives between prompts, not only usage, so
+   * {@link AcpProvider.listenAutonomous} can replay an autonomous round that
+   * started before anyone listened (PR 5 §2.3). Only for adapters that declare
+   * `autonomousRounds` (Claude). Default off.
+   */
+  captureAutonomousRounds?: boolean;
+  /** Once an autonomous round's frames flow, how long it may run without its result (default 10 min; tests shorten it). */
+  autonomousRoundCapMs?: number;
 }
 
 /** ACP-local SendOptions extension kept out of the provider-neutral contract. */
@@ -210,6 +219,13 @@ const NO_ACTIVE_PROMPT: SteerResult = { outcome: "promptRequired", reason: STEER
 const STEER_QUIET_MS = 500;
 /** Usage frames kept between prompts for billing replay; the oldest are dropped first. */
 const MAX_IDLE_USAGE_FRAMES = 1_000;
+/** Frames kept between prompts while capturing autonomous rounds (PR 5 §2.3); the oldest non-usage frame goes first. */
+const MAX_AUTONOMOUS_FRAMES = 2_000;
+const MAX_AUTONOMOUS_BYTES = 4 * 1024 * 1024;
+/** How long `listenAutonomous` waits for an autonomous round's first frame by default. */
+const AUTONOMOUS_IDLE_MS = 60_000;
+/** Once a round's frames flow, the longest it may run before the listen gives up (Codex's own child wait). */
+const AUTONOMOUS_HARD_CAP_MS = 10 * 60 * 1000;
 /** Unknown session ids logged per pool entry, at most. */
 const MAX_LOGGED_UNKNOWN_SESSIONS = 32;
 const DEFAULT_PERMISSION_MODE_BY_AGENT: Record<string, string | null> = {
@@ -1202,6 +1218,112 @@ export class AcpProvider implements Provider {
     if (promptError) throw promptError;
   }
 
+  /**
+   * Stream an autonomous round of `chatId`'s session (PR 5 §2.3): a model cycle
+   * the bridge started after the last prompt resolved, such as Claude's
+   * task-notification follow-up for a background subagent that finished before
+   * the human turn's result. Frames that arrived since the prompt replay first.
+   *
+   * The round keeps the last prompt's state: its usage collector (so Claude's
+   * cumulative turn-cost estimate replaces the prompt's, R6), streamed text and
+   * context. It ends at the first of:
+   * - a root `usage_update` whose `_meta["_claude/origin"].kind` is one of the
+   *   adapter's result origins (the round's result);
+   * - `idleMs` without a frame of turn activity, before the first one;
+   * - {@link AUTONOMOUS_HARD_CAP_MS} after the first one;
+   * - `signal` abort or the agent process dying.
+   * Afterwards `getLastResponse()` covers the prompt and the round. Without a
+   * pooled, idle session, or for an adapter without autonomous rounds, it
+   * yields nothing. A failure is reported as frames, never thrown.
+   */
+  async *listenAutonomous(options: ListenAutonomousOptions = {}): AsyncGenerator<ProviderEvent> {
+    const chatId = options.chatId ?? "__default__";
+    const entry = this._pool.get(chatId);
+    const rounds = this._adapter.autonomousRounds;
+    if (!entry || !rounds || !this._capturesAutonomousRounds || entry.promptInFlight || !entry.client.alive
+      || this._activeStreaming.has(chatId)) return;
+    const credentials = this._credentials();
+    const requestedModel = () => currentConfigValue(entry.configOptions, MODEL_OPTION_CATEGORY)
+      ?? entry.models?.currentModelId ?? this._options.model;
+    const requestedModelSource = (): TaskUsageUnit["modelSource"] => currentConfigValue(entry.configOptions, MODEL_OPTION_CATEGORY)
+      || entry.models?.currentModelId ? "session_acknowledged" : requestedModel() ? "configured" : "unknown";
+    const resultOrigins = new Set(rounds.resultOrigins);
+    const idleMs = Math.max(1, options.idleMs ?? AUTONOMOUS_IDLE_MS);
+    const capMs = Math.max(1, this._options.autonomousRoundCapMs ?? AUTONOMOUS_HARD_CAP_MS);
+    const startedAt = Date.now();
+    let firstActivityAt = null as number | null;
+    let ended = null as "result" | "death" | null;
+    const queue: ProviderEvent[] = [];
+    let wake: (() => void) | null = null;
+    const push = (event: ProviderEvent) => {
+      queue.push(event);
+      wake?.();
+    };
+
+    this._activeStreaming.add(chatId);
+    this._deathListeners.set(chatId, () => {
+      ended ??= "death";
+      wake?.();
+    });
+    const onUpdate = (notification: SessionNotification) => {
+      const child = this._routeFrame(chatId, entry, notification);
+      if (child === undefined) return;
+      entry.lastUpdateAt = Date.now();
+      const update = child !== null
+        ? this._childUpdate(entry, notification.update, child, requestedModel(), requestedModelSource(), credentials)
+        : this._rootIdleUpdate(entry, notification.update, requestedModel(), requestedModelSource(), credentials);
+      if (firstActivityAt === null && (child !== null || isTurnLevelUpdate(update) || isSubagentLifecycle(update))) {
+        firstActivityAt = Date.now();
+      }
+      push(update);
+      if (child === null && update.sessionUpdate === "usage_update") {
+        const origin = autonomousOrigin(update as unknown as Record<string, unknown>);
+        if (origin && resultOrigins.has(origin)) {
+          ended ??= "result";
+          wake?.();
+        }
+      }
+    };
+    const originalOnUpdate = entry.client["_options"].onSessionUpdate;
+    entry.client["_options"].onSessionUpdate = onUpdate;
+    let stop: "result" | "death" | "idle" | "cap" | "abort" | null = null;
+    try {
+      for (const notification of takeIdleFrames(entry)) onUpdate(notification);
+      while (true) {
+        while (queue.length) yield queue.shift()!;
+        if (ended) { stop = ended; break; }
+        if (options.signal?.aborted) { stop = "abort"; break; }
+        const now = Date.now();
+        const deadline = firstActivityAt === null ? startedAt + idleMs : firstActivityAt + capMs;
+        if (now >= deadline) { stop = firstActivityAt === null ? "idle" : "cap"; break; }
+        let timer: ReturnType<typeof setTimeout> | null = null;
+        const onAbort = () => wake?.();
+        await new Promise<void>((resolve) => {
+          wake = resolve;
+          timer = setTimeout(resolve, deadline - now);
+          options.signal?.addEventListener("abort", onAbort, { once: true });
+        });
+        wake = null;
+        if (timer) clearTimeout(timer);
+        options.signal?.removeEventListener("abort", onAbort);
+      }
+    } finally {
+      if (entry.client["_options"].onSessionUpdate === onUpdate) entry.client["_options"].onSessionUpdate = originalOnUpdate;
+      this._deathListeners.delete(chatId);
+      this._activeStreaming.delete(chatId);
+      entry.lastUsed = Date.now();
+      if (stop === "cap") {
+        console.warn(`[AcpProvider] ${this._adapter.agentType}: an autonomous round ran ${Math.round(capMs / 1000)} s without its result; stopped listening`);
+      }
+      this._lastResponse = buildAgentResponse(entry, { stopReason: "end_turn" }, this._adapter.promptUsageSettleScope, null,
+        this._adapter.agentType, requestedModel(), requestedModelSource());
+    }
+  }
+
+  /** The adapter declares autonomous rounds and the caller asked to capture them. */
+  private get _capturesAutonomousRounds(): boolean {
+    return this._options.captureAutonomousRounds === true && !!this._adapter.autonomousRounds;
+  }
 
   /**
    * Whether `notification` belongs to `entry` (PR 5 §1.2): its root session or
@@ -1254,6 +1376,26 @@ export class AcpProvider implements Provider {
     return { ...next, _meta: { ...metaOf(next), remiSessionId: sessionId } } as SessionUpdate;
   }
 
+  /**
+   * A root frame of an autonomous round: the prompt's text, model, usage and
+   * context carry on, as in `sendStream`; failures are only reported.
+   */
+  private _rootIdleUpdate(entry: PoolEntry, update: SessionUpdate, requestedModel: string | null | undefined,
+    modelSource: TaskUsageUnit["modelSource"], credentials: string[]): SessionUpdate {
+    let next = update;
+    if (next.sessionUpdate === "session_info_update") next = withRedactedSessionFailure(next, credentials).update;
+    this._applyConfigUpdate(entry, next);
+    if (next.sessionUpdate === "usage_update") next = this._stampUsage(entry, next, requestedModel, modelSource, true);
+    if (next.sessionUpdate === "agent_message_chunk" && !stampedParent(next)) {
+      entry.promptState.text += extractChunkText((next as Record<string, any>).content);
+    }
+    if (next.sessionUpdate === "compaction_update" || next.sessionUpdate === "tool_call_update") next = redactFailedFrame(next, credentials);
+    if (next.sessionUpdate === "tool_call_update") {
+      const status = (next as { status?: unknown }).status;
+      if (status === "completed" || status === "failed") entry.promptState.completedToolCount++;
+    }
+    return next;
+  }
 
   /** A model or config change the agent reported for the root session. */
   private _applyConfigUpdate(entry: PoolEntry, update: SessionUpdate): void {
@@ -1475,6 +1617,22 @@ export class AcpProvider implements Provider {
       if (this._routeFrame(chatId, entry, notification) === undefined) return;
       entry.lastUpdateAt = Date.now();
       entry.idleFrames ??= [];
+      if (this._capturesAutonomousRounds) {
+        entry.idleFrames.push(notification);
+        entry.idleFrameBytes = (entry.idleFrameBytes ?? 0) + frameBytes(notification);
+        let dropped = 0;
+        while (entry.idleFrames.length > MAX_AUTONOMOUS_FRAMES
+          || (entry.idleFrameBytes > MAX_AUTONOMOUS_BYTES && entry.idleFrames.length > 1)) {
+          const index = entry.idleFrames.findIndex((frame) => frame.update?.sessionUpdate !== "usage_update");
+          const [removed] = entry.idleFrames.splice(index >= 0 ? index : 0, 1);
+          entry.idleFrameBytes -= frameBytes(removed!);
+          dropped++;
+        }
+        if (dropped) {
+          console.warn(`[AcpProvider] ${this._adapter.agentType}: dropped ${dropped} frame(s) received between prompts (buffer full)`);
+        }
+        return;
+      }
       if (notification.update?.sessionUpdate !== "usage_update") return;
       entry.idleFrames.push(notification);
       if (entry.idleFrames.length > MAX_IDLE_USAGE_FRAMES) {

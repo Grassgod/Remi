@@ -50,6 +50,7 @@ import {
 } from "./client.js";
 import { responseToUsageUnits } from "./usage-units.js";
 import { createTraceTranslator, type TraceTranslator } from "./trace-translator.js";
+import { TaskActivityReporter } from "./task-activity.js";
 import { finalReplyBody } from "@shared/turn-trace.js";
 import { TaskUsageLedger } from "./task-usage-ledger.js";
 import { extractAntigravityDefaultModel, extractBaseUrl } from "@multiremi/relay/fragment.js";
@@ -434,6 +435,10 @@ const AUTHORITY_PROBE_DELAYS_MS = [30_000, 60_000, 120_000, 240_000, 480_000, 90
 const DEFAULT_AUTHORITY_PROBE_MAX_MS = 900_000;
 const DEFAULT_TASK_DRAIN_TIMEOUT_MS = 5 * 60 * 1_000;
 const DEFAULT_OUTBOX_STARTUP_FLUSH_TIMEOUT_MS = 30_000;
+/** An owed autonomous round may take this long to send its first frame (PR 5 §2.5, decision U1). */
+const DEFAULT_AUTONOMOUS_IDLE_MS = 60_000;
+/** Autonomous rounds one attempt waits for, at most. */
+const AUTONOMOUS_MAX_ROUNDS = 8;
 const IN_PROCESS_RUNTIME_MODEL_DISCOVERY_DISABLED =
   "Runtime model discovery is temporarily disabled in the daemon process; gateway models remain available";
 
@@ -480,6 +485,11 @@ export interface MultiremiDaemonOptions {
    * nested trace. `REMI_ACP_NATIVE_SUBAGENTS=0` restores the root-only frames.
    */
   nativeSubagents?: boolean;
+  /**
+   * How long the daemon waits for an owed autonomous round's first frame
+   * (Claude's late answer to a background subagent, PR 5 §2.5; default 60 s).
+   */
+  autonomousIdleMs?: number;
   daemonPort?: number;
   workspacesRoot?: string;
   repoCacheRoot?: string;
@@ -598,6 +608,8 @@ function upsertRepoWarning(warnings: TaskRepoWarning[], warning: TaskRepoWarning
 }
 
 export type MultiremiTaskProvider = Pick<Provider, "sendStream" | "getLastResponse" | "steer"> & {
+  /** An autonomous round after the prompt resolved (PR 5 §2.3); absent when the provider captures none. */
+  listenAutonomous?: Provider["listenAutonomous"];
   readonly typedSessionFailures?: boolean;
   close?: () => Promise<void> | void;
   discoverModelCapabilities?: () => Promise<AcpModelCapability[]>;
@@ -606,6 +618,22 @@ export type MultiremiTaskProvider = Pick<Provider, "sendStream" | "getLastRespon
   setElicitationHandler?: (handler: (params: ElicitationCreateParams) => Promise<ElicitationResult>) => void;
 };
 
+/** A frame of model work in an autonomous round (PR 5 §2.5); title and status updates are not. */
+function isAutonomousActivity(event: ProviderEvent): boolean {
+  switch (event.sessionUpdate) {
+    case "agent_message_chunk":
+    case "agent_thought_chunk":
+    case "tool_call":
+    case "tool_call_update":
+    case "plan":
+    case "usage_update":
+    case "subagent_spawned":
+    case "subagent_state_update":
+      return true;
+    default:
+      return false;
+  }
+}
 
 export interface ElicitationContext {
   text: string;
@@ -747,6 +775,8 @@ export class MultiremiDaemon {
   private workspaceRelays = new Map<string, MultiremiRelayWire | undefined>();
   /** Antigravity's loopback gateway shim; created at the first Antigravity run or probe. */
   private antigravityShim: AntigravityGatewayShim | null = null;
+  /** Running attempts' `task.activity` reporters, resent on reconnect (PR 5 §3.8). */
+  private activityReporters = new Set<TaskActivityReporter>();
   private readonly ownsAntigravityShim: boolean;
   private runtimeCodexProfile: RuntimeCodexProfile | null = null;
   private runtimeClaudeProfile: RuntimeClaudeProfile | null = null;
@@ -979,6 +1009,7 @@ export class MultiremiDaemon {
       steerPollIntervalMs: options.steerPollIntervalMs ?? numberEnv(process.env.MULTIREMI_STEER_POLL_INTERVAL_MS, DEFAULT_STEER_POLL_MS),
       forceAnswerGraceMs: options.forceAnswerGraceMs ?? numberEnv(process.env.MULTIREMI_FORCE_ANSWER_GRACE_MS, DEFAULT_FORCE_ANSWER_GRACE_MS),
       nativeSubagents: options.nativeSubagents ?? process.env.REMI_ACP_NATIVE_SUBAGENTS !== "0",
+      autonomousIdleMs: Math.max(1, options.autonomousIdleMs ?? DEFAULT_AUTONOMOUS_IDLE_MS),
       daemonPort: options.daemonPort ?? numberEnv(process.env.MULTIREMI_DAEMON_PORT, 6131),
       workspacesRoot,
       repoCacheRoot: options.repoCacheRoot ?? process.env.MULTIREMI_REPO_CACHE_ROOT ?? sharedReposRoot(workspacesRoot),
@@ -1188,6 +1219,7 @@ export class MultiremiDaemon {
       onStateChange: () => { this.taskDownlinks.connectionChanged(); this.wakeClaim(); },
       readyToConnect: () => this.supervisorReady(),
       onConnected: () => {
+        for (const reporter of this.activityReporters) reporter.resend();
         const runtime = this.protocolLane.runtime();
         if (runtime) this.protocolClient.send({ t: "runtime.ready",
           rt: runtime.runtime_id, p: { active_task_ids: runtime.active_task_ids, active_question_waits: runtime.active_question_waits ?? [] } });
@@ -4355,10 +4387,14 @@ export class MultiremiDaemon {
       ...(antigravity ? { gatewayShim: antigravity.run, providerHome: providerHome!.home } : {}),
       // Honoured only by adapters that declare them (PR 5 §1.1, §2.3).
       nativeSubagentSessions: this.options.nativeSubagents,
+      captureAutonomousRounds: true,
     });
     if (!provider.sendStream) {
       throw new Error(`Provider ${agent.provider} does not support streaming`);
     }
+    // The sidebar's running-subagent badge (PR 5 §3.8): top-level count, else nested.
+    const activity = new TaskActivityReporter((running) => this.client.reportTaskActivity(task.id, running, this.options.runtimeId));
+    this.activityReporters.add(activity);
     // One writer per attempt: ACP updates, permissions, questions and steers all
     // go through the translator, which flushes pending deltas before any other
     // fact, so the trace keeps their order (PR 2 §2).
@@ -4376,6 +4412,7 @@ export class MultiremiDaemon {
       redactText: (text) => provider.typedSessionFailures === false && classifyLegacyProviderFailure(text)
         ? redactProviderErrorText(text, failureCredentials) : text,
       standaloneText: (text) => provider.typedSessionFailures === false && classifyLegacyProviderFailure(text) !== null,
+      onSubagentCounts: (counts) => activity.update(counts.top || counts.nested),
     });
     const resetElicitationContextOffset = this.attachHumanInputHandlers(provider, task, signal, trace);
     let finalSessionId: string | null = task.sessionId;
@@ -4565,6 +4602,55 @@ export class MultiremiDaemon {
           await this.taskDownlinks.consumeTaskSteerMessages(task.id, injectedSteerIds);
           injectedSteerIds = [];
         }
+        // Claude may still owe this attempt a late answer (PR 5 §2.5): a
+        // background subagent that ended before the prompt's result starts a
+        // model cycle of its own. Listen for it in the same attempt, unless a
+        // steer, a wrap-up or the cancel came first; the bridge already holds a
+        // prompt while such a subagent still runs.
+        let autonomousRounds = 0;
+        while (provider.listenAutonomous && !turnError && !turnAbort.signal.aborted && !signal.aborted && !forceAnswerExpired
+          && !steerFeed.hasPending && trace.owesAutonomousRound && autonomousRounds < AUTONOMOUS_MAX_ROUNDS) {
+          autonomousRounds++;
+          const listen = new AbortController();
+          const stopListening = () => listen.abort();
+          signal.addEventListener("abort", stopListening, { once: true });
+          // A steer or a wrap-up ends the wait; no prompt runs, so the pump has no round.
+          steerFeed.setInterrupt(stopListening);
+          let roundActivity = 0;
+          let listenFailed = false;
+          try {
+            for await (const event of provider.listenAutonomous({ chatId: config.chatId, signal: listen.signal,
+              idleMs: this.options.autonomousIdleMs })) {
+              if (isAutonomousActivity(event)) roundActivity++;
+              const usageUnits = (event as { _meta?: Record<string, unknown> })._meta?.remiUsageUnits;
+              if (Array.isArray(usageUnits)) checkpointUsage(ledger.observe((usageUnits as TaskUsageUnit[]).map(unit => ({
+                ...unit, provider: agent.provider, requestedModel: unit.requestedModel ?? config.model ?? null,
+              }))));
+              trace.acp(event);
+            }
+          } catch (err) {
+            // A failed listen never fails the turn: it completes with what it has.
+            listenFailed = true;
+            log.warn(`Task ${task.id}: autonomous round failed: ${redactProviderErrorText(err instanceof Error ? err.message : String(err), failureCredentials)}`);
+          } finally {
+            this.recordTrace(task.id, () => trace.promptEnded({ aborted: false }));
+            steerFeed.setInterrupt(null);
+            signal.removeEventListener("abort", stopListening);
+          }
+          last = (provider.getLastResponse?.() as AgentResponse | null | undefined) ?? last;
+          if (last?.model) this.recordTrace(task.id, () => trace.model(last!.model!));
+          finalSessionId = last?.sessionId ?? finalSessionId;
+          checkpointUsage(ledger.observe(responseToUsageUnits(agent.provider, last, config.model, `turn:${turnIndex}:auto:${autonomousRounds}`)));
+          if (listenFailed) break;
+          if (!roundActivity) {
+            // R1: the owed notification was consumed inside the prompt after all (unless a steer or cancel stopped the wait).
+            if (!listen.signal.aborted) {
+              log.info(`Task ${task.id}: autonomous_wait_empty after ${this.options.autonomousIdleMs}ms (round ${autonomousRounds})`);
+            }
+            break;
+          }
+        }
+        if (signal.aborted) throw (turnError ?? new Error("Cancelled"));
         const steered = steerFeed.take().filter((m) => !recordedSteerIds.has(m.id));
         if (turnError && !turnAbort.signal.aborted) throw turnError;
         const lastItem = trace.lastItem;
@@ -4660,6 +4746,8 @@ export class MultiremiDaemon {
       antigravity?.run.close();
       checkpointUsage(ledger.finish());
       this.recordTrace(task.id, () => trace.flush());
+      activity.finish();
+      this.activityReporters.delete(activity);
       pump?.stop();
       steerFeed.stop();
       await this.reportIssueWorkspaceAfterRun(task, workspaceDir, preparedWorkspace.repos).catch((err) => {

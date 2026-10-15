@@ -98,6 +98,7 @@ function scriptedAcp(config: FakeSubagentConfig, logPath: string, agentType: "cl
     });
     return {
       sendStream: (message, sendOptions) => acp.sendStream(message, sendOptions) as AsyncGenerator<ProviderEvent>,
+      listenAutonomous: (listenOptions) => acp.listenAutonomous(listenOptions),
       steer: (text, steerOptions) => acp.steer(text, steerOptions),
       getLastResponse: () => acp.getLastResponse(),
       getStreamedText: (chatId) => acp.getStreamedText(chatId),
@@ -218,5 +219,97 @@ describe("Bun Multiremi daemon native subagents", () => {
     expect(store.getTask(task.id)).toMatchObject({ status: "completed", result: "plain answer" });
     const caps = agentLog(logPath).find((entry) => entry.method === "initialize")!.params!.clientCapabilities;
     expect(caps.subagents).toBeUndefined();
+  }, 30_000);
+  /** A background child that ends before the human turn's result (the 0.89 race): the bridge does not hold the prompt. */
+  const RACE = (followUpDelayMs: number): FakeSubagentStep[] => [
+    spawned(CHILD),
+    chunk("I started a background agent; I'll reply once it reports back."),
+    { session: CHILD, update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "There are 3 files." },
+      _meta: { claudeCode: { parentToolUseId: "toolu_01" } } } },
+    ended(CHILD),
+    { billing: { cost: 0.1245, used: 27_441, size: 1_000_000, origin: "human" } },
+    { resolve: "end_turn" },
+    { delayMs: followUpDelayMs, ...chunk("3") },
+    { billing: {} },
+    { billing: { cost: 0.1329, used: 27_993, size: 1_000_000, origin: "task-notification" } },
+  ];
+  const requestUnits = (taskId: string) => Number((database!.db.query(
+    "SELECT COUNT(*) AS n FROM multiremi_usage_units WHERE task_id=? AND source='provider_request'").get(taskId) as { n: number }).n);
+
+  it("(1) a late follow-up joins the same turn as its final reply, and its requests are billed", async () => {
+    const { store, task, daemon } = await bed("late-answer");
+    const logPath = join(workDir!, "agent.jsonl");
+    const run = daemon(scriptedAcp({ prompts: [RACE(300)] }, logPath, "claude"), { autonomousIdleMs: 5_000 });
+    await run.start();
+
+    expect(store.getTask(task.id)).toMatchObject({ status: "completed", result: "3" });
+    expect(agentLog(logPath).filter((entry) => entry.method === "session/prompt")).toHaveLength(1);
+    const trace = foldTraceLines(run.traceStore().read(task.id).events);
+    const messages = trace.items.filter((item) => item.type === "agent_message" && item.parent_id === null);
+    expect(messages.map((item) => item.type === "agent_message" && [item.text, item.phase === "final"]))
+      .toEqual([["I started a background agent; I'll reply once it reports back.", false], ["3", true]]);
+    expect(trace.items.find((item) => item.id === `sa:${CHILD}`)).toMatchObject({ status: "completed", background: true });
+    await waitFor(() => requestUnits(task.id) === 3, "the prompt's and the follow-up's requests billed");
+  }, 30_000);
+
+  it("(2) with no follow-up the wait ends at idleMs and the turn completes with the original reply", async () => {
+    const { store, task, daemon } = await bed("no-follow-up");
+    const logPath = join(workDir!, "agent.jsonl");
+    const run = daemon(scriptedAcp({ prompts: [RACE(60_000).slice(0, 6)] }, logPath, "claude"), { autonomousIdleMs: 400 });
+    const started = Date.now();
+    await run.start();
+
+    expect(store.getTask(task.id)).toMatchObject({ status: "completed",
+      result: "I started a background agent; I'll reply once it reports back." });
+    const resolvedAt = agentLog(logPath).find((entry) => entry.kind === "resolved")!.at;
+    expect(Date.now() - resolvedAt).toBeGreaterThanOrEqual(400);
+    expect(Date.now() - started).toBeLessThan(15_000);
+  }, 30_000);
+
+  it("(3) a steer during the wait ends it, re-prompts on the same session and completes once", async () => {
+    const { store, task, daemon } = await bed("steer-in-wait");
+    const logPath = join(workDir!, "agent.jsonl");
+    let steerId = "";
+    // The re-prompt's own result (`human`) carried the pending notification: no second wait.
+    const run = daemon(scriptedAcp({ prompts: [RACE(20_000), [chunk("中文结论"), { billing: { origin: "human" } }]] }, logPath, "claude"),
+      { autonomousIdleMs: 15_000 });
+    const done = run.start();
+    await waitFor(() => agentLog(logPath).find((entry) => entry.kind === "resolved"), "the first prompt resolved");
+    steerId = store.createTaskSteerMessage({ taskId: task.id, kind: "steer", content: "改用中文输出" }).id;
+    const steeredAt = Date.now();
+    await done;
+
+    expect(Date.now() - steeredAt).toBeLessThan(10_000);
+    expect(store.getTask(task.id)).toMatchObject({ status: "completed", result: "中文结论" });
+    const log = agentLog(logPath);
+    expect(log.filter((entry) => entry.method === "session/prompt")).toHaveLength(2);
+    expect(log.some((entry) => entry.kind === "overlap")).toBe(false);
+    expect(log.filter((entry) => entry.method === "session/prompt")[1]!.params!.prompt[0].text).toContain("改用中文输出");
+    expect(store.getTaskSteerMessage(steerId)?.consumedAt).toBeTruthy();
+  }, 30_000);
+
+  it("(6) task.activity reports the running subagents, 1 then 0", async () => {
+    const reports = spyOn(MultiremiDaemonClient.prototype, "reportTaskActivity");
+    try {
+      const { store, task, daemon } = await bed("activity");
+      const logPath = join(workDir!, "agent.jsonl");
+      const run = daemon(scriptedAcp({ prompts: [[
+        spawned(CHILD),
+        chunk("Started it; waiting."),
+        { delayMs: 900, session: CHILD, update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "3" } } },
+        ended(CHILD),
+        // The bridge held the prompt for the child; the follow-up is inside it.
+        chunk("3"),
+        { billing: { origin: "task-notification" } },
+      ]] }, logPath, "claude"));
+      await run.start();
+      expect(store.getTask(task.id)?.status).toBe("completed");
+      const values = reports.mock.calls.filter(([taskId]) => taskId === task.id).map(([, running]) => running);
+      expect(values[0]).toBe(1);
+      expect(values.at(-1)).toBe(0);
+      expect(values.filter((value, index) => index === 0 || values[index - 1] !== value)).toEqual([1, 0]);
+    } finally {
+      reports.mockRestore();
+    }
   }, 30_000);
 });

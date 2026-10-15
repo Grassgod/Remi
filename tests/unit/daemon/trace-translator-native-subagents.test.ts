@@ -357,3 +357,118 @@ describe("native subagents: the orphan Agent hook (claude-agent-acp 0.89 shape)"
     expect(h.item("toolu_01", "subagent")).toMatchObject({ background: true, status: "in_progress" });
   });
 });
+
+const marker = (kind: string) => ({ sessionUpdate: "usage_update", used: 0, size: 0, _meta: { "_claude/origin": { kind } } });
+const rootTool = (id: string) => [
+  { sessionUpdate: "tool_call", toolCallId: id, name: "Bash", kind: "execute", status: "pending", title: "ls", _meta: { claudeCode: { toolName: "Bash" } } },
+  { sessionUpdate: "tool_call_update", toolCallId: id, status: "completed" },
+];
+
+describe("owesAutonomousRound (PR 5 §2.4)", () => {
+  it("native: a background child that ended before the human result is owed its notification", () => {
+    // The 0.89 race: the child ends before the root's result, so the bridge does not hold the prompt.
+    const h = harness("claude").round([spawned(A), chunk("I started it."), state(A, "completed"), marker("human")]);
+    expect(h.item(`sa:${A}`, "subagent").background).toBe(true);
+    expect(h.translator.owesAutonomousRound).toBe(true);
+    // The follow-up's own result settles it.
+    h.round([chunk("3"), marker("task-notification")]);
+    expect(h.translator.owesAutonomousRound).toBe(false);
+  });
+
+  it("a later prompt's result (a steer's re-prompt) carried the pending notification", () => {
+    const h = harness("claude").round([spawned(A), chunk("I started it."), state(A, "completed"), marker("human")]);
+    expect(h.translator.owesAutonomousRound).toBe(true);
+    // The wait was stopped by a steer: an empty listen round, then the re-prompt.
+    h.round([]);
+    expect(h.translator.owesAutonomousRound).toBe(true);
+    h.round([chunk("中文结论"), marker("human")]);
+    expect(h.translator.owesAutonomousRound).toBe(false);
+
+    const legacy = harness("claude").round([
+      { sessionUpdate: "tool_call", toolCallId: "toolu_1", title: "Task", kind: "think", status: "pending", _meta: { claudeCode: { toolName: "Agent" } } },
+      hook("toolu_1", { status: "async_launched", isAsync: true }),
+      marker("human"),
+    ]);
+    expect(legacy.translator.owesAutonomousRound).toBe(true);
+    legacy.round([chunk("re-prompted"), marker("human")]);
+    expect(legacy.translator.owesAutonomousRound).toBe(false);
+  });
+
+  it("native: a background child still running is owed", () => {
+    const h = harness("claude").round([spawned(A), chunk("Started."), marker("human")]);
+    expect(h.translator.owesAutonomousRound).toBe(true);
+  });
+
+  it("native: a root tool result after the child's end carried the notification inside the prompt", () => {
+    const h = harness("claude").round([spawned(A), chunk("Started."), state(A, "completed"), ...rootTool("toolu_ls"), marker("human")]);
+    expect(h.translator.owesAutonomousRound).toBe(false);
+  });
+
+  it("native: a held prompt already ran the follow-up (live bg-fast and bg-slow captures)", () => {
+    for (const name of ["claude-090-native-subagent-bg-fast.json", "claude-090-native-subagent-bg-slow.json"]) {
+      const { prompts } = providerFrames(name);
+      const h = harness("claude");
+      for (const prompt of prompts) {
+        h.round(prompt);
+        expect(h.translator.owesAutonomousRound).toBe(false);
+      }
+    }
+  });
+
+  it("native: a foreground child (no background verdict) owes nothing", () => {
+    const { prompts } = providerFrames("claude-090-native-subagent-permission.json");
+    expect(harness("claude").round(prompts[0]!).translator.owesAutonomousRound).toBe(false);
+  });
+
+  it("native: a nested background child never owes the root a round", () => {
+    const h = harness("claude").round([spawned(A), stamped(A, spawned(B)), stamped(A, chunk("child keeps going")),
+      stamped(A, state(B, "completed")), state(A, "completed"), marker("human")]);
+    expect(h.item(`sa:${B}`, "subagent").background).toBe(true);
+    expect(h.translator.owesAutonomousRound).toBe(false);
+  });
+
+  it("without native sessions: background launches outnumber the autonomous results since the first", () => {
+    const launch = (id: string) => [
+      { sessionUpdate: "tool_call", toolCallId: id, title: "Task", kind: "think", status: "pending", _meta: { claudeCode: { toolName: "Agent" } } },
+      hook(id, { status: "async_launched", isAsync: true }),
+    ];
+    const h = harness("claude").round([marker("task-notification"), ...launch("toolu_1"), chunk("Started."), marker("human")]);
+    // An earlier marker does not count: it came before the launch.
+    expect(h.translator.owesAutonomousRound).toBe(true);
+    h.round([chunk("3"), marker("task-notification")]);
+    expect(h.translator.owesAutonomousRound).toBe(false);
+    h.round([...launch("toolu_2"), ...launch("toolu_3"), marker("human"), chunk("one back"), marker("task-notification")]);
+    expect(h.translator.owesAutonomousRound).toBe(true);
+  });
+
+  it("Codex declares no autonomous rounds and never owes one", () => {
+    const { prompts } = providerFrames("codex-222-native-subagent-wait.json");
+    const h = harness("codex").round(prompts[0]!);
+    h.round([spawned("t2"), chunk("Started.")]);
+    expect(h.translator.owesAutonomousRound).toBe(false);
+  });
+});
+
+describe("onSubagentCounts (PR 5 §3.8)", () => {
+  it("reports each change of the running top-level and nested counts", () => {
+    const counts: Array<{ top: number; nested: number }> = [];
+    const h = harness("claude", { onSubagentCounts: (value) => counts.push(value) });
+    h.round([
+      spawned(A), stamped(A, spawned(B)), chunk("Started."),
+      stamped(A, state(B, "completed")), state(A, "completed"),
+    ]);
+    expect(counts).toEqual([{ top: 1, nested: 0 }, { top: 1, nested: 1 }, { top: 1, nested: 0 }, { top: 0, nested: 0 }]);
+    // A resumed generation runs again.
+    h.round([spawned(`${A}:generation:2`, { prompt: "again" }), state(`${A}:generation:2`, "completed")]);
+    expect(counts.slice(4)).toEqual([{ top: 1, nested: 0 }, { top: 0, nested: 0 }]);
+  });
+
+  it("counts Claude's A-mode background launches too, and never throws for a failing listener", () => {
+    const h = harness("claude", { onSubagentCounts: () => { throw new Error("listener broke"); } });
+    h.round([
+      { sessionUpdate: "tool_call", toolCallId: "toolu_1", title: "Task", kind: "think", status: "pending", _meta: { claudeCode: { toolName: "Agent" } } },
+      hook("toolu_1", { status: "async_launched", isAsync: true }),
+    ]);
+    expect(h.item("toolu_1", "subagent").status).toBe("in_progress");
+  });
+});

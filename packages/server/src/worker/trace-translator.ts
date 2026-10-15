@@ -96,6 +96,11 @@ export interface TraceTranslatorOptions {
    */
   standaloneText?: (text: string) => boolean;
   flushIntervalMs?: number;
+  /**
+   * Running subagents changed (PR 5 §3.8): in-progress `subagent` items,
+   * top-level and nested. Called with the new counts on every change only.
+   */
+  onSubagentCounts?: (counts: { top: number; nested: number }) => void;
 }
 
 /** The subagent a child session belongs to, for a request it raised (PR 5 §1.3). */
@@ -186,6 +191,12 @@ export interface TraceTranslator {
    * permission or question; null for the root session or an unknown one.
    */
   subagentOfSession(sessionId: string | null | undefined): TraceSubagentRef | null;
+  /**
+   * The bridge still owes this attempt an autonomous round (PR 5 §2.4): a
+   * background subagent's notification that the prompt did not consume. False
+   * unless the adapter declares autonomous rounds.
+   */
+  readonly owesAutonomousRound: boolean;
   /** A `compaction_update` was seen in this attempt. */
   readonly sawCompaction: boolean;
   /** The last item an ACP update touched in the most recent prompt round. */
@@ -507,6 +518,24 @@ export function createTraceTranslator(
   /** Orphan hook markers waiting for the alias of their call (§3.3). */
   const pendingHooks = new Map<string, boolean>();
   let spawnCounter = 0;
+  /** Order of ACP frames, for the autonomous-round rule (§2.4). */
+  let frameOrder = 0;
+  /** Frame order of the last autonomous result marker, and of the last top-level tool result. */
+  let lastMarkerOrder = 0;
+  let lastToolResultOrder = 0;
+  /** Without native sessions: background launches (by the round they started in), and the autonomous markers since the first. */
+  const backgroundLaunches = new Map<string, number>();
+  let markersSinceLaunch = 0;
+  /**
+   * Prompt rounds ended so far, and the round of the last root result marker of
+   * any origin. A result in a later round than a background child's end means
+   * the next prompt (a steer's re-prompt) carried its pending notification.
+   */
+  let roundIndex = 0;
+  let lastResultRound = -1;
+  const autonomousOrigins = new Set(adapter.autonomousRounds?.resultOrigins ?? []);
+  const runningSubagents = new Map<string, boolean>();
+  let subagentCounts = { top: 0, nested: 0 };
 
   const uniqueId = (base: string): string => {
     if (!usedIds.has(base)) { usedIds.add(base); return base; }
@@ -519,8 +548,22 @@ export function createTraceTranslator(
   const remember = (item: TraceItem, touchedByAcp: boolean): void => {
     items.set(item.id, item);
     if (touchedByAcp) roundLast = item;
+    if (item.type === "subagent") countSubagent(item);
   };
 
+  /** Keep the running-subagent counts incremental and report a change (§3.8). */
+  const countSubagent = (item: TraceSubagentItem): void => {
+    const running = item.status === "in_progress";
+    if ((runningSubagents.get(item.id) ?? false) === running) return;
+    runningSubagents.set(item.id, running);
+    const key = item.parent_id === null ? "top" : "nested";
+    subagentCounts = { ...subagentCounts, [key]: subagentCounts[key] + (running ? 1 : -1) };
+    try {
+      opts.onSubagentCounts?.(subagentCounts);
+    } catch {
+      // A failing listener never breaks the trace.
+    }
+  };
 
   const write = (type: "item.started" | "item.updated" | "item.completed", item: TraceItem, touchedByAcp = false): void => {
     const capped = capTraceItem(item);
@@ -652,6 +695,16 @@ export function createTraceTranslator(
     }
   };
 
+  /** An autonomous cycle's result marker on the root (§2.4). */
+  const onAutonomousMarker = (frame: VendorFrame): void => {
+    if (!autonomousOrigins.size || frame.sessionUpdate !== "usage_update" || frameSession(frame)) return;
+    const origin = autonomousOrigin(frame);
+    if (!origin) return;
+    lastResultRound = roundIndex;
+    if (!autonomousOrigins.has(origin)) return;
+    lastMarkerOrder = frameOrder;
+    if (backgroundLaunches.size) markersSinceLaunch++;
+  };
 
   const onSpawned = (frame: VendorFrame): void => {
     const sessionId = typeof frame.subagentSessionId === "string" ? frame.subagentSessionId : "";
@@ -718,6 +771,8 @@ export function createTraceTranslator(
     const completedAt = now();
     const ended = { ...agent.item, status, completed_at: completedAt };
     const reply = subagentReply([...items.values()].map((item) => item.id === agent.id ? ended : item), agent.id);
+    agent.endedOrder = frameOrder;
+    agent.endedRound = roundIndex;
     rewriteAgent(agent, { status, completed_at: completedAt, duration_ms: Math.max(0, nowMs() - agent.startedMs),
       output: reply?.text ?? null });
   };
@@ -904,6 +959,8 @@ export function createTraceTranslator(
     const item = toolItem(state, state.status, now(), true);
     // Uncapped, like the in-progress and late-frame comparisons.
     state.lastShape = shapeOf(item);
+    // A root tool's result went back to the model: a notification due then rode along (§2.4).
+    if (touchedByAcp && state.parentId === null && state.cls.type !== "subagent") lastToolResultOrder = frameOrder;
     write("item.completed", item, touchedByAcp);
   };
 
@@ -947,6 +1004,8 @@ export function createTraceTranslator(
       const changes = diffChanges(frame);
       if (changes) state.changes = changes;
     }
+    // Without native sessions, each top-level background launch owes one autonomous result (§2.4).
+    if (isBackgroundLaunch(state) && state.parentId === null && !backgroundLaunches.has(state.id)) backgroundLaunches.set(state.id, roundIndex);
 
     const chunk = terminalChunk(frame);
     if (chunk !== null && !state.closed) {
@@ -1154,6 +1213,8 @@ export function createTraceTranslator(
         }
         const frame = update as unknown as VendorFrame;
         if (!sawStampedParent && parentToolUseId(frame) !== null) sawStampedParent = true;
+        frameOrder++;
+        onAutonomousMarker(frame);
         inferBackground(frame);
         switch (frame.sessionUpdate) {
           case "agent_message_chunk":
@@ -1218,6 +1279,7 @@ export function createTraceTranslator(
       });
       aborting = false;
       roundTools.clear();
+      roundIndex++;
       endedRoundLast = roundLast;
       roundLast = null;
       roundOpen = false;
@@ -1326,6 +1388,18 @@ export function createTraceTranslator(
       return agent ? { item_id: agent.id, name: agent.item.name?.trim() || agent.item.title?.trim() || "" } : null;
     },
 
+    get owesAutonomousRound() {
+      if (!autonomousOrigins.size) return false;
+      for (const agent of natives.values()) {
+        if (agent.parentId !== null || agent.item.background !== true) continue;
+        if (agent.item.status === "in_progress") return true;
+        // Ended after the last autonomous result; neither a root tool result nor a later prompt carried its notification since.
+        if (agent.endedOrder !== null && agent.endedOrder > lastMarkerOrder && !(lastToolResultOrder > agent.endedOrder)
+          && !(lastResultRound > agent.endedRound)) return true;
+      }
+      const latestLaunch = Math.max(-1, ...backgroundLaunches.values());
+      return backgroundLaunches.size > markersSinceLaunch && !(lastResultRound > latestLaunch);
+    },
 
     get sawCompaction() {
       return sawCompaction;
