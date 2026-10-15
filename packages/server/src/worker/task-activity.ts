@@ -55,15 +55,24 @@ export class TaskActivityReporter {
     if (this.debounce) clearTimeout(this.debounce);
     this.debounce = null;
     if (this.finished) return;
+    if (this.value === 0) this.stopRefresh();
     if (this.value === this.sent && this.value === 0) return;
     this.emit(this.value);
     if (this.value > 0 && !this.refresh) {
-      this.refresh = setInterval(() => this.emit(this.value), this.refreshMs);
+      this.refresh = setInterval(() => this.tick(), this.refreshMs);
       (this.refresh as { unref?: () => void }).unref?.();
-    } else if (this.value === 0 && this.refresh) {
-      clearInterval(this.refresh);
-      this.refresh = null;
     }
+  }
+
+  /** The periodic refresh: only a count above 0 is repeated; 0 goes out once, through the debounce. */
+  private tick(): void {
+    if (this.value > 0) this.emit(this.value);
+    else this.stopRefresh();
+  }
+
+  private stopRefresh(): void {
+    if (this.refresh) clearInterval(this.refresh);
+    this.refresh = null;
   }
 
   private emit(running: number): void {

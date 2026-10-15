@@ -100,6 +100,7 @@ function scriptedAcp(config: FakeSubagentConfig, logPath: string, agentType: "cl
       sendStream: (message, sendOptions) => acp.sendStream(message, sendOptions) as AsyncGenerator<ProviderEvent>,
       listenAutonomous: (listenOptions) => acp.listenAutonomous(listenOptions),
       steer: (text, steerOptions) => acp.steer(text, steerOptions),
+      subagentSession: (sessionId) => acp.subagentSession(sessionId),
       getLastResponse: () => acp.getLastResponse(),
       getStreamedText: (chatId) => acp.getStreamedText(chatId),
       get typedSessionFailures() { return acp.typedSessionFailures; },
@@ -264,6 +265,17 @@ describe("Bun Multiremi daemon native subagents", () => {
     const resolvedAt = agentLog(logPath).find((entry) => entry.kind === "resolved")!.at;
     expect(Date.now() - resolvedAt).toBeGreaterThanOrEqual(400);
     expect(Date.now() - started).toBeLessThan(15_000);
+  }, 30_000);
+
+  it("REMI_ACP_AUTONOMOUS_ROUNDS=0 (the option): no capture and no wait, as before PR 5", async () => {
+    const { store, task, daemon } = await bed("no-autonomous");
+    const logPath = join(workDir!, "agent.jsonl");
+    const run = daemon(scriptedAcp({ prompts: [RACE(2_000)] }, logPath, "claude"), { autonomousRounds: false, autonomousIdleMs: 10_000 });
+    await run.start();
+    expect(store.getTask(task.id)).toMatchObject({ status: "completed",
+      result: "I started a background agent; I'll reply once it reports back." });
+    const resolvedAt = agentLog(logPath).find((entry) => entry.kind === "resolved")!.at;
+    expect(Date.now() - resolvedAt).toBeLessThan(5_000);
   }, 30_000);
 
   it("(3) a steer during the wait ends it, re-prompts on the same session and completes once", async () => {

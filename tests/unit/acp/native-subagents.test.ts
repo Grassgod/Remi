@@ -293,6 +293,18 @@ describe("AcpProvider child permissions and questions (PR 5 §1.3)", () => {
     expect(agent.frames().find((frame) => frame.kind === "elicitation_answer")?.result).toEqual({ action: "accept", content: { question_0: "staging" } });
   });
 
+  it("names a child's agent synchronously from its own registry, any generation", async () => {
+    const agent = fakeAgent("claude", { prompts: [[
+      spawned(CHILD), ended(CHILD),
+      { update: { sessionUpdate: "subagent_spawned", subagentSessionId: `${CHILD}:generation:2`, task: "again", capabilities: {} } },
+    ]] });
+    await collect(agent.provider);
+    expect(agent.provider.subagentSession(CHILD)).toEqual({ agentId: CHILD, name: "Count files" });
+    expect(agent.provider.subagentSession(`${CHILD}:generation:2`)).toEqual({ agentId: CHILD, name: "Count files" });
+    expect(agent.provider.subagentSession("sess_root")).toBeNull();
+    expect(agent.provider.subagentSession("stranger")).toBeNull();
+  });
+
   it("forgets the children wherever it forgets the root", async () => {
     const agent = fakeAgent("claude", { prompts: [[spawned(CHILD), spawned(NESTED)]] });
     await collect(agent.provider);

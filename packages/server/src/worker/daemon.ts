@@ -49,7 +49,8 @@ import {
   type UploadFeishuBotAttachmentInput,
 } from "./client.js";
 import { responseToUsageUnits } from "./usage-units.js";
-import { createTraceTranslator, type TraceTranslator } from "./trace-translator.js";
+import { createTraceTranslator, type TraceSubagentRef, type TraceTranslator } from "./trace-translator.js";
+import { nativeAgentItemId } from "@acp/adapters/trace-vendor.js";
 import { TaskActivityReporter } from "./task-activity.js";
 import { finalReplyBody } from "@shared/turn-trace.js";
 import { TaskUsageLedger } from "./task-usage-ledger.js";
@@ -486,6 +487,13 @@ export interface MultiremiDaemonOptions {
    */
   nativeSubagents?: boolean;
   /**
+   * Late answers as autonomous rounds (PR 5 §2, default on): Claude's frames
+   * between prompts are captured and an owed round is waited for in the same
+   * attempt. `REMI_ACP_AUTONOMOUS_ROUNDS=0` turns both off, restoring the
+   * completion timing without it; independent of {@link nativeSubagents}.
+   */
+  autonomousRounds?: boolean;
+  /**
    * How long the daemon waits for an owed autonomous round's first frame
    * (Claude's late answer to a background subagent, PR 5 §2.5; default 60 s).
    */
@@ -610,6 +618,8 @@ function upsertRepoWarning(warnings: TaskRepoWarning[], warning: TaskRepoWarning
 export type MultiremiTaskProvider = Pick<Provider, "sendStream" | "getLastResponse" | "steer"> & {
   /** An autonomous round after the prompt resolved (PR 5 §2.3); absent when the provider captures none. */
   listenAutonomous?: Provider["listenAutonomous"];
+  /** The native agent of a child session, as the provider registered it (PR 5 §1.3). */
+  subagentSession?: (sessionId: string) => { agentId: string; name: string | null } | null;
   readonly typedSessionFailures?: boolean;
   close?: () => Promise<void> | void;
   discoverModelCapabilities?: () => Promise<AcpModelCapability[]>;
@@ -1009,6 +1019,7 @@ export class MultiremiDaemon {
       steerPollIntervalMs: options.steerPollIntervalMs ?? numberEnv(process.env.MULTIREMI_STEER_POLL_INTERVAL_MS, DEFAULT_STEER_POLL_MS),
       forceAnswerGraceMs: options.forceAnswerGraceMs ?? numberEnv(process.env.MULTIREMI_FORCE_ANSWER_GRACE_MS, DEFAULT_FORCE_ANSWER_GRACE_MS),
       nativeSubagents: options.nativeSubagents ?? process.env.REMI_ACP_NATIVE_SUBAGENTS !== "0",
+      autonomousRounds: options.autonomousRounds ?? process.env.REMI_ACP_AUTONOMOUS_ROUNDS !== "0",
       autonomousIdleMs: Math.max(1, options.autonomousIdleMs ?? DEFAULT_AUTONOMOUS_IDLE_MS),
       daemonPort: options.daemonPort ?? numberEnv(process.env.MULTIREMI_DAEMON_PORT, 6131),
       workspacesRoot,
@@ -3994,7 +4005,7 @@ export class MultiremiDaemon {
         try {
           const toolTitle = params.toolCall?.title ?? "tool call";
           // A child session's request names its subagent (PR 5 §1.3); the root's carries no field.
-          const subagent = this.recordTrace(task.id, () => trace.subagentOfSession(params.sessionId));
+          const subagent = this.subagentRef(task.id, provider, trace, params.sessionId);
           // S2 creates the decision message and sets awaiting_human atomically.
           const questionId = `question_${randomUUID()}`, waitId = randomUUID();
           this.taskDownlinks.beginQuestionWait?.(task.id, questionId, waitId);
@@ -4056,7 +4067,7 @@ export class MultiremiDaemon {
           elicitationContextOffset = sliced.offset;
           context = sliced.context;
         }
-        const subagent = this.recordTrace(task.id, () => trace.subagentOfSession(params.sessionId));
+        const subagent = this.subagentRef(task.id, provider, trace, params.sessionId);
         const questionId = `question_${randomUUID()}`, waitId = randomUUID();
         this.taskDownlinks.beginQuestionWait?.(task.id, questionId, waitId);
         const result = await this.taskDownlinks.rpc("turn.decision", {
@@ -4109,6 +4120,21 @@ export class MultiremiDaemon {
     return () => {
       elicitationContextOffset = 0;
     };
+  }
+
+  /**
+   * The subagent a permission or question came from (PR 5 §1.3), for
+   * `metadata.subagent`; null for the root session. The request can arrive
+   * before the stream's consumer gave the translator the child's
+   * `subagent_spawned`, so the provider's own registry answers then.
+   */
+  private subagentRef(taskId: string, provider: MultiremiTaskProvider, trace: TraceTranslator,
+    sessionId: string | null | undefined): TraceSubagentRef | null {
+    if (!sessionId) return null;
+    const traced = this.recordTrace(taskId, () => trace.subagentOfSession(sessionId));
+    if (traced) return traced;
+    const child = provider.subagentSession?.(sessionId);
+    return child ? { item_id: nativeAgentItemId(child.agentId), name: child.name ?? "" } : null;
   }
 
   /** Questions and permissions share the reply/expiry race through decision messages. */
@@ -4387,7 +4413,7 @@ export class MultiremiDaemon {
       ...(antigravity ? { gatewayShim: antigravity.run, providerHome: providerHome!.home } : {}),
       // Honoured only by adapters that declare them (PR 5 §1.1, §2.3).
       nativeSubagentSessions: this.options.nativeSubagents,
-      captureAutonomousRounds: true,
+      captureAutonomousRounds: this.options.autonomousRounds,
     });
     if (!provider.sendStream) {
       throw new Error(`Provider ${agent.provider} does not support streaming`);
@@ -4608,7 +4634,8 @@ export class MultiremiDaemon {
         // steer, a wrap-up or the cancel came first; the bridge already holds a
         // prompt while such a subagent still runs.
         let autonomousRounds = 0;
-        while (provider.listenAutonomous && !turnError && !turnAbort.signal.aborted && !signal.aborted && !forceAnswerExpired
+        while (this.options.autonomousRounds && provider.listenAutonomous && !turnError && !turnAbort.signal.aborted
+          && !signal.aborted && !forceAnswerExpired
           && !steerFeed.hasPending && trace.owesAutonomousRound && autonomousRounds < AUTONOMOUS_MAX_ROUNDS) {
           autonomousRounds++;
           const listen = new AbortController();

@@ -27,7 +27,7 @@ import { AcpRpcError, AcpSessionFailureError, airMetadata, readSessionFailure, r
 import { resolveAcpProcessLaunch } from "./launch.js";
 import { createAdapter, type AgentAdapter } from "./adapters/index.js";
 import { resolveClaudeContextSelection, hasOneMillionContext } from "./adapters/claude-code/model-context.js";
-import { autonomousOrigin, isWorkspaceTrustPrompt, permissionAsQuestion, serviceMessage, serviceMessageFailure, type PermissionQuestion } from "./adapters/trace-vendor.js";
+import { autonomousOrigin, isWorkspaceTrustPrompt, nativeAgentId, permissionAsQuestion, serviceMessage, serviceMessageFailure, type PermissionQuestion } from "./adapters/trace-vendor.js";
 import { accessConfigFor, type AcpAccessConfig } from "./access/index.js";
 import type { GatewayShimChannel, GatewayShimEvent, GatewayShimHost, GatewayShimListingFailure } from "./access/gateway-shim-types.js";
 import { GEMINI_USAGE_SOURCE, geminiObservationUsage } from "./gemini-request-usage.js";
@@ -368,6 +368,8 @@ interface NativeChildSession {
   parentSessionId: string;
   /** Its `subagent_state_update` arrived. */
   terminal: boolean;
+  /** The announced name, for a request it raises before the trace saw the announcement. */
+  name: string | null;
 }
 
 /** One ACP process's gateway-shim channel and what the provider learned from it. */
@@ -1351,9 +1353,14 @@ export class AcpProvider implements Provider {
     const announced = typeof update?.subagentSessionId === "string" ? update.subagentSessionId : "";
     if (update?.sessionUpdate === "subagent_spawned" && announced && announced !== entry.acpSessionId) {
       entry.children ??= new Map();
+      const name = typeof update.name === "string" && update.name.trim() ? update.name.trim() : null;
       const known = entry.children.get(announced);
-      if (known) known.terminal = false;
-      else entry.children.set(announced, { parentSessionId: sessionId, terminal: false });
+      if (known) {
+        known.terminal = false;
+        known.name = name ?? known.name;
+      } else {
+        entry.children.set(announced, { parentSessionId: sessionId, terminal: false, name });
+      }
       this._sessionToChatId.set(announced, chatId);
     } else if (update?.sessionUpdate === "subagent_state_update" && announced) {
       const known = entry.children?.get(announced);
@@ -1426,6 +1433,24 @@ export class AcpProvider implements Provider {
     return { ...update, _meta: { ...update._meta,
       remiUsageUnits: entry.promptState.usage.collector.takeChangedUnits(this._adapter.agentType, requestedModel),
     } };
+  }
+
+  /**
+   * The native agent a child session belongs to, as this provider registered
+   * it from `subagent_spawned` (PR 5 §1.3): the agent id without the
+   * generation suffix, and its announced name. Null for a root or unknown
+   * session. Answers synchronously, while the announcement may still be
+   * queued for the stream's consumer.
+   */
+  subagentSession(sessionId: string): { agentId: string; name: string | null } | null {
+    for (const entry of this._pool.values()) {
+      const child = entry.children?.get(sessionId);
+      if (!child) continue;
+      // Any generation's own announcement may carry the name; the first one does.
+      const name = child.name ?? entry.children?.get(nativeAgentId(sessionId))?.name ?? null;
+      return { agentId: nativeAgentId(sessionId), name };
+    }
+    return null;
   }
 
   /** Forget the entry's child sessions (wherever its root session is forgotten). */

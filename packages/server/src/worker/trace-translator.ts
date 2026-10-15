@@ -26,6 +26,7 @@ import {
   messageId as frameMessageId,
   messagePhase,
   nativeAgentId,
+  nativeAgentItemId,
   nativeAgentPrompt,
   noticeFields,
   parentToolUseId,
@@ -717,7 +718,9 @@ export function createTraceTranslator(
     }
     const parentId = agentOfSession(frameSession(frame))?.id ?? null;
     boundary(parentId);
-    const id = uniqueId(`sa:${baseId}`);
+    // Deterministic, so a request raised before this frame reaches the trace can name it (the daemon's fallback).
+    const id = nativeAgentItemId(baseId);
+    usedIds.add(id);
     const name = typeof frame.name === "string" && frame.name.trim() ? frame.name : null;
     // `agent_type` and `model` are not on the AIR-form announcement (U2); `background` comes from the hook or inference.
     const item: TraceSubagentItem = {
@@ -773,8 +776,9 @@ export function createTraceTranslator(
     const reply = subagentReply([...items.values()].map((item) => item.id === agent.id ? ended : item), agent.id);
     agent.endedOrder = frameOrder;
     agent.endedRound = roundIndex;
+    // A resumed generation without a reply of its own (claude-agent-acp 0.90 drops its frames) keeps the last known result.
     rewriteAgent(agent, { status, completed_at: completedAt, duration_ms: Math.max(0, nowMs() - agent.startedMs),
-      output: reply?.text ?? null });
+      output: reply?.text ?? agent.item.output ?? null });
   };
 
   const onChunk = (frame: VendorFrame, kind: "agent_message" | "reasoning"): void => {

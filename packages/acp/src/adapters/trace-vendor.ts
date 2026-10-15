@@ -113,6 +113,11 @@ export function nativeAgentId(sessionId: string): string {
   return sessionId.replace(/:generation:\d+$/, "");
 }
 
+/** The trace item of a native agent, from any of its child session ids (PR 5 §3.1). */
+export function nativeAgentItemId(sessionId: string): string {
+  return `sa:${nativeAgentId(sessionId)}`;
+}
+
 /**
  * The origin of a model cycle's result: `_meta["_claude/origin"].kind` on the
  * `usage_update` claude-agent-acp sends at every result (CA/acp-agent.js

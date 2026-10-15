@@ -133,6 +133,7 @@ describe("native subagents: Claude 0.90 live captures", () => {
     const h = harness("claude").round(prompts[0]!);
     h.feed(prompts[1]!.slice(0, prompts[1]!.findIndex((event) => event.sessionUpdate === "subagent_spawned") + 1));
     expect(h.item(`sa:${A}`, "subagent")).toMatchObject({ status: "in_progress", completed_at: null, duration_ms: null, background: true });
+    expect(h.item(`sa:${A}`, "subagent").output).toStartWith("There are 3 files in /work.");
     h.round(prompts[1]!.slice(prompts[1]!.findIndex((event) => event.sessionUpdate === "subagent_spawned") + 1));
     const subagents = h.state.items.filter((item) => item.type === "subagent");
     expect(subagents).toHaveLength(1);
@@ -140,8 +141,8 @@ describe("native subagents: Claude 0.90 live captures", () => {
     const resumed = h.children(`sa:${A}`).filter((item) => item.type === "user_message");
     expect(resumed).toEqual([expect.objectContaining({ origin: "input", text: "Please also report the size in bytes of a.txt in /work.",
       message_ids: [], attachments: [], steer: null, status: "completed" })]);
-    // 0.90 drops the generation's own frames (live): no reply follows the new instructions.
-    expect(subagents[0]!.type === "subagent" && subagents[0]!.output).toBeNull();
+    // 0.90 drops the generation's own frames (live): the item keeps the first generation's result.
+    expect(subagents[0]!.type === "subagent" && subagents[0]!.output).toStartWith("There are 3 files in /work.");
     // The SendMessage call stays a root tool (the shared control row reads it).
     expect(h.state.items.find((item) => item.type === "tool" && item.tool === "SendMessage")).toMatchObject({ parent_id: null });
     expect(h.translator.settle().text).toBe("6 bytes");
@@ -230,6 +231,19 @@ describe("native subagents: lifecycle", () => {
       expect(h.item("toolu_open", "command").status).toBe("stopped");
       expect(h.children(`sa:${A}`).find((item) => item.type === "agent_message")?.status).toBe("completed");
     }
+  });
+
+  it("a resumed generation's own reply replaces the output; without one the last result stays", () => {
+    const h = harness("claude").round([
+      spawned(A), stamped(A, chunk("first answer")), state(A, "completed"),
+      spawned(`${A}:generation:2`, { prompt: "and the size?" }), state(`${A}:generation:2`, "completed"),
+    ]);
+    expect(h.item(`sa:${A}`, "subagent").output).toBe("first answer");
+    h.round([
+      spawned(`${A}:generation:3`, { prompt: "and the owner?" }), stamped(`${A}:generation:3`, chunk("second answer")),
+      state(`${A}:generation:3`, "completed"),
+    ]);
+    expect(h.item(`sa:${A}`, "subagent").output).toBe("second answer");
   });
 
   it("nests a child spawned by a child, and its frames, under that child", () => {
