@@ -6,7 +6,7 @@ import type { TaskStreamEvent } from "@connectors/base.js";
 import type { TraceEvent, TraceItemOf } from "@multiremi/contracts/trace.js";
 import type { CotSample } from "@connectors/feishu/native-cot.js";
 import { subagentResolver } from "@shared/trace-step-copy.js";
-import { agentMessage, command, completed, delta, input, item, nativeHarness, plan, read, reasoning, running, started, streamedText,
+import { TS, agentMessage, command, completed, delta, input, item, nativeHarness, plan, read, reasoning, running, started, streamedText,
   terminal, turnCompleted, turnStarted, updated } from "./feishu-native-harness.js";
 
 const trace = (rows: TaskStreamEvent[]): TraceEvent[] => rows.map(row => (row as { message: TraceEvent }).message);
@@ -320,7 +320,10 @@ describe("semantic native CoT timeline", () => {
     const timeline = new FeishuCotTimeline("task");
     const long = '中文🙂"\\\n'.repeat(2000);
     feed(timeline, [completed(1, command("tc", long)), completed(2, plan([{ content: long, status: "pending", priority: null }])),
-      completed(3, item("subagent", "agent", { title: long }))]);
+      completed(3, item("subagent", "agent", { title: long })),
+      completed(4, item("user_message", "in:long", { background_tasks: [{ task_id: "t0", name: long, task_type: "shell", status: "failed" }] })),
+      started(5, item("background_task", "bg:t1", { task_id: "t1", name: long, tool_item_id: "tc" })),
+      completed(6, item("background_task", "bg:t2", { task_id: "t2", task_type: "workflow", name: long, status: "stopped", stop_reason: "lost" }))]);
     const samples = timeline.finish("completed");
     expect(samples.every(([, content]) => Buffer.byteLength(JSON.stringify(content)) <= 4096)).toBe(true);
     expect(JSON.stringify(samples)).not.toContain("�");
@@ -659,5 +662,225 @@ describe("native subagent sessions and agent-control rows (PR 5)", () => {
     const order = h.events().flatMap(e => e.event_type === "REASONING_MESSAGE_CONTENT" ? [JSON.parse(e.content).delta]
       : e.event_type === "STEP_STARTED" || e.event_type === "STEP_FINISHED" ? [JSON.parse(e.content).stepName] : []);
     expect(order).toEqual(["正在运行子代理：count-files", launched.text, "子代理已完成：count-files"]);
+  });
+});
+
+describe("background tasks (PR 6 §9)", () => {
+  // Items as the translator writes them (PR 6 §4.2): `bg:<task id>`, linked to the call that started it.
+  const task = (taskId: string, patch: Partial<TraceItemOf<"background_task">> = {}) => item("background_task", `bg:${taskId}`, {
+    task_id: taskId, task_type: "shell", name: "npm test", description: "npm test", tool_item_id: "toolu_bg", can_stop: true,
+    summary: null, duration_ms: 45_000, ...patch });
+  const launch = command("toolu_bg", "npm test", [{ type: "unknown", command: "npm test" }], { title: "Run tests", output: "Command running in background with ID: bash_1" });
+  const steps = (samples: CotSample[], type: "STEP_STARTED" | "STEP_FINISHED") => of(samples, type).map(content => content.stepName);
+  const order = (samples: CotSample[]) => samples.flatMap(([type, content]) => type === "TOOL_CALL_START" ? [`row:${content.title}`]
+    : type === "STEP_STARTED" || type === "STEP_FINISHED" ? [`${type === "STEP_STARTED" ? "start" : "end"}:${content.stepName}`]
+    : type === "REASONING_MESSAGE_CONTENT" ? [`text:${content.delta}`] : []);
+
+  it("writes the launch row in the task's copy, then a step from it to the task's end (Claude: the spawn precedes the call's result)", () => {
+    const timeline = new FeishuCotTimeline("task");
+    feed(timeline, [turnStarted(1), started(2, launch), started(3, task("bash_1"))]);
+    // The call still runs: its task's step waits for the row.
+    expect(timeline.drain().samples).toEqual([]);
+    feed(timeline, [completed(4, launch)]);
+    const opening = timeline.drain().samples;
+    expect(order(opening)).toEqual(["row:已启动后台命令 Run tests", "start:后台运行中：Run tests"]);
+    // One row whatever the actions, the command in its args, no status note.
+    expect(of(opening, "TOOL_CALL_START")[0]).toMatchObject({ toolCallName: "Bash", icon: "bash" });
+    expect(of(opening, "TOOL_CALL_ARGS").map(content => content.delta)).toEqual(["$ npm test"]);
+    expect(of(opening, "TOOL_CALL_RESULT")).toEqual([]);
+    expect(JSON.stringify(opening)).not.toContain("Command running in background");
+    feed(timeline, [completed(5, task("bash_1", { summary: "120 passed" }))]);
+    expect(timeline.drain().samples).toEqual([["STEP_FINISHED", { stepId: of(opening, "STEP_STARTED")[0]!.stepId, stepName: "后台命令已完成 Run tests" }]]);
+    expect(of(timeline.finish("completed"), "STEP_FINISHED")).toEqual([]);
+  });
+
+  it("closes a task the attempt handed off as still running, behind the held answer", () => {
+    const timeline = new FeishuCotTimeline("task");
+    const dev = task("bash_2", { name: "npm run dev", tool_item_id: "toolu_dev", duration_ms: null });
+    const call = command("toolu_dev", "npm run dev");
+    const answer = agentMessage("msg:answer", "The dev server is up.", "final");
+    feed(timeline, [turnStarted(1), started(2, call), started(3, dev), completed(4, call), completed(5, answer),
+      // The park path hands the task off before the turn closes (§2.2).
+      completed(6, { ...dev, handed_off: true, completed_at: "2026-10-15T00:00:40.000Z" })]);
+    const samples = [...timeline.drain().samples, ...timeline.finish("completed")];
+    expect(order(samples)).toEqual(["row:已启动后台命令 npm run dev", "start:后台运行中：npm run dev", "end:npm run dev 仍在后台运行"]);
+    expect(prose(samples)).toBe("");
+  });
+
+  it("closes a task step still open when the run ends as still running (finish)", () => {
+    for (const status of ["completed", "cancelled", "failed"]) {
+      const timeline = new FeishuCotTimeline("task");
+      feed(timeline, [turnStarted(1), completed(2, launch), started(3, task("bash_1"))]);
+      expect(steps(timeline.drain().samples, "STEP_STARTED")).toEqual(["后台运行中：Run tests"]);
+      expect(steps(timeline.finish(status), "STEP_FINISHED")).toEqual(["Run tests 仍在后台运行"]);
+    }
+  });
+
+  it.each([
+    ["failed", {}, "后台命令失败 Run tests"],
+    ["stopped", { stop_reason: "user" }, "后台命令已停止 Run tests · 由用户停止"],
+    ["stopped", { stop_reason: "turn_end", stop_request: { requested_at: TS, by: "remi", outcome: "stopped" } }, "后台命令已停止 Run tests · 随本轮结束"],
+    ["stopped", { stop_reason: "cancelled" }, "后台命令已停止 Run tests · 本轮已中断"],
+    ["stopped", { stop_reason: "lost" }, "后台命令已停止 Run tests · 进程已中断"],
+    // A person's stop the bridge confirmed, before the translator gave it a reason.
+    ["stopped", { stop_reason: null, stop_request: { requested_at: TS, by: "user", outcome: "stopped" } }, "后台命令已停止 Run tests · 由用户停止"],
+    // The model's own TaskStop: no stop request, no reason.
+    ["stopped", { stop_reason: null }, "后台命令已停止 Run tests"],
+  ] as const)("names a %s task truthfully (%j)", (status, patch, name) => {
+    const timeline = new FeishuCotTimeline("task");
+    feed(timeline, [completed(1, launch), started(2, task("bash_1")), completed(3, task("bash_1", { status, ...patch }))]);
+    expect(steps(timeline.drain().samples, "STEP_FINISHED")).toEqual([name]);
+  });
+
+  it("names workflows and other tasks by their name, launched from any tool call", () => {
+    const timeline = new FeishuCotTimeline("task");
+    const workflow = item("tool", "toolu_wf", { tool: "Workflow", title: "Workflow", input: { name: "release-check" } });
+    const monitor = item("tool", "toolu_mcp", { tool: "mcp__ci__watch", server: "ci", title: "Watch CI" });
+    feed(timeline, [
+      started(1, running(workflow)), started(2, task("wf_1", { task_type: "workflow", name: "release-check", tool_item_id: workflow.id })),
+      completed(3, workflow), completed(4, task("wf_1", { task_type: "workflow", name: "release-check", tool_item_id: workflow.id, status: "failed" })),
+      completed(5, monitor), started(6, task("mcp_1", { task_type: "monitor", name: "CI #42", tool_item_id: monitor.id })),
+    ]);
+    const samples = [...timeline.drain().samples, ...timeline.finish("completed")];
+    expect(order(samples)).toEqual([
+      "row:已启动后台工作流 release-check", "start:后台运行中：release-check", "end:后台工作流失败 release-check",
+      // Announced after its call's row: the row keeps the call's own copy; a non-shell step names the task.
+      "row:已调用 Watch CI", "start:后台运行中：CI #42", "end:CI #42 仍在后台运行",
+    ]);
+  });
+
+  it("opens a waiting step at the next event of another item, and keeps the launch copy on a call closed later (Codex)", () => {
+    const timeline = new FeishuCotTimeline("task");
+    const terminal = command("call_dev", "npm run dev", undefined, { status: "in_progress", completed_at: null });
+    const dev = task("call_dev:item_1", { name: "npm run dev", tool_item_id: terminal.id, duration_ms: null });
+    // The background terminal keeps its call open; the root carries on.
+    feed(timeline, [turnStarted(1), started(2, terminal), started(3, dev), updated(4, { ...dev, summary: "listening" }),
+      completed(5, agentMessage("msg:wait", "The server is starting.", "commentary"))]);
+    expect(order(timeline.drain().samples)).toEqual(["start:后台运行中：npm run dev", "text:The server is starting."]);
+    // Closing the turn stops the open call; its row still reads as the launch, with no 「已停止」 note.
+    feed(timeline, [completed(6, { ...dev, handed_off: true }), completed(7, { ...terminal, status: "stopped", completed_at: TS })]);
+    const closing = timeline.drain().samples;
+    expect(order(closing)).toEqual(["end:npm run dev 仍在后台运行", "row:已启动后台命令 npm run dev"]);
+    expect(of(closing, "TOOL_CALL_RESULT")).toEqual([]);
+  });
+
+  it("titles a call written before its task was announced with its own copy, and still opens the task's step", () => {
+    const timeline = new FeishuCotTimeline("task");
+    const call = command("call_dev", "npm run dev");
+    feed(timeline, [completed(1, call), started(2, task("call_dev:item_1", { name: "npm run dev", tool_item_id: call.id }))]);
+    expect(order(timeline.drain().samples)).toEqual(["row:已运行 npm run dev", "start:后台运行中：npm run dev"]);
+  });
+
+  it("opens and closes at once a task that ended before its call's row, then writes nothing more for it", () => {
+    const timeline = new FeishuCotTimeline("task");
+    feed(timeline, [started(1, launch), started(2, task("bash_1")), completed(3, task("bash_1", { duration_ms: 300 })), completed(4, launch)]);
+    const samples = timeline.drain().samples;
+    expect(order(samples)).toEqual(["row:已启动后台命令 Run tests", "start:后台运行中：Run tests", "end:后台命令已完成 Run tests"]);
+    // A level-closed end the bridge corrects keeps the first end: a native step is not reopened.
+    feed(timeline, [completed(5, task("bash_1", { status: "failed" }))]);
+    expect(timeline.drain().samples).toEqual([]);
+    expect(timeline.finish("completed").filter(([type]) => type.startsWith("STEP_"))).toEqual([]);
+  });
+
+  it("keeps a task a subagent started in the workbench, though it shows that the subagent runs", () => {
+    const timeline = new FeishuCotTimeline("task");
+    const agent = item("subagent", "toolu_agent", { tool: "Task", title: "Task", prompt: null });
+    const childCall = command("toolu_child_bg", "npm test", undefined, { parent_id: agent.id });
+    feed(timeline, [started(1, agent), completed(2, childCall),
+      started(3, task("bash_9", { parent_id: agent.id, tool_item_id: childCall.id })),
+      completed(4, task("bash_9", { parent_id: agent.id, tool_item_id: childCall.id }))]);
+    const samples = timeline.drain().samples;
+    expect(steps(samples, "STEP_STARTED")).toEqual(["正在运行子代理：Task"]);
+    expect(JSON.stringify(samples)).not.toContain("npm test");
+  });
+
+  it("does not count a task as a tool: an answer before it stays the answer", () => {
+    const timeline = new FeishuCotTimeline("task");
+    const answer = agentMessage("msg:answer", "Tests are running in the background.");
+    feed(timeline, [completed(1, launch), started(2, task("bash_1")), completed(3, answer),
+      completed(4, { ...task("bash_1"), handed_off: true })]);
+    const before = timeline.drain().samples;
+    // Unlike a tool, the task's end does not make the `unknown` reply narration (rule 2).
+    expect(prose(before)).toBe("");
+    // The close promotes it (the final-reply rule's re-emission).
+    feed(timeline, [completed(5, { ...answer, phase: "final" }),
+      turnCompleted(6, [launch, { ...task("bash_1"), handed_off: true }, { ...answer, phase: "final" }])]);
+    const samples = [...before, ...timeline.drain().samples, ...timeline.finish("completed")];
+    expect(prose(samples)).toBe("");
+    expect(timeline.answer("")).toBe("Tests are running in the background.");
+    expect(steps(samples, "STEP_FINISHED")).toEqual(["Run tests 仍在后台运行"]);
+  });
+
+  it("finishes a task step opened before the checkpoint without opening it again", () => {
+    const prefix = [turnStarted(1), started(2, launch), started(3, task("bash_1")), completed(4, launch)];
+    const original = new FeishuCotTimeline("task");
+    feed(original, prefix);
+    const sent = original.drain();
+    const stepId = of(sent.samples, "STEP_STARTED")[0]!.stepId;
+    // Production replays from seq 0, so the resumed timeline sees the start again.
+    const resumed = new FeishuCotTimeline("task", sent.throughSeq);
+    feed(resumed, [...prefix, completed(5, task("bash_1", { status: "stopped", stop_reason: "user" }))]);
+    expect(resumed.drain().samples).toEqual([["STEP_FINISHED", { stepId, stepName: "后台命令已停止 Run tests · 由用户停止" }]]);
+  });
+
+  describe("doorbell turns", () => {
+    const doorbell = (patch: Partial<TraceItemOf<"user_message">> = {}) => item("user_message", "in:tsk_doorbell", {
+      origin: "input", text: "后台任务已结束：npm test（已完成，用时 45 秒）\n120 passed", message_ids: ["msg_doorbell"],
+      background_tasks: [{ task_id: "bash_1", name: "npm test", task_type: "shell", status: "completed" }], ...patch });
+
+    it("opens with the doorbell step, then the reply; the replayed end of its task adds nothing", () => {
+      const timeline = new FeishuCotTimeline("task");
+      feed(timeline, [turnStarted(1), completed(2, doorbell())]);
+      expect(timeline.drain().samples.map(([type, content]) => [type, content.stepName])).toEqual([
+        ["STEP_STARTED", "后台任务 npm test 已完成"], ["STEP_FINISHED", "后台任务 npm test 已完成"]]);
+      // The attached cycle replays the end captured while parked (§2.5), then answers.
+      feed(timeline, [started(3, task("bash_1", { tool_item_id: "toolu_origin" })), completed(4, task("bash_1", { tool_item_id: "toolu_origin" })),
+        completed(5, agentMessage("msg:answer", "All 120 tests passed.", "final"))]);
+      const rest = [...timeline.drain().samples, ...timeline.finish("completed")];
+      expect(rest.filter(([type]) => type.startsWith("STEP_"))).toEqual([]);
+      expect(timeline.answer("")).toBe("All 120 tests passed.");
+    });
+
+    it("names a failure, several doorbells merged into one turn, and a nameless task", () => {
+      const timeline = new FeishuCotTimeline("task");
+      feed(timeline, [completed(1, doorbell({ background_tasks: [
+        { task_id: "bash_1", name: "npm test", task_type: "shell", status: "failed" },
+        { task_id: "wf_1", name: "release-check", task_type: "workflow", status: "completed" },
+        { task_id: "mcp_1", name: " ", task_type: "monitor", status: "completed" },
+      ] }))]);
+      expect(steps(timeline.drain().samples, "STEP_FINISHED")).toEqual(["后台任务 npm test 失败", "后台任务 release-check 已完成", "后台任务已完成"]);
+    });
+
+    it("says nothing for an input without doorbells (a person's message, or an older trace)", () => {
+      const timeline = new FeishuCotTimeline("task");
+      feed(timeline, [completed(1, input("后台任务已结束：npm test（已完成）")), completed(2, doorbell({ id: "in:other", background_tasks: [] }))]);
+      expect(timeline.drain().samples).toEqual([]);
+    });
+
+    it("shows a doorbell that arrives as a steer after the earlier reply, as narration", () => {
+      const timeline = new FeishuCotTimeline("task");
+      feed(timeline, [completed(1, doorbell()), completed(2, agentMessage("msg:first", "npm test passed.")),
+        completed(3, doorbell({ id: "steer:st_2", origin: "steer",
+          background_tasks: [{ task_id: "bash_2", name: "npm run lint", task_type: "shell", status: "completed" }] }))]);
+      expect(order(timeline.drain().samples)).toEqual(["start:后台任务 npm test 已完成", "end:后台任务 npm test 已完成",
+        "text:npm test passed.", "start:后台任务 npm run lint 已完成", "end:后台任务 npm run lint 已完成"]);
+    });
+
+    it("adds no doorbell step for a task whose end this attempt already showed (a second doorbell steered in late)", () => {
+      const timeline = new FeishuCotTimeline("task");
+      const lint = task("bash_2", { name: "npm run lint", tool_item_id: "toolu_origin_2" });
+      // Both tasks ended while parked: the cycle replays the second end before its doorbell steers in.
+      feed(timeline, [completed(1, doorbell()), completed(2, lint),
+        completed(3, doorbell({ id: "steer:st_2", origin: "steer",
+          background_tasks: [{ task_id: "bash_2", name: "npm run lint", task_type: "shell", status: "completed" }] }))]);
+      expect(order(timeline.drain().samples)).toEqual(["start:后台任务 npm test 已完成", "end:后台任务 npm test 已完成",
+        "start:后台运行中：npm run lint", "end:后台命令已完成 npm run lint"]);
+    });
+
+    it("does not write an acknowledged doorbell step again after a restart", () => {
+      const resumed = new FeishuCotTimeline("task", 2);
+      feed(resumed, [turnStarted(1), completed(2, doorbell()), completed(3, agentMessage("msg:answer", "All passed.", "final"))]);
+      expect(resumed.drain().samples).toEqual([]);
+    });
   });
 });

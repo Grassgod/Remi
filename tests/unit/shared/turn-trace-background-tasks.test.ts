@@ -6,6 +6,8 @@ import type {
   TraceEvent,
   TraceItem,
   TraceSubagentItem,
+  TraceUserMessageDoorbell,
+  TraceUserMessageItem,
 } from "@multiremi/contracts/trace";
 import {
   TRACE_BACKGROUND_TASK_OUTPUT_TAIL_MAX_BYTES,
@@ -15,6 +17,7 @@ import {
   isTraceEventBody,
   isTraceItem,
   isTraceItemType,
+  isTraceUserMessageDoorbell,
   knownTraceItems,
 } from "@multiremi/contracts/trace";
 import { BACKGROUND_TASK_STOP_REASONS } from "@multiremi/contracts/unified-model";
@@ -148,6 +151,46 @@ describe("background_task contract (PR 6 §4.1)", () => {
     expect(known?.map((item) => item.id)).toEqual(["call_dev", "bg:t1"]);
     // A damaged item of this (now known) type rejects the list, as for every known type.
     expect(knownTraceItems([task("t1"), { ...task("t2"), can_stop: null }])).toBeNull();
+  });
+});
+
+describe("user_message doorbells (PR 6 §2.5)", () => {
+  const doorbell: TraceUserMessageDoorbell = { task_id: "bash_1", name: "npm test", task_type: "shell", status: "completed" };
+  const prompt = (facts: Record<string, unknown> = {}): TraceUserMessageItem => ({
+    id: "in:tsk_doorbell", parent_id: null, status: "completed", started_at: at(1), completed_at: at(1), type: "user_message",
+    origin: "input", text: "后台任务已结束：npm test（已完成，用时 45 秒）", message_ids: ["msg_doorbell"], attachments: [], steer: null,
+    ...facts,
+  } as TraceUserMessageItem);
+
+  it("accepts an input or steer item without the field (older traces) and with well-formed doorbells", () => {
+    expect(isTraceItem(prompt())).toBe(true);
+    expect(isTraceItem(prompt({ background_tasks: [] }))).toBe(true);
+    expect(isTraceItem(prompt({ background_tasks: [doorbell, { ...doorbell, task_id: "wf_2", task_type: "workflow", status: "failed" }] }))).toBe(true);
+    expect(isTraceItem(prompt({ origin: "steer", background_tasks: [doorbell],
+      steer: { steer_id: "st_1", kind: "now", injected: true, author_type: "platform", author_id: null } }))).toBe(true);
+    // Extra keys inside an entry are accepted, like every guard here.
+    expect(isTraceItem(prompt({ background_tasks: [{ ...doorbell, origin_attempt_id: "tsk_origin" }] }))).toBe(true);
+    expect(isTraceUserMessageDoorbell(doorbell)).toBe(true);
+  });
+
+  it("rejects a malformed doorbell list or entry", () => {
+    const bad: unknown[] = [
+      null,
+      doorbell,
+      "bash_1",
+      [null],
+      [{ ...doorbell, task_id: "" }],
+      [{ ...doorbell, task_id: undefined }],
+      [{ ...doorbell, name: null }],
+      [{ ...doorbell, task_type: 3 }],
+      // A stop never rings, so a doorbell is only ever a completion or a failure.
+      [{ ...doorbell, status: "stopped" }],
+      [{ ...doorbell, status: "running" }],
+      [doorbell, { ...doorbell, status: undefined }],
+    ];
+    for (const background_tasks of bad) {
+      expect(isTraceItem(prompt({ background_tasks })), JSON.stringify(background_tasks)).toBe(false);
+    }
   });
 });
 

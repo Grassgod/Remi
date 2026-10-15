@@ -134,12 +134,30 @@ export interface TraceSteerResult {
   error: string | null;
 }
 
+/**
+ * A background-task doorbell among a `user_message`'s messages (PR 6 §2.5):
+ * the message's `metadata.background_task`, without its origin ids.
+ */
+export interface TraceUserMessageDoorbell {
+  task_id: string;
+  name: string;
+  task_type: string;
+  /** Only an end that wakes the model rings: a stop never does. */
+  status: "completed" | "failed";
+}
+
 export interface TraceUserMessageItem extends TraceItemBase {
   type: "user_message";
   origin: "input" | "steer";
   text: string;
   message_ids: string[];
   attachments: Array<{ id: string; name: string | null }>;
+  /**
+   * PR 6 §2.5: the messages of this item that are background-task doorbells,
+   * in order, so a reader (Feishu) can say why the agent spoke on its own.
+   * Absent when there are none, and in traces written before it existed.
+   */
+  background_tasks?: TraceUserMessageDoorbell[];
   steer: {
     steer_id: string;
     kind: string;
@@ -695,6 +713,11 @@ export function isTraceBackgroundTaskStopRequest(value: unknown): value is Trace
     && isOneOf(value.outcome, TRACE_BACKGROUND_TASK_STOP_OUTCOMES);
 }
 
+export function isTraceUserMessageDoorbell(value: unknown): value is TraceUserMessageDoorbell {
+  return isRow(value) && isNonEmptyString(value.task_id) && typeof value.name === "string"
+    && typeof value.task_type === "string" && isOneOf(value.status, ["completed", "failed"]);
+}
+
 /** An optional field that, when present, is null or passes `check`. */
 function isOptionalNullable(value: unknown, check: (value: unknown) => boolean): boolean {
   return value === undefined || value === null || check(value);
@@ -718,6 +741,8 @@ export function isTraceItem(value: unknown): value is TraceItem {
         && (steer === null || (isRow(steer) && typeof steer.steer_id === "string" && typeof steer.kind === "string"
           && typeof steer.injected === "boolean" && isNullableString(steer.author_type) && isNullableString(steer.author_id)
           && (steer.result === undefined || isTraceSteerResult(steer.result))))
+        && (v.background_tasks === undefined
+          || (Array.isArray(v.background_tasks) && v.background_tasks.every(isTraceUserMessageDoorbell)))
         && isOptionalTrue(v.truncated);
     }
     case "agent_message":

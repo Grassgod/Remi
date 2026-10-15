@@ -209,6 +209,46 @@ is unchanged:
   A `compaction` item is a step from "正在压缩上下文" to its outcome
   (one reported only once finished still opens it), and a `notice` item a step
   named by its title.
+- A `background_task` item (PR 6: a backgrounded shell, a workflow, an MCP
+  task) is a step, and the call that started it (`tool_item_id`) is its launch
+  row. The row is titled in the shared launch copy, whatever the task's state
+  when the row is written, because the step tells how the task ends: 「已启动后台命令
+  …」 for a shell, 「已启动后台工作流 …」 for a workflow, 「已启动后台任务 …」
+  otherwise. It is one row even for a compound command, keeps the command in its
+  args, and never gets a status note (a call the turn's close stops still reads
+  as the launch). The label is the call's (Claude's Bash description, else the
+  command), so the row and the step name the same thing; a workflow or other task
+  is named by the task. The step opens as 「后台运行中：…」 and ends in the shared
+  copy of the task's phase: 「后台命令已完成 …」, 「后台命令失败 …」, or 「后台命令已停止
+  …」 with the reason after it (「· 由用户停止」, 「· 随本轮结束」, 「· 本轮已中断」,
+  「· 进程已中断」; a model's own `TaskStop` has none). A Feishu group has many
+  readers, so a person's stop does not read 「已由你停止」 as on the web. A task the
+  attempt handed off (`handed_off: true`, the park path) ends as 「… 仍在后台运行」,
+  and so does a step still open when the presentation finishes, since the task
+  was last seen running.
+  Claude announces a backgrounded Bash before the Bash result, so a task seen
+  while its call still runs waits: its step opens right after the call's row, or
+  at the next event of any other item (a Codex background terminal can keep its
+  call open), so the CoT reads row, then step. A task that already ended by then
+  opens and closes at once. A call whose row was written before its task was
+  announced (a late Codex announcement, a Claude spawn held until the prompt
+  result) keeps its own copy, such as 「已运行 npm run dev」, because a native title
+  cannot be rewritten; its task's step still follows. A level-closed end the
+  bridge later corrects keeps its first end, as a native step is not reopened.
+  A task is not a tool: it does not end the answer search (rule 2) and is not in
+  the footer's tool count. A task started inside a subagent (`parent_id`) stays
+  in the workbench, though, like any child, it opens its subagent's step. Paused,
+  progress, summary and output tail stay in the workbench as well.
+- A doorbell turn opens with one step per doorbell its input names
+  (`user_message.background_tasks`, PR 6 §2.5): 「后台任务 npm test 已完成」 or
+  「后台任务 npm test 失败」, before anything else of the turn, so the reader sees why
+  the bot spoke. Merged doorbells get one step each, and a doorbell delivered as a
+  steer gets its step where it arrives. The attached cycle replays the parked
+  task's end into the attempt; one step per task either way: that
+  `background_task` item adds none after its doorbell, and a doorbell steered in
+  after the replayed end adds none.
+  The doorbell's own text is not shown, as no user message is. An older trace
+  without the field shows no doorbell step and is otherwise unchanged.
 - Questions and approvals keep the existing cards and callbacks. The same native
   process gets a waiting step, then a matching finish step when the original
   request is answered, expires or is cancelled. Neither process text nor running
@@ -227,6 +267,34 @@ Official references:
 and [SDK model](https://github.com/larksuite/oapi-sdk-python/blob/v2_main/lark_oapi/api/im/v1/model/message_cot.py),
 the request shape was confirmed with bot-authenticated POST/PUT requests. Native CoT does not
 replace interactive question/approval forms; those use `card.action.trigger`.
+
+## Background tasks and self-started turns
+
+A background task that outlives its turn keeps running on the computer (PR 6,
+keep-alive on demand); its later state is the session's, shown in the web's
+后台任务 view. Feishu shows only turns:
+
+- **Self-started turns.** When a Claude task ends while its lane is parked, the
+  daemon rings the doorbell: the server writes a platform `status` message to the
+  agent, and the lane machine creates, merges or steers a turn. A created turn
+  of a Feishu-bound Chat whose origin attempt has a `cot` delivery gets a
+  proactive `cot` row of its own, copied from the origin's binding, chat, thread
+  and reply target (the server's part). Its process, answer card and any
+  interaction card therefore land in the thread of the turn that started the
+  task. The presenter needs no other input: the turn renders like any other, and
+  its first step is the doorbell's. It has no inbound message, so it has no
+  receipt and no `THINKING` reaction. A merged or steered doorbell joins a turn
+  that already has its delivery.
+- **The doorbell message itself is not mirrored.** No outbound delivery is ever
+  written for a platform `status` message: every
+  `multiremi_feishu_bot_outbound_deliveries` row is an inbound turn, an Issue
+  seed, a human-request or decision lane, a round push, an agent's attachment,
+  or a split lane of one of those.
+- **Ends without a reply post nothing**: a stop, the keep-alive cap, a daemon
+  restart, an eviction, a Codex end. Feishu has no stop control; stopping is the
+  web's.
+- A Chat started from Feishu is a Chat lane like any other: it parks, its process
+  is reused, and it rings the doorbell.
 
 ## Recovery and rollout
 
@@ -372,8 +440,11 @@ Unit tests cover native POST/PUT payloads and topic origin, direct answers,
 text/final isolation and the final-reply rule across steer rounds, rows built
 from item fixtures (actions, file changes, statuses), plan/subagent/compaction
 steps (native child sessions, nesting, resumed generations, agent-control rows
-and the hidden `wait`, the late background answer), context and timing from
-turn events, restart checkpoints, result UUIDs,
+and the hidden `wait`, the late background answer), background tasks (launch
+rows, the running, finished, failed, stopped-with-reason and handed-off steps,
+the step order in both bridges' frame orders, nesting, a resumed checkpoint),
+doorbell steps and a proactive doorbell delivery in its origin thread, context
+and timing from turn events, restart checkpoints, result UUIDs,
 approval callbacks keyed by `message_id`, the child-session request prefix,
 multiple questions/custom answers,
 identity checks, web completion, expiration, lease ownership, the final-only
