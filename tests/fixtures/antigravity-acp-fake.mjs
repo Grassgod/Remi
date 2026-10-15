@@ -9,7 +9,10 @@
 //   `usage_update` whose `used` double-counts the cache, ask permission for a
 //   shell command, and finish with `end_turn`;
 // - a prompt containing ABORT_STREAM cuts its model stream after the first
-//   chunk; one containing SUBAGENT_LAST also calls another model last.
+//   chunk; one containing SUBAGENT_LAST also calls another model last;
+// - BACKGROUND_CMD backgrounds a command, says so and never ends the turn,
+//   ignoring session/cancel (server 1.4.0 while it waits on the command);
+//   FOREGROUND_CMD runs a 1.5 s foreground command before answering.
 //
 // Everything it sees is appended as JSON lines to $FAKE_AGY_CAPTURE.
 import { appendFileSync } from "node:fs";
@@ -67,9 +70,37 @@ async function generate(model, text, cutAfterFirstChunk = false) {
   return body;
 }
 
+async function shell(sid, toolCallId, command, extra = {}) {
+  const call = { toolCallId, title: command, kind: "execute", status: "pending", rawInput: { CommandLine: command, Cwd: process.cwd(), ...extra } };
+  update(sid, { sessionUpdate: "tool_call", ...call });
+  const answer = await ask("session/request_permission", { sessionId: sid, toolCall: call, options: [
+    { optionId: "allow_always", name: "Allow Always", kind: "allow_always" },
+    { optionId: "allow", name: "Allow", kind: "allow_once" },
+    { optionId: "deny", name: "Deny", kind: "reject_once" },
+  ] });
+  record({ kind: "permission", outcome: answer?.outcome ?? null });
+  update(sid, { sessionUpdate: "tool_call_update", toolCallId, status: "in_progress", rawInput: { command_line: command, working_dir: process.cwd() } });
+}
+
 async function prompt(id, params) {
   const sid = params.sessionId;
   const text = params.prompt.map((block) => block.text ?? "").join("");
+  if (text.includes("BACKGROUND_CMD")) {
+    await shell(sid, "call-bg-1", "npm run dev", { WaitMsBeforeAsync: 0 });
+    await generate(current, text);
+    update(sid, { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Started it in the background; I will report when it finishes." } });
+    record({ kind: "background_wait", id });
+    return; // never answered
+  }
+  if (text.includes("FOREGROUND_CMD")) {
+    await shell(sid, "call-fg-1", "make build");
+    await new Promise((resolve) => setTimeout(resolve, 1_500));
+    update(sid, { sessionUpdate: "tool_call_update", toolCallId: "call-fg-1", status: "completed", rawOutput: { exitCode: 0, combinedOutput: "ok\n" } });
+    await generate(current, text);
+    update(sid, { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Built." } });
+    send({ id, result: { stopReason: "end_turn" } });
+    return;
+  }
   if (text.includes("ABORT_STREAM")) {
     await generate(current, text, true);
     update(sid, { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Stopped early." } });

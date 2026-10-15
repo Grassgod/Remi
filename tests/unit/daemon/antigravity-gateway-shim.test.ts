@@ -33,9 +33,10 @@ function shimFor(base: string, options: AntigravityGatewayShimOptions = {}) {
   return { shim, run };
 }
 
+/** Observations and breaker events; `request_started` is asserted on its own. */
 function record(channel: GatewayShimChannel) {
   const events: GatewayShimEvent[] = [];
-  channel.subscribe((event) => events.push(event));
+  channel.subscribe((event) => { if (event.type !== "request_started") events.push(event); });
   return events;
 }
 
@@ -108,6 +109,19 @@ describe("Antigravity gateway shim", () => {
     expect(events).toEqual([{ type: "request", obs: { seq: 1, requestedModel: "gemini-3.7-flash", status: 200, aborted: false,
       responseId: "resp-1", modelVersion: "gemini-3.7-flash-001",
       usageMetadata: { promptTokenCount: 120, cachedContentTokenCount: 100, candidatesTokenCount: 7, thoughtsTokenCount: 3, totalTokenCount: 130 } } }]);
+  });
+
+  it("announces each model call as it starts, before its observation", async () => {
+    const gateway = upstream(() => Response.json({ responseId: "r", usageMetadata: USAGE_1 }));
+    const { run } = shimFor(gateway.base);
+    const channel = run.open("starts");
+    const types: string[] = [];
+    channel.subscribe((event) => types.push(event.type === "request_started" ? `started:${event.requestedModel}` : event.type));
+    await (await fetch(`${channel.baseUrl}/v1beta/models`)).text();
+    await (await fetch(`${channel.baseUrl}/v1beta/models/m:countTokens`, { method: "POST", body: "{}" })).text();
+    await (await fetch(`${channel.baseUrl}/v1beta/models/m:generateContent`, { method: "POST", body: "{}" })).text();
+    await channel.settled(1000);
+    expect(types).toEqual(["started:m", "request"]);
   });
 
   it("observes non-stream JSON responses and never meters listings or countTokens", async () => {

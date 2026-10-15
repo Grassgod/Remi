@@ -20,6 +20,7 @@ import {
   ClaudeAdapter,
 } from "@acp/index.js";
 import { CodexAdapter } from "@acp/index.js";
+import { ANTIGRAVITY_FOREGROUND_NOTE } from "@acp/adapters/antigravity.js";
 import { resolveConfigOptionChange } from "@acp/provider.js";
 import { readExecutionModel } from "@shared/agent-execution.js";
 import type { AgentAdapter, SessionConfigOption } from "@shared/contracts/acp-protocol.js";
@@ -705,6 +706,30 @@ async function prompt(id, params) {
   } else if (text === "hang") {
     pendingPrompt = id;
     return;
+  } else if (text === "background") {
+    // The model backgrounds a command and moves on; the turn then waits on it forever.
+    update(sid, { sessionUpdate: "tool_call", toolCallId: "t-bg", title: "sleep 600", kind: "execute", status: "pending",
+      rawInput: { CommandLine: "sleep 600", WaitMsBeforeAsync: 0 } });
+    update(sid, { sessionUpdate: "tool_call_update", toolCallId: "t-bg", status: "in_progress" });
+    chunk(sid, "Started it in the background.");
+    pendingPrompt = id;
+    return;
+  } else if (text === "idle") {
+    // A resumed turn that answers, then never ends.
+    chunk(sid, "OK");
+    pendingPrompt = id;
+    return;
+  } else if (text === "foreground") {
+    update(sid, { sessionUpdate: "tool_call", toolCallId: "t-fg", title: "make build", kind: "execute", status: "pending", rawInput: { CommandLine: "make build" } });
+    update(sid, { sessionUpdate: "tool_call_update", toolCallId: "t-fg", status: "in_progress" });
+    await new Promise((resolve) => setTimeout(resolve, 900));
+    update(sid, { sessionUpdate: "tool_call_update", toolCallId: "t-fg", status: "completed", rawOutput: { exitCode: 0 } });
+    chunk(sid, "built");
+  } else if (text === "slow") {
+    await new Promise((resolve) => setTimeout(resolve, 900));
+    chunk(sid, "thought");
+  } else if (text === "cancel-words") {
+    chunk(sid, "The request was cancelled by the client.");
   }
   send({ id, result: { stopReason: "end_turn" } });
 }
@@ -724,7 +749,12 @@ createInterface({ input: process.stdin }).on("line", (line) => {
     case "session/set_config_option": current = message.params.value; return ok({ configOptions: configOptions() });
     case "session/prompt": return void prompt(message.id, message.params);
     case "session/cancel":
-      if (pendingPrompt !== null) { send({ id: pendingPrompt, result: { stopReason: "cancelled" } }); pendingPrompt = null; }
+      if (pendingPrompt !== null) {
+        // Server 1.4.0 acknowledges a cancel with this text before the cancelled reply.
+        chunk(message.params.sessionId, "The request was cancelled by the client.");
+        send({ id: pendingPrompt, result: { stopReason: "cancelled" } });
+        pendingPrompt = null;
+      }
       return;
     default: return send({ id: message.id, error: { code: -32601, message: "Method not found: " + message.method } });
   }
@@ -778,7 +808,7 @@ describe("AcpProvider with the Antigravity access config", () => {
       const [created] = agent.requests("session/new");
       // The session cwd comes first, so shell commands run there (R5).
       expect(created.params._meta).toEqual({ antigravity: { systemPrompt: { append: `The working directory of this session is ${agent.dir}. `
-        + "Run every shell command in that directory (set it as the command's working directory) unless the task names another directory.\n\nYou are Remi." } } });
+        + `Run every shell command in that directory (set it as the command's working directory) unless the task names another directory.\n${ANTIGRAVITY_FOREGROUND_NOTE}\n\nYou are Remi.` } } });
       expect(agent.requests("session/set_mode").map((r) => r.params.modeId)).toEqual(["yolo"]);
       expect(agent.requests("session/set_config_option").map((r) => r.params)).toEqual([
         { sessionId: "agy-session-1", configId: "model", value: "gemini-2.5-pro" }]);
@@ -955,6 +985,91 @@ describe("AcpProvider with the Antigravity access config", () => {
     } finally {
       await provider.close();
     }
+  });
+
+  it("drops the server's cancel acknowledgement only after Remi's own cancel", async () => {
+    const agent = fakeAntigravityAgent();
+    const { provider } = antigravityProvider(agent);
+    try {
+      const abort = new AbortController();
+      const cancelled: ProviderEvent[] = [];
+      await expect((async () => {
+        for await (const event of provider.sendStream("hang", { chatId: "c1", signal: abort.signal })) {
+          cancelled.push(event);
+          if (cancelled.length === 1) setTimeout(() => abort.abort(), 20);
+        }
+      })()).rejects.toThrow("Cancelled");
+      expect(agent.requests("session/cancel")).toHaveLength(1);
+      expect(JSON.stringify(cancelled)).not.toContain("The request was cancelled by the client.");
+      // The same words outside a cancel are the model's and stay.
+      await collect(provider.sendStream("cancel-words", { chatId: "c1" }));
+      expect(provider.getLastResponse()?.text).toBe("The request was cancelled by the client.");
+    } finally {
+      await provider.close();
+    }
+  });
+
+  describe("stall watchdog", () => {
+    const STALL_MS = 200;
+
+    it("fails a turn left open by a background command as a timeout and cancels it", async () => {
+      const agent = fakeAntigravityAgent();
+      const { provider, shim } = antigravityProvider(agent, { turnStallTimeoutMs: STALL_MS });
+      try {
+        const started = performance.now();
+        // The model spoke after the tool went async: it moved on, so the open tool no longer explains the silence.
+        const error = await collect(provider.sendStream("background", { chatId: "c1" }), () => {
+          shim.channels[0]!.emit({ type: "request_started", requestedModel: "gemini-2.5-pro" });
+          shim.channels[0]!.emit(request(1));
+        }).catch((e) => e);
+        expect(error).toBeInstanceOf(AcpSessionFailureError);
+        expect((error as AcpSessionFailureError).failure).toMatchObject({ category: "timeout", errorKind: "turn_stalled",
+          title: "The antigravity turn timed out after 200 ms without progress" });
+        expect((error as AcpSessionFailureError).hint).toMatchObject({ category: "timeout", errorKind: "turn_stalled" });
+        expect(agent.requests("session/cancel")).toHaveLength(1);
+        expect(performance.now() - started).toBeLessThan(5_000);
+      } finally {
+        await provider.close();
+      }
+    });
+
+    it("fails a turn that answered but never ended", async () => {
+      const agent = fakeAntigravityAgent();
+      const { provider } = antigravityProvider(agent, { turnStallTimeoutMs: STALL_MS });
+      try {
+        const error = await collect(provider.sendStream("idle", { chatId: "c1" })).catch((e) => e);
+        expect((error as AcpSessionFailureError).failure).toMatchObject({ errorKind: "turn_stalled" });
+        expect(agent.requests("session/cancel")).toHaveLength(1);
+      } finally {
+        await provider.close();
+      }
+    });
+
+    it("never trips on a long foreground command, a model call in flight or a pending permission answer", async () => {
+      const agent = fakeAntigravityAgent();
+      const { provider, shim } = antigravityProvider(agent, { turnStallTimeoutMs: STALL_MS });
+      try {
+        // 900 ms foreground command, 4.5× the bound: the model is waiting on the tool.
+        await collect(provider.sendStream("foreground", { chatId: "c1" }));
+        expect(provider.getLastResponse()?.text).toBe("built");
+        // A model call in flight for 900 ms.
+        await collect(provider.sendStream("slow", { chatId: "c1" }), () => {
+          shim.channels[0]!.emit({ type: "request_started", requestedModel: "gemini-2.5-pro" });
+        });
+        expect(provider.getLastResponse()?.text).toBe("thought");
+        shim.channels[0]!.emit(request(1));
+        // A person takes 800 ms to answer a permission prompt.
+        provider.setPermissionHandler(async (params) => {
+          await Bun.sleep(800);
+          return { outcome: "selected", optionId: params.options.find((o) => o.kind === "allow_once")!.optionId };
+        });
+        await collect(provider.sendStream("approval", { chatId: "c1" }));
+        expect(provider.getLastResponse()?.text).toBe("approval:allow");
+        expect(agent.requests("session/cancel")).toHaveLength(0);
+      } finally {
+        await provider.close();
+      }
+    });
   });
 
   it("selects models strictly, rejects effort, and requires a model", async () => {

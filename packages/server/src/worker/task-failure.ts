@@ -202,6 +202,8 @@ function classifyFailureHint(hint?: TaskFailureHint): TaskFailureReasonValue | n
     case "overloaded": return TaskFailureReason.AgentProviderCapacityOrRateLimit;
     case "server_error": return TaskFailureReason.AgentProviderServerError;
     case "invalid_request": return TaskFailureReason.ApiInvalidRequest;
+    // The provider's stall watchdog stopped a turn that made no progress.
+    case "turn_stalled": return TaskFailureReason.AgentTimeout;
   }
   if (hint?.codexErrorInfo != null) {
     const info = hint.codexErrorInfo;

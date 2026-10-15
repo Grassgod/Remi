@@ -30,6 +30,12 @@ export interface GatewayShimRequestObservation {
 
 export type GatewayShimEvent =
   /**
+   * A `:generateContent` / `:streamGenerateContent` call left for the gateway;
+   * its `request` observation follows when it ends. Lets the provider tell a
+   * thinking model from a stalled turn.
+   */
+  | { type: "request_started"; requestedModel: string | null }
+  /**
    * Emitted once per `:generateContent` / `:streamGenerateContent` call.
    * Model listings and `countTokens` consume nothing and are not observed.
    */

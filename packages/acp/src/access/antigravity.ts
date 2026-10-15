@@ -142,4 +142,7 @@ export const ANTIGRAVITY_ACCESS: AcpAccessConfig = {
   denyWorkspaceTrust: true,
   serviceMessages: true,
   requiresHome: true,
+  // A background shell command keeps a server 1.4.0 turn open, and the server
+  // ignores session/cancel meanwhile; a resumed turn can then never end.
+  turnStallTimeoutMs: 120_000,
 };

@@ -45,6 +45,14 @@ function workingDirectoryNote(cwd: unknown): string | null {
     + "(set it as the command's working directory) unless the task names another directory.";
 }
 
+/**
+ * Server 1.4.0 keeps a turn open while a background command runs and ignores
+ * `session/cancel` meanwhile (live probe); the provider's stall watchdog is
+ * the backstop when the model backgrounds one anyway.
+ */
+export const ANTIGRAVITY_FOREGROUND_NOTE = "Run shell commands in the foreground and wait for them to finish; never leave a command "
+  + "running in the background. If a command could run for a long time, say so instead of starting it in the background.";
+
 export class AntigravityAdapter implements AgentAdapter {
   readonly agentType = "antigravity";
   /** The server returns no prompt usage; shim observations are per request. */
@@ -93,7 +101,7 @@ export class AntigravityAdapter implements AgentAdapter {
   /**
    * `_meta.antigravity.systemPrompt.append` (advertised in `initialize`
    * `_meta.antigravity.systemPrompt.append`; read on new, load and resume):
-   * the session's working directory, Remi's system prompt, then the
+   * the session notes (working directory, foreground commands), Remi's system prompt, then the
    * runtime-context instructions the daemon writes to `$GEMINI_HOME/AGENTS.md`.
    * Server 1.4.0 reads neither that file nor the cwd's AGENTS.md on its own
    * (live probe), so nothing is duplicated.
@@ -104,8 +112,9 @@ export class AntigravityAdapter implements AgentAdapter {
     if (options.allowedTools?.length) {
       console.warn(`[acp:antigravity] ignoring allowedTools (${options.allowedTools.join(", ")}): Remi tool names do not apply to Antigravity`);
     }
-    const append = [workingDirectoryNote(options.cwd), options.systemPrompt?.trim(), homeInstructions(options.home)].filter(Boolean).join("\n\n");
-    return append ? { antigravity: { systemPrompt: { append } } } : undefined;
+    const notes = [workingDirectoryNote(options.cwd), ANTIGRAVITY_FOREGROUND_NOTE].filter(Boolean).join("\n");
+    const append = [notes, options.systemPrompt?.trim(), homeInstructions(options.home)].filter(Boolean).join("\n\n");
+    return { antigravity: { systemPrompt: { append } } };
   }
 
   defaultExecutable(): string {

@@ -34,6 +34,11 @@ describe("Multiremi task failure classification", () => {
     expect(classifyTaskFailure("the agent gave up for reasons unknown")).toBe(TaskFailureReason.AgentUnknown);
   });
 
+  it("classifies a turn the stall watchdog stopped as an agent timeout", () => {
+    expect(classifyDaemonTaskFailure("antigravity", "The antigravity turn timed out after 120 s without progress: No agent update",
+      { category: "timeout", errorKind: "turn_stalled" })).toBe(TaskFailureReason.AgentTimeout);
+  });
+
   it("classifies an unconfigured Antigravity gateway or model as missing configuration", () => {
     for (const error of [
       "[antigravity_gateway_unconfigured] Antigravity runs only through the workspace Model gateway: configure Settings > Model gateway > Antigravity with an API key",

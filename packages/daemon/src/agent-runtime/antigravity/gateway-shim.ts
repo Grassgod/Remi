@@ -361,7 +361,10 @@ export class AntigravityGatewayShim {
   ): Promise<Response> {
     const controller = new AbortController();
     channel.requests.add(controller);
-    if (metered) channel.inflight++;
+    if (metered) {
+      channel.inflight++;
+      channel.emit({ type: "request_started", requestedModel: route.model });
+    }
     let status = 0;
     let scanner: GeminiResponseScanner | null = null;
     let finished = false;

@@ -52,4 +52,10 @@ export interface AcpAccessConfig {
   readonly serviceMessages: boolean;
   /** The provider home is required: the environment builder derives the agent home from it. */
   readonly requiresHome: boolean;
+  /**
+   * Fail a turn that shows no agent update, no model call in flight, no
+   * blocking tool call and no pending permission or question for this long;
+   * null disables the watchdog. Needs the gateway shim (model calls in flight).
+   */
+  readonly turnStallTimeoutMs: number | null;
 }

@@ -96,6 +96,11 @@ export interface AcpProviderOptions {
   gatewayShim?: GatewayShimHost;
   /** A shim base URL without usage observations, for subprocess model probes that cannot hold a host. */
   gatewayUrl?: string;
+  /**
+   * Stall watchdog bound for access configs that declare one (Antigravity:
+   * 120 s). Tests shorten it; production leaves it unset.
+   */
+  turnStallTimeoutMs?: number;
 }
 
 /** ACP-local SendOptions extension kept out of the provider-neutral contract. */
@@ -167,6 +172,8 @@ export class UnsupportedAcpEffortError extends Error {
 const IDLE_TIMEOUT_MS = 10 * 60 * 1000;
 const CLEANUP_INTERVAL_MS = 60 * 1000;
 const PROMPT_CANCEL_SETTLE_MS = 5_000;
+/** The server's own text after a `session/cancel` (server 1.4.0), not the model's. */
+const CANCELLED_BY_CLIENT_TEXT = "The request was cancelled by the client.";
 /** How long a prompt waits for its last gateway-shim observations before settling usage. */
 const GATEWAY_SETTLE_MS = 2_000;
 const DEFAULT_PERMISSION_MODE_BY_AGENT: Record<string, string | null> = {
@@ -273,6 +280,8 @@ interface GatewayState {
   fatal: Extract<GatewayShimEvent, { type: "fatal" }> | null;
   /** The agent's own context window report; its `used` is never trusted. */
   nativeContextSize: number | null;
+  /** Model calls the shim reported started but not yet ended. */
+  inflight: number;
 }
 
 /** Usage updates the provider synthesized from shim observations (unforgeable by the agent). */
@@ -280,9 +289,11 @@ const SHIM_USAGE_UPDATES = new WeakSet<object>();
 
 function openGateway(host: GatewayShimHost, label: string): GatewayState {
   const channel = host.open(label);
-  const state: GatewayState = { channel, unsubscribe: () => {}, listener: null, fatal: null, nativeContextSize: null };
+  const state: GatewayState = { channel, unsubscribe: () => {}, listener: null, fatal: null, nativeContextSize: null, inflight: 0 };
   state.unsubscribe = channel.subscribe((event) => {
     if (event.type === "fatal") state.fatal = event;
+    if (event.type === "request_started") state.inflight++;
+    if (event.type === "request") state.inflight = Math.max(0, state.inflight - 1);
     state.listener?.(event);
   });
   return state;
@@ -731,9 +742,31 @@ export class AcpProvider implements Provider {
     /** Last HTTP status the gateway shim saw in this prompt (service-message category). */
     let gatewayStatus: number | null = null;
     let syntheticSeq = 0;
+    /** This round sent `session/cancel` (a stop, a steer, an opened breaker or the stall watchdog). */
+    let cancelSent = false;
+    /** Stall watchdog state (access configs with `turnStallTimeoutMs`). */
+    let lastActivity = Date.now();
+    let stalled = false;
+    /** Order of agent frames, and of the last one that was model output (text, thought or a new tool call). */
+    let frameSeq = 0;
+    let lastOutputSeq = 0;
+    /** Tool calls still pending / in progress, with the frame order of their last update. */
+    const openTools = new Map<string, number>();
     const onUpdate = (notification: SessionNotification) => {
       if (notification.sessionId !== entry.acpSessionId) return;
       let update = notification.update;
+      lastActivity = Date.now();
+      frameSeq++;
+      if (update.sessionUpdate === "agent_message_chunk" || update.sessionUpdate === "agent_thought_chunk") lastOutputSeq = frameSeq;
+      if (update.sessionUpdate === "tool_call" || update.sessionUpdate === "tool_call_update") {
+        const id = (update as { toolCallId?: unknown }).toolCallId;
+        const status = (update as { status?: unknown }).status;
+        if (typeof id === "string") {
+          if (update.sessionUpdate === "tool_call" && !openTools.has(id)) lastOutputSeq = frameSeq;
+          if (status === "completed" || status === "failed") openTools.delete(id);
+          else if (status === "pending" || status === "in_progress" || update.sessionUpdate === "tool_call" || openTools.has(id)) openTools.set(id, frameSeq);
+        }
+      }
       if (update.sessionUpdate === "usage_update" && entry.gateway && !SHIM_USAGE_UPDATES.has(update)) {
         // Native `used` is total + cached (double-counts the cache): keep only the window size.
         const size = nonNegativeFinite(update.size);
@@ -742,6 +775,8 @@ export class AcpProvider implements Provider {
       }
       if (update.sessionUpdate === "agent_message_chunk" && this._access?.serviceMessages) {
         const text = extractChunkText((update as Record<string, any>).content);
+        // The server's acknowledgement of our own cancel, not the model's words.
+        if (cancelSent && text.trim() === CANCELLED_BY_CLIENT_TEXT) return;
         const service = serviceMessage(text);
         if (service?.type === "failure") {
           const failure = serviceMessageFailure(service, `${this._adapter.agentType}:service:${++syntheticSeq}`, gatewayStatus);
@@ -848,9 +883,12 @@ export class AcpProvider implements Provider {
             _meta: { jetbrains: { air: { sessionFailure: gatewayFatalFailure(event, `${this._adapter.agentType}:gateway:${++syntheticSeq}`) } } },
           } as SessionUpdate });
           // The harness retries a dead gateway forever; end the turn.
+          cancelSent = true;
           entry.client.cancel(entry.acpSessionId).catch(() => {});
           return;
         }
+        lastActivity = Date.now();
+        if (event.type === "request_started") return;
         const obs = event.obs;
         if (obs.status) gatewayStatus = obs.status;
         const usage = geminiObservationUsage(obs, entry.acpSessionId);
@@ -899,6 +937,56 @@ export class AcpProvider implements Provider {
     // Sent after the prompt request, so the agent sees the cancel for it.
     if (gateway?.fatal) gateway.listener?.(gateway.fatal);
 
+    // cancel is only a notification. Keep this stream and its update handler
+    // alive until the original prompt settles; the daemon may then send its
+    // steering prompt on the same session without overlap.
+    const cancelAndSettle = async () => {
+      cancelSent = true;
+      await entry.client.cancel(entry.acpSessionId).catch(() => {});
+      let timer: ReturnType<typeof setTimeout> | null = null;
+      try {
+        const settled = await Promise.race([
+          promptCompletion.then(() => true),
+          new Promise<false>(resolve => { timer = setTimeout(() => resolve(false), PROMPT_CANCEL_SETTLE_MS); }),
+        ]);
+        if (!settled) {
+          // An unresponsive bridge cannot retain an in-flight prompt or
+          // block task shutdown. Stop it before allowing session reuse.
+          await entry.client.stop();
+          await promptCompletion;
+          this._lastResponse ??= buildAgentResponse(entry, { stopReason: "cancelled" }, this._adapter.promptUsageSettleScope, turnFailure(),
+            this._adapter.agentType, requestedModel(), requestedModelSource());
+        }
+      } finally { if (timer) clearTimeout(timer); }
+    };
+
+    // Stall watchdog: no agent update, no model call in flight, no tool call
+    // the model is waiting on and no pending permission or question for the
+    // whole bound. An open tool call counts as blocking until later model
+    // output (text, a thought, another tool call) arrives on the same ordered
+    // ACP stream: a model can only continue once the tool returned, so after
+    // that the tool runs in the background and no longer explains the silence.
+    const stallMs = this._access?.turnStallTimeoutMs && gateway
+      ? Math.max(1, this._options.turnStallTimeoutMs ?? this._access.turnStallTimeoutMs) : null;
+    const watchdog = stallMs === null ? null : setInterval(() => {
+      if (promptDone || stalled) return;
+      const now = Date.now();
+      const blockingTool = [...openTools.values()].some((updatedSeq) => updatedSeq >= lastOutputSeq);
+      if (gateway!.inflight > 0 || blockingTool || (this._pendingHumanRequests.get(entry.acpSessionId) ?? 0) > 0) {
+        lastActivity = now;
+        return;
+      }
+      if (now - lastActivity < stallMs) return;
+      stalled = true;
+      // An earlier typed failure (e.g. an opened breaker whose cancel the server ignored) stays the turn's reason.
+      if (failureState.failure?.severity !== "error") onUpdate({ sessionId: entry.acpSessionId, update: {
+        sessionUpdate: "session_info_update",
+        _meta: { jetbrains: { air: { sessionFailure: turnStalledFailure(this._adapter.agentType, stallMs, `${this._adapter.agentType}:stall:${++syntheticSeq}`) } } },
+      } as SessionUpdate });
+      resolveWaiting?.();
+    }, Math.max(5, Math.min(5_000, Math.floor(stallMs / 4))));
+    (watchdog as { unref?: () => void } | null)?.unref?.();
+
     try {
       while (true) {
         while (eventQueue.length > 0) {
@@ -907,26 +995,15 @@ export class AcpProvider implements Provider {
 
         if (promptDone) break;
 
+        if (stalled) {
+          // Stop the turn the way a cancel does; the typed failure above fails it.
+          await cancelAndSettle();
+          while (eventQueue.length) yield eventQueue.shift()!;
+          break;
+        }
+
         if (options?.signal?.aborted) {
-          // cancel is only a notification. Keep this stream and its update
-          // handler alive until the original prompt settles; the daemon may
-          // then send its steering prompt on the same session without overlap.
-          await entry.client.cancel(entry.acpSessionId).catch(() => {});
-          let timer: ReturnType<typeof setTimeout> | null = null;
-          try {
-            const settled = await Promise.race([
-              promptCompletion.then(() => true),
-              new Promise<false>(resolve => { timer = setTimeout(() => resolve(false), PROMPT_CANCEL_SETTLE_MS); }),
-            ]);
-            if (!settled) {
-              // An unresponsive bridge cannot retain an in-flight prompt or
-              // block task shutdown. Stop it before allowing session reuse.
-              await entry.client.stop();
-              await promptCompletion;
-              this._lastResponse ??= buildAgentResponse(entry, { stopReason: "cancelled" }, this._adapter.promptUsageSettleScope, turnFailure(),
-                this._adapter.agentType, requestedModel(), requestedModelSource());
-            }
-          } finally { if (timer) clearTimeout(timer); }
+          await cancelAndSettle();
           // ACP permits final tool/content updates before the cancelled reply.
           while (eventQueue.length) yield eventQueue.shift()!;
           throw new Error("Cancelled");
@@ -939,6 +1016,7 @@ export class AcpProvider implements Provider {
         resolveWaiting = null;
       }
     } finally {
+      if (watchdog) clearInterval(watchdog);
       // Streaming errors, process death, generator return and task aborts all
       // retain actual requests observed before the prompt stopped.
       if (!this._lastResponse) this._lastResponse = buildAgentResponse(entry,
@@ -1165,8 +1243,8 @@ export class AcpProvider implements Provider {
       privateTmpDirectory: this._options.privateTmpDirectory,
       privateTmpPlatform: this._options.privateTmpPlatform,
       env,
-      onPermissionRequest: (params) => this._handlePermission(params),
-      onElicitationRequest: (params) => this._handleElicitation(params),
+      onPermissionRequest: (params) => this._awaitingHuman(params.sessionId, () => this._handlePermission(params)),
+      onElicitationRequest: (params) => this._awaitingHuman(params.sessionId, () => this._handleElicitation(params)),
       onSessionUpdate: () => {},
       onProcessExit: (reason) => this._handleClientDeath(client, reason),
       log: (...args) => {
@@ -1460,6 +1538,20 @@ export class AcpProvider implements Provider {
     return chosen ? { outcome: "selected", optionId: chosen.optionId } : { outcome: "cancelled" };
   }
 
+  /** Agent requests waiting on Remi or a person, by ACP session: a turn waiting on them is not stalled. */
+  private _pendingHumanRequests = new Map<string, number>();
+
+  private async _awaitingHuman<T>(sessionId: string, answer: () => Promise<T>): Promise<T> {
+    this._pendingHumanRequests.set(sessionId, (this._pendingHumanRequests.get(sessionId) ?? 0) + 1);
+    try {
+      return await answer();
+    } finally {
+      const left = (this._pendingHumanRequests.get(sessionId) ?? 1) - 1;
+      if (left > 0) this._pendingHumanRequests.set(sessionId, left);
+      else this._pendingHumanRequests.delete(sessionId);
+    }
+  }
+
   private async _handleElicitation(params: ElicitationCreateParams): Promise<ElicitationResult> {
     const chatId = this._sessionToChatId.get(params.sessionId);
     const handler = (chatId ? this._elicitationHandlers.get(chatId) : undefined) ?? this._elicitationHandler;
@@ -1700,6 +1792,18 @@ export function accumulateUsage(state: PromptUsageState, update: SessionUpdate, 
       established && typeof monetary.requestId === "string" ? monetary.requestId : undefined,
       established && typeof monetary.providerSessionId === "string" ? monetary.providerSessionId : undefined);
   }
+}
+
+/**
+ * The typed failure of a turn the stall watchdog stopped. Classified as an
+ * agent timeout (`errorKind: turn_stalled`), never retried automatically.
+ */
+function turnStalledFailure(agentType: string, stallMs: number, id: string): AcpSessionFailure {
+  const bound = stallMs >= 1000 ? `${Math.round(stallMs / 1000)} s` : `${stallMs} ms`;
+  return { id, revision: 1, severity: "error", category: "timeout", errorKind: "turn_stalled",
+    title: `The ${agentType} turn timed out after ${bound} without progress`,
+    details: `No agent update, model call, running tool or pending question for ${bound}, so Remi stopped the turn. `
+      + "A shell command left running in the background can hold a turn open; ask for it to run in the foreground." };
 }
 
 /** The typed failure of an opened gateway-shim breaker (§4.2). */

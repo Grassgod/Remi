@@ -83,7 +83,7 @@ function fakeGateway() {
   return { requests, base: `http://127.0.0.1:${server.port}/antigravity` };
 }
 
-async function setup(options: { gateway: ReturnType<typeof fakeGateway> | null }) {
+async function setup(options: { gateway: ReturnType<typeof fakeGateway> | null; turnStallTimeoutMs?: number }) {
   const root = realpathSync(mkdtempSync(join(os.tmpdir(), "remi-agy-daemon-")));
   cleanup.push(() => rmSync(root, { recursive: true, force: true, maxRetries: 5 }));
   const database: Database = openSqliteDatabase(":memory:");
@@ -119,8 +119,10 @@ async function setup(options: { gateway: ReturnType<typeof fakeGateway> | null }
     workspacesRoot: join(root, "state"), repoCacheRoot: join(root, "repo-cache"), taskDrainTimeoutMs: 2_000,
     // The model probe has no pinned install here: run it in-process against the fake server.
     inProcessRuntimeModelDiscoveryEnabled: true,
-    providerFactory: (provider) => createRuntimeProvider(provider.executable ? provider
-      : { ...provider, executable: process.execPath, args: [FIXTURE], env: { ...provider.env, FAKE_AGY_CAPTURE: capture } }),
+    providerFactory: (provider) => createRuntimeProvider({
+      ...(provider.executable ? provider : { ...provider, executable: process.execPath, args: [FIXTURE], env: { ...provider.env, FAKE_AGY_CAPTURE: capture } }),
+      ...(options.turnStallTimeoutMs ? { turnStallTimeoutMs: options.turnStallTimeoutMs } : {}),
+    }),
   });
   void daemon.start().catch(() => {});
   cleanup.push(() => daemon.stopAndDrainTestWork());
@@ -235,8 +237,9 @@ describe("Antigravity through the daemon gateway shim", () => {
       .toBe(usageOf(1).totalTokenCount + usageOf(2).totalTokenCount + LITE_USAGE.totalTokenCount);
 
     // Trace: one turn with the command and the reply; context is the last session-model call, not the later subagent call (R9).
+    // The server can report completion just before the daemon seals the turn.
+    await poll(() => foldTraceLines(daemon.traceStore().read(first.id).events).turn?.status === "completed", "the sealed trace");
     const trace = foldTraceLines(daemon.traceStore().read(first.id).events);
-    expect(trace.turn?.status).toBe("completed");
     expect(trace.turn?.context_usage).toEqual({ used: usageOf(2).totalTokenCount, size: 1_048_576 });
     const command = trace.items.find((item) => item.type === "command");
     expect(command).toMatchObject({ type: "command", command: "ls -la", cwd: local, status: "completed" });
@@ -265,6 +268,42 @@ describe("Antigravity through the daemon gateway shim", () => {
       expect(status).toBe(404);
     }
   }, 90_000);
+
+  it("stops a turn a background command holds open, as an agent timeout, while a long foreground command completes", async () => {
+    const gateway = fakeGateway();
+    const { root, local, store, database, agent, daemon, lines, runtime } = await setup({ gateway, turnStallTimeoutMs: 400 });
+    const directory = store.runtimeWorkspaces.create(runtime.id, { name: "User project", root_path: local });
+    const chat = store.createChatSession({ agentId: agent.id, runtime_workspace_id: directory.id });
+    if (privateTmpUnavailable(root)) return;
+
+    // 1.5 s of foreground work, nearly 4× the bound: the model waits on the tool, so nothing trips.
+    const foreground = store.sendChatMessage(chat.id, { body: "FOREGROUND_CMD build it" }).task;
+    await poll(() => ["completed", "failed"].includes(store.getTask(foreground.id)?.status ?? ""), "the foreground turn");
+    expect(store.getTask(foreground.id)?.error).toBeNull();
+    expect(store.getTask(foreground.id)?.status).toBe("completed");
+    await poll(() => foldTraceLines(daemon.traceStore().read(foreground.id).events).turn?.status === "completed", "the sealed trace");
+    const built = foldTraceLines(daemon.traceStore().read(foreground.id).events);
+    expect(built.items.find((item) => item.type === "command")).toMatchObject({ command: "make build", status: "completed" });
+
+    // The model backgrounds a command, says so, and the server never ends the turn nor honours the cancel.
+    const started = Date.now();
+    const background = store.sendChatMessage(chat.id, { body: "BACKGROUND_CMD start the dev server" }).task;
+    await poll(() => ["completed", "failed"].includes(store.getTask(background.id)?.status ?? ""), "the stalled turn");
+    const stalled = store.getTask(background.id)!;
+    expect(stalled.status).toBe("failed");
+    expect(stalled.failureReason).toBe("agent_error.agent_timeout");
+    expect(stalled.error).toContain("The antigravity turn timed out after 400 ms without progress");
+    // Bound plus the 5 s cancel grace before the process is stopped.
+    expect(Date.now() - started).toBeLessThan(15_000);
+    const waiting = lines().find((line) => line.kind === "background_wait")!;
+    const process = lines().filter((line) => line.pid === waiting.pid);
+    expect(process.some((line) => line.kind === "request" && line.method === "session/cancel")).toBe(true);
+    // Stopped like an unanswered cancel: the server process is gone.
+    expect(() => globalThis.process.kill(waiting.pid, 0)).toThrow();
+    // The model call before the stall was still billed.
+    await poll(() => (database.query("SELECT COUNT(*) AS n FROM multiremi_usage_units WHERE task_id = ? AND scope = 'request'").get(background.id) as { n: number }).n === 1,
+      "the stalled turn's usage");
+  }, 60_000);
 
   it("fails an unconfigured gateway before the start ACK, without spawning the server", async () => {
     const { store, database, agent, lines } = await setup({ gateway: null });

@@ -9,7 +9,7 @@ import {
   ANTIGRAVITY_ACCESS, ANTIGRAVITY_BLANKED_ENV, ANTIGRAVITY_PLACEHOLDER_KEY, accessConfigFor, antigravityHomeFiles,
   buildAntigravityEnv, mapAntigravityPermissionMode, seedAntigravityHome,
 } from "@acp/access/index.js";
-import { AntigravityAdapter } from "@acp/adapters/antigravity.js";
+import { ANTIGRAVITY_FOREGROUND_NOTE, AntigravityAdapter } from "@acp/adapters/antigravity.js";
 import { resolveAntigravityServer } from "@acp/antigravity-install.js";
 import { resolveAcpPermissionMode, resolveAvailableAcpPermissionMode } from "@acp/index.js";
 import { ANTIGRAVITY_PIN } from "@acp/runtime-versions.js";
@@ -169,25 +169,33 @@ describe("AntigravityAdapter.buildSessionMeta", () => {
     const home = tempDir();
     writeFileSync(join(home, "AGENTS.md"), "# Runtime workspace local context\nUse bun.\n");
     expect(new AntigravityAdapter().buildSessionMeta({ systemPrompt: "You are Remi.", home })).toEqual({
-      antigravity: { systemPrompt: { append: "You are Remi.\n\n# Runtime workspace local context\nUse bun." } },
+      antigravity: { systemPrompt: { append: `${ANTIGRAVITY_FOREGROUND_NOTE}\n\nYou are Remi.\n\n# Runtime workspace local context\nUse bun.` } },
     });
-    expect(new AntigravityAdapter().buildSessionMeta({ systemPrompt: "  ", home: tempDir() })).toBeUndefined();
+    // The session notes always go out, even without a system prompt.
+    expect(new AntigravityAdapter().buildSessionMeta({ systemPrompt: "  ", home: tempDir() })).toEqual({
+      antigravity: { systemPrompt: { append: ANTIGRAVITY_FOREGROUND_NOTE } },
+    });
     expect(new AntigravityAdapter().buildSessionMeta({ systemPrompt: "Only Remi." })).toEqual({
-      antigravity: { systemPrompt: { append: "Only Remi." } },
+      antigravity: { systemPrompt: { append: `${ANTIGRAVITY_FOREGROUND_NOTE}\n\nOnly Remi.` } },
     });
+  });
+
+  it("asks for foreground shell commands, since a background one holds the turn open", () => {
+    expect(ANTIGRAVITY_FOREGROUND_NOTE).toContain("in the foreground");
+    expect(ANTIGRAVITY_FOREGROUND_NOTE).toContain("could run for a long time, say so");
   });
 
   it("names the session cwd first, so shell commands run there and not in the server's skills directory (R5)", () => {
     const meta = new AntigravityAdapter().buildSessionMeta({ systemPrompt: "You are Remi.", cwd: "/work/project" });
     expect(meta).toEqual({ antigravity: { systemPrompt: { append: "The working directory of this session is /work/project. Run every shell command "
-      + "in that directory (set it as the command's working directory) unless the task names another directory.\n\nYou are Remi." } } });
+      + `in that directory (set it as the command's working directory) unless the task names another directory.\n${ANTIGRAVITY_FOREGROUND_NOTE}\n\nYou are Remi.` } } });
   });
 
   it("rejects Agent Plugins and ignores allowedTools with a warning", () => {
     expect(() => new AntigravityAdapter().buildSessionMeta({ pluginPaths: ["/plugins/a"] })).toThrow("Antigravity does not support Remi Agent Plugins");
     const warn = spyOn(console, "warn").mockImplementation(() => {});
     try {
-      expect(new AntigravityAdapter().buildSessionMeta({ allowedTools: ["Bash"] })).toBeUndefined();
+      expect(new AntigravityAdapter().buildSessionMeta({ allowedTools: ["Bash"] })).toEqual({ antigravity: { systemPrompt: { append: ANTIGRAVITY_FOREGROUND_NOTE } } });
       expect(warn.mock.calls.join(" ")).toContain("ignoring allowedTools");
     } finally {
       warn.mockRestore();

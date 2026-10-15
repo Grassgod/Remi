@@ -275,7 +275,7 @@ async function main() {
   steps.observations = observations.map(({ label, event }) => event.type === "request"
     ? { label, seq: event.obs.seq, model: event.obs.requestedModel, status: event.obs.status, aborted: event.obs.aborted,
       responseId: event.obs.responseId ? "<present>" : null, modelVersion: event.obs.modelVersion, usage: event.obs.usageMetadata }
-    : { label, fatal: event.reason, status: event.status });
+    : event.type === "fatal" ? { label, fatal: event.reason, status: event.status } : { label, started: event.requestedModel });
   report.files_under_home = listFiles(home).slice(0, 80);
   report.home_bytes = du(home);
   report.private_tmp_bytes = du(privateTmp);
