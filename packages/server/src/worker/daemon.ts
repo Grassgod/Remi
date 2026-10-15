@@ -4,7 +4,8 @@ import { parseRuntimeClaudeProfile, type RuntimeClaudeProfile } from "@multiremi
 import { assertRuntimeClaudeProjectCredentials, resolveRuntimeClaudeProfile, runtimeClaudeProfileEnv, runtimeClaudeProfileRouting } from "@daemon/agent-runtime/claude-profile.js";
 import { resolveRuntimeCodexProfile } from "@daemon/agent-runtime/codex-profile.js";
 import { discoverRuntimeProfileModels } from "./runtime-profile-models.js";
-import { antigravityCliVersion, resolveAntigravityExecutable } from "@acp/antigravity.js";
+import { ensureAntigravityServer, installedAntigravity } from "@acp/antigravity-install.js";
+import { AntigravityGatewayShim, type GatewayShimRun } from "@daemon/agent-runtime/antigravity/gateway-shim.js";
 import { prepareRuntimeCodexModelCatalog } from "./runtime-codex-model-catalog.js";
 import { isPermanentFeishuDeliveryError } from "@shared/feishu-delivery-error.js";
 import { existsSync, realpathSync } from "node:fs";
@@ -51,7 +52,7 @@ import { responseToUsageUnits } from "./usage-units.js";
 import { createTraceTranslator, type TraceTranslator } from "./trace-translator.js";
 import { finalReplyBody } from "@shared/turn-trace.js";
 import { TaskUsageLedger } from "./task-usage-ledger.js";
-import { extractBaseUrl } from "@multiremi/relay/fragment.js";
+import { extractAntigravityDefaultModel, extractBaseUrl } from "@multiremi/relay/fragment.js";
 import type { TaskUsageSnapshot, TaskUsageUnit } from "@multiremi/contracts/usage-accounting.js";
 import {
   DaemonProtocolClient,
@@ -137,6 +138,7 @@ import {
   prepareIssueSessionProviderHome,
   resolveTaskProviderHome,
   prepareTaskPrivateTempDirectory,
+  seedIssueSessionAntigravityHome,
   type TaskPrivateTempDirectory,
   type IssueSessionProviderHome,
 } from "@daemon/agent-runtime/workspace/session-home.js";
@@ -539,6 +541,11 @@ export interface MultiremiDaemonOptions {
   protocolClientOptions?: Partial<DaemonProtocolClientOptions>;
   /** Injectable probe schedule for terminal-authority tests. */
   authorityProbeDelaysMs?: number[];
+  /**
+   * The Antigravity gateway shim (PR 4 §4). Production creates one lazily per
+   * daemon and stops it at shutdown; tests inject one with a fake upstream.
+   */
+  antigravityGatewayShim?: AntigravityGatewayShim;
 }
 
 export interface MultiremiDaemonSshMeshRuntime {
@@ -640,6 +647,37 @@ export function sliceElicitationContext(
 }
 
 export type MultiremiDaemonProviderFactory = (options: AcpProviderOptions) => MultiremiTaskProvider;
+
+/** The run's shim scope plus what the run needs to know about its gateway. */
+interface AntigravityRunGateway {
+  run: GatewayShimRun;
+  /** For redaction only. */
+  apiKey: string;
+  defaultModel: string | null;
+}
+
+/** A run's Antigravity gateway: the workspace Model gateway engine, resolved before the start ACK. */
+interface AntigravityGateway {
+  upstreamBase: string;
+  apiKey: string;
+  /** The engine's `default_model`, used when the Agent names none. */
+  defaultModel: string | null;
+}
+
+/**
+ * Antigravity runs only through the workspace Model gateway (PR 4 §3): its
+ * engine needs a base URL and a key. Fails fast with a typed reason, before
+ * the start ACK and therefore before any model call.
+ */
+export function antigravityGatewayFor(relay: MultiremiRelayEngineWire | null | undefined): AntigravityGateway {
+  const upstreamBase = relay ? extractBaseUrl("antigravity", relay.fragment) : null;
+  const apiKey = relay?.auth_token?.trim() ?? "";
+  if (!relay || !upstreamBase || !apiKey) {
+    throw new Error("[antigravity_gateway_unconfigured] Antigravity runs only through the workspace Model gateway: "
+      + `configure Settings > Model gateway > Antigravity with ${upstreamBase ? "an API key" : "a base URL and an API key"}`);
+  }
+  return { upstreamBase, apiKey, defaultModel: extractAntigravityDefaultModel(relay.fragment) };
+}
 export type MultiremiDaemonUpdateRunner = (targetVersion: string) => string | Promise<string>;
 export type MultiremiAgentPluginProviderPreflight = (
   provider: "claude" | "codex",
@@ -671,7 +709,7 @@ export class MultiremiRuntimeReregisterGate {
 
 export class MultiremiDaemon {
   private client: MultiremiDaemonClient;
-  private options: Required<Omit<MultiremiDaemonOptions, "token" | "runtimeId" | "daemonId" | "workspaceId" | "providerFactory" | "updateRunner" | "localSkillRoots" | "launchedBy" | "onRestartRequested" | "taskTimeoutMs" | "daemonPort" | "workspacesRoot" | "repoCacheRoot" | "gcEnabled" | "gcIntervalMs" | "gcDryRun" | "legacyKeepDays" | "pluginCacheRoot" | "agentPluginProviderPreflight" | "sshMeshManager" | "terminalAuthorityCleanupRetryDelaysMs" | "issueWorkspaceLifecycleLocker" | "workspaceRootFence" | "runSnapshotGcPass" | "supervisorReady" | "onReadyChange" | "cliUpdateCoordinator" | "outboxPath" | "outboxBackoffMs" | "outboxMaxBytes" | "claimIdleMaxMs" | "pluginDesiredRefreshMs" | "protocolClient" | "protocolClientOptions" | "authorityProbeDelaysMs">> & {
+  private options: Required<Omit<MultiremiDaemonOptions, "token" | "runtimeId" | "daemonId" | "workspaceId" | "providerFactory" | "updateRunner" | "localSkillRoots" | "launchedBy" | "onRestartRequested" | "taskTimeoutMs" | "daemonPort" | "workspacesRoot" | "repoCacheRoot" | "gcEnabled" | "gcIntervalMs" | "gcDryRun" | "legacyKeepDays" | "pluginCacheRoot" | "agentPluginProviderPreflight" | "sshMeshManager" | "terminalAuthorityCleanupRetryDelaysMs" | "issueWorkspaceLifecycleLocker" | "workspaceRootFence" | "runSnapshotGcPass" | "supervisorReady" | "onReadyChange" | "cliUpdateCoordinator" | "outboxPath" | "outboxBackoffMs" | "outboxMaxBytes" | "claimIdleMaxMs" | "pluginDesiredRefreshMs" | "protocolClient" | "protocolClientOptions" | "authorityProbeDelaysMs" | "antigravityGatewayShim">> & {
     token: string | null;
     runtimeId: string | null;
     daemonId: string | null;
@@ -700,6 +738,9 @@ export class MultiremiDaemon {
   private workspaceRepoUrls = new Map<string, Set<string>>();
   private workspaceSettings = new Map<string, Record<string, unknown>>();
   private workspaceRelays = new Map<string, MultiremiRelayWire | undefined>();
+  /** Antigravity's loopback gateway shim; created at the first Antigravity run or probe. */
+  private antigravityShim: AntigravityGatewayShim | null = null;
+  private readonly ownsAntigravityShim: boolean;
   private runtimeCodexProfile: RuntimeCodexProfile | null = null;
   private runtimeClaudeProfile: RuntimeClaudeProfile | null = null;
   private runtimeProfileSnapshotReceived = false;
@@ -974,6 +1015,8 @@ export class MultiremiDaemon {
       },
     });
     this.providerFactory = options.providerFactory ?? createRuntimeProvider;
+    this.antigravityShim = options.antigravityGatewayShim ?? null;
+    this.ownsAntigravityShim = !options.antigravityGatewayShim;
     this.updateRunner = options.updateRunner ?? runDefaultMultiremiUpdate;
     this.onRestartRequested = options.onRestartRequested ?? null;
     this.cliUpdateCoordinator?.register({
@@ -1491,6 +1534,11 @@ export class MultiremiDaemon {
         await releaseDaemonTrace(this.protocolClient);
       }
       this.stopRepoCheckoutServer();
+      // Every task has drained, so no Antigravity server still needs the gateway.
+      if (this.ownsAntigravityShim) {
+        this.antigravityShim?.stop();
+        this.antigravityShim = null;
+      }
       // Undelivered rows stay on disk and replay on the next start(). close()
       // wakes retry sleepers, so a mid-backoff pump exits promptly.
       this.outboxAbort?.abort();
@@ -1632,13 +1680,15 @@ export class MultiremiDaemon {
   /** Version of this runtime's ACP bridge (claude-agent-acp / codex-acp), or null. */
   private acpVersion(): string | null {
     const provider = this.options.provider;
+    // Antigravity's ACP server is the agent itself: the pinned install's version.
+    if (provider === "antigravity") return installedAntigravity()?.manifest.version ?? null;
     return provider === "claude" || provider === "codex" ? bridgeVersion(provider) : null;
   }
 
   /** Version of the underlying agent CLI (`claude` / `codex`), or null. */
   private agentVersion(): string | null {
     const provider = this.options.provider;
-    if (provider === "antigravity") return antigravityCliVersion();
+    if (provider === "antigravity") return installedAntigravity()?.manifest.version ?? null;
     return provider === "claude" || provider === "codex" ? agentCliVersion(provider) : null;
   }
 
@@ -1827,7 +1877,7 @@ export class MultiremiDaemon {
     try {
       await this.client.reportRuntimeUpdateResult(runtimeId, requestId, { status: "running" });
       const output = scope === "acp"
-        ? this.reinstallAcpBridge()
+        ? await this.reinstallAcpBridge()
         : scope === "agent"
           ? await this.updateAgentCli()
           : await this.updateRunner(targetVersion);
@@ -1846,8 +1896,13 @@ export class MultiremiDaemon {
   }
 
   /** Force-reinstall this runtime's ACP bridge to the latest version. */
-  private reinstallAcpBridge(): string {
+  private async reinstallAcpBridge(): Promise<string> {
     const provider = this.options.provider;
+    if (provider === "antigravity") {
+      // Re-download the version this Remi release pins; the terms acceptance on record carries over.
+      const installed = await ensureAntigravityServer({ force: true, log: (message) => log.info(`[acp] ${message}`) });
+      return `Antigravity ACP server ${installed.manifest.version} reinstalled`;
+    }
     if (provider !== "claude" && provider !== "codex") {
       throw new Error(`ACP bridge update not supported for provider: ${provider}`);
     }
@@ -1857,13 +1912,15 @@ export class MultiremiDaemon {
   /** Update the underlying agent CLI (claude/codex) via its own `update` subcommand. */
   private async updateAgentCli(): Promise<string> {
     const provider = this.options.provider;
-    if (!["claude", "codex", "antigravity"].includes(provider)) {
+    if (provider === "antigravity") {
+      throw new Error("The Antigravity ACP server is pinned by the Remi release; upgrade Remi to change it");
+    }
+    if (!["claude", "codex"].includes(provider)) {
       throw new Error(`agent update not supported for provider: ${provider}`);
     }
     // Spawn with the daemon's own env: it was launched from a login shell, so
     // PATH already resolves claude/codex (incl. Homebrew on macOS).
-    const executable = provider === "antigravity" ? resolveAntigravityExecutable() : provider;
-    const proc = Bun.spawn([executable, "update"], { stdout: "pipe", stderr: "pipe", env: process.env });
+    const proc = Bun.spawn([provider, "update"], { stdout: "pipe", stderr: "pipe", env: process.env });
     const [stdout, stderr, exitCode] = await Promise.all([
       streamText(proc.stdout),
       streamText(proc.stderr),
@@ -2254,6 +2311,19 @@ export class MultiremiDaemon {
 
   private async discoverAcpRuntimeModels(signal: AbortSignal): Promise<MultiremiRuntimeModel[]> {
     const prepared = await this.runtimeModelProbeProviderOptions();
+    try {
+      const models = await this.discoverAcpRuntimeModelsWith(prepared, signal);
+      prepared.check?.();
+      return models;
+    } finally {
+      prepared.release?.();
+    }
+  }
+
+  private async discoverAcpRuntimeModelsWith(
+    prepared: Awaited<ReturnType<MultiremiDaemon["runtimeModelProbeProviderOptions"]>>,
+    signal: AbortSignal,
+  ): Promise<MultiremiRuntimeModel[]> {
     const probe = async (): Promise<MultiremiRuntimeModel[]> => {
       if (!this.options.inProcessRuntimeModelDiscoveryEnabled) {
         const capabilities = await probeRuntimeModels(prepared.options, {
@@ -2299,8 +2369,13 @@ export class MultiremiDaemon {
     options: AcpProviderOptions;
     catalogState?: CodexModelCatalogState;
     relay?: MultiremiRelayEngineWire | null;
+    /** Ends what the probe borrowed (the Antigravity shim token). */
+    release?: () => void;
+    /** Throws when the probe's models cannot be trusted (the Antigravity gateway refused its listing). */
+    check?: () => void;
   }> {
     const provider = this.options.provider;
+    if (provider === "antigravity") return this.antigravityModelProbeOptions();
     if (provider !== "claude" && provider !== "codex") {
       return { options: { agentType: provider, cwd: homedir() } };
     }
@@ -2357,6 +2432,48 @@ export class MultiremiDaemon {
         },
       },
     };
+  }
+
+  /**
+   * The Antigravity model probe (PR 4 §3): a per-daemon probe home and a probe
+   * shim token in front of the workspace gateway. The probe subprocess cannot
+   * hold the in-process shim, so it gets only the token URL; listing models
+   * consumes nothing, so the channel's observations are not metered.
+   */
+  private async antigravityModelProbeOptions(): Promise<{ options: AcpProviderOptions; release: () => void; check: () => void }> {
+    const workspaceId = this.options.workspaceId ?? "local";
+    const gateway = antigravityGatewayFor((await this.effectiveWorkspaceRelay(workspaceId))?.antigravity);
+    const owner = `${this.options.daemonId ?? this.options.runtimeName}:antigravity`;
+    const root = join(probeRoot(this.options.workspacesRoot), `antigravity-${createHash("sha256").update(owner).digest("hex").slice(0, 16)}`);
+    const providerHome: IssueSessionProviderHome = {
+      storageRoot: resolve(this.options.workspacesRoot), root, home: join(root, "home"),
+      sessionId: "runtime-model-probe", agentId: owner, generation: 1, provider: "antigravity",
+    };
+    await prepareIssueSessionProviderHome(providerHome);
+    await seedIssueSessionAntigravityHome(providerHome, { cwd: root });
+    const run = this.antigravityGatewayShim().forRun({ upstreamBase: gateway.upstreamBase, apiKey: gateway.apiKey, runId: "runtime-model-probe" });
+    try {
+      const channel = run.open("runtime-model-probe");
+      // Server 1.4.0 answers a refused or unreachable listing with built-in
+      // fallback ids; those are not the gateway's models, so the probe fails.
+      // The breaker stays open; a later successful listing supersedes a failed one.
+      const seen: { fatal: string | null; listing: string | null } = { fatal: null, listing: null };
+      channel.subscribe((event) => {
+        if (event.type === "fatal") seen.fatal = event.message;
+        else if (event.type === "listing") seen.listing = event.failure?.message ?? null;
+      });
+      return {
+        options: { agentType: "antigravity", cwd: root, providerHome: providerHome.home, gatewayUrl: channel.baseUrl },
+        release: () => run.close(),
+        check: () => {
+          const problem = seen.fatal ?? seen.listing;
+          if (problem) throw new Error(`[antigravity_gateway_unavailable] the model probe could not list the gateway's models: ${problem}`);
+        },
+      };
+    } catch (error) {
+      run.close();
+      throw error;
+    }
   }
 
   private async handleRuntimeLocalSkillList(runtimeId: string, requestId: string, requestedRoot?: string): Promise<void> {
@@ -3080,6 +3197,7 @@ export class MultiremiDaemon {
         .map(([, value]) => value),
     ]);
     let providerInstallEnv: Record<string, string> | undefined;
+    let antigravity: AntigravityRunGateway | null = null;
     let releaseIssueWorkspaceLifecycle: (() => void) | null = null;
     let progressSummarizer: TaskProgressSummarizer | null = null;
     let providerEntered = false;
@@ -3160,9 +3278,23 @@ export class MultiremiDaemon {
         ? workspaceRelay?.claude
         : task.agent?.provider === "codex"
           ? workspaceRelay?.codex
-          : null;
+          : task.agent?.provider === "antigravity"
+            ? workspaceRelay?.antigravity ?? null
+            : null;
       if (relay?.auth_token) failureCredentials.push(relay.auth_token);
       if (task.authToken) failureCredentials.push(task.authToken);
+      if (task.agent?.provider === "antigravity") {
+        // Before the start ACK, so a missing gateway costs no model call (PR 4 §3).
+        const gateway = antigravityGatewayFor(relay);
+        if (!task.agent.model && !gateway.defaultModel) {
+          throw new Error("[antigravity_model_required] antigravity needs a model: set the Agent's model or the Model gateway default_model");
+        }
+        // The real key stays in the daemon: the server gets a per-process loopback token.
+        antigravity = {
+          run: this.antigravityGatewayShim().forRun({ upstreamBase: gateway.upstreamBase, apiKey: gateway.apiKey, runId: usageRunId }),
+          apiKey: gateway.apiKey, defaultModel: gateway.defaultModel,
+        };
+      }
       if (providerHome) {
         providerEnv = await loadIssueSessionProviderEnv(providerHome, {
           ...(relayAuthoritative
@@ -3270,6 +3402,7 @@ export class MultiremiDaemon {
         usageLedger,
         startSignal,
         () => { providerEntered = true; },
+        antigravity,
       );
       if (!summary.completed) {
         const failureReason = summary.failureReason
@@ -3333,6 +3466,8 @@ export class MultiremiDaemon {
       this.finalizeTaskProgress(progressSummarizer, "failed", error, task.id);
       await awaitFinalReportDrain();
     } finally {
+      // Revokes the run's shim tokens; runAgent already closed them unless setup failed first.
+      antigravity?.run.close();
       if (usageLedger) checkpointUsage(usageLedger.finish());
       await cleanupTaskPrivateTempDirectory(
         taskPrivateTmp,
@@ -4087,6 +4222,7 @@ export class MultiremiDaemon {
     usageLedger?: TaskUsageLedger,
     startupSignal: AbortSignal = signal,
     onProviderEntry?: () => void,
+    antigravity: AntigravityRunGateway | null = null,
   ): Promise<RunSummary> {
     this.assertWorkspaceRootOwner();
     const agent = task.agent;
@@ -4174,9 +4310,17 @@ export class MultiremiDaemon {
       providerEnv,
     };
     const config = runtime.assemble(ctx);
-    const failureCredentials = Object.entries(config.env ?? {})
+    const failureCredentials = [...Object.entries(config.env ?? {})
       .filter(([name]) => /(?:^|_)(?:SECRET|TOKEN|PASSWORD|API_KEY|ACCESS_KEY|PRIVATE_KEY|CREDENTIAL)(?:_|$)/i.test(name))
-      .map(([, value]) => value);
+      .map(([, value]) => value), ...(antigravity ? [antigravity.apiKey] : [])];
+    if (agent.provider === "antigravity") {
+      if (!antigravity || !providerHome) {
+        throw new Error("[antigravity_gateway_unconfigured] Antigravity runs only through the workspace Model gateway and a session home");
+      }
+      // Without a selection the server silently runs the gateway's first model.
+      if (!config.model) config.model = antigravity.defaultModel;
+      await seedIssueSessionAntigravityHome(providerHome, { cwd: config.cwd, workspaceDir });
+    }
 
     // Preparation above can yield after the start ACK. Shutdown must still
     // prevent entering a provider, without aborting an already-running turn.
@@ -4196,6 +4340,7 @@ export class MultiremiDaemon {
       pluginPaths: config.pluginPaths,
       pluginFingerprint: config.pluginFingerprint,
       codexHome: config.codexHome,
+      ...(antigravity ? { gatewayShim: antigravity.run, providerHome: providerHome!.home } : {}),
     });
     if (!provider.sendStream) {
       throw new Error(`Provider ${agent.provider} does not support streaming`);
@@ -4495,6 +4640,10 @@ export class MultiremiDaemon {
         return { output: candidate, sessionId: finalSessionId, workDir, usageSnapshot: ledger.snapshot, completed: true };
       }
     } finally {
+      // Every prompt has settled (and drained its model calls): revoke the run's
+      // shim tokens before the ledger closes, so no later call can use the real
+      // key unmetered (a backgrounded command, the steering drain, close()).
+      antigravity?.run.close();
       checkpointUsage(ledger.finish());
       this.recordTrace(task.id, () => trace.flush());
       pump?.stop();
@@ -4504,6 +4653,12 @@ export class MultiremiDaemon {
       });
       await provider.close?.();
     }
+  }
+
+  /** The daemon's Antigravity gateway shim (PR 4 §4.1), started at first use. */
+  private antigravityGatewayShim(): AntigravityGatewayShim {
+    this.antigravityShim ??= new AntigravityGatewayShim();
+    return this.antigravityShim;
   }
 
   private startRepoCheckoutServer(): void {

@@ -36,6 +36,7 @@
     "build:multiremi": "bun run scripts/build-multiremi.ts",
     "release:prepare": "bun run scripts/release-runtime.ts prepare",
     "release:check": "bun run scripts/release-runtime.ts check",
+    "release:pin-antigravity": "bun run scripts/release-runtime.ts pin-antigravity",
     "lock:clean": "bun run scripts/clean-lockfile.ts",
     "test": "bun run scripts/run-tests.ts",
     "docs:check": "node scripts/check-dev-context.mjs",

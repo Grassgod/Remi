@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { I18nProvider } from "@multiremi/core/i18n/react";
 import enCommon from "../../locales/en/common.json";
@@ -14,6 +14,7 @@ const relayRef = vi.hoisted(() => ({
   current: {
     claude: { fragment: '{"env":{"ANTHROPIC_BASE_URL":"https://ai.openremi.fun"}}', hasToken: true, revision: 3 },
     codex: { fragment: "", hasToken: false, revision: 0 },
+    antigravity: null,
     modelDiscovery: true,
   } as Record<string, unknown> | undefined,
   pending: false,
@@ -115,6 +116,7 @@ describe("ModelGatewayTab", () => {
     relayRef.current = {
       claude: { fragment: '{"env":{"ANTHROPIC_BASE_URL":"https://ai.openremi.fun"}}', hasToken: true, revision: 3 },
       codex: { fragment: "", hasToken: false, revision: 0 },
+      antigravity: null,
       modelDiscovery: true,
     };
     relayRef.pending = false;
@@ -134,16 +136,98 @@ describe("ModelGatewayTab", () => {
     }));
   });
 
-  it("renders discovery toggle and both engine sections for an admin", () => {
+  it("renders discovery toggle and every engine section for an admin", () => {
     render(<ModelGatewayTab />, { wrapper: Wrapper });
     expect(screen.getByText("Auto-discover models")).toBeInTheDocument();
     expect(screen.getByText("Claude")).toBeInTheDocument();
     expect(screen.getByText("Codex")).toBeInTheDocument();
+    expect(screen.getByText("Antigravity")).toBeInTheDocument();
     expect(screen.getByText("Task progress summaries")).toBeInTheDocument();
     expect(screen.getByText("Issue automatic naming")).toBeInTheDocument();
     expect(screen.getByRole("switch", { name: "Automatic naming" })).toBeChecked();
     // claude fragment is pre-filled from server config
     expect(screen.getByDisplayValue(/ANTHROPIC_BASE_URL/)).toBeInTheDocument();
+  });
+
+  it("shows the Antigravity section with its own placeholder and hint but no reasoning levels", () => {
+    relayRef.current = {
+      ...relayRef.current,
+      antigravity: { fragment: '{"base_url":"https://ai.openremi.fun/antigravity"}', hasToken: true, revision: 2 },
+    };
+    render(<ModelGatewayTab />, { wrapper: Wrapper });
+
+    const heading = screen.getByRole("heading", { name: /Antigravity/ });
+    const section = heading.closest("section");
+    if (!section) throw new Error("Antigravity section not found");
+    expect(within(section).getByRole("img", { name: "Antigravity" })).toBeInTheDocument();
+    expect(within(section).getByDisplayValue(/ai\.openremi\.fun\/antigravity/)).toBeInTheDocument();
+    expect(within(section).getByText(enSettings.modelGateway.antigravity_hint)).toBeInTheDocument();
+    expect(within(section).queryByText(enSettings.modelGateway.reasoning_title)).toBeNull();
+    // Claude and Codex keep their reasoning-level editors; nothing asks for Antigravity's.
+    expect(screen.getAllByText(enSettings.modelGateway.reasoning_title)).toHaveLength(2);
+    expect(mockGetReasoningLevels).not.toHaveBeenCalledWith("workspace-1", "antigravity");
+  });
+
+  it("offers an Antigravity fragment placeholder when the engine is unconfigured", () => {
+    render(<ModelGatewayTab />, { wrapper: Wrapper });
+
+    const section = screen.getByRole("heading", { name: /Antigravity/ }).closest("section");
+    if (!section) throw new Error("Antigravity section not found");
+    const editor = within(section).getByRole("textbox");
+    expect(editor).toHaveValue("");
+    expect(editor.getAttribute("placeholder")).toContain('"base_url"');
+    expect(editor.getAttribute("placeholder")).toContain('"default_model"');
+  });
+
+  it("saves the Antigravity fragment and a new gateway key through the antigravity engine", async () => {
+    const user = userEvent.setup();
+    render(<ModelGatewayTab />, { wrapper: Wrapper });
+
+    const section = screen.getByRole("heading", { name: /Antigravity/ }).closest("section");
+    if (!section) throw new Error("Antigravity section not found");
+    const fragment = '{"base_url":"https://ai.openremi.fun/antigravity","default_model":"gemini-3.7-flash"}';
+    const [editor, key] = [within(section).getByRole("textbox"), section.querySelector("input")];
+    if (!key) throw new Error("Antigravity key input not found");
+    await user.click(editor);
+    await user.paste(fragment);
+    await user.type(key, "agy-key");
+    await user.click(within(section).getByRole("button", { name: /^Save$/ }));
+
+    await waitFor(() => expect(mockUpdateRelay).toHaveBeenCalledWith("workspace-1", "antigravity", {
+      fragment,
+      token_op: "set",
+      auth_token: "agy-key",
+    }));
+    await waitFor(() => expect(mockInvalidateQueries).toHaveBeenCalledWith({
+      queryKey: ["runtimes", "models", "fleet", "workspace-1"],
+    }));
+  });
+
+  it("probes Antigravity without refreshing reasoning-level rows it does not have", async () => {
+    mockProbeRelay.mockResolvedValue({
+      engine: "antigravity",
+      status: "ready",
+      error: null,
+      models: [
+        { id: "gemini-3.7-flash", label: "Gemini 3.7 Flash", thinking: { status: "unsupported", supported_levels: [] } },
+      ],
+      last_success_at: "2026-10-15T06:00:00.000Z",
+    });
+    const user = userEvent.setup();
+    render(<ModelGatewayTab />, { wrapper: Wrapper });
+
+    const section = screen.getByRole("heading", { name: /Antigravity/ }).closest("section");
+    if (!section) throw new Error("Antigravity section not found");
+    await user.click(within(section).getByRole("button", { name: "Probe now" }));
+
+    await waitFor(() => expect(mockProbeRelay).toHaveBeenCalledWith("workspace-1", "antigravity"));
+    expect(await within(section).findByText("1 model · gateway declares no reasoning levels")).toBeInTheDocument();
+    await waitFor(() => expect(mockInvalidateQueries).toHaveBeenCalledWith({
+      queryKey: ["runtimes", "models", "fleet", "workspace-1"],
+    }));
+    expect(mockInvalidateQueries).not.toHaveBeenCalledWith({
+      queryKey: ["relay-reasoning-levels", "workspace-1", "antigravity"],
+    });
   });
 
   it("blocks non owner/admin members", () => {

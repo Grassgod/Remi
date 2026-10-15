@@ -3,9 +3,11 @@ import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { cpSync, mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { candidateFiles, candidateIdentity, checkCandidateSource, createCandidate, ociDigest, resolveCandidate, trustedReleaseRun, verifyCandidate, type CandidateManifest } from "../../../scripts/release-candidate.js";
 
+// The snapshot check validates the Antigravity block structurally; reuse the real pin.
+const realAntigravityPin = JSON.parse(readFileSync(resolve(import.meta.dir, "../../../packages/acp/src/runtime-versions.json"), "utf8")).antigravity;
 const repository = "example/remi", sha = "a".repeat(40), runId = "123";
 const directories: string[] = [];
 afterEach(() => { for (const directory of directories.splice(0)) rmSync(directory, { recursive: true, force: true }); });
@@ -15,7 +17,8 @@ function fixture() {
   writeFileSync(join(root, "package.json"), JSON.stringify({ version: "1.2.3" }));
   writeFileSync(join(root, "bun.lock"), "frozen lock"); writeFileSync(join(root, "scripts/install-remi.sh"), "#!/bin/sh\n");
   writeFileSync(join(root, "packages/acp/src/runtime-versions.json"), JSON.stringify({ schema: 1, preparedFor: "1.2.3", checkedAt: "2026-10-10T00:00:00Z",
-    claude: { acp: "1.0.0", sdk: "1.0.0", executable: "1.0.0" }, codex: { acp: "1.0.0", sdk: "1.0.0", executable: "1.0.0" } }));
+    claude: { acp: "1.0.0", sdk: "1.0.0", executable: "1.0.0" }, codex: { acp: "1.0.0", sdk: "1.0.0", executable: "1.0.0" },
+    antigravity: realAntigravityPin }));
   const directory = join(root, "candidate"); mkdirSync(directory);
   const identity = candidateIdentity(root, repository, sha);
   for (const name of candidateFiles(identity)) {
@@ -112,7 +115,10 @@ describe("candidate release inputs and provenance", () => {
       { ...manual, retryRunId: "123" }, { ...manual, event: "pull_request" }, { ...manual, ref: "refs/heads/feature" }]) {
       expect(() => checkCandidateSource(f.root, source)).toThrow();
     }
+    // Every commit must keep a well-formed Antigravity pin; a release also needs a prepared snapshot.
     writeFileSync(join(f.root, "packages/acp/src/runtime-versions.json"), '{}');
+    expect(() => checkCandidateSource(f.root, push)).toThrow("Antigravity pin");
+    writeFileSync(join(f.root, "packages/acp/src/runtime-versions.json"), JSON.stringify({ antigravity: realAntigravityPin }));
     expect(() => checkCandidateSource(f.root, push)).toThrow("not prepared");
   });
 

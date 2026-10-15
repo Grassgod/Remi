@@ -99,8 +99,12 @@ export function prepareRuntimeWorkspaceContext(
   if (!workspace.envFile) return {};
   const env = parseEnv(readText(containedPath(root, resolve(root, workspace.envFile))));
   // Runtime/task identity and provider homes/routing stay authoritative.
+  // Antigravity also owns its home, gateway routing and Google credentials
+  // (blanked by its environment builder); other providers may use Google tools.
+  const antigravity = providerHome.provider === "antigravity";
   for (const key of Object.keys(env)) {
-    if (/^(MULTIREMI_|CODEX_HOME$|CLAUDE_CONFIG_DIR$|OPENAI_|ANTHROPIC_)/i.test(key)) {
+    if (/^(MULTIREMI_|CODEX_HOME$|CLAUDE_CONFIG_DIR$|OPENAI_|ANTHROPIC_)/i.test(key)
+      || (antigravity && /^(GEMINI_HOME$|GEMINI_API_KEY$|AGY_|GOOGLE_|ANTIGRAVITY_)/i.test(key))) {
       throw new LocalDirectoryError(`Runtime workspace env file cannot override ${key}`);
     }
   }

@@ -2,12 +2,18 @@ import { validCodexNativeCatalog } from "@multiremi/contracts/codex-model-catalo
 import { createLogger } from "@shared/logger.js";
 import type { GatewayModelsSnapshot, MultiremiStore, RelayEngine } from "@multiremi/store/store.js";
 import type { MultiremiRuntimeModelThinking } from "@multiremi/contracts/types.js";
-import { extractBaseUrl, validateGatewayUrl } from "@multiremi/relay/fragment.js";
+import { extractBaseUrl, RELAY_ENGINES, validateGatewayUrl } from "@multiremi/relay/fragment.js";
 import { publicRelayHttpRequest } from "@multiremi/relay/http.js";
 
 const log = createLogger("relay-discovery");
 
-const MODEL_PATH: Record<RelayEngine, string> = { claude: "/v1/models", codex: "/models" };
+const MODEL_PATH: Record<RelayEngine, string> = {
+  claude: "/v1/models",
+  codex: "/models",
+  antigravity: "/v1beta/models?pageSize=1000",
+};
+/** The Antigravity server follows at most five `nextPageToken` pages; so do we. */
+const GEMINI_MAX_PAGES = 5;
 const MAX_BODY = 1_000_000;
 const TIMEOUT_MS = 10_000;
 
@@ -86,12 +92,80 @@ function codexThinking(model: Record<string, unknown>): MultiremiRuntimeModelThi
   };
 }
 
+/**
+ * Image-generation ids, as the Antigravity server recognises them (gateway
+ * model_discovery `is_image_model`). It keeps them out of its model picker, so
+ * offering them in the Agent dropdown would only produce a selection that fails.
+ */
+function isGeminiImageModel(id: string): boolean {
+  const clean = id.toLowerCase().replace(/-preview$/, "");
+  return clean.startsWith("imagen") || clean.startsWith("dall-e")
+    || clean.endsWith("-image") || clean.endsWith("_image") || clean.includes("image-gen");
+}
+
+/**
+ * The server's chat filter: an entry that lists its generation methods without
+ * `generateContent` (an embedding model, say) is not offered. Like the server, an
+ * entry that lists none at all is kept.
+ */
+function geminiGeneratesContent(methods: unknown): boolean {
+  if (methods === undefined || methods === null) return true;
+  return Array.isArray(methods) && (methods.length === 0 || methods.includes("generateContent"));
+}
+
+type GatewayFetchResult = {
+  models: GatewayModelsSnapshot["models"];
+  nativeCatalogStatus?: GatewayModelsSnapshot["nativeCatalogStatus"];
+  error?: string;
+};
+
+/**
+ * Gemini `models.list` behind the Antigravity gateway, paged the way the server
+ * pages it. The listing carries no reasoning metadata and the server's gateway
+ * path offers no `thought_level` selector, so every model states `unsupported`.
+ * The first page decides whether discovery succeeded; a later page failing keeps
+ * what was already listed (as the server does) and reports the failure.
+ */
+async function fetchAntigravityModels(base: string, token: string, httpGet: HttpGet): Promise<GatewayFetchResult> {
+  const headers: Record<string, string> = { Authorization: `Bearer ${token}` };
+  const firstPage = joinUrl(base, MODEL_PATH.antigravity);
+  const models: GatewayModelsSnapshot["models"] = [];
+  const seen = new Set<string>();
+  let pageToken: string | null = null;
+  for (let page = 0; page < GEMINI_MAX_PAGES; page++) {
+    let body: Record<string, unknown>;
+    try {
+      const url = pageToken ? `${firstPage}&pageToken=${encodeURIComponent(pageToken)}` : firstPage;
+      const res = await httpGet(url, headers);
+      if (res.status < 200 || res.status >= 300) throw new Error(`gateway HTTP ${res.status}`);
+      body = parseBody(res.text);
+      if (!Array.isArray(body.models)) throw new Error("gateway returned an invalid model list");
+    } catch (err) {
+      if (page === 0) throw err;
+      return { models, error: `model list page ${page + 1}: ${discoveryError(err, token)}` };
+    }
+    for (const candidate of body.models as unknown[]) {
+      const m = object(candidate);
+      if (!m || !geminiGeneratesContent(m.supportedGenerationMethods)) continue;
+      const id = typeof m.name === "string" ? m.name.trim().replace(/^models\//, "") : "";
+      if (!id || seen.has(id) || isGeminiImageModel(id)) continue;
+      seen.add(id);
+      const label = typeof m.displayName === "string" && m.displayName.trim() ? m.displayName.trim() : id;
+      models.push({ id, label, thinking: { status: "unsupported", supportedLevels: [] } });
+    }
+    pageToken = typeof body.nextPageToken === "string" && body.nextPageToken ? body.nextPageToken : null;
+    if (!pageToken) break;
+  }
+  return { models };
+}
+
 async function fetchGatewayModels(
   engine: RelayEngine,
   base: string,
   token: string,
   httpGet: HttpGet,
-): Promise<{ models: GatewayModelsSnapshot["models"]; nativeCatalogStatus?: GatewayModelsSnapshot["nativeCatalogStatus"]; error?: string }> {
+): Promise<GatewayFetchResult> {
+  if (engine === "antigravity") return fetchAntigravityModels(base, token, httpGet);
   const headers: Record<string, string> = { Authorization: `Bearer ${token}` };
   if (engine === "claude") headers["anthropic-version"] = "2023-06-01";
   const res = await httpGet(joinUrl(base, MODEL_PATH[engine]), headers);
@@ -166,7 +240,7 @@ export async function discoverGatewayModels(
   try {
     const { models, nativeCatalogStatus, error } = await fetchGatewayModels(engine, base, engineConfig.authToken, httpGet);
     store.saveGatewayModels(workspaceId, engine, { models, sourceRevision: engineConfig.revision, nativeCatalogStatus, error });
-    if (error) log.warn(`relay ${engine} capability discovery failed: ${error}`);
+    if (error) log.warn(`relay ${engine} discovery incomplete: ${error}`);
     log.info(`relay ${engine} discovery: ${models.length} models for workspace ${workspaceId}`);
   } catch (err) {
     // Cap + sanitize the stored/logged error so a gateway can't smuggle bytes into the DB/logs.
@@ -177,9 +251,9 @@ export async function discoverGatewayModels(
   }
 }
 
-/** Fire-and-forget discovery for both engines (used on config save / toggle). */
+/** Fire-and-forget discovery for every engine (used on config save / toggle). */
 export function triggerGatewayDiscovery(store: MultiremiStore, workspaceId: string, engine?: RelayEngine): void {
-  const engines: RelayEngine[] = engine ? [engine] : ["claude", "codex"];
+  const engines: readonly RelayEngine[] = engine ? [engine] : RELAY_ENGINES;
   for (const e of engines) void discoverGatewayModels(store, workspaceId, e).catch(() => {});
 }
 

@@ -153,6 +153,8 @@ export interface NewSessionMeta {
    * `developer_instructions`, hardcoded to `null` (dist/index.js:26263).
    */
   systemPrompt?: string | { append?: string; [key: string]: unknown };
+  /** Antigravity ACP server options (`_meta.antigravity`, read on new, load and resume). */
+  antigravity?: { systemPrompt?: { append: string } };
 }
 
 export interface SdkMessageFilter {

@@ -1,15 +1,32 @@
 import { afterEach, expect, test } from "bun:test";
 import { execFileSync, spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { copyFileSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { BRIDGE_PACKAGE, RUNTIME_PIN } from "../../../packages/acp/src/runtime-versions.js";
-import { checkRelease, checkReleaseSnapshot, latestRuntimeVersions, prepareRelease, SNAPSHOT_PATH, type RuntimeSnapshot } from "../../../scripts/release-runtime.js";
+import {
+  ACP_REGISTRY_URL, checkRelease, checkReleaseSnapshot, latestRuntimeVersions, pinAntigravity, prepareRelease, SNAPSHOT_PATH,
+  type RuntimeSnapshot,
+} from "../../../scripts/release-runtime.js";
+import type { AntigravityPin } from "../../../packages/acp/src/runtime-versions.js";
 
+const sha = (fill: string) => fill.repeat(64);
+const agyUrl = (os: string, file: string, version = "1.3.0") => `https://dl.google.com/agy-extensions/releases/${os}/agy-acp-server-${version}-${file}.zip`;
+const antigravity: AntigravityPin = {
+  server: "1.3.0", terms: "https://antigravity.google/terms",
+  artifacts: {
+    "darwin-arm64": { url: agyUrl("macos", "darwin-arm64"), sha256: sha("a"), bytes: 10 },
+    "darwin-x64": { url: agyUrl("macos", "darwin-x86_64"), sha256: sha("b"), bytes: 11 },
+    "linux-x64": { url: agyUrl("linux", "linux-x86_64"), sha256: sha("c"), bytes: 12, args: ["--uid="] },
+    "linux-arm64": { url: agyUrl("linux", "linux-arm64"), sha256: sha("d"), bytes: 13, args: ["--uid="] },
+  },
+};
 const baseline: RuntimeSnapshot = {
   schema: 1, preparedFor: "0.2.69", checkedAt: "2026-09-13T00:00:00.000Z",
   claude: { acp: "0.76.0", sdk: "0.3.270", executable: "2.1.270" },
   codex: { acp: "1.11.0", sdk: "0.154.0", executable: "0.154.0" },
+  antigravity,
 };
 const next = {
   claude: { acp: "0.77.0", sdk: "0.3.271", executable: "2.1.271" },
@@ -148,4 +165,94 @@ test("tag publication rejects malformed snapshots and prerelease dependency pins
     { ...baseline, schema: 2 },
     { ...baseline, codex: { ...baseline.codex, sdk: "0.154.0-beta" } },
   ]) expect(() => checkReleaseSnapshot("0.2.69", invalid)).toThrow("not prepared");
+});
+
+test("prepare carries the hand-pinned Antigravity block forward unchanged", async () => {
+  const root = repository();
+  const snapshot = await prepareRelease(root, "0.2.70", { latest: async () => next, verify: async (candidate) => {
+    expect(candidate.antigravity).toEqual(antigravity);
+  } });
+  expect(snapshot.antigravity).toEqual(antigravity);
+  expect(JSON.parse(files(root)[1]!).antigravity).toEqual(antigravity);
+});
+
+test("check rejects a malformed Antigravity pin on every commit", () => {
+  const artifact = antigravity.artifacts["darwin-arm64"]!;
+  const invalid: Array<Record<string, unknown>> = [
+    { ...antigravity, server: "1.4.0-beta" },
+    { ...antigravity, terms: "http://antigravity.google/terms" },
+    { ...antigravity, artifacts: {} },
+    { ...antigravity, artifacts: { "windows-x64": artifact } },
+    { ...antigravity, artifacts: { "darwin-arm64": { ...artifact, url: "https://mirror.example.com/agy-acp-server-1.3.0-darwin-arm64.zip" } } },
+    { ...antigravity, artifacts: { "darwin-arm64": { ...artifact, url: agyUrl("macos", "darwin-arm64", "1.2.0") } } },
+    { ...antigravity, artifacts: { "darwin-arm64": { ...artifact, sha256: "ABC" } } },
+    { ...antigravity, artifacts: { "darwin-arm64": { ...artifact, bytes: 0 } } },
+    { ...antigravity, artifacts: { "darwin-arm64": { ...artifact, args: [1] } } },
+  ];
+  for (const pin of invalid) {
+    expect(() => checkReleaseSnapshot("0.2.69", { ...baseline, antigravity: pin as unknown as AntigravityPin })).toThrow("Invalid Antigravity pin");
+  }
+  expect(() => checkReleaseSnapshot("0.2.69", { ...baseline, antigravity: undefined as unknown as AntigravityPin })).toThrow("Invalid Antigravity pin");
+  expect(() => checkReleaseSnapshot("0.2.69", baseline)).not.toThrow();
+
+  const root = repository();
+  const git = (...args: string[]) => execFileSync("git", args, { cwd: root, encoding: "utf8" }).trim();
+  git("init", "--quiet");
+  git("add", ".");
+  git("-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "--quiet", "-m", "baseline");
+  const baseRef = git("rev-parse", "HEAD");
+  expect(checkRelease(root, { baseRef })).toBe(false);
+  writeFileSync(join(root, SNAPSHOT_PATH), JSON.stringify({ ...baseline, antigravity: { ...antigravity, server: "latest" } }));
+  expect(() => checkRelease(root, { baseRef })).toThrow("Invalid Antigravity pin");
+});
+
+function antigravityRegistry(version = "1.4.0") {
+  const binary = (os: string, file: string, args?: string[]) => ({ archive: agyUrl(os, file, version), cmd: "./agy_acp_server.par", ...(args ? { args } : {}) });
+  const archives = new Map<string, string>();
+  const calls: string[] = [];
+  const fetcher = async (url: string) => {
+    calls.push(url);
+    if (url === ACP_REGISTRY_URL) {
+      return Response.json({ version: "1.0.0", agents: [{ id: "other-acp", version: "9.9.9" }, {
+        id: "antigravity-acp", version, license_url: "https://antigravity.google/terms",
+        distribution: { binary: {
+          "darwin-aarch64": binary("macos", "darwin-arm64"), "darwin-x86_64": binary("macos", "darwin-x86_64"),
+          "linux-x86_64": binary("linux", "linux-x86_64", ["--uid="]), "linux-aarch64": binary("linux", "linux-arm64", ["--uid="]),
+          "windows-x86_64": { archive: "https://dl.google.com/agy-extensions/releases/windows/x.zip", cmd: "./agy_acp_server.exe" },
+        } },
+      }] });
+    }
+    expect(url.startsWith("https://dl.google.com/agy-extensions/releases/")).toBe(true);
+    const body = `archive:${url}`;
+    archives.set(url, body);
+    return new Response(body);
+  };
+  return { calls, fetcher, archives };
+}
+
+test("pin-antigravity --dry-run hashes every supported archive and writes nothing", async () => {
+  const root = repository(), before = files(root);
+  const { calls, fetcher, archives } = antigravityRegistry();
+  const pin = await pinAntigravity(root, "1.4.0", { dryRun: true, fetch: fetcher });
+  expect(files(root)).toEqual(before);
+  expect(calls).toHaveLength(5); // the registry and four archives; never Windows
+  expect(Object.keys(pin.artifacts).sort()).toEqual(["darwin-arm64", "darwin-x64", "linux-arm64", "linux-x64"]);
+  for (const artifact of Object.values(pin.artifacts)) {
+    const body = archives.get(artifact!.url)!;
+    expect(artifact!.sha256).toBe(createHash("sha256").update(body).digest("hex"));
+    expect(artifact!.bytes).toBe(Buffer.byteLength(body));
+  }
+  expect(pin.artifacts["linux-x64"]!.args).toEqual(["--uid="]);
+  expect(pin.artifacts["darwin-arm64"]!.args).toBeUndefined();
+  expect(pin.server).toBe("1.4.0");
+});
+
+test("pin-antigravity writes only the antigravity block and refuses a stale registry or a downgrade", async () => {
+  const root = repository();
+  const pin = await pinAntigravity(root, "1.4.0", { fetch: antigravityRegistry().fetcher });
+  const written = JSON.parse(files(root)[1]!);
+  expect(written).toEqual({ ...baseline, antigravity: pin });
+  await expect(pinAntigravity(root, "1.5.0", { fetch: antigravityRegistry().fetcher })).rejects.toThrow("lists antigravity-acp 1.4.0");
+  await expect(pinAntigravity(root, "1.3.9", { fetch: antigravityRegistry("1.3.9").fetcher })).rejects.toThrow("downgrade");
+  await expect(pinAntigravity(root, "v1.4.0", { fetch: antigravityRegistry().fetcher })).rejects.toThrow("stable SemVer");
 });

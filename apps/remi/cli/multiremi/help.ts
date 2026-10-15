@@ -107,6 +107,7 @@ Options:
   --ref <branch-or-sha>  Branch or commit for repo checkout (memory/wiki commands
                          use --ref <type>:<value> as a citation; see below)
   --provider <name>      Limit daemon to one provider: claude, codex or antigravity (default: auto-detect)
+  --accept-antigravity-terms  Accept Google's Antigravity terms for its first download (setup/daemon start)
   --workspace <id>       Workspace id (default: local)
   --responsible-member <id>  Deprecated no-op on issue create/update: Issues no longer designate a human
   --runtime-id <id>      Reuse a fixed runtime id

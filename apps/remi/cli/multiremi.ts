@@ -144,7 +144,7 @@ export async function runMultiremi(args: string[], runOptions: RunMultiremiOptio
 
   switch (parsed.command) {
     case "setup":
-      if (!setup(parsed.options, programName)) return;
+      if (!await setup(parsed.options, programName)) return;
       if (Boolean(parsed.options.start)) await daemon(parsed.options, [], programName);
       return;
     case "login":
@@ -242,7 +242,21 @@ async function serve(options: CliOptions): Promise<void> {
   });
 }
 
-function setup(options: CliOptions, programName: string): boolean {
+/**
+ * An explicitly selected Antigravity installs the pinned server (opt-in; never
+ * auto-detected into a download). Without accepted terms this fails with the
+ * command to run.
+ */
+async function ensureExplicitAntigravity(options: CliOptions, provider: string | null | undefined): Promise<void> {
+  if (provider !== "antigravity") return;
+  const { ensureAntigravityServer } = await import("@acp/antigravity-install.js");
+  await ensureAntigravityServer({
+    acceptTerms: Boolean(options["accept-antigravity-terms"]),
+    log: (message) => console.error(`[runtime] ${message}`),
+  });
+}
+
+async function setup(options: CliOptions, programName: string): Promise<boolean> {
   if (options.help || options.h) {
     showHelp(programName);
     return false;
@@ -268,6 +282,7 @@ function setup(options: CliOptions, programName: string): boolean {
     ? [next.provider]
     : [...SUPPORTED_DAEMON_PROVIDERS]).filter((provider): provider is ProvisionProvider => provider === "claude" || provider === "codex");
   ensureAcpBridges(provisionTargets, (m) => console.log(`  ${m}`));
+  await ensureExplicitAntigravity(options, next.provider);
   if (!next.token) {
     console.log("Token is not set. Run:");
     console.log("  remi login --token <YOUR_TOKEN>");
@@ -321,6 +336,8 @@ async function daemon(options: CliOptions, positional: string[], programName: st
   const action = positional[0] ?? "start";
   switch (action) {
     case "start":
+      // Install before a background spawn so a missing terms consent reaches this terminal.
+      await ensureExplicitAntigravity(options, stringOpt(options.provider, process.env.MULTIREMI_PROVIDER) ?? loadMultiremiConfig().provider);
       if (Boolean(options.foreground) || Boolean(options.once)) {
         await runDaemonForeground(options, programName);
       } else {
@@ -393,6 +410,7 @@ export async function resolveWorkerDaemons(
   // needs `claude` / `codex` themselves.
   ensureAcpBridges((requestedProvider ? [requestedProvider] : [...SUPPORTED_DAEMON_PROVIDERS])
     .filter((provider): provider is ProvisionProvider => provider === "claude" || provider === "codex"));
+  await ensureExplicitAntigravity(options, requestedProvider);
   const providers = await resolveHealthyDaemonProviders(requestedProvider);
   if (providers.length === 0) return [];
 

@@ -802,6 +802,24 @@ describe("MUL-338 gateway reasoning declarations: the write endpoint", () => {
     expect(badEngine.status).toBe(400);
   });
 
+  it("refuses declarations for the Antigravity engine, whose gateway path has no reasoning selector", async () => {
+    const { store, app } = setupClaude();
+    store.upsertRelayConfig("local", "antigravity", {
+      fragment: JSON.stringify({ base_url: "https://ai.openremi.fun/antigravity" }), tokenOp: "set", authToken: "test-key",
+    });
+
+    const read = await app.request("/api/workspaces/local/relay-config/antigravity/reasoning-levels");
+    expect(read.status).toBe(400);
+    expect(await read.json()).toEqual({ error: "reasoning levels are not supported for antigravity" });
+    for (const levels of [["high"], []]) {
+      const write = await app.request("/api/workspaces/local/relay-config/antigravity/reasoning-levels", {
+        method: "PUT", headers, body: JSON.stringify({ model: "gemini-3.7-flash", levels }),
+      });
+      expect(write.status).toBe(400);
+    }
+    expect(store.listGatewayModelReasoning("local", "antigravity")).toEqual([]);
+  });
+
   it("requires a workspace administrator", async () => {
     const store = createLocalStore();
     store.createWorkspaceMember({ id: "mem_local_bob", workspaceId: "local", userId: "bob", name: "Bob", email: "bob@example.com", role: "member" });

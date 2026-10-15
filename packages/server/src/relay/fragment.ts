@@ -1,6 +1,13 @@
 import { parse as parseToml } from "smol-toml";
 
-export type RelayEngine = "claude" | "codex";
+export type RelayEngine = "claude" | "codex" | "antigravity";
+
+/** Every engine the workspace model gateway can hold a config for. */
+export const RELAY_ENGINES: readonly RelayEngine[] = ["claude", "codex", "antigravity"];
+
+export function isRelayEngine(value: string): value is RelayEngine {
+  return (RELAY_ENGINES as readonly string[]).includes(value);
+}
 
 export type FragmentValidation = { ok: true } | { ok: false; error: string };
 
@@ -24,6 +31,15 @@ const CLAUDE_ENV_ALLOW = new Set([
 // Codex `[model_providers.<id>]` fixed fields. env_key/experimental_bearer_token/auth
 // are rejected: the key travels via the separate token → auth.json path.
 const CODEX_PROVIDER_ALLOW = new Set(["name", "base_url", "wire_api", "supports_websockets", "requires_openai_auth"]);
+
+// Antigravity fragment: the Gemini-protocol gateway root and an optional default
+// model. The gateway key travels in the separate token field and is held by the
+// daemon's local gateway shim; the Antigravity process only ever sees the shim URL.
+const ANTIGRAVITY_KEYS = new Set(["base_url", "default_model"]);
+const ANTIGRAVITY_MODEL_MAX_CHARS = 200;
+// The server builds `<base_url>/v1beta/models/...` itself, so a base that already
+// names a version would be requested as `/v1beta/v1beta/...` (or `/v1/v1beta/...`).
+const VERSIONED_PATH = /\/v1(?:beta)?$/i;
 
 function hasDangerousKeysDeep(value: unknown): string | null {
   if (!value || typeof value !== "object") return null;
@@ -152,16 +168,72 @@ function validateCodex(text: string): FragmentValidation {
   return { ok: true };
 }
 
+function validateAntigravity(text: string): FragmentValidation {
+  let obj: unknown;
+  try {
+    obj = JSON.parse(text);
+  } catch (err) {
+    return { ok: false, error: `invalid JSON: ${(err as Error).message}` };
+  }
+  if (!obj || typeof obj !== "object" || Array.isArray(obj)) return { ok: false, error: "fragment must be a JSON object" };
+  const top = obj as Record<string, unknown>;
+  for (const key of Object.keys(top)) {
+    if (!ANTIGRAVITY_KEYS.has(key)) return { ok: false, error: `only base_url / default_model allowed, got: ${key}` };
+  }
+  if (top.base_url !== undefined) {
+    if (typeof top.base_url !== "string") return { ok: false, error: "base_url must be a string" };
+    const u = validateGatewayUrl(top.base_url);
+    if (!u.ok) return u;
+    const url = new URL(top.base_url);
+    // Paths are appended to the base verbatim; a query or fragment would end up
+    // in the middle of every request URL.
+    if (url.search || url.hash) return { ok: false, error: "base_url must not contain a query or fragment" };
+    if (VERSIONED_PATH.test(url.pathname.replace(/\/+$/, ""))) {
+      return { ok: false, error: "base_url must be the gateway root without /v1beta or /v1 (the server appends /v1beta/...)" };
+    }
+  }
+  if (top.default_model !== undefined) {
+    const model = top.default_model;
+    if (typeof model !== "string" || !model || model.length > ANTIGRAVITY_MODEL_MAX_CHARS || /[\s\u0000-\u001f\u007f]/.test(model)) {
+      return { ok: false, error: `default_model must be a model id of 1-${ANTIGRAVITY_MODEL_MAX_CHARS} characters without whitespace` };
+    }
+  }
+  return { ok: true };
+}
+
 export function validateRelayFragment(engine: RelayEngine, text: string): FragmentValidation {
   const trimmed = text.trim();
   if (!trimmed) return { ok: true }; // empty fragment = nothing to merge
-  return engine === "claude" ? validateClaude(trimmed) : validateCodex(trimmed);
+  if (engine === "claude") return validateClaude(trimmed);
+  if (engine === "antigravity") return validateAntigravity(trimmed);
+  return validateCodex(trimmed);
+}
+
+function parseAntigravityFragment(fragment: string): { base_url?: unknown; default_model?: unknown } | null {
+  const trimmed = fragment.trim();
+  if (!trimmed) return null;
+  try {
+    const obj = JSON.parse(trimmed) as unknown;
+    return obj && typeof obj === "object" && !Array.isArray(obj) ? obj as { base_url?: unknown; default_model?: unknown } : null;
+  } catch {
+    return null;
+  }
+}
+
+/** The Antigravity engine's configured default model, used when an Agent names none. */
+export function extractAntigravityDefaultModel(fragment: string): string | null {
+  const model = parseAntigravityFragment(fragment)?.default_model;
+  return typeof model === "string" && model ? model : null;
 }
 
 /** Extract the gateway base_url from a stored fragment (for server-side discovery). */
 export function extractBaseUrl(engine: RelayEngine, fragment: string): string | null {
   const trimmed = fragment.trim();
   if (!trimmed) return null;
+  if (engine === "antigravity") {
+    const base = parseAntigravityFragment(trimmed)?.base_url;
+    return typeof base === "string" && base ? base : null;
+  }
   try {
     if (engine === "claude") {
       const obj = JSON.parse(trimmed) as { env?: Record<string, string> };

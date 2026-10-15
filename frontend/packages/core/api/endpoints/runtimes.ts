@@ -75,6 +75,8 @@ import {
   EMPTY_DAEMON_ROUTING_RESPONSE,
   type RelayConfigResponse,
   RelayConfigResponseSchema,
+  type RelayEngine,
+  type RelayReasoningEngine,
   type RelayEngineProbe,
   RelayEngineProbeSchema,
   type RelayReasoningLevelSaveResult,
@@ -179,7 +181,7 @@ export class RuntimesEndpoints {
 
   async updateRelayConfig(
     workspaceId: string,
-    engine: "claude" | "codex",
+    engine: RelayEngine,
     data: { fragment: string; token_op: "keep" | "set" | "clear"; auth_token?: string },
   ): Promise<RelayConfigResponse> {
     const raw = await this.http.fetch<unknown>(`/api/workspaces/${workspaceId}/relay-config/${engine}`, {
@@ -191,7 +193,7 @@ export class RuntimesEndpoints {
     });
   }
 
-  async revealRelayToken(workspaceId: string, engine: "claude" | "codex"): Promise<string> {
+  async revealRelayToken(workspaceId: string, engine: RelayEngine): Promise<string> {
     const raw = await this.http.fetch<{ token?: unknown }>(
       `/api/workspaces/${workspaceId}/relay-config/${engine}/reveal`,
       { method: "POST" },
@@ -202,7 +204,7 @@ export class RuntimesEndpoints {
   // Explicit "probe now": run gateway discovery once and answer with the fresh
   // snapshot. Strictly parsed — the caller reports the model/effort counts as
   // fact, so a drifted body must surface as a contract error, not "0 models".
-  async probeRelayEngine(workspaceId: string, engine: "claude" | "codex"): Promise<RelayEngineProbe> {
+  async probeRelayEngine(workspaceId: string, engine: RelayEngine): Promise<RelayEngineProbe> {
     const raw = await this.http.fetch<unknown>(
       `/api/workspaces/${workspaceId}/relay-config/${engine}/probe`,
       { method: "POST" },
@@ -217,9 +219,10 @@ export class RuntimesEndpoints {
   // a per-model upsert where `levels: []` clears the declaration. Both parse
   // strictly: the editor renders these rows as enforcement facts, so a drifted
   // shape must surface as a contract error instead of "not declared".
+  // Antigravity has no reasoning selector, so the server refuses these routes for it.
   async getRelayReasoningLevels(
     workspaceId: string,
-    engine: "claude" | "codex",
+    engine: RelayReasoningEngine,
   ): Promise<RelayReasoningLevelsResponse> {
     const raw = await this.http.fetch<unknown>(
       `/api/workspaces/${workspaceId}/relay-config/${engine}/reasoning-levels`,
@@ -231,7 +234,7 @@ export class RuntimesEndpoints {
 
   async putRelayReasoningLevel(
     workspaceId: string,
-    engine: "claude" | "codex",
+    engine: RelayReasoningEngine,
     data: { model: string; levels: string[]; default_level?: string },
   ): Promise<RelayReasoningLevelSaveResult> {
     const body: { model: string; levels: string[]; default_level?: string } = {
