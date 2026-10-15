@@ -1,5 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import { claudeUsagePatch, codexUsagePatch } from "@acp/usage-bridge-patches.js";
+import { CODEX_SESSION_BOUNDARY } from "../../fixtures/acp/codex-acp-session-boundary.js";
+import { CODEX_USAGE_V6_FIXTURE as v6Fixture } from "../../fixtures/acp/codex-usage-v6-boundary.js";
 
 // These are the upstream handler boundaries; execute patched JavaScript with
 // protocol notifications, rather than assert that generated text contains fields.
@@ -16,7 +18,7 @@ const codexBoundary = `  async handleNotification(notification) {
   routeChild(childEvent, session) {
     if (session.current.supportsSubagents) session.current.dispatch(childEvent);
     else session.current.enqueueInteraction(childEvent);
-  }`;
+  }` + CODEX_SESSION_BOUNDARY;
 const count = (input: number, cache: number, output: number, total: number) => ({
   inputTokens: input, cachedInputTokens: cache, cacheWriteInputTokens: 0, outputTokens: output,
   reasoningOutputTokens: output / 2, totalTokens: total,
@@ -37,6 +39,40 @@ describe("Codex consumption bridge", () => {
     expect(codexUsagePatch(codexBoundary.replace('case "rawResponse/completed":', 'case "unknown":'))).toBeNull();
     const patched = codexUsagePatch(codexBoundary)!;
     expect(codexUsagePatch(patched)).toBe(patched);
+  });
+
+  it("opts new threads into the only app-server stream that carries per-request usage", async () => {
+    // Without experimentalRawEvents app-server never sends rawResponse/completed
+    // (verified on codex 0.161.0 and 0.162.1), so the request hook stays dead.
+    const instance = actor();
+    const calls: Record<string, any> = {};
+    instance.codexClient = {
+      initialize: async (params: any) => { calls.initialize = params; return {}; },
+      threadStart: async (params: any) => { calls.threadStart = params; return { thread: { id: "native" } }; },
+    };
+    await instance.initialize({ clientInfo: { name: "remi" } });
+    expect(await instance.newSession({ cwd: "/work", config: {} })).toBe("native");
+    expect(calls.threadStart).toEqual({ experimentalRawEvents: true, config: {}, cwd: "/work" });
+    // The opt-in also streams every raw response item; the bridge ignores them.
+    expect(calls.initialize.capabilities).toEqual({ experimentalApi: true,
+      optOutNotificationMethods: ["rawResponseItem/completed"], requestAttestation: false });
+  });
+
+  it("refuses to install a request hook that app-server would never call", () => {
+    expect(codexUsagePatch(codexBoundary.replace("this.codexClient.threadStart({", "this.codexClient.threadOpen({"))).toBeNull();
+    expect(codexUsagePatch(codexBoundary.replace("        experimentalApi: true,", "        experimentalApi: false,"))).toBeNull();
+    // handleNotification of another class (the elicitation handler) first.
+    expect(codexUsagePatch("var Other = class {\n" + codexBoundary.replace("  async handleNotification(notification) {",
+      "  async handleNotification(notification) {}\n};\nvar Events = class {\n  async helper() {"))).toBeNull();
+  });
+
+  it("upgrades a v6 bundle in place to exactly the bytes of a fresh patch", () => {
+    expect(v6Fixture.boundary).toBe(codexBoundary);
+    const upgraded = codexUsagePatch(v6Fixture.patched)!;
+    expect(upgraded).toBe(codexUsagePatch(codexBoundary)!);
+    expect(upgraded).not.toContain("codex-usage-v6");
+    expect(upgraded.match(/const normalize = /g)).toHaveLength(1);
+    expect(upgraded.match(/experimentalRawEvents/g)).toHaveLength(1);
   });
 
   it("upgrades v5 bundles without leaving the compaction epoch state machine or duplicating request hooks", () => {

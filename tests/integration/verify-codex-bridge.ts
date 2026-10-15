@@ -8,6 +8,7 @@ import { homedir, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { AcpClient } from "@acp/client.js";
 import { BRIDGE_PIN, RUNTIME_PIN, CODEX_USAGE_PATCH, patchCodexUsageBridge } from "@acp/provision.js";
+import { beginCodexRolloutUsage, collectCodexRolloutUsage } from "@acp/codex-rollout-usage.js";
 
 const args = process.argv.slice(2);
 const packageArg = args.find((arg) => arg.startsWith("--package-dir="))?.slice("--package-dir=".length);
@@ -91,6 +92,23 @@ const childUsage = await responseHandler.createUpdateEvent(dispatched[0]);
 assert.equal(childUsage._meta.remiTokenUsage.providerSessionId, "native-child");
 assert.equal(childUsage._meta.remiTokenUsage.requestedModel, null);
 assert.equal(childUsage._meta.remiTokenUsage.modelSource, "unknown");
+// app-server sends rawResponse/completed only for threads whose thread/start
+// opted into raw events (codex 0.161.0 and 0.162.1); without that the hook
+// above never runs. resume/fork cannot opt in and use the native rollout.
+const rawStart = patched.indexOf("    const response = await this.codexClient.threadStart({/*remi-usage:begin*/\n      experimentalRawEvents: true,");
+assert(rawStart >= 0 && patched.startsWith("\n  async newSession(request) {", patched.lastIndexOf("\n  async ", rawStart)),
+  "The published newSession must opt thread/start into raw response events");
+const initializeStart = patched.indexOf("  async initialize(request) {\n    const response = await this.codexClient.initialize({");
+const initializeEnd = patched.indexOf("\n  }\n", initializeStart);
+assert(initializeStart >= 0 && initializeEnd > initializeStart, "Inspect the new bridge's app-server initialize");
+const Initializer = new Function(`return class { ${patched.slice(initializeStart, initializeEnd + 4)} }`)();
+const initializer = new Initializer();
+let appServerInitialize: any;
+initializer.codexClient = { initialize: async (params: any) => { appServerInitialize = params; return {}; } };
+initializer.defaultClientInfo = { name: bridge.name, title: "Codex ACP", version: bridge.version };
+await initializer.initialize({});
+assert.equal(appServerInitialize.capabilities.experimentalApi, true);
+assert.deepEqual(appServerInitialize.capabilities.optOutNotificationMethods, ["rawResponseItem/completed"]);
 if (args.includes("--usage-only")) {
   console.log(JSON.stringify({ bridge: bridge.version, codex: codex.version, cliVersion,
     usagePatch: CODEX_USAGE_PATCH, usageHook: "passed", sessionNegotiation: "not_run" }));
@@ -111,9 +129,10 @@ for (const key of ["CODEX_PATH", "CODEX_CONFIG", "DEFAULT_AUTH_REQUEST", "MODEL_
   delete process.env[key];
 }
 let text = "";
-let usageUpdates = 0;
 let invalidUsageUpdates = 0;
-const client = new AcpClient({
+// Streamed request usage by native identity (thread, response).
+const streamed = new Map<string, any>();
+const bridgeClient = () => new AcpClient({
   executable: node, args: [entry], agentType: "codex", cwd,
   env: { CODEX_HOME: isolatedHome },
   log: (...messages) => { if (messages[0] === "stderr:") console.error(...messages); },
@@ -125,15 +144,19 @@ const client = new AcpClient({
     }
     if (update.sessionUpdate === "usage_update") {
       if (update._meta?.remiUsagePatch !== CODEX_USAGE_PATCH || update._meta?.remiUsageMode !== "request") invalidUsageUpdates++;
-      if (update._meta?.remiTokenUsage) usageUpdates++;
+      const usage = update._meta?.remiTokenUsage as any;
+      if (usage) streamed.set(JSON.stringify([usage.providerSessionId, usage.providerRequestId]), usage);
     }
   },
 });
+let client = bridgeClient();
+const requestUsage: Record<string, { streamed: number; rollout: number }> = {};
+const timeoutMs = args.includes("--prompt") ? 240_000 : 120_000;
 let timedOut = false;
 const timeout = setTimeout(() => {
   timedOut = true;
   void client.stop();
-}, 120_000);
+}, timeoutMs);
 try {
   console.log("Checking ACP initialize...");
   await client.start();
@@ -155,24 +178,58 @@ try {
   await client.setMode(session.sessionId, "read-only");
   if (args.includes("--prompt")) {
     console.log("Checking a real model reply and streamed usage...");
+    const rollout = beginCodexRolloutUsage(isolatedHome, session.sessionId);
     const result = await client.prompt(session.sessionId, "Reply with exactly REMI_CODEX_BRIDGE_OK. Do not use tools.");
     assert.equal(result.stopReason, "end_turn");
     assert(text.includes("REMI_CODEX_BRIDGE_OK"));
-    assert(usageUpdates > 0, "A real prompt must deliver patched usage updates");
+    assert(streamed.size > 0, "A new thread must stream rawResponse/completed request usage");
     assert.equal(invalidUsageUpdates, 0, "All streamed usage must carry the Remi patch");
+    // The daemon also reads the native rollout. Both sources must name the
+    // same requests with the same counters, or the merge would double count.
+    const recorded = await collectCodexRolloutUsage(rollout, { waitMs: 2_000 });
+    for (const usage of streamed.values()) {
+      const match = recorded.find(({ usage: native }) => native.providerSessionId === usage.providerSessionId
+        && native.providerRequestId === usage.providerRequestId);
+      assert(match, `The rollout lacks streamed request ${usage.providerRequestId}`);
+      for (const key of ["inputTokens", "cachedInputTokens", "cacheWriteTokens", "outputTokens", "totalTokens"]) {
+        assert.equal(match.usage[key], usage[key], `${key} differs between the stream and the rollout`);
+      }
+    }
+    requestUsage.newThread = { streamed: streamed.size, rollout: recorded.length };
   }
   console.log("Checking ACP session/close...");
   await client.closeSession(session.sessionId);
+  if (args.includes("--prompt")) {
+    // A daemon restart resumes the thread in a new bridge process; thread/resume
+    // cannot opt into raw events, so only the rollout carries its requests.
+    console.log("Checking resumed-thread request usage from the native rollout...");
+    await client.stop();
+    client = bridgeClient();
+    await client.start();
+    await client.initialize();
+    const resumed = await client.resumeSession(session.sessionId, cwd, []);
+    streamed.clear();
+    text = "";
+    const rollout = beginCodexRolloutUsage(isolatedHome, resumed.sessionId);
+    const result = await client.prompt(resumed.sessionId, "Reply with exactly REMI_CODEX_RESUME_OK. Do not use tools.");
+    assert.equal(result.stopReason, "end_turn");
+    assert(text.includes("REMI_CODEX_RESUME_OK"));
+    const recorded = await collectCodexRolloutUsage(rollout, { waitMs: 2_000 });
+    assert(recorded.length > 0 && recorded.every(({ threadId, usage }) => threadId === session.sessionId && usage.accuracy === "exact"),
+      "A resumed thread's requests must be recorded in its rollout");
+    requestUsage.resumedThread = { streamed: streamed.size, rollout: recorded.length };
+    await client.closeSession(resumed.sessionId);
+  }
   console.log(JSON.stringify({
     bridge: bridge.version, codex: codex.version, cliVersion,
     usagePatch: CODEX_USAGE_PATCH, protocolVersion: initialized.protocolVersion,
     model: model.currentValue, effort: effort.currentValue,
     modelCatalog: session.models?.availableModels.map((entry) => entry.modelId),
-    prompt: args.includes("--prompt") ? "passed" : "not-run", usageUpdates,
+    prompt: args.includes("--prompt") ? "passed" : "not-run", requestUsage,
     status: "passed",
   }, null, 2));
 } catch (error) {
-  if (timedOut) throw new Error("Codex bridge verification timed out after 120 seconds", { cause: error });
+  if (timedOut) throw new Error(`Codex bridge verification timed out after ${timeoutMs / 1000} seconds`, { cause: error });
   throw error;
 } finally {
   clearTimeout(timeout);
