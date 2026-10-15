@@ -56,7 +56,7 @@ Claude 桥 bundle 带两个补丁，都改 `dist/acp-agent.js`：`claude-usage-v
 - 后台子代理在根会话结果之前结束时，后续轮仍在 `session/prompt` 返回后开始，daemon 在同一轮里收到它的回答；子代理的权限请求仍以子会话 id 发出。
 - 重录 `tests/fixtures/acp/claude-090-native-subagent-*.json`（脱敏）并跑 `tests/unit/acp/native-subagents.test.ts`、`tests/unit/acp/autonomous-turn.test.ts`、`tests/unit/daemon/trace-translator-native-subagents.test.ts` 与 `tests/integration/multiremi-daemon-subagents.test.ts`。
 
-任何一项不成立时，可在 daemon 环境里设 `REMI_ACP_NATIVE_SUBAGENTS=0` 或 `REMI_ACP_AUTONOMOUS_ROUNDS=0` 恢复此前的行为（见 [daemon 环境](deploy/66-8-remi-environment.md)），再修补丁或 adapter 后发版。本节的事实在 claude-agent-acp 0.90.0 上实测（2026-10-15）。
+任何一项不成立时，可在 daemon 环境里设 `REMI_ACP_NATIVE_SUBAGENTS=0` 或 `REMI_ACP_AUTONOMOUS_ROUNDS=0` 恢复此前的行为（见 [daemon 环境](deploy/66-8-remi-environment.md)），再修补丁或 adapter 后发版。claude-agent-acp 0.90.0 上的实测（2026-10-16，经 Remi 安装路径打补丁的真实 bridge 与本分支的 daemon）：前台子代理 `backgrounded: false`、后台启动为 `true`，`subagentType` 为 `general-purpose`；后台子代理在根会话结果之前结束时，后续轮的回答作为自主轮在同一轮里收到，等待期间的引导结束等待并在同一轮里得到回答；子代理的写权限请求以子会话 id 发出，批准后子代理继续。恢复一代（`<id>:generation:N`）的标记未实测。
 
 ## Codex 升级检查项
 
