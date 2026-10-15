@@ -61,7 +61,6 @@ export class FeishuStreamingSession {
   private readonly imageResolver: MarkdownImageResolver;
   private currentRawText = "";
   private header: unknown;
-  private taskOwnsLifetime = false;
   private readonly timers = { safety: new TimerSlot(), heartbeat: new TimerSlot(), patch: new TimerSlot() };
   private startTime = 0;
   private lastStatusText = "";
@@ -91,8 +90,7 @@ export class FeishuStreamingSession {
     receiveId: string,
     receiveIdType: "open_id" | "user_id" | "union_id" | "email" | "chat_id" = "chat_id",
     options?: { replyToMessageId?: string; sessionId?: string | null; displayName?: string | null;
-      agentName?: string | null; nameSuffix?: string; subtitle?: string | null; mentionOpenId?: string;
-      durable?: { idempotencyKey: string; messageId?: string | null } },
+      agentName?: string | null; nameSuffix?: string; subtitle?: string | null; mentionOpenId?: string },
   ): Promise<void> {
     if (this.state) return;
     this.abortController.signal.throwIfAborted();
@@ -103,20 +101,14 @@ export class FeishuStreamingSession {
     this.agentName = options?.agentName;
     this.execution = { agentName: options?.displayName ?? options?.agentName };
     this.mentionOpenId = options?.mentionOpenId;
-    this.taskOwnsLifetime = Boolean(options?.durable);
     const card = buildInitialCardJson(options);
     this.header = card.header;
-    let messageId = options?.durable?.messageId;
-    if (!messageId) {
-      const data = { msg_type: "interactive" as const, content: JSON.stringify(card),
-        ...(options?.durable ? { uuid: options.durable.idempotencyKey } : {}) };
-      const sent = options?.replyToMessageId
-        ? await this.client.im.message.reply({ path: { message_id: options.replyToMessageId }, data: { ...data, reply_in_thread: true } })
-        : await this.client.im.message.create({ params: { receive_id_type: receiveIdType }, data: { ...data, receive_id: receiveId } });
-      if (sent.code !== 0 || !sent.data?.message_id) throw new Error(`Send card failed: ${sent.msg}`);
-      messageId = sent.data.message_id;
-    }
-    this.state = { messageId, currentText: "", currentStatus: "" };
+    const data = { msg_type: "interactive" as const, content: JSON.stringify(card) };
+    const sent = options?.replyToMessageId
+      ? await this.client.im.message.reply({ path: { message_id: options.replyToMessageId }, data: { ...data, reply_in_thread: true } })
+      : await this.client.im.message.create({ params: { receive_id_type: receiveIdType }, data: { ...data, receive_id: receiveId } });
+    if (sent.code !== 0 || !sent.data?.message_id) throw new Error(`Send card failed: ${sent.msg}`);
+    this.state = { messageId: sent.data.message_id, currentText: "", currentStatus: "" };
     this.startTime = Date.now();
     this.resetSafetyTimer();
     this.resetHeartbeat();
@@ -294,7 +286,6 @@ export class FeishuStreamingSession {
   }
 
   private resetSafetyTimer(): void {
-    if (this.taskOwnsLifetime) return;
     this.timers.safety.arm(SAFETY_TIMEOUT_MS, () => {
       if (!this.isActive()) return;
       this.abortController.abort();
@@ -345,7 +336,7 @@ export class FeishuStreamingSession {
 
   isActive(): boolean { return this.state !== null && !this.closed && !this.closing; }
 
-  /** Stop local writers without marking a durable Task as cancelled. */
+  /** Stop local writers without closing the card. */
   detach(): void {
     this.closed = true;
     for (const timer of Object.values(this.timers)) timer.clear();

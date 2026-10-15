@@ -22,11 +22,12 @@
  * five state values; the daemon side never learns about those states.
  */
 
-import type { TraceEvent } from "@multiremi/contracts/trace.js";
+import type { TraceEventPage, TraceTurnPage } from "@multiremi/contracts/trace.js";
 import type { DaemonProtocolErrorCode } from "@multiremi/contracts/daemon-protocol.js";
 import type { TraceStore } from "@multiremi/worker/trace-store.js";
+import { readEventPage, readTurnPage } from "@multiremi/worker/trace-pages.js";
 
-export interface DaemonTraceReadRequest {
+interface DaemonTraceReadRequestBase {
   taskId: string;
   /**
    * The runtime that owns the task.
@@ -37,9 +38,7 @@ export interface DaemonTraceReadRequest {
    * would be an extra query on the hot path.
    */
   runtimeId: string;
-  /** Exclusive cursor: the first event returned has `seq > after_seq`. */
-  afterSeq?: number;
-  /** Maximum events per page. Clamped to 1..500; defaults to 200. */
+  /** Maximum items (`turn`) or events (`events`) per page. Clamped to 1..500; defaults to 200. */
   limit?: number;
   /** Maximum serialized bytes per page. Defaults to 1 MiB. */
   maxBytes?: number;
@@ -47,21 +46,33 @@ export interface DaemonTraceReadRequest {
   timeoutMs?: number;
 }
 
-export interface DaemonTraceReadSuccess {
-  ok: true;
-  events: TraceEvent[];
-  /** Pass back as `afterSeq` to continue. */
-  next_after_seq: number;
-  /** Daemon's current head for this task. */
-  head: number;
-  /** True when this page reached the head. */
-  eof: boolean;
-  /**
-   * True when the trace is final. The one completeness signal on this path, taken
-   * from `TraceStore.head(taskId).closed`; there is no terminator event.
-   */
-  closed: boolean;
+/**
+ * `view=turn` (PR 2): the running fold or the closed snapshot, paged by item
+ * index. A v1 file answers `format: "legacy"` with no turn and no items.
+ */
+export interface DaemonTraceReadTurnRequest extends DaemonTraceReadRequestBase {
+  view: "turn";
+  /** Index of the first item to return; defaults to 0. */
+  itemCursor?: number;
 }
+
+/** `view=events`: raw stored lines, v1 files included. */
+export interface DaemonTraceReadEventsRequest extends DaemonTraceReadRequestBase {
+  view: "events";
+  /** Exclusive cursor: the first event returned has `seq > after_seq`. */
+  afterSeq?: number;
+}
+
+export type DaemonTraceReadRequest = DaemonTraceReadTurnRequest | DaemonTraceReadEventsRequest;
+
+/**
+ * A successful read, shaped by the request's view. `closed` is the one
+ * completeness signal on this path, taken from `TraceStore.head(taskId).closed`;
+ * there is no terminator event.
+ */
+export type DaemonTraceReadTurnSuccess = { ok: true } & TraceTurnPage;
+export type DaemonTraceReadEventsSuccess = { ok: true } & TraceEventPage;
+export type DaemonTraceReadSuccess = DaemonTraceReadTurnSuccess | DaemonTraceReadEventsSuccess;
 
 export interface DaemonTraceReadFailure {
   ok: false;
@@ -96,6 +107,7 @@ export interface DaemonTraceReader {
 /** Clamp a caller's page request the way the real implementation must. */
 export const DAEMON_TRACE_READ_DEFAULT_LIMIT = 200;
 export const DAEMON_TRACE_READ_MAX_LIMIT = 500;
+const DAEMON_TRACE_READ_DEFAULT_MAX_BYTES = 1024 * 1024;
 
 /** Where a runtime's trace store comes from. Injectable so tests stay in memory. */
 export type DaemonTraceStoreLookup = (runtimeId: string) => TraceStore | null;
@@ -128,24 +140,16 @@ export class InMemoryDaemonTraceReader implements DaemonTraceReader {
         last_seen_at: this.lastSeenAt(request.runtimeId) ?? undefined,
       };
     }
-    // A closed trace is still hot and still readable; only "never seen" is not.
-    const head = store.head(request.taskId);
-    if (head === null) {
-      return { ok: false, code: "trace_not_hot", runtime_id: request.runtimeId };
-    }
-
     const limit = Math.max(
       1,
       Math.min(Math.floor(request.limit ?? DAEMON_TRACE_READ_DEFAULT_LIMIT), DAEMON_TRACE_READ_MAX_LIMIT),
     );
-    const page = store.read(request.taskId, request.afterSeq ?? 0, limit, request.maxBytes);
-    return {
-      ok: true,
-      events: page.events,
-      next_after_seq: page.events.at(-1)?.seq ?? request.afterSeq ?? 0,
-      head: page.head,
-      eof: page.eof,
-      closed: head.closed,
-    };
+    const maxBytes = request.maxBytes ?? DAEMON_TRACE_READ_DEFAULT_MAX_BYTES;
+    // A closed trace is still hot and still readable; only "never seen" is not.
+    const page = request.view === "turn"
+      ? readTurnPage(store, request.taskId, { itemCursor: request.itemCursor ?? 0, limit, maxBytes })
+      : readEventPage(store, request.taskId, { afterSeq: request.afterSeq ?? 0, limit, maxBytes });
+    if (!page) return { ok: false, code: "trace_not_hot", runtime_id: request.runtimeId };
+    return { ok: true, ...page };
   }
 }

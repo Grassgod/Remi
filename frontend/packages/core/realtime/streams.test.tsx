@@ -84,3 +84,16 @@ describe.each(["log", "trace"] as const)("shared %s stream consumers", (stream) 
     expect(second.onFrames).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("trace subscription start", () => {
+  afterEach(() => { cleanup(); resetStreamSubscriptionCountsForTesting(); });
+
+  it("opens at the caller's fromSeq and does not resubscribe when it moves", () => {
+    vi.clearAllMocks();
+    provider.subscribeTrace.mockImplementation(() => ({ stream: "trace", id: "tsk", head: () => 0, unsubscribe: vi.fn() }));
+    const hook = renderHook(({ fromSeq }) => useTraceStreamSubscription("tsk", handlers(), true, { fromSeq }), { initialProps: { fromSeq: 42 } });
+    expect(provider.subscribeTrace).toHaveBeenCalledWith("tsk", expect.anything(), { fromSeq: 42 });
+    hook.rerender({ fromSeq: 99 });
+    expect(provider.subscribeTrace).toHaveBeenCalledTimes(1);
+  });
+});

@@ -4,6 +4,9 @@ import { DaemonProtocolRpcError } from "@multiremi/worker/daemon-protocol-client
 import type { MultiremiTaskWithAgent } from "@multiremi/contracts/types.js";
 import type { UnifiedMessage } from "@multiremi/contracts/unified-model.js";
 import type { PermissionOutcome, RequestPermissionParams } from "@multiremi/contracts/acp-protocol.js";
+import type { TraceEventInput } from "@multiremi/contracts/trace.js";
+import { createAdapter } from "@acp/index.js";
+import { createTraceTranslator, type TraceTranslator } from "@multiremi/worker/trace-translator.js";
 
 const params: RequestPermissionParams = {
   sessionId: "provider_session",
@@ -29,7 +32,8 @@ const answer = (optionId: string): UnifiedMessage => ({ ...decision, id: "msg_re
 
 function fixture(input: { reply?: UnifiedMessage | null; expiredReply?: UnifiedMessage; failure?: Error; abort?: boolean } = {}) {
   const calls: Array<{ type: string; payload: Record<string, unknown> }> = [];
-  const trace: Array<Record<string, unknown>> = [];
+  const trace: TraceEventInput[] = [];
+  const translator = createTraceTranslator(createAdapter("claude"), (events) => trace.push(...events));
   const confirmed: UnifiedMessage[] = [];
   const boundaries: string[] = [];
   const daemon = Object.create(MultiremiDaemon.prototype) as MultiremiDaemon;
@@ -37,7 +41,6 @@ function fixture(input: { reply?: UnifiedMessage | null; expiredReply?: UnifiedM
   Object.assign(daemon, {
     options: { approvalMode: "ask", humanRequestTimeoutMs: 1000, runtimeId: "rt_one" },
     pollAbort: new AbortController(),
-    ensureTrace: () => ({ append: (_attempt: string, _runtime: string, events: Record<string, unknown>[]) => trace.push(...events) }),
     taskDownlinks: {
       beginDecision: () => boundaries.push("begin"), finishDecision: () => boundaries.push("finish"),
       turnInput: () => ({ turn_id: "turn_one", attempt_id: "tsk_one", input_to_seq: 1 }),
@@ -58,8 +61,8 @@ function fixture(input: { reply?: UnifiedMessage | null; expiredReply?: UnifiedM
   let handler!: (params: RequestPermissionParams) => Promise<PermissionOutcome>;
   const provider = { setPermissionHandler: (value: typeof handler) => { handler = value; } } as MultiremiTaskProvider;
   const attach = daemon as unknown as { attachHumanInputHandlers(provider: MultiremiTaskProvider,
-    task: MultiremiTaskWithAgent, signal: AbortSignal, nextSeq: () => number): () => void };
-  attach.attachHumanInputHandlers(provider, { id: "tsk_one" } as MultiremiTaskWithAgent, signal, () => 1);
+    task: MultiremiTaskWithAgent, signal: AbortSignal, trace: TraceTranslator): () => void };
+  attach.attachHumanInputHandlers(provider, { id: "tsk_one" } as MultiremiTaskWithAgent, signal, translator);
   return { calls, trace, confirmed, boundaries, run: () => handler(params) };
 }
 
@@ -84,7 +87,12 @@ describe("permission decision messages", () => {
     expect(h.calls[0]!.payload).not.toHaveProperty("task_id");
     expect(h.confirmed).toEqual([reply]);
     expect(h.boundaries).toEqual(["begin", "finish"]);
-    expect(h.trace[0]).toMatchObject({ type: "permission_request", input: { message_id: decision.id } });
+    // The request and its answer are one permission item, linked to the tool call.
+    expect(h.trace.map((event) => event.type)).toEqual(["item.started", "item.completed"]);
+    expect(h.trace[0]).toMatchObject({ item: { id: `perm:${decision.id}`, type: "permission", status: "in_progress",
+      tool_item_id: "tool_one", title: "Write file", message_id: decision.id } });
+    expect(h.trace[1]).toMatchObject({ item: { id: `perm:${decision.id}`, status: optionId === "allow" ? "completed" : "declined",
+      outcome: "selected", decision: { option_id: optionId }, responded_by: "member_one", reply_message_id: reply.id } });
   });
 
   it("cancels an unknown option instead of granting permission", async () => {
@@ -100,6 +108,7 @@ describe("permission decision messages", () => {
     } });
     expect(h.confirmed).toEqual([]);
     expect(h.boundaries).toEqual(["begin", "finish"]);
+    expect(h.trace.at(-1)).toMatchObject({ type: "item.completed", item: { status: "stopped", outcome: abort ? "cancelled" : "timeout" } });
   });
 
   it("honors the reply that commits before expiry", async () => {

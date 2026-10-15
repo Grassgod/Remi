@@ -3,8 +3,9 @@ import { screen } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { AgentTask } from "@multiremi/core/types/agent";
 import { renderWithI18n } from "../../test/i18n";
+import type { TraceItem } from "@multiremi/contracts/trace";
+import { message } from "../../test/trace-fixtures";
 import { AgentTranscriptDialog } from "./agent-transcript-dialog";
-import type { TimelineItem } from "./build-timeline";
 
 // The mention chips reach for workspace queries; stub them the way
 // common/markdown.test.tsx does so this file stays about the wiring.
@@ -29,7 +30,7 @@ const task: AgentTask = {
   created_at: "2026-07-30T00:00:00Z",
 };
 
-function renderTranscript(items: TimelineItem[]) {
+function renderTranscript(items: TraceItem[]) {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return renderWithI18n(
     <QueryClientProvider client={queryClient}>
@@ -49,13 +50,7 @@ describe("transcript markdown", () => {
   // in an agent's reply rendered as inert text while the same mention in a
   // chat message rendered as a card. Both now go through views/common/markdown.
   it("renders issue mentions as chips, like every other markdown surface", () => {
-    renderTranscript([
-      {
-        seq: 1,
-        type: "text",
-        content: "Fixed in [MUL-42](mention://issue/issue-42).",
-      },
-    ]);
+    renderTranscript([message("msg:1", "Fixed in [MUL-42](mention://issue/issue-42).", "final")]);
 
     expect(screen.getAllByTestId("issue-mention-card").length).toBeGreaterThan(0);
     expect(screen.getAllByTestId("issue-mention-card")[0]).toHaveTextContent(
@@ -64,9 +59,7 @@ describe("transcript markdown", () => {
   });
 
   it("still renders ordinary prose", () => {
-    renderTranscript([
-      { seq: 1, type: "text", content: "Audit done: env vars win." },
-    ]);
+    renderTranscript([message("msg:1", "Audit done: env vars win.", "final")]);
 
     expect(
       screen.getAllByText("Audit done: env vars win.").length,

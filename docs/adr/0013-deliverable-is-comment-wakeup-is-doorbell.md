@@ -4,6 +4,8 @@
 
 Amended by [ADR 0016](0016-unified-message-inbox-and-turn.md) (MUL-493): the `agent_read_state` read progress moves into the session lane cursor.
 
+Implementation moved by [ADR 0019](0019-turn-and-item-traces.md) (PR 2): the last top-level assistant message is now chosen by the trace translator's `settle()` final-reply rule over `agent_message` items; the fragment-based `last-assistant-message.ts` is deleted.
+
 Accepted for MUL-498. The latest user decision replaces inbox directories and
 inline unread history with triggering messages and one complete unread-range
 read. Text is truncated before dispatch. The latest review permits one exception:
@@ -136,7 +138,7 @@ The migration leaves existing data intact; initialization is lazy on first acces
 
 ## Implementation
 
-- `packages/server/src/worker/last-assistant-message.ts`
+- `packages/server/src/worker/trace-translator.ts` (`settle()`; the rule is `selectFinalReply` in `packages/shared/src/turn-trace.ts`)
 - `packages/server/src/store/envelope-body.ts`
 - `packages/server/src/store/repos/tasks-repo.ts`
 - `packages/server/src/store/task-session-input.ts`

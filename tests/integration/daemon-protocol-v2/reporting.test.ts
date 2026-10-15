@@ -4,6 +4,7 @@ import type { SqlDatabase } from "@multiremi/store/db/postgres.js";
 import { MultiremiDaemonClient } from "@multiremi/client.js";
 import { MultiremiTaskReportOutbox } from "@multiremi/worker/outbox.js";
 import { DaemonProtocolHarness, waitFor } from "./harness.js";
+import { agentTexts } from "../../helpers/turn-trace.js";
 
 const fixtures: DaemonProtocolHarness[] = [];
 afterEach(async () => { for (const h of fixtures.splice(0)) await h.dispose(); });
@@ -281,7 +282,7 @@ describe("v2 report reconciliation with real sockets and DB", () => {
       expect(turns).toBe(2);
       expect(prompts[1]).toContain("use the new answer");
       expect(h.store.getTask(t.id)).toMatchObject({ status: "completed", result: "new answer" });
-      expect(h.daemon.traceStore().read(t.id).events).toContainEqual(expect.objectContaining({ type: "text", content: "old answer" }));
+      expect(agentTexts(h.daemon.traceStore().read(t.id).events)).toContain("old answer");
       expect(terminalEffects).toBe(1);
       expect(h.ledger.filter(entry => entry.type === "turn.complete" && entry.partition === t.id)).toHaveLength(2);
       expect(outbox(h).stats().blocked).toBe(0);

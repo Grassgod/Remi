@@ -3,8 +3,9 @@ import { InMemoryTraceSink } from "@multiremi/api/trace/trace-sink.js";
 import { InMemoryTraceStore } from "@multiremi/worker/trace-store.js";
 import type { TraceEvent } from "@multiremi/contracts/trace.js";
 
+/** The sink carries events opaquely; any `{ seq, ts, type }` line stands in for one. */
 function event(seq: number, content = `event-${seq}`): TraceEvent {
-  return { seq, ts: "2026-09-27T00:00:00.000Z", type: "text", content };
+  return { seq, ts: "2026-09-27T00:00:00.000Z", type: "text", content } as unknown as TraceEvent;
 }
 
 function batch(...seqs: number[]): TraceEvent[] {

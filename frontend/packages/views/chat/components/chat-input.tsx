@@ -91,6 +91,8 @@ interface ChatInputProps {
   agentName?: string;
   /** Rendered at the bottom-left of the input bar — typically the agent picker. */
   leftAdornment?: ReactNode;
+  /** Rendered before the action buttons at the bottom-right — the context ring. */
+  rightAdornment?: ReactNode;
   /** Chat @ suggestions: current/recent issue/project entries. */
   contextItems?: MentionItem[];
 }
@@ -105,6 +107,7 @@ export function ChatInput({
   noAgent,
   agentName,
   leftAdornment,
+  rightAdornment,
   contextItems,
 }: ChatInputProps) {
   const { t } = useT("chat");
@@ -454,6 +457,7 @@ export function ChatInput({
           </div>
         )}
         <div className="absolute bottom-1 right-1.5 flex items-center gap-1">
+          {rightAdornment}
           {uploadEnabled && (
             <FileUploadButton
               size="sm"

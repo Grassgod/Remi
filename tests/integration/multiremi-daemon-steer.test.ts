@@ -17,6 +17,7 @@ import { MultiremiStore } from "@multiremi/store.js";
 import type { DaemonProtocolLayer } from "@multiremi/api/daemon-protocol/index.js";
 import { DaemonProtocolSession } from "@multiremi/api/daemon-protocol/session.js";
 import { unreadRangeHint } from "@multiremi/contracts/session-input.js";
+import { agentTexts, traceItems } from "../helpers/turn-trace.js";
 
 let database: IntegrationDatabase | null = null;
 let fixtureStore: MultiremiStore | null = null;
@@ -126,7 +127,7 @@ describe("Bun Multiremi daemon steering", () => {
       expect(completed.status).toBe("completed");
       // The result contains only the post-steer segment; earlier output remains in the trace.
       expect(completed.result).toBe("中文结论");
-      expect(daemon.traceStore().read(task.id).events).toContainEqual(expect.objectContaining({ type: "text", content: "English draft. " }));
+      expect(agentTexts(daemon.traceStore().read(task.id).events)).toContain("English draft. ");
 
       // The injected prompt carries the user's directive on the same session.
       expect(prompts).toHaveLength(2);
@@ -138,10 +139,12 @@ describe("Bun Multiremi daemon steering", () => {
       expect(steerId).toBeTruthy();
       expect(store.getTaskSteerMessage(steerId!)?.consumedAt).toBeTruthy();
       expect(store.listPendingTaskSteerMessages(task.id)).toHaveLength(0);
-      const steerMessages = daemon.traceStore().read(task.id).events.filter((m) => m.type === "steer");
+      const steerMessages = traceItems(daemon.traceStore().read(task.id).events)
+        .filter((item) => item.type === "user_message" && item.origin === "steer");
       expect(steerMessages).toHaveLength(1);
+      expect(steerMessages[0]).toMatchObject({ steer: { steer_id: steerId, kind: "steer", injected: true } });
       const message = store.getMessage(steerId!)!;
-      const [range, ...body] = String(steerMessages[0]!.content).split("\n");
+      const [range, ...body] = String((steerMessages[0] as { text: string }).text).split("\n");
       expect(JSON.parse(range!)).toEqual({ type: "unread_range", session_id: message.session_id,
         from_seq: 0, to_seq: message.seq, unread_count: 1,
         instruction: unreadRangeHint(message.session_id, 0, message.seq, 1, true) });
@@ -211,7 +214,7 @@ describe("Bun Multiremi daemon steering", () => {
       const completed = store.getTask(task.id)!;
       expect(completed.status).toBe("completed");
       expect(completed.result).toBe("中文结论");
-      expect(daemon.traceStore().read(task.id).events).toContainEqual(expect.objectContaining({ type: "text", content: "old answer. " }));
+      expect(agentTexts(daemon.traceStore().read(task.id).events)).toContain("old answer. ");
       expect(prompts).toHaveLength(2);
       expect(prompts[1]).toContain("改用中文输出");
       expect(steerId).toBeTruthy();
@@ -261,7 +264,7 @@ describe("Bun Multiremi daemon steering", () => {
       await daemon.start();
       expect(conflicts).toBe(1);
       expect(store.getTask(task.id)).toMatchObject({ status: "completed", result: "final directive." });
-      expect(daemon.traceStore().read(task.id).events).toContainEqual(expect.objectContaining({ type: "text", content: "draft. " }));
+      expect(agentTexts(daemon.traceStore().read(task.id).events)).toContain("draft. ");
       expect(prompts).toHaveLength(2);
       expect(prompts[1]).toContain("Include the final directive");
       expect(store.getTaskSteerMessage(steerId)?.consumedAt).toBeTruthy();
@@ -353,7 +356,7 @@ describe("Bun Multiremi daemon steering", () => {
       const completed = store.getTask(task.id)!;
       expect(completed.status).toBe("completed");
       expect(completed.result).toBe("中文结论");
-      expect(daemon.traceStore().read(task.id).events).toContainEqual(expect.objectContaining({ type: "text", content: "english draft. " }));
+      expect(agentTexts(daemon.traceStore().read(task.id).events)).toContain("english draft. ");
       expect(prompts).toHaveLength(2);
       expect(prompts[1]).toContain("改用中文输出");
       expect(store.listPendingTaskSteerMessages(task.id)).toHaveLength(0);
@@ -429,7 +432,7 @@ describe("Bun Multiremi daemon steering", () => {
       expect(completed.status).toBe("completed");
       // Even when force-answer grace expires, the result intentionally keeps only the last segment.
       expect(completed.result).toBe("Still exploring…");
-      expect(daemon.traceStore().read(task.id).events).toContainEqual(expect.objectContaining({ type: "text", content: "Partial findings. " }));
+      expect(agentTexts(daemon.traceStore().read(task.id).events)).toContain("Partial findings. ");
       expect(prompts).toHaveLength(2);
       expect(prompts[1]).toContain("Deliver now");
       expect(prompts[1]).toBe("[Deliver now] The user asked for the result immediately. Stop exploring and stop making new changes. "

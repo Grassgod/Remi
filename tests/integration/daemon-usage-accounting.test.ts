@@ -200,6 +200,20 @@ describe("daemon consumption reports over the real server protocol", () => {
     await daemon.start();
     expect(observedWhileRunning).toBe(true);
     expect(store.getTask(task.id)?.status).toBe(outcome === "failure" ? "failed" : outcome === "cancel" ? "cancelled" : "completed");
+    // Every outcome seals the trace, the server-side cancel included (PR 2 §3.2),
+    // and the context occupancy rides on the turn while billing stays in the ledger.
+    expect(daemon.traceStore().head(task.id)?.closed).toBe(true);
+    const snapshot = daemon.traceStore().snapshotPart(task.id, 0)!;
+    expect(snapshot.turn).toMatchObject({
+      status: outcome === "failure" ? "failed" : outcome === "cancel" ? "cancelled" : "completed",
+      context_usage: { used: 70000, size: 200000 },
+    });
+    expect(snapshot.items.filter(item => item.type === "agent_message").map(item => (item as { text: string }).text))
+      .toEqual(outcome === "steer" ? ["First findings", "中文结论"] : ["First findings"]);
+    if (outcome === "steer") {
+      expect(snapshot.items.find(item => item.type === "user_message" && item.origin === "steer"))
+        .toMatchObject({ text: expect.stringContaining("Continue in Chinese"), steer: { kind: "steer", injected: true } });
+    }
     const report = store.getUsageReport({ workspaceId: "local", days: null });
     expect(report.summary).toMatchObject({ actual_total_tokens: outcome === "steer" ? 32 : 25, context_peak_tokens: 70000, task_count: 1 });
     expect(report.by_model.filter(row => row.actual_total_tokens > 0).map(row => [row.model, row.actual_total_tokens]).sort()).toEqual(

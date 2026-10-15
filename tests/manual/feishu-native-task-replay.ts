@@ -1,6 +1,8 @@
 #!/usr/bin/env bun
 /** Explicit opt-in live replay. The fixture stays outside git and contains
- * { snapshot: FeishuBotTaskSnapshot, messages: MultiremiTaskMessage[] }.
+ * { snapshot: FeishuBotTaskSnapshot, events: TraceEvent[] }: the stored lines of
+ * a terminal Task's v2 trace (`remi` trace read with `--raw`). v1 lines are
+ * skipped by the presenter, as in production.
  * Uses the production presenter/serializers; lark-cli only supplies bot auth.
  * Never starts an Agent, executes a tool, or submits an approval.
  *
@@ -10,9 +12,9 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import type * as Lark from "@larksuiteoapi/node-sdk";
-import type { FeishuBotTaskSnapshot, FeishuPresentationCheckpoint, MultiremiTaskMessage } from "@multiremi/contracts/types.js";
+import type { FeishuBotTaskSnapshot, FeishuPresentationCheckpoint } from "@multiremi/contracts/types.js";
 import type { TaskStreamEvent } from "@connectors/base.js";
-import { taskMessageToTraceEvent } from "@multiremi/contracts/trace.js";
+import type { TraceEvent } from "@multiremi/contracts/trace.js";
 import { FeishuTaskPresentation } from "@connectors/feishu/task-presentation.js";
 
 const arg = (name: string) => { const i = process.argv.indexOf(name); return i < 0 ? undefined : process.argv[i + 1]; };
@@ -24,9 +26,10 @@ const cli = promisify(execFile);
 const cliEnv = { ...process.env, LARKSUITE_CLI_NO_UPDATE_NOTIFIER: "1", LARKSUITE_CLI_NO_SKILLS_NOTIFIER: "1" };
 const auth = JSON.parse((await cli("lark-cli", ["auth", "status", "--json"], { env: cliEnv })).stdout);
 if (auth.appId !== appId || !auth.identities?.bot?.available) throw new Error("Selected CLI bot differs from --app-id or is unavailable");
-const fixture = await Bun.file(fixturePath).json() as { snapshot: FeishuBotTaskSnapshot; messages: MultiremiTaskMessage[] };
+const fixture = await Bun.file(fixturePath).json() as { snapshot: FeishuBotTaskSnapshot; events: TraceEvent[] };
 if (!["completed", "failed", "cancelled"].includes(fixture.snapshot.status)) throw new Error("Replay requires a terminal Task");
-if (fixture.messages.some(m => ["permission_request", "question_request"].includes(m.type))) throw new Error("Use interaction unit tests for human requests; this replay never submits them");
+const isRequest = (event: TraceEvent) => "item" in event && (event.item.type === "permission" || event.item.type === "question");
+if (fixture.events.some(isRequest)) throw new Error("Use interaction unit tests for human requests; this replay never submits them");
 
 const trace: Array<{ method: string; path: string; code: number; events?: string[] }> = [];
 async function api(method: string, path: string, data: unknown, params?: unknown): Promise<any> {
@@ -56,9 +59,9 @@ const client = {
 } as unknown as Lark.Client;
 let saved: FeishuPresentationCheckpoint | undefined;
 async function* stream(): AsyncGenerator<TaskStreamEvent> {
-  for (const message of fixture.messages) {
-    yield { kind: "message", message: { seq: message.seq, ...taskMessageToTraceEvent(message, message.createdAt), ts: message.createdAt } };
-    if (message.type === "tool_result") await Bun.sleep(1000);
+  for (const event of fixture.events) {
+    yield { kind: "message", message: event };
+    if (event.type === "item.completed" && event.item.parent_id === null && event.item.type !== "agent_message") await Bun.sleep(1000);
   }
   yield { kind: "snapshot", snapshot: fixture.snapshot };
 }
@@ -66,7 +69,6 @@ const result = await new FeishuTaskPresentation(client, chatId, {
   taskId: fixture.snapshot.taskId,
   // Mirrors the daemon: no session yet, adopted from the fixture's snapshot.
   sessionId: null,
-  respondHumanRequest: async () => { throw new Error("Replay never submits a human response"); },
 }, {
   appId, replyToMessageId: arg("--reply-to"), mentionOpenId: arg("--mention"),
   idempotencyKey: `manual-replay:${fixture.snapshot.taskId}:${Date.now()}`,

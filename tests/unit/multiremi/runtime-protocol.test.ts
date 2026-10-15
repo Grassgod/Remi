@@ -9,7 +9,7 @@ import type { SqlDatabase } from "@multiremi/store/db/postgres.js";
 afterEach(resetMultiremiTestEnv);
 
 describe("database-derived runtime protocol", () => {
-  it.each(["0.2.87", "0.2.88"])("rejects released v%s on v2 and admits the unified-model minimum", cliVersion => {
+  it.each(["0.2.87", "0.2.88", "0.2.89"])("rejects released v%s on v2 and admits the turn + items trace minimum", cliVersion => {
     const store = createLocalStore();
     const runtime = store.registerRuntime({ id: "rt_old_release", name: "Old release", provider: "claude", daemonId: "dmn_old_release",
       metadata: { cli_version: cliVersion } });

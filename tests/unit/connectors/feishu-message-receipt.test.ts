@@ -2,7 +2,7 @@ import { describe, expect, it } from "bun:test";
 import { FeishuConnector } from "@connectors/feishu/index.js";
 import { setFeishuMessageReceipt } from "@connectors/feishu/message-receipt.js";
 import { FeishuTaskPresentation } from "@connectors/feishu/task-presentation.js";
-import { completed, nativeHarness, taskEvent } from "./feishu-native-harness.js";
+import { agentMessage, completed, item, nativeHarness, snapshot, started, terminal, turnCompleted, turnStarted } from "./feishu-native-harness.js";
 import type { TaskStreamEvent } from "@connectors/base.js";
 import { FeishuDeliveryError, isPermanentFeishuDeliveryError } from "@shared/feishu-delivery-error.js";
 
@@ -34,7 +34,7 @@ function transport() {
     fail: (emoji: string | null, code = 99991500) => { rejectEmoji = emoji; rejectCode = code; },
     emojis: (id = "om_original") => (rows.get(id) ?? []).map(item => item.reaction_type.emoji_type) };
 }
-const meta = { taskId: "tsk_test", respondHumanRequest: async () => { throw new Error("not expected"); } };
+const meta = { taskId: "tsk_test" };
 
 describe("persistent Feishu message receipts", () => {
   it("clears the working receipt on success without adding DONE or changing unrelated reactions", async () => {
@@ -105,7 +105,7 @@ describe("persistent Feishu message receipts", () => {
       async function* stream(): AsyncGenerator<TaskStreamEvent> {
         expect(reactions.emojis()).toEqual(["THINKING"]);
         expect(h.cards()).toHaveLength(0);
-        yield { kind: "snapshot", snapshot: { ...(completed as any).snapshot, status, receiptMessageIds: ["om_original", "om_steer"] } };
+        yield snapshot({ status, receiptMessageIds: ["om_original", "om_steer"] });
       }
       await new FeishuTaskPresentation(h.client as any, "oc_chat", meta, { appId: reactions.appId, idempotencyKey: "delivery",
         receiptMessageIds: ["om_original"], save: h.save }).consume(stream());
@@ -131,11 +131,12 @@ describe("persistent Feishu message receipts", () => {
     const waiting = new Promise<void>(resolve => { started = resolve; });
     const answer = new Promise<void>(resolve => { finish = resolve; });
     async function* stream(): AsyncGenerator<TaskStreamEvent> {
-      yield taskEvent(1, "execution", { meta: { agentName: "Remi" } });
+      yield turnStarted(1, { agent_name: "Remi" });
       started();
       await answer;
-      yield taskEvent(2, "text", { content: "Hello" });
-      yield completed;
+      yield completed(2, agentMessage("msg:hello", "Hello", "final"));
+      yield turnCompleted(3, [agentMessage("msg:hello", "Hello", "final")]);
+      yield terminal;
     }
     const done = new FeishuTaskPresentation(h.client as any, "oc_private", meta, {
       appId: reactions.appId, idempotencyKey: "delivery", receiptMessageIds: ["om_original"], save: h.save,
@@ -157,7 +158,7 @@ describe("persistent Feishu message receipts", () => {
     const accepted = new Promise<void>(resolve => { acknowledge = resolve; });
     const create = h.client.im.message.create;
     h.client.im.message.create = async input => { started(); await accepted; return create(input); };
-    async function* stream() { yield completed; }
+    async function* stream() { yield terminal; }
     const done = new FeishuTaskPresentation(h.client as any, "oc_chat", meta, {
       appId: reactions.appId, idempotencyKey: "delivery", receiptMessageIds: ["om_original"], save: h.save,
     }).consume(stream());
@@ -174,7 +175,7 @@ describe("persistent Feishu message receipts", () => {
     h.client.request = input => input.url.includes("/reactions") ? reactions.client.request(input) : request(input);
     const renderer = () => new FeishuTaskPresentation(h.client as any, "oc_chat", meta, { appId: reactions.appId, idempotencyKey: "delivery",
       receiptMessageIds: ["om_original"], checkpoint: h.checkpoint, save: h.save });
-    async function* stream() { yield completed; }
+    async function* stream() { yield terminal; }
     reactions.failDelete(true);
     await expect(renderer().consume(stream())).rejects.toThrow();
     expect(h.cards()).toHaveLength(1);
@@ -188,7 +189,7 @@ describe("persistent Feishu message receipts", () => {
   it("does not restore THINKING when resuming an acknowledged result without a visible success marker", async () => {
     const h = nativeHarness(), reactions = transport();
     h.client.request = reactions.client.request;
-    async function* stream() { yield completed; }
+    async function* stream() { yield terminal; }
     await new FeishuTaskPresentation(h.client as any, "oc_chat", meta, {
       appId: reactions.appId, idempotencyKey: "delivery", receiptMessageIds: ["om_original"],
       checkpoint: { version: "native_cot_v1", startedAt: Date.now(), throughSeq: 0, interactions: {}, resultMessageId: "om_already_sent" },
@@ -201,7 +202,7 @@ describe("persistent Feishu message receipts", () => {
   it("does not mark a Runtime handover as a task failure", async () => {
     const h = nativeHarness(), reactions = transport(), abort = new AbortController();
     h.client.request = reactions.client.request;
-    async function* stream() { abort.abort(new Error("handover")); yield completed; }
+    async function* stream() { abort.abort(new Error("handover")); yield terminal; }
     await expect(new FeishuTaskPresentation(h.client as any, "oc_chat", { ...meta, signal: abort.signal }, {
       appId: reactions.appId, idempotencyKey: "delivery", receiptMessageIds: ["om_original"],
     }).consume(stream())).rejects.toThrow("handover");
@@ -218,7 +219,7 @@ describe("persistent Feishu message receipts", () => {
       const request = h.client.request;
       h.client.request = input => input.url.includes("/reactions") ? reactions.client.request(input) : request(input);
       reactions.fail("CROSSMARK", refusal);
-      async function* stream() { yield taskEvent(1, "question_request", { input: { message_id: "hr_1" } }); yield completed; }
+      async function* stream() { yield started(1, item("question", "q:hr_1", { message_id: "hr_1" })); yield terminal; }
       const failure = await new FeishuTaskPresentation(h.client as any, "oc_chat",
         { ...meta, getHumanRequest: async () => { throw original; } },
         { appId: reactions.appId, idempotencyKey: "delivery", receiptMessageIds: ["om_original"], save: h.save,

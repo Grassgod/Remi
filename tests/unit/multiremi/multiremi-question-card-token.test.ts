@@ -14,7 +14,7 @@ import type { MultiremiFeishuBotOutboundDelivery } from "@multiremi/contracts/ty
 import { sendDecisionLane, sendIssueDecisionLane } from "../../../apps/remi/cli/multiremi.js";
 import type { FeishuChannelHandle } from "../../../apps/remi/cli/agent.js";
 import { FeishuTaskPresentation } from "@connectors/feishu/task-presentation.js";
-import { nativeHarness, taskEvent, completed } from "../connectors/feishu-native-harness.js";
+import { item, nativeHarness, started, terminal } from "../connectors/feishu-native-harness.js";
 
 import { unifiedModelBackendTests } from "./unified-model-test-backends.js";
 import { assertQuestionCardToken } from "@multiremi/store/question-card-token.js";
@@ -381,12 +381,10 @@ for (const backend of ["SQLite", "Postgres"] as const) {
       const presentation = new FeishuTaskPresentation(h.client as any, "oc_mul487", {
         taskId: f.task.id, getHumanRequest: async () => store.getTaskHumanRequest(f.request.id),
         prepareHumanRequestCard: async (id, recipient) => store.prepareTaskStreamQuestionCard(id, recipient)!,
-        respondHumanRequest: async (_id, response, credential) => store.respondTaskHumanRequest(f.request.id,
-          { response, cardCredential: credential, respondedBy: f.member.id, expectedRouteRevision: store.getQuestion(f.request.id)!.route_revision })!,
       }, { appId: "cli_mul487", idempotencyKey: "native-token-retry", interactionOpenId: f.recipient, save: h.save });
       async function* stream() {
-        yield taskEvent(1, "question_request", { input: { message_id: f.request.id } });
-        yield completed;
+        yield started(1, item("question", `q:${f.request.id}`, { message_id: f.request.id }));
+        yield terminal;
       }
       await presentation.consume(stream());
       expect(tokens).toHaveLength(2);

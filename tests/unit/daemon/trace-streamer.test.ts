@@ -2,12 +2,17 @@ import { describe, expect, it } from "bun:test";
 import { TraceStreamer, coldTraceCursor } from "@multiremi/worker/trace-streamer.js";
 import { InMemoryTraceStore, traceEventBytes } from "@multiremi/worker/trace-store.js";
 import type { DaemonProtocolClient } from "@multiremi/worker/daemon-protocol-client.js";
-import type { TraceEvent } from "@multiremi/contracts/trace.js";
+import type { TraceEventInput, TraceEventLine } from "@multiremi/contracts/trace.js";
 import { waitFor } from "../../integration/daemon-protocol-v2/harness.js";
 import { encodeDaemonProtocolFrame } from "@multiremi/api/daemon-protocol/frames.js";
 
+/** An opaque body of about `bytes` bytes: the streamer never looks inside events. */
+function body(bytes = 0, type = "x.test"): TraceEventInput {
+  return { type, pad: " ".repeat(bytes) } as unknown as TraceEventInput;
+}
+
 function peer() {
-  const frames: Array<{ task_id: string; events: TraceEvent[]; closed: boolean }> = [];
+  const frames: Array<{ task_id: string; events: TraceEventLine[]; closed: boolean }> = [];
   const listeners = new Set<(welcome: any) => void>();
   let paused = false;
   const client = { onWelcome: (listener: any) => { listeners.add(listener); return () => listeners.delete(listener); },
@@ -19,26 +24,26 @@ function peer() {
 }
 
 describe("trace stream frame and replay budgets", () => {
-  it("cold replay retains a sole legal event larger than the replay byte budget", async () => {
+  it("cold replay keeps the newest events that fit the 2 MiB budget, each up to the 1 MiB ceiling", async () => {
     const store = new InMemoryTraceStore(); const p = peer();
-    const event = store.append("large", [{ type: "text", content: "\u0001".repeat(256 * 1024),
-      output: "\u0001".repeat(64 * 1024), input: { body: "!".repeat(250_000) }, meta: { body: "!".repeat(60_000) } }]).events[0]!;
-    expect(traceEventBytes(event)).toBeGreaterThan(2 * 1024 * 1024);
-    expect(coldTraceCursor(store, "large")).toBe(0);
+    const events = store.append("large", [body(900 * 1024), body(900 * 1024), body(900 * 1024)]).events;
+    expect(events).toHaveLength(3);
+    expect(traceEventBytes(events[2]!)).toBeGreaterThan(900 * 1024);
+    expect(coldTraceCursor(store, "large")).toBe(1);
     const pump = new TraceStreamer(p.client, store);
     try {
       pump.track("large", "rt");
-      await waitFor(() => p.frames.length === 1, "cold oversized replay");
-      expect(p.frames[0]!.events).toEqual([event]);
+      await waitFor(() => p.frames.flatMap((frame) => frame.events).length === 2, "cold tail replay");
+      expect(p.frames.flatMap((frame) => frame.events)).toEqual(events.slice(1));
+      expect(p.frames.every((frame) => frame.events.length === 1)).toBe(true);
     } finally { await pump.stop(); }
   });
   it("sends at most 256 events or 256 KiB, but admits one 640 KiB event", async () => {
     const store = new InMemoryTraceStore(); const p = peer();
     const pump = new TraceStreamer(p.client, store);
     pump.track("task", "rt");
-    const large = store.append("task", [{ type: "tool_result", content: " ".repeat(256 * 1024),
-      input: { value: " ".repeat(256 * 1024 - 32) }, output: " ".repeat(64 * 1024), meta: { value: " ".repeat(64 * 1024 - 32) } }]).events[0]!;
-    store.append("task", Array.from({ length: 520 }, () => ({ type: "text", content: "small" })));
+    const large = store.append("task", [body(640 * 1024)]).events[0]!;
+    store.append("task", Array.from({ length: 520 }, () => body(5)));
     store.close("task", { status: "completed", ended_at: new Date().toISOString() });
     pump.wake();
     try {
@@ -61,7 +66,7 @@ describe("trace stream frame and replay budgets", () => {
   it("includes the envelope and array separators in the multi-event byte limit", async () => {
     const store = new InMemoryTraceStore(); const p = peer();
     const pump = new TraceStreamer(p.client, store);
-    store.append("boundary", Array.from({ length: 4 }, () => ({ type: "text", content: " ".repeat(130920) })));
+    store.append("boundary", Array.from({ length: 4 }, () => body(130920)));
     pump.track("boundary", "rt");
     try {
       await waitFor(() => p.frames.flatMap(frame => frame.events).length === 4, "byte boundary");
@@ -75,7 +80,7 @@ describe("trace stream frame and replay budgets", () => {
   it("yields to reports and backpressure, then resumes at welcome's head", async () => {
     const store = new InMemoryTraceStore(); const p = peer(); let priority = true;
     const pump = new TraceStreamer(p.client, store, () => priority);
-    pump.track("task", "rt"); store.append("task", Array.from({ length: 4 }, () => ({ type: "text" })));
+    pump.track("task", "rt"); store.append("task", Array.from({ length: 4 }, () => body()));
     pump.wake();
     try {
       await Bun.sleep(30); expect(p.frames).toHaveLength(0);
@@ -89,12 +94,12 @@ describe("trace stream frame and replay budgets", () => {
 
   it("replays only a continuous tail bounded by 2,000 events and 2 MiB", () => {
     const store = new InMemoryTraceStore();
-    store.append("count", Array.from({ length: 2500 }, () => ({ type: "text", content: "x" })));
+    store.append("count", Array.from({ length: 2500 }, () => body(1)));
     expect(coldTraceCursor(store, "count")).toBe(500);
-    store.append("bytes", Array.from({ length: 2100 }, () => ({ type: "text", content: " ".repeat(4096) })));
+    store.append("bytes", Array.from({ length: 2100 }, () => body(4096)));
     const cursor = coldTraceCursor(store, "bytes");
     expect(cursor).toBeGreaterThan(100);
-    const tail: TraceEvent[] = [];
+    const tail: TraceEventLine[] = [];
     let after = cursor;
     while (after < 2100) {
       const page = store.read("bytes", after, 500); tail.push(...page.events); after = page.events.at(-1)!.seq;

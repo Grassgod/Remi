@@ -8,7 +8,7 @@ import type {
 } from "../../types";
 import type { HttpClient } from "../http";
 import { ApiContractError, parseStrictResponse } from "../schema";
-import { TaskTraceReadSchema, type TaskTraceRead } from "../schemas/tasks";
+import { TraceTurnPageSchema, type TaskTraceRead } from "../schemas/tasks";
 
 export class TasksEndpoints {
   constructor(readonly http: HttpClient) {}
@@ -43,11 +43,17 @@ export class TasksEndpoints {
     return { tasks: (await this.listTasksByIssue(issueId)).filter(task => ["queued", "running", "awaiting_human"].includes(task.status)) };
   }
 
-  async getTaskTrace(taskId: string, afterSeq = 0, limit = 500, turnId?: string): Promise<TaskTraceRead> {
-    const query = new URLSearchParams({ after_seq: String(afterSeq), limit: String(limit) });
-    if (turnId) query.set("attempt_id", taskId);
-    const raw = await this.http.fetch<unknown>(`/api/turns/${encodeURIComponent(turnId ?? taskId)}/trace?${query}`);
-    return parseStrictResponse(raw, TaskTraceReadSchema, { endpoint: "GET /api/turns/:id/trace" });
+  /**
+   * One `view=turn` page of an attempt's trace: the turn and its items from
+   * `itemCursor`. Page with `next_item_cursor` until it is null. With `turnId`
+   * the turn route reads the given attempt (`attempt_id`), otherwise `taskId`
+   * is the turn itself.
+   */
+  async getTaskTrace(taskId: string, options: { itemCursor?: number; turnId?: string } = {}): Promise<TaskTraceRead> {
+    const query = new URLSearchParams({ view: "turn", item_cursor: String(options.itemCursor ?? 0) });
+    if (options.turnId) query.set("attempt_id", taskId);
+    const raw = await this.http.fetch<unknown>(`/api/turns/${encodeURIComponent(options.turnId ?? taskId)}/trace?${query}`);
+    return parseStrictResponse(raw, TraceTurnPageSchema, { endpoint: "GET /api/turns/:id/trace" });
   }
 
   async getTask(taskId: string, turnId = taskId): Promise<AgentTask> {

@@ -2,8 +2,9 @@ import { expect, it } from "bun:test";
 import { readFeishuResultMetadata, sendResultCardLane } from "../../../apps/remi/cli/multiremi.js";
 import type { MultiremiDaemon } from "@multiremi/daemon.js";
 import type { MultiremiFeishuBotOutboundDelivery } from "@multiremi/contracts/types.js";
+import type { TraceEvent } from "@multiremi/contracts/trace.js";
 import type { FeishuChannelHandle } from "../../../apps/remi/cli/agent.js";
-import { completed, transcript } from "../connectors/feishu-native-harness.js";
+import { terminal, transcript } from "../connectors/feishu-native-harness.js";
 
 type Reader = Pick<MultiremiDaemon, "subscribeTrace" | "getFeishuBotTaskSnapshot">;
 const delivery = (): MultiremiFeishuBotOutboundDelivery => ({ id: "fbo_test", claimToken: "claim", taskId: "tsk_test",
@@ -18,7 +19,7 @@ function reader(unsubscribe = async () => {}): Reader {
       callback([], true);
       return unsubscribe;
     },
-    getFeishuBotTaskSnapshot: async () => ({ ...(completed as any).snapshot,
+    getFeishuBotTaskSnapshot: async () => ({ ...(terminal as any).snapshot,
       startedAt: "2026-10-04T00:00:00Z", completedAt: "2026-10-04T00:00:46Z" }),
   };
 }
@@ -67,13 +68,30 @@ it("honors a delivery cancellation instead of sending a metadata fallback", asyn
   expect(sends).toBe(0);
 });
 
-it("hydrates a historical queued body without elapsedSeconds from the terminal snapshot", async () => {
+it("hydrates a historical queued body without elapsedSeconds from the closing turn and stops reading there", async () => {
   const row = delivery();
   row.body = JSON.stringify({ text: "Historical reply", agentName: "Remi", stats: "46s" });
   const cards: any[] = [];
+  let snapshotReads = 0;
   const handle = { sendProactiveCard: async (card: any) => { cards.push(card); return { messageId: "om_history" }; } } as FeishuChannelHandle;
-  await sendResultCardLane(handle, row, undefined, reader());
+  await sendResultCardLane(handle, row, undefined, { ...reader(), getFeishuBotTaskSnapshot: async () => {
+    snapshotReads++;
+    throw new Error("turn.completed already carries the metadata");
+  } });
   expect(JSON.stringify(cards[0].card)).toContain("Historical reply");
-  expect(JSON.stringify(cards[0].card)).toContain("46s");
+  expect(JSON.stringify(cards[0].card)).toContain("46s"); // the transcript's turn lasted 46 s
   expect(JSON.stringify(cards[0].card)).toContain("82k/1M");
+  expect(snapshotReads).toBe(0);
+});
+
+it("reads a v1 trace, which has no turn.completed, to its terminal snapshot", async () => {
+  const legacy: Reader = {
+    subscribeTrace: async (_id, _afterSeq, callback) => {
+      callback([{ seq: 1, ts: "2026-10-04T00:00:00Z", type: "usage", meta: { used: 5, size: 10 } } as unknown as TraceEvent], false);
+      callback([], true);
+      return async () => {};
+    },
+    getFeishuBotTaskSnapshot: async () => ({ ...(terminal as any).snapshot, startedAt: "2026-10-04T00:00:00Z", completedAt: "2026-10-04T00:00:12Z" }),
+  };
+  expect(await readFeishuResultMetadata(legacy, "tsk_test", "Remi", undefined)).toEqual({ agentName: "Remi", subtitle: "Remi", stats: "12s" });
 });

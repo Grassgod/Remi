@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { AcpProvider } from "@acp/provider.js";
-import { responseToUsageUnits } from "@multiremi/worker/acp-event-mapper.js";
+import { responseToUsageUnits } from "@multiremi/worker/usage-units.js";
 import { TaskUsageLedger } from "@multiremi/worker/task-usage-ledger.js";
 import { createLocalStore, resetMultiremiTestEnv } from "../multiremi/helpers.js";
 

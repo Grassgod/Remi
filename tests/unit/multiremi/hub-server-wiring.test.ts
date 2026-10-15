@@ -9,6 +9,7 @@ import {
   nextWebSocketMessage,
   resetMultiremiTestEnv,
 } from "./helpers.js";
+import { deltaTraceEvent } from "../../helpers/turn-trace.js";
 
 let savedApiRole: string | undefined;
 beforeEach(() => { savedApiRole = process.env.MULTIREMI_API_ROLE; });
@@ -90,7 +91,7 @@ describe("MUL-436 shared server Hub wiring", () => {
       const event = nextWebSocketMessage(trace);
       const entry = store.getConversationLogEntry(session.id, 1)!;
       hub.onEntry(session.id, entry);
-      hub.append(task.id, [{ seq: 1, ts: "2026-09-28T00:00:00.000Z", type: "text", content: "trace" }]);
+      hub.append(task.id, [deltaTraceEvent(1, "trace", "2026-09-28T00:00:00.000Z")]);
       expect(await row).toMatchObject({ type: "stream.data", payload: { stream: "log", id: session.id, frames: [{ seq: 1, kind: "entry" }] } });
       expect(await event).toMatchObject({ type: "stream.data", payload: { stream: "trace", id: task.id, frames: [{ seq: 1 }] } });
       const edit = nextWebSocketMessage(log);

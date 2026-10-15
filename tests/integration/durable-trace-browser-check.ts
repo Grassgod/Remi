@@ -5,6 +5,7 @@ import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { HERMETIC_ENV_RUN_ROOT_PATHS, scrubInheritedEnv } from "../setup/hermetic-env-policy";
 import type { TraceEvent } from "@multiremi/contracts/trace";
+import { agentMessage, fakeDaemonTraceReader, readCommand, sequence, traceTurn, turnCompleted, type FakeTraceRead } from "./turn-trace-browser-fixture";
 
 const root = resolve(import.meta.dir, "../..");
 const output = mkdtempSync(join(tmpdir(), "remi-durable-trace-browser-"));
@@ -12,7 +13,7 @@ scrubInheritedEnv();
 process.env.NODE_ENV = "test";
 process.env.MULTIREMI_TEST_RUN_ROOT = output;
 for (const [key, path] of Object.entries(HERMETIC_ENV_RUN_ROOT_PATHS)) process.env[key] = join(output, path);
-const [{ openSqliteDatabase }, { MultiremiStore }, { startMultiremiServer }, { createHub }, { createLocalHubTransport }, { seedZeroJumpFixture }, { launchBrowser, mktContext }] = await Promise.all([
+const [{ openSqliteDatabase }, { MultiremiStore }, { startMultiremiServer }, { createHub }, { createLocalHubTransport }, { seedZeroJumpFixture, markTaskRunning }, { launchBrowser, mktContext }] = await Promise.all([
   import("@multiremi/store/db/sqlite.js"), import("@multiremi/store.js"), import("@multiremi/api.js"),
   import("@multiremi/api/hub/hub-core.js"), import("@multiremi/api/hub/hub-transport.js"),
   import("./zero-jump-fixture"), import("../../frontend/scripts/perf/lib/harness"),
@@ -23,20 +24,38 @@ const fixture = await seedZeroJumpFixture(store);
 const firstTask = store.getTask(fixture.runningTaskId)!;
 const secondTask = store.createTask({ agentId: firstTask.agentId, issueId: fixture.shortIssueId,
   issueSessionId: store.getOrCreateDefaultIssueSession(fixture.shortIssueId, fixture.userId).id, prompt: "Second isolated trace" });
-database.run("UPDATE multiremi_tasks SET status = 'running' WHERE id = ?", [secondTask.id]);
+markTaskRunning(store, secondTask.id);
 store.markTaskTraceDaemon(firstTask.id, "runtime-browser-fixture");
 store.markTaskTraceDaemon(secondTask.id, "runtime-browser-fixture");
+// Turn + items traces (PR 2): a long running turn of 2300 events (one turn,
+// 2299 items) and a short second one. The dialog reads them through the real
+// `view=turn` route and follows the Hub from the head.
+const TS = "2026-10-05T00:00:00.000Z";
+const historyItems = 2298;
 const events = new Map<string, TraceEvent[]>([
-  [firstTask.id, Array.from({ length: 2300 }, (_, index) => ({ seq: index + 1, ts: "2026-10-05T00:00:00Z",
-    ...(index === 0 ? { type: "text", content: "Historic first event", meta: { phase: "commentary" } }
-      : { type: "tool_result", tool: "Read", tool_call_id: `history-${index}`, status: "completed", input: { file_path: `history-${index}.ts` } }),
-  }))],
-  [secondTask.id, [{ seq: 1, ts: "2026-10-05T00:00:00Z", type: "text", content: "Second task only", meta: { phase: "final_answer" } }]],
+  [firstTask.id, sequence([
+    { type: "turn.started", turn: traceTurn(firstTask.id, TS) },
+    { type: "item.completed", item: agentMessage("msg:history", "Historic first event", "commentary", TS) },
+    ...Array.from({ length: historyItems }, (_, index) => (
+      { type: "item.completed" as const, item: readCommand(`history-${index}`, `src/history-${index}.ts`, TS) })),
+  ], TS)],
+  [secondTask.id, sequence([
+    { type: "turn.started", turn: traceTurn(secondTask.id, TS) },
+    { type: "item.completed", item: agentMessage("msg:second", "Second task only", "final", TS) },
+  ], TS)],
 ]);
+const firstItemCount = historyItems + 1;
 const closed = new Set<string>();
 const hub = createHub({ transport: createLocalHubTransport() });
 for (const [taskId, frames] of events) hub.append(taskId, frames);
-const reads: { taskId: string; afterSeq: number; limit: number }[] = [];
+const reads: FakeTraceRead[] = [];
+/** Appends the next events of a task to its trace and the Hub, seq after its head. */
+function appendLive(taskId: string, bodies: Parameters<typeof sequence>[0]) {
+  const all = events.get(taskId)!;
+  const next = sequence(bodies, TS, all.at(-1)?.seq ?? 0);
+  all.push(...next);
+  hub.append(taskId, next);
+}
 const skipBuild = process.argv.includes("--skip-build");
 let apiPort = 0;
 if (skipBuild) {
@@ -48,14 +67,7 @@ if (skipBuild) {
 }
 const service = startMultiremiServer({ store, apiRole: "all", liveHub: hub, scheduler: null,
   port: apiPort, hostname: "127.0.0.1", authToken: null, backgroundJobs: false,
-  daemonTraceReader: { async read({ taskId, afterSeq = 0, limit = 200 }) {
-    reads.push({ taskId, afterSeq, limit });
-    const all = events.get(taskId) ?? [];
-    const page = all.filter(event => event.seq > afterSeq).slice(0, limit);
-    const next = page.at(-1)?.seq ?? afterSeq;
-    return { ok: true, events: page, next_after_seq: next, head: all.at(-1)?.seq ?? 0,
-      eof: next >= (all.at(-1)?.seq ?? 0), closed: closed.has(taskId) };
-  } },
+  daemonTraceReader: fakeDaemonTraceReader(events, closed, { reads }),
 });
 const token = (await store.createAccessToken({ name: "Isolated durable trace browser", type: "pat", purpose: "session",
   workspaceId: fixture.workspaceId, userId: fixture.userId, expiresInDays: 1 })).token;
@@ -148,40 +160,40 @@ try {
   await row.click();
   let dialog = page.getByRole("dialog");
   await dialog.getByText("Historic first event", { exact: true }).waitFor();
-  await page.waitForFunction(() => document.querySelector('[role="dialog"]')?.textContent?.includes("Load more events"));
-  check("one bounded history page on opening", reads.filter(read => read.taskId === firstTask.id).length === 1 && reads[0]?.limit === 200);
+  await dialog.getByText(new RegExp(`\\b${firstItemCount} events\\b`)).first().waitFor();
+  // The Hub replay can fill the fold before the pages finish; wait for the last page.
+  const firstReads = () => reads.filter(read => read.taskId === firstTask.id);
+  await eventually(() => firstReads().length >= Math.ceil(firstItemCount / Math.max(1, firstReads()[0]?.limit ?? 1)));
+  const openingReads = firstReads();
+  const pageSize = openingReads[0]?.limit ?? 0;
+  const expectedCursors = Array.from({ length: Math.ceil(firstItemCount / Math.max(1, pageSize)) }, (_, index) => index * pageSize);
+  check("opening folds every view=turn page by item cursor", pageSize > 0
+    && openingReads.every(read => read.view === "turn" && read.limit === pageSize)
+    && JSON.stringify(openingReads.map(read => read.cursor)) === JSON.stringify(expectedCursors), { openingReads, expectedCursors });
   check("live suffix does not fabricate final answer", await dialog.getByText("Final answer", { exact: true }).count() === 0);
   await eventually(() => streamActions.some(action => action.type === "stream.subscribe" && action.id === firstTask.id));
   await page.screenshot({ path: join(output, "opened-trace.png") });
   check("subscribes the open task", streamActions.some(action => action.type === "stream.subscribe" && action.id === firstTask.id), { streamActions, socketPaths, socketDiagnostics, browserErrors, observations: await page.evaluate(() => (window as unknown as { traceSocketObservations: unknown[] }).traceSocketObservations), dialogText: (await dialog.innerText()).slice(0, 300) });
-  await dialog.getByRole("button", { name: "Load more events" }).click();
-  await dialog.getByRole("button", { name: "Back to beginning" }).waitFor();
-  check("live replay does not jump the HTTP history cursor", reads.filter(read => read.taskId === firstTask.id)[1]?.afterSeq === 200);
-  for (let count = 0; count < 10; count++) {
-    const button = dialog.getByRole("button", { name: "Load more events" });
-    await button.waitFor({ state: "visible" });
-    await button.click();
-    await page.waitForFunction(() => !document.querySelector('[role="dialog"] button:disabled')?.textContent?.includes("Load more events"));
-  }
-  await dialog.getByRole("button", { name: "Back to beginning" }).click();
-  await dialog.getByText("Historic first event", { exact: true }).waitFor();
-  check("evicted first history remains reachable", reads.at(-1)?.afterSeq === 0);
+  const readsBeforeReplay = reads.filter(read => read.taskId === firstTask.id).length;
+  await Bun.sleep(500);
+  check("the Hub replay folds into the snapshot without another read",
+    reads.filter(read => read.taskId === firstTask.id).length === readsBeforeReplay
+      && await dialog.getByText("Historic first event", { exact: true }).count() === 1);
   const subscriptionsBeforeReconnect = streamActions.filter(action => action.type === "stream.subscribe" && action.id === firstTask.id).length;
   await page.evaluate(() => {
     const sockets = (window as unknown as { traceObservedSockets: WebSocket[] }).traceObservedSockets;
     sockets.find(socket => new URL(socket.url).pathname === "/api/trace/ws" && socket.readyState === WebSocket.OPEN)?.close();
   });
-  const recovered: TraceEvent = { seq: 2301, ts: "2026-10-05T00:00:00Z", type: "text", content: "Recovered while disconnected", meta: { phase: "commentary" } };
-  events.get(firstTask.id)!.push(recovered); hub.append(firstTask.id, [recovered]);
+  appendLive(firstTask.id, [{ type: "item.completed", item: agentMessage("msg:recovered", "Recovered while disconnected", "commentary", TS) }]);
   await dialog.getByText("Recovered while disconnected", { exact: true }).waitFor();
   const subscriptionsAfterReconnect = streamActions.filter(action => action.type === "stream.subscribe" && action.id === firstTask.id);
   check("real trace socket reconnect resumes from the delivered sequence", subscriptionsAfterReconnect.length > subscriptionsBeforeReconnect && subscriptionsAfterReconnect.at(-1)?.fromSeq === 2301);
-  const last: TraceEvent = { seq: 2302, ts: "2026-10-05T00:00:00Z", type: "text", content: "Live final marker", meta: { phase: "final_answer" } };
-  events.get(firstTask.id)!.push(last);
-  hub.append(firstTask.id, [last]);
-  await dialog.getByText("Live final marker", { exact: true }).waitFor();
+  appendLive(firstTask.id, [{ type: "item.completed", item: agentMessage("msg:final", "Live final marker", "final", TS) }]);
+  appendLive(firstTask.id, [turnCompleted(events.get(firstTask.id)!, TS)]);
+  await dialog.getByText("Live final marker", { exact: true }).first().waitFor();
   closed.add(firstTask.id); hub.close(firstTask.id);
   await dialog.getByText(/Execution finished/).waitFor();
+  check("the final item is the final answer", await dialog.getByText("Final answer", { exact: true }).count() === 1);
   check("closed trace stops spinners while parent task is still running", await dialog.locator(".animate-spin").count() === 0);
   await page.screenshot({ path: join(output, "closed-trace.png") });
   await page.keyboard.press("Escape"); await dialog.waitFor({ state: "hidden" });
@@ -192,7 +204,10 @@ try {
   await page.locator('[data-perf-anchor="agent-stream"] button').first().click();
   dialog = page.getByRole("dialog");
   await dialog.getByText(/Execution finished/).waitFor();
-  check("reopening after refresh reconstructs closed history", reads.length > beforeRefreshOpen);
+  check("reopening after refresh reconstructs closed history", reads.length > beforeRefreshOpen
+    && reads.slice(beforeRefreshOpen).every(read => read.view === "turn")
+    && await dialog.getByText("Final answer", { exact: true }).count() === 1
+    && await dialog.getByText("Recovered while disconnected", { exact: true }).count() === 1);
   await page.keyboard.press("Escape"); await dialog.waitFor({ state: "hidden" });
   await page.goto(`${origin}/${fixture.workspaceSlug}/issues/${fixture.shortIssueId}`, { waitUntil: "networkidle" });
   await page.locator("button:has(.lucide-minus)").first().click();

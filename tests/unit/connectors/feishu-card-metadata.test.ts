@@ -7,6 +7,8 @@ import { compactModelName, formatCardStats, formatExecutionSubtitle } from "@con
 import { readContextUsage, readExecutionModel } from "@shared/agent-execution.js";
 import type { TaskStreamEvent } from "@connectors/base.js";
 import { buildToolApprovalForm } from "@connectors/feishu/permission-ui.js";
+import type { TraceEvent } from "@multiremi/contracts/trace.js";
+import { completed, item, turnStarted, turnUpdated } from "./feishu-native-harness.js";
 
 const sessions: FeishuStreamingSession[] = [];
 afterEach(() => { for (const session of sessions.splice(0)) session.detach(); });
@@ -33,10 +35,10 @@ function harness() {
   return { channel, cards, sends };
 }
 
-function event(seq: number, type: string, meta: Record<string, unknown>): TaskStreamEvent {
-  return { kind: "message", message: { seq, type,
-    content: null, tool: null, input: null, output: null, tool_call_id: null, status: null, meta,
-    ts: "2026-09-08T00:00:00Z" } };
+/** A v1 (legacy fragment) line, as an old trace still holds it. */
+function legacy(seq: number, type: string, meta: Record<string, unknown>): TaskStreamEvent {
+  return { kind: "message", message: { seq, type, content: null, tool: null, input: null, output: null, tool_call_id: null,
+    status: null, meta, ts: "2026-09-08T00:00:00Z" } as unknown as TraceEvent };
 }
 
 async function* stream(messages: TaskStreamEvent[], status: "completed" | "failed" | "cancelled" = "completed"): AsyncGenerator<TaskStreamEvent> {
@@ -48,8 +50,8 @@ async function* stream(messages: TaskStreamEvent[], status: "completed" | "faile
   } };
 }
 
-const meta = { taskId: "tsk_card", displayName: "Remi", respondHumanRequest: async () => { throw new Error("unexpected"); } };
-const execution = event(1, "execution", { agentName: "Remi", provider: "claude", model: "claude-opus-5" });
+const meta = { taskId: "tsk_card", displayName: "Remi" };
+const execution = turnStarted(1, { agent_name: "Remi", provider: "claude", model: "claude-opus-5" });
 
 describe("Feishu card execution identity and context", () => {
   it("formats compact one-line identities without changing the actual model id", () => {
@@ -90,11 +92,9 @@ describe("Feishu card execution identity and context", () => {
       const h = harness();
       await h.channel.handleTaskStream("oc_chat", "topic1", stream([
         execution,
-        event(2, "usage", { used: 190000, size: 200000 }),
-        event(3, "compaction", {}),
-        event(4, "usage", { used: 82000, size: 200000 }),
-        event(5, "usage", { used: 999, size: 1000, parent_tool_call_id: "subagent" }),
-        event(6, "usage", { totalTokens: 883000 }),
+        turnUpdated(2, { context_usage: { used: 190000, size: 200000 } }),
+        completed(3, item("compaction", "cmp:1")),
+        turnUpdated(4, { context_usage: { used: 82000, size: 200000 } }),
       ], status), meta, { mentionOpenId: "ou_sender" });
       const final = h.cards.at(-1);
       expect(final.header.subtitle.content).toBe("Remi Claude opus5");
@@ -106,33 +106,38 @@ describe("Feishu card execution identity and context", () => {
     });
   }
 
-  it("clears context on model switches, and does not keep a stale upper limit", async () => {
+  it("follows a model switch and the latest context snapshot, including an empty one", async () => {
     const h = harness();
     await h.channel.handleTaskStream("oc_chat", "topic1", stream([
       execution,
-      event(2, "usage", { used: 190000, size: 200000 }),
-      event(3, "execution", { model: "fable-5-1" }),
-      event(4, "usage", { used: 0 }),
+      turnUpdated(2, { context_usage: { used: 190000, size: 200000 } }),
+      turnUpdated(3, { model: "fable-5-1" }),
+      turnUpdated(4, { context_usage: { used: 0, size: 1000000 } }),
     ]), meta);
     const final = h.cards.at(-1);
     expect(final.header.subtitle.content).toBe("Remi Claude fable51");
-    expect(JSON.stringify(final)).toContain("0/—");
+    expect(JSON.stringify(final)).toContain("0/1M");
     expect(JSON.stringify(final)).not.toContain("200k");
   });
 
-  it("hides billing-only context and does not infer a model for old Tasks", async () => {
+  it("shows no model or context for an old Task whose trace holds legacy fragments", async () => {
     const h = harness();
-    await h.channel.handleTaskStream("oc_chat", "topic1", stream([event(1, "usage", { total_tokens: 883000 })]), meta);
+    await h.channel.handleTaskStream("oc_chat", "topic1", stream([
+      legacy(1, "execution", { agentName: "Remi", provider: "claude", model: "claude-opus-5" }),
+      legacy(2, "usage", { used: 82000, size: 200000, total_tokens: 883000 }),
+    ]), meta);
     expect(h.cards.at(-1).header.subtitle.content).toBe("Remi");
     expect(JSON.stringify(h.cards)).not.toContain("883");
+    expect(JSON.stringify(h.cards)).not.toContain("82k");
+    expect(JSON.stringify(h.cards.at(-1))).toContain("Answer");
   });
 
-  it("replays a proactive card into its existing message with the same metadata", async () => {
+  it("finishes a legacy streaming-card delivery with a result card carrying the same metadata", async () => {
     const h = harness();
     await h.channel.handleTaskStream("oc_chat", "report", stream([
-      execution, event(2, "usage", { used: 82000, size: 200000 }),
+      execution, turnUpdated(2, { context_usage: { used: 82000, size: 200000 } }),
     ]), meta, { durable: { idempotencyKey: "delivery", messageId: "om_existing" } });
-    expect(h.sends).toHaveLength(0);
+    expect(h.sends).toHaveLength(1);
     expect(h.cards.at(-1).header.subtitle.content).toBe("Remi Claude opus5");
     expect(JSON.stringify(h.cards)).toContain("82k/200k");
     expect(JSON.stringify(h.cards)).not.toContain("<at ");

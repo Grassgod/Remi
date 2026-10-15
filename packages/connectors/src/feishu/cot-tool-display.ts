@@ -1,8 +1,36 @@
-/** Native CoT tool labels, following aiden-bot's semantic display rules.
- * Tool outputs are deliberately not used here: the Task transcript owns logs. */
-import { isCollabInput, isSubagentActivityInput, subagentName } from "./tool-formatters.js";
+/** Native CoT rows for turn + items traces. Titles use the shared Codex-style
+ * step copy (`@shared/trace-step-copy`, zh), so Feishu reads like Chat; icons
+ * keep aiden-bot's semantic categories. Tool outputs are deliberately not used
+ * here: the Task transcript in the workbench owns logs. */
+import type {
+  CommandAction,
+  FileChange,
+  TraceCommandItem,
+  TraceCompactionItem,
+  TraceFileChangeItem,
+  TracePlanItem,
+  TraceSubagentItem,
+  TraceToolItem,
+  TraceWebSearchItem,
+} from "@multiremi/contracts/trace.js";
+import { describeStep, formatStepCopy } from "@shared/trace-step-copy.js";
+
 export interface CotListResult { type: "list"; items: Array<{ text: string; icon?: "task" }> }
-export interface CotToolDisplay { title: string; icon: string; args?: string; result?: CotListResult; subagent?: boolean }
+
+/** The tool items a native row is written for (`subagent` is a step instead). */
+export type CotToolItem = TraceCommandItem | TraceFileChangeItem | TraceWebSearchItem | TraceToolItem;
+
+/** One native tool invocation: a command action, a changed file, a search or a tool call. */
+export interface CotStepRow {
+  /** Stable across replays: the item ID plus the action/change index. */
+  key: string;
+  title: string;
+  icon: string;
+  args?: string;
+  /** A short status the title cannot carry (a failed command still reads "已运行"). */
+  note?: string;
+}
+
 const str = (v: unknown) => typeof v === "string" ? v.trim() : "";
 const line = (v: string) => v.replace(/\s+/g, " ").trim();
 
@@ -16,25 +44,7 @@ export function cotPreview(text: string, budget = 2400): string {
   return result;
 }
 
-export function isCotShell(name: string): boolean { return /bash|shell|exec|command/i.test(name); }
-
-function shellIcon(command: string): string {
-  // Classify a simple pipeline by its leading executable, not words in its
-  // arguments or output filters (e.g. `remi task get ... | grep -v INFO`).
-  // Keep scripts and compound commands generic instead of guessing at intent.
-  if (/[\n\r;]|&&|\|\||<<|\$\(|`/.test(command)) return "bash";
-  const executable = command.match(/^\/?(?:[\w.-]+\/)*([\w.-]+)(?=\s|\||$)/)?.[1];
-  if (executable && /^(rg|grep|find)$/.test(executable)) return "search";
-  if (executable && /^(cat|sed|head|tail)$/.test(executable)) return "read";
-  return "bash";
-}
-
-export function isCotSubagent(name: string, input: Record<string, unknown>): boolean {
-  return /^(agent|task|spawn_agent|spawnagent)$/i.test(name) || /[/:._](spawn_agent|spawnagent)$/i.test(name)
-    || isSubagentActivityInput(input) || isCollabInput(input);
-}
-
-export function cotPlan(entries: unknown): { title: string; result: CotListResult } | undefined {
+export function cotPlan(entries: TracePlanItem["entries"] | unknown): { title: string; result: CotListResult } | undefined {
   if (!Array.isArray(entries) || !entries.length) return undefined;
   const rows = entries.filter((e): e is Record<string, unknown> => !!e && typeof e === "object"
     && typeof (e as Record<string, unknown>).content === "string" && !!str((e as Record<string, unknown>).content));
@@ -57,40 +67,123 @@ export function cotPlan(entries: unknown): { title: string; result: CotListResul
   return { title: `更新待办 (${done}/${rows.length})`, result };
 }
 
-export function cotToolDisplay(name: string, input: Record<string, unknown>, metaTitle?: string): CotToolDisplay {
-  const description = line(str(input.description));
-  const path = str(input.file_path) || str(input.path) || str(input.filePath);
-  const query = str(input.pattern) || str(input.query);
-  let display: CotToolDisplay;
-  if (isCotShell(name)) {
-    const command = str(input.command) || str(input.cmd);
-    const title = description || (command ? `执行：${line(command)}` : name);
-    display = { title, icon: shellIcon(command), args: command ? `$ ${command}` : undefined };
-  } else if (/todo/i.test(name)) {
-    display = { icon: "doc", ...(cotPlan(input.todos) ?? { title: "更新待办" }) };
-  } else if (isCotSubagent(name, input)) {
-    const child = subagentName(input.agentPath);
-    const activity = str(input.activityKind);
-    const verb = /wait/i.test(name) ? "等待子任务" : /send|followup/i.test(name) ? "继续子任务"
-      : /close|interrupt/i.test(name) ? "结束子任务" : "启动子任务";
-    display = { icon: "robot_outlined", title: description || (child ? `${activity || verb} · ${child}` : verb), subagent: true };
-  } else if (/tool_?search/i.test(name)) {
-    display = { icon: "find-app_outlined", title: query ? `加载工具：${query}` : "加载工具", args: query };
-  } else if (/skill/i.test(name)) {
-    const skill = str(input.skill) || str(input.name);
-    display = { icon: "doc", title: skill ? `阅读 ${skill} 技能` : "阅读技能", args: skill };
-  } else if (/grep|glob|search|find/i.test(name)) {
-    display = { icon: "search", title: query ? `搜索 ${query}` : name, args: query };
-  } else if (/web|browser/i.test(name)) {
-    const url = str(input.url);
-    display = { icon: "search", title: query ? `搜索 ${query}` : url ? `打开 ${url}` : name, args: query || url };
-  } else if (/read|view|open|fetch/i.test(name)) {
-    display = { icon: "read", title: path ? `读取 ${path}` : name, args: path };
-  } else if (/edit|write|patch|replace/i.test(name)) {
-    display = { icon: "write", title: path ? `编辑 ${path}` : name, args: path };
-  } else {
-    display = { icon: "default", title: description || str(metaTitle) || name };
+function toolIcon(name: string): string {
+  if (/tool_?search/i.test(name)) return "find-app_outlined";
+  if (/skill|todo/i.test(name)) return "doc";
+  if (/grep|glob|search|find|web|browser/i.test(name)) return "search";
+  if (/read|view|open|fetch/i.test(name)) return "read";
+  if (/edit|write|patch|replace/i.test(name)) return "write";
+  return "default";
+}
+
+function commandAction(item: TraceCommandItem, part: CommandAction | undefined): CommandAction | undefined {
+  return part ?? (item.actions.length === 1 ? item.actions[0] : undefined);
+}
+
+function icon(item: CotToolItem, part: CommandAction | FileChange | undefined): string {
+  switch (item.type) {
+    case "command": {
+      const action = commandAction(item, part as CommandAction | undefined);
+      if (!action || action.type === "unknown") return "bash";
+      return action.type === "read" ? "read" : "search";
+    }
+    case "file_change": return "write";
+    case "web_search": return "search";
+    case "tool": return toolIcon(item.tool);
   }
-  if (description && !display.subagent && !/todo/i.test(name)) display.title = description;
-  return { ...display, title: cotPreview(line(display.title)), args: display.args ? cotPreview(display.args) : undefined };
+}
+
+function args(item: CotToolItem, part: CommandAction | FileChange | undefined): string | undefined {
+  switch (item.type) {
+    case "command": {
+      const action = commandAction(item, part as CommandAction | undefined);
+      const command = action ? action.command : item.command;
+      if (command) return `$ ${command}`;
+      if (action?.type === "read") return action.path;
+      if (action?.type === "list_files") return action.path ?? undefined;
+      if (action?.type === "search") return [action.query, action.path].filter(Boolean).join(" · ") || undefined;
+      return undefined;
+    }
+    case "file_change": {
+      const change = part as FileChange | undefined;
+      return change ? change.move_path ? `${change.path} → ${change.move_path}` : change.path : undefined;
+    }
+    case "web_search": return item.query ?? item.url ?? undefined;
+    case "tool": {
+      const input = item.input ?? {};
+      if (/tool_?search/i.test(item.tool)) return str(input.query) || undefined;
+      if (/skill/i.test(item.tool)) return str(input.skill) || str(input.name) || undefined;
+      return undefined;
+    }
+  }
+}
+
+/**
+ * The note a row needs when its copy cannot express the item's status: a failed
+ * command reads "已运行 …" and a stopped read "已读取 …" (Codex keeps their done
+ * copy), so the result says what happened. Copy that already reads stopped or
+ * declined needs none.
+ */
+function statusNote(item: CotToolItem, key: string): string | undefined {
+  switch (item.status) {
+    case "failed": return key.endsWith("_declined") ? undefined : "执行失败";
+    case "stopped": return key.endsWith("_stopped") ? undefined : "已停止";
+    case "declined": return key.endsWith("_declined") ? undefined : "已拒绝";
+    default: return undefined;
+  }
+}
+
+/**
+ * Native rows for a finished tool item: one per command action, one per changed
+ * file, else one. A command the model labelled (Claude's Bash description,
+ * `command.title`) is one row under that label, as in Chat; its command stays
+ * in the row's args.
+ */
+export function cotStepRows(item: CotToolItem): CotStepRow[] {
+  const titled = item.type === "command" && !!item.title?.trim();
+  const parts: Array<CommandAction | FileChange | undefined> = titled ? [undefined]
+    : item.type === "command" && item.actions.length > 1
+    ? item.actions
+    : item.type === "file_change" && item.changes.length > 1 ? item.changes
+      : [item.type === "command" ? item.actions[0] : item.type === "file_change" ? item.changes[0] : undefined];
+  let key = "";
+  const rows = parts.map((part, index): CotStepRow => {
+    const step = describeStep(item, part);
+    key = step.key;
+    const title = cotPreview(line(formatStepCopy(step.key, step.args))) || item.tool;
+    const detail = args(item, part);
+    return { key: `${item.id}:${index}`, title, icon: icon(item, part), ...(detail ? { args: cotPreview(detail) } : {}) };
+  });
+  const note = statusNote(item, key);
+  if (note) rows[rows.length - 1]!.note = note;
+  return rows;
+}
+
+/** Claude's first Agent frame is titled with the tool name alone; the real description follows. */
+function placeholderTitle(item: TraceSubagentItem): boolean {
+  const title = item.title?.trim();
+  return !title || title === item.tool || /^(task|agent)$/i.test(title);
+}
+
+/** Whether the subagent carries a real description or prompt yet. */
+export function cotSubagentReady(item: TraceSubagentItem): boolean {
+  return !placeholderTitle(item) || !!item.prompt?.trim();
+}
+
+/** The subagent's own label: its real title, else the start of its prompt, else the tool. */
+export function cotSubagentTitle(item: TraceSubagentItem): string {
+  const label = !placeholderTitle(item) ? item.title! : item.prompt?.trim() || item.title || item.tool || "";
+  return cotPreview(line(label), 600) || "子任务";
+}
+
+/** Step name for a subagent: Codex copy while it runs and once it ends. */
+export function cotSubagentStep(item: TraceSubagentItem): string {
+  const title = cotSubagentTitle(item);
+  if (item.status === "failed") return `子代理执行失败：${title}`;
+  if (item.status === "declined") return `已拒绝子代理：${title}`;
+  return formatStepCopy(describeStep(item).key, { title });
+}
+
+export function cotCompactionStep(item: TraceCompactionItem): string {
+  return formatStepCopy(describeStep(item).key);
 }

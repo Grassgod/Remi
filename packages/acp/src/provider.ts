@@ -14,7 +14,6 @@ import type {
   ProviderEvent,
 } from "@shared/contracts/provider-types.js";
 import { createAgentResponse } from "@shared/contracts/provider-types.js";
-import { isCompactionChunk } from "@shared/contracts/compaction.js";
 import { readContextUsage, type ContextUsage } from "@shared/agent-execution.js";
 import { UsageCollector } from "./usage-collector.js";
 import { beginCodexRolloutUsage, codexHomeFor, collectCodexRolloutUsage, type CodexRolloutCursor } from "./codex-rollout-usage.js";
@@ -659,13 +658,30 @@ export class AcpProvider implements Provider {
         } };
       }
       if (update.sessionUpdate === "agent_message_chunk") {
+        // Remi advertises `session.compaction` and `session.notices`, so neither
+        // bridge reports compaction or notices as message text any more.
         const text = extractChunkText((update as Record<string, any>).content);
-        if (!isCompactionChunk(text)) {
-          entry.promptState.text += text;
-          if (text.trim() && failureState.compaction) {
-            failureState.compaction = null;
-            console.warn("[AcpProvider] Assistant continued after a context compaction failure");
-          }
+        entry.promptState.text += text;
+        if (text.trim() && failureState.compaction) {
+          failureState.compaction = null;
+          console.warn("[AcpProvider] Assistant continued after a context compaction failure");
+        }
+      }
+      if (update.sessionUpdate === "compaction_update") {
+        const compaction = update as { compactionId?: unknown; status?: unknown; error?: unknown };
+        // The ACP compaction lifecycle (CA/context-compaction.js, CX:42234-42296):
+        // a failed compaction ends the turn unless the assistant continues.
+        if (compaction.status === "failed") {
+          const error = typeof compaction.error === "string" ? compaction.error
+            : typeof record(compaction.error)?.message === "string" ? record(compaction.error)!.message as string : "Compacting failed";
+          failureState.compaction = {
+            id: typeof compaction.compactionId === "string" ? compaction.compactionId : "compaction",
+            revision: 1, category: "unknown", severity: "error",
+            title: "Context compaction failed",
+            details: redactProviderErrorText(error, credentials),
+          };
+          update = JSON.parse(JSON.stringify(update, (_key, value) =>
+            typeof value === "string" ? redactProviderErrorText(value, credentials) : value));
         }
       }
       if (update.sessionUpdate === "tool_call_update") {
