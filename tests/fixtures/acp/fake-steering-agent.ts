@@ -23,6 +23,10 @@ export interface FakeSteerPromptPlan {
   tool?: { ms: number | null };
   /** A subagent's shell call (it carries `parentToolUseId`) that stays open. */
   childTool?: boolean;
+  /** Billing frames every this many ms while the turn runs (turn-level updates for retries). */
+  tickMs?: number;
+  /** Ask the client a `session/request_permission` once the turn runs. */
+  permission?: boolean;
   /** "steer": hold until a steer is injected; "cancel": hold until cancelled; "none": end now. */
   hold?: "steer" | "cancel" | "none";
   /** Text answering an injected steer. */
@@ -34,9 +38,12 @@ export interface FakeSteerPromptPlan {
 /**
  * - `auto`: what the bridge does (inject, `promptRequired` with the opt-in, else `startedNewTurn`);
  * - `race`: the running prompt completes just before the steer is handled; then `auto` for an idle session;
- * - `error` / `failed` / `hang`: a JSON-RPC error, `{outcome:"failed"}`, or no answer at all.
+ * - `error` / `failed` / `hang`: a JSON-RPC error, `{outcome:"failed"}`, or no answer at all;
+ * - `notYet`: `promptRequired` (`noRunningTurn`) even while a turn runs;
+ * - `afterPrompt`: answer only once the running prompt ended, then start a turn of
+ *   its own (`startedNewTurn`), as codex-acp does for a steer it could not inject.
  */
-export type FakeSteerPlan = "auto" | "race" | "error" | "failed" | "hang";
+export type FakeSteerPlan = "auto" | "race" | "error" | "failed" | "hang" | "notYet" | "afterPrompt";
 
 export interface FakeSteerConfig {
   advertise: "claude" | "codex" | "none";
@@ -50,6 +57,14 @@ export interface FakeSteerConfig {
   cancelDelayMs?: number;
   /** A bridge-started turn keeps talking after cancel (never goes quiet). */
   detachedIgnoresCancel?: boolean;
+  /**
+   * The bridge registers a prompt's turn this long after `session/prompt`
+   * arrived, sending no turn-level update before (codex-acp awaits before its
+   * pending turn start, claude-agent-acp in `startTurn`). Until then a steer
+   * finds no turn: Claude with the opt-in answers `promptRequired`; Codex
+   * waits for the prompt to end and starts a turn of its own.
+   */
+  turnStartDelayMs?: number;
 }
 
 const config = JSON.parse(process.env.FAKE_STEER_CONFIG ?? "{}") as FakeSteerConfig;
@@ -76,6 +91,9 @@ interface ActivePrompt {
   sessionId: string;
   plan: FakeSteerPromptPlan;
   settled: boolean;
+  registered: boolean;
+  onSettle: Array<() => void>;
+  timers: Array<ReturnType<typeof setInterval>>;
 }
 let active: ActivePrompt | null = null;
 let detached: { stop: () => void } | null = null;
@@ -86,11 +104,14 @@ let steerCount = 0;
 const pick = <T>(list: T[] | undefined, index: number, fallback: T): T =>
   list?.length ? list[Math.min(index, list.length - 1)]! : fallback;
 
+let requestId = 1_000_000;
 function settle(prompt: ActivePrompt, stopReason: string): void {
   if (prompt.settled) return;
   prompt.settled = true;
   if (active === prompt) active = null;
+  for (const timer of prompt.timers) clearInterval(timer);
   send({ id: prompt.id, result: { stopReason } });
+  for (const callback of prompt.onSettle.splice(0)) callback();
   const after = prompt.plan.afterResolve;
   if (after) {
     setTimeout(() => { for (let index = 0; index < after.frames; index++) billing(prompt.sessionId); }, after.delayMs);
@@ -100,8 +121,17 @@ function settle(prompt: ActivePrompt, stopReason: string): void {
 function startPrompt(id: number | string, sessionId: string): void {
   const plan = pick(resumed && config.resumedPrompts ? config.resumedPrompts : config.prompts, promptCount++,
     { hold: "none" } as FakeSteerPromptPlan);
-  const prompt: ActivePrompt = { id, sessionId, plan, settled: false };
+  const prompt: ActivePrompt = { id, sessionId, plan, settled: false, registered: false, onSettle: [], timers: [] };
   active = prompt;
+  if (config.turnStartDelayMs) setTimeout(() => runTurn(prompt), config.turnStartDelayMs);
+  else runTurn(prompt);
+}
+
+function runTurn(prompt: ActivePrompt): void {
+  if (prompt.settled) return;
+  const { plan, sessionId } = prompt;
+  prompt.registered = true;
+  log({ kind: "turn_registered" });
   if (plan.background) {
     update(sessionId, { sessionUpdate: "tool_call", toolCallId: "toolu_bg", title: "Count files", kind: "think",
       status: "pending", _meta: { claudeCode: { toolName: "Agent" } } });
@@ -126,6 +156,12 @@ function startPrompt(id: number | string, sessionId: string): void {
     }
   }
   billing(sessionId);
+  if (plan.tickMs) prompt.timers.push(setInterval(() => billing(sessionId), plan.tickMs));
+  if (plan.permission) {
+    send({ id: ++requestId, method: "session/request_permission", params: { sessionId,
+      toolCall: { toolCallId: "toolu_perm", title: "Write file" },
+      options: [{ optionId: "allow", name: "Allow", kind: "allow_once" }, { optionId: "deny", name: "Deny", kind: "reject_once" }] } });
+  }
   if ((plan.hold ?? "none") === "none") settle(prompt, "end_turn");
 }
 
@@ -166,6 +202,21 @@ function steer(id: number | string, params: Record<string, any>): void {
     send({ id, result: { outcome: "failed" } });
     return;
   }
+  if (plan === "notYet") {
+    send({ id, result: { outcome: "promptRequired", reason: "noRunningTurn" } });
+    return;
+  }
+  if (plan === "afterPrompt" || (active && !active.settled && !active.registered
+    && params?._meta?.steering?.idleBehavior !== "promptRequired")) {
+    // Queued behind the running prompt, then a turn of its own.
+    const startOwn = () => {
+      startDetachedTurn(params.sessionId);
+      send({ id, result: { outcome: "startedNewTurn" } });
+    };
+    if (active && !active.settled) active.onSettle.push(() => setTimeout(startOwn, 10));
+    else startOwn();
+    return;
+  }
   if (plan === "race") {
     // The running turn finished just before the steer was handled: Claude with
     // the opt-in leaves the text to the client; Codex starts a turn of its own.
@@ -181,7 +232,7 @@ function steer(id: number | string, params: Record<string, any>): void {
     }, 30);
     return;
   }
-  if (active && !active.settled) {
+  if (active && !active.settled && active.registered) {
     inject(active, text);
     send({ id, result: { outcome: "injected" } });
     return;
@@ -203,7 +254,10 @@ const advertisement = config.advertise === "claude"
 createInterface({ input: process.stdin }).on("line", (line) => {
   if (!line.trim()) return;
   const message = JSON.parse(line) as { id?: number | string; method?: string; params?: Record<string, any> };
-  if (!message.method) return;
+  if (!message.method) {
+    log({ kind: "response", id: message.id ?? null, result: (message as { result?: unknown }).result ?? null });
+    return;
+  }
   log({ kind: "request", method: message.method, params: message.params ?? null });
   const ok = (result: unknown) => send({ id: message.id, result });
   switch (message.method) {

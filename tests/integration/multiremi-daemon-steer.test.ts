@@ -22,7 +22,7 @@ import { DaemonProtocolSession } from "@multiremi/api/daemon-protocol/session.js
 import { unreadRangeHint } from "@multiremi/contracts/session-input.js";
 import type { TraceSteerResult } from "@multiremi/contracts/trace.js";
 import type { ProviderEvent, SteerResult } from "@shared/contracts/provider-types.js";
-import { AcpProvider } from "@acp/provider.js";
+import { AcpProvider, type AcpProviderOptions } from "@acp/provider.js";
 import { agentTexts, traceItems } from "../helpers/turn-trace.js";
 import type { FakeSteerConfig } from "../fixtures/acp/fake-steering-agent.js";
 
@@ -110,15 +110,19 @@ const response = (sessionId: string): AgentResponse => ({ text: "", sessionId, r
 
 /** The real AcpProvider over the scripted agent, so the steer is created once the prompt streams. */
 function scriptedAcp(config: FakeSteerConfig, logPath: string, agentType: "claude" | "codex",
-  onFirstChunk: () => void): MultiremiDaemonProviderFactory {
+  onFirstChunk: () => void, extra: { providerOptions?: Partial<AcpProviderOptions>; beforeFirstPrompt?: () => Promise<void> } = {},
+): MultiremiDaemonProviderFactory {
   return (options) => {
     const acp = new AcpProvider({
       ...options, agentType, executable: process.execPath, args: [FAKE_AGENT], privateTmpDirectory: undefined,
       env: { ...options.env, FAKE_STEER_CONFIG: JSON.stringify(config), FAKE_STEER_LOG: logPath },
+      ...extra.providerOptions,
     });
     let chunks = 0;
+    let prompts = 0;
     return {
       async *sendStream(message, sendOptions) {
+        if (++prompts === 1) await extra.beforeFirstPrompt?.();
         for await (const event of acp.sendStream(message, sendOptions)) {
           yield event as ProviderEvent;
           if (event.sessionUpdate === "agent_message_chunk" && ++chunks === 1) onFirstChunk();
@@ -632,9 +636,10 @@ describe("Bun Multiremi daemon native steering (ADR 0020)", () => {
         }
         yield chunk("中文结论");
       },
+      // The bridge's noRunningTurn as the prompt answers; the provider reports it as the prompt ending.
       async steer() {
         steered.resolve();
-        return { outcome: "promptRequired", reason: "noRunningTurn" };
+        return { outcome: "promptRequired", reason: "noActivePrompt" };
       },
       getLastResponse: () => response("sess-prompt-required"),
     }));
@@ -898,4 +903,177 @@ describe("Bun Multiremi daemon native steering (ADR 0020)", () => {
       expect(store.getTaskSteerMessage(steerId)?.consumedAt).toBeTruthy();
     });
   }
+});
+
+describe("Bun Multiremi daemon native steering: review fixes", () => {
+  for (const agentType of ["claude", "codex"] as const) {
+    it(`real ACP provider (${agentType}): a steer queued before the prompt goes out joins the turn once the bridge starts it`, async () => {
+      const { store, task, daemon } = await steerBed(`native-early-${agentType}`, "Write the summary in English");
+      const logPath = join(workDir!, `agent-early-${agentType}.jsonl`);
+      let steerId = "";
+      const run = daemon(scriptedAcp({ advertise: agentType, turnStartDelayMs: 300,
+        prompts: [{ chunks: ["English draft. "], hold: "steer", answer: "中文结论" }] }, logPath, agentType, () => {}, {
+        beforeFirstPrompt: async () => {
+          steerId = store.createTaskSteerMessage({ taskId: task.id, kind: "steer", content: "改用中文输出" }).id;
+          // The push reaches the run's feed before the prompt goes out.
+          await Bun.sleep(150);
+        },
+      }));
+      await run.start();
+
+      expect(store.getTask(task.id)).toMatchObject({ status: "completed", result: "中文结论" });
+      const frames = agentFrames(logPath);
+      expect(frames.filter((frame) => frame.kind === "overlap")).toEqual([]);
+      expect(frames.filter((frame) => frame.method === "session/prompt")).toHaveLength(1);
+      const registered = frames.find((frame) => frame.kind === "turn_registered")!;
+      const steering = frames.filter((frame) => frame.method === "_session/steering");
+      expect(steering).toHaveLength(1);
+      expect(steering[0]!.at).toBeGreaterThanOrEqual(registered.at);
+      expect(steerResults(run, task.id)).toEqual([[steerId, NATIVE]]);
+      expect(store.getTaskSteerMessage(steerId)?.consumedAt).toBeTruthy();
+    });
+  }
+
+  it("a wrap-up behind a steer the provider still holds starts its grace at once", async () => {
+    const { store, task, daemon } = await steerBed("native-force-behind-held", "Build everything");
+    const turn = store.listTurns({ workspace_id: "local" }).find((value) => value.current_attempt_id === task.id)!;
+    const prompts: string[] = [];
+    const held = Promise.withResolvers<void>();
+    let signal: AbortSignal | undefined;
+    let steerId = "";
+    let wrapUpAt = 0;
+    let calls = 0;
+    const run = daemon(() => ({
+      async *sendStream(message, options) {
+        prompts.push(message);
+        signal = options?.signal;
+        options?.onPromptStarted?.();
+        yield chunk("Still building.");
+        steerId = store.createTaskSteerMessage({ taskId: task.id, kind: "steer", content: "also run the linter" }).id;
+        await held.promise;
+        wrapUpAt = Date.now();
+        store.wrapUpTurn(turn.id);
+        while (!options?.signal?.aborted) await Bun.sleep(20);
+        throw new Error("Cancelled");
+      },
+      // Held behind a running tool call that never ends; answers when the round is cancelled.
+      steer() {
+        calls++;
+        held.resolve();
+        return new Promise<SteerResult>((resolve) => {
+          signal!.addEventListener("abort", () => resolve({ outcome: "promptRequired", reason: "noActivePrompt" }), { once: true });
+        });
+      },
+      getLastResponse: () => response("sess-force-behind-held"),
+    }), { forceAnswerGraceMs: 600 });
+    await run.start();
+    const finishedAt = Date.now();
+
+    expect(store.getTask(task.id)).toMatchObject({ status: "completed", result: "Still building." });
+    expect(prompts).toHaveLength(1);
+    expect(calls).toBe(1);
+    expect(finishedAt - wrapUpAt).toBeGreaterThanOrEqual(550);
+    expect(finishedAt - wrapUpAt).toBeLessThan(5_000);
+    expect(steerResults(run, task.id)).toEqual([
+      [steerId, { via: "none", native_outcome: "promptRequired", error: null }],
+      [expect.stringMatching(/^wrap_up:/), { via: "none", native_outcome: null, error: null }],
+    ]);
+  });
+
+  it("a steer while a person-facing request is open goes through interrupt + re-prompt", async () => {
+    const { store, task, daemon } = await steerBed("native-user-input", "Write it");
+    const prompts: string[] = [];
+    const aborted: boolean[] = [];
+    let steerId = "";
+    const run = daemon(() => ({
+      async *sendStream(message, options) {
+        prompts.push(message);
+        options?.onPromptStarted?.();
+        if (prompts.length === 1) {
+          yield chunk("Waiting for approval. ");
+          steerId = store.createTaskSteerMessage({ taskId: task.id, kind: "steer", content: "use the staging bucket" }).id;
+          while (!options?.signal?.aborted) await Bun.sleep(10);
+          aborted.push(true);
+          throw new Error("Cancelled");
+        }
+        yield chunk("Used staging.");
+      },
+      async steer() {
+        return { outcome: "promptRequired", reason: "userInputPending" };
+      },
+      getLastResponse: () => response("sess-user-input"),
+    }));
+    await run.start();
+
+    expect(store.getTask(task.id)).toMatchObject({ status: "completed", result: "Used staging." });
+    expect(prompts).toHaveLength(2);
+    expect(prompts[1]).toContain("use the staging bucket");
+    expect(aborted).toEqual([true]);
+    expect(steerResults(run, task.id)).toEqual([[steerId,
+      { via: "reprompt", native_outcome: "promptRequired", error: "userInputPending" }]]);
+  });
+
+  it("real ACP provider: a Claude tool call past the wait cap falls back to interrupt + re-prompt", async () => {
+    const { store, task, daemon } = await steerBed("native-acp-tool-cap", "Run the endless command");
+    const logPath = join(workDir!, "agent-tool-cap.jsonl");
+    let steerId = "";
+    const run = daemon(scriptedAcp({ advertise: "claude",
+      prompts: [{ chunks: ["Running it. "], tool: { ms: null }, hold: "cancel" }, { chunks: ["中文结论"] }] }, logPath, "claude",
+      () => { steerId = store.createTaskSteerMessage({ taskId: task.id, kind: "steer", content: "改用中文输出" }).id; },
+      { providerOptions: { toolCallWaitMs: 300 } }));
+    await run.start();
+
+    expect(store.getTask(task.id)).toMatchObject({ status: "completed", result: "中文结论" });
+    const frames = agentFrames(logPath);
+    expect(frames.filter((frame) => frame.kind === "overlap")).toEqual([]);
+    expect(frames.filter((frame) => frame.method === "_session/steering")).toHaveLength(0);
+    expect(frames.filter((frame) => frame.method === "session/cancel")).toHaveLength(1);
+    const prompts = frames.filter((frame) => frame.method === "session/prompt");
+    expect(prompts).toHaveLength(2);
+    expect(prompts[1]!.params!.prompt[0].text).toContain("改用中文输出");
+    expect(steerResults(run, task.id)).toEqual([[steerId,
+      { via: "reprompt", native_outcome: "promptRequired", error: "toolCallRunning" }]]);
+  });
+
+  it("force-answer expiry acknowledges a still-pending injected steer with one that arrived during the cancel", async () => {
+    const { store, task, daemon } = await steerBed("native-force-gap", "Research deeply");
+    const turn = store.listTurns({ workspace_id: "local" }).find((value) => value.current_attempt_id === task.id)!;
+    const steers: string[] = [];
+    const firstInjected = Promise.withResolvers<void>();
+    let s1 = "";
+    let s2 = "";
+    const run = daemon(() => ({
+      async *sendStream(message, options) {
+        options?.onPromptStarted?.();
+        yield chunk("Partial findings. ");
+        s1 = store.createTaskSteerMessage({ taskId: task.id, kind: "steer", content: "also check b.ts" }).id;
+        await firstInjected.promise;
+        store.wrapUpTurn(turn.id);
+        yield chunk("Still exploring…");
+        while (!options?.signal?.aborted) await Bun.sleep(20);
+        // S2 arrives while the expired round is being cancelled; S1 is still unacknowledged.
+        s2 = store.createTaskSteerMessage({ taskId: task.id, kind: "steer", content: "one more thing" }).id;
+        await Bun.sleep(200);
+        throw new Error("Cancelled");
+      },
+      async steer(text) {
+        steers.push(text);
+        firstInjected.resolve();
+        return { outcome: "injected" };
+      },
+      getLastResponse: () => response("sess-force-gap"),
+    }), { forceAnswerGraceMs: 500 });
+    await run.start();
+
+    expect(store.getTask(task.id)).toMatchObject({ status: "completed", result: "Still exploring…" });
+    expect(steers).toHaveLength(2);
+    expect(store.getTaskSteerMessage(s1)?.consumedAt).toBeTruthy();
+    expect(store.getTaskSteerMessage(s2)?.consumedAt).toBeTruthy();
+    expect(store.listPendingTaskSteerMessages(task.id)).toHaveLength(0);
+    expect(steerResults(run, task.id)).toEqual([
+      [s1, NATIVE],
+      [expect.stringMatching(/^wrap_up:/), NATIVE],
+      [s2, { via: "none", native_outcome: null, error: null }],
+    ]);
+  });
 });

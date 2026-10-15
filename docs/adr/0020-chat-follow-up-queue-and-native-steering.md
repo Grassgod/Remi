@@ -34,13 +34,17 @@
 运行中的轮收到引导时，daemon 优先把它注入正在进行的 prompt，不中止当前生成；做不到时才退回到中止后重新提示。
 
 - **能力。** Claude（claude-agent-acp 0.90.0）与 Codex（codex-acp 2.2.2）的 ACP 桥都提供 `_session/steering`，并在 `initialize` 结果顶层 `_meta.steering.supported: true` 声明。adapter 的 `steering` 记方法名和是否接受空闲 opt-in：Claude 带 `_meta.steering.idleBehavior: "promptRequired"`，空闲时只回答 `promptRequired`、不自行开轮；Codex 丢弃 `_meta`，空闲时总会在上一个 prompt 结束后自行开轮。Antigravity 不声明能力，provider 也没有 `steer`，始终走退回路径。该字段也是将来换成 ACP 标准 `session/inject` 的切换点。
-- **调用规则。** 每个 attempt 一个 steer pump：本轮 prompt 已发出（`onPromptStarted`）后才调用，同一时间只有一个调用，调用期间到达的引导合成下一批。注入文本与重新提示相同，都是 `buildSteerInjectionPrompt`，附件转成文本引用，所以 Codex 不会收到图片块。provider 的请求超时 30 s；没有进行中的 prompt 时不发请求，直接回答 `promptRequired`。每轮结束后 run loop 先等 pump 空闲再取引导，迟到的回答不会漏掉。
-- **等工具调用结束（Claude）。** claude-agent-acp 0.90 在前台工具调用运行中收到引导时，把该调用移到后台而不中断它；后台 shell 不会让这一轮保持打开，调用结果和对引导的回答要等 `session/prompt` 结束后作为后续轮才到，Remi 收不到（2026-10-15 实测：回答“仍在后台运行，完成后回复”后 prompt 结束，真正的答案在其后 1.7 s 才到）。所以 Claude adapter 设 `waitForToolCalls`：provider 等本 prompt 没有运行中的顶层工具调用（子 agent 的调用不算，已在后台启动的子 agent 立即完成）再发请求；实测此时注入，回答仍在同一个 prompt 里。等待期间 prompt 结束则回答 `promptRequired`，不发请求。Codex 的 `turn/steer` 不打断命令，命令结束后在同一 prompt 里回答，不需要等待。
+- **调用规则。** 每个 attempt 一个 steer pump，同一时间只有一个调用，调用期间到达的引导合成下一批。注入文本与重新提示相同，都是 `buildSteerInjectionPrompt`，附件转成文本引用，所以 Codex 不会收到图片块。provider 的请求超时 30 s；没有进行中的 prompt 时不发请求，回答 `promptRequired`（`noActivePrompt`）。每轮结束后 run loop 先等 pump 空闲再取引导，迟到的回答不会漏掉。
+- **轮开始后才可引导。** 桥异步登记一轮：codex-acp 的 `prompt()` 先 await 再登记 pending turn start，这之前到的引导会排在我们的 prompt 后面、等它结束再自开一轮；claude-agent-acp 在 `startTurn` 里 await 时引导得到 `promptRequired`。所以 provider 在本 prompt 收到第一条轮内更新（消息或思考文字、工具调用、计划、用量）后才触发 `onPromptStarted`，pump 在此之后才调用；在 prompt 发出前或工作区准备期间排进来的引导等到这一刻再注入。
+- **桥回答 `promptRequired` 而我们的 prompt 仍在进行。** 这表示轮刚结束（prompt 马上返回）或还没登记：provider 在下一条轮内更新时重试，最多 5 次、自首次起 10 s；prompt 先结束则回答 `noActivePrompt`，超出上限则回答 `noRunningTurn`，由 pump 中止后重新提示。
+- **有待人回答的请求时不原生引导。** attempt 有打开的权限或提问卡片时（provider 正在处理 `session/request_permission` 或 `elicitation/create`），两个桥都不等待、不发请求，回答 `promptRequired`（`userInputPending`），走中止后重新提示的旧路径，由它取消卡片；这与本分支之前一致，用户输入的消息被当作回答。正在等工具调用的引导遇到新卡片也立即让路。
+- **等工具调用结束（Claude）。** claude-agent-acp 0.90 在前台工具调用运行中收到引导时，把该调用移到后台而不中断它；后台 shell 不会让这一轮保持打开，调用结果和对引导的回答要等 `session/prompt` 结束后作为后续轮才到，Remi 收不到（2026-10-15 实测：回答“仍在后台运行，完成后回复”后 prompt 结束，真正的答案在其后 1.7 s 才到）。所以 Claude adapter 设 `waitForToolCalls`：provider 等本 prompt 没有运行中的顶层工具调用（子 agent 的调用不算，已在后台启动的子 agent 立即完成）再发请求；实测此时注入，回答仍在同一个 prompt 里。最多等 30 s（provider 选项 `toolCallWaitMs`），仍有调用在运行则回答 `promptRequired`（`toolCallRunning`），中止后重新提示，命令被打断，与本分支之前相同。等待期间 prompt 结束则回答 `noActivePrompt`，不发请求。Codex 的 `turn/steer` 不打断命令，命令结束后在同一 prompt 里回答，不需要等待。
 
 | 结果 | daemon 处理 | trace `steer.result` |
 |---|---|---|
 | `injected` | prompt 继续 | `{via:"native", native_outcome:"injected"}` |
-| `promptRequired` | 放回队首；本轮自然结束后重新提示，不中止 | `{via:"reprompt", native_outcome:"promptRequired"}` |
+| `promptRequired`（`noActivePrompt`） | 放回队首；本轮自然结束后重新提示，不中止 | `{via:"reprompt", native_outcome:"promptRequired"}` |
+| `promptRequired`（其他原因：`noRunningTurn`、`toolCallRunning`、`userInputPending`） | prompt 仍在进行但接不了引导：放回队首并中止本轮；不计为失败 | `{via:"reprompt", native_outcome:"promptRequired", error:<原因>}` |
 | `startedNewTurn` | provider 已取消桥自开的轮并等待安静；放回队首，重新提示 | `{via:"reprompt", native_outcome:"startedNewTurn"}` |
 | `failed`（含超时、抛错） | 放回队首并中止本轮；连续 2 次后本 attempt 不再尝试原生引导 | `{via:"reprompt", native_outcome:"failed", error}` |
 | `unsupported` | 放回队首并中止本轮；本 attempt 不再尝试 | `{via:"reprompt", native_outcome:"unsupported"}` |
@@ -48,11 +52,12 @@
 
 - **确认。** 原生注入的引导在该 prompt 结束后确认，正文里的范围提示要在 prompt 运行中可读；重新提示的引导在携带它的 prompt 结束后确认；`via:"none"` 立即确认。已结束的轮从不被中止，否则下一轮的工具会被误记为被打断。
 - **D3。** 桥在空闲时自行开启的新轮（Codex 的 `startedNewTurn` 竞态）算作同一 attempt 内的又一个 provider 轮，即现有 turnIndex 循环多一次迭代：先 `session/cancel` 桥开启的轮，等该会话自取消起 500 ms 没有 `session/update`（最多 5 s，超时走现有的停止进程路径），再重新提示。它不新建 Remi 轮或 attempt：引导消息作为本 attempt 的输入下发并确认，第二个 Remi 轮会破坏同 lane 单轮与完成屏障，桥也不给出独立轮的结束信号。Claude 因为总带 opt-in 不会走到这里。竞态下内容会在 Codex 线程里出现两次，接受。
-- **退回路径。** 中止 → provider 发 `session/cancel` → 等原 prompt 结束，最多 5 s，否则停止桥进程 → 在同一 provider 会话重新提示。循环等生成器结束才发下一个 prompt，所以不会出现重叠的 `session/prompt`。没有 `steer` 的 provider 一直这样处理。30 s 超时后退回时桥可能仍会注入，同一引导可能送达两次，记 warning。
+- **退回路径。** 中止 → provider 发 `session/cancel` → 等原 prompt 结束，最多 5 s，否则停止桥进程 → 在同一 provider 会话重新提示。循环等生成器结束才发下一个 prompt，所以不会出现重叠的 `session/prompt`。没有 `steer` 的 provider 一直这样处理。30 s 超时后退回时桥可能仍会注入，同一引导可能送达两次，记 warning。没有空闲 opt-in 的桥（Codex）超时后，那个请求可能在我们的 prompt 结束后变成桥自开的一轮：provider 记下这个未答的请求，下一次发 prompt 前先等它的回答，是 `startedNewTurn` 就按 D3 取消并等安静，5 s 内仍不回答就停止桥进程，所以迟到的轮不会重复送达。
+- **待引导期间编辑或删除消息。** 引导在 provider 等工具调用、等轮开始或请求进行中时，用户仍能编辑或删除这条未读消息（`PATCH`/`DELETE /api/messages/:id` 只在轮输入确认后才返回 409），daemon 注入的仍是原文。锁定需要新的 daemon→server 协议记录“已交给 agent”，不在本次范围；本分支之前重新提示的那一轮同样存在这个窗口。原生路径的这段时间由 30 s 工具调用上限和 30 s 请求超时约束。
 - **计费。** 两个 prompt 之间到达的 `usage_update`（桥自开并被取消的轮、prompt 结束后才到的 task-notification 后续轮）由 provider 缓存，最多 1000 帧，在同一会话下一次 `sendStream` 开头按原样重放，计入下一轮的用量；请求单元 ID 不变，不会重复计费。
 - **后台子代理。** Claude 为后台子代理保持轮打开时，引导照样注入：桥把保留的结束移交给引导，等回答它的结果再结束 prompt。prompt 已结束后才到的 task-notification 后续轮没有可加入的 prompt，引导在本轮结束后重新提示。
 - **trace。** `user_message.steer.result` 为 `{via, native_outcome, error}`，可选、加法变更（ADR 0019 决策 1），此前的 trace 没有该字段；`injected` 等于 `via !== "none"`。翻译器在结果确定后为每条引导写一次 `item.completed`。Chat 不额外显示，执行记录对话框给 `via:"none"` 标「未送达」。
-- **强制回答。** `turn.wrap_up` 作为 force_answer 引导走同样的路径。pump 把“[Deliver now]”交给 provider 时就对当前轮起宽限计时，不再等下一轮开始，所以等工具调用结束的时间也计入宽限；到期中止并交付最后的回复，没送达的引导和之后的引导记 `via:"none"`。pump 每次调用前检查是否已到期。完成屏障路径没有进行中的 prompt，总是重新提示。
+- **强制回答。** `turn.wrap_up` 作为 force_answer 引导走同样的路径。wrap-up 一到达就对当前轮起宽限计时，不等它被交给 provider，也不等前一条仍被 provider 挂着的引导，更不等下一轮开始，所以等工具调用或等前一条引导的时间都计入宽限；到期中止并交付最后的回复，没送达的引导和之后的引导记 `via:"none"`。pump 每次调用前检查是否已到期。完成屏障路径没有进行中的 prompt，总是重新提示。
 
 ## 未采用的方案
 

@@ -84,8 +84,8 @@ describe("SteerPump outcomes", () => {
     expect(h.pump.takeFallback("s1")).toBeNull();
   });
 
-  it("promptRequired: requeued for the re-prompt, the round is not interrupted", async () => {
-    const h = harness([{ outcome: "promptRequired", reason: "noRunningTurn" }]);
+  it("promptRequired (prompt ended): requeued for the re-prompt, the round is not interrupted", async () => {
+    const h = harness([{ outcome: "promptRequired", reason: "noActivePrompt" }]);
     h.begin();
     h.send("s1");
     await h.pump.idle();
@@ -99,6 +99,23 @@ describe("SteerPump outcomes", () => {
     expect(h.aborts).toBe(0);
     expect(h.pump.nativeEnabled).toBe(true);
   });
+
+  for (const reason of ["noRunningTurn", "toolCallRunning", "userInputPending"]) {
+    it(`promptRequired (${reason}, prompt still running): interrupt and re-prompt, not a native failure`, async () => {
+      const h = harness([{ outcome: "promptRequired", reason }, { outcome: "promptRequired", reason }, { outcome: "promptRequired", reason }]);
+      for (const id of ["s1", "s2", "s3"]) {
+        h.begin();
+        h.send(id);
+        await h.pump.idle();
+        h.end();
+        expect(h.feed.take().map((m) => m.id)).toEqual([id]);
+      }
+      expect(h.aborts).toBe(3);
+      expect(h.calls).toHaveLength(3);
+      expect(h.pump.nativeEnabled).toBe(true);
+      expect(h.pump.takeFallback("s1")).toEqual({ via: "reprompt", native_outcome: "promptRequired", error: reason });
+    });
+  }
 
   it("startedNewTurn: requeued; a round that already ended is never interrupted", async () => {
     const answer = Promise.withResolvers<SteerResult>();
@@ -242,7 +259,7 @@ describe("SteerPump rules", () => {
     const waiting = h.pump.idle().then(() => { idle = true; });
     await settle();
     expect(idle).toBe(false);
-    answer.resolve({ outcome: "promptRequired" });
+    answer.resolve({ outcome: "promptRequired", reason: "noActivePrompt" });
     await waiting;
     expect(h.feed.take().map((m) => m.id)).toEqual(["s1"]);
   });
@@ -266,13 +283,32 @@ describe("SteerPump rules", () => {
     h.begin();
     h.send("wrap_up:1", "force_answer");
     await settle();
-    // The provider may still hold it while a tool call runs; the grace already counts.
+    // The provider may still hold it while a tool call runs; the grace already
+    // counts (armed on arrival and again at hand-off: arming is idempotent).
     expect(h.calls).toHaveLength(1);
-    expect(h.armed).toBe(1);
+    const armedAtHandOff = h.armed;
+    expect(armedAtHandOff).toBeGreaterThan(0);
     answer.resolve({ outcome: "injected" });
     await h.pump.idle();
     expect(h.injected).toEqual([["wrap_up:1"]]);
+    expect(h.armed).toBe(armedAtHandOff);
+  });
+
+  it("arms force-answer when a wrap-up arrives behind a steer the provider still holds", async () => {
+    const held = Promise.withResolvers<SteerResult>();
+    const h = harness([held.promise, { outcome: "injected" }]);
+    h.begin();
+    h.send("s1");
+    await settle();
+    expect(h.calls).toHaveLength(1);
+    expect(h.armed).toBe(0);
+    // S1 is held (a running tool call); the wrap-up's grace starts now, not after S1.
+    h.send("wrap_up:1", "force_answer");
     expect(h.armed).toBe(1);
+    expect(h.calls).toHaveLength(1);
+    held.resolve({ outcome: "injected" });
+    await h.pump.idle();
+    expect(h.injected).toEqual([["s1"], ["wrap_up:1"]]);
   });
 
   it("does not arm force-answer for an ordinary steer", async () => {

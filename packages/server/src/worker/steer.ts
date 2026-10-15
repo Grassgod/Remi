@@ -109,6 +109,11 @@ export class TaskSteerFeed {
     if (this.queue.length) this.queue = this.queue.filter((m) => !handled.has(m.id));
   }
 
+  /** The queued messages, oldest first, without taking them. */
+  peek(): readonly MultiremiTaskSteerMessage[] {
+    return this.queue;
+  }
+
   get hasPending(): boolean {
     return this.queue.length > 0;
   }

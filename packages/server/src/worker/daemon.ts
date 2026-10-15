@@ -4283,7 +4283,13 @@ export class MultiremiDaemon {
         // the server's input barrier. Acknowledging while building the prompt
         // would fail before the unread ordinary messages could ever be read.
         if (via !== "none") injectedSteerIds.push(...ids);
-        else await this.taskDownlinks.consumeTaskSteerMessages(task.id, ids);
+        else {
+          // No prompt follows a force-answer expiry: acknowledge the injected
+          // steers still pending with the late ones, or the lower-seq injected
+          // ids would fail the contiguous acknowledgement ("unconfirmed turn input gap").
+          await this.taskDownlinks.consumeTaskSteerMessages(task.id, [...injectedSteerIds, ...ids]);
+          injectedSteerIds = [];
+        }
         for (const message of messages) recordedSteerIds.add(message.id);
         // A reconnect replay of an already-handled id must not re-enqueue
         // them, or the stale duplicate would trip the next turn's interrupt.

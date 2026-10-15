@@ -5,13 +5,15 @@
 // re-prompts it with the same text after the round — the existing fallback.
 import type { MultiremiTaskSteerMessage } from "@multiremi/contracts/types.js";
 import type { TraceSteerResult } from "@multiremi/contracts/trace.js";
-import type { SteerOutcome, SteerResult } from "@shared/contracts/provider-types.js";
+import { STEER_REASONS, type SteerOutcome, type SteerResult } from "@shared/contracts/provider-types.js";
 
 /** Consecutive `failed` answers after which this attempt stops trying native steering. */
 export const STEER_PUMP_MAX_CONSECUTIVE_FAILURES = 2;
 
 export interface SteerPumpFeed {
   readonly hasPending: boolean;
+  /** The queued messages, oldest first, without taking them. */
+  peek(): readonly MultiremiTaskSteerMessage[];
   take(): MultiremiTaskSteerMessage[];
   requeue(messages: MultiremiTaskSteerMessage[]): void;
 }
@@ -77,6 +79,9 @@ export class SteerPump {
 
   /** The feed's interrupt: steer natively, or interrupt the round once native is off. */
   interrupt(): void {
+    // A wrap-up's grace counts from its arrival, even while an earlier steer
+    // is still held or in flight (the kick below is then a no-op).
+    if (this.options.feed.peek().some((message) => message.kind === "force_answer")) this.options.armForceAnswer();
     if (!this.round) return;
     if (!this.nativeEnabled) {
       this.round.abort();
@@ -156,9 +161,16 @@ export class SteerPump {
         this.options.log?.(`Native steer answered ${result.outcome}${result.reason ? ` (${result.reason})` : ""}`
           + `${result.error ? `: ${result.error}` : ""}; re-prompting ${messages.length} message(s)`);
         switch (result.outcome) {
-          // No running prompt: the round is ending by itself; re-prompt after it.
           case "promptRequired":
-            this.fallBack(round, messages, "promptRequired", null, false);
+            // No running prompt: the round is ending by itself; re-prompt after it.
+            if (result.reason === STEER_REASONS.noActivePrompt) {
+              this.fallBack(round, messages, "promptRequired", null, false);
+              return;
+            }
+            // The prompt runs but cannot take the steer (a tool call past the
+            // wait cap, a person-facing request, no turn to join): interrupt
+            // and re-prompt. Not a native failure.
+            this.fallBack(round, messages, "promptRequired", result.reason ?? null, true);
             return;
           // The provider already cancelled the bridge's own turn and waited for
           // it (D3); interrupt only a round that is somehow still streaming.

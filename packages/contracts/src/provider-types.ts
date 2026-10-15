@@ -20,9 +20,26 @@ export type ProviderEvent = SessionUpdate;
  */
 export type SteerOutcome = TraceSteerOutcome;
 
+/**
+ * Why a steer came back `promptRequired`. Only `noActivePrompt` means the
+ * prompt has ended (the round finishes by itself); every other reason means
+ * the prompt is still running but cannot take the steer now, so the caller
+ * interrupts it and re-prompts (ADR 0020).
+ */
+export const STEER_REASONS = {
+  /** No prompt of ours is running; nothing was sent. */
+  noActivePrompt: "noActivePrompt",
+  /** The bridge answered it has no running turn while our prompt still ran (claude-agent-acp opt-in). */
+  noRunningTurn: "noRunningTurn",
+  /** A top-level tool call kept running past the wait cap (`AgentSteering.waitForToolCalls`). */
+  toolCallRunning: "toolCallRunning",
+  /** A permission or question is waiting for a person; nothing was sent. */
+  userInputPending: "userInputPending",
+} as const;
+
 export interface SteerResult {
   outcome: SteerOutcome;
-  /** Bridge or provider detail, e.g. `noRunningTurn` / `noActivePrompt`. */
+  /** For `promptRequired`, one of {@link STEER_REASONS}; otherwise bridge detail. */
   reason?: string;
   /** Redacted error text for `failed`. */
   error?: string;
@@ -66,8 +83,10 @@ export interface SendOptions {
   traceId?: string;
   signal?: AbortSignal;
   /**
-   * Fires once the provider has sent this stream's prompt to the agent, so a
-   * native steer has a running prompt to join (ADR 0020).
+   * Fires once the agent has started this stream's prompt: its first
+   * turn-level update (message or thought text, a tool call, usage) arrived.
+   * A bridge registers the turn asynchronously, so only then does a native
+   * steer have a running turn to join (ADR 0020).
    */
   onPromptStarted?: () => void;
 }

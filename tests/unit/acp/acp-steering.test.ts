@@ -23,7 +23,8 @@ afterEach(async () => {
 
 interface Logged { kind: string; method?: string; params?: Record<string, any>; at: number }
 
-function fakeAgent(agentType: "claude" | "codex", config: FakeSteerConfig, options: { steerTimeoutMs?: number } = {}) {
+function fakeAgent(agentType: "claude" | "codex", config: FakeSteerConfig,
+  options: { steerTimeoutMs?: number; toolCallWaitMs?: number; steerRetryWindowMs?: number } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "acp-steering-"));
   const logPath = join(dir, "frames.jsonl");
   const provider = new AcpProvider({
@@ -193,11 +194,12 @@ describe("AcpProvider.steer", () => {
     expect(agent.requests("_session/steering")).toHaveLength(0);
   });
 
-  it("passes the bridge's promptRequired through when the turn settled first, with no cancel", async () => {
+  it("a bridge promptRequired as the prompt ends reports the prompt ended, with no cancel", async () => {
     const agent = fakeAgent("claude", { advertise: "claude", prompts: [{ hold: "cancel" }], steers: ["race"] });
     const run = stream(agent.provider, "original");
     await until(() => run.started, "prompt started");
-    expect(await agent.provider.steer("late", { chatId: "chat" })).toEqual({ outcome: "promptRequired", reason: "noRunningTurn" });
+    // The turn settled just before our prompt answered: the round ends by itself.
+    expect(await agent.provider.steer("late", { chatId: "chat" })).toEqual({ outcome: "promptRequired", reason: "noActivePrompt" });
     await run.done;
     expect(agent.requests("session/cancel")).toHaveLength(0);
   });
@@ -303,5 +305,147 @@ describe("AcpProvider.steer", () => {
     for (const id of secondUnits) expect(firstUnits).not.toContain(id);
     const billed = (agent.provider.getLastResponse()?.metadata?.usageUnits as Array<{ unitId: string }>).map((unit) => unit.unitId);
     for (const id of secondUnits) expect(billed).toContain(id);
+  });
+});
+
+describe("AcpProvider.steer gating (review fixes)", () => {
+  const entryOf = (provider: AcpProvider) =>
+    (provider as unknown as { _pool: Map<string, { promptInFlight: object | null }> })._pool.get("chat");
+
+  for (const agentType of ["claude", "codex"] as const) {
+    it(`${agentType}: onPromptStarted waits for the turn, and an early steer joins it once it runs`, async () => {
+      const agent = fakeAgent(agentType, { advertise: agentType, turnStartDelayMs: 300,
+        prompts: [{ chunks: ["Working. "], hold: "steer", answer: "Steered." }] });
+      const startedAt = Date.now();
+      const run = stream(agent.provider, "original");
+      await until(() => !!entryOf(agent.provider)?.promptInFlight, "prompt on the wire");
+      // Steered in the gap between session/prompt and the bridge registering the turn.
+      expect(run.started).toBe(false);
+      expect(await agent.provider.steer("go on", { chatId: "chat" })).toEqual({ outcome: "injected" });
+      await run.done;
+      const registered = agent.frames().find((frame) => frame.kind === "turn_registered")!;
+      expect(registered.at - startedAt).toBeGreaterThanOrEqual(250);
+      expect(agent.requests("_session/steering")[0]!.at).toBeGreaterThanOrEqual(registered.at);
+      expect(texts(run.events)).toEqual(["Working. ", "Steered."]);
+      expect(agent.requests("session/prompt")).toHaveLength(1);
+      expect(agent.frames().some((frame) => frame.kind === "overlap")).toBe(false);
+    });
+  }
+
+  it("retries a bridge promptRequired on the next turn-level update while the prompt runs", async () => {
+    const agent = fakeAgent("claude", { advertise: "claude", prompts: [{ hold: "steer", tickMs: 60 }], steers: ["notYet", "notYet", "auto"] });
+    const run = stream(agent.provider, "original");
+    await until(() => run.started, "prompt started");
+    expect(await agent.provider.steer("go on", { chatId: "chat" })).toEqual({ outcome: "injected" });
+    await run.done;
+    expect(agent.requests("_session/steering")).toHaveLength(3);
+    expect(agent.requests("session/cancel")).toHaveLength(0);
+  });
+
+  it("gives up on a bridge that keeps answering promptRequired: interrupt and re-prompt", async () => {
+    const agent = fakeAgent("claude", { advertise: "claude", prompts: [{ hold: "cancel", tickMs: 40 }], steers: ["notYet"] },
+      { steerRetryWindowMs: 5_000 });
+    const run = stream(agent.provider, "original");
+    await until(() => run.started, "prompt started");
+    expect(await agent.provider.steer("go on", { chatId: "chat" })).toEqual({ outcome: "promptRequired", reason: "noRunningTurn" });
+    // Bounded by attempts here (5); the time window bounds a bridge that goes quiet.
+    expect(agent.requests("_session/steering")).toHaveLength(5);
+    const settled = run.done.catch(() => {});
+    await agent.provider.close();
+    await settled;
+  });
+
+  it("gives up after the retry window when no turn-level update comes", async () => {
+    const agent = fakeAgent("claude", { advertise: "claude", prompts: [{ hold: "cancel" }], steers: ["notYet"] },
+      { steerRetryWindowMs: 250 });
+    const run = stream(agent.provider, "original");
+    await until(() => run.started, "prompt started");
+    const started = Date.now();
+    expect(await agent.provider.steer("go on", { chatId: "chat" })).toEqual({ outcome: "promptRequired", reason: "noRunningTurn" });
+    expect(Date.now() - started).toBeGreaterThanOrEqual(240);
+    expect(agent.requests("_session/steering")).toHaveLength(1);
+    const settled = run.done.catch(() => {});
+    await agent.provider.close();
+    await settled;
+  });
+
+  it("claude: caps the wait for a running tool call, then asks for interrupt and re-prompt", async () => {
+    const agent = fakeAgent("claude", { advertise: "claude", prompts: [{ tool: { ms: null }, hold: "cancel" }] }, { toolCallWaitMs: 250 });
+    const run = stream(agent.provider, "long tool");
+    await until(() => run.events.some((event) => event.sessionUpdate === "tool_call"), "tool call");
+    const started = Date.now();
+    expect(await agent.provider.steer("later", { chatId: "chat" })).toEqual({ outcome: "promptRequired", reason: "toolCallRunning" });
+    expect(Date.now() - started).toBeGreaterThanOrEqual(240);
+    expect(agent.requests("_session/steering")).toHaveLength(0);
+    const settled = run.done.catch(() => {});
+    await agent.provider.close();
+    await settled;
+  });
+
+  for (const agentType of ["claude", "codex"] as const) {
+    it(`${agentType}: never steers while a permission waits for a person, held or fresh`, async () => {
+      const agent = fakeAgent(agentType, { advertise: agentType, prompts: [{ tool: { ms: null }, permission: true, hold: "cancel" }] });
+      const answer = Promise.withResolvers<{ outcome: "cancelled" }>();
+      let asked = 0;
+      agent.provider.setPermissionHandler(() => { asked++; return answer.promise; }, "chat");
+      const run = stream(agent.provider, "write it");
+      await until(() => asked === 1, "permission card");
+      expect(await agent.provider.steer("do it differently", { chatId: "chat" }))
+        .toEqual({ outcome: "promptRequired", reason: "userInputPending" });
+      expect(agent.requests("_session/steering")).toHaveLength(0);
+      answer.resolve({ outcome: "cancelled" });
+      const settled = run.done.catch(() => {});
+      await agent.provider.close();
+      await settled;
+    });
+  }
+
+  it("claude: a steer held for a tool call gives way when a permission opens", async () => {
+    const agent = fakeAgent("claude", { advertise: "claude", prompts: [{ tool: { ms: null }, hold: "cancel" }] });
+    const answer = Promise.withResolvers<{ outcome: "cancelled" }>();
+    agent.provider.setPermissionHandler(() => answer.promise, "chat");
+    const run = stream(agent.provider, "long tool");
+    await until(() => run.events.some((event) => event.sessionUpdate === "tool_call"), "tool call");
+    const held = agent.provider.steer("later", { chatId: "chat" });
+    await Bun.sleep(100);
+    // The card opens while the steer is held.
+    const client = (agent.provider as unknown as { _pool: Map<string, { client: AcpClient }> })._pool.get("chat")!.client;
+    void (client as unknown as { _options: { onPermissionRequest: (params: unknown) => Promise<unknown> } })._options
+      .onPermissionRequest({ sessionId: "sess-steer", toolCall: { toolCallId: "toolu_perm" }, options: [] });
+    expect(await held).toEqual({ outcome: "promptRequired", reason: "userInputPending" });
+    expect(agent.requests("_session/steering")).toHaveLength(0);
+    answer.resolve({ outcome: "cancelled" });
+    const settled = run.done.catch(() => {});
+    await agent.provider.close();
+    await settled;
+  });
+
+  it("codex: a timed-out steer that becomes a bridge turn is cancelled before the re-prompt", async () => {
+    const agent = fakeAgent("codex", { advertise: "codex",
+      prompts: [{ hold: "cancel", chunks: ["Long run. "] }, { hold: "none", chunks: ["Re-prompted."] }], steers: ["afterPrompt"] },
+      { steerTimeoutMs: 200 });
+    const abort = new AbortController();
+    let started = false;
+    const first = (async () => {
+      for await (const _ of agent.provider.sendStream("original", { chatId: "chat", signal: abort.signal,
+        onPromptStarted: () => { started = true; } })) { /* drain */ }
+    })().catch(() => {});
+    await until(() => started, "prompt started");
+    const result = await agent.provider.steer("go on", { chatId: "chat" });
+    expect(result.outcome).toBe("failed");
+    expect(result.error).toContain("did not answer within 200ms");
+    // The pump's fallback: interrupt the round, then re-prompt.
+    abort.abort();
+    await first;
+    const next = stream(agent.provider, "re-prompt");
+    await next.done;
+    expect(texts(next.events)).toEqual(["Re-prompted."]);
+    // Our abort's cancel, then the D3 cancel of the bridge's own turn before the re-prompt.
+    const cancels = agent.requests("session/cancel");
+    const prompts = agent.requests("session/prompt");
+    expect(cancels).toHaveLength(2);
+    expect(prompts).toHaveLength(2);
+    expect(prompts[1]!.at).toBeGreaterThan(cancels[1]!.at);
+    expect(agent.frames().some((frame) => frame.kind === "overlap")).toBe(false);
   });
 });
