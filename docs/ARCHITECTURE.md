@@ -19,7 +19,7 @@ summary: 从 CLI、Web 和飞书入口追踪到 API、存储与 Agent 执行，�
 | `packages/server` | Hono API、wire 序列化、领域存储、平台 worker | [API 组合与服务启动](../packages/server/src/api/server.ts)、[Store](../packages/server/src/store/store.ts) |
 | `packages/daemon` | 共享 AgentRuntime、工作目录/插件/MCP/提示词组装、lane 和定时调度 | [runtime.ts](../packages/daemon/src/agent-runtime/runtime.ts)、[orchestrator.ts](../packages/daemon/src/orchestrator.ts)、[scheduler.ts](../packages/daemon/src/scheduler.ts) |
 | `packages/remi` | Remi core 库与会话辅助代码；当前 foreground 的飞书消息接线位于 `apps/remi/cli/multiremi.ts` | [core.ts](../packages/remi/src/core.ts)、[当前 foreground](../apps/remi/cli/multiremi.ts) |
-| `packages/acp` | ACP 连接、原生 agy 与统一 provider 事件 | [provider 工厂](../packages/acp/src/runtime-provider.ts)、[client.ts](../packages/acp/src/client.ts)、[adapter registry](../packages/acp/src/adapters/index.ts) |
+| `packages/acp` | ACP 连接、接入配置（Antigravity）与统一 provider 事件 | [provider 工厂](../packages/acp/src/runtime-provider.ts)、[client.ts](../packages/acp/src/client.ts)、[adapter registry](../packages/acp/src/adapters/index.ts) |
 | `packages/connectors` | 平台消息接收与回复适配 | [base.ts](../packages/connectors/src/base.ts)、[feishu](../packages/connectors/src/feishu) |
 | `packages/contracts` / `shared` / `auth` | 共享类型、配置/基础设施、认证 | [contracts](../packages/contracts/src)、[shared](../packages/shared/src)、[auth](../packages/auth/src) |
 
@@ -39,7 +39,7 @@ store 的四路实时事件由 [realtime-fanout](../packages/server/src/api/real
 **任务执行**：issue/chat/autopilot 产生 task → [任务存储](../packages/server/src/store/repos/tasks-repo.ts) →
 [服务端 offer 泵](../packages/server/src/api/daemon-protocol/task-offers.ts) 推送 →
 [worker loop](../packages/server/src/worker/daemon.ts) accept 并执行 →
-[AgentRuntime](../packages/daemon/src/agent-runtime/runtime.ts) 组装执行上下文 → ACP 或原生 agy provider → 消息、usage 和终态上报。
+[AgentRuntime](../packages/daemon/src/agent-runtime/runtime.ts) 组装执行上下文 → ACP provider → 消息、usage 和终态上报。
 权限请求、会话延续、工作目录归属与重试都在这条链路中，不可只以模型输出判断完成。
 
 当前工作树已经使用服务端 `task.offer` / accept / reject，不再发 HTTP claim 或 dispatch-lease。
@@ -116,7 +116,7 @@ PostgreSQL 的 `PgBridge.request` 用 `Atomics.wait` 等待 [pg-worker](../packa
 ## 配置与能力定位
 
 - bot assignment 由工作区独立的 `multiremi_feishu_bot_configs` 记录关联 Agent/Runtime；实际任务通过 Agent 行组装执行参数。bot 凭据在控制面配置，daemon 环境仅承载连接和进程设置，见[配置说明](deploy/66-8-remi-environment.md)。
-- 当前运行时支持 Claude、Codex 和 [Antigravity](antigravity.md)：前两者通过 ACP，Antigravity 通过原生 `agy` CLI，统一输出 Remi 事件。认证方式按各 CLI 和[安装说明](../README.md)配置，不能把所有后端概括为“不需要 API key”。
+- 当前运行时支持 Claude、Codex 和 [Antigravity](antigravity.md)，都通过 ACP：前两者用 npm bridge，Antigravity 用按机器下载并固定版本的 Google ACP server（网关认证，用量取自 daemon 网关垫片），统一输出 Remi 事件。认证方式按各 CLI 和[安装说明](../README.md)配置，不能把所有后端概括为“不需要 API key”。
 - Codex 与 Claude Code 的 Runtime 详情支持自定义模型连接，执行时注入隔离 Home；鉴权、任务快照与协议分别见 [Codex 连接](design/acp-codex-via-codex-acp.md) 和 [Claude Code 连接](design/acp-claude-via-claude-agent-acp.md)。
 - [MCP 组装](../packages/daemon/src/agent-runtime/mcp/ephemeral.ts)当前接受 `command` 形式的 stdio 服务；远程 HTTP 配置不能仅因存进 agent 字段就视为已注入。
 - 项目知识由[知识服务](../packages/server/src/project-knowledge/service.ts)和[知识路由](../packages/server/src/api/routers/knowledge.ts)提供；用户项目知识与本仓库开发文档分别维护。

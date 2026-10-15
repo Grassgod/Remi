@@ -4,7 +4,7 @@ import { parseRuntimeClaudeProfile, type RuntimeClaudeProfile } from "@multiremi
 import { assertRuntimeClaudeProjectCredentials, resolveRuntimeClaudeProfile, runtimeClaudeProfileEnv, runtimeClaudeProfileRouting } from "@daemon/agent-runtime/claude-profile.js";
 import { resolveRuntimeCodexProfile } from "@daemon/agent-runtime/codex-profile.js";
 import { discoverRuntimeProfileModels } from "./runtime-profile-models.js";
-import { antigravityCliVersion, resolveAntigravityExecutable } from "@acp/antigravity.js";
+import { installedAntigravity } from "@acp/antigravity-install.js";
 import { prepareRuntimeCodexModelCatalog } from "./runtime-codex-model-catalog.js";
 import { isPermanentFeishuDeliveryError } from "@shared/feishu-delivery-error.js";
 import { existsSync, realpathSync } from "node:fs";
@@ -1630,13 +1630,15 @@ export class MultiremiDaemon {
   /** Version of this runtime's ACP bridge (claude-agent-acp / codex-acp), or null. */
   private acpVersion(): string | null {
     const provider = this.options.provider;
+    // Antigravity's ACP server is the agent itself: the pinned install's version.
+    if (provider === "antigravity") return installedAntigravity()?.manifest.version ?? null;
     return provider === "claude" || provider === "codex" ? bridgeVersion(provider) : null;
   }
 
   /** Version of the underlying agent CLI (`claude` / `codex`), or null. */
   private agentVersion(): string | null {
     const provider = this.options.provider;
-    if (provider === "antigravity") return antigravityCliVersion();
+    if (provider === "antigravity") return installedAntigravity()?.manifest.version ?? null;
     return provider === "claude" || provider === "codex" ? agentCliVersion(provider) : null;
   }
 
@@ -1846,6 +1848,7 @@ export class MultiremiDaemon {
   /** Force-reinstall this runtime's ACP bridge to the latest version. */
   private reinstallAcpBridge(): string {
     const provider = this.options.provider;
+    // TODO(PR 4 Task C): Antigravity reinstalls its pin (ensureAntigravityServer({ force: true })).
     if (provider !== "claude" && provider !== "codex") {
       throw new Error(`ACP bridge update not supported for provider: ${provider}`);
     }
@@ -1855,13 +1858,15 @@ export class MultiremiDaemon {
   /** Update the underlying agent CLI (claude/codex) via its own `update` subcommand. */
   private async updateAgentCli(): Promise<string> {
     const provider = this.options.provider;
-    if (!["claude", "codex", "antigravity"].includes(provider)) {
+    if (provider === "antigravity") {
+      throw new Error("The Antigravity ACP server is pinned by the Remi release; upgrade Remi to change it");
+    }
+    if (!["claude", "codex"].includes(provider)) {
       throw new Error(`agent update not supported for provider: ${provider}`);
     }
     // Spawn with the daemon's own env: it was launched from a login shell, so
     // PATH already resolves claude/codex (incl. Homebrew on macOS).
-    const executable = provider === "antigravity" ? resolveAntigravityExecutable() : provider;
-    const proc = Bun.spawn([executable, "update"], { stdout: "pipe", stderr: "pipe", env: process.env });
+    const proc = Bun.spawn([provider, "update"], { stdout: "pipe", stderr: "pipe", env: process.env });
     const [stdout, stderr, exitCode] = await Promise.all([
       streamText(proc.stdout),
       streamText(proc.stderr),

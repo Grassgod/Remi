@@ -1,6 +1,18 @@
-import { describe, it, expect } from "bun:test";
+import { afterAll, describe, it, expect, spyOn } from "bun:test";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import {
   AcpProvider,
+  AcpSessionFailureError,
+  UnsupportedAcpEffortError,
+  UnsupportedAcpModelError,
+  elicitationToQuestions,
+  type ElicitationCreateParams,
+  type GatewayShimChannel,
+  type GatewayShimEvent,
+  type GatewayShimHost,
+  type ProviderEvent,
+  type UsageUpdate,
   resolveAcpExecutableForAgent,
   resolveAcpHealthCheckCommand,
   resolveAcpPermissionMode,
@@ -590,5 +602,395 @@ describe("Claude ACP adapter", () => {
 
     expect(adapter.resolveToolName(update)).toBe("ExitPlanMode");
     expect(adapter.isExitPlanMode(update)).toBe(true);
+  });
+});
+
+// ── Antigravity (PR 4 §2.2): access-config-gated provider behaviour ─────────
+
+interface FakeShimChannel extends GatewayShimChannel {
+  readonly label: string;
+  closed: boolean;
+  emit(event: GatewayShimEvent): void;
+  /** Observations to deliver when the provider waits for the prompt's requests to settle. */
+  pendingOnSettle: GatewayShimEvent[];
+  settledCalls: number;
+}
+
+function fakeShim() {
+  const channels: FakeShimChannel[] = [];
+  const host: GatewayShimHost = {
+    open(label) {
+      const listeners = new Set<(event: GatewayShimEvent) => void>();
+      const channel: FakeShimChannel = {
+        label, closed: false, pendingOnSettle: [], settledCalls: 0,
+        baseUrl: `http://127.0.0.1:9/r_test${channels.length + 1}`,
+        subscribe(listener) { listeners.add(listener); return () => listeners.delete(listener); },
+        emit(event) { for (const listener of listeners) listener(event); },
+        async settled() {
+          channel.settledCalls++;
+          for (const event of channel.pendingOnSettle.splice(0)) channel.emit(event);
+        },
+        close() { channel.closed = true; listeners.clear(); },
+      };
+      channels.push(channel);
+      return channel;
+    },
+  };
+  return { host, channels };
+}
+
+const AGY_MODELS = [
+  { value: "gemini-2.5-flash", name: "gemini-2.5-flash" },
+  { value: "gemini-2.5-pro", name: "gemini-2.5-pro" },
+];
+
+/**
+ * A stdio ACP agent shaped like antigravity-acp 1.4.0: gateway configOptions
+ * with no thought_level, default/auto_edit/yolo modes, native `usage_update`
+ * whose `used` double-counts the cache, `interaction_` questions and the
+ * workspace-trust prompt as permission requests, service text as a chunk.
+ */
+const agentDirs: string[] = [];
+afterAll(() => { for (const dir of agentDirs.splice(0)) rmSync(dir, { recursive: true, force: true }); });
+
+function fakeAntigravityAgent() {
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), "agy-provider-")));
+  agentDirs.push(dir);
+  const log = join(dir, "log.jsonl");
+  const script = join(dir, "agent.mjs");
+  writeFileSync(script, `
+import { appendFileSync } from "node:fs";
+import { createInterface } from "node:readline";
+const LOG = ${JSON.stringify(log)};
+const MODELS = ${JSON.stringify(AGY_MODELS)};
+const record = (entry) => appendFileSync(LOG, JSON.stringify(entry) + "\\n");
+record({ kind: "env", GEMINI_HOME: process.env.GEMINI_HOME ?? null, AGY_LLM_GATEWAY_URL: process.env.AGY_LLM_GATEWAY_URL ?? null,
+  AGY_LLM_GATEWAY_API_KEY: process.env.AGY_LLM_GATEWAY_API_KEY ?? null, GEMINI_API_KEY: process.env.GEMINI_API_KEY ?? null,
+  AGY_ACP_ENABLE_GATEWAY_AUTH: process.env.AGY_ACP_ENABLE_GATEWAY_AUTH ?? null, AGY_ACP_DEFAULT_MODEL: process.env.AGY_ACP_DEFAULT_MODEL ?? null });
+const send = (message) => process.stdout.write(JSON.stringify({ jsonrpc: "2.0", ...message }) + "\\n");
+let current = MODELS[0].value;
+let nextId = 1000;
+const waiting = new Map();
+let pendingPrompt = null;
+const configOptions = () => [{ id: "model", name: "Model", category: "model", type: "select", currentValue: current, options: MODELS }];
+const update = (sessionId, body) => send({ method: "session/update", params: { sessionId, update: body } });
+const chunk = (sessionId, text) => update(sessionId, { sessionUpdate: "agent_message_chunk", content: { type: "text", text } });
+const ask = (params) => new Promise((resolve) => { const id = nextId++; waiting.set(id, resolve); send({ id, method: "session/request_permission", params }); });
+async function prompt(id, params) {
+  const sid = params.sessionId;
+  const text = params.prompt.map((block) => block.text ?? "").join("");
+  if (text === "usage") {
+    update(sid, { sessionUpdate: "usage_update", used: 241282, size: 1048576 });
+    chunk(sid, "Done.");
+  } else if (text === "question") {
+    update(sid, { sessionUpdate: "tool_call", toolCallId: "interaction_ab12cd34", title: "Which colour?", rawInput: {}, status: "pending" });
+    const answer = await ask({ sessionId: sid, toolCall: { toolCallId: "interaction_ab12cd34", title: "Which colour?", rawInput: {}, status: "pending" },
+      options: [{ optionId: "opt_red", name: "Red", kind: "allow_once" }, { optionId: "opt_blue", name: "Blue", kind: "allow_once" }] });
+    chunk(sid, "chose:" + (answer.outcome.optionId ?? answer.outcome.outcome));
+  } else if (text === "trust") {
+    const answer = await ask({ sessionId: sid, toolCall: { toolCallId: "interaction_ef567890", title: "Do you trust the authors of this workspace to execute automated agent hooks?", rawInput: {}, status: "pending" },
+      options: [{ optionId: "trust", name: "Trust Workspace", kind: "allow_once" }, { optionId: "deny", name: "Don't Trust", kind: "reject_once" }] });
+    chunk(sid, "trust:" + (answer.outcome.optionId ?? answer.outcome.outcome));
+  } else if (text === "approval") {
+    const answer = await ask({ sessionId: sid, toolCall: { toolCallId: "t-ls", title: "ls -la", kind: "execute", rawInput: { CommandLine: "ls -la" }, status: "pending" },
+      options: [{ optionId: "allow_always", name: "Allow Always", kind: "allow_always" }, { optionId: "allow", name: "Allow", kind: "allow_once" }, { optionId: "deny", name: "Deny", kind: "reject_once" }] });
+    chunk(sid, "approval:" + (answer.outcome.optionId ?? answer.outcome.outcome));
+  } else if (text === "service") {
+    chunk(sid, "Agent execution error: 401 Unauthorized: invalid API key");
+  } else if (text === "replaced") {
+    current = MODELS[0].value;
+    update(sid, { sessionUpdate: "config_option_update", configOptions: configOptions() });
+    chunk(sid, "gemini-2.5-pro is no longer available. Using gemini-2.5-flash.\\n\\n");
+    chunk(sid, "Hello");
+  } else if (text === "hang") {
+    pendingPrompt = id;
+    return;
+  }
+  send({ id, result: { stopReason: "end_turn" } });
+}
+createInterface({ input: process.stdin }).on("line", (line) => {
+  const message = JSON.parse(line);
+  if (message.id != null && !message.method) { waiting.get(message.id)?.(message.result); waiting.delete(message.id); return; }
+  record({ kind: "request", method: message.method, params: message.params });
+  const ok = (result) => send({ id: message.id, result });
+  switch (message.method) {
+    case "initialize": return ok({ protocolVersion: 1, agentInfo: { name: "antigravity-acp", version: "1.4.0" },
+      agentCapabilities: { loadSession: true, sessionCapabilities: { resume: {}, list: {} }, _meta: { antigravity: { systemPrompt: { append: true } } } } });
+    case "session/new":
+    case "session/resume":
+      return ok({ sessionId: message.params.sessionId ?? "agy-session-1", configOptions: configOptions(),
+        modes: { currentModeId: "default", availableModes: [{ id: "default", name: "Default" }, { id: "auto_edit", name: "Auto Edit" }, { id: "yolo", name: "YOLO" }] } });
+    case "session/set_mode": return ok({});
+    case "session/set_config_option": current = message.params.value; return ok({ configOptions: configOptions() });
+    case "session/prompt": return void prompt(message.id, message.params);
+    case "session/cancel":
+      if (pendingPrompt !== null) { send({ id: pendingPrompt, result: { stopReason: "cancelled" } }); pendingPrompt = null; }
+      return;
+    default: return send({ id: message.id, error: { code: -32601, message: "Method not found: " + message.method } });
+  }
+});
+`);
+  const entries = () => existsSync(log) ? readFileSync(log, "utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line)) : [];
+  return {
+    dir,
+    script,
+    requests: (method: string) => entries().filter((entry) => entry.kind === "request" && entry.method === method),
+    env: () => entries().find((entry) => entry.kind === "env"),
+  };
+}
+
+function antigravityProvider(agent: ReturnType<typeof fakeAntigravityAgent>, overrides: Partial<NonNullable<ConstructorParameters<typeof AcpProvider>[0]>> = {}) {
+  const shim = fakeShim();
+  const home = join(agent.dir, "home");
+  mkdirSync(home, { recursive: true });
+  const provider = new AcpProvider({
+    agentType: "antigravity", executable: process.execPath, args: [agent.script], cwd: agent.dir, providerHome: home,
+    gatewayShim: shim.host, model: "gemini-2.5-pro", env: { GEMINI_API_KEY: "AIza-inherited-personal-key" }, ...overrides,
+  });
+  return { provider, shim, home };
+}
+
+async function collect(stream: AsyncGenerator<ProviderEvent>, onFirst?: () => void): Promise<ProviderEvent[]> {
+  const events: ProviderEvent[] = [];
+  for await (const event of stream) {
+    if (!events.length) onFirst?.();
+    events.push(event);
+  }
+  return events;
+}
+
+const PROBE_USAGE = { promptTokenCount: 138_617, cachedContentTokenCount: 101_304, candidatesTokenCount: 1_361, totalTokenCount: 139_978 };
+function request(seq: number, overrides: Partial<Extract<GatewayShimEvent, { type: "request" }>["obs"]> = {}): GatewayShimEvent {
+  return { type: "request", obs: { seq, requestedModel: "gemini-2.5-pro", status: 200, aborted: false, responseId: `resp-${seq}`,
+    modelVersion: "gemini-2.5-pro-002", usageMetadata: PROBE_USAGE, ...overrides } };
+}
+
+describe("AcpProvider with the Antigravity access config", () => {
+  it("spawns with the access env, the shim URL and the system prompt, and closes the shim channel with the process", async () => {
+    const agent = fakeAntigravityAgent();
+    const { provider, shim, home } = antigravityProvider(agent);
+    try {
+      await collect(provider.sendStream("usage", { chatId: "c1", systemPrompt: "You are Remi." }));
+      expect(agent.env()).toEqual({
+        kind: "env", GEMINI_HOME: home, AGY_LLM_GATEWAY_URL: shim.channels[0]!.baseUrl, AGY_LLM_GATEWAY_API_KEY: "remi-shim",
+        GEMINI_API_KEY: "", AGY_ACP_ENABLE_GATEWAY_AUTH: "1", AGY_ACP_DEFAULT_MODEL: "gemini-2.5-pro",
+      });
+      const [created] = agent.requests("session/new");
+      expect(created.params._meta).toEqual({ antigravity: { systemPrompt: { append: "You are Remi." } } });
+      expect(agent.requests("session/set_mode").map((r) => r.params.modeId)).toEqual(["yolo"]);
+      expect(agent.requests("session/set_config_option").map((r) => r.params)).toEqual([
+        { sessionId: "agy-session-1", configId: "model", value: "gemini-2.5-pro" }]);
+      expect(shim.channels).toHaveLength(1);
+      expect(shim.channels[0]!.closed).toBe(false);
+    } finally {
+      await provider.close();
+    }
+    expect(shim.channels[0]!.closed).toBe(true);
+  });
+
+  it("bills shim observations, never the native usage_update, and settles before the response", async () => {
+    const agent = fakeAntigravityAgent();
+    const { provider, shim } = antigravityProvider(agent);
+    try {
+      const events = await collect(provider.sendStream("usage", { chatId: "c1" }), () => {
+        const channel = shim.channels[0]!;
+        channel.emit(request(1));
+        // The last request's usage only arrives once the provider waits for it.
+        channel.pendingOnSettle.push(request(2, { requestedModel: "gemini-2.5-flash-lite",
+          usageMetadata: { promptTokenCount: 500, candidatesTokenCount: 20, thoughtsTokenCount: 30, totalTokenCount: 550 } }));
+      });
+      const usage = events.filter((event) => event.sessionUpdate === "usage_update") as UsageUpdate[];
+      expect(usage.some((event) => event.used === 241282)).toBe(false);
+      expect(usage.map((event) => [event.used, event.size])).toEqual([[139_978, 1_048_576], [0, 0]]);
+      expect(usage.flatMap((event) => (event._meta?.remiUsageUnits as Array<{ providerRequestId?: string }>).map((unit) => unit.providerRequestId)))
+        .toContain("resp-1");
+      expect(shim.channels[0]!.settledCalls).toBe(1);
+      const response = provider.getLastResponse()!;
+      const units = (response.metadata?.usageUnits as Array<Record<string, unknown>>).filter((unit) => unit.source !== "context_snapshot");
+      expect(units.map((unit) => [unit.providerRequestId, unit.identityKind, unit.inputTokens, unit.cacheReadTokens, unit.outputTokens])).toEqual([
+        ["resp-1", "request", 37_313, 101_304, 1_361],
+        ["resp-2", "request", 500, 0, 50],
+      ]);
+      // Context is the session model's last request (cached included), never a browser/subagent call.
+      expect(response.metadata?.contextUsage).toEqual({ used: 139_978, size: 1_048_576 });
+      expect(response.totalTokens).toBe(139_978 + 550);
+    } finally {
+      await provider.close();
+    }
+  });
+
+  it("asks the model's single-choice question through the elicitation handler, not the approval path", async () => {
+    const agent = fakeAntigravityAgent();
+    const { provider } = antigravityProvider(agent);
+    const elicitations: ElicitationCreateParams[] = [];
+    provider.setPermissionHandler(async () => { throw new Error("a question is not a tool approval"); }, "c1");
+    provider.setElicitationHandler(async (params) => {
+      elicitations.push(params);
+      return { action: "accept", content: { answer: "Blue" } };
+    }, "c1");
+    try {
+      await collect(provider.sendStream("question", { chatId: "c1" }));
+      expect(provider.getLastResponse()?.text).toBe("chose:opt_blue");
+      expect(elicitations).toEqual([{
+        mode: "form", sessionId: "agy-session-1", toolCallId: "interaction_ab12cd34", message: "Which colour?",
+        requestedSchema: { type: "object", required: ["answer"], properties: { answer: { type: "string",
+          oneOf: [{ const: "Red", title: "Red" }, { const: "Blue", title: "Blue" }] } } },
+      }]);
+      expect(elicitationToQuestions(elicitations[0]!)?.[0]?.question).toEqual({
+        question: "Which colour?", header: undefined, options: [{ label: "Red" }, { label: "Blue" }], multiSelect: false });
+
+      provider.setElicitationHandler(async () => ({ action: "decline" }), "c1");
+      await collect(provider.sendStream("question", { chatId: "c1" }));
+      expect(provider.getLastResponse()?.text).toBe("chose:cancelled");
+    } finally {
+      await provider.close();
+    }
+  });
+
+  it("denies the workspace-trust prompt itself and leaves tool approvals to the handler", async () => {
+    const agent = fakeAntigravityAgent();
+    const { provider } = antigravityProvider(agent);
+    const approvals: string[] = [];
+    provider.setPermissionHandler(async (params) => {
+      approvals.push(params.toolCall.toolCallId);
+      return { outcome: "selected", optionId: "allow" };
+    }, "c1");
+    try {
+      await collect(provider.sendStream("trust", { chatId: "c1" }));
+      expect(provider.getLastResponse()?.text).toBe("trust:deny");
+      await collect(provider.sendStream("approval", { chatId: "c1" }));
+      expect(provider.getLastResponse()?.text).toBe("approval:allow");
+      expect(approvals).toEqual(["t-ls"]);
+    } finally {
+      await provider.close();
+    }
+  });
+
+  it("turns a service-message chunk into a typed failure, categorized by the shim's last status", async () => {
+    const agent = fakeAntigravityAgent();
+    const { provider, shim } = antigravityProvider(agent);
+    try {
+      const events: ProviderEvent[] = [];
+      const error = await (async () => {
+        for await (const event of provider.sendStream("service", { chatId: "c1" })) {
+          if (!events.length) shim.channels[0]!.emit(request(1, { status: 401, usageMetadata: null, responseId: null }));
+          events.push(event);
+        }
+      })().catch((e) => e);
+      expect(error).toBeInstanceOf(AcpSessionFailureError);
+      expect((error as AcpSessionFailureError).failure).toMatchObject({ category: "authentication", errorKind: "authentication_failed",
+        severity: "error", details: "401 Unauthorized: invalid API key" });
+      // Failures are typed, so the daemon's legacy last-message heuristics stay off.
+      expect(provider.typedSessionFailures).toBe(true);
+      expect(events.some((event) => event.sessionUpdate === "agent_message_chunk")).toBe(false);
+      expect(events.some((event) => event.sessionUpdate === "session_info_update")).toBe(true);
+      expect(provider.getLastResponse()?.text).toBe("");
+      // A rejected request without counters is not billed.
+      expect((provider.getLastResponse()?.metadata?.usageUnits as unknown[]).length).toBe(0);
+    } finally {
+      await provider.close();
+    }
+  });
+
+  it("reports a replaced model as a warning notice and keeps the reply text", async () => {
+    const agent = fakeAntigravityAgent();
+    const { provider } = antigravityProvider(agent);
+    try {
+      const events = await collect(provider.sendStream("replaced", { chatId: "c1" }));
+      expect(events.find((event) => event.sessionUpdate === "notice")).toEqual({ sessionUpdate: "notice", severity: "warning",
+        title: "Model replaced", description: "gemini-2.5-pro is no longer available; the agent switched to gemini-2.5-flash." });
+      expect(provider.getLastResponse()?.text).toBe("Hello");
+    } finally {
+      await provider.close();
+    }
+  });
+
+  it("cancels the prompt and fails the turn when the shim breaker opens, then replaces the process", async () => {
+    const agent = fakeAntigravityAgent();
+    const { provider, shim } = antigravityProvider(agent);
+    try {
+      const error = await collect(provider.sendStream("hang", { chatId: "c1" }), () => {
+        shim.channels[0]!.emit({ type: "fatal", reason: "auth", status: 401, message: "gateway rejected the key" });
+      }).catch((e) => e);
+      expect(error).toBeInstanceOf(AcpSessionFailureError);
+      expect((error as AcpSessionFailureError).failure).toMatchObject({ category: "authentication", title: "The model gateway rejected the credentials" });
+      expect(agent.requests("session/cancel")).toHaveLength(1);
+      const warn = spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        await collect(provider.sendStream("usage", { chatId: "c1" }));
+      } finally {
+        warn.mockRestore();
+      }
+      // The fatal channel's process is discarded; the next turn gets a new token.
+      expect(shim.channels.map((channel) => channel.closed)).toEqual([true, false]);
+    } finally {
+      await provider.close();
+    }
+  });
+
+  it("selects models strictly, rejects effort, and requires a model", async () => {
+    const agent = fakeAntigravityAgent();
+    const { provider } = antigravityProvider(agent, { model: null });
+    try {
+      await expect(collect(provider.sendStream("usage", { chatId: "c1" }))).rejects.toThrow("[antigravity_model_required]");
+      await expect(collect(provider.sendStream("usage", { chatId: "c1", model: "gemini-1.0-retired" }))).rejects.toBeInstanceOf(UnsupportedAcpModelError);
+      await expect(collect(provider.sendStream("usage", { chatId: "c1", model: "gemini-2.5-pro", effort: "high" })))
+        .rejects.toBeInstanceOf(UnsupportedAcpEffortError);
+      await collect(provider.sendStream("usage", { chatId: "c1", model: "gemini-2.5-pro" }));
+      expect(provider.getLastResponse()?.text).toBe("Done.");
+    } finally {
+      await provider.close();
+    }
+  });
+
+  it("discovers models once, with effort unsupported and no per-model walk", async () => {
+    const agent = fakeAntigravityAgent();
+    const { provider } = antigravityProvider(agent, { model: null });
+    try {
+      expect(await provider.discoverModelCapabilities()).toEqual([
+        { id: "gemini-2.5-flash", label: "gemini-2.5-flash", default: true, effort: { status: "unsupported", supportedLevels: [] } },
+        { id: "gemini-2.5-pro", label: "gemini-2.5-pro", default: false, effort: { status: "unsupported", supportedLevels: [] } },
+      ]);
+      expect(agent.requests("session/set_config_option")).toEqual([]);
+    } finally {
+      await provider.close();
+    }
+  });
+
+  it("refuses to start without a gateway, a session home, or with the retired agy executable", async () => {
+    const agent = fakeAntigravityAgent();
+    const cases: Array<[Partial<NonNullable<ConstructorParameters<typeof AcpProvider>[0]>>, string]> = [
+      [{ gatewayShim: undefined }, "[antigravity_gateway_unconfigured]"],
+      [{ providerHome: undefined }, "[antigravity_home_required]"],
+      [{ executable: "/usr/local/bin/agy", args: [] }, "points at the retired agy CLI; clear it"],
+    ];
+    for (const [overrides, message] of cases) {
+      const { provider } = antigravityProvider(agent, overrides);
+      try {
+        await expect(collect(provider.sendStream("usage", { chatId: "c1" }))).rejects.toThrow(message);
+      } finally {
+        await provider.close();
+      }
+    }
+    expect(agent.requests("initialize")).toEqual([]);
+    // A probe subprocess passes a plain shim URL instead of the in-process host.
+    const { provider } = antigravityProvider(agent, { gatewayShim: undefined, gatewayUrl: "http://127.0.0.1:9/r_probe" });
+    try {
+      await collect(provider.sendStream("usage", { chatId: "c1" }));
+      expect(agent.env().AGY_LLM_GATEWAY_URL).toBe("http://127.0.0.1:9/r_probe");
+    } finally {
+      await provider.close();
+    }
+  });
+
+  it("ignores custom args without an executable override and reports a missing pinned install", async () => {
+    const provider = new AcpProvider({ agentType: "antigravity", args: ["--model", "x"], providerHome: "/tmp/h", gatewayUrl: "http://127.0.0.1:9/r_x",
+      model: "gemini-2.5-pro" });
+    try {
+      await expect(collect(provider.sendStream("usage", { chatId: "c1" }))).rejects.toThrow("[antigravity_not_installed]");
+      expect(await provider.healthCheck()).toBe(false);
+    } finally {
+      await provider.close();
+    }
   });
 });

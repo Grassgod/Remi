@@ -1,0 +1,98 @@
+[
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "32c717b6-abe8-408f-9b88-6b036b894348",
+      "update": {
+        "content": {
+          "text": "List the files in the current directory, read README.md, and summarize it in one sentence. Do not modify any files.",
+          "type": "text"
+        },
+        "sessionUpdate": "user_message_chunk"
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "32c717b6-abe8-408f-9b88-6b036b894348",
+      "update": {
+        "toolCallId": "call_1707387",
+        "title": "ls -la",
+        "status": "completed",
+        "rawInput": "{\"CommandLine\": \"ls -la\", \"Cwd\": \"/tmp/agy-live/work\", \"WaitMsBeforeAsync\": 5000, \"toolAction\": \"Listing files in current directory\", \"toolSummary\": \"List files\"}",
+        "sessionUpdate": "tool_call",
+        "kind": "execute"
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "32c717b6-abe8-408f-9b88-6b036b894348",
+      "update": {
+        "toolCallId": "call_1707387",
+        "sessionUpdate": "tool_call_update",
+        "status": "completed",
+        "rawOutput": {
+          "commandLine": "ls -la",
+          "workingDir": "/tmp/agy-live/work",
+          "exitCode": 0,
+          "exit_code": 0,
+          "combinedOutput": "README.md\r\nnotes.txt\r\n",
+          "formatted_output": "README.md\r\nnotes.txt\r\n"
+        }
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "32c717b6-abe8-408f-9b88-6b036b894348",
+      "update": {
+        "toolCallId": "call_1707388",
+        "title": "Running view_file",
+        "status": "completed",
+        "rawInput": "{\"AbsolutePath\": \"/tmp/agy-live/work/README.md\", \"toolAction\": \"Reading README\", \"toolSummary\": \"Read README\"}",
+        "sessionUpdate": "tool_call",
+        "kind": "read",
+        "locations": [
+          {
+            "path": "/tmp/agy-live/work/README.md"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "32c717b6-abe8-408f-9b88-6b036b894348",
+      "update": {
+        "toolCallId": "call_1707388",
+        "sessionUpdate": "tool_call_update",
+        "status": "completed",
+        "rawOutput": "# Probe workspace\n"
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "32c717b6-abe8-408f-9b88-6b036b894348",
+      "update": {
+        "content": {
+          "text": "The workspace exists only to test an ACP client.",
+          "type": "text"
+        },
+        "sessionUpdate": "agent_message_chunk"
+      }
+    }
+  }
+]

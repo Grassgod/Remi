@@ -4,7 +4,6 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "no
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { AcpClient } from "@acp/index.js";
-import { AntigravityProvider } from "@acp/antigravity.js";
 import { buildTaskEnv } from "@daemon/agent-runtime/env/injector.js";
 import type { AgentTask } from "@daemon/contracts/types.js";
 import { pendingTurnBackendTests } from "../multiremi/pending-turn-test-backends.js";
@@ -15,8 +14,8 @@ import { normalizeDaemonTurnOffer } from "@multiremi/worker/daemon-offers.js";
 
 afterEach(resetMultiremiTestEnv);
 pendingTurnBackendTests("Store offer to actual provider spawn", fixture => {
-  for (const provider of ["acp", "antigravity"] as const) {
-    it(`${provider} final spawn removes a legacy task ID inherited from the parent and overlays`, async () => {
+  {
+    it("acp final spawn removes a legacy task ID inherited from the parent and overlays", async () => {
       const { store } = fixture();
       const runtime = store.registerRuntime({ id: "rt_spawn", daemonId: "daemon_spawn", name: "Spawn", provider: "codex", workspaceId: "local" });
       const agent = store.createAgent({ name: "Spawn", provider: "codex", runtimeId: runtime.id });
@@ -49,15 +48,12 @@ pendingTurnBackendTests("Store offer to actual provider spawn", fixture => {
           turn: process.env.MULTIREMI_TURN_ID, attempt: process.env.MULTIREMI_ATTEMPT_ID,
           old: process.env.MULTIREMI_TASK_ID,
         }));
-        ${provider === "acp" ? "await new Promise(() => {});" : ""}
+        await new Promise(() => {});
       `);
       const env = { ...overlay, TEST_ID_CAPTURE: capture, MULTIREMI_TASK_ID: "tsk_overlay_sentinel" };
-      const client = provider === "acp"
-        ? new AcpClient({ executable: process.execPath, args: [script], env })
-        : new AntigravityProvider({ executable: process.execPath, args: [script], env });
+      const client = new AcpClient({ executable: process.execPath, args: [script], env });
       try {
-        if (client instanceof AcpClient) await client.start();
-        else expect(await client.healthCheck()).toBe(true);
+        await client.start();
         const deadline = performance.now() + 2000;
         while (!existsSync(capture)) {
           if (performance.now() > deadline) throw new Error("Child did not capture its environment");
@@ -65,8 +61,7 @@ pendingTurnBackendTests("Store offer to actual provider spawn", fixture => {
         }
         expect(JSON.parse(readFileSync(capture, "utf8"))).toEqual({ turn: turn.id, attempt: claimed.id });
       } finally {
-        if (client instanceof AcpClient) await client.stop();
-        else await client.close();
+        await client.stop();
         if (original === undefined) delete process.env.MULTIREMI_TASK_ID;
         else process.env.MULTIREMI_TASK_ID = original;
         rmSync(directory, { recursive: true, force: true });

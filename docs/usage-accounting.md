@@ -38,6 +38,8 @@ Claude 采集保留请求状态直到最终用量和终止事件得到确认，�
 
 Codex 从 `rawResponse/completed` 采集实际逐请求消费，以真实 thread/session 与 response ID 使用 `identityKind=request`，包含上下文压缩请求。旧累计通知和 PromptResult 的最后请求不能与这些请求重复相加。实时采集和原生日志恢复共用计数校验，缓存分量从 input 中拆出，reasoning 不再加到 output；详见 [Codex 接入](design/acp-codex-via-codex-acp.md)。
 
+Antigravity 的消费只取自 daemon 本地网关垫片观察到的每次模型响应 `usageMetadata`（[gemini-request-usage.ts](../packages/acp/src/gemini-request-usage.ts)），以 ACP server 签发的 session ID 与 `responseId` 建立 `identityKind=request`；没有 `responseId` 的响应只记 partial、不建身份，中断且无计数的流记 unknown，被拒绝且无计数的请求不计。我们网关的 `promptTokenCount` 含缓存，因此 input 为 prompt + toolUsePrompt − cached，缓存读取单列，thinking 计入 output 且不重复相加。server 自报的 `usage_update.used` 等于 total + cached，会把缓存算两遍，provider 直接丢弃，绝不计费；上下文占用取会话模型最近一次请求的 total。垫片本身及其 daemon 接线见 [Antigravity Runtime](antigravity.md)（PR 4 Task C）。
+
 历史累计证据仍可以具有 `identityKind=cumulative_meter`：真实 session、`providerObservationId` 和 `meterEvidence` 保留 epoch、before/after 及可用 last。相同 meter namespace/epoch 内相邻 `(before,after]` 区间可累计，重叠观察跨 run 只保留审计而不另加消费。不同形式的 compaction 时间戳与 item/turn 身份可能指向同一次重置，重叠时保守判为竞争。没有可靠 session、baseline 或 epoch 的证据不建立强身份。历史请求恢复必须证明与原累计观测的覆盖关系后才能替换，不能将两者相加。计量器 owner 用标量区间检索，证据 JSON 供审计，不用于正常报表逐行解析。
 
 用量报告按字节与单位数分块，避免长任务超过 daemon 的 1 MiB frame 上限。单个 turn 金额关联的请求列表也可分块：`coverageExpectedCount` 和 `coverageSha256` 固定完整排序列表的数量与 SHA-256（UTF-8 `JSON.stringify(sortedIds)`），各块保留同 unit/revision、金额和不可变事实，仅发送列表子集。同 revision 的列表块幂等追加，更新 revision 清空旧关联；较旧 revision 不回退。数量及哈希验证完成前金额只保留诊断，不能提前计入已知费用或与配置估价相加。所有块持久化后才发送 run 完整标记。采集器在金额观测与 turn settle 时关联覆盖，避免每个请求写入不断增长的完整列表。

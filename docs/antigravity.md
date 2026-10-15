@@ -1,42 +1,38 @@
-# Antigravity (agy) Runtime
+# Antigravity Runtime
 
-Remi supports Antigravity as the `antigravity` provider. It invokes the native `agy` CLI through [AntigravityProvider](../packages/acp/src/antigravity.ts); Claude and Codex continue to use ACP. The implementation follows the [official headless CLI contract](https://antigravity.google/docs/cli/headless/), with compatibility cases identified in Multica's `server/pkg/agent/antigravity.go` and model discovery at commit `ded103c8c44e3fec15b4c3a5d36d2b4bbf974d35`.
+Remi runs Antigravity as the `antigravity` provider on Google's official ACP server (`antigravity-acp`), authenticated through the server's gateway mode and pointed at a loopback gateway shim in the daemon. The retired `agy -p` integration and personal-account `agy` logins no longer work.
 
-## Configure a machine
+> **Status (PR 4, Task A).** Provisioning, the access config, the provider behaviour and the trace mapping are in place. The daemon's gateway shim and its wiring (session home, shim channel, model probes, remote reinstall) land in Task C; until then the daemon cannot start an Antigravity task, which fails with `antigravity_home_required` or `antigravity_gateway_unconfigured` before any model call. Windows is not supported.
 
-1. Install and sign in using the [official Windows, macOS or Linux instructions](https://antigravity.google/docs/cli/install). Authentication belongs to the daemon machine's native agy account; Remi does not initiate login or copy Claude/Codex credentials into agy.
-2. Verify `agy --version` and `agy models` from the account that runs the daemon. A working executable does not prove the account is signed in.
-3. Start the configured daemon with `remi daemon start --provider antigravity`, or let the daemon discover providers automatically. The provider name is `antigravity`; the executable name is `agy`.
-4. Select Antigravity when creating or editing an Agent. Models come from the Runtime's `agy models` catalog. CLI equivalents are `remi agent create --provider antigravity ...` and `remi agent edit <id> --provider antigravity`.
+## Upgrade notes
 
-| Environment variable | Purpose |
-| --- | --- |
-| `MULTIREMI_ANTIGRAVITY_PATH` | Path to the native agy executable; Agent `executable` overrides it for task execution |
-| `MULTIREMI_ANTIGRAVITY_MODEL` | Default model if the Agent has no explicit model; must match a catalog ID |
-| `MULTIREMI_ANTIGRAVITY_SKILLS_DIR` | Root for importing machine-local Skills; defaults to `~/.agents/skills` |
+1. `agy -p` and personal-account `agy` logins no longer work; an Agent `executable` that points at `agy` is rejected ("points at the retired agy CLI; clear it").
+2. Configure *Settings > Model gateway > Antigravity* with the gateway base URL and API key ([contract](runtime-model-discovery.md#antigravity-gateway-engine)).
+3. On each machine run `remi runtime prepare --provider antigravity --accept-antigravity-terms`. It downloads about 110 MB on macOS (about 400 MB on disk) or about 330 MB on Linux (about 1.1 GB on disk).
+4. Reselect the model of every Antigravity Agent and clear its thinking level: stale ids fail with `acp_model_unsupported`, and an explicit effort fails with `acp_effort_unsupported`.
+5. Restart the daemon.
 
-PATH discovery also checks the standard `~/.local/bin/agy` or Windows `%LOCALAPPDATA%/agy/bin/agy.exe` location. Install agy separately; Remi's ACP bridge provisioning does not install an ACP wrapper for it. Runtime Agent CLI updates invoke `agy update`; ACP bridge updates do not apply.
+## Install and terms
 
-## Execution and compatibility
+The server is proprietary, with no redistribution grant. Remi never bundles, mirrors or commits it: [antigravity-install.ts](../packages/acp/src/antigravity-install.ts) downloads the archive pinned in [runtime-versions.json](../packages/acp/src/runtime-versions.json) from `dl.google.com`, checks its size and sha256 while streaming, extracts it into a stage (`ditto` on macOS, `unzip` or `bsdtar` on Linux) and renames it into `${REMI_HOME:-~/.remi}/acp/antigravity/<version>-<platform>/`, next to an `install.json` manifest. A failure leaves the working install untouched; one previous copy is kept.
 
-The provider inspects the installed CLI's help before choosing its protocol. Versions advertising streaming JSON emit text/tool events and actual token usage into the existing task transcript. When streaming input is available, prompts travel over stdin, preserving multiline content and avoiding Windows command-line length limits. Otherwise the one-shot `-p` interface is used.
+Antigravity is opt-in. The first download requires accepting [Google's terms](https://antigravity.google/terms) with `--accept-antigravity-terms` or `REMI_ACCEPT_ANTIGRAVITY_TERMS=1`; the acceptance time is recorded and carried across pin bumps. Whether this use is covered by those terms is a business and legal decision (PR 4 risk R2). Downloads happen only in `remi runtime prepare --provider antigravity`, in `remi setup` / `remi daemon start` when Antigravity is the explicit or configured provider, and in the default `remi runtime prepare` (the installer) when some Antigravity install already exists. Task execution never downloads, and auto-detection only considers the pinned install, never `agy` on `PATH`.
 
-Explicit conversation IDs drive Chat/Issue continuation; the adapter never resumes the machine's most recent conversation implicitly. Cancellation stops the task's process tree, including on Windows, while retaining any observed conversation ID for steering. A configured task deadline is enforced by the daemon; the CLI also receives an explicit print timeout so its five-minute default cannot silently truncate a longer task.
+The daemon-start health check spawns nothing: the manifest must match the pin, both binaries must be executable, and no machine policy file (`/Library/Application Support/Antigravity/admin_settings.json`, `/etc/antigravity/admin_settings.json`) may exist, because its admin tier overrides Remi's gateway routing. `remi runtime prepare` also runs the full check (`verifyAntigravityRuntime` in [runtime-verify.ts](../packages/acp/src/runtime-verify.ts)): `initialize` must report `antigravity-acp` at the pinned version with `loadSession`, and `session/new` against a fake upstream must list the upstream's single model and send Bearer auth. It needs no credentials and sends no prompt.
 
-Older text-only releases preserve stdout line breaks, extract the conversation ID from the per-run log, and recover an empty stdout from the current turn of the CLI transcript. Log-only provider errors and print timeouts fail the task even when agy exits with code 0. Missing terminal JSON results and unrecoverable empty responses also fail. Legacy releases that report no usage leave token counts unknown.
+## Access config
 
-Reasoning levels are exposed only when the installed CLI advertises `--effort`. Model IDs are discovered, not hard-coded; legacy one-column catalogs and newer tab-separated IDs/labels are accepted. An unavailable catalog does not fabricate models. A non-empty model absent from a successfully discovered catalog is rejected before execution.
+[access/antigravity.ts](../packages/acp/src/access/antigravity.ts) declares what the provider does differently; nothing in the provider branches on the agent name:
 
-## Context and supported boundaries
+- **Launch:** `<install>/agy_acp_server.par`, with `--uid=` on Linux. An Agent `executable` override still wins (and keeps its custom args); custom args without one are ignored with a warning.
+- **Environment:** `GEMINI_HOME` is the session's provider home; gateway auth is enabled with `AGY_LLM_GATEWAY_URL` set to the shim and the placeholder key `remi-shim`; file storage instead of the keychain; `BROWSER=/usr/bin/false`; loopback merged into `NO_PROXY` / `no_proxy`; every inherited Google, gateway and OAuth variable blanked. The real gateway key never enters the server process.
+- **Home files:** `antigravity-acp/settings.json` selects `auth.type = gateway`; `trusted_workspaces.json` marks the task directories untrusted, so repository hooks stay off.
+- **Session:** `session/new` (or `session/resume`) with `_meta.antigravity.systemPrompt.append` carrying Remi's system prompt and the runtime-context `AGENTS.md`; then `set_mode` (`yolo` / `auto_edit` / `default`), then a strict `set_config_option` for the model: without one the server silently runs the gateway's first model, so a missing model fails with `antigravity_model_required`. The gateway path has no effort selector.
+- **Prompts:** questions the model asks through `ask_user` arrive as `session/request_permission` and are answered through the elicitation handler (single choice); the workspace-trust prompt is answered `deny`; gateway errors streamed as `Agent execution error: …` text become typed session failures.
+- **Usage:** the server's `usage_update.used` double-counts the cache and is never billed. Billing and context come from the shim's per-response `usageMetadata` ([gemini-request-usage.ts](../packages/acp/src/gemini-request-usage.ts)), one request-identity unit per response; the shim interfaces are in [gateway-shim-types.ts](../packages/acp/src/access/gateway-shim-types.ts).
 
-Task instructions, project context and Skills use Remi's existing bootstrap/delta prompts. Skills in automatic execution directories are materialized under `.agents/skills`. When bound to a Runtime directory, Remi stores its context and Skill files in daemon-owned state, passes a Skill index and the local instructions into the prompt, and keeps the selected user directory as the child cwd. Remi does not replace the user's `AGENTS.md` or write platform metadata into that directory.
-
-The native agy OAuth profile and conversation history remain in agy's own data directory. Remi tracks the explicit conversation ID and owns its separate task context; its existing Claude/Codex isolated native-home contract does not apply to agy. A native agy login is required on each machine that executes it.
-
-This integration supports automatic approval. It rejects Remi interactive approval requests, tool allowlists, non-text media, task-scoped MCP configuration and Remi Agent Plugins before starting a task, because the adapter cannot enforce those contracts. Configure machine-level MCP through `agy mcp` if needed. Workspace Relay configuration for Claude and Codex does not apply to agy. Settings > Model gateway also stores an Antigravity engine (gateway base URL, default model and key; see [its contract](runtime-model-discovery.md#antigravity-gateway-engine)), but this provider does not read it: the daemon receives that configuration and ignores it until its gateway shim lands in a follow-up (PR 4 Task C).
+Agent Plugins are not supported; `allowedTools` is ignored with a warning; extra directories have no effect; the server sends no plan updates and only single-choice questions.
 
 ## Validation
 
-Run `bun test tests/unit/acp/antigravity.test.ts tests/integration/antigravity-daemon.test.ts`. The subprocess fixture covers the public CLI event formats and legacy failure/recovery cases. The integration test runs a real API and daemon through Chat creation, continuation, and Issue execution in a retained directory, using a simulated agy executable. It does not prove successful Google authentication or real model execution.
-
-After native login, run a task through an Antigravity Runtime and verify its reply, resumed conversation, tool transcript, usage and selected cwd. Do not label a CLI version check or a simulated-provider test as a real-model smoke.
+Run `bun test tests/unit/acp/antigravity-install.test.ts tests/unit/acp/antigravity-access.test.ts tests/unit/acp/gemini-request-usage.test.ts tests/unit/acp/providers.test.ts tests/unit/acp/trace-vendor.test.ts tests/unit/daemon/trace-translator.test.ts`. They use fake archives, a fake ACP agent and a fake shim, so they prove neither Google authentication nor real model execution. The daemon integration test and the opt-in live probe arrive with Task C.

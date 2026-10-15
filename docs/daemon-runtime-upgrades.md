@@ -21,6 +21,29 @@ Claude ACP 使用 @anthropic-ai/claude-agent-sdk 内的 CC 执行文件，Codex 
 
 依赖升级不新增发版定时器；夜间发版任务使用同一准备入口。上线机器的依赖更新频率跟随 daemon 发版和升级频率。
 
+## Antigravity 固定与升级检查项
+
+Antigravity 不是 npm 包，`release:prepare` 只原样沿用 `antigravity` 块，`release:check` 在每个提交上校验它的结构（稳定版本号、`dl.google.com` 的 https 地址、64 位十六进制 sha256、正数字节数、已知平台）。升级时由维护者手动执行：
+
+```bash
+bun run release:pin-antigravity --version <server 版本> --dry-run   # 只计算，不写文件
+bun run release:pin-antigravity --version <server 版本>
+```
+
+命令读取公共 ACP registry（`cdn.agentclientprotocol.com/registry/v1/latest/registry.json`，只列最新版本、不带校验和），下载四个支持平台的压缩包计算 sha256 与大小（不保存压缩包），只改写 `antigravity` 块，拒绝降级。1.4.0 的四个值已于 2026-10-15 用 `--dry-run` 对真实 registry 复核一致。
+
+每次升级 server 版本，逐条对照新版本源码确认以下事实仍然成立，再提交 pin：
+
+- 环境开关名仍是 `AGY_ACP_ENABLE_GATEWAY_AUTH`（`gateway/gateway.py:18`），`settings.json` 的 `auth.type = "gateway"` 仍选中网关认证；
+- 网关 URL 规则不变：server 自己追加 `/v1beta/...`（`gateway/model_discovery.py:399-414`），base URL 不带 `/v1beta`；
+- `_extract_tokens_used` 仍是 `total + cached`（`server.py:1494-1521`），因此 native `used` 继续不能计费；
+- `ask_user` 仍以 `interaction_<hex>` 工具调用加 `session/request_permission` 发出（`server.py:5204-5320`），工作区信任提示的选项 id 仍是 `{trust, deny}`；
+- 网关错误文本前缀仍是 `Agent execution error:`（`api_errors.py:175`）与 `Agent connection was lost and could not be re-established:`；
+- rawInput 的键名（`tools.py:440-449, 640-660`）与 `trace-vendor.ts` 的别名表一致；
+- `remi runtime prepare --provider antigravity --accept-antigravity-terms` 的完整校验在 Linux x64 与 macOS 上通过。
+
+CI 中按 `antigravity` 块变化触发的 Linux/macOS 校验作业尚未加入（PR 4 后续）；在此之前由维护者在两类机器上手动执行上面最后一项。
+
 ## Codex 升级检查项
 
 每次升级 Codex（`runtime-versions.json` 的 `codex.sdk` / `codex.executable`）后，逐条确认下列事实。开关仍存在但路径或默认值改变时，先修 `mergeCodexSessionConfig` 再发版：
@@ -83,8 +106,11 @@ daemon 由 systemd 托管时，重启交给 `systemctl --user restart --no-block
 remi runtime prepare                         # 已安装/配置的 provider
 remi runtime prepare --provider claude
 remi runtime prepare --provider claude --provider codex
+remi runtime prepare --provider antigravity --accept-antigravity-terms
 ```
 
-不带 `--provider` 时（安装脚本即如此调用），只准备配置或检测到的 provider 中带 ACP bundle 的 claude、codex；antigravity 等没有 bundle 的 provider 直接跳过，全部跳过时输出空的 `runtimes` 并成功退出，不阻塞 CLI 升级。显式 `--provider` 只接受 claude、codex，传入其它值直接报错。
+不带 `--provider` 时（安装脚本即如此调用），准备配置或检测到的 provider 中带 ACP bundle 的 claude、codex；antigravity 只在本机已有任一版本安装时才准备，这样新 CLI 替换前就能预取新 pin，但绝不会成为一台机器的首次下载。全部跳过时输出空的 `runtimes` 并成功退出，不阻塞 CLI 升级。显式 `--provider` 接受 claude、codex、antigravity，传入其它值直接报错；任何准备失败都按失败退出。
+
+Antigravity 的 ACP server 是 Google 的专有软件，不随 Remi 发布包分发：每台机器自己从 `dl.google.com` 下载 `runtime-versions.json` 里固定的压缩包（macOS 约 110 MB、解压约 400 MB；Linux 约 330 MB、解压约 1.1 GB），流式校验大小与 sha256，在同级 stage 目录解压后原子改名到 `${REMI_HOME:-~/.remi}/acp/antigravity/<版本>-<平台>/`，保留一份旧副本。首次下载必须显式同意 Google 条款（`--accept-antigravity-terms` 或 `REMI_ACCEPT_ANTIGRAVITY_TERMS=1`），同意时间写入 `install.json`，之后的 pin 升级沿用。准备后运行完整校验：只做 `initialize`（版本与 `loadSession`），再对假上游做无凭据的网关契约检查（`session/new` 必须列出上游的唯一模型并带 Bearer 认证），不发 prompt。不支持 Windows。详见 [Antigravity Runtime](antigravity.md)。
 
 命令无服务端鉴权要求，只操作当前用户的本地 Remi 依赖。隔离验证时给 REMI_HOME 指定新临时目录；源码运行可通过 REMI_CLAUDE_AGENT_ACP_EXECUTABLE 显式选择仓库内 bin/remi-claude-agent-acp。

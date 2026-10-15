@@ -1,0 +1,521 @@
+[
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "32c717b6-abe8-408f-9b88-6b036b894348",
+      "update": {
+        "availableCommands": [
+          {
+            "name": "plan",
+            "description": "Plan carefully before executing a task (generates an implementation plan artifact and awaits user approval)."
+          },
+          {
+            "name": "logout",
+            "description": "Log out and clear stored credentials."
+          },
+          {
+            "name": "usage",
+            "description": "Show model token usage and quota limits."
+          }
+        ],
+        "sessionUpdate": "available_commands_update"
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "32c717b6-abe8-408f-9b88-6b036b894348",
+      "update": {
+        "toolCallId": "0446f287f8f345bebe093a06340941f3",
+        "title": "ls -la",
+        "status": "pending",
+        "rawInput": {
+          "CommandLine": "ls -la",
+          "Cwd": "/tmp/agy-live/work",
+          "WaitMsBeforeAsync": 5000
+        },
+        "sessionUpdate": "tool_call",
+        "kind": "execute"
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "32c717b6-abe8-408f-9b88-6b036b894348",
+      "update": {
+        "toolCallId": "0446f287f8f345bebe093a06340941f3",
+        "sessionUpdate": "tool_call_update",
+        "kind": "execute",
+        "status": "in_progress",
+        "title": "ls -la",
+        "rawInput": {
+          "command_line": "ls -la",
+          "working_dir": "/tmp/agy-live/work"
+        }
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "32c717b6-abe8-408f-9b88-6b036b894348",
+      "update": {
+        "toolCallId": "0446f287f8f345bebe093a06340941f3",
+        "sessionUpdate": "tool_call_update",
+        "status": "completed",
+        "rawOutput": {
+          "commandLine": "ls -la",
+          "workingDir": "/tmp/agy-live/work",
+          "exitCode": 0,
+          "exit_code": 0,
+          "combinedOutput": "total 16\r\n-rw-r--r--  1 u  staff  72 README.md\r\n-rw-r--r--  1 u  staff  17 notes.txt\r\n",
+          "formatted_output": "total 16\r\n-rw-r--r--  1 u  staff  72 README.md\r\n-rw-r--r--  1 u  staff  17 notes.txt\r\n"
+        }
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "32c717b6-abe8-408f-9b88-6b036b894348",
+      "update": {
+        "used": 12384,
+        "size": 1048576,
+        "sessionUpdate": "usage_update"
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "32c717b6-abe8-408f-9b88-6b036b894348",
+      "update": {
+        "toolCallId": "a1f0c2d4e5b64a7f8c9d0e1f2a3b4c5d",
+        "title": "Running view_file",
+        "status": "in_progress",
+        "rawInput": {
+          "AbsolutePath": "/tmp/agy-live/work/README.md"
+        },
+        "sessionUpdate": "tool_call",
+        "kind": "read",
+        "locations": [
+          {
+            "path": "/tmp/agy-live/work/README.md"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "32c717b6-abe8-408f-9b88-6b036b894348",
+      "update": {
+        "toolCallId": "a1f0c2d4e5b64a7f8c9d0e1f2a3b4c5d",
+        "sessionUpdate": "tool_call_update",
+        "status": "completed",
+        "rawOutput": "# Probe workspace\n\nThis folder exists only to test an ACP client.\n"
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "32c717b6-abe8-408f-9b88-6b036b894348",
+      "update": {
+        "toolCallId": "b2e1d3c5f6a74b8e9d0f1a2b3c4d5e6f",
+        "title": "Running grep_search",
+        "status": "in_progress",
+        "rawInput": {
+          "Query": "alpha",
+          "SearchPath": "/tmp/agy-live/work",
+          "MatchPerLine": true
+        },
+        "sessionUpdate": "tool_call",
+        "kind": "search",
+        "locations": [
+          {
+            "path": "/tmp/agy-live/work"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "32c717b6-abe8-408f-9b88-6b036b894348",
+      "update": {
+        "toolCallId": "b2e1d3c5f6a74b8e9d0f1a2b3c4d5e6f",
+        "sessionUpdate": "tool_call_update",
+        "status": "completed",
+        "rawOutput": "/tmp/agy-live/work/notes.txt:1:alpha"
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "32c717b6-abe8-408f-9b88-6b036b894348",
+      "update": {
+        "toolCallId": "c3f2e4d6a7b85c9f0e1a2b3c4d5e6f70",
+        "title": "Running list_dir",
+        "status": "in_progress",
+        "rawInput": {
+          "DirectoryPath": "/tmp/agy-live/work"
+        },
+        "sessionUpdate": "tool_call",
+        "kind": "search",
+        "locations": [
+          {
+            "path": "/tmp/agy-live/work"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "32c717b6-abe8-408f-9b88-6b036b894348",
+      "update": {
+        "toolCallId": "c3f2e4d6a7b85c9f0e1a2b3c4d5e6f70",
+        "sessionUpdate": "tool_call_update",
+        "status": "completed",
+        "rawOutput": "README.md\nnotes.txt"
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "32c717b6-abe8-408f-9b88-6b036b894348",
+      "update": {
+        "toolCallId": "d4a3f5e7b8c96d0a1f2b3c4d5e6f7081",
+        "title": "Running write_to_file",
+        "status": "in_progress",
+        "rawInput": {
+          "TargetFile": "/tmp/agy-live/work/summary.md",
+          "CodeContent": "# Summary\n\nA probe workspace.\n"
+        },
+        "sessionUpdate": "tool_call",
+        "kind": "edit",
+        "locations": [
+          {
+            "path": "/tmp/agy-live/work/summary.md"
+          }
+        ],
+        "content": [
+          {
+            "type": "diff",
+            "path": "/tmp/agy-live/work/summary.md",
+            "oldText": null,
+            "newText": "# Summary\n\nA probe workspace.\n",
+            "_meta": {
+              "kind": "add"
+            }
+          }
+        ]
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "32c717b6-abe8-408f-9b88-6b036b894348",
+      "update": {
+        "toolCallId": "d4a3f5e7b8c96d0a1f2b3c4d5e6f7081",
+        "sessionUpdate": "tool_call_update",
+        "status": "completed",
+        "rawOutput": "Created file"
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "32c717b6-abe8-408f-9b88-6b036b894348",
+      "update": {
+        "toolCallId": "e5b4a6f8c9d07e1b2a3c4d5e6f708192",
+        "title": "Running replace_file_content",
+        "status": "in_progress",
+        "rawInput": {
+          "TargetFile": "/tmp/agy-live/work/notes.txt",
+          "TargetContent": "beta",
+          "ReplacementContent": "BETA"
+        },
+        "sessionUpdate": "tool_call",
+        "kind": "edit",
+        "locations": [
+          {
+            "path": "/tmp/agy-live/work/notes.txt"
+          }
+        ],
+        "content": [
+          {
+            "type": "diff",
+            "path": "/tmp/agy-live/work/notes.txt",
+            "oldText": "beta",
+            "newText": "BETA",
+            "_meta": {
+              "kind": "modify"
+            }
+          }
+        ]
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "32c717b6-abe8-408f-9b88-6b036b894348",
+      "update": {
+        "toolCallId": "e5b4a6f8c9d07e1b2a3c4d5e6f708192",
+        "sessionUpdate": "tool_call_update",
+        "status": "completed",
+        "rawOutput": "Edited file"
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "32c717b6-abe8-408f-9b88-6b036b894348",
+      "update": {
+        "toolCallId": "f6c5b7a9d0e18f2c3b4d5e6f70819203",
+        "title": "Running search_web",
+        "status": "in_progress",
+        "rawInput": {
+          "query": "agent client protocol"
+        },
+        "sessionUpdate": "tool_call",
+        "kind": "search"
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "32c717b6-abe8-408f-9b88-6b036b894348",
+      "update": {
+        "toolCallId": "f6c5b7a9d0e18f2c3b4d5e6f70819203",
+        "sessionUpdate": "tool_call_update",
+        "status": "completed",
+        "rawOutput": "Found 3 results for agent client protocol",
+        "content": [
+          {
+            "type": "content",
+            "content": {
+              "type": "text",
+              "text": "Found 3 results for agent client protocol"
+            }
+          }
+        ]
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "32c717b6-abe8-408f-9b88-6b036b894348",
+      "update": {
+        "toolCallId": "07d6c8b0e1f2903d4c5e6f7081920314",
+        "title": "Running read_url_content",
+        "status": "in_progress",
+        "rawInput": {
+          "Url": "https://agentclientprotocol.com/"
+        },
+        "sessionUpdate": "tool_call",
+        "kind": "fetch",
+        "content": [
+          {
+            "type": "content",
+            "content": {
+              "type": "text",
+              "text": "https://agentclientprotocol.com/"
+            }
+          }
+        ]
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "32c717b6-abe8-408f-9b88-6b036b894348",
+      "update": {
+        "toolCallId": "07d6c8b0e1f2903d4c5e6f7081920314",
+        "sessionUpdate": "tool_call_update",
+        "status": "completed",
+        "rawOutput": "Agent Client Protocol: a protocol for code editors and agents."
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "32c717b6-abe8-408f-9b88-6b036b894348",
+      "update": {
+        "toolCallId": "18e7d9c1f2a3014e5d6f708192031425",
+        "title": "github_search_issues",
+        "status": "in_progress",
+        "rawInput": {
+          "arguments": {
+            "q": "is:open bug"
+          },
+          "q": "is:open bug"
+        },
+        "sessionUpdate": "tool_call",
+        "kind": "other",
+        "_meta": {
+          "mcp": {
+            "tool": "search_issues",
+            "server": "github"
+          },
+          "is_mcp_tool_call": true
+        }
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "32c717b6-abe8-408f-9b88-6b036b894348",
+      "update": {
+        "toolCallId": "18e7d9c1f2a3014e5d6f708192031425",
+        "sessionUpdate": "tool_call_update",
+        "status": "completed",
+        "rawOutput": "2 issues",
+        "content": [
+          {
+            "type": "content",
+            "content": {
+              "type": "text",
+              "text": "2 issues"
+            }
+          }
+        ]
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "32c717b6-abe8-408f-9b88-6b036b894348",
+      "update": {
+        "toolCallId": "interaction_ab12cd34",
+        "title": "Which colour should the badge be?",
+        "status": "pending",
+        "rawInput": {},
+        "sessionUpdate": "tool_call"
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "32c717b6-abe8-408f-9b88-6b036b894348",
+      "update": {
+        "toolCallId": "interaction_ab12cd34",
+        "sessionUpdate": "tool_call_update",
+        "status": "completed",
+        "rawOutput": "Response received"
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "32c717b6-abe8-408f-9b88-6b036b894348",
+      "update": {
+        "toolCallId": "29f8e0d2a3b4125f6e708192031425a6",
+        "title": "Running browser_subagent",
+        "status": "in_progress",
+        "rawInput": {
+          "Task": "Open the docs page and read the title"
+        },
+        "sessionUpdate": "tool_call",
+        "kind": "other"
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "32c717b6-abe8-408f-9b88-6b036b894348",
+      "update": {
+        "toolCallId": "29f8e0d2a3b4125f6e708192031425a6",
+        "sessionUpdate": "tool_call_update",
+        "status": "completed",
+        "rawOutput": "Title: Agent Client Protocol"
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "32c717b6-abe8-408f-9b88-6b036b894348",
+      "update": {
+        "content": {
+          "text": "### Files",
+          "type": "text"
+        },
+        "sessionUpdate": "agent_message_chunk"
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "32c717b6-abe8-408f-9b88-6b036b894348",
+      "update": {
+        "content": {
+          "text": "\n- README.md\n- notes.txt\n\nThe workspace exists only to test an ACP client.",
+          "type": "text"
+        },
+        "sessionUpdate": "agent_message_chunk"
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "32c717b6-abe8-408f-9b88-6b036b894348",
+      "update": {
+        "used": 26952,
+        "size": 1048576,
+        "sessionUpdate": "usage_update"
+      }
+    }
+  }
+]

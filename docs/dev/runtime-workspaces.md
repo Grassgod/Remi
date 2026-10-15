@@ -115,7 +115,7 @@ SAVEPOINT 回滚。
 
 每个任务执行前，daemon 在 `env/<主体>/tmp/` 下分配一个独占目录（`<task>-XXXXXX`，0700），执行结束后删除；每轮 GC 还会清掉不在运行的执行留下的残留。Linux 把它挂载为进程树的字面 `/tmp`（[实现](../../packages/acp/src/private-tmp.ts)），因此同一个任务里的 shell、子进程和 ACP 文件工具看到同一份 `/tmp`，不同任务互不可见。namespace 不可用时 fail-closed：任务以 `private_tmp_isolation_unavailable` 失败，不退回共享 `/tmp`。
 
-macOS 是有意降级（MUL-449）：内核没有 user / mount namespace，无法按任务替换字面 `/tmp`。darwin 上不套 `unshare`，改为把 `TMPDIR` / `TMP` / `TEMP` 指向该任务的私有目录，并接受字面 `/tmp` 与主机共享；`mapPrivateTmpPath` / `privateTmpVisiblePath` 在 darwin 上恒等，保证文件工具与 shell 解析同一路径（包括 antigravity 的 `--log-file`）。其他非 Linux 平台（win32 等）仍然报错。平台参数只为单测模拟 darwin，不影响 Linux 行为。
+macOS 是有意降级（MUL-449）：内核没有 user / mount namespace，无法按任务替换字面 `/tmp`。darwin 上不套 `unshare`，改为把 `TMPDIR` / `TMP` / `TEMP` 指向该任务的私有目录，并接受字面 `/tmp` 与主机共享；`mapPrivateTmpPath` / `privateTmpVisiblePath` 在 darwin 上恒等，保证文件工具与 shell 解析同一路径。其他非 Linux 平台（win32 等）仍然报错。平台参数只为单测模拟 darwin，不影响 Linux 行为。
 
 macOS 的 socket 路径上限是 104 字节（`sun_path`），而真实私有目录在 `env/` 的深层路径下，委派任务的路径可超过 220 字节，所以在 TMPDIR 里建 socket 的工具（MCP/IDE 的 IPC、git credential cache、tmux 等）会失败。darwin 上因此额外为每次执行创建一个 `/tmp/remi-XXXXXXXX` 短别名（`symlink()` 原子创建，随机名字，EEXIST 就换名重试，有次数上限；建好后 `lstat` 校验确实是自己建的链接并指向本次真实目录），`TMPDIR` / `TMP` / `TEMP` 指向别名，真实目录仍在 `env/<主体>/tmp/` 下。别名创建失败（例如 `/tmp` 不可写）只记一条 warn 并退回长路径，任务照常执行。执行结束时先校验「是符号链接」且「readlink 等于本次真实目录」，两项都满足才 `unlink` 别名，绝不经由别名递归删除；真实目录仍由 `cleanupTaskPrivateTempDirectory` 按 storage 边界删除。daemon 崩溃留下的悬空别名不做启动清扫：macOS 会定期清理 `/tmp`，且残留链接指向已删除的目录，只占名字不占数据。`isolateProcessTmp` 的 darwin 分支因此保留传入路径原样（不做 realpath），否则别名会被展开回长路径。
 

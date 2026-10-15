@@ -38,7 +38,7 @@ function frames(name: string): ProviderEvent[] {
 }
 
 /** A translator wired to a store stand-in: dense seq, a fixed clock, and the shared fold. */
-function harness(agentType: "claude" | "codex", options: { flushIntervalMs?: number } = {}) {
+function harness(agentType: "claude" | "codex" | "antigravity", options: { flushIntervalMs?: number } = {}) {
   let tick = 0;
   const now = () => new Date(T0 + tick * 1000).toISOString();
   const batches: TraceEventInput[][] = [];
@@ -908,6 +908,76 @@ describe("trace translator: subagents and labels (spec §13)", () => {
   });
 });
 
+describe("trace translator: Antigravity (antigravity-acp 1.4.0, PR 4 §5)", () => {
+  // The provider drops the server's own usage_update (its `used` double-counts
+  // the cache) and replaces it with shim observations, so the translator never
+  // sees one.
+  const live = () => frames("antigravity-140-turn-notifications.json")
+    .filter((frame) => (frame as { sessionUpdate: string }).sessionUpdate !== "usage_update");
+
+  it("maps one recorded turn to command, file change, search, tool and message items", () => {
+    const h = harness("antigravity").start().feed(live());
+    h.translator.promptEnded();
+    expect(h.item("0446f287f8f345bebe093a06340941f3", "command")).toMatchObject({
+      status: "completed", tool: "run_command", source: "shell", command: "ls -la", cwd: "/tmp/agy-live/work",
+      // Published as rawOutput.exit_code (AGY/server.py:125-163).
+      exit_code: 0, output: expect.stringContaining("README.md"),
+      actions: [{ type: "list_files", command: "ls -la", path: null }],
+    });
+    expect(h.item("a1f0c2d4e5b64a7f8c9d0e1f2a3b4c5d", "command")).toMatchObject({ tool: "view_file", source: "tool",
+      actions: [{ type: "read", path: "/tmp/agy-live/work/README.md", name: "README.md" }] });
+    expect(h.item("b2e1d3c5f6a74b8e9d0f1a2b3c4d5e6f", "command")).toMatchObject({ tool: "grep_search",
+      actions: [{ type: "search", query: "alpha", path: "/tmp/agy-live/work" }] });
+    expect(h.item("c3f2e4d6a7b85c9f0e1a2b3c4d5e6f70", "command")).toMatchObject({ tool: "list_dir",
+      actions: [{ type: "list_files", path: "/tmp/agy-live/work" }] });
+    expect(h.item("d4a3f5e7b8c96d0a1f2b3c4d5e6f7081", "file_change")).toMatchObject({ tool: "write_to_file",
+      changes: [{ path: "/tmp/agy-live/work/summary.md", kind: "add", added: 3, removed: 0 }] });
+    expect(h.item("e5b4a6f8c9d07e1b2a3c4d5e6f708192", "file_change")).toMatchObject({ tool: "replace_file_content",
+      changes: [{ path: "/tmp/agy-live/work/notes.txt", kind: "update", diff: "@@\n-beta\n+BETA" }] });
+    expect(h.item("f6c5b7a9d0e18f2c3b4d5e6f70819203", "web_search")).toMatchObject({ tool: "search_web", action: "search", query: "agent client protocol" });
+    expect(h.item("07d6c8b0e1f2903d4c5e6f7081920314", "web_search")).toMatchObject({ tool: "read_url_content", action: "fetch", url: "https://agentclientprotocol.com/" });
+    expect(h.item("18e7d9c1f2a3014e5d6f708192031425", "tool")).toMatchObject({ tool: "search_issues", server: "github", output: "2 issues" });
+    expect(h.item("29f8e0d2a3b4125f6e708192031425a6", "tool")).toMatchObject({ tool: "browser_subagent", server: null });
+    // The ask_user stand-in is shown as the question item (provider elicitation), not as a tool.
+    expect(h.state.items.some((item) => item.id === "interaction_ab12cd34")).toBe(false);
+    // Chunks without message ids form one message after the last tool.
+    const messages = h.ofType("agent_message");
+    expect(messages).toHaveLength(1);
+    expect(messages[0]!.text).toBe("### Files\n- README.md\n- notes.txt\n\nThe workspace exists only to test an ACP client.");
+    // No phase: the shared final-reply rule picks the last message.
+    expect(h.translator.settle()).toMatchObject({ itemId: messages[0]!.id });
+  });
+
+  it("parses replayed JSON-string input and its model-written summary", () => {
+    // The provider drops replayed updates (outside an active prompt); the input shape still has to parse.
+    const h = harness("antigravity").start().feed(frames("antigravity-140-replay-notifications.json"));
+    h.translator.promptEnded();
+    expect(h.item("call_1707387", "command")).toMatchObject({ command: "ls -la", cwd: "/tmp/agy-live/work", title: "List files" });
+    expect(h.item("call_1707388", "command")).toMatchObject({ tool: "view_file", actions: [{ type: "read", path: "/tmp/agy-live/work/README.md" }] });
+  });
+
+  it("records the provider's typed failure for a service message, not the raw text", () => {
+    // What AcpProvider forwards for antigravity-140-service-notifications.json: the
+    // chunk is dropped and a session failure takes its place.
+    const failure = { id: "antigravity:service:1", revision: 1, severity: "error", category: "authentication", errorKind: "authentication_failed",
+      title: "Antigravity gateway rejected the credentials", details: "401 Unauthorized: API key not valid. Please pass a valid API key." };
+    const h = harness("antigravity").start().feed([{ sessionUpdate: "session_info_update", _meta: { jetbrains: { air: { sessionFailure: failure } } } }]);
+    h.translator.promptEnded();
+    expect(h.item("fail:antigravity:service:1", "notice")).toMatchObject({ severity: "error", category: "authentication",
+      error_kind: "authentication_failed", description: failure.details });
+    expect(h.ofType("agent_message")).toEqual([]);
+  });
+
+  it("takes context from the provider's shim usage, cached tokens included", () => {
+    const h = harness("antigravity").start().feed([
+      { sessionUpdate: "usage_update", used: 139_978, size: 1_048_576, _meta: { remiUsageMode: "request" } },
+      // A billing-only observation (another model's call) leaves context alone.
+      { sessionUpdate: "usage_update", used: 0, size: 0, _meta: { remiUsageMode: "request" } },
+    ]);
+    expect(h.state.turn?.context_usage).toEqual({ used: 139_978, size: 1_048_576 });
+  });
+});
+
 describe("trace translator: every recorded fixture", () => {
   // Capability evidence files sit beside the frames they vouch for; they hold no frames.
   const names = readdirSync(FIXTURES).filter((name) => name.endsWith(".json") && !name.endsWith("-capability-evidence.json")).sort();
@@ -918,7 +988,7 @@ describe("trace translator: every recorded fixture", () => {
 
   for (const name of names) {
     it(`emits only valid events for ${name}`, () => {
-      const agentType = name.startsWith("codex") ? "codex" : "claude";
+      const agentType = name.startsWith("codex") ? "codex" : name.startsWith("antigravity") ? "antigravity" : "claude";
       const h = harness(agentType).start().feed(frames(name));
       h.translator.promptEnded();
       h.translator.settle();

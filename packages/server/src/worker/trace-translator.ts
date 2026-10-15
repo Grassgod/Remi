@@ -649,7 +649,7 @@ export function createTraceTranslator(
     if (suppressed.has(id)) return;
     let state = tools.get(id);
     if (!state) {
-      const facts = mergeToolFacts(null, frame);
+      const facts = mergeToolFacts(null, frame, agentType);
       const cls = classifyTool(agentType, facts);
       if (cls.type === "suppress") {
         suppressed.add(id);
@@ -674,7 +674,7 @@ export function createTraceTranslator(
       state.lastShape = shapeOf(item);
       write("item.started", item, true);
     } else {
-      state.facts = mergeToolFacts(state.facts, frame);
+      state.facts = mergeToolFacts(state.facts, frame, agentType);
       refreshClass(state);
       const changes = diffChanges(frame);
       if (changes) state.changes = changes;

@@ -67,9 +67,8 @@ export function buildTaskEnv(task: AgentTask, opts: BuildTaskEnvOptions): Record
       ? { CLAUDE_CONFIG_DIR: opts.providerHome.home }
       : opts.providerHome?.provider === "codex"
         ? { CODEX_HOME: opts.providerHome.home }
-        : opts.providerHome?.provider === "antigravity"
-          ? { MULTIREMI_ANTIGRAVITY_CONTEXT_DIR: opts.providerHome.home }
-          : {}),
+        // Antigravity: the provider's environment builder owns GEMINI_HOME.
+        : {}),
     ...(taskAuthToken ? { MULTIREMI_TOKEN: taskAuthToken } : {}),
   };
   const brokerEnv = hasReadOnlyCodeSnapshot(task) ? readOnlyGitEnv(env) : appendGitCredentialBrokerEnv(env, {

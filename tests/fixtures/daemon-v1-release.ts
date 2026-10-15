@@ -75,8 +75,17 @@ export class DaemonV1ReleaseHarness {
       const version = execFileSync(binary, ["--version"], { encoding: "utf8", timeout: 5_000,
         env: { HOME: join(root, "home"), PATH: "/usr/bin:/bin" } }).trim();
       if (version !== "0.2.82") throw new Error("Release fixture binary version mismatch");
-      const quote = (path: string) => `'${path.replace(/'/g, "'\\''")}'`;
-      writeFileSync(join(root, "agy-fixture"), `#!/bin/sh\nexec ${quote(process.execPath)} ${quote(resolve(import.meta.dir, "antigravity-cli.mjs"))} "$@"\n`, { mode: 0o755 });
+      // The published v0.2.82 binary still health-checks the retired `agy` CLI
+      // (via MULTIREMI_ANTIGRAVITY_PATH); an inert stub answers its probes.
+      writeFileSync(join(root, "agy-fixture"), [
+        "#!/bin/sh",
+        'case " $* " in',
+        '  *" --version "*) echo 1.2.2 ;;',
+        '  *" models "*) printf "model-one\\tModel One\\n" ;;',
+        "  *) exit 1 ;;",
+        "esac",
+        "",
+      ].join("\n"), { mode: 0o755 });
       return new DaemonV1ReleaseHarness(root, binary);
     } catch (error) {
       rmSync(root, { recursive: true, force: true });

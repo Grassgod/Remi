@@ -11,6 +11,8 @@
  *   notice, elicitation and diff modules are unchanged; renderer and agent code
  *   moved by a few dozen lines).
  * - codex-acp 2.2.2 (`CX` = its `dist/index.js`)
+ * - antigravity-acp 1.4.0 (`AGY` = the server's extracted Python source,
+ *   `acp_server/`), Google's official ACP server (PR 4 §5)
  *
  * Title parsing is version-pinned on purpose (risk R6): Codex sends single-action
  * reads, lists and searches with only a title and locations.
@@ -228,6 +230,8 @@ export type ToolClass =
 
 /** Accumulated facts of one tool call across its frames. */
 export interface ToolFacts {
+  /** The call's `toolCallId`. */
+  id: string | null;
   name: string | null;
   kind: string | null;
   title: string | null;
@@ -237,6 +241,8 @@ export interface ToolFacts {
   terminal: boolean;
   terminalCwd: string | null;
   mcp: boolean;
+  /** Antigravity's `_meta.mcp.server`. */
+  mcpServer: string | null;
   airSubagent: boolean;
   /** Claude AIR `commandTitle`, from any frame. */
   commandTitle: string | null;
@@ -246,15 +252,21 @@ export interface ToolFacts {
   subagentType: string | null;
 }
 
-/** Fold one frame into the facts of its tool call. Later frames win, input keys merge. */
-export function mergeToolFacts(previous: ToolFacts | null, frame: VendorFrame): ToolFacts {
-  const name = toolName(frame) ?? previous?.name ?? null;
-  const input = rawInputOf(frame);
+/**
+ * Fold one frame into the facts of its tool call. Later frames win, input keys
+ * merge. Antigravity names and input keys are normalized first (its frames of
+ * one call spell the same argument differently).
+ */
+export function mergeToolFacts(previous: ToolFacts | null, frame: VendorFrame, agentType?: string): ToolFacts {
+  const antigravity = agentType === "antigravity";
+  const name = (antigravity ? antigravityToolName(frame) : toolName(frame)) ?? previous?.name ?? null;
+  const input = antigravity ? normalizeToolInput(frame.rawInput) : rawInputOf(frame);
   const locations = Array.isArray(frame.locations)
     ? frame.locations.flatMap((location) => str(record(location)?.path) ?? [])
     : previous?.locations ?? [];
   const info = terminalInfo(frame);
   return {
+    id: str(frame.toolCallId) ?? previous?.id ?? null,
     name,
     kind: str(frame.kind) ?? previous?.kind ?? null,
     title: str(frame.title) ?? previous?.title ?? null,
@@ -263,6 +275,7 @@ export function mergeToolFacts(previous: ToolFacts | null, frame: VendorFrame): 
     terminal: (previous?.terminal ?? false) || info !== null || hasTerminalContent(frame),
     terminalCwd: info?.cwd ?? previous?.terminalCwd ?? null,
     mcp: (previous?.mcp ?? false) || isMcp(frame, name),
+    mcpServer: str(record(meta(frame)?.mcp)?.server) ?? previous?.mcpServer ?? null,
     airSubagent: (previous?.airSubagent ?? false) || isAirSubagent(frame),
     commandTitle: commandTitle(frame) ?? previous?.commandTitle ?? null,
     asyncLaunch: (previous?.asyncLaunch ?? false) || isAsyncLaunch(frame),
@@ -404,6 +417,183 @@ function codexClass(facts: ToolFacts): ToolClass {
   }
 }
 
+// ── Antigravity ─────────────────────────────────────────────────────────────
+
+/**
+ * Canonical input keys and the spellings Antigravity uses for them. The Go
+ * harness and the Python server name the same argument in PascalCase and
+ * snake_case, and one call's frames mix them (`CommandLine` on the permission
+ * frame, `command_line` on the live one; AGY/tools.py:440-449, 515-540,
+ * 640-660, and the live probe). The first spelling present wins.
+ */
+const ANTIGRAVITY_INPUT_KEYS: ReadonlyArray<readonly [string, readonly string[]]> = [
+  ["command", ["CommandLine", "command_line", "command"]],
+  ["cwd", ["Cwd", "working_dir", "cwd"]],
+  ["path", ["AbsolutePath", "absolute_path", "TargetFile", "target_file", "FilePath", "file_path", "path", "DirectoryPath",
+    "directory_path", "SearchDirectory", "search_directory", "SearchPath", "search_path"]],
+  ["query", ["Query", "query", "Pattern", "pattern", "SearchPattern", "search_pattern"]],
+  ["url", ["Url", "url"]],
+];
+const ANTIGRAVITY_INPUT_ALIASES = new Set(ANTIGRAVITY_INPUT_KEYS.flatMap(([, aliases]) => aliases));
+
+/**
+ * An Antigravity `rawInput` with canonical keys. Replay sends the arguments as
+ * a JSON string (`arguments_json`, AGY/server.py:6403-6405); other keys are kept.
+ */
+export function normalizeToolInput(raw: unknown): Record<string, unknown> | null {
+  let value = raw;
+  if (typeof value === "string") {
+    if (!value.trim()) return null;
+    try { value = JSON.parse(value); } catch { return { value: raw }; }
+  }
+  const input = record(value);
+  if (!input) return null;
+  const out: Record<string, unknown> = {};
+  for (const [canonical, aliases] of ANTIGRAVITY_INPUT_KEYS) {
+    const alias = aliases.find((key) => input[key] !== undefined && input[key] !== null);
+    if (alias) out[canonical] = input[alias];
+  }
+  for (const [key, entry] of Object.entries(input)) if (!ANTIGRAVITY_INPUT_ALIASES.has(key)) out[key] = entry;
+  return out;
+}
+
+/**
+ * An Antigravity tool name: `_meta.mcp.tool` for MCP calls, `run_command` for
+ * kind `execute` (whose title is the command, AGY/tools.py:440-449), else the
+ * name in a `Run <tool>?` permission or `Running <tool>` live / replay title
+ * (AGY/server.py:4945-4949, 5927-5931, 6410-6414).
+ */
+export function antigravityToolName(frame: VendorFrame): string | null {
+  const mcpTool = str(record(meta(frame)?.mcp)?.tool);
+  if (mcpTool) return mcpTool;
+  if (frame.kind === "execute") return "run_command";
+  const match = /^(?:Running |Run )(\S+?)\??$/.exec(str(frame.title) ?? "");
+  return match ? match[1]! : null;
+}
+
+const ANTIGRAVITY_SHELL_TOOLS: ReadonlySet<string> = new Set(["run_command", "shell"]);
+const ANTIGRAVITY_READ_TOOLS: ReadonlySet<string> = new Set(["client_view_file", "view_file", "read_file"]);
+const ANTIGRAVITY_SEARCH_TOOLS: ReadonlySet<string> = new Set(["grep_search", "find_by_name", "search_directory", "find_file"]);
+const ANTIGRAVITY_LIST_TOOLS: ReadonlySet<string> = new Set(["list_dir", "list_directory"]);
+/** AGY/tools.py `AUTO_EDIT_TOOLS`. */
+const ANTIGRAVITY_EDIT_TOOLS: ReadonlySet<string> = new Set(["client_create_file", "client_edit_file", "create_file", "edit_file",
+  "write_file", "replace_file_content", "multi_replace_file_content", "write_to_file"]);
+
+/** The server's `ask_user` stand-in call: `interaction_<hex>` with `rawInput: {}` (AGY/server.py:5240-5262). */
+function isInteractionCall(id: string | null, input: unknown): boolean {
+  const raw = record(input);
+  return !!id?.startsWith("interaction_") && (input === undefined || input === null || (raw !== null && Object.keys(raw).length === 0));
+}
+
+function antigravityClass(facts: ToolFacts): ToolClass {
+  const input = facts.input;
+  // The question is the `question` item (provider elicitation), like Claude's AskUserQuestion.
+  if (isInteractionCall(facts.id, input ?? {})) return { type: "suppress" };
+  if (facts.mcp) return { type: "tool", server: facts.mcpServer ?? str(input?.ServerName) };
+  const name = facts.name ?? "";
+  const path = str(input?.path) ?? facts.locations[0] ?? null;
+  if (ANTIGRAVITY_SHELL_TOOLS.has(name)) {
+    // The title is the command (AGY/tools.py:440-449); replay adds the model's `toolSummary`.
+    const title = facts.kind === "execute" ? facts.title : null;
+    return { type: "command", source: "shell", command: commandText(input?.command) ?? title, cwd: str(input?.cwd),
+      actions: null, title: str(input?.toolSummary) };
+  }
+  if (ANTIGRAVITY_READ_TOOLS.has(name)) {
+    return { type: "command", source: "tool", command: null, cwd: null, actions: path ? [readAction(path)] : [], title: null };
+  }
+  if (ANTIGRAVITY_SEARCH_TOOLS.has(name)) {
+    return { type: "command", source: "tool", command: null, cwd: null, title: null,
+      actions: [{ type: "search", command: null, query: str(input?.query), path }] };
+  }
+  if (ANTIGRAVITY_LIST_TOOLS.has(name)) {
+    return { type: "command", source: "tool", command: null, cwd: null, actions: [{ type: "list_files", command: null, path }], title: null };
+  }
+  if (ANTIGRAVITY_EDIT_TOOLS.has(name) || (!facts.name && facts.kind === "edit")) return { type: "file_change" };
+  // `search_web` has kind `search` (AGY/tools.py:42); `read_url_content` has kind `fetch`.
+  if (name === "search_web") return { type: "web_search", action: "search", query: str(input?.query), url: null };
+  if (name === "read_url_content") return { type: "web_search", action: "fetch", query: null, url: str(input?.url) };
+  // browser_subagent and everything else: a plain tool.
+  return { type: "tool", server: null };
+}
+
+/** A single-choice question the server sent as `session/request_permission`. */
+export interface PermissionQuestion {
+  question: string;
+  options: Array<{ optionId: string; label: string }>;
+}
+
+/** Option ids of the server's real tool approvals (AGY/server.py:4996-5068). */
+const ANTIGRAVITY_APPROVAL_OPTION_IDS: ReadonlySet<string> = new Set(["allow", "allow_always", "deny"]);
+
+function permissionOptions(params: unknown): Array<{ optionId: string; name: string | null }> | null {
+  const options = record(params)?.options;
+  if (!Array.isArray(options) || !options.length) return null;
+  const rows = options.map((option) => ({ optionId: str(record(option)?.optionId), name: str(record(option)?.name) }));
+  return rows.every((row) => row.optionId !== null) ? rows as Array<{ optionId: string; name: string | null }> : null;
+}
+
+/** The workspace-trust prompt for repository hooks: option ids exactly `{trust, deny}` (AGY/hooks.py:395-398). */
+export function isWorkspaceTrustPrompt(params: unknown): boolean {
+  const ids = permissionOptions(params)?.map((option) => option.optionId);
+  return !!ids && ids.length === 2 && ids.includes("trust") && ids.includes("deny");
+}
+
+/**
+ * The model's `ask_user` question (AGY/server.py:5204-5320): an
+ * `interaction_` call with empty input, no kind, and options that are not the
+ * approval ids. Single choice only (the server's own TODO b/524989454).
+ */
+export function permissionAsQuestion(params: unknown): PermissionQuestion | null {
+  const toolCall = record(record(params)?.toolCall);
+  if (!toolCall || toolCall.kind != null || !isInteractionCall(str(toolCall.toolCallId), toolCall.rawInput)) return null;
+  const options = permissionOptions(params);
+  if (!options || options.some((option) => ANTIGRAVITY_APPROVAL_OPTION_IDS.has(option.optionId)) || isWorkspaceTrustPrompt(params)) return null;
+  return {
+    question: str(toolCall.title) ?? "",
+    options: options.map((option) => ({ optionId: option.optionId, label: option.name ?? option.optionId })),
+  };
+}
+
+/** A server-authored message the agent streams as ordinary assistant text. */
+export type ServiceMessage =
+  | { type: "failure"; source: "execution" | "connection"; details: string }
+  | { type: "model_replaced"; previous: string; replacement: string; rest: string };
+
+const EXECUTION_ERROR = "Agent execution error: ";
+const CONNECTION_LOST = "Agent connection was lost and could not be re-established:";
+
+/**
+ * Classify one `agent_message_chunk` text. Gateway and harness errors arrive
+ * as a single full-text chunk before `end_turn` (AGY/server.py:5553-5601,
+ * 5688-5722; prefix AGY/api_errors.py:175). The model-replacement notice
+ * precedes the turn's own reply in the stream (AGY/model_selection.py:463-482).
+ * Version-pinned text (risk R11).
+ */
+export function serviceMessage(text: string): ServiceMessage | null {
+  if (text.startsWith(EXECUTION_ERROR)) return { type: "failure", source: "execution", details: text.slice(EXECUTION_ERROR.length).trim() };
+  if (text.startsWith(CONNECTION_LOST)) return { type: "failure", source: "connection", details: text.slice(CONNECTION_LOST.length).trim() };
+  const replaced = /^(\S+) is no longer available\. Using (\S+)\.\n\n/.exec(text);
+  if (replaced) return { type: "model_replaced", previous: replaced[1]!, replacement: replaced[2]!, rest: text.slice(replaced[0].length) };
+  return null;
+}
+
+/**
+ * The typed session failure of a service-message failure. `gatewayStatus` is
+ * the last HTTP status the shim saw in this prompt: a 401/403 makes it an
+ * authentication failure the daemon classifies as such.
+ */
+export function serviceMessageFailure(message: Extract<ServiceMessage, { type: "failure" }>, id: string, gatewayStatus: number | null): AcpSessionFailure {
+  const auth = gatewayStatus === 401 || gatewayStatus === 403;
+  return {
+    id, revision: 1, severity: "error",
+    category: auth ? "authentication" : message.source === "connection" ? "connection" : "unknown",
+    title: auth ? "Antigravity gateway rejected the credentials"
+      : message.source === "connection" ? "Antigravity lost its agent connection" : "Antigravity execution error",
+    details: message.details,
+    ...(auth ? { errorKind: "authentication_failed" } : {}),
+  };
+}
+
 /**
  * The `tool` label of an item: the bridge's own name when it sends one, else a
  * stable name per class (`resolved` is the adapter's guess from the first
@@ -419,12 +609,15 @@ export function toolLabel(facts: ToolFacts, cls: ToolClass, resolved: string | n
 
 /** Classify a tool call by the pinned bridge's facts (spec §2.2). */
 export function classifyTool(agentType: string, facts: ToolFacts): ToolClass {
+  if (agentType === "antigravity") return antigravityClass(facts);
   return agentType === "claude" ? claudeClass(facts) : codexClass(facts);
 }
 
 /**
  * `FileChange`s from a frame's ACP `diff` content blocks, or null when it has
- * none. Codex sends one block per hunk with `_meta.kind` (CX:29118-29233); its
+ * none. Antigravity's `replace_file_content` diffs are snippet-level: old and
+ * new text are the replaced fragment, not the file. Codex sends one block per
+ * hunk with `_meta.kind` (CX:29118-29233); its
  * hunks of one path merge into one change. Claude sends `{path, oldText,
  * newText}`, `oldText: null` for a created file (CA/tool-calls/reporters/
  * file-edit.js:20-32, 79-97, 108-121). Patch-only blocks (an AIR `diffPatch`
@@ -440,7 +633,9 @@ export function diffChanges(frame: VendorFrame): FileChange[] | null {
     const kind = record(row._meta)?.kind;
     const change = fileChangeFromTexts(row.path, typeof row.oldText === "string" ? row.oldText : null,
       typeof row.newText === "string" ? row.newText : null,
-      kind === "add" || kind === "update" || kind === "delete" ? { kind } : {});
+      kind === "add" || kind === "update" || kind === "delete" ? { kind }
+        // Antigravity says `modify` (AGY/tools.py:657-660).
+        : kind === "modify" ? { kind: "update" } : {});
     const previous = changes.at(-1);
     if (previous && previous.path === change.path && previous.kind === change.kind) {
       const diff = previous.diff !== null && change.diff !== null ? `${previous.diff}\n${change.diff}` : previous.diff ?? change.diff;

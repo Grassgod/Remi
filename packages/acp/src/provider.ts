@@ -6,7 +6,7 @@
 
 import { homedir } from "node:os";
 import { existsSync } from "node:fs";
-import { delimiter, dirname, isAbsolute, join } from "node:path";
+import { basename, delimiter, dirname, isAbsolute, join } from "node:path";
 import type {
   Provider,
   SendOptions,
@@ -22,6 +22,10 @@ import { AcpSessionFailureError, airMetadata, readSessionFailure, redactProvider
 import { resolveAcpProcessLaunch } from "./launch.js";
 import { createAdapter, type AgentAdapter } from "./adapters/index.js";
 import { resolveClaudeContextSelection, hasOneMillionContext } from "./adapters/claude-code/model-context.js";
+import { isWorkspaceTrustPrompt, permissionAsQuestion, serviceMessage, serviceMessageFailure, type PermissionQuestion } from "./adapters/trace-vendor.js";
+import { accessConfigFor, type AcpAccessConfig } from "./access/index.js";
+import type { GatewayShimChannel, GatewayShimEvent, GatewayShimHost } from "./access/gateway-shim-types.js";
+import { GEMINI_USAGE_SOURCE, geminiObservationUsage } from "./gemini-request-usage.js";
 import type {
   SessionNotification,
   SessionUpdate,
@@ -83,6 +87,15 @@ export interface AcpProviderOptions {
   pluginFingerprint?: string;
   /** Isolated home used only for Codex Plugin execution. */
   codexHome?: string;
+  /**
+   * Session (lane) provider home, for agents whose access config derives the
+   * agent home from it (Antigravity: `GEMINI_HOME`).
+   */
+  providerHome?: string;
+  /** The run's loopback gateway shim; one channel per ACP process. In-process only, never serialized. */
+  gatewayShim?: GatewayShimHost;
+  /** A shim base URL without usage observations, for subprocess model probes that cannot hold a host. */
+  gatewayUrl?: string;
 }
 
 /** ACP-local SendOptions extension kept out of the provider-neutral contract. */
@@ -154,6 +167,8 @@ export class UnsupportedAcpEffortError extends Error {
 const IDLE_TIMEOUT_MS = 10 * 60 * 1000;
 const CLEANUP_INTERVAL_MS = 60 * 1000;
 const PROMPT_CANCEL_SETTLE_MS = 5_000;
+/** How long a prompt waits for its last gateway-shim observations before settling usage. */
+const GATEWAY_SETTLE_MS = 2_000;
 const DEFAULT_PERMISSION_MODE_BY_AGENT: Record<string, string | null> = {
   claude: "bypassPermissions",
   // codex advertises read-only/agent/agent-full-access, so the literal id is
@@ -244,6 +259,53 @@ interface PoolEntry {
   appliedEffort: string | null;
   /** Last permission mode we logged about, so a fallback is reported once per session. */
   warnedPermissionMode: string | null;
+  /** The gateway-shim channel of this ACP process (access configs with `usage: "gateway-shim"`). */
+  gateway?: GatewayState;
+}
+
+/** One ACP process's gateway-shim channel and what the provider learned from it. */
+interface GatewayState {
+  channel: GatewayShimChannel | null;
+  unsubscribe: () => void;
+  /** The active prompt's listener; null between prompts. */
+  listener: ((event: GatewayShimEvent) => void) | null;
+  /** The breaker opened: this process can no longer reach the gateway. */
+  fatal: Extract<GatewayShimEvent, { type: "fatal" }> | null;
+  /** The agent's own context window report; its `used` is never trusted. */
+  nativeContextSize: number | null;
+}
+
+/** Usage updates the provider synthesized from shim observations (unforgeable by the agent). */
+const SHIM_USAGE_UPDATES = new WeakSet<object>();
+
+function openGateway(host: GatewayShimHost, label: string): GatewayState {
+  const channel = host.open(label);
+  const state: GatewayState = { channel, unsubscribe: () => {}, listener: null, fatal: null, nativeContextSize: null };
+  state.unsubscribe = channel.subscribe((event) => {
+    if (event.type === "fatal") state.fatal = event;
+    state.listener?.(event);
+  });
+  return state;
+}
+
+/** `settled()` is bounded by contract; a misbehaving shim still cannot hold the prompt open. */
+async function settleGateway(channel: GatewayShimChannel): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      channel.settled(GATEWAY_SETTLE_MS).catch(() => {}),
+      new Promise<void>((resolve) => { timer = setTimeout(resolve, GATEWAY_SETTLE_MS + 500); }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function closeGateway(state: GatewayState | undefined): void {
+  if (!state) return;
+  state.listener = null;
+  try { state.unsubscribe(); } catch {}
+  try { state.channel?.close(); } catch {}
 }
 
 type PermissionHandler = (params: RequestPermissionParams) => Promise<PermissionOutcome>;
@@ -252,7 +314,7 @@ type ElicitationHandler = (params: ElicitationCreateParams) => Promise<Elicitati
 export function resolveAcpPermissionMode(agentType: string, mode?: string | null): string | null {
   const normalized = typeof mode === "string" ? mode.trim() : "";
   if (normalized) return normalized === "bypass" ? "bypassPermissions" : normalized;
-  return DEFAULT_PERMISSION_MODE_BY_AGENT[agentType] ?? null;
+  return DEFAULT_PERMISSION_MODE_BY_AGENT[agentType] ?? accessConfigFor(agentType)?.defaultPermissionMode ?? null;
 }
 
 /**
@@ -332,7 +394,17 @@ function isAcpDefaultSentinel(value: string): boolean {
 
 export function resolveAcpExecutableForAgent(agentType: string, executable: string | null | undefined, fallback: string): string {
   const explicit = typeof executable === "string" ? executable.trim() : "";
-  if (explicit) return explicit;
+  const access = accessConfigFor(agentType);
+  if (explicit) {
+    if (access?.retiredExecutables.includes(basename(explicit))) {
+      throw new Error(`[acp_executable_retired] ${agentType}: Agent executable "${explicit}" points at the retired agy CLI; clear it`);
+    }
+    return explicit;
+  }
+  if (access) {
+    // The pinned per-machine install; a missing one surfaces through health and launch.
+    try { return access.launch().executable; } catch { return fallback; }
+  }
 
   if (agentType === "claude") {
     const envExecutable = process.env.REMI_CLAUDE_AGENT_ACP_EXECUTABLE?.trim();
@@ -397,6 +469,8 @@ export interface AcpHealthCheckCommand {
    * probe flag.
    */
   args?: string[];
+  /** A spawn-free check already failed (e.g. the pinned install does not match its manifest). */
+  failure?: string;
 }
 
 export function resolveAcpHealthCheckCommand(
@@ -405,6 +479,12 @@ export function resolveAcpHealthCheckCommand(
   fallback: string,
 ): AcpHealthCheckCommand {
   const command = resolveAcpExecutableForAgent(agentType, executable, fallback);
+  const access = accessConfigFor(agentType);
+  if (access && !executable?.trim()) {
+    // Never spawned at daemon start: the manifest, executables and machine policy are the check.
+    const failure = access.healthProblem();
+    return failure ? { command, failure } : { command };
+  }
   // The claude wrapper applies + verifies the AskUserQuestion patch, so it
   // genuinely has to run --verify-patch.
   if (agentType === "claude" && command.endsWith(REMI_CLAUDE_AGENT_ACP_WRAPPER)) {
@@ -446,10 +526,19 @@ export class AcpProvider implements Provider {
   /** Active-stream wakeups keyed by chatId, fired when the entry's ACP process dies. */
   private _deathListeners = new Map<string, (reason: string) => void>();
 
+  /** The agent's access config; null for the npm-bridge agents. */
+  private _access: AcpAccessConfig | null;
+
   constructor(options: AcpProviderOptions = {}) {
     this._options = options;
     this._adapter = createAdapter(options.agentType ?? "claude");
+    this._access = accessConfigFor(this._adapter.agentType);
     this.name = `acp:${this._adapter.agentType}`;
+  }
+
+  /** A requested model the agent cannot select fails instead of running another one. */
+  private get _strictModel(): boolean {
+    return this._adapter.agentType === "codex" || this._access?.strictModel === true;
   }
 
   get adapter(): AgentAdapter {
@@ -508,6 +597,16 @@ export class AcpProvider implements Provider {
       const models = flattenSelectOptions(modelOption).filter((model) => !isAcpDefaultSentinel(model.value));
       if (isAcpDefaultSentinel(initialModel)) {
         models.unshift({ value: initialModel, name: "Default" });
+      }
+      if (this._access?.effort === "none") {
+        // No effort selector in this access mode: one read, no per-model walk.
+        return models.map((model) => ({
+          id: model.value,
+          label: model.name || model.value,
+          ...(model.description ? { description: model.description } : {}),
+          default: model.value === initialModel,
+          effort: { status: "unsupported" as const, supportedLevels: [] },
+        }));
       }
       const discovered: AcpModelCapability[] = [];
 
@@ -579,8 +678,14 @@ export class AcpProvider implements Provider {
       .filter(([name]) => /(?:^|_)(?:SECRET|TOKEN|PASSWORD|API_KEY|ACCESS_KEY|PRIVATE_KEY|CREDENTIAL)(?:_|$)/i.test(name))
       .map(([, value]) => value)].filter((value): value is string => Boolean(value));
     const chatId = options?.chatId ?? "__default__";
+    if (this._access?.modelRequired && !(options?.model ?? this._options.model)) {
+      // Without an explicit selection the agent silently runs the gateway's first model.
+      throw new Error(`[${this._adapter.agentType}_model_required] ${this._adapter.agentType} needs a model: `
+        + "set the Agent's model or the Model gateway default_model");
+    }
     const entry = await abortableEnsureSession(this._ensureSession(chatId, options), options?.signal);
-    this._typedSessionFailures = entry.client.typedSessionFailures ?? false;
+    // An access config that turns service messages into typed failures needs no legacy text heuristics.
+    this._typedSessionFailures = (entry.client.typedSessionFailures ?? false) || this._access?.serviceMessages === true;
 
     this._activeStreaming.add(chatId);
     entry.lastUsed = Date.now();
@@ -623,9 +728,36 @@ export class AcpProvider implements Provider {
     });
 
     const originalOnUpdate = entry.client["_options"].onSessionUpdate;
-    entry.client["_options"].onSessionUpdate = (notification: SessionNotification) => {
+    /** Last HTTP status the gateway shim saw in this prompt (service-message category). */
+    let gatewayStatus: number | null = null;
+    let syntheticSeq = 0;
+    const onUpdate = (notification: SessionNotification) => {
       if (notification.sessionId !== entry.acpSessionId) return;
       let update = notification.update;
+      if (update.sessionUpdate === "usage_update" && entry.gateway && !SHIM_USAGE_UPDATES.has(update)) {
+        // Native `used` is total + cached (double-counts the cache): keep only the window size.
+        const size = nonNegativeFinite(update.size);
+        if (size) entry.gateway.nativeContextSize = size;
+        return;
+      }
+      if (update.sessionUpdate === "agent_message_chunk" && this._access?.serviceMessages) {
+        const text = extractChunkText((update as Record<string, any>).content);
+        const service = serviceMessage(text);
+        if (service?.type === "failure") {
+          const failure = serviceMessageFailure(service, `${this._adapter.agentType}:service:${++syntheticSeq}`, gatewayStatus);
+          onUpdate({ sessionId: entry.acpSessionId, update: {
+            sessionUpdate: "session_info_update", _meta: { jetbrains: { air: { sessionFailure: failure } } },
+          } as SessionUpdate });
+          return;
+        }
+        if (service?.type === "model_replaced") {
+          // The agent also sends the new selection as `config_option_update` (the turn's model).
+          pushEvent({ sessionUpdate: "notice", severity: "warning", title: "Model replaced",
+            description: `${service.previous} is no longer available; the agent switched to ${service.replacement}.` });
+          if (!service.rest) return;
+          update = { ...update, content: [{ type: "text", text: service.rest }] } as SessionUpdate;
+        }
+      }
       if (update.sessionUpdate === "session_info_update") {
         const failure = readSessionFailure(update._meta, credentials);
         if (failure && (failure.severity === "error" || failureState.failure?.severity !== "error")) failureState.failure = failure;
@@ -646,6 +778,8 @@ export class AcpProvider implements Provider {
       if (update.sessionUpdate === "usage_update") {
         accumulateUsage(entry.promptState.usage, update, requestedModel(), requestedModelSource(), this._adapter.agentType);
         const context = (update._meta?.claudeCode as { parentToolUseId?: string } | undefined)?.parentToolUseId
+          // A billing-only shim observation (size 0) says nothing about context.
+          || (SHIM_USAGE_UPDATES.has(update) && !(update.size > 0))
           ? null : readContextUsage(update);
         if (context) entry.promptState.contextUsage = context;
         update = { ...update, _meta: { ...update._meta,
@@ -701,11 +835,47 @@ export class AcpProvider implements Provider {
       }
       pushEvent(update);
     };
+    entry.client["_options"].onSessionUpdate = onUpdate;
+
+    const gateway = entry.gateway;
+    if (gateway) {
+      // Shim observations enter the same queue as agent updates: one writer, in order.
+      gateway.listener = (event) => {
+        if (event.type === "fatal") {
+          gatewayStatus = event.status ?? gatewayStatus;
+          onUpdate({ sessionId: entry.acpSessionId, update: {
+            sessionUpdate: "session_info_update",
+            _meta: { jetbrains: { air: { sessionFailure: gatewayFatalFailure(event, `${this._adapter.agentType}:gateway:${++syntheticSeq}`) } } },
+          } as SessionUpdate });
+          // The harness retries a dead gateway forever; end the turn.
+          entry.client.cancel(entry.acpSessionId).catch(() => {});
+          return;
+        }
+        const obs = event.obs;
+        if (obs.status) gatewayStatus = obs.status;
+        const usage = geminiObservationUsage(obs, entry.acpSessionId);
+        if (!usage) return;
+        // Subagent and browser calls run other models; only the session model's calls are its context (R9).
+        const sessionModel = requestedModel();
+        const context = usage.contextTokens !== null && (!obs.requestedModel || !sessionModel || obs.requestedModel === sessionModel);
+        const synthetic: UsageUpdate = {
+          sessionUpdate: "usage_update",
+          used: context ? usage.contextTokens! : 0,
+          size: context ? gateway.nativeContextSize ?? this._access!.defaultContextWindow : 0,
+          _meta: { remiUsageMode: "request", ...("remiTokenUsage" in usage
+            ? { remiTokenUsage: usage.remiTokenUsage } : { remiMissingRequestUsage: usage.remiMissingRequestUsage }) },
+        };
+        SHIM_USAGE_UPDATES.add(synthetic);
+        onUpdate({ sessionId: entry.acpSessionId, update: synthetic });
+      };
+    }
 
     const promptStartMs = Date.now();
     const promptCompletion = entry.client
       .prompt(entry.acpSessionId, message, buildMediaContent(options?.media))
-      .then((result: PromptResult) => {
+      .then(async (result: PromptResult) => {
+        // The last request's usage must land in this prompt's collector.
+        if (gateway?.channel) await settleGateway(gateway.channel);
         promptDone = true;
         const failure = readSessionFailure(result._meta, credentials);
         if (failure && (failure.severity === "error" || failureState.failure?.severity !== "error")) failureState.failure = failure;
@@ -772,6 +942,7 @@ export class AcpProvider implements Provider {
         this._adapter.agentType, requestedModel(), requestedModelSource());
       this._deathListeners.delete(chatId);
       entry.client["_options"].onSessionUpdate = originalOnUpdate;
+      if (gateway) gateway.listener = null;
       this._activeStreaming.delete(chatId);
       entry.lastUsed = Date.now();
     }
@@ -782,11 +953,22 @@ export class AcpProvider implements Provider {
   }
 
   async healthCheck(): Promise<boolean> {
-    const check = resolveAcpHealthCheckCommand(
-      this._adapter.agentType,
-      this._options.executable,
-      this._adapter.defaultExecutable(),
-    );
+    let check: AcpHealthCheckCommand;
+    try {
+      check = resolveAcpHealthCheckCommand(
+        this._adapter.agentType,
+        this._options.executable,
+        this._adapter.defaultExecutable(),
+      );
+    } catch (error) {
+      // A retired executable override.
+      console.error(`[acp] ${this._adapter.agentType} health check failed: ${error instanceof Error ? error.message : String(error)}`);
+      return false;
+    }
+    if (check.failure) {
+      console.error(`[acp] ${this._adapter.agentType} health check failed: ${check.failure}`);
+      return false;
+    }
     // No probe args → existence is the whole check (e.g. codex-acp).
     if (!check.args) {
       const ok = acpExecutableResolves(check.command);
@@ -867,12 +1049,15 @@ export class AcpProvider implements Provider {
       allowedTools: options?.allowedTools ?? this._options.allowedTools,
       systemPrompt: options?.systemPrompt,
       pluginPaths,
+      home: this._options.providerHome,
     } as Parameters<AgentAdapter["buildSessionMeta"]>[0]);
 
     const existing = this._pool.get(chatId);
     if (existing) {
       const stale =
         !existing.client.alive ||
+        // The shim breaker opened for this process's token; a new process gets a new one.
+        !!existing.gateway?.fatal ||
         existing.cwd !== cwd ||
         existing.mcpServersKey !== mcpServersKey ||
         existing.pluginPathsKey !== pluginPathsKey ||
@@ -881,7 +1066,7 @@ export class AcpProvider implements Provider {
         existing.customModelOption !== customModelOption ||
         existing.startupModel !== startupModel;
       if (stale && existing.client.alive) {
-        const reason = existing.cwd !== cwd
+        const reason = existing.gateway?.fatal ? `gateway unavailable (${existing.gateway.fatal.reason})` : existing.cwd !== cwd
           ? `cwd ${existing.cwd} -> ${cwd}`
           : existing.mcpServersKey !== mcpServersKey
             ? "mcpServers changed"
@@ -939,14 +1124,37 @@ export class AcpProvider implements Provider {
     if (startupModel) env.ANTHROPIC_MODEL = startupModel;
     if (codexHome) env.CODEX_HOME = codexHome;
 
+    const launch = this._resolveLaunch();
+    let gateway: GatewayState | undefined;
+    if (this._access) {
+      const home = this._options.providerHome?.trim();
+      if (this._access.requiresHome && !(home && isAbsolute(home))) {
+        throw new Error(`[${this._adapter.agentType}_home_required] ${this._adapter.agentType} needs an absolute session home`);
+      }
+      if (this._access.usage === "gateway-shim" && this._options.gatewayShim) {
+        gateway = openGateway(this._options.gatewayShim, `${this._adapter.agentType}:${chatId}`);
+      }
+      const shimUrl = gateway?.channel?.baseUrl ?? this._options.gatewayUrl;
+      if (!shimUrl) {
+        throw new Error(`[${this._adapter.agentType}_gateway_unconfigured] ${this._adapter.agentType} runs only through the `
+          + "workspace Model gateway; configure it under Model gateway");
+      }
+      try {
+        // Last, so the access config owns home, routing and the blanked credentials.
+        Object.assign(env, this._access.buildEnv({
+          home: home!, shimUrl, model, daemonEnv: { ...process.env, ...this._options.env },
+          launch: launch.pinned ? { executable: launch.executable, args: launch.args ?? [] } : null,
+        }));
+      } catch (error) {
+        closeGateway(gateway);
+        throw error;
+      }
+    }
+
     const client = new AcpClient({
       inheritProcessGroup: this._options.inheritProcessGroup,
-      executable: resolveAcpExecutableForAgent(
-        this._adapter.agentType,
-        this._options.executable,
-        this._adapter.defaultExecutable(),
-      ),
-      args: this._options.args,
+      executable: launch.executable,
+      args: launch.args,
       agentType: this._adapter.agentType,
       cwd,
       privateTmpDirectory: this._options.privateTmpDirectory,
@@ -997,6 +1205,7 @@ export class AcpProvider implements Provider {
         appliedContext: null,
         appliedEffort: null,
         warnedPermissionMode: null,
+        ...(gateway ? { gateway } : {}),
       };
       this._adoptSessionState(entry, result);
       await this._applyMode(entry, permissionMode);
@@ -1010,8 +1219,24 @@ export class AcpProvider implements Provider {
     } catch (error) {
       this._startingClients.delete(client);
       await client.stop();
+      closeGateway(gateway);
       throw error;
     }
+  }
+
+  /**
+   * The executable and args to spawn. An Agent `executable` override wins (and
+   * keeps its own args); otherwise an access config supplies its pinned launch.
+   */
+  private _resolveLaunch(): { executable: string; args: string[] | undefined; pinned: boolean } {
+    const explicit = this._options.executable?.trim();
+    const executable = resolveAcpExecutableForAgent(this._adapter.agentType, this._options.executable, this._adapter.defaultExecutable());
+    if (!this._access || explicit) return { executable, args: this._options.args, pinned: false };
+    const pinned = this._access.launch();
+    if (this._options.args?.length) {
+      console.warn(`[acp] ${this._adapter.agentType}: ignoring custom args without an executable override`);
+    }
+    return { executable: pinned.executable, args: pinned.args, pinned: true };
   }
 
   /** Record what the agent advertised for a freshly created/loaded session. */
@@ -1038,6 +1263,7 @@ export class AcpProvider implements Provider {
       if (entry.client !== client) continue;
       this._pool.delete(chatId);
       this._sessionToChatId.delete(entry.acpSessionId);
+      closeGateway(entry.gateway);
       console.error(`[AcpProvider] ${this._adapter.agentType} agent for ${chatId} died (${reason}); session evicted`);
       this._deathListeners.get(chatId)?.(reason);
     }
@@ -1048,6 +1274,7 @@ export class AcpProvider implements Provider {
       if (entry.client.alive) await entry.client.closeSession(entry.acpSessionId);
     } catch {}
     await entry.client.stop();
+    closeGateway(entry.gateway);
     this._sessionToChatId.delete(entry.acpSessionId);
     this._pool.delete(chatId);
   }
@@ -1149,7 +1376,7 @@ export class AcpProvider implements Provider {
       change = { configId: option.id, value };
     }
     if (!change) {
-      if (this._adapter.agentType !== "codex") {
+      if (!this._strictModel) {
         // Claude's session metadata can already select a full SDK model ID
         // while its picker reports an alias. Preserve that existing path;
         // the explicit 1M resolver above still validates context selection.
@@ -1173,7 +1400,7 @@ export class AcpProvider implements Provider {
       if (!selected || (!hasOneMillionContext(selected) && !declaredCustomRow)) {
         throw new Error(`[acp_model_context_unsupported] Claude did not select ${value} (selected: ${selected ?? "unknown"})`);
       }
-    } else if (this._adapter.agentType === "codex"
+    } else if (this._strictModel
       && category === MODEL_OPTION_CATEGORY && currentConfigValue(entry.configOptions, category) !== value) {
       throw new UnsupportedAcpModelError(
         this._adapter.agentType,
@@ -1191,6 +1418,15 @@ export class AcpProvider implements Provider {
   }
 
   private async _handlePermission(params: RequestPermissionParams): Promise<PermissionOutcome> {
+    if (this._access?.denyWorkspaceTrust && isWorkspaceTrustPrompt(params)) {
+      // Seeded `untrusted` already suppresses repository hooks; never trust them on a model's behalf.
+      return { outcome: "selected", optionId: "deny" };
+    }
+    if (this._access?.permissionQuestions) {
+      const question = permissionAsQuestion(params);
+      // Not a tool approval: the daemon's auto-approve would answer the model's question arbitrarily.
+      if (question) return this._permissionQuestion(params, question);
+    }
     const chatId = this._sessionToChatId.get(params.sessionId);
     const handler = (chatId ? this._permissionHandlers.get(chatId) : undefined) ?? this._permissionHandler;
     if (handler) {
@@ -1198,6 +1434,25 @@ export class AcpProvider implements Provider {
     }
     console.error(`[AcpProvider] permission request cancelled: no handler for session ${params.sessionId}`);
     return { outcome: "cancelled" };
+  }
+
+  /** A single-choice question asked through `session/request_permission`, answered through the elicitation handler. */
+  private async _permissionQuestion(params: RequestPermissionParams, question: PermissionQuestion): Promise<PermissionOutcome> {
+    const field = "answer";
+    const result = await this._handleElicitation({
+      mode: "form",
+      sessionId: params.sessionId,
+      toolCallId: params.toolCall.toolCallId,
+      message: question.question,
+      requestedSchema: {
+        type: "object",
+        properties: { [field]: { type: "string", oneOf: question.options.map((option) => ({ const: option.label, title: option.label })) } },
+        required: [field],
+      },
+    });
+    const answer = result.action === "accept" ? result.content?.[field] : undefined;
+    const chosen = typeof answer === "string" ? question.options.find((option) => option.label === answer.trim()) : undefined;
+    return chosen ? { outcome: "selected", optionId: chosen.optionId } : { outcome: "cancelled" };
   }
 
   private async _handleElicitation(params: ElicitationCreateParams): Promise<ElicitationResult> {
@@ -1226,6 +1481,7 @@ export class AcpProvider implements Provider {
           await entry.client.closeSession(entry.acpSessionId);
           await entry.client.stop();
         } catch {}
+        closeGateway(entry.gateway);
         this._sessionToChatId.delete(entry.acpSessionId);
         this._permissionHandlers.delete(chatId);
         this._elicitationHandlers.delete(chatId);
@@ -1244,6 +1500,7 @@ export class AcpProvider implements Provider {
       if (entry) {
         try { await entry.client.closeSession(entry.acpSessionId); } catch {}
         await entry.client.stop();
+        closeGateway(entry.gateway);
         this._sessionToChatId.delete(entry.acpSessionId);
         this._permissionHandlers.delete(chatId);
         this._elicitationHandlers.delete(chatId);
@@ -1253,6 +1510,7 @@ export class AcpProvider implements Provider {
       for (const [, entry] of this._pool) {
         try { await entry.client.closeSession(entry.acpSessionId); } catch {}
         await entry.client.stop();
+        closeGateway(entry.gateway);
         this._sessionToChatId.delete(entry.acpSessionId);
       }
       this._pool.clear();
@@ -1406,7 +1664,8 @@ export function accumulateUsage(state: PromptUsageState, update: SessionUpdate, 
   const used = nonNegativeFinite(u.used);
   if (used != null) state.totalTokens = used;
   if (!(u._meta?.claudeCode?.parentToolUseId)) state.collector.context(u.used, u.size);
-  if (providerType === "codex" && u._meta?.remiUsageMode === "request") state.collector.useRequestTelemetry();
+  const shimUsage = accessConfigFor(providerType)?.usage === "gateway-shim";
+  if ((providerType === "codex" || shimUsage) && u._meta?.remiUsageMode === "request") state.collector.useRequestTelemetry();
 
   const remiUsage = readRemiTokenUsage(u._meta?.remiTokenUsage);
   if (remiUsage) {
@@ -1416,6 +1675,9 @@ export function accumulateUsage(state: PromptUsageState, update: SessionUpdate, 
   if (providerType === "codex" && missing?.source === "codex_response_usage"
     && typeof missing.providerSessionId === "string" && missing.providerSessionId
     && typeof missing.providerRequestId === "string" && missing.providerRequestId) {
+    state.collector.update(missing, requestedModel, modelSource);
+  } else if (shimUsage && missing?.source === GEMINI_USAGE_SOURCE && typeof missing.id === "string" && missing.id) {
+    // A shim observation whose counters cannot be split: billed as unknown, never guessed.
     state.collector.update(missing, requestedModel, modelSource);
   }
   state.collector.uncertainTotal(u._meta?.remiUncertainUsage?.reportedTotalTokens);
@@ -1432,6 +1694,22 @@ export function accumulateUsage(state: PromptUsageState, update: SessionUpdate, 
     state.collector.cost(cost, u.cost?.currency, established ? monetary.scope : providerType === "claude" ? "turn" : "task", source,
       established && typeof monetary.requestId === "string" ? monetary.requestId : undefined,
       established && typeof monetary.providerSessionId === "string" ? monetary.providerSessionId : undefined);
+  }
+}
+
+/** The typed failure of an opened gateway-shim breaker (§4.2). */
+function gatewayFatalFailure(event: Extract<GatewayShimEvent, { type: "fatal" }>, id: string): AcpSessionFailure {
+  const status = event.status !== null ? ` (HTTP ${event.status})` : "";
+  switch (event.reason) {
+    case "auth":
+      return { id, revision: 1, severity: "error", category: "authentication", errorKind: "authentication_failed",
+        title: "The model gateway rejected the credentials", details: `${event.message}${status}` };
+    case "quota":
+      return { id, revision: 1, severity: "error", category: "quota",
+        title: "The model gateway is rate limiting or out of quota", details: `${event.message}${status}` };
+    default:
+      return { id, revision: 1, severity: "error", category: "connection",
+        title: "The model gateway is unreachable", details: `${event.message}${status}` };
   }
 }
 

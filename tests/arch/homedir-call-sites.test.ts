@@ -8,7 +8,8 @@ const ROOT = join(import.meta.dir, "../..");
 // Existing production home reads. New defaults need an isolation review, even
 // inside a file that already reads home; lowering a count needs no exemption.
 const HOME_CALL_LIMITS: Readonly<Record<string, number>> = {
-  "packages/acp/src/antigravity.ts": 2,
+  // ${REMI_HOME:-~/.remi}/acp/antigravity, like the npm bundles' prefix.
+  "packages/acp/src/antigravity-install.ts": 1,
   "packages/acp/src/client.ts": 2,
   "packages/acp/src/provider.ts": 7,
   "packages/acp/src/provision.ts": 2,

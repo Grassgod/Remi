@@ -151,10 +151,12 @@ and the optional count share a SQLite read transaction or a PostgreSQL
 read-only Repeatable Read transaction. The Web pages do not call this API yet.
 
 Agent creation, editing and default-agent commands accept `--provider antigravity`.
-`remi daemon start --provider antigravity` selects the native `agy` runtime;
-automatic daemon discovery also detects it. Install/sign in to agy on the daemon
-machine first. See [Antigravity Runtime](antigravity.md) for model discovery,
-configuration and execution limits. Agent Plugin provider filters remain scoped
+`remi daemon start --provider antigravity` (and `remi setup` with that provider)
+installs Google's pinned Antigravity ACP server when it is missing; the first
+download needs `--accept-antigravity-terms` or `REMI_ACCEPT_ANTIGRAVITY_TERMS=1`.
+Automatic daemon discovery considers only that pinned install, never `agy` on
+`PATH`. See [Antigravity Runtime](antigravity.md) for install, gateway and
+execution limits. Agent Plugin provider filters remain scoped
 to Claude/Codex.
 
 `remi agent create|update|template create` accept `--fallback-model <model>` and
@@ -341,12 +343,14 @@ task-scoped: it marks the automation run of `MULTIREMI_TURN_ID` (or `--turn`) qu
 so its Chat is archived when the run completes. `remi chat list --origin
 user|automation|all` selects which Chats are listed (default: user conversations).
 
-`remi runtime prepare [--provider claude|codex]` installs this release's fixed ACP
-and Agent dependencies, verifying executables and ACP initialization without
-switching a running daemon. Without `--provider` it prepares the configured or
-detected providers that have an ACP bundle and skips the rest (such as
-antigravity), succeeding with empty `runtimes` when none remain; an explicit
-`--provider` other than claude or codex is rejected. This local command does not require server authentication.
+`remi runtime prepare [--provider claude|codex|antigravity] [--accept-antigravity-terms]`
+installs this release's fixed ACP and Agent dependencies, verifying executables and
+ACP initialization without switching a running daemon. Antigravity is Google's
+server, downloaded per machine after terms consent and checked with a
+credential-free gateway contract check. Without `--provider` it prepares the
+configured or detected bundled providers, and Antigravity only when some install
+already exists (a pin bump is pre-fetched, never a first download), succeeding with
+empty `runtimes` when none remain; any other explicit `--provider` is rejected. This local command does not require server authentication.
 Maintainers refresh dependencies before every release with
 `bun run release:prepare --version <next>`; daemons do not poll the registry.
 See [daemon runtime upgrades](daemon-runtime-upgrades.md) for the release and

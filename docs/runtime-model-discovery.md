@@ -226,7 +226,7 @@ The daemon wire carries the engine as `relay.antigravity` (fragment, key and
 revision) wherever the relay travels — register, the workspace repository
 refresh and the `workspace.relay` downlink in the heartbeat acknowledgement —
 and, as for the other engines, only to owner/admin daemons. The daemon currently
-receives and ignores it: Antigravity tasks still run through the
-[agy provider](antigravity.md), and nothing yet routes model requests through
-this gateway. Consuming it — the daemon's local gateway shim that holds the key
-and forwards only Antigravity model requests — is follow-up work (PR 4 Task C).
+receives and ignores it. Antigravity now runs on Google's ACP server, whose
+provider routes model calls only through a loopback gateway shim
+([Antigravity Runtime](antigravity.md)); the shim that holds this key and its
+daemon wiring are follow-up work (PR 4 Task C).
