@@ -14,6 +14,7 @@ import type { AgentAdapter } from "@acp/index.js";
 import {
   CLAUDE_SUBAGENT_TOOLS,
   classifyTool,
+  endsWithAbortMarker,
   compactionFacts,
   contentText,
   diffChanges,
@@ -631,7 +632,36 @@ export function createTraceTranslator(
   };
 
   /** A subagent whose launch the bridge reported as async (`toolResponse.isAsync` / `async_launched`). */
-  const isBackgroundLaunch = (state: ToolState): boolean => state.cls.type === "subagent" && state.facts.asyncLaunch;
+  const isBackgroundLaunch = (state: ToolState): boolean => state.cls.type === "subagent" && state.facts.asyncLaunch === true;
+
+  /**
+   * A background launch or anything under one: it runs beside the root, so a
+   * round's abort neither cuts it short nor closes it.
+   */
+  const inBackground = (state: ToolState): boolean => {
+    const seen = new Set<string>();
+    for (let current: ToolState | undefined = state; current && !seen.has(current.id); current = current.parentId ? tools.get(current.parentId) : undefined) {
+      if (isBackgroundLaunch(current)) return true;
+      seen.add(current.id);
+    }
+    return false;
+  };
+
+  /**
+   * The abort cut this call short, so it ends `stopped` rather than with the
+   * bridge's status. claude-agent-acp 0.90 reports such calls as:
+   * - an unfinished call: `failed`, no exit code, no output of its own (its
+   *   closing note is not the tool's output);
+   * - an interrupted Claude command: output ending in the abort marker, with an
+   *   AIR-synthesized exit code 1 (`failed`, or `completed` when Claude Code did
+   *   not mark the result an error).
+   */
+  const cutShortByAbort = (state: ToolState, status: string | null): boolean => {
+    if (!aborting || inBackground(state)) return false;
+    if (status === "failed" && state.exitCode === null && state.output.value === null) return true;
+    return agentType === "claude" && state.cls.type === "command" && (status === "failed" || status === "completed")
+      && endsWithAbortMarker(state.output.value ?? state.result);
+  };
 
   const completeTool = (state: ToolState, acpStatus: "completed" | "failed" | "cancelled", touchedByAcp = true): void => {
     state.closed = true;
@@ -713,9 +743,13 @@ export function createTraceTranslator(
       return;
     }
     if (terminal) {
-      // The abort cut it short: the bridge's closing note is not the tool's output.
-      const cutShort = aborting && status === "failed" && state.exitCode === null && state.output.value === null;
-      completeTool(state, cutShort ? "cancelled" : status as "completed" | "failed" | "cancelled");
+      if (cutShortByAbort(state, status)) {
+        // Its exit code, if any, is AIR's synthesized 1 for an interrupt.
+        state.exitCode = null;
+        completeTool(state, "cancelled");
+      } else {
+        completeTool(state, status as "completed" | "failed" | "cancelled");
+      }
       return;
     }
     const item = toolItem(state, "in_progress", null, false);
@@ -914,10 +948,11 @@ export function createTraceTranslator(
         endAllText();
         if (opts?.aborted) {
           // The interrupted calls will not report again; the next round is a new
-          // prompt. A background subagent's call already returned: it ends with the turn.
+          // prompt. A background subagent's call already returned and its steps
+          // keep running: they end on their own frames, or with the turn.
           for (const id of roundTools) {
             const state = tools.get(id);
-            if (state && !state.closed && !isBackgroundLaunch(state)) completeTool(state, "cancelled", false);
+            if (state && !state.closed && !inBackground(state)) completeTool(state, "cancelled", false);
           }
         }
         emitter.flush();
