@@ -37,7 +37,7 @@
  */
 
 import type { GcRunMode, StorageReport, StorageSubjectRef, SubjectSnapshot } from "./storage.js";
-import type { TraceContextUsage, TraceEvent, TraceEventLine, TraceEventPage, TraceTurnPage } from "./trace.js";
+import type { TraceContextUsage, TraceEvent, TraceEventPage, TraceTurnPage } from "./trace.js";
 import type { MultiremiChatSessionStatus, MultiremiDaemonHeartbeatAck, MultiremiDaemonSshMeshStatus } from "./types.js";
 import type { UnifiedMessage, DecisionOption } from "./unified-model.js";
 
@@ -54,12 +54,16 @@ export const DAEMON_PROTOCOL_MIN = 2;
 /**
  * Lowest CLI version the server accepts on the v2 socket.
  *
- * First unified-model release: v0.2.89. Released v0.2.88 and earlier daemons
- * use the old payload protocol and must upgrade. Before publishing, the release
- * owner must verify the v0.2.89 tag, package.json, prepared dependency snapshot
- * and target main SHA. The version gate does not mean the fleet has upgraded.
+ * First turn + items trace release: v0.2.90 (PR 2, ADR 0019). Released v0.2.89
+ * and earlier daemons write fragment traces and answer `trace.read` without a
+ * view, so they must upgrade; a v0.2.90 daemon refuses a server that still
+ * advertises an older gate. `package.json` moves only through
+ * `bun run release:prepare --version <next>`, so the release that carries PR 2
+ * must be prepared as exactly v0.2.90. Before publishing, the release owner must
+ * verify the v0.2.90 tag, package.json, prepared dependency snapshot and target
+ * main SHA. The version gate does not mean the fleet has upgraded.
  */
-export const DAEMON_MIN_CLI_VERSION = "0.2.89";
+export const DAEMON_MIN_CLI_VERSION = "0.2.90";
 
 // ── Frames ──────────────────────────────────────────────────────────────────
 
@@ -425,18 +429,17 @@ export interface DaemonTaskCompletionFields {
   /** The trace turn's `provider` and last reported `model`, or null when unknown. */
   model: DaemonTaskCompletionModel | null;
   /**
-   * Turn + items traces (PR 2) add the three fields below; they also ride on
-   * `task.fail`. The daemon always sends them since PR 2 P2a; they stay optional
-   * here until the receiver's validation switches (P2b). A receiver treats a
-   * malformed value as null and never blocks the terminal report on it.
+   * Turn + items traces (PR 2). The daemon sends these three on `task.fail` as
+   * well; a receiver reads a malformed value as null and never blocks the
+   * terminal report on it.
    *
    * Last context-window occupancy the bridge reported for the turn.
    */
-  context_usage?: TraceContextUsage | null;
-  /** `final_started_at - started_at` of the trace turn ("Worked for"), or null. */
-  worked_ms?: number | null;
-  /** Top-level items other than user_message and the final agent_message. */
-  process_item_count?: number | null;
+  context_usage: TraceContextUsage | null;
+  /** `final_started_at - started_at` of the trace turn ("Worked for"), or null without a final reply. */
+  worked_ms: number | null;
+  /** Top-level items the Chat fold renders: every item but the final reply, user messages, permissions and questions. */
+  process_item_count: number | null;
 }
 
 /** Turn input travels as messages; attempt ids remain trace/outbox keys. */
@@ -622,35 +625,17 @@ export interface DaemonTracePushPayload {
   closed: boolean;
 }
 
-/** `trace.read` request, server -> daemon. */
-export interface DaemonTraceReadPayload {
-  task_id: string;
-  after_seq: number;
-  limit: number;
-  max_bytes: number;
-}
-
-/** `trace.read` / `trace.fetch` reply payload, on success: raw lines, v1 files included. */
-export interface DaemonTraceReadReplyPayload {
-  ok: true;
-  events: TraceEventLine[];
-  next_after_seq: number;
-  head: number;
-  eof: boolean;
-  closed: boolean;
-}
-
 /**
- * `trace.read` request once traces are turn + items (PR 2): the server picks a
- * view. `turn` pages the fold (running) or the persisted snapshot (closed) from
+ * `trace.read` request, server -> daemon (PR 2): the server picks a view.
+ * `turn` pages the fold (running) or the persisted snapshot (closed) from
  * `item_cursor`; `events` pages raw stored lines after `after_seq`, which is also
- * the only view of a v1 file. The daemon answers both since PR 2 P2a and reads a
- * payload without `view` ({@link DaemonTraceReadPayload}, the server before P2b)
- * as `events`.
+ * the only view that shows a v1 file's lines. A payload without a known `view`
+ * is a protocol violation: the daemon release gate (`DAEMON_MIN_CLI_VERSION`)
+ * keeps servers that did not send one away from daemons that require it.
  */
-export type DaemonTraceReadViewPayload = DaemonTraceReadTurnViewPayload | DaemonTraceReadEventsViewPayload;
+export type DaemonTraceReadPayload = DaemonTraceReadTurnPayload | DaemonTraceReadEventsPayload;
 
-export interface DaemonTraceReadTurnViewPayload {
+export interface DaemonTraceReadTurnPayload {
   task_id: string;
   view: "turn";
   /** Index of the first item to return; 0 for the first page. */
@@ -661,18 +646,25 @@ export interface DaemonTraceReadTurnViewPayload {
   max_bytes: number;
 }
 
-export interface DaemonTraceReadEventsViewPayload {
+export interface DaemonTraceReadEventsPayload {
   task_id: string;
   view: "events";
+  /** Exclusive cursor: the first line returned has `seq > after_seq`. */
   after_seq: number;
   limit: number;
   max_bytes: number;
 }
 
-/** `trace.read` success reply for {@link DaemonTraceReadViewPayload}, shaped by its `view`. */
-export type DaemonTraceReadViewReplyPayload =
-  | ({ ok: true } & TraceTurnPage)
-  | ({ ok: true } & TraceEventPage);
+/**
+ * `trace.read` success reply, shaped by the request's `view`. A v1 file answers
+ * `format: "legacy"`: no turn and no items for `turn`, its raw lines for `events`.
+ */
+export type DaemonTraceReadReplyPayload = DaemonTraceReadTurnReplyPayload | DaemonTraceReadEventsReplyPayload;
+export type DaemonTraceReadTurnReplyPayload = { ok: true } & TraceTurnPage;
+export type DaemonTraceReadEventsReplyPayload = { ok: true } & TraceEventPage;
+
+/** `trace.fetch` reply on success: the server reads the daemon's `events` view. */
+export type DaemonTraceFetchReplyPayload = DaemonTraceReadEventsReplyPayload;
 
 /** `trace.fetch` request, daemon -> server: fill a gap from the server's copy. */
 export interface DaemonTraceFetchPayload {

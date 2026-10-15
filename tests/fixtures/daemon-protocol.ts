@@ -3,7 +3,7 @@ import { MultiremiDaemon, type MultiremiDaemonOptions } from "@multiremi/daemon.
 import type { MultiremiDaemonClient } from "@multiremi/client.js";
 import { startMultiremiServer as startNativeServer } from "@multiremi/api.js";
 import type { DaemonProtocolLayer } from "@multiremi/api/daemon-protocol/index.js";
-import type { DaemonRuntimeCapabilities } from "@multiremi/contracts/daemon-protocol.js";
+import { compareDaemonCliVersion, DAEMON_MIN_CLI_VERSION, type DaemonRuntimeCapabilities } from "@multiremi/contracts/daemon-protocol.js";
 
 export function runtimeCapabilitiesInFrame(frame: Record<string, any>, runtimeId: string): DaemonRuntimeCapabilities {
   const runtime = frame.p?.runtimes?.find((entry: { runtime_id?: string }) => entry.runtime_id === runtimeId);
@@ -28,6 +28,14 @@ export function startMultiremiServer(options: NonNullable<Parameters<typeof star
   return server;
 }
 
+/**
+ * The CLI version a source daemon reports. `package.json` moves only through
+ * release preparation, which can trail the payload gate (ADR 0019 bumps the gate
+ * to the release that will carry it); until then a source daemon reports the
+ * gate itself, as the release build of that change will.
+ */
+export const TEST_DAEMON_CLI_VERSION = compareDaemonCliVersion(version, DAEMON_MIN_CLI_VERSION) >= 0 ? version : DAEMON_MIN_CLI_VERSION;
+
 /** Source tests do not receive the release build's MULTIREMI_VERSION define. */
 export class TestMultiremiDaemon extends MultiremiDaemon {
   private testRun: Promise<void> | null = null;
@@ -36,7 +44,7 @@ export class TestMultiremiDaemon extends MultiremiDaemon {
   constructor(options: MultiremiDaemonOptions) {
     const socketClosures = new Set<Promise<void>>();
     const connect = options.protocolClientOptions?.connect;
-    const cliVersion = options.protocolClientOptions?.cliVersion ?? version;
+    const cliVersion = options.protocolClientOptions?.cliVersion ?? TEST_DAEMON_CLI_VERSION;
     super({
       onceOfferTimeoutMs: 1_000,
       ...options,

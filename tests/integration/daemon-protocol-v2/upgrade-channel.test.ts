@@ -5,7 +5,6 @@ import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { version as fixtureVersion } from "../../../package.json";
 import { createMultiremiApp, startMultiremiServer } from "@multiremi/api.js";
 import { MultiremiStore } from "@multiremi/store.js";
 import { MultiremiDaemonClient } from "@multiremi/client.js";
@@ -15,7 +14,7 @@ import { multiremiVersion } from "@multiremi/version.js";
 import { DaemonProtocolHarness, waitFor } from "./harness.js";
 import { CommandRegistry } from "../../../apps/remi/cli/core/index.js";
 import { operationsCommandSpecs } from "../../../apps/remi/cli/commands/operations.js";
-import { TestMultiremiDaemon } from "../../fixtures/daemon-protocol.js";
+import { TEST_DAEMON_CLI_VERSION as fixtureVersion, TestMultiremiDaemon } from "../../fixtures/daemon-protocol.js";
 
 const cleanups: Array<() => Promise<void> | void> = [];
 afterEach(async () => { for (const cleanup of cleanups.splice(0).reverse()) await cleanup(); });

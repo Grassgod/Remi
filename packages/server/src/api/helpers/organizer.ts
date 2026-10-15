@@ -2,7 +2,8 @@ import type { Context } from "hono";
 import type { MultiremiTask } from "@multiremi/contracts/types.js";
 import type { ConversationLogTurnMetadata } from "@multiremi/contracts/conversation-log.js";
 import type { MultiremiStore } from "@multiremi/store/store.js";
-import type { TraceReader } from "@multiremi/trace/trace-reader.js";
+import { TRACE_READ_MAX_LIMIT, type TraceReader } from "@multiremi/trace/trace-reader.js";
+import type { TraceItem, TraceTurnStats } from "@multiremi/contracts/trace.js";
 import { agentRoleAtLeast } from "@multiremi/store/agent-role.js";
 import { currentTaskAccessToken } from "../wire/index.js";
 
@@ -58,7 +59,8 @@ export interface OrganizerTurnStats {
 }
 
 export interface OrganizerInspectionSources {
-  readTrace?: Pick<TraceReader, "readTrace">;
+  /** Running turns: one `view=turn` page of the daemon's fold. */
+  readTrace?: Pick<TraceReader, "readTurn">;
   getTurnStats?: (taskId: string) => OrganizerTurnStats | null;
 }
 
@@ -84,25 +86,18 @@ export async function organizerTaskInspection(
 ): Promise<Record<string, unknown>> {
   const terminal = ["completed", "failed", "cancelled"].includes(task.status);
   const card = terminal ? sources.getTurnStats?.(task.id) ?? null : null;
-  let traceEvents: Awaited<ReturnType<TraceReader["readTrace"]>>["events"] | null = null;
+  // A running turn reads one page of the daemon's fold: its turn carries the
+  // live statistics of every item, and `head` is the event count of a dense trace.
+  let live: { stats: TraceTurnStats; head: number; lastActivityAt: string | null } | null = null;
   if (!terminal && sources.readTrace) {
-    const probe = await sources.readTrace.readTrace(task.id, Number.MAX_SAFE_INTEGER, 1);
-    if (probe.state === "ok") {
-      const tail = await sources.readTrace.readTrace(task.id, Math.max(0, probe.head - 200), 200);
-      if (tail.state === "ok") traceEvents = tail.events;
+    const page = await sources.readTrace.readTurn(task.id, 0, TRACE_READ_MAX_LIMIT);
+    if (page.state === "ok" && page.turn) {
+      live = { stats: page.turn.stats, head: page.head, lastActivityAt: latestActivity(page.turn.started_at, page.items) };
     }
   }
-  const histogram = new Map<string, { type: string; tool: string | null; count: number }>();
-  for (const message of traceEvents ?? []) {
-    const key = `${message.type}\u0000${message.tool ?? ""}`;
-    const bucket = histogram.get(key) ?? { type: message.type, tool: message.tool ?? null, count: 0 };
-    bucket.count += 1;
-    histogram.set(key, bucket);
-  }
-  const latestMessage = traceEvents?.at(-1) ?? null;
-  const typeHistogram = card?.typeHistogram ?? [...histogram.values()];
-  const toolCallCount = card?.toolCallCount ?? (traceEvents ?? []).filter((message) => message.type === "tool_use").length;
-  const eventCount = card?.eventCount ?? traceEvents?.length ?? 0;
+  const typeHistogram = card?.typeHistogram ?? live?.stats.type_histogram ?? [];
+  const toolCallCount = card?.toolCallCount ?? live?.stats.tool_call_count ?? 0;
+  const eventCount = card?.eventCount ?? live?.head ?? 0;
   const requests = store.listTaskHumanRequests(task.id);
   const requestCounts = { pending: 0, responded: 0, timeout: 0, cancelled: 0 };
   for (const request of requests) requestCounts[request.status] += 1;
@@ -115,7 +110,7 @@ export async function organizerTaskInspection(
     dispatched_at: task.dispatchedAt,
     failed_at: task.failedAt,
     cancelled_at: task.cancelledAt,
-    last_message: latestMessage ? { seq: latestMessage.seq, created_at: latestMessage.ts } : null,
+    last_message: live && live.head > 0 ? { seq: live.head, created_at: live.lastActivityAt } : null,
     tool_call_count: toolCallCount,
     event_count: eventCount,
     message_type_histogram: typeHistogram.map((bucket) => ({
@@ -141,4 +136,20 @@ export async function organizerTaskInspection(
     agent: agent ? { id: agent.id, name: agent.name, role: agent.role, supervisor: agent.supervisor === true } : { id: task.agentId },
     issue: issue ? { id: issue.id, key: issue.key, status: issue.status } : task.issueId ? { id: task.issueId } : null,
   };
+}
+
+/** The latest start or completion time among the page's items, or the turn start. */
+function latestActivity(startedAt: string, items: readonly TraceItem[]): string | null {
+  let latest = Date.parse(startedAt);
+  let value: string | null = Number.isFinite(latest) ? startedAt : null;
+  for (const item of items) {
+    for (const at of [item.started_at, item.completed_at]) {
+      const time = at ? Date.parse(at) : NaN;
+      if (Number.isFinite(time) && (value === null || time > latest)) {
+        latest = time;
+        value = at;
+      }
+    }
+  }
+  return value;
 }

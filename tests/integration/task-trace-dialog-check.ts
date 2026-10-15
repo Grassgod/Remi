@@ -7,6 +7,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { MultiremiStore } from "../../packages/server/src/store/store.js";
 import { startMultiremiServer } from "../../packages/server/src/api/server.js";
+import type { DaemonTraceReader } from "../../packages/server/src/api/trace/daemon-trace-reader.js";
 import { seedZeroJumpFixture } from "./zero-jump-fixture";
 import { launchBrowser, mktContext } from "../../frontend/scripts/perf/lib/harness";
 
@@ -57,11 +58,16 @@ const authHeaders = { Authorization: `Bearer ${credential}`, "X-Workspace-Slug":
 let readerReachable = true;
 const traceEvents = [1, 2, 3].map(seq => ({ seq, ts: "2026-08-08T00:00:00Z", type: "tool_use",
   tool: "Read", tool_call_id: `trace-${seq}`, input: { file_path: `/tmp/example-${seq}.ts` } }));
-const daemonTraceReader = {
-  async read({ afterSeq = 0 }: { afterSeq?: number }) {
+const daemonTraceReader: DaemonTraceReader = {
+  async read(request) {
     if (!readerReachable) return { ok: false as const, code: "daemon_unreachable" as const, last_seen_at: "2026-08-08T00:00:00Z" };
+    // TODO(PR 2 P3): these fixtures are fragment events, which only a v1 file holds; the turn view answers legacy.
+    if (request.view === "turn") {
+      return { ok: true, view: "turn", format: "legacy", turn: null, items: [], next_item_cursor: null, head: 3, closed: false };
+    }
+    const afterSeq = request.afterSeq ?? 0;
     const events = traceEvents.filter(event => event.seq > afterSeq);
-    return { ok: true as const, events, next_after_seq: events.at(-1)?.seq ?? afterSeq,
+    return { ok: true as const, view: "events", format: "legacy", events, next_after_seq: events.at(-1)?.seq ?? afterSeq,
       head: 3, eof: true, closed: false };
   },
 };

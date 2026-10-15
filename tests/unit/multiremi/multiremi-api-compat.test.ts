@@ -1159,7 +1159,7 @@ describe("Multiremi API — Go server compatibility endpoints", () => {
     const taskPrefix = task.id.slice(0, 8);
     const trace = await app.request(turnApiPath(store, taskPrefix, "/trace"));
     expect(trace.status).toBe(200);
-    expect(await trace.json()).toMatchObject({ turn_id: task.id, attempt_id: task.id, events: [], state: "unreachable", reason: "daemon_unreachable" });
+    expect(await trace.json()).toMatchObject({ turn_id: task.id, attempt_id: task.id, view: "turn", turn: null, items: [], state: "unreachable", reason: "daemon_unreachable" });
     expect(store.listTaskMessages(task.id)[0]?.content).toBe("compat done");
 
     const gc = await reportFrame(store, "gc.check_issue", { issue_id: issue.key }, { runtimeId: runtime.id });

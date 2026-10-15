@@ -15,7 +15,7 @@ import {
   TRACE_FILE_FORMAT,
   TRACE_REF_LOCATIONS,
 } from "@multiremi/contracts/trace-file";
-import type { TraceEndStatus, TraceFileHeader, TraceFileTrailer } from "@multiremi/contracts/trace-file";
+import type { TraceEndStatus, TraceFileHeaderV2, TraceFileTrailer } from "@multiremi/contracts/trace-file";
 import { TRACE_ITEM_STATUSES } from "@multiremi/contracts/trace.js";
 import type { TraceEndStatus as StoreTraceEndStatus } from "@multiremi/worker/trace-store.js";
 
@@ -198,7 +198,7 @@ describe("trace file and archive request contract", () => {
   });
 
   it("pins the trace file format and pointer states", () => {
-    expect(TRACE_FILE_FORMAT).toBe("multiremi.trace.v1");
+    expect(TRACE_FILE_FORMAT).toBe("multiremi.trace.v2");
     expect([...TRACE_REF_LOCATIONS]).toEqual(["daemon", "none", "lost"]);
   });
 
@@ -218,7 +218,7 @@ describe("trace file and archive request contract", () => {
   });
 
   it("types the trailer end block and keeps framing lines free of seq", () => {
-    const header: TraceFileHeader = {
+    const header: TraceFileHeaderV2 = {
       format: TRACE_FILE_FORMAT,
       task_id: "task_1",
       session_id: "ises_1",

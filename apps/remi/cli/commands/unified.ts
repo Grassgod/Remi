@@ -7,6 +7,7 @@ import { CliError, CliRenderer, type CommandInvocation, type CommandSpec, type C
 import {
   commandOptions, clientFor, encodePath, integerOption, outputMode, positional,
   renderResource, stringOption, stringOptions, YES_OPTION, PAGE_OPTIONS, requireConfirmation,
+  TRACE_READ_OPTIONS, traceReadQuery, renderTraceRead,
 } from "./resource-common.js";
 import { detectCliContentTypeFromFilename } from "../multiremi/http.js";
 
@@ -127,10 +128,10 @@ export function unifiedCommandSpecs(): CommandSpec[] {
       if (action !== "wrap-up") requireConfirmation(i);
       renderResource(i, await request(i, "POST", `${turnPath(i)}/${action}`, { reason: stringOption(i, "reason") ?? undefined, ...(action === "retry" ? { cold: i.options.cold === true } : {}) }));
     })),
-    spec(["turn", "trace", "read"], "read", [ref("turn")], [option("attempt"), option("after", "integer"), option("limit", "integer")], async (i) => {
+    spec(["turn", "trace", "read"], "read", [ref("turn")], [option("attempt"), ...TRACE_READ_OPTIONS], async (i) => {
       const client = await clientFor(i);
-      const result = await client.request({ method: "GET", path: `${turnPath(i)}/trace`, query: { attempt_id: stringOption(i, "attempt"), after_seq: integerOption(i, "after"), limit: integerOption(i, "limit") } });
-      new CliRenderer().render(result.data, { mode: outputMode(i) });
+      const result = await client.request({ method: "GET", path: `${turnPath(i)}/trace`, query: { attempt_id: stringOption(i, "attempt"), ...traceReadQuery(i) } });
+      renderTraceRead(i, result.data);
     }),
   ];
 }

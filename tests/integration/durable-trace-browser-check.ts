@@ -49,13 +49,20 @@ if (skipBuild) {
 }
 const service = startMultiremiServer({ store, apiRole: "all", liveHub: hub, scheduler: null,
   port: apiPort, hostname: "127.0.0.1", authToken: null, backgroundJobs: false,
-  daemonTraceReader: { async read({ taskId, afterSeq = 0, limit = 200 }) {
+  daemonTraceReader: { async read(request) {
+    // The fixtures are fragment events, which only a v1 file holds: the turn view answers legacy.
+    const { taskId, limit = 200 } = request;
+    const afterSeq = request.view === "events" ? request.afterSeq ?? 0 : 0;
     reads.push({ taskId, afterSeq, limit });
     const all = events.get(taskId) ?? [];
+    const head = all.at(-1)?.seq ?? 0;
+    if (request.view === "turn") {
+      return { ok: true, view: "turn", format: "legacy", turn: null, items: [], next_item_cursor: null, head, closed: closed.has(taskId) };
+    }
     const page = all.filter(event => event.seq > afterSeq).slice(0, limit);
     const next = page.at(-1)?.seq ?? afterSeq;
-    return { ok: true, events: page, next_after_seq: next, head: all.at(-1)?.seq ?? 0,
-      eof: next >= (all.at(-1)?.seq ?? 0), closed: closed.has(taskId) };
+    return { ok: true, view: "events", format: "legacy", events: page as unknown as Array<Record<string, unknown> & TraceEvent>,
+      next_after_seq: next, head, eof: next >= head, closed: closed.has(taskId) };
   } },
 });
 const token = (await store.createAccessToken({ name: "Isolated durable trace browser", type: "pat", purpose: "session",

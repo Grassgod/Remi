@@ -31,8 +31,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expectArchiveEraMigrated, installArchiveEraSchema } from "./archive-era-schema.js";
 import { InMemoryDaemonTraceReader } from "@multiremi/api/trace/daemon-trace-reader.js";
-// TODO(PR 2 P2b): these read-path cases still feed legacy fragment events.
-import { LegacyFragmentTraceStore as InMemoryTraceStore } from "../../helpers/legacy-trace-store.js";
+import { InMemoryTraceStore } from "@multiremi/worker/trace-store.js";
+import { messageEvent } from "./trace-budget-fixtures.js";
 import { TraceReader } from "@multiremi/trace/trace-reader.js";
 import { daemonTaskClaimResponse } from "@multiremi/api/wire/tasks.js";
 import { createMultiremiApp } from "@multiremi/api.js";
@@ -367,9 +367,10 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     expect(pointerQueryCount).toBeGreaterThan(0);
 
     const trace = new InMemoryTraceStore();
-    trace.append(task.id, [{ type: "text", content: "hot event" }]);
+    trace.append(task.id, [messageEvent("msg:hot", "hot event")]);
     const reader = new TraceReader({ store, daemon: new InMemoryDaemonTraceReader(() => trace) });
-    expect(await reader.readTrace(task.id)).toMatchObject({ state: "ok", source: "daemon", head: 1 });
+    expect(await reader.readTurn(task.id)).toMatchObject({ state: "ok", source: "daemon", head: 1, items: [{ id: "msg:hot" }] });
+    expect(await reader.readEvents(task.id)).toMatchObject({ state: "ok", source: "daemon", head: 1, events: [{ seq: 1 }] });
 
     const empty = store.createTask({ agentId: agent.id, workspaceId: "local", prompt: "empty" });
     expect(store.claimTask(runtime.id)?.id).toBe(empty.id);
@@ -380,7 +381,7 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     expect(store.claimTask(runtime.id)?.id).toBe(lost.id);
     store.markTaskTraceLost(lost.id);
     expect(store.getTaskTrace(lost.id)).toMatchObject({ location: "lost", runtimeId: runtime.id });
-    expect(await new TraceReader({ store, daemon: new InMemoryDaemonTraceReader(() => trace) }).readTrace(lost.id))
+    expect(await new TraceReader({ store, daemon: new InMemoryDaemonTraceReader(() => trace) }).readTurn(lost.id))
       .toMatchObject({ state: "lost", source: null });
 
     expect(store.markTaskTracesLostForRuntimes([runtime.id])).toBe(1);

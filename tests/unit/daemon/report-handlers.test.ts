@@ -15,6 +15,7 @@ const cardFields: DaemonTaskCompletionFields = {
   trace: { head: 9, event_count: 2, closed: true, tool_call_count: 1,
     type_histogram: [{ type: "text", tool: null, count: 1 }, { type: "tool_use", tool: "Read", count: 1 }] },
   final_reply_md: "done", model: null,
+  context_usage: { used: 41_000, size: 200_000 }, worked_ms: 12_345, process_item_count: 3,
 };
 afterEach(() => { for (const db of databases.splice(0)) db.close(); });
 function fixture() {
@@ -221,11 +222,11 @@ describe("v2 reports", () => {
         expect(await sendReport(store, type, { task_id: task.id, output: "answer", error: "failure", ...fields }, {
           runtimeId: runtime.id, onRoundCard: (taskId, fields) => received.push({ taskId, fields }),
         })).toEqual(success(store, type));
-        // TODO(PR 2 P2b): report-handlers validates and forwards context_usage, worked_ms and process_item_count too.
         expect(received).toEqual([{ taskId: task.id, fields: {
           trace: { head: 5, event_count: 5, closed: true, tool_call_count: 1,
             type_histogram: [{ type: "command", tool: "Read", count: 1 }, { type: "agent_message", tool: null, count: 1 }] },
           final_reply_md: "final **answer**", model: { provider: "claude", model: "fixture-model" },
+          context_usage: null, worked_ms: 0, process_item_count: 1,
         } }]);
       } finally { await trace.stop(); }
     });
@@ -281,6 +282,40 @@ describe("v2 reports", () => {
           expect(error.mock.calls).toEqual([[expect.stringContaining("malformed round-card field"), { taskId: task.id, field }]]);
         }
       } finally { error.mockRestore(); }
+    });
+
+    it(`nulls a missing or malformed turn summary field without costing the rest of the ${type} card`, async () => {
+      const error = spyOn(console, "error").mockImplementation(() => {});
+      const warn = spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        for (const [field, patch, expected, level] of [
+          ["context_usage", { context_usage: { used: -1, size: 10 } }, { context_usage: null }, "error"],
+          ["context_usage", { context_usage: { used: 1 } }, { context_usage: null }, "error"],
+          ["context_usage", { context_usage: "41000/200000" }, { context_usage: null }, "error"],
+          ["worked_ms", { worked_ms: 1.5 }, { worked_ms: null }, "error"],
+          ["worked_ms", { worked_ms: -3 }, { worked_ms: null }, "error"],
+          ["process_item_count", { process_item_count: "3" }, { process_item_count: null }, "error"],
+          ["process_item_count", { process_item_count: undefined }, { process_item_count: null }, "warn"],
+          ["worked_ms", { worked_ms: null }, { worked_ms: null }, null],
+        ] as const) {
+          const { store, task, runtime } = fixture();
+          store.startTask(task.id);
+          const received: Array<{ id: string; value: DaemonTaskCompletionFields | null }> = [];
+          error.mockClear();
+          warn.mockClear();
+          const frame: Record<string, unknown> = { task_id: task.id, ...cardFields, ...patch };
+          if ("process_item_count" in patch && patch.process_item_count === undefined) delete frame.process_item_count;
+          expect(await sendReport(store, type, frame, {
+            runtimeId: runtime.id, onRoundCard: (id, value) => received.push({ id, value }),
+          })).toEqual(success(store, type));
+          expect(store.getTask(task.id)?.status).toBe(type === "turn.complete" ? "completed" : "failed");
+          // Only the bad field is blanked; trace, model and the other summary fields still land.
+          expect(received).toEqual([{ id: task.id, value: { ...cardFields, ...expected } }]);
+          const logged = level === "error" ? error.mock.calls : level === "warn" ? warn.mock.calls : [];
+          if (level) expect(logged).toEqual([[expect.stringContaining(level === "error" ? "malformed round-card field" : "missing a turn summary field"), { taskId: task.id, field }]]);
+          else expect([...error.mock.calls, ...warn.mock.calls]).toEqual([]);
+        }
+      } finally { error.mockRestore(); warn.mockRestore(); }
     });
 
     it(`keeps frame-level rejections side-effect free for ${type}`, async () => {

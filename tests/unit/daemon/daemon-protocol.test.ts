@@ -334,6 +334,8 @@ describe("meetsDaemonMinCliVersion", () => {
     expect(meetsDaemonMinCliVersion("0.2.86")).toBe(false);
     expect(meetsDaemonMinCliVersion("0.2.87")).toBe(false);
     expect(meetsDaemonMinCliVersion("0.2.88")).toBe(false);
+    // v0.2.89 still writes fragment traces (PR 2, ADR 0019).
+    expect(meetsDaemonMinCliVersion("0.2.89")).toBe(false);
     expect(meetsDaemonMinCliVersion("0.1.0")).toBe(false);
   });
 });
@@ -384,7 +386,7 @@ describe("payload contracts", () => {
     const push: DaemonTracePushPayload = { task_id: "t", events: [], closed: false };
     const append: DaemonTraceAppendPayload = { task_id: "t", events: [], closed: true };
     const reply: DaemonTraceReadReplyPayload = {
-      ok: true, events: [], next_after_seq: 0, head: 0, eof: true, closed: true,
+      ok: true, view: "events", format: "v2", events: [], next_after_seq: 0, head: 0, eof: true, closed: true,
     };
     const subscribe: DaemonTraceSubscribeReplyPayload = {
       ok: true, first_seq: 1, head: 0, closed: false, gap: false,

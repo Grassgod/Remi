@@ -19292,7 +19292,7 @@
             "protocol": {
               "version": 1,
               "state": "rejected",
-              "min_version": "0.2.89",
+              "min_version": "0.2.90",
               "last_error": null
             },
             "executionGroupIds": [
@@ -19353,7 +19353,7 @@
           "protocol": {
             "version": 1,
             "state": "rejected",
-            "min_version": "0.2.89",
+            "min_version": "0.2.90",
             "last_error": null
           },
           "executionGroupIds": [
@@ -20262,7 +20262,7 @@
           "protocol": {
             "version": 1,
             "state": "rejected",
-            "min_version": "0.2.89",
+            "min_version": "0.2.90",
             "last_error": null
           },
           "owner_id": "local",
@@ -20324,7 +20324,7 @@
           "protocol": {
             "version": 1,
             "state": "rejected",
-            "min_version": "0.2.89",
+            "min_version": "0.2.90",
             "last_error": null
           },
           "executionGroupIds": [
@@ -21492,10 +21492,12 @@
       "body": {
         "turn_id": "tsk_snapshot",
         "attempt_id": "tsk_snapshot",
-        "events": [],
-        "next_after_seq": 0,
+        "view": "turn",
+        "format": "v2",
+        "turn": null,
+        "items": [],
+        "next_item_cursor": null,
         "head": 0,
-        "eof": true,
         "closed": false,
         "source": "daemon",
         "state": "unreachable",
@@ -25562,6 +25564,9 @@
               "failure_reason": null,
               "final_entry_id": null,
               "elapsed_ms": null,
+              "context_usage": null,
+              "worked_ms": null,
+              "process_item_count": null,
               "assignee_agent_id": "agt_4it58rkbvy1m",
               "attempt": 1,
               "source_event_id": null,
@@ -27754,7 +27759,7 @@
           "protocol": {
             "version": 1,
             "state": "rejected",
-            "min_version": "0.2.89",
+            "min_version": "0.2.90",
             "last_error": null
           },
           "executionGroupIds": [
@@ -27814,7 +27819,7 @@
           "protocol": {
             "version": 1,
             "state": "rejected",
-            "min_version": "0.2.89",
+            "min_version": "0.2.90",
             "last_error": null
           },
           "executionGroupIds": [
@@ -27850,7 +27855,7 @@
         "protocol": {
           "version": 1,
           "state": "rejected",
-          "min_version": "0.2.89",
+          "min_version": "0.2.90",
           "last_error": null
         },
         "owner_id": "local",
@@ -29590,6 +29595,9 @@
             "type_histogram": null,
             "model": null,
             "trace_ref": null,
+            "context_usage": null,
+            "worked_ms": null,
+            "process_item_count": null,
             "offered_at": null,
             "accepted_at": "<timestamp>",
             "started_at": "<timestamp>",
@@ -29688,10 +29696,12 @@
       "body": {
         "turn_id": "tsk_snapshot",
         "attempt_id": "tsk_snapshot",
-        "events": [],
-        "next_after_seq": 0,
+        "view": "turn",
+        "format": "v2",
+        "turn": null,
+        "items": [],
+        "next_item_cursor": null,
         "head": 0,
-        "eof": true,
         "closed": false,
         "source": "daemon",
         "state": "unreachable",

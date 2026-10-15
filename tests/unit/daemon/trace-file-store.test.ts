@@ -7,7 +7,7 @@ import { DAEMON_WS_MAX_PAYLOAD_BYTES } from "@multiremi/contracts/daemon-protoco
 import { encodeDaemonProtocolFrame, daemonFrameByteLimit } from "@multiremi/api/daemon-protocol/frames.js";
 import { InMemoryTraceStore, traceEventBytes } from "@multiremi/worker/trace-store.js";
 import type { TraceEventInput, TraceEventLine, TraceItem } from "@multiremi/contracts/trace.js";
-import { checkTraceFileLines, TRACE_FILE_FORMAT, TRACE_FILE_FORMAT_V2 } from "@multiremi/contracts/trace-file.js";
+import { checkTraceFileLines, TRACE_FILE_FORMAT_V1, TRACE_FILE_FORMAT_V2 } from "@multiremi/contracts/trace-file.js";
 import { TRACE_EVENT_MAX_BYTES, TRACE_ITEM_INPUT_MAX_BYTES, TRACE_TRUNCATION_MARKER } from "@shared/trace-sanitize.js";
 import { contractMessage, contractSnapshot, describeTraceStoreContract } from "./trace-store-contract.js";
 
@@ -432,7 +432,7 @@ describe("TraceFileStore", () => {
     function writeV1(path: string, options: { closed: boolean; taskId?: string }) {
       mkdirSync(join(path, ".."), { recursive: true });
       const taskId = options.taskId ?? "tsk_one";
-      const header = { format: TRACE_FILE_FORMAT, task_id: taskId, session_id: "ises_one", agent_id: "agt_one", provider: "codex",
+      const header = { format: TRACE_FILE_FORMAT_V1, task_id: taskId, session_id: "ises_one", agent_id: "agt_one", provider: "codex",
         started_at: NOW, runtime_id: "rt_v1" };
       const events = [
         { seq: 1, ts: NOW, type: "text", content: "legacy answer" },

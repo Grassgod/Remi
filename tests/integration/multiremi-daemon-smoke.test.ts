@@ -985,11 +985,17 @@ describe("Bun Multiremi daemon smoke", () => {
       expect(state.items[3]).toMatchObject({ text: "Smoke completed", phase: "final" });
       expect(state.turn).toMatchObject({ id: task.id, status: "completed", agent_name: "Claude Smoke", provider: "claude",
         model: "claude-smoke", final_item_id: "msg:2", context_usage: null, stats: { tool_call_count: 1, process_item_count: 2 } });
-      const transcript = await daemonTraceService(smokeLayer).reader.read({ runtimeId: expectedRuntimeId, taskId: task.id });
+      const transcript = await daemonTraceService(smokeLayer).reader.read({ runtimeId: expectedRuntimeId, taskId: task.id, view: "events" });
       expect(transcript.ok).toBe(true);
       if (!transcript.ok) throw new Error(transcript.code);
+      if (transcript.view !== "events") throw new Error(`unexpected view ${transcript.view}`);
       expect(JSON.stringify(transcript.events)).toBe(JSON.stringify(events));
       expect(transcript.events[0]!.ts).toBeTruthy();
+      // The closed trace's default view is its persisted snapshot: the same items the fold above produced.
+      const folded = await daemonTraceService(smokeLayer).reader.read({ runtimeId: expectedRuntimeId, taskId: task.id, view: "turn" });
+      expect(folded).toMatchObject({ ok: true, view: "turn", format: "v2", closed: true, next_item_cursor: null,
+        turn: { id: task.id, status: "completed", final_item_id: "msg:2" } });
+      if (folded.ok && folded.view === "turn") expect(folded.items.map(itemShape)).toEqual(state.items.map(itemShape));
       expect(store.listTaskMessages(task.id)).toEqual([]);
       expect(store.getTask(task.id)?.usage[0]).toMatchObject({
         provider: "claude",

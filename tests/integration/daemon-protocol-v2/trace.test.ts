@@ -58,9 +58,13 @@ describe("memory trace over the real protocol", () => {
       await waitFor(() => daemonTraceService(h.layer).sink.head(t.id) === 1, "oversized singleton append");
       await waitFor(() => pushed.length === 1, "oversized singleton push");
       expect(pushed[0]).toEqual(expected);
-      const result = await daemonTraceService(h.layer).reader.read({ runtimeId: rt(h), taskId: t.id, maxBytes: 8 });
+      const result = await daemonTraceService(h.layer).reader.read({ runtimeId: rt(h), taskId: t.id, view: "events", maxBytes: 8 });
       expect(result).toMatchObject({ ok: true, head: 1, next_after_seq: 1, eof: true });
-      if (result.ok) expect(result.events).toEqual([expected]);
+      if (result.ok && result.view === "events") expect(result.events).toEqual([expected]);
+      // The default HTTP view folds the same line into the item.
+      const folded = await daemonTraceService(h.layer).reader.read({ runtimeId: rt(h), taskId: t.id, view: "turn", maxBytes: 8 });
+      expect(folded).toMatchObject({ ok: true, view: "turn", format: "v2", head: 1, closed: false, next_item_cursor: null,
+        items: [{ id: "msg:large", seq: 1 }] });
       const fetched = await h.client.rpc("trace.fetch", { task_id: t.id, after_seq: 0, limit: 1 }, rt(h));
       expect(fetched.events).toEqual([expected]);
       expect(h.client.connectionState()).toBe("connected");
@@ -91,7 +95,7 @@ describe("memory trace over the real protocol", () => {
         trace(h).close(t.id, "completed");
         if (injection === "daemon") {
           await h.restartDaemon();
-          const recovered = await daemonTraceService(h.layer).reader.read({ runtimeId: rt(h), taskId: t.id });
+          const recovered = await daemonTraceService(h.layer).reader.read({ runtimeId: rt(h), taskId: t.id, view: "events" });
           expect(recovered).toMatchObject({ ok: true, head: 8, closed: true });
           // Closed history does not flood the Hub at boot. Explicit local need
           // can start its replay after recovery.
@@ -152,7 +156,7 @@ describe("memory trace over the real protocol", () => {
       // is dropped (with a warning), so no trace exists for the task and the
       // replayed completion still lands.
       expect(h.daemon.traceStore().head(tasks[i]!)).toBeNull();
-      expect(await daemonTraceService(h.layer).reader.read({ runtimeId: runtimes[i]!, taskId: tasks[i]! }))
+      expect(await daemonTraceService(h.layer).reader.read({ runtimeId: runtimes[i]!, taskId: tasks[i]!, view: "events" }))
         .toMatchObject({ ok: false, code: "trace_not_hot" });
     }
     expect(h.errors).toEqual([]);
@@ -198,7 +202,7 @@ describe("memory trace over the real protocol", () => {
     await h.client.event({ t: "turn.complete", seq: 999_002, rt: rt(h), p: turnCompletion(h.store, empty.id, "empty", { ...transport.completion(empty.id) }) });
     transport.close(empty.id, "completed");
     expect(snapshot(h, empty.id)).toMatchObject({ head: 0, closed: true });
-    expect(await daemonTraceService(h.layer).reader.read({ runtimeId: rt(h), taskId: empty.id }))
+    expect(await daemonTraceService(h.layer).reader.read({ runtimeId: rt(h), taskId: empty.id, view: "events" }))
       .toMatchObject({ ok: true, events: [], head: 0, eof: true, closed: true });
   });
 
@@ -248,20 +252,20 @@ describe("memory trace over the real protocol", () => {
     const h = await fixture(); const t = task(h);
     trace(h).append(t.id, rt(h), [body({ pad: " ".repeat(256 * 1024) }), ...Array.from({ length: 510 }, () => body())]);
     const reader = daemonTraceService(h.layer).reader;
-    const large = await reader.read({ runtimeId: rt(h), taskId: t.id, maxBytes: 8 });
+    const large = await reader.read({ runtimeId: rt(h), taskId: t.id, view: "events", maxBytes: 8 });
     expect(large).toMatchObject({ ok: true, head: 511, eof: false, closed: false, next_after_seq: 1 });
-    if (large.ok) { expect(large.events).toHaveLength(1); expect((large.events[0] as unknown as { pad: string }).pad.length).toBe(256 * 1024); }
-    const page = await reader.read({ runtimeId: rt(h), taskId: t.id, afterSeq: 1, limit: 9999, maxBytes: 2 * 1024 * 1024 });
+    if (large.ok && large.view === "events") { expect(large.events).toHaveLength(1); expect((large.events[0] as unknown as { pad: string }).pad.length).toBe(256 * 1024); }
+    const page = await reader.read({ runtimeId: rt(h), taskId: t.id, view: "events", afterSeq: 1, limit: 9999, maxBytes: 2 * 1024 * 1024 });
     expect(page).toMatchObject({ ok: true, eof: false, next_after_seq: 501 });
-    if (page.ok) expect(page.events).toHaveLength(500);
-    const end = await reader.read({ runtimeId: rt(h), taskId: t.id, afterSeq: 501 });
+    if (page.ok && page.view === "events") expect(page.events).toHaveLength(500);
+    const end = await reader.read({ runtimeId: rt(h), taskId: t.id, view: "events", afterSeq: 501 });
     expect(end).toMatchObject({ ok: true, eof: true, head: 511 });
-    expect(await reader.read({ runtimeId: rt(h), taskId: "not-owned" })).toMatchObject({ ok: false, code: "trace_not_hot" });
+    expect(await reader.read({ runtimeId: rt(h), taskId: "not-owned", view: "events" })).toMatchObject({ ok: false, code: "trace_not_hot" });
     h.daemon.traceStore().forget(t.id);
-    expect(await reader.read({ runtimeId: rt(h), taskId: t.id })).toMatchObject({ ok: false, code: "trace_not_hot" });
+    expect(await reader.read({ runtimeId: rt(h), taskId: t.id, view: "events" })).toMatchObject({ ok: false, code: "trace_not_hot" });
     const runtime = rt(h); await h.stopDaemon();
     const start = performance.now();
-    expect(await reader.read({ runtimeId: runtime, taskId: t.id })).toMatchObject({ ok: false, code: "daemon_unreachable", runtime_id: runtime, last_seen_at: expect.any(String) });
+    expect(await reader.read({ runtimeId: runtime, taskId: t.id, view: "events" })).toMatchObject({ ok: false, code: "daemon_unreachable", runtime_id: runtime, last_seen_at: expect.any(String) });
     expect(performance.now() - start).toBeLessThan(10_000);
   });
 });

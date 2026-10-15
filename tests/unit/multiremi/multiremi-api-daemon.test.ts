@@ -9,8 +9,8 @@ import { afterEach, describe, expect, it } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
 import type { MultiremiStore } from "@multiremi/store.js";
 import { InMemoryDaemonTraceReader } from "@multiremi/api/trace/daemon-trace-reader.js";
-// TODO(PR 2 P2b): these read-path cases still feed legacy fragment events.
-import { LegacyFragmentTraceStore as InMemoryTraceStore } from "../../helpers/legacy-trace-store.js";
+import { InMemoryTraceStore } from "@multiremi/worker/trace-store.js";
+import { commandItem, messageEvent } from "./trace-budget-fixtures.js";
 import { daemonRuntimeId } from "@multiremi/store.js";
 import { daemonTaskWireResponse, daemonTaskMessageWireResponse } from "@multiremi/api/wire/index.js";
 import { DAEMON_MIN_CLI_VERSION, DAEMON_PROTOCOL_MIN } from "@multiremi/contracts/daemon-protocol.js";
@@ -1309,9 +1309,11 @@ describe("Multiremi API — daemon endpoints", () => {
     expect(since.status).toBe(426);
     expect(await since.json()).toEqual({ code: "daemon_protocol_upgrade_required", min_version: DAEMON_PROTOCOL_MIN });
     // #10: the UI reads daemon trace events; legacy SQL rows remain a separate compatibility fixture.
-    trace.append(task.id,[{type:"text",content:"starting"},{type:"tool_result",tool:"edit",content:"updated"}]);
+    trace.append(task.id,[messageEvent("msg:start","starting"),{type:"item.completed",item:commandItem("cmd_edit","edit")}]);
     const uiMessages = await (await app.request(turnApiPath(store, task.id, "/trace"))).json();
-    expect(uiMessages.events.map((message: any) => message.seq)).toEqual([1, 2]);
+    expect(uiMessages.items.map((item: any) => [item.id, item.seq])).toEqual([["msg:start", 1], ["cmd_edit", 2]]);
+    const rawMessages = await (await app.request(turnApiPath(store, task.id, "/trace?view=events"))).json();
+    expect(rawMessages.events.map((message: any) => message.seq)).toEqual([1, 2]);
     const sinceBody = store.listTaskMessages(task.id).filter(message => message.seq > 1).map(message => daemonTaskMessageWireResponse(message, store.getTask(task.id)!));
     expect(sinceBody.map((message: any) => [message.seq, message.output])).toEqual([[2, "updated"]]);
     expect(sinceBody[0].task_id).toBe(task.id);

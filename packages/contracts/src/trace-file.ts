@@ -23,17 +23,22 @@ import {
   type TraceTurn,
 } from "./trace.js";
 
-/** Format marker on the first line of a per-task trace file. */
-export const TRACE_FILE_FORMAT = "multiremi.trace.v1";
+/**
+ * Format marker of a fragment trace (before PR 2). The daemon no longer writes
+ * it; a v1 file stays readable (raw lines, `view=events`) and is never appended to.
+ */
+export const TRACE_FILE_FORMAT_V1 = "multiremi.trace.v1";
 
 /**
- * Format marker of a turn + items trace (PR 2). Events are `TraceEvent`
- * lines; `close()` appends snapshot framing lines before the trailer. A v1 file
- * stays readable (raw lines only) and is never appended to.
+ * Format marker of a turn + items trace (PR 2, ADR 0019). Events are
+ * `TraceEvent` lines; `close()` appends snapshot framing lines before the trailer.
  */
 export const TRACE_FILE_FORMAT_V2 = "multiremi.trace.v2";
 
-export const TRACE_FILE_FORMATS = [TRACE_FILE_FORMAT, TRACE_FILE_FORMAT_V2] as const;
+/** Format marker on the first line of every trace file the daemon writes now. */
+export const TRACE_FILE_FORMAT = TRACE_FILE_FORMAT_V2;
+
+export const TRACE_FILE_FORMATS = [TRACE_FILE_FORMAT_V1, TRACE_FILE_FORMAT_V2] as const;
 export type TraceFileFormat = (typeof TRACE_FILE_FORMATS)[number];
 
 /** Short name recorded by `checkTraceFileLines`. */
@@ -79,9 +84,9 @@ export interface MultiremiTaskTrace {
   updatedAt: string;
 }
 
-/** First line of `<workspacesRoot>/traces/<subject>/<task_id>.jsonl`. */
+/** First line of `<workspacesRoot>/traces/<subject>/<task_id>.jsonl` in a v1 file. */
 export interface TraceFileHeader {
-  format: typeof TRACE_FILE_FORMAT;
+  format: typeof TRACE_FILE_FORMAT_V1;
   task_id: string;
   session_id: string;
   agent_id: string;
@@ -230,7 +235,7 @@ export function checkTraceFileLines(
   try { header = JSON.parse(lines[0]!); } catch { return { ok: false, reason: "invalid header JSON" }; }
   if (!header || typeof header !== "object" || Array.isArray(header)) return { ok: false, reason: "invalid header" };
   const first = header as Record<string, unknown>;
-  const format: TraceFileFormatVersion | null = first.format === TRACE_FILE_FORMAT ? "v1"
+  const format: TraceFileFormatVersion | null = first.format === TRACE_FILE_FORMAT_V1 ? "v1"
     : first.format === TRACE_FILE_FORMAT_V2 ? "v2" : null;
   if (format === null || typeof first.task_id !== "string" || !first.task_id
     || typeof first.session_id !== "string" || !first.session_id

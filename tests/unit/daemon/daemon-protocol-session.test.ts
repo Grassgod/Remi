@@ -19,6 +19,7 @@
  */
 import { describe, expect, it } from "bun:test";
 import {
+  compareDaemonCliVersion,
   DAEMON_ACK_TIMEOUT_MS,
   DAEMON_MIN_CLI_VERSION,
   DAEMON_FRAME_MAX_BYTES,
@@ -211,7 +212,7 @@ describe("MUL-417 daemon protocol session — handshake", () => {
     expect(h.session.isHandshakeComplete).toBe(false);
   });
 
-  it.each(["0.2.82", "0.2.85", "0.2.86", "0.2.87", "0.2.88"])("rejects CLI %s below the minimum with reject and close 4426", async (version) => {
+  it.each(["0.2.82", "0.2.85", "0.2.86", "0.2.87", "0.2.88", "0.2.89"])("rejects CLI %s below the minimum with reject and close 4426", async (version) => {
     const h = harness();
     await h.session.handleMessage(JSON.stringify({
       v: 2,
@@ -228,11 +229,19 @@ describe("MUL-417 daemon protocol session — handshake", () => {
     expect(h.registry.size).toBe(0);
   });
 
-  it("admits the candidate package version without a forged CLI label", async () => {
+  it("admits the release that carries the gate without a forged CLI label", async () => {
     const { default: candidate } = await import("../../../package.json");
+    // `package.json` moves only through release preparation. Until that runs for
+    // the gate's release (ADR 0019), the gate names the next patch release
+    // exactly, so the release it requires is the one preparation produces next.
+    const prepared = compareDaemonCliVersion(candidate.version, DAEMON_MIN_CLI_VERSION) >= 0;
+    if (!prepared) {
+      const [major, minor, patch] = candidate.version.split(".").map(Number);
+      expect(DAEMON_MIN_CLI_VERSION).toBe(`${major}.${minor}.${patch! + 1}`);
+    }
     const h = harness();
     await h.session.handleMessage(JSON.stringify({ v: 2, t: "hello", ts: 1,
-      p: helloPayload({ cli_version: candidate.version }) }));
+      p: helloPayload({ cli_version: prepared ? candidate.version : DAEMON_MIN_CLI_VERSION }) }));
     expect(h.socket.lastOfType("reject")).toBeNull();
     expect(h.socket.lastOfType("welcome")).not.toBeNull();
     expect(h.session.isHandshakeComplete).toBe(true);

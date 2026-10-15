@@ -465,6 +465,6 @@ export function registerUnifiedRoutes(app: Hono, deps: RouterDeps): void {
     if (!window) return c.json({ error: "invalid trace window" }, 400);
     const attemptId = c.req.query("attempt_id") ?? turn.current_attempt_id;
     if (!attemptId || !store.listTurnAttempts(turn.id).some(a => a.id === attemptId)) return c.json({ error: "attempt not found" }, 404);
-    return c.json({ turn_id: turn.id, attempt_id: attemptId, ...await deps.traceReader.readTrace(attemptId, window.afterSeq, window.limit) });
+    return c.json({ turn_id: turn.id, attempt_id: attemptId, ...await deps.traceReader.read(attemptId, window) });
   });
 }

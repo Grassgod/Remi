@@ -56,7 +56,7 @@ describe("unified CLI wire contracts", () => {
       expect(requests).toHaveLength(0);
     }
   });
-  const cases: Array<{ args: string[]; method: string; path: string; body?: unknown; query?: Record<string, string> }> = [
+  const cases: Array<{ args: string[]; method: string; path: string; body?: unknown; query?: Record<string, string>; absent?: string[] }> = [
     { args: ["message", "send", "ises_1", "--content", "Hello", "--to", "parent-owner", "--wake", "next-turn"], method: "POST", path: "/api/sessions/ises_1/messages",
       body: { body_md: "Hello", to: { type: "role", ref: "parent_owner" }, message_kind: "request", wake_requested: "next_turn", reply_to_id: null, dedupe_key: null } },
     { args: ["message", "list", "ises_1", "--unread-by", "agt_1", "--thread", "msg_1", "--after", "3", "--limit", "10"], method: "GET", path: "/api/sessions/ises_1/messages", query: { unread_by: "agt_1", thread: "msg_1", after_seq: "3", limit: "10" } },
@@ -73,9 +73,10 @@ describe("unified CLI wire contracts", () => {
     { args: ["turn", "cancel", "tsk_root", "--yes", "--reason", "Stop"], method: "POST", path: "/api/turns/tsk_root/cancel", body: { reason: "Stop" } },
     { args: ["turn", "wrap-up", "tsk_root", "--reason", "Finish"], method: "POST", path: "/api/turns/tsk_root/wrap-up", body: { reason: "Finish" } },
     { args: ["turn", "retry", "tsk_root", "--cold", "--yes"], method: "POST", path: "/api/turns/tsk_root/retry", body: { cold: true } },
-    { args: ["turn", "trace", "read", "tsk_root", "--attempt", "tsk_attempt", "--after", "5", "--limit", "20"], method: "GET", path: "/api/turns/tsk_root/trace", query: { attempt_id: "tsk_attempt", after_seq: "5", limit: "20" } },
+    { args: ["turn", "trace", "read", "tsk_root", "--attempt", "tsk_attempt", "--cursor", "4", "--limit", "20"], method: "GET", path: "/api/turns/tsk_root/trace", query: { attempt_id: "tsk_attempt", view: "turn", item_cursor: "4", limit: "20" }, absent: ["after_seq"] },
+    { args: ["turn", "trace", "read", "tsk_root", "--attempt", "tsk_attempt", "--raw", "--after", "5", "--limit", "20"], method: "GET", path: "/api/turns/tsk_root/trace", query: { attempt_id: "tsk_attempt", view: "events", after_seq: "5", limit: "20" }, absent: ["item_cursor"] },
   ];
-  for (const sample of cases) it(sample.args.slice(0, sample.args[0] === "inbox" ? 2 : sample.args[1] === "trace" ? 3 : 2).join(" "), async () => {
+  for (const sample of cases) it(sample.args.slice(0, sample.args[0] === "inbox" ? 2 : sample.args[1] === "trace" ? 3 : 2).join(" ") + (sample.args.includes("--raw") ? " --raw" : ""), async () => {
     setup();
     await registry.execute([...sample.args, "--output", "json"]);
     expect(requests.length).toBe(2);
@@ -85,6 +86,7 @@ describe("unified CLI wire contracts", () => {
     expect(request.headers.get("X-Workspace-ID")).toBe("local");
     expect(request.headers.get("Authorization")).toBe("Bearer fixture");
     for (const [key, value] of Object.entries(sample.query ?? {})) expect(url.searchParams.get(key)).toBe(value);
+    for (const key of sample.absent ?? []) expect(url.searchParams.has(key)).toBe(false);
     if (sample.body) expect(await request.json()).toEqual(sample.body);
     expect(JSON.parse(output.join("\n"))).toEqual({ id: "msg_1", messages: [], turns: [] });
     expect(warnings).toEqual([]);

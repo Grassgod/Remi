@@ -144,6 +144,14 @@ describe("item caps", () => {
     expect(capped!.item).toMatchObject({ prompt: null });
     expect(bytes(JSON.stringify(capped))).toBeLessThanOrEqual(TRACE_EVENT_MAX_BYTES);
 
+    // An item that fits alone but not inside its envelope is still reduced: the ceiling bounds the whole body.
+    const empty = { ...body.item, prompt: "" };
+    const fitsAlone = { type: "item.completed", item: { ...empty, prompt: "p".repeat(TRACE_EVENT_MAX_BYTES - bytes(JSON.stringify(empty))) } } as const;
+    expect(bytes(JSON.stringify(fitsAlone.item))).toBe(TRACE_EVENT_MAX_BYTES);
+    const bounded = capTraceEvent(fitsAlone);
+    expect(bounded!.item).toMatchObject({ prompt: null });
+    expect(bytes(JSON.stringify(bounded))).toBeLessThanOrEqual(TRACE_EVENT_MAX_BYTES);
+
     const delta = capTraceEvent({ type: "item.delta", item_id: "call_1", field: "output", delta: "d".repeat(100 * KiB) });
     expect(delta && delta.type === "item.delta" && bytes(delta.delta)).toBe(64 * KiB);
     const fine = { type: "turn.updated", patch: { model: "m" } } as const;

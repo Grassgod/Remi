@@ -2,6 +2,7 @@ import { describe, expect, it } from "bun:test";
 import type { TraceItem, TraceTurn } from "@multiremi/contracts/trace";
 import {
   TRACE_FILE_FORMAT,
+  TRACE_FILE_FORMAT_V1,
   TRACE_FILE_FORMAT_V2,
   TRACE_FILE_FORMATS,
   checkTraceFileLines,
@@ -29,7 +30,7 @@ const headerV2: TraceFileHeaderV2 = {
   format: TRACE_FILE_FORMAT_V2, task_id: "tsk_one", session_id: "ises_one", agent_id: "agt_one", provider: "codex", started_at: NOW,
 };
 const header = JSON.stringify(headerV2);
-const headerV1 = JSON.stringify({ ...headerV2, format: TRACE_FILE_FORMAT });
+const headerV1 = JSON.stringify({ ...headerV2, format: TRACE_FILE_FORMAT_V1 });
 const events = [
   JSON.stringify({ seq: 1, ts: NOW, type: "item.completed", item }),
   JSON.stringify({ seq: 2, ts: NOW, type: "turn.completed", turn }),
@@ -42,8 +43,10 @@ const trailer = (snapshotParts?: number, head = 2): string => JSON.stringify({
 
 describe("trace file v2 framing", () => {
   it("pins both formats", () => {
-    expect(TRACE_FILE_FORMAT).toBe("multiremi.trace.v1");
+    expect(TRACE_FILE_FORMAT_V1).toBe("multiremi.trace.v1");
     expect(TRACE_FILE_FORMAT_V2).toBe("multiremi.trace.v2");
+    // The daemon writes v2 only; v1 files are read-only history.
+    expect(TRACE_FILE_FORMAT).toBe(TRACE_FILE_FORMAT_V2);
     expect([...TRACE_FILE_FORMATS]).toEqual(["multiremi.trace.v1", "multiremi.trace.v2"]);
   });
 

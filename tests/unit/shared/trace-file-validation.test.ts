@@ -1,8 +1,8 @@
 import { describe, expect, it } from "bun:test";
-import { checkTraceFileLines, isTraceFileTrailer, TRACE_FILE_FORMAT } from "@multiremi/contracts/trace-file.js";
+import { checkTraceFileLines, isTraceFileTrailer, TRACE_FILE_FORMAT_V1 } from "@multiremi/contracts/trace-file.js";
 
 const NOW = "2026-09-27T00:00:00.000Z";
-const header = JSON.stringify({ format: TRACE_FILE_FORMAT, task_id: "tsk_one", session_id: "ises_one", agent_id: "agt_one", provider: "codex", started_at: NOW });
+const header = JSON.stringify({ format: TRACE_FILE_FORMAT_V1, task_id: "tsk_one", session_id: "ises_one", agent_id: "agt_one", provider: "codex", started_at: NOW });
 const event = JSON.stringify({ seq: 1, ts: NOW, type: "text", content: "first" });
 const trailer = JSON.stringify({ end: { status: "completed", head: 1, event_count: 1, ended_at: NOW } });
 

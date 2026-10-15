@@ -3,8 +3,8 @@ import { attemptMessagesPath, requestMessageBody, turnApiPath } from "./unified-
 import { afterEach, describe, expect, it } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { InMemoryDaemonTraceReader } from "@multiremi/api/trace/daemon-trace-reader.js";
-// TODO(PR 2 P2b): these read-path cases still feed legacy fragment events.
-import { LegacyFragmentTraceStore as InMemoryTraceStore } from "../../helpers/legacy-trace-store.js";
+import { InMemoryTraceStore } from "@multiremi/worker/trace-store.js";
+import { commandItem, messageEvent, turnStartedEvent } from "./trace-budget-fixtures.js";
 import { createLocalStore as createStore, db, resetMultiremiTestEnv } from "./helpers.js";
 
 afterEach(resetMultiremiTestEnv);
@@ -79,14 +79,9 @@ async function setup() {
   });
   const trace = new InMemoryTraceStore();
   trace.append(targetTask.id, [
-    {
-      type: "tool_call",
-      tool: "exec_command",
-      content: "TOP SECRET transcript body",
-      input: { command: "private command" },
-      output: "private output",
-    },
-    { type: "assistant", content: "private answer" },
+    turnStartedEvent(targetTask.id),
+    { type: "item.completed", item: { ...commandItem("cmd_private", "private command"), output: "TOP SECRET transcript body\nprivate output" } },
+    messageEvent("msg:private", "private answer"),
   ]);
   const app = createMultiremiApp({ store, authToken: "root-secret",
     daemonTraceReader: new InMemoryDaemonTraceReader(() => trace) });

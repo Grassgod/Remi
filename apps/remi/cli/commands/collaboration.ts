@@ -25,6 +25,7 @@ import {
 import {
   INPUT_OPTIONS,
   PAGE_OPTIONS,
+  TRACE_READ_OPTIONS,
   YES_OPTION,
   clientFor,
   commandOptions,
@@ -36,11 +37,13 @@ import {
   positional,
   queryOptions,
   renderResource,
+  renderTraceRead,
   requestBody,
   requireConfirmation,
   requiredWorkspace,
   stringOption,
   stringOptions,
+  traceReadQuery,
 } from "./resource-common.js";
 
 const HUMAN_TASK: readonly CliIdentity[] = ["human", "task"];
@@ -689,17 +692,16 @@ function shareCommandSpecs(): CommandSpec[] {
       await getAndRender(invocation, `/api/shares/${encodePath(token)}`);
     }),
     nativeSpec("share.trace.read", ["share", "trace", "read"], "Read a task trace through a signed issue share", "read", ["human", "share"], [refPositional("task"), optionalPositional("token")], [
-      { name: "after", type: "integer", valueName: "seq", description: "Exclusive trace sequence cursor" },
-      { name: "limit", type: "integer", valueName: "count", description: "Maximum events" },
+      ...TRACE_READ_OPTIONS,
     ], async (invocation) => {
       const token = positionalOrOption(invocation, 1, "token", "share");
       if (!stringOption(invocation, "share") || token !== stringOption(invocation, "share")) {
         throw new CliError("usage", "share trace read requires a matching --share <signed-token>");
       }
-      await getAndRender(invocation, `/api/shares/${encodePath(token)}/tasks/${encodePath(positional(invocation, 0, "task"))}/trace`, undefined, {
-        after_seq: integerOption(invocation, "after"),
-        limit: integerOption(invocation, "limit"),
-      });
+      const query = traceReadQuery(invocation);
+      const client = await clientFor(invocation);
+      const response = await client.request({ method: "GET", path: `/api/shares/${encodePath(token)}/tasks/${encodePath(positional(invocation, 0, "task"))}/trace`, query });
+      renderTraceRead(invocation, response.data);
     }),
   ];
 }
@@ -949,14 +951,13 @@ function taskCommandSpecs(): CommandSpec[] {
       await getAndRender(invocation, `/api/tasks/${encodePath(positional(invocation, 0, "task"))}/steer`, ["messages"]);
     }),
     nativeSpec("task.trace.read", ["task", "trace", "read"], "Read a task trace window", "read", HUMAN_TASK, [refPositional("task")], [
-      { name: "after", type: "integer", valueName: "seq", description: "Exclusive trace sequence cursor" },
+      ...TRACE_READ_OPTIONS,
       { name: "since", type: "integer", valueName: "seq", description: "Deprecated alias for --after" },
-      { name: "limit", type: "integer", valueName: "count", description: "Maximum events" },
     ], async (invocation) => {
-      await getAndRender(invocation, `/api/tasks/${encodePath(positional(invocation, 0, "task"))}/trace`, undefined, {
-        after_seq: integerOption(invocation, "after") ?? integerOption(invocation, "since"),
-        limit: integerOption(invocation, "limit"),
-      });
+      const query = traceReadQuery(invocation, integerOption(invocation, "since"));
+      const client = await clientFor(invocation);
+      const response = await client.request({ method: "GET", path: `/api/tasks/${encodePath(positional(invocation, 0, "task"))}/trace`, query });
+      renderTraceRead(invocation, response.data);
     }, [
       { path: ["task", "message", "list"], deprecatedSince: DEPRECATED_SINCE, replacement: "remi task trace read" },
       { path: ["task", "messages"], deprecatedSince: DEPRECATED_SINCE, replacement: "remi task trace read" },

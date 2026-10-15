@@ -515,7 +515,7 @@ export function pageTurnTrace(
 export function turnCompletionFields(
   state: Pick<TurnTraceState, "turn" | "items" | "head">,
   counts: { eventCount: number },
-): Required<DaemonTaskCompletionFields> {
+): DaemonTaskCompletionFields {
   const stats = turnTraceStats(state.items);
   const turn = state.turn;
   const final = finalItem(state.items, turn?.final_item_id);

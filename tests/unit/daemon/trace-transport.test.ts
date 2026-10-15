@@ -7,7 +7,7 @@ import { DaemonTraceTransport } from "@multiremi/worker/trace-transport.js";
 import { InMemoryTraceStore } from "@multiremi/worker/trace-store.js";
 import type { DaemonProtocolClient } from "@multiremi/worker/daemon-protocol-client.js";
 import { parseDaemonProtocolFrame, type DaemonParsedFrame } from "@multiremi/api/daemon-protocol/frames.js";
-import { checkTraceFileLines, TRACE_FILE_FORMAT } from "@multiremi/contracts/trace-file.js";
+import { checkTraceFileLines, TRACE_FILE_FORMAT_V1 } from "@multiremi/contracts/trace-file.js";
 import type { TraceEventInput, TraceItem, TraceTurn } from "@multiremi/contracts/trace.js";
 
 const NOW = "2026-09-28T12:00:00.000Z";
@@ -20,7 +20,7 @@ function peer() {
     connectionState: () => "disconnected", send: (frame: { p: any }) => replies.push(frame) };
   return { client: client as unknown as DaemonProtocolClient, replies,
     read: (rt: string, taskId: string, extra: Record<string, unknown> = {}) => {
-      const parsed = parseDaemonProtocolFrame(JSON.stringify({ v: 2, t: "trace.read", id: "read", rt, p: { task_id: taskId, ...extra } }));
+      const parsed = parseDaemonProtocolFrame(JSON.stringify({ v: 2, t: "trace.read", id: "read", rt, p: { task_id: taskId, view: "events", ...extra } }));
       if (!parsed.ok) throw new Error(parsed.reason);
       handler(parsed.frame);
       return replies.at(-1)!.p;
@@ -121,7 +121,7 @@ describe("daemon trace transport ownership and reads", () => {
     // The crash also cut the last line short.
     appendFileSync(join(f.root, "traces", "iss_t", "task_open.jsonl"), '{"seq":2,"type":"it');
     // An unclosed v1 trace is read-only history and is never resumed.
-    writeFileSync(join(f.root, "traces", "iss_t", "task_v1.jsonl"), `${JSON.stringify({ format: TRACE_FILE_FORMAT, task_id: "task_v1",
+    writeFileSync(join(f.root, "traces", "iss_t", "task_v1.jsonl"), `${JSON.stringify({ format: TRACE_FILE_FORMAT_V1, task_id: "task_v1",
       session_id: "ises_t", agent_id: "agent", provider: "codex", started_at: NOW, runtime_id: "rt" })}\n${JSON.stringify({ seq: 1, ts: NOW, type: "text", content: "old" })}\n`);
     const p = peer(); let calls = 0;
     Object.assign(p.client, { connectionState: () => "connected", uplinkPaused: () => false,
@@ -304,7 +304,7 @@ describe("daemon trace transport close and completion", () => {
     const f = fileFixture("trace-v1-close-");
     const path = join(f.root, "traces", "iss_t", "legacy.jsonl");
     mkdirSync(join(f.root, "traces", "iss_t"), { recursive: true });
-    const content = `${JSON.stringify({ format: TRACE_FILE_FORMAT, task_id: "legacy", session_id: "ises_t", agent_id: "agent",
+    const content = `${JSON.stringify({ format: TRACE_FILE_FORMAT_V1, task_id: "legacy", session_id: "ises_t", agent_id: "agent",
       provider: "codex", started_at: NOW, runtime_id: "rt" })}\n${JSON.stringify({ seq: 1, ts: NOW, type: "text", content: "old" })}\n`;
     writeFileSync(path, content);
     const p = peer();
@@ -334,6 +334,22 @@ describe("daemon trace transport view=turn", () => {
       const last = p.read("rt", "task", { view: "turn", item_cursor: 4, limit: 2 });
       expect(last.items.map((item: TraceItem) => item.id)).toEqual(["m4"]);
       expect(last.next_item_cursor).toBeNull();
+      // Every page's turn carries the live statistics of the whole fold, not the zeros of turn.started.
+      expect(first.turn.stats).toMatchObject({ item_count: 5, process_item_count: 5, tool_call_count: 0 });
+      expect(last.turn.stats).toEqual(first.turn.stats);
+    } finally { await trace.stop(); }
+  });
+
+  it("answers a read without a known view with protocol_violation", async () => {
+    const p = peer();
+    const trace = new DaemonTraceTransport(p.client);
+    try {
+      trace.append("task", "rt", [started()]);
+      // Servers past the release gate always name a view; the pre-PR 2 fallback is gone.
+      for (const view of [undefined, "fragments"]) {
+        expect(p.read("rt", "task", { view })).toEqual({ ok: false, code: "protocol_violation", retryable: false });
+      }
+      expect(p.read("rt", "task", { view: "events" })).toMatchObject({ ok: true, view: "events", head: 1 });
     } finally { await trace.stop(); }
   });
 

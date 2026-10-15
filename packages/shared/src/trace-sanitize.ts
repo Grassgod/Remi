@@ -416,8 +416,8 @@ export function capTraceItem<T extends TraceItem>(item: T): T {
   return (changed ? next : item) as T;
 }
 
-/** Largest-first fields an oversized event may lose, per item type. */
-function dropOversizedFields(item: TraceItem): TraceItem | null {
+/** Largest-first fields an oversized event may lose, per item type, until the item fits `maxBytes`. */
+function dropOversizedFields(item: TraceItem, maxBytes: number): TraceItem | null {
   const next = { ...item } as Record<string, unknown>;
   const candidates: Array<[string, () => void]> = [];
   if (typeof next.output === "string") {
@@ -444,7 +444,7 @@ function dropOversizedFields(item: TraceItem): TraceItem | null {
     - utf8ByteLength(JSON.stringify(item[a as keyof TraceItem] ?? null)));
   for (const [, drop] of candidates) {
     drop();
-    if (utf8ByteLength(JSON.stringify(next)) <= TRACE_EVENT_MAX_BYTES) return next as unknown as TraceItem;
+    if (utf8ByteLength(JSON.stringify(next)) <= maxBytes) return next as unknown as TraceItem;
   }
   return null;
 }
@@ -460,7 +460,9 @@ export function capTraceEvent<T extends TraceEventBody>(body: T): T | null {
     const item = capTraceItem(body.item);
     const capped = item === body.item ? body : { ...body, item };
     if (utf8ByteLength(JSON.stringify(capped)) <= TRACE_EVENT_MAX_BYTES) return capped;
-    const reduced = dropOversizedFields(item);
+    // The ceiling bounds the whole body: the item gets what the envelope leaves.
+    const envelope = utf8ByteLength(JSON.stringify({ ...body, item: null })) - utf8ByteLength("null");
+    const reduced = dropOversizedFields(item, TRACE_EVENT_MAX_BYTES - envelope);
     return reduced ? { ...body, item: reduced } : null;
   }
   if (body.type === "item.delta") {
