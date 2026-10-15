@@ -2,7 +2,7 @@ import { DaemonProtocolClient, DaemonProtocolRpcError } from "./daemon-protocol-
 import { MultiremiTaskReportOutbox, type MultiremiOutboxKind, type MultiremiTaskReportOutboxOptions } from "./outbox.js";
 import { outboxRecordFrame } from "./report-frames.js";
 import type { DaemonTaskCompletionFields } from "@multiremi/contracts/daemon-protocol.js";
-import { daemonTraceTransport } from "./trace-transport.js";
+import { daemonTraceTransport, type TraceCloseError } from "./trace-transport.js";
 
 export interface DaemonReportTransport {
   report(type: string, partition: string, payload: Record<string, unknown>, wait?: boolean | { timeoutMs: number }): Promise<Record<string, unknown>>;
@@ -23,7 +23,9 @@ export function acquireDaemonOutbox(protocol: DaemonProtocolClient, options: Mul
         const reply = await protocol.event(outboxRecordFrame(record) as ReturnType<typeof outboxRecordFrame> & { seq: number });
         if (record.terminal) {
           const trace = daemonTraceTransport(protocol);
-          if (trace.store.head(record.taskId)) trace.close(record.taskId, record.kind === "turn.complete" ? "completed" : "failed");
+          if (trace.store.head(record.taskId)) {
+            trace.close(record.taskId, record.kind === "turn.complete" ? "completed" : "failed", terminalError(record.payload));
+          }
         }
         return reply;
       },
@@ -47,24 +49,39 @@ export function daemonOutboxHasPriority(protocol: DaemonProtocolClient): boolean
   return (shared.get(protocol)?.outbox.stats().pending ?? 0) > 0;
 }
 
+/** The turn error a failed terminal report records on the trace. */
+export function terminalError(payload: Record<string, unknown>): TraceCloseError | null {
+  if (typeof payload.error !== "string") return null;
+  const reason = typeof payload.failure_reason === "string" ? payload.failure_reason
+    : typeof payload.failureReason === "string" ? payload.failureReason : null;
+  return { message: payload.error, reason };
+}
+
+export interface DaemonReportTraceHooks {
+  completion(taskId: string, status: "completed" | "failed"): DaemonTaskCompletionFields;
+  close(taskId: string, status: "completed" | "failed", error?: TraceCloseError | null): void;
+}
+
 export function daemonReportTransport(protocol: DaemonProtocolClient, runtime: () => string | null, outbox: () => MultiremiTaskReportOutbox,
-  waitTimeoutMs = 30_000, waitSignal?: () => AbortSignal,
-  trace?: { completion(taskId: string): DaemonTaskCompletionFields; close(taskId: string, status: "completed" | "failed"): void }): DaemonReportTransport {
+  waitTimeoutMs = 30_000, waitSignal?: () => AbortSignal, trace?: DaemonReportTraceHooks): DaemonReportTransport {
   return {
     async report(type, partition, payload, wait = false) {
       const runtimeId = runtime();
       const terminal = type === "turn.complete" || type === "task.fail";
+      const status = type === "turn.complete" ? "completed" : "failed";
+      // The fields describe the close below; the trace is sealed only after the
+      // report is queued (or accepted), so a rejected completion can continue the turn.
       const p = { ...payload, runtime_id: payload.runtime_id ?? runtimeId,
-        ...(terminal ? trace?.completion(partition) : {}) };
+        ...(terminal ? trace?.completion(partition, status) : {}) };
       const kind = (type.startsWith("task.") ? type.slice(5) : type) as MultiremiOutboxKind;
       if (wait) {
         const reply = await outbox().enqueueAndWait(partition, kind, p,
           typeof wait === "object" ? wait.timeoutMs : waitTimeoutMs, waitSignal?.());
-        if (terminal) trace?.close(partition, type === "turn.complete" ? "completed" : "failed");
+        if (terminal) trace?.close(partition, status, terminalError(payload));
         return reply;
       }
       outbox().enqueue(partition, kind, p);
-      if (terminal) trace?.close(partition, type === "turn.complete" ? "completed" : "failed");
+      if (terminal) trace?.close(partition, status, terminalError(payload));
       return { ok: true };
     },
     rpc: (type, payload) => protocol.rpc(type, payload, runtime() ?? undefined),

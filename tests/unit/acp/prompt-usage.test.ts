@@ -3,7 +3,7 @@
 // context occupancy is never used as actual token consumption.
 import { describe, expect, it } from "bun:test";
 import { accumulateUsage, createPromptUsageState, resolvePromptUsage } from "@acp/provider.js";
-import { responseToUsage } from "@multiremi/worker/acp-event-mapper.js";
+import { responseToUsage } from "@multiremi/worker/usage-units.js";
 
 function streamedOnly() {
   const usage = createPromptUsageState();

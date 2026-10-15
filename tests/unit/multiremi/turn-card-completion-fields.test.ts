@@ -3,7 +3,8 @@ import { createResponsibleTestIssue } from './helpers.js';
  * MUL-432 segment 2 item 5: the live `turn` card takes the round-card fields
  * of a daemon's `turn.complete` / `task.fail` frame through A's seam, wired in
  * the real server's terminal transaction. Only `trace.event_count`, `tool_call_count`,
- * `type_histogram` and `model` are written (ruling (z)); the frame's
+ * `type_histogram`, `model` and the PR 2 trace summary (`context_usage`,
+ * `worked_ms`, `process_item_count`) are written (ruling (z)); the frame's
  * `final_reply_md` is not, so the chat card keeps its assistant message and the
  * Issue card its `final_entry_id`. The card is created with the turn and stays the same row at reply
  * completion. A daemon that sends no fields writes nothing and
@@ -40,6 +41,9 @@ const FIELDS: DaemonTaskCompletionFields = {
   },
   final_reply_md: "FRAME REPLY, not for the card",
   model: { provider: "claude", model: "claude-sonnet-5" },
+  context_usage: { used: 48_213, size: 200_000 },
+  worked_ms: 73_400,
+  process_item_count: 4,
 };
 
 const CARD_FIELDS = {
@@ -47,6 +51,10 @@ const CARD_FIELDS = {
   tool_call_count: 2,
   type_histogram: FIELDS.trace.type_histogram,
   model: FIELDS.model,
+  // The Chat page reads these from the card, never from the trace (MUL-472).
+  context_usage: FIELDS.context_usage,
+  worked_ms: FIELDS.worked_ms,
+  process_item_count: FIELDS.process_item_count,
 };
 
 /**
@@ -144,7 +152,7 @@ function turnCompletionPayload(world: World, taskId: string, body: string, field
   };
 }
 
-/** The four frame fields are absent from a card no daemon filled. */
+/** The frame fields are absent from a card no daemon filled. */
 function expectNoFrameFields(entry: ConversationLogEntry) {
   for (const key of Object.keys(CARD_FIELDS)) expect(entry.metadata[key] ?? null).toBeNull();
 }
@@ -198,7 +206,7 @@ function watchSeam(world: World) {
 
 for (const backend of backends) {
   describe.skipIf(!backend.available)(`live turn card fields from the terminal frame (${backend.name})`, () => {
-    it("turn.complete with the fields writes the four onto the Issue card and keeps final_entry_id", async () => {
+    it("turn.complete with the fields writes the frame fields onto the Issue card and keeps final_entry_id", async () => {
       await withWorld(backend, async (world) => {
         const task = runIssueTask(world, "Card issue");
         const before = card(world, task.id);
@@ -236,7 +244,7 @@ for (const backend of backends) {
       });
     }, TIMEOUT);
 
-    it("turn.complete updates the existing chat turn card in place with all four fields", async () => {
+    it("turn.complete updates the existing chat turn card in place with every frame field", async () => {
       await withWorld(backend, async (world) => {
         const chat = world.store.createChatSession({ agentId: world.agentId, workspaceId: "local", creatorId: "local" });
         const sent = world.store.sendChatMessage(chat.id, { content: "hello" });
@@ -280,7 +288,7 @@ for (const backend of backends) {
       });
     }, TIMEOUT);
 
-    it("task.fail with the fields writes the four onto the card", async () => {
+    it("task.fail with the fields writes them onto the card", async () => {
       await withWorld(backend, async (world) => {
         const task = runIssueTask(world, "Card failure");
         const reply = await serverReport(world.store, world.runtimeId, "task.fail",
@@ -293,7 +301,7 @@ for (const backend of backends) {
       });
     }, TIMEOUT);
 
-    it("completes a one-shot task on its existing auto conversation card with all four fields", async () => {
+    it("completes a one-shot task on its existing auto conversation card with every frame field", async () => {
       await withWorld(backend, async (world) => {
         const task = world.store.createTask({ agentId: world.agentId, workspaceId: "local", prompt: "One-shot" });
         const before = card(world, task.id);
@@ -359,7 +367,43 @@ for (const backend of backends) {
       });
     }, TIMEOUT);
 
-    it.each(["turn.complete", "task.fail"])("a failed %s card write rolls back and replays with all four fields", async (type) => {
+    it("a malformed trace summary field lands as null next to the rest of the card", async () => {
+      await withWorld(backend, async (world) => {
+        const task = runIssueTask(world, "Malformed summary");
+        const error = spyOn(console, "error").mockImplementation(() => {});
+        try {
+          const reply = await serverReport(world.store, world.runtimeId, "turn.complete", {
+            ...turnCompletionPayload(world, task.id, "answer"), context_usage: { used: "lots", size: 1 }, worked_ms: -1,
+          });
+          expect(reply.ok).toBe(true);
+        } finally { error.mockRestore(); }
+        expect(card(world, task.id).metadata).toMatchObject({ ...CARD_FIELDS, context_usage: null, worked_ms: null, status: "completed" });
+        const attempt = world.store.listTurnAttempts(world.store.getTurnForAttempt(task.id)!.id).find((row) => row.id === task.id)!;
+        expect(attempt).toMatchObject({ context_usage: null, worked_ms: null, process_item_count: FIELDS.process_item_count });
+      });
+    }, TIMEOUT);
+
+    it("rewrites the card when only the trace summary changed and keeps its revision otherwise", async () => {
+      await withWorld(backend, async (world) => {
+        const task = runIssueTask(world, "Summary revision");
+        const write = (fields: DaemonTaskCompletionFields) =>
+          world.db.transaction(() => world.store.recordTurnCardCompletionFieldsWithinTransaction(task.id, fields))();
+        expect(write(FIELDS)).toBe(true);
+        const first = card(world, task.id);
+        expect(first.metadata).toMatchObject(CARD_FIELDS);
+        expect(write(FIELDS)).toBe(false);
+        expect(card(world, task.id).revision).toBe(first.revision);
+        for (const patch of [{ context_usage: { used: 1, size: 200_000 } }, { worked_ms: 1 }, { process_item_count: 0 }, { context_usage: null }]) {
+          expect(write({ ...FIELDS, ...patch }), JSON.stringify(patch)).toBe(true);
+          expect(card(world, task.id).metadata).toMatchObject(patch);
+          expect(write({ ...FIELDS, ...patch })).toBe(false);
+        }
+        const attempt = world.store.listTurnAttempts(world.store.getTurnForAttempt(task.id)!.id).find((row) => row.id === task.id)!;
+        expect(attempt).toMatchObject({ context_usage: null, worked_ms: FIELDS.worked_ms, process_item_count: FIELDS.process_item_count });
+      });
+    }, TIMEOUT);
+
+    it.each(["turn.complete", "task.fail"])("a failed %s card write rolls back and replays with every frame field", async (type) => {
       await withWorld(backend, async (world) => {
         const task = runIssueTask(world, "Card write failure");
         const payload = type === "turn.complete" ? turnCompletionPayload(world, task.id, "answer")

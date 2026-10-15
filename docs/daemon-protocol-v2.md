@@ -18,10 +18,13 @@ trace 事件的唯一定义在 [`packages/contracts/src/trace.ts`](../packages/c
 | 模块 | 内容 | 当前状态 |
 |---|---|---|
 | `packages/contracts/src/daemon-protocol.ts` | 帧类型、常量、错误码、close code、载荷类型 | A-0 落地 |
-| `packages/contracts/src/trace.ts` | `TraceEvent`、`KNOWN_TRACE_EVENT_TYPES` | A-0 落地 |
-| `packages/shared/src/trace-sanitize.ts` | 字段截断与消隐（唯一 sanitize 点） | A-0 落地，A-6 接入 |
-| `packages/shared/src/trace-derive.ts` | `deriveFinalReply` / 直方图 / 取模型 | A-0 落地，A-5、A-8 接入 |
+| `packages/contracts/src/trace.ts` | 轮与条目、`TraceEvent`、`KNOWN_TRACE_EVENT_TYPES`、`view=turn` / `view=events` 分页形状 | PR 2 |
+| `packages/contracts/src/trace-file.ts` | `multiremi.trace.v2` 文件框架（首行、快照分片、trailer）与校验 | PR 2 |
+| `packages/shared/src/trace-sanitize.ts` | 条目字段上限与单事件 1 MiB 上限（唯一 sanitize 点） | PR 2 |
+| `packages/shared/src/turn-trace.ts` | 唯一的 fold：条目 upsert、统计、快照与分页、最终回复规则、完成字段 | PR 2 |
+| `packages/server/src/worker/trace-translator.ts` | ACP 通知 → 轮与条目事件；`settle()` 选最终回复 | PR 2 |
 | `packages/server/src/worker/trace-store.ts`、`trace-file-store.ts` | `TraceStore` 接口、测试内存实现与生产文件实现 | daemon 已接线，文件恢复归属和有界分页 |
+| `packages/server/src/worker/trace-pages.ts` | `trace.read` 两种视图在 `TraceStore` 上的分页 | PR 2 |
 | `packages/server/src/api/trace/trace-sink.ts` | `TraceSink` 接口 + 内存实现 | A-0 接口，C 的 Hub 实现 |
 | `packages/server/src/api/trace/daemon-trace-reader.ts` | `DaemonTraceReader` 接口 + 内存假实现 | A-0 接口，A-6 真实现 |
 | `packages/server/src/api/daemon-protocol/` | 服务端握手、注册表、hb、ack 与 RPC 分发 | A-1 落地 |
@@ -30,9 +33,10 @@ trace 事件的唯一定义在 [`packages/contracts/src/trace.ts`](../packages/c
 
 ### MUL-498：评论交付、门铃唤醒与按需输入
 
-daemon 的任务 `output` 只保留最后一条顶层 assistant 消息。顶层工具调用、工具结果、
-compaction 与 steer 切分消息段，连续文本 chunk 合并；同段存在 final 时只取 final。
-子 agent 的正文及工具事件不参与结果，完整执行过程仍保留在 trace。
+daemon 的任务回复只取一条顶层 `agent_message` 条目，由 `settle()` 按
+[ADR 0019](adr/0019-turn-and-item-traces.md) 决策 4 选出：桥接标为 final 的最后一条；
+否则其后没有顶层工具条目或 `question` 条目的最后一条 `unknown` 消息；仍找不到时（轮以工具或问题结束）
+取最后一条 `unknown` 消息（D-final）。子 agent 的条目不参与结果，完整执行过程仍保留在 trace。
 
 委派终态信封保留三种英文首行和独立 `Status:` 行，后面只写结论评论 id、
 `remi comment list <issue> --thread <comment>` 与最多 500 字的摘要。自动回复沿用
@@ -655,67 +659,60 @@ Concierge 出站依赖下行推送与重试定时器，不要求为投递缩短�
 
 `packages/contracts/src/trace.ts` 是唯一定义：daemon 的 trace 文件行、`trace.append` 帧、
 C 的 Live Hub 元素都直接用它。谁要加字段，改这一个文件并同步这些使用方。
+模型与取舍见 [ADR 0019](adr/0019-turn-and-item-traces.md)。
 
-字段与 `TaskMessageInput` 一一对应、无损，唯一的命名差异是
-`toolCallId` → `tool_call_id`。
+一份 trace 是一次轮尝试：一个 `TraceTurn` 加若干 `TraceItem`。条目有 13 种
+（`user_message`、`agent_message`、`reasoning`、`command`、`file_change`、`web_search`、`tool`、
+`subagent`、`plan`、`permission`、`question`、`compaction`、`notice`），每个都是完整记录，
+子 agent 的条目用 `parent_id` 指向它的 `subagent` 条目。事件只有七种：
 
-**`type` 是开放的 `string`，不是闭合枚举**（裁决 1）。daemon 写文件原样保留字符串，
-不改写、不丢。`KNOWN_TRACE_EVENT_TYPES` 只供前端/飞书 switch 穷举与直方图分桶，**不是校验器**；
-`KnownTraceEventType` 这个闭合联合类型存在，但不允许用作任何字段的类型。
+| 事件 | 载荷 |
+|---|---|
+| `turn.started` / `turn.completed` | 完整的 `turn` |
+| `turn.updated` | `patch`：`model`、`requested_model`、`agent_name`、`context_usage` |
+| `item.started` / `item.updated` / `item.completed` | 完整的 `item`；`updated` 是进行中条目的整体替换 |
+| `item.delta` | `{item_id, field: "text" \| "output", delta}` |
 
-已知的 13 种取值，从生产者而不是从查看处读出：
+读者一律用 [`shared/turn-trace.ts`](../packages/shared/src/turn-trace.ts) 的 fold：条目按 `id`
+upsert、保留第一次出现的位置；应用任一事件都把 `item.seq` 设为事件 `seq`，`seq` 不大于它的事件
+被跳过；`item.delta` 只追加到 `in_progress` 的条目。因此重放快照 head 以下的事件、拼接不同 head 的
+分页都是幂等的。`stream.gap` 时重新取一页并替换本地状态。
 
-`execution`、`text`、`thinking`、`compaction`、`usage`、`plan`、`tool_use`、`tool_result`、
-`permission_request`、`permission_response`、`question_request`、`question_response`、`steer`。
+未知的 `type` 在存储、Hub 与 `view=events` 中原样透传，fold 跳过它但仍推进 head。
+`ts` 是 **ISO 8601 字符串**；帧封装上那个数字 `ts` 是另一层，不受影响。
 
-人工请求事件以 decision 消息为唯一标识：`permission_request` / `question_request` 的
-`input.message_id` 是 `turn.decision` 返回的 decision 消息 ID，另带 `options` 与 `tool_call`
-或 `questions`；对应 `*_response` 带同一 `message_id`，以及 `reply_message_id`、`option_id` / `answers`
-和 `responded_by`。事件不带 `request_id`。展示方用
-[`traceHumanRequestId`](../packages/shared/src/trace-semantics.ts) 读取该 ID，人工请求的读取、卡片与答复都按它访问
-`/api/daemon/messages/:id`。
+人工请求是 `permission` / `question` 条目：`message_id` 是 `turn.decision` 返回的 decision 消息 ID，
+答复后同一条目以 `item.completed` 带 `decision` / `answers`、`responded_by` 与 `reply_message_id`。
+展示方（如飞书）直接以条目的 `message_id` 为键：读取人工请求、发交互卡片与提交答复都按它访问
+`/api/daemon/messages/:id`，不再经 `traceHumanRequestId` 从片段事件里取 ID。
 
-**不含 `assistant` 与 `error`。**`assistant` 是已被 e1d88572 删掉的陈旧生产者（mapper 产出 `text`）；
-`error` 只出现在前端展示联合类型和浏览器 socket 的握手帧上，没有任何 daemon 写入者产出它。
-展示层要显示 error 或 assistant 行由它自己派生，不能指望线上出现。历史数据里若出现这两种或任何
-未知 type，一律**原样保留**，不归一成 `text`。
+计费不进 trace：`size == 0` 的 `usage_update` 是计费帧，翻译器丢弃，计费照旧经
+`_meta.remiUsageUnits` 进入用量账本；上下文占用是 `turn.updated {context_usage}`。
 
-`ts` 是 **ISO 8601 字符串**，不是数字。
-帧封装上那个数字 `ts` 是另一层，不受影响。
-
-`input` / `meta` 是 JSON **对象**，不是字符串（生产上有 112 行 meta 含 `\u0000`，在 Bun 里是合法 JSON；
-读取方在 Bun 里解析，SQL 里不用 `::jsonb`）。
-
-字段字节上限整套从服务端现行规则搬到 daemon 的 `TraceStore.append`（裁决 6b）：
+字段上限在 [共享 sanitizer](../packages/shared/src/trace-sanitize.ts)，翻译器先应用、
+`TraceStore.append` 再复核（同一函数，对翻译器的输出是 no-op）：
 
 | 字段 | 上限 |
 |---|---|
-| `tool` | 512 B |
-| `content` | 256 KiB |
-| `input` | 256 KiB |
-| `output` | 64 KiB |
-| `meta` | 64 KiB |
+| `agent_message` / `user_message` 文本 | 256 KiB |
+| `reasoning` 文本 | 64 KiB |
+| `command` / `tool` 等的 `output` | 64 KiB，保留前 16 KiB 与后 48 KiB |
+| `tool.input` | 16 KiB JSON（经 `sanitizeTraceJson`） |
+| `file_change` 的 `diff` | 每处 64 KiB，每条目 256 KiB |
+| `title` / `tool` | 512 B |
+| 单个事件（含外壳） | 1 MiB；超出时丢最大的字段并置 `*_truncated`，仍超出的事件不占 seq |
 
-`input` / `meta` 另有 JSON 深度 8、数组 256、**base64 消隐**（长度 > 4096 且形如 base64 的字符串）
-三项结构处理由 [共享 sanitizer](../packages/shared/src/trace-sanitize.ts)统一实现。UTF-8
-截断按字节切、去掉尾部 U+FFFD、追加 `… [truncated]`。
-[边界夹具](../tests/unit/daemon/trace-sanitize-equivalence.test.ts)直接断言 UTF-8、阈值两侧、
-深度、数组宽度、base64 消隐及截断后结构解析；不再把委托同一 sanitizer 的旧 DB writer
-当作独立参照。[共享 TraceStore 契约](../tests/unit/daemon/trace-store-contract.ts)分别用于
-内存与文件 Store，验证 append 上的 cap、seq、关闭与分页；文件恢复和磁盘安全另由
-[文件 Store 用例](../tests/unit/daemon/trace-file-store.test.ts)覆盖。
+文本触顶后不再追加 delta，`item.completed` 带 `truncated: true`。
 
-`TaskMessageBatcher` 的 64 KiB 是 text/thinking 的**合并上限**，不是截断上限（裁决 6b）；
-截断上限只有 `TraceStore.append` 一处。
-
-生产数据佐证：库里 `input` 正好卡在 256 KiB 的有 187 行，`output` 卡在 64 KiB 的有 2,492 行。
+v1 文件里的片段事件（`text`、`tool_use` 等）不再有类型定义，只在 `view=events` 原样读出。
 
 ### 5.2 seq 连续分配、只追加
 
 `TraceStore.append` 在**写盘那一刻**为每个 task 从 1 起**连续**分配 seq（裁决 2），
 `seq` 与 `ts` 都由它分配（按本地时钟盖章），已写入的 seq 永不重写。
 
-`TaskMessageBatcher` 只合并相邻且同阶段、同父工具的文本，写出时由 store 重新分配 seq；输入中的旧 seq 不参与新序列。
+翻译器的合并器把同一 `(item_id, field)` 的 delta 缓冲至多 200 ms 或 16 KiB，单个 delta 至多 64 KiB；
+任何非 delta 事件或别的条目的 delta 先冲刷缓冲，所以单一写入者保序。producer 不带 seq，由 store 分配。
 seq 连续是 Hub「丢弃 `≤ head` 的事件」这条规则成立的前提，也是「`first_seq..head` 连续无洞」
 这条断言能成立的原因（该断言只适用于新写的实时 trace，见下）。
 
@@ -745,9 +742,11 @@ seq 连续是 Hub「丢弃 `≤ head` 的事件」这条规则成立的前提，
 | `TraceSink`（`api/trace/trace-sink.ts`） | A 定义 | A-0 内存版；C 的 Live Hub 实现真实版 |
 | `DaemonTraceReader`（`api/trace/daemon-trace-reader.ts`） | A 定义 | A-6 |
 
-`TraceStore` 的签名（A2）：`append(taskId, events: Omit<TraceEvent, "seq" | "ts">[]) → { head, events }`，
-seq/ts 与截断都在这里做；`read(taskId, afterSeq, limit, maxBytes) → { events, head, eof }`；
-`head(taskId) → { head, closed } | null`；`close(taskId, { status, ended_at })` 写末行，幂等，首次生效。
+`TraceStore` 的签名：`append(taskId, events: TraceEventInput[]) → { head, events }`，
+seq/ts 与截断都在这里做；`read(taskId, afterSeq, limit, maxBytes) → { events, head, eof }`（原始行，v1 也是）；
+`head(taskId) → { head, closed } | null`；`close(taskId, { status, ended_at, snapshot })` 写快照分片与
+trailer，幂等，首次生效；`snapshotPart(taskId, part)` 读已关闭 trace 的第 `part` 个快照分片；
+`format(taskId) → "v1" | "v2" | null`。v1 trace 只读，追加或关闭都抛错。
 
 `TraceSink.subscribe(taskId, fromSeq, onEvents)` 返回 `{ first_seq, head, gap, closed, unsubscribe }`。
 `gap` 为真表示 `fromSeq` 早于 sink 还能提供的最早序号，调用方须用 `DaemonTraceReader` 补齐；
@@ -764,17 +763,24 @@ B 的 `unreachable` 对应其余三种错误。
 
 ### 5.4 daemon 写入与存储
 
-`TaskMessageBatcher` 的出口调用 `TraceFileStore.append`，随后 `TraceStreamer` 按 head 读游标
+翻译器的事件经 `DaemonTraceTransport.append` 写入 `TraceFileStore`，同批存下的事件再应用到每个
+运行中尝试的内存 fold；随后 `TraceStreamer` 按 head 读游标
 发 `trace.append`。daemon 上只有一份数据：trace 文件既是被上传的内容，也是重放缓冲。
 `trace.append` 的外层信封用 `id`/`re`，不带 `seq`，应答仍捎带 `hub_head`；带 `seq`、
 不带 `id` 的误用按 RPC 拒绝为 `protocol_violation`，不追加事件。丢失应答后按服务端 head
 重发，服务端按 task 内事件 seq 幂等，不使用 outbox 或滑动窗口。
 
 **trace 不进 outbox。**规范化 JSONL 文件是持久来源，可靠业务报告才进入 outbox；
-旧 outbox 残留的 `messages` 行仅在恢复时转换成本地 trace。
+旧 outbox 残留的 `messages` 行（片段事件）打警告后丢弃，不再写入 trace。
 
 文件位于 `<workspacesRoot>/traces/<主体>/<task_id>.jsonl`；主体是 Chat 或 Issue 的 id（同时带两者的执行归 Chat），两者都没有时用 task id 本身。
-首行保存 task、Session、Agent、provider、开始时间与 `runtime_id`，末行为不占 seq 的 trailer。
+首行保存格式 `multiremi.trace.v2`、task、Session、Agent、provider、开始时间与 `runtime_id`。
+`DaemonTraceTransport.close(taskId, status, error?)` 依次写：所有未结束条目的 `item.completed`
+（工具 `stopped`；文本 `completed`，取消时 `stopped`）、`turn.completed`（状态、错误、完成时间、
+最终条目、统计）、快照分片行 `{"snapshot":{part, parts, head, turn, items}}`（每行至多 768 KiB，不带 seq）、
+trailer `{"end":{status, head, event_count, ended_at, snapshot_parts}}`。快照分片与首行、trailer 一样
+不进 seq 轴、Hub 和冷启动回放；`close()` 中途崩溃留下的分片与半个 trailer 在恢复时截回最后一个事件。
+取消的轮也会 close。v1（`multiremi.trace.v1`）文件只读：不续传、不重新封口。
 多个 Runtime 共用进程 transport 与一份文件 store，任务上下文在执行前注册；恢复后只允许原 Runtime 读取。
 旧文件缺少 `runtime_id` 时不猜测 ACL，文件仍留在磁盘，但新进程不能把它自动注册为可读热 trace。
 
@@ -782,8 +788,8 @@ B 的 `unreachable` 对应其余三种错误。
 活跃追加不逐 token 刷盘。本契约保证本版本已写入记录的进程重启恢复，不承诺断电时未刷盘尾部保留。
 启动只登记 trace 文件路径，首次读取或追加时才建索引（64 KiB 缓冲扫描，仅保存每条记录的 seq/文件偏移，不缓存事件正文）；常驻索引按 LRU 限量，默认保留 256 个已关闭 trace，未关闭的始终常驻；
 读页二分定位并按记录数和序列化字节停止，默认最多 200 条，硬上限 500 条及 2 MiB，
-单条超预算事件仍返回。文件恢复的单行硬上限为 4 MiB；新 append 的事件 JSON 上限为 4 MiB−8 KiB，
-为 RPC/push 信封预留空间，以容纳规范化字符串的 JSON 转义而不产生成功写盘却不能传输的事件。
+单条超预算事件仍返回。新事件体由 sanitizer 限制在 1 MiB；文件恢复的单行硬上限仍为 4 MiB，
+store 拒绝超过 4 MiB−8 KiB 的事件行，为 RPC/push 信封预留空间。
 
 `trace.append` 每帧 ≤ 256 条或 ≤ 256 KiB，**但至少 1 条**；字节预算按实际序列化载荷计算。
 字段值预算与 JSON 帧预算是两层约束，控制字符转义会扩大实际传输大小。
@@ -791,54 +797,53 @@ B 的 `unreachable` 对应其余三种错误。
 允许使用现有 socket 的 4 MiB 硬上限。多事件页不享受该例外，单事件超出 4 MiB 也明确拒绝。
 该例外同时覆盖反向 `trace.read` 与 `trace.fetch` 的应答，不丢字段或再次截断；
 下行单条超预算 trace.push 可独占窗口，ack 后才继续发送，普通窗口仍为 64 帧或 1 MiB。
-`TaskMessageBatcher` 使用 200 ms / 16 KiB 触发与 64 KiB 合并上限
-（那是合并上限，不是截断上限）。
+翻译器的 delta 合并器使用 200 ms / 16 KiB 触发与 64 KiB 单个 delta 上限（§5.2）。
 
 ### 5.4b 完成帧的轮次卡字段
 
-`turn.complete` 与 `task.fail` 在现有载荷上加三项（裁决 5）：
+`turn.complete` 与 `task.fail` 在现有载荷上加这些字段（`DaemonTaskCompletionFields`），全部来自 fold：
 
 ```ts
 trace: {
   head: number; event_count: number; closed: true;
-  tool_call_count: number;                                        // 唯一工具调用 id 数，加无 id 的 tool_use 数
-  type_histogram: Array<{ type: string; tool: string | null; count: number }>;
+  tool_call_count: number;     // 任意深度的 command|file_change|web_search|tool|subagent 条目
+  type_histogram: Array<{ type: TraceItemType; tool: string | null; count: number }>;
 };
-final_reply_md: string | null;
-model: { provider: string; model: string } | null;                // 最后一条 execution 事件的 meta
+final_reply_md: string | null;                      // 最终条目的文本
+model: { provider: string; model: string } | null;  // turn 的 provider 与最后上报的 model
+context_usage: { used: number; size: number } | null;
+worked_ms: number | null;                           // final_started_at − started_at
+process_item_count: number | null;                  // 在 Chat 折叠中产生一行的顶层条目数
 ```
 
-- `type_histogram` 按 `(type, tool)` 分桶，`tool` 只在 `tool_use` / `tool_result` 上非空（A11）；
-  organizer 今天就是这么算的（`api/helpers/organizer.ts:52-58`），只按 type 会让它丢掉工具维度。
-- daemon 的 `final_reply_md` 与 `deriveFinalReply(events)` 使用相同规则，见 §5.4c。
-  统一完成入口以 `reply.body_md` 为最终正文，trace 摘要不覆盖消息；卡片仅保留回复引用。
-  摘要字段缺失或畸形时，终态照常生效并打日志，不去读 trace 补算。
-- `turn.complete` 的回复在 `reply: {body_md, message_kind}` 中，载荷另带 `turn_id`、`attempt_id`、`input_to_seq`；不再上报旧 `output`。卡片的最终回复以 `reply.body_md` 为准。
+- `type_histogram` 按 `(条目类型, tool)` 分桶，`tool` 只在带工具名的条目上非空。
+- 报告先于 `close()` 发送（steer 待处理时 `turn.complete` 可能被拒，轮还要继续写），
+  所以完成字段描述的是即将写下的 close：其中的未结束条目与 `turn.completed` 已计入 `head` / `event_count`。
+- `process_item_count` 统计除最终回复、`user_message`、`permission`、`question`、`reasoning`
+  和没有可见文字的 `agent_message` 外的顶层条目，正是在 Chat 折叠中产生一行的条目（ADR 0019 Q1、D-count）。
+- 读者校验 `turn.stats` 时丢掉未知条目类型的直方图桶，不拒绝整轮；快照丢掉未知类型的条目（向前兼容）。
+  格式只以新的可选字段或新的条目类型演进，不给已有条目的 `status` / `type` 增加取值（ADR 0019 决策 1）。
+- 统一完成入口以 `reply.body_md` 为最终正文（与 `final_reply_md` 相同），trace 摘要不覆盖消息；卡片仅保留回复引用。
+- 服务端校验：`trace`、`final_reply_md`、`model` 缺失或畸形时整张卡留空；`context_usage`、`worked_ms`、
+  `process_item_count` 各自独立校验，畸形或缺失只把该项写成 null。两种情况都打日志、终态照常生效，
+  不去读 trace 补算。
+- 写入：`multiremi_turn_attempts` 的 `event_count`、`tool_call_count`、`type_histogram`、`model`、
+  `context_usage`（JSON 文本）、`worked_ms`、`process_item_count`（迁移 `20261015_turn_attempt_trace_summary`），
+  投影到轮卡元数据与尝试列表。Chat 页面读卡片上的这三项显示已结束轮的折叠与上下文环，不读 trace（MUL-472）。
+- `turn.complete` 的回复在 `reply: {body_md, message_kind}` 中，载荷另带 `turn_id`、`attempt_id`、`input_to_seq`；不再上报旧 `output`。
 - `head` 与 `event_count` 分开：新写的 trace 两者相等，**历史 trace 可能是稀疏的**，
   `head ≠ event_count`（A11）。
 
-历史 HTTP 入口 `POST /api/daemon/tasks/:taskId/complete|fail` 已退役；以下描述其 trace 迁移口径。
 B5 只读取其中的 `event_count`：非负安全整数才有效，非法值按未提供处理并记一条 warn。
 只有明确的 `event_count === 0` 才把热指针写成 `none`；缺失或正数保留 daemon 指针，
 不通过旧消息表推断空 trace。旧的空任务因此可能返回 `unreachable` 或 `not_found`。
 
-### 5.4c `deriveFinalReply` 与直方图
+### 5.4c 摘要随追加增量维护
 
-`packages/shared/src/trace-derive.ts` 提供共享派生函数及增量 accumulator，daemon 与服务端共用，
-新卡片与历史卡片才对得上：
-
-- `deriveFinalReply(events)`：规则位于 `shared/trace-semantics.ts`。
-  顶层（无 `meta.parent_tool_call_id`）`text` 的 `final` / `final_answer` 阶段追加到 `final`；
-  `phase === "commentary"` 的只结束候选段、自身不参与回答；其他顶层 `text` 追加到 `candidate`；
-  `thinking / tool_use / permission_request / question_request / plan / compaction` 这六种
-  事件结束候选段；嵌套事件既不贡献也不结束。`final` 非空白则用它，否则用 `candidate`，结果 trim。
-- `traceTypeHistogram(events)` / `countToolCalls(events)`：原始事件直方图与工具调用数；同一调用 id 的 refinements 只计一次，只有 `tool_result` 的 id 也计一次，无 id 的历史 `tool_use` 各计一次。
-- `deriveTraceModel(events)`：取最后一条同时带 provider 与 model 的 `execution` 事件。
-
-`tool_result`、`usage`、`execution`、`steer`、`*_response` 不结束候选段，嵌套事件也不结束顶层候选段。
-正常执行在 append 时更新小摘要，完成与 outbox 重试不重新全量扫描文件；
-恢复后的任务首次需要摘要时按有界页重建并缓存。活跃摘要仅保留答案文本、工具 id 集合与直方图，不保留完整事件；
-close 后释放工具 id 集合，仅缓存最近 128 个完成结果。GC 后剔除明确已删除文件的 offset 索引、归属与回放游标。
+daemon 为每个运行中的尝试保留一个 fold（`TurnTraceFold`），`DaemonTraceTransport.append` 把 store
+存下的事件应用上去；`completion()` 与 `trace.read view=turn` 都直接读它，不重新扫描文件。
+恢复后的任务首次需要时按有界页重建 fold；close 后释放 fold，只缓存最近 128 个完成结果和
+已关闭 trace 的快照分片大小。GC 后剔除明确已删除文件的 offset 索引、归属与回放游标。
 
 ### 5.5 续传与冷启动
 
@@ -862,7 +867,7 @@ daemon 启动从本版本 JSONL 恢复 head、closed 与 Runtime 归属，只自
 - `trace.subscribe{task_id, from_seq}`：rpc，返回 `{first_seq, head, closed, gap}`；
 - `trace.unsubscribe`；
 - 下行 `trace.push{task_id, events, closed}`：每个订阅内保序，`closed` 表示该 task 的 trace 已收尾；
-- `trace.fetch{task_id, after_seq, limit}`：rpc，服务端调 B 的 `readTrace` 补缺口。
+- `trace.fetch{task_id, after_seq, limit}`：rpc，服务端以 `view=events` 读 daemon 补缺口，应答是原始行。
 
 B 方案里的 `GET /api/daemon/tasks/:id/trace` 改用 `trace.fetch`，不新增这条 HTTP 路由。
 实现在 A-6；connector 从轮询切到订阅归 C。
@@ -878,35 +883,47 @@ B 方案里的 `GET /api/daemon/tasks/:id/trace` 改用 `trace.fetch`，不新�
 
 ## 6. 反向 RPC `trace.read`
 
-daemon 上唯一的只读方法，供 B、C 读热 trace。
+daemon 上唯一的只读方法，供 B、C 读热 trace。请求按 `view` 分两种（PR 2）：
 
 ```ts
-DaemonTraceReader.read({
-  taskId, runtimeId, afterSeq = 0, limit = 200, maxBytes = 1 MiB, timeoutMs = 10_000,
-}) → { ok: true, events, next_after_seq, head, eof, closed }
-   | { ok: false, code, runtime_id?, last_seen_at? }
+DaemonTraceReader.read({ taskId, runtimeId, view: "turn", itemCursor = 0, limit = 200, maxBytes = 1 MiB, timeoutMs = 10_000 })
+  → { ok: true, view: "turn", format: "v2" | "legacy", turn, items, next_item_cursor, head, closed }
+DaemonTraceReader.read({ taskId, runtimeId, view: "events", afterSeq = 0, limit = 200, maxBytes = 1 MiB, timeoutMs = 10_000 })
+  → { ok: true, view: "events", format: "v2" | "legacy", events, next_after_seq, head, eof, closed }
+// 两者失败时都是 { ok: false, code, runtime_id?, last_seen_at? }
 ```
+
+线上载荷是 `{task_id, view: "turn", item_cursor, limit, max_bytes}` 或
+`{task_id, view: "events", after_seq, limit, max_bytes}`。没有已知 `view` 的请求按 `protocol_violation`
+拒绝：只有过了版本门槛（§7.4b）的服务端才会连上新 daemon，它们总是带 `view`。
+服务端的 socket reader 校验应答的形状与请求的视图一致，不一致按 `daemon_timeout` 处理。
+
+| `view` | 运行中 | 已关闭 | v1 文件 |
+|---|---|---|---|
+| `turn` | daemon 内存 fold 的一页；`turn.stats` 是整个 fold 的实时统计 | 快照分片按条目序号分页 | `format: "legacy"`，`turn: null`，`items: []` |
+| `events` | 原始事件行 | 原始事件行 | 原始片段行 |
 
 `runtimeId` 是必填（裁决 4）：B 的指针里存的就是它，服务端用自己的注册表做
 `runtimeId → daemonId` 路由，比先查 task 表再拿 runtime 少一次查询。
 
-A-0 除接口外还提供内存假实现 `InMemoryDaemonTraceReader`，按 `runtimeId → TraceStore` 路由：
+A-0 除接口外还提供内存假实现 `InMemoryDaemonTraceReader`，按 `runtimeId → TraceStore` 路由，
+两种视图与 daemon 共用 [`trace-pages.ts`](../packages/server/src/worker/trace-pages.ts)：
 runtime 不在（无可用连接）返回 `daemon_unreachable`；`store.head(taskId) === null` 返回 `trace_not_hot`。
-`daemon_busy` 与 `daemon_timeout` 属于 socket 层，由 A-6 的真实实现补上，假实现不假装有。
+`daemon_busy` 与 `daemon_timeout` 属于 socket 层，由真实实现补上，假实现不假装有。
 
-**端点归属**（裁决 4）：页面与分享的 `GET /api/tasks/:id/trace`、
+**端点归属**（裁决 4）：`GET /api/turns/:id/trace`、`GET /api/tasks/:id/trace`、
 `GET /api/shares/:token/tasks/:task_id/trace` 归 B5（MUL-429），鉴权用 `canUserViewTaskMessages`；
-concierge 走 WS rpc `trace.fetch`，**不保留** daemon 侧的 HTTP 读路由（今天它在
-`GET /api/daemon/tasks/:id/messages?since_seq` 上每 400 ms 轮询，由 A-6 删除）。
+三者接受 `view`（默认 `turn`）、`item_cursor`、`after_seq`、`limit`、`max_bytes`，另一视图的游标返回 400；
+应答是 `{state, source, reason?, retryable?, runtime_id?, runtime_name?, last_seen_at?}` 加对应视图的页，
+`state` 不是 `ok` 时页为空。concierge 走 WS rpc `trace.fetch`，**不保留** daemon 侧的 HTTP 读路由。
 
-- **cursor**：`after_seq` 是整数，与 B 文件行的 `seq` 同一含义；第一条返回的事件满足
-  `seq > after_seq`。B 的文件需能按 seq 定位（索引或顺序扫描均可，B 定）。
-- **上限**：`limit ≤ 500`，`max_bytes ≤ 1 MiB`，超出截断并返回 `eof: false`。单条事件大于
-  `max_bytes` 时仍单独返回，否则读者会死锁。
+- **cursor**：`view=turn` 的 `item_cursor` 是条目序号，`next_item_cursor` 为 null 表示最后一页；
+  `view=events` 的 `after_seq` 与文件行的 `seq` 同一含义，第一条返回的事件满足 `seq > after_seq`。
+- **上限**：`limit ≤ 500`，`max_bytes ≤ 1 MiB`，两种视图都适用。单个条目或事件大于 `max_bytes`
+  时仍单独返回，否则读者会死锁。服务端按同一预算再裁一次，不信任 daemon 已经裁好。
 - **并发**：每连接最多 4 个在途 `trace.read`，排队上限 32，超出即 `daemon_busy`。
 - **超时**：默认 10 s，超时返回 `daemon_timeout`。
-- **鉴权**：daemon 侧校验该 task 属于本进程的 runtime，否则 `trace_not_hot`。页面侧 HTTP 接口与
-  鉴权由 C 定义，沿用 `canUserViewTaskMessages`。
+- **鉴权**：daemon 侧校验该 task 属于本进程的 runtime，否则 `trace_not_hot`。
 - **离线**：无存活连接时返回 `daemon_unreachable`，附 `runtime_id` 与 `last_seen_at`；页面按 §5
   降级显示为「不可达」，而不是空 trace。
 - **`trace_not_hot` 的判定**：daemon 端 `TraceStore.head(taskId) === null`（裁决 4）。已 `close`
@@ -916,8 +933,7 @@ concierge 走 WS rpc `trace.fetch`，**不保留** daemon 侧的 HTTP 读路由�
 经常处于 `eof` 但永远不 `closed`。
 
 命名统一：**表示完整性的那个布尔值一律叫 `closed`**，不再有 `ended` 布尔、`isEnded()` 或
-`trace.end` 事件。唯一的 `ended` 出现在 `close(taskId, { status, ended_at })` 的
-`ended_at` 时间戳字段名里——那是一个时刻，不是状态标志。
+`trace.end` 事件。唯一的 `ended` 出现在 trailer 的 `ended_at` 时间戳字段名里——那是一个时刻，不是状态标志。
 
 ## 7. 版本协商与升级通道
 
@@ -1003,11 +1019,18 @@ daemon protocol rejected by server (min X, self Y); waiting for pending_update, 
 
 ### 7.4b `DAEMON_MIN_CLI_VERSION` 与载荷发布版本
 
-当前 `DAEMON_MIN_CLI_VERSION` 为首个包含统一模型的正式版本 `0.2.89`。
-package 版本与依赖快照同步为 `0.2.89`，PPE 新 daemon 不需要伪造 label 即可接入；
-已发布的 `0.2.88` 使用旧协议，与 `0.2.85`、`0.2.86`、`0.2.87` 一并被拒绝。这次修改不打 tag、不发布。
-发布前，发布负责人核对 `v0.2.89` tag、package 版本、依赖快照、Release 资产和目标 main SHA；
-操作见[统一模型切换清单](deploy/unified-model-cutover.md)。门槛不表示 fleet 已升级。
+当前 `DAEMON_MIN_CLI_VERSION` 为首个写「轮 + 条目」trace 的正式版本 `0.2.90`
+（PR 2，[ADR 0019](adr/0019-turn-and-item-traces.md) 决策 9）。已发布的 `0.2.89` 写片段 trace、
+回答不带 `view` 的 `trace.read`，与更早版本一并被拒绝；`DAEMON_PROTOCOL_VERSION` 仍为 2。
+`package.json` 与依赖快照由 `bun run release:prepare --version 0.2.90` 与门槛同批改到 `0.2.90`（`release:check` 要求二者一致）。
+发布前，发布负责人核对 `v0.2.90` tag、package 版本、依赖快照、Release 资产和目标 main SHA。
+v0.2.90 同时是 [ADR 0018](adr/0018-local-records-and-recyclable-workspaces.md) 的首个发版（PR #417 不在 v0.2.89 里）；
+API 上线后门槛立即为每台 daemon 自动排队升级，所以 ADR 0018 的前置步骤要在部署 API 之前做完。
+旧 Web 读 trace 带 `after_seq` 不带 `view`，会被 `parseTraceWindow` 以 400 拒绝，所以 Web 与 API 同批上线。
+部署顺序（细节见 ADR 0019 决策 9）：updater drain 暂停派活 → 运行中的轮与 outbox 排空（含 R10 飞书投递核对）→
+ADR 0018 前置步骤（核对 66-8 工作区根下不属于新布局的目录；删除关闭 GC 的 systemd 覆盖文件并设
+`MULTIREMI_GC_DRY_RUN=true`）→ API（含迁移）与 Web 同批 → daemon 自动升级，先在一台上核对预演再去掉
+`MULTIREMI_GC_DRY_RUN` → 解除 drain。门槛不表示 fleet 已升级。
 
 ### 7.5 升级失败的提示
 

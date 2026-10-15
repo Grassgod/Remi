@@ -4,6 +4,7 @@ import type { MultiremiChatMessage, MultiremiSessionEvent } from "@multiremi/con
 const TURN_STATE_FIELDS = [
   "status", "final_reply_md", "final_entry_id", "summary", "tool_call_count", "event_count",
   "type_histogram", "usage", "model", "elapsed_ms", "failure_reason",
+  "context_usage", "worked_ms", "process_item_count",
 ];
 
 /** Reconstruct immutable event bodies from the mutable display rows and their markers. */

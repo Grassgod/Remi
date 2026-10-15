@@ -154,7 +154,7 @@ pendingTurnBackendTests('MUL-505 canonical runtime',fixture=>{
     expect(store.claimTask(runtime.id)?.id).toBe(first.id);store.startTask(first.id);
     store.recoverOrphans(runtime.id);
     const current=db.query('SELECT current_attempt_id FROM multiremi_turns WHERE id=?').get(first.id).current_attempt_id;
-    const fields={trace:{event_count:7,head:7,closed:true as const,tool_call_count:2,type_histogram:[{type:'tool_use',tool:'Read',count:2}]},model:{provider:'codex',model:'new-model'},final_reply_md:null};
+    const fields={trace:{event_count:7,head:7,closed:true as const,tool_call_count:2,type_histogram:[{type:'tool_use',tool:'Read',count:2}]},model:{provider:'codex',model:'new-model'},final_reply_md:null,context_usage:null,worked_ms:null,process_item_count:null};
     db.transaction(()=>store.recordTurnCardCompletionFieldsWithinTransaction(current,fields))();
     db.transaction(()=>store.recordTurnCardCompletionFieldsWithinTransaction(first.id,{...fields,trace:{...fields.trace,event_count:3},model:{provider:'claude',model:'old-model'}}))();
     expect(store.findTurnEntry(first.id)?.metadata.event_count).toBe(7);

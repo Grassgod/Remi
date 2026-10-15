@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   buildSummaryPrompt,
-  digestTaskMessage,
+  digestTraceItem,
   parseSummaryText,
   pickTaskStartupLine,
   PROGRESS_SUMMARY_DEFAULTS,
@@ -19,11 +19,30 @@ import {
   type ProgressSummaryResult,
   type SummaryCliSpawn,
 } from "@multiremi/worker/progress-summarizer.js";
-import type { TaskMessageInput } from "@multiremi/contracts/types.js";
+import type { TraceEvent, TraceItem } from "@multiremi/contracts/trace.js";
 import { resolveWorkspaceProgressSummaryPolicy } from "@daemon/agent-runtime/workspace/progress-summary-policy.js";
 
-function textMessage(content = "working on it"): TaskMessageInput {
-  return { type: "text", content };
+const AT = "2026-10-15T00:00:00.000Z";
+let seq = 0;
+const base = (id: string, status: TraceItem["status"] = "completed") =>
+  ({ id, parent_id: null, status, started_at: AT, completed_at: status === "in_progress" ? null : AT });
+
+/** A completed trace item event, as the store hands it to `onEvents`. */
+function completed(item: TraceItem): TraceEvent {
+  return { seq: ++seq, ts: AT, type: "item.completed", item };
+}
+
+function textMessage(content = "working on it"): TraceEvent {
+  return completed({ ...base(`msg:${seq}`), type: "agent_message", text: content, phase: "unknown" });
+}
+
+function toolItem(tool: string, input: Record<string, unknown>, status: TraceItem["status"] = "completed", output: string | null = null): TraceItem {
+  return { ...base(`call:${seq}`, status), type: "tool", tool, server: null, kind: null, title: null, input, output, duration_ms: 1 };
+}
+
+/** A non-completion event: progress within an item, which counts for nothing. */
+function delta(): TraceEvent {
+  return { seq: ++seq, ts: AT, type: "item.delta", item_id: "msg:x", field: "text", delta: "…" };
 }
 
 const CREDENTIALS = { baseUrl: "https://relay.example", authToken: "tok" };
@@ -337,20 +356,29 @@ describe("resolveSummarizerCredentials", () => {
   });
 });
 
-describe("digestTaskMessage", () => {
+describe("digestTraceItem", () => {
   it("compresses tool calls to name plus key input", () => {
-    const line = digestTaskMessage({ type: "tool_use", tool: "Bash", input: { command: "bun test" } });
-    expect(line).toBe('tool Bash {"command":"bun test"}');
+    expect(digestTraceItem(toolItem("Bash", { command: "bun test" }))).toBe('tool Bash {"command":"bun test"}');
+    const command: TraceItem = { ...base("c1"), type: "command", tool: "Bash", source: "shell", command: "bun test", cwd: null,
+      actions: [{ type: "unknown", command: "bun test" }], output: "ok", exit_code: 0, duration_ms: 1 };
+    expect(digestTraceItem(command)).toBe("tool Bash bun test");
+    const read: TraceItem = { ...command, command: null, source: "tool", tool: "Read", actions: [{ type: "read", command: null, name: "a.ts", path: "/r/a.ts" }] };
+    expect(digestTraceItem(read)).toBe("tool Read /r/a.ts");
   });
 
-  it("keeps failed tool results but drops successful ones and usage", () => {
-    expect(digestTaskMessage({ type: "tool_result", tool: "Bash", status: "failed", output: "boom" })).toContain("failed");
-    expect(digestTaskMessage({ type: "tool_result", tool: "Bash", status: "completed", output: "ok" })).toBeNull();
-    expect(digestTaskMessage({ type: "usage", meta: {} })).toBeNull();
+  it("keeps failed tools with their output, and skips user, permission and usage-like items", () => {
+    expect(digestTraceItem(toolItem("Bash", {}, "failed", "boom"))).toBe("tool Bash failed boom");
+    expect(digestTraceItem({ ...base("in"), type: "user_message", origin: "steer", text: "x", message_ids: [], attachments: [], steer: null })).toBeNull();
+    expect(digestTraceItem({ ...base("perm:1"), type: "permission", tool_item_id: null, title: "x", message_id: null, options: [],
+      decision: null, outcome: null, responded_by: null, reply_message_id: null })).toBeNull();
   });
 
-  it("truncates long assistant text", () => {
-    const line = digestTaskMessage(textMessage("x".repeat(500)));
+  it("summarizes a plan and truncates long assistant text", () => {
+    expect(digestTraceItem({ ...base("plan"), type: "plan", entries: [
+      { content: "a", status: "completed", priority: null }, { content: "b", status: "pending", priority: null },
+    ] })).toBe("plan: 1/2 completed");
+    const event = textMessage("x".repeat(500));
+    const line = digestTraceItem((event as Extract<TraceEvent, { type: "item.completed" }>).item);
     expect(line!.length).toBeLessThan(320);
     expect(line!.endsWith("…")).toBe(true);
   });
@@ -366,15 +394,33 @@ describe("TaskProgressTracker", () => {
     expect(tracker.shouldTrigger(1000)).toBe(true);
   });
 
-  it("counts non-digestible messages toward N", () => {
+  it("counts non-digestible completed items toward N, and other events not at all", () => {
     const tracker = new TaskProgressTracker(2, 0, 12_000, 0);
-    tracker.record([{ type: "usage", meta: {} }, { type: "usage", meta: {} }]);
+    const steer = (id: string) => completed({ ...base(id), type: "user_message", origin: "steer", text: "x", message_ids: [], attachments: [], steer: null });
+    tracker.record([delta(), delta(), steer("steer:1")]);
+    expect(tracker.shouldTrigger(1)).toBe(false);
+    tracker.record([steer("steer:2")]);
     expect(tracker.shouldTrigger(1)).toBe(true);
+  });
+
+  it("counts and digests an item once when it completes again (phase change, late hook, decline)", () => {
+    const tracker = new TaskProgressTracker(2, 0, 12_000, 0);
+    const item = toolItem("Read", { file: "a.ts" });
+    tracker.record([completed(item)]);
+    tracker.record([completed({ ...item, status: "declined" }), completed(item)]);
+    expect(tracker.pendingMessageCount()).toBe(1);
+    expect(tracker.shouldTrigger(1)).toBe(false);
+    const { digest, messageCount } = tracker.drain(1);
+    expect(messageCount).toBe(1);
+    expect(digest.split("\n").filter((line) => line.includes("tool Read"))).toHaveLength(1);
+    // Still the same item after a drain.
+    tracker.record([completed(item)]);
+    expect(tracker.pendingMessageCount()).toBe(0);
   });
 
   it("drain resets the window and reports the digest", () => {
     const tracker = new TaskProgressTracker(2, 1000, 12_000, 0);
-    tracker.record([textMessage("step one"), { type: "tool_use", tool: "Read", input: { file: "a.ts" } }]);
+    tracker.record([textMessage("step one"), completed(toolItem("Read", { file: "a.ts" }))]);
     const { digest, messageCount } = tracker.drain(2000);
     expect(messageCount).toBe(2);
     expect(digest).toContain("assistant: step one");
@@ -460,13 +506,13 @@ describe("TaskProgressSummarizer", () => {
         spawnImpl: successfulCliSpawn("must not start", () => { cliRequests++; }),
         report: async () => { reports++; }, onClosed: () => { closed++; },
       });
-      summarizer.onMessages([textMessage()]);
+      summarizer.onEvents([textMessage()]);
       expect(requests).toBe(1);
       const finalization = summarizer.finalize("failed");
       const closing = summarizer.closeWithoutSummary();
       expect(closing).toBe(finalization);
       expect(closed).toBe(0);
-      summarizer.onMessages([textMessage("must not trigger another request")]);
+      summarizer.onEvents([textMessage("must not trigger another request")]);
       release();
       await closing;
       await summarizer.finalize("failed");
@@ -489,7 +535,7 @@ describe("TaskProgressSummarizer", () => {
       spawnImpl: successfulCliSpawn("must not start", () => { requests++; }),
       report: async () => {}, onUsage: () => { usageEvents++; }, onClosed: () => { closed++; },
     });
-    summarizer.onMessages([textMessage()]);
+    summarizer.onEvents([textMessage()]);
     await summarizer.closeWithoutSummary();
     expect(requests).toBe(0);
     expect(usageEvents).toBe(0);
@@ -508,10 +554,10 @@ describe("TaskProgressSummarizer", () => {
       fetchImpl: async () => summaryResponse("已完成初始探索，开始修改代码", { step: 1, total: 3 }),
       now: () => now,
     });
-    summarizer.onMessages([textMessage(), textMessage()]);
+    summarizer.onEvents([textMessage(), textMessage()]);
     expect(reported.length).toBe(0);
     now = 2000;
-    summarizer.onMessages([textMessage()]);
+    summarizer.onEvents([textMessage()]);
     await Bun.sleep(0);
     expect(reported).toEqual([{
       result: { summary: "已完成初始探索，开始修改代码", step: 1, total: 3 },
@@ -537,11 +583,11 @@ describe("TaskProgressSummarizer", () => {
       },
       now: () => now,
     });
-    summarizer.onMessages([textMessage()]);
+    summarizer.onEvents([textMessage()]);
     now += 1000;
-    summarizer.onMessages([textMessage()]);
+    summarizer.onEvents([textMessage()]);
     now += 1000;
-    summarizer.onMessages([textMessage()]);
+    summarizer.onEvents([textMessage()]);
     release!();
     await Bun.sleep(0);
     expect(calls).toBe(1);
@@ -559,7 +605,7 @@ describe("TaskProgressSummarizer", () => {
       fetchImpl: async () => { throw new Error("network down"); },
       now: () => now,
     });
-    summarizer.onMessages([textMessage()]);
+    summarizer.onEvents([textMessage()]);
     await Bun.sleep(0);
     expect(reported.length).toBe(0);
     // A later terminal summary still works if the model recovers.
@@ -583,12 +629,12 @@ describe("TaskProgressSummarizer", () => {
       },
       now: () => 0,
     });
-    summarizer.onMessages([textMessage("fixed the bug")]);
+    summarizer.onEvents([textMessage("fixed the bug")]);
     await summarizer.finalize("completed", "PR ready");
     expect(reported).toEqual([{ result: { summary: "任务已完成：修复了登录问题" }, final: true }]);
     expect(prompts[0]).toContain("任务已正常结束");
     // Once finalized, further messages and finalizes are ignored.
-    summarizer.onMessages([textMessage()]);
+    summarizer.onEvents([textMessage()]);
     await summarizer.finalize("completed");
     await Bun.sleep(0);
     expect(reported.length).toBe(1);
@@ -610,7 +656,7 @@ describe("TaskProgressSummarizer", () => {
       },
       now: () => 1000,
     });
-    summarizer.onMessages([textMessage()]);
+    summarizer.onEvents([textMessage()]);
     await Bun.sleep(0);
     expect(requests.length).toBe(1);
     expect(requests[0]!.url).toBe("https://relay.example/v1/messages");
@@ -722,12 +768,12 @@ describe("TaskProgressSummarizer", () => {
       now: () => now,
     });
 
-    summarizer.onMessages([textMessage("first")]);
+    summarizer.onEvents([textMessage("first")]);
     await waitForReport;
     await Bun.sleep(0);
     waitForReport = new Promise<void>((resolve) => { reportReady = resolve; });
     now++;
-    summarizer.onMessages([textMessage("second")]);
+    summarizer.onEvents([textMessage("second")]);
     await waitForReport;
 
     expect(reports).toEqual(["CLI final fallback", "CLI final fallback"]);
@@ -787,12 +833,12 @@ describe("TaskProgressSummarizer", () => {
       now: () => now,
     });
 
-    summarizer.onMessages([textMessage("first")]);
+    summarizer.onEvents([textMessage("first")]);
     await waitForReport;
     await Bun.sleep(0);
     waitForReport = new Promise<void>((resolve) => { reportReady = resolve; });
     now++;
-    summarizer.onMessages([textMessage("second")]);
+    summarizer.onEvents([textMessage("second")]);
     await waitForReport;
 
     expect(reports).toEqual(["CLI 摘要", "CLI 摘要"]);

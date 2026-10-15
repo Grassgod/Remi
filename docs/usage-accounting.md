@@ -129,7 +129,7 @@ bun run scripts/reconcile-task-usage.ts --verify-plan=<review-plan.json>
 
 现代记录修复由 [modern-usage-repair.ts](../scripts/modern-usage-repair.ts)执行，通过 `multiremi_turn_execution_records` 读取轮及尝试，原 task ID 对应尝试 ID。每个待修复尝试必须处于终态、只有一个已完整上报的执行 run，且尝试、原始请求与原生日志的 provider session 身份一致。Claude 仅使用有明确结束原因的最终请求记录更新同一请求；全部相关请求身份匹配、更新增量恰好解释唯一结算差额时，才将对应 `acp_prompt_unattributed_remainder` 退休。原有进度摘要、上下文和其他调用保留；涉及费用覆盖时同时更新原关联，不把修正后的数字再加一份。
 
-原始 usage 事件属于尝试的 daemon trace，不属于对话消息。恢复计划不再读取服务端归档，也不再回填历史 trace；同一尝试的 seq 只读取一次。`multiremi_task_messages` 的入口仅保留作历史只读取证；统一模型不向它写入新执行事件。缺少请求身份和覆盖证据时保留 unknown。
+计费不在 trace 中：自 PR 2（[ADR 0019](adr/0019-turn-and-item-traces.md) 决策 6）起，桥接的计费帧（`size == 0` 的 `usage_update`）由 trace 翻译器丢弃，计量单位只经 `_meta.remiUsageUnits` 进入 [task usage ledger](../packages/server/src/worker/task-usage-ledger.ts) 与可靠 usage 报告；trace 只在 `turn.updated` 里记录上下文占用（`context_usage`），它也随完成报告写到轮卡，但不是消费。v1 trace 文件里的旧 `usage` 片段属于历史 daemon trace，不属于对话消息。恢复计划不再读取服务端归档，也不再回填历史 trace；同一尝试的 seq 只读取一次。`multiremi_task_messages` 的入口仅保留作历史只读取证；统一模型不向它写入新执行事件。缺少请求身份和覆盖证据时保留 unknown。
 
 Codex 原生日志的 `token_usage_record` 按 thread/session 与 response ID 去重，`compacted.latest_token_usage_record` 是同一请求的副本。普通生成和压缩请求均进入恢复小计。只有同一 turn 的独立请求分量之和等于最终 `turn_token_usage`、存在匹配的 `task_started` 和 `task_complete`，并满足任务和 run 的归属边界，才能替代该 turn 明确始末范围内的旧 unknown 观测。其他轮次或界外的迟到观测继续保留未知，单一 run 不等于只有一个 turn。
 

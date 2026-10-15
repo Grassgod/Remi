@@ -70,7 +70,7 @@ daemon 上的四类东西：
 
 ## 3. 记录：留在 daemon，服务端只持指针
 
-- trace 由 daemon 实时写入 `traces/<主体>/<tsk>.jsonl`，格式 `multiremi.trace.v1` 不变。
+- trace 由 daemon 实时写入 `traces/<主体>/<tsk>.jsonl`，格式 `multiremi.trace.v1` 不变（此后由 [ADR 0019](0019-turn-and-item-traces.md) 改为 `multiremi.trace.v2`，v1 文件只读）。
 - 原生会话历史由 provider 写在 home 里（`CLAUDE_CONFIG_DIR` / `CODEX_HOME` 指向该会话线的 home）。回收时就地清理 home，只保留 `projects/`、`sessions/`、`session_index.jsonl`，路径不变。
 - `multiremi_task_traces.location` 只剩 `daemon | none | lost`；读取路径不变：`GET /api/turns/:id/trace` → `trace.read` RPC → daemon。daemon 离线返回 `unreachable`；daemon 下线或 Runtime 删除时指针标 `lost`。
 - daemon 启动只登记 trace 文件路径，首次读取时建索引，常驻索引按 LRU 限量。

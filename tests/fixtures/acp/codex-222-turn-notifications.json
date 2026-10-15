@@ -1,0 +1,735 @@
+[
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "019fd67e-c843-7071-b5d6-66f42f33234c",
+      "update": {
+        "sessionUpdate": "usage_update",
+        "used": 14445,
+        "size": 258400
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "019fd67e-c843-7071-b5d6-66f42f33234c",
+      "update": {
+        "sessionUpdate": "agent_thought_chunk",
+        "messageId": "rs_01",
+        "content": {
+          "type": "text",
+          "text": "**Inspecting the helper**\n\n"
+        }
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "019fd67e-c843-7071-b5d6-66f42f33234c",
+      "update": {
+        "sessionUpdate": "agent_thought_chunk",
+        "messageId": "rs_01",
+        "content": {
+          "type": "text",
+          "text": "The test says add is off by one."
+        }
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "019fd67e-c843-7071-b5d6-66f42f33234c",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "messageId": "msg_c1",
+        "content": {
+          "type": "text",
+          "text": "I'll inspect the math helper "
+        },
+        "_meta": {
+          "jetbrains": {
+            "air": {
+              "version": 1,
+              "phase": "commentary"
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "019fd67e-c843-7071-b5d6-66f42f33234c",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "messageId": "msg_c1",
+        "content": {
+          "type": "text",
+          "text": "and run the failing test."
+        },
+        "_meta": {
+          "jetbrains": {
+            "air": {
+              "version": 1,
+              "phase": "commentary"
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "019fd67e-c843-7071-b5d6-66f42f33234c",
+      "update": {
+        "sessionUpdate": "tool_call",
+        "toolCallId": "call_cmd1",
+        "name": "exec_command",
+        "kind": "execute",
+        "title": "bun test tests/unit/math.test.ts",
+        "status": "in_progress",
+        "content": [
+          {
+            "type": "terminal",
+            "terminalId": "call_cmd1"
+          }
+        ],
+        "rawInput": {
+          "command": "/bin/zsh -lc 'bun test tests/unit/math.test.ts'",
+          "cwd": "/work/repo"
+        },
+        "_meta": {
+          "terminal_info": {
+            "cwd": "/work/repo",
+            "terminal_id": "call_cmd1"
+          }
+        }
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "019fd67e-c843-7071-b5d6-66f42f33234c",
+      "update": {
+        "sessionUpdate": "tool_call_update",
+        "toolCallId": "call_cmd1",
+        "_meta": {
+          "terminal_output": {
+            "data": "1 fail\n",
+            "terminal_id": "call_cmd1"
+          }
+        }
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "019fd67e-c843-7071-b5d6-66f42f33234c",
+      "update": {
+        "sessionUpdate": "tool_call_update",
+        "toolCallId": "call_cmd1",
+        "_meta": {
+          "terminal_output": {
+            "data": "expected 4, got 5\n",
+            "terminal_id": "call_cmd1"
+          }
+        }
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "019fd67e-c843-7071-b5d6-66f42f33234c",
+      "update": {
+        "sessionUpdate": "tool_call_update",
+        "toolCallId": "call_cmd1",
+        "status": "failed",
+        "_meta": {
+          "terminal_exit": {
+            "exit_code": 1,
+            "signal": null,
+            "terminal_id": "call_cmd1"
+          }
+        }
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "019fd67e-c843-7071-b5d6-66f42f33234c",
+      "update": {
+        "sessionUpdate": "tool_call",
+        "toolCallId": "call_read1",
+        "kind": "read",
+        "title": "Read file '/work/repo/src/math.ts'",
+        "status": "in_progress",
+        "locations": [
+          {
+            "path": "/work/repo/src/math.ts"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "019fd67e-c843-7071-b5d6-66f42f33234c",
+      "update": {
+        "sessionUpdate": "tool_call_update",
+        "toolCallId": "call_read1",
+        "status": "completed"
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "019fd67e-c843-7071-b5d6-66f42f33234c",
+      "update": {
+        "sessionUpdate": "tool_call",
+        "toolCallId": "call_search1",
+        "kind": "search",
+        "title": "Search for 'add(' in src",
+        "status": "in_progress"
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "019fd67e-c843-7071-b5d6-66f42f33234c",
+      "update": {
+        "sessionUpdate": "tool_call_update",
+        "toolCallId": "call_search1",
+        "status": "completed",
+        "rawOutput": "src/math.ts:1:export const add\n"
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "019fd67e-c843-7071-b5d6-66f42f33234c",
+      "update": {
+        "sessionUpdate": "tool_call",
+        "toolCallId": "call_list1",
+        "kind": "read",
+        "title": "List files in 'src'",
+        "status": "in_progress"
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "019fd67e-c843-7071-b5d6-66f42f33234c",
+      "update": {
+        "sessionUpdate": "tool_call_update",
+        "toolCallId": "call_list1",
+        "status": "completed",
+        "rawOutput": "index.ts\nmath.ts\n"
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "019fd67e-c843-7071-b5d6-66f42f33234c",
+      "update": {
+        "sessionUpdate": "tool_call",
+        "toolCallId": "call_patch1",
+        "title": "Editing files",
+        "kind": "edit",
+        "status": "in_progress",
+        "content": [
+          {
+            "type": "diff",
+            "oldText": "export const add = (a, b) => a + b + 1;\n",
+            "newText": "export const add = (a, b) => a + b;\n",
+            "path": "/work/repo/src/math.ts",
+            "_meta": {
+              "kind": "update"
+            }
+          },
+          {
+            "type": "diff",
+            "oldText": "export const sub = (a, b) => a - b - 1;\n",
+            "newText": "export const sub = (a, b) => a - b;\n",
+            "path": "/work/repo/src/math.ts",
+            "_meta": {
+              "kind": "update"
+            }
+          },
+          {
+            "type": "diff",
+            "oldText": null,
+            "newText": "# Fix\n\nRemoved the off-by-one.\n",
+            "path": "/work/repo/notes/fix.md",
+            "_meta": {
+              "kind": "add"
+            }
+          }
+        ]
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "019fd67e-c843-7071-b5d6-66f42f33234c",
+      "update": {
+        "sessionUpdate": "tool_call_update",
+        "toolCallId": "call_patch1",
+        "status": "completed"
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "019fd67e-c843-7071-b5d6-66f42f33234c",
+      "update": {
+        "sessionUpdate": "tool_call",
+        "toolCallId": "ws_1",
+        "title": "Web search: bun test toBe",
+        "kind": "search",
+        "status": "in_progress",
+        "rawInput": {
+          "query": "bun test toBe",
+          "action": {
+            "type": "search",
+            "query": "bun test toBe"
+          }
+        }
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "019fd67e-c843-7071-b5d6-66f42f33234c",
+      "update": {
+        "sessionUpdate": "tool_call_update",
+        "toolCallId": "ws_1",
+        "title": "Web search: bun test toBe",
+        "status": "completed",
+        "rawInput": {
+          "query": "bun test toBe",
+          "action": {
+            "type": "search",
+            "query": "bun test toBe"
+          }
+        }
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "019fd67e-c843-7071-b5d6-66f42f33234c",
+      "update": {
+        "sessionUpdate": "tool_call",
+        "toolCallId": "ws_2",
+        "title": "Open page: https://bun.sh/docs/test",
+        "kind": "search",
+        "status": "in_progress",
+        "rawInput": {
+          "query": "",
+          "action": {
+            "type": "openPage",
+            "url": "https://bun.sh/docs/test"
+          }
+        }
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "019fd67e-c843-7071-b5d6-66f42f33234c",
+      "update": {
+        "sessionUpdate": "tool_call_update",
+        "toolCallId": "ws_2",
+        "title": "Open page: https://bun.sh/docs/test",
+        "status": "completed",
+        "rawInput": {
+          "query": "",
+          "action": {
+            "type": "openPage",
+            "url": "https://bun.sh/docs/test"
+          }
+        }
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "019fd67e-c843-7071-b5d6-66f42f33234c",
+      "update": {
+        "sessionUpdate": "tool_call",
+        "toolCallId": "mcp_1",
+        "kind": "execute",
+        "title": "mcp.github.search_issues",
+        "status": "in_progress",
+        "rawInput": {
+          "server": "github",
+          "tool": "search_issues",
+          "arguments": {
+            "q": "add off by one"
+          }
+        },
+        "_meta": {
+          "is_mcp_tool_call": true
+        }
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "019fd67e-c843-7071-b5d6-66f42f33234c",
+      "update": {
+        "sessionUpdate": "tool_call_update",
+        "toolCallId": "mcp_1",
+        "status": "completed",
+        "rawInput": {
+          "server": "github",
+          "tool": "search_issues",
+          "arguments": {
+            "q": "add off by one"
+          }
+        },
+        "rawOutput": {
+          "result": {
+            "content": [
+              {
+                "type": "text",
+                "text": "[]"
+              }
+            ]
+          },
+          "error": null
+        }
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "019fd67e-c843-7071-b5d6-66f42f33234c",
+      "update": {
+        "sessionUpdate": "tool_call",
+        "toolCallId": "call_spawn1",
+        "title": "spawnAgent",
+        "status": "in_progress",
+        "rawInput": {
+          "prompt": "Review the fix",
+          "senderThreadId": "019fd67e-c843-7071-b5d6-66f42f33234c",
+          "receiverThreadIds": [],
+          "agentsStates": {},
+          "model": null,
+          "reasoningEffort": null
+        },
+        "_meta": {
+          "jetbrains": {
+            "air": {
+              "version": 1,
+              "subagent": true
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "019fd67e-c843-7071-b5d6-66f42f33234c",
+      "update": {
+        "sessionUpdate": "tool_call_update",
+        "toolCallId": "call_spawn1",
+        "status": "completed",
+        "rawInput": {
+          "prompt": "Review the fix",
+          "senderThreadId": "019fd67e-c843-7071-b5d6-66f42f33234c",
+          "receiverThreadIds": [
+            "019fd67e-f5d8-7041-87ee-6f1d8d52280f"
+          ],
+          "agentsStates": {},
+          "model": null,
+          "reasoningEffort": null
+        },
+        "_meta": {
+          "jetbrains": {
+            "air": {
+              "version": 1,
+              "subagent": true
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "019fd67e-c843-7071-b5d6-66f42f33234c",
+      "update": {
+        "sessionUpdate": "plan",
+        "entries": [
+          {
+            "status": "completed",
+            "content": "Find the off-by-one",
+            "priority": "medium"
+          },
+          {
+            "status": "in_progress",
+            "content": "Fix add and sub",
+            "priority": "medium"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "019fd67e-c843-7071-b5d6-66f42f33234c",
+      "update": {
+        "sessionUpdate": "plan",
+        "entries": [
+          {
+            "status": "completed",
+            "content": "Find the off-by-one",
+            "priority": "medium"
+          },
+          {
+            "status": "completed",
+            "content": "Fix add and sub",
+            "priority": "medium"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "019fd67e-c843-7071-b5d6-66f42f33234c",
+      "update": {
+        "sessionUpdate": "compaction_update",
+        "compactionId": "cmp_item_1",
+        "status": "in_progress"
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "019fd67e-c843-7071-b5d6-66f42f33234c",
+      "update": {
+        "sessionUpdate": "compaction_update",
+        "compactionId": "cmp_item_1",
+        "status": "completed"
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "019fd67e-c843-7071-b5d6-66f42f33234c",
+      "update": {
+        "sessionUpdate": "compaction_update",
+        "compactionId": "compaction:turn_2",
+        "status": "completed"
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "019fd67e-c843-7071-b5d6-66f42f33234c",
+      "update": {
+        "sessionUpdate": "compaction_update",
+        "compactionId": "cmp_item_3",
+        "status": "in_progress"
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "019fd67e-c843-7071-b5d6-66f42f33234c",
+      "update": {
+        "sessionUpdate": "compaction_update",
+        "compactionId": "cmp_item_3",
+        "status": "failed",
+        "error": "Codex ended the turn before compaction completed."
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "019fd67e-c843-7071-b5d6-66f42f33234c",
+      "update": {
+        "sessionUpdate": "notice",
+        "severity": "warning",
+        "title": "Configuration warning",
+        "description": "model_reasoning_effort is ignored for this model"
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "019fd67e-c843-7071-b5d6-66f42f33234c",
+      "update": {
+        "sessionUpdate": "session_info_update",
+        "_meta": {
+          "jetbrains": {
+            "air": {
+              "version": 1,
+              "sessionFailure": {
+                "id": "turn_1:retry",
+                "revision": 1,
+                "category": "provider",
+                "severity": "warning",
+                "title": "Reconnecting",
+                "details": "stream disconnected; retrying 1/5"
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "019fd67e-c843-7071-b5d6-66f42f33234c",
+      "update": {
+        "sessionUpdate": "session_info_update",
+        "_meta": {
+          "jetbrains": {
+            "air": {
+              "version": 1,
+              "sessionFailure": {
+                "id": "turn_1:retry",
+                "revision": 2,
+                "category": "provider",
+                "severity": "warning",
+                "title": "Reconnecting",
+                "details": "stream disconnected; retrying 2/5"
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "019fd67e-c843-7071-b5d6-66f42f33234c",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "messageId": "msg_c2",
+        "content": {
+          "type": "text",
+          "text": "Fixed `add` and `sub` in `src/math.ts`; "
+        },
+        "_meta": {
+          "jetbrains": {
+            "air": {
+              "version": 1,
+              "phase": "final_answer"
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "019fd67e-c843-7071-b5d6-66f42f33234c",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "messageId": "msg_c2",
+        "content": {
+          "type": "text",
+          "text": "both tests pass."
+        },
+        "_meta": {
+          "jetbrains": {
+            "air": {
+              "version": 1,
+              "phase": "final_answer"
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "019fd67e-c843-7071-b5d6-66f42f33234c",
+      "update": {
+        "sessionUpdate": "usage_update",
+        "used": 16020,
+        "size": 258400
+      }
+    }
+  }
+]

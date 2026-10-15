@@ -37,6 +37,7 @@ import type {
 // A-0's real modules: `43e41952` is merged into this branch, so these are the
 // upstream signatures themselves rather than a transcription to compare against.
 import type { TraceEvent } from "@multiremi/contracts/trace";
+import { deltaTraceEvent } from "../../helpers/turn-trace.js";
 import type {
   TraceSink,
   TraceSinkListener,
@@ -59,19 +60,14 @@ import type { HubTransport } from "@multiremi/api/hub/hub-transport";
 
 // ── A-0 compatibility: the hub satisfies the published TraceSink seam ───────────────────────────
 
-/** A-0 `TraceEvent`: `ts` is an ISO string and `type` is an open string. */
+/** A turn + items `TraceEvent` (PR 2): `ts` is an ISO string; the hub never looks inside the body. */
 function a0TraceEvent(seq: number): TraceEvent {
-  return {
-    seq,
-    ts: new Date(1_700_000_000_000 + seq).toISOString(),
-    type: "text",
-    content: `event-${seq}`,
-  };
+  return deltaTraceEvent(seq, `event-${seq}`);
 }
 
-/** An event whose `type` no enum lists, to prove it passes through verbatim. */
+/** An event whose `type` the contract does not list (a newer producer's), to prove it passes through verbatim. */
 function unknownTypeEvent(seq: number, type: string): TraceEvent {
-  return { seq, ts: new Date(1_700_000_000_000 + seq).toISOString(), type, content: "x" };
+  return { seq, ts: new Date(1_700_000_000_000 + seq).toISOString(), type, blob: "x" } as unknown as TraceEvent;
 }
 
 /** The wiring C1/A-6 use: the hub is handed to a consumer of A-0's `TraceSink`. */
@@ -342,7 +338,7 @@ describe("EmptyLiveHub", () => {
     // are for enumeration and bucketing, not validation, so the hub must not be
     // the layer that drops or rewrites a type it has not seen.
     const exotic = unknownTypeEvent(1, "some_future_type");
-    expect(exotic.type).toBe("some_future_type");
+    expect(exotic.type as string).toBe("some_future_type");
     expect(() => hub.append("task_a", [exotic])).not.toThrow();
   });
 

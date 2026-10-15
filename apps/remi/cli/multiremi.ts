@@ -17,7 +17,8 @@ import {
   MultiremiStore,
 } from "@multiremi/index.js";
 import type { MultiremiDaemonOptions } from "@multiremi/daemon.js";
-import type { TraceEvent } from "@multiremi/contracts/trace.js";
+import type { TraceAgentMessageItem, TraceEvent, TraceTurn } from "@multiremi/contracts/trace.js";
+import { completeTurn } from "@shared/turn-trace.js";
 import type {
   FeishuBotCancelCandidate,
   FeishuBotCancelResult,
@@ -48,7 +49,7 @@ import { feishuTransportError } from "@connectors/feishu/native-cot.js";
 import { redactFeishuBotError } from "@multiremi/feishu-bot/diagnostics.js";
 import { formatMentionForCard } from "@connectors/feishu/mention.js";
 import { buildFinalCard } from "@connectors/feishu/streaming/card-elements.js";
-import { FeishuTaskMetadata } from "@connectors/feishu/task-metadata.js";
+import { FEISHU_COMMAND_PROVIDER, FeishuTaskMetadata } from "@connectors/feishu/task-metadata.js";
 import {
   registerDecisionCardInteraction,
   registerIssueDecisionCardInteraction,
@@ -764,19 +765,18 @@ export function controlPlaneConciergeHost(deps: {
             // `null` until the first snapshot pins the provider session, so the
             // card opens as "刚醒来的 <agent>" instead of a bare agent name.
             taskId, displayName, sessionId: null, signal: options.signal,
-            isHumanRequestPending: requestId => daemon.isFeishuBotHumanRequestPending(taskId, requestId),
             getHumanRequest: requestId => daemon.getFeishuBotHumanRequest(taskId, requestId),
             prepareHumanRequestCard: (requestId, openId) => daemon.prepareTaskHumanRequestCard(requestId, openId),
-            respondHumanRequest: (requestId, response, credential) => daemon.respondFeishuBotHumanRequest(requestId, response, credential),
           }, {
             ...(delivery.kind === "cot" ? { lane: "cot" as const } : {}),
             replyToMessageId: delivery.replyToMessageId ?? undefined,
             receiptMessageIds: delivery.receiptMessageIds,
             mentionOpenId: mentionOpenId ?? undefined,
+            // A resume message ID without a presentation checkpoint is an older
+            // daemon's streaming card: it finishes with the result card only.
             durable: { idempotencyKey: delivery.idempotencyKey, messageId: delivery.resumeMessageId,
               presentation: delivery.presentation },
             interactionOpenId: interactionOpenId ?? undefined,
-            onStarted: options.onStarted,
             onCheckpoint: options.onCheckpoint,
           });
       }
@@ -817,7 +817,7 @@ export async function sendResultCardLane(handle: FeishuChannelHandle, delivery: 
   if (daemon && delivery.taskId) {
     try {
       const metadata = await readFeishuResultMetadata(daemon, delivery.taskId, cardInput.agentName,
-        cardInput.elapsedSeconds ?? 0, options?.signal);
+        cardInput.elapsedSeconds, options?.signal);
       cardInput = { ...cardInput, ...metadata };
     } catch {
       options?.signal.throwIfAborted();
@@ -832,10 +832,15 @@ export async function sendResultCardLane(handle: FeishuChannelHandle, delivery: 
   return sent;
 }
 
-/** Read canonical trace on the host, outside the server's synchronous DB path. */
+/**
+ * Read canonical trace on the host, outside the server's synchronous DB path.
+ * `turn.completed` carries the final model, context and tool count, so the read
+ * stops there; a trace that closes without one (a v1 trace) ends at its
+ * terminal snapshot. `elapsed` is the queued body's Task time, when it has one.
+ */
 export async function readFeishuResultMetadata(
   daemon: Pick<MultiremiDaemon, "subscribeTrace" | "getFeishuBotTaskSnapshot">,
-  taskId: string, agentName: string | null | undefined, elapsed: number,
+  taskId: string, agentName: string | null | undefined, elapsed: number | undefined,
   signal?: AbortSignal, timeoutMs = 5_000,
 ): Promise<ReturnType<FeishuTaskMetadata["render"]>> {
   const abort = new AbortController();
@@ -849,14 +854,17 @@ export async function readFeishuResultMetadata(
     bounded.addEventListener("abort", onAbort, { once: true });
   });
   const reading = (async () => {
+    let snapshotElapsed: number | undefined;
     for await (const event of subscribeFeishuTask(daemon, taskId, bounded)) {
-      if (event.kind === "message") metadata.accept(event.message);
-      else {
+      if (event.kind === "message") {
+        metadata.accept(event.message);
+        if (metadata.completed) break;
+      } else {
         const start = Date.parse(event.snapshot.startedAt ?? ""), end = Date.parse(event.snapshot.completedAt ?? "");
-        if (Number.isFinite(start) && Number.isFinite(end) && end >= start) elapsed = Math.round((end - start) / 1000);
+        if (Number.isFinite(start) && Number.isFinite(end) && end >= start) snapshotElapsed = Math.round((end - start) / 1000);
       }
     }
-    return metadata.render(elapsed);
+    return metadata.render(elapsed ?? metadata.durationSeconds ?? snapshotElapsed ?? 0);
   })();
   try { return await Promise.race([reading, interrupted]); }
   finally {
@@ -1203,10 +1211,9 @@ export function createFeishuTaskHandler(
     // every command in a group miss and start a Task instead.
     const rawContent = feishuMessageRawContent(message);
     const command = resolveFeishuCommand(rawContent);
-    const replyCard = (text: string, taskId: string, name: string) => consumer(singleMessageStream(text), {
+    const replyCard = (text: string, taskId: string, name: string) => consumer(singleMessageStream(text, taskId), {
       taskId,
       displayName: name,
-      respondHumanRequest: async () => { throw new Error("command has no human request"); },
     });
     if (command && command.name === "stop") {
       // A stop that could not be requested must say so. Letting the error escape
@@ -1300,8 +1307,6 @@ export function createFeishuTaskHandler(
       sessionId: null,
       getHumanRequest: requestId => daemon.getFeishuBotHumanRequest(submitted.taskId, requestId),
       prepareHumanRequestCard: (requestId, openId) => daemon.prepareTaskHumanRequestCard(requestId, openId),
-      respondHumanRequest: (requestId, response, credential) =>
-        daemon.respondFeishuBotHumanRequest(requestId, response, credential),
     });
   };
 }
@@ -1511,33 +1516,26 @@ export async function* subscribeFeishuTask(
   }
 }
 
-async function* singleMessageStream(text: string): AsyncGenerator<TaskStreamEvent> {
-  yield {
-    kind: "message",
-    message: {
-      seq: 1,
-      type: "text",
-      tool: null,
-      content: text,
-      input: null,
-      output: null,
-      tool_call_id: null,
-      status: null,
-      meta: null,
-      ts: new Date().toISOString(),
-    },
-  };
+/**
+ * A host command reply (`/new`, `/stop`, `/status`, ...) as a one-item turn, so
+ * it reaches the card through the same Task presenter: `turn.started`, the
+ * final `agent_message`, `turn.completed`, then the terminal snapshot.
+ */
+export async function* singleMessageStream(text: string, taskId: string): AsyncGenerator<TaskStreamEvent> {
+  const ts = new Date().toISOString();
+  const reply: TraceAgentMessageItem = { id: "msg:reply", parent_id: null, status: "completed", started_at: ts,
+    completed_at: ts, type: "agent_message", text, phase: "final" };
+  const turn: TraceTurn = { id: taskId, turn_id: null, agent_id: taskId, agent_name: null, provider: FEISHU_COMMAND_PROVIDER,
+    requested_model: null, model: null, status: "running", error: null, started_at: ts, completed_at: null, duration_ms: null,
+    final_item_id: null, final_started_at: null, context_usage: null,
+    stats: { item_count: 0, tool_call_count: 0, process_item_count: 0, type_histogram: [] } };
+  yield { kind: "message", message: { seq: 1, ts, type: "turn.started", turn } };
+  yield { kind: "message", message: { seq: 2, ts, type: "item.completed", item: reply } };
+  yield { kind: "message", message: { seq: 3, ts, type: "turn.completed",
+    turn: completeTurn({ turn, items: [reply] }, { status: "completed", completedAt: ts })! } };
   yield {
     kind: "snapshot",
-    snapshot: {
-      taskId: "feishu-command",
-      status: "completed",
-      result: text,
-      error: null,
-      sessionId: null,
-      workDir: null,
-      usage: [],
-    },
+    snapshot: { taskId, status: "completed", result: text, error: null, sessionId: null, workDir: null, usage: [] },
   };
 }
 

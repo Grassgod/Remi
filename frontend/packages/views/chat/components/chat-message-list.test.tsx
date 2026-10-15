@@ -1,7 +1,6 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { describe, expect, it, vi } from "vitest";
-import type { TraceEvent } from "@multiremi/contracts/trace";
 import type { Attachment, ChatMessage, ChatPendingTask } from "@multiremi/core/types";
 import { SessionLogEntrySchema } from "@multiremi/core/api/schemas/session-log";
 import { MemorySessionReplica, openBrowserReplica, type SessionLogEntry } from "@multiremi/core/replica";
@@ -9,6 +8,8 @@ import { setApiInstance } from "@multiremi/core/api";
 import type { OptimisticChatRow } from "../lib/optimistic-log";
 import { useTraceStreamSubscription } from "@multiremi/core/realtime";
 import { paths } from "@multiremi/core/paths";
+import type { TraceItem } from "@multiremi/contracts/trace";
+import { command, message as traceMessage, permission, read, traceTurn, turnPage, turnTraceCache } from "../../test/trace-fixtures";
 
 const { copiedText } = vi.hoisted(() => ({ copiedText: vi.fn().mockResolvedValue(true) }));
 vi.mock("@multiremi/ui/lib/clipboard", () => ({ copyText: copiedText }));
@@ -144,7 +145,7 @@ describe("cached message observer visibility", () => {
 
   it.each(["live", "assistant"])("loads only a visible live task, keeps terminal reply trace lazy (%s)", async (kind) => {
     const taskId = "tsk_visibility";
-    const getTaskTrace = vi.fn(async () => ({ events: [], eof: true, state: "ok", next_after_seq: 0 }));
+    const getTaskTrace = vi.fn(async () => turnPage(traceTurn({ id: taskId }), []));
     setApiInstance({ getTaskTrace } as never);
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     const entries = kind === "assistant" ? [{ session_id: "cs-1", seq: 1, id: "msg-1", revision: 1,
@@ -172,9 +173,7 @@ describe("cached message observer visibility", () => {
 const TASK_ID = "task_01hzzzzzzzzzzzzzzzzzzzzzzz";
 const TIMELINE_TEXT = "Timeline answer from the task transcript.";
 
-const taskEvents: TraceEvent[] = [
-  { seq: 1, ts: "2026-09-16T00:00:00Z", type: "text", content: TIMELINE_TEXT },
-];
+const liveTraceCache = turnTraceCache(turnPage(traceTurn({ id: TASK_ID }), [traceMessage("msg:1", TIMELINE_TEXT, "final")], { closed: false }));
 
 function attachment(id: string): Attachment {
   return { id, url: `/api/attachments/${id}/content`, filename: `${id}.png` } as Attachment;
@@ -214,11 +213,12 @@ function renderList(
   messages: ChatMessage[],
   pending: ChatPendingTask | null,
   includeHead = false,
+  traceCache: unknown = liveTraceCache,
 ) {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false, staleTime: Infinity } },
   });
-  client.setQueryData(["task-trace", TASK_ID], taskEvents);
+  if (traceCache) client.setQueryData(["task-trace", TASK_ID], traceCache);
   const entries = messages.map((message, index) => ({
     session_id: "cs-1", seq: index + 1, id: message.id, revision: 1,
     kind: message.role === "user" ? "message" : "turn",
@@ -386,21 +386,56 @@ describe("ChatMessageList measurement contract", () => {
 });
 
 describe("ChatMessageList with mid-run agent attachments", () => {
-  it.each(["closed", "error"])("stops the stale pending-task spinner when the trace reports %s", async state => {
-    const view = renderList([], pendingTask);
+  it("shows the status pill only until the trace has a turn, then the steps fold speaks for the run", async () => {
+    const noTurn = turnTraceCache(turnPage(null, [], { closed: false }));
+    const view = renderList([], pendingTask, false, noTurn);
     expect(screen.getByTestId("status-pill")).toBeInTheDocument();
+    expect(view.container.querySelector("[data-chat-live-turn]")).toBeNull();
     const callbacks = vi.mocked(useTraceStreamSubscription).mock.calls.at(-1)![1];
     await act(async () => {
-      if (state === "closed") callbacks.onClosed?.({ stream: "trace", id: TASK_ID, head_seq: 1 });
-      else callbacks.onError?.({ stream: "trace", id: TASK_ID, code: "forbidden" });
+      callbacks.onFrames?.([{ seq: 1, kind: "trace", payload: { seq: 1, ts: traceTurn().started_at, type: "turn.started", turn: traceTurn({ id: TASK_ID }) } }]);
     });
-    expect(screen.queryByTestId("status-pill")).toBeNull();
-    if (state === "error") expect(screen.getByRole("alert", { hidden: true })).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByTestId("status-pill")).toBeNull());
+    expect(view.container.querySelector('[data-chat-steps="live"]')).not.toBeNull();
     view.unmount();
   });
+
+  it("hides the pill once the trace closes and keeps it for a legacy trace", async () => {
+    const view = renderList([], pendingTask, false, turnTraceCache(turnPage(null, [], { closed: false })));
+    const callbacks = vi.mocked(useTraceStreamSubscription).mock.calls.at(-1)![1];
+    await act(async () => { callbacks.onClosed?.({ stream: "trace", id: TASK_ID, head_seq: 1 }); });
+    await waitFor(() => expect(screen.queryByTestId("status-pill")).toBeNull());
+    view.unmount();
+    const legacy = renderList([], pendingTask, false, turnTraceCache(turnPage(null, [], { format: "legacy", closed: false })));
+    expect(screen.getByTestId("status-pill")).toBeInTheDocument();
+    expect(legacy.container.querySelector("[data-chat-live-turn]")).toBeNull();
+    legacy.unmount();
+  });
+
+  it("keeps the pill when the live read fails", async () => {
+    setApiInstance({ getTaskTrace: vi.fn().mockRejectedValue(new Error("offline")) } as never);
+    const view = renderList([], pendingTask, false, null);
+    await waitFor(() => expect(screen.getByRole("alert", { hidden: true })).toBeInTheDocument());
+    expect(screen.getByTestId("status-pill")).toBeInTheDocument();
+    view.unmount();
+  });
+
+  it.each([
+    ["the server says the task waits for an answer", "awaiting_human", false],
+    ["the trace shows an open permission", "running", true],
+  ] as const)("shows the waiting pill beside the fold while %s", (_case, status, openPermission) => {
+    const waiting: TraceItem[] = openPermission
+      ? [{ ...permission("perm:1", "Bash"), status: "in_progress", completed_at: null, outcome: null }] : [];
+    const cache = turnTraceCache(turnPage(traceTurn({ id: TASK_ID }), [command("cmd_1", [read("a.ts")]), ...waiting], { closed: false }));
+    const view = renderList([], { ...pendingTask, status }, false, cache);
+    expect(view.container.querySelector('[data-chat-steps="live"]')).not.toBeNull();
+    expect(screen.getByTestId("status-pill")).toBeInTheDocument();
+    view.unmount();
+  });
+
   it("keeps and copies the complete persisted reply, then reads execution only on click", async () => {
     copiedText.mockClear();
-    const getTaskTrace = vi.fn().mockResolvedValue({ events: [], head: 0, next_after_seq: 0, eof: true, closed: true, source: "daemon", state: "ok" });
+    const getTaskTrace = vi.fn().mockResolvedValue(turnPage(traceTurn({ id: TASK_ID, status: "completed" }), []));
     const getTask = vi.fn().mockResolvedValue({ id: TASK_ID, agent_id: "", runtime_id: "", issue_id: "", status: "completed",
       priority: 0, created_at: "2026-10-05T00:00:00Z", started_at: null, dispatched_at: null, completed_at: null, result: null, error: null });
     setApiInstance({ getTaskTrace, getTask, getTaskPrompt: vi.fn().mockRejectedValue({ status: 404 }) } as never);
@@ -413,7 +448,7 @@ describe("ChatMessageList with mid-run agent attachments", () => {
     await waitFor(() => expect(copiedText).toHaveBeenCalledWith(complete));
     fireEvent.click(view.container.querySelector<HTMLButtonElement>("[data-chat-trace]")!);
     await waitFor(() => expect(getTask).toHaveBeenCalledWith(TASK_ID, undefined));
-    await waitFor(() => expect(getTaskTrace).toHaveBeenCalledWith(TASK_ID, 0, 200, undefined));
+    await waitFor(() => expect(getTaskTrace).toHaveBeenCalledWith(TASK_ID, { itemCursor: 0, turnId: undefined }));
     view.unmount();
   });
 
@@ -427,11 +462,11 @@ describe("ChatMessageList with mid-run agent attachments", () => {
     expect(view.container.querySelector("[data-chat-trace]")).toBeInTheDocument();
     view.unmount();
   });
-  it("keeps the running task's status visible after an attachment push lands", () => {
-    renderList([attachmentPush("msg-1", "Here is the report.")], pendingTask);
+  it("keeps the running task's live steps visible after an attachment push lands", () => {
+    const view = renderList([attachmentPush("msg-1", "Here is the report.")], pendingTask);
 
-    // The push is not the reply: the live timeline and the pill must survive.
-    expect(screen.getByTestId("status-pill")).toBeInTheDocument();
+    // The push is not the reply: the live turn must survive.
+    expect(view.container.querySelector("[data-chat-live-turn]")).not.toBeNull();
     expect(screen.getAllByText(TIMELINE_TEXT)).toHaveLength(1);
   });
 
@@ -630,6 +665,97 @@ describe("Chat rows without the envelope header or attempts list", () => {
       await waitFor(() => expect(view.container.querySelector('[data-chat-copy="copied"]')).not.toBeNull());
       expect(copiedText).toHaveBeenCalledWith("Copy me");
       await waitFor(() => expect(view.container.querySelector('[data-chat-copy="copied"]')).toBeNull(), { timeout: 2500 });
+    } finally { view.unmount(); client.clear(); }
+  });
+});
+
+describe("finished turn steps fold (MUL-472)", () => {
+  const renderRows = (rows: Record<string, unknown>[]) => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+    const entries = rows.map(row => SessionLogEntrySchema.parse({ session_id: "cs-1", revision: 1, body_html: null, render_version: null, ...row }));
+    const replica = new MemorySessionReplica({ "cs-1": { entries } });
+    const view = render(<QueryClientProvider client={client}><ChatMessageList sessionId="cs-1"
+      replica={replica} optimisticRows={[]} pendingTask={null} availability={undefined} /></QueryClientProvider>);
+    return { view, client };
+  };
+
+  it("folds a counted turn's steps above its reply, collapsed, and reads the trace only when opened", async () => {
+    const getTaskTrace = vi.fn().mockResolvedValue(turnPage(traceTurn({ id: "attempt_7", status: "completed" }), [traceMessage("msg:f", "Answer", "final")]));
+    const getTurn = vi.fn();
+    setApiInstance({ getTaskTrace, getTurn } as never);
+    const { view, client } = renderRows([
+      { seq: 1, id: "turn_7", kind: "turn", task_id: "attempt_7", body_md: "",
+        metadata: { turn_id: "turn_7", status: "completed", final_entry_id: "msg_7", process_item_count: 3, worked_ms: 4000, elapsed_ms: 9000 } },
+      { seq: 2, id: "msg_7", kind: "message", sender_type: "agent", message_kind: "reply", task_id: "turn_7", body_md: "Answer" },
+      { seq: 3, id: "turn_8", kind: "turn", task_id: "attempt_8", body_md: "Old answer",
+        metadata: { turn_id: "turn_8", status: "completed", final_reply_md: "Old answer", elapsed_ms: 1000 } },
+    ]);
+    try {
+      const reply = view.container.querySelector<HTMLElement>('[data-perf-key="msg_7"]')!;
+      const fold = reply.querySelector('[data-chat-steps="finished"]')!;
+      expect(fold).not.toBeNull();
+      const header = fold.querySelector<HTMLButtonElement>("[data-chat-steps-header]")!;
+      expect(header).toHaveAttribute("aria-expanded", "false");
+      // The fold carries the execution log, so the reply footer has none of its own.
+      expect(reply.querySelector("[data-chat-trace]")).toBeNull();
+      // An old card without a count gets no fold and keeps the quiet log button.
+      const old = view.container.querySelector<HTMLElement>('[data-perf-key="turn_8"]')!;
+      expect(old.querySelector("[data-chat-steps]")).toBeNull();
+      expect(old.querySelector("[data-chat-trace]")).not.toBeNull();
+      expect(getTaskTrace).not.toHaveBeenCalled();
+      expect(getTurn).not.toHaveBeenCalled();
+      fireEvent.click(header);
+      await waitFor(() => expect(getTaskTrace).toHaveBeenCalledWith("attempt_7", { itemCursor: 0, turnId: "turn_7" }));
+      expect(getTaskTrace).toHaveBeenCalledTimes(1);
+      await waitFor(() => expect(reply.querySelector('[data-chat-steps="finished"] [data-chat-trace]')).not.toBeNull());
+    } finally { view.unmount(); client.clear(); }
+  });
+
+  it("puts a failed turn's steps above its failure notice and keeps the notice's own log button", () => {
+    const getTaskTrace = vi.fn();
+    setApiInstance({ getTaskTrace, getTurn: vi.fn() } as never);
+    const { view, client } = renderRows([
+      { seq: 1, id: "turn_9", kind: "turn", task_id: "attempt_9", body_md: "",
+        metadata: { turn_id: "turn_9", status: "failed", failure_reason: "agent_error", process_item_count: 2, elapsed_ms: 5000 } },
+    ]);
+    try {
+      const row = view.container.querySelector<HTMLElement>('[data-perf-key="turn_9"]')!;
+      const fold = row.querySelector('[data-chat-steps="finished"]')!;
+      const notice = row.querySelector('[data-turn-notice="failed"]')!;
+      expect(fold.compareDocumentPosition(notice) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      expect(notice.querySelector("[data-chat-trace]")).not.toBeNull();
+      expect(getTaskTrace).not.toHaveBeenCalled();
+    } finally { view.unmount(); client.clear(); }
+  });
+
+  it("shows no fold for a turn that counted no process items", () => {
+    setApiInstance({ getTaskTrace: vi.fn() } as never);
+    const { view, client } = renderRows([
+      { seq: 1, id: "turn_10", kind: "turn", task_id: "attempt_10", body_md: "Hi",
+        metadata: { turn_id: "turn_10", status: "completed", final_reply_md: "Hi", process_item_count: 0, worked_ms: 100 } },
+    ]);
+    try {
+      expect(view.container.querySelector("[data-chat-steps]")).toBeNull();
+      expect(view.container.querySelector("[data-chat-trace]")).not.toBeNull();
+    } finally { view.unmount(); client.clear(); }
+  });
+});
+
+describe("live turn steps", () => {
+  it("renders the running turn's fold and final reply from its live trace, then yields to the persisted reply", async () => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
+    client.setQueryData(["task-trace", TASK_ID], turnTraceCache(turnPage(traceTurn({ id: TASK_ID }), [
+      command("cmd_1", [read("a.ts")]),
+      traceMessage("msg:f", "Streaming answer", "final", { status: "in_progress", completed_at: null }),
+    ], { closed: false })));
+    const replica = new MemorySessionReplica({ "cs-1": { entries: [] } });
+    const view = render(<QueryClientProvider client={client}><ChatMessageList sessionId="cs-1" replica={replica} optimisticRows={[]}
+      pendingTask={pendingTask} availability={undefined} /></QueryClientProvider>);
+    try {
+      expect(view.container.querySelector('[data-chat-steps="live"]')).not.toBeNull();
+      expect(view.container.querySelector("[data-chat-live-final]")).toHaveTextContent("Streaming answer");
+      // The fold carries the run; the pill would only repeat it.
+      expect(screen.queryByTestId("status-pill")).toBeNull();
     } finally { view.unmount(); client.clear(); }
   });
 });

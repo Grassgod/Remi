@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { command, fileChange, message, read, reasoning, search, change, unknown, userMessage, webSearch } from "../../test/trace-fixtures";
 import { pickStageKeys } from "./task-status-pill";
 
 describe("pickStageKeys", () => {
@@ -45,5 +46,30 @@ describe("pickStageKeys", () => {
 
   it("returns thinking for running with no messages", () => {
     expect(pickStageKeys("running", [], "online")).toEqual({ stageKey: "thinking" });
+  });
+
+  it("takes the running stage from the last top-level item", () => {
+    const running = { status: "in_progress" as const, completed_at: null };
+    expect(pickStageKeys("running", [userMessage("in:1", "hi")], "online")).toEqual({ stageKey: "thinking" });
+    expect(pickStageKeys("running", [reasoning("rsn:1", "hm", running)], "online")).toEqual({ stageKey: "thinking" });
+    expect(pickStageKeys("running", [message("msg:1", "Hel", "unknown", running)], "online")).toEqual({ stageKey: "typing" });
+    expect(pickStageKeys("running", [command("cmd_1", [read("a.ts")], running)], "online"))
+      .toEqual({ stageKey: "thinking", toolKey: "reading_files" });
+    expect(pickStageKeys("running", [command("cmd_1", [search("x")], running)], "online"))
+      .toEqual({ stageKey: "thinking", toolKey: "searching_code" });
+    expect(pickStageKeys("running", [command("cmd_1", [read("a.ts"), unknown("make")], running)], "online"))
+      .toEqual({ stageKey: "thinking", toolKey: "running_command" });
+    expect(pickStageKeys("running", [fileChange("fc_1", [change("a.ts")], running)], "online"))
+      .toEqual({ stageKey: "thinking", toolKey: "making_edits" });
+    expect(pickStageKeys("running", [webSearch("ws_1", "q", running)], "online"))
+      .toEqual({ stageKey: "thinking", toolKey: "searching_web" });
+  });
+
+  it("reads a finished tool as thinking again and ignores a subagent's own items", () => {
+    expect(pickStageKeys("running", [command("cmd_1", [read("a.ts")])], "online")).toEqual({ stageKey: "thinking" });
+    expect(pickStageKeys("running", [
+      message("msg:1", "Hello", "unknown", { status: "in_progress", completed_at: null }),
+      command("cmd_c", [unknown("make")], { parent_id: "agent_1", status: "in_progress", completed_at: null }),
+    ], "online")).toEqual({ stageKey: "typing" });
   });
 });

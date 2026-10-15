@@ -1,7 +1,7 @@
 // LLM progress summaries for running tasks (MUL-67). The daemon feeds every
-// reported task-message batch into a per-task TaskProgressSummarizer; when
-// enough new activity accumulates (≥N messages AND ≥T ms since the last
-// summary — MoA-style dual trigger) it makes one stateless small-model call
+// stored trace batch into a per-task TaskProgressSummarizer; when enough new
+// activity accumulates (≥N completed items AND ≥T ms since the last summary —
+// MoA-style dual trigger) it makes one stateless small-model call
 // and writes the result through `reportProgress`. A terminal summary is forced
 // when the run ends (completed / failed / cancelled) with `final: true`, which
 // bypasses the server's terminal-status progress guard.
@@ -9,7 +9,7 @@
 // Isolation contract: summarization is strictly fire-and-forget. Model or
 // network failures are logged and swallowed; they must never affect task
 // execution. At most one summary call is in flight per task.
-import type { TaskMessageInput } from "@multiremi/contracts/types.js";
+import type { TraceEvent, TraceItem } from "@multiremi/contracts/trace.js";
 import { createLogger } from "@shared/logger.js";
 import { existsSync } from "node:fs";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
@@ -31,7 +31,7 @@ export interface OpenAiProgressSummaryConfig {
 
 export interface ProgressSummaryConfig {
   enabled: boolean;
-  /** Trigger floor: new task messages since the last summary (N). */
+  /** Trigger floor: items completed since the last summary (N). */
   minNewMessages: number;
   /** Debounce floor: milliseconds since the last summary (T). */
   minIntervalMs: number;
@@ -69,7 +69,7 @@ function positiveInt(raw: string | undefined, fallback: number): number {
 /**
  * N/T and machine-level model overrides are env-tunable:
  *   MULTIREMI_PROGRESS_SUMMARY_DISABLED=1     turn the feature off
- *   MULTIREMI_PROGRESS_SUMMARY_MESSAGES=20    N — new messages per summary
+ *   MULTIREMI_PROGRESS_SUMMARY_MESSAGES=20    N — completed trace items per summary
  *   MULTIREMI_PROGRESS_SUMMARY_INTERVAL_MS=45000  T — debounce between summaries
  *   MULTIREMI_PROGRESS_SUMMARY_MODEL=...      summary model id
  *   MULTIREMI_PROGRESS_SUMMARY_TRANSPORT=auto API first, then CLI on HTTP errors
@@ -206,34 +206,66 @@ export function resolveSummarizerCredentials(
   return null;
 }
 
-/** One compressed line per interesting message; null = not digest-worthy. */
-export function digestTaskMessage(message: TaskMessageInput): string | null {
+/** One compressed line per completed trace item; null = not digest-worthy. */
+export function digestTraceItem(item: TraceItem): string | null {
   const clip = (value: string, max: number): string => {
     const text = value.replace(/\s+/g, " ").trim();
     return text.length > max ? `${text.slice(0, max)}…` : text;
   };
-  if (message.type === "text" && message.content) return `assistant: ${clip(message.content, 300)}`;
-  if (message.type === "thinking" && message.content) return `thinking: ${clip(message.content, 160)}`;
-  if (message.type === "plan" && message.content) return `plan: ${clip(message.content, 120)}`;
-  if (message.type === "tool_use") {
-    const input = message.input ? clip(JSON.stringify(message.input), 200) : "";
-    return `tool ${message.tool ?? "?"}${input ? ` ${input}` : ""}`;
+  const failed = (tool: string, output: string | null): string =>
+    `tool ${tool} failed${output ? ` ${clip(output, 200)}` : ""}`;
+  switch (item.type) {
+    case "agent_message":
+      return item.text.trim() ? `assistant: ${clip(item.text, 300)}` : null;
+    case "reasoning":
+      return item.text.trim() ? `thinking: ${clip(item.text, 160)}` : null;
+    case "plan": {
+      const done = item.entries.filter((entry) => entry.status === "completed").length;
+      return `plan: ${done}/${item.entries.length} completed`;
+    }
+    case "command": {
+      if (item.status === "failed") return failed(item.tool, item.output);
+      const detail = item.command ?? item.actions.map((action) => action.type === "unknown" ? action.command
+        : action.type === "read" ? action.path : action.type === "search" ? action.query ?? action.path ?? "" : action.path ?? "")
+        .filter(Boolean).join(", ");
+      return `tool ${item.tool}${detail ? ` ${clip(detail, 200)}` : ""}`;
+    }
+    case "file_change": {
+      if (item.status === "failed") return failed(item.tool, item.output);
+      const paths = item.changes.map((change) => change.path).join(", ");
+      return `tool ${item.tool}${paths ? ` ${clip(paths, 200)}` : ""}`;
+    }
+    case "web_search": {
+      if (item.status === "failed") return failed(item.tool, item.output);
+      const detail = item.query ?? item.url ?? "";
+      return `tool ${item.tool}${detail ? ` ${clip(detail, 200)}` : ""}`;
+    }
+    case "tool": {
+      if (item.status === "failed") return failed(item.tool, item.output);
+      const input = item.input ? clip(JSON.stringify(item.input), 200) : "";
+      return `tool ${item.tool}${input ? ` ${input}` : ""}`;
+    }
+    case "subagent": {
+      if (item.status === "failed") return failed(item.tool, item.output);
+      const detail = item.title ?? item.prompt ?? "";
+      return `tool ${item.tool}${detail ? ` ${clip(detail, 200)}` : ""}`;
+    }
+    default:
+      // user/steer messages, permission/question traffic, compaction, notices: skip.
+      return null;
   }
-  if (message.type === "tool_result" && message.status === "failed") {
-    const output = message.output ? ` ${clip(message.output, 200)}` : "";
-    return `tool ${message.tool ?? "?"} failed${output}`;
-  }
-  // usage snapshots, successful tool_results (their tool_use already tells the
-  // story), permission/question traffic: skip.
-  return null;
 }
 
 /**
  * Pure trigger/accumulation state, unit-testable without any I/O. Counts every
- * reported message toward the N trigger but stores only digest-worthy lines,
- * keeping the newest ones within the character budget.
+ * completed trace item toward the N trigger but stores only digest-worthy lines,
+ * keeping the newest ones within the character budget. Other events (deltas,
+ * starts, turn updates) are progress within an item and count for nothing.
+ * An item counts once: a later `item.completed` for the same id (a phase
+ * change, a late hook, a decline) re-states it and is skipped.
  */
 export class TaskProgressTracker {
+  private readonly completed = new Set<string>();
   private pendingCount = 0;
   private pendingLines: string[] = [];
   private pendingChars = 0;
@@ -249,10 +281,12 @@ export class TaskProgressTracker {
     this.lastSummaryAtMs = nowMs;
   }
 
-  record(messages: TaskMessageInput[]): void {
-    for (const message of messages) {
+  record(events: readonly TraceEvent[]): void {
+    for (const event of events) {
+      if (event.type !== "item.completed" || this.completed.has(event.item.id)) continue;
+      this.completed.add(event.item.id);
       this.pendingCount++;
-      const line = digestTaskMessage(message);
+      const line = digestTraceItem(event.item);
       if (!line) continue;
       this.pendingLines.push(line);
       this.pendingChars += line.length;
@@ -608,7 +642,7 @@ export interface TaskProgressSummarizerOptions {
 }
 
 /**
- * Per-task glue: trigger evaluation + single-flight summary calls. `onMessages`
+ * Per-task glue: trigger evaluation + single-flight summary calls. `onEvents`
  * is synchronous and cheap on the hot path; the model call runs detached from
  * the run loop. `finalize` produces the terminal summary and resolves once the
  * write finished (callers fire-and-forget it).
@@ -649,9 +683,9 @@ export class TaskProgressSummarizer {
     );
   }
 
-  onMessages(messages: TaskMessageInput[]): void {
+  onEvents(events: readonly TraceEvent[]): void {
     if (this.finalized) return;
-    this.tracker.record(messages);
+    this.tracker.record(events);
     if (this.inFlight || !this.tracker.shouldTrigger(this.now())) return;
     const { digest } = this.tracker.drain(this.now());
     this.inFlight = this.summarizeAndReport(digest, undefined, undefined)

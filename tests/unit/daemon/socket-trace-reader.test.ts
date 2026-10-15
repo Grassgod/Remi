@@ -22,10 +22,10 @@ function fixture() {
 describe("socket trace reader admission and errors", () => {
   it("limits each connection to four in flight and 32 queued, then admits the oldest waiter", async () => {
     const f = fixture();
-    const reads = Array.from({ length: 36 }, (_, i) => f.reader.read({ runtimeId: "rt", taskId: `task-${i}` }));
+    const reads = Array.from({ length: 36 }, (_, i) => f.reader.read({ runtimeId: "rt", taskId: `task-${i}`, view: "events" }));
     expect(f.sent).toHaveLength(4); expect(f.pending.size).toBe(4);
-    expect(await f.reader.read({ runtimeId: "rt", taskId: "overflow" })).toEqual({ ok: false, code: "daemon_busy", runtime_id: "rt" });
-    f.reply(f.sent[0]!.id, { ok: true, events: [], next_after_seq: 0, head: 0, eof: true, closed: false });
+    expect(await f.reader.read({ runtimeId: "rt", taskId: "overflow", view: "events" })).toEqual({ ok: false, code: "daemon_busy", runtime_id: "rt" });
+    f.reply(f.sent[0]!.id, { ok: true, view: "events", format: "v2", events: [], next_after_seq: 0, head: 0, eof: true, closed: false });
     expect((await reads[0]!).ok).toBe(true);
     expect(f.sent).toHaveLength(5); expect(f.sent[4]!.frame.p.task_id).toBe("task-4");
     f.close();
@@ -36,11 +36,11 @@ describe("socket trace reader admission and errors", () => {
 
   it("defaults pages, clamps upper limits and keeps eof separate from closed", async () => {
     const f = fixture();
-    const first = f.reader.read({ runtimeId: "rt", taskId: "task" });
-    expect(f.sent[0]!.frame.p).toEqual({ task_id: "task", after_seq: 0, limit: 200, max_bytes: 1024 * 1024 });
-    f.reply(f.sent[0]!.id, { ok: true, events: [], next_after_seq: 0, head: 7, eof: false, closed: true });
+    const first = f.reader.read({ runtimeId: "rt", taskId: "task", view: "events" });
+    expect(f.sent[0]!.frame.p).toEqual({ task_id: "task", view: "events", after_seq: 0, limit: 200, max_bytes: 1024 * 1024 });
+    f.reply(f.sent[0]!.id, { ok: true, view: "events", format: "v2", events: [], next_after_seq: 0, head: 7, eof: false, closed: true });
     expect(await first).toMatchObject({ eof: false, closed: true });
-    const second = f.reader.read({ runtimeId: "rt", taskId: "task", limit: 1000, maxBytes: 2 * 1024 * 1024 });
+    const second = f.reader.read({ runtimeId: "rt", taskId: "task", view: "events", limit: 1000, maxBytes: 2 * 1024 * 1024 });
     expect(f.sent[1]!.frame.p).toMatchObject({ limit: 500, max_bytes: 1024 * 1024 });
     f.reply(f.sent[1]!.id, { ok: false, code: "trace_not_hot", retryable: false });
     expect(await second).toEqual({ ok: false, code: "trace_not_hot", runtime_id: "rt" }); f.close();
@@ -48,11 +48,33 @@ describe("socket trace reader admission and errors", () => {
 
   it("times out and forgets the request; offline includes runtime and last observation", async () => {
     const f = fixture();
-    const result = await f.reader.read({ runtimeId: "rt", taskId: "task", timeoutMs: 5 });
+    const result = await f.reader.read({ runtimeId: "rt", taskId: "task", view: "turn", timeoutMs: 5 });
     expect(result).toEqual({ ok: false, code: "daemon_timeout", runtime_id: "rt" });
     expect(f.pending.size).toBe(0);
-    f.reply(f.sent[0]!.id, { ok: true, events: [], head: 0, eof: true, closed: false });
+    f.reply(f.sent[0]!.id, { ok: true, view: "turn", format: "v2", turn: null, items: [], next_item_cursor: null, head: 0, closed: false });
     f.close();
-    expect(await f.reader.read({ runtimeId: "rt", taskId: "task" })).toEqual({ ok: false, code: "daemon_unreachable", runtime_id: "rt", last_seen_at: "2026-09-28T00:00:00Z" });
+    expect(await f.reader.read({ runtimeId: "rt", taskId: "task", view: "turn" })).toEqual({ ok: false, code: "daemon_unreachable", runtime_id: "rt", last_seen_at: "2026-09-28T00:00:00Z" });
+  });
+
+  it("sends the view and item cursor, and validates each reply shape", async () => {
+    const f = fixture();
+    const turnPage = { ok: true, view: "turn", format: "v2", turn: null, items: [], next_item_cursor: 3, head: 9, closed: false };
+    const turn = f.reader.read({ runtimeId: "rt", taskId: "task", view: "turn", itemCursor: 2.7, limit: 50 });
+    expect(f.sent[0]!.frame.p).toEqual({ task_id: "task", view: "turn", item_cursor: 2, limit: 50, max_bytes: 1024 * 1024 });
+    f.reply(f.sent[0]!.id, turnPage);
+    expect(await turn).toEqual(turnPage as never);
+    // A reply for the other view, or without the paging fields, is not an answer.
+    for (const [view, bad] of [
+      ["turn", { ok: true, view: "events", format: "v2", events: [], next_after_seq: 0, head: 0, eof: true, closed: false }],
+      ["turn", { ...turnPage, next_item_cursor: -1 }],
+      ["turn", { ...turnPage, format: "v3" }],
+      ["events", { ok: true, events: [], next_after_seq: 0, head: 0, eof: true, closed: false }],
+      ["events", { ok: true, view: "events", format: "legacy", events: [], next_after_seq: 0, head: 0, closed: false }],
+    ] as const) {
+      const read = f.reader.read({ runtimeId: "rt", taskId: "task", view });
+      f.reply(f.sent.at(-1)!.id, bad);
+      expect(await read).toEqual({ ok: false, code: "daemon_timeout", runtime_id: "rt" });
+    }
+    f.close();
   });
 });

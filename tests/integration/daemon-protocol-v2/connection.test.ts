@@ -129,10 +129,10 @@ describe("daemon protocol v2 real connection", () => {
     });
     it("reads pending and settled decision messages through the card host's real HTTP client", async () => {
     const reads = spyOn(h.daemon, "getMessageHumanRequest");
-    expect(await h.daemon.isFeishuBotHumanRequestPending(task.id, request.id)).toBe(true);
+    expect((await h.daemon.getFeishuBotHumanRequest(task.id, request.id))?.status).toBe("pending");
     expect(await h.daemon.getFeishuBotHumanRequest(task.id, request.id)).toEqual(request);
     expect(h.store.respondTaskHumanRequest(request.id, { response: { answer: "yes" }, respondedBy: "mem_local_local", expectedRouteRevision: h.store.getQuestion(request.id)!.route_revision })).toBeTruthy();
-    expect(await h.daemon.isFeishuBotHumanRequestPending(task.id, request.id)).toBe(false);
+    expect((await h.daemon.getFeishuBotHumanRequest(task.id, request.id))?.status).toBe("responded");
     expect(await h.daemon.getFeishuBotHumanRequest(task.id, request.id)).toMatchObject({ status: "responded", response: { answer: "yes", answers: { 'Continue?': 'yes' } } });
     await expect(h.daemon.getFeishuBotHumanRequest(task.id, "hrq_missing")).rejects.toBeInstanceOf(MultiremiDaemonHttpError);
     await expect(h.daemon.getFeishuBotHumanRequest(task.id, "hrq_missing")).rejects.toMatchObject({ status: 404 });

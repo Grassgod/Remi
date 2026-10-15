@@ -1,8 +1,8 @@
 "use client";
 
-import { extractTraceFinalAnswer } from "@multiremi/shared/trace-semantics";
-
 import { useState, useRef, useCallback, useEffect, useMemo } from "react";
+import type { TraceItem, TraceTurn } from "@multiremi/contracts/trace";
+import { finalItem, turnTraceStats } from "@multiremi/shared/turn-trace";
 import {
   Bot,
   CheckCircle2,
@@ -41,34 +41,35 @@ import {
   formatElapsedSince,
   formatTokens,
 } from "../format";
-import { api, type TaskTraceRead } from "@multiremi/core/api";
+import { api } from "@multiremi/core/api";
 import { useTranscriptViewStore } from "@multiremi/core/agents/stores";
 import type { AgentTask, Agent, AgentRuntime } from "@multiremi/core/types/agent";
-import { redactString } from "./redact";
-import { buildEntries, countToolCalls, nestEntries, type ContextUsage, type TimelineItem } from "./build-timeline";
+import { redactItem } from "./redact";
 import { useT } from "../../i18n";
 import {
   formatProvider,
-  getEventLabel,
-  getEventSummary,
+  getItemLabel,
+  getItemSummary,
+  itemFilterKey,
   usageSnapshotFromTask,
 } from "./event-format";
 import { MetadataChip } from "./metadata-chip";
 import { SortDirectionToggle } from "./sort-direction-toggle";
 import { TimelineBar } from "./timeline-bar";
-import { TranscriptEventRow } from "./transcript-event-row";
-import { TranscriptStepRow } from "./transcript-step-row";
+import { PlanEntries, TranscriptItemRow } from "./transcript-item-row";
 import { ExecutionModelInfo } from "./execution-model-info";
+import type { TurnTraceReadInfo } from "./use-task-trace";
 
 interface AgentTranscriptDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   task: AgentTask;
-  items: TimelineItem[];
+  /** The trace's turn; model and context usage come from it. */
+  turn?: TraceTurn | null;
+  /** Every item of the trace, at any depth; subagent items nest their own. */
+  items: readonly TraceItem[];
   agentName: string;
   isLive?: boolean;
-  contextUsage?: ContextUsage | null;
-  traceModel?: string | null;
   /**
    * Optional content rendered between the header chips and the event list.
    * Used by autopilot run rows to surface the inbound webhook trigger
@@ -79,14 +80,11 @@ interface AgentTranscriptDialogProps {
   /** Assignment content supplied by callers that own a turn, used only on prompt 404. */
   promptFallback?: React.ReactNode;
   initialView?: "execution" | "prompt";
-  traceResult?: TaskTraceRead | null;
+  traceRead?: TurnTraceReadInfo | null;
+  traceClosed?: boolean;
   traceLoading?: boolean;
   traceError?: boolean;
   onTraceRetry?: () => void;
-  onTraceLoadMore?: () => void;
-  onTraceRestart?: () => void;
-  traceWindowLimit?: number;
-  traceComplete?: boolean;
 }
 
 // ─── Color mapping for timeline segments ────────────────────────────────────
@@ -94,31 +92,29 @@ interface AgentTranscriptDialogProps {
 /** Task states after which no step can still be running. */
 const TERMINAL_TASK_STATUS = new Set<string>(["completed", "failed", "cancelled"]);
 
+const NO_CHILDREN: readonly TraceItem[] = [];
+
 // ─── Main dialog ────────────────────────────────────────────────────────────
 
 export function AgentTranscriptDialog({
   open,
   onOpenChange,
   task,
-  items,
+  turn = null,
+  items: rawItems,
   agentName,
   isLive = false,
-  contextUsage,
-  traceModel,
   headerSlot,
   promptFallback,
   initialView = "execution",
-  traceResult,
+  traceRead,
+  traceClosed = false,
   traceLoading = false,
   traceError = false,
   onTraceRetry,
-  onTraceLoadMore,
-  onTraceRestart,
-  traceWindowLimit,
-  traceComplete = true,
 }: AgentTranscriptDialogProps) {
   const { t } = useT("agents");
-  const [selectedSeq, setSelectedSeq] = useState<number | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
   const [elapsed, setElapsed] = useState("");
   const [copied, setCopied] = useState(false);
   const [copiedWorkdir, setCopiedWorkdir] = useState(false);
@@ -129,7 +125,7 @@ export function AgentTranscriptDialog({
   const [selectedTools, setSelectedTools] = useState<Set<string>>(new Set());
   const sortDirection = useTranscriptViewStore((s) => s.sortDirection);
   const setSortDirection = useTranscriptViewStore((s) => s.setSortDirection);
-  const eventRefs = useRef<Map<number, HTMLDivElement>>(new Map());
+  const eventRefs = useRef<Map<string, HTMLDivElement>>(new Map());
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const promptQuery = useQuery({
     queryKey: ["task-prompt", task.id],
@@ -145,36 +141,52 @@ export function AgentTranscriptDialog({
     && promptQuery.error.status === 404,
   );
 
-  // Derive filter options from each item:
-  //   tool_use / tool_result → filter value = tool, display = "tool:Bash"
-  //   other types → display from getEventLabel
-  const filterOptions = useMemo(() => {
-    const options = new Map<string, string>();
+  // Redact for display and copy; ids, statuses and times stay intact.
+  // `redactItem` caches per item, and the reducer keeps the identity of an
+  // item that did not change, so a live frame redacts only what it touched.
+  const items = useMemo(() => rawItems.map(redactItem), [rawItems]);
+  // One pass builds the top level and the parent → children index. Top level:
+  // items without a parent, or whose parent is not in the trace (fail open).
+  const childrenIndex = useRef(new Map<string, readonly TraceItem[]>());
+  const { topItems, childrenOf } = useMemo(() => {
+    const ids = new Set<string>();
+    for (const item of items) ids.add(item.id);
+    const top: TraceItem[] = [];
+    const groups = new Map<string, TraceItem[]>();
     for (const item of items) {
-      if (item.tool && (item.type === "tool_use" || item.type === "tool_result")) {
-        const key = `tool:${item.tool}`;
-        if (!options.has(key)) options.set(key, key);
-      } else {
-        const value = item.type;
-        if (!options.has(value)) {
-          options.set(value, getEventLabel(item));
-        }
+      if (item.parent_id === null || !ids.has(item.parent_id)) top.push(item);
+      else {
+        const siblings = groups.get(item.parent_id);
+        if (siblings) siblings.push(item); else groups.set(item.parent_id, [item]);
       }
     }
-    return Array.from(options.entries()).sort((a, b) => a[1].localeCompare(b[1]));
+    // Keep a parent's array when its children did not change, so its
+    // memoized row does not re-render.
+    const previous = childrenIndex.current;
+    const next = new Map<string, readonly TraceItem[]>();
+    for (const [parentId, children] of groups) {
+      const before = previous.get(parentId);
+      next.set(parentId, before && before.length === children.length && before.every((child, i) => child === children[i]) ? before : children);
+    }
+    childrenIndex.current = next;
+    return { topItems: top, childrenOf: next };
   }, [items]);
 
-  // Resolve filter key for each item — mirrors filterOptions derivation exactly
-  const itemFilterKey = (item: TimelineItem) =>
-    item.tool && (item.type === "tool_use" || item.type === "tool_result")
-      ? `tool:${item.tool}`
-      : item.type;
+  // Filter options: tool items by their tool ("tool:Bash"), the rest by type.
+  const filterOptions = useMemo(() => {
+    const options = new Map<string, string>();
+    for (const item of topItems) {
+      const key = itemFilterKey(item);
+      if (!options.has(key)) options.set(key, key.startsWith("tool:") ? key : getItemLabel(item));
+    }
+    return Array.from(options.entries()).sort((a, b) => a[1].localeCompare(b[1]));
+  }, [topItems]);
 
-  // Strict filter
+  // Strict filter, top level only: a subagent keeps all of its own steps.
   const filteredItems = useMemo(() => {
-    if (selectedTools.size === 0) return items;
-    return items.filter((item) => selectedTools.has(itemFilterKey(item)));
-  }, [items, selectedTools]);
+    if (selectedTools.size === 0) return topItems;
+    return topItems.filter((item) => selectedTools.has(itemFilterKey(item)));
+  }, [topItems, selectedTools]);
 
   // Apply user-chosen sort direction. Reverse is a pure presentation concern —
   // the underlying timeline (and its seq numbers) is untouched, so copy/filter
@@ -229,9 +241,20 @@ export function AgentTranscriptDialog({
     return () => clearInterval(interval);
   }, [isLive, task.started_at, task.dispatched_at]);
 
-  const handleSegmentClick = useCallback((seq: number) => {
-    setSelectedSeq(seq);
-    eventRefs.current.get(seq)?.scrollIntoView({ behavior: "smooth", block: "center" });
+  const childrenRef = useRef(childrenOf);
+  childrenRef.current = childrenOf;
+  const getChildren = useCallback((id: string) => childrenRef.current.get(id) ?? NO_CHILDREN, []);
+
+  // A subagent row registers for its own items too: they have no row while it
+  // is collapsed, and timeline navigation must still land on them.
+  const registerRow = useCallback((id: string, element: HTMLDivElement | null) => {
+    if (element) eventRefs.current.set(id, element);
+    else eventRefs.current.delete(id);
+  }, []);
+
+  const handleSegmentClick = useCallback((id: string) => {
+    setSelectedId(id);
+    eventRefs.current.get(id)?.scrollIntoView({ behavior: "smooth", block: "center" });
   }, []);
 
   // Live-follow: the transcript is tailing a running task. Also gates the
@@ -239,12 +262,12 @@ export function AgentTranscriptDialog({
   const liveFollow = isLive && sortDirection === "chronological";
   // A finished task can't have running steps; `isLive` wins so a task whose
   // status has landed while the stream is still open keeps its spinners.
-  const taskTerminal = !isLive && (traceResult?.closed === true || TERMINAL_TASK_STATUS.has(task.status));
+  const taskTerminal = !isLive && (traceClosed || TERMINAL_TASK_STATUS.has(task.status));
 
   // Follow the newest events while a task is live, but only when the user is
   // already parked near the bottom — scrolling up to read history pauses the
   // auto-follow (standard log-tail behavior). Only in chronological order.
-  const lastItemSeq = displayItems.length > 0 ? displayItems[displayItems.length - 1]!.seq : null;
+  const lastItemSeq = items.length > 0 ? items[items.length - 1]!.seq ?? items.length : null;
   useEffect(() => {
     if (!isLive || sortDirection !== "chronological") return;
     const el = scrollContainerRef.current;
@@ -265,24 +288,19 @@ export function AgentTranscriptDialog({
   }, [task.relative_work_dir]);
 
   const handleCopyAll = useCallback(() => {
-    // Flat chronological order, with subagent steps indented one level — same
-    // fail-open rule as nestEntries: an unknown parent id stays flush left.
-    const stepIds = new Set(displayItems.map((item) => item.toolCallId).filter(Boolean));
-    const text = displayItems
-      .map((item) => {
-        const label = getEventLabel(item);
-        const summary = getEventSummary(item);
-        const parentId = item.meta?.parent_tool_call_id;
-        const nested = typeof parentId === "string" && parentId !== item.toolCallId && stepIds.has(parentId);
-        return `${nested ? "  " : ""}[${label}] ${summary}`;
-      })
-      .join("\n");
-    void copyText(text).then((ok) => {
+    // The displayed order, with a subagent's own items indented under it.
+    const lines: string[] = [];
+    const add = (item: TraceItem, depth: number) => {
+      lines.push(`${"  ".repeat(depth)}[${getItemLabel(item)}] ${getItemSummary(item)}`);
+      for (const child of childrenOf.get(item.id) ?? []) add(child, depth + 1);
+    };
+    for (const item of displayItems) add(item, 0);
+    void copyText(lines.join("\n")).then((ok) => {
       if (!ok) return;
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     });
-  }, [displayItems]);
+  }, [displayItems, childrenOf]);
 
   const handleCopyPrompt = useCallback(() => {
     const prompt = promptQuery.data?.prompt;
@@ -320,43 +338,38 @@ export function AgentTranscriptDialog({
         ? elapsed
         : null;
 
-  const toolCount = countToolCalls(items);
+  // The single tool-count rule: a finished turn's stats, else the same count
+  // over the items read so far.
+  const liveToolCount = useMemo(() => turnTraceStats(items).tool_call_count, [items]);
+  const toolCount = turn && turn.status !== "running" ? turn.stats.tool_call_count : liveToolCount;
+  const contextUsage = turn?.context_usage ?? null;
 
   // Header token rollup (server-provided) + the agent's final reply, surfaced
   // above the event list so the outcome isn't buried in a one-line summary.
   const usage = useMemo(() => usageSnapshotFromTask(task), [task]);
   const [answerCopied, setAnswerCopied] = useState(false);
-  const finalAnswer = useMemo(() => traceComplete ? extractTraceFinalAnswer(items) : null, [items, traceComplete]);
+  // The final reply is the item the daemon marked final; it is never a child's.
+  const finalAnswer = useMemo(() => {
+    const final = finalItem(items, turn?.final_item_id);
+    return final && final.parent_id === null && final.text.trim() ? final.text : null;
+  }, [items, turn?.final_item_id]);
   const handleCopyAnswer = useCallback(() => {
     if (!finalAnswer) return;
-    void copyText(redactString(finalAnswer)).then((ok) => {
+    void copyText(finalAnswer).then((ok) => {
       if (!ok) return;
       setAnswerCopied(true);
       setTimeout(() => setAnswerCopied(false), 2000);
     });
   }, [finalAnswer]);
 
-  // Pair tool_use/tool_result into step cards (Batch 2 gives us tool_call_id);
-  // the final answer, usage, and plan are surfaced in their own sections.
-  // buildEntries pairs chronologically; apply the display sort to the entries
-  // afterward so newest-first doesn't corrupt the pairing.
-  const entries = useMemo(() => {
-    // Nest before the display sort so a subagent's steps stay chronological
-    // inside their group while the top level follows the chosen direction.
-    const paired = nestEntries(buildEntries(filteredItems));
-    return sortDirection === "newest_first" ? [...paired].reverse() : paired;
-  }, [filteredItems, sortDirection]);
+  const entries = displayItems;
   const planEntries = useMemo(() => {
-    for (let i = items.length - 1; i >= 0; i--) {
-      const it = items[i];
-      // "plan" isn't in TimelineItem's narrow union but flows through from the
-      // wire; compare as string.
-      if ((it?.type as string) === "plan" && Array.isArray(it?.meta?.entries)) {
-        return it!.meta!.entries as Array<Record<string, unknown>>;
-      }
+    for (let i = topItems.length - 1; i >= 0; i--) {
+      const item = topItems[i]!;
+      if (item.type === "plan") return item.entries;
     }
     return null;
-  }, [items]);
+  }, [topItems]);
 
   const statusDisplay = task.status === "queued"
     ? { label: t(($) => $.transcript.status_queued), icon: Clock, tone: "bg-muted text-muted-foreground", spins: false }
@@ -394,7 +407,8 @@ export function AgentTranscriptDialog({
           ? t(($) => $.transcript.waiting_events)
           : null;
   const emptyStateSpins = !taskTerminal && ((task.status === "dispatched" && !task.queue_blocker) || (task.status === "running" && isLive));
-  const traceUnavailable = traceError || (traceResult !== undefined && traceResult !== null && traceResult.state !== "ok");
+  const traceUnavailable = traceError || (!!traceRead && traceRead.state !== "ok");
+  const legacyTrace = traceRead?.format === "legacy";
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -449,7 +463,7 @@ export function AgentTranscriptDialog({
             </div>
 
             <div className="ml-auto flex items-center gap-1">
-              {activeView === "execution" && items.length > 1 && (
+              {activeView === "execution" && topItems.length > 1 && (
                 <SortDirectionToggle
                   value={sortDirection}
                   onChange={handleSortDirectionChange}
@@ -506,7 +520,7 @@ export function AgentTranscriptDialog({
                   className="flex items-center gap-1 rounded px-2 py-1 text-xs text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
                 >
                   {copied ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
-                  {copied ? t(($) => $.transcript.copied) : selectedTools.size > 0 ? t(($) => $.transcript.copy_filtered) : traceWindowLimit ? t(($) => $.transcript.copy_loaded) : t(($) => $.transcript.copy_all)}
+                  {copied ? t(($) => $.transcript.copied) : selectedTools.size > 0 ? t(($) => $.transcript.copy_filtered) : t(($) => $.transcript.copy_all)}
                 </button>
               ) : promptQuery.data?.prompt ? (
                 <button
@@ -567,7 +581,7 @@ export function AgentTranscriptDialog({
             )}
             <MetadataChip>
               {selectedTools.size > 0
-                ? t(($) => $.transcript.events_filtered, { shown: filteredItems.length, total: items.length })
+                ? t(($) => $.transcript.events_filtered, { shown: filteredItems.length, total: topItems.length })
                 : t(($) => $.transcript.events, { count: items.length })}
             </MetadataChip>
 
@@ -585,13 +599,13 @@ export function AgentTranscriptDialog({
             {contextUsage && (
               <MetadataChip>
                 {t(($) => $.transcript.context_usage, {
-                  value: contextUsage.size == null
-                    ? formatTokens(contextUsage.used)
-                    : `${formatTokens(contextUsage.used)} / ${formatTokens(contextUsage.size)}`,
+                  value: contextUsage.size > 0
+                    ? `${formatTokens(contextUsage.used)} / ${formatTokens(contextUsage.size)}`
+                    : formatTokens(contextUsage.used),
                 })}
               </MetadataChip>
             )}
-            <ExecutionModelInfo task={task} traceModel={traceModel} agentModel={agentInfo?.model} agentThinkingLevel={agentInfo?.thinking_level} />
+            <ExecutionModelInfo task={task} traceModel={turn?.model} agentModel={agentInfo?.model} agentThinkingLevel={agentInfo?.thinking_level} />
 
             {/* Working directory — server-derived display path. Falls back to
                 nothing when older backends omit the field rather than rendering
@@ -636,39 +650,31 @@ export function AgentTranscriptDialog({
 
         {onTraceRetry && (
           <div
-            role={traceError || traceResult?.state === "unreachable" ? "alert" : "status"}
+            role={traceError || traceRead?.state === "unreachable" ? "alert" : "status"}
             className={cn(
               "flex min-h-12 shrink-0 flex-wrap items-center gap-2 border-b px-4 py-1 text-xs text-muted-foreground",
-              (traceError || traceResult?.state === "unreachable") && "h-16 max-md:h-[88px]",
+              (traceError || traceRead?.state === "unreachable") && "h-16 max-md:h-[88px]",
             )}
           >
             {traceLoading ? <Loader2 className="h-4 w-4 shrink-0 animate-spin" /> : null}
             <span className="min-w-0 flex-1">
-              {traceError ? t(($) => $.transcript.trace_failed) : traceLoading && !traceResult ? t(($) => $.transcript.trace_loading)
-                : traceResult?.state === "unreachable"
-                  ? t(($) => $.transcript.trace_unreachable, { name: traceResult.runtime_name ?? traceResult.runtime_id ?? "" })
-                  : traceResult?.state === "lost" ? t(($) => $.transcript.trace_lost)
-                  : traceResult?.state === "not_found" ? t(($) => $.transcript.trace_not_found)
-                  : traceResult?.closed ? t(($) => $.transcript.trace_finished, { count: items.length })
+              {traceError ? t(($) => $.transcript.trace_failed) : traceLoading && !traceRead ? t(($) => $.transcript.trace_loading)
+                : traceRead?.state === "unreachable"
+                  ? t(($) => $.transcript.trace_unreachable, { name: traceRead.runtime_name ?? traceRead.runtime_id ?? "" })
+                  : traceRead?.state === "lost" ? t(($) => $.transcript.trace_lost)
+                  : traceRead?.state === "not_found" ? t(($) => $.transcript.trace_not_found)
+                  : legacyTrace ? null
+                  : traceClosed ? t(($) => $.transcript.trace_finished, { count: items.length })
                   : t(($) => $.transcript.trace_live)}
-              {traceResult?.state === "unreachable" && traceResult.last_seen_at && (
-                <span className="block">{t(($) => $.transcript.trace_last_seen, { time: new Date(traceResult.last_seen_at).toLocaleString() })}</span>
+              {traceRead?.state === "unreachable" && traceRead.last_seen_at && (
+                <span className="block">{t(($) => $.transcript.trace_last_seen, { time: new Date(traceRead.last_seen_at).toLocaleString() })}</span>
               )}
-              {traceWindowLimit && <span className="block text-[10px]">{t(($) => $.transcript.trace_window, { count: traceWindowLimit })}</span>}
             </span>
-            {(traceError || traceResult?.state === "unreachable") && (
+            {(traceError || traceRead?.state === "unreachable") && (
               <button type="button" onClick={onTraceRetry} className="shrink-0 text-foreground underline underline-offset-2">
                 {t(($) => $.transcript.trace_retry)}
               </button>
             )}
-            {onTraceLoadMore && (
-              <button type="button" disabled={traceLoading} onClick={onTraceLoadMore} className="shrink-0 text-foreground underline underline-offset-2 disabled:opacity-50">
-                {t(($) => $.transcript.trace_load_more)}
-              </button>
-            )}
-            {onTraceRestart && <button type="button" disabled={traceLoading} onClick={onTraceRestart} className="shrink-0 text-foreground underline underline-offset-2 disabled:opacity-50">
-              {t(($) => $.transcript.trace_restart)}
-            </button>}
           </div>
         )}
 
@@ -712,7 +718,7 @@ export function AgentTranscriptDialog({
           <div className="border-b px-4 py-2.5 shrink-0">
             <TimelineBar
               items={displayItems}
-              selectedSeq={selectedSeq}
+              selectedId={selectedId}
               onSegmentClick={handleSegmentClick}
             />
           </div>
@@ -735,7 +741,7 @@ export function AgentTranscriptDialog({
               </button>
             </div>
             <div className="max-h-48 overflow-auto text-xs">
-              <Markdown mode="minimal">{redactString(finalAnswer)}</Markdown>
+              <Markdown mode="minimal">{finalAnswer}</Markdown>
             </div>
           </div>
         )}
@@ -746,24 +752,8 @@ export function AgentTranscriptDialog({
             <span className="text-[11px] font-medium text-muted-foreground uppercase tracking-wide">
               {t(($) => $.transcript.plan)}
             </span>
-            <div className="mt-1.5 space-y-1">
-              {planEntries.map((p, i) => {
-                const status = String(p.status ?? "pending");
-                return (
-                  <div key={i} className="flex items-start gap-1.5 text-xs">
-                    {status === "completed" ? (
-                      <CheckCircle2 className="h-3.5 w-3.5 shrink-0 mt-0.5 text-emerald-500" />
-                    ) : status === "in_progress" ? (
-                      <Loader2 className="h-3.5 w-3.5 shrink-0 mt-0.5 text-blue-500 animate-spin" />
-                    ) : (
-                      <div className="h-3.5 w-3.5 shrink-0 mt-0.5 rounded-full border border-muted-foreground/40" />
-                    )}
-                    <span className={cn(status === "completed" && "text-muted-foreground line-through")}>
-                      {redactString(String(p.content ?? p.activeForm ?? ""))}
-                    </span>
-                  </div>
-                );
-              })}
+            <div className="mt-1.5">
+              <PlanEntries entries={planEntries} />
             </div>
           </div>
         )}
@@ -777,7 +767,7 @@ export function AgentTranscriptDialog({
             <div role="status" className="flex h-full items-center justify-center gap-2 text-sm text-muted-foreground">
               <Loader2 className="h-4 w-4 animate-spin" />{t(($) => $.transcript.trace_loading)}
             </div>
-          ) : entries.length === 0 && traceUnavailable ? (
+          ) : entries.length === 0 && (traceUnavailable || legacyTrace) ? (
             <div className="h-full" aria-hidden="true" />
           ) : entries.length === 0 ? (
             <div className="flex items-center justify-center h-full text-sm text-muted-foreground">
@@ -794,36 +784,18 @@ export function AgentTranscriptDialog({
             </div>
           ) : (
             <div className="divide-y">
-              {entries.map((entry) =>
-                entry.kind === "step" ? (
-                  <TranscriptStepRow
-                    key={`s-${entry.toolCallId}`}
-                    ref={(el) => {
-                      // Nested children have no row of their own while the group
-                      // is collapsed — register the group for their seqs too, so
-                      // timeline-bar navigation still lands on them.
-                      for (const seq of [entry.seq, ...(entry.children ?? []).map((c) => c.seq)]) {
-                        if (el) eventRefs.current.set(seq, el);
-                        else eventRefs.current.delete(seq);
-                      }
-                    }}
-                    step={entry}
-                    selectedSeq={selectedSeq}
-                    liveFollow={liveFollow}
-                    taskTerminal={taskTerminal}
-                  />
-                ) : (
-                  <TranscriptEventRow
-                    key={`e-${entry.seq}`}
-                    ref={(el) => {
-                      if (el) eventRefs.current.set(entry.seq, el);
-                      else eventRefs.current.delete(entry.seq);
-                    }}
-                    item={entry.item}
-                    isSelected={selectedSeq === entry.seq}
-                  />
-                ),
-              )}
+              {entries.map((item) => (
+                <TranscriptItemRow
+                  key={item.id}
+                  item={item}
+                  childItems={childrenOf.get(item.id) ?? NO_CHILDREN}
+                  getChildren={getChildren}
+                  selectedId={selectedId}
+                  liveFollow={liveFollow}
+                  taskTerminal={taskTerminal}
+                  registerRow={registerRow}
+                />
+              ))}
             </div>
           )}
         </div>

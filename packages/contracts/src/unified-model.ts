@@ -4,6 +4,7 @@ import type { MultiremiTaskPluginSnapshotEntry, TaskUsageEntry } from "./types.j
 import type { RuntimeCodexProfile } from "./codex-profile.js";
 import type { RuntimeClaudeProfile } from "./claude-profile.js";
 import type { TraceRef } from "./trace-file.js";
+import type { TraceContextUsage } from "./trace.js";
 
 export const MESSAGE_KINDS = ["request", "reply", "report", "decision", "status", "final"] as const;
 export type MessageKind = typeof MESSAGE_KINDS[number];
@@ -151,6 +152,10 @@ export interface MultiremiTurnAttempt {
   type_histogram: ConversationLogTypeHistogramBucket[] | null;
   model: { provider: string; model: string } | null;
   trace_ref: TraceRef | null;
+  /** PR 2 trace summary from the completion report; null before it, or when the daemon sent none. */
+  context_usage: TraceContextUsage | null;
+  worked_ms: number | null;
+  process_item_count: number | null;
   offered_at: string | null;
   accepted_at: string | null;
   started_at: string | null;

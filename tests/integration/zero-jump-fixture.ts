@@ -62,7 +62,6 @@ export interface ZeroJumpFixture {
     longCodeBlocks: number;
     longImages: number;
     sessions: number;
-    runningMessages: number;
     f398Comments: number;
     f398QueuedTasks: number;
     f398Updates: number;
@@ -443,14 +442,7 @@ export async function seedZeroJumpFixture(store: MultiremiStore): Promise<ZeroJu
   // run; write the state the daemon would have written so the issue renders its
   // SessionAgentStreamRow (the detail scenario's terminal element).
   markTaskRunning(store, runningTask.id);
-
-  const runningMessages = 6;
-  store.appendTaskMessages(runningTask.id, Array.from({ length: runningMessages }, (_, index) => ({
-    type: index === 0 ? "text" : "tool_use",
-    tool: index === 0 ? null : "Read",
-    content: `zero-jump fixture message ${index + 1}`,
-    status: "completed",
-  })));
+  // Its trace lives on the daemon (PR 2); the retired task-message table is not seeded.
 
   const inboxItemId = deepLinkCommentId;
 
@@ -483,7 +475,6 @@ export async function seedZeroJumpFixture(store: MultiremiStore): Promise<ZeroJu
       longCodeBlocks: FIXTURE.codeBlocks,
       longImages: imageAttachmentIds.length,
       sessions: longSessionIds.length,
-      runningMessages,
       f398Comments: FIXTURE.f398Comments,
       f398QueuedTasks: FIXTURE.f398QueuedTasks,
       f398Updates: FIXTURE.f398Updates,

@@ -24,6 +24,7 @@ import type { DaemonProtocolSession } from "./session.js";
 import type { DaemonParsedFrame } from "./frames.js";
 import type { DaemonTurnBridge } from "./turn-bridge.js";
 import type { DaemonTurnCompletePayload } from "@multiremi/contracts/daemon-protocol.js";
+import { isTraceContextUsage, type TraceContextUsage } from "@multiremi/contracts/trace.js";
 
 class ReportRejection extends Error {
   constructor(readonly code: string) { super(code); }
@@ -73,7 +74,39 @@ function completionFields(p: Record<string, unknown>, taskId: string): DaemonTas
     log.warn("Terminal report is missing round-card fields", { taskId });
     return null;
   }
-  return { trace: p.trace, final_reply_md: p.final_reply_md, model: p.model } as DaemonTaskCompletionFields;
+  return {
+    trace: p.trace, final_reply_md: p.final_reply_md, model: p.model,
+    ...traceSummaryFields(p, taskId),
+  } as DaemonTaskCompletionFields;
+}
+
+/**
+ * The turn + items summary fields (PR 2): context usage, "worked for" and the
+ * process item count. Each is validated on its own; a missing or malformed
+ * value becomes null with a log line and never costs the rest of the card.
+ */
+function traceSummaryFields(p: Record<string, unknown>, taskId: string): Pick<DaemonTaskCompletionFields,
+  "context_usage" | "worked_ms" | "process_item_count"> {
+  const count = (value: unknown): boolean => Number.isSafeInteger(value) && (value as number) >= 0;
+  const field = <T>(name: "context_usage" | "worked_ms" | "process_item_count", valid: (value: unknown) => boolean): T | null => {
+    const value = p[name];
+    if (value === null) return null;
+    if (value === undefined) {
+      log.warn("Terminal report is missing a turn summary field", { taskId, field: name });
+      return null;
+    }
+    if (!valid(value)) {
+      log.error("Terminal report has a malformed round-card field", { taskId, field: name });
+      return null;
+    }
+    return value as T;
+  };
+  const usage = field<TraceContextUsage>("context_usage", isTraceContextUsage);
+  return {
+    context_usage: usage ? { used: usage.used, size: usage.size } : null,
+    worked_ms: field<number>("worked_ms", count),
+    process_item_count: field<number>("process_item_count", count),
+  };
 }
 
 /**

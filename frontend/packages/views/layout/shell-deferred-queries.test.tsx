@@ -37,6 +37,10 @@ import {
 import { ChatFab } from "../chat/components/chat-fab";
 import { ChatWindow } from "../chat/components/chat-window";
 import { DashboardLayout } from "./dashboard-layout";
+import { EMPTY_TURN_TRACE_CACHE } from "../common/task-transcript/use-task-trace";
+
+/** A loaded `["task-trace", id]` cache entry (turn + items reader state). */
+const CACHED_TRACE = { ...EMPTY_TURN_TRACE_CACHE, read: { state: "ok", format: "v2" } };
 
 const listAgents = vi.hoisted(() => vi.fn(async () => []));
 const listSquads = vi.hoisted(() => vi.fn(async () => []));
@@ -51,7 +55,7 @@ const getLatestCliVersion = vi.hoisted(() => vi.fn(async () => "1.0.0"));
 const listIssues = vi.hoisted(() => vi.fn(async () => ({ issues: [], total: 0 })));
 const listChatSessions = vi.hoisted(() => vi.fn(async () => []));
 const listPendingChatTasks = vi.hoisted(() => vi.fn(async () => ({ tasks: [] })).mockName("listPendingChatTasks"));
-const getTaskTrace = vi.hoisted(() => vi.fn(async () => ({ events: [], eof: true, state: "ok", next_after_seq: 0 })).mockName("getTaskTrace"));
+const getTaskTrace = vi.hoisted(() => vi.fn(async () => ({ view: "turn", format: "v2", turn: null, items: [], next_item_cursor: null, head: 0, closed: false, state: "ok" })).mockName("getTaskTrace"));
 const listDecisionMessages = vi.hoisted(() => vi.fn(async () => ({ messages: [], next_cursor: null })).mockName("listDecisionMessages"));
 const listMessages = vi.hoisted(() => vi.fn(async (_sessionId: string, options: { message_kind?: string }) =>
   options.message_kind === "decision" ? listDecisionMessages() : { messages: [], next_cursor: null }));
@@ -291,7 +295,7 @@ describe("complete shell observer guard (MUL-472 R1)", () => {
       created_at: "2026-09-28T00:00:00Z", updated_at: "2026-09-28T00:00:00Z",
     }]);
     client.setQueryData(chatKeys.pendingTask(sessionId), { task_id: taskId, status: "running" });
-    client.setQueryData(["task-trace", taskId], []);
+    client.setQueryData(["task-trace", taskId], CACHED_TRACE);
     act(() => { useChatStore.getState().setActiveSession(sessionId); useChatStore.getState().setOpen(true); });
     const view = render(<Shell />, { wrapper: wrapper(client) });
     try {
@@ -313,7 +317,7 @@ describe("complete shell observer guard (MUL-472 R1)", () => {
     const taskId = "tsk_qa_hidden";
     client.setQueryData(chatKeys.sessions("ws-1"), [{ id: sessionId, agent_id: "agt_refetch", status: "active", title: "QA chat" }]);
     client.setQueryData(chatKeys.pendingTask(sessionId), { task_id: taskId, status: "running" });
-    client.setQueryData(["task-trace", taskId], []);
+    client.setQueryData(["task-trace", taskId], CACHED_TRACE);
     act(() => { useChatStore.getState().setActiveSession(sessionId); });
     const view = render(<Shell />, { wrapper: wrapper(client) });
     try {
@@ -379,7 +383,7 @@ describe("complete shell observer guard (MUL-472 R1)", () => {
       [chatKeys.pendingTasks("ws-1"), { tasks: [] }],
       [chatKeys.pendingTask(sessionId), { task_id: taskId, status: "running" }],
       [chatKeys.queue("ws-1", sessionId), { items: [], paused: null }],
-      [["task-trace", taskId], []], [[...chatKeys.humanRequests(taskId), sessionId], []],
+      [["task-trace", taskId], CACHED_TRACE], [[...chatKeys.humanRequests(taskId), sessionId], []],
     ];
     for (const [key, data] of cached) client.setQueryData(key, data);
     // The reopened chat still finds its session, so the queue mounts again.

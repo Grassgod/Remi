@@ -29,7 +29,16 @@ import { MultiremiStore } from "@multiremi/store.js";
 import { prepareFeishuIssueTopic } from "../fixtures/multiremi-feishu-topic.js";
 import { MultiremiRepoCache } from "@multiremi/repo-cache.js";
 import { ManualDaemonProtocolClock } from "@multiremi/api/daemon-protocol/clock.js";
-import { traceEventToTaskMessage, type TraceEvent } from "@multiremi/contracts/trace.js";
+import { isTraceEvent, type TraceEvent, type TraceItem } from "@multiremi/contracts/trace.js";
+import { applyTurnTraceEvents, EMPTY_TURN_TRACE } from "@shared/turn-trace.js";
+
+/** The daemon's stored turn + items trace of a task, folded. */
+function foldedTrace(events: ReadonlyArray<{ seq: number; type: string }>) {
+  const typed = events.filter(isTraceEvent);
+  expect(typed).toHaveLength(events.length);
+  return applyTurnTraceEvents(EMPTY_TURN_TRACE, typed);
+}
+const itemShape = (item: TraceItem) => [item.id, item.type, item.status] as const;
 import { daemonTraceService } from "@multiremi/api/daemon-protocol/trace-handlers.js";
 let db: Database | null = null;
 let workDir: string | null = null;
@@ -887,7 +896,7 @@ describe("Bun Multiremi daemon smoke", () => {
 
       daemonRun = daemon.start();
       await waitForCondition(() => store.getTask(task.id)?.status === "completed"
-        && daemonTraceService(smokeLayer).sink.head(task.id) === 7, 5_000);
+        && daemonTraceService(smokeLayer).sink.head(task.id) === 13, 5_000);
 
       const completed = store.getTask(task.id)!;
       expect(completed.status).toBe("completed");
@@ -952,48 +961,41 @@ describe("Bun Multiremi daemon smoke", () => {
         allowedTools: ["Read"],
         permissionMode: "bypassPermissions",
       });
-      const messages = daemon.traceStore().read(task.id).events.map(traceEventToTaskMessage);
-      // The initial tool_call already carries rawOutput and no follow-up update,
-      // so the stateful mapper emits BOTH a tool_use and its paired tool_result
-      // (each with its own seq). Output lives on the result, not the use.
-      expect(messages.map((message) => ({
-        seq: message.seq,
-        type: message.type,
-        tool: message.tool,
-        content: message.content,
-        input: message.input,
-        output: message.output,
-      }))).toEqual([
-        { seq: 1, type: "execution", tool: null, content: null, input: null, output: null },
-        { seq: 2, type: "thinking", tool: null, content: "Thinking", input: null, output: null },
-        { seq: 3, type: "tool_use", tool: "Read", content: null, input: { path: "README.md" }, output: null },
-        { seq: 4, type: "tool_result", tool: "Read", content: null, input: { path: "README.md" }, output: "{\"content\":\"file body\"}" },
-        { seq: 5, type: "text", tool: null, content: "Smoke completed", input: null, output: null },
-        { seq: 6, type: "usage", tool: null, content: null, input: null, output: null },
-        { seq: 7, type: "execution", tool: null, content: null, input: null, output: null },
+      const events = daemon.traceStore().read(task.id).events;
+      expect(events.map((event) => event.seq)).toEqual(Array.from({ length: 13 }, (_, i) => i + 1));
+      expect(events.map((event) => event.type)).toEqual([
+        "turn.started", "item.completed",
+        "item.started", "item.delta", "item.completed",
+        "item.started",
+        "item.started", "item.delta", "item.completed",
+        "turn.updated", "item.completed",
+        "item.completed", "turn.completed",
       ]);
-      expect(messages[0]?.meta).toEqual({ agentName: "Claude Smoke", provider: "claude" });
-      expect(messages[6]?.meta).toEqual({ provider: "claude", model: "claude-smoke", modelName: null });
-      // tool_use and tool_result pair on a shared (synthetic) tool_call_id.
-      expect(messages[2]?.toolCallId).toBeTruthy();
-      expect(messages[3]?.toolCallId).toBe(messages[2]?.toolCallId);
-      // usage numbers now live in meta, not a content JSON string.
-      expect(messages[5]?.meta).toMatchObject({ model: "claude-smoke", inputTokens: 7, outputTokens: 3 });
-      const transcript = await daemonTraceService(smokeLayer).reader.read({ runtimeId: expectedRuntimeId, taskId: task.id });
+      const state = foldedTrace(events);
+      // The bare tool_call carries rawOutput but no status, so it never
+      // completed: close() stops it. The usage frame has no context occupancy.
+      expect(state.items.map(itemShape)).toEqual([
+        [`in:${task.id}`, "user_message", "completed"],
+        ["rsn:1", "reasoning", "completed"],
+        ["syn_0", "tool", "stopped"],
+        ["msg:2", "agent_message", "completed"],
+      ]);
+      expect(state.items[1]).toMatchObject({ text: "Thinking" });
+      expect(state.items[2]).toMatchObject({ tool: "Read", input: { path: "README.md" } });
+      expect(state.items[3]).toMatchObject({ text: "Smoke completed", phase: "final" });
+      expect(state.turn).toMatchObject({ id: task.id, status: "completed", agent_name: "Claude Smoke", provider: "claude",
+        model: "claude-smoke", final_item_id: "msg:2", context_usage: null, stats: { tool_call_count: 1, process_item_count: 1 } });
+      const transcript = await daemonTraceService(smokeLayer).reader.read({ runtimeId: expectedRuntimeId, taskId: task.id, view: "events" });
       expect(transcript.ok).toBe(true);
       if (!transcript.ok) throw new Error(transcript.code);
-      const transcriptBody = transcript.events;
-      expect(transcriptBody.map((m) => ({ seq: m.seq, type: m.type, tool: m.tool ?? undefined, content: m.content ?? undefined, output: m.output ?? undefined }))).toEqual([
-        { seq: 1, type: "execution", tool: undefined, content: undefined, output: undefined },
-        { seq: 2, type: "thinking", tool: undefined, content: "Thinking", output: undefined },
-        { seq: 3, type: "tool_use", tool: "Read", content: undefined, output: undefined },
-        { seq: 4, type: "tool_result", tool: "Read", content: undefined, output: "{\"content\":\"file body\"}" },
-        { seq: 5, type: "text", tool: undefined, content: "Smoke completed", output: undefined },
-        { seq: 6, type: "usage", tool: undefined, content: undefined, output: undefined },
-        { seq: 7, type: "execution", tool: undefined, content: undefined, output: undefined },
-      ]);
-      expect(transcriptBody[0]!.ts).toBeTruthy();
-      expect(transcriptBody[3]!.tool_call_id).toBe(transcriptBody[2]!.tool_call_id);
+      if (transcript.view !== "events") throw new Error(`unexpected view ${transcript.view}`);
+      expect(JSON.stringify(transcript.events)).toBe(JSON.stringify(events));
+      expect(transcript.events[0]!.ts).toBeTruthy();
+      // The closed trace's default view is its persisted snapshot: the same items the fold above produced.
+      const folded = await daemonTraceService(smokeLayer).reader.read({ runtimeId: expectedRuntimeId, taskId: task.id, view: "turn" });
+      expect(folded).toMatchObject({ ok: true, view: "turn", format: "v2", closed: true, next_item_cursor: null,
+        turn: { id: task.id, status: "completed", final_item_id: "msg:2" } });
+      if (folded.ok && folded.view === "turn") expect(folded.items.map(itemShape)).toEqual(state.items.map(itemShape));
       expect(store.listTaskMessages(task.id)).toEqual([]);
       expect(store.getTask(task.id)?.usage[0]).toMatchObject({
         provider: "claude",
@@ -1035,13 +1037,17 @@ describe("Bun Multiremi daemon smoke", () => {
     }
   });
 
-  it("keeps a real answer when compaction status arrives at the turn tail", async () => {
+  const compactionUpdates = (status: string) => [
+    { sessionUpdate: "compaction_update", compactionId: "cmp_tail", status: "in_progress" },
+    { sessionUpdate: "compaction_update", compactionId: "cmp_tail", status },
+  ];
+
+  it("keeps a real answer when a compaction completes at the turn tail", async () => {
     const { store, taskId, issueId, traceEvents } = await runCompactionFinalizeCase({
       id: "answer-tail",
-      chunks: [
-        "Implemented the fix and verified it.",
-        "Compacting...",
-        "\n\nCompacting completed.",
+      updates: [
+        { sessionUpdate: "agent_message_chunk", content: [{ type: "text", text: "Implemented the fix and verified it." }] },
+        ...compactionUpdates("completed"),
       ],
       lastText: "Implemented the fix and verified it.",
     });
@@ -1054,18 +1060,19 @@ describe("Bun Multiremi daemon smoke", () => {
       "Finish the task",
       "Implemented the fix and verified it.",
     ]);
-    expect(traceEvents.map((message) => message.type)).toEqual([
-      "execution",
-      "text",
-      "compaction",
-      "compaction",
+    const state = foldedTrace(traceEvents);
+    expect(state.items.map(itemShape)).toEqual([
+      [`in:${taskId}`, "user_message", "completed"],
+      ["msg:1", "agent_message", "completed"],
+      ["cmp:cmp_tail", "compaction", "completed"],
     ]);
+    expect(state.turn).toMatchObject({ status: "completed", final_item_id: "msg:1" });
   });
 
   it("fails a compaction-only run after the provider filters its fallback text", async () => {
     const { store, taskId, issueId, traceEvents } = await runCompactionFinalizeCase({
       id: "compaction-only",
-      chunks: ["Compacting...", "\n\nCompacting completed."],
+      updates: compactionUpdates("completed"),
       lastText: "",
     });
 
@@ -1075,17 +1082,19 @@ describe("Bun Multiremi daemon smoke", () => {
       failureReason: "agent_error.empty_or_unparseable_output",
     });
     expect(store.listIssueComments(issueId).map(comment => comment.body)).toEqual(["Finish the task"]);
-    expect(traceEvents.map((message) => message.type)).toEqual([
-      "execution",
-      "compaction",
-      "compaction",
+    const state = foldedTrace(traceEvents);
+    expect(state.items.map(itemShape)).toEqual([
+      [`in:${taskId}`, "user_message", "completed"],
+      ["cmp:cmp_tail", "compaction", "completed"],
     ]);
+    expect(state.turn).toMatchObject({ status: "failed", final_item_id: null,
+      error: { message: "Agent returned empty output after compaction.", reason: "agent_error.empty_or_unparseable_output" } });
   });
 
   it("preserves the existing placeholder for empty output without compaction", async () => {
     const { store, taskId, issueId, traceEvents } = await runCompactionFinalizeCase({
       id: "ordinary-empty",
-      chunks: [],
+      updates: [],
       lastText: "",
     });
 
@@ -1094,8 +1103,8 @@ describe("Bun Multiremi daemon smoke", () => {
       result: "Task completed.",
     });
     expect(store.listIssueComments(issueId).map(comment => comment.body)).toEqual(["Finish the task"]);
-    expect(traceEvents.map(message => ({ type: message.type, meta: message.meta })))
-      .toEqual([{ type: "execution", meta: { agentName: "Claude ordinary-empty", provider: "claude" } }]);
+    expect(traceEvents.map((event) => event.type)).toEqual(["turn.started", "item.completed", "turn.completed"]);
+    expect(foldedTrace(traceEvents).turn).toMatchObject({ agent_name: "Claude ordinary-empty", provider: "claude", status: "completed" });
   });
 
   it("reconciles, materializes and retains a direct task Agent Plugin runtime in its lane generation", async () => {
@@ -3819,7 +3828,7 @@ function daemonTestBed(tmpPrefix: string): { store: MultiremiStore; workDir: str
 
 async function runCompactionFinalizeCase(spec: {
   id: string;
-  chunks: string[];
+  updates: Array<Record<string, unknown>>;
   lastText: string;
 }): Promise<{ store: MultiremiStore; taskId: string; issueId: string; traceEvents: TraceEvent[] }> {
   const { store, workDir: root } = daemonTestBed(`multiremi-daemon-${spec.id}-`);
@@ -3847,12 +3856,7 @@ async function runCompactionFinalizeCase(spec: {
   });
   const providerFactory: MultiremiDaemonProviderFactory = () => ({
     async *sendStream() {
-      for (const text of spec.chunks) {
-        yield {
-          sessionUpdate: "agent_message_chunk",
-          content: [{ type: "text", text }],
-        } as any;
-      }
+      for (const update of spec.updates) yield update as any;
     },
     getLastResponse: () => ({
       text: spec.lastText,
@@ -3879,7 +3883,7 @@ async function runCompactionFinalizeCase(spec: {
       providerFactory,
     });
     await daemon.start();
-    traceEvents = daemon.traceStore().read(task.id).events;
+    traceEvents = daemon.traceStore().read(task.id).events.filter(isTraceEvent);
   } finally {
     server.stop(true);
   }

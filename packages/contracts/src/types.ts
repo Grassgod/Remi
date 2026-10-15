@@ -4491,6 +4491,9 @@ export type FeishuBotRuntimeState = "stopped" | "starting" | "online" | "failed"
 export type FeishuBotOutboundBodyOrigin = "issue" | "agent";
 
 /** Delivery state only. Task messages and human responses remain authoritative. */
+/** Native CoT renderers, oldest first: `semantic_v1` read fragment events, `items_v1` reads turn + items. */
+export type FeishuCotPresentation = "semantic_v1" | "items_v1";
+
 export interface FeishuPresentationCheckpoint {
   /** Invocation IDs whose native START is deferred until display arguments arrive. */
   deferredToolIds?: string[];
@@ -4500,8 +4503,12 @@ export interface FeishuPresentationCheckpoint {
   interactionOpenId?: string;
   cot?: {
     status: "creating" | "active" | "finished" | "disabled";
-    /** Keep event IDs/layout from different renderers out of the same CoT. */
-    presentation?: "semantic_v1";
+    /**
+     * Keep event IDs/layout from different renderers out of the same CoT.
+     * `items_v1` is the turn + items renderer; an active CoT with any other tag
+     * (or none) belongs to an earlier renderer and is closed once on resume.
+     */
+    presentation?: FeishuCotPresentation;
     cotId?: string;
     messageId?: string;
     /** Set before a write, cleared after its acknowledgement is checkpointed. */
