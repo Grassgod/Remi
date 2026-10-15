@@ -14,7 +14,7 @@ import { registerTurnChangeHook, registerExecutionMessageWriter, notifyTurnChang
 // The legacy row lock plus `MAX(seq) + 1` is gone.
 import { createId, nowIso } from "@multiremi/ids.js";
 import { RELAY_EXECUTION_SCOPE_PREFIX } from "@multiremi/contracts/task-execution.js";
-import type { TraceContextUsage } from "@multiremi/contracts/trace.js";
+import type { TraceContextUsage, TraceLateSubagent } from "@multiremi/contracts/trace.js";
 import { nullableString, parseJson, toJson } from "@multiremi/store/helpers.js";
 import { type StoreContext } from "@multiremi/store/context.js";
 import { afterCommit } from "@multiremi/store/db/postgres.js";
@@ -772,13 +772,14 @@ export class ConversationLogRepo {
     toolCallCount?:number|null;eventCount?:number|null;typeHistogram?:unknown[]|null;usage?:unknown[]|null;
     model?:unknown|null;elapsedMs?:number|null;failureReason?:string|null;
     contextUsage?:TraceContextUsage|null;workedMs?:number|null;processItemCount?:number|null;
+    lateSubagents?:TraceLateSubagent[]|null;
     inbox?:{delivered_from_seq:number;delivered_to_seq:number;delivered_at:string;task_id:string};
   }):ConversationLogEntry|null {
     const attempt=this.ctx.db.query('SELECT turn_id FROM multiremi_turn_attempts WHERE id=?').get(taskId);
     if(!attempt)return null;
     const mapping:Record<string,string>={summary:'progress_summary',toolCallCount:'tool_call_count',eventCount:'event_count',typeHistogram:'type_histogram',usage:'usage',model:'model',failureReason:'failure_reason',
-      contextUsage:'context_usage',workedMs:'worked_ms',processItemCount:'process_item_count'};
-    const json=new Set(['typeHistogram','usage','model','contextUsage']);
+      contextUsage:'context_usage',workedMs:'worked_ms',processItemCount:'process_item_count',lateSubagents:'late_subagents'};
+    const json=new Set(['typeHistogram','usage','model','contextUsage','lateSubagents']);
     const values:Record<string,unknown>={};
     for(const [key,column] of Object.entries(mapping))if((fields as any)[key]!==undefined)values[column]=json.has(key)?toJson((fields as any)[key]):(fields as any)[key];
     const keys=Object.keys(values);

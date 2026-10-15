@@ -231,6 +231,13 @@ S2 同事务创建 decision 消息并将轮置为 `awaiting_human`，通过 `rep
 上行 best-effort 帧 `task.activity { task_id, runtime_id?, running_subagents }` 报告一个运行中尝试当前打开的子代理数
 （顶层子代理数，没有时取嵌套子代理数），由 daemon 的 trace 折叠重算；丢一帧由下一次变化或定时刷新补上。
 载荷类型是 `DaemonTaskActivityPayload`；没有注册处理器的服务端按 best-effort 规则忽略它。
+服务端按任务报告的同一规则授权（`authorizeReportTask`；载荷带 `runtime_id` 时须与任务的 Runtime 一致），
+`running_subagents` 须为不超过 2^31−1 的非负整数，否则拒绝且不写入；不带 `id` 的帧没有应答，拒绝也不回报。
+计数写入该尝试的 `multiremi_turn_attempts.running_subagents`（迁移 `20261017_turn_attempt_subagents`），
+只有 accepted / running 的尝试接受，终态尝试忽略；从未上报按 0 计，所以没开过子代理的尝试结束时报的 0 不写库。
+值变化且任务属于 Chat 时（不论是否绑定项目）向 Chat 创建者推 `task:subagents`，载荷在任务字段外带
+`running_subagents`；该事件不唤醒 daemon 下行。`GET /api/turns` 的每行带当前尝试的 `running_subagents`，
+尝试不再活跃或从未上报时为 null；尝试列表同样投影。
 
 **server → daemon**：`trace.read`。
 
@@ -558,7 +565,7 @@ SSH 配置 revision 时，才广播 `daemon:ssh_mesh_changed` 重新下发整个
 `agent_plugin:*` 事件，唤醒配置下行及派活条件检查。
 
 插件心跳协调只读取当前 Runtime 及其状态；工作区绑定和活跃任务的版本需求仍用于计算
-desired，配置变更继续协调整个工作区。`task:usage` 仅向浏览器通知用量变化，不唤醒 daemon
+desired，配置变更继续协调整个工作区。`task:usage`、`task:subagents` 仅向浏览器通知用量与子代理计数变化，不唤醒 daemon
 下行或派活。Daemon 报告在事务锁内使用轻量 Runtime 身份校验，不计算历史用量。
 
 | 事件 | 下行 | 派活 |
@@ -818,6 +825,7 @@ model: { provider: string; model: string } | null;  // turn 的 provider 与最�
 context_usage: { used: number; size: number } | null;
 worked_ms: number | null;                           // final_started_at − started_at
 process_item_count: number | null;                  // 在 Chat 折叠中产生一行的顶层条目数
+late_subagents?: TraceLateSubagent[] | null;        // 最终回复开始后才结束的顶层子代理，至多 5 个（PR 5）
 ```
 
 - `type_histogram` 按 `(条目类型, tool)` 分桶，`tool` 只在带工具名的条目上非空。
@@ -830,10 +838,13 @@ process_item_count: number | null;                  // 在 Chat 折叠中产生�
 - 统一完成入口以 `reply.body_md` 为最终正文（与 `final_reply_md` 相同），trace 摘要不覆盖消息；卡片仅保留回复引用。
 - 服务端校验：`trace`、`final_reply_md`、`model` 缺失或畸形时整张卡留空；`context_usage`、`worked_ms`、
   `process_item_count` 各自独立校验，畸形或缺失只把该项写成 null。两种情况都打日志、终态照常生效，
-  不去读 trace 补算。
+  不去读 trace 补算。`late_subagents` 是可选字段：旧 daemon 不发时静默写 null；超过 5 项或任一项不满足
+  `isTraceLateSubagent` 时整项写 null 并打日志；空数组按 null（没有）存，每项只保留契约里的四个键。
 - 写入：`multiremi_turn_attempts` 的 `event_count`、`tool_call_count`、`type_histogram`、`model`、
-  `context_usage`（JSON 文本）、`worked_ms`、`process_item_count`（迁移 `20261015_turn_attempt_trace_summary`），
-  投影到轮卡元数据与尝试列表。Chat 页面读卡片上的这三项显示已结束轮的折叠与上下文环，不读 trace（MUL-472）。
+  `context_usage`（JSON 文本）、`worked_ms`、`process_item_count`（迁移 `20261015_turn_attempt_trace_summary`）
+  与 `late_subagents`（JSON 文本，迁移 `20261017_turn_attempt_subagents`），
+  投影到轮卡元数据与尝试列表。Chat 页面读卡片上的这三项显示已结束轮的折叠与上下文环，读 `late_subagents`
+  显示在后台结束的子代理行，都不读 trace（MUL-472）。
 - `turn.complete` 的回复在 `reply: {body_md, message_kind}` 中，载荷另带 `turn_id`、`attempt_id`、`input_to_seq`；不再上报旧 `output`。
 - `head` 与 `event_count` 分开：新写的 trace 两者相等，**历史 trace 可能是稀疏的**，
   `head ≠ event_count`（A11）。

@@ -60,7 +60,7 @@ export function projectTurnCard(db: SqlDatabase, entry: ConversationLogEntry): C
   if (entry.kind!=="turn") return entry;
   const row=db.query(`SELECT t.*,a.status AS attempt_status,a.attempt_no,a.failure_reason,a.progress_summary,a.event_count,
     a.tool_call_count,a.type_histogram,a.model,a.trace_ref,a.usage,a.started_at AS attempt_started_at,a.ended_at AS attempt_ended_at,
-    a.context_usage,a.worked_ms,a.process_item_count
+    a.context_usage,a.worked_ms,a.process_item_count,a.late_subagents
     FROM multiremi_turns t LEFT JOIN multiremi_turn_attempts a ON a.id=t.current_attempt_id WHERE t.id=?`).get(entry.id);
   if (!row) throw new Error(`Missing turn for conversation pointer: ${entry.id}`);
   const reply=row.reply_message_id ? db.query("SELECT body_md FROM multiremi_conversation_log WHERE id=?").get(row.reply_message_id) : null;
@@ -77,6 +77,8 @@ export function projectTurnCard(db: SqlDatabase, entry: ConversationLogEntry): C
     // PR 2: the trace summary, so the Chat page needs no trace read for a finished turn.
     context_usage:parseJson(row.context_usage,null),worked_ms:row.worked_ms==null?null:Number(row.worked_ms),
     process_item_count:row.process_item_count==null?null:Number(row.process_item_count),
+    // PR 5: subagents that ended after the final reply started, for the finished turn's rows.
+    late_subagents:parseJson(row.late_subagents,null),
     ...(row.input_to_seq!=null ? {inbox:{delivered_from_seq:row.input_from_seq ?? undefined,delivered_to_seq:row.input_to_seq}} : {}),
     assignee_agent_id:row.agent_id,attempt:row.attempt_no,
     source_event_id:row.assignment_source_event_id??null,continued_from_task_id:row.continued_from_turn_id??null,

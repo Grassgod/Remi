@@ -16,7 +16,9 @@ const cardFields: DaemonTaskCompletionFields = {
     type_histogram: [{ type: "text", tool: null, count: 1 }, { type: "tool_use", tool: "Read", count: 1 }] },
   final_reply_md: "done", model: null,
   context_usage: { used: 41_000, size: 200_000 }, worked_ms: 12_345, process_item_count: 3,
+  late_subagents: [{ item_id: "sa:counter", name: "Counter", status: "completed", duration_ms: 4_200 }],
 };
+const late = (index: number) => ({ item_id: `sa:${index}`, name: `Agent ${index}`, status: "failed" as const, duration_ms: null });
 afterEach(() => { for (const db of databases.splice(0)) db.close(); });
 function fixture() {
   const db = openSqliteDatabase(":memory:"); databases.push(db);
@@ -226,7 +228,7 @@ describe("v2 reports", () => {
           trace: { head: 5, event_count: 5, closed: true, tool_call_count: 1,
             type_histogram: [{ type: "command", tool: "Read", count: 1 }, { type: "agent_message", tool: null, count: 1 }] },
           final_reply_md: "final **answer**", model: { provider: "claude", model: "fixture-model" },
-          context_usage: null, worked_ms: 0, process_item_count: 1,
+          context_usage: null, worked_ms: 0, process_item_count: 1, late_subagents: null,
         } }]);
       } finally { await trace.stop(); }
     });
@@ -297,6 +299,16 @@ describe("v2 reports", () => {
           ["process_item_count", { process_item_count: "3" }, { process_item_count: null }, "error"],
           ["process_item_count", { process_item_count: undefined }, { process_item_count: null }, "warn"],
           ["worked_ms", { worked_ms: null }, { worked_ms: null }, null],
+          // PR 5: late_subagents is optional. An older daemon omits it silently; a bad list is null as a whole.
+          ["late_subagents", { late_subagents: undefined }, { late_subagents: null }, null],
+          ["late_subagents", { late_subagents: null }, { late_subagents: null }, null],
+          ["late_subagents", { late_subagents: [] }, { late_subagents: null }, null],
+          ["late_subagents", { late_subagents: [{ ...late(1), extra: "dropped" }] }, { late_subagents: [late(1)] }, null],
+          ["late_subagents", { late_subagents: [1, 2, 3, 4, 5, 6].map(late) }, { late_subagents: null }, "error"],
+          ["late_subagents", { late_subagents: [late(1), { ...late(2), status: "running" }] }, { late_subagents: null }, "error"],
+          ["late_subagents", { late_subagents: [{ ...late(1), item_id: "" }] }, { late_subagents: null }, "error"],
+          ["late_subagents", { late_subagents: [{ ...late(1), duration_ms: -1 }] }, { late_subagents: null }, "error"],
+          ["late_subagents", { late_subagents: { item_id: "sa:1" } }, { late_subagents: null }, "error"],
         ] as const) {
           const { store, task, runtime } = fixture();
           store.startTask(task.id);
@@ -304,13 +316,13 @@ describe("v2 reports", () => {
           error.mockClear();
           warn.mockClear();
           const frame: Record<string, unknown> = { task_id: task.id, ...cardFields, ...patch };
-          if ("process_item_count" in patch && patch.process_item_count === undefined) delete frame.process_item_count;
+          for (const [key, value] of Object.entries(patch)) if (value === undefined) delete frame[key];
           expect(await sendReport(store, type, frame, {
             runtimeId: runtime.id, onRoundCard: (id, value) => received.push({ id, value }),
           })).toEqual(success(store, type));
           expect(store.getTask(task.id)?.status).toBe(type === "turn.complete" ? "completed" : "failed");
           // Only the bad field is blanked; trace, model and the other summary fields still land.
-          expect(received).toEqual([{ id: task.id, value: { ...cardFields, ...expected } }]);
+          expect(received).toEqual([{ id: task.id, value: { ...cardFields, ...expected } as DaemonTaskCompletionFields }]);
           const logged = level === "error" ? error.mock.calls : level === "warn" ? warn.mock.calls : [];
           if (level) expect(logged).toEqual([[expect.stringContaining(level === "error" ? "malformed round-card field" : "missing a turn summary field"), { taskId: task.id, field }]]);
           else expect([...error.mock.calls, ...warn.mock.calls]).toEqual([]);

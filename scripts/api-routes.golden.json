@@ -21522,7 +21522,8 @@
             "started_at": null,
             "ended_at": null,
             "ended_reason": null,
-            "legacy_prompt": null
+            "legacy_prompt": null,
+            "running_subagents": null
           },
           {
             "id": "tsk_8rcx9z88woyu",
@@ -21556,7 +21557,8 @@
             "started_at": null,
             "ended_at": null,
             "ended_reason": null,
-            "legacy_prompt": null
+            "legacy_prompt": null,
+            "running_subagents": null
           },
           {
             "id": "tsk_1ut6x0i244sp",
@@ -21590,7 +21592,8 @@
             "started_at": null,
             "ended_at": null,
             "ended_reason": null,
-            "legacy_prompt": null
+            "legacy_prompt": null,
+            "running_subagents": null
           },
           {
             "id": "tsk_lnktpkuv95wd",
@@ -21624,7 +21627,8 @@
             "started_at": null,
             "ended_at": null,
             "ended_reason": null,
-            "legacy_prompt": null
+            "legacy_prompt": null,
+            "running_subagents": null
           },
           {
             "id": "tsk_snapshot",
@@ -21658,7 +21662,8 @@
             "started_at": "<timestamp>",
             "ended_at": "<timestamp>",
             "ended_reason": null,
-            "legacy_prompt": null
+            "legacy_prompt": null,
+            "running_subagents": null
           }
         ],
         "next_cursor": null
@@ -25802,6 +25807,7 @@
               "context_usage": null,
               "worked_ms": null,
               "process_item_count": null,
+              "late_subagents": null,
               "assignee_agent_id": "agt_4it58rkbvy1m",
               "attempt": 1,
               "source_event_id": null,
@@ -29641,7 +29647,8 @@
             "started_at": null,
             "ended_at": null,
             "ended_reason": null,
-            "legacy_prompt": null
+            "legacy_prompt": null,
+            "running_subagents": null
           },
           {
             "id": "tsk_snapshot",
@@ -29675,7 +29682,8 @@
             "started_at": "<timestamp>",
             "ended_at": "<timestamp>",
             "ended_reason": null,
-            "legacy_prompt": null
+            "legacy_prompt": null,
+            "running_subagents": null
           }
         ],
         "next_cursor": null
@@ -29833,6 +29841,8 @@
             "context_usage": null,
             "worked_ms": null,
             "process_item_count": null,
+            "running_subagents": null,
+            "late_subagents": null,
             "offered_at": null,
             "accepted_at": "<timestamp>",
             "started_at": "<timestamp>",
