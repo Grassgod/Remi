@@ -32,17 +32,18 @@ bun run release:pin-antigravity --version <server 版本>
 
 命令读取公共 ACP registry（`cdn.agentclientprotocol.com/registry/v1/latest/registry.json`，只列最新版本、不带校验和），下载四个支持平台的压缩包计算 sha256 与大小（不保存压缩包），只改写 `antigravity` 块，拒绝降级。1.4.0 的四个值已于 2026-10-15 用 `--dry-run` 对真实 registry 复核一致。
 
-每次升级 server 版本，逐条对照新版本源码确认以下事实仍然成立，再提交 pin：
+每次升级 server 版本，用新版本实际运行（假上游或真实网关）逐条确认以下行为仍然成立，再提交 pin。这些是对专有 server 可观察行为的记录，不引用、不复制其源码：
 
-- 环境开关名仍是 `AGY_ACP_ENABLE_GATEWAY_AUTH`（`gateway/gateway.py:18`），`settings.json` 的 `auth.type = "gateway"` 仍选中网关认证；
-- 网关 URL 规则不变：server 自己追加 `/v1beta/...`（`gateway/model_discovery.py:399-414`），base URL 不带 `/v1beta`；
-- `_extract_tokens_used` 仍是 `total + cached`（`server.py:1494-1521`），因此 native `used` 继续不能计费；
-- `ask_user` 仍以 `interaction_<hex>` 工具调用加 `session/request_permission` 发出（`server.py:5204-5320`），工作区信任提示的选项 id 仍是 `{trust, deny}`；
-- 网关错误文本前缀仍是 `Agent execution error:`（`api_errors.py:175`）与 `Agent connection was lost and could not be re-established:`；
-- rawInput 的键名（`tools.py:440-449, 640-660`）与 `trace-vendor.ts` 的别名表一致；
-- `remi runtime prepare --provider antigravity --accept-antigravity-terms` 的完整校验在 Linux x64 与 macOS 上通过。
+- 环境开关仍是 `AGY_ACP_ENABLE_GATEWAY_AUTH=1`，`antigravity-acp/settings.json` 的 `auth.type = "gateway"` 仍选中网关认证（`runtime prepare` 的契约检查覆盖）；
+- 网关 URL 规则不变：server 自己在 `AGY_LLM_GATEWAY_URL` 后追加 `/v1beta/...`，base URL 不带 `/v1beta`；listing 仍同时带 Bearer 与占位 `x-goog-api-key`，由垫片剥掉；
+- 网关模式仍不提供 `thought_level` 选项，`session/set_config_option` 仍能严格切换模型；
+- server 自报的 `usage_update.used` 仍等于 total + cached，因此 native `used` 继续不能计费（实测对账见 [Antigravity Runtime](antigravity.md#validation)）；
+- `ask_user` 仍以 `interaction_<hex>` 工具调用加 `session/request_permission` 发出，工作区信任提示的选项 id 仍是 `{trust, deny}`；
+- 网关错误仍以 `Agent execution error:` 或 `Agent connection was lost and could not be re-established:` 开头的整段文本流出；
+- rawInput 的键名与 `trace-vendor.ts` 的别名表一致（用手动探测重新导出 fixture 对照）；
+- `remi runtime prepare --provider antigravity --accept-antigravity-terms` 的完整校验（含真实垫片前的契约检查）在 Linux x64 与 macOS 上通过，并跑一次[手动探测](antigravity.md#validation)。
 
-CI 中按 `antigravity` 块变化触发的 Linux/macOS 校验作业尚未加入（PR 4 后续）；在此之前由维护者在两类机器上手动执行上面最后一项。
+CI 不在 runner 上代为同意 Google 条款，所以按 `antigravity` 块变化触发的 Linux/macOS 校验作业没有加入（PR 4 后续：需要先确定由谁、以什么身份同意条款）；在此之前由维护者在两类机器上手动执行上面最后一项。
 
 ## Codex 升级检查项
 

@@ -1,38 +1,112 @@
 # Antigravity Runtime
 
-Remi runs Antigravity as the `antigravity` provider on Google's official ACP server (`antigravity-acp`), authenticated through the server's gateway mode and pointed at a loopback gateway shim in the daemon. The retired `agy -p` integration and personal-account `agy` logins no longer work.
+Remi runs Antigravity as the `antigravity` provider on Google's official ACP server (`antigravity-acp`, pinned at 1.4.0). The server authenticates only through its gateway mode, against a loopback gateway shim inside the daemon that holds the workspace Model gateway key. The retired `agy -p` integration and personal-account `agy` logins no longer work.
 
-> **Status (PR 4, Task A).** Provisioning, the access config, the provider behaviour and the trace mapping are in place. The daemon's gateway shim and its wiring (session home, shim channel, model probes, remote reinstall) land in Task C; until then the daemon cannot start an Antigravity task, which fails with `antigravity_home_required` or `antigravity_gateway_unconfigured` before any model call. Windows is not supported.
+> **Opt-in, and not ready to enable by default.** The server is Google's proprietary software, downloaded per machine from Google after the operator accepts [Google's Antigravity terms](https://antigravity.google/terms). Whether this use (a third-party ACP client on an API-key gateway) is covered by those terms has not been reviewed: **get a legal review before enabling Antigravity by default** for any workspace or installer (PR 4 risk R2). Windows is not supported.
 
 ## Upgrade notes
 
 1. `agy -p` and personal-account `agy` logins no longer work; an Agent `executable` that points at `agy` is rejected ("points at the retired agy CLI; clear it").
-2. Configure *Settings > Model gateway > Antigravity* with the gateway base URL and API key ([contract](runtime-model-discovery.md#antigravity-gateway-engine)).
-3. On each machine run `remi runtime prepare --provider antigravity --accept-antigravity-terms`. It downloads about 110 MB on macOS (about 400 MB on disk) or about 330 MB on Linux (about 1.1 GB on disk).
-4. Reselect the model of every Antigravity Agent and clear its thinking level: stale ids fail with `acp_model_unsupported`, and an explicit effort fails with `acp_effort_unsupported`.
+2. Configure *Settings > Model gateway > Antigravity* with the gateway base URL, the API key and, ideally, a `default_model` ([engine contract](runtime-model-discovery.md#antigravity-gateway-engine)).
+3. On each machine run `remi runtime prepare --provider antigravity --accept-antigravity-terms`. It downloads about 110 MB on macOS (392 MB on disk) or about 330 MB on Linux (about 1.1 GB on disk).
+4. Reselect the model of every Antigravity Agent (or rely on the engine's `default_model`) and clear its thinking level: stale ids fail with `acp_model_unsupported`, and an explicit effort fails with `acp_effort_unsupported`.
 5. Restart the daemon.
 
-## Install and terms
+## Terms, licensing and platforms
 
-The server is proprietary, with no redistribution grant. Remi never bundles, mirrors or commits it: [antigravity-install.ts](../packages/acp/src/antigravity-install.ts) downloads the archive pinned in [runtime-versions.json](../packages/acp/src/runtime-versions.json) from `dl.google.com`, checks its size and sha256 while streaming, extracts it into a stage (`ditto` on macOS, `unzip` or `bsdtar` on Linux) and renames it into `${REMI_HOME:-~/.remi}/acp/antigravity/<version>-<platform>/`, next to an `install.json` manifest. A failure leaves the working install untouched; one previous copy is kept.
+- **Never bundled.** The server has no redistribution grant. Remi release artifacts, images and the repository never contain, mirror or cache it for others; each machine downloads the archive pinned in [runtime-versions.json](../packages/acp/src/runtime-versions.json) from `dl.google.com` itself. Tests use fakes ([antigravity-acp-fake.mjs](../tests/fixtures/antigravity-acp-fake.mjs)).
+- **Explicit consent.** The first download requires `--accept-antigravity-terms` (or `REMI_ACCEPT_ANTIGRAVITY_TERMS=1`), prints the terms URL and records the acceptance time in `install.json`; later pin bumps carry it. Downloads happen only in `remi runtime prepare --provider antigravity`, in `remi setup` / `remi daemon start` when Antigravity is the explicit or configured provider, and in the default `remi runtime prepare` (the installer) when some Antigravity install already exists. Task execution never downloads, and auto-detection considers only the pinned install, never `agy` on `PATH`.
+- **Gateway auth only.** `antigravity-acp/settings.json` selects `auth.type = gateway`; personal OAuth, AI Studio keys and Vertex credentials are blanked from the server's environment and the browser is disabled (`BROWSER=/usr/bin/false`). The gateway key itself never reaches the server process (see the shim below).
+- **Platforms.** macOS (arm64, x64) and Linux (x64, arm64). Windows is listed by Google but not pinned and not supported.
+- **CI.** No CI job accepts Google's terms on a runner. The pin-bump verification (`runtime prepare --provider antigravity` on Linux and macOS) stays a maintainer step ([upgrade checklist](daemon-runtime-upgrades.md#antigravity-固定与升级检查项)) until someone decides who may accept the terms for CI.
 
-Antigravity is opt-in. The first download requires accepting [Google's terms](https://antigravity.google/terms) with `--accept-antigravity-terms` or `REMI_ACCEPT_ANTIGRAVITY_TERMS=1`; the acceptance time is recorded and carried across pin bumps. Whether this use is covered by those terms is a business and legal decision (PR 4 risk R2). Downloads happen only in `remi runtime prepare --provider antigravity`, in `remi setup` / `remi daemon start` when Antigravity is the explicit or configured provider, and in the default `remi runtime prepare` (the installer) when some Antigravity install already exists. Task execution never downloads, and auto-detection only considers the pinned install, never `agy` on `PATH`.
+## Architecture
 
-The daemon-start health check spawns nothing: the manifest must match the pin, both binaries must be executable, and no machine policy file (`/Library/Application Support/Antigravity/admin_settings.json`, `/etc/antigravity/admin_settings.json`) may exist, because its admin tier overrides Remi's gateway routing. `remi runtime prepare` also runs the full check (`verifyAntigravityRuntime` in [runtime-verify.ts](../packages/acp/src/runtime-verify.ts)): `initialize` must report `antigravity-acp` at the pinned version with `loadSession`, and `session/new` against a fake upstream must list the upstream's single model and send Bearer auth. It needs no credentials and sends no prompt.
+```
+ACP server (Google, pinned)  ──HTTP──▶  daemon gateway shim (127.0.0.1)  ──HTTPS──▶  workspace Model gateway
+        ▲ ACP over stdio                    │ usageMetadata of every model response
+        └──────── AcpProvider ◀─────────────┘ → usage ledger, turn context
+```
 
-## Access config
+- [antigravity-install.ts](../packages/acp/src/antigravity-install.ts): per-machine install, health and launch.
+- [access/antigravity.ts](../packages/acp/src/access/antigravity.ts): the access config (launch, environment, home files, modes, flags); the provider consults it instead of branching on the agent name.
+- [gateway-shim.ts](../packages/daemon/src/agent-runtime/antigravity/gateway-shim.ts) and [gemini-sse.ts](../packages/daemon/src/agent-runtime/antigravity/gemini-sse.ts): the shim; its interfaces live in [gateway-shim-types.ts](../packages/acp/src/access/gateway-shim-types.ts), so `packages/acp` never imports the daemon.
+- [daemon.ts](../packages/server/src/worker/daemon.ts): resolves the engine before the start ACK, scopes the shim to the run, seeds the session home and probes models through the shim.
 
-[access/antigravity.ts](../packages/acp/src/access/antigravity.ts) declares what the provider does differently; nothing in the provider branches on the agent name:
+## Install and health
 
-- **Launch:** `<install>/agy_acp_server.par`, with `--uid=` on Linux. An Agent `executable` override still wins (and keeps its custom args); custom args without one are ignored with a warning.
-- **Environment:** `GEMINI_HOME` is the session's provider home; gateway auth is enabled with `AGY_LLM_GATEWAY_URL` set to the shim and the placeholder key `remi-shim`; file storage instead of the keychain; `BROWSER=/usr/bin/false`; loopback merged into `NO_PROXY` / `no_proxy`; every inherited Google, gateway and OAuth variable blanked. The real gateway key never enters the server process.
-- **Home files:** `antigravity-acp/settings.json` selects `auth.type = gateway`; `trusted_workspaces.json` marks the task directories untrusted, so repository hooks stay off.
-- **Session:** `session/new` (or `session/resume`) with `_meta.antigravity.systemPrompt.append` carrying Remi's system prompt and the runtime-context `AGENTS.md`; then `set_mode` (`yolo` / `auto_edit` / `default`), then a strict `set_config_option` for the model: without one the server silently runs the gateway's first model, so a missing model fails with `antigravity_model_required`. The gateway path has no effort selector.
-- **Prompts:** questions the model asks through `ask_user` arrive as `session/request_permission` and are answered through the elicitation handler (single choice); the workspace-trust prompt is answered `deny`; gateway errors streamed as `Agent execution error: …` text become typed session failures.
-- **Usage:** the server's `usage_update.used` double-counts the cache and is never billed. Billing and context come from the shim's per-response `usageMetadata` ([gemini-request-usage.ts](../packages/acp/src/gemini-request-usage.ts)), one request-identity unit per response; the shim interfaces are in [gateway-shim-types.ts](../packages/acp/src/access/gateway-shim-types.ts).
+[antigravity-install.ts](../packages/acp/src/antigravity-install.ts) streams the archive, checks its size and sha256 while streaming, extracts it into a stage (`ditto` on macOS, `unzip` or `bsdtar` on Linux) and renames it into `${REMI_HOME:-~/.remi}/acp/antigravity/<version>-<platform>/` next to `install.json`. It needs 1.5 GB free; a failure leaves the working install untouched; one previous copy is kept. Both binaries (`agy_acp_server.par`, `localharness_external`) are signed with the hardened runtime and carry no quarantine attribute when downloaded this way, so macOS needs no `xattr` step.
 
-Agent Plugins are not supported; `allowedTools` is ignored with a warning; extra directories have no effect; the server sends no plan updates and only single-choice questions.
+The daemon-start health check spawns nothing: the manifest must match the pin, both binaries must be executable, and no machine policy file (`/Library/Application Support/Antigravity/admin_settings.json`, `/etc/antigravity/admin_settings.json`) may exist, because its admin tier overrides Remi's gateway routing. `remi runtime prepare` runs the full check (`verifyAntigravityRuntime` in [runtime-verify.ts](../packages/acp/src/runtime-verify.ts)): `initialize` must report `antigravity-acp` at the pinned version with `loadSession`, and `session/new` through the daemon's real shim in front of a fake upstream must list the upstream's single model, with the upstream seeing only `Authorization: Bearer <key>` and no `x-goog-api-key`. It needs no credentials and sends no prompt. The remote "update ACP bridge" action reinstalls the pin (consent on record carries over); "update agent" is rejected because the release pins the server.
+
+## Gateway engine and model
+
+Antigravity runs only through the workspace's *Model gateway > Antigravity* engine (fragment `{"base_url", "default_model"}`, key in the token field; [contract](runtime-model-discovery.md#antigravity-gateway-engine)). Before the start ACK, and therefore before any model call, a task fails with:
+
+- `antigravity_gateway_unconfigured` when the engine, its base URL or its key is missing;
+- `antigravity_model_required` when neither the Agent nor the engine names a model (without a selection the server silently runs the gateway's first model).
+
+Both classify as `agent_error.missing_config`. An Agent without a model runs the engine's `default_model`. Model selection is strict: `session/set_config_option` must switch to the requested id or the turn fails with `acp_model_unsupported`. The gateway path offers no effort selector, so an explicit effort fails with `acp_effort_unsupported`; variant ids such as `gemini-3-pro-high` are separate models.
+
+The runtime's executable model list comes from the server's own `configOptions` (it caps unknown models and filters image models), probed through a per-daemon probe home and a probe token of the shim; listing consumes nothing and is not metered. The workspace dropdown comes from the gateway discovery.
+
+## Gateway shim
+
+One shim serves the daemon process (lazily bound to `127.0.0.1:<random port>`, stopped at shutdown after tasks drain). Each task run gets a scope holding the real key (`forRun`); each ACP process gets its own token (`open`), so usage attribution follows the provider pool entry and its ACP session. Every token of a run is revoked when the run ends.
+
+- **Routes.** `/<token>/` plus only `GET v1beta/models`, `GET v1beta/models/<m>`, `GET v1/models` and `POST v1beta/models/<m>:{streamGenerateContent,generateContent,countTokens}`. Unknown, revoked and disallowed requests get the same 404 body. Request bodies are capped at 32 MiB.
+- **Headers.** Inbound `authorization`, `x-goog-api-key`, `cookie`, `host`, hop-by-hop, `x-forwarded-*` and any `key=` query parameter are dropped; `Authorization: Bearer <real key>` is added. (Our gateway prefers `x-goog-api-key`, which the harness fills with the placeholder, so forwarding it would 401.) `content-encoding`, `content-length`, `transfer-encoding` and `set-cookie` are dropped from responses.
+- **Upstream.** `base_url + "/" + route`, https only, host checked for public addresses (cached 60 s), no redirects, proxied by Bun's own `HTTPS_PROXY` / `NO_PROXY` handling.
+- **Streaming.** Response bytes pass through unchanged while a parser reads each SSE `data:` event (events over 2 MiB are not parsed) or the buffered JSON body (up to 8 MiB, for parsing only), keeping the last `usageMetadata`, `responseId` and `modelVersion`. Each `generateContent` / `streamGenerateContent` call emits one observation when it ends or is cut short; listings and `countTokens` consume nothing and emit none.
+- **Timeouts.** 60 s to the upstream response (then 504), 120 s of silence between bytes, 15 min in total. A stream cut mid-body drops the connection instead of ending it cleanly, so the harness never mistakes it for a complete response.
+- **Breaker.** The harness retries a dead gateway forever. A 401 or 403 opens the token's breaker at once (`auth`); 5 consecutive network / 5xx / 429 failures, or 180 s of continuous failure, open it as `unreachable` / `quota`. The token then answers 503 quickly, and the provider fails the turn with a typed session failure (authentication, connection or quota) and cancels it.
+- **Security.** Loopback bind only; 256-bit tokens looked up by hash and logged as at most 6 characters; the real key lives only in the shim and in the daemon's redaction list. Residual risk (R4, accepted): shell commands the model runs inherit `AGY_LLM_GATEWAY_URL` and could call the allowlisted model routes; that usage is metered to the same run.
+
+## Environment and session home
+
+`buildAntigravityEnv` (in [access/antigravity.ts](../packages/acp/src/access/antigravity.ts)) sets `GEMINI_HOME` to the session's provider home (per lane generation, like `CLAUDE_CONFIG_DIR` / `CODEX_HOME`, so `session/resume` finds `antigravity-acp/conversations/<id>`), `AGY_ACP_ENABLE_GATEWAY_AUTH=1`, `AGY_ACP_FORCE_FILE_STORAGE=1` (no keychain), `AGY_LLM_GATEWAY_URL=<shim token URL>`, the placeholder `AGY_LLM_GATEWAY_API_KEY=remi-shim`, `AGY_ACP_DEFAULT_MODEL` when known, and loopback merged into `NO_PROXY` / `no_proxy`. Every inherited Google, gateway and OAuth variable is set to the empty string (which the server treats as unset); `AGY_LLM_GATEWAY_PROXY_URL` is never set. A runtime-workspace env file cannot override `GEMINI_HOME`, `GEMINI_API_KEY`, `AGY_*`, `GOOGLE_*` or `ANTIGRAVITY_*` for an Antigravity Agent.
+
+Before every server start the daemon rewrites `antigravity-acp/settings.json` (`auth.type = gateway`) and `trusted_workspaces.json` (the run's cwd and workspace marked untrusted, so repository hooks stay off and no trust prompt is asked; a trust prompt is answered `deny`). Never set `AGY_ACP_DISABLE_WORKSPACE_TRUST`: it means "trust everything".
+
+The server also creates directories on its own: `$GEMINI_HOME/antigravity-cli/skills`, `$GEMINI_HOME/config/skills`, its conversation databases and `brain/`, and empty `.agents/skills` and `.gemini/skills` directories in the session cwd (empty directories do not show in `git status`).
+
+## Session behaviour
+
+- `session/new` (or `session/resume` when continuing) carries `_meta.antigravity.systemPrompt.append`: a working-directory note naming the session cwd, Remi's system prompt, then the runtime-context instructions the daemon writes to `$GEMINI_HOME/AGENTS.md`. The server reads neither that file nor the cwd's `AGENTS.md` on its own (live probe), so nothing is duplicated.
+- Without the working-directory note, models chose `$GEMINI_HOME/antigravity-cli/skills` as every shell command's working directory regardless of workspace trust (live probe, R5); with it they use the session cwd.
+- Modes: `bypassPermissions` / `dontAsk` / `auto` → `yolo`; `acceptEdits` → `auto_edit`; `default` / `plan` → `default`; the default is `bypassPermissions`.
+- Questions the model asks through `ask_user` arrive as `session/request_permission` (an `interaction_` call) and go through the elicitation handler as single-choice questions, never the daemon's auto-approval. Gateway errors streamed as `Agent execution error: …` or `Agent connection was lost …` text become typed session failures; "X is no longer available. Using Y." becomes a warning notice.
+- There is no native steering: a steer cancels, waits for the turn to end and re-prompts. A cancel while the model streams or runs a foreground command ends the turn within milliseconds; the server then streams "The request was cancelled by the client." as ordinary text. The provider never overlaps prompts on one session; when a client does, the server keeps the connection, finishes the running prompt and ends the overlapping one with an `Agent connection was lost … Concurrent receive_steps() calls are not supported` service message (a typed failure in Remi).
+- **Known gap: background shell commands.** When the model starts a command in the background (`WaitMsBeforeAsync: 0`), the turn stays open until the command reports back and the server ignores `session/cancel` meanwhile; the provider stops the process after its 5 s cancel grace. A turn resumed after such a stop answered but then stayed open for over a minute (once for over five minutes without answering). Remi does not mitigate this yet.
+- Not supported: Agent Plugins (rejected), `allowedTools` (ignored with a warning), extra directories (no effect), plan updates, multi-select questions, non-Gemini models.
+
+## Usage and context
+
+The server's own `usage_update.used` equals total + cached (it counts the cache twice) and is never billed; the provider keeps only its window size. Billing comes from the shim: one request-identity unit per model response ([gemini-request-usage.ts](../packages/acp/src/gemini-request-usage.ts)), keyed by the server-minted ACP session id and the `responseId`, under connection `workspace:<ws>:relay:antigravity` with provider `antigravity`. Our gateway's `promptTokenCount` includes cached tokens, so input = prompt + tool-use prompt − cached, cache reads are separate, and thinking counts as output once. A response without `responseId` is `partial` without identity; a stream cut short keeps only the counters it carried and is `partial`, or `unknown` when it carried none; a rejected request without counters bills nothing. Context is the last session-model request's total; calls to other models (browser subagents) bill but do not count as context (R9). Details: [usage accounting](usage-accounting.md).
 
 ## Validation
 
-Run `bun test tests/unit/acp/antigravity-install.test.ts tests/unit/acp/antigravity-access.test.ts tests/unit/acp/gemini-request-usage.test.ts tests/unit/acp/providers.test.ts tests/unit/acp/trace-vendor.test.ts tests/unit/daemon/trace-translator.test.ts`. They use fake archives, a fake ACP agent and a fake shim, so they prove neither Google authentication nor real model execution. The daemon integration test and the opt-in live probe arrive with Task C.
+- Unit: `bun run test tests/unit/acp/antigravity-install.test.ts tests/unit/acp/antigravity-access.test.ts tests/unit/acp/gemini-request-usage.test.ts tests/unit/acp/providers.test.ts tests/unit/acp/trace-vendor.test.ts tests/unit/daemon/trace-translator.test.ts tests/unit/daemon/antigravity-gateway-shim.test.ts`.
+- Integration: `bun run test tests/integration/antigravity-daemon.test.ts` runs the real API, daemon, provider and shim against a fake ACP server and a fake gateway: a turn into a turn + items trace, request units with the cache split, header stripping, context from the session model only, the model probe through a shim token, resume in a fresh process, a cut stream billed as `partial`, and the unconfigured gateway failing before the start ACK. On Linux runners without user namespaces the turn fails with `private_tmp_isolation_unavailable`, which the test accepts.
+- Manual live probe (spends real tokens): `REMI_AGY_LIVE=1 bun run tests/manual/antigravity-live-probe.ts --env-file <file with AGY_LLM_GATEWAY_URL and AGY_LLM_GATEWAY_API_KEY>`, after `remi runtime prepare --provider antigravity --accept-antigravity-terms`. It uses the pinned install, the real shim and the real provider, and redacts the key from its report.
+
+Last live run (2026-10-15, macOS arm64, server 1.4.0, `gemini-2.5-flash` on our gateway, no system proxy):
+
+- Install: 108 MB download, 392 MB on disk, 44 s for `runtime prepare` including the contract check through the real shim. First spawn to `initialize` in 1.5–1.7 s cold and warm; a spawn leaves only a 136 KB CA bundle under `TMPDIR` (the archive does not self-extract per process), and a session home grows to about 7 MB (R10).
+- Usage: every model call became an exact request-identity unit with the cache split (for example input 4,292, cache read 8,126, output 106, total 12,524); a stream cancelled mid-answer became one `partial` unit. Over two raw connections the server's Σ`used` equalled the shim's Σ(total + cached) exactly (20,462 and 66,265), confirming the double count.
+- Working directory: without the note every command ran in `$GEMINI_HOME/antigravity-cli/skills` whatever the workspace trust; with it, in the session cwd (R5). The server read neither `$GEMINI_HOME/AGENTS.md` nor the cwd's `AGENTS.md` on its own.
+- Cancel settled 7–22 ms after `session/cancel` while streaming or in a foreground command; `session/resume` in a fresh process continued the conversation; a true overlap kept the process and the session usable (R6).
+- Proxy: with dead `HTTPS_PROXY` / `HTTP_PROXY` and a SOCKS `ALL_PROXY` in its environment the server still reached the loopback shim and answered, and the shim's upstream calls went through `HTTPS_PROXY` (CONNECT). A macOS *system* SOCKS proxy was not available to test (R7).
+
+## Troubleshooting
+
+- **`antigravity_terms_required`**: run `remi runtime prepare --provider antigravity --accept-antigravity-terms` (or set `REMI_ACCEPT_ANTIGRAVITY_TERMS=1`) after reviewing the terms.
+- **Health check: "is not installed" or "does not match"**: rerun `runtime prepare`; a pin bump needs one download per machine.
+- **"machine policy overrides gateway routing"**: an `admin_settings.json` policy file exists; it can pin the URL or forbid gateway auth, so Remi refuses to run. Remove the policy or run on another machine.
+- **`antigravity_gateway_unconfigured` / `antigravity_model_required`**: configure the Antigravity engine's base URL and key, and a `default_model` or the Agent's model.
+- **"The model gateway rejected the credentials"**: the gateway answered 401/403 to the real key; fix the key in *Model gateway*. A key that only works as `x-goog-api-key` must also accept `Authorization: Bearer`.
+- **"The model gateway is unreachable" / "rate limiting or out of quota"**: the shim's breaker opened after repeated network, 5xx or 429 failures. Check the gateway and the daemon's proxy settings; the next turn starts a fresh server process with a new token.
+- **Proxy and SOCKS.** The shim's upstream calls use the daemon's `HTTPS_PROXY` / `NO_PROXY`. The server only talks to the loopback shim and Google's local harness; its environment merges `127.0.0.1,localhost,::1` into `NO_PROXY` / `no_proxy`. Proxy variables in the daemon's environment (including a SOCKS `ALL_PROXY`) were verified not to affect those loopback calls. On macOS, CPython reads environment proxies whenever any `*_proxy` variable is set and only otherwise the system settings, so this non-empty `no_proxy` should also keep a *system* SOCKS proxy (which failed with a missing `python-socks` error in the first probe) out of the server; that case is not yet verified (R7). If the error appears, set `HTTPS_PROXY` / `HTTP_PROXY` explicitly in the daemon's environment.
+- **Commands run in the wrong directory**: they should run in the session cwd; if a model still picks `$GEMINI_HOME/antigravity-cli/skills`, report the model id (R5).
+- **A turn never ends after a background command**: see the known gap above; stop the task, which stops the server process.
+- **First turn slow**: the first spawn initializes in about 1.5 s on Apple silicon; a cold `session/new` also lists the gateway's models.

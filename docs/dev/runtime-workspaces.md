@@ -127,7 +127,7 @@ daemon 检查 cwd、额外上下文和环境文件的真实路径位于根目录
 
 Skill 索引包含名称、触发描述和绝对 `SKILL.md` 路径，支持文件从原目录读取。数据库 Agent Skill 写入 daemon 状态目录，不覆盖本地同名 Skill。单份上下文文件上限 256 KiB；生成的本地指令和 Skill 索引合计上限 24 KiB，超限明确失败。
 
-`env_file` 使用 dotenv 格式，不执行 shell。注入顺序：机器环境 → 团队环境 → Agent 环境 → 本地环境文件 → provider 路由/认证 → Task 坐标。本地文件不能覆盖 `MULTIREMI_*`、`CODEX_HOME`、`CLAUDE_CONFIG_DIR`、`OPENAI_*`、`ANTHROPIC_*`。其他 provider 配置继续沿用现有筛选、插件和 relay 机制，不共享完整 native home。
+`env_file` 使用 dotenv 格式，不执行 shell。注入顺序：机器环境 → 团队环境 → Agent 环境 → 本地环境文件 → provider 路由/认证 → Task 坐标。本地文件不能覆盖 `MULTIREMI_*`、`CODEX_HOME`、`CLAUDE_CONFIG_DIR`、`OPENAI_*`、`ANTHROPIC_*`。Antigravity Agent 另外不能覆盖 `GEMINI_HOME`、`GEMINI_API_KEY`、`AGY_*`、`GOOGLE_*`、`ANTIGRAVITY_*`（home、网关路由与 Google 凭据由其环境构造器独占；其他 provider 仍可在本地文件中使用 Google 工具变量）。其他 provider 配置继续沿用现有筛选、插件和 relay 机制，不共享完整 native home。
 
 这些文件无需纳入云端 Git。注册不上传文件内容，服务端 Task prompt 仅描述路径；执行 agent 及其模型服务仍可能读取文件，任务输出和会话历史仍按现有机制处理。跨 Chat 的原生历史不会自动合并；跨任务记忆可保存在工作区文件中。
 

@@ -225,8 +225,10 @@ the fragment's `default_model`; with none configured, nothing is marked.
 The daemon wire carries the engine as `relay.antigravity` (fragment, key and
 revision) wherever the relay travels — register, the workspace repository
 refresh and the `workspace.relay` downlink in the heartbeat acknowledgement —
-and, as for the other engines, only to owner/admin daemons. The daemon currently
-receives and ignores it. Antigravity now runs on Google's ACP server, whose
-provider routes model calls only through a loopback gateway shim
-([Antigravity Runtime](antigravity.md)); the shim that holds this key and its
-daemon wiring are follow-up work (PR 4 Task C).
+and, as for the other engines, only to owner/admin daemons. An Antigravity daemon
+keeps the key in its loopback gateway shim
+([gateway-shim.ts](../packages/daemon/src/agent-runtime/antigravity/gateway-shim.ts)):
+tasks and the runtime model probe reach the gateway only through a per-process
+shim token, and a task without the engine's base URL and key fails with
+`antigravity_gateway_unconfigured` before its start ACK. An Agent without a model
+runs the engine's `default_model` ([Antigravity Runtime](antigravity.md)).
