@@ -6,7 +6,10 @@
  * (`packages/server/src/worker/trace-translator.ts`) only maps facts to items.
  * The shapes are those of the pinned bridges (`runtime-versions.json`):
  *
- * - claude-agent-acp 0.89.0 (`CA` = its `dist/`)
+ * - claude-agent-acp 0.90.0 (`CA` = its `dist/`). The `CA` line numbers below
+ *   were taken from 0.89.0; 0.90.0 keeps the cited behaviour (its compaction,
+ *   notice, elicitation and diff modules are unchanged; renderer and agent code
+ *   moved by a few dozen lines).
  * - codex-acp 2.2.2 (`CX` = its `dist/index.js`)
  *
  * Title parsing is version-pinned on purpose (risk R6): Codex sends single-action

@@ -57,11 +57,9 @@ export const DAEMON_PROTOCOL_MIN = 2;
  * First turn + items trace release: v0.2.90 (PR 2, ADR 0019). Released v0.2.89
  * and earlier daemons write fragment traces and answer `trace.read` without a
  * view, so they must upgrade; a v0.2.90 daemon refuses a server that still
- * advertises an older gate. `package.json` moves only through
- * `bun run release:prepare --version <next>`, so the release that carries PR 2
- * must be prepared as exactly v0.2.90. Before publishing, the release owner must
- * verify the v0.2.90 tag, package.json, prepared dependency snapshot and target
- * main SHA. The version gate does not mean the fleet has upgraded.
+ * advertises an older gate. Before publishing, the release owner must verify the
+ * v0.2.90 tag, package.json, prepared dependency snapshot and target main SHA.
+ * The version gate does not mean the fleet has upgraded.
  */
 export const DAEMON_MIN_CLI_VERSION = "0.2.90";
 

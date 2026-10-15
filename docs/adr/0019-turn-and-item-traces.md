@@ -63,7 +63,7 @@ daemon 在每次报告完成前调用 `settle()`：
 
 ### 5. 压缩由桥接直接报告
 
-daemon 在 ACP `clientCapabilities` 声明 `session.compaction` 与 `session.notices`。有了前者，两个固定版本的桥（Claude ACP 0.89、Codex ACP 2.2.2）发送 `compaction_update`，而不是「Compact conversation」工具调用或横幅文字；对两个桥的夹具录制验证了这一点（R11，`tests/fixtures/acp/*-089-*`、`codex-222-*`）。有了后者，提示以 `notice` 更新到达，不再混进回复文字。压缩成为 `compaction` 条目，横幅文字匹配删除。
+daemon 在 ACP `clientCapabilities` 声明 `session.compaction` 与 `session.notices`。有了前者，两个桥（Claude ACP 0.89 起、Codex ACP 2.2.2）发送 `compaction_update`，而不是「Compact conversation」工具调用或横幅文字；对 Claude 0.89 与 Codex 2.2.2 的夹具录制验证了这一点（R11，`tests/fixtures/acp/*-089-*`、`codex-222-*`）。v0.2.90 的发版准备把 Claude 桥固定到 0.90.0：其 `context-compaction.js`、`session-notices.js`、`elicitation.js` 与 0.89 相同，`acp-agent.js` 的能力判断、`_meta.claudeCode`（`toolName`、`parentToolUseId`）与 AIR 退出码规则未变，静态核对见该 PR。有了后者，提示以 `notice` 更新到达，不再混进回复文字。压缩成为 `compaction` 条目，横幅文字匹配删除。
 
 ### 6. 计费不进 trace
 
@@ -86,7 +86,7 @@ v1 文件只读：不追加、不续传、不重新封口，`view=turn` 只给 l
 - 服务端拒绝 v0.2.89 及更早的 daemon（`reject` + close 4426），它们进入 `upgrade_wait`，经 HTTP 心跳通道自动排队升级到服务端版本；
 - v0.2.90 的 daemon 遇到门槛更低的旧服务端时自行进入 `upgrade_wait`，因此新 daemon 只会收到带 `view` 的 `trace.read`，不带 `view` 的请求按 `protocol_violation` 拒绝。
 
-`package.json` 版本只由发版准备（`bun run release:prepare --version <next>`）连同依赖快照一起修改，`release:check` 也要求二者一致，所以本 PR 不改它。**携带 PR 2 的发版必须准备为 v0.2.90。**在那之前，源码运行的测试 daemon 报告门槛版本本身（`tests/fixtures/daemon-protocol.ts`）。
+`package.json` 与依赖快照由发版准备（`bun run release:prepare --version 0.2.90`）一起改到 0.2.90，门槛与版本号同批落地，源码运行的 daemon 报告的就是门槛版本。
 
 部署顺序：负责人发起 updater drain，暂停派活 → 等运行中的轮与 outbox 排空 → 部署 API（跑上述迁移）→ 升级 daemon（被拒的旧 daemon 自动升级）→ 核对后解除 drain。部署前还要检查飞书 outbox 中持有 `messageId` 但没有展示检查点的投递（R10），它们在新版本只经 `FeishuTaskPresentation` 补发最终卡片。
 

@@ -19,7 +19,6 @@
  */
 import { describe, expect, it } from "bun:test";
 import {
-  compareDaemonCliVersion,
   DAEMON_ACK_TIMEOUT_MS,
   DAEMON_MIN_CLI_VERSION,
   DAEMON_FRAME_MAX_BYTES,
@@ -229,19 +228,11 @@ describe("MUL-417 daemon protocol session — handshake", () => {
     expect(h.registry.size).toBe(0);
   });
 
-  it("admits the release that carries the gate without a forged CLI label", async () => {
+  it("admits the candidate package version without a forged CLI label", async () => {
     const { default: candidate } = await import("../../../package.json");
-    // `package.json` moves only through release preparation. Until that runs for
-    // the gate's release (ADR 0019), the gate names the next patch release
-    // exactly, so the release it requires is the one preparation produces next.
-    const prepared = compareDaemonCliVersion(candidate.version, DAEMON_MIN_CLI_VERSION) >= 0;
-    if (!prepared) {
-      const [major, minor, patch] = candidate.version.split(".").map(Number);
-      expect(DAEMON_MIN_CLI_VERSION).toBe(`${major}.${minor}.${patch! + 1}`);
-    }
     const h = harness();
     await h.session.handleMessage(JSON.stringify({ v: 2, t: "hello", ts: 1,
-      p: helloPayload({ cli_version: prepared ? candidate.version : DAEMON_MIN_CLI_VERSION }) }));
+      p: helloPayload({ cli_version: candidate.version }) }));
     expect(h.socket.lastOfType("reject")).toBeNull();
     expect(h.socket.lastOfType("welcome")).not.toBeNull();
     expect(h.session.isHandshakeComplete).toBe(true);

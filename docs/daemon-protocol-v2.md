@@ -1021,8 +1021,7 @@ daemon protocol rejected by server (min X, self Y); waiting for pending_update, 
 当前 `DAEMON_MIN_CLI_VERSION` 为首个写「轮 + 条目」trace 的正式版本 `0.2.90`
 （PR 2，[ADR 0019](adr/0019-turn-and-item-traces.md) 决策 9）。已发布的 `0.2.89` 写片段 trace、
 回答不带 `view` 的 `trace.read`，与更早版本一并被拒绝；`DAEMON_PROTOCOL_VERSION` 仍为 2。
-`package.json` 只由 `bun run release:prepare --version <next>` 连同依赖快照修改（`release:check` 要求二者一致），
-因此 PR 2 不改它，**携带 PR 2 的发版必须准备为 `v0.2.90`**；在那之前源码测试 daemon 报告门槛版本本身。
+`package.json` 与依赖快照由 `bun run release:prepare --version 0.2.90` 与门槛同批改到 `0.2.90`（`release:check` 要求二者一致）。
 发布前，发布负责人核对 `v0.2.90` tag、package 版本、依赖快照、Release 资产和目标 main SHA。
 部署顺序：updater drain 暂停派活 → 运行中的轮与 outbox 排空 → API（含迁移）→ daemon → 解除 drain。
 门槛不表示 fleet 已升级。
