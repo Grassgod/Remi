@@ -11,6 +11,7 @@ import {
   type TraceSubagentItem,
 } from "@multiremi/contracts/trace.js";
 import { applyTurnTraceEvent, EMPTY_TURN_TRACE, finalItem, type TurnTraceState } from "@shared/turn-trace.js";
+import { isHiddenStep, subagentResolver, type AgentResolver } from "@shared/trace-step-copy.js";
 import { cotTextEvents, type CotSample } from "./native-cot.js";
 import {
   cotCompactionStep,
@@ -49,6 +50,9 @@ interface OpenStep { stepId: string; kind: "subagent" | "compaction"; item: Trac
  *
  * - Tool rows are written once, from `item.completed`, when the item is whole:
  *   one per command action, per changed file, else one, in Codex step copy.
+ *   An agent-control row names its target from the trace's subagents
+ *   (「已发送消息给 X」); a hidden step (Codex `wait`) writes no row, though it
+ *   still ends the answer search like any tool.
  * - Text is written per item when it completes. A top-level agent message
  *   that may be the answer (`final` / `unknown` phase) is held, following the
  *   shared final-reply rule: a later message that would replace it, a rule-2
@@ -126,7 +130,7 @@ export class FeishuCotTimeline {
     const done = event.type === "item.completed";
     if (item.type === "agent_message") { if (done) this.message(item); }
     else if (item.type === "reasoning") { if (done) this.paragraph(item); }
-    else if (ROW_TYPES.has(item.type)) { if (done) this.tool(item as CotToolItem); }
+    else if (ROW_TYPES.has(item.type)) { if (done && !isHiddenStep(item)) this.tool(item as CotToolItem); }
     else if (item.type === "subagent") this.subagent(item, done);
     else if (item.type === "compaction") this.compaction(item, seen, done);
     else if (item.type === "plan") this.plan(item, event.seq);
@@ -136,6 +140,9 @@ export class FeishuCotTimeline {
   private item(id: string): TraceItem | undefined {
     return this.trace.items.find(candidate => candidate.id === id);
   }
+
+  /** Names a control row's agent from the subagents seen so far; built only when a row asks. */
+  private readonly resolveAgent: AgentResolver = target => subagentResolver(this.trace.items)(target);
 
   private heldPhase(): TraceAgentMessageItem["phase"] | null {
     const held = this.held ? this.item(this.held) : undefined;
@@ -194,7 +201,7 @@ export class FeishuCotTimeline {
       }
       return;
     }
-    const rows = cotStepRows(item);
+    const rows = cotStepRows(item, this.resolveAgent);
     const note = rows.at(-1)?.note;
     const samples: CotSample[] = [];
     let toolCallId = "";
@@ -304,7 +311,7 @@ export class FeishuCotTimeline {
     // Finish display steps without claiming an unobserved background task succeeded.
     for (const [itemId, step] of [...this.steps]) {
       this.finishStep(itemId, step.kind === "compaction" ? cotCompactionStep({ ...(step.item as TraceCompactionItem), status: "stopped" })
-        : `${cotSubagentTitle(step.item as TraceSubagentItem)} · ${status === "cancelled" ? "本轮已中断" : "本轮已结束，子任务结果见工作台"}`);
+        : `${cotSubagentTitle(step.item as TraceSubagentItem)} · ${status === "cancelled" ? "本轮已中断" : "本轮已结束，子代理结果见工作台"}`);
     }
     if (this.reasoning) this.queue.push(["REASONING_END", { messageId: this.id("reasoning") }]);
     pending.push(...this.queue);
