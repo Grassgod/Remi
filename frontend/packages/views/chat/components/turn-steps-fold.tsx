@@ -173,7 +173,9 @@ export function FinishedTurnSteps({ attemptId, turnId, sessionId = null, header,
   const steps = useMemo(() => buildTurnSteps(trace.items), [trace.items]);
   const source = useMemo<SubagentTraceSource>(() => ({ sessionId, attemptId, turnId, live: false }), [sessionId, attemptId, turnId]);
   const read = trace.read;
-  const unavailable = read && read.state !== "ok"
+  // The cache can hold the live phase's first read, which may have landed before
+  // the daemon had a trace (`not_found`) while the stream supplied every item.
+  const unavailable = read && read.state !== "ok" && !trace.items.length
     ? read.state === "unreachable" ? ta(($) => $.transcript.trace_unreachable, { name: read.runtime_name ?? read.runtime_id ?? "" })
       : read.state === "lost" ? ta(($) => $.transcript.trace_lost) : ta(($) => $.transcript.trace_not_found)
     : null;

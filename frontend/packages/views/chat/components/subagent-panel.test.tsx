@@ -216,6 +216,24 @@ describe("subagent panel", () => {
     expect(screen.queryByRole("status")).toBeNull();
   });
 
+  it("shows what the stream delivered when a live attempt's first read found no trace yet", () => {
+    // The read can land while the turn is still queued (`not_found`, pointer_missing); live frames fill the items.
+    client.setQueryData(["task-trace", "att_1"], { ...turnTraceCache(turnPage(traceTurn({ status: "running" }), claudeLiveItems())), read: { state: "not_found", format: "v2" } });
+    renderLayout();
+    open({ path: ["sa:gp"] });
+    expect(document.querySelector('[data-subagent-detail="sa:gp"]')).not.toBeNull();
+    expect(screen.queryByText("暂无执行过程记录")).toBeNull();
+    act(() => { useChatStore.getState().setSubagentPath([]); });
+    expect(overviewRow("sa:explore")).toBeInTheDocument();
+  });
+
+  it("still explains an empty panel with a read that found no trace", () => {
+    client.setQueryData(["task-trace", "att_1"], { ...turnTraceCache(turnPage(traceTurn({ status: "completed" }), [])), read: { state: "not_found", format: "v2" } });
+    renderLayout();
+    open({ live: false });
+    expect(screen.getByText("暂无执行过程记录")).toBeInTheDocument();
+  });
+
   it("reads a finished turn's trace only once it opens, and names a missing subagent", async () => {
     getTaskTrace.mockResolvedValue(turnPage(traceTurn({ status: "completed" }), claudeDoneItems()));
     renderLayout();

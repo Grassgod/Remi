@@ -177,13 +177,16 @@ export function SubagentPanelView({ target, onClose, focusOnMount = true }: {
     sessionId: target.sessionId, attemptId: target.attemptId, turnId: target.turnId, live: target.live,
   }), [target.sessionId, target.attemptId, target.turnId, target.live]);
   const read = trace.read;
-  const unavailable = read && read.state !== "ok"
-    ? read.state === "unreachable" ? ta(($) => $.transcript.trace_unreachable, { name: read.runtime_name ?? read.runtime_id ?? "" })
-      : read.state === "lost" ? ta(($) => $.transcript.trace_lost) : ta(($) => $.transcript.trace_not_found)
-    : null;
   // While pages are still arriving, a subagent that is not there yet (it may
   // be on a later page) and an empty list both mean "loading".
   const missing = detail ? !isSubagent(current) : !items.some((item) => item.type === "subagent" && item.parent_id === null);
+  // A live attempt's first read can land before the daemon has a trace for it
+  // (`not_found`); the stream then supplies every item. A read that is not ok
+  // only explains a view with nothing to show.
+  const unavailable = read && read.state !== "ok" && missing
+    ? read.state === "unreachable" ? ta(($) => $.transcript.trace_unreachable, { name: read.runtime_name ?? read.runtime_id ?? "" })
+      : read.state === "lost" ? ta(($) => $.transcript.trace_lost) : ta(($) => $.transcript.trace_not_found)
+    : null;
   let body: ReactNode;
   if (trace.error && (!items.length || missing)) {
     body = (

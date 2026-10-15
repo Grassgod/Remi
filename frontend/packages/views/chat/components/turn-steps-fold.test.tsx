@@ -6,7 +6,7 @@ import type { TraceItem, TraceTurn } from "@multiremi/contracts/trace";
 import { createChatStore, registerChatStore, useChatStore } from "@multiremi/core/chat";
 import { renderWithI18n } from "../../test/i18n";
 import {
-  T0, at, command, compaction, message, read, reasoning, subagent, traceTurn, turnPage, unknown,
+  T0, at, command, compaction, message, read, reasoning, subagent, traceTurn, turnPage, turnTraceCache, unknown,
 } from "../../test/trace-fixtures";
 import { FinishedTurnSteps, LiveTurnSteps } from "./turn-steps-fold";
 
@@ -306,6 +306,15 @@ describe("finished fold (MUL-472)", () => {
     expect(await screen.findByText("已读取文件，运行了命令")).toBeInTheDocument();
     expect(screen.queryByText("Final reply")).toBeNull();
     expect(screen.getByTestId("log")).toBeInTheDocument();
+  });
+
+  it("shows the steps the live stream left in the cache even when that read found no trace yet", () => {
+    client.setQueryData(["task-trace", "att_1"], { ...turnTraceCache(turnPage(traceTurn({ status: "completed" }), [command("cmd_1", [read("a.ts")])])),
+      read: { state: "not_found", format: "v2" } });
+    renderWithI18n(<Query><Fold initialOpen /></Query>, { locale: "zh-Hans" });
+    expect(screen.getByText("已读取 a.ts")).toBeInTheDocument();
+    expect(screen.queryByText("暂无执行过程记录")).toBeNull();
+    expect(getTaskTrace).not.toHaveBeenCalled();
   });
 
   it("offers a retry when the read fails", async () => {
