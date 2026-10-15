@@ -39,9 +39,11 @@ export interface TaskSteerSource {
  * Receives unconsumed steer messages during one task run.
  *
  * The run loop drains arrivals with {@link take} between provider turns and
- * registers an interrupt callback while a turn is streaming so a mid-turn
- * steer can soft-cancel the turn (ACP `session/cancel`) and be injected as
- * the next prompt on the same provider session. The feed only observes —
+ * registers an interrupt callback while a turn is streaming. With native
+ * steering the callback kicks the `SteerPump`, which takes batches into the
+ * running prompt and {@link requeue}s any it could not inject; otherwise a
+ * mid-turn steer soft-cancels the turn (ACP `session/cancel`) and is injected
+ * as the next prompt on the same provider session. The feed only observes —
  * marking messages consumed stays with the run loop, after injection.
  */
 export class TaskSteerFeed {
@@ -83,6 +85,17 @@ export class TaskSteerFeed {
   }
 
   /**
+   * Put a batch the native steer pump took back at the front, in order, without
+   * firing the interrupt: the pump decides how its own batch falls back
+   * (ADR 0020), and the run loop's next {@link take} re-prompts it.
+   */
+  requeue(messages: MultiremiTaskSteerMessage[]): void {
+    if (!messages.length) return;
+    const queued = new Set(this.queue.map((message) => message.id));
+    this.queue.unshift(...messages.filter((message) => !queued.has(message.id)));
+  }
+
+  /**
    * Mark ids handled outside the feed (the run loop's authoritative fetch
    * observed and processed them directly). Pins them in `seen` and drops any
    * queued copies, so a replay that arrives after the ids were
@@ -94,6 +107,11 @@ export class TaskSteerFeed {
     if (!handled.size) return;
     for (const id of handled) this.seen.add(id);
     if (this.queue.length) this.queue = this.queue.filter((m) => !handled.has(m.id));
+  }
+
+  /** The queued messages, oldest first, without taking them. */
+  peek(): readonly MultiremiTaskSteerMessage[] {
+    return this.queue;
   }
 
   get hasPending(): boolean {

@@ -46,6 +46,7 @@ import type {
   TraceItemStatus,
   TracePlanItem,
   TraceReasoningItem,
+  TraceSteerResult,
   TraceTurn,
 } from "@multiremi/contracts/trace.js";
 import { readExecutionModel } from "@shared/agent-execution.js";
@@ -58,10 +59,16 @@ import {
   TRACE_ITEM_TEXT_MAX_BYTES,
   TRACE_TRUNCATION_MARKER,
   capItemText,
+  capLabel,
   capTraceItem,
   utf8ByteLength,
 } from "@shared/trace-sanitize.js";
 import { selectFinalReply } from "@shared/turn-trace.js";
+
+/** A native steer error is a short diagnostic: label-sized, like a tool name. */
+function steerError(error: string | null): string | null {
+  return error === null ? null : capLabel(error);
+}
 
 /** Coalescing constants, kept from the retired `TaskMessageBatcher`. */
 export const TRACE_DELTA_FLUSH_INTERVAL_MS = 200;
@@ -151,7 +158,11 @@ export interface TraceTranslator {
   permissionResolved(itemId: string, resolution: TracePermissionResolution): void;
   questionRequested(request: TraceQuestionRequest): string;
   questionResolved(itemId: string, resolution: TraceQuestionResolution): void;
-  steer(messages: MultiremiTaskSteerMessage[], injected: boolean): void;
+  /**
+   * A steer batch whose delivery is known (ADR 0020): one completed
+   * `user_message {origin:"steer"}` per message, carrying `result`.
+   */
+  steer(messages: MultiremiTaskSteerMessage[], result: TraceSteerResult): void;
   /** The provider's own model report (`getLastResponse().model`). */
   model(model: string): void;
   /** The final-reply rule (spec §2.4); call before each `completeTurn`. */
@@ -1029,7 +1040,7 @@ export function createTraceTranslator(
       });
     },
 
-    steer(messages, injected) {
+    steer(messages, result) {
       emitter.run(() => {
         boundary(null);
         for (const message of messages) {
@@ -1040,8 +1051,9 @@ export function createTraceTranslator(
             id, parent_id: null, status: "completed", started_at: at, completed_at: at, type: "user_message", origin: "steer",
             text: text.value, ...(text.truncated ? { truncated: true as const } : {}),
             message_ids: [message.id], attachments: attachmentRefs(message.attachments),
-            steer: { steer_id: message.id, kind: message.kind, injected, author_type: message.authorType ?? null,
-              author_id: message.authorId ?? null },
+            steer: { steer_id: message.id, kind: message.kind, injected: result.via !== "none",
+              author_type: message.authorType ?? null, author_id: message.authorId ?? null,
+              result: { via: result.via, native_outcome: result.native_outcome, error: steerError(result.error) } },
           });
         }
       });

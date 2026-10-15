@@ -119,6 +119,7 @@ export class AgentSession {
       permissionMode: c.permissionMode,
       traceId: c.traceId,
       signal: c.signal,
+      onPromptStarted: c.onPromptStarted,
       pluginPaths: c.pluginPaths,
       pluginFingerprint: c.pluginFingerprint,
       codexHome: c.codexHome,

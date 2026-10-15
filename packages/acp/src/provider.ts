@@ -12,13 +12,16 @@ import type {
   SendOptions,
   AgentResponse,
   ProviderEvent,
+  SteerOutcome,
+  SteerResult,
 } from "@shared/contracts/provider-types.js";
-import { createAgentResponse } from "@shared/contracts/provider-types.js";
+import { createAgentResponse, STEER_REASONS } from "@shared/contracts/provider-types.js";
+import { TRACE_STEER_OUTCOMES } from "@shared/contracts/trace.js";
 import { readContextUsage, type ContextUsage } from "@shared/agent-execution.js";
 import { UsageCollector } from "./usage-collector.js";
 import type { TaskUsageUnit } from "@shared/contracts/usage-accounting.js";
 import { AcpClient } from "./client.js";
-import { AcpSessionFailureError, airMetadata, readSessionFailure, redactProviderError, redactProviderErrorText, record, type AcpSessionFailure } from "./session-failure.js";
+import { AcpRpcError, AcpSessionFailureError, airMetadata, readSessionFailure, redactProviderError, redactProviderErrorText, record, type AcpSessionFailure } from "./session-failure.js";
 import { resolveAcpProcessLaunch } from "./launch.js";
 import { createAdapter, type AgentAdapter } from "./adapters/index.js";
 import { resolveClaudeContextSelection, hasOneMillionContext } from "./adapters/claude-code/model-context.js";
@@ -39,6 +42,7 @@ import type {
   NewSessionMeta,
   NewSessionResult,
   PromptUsageSettleScope,
+  SteerResponse,
 } from "@shared/contracts/acp-protocol.js";
 
 export interface AcpProviderOptions {
@@ -83,6 +87,12 @@ export interface AcpProviderOptions {
   pluginFingerprint?: string;
   /** Isolated home used only for Codex Plugin execution. */
   codexHome?: string;
+  /** How long a native steer may take before it falls back (default 30 s; tests shorten it). */
+  steerTimeoutMs?: number;
+  /** How long a steer waits for running top-level tool calls (default 30 s; tests shorten it). */
+  toolCallWaitMs?: number;
+  /** How long a bridge `promptRequired` during our prompt is retried (default 10 s; tests shorten it). */
+  steerRetryWindowMs?: number;
 }
 
 /** ACP-local SendOptions extension kept out of the provider-neutral contract. */
@@ -154,6 +164,18 @@ export class UnsupportedAcpEffortError extends Error {
 const IDLE_TIMEOUT_MS = 10 * 60 * 1000;
 const CLEANUP_INTERVAL_MS = 60 * 1000;
 const PROMPT_CANCEL_SETTLE_MS = 5_000;
+/** A native steer that has not answered by then falls back to interrupt + re-prompt (ADR 0020). */
+const STEER_TIMEOUT_MS = 30_000;
+/** How long a steer waits for running top-level tool calls before interrupt + re-prompt. */
+const STEER_TOOL_CALL_WAIT_MS = 30_000;
+/** A bridge `promptRequired` while our prompt runs is retried this long, at most this often. */
+const STEER_RETRY_WINDOW_MS = 10_000;
+const STEER_MAX_ATTEMPTS = 5;
+const NO_ACTIVE_PROMPT: SteerResult = { outcome: "promptRequired", reason: STEER_REASONS.noActivePrompt };
+/** A cancelled bridge-started turn counts as settled after this long without a session/update. */
+const STEER_QUIET_MS = 500;
+/** Usage frames kept between prompts for billing replay; the oldest are dropped first. */
+const MAX_IDLE_USAGE_FRAMES = 1_000;
 const DEFAULT_PERMISSION_MODE_BY_AGENT: Record<string, string | null> = {
   claude: "bypassPermissions",
   // codex advertises read-only/agent/agent-full-access, so the literal id is
@@ -244,6 +266,29 @@ interface PoolEntry {
   appliedEffort: string | null;
   /** Last permission mode we logged about, so a fallback is reported once per session. */
   warnedPermissionMode: string | null;
+  /**
+   * The `session/prompt` currently awaiting its response, or null. Native
+   * steering needs one to join; without it `steer()` makes no wire call.
+   */
+  promptInFlight: object | null;
+  /** When the agent last sent a `session/update` for this session. */
+  lastUpdateAt: number;
+  /** Top-level tool calls of the current prompt that have not completed or failed. */
+  openToolCalls: Set<string>;
+  /** Wakes steers waiting for the turn, tool calls, a person, or the prompt's end. */
+  steerWaiters: Set<() => void>;
+  /** Turn-level updates of the current prompt (text, tool calls, usage). */
+  turnUpdates: number;
+  /** Permission and question requests of this session waiting for an answer. */
+  userInputs: number;
+  /** A timed-out steer a bridge without the idle opt-in may still turn into a turn of its own. */
+  lateSteer: Promise<SteerResponse> | null;
+  /**
+   * `usage_update` frames that arrived while no prompt stream was listening (a
+   * bridge-started turn, a task-notification follow-up after the prompt
+   * resolved). The next `sendStream` replays them so their requests are billed.
+   */
+  idleUsage: SessionNotification[];
 }
 
 type PermissionHandler = (params: RequestPermissionParams) => Promise<PermissionOutcome>;
@@ -575,10 +620,11 @@ export class AcpProvider implements Provider {
 
   async *sendStream(message: string, options?: SendOptions): AsyncGenerator<ProviderEvent> {
     this._lastResponse = null;
-    const credentials = [this._options.apiKey, ...Object.entries(this._options.env ?? {})
-      .filter(([name]) => /(?:^|_)(?:SECRET|TOKEN|PASSWORD|API_KEY|ACCESS_KEY|PRIVATE_KEY|CREDENTIAL)(?:_|$)/i.test(name))
-      .map(([, value]) => value)].filter((value): value is string => Boolean(value));
+    const credentials = this._credentials();
     const chatId = options?.chatId ?? "__default__";
+    // A bridge-started turn from a timed-out steer must not overlap this prompt.
+    const previous = this._pool.get(chatId);
+    if (previous?.lateSteer) await this._settleLateSteer(previous);
     const entry = await abortableEnsureSession(this._ensureSession(chatId, options), options?.signal);
     this._typedSessionFailures = entry.client.typedSessionFailures ?? false;
 
@@ -622,10 +668,29 @@ export class AcpProvider implements Provider {
       resolveWaiting?.();
     });
 
+    // Set once this stream's prompt is on the wire; see onPromptStarted.
+    let promptToken: object | null = null;
+    let promptStarted = false;
     const originalOnUpdate = entry.client["_options"].onSessionUpdate;
-    entry.client["_options"].onSessionUpdate = (notification: SessionNotification) => {
+    const onUpdate = (notification: SessionNotification) => {
       if (notification.sessionId !== entry.acpSessionId) return;
+      entry.lastUpdateAt = Date.now();
       let update = notification.update;
+      if (promptToken && entry.promptInFlight === promptToken && isTurnLevelUpdate(update)) {
+        // The bridge registers the turn asynchronously (codex-acp `prompt()`
+        // awaits before its pending turn start; claude-agent-acp awaits in
+        // `startTurn`): only a turn-level update proves a steer can join it.
+        entry.turnUpdates = (entry.turnUpdates ?? 0) + 1;
+        wakeSteerWaiters(entry);
+        if (!promptStarted) {
+          promptStarted = true;
+          try {
+            options?.onPromptStarted?.();
+          } catch (error) {
+            console.warn(`[AcpProvider] onPromptStarted failed: ${error instanceof Error ? error.message : String(error)}`);
+          }
+        }
+      }
       if (update.sessionUpdate === "session_info_update") {
         const failure = readSessionFailure(update._meta, credentials);
         if (failure && (failure.severity === "error" || failureState.failure?.severity !== "error")) failureState.failure = failure;
@@ -679,6 +744,9 @@ export class AcpProvider implements Provider {
             typeof value === "string" ? redactProviderErrorText(value, credentials) : value));
         }
       }
+      if (update.sessionUpdate === "tool_call" || update.sessionUpdate === "tool_call_update") {
+        trackToolCall(entry, update);
+      }
       if (update.sessionUpdate === "tool_call_update") {
         const status = (update as any).status;
         const compaction = record(record(update._meta)?.contextCompaction);
@@ -701,11 +769,23 @@ export class AcpProvider implements Provider {
       }
       pushEvent(update);
     };
+    entry.client["_options"].onSessionUpdate = onUpdate;
+    entry.openToolCalls?.clear();
+    entry.turnUpdates = 0;
+    // Bill the requests of turns no stream was listening to (ADR 0020): a
+    // bridge-started turn the daemon cancelled, or a follow-up after a resolve.
+    for (const notification of (entry.idleUsage ?? []).splice(0)) onUpdate(notification);
 
     const promptStartMs = Date.now();
+    promptToken = {};
+    const settlePromptInFlight = () => {
+      if (entry.promptInFlight === promptToken) entry.promptInFlight = null;
+      wakeSteerWaiters(entry);
+    };
     const promptCompletion = entry.client
       .prompt(entry.acpSessionId, message, buildMediaContent(options?.media))
       .then((result: PromptResult) => {
+        settlePromptInFlight();
         promptDone = true;
         const failure = readSessionFailure(result._meta, credentials);
         if (failure && (failure.severity === "error" || failureState.failure?.severity !== "error")) failureState.failure = failure;
@@ -719,11 +799,14 @@ export class AcpProvider implements Provider {
         resolveWaiting?.();
       })
       .catch((err: unknown) => {
+        settlePromptInFlight();
         promptDone = true;
         promptError = redactProviderError(err, credentials);
         console.error(`[AcpProvider] prompt FAILED after ${((Date.now() - promptStartMs) / 1000).toFixed(1)}s: ${promptError.message}`);
         resolveWaiting?.();
       });
+    // The request is on the wire; `onPromptStarted` waits for the turn itself.
+    if (!promptDone) entry.promptInFlight = promptToken;
 
     try {
       while (true) {
@@ -779,6 +862,183 @@ export class AcpProvider implements Provider {
     const failure = turnFailure();
     if (failure?.severity === "error") throw new AcpSessionFailureError(failure, promptError ?? undefined, credentials);
     if (promptError) throw promptError;
+  }
+
+  /**
+   * Native steering (ADR 0020): inject `text` into the prompt streaming for
+   * `chatId`. Every failure is an outcome; the caller falls back to interrupt
+   * and re-prompt for anything but `injected` (see {@link STEER_REASONS}).
+   *
+   * Before the wire call: no permission or question may be waiting for a
+   * person, the bridge must have started the turn (a turn-level update), and,
+   * for a bridge that backgrounds running calls, no top-level tool call may be
+   * running (capped). A bridge `promptRequired` while our prompt still runs
+   * is retried on the next turn-level update, within a bounded window.
+   */
+  async steer(text: string, options: { chatId?: string | null } = {}): Promise<SteerResult> {
+    const entry = this._pool.get(options.chatId ?? "__default__");
+    const prompt = entry?.promptInFlight;
+    // Nothing to join: no wire call, the caller sends the text as a prompt.
+    if (!entry || !prompt || !entry.client.alive) return NO_ACTIVE_PROMPT;
+    const steering = this._adapter.steering;
+    if (!steering || !entry.client.steeringSupported) return { outcome: "unsupported" };
+    // The daemon steers only after onPromptStarted, so the turn has normally started already.
+    let ready = await this._waitForSteerable(entry, prompt, () => (entry.turnUpdates ?? 0) > 0, Number.POSITIVE_INFINITY);
+    let retryDeadline: number | null = null;
+    for (let attempt = 1; ; attempt++) {
+      if (ready === "ready" && steering.waitForToolCalls) {
+        ready = await this._waitForSteerable(entry, prompt, () => !entry.openToolCalls?.size,
+          Date.now() + (this._options.toolCallWaitMs ?? STEER_TOOL_CALL_WAIT_MS));
+        if (ready === "timeout") return { outcome: "promptRequired", reason: STEER_REASONS.toolCallRunning };
+      }
+      if (ready === "ended") return NO_ACTIVE_PROMPT;
+      if (ready === "userInput") return { outcome: "promptRequired", reason: STEER_REASONS.userInputPending };
+      if (ready === "timeout") return { outcome: "promptRequired", reason: STEER_REASONS.noRunningTurn };
+      const seen = entry.turnUpdates ?? 0;
+      const result = await this._sendSteer(entry, text, steering);
+      if (result.outcome === "startedNewTurn") await this._cancelBridgeTurn(entry);
+      if (result.outcome !== "promptRequired") return result;
+      if (entry.promptInFlight !== prompt || !entry.client.alive) return NO_ACTIVE_PROMPT;
+      // The turn settled just before our prompt answers, or has not been
+      // registered yet: try again on the next turn-level update.
+      retryDeadline ??= Date.now() + (this._options.steerRetryWindowMs ?? STEER_RETRY_WINDOW_MS);
+      if (attempt >= STEER_MAX_ATTEMPTS || Date.now() >= retryDeadline) {
+        return { outcome: "promptRequired", reason: STEER_REASONS.noRunningTurn };
+      }
+      ready = await this._waitForSteerable(entry, prompt, () => (entry.turnUpdates ?? 0) > seen, retryDeadline);
+    }
+  }
+
+  /** One `_session/steering` request, with the timeout and the outcome mapping. */
+  private async _sendSteer(entry: PoolEntry, text: string, steering: NonNullable<AgentAdapter["steering"]>): Promise<SteerResult> {
+    const timeoutMs = this._options.steerTimeoutMs ?? STEER_TIMEOUT_MS;
+    const request = entry.client.steer(entry.acpSessionId, text, steering);
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    let response: SteerResponse | null | undefined;
+    try {
+      response = await Promise.race([
+        request,
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(new SteerTimeoutError(timeoutMs)), timeoutMs);
+        }),
+      ]);
+    } catch (error) {
+      if (error instanceof SteerTimeoutError) {
+        // The bridge may still inject it, so the re-prompt can deliver it twice (R9).
+        console.warn(`[AcpProvider] ${this._adapter.agentType} steer did not answer within ${timeoutMs}ms; falling back to re-prompt`);
+        // Without the idle opt-in the bridge may still start a turn of its own
+        // with this text once our prompt ends; settle it before re-prompting.
+        if (!steering.idleOptIn) entry.lateSteer = request;
+      }
+      // A bridge that advertises steering but does not serve the method.
+      if (error instanceof AcpRpcError && error.code === -32601) return { outcome: "unsupported" };
+      const message = error instanceof Error ? error.message : String(error);
+      return { outcome: "failed", error: redactProviderErrorText(message, this._credentials()).slice(0, 2_000) };
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+    const reason = typeof response?.reason === "string" && response.reason ? response.reason : undefined;
+    const answered = response?.outcome;
+    const outcome = TRACE_STEER_OUTCOMES.includes(answered as SteerOutcome) && answered !== "unsupported"
+      ? answered as SteerOutcome : "failed";
+    if (outcome === "failed") {
+      return { outcome, ...(reason ? { reason } : {}),
+        error: answered === "failed" ? reason ?? "The agent could not apply the steer" : `Unexpected steer outcome: ${String(answered)}` };
+    }
+    return { outcome, ...(reason ? { reason } : {}) };
+  }
+
+  /**
+   * Wait until `ready()` holds for this prompt. A person-facing request beats
+   * readiness: the caller must not steer while a permission or question waits.
+   */
+  private async _waitForSteerable(entry: PoolEntry, prompt: object, ready: () => boolean,
+    deadline: number): Promise<"ready" | "ended" | "userInput" | "timeout"> {
+    while (true) {
+      if (entry.promptInFlight !== prompt || !entry.client.alive) return "ended";
+      if ((entry.userInputs ?? 0) > 0) return "userInput";
+      if (ready()) return "ready";
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) return "timeout";
+      let timer: ReturnType<typeof setTimeout> | null = null;
+      await new Promise<void>((resolve) => {
+        entry.steerWaiters.add(resolve);
+        // A missed wake costs at most a second.
+        timer = setTimeout(resolve, Math.min(remaining, 1_000));
+      });
+      if (timer) clearTimeout(timer);
+    }
+  }
+
+  /**
+   * A steer that timed out on a bridge without the idle opt-in may still start
+   * a turn of its own once the previous prompt ended (codex-acp
+   * `startNewTurnFromSteering`). Before the next prompt: wait for its answer,
+   * cancel such a turn (D3), and stop a bridge that does not answer in time.
+   */
+  private async _settleLateSteer(entry: PoolEntry): Promise<void> {
+    const late = entry.lateSteer;
+    if (!late) return;
+    entry.lateSteer = null;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const answer = await Promise.race([
+      late.then((response) => response, () => null),
+      new Promise<"pending">((resolve) => { timer = setTimeout(() => resolve("pending"), PROMPT_CANCEL_SETTLE_MS); }),
+    ]);
+    if (timer) clearTimeout(timer);
+    if (answer === "pending") {
+      console.warn(`[AcpProvider] ${this._adapter.agentType}: a timed-out steer is still unanswered; stopping the bridge before re-prompting`);
+      await entry.client.stop();
+    } else if (answer?.outcome === "startedNewTurn") {
+      await this._cancelBridgeTurn(entry);
+    }
+  }
+
+  /**
+   * The bridge started a turn of its own (codex-acp's idle steer, D3). Cancel
+   * it and wait until the session has been quiet for {@link STEER_QUIET_MS},
+   * at most {@link PROMPT_CANCEL_SETTLE_MS}; a bridge that keeps talking is
+   * stopped, as an unresponsive cancel is, so the next prompt never overlaps it.
+   */
+  private async _cancelBridgeTurn(entry: PoolEntry): Promise<void> {
+    const cancelledAt = Date.now();
+    await entry.client.cancel(entry.acpSessionId).catch(() => {});
+    while (true) {
+      const now = Date.now();
+      const quietSince = Math.max(cancelledAt, entry.lastUpdateAt ?? 0);
+      if (now - quietSince >= STEER_QUIET_MS) return;
+      if (now - cancelledAt >= PROMPT_CANCEL_SETTLE_MS) break;
+      await Bun.sleep(Math.min(50, STEER_QUIET_MS - (now - quietSince)));
+    }
+    console.warn(`[AcpProvider] ${this._adapter.agentType}: the bridge-started turn did not go quiet within `
+      + `${PROMPT_CANCEL_SETTLE_MS / 1000}s of cancel; stopping the bridge before re-prompting`);
+    await entry.client.stop();
+  }
+
+  /** Values of credential-like settings, redacted from provider errors. */
+  private _credentials(): string[] {
+    return [this._options.apiKey, ...Object.entries(this._options.env ?? {})
+      .filter(([name]) => /(?:^|_)(?:SECRET|TOKEN|PASSWORD|API_KEY|ACCESS_KEY|PRIVATE_KEY|CREDENTIAL)(?:_|$)/i.test(name))
+      .map(([, value]) => value)].filter((value): value is string => Boolean(value));
+  }
+
+  /**
+   * Updates that arrive while no prompt stream is listening. Records activity
+   * for the steer quiet-wait and keeps `usage_update` frames for the next
+   * stream, so a bridge-started or follow-up turn is still billed.
+   */
+  private _handleIdleUpdate(client: AcpClient, notification: SessionNotification): void {
+    for (const entry of this._pool.values()) {
+      if (entry.client !== client || entry.acpSessionId !== notification.sessionId) continue;
+      entry.lastUpdateAt = Date.now();
+      if (notification.update?.sessionUpdate !== "usage_update") return;
+      entry.idleUsage.push(notification);
+      if (entry.idleUsage.length > MAX_IDLE_USAGE_FRAMES) {
+        entry.idleUsage.splice(0, entry.idleUsage.length - MAX_IDLE_USAGE_FRAMES);
+        console.warn(`[AcpProvider] ${this._adapter.agentType}: dropped the oldest usage frames received between prompts`);
+      }
+      return;
+    }
   }
 
   async healthCheck(): Promise<boolean> {
@@ -870,6 +1130,9 @@ export class AcpProvider implements Provider {
     } as Parameters<AgentAdapter["buildSessionMeta"]>[0]);
 
     const existing = this._pool.get(chatId);
+    // Unbilled frames survive a process replacement (e.g. the bridge stopped
+    // after a bridge-started turn would not go quiet).
+    let idleUsage: SessionNotification[] = [];
     if (existing) {
       const stale =
         !existing.client.alive ||
@@ -898,6 +1161,7 @@ export class AcpProvider implements Provider {
         );
       }
       if (stale) {
+        idleUsage = existing.idleUsage ?? [];
         await this._discardEntry(chatId, existing);
       } else {
         try {
@@ -954,7 +1218,7 @@ export class AcpProvider implements Provider {
       env,
       onPermissionRequest: (params) => this._handlePermission(params),
       onElicitationRequest: (params) => this._handleElicitation(params),
-      onSessionUpdate: () => {},
+      onSessionUpdate: (notification) => this._handleIdleUpdate(client, notification),
       onProcessExit: (reason) => this._handleClientDeath(client, reason),
       log: (...args) => {
         if (process.env.REMI_DEBUG) console.error(...args);
@@ -997,6 +1261,14 @@ export class AcpProvider implements Provider {
         appliedContext: null,
         appliedEffort: null,
         warnedPermissionMode: null,
+        promptInFlight: null,
+        lastUpdateAt: 0,
+        openToolCalls: new Set(),
+        steerWaiters: new Set(),
+        turnUpdates: 0,
+        userInputs: 0,
+        lateSteer: null,
+        idleUsage,
       };
       this._adoptSessionState(entry, result);
       await this._applyMode(entry, permissionMode);
@@ -1194,7 +1466,7 @@ export class AcpProvider implements Provider {
     const chatId = this._sessionToChatId.get(params.sessionId);
     const handler = (chatId ? this._permissionHandlers.get(chatId) : undefined) ?? this._permissionHandler;
     if (handler) {
-      return handler(params);
+      return this._whileUserInput(chatId, () => handler(params));
     }
     console.error(`[AcpProvider] permission request cancelled: no handler for session ${params.sessionId}`);
     return { outcome: "cancelled" };
@@ -1204,10 +1476,26 @@ export class AcpProvider implements Provider {
     const chatId = this._sessionToChatId.get(params.sessionId);
     const handler = (chatId ? this._elicitationHandlers.get(chatId) : undefined) ?? this._elicitationHandler;
     if (handler) {
-      return handler(params);
+      return this._whileUserInput(chatId, () => handler(params));
     }
     console.error(`[AcpProvider] elicitation request cancelled: no handler for session ${params.sessionId}`);
     return { action: "cancel" };
+  }
+
+  /**
+   * A permission or question is with the daemon (in ask mode, a card waits
+   * for a person): a native steer must not be sent meanwhile (ADR 0020).
+   */
+  private async _whileUserInput<T>(chatId: string | undefined, handle: () => Promise<T>): Promise<T> {
+    const entry = chatId ? this._pool.get(chatId) : undefined;
+    if (!entry) return handle();
+    entry.userInputs = (entry.userInputs ?? 0) + 1;
+    wakeSteerWaiters(entry);
+    try {
+      return await handle();
+    } finally {
+      entry.userInputs--;
+    }
   }
 
   // ── Cleanup ────────────────────────────────────────────────────
@@ -1270,6 +1558,46 @@ export class AcpProvider implements Provider {
     this._startingClients.clear();
     await Promise.allSettled(starting.map((client) => client.stop()));
     await this.clearSession();
+  }
+}
+
+/** Updates that only a running turn sends: text, thoughts, tool calls, plans, usage. */
+function isTurnLevelUpdate(update: SessionUpdate): boolean {
+  switch (update.sessionUpdate) {
+    case "agent_message_chunk":
+    case "agent_thought_chunk":
+    case "tool_call":
+    case "tool_call_update":
+    case "plan":
+    case "usage_update":
+      return true;
+    default:
+      return false;
+  }
+}
+
+/** Keep the prompt's running top-level tool calls; subagent calls carry a parent. */
+function trackToolCall(entry: PoolEntry, update: SessionUpdate): void {
+  const call = update as { sessionUpdate: string; toolCallId?: unknown; status?: unknown; _meta?: Record<string, any> };
+  if (!entry.openToolCalls || typeof call.toolCallId !== "string" || call._meta?.claudeCode?.parentToolUseId) return;
+  if (call.status === "completed" || call.status === "failed") {
+    if (entry.openToolCalls.delete(call.toolCallId) && !entry.openToolCalls.size) wakeSteerWaiters(entry);
+  } else if (call.sessionUpdate === "tool_call") {
+    entry.openToolCalls.add(call.toolCallId);
+  }
+}
+
+function wakeSteerWaiters(entry: PoolEntry): void {
+  if (!entry.steerWaiters?.size) return;
+  const waiters = [...entry.steerWaiters];
+  entry.steerWaiters.clear();
+  for (const wake of waiters) wake();
+}
+
+class SteerTimeoutError extends Error {
+  constructor(timeoutMs: number) {
+    super(`Steer did not answer within ${timeoutMs}ms`);
+    this.name = "SteerTimeoutError";
   }
 }
 
