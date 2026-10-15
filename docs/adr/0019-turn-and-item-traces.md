@@ -1,6 +1,6 @@
 # ADR 0019：执行 trace 改为「轮 + 条目」
 
-- 状态：已接受（PR 2；编排决策 2026-10-15，风险项 R1–R16、P1 后续问题 Q1–Q6 与 P2a 复审决定 D-final、D-count 已裁定）。
+- 状态：已接受（PR 2；编排决策 2026-10-15，风险项 R1–R16、P1 后续问题 Q1–Q6 与 P2a 复审决定 D-final、D-count 已裁定；子代理研究的补充见决策 10）。
 - 取代 [ADR 0006](0006-conversation-log-and-daemon-owned-traces.md) 中 trace 格式的部分：决策 5 的 `multiremi.trace.v1` 片段事件与「字段和 `TaskMessageInput` 一一对应」，以及决策 4 末尾「轮卡上的 trace 数字由 `trace-derive` 函数派生」。trace 的归属（daemon 持有文件，服务端只存指针）不变；决策 5–9 的其余内容已由 [ADR 0018](0018-local-records-and-recyclable-workspaces.md) 取代。
 - 继承 [ADR 0013](0013-deliverable-is-comment-wakeup-is-doorbell.md)：任务回复仍是最后一条顶层 assistant 消息，现在由本 ADR 决策 4 的规则选出。
 - 不改 [daemon 协议 v2](../daemon-protocol-v2.md) 的帧、序号与续传机制，也不改 `DAEMON_PROTOCOL_VERSION`。
@@ -32,7 +32,9 @@ PR 2 之前，daemon 把 ACP 通知映射成 13 种片段事件（`text`、`thin
 
 单个事件序列化后不超过 1 MiB（含事件外壳）；超出时按条目类型丢掉最大的字段并置 `*_truncated`，仍放不下的事件不占 seq，存储记一条警告。命令的 `command`、`cwd` 与 `actions[].command` 也有上限，截断时置 `command_truncated`，所以超长 heredoc 不会让整个命令条目被丢弃。字段上限见 [`trace-sanitize.ts`](../../packages/shared/src/trace-sanitize.ts)。
 
-校验器向前兼容：`isTraceTurn` 遇到未知条目类型的直方图桶时丢掉这些桶，不拒绝整轮，所以旧读者能读新 daemon 的统计。
+校验器向前兼容：`isTraceTurn` 遇到未知条目类型的直方图桶时丢掉这些桶，不拒绝整轮，所以旧读者能读新 daemon 的统计。快照也一样：`isTraceTurnSnapshot` 与 `isTraceFileSnapshotLine` 丢掉未知类型的条目，网页 schema 逐条跳过；已知类型的条目畸形时仍拒绝整份快照，因为那是损坏而不是新版本。
+
+格式因此只按一条规则演进：**新事实放进新的可选字段或新的条目类型，绝不给已有条目的 `status` 或 `type` 增加新取值。**旧读者校验 `status` 时会把带新取值的条目整条丢掉，按 `type` 分支的读者会把它当成别的东西；新字段与新类型则会被旧读者忽略或跳过。缺失的可选字段表示「未知」或「写于该字段出现之前」。决策 10 的字段都是这样加入的。
 
 ### 2. 文件格式 `multiremi.trace.v2`
 
@@ -89,6 +91,15 @@ v1 文件只读：不追加、不续传、不重新封口，`view=turn` 只给 l
 `package.json` 与依赖快照由发版准备（`bun run release:prepare --version 0.2.90`）一起改到 0.2.90，门槛与版本号同批落地，源码运行的 daemon 报告的就是门槛版本。
 
 部署顺序：负责人发起 updater drain，暂停派活 → 等运行中的轮与 outbox 排空 → 部署 API（跑上述迁移）→ 升级 daemon（被拒的旧 daemon 自动升级）→ 核对后解除 drain。部署前还要检查飞书 outbox 中持有 `messageId` 但没有展示检查点的投递（R10），它们在新版本只经 `FeishuTaskPresentation` 补发最终卡片。
+
+### 10. 子代理、命令标签与被中断的调用
+
+子代理研究（PR 2 §13）补了四条，全部按决策 1 的规则以可选字段或翻译器规则落地，格式版本不变：
+
+- **后台子代理。**Claude 的 Agent SDK 默认把子代理放到后台：Agent 调用的 PostToolUse hook 更新带 `_meta.claudeCode.toolResponse.isAsync: true`（或 `status: "async_launched"`），随后的调用结果只是启动回执。翻译器据此让 `subagent` 条目保持 `in_progress`，不把回执当作输出，并置 `background: true`；子代理的步骤照常以 `parent_id` 挂在它下面。桥接会把这一轮挂起到它启动的后台子代理结束，所以轮结束（transport `close()`）就是它的结束：以 `completed` 收尾，只有轮被取消时为 `stopped`；被中断的一轮也不提前停止它，因为它的调用已经返回。飞书不再按输出文字猜测后台启动，Chat 折叠在它运行时显示「后台运行中」。
+- **子代理事实。**`subagent` 增加可选字段 `agent_type`（Claude `subagent_type`，或进度帧的 `subagentType`）、`name`（Claude 的 `description`，Codex 的代理路径末段）、`background`、`model`、`thread_id`（Codex `agentThreadId` 或 `receiverThreadIds[0]`），在数据存在时写入。
+- **命令标签。**`command` 增加可选字段 `title`，取 Claude AIR 的 `_meta.jetbrains.air.commandTitle`（即模型写的 Bash `description`）。Chat 与飞书有标签时整条命令只占一行，以标签为行文字，命令留在详情里。
+- **被中断的调用。**daemon 中断一轮（引导、强制回答宽限期到期或取消任务）时先通知翻译器。claude-agent-acp 0.90 把被中断而没有结果的调用以 `failed` 加一句说明关闭；在中断期间，没有退出码也没有自身输出的 `failed` 调用记为 `stopped`，界面显示「已停止 …」。带退出码或输出的失败，以及没有中断时的失败，仍是 `failed`。
 
 ## 未采用的方案
 

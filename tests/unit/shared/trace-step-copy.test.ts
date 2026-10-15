@@ -59,6 +59,31 @@ describe("describeStep (zh-CN, Codex wording)", () => {
     expect(describeStep(shell("cat a.ts", "stopped"))).toMatchObject({ key: "read_done", state: "stopped" });
   });
 
+  it("labels a command the model titled with its title, in every state (spec §13)", () => {
+    const titled = (status: TraceItem["status"]) => ({ ...shell("sleep 25; ls -A /w", status), title: "Sleep 25s then list directory" });
+    expect(zh(titled("completed"))).toBe("Sleep 25s then list directory");
+    expect(zh(titled("in_progress"))).toBe("Sleep 25s then list directory");
+    expect(describeStep(titled("in_progress")).state).toBe("active");
+    expect(zh(titled("failed"))).toBe("Sleep 25s then list directory");
+    expect(zh(titled("stopped"))).toBe("已停止 Sleep 25s then list directory");
+    expect(zh(titled("declined"))).toBe("已拒绝运行 Sleep 25s then list directory");
+    // The command stays available to the detail; a blank title is no title.
+    expect(describeStep(titled("completed")).args.command).toBe("sleep 25; ls -A /w");
+    expect(zh({ ...shell("npm test"), title: "  " })).toBe("已运行 npm test");
+  });
+
+  it("names a background subagent while it runs (spec §13)", () => {
+    const agent = (status: TraceItem["status"], background?: boolean) => ({
+      ...base, id: "toolu_agent", status, type: "subagent" as const, tool: "Agent", title: "Count files", prompt: null, output: null,
+      duration_ms: null, ...(background === undefined ? {} : { background }),
+    });
+    expect(zh(agent("in_progress", true))).toBe("后台运行中：Count files");
+    expect(zh(agent("in_progress", false))).toBe("正在运行子代理：Count files");
+    expect(zh(agent("in_progress"))).toBe("正在运行子代理：Count files");
+    expect(zh(agent("completed", true))).toBe("子代理已完成：Count files");
+    expect(zh(agent("stopped", true))).toBe("子代理已停止：Count files");
+  });
+
   it("describes one row per action of a multi-action command", () => {
     const item = shell("cat a.ts && rg foo src");
     expect(item.actions).toHaveLength(2);

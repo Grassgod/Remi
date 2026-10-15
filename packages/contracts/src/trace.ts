@@ -145,6 +145,12 @@ export interface TraceCommandItem extends TraceItemBase {
   command: string | null;
   cwd: string | null;
   actions: CommandAction[];
+  /**
+   * The model's own label for the command (Claude AIR `commandTitle`, the Bash
+   * `description`), shown as the step label; the command stays in the detail.
+   * Absent when the bridge sends none and in traces written before it existed.
+   */
+  title?: string | null;
   /** `command`, `cwd` or an action's `command` was capped (or dropped to fit an event). */
   command_truncated?: true;
   output: string | null;
@@ -194,6 +200,22 @@ export interface TraceSubagentItem extends TraceItemBase {
   output: string | null;
   output_truncated?: true;
   duration_ms: number | null;
+  // Optional facts (PR 2 §13), absent when the bridge sends none and in traces
+  // written before they existed.
+  /** The kind of agent: Claude `subagent_type` (input or progress beat). */
+  agent_type?: string | null;
+  /** The agent's short name: Claude `description`, Codex agent path. */
+  name?: string | null;
+  /**
+   * Runs in the background: Claude `run_in_background`, or an async launch. A
+   * background subagent stays `in_progress` after its launch is acknowledged and
+   * completes when the turn closes (the bridge holds the turn until it settles).
+   */
+  background?: boolean | null;
+  /** The model the subagent was asked to use, when the call names one. */
+  model?: string | null;
+  /** The child thread: Codex `agentThreadId` / `receiverThreadIds[0]`. */
+  thread_id?: string | null;
 }
 
 export interface TracePlanItem extends TraceItemBase {
@@ -414,6 +436,14 @@ function isCount(value: unknown): boolean {
 function isNullableNumber(value: unknown): boolean {
   return value === null || (typeof value === "number" && Number.isFinite(value));
 }
+function isOptionalNullableString(value: unknown): boolean {
+  return value === undefined || value === null || typeof value === "string";
+}
+
+function isOptionalNullableBoolean(value: unknown): boolean {
+  return value === undefined || value === null || typeof value === "boolean";
+}
+
 function isOptionalTrue(value: unknown): boolean {
   return value === undefined || value === true;
 }
@@ -538,7 +568,7 @@ export function isTraceItem(value: unknown): value is TraceItem {
     case "command":
       return typeof v.tool === "string" && isOneOf(v.source, ["shell", "tool"]) && isNullableString(v.command)
         && isNullableString(v.cwd) && Array.isArray(v.actions) && v.actions.every(isCommandAction)
-        && isOptionalTrue(v.command_truncated) && isNullableString(v.output) && isOptionalTrue(v.output_truncated)
+        && isOptionalNullableString(v.title) && isOptionalTrue(v.command_truncated) && isNullableString(v.output) && isOptionalTrue(v.output_truncated)
         && (v.exit_code === null || Number.isSafeInteger(v.exit_code)) && isNullableNumber(v.duration_ms);
     case "file_change":
       return typeof v.tool === "string" && Array.isArray(v.changes) && v.changes.every(isFileChange)
@@ -553,7 +583,10 @@ export function isTraceItem(value: unknown): value is TraceItem {
         && isNullableString(v.output) && isOptionalTrue(v.output_truncated) && isNullableNumber(v.duration_ms);
     case "subagent":
       return typeof v.tool === "string" && isNullableString(v.title) && isNullableString(v.prompt)
-        && isNullableString(v.output) && isOptionalTrue(v.output_truncated) && isNullableNumber(v.duration_ms);
+        && isNullableString(v.output) && isOptionalTrue(v.output_truncated) && isNullableNumber(v.duration_ms)
+        && isOptionalNullableString(v.agent_type) && isOptionalNullableString(v.name)
+        && isOptionalNullableBoolean(v.background) && isOptionalNullableString(v.model)
+        && isOptionalNullableString(v.thread_id);
     case "plan":
       return Array.isArray(v.entries) && v.entries.every((entry) => isRow(entry) && typeof entry.content === "string"
         && isOneOf(entry.status, ["pending", "in_progress", "completed"]) && isNullableString(entry.priority));
@@ -608,7 +641,32 @@ export function isTraceEvent(value: unknown): value is TraceEvent {
     && isTraceTimestamp(value.ts) && isTraceEventBody(value);
 }
 
+/**
+ * The items of a snapshot a reader can use, or null when one is damaged.
+ * Forward compatible (spec §13): an item whose `type` this build does not know,
+ * from a newer producer, is dropped; an item of a known type that fails its
+ * validator, or a row with no type, rejects the whole list. A newer producer
+ * therefore adds facts only as new optional fields or new item types, never as
+ * new `status` or `type` values on existing items (ADR 0019 decision 1).
+ */
+export function knownTraceItems(items: unknown): TraceItem[] | null {
+  if (!Array.isArray(items)) return null;
+  const known: TraceItem[] = [];
+  for (const item of items) {
+    if (isTraceItem(item)) known.push(item);
+    else if (!isRow(item) || !isNonEmptyString(item.type) || isTraceItemType(item.type)) return null;
+  }
+  return known;
+}
+
+/**
+ * A well-formed snapshot. Items of unknown types are dropped from `items` in
+ * place ({@link knownTraceItems}), as unknown histogram buckets are.
+ */
 export function isTraceTurnSnapshot(value: unknown): value is TraceTurnSnapshot {
-  return isRow(value) && isTraceTurn(value.turn) && Array.isArray(value.items) && value.items.every(isTraceItem)
-    && isCount(value.head) && typeof value.closed === "boolean";
+  if (!isRow(value) || !isTraceTurn(value.turn) || !isCount(value.head) || typeof value.closed !== "boolean") return false;
+  const items = knownTraceItems(value.items);
+  if (!items) return false;
+  if (items.length !== (value.items as unknown[]).length) value.items = items;
+  return true;
 }

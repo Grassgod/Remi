@@ -365,6 +365,13 @@ export function capTraceItem<T extends TraceItem>(item: T): T {
     const capped = capLabel(target[key]);
     if (capped !== target[key]) { target[key] = capped; changed = true; }
   };
+  /** An optional label (PR 2 §13 fields): capped when present, left absent otherwise. */
+  const optionalLabel = (key: string) => {
+    const target = next as unknown as Record<string, unknown>;
+    if (typeof target[key] !== "string") return;
+    const capped = capLabel(target[key] as string);
+    if (capped !== target[key]) { target[key] = capped; changed = true; }
+  };
   switch (next.type) {
     case "user_message":
     case "agent_message":
@@ -375,6 +382,7 @@ export function capTraceItem<T extends TraceItem>(item: T): T {
       break;
     case "command": {
       label("tool");
+      optionalLabel("title");
       output(true);
       let commandTruncated = false;
       const line = (key: "command" | "cwd", maxBytes: number) => {
@@ -412,6 +420,7 @@ export function capTraceItem<T extends TraceItem>(item: T): T {
     case "subagent":
       label("tool");
       label("title");
+      for (const key of ["agent_type", "name", "model", "thread_id"]) optionalLabel(key);
       output(true);
       break;
     case "permission":

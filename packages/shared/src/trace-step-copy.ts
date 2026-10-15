@@ -38,6 +38,11 @@ export const STEP_COPY_ZH = {
   run_done: "已运行 {{command}}",
   run_stopped: "已停止 {{command}}",
   run_declined: "已拒绝运行 {{command}}",
+  // A command the model labelled itself (Claude's Bash description): the label
+  // is the row, the command stays in the detail (PR 2 §13).
+  titled_done: "{{title}}",
+  titled_stopped: "已停止 {{title}}",
+  titled_declined: "已拒绝运行 {{title}}",
   // File changes (one row per changed file).
   create_active: "正在创建 {{file}}",
   create_done: "已创建 {{file}}",
@@ -65,6 +70,7 @@ export const STEP_COPY_ZH = {
   tool_declined: "已拒绝调用 {{tool}}",
   // Breaker and non-step items.
   subagent_active: "正在运行子代理：{{title}}",
+  subagent_background: "后台运行中：{{title}}",
   subagent_done: "子代理已完成：{{title}}",
   subagent_stopped: "子代理已停止：{{title}}",
   reasoning_active: "正在思考",
@@ -157,6 +163,8 @@ export function describeStep(item: TraceItem, part?: CommandAction | FileChange)
 
   switch (item.type) {
     case "command": {
+      const title = item.title?.trim();
+      if (title) return done("titled", { title, command: item.command ?? item.tool });
       const action = part && !isFileChange(part) ? part : item.actions.length === 1 ? item.actions[0] : undefined;
       const command = action?.command ?? item.command ?? item.tool;
       // A declined read is still a command the user refused (Codex: declined → command branch).
@@ -182,8 +190,12 @@ export function describeStep(item: TraceItem, part?: CommandAction | FileChange)
     }
     case "tool":
       return done("tool", { tool: item.title ?? item.tool });
-    case "subagent":
-      return done("subagent", { title: item.title ?? item.tool });
+    case "subagent": {
+      const title = item.title ?? item.tool;
+      // Launched in the background: running until the turn closes (spec §13).
+      if (state === "active" && item.background === true) return { key: "subagent_background", args: { title }, state };
+      return done("subagent", { title });
+    }
     case "reasoning":
       return twoState("reasoning", {});
     case "plan":

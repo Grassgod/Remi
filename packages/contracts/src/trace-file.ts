@@ -15,9 +15,9 @@
  */
 
 import {
-  isTraceItem,
   isTraceTimestamp,
   isTraceTurn,
+  knownTraceItems,
   type TraceEventLine,
   type TraceItem,
   type TraceTurn,
@@ -195,16 +195,24 @@ export function isTraceFileTrailerV2(value: unknown): value is TraceFileTrailerV
   return Number.isSafeInteger(parts) && (parts as number) >= 0;
 }
 
-/** A snapshot framing line, independent of its position in the file. */
+/**
+ * A snapshot framing line, independent of its position in the file. Items of
+ * unknown types (a newer daemon's) are dropped from `items` in place, like
+ * `isTraceTurnSnapshot` does; a damaged item of a known type rejects the line.
+ */
 export function isTraceFileSnapshotLine(value: unknown): value is TraceFileSnapshotLine {
   if (!value || typeof value !== "object" || Array.isArray(value) || "seq" in value || "end" in value) return false;
   const snapshot = (value as { snapshot?: unknown }).snapshot;
   if (!snapshot || typeof snapshot !== "object" || Array.isArray(snapshot)) return false;
   const row = snapshot as Record<string, unknown>;
-  return Number.isSafeInteger(row.parts) && (row.parts as number) >= 1
+  if (!(Number.isSafeInteger(row.parts) && (row.parts as number) >= 1
     && Number.isSafeInteger(row.part) && (row.part as number) >= 0 && (row.part as number) < (row.parts as number)
     && Number.isSafeInteger(row.head) && (row.head as number) >= 0
-    && isTraceTurn(row.turn) && Array.isArray(row.items) && row.items.every(isTraceItem);
+    && isTraceTurn(row.turn))) return false;
+  const items = knownTraceItems(row.items);
+  if (!items) return false;
+  if (items.length !== (row.items as unknown[]).length) row.items = items;
+  return true;
 }
 
 /** An event line of either format: `seq >= 1`, a valid `ts` and a non-empty `type`. */

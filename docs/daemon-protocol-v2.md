@@ -821,7 +821,8 @@ process_item_count: number | null;                  // 在 Chat 折叠中产生�
   所以完成字段描述的是即将写下的 close：其中的未结束条目与 `turn.completed` 已计入 `head` / `event_count`。
 - `process_item_count` 统计除最终回复、`user_message`、`permission`、`question`、`reasoning`
   和没有可见文字的 `agent_message` 外的顶层条目，正是在 Chat 折叠中产生一行的条目（ADR 0019 Q1、D-count）。
-- 读者校验 `turn.stats` 时丢掉未知条目类型的直方图桶，不拒绝整轮（向前兼容）。
+- 读者校验 `turn.stats` 时丢掉未知条目类型的直方图桶，不拒绝整轮；快照丢掉未知类型的条目（向前兼容）。
+  格式只以新的可选字段或新的条目类型演进，不给已有条目的 `status` / `type` 增加取值（ADR 0019 决策 1）。
 - 统一完成入口以 `reply.body_md` 为最终正文（与 `final_reply_md` 相同），trace 摘要不覆盖消息；卡片仅保留回复引用。
 - 服务端校验：`trace`、`final_reply_md`、`model` 缺失或畸形时整张卡留空；`context_usage`、`worked_ms`、
   `process_item_count` 各自独立校验，畸形或缺失只把该项写成 null。两种情况都打日志、终态照常生效，

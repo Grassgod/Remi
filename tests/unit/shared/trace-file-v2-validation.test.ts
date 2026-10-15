@@ -99,7 +99,27 @@ describe("trace file v2 framing", () => {
     expect(isTraceFileSnapshotLine({ ...(line as object), seq: 3 })).toBe(false);
     expect(isTraceFileSnapshotLine({ snapshot: { part: 1, parts: 1, head: 2, turn, items: [] } })).toBe(false);
     expect(isTraceFileSnapshotLine({ snapshot: { part: 0, parts: 1, head: 2, turn: { ...turn, status: "done" }, items: [] } })).toBe(false);
-    expect(isTraceFileSnapshotLine({ snapshot: { part: 0, parts: 1, head: 2, turn, items: [{ ...item, type: "assistant" }] } })).toBe(false);
+    // A damaged item of a known type rejects the line.
+    expect(isTraceFileSnapshotLine({ snapshot: { part: 0, parts: 1, head: 2, turn, items: [{ ...item, phase: "final_answer" }] } })).toBe(false);
+    expect(isTraceFileSnapshotLine({ snapshot: { part: 0, parts: 1, head: 2, turn, items: [{ ...item, status: "running" }] } })).toBe(false);
+    expect(isTraceFileSnapshotLine({ snapshot: { part: 0, parts: 1, head: 2, turn, items: ["msg:1"] } })).toBe(false);
+  });
+
+  it("drops snapshot items of unknown types instead of rejecting the line (spec §13)", () => {
+    const newer = { snapshot: { part: 0, parts: 1, head: 2, turn, items: [
+      { ...item, id: "agent_card", type: "agent_card", agents: [] }, item,
+    ] } };
+    expect(isTraceFileSnapshotLine(newer)).toBe(true);
+    expect(newer.snapshot.items).toEqual([item]);
+    // The file inspection reads such a line as an ordinary snapshot part.
+    expect(checkTraceFileLines([header, ...events, JSON.stringify(newer), trailer(1)])).toMatchObject({
+      ok: true, value: { closed: true, snapshot_parts: 1 },
+    });
+    // A known list is left as it is.
+    const known = JSON.parse(snapshot(0, 1)) as TraceFileSnapshotLine;
+    const before = known.snapshot.items;
+    expect(isTraceFileSnapshotLine(known)).toBe(true);
+    expect(known.snapshot.items).toBe(before);
   });
 
   it("validates the v2 trailer shape", () => {

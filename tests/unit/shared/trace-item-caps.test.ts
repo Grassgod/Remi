@@ -134,6 +134,23 @@ describe("item caps", () => {
     }
   });
 
+  it("caps the optional §13 labels when present and leaves absent ones absent", () => {
+    const long = "L".repeat(600);
+    const base = { parent_id: null, status: "completed" as const, started_at: NOW, completed_at: NOW, duration_ms: null };
+    const agent = capTraceItem({ ...base, id: "a", type: "subagent", tool: "Agent", title: null, prompt: null, output: null,
+      agent_type: long, name: long, background: true, model: long, thread_id: long } as TraceItem) as unknown as Record<string, unknown>;
+    for (const key of ["agent_type", "name", "model", "thread_id"]) {
+      expect(bytes(agent[key] as string), key).toBeLessThanOrEqual(512 + bytes(TRACE_TRUNCATION_MARKER));
+    }
+    expect(agent.background).toBe(true);
+    const titled = capTraceItem({ ...command("ok"), title: long } as TraceItem) as unknown as Record<string, unknown>;
+    expect(bytes(titled.title as string)).toBeLessThanOrEqual(512 + bytes(TRACE_TRUNCATION_MARKER));
+    const plain = command("ok");
+    expect(capTraceItem(plain)).toBe(plain);
+    expect("title" in capTraceItem(plain)).toBe(false);
+    for (const item of [agent, titled]) expect(isTraceItem(item)).toBe(true);
+  });
+
   it("drops the largest fields of an event over 1 MiB", () => {
     const body = {
       type: "item.completed",

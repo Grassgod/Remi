@@ -437,6 +437,11 @@ export function turnWorkedMs(turn: Pick<TraceTurn, "started_at" | "final_started
  * (spec §2.3): tools become `stopped`; text, plans and steer/input messages
  * become `completed`, or `stopped` when the turn was cancelled; anything else
  * (permission, question, compaction, notice) becomes `stopped`.
+ *
+ * A background subagent (`background: true`, spec §13) is the exception among
+ * tools: it stays open after its launch is acknowledged, and the bridge holds
+ * the turn until it settles, so the turn's end is its end. It becomes
+ * `completed`, with its duration, unless the turn was cancelled.
  */
 export function closeOpenItems(
   items: readonly TraceItem[],
@@ -447,11 +452,18 @@ export function closeOpenItems(
   const out: TraceEventBody[] = [];
   for (const item of items) {
     if (item.status !== "in_progress") continue;
+    const { seq: _seq, ...rest } = item;
+    if (item.type === "subagent" && item.background === true) {
+      out.push({ type: "item.completed", item: {
+        ...rest, status: textStatus, completed_at: completedAt,
+        duration_ms: item.duration_ms ?? elapsedMs(item.started_at, completedAt),
+      } as TraceItem });
+      continue;
+    }
     const status: TraceItemStatus = isToolItem(item) ? "stopped"
       : item.type === "agent_message" || item.type === "reasoning" || item.type === "user_message" || item.type === "plan"
         ? textStatus
         : "stopped";
-    const { seq: _seq, ...rest } = item;
     out.push({ type: "item.completed", item: { ...rest, status, completed_at: completedAt } as TraceItem });
   }
   return out;

@@ -7,7 +7,7 @@ import type {
   TraceTurn,
   TraceEvent,
 } from "@multiremi/contracts/trace";
-import { isTraceItem, isTraceTurn, isTraceEvent } from "@multiremi/contracts/trace";
+import { isTraceItem, isTraceTurn, isTraceEvent, isTraceTurnSnapshot, knownTraceItems } from "@multiremi/contracts/trace";
 import {
   EMPTY_TURN_TRACE,
   TurnTraceFold,
@@ -547,6 +547,33 @@ describe("contract validators on reducer output", () => {
     expect(isTraceEvent({ seq: 1, ts: at(1), type: "turn.updated", patch: { status: "completed" } })).toBe(false);
     expect(isTraceEvent({ seq: 1, ts: at(1), type: "item.started", item: { ...message("m", "x"), phase: "final_answer" } })).toBe(false);
     expect(isTraceEvent({ seq: 1, ts: at(1), type: "item.future" })).toBe(false);
+  });
+
+  it("drops snapshot items of unknown types instead of rejecting the snapshot (spec §13)", () => {
+    const known = message("msg:1", "done");
+    const snapshot = { turn: turn(), head: 3, closed: true, items: [{ ...known, id: "card", type: "agent_card", agents: [] }, known] };
+    expect(isTraceTurnSnapshot(snapshot)).toBe(true);
+    expect(snapshot.items).toEqual([known]);
+    expect(knownTraceItems([known])).toEqual([known]);
+    // A damaged item of a known type, or a row without a type, still rejects it.
+    expect(isTraceTurnSnapshot({ turn: turn(), head: 3, closed: true, items: [{ ...known, status: "running" }] })).toBe(false);
+    expect(isTraceTurnSnapshot({ turn: turn(), head: 3, closed: true, items: [{ id: "x" }] })).toBe(false);
+    expect(knownTraceItems("items")).toBeNull();
+  });
+
+  it("accepts the optional subagent and command facts and rejects malformed ones (spec §13)", () => {
+    const base = { id: "toolu_a", parent_id: null, status: "in_progress", started_at: at(1), completed_at: null };
+    const subagent = { ...base, type: "subagent", tool: "Agent", title: "Count files", prompt: "p", output: null, duration_ms: null };
+    expect(isTraceItem(subagent)).toBe(true);
+    expect(isTraceItem({ ...subagent, agent_type: "general-purpose", name: "Count files", background: true, model: null, thread_id: null })).toBe(true);
+    for (const bad of [{ agent_type: 1 }, { name: false }, { background: "yes" }, { model: {} }, { thread_id: ["t"] }]) {
+      expect(isTraceItem({ ...subagent, ...bad }), JSON.stringify(bad)).toBe(false);
+    }
+    const command = { ...base, type: "command", tool: "Bash", source: "shell", command: "ls", cwd: null, actions: [], output: null,
+      exit_code: null, duration_ms: null };
+    expect(isTraceItem({ ...command, title: "List files" })).toBe(true);
+    expect(isTraceItem({ ...command, title: null })).toBe(true);
+    expect(isTraceItem({ ...command, title: 3 })).toBe(false);
   });
 
   it("drops histogram buckets of unknown item types instead of rejecting the turn (spec §12)", () => {
