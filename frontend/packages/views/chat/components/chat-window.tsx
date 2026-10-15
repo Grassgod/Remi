@@ -1009,7 +1009,7 @@ export function ChatWindow({
     >
       <ChatResizeHandles onDragStart={startDrag} />
       {/* In the floating window the subagent panel covers the conversation. */}
-      <SubagentPanelLayout sessionId={displayedSessionId ?? null} presentation="window">
+      <SubagentPanelLayout sessionId={displayedSessionId ?? null} presentation="window" visible={isOpen}>
         {conversation}
       </SubagentPanelLayout>
     </motion.div>

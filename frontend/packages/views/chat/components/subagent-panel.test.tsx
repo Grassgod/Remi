@@ -34,15 +34,19 @@ function open(target: Partial<SubagentPanelTarget> = {}) {
 }
 
 function renderLayout({ sessionId = "chat_1", presentation = "page" as "page" | "window" } = {}) {
-  const ui = (session: string) => (
+  const ui = (session: string, visible = true) => (
     <QueryClientProvider client={client}>
-      <SubagentPanelLayout sessionId={session} presentation={presentation}>
+      <SubagentPanelLayout sessionId={session} presentation={presentation} visible={visible}>
         <div data-testid="chat-conversation">conversation</div>
       </SubagentPanelLayout>
     </QueryClientProvider>
   );
   const view = renderWithI18n(ui(sessionId), { locale: "zh-Hans" });
-  return { ...view, switchTo: (next: string) => view.rerender(ui(next)) };
+  return {
+    ...view,
+    switchTo: (next: string) => view.rerender(ui(next)),
+    setVisible: (visible: boolean) => view.rerender(ui(sessionId, visible)),
+  };
 }
 
 const panel = () => document.querySelector<HTMLElement>("[data-subagent-panel]");
@@ -221,6 +225,23 @@ describe("subagent panel", () => {
     expect(document.querySelector('[data-subagent-panel-mode="split"]')).not.toBeNull();
     expect(screen.getByRole("separator", { name: "调整子代理面板大小" })).toBeInTheDocument();
     expect(document.querySelector('[data-panel][id="subagents"]')).not.toBeNull();
+  });
+
+  it("closes when the floating chat window closes, and stays closed when it reopens", () => {
+    seed(claudeLiveItems());
+    const view = renderLayout({ presentation: "window" });
+    open({ path: ["sa:plan"] });
+    expect(document.querySelector('[data-subagent-panel-mode="overlay"]')).not.toBeNull();
+    view.setVisible(false);
+    expect(useChatStore.getState().subagentPanel).toBeNull();
+    expect(panel()).toBeNull();
+    view.setVisible(true);
+    expect(panel()).toBeNull();
+    // Opening it while the window is hidden shows nothing and is dropped.
+    view.setVisible(false);
+    open();
+    expect(panel()).toBeNull();
+    expect(useChatStore.getState().subagentPanel).toBeNull();
   });
 
   it("covers the conversation when there is no room beside it, and in the floating window", () => {

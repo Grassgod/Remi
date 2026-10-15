@@ -43,24 +43,26 @@ import { REPLY, StepsFold, useFoldHeaderText } from "./turn-steps-fold";
 //   (运行中 · n / 已完成 · n, top-level subagents) and a subagent's detail, a
 //   read-only mini conversation (task bubble, steps, reply) that updates
 //   live. Nested subagents open a deeper detail; ← goes up one level.
-// - × or Esc (focus inside) closes it, and so does switching chats; a click
-//   in the conversation does not.
+// - × or Esc (focus inside) closes it, and so do switching chats and closing
+//   the floating window; a click in the conversation does not.
 
 /** The conversation keeps this much beside the panel (Codex). */
 export const CONVERSATION_MIN_PX = 352;
 export const SUBAGENT_PANEL_MIN_PX = 320;
 const LAYOUT_ID = "chat-subagent-panel";
 
-/** The open panel target for this chat, closing a panel left open for another chat. */
-function useSubagentPanelTarget(sessionId: string | null): SubagentPanelTarget | null {
+/**
+ * The open panel target for this chat. Switching chats closes the panel (it
+ * belongs to one chat's turn), and so does hiding the chat (closing the
+ * floating window).
+ */
+function useSubagentPanelTarget(sessionId: string | null, visible: boolean): SubagentPanelTarget | null {
   const panel = useChatStore((s) => s.subagentPanel);
   const close = useChatStore((s) => s.closeSubagentPanel);
   useEffect(() => {
-    // Switching chats closes the panel: it belongs to one chat's turn.
-    const open = useChatStore.getState().subagentPanel;
-    if (open && open.sessionId !== sessionId) close();
-  }, [sessionId, close]);
-  return panel && panel.sessionId === sessionId ? panel : null;
+    if (panel && (!visible || panel.sessionId !== sessionId)) close();
+  }, [panel, sessionId, visible, close]);
+  return visible && panel && panel.sessionId === sessionId ? panel : null;
 }
 
 /** Width of an element, followed through resizes. */
@@ -85,12 +87,14 @@ function useElementWidth<T extends HTMLElement>(): [React.RefObject<T | null>, n
  * mounted whether the panel is open or not, so its scroll position and
  * composer survive opening and closing it.
  */
-export function SubagentPanelLayout({ sessionId, presentation, children }: {
+export function SubagentPanelLayout({ sessionId, presentation, visible = true, children }: {
   sessionId: string | null;
   presentation: "page" | "window";
+  /** The chat is on screen; closing the floating window closes the panel. */
+  visible?: boolean;
   children: ReactNode;
 }) {
-  const target = useSubagentPanelTarget(sessionId);
+  const target = useSubagentPanelTarget(sessionId, visible);
   const close = useChatStore((s) => s.closeSubagentPanel);
   const isMobile = useIsMobile();
   const [groupRef, groupWidth] = useElementWidth<HTMLDivElement>();
