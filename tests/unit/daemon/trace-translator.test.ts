@@ -853,6 +853,33 @@ describe("trace translator: subagents and labels (spec §13)", () => {
     expect(h.item(SLEEP, "command")).toMatchObject({ status: "completed", exit_code: 0, output: "a.txt\nb.txt\nnotes.md", parent_id: AGENT });
   });
 
+  it("a native steer into a turn held for a background subagent stops nothing (ADR 0020)", () => {
+    const SLEEP = "toolu_child_sleep";
+    const h = harness("claude").start().feed([
+      ...agentFrames(true),
+      { sessionUpdate: "tool_call_update", toolCallId: AGENT, _meta: { claudeCode: { toolResponse: { status: "async_launched", isAsync: true } } } },
+      { sessionUpdate: "tool_call_update", toolCallId: AGENT, status: "completed", content: [{ type: "content", content: { type: "text", text: LAUNCH_ACK } }] },
+      { sessionUpdate: "tool_call", toolCallId: SLEEP, name: "Bash", status: "pending", title: "sleep 25; ls -A /work", kind: "execute",
+        rawInput: { command: "sleep 25; ls -A /work" }, content: [{ type: "terminal", terminalId: SLEEP }],
+        _meta: { claudeCode: { toolName: "Bash", parentToolUseId: AGENT }, terminal_info: { terminal_id: SLEEP } } },
+      chunk("I've started a background agent to count the files.", { messageId: "m_root_1" }),
+    ]);
+    // Injected into the held prompt: no roundAborted, the prompt keeps running.
+    h.translator.steer([{ id: "st_held", taskId: "tsk_attempt", kind: "steer", content: "also report the sizes", authorType: "user",
+      authorId: "mem_1", createdAt: new Date(T0).toISOString(), consumedAt: null }], { via: "native", native_outcome: "injected", error: null });
+    h.feed([
+      { sessionUpdate: "tool_call_update", toolCallId: SLEEP, status: "completed", _meta: { terminal_exit: { terminal_id: SLEEP, exit_code: 0, signal: null } } },
+      chunk("3 files, 12 bytes in total.", { messageId: "m_root_2" }),
+    ]);
+    h.translator.promptEnded();
+    expect(h.item(SLEEP, "command")).toMatchObject({ status: "completed", exit_code: 0 });
+    expect(h.item(AGENT, "subagent").status).toBe("in_progress");
+    expect(h.state.items.filter((item) => item.parent_id === null).map((item) => item.id))
+      .toEqual(["in:tsk_attempt", AGENT, "msg:m_root_1", "steer:st_held", "msg:m_root_2"]);
+    expect(h.translator.settle()).toEqual({ itemId: "msg:m_root_2", text: "3 files, 12 bytes in total." });
+    expect(h.state.items.some((item) => item.status === "stopped")).toBe(false);
+  });
+
   it("never guesses a background subagent as the parent of an unstamped root tool", () => {
     const h = harness("claude").start().feed([
       ...agentFrames(true),
