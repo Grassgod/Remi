@@ -90,6 +90,7 @@ daemon 由 systemd 托管时，重启交给 `systemctl --user restart --no-block
 历史 Issue 与 Chat 在 daemon 上的原生会话和 trace 作废，不迁移；服务端迁移同时把所有会话线置为新一代，
 重开历史主体时从分支新建工作区、从对话日志重建上下文。旧 daemon 在升级窗口内调用已删除的 RPC 得到 404，按既有逻辑跳过清理。
 此前用 systemd 覆盖文件设置 `MULTIREMI_GC_ENABLED=false` 的 daemon，在预演清单核对无误后删除该覆盖文件并重启，周期回收才会开启。
+清扫会把 v0.2.89 的 `.runtime/`（含 Codex 原生 rollout）一并移入 `legacy-<日期>/` 并按期删除；需要补录 `codex-usage-v6` 期间的 Codex 用量时，先在该 daemon 上导出，或在期限内从 `legacy-<日期>/` 导出，步骤见 [Codex 原生用量补录](usage-accounting.md#codex-原生用量补录)。
 实现及读页上限见 [daemon 协议 v2](daemon-protocol-v2.md)。
 
 ## 本地准备与验证

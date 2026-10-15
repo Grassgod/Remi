@@ -12,6 +12,8 @@ export interface NativeRunScope {
   taskId: string; runId: string; providerSessionId: string;
   /** A reviewed run/session binding from immutable execution/archive evidence. */
   evidenceRef: string;
+  /** Native subagent threads whose records name this root as their Codex `session_id`. */
+  descendantSessionIds?: string[];
 }
 export interface ModernUsageRepair {
   taskId: string; expectedTurnId: string; expectedStateSha256: string; scope: NativeRunScope;
@@ -119,17 +121,19 @@ export function buildModernUsageRepairs(state: ReturnType<typeof readModernRepai
     const legacyCodexSession = nativeSessions.length === 1 && main.some(unit => unresolvedCodexSession(unit, nativeSessions[0]!))
       && main.every(unit => unresolvedCodexSession(unit, nativeSessions[0]!) || (unit.provider === "codex" && unit.providerSessionId === nativeSessions[0] && unit.providerRequestId)) ? nativeSessions[0] : null;
     const sessionId = explicit?.providerSessionId ?? (sessions.length === 1 ? sessions[0] : legacyCodexSession);
-    if (!sessionId || (sessions.length && sessions.some(id => id !== sessionId))) continue;
+    if (!sessionId || (sessions.length && sessions.some(id => id !== sessionId && !explicit?.descendantSessionIds?.includes(id!)))) continue;
     if (state.task.session_id !== sessionId) continue;
     const end = Date.parse(state.task.completed_at ?? state.task.failed_at ?? state.task.cancelled_at);
     const start = Date.parse(state.task.started_at);
-    const evidence = native.filter(unit => unit.provider === state.task.provider && unit.providerSessionId === sessionId && unit.providerRequestId && validNativeRequest(unit)
+    // Child requests keep their own native thread as identity, as live usage does.
+    const threads = new Set([sessionId, ...(explicit?.descendantSessionIds ?? [])]);
+    const evidence = native.filter(unit => unit.provider === state.task.provider && threads.has(unit.providerSessionId!) && unit.providerRequestId && validNativeRequest(unit)
       && Date.parse(unit.occurredAt) >= start && Date.parse(unit.occurredAt) < end);
     if (!evidence.length) continue;
     // An inferred namespace is safe only if every supplied request already has
     // a single canonical same-run owner. It does not authorize missing requests.
     if (!explicit && !legacyCodexSession && evidence.some(unit => main.filter(old => old.providerRequestId === unit.providerRequestId && old.provider === unit.provider).length !== 1)) continue;
-    if (evidence.some(unit => state.units.some(row => row.run_id !== run.run_id && row.provider_session_id === sessionId && row.provider_request_id === unit.providerRequestId))) continue;
+    if (evidence.some(unit => state.units.some(row => row.run_id !== run.run_id && row.provider_session_id === unit.providerSessionId && row.provider_request_id === unit.providerRequestId))) continue;
     const correctedRequestIds: string[] = [];
     let gained = 0;
     // A partial archive never proves that every old unknown meter observation
@@ -151,7 +155,7 @@ export function buildModernUsageRepairs(state: ReturnType<typeof readModernRepai
     const updated = units.filter(unit => !supersededUnitIds.includes(unit.unitId));
     const revision = Math.max(Number(run.revision), ...state.receipts.filter(row => row.run_id === run.run_id).map(row => Number(row.revision)), ...units.map(unit => unit.revision)) + 1;
     for (const unit of evidence) {
-      const index = updated.findIndex(old => (old.purpose ?? "agent") === "agent" && old.provider === unit.provider && old.providerSessionId === sessionId && old.providerRequestId === unit.providerRequestId);
+      const index = updated.findIndex(old => (old.purpose ?? "agent") === "agent" && old.provider === unit.provider && old.providerSessionId === unit.providerSessionId && old.providerRequestId === unit.providerRequestId);
       const old = index < 0 ? null : updated[index]!;
       if (old && ["inputTokens", "outputTokens", "cacheReadTokens", "cacheWriteTokens"].some(key => (old as any)[key] != null && (unit as any)[key] < (old as any)[key])) continue;
       if (old && ["inputTokens", "outputTokens", "cacheReadTokens", "cacheWriteTokens"].every(key => (old as any)[key] === (unit as any)[key]) && old.accuracy === "exact") continue;
@@ -160,8 +164,10 @@ export function buildModernUsageRepairs(state: ReturnType<typeof readModernRepai
         reportedTotalTokens: unit.reportedTotalTokens, accuracy: "exact" as const, evidenceRef: unit.evidenceRef,
         ...(unit.model ? { model: unit.model, modelSource: unit.modelSource } : {}) };
       if (!old) {
-        // Preserve the evidenced connection only when the run has one route.
-        const connections = [...new Set(main.map(value => value.connectionId).filter(Boolean))];
+        // Preserve the evidenced connection only when the run has one route. A
+        // run without requests (context only) still carries the ledger's route.
+        const routed = main.length ? main : units.filter(value => (value.purpose ?? "agent") === "agent");
+        const connections = [...new Set(routed.map(value => value.connectionId).filter(Boolean))];
         if (connections.length > 1) continue;
         if (connections.length) next.connectionId = connections[0];
         updated.push(next);

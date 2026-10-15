@@ -8,6 +8,8 @@ import { ensureUsageAccountingSchema, legacyUsageSnapshot } from "../packages/se
 import { parseRawUsageEvidence, type HistoricalTaskBoundary } from "./usage-evidence.js";
 import { nextUsageRevision, readPlanUsageRevisionStates, usageRevisionStateSha256 } from "./usage-reconciliation-revisions.js";
 import { assertUsageReconciliationSchema, type ModernUsageRepair } from "./modern-usage-repair.js";
+import { buildNativeUsageBackfill, summarizeNativeBackfill, type NativeBackfillReport } from "./native-usage-backfill.js";
+import type { CodexNativeUsageExport } from "./export-codex-native-usage.js";
 
 interface Task extends HistoricalTaskBoundary { workspace_id: string; agent_id: string; issue_id: string | null; chat_session_id: string | null; usage: string; has_live_usage: boolean; status: string; }
 export interface ReconcileUsagePlan {
@@ -21,6 +23,8 @@ export interface ReconcileUsagePlan {
   excludedTasks?: Array<{ taskId: string; reason: "modern_live_usage" | "nonterminal_task" }>;
   modernRepairs?: ModernUsageRepair[];
   modernRepairSkipped?: Array<{ taskId: string; reason: string }>;
+  /** Coverage of the daemon-host Codex rollout exports given with --native-evidence. */
+  nativeBackfill?: NativeBackfillReport;
 }
 
 export function summarizeReconcileUsagePlan(plan: ReconcileUsagePlan) {
@@ -49,6 +53,7 @@ export function summarizeReconcileUsagePlan(plan: ReconcileUsagePlan) {
   return { counts: plan.counts, taskManifestCount: plan.tasks.length, excluded, source, coverage, unrecoverable, attribution, delta, evidenceDelta,
     originalKnownTokens, recoveredKnownSubtotal, countedEvidenceTokens, preservedLegacyTokens,
     modernRepairCount: plan.modernRepairs?.length ?? 0, modernRepairSkipped: plan.modernRepairSkipped ?? [],
+    nativeBackfill: summarizeNativeBackfill(plan.nativeBackfill),
     modernBeforeActualTokens: (plan.modernRepairs ?? []).reduce((sum, repair) => sum + repair.beforeActualTokens, 0),
     modernAfterActualTokens: (plan.modernRepairs ?? []).reduce((sum, repair) => sum + repair.afterActualTokens, 0),
     plannedLedgerKnownTokens: countedEvidenceTokens + preservedLegacyTokens + (plan.modernRepairs ?? []).reduce((sum, repair) => sum + repair.afterActualTokens, 0) };
@@ -205,6 +210,31 @@ export async function buildReconcileUsagePlan(sql: Bun.SQL, options: { taskId?: 
   return plan;
 }
 
+/** Read through the apply-time reader so the reviewed state hashes are reproducible. */
+export async function addNativeUsageBackfill(databaseUrl: string, plan: ReconcileUsagePlan, files: string[], options: { taskId?: string; since?: string | null }): Promise<void> {
+  const exports = await Promise.all(files.map(file => Bun.file(file).json() as Promise<CodexNativeUsageExport>));
+  const db = new PostgresSyncDatabase(databaseUrl);
+  try {
+    assertUsageReconciliationSchema(db);
+    const native = db.transaction(() => {
+      db.exec("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY");
+      return buildNativeUsageBackfill(db, exports, options);
+    })();
+    mergeNativeUsageBackfill(plan, native);
+  } finally { db.close(); }
+}
+
+export function mergeNativeUsageBackfill(plan: ReconcileUsagePlan, native: ReturnType<typeof buildNativeUsageBackfill>): void {
+  plan.modernRepairs = [...(plan.modernRepairs ?? []), ...native.repairs];
+  plan.nativeBackfill = native.report;
+  const repaired = new Set(native.repairs.map(repair => repair.taskId));
+  plan.excludedTasks = plan.excludedTasks?.filter(task => !repaired.has(task.taskId));
+  plan.limitations.push(
+    "Codex native rollout exports are attributed by root session to the single attempt whose execution window contains each request; requests outside every window, in overlapping windows, already recorded, or reported differently by two exports stay unattributed.",
+    "Native backfill only adds missing requests to a terminal attempt's single complete live run that recorded no consumption; its context and other units are kept unchanged. Attempts whose rollouts were deleted remain unknown.",
+  );
+}
+
 export async function mainReconcileTaskUsage(): Promise<void> {
   const arg = (name: string) => process.argv.find(a => a.startsWith(`--${name}=`))?.slice(name.length + 3);
   const databaseUrl = process.env.MULTIREMI_DATABASE_URL;
@@ -230,6 +260,8 @@ export async function mainReconcileTaskUsage(): Promise<void> {
       return buildReconcileUsagePlan(tx, { taskId: arg("task-id"),
         onProgress: message => process.stderr.write(`${message}\n`) });
     });
+    const nativeEvidence = process.argv.filter(a => a.startsWith("--native-evidence=")).flatMap(a => a.slice("--native-evidence=".length).split(",")).filter(Boolean);
+    if (nativeEvidence.length) await addNativeUsageBackfill(databaseUrl, plan, nativeEvidence, { taskId: arg("task-id"), since: arg("native-since") ?? null });
     const out = arg("out");
     if (out) await Bun.write(out, JSON.stringify(plan));
     process.stdout.write(`${JSON.stringify({ mode: plan.mode, ...summarizeReconcileUsagePlan(plan), output: out ?? null, limitations: plan.limitations }, null, 2)}\n`);

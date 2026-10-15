@@ -1029,7 +1029,8 @@ API 上线后门槛立即为每台 daemon 自动排队升级，所以 ADR 0018 �
 旧 Web 读 trace 带 `after_seq` 不带 `view`，会被 `parseTraceWindow` 以 400 拒绝，所以 Web 与 API 同批上线。
 部署顺序（细节见 ADR 0019 决策 9）：updater drain 暂停派活 → 运行中的轮与 outbox 排空（含 R10 飞书投递核对）→
 ADR 0018 前置步骤（核对 66-8 工作区根下不属于新布局的目录；删除关闭 GC 的 systemd 覆盖文件并设
-`MULTIREMI_GC_DRY_RUN=true`）→ API（含迁移）与 Web 同批 → daemon 自动升级，先在一台上核对预演再去掉
+`MULTIREMI_GC_DRY_RUN=true`；在每台 daemon 上导出 `codex-usage-v6` 期间的 Codex 原生用量，并保留 API 主机的
+`REMI_SESSION_ARCHIVE_ROOT`，见 [Codex 原生用量补录](usage-accounting.md#codex-原生用量补录)）→ API（含迁移）与 Web 同批 → daemon 自动升级，先在一台上核对预演再去掉
 `MULTIREMI_GC_DRY_RUN` → 解除 drain。门槛不表示 fleet 已升级。
 
 ### 7.5 升级失败的提示
