@@ -45,7 +45,21 @@ export type GatewayShimEvent =
    * 429 failures. The token now answers 503 quickly; the provider cancels and
    * fails the turn.
    */
-  | { type: "fatal"; reason: "auth" | "unreachable" | "quota"; status: number | null; message: string };
+  | { type: "fatal"; reason: "auth" | "unreachable" | "quota"; status: number | null; message: string }
+  /**
+   * A model listing (`GET models`, `GET models/<m>`) ended, with or without a
+   * prompt. Server 1.4.0 never fails `session/new` on a refused listing: it
+   * falls back to built-in model ids, so the provider needs this to report the
+   * gateway failure instead of an unsupported model.
+   */
+  | { type: "listing"; status: number; failure: GatewayShimListingFailure | null };
+
+/** Why a model listing failed: `status` 0 means no response arrived. */
+export interface GatewayShimListingFailure {
+  reason: "auth" | "unreachable" | "quota";
+  status: number;
+  message: string;
+}
 
 export interface GatewayShimChannel {
   /** `http://127.0.0.1:<port>/r_<token>`, without `/v1beta`. */
@@ -57,6 +71,16 @@ export interface GatewayShimChannel {
    * `ms` at the latest. Never rejects.
    */
   settled(ms: number): Promise<void>;
+  /**
+   * A prompt of this channel's ACP process is active until the returned
+   * function is called (idempotent). Model calls are served only while one
+   * is: outside a prompt nothing would meter them (a backgrounded shell
+   * command calling the gateway after the turn), so they get a fast 503.
+   * Listings and `countTokens` are always served.
+   */
+  beginPrompt(): () => void;
+  /** Cut every model call still in flight; each still emits its (aborted) observation. */
+  abortInflight(): void;
   /** Revokes the token; later requests get the unknown-token 404. Idempotent. */
   close(): void;
 }

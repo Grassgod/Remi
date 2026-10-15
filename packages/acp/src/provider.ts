@@ -27,7 +27,7 @@ import { createAdapter, type AgentAdapter } from "./adapters/index.js";
 import { resolveClaudeContextSelection, hasOneMillionContext } from "./adapters/claude-code/model-context.js";
 import { isWorkspaceTrustPrompt, permissionAsQuestion, serviceMessage, serviceMessageFailure, type PermissionQuestion } from "./adapters/trace-vendor.js";
 import { accessConfigFor, type AcpAccessConfig } from "./access/index.js";
-import type { GatewayShimChannel, GatewayShimEvent, GatewayShimHost } from "./access/gateway-shim-types.js";
+import type { GatewayShimChannel, GatewayShimEvent, GatewayShimHost, GatewayShimListingFailure } from "./access/gateway-shim-types.js";
 import { GEMINI_USAGE_SOURCE, geminiObservationUsage } from "./gemini-request-usage.js";
 import type {
   SessionNotification,
@@ -186,6 +186,8 @@ const PROMPT_CANCEL_SETTLE_MS = 5_000;
 const CANCELLED_BY_CLIENT_TEXT = "The request was cancelled by the client.";
 /** How long a prompt waits for its last gateway-shim observations before settling usage. */
 const GATEWAY_SETTLE_MS = 2_000;
+/** After cutting the calls still open at prompt end, how long their (aborted) observations may take. */
+const GATEWAY_ABORT_SETTLE_MS = 500;
 /** A native steer that has not answered by then falls back to interrupt + re-prompt (ADR 0020). */
 const STEER_TIMEOUT_MS = 30_000;
 /** How long a steer waits for running top-level tool calls before interrupt + re-prompt. */
@@ -329,6 +331,8 @@ interface GatewayState {
   nativeContextSize: number | null;
   /** Model calls the shim reported started but not yet ended. */
   inflight: number;
+  /** The last model listing failed (refused or unreachable); cleared by a listing that succeeds. */
+  listingFailure: GatewayShimListingFailure | null;
 }
 
 /** Usage updates the provider synthesized from shim observations (unforgeable by the agent). */
@@ -336,23 +340,24 @@ const SHIM_USAGE_UPDATES = new WeakSet<object>();
 
 function openGateway(host: GatewayShimHost, label: string): GatewayState {
   const channel = host.open(label);
-  const state: GatewayState = { channel, unsubscribe: () => {}, listener: null, fatal: null, nativeContextSize: null, inflight: 0 };
+  const state: GatewayState = { channel, unsubscribe: () => {}, listener: null, fatal: null, nativeContextSize: null, inflight: 0, listingFailure: null };
   state.unsubscribe = channel.subscribe((event) => {
     if (event.type === "fatal") state.fatal = event;
     if (event.type === "request_started") state.inflight++;
     if (event.type === "request") state.inflight = Math.max(0, state.inflight - 1);
+    if (event.type === "listing") state.listingFailure = event.failure;
     state.listener?.(event);
   });
   return state;
 }
 
 /** `settled()` is bounded by contract; a misbehaving shim still cannot hold the prompt open. */
-async function settleGateway(channel: GatewayShimChannel): Promise<void> {
+async function settleGateway(channel: GatewayShimChannel, ms: number = GATEWAY_SETTLE_MS): Promise<void> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     await Promise.race([
-      channel.settled(GATEWAY_SETTLE_MS).catch(() => {}),
-      new Promise<void>((resolve) => { timer = setTimeout(resolve, GATEWAY_SETTLE_MS + 500); }),
+      channel.settled(ms).catch(() => {}),
+      new Promise<void>((resolve) => { timer = setTimeout(resolve, ms + 500); }),
     ]);
   } finally {
     clearTimeout(timer);
@@ -648,6 +653,9 @@ export class AcpProvider implements Provider {
     });
 
     try {
+      // A refused or unreachable listing leaves the server's built-in fallback ids, not the gateway's models.
+      const listing = entry.gateway?.fatal ?? entry.gateway?.listingFailure;
+      if (listing) throw gatewaySessionFailure(this._adapter.agentType, listing, credentialsOf(this._options));
       const modelOption = selectConfigOption(entry.configOptions, MODEL_OPTION_CATEGORY);
       if (!modelOption) return [];
 
@@ -962,7 +970,7 @@ export class AcpProvider implements Provider {
           return;
         }
         lastActivity = Date.now();
-        if (event.type === "request_started") return;
+        if (event.type === "request_started" || event.type === "listing") return;
         const obs = event.obs;
         if (obs.status) gatewayStatus = obs.status;
         const usage = geminiObservationUsage(obs, entry.acpSessionId);
@@ -993,12 +1001,30 @@ export class AcpProvider implements Provider {
       if (entry.promptInFlight === promptToken) entry.promptInFlight = null;
       wakeSteerWaiters(entry);
     };
+    // The shim serves model calls only while a prompt of this process is active.
+    let endGatewayPrompt: (() => void) | null = null;
+    // Model calls still running when the prompt ends are this prompt's: wait
+    // for their observations (bounded), then cut the rest, which bill as
+    // partial. Nothing outside a prompt is metered, so nothing may run there.
+    const drainGateway = async () => {
+      const channel = gateway?.channel;
+      if (!channel) return;
+      // The server ended the prompt: refuse new model calls first, so none can
+      // start after the drain and finish unobserved.
+      endGatewayPrompt?.();
+      await settleGateway(channel);
+      if (gateway!.inflight > 0) {
+        channel.abortInflight();
+        await settleGateway(channel, GATEWAY_ABORT_SETTLE_MS);
+      }
+    };
+    endGatewayPrompt = gateway?.channel?.beginPrompt() ?? null;
     const promptCompletion = entry.client
       .prompt(entry.acpSessionId, message, buildMediaContent(options?.media))
       .then(async (result: PromptResult) => {
         settlePromptInFlight();
-        // The last request's usage must land in this prompt's collector.
-        if (gateway?.channel) await settleGateway(gateway.channel);
+        // The last requests' usage must land in this prompt's collector.
+        await drainGateway();
         promptDone = true;
         const failure = readSessionFailure(result._meta, credentials);
         if (failure && (failure.severity === "error" || failureState.failure?.severity !== "error")) failureState.failure = failure;
@@ -1011,8 +1037,9 @@ export class AcpProvider implements Provider {
         }
         resolveWaiting?.();
       })
-      .catch((err: unknown) => {
+      .catch(async (err: unknown) => {
         settlePromptInFlight();
+        await drainGateway();
         promptDone = true;
         promptError = redactProviderError(err, credentials);
         console.error(`[AcpProvider] prompt FAILED after ${((Date.now() - promptStartMs) / 1000).toFixed(1)}s: ${promptError.message}`);
@@ -1111,6 +1138,7 @@ export class AcpProvider implements Provider {
       }
     } finally {
       if (watchdog) clearInterval(watchdog);
+      endGatewayPrompt?.();
       // Streaming errors, process death, generator return and task aborts all
       // retain actual requests observed before the prompt stopped.
       if (!this._lastResponse) this._lastResponse = buildAgentResponse(entry,
@@ -1583,8 +1611,17 @@ export class AcpProvider implements Provider {
         idleUsage,
       };
       this._adoptSessionState(entry, result);
+      // Server 1.4.0 never fails `session/new` on a refused listing: it falls
+      // back to built-in model ids. A failure the shim saw is the real cause.
+      if (gateway?.fatal) throw gatewaySessionFailure(this._adapter.agentType, gateway.fatal, credentialsOf(this._options));
       await this._applyMode(entry, permissionMode);
-      await this._applyModelAndEffort(entry, model, effort);
+      try {
+        await this._applyModelAndEffort(entry, model, effort);
+      } catch (error) {
+        const problem = gateway?.fatal ?? gateway?.listingFailure;
+        if (problem) throw gatewaySessionFailure(this._adapter.agentType, problem, credentialsOf(this._options), error);
+        throw error;
+      }
 
       this._pool.set(chatId, entry);
       this._sessionToChatId.set(entry.acpSessionId, chatId);
@@ -2140,18 +2177,35 @@ function turnStalledFailure(agentType: string, stallMs: number, id: string): Acp
       + "A shell command left running in the background can hold a turn open; ask for it to run in the foreground." };
 }
 
+function credentialsOf(options: AcpProviderOptions): string[] {
+  return [options.apiKey, ...Object.entries(options.env ?? {})
+    .filter(([name]) => /(?:^|_)(?:SECRET|TOKEN|PASSWORD|API_KEY|ACCESS_KEY|PRIVATE_KEY|CREDENTIAL)(?:_|$)/i.test(name))
+    .map(([, value]) => value)].filter((value): value is string => Boolean(value));
+}
+
+/** A gateway failure the shim saw while the session was set up (breaker or listing), as a typed failure. */
+function gatewaySessionFailure(agentType: string, problem: Extract<GatewayShimEvent, { type: "fatal" }> | GatewayShimListingFailure,
+  credentials: string[], cause?: unknown): AcpSessionFailureError {
+  const event = "type" in problem ? problem
+    : { type: "fatal" as const, reason: problem.reason, status: problem.status || null, message: problem.message };
+  return new AcpSessionFailureError(gatewayFatalFailure(event, `${agentType}:gateway:setup`),
+    cause instanceof Error ? cause : undefined, credentials);
+}
+
 /** The typed failure of an opened gateway-shim breaker (§4.2). */
 function gatewayFatalFailure(event: Extract<GatewayShimEvent, { type: "fatal" }>, id: string): AcpSessionFailure {
-  const status = event.status !== null ? ` (HTTP ${event.status})` : "";
+  const status = event.status !== null && !event.message.includes(`HTTP ${event.status}`) ? ` (HTTP ${event.status})` : "";
   switch (event.reason) {
     case "auth":
       return { id, revision: 1, severity: "error", category: "authentication", errorKind: "authentication_failed",
         title: "The model gateway rejected the credentials", details: `${event.message}${status}` };
     case "quota":
-      return { id, revision: 1, severity: "error", category: "quota",
+      return { id, revision: 1, severity: "error", category: "quota", errorKind: "rate_limit",
         title: "The model gateway is rate limiting or out of quota", details: `${event.message}${status}` };
     default:
+      // 5xx answers are the gateway's own errors; no answer at all is the network.
       return { id, revision: 1, severity: "error", category: "connection",
+        errorKind: event.status !== null && event.status >= 500 ? "server_error" : "gateway_unreachable",
         title: "The model gateway is unreachable", details: `${event.message}${status}` };
   }
 }

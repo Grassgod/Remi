@@ -16,7 +16,12 @@
 // - STEER_ME streams a line and waits for session/cancel, which it
 //   acknowledges with server 1.4.0's "The request was cancelled by the
 //   client." text before answering `cancelled`; STEER_FOLLOW_UP answers at once.
-// It never advertises `_session/steering` (server 1.4.0 has none).
+// - LATE_CALL answers, then calls the gateway again after the turn ended (a
+//   backgrounded command); CROSSING_CALL ends the turn while a slow model call
+//   is still in flight.
+// It never advertises `_session/steering` (server 1.4.0 has none). Like
+// server 1.4.0, a refused or failed model listing falls back to built-in ids,
+// and selecting a model it does not list leaves the current one.
 //
 // Everything it sees is appended as JSON lines to $FAKE_AGY_CAPTURE.
 import { appendFileSync } from "node:fs";
@@ -42,11 +47,12 @@ let current = null;
 const configOptions = () => [{ id: "model", name: "Model", category: "model", type: "select", currentValue: current ?? "none",
   options: models.map((value) => ({ value, name: value })) }];
 
+const BUILT_IN_FALLBACK = ["gemini-3.1-pro-preview", "gemini-3-flash-preview", "gemini-3.1-flash-lite-preview"];
+
 async function listModels() {
-  const response = await fetch(`${GATEWAY}/v1beta/models?pageSize=1000&key=${KEY}`, { headers: harnessHeaders });
-  record({ kind: "list", status: response.status });
-  if (!response.ok) return;
-  models = (await response.json()).models.map((model) => model.name.replace(/^models\//, ""));
+  const response = await fetch(`${GATEWAY}/v1beta/models?pageSize=1000&key=${KEY}`, { headers: harnessHeaders }).catch(() => null);
+  record({ kind: "list", status: response?.status ?? 0 });
+  models = response?.ok ? (await response.json()).models.map((model) => model.name.replace(/^models\//, "")) : BUILT_IN_FALLBACK;
   // The real server defaults to the gateway's first model until told otherwise.
   current ??= models[0] ?? null;
 }
@@ -91,6 +97,35 @@ let waitingForCancel = null;
 async function prompt(id, params) {
   const sid = params.sessionId;
   const text = params.prompt.map((block) => block.text ?? "").join("");
+  if (text.includes("LATE_CALL")) {
+    await generate(current, text);
+    update(sid, { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Answered before the late call." } });
+    send({ id, result: { stopReason: "end_turn" } });
+    // A backgrounded command reusing $AGY_LLM_GATEWAY_URL after the turn: shortly
+    // after, or at the latest when Remi stops this process at the run's end.
+    let fired = false;
+    const lateCall = async () => {
+      if (fired) return;
+      fired = true;
+      const response = await fetch(`${GATEWAY}/v1beta/models/${current}:streamGenerateContent?alt=sse`, {
+        method: "POST", headers: harnessHeaders, body: JSON.stringify({ contents: [{ role: "user", parts: [{ text: "late call" }] }] }),
+      }).catch(() => null);
+      record({ kind: "late_call", status: response?.status ?? 0 });
+    };
+    setTimeout(lateCall, 30);
+    process.once("SIGTERM", () => { void lateCall().finally(() => process.exit(0)); });
+    return;
+  }
+  if (text.includes("CROSSING_CALL")) {
+    // The turn ends while this call is still streaming.
+    const call = generate(current, "SLOW_RESPONSE crossing the end of the turn");
+    // Let the call reach the gateway (it answers after 600 ms) before the turn ends.
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    update(sid, { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Ended while a call was open." } });
+    send({ id, result: { stopReason: "end_turn" } });
+    await call;
+    return;
+  }
   if (text.includes("STEER_FOLLOW_UP")) {
     await generate(current, text);
     update(sid, { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Following the steer." } });
@@ -170,7 +205,7 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
     case "session/set_mode":
       return ok({});
     case "session/set_config_option":
-      current = message.params.value;
+      if (models.includes(message.params.value)) current = message.params.value;
       return ok({ configOptions: configOptions() });
     case "session/prompt":
       return void prompt(message.id, message.params);

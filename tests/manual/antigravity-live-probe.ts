@@ -156,7 +156,10 @@ async function main() {
   const native = await rawClient("native-instructions", model, privateTmp);
   const nativeSession = await native.client.newSession({ cwd: work, mcpServers: [] });
   await native.client.setConfigOption(nativeSession.sessionId, "model", model).catch(() => {});
+  // Raw connections open the shim's model-call gate themselves, as the provider does per prompt.
+  const endNative = native.channel.beginPrompt();
   await native.client.prompt(nativeSession.sessionId, "Without using any tools, answer from your instructions only: what are the home code word and the workspace code word? Reply as `home=<word or NONE> workspace=<word or NONE>`.");
+  endNative();
   const nativeReply = text(native.updates);
   steps.native_instructions = {
     reply: clip(nativeReply), reads_gemini_home_agents_md: nativeReply.includes("BLUEFIN-7731"), reads_cwd_agents_md: nativeReply.includes("PELICAN-2208"),
@@ -246,6 +249,7 @@ async function main() {
   const overlap = await rawClient("overlap", model, privateTmp);
   const overlapSession = await overlap.client.newSession({ cwd: work, mcpServers: [] });
   await overlap.client.setConfigOption(overlapSession.sessionId, "model", model).catch(() => {});
+  const endOverlap = overlap.channel.beginPrompt();
   const first = overlap.client.prompt(overlapSession.sessionId, "Count from 1 to 80, one number per line, then say FINISHED. Do not use tools.")
     .then((result) => ({ result: clip(result) }), (error) => ({ error: clip(String(error)) }));
   for (let i = 0; i < 300 && !overlap.updates.some((u) => u.sessionUpdate === "agent_message_chunk"); i++) await sleep(100);
@@ -258,6 +262,7 @@ async function main() {
   const after = overlap.updates.length;
   const third = await bounded(overlap.client.prompt(overlapSession.sessionId, "Reply with the word AFTER.")
     .then((result) => ({ result: clip(result) }), (error) => ({ error: clip(String(error)) })), STEP_TIMEOUT_MS);
+  endOverlap();
   steps.r6_overlap = { first_still_running_when_second_sent: firstStillRunning, first: firstResult, second, second_text: clip(secondText.slice(-300)),
     third_after_overlap: third, third_text: clip(text(overlap.updates.slice(after))), alive_after: overlap.client.alive,
     stderr_tail: overlap.stderr.slice(-5),
@@ -275,7 +280,8 @@ async function main() {
   steps.observations = observations.map(({ label, event }) => event.type === "request"
     ? { label, seq: event.obs.seq, model: event.obs.requestedModel, status: event.obs.status, aborted: event.obs.aborted,
       responseId: event.obs.responseId ? "<present>" : null, modelVersion: event.obs.modelVersion, usage: event.obs.usageMetadata }
-    : event.type === "fatal" ? { label, fatal: event.reason, status: event.status } : { label, started: event.requestedModel });
+    : event.type === "fatal" ? { label, fatal: event.reason, status: event.status }
+      : event.type === "listing" ? { label, listing: event.status, failure: event.failure?.reason ?? null } : { label, started: event.requestedModel });
   report.files_under_home = listFiles(home).slice(0, 80);
   report.home_bytes = du(home);
   report.private_tmp_bytes = du(privateTmp);

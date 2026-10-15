@@ -611,6 +611,11 @@ describe("Claude ACP adapter", () => {
 interface FakeShimChannel extends GatewayShimChannel {
   readonly label: string;
   closed: boolean;
+  /** Prompts the provider opened the model-call gate for. */
+  activePrompts: number;
+  /** Observations to deliver when the provider cuts the calls still in flight. */
+  pendingOnAbort: GatewayShimEvent[];
+  abortCalls: number;
   emit(event: GatewayShimEvent): void;
   /** Observations to deliver when the provider waits for the prompt's requests to settle. */
   pendingOnSettle: GatewayShimEvent[];
@@ -623,7 +628,16 @@ function fakeShim() {
     open(label) {
       const listeners = new Set<(event: GatewayShimEvent) => void>();
       const channel: FakeShimChannel = {
-        label, closed: false, pendingOnSettle: [], settledCalls: 0,
+        label, closed: false, pendingOnSettle: [], settledCalls: 0, activePrompts: 0, pendingOnAbort: [], abortCalls: 0,
+        beginPrompt() {
+          channel.activePrompts++;
+          let ended = false;
+          return () => { if (!ended) { ended = true; channel.activePrompts--; } };
+        },
+        abortInflight() {
+          channel.abortCalls++;
+          for (const event of channel.pendingOnAbort.splice(0)) channel.emit(event);
+        },
         baseUrl: `http://127.0.0.1:9/r_test${channels.length + 1}`,
         subscribe(listener) { listeners.add(listener); return () => listeners.delete(listener); },
         emit(event) { for (const listener of listeners) listener(event); },
@@ -960,7 +974,7 @@ describe("AcpProvider with the Antigravity access config", () => {
     }
   });
 
-  it("fails the turn at once when the breaker opened before the prompt (e.g. while session/new listed models)", async () => {
+  it("fails at session setup when the breaker opened while session/new listed models", async () => {
     const agent = fakeAntigravityAgent();
     const inner = fakeShim();
     // The fatal event arrives as soon as the provider subscribes, before any prompt listener exists.
@@ -978,10 +992,58 @@ describe("AcpProvider with the Antigravity access config", () => {
     try {
       const error = await collect(provider.sendStream("hang", { chatId: "c1" })).catch((e) => e);
       expect(error).toBeInstanceOf(AcpSessionFailureError);
-      expect((error as AcpSessionFailureError).failure).toMatchObject({ category: "authentication" });
-      // The prompt went out, then its cancel: the harness would otherwise retry the dead token forever.
-      expect(agent.requests("session/prompt")).toHaveLength(1);
-      expect(agent.requests("session/cancel")).toHaveLength(1);
+      expect((error as AcpSessionFailureError).failure).toMatchObject({ category: "authentication", errorKind: "authentication_failed" });
+      // Nothing went to the dead token: no prompt, and the process and its channel are gone.
+      expect(agent.requests("session/prompt")).toHaveLength(0);
+      expect(inner.channels.map((channel) => channel.closed)).toEqual([true]);
+    } finally {
+      await provider.close();
+    }
+  });
+
+  it("reports a failed model listing instead of the unsupported model the server's fallback list implies", async () => {
+    const agent = fakeAntigravityAgent();
+    const inner = fakeShim();
+    const host: GatewayShimHost = { open(label) {
+      const channel = inner.host.open(label) as FakeShimChannel;
+      const subscribe = channel.subscribe;
+      channel.subscribe = (listener) => {
+        const off = subscribe(listener);
+        listener({ type: "listing", status: 503, failure: { reason: "unreachable", status: 503, message: "the model gateway failed (HTTP 503)" } });
+        return off;
+      };
+      return channel;
+    } };
+    const { provider } = antigravityProvider(agent, { gatewayShim: host, model: "gemini-9-not-listed" });
+    try {
+      const error = await collect(provider.sendStream("usage", { chatId: "c1" })).catch((e) => e);
+      expect(error).toBeInstanceOf(AcpSessionFailureError);
+      expect((error as AcpSessionFailureError).failure).toMatchObject({ category: "connection", errorKind: "server_error",
+        title: "The model gateway is unreachable", details: "the model gateway failed (HTTP 503)" });
+      // Discovery refuses the fallback list the same way.
+      await expect(provider.discoverModelCapabilities()).rejects.toThrow("The model gateway is unreachable");
+    } finally {
+      await provider.close();
+    }
+  });
+
+  it("opens the shim's model-call gate only for a prompt and bills calls still open at its end as cut short", async () => {
+    const agent = fakeAntigravityAgent();
+    const { provider, shim } = antigravityProvider(agent);
+    try {
+      let activeDuring = -1;
+      await collect(provider.sendStream("usage", { chatId: "c1" }), () => {
+        const channel = shim.channels[0]!;
+        activeDuring = channel.activePrompts;
+        // A call that is still open when the agent ends the turn.
+        channel.emit({ type: "request_started", requestedModel: "gemini-2.5-pro" });
+        channel.pendingOnAbort.push(request(7, { aborted: true, responseId: "resp-open", usageMetadata: { promptTokenCount: 50, totalTokenCount: 50 } }));
+      });
+      expect(activeDuring).toBe(1);
+      expect(shim.channels[0]!.activePrompts).toBe(0);
+      expect(shim.channels[0]!.abortCalls).toBe(1);
+      const units = (provider.getLastResponse()?.metadata?.usageUnits ?? []) as Array<Record<string, unknown>>;
+      expect(units.filter((unit) => unit.scope === "request")).toMatchObject([{ providerRequestId: "resp-open", accuracy: "partial", inputTokens: 50 }]);
     } finally {
       await provider.close();
     }

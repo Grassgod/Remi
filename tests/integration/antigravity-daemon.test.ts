@@ -11,6 +11,7 @@ import { createRuntimeProvider, isolateProcessTmp, PrivateTmpIsolationUnavailabl
 import { AntigravityGatewayShim } from "@daemon/agent-runtime/antigravity/gateway-shim.js";
 import { startMultiremiServer, TestMultiremiDaemon } from "../fixtures/daemon-protocol.js";
 import { foldTraceLines } from "../helpers/turn-trace.js";
+import { TaskUsageLedger } from "@multiremi/worker/task-usage-ledger.js";
 
 /**
  * Antigravity through the real API, daemon, provider and gateway shim, with a
@@ -41,6 +42,8 @@ const CUT_USAGE = { promptTokenCount: 500, totalTokenCount: 500 };
 function fakeGateway() {
   const requests: GatewayRequest[] = [];
   let calls = 0;
+  /** Status of model listings: 200, or a refused / failing gateway. */
+  const control = { listStatus: 200 };
   const server = Bun.serve({
     hostname: "127.0.0.1", port: 0, idleTimeout: 0,
     async fetch(request) {
@@ -50,6 +53,9 @@ function fakeGateway() {
         googKey: request.headers.has("x-goog-api-key"), model });
       if (request.headers.get("authorization") !== `Bearer ${GATEWAY_KEY}` || request.headers.has("x-goog-api-key")) {
         return Response.json({ error: { code: 401, message: "API key not valid", status: "UNAUTHENTICATED" } }, { status: 401 });
+      }
+      if (request.method === "GET" && url.pathname === "/antigravity/v1beta/models" && control.listStatus !== 200) {
+        return Response.json({ error: { code: control.listStatus } }, { status: control.listStatus });
       }
       if (request.method === "GET" && url.pathname === "/antigravity/v1beta/models") {
         // The server defaults to the first listed model, so the session model must be selected explicitly.
@@ -68,6 +74,11 @@ function fakeGateway() {
             candidates: [{ content: { parts: [{ text: "Sto" }] } }] }));
         } }), { headers: { "content-type": "text/event-stream" } });
       }
+      if (body.includes("SLOW_RESPONSE")) {
+        await Bun.sleep(600);
+        return new Response(event({ responseId: "resp-crossing", modelVersion: `${model}-001`, usageMetadata: usageOf(9) }),
+          { headers: { "content-type": "text/event-stream" } });
+      }
       const usage = model === SESSION_MODEL ? usageOf(++calls) : LITE_USAGE;
       const responseId = `resp-${model}-${model === SESSION_MODEL ? calls : "lite"}`;
       return new Response(new ReadableStream({ start(controller) {
@@ -80,7 +91,7 @@ function fakeGateway() {
     },
   });
   cleanup.push(() => server.stop(true));
-  return { requests, base: `http://127.0.0.1:${server.port}/antigravity` };
+  return { requests, control, base: `http://127.0.0.1:${server.port}/antigravity` };
 }
 
 async function setup(options: { gateway: ReturnType<typeof fakeGateway> | null; turnStallTimeoutMs?: number }) {
@@ -332,6 +343,82 @@ describe("Antigravity through the daemon gateway shim", () => {
     expect(JSON.stringify(items)).not.toContain("The request was cancelled by the client.");
     expect(items.find((item) => item.type === "user_message" && item.origin === "steer")).toMatchObject({
       steer: { steer_id: steerId, injected: true, result: { via: "reprompt", native_outcome: "unsupported" } } });
+  }, 60_000);
+
+  it("reports a refused or failing gateway, not the unsupported model the server's fallback list implies", async () => {
+    const gateway = fakeGateway();
+    const { root, local, store, agent, lines, runtime } = await setup({ gateway });
+    const directory = store.runtimeWorkspaces.create(runtime.id, { name: "User project", root_path: local });
+    const chat = store.createChatSession({ agentId: agent.id, runtime_workspace_id: directory.id });
+    if (privateTmpUnavailable(root)) return;
+    const run = async (status: number, body: string) => {
+      gateway.control.listStatus = status;
+      const task = store.sendChatMessage(chat.id, { body }).task;
+      await poll(() => ["completed", "failed"].includes(store.getTask(task.id)?.status ?? ""), `the turn with a ${status} listing`);
+      return store.getTask(task.id)!;
+    };
+    // A revoked key: the listing's 401 opens the breaker before any prompt.
+    const revoked = await run(401, "Inspect project");
+    expect(revoked.status).toBe("failed");
+    expect(revoked.failureReason).toBe("agent_error.provider_auth_or_access");
+    expect(revoked.error).toContain("The model gateway rejected the credentials");
+    expect(revoked.error).not.toContain("acp_model_unsupported");
+    // A gateway outage: two failed listings stay under the breaker threshold, but the session model is missing.
+    const outage = await run(503, "Inspect project");
+    expect(outage.status).toBe("failed");
+    expect(outage.failureReason).toBe("agent_error.provider_server_error");
+    expect(outage.error).toContain("The model gateway is unreachable");
+    expect(outage.error).not.toContain("acp_model_unsupported");
+    // The server really fell back to its built-in ids, and no prompt reached it.
+    expect(lines().filter((line) => line.kind === "list").map((line) => line.status)).toContain(401);
+    expect(lines().some((line) => line.kind === "request" && line.method === "session/prompt")).toBe(false);
+    // The runtime's models never became the fallback list.
+    expect(store.listRuntimeModels(runtime.id).map((model) => model.id)).not.toContain("gemini-3-flash-preview");
+  }, 60_000);
+
+  it("refuses model calls after the turn, bills a call crossing its end once, and revokes before the ledger closes", async () => {
+    const gateway = fakeGateway();
+    const order: string[] = [];
+    const finish = TaskUsageLedger.prototype.finish;
+    const ledgerSpy = spyOn(TaskUsageLedger.prototype, "finish").mockImplementation(function (this: TaskUsageLedger) {
+      order.push("ledger.finish");
+      return finish.call(this);
+    });
+    cleanup.push(() => ledgerSpy.mockRestore());
+    const { root, local, store, database, agent, shim, lines, runtime } = await setup({ gateway });
+    const forRun = shim.forRun.bind(shim);
+    shim.forRun = (options) => {
+      const run = forRun(options);
+      if (options.runId === "runtime-model-probe") return run;
+      const close = run.close.bind(run);
+      run.close = () => { order.push("revoke"); close(); };
+      return run;
+    };
+    const directory = store.runtimeWorkspaces.create(runtime.id, { name: "User project", root_path: local });
+    const chat = store.createChatSession({ agentId: agent.id, runtime_workspace_id: directory.id });
+    if (privateTmpUnavailable(root)) return;
+    const units = (taskId: string) => database.query("SELECT provider_request_id, accuracy FROM multiremi_usage_units WHERE task_id = ? AND scope = 'request'")
+      .all(taskId) as Array<{ provider_request_id: string; accuracy: string }>;
+
+    const late = store.sendChatMessage(chat.id, { body: "LATE_CALL please" }).task;
+    await poll(() => lines().some((line) => line.kind === "late_call"), "the late call");
+    await poll(() => store.getTask(late.id)?.status === "completed", "the late-call turn");
+    // Refused (503 while the run lives, 404 once its token is revoked), never forwarded, never billed.
+    expect([503, 404]).toContain(lines().find((line) => line.kind === "late_call")!.status);
+    const modelCalls = () => gateway.requests.filter((request) => request.model).length;
+    expect(modelCalls()).toBe(1);
+    await poll(() => units(late.id).length === 1, "the late-call turn's usage");
+    expect(units(late.id)).toHaveLength(1);
+    // The run revoked its tokens before its ledger's final close. (The earlier
+    // finish sent with the completion leaves the session open for a racing
+    // steer; no prompt is active there, so the shim serves no model call.)
+    await poll(() => order.lastIndexOf("ledger.finish") > order.indexOf("revoke") && order.indexOf("revoke") >= 0, "the run's teardown");
+    expect(order.slice(order.indexOf("revoke"))).toContain("ledger.finish");
+
+    const crossing = store.sendChatMessage(chat.id, { body: "CROSSING_CALL please" }).task;
+    await poll(() => store.getTask(crossing.id)?.status === "completed", "the crossing turn");
+    await poll(() => units(crossing.id).length === 1, "the crossing call's usage");
+    expect(units(crossing.id)).toEqual([{ provider_request_id: "resp-crossing", accuracy: "exact" }]);
   }, 60_000);
 
   it("fails an unconfigured gateway before the start ACK, without spawning the server", async () => {

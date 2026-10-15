@@ -256,7 +256,8 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
         if (!dropGoogKey && goog) headers.set("x-goog-api-key", goog);
         return fetch(upstream.baseUrl + url.pathname.replace(/^\/r_test/, "") + url.search, { headers });
       } });
-      const channel = { baseUrl: `http://127.0.0.1:${server.port}/r_test`, subscribe: () => () => {}, settled: async () => {}, close: () => {} };
+      const channel = { baseUrl: `http://127.0.0.1:${server.port}/r_test`, subscribe: () => () => {}, settled: async () => {},
+        beginPrompt: () => () => {}, abortInflight: () => {}, close: () => {} };
       return { host: { open: () => channel }, close: () => server.stop(true) };
     };
   }

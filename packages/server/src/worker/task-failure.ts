@@ -204,6 +204,8 @@ function classifyFailureHint(hint?: TaskFailureHint): TaskFailureReasonValue | n
     case "invalid_request": return TaskFailureReason.ApiInvalidRequest;
     // The provider's stall watchdog stopped a turn that made no progress.
     case "turn_stalled": return TaskFailureReason.AgentTimeout;
+    // The Antigravity gateway shim got no answer from the gateway at all.
+    case "gateway_unreachable": return TaskFailureReason.AgentProviderNetwork;
   }
   if (hint?.codexErrorInfo != null) {
     const info = hint.codexErrorInfo;

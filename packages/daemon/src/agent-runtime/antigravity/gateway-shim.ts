@@ -21,7 +21,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import type { Server as BunServer } from "bun";
 import type {
-  GatewayShimChannel, GatewayShimEvent, GatewayShimHost, GatewayShimRequestObservation,
+  GatewayShimChannel, GatewayShimEvent, GatewayShimHost, GatewayShimListingFailure, GatewayShimRequestObservation,
 } from "@acp/access/gateway-shim-types.js";
 import { assertPublicHost } from "@shared/relay-http.js";
 import { createLogger } from "@shared/logger.js";
@@ -105,6 +105,14 @@ function gatewayError(status: number, message: string, state: string): Response 
   return Response.json({ error: { code: status, message, status: state } }, { status });
 }
 
+/** A refused or failed listing, or null for an answer the gateway gave. */
+function listingFailure(status: number): GatewayShimListingFailure | null {
+  if (status === 401 || status === 403) return { reason: "auth", status, message: `the model gateway rejected the gateway key (HTTP ${status})` };
+  if (status === 429) return { reason: "quota", status, message: "the model gateway is rate limiting or out of quota (HTTP 429)" };
+  if (status >= 500) return { reason: "unreachable", status, message: `the model gateway failed (HTTP ${status})` };
+  return null;
+}
+
 function hashToken(token: string): string {
   return createHash("sha256").update(token).digest("hex");
 }
@@ -125,7 +133,7 @@ function matchRoute(method: string, rest: string): Route | null {
 }
 
 class ShimAbort extends Error {
-  constructor(readonly cause: "client" | "first-byte" | "idle" | "total" | "revoked") {
+  constructor(readonly cause: "client" | "first-byte" | "idle" | "total" | "revoked" | "settle") {
     super(`gateway shim request ended: ${cause}`);
   }
 }
@@ -162,7 +170,8 @@ class ShimRunState implements GatewayShimRun {
     private readonly shim: AntigravityGatewayShim,
     readonly runId: string,
     readonly upstreamBase: string,
-    readonly apiKey: string,
+    /** Cleared at close: a finished run keeps no copy of the gateway key. */
+    public apiKey: string,
   ) {}
 
   open(label: string): GatewayShimChannel {
@@ -174,6 +183,10 @@ class ShimRunState implements GatewayShimRun {
     if (this.closed) return;
     this.closed = true;
     for (const channel of [...this.channels]) channel.close();
+    // A run that never opened a channel (a task that failed before its server
+    // started) is forgotten here; one with channels, by its last channel's close.
+    this.shim._forgetRun(this);
+    this.apiKey = "";
   }
 }
 
@@ -185,6 +198,12 @@ class ShimChannel implements GatewayShimChannel {
   readonly waiters = new Set<() => void>();
   readonly listeners = new Set<(event: GatewayShimEvent) => void>();
   readonly requests = new Set<AbortController>();
+  /** In-flight model calls, for `abortInflight()`. */
+  readonly metered = new Set<AbortController>();
+  /** Active prompts of this channel's ACP process: model calls are served only while one is. */
+  activePrompts = 0;
+  /** A model call outside a prompt was refused and logged (logged once). */
+  refusedLogged = false;
   failures = 0;
   failingSince: number | null = null;
   fatal: Extract<GatewayShimEvent, { type: "fatal" }> | null = null;
@@ -210,6 +229,20 @@ class ShimChannel implements GatewayShimChannel {
       const timer = setTimeout(done, Math.max(0, ms));
       this.waiters.add(done);
     });
+  }
+
+  beginPrompt(): () => void {
+    this.activePrompts++;
+    let ended = false;
+    return () => {
+      if (ended) return;
+      ended = true;
+      this.activePrompts = Math.max(0, this.activePrompts - 1);
+    };
+  }
+
+  abortInflight(): void {
+    for (const request of [...this.metered]) request.abort(new ShimAbort("settle"));
   }
 
   close(): void {
@@ -285,6 +318,16 @@ export class AntigravityGatewayShim {
     this.server = null;
   }
 
+  /** Runs that still hold a gateway key (diagnostics and tests). */
+  get openRuns(): number {
+    return this.runs.size;
+  }
+
+  /** @internal A closed run with no live channel. */
+  _forgetRun(run: ShimRunState): void {
+    if (run.closed && !run.channels.size) this.runs.delete(run);
+  }
+
   /** @internal */
   _openChannel(run: ShimRunState, label: string): GatewayShimChannel {
     const port = this.ensureServer();
@@ -352,6 +395,15 @@ export class AntigravityGatewayShim {
     headers.set("authorization", `Bearer ${channel.run.apiKey}`);
 
     const metered = route.kind === "generateContent" || route.kind === "streamGenerateContent";
+    if (metered && channel.activePrompts === 0) {
+      // Nothing would meter it: the run's prompt has ended (a backgrounded
+      // command calling the gateway after the turn, between prompts).
+      if (!channel.refusedLogged) {
+        channel.refusedLogged = true;
+        log.warn(`gateway shim refused a model call outside an active prompt for ${channel.tokenPrefix} (${channel.label})`);
+      }
+      return gatewayError(503, "no Remi prompt is active for this session; model calls are served only during a turn", "UNAVAILABLE");
+    }
     return this.forward(channel, request, server, route, metered, upstream, { method: request.method, headers, body });
   }
 
@@ -362,9 +414,11 @@ export class AntigravityGatewayShim {
     const controller = new AbortController();
     channel.requests.add(controller);
     if (metered) {
+      channel.metered.add(controller);
       channel.inflight++;
       channel.emit({ type: "request_started", requestedModel: route.model });
     }
+    const listing = route.kind === "list" || route.kind === "get";
     let status = 0;
     let scanner: GeminiResponseScanner | null = null;
     let finished = false;
@@ -382,6 +436,7 @@ export class AntigravityGatewayShim {
       clearTimeout(idleTimer);
       request.signal.removeEventListener("abort", onClientAbort);
       channel.requests.delete(controller);
+      channel.metered.delete(controller);
       if (!metered) return;
       const facts = scanner?.end() ?? { responseId: null, modelVersion: null, usageMetadata: null };
       const obs: GatewayShimRequestObservation = {
@@ -404,16 +459,19 @@ export class AntigravityGatewayShim {
     } catch (error) {
       const cause = abortCause();
       finish(cause !== null);
-      if (cause === "client" || cause === "revoked") return gatewayError(499, "client closed the request", "CANCELLED");
-      this.recordFailure(channel, "unreachable", null, cause === "first-byte"
+      if (cause === "client" || cause === "revoked" || cause === "settle") return gatewayError(499, "client closed the request", "CANCELLED");
+      const message = cause === "first-byte"
         ? "the model gateway did not answer in time"
-        : `the model gateway is unreachable (${this.describe(error, channel.run.apiKey)})`);
+        : `the model gateway is unreachable (${this.describe(error, channel.run.apiKey)})`;
+      if (listing) channel.emit({ type: "listing", status: 0, failure: { reason: "unreachable", status: 0, message } });
+      this.recordFailure(channel, "unreachable", null, message);
       return cause === "first-byte"
         ? gatewayError(504, "the model gateway did not answer in time", "DEADLINE_EXCEEDED")
         : gatewayError(502, "the model gateway is unreachable", "UNAVAILABLE");
     }
     clearTimeout(firstByteTimer);
     status = response.status;
+    if (listing) channel.emit({ type: "listing", status, failure: listingFailure(status) });
     this.recordStatus(channel, response.status);
 
     const headers = new Headers();

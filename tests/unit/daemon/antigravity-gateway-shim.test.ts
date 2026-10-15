@@ -29,14 +29,20 @@ function upstream(respond: (request: Request, seen: Seen) => Response | Promise<
 function shimFor(base: string, options: AntigravityGatewayShimOptions = {}) {
   const shim = new AntigravityGatewayShim({ assertUpstream: async () => {}, ...options });
   cleanups.push(() => shim.stop());
-  const run = shim.forRun({ upstreamBase: base, apiKey: REAL_KEY, runId: "run-1" });
-  return { shim, run };
+  const raw = shim.forRun({ upstreamBase: base, apiKey: REAL_KEY, runId: "run-1" });
+  // Channels with a prompt active, as the provider holds one during every turn.
+  const run = { runId: raw.runId, close: () => raw.close(), open: (label: string) => {
+    const channel = raw.open(label);
+    channel.beginPrompt();
+    return channel;
+  } };
+  return { shim, run, raw };
 }
 
 /** Observations and breaker events; `request_started` is asserted on its own. */
 function record(channel: GatewayShimChannel) {
   const events: GatewayShimEvent[] = [];
-  channel.subscribe((event) => { if (event.type !== "request_started") events.push(event); });
+  channel.subscribe((event) => { if (event.type !== "request_started" && event.type !== "listing") events.push(event); });
   return events;
 }
 
@@ -121,7 +127,76 @@ describe("Antigravity gateway shim", () => {
     await (await fetch(`${channel.baseUrl}/v1beta/models/m:countTokens`, { method: "POST", body: "{}" })).text();
     await (await fetch(`${channel.baseUrl}/v1beta/models/m:generateContent`, { method: "POST", body: "{}" })).text();
     await channel.settled(1000);
-    expect(types).toEqual(["started:m", "request"]);
+    // Listings report how they ended; countTokens is neither metered nor reported.
+    expect(types).toEqual(["listing", "started:m", "request"]);
+  });
+
+  it("refuses model calls outside an active prompt with a fast 503, still serving listings", async () => {
+    const gateway = upstream(() => Response.json({ responseId: "r", usageMetadata: USAGE_1 }));
+    const { raw } = shimFor(gateway.base);
+    const channel = raw.open("gate");
+    const events = record(channel);
+    expect((await fetch(`${channel.baseUrl}/v1beta/models`)).status).toBe(200);
+    expect((await fetch(`${channel.baseUrl}/v1beta/models/m:countTokens`, { method: "POST", body: "{}" })).status).toBe(200);
+    // A backgrounded command calling the gateway after the turn: refused, never forwarded, nothing to bill.
+    const refused = await fetch(`${channel.baseUrl}/v1beta/models/m:streamGenerateContent?alt=sse`, { method: "POST", body: "{}" });
+    expect(refused.status).toBe(503);
+    expect(gateway.seen.filter((seen) => seen.path.includes(":streamGenerateContent"))).toHaveLength(0);
+    const end = channel.beginPrompt();
+    expect((await fetch(`${channel.baseUrl}/v1beta/models/m:generateContent`, { method: "POST", body: "{}" })).status).toBe(200);
+    end();
+    end();
+    expect((await fetch(`${channel.baseUrl}/v1beta/models/m:generateContent`, { method: "POST", body: "{}" })).status).toBe(503);
+    await channel.settled(1000);
+    expect(events.filter((event) => event.type === "request")).toHaveLength(1);
+    // Refusals are not gateway failures.
+    expect(events.some((event) => event.type === "fatal")).toBe(false);
+  });
+
+  it("reports how every model listing ended, even with no prompt", async () => {
+    let status = 200;
+    const gateway = upstream(() => status === 200 ? Response.json({ models: [] }) : new Response("no", { status }));
+    const { raw } = shimFor(gateway.base);
+    const channel = raw.open("listings");
+    const listings: unknown[] = [];
+    channel.subscribe((event) => { if (event.type === "listing") listings.push(event); });
+    for (const next of [200, 401, 503, 429]) {
+      status = next;
+      await (await fetch(`${channel.baseUrl}/v1beta/models?pageSize=1000`)).text();
+    }
+    expect(listings).toEqual([
+      { type: "listing", status: 200, failure: null },
+      { type: "listing", status: 401, failure: { reason: "auth", status: 401, message: expect.any(String) } },
+      // The 401 opened the breaker: later listings are not forwarded (and not reported).
+    ]);
+  });
+
+  it("cuts the model calls still in flight on request, each with an aborted observation", async () => {
+    const gateway = upstream(() => new Response(new ReadableStream({ start(controller) {
+      controller.enqueue(new TextEncoder().encode(sse({ responseId: "resp-open", usageMetadata: USAGE_1 })));
+    } }), { headers: { "content-type": "text/event-stream" } }));
+    const { run } = shimFor(gateway.base);
+    const channel = run.open("abort-inflight");
+    const events = record(channel);
+    const response = await fetch(`${channel.baseUrl}/v1beta/models/m:streamGenerateContent?alt=sse`, { method: "POST", body: "{}" });
+    await response.body!.getReader().read();
+    channel.abortInflight();
+    await channel.settled(2000);
+    expect(events).toMatchObject([{ type: "request", obs: { aborted: true, responseId: "resp-open", usageMetadata: USAGE_1 } }]);
+  }, 15_000);
+
+  it("forgets a closed run and drops its key, with or without channels", () => {
+    const shim = new AntigravityGatewayShim({ assertUpstream: async () => {} });
+    cleanups.push(() => shim.stop());
+    const unused = shim.forRun({ upstreamBase: "https://gw.example/antigravity", apiKey: REAL_KEY, runId: "never-opened" });
+    const used = shim.forRun({ upstreamBase: "https://gw.example/antigravity", apiKey: REAL_KEY, runId: "opened" });
+    used.open("one");
+    expect(shim.openRuns).toBe(2);
+    unused.close();
+    used.close();
+    expect(shim.openRuns).toBe(0);
+    expect(JSON.stringify(unused)).not.toContain(REAL_KEY);
+    expect(JSON.stringify(used)).not.toContain(REAL_KEY);
   });
 
   it("observes non-stream JSON responses and never meters listings or countTokens", async () => {
@@ -236,6 +311,7 @@ describe("Antigravity gateway shim", () => {
     const shim = new AntigravityGatewayShim({ assertUpstream: async () => {}, fetch: async () => { throw Object.assign(new Error(`connect ${REAL_KEY}`), { code: "ECONNREFUSED" }); } });
     cleanups.push(() => shim.stop());
     const channel = shim.forRun({ upstreamBase: "https://gateway.example/antigravity", apiKey: REAL_KEY, runId: "net" }).open("net");
+    channel.beginPrompt();
     const events = record(channel);
     for (let i = 0; i < 5; i++) expect((await fetch(`${channel.baseUrl}/v1beta/models/m:generateContent`, { method: "POST", body: "{}" })).status).toBe(502);
     await channel.settled(1000);

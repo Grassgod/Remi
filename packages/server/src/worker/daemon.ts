@@ -2312,7 +2312,9 @@ export class MultiremiDaemon {
   private async discoverAcpRuntimeModels(signal: AbortSignal): Promise<MultiremiRuntimeModel[]> {
     const prepared = await this.runtimeModelProbeProviderOptions();
     try {
-      return await this.discoverAcpRuntimeModelsWith(prepared, signal);
+      const models = await this.discoverAcpRuntimeModelsWith(prepared, signal);
+      prepared.check?.();
+      return models;
     } finally {
       prepared.release?.();
     }
@@ -2369,6 +2371,8 @@ export class MultiremiDaemon {
     relay?: MultiremiRelayEngineWire | null;
     /** Ends what the probe borrowed (the Antigravity shim token). */
     release?: () => void;
+    /** Throws when the probe's models cannot be trusted (the Antigravity gateway refused its listing). */
+    check?: () => void;
   }> {
     const provider = this.options.provider;
     if (provider === "antigravity") return this.antigravityModelProbeOptions();
@@ -2436,7 +2440,7 @@ export class MultiremiDaemon {
    * hold the in-process shim, so it gets only the token URL; listing models
    * consumes nothing, so the channel's observations are not metered.
    */
-  private async antigravityModelProbeOptions(): Promise<{ options: AcpProviderOptions; release: () => void }> {
+  private async antigravityModelProbeOptions(): Promise<{ options: AcpProviderOptions; release: () => void; check: () => void }> {
     const workspaceId = this.options.workspaceId ?? "local";
     const gateway = antigravityGatewayFor((await this.effectiveWorkspaceRelay(workspaceId))?.antigravity);
     const owner = `${this.options.daemonId ?? this.options.runtimeName}:antigravity`;
@@ -2450,9 +2454,21 @@ export class MultiremiDaemon {
     const run = this.antigravityGatewayShim().forRun({ upstreamBase: gateway.upstreamBase, apiKey: gateway.apiKey, runId: "runtime-model-probe" });
     try {
       const channel = run.open("runtime-model-probe");
+      // Server 1.4.0 answers a refused or unreachable listing with built-in
+      // fallback ids; those are not the gateway's models, so the probe fails.
+      // The breaker stays open; a later successful listing supersedes a failed one.
+      const seen: { fatal: string | null; listing: string | null } = { fatal: null, listing: null };
+      channel.subscribe((event) => {
+        if (event.type === "fatal") seen.fatal = event.message;
+        else if (event.type === "listing") seen.listing = event.failure?.message ?? null;
+      });
       return {
         options: { agentType: "antigravity", cwd: root, providerHome: providerHome.home, gatewayUrl: channel.baseUrl },
         release: () => run.close(),
+        check: () => {
+          const problem = seen.fatal ?? seen.listing;
+          if (problem) throw new Error(`[antigravity_gateway_unavailable] the model probe could not list the gateway's models: ${problem}`);
+        },
       };
     } catch (error) {
       run.close();
@@ -4624,6 +4640,10 @@ export class MultiremiDaemon {
         return { output: candidate, sessionId: finalSessionId, workDir, usageSnapshot: ledger.snapshot, completed: true };
       }
     } finally {
+      // Every prompt has settled (and drained its model calls): revoke the run's
+      // shim tokens before the ledger closes, so no later call can use the real
+      // key unmetered (a backgrounded command, the steering drain, close()).
+      antigravity?.run.close();
       checkpointUsage(ledger.finish());
       this.recordTrace(task.id, () => trace.flush());
       pump?.stop();
@@ -4632,7 +4652,6 @@ export class MultiremiDaemon {
         log.warn(`Failed to report final workspace state for ${task.id}: ${err instanceof Error ? err.message : String(err)}`);
       });
       await provider.close?.();
-      antigravity?.run.close();
     }
   }
 
