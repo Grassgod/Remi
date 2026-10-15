@@ -90,16 +90,31 @@ v1 文件只读：不追加、不续传、不重新封口，`view=turn` 只给 l
 
 `package.json` 与依赖快照由发版准备（`bun run release:prepare --version 0.2.90`）一起改到 0.2.90，门槛与版本号同批落地，源码运行的 daemon 报告的就是门槛版本。
 
-部署顺序：负责人发起 updater drain，暂停派活 → 等运行中的轮与 outbox 排空 → 部署 API（跑上述迁移）→ 升级 daemon（被拒的旧 daemon 自动升级）→ 核对后解除 drain。部署前还要检查飞书 outbox 中持有 `messageId` 但没有展示检查点的投递（R10），它们在新版本只经 `FeishuTaskPresentation` 补发最终卡片。
+v0.2.90 也是 [ADR 0018](0018-local-records-and-recyclable-workspaces.md) 的首个发版：PR #417 合入时 v0.2.89 已经发布，它不在 v0.2.89 里。API 一上线，0.2.90 门槛就经心跳通道给每台 daemon 自动排队升级，ADR 0018 原计划的「先升一台」无法再靠手工控制，所以它待办的前置步骤必须在部署 API 之前做完。Web 必须与 API 同批上线：旧 Web 读 trace 时带 `after_seq`、不带 `view`，新的 `parseTraceWindow` 按 `view=turn` 解析并返回 400。
+
+部署顺序：
+
+1. 负责人发起 updater drain，暂停派活。
+2. 等运行中的轮与 outbox 排空；检查飞书 outbox 中持有 `messageId` 但没有展示检查点的投递（R10），它们在新版本只经 `FeishuTaskPresentation` 补发最终卡片。
+3. ADR 0018 前置步骤（[ADR 0018 §10–11](0018-local-records-and-recyclable-workspaces.md#10-历史数据与升级)、[存储布局升级边界](../daemon-runtime-upgrades.md#存储布局升级边界)、[daemon 环境说明](../deploy/66-8-remi-environment.md)）：
+   - 核对 66-8 工作区根下不属于新布局的目录（此前见过 `kb_mono`、`local`）：daemon 首次启动会把它们移入 `legacy-<日期>/`，7 天后由回收轮次删除；需要保留的先移走或备份。
+   - 删除两台 daemon 主机上关闭 GC 的 systemd 覆盖文件，同时在环境文件里设 `MULTIREMI_GC_DRY_RUN=true`，让升级后的回收（含 `legacy-<日期>/` 的到期删除）先只出计划、不删除。
+4. 同批部署 API（跑迁移，含 ADR 0018 与本 ADR 的迁移）与 Web。
+5. daemon：被拒的旧 daemon 自动升级到 0.2.90。先在一台上核对预演：存储页「预演一轮」的清单无误后，去掉该机的 `MULTIREMI_GC_DRY_RUN` 并重启，再对其余 daemon 做同样的事。
+6. 核对后解除 drain。
 
 ### 10. 子代理、命令标签与被中断的调用
 
 子代理研究（PR 2 §13）补了四条，全部按决策 1 的规则以可选字段或翻译器规则落地，格式版本不变：
 
-- **后台子代理。**Claude 的 Agent SDK 默认把子代理放到后台：Agent 调用的 PostToolUse hook 更新带 `_meta.claudeCode.toolResponse.isAsync: true`（或 `status: "async_launched"`），随后的调用结果只是启动回执。翻译器据此让 `subagent` 条目保持 `in_progress`，不把回执当作输出，并置 `background: true`；子代理的步骤照常以 `parent_id` 挂在它下面。桥接会把这一轮挂起到它启动的后台子代理结束，所以轮结束（transport `close()`）就是它的结束：以 `completed` 收尾，只有轮被取消时为 `stopped`；被中断的一轮也不提前停止它，因为它的调用已经返回。飞书不再按输出文字猜测后台启动，Chat 折叠在它运行时显示「后台运行中」。
-- **子代理事实。**`subagent` 增加可选字段 `agent_type`（Claude `subagent_type`，或进度帧的 `subagentType`）、`name`（Claude 的 `description`，Codex 的代理路径末段）、`background`、`model`、`thread_id`（Codex `agentThreadId` 或 `receiverThreadIds[0]`），在数据存在时写入。
+- **后台子代理。**Claude 的 Agent SDK 默认把子代理放到后台：Agent 调用的 PostToolUse hook 更新带 `_meta.claudeCode.toolResponse.isAsync: true`（或 `status: "async_launched"`），随后的调用结果只是启动回执。翻译器据此让 `subagent` 条目保持 `in_progress`，不把回执当作输出，并置 `background: true`；子代理的步骤照常以 `parent_id` 挂在它下面。桥接会把这一轮挂起到它启动的后台子代理结束，所以轮结束（transport `close()`）就是它的结束：轮完成时以 `completed` 收尾，轮失败或被取消时可能被打断，记为 `stopped`。被中断的一轮既不提前停止它，也不停止它下面仍在运行的步骤，因为它的调用已经返回，那些步骤之后的帧照常写入输出与状态。飞书不再按输出文字猜测后台启动，Chat 折叠在它运行时显示「后台运行中」。
+- **子代理事实。**`subagent` 增加可选字段 `agent_type`（Claude `subagent_type`，或进度帧的 `subagentType`）、`name`（Claude 的 `description`，Codex 的代理路径末段）、`background`、`model`、`thread_id`（Codex `agentThreadId` 或 `receiverThreadIds[0]`），在数据存在时写入。`background` 只来自 hook 的标记：异步启动为 true，前台结果为 false，hook 之前缺省；输入里的 `run_in_background` 只是请求，不作依据，所以前台运行的子代理不会显示「后台运行中」。
 - **命令标签。**`command` 增加可选字段 `title`，取 Claude AIR 的 `_meta.jetbrains.air.commandTitle`（即模型写的 Bash `description`）。Chat 与飞书有标签时整条命令只占一行，以标签为行文字，命令留在详情里。
-- **被中断的调用。**daemon 中断一轮（引导、强制回答宽限期到期或取消任务）时先通知翻译器。claude-agent-acp 0.90 把被中断而没有结果的调用以 `failed` 加一句说明关闭；在中断期间，没有退出码也没有自身输出的 `failed` 调用记为 `stopped`，界面显示「已停止 …」。带退出码或输出的失败，以及没有中断时的失败，仍是 `failed`。
+- **被中断的调用。**daemon 中断一轮（引导、强制回答宽限期到期或取消任务）时先通知翻译器。claude-agent-acp 0.90 用两种方式报告被中断的调用，中断期间两者都记为 `stopped`，界面显示「已停止 …」：
+  - 没有结果的调用以 `failed` 加一句说明关闭：没有退出码、也没有自身输出；
+  - 正在运行的 Claude 命令被打断：输出以 `[Command was aborted before completion]` 结尾，AIR 的退出码固定为 1。翻译器清掉这个合成的退出码。
+
+  其余带退出码或输出的失败、没有中断时的失败（包括中断之外出现的同一种命令结果），以及后台子代理下的步骤，仍按桥接的状态记录。
 
 ## 未采用的方案
 

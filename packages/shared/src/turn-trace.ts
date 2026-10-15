@@ -441,7 +441,8 @@ export function turnWorkedMs(turn: Pick<TraceTurn, "started_at" | "final_started
  * A background subagent (`background: true`, spec §13) is the exception among
  * tools: it stays open after its launch is acknowledged, and the bridge holds
  * the turn until it settles, so the turn's end is its end. It becomes
- * `completed`, with its duration, unless the turn was cancelled.
+ * `completed`, with its duration, when the turn completed; a failed or
+ * cancelled turn may have cut it short, so it becomes `stopped`.
  */
 export function closeOpenItems(
   items: readonly TraceItem[],
@@ -455,7 +456,7 @@ export function closeOpenItems(
     const { seq: _seq, ...rest } = item;
     if (item.type === "subagent" && item.background === true) {
       out.push({ type: "item.completed", item: {
-        ...rest, status: textStatus, completed_at: completedAt,
+        ...rest, status: turnStatus === "completed" ? "completed" : "stopped", completed_at: completedAt,
         duration_ms: item.duration_ms ?? elapsedMs(item.started_at, completedAt),
       } as TraceItem });
       continue;

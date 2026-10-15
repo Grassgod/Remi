@@ -817,12 +817,40 @@ describe("trace translator: subagents and labels (spec §13)", () => {
     h.translator.roundAborted();
     h.translator.promptEnded({ aborted: true });
     expect(h.item(AGENT, "subagent").status).toBe("in_progress");
-    // The turn's end is its end: completed (with its duration), stopped only on a cancel.
+    // The turn's end is its end: completed (with its duration) when the turn
+    // completed; a failed or cancelled turn may have cut it short.
     const [closed] = closeOpenItems(h.state.items, "completed", new Date(T0 + 60_000).toISOString());
     expect(closed).toMatchObject({ type: "item.completed", item: { id: AGENT, status: "completed", output: null, background: true } });
     expect((closed as { item: { duration_ms: number } }).item.duration_ms).toBeGreaterThan(0);
-    expect(closeOpenItems(h.state.items, "cancelled", new Date(T0 + 60_000).toISOString())[0])
-      .toMatchObject({ item: { id: AGENT, status: "stopped" } });
+    for (const status of ["failed", "cancelled"] as const) {
+      expect(closeOpenItems(h.state.items, status, new Date(T0 + 60_000).toISOString())[0], status)
+        .toMatchObject({ item: { id: AGENT, status: "stopped" } });
+    }
+  });
+
+  it("lets a background subagent's step outlive a steer and complete on its own frames", () => {
+    const SLEEP = "toolu_child_sleep";
+    const h = harness("claude").start().feed([
+      ...agentFrames(true),
+      { sessionUpdate: "tool_call_update", toolCallId: AGENT, _meta: { claudeCode: { toolResponse: { status: "async_launched", isAsync: true } } } },
+      { sessionUpdate: "tool_call_update", toolCallId: AGENT, status: "completed", content: [{ type: "content", content: { type: "text", text: LAUNCH_ACK } }] },
+      { sessionUpdate: "tool_call", toolCallId: SLEEP, name: "Bash", status: "pending", title: "sleep 25; ls -A /work", kind: "execute",
+        rawInput: { command: "sleep 25; ls -A /work", description: "Sleep 25s then list directory" },
+        content: [{ type: "terminal", terminalId: SLEEP }],
+        _meta: { claudeCode: { toolName: "Bash", parentToolUseId: AGENT }, jetbrains: { air: { version: 1, commandTitle: "Sleep 25s then list directory" } },
+          terminal_info: { terminal_id: SLEEP } } },
+    ]);
+    // The user steers the root while the background child sleeps.
+    h.translator.roundAborted();
+    h.translator.promptEnded({ aborted: true });
+    expect(h.item(SLEEP, "command").status).toBe("in_progress");
+    expect(h.item(AGENT, "subagent").status).toBe("in_progress");
+    // The child finishes during the next round: its output and status apply.
+    h.feed([
+      { sessionUpdate: "tool_call_update", toolCallId: SLEEP, _meta: { terminal_output: { terminal_id: SLEEP, data: "a.txt\nb.txt\nnotes.md" } } },
+      { sessionUpdate: "tool_call_update", toolCallId: SLEEP, status: "completed", _meta: { terminal_exit: { terminal_id: SLEEP, exit_code: 0, signal: null } } },
+    ]);
+    expect(h.item(SLEEP, "command")).toMatchObject({ status: "completed", exit_code: 0, output: "a.txt\nb.txt\nnotes.md", parent_id: AGENT });
   });
 
   it("never guesses a background subagent as the parent of an unstamped root tool", () => {
@@ -888,11 +916,32 @@ describe("trace translator: subagents and labels (spec §13)", () => {
       expect(h.item("toolu_cancel", "command").status).toBe("stopped");
     });
 
+    // claude-agent-acp 0.90 with AIR: the interrupt result of a running command
+    // (CA/tool-calls/renderer.js terminal_exit, reporters/bash.js abort marker).
+    const interrupted = (id: string) => [
+      { sessionUpdate: "tool_call_update", toolCallId: id, status: "failed", _meta: {
+        terminal_info: { terminal_id: id },
+        terminal_output: { terminal_id: id, data: "building…\n[Command was aborted before completion]" },
+        terminal_exit: { terminal_id: id, exit_code: 1, signal: null } } },
+    ];
+
+    it("ends a running command the abort interrupted stopped, without AIR's exit code 1", () => {
+      const h = harness("claude").start().feed([bash("toolu_running")]);
+      h.translator.roundAborted();
+      h.feed(interrupted("toolu_running"));
+      h.translator.promptEnded({ aborted: true });
+      expect(h.item("toolu_running", "command")).toMatchObject({ status: "stopped", exit_code: null,
+        output: "building…\n[Command was aborted before completion]" });
+    });
+
     it("keeps genuine failures failed", () => {
       const h = harness("claude").start().feed([
         bash("toolu_plain"), unfinished("toolu_plain", "Claude ended the turn without returning a result for this tool."),
+        bash("toolu_marker"), ...interrupted("toolu_marker"),
         bash("toolu_exit"),
       ]);
+      // The abort marker outside an abort is Claude Code's own interrupt: a failure.
+      expect(h.item("toolu_marker", "command")).toMatchObject({ status: "failed", exit_code: 1 });
       // No abort: a failure is a failure.
       expect(h.item("toolu_plain", "command").status).toBe("failed");
       // During an abort, a call with its own exit code or output still failed.

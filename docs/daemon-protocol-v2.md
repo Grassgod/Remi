@@ -1024,8 +1024,13 @@ daemon protocol rejected by server (min X, self Y); waiting for pending_update, 
 回答不带 `view` 的 `trace.read`，与更早版本一并被拒绝；`DAEMON_PROTOCOL_VERSION` 仍为 2。
 `package.json` 与依赖快照由 `bun run release:prepare --version 0.2.90` 与门槛同批改到 `0.2.90`（`release:check` 要求二者一致）。
 发布前，发布负责人核对 `v0.2.90` tag、package 版本、依赖快照、Release 资产和目标 main SHA。
-部署顺序：updater drain 暂停派活 → 运行中的轮与 outbox 排空 → API（含迁移）→ daemon → 解除 drain。
-门槛不表示 fleet 已升级。
+v0.2.90 同时是 [ADR 0018](adr/0018-local-records-and-recyclable-workspaces.md) 的首个发版（PR #417 不在 v0.2.89 里）；
+API 上线后门槛立即为每台 daemon 自动排队升级，所以 ADR 0018 的前置步骤要在部署 API 之前做完。
+旧 Web 读 trace 带 `after_seq` 不带 `view`，会被 `parseTraceWindow` 以 400 拒绝，所以 Web 与 API 同批上线。
+部署顺序（细节见 ADR 0019 决策 9）：updater drain 暂停派活 → 运行中的轮与 outbox 排空（含 R10 飞书投递核对）→
+ADR 0018 前置步骤（核对 66-8 工作区根下不属于新布局的目录；删除关闭 GC 的 systemd 覆盖文件并设
+`MULTIREMI_GC_DRY_RUN=true`）→ API（含迁移）与 Web 同批 → daemon 自动升级，先在一台上核对预演再去掉
+`MULTIREMI_GC_DRY_RUN` → 解除 drain。门槛不表示 fleet 已升级。
 
 ### 7.5 升级失败的提示
 
