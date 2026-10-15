@@ -11,7 +11,17 @@ import {
   type TraceItemOf,
 } from "@multiremi/contracts/trace.js";
 import { EMPTY_TURN_TRACE, applyTurnTraceEvents, finalItem, turnTraceStats, type TurnTraceState } from "@shared/turn-trace.js";
-import { TRACE_ITEM_OUTPUT_MAX_BYTES, TRACE_ITEM_TEXT_MAX_BYTES, TRACE_TRUNCATION_MARKER, utf8ByteLength } from "@shared/trace-sanitize.js";
+import {
+  TRACE_EVENT_MAX_BYTES,
+  TRACE_ITEM_COMMAND_MAX_BYTES,
+  TRACE_ITEM_OUTPUT_HEAD_BYTES,
+  TRACE_ITEM_OUTPUT_MAX_BYTES,
+  TRACE_ITEM_OUTPUT_TAIL_BYTES,
+  TRACE_ITEM_TEXT_MAX_BYTES,
+  TRACE_TRUNCATION_MARKER,
+  capTraceEvent,
+  utf8ByteLength,
+} from "@shared/trace-sanitize.js";
 import {
   createTraceTranslator,
   TRACE_DELTA_BUFFER_BYTES,
@@ -305,6 +315,57 @@ describe("trace translator: tools (claude-agent-acp 0.89 capture)", () => {
     expect(h.state.turn?.context_usage).toEqual({ used: 18950, size: 200000 });
   });
 
+  it("keeps the first completion's duration when the hook re-emits the item", () => {
+    const edit = (extra: Record<string, unknown>) => ({ _meta: { claudeCode: { toolName: "Edit" } }, toolCallId: "e1",
+      sessionUpdate: "tool_call_update", ...extra });
+    const h = harness("claude").start().feed([
+      edit({ sessionUpdate: "tool_call", name: "Edit", status: "pending", title: "Edit", kind: "edit", content: [] }),
+      edit({ rawInput: { file_path: "/r/a.ts" }, content: [{ type: "diff", path: "/r/a.ts", oldText: "a + 1", newText: "a" }] }),
+      edit({ status: "completed", rawOutput: "updated" }),
+      // Time passes before the PostToolUse hook re-sends the full diff.
+      chunk("one", { messageId: "m1" }), chunk("two", { messageId: "m2" }), chunk("three", { messageId: "m3" }),
+      edit({ content: [{ type: "diff", path: "/r/a.ts", oldText: "x = a + 1;", newText: "x = a;" }] }),
+    ]);
+    const durations = h.events.flatMap((event) =>
+      event.type === "item.completed" && event.item.id === "e1" && event.item.type === "file_change" ? [event.item.duration_ms] : []);
+    expect(durations).toHaveLength(2);
+    expect(durations[0]).not.toBeNull();
+    expect(durations[1]).toBe(durations[0]!);
+  });
+
+  it("maps Claude PowerShell to a shell command", () => {
+    const h = harness("claude").start().feed([
+      { sessionUpdate: "tool_call", toolCallId: "ps_1", status: "pending", title: "Get-ChildItem", kind: "execute",
+        _meta: { claudeCode: { toolName: "PowerShell" } }, rawInput: { command: "Get-ChildItem -Recurse" } },
+      { sessionUpdate: "tool_call_update", toolCallId: "ps_1", _meta: { terminal_output: { data: "a.ts\n", terminal_id: "ps_1" } } },
+      { sessionUpdate: "tool_call_update", toolCallId: "ps_1", status: "completed", _meta: { terminal_exit: { exit_code: 0 } } },
+    ]);
+    expect(h.item("ps_1", "command")).toMatchObject({ tool: "PowerShell", source: "shell", command: "Get-ChildItem -Recurse",
+      status: "completed", exit_code: 0, output: "a.ts\n" });
+  });
+
+  it("stops the tools still open when a steer aborts the round, and only that round's", () => {
+    const bash = (id: string, command: string) => ({ sessionUpdate: "tool_call", toolCallId: id, name: "Bash", status: "pending",
+      title: command, kind: "execute", _meta: { claudeCode: { toolName: "Bash" } }, rawInput: { command } });
+    const h = harness("claude").start().feed([bash("t0", "sleep 100")]);
+    h.translator.promptEnded();
+    expect(h.item("t0", "command").status).toBe("in_progress");
+
+    h.feed([bash("t1", "sleep 1"), bash("t2", "ls"),
+      { sessionUpdate: "tool_call_update", toolCallId: "t2", status: "completed", _meta: { terminal_exit: { exit_code: 0 } } }]);
+    h.translator.promptEnded({ aborted: true });
+    expect(h.item("t1", "command")).toMatchObject({ status: "stopped" });
+    expect(h.item("t1", "command").completed_at).not.toBeNull();
+    expect(h.item("t2", "command").status).toBe("completed");
+    // An earlier round's open call is not this round's to stop; the attempt's close handles it.
+    expect(h.item("t0", "command").status).toBe("in_progress");
+
+    // A round that ends normally leaves its open calls alone.
+    h.feed([bash("t3", "make")]);
+    h.translator.promptEnded({ aborted: false });
+    expect(h.item("t3", "command").status).toBe("in_progress");
+  });
+
   it("picks the closing message as the final reply", () => {
     const h = turn();
     expect(h.translator.settle()).toEqual({ itemId: "msg:msg_01C", text: "Fixed `add` in `src/math.ts`; the math tests pass now." });
@@ -342,6 +403,50 @@ describe("trace translator: subagents", () => {
     expect(h.item("glob_2").parent_id).toBeNull();
     // A spawn never nests itself.
     expect(h.item("agent_2").parent_id).toBeNull();
+  });
+
+  it("turns the time-window fallback off once the bridge stamped a parent: a parallel top-level tool stays top-level", () => {
+    const agent = { sessionUpdate: "tool_call", toolCallId: "agent_1", name: "Agent", status: "pending", title: "Task", kind: "think",
+      _meta: { claudeCode: { toolName: "Agent" } }, rawInput: { description: "look" } };
+    const h = harness("claude").start().feed([
+      agent,
+      { sessionUpdate: "tool_call", toolCallId: "grep_1", name: "Grep", status: "pending", title: "grep", kind: "search",
+        _meta: { claudeCode: { toolName: "Grep", parentToolUseId: "agent_1" } }, rawInput: { pattern: "add" } },
+      // The main agent runs a Bash call in parallel while the Agent is still open.
+      { sessionUpdate: "tool_call", toolCallId: "bash_1", name: "Bash", status: "pending", title: "ls", kind: "execute",
+        _meta: { claudeCode: { toolName: "Bash" } }, rawInput: { command: "ls" } },
+    ]);
+    expect(h.item("agent_1", "subagent").status).toBe("in_progress");
+    expect(h.item("grep_1").parent_id).toBe("agent_1");
+    expect(h.item("bash_1").parent_id).toBeNull();
+
+    // A stamped text chunk is enough too.
+    const viaText = harness("claude").start().feed([
+      agent,
+      chunk("Searching.", { messageId: "s1", _meta: { claudeCode: { parentToolUseId: "agent_1" } } }),
+      { sessionUpdate: "tool_call", toolCallId: "bash_2", name: "Bash", status: "pending", title: "ls", kind: "execute",
+        _meta: { claudeCode: { toolName: "Bash" } }, rawInput: { command: "ls" } },
+    ]);
+    expect(viaText.item("msg:s1").parent_id).toBe("agent_1");
+    expect(viaText.item("bash_2").parent_id).toBeNull();
+  });
+
+  it("completes a subagent's open text when the subagent completes", () => {
+    const h = harness("claude").start().feed([
+      { sessionUpdate: "tool_call", toolCallId: "agent_1", name: "Agent", status: "pending", title: "Task", kind: "think",
+        _meta: { claudeCode: { toolName: "Agent" } }, rawInput: { description: "look", prompt: "find callers" } },
+      chunk("Found one caller.", { messageId: "s1", _meta: { claudeCode: { parentToolUseId: "agent_1" } } }),
+      thought("checking", { messageId: "s1", _meta: { claudeCode: { parentToolUseId: "agent_1" } } }),
+      chunk("Top-level prose.", { messageId: "m1" }),
+      { sessionUpdate: "tool_call_update", toolCallId: "agent_1", status: "completed", rawOutput: "One caller." },
+    ]);
+    expect(h.item("msg:s1", "agent_message")).toMatchObject({ parent_id: "agent_1", status: "completed" });
+    expect(h.item("rsn:s1", "reasoning")).toMatchObject({ parent_id: "agent_1", status: "completed" });
+    // Its children end before it does; text at other levels is untouched.
+    const order = h.events.flatMap((event) => event.type === "item.completed" ? [event.item.id] : []);
+    expect(order.indexOf("msg:s1")).toBeLessThan(order.indexOf("agent_1"));
+    expect(order.indexOf("rsn:s1")).toBeLessThan(order.indexOf("agent_1"));
+    expect(h.item("msg:m1", "agent_message").status).toBe("in_progress");
   });
 
   it("keeps Codex flat (no subagent sessions advertised)", () => {
@@ -423,6 +528,14 @@ describe("trace translator: codex-acp 2.2.2 frames", () => {
 });
 
 describe("trace translator: compaction (decision R11)", () => {
+  it("rests on the committed capability evidence: both pinned bridges send compaction and notices only to clients that ask", () => {
+    const evidence = (name: string) => JSON.parse(readFileSync(new URL(name, FIXTURES), "utf8")) as Record<string, unknown>;
+    expect(evidence("claude-089-capability-evidence.json")).toEqual({ clientSupportsCompactionUpdates: true, clientSupportsNotices: true,
+      withoutCapability: { compaction: false, notices: false } });
+    expect(evidence("codex-222-capability-evidence.json")).toEqual({ supportsCompaction: true, supportsNotices: true,
+      withoutCapability: { compaction: false, notices: false } });
+  });
+
   it("follows the claude-agent-acp 0.89 compaction lifecycle", () => {
     const h = harness("claude").start().feed(frames("claude-089-compaction-notifications.json"));
     h.translator.promptEnded();
@@ -472,6 +585,17 @@ describe("trace translator: permissions and questions", () => {
       decision: { option_id: "reject", name: "Reject", kind: "reject_once" }, responded_by: "mem_1", reply_message_id: "rep_1" });
     h.feed([{ sessionUpdate: "tool_call_update", toolCallId: "toolu_rm", status: "failed" }]);
     expect(h.item("toolu_rm", "command").status).toBe("declined");
+  });
+
+  it("a decline after the tool ended re-emits it with its first duration", () => {
+    const h = harness("claude").start().feed([bash,
+      { sessionUpdate: "tool_call_update", toolCallId: "toolu_rm", status: "failed" }]);
+    const first = h.item("toolu_rm", "command").duration_ms;
+    expect(first).not.toBeNull();
+    const id = h.translator.permissionRequested({ decisionId: "dec_5", toolCallId: "toolu_rm", title: "rm", options });
+    h.feed([chunk("waiting", { messageId: "m9" })]);
+    h.translator.permissionResolved(id, { option: options[1]!, outcome: "selected", respondedBy: null, replyMessageId: null });
+    expect(h.item("toolu_rm", "command")).toMatchObject({ status: "declined", duration_ms: first });
   });
 
   it("an allowed permission completes and leaves the tool alone", () => {
@@ -588,10 +712,53 @@ describe("trace translator: caps", () => {
     const streamed = h.events.filter((event) => event.type === "item.delta").reduce((sum, event) => sum + (event.type === "item.delta" ? utf8ByteLength(event.delta) : 0), 0);
     expect(streamed).toBeLessThanOrEqual(TRACE_ITEM_OUTPUT_MAX_BYTES);
   });
+
+  it("keeps the head of an output that overflows in a single chunk", () => {
+    const h = harness("codex").start().feed([
+      { sessionUpdate: "tool_call", toolCallId: "c1", kind: "execute", title: "cat", status: "in_progress", rawInput: { command: "cat big" },
+        _meta: { terminal_info: { cwd: "/r", terminal_id: "c1" } } },
+    ]);
+    const data = `HEAD${"h".repeat(20 * 1024)}${"m".repeat(200 * 1024)}${"t".repeat(50 * 1024)}TAIL`;
+    expect(utf8ByteLength(data)).toBeGreaterThanOrEqual(200 * 1024);
+    h.feed([
+      { sessionUpdate: "tool_call_update", toolCallId: "c1", _meta: { terminal_output: { data, terminal_id: "c1" } } },
+      { sessionUpdate: "tool_call_update", toolCallId: "c1", status: "completed", _meta: { terminal_exit: { exit_code: 0 } } },
+    ]);
+    const item = h.item("c1", "command");
+    expect(item.output_truncated).toBe(true);
+    const [head, tail] = item.output!.split(`\n${TRACE_TRUNCATION_MARKER}\n`);
+    expect(head).toBe(data.slice(0, TRACE_ITEM_OUTPUT_HEAD_BYTES));
+    expect(tail).toBe(data.slice(-TRACE_ITEM_OUTPUT_TAIL_BYTES));
+    // Nothing of the overflowing chunk streams; the completion carries it.
+    expect(h.events.some((event) => event.type === "item.delta" && event.item_id === "c1")).toBe(false);
+  });
+
+  it("caps a 600 KiB heredoc command so no event is dropped", () => {
+    const heredoc = `cat <<'EOF' > big.txt\n${"x".repeat(600 * 1024)}\nEOF`;
+    const h = harness("claude").start().feed([
+      { sessionUpdate: "tool_call", toolCallId: "toolu_big", name: "Bash", status: "pending", title: "Terminal", kind: "execute",
+        _meta: { claudeCode: { toolName: "Bash" } } },
+      { sessionUpdate: "tool_call_update", toolCallId: "toolu_big", title: heredoc, rawInput: { command: heredoc } },
+      { sessionUpdate: "tool_call_update", toolCallId: "toolu_big", status: "completed", _meta: { terminal_exit: { exit_code: 0 } } },
+    ]);
+    const item = h.item("toolu_big", "command");
+    expect(item).toMatchObject({ status: "completed", exit_code: 0, command_truncated: true });
+    expect(item.command!.startsWith("cat <<'EOF' > big.txt\n")).toBe(true);
+    expect(utf8ByteLength(item.command!)).toBe(TRACE_ITEM_COMMAND_MAX_BYTES + utf8ByteLength(TRACE_TRUNCATION_MARKER));
+    expect(item.actions.every((action) => action.command === null || utf8ByteLength(action.command) <= TRACE_ITEM_COMMAND_MAX_BYTES + 32)).toBe(true);
+    const events = h.events.filter((event) => "item" in event && event.item.id === "toolu_big");
+    expect(events.map((event) => event.type)).toEqual(["item.started", "item.updated", "item.completed"]);
+    for (const event of events) {
+      expect(utf8ByteLength(JSON.stringify(event))).toBeLessThan(TRACE_EVENT_MAX_BYTES);
+      // The store's re-check keeps the event as it is.
+      expect(capTraceEvent(event)).toEqual(event);
+    }
+  });
 });
 
 describe("trace translator: every recorded fixture", () => {
-  const names = readdirSync(FIXTURES).filter((name) => name.endsWith(".json")).sort();
+  // Capability evidence files sit beside the frames they vouch for; they hold no frames.
+  const names = readdirSync(FIXTURES).filter((name) => name.endsWith(".json") && !name.endsWith("-capability-evidence.json")).sort();
 
   it("finds the recorded fixtures", () => {
     expect(names.length).toBeGreaterThanOrEqual(25);

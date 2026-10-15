@@ -11,6 +11,8 @@ import { isFileChange, isTraceItem } from "@multiremi/contracts/trace";
 import { fileChangeFromTexts } from "@shared/trace-file-change.js";
 import {
   TRACE_EVENT_MAX_BYTES,
+  TRACE_ITEM_COMMAND_MAX_BYTES,
+  TRACE_ITEM_CWD_MAX_BYTES,
   TRACE_ITEM_DIFF_MAX_BYTES,
   TRACE_ITEM_INPUT_MAX_BYTES,
   TRACE_ITEM_OUTPUT_HEAD_BYTES,
@@ -18,6 +20,7 @@ import {
   TRACE_ITEM_REASONING_MAX_BYTES,
   TRACE_ITEM_TEXT_MAX_BYTES,
   TRACE_TRUNCATION_MARKER,
+  capCommandActions,
   capFileChanges,
   capItemInput,
   capItemText,
@@ -152,10 +155,60 @@ describe("item caps", () => {
     expect(bounded!.item).toMatchObject({ prompt: null });
     expect(bytes(JSON.stringify(bounded))).toBeLessThanOrEqual(TRACE_EVENT_MAX_BYTES);
 
+    // A command's parsed actions are a drop candidate: the line and the result survive.
+    const paths = Array.from({ length: 600 }, (_, i) => ({ type: "read" as const, command: null, name: `f${i}`, path: `/r/${"d".repeat(2 * KiB)}/${i}` }));
+    const listing = capTraceEvent({ type: "item.completed", item: { ...command("tail"), command: "cat many", actions: paths } });
+    expect(listing).not.toBeNull();
+    expect(listing!.item).toMatchObject({ command: "cat many", actions: [], command_truncated: true, output: "tail" });
+    expect(bytes(JSON.stringify(listing))).toBeLessThanOrEqual(TRACE_EVENT_MAX_BYTES);
+    expect(isTraceItem(listing!.item)).toBe(true);
+
     const delta = capTraceEvent({ type: "item.delta", item_id: "call_1", field: "output", delta: "d".repeat(100 * KiB) });
     expect(delta && delta.type === "item.delta" && bytes(delta.delta)).toBe(64 * KiB);
     const fine = { type: "turn.updated", patch: { model: "m" } } as const;
     expect(capTraceEvent(fine)).toBe(fine);
+  });
+});
+
+describe("command caps", () => {
+  const heredoc = `cat <<'EOF' > big.txt\n${"x".repeat(600 * KiB)}\nEOF`;
+
+  it("caps the command line, the cwd and the actions' commands, and flags the item", () => {
+    const item = capTraceItem<TraceCommandItem>({
+      ...command(null), command: heredoc, cwd: `/${"c".repeat(8 * KiB)}`,
+      actions: [{ type: "unknown", command: heredoc }, { type: "search", command: heredoc, query: "x", path: null }],
+    });
+    expect(item.command_truncated).toBe(true);
+    expect(item.command!.startsWith("cat <<'EOF' > big.txt\nxxx")).toBe(true);
+    expect(item.command!.endsWith(TRACE_TRUNCATION_MARKER)).toBe(true);
+    expect(bytes(item.command!)).toBe(TRACE_ITEM_COMMAND_MAX_BYTES + bytes(TRACE_TRUNCATION_MARKER));
+    expect(bytes(item.cwd!)).toBe(TRACE_ITEM_CWD_MAX_BYTES + bytes(TRACE_TRUNCATION_MARKER));
+    // The actions share one budget: the first keeps the head, the second only the marker.
+    expect(bytes(item.actions[0]!.command!)).toBe(TRACE_ITEM_COMMAND_MAX_BYTES + bytes(TRACE_TRUNCATION_MARKER));
+    expect(item.actions[1]).toEqual({ type: "search", command: TRACE_TRUNCATION_MARKER, query: "x", path: null });
+    expect(isTraceItem(item)).toBe(true);
+    // The store re-checks what the translator capped: a no-op.
+    expect(capTraceItem(item)).toEqual(item);
+    expect(capCommandActions(item.actions).value).toEqual(item.actions);
+    // A short command is untouched and gains no flag.
+    const small = command("ok");
+    expect(capTraceItem(small)).toBe(small);
+    expect(capCommandActions([{ type: "list_files", command: null, path: null }]).truncated).toBe(false);
+  });
+
+  it("keeps a 600 KiB heredoc event under the ceiling instead of dropping it", () => {
+    const item: TraceCommandItem = { ...command("done"), command: heredoc, actions: [{ type: "unknown", command: heredoc }] };
+    const body = { type: "item.completed" as const, item };
+    expect(bytes(JSON.stringify(body))).toBeGreaterThan(TRACE_EVENT_MAX_BYTES);
+    const capped = capTraceEvent(body);
+    expect(capped).not.toBeNull();
+    expect(capped!.item).toMatchObject({ type: "command", command_truncated: true, output: "done", exit_code: 0 });
+    expect(bytes(JSON.stringify(capped))).toBeLessThan(40 * KiB);
+  });
+
+  it("rejects a malformed command_truncated", () => {
+    expect(isTraceItem({ ...command(null), command_truncated: true })).toBe(true);
+    expect(isTraceItem({ ...command(null), command_truncated: false })).toBe(false);
   });
 });
 

@@ -448,7 +448,7 @@ export class TraceFileStore implements TraceStore {
     if (entry.closed || events.length === 0) return { head: entry.head, events: [] };
     const stored: TraceEvent[] = [];
     for (const event of events) {
-      const row = sanitizeStoredEvent(event, this.now());
+      const row = sanitizeStoredEvent(event, this.now(), taskId);
       if (row) stored.push({ ...row, seq: entry.head + stored.length + 1 } as TraceEvent);
     }
     if (stored.length === 0) return { head: entry.head, events: [] };

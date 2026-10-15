@@ -261,8 +261,11 @@ export function digestTraceItem(item: TraceItem): string | null {
  * completed trace item toward the N trigger but stores only digest-worthy lines,
  * keeping the newest ones within the character budget. Other events (deltas,
  * starts, turn updates) are progress within an item and count for nothing.
+ * An item counts once: a later `item.completed` for the same id (a phase
+ * change, a late hook, a decline) re-states it and is skipped.
  */
 export class TaskProgressTracker {
+  private readonly completed = new Set<string>();
   private pendingCount = 0;
   private pendingLines: string[] = [];
   private pendingChars = 0;
@@ -280,7 +283,8 @@ export class TaskProgressTracker {
 
   record(events: readonly TraceEvent[]): void {
     for (const event of events) {
-      if (event.type !== "item.completed") continue;
+      if (event.type !== "item.completed" || this.completed.has(event.item.id)) continue;
+      this.completed.add(event.item.id);
       this.pendingCount++;
       const line = digestTraceItem(event.item);
       if (!line) continue;

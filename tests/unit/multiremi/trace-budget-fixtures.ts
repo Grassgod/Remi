@@ -4,7 +4,7 @@
 // `ts` and `seq`, so the largest stored line is a little over the server's 1 MiB
 // page budget. Each case below sits exactly at the ceiling: its stored line is the
 // "oversized first event" a page must still return alone, byte-for-byte.
-import type { TraceCommandItem, TraceEvent, TraceEventInput, TraceTurn } from "@multiremi/contracts/trace.js";
+import type { TraceCommandItem, TraceEvent, TraceEventInput, TraceSubagentItem, TraceTurn } from "@multiremi/contracts/trace.js";
 import { TRACE_EVENT_MAX_BYTES } from "@shared/trace-sanitize.js";
 
 export const traceJsonBytes = (value: unknown): number => Buffer.byteLength(JSON.stringify(value), "utf8");
@@ -40,6 +40,19 @@ export function commandItem(id: string, command: string): TraceCommandItem {
   };
 }
 
+/**
+ * A finished subagent whose `prompt` carries `text`. The prompt is not a capped
+ * field (a command line is, at 16 KiB), so the item reaches the store, the
+ * readers and the page budgets at its full size.
+ */
+export function bulkItem(id: string, text: string): TraceSubagentItem {
+  return {
+    id, parent_id: null, type: "subagent", status: "completed",
+    started_at: TRACE_BUDGET_FIXTURE_TS, completed_at: TRACE_BUDGET_FIXTURE_TS,
+    tool: "Agent", title: null, prompt: text, output: null, duration_ms: 1,
+  };
+}
+
 /** `item.completed` of a finished agent message. */
 export function messageEvent(id: string, text: string): TraceEventInput {
   return {
@@ -60,10 +73,10 @@ const ascii = (bytes: number) => "a".repeat(bytes);
 // "\u0001" serializes as a six-byte escape; the remainder is plain spaces.
 const escaped = (bytes: number) => "\u0001".repeat(Math.floor(bytes / 6)) + " ".repeat(bytes % 6);
 
-/** An `item.completed` command whose body is exactly the ceiling. The command text is not a capped field. */
-function ceilingCommand(id: string, pad: (bytes: number) => string): TraceEventInput {
-  const base = { type: "item.completed" as const, item: commandItem(id, "") };
-  return { ...base, item: { ...base.item, command: pad(TRACE_EVENT_MAX_BYTES - traceJsonBytes(base)) } };
+/** An `item.completed` subagent whose body is exactly the ceiling, carried by its uncapped prompt. */
+function ceilingPrompt(id: string, pad: (bytes: number) => string): TraceEventInput {
+  const base = { type: "item.completed" as const, item: bulkItem(id, "") };
+  return { ...base, item: { ...base.item, prompt: pad(TRACE_EVENT_MAX_BYTES - traceJsonBytes(base)) } };
 }
 
 /** A body of a type this contract does not know: opaque to the store, the hub and `view=events`. */
@@ -73,8 +86,8 @@ function ceilingFuture(): TraceEventInput {
 }
 
 export const oversizedTraceCases: Array<{ name: string; input: TraceEventInput }> = [
-  { name: "ceiling command", input: ceilingCommand("cmd_ceiling", ascii) },
-  { name: "JSON-expanded command", input: ceilingCommand("cmd_escaped", escaped) },
+  { name: "ceiling prompt", input: ceilingPrompt("agent_ceiling", ascii) },
+  { name: "JSON-expanded prompt", input: ceilingPrompt("agent_escaped", escaped) },
   { name: "unknown future type", input: ceilingFuture() },
 ];
 

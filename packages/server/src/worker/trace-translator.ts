@@ -132,8 +132,12 @@ export interface TraceTranslator {
   start(input: TraceTranslatorStart): void;
   /** One `session/update`. */
   acp(update: ProviderEvent): void;
-  /** Each `session.run()` exit: completes open text items and flushes deltas. */
-  promptEnded(): void;
+  /**
+   * Each `session.run()` exit: completes open text items and flushes deltas.
+   * `aborted` (a steer or force-answer interrupt cut the round short) also
+   * stops the round's tool items that are still open.
+   */
+  promptEnded(opts?: { aborted?: boolean }): void;
   permissionRequested(request: TracePermissionRequest): string;
   permissionResolved(itemId: string, resolution: TracePermissionResolution): void;
   questionRequested(request: TraceQuestionRequest): string;
@@ -294,7 +298,8 @@ class OutputBuffer {
     }
     if (!this.overflowed) {
       this.overflowed = true;
-      this.head = utf8Head(this.full, TRACE_ITEM_OUTPUT_HEAD_BYTES);
+      // The head includes this chunk: one chunk may carry the whole output.
+      this.head = utf8Head(this.full + chunk, TRACE_ITEM_OUTPUT_HEAD_BYTES);
       this.tail = this.full;
       this.full = "";
     }
@@ -342,6 +347,8 @@ interface ToolState {
   lastShape: string;
   closed: boolean;
   status: TraceItemStatus;
+  /** Set at the first completion; later re-emits (late hooks, a decline) keep it. */
+  durationMs: number | null;
 }
 
 const NO_STATS = { item_count: 0, tool_call_count: 0, process_item_count: 0, type_histogram: [] };
@@ -426,6 +433,10 @@ export function createTraceTranslator(
   let roundLast: TraceItem | null = null;
   let endedRoundLast: TraceItem | null = null;
   let roundOpen = false;
+  /** Tool items started in the current prompt round. */
+  const roundTools = new Set<string>();
+  /** A frame carried `_meta.claudeCode.parentToolUseId`: the bridge stamps parents, so no time-window guess. */
+  let sawStampedParent = false;
 
   const uniqueId = (base: string): string => {
     if (!usedIds.has(base)) { usedIds.add(base); return base; }
@@ -534,9 +545,13 @@ export function createTraceTranslator(
 
   // ── Tools ───────────────────────────────────────────────────────────────
 
-  /** Claude-only fallback when the bridge does not stamp a parent: the single open Agent call. */
+  /**
+   * Claude-only fallback when the bridge does not stamp a parent: the single
+   * open Agent call. Off once any frame of the attempt carried a stamped
+   * parent, since an unstamped tool is then top-level (a parallel call).
+   */
   const timeWindowParent = (id: string, facts: ToolFacts): string | null => {
-    if (agentType !== "claude" || (facts.name && CLAUDE_SUBAGENT_TOOLS.has(facts.name))) return null;
+    if (agentType !== "claude" || sawStampedParent || (facts.name && CLAUDE_SUBAGENT_TOOLS.has(facts.name))) return null;
     let parent: string | null = null;
     for (const [candidateId, candidate] of tools) {
       if (candidateId === id || candidate.closed || candidate.cls.type !== "subagent" || candidate.parentId !== null) continue;
@@ -551,7 +566,8 @@ export function createTraceTranslator(
     const tool = toolLabel(facts, state.cls, state.resolved);
     const base = { id: state.id, parent_id: state.parentId, status, started_at: state.startedAt, completed_at: completedAt };
     const output = final ? state.result ?? state.output.value : state.output.value;
-    const duration = completedAt ? Math.max(0, nowMs() - state.startedMs) : null;
+    if (completedAt && state.durationMs === null) state.durationMs = Math.max(0, nowMs() - state.startedMs);
+    const duration = completedAt ? state.durationMs : null;
     const truncated = !final || state.result === null ? state.output.overflowed : false;
     const flag = truncated ? { output_truncated: true as const } : {};
     switch (state.cls.type) {
@@ -595,10 +611,15 @@ export function createTraceTranslator(
     }
   };
 
-  const completeTool = (state: ToolState, acpStatus: "completed" | "failed" | "cancelled"): void => {
+  const completeTool = (state: ToolState, acpStatus: "completed" | "failed" | "cancelled", touchedByAcp = true): void => {
     state.closed = true;
     state.status = declined.has(state.id) ? "declined" : acpStatus === "cancelled" ? "stopped" : acpStatus;
-    write("item.completed", toolItem(state, state.status, now(), true), true);
+    // A subagent's own text ends with it, not at the next top-level boundary.
+    if (state.cls.type === "subagent") boundary(state.id);
+    const item = toolItem(state, state.status, now(), true);
+    // Uncapped, like the in-progress and late-frame comparisons.
+    state.lastShape = shapeOf(item);
+    write("item.completed", item, touchedByAcp);
   };
 
   const onTool = (frame: VendorFrame): void => {
@@ -620,8 +641,10 @@ export function createTraceTranslator(
       state = {
         id, parentId, startedAt: now(), startedMs: nowMs(), facts, resolved, cls, output: new OutputBuffer(), result: null,
         exitCode: null, changes: [], parsedCommand: null, actions: [], lastShape: "", closed: false, status: "in_progress",
+        durationMs: null,
       };
       tools.set(id, state);
+      roundTools.add(id);
       refreshClass(state);
       const changes = diffChanges(frame);
       if (changes) state.changes = changes;
@@ -664,7 +687,6 @@ export function createTraceTranslator(
     }
     if (terminal) {
       completeTool(state, status as "completed" | "failed" | "cancelled");
-      state.lastShape = shapeOf(items.get(state.id)!);
       return;
     }
     const item = toolItem(state, "in_progress", null, false);
@@ -813,8 +835,10 @@ export function createTraceTranslator(
         if (!roundOpen) {
           roundOpen = true;
           roundLast = null;
+          roundTools.clear();
         }
         const frame = update as unknown as VendorFrame;
+        if (!sawStampedParent && parentToolUseId(frame) !== null) sawStampedParent = true;
         switch (frame.sessionUpdate) {
           case "agent_message_chunk":
             onChunk(frame, "agent_message");
@@ -856,11 +880,19 @@ export function createTraceTranslator(
       });
     },
 
-    promptEnded() {
+    promptEnded(opts) {
       emitter.run(() => {
         endAllText();
+        if (opts?.aborted) {
+          // The interrupted calls will not report again; the next round is a new prompt.
+          for (const id of roundTools) {
+            const state = tools.get(id);
+            if (state && !state.closed) completeTool(state, "cancelled", false);
+          }
+        }
         emitter.flush();
       });
+      roundTools.clear();
       endedRoundLast = roundLast;
       roundLast = null;
       roundOpen = false;

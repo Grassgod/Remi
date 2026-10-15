@@ -1,0 +1,8 @@
+{
+  "supportsCompaction": true,
+  "supportsNotices": true,
+  "withoutCapability": {
+    "compaction": false,
+    "notices": false
+  }
+}

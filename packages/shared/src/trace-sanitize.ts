@@ -17,6 +17,7 @@
  */
 
 import type {
+  CommandAction,
   FileChange,
   LegacyTraceEvent,
   LegacyTraceEventInput,
@@ -240,6 +241,10 @@ export const TRACE_ITEM_DIFF_MAX_BYTES = 64 * 1024;
 export const TRACE_ITEM_DIFFS_MAX_BYTES = 256 * 1024;
 /** `title` / `tool` labels. */
 export const TRACE_ITEM_LABEL_MAX_BYTES = 512;
+/** A command's `command` line, and the budget all of its `actions[].command` share. */
+export const TRACE_ITEM_COMMAND_MAX_BYTES = 16 * 1024;
+/** A command's `cwd`. */
+export const TRACE_ITEM_CWD_MAX_BYTES = 4 * 1024;
 /** One serialized event; over it, the largest fields are dropped. */
 export const TRACE_EVENT_MAX_BYTES = 1024 * 1024;
 
@@ -347,6 +352,28 @@ export function capFileChanges(changes: readonly FileChange[]): CappedValue<File
   return { value, truncated };
 }
 
+/**
+ * Command actions: their `command` strings share one budget of
+ * `TRACE_ITEM_COMMAND_MAX_BYTES` (an action repeats part of the command line,
+ * so a heredoc parsed into actions must not outgrow the line's own cap). A
+ * string over what is left keeps its head and the marker.
+ */
+export function capCommandActions(actions: readonly CommandAction[]): CappedValue<CommandAction[]> {
+  let budget = TRACE_ITEM_COMMAND_MAX_BYTES;
+  let truncated = false;
+  const value = actions.map((action) => {
+    if (action.command === null) return action;
+    const limit = Math.max(budget, 0);
+    // Charge kept content only, never the marker, so re-capping is a no-op.
+    const command = capItemText(action.command, limit).value;
+    budget -= Math.min(utf8ByteLength(action.command), limit);
+    if (command === action.command) return action;
+    truncated = true;
+    return { ...action, command } as CommandAction;
+  });
+  return { value, truncated };
+}
+
 /** Apply every item cap for the item's type. Returns the same object when nothing changed. */
 export function capTraceItem<T extends TraceItem>(item: T): T {
   const next = { ...item } as TraceItem;
@@ -378,10 +405,23 @@ export function capTraceItem<T extends TraceItem>(item: T): T {
     case "reasoning":
       text(TRACE_ITEM_REASONING_MAX_BYTES);
       break;
-    case "command":
+    case "command": {
       label("tool");
       output(true);
+      let commandTruncated = false;
+      const line = (key: "command" | "cwd", maxBytes: number) => {
+        const value = next[key];
+        if (value === null) return;
+        const capped = capItemText(value, maxBytes);
+        if (capped.truncated) { next[key] = capped.value; commandTruncated = true; }
+      };
+      line("command", TRACE_ITEM_COMMAND_MAX_BYTES);
+      line("cwd", TRACE_ITEM_CWD_MAX_BYTES);
+      const actions = capCommandActions(next.actions);
+      if (actions.truncated) { next.actions = actions.value; commandTruncated = true; }
+      if (commandTruncated) { next.command_truncated = true; changed = true; }
       break;
+    }
     case "file_change": {
       label("tool");
       output(true);
@@ -429,6 +469,11 @@ function dropOversizedFields(item: TraceItem, maxBytes: number): TraceItem | nul
   if (typeof next.text === "string") candidates.push(["text", () => { next.text = ""; next.truncated = true; }]);
   if (next.input && typeof next.input === "object") {
     candidates.push(["input", () => { next.input = null; next.input_truncated = true; }]);
+  }
+  if (item.type === "command") {
+    if (typeof next.command === "string") candidates.push(["command", () => { next.command = null; next.command_truncated = true; }]);
+    if (typeof next.cwd === "string") candidates.push(["cwd", () => { next.cwd = null; next.command_truncated = true; }]);
+    if (item.actions.length > 0) candidates.push(["actions", () => { next.actions = []; next.command_truncated = true; }]);
   }
   if (Array.isArray(next.changes)) {
     candidates.push(["changes", () => {

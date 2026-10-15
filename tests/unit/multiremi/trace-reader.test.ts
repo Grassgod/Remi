@@ -8,7 +8,7 @@ import { legacyTraceFile, traceWriter } from "../../helpers/turn-trace.js";
 import { createStore, resetMultiremiTestEnv } from "./helpers.js";
 
 import {
-  commandItem, messageEvent, oversizedTraceCases, TRACE_BUDGET_FIXTURE_TS, TRACE_STORED_EVENT_MAX_BYTES,
+  bulkItem, commandItem, messageEvent, oversizedTraceCases, TRACE_BUDGET_FIXTURE_TS, TRACE_STORED_EVENT_MAX_BYTES,
   turnStartedEvent, storedEventBytes,
 } from "./trace-budget-fixtures.js";
 
@@ -72,7 +72,7 @@ describe("TraceReader view=events oversized first event", () => {
   it("keeps two 600KiB events on separate bounded pages", async () => {
     const trace = new InMemoryTraceStore(() => TRACE_BUDGET_FIXTURE_TS);
     const original = trace.append("tsk_trace", [0, 1].map((i) =>
-      ({ type: "item.completed" as const, item: commandItem(`cmd_${i}`, "a".repeat(600_000)) }))).events;
+      ({ type: "item.completed" as const, item: bulkItem(`cmd_${i}`, "a".repeat(600_000)) }))).events;
     expect(storedEventBytes(original[0]!)).toBeGreaterThan(600_000);
     const reader = readerOver(trace);
     for (const afterSeq of [0, 1]) {
@@ -125,12 +125,12 @@ describe("TraceReader view=turn", () => {
       writer.append("tsk_trace", [turnStartedEvent("tsk_trace"), oversizedTraceCases[0]!.input, messageEvent("msg:last", "last")]);
       const reader = readerOver(writer.store as InMemoryTraceStore);
       const page = await reader.readTurn("tsk_trace");
-      expect(page.items.map((item) => item.id)).toEqual(["cmd_ceiling"]);
+      expect(page.items.map((item) => item.id)).toEqual(["agent_ceiling"]);
       // At the event ceiling, the item leaves no room for the next one in a 1 MiB page.
       expect(Buffer.byteLength(JSON.stringify(page.items[0]))).toBeGreaterThan(TRACE_READ_MAX_BYTES - 64);
       expect(page.next_item_cursor).toBe(1);
       // A budget smaller than the first item still returns it, alone.
-      expect(await reader.readTurn("tsk_trace", 0, 200, 1000)).toMatchObject({ items: [{ id: "cmd_ceiling" }], next_item_cursor: 1 });
+      expect(await reader.readTurn("tsk_trace", 0, 200, 1000)).toMatchObject({ items: [{ id: "agent_ceiling" }], next_item_cursor: 1 });
       const last = await reader.readTurn("tsk_trace", 1);
       expect(last).toMatchObject({ items: [{ id: "msg:last", text: "last" }], next_item_cursor: null, head: 3 });
     } finally { await writer.stop(); }
@@ -141,8 +141,8 @@ describe("TraceReader view=turn", () => {
     try {
       writer.append("tsk_trace", [
         turnStartedEvent("tsk_trace"),
-        { type: "item.completed", item: commandItem("cmd_1", "a".repeat(500_000)) },
-        { type: "item.completed", item: commandItem("cmd_2", "b".repeat(500_000)) },
+        { type: "item.completed", item: bulkItem("cmd_1", "a".repeat(500_000)) },
+        { type: "item.completed", item: bulkItem("cmd_2", "b".repeat(500_000)) },
         messageEvent("msg:final", "done"),
       ]);
       writer.close("tsk_trace", "completed");

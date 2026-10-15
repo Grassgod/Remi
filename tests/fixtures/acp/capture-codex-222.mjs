@@ -1,12 +1,19 @@
 // codex-acp 2.2.2 frames for Remi's AIR client (terminal_output: true, no
 // `plan` capability, session.compaction + session.notices).
 //
-// The compaction and notice frames come from the bundle's own pure modules
-// (src/CodexSessionCompactions.ts, src/SessionNotice.ts), sliced out of
-// dist/index.js and evaluated in isolation. The tool and message frames are
-// written from the renderer/reporter code paths cited next to each one, because
-// the bundle's renderer cannot run outside a live app-server.
+// Which frames come from the bridge and which are scripted:
+// - From the bridge: the compaction frames and the notice, made by the
+//   bundle's own pure modules (src/CodexSessionCompactions.ts,
+//   src/SessionNotice.ts) sliced out of dist/index.js and evaluated in
+//   isolation, and the capability evidence (`clientSupportsCompaction` /
+//   `clientSupportsNotices` on Remi's capabilities).
+// - Scripted here: every other frame (messages, reasoning, tools, plans, usage
+//   and the typed session failures), written from the renderer/reporter code
+//   paths cited next to each one, because the bundle's renderer cannot run
+//   outside a live app-server.
 // Usage: bun tests/fixtures/acp/capture-codex-222.mjs <codex-acp@2.2.2 dist/index.js> tests/fixtures/acp
+// It writes codex-222-turn-notifications.json and
+// codex-222-capability-evidence.json (both committed).
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 

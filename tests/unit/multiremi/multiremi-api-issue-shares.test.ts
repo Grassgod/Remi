@@ -10,7 +10,7 @@ import { createLocalStore as createStore, db, resetMultiremiTestEnv } from "./he
 import { TRACE_READ_MAX_BYTES } from "@multiremi/trace/trace-reader.js";
 import { traceWriter } from "../../helpers/turn-trace.js";
 import {
-  commandItem, messageEvent, oversizedTraceCases, TRACE_BUDGET_FIXTURE_TS, TRACE_STORED_EVENT_MAX_BYTES,
+  bulkItem, messageEvent, oversizedTraceCases, TRACE_BUDGET_FIXTURE_TS, TRACE_STORED_EVENT_MAX_BYTES,
   storedEventBytes, turnStartedEvent,
 } from "./trace-budget-fixtures.js";
 
@@ -90,7 +90,7 @@ describe("Multiremi API - issue sharing", () => {
       const daemon = new InMemoryDaemonTraceReader(() => trace);
       const { task, get } = await sharedTraceFixture(trace, endpoint, daemon);
       const original = trace.append(task.id, [0, 1].map((i) =>
-        ({ type: "item.completed" as const, item: commandItem(`cmd_${i}`, "\u0001".repeat(100_000)) }))).events;
+        ({ type: "item.completed" as const, item: bulkItem(`cmd_${i}`, "\u0001".repeat(100_000)) }))).events;
       expect(storedEventBytes(original[0]!)).toBeGreaterThan(600_000);
       for (const afterSeq of [0, 1]) {
         // This source intentionally ignores the byte budget, exercising B5 itself.
@@ -112,13 +112,13 @@ describe("Multiremi API - issue sharing", () => {
         expect(first.status).toBe(200);
         expect(first.page).toMatchObject({ view: "turn", format: "v2", state: "ok", closed: false, head: 3,
           next_item_cursor: 1, turn: { id: task.id, status: "running" } });
-        expect(first.page.items.map((item: { id: string }) => item.id)).toEqual(["cmd_ceiling"]);
+        expect(first.page.items.map((item: { id: string }) => item.id)).toEqual(["agent_ceiling"]);
         expect(Buffer.byteLength(first.text)).toBeLessThanOrEqual(TRACE_STORED_EVENT_MAX_BYTES + 2048);
         const rest = await get(`?item_cursor=${first.page.next_item_cursor}`);
         expect(rest.page).toMatchObject({ next_item_cursor: null, items: [{ id: "msg:last", text: "last" }] });
         writer.close(task.id, "completed");
         const closed = await get("?view=turn&limit=1");
-        expect(closed.page).toMatchObject({ closed: true, turn: { status: "completed" }, items: [{ id: "cmd_ceiling" }], next_item_cursor: 1 });
+        expect(closed.page).toMatchObject({ closed: true, turn: { status: "completed" }, items: [{ id: "agent_ceiling" }], next_item_cursor: 1 });
         for (const query of ["?after_seq=1", "?view=events&item_cursor=1", "?view=fragments", "?item_cursor=-1", "?max_bytes=0"]) {
           expect((await get(query)).status, query).toBe(400);
         }
@@ -326,8 +326,8 @@ describe("Multiremi API - issue sharing", () => {
     expect(sharedTrace.status).toBe(200);
     expect(await sharedTrace.json()).toMatchObject({ view: "turn", state: "ok", source: "daemon", items: [{ text: "A visible task message" }] });
     traceStore.append(task.id, [
-      { type: "item.completed", item: commandItem("cmd_a", "a".repeat(600_000)) },
-      { type: "item.completed", item: commandItem("cmd_b", "b".repeat(600_000)) },
+      { type: "item.completed", item: bulkItem("cmd_a", "a".repeat(600_000)) },
+      { type: "item.completed", item: bulkItem("cmd_b", "b".repeat(600_000)) },
     ]);
     for (const [path, credential] of [
       [tracePath, viewer.token],

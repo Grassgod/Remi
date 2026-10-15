@@ -256,7 +256,9 @@ function claudeClass(facts: ToolFacts): ToolClass {
   const input = facts.input;
   const path = str(input?.file_path) ?? str(input?.path) ?? facts.locations[0] ?? null;
   switch (name) {
-    case "Bash": {
+    case "Bash":
+    case "PowerShell": {
+      // Both use the bridge's bash reporter (CA/tool-calls/reporters/index.js:13).
       // rawInput is withheld while AIR input streams (CA/tool-calls/renderer.js:
       // 91-95); the title is the command once known (bash.js:7).
       const title = facts.title && facts.title !== "Terminal" ? facts.title : null;

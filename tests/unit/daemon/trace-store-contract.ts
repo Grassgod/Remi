@@ -1,9 +1,9 @@
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it, spyOn } from "bun:test";
 import type { TraceEventInput, TraceItem, TraceTurn, TraceTurnSnapshot } from "@multiremi/contracts/trace.js";
 import { TRACE_SNAPSHOT_PART_MAX_BYTES } from "@multiremi/contracts/trace-file.js";
 import type { TraceStore } from "@multiremi/worker/trace-store.js";
 import { traceEventBytes } from "@multiremi/worker/trace-store.js";
-import { TRACE_ITEM_TEXT_MAX_BYTES, TRACE_TRUNCATION_MARKER } from "@shared/trace-sanitize.js";
+import { TRACE_EVENT_MAX_BYTES, TRACE_ITEM_TEXT_MAX_BYTES, TRACE_TRUNCATION_MARKER } from "@shared/trace-sanitize.js";
 
 export const CONTRACT_NOW = "2026-09-27T00:00:00.000Z";
 
@@ -59,13 +59,44 @@ export function describeTraceStoreContract(
       const [capped] = store.append("tsk_one", contractEvents("c".repeat(TRACE_ITEM_TEXT_MAX_BYTES + 10))).events;
       expect(textOf(capped)).toBe("c".repeat(TRACE_ITEM_TEXT_MAX_BYTES) + TRACE_TRUNCATION_MARKER);
       expect((capped as unknown as { item: { truncated?: true } }).item.truncated).toBe(true);
-      // An event that cannot be brought under 1 MiB is dropped and takes no seq.
-      const opaque = { type: "future.event", blob: "x".repeat(1024 * 1024 + 1) } as unknown as TraceEventInput;
-      expect(store.append("tsk_one", [opaque]).events).toEqual([]);
+      // An event that cannot be brought under 1 MiB is dropped, takes no seq, and says so.
+      const warn = spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        const opaque = { type: "future.event", blob: "x".repeat(1024 * 1024 + 1) } as unknown as TraceEventInput;
+        expect(store.append("tsk_one", [opaque]).events).toEqual([]);
+        const options = Array.from({ length: 3000 }, (_, i) => ({ option_id: `o${i}`, name: "n".repeat(512), kind: "allow_once" }));
+        const permission = { type: "item.started", item: { id: "perm:big", parent_id: null, status: "in_progress",
+          started_at: CONTRACT_NOW, completed_at: null, type: "permission", tool_item_id: null, title: "t", message_id: null,
+          options, decision: null, outcome: null, responded_by: null, reply_message_id: null } } as TraceEventInput;
+        expect(store.append("tsk_one", [permission]).events).toEqual([]);
+        const drops = warn.mock.calls.filter((call) => String(call[0]).includes("Trace event dropped"));
+        expect(drops).toHaveLength(2);
+        expect(drops[0]![1]).toMatchObject({ taskId: "tsk_one", type: "future.event", itemId: null });
+        expect(drops[1]![1]).toMatchObject({ taskId: "tsk_one", type: "item.started", itemId: "perm:big", itemType: "permission" });
+      } finally {
+        warn.mockRestore();
+      }
       expect(store.head("tsk_one")).toEqual({ head: 1, closed: false });
       // Other unknown bodies pass through untouched: payloads are opaque to the store.
       const [future] = store.append("tsk_one", [{ type: "future.event", note: "kept" } as unknown as TraceEventInput]).events;
       expect(future).toMatchObject({ seq: 2, type: "future.event", note: "kept" });
+    });
+
+    it("stores a 600 KiB heredoc command with its command capped instead of dropping it", () => {
+      const store = create();
+      const heredoc = `cat <<'EOF' > big.txt\n${"x".repeat(600 * 1024)}\nEOF`;
+      const item = { id: "toolu_big", parent_id: null, status: "completed", started_at: CONTRACT_NOW, completed_at: CONTRACT_NOW,
+        type: "command", tool: "Bash", source: "shell", command: heredoc, cwd: "/repo", actions: [{ type: "unknown", command: heredoc }],
+        output: "", exit_code: 0, duration_ms: 5 } as TraceItem;
+      const warn = spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        const [stored] = store.append("tsk_one", [{ type: "item.completed", item }]).events;
+        expect(stored).toMatchObject({ seq: 1, type: "item.completed", item: { id: "toolu_big", command_truncated: true, exit_code: 0 } });
+        expect(traceEventBytes(stored!)).toBeLessThan(TRACE_EVENT_MAX_BYTES);
+        expect(warn.mock.calls.some((call) => String(call[0]).includes("Trace event dropped"))).toBe(false);
+      } finally {
+        warn.mockRestore();
+      }
     });
 
     for (const status of ["completed", "failed", "cancelled"] as const) {

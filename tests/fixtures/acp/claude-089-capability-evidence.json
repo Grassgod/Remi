@@ -1,0 +1,8 @@
+{
+  "clientSupportsCompactionUpdates": true,
+  "clientSupportsNotices": true,
+  "withoutCapability": {
+    "compaction": false,
+    "notices": false
+  }
+}

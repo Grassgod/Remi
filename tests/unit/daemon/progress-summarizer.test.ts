@@ -396,11 +396,26 @@ describe("TaskProgressTracker", () => {
 
   it("counts non-digestible completed items toward N, and other events not at all", () => {
     const tracker = new TaskProgressTracker(2, 0, 12_000, 0);
-    const steer = completed({ ...base("steer:1"), type: "user_message", origin: "steer", text: "x", message_ids: [], attachments: [], steer: null });
-    tracker.record([delta(), delta(), steer]);
+    const steer = (id: string) => completed({ ...base(id), type: "user_message", origin: "steer", text: "x", message_ids: [], attachments: [], steer: null });
+    tracker.record([delta(), delta(), steer("steer:1")]);
     expect(tracker.shouldTrigger(1)).toBe(false);
-    tracker.record([steer]);
+    tracker.record([steer("steer:2")]);
     expect(tracker.shouldTrigger(1)).toBe(true);
+  });
+
+  it("counts and digests an item once when it completes again (phase change, late hook, decline)", () => {
+    const tracker = new TaskProgressTracker(2, 0, 12_000, 0);
+    const item = toolItem("Read", { file: "a.ts" });
+    tracker.record([completed(item)]);
+    tracker.record([completed({ ...item, status: "declined" }), completed(item)]);
+    expect(tracker.pendingMessageCount()).toBe(1);
+    expect(tracker.shouldTrigger(1)).toBe(false);
+    const { digest, messageCount } = tracker.drain(1);
+    expect(messageCount).toBe(1);
+    expect(digest.split("\n").filter((line) => line.includes("tool Read"))).toHaveLength(1);
+    // Still the same item after a drain.
+    tracker.record([completed(item)]);
+    expect(tracker.pendingMessageCount()).toBe(0);
   });
 
   it("drain resets the window and reports the digest", () => {

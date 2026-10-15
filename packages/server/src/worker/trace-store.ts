@@ -33,7 +33,10 @@ import {
   type TraceFileFormatVersion,
   type TraceFileSnapshotLine,
 } from "@multiremi/contracts/trace-file.js";
+import { createLogger } from "@shared/logger.js";
 import { capTraceEvent } from "@shared/trace-sanitize.js";
+
+const log = createLogger("multiremi-trace-store");
 
 export type { TraceEndStatus } from "@multiremi/contracts/trace-file.js";
 
@@ -214,7 +217,7 @@ export class InMemoryTraceStore implements TraceStore {
 
     const stored: TraceEvent[] = [];
     for (const event of events) {
-      const row = sanitizeStoredEvent(event, this.now());
+      const row = sanitizeStoredEvent(event, this.now(), taskId);
       if (!row) continue;
       state.head += 1;
       const sequenced = { ...row, seq: state.head } as TraceEvent;
@@ -290,13 +293,24 @@ export class InMemoryTraceStore implements TraceStore {
 /**
  * The stored form of one event body: the item caps and the 1 MiB ceiling
  * re-applied (`capTraceEvent`), plus the write time. Null for an event that
- * cannot be brought under the ceiling; the caller drops it. Bodies of a type
- * this contract does not know pass through untouched (they are opaque to the
- * store, as they are to the hub).
+ * cannot be brought under the ceiling; the caller drops it, and this logs a
+ * warning naming the event so the gap is never silent. Bodies of a type this
+ * contract does not know pass through untouched (they are opaque to the store,
+ * as they are to the hub).
  */
-export function sanitizeStoredEvent(event: TraceEventInput, ts: string): Omit<TraceEvent, "seq"> | null {
+export function sanitizeStoredEvent(event: TraceEventInput, ts: string, taskId: string): Omit<TraceEvent, "seq"> | null {
   const capped = capTraceEvent(event);
-  if (!capped) return null;
+  if (!capped) {
+    const item = "item" in event && event.item && typeof event.item === "object" ? event.item as { id?: unknown; type?: unknown } : null;
+    log.warn("Trace event dropped: over the event ceiling after its fields were dropped", {
+      taskId,
+      type: event.type,
+      itemId: typeof item?.id === "string" ? item.id : null,
+      itemType: typeof item?.type === "string" ? item.type : null,
+      bytes: Buffer.byteLength(JSON.stringify(event), "utf8"),
+    });
+    return null;
+  }
   // `seq` and `ts` are the store's: a producer's own are overwritten.
   const { seq: _seq, ts: _ts, ...body } = capped as TraceEventInput & { seq?: unknown; ts?: unknown };
   return { ts, ...body } as Omit<TraceEvent, "seq">;

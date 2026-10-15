@@ -4340,7 +4340,8 @@ export class MultiremiDaemon {
         } catch (err) {
           turnError = err;
         } finally {
-          this.recordTrace(task.id, () => trace.promptEnded());
+          // A steer interrupt aborts the round: its still-open tools end `stopped`.
+          this.recordTrace(task.id, () => trace.promptEnded({ aborted: turnAbort.signal.aborted }));
           steerFeed.setInterrupt(null);
           signal.removeEventListener("abort", onTaskAbort);
           if (graceTimer) clearTimeout(graceTimer);

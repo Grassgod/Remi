@@ -72,6 +72,9 @@ describe("classifyTool", () => {
     expect(c("Bash", { command: "ls -la" })).toMatchObject({ type: "command", source: "shell", command: "ls -la", actions: null });
     expect(classifyTool("claude", facts({ _meta: { claudeCode: { toolName: "Bash" } }, title: "git status" }))).toMatchObject({ command: "git status" });
     expect(classifyTool("claude", facts({ _meta: { claudeCode: { toolName: "Bash" } }, title: "Terminal" }))).toMatchObject({ command: null });
+    // PowerShell shares the bridge's bash reporter (CA/tool-calls/reporters/index.js:13).
+    expect(c("PowerShell", { command: "Get-ChildItem" })).toMatchObject({ type: "command", source: "shell", command: "Get-ChildItem", actions: null });
+    expect(classifyTool("claude", facts({ _meta: { claudeCode: { toolName: "PowerShell" } }, title: "Get-Date" }))).toMatchObject({ type: "command", command: "Get-Date" });
     expect(c("Read", { file_path: "/r/x.ts" })).toMatchObject({ type: "command", source: "tool", actions: [{ type: "read", path: "/r/x.ts" }] });
     expect(c("Grep", { pattern: "foo", path: "src" })).toMatchObject({ actions: [{ type: "search", query: "foo", path: "src" }] });
     expect(c("LS", { path: "src" })).toMatchObject({ actions: [{ type: "list_files", path: "src" }] });

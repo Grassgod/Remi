@@ -3,7 +3,22 @@
 // exact clientCapabilities Remi sends (packages/acp/src/client.ts initialize()).
 // Usage: bun tests/fixtures/acp/capture-claude-089.mjs <claude-agent-acp@0.89.0 dist> tests/fixtures/acp
 // Run it against a private copy of the npm package whose node_modules resolves
-// `diff` (dist/diff.js imports it); it writes the claude-089-*.json fixtures.
+// `diff` (dist/diff.js imports it); it writes the claude-089-*.json fixtures and
+// claude-089-capability-evidence.json (both committed).
+//
+// Which frames come from the bridge and which are scripted:
+// - From the bridge: every `tool_call` / `tool_call_update` frame is built by
+//   its `AcpToolCallRenderer` (toolCall, refinement, result, progress,
+//   hookResult) and filtered by its `ToolCallFieldTracker`; the compaction
+//   frames come from its `ContextCompactionLifecycle`; the notice from
+//   `noticeOrTranscriptUpdate`; the capability evidence from
+//   `clientSupportsCompactionUpdates` / `clientSupportsNotices`.
+// - Scripted here: the conversation itself (which tools run, their inputs,
+//   `tool_result` contents and structured results, and the frame order); every
+//   `agent_message_chunk` / `agent_thought_chunk` and `usage_update` frame,
+//   written in the shape acp-agent.js streams; and the
+//   `_meta.claudeCode.parentToolUseId` stamp on subagent frames, which
+//   `push(update, parent)` adds the way acp-agent.js:502-510 does.
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 

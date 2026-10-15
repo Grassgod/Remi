@@ -1,4 +1,4 @@
-import { expect, it } from "bun:test";
+import { expect, it, spyOn } from "bun:test";
 import { isTraceFileEvent } from "@multiremi/contracts/trace-file.js";
 import { capTraceEvent, TRACE_EVENT_MAX_BYTES } from "@shared/trace-sanitize.js";
 import { InMemoryTraceStore } from "@multiremi/worker/trace-store.js";
@@ -20,16 +20,24 @@ for (const { name, input } of oversizedTraceCases) {
   });
 }
 
-it("drops a body one byte over the ceiling instead of storing it", () => {
+it("one byte over the ceiling, an item loses its largest field and an opaque body is dropped", () => {
   const store = new InMemoryTraceStore(() => TRACE_BUDGET_FIXTURE_TS);
-  for (const { input } of oversizedTraceCases) {
-    const over = JSON.parse(JSON.stringify(input)) as Record<string, any>;
-    if (over.item) over.item.command += "a";
-    else over.blob += "a";
-    expect(traceJsonBytes(over)).toBe(TRACE_EVENT_MAX_BYTES + 1);
-    expect(store.append("tsk_over", [over as never]).events).toEqual([]);
+  const warn = spyOn(console, "warn").mockImplementation(() => {});
+  try {
+    for (const { input } of oversizedTraceCases) {
+      const over = JSON.parse(JSON.stringify(input)) as Record<string, any>;
+      if (over.item) over.item.prompt += "a";
+      else over.blob += "a";
+      expect(traceJsonBytes(over)).toBe(TRACE_EVENT_MAX_BYTES + 1);
+      const stored = store.append("tsk_over", [over as never]).events;
+      if (over.item) expect(stored).toMatchObject([{ item: { id: over.item.id, prompt: null } }]);
+      else expect(stored).toEqual([]);
+    }
+    expect(warn.mock.calls.filter((call) => String(call[0]).includes("Trace event dropped"))).toHaveLength(1);
+  } finally {
+    warn.mockRestore();
   }
-  expect(store.head("tsk_over")).toEqual({ head: 0, closed: false });
+  expect(store.head("tsk_over")).toEqual({ head: 2, closed: false });
 });
 
 it("bounds a stored line by the ceiling plus the largest ts and seq", () => {

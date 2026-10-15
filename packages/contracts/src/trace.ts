@@ -200,6 +200,8 @@ export interface TraceCommandItem extends TraceItemBase {
   command: string | null;
   cwd: string | null;
   actions: CommandAction[];
+  /** `command`, `cwd` or an action's `command` was capped (or dropped to fit an event). */
+  command_truncated?: true;
   output: string | null;
   output_truncated?: true;
   exit_code: number | null;
@@ -576,7 +578,7 @@ export function isTraceItem(value: unknown): value is TraceItem {
     case "command":
       return typeof v.tool === "string" && isOneOf(v.source, ["shell", "tool"]) && isNullableString(v.command)
         && isNullableString(v.cwd) && Array.isArray(v.actions) && v.actions.every(isCommandAction)
-        && isNullableString(v.output) && isOptionalTrue(v.output_truncated)
+        && isOptionalTrue(v.command_truncated) && isNullableString(v.output) && isOptionalTrue(v.output_truncated)
         && (v.exit_code === null || Number.isSafeInteger(v.exit_code)) && isNullableNumber(v.duration_ms);
     case "file_change":
       return typeof v.tool === "string" && Array.isArray(v.changes) && v.changes.every(isFileChange)
