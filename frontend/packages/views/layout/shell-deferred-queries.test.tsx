@@ -64,6 +64,7 @@ const getSessionLog = vi.hoisted(() => vi.fn(async (_sessionId: string, _params:
 const subscribeStream = vi.hoisted(() => vi.fn(() => ({ unsubscribe: vi.fn() })));
 const wsTransport = vi.hoisted(() => ({ subscribeStream, onReconnect: () => () => {} }));
 const getPendingChatTask = vi.hoisted(() => vi.fn(async () => ({ task_id: "tsk_guard_live", status: "running" })));
+const getChatQueue = vi.hoisted(() => vi.fn(async () => ({ items: [], paused: null })).mockName("getChatQueue"));
 const listWorkspaces = vi.hoisted(() => vi.fn(async () => [{ id: "ws-1", name: "Acme", slug: "acme" }]));
 
 const navigation = vi.hoisted(() => ({ pathname: "/acme/issues" }));
@@ -149,7 +150,7 @@ beforeEach(() => {
     listAgents, listSquads, getAgentTaskSnapshot, listRuntimes, listMyInvitations,
     listPins, listInboxPage, getLatestCliVersion, listIssues, listChatSessions,
     listPendingChatTasks, listWorkspaces, getTaskTrace, listMessages, listDecisionMessages,
-    listChatMessagesPage, getSessionLog, subscribeStream, getPendingChatTask, getIssue, getProject,
+    listChatMessagesPage, getSessionLog, subscribeStream, getPendingChatTask, getIssue, getProject, getChatQueue,
   ]) spy.mockClear();
   getSessionLog.mockImplementation(async (sessionId: string, params: { anchor?: number }) => {
     const entries = sessionId === "cs_guard_cached" && params.anchor !== 0
@@ -178,6 +179,7 @@ beforeEach(() => {
     listChatMessagesPage,
     getSessionLog,
     getPendingChatTask,
+    getChatQueue,
     listWorkspaces,
     listMembers: async () => [],
     listProjects: async () => ({ projects: [] }),
@@ -380,9 +382,12 @@ describe("complete shell observer guard (MUL-472 R1)", () => {
       [chatKeys.sessions("ws-1"), [{ id: sessionId, agent_id: "agt_guard", status: "active", title: "Cached chat" }]],
       [chatKeys.pendingTasks("ws-1"), { tasks: [] }],
       [chatKeys.pendingTask(sessionId), { task_id: taskId, status: "running" }],
+      [chatKeys.queue("ws-1", sessionId), { items: [], paused: null }],
       [["task-trace", taskId], CACHED_TRACE], [[...chatKeys.humanRequests(taskId), sessionId], []],
     ];
     for (const [key, data] of cached) client.setQueryData(key, data);
+    // The reopened chat still finds its session, so the queue mounts again.
+    listChatSessions.mockImplementation(async () => [{ id: sessionId, agent_id: "agt_guard", status: "active", title: "Cached chat" }] as never);
     act(() => { useChatStore.getState().setActiveSession(sessionId); });
     act(() => { useChatStore.getState().setOpen(true); });
     const startedKeys: Array<readonly unknown[]> = [];
@@ -398,10 +403,13 @@ describe("complete shell observer guard (MUL-472 R1)", () => {
       // trace lazy even with the real virtualized row mounted.
       await waitFor(() => expect(getSessionLog).toHaveBeenCalledTimes(2));
       await waitFor(() => expect(view.getByText("Cached reply")).toBeTruthy());
+      // The follow-up queue is observed only inside the visible chat.
+      await waitFor(() => expect(client.getQueryCache().find({ queryKey: chatKeys.queue("ws-1", sessionId) })?.isActive()).toBe(true));
       act(() => { useChatStore.getState().setOpen(false); });
       await act(async () => {});
       getSessionLog.mockClear();
       subscribeStream.mockClear();
+      getChatQueue.mockClear();
       await act(async () => {
         for (const [queryKey] of cached) await client.invalidateQueries({ queryKey, exact: true });
       });
@@ -410,6 +418,7 @@ describe("complete shell observer guard (MUL-472 R1)", () => {
       expect(listDecisionMessages).not.toHaveBeenCalled();
       expect(getIssue).not.toHaveBeenCalled();
       expect(getProject).not.toHaveBeenCalled();
+      expect(getChatQueue).not.toHaveBeenCalled();
       act(() => { markRouteContentReady(navigation.pathname); });
       await act(async () => { flushIdle(); });
       await waitFor(() => expect(listPendingChatTasks).toHaveBeenCalledTimes(1));
@@ -422,6 +431,7 @@ describe("complete shell observer guard (MUL-472 R1)", () => {
       expect(listDecisionMessages).not.toHaveBeenCalled();
       expect(getSessionLog).not.toHaveBeenCalled();
       expect(subscribeStream).not.toHaveBeenCalled();
+      expect(getChatQueue).not.toHaveBeenCalled();
       for (const queryKey of [workspaceKeys.members("ws-1"), projectKeys.list("ws-1")]) {
         expect(client.getQueryCache().find({ queryKey })?.isActive()).toBe(false);
       }
@@ -431,6 +441,8 @@ describe("complete shell observer guard (MUL-472 R1)", () => {
         expect(listMessages).toHaveBeenCalledWith(sessionId, { message_kind: "decision", cursor: undefined });
         expect(subscribeStream).toHaveBeenCalledTimes(1);
         expect(getPendingChatTask).toHaveBeenCalledTimes(1);
+        expect(getChatQueue).toHaveBeenCalledWith(sessionId);
+        expect(getChatQueue).toHaveBeenCalledTimes(1);
         for (const queryKey of [workspaceKeys.members("ws-1"), projectKeys.list("ws-1")]) {
           expect(client.getQueryCache().find({ queryKey })?.isActive()).toBe(true);
         }
@@ -441,6 +453,7 @@ describe("complete shell observer guard (MUL-472 R1)", () => {
       expect(getSessionLog).not.toHaveBeenCalled();
       expect(listChatMessagesPage).not.toHaveBeenCalled();
     } finally {
+      listChatSessions.mockImplementation(async () => []);
       view.unmount(); unsubscribe(); client.clear();
     }
   });

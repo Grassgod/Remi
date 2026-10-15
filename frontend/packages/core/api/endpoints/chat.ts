@@ -68,10 +68,15 @@ export class ChatEndpoints {
     return session;
   }
 
+  /**
+   * Sends now: a running turn takes the message as a steer (ADR 0020). The
+   * wake is explicit so a different server default cannot turn a steer into
+   * a deferred message; queueing goes through the follow-up queue instead.
+   */
   async sendChatMessage(sessionId: string, content: string, attachmentIds?: string[], clientId?: string): Promise<SendChatMessageResponse> {
     const session = await this.getChatSession(sessionId);
     const result = await new MessagesEndpoints(this.http).sendMessage(sessionId, {
-      body_md: content, message_kind: "request", to: { type: "agent", ref: session.agent_id },
+      body_md: content, message_kind: "request", to: { type: "agent", ref: session.agent_id }, wake_requested: "now",
       attachment_ids: attachmentIds?.length ? attachmentIds : undefined, dedupe_key: clientId,
     });
     // The message is committed. A supplemental read must not turn it into a failed send.

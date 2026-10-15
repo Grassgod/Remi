@@ -50,6 +50,7 @@ import {
 } from "./utils/parse-markdown-chunked";
 import type { MentionItem } from "./extensions/mention-suggestion";
 import { createEditorExtensions } from "./extensions";
+import type { SubmitOptions } from "./extensions/submit-shortcut";
 import { uploadAndInsertFile } from "./extensions/file-upload";
 import { preprocessMarkdown } from "./utils/preprocess";
 import { openLink, isMentionHref } from "./utils/link-handler";
@@ -81,13 +82,19 @@ interface ContentEditorProps {
   placeholder?: string;
   className?: string;
   debounceMs?: number;
-  onSubmit?: () => void;
+  /** Mod-Enter submits with `invert: false`; see `invertibleSubmit`. */
+  onSubmit?: (options: SubmitOptions) => void;
   onBlur?: () => void;
   onUploadFile?: (file: File) => Promise<UploadResult | null>;
   /** Show the floating formatting toolbar on text selection. Defaults true. */
   showBubbleMenu?: boolean;
   /** When true, bare Enter submits (chat-style). Mod-Enter always submits. */
   submitOnEnter?: boolean;
+  /**
+   * When true, Mod-Shift-Enter submits with `invert: true` (Chat's other
+   * follow-up mode). Other editors leave the key unbound. Defaults false.
+   */
+  invertibleSubmit?: boolean;
   /**
    * ID of the issue this editor belongs to. When set, the bubble menu exposes
    * a "Create sub-issue from selection" action that parents the new issue
@@ -121,6 +128,9 @@ interface ContentEditorProps {
 interface ContentEditorRef {
   getMarkdown: () => string;
   clearContent: () => void;
+  /** Replace the document with `markdown` without emitting `onUpdate`; the
+   *  caller already holds the new value. */
+  setContent: (markdown: string) => void;
   focus: () => void;
   /** Drop focus from the editor — used by chat after send so the caret
    *  stops competing with the StatusPill / streaming reply for the user's
@@ -148,6 +158,7 @@ const ContentEditor = forwardRef<ContentEditorRef, ContentEditorProps>(
       onUploadFile,
       showBubbleMenu = true,
       submitOnEnter = false,
+      invertibleSubmit = false,
       currentIssueId,
       disableMentions = false,
       mentionMode = "default",
@@ -224,6 +235,7 @@ const ContentEditor = forwardRef<ContentEditorRef, ContentEditorProps>(
         onSubmitRef,
         onUploadFileRef,
         submitOnEnter,
+        invertibleSubmit,
         disableMentions,
         mentionMode,
         getMentionContextItems: () => mentionContextItemsRef.current,
@@ -263,6 +275,27 @@ const ContentEditor = forwardRef<ContentEditorRef, ContentEditorProps>(
         },
       },
     });
+
+    // Replaces the document without emitting onUpdate. Large markdown takes the
+    // same chunked path as mount (see parseMarkdownChunked).
+    const replaceContent = (incoming: string) => {
+      if (!editor || editor.isDestroyed) return;
+      const manager =
+        incoming.length > MARKDOWN_CHUNK_THRESHOLD
+          ? (editor.storage as { markdown?: { manager?: MarkdownManagerLike } })
+              .markdown?.manager
+          : undefined;
+      if (manager) {
+        editor.commands.setContent(parseMarkdownChunked(manager, incoming), {
+          emitUpdate: false,
+        });
+      } else {
+        editor.commands.setContent(incoming, {
+          emitUpdate: false,
+          contentType: "markdown",
+        });
+      }
+    };
 
     // Cleanup debounce on unmount
     useEffect(() => {
@@ -309,21 +342,7 @@ const ContentEditor = forwardRef<ContentEditorRef, ContentEditorProps>(
       // server save → self-write loop.
       const { from, to } = editor.state.selection;
       // Same chunked path on WS-driven re-parse of a large description.
-      const manager =
-        incoming.length > MARKDOWN_CHUNK_THRESHOLD
-          ? (editor.storage as { markdown?: { manager?: MarkdownManagerLike } })
-              .markdown?.manager
-          : undefined;
-      if (manager) {
-        editor.commands.setContent(parseMarkdownChunked(manager, incoming), {
-          emitUpdate: false,
-        });
-      } else {
-        editor.commands.setContent(incoming, {
-          emitUpdate: false,
-          contentType: "markdown",
-        });
-      }
+      replaceContent(incoming);
 
       // Clamp prior selection to the new doc size so the caret doesn't snap
       // to position 0 after ProseMirror replaces the document.
@@ -334,12 +353,20 @@ const ContentEditor = forwardRef<ContentEditorRef, ContentEditorProps>(
       });
 
       lastEmittedRef.current = stripBlobUrls(editor.getMarkdown()).trimEnd();
+      // eslint-disable-next-line react-hooks/exhaustive-deps -- replaceContent reads the same editor
     }, [defaultValue, editor]);
 
     useImperativeHandle(ref, () => ({
       getMarkdown: () => stripBlobUrls(editor?.getMarkdown() ?? ""),
       clearContent: () => {
         editor?.commands.clearContent();
+      },
+      setContent: (markdown: string) => {
+        if (!editor || editor.isDestroyed) return;
+        // A pending debounced onUpdate would report the replaced document.
+        if (debounceRef.current) clearTimeout(debounceRef.current);
+        replaceContent(markdown ? preprocessMarkdown(markdown) : "");
+        lastEmittedRef.current = stripBlobUrls(editor.getMarkdown()).trimEnd();
       },
       focus: () => {
         editor?.commands.focus();

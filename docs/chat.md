@@ -107,8 +107,27 @@ Project 资源列表变化或项目不可用时，已有工作副本保留。
 ## 消息与执行队列
 
 消息写入对话日志。正在运行的轮收到定向的 now 消息会插话；pending 轮合并后续消息，领取时读取连续输入范围。同一 lane 只有一个 pending 轮。
+运行中有两种后续发送方式，取舍见 [ADR 0020](adr/0020-chat-follow-up-queue-and-native-steering.md)：
 
-队列是未读消息，按 seq 顺序读取。未读消息可编辑或删除，已进入轮输入的消息修改返回 409；编辑和删除留下日志标记。收尾用 turn wrap-up，取消用 turn cancel，重试在同一轮新增 attempt。取消不撤销已执行的工具操作。
+- **引导**：普通发送 `POST /api/sessions/:id/messages`，`wake_requested:"now"`，行为不变，送进正在运行的这一轮。未读消息可用 `PATCH`/`DELETE /api/messages/:id` 编辑或删除，已进入轮输入的返回 409；编辑和删除留下日志标记。
+- **排队**：`POST /api/sessions/:id/queue` 把消息存进服务端队列表，不写对话日志。lane 没有 pending、running 或 awaiting_human 轮且未暂停时立即放行；否则在当前轮 completed 的终态事务里按入队顺序放行。放行把每条转成普通成员 now request，第一条建 pending 轮，其余合并进同一轮，正文全部内联；它们排在本轮回复之后进入日志。
+
+排队的条目只有原发送人能改：`PATCH .../queue/:qid` 可带 `expected_revision`，`DELETE` 幂等，`POST .../queue/:qid/steer` 立即放行这一条（改为引导，重复调用返回同一条消息）。
+已被轮放行的条目再改或引导返回 409 `queued_message_consumed`，版本不符返回 409 `revision_conflict`，归档的 Chat 入队、引导和继续返回 409。每个 Chat 最多 50 条未放行条目，每条最多 10 个附件。
+
+队列会暂停。`interrupted` 与 `send_failed` 期间轮结束也不放行；`turn_ended` 在该 lane 下一次有轮 completed 时自动解除并放行：
+
+| 原因 | 触发 | 解除 |
+|---|---|---|
+| `interrupted` | 成员停止当前轮（`POST /api/turns/:id/cancel`） | 只由 `POST .../queue/resume` 解除，期间轮 completed 也不放行 |
+| `turn_ended` | 轮 failed，或被成员以外的身份（agent、supervisor 等）取消 | 该 lane 任一轮 completed（包括失败轮重试成功、之后的直接发送完成）时自动解除并放行；或 resume |
+| `send_failed` | 放行某条失败；该条标为 failed，后面的条目不越过它 | resume，或编辑、删除、引导该条后不再有 failed 条目 |
+
+resume 清除暂停、把 failed 条目重置为 queued，lane 空闲时全部放行；队列为空时暂停自动清除。
+归档时被取消的轮既不放行也不暂停；恢复后条目保留，resume、下一次入队或下一轮 completed 时放行。`wake=next_turn` 的含义不变，仍不会单独补铃。
+Web 输入框运行中按偏好（设置 →「偏好」→「聊天」，默认引导）发送，⌘↵ 用默认方式，⌘⇧↵ 这一条换用另一种；空闲时都是普通发送。排队的消息显示在输入框上方的队列里，可逐条引导、编辑（载入输入框，保存时带 `expected_revision`）或删除（5 秒内可撤销）；暂停时显示原因和「继续」。没有 API 应答（网络错误、超时或网关 408/502/503/504）的排队请求标为无法确认送达，不自动重试。前端实现见[前端开发上下文](dev/frontend.md)。
+
+收尾用 turn wrap-up，取消用 turn cancel，重试在同一轮新增 attempt。取消不撤销已执行的工具操作。
 输入框在发送失败时保留草稿，删除失败时保持会话选择。
 
 聊天记录与 provider 会话是两层状态。正常续接复用既有运行上下文，输入范围从当前 agent lane 的实际读游标开始，
@@ -137,7 +156,7 @@ Chat 列表的未读计数使用同一 member lane；读到较早消息保留最
 聊天列表、创建和待处理任务在解析工作区后继续校验成员权限；未知 slug 不回退到 `local`。
 
 服务端数据由 Query cache 管理，草稿和选择由工作区分区的 store 管理。WS 更新保持当前执行任务与后续队列分离，
-取消某条排队消息不能清除另一条正在执行任务的状态。
+取消某条排队消息不能清除另一条正在执行任务的状态。队列的每次变更、放行和暂停在提交后发送 `chat:queue_updated`，只推给该 Chat 的创建者；放行的消息经普通日志流到达。
 已上传附件的草稿绑定与文本一起按工作区保存，切换浮窗、独立页或会话后仍可发送。
 
 ## 归档、来源与自动化 Chat
@@ -172,6 +191,8 @@ remi turn list --chat <chat>
 [Chat 视图](../frontend/packages/views/chat) 与 [core/chat](../frontend/packages/core/chat)。
 验证方法遵循[测试指南](../TESTING.md)；`bun run smoke:chat` 启动隔离浏览器测试。
 单元测试、浏览器冒烟和真实 provider 执行分别报告结果。
+跟进队列的 Store 状态机与 HTTP 鉴权、错误码分别由 `tests/unit/multiremi/inbox-chat-follow-up-queue.test.ts` 和
+`tests/unit/multiremi/multiremi-api-chat-queue.test.ts` 覆盖，配置 `MULTIREMI_TEST_POSTGRES_URL` 时同时跑 PostgreSQL。
 `tests/integration/daemon-protocol-v2/chat-unread-consumption.test.ts` 使用隔离的真实 daemon、API、SQLite、
 ACP 子进程与 CLI 范围读取，回归连续 warm 输入和 next_turn 编辑/删除的消息 ID、正文哈希、读取次数与持久回执。
 该测试使用测试 provider，不调用真实模型，也不代替 PPE 或浏览器验收。

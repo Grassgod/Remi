@@ -109,3 +109,150 @@ describe("new chat project selection", () => {
     expect(createChatStore({ storage }).getState().draftProjectId).toBeNull();
   });
 });
+
+describe("follow-up preference", () => {
+  it("defaults to steer and persists the choice globally across workspaces", () => {
+    const storage = memoryStorage();
+    const store = createChatStore({ storage });
+    expect(store.getState().followUpMode).toBe("steer");
+    store.getState().setFollowUpMode("queue");
+    expect(storage.getItem("multimira:chat:followUpMode")).toBe("queue");
+    workspace.slug = "workspace-b";
+    workspace.rehydrate.forEach(callback => callback());
+    expect(store.getState().followUpMode).toBe("queue");
+    expect(createChatStore({ storage }).getState().followUpMode).toBe("queue");
+  });
+
+  it("ignores an unknown stored value", () => {
+    const storage = memoryStorage();
+    storage.setItem("multimira:chat:followUpMode", "interrupt");
+    expect(createChatStore({ storage }).getState().followUpMode).toBe("steer");
+  });
+});
+
+describe("queued message edit", () => {
+  const edit = { itemId: "qmsg_1", revision: 3, body_md: "Queued [a](/api/attachments/att_q/content)", attachments: { "/api/attachments/att_q/content": "att_q" } };
+
+  it("loads the row into the draft, stashes the draft and restores it", () => {
+    const storage = memoryStorage();
+    const store = createChatStore({ storage });
+    store.getState().setInputDraft("chat-1", "my draft");
+    store.getState().setInputDraftAttachment("chat-1", "url-d", "att_d");
+    store.getState().startQueueEdit("chat-1", edit);
+    expect(store.getState().inputDrafts["chat-1"]).toBe(edit.body_md);
+    expect(store.getState().inputDraftAttachments["chat-1"]).toEqual(edit.attachments);
+    expect(store.getState().queueEdit["chat-1"]).toEqual({ itemId: "qmsg_1", revision: 3, stash: { draft: "my draft", attachments: { "url-d": "att_d" } } });
+    // A reload keeps the edit and its stash.
+    expect(createChatStore({ storage }).getState().queueEdit["chat-1"]?.stash.draft).toBe("my draft");
+    store.getState().finishQueueEdit("chat-1", "restore");
+    expect(store.getState().queueEdit).toEqual({});
+    expect(store.getState().inputDrafts["chat-1"]).toBe("my draft");
+    expect(store.getState().inputDraftAttachments["chat-1"]).toEqual({ "url-d": "att_d" });
+    expect(storage.getItem("multimira:chat:queueEdit:workspace-a")).toBeNull();
+  });
+
+  it("keeps the first stash when switching to another queued message", () => {
+    const store = createChatStore({ storage: memoryStorage() });
+    store.getState().setInputDraft("chat-1", "my draft");
+    store.getState().startQueueEdit("chat-1", edit);
+    store.getState().startQueueEdit("chat-1", { itemId: "qmsg_2", revision: 1, body_md: "Second", attachments: {} });
+    expect(store.getState().queueEdit["chat-1"]).toMatchObject({ itemId: "qmsg_2", stash: { draft: "my draft" } });
+    expect(store.getState().inputDraftAttachments["chat-1"]).toBeUndefined();
+  });
+
+  it("keeps the edited text, followed by the stashed draft, when the row can no longer be saved", () => {
+    const store = createChatStore({ storage: memoryStorage() });
+    store.getState().setInputDraft("chat-1", "my draft");
+    store.getState().startQueueEdit("chat-1", edit);
+    store.getState().setInputDraft("chat-1", "edited text");
+    store.getState().finishQueueEdit("chat-1", "keep");
+    expect(store.getState().queueEdit).toEqual({});
+    expect(store.getState().inputDrafts["chat-1"]).toBe("edited text\n\nmy draft");
+    expect(store.getState().inputDraftAttachments["chat-1"]).toEqual(edit.attachments);
+  });
+
+  it("keeps the submitted text rather than the debounced stored draft", () => {
+    const store = createChatStore({ storage: memoryStorage() });
+    store.getState().setInputDraft("chat-1", "my draft");
+    store.getState().startQueueEdit("chat-1", edit);
+    store.getState().setInputDraft("chat-1", "edited te");
+    store.getState().finishQueueEdit("chat-1", "keep", "edited text, last keystrokes");
+    expect(store.getState().inputDrafts["chat-1"]).toBe("edited text, last keystrokes\n\nmy draft");
+  });
+
+  it("isolates edits per workspace and drops malformed stored entries", () => {
+    const storage = memoryStorage();
+    storage.setItem("multimira:chat:queueEdit:workspace-b", JSON.stringify({ "chat-9": { itemId: "q", revision: "1" } }));
+    const store = createChatStore({ storage });
+    store.getState().startQueueEdit("chat-1", edit);
+    workspace.slug = "workspace-b";
+    workspace.rehydrate.forEach(callback => callback());
+    expect(store.getState().queueEdit).toEqual({});
+    workspace.slug = "workspace-a";
+    workspace.rehydrate.forEach(callback => callback());
+    expect(store.getState().queueEdit["chat-1"]?.itemId).toBe("qmsg_1");
+  });
+});
+
+describe("queue outbox", () => {
+  const item = { client_id: "client-1", body_md: "Next", attachments: [], created_at: "2026-10-15T00:00:00Z", state: "sending" as const };
+
+  it("replaces by client id, removes, and reads an in-flight item back as unconfirmed after a reload", () => {
+    const storage = memoryStorage();
+    const store = createChatStore({ storage });
+    store.getState().putQueueOutboxItem("chat-1", item);
+    store.getState().putQueueOutboxItem("chat-1", { ...item, body_md: "Next (again)" });
+    expect(store.getState().queueOutbox["chat-1"]).toEqual([{ ...item, body_md: "Next (again)" }]);
+    expect(createChatStore({ storage }).getState().queueOutbox["chat-1"]).toEqual([{ ...item, body_md: "Next (again)", state: "unconfirmed" }]);
+    store.getState().removeQueueOutboxItem("chat-1", "client-1");
+    expect(store.getState().queueOutbox).toEqual({});
+    expect(storage.getItem("multimira:chat:queueOutbox:workspace-a")).toBeNull();
+  });
+
+  it("removes an item from the workspace an enqueue started in after a switch", () => {
+    const storage = memoryStorage();
+    const store = createChatStore({ storage });
+    store.getState().putQueueOutboxItem("chat-1", item);
+    workspace.slug = "workspace-b";
+    workspace.rehydrate.forEach(callback => callback());
+    store.getState().putQueueOutboxItem("chat-9", { ...item, client_id: "client-b" });
+    store.getState().removeQueueOutboxItem("chat-1", "client-1", "workspace-a");
+    expect(store.getState().queueOutbox["chat-9"]).toHaveLength(1);
+    expect(storage.getItem("multimira:chat:queueOutbox:workspace-a")).toBeNull();
+    workspace.slug = "workspace-a";
+    workspace.rehydrate.forEach(callback => callback());
+    expect(store.getState().queueOutbox).toEqual({});
+  });
+
+  it("restores text to the draft, or to the stash while an edit is open", () => {
+    const store = createChatStore({ storage: memoryStorage() });
+    store.getState().setInputDraft("chat-1", "draft");
+    store.getState().restoreToDraft("chat-1", "Refused message", { "/api/attachments/a/content": "a" });
+    expect(store.getState().inputDrafts["chat-1"]).toBe("draft\n\nRefused message");
+    expect(store.getState().inputDraftAttachments["chat-1"]).toEqual({ "/api/attachments/a/content": "a" });
+    store.getState().startQueueEdit("chat-1", { itemId: "qmsg_1", revision: 1, body_md: "Queued", attachments: {} });
+    store.getState().restoreToDraft("chat-1", "Another", {});
+    expect(store.getState().inputDrafts["chat-1"]).toBe("Queued");
+    expect(store.getState().queueEdit["chat-1"]?.stash.draft).toBe("draft\n\nRefused message\n\nAnother");
+  });
+
+  it("drops the queue state of a deleted session", () => {
+    const storage = memoryStorage();
+    const store = createChatStore({ storage });
+    store.getState().putQueueOutboxItem("chat-1", item);
+    store.getState().putQueueOutboxItem("chat-2", { ...item, client_id: "client-2" });
+    store.getState().startQueueEdit("chat-1", { itemId: "qmsg_1", revision: 1, body_md: "x", attachments: {} });
+    store.getState().clearQueueState("chat-1");
+    expect(store.getState().queueEdit).toEqual({});
+    expect(Object.keys(store.getState().queueOutbox)).toEqual(["chat-2"]);
+    expect(createChatStore({ storage }).getState().queueEdit).toEqual({});
+  });
+
+  it("isolates the outbox per workspace", () => {
+    const store = createChatStore({ storage: memoryStorage() });
+    store.getState().putQueueOutboxItem("chat-1", item);
+    workspace.slug = "workspace-b";
+    workspace.rehydrate.forEach(callback => callback());
+    expect(store.getState().queueOutbox).toEqual({});
+  });
+});

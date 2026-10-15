@@ -21,7 +21,7 @@ summary: 按任务定位当前实现、约束和验证命令。
 | 改用量采集、统计报表或模型价格 | [统一用量与价格](../usage-accounting.md)、[公开参考价格导入](../usage-reference-prices.md) | actual/context/unknown、run 幂等、执行归属、双时轴和受控历史迁移 |
 | 通过 CLI 使用、管理或排查 Remi | [Remi Skill](../../.agents/skills/remi/SKILL.md) | 任务协作、项目知识、Agent 与模型、集成、权限和运行维护 |
 | 改 Runtime 工作区、执行目录或本地上下文 | [Runtime 持久化工作区](runtime-workspaces.md) | daemon 归属、绑定、目录和上下文保留、调度约束 |
-| 改 Chat 页面、私聊或消息队列 | [Chat 契约](../chat.md) | 会话管理、工作位置、队列串行和私聊权限 |
+| 改 Chat 页面、私聊或消息队列 | [Chat 契约](../chat.md)、[ADR 0020](../adr/0020-chat-follow-up-queue-and-native-steering.md) | 会话管理、工作位置、引导与跟进队列、暂停规则和私聊权限 |
 | 改 Agent 并行调度与执行目录 | [并行执行](../parallel-agent-execution.md) | Agent/Session 执行隔离、共享代码和 daemon 协议升级 |
 | 修改登录、租户隔离或 token 权限 | [认证与权限](auth.md) | 身份来源、资源 guard 和生产启动约束 |
 | 修改 ACP 后端或 token-sync | [Codex 接入](../design/acp-codex-via-codex-acp.md)、[Claude Code 接入](../design/acp-claude-via-claude-agent-acp.md)、[认证插件与同步](../design/1passport-bytedance-sso.md) | 实际启动、认证、会话和凭据隔离边界 |

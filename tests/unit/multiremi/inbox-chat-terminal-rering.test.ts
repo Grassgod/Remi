@@ -84,6 +84,47 @@ pendingTurnBackendTests('MUL-493 B4 Chat terminal re-ring', fixture => {
     }, 120_000);
   }
 
+  // ADR 0020: the follow-up queue releases inside the same terminal transaction,
+  // before this re-ring scan, which then merges into the released turn.
+  it('completed releases queued rows after the unread steer into one successor', () => {
+    const f = setup();
+    const queued = ['Queued one', 'Queued two'].map(body => f.store.enqueueQueuedMessage({
+      session_id: f.session.id, sender_member_id: 'mem_local_local', body_md: body, client_id: body }).item);
+    expect(f.bridge.complete({ payload: { turn_id: f.first.turn_id!, attempt_id: f.attempt.id, input_to_seq: 2,
+      reply: { body_md: 'First request completed', message_kind: 'final' } }, completionFields: null }, f.scope).ok).toBe(true);
+    const turns = f.store.listTurns({ workspace_id: 'local', session_id: f.session.id });
+    expect(turns).toHaveLength(2);
+    const successor = turns.find(turn => turn.id !== f.first.turn_id)!;
+    const released = f.store.listMessages(f.session.id).filter(message => message.metadata.queued_message_id);
+    expect(released.map(message => message.metadata.queued_message_id)).toEqual(queued.map(item => item.id));
+    expect(released.every(message => message.seq > f.late.message.seq && message.metadata.delivery_turn_id === successor.id)).toBe(true);
+    expect(successor).toMatchObject({ status: 'pending', trigger_message_id: released[0]!.id });
+    // The unread scan joined the turn the queue release created; its audit says so.
+    const rings = fixture().db.query("SELECT payload FROM multiremi_system_events WHERE event='re_ring' AND resource_id=?")
+      .all(successor.id) as Array<{ payload: string }>;
+    expect(rings.map(row => JSON.parse(row.payload).action)).toEqual(['coalesced']);
+    const attempt = f.store.claimTask(f.runtime.id)!;
+    f.store.startTask(attempt.id);
+    const offer = f.bridge.offerInput(f.store.getTaskWithAgent(attempt.id)!);
+    const ids = offer.input_messages.map(message => message.id);
+    expect(ids.indexOf(f.late.message.id)).toBeLessThan(ids.indexOf(released[0]!.id));
+    expect(ids.slice(ids.indexOf(released[0]!.id))).toEqual(released.map(message => message.id));
+  }, 120_000);
+
+  for (const status of ['cancelled', 'failed'] as const) {
+    it(`${status} pauses the queue but still re-rings the unread steer`, () => {
+      const f = setup();
+      const queued = f.store.enqueueQueuedMessage({ session_id: f.session.id, sender_member_id: 'mem_local_local',
+        body_md: 'Waits for resume', client_id: 'wait' }).item;
+      if (status === 'cancelled') f.store.cancelTurn(f.first.turn_id!);
+      else f.store.failTask(f.attempt.id, { error: 'Non-retryable failure', failureReason: 'agent_error' });
+      expect(f.store.listQueuedMessages(f.session.id)).toMatchObject({ paused: { reason: 'turn_ended' }, items: [{ id: queued.id, status: 'queued' }] });
+      const successor = f.store.listTurns({ workspace_id: 'local', session_id: f.session.id }).find(turn => turn.id !== f.first.turn_id)!;
+      expect(successor).toMatchObject({ status: 'pending', trigger_message_id: f.late.message.id });
+      expect(f.store.listMessages(f.session.id).some(message => message.metadata.queued_message_id)).toBe(false);
+    }, 120_000);
+  }
+
   it('cancel with a replacement keeps unread seq 3 in the same turn', () => {
     const f = setup();
     const replacement = f.store.retryTurn(f.first.turn_id!, true);

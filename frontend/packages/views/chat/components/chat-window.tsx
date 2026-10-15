@@ -4,6 +4,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { WorkLocationPicker, type WorkLocation } from "../../runtimes/components/runtime-workspace-picker";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { motion } from "motion/react";
+import { toast } from "sonner";
 import {
   ExternalLink,
   List,
@@ -48,21 +49,25 @@ import { useIssueLog } from "@multiremi/core/session-log/use-issue-log";
 import type { IssueLogBootstrap } from "@multiremi/core/api/schemas/session-log";
 import {
   useCreateChatSession,
+  useEnqueueChatMessage,
   useMarkChatSessionRead,
   useUpdateChatSession,
+  useUpdateQueuedChatMessage,
 } from "@multiremi/core/chat/mutations";
 import {
   reconcileSettledPendingChatTask,
   useChatStore,
+  type ChatQueueEdit,
   type PendingChatTaskRef,
 } from "@multiremi/core/chat";
+import { isQueueDeliveryUnconfirmed, queueErrorCode } from "@multiremi/core/chat/queue";
 import { ChatMessageList } from "./chat-message-list";
 import { contextRingSource } from "../lib/turn-card";
 import { ChatContextUsage } from "./chat-context-usage";
 import type { SessionLogEntry } from "@multiremi/core/replica";
 import { useTurnTrace } from "../../common/task-transcript/use-task-trace";
 import { clientIdOf, type OptimisticChatRow } from "../lib/optimistic-log";
-import { ChatInput } from "./chat-input";
+import { ChatInput, type ChatSendMode } from "./chat-input";
 import { AgentDropdown } from "./agent-dropdown";
 import { ProjectDisplay } from "./project-dropdown";
 import { SessionDropdown } from "./session-dropdown";
@@ -85,7 +90,7 @@ import { useWorkspacePaths } from "@multiremi/core/paths";
 import { getCurrentWsId } from "@multiremi/core/platform";
 import { createSafeId } from "@multiremi/core/utils";
 import { useFloatingPanelLayout } from "../../layout/floating-panel-layout";
-import { ChatQueue } from "./chat-queue";
+import { ChatQueue, type ChatQueueController } from "./chat-queue";
 
 const uiLogger = createLogger("chat.ui");
 const apiLogger = createLogger("chat.api");
@@ -285,6 +290,9 @@ export function ChatWindow({
   const createSession = useCreateChatSession();
   const markRead = useMarkChatSessionRead();
   const updateSession = useUpdateChatSession();
+  const { mutateAsync: enqueueMessage } = useEnqueueChatMessage();
+  const { mutateAsync: updateQueuedMessage } = useUpdateQueuedChatMessage();
+  const queueController = useRef<ChatQueueController | null>(null);
   const [actionError, setActionError] = useState(false);
 
   const currentMember = members.find((m) => m.user_id === user?.id);
@@ -450,11 +458,35 @@ export function ChatWindow({
     }
   }, [qc, wsId, refreshSession]);
 
-  const handleSend = useCallback(async (content: string, attachmentIds?: string[], localAttachments?: Attachment[]) => {
+  const handleSend = useCallback(async (content: string, attachmentIds?: string[], localAttachments?: Attachment[], mode: ChatSendMode = "send") => {
     if (!activeAgent) throw new Error("No agent available");
     const sessionAtStart = useChatStore.getState().activeSessionId;
     const sessionId = await ensureSession(content);
     if (!sessionId || getCurrentWsId() !== wsId) throw new Error("Chat workspace changed");
+    if (mode === "queue") {
+      // Queued (排队): the row waits outside the log until this turn completes.
+      // An enqueue on an idle lane releases every queued row, so deletes still
+      // behind their undo are sent first.
+      await queueController.current?.flushDeletes();
+      try {
+        const result = await enqueueMessage({
+          sessionId, body_md: content, attachment_ids: attachmentIds, client_id: createSafeId(),
+          created_at: new Date().toISOString(),
+          attachments: (localAttachments ?? []).map((attachment) => ({
+            id: attachment.id, filename: attachment.filename, content_type: attachment.content_type, size: attachment.size_bytes,
+          })),
+        });
+        // An idle lane released it at once: it is already a log message.
+        if (result.released) refreshSession(sessionId);
+      } catch (error) {
+        // Without an HTTP answer the row stays in the queue as unconfirmed;
+        // the draft has been handed over to it.
+        if (isQueueDeliveryUnconfirmed(error)) return;
+        throw error;
+      }
+      return;
+    }
+    // Sent now: idle starts a turn; a running turn takes it as a steer (引导).
     const row: OptimisticChatRow = {
       clientId: createSafeId(), sessionId, content, attachmentIds, attachments: localAttachments,
       createdAt: new Date().toISOString(),
@@ -464,7 +496,32 @@ export function ChatWindow({
     setOptimisticRows((rows) => [...rows, row]);
     if (useChatStore.getState().activeSessionId === sessionAtStart) setActiveSession(sessionId, activeAgent.id);
     await deliverRow(row);
-  }, [activeAgent, ensureSession, setActiveSession, wsId, logSnapshot.head, deliverRow]);
+  }, [activeAgent, ensureSession, setActiveSession, wsId, logSnapshot.head, deliverRow, enqueueMessage, refreshSession]);
+
+  // Saves the queued message edited in the composer. A row that can no
+  // longer change (released, deleted, or edited elsewhere) keeps the text as
+  // an ordinary draft; other failures stay in edit mode for a retry.
+  const handleSaveQueueEdit = useCallback(async (sessionId: string, edit: ChatQueueEdit, content: string, attachmentIds: string[]) => {
+    try {
+      await updateQueuedMessage({
+        sessionId, itemId: edit.itemId, body_md: content, attachment_ids: attachmentIds, expected_revision: edit.revision,
+      });
+      if (useChatStore.getState().queueEdit[sessionId]?.itemId === edit.itemId) {
+        useChatStore.getState().finishQueueEdit(sessionId, "restore");
+      }
+    } catch (error) {
+      const code = queueErrorCode(error);
+      const notice = code === "revision_conflict" ? t(($) => $.queue.changed)
+        : code === "queued_message_consumed" ? t(($) => $.queue.consumed)
+          : code === "queued_message_not_found" || code === "queued_message_deleted" ? t(($) => $.queue.deleted_elsewhere)
+            : null;
+      if (!notice) throw error;
+      if (useChatStore.getState().queueEdit[sessionId]?.itemId !== edit.itemId) return;
+      // The submitted text, not the debounced stored draft, so no keystroke is lost.
+      useChatStore.getState().finishQueueEdit(sessionId, "keep", content);
+      toast(notice);
+    }
+  }, [updateQueuedMessage, t]);
 
   const retrySend = useCallback((clientId: string) => {
     const row = optimisticRows.find((item) => item.clientId === clientId);
@@ -498,6 +555,8 @@ export function ChatWindow({
         queryKey: chatKeys.pendingTask(activeSessionId),
       });
       void qc.invalidateQueries({ queryKey: chatKeys.pendingTasks(wsId) });
+      // A member's stop pauses the follow-up queue (interrupted).
+      void qc.invalidateQueries({ queryKey: chatKeys.queue(wsId, activeSessionId) });
       void replica.refreshTailPreservingWindow().catch(() => {});
     }
   }, [pendingTaskId, activeSessionId, stopping, qc, wsId, replica]);
@@ -822,7 +881,10 @@ export function ChatWindow({
         <ChatQueue
           key={`${wsId}:${activeSessionId}:${currentSession.agent_id}`}
           sessionId={activeSessionId}
-          agentId={currentSession.agent_id}
+          pendingTaskId={pendingTaskId}
+          archived={isSessionArchived}
+          onReleased={() => refreshSession(activeSessionId)}
+          controllerRef={queueController}
         />
       )}
       {actionError && (
@@ -850,10 +912,10 @@ export function ChatWindow({
       )}
       <ChatInput
         onSend={handleSend}
+        onSaveQueueEdit={handleSaveQueueEdit}
         onUploadFile={handleUploadFile}
         onStop={handleStop}
         isRunning={!!pendingTaskId}
-        supportsQueue={pendingTask?.supports_queue}
         disabled={isSessionArchived}
         noAgent={noAgent}
         agentName={activeAgent?.name}

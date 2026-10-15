@@ -21,6 +21,7 @@ import { SkillsEndpoints } from "./endpoints/skills";
 import { TokensEndpoints } from "./endpoints/tokens";
 import { AttachmentsEndpoints } from "./endpoints/attachments";
 import { ChatEndpoints } from "./endpoints/chat";
+import { ChatQueueEndpoints } from "./endpoints/chat-queue";
 import { ProjectsEndpoints } from "./endpoints/projects";
 import { ProjectDocsEndpoints } from "./endpoints/project-docs";
 import { LabelsEndpoints } from "./endpoints/labels";
@@ -82,6 +83,7 @@ export const ENDPOINT_FACTORIES: ReadonlyArray<(http: HttpClient) => object> = [
   (http: HttpClient) => new TokensEndpoints(http),
   (http: HttpClient) => new AttachmentsEndpoints(http),
   (http: HttpClient) => new ChatEndpoints(http),
+  (http: HttpClient) => new ChatQueueEndpoints(http),
   (http: HttpClient) => new ProjectsEndpoints(http),
   (http: HttpClient) => new ProjectDocsEndpoints(http),
   (http: HttpClient) => new LabelsEndpoints(http),
@@ -134,6 +136,7 @@ export interface ApiClient extends
     TokensEndpoints,
     AttachmentsEndpoints,
     ChatEndpoints,
+    ChatQueueEndpoints,
     ProjectsEndpoints,
     ProjectDocsEndpoints,
     LabelsEndpoints,

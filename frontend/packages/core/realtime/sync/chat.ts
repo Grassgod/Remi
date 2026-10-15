@@ -70,7 +70,6 @@ export function createChatHandlers({ qc }: SyncContext): SyncModule {
     const wsId = getCurrentWsId();
     if (!wsId) return;
     void qc.invalidateQueries({ queryKey: ["turns", wsId] });
-    void qc.invalidateQueries({ queryKey: ["chat-unread", wsId] });
     void qc.invalidateQueries({ queryKey: ["inbox", wsId] });
   };
   const invalidatePendingAggregate = () => {
@@ -94,9 +93,13 @@ export function createChatHandlers({ qc }: SyncContext): SyncModule {
 
   return {
     handlers: {
+      // Every follow-up queue change (enqueue, edit, delete, steer, release,
+      // pause) arrives here. Released rows come in through the log stream.
       "chat:queue_updated": (p) => {
         invalidateUnified();
         const payload = p as { chat_session_id: string };
+        const wsId = getCurrentWsId();
+        if (wsId) void qc.invalidateQueries({ queryKey: chatKeys.queue(wsId, payload.chat_session_id) });
         invalidateQueue(payload.chat_session_id);
       },
 
@@ -330,6 +333,7 @@ export function createChatHandlers({ qc }: SyncContext): SyncModule {
 
         const chatState = useChatStore.getState?.();
         chatState?.clearInputDraft(payload.chat_session_id);
+        chatState?.clearQueueState(payload.chat_session_id);
         if (chatState && chatState.activeSessionId === payload.chat_session_id) {
           chatState.setActiveSession(null);
         }

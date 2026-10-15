@@ -44,6 +44,9 @@ const dropHandlers = vi.hoisted(() => ({
 }));
 const editorProps = vi.hoisted(() => ({
   last: null as null | Record<string, unknown>,
+  setContent: vi.fn(),
+  /** Mimic ContentEditor's own defaultValue sync of a clean editor. */
+  syncDefault: false,
 }));
 const logger = vi.hoisted(() => ({
   debug: vi.fn(),
@@ -76,11 +79,20 @@ vi.mock("../../editor", () => ({
     const { defaultValue, onUpdate, placeholder, onUploadFile } = props;
     editorProps.last = props as unknown as Record<string, unknown>;
     const valueRef = useRef<string>(defaultValue ?? "");
+    const lastDefault = useRef<string>(defaultValue ?? "");
+    if (editorProps.syncDefault && (defaultValue ?? "") !== lastDefault.current) {
+      if (valueRef.current === lastDefault.current) valueRef.current = defaultValue ?? "";
+      lastDefault.current = defaultValue ?? "";
+    }
     const uploadingRef = useRef(0);
     useImperativeHandle(ref, () => ({
       getMarkdown: () => valueRef.current,
       clearContent: () => {
         valueRef.current = "";
+      },
+      setContent: (markdown: string) => {
+        editorProps.setContent(markdown);
+        valueRef.current = markdown;
       },
       blur: () => {},
       focus: () => {},
@@ -120,6 +132,14 @@ vi.mock("@multiremi/core/chat", () => {
     inputDrafts: {} as Record<string, string>,
     inputDraftAttachments: {} as Record<string, Record<string, string>>,
     localAttachmentDetails: {} as Record<string, UploadResult>,
+    followUpMode: "steer" as "steer" | "queue",
+    queueEdit: {} as Record<string, { itemId: string; revision: number; stash: { draft: string; attachments: Record<string, string> } }>,
+    finishQueueEdit: vi.fn((key: string, outcome: "restore" | "keep") => {
+      const edit = state.queueEdit[key];
+      if (!edit) return;
+      delete state.queueEdit[key];
+      if (outcome === "restore") state.inputDrafts[key] = edit.stash.draft;
+    }),
     setInputDraft: vi.fn((key: string, content: string) => {
       state.inputDrafts[key] = content;
     }),
@@ -160,7 +180,16 @@ beforeEach(() => {
   state.localAttachmentDetails = {};
   state.activeSessionId = null;
   state.selectedAgentId = "agent-1";
+  state.followUpMode = "steer";
+  state.queueEdit = {};
+  editorProps.syncDefault = false;
 });
+
+/** The editor's Mod-Enter / Mod-Shift-Enter handler, as Tiptap calls it. */
+function pressSubmitShortcut(invert: boolean) {
+  const onSubmit = editorProps.last?.onSubmit as ((options: { invert: boolean }) => void) | undefined;
+  act(() => onSubmit?.({ invert }));
+}
 
 function renderInput(
   props: Partial<React.ComponentProps<typeof ChatInput>> = {},
@@ -339,7 +368,7 @@ describe("ChatInput sending and queue", () => {
     await screen.findByRole("alert");
     fireEvent.click(screen.getByRole("button", { name: "Send" }));
     await waitFor(() => expect(onSend).toHaveBeenCalledTimes(2));
-    expect(onSend).toHaveBeenLastCalledWith("Please keep this", undefined, []);
+    expect(onSend).toHaveBeenLastCalledWith("Please keep this", undefined, [], "send");
     await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
   });
 
@@ -380,7 +409,7 @@ describe("ChatInput sending and queue", () => {
     fireEvent.click(screen.getByRole("button", { name: "Send" }));
 
     await screen.findByRole("alert");
-    expect(onSend).toHaveBeenCalledWith(content, ["att-failed"], [attachment]);
+    expect(onSend).toHaveBeenCalledWith(content, ["att-failed"], [attachment], "send");
     expect(useChatStore.getState().inputDrafts["session-1"]).toBe(content);
     expect(useChatStore.getState().inputDraftAttachments["session-1"]).toEqual({
       "https://cdn.example/failed.png": "att-failed",
@@ -401,21 +430,6 @@ describe("ChatInput sending and queue", () => {
     expect(logged).not.toContain(sensitiveToken);
     expect(logged).not.toContain(sensitiveBody);
     expect(logged).not.toContain(sensitiveCause);
-  });
-
-  it("allows queueing without removing the current stop control", async () => {
-    const onSend = vi.fn().mockResolvedValue(undefined);
-    const onStop = vi.fn();
-    renderInput({ onSend, onStop, isRunning: true, supportsQueue: true });
-    fireEvent.change(screen.getByTestId("editor"), {
-      target: { value: "Next instruction" },
-    });
-    fireEvent.click(screen.getByRole("button", { name: "Add to queue" }));
-    await waitFor(() =>
-      expect(onSend).toHaveBeenCalledWith("Next instruction", undefined, []),
-    );
-    fireEvent.click(screen.getByRole("button", { name: "Stop" }));
-    expect(onStop).toHaveBeenCalledOnce();
   });
 
   it("does not send from an archived session", () => {
@@ -455,7 +469,7 @@ it("retains uploaded attachment IDs when moving to another chat surface", async 
   await waitFor(() =>
     expect(onSend).toHaveBeenCalledWith("![](https://cdn.example/cross.png)", [
       "att-cross",
-    ], [uploaded]),
+    ], [uploaded], "send"),
   );
   await waitFor(() =>
     expect(
@@ -506,3 +520,196 @@ it("does not clear a new workspace draft when an earlier send completes", async 
     "New workspace draft",
   );
 });
+
+describe("ChatInput follow-up modes", () => {
+  const type = (value: string) =>
+    fireEvent.change(screen.getByTestId("editor"), { target: { value } });
+  /** Lets the previous send settle so the next one is not skipped as in flight. */
+  const settle = () => act(async () => {});
+
+  it("sends normally while idle, from the button and from either shortcut", async () => {
+    const onSend = vi.fn().mockResolvedValue(undefined);
+    renderInput({ onSend });
+    expect(screen.queryByRole("button", { name: "Steer" })).toBeNull();
+    type("Idle message");
+    pressSubmitShortcut(true);
+    await waitFor(() => expect(onSend).toHaveBeenCalledWith("Idle message", undefined, [], "send"));
+    await settle();
+    type("Second");
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    await waitFor(() => expect(onSend).toHaveBeenLastCalledWith("Second", undefined, [], "send"));
+  });
+
+  it("steers by default while running; Mod-Shift-Enter queues this one message", async () => {
+    const onSend = vi.fn().mockResolvedValue(undefined);
+    const onStop = vi.fn();
+    renderInput({ onSend, onStop, isRunning: true });
+    const button = screen.getByRole("button", { name: "Steer" });
+    expect(button).toHaveAttribute("title", "Steer · Ctrl+Enter\nQueue · Ctrl+Shift+Enter");
+    expect(button).toHaveAttribute("data-follow-up-mode", "steer");
+    type("Use the staging database");
+    pressSubmitShortcut(false);
+    await waitFor(() => expect(onSend).toHaveBeenCalledWith("Use the staging database", undefined, [], "steer"));
+    await settle();
+    type("Then write the summary");
+    pressSubmitShortcut(true);
+    await waitFor(() => expect(onSend).toHaveBeenLastCalledWith("Then write the summary", undefined, [], "queue"));
+    await settle();
+    type("Click");
+    fireEvent.click(screen.getByRole("button", { name: "Steer" }));
+    await waitFor(() => expect(onSend).toHaveBeenLastCalledWith("Click", undefined, [], "steer"));
+    await settle();
+    fireEvent.click(screen.getByRole("button", { name: "Stop" }));
+    expect(onStop).toHaveBeenCalledOnce();
+  });
+
+  it("queues by default when the preference says so; Mod-Shift-Enter steers", async () => {
+    useChatStore.getState().followUpMode = "queue";
+    const onSend = vi.fn().mockResolvedValue(undefined);
+    renderInput({ onSend, isRunning: true });
+    const button = screen.getByRole("button", { name: "Queue" });
+    expect(button).toHaveAttribute("title", "Queue · Ctrl+Enter\nSteer · Ctrl+Shift+Enter");
+    type("After this run");
+    fireEvent.click(button);
+    await waitFor(() => expect(onSend).toHaveBeenCalledWith("After this run", undefined, [], "queue"));
+    await settle();
+    type("Right now");
+    pressSubmitShortcut(true);
+    await waitFor(() => expect(onSend).toHaveBeenLastCalledWith("Right now", undefined, [], "steer"));
+  });
+
+  it("never sends from bare Enter, so a composing IME candidate cannot submit", () => {
+    renderInput({ isRunning: true });
+    // Only the Mod shortcuts submit; the extension also ignores them while composing.
+    expect(editorProps.last?.submitOnEnter).toBeUndefined();
+    expect(typeof editorProps.last?.onSubmit).toBe("function");
+    // Chat opts in to Mod-Shift-Enter; other editors leave it unbound.
+    expect(editorProps.last?.invertibleSubmit).toBe(true);
+  });
+
+  it.each([
+    ["queue_full", "The queue is full (50 messages). Steer or delete queued messages first."],
+    ["chat_archived", "This chat is archived. Restore it to send queued messages."],
+  ])("explains a %s refusal and keeps the draft", async (code, copy) => {
+    const onSend = vi.fn().mockRejectedValue(new ApiError(code, code === "queue_full" ? 400 : 409, "x", { error: code, code }));
+    renderInput({ onSend, isRunning: true });
+    fireEvent.change(screen.getByTestId("editor"), { target: { value: "One more" } });
+    pressSubmitShortcut(true);
+    expect(await screen.findByRole("alert")).toHaveTextContent(copy);
+    expect(onSend).toHaveBeenCalledWith("One more", undefined, [], "queue");
+  });
+});
+
+describe("ChatInput queued-message edit", () => {
+  const edit = { itemId: "qmsg_1", revision: 2, stash: { draft: "my own draft", attachments: {} } };
+  function editing(onSaveQueueEdit = vi.fn().mockResolvedValue(undefined)) {
+    const state = useChatStore.getState();
+    state.activeSessionId = "session-1";
+    state.inputDrafts["session-1"] = "Queued text";
+    state.queueEdit["session-1"] = edit;
+    const onSend = vi.fn();
+    const view = renderInput({ onSend, onSaveQueueEdit, isRunning: true });
+    return { ...view, onSend, onSaveQueueEdit };
+  }
+
+  it("shows the edit strip and saves through the queue instead of sending", async () => {
+    const { onSend, onSaveQueueEdit } = editing();
+    expect(screen.getByText("Editing queued message")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Steer" })).toBeNull();
+    fireEvent.change(screen.getByTestId("editor"), { target: { value: "Queued text, edited" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(onSaveQueueEdit).toHaveBeenCalledWith("session-1", edit, "Queued text, edited", []));
+    expect(onSend).not.toHaveBeenCalled();
+    // The store settles the draft; the composer clears nothing itself.
+    expect(useChatStore.getState().clearInputDraft).not.toHaveBeenCalled();
+  });
+
+  it("saves from Mod-Enter and Mod-Shift-Enter alike", async () => {
+    const { onSaveQueueEdit } = editing();
+    pressSubmitShortcut(true);
+    await waitFor(() => expect(onSaveQueueEdit).toHaveBeenCalledWith("session-1", edit, "Queued text", []));
+  });
+
+  it("cancels from the strip and from Esc, restoring the stashed draft into the editor", async () => {
+    editing();
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(useChatStore.getState().finishQueueEdit).toHaveBeenCalledWith("session-1", "restore");
+    useChatStore.getState().queueEdit["session-1"] = edit;
+    fireEvent.keyDown(screen.getByTestId("editor"), { key: "Escape" });
+    expect(useChatStore.getState().finishQueueEdit).toHaveBeenCalledTimes(2);
+  });
+
+  it("stops Esc at the composer so the editor's blur shortcut does not run", () => {
+    editing();
+    const editorKeydown = vi.fn();
+    screen.getByTestId("editor").addEventListener("keydown", editorKeydown);
+    fireEvent.keyDown(screen.getByTestId("editor"), { key: "Escape" });
+    expect(useChatStore.getState().finishQueueEdit).toHaveBeenCalledWith("session-1", "restore");
+    expect(editorKeydown).not.toHaveBeenCalled();
+  });
+
+  it("keeps Esc for an IME composition or an open suggestion", () => {
+    const { container } = editing();
+    fireEvent.keyDown(screen.getByTestId("editor"), { key: "Escape", isComposing: true });
+    const suggestion = document.createElement("span");
+    suggestion.className = "suggestion";
+    container.querySelector("[aria-disabled], [data-testid='drop-zone']")?.appendChild(suggestion);
+    fireEvent.keyDown(screen.getByTestId("editor"), { key: "Escape" });
+    expect(useChatStore.getState().finishQueueEdit).not.toHaveBeenCalled();
+  });
+
+  it("writes a draft changed outside the editor into it", async () => {
+    const state = useChatStore.getState();
+    state.activeSessionId = "session-1";
+    state.inputDrafts["session-1"] = "Before";
+    const view = renderInput({});
+    state.inputDrafts["session-1"] = "Loaded queued message";
+    view.rerender(
+      <I18nProvider locale="en" resources={TEST_RESOURCES}>
+        <ChatInput onSend={vi.fn()} agentName="Multiremi" />
+      </I18nProvider>,
+    );
+    await waitFor(() => expect(editorProps.setContent).toHaveBeenCalledWith("Loaded queued message"));
+  });
+
+  it("does not treat the lazily created session of a first send as an outside edit", async () => {
+    let finish!: () => void;
+    const onSend = vi.fn(() => {
+      useChatStore.getState().activeSessionId = "session-new";
+      return new Promise<void>((resolve) => { finish = resolve; });
+    });
+    const view = renderInput({ onSend });
+    fireEvent.change(screen.getByTestId("editor"), { target: { value: "First message" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    view.rerender(
+      <I18nProvider locale="en" resources={TEST_RESOURCES}>
+        <ChatInput onSend={onSend} agentName="Multiremi" />
+      </I18nProvider>,
+    );
+    await act(async () => { finish(); });
+    expect(editorProps.setContent).not.toHaveBeenCalled();
+  });
+
+  it("enables the primary button when an outside change fills an empty draft", async () => {
+    editorProps.syncDefault = true;
+    const state = useChatStore.getState();
+    state.activeSessionId = "session-1";
+    const view = renderInput({});
+    expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
+    state.inputDrafts["session-1"] = "Loaded queued message";
+    view.rerender(
+      <I18nProvider locale="en" resources={TEST_RESOURCES}>
+        <ChatInput onSend={vi.fn()} agentName="Multiremi" />
+      </I18nProvider>,
+    );
+    await waitFor(() => expect(screen.getByRole("button", { name: "Send" })).not.toBeDisabled());
+  });
+
+  it("explains a failed save and stays in edit mode", async () => {
+    editing(vi.fn().mockRejectedValue(new Error("offline")));
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Could not update the queue");
+    expect(screen.getByText("Editing queued message")).toBeInTheDocument();
+  });
+});
+
