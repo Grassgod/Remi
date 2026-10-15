@@ -42,7 +42,9 @@ import { finishedFoldHeader, isAwaitingHuman } from "../lib/turn-steps";
 import { isNonterminalTurn } from "../lib/turn-card";
 import { FinishedTurnSteps, LiveTurnSteps } from "./turn-steps-fold";
 import { SubagentCompletionRows } from "./subagent-completion-row";
-import { SubagentRunningStrip } from "./subagent-running-strip";
+import { ChatRunningStrip } from "./subagent-running-strip";
+import { DoorbellRow } from "./doorbell-row";
+import { doorbellTaskIds, rowDoorbell } from "../lib/background-tasks";
 import { isTraceLateSubagent, type TraceLateSubagent } from "@multiremi/contracts/trace";
 import { useT } from "../../i18n";
 import { clientIdOf, mergeOptimisticChatRows, type OptimisticChatRow } from "../lib/optimistic-log";
@@ -237,13 +239,17 @@ export function ChatMessageList({
     }).map(entry => {
       // Q rows became one fixed-height summary line; never reserve the old button height.
       const row = entry as SessionLogEntry & { metadata?: Record<string, unknown> };
-      const question = row.kind === "message" && linkedQuestionId(row.id, row.metadata) ? ":question-line-v1" : "";
+      const question = row.kind === "message" && linkedQuestionId(row.id, row.metadata) ? ":question-line-v1"
+        // A doorbell is one centered line, not a bubble (PR 6).
+        : rowDoorbell(row) ? ":doorbell-v1" : "";
       // The Chat column, bubble and turn rows changed size; old cached heights are misses.
       const steps = openSteps.has(entry.id) ? STEPS_OPEN_VERSION : "";
       return { ...entry, render_version: `${entry.render_version ?? ""}${question}${CHAT_LAYOUT_VERSION}${steps}` };
     }), optimisticRows);
   }, [optimisticRows, openSteps]);
   const cardsByReply = useMemo(() => turnCardsByReply(snapshot.entries), [snapshot.entries]);
+  // Tasks the loaded conversation already explains with a doorbell line (PR 6).
+  const doorbells = useMemo(() => doorbellTaskIds(snapshot.entries as ReadonlyArray<SessionLogEntry & { sender_type?: string | null; metadata?: unknown }>), [snapshot.entries]);
   const entryKey = useCallback((entry: SessionLogEntry) => clientIdOf(entry) ?? entry.id, []);
   const pendingTaskId = pendingTask?.task_id ?? null;
   const pendingAlreadyPersisted = !!pendingTaskId && replica.getSnapshot(sessionId).entries.some((entry) => {
@@ -271,9 +277,11 @@ export function ChatMessageList({
     transformEntries={transformEntries}
     entryKey={entryKey}
     header={<>
-      {/* Sticky while a subagent of the running turn is in progress (PR 5 §6.5). */}
-      {showLiveTimeline && liveTraceId && <SubagentRunningStrip items={liveTrace.items}
-        source={{ sessionId, attemptId: liveTraceId, turnId: pendingTask?.turn_id, live: true }} />}
+      {/* Sticky while a subagent of the running turn (PR 5 §6.5) or a background
+        * task of the chat (PR 6 §8.1, with or without a turn) runs. */}
+      <ChatRunningStrip sessionId={sessionId} doorbells={doorbells}
+        items={showLiveTimeline && liveTraceId ? liveTrace.items : undefined}
+        source={showLiveTimeline && liveTraceId ? { sessionId, attemptId: liveTraceId, turnId: pendingTask?.turn_id, live: true } : null} />
       <div className="flex h-10 items-center justify-center text-xs text-muted-foreground max-md:h-12">
         {hasOlderMessages ? <button type="button" data-chat-earlier disabled={!visible || isFetchingOlderMessages}
           onClick={loadOlder} className="h-full hover:text-foreground">
@@ -297,6 +305,10 @@ export function ChatMessageList({
           elapsed_ms: typeof row.metadata?.elapsed_ms === "number" ? row.metadata.elapsed_ms : null,
           attachments: AttachmentSchema.array().safeParse(row.metadata?.attachments).data as ChatMessage["attachments"],
       };
+      // The doorbell a parked task's end rang (PR 6 §8.1): a line before the
+      // reply it started, never a bubble.
+      const doorbell = rowDoorbell(row);
+      if (doorbell) return <DoorbellRow doorbell={doorbell} sessionId={sessionId} />;
       const clientId = clientIdOf(entry);
       const local = optimisticRows.find((item) => item.clientId === clientId);
       const isPush = row.kind === "turn" && isNonterminalTurn(row.metadata);

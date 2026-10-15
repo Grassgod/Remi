@@ -4,7 +4,8 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode }
 import { useDefaultLayout } from "react-resizable-panels";
 import type { TraceItem, TraceSubagentItem } from "@multiremi/contracts/trace";
 import { topLevelSubagents } from "@multiremi/shared/turn-trace";
-import { useChatStore, type SubagentPanelTarget } from "@multiremi/core/chat";
+import type { BackgroundTaskResolver } from "@multiremi/shared/trace-step-copy";
+import { useChatStore, type ChatPanelView, type SubagentPanelTarget } from "@multiremi/core/chat";
 import { defaultStorage } from "@multiremi/core/platform";
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@multiremi/ui/components/ui/resizable";
 import { Sheet, SheetContent } from "@multiremi/ui/components/ui/sheet";
@@ -12,7 +13,7 @@ import { useIsMobile } from "@multiremi/ui/hooks/use-mobile";
 import { cn } from "@multiremi/ui/lib/utils";
 import { AlertCircle, ArrowLeft, Bot, CircleStop, CircleX, LoaderCircle, X } from "lucide-react";
 import { Markdown } from "../../common/markdown";
-import { useTurnTrace } from "../../common/task-transcript/use-task-trace";
+import { useTurnTrace, type TurnTraceView } from "../../common/task-transcript/use-task-trace";
 import { useT } from "../../i18n";
 import {
   isSubagent,
@@ -24,7 +25,15 @@ import {
   subagentTaskLine,
   type SubagentGeneration,
 } from "../lib/subagents";
+import { backgroundLaunchResolver, findBackgroundTask } from "../lib/background-tasks";
 import { buildChildSteps, liveBlockKey, liveLabel, type FoldHeader } from "../lib/turn-steps";
+import {
+  BackgroundTaskDetail,
+  BackgroundTaskDetailFooter,
+  BackgroundTaskDetailHeader,
+  BackgroundTasksOverview,
+} from "./background-task-view";
+import { useCachedBackgroundTasks, useChatBackgroundTasks, type ChatBackgroundTasksView } from "./use-background-tasks";
 import { useStickyLabel, useTickingNow } from "./live-hooks";
 import { SubagentTraceContext, type SubagentTraceSource } from "./subagent-context";
 import { formatSubagentElapsed, SubagentStatusText, useSubagentElapsed } from "./subagent-step-row";
@@ -45,6 +54,10 @@ import { REPLY, StepsFold, useFoldHeaderText } from "./turn-steps-fold";
 //   live. Nested subagents open a deeper detail; ← goes up one level.
 // - × or Esc (focus inside) closes it, and so do switching chats and closing
 //   the floating window; a click in the conversation does not.
+// - PR 6: the same panel has a 后台任务 view, the chat's background tasks from
+//   the session registry (`background-task-view.tsx`). It needs no attempt,
+//   so it opens with no running turn. A 「子代理 · n | 后台任务 · m」 switch
+//   shows only while both kinds exist; otherwise the header is one title.
 
 /** The conversation keeps this much beside the panel (Codex). */
 export const CONVERSATION_MIN_PX = 352;
@@ -154,7 +167,12 @@ function SubagentPanelHandle() {
 
 const ICON_BUTTON = "inline-flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-foreground/[0.06] hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring";
 
-/** The panel's own view: header, the overview or a detail, and the read-only note. */
+/**
+ * The panel's own view: the header (a 「子代理 · n | 后台任务 · m」 switch when
+ * both kinds exist, else the single title), the 子代理 view (an attempt's
+ * overview or a subagent's detail) or the 后台任务 view (the chat's tasks, PR 6
+ * §8.1), and the footer.
+ */
 export function SubagentPanelView({ target, onClose, focusOnMount = true }: {
   target: SubagentPanelTarget;
   onClose: () => void;
@@ -162,20 +180,102 @@ export function SubagentPanelView({ target, onClose, focusOnMount = true }: {
   focusOnMount?: boolean;
 }) {
   const { t } = useT("chat");
-  const { t: ta } = useT("agents");
-  const setPath = useChatStore((s) => s.setSubagentPath);
-  const trace = useTurnTrace(target.attemptId, { live: target.live, turnId: target.turnId });
-  const items = trace.items;
+  const view = target.view ?? "subagents";
+  const attemptId = target.attemptId ?? null;
+  // The 后台任务 view reads no trace of its own: only the running turn's (which
+  // the live fold already follows) or one already cached (MUL-472).
+  const trace = useTurnTrace(attemptId, { enabled: view === "subagents" || target.live, live: target.live, turnId: target.turnId });
+  const tasks = useChatBackgroundTasks(target.sessionId, { enabled: view === "tasks" });
+  const setView = useChatStore((s) => s.setPanelView);
   const rootRef = useRef<HTMLElement>(null);
   useEffect(() => {
     if (focusOnMount) rootRef.current?.focus({ preventScroll: true });
   }, [focusOnMount]);
+  const subagentCount = useMemo(() => topLevelSubagents(trace.items).length, [trace.items]);
+  const both = !!attemptId && subagentCount > 0 && tasks.rows.length > 0;
+  const title = both
+    ? <PanelSwitch view={view} subagents={subagentCount} tasks={tasks.rows.length} onChange={setView} />
+    : <h2 className="min-w-0 flex-1 truncate pl-2 text-sm font-medium">
+      {view === "tasks" ? t(($) => $.bg_tasks.panel_title) : t(($) => $.subagents.panel_title)}
+    </h2>;
+  return (
+    <section
+      ref={rootRef}
+      tabIndex={-1}
+      aria-label={view === "tasks" ? t(($) => $.bg_tasks.panel_title) : t(($) => $.subagents.panel_title)}
+      data-panel-view={view}
+      data-subagent-panel={view === "tasks" ? (target.task ? "task" : "tasks") : target.path.length > 0 ? "detail" : "overview"}
+      onKeyDown={(event) => {
+        if (event.key !== "Escape" || event.defaultPrevented) return;
+        event.preventDefault();
+        onClose();
+      }}
+      className="flex h-full min-h-0 flex-col bg-background outline-none"
+    >
+      {view === "tasks"
+        ? <BackgroundTasksPanel target={target} tasks={tasks} title={title} onClose={onClose} />
+        : <SubagentsPanel target={target} trace={trace} title={title} onClose={onClose} />}
+    </section>
+  );
+}
+
+/** 「子代理 · n | 后台任务 · m」: shown only while both kinds exist. */
+function PanelSwitch({ view, subagents, tasks, onChange }: {
+  view: ChatPanelView; subagents: number; tasks: number; onChange: (view: ChatPanelView) => void;
+}) {
+  const { t } = useT("chat");
+  const option = (value: ChatPanelView, label: string) => (
+    <button key={value} type="button" role="tab" aria-selected={view === value} data-panel-switch-option={value}
+      onClick={() => onChange(value)}
+      className={cn("h-6 rounded-md px-2 whitespace-nowrap text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring",
+        view === value && "bg-background text-foreground shadow-xs")}>
+      {label}
+    </button>
+  );
+  return (
+    <div className="min-w-0 flex-1 pl-1">
+      <div role="tablist" data-panel-switch className="inline-flex max-w-full gap-0.5 overflow-x-auto rounded-lg bg-muted p-0.5 text-xs font-medium [scrollbar-width:none]">
+        {option("subagents", t(($) => $.subagents.view, { count: subagents }))}
+        {option("tasks", t(($) => $.bg_tasks.view, { count: tasks }))}
+      </div>
+    </div>
+  );
+}
+
+function PanelHeader({ title, back, onClose }: { title: ReactNode; back?: () => void; onClose: () => void }) {
+  return (
+    <div data-subagent-panel-header className="flex h-12 shrink-0 items-center gap-1.5 border-b pr-2 pl-2">
+      {back && <BackButton onBack={back} />}
+      {title}
+      <CloseButton onClose={onClose} />
+    </div>
+  );
+}
+
+/** The 子代理 view (PR 5): one attempt's overview or a subagent's detail. */
+function SubagentsPanel({ target, trace, title, onClose }: {
+  target: SubagentPanelTarget;
+  trace: TurnTraceView;
+  title: ReactNode;
+  onClose: () => void;
+}) {
+  const { t } = useT("chat");
+  const { t: ta } = useT("agents");
+  const setPath = useChatStore((s) => s.setSubagentPath);
+  const items = trace.items;
+  const attemptId = target.attemptId ?? null;
   const currentId = target.path.at(-1);
   const current = currentId ? items.find((item) => item.id === currentId) : undefined;
   const detail = target.path.length > 0;
   const source = useMemo<SubagentTraceSource>(() => ({
-    sessionId: target.sessionId, attemptId: target.attemptId, turnId: target.turnId, live: target.live,
-  }), [target.sessionId, target.attemptId, target.turnId, target.live]);
+    sessionId: target.sessionId, attemptId, turnId: target.turnId, live: target.live,
+  }), [target.sessionId, attemptId, target.turnId, target.live]);
+  // Launch rows of background tasks a subagent started (PR 6): the registry
+  // when it is loaded, else the trace.
+  const taskRows = useCachedBackgroundTasks(target.sessionId);
+  const attemptEnded = !!trace.turn && trace.turn.status !== "running";
+  const resolveBackgroundTask = useMemo(() => backgroundLaunchResolver(items, taskRows, attemptId, attemptEnded),
+    [items, taskRows, attemptId, attemptEnded]);
   const read = trace.read;
   // While pages are still arriving, a subagent that is not there yet (it may
   // be on a later page) and an empty list both mean "loading".
@@ -208,46 +308,85 @@ export function SubagentPanelView({ target, onClose, focusOnMount = true }: {
     body = <div className="p-4 text-sm text-muted-foreground">{unavailable}</div>;
   } else if (detail) {
     body = isSubagent(current)
-      ? <SubagentDetail key={current.id} item={current} items={items} />
+      ? <SubagentDetail key={current.id} item={current} items={items} resolveBackgroundTask={resolveBackgroundTask} />
       : <div data-subagent-not-found className="p-4 text-sm text-muted-foreground">{t(($) => $.subagents.not_found)}</div>;
   } else {
     body = <SubagentOverview items={items} onOpen={(item) => setPath(subagentPath(items, item.id))} />;
   }
+  const back = () => setPath(target.path.slice(0, -1));
   return (
-    <section
-      ref={rootRef}
-      tabIndex={-1}
-      aria-label={t(($) => $.subagents.panel_title)}
-      data-subagent-panel={detail ? "detail" : "overview"}
-      onKeyDown={(event) => {
-        if (event.key !== "Escape" || event.defaultPrevented) return;
-        event.preventDefault();
-        onClose();
-      }}
-      className="flex h-full min-h-0 flex-col bg-background outline-none"
-    >
+    <div className="flex min-h-0 flex-1 flex-col">
       {detail && isSubagent(current)
-        ? <DetailHeader item={current} items={items} onBack={() => setPath(target.path.slice(0, -1))} onClose={onClose} />
-        : (
-          <div data-subagent-panel-header className="flex h-12 shrink-0 items-center gap-1.5 border-b pr-2 pl-2">
-            {detail && <BackButton onBack={() => setPath(target.path.slice(0, -1))} />}
-            <h2 className={cn("min-w-0 flex-1 truncate text-sm font-medium", !detail && "pl-2")}>{t(($) => $.subagents.panel_title)}</h2>
-            <CloseButton onClose={onClose} />
-          </div>
-        )}
+        ? <DetailHeader item={current} items={items} onBack={back} onClose={onClose} />
+        : <PanelHeader title={detail ? <h2 className="min-w-0 flex-1 truncate text-sm font-medium">{t(($) => $.subagents.panel_title)}</h2> : title}
+          back={detail ? back : undefined} onClose={onClose} />}
       <SubagentTraceContext.Provider value={source}>
         <div key={target.path.join("/")} data-subagent-panel-body className="min-h-0 flex-1 overflow-y-auto">{body}</div>
       </SubagentTraceContext.Provider>
       <div data-subagent-panel-footer className="shrink-0 border-t px-4 py-2.5 text-xs text-muted-foreground">
         {t(($) => $.subagents.read_only)}
       </div>
-    </section>
+    </div>
   );
 }
 
-function BackButton({ onBack, className }: { onBack: () => void; className?: string }) {
+/**
+ * The 后台任务 view (PR 6 §8.2): the chat's tasks from the session registry,
+ * opened with or without a running turn; ← from a task's detail goes back to
+ * the list.
+ */
+function BackgroundTasksPanel({ target, tasks, title, onClose }: {
+  target: SubagentPanelTarget;
+  tasks: ChatBackgroundTasksView;
+  title: ReactNode;
+  onClose: () => void;
+}) {
   const { t } = useT("chat");
-  const label = t(($) => $.subagents.back);
+  const setTask = useChatStore((s) => s.setPanelTask);
+  const row = target.task ? findBackgroundTask(tasks.rows, target.task) : null;
+  const back = () => setTask(null);
+  const currentAttemptId = target.live ? target.attemptId ?? null : null;
+  let body: ReactNode;
+  if (tasks.error && !tasks.rows.length) {
+    body = (
+      <div role="alert" className="flex items-center gap-1.5 p-4 text-sm text-destructive">
+        <AlertCircle className="size-4" aria-hidden="true" />
+        {t(($) => $.bg_tasks.load_failed)}
+        <button type="button" onClick={tasks.retry} className="underline underline-offset-2 hover:text-foreground">
+          {t(($) => $.bg_tasks.retry)}
+        </button>
+      </div>
+    );
+  } else if (!tasks.loaded) {
+    body = (
+      <div role="status" className="flex items-center gap-1.5 p-4 text-sm text-muted-foreground">
+        <LoaderCircle className="size-4 animate-spin" aria-hidden="true" />{t(($) => $.bg_tasks.loading)}
+      </div>
+    );
+  } else if (target.task) {
+    body = row ? <BackgroundTaskDetail row={row} />
+      : <div data-bg-not-found className="p-4 text-sm text-muted-foreground">{t(($) => $.bg_tasks.not_found)}</div>;
+  } else {
+    body = <BackgroundTasksOverview sessionId={target.sessionId} rows={tasks.rows} currentAttemptId={currentAttemptId}
+      onOpen={(open) => setTask({ task_id: open.task_id, provider_session_id: open.provider_session_id })} />;
+  }
+  const footer = row ? <BackgroundTaskDetailFooter row={row} /> : null;
+  return (
+    <div className="flex min-h-0 flex-1 flex-col">
+      {target.task && row
+        ? <BackgroundTaskDetailHeader sessionId={target.sessionId} row={row} back={<BackButton onBack={back} label={t(($) => $.bg_tasks.back)} />}
+          close={<CloseButton onClose={onClose} />} />
+        : <PanelHeader title={target.task ? <h2 className="min-w-0 flex-1 truncate text-sm font-medium">{t(($) => $.bg_tasks.panel_title)}</h2> : title}
+          back={target.task ? back : undefined} onClose={onClose} />}
+      <div key={target.task?.task_id ?? ""} data-bg-panel-body className="min-h-0 flex-1 overflow-y-auto">{body}</div>
+      {footer && <div data-bg-panel-footer className="shrink-0 border-t px-4 py-2.5 text-xs text-muted-foreground">{footer}</div>}
+    </div>
+  );
+}
+
+function BackButton({ onBack, className, label: given }: { onBack: () => void; className?: string; label?: string }) {
+  const { t } = useT("chat");
+  const label = given ?? t(($) => $.subagents.back);
   return (
     <button type="button" data-subagent-panel-back aria-label={label} title={label} onClick={onBack} className={cn(ICON_BUTTON, className)}>
       <ArrowLeft className="size-4" aria-hidden="true" />
@@ -384,7 +523,9 @@ function nonBlank(value: string | null | undefined): string | null {
   return value?.trim() ? value : null;
 }
 
-function SubagentDetail({ item, items }: { item: TraceSubagentItem; items: readonly TraceItem[] }) {
+function SubagentDetail({ item, items, resolveBackgroundTask }: {
+  item: TraceSubagentItem; items: readonly TraceItem[]; resolveBackgroundTask?: BackgroundTaskResolver;
+}) {
   const { t } = useT("chat");
   const generations = useMemo(() => subagentGenerations(items, item), [items, item]);
   const status = subagentStatus(item);
@@ -400,6 +541,7 @@ function SubagentDetail({ item, items }: { item: TraceSubagentItem; items: reado
     <div data-subagent-detail={item.id} className="space-y-4 px-4 py-5">
       {generations.map((generation, index) => (
         <GenerationView key={generation.key} generation={generation} item={item} items={items} first={index === 0}
+          resolveBackgroundTask={resolveBackgroundTask}
           last={index === generations.length - 1}
           // The last generation's reply is the result only when it completed.
           showReply={index < generations.length - 1 || status === "completed"} />
@@ -454,19 +596,20 @@ function parseTime(value: string | null | undefined): number | null {
 }
 
 /** One generation: its instructions, its steps fold (timed by the generation) and its reply. */
-function GenerationView({ generation, item, items, first, last, showReply }: {
+function GenerationView({ generation, item, items, first, last, showReply, resolveBackgroundTask }: {
   generation: SubagentGeneration;
   item: TraceSubagentItem;
   items: readonly TraceItem[];
   first: boolean;
   last: boolean;
   showReply: boolean;
+  resolveBackgroundTask?: BackgroundTaskResolver;
 }) {
   const { t } = useT("chat");
   const headerText = useFoldHeaderText();
   const reply = showReply ? generation.reply : null;
-  const steps = useMemo(() => buildChildSteps(items, item.id, { children: generation.children, excludeId: reply?.id }),
-    [items, item.id, generation.children, reply?.id]);
+  const steps = useMemo(() => buildChildSteps(items, item.id, { children: generation.children, excludeId: reply?.id, resolveBackgroundTask }),
+    [items, item.id, generation.children, reply?.id, resolveBackgroundTask]);
   const label = useStickyLabel(generation.running ? liveLabel(steps) : null);
   const start = parseTime(generation.startedAt);
   const now = useTickingNow(generation.running && start !== null, start);

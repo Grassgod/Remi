@@ -22,6 +22,7 @@ import {
   ShieldQuestion,
   SquareTerminal,
   TextSelect,
+  Workflow,
   Wrench,
   XCircle,
   type LucideIcon,
@@ -63,7 +64,7 @@ function itemIcon(item: TraceItem): LucideIcon {
     case "question": return CircleHelp;
     case "compaction": return TextSelect;
     case "notice": return item.severity === "error" ? AlertCircle : FileText;
-    case "background_task": return SquareTerminal; // PR 6 Phase C
+    case "background_task": return item.task_type === "workflow" ? Workflow : SquareTerminal;
   }
 }
 
@@ -92,7 +93,7 @@ function hasDetail(item: TraceItem, childCount: number): boolean {
     case "notice":
       return !!item.description || !!item.category || !!item.error_kind;
     case "background_task":
-      return false; // PR 6 Phase C: no detail until the background-task view lands.
+      return !!item.description || !!item.summary || !!item.output_tail || !!item.usage;
   }
 }
 
@@ -281,8 +282,28 @@ function ItemDetail({ item }: { item: TraceItem }) {
         </div>
       );
     case "background_task":
-      return null; // PR 6 Phase C
+      // The attempt's own record of the task (PR 6 §4.1); its later state is the chat's background tasks view.
+      return (
+        <div className="space-y-1.5 rounded border bg-muted/40 p-3 text-[11px] text-muted-foreground">
+          {item.description && item.description !== item.name && <div className="whitespace-pre-wrap break-all font-mono text-foreground">{item.description}</div>}
+          {item.summary && <div className="whitespace-pre-wrap text-foreground">{item.summary}</div>}
+          {item.usage && <BackgroundTaskUsage usage={item.usage} />}
+          {item.output_tail && (
+            <pre className="max-h-48 overflow-auto whitespace-pre-wrap break-words font-mono">{item.output_tail}</pre>
+          )}
+        </div>
+      );
   }
+}
+
+/** A workflow's usage, in the chat's background-task words (PR 6). */
+function BackgroundTaskUsage({ usage }: { usage: { total_tokens: number; tool_uses: number } }) {
+  const { t } = useT("chat");
+  return (
+    <div className="tabular-nums">
+      {t(($) => $.bg_tasks.usage_tokens, { count: usage.total_tokens })} · {t(($) => $.bg_tasks.usage_tools, { count: usage.tool_uses })}
+    </div>
+  );
 }
 
 export function PlanEntries({ entries }: { entries: TraceItemOf<"plan">["entries"] }) {

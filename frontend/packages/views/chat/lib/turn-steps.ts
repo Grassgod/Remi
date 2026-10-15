@@ -19,6 +19,7 @@ import {
   summarizeSteps,
   type AgentControl,
   type AgentResolver,
+  type BackgroundTaskResolver,
   type StepCategory,
   type StepDescriptor,
   type StepSummaryFragment,
@@ -38,6 +39,9 @@ import {
  *   tool call that messages, interrupts, resumes, closes or lists subagents is
  *   an agent-control row (PR 5 §6.1, shared `agentControl`) whose target reads
  *   as the subagent's name; a hidden step (Codex `wait`) gives no row.
+ *   A command or tool call that started a background task (PR 6 §4.3) is one
+ *   launch row that reads as the task in its phase (`resolveBackgroundTask`);
+ *   the task's own item draws nothing, at any depth.
  *   Reasoning gives no row; it only feeds the live label. Commentary, context
  *   compaction, subagents (one-line rows that open the subagent panel), the
  *   plan and notices are breaker blocks.
@@ -67,7 +71,9 @@ export type StepIconKind =
   | "agent_interrupt"
   | "agent_resume"
   | "agent_close"
-  | "agent_list";
+  | "agent_list"
+  | "workflow"
+  | "background";
 
 export interface StepRow {
   key: string;
@@ -120,6 +126,14 @@ export interface TurnSteps {
   resolveAgent: AgentResolver;
 }
 
+export interface StepsOptions {
+  /**
+   * The background task a call started (PR 6): its launch row reads as the
+   * task. Build one with `backgroundLaunchResolver` (`lib/background-tasks.ts`).
+   */
+  resolveBackgroundTask?: BackgroundTaskResolver;
+}
+
 const STEP_TYPES: ReadonlySet<TraceItem["type"]> = new Set(["command", "file_change", "web_search", "tool"]);
 
 export function isStepItem(item: TraceItem): item is StepItem {
@@ -139,9 +153,20 @@ function actionIcon(action: CommandAction | undefined): StepIconKind {
   }
 }
 
-function row(item: StepItem, key: string, part?: CommandAction | FileChange, resolveAgent?: AgentResolver): StepRow {
-  const descriptor = describeStep(item, part, resolveAgent);
+/** A launch row's glyph: a shell keeps the terminal (or the stop) glyph, a workflow and other tasks get their own. */
+function launchIcon(item: StepItem, descriptor: StepDescriptor): StepIconKind {
+  if (descriptor.key.startsWith("background_workflow_")) return "workflow";
+  if (descriptor.key.startsWith("background_task_")) return "background";
+  return descriptor.state === "stopped" || item.status === "stopped" ? "stopped" : "command";
+}
+
+function row(item: StepItem, key: string, part?: CommandAction | FileChange, resolveAgent?: AgentResolver,
+  resolveBackgroundTask?: BackgroundTaskResolver): StepRow {
+  const descriptor = describeStep(item, part, resolveAgent, resolveBackgroundTask);
   const category = stepCategory(item, part, resolveAgent) ?? "tool";
+  if (descriptor.key.startsWith("background_")) {
+    return { key, item, part, descriptor, category, icon: launchIcon(item, descriptor), active: item.status === "in_progress" };
+  }
   const control = item.type === "tool" ? agentControl(item, resolveAgent) ?? undefined : undefined;
   if (control && control.kind !== "wait") {
     return { key, item, part, descriptor, category, icon: `agent_${control.kind}`, active: item.status === "in_progress", control };
@@ -167,9 +192,14 @@ function row(item: StepItem, key: string, part?: CommandAction | FileChange, res
 /**
  * The step rows one item contributes; empty for anything that is not a step
  * and for a hidden step. `resolveAgent` ({@link subagentResolver}) names the
- * subagent a control row targets.
+ * subagent a control row targets; `resolveBackgroundTask` finds the task a
+ * call started, whose launch is one row.
  */
-export function stepRows(item: TraceItem, resolveAgent?: AgentResolver): StepRow[] {
+export function stepRows(item: TraceItem, resolveAgent?: AgentResolver, resolveBackgroundTask?: BackgroundTaskResolver): StepRow[] {
+  // A call that started a background task is one row, whatever it parsed into.
+  if ((item.type === "command" || item.type === "tool") && item.status !== "declined" && resolveBackgroundTask?.(item.id)) {
+    return [row(item, item.type === "command" ? `${item.id}:0` : item.id, undefined, resolveAgent, resolveBackgroundTask)];
+  }
   switch (item.type) {
     case "command": {
       // A command the model labelled (Claude's Bash description) is one row
@@ -232,7 +262,7 @@ export function groupSteps(entries: ReadonlyArray<StepRow | { breaker: BreakerIt
 }
 
 /** `all` is every item of the trace, at any depth: control rows name their target from it. */
-function buildSteps(process: readonly TraceItem[], finals: TraceAgentMessageItem[], all: readonly TraceItem[]): TurnSteps {
+function buildSteps(process: readonly TraceItem[], finals: TraceAgentMessageItem[], all: readonly TraceItem[], options: StepsOptions = {}): TurnSteps {
   const resolveAgent = subagentResolver(all);
   const entries: Array<StepRow | { breaker: BreakerItem }> = [];
   const rows: StepRow[] = [];
@@ -256,7 +286,7 @@ function buildSteps(process: readonly TraceItem[], finals: TraceAgentMessageItem
       else otherRunning = true;
     }
     if (isStepItem(item)) {
-      const itemRows = stepRows(item, resolveAgent);
+      const itemRows = stepRows(item, resolveAgent, options.resolveBackgroundTask);
       rows.push(...itemRows);
       entries.push(...itemRows);
       breakerRunning = false;
@@ -273,7 +303,7 @@ function buildSteps(process: readonly TraceItem[], finals: TraceAgentMessageItem
 }
 
 /** The top-level fold of a turn: process blocks plus the final replies. */
-export function buildTurnSteps(items: readonly TraceItem[]): TurnSteps {
+export function buildTurnSteps(items: readonly TraceItem[], options: StepsOptions = {}): TurnSteps {
   const process: TraceItem[] = [];
   const finals: TraceAgentMessageItem[] = [];
   for (const item of items) {
@@ -281,12 +311,13 @@ export function buildTurnSteps(items: readonly TraceItem[]): TurnSteps {
     // Reasoning is read here whether or not the shared count includes it.
     else if (isProcessItem(item) || (item.type === "reasoning" && item.parent_id === null)) process.push(item);
   }
-  return buildSteps(process, finals, items);
+  return buildSteps(process, finals, items, options);
 }
 
-const NESTED_HIDDEN: ReadonlySet<TraceItem["type"]> = new Set(["user_message", "permission", "question"]);
+/** A subagent's own items that draw no row: as at the top, its background tasks show through their launch rows. */
+const NESTED_HIDDEN: ReadonlySet<TraceItem["type"]> = new Set(["user_message", "permission", "question", "background_task"]);
 
-export interface ChildStepsOptions {
+export interface ChildStepsOptions extends StepsOptions {
   /** Leave this item out: the reply the subagent panel shows below the fold. */
   excludeId?: string | null;
   /** The subagent's direct children to use, when only a part of them (one generation) is wanted. */
@@ -295,12 +326,13 @@ export interface ChildStepsOptions {
 
 /**
  * The steps a subagent ran, for its detail in the subagent panel. Subagent
- * text is never final. Its instructions (`user_message`), permissions and
- * questions draw no row.
+ * text is never final. Its instructions (`user_message`), permissions,
+ * questions and background tasks (their launch rows stand for them) draw no
+ * row.
  */
 export function buildChildSteps(items: readonly TraceItem[], parentId: string, options: ChildStepsOptions = {}): TurnSteps {
   const children = options.children ?? items.filter((item) => item.parent_id === parentId);
-  return buildSteps(children.filter((item) => !NESTED_HIDDEN.has(item.type) && item.id !== options.excludeId), [], items);
+  return buildSteps(children.filter((item) => !NESTED_HIDDEN.has(item.type) && item.id !== options.excludeId), [], items, options);
 }
 
 // ── Summaries and the live label ────────────────────────────────────────────

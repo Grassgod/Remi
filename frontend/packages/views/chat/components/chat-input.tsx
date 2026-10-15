@@ -81,6 +81,8 @@ interface ChatInputProps {
    *  fires (the editor's file-upload extension is a no-op without a handler). */
   onUploadFile?: (file: File) => Promise<UploadResult | null>;
   onStop?: () => void;
+  /** The stop button's name, when it needs to say more than 「停止」 (background tasks keep running). */
+  stopLabel?: string;
   isRunning?: boolean;
   disabled?: boolean;
   /** True when the user has no agent available — disables the editor and
@@ -102,6 +104,7 @@ export function ChatInput({
   onSaveQueueEdit,
   onUploadFile,
   onStop,
+  stopLabel,
   isRunning,
   disabled,
   noAgent,
@@ -467,8 +470,8 @@ export function ChatInput({
           {isRunning && (
             <Button
               size="icon-sm"
-              aria-label={t(($) => $.input.stop_tooltip)}
-              title={t(($) => $.input.stop_tooltip)}
+              aria-label={stopLabel ?? t(($) => $.input.stop_tooltip)}
+              title={stopLabel ?? t(($) => $.input.stop_tooltip)}
               onClick={onStop}
             >
               <Square className="size-3.5 fill-current" />
