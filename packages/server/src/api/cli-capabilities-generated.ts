@@ -6375,6 +6375,7 @@ export const CLI_CAPABILITIES_RUNTIME = {
     "turn.retry": {
       "command": "remi turn retry",
       "auth": [
+        "human",
         "task"
       ],
       "capability": "turn.retry",

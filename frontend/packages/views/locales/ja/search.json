@@ -1,6 +1,6 @@
 {
   "title": "検索",
-  "description": "ページ、イシュー、プロジェクト、メンバーを検索します",
+  "description": "ページ、イシュー、プロジェクト、メンバー、チャットを検索します",
   "placeholder": "コマンドを入力するか検索...",
   "groups": {
     "pages": "ページ",
@@ -8,6 +8,7 @@
     "members": "メンバー",
     "projects": "プロジェクト",
     "issues": "イシュー",
+    "chats": "チャット",
     "recent": "最近の項目"
   },
   "pages": {

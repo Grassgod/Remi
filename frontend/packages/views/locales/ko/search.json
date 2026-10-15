@@ -1,6 +1,6 @@
 {
   "title": "검색",
-  "description": "페이지, 이슈, 프로젝트, 멤버를 검색합니다",
+  "description": "페이지, 이슈, 프로젝트, 멤버, 채팅을 검색합니다",
   "placeholder": "명령어를 입력하거나 검색하세요...",
   "groups": {
     "pages": "페이지",
@@ -8,6 +8,7 @@
     "members": "멤버",
     "projects": "프로젝트",
     "issues": "이슈",
+    "chats": "채팅",
     "recent": "최근 항목"
   },
   "pages": {

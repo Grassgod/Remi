@@ -5,16 +5,16 @@ import { cn } from "@multiremi/ui/lib/utils";
 import { UnicodeSpinner } from "@multiremi/ui/components/common/unicode-spinner";
 import type { AgentAvailability } from "@multiremi/core/agents";
 import type { ChatPendingTask } from "@multiremi/core/types";
-
-type StageMessage = { type: string; tool?: string | null };
+import type { TraceItem } from "@multiremi/contracts/trace";
 import { formatElapsedSecs } from "../../common/format";
+import { isAwaitingHuman } from "../lib/turn-steps";
 import { useT } from "../../i18n";
 
 interface Props {
   /** Server-authoritative pending-task snapshot (`created_at` anchors the timer). */
   pendingTask: ChatPendingTask;
-  /** Live task-message stream — the latest non-error entry decides the running-stage label. */
-  taskMessages: readonly StageMessage[];
+  /** The live trace's items; the last top-level one decides the running stage. */
+  items: readonly TraceItem[];
   /** Resolved presence; pass `undefined` to suppress availability hints. */
   availability: AgentAvailability | undefined;
 }
@@ -42,27 +42,12 @@ type ToolKey =
   | "searching_web"
   | "fallback";
 
-// Tool slug → translation key. Unknown tools fall back to "Working".
-const TOOL_KEY_BY_SLUG: Record<string, Exclude<ToolKey, "fallback">> = {
-  bash: "running_command",
-  exec: "running_command",
-  read: "reading_files",
-  glob: "reading_files",
-  grep: "searching_code",
-  write: "making_edits",
-  edit: "making_edits",
-  multi_edit: "making_edits",
-  multiedit: "making_edits",
-  web_search: "searching_web",
-  websearch: "searching_web",
-};
-
 // Pure stage decision returning translation keys. The hook below maps these
 // keys into localized labels — keeping the decision pure makes it easy to
 // follow the priority rules without translation noise.
 export function pickStageKeys(
   status: string | undefined,
-  taskMessages: readonly StageMessage[],
+  items: readonly TraceItem[],
   availability: AgentAvailability | undefined,
 ): { stageKey: StageKey; toolKey?: ToolKey; static?: boolean } {
   if (
@@ -93,37 +78,44 @@ export function pickStageKeys(
   if (status === "queued") return { stageKey: "queued" };
   if (status === "dispatched") return { stageKey: "starting_up" };
 
-  // running: latest meaningful message decides the label.
-  let latest: StageMessage | null = null;
-  for (let i = taskMessages.length - 1; i >= 0; i--) {
-    const m = taskMessages[i];
-    if (m && m.type !== "error" && m.type !== "tool_result") {
-      latest = m;
-      break;
-    }
+  // running: the last top-level item decides the label. A tool names its
+  // work while it runs; once it is done the agent is thinking again.
+  let last: TraceItem | undefined;
+  for (let i = items.length - 1; i >= 0; i--) {
+    const item = items[i]!;
+    if (item.parent_id === null && item.type !== "user_message") { last = item; break; }
   }
+  if (!last) return { stageKey: "thinking" };
+  if (last.type === "agent_message") return { stageKey: last.status === "in_progress" ? "typing" : "thinking" };
+  if (last.status !== "in_progress") return { stageKey: "thinking" };
+  const toolKey = toolStage(last);
+  return toolKey ? { stageKey: "thinking", toolKey } : { stageKey: "thinking" };
+}
 
-  if (!latest) return { stageKey: "thinking" };
-  if (latest.type === "thinking") return { stageKey: "thinking" };
-  if (latest.type === "text") return { stageKey: "typing" };
-  if (latest.type === "tool_use") {
-    const tool = (latest.tool ?? "").toLowerCase();
-    const toolKey = TOOL_KEY_BY_SLUG[tool] ?? "fallback";
-    // tool_use is technically still "thinking + tool" — surface the tool
-    // label in the toolKey channel; main stage label uses the tool one.
-    return { stageKey: "thinking", toolKey };
+function toolStage(item: TraceItem): ToolKey | null {
+  switch (item.type) {
+    case "command": {
+      const kinds = new Set(item.actions.map((action) => action.type));
+      if (kinds.size === 1 && kinds.has("read")) return "reading_files";
+      if (kinds.size > 0 && [...kinds].every((kind) => kind === "search" || kind === "list_files")) return "searching_code";
+      return "running_command";
+    }
+    case "file_change": return "making_edits";
+    case "web_search": return "searching_web";
+    case "tool":
+    case "subagent": return "fallback";
+    default: return null;
   }
-  return { stageKey: "thinking" };
 }
 
 function useResolveStage(): (
   status: string | undefined,
-  taskMessages: readonly StageMessage[],
+  items: readonly TraceItem[],
   availability: AgentAvailability | undefined,
 ) => Stage {
   const { t } = useT("chat");
-  return (status, taskMessages, availability) => {
-    const decision = pickStageKeys(status, taskMessages, availability);
+  return (status, items, availability) => {
+    const decision = pickStageKeys(status, items, availability);
     if (decision.toolKey) {
       return {
         label: t(($) => $.status_pill.tools[decision.toolKey!]),
@@ -138,7 +130,7 @@ function useResolveStage(): (
 
 export function TaskStatusPill({
   pendingTask,
-  taskMessages,
+  items,
   availability,
 }: Props) {
   const resolveStage = useResolveStage();
@@ -163,18 +155,21 @@ export function TaskStatusPill({
     return () => clearInterval(timer);
   }, []);
 
-  // Effective status — defense-in-depth derive on top of the cache. If any
-  // task_message has streamed in, the daemon has by definition started
-  // running; we trust that observation over a stale cache.
-  const status = taskMessages.length > 0 ? "running" : pendingTask.status;
+  // Effective status — defense-in-depth derive on top of the cache. A wait on
+  // a person comes first: the server's `awaiting_human`, or a permission or
+  // question the trace shows open (the turn's own input item must not flip it
+  // to running). Otherwise, once the trace holds any item the daemon has by
+  // definition started running; we trust that over a stale cache.
+  const status = pendingTask.status === "awaiting_human" || isAwaitingHuman(items) ? "awaiting_human"
+    : items.length > 0 ? "running" : pendingTask.status;
   const elapsedSecs = Math.max(0, Math.floor((now - anchor) / 1000));
   const queuedWaitReason = status === "queued" && typeof pendingTask.wait_reason === "string"
     ? pendingTask.wait_reason.trim() : "";
   // A task-specific explanation takes priority over coarse agent availability.
   const stage = queuedWaitReason
-    ? { ...resolveStage(status, taskMessages, undefined), static: true }
-    : resolveStage(status, taskMessages, availability);
-  const preparationSummary = taskMessages.length === 0 && !stage.static
+    ? { ...resolveStage(status, items, undefined), static: true }
+    : resolveStage(status, items, availability);
+  const preparationSummary = items.length === 0 && !stage.static
     && (status === "running" || status === "dispatched")
     && typeof pendingTask.progress_summary === "string"
     ? pendingTask.progress_summary.trim() : "";

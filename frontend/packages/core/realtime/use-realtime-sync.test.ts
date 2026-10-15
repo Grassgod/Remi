@@ -1,4 +1,4 @@
-import { QueryClient } from "@tanstack/react-query";
+import { QueryClient, QueryObserver } from "@tanstack/react-query";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { setApiInstance } from "../api";
 import type { ApiClient } from "../api/client";
@@ -55,7 +55,20 @@ describe("applyChatDoneToCache", () => {
     const invalidate = vi.spyOn(qc, "invalidateQueries");
     applyChatDoneToCache(qc, donePayload());
     expect(qc.getQueryData<ChatPendingTask>(pendingKey)).toEqual({ supports_queue: true });
-    expect(invalidate).toHaveBeenCalledWith({ queryKey: ["task-trace", taskId] });
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ["task-trace", taskId], refetchType: "none" });
+  });
+
+  it("marks the turn trace stale without rereading it for an active reader", async () => {
+    const qc = createQueryClient();
+    const read = vi.fn(async () => ({ state: {}, read: { state: "ok" }, pending: [] }));
+    const observer = new QueryObserver(qc, { queryKey: ["task-trace", taskId], queryFn: read, staleTime: Infinity });
+    const unsubscribe = observer.subscribe(() => {});
+    await vi.waitFor(() => expect(observer.getCurrentResult().isSuccess).toBe(true));
+    applyChatDoneToCache(qc, donePayload());
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(read).toHaveBeenCalledTimes(1);
+    expect(qc.getQueryState(["task-trace", taskId])?.isInvalidated).toBe(true);
+    unsubscribe();
   });
 
   it("handles a replayed chat done event", () => {

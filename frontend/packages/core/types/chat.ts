@@ -42,6 +42,8 @@ export interface UpdateChatSessionInput {
 
 export interface PendingChatTaskItem {
   task_id: string;
+  /** The turn the attempt belongs to; cancel addresses the turn. */
+  turn_id?: string;
   status: string;
   chat_session_id: string;
 }

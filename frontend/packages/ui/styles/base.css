@@ -135,6 +135,41 @@
   animation: chat-text-shimmer 2.5s linear infinite;
 }
 
+/* Cadenced shimmer for a Chat step that is still running (Codex steps):
+ * the highlight crosses the text once in 1000ms, 600ms after the label
+ * appears and then every 4000ms, in 48 steps. The band sits outside the
+ * text at both ends of the sweep, so between runs the label reads as plain
+ * muted text. The 4000ms keyframe cycle holds still after its first 25%.
+ * Reduced motion keeps the muted text and drops the sweep. */
+@keyframes step-shimmer {
+  0% { background-position: 125% 0; }
+  25%, 100% { background-position: 0% 0; }
+}
+
+.animate-step-shimmer {
+  background-image: linear-gradient(
+    90deg,
+    var(--muted-foreground) 0%,
+    var(--muted-foreground) 40%,
+    var(--foreground) 50%,
+    var(--muted-foreground) 60%,
+    var(--muted-foreground) 100%
+  );
+  background-size: 250% 100%;
+  background-position: 0% 0;
+  background-clip: text;
+  -webkit-background-clip: text;
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+  animation: step-shimmer 4000ms steps(48, end) 600ms infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-step-shimmer {
+    animation: none;
+  }
+}
+
 /* Navigation progress bar: 2px brand-colored indeterminate sweep with a
  * right-edge glow that shows across the top of the dashboard while a
  * transition-wrapped push/replace is committing. Driven by useIsNavigating();

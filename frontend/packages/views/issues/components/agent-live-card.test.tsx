@@ -152,7 +152,7 @@ beforeEach(() => {
   wsReconnectCallbacks.clear();
   mockApi.getActiveTasksForIssue.mockReset();
   mockApi.getTaskTrace.mockReset();
-  mockApi.getTaskTrace.mockResolvedValue({ events: [], eof: true, state: "ok", next_after_seq: 0 });
+  mockApi.getTaskTrace.mockResolvedValue({ view: "turn", format: "v2", turn: null, items: [], next_item_cursor: null, head: 0, closed: false, state: "ok" });
   mockApi.cancelTask.mockReset();
 });
 

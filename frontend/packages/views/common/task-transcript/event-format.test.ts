@@ -1,106 +1,80 @@
 import { describe, expect, it } from "vitest";
 import type { AgentTask } from "@multiremi/core/types/agent";
-import type { TimelineItem } from "./build-timeline";
+import {
+  at, change, command, compaction, fileChange, message, notice, permission, plan, read, reasoning, search, subagent, tool,
+  unknown, userMessage, webSearch,
+} from "../../test/trace-fixtures";
 import {
   formatEventTime,
   formatProvider,
   formatStepDuration,
-  getEventColor,
-  getEventLabel,
-  getEventSummary,
-  isSubagentStep,
-  omitKeys,
-  shortThreadId,
+  getItemColor,
+  getItemLabel,
+  getItemSummary,
+  itemDurationMs,
+  itemFilterKey,
   usageSnapshotFromTask,
 } from "./event-format";
 
-function item(over: Partial<TimelineItem> & Pick<TimelineItem, "type">): TimelineItem {
-  return { seq: 1, ...over };
-}
-
-describe("getEventColor", () => {
-  it("maps each event kind to its lane colour", () => {
-    expect(getEventColor(item({ type: "text" }))).toBe("agent");
-    expect(getEventColor(item({ type: "thinking" }))).toBe("thinking");
-    expect(getEventColor(item({ type: "tool_use" }))).toBe("tool");
-    expect(getEventColor(item({ type: "tool_result" }))).toBe("result");
-    expect(getEventColor(item({ type: "steer" }))).toBe("steer");
-    expect(getEventColor(item({ type: "error" }))).toBe("error");
-  });
-
-  it("falls back to the neutral lane for kinds it has never seen", () => {
-    expect(getEventColor(item({ type: "permission_request" }))).toBe("result");
+describe("getItemColor", () => {
+  it("maps each item kind to its lane colour", () => {
+    expect(getItemColor(message("m", "hi"))).toBe("agent");
+    expect(getItemColor(reasoning("r", "hm"))).toBe("thinking");
+    expect(getItemColor(command("c", [read("a.ts")]))).toBe("tool");
+    expect(getItemColor(command("c", [unknown("x")], { status: "failed" }))).toBe("error");
+    expect(getItemColor(userMessage("u", "steer"))).toBe("steer");
+    expect(getItemColor(notice("n", "boom", "error"))).toBe("error");
+    expect(getItemColor(plan([]))).toBe("result");
   });
 });
 
-describe("getEventLabel", () => {
-  it("prefers the tool name over the generic label", () => {
-    expect(getEventLabel(item({ type: "tool_use", tool: "Bash" }))).toBe("Bash");
-    expect(getEventLabel(item({ type: "tool_use" }))).toBe("Tool");
-    expect(getEventLabel(item({ type: "tool_result" }))).toBe("Result");
-  });
-
-  it("renders an unknown kind as spaced words rather than 'Event'", () => {
-    expect(getEventLabel(item({ type: "plan_update" as TimelineItem["type"] }))).toBe("plan update");
+describe("getItemLabel", () => {
+  it("prefers the tool name for tool items", () => {
+    expect(getItemLabel(command("c", [read("a.ts")]))).toBe("Bash");
+    expect(getItemLabel(tool("t", "mcp__linear__search"))).toBe("mcp__linear__search");
+    expect(getItemLabel(message("m", "x", "final"))).toBe("Final");
+    expect(getItemLabel(compaction("cmp"))).toBe("Compaction");
   });
 
   it("distinguishes a user steer from a force-answer request", () => {
-    expect(getEventLabel(item({ type: "steer", meta: { steer_kind: "steer" } })))
-      .toBe("User steer");
-    expect(getEventLabel(item({ type: "steer", meta: { steer_kind: "force_answer" } })))
-      .toBe("Deliver now");
+    const steer = { ...userMessage("s", "go"), origin: "steer" as const, steer: { steer_id: "s", kind: "steer", injected: true, author_type: null, author_id: null } };
+    expect(getItemLabel(steer)).toBe("User steer");
+    expect(getItemLabel({ ...steer, steer: { ...steer.steer, kind: "force_answer" } })).toBe("Deliver now");
   });
 });
 
-describe("getEventSummary", () => {
-  it("uses the first non-empty line of agent text", () => {
-    expect(getEventSummary(item({ type: "text", content: "\n\n  hello there\nsecond" })))
-      .toBe("  hello there");
+describe("getItemSummary", () => {
+  it("uses the first non-empty line of text", () => {
+    expect(getItemSummary(message("m", "\n\nfirst\nsecond"))).toBe("first");
   });
 
-  it("shortens a deep file path from a tool input", () => {
-    expect(
-      getEventSummary(item({ type: "tool_use", input: { file_path: "/a/b/c/d/e.ts" } })),
-    ).toBe(".../d/e.ts");
+  it("summarizes commands by their text, else by the parsed action", () => {
+    expect(getItemSummary(command("c", [unknown("bun test")]))).toBe("bun test");
+    expect(getItemSummary(command("c", [read("/repo/src/a/b.ts")], { command: null }))).toBe("cat /repo/src/a/b.ts");
+    expect(getItemSummary({ ...command("c", [search("todo")]), command: null, actions: [{ type: "search", command: null, query: "todo", path: null }] })).toBe("todo");
+    expect(getItemSummary(command("c", [unknown("x".repeat(200))])).endsWith("...")).toBe(true);
   });
 
-  it("leaves a shallow path alone", () => {
-    expect(getEventSummary(item({ type: "tool_use", input: { path: "a/b.ts" } }))).toBe("a/b.ts");
+  it("summarizes files, searches, tools, subagents, plans and permissions", () => {
+    expect(getItemSummary(fileChange("f", [change("/repo/src/a/b.ts"), change("c.ts")]))).toBe(".../a/b.ts, c.ts");
+    expect(getItemSummary(webSearch("w", "acp"))).toBe("acp");
+    expect(getItemSummary(tool("t", "x", { input: { file_path: "/a/b/c/d.ts" } }))).toBe(".../c/d.ts");
+    expect(getItemSummary(subagent("s", "Explore"))).toBe("Explore");
+    expect(getItemSummary(plan([{ content: "a", status: "completed", priority: null }, { content: "b", status: "pending", priority: null }]))).toBe("1/2 · a · b");
+    expect(getItemSummary(permission("p", "Bash"))).toBe("Bash · selected");
+  });
+});
+
+describe("item filters and timing", () => {
+  it("filters tool items by tool and the rest by type", () => {
+    expect(itemFilterKey(command("c", [read("a.ts")]))).toBe("tool:Bash");
+    expect(itemFilterKey(message("m", "hi"))).toBe("agent_message");
   });
 
-  it("truncates a long command", () => {
-    const cmd = "x".repeat(200);
-    const summary = getEventSummary(item({ type: "tool_use", input: { command: cmd } }));
-    expect(summary).toHaveLength(123);
-    expect(summary.endsWith("...")).toBe(true);
-  });
-
-  it("falls back to any short string field", () => {
-    expect(getEventSummary(item({ type: "tool_use", input: { whatever: "ok" } }))).toBe("ok");
-  });
-
-  it("returns empty for a tool_use with no input at all", () => {
-    expect(getEventSummary(item({ type: "tool_use" }))).toBe("");
-  });
-
-  it("appends the option count to a permission request", () => {
-    expect(
-      getEventSummary(
-        item({
-          type: "permission_request",
-          content: "Permission requested: Bash",
-          input: { options: [{}, {}] },
-        }),
-      ),
-    ).toBe("Permission requested: Bash (2)");
-  });
-
-  it("joins the chosen option and status on a response", () => {
-    expect(
-      getEventSummary(
-        item({ type: "permission_response", input: { option_id: "allow", status: "answered" } }),
-      ),
-    ).toBe("allow · answered");
+  it("prefers the daemon's duration, else the item's own span", () => {
+    expect(itemDurationMs(command("c", [read("a.ts")], { duration_ms: 1234 }))).toBe(1234);
+    expect(itemDurationMs(reasoning("r", "x", { started_at: at(0), completed_at: at(3) }))).toBe(3000);
+    expect(itemDurationMs(message("m", "x"))).toBeNull();
   });
 });
 
@@ -120,21 +94,6 @@ describe("small formatters", () => {
   it("returns an empty string for an unparseable timestamp", () => {
     expect(formatEventTime("not-a-date")).toBe("");
     expect(formatEventTime("2026-01-01T10:00:00Z")).not.toBe("");
-  });
-
-  it("shows only the head of a thread uuid", () => {
-    expect(shortThreadId("0123456789abcdef")).toBe("01234567");
-  });
-
-  it("drops the keys a detail pane renders itself", () => {
-    expect(omitKeys({ a: 1, b: 2, c: 3 }, ["b"])).toEqual({ a: 1, c: 3 });
-  });
-
-  it("recognizes the two subagent-delegating tools", () => {
-    expect(isSubagentStep("Agent")).toBe(true);
-    expect(isSubagentStep("Task")).toBe(true);
-    expect(isSubagentStep("Bash")).toBe(false);
-    expect(isSubagentStep(undefined)).toBe(false);
   });
 });
 

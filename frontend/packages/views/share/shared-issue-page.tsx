@@ -17,9 +17,11 @@ import type {
   AgentTask,
   SharedIssueActor,
   SharedIssueBundle,
-  SharedTaskTracePage,
   TimelineEntry,
 } from "@multiremi/core/types";
+import type { TraceItem } from "@multiremi/contracts/trace";
+import { applyTurnTracePage, EMPTY_TURN_TRACE } from "@multiremi/shared/turn-trace";
+import { describeStep } from "@multiremi/shared/trace-step-copy";
 import { api } from "@multiremi/core/api";
 import { Badge } from "@multiremi/ui/components/ui/badge";
 import { Markdown } from "@multiremi/ui/markdown";
@@ -312,6 +314,9 @@ function SharedTimelineEntry({
   );
 }
 
+/** Pages a shared trace reads at most; the cursor must advance on each. */
+const MAX_SHARED_TRACE_PAGES = 200;
+
 export function SharedTask({
   task,
   actors,
@@ -322,6 +327,7 @@ export function SharedTask({
   token: string;
 }) {
   const { t } = useT("issues");
+  const { t: tc } = useT("chat");
   const [open, setOpen] = useState(false);
   const [requestVersion, setRequestVersion] = useState(0);
   const trace = useQuery({
@@ -329,16 +335,16 @@ export function SharedTask({
     enabled: open,
     retry: false,
     queryFn: async () => {
-      const events: SharedTaskTracePage["events"] = [];
-      let afterSeq = 0;
-      for (;;) {
-        const page = await api.getSharedTaskTrace(token, task.id, afterSeq);
-        if (page.state !== "ok") return { events, state: page.state, runtimeName: page.runtime_name };
-        events.push(...page.events);
-        if (page.eof) return { events, state: "ok" as const, runtimeName: page.runtime_name };
-        if (page.next_after_seq <= afterSeq) throw new Error("trace cursor did not advance");
-        afterSeq = page.next_after_seq;
+      let state = EMPTY_TURN_TRACE;
+      let cursor: number | null = 0;
+      for (let pages = 0; cursor !== null && pages < MAX_SHARED_TRACE_PAGES; pages++) {
+        const page = await api.getSharedTaskTrace(token, task.id, cursor);
+        if (page.state !== "ok") return { items: [] as readonly TraceItem[], state: page.state, runtimeName: page.runtime_name };
+        state = applyTurnTracePage(state, page);
+        if (page.next_item_cursor !== null && page.next_item_cursor <= cursor) throw new Error("trace cursor did not advance");
+        cursor = page.next_item_cursor;
       }
+      return { items: state.items, state: "ok" as const, runtimeName: null };
     },
   });
   const agent = findActor(actors, "agent", task.agent_id);
@@ -347,6 +353,10 @@ export function SharedTask({
     ? t(($) => $.share.trace_unreachable, { name: trace.data?.runtimeName ?? "?" })
     : state === "lost" ? t(($) => $.share.trace_lost)
     : null;
+  const items = trace.data?.items ?? [];
+  const ids = new Set(items.map((item) => item.id));
+  const depth = (item: TraceItem): number => item.parent_id && ids.has(item.parent_id)
+    ? 1 + depth(items.find((parent) => parent.id === item.parent_id)!) : 0;
   return (
     <details className="border-y py-2 text-sm" onToggle={(event) => {
       const expanded = event.currentTarget.open;
@@ -358,39 +368,30 @@ export function SharedTask({
         <span className="min-w-0 flex-1 truncate">{agent?.name ?? task.agent_id}</span>
         <span className="text-xs text-muted-foreground">{task.status}</span>
       </summary>
-      <div className="mt-3 space-y-3 pl-6">
+      <div className="mt-3 space-y-1 pl-6">
         {open && trace.isPending && <p>{t(($) => $.share.trace_loading)}</p>}
         {open && trace.isError && <p>{t(($) => $.share.trace_failed)}</p>}
         {open && stateText && <p>{stateText}</p>}
-        {open && trace.data?.events.map((event, index) => (
-          <div key={String(event.seq ?? index)} className="overflow-hidden">
-            <div className="mb-1 text-[11px] uppercase text-muted-foreground">{event.type}</div>
-            <pre className="max-h-72 overflow-auto whitespace-pre-wrap break-words rounded-md bg-muted/50 p-3 text-xs">
-              {messageText(traceEventToMessage(event))}
-            </pre>
-          </div>
-        ))}
+        {open && items.map((item) => {
+          // One line per item, in the words Chat and Feishu use for it.
+          const descriptor = describeStep(item);
+          const text = tc(($) => $.steps[descriptor.key], descriptor.args);
+          return (
+            <p key={item.id} data-shared-trace-item={item.type} title={text}
+              style={{ paddingLeft: `${depth(item) * 16}px` }}
+              className="truncate text-sm text-muted-foreground">
+              {text}
+            </p>
+          );
+        })}
       </div>
     </details>
   );
 }
 
-export function traceEventToMessage(event: SharedTaskTracePage["events"][number]): Record<string, unknown> {
-  return { ...event };
-}
-
 function findActor(actors: SharedIssueActor[], type: string, id: string | null): SharedIssueActor | null {
   if (!id) return null;
   return actors.find((actor) => actor.type === type && actor.id === id) ?? null;
-}
-
-export function messageText(message: Record<string, unknown>): string {
-  for (const key of ["content", "output", "text", "body", "input"]) {
-    const value = message[key];
-    if (typeof value === "string" && value) return value;
-    if (value && typeof value === "object") return JSON.stringify(value, null, 2);
-  }
-  return JSON.stringify(message, null, 2);
 }
 
 function formatDateTime(value: string): string {

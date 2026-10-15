@@ -84,9 +84,11 @@ pendingTurnBackendTests("MUL-508 access consistency", (fixture, backend) => {
   it("B1: retry requires supervisor role and scope, preserves source visibility, and rejects side sessions", async () => {
     const f = await scaffold(), target = f.running();
     const normal = await f.store.createTaskAccessToken(target.task, "local");
+    // People may retry their own Chat turns, so the command is offered to them;
+    // the Issue turn below still requires a supervisor or related controller.
     for (const credential of [f.pat.token, "access-master"]) {
       const capabilities = await f.request("/api/cli/capabilities", "GET", undefined, credential);
-      expect(capabilities.data.commands.find((command: any) => command.id === "turn.retry")?.allowed).toBe(false);
+      expect(capabilities.data.commands.find((command: any) => command.id === "turn.retry")?.allowed).toBe(true);
     }
     const capabilities = await f.request("/api/cli/capabilities", "GET", undefined, normal.token);
     expect(capabilities.data.commands.find((command: any) => command.id === "turn.retry")?.allowed).toBe(true);

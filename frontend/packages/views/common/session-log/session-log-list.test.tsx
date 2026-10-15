@@ -386,6 +386,69 @@ describe("SessionLogList", () => {
     view.restore();
   });
 
+  it("shows Chat's arrow button whenever the reader leaves the bottom, badged with new messages", () => {
+    const replica = new MemorySessionReplica({
+      [SESSION]: { entries: [entry(1), entry(2)] },
+    });
+    const view = renderList(replica, { scrollButton: "arrow", contentClassName: "max-w-[768px] px-4 py-6" });
+    reveal();
+    expect(view.content.className).toContain("max-w-[768px]");
+    expect(view.content.className).not.toContain("max-w-4xl");
+    expect(view.container.querySelector("[data-session-log-scroll-bottom]")).toBeNull();
+
+    // The reader scrolls up, away from the end the reveal parked them at.
+    act(() => {
+      fireEvent.wheel(view.root, { deltaY: -120 });
+      view.root.scrollTop = 0;
+      fireEvent.scroll(view.root);
+    });
+    const button = view.container.querySelector("[data-session-log-scroll-bottom]");
+    expect(button).not.toBeNull();
+    expect(button!.getAttribute("aria-label")).toBe("Scroll to bottom");
+    expect(view.container.querySelector("[data-session-log-scroll-bottom-count]")).toBeNull();
+    // Chat never shows the Issue chip.
+    act(() => {
+      replica.append(SESSION, [entry(3), entry(4)]);
+    });
+    expect(view.container.querySelector("[data-session-log-new-messages]")).toBeNull();
+    expect(view.container.querySelector("[data-session-log-scroll-bottom-count]")!.textContent).toBe("2");
+    expect(button!.getAttribute("aria-label")).toContain("2");
+
+    act(() => {
+      fireEvent.click(view.container.querySelector("[data-session-log-scroll-bottom]")!);
+      raf.runFrame();
+    });
+    expect(view.root.getAttribute("data-stick-state")).toBe("returning");
+    expect(view.container.querySelector("[data-session-log-scroll-bottom]")).toBeNull();
+    view.restore();
+  });
+
+  it("shows no arrow when a wheel-up releases a log that does not overflow", () => {
+    const replica = new MemorySessionReplica({ [SESSION]: { entries: [entry(1)] } });
+    const view = renderList(replica, { scrollButton: "arrow" });
+    // A short chat: everything fits, so the reader is already at the end.
+    Object.defineProperty(view.root, "scrollHeight", { configurable: true, get: () => 400 });
+    reveal();
+    act(() => {
+      fireEvent.wheel(view.root, { deltaY: -120 });
+    });
+    expect(view.root.getAttribute("data-stick-state")).toBe("released");
+    expect(view.container.querySelector("[data-session-log-scroll-bottom]")).toBeNull();
+    view.restore();
+  });
+
+  it("keeps the Issue column and chip by default", () => {
+    const replica = new MemorySessionReplica({ [SESSION]: { entries: [entry(1)] } });
+    const view = renderList(replica);
+    reveal();
+    expect(view.content.className).toContain("max-w-4xl");
+    act(() => {
+      fireEvent.wheel(view.root, { deltaY: -120 });
+    });
+    expect(view.container.querySelector("[data-session-log-scroll-bottom]")).toBeNull();
+    view.restore();
+  });
+
   it("shows no chip while pinned", () => {
     const replica = new MemorySessionReplica({ [SESSION]: { entries: [entry(1)] } });
     const view = renderList(replica);

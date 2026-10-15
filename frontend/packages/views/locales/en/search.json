@@ -1,6 +1,6 @@
 {
   "title": "Search",
-  "description": "Search pages, issues, projects, and members",
+  "description": "Search pages, issues, projects, members, and chats",
   "placeholder": "Type a command or search...",
   "groups": {
     "pages": "Pages",
@@ -8,6 +8,7 @@
     "members": "Members",
     "projects": "Projects",
     "issues": "Issues",
+    "chats": "Chats",
     "recent": "Recent"
   },
   "pages": {
