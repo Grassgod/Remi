@@ -33,6 +33,18 @@ function homeInstructions(home: unknown): string | null {
   }
 }
 
+/**
+ * Server 1.4.0 lets the model choose each shell command's working directory,
+ * and without this note models picked `$GEMINI_HOME/antigravity-cli/skills`
+ * (a directory the server creates) instead of the session cwd, whatever the
+ * workspace trust (live probe, risk R5). Naming the cwd fixes the choice.
+ */
+function workingDirectoryNote(cwd: unknown): string | null {
+  if (typeof cwd !== "string" || !cwd) return null;
+  return `The working directory of this session is ${cwd}. Run every shell command in that directory `
+    + "(set it as the command's working directory) unless the task names another directory.";
+}
+
 export class AntigravityAdapter implements AgentAdapter {
   readonly agentType = "antigravity";
   /** The server returns no prompt usage; shim observations are per request. */
@@ -81,8 +93,10 @@ export class AntigravityAdapter implements AgentAdapter {
   /**
    * `_meta.antigravity.systemPrompt.append` (advertised in `initialize`
    * `_meta.antigravity.systemPrompt.append`; read on new, load and resume):
-   * Remi's system prompt, then the runtime-context instructions the daemon
-   * writes to `$GEMINI_HOME/AGENTS.md`.
+   * the session's working directory, Remi's system prompt, then the
+   * runtime-context instructions the daemon writes to `$GEMINI_HOME/AGENTS.md`.
+   * Server 1.4.0 reads neither that file nor the cwd's AGENTS.md on its own
+   * (live probe), so nothing is duplicated.
    */
   buildSessionMeta(options: AgentSessionOptions): NewSessionMeta | undefined {
     const plugins = options.pluginPaths;
@@ -90,7 +104,7 @@ export class AntigravityAdapter implements AgentAdapter {
     if (options.allowedTools?.length) {
       console.warn(`[acp:antigravity] ignoring allowedTools (${options.allowedTools.join(", ")}): Remi tool names do not apply to Antigravity`);
     }
-    const append = [options.systemPrompt?.trim(), homeInstructions(options.home)].filter(Boolean).join("\n\n");
+    const append = [workingDirectoryNote(options.cwd), options.systemPrompt?.trim(), homeInstructions(options.home)].filter(Boolean).join("\n\n");
     return append ? { antigravity: { systemPrompt: { append } } } : undefined;
   }
 

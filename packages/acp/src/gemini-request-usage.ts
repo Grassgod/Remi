@@ -5,7 +5,7 @@
  * On our gateway `promptTokenCount` includes the cached prompt tokens and
  * `totalTokenCount` is prompt + candidates + thoughts (+ tool-use prompt).
  * Thinking is billed as output and is never added again. The server's own
- * `usage_update.used` is `total + cached` (`AGY/server.py:1494-1521`) and must
+ * `usage_update.used` is `total + cached` (server 1.4.0, and the probe) and must
  * never be billed: it double-counts the cache.
  */
 
@@ -100,7 +100,8 @@ export function geminiObservationUsage(obs: GatewayShimRequestObservation, sessi
     sessionId, responseId: obs.responseId, modelVersion: obs.modelVersion, requestedModel: obs.requestedModel,
     usageMetadata: obs.usageMetadata, fallbackId,
   });
-  if (usage) return { remiTokenUsage: usage, contextTokens: usage.totalTokens };
+  // A cut-short stream's last counters are a lower bound (R8): never claim them exact.
+  if (usage) return { remiTokenUsage: obs.aborted ? { ...usage, accuracy: "partial" } : usage, contextTokens: usage.totalTokens };
   // A rejected request without counters consumed nothing billable.
   if (!obs.usageMetadata && !obs.aborted && (obs.status < 200 || obs.status >= 300)) return null;
   const total = count(obs.usageMetadata?.totalTokenCount);

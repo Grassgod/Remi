@@ -104,8 +104,9 @@ async function loadRuntimePrepareDeps(): Promise<RuntimePrepareDeps> {
       }
       if (providers.includes("antigravity")) {
         await ensureAntigravityServer({ acceptTerms: options.acceptAntigravityTerms, log: (message) => console.error(`[runtime] ${message}`) });
-        // TODO(PR 4 Task C): pass the daemon gateway shim so the contract check also proves the header policy.
-        await verifyAntigravityRuntime();
+        // The daemon's own gateway shim sits in front of the fake upstream, so the check also proves the header policy.
+        const { contractCheckShim } = await import("@daemon/agent-runtime/antigravity/gateway-shim.js");
+        await verifyAntigravityRuntime({ shim: contractCheckShim });
       }
     },
     versions: (provider) => provider === "antigravity" ? { server: ANTIGRAVITY_PIN.server } : releaseRuntimeVersions(provider),

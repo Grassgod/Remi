@@ -4,7 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentTask } from "@daemon/contracts/types.js";
 import { LocalPathLocker, resolveTaskWorkDir } from "@daemon/agent-runtime/workspace/ephemeral.js";
-import { resolveTaskProviderHome, prepareIssueSessionProviderHome } from "@daemon/agent-runtime/workspace/session-home.js";
+import { resolveTaskProviderHome, prepareIssueSessionProviderHome, seedIssueSessionAntigravityHome } from "@daemon/agent-runtime/workspace/session-home.js";
+import { symlinkSync } from "node:fs";
 import { prepareRuntimeWorkspaceContext } from "@daemon/agent-runtime/workspace/runtime-context.js";
 import { buildTaskPrompt } from "@daemon/agent-runtime/prompts/ephemeral.js";
 
@@ -89,6 +90,42 @@ describe("Runtime workspace local execution", () => {
     expect(buildTaskPrompt(task)).not.toContain("LOCAL_FEATURE");
     expect(readFileSync(join(root, "AGENTS.md"), "utf8")).toBe("PARENT_PRIVATE_INSTRUCTION");
     expect(existsSync(join(cwd, ".multiremi"))).toBe(false);
+  });
+
+  it("keeps Antigravity's home, gateway routing and Google credentials out of the env file, but not other providers' Google tools", async () => {
+    const { base, cwd, task, options } = fixture();
+    writeFileSync(join(cwd, ".env.local"), "GOOGLE_APPLICATION_CREDENTIALS=/creds.json\n");
+    const codexHome = resolveTaskProviderHome(task, options.workspacesRoot)!;
+    await prepareIssueSessionProviderHome(codexHome, { baseCodexHome: join(base, "user-home", ".codex"), linkCodexAuth: false });
+    expect(prepareRuntimeWorkspaceContext(task, codexHome, cwd, { userHome: join(base, "user-home") }))
+      .toEqual({ GOOGLE_APPLICATION_CREDENTIALS: "/creds.json" });
+    const agyTask = { ...task, agent: { ...task.agent!, provider: "antigravity" } } as AgentTask;
+    const agyHome = resolveTaskProviderHome(agyTask, options.workspacesRoot)!;
+    await prepareIssueSessionProviderHome(agyHome);
+    for (const line of ["GOOGLE_APPLICATION_CREDENTIALS=/creds.json", "GEMINI_HOME=/elsewhere", "GEMINI_API_KEY=k", "AGY_LLM_GATEWAY_URL=https://x", "ANTIGRAVITY_HARNESS_PATH=/h"]) {
+      writeFileSync(join(cwd, ".env.local"), `${line}\n`);
+      expect(() => prepareRuntimeWorkspaceContext(agyTask, agyHome, cwd, { userHome: join(base, "user-home") }))
+        .toThrow(`cannot override ${line.split("=")[0]}`);
+    }
+  });
+
+  it("seeds the Antigravity home on every start and refuses a linked settings file", async () => {
+    const { base, cwd, task, options } = fixture();
+    const agyTask = { ...task, agent: { ...task.agent!, provider: "antigravity" } } as AgentTask;
+    const home = resolveTaskProviderHome(agyTask, options.workspacesRoot)!;
+    await prepareIssueSessionProviderHome(home);
+    await seedIssueSessionAntigravityHome(home, { cwd, workspaceDir: base });
+    const settings = join(home.home, "antigravity-acp", "settings.json");
+    expect(JSON.parse(readFileSync(settings, "utf8"))).toEqual({ auth: { type: "gateway" } });
+    expect(JSON.parse(readFileSync(join(home.home, "antigravity-acp", "trusted_workspaces.json"), "utf8")))
+      .toEqual({ trusted: [], untrusted: [realpathSync(cwd), realpathSync(base)] });
+    // A model can rewrite its own home; the next start must not write through a planted link.
+    rmSync(settings);
+    const outside = join(base, "outside.json");
+    writeFileSync(outside, "{}");
+    symlinkSync(outside, settings);
+    await expect(seedIssueSessionAntigravityHome(home, { cwd })).rejects.toThrow("regular file");
+    expect(readFileSync(outside, "utf8")).toBe("{}");
   });
 
   it("fails closed on wrong hosts, missing directories and escaping cwd", async () => {

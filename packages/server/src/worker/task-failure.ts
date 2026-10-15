@@ -56,7 +56,8 @@ export function classifyTaskFailure(rawError: string): TaskFailureReasonValue {
     lower.includes("missing environment variable") ||
     (lower.includes("missing") && lower.includes("api_key")) ||
     (lower.includes("api key") && lower.includes("required")) ||
-    containsAny(lower, "no llm provider configured", "no provider configured")
+    containsAny(lower, "no llm provider configured", "no provider configured",
+      "antigravity_gateway_unconfigured", "antigravity_model_required", "antigravity_home_required")
   ) {
     return TaskFailureReason.AgentMissingConfig;
   }

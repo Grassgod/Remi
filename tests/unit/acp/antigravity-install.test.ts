@@ -13,6 +13,7 @@ import {
 } from "@acp/antigravity-install.js";
 import { resolveAcpHealthCheckCommand } from "@acp/index.js";
 import { ANTIGRAVITY_CONTRACT_MODEL, verifyAntigravityRuntime } from "@acp/runtime-verify.js";
+import { contractCheckShim } from "@daemon/agent-runtime/antigravity/gateway-shim.js";
 import type { AntigravityPin } from "@acp/runtime-versions.js";
 
 const roots: string[] = [];
@@ -269,6 +270,8 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
     try {
       expect(await verifyAntigravityRuntime({ server, pin })).toEqual({ version: "9.9.9", models: [ANTIGRAVITY_CONTRACT_MODEL] });
       expect(await verifyAntigravityRuntime({ server, pin, shim: forwardingShim() })).toEqual({ version: "9.9.9", models: [ANTIGRAVITY_CONTRACT_MODEL] });
+      // The daemon's real shim, as `remi runtime prepare` runs it.
+      expect(await verifyAntigravityRuntime({ server, pin, shim: contractCheckShim })).toEqual({ version: "9.9.9", models: [ANTIGRAVITY_CONTRACT_MODEL] });
     } finally {
       warn.mockRestore();
     }

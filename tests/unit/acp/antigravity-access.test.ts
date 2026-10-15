@@ -53,12 +53,12 @@ describe("buildAntigravityEnv", () => {
     for (const name of ANTIGRAVITY_BLANKED_ENV) expect(env[name]).toBe("");
     expect(env.AGY_ACP_CCPA_PROJECT).toBe("");
     expect(env.AGY_ACP_CCPA_BASE_URL).toBe("");
-    // Never a proxy for the loopback discovery call (AGY/gateway/model_discovery.py:265-271).
+    // Never a proxy for the loopback discovery call (server 1.4.0 would send the loopback discovery call through it).
     expect(env.AGY_LLM_GATEWAY_PROXY_URL).toBe("");
     // Set means "trusted": it may only ever be blank.
     expect(env.AGY_ACP_DISABLE_WORKSPACE_TRUST).toBe("");
     expect(env).not.toHaveProperty("AGY_ACP_DEFAULT_MODEL");
-    // The harness path key is never present-but-empty (AGY/main.py:81).
+    // The harness path key is never present-but-empty (server 1.4.0 takes an empty one as set).
     expect(env).not.toHaveProperty("ANTIGRAVITY_HARNESS_PATH");
   });
 
@@ -99,7 +99,7 @@ describe("seeded home files", () => {
     const files = Object.fromEntries(antigravityHomeFiles({ cwd: link, workspaceDir: workspace }).map((file) => [file.path, JSON.parse(file.content)]));
     expect(files).toEqual({
       [join("antigravity-acp", "settings.json")]: { auth: { type: "gateway" } },
-      // Canonical paths, as AGY/workspace_trust.py:get_canonical_workspace_path compares them.
+      // Canonical paths, as server 1.4.0 compares them.
       [join("antigravity-acp", "trusted_workspaces.json")]: { trusted: [], untrusted: [cwd, workspace] },
     });
     expect(antigravityHomeFiles({ cwd, workspaceDir: cwd })[1]!.content).toContain(`"untrusted": [\n    ${JSON.stringify(cwd)}\n  ]`);
@@ -175,6 +175,12 @@ describe("AntigravityAdapter.buildSessionMeta", () => {
     expect(new AntigravityAdapter().buildSessionMeta({ systemPrompt: "Only Remi." })).toEqual({
       antigravity: { systemPrompt: { append: "Only Remi." } },
     });
+  });
+
+  it("names the session cwd first, so shell commands run there and not in the server's skills directory (R5)", () => {
+    const meta = new AntigravityAdapter().buildSessionMeta({ systemPrompt: "You are Remi.", cwd: "/work/project" });
+    expect(meta).toEqual({ antigravity: { systemPrompt: { append: "The working directory of this session is /work/project. Run every shell command "
+      + "in that directory (set it as the command's working directory) unless the task names another directory.\n\nYou are Remi." } } });
   });
 
   it("rejects Agent Plugins and ignores allowedTools with a warning", () => {

@@ -11,8 +11,9 @@
  *   notice, elicitation and diff modules are unchanged; renderer and agent code
  *   moved by a few dozen lines).
  * - codex-acp 2.2.2 (`CX` = its `dist/index.js`)
- * - antigravity-acp 1.4.0 (`AGY` = the server's extracted Python source,
- *   `acp_server/`), Google's official ACP server (PR 4 §5)
+ * - antigravity-acp 1.4.0, Google's official (proprietary) ACP server (PR 4 §5):
+ *   behaviour notes from its observable protocol and the live probe, re-checked
+ *   on every pin bump; nothing here cites or copies its source
  *
  * Title parsing is version-pinned on purpose (risk R6): Codex sends single-action
  * reads, lists and searches with only a title and locations.
@@ -449,8 +450,8 @@ function codexClass(facts: ToolFacts): ToolClass {
  * Canonical input keys and the spellings Antigravity uses for them. The Go
  * harness and the Python server name the same argument in PascalCase and
  * snake_case, and one call's frames mix them (`CommandLine` on the permission
- * frame, `command_line` on the live one; AGY/tools.py:440-449, 515-540,
- * 640-660, and the live probe). The first spelling present wins.
+ * frame, `command_line` on the live one; server 1.4.0 and the live probe).
+ * The first spelling present wins.
  */
 const ANTIGRAVITY_INPUT_KEYS: ReadonlyArray<readonly [string, readonly string[]]> = [
   ["command", ["CommandLine", "command_line", "command"]],
@@ -464,7 +465,7 @@ const ANTIGRAVITY_INPUT_ALIASES = new Set(ANTIGRAVITY_INPUT_KEYS.flatMap(([, ali
 
 /**
  * An Antigravity `rawInput` with canonical keys. Replay sends the arguments as
- * a JSON string (`arguments_json`, AGY/server.py:6403-6405); other keys are kept.
+ * a JSON string (server 1.4.0); other keys are kept.
  */
 export function normalizeToolInput(raw: unknown): Record<string, unknown> | null {
   let value = raw;
@@ -485,9 +486,8 @@ export function normalizeToolInput(raw: unknown): Record<string, unknown> | null
 
 /**
  * An Antigravity tool name: `_meta.mcp.tool` for MCP calls, `run_command` for
- * kind `execute` (whose title is the command, AGY/tools.py:440-449), else the
- * name in a `Run <tool>?` permission or `Running <tool>` live / replay title
- * (AGY/server.py:4945-4949, 5927-5931, 6410-6414).
+ * kind `execute` (whose title is the command in server 1.4.0), else the
+ * name in a `Run <tool>?` permission or `Running <tool>` live / replay title.
  */
 export function antigravityToolName(frame: VendorFrame): string | null {
   const mcpTool = str(record(meta(frame)?.mcp)?.tool);
@@ -501,11 +501,11 @@ const ANTIGRAVITY_SHELL_TOOLS: ReadonlySet<string> = new Set(["run_command", "sh
 const ANTIGRAVITY_READ_TOOLS: ReadonlySet<string> = new Set(["client_view_file", "view_file", "read_file"]);
 const ANTIGRAVITY_SEARCH_TOOLS: ReadonlySet<string> = new Set(["grep_search", "find_by_name", "search_directory", "find_file"]);
 const ANTIGRAVITY_LIST_TOOLS: ReadonlySet<string> = new Set(["list_dir", "list_directory"]);
-/** AGY/tools.py `AUTO_EDIT_TOOLS`. */
+/** The file-editing tools of server 1.4.0 (those its `auto_edit` mode approves). */
 const ANTIGRAVITY_EDIT_TOOLS: ReadonlySet<string> = new Set(["client_create_file", "client_edit_file", "create_file", "edit_file",
   "write_file", "replace_file_content", "multi_replace_file_content", "write_to_file"]);
 
-/** The server's `ask_user` stand-in call: `interaction_<hex>` with `rawInput: {}` (AGY/server.py:5240-5262). */
+/** The server's `ask_user` stand-in call: `interaction_<hex>` with `rawInput: {}` (server 1.4.0). */
 function isInteractionCall(id: string | null, input: unknown): boolean {
   const raw = record(input);
   return !!id?.startsWith("interaction_") && (input === undefined || input === null || (raw !== null && Object.keys(raw).length === 0));
@@ -519,7 +519,7 @@ function antigravityClass(facts: ToolFacts): ToolClass {
   const name = facts.name ?? "";
   const path = str(input?.path) ?? facts.locations[0] ?? null;
   if (ANTIGRAVITY_SHELL_TOOLS.has(name)) {
-    // The title is the command (AGY/tools.py:440-449); replay adds the model's `toolSummary`.
+    // Server 1.4.0 titles a shell call with its command; replay adds the model's `toolSummary`.
     const title = facts.kind === "execute" ? facts.title : null;
     return { type: "command", source: "shell", command: commandText(input?.command) ?? title, cwd: str(input?.cwd),
       actions: null, title: str(input?.toolSummary) };
@@ -535,7 +535,7 @@ function antigravityClass(facts: ToolFacts): ToolClass {
     return { type: "command", source: "tool", command: null, cwd: null, actions: [{ type: "list_files", command: null, path }], title: null };
   }
   if (ANTIGRAVITY_EDIT_TOOLS.has(name) || (!facts.name && facts.kind === "edit")) return { type: "file_change" };
-  // `search_web` has kind `search` (AGY/tools.py:42); `read_url_content` has kind `fetch`.
+  // Server 1.4.0: `search_web` has kind `search`; `read_url_content` has kind `fetch`.
   if (name === "search_web") return { type: "web_search", action: "search", query: str(input?.query), url: null };
   if (name === "read_url_content") return { type: "web_search", action: "fetch", query: null, url: str(input?.url) };
   // browser_subagent and everything else: a plain tool.
@@ -548,7 +548,7 @@ export interface PermissionQuestion {
   options: Array<{ optionId: string; label: string }>;
 }
 
-/** Option ids of the server's real tool approvals (AGY/server.py:4996-5068). */
+/** Option ids of the server's real tool approvals (server 1.4.0). */
 const ANTIGRAVITY_APPROVAL_OPTION_IDS: ReadonlySet<string> = new Set(["allow", "allow_always", "deny"]);
 
 function permissionOptions(params: unknown): Array<{ optionId: string; name: string | null }> | null {
@@ -558,16 +558,16 @@ function permissionOptions(params: unknown): Array<{ optionId: string; name: str
   return rows.every((row) => row.optionId !== null) ? rows as Array<{ optionId: string; name: string | null }> : null;
 }
 
-/** The workspace-trust prompt for repository hooks: option ids exactly `{trust, deny}` (AGY/hooks.py:395-398). */
+/** The workspace-trust prompt for repository hooks: option ids exactly `{trust, deny}` (server 1.4.0). */
 export function isWorkspaceTrustPrompt(params: unknown): boolean {
   const ids = permissionOptions(params)?.map((option) => option.optionId);
   return !!ids && ids.length === 2 && ids.includes("trust") && ids.includes("deny");
 }
 
 /**
- * The model's `ask_user` question (AGY/server.py:5204-5320): an
- * `interaction_` call with empty input, no kind, and options that are not the
- * approval ids. Single choice only (the server's own TODO b/524989454).
+ * The model's `ask_user` question (server 1.4.0): an `interaction_` call with
+ * empty input, no kind, and options that are not the approval ids. Server
+ * 1.4.0 asks single-choice questions only.
  */
 export function permissionAsQuestion(params: unknown): PermissionQuestion | null {
   const toolCall = record(record(params)?.toolCall);
@@ -590,9 +590,8 @@ const CONNECTION_LOST = "Agent connection was lost and could not be re-establish
 
 /**
  * Classify one `agent_message_chunk` text. Gateway and harness errors arrive
- * as a single full-text chunk before `end_turn` (AGY/server.py:5553-5601,
- * 5688-5722; prefix AGY/api_errors.py:175). The model-replacement notice
- * precedes the turn's own reply in the stream (AGY/model_selection.py:463-482).
+ * as a single full-text chunk before `end_turn` (server 1.4.0). The
+ * model-replacement notice precedes the turn's own reply in the stream.
  * Version-pinned text (risk R11).
  */
 export function serviceMessage(text: string): ServiceMessage | null {
@@ -660,7 +659,7 @@ export function diffChanges(frame: VendorFrame): FileChange[] | null {
     const change = fileChangeFromTexts(row.path, typeof row.oldText === "string" ? row.oldText : null,
       typeof row.newText === "string" ? row.newText : null,
       kind === "add" || kind === "update" || kind === "delete" ? { kind }
-        // Antigravity says `modify` (AGY/tools.py:657-660).
+        // Antigravity 1.4.0 says `modify`.
         : kind === "modify" ? { kind: "update" } : {});
     const previous = changes.at(-1);
     if (previous && previous.path === change.path && previous.kind === change.kind) {

@@ -776,7 +776,9 @@ describe("AcpProvider with the Antigravity access config", () => {
         GEMINI_API_KEY: "", AGY_ACP_ENABLE_GATEWAY_AUTH: "1", AGY_ACP_DEFAULT_MODEL: "gemini-2.5-pro",
       });
       const [created] = agent.requests("session/new");
-      expect(created.params._meta).toEqual({ antigravity: { systemPrompt: { append: "You are Remi." } } });
+      // The session cwd comes first, so shell commands run there (R5).
+      expect(created.params._meta).toEqual({ antigravity: { systemPrompt: { append: `The working directory of this session is ${agent.dir}. `
+        + "Run every shell command in that directory (set it as the command's working directory) unless the task names another directory.\n\nYou are Remi." } } });
       expect(agent.requests("session/set_mode").map((r) => r.params.modeId)).toEqual(["yolo"]);
       expect(agent.requests("session/set_config_option").map((r) => r.params)).toEqual([
         { sessionId: "agy-session-1", configId: "model", value: "gemini-2.5-pro" }]);
@@ -923,6 +925,33 @@ describe("AcpProvider with the Antigravity access config", () => {
       }
       // The fatal channel's process is discarded; the next turn gets a new token.
       expect(shim.channels.map((channel) => channel.closed)).toEqual([true, false]);
+    } finally {
+      await provider.close();
+    }
+  });
+
+  it("fails the turn at once when the breaker opened before the prompt (e.g. while session/new listed models)", async () => {
+    const agent = fakeAntigravityAgent();
+    const inner = fakeShim();
+    // The fatal event arrives as soon as the provider subscribes, before any prompt listener exists.
+    const host: GatewayShimHost = { open(label) {
+      const channel = inner.host.open(label) as FakeShimChannel;
+      const subscribe = channel.subscribe;
+      channel.subscribe = (listener) => {
+        const off = subscribe(listener);
+        listener({ type: "fatal", reason: "auth", status: 401, message: "gateway rejected the key" });
+        return off;
+      };
+      return channel;
+    } };
+    const { provider } = antigravityProvider(agent, { gatewayShim: host });
+    try {
+      const error = await collect(provider.sendStream("hang", { chatId: "c1" })).catch((e) => e);
+      expect(error).toBeInstanceOf(AcpSessionFailureError);
+      expect((error as AcpSessionFailureError).failure).toMatchObject({ category: "authentication" });
+      // The prompt went out, then its cancel: the harness would otherwise retry the dead token forever.
+      expect(agent.requests("session/prompt")).toHaveLength(1);
+      expect(agent.requests("session/cancel")).toHaveLength(1);
     } finally {
       await provider.close();
     }

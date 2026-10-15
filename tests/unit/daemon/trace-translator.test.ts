@@ -969,7 +969,7 @@ describe("trace translator: Antigravity (antigravity-acp 1.4.0, PR 4 §5)", () =
     h.translator.promptEnded();
     expect(h.item("0446f287f8f345bebe093a06340941f3", "command")).toMatchObject({
       status: "completed", tool: "run_command", source: "shell", command: "ls -la", cwd: "/tmp/agy-live/work",
-      // Published as rawOutput.exit_code (AGY/server.py:125-163).
+      // Server 1.4.0 publishes it as rawOutput.exit_code.
       exit_code: 0, output: expect.stringContaining("README.md"),
       actions: [{ type: "list_files", command: "ls -la", path: null }],
     });

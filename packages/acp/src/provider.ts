@@ -894,6 +894,10 @@ export class AcpProvider implements Provider {
         console.error(`[AcpProvider] prompt FAILED after ${((Date.now() - promptStartMs) / 1000).toFixed(1)}s: ${promptError.message}`);
         resolveWaiting?.();
       });
+    // The breaker opened before this prompt (e.g. while `session/new` listed
+    // models): the harness would retry the dead token forever, so fail now.
+    // Sent after the prompt request, so the agent sees the cancel for it.
+    if (gateway?.fatal) gateway.listener?.(gateway.fatal);
 
     try {
       while (true) {
@@ -1050,6 +1054,7 @@ export class AcpProvider implements Provider {
       systemPrompt: options?.systemPrompt,
       pluginPaths,
       home: this._options.providerHome,
+      cwd,
     } as Parameters<AgentAdapter["buildSessionMeta"]>[0]);
 
     const existing = this._pool.get(chatId);

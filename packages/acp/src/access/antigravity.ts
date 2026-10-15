@@ -4,8 +4,9 @@
  * daemon's loopback gateway shim. The real gateway key never enters the server
  * process; it sees only the placeholder below.
  *
- * Facts cited as `AGY/` are from the pinned 1.4.0 server source
- * (`google3/cloud/developer_experience/antigravity_extensions/acp_server/`).
+ * Behaviour notes refer to the pinned server (1.4.0) as observed through its
+ * protocol and the live probe; re-check them on every pin bump
+ * (docs/daemon-runtime-upgrades.md).
  */
 
 import { chmodSync, mkdirSync, realpathSync, writeFileSync } from "node:fs";
@@ -17,7 +18,7 @@ import type { AcpAccessConfig, AcpAccessEnvInput } from "./types.js";
 
 /** Non-secret placeholder the shim discards; the harness also echoes it as `x-goog-api-key`. */
 export const ANTIGRAVITY_PLACEHOLDER_KEY = "remi-shim";
-/** Default gateway context window (`AGY/gateway/model_discovery.py:42`, and the probe). */
+/** Default gateway context window (server 1.4.0 in gateway mode, and the probe). */
 export const ANTIGRAVITY_DEFAULT_CONTEXT_WINDOW = 1_048_576;
 const LOOPBACK_NO_PROXY = ["127.0.0.1", "localhost", "::1"];
 
@@ -27,9 +28,9 @@ const LOOPBACK_NO_PROXY = ["127.0.0.1", "localhost", "::1"];
  * and `AcpClient` merges this overlay over the daemon environment, so an empty
  * value is the only way to keep an inherited one out.
  *
- * Never blanked: `ANTIGRAVITY_HARNESS_PATH` (`AGY/main.py:81` returns early
- * when the key exists at all, even empty) and `AGY_ACP_DISABLE_WORKSPACE_TRUST`
- * is blanked rather than set (`AGY/workspace_trust.py:153-154`: set means trusted).
+ * Never blanked: `ANTIGRAVITY_HARNESS_PATH` (server 1.4.0 takes the key as
+ * set even when empty). `AGY_ACP_DISABLE_WORKSPACE_TRUST` is blanked rather
+ * than set (server 1.4.0: set means every workspace is trusted).
  */
 export const ANTIGRAVITY_BLANKED_ENV = [
   "GEMINI_API_KEY", "GOOGLE_API_KEY", "GOOGLE_APPLICATION_CREDENTIALS", "GOOGLE_CLOUD_PROJECT", "GOOGLE_CLOUD_LOCATION",
@@ -47,7 +48,7 @@ function loopbackGatewayUrl(raw: string): string {
     throw new Error("[antigravity_gateway_unconfigured] the Antigravity gateway URL must be the daemon's loopback shim");
   }
   const base = url.toString().replace(/\/+$/, "");
-  // The server appends `/v1beta/...` itself (`AGY/gateway/model_discovery.py:399-414`).
+  // Server 1.4.0 appends `/v1beta/...` itself.
   if (/\/v1(?:beta)?$/.test(base)) throw new Error("[antigravity_gateway_unconfigured] the shim URL must not end in /v1beta");
   return base;
 }
@@ -88,9 +89,8 @@ export function buildAntigravityEnv(input: AcpAccessEnvInput): Record<string, st
 
 /**
  * `GEMINI_HOME/antigravity-acp/` files seeded before the first spawn: gateway
- * auth selected by settings (`AGY/server.py:953`), and the task directories
- * marked untrusted so repository hooks stay off and no trust prompt is asked
- * (`AGY/hooks.py:328-345, 376-410`; format `AGY/workspace_trust.py:160-163`).
+ * auth selected by settings, and the task directories marked untrusted so
+ * repository hooks stay off and no trust prompt is asked (server 1.4.0).
  */
 export function antigravityHomeFiles(input: { cwd: string; workspaceDir?: string | null }): Array<{ path: string; content: string }> {
   const canonical = (path: string) => { try { return realpathSync(path); } catch { return path; } };
@@ -111,7 +111,7 @@ export function seedAntigravityHome(input: { home: string; cwd: string; workspac
   }
 }
 
-/** Remi mode names → the server's `default` / `auto_edit` / `yolo` (`AGY/config_options.py:25-41`). */
+/** Remi mode names → the server's `default` / `auto_edit` / `yolo` (server 1.4.0's modes). */
 const PERMISSION_MODES: Record<string, string[]> = {
   bypassPermissions: ["yolo"],
   dontAsk: ["yolo"],
@@ -134,7 +134,7 @@ export const ANTIGRAVITY_ACCESS: AcpAccessConfig = {
   defaultPermissionMode: "bypassPermissions",
   strictModel: true,
   modelRequired: true,
-  // Gateway mode offers no `thought_level` option (`AGY/server.py:3507-3533`).
+  // Server 1.4.0: gateway mode offers no `thought_level` option.
   effort: "none",
   usage: "gateway-shim",
   defaultContextWindow: ANTIGRAVITY_DEFAULT_CONTEXT_WINDOW,

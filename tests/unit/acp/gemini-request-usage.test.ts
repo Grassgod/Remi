@@ -78,6 +78,13 @@ describe("geminiObservationUsage", () => {
     });
   });
 
+  it("bills a cut-short stream's last counters as partial, never exact (R8)", () => {
+    const counters = { promptTokenCount: 500, totalTokenCount: 500 };
+    expect(geminiObservationUsage(observation({ usageMetadata: counters }), "acp-session")).toMatchObject({ remiTokenUsage: { accuracy: "exact" } });
+    expect(geminiObservationUsage(observation({ aborted: true, usageMetadata: counters }), "acp-session")).toMatchObject({
+      remiTokenUsage: { id: "resp-1", accuracy: "partial", inputTokens: 500, outputTokens: 0, totalTokens: 500 }, contextTokens: 500 });
+  });
+
   it("keeps only the reported total of an unsplittable response", () => {
     const usage = geminiObservationUsage(observation({ usageMetadata: { promptTokenCount: 1, cachedContentTokenCount: 2, totalTokenCount: 9 } }), "acp-session");
     expect(usage).toMatchObject({ remiMissingRequestUsage: { id: "resp-1", providerSessionId: "acp-session", providerRequestId: "resp-1",

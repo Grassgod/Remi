@@ -31,7 +31,7 @@ export const ANTIGRAVITY_TERMS_ENV = "REMI_ACCEPT_ANTIGRAVITY_TERMS";
 export const ANTIGRAVITY_PREPARE_COMMAND = "remi runtime prepare --provider antigravity --accept-antigravity-terms";
 
 /**
- * Machine policy files the server's admin tier reads (`gateway/admin_settings.py:41-44`).
+ * Machine policy files the server's admin tier reads (server 1.4.0).
  * They override our environment and can pin the gateway URL or forbid it.
  */
 export const ANTIGRAVITY_ADMIN_SETTINGS: Partial<Record<NodeJS.Platform, string>> = {
