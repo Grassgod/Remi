@@ -159,6 +159,12 @@ export const TranscriptItemRow = memo(function TranscriptItemRow({
               {t(($) => $.transcript.step_not_finished)}
             </span>
           )}
+          {item.type === "user_message" && item.steer?.result?.via === "none" && (
+            // Recorded after the force-answer grace expired: the agent never saw it (ADR 0020).
+            <span className="mt-0.5 inline-flex shrink-0 items-center rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
+              {t(($) => $.transcript.steer_not_delivered)}
+            </span>
+          )}
           <CollapsibleTrigger disabled={!detail}
             className={cn("min-w-0 flex-1 py-0.5 text-left text-xs text-muted-foreground transition-colors",
               detail ? "cursor-pointer hover:text-foreground" : "cursor-default",

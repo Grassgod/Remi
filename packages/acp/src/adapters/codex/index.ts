@@ -26,6 +26,15 @@ const PERMISSION_MODE_ALIASES: Record<string, string[]> = {
 export class CodexAdapter implements AgentAdapter {
   readonly agentType = "codex";
   readonly promptUsageSettleScope = "last-request" as const;
+  /**
+   * codex-acp 2.2.2 `_session/steering` (dist/index.js:39759, routed at
+   * :42529-42530; advertised at :42474-42477). It drops `_meta`
+   * (:43989-43998), so there is no idle opt-in: an idle session always starts a
+   * turn once the previous prompt completes (`startedNewTurn`, :43906-43960).
+   * A steer during a command joins the turn without stopping it (app-server
+   * `turn/steer`, :43851-43890); the answer stays inside the prompt.
+   */
+  readonly steering = { method: "_session/steering", idleOptIn: false, waitForToolCalls: false } as const;
 
   resolveToolName(update: ToolCallUpdate | ToolCallProgressUpdate): string {
     // No `_meta` probe here: the only tool-call `_meta` keys codex-acp emits are

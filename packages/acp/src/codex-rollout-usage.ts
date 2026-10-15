@@ -8,14 +8,18 @@ import { normalizeCodexRequestUsage } from "./codex-request-usage.js";
  * opted into raw events. Resumed and forked threads cannot opt in, but Codex
  * still persists one `token_usage_record` per upstream response in the native
  * rollout (`$CODEX_HOME/sessions/YYYY/MM/DD/rollout-*.jsonl`), including native
- * child threads under their root `session_id`. This reads only the records a
- * single prompt appended, in the same request shape as the bridge patch emits.
+ * child threads under their root `session_id`. A cursor lives as long as the
+ * pooled session and each read advances it, so every record is read once:
+ * a prompt also reads turns the bridge ran since the previous read, as idle
+ * usage frames are billed to the next prompt. Requests have the same shape
+ * as the bridge patch emits.
  */
 export interface CodexRolloutCursor {
   sessionsDir: string;
   threadId: string;
-  promptStartMs: number;
-  /** Rollout byte sizes before the prompt; files absent here are read whole. */
+  /** Start of the first prompt read through this cursor; earlier records are history. */
+  sinceMs: number;
+  /** Bytes already read per rollout (sizes at creation); files absent here are read whole. */
   offsets: Map<string, number>;
 }
 
@@ -58,19 +62,19 @@ function dayDirs(sessionsDir: string, times: number[]): string[] {
   return [...dirs];
 }
 
-function candidateTimes(cursor: Pick<CodexRolloutCursor, "threadId" | "promptStartMs">, now: number): number[] {
+function candidateTimes(cursor: Pick<CodexRolloutCursor, "threadId" | "sinceMs">, now: number): number[] {
   const created = uuidV7Ms(cursor.threadId);
-  return [cursor.promptStartMs, now, ...(created === null ? [] : [created])];
+  return [cursor.sinceMs, now, ...(created === null ? [] : [created])];
 }
 
 function isRollout(name: string): boolean {
   return name.startsWith("rollout-") && name.endsWith(".jsonl");
 }
 
-/** Synchronous and stat-only: taken before the prompt is sent. */
-export function beginCodexRolloutUsage(codexHome: string, threadId: string, promptStartMs = Date.now()): CodexRolloutCursor {
-  const cursor: CodexRolloutCursor = { sessionsDir: join(codexHome, "sessions"), threadId, promptStartMs, offsets: new Map() };
-  for (const dir of dayDirs(cursor.sessionsDir, candidateTimes(cursor, promptStartMs))) {
+/** Synchronous and stat-only: taken before the session's first read prompt is sent. */
+export function beginCodexRolloutUsage(codexHome: string, threadId: string, sinceMs = Date.now()): CodexRolloutCursor {
+  const cursor: CodexRolloutCursor = { sessionsDir: join(codexHome, "sessions"), threadId, sinceMs, offsets: new Map() };
+  for (const dir of dayDirs(cursor.sessionsDir, candidateTimes(cursor, sinceMs))) {
     let names: string[];
     try { names = readdirSync(dir); } catch { continue; }
     for (const name of names) {
@@ -110,7 +114,7 @@ async function readAppendedLines(path: string, from: number, size: number, onLin
 interface ScanState {
   consumed: Map<string, number>;
   requests: Map<string, CodexRolloutRequestUsage>;
-  /** The root rollout changed during this prompt; only then is there a turn end to wait for. */
+  /** The root rollout changed since the last read; only then is there a turn end to wait for. */
   rootSeen: boolean;
   /** The root rollout's last complete line is a turn end and nothing follows it. */
   rootTerminal: boolean;
@@ -126,9 +130,9 @@ async function scan(cursor: CodexRolloutCursor, requestedModel: string | null, s
       const from = state.consumed.get(path) ?? cursor.offsets.get(path) ?? 0;
       let info;
       try { info = await stat(path); } catch { continue; }
-      // Unchanged since the last read, or untouched during this prompt (with
-      // slack for coarse mtimes; record timestamps are filtered exactly).
-      if (info.size <= from || info.mtimeMs < cursor.promptStartMs - MTIME_SLACK_MS) continue;
+      // Unchanged since the last read, or untouched since the cursor began
+      // (with slack for coarse mtimes; record timestamps are filtered exactly).
+      if (info.size <= from || info.mtimeMs < cursor.sinceMs - MTIME_SLACK_MS) continue;
       const root = name.endsWith(`-${cursor.threadId}.jsonl`);
       if (root) state.rootSeen = true;
       const onLine = (line: string): void => {
@@ -142,7 +146,7 @@ async function scan(cursor: CodexRolloutCursor, requestedModel: string | null, s
         let row: any;
         try { row = JSON.parse(line); } catch { return; }
         const at = typeof row?.timestamp === "string" ? Date.parse(row.timestamp) : NaN;
-        if (!Number.isFinite(at) || at < cursor.promptStartMs) return;
+        if (!Number.isFinite(at) || at < cursor.sinceMs) return;
         if (terminalLine && row.type === "event_msg" && ["task_complete", "turn_aborted"].includes(row.payload?.type)) {
           state.rootTerminal = true;
           return;
@@ -187,7 +191,10 @@ export async function collectCodexRolloutUsage(cursor: CodexRolloutCursor, optio
   const state: ScanState = { consumed: new Map(), requests: new Map(), rootSeen: false, rootTerminal: false };
   for (;;) {
     await scan(cursor, options.requestedModel ?? null, state);
-    if (!state.rootSeen || state.rootTerminal || Date.now() >= deadline) return [...state.requests.values()];
+    if (!state.rootSeen || state.rootTerminal || Date.now() >= deadline) {
+      for (const [path, offset] of state.consumed) cursor.offsets.set(path, offset);
+      return [...state.requests.values()];
+    }
     await new Promise(resolve => setTimeout(resolve, POLL_MS));
   }
 }

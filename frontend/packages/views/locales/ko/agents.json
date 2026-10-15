@@ -486,6 +486,7 @@
     "nested_steps_one": "{{count}}단계",
     "nested_steps_other": "{{count}}단계",
     "step_not_finished": "미완료",
+    "steer_not_delivered": "전달되지 않음",
     "human_answer_label": "답변:",
     "human_status": "상태: {{value}}",
     "human_responded_by": "응답자: {{value}}"

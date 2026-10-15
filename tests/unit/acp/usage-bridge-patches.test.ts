@@ -1,7 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import { claudeUsagePatch, codexUsagePatch } from "@acp/usage-bridge-patches.js";
 import { CODEX_SESSION_BOUNDARY } from "../../fixtures/acp/codex-acp-session-boundary.js";
-import v6Fixture from "../../fixtures/acp/codex-usage-v6-boundary.json";
+import { CODEX_USAGE_V6_FIXTURE as v6Fixture } from "../../fixtures/acp/codex-usage-v6-boundary.js";
 
 // These are the upstream handler boundaries; execute patched JavaScript with
 // protocol notifications, rather than assert that generated text contains fields.
