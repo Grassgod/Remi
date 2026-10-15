@@ -2,8 +2,10 @@ import { describe, expect, it } from "bun:test";
 import {
   classifyTool,
   codexActionFromTitle,
+  commandTitle,
   compactionFacts,
   diffChanges,
+  isAsyncLaunch,
   isMcp,
   mcpServer,
   mergeToolFacts,
@@ -81,8 +83,8 @@ describe("classifyTool", () => {
     for (const name of ["Edit", "Write", "MultiEdit", "NotebookEdit"]) expect(c(name).type).toBe("file_change");
     expect(c("WebSearch", { query: "q" })).toEqual({ type: "web_search", action: "search", query: "q", url: null });
     expect(c("WebFetch", { url: "https://x" })).toMatchObject({ type: "web_search", action: "fetch", url: "https://x" });
-    expect(c("Agent", { prompt: "go" })).toEqual({ type: "subagent", prompt: "go" });
-    expect(c("Task", { description: "d" })).toEqual({ type: "subagent", prompt: "d" });
+    expect(c("Agent", { prompt: "go" })).toEqual({ type: "subagent", prompt: "go", agentType: null, name: null, background: null, model: null, threadId: null });
+    expect(c("Task", { description: "d" })).toEqual({ type: "subagent", prompt: "d", agentType: null, name: "d", background: null, model: null, threadId: null });
     expect(c("AskUserQuestion")).toEqual({ type: "suppress" });
     expect(c("mcp__github__search")).toEqual({ type: "tool", server: "github" });
     expect(c("ExitPlanMode")).toEqual({ type: "tool", server: null });
@@ -105,16 +107,61 @@ describe("classifyTool", () => {
     expect(c({ kind: "search", title: "Search for 'x' in src" })).toMatchObject({ type: "command", actions: [{ type: "search", query: "x", path: "src" }] });
     expect(c({ kind: "edit", title: "Editing files" }).type).toBe("file_change");
     expect(c({ kind: "execute", title: "mcp.github.search", _meta: { is_mcp_tool_call: true } })).toEqual({ type: "tool", server: "github" });
-    expect(c({ title: "spawnAgent", rawInput: { prompt: "p" } })).toEqual({ type: "subagent", prompt: "p" });
-    expect(c({ title: "x", _meta: { jetbrains: { air: { subagent: true } } } })).toEqual({ type: "subagent", prompt: null });
+    expect(c({ title: "spawnAgent", rawInput: { prompt: "p" } })).toEqual({ type: "subagent", prompt: "p", agentType: null, name: null, background: null, model: null, threadId: null });
+    expect(c({ title: "x", _meta: { jetbrains: { air: { subagent: true } } } })).toEqual({ type: "subagent", prompt: null, agentType: null, name: null, background: null, model: null, threadId: null });
     expect(c({ kind: "think", title: "Thinking" })).toEqual({ type: "tool", server: null });
   });
 
+  // Frames as recorded from claude-agent-acp 0.89 (A, A-bg) and codex-acp 2.2.2 (A).
+  it("reads the subagent facts of a Claude Agent call", () => {
+    const frames = [
+      { _meta: { claudeCode: { toolName: "Agent" }, jetbrains: { air: { version: 1, subagent: true } } }, name: "Agent", title: "Task", kind: "think" },
+      { rawInput: { description: "Count files in directory", prompt: "List the files", subagent_type: "general-purpose", run_in_background: true } },
+    ];
+    expect(classifyTool("claude", facts(...frames))).toEqual({ type: "subagent", prompt: "List the files",
+      agentType: "general-purpose", name: "Count files in directory", background: true, model: null, threadId: null });
+    // The SDK backgrounds by default: the hook markers alone make it background.
+    const launched = facts(frames[0]!, { rawInput: { description: "d", prompt: "p" } },
+      { _meta: { claudeCode: { toolResponse: { status: "async_launched", isAsync: true } } } });
+    expect(launched.asyncLaunch).toBe(true);
+    expect(classifyTool("claude", launched)).toMatchObject({ background: true, agentType: null });
+    expect(isAsyncLaunch({ _meta: { claudeCode: { toolResponse: { isAsync: true } } } })).toBe(true);
+    expect(isAsyncLaunch({ _meta: { claudeCode: { toolResponse: { status: "async_launched" } } } })).toBe(true);
+    expect(isAsyncLaunch({ _meta: { claudeCode: { toolResponse: { status: "completed" } } } })).toBe(false);
+    // A progress beat names the type; an explicit model and a foreground run are kept.
+    const beat = facts(frames[0]!, { rawInput: { description: "d", prompt: "p", run_in_background: false, model: "haiku" } },
+      { status: "in_progress", _meta: { claudeCode: { toolName: "Agent", toolResponse: { elapsedTimeSeconds: 3, subagentType: "Explore" } } } });
+    expect(classifyTool("claude", beat)).toMatchObject({ agentType: "Explore", background: false, model: "haiku" });
+  });
+
+  it("reads the Codex subagent thread from activity and collab calls", () => {
+    expect(classifyTool("codex", facts({ kind: "other", title: "Start subagent count_files", _meta: { jetbrains: { air: { version: 1, subagent: true } } },
+      rawInput: { agentThreadId: "01a13da2-2fd7", agentPath: "/root/count_files", activityKind: "started" } })))
+      .toEqual({ type: "subagent", prompt: null, agentType: null, name: "count_files", background: null, model: null, threadId: "01a13da2-2fd7" });
+    expect(classifyTool("codex", facts({ kind: "other", title: "spawnAgent",
+      rawInput: { prompt: "count", senderThreadId: "root", receiverThreadIds: ["child-1"], model: "gpt-6.1-sol" } })))
+      .toMatchObject({ prompt: "count", threadId: "child-1", model: "gpt-6.1-sol" });
+    expect(classifyTool("codex", facts({ kind: "other", title: "wait",
+      rawInput: { prompt: null, senderThreadId: "root", receiverThreadIds: [], model: null } }))).toMatchObject({ threadId: null, model: null });
+  });
+
+  it("takes a Claude command's label from AIR commandTitle", () => {
+    const bash = { _meta: { claudeCode: { toolName: "Bash" }, jetbrains: { air: { version: 1, commandTitle: "List all files including hidden" } } },
+      name: "Bash", kind: "execute", rawInput: { command: "ls -A /w", description: "List all files including hidden" } };
+    expect(commandTitle(bash)).toBe("List all files including hidden");
+    expect(classifyTool("claude", facts(bash))).toMatchObject({ type: "command", command: "ls -A /w", title: "List all files including hidden" });
+    // Without AIR the description still labels it; a call with neither has none.
+    expect(classifyTool("claude", facts({ _meta: { claudeCode: { toolName: "Bash" } }, rawInput: { command: "ls", command_description: "List" } })))
+      .toMatchObject({ title: "List" });
+    expect(classifyTool("claude", facts({ _meta: { claudeCode: { toolName: "Bash" } }, rawInput: { command: "ls" } }))).toMatchObject({ title: null });
+    expect(classifyTool("codex", facts({ kind: "execute", rawInput: { command: "ls" } }))).toMatchObject({ title: null });
+  });
+
   it("labels a tool by the bridge's name, else by class", () => {
-    expect(toolLabel(facts({ name: "exec_command" }), { type: "command", source: "shell", command: "ls", cwd: null, actions: null }, "Bash")).toBe("exec_command");
+    expect(toolLabel(facts({ name: "exec_command" }), { type: "command", source: "shell", command: "ls", cwd: null, actions: null, title: null }, "Bash")).toBe("exec_command");
     expect(toolLabel(facts({ kind: "search" }), { type: "web_search", action: "fetch", query: null, url: null }, "Grep")).toBe("WebFetch");
     expect(toolLabel(facts({ title: "mcp.s.t", _meta: { is_mcp_tool_call: true } }), { type: "tool", server: "s" }, "Bash")).toBe("mcp.s.t");
-    expect(toolLabel(facts({ kind: "execute", title: "ls -la" }), { type: "command", source: "shell", command: "ls -la", cwd: null, actions: null }, "Bash")).toBe("Bash");
+    expect(toolLabel(facts({ kind: "execute", title: "ls -la" }), { type: "command", source: "shell", command: "ls -la", cwd: null, actions: null, title: null }, "Bash")).toBe("Bash");
   });
 });
 

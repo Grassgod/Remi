@@ -176,13 +176,53 @@ function isAirSubagent(frame: VendorFrame): boolean {
   return airMetadata(frame._meta)?.subagent === true;
 }
 
+/**
+ * The model-written label of a Claude shell call, `_meta.jetbrains.air.commandTitle`
+ * (the Bash `description`; CA/tool-calls/renderer.js `toolUseMeta`).
+ */
+export function commandTitle(frame: VendorFrame): string | null {
+  return str(airMetadata(frame._meta)?.commandTitle);
+}
+
+/** `_meta.claudeCode.toolResponse`: the PostToolUse markers or a progress beat (CA/tool-calls/content.js:175-194). */
+function toolResponse(frame: VendorFrame): Record<string, unknown> | null {
+  return record(record(meta(frame)?.claudeCode)?.toolResponse);
+}
+
+/**
+ * Whether the Agent call's PostToolUse hook update reports an async launch:
+ * `toolResponse.isAsync === true` or `status: "async_launched"`. The bridge sends
+ * it before the call's result, which is then only the launch acknowledgement
+ * (recorded with claude-agent-acp 0.89; 0.90 keeps the markers).
+ */
+export function isAsyncLaunch(frame: VendorFrame): boolean {
+  const response = toolResponse(frame);
+  return response?.isAsync === true || response?.status === "async_launched";
+}
+
 /** What one tool call becomes in the trace. */
 export type ToolClass =
-  | { type: "command"; source: "shell" | "tool"; command: string | null; cwd: string | null; actions: CommandAction[] | null }
+  | {
+    type: "command";
+    source: "shell" | "tool";
+    command: string | null;
+    cwd: string | null;
+    actions: CommandAction[] | null;
+    /** The model-written label (Claude `commandTitle`), or null. */
+    title: string | null;
+  }
   | { type: "file_change" }
   | { type: "web_search"; action: "search" | "fetch"; query: string | null; url: string | null }
   | { type: "tool"; server: string | null }
-  | { type: "subagent"; prompt: string | null }
+  | {
+    type: "subagent";
+    prompt: string | null;
+    agentType: string | null;
+    name: string | null;
+    background: boolean | null;
+    model: string | null;
+    threadId: string | null;
+  }
   /** Shown elsewhere (Claude AskUserQuestion is the `question` item). */
   | { type: "suppress" };
 
@@ -198,6 +238,12 @@ export interface ToolFacts {
   terminalCwd: string | null;
   mcp: boolean;
   airSubagent: boolean;
+  /** Claude AIR `commandTitle`, from any frame. */
+  commandTitle: string | null;
+  /** An Agent call's hook update reported an async (background) launch. */
+  asyncLaunch: boolean;
+  /** Claude's subagent type from an Agent progress beat. */
+  subagentType: string | null;
 }
 
 /** Fold one frame into the facts of its tool call. Later frames win, input keys merge. */
@@ -218,6 +264,9 @@ export function mergeToolFacts(previous: ToolFacts | null, frame: VendorFrame): 
     terminalCwd: info?.cwd ?? previous?.terminalCwd ?? null,
     mcp: (previous?.mcp ?? false) || isMcp(frame, name),
     airSubagent: (previous?.airSubagent ?? false) || isAirSubagent(frame),
+    commandTitle: commandTitle(frame) ?? previous?.commandTitle ?? null,
+    asyncLaunch: (previous?.asyncLaunch ?? false) || isAsyncLaunch(frame),
+    subagentType: str(toolResponse(frame)?.subagentType) ?? previous?.subagentType ?? null,
   };
 }
 
@@ -265,16 +314,19 @@ function claudeClass(facts: ToolFacts): ToolClass {
       // rawInput is withheld while AIR input streams (CA/tool-calls/renderer.js:
       // 91-95); the title is the command once known (bash.js:7).
       const title = facts.title && facts.title !== "Terminal" ? facts.title : null;
-      return { type: "command", source: "shell", command: commandText(input?.command) ?? title, cwd: null, actions: null };
+      // The model's label: AIR `commandTitle`, else the input's description
+      // (0.90 also reads `command_description`, CA/tool-calls/reporters/bash.js).
+      const label = facts.commandTitle ?? str(input?.description) ?? str(input?.command_description);
+      return { type: "command", source: "shell", command: commandText(input?.command) ?? title, cwd: null, actions: null, title: label };
     }
     case "Read":
-      return { type: "command", source: "tool", command: null, cwd: null, actions: path ? [readAction(path)] : [] };
+      return { type: "command", source: "tool", command: null, cwd: null, actions: path ? [readAction(path)] : [], title: null };
     case "Grep":
     case "Glob":
-      return { type: "command", source: "tool", command: null, cwd: null,
+      return { type: "command", source: "tool", command: null, cwd: null, title: null,
         actions: [{ type: "search", command: null, query: str(input?.pattern), path: str(input?.path) ?? str(input?.file_path) }] };
     case "LS":
-      return { type: "command", source: "tool", command: null, cwd: null, actions: [{ type: "list_files", command: null, path }] };
+      return { type: "command", source: "tool", command: null, cwd: null, actions: [{ type: "list_files", command: null, path }], title: null };
     case "Edit":
     case "Write":
     case "MultiEdit":
@@ -285,8 +337,16 @@ function claudeClass(facts: ToolFacts): ToolClass {
     case "WebFetch":
       return { type: "web_search", action: "fetch", query: str(input?.prompt), url: str(input?.url) };
     case "Agent":
-    case "Task":
-      return { type: "subagent", prompt: str(input?.prompt) ?? str(input?.description) };
+    case "Task": {
+      // An async launch (hook markers) is background whatever the input says:
+      // the SDK backgrounds subagents by default.
+      const requested = typeof input?.run_in_background === "boolean" ? input.run_in_background : null;
+      return {
+        type: "subagent", prompt: str(input?.prompt) ?? str(input?.description),
+        agentType: str(input?.subagent_type) ?? facts.subagentType, name: str(input?.description),
+        background: facts.asyncLaunch ? true : requested, model: str(input?.model), threadId: null,
+      };
+    }
     case "AskUserQuestion":
       return { type: "suppress" };
     default:
@@ -299,13 +359,22 @@ function codexClass(facts: ToolFacts): ToolClass {
   const title = facts.title;
   if (facts.mcp) return { type: "tool", server: mcpServer({ title }, facts.name, input) };
   if (facts.airSubagent || (title !== null && CODEX_COLLAB_TOOLS.has(title))) {
-    return { type: "subagent", prompt: str(input?.prompt) };
+    // Activity calls ("Start/Complete subagent X") carry `{agentThreadId,
+    // agentPath}`; collab calls (`spawnAgent`, `wait`, …) carry `{receiverThreadIds,
+    // model, prompt}` (CX:28180, 29803-29866).
+    const receivers = Array.isArray(input?.receiverThreadIds) ? input.receiverThreadIds : [];
+    const agentPath = str(input?.agentPath);
+    return {
+      type: "subagent", prompt: str(input?.prompt), agentType: null,
+      name: agentPath ? agentPath.replace(/\/+$/, "").split("/").pop() || null : null,
+      background: null, model: str(input?.model), threadId: str(input?.agentThreadId) ?? str(receivers[0]),
+    };
   }
   switch (facts.kind) {
     case "execute": {
       const command = commandText(input?.command);
       if (command !== null || facts.terminal) {
-        return { type: "command", source: "shell", command, cwd: str(input?.cwd) ?? facts.terminalCwd, actions: null };
+        return { type: "command", source: "shell", command, cwd: str(input?.cwd) ?? facts.terminalCwd, actions: null, title: facts.commandTitle };
       }
       return { type: "tool", server: null };
     }
@@ -313,7 +382,7 @@ function codexClass(facts: ToolFacts): ToolClass {
       // Single-action reads and lists arrive with only a title and locations;
       // reads send no output (CX:28463-28518).
       const action = codexActionFromTitle(title, facts.locations);
-      if (action && action.type !== "search") return { type: "command", source: "tool", command: null, cwd: null, actions: [action] };
+      if (action && action.type !== "search") return { type: "command", source: "tool", command: null, cwd: null, actions: [action], title: null };
       return { type: "tool", server: null };
     }
     case "search": {
@@ -325,7 +394,7 @@ function codexClass(facts: ToolFacts): ToolClass {
         return { type: "web_search", action: fetch ? "fetch" : "search", query: str(input?.query) ?? str(action?.query) ?? str(action?.pattern), url: str(action?.url) };
       }
       const parsed = codexActionFromTitle(title, facts.locations);
-      return { type: "command", source: "tool", command: null, cwd: null,
+      return { type: "command", source: "tool", command: null, cwd: null, title: null,
         actions: [parsed ?? { type: "search", command: null, query: str(input?.query), path: facts.locations[0] ?? null }] };
     }
     case "edit":

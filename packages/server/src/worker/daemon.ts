@@ -4302,6 +4302,9 @@ export class MultiremiDaemon {
       while (true) {
         turnIndex++;
         const turnAbort = new AbortController();
+        // Before any abort can fire: the bridge's reports of the calls the abort
+        // cuts short arrive between here and `promptEnded`.
+        turnAbort.signal.addEventListener("abort", () => this.recordTrace(task.id, () => trace.roundAborted()), { once: true });
         const onTaskAbort = () => turnAbort.abort();
         signal.addEventListener("abort", onTaskAbort, { once: true });
         if (signal.aborted) turnAbort.abort();

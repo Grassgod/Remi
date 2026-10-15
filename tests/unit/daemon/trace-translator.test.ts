@@ -10,7 +10,7 @@ import {
   type TraceItem,
   type TraceItemOf,
 } from "@multiremi/contracts/trace.js";
-import { EMPTY_TURN_TRACE, applyTurnTraceEvents, finalItem, turnTraceStats, type TurnTraceState } from "@shared/turn-trace.js";
+import { EMPTY_TURN_TRACE, applyTurnTraceEvents, closeOpenItems, finalItem, turnTraceStats, type TurnTraceState } from "@shared/turn-trace.js";
 import {
   TRACE_EVENT_MAX_BYTES,
   TRACE_ITEM_COMMAND_MAX_BYTES,
@@ -762,6 +762,149 @@ describe("trace translator: caps", () => {
       // The store's re-check keeps the event as it is.
       expect(capTraceEvent(event)).toEqual(event);
     }
+  });
+});
+
+// Frames as recorded from claude-agent-acp 0.89.0 with Remi's capabilities
+// (SUBAGENT-LIVE-PROBE runs A and A-bg; 0.90.0 sends the same frames on these
+// paths) and from codex-acp 2.2.2 (run A). Long texts are shortened.
+const AGENT = "toolu_01KHEhzBZQ61AHmRGz2TjPyb";
+const CHILD_BASH = "toolu_01AUA4wk4GUdeSRFz5uSudDj";
+const agentFrames = (background: boolean) => [
+  { sessionUpdate: "tool_call", toolCallId: AGENT, name: "Agent", status: "pending", title: "Task", kind: "think", content: [],
+    _meta: { claudeCode: { toolName: "Agent" }, jetbrains: { air: { version: 1, subagent: true } } } },
+  { sessionUpdate: "tool_call_update", toolCallId: AGENT, title: "Count files in directory" },
+  { sessionUpdate: "tool_call_update", toolCallId: AGENT,
+    rawInput: { description: "Count files in directory", prompt: "List the files in the current working directory and report how many there are.",
+      subagent_type: "general-purpose", run_in_background: background },
+    content: [{ type: "content", content: { type: "text", text: "List the files in the current working directory and report how many there are." } }] },
+];
+const childFrames = [
+  { sessionUpdate: "tool_call", toolCallId: CHILD_BASH, name: "Bash", status: "pending", title: "ls -A /work", kind: "execute",
+    rawInput: { command: "ls -A /work", description: "List all files including hidden" },
+    content: [{ type: "terminal", terminalId: CHILD_BASH }],
+    _meta: { claudeCode: { toolName: "Bash", parentToolUseId: AGENT }, jetbrains: { air: { version: 1, commandTitle: "List all files including hidden" } },
+      terminal_info: { terminal_id: CHILD_BASH } } },
+  { sessionUpdate: "tool_call_update", toolCallId: CHILD_BASH, _meta: { terminal_output: { terminal_id: CHILD_BASH, data: "a.txt\nb.txt\nnotes.md" } } },
+  { sessionUpdate: "tool_call_update", toolCallId: CHILD_BASH, status: "completed",
+    _meta: { terminal_exit: { terminal_id: CHILD_BASH, exit_code: 0, signal: null } } },
+  chunk("The directory contains 3 files.", { messageId: "msg_011Cg3L52RFzACKf3wKTGpnu", _meta: { claudeCode: { parentToolUseId: AGENT } } }),
+];
+const LAUNCH_ACK = "Async agent launched successfully. (This tool result is internal metadata.)\nagentId: a6d91312b45bfd273\n"
+  + "The agent is working in the background. You will be notified automatically when it completes.";
+
+describe("trace translator: subagents and labels (spec §13)", () => {
+  it("keeps a background subagent running past its launch acknowledgement (A-bg)", () => {
+    const h = harness("claude").start().feed([
+      ...agentFrames(true),
+      { sessionUpdate: "tool_call_update", toolCallId: AGENT, _meta: { claudeCode: { toolResponse: { status: "async_launched", isAsync: true } } } },
+      { sessionUpdate: "tool_call_update", toolCallId: AGENT, status: "completed", content: [{ type: "content", content: { type: "text", text: LAUNCH_ACK } }] },
+      ...childFrames,
+      chunk("I've started a background agent to count the files.", { messageId: "msg_011Cg3L5C3wp9earxs13XHeR" }),
+      chunk("3", { messageId: "msg_011Cg3L5HXbFror2r1ZdReTx" }),
+    ]);
+    h.translator.promptEnded();
+    const agent = h.item(AGENT, "subagent");
+    expect(agent).toMatchObject({ status: "in_progress", completed_at: null, output: null, background: true,
+      agent_type: "general-purpose", name: "Count files in directory", title: "Count files in directory" });
+    expect(h.events.some((event) => event.type === "item.completed" && event.item.id === AGENT)).toBe(false);
+    // Its children stream under it; the child command is labelled by the model.
+    expect(h.item(CHILD_BASH, "command")).toMatchObject({ parent_id: AGENT, status: "completed", title: "List all files including hidden",
+      command: "ls -A /work", exit_code: 0 });
+    // An aborted later round does not cut it short: its call already returned.
+    h.translator.roundAborted();
+    h.translator.promptEnded({ aborted: true });
+    expect(h.item(AGENT, "subagent").status).toBe("in_progress");
+    // The turn's end is its end: completed (with its duration), stopped only on a cancel.
+    const [closed] = closeOpenItems(h.state.items, "completed", new Date(T0 + 60_000).toISOString());
+    expect(closed).toMatchObject({ type: "item.completed", item: { id: AGENT, status: "completed", output: null, background: true } });
+    expect((closed as { item: { duration_ms: number } }).item.duration_ms).toBeGreaterThan(0);
+    expect(closeOpenItems(h.state.items, "cancelled", new Date(T0 + 60_000).toISOString())[0])
+      .toMatchObject({ item: { id: AGENT, status: "stopped" } });
+  });
+
+  it("never guesses a background subagent as the parent of an unstamped root tool", () => {
+    const h = harness("claude").start().feed([
+      ...agentFrames(true),
+      { sessionUpdate: "tool_call_update", toolCallId: AGENT, _meta: { claudeCode: { toolResponse: { status: "async_launched", isAsync: true } } } },
+      { sessionUpdate: "tool_call_update", toolCallId: AGENT, status: "completed", content: [{ type: "content", content: { type: "text", text: LAUNCH_ACK } }] },
+      // The root keeps working before any stamped child frame arrives.
+      { sessionUpdate: "tool_call", toolCallId: "toolu_root", name: "Read", status: "pending", title: "Read a.ts", kind: "read",
+        rawInput: { file_path: "/w/a.ts" }, _meta: { claudeCode: { toolName: "Read" } } },
+    ]);
+    expect(h.item("toolu_root", "command").parent_id).toBeNull();
+  });
+
+  it("completes a foreground subagent with its result (A)", () => {
+    const h = harness("claude").start().feed([
+      ...agentFrames(false), ...childFrames,
+      { sessionUpdate: "tool_call_update", toolCallId: AGENT, _meta: { claudeCode: { toolResponse: { status: "completed" } } } },
+      { sessionUpdate: "tool_call_update", toolCallId: AGENT, status: "completed",
+        content: [{ type: "content", content: { type: "text", text: "There are 3 entries. **Total: 3.**" } }] },
+    ]);
+    expect(h.item(AGENT, "subagent")).toMatchObject({ status: "completed", output: "There are 3 entries. **Total: 3.**", background: false,
+      agent_type: "general-purpose" });
+  });
+
+  it("records the Codex subagent thread and name (codex-acp 2.2.2 run A)", () => {
+    const h = harness("codex").start().feed([
+      { sessionUpdate: "tool_call", toolCallId: "call_ad5f", kind: "other", title: "Start subagent count_files", status: "in_progress",
+        rawInput: { agentThreadId: "01a13da2-2fd7-72f2-a0a9-4ff3bbdb03f8", agentPath: "/root/count_files", activityKind: "started" },
+        _meta: { jetbrains: { air: { version: 1, subagent: true } } } },
+      { sessionUpdate: "tool_call_update", toolCallId: "call_ad5f", status: "completed" },
+      { sessionUpdate: "tool_call", toolCallId: "call_ae5b", kind: "other", title: "wait", status: "in_progress",
+        rawInput: { prompt: null, senderThreadId: "01a13da1-fb97", receiverThreadIds: [], agentsStates: {}, model: null, reasoningEffort: null } },
+      { sessionUpdate: "tool_call_update", toolCallId: "call_ae5b", status: "completed" },
+    ]);
+    expect(h.item("call_ad5f", "subagent")).toMatchObject({ status: "completed", name: "count_files",
+      thread_id: "01a13da2-2fd7-72f2-a0a9-4ff3bbdb03f8" });
+    const wait = h.item("call_ae5b", "subagent");
+    expect(wait.thread_id).toBeUndefined();
+    expect(wait.background).toBeUndefined();
+  });
+
+  describe("a call the abort cut short (claude-agent-acp 0.90 closes it failed)", () => {
+    const bash = (id: string) => ({ sessionUpdate: "tool_call", toolCallId: id, name: "Bash", status: "pending", title: "sleep 30", kind: "execute",
+      rawInput: { command: "sleep 30", description: "Wait for the build" }, content: [{ type: "terminal", terminalId: id }],
+      _meta: { claudeCode: { toolName: "Bash" }, terminal_info: { terminal_id: id } } });
+    const unfinished = (id: string, text: string) =>
+      ({ sessionUpdate: "tool_call_update", toolCallId: id, status: "failed", content: [{ type: "content", content: { type: "text", text } }] });
+
+    it("ends stopped after a steer interrupt", () => {
+      const h = harness("claude").start().feed([bash("toolu_steer")]);
+      h.translator.roundAborted();
+      h.feed([unfinished("toolu_steer", "Claude stopped this tool call before it ran.")]);
+      h.translator.promptEnded({ aborted: true });
+      expect(h.item("toolu_steer", "command")).toMatchObject({ status: "stopped", exit_code: null, title: "Wait for the build" });
+    });
+
+    it("ends stopped when the turn is cancelled", () => {
+      const h = harness("claude").start().feed([bash("toolu_cancel")]);
+      h.translator.roundAborted();
+      h.feed([unfinished("toolu_cancel", "The turn was cancelled before this tool call returned a result.")]);
+      h.translator.promptEnded({ aborted: true });
+      expect(h.item("toolu_cancel", "command").status).toBe("stopped");
+    });
+
+    it("keeps genuine failures failed", () => {
+      const h = harness("claude").start().feed([
+        bash("toolu_plain"), unfinished("toolu_plain", "Claude ended the turn without returning a result for this tool."),
+        bash("toolu_exit"),
+      ]);
+      // No abort: a failure is a failure.
+      expect(h.item("toolu_plain", "command").status).toBe("failed");
+      // During an abort, a call with its own exit code or output still failed.
+      h.translator.roundAborted();
+      h.feed([
+        { sessionUpdate: "tool_call_update", toolCallId: "toolu_exit", _meta: { terminal_output: { terminal_id: "toolu_exit", data: "boom" } } },
+        { sessionUpdate: "tool_call_update", toolCallId: "toolu_exit", status: "failed", _meta: { terminal_exit: { terminal_id: "toolu_exit", exit_code: 1, signal: null } } },
+      ]);
+      h.translator.promptEnded({ aborted: true });
+      expect(h.item("toolu_exit", "command")).toMatchObject({ status: "failed", exit_code: 1 });
+      // The next round is not aborted any more.
+      h.feed([bash("toolu_next"), unfinished("toolu_next", "Claude ended the turn without returning a result for this tool.")]);
+      expect(h.item("toolu_next", "command").status).toBe("failed");
+    });
   });
 });
 

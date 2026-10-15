@@ -138,6 +138,14 @@ export interface TraceTranslator {
    * stops the round's tool items that are still open.
    */
   promptEnded(opts?: { aborted?: boolean }): void;
+  /**
+   * The daemon is aborting the current round: a steer or force-answer
+   * interrupt, or the task's cancel. Until `promptEnded`, a tool the bridge
+   * closes as `failed` with no exit code and no output of its own ends
+   * `stopped`: claude-agent-acp 0.90 closes the calls the abort cut short as
+   * `failed` with only an explanatory note. Genuine failures keep `failed`.
+   */
+  roundAborted(): void;
   permissionRequested(request: TracePermissionRequest): string;
   permissionResolved(itemId: string, resolution: TracePermissionResolution): void;
   questionRequested(request: TraceQuestionRequest): string;
@@ -437,6 +445,8 @@ export function createTraceTranslator(
   const roundTools = new Set<string>();
   /** A frame carried `_meta.claudeCode.parentToolUseId`: the bridge stamps parents, so no time-window guess. */
   let sawStampedParent = false;
+  /** `roundAborted()` was called and the round has not ended yet. */
+  let aborting = false;
 
   const uniqueId = (base: string): string => {
     if (!usedIds.has(base)) { usedIds.add(base); return base; }
@@ -548,13 +558,15 @@ export function createTraceTranslator(
   /**
    * Claude-only fallback when the bridge does not stamp a parent: the single
    * open Agent call. Off once any frame of the attempt carried a stamped
-   * parent, since an unstamped tool is then top-level (a parallel call).
+   * parent, since an unstamped tool is then top-level (a parallel call). A
+   * background subagent runs beside the root, so it is never the guess.
    */
   const timeWindowParent = (id: string, facts: ToolFacts): string | null => {
     if (agentType !== "claude" || sawStampedParent || (facts.name && CLAUDE_SUBAGENT_TOOLS.has(facts.name))) return null;
     let parent: string | null = null;
     for (const [candidateId, candidate] of tools) {
-      if (candidateId === id || candidate.closed || candidate.cls.type !== "subagent" || candidate.parentId !== null) continue;
+      if (candidateId === id || candidate.closed || candidate.cls.type !== "subagent" || candidate.parentId !== null
+        || candidate.cls.background === true) continue;
       if (parent !== null) return null;
       parent = candidateId;
     }
@@ -573,14 +585,21 @@ export function createTraceTranslator(
     switch (state.cls.type) {
       case "command":
         return { ...base, type: "command", tool, source: state.cls.source, command: state.cls.command, cwd: state.cls.cwd,
-          actions: state.actions, output, ...flag, exit_code: state.exitCode, duration_ms: duration };
+          actions: state.actions, ...(state.cls.title ? { title: state.cls.title } : {}), output, ...flag,
+          exit_code: state.exitCode, duration_ms: duration };
       case "file_change":
         return { ...base, type: "file_change", tool, changes: state.changes, output, ...flag, duration_ms: duration };
       case "web_search":
         return { ...base, type: "web_search", tool, action: state.cls.action, query: state.cls.query, url: state.cls.url,
           output, ...flag, duration_ms: duration };
-      case "subagent":
-        return { ...base, type: "subagent", tool, title: facts.title, prompt: state.cls.prompt, output, ...flag, duration_ms: duration };
+      case "subagent": {
+        // The §13 facts appear only once known; an older reader ignores them.
+        const cls = state.cls;
+        return { ...base, type: "subagent", tool, title: facts.title, prompt: cls.prompt, output, ...flag, duration_ms: duration,
+          ...(cls.agentType !== null ? { agent_type: cls.agentType } : {}), ...(cls.name !== null ? { name: cls.name } : {}),
+          ...(cls.background !== null ? { background: cls.background } : {}), ...(cls.model !== null ? { model: cls.model } : {}),
+          ...(cls.threadId !== null ? { thread_id: cls.threadId } : {}) };
+      }
       case "tool":
         return { ...base, type: "tool", tool, server: state.cls.server, kind: facts.kind, title: facts.title,
           input: facts.input, output, ...flag, duration_ms: duration };
@@ -610,6 +629,9 @@ export function createTraceTranslator(
       }
     }
   };
+
+  /** A subagent whose launch the bridge reported as async (`toolResponse.isAsync` / `async_launched`). */
+  const isBackgroundLaunch = (state: ToolState): boolean => state.cls.type === "subagent" && state.facts.asyncLaunch;
 
   const completeTool = (state: ToolState, acpStatus: "completed" | "failed" | "cancelled", touchedByAcp = true): void => {
     state.closed = true;
@@ -668,8 +690,13 @@ export function createTraceTranslator(
     if (exit !== undefined) state.exitCode = exit;
     const status = typeof frame.status === "string" ? frame.status : null;
     // `cancelled` is ACP v2's status; the pinned bridges send v1 `failed` (CA renderer.js:11-20).
-    const terminal = status === "completed" || status === "failed" || status === "cancelled";
-    if (terminal || state.closed) {
+    let terminal = status === "completed" || status === "failed" || status === "cancelled";
+    // An async (background) subagent launch: the call's result only acknowledges
+    // the launch, and the subagent keeps working while the bridge holds the turn.
+    // The item stays open, without that text, until the turn closes (spec §13).
+    const launched = terminal && status === "completed" && !state.closed && isBackgroundLaunch(state);
+    if (launched) terminal = false;
+    if ((terminal || state.closed) && !launched) {
       const result = resultText(frame);
       if (result !== null) state.result = result;
       if (state.exitCode === null) state.exitCode = rawExitCode(frame);
@@ -686,7 +713,9 @@ export function createTraceTranslator(
       return;
     }
     if (terminal) {
-      completeTool(state, status as "completed" | "failed" | "cancelled");
+      // The abort cut it short: the bridge's closing note is not the tool's output.
+      const cutShort = aborting && status === "failed" && state.exitCode === null && state.output.value === null;
+      completeTool(state, cutShort ? "cancelled" : status as "completed" | "failed" | "cancelled");
       return;
     }
     const item = toolItem(state, "in_progress", null, false);
@@ -884,18 +913,24 @@ export function createTraceTranslator(
       emitter.run(() => {
         endAllText();
         if (opts?.aborted) {
-          // The interrupted calls will not report again; the next round is a new prompt.
+          // The interrupted calls will not report again; the next round is a new
+          // prompt. A background subagent's call already returned: it ends with the turn.
           for (const id of roundTools) {
             const state = tools.get(id);
-            if (state && !state.closed) completeTool(state, "cancelled", false);
+            if (state && !state.closed && !isBackgroundLaunch(state)) completeTool(state, "cancelled", false);
           }
         }
         emitter.flush();
       });
+      aborting = false;
       roundTools.clear();
       endedRoundLast = roundLast;
       roundLast = null;
       roundOpen = false;
+    },
+
+    roundAborted() {
+      aborting = true;
     },
 
     permissionRequested(request) {
