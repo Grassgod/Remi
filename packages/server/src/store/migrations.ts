@@ -85,7 +85,7 @@ export function runMigrations(db: SqlDatabase, options: { dialect?: SqlDatabaseD
     if(tables.has('multiremi_issues'))addColumnIfMissing(db,'multiremi_issues','responsible_member_id TEXT');
     if(tables.has('multiremi_autopilots'))addColumnIfMissing(db,'multiremi_autopilots','responsible_member_id TEXT');
     if(tables.has('multiremi_issue_activity'))addColumnIfMissing(db,'multiremi_issue_activity','workspace_id TEXT');
-    if(tables.has('multiremi_schema_migrations') && db.query('SELECT id FROM multiremi_schema_migrations WHERE id=?').get(UNIFIED_MODEL_MIGRATION)){runUnifiedModelMigration(db,{reportDir:process.env.MULTIREMI_MIGRATION_REPORT_DIR});separateLaneProviderProgress(db);foldAgentReadState(db);createMemberInboxReadProjection(db);foldDecisionRecords(db);createDecisionReadProjections(db);migrateAttemptInput(db);widenAttemptCounters(db);ensureTurnListIndexes(db);ensureQuestionQueryIndexes(db);db.exec(UNIFIED_LANE_SWEEP_INDEX);ensureUsageAccountingSchema(db);migrateLocalRecords(db);migrateChatFollowUpQueue(db);return;}
+    if(tables.has('multiremi_schema_migrations') && db.query('SELECT id FROM multiremi_schema_migrations WHERE id=?').get(UNIFIED_MODEL_MIGRATION)){runUnifiedModelMigration(db,{reportDir:process.env.MULTIREMI_MIGRATION_REPORT_DIR});separateLaneProviderProgress(db);foldAgentReadState(db);createMemberInboxReadProjection(db);foldDecisionRecords(db);createDecisionReadProjections(db);migrateAttemptInput(db);widenAttemptCounters(db);ensureTurnListIndexes(db);ensureQuestionQueryIndexes(db);db.exec(UNIFIED_LANE_SWEEP_INDEX);ensureUsageAccountingSchema(db);migrateLocalRecords(db);addTurnAttemptTraceSummary(db);migrateChatFollowUpQueue(db);return;}
     // Inspect the existing snapshot before bootstrap migrations can touch it.
     const checks=unifiedModelPreflight(db);
     if(checks.some(c=>!c.ok)){
@@ -94,7 +94,7 @@ export function runMigrations(db: SqlDatabase, options: { dialect?: SqlDatabaseD
     }
     runMigrationsForDialect(db,resolveSqlDialect(db,options.dialect));
     runUnifiedModelMigration(db,{reportDir:process.env.MULTIREMI_MIGRATION_REPORT_DIR});
-    separateLaneProviderProgress(db);foldAgentReadState(db);createMemberInboxReadProjection(db);foldDecisionRecords(db);createDecisionReadProjections(db);migrateAttemptInput(db);widenAttemptCounters(db);ensureTurnListIndexes(db);ensureQuestionQueryIndexes(db);ensureUsageAccountingSchema(db);migrateLocalRecords(db);migrateChatFollowUpQueue(db);
+    separateLaneProviderProgress(db);foldAgentReadState(db);createMemberInboxReadProjection(db);foldDecisionRecords(db);createDecisionReadProjections(db);migrateAttemptInput(db);widenAttemptCounters(db);ensureTurnListIndexes(db);ensureQuestionQueryIndexes(db);ensureUsageAccountingSchema(db);migrateLocalRecords(db);addTurnAttemptTraceSummary(db);migrateChatFollowUpQueue(db);
   }));
   // SQLite schema rebuilds toggle foreign_keys outside their transactions.
   // Hold a separate SQLite writer lock across that entire sequence so another
@@ -5986,6 +5986,28 @@ function migrateLocalRecords(db: SqlDatabase): void {
       delete settings.session_archive;
       db.run("UPDATE multiremi_workspaces SET settings = ? WHERE id = ?", [JSON.stringify(settings), workspace.id]);
     }
+  });
+}
+
+/**
+ * PR 2 (ADR 0019): the turn + items trace summary on the attempt. The daemon's
+ * completion report carries it; the turn card projects it, so the Chat page
+ * renders the finished-turn fold and the idle context ring without reading the
+ * trace (MUL-472). Attempts that predate it keep NULL: no fold, no ring.
+ *
+ * - `context_usage`: JSON `{used, size}`, the last context-window occupancy.
+ * - `worked_ms`: `final_started_at - started_at` of the trace turn.
+ * - `process_item_count`: top-level items the Chat fold renders.
+ *
+ * Runs on both chains: a fresh unified schema already has the columns, an
+ * upgraded one gains them here.
+ */
+const TURN_ATTEMPT_TRACE_SUMMARY_MIGRATION = "20261015_turn_attempt_trace_summary";
+function addTurnAttemptTraceSummary(db: SqlDatabase): void {
+  runMigrationOnce(db, TURN_ATTEMPT_TRACE_SUMMARY_MIGRATION, () => {
+    addColumnIfMissing(db, "multiremi_turn_attempts", "context_usage TEXT");
+    addColumnIfMissing(db, "multiremi_turn_attempts", "worked_ms BIGINT");
+    addColumnIfMissing(db, "multiremi_turn_attempts", "process_item_count BIGINT");
   });
 }
 

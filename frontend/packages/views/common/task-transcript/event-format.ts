@@ -1,33 +1,38 @@
+import type { TraceItem } from "@multiremi/contracts/trace";
 import type { AgentTask } from "@multiremi/core/types/agent";
-import type { TimelineItem, UsageSnapshot } from "./build-timeline";
 
-// Pure presentation helpers shared by the transcript dialog and its rows:
-// how an event is coloured, labelled and summarised, plus the small value
+// Pure presentation helpers shared by the transcript dialog and its rows: how
+// a trace item is coloured, labelled and summarised, plus the small value
 // formatters the rows print.
 
 export type EventColor = "agent" | "thinking" | "tool" | "result" | "steer" | "error";
 
-export function getEventColor(item: TimelineItem): EventColor {
+const TOOL_TYPES: ReadonlySet<TraceItem["type"]> = new Set(["command", "file_change", "web_search", "tool", "subagent"]);
+
+export function isToolTraceItem(item: TraceItem): boolean {
+  return TOOL_TYPES.has(item.type);
+}
+
+export function getItemColor(item: TraceItem): EventColor {
   switch (item.type) {
-    case "text":
+    case "agent_message":
       return "agent";
-    case "thinking":
+    case "reasoning":
       return "thinking";
-    case "tool_use":
-      return "tool";
-    case "tool_result":
-      return "result";
-    case "steer":
+    case "user_message":
       return "steer";
-    case "error":
-      return "error";
+    case "notice":
+      return item.severity === "error" ? "error" : "result";
+    case "compaction":
+      return item.status === "failed" ? "error" : "result";
     default:
-      return "result";
+      if (!isToolTraceItem(item)) return "result";
+      return item.status === "failed" ? "error" : "tool";
   }
 }
 
 export const colorClasses: Record<EventColor, { bg: string; bgActive: string; label: string }> = {
-  agent: { bg: "bg-emerald-400/60", bgActive: "bg-emerald-500", label: "bg-emerald-500" },
+  agent: { bg: "bg-emerald-400/60", bgActive: "bg-emerald-500", label: "bg-emerald-500/20 text-emerald-700 dark:text-emerald-300" },
   thinking: { bg: "bg-violet-400/60", bgActive: "bg-violet-500", label: "bg-violet-500/20 text-violet-700 dark:text-violet-300" },
   tool: { bg: "bg-blue-400/60", bgActive: "bg-blue-500", label: "bg-blue-500/20 text-blue-700 dark:text-blue-300" },
   result: { bg: "bg-slate-300/60 dark:bg-slate-600/60", bgActive: "bg-slate-400 dark:bg-slate-500", label: "bg-muted text-muted-foreground" },
@@ -35,109 +40,122 @@ export const colorClasses: Record<EventColor, { bg: string; bgActive: string; la
   error: { bg: "bg-red-400/60", bgActive: "bg-red-500", label: "bg-red-500/20 text-red-700 dark:text-red-300" },
 };
 
-// ─── Helpers ────────────────────────────────────────────────────────────────
+// ─── Labels and summaries ───────────────────────────────────────────────────
 
-export function getEventLabel(item: TimelineItem): string {
+export function getItemLabel(item: TraceItem): string {
   switch (item.type) {
-    case "text":
-      return "Agent";
-    case "thinking":
+    case "user_message":
+      if (item.origin !== "steer") return "Input";
+      return item.steer?.kind === "force_answer" ? "Deliver now" : "User steer";
+    case "agent_message":
+      return item.phase === "final" ? "Final" : "Agent";
+    case "reasoning":
       return "Thinking";
+    case "command":
+      return item.tool || "Command";
+    case "file_change":
+      return item.tool || "Edit";
+    case "web_search":
+      return item.tool || (item.action === "fetch" ? "Fetch" : "Web search");
+    case "tool":
+      return item.tool || "Tool";
+    case "subagent":
+      return item.tool || "Subagent";
+    case "plan":
+      return "Plan";
+    case "permission":
+      return "Permission";
+    case "question":
+      return "Question";
     case "compaction":
       return "Compaction";
-    case "tool_use":
-      return item.tool ?? "Tool";
-    case "tool_result":
-      return item.tool ? `${item.tool}` : "Result";
-    case "steer":
-      return item.meta?.steer_kind === "force_answer" ? "Deliver now" : "User steer";
-    case "error":
-      return "Error";
-    case "permission_request":
-      return "Permission";
-    case "permission_response":
-      return "Permission";
-    case "question_request":
-      return "Question";
-    case "question_response":
-      return "Answer";
-    default:
-      // Unknown/new message kinds render their raw type rather than a generic
-      // "Event" — the old default paired with an empty summary produced the
-      // uninformative "Event (empty)" rows. (`type` is exhaustive for the
-      // current union, so this is future-proofing for widened payloads.)
-      return (item.type as string) ? String(item.type).replace(/_/g, " ") : "Event";
+    case "notice":
+      return "Notice";
   }
 }
 
-export function getEventSummary(item: TimelineItem): string {
-  switch (item.type) {
-    case "text":
-      return item.content?.split("\n").find((l) => l.trim().length > 0) ?? "";
-    case "thinking":
-      return item.content?.slice(0, 200) ?? "";
-    case "tool_use": {
-      if (!item.input) return "";
-      const inp = item.input as Record<string, string>;
-      if (inp.query) return inp.query;
-      if (inp.file_path) return shortenPath(inp.file_path);
-      if (inp.path) return shortenPath(inp.path);
-      if (inp.pattern) return inp.pattern;
-      if (inp.description) return String(inp.description);
-      if (inp.command) {
-        const cmd = String(inp.command);
-        return cmd.length > 120 ? cmd.slice(0, 120) + "..." : cmd;
-      }
-      if (inp.prompt) {
-        const p = String(inp.prompt);
-        return p.length > 120 ? p.slice(0, 120) + "..." : p;
-      }
-      if (inp.skill) return String(inp.skill);
-      for (const v of Object.values(inp)) {
-        if (typeof v === "string" && v.length > 0 && v.length < 120) return v;
-      }
-      return "";
-    }
-    case "tool_result":
-      return item.output?.slice(0, 200) ?? "";
-    case "error":
-      return item.content ?? "";
-    case "steer":
-      return item.content?.split("\n").find((line) => line.trim().length > 0) ?? "";
-    case "permission_request":
-    case "question_request": {
-      // daemon already writes a human-readable line into content
-      // ("Permission requested: Bash" / the question text); append a count of
-      // the options / questions carried in input.
-      const base = item.content ?? getEventLabel(item);
-      const inp = item.input as Record<string, unknown> | undefined;
-      const options = Array.isArray(inp?.options) ? (inp!.options as unknown[]).length : 0;
-      const questions = Array.isArray(inp?.questions) ? (inp!.questions as unknown[]).length : 0;
-      const n = options || questions;
-      return n > 0 ? `${base} (${n})` : base;
-    }
-    case "permission_response":
-    case "question_response": {
-      const inp = item.input as Record<string, unknown> | undefined;
-      const chosen = inp?.option_id ?? (Array.isArray(inp?.answers) ? (inp!.answers as unknown[]).join(", ") : undefined);
-      const status = inp?.status;
-      return [chosen, status].filter(Boolean).map(String).join(" · ") || (item.content ?? "");
-    }
-    default:
-      // Any other kind: first non-empty line of content, else output.
-      return (
-        item.content?.split("\n").find((l) => l.trim().length > 0) ??
-        item.output?.slice(0, 200) ??
-        ""
-      );
-  }
+function firstLine(text: string | null | undefined): string {
+  return text?.split("\n").find((line) => line.trim().length > 0)?.trim() ?? "";
 }
 
-function shortenPath(p: string): string {
-  const parts = p.split("/");
-  if (parts.length <= 3) return p;
+export function shortenPath(path: string): string {
+  const parts = path.split("/");
+  if (parts.length <= 3) return path;
   return ".../" + parts.slice(-2).join("/");
 }
+
+function inputSummary(input: Record<string, unknown> | null): string {
+  if (!input) return "";
+  for (const key of ["query", "file_path", "path", "pattern", "description", "command", "prompt", "url", "skill"]) {
+    const value = input[key];
+    if (typeof value !== "string" || !value) continue;
+    return key.endsWith("path") ? shortenPath(value) : value.length > 120 ? `${value.slice(0, 120)}...` : value;
+  }
+  for (const value of Object.values(input)) {
+    if (typeof value === "string" && value.length > 0 && value.length < 120) return value;
+  }
+  return "";
+}
+
+/** One line that says what an item was, for the row and for "copy all". */
+export function getItemSummary(item: TraceItem): string {
+  switch (item.type) {
+    case "user_message":
+    case "agent_message":
+      return firstLine(item.text);
+    case "reasoning":
+      return item.text.slice(0, 200);
+    case "command": {
+      const command = item.command ?? item.actions.map((action) => action.command).filter(Boolean).join(" && ");
+      if (command) return command.length > 160 ? `${command.slice(0, 160)}...` : command;
+      const action = item.actions[0];
+      return action?.type === "read" ? shortenPath(action.path) : action?.type === "search" ? action.query ?? "" : "";
+    }
+    case "file_change":
+      return item.changes.map((change) => shortenPath(change.path)).join(", ");
+    case "web_search":
+      return item.query ?? item.url ?? "";
+    case "tool":
+      return item.title ?? inputSummary(item.input);
+    case "subagent":
+      return item.title ?? firstLine(item.prompt);
+    case "plan": {
+      const done = item.entries.filter((entry) => entry.status === "completed").length;
+      return item.entries.length ? `${done}/${item.entries.length} · ${item.entries.map((entry) => entry.content).join(" · ")}` : "";
+    }
+    case "permission": {
+      const decision = item.decision?.name ?? item.outcome;
+      return [item.title, decision].filter(Boolean).join(" · ");
+    }
+    case "question":
+      return firstLine(item.message);
+    case "compaction":
+      if (item.error) return item.error;
+      if (item.pre_tokens != null && item.post_tokens != null) return `${formatTokenCount(item.pre_tokens)} → ${formatTokenCount(item.post_tokens)}`;
+      return firstLine(item.summary);
+    case "notice":
+      return [item.title, firstLine(item.description)].filter(Boolean).join(" · ");
+  }
+}
+
+function formatTokenCount(value: number): string {
+  return value >= 1000 ? `${Math.round(value / 100) / 10}K` : String(value);
+}
+
+/** Filter value: tool items by their tool, everything else by type. */
+export function itemFilterKey(item: TraceItem): string {
+  return isToolTraceItem(item) && "tool" in item && item.tool ? `tool:${item.tool}` : item.type;
+}
+
+/** The daemon's duration for tools, else the item's own start-to-end time. */
+export function itemDurationMs(item: TraceItem): number | null {
+  if ("duration_ms" in item && typeof item.duration_ms === "number") return item.duration_ms;
+  if (!item.completed_at || item.type === "agent_message" || item.type === "user_message") return null;
+  const ms = Date.parse(item.completed_at) - Date.parse(item.started_at);
+  return Number.isFinite(ms) && ms >= 0 ? ms : null;
+}
+
+// ─── Formatters ─────────────────────────────────────────────────────────────
 
 export function formatProvider(provider: string): string {
   const map: Record<string, string> = {
@@ -149,25 +167,10 @@ export function formatProvider(provider: string): string {
   return map[provider.toLowerCase()] ?? provider;
 }
 
-/** Agent / Task (legacy) steps delegate to a subagent — they own children and report Markdown. */
-export function isSubagentStep(tool?: string): boolean {
-  return tool === "Agent" || tool === "Task";
-}
-
-export function omitKeys(input: Record<string, unknown>, keys: string[]): Record<string, unknown> {
-  return Object.fromEntries(Object.entries(input).filter(([k]) => !keys.includes(k)));
-}
-
-/** Thread ids are UUIDs — show a recognizable head, never the full id inline. */
-export function shortThreadId(id: string): string {
-  return id.slice(0, 8);
-}
-
 export function formatStepDuration(ms: number): string {
   if (ms < 1000) return `${ms}ms`;
   return `${(ms / 1000).toFixed(1)}s`;
 }
-
 
 export function formatEventTime(iso: string): string {
   const d = new Date(iso);
@@ -175,9 +178,16 @@ export function formatEventTime(iso: string): string {
   return d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", second: "2-digit" });
 }
 
+/** Rolled-up token snapshot for the transcript header. */
+export interface UsageSnapshot {
+  model?: string;
+  inputTokens?: number;
+  outputTokens?: number;
+  totalTokens?: number;
+}
+
 // Fold the server-side per-provider usage rollup (camelCase on the wire) into a
-// single header snapshot. Terminal tasks carry this; live fallback (last usage
-// message) is a Batch 3 concern.
+// single header snapshot. Terminal tasks carry this.
 export function usageSnapshotFromTask(task: AgentTask): UsageSnapshot | null {
   const entries = task.usage;
   if (!entries || entries.length === 0) return null;

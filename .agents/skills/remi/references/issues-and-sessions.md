@@ -52,7 +52,7 @@ Session get 等命令同时需要 Issue ID 和 Session ID；成果 publish 的 S
 
 `remi session show <session>` 查看会话，`remi session inherited-context <session>` 查看最近一次领取记录的继承诊断。事件数量是截断前计数，实际上下文可能受 token 预算截断，尚未领取时不能声称继承内容已全部送入模型。
 
-`remi turn trace read <turn> --attempt <attempt>` 查询指定尝试的执行证据。执行记录留在 daemon 本机，服务端不再归档：daemon 离线时读取返回不可达，daemon 下线或 Runtime 删除后记录标为丢失。
+`remi turn trace read <turn> --attempt <attempt>` 查询指定尝试的执行证据：默认返回折叠后的轮与条目（`turn`、`items`），用 `--cursor <next_item_cursor>` 翻页；`--raw` 返回原始事件行，用 `--after <next_after_seq>` 翻页，也是查看旧格式（v1）记录的唯一方式。执行记录留在 daemon 本机，服务端不再归档：daemon 离线时读取返回不可达，daemon 下线或 Runtime 删除后记录标为丢失。
 
 ## 附件与分享
 

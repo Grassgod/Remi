@@ -3,7 +3,7 @@ import { normalizeCodexRequestUsage } from "@acp/codex-request-usage.js";
 import { codexUsagePatch } from "@acp/usage-bridge-patches.js";
 import { AcpProvider } from "@acp/provider.js";
 import { unitActualTotal } from "@acp/usage-collector.js";
-import { responseToUsageUnits } from "@multiremi/worker/acp-event-mapper.js";
+import { responseToUsageUnits } from "@multiremi/worker/usage-units.js";
 import { CODEX_SESSION_BOUNDARY } from "../../fixtures/acp/codex-acp-session-boundary.js";
 
 const boundary = `  async handleNotification(notification) {}

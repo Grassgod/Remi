@@ -94,7 +94,7 @@ daemon 上的东西分四类：工作区（代码目录）、运行环境（prov
 
 ## 记录
 
-- trace 由 daemon 实时写入 `traces/<主体>/<tsk>.jsonl`，格式 `multiremi.trace.v1` 不变；`GET /api/turns/:id/trace` 经 `trace.read` RPC 读取。
+- trace 由 daemon 实时写入 `traces/<主体>/<tsk>.jsonl`，格式为「轮 + 条目」的 `multiremi.trace.v2`（[ADR 0019](../adr/0019-turn-and-item-traces.md)），早于它的 v1 文件只读、位置不变；`GET /api/turns/:id/trace` 经 `trace.read` RPC 读取，默认返回折叠后的轮与条目，`view=events` 返回原始行。
 - `multiremi_task_traces.location` 只剩 `daemon | none | lost`。daemon 离线时读取返回 `unreachable`；daemon 下线或 Runtime 删除时指针标 `lost`，下线计划里的 `traces_to_lose` 给出受影响数量。
 - 原生会话历史（Claude `projects/`、Codex `sessions/`、`session_index.jsonl`）由 provider 写在 home 里，回收时保留，路径不变。
 - 记录随主体硬删除一起删除，除此之外不回收。

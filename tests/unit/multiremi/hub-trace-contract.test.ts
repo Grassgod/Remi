@@ -32,12 +32,13 @@ import type { HumanRequestEvent } from "@multiremi/api/hub/live-hub.js";
 import { createLocalHubTransport } from "@multiremi/api/hub/hub-transport.js";
 import { InMemoryTraceSink } from "@multiremi/api/trace/trace-sink.js";
 import type { TraceEvent } from "@multiremi/contracts/trace.js";
+import { deltaTraceEvent } from "../../helpers/turn-trace.js";
 import { createStore, resetMultiremiTestEnv } from "./helpers.js";
 
 afterEach(resetMultiremiTestEnv);
 
 function traceEvent(seq: number, content = `t-${seq}`): TraceEvent {
-  return { seq, ts: new Date(1_700_000_000_000 + seq).toISOString(), type: "text", content };
+  return deltaTraceEvent(seq, content);
 }
 
 async function settle(turns = 6): Promise<void> {

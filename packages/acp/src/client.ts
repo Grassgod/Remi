@@ -530,6 +530,15 @@ export class AcpClient {
             : { "subagent-transcript": true, jetbrains: { air: { version: 1, capabilities: ["sessionFailure"] } } }),
         },
         fs: { readTextFile: true, writeTextFile: true },
+        // ACP session lifecycle reports (PR 2 decision R11). Both pinned bridges
+        // need an object: with `compaction` they send `compaction_update` /
+        // `compaction_summary_chunk` instead of a "Compact conversation" tool call
+        // or banner text (claude-agent-acp 0.89 dist/context-compaction.js:3-6,
+        // acp-agent.js:2536-2541; codex-acp 2.2.2 dist/index.js:42231-42233,
+        // 44875); with `notices` they send `notice` updates instead of message
+        // text that would pollute the final reply (dist/session-notices.js:6-35;
+        // dist/index.js:30671-30682, 31504-31517, 31702-31711).
+        session: { compaction: {}, notices: {} },
         // Form-elicitation support: the agent keeps AskUserQuestion enabled and
         // sends it to us as `elicitation/create` instead of disabling the tool.
         // NOTE: `form` must be an object — the agent's zod schema silently

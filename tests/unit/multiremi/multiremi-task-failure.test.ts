@@ -153,13 +153,11 @@ describe("Multiremi task failure classification", () => {
   it("classifies poisoned output, invalid requests, and Codex resume-unsafe timeouts", () => {
     expect(classifyPoisonedOutput("I reached the iteration limit and could not continue.")).toBe(TaskFailureReason.IterationLimit);
     expect(classifyPoisonedOutput("Put your final update inside the content string. Keep it concise.")).toBe(TaskFailureReason.AgentFallbackMessage);
-    expect(classifyPoisonedOutput("Compacting...")).toBe(TaskFailureReason.AgentFallbackMessage);
-    expect(classifyPoisonedOutput("\n\nCompacting completed.")).toBe(TaskFailureReason.AgentFallbackMessage);
-    expect(classifyPoisonedOutput("Compacting...\n\nCompacting failed: context window unavailable"))
-      .toBe(TaskFailureReason.AgentFallbackMessage);
-    // codex-acp's `thread/compacted` banner — same failure mode, different bridge.
-    expect(classifyPoisonedOutput("*Context compacted to fit the model's context window.*\n\n"))
-      .toBe(TaskFailureReason.AgentFallbackMessage);
+    // Compaction banners no longer reach the reply: Remi advertises
+    // `session.compaction`, so both pinned bridges send `compaction_update`
+    // (PR 2 decision R11) and a banner-looking reply is ordinary text.
+    expect(classifyPoisonedOutput("Compacting...")).toBeNull();
+    expect(classifyPoisonedOutput("*Context compacted to fit the model's context window.*\n\n")).toBeNull();
     expect(classifyPoisonedOutput("The final answer mentions Compacting... as diagnostic context.")).toBeNull();
     expect(classifyPoisonedOutput("Note: *Context compacted to fit the model's context window.* happened mid-run, but the fix landed."))
       .toBeNull();

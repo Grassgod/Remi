@@ -461,7 +461,7 @@ export function registerTaskRoutes(app: Hono, deps: RouterDeps): void {
     }
     const window = parseTraceWindow(c);
     if (!window) return c.json({ error: "invalid trace window" }, 400);
-    return c.json(await deps.traceReader.readTrace(task.id, window.afterSeq, window.limit));
+    return c.json(await deps.traceReader.read(task.id, window));
   });
   app.get("/api/multiremi/tasks/:id/messages", (c) => {
     const task = taskFromParam(store, c, "id");

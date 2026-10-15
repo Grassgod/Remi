@@ -7,7 +7,7 @@ import { useAfterFirstScreen } from "@multiremi/core/platform/use-after-first-sc
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useSyncExternalStore, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useWorkspaceId } from "@multiremi/core/hooks";
-import { api, TRACE_LIVE_WINDOW_SIZE } from "@multiremi/core/api";
+import { api } from "@multiremi/core/api";
 import { toast } from "sonner";
 import { cn } from "@multiremi/ui/lib/utils";
 import { Button } from "@multiremi/ui/components/ui/button";
@@ -21,7 +21,7 @@ import {
   TooltipTrigger,
   TooltipContent,
 } from "@multiremi/ui/components/ui/tooltip";
-import { ChevronRight, ChevronDown, Brain, AlertCircle, AlertTriangle, CircleSlash, Copy, LoaderCircle, Check, RotateCcw, ScrollText } from "lucide-react";
+import { ChevronRight, ChevronDown, AlertCircle, AlertTriangle, CircleSlash, Copy, LoaderCircle, Check, RotateCcw, ScrollText } from "lucide-react";
 import { AttachmentSchema } from "@multiremi/core/api/schemas";
 import type { SessionLogRow } from "@multiremi/core/api/schemas/session-log";
 import type { SessionLogEntry, SessionReplicaPort } from "@multiremi/core/replica";
@@ -32,14 +32,15 @@ import { copyText } from "@multiremi/ui/lib/clipboard";
 import { AttachmentList } from "../../issues/components/comment-card";
 import type { AgentAvailability } from "@multiremi/core/agents";
 import type { ChatMessage, ChatPendingTask, TaskFailureReason } from "@multiremi/core/types";
-import type { ChatTimelineItem } from "@multiremi/core/chat";
 import { failureReasonLabel } from "../../agents/components/tabs/task-failure";
-import { toChatTimeline } from "../lib/chat-timeline";
 import { TaskStatusPill } from "./task-status-pill";
-import { useTaskTraceState } from "../../common/task-transcript/use-task-trace";
+import { useTurnTrace } from "../../common/task-transcript/use-task-trace";
 import { TaskTraceDialog } from "../../common/task-transcript/task-trace-dialog";
 import { formatElapsedMs } from "../../common/format";
-import { splitTimeline, extractCopyText } from "../lib/copy-text";
+import { extractCopyText } from "../lib/copy-text";
+import { finishedFoldHeader, isAwaitingHuman } from "../lib/turn-steps";
+import { isNonterminalTurn } from "../lib/turn-card";
+import { FinishedTurnSteps, LiveTurnSteps } from "./turn-steps-fold";
 import { useT } from "../../i18n";
 import { clientIdOf, mergeOptimisticChatRows, type OptimisticChatRow } from "../lib/optimistic-log";
 
@@ -61,7 +62,39 @@ interface TurnCardRef {
   attemptId: string | null;
   status: string | null;
   failureReason: string | null;
+  steps: TurnStepsRef | null;
 }
+
+/**
+ * What a finished turn's steps fold needs from its card, without its trace:
+ * the card counted process items (PR 2; older cards carry no count and get no
+ * fold) and says how long the agent worked.
+ */
+interface TurnStepsRef {
+  attemptId: string;
+  turnId: string;
+  status: string | null;
+  workedMs: number | null;
+  elapsedMs: number | null;
+}
+
+const metadataNumber = (value: unknown): number | null =>
+  typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : null;
+
+function turnStepsRef(metadata: Record<string, unknown> | undefined, attemptId: string | null | undefined): TurnStepsRef | null {
+  const count = metadataNumber(metadata?.process_item_count);
+  if (!count || !attemptId || typeof metadata?.turn_id !== "string") return null;
+  return {
+    attemptId,
+    turnId: metadata.turn_id,
+    status: typeof metadata.status === "string" ? metadata.status : null,
+    workedMs: metadataNumber(metadata.worked_ms),
+    elapsedMs: metadataNumber(metadata.elapsed_ms),
+  };
+}
+
+/** Row heights are cached per render version; an open fold is a different layout. */
+const STEPS_OPEN_VERSION = ":steps-open";
 
 const endedBadly = (status: string | null | undefined): status is "failed" | "cancelled" =>
   status === "failed" || status === "cancelled";
@@ -82,6 +115,7 @@ function turnCardsByReply(entries: readonly SessionLogEntry[]): Map<string, Turn
       attemptId: row.task_id ?? null,
       status: typeof metadata.status === "string" ? metadata.status : null,
       failureReason: typeof metadata.failure_reason === "string" ? metadata.failure_reason : null,
+      steps: turnStepsRef(metadata, row.task_id),
     });
   }
   return cards;
@@ -155,6 +189,17 @@ export function ChatMessageList({
     }
     if (visible) onLoadOlderMessages?.();
   }, [onLoadOlderMessages, visible]);
+  // Which finished turns have their steps open, by row id. Lifted here so the
+  // row's render version tells the height cache open and closed apart.
+  const [openSteps, setOpenSteps] = useState<ReadonlySet<string>>(() => new Set());
+  const setStepsOpen = useCallback((rowId: string, open: boolean) => {
+    setOpenSteps((current) => {
+      if (current.has(rowId) === open) return current;
+      const next = new Set(current);
+      if (open) next.add(rowId); else next.delete(rowId);
+      return next;
+    });
+  }, []);
   const transformEntries = useCallback((entries: readonly SessionLogEntry[]) => {
     const replies = new Set(entries.filter(entry => entry.kind === "message"
       && !(entry as SessionLogEntry & { deleted_at?: string | null }).deleted_at).map(entry => entry.id));
@@ -177,9 +222,10 @@ export function ChatMessageList({
       const row = entry as SessionLogEntry & { metadata?: Record<string, unknown> };
       const question = row.kind === "message" && linkedQuestionId(row.id, row.metadata) ? ":question-line-v1" : "";
       // The Chat column, bubble and turn rows changed size; old cached heights are misses.
-      return { ...entry, render_version: `${entry.render_version ?? ""}${question}${CHAT_LAYOUT_VERSION}` };
+      const steps = openSteps.has(entry.id) ? STEPS_OPEN_VERSION : "";
+      return { ...entry, render_version: `${entry.render_version ?? ""}${question}${CHAT_LAYOUT_VERSION}${steps}` };
     }), optimisticRows);
-  }, [optimisticRows]);
+  }, [optimisticRows, openSteps]);
   const cardsByReply = useMemo(() => turnCardsByReply(snapshot.entries), [snapshot.entries]);
   const entryKey = useCallback((entry: SessionLogEntry) => clientIdOf(entry) ?? entry.id, []);
   const pendingTaskId = pendingTask?.task_id ?? null;
@@ -189,11 +235,16 @@ export function ChatMessageList({
       && !isNonterminalTurn(row.metadata);
   });
   const showLiveTimeline = !!pendingTaskId && !pendingAlreadyPersisted;
-  const liveTrace = useTaskTraceState(pendingTaskId, visible && showLiveTimeline, true, pendingTask?.turn_id);
-  const liveTaskEvents = liveTrace.events;
-  const liveTimeline: ChatTimelineItem[] = toChatTimeline(liveTaskEvents);
-  const hasLive = showLiveTimeline && liveTimeline.length > 0;
-  const showStatusPill = !!pendingTaskId && !pendingAlreadyPersisted && !!pendingTask && !liveTrace.closed && !liveTrace.error;
+  // An optimistic pending id has no trace yet; the real id replaces it on dispatch.
+  const liveTraceId = pendingTaskId?.startsWith("optimistic-") ? null : pendingTaskId;
+  const liveTrace = useTurnTrace(liveTraceId, { enabled: visible && showLiveTimeline, live: true, turnId: pendingTask?.turn_id });
+  // The pill says only what the steps fold cannot: the wait before the trace
+  // has a turn (queued, dispatched, offline, the directory lock, preparation),
+  // a read that failed or a legacy trace (no fold), and a wait on a person.
+  const foldShown = !!liveTrace.turn && liveTrace.read?.format !== "legacy";
+  const waitingOnHuman = pendingTask?.status === "awaiting_human" || isAwaitingHuman(liveTrace.items);
+  const showStatusPill = !!pendingTaskId && !pendingAlreadyPersisted && !!pendingTask && !liveTrace.closed
+    && (!foldShown || waitingOnHuman);
 
   return <SessionLogList sessionId={sessionId} replica={replica} perfScroll="session-log"
     contentClassName={CHAT_CONTENT_CLASS} scrollButton="arrow"
@@ -236,19 +287,28 @@ export function ChatMessageList({
       const trace = card ? { taskId: card.attemptId ?? card.turnId, turnId: card.turnId }
         : row.kind === "message" && !isUser && row.message_kind === "reply" && row.task_id ? { taskId: row.task_id, turnId: row.task_id }
           : null;
+      // A finished turn whose card counted process items folds its steps above
+      // the reply (or the failure notice); older cards have no count and no fold.
+      const stepsRef = card ? card.steps : row.kind === "turn" && !isPush ? turnStepsRef(row.metadata, row.task_id) : null;
+      // A failed or cancelled turn's notice carries its own execution log.
+      const endNotice = !!(card && endedBadly(card.status)) || !!(turnId && endedBadly(turnStatus));
+      const stepsFold = stepsRef ? <FinishedTurnSteps attemptId={stepsRef.attemptId} turnId={stepsRef.turnId}
+        header={finishedFoldHeader(stepsRef)} visible={visible} open={openSteps.has(row.id)}
+        onOpenChange={(open) => setStepsOpen(row.id, open)}
+        footer={endNotice ? undefined : <ChatTraceButton taskId={stepsRef.attemptId} turnId={stepsRef.turnId} visible={visible} />} /> : null;
       return <div className="group/message">
         {questionId ? <LinkedQuestion id={questionId} getActorName={getActorName} /> : null}
         {card && endedBadly(card.status)
-          ? <TurnEndNotice turnId={card.turnId} attemptId={card.attemptId} status={card.status}
-            failureReason={card.failureReason ?? message.failure_reason ?? null} details={message.content} visible={visible} />
+          ? <div className="space-y-3">{stepsFold}<TurnEndNotice turnId={card.turnId} attemptId={card.attemptId} status={card.status}
+            failureReason={card.failureReason ?? message.failure_reason ?? null} details={message.content} visible={visible} /></div>
           : turnId && endedBadly(turnStatus)
-            ? <TurnEndNotice turnId={turnId} attemptId={row.task_id ?? null} status={turnStatus}
-              failureReason={message.failure_reason ?? null} details={message.content} visible={visible} />
+            ? <div className="space-y-3">{stepsFold}<TurnEndNotice turnId={turnId} attemptId={row.task_id ?? null} status={turnStatus}
+              failureReason={message.failure_reason ?? null} details={message.content} visible={visible} /></div>
             : row.kind === "turn" && row.metadata?.final_entry_id
               // The reply row is not loaded; a finished card has nothing of its own to show.
               ? null
               : <MessageBubble message={message} isPending={!!pendingTaskId && row.task_id === pendingTaskId}
-                isPush={isPush} visible={visible} trace={trace} />}
+                isPush={isPush} visible={visible} trace={trace} steps={stepsFold} />}
         {isUser && <NotWokenHint wakeApplied={row.wake_applied} wakeReason={row.wake_reason} />}
         {row.kind === "message" && !questionId && <QuestionReplyReference metadata={row.metadata} />}
         {isUser && local && <div className="flex justify-end"><SendStatus status={local.status}
@@ -256,17 +316,11 @@ export function ChatMessageList({
       </div>;
     }}
     footer={<div className="space-y-4 pb-4">
-      {hasLive && <div className="text-[10px] text-muted-foreground">{traceT(($) => $.transcript.trace_window, { count: TRACE_LIVE_WINDOW_SIZE })}</div>}
-      {hasLive && <TimelineView items={liveTimeline} isStreaming={!liveTrace.closed && !liveTrace.error} />}
+      {showLiveTimeline && <LiveTurnSteps key={liveTraceId ?? "pending"} trace={liveTrace} />}
       {showLiveTimeline && liveTrace.error && <div role="alert" className="text-xs text-destructive">{traceT(($) => $.transcript.trace_failed)}</div>}
       {showStatusPill && pendingTask && <TaskStatusPill pendingTask={pendingTask}
-        taskMessages={liveTaskEvents} availability={availability} />}
+        items={liveTrace.items} availability={availability} />}
     </div>} />;
-}
-
-function isNonterminalTurn(metadata?: Record<string, unknown>): boolean {
-  if (typeof metadata?.status === "string") return !["completed", "failed", "cancelled"].includes(metadata.status);
-  return metadata?.elapsed_ms == null && metadata?.failure_reason == null;
 }
 
 function SendStatus({ status, onRetry }: { status: OptimisticChatRow["status"]; onRetry: () => void }) {
@@ -288,7 +342,11 @@ function SendStatus({ status, onRetry }: { status: OptimisticChatRow["status"]; 
 
 type TraceRef = { taskId: string; turnId?: string } | null;
 
-function MessageBubble({ message, isPending, isPush, visible, trace = null }: { message: ChatMessage; isPending: boolean; isPush: boolean; visible: boolean; trace?: TraceRef }) {
+function MessageBubble({ message, isPending, isPush, visible, trace = null, steps = null }: {
+  message: ChatMessage; isPending: boolean; isPush: boolean; visible: boolean; trace?: TraceRef;
+  /** The finished turn's steps fold, rendered above the reply. */
+  steps?: React.ReactNode;
+}) {
   if (message.role === "user") {
     const markdown = message.content;
     return (
@@ -312,7 +370,7 @@ function MessageBubble({ message, isPending, isPush, visible, trace = null }: { 
     );
   }
 
-  return <AssistantMessage message={message} isPending={isPending} isPush={isPush} visible={visible} trace={trace} />;
+  return <AssistantMessage message={message} isPending={isPending} isPush={isPush} visible={visible} trace={trace} steps={steps} />;
 }
 
 function AssistantMessage({
@@ -321,14 +379,15 @@ function AssistantMessage({
   isPush,
   visible,
   trace,
+  steps,
 }: {
   message: ChatMessage;
   isPending: boolean;
   isPush: boolean;
   visible: boolean;
   trace: TraceRef;
+  steps: React.ReactNode;
 }) {
-  const timeline: ChatTimelineItem[] = [];
   const traceRef: TraceRef = trace ?? (message.task_id && !isPush ? { taskId: message.task_id, turnId: message.turn_id } : null);
 
   // Legacy failure bubble: an assistant row written by the server's FailTask
@@ -339,7 +398,6 @@ function AssistantMessage({
       <div className="w-full space-y-1.5"><FailureBubble
         reason={message.failure_reason}
         rawError={message.content}
-        timeline={timeline}
         elapsedMs={message.elapsed_ms}
       />
         {traceRef && <ChatTraceButton taskId={traceRef.taskId} turnId={traceRef.turnId} visible={visible} />}
@@ -349,6 +407,7 @@ function AssistantMessage({
 
   return (
     <div className="w-full space-y-1.5">
+      {steps && <div className="pb-1.5">{steps}</div>}
       <div className="text-sm leading-relaxed prose prose-sm dark:prose-invert max-w-none">
         <Markdown attachments={message.attachments}>{message.content}</Markdown>
       </div>
@@ -359,9 +418,9 @@ function AssistantMessage({
       />
       <MessageFooter
         message={message}
-        timeline={timeline}
         isPending={isPending}
-        trace={traceRef
+        // The steps fold carries the execution log for the turns that have one.
+        trace={traceRef && !steps
           ? <ChatTraceButton taskId={traceRef.taskId} turnId={traceRef.turnId} visible={visible} quiet /> : null}
       />
     </div>
@@ -496,12 +555,10 @@ function NotWokenHint({ wakeApplied, wakeReason }: { wakeApplied?: string | null
 // final text is still being appended.
 function MessageFooter({
   message,
-  timeline,
   isPending,
   trace,
 }: {
   message: ChatMessage;
-  timeline: ChatTimelineItem[];
   isPending: boolean;
   trace?: React.ReactNode;
 }) {
@@ -512,19 +569,13 @@ function MessageFooter({
       {message.elapsed_ms != null && (
         <ElapsedCaption variant="replied" elapsedMs={message.elapsed_ms} />
       )}
-      {showCopy && <MessageCopyButton message={message} timeline={timeline} />}
+      {showCopy && <MessageCopyButton message={message} />}
       {trace}
     </div>
   );
 }
 
-function MessageCopyButton({
-  message,
-  timeline,
-}: {
-  message: ChatMessage;
-  timeline: ChatTimelineItem[];
-}) {
+function MessageCopyButton({ message }: { message: ChatMessage }) {
   const { t } = useT("chat");
   const [copied, setCopied] = useState(false);
   useEffect(() => {
@@ -533,7 +584,7 @@ function MessageCopyButton({
     return () => clearTimeout(timer);
   }, [copied]);
   const handleCopy = async () => {
-    if (await copyText(extractCopyText(message, timeline))) {
+    if (await copyText(extractCopyText(message))) {
       setCopied(true);
     } else {
       toast.error(t(($) => $.message_list.copy_failed_toast));
@@ -592,12 +643,10 @@ function ElapsedCaption({
 function FailureBubble({
   reason,
   rawError,
-  timeline,
   elapsedMs,
 }: {
   reason: string;
   rawError: string;
-  timeline: ChatTimelineItem[];
   elapsedMs?: number | null;
 }) {
   const { t } = useT("chat");
@@ -639,276 +688,9 @@ function FailureBubble({
           )}
         </div>
       </div>
-      {timeline.length > 0 && <TimelineView items={timeline} />}
       {elapsedMs != null && (
         <ElapsedCaption variant="failed" elapsedMs={elapsedMs} />
       )}
     </div>
   );
 }
-
-// ─── Timeline: outer process fold + final text (Conductor-style) ─────────
-//
-// splitTimeline (lib/copy-text.ts) carves the items into:
-//   preface — text before the first thinking/tool item
-//   middle  — first → last non-text item (inclusive, may sandwich text)
-//   final   — text after the last non-text item
-//
-// We render preface + final outside an outer Collapsible ("X steps") that
-// wraps middle. The inner row Collapsibles (ThinkingRow / ToolCallRow /
-// ToolResultRow) are unchanged — clicking them toggles independently of
-// the outer fold. Copy mirrors what's visible when the outer fold is
-// closed: preface + final, never middle. See extractCopyText for the
-// authoritative copy logic.
-
-function TimelineView({
-  items,
-  isStreaming,
-  attachments,
-}: {
-  items: ChatTimelineItem[];
-  isStreaming?: boolean;
-  attachments?: import("@multiremi/core/types").Attachment[];
-}) {
-  const { preface, middle, final } = splitTimeline(items);
-
-  return (
-    <>
-      {preface.length > 0 && (
-        <div className="text-sm leading-relaxed prose prose-sm dark:prose-invert max-w-none">
-          <Markdown attachments={attachments}>
-            {preface.map((t) => t.content ?? "").join("")}
-          </Markdown>
-        </div>
-      )}
-      {middle.length > 0 && (
-        <OuterProcessFold
-          items={middle}
-          defaultOpen={!!isStreaming}
-          attachments={attachments}
-        />
-      )}
-      {final.length > 0 && (
-        <div className="text-sm leading-relaxed prose prose-sm dark:prose-invert max-w-none">
-          <Markdown attachments={attachments}>
-            {final.map((t) => t.content ?? "").join("")}
-          </Markdown>
-        </div>
-      )}
-    </>
-  );
-}
-
-function OuterProcessFold({
-  items,
-  defaultOpen,
-  attachments,
-}: {
-  items: ChatTimelineItem[];
-  defaultOpen?: boolean;
-  attachments?: import("@multiremi/core/types").Attachment[];
-}) {
-  const { t } = useT("chat");
-  // useState seeds once at mount — subsequent renders never overwrite the
-  // user's manual toggle. The streaming → completed transition unmounts
-  // the live <TimelineView> and mounts the persisted AssistantMessage's
-  // own <TimelineView>, so the persisted instance starts closed (default)
-  // even if the live one was open. That's the desired collapsed-default.
-  const [open, setOpen] = useState(defaultOpen ?? false);
-  const stepCount = items.length;
-
-  return (
-    <Collapsible open={open} onOpenChange={setOpen}>
-      <CollapsibleTrigger className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors">
-        {open ? <ChevronDown className="size-3" /> : <ChevronRight className="size-3" />}
-        <span>{t(($) => $.message_list.process_steps, { count: stepCount })}</span>
-      </CollapsibleTrigger>
-      <CollapsibleContent>
-        <div className="mt-1 rounded-lg border bg-muted/20 p-2 space-y-0.5">
-          {items.map((item) =>
-            item.type === "text" ? (
-              <MiddleTextRow key={item.seq} item={item} attachments={attachments} />
-            ) : (
-              <ItemRow key={item.seq} item={item} />
-            ),
-          )}
-        </div>
-      </CollapsibleContent>
-    </Collapsible>
-  );
-}
-
-// Intermediate text segment rendered inside the outer fold. Visually
-// down-shifted (xs / muted) so it reads as part of the agent's process,
-// not the final answer — the final answer renders below the fold at full
-// prose size.
-function MiddleTextRow({
-  item,
-  attachments,
-}: {
-  item: ChatTimelineItem;
-  attachments?: import("@multiremi/core/types").Attachment[];
-}) {
-  return (
-    <div className="py-0.5 text-xs text-muted-foreground prose prose-sm dark:prose-invert max-w-none [&>*:first-child]:mt-0 [&>*:last-child]:mb-0">
-      <Markdown attachments={attachments}>{item.content ?? ""}</Markdown>
-    </div>
-  );
-}
-
-// ─── Individual item rows ────────────────────────────────────────────────
-
-function ItemRow({ item }: { item: ChatTimelineItem }) {
-  switch (item.type) {
-    case "tool_use":
-      return <ToolCallRow item={item} />;
-    case "tool_result":
-      return <ToolResultRow item={item} />;
-    case "thinking":
-      return <ThinkingRow item={item} />;
-    case "error":
-      return <ErrorRow item={item} />;
-    case "permission_request":
-    case "permission_response":
-    case "question_request":
-    case "question_response":
-      return <HumanEventRow item={item} />;
-    default:
-      return null;
-  }
-}
-
-// Static history rows for the approval-routing flow; the interactive pending
-// card lives in HumanRequestDock, this only records what was asked/decided.
-function HumanEventRow({ item }: { item: ChatTimelineItem }) {
-  const isRequest = item.type === "permission_request" || item.type === "question_request";
-  return (
-    <div className="flex items-start gap-1.5 py-0.5 text-xs text-muted-foreground">
-      <AlertCircle
-        className={cn("mt-0.5 h-3.5 w-3.5 shrink-0", isRequest ? "text-amber-500" : "text-emerald-500")}
-      />
-      <span className="min-w-0 break-words">{item.content ?? ""}</span>
-    </div>
-  );
-}
-
-function shortenPath(p: string): string {
-  const parts = p.split("/");
-  if (parts.length <= 3) return p;
-  return ".../" + parts.slice(-2).join("/");
-}
-
-function getToolSummary(item: ChatTimelineItem): string {
-  if (!item.input) return "";
-  const inp = item.input as Record<string, string>;
-  if (inp.query) return inp.query;
-  if (inp.file_path) return shortenPath(inp.file_path);
-  if (inp.path) return shortenPath(inp.path);
-  if (inp.pattern) return inp.pattern;
-  if (inp.description) return String(inp.description);
-  if (inp.command) {
-    const cmd = String(inp.command);
-    return cmd.length > 100 ? cmd.slice(0, 100) + "..." : cmd;
-  }
-  if (inp.prompt) {
-    const p = String(inp.prompt);
-    return p.length > 100 ? p.slice(0, 100) + "..." : p;
-  }
-  if (inp.skill) return String(inp.skill);
-  for (const v of Object.values(inp)) {
-    if (typeof v === "string" && v.length > 0 && v.length < 120) return v;
-  }
-  return "";
-}
-
-function ToolCallRow({ item }: { item: ChatTimelineItem }) {
-  const [open, setOpen] = useState(false);
-  const summary = getToolSummary(item);
-  const hasInput = item.input && Object.keys(item.input).length > 0;
-
-  return (
-    <Collapsible open={open} onOpenChange={setOpen}>
-      <CollapsibleTrigger className="flex w-full items-center gap-1.5 rounded px-1 -mx-1 py-0.5 text-xs hover:bg-accent/30 transition-colors">
-        <ChevronRight
-          className={cn(
-            "h-3 w-3 shrink-0 text-muted-foreground transition-transform",
-            open && "rotate-90",
-            !hasInput && "invisible",
-          )}
-        />
-        <span className="font-medium text-foreground shrink-0">{item.tool}</span>
-        {summary && <span className="truncate text-muted-foreground">{summary}</span>}
-      </CollapsibleTrigger>
-      {hasInput && (
-        <CollapsibleContent>
-          <pre className="ml-[18px] mt-0.5 max-h-32 overflow-auto rounded bg-muted/50 p-2 text-xs text-muted-foreground whitespace-pre-wrap break-all">
-            {JSON.stringify(item.input, null, 2)}
-          </pre>
-        </CollapsibleContent>
-      )}
-    </Collapsible>
-  );
-}
-
-function ToolResultRow({ item }: { item: ChatTimelineItem }) {
-  const { t } = useT("chat");
-  const [open, setOpen] = useState(false);
-  const output = item.output ?? "";
-  if (!output) return null;
-
-  const preview = output.length > 120 ? output.slice(0, 120) + "..." : output;
-  const labelPrefix = item.tool
-    ? t(($) => $.message_list.tool_result_named, { tool: item.tool })
-    : t(($) => $.message_list.tool_result_unnamed);
-
-  return (
-    <Collapsible open={open} onOpenChange={setOpen}>
-      <CollapsibleTrigger className="flex w-full items-start gap-1.5 rounded px-1 -mx-1 py-0.5 text-xs hover:bg-accent/30 transition-colors">
-        <ChevronRight
-          className={cn("h-3 w-3 shrink-0 text-muted-foreground transition-transform mt-0.5", open && "rotate-90")}
-        />
-        <span className="text-muted-foreground/70 truncate">
-          {labelPrefix}{preview}
-        </span>
-      </CollapsibleTrigger>
-      <CollapsibleContent>
-        <pre className="ml-[18px] mt-0.5 max-h-40 overflow-auto rounded bg-muted/50 p-2 text-xs text-muted-foreground whitespace-pre-wrap break-all">
-          {output.length > 4000 ? output.slice(0, 4000) + "\n... (truncated)" : output}
-        </pre>
-      </CollapsibleContent>
-    </Collapsible>
-  );
-}
-
-function ThinkingRow({ item }: { item: ChatTimelineItem }) {
-  const [open, setOpen] = useState(false);
-  const text = item.content ?? "";
-  if (!text) return null;
-
-  const preview = text.length > 150 ? text.slice(0, 150) + "..." : text;
-
-  return (
-    <Collapsible open={open} onOpenChange={setOpen}>
-      <CollapsibleTrigger className="flex w-full items-start gap-1.5 rounded px-1 -mx-1 py-0.5 text-xs hover:bg-accent/30 transition-colors">
-        <Brain className="h-3 w-3 shrink-0 text-muted-foreground/60 mt-0.5" />
-        <span className="text-muted-foreground italic truncate">{preview}</span>
-      </CollapsibleTrigger>
-      <CollapsibleContent>
-        <pre className="ml-[18px] mt-0.5 max-h-40 overflow-auto rounded bg-muted/30 p-2 text-xs text-muted-foreground whitespace-pre-wrap break-words">
-          {text}
-        </pre>
-      </CollapsibleContent>
-    </Collapsible>
-  );
-}
-
-function ErrorRow({ item }: { item: ChatTimelineItem }) {
-  return (
-    <div className="flex items-start gap-1.5 px-1 -mx-1 py-0.5 text-xs">
-      <AlertCircle className="h-3 w-3 shrink-0 text-destructive mt-0.5" />
-      <span className="text-destructive">{item.content}</span>
-    </div>
-  );
-}
-
-// ─── Shared ──────────────────────────────────────────────────────────────

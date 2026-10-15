@@ -89,15 +89,20 @@ export function useTraceStreamSubscription(
   taskId: string | null | undefined,
   handlers: StreamSubscriptionHandlers,
   enabled = true,
+  options?: { fromSeq?: number },
 ): void {
   const { subscribeTrace } = useWS();
   const handlersRef = useRef(handlers);
   handlersRef.current = handlers;
+  // Read when the subscription opens only: a moving head must not resubscribe.
+  // A consumer joining a subscription that is already open shares its start.
+  const optionsRef = useRef(options);
+  optionsRef.current = options;
 
   useEffect(() => {
     if (!enabled || !taskId) return;
     const key = `trace:${taskId}`;
-    return registerConsumer(traceCounts, key, handlersRef, (callbacks) => subscribeTrace(taskId, callbacks));
+    return registerConsumer(traceCounts, key, handlersRef, (callbacks) => subscribeTrace(taskId, callbacks, optionsRef.current));
   }, [taskId, enabled, subscribeTrace]);
 }
 

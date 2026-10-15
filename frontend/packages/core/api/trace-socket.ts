@@ -1,5 +1,5 @@
 import { WSClient } from "./ws-client";
-import type { StreamSubscription, StreamSubscriptionHandlers } from "./ws-client";
+import type { StreamSubscription, StreamSubscriptionHandlers, StreamSubscriptionOptions } from "./ws-client";
 import type { Logger } from "../logger";
 import { createLogger, noopLogger } from "../logger";
 
@@ -56,12 +56,12 @@ export class TraceSocket {
    * The first call opens the socket; the returned unsubscribe closes it again
    * once it was the last one.
    */
-  subscribe(taskId: string, handlers: StreamSubscriptionHandlers): StreamSubscription {
+  subscribe(taskId: string, handlers: StreamSubscriptionHandlers, options?: StreamSubscriptionOptions): StreamSubscription {
     if (this.subscriptions.has(taskId)) {
       throw new Error(`trace socket already subscribed to ${taskId}`);
     }
     const client = this.ensureClient();
-    const subscription = client.subscribeStream("trace", taskId, handlers);
+    const subscription = client.subscribeStream("trace", taskId, handlers, options);
     this.subscriptions.set(taskId, () => subscription.unsubscribe());
     return {
       stream: "trace",

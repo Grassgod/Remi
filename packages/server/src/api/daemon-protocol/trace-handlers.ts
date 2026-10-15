@@ -151,7 +151,8 @@ export class DaemonTraceService {
     try {
       const task = this.task(frame, session);
       if (!Number.isSafeInteger(frame.payload.after_seq) || (frame.payload.after_seq as number) < 0) return failure();
-      return session.deferReply(frame.id ?? "", this.reader.read({ taskId: task.id, runtimeId: task.runtimeId!,
+      // A concierge fills a gap with raw lines: the daemon's `events` view.
+      return session.deferReply(frame.id ?? "", this.reader.read({ taskId: task.id, runtimeId: task.runtimeId!, view: "events",
         afterSeq: frame.payload.after_seq as number, limit: typeof frame.payload.limit === "number" ? frame.payload.limit : undefined }));
     } catch (error) { return traceRejection(error); }
   }

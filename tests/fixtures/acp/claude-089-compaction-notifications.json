@@ -1,0 +1,224 @@
+[
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_claude_089",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "messageId": "msg_03A",
+        "content": {
+          "type": "text",
+          "text": "Working on it."
+        }
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_claude_089",
+      "update": {
+        "sessionUpdate": "compaction_update",
+        "compactionId": "cmp_uuid_1",
+        "status": "in_progress",
+        "_meta": {
+          "jetbrains": {
+            "air": {
+              "version": 1,
+              "contextCompaction": {
+                "version": 1
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_claude_089",
+      "update": {
+        "sessionUpdate": "compaction_summary_chunk",
+        "compactionId": "cmp_uuid_1",
+        "content": {
+          "type": "text",
+          "text": "The user is fixing add(). "
+        }
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_claude_089",
+      "update": {
+        "sessionUpdate": "compaction_summary_chunk",
+        "compactionId": "cmp_uuid_1",
+        "content": {
+          "type": "text",
+          "text": "Tests were failing by one."
+        }
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_claude_089",
+      "update": {
+        "sessionUpdate": "compaction_update",
+        "compactionId": "cmp_uuid_1",
+        "status": "completed",
+        "_meta": {
+          "jetbrains": {
+            "air": {
+              "version": 1,
+              "contextCompaction": {
+                "version": 1
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_claude_089",
+      "update": {
+        "sessionUpdate": "compaction_update",
+        "compactionId": "cmp_uuid_1",
+        "status": "completed",
+        "_meta": {
+          "jetbrains": {
+            "air": {
+              "version": 1,
+              "contextCompaction": {
+                "version": 1,
+                "trigger": "automatic",
+                "preTokens": 190000,
+                "postTokens": 12000,
+                "durationMs": 8000
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_claude_089",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "messageId": "msg_03B",
+        "content": {
+          "type": "text",
+          "text": "Done after compaction."
+        }
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_claude_089",
+      "update": {
+        "sessionUpdate": "compaction_update",
+        "compactionId": "cmp_uuid_2",
+        "status": "in_progress",
+        "_meta": {
+          "jetbrains": {
+            "air": {
+              "version": 1,
+              "contextCompaction": {
+                "version": 1
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_claude_089",
+      "update": {
+        "sessionUpdate": "compaction_update",
+        "compactionId": "cmp_uuid_2",
+        "status": "failed",
+        "error": "Conversation too long to compact",
+        "_meta": {
+          "jetbrains": {
+            "air": {
+              "version": 1,
+              "contextCompaction": {
+                "version": 1
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_claude_089",
+      "update": {
+        "sessionUpdate": "compaction_update",
+        "compactionId": "cmp_uuid_3",
+        "status": "in_progress",
+        "_meta": {
+          "jetbrains": {
+            "air": {
+              "version": 1,
+              "contextCompaction": {
+                "version": 1
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_claude_089",
+      "update": {
+        "sessionUpdate": "compaction_update",
+        "compactionId": "cmp_uuid_3",
+        "status": "cancelled"
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_claude_089",
+      "update": {
+        "sessionUpdate": "notice",
+        "severity": "warning",
+        "title": "Hook blocked the tool",
+        "description": "PreToolUse hook denied Bash"
+      }
+    }
+  }
+]

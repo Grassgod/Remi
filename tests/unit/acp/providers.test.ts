@@ -202,17 +202,19 @@ describe("AcpProvider", () => {
     expect(provider.getStreamedText("chat-1")).toBe("Decision context");
   });
 
-  it("keeps claude compaction statuses out of the final response text", async () => {
+  it("keeps compaction out of the final response text: it arrives as compaction_update, not message text", async () => {
+    // Remi advertises `session.compaction`, so claude-agent-acp 0.89 reports the
+    // compaction lifecycle as its own updates (dist/context-compaction.js:3-6).
     const provider = new AcpProvider({ agentType: "claude" });
     const client = {
       _options: { onSessionUpdate: (_notification: unknown) => {} },
       prompt: async () => {
-        for (const text of ["Final answer.", "Compacting...", "\n\nCompacting completed."]) {
-          client._options.onSessionUpdate({
-            sessionId: "session-1",
-            update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text } },
-          });
-        }
+        const updates = [
+          { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Final answer." } },
+          { sessionUpdate: "compaction_update", compactionId: "cmp_1", status: "in_progress" },
+          { sessionUpdate: "compaction_update", compactionId: "cmp_1", status: "completed" },
+        ];
+        for (const update of updates) client._options.onSessionUpdate({ sessionId: "session-1", update });
         return { stopReason: "end_turn" };
       },
       cancel: async () => {},

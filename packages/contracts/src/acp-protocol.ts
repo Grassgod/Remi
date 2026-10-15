@@ -69,6 +69,12 @@ export interface InitializeParams {
 export interface ClientCapabilities {
   fs?: { readTextFile?: boolean; writeTextFile?: boolean };
   terminal?: boolean;
+  /**
+   * `ClientSessionCapabilities` (@agentclientprotocol/sdk 1.8.0
+   * dist/schema/zod.gen.js:2345-2350): each present entry opts into an ACP
+   * session report. Both are records; the bridges require an object.
+   */
+  session?: { compaction?: Record<string, unknown>; notices?: Record<string, unknown>; _meta?: Record<string, unknown> };
   elicitation?: { form?: Record<string, unknown>; url?: Record<string, unknown> };
   _meta?: Record<string, unknown>;
 }
@@ -277,7 +283,40 @@ export type SessionUpdate =
   | UsageUpdate
   | ConfigOptionUpdate
   | SessionInfoUpdate
-  | AvailableCommandsUpdate;
+  | AvailableCommandsUpdate
+  | CompactionUpdate
+  | CompactionSummaryChunkUpdate
+  | NoticeUpdate;
+
+/**
+ * ACP context compaction lifecycle (sdk 1.8.0 schema; sent once the client
+ * advertises `session.compaction`). `summary` comes with the terminal update
+ * unless it streamed as `compaction_summary_chunk`s.
+ */
+export interface CompactionUpdate {
+  sessionUpdate: "compaction_update";
+  compactionId: string;
+  status: "in_progress" | "completed" | "failed" | "cancelled";
+  summary?: ContentBlock[];
+  error?: string;
+  _meta?: Record<string, unknown>;
+}
+
+export interface CompactionSummaryChunkUpdate {
+  sessionUpdate: "compaction_summary_chunk";
+  compactionId: string;
+  content: ContentBlock;
+  _meta?: Record<string, unknown>;
+}
+
+/** A session notice (sent once the client advertises `session.notices`). */
+export interface NoticeUpdate {
+  sessionUpdate: "notice";
+  severity: "info" | "warning" | "error";
+  title: string;
+  description?: string;
+  _meta?: Record<string, unknown>;
+}
 
 export interface ContentChunkUpdate {
   sessionUpdate: "agent_message_chunk" | "user_message_chunk";

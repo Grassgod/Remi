@@ -1,9 +1,12 @@
 /**
- * Test patch-only updates and resuming the same message after a local restart.
+ * Test patch-only updates of one long-running message.
  *
  * Phase 1 (0-30s): Interactive updates via im.message.patch
- * Phase 2 (30s-3m): Reattach to the message and continue via the same patch path
+ * Phase 2 (30s-3m): Continue on the same message via the same patch path
  * Phase 3: Close with final card
+ *
+ * Reattaching a session to an existing message was a protocol-v4 Task delivery
+ * feature and is gone with that renderer.
  *
  * Usage: bun run tests/manual/test-degraded-mode.ts
  */
@@ -16,7 +19,7 @@ async function main() {
   const config = loadConfig();
   const creds = { appId: config.appId, appSecret: config.appSecret, domain: config.domain as any };
   const client = createFeishuClient(creds);
-  let session = new FeishuStreamingSession(client, creds);
+  const session = new FeishuStreamingSession(client, creds);
 
   console.log("Creating patch-only card...");
   await session.start(config.chatId, "open_id", { sessionId: "degraded-test" });
@@ -43,14 +46,8 @@ async function main() {
     session.updateStepDuration(5000);
   }
 
-  // Phase 2: Resume by message identity, replaying earlier steps.
-  console.log("\n═══ Phase 2: Resume message ═══");
-  const messageId = session.getMessageId();
-  const previousSteps = session.getSteps();
-  session.detach();
-  session = new FeishuStreamingSession(client, creds);
-  await session.start(config.chatId, "open_id", { durable: { idempotencyKey: `patch-probe-${Date.now()}`, messageId } });
-  for (const step of previousSteps) session.addStep(step.tool, step.desc);
+  // Phase 2: Keep patching the same message.
+  console.log("\n═══ Phase 2: Continue the same message ═══");
 
   // Continue for 2.5 minutes on the same message.
   const degradedStart = Date.now();
@@ -62,12 +59,12 @@ async function main() {
     const toolName = stepCount % 3 === 0 ? "Edit" : stepCount % 3 === 1 ? "Bash" : "Grep";
     const desc = `${toolName} \`$ operation_${stepCount}\``;
     session.addStep(toolName, desc);
-    await session.updateStatus(`Running ${toolName}... (resumed, ${elapsed}s)`);
+    await session.updateStatus(`Running ${toolName}... (continued, ${elapsed}s)`);
 
-    contentText += `Step ${stepCount} after resuming (${elapsed}s elapsed).\n`;
+    contentText += `Step ${stepCount} after continuing (${elapsed}s elapsed).\n`;
     await session.update(contentText);
 
-    console.log(`  Step ${stepCount} (resumed, ${elapsed}s)`);
+    console.log(`  Step ${stepCount} (continued, ${elapsed}s)`);
     await Bun.sleep(10000);
 
     session.updateStepDuration(10000);
@@ -79,7 +76,7 @@ async function main() {
   await session.close({
     finalText: contentText,
     toolCount: stepCount,
-    stats: `${totalElapsed}s · ${stepCount} tools · patch resume test`,
+    stats: `${totalElapsed}s · ${stepCount} tools · long patch test`,
   });
   console.log(`Closed. Total steps: ${stepCount}`);
 

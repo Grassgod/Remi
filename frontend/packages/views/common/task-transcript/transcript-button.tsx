@@ -9,15 +9,12 @@ import {
   TooltipTrigger,
 } from "@multiremi/ui/components/ui/tooltip";
 import type { AgentTask } from "@multiremi/core/types/agent";
-import type { TimelineItem } from "./build-timeline";
 import { TaskTraceDialog } from "./task-trace-dialog";
 import { useT } from "../../i18n";
 
 interface TranscriptButtonProps {
   task: AgentTask;
   agentName: string;
-  /** Legacy caller data is ignored: v2 traces are read from the trace endpoint. */
-  items?: TimelineItem[];
   isLive?: boolean;
   className?: string;
   title?: string;

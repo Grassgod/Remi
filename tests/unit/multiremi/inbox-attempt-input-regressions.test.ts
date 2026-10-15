@@ -109,9 +109,12 @@ pendingTurnBackendTests('MUL-506 provider input boundaries', fixture => {
         f.store.answerMessageDecision(nativeId, { sender: { type: 'member', id: 'mem_local_local' }, expected_route_revision:f.store.getQuestion(nativeId)!.route_revision, body_md: 'Yes', response:{answers:{'Current approval?':'Yes'}} });
         const offer = f.bridge.offerInput(f.store.getTaskWithAgent(f.attempt.id)!);
         f.store.recordSessionAgentRangeRead(f.session.id, f.agent.id, { seq: 1, offset: 0 }, { seq: offer.input_to_seq + 1, offset: 0 }, f.attempt.id);
-        const fields = { trace: { head: 0, event_count: Number.MAX_SAFE_INTEGER, tool_call_count: Number.MAX_SAFE_INTEGER, closed: true as const, type_histogram: [] }, final_reply_md: '', model: { provider: 'codex', model: 'fixture' } };
+        const fields = { trace: { head: 0, event_count: Number.MAX_SAFE_INTEGER, tool_call_count: Number.MAX_SAFE_INTEGER, closed: true as const, type_histogram: [] }, final_reply_md: '', model: { provider: 'codex', model: 'fixture' },
+          context_usage: null, worked_ms: Number.MAX_SAFE_INTEGER, process_item_count: Number.MAX_SAFE_INTEGER };
         expect(f.bridge.complete({ payload: { turn_id: f.sent.turn_id!, attempt_id: f.attempt.id, input_to_seq: offer.input_to_seq, reply: { body_md: 'large counts', message_kind: 'final' } }, completionFields: fields }, f.scope).ok).toBe(true);
-        expect(f.store.listTurnAttempts(f.sent.turn_id!).at(-1)).toMatchObject({ event_count: Number.MAX_SAFE_INTEGER, tool_call_count: Number.MAX_SAFE_INTEGER });
-        expect(f.store.getConversationLogEntryById(f.sent.turn_id!)?.metadata).toMatchObject({ event_count: Number.MAX_SAFE_INTEGER, tool_call_count: Number.MAX_SAFE_INTEGER });
+        expect(f.store.listTurnAttempts(f.sent.turn_id!).at(-1)).toMatchObject({ event_count: Number.MAX_SAFE_INTEGER, tool_call_count: Number.MAX_SAFE_INTEGER,
+          worked_ms: Number.MAX_SAFE_INTEGER, process_item_count: Number.MAX_SAFE_INTEGER });
+        expect(f.store.getConversationLogEntryById(f.sent.turn_id!)?.metadata).toMatchObject({ event_count: Number.MAX_SAFE_INTEGER, tool_call_count: Number.MAX_SAFE_INTEGER,
+          worked_ms: Number.MAX_SAFE_INTEGER, process_item_count: Number.MAX_SAFE_INTEGER });
     });
 });

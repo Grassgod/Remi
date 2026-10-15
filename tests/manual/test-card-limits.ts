@@ -5,6 +5,7 @@
 import { createFeishuClient } from "@connectors/feishu/client.js";
 import { FeishuStreamingSession } from "@connectors/feishu/streaming.js";
 import { buildStepDiv } from "@connectors/feishu/tool-formatters.js";
+import { buildFinalCard } from "@connectors/feishu/streaming/card-elements.js";
 import { loadConfig } from "./_load-config.js";
 
 async function main() {
@@ -32,12 +33,9 @@ async function main() {
     await Bun.sleep(1000);
   }
 
-  const resumed = new FeishuStreamingSession(client, creds);
-  await resumed.start(config.chatId, "open_id", {
-    displayName: "Card limit probe",
-    durable: { messageId, idempotencyKey: `card-limit-${Date.now()}` },
-  });
-  await resumed.close({ finalText: `Full-card patches accepted ${elements.length} step elements.` });
+  // The session was detached above; patch the closing card onto the same message directly.
+  await client.im.message.patch({ path: { message_id: messageId }, data: { content: JSON.stringify(buildFinalCard({
+    text: `Full-card patches accepted ${elements.length} step elements.`, displayName: "Card limit probe" })) } });
 }
 
 main().catch(error => { console.error("Fatal:", error); process.exit(1); });

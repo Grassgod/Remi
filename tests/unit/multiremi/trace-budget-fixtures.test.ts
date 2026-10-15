@@ -1,24 +1,47 @@
-import { expect, it } from "bun:test";
+import { expect, it, spyOn } from "bun:test";
 import { isTraceFileEvent } from "@multiremi/contracts/trace-file.js";
-import { sanitizeStoredEvent } from "@multiremi/worker/trace-store.js";
+import { capTraceEvent, TRACE_EVENT_MAX_BYTES } from "@shared/trace-sanitize.js";
+import { InMemoryTraceStore } from "@multiremi/worker/trace-store.js";
+import { TRACE_READ_MAX_BYTES } from "@multiremi/trace/trace-reader.js";
 import {
-  maximalNullableTraceInput, TRACE_SANITIZED_EVENT_MAX_BYTES,
-  traceFiniteEventBytes, traceJsonBytes,
+  oversizedTraceCases, TRACE_BUDGET_FIXTURE_TS, TRACE_STORED_EVENT_MAX_BYTES, storedEventBytes, traceJsonBytes,
 } from "./trace-budget-fixtures.js";
 
-it("bounds the nullable skeleton and exceeds the old empty-string skeleton", () => {
-  const ts = "9999-12-31T23:59:59.999999Z";
-  const input = maximalNullableTraceInput(ts);
-  expect(sanitizeStoredEvent(input, ts)).toEqual(input);
-  const event = { ...input, ts, seq: Number.MAX_SAFE_INTEGER };
-  expect(isTraceFileEvent(event)).toBe(true);
-  expect(event.tool_call_id).toBeNull();
-  const finite = traceFiniteEventBytes(event);
-  expect(finite).toBeLessThanOrEqual(TRACE_SANITIZED_EVENT_MAX_BYTES);
-  const oldEmptySkeletonBound = TRACE_SANITIZED_EVENT_MAX_BYTES - (traceJsonBytes(null) - traceJsonBytes(""));
-  expect(finite).toBeGreaterThan(oldEmptySkeletonBound);
-  // QA4 counted ts contents: its 27-byte / 121-byte results differ by 94 bytes.
-  expect(finite + traceJsonBytes(ts) - traceJsonBytes("")).toBe(2_297_041);
-  const longTs = `2026-01-01T00:00:00.${"0".repeat(100)}Z`;
-  expect(finite + traceJsonBytes(longTs) - traceJsonBytes("")).toBe(2_297_135);
+for (const { name, input } of oversizedTraceCases) {
+  it(`${name} sits exactly at the event ceiling and stores over the page budget`, () => {
+    // The fixture is what the store keeps: the caps leave it untouched.
+    expect(capTraceEvent(input)).toBe(input);
+    expect(traceJsonBytes(input)).toBe(TRACE_EVENT_MAX_BYTES);
+    const store = new InMemoryTraceStore(() => TRACE_BUDGET_FIXTURE_TS);
+    const [stored] = store.append("tsk_budget", [input]).events;
+    expect(isTraceFileEvent(stored)).toBe(true);
+    expect(storedEventBytes(stored!)).toBeGreaterThan(TRACE_READ_MAX_BYTES);
+    expect(storedEventBytes(stored!)).toBeLessThanOrEqual(TRACE_STORED_EVENT_MAX_BYTES);
+  });
+}
+
+it("one byte over the ceiling, an item loses its largest field and an opaque body is dropped", () => {
+  const store = new InMemoryTraceStore(() => TRACE_BUDGET_FIXTURE_TS);
+  const warn = spyOn(console, "warn").mockImplementation(() => {});
+  try {
+    for (const { input } of oversizedTraceCases) {
+      const over = JSON.parse(JSON.stringify(input)) as Record<string, any>;
+      if (over.item) over.item.prompt += "a";
+      else over.blob += "a";
+      expect(traceJsonBytes(over)).toBe(TRACE_EVENT_MAX_BYTES + 1);
+      const stored = store.append("tsk_over", [over as never]).events;
+      if (over.item) expect(stored).toMatchObject([{ item: { id: over.item.id, prompt: null } }]);
+      else expect(stored).toEqual([]);
+    }
+    expect(warn.mock.calls.filter((call) => String(call[0]).includes("Trace event dropped"))).toHaveLength(1);
+  } finally {
+    warn.mockRestore();
+  }
+  expect(store.head("tsk_over")).toEqual({ head: 2, closed: false });
+});
+
+it("bounds a stored line by the ceiling plus the largest ts and seq", () => {
+  const largest = TRACE_EVENT_MAX_BYTES + traceJsonBytes({ ts: TRACE_BUDGET_FIXTURE_TS, seq: Number.MAX_SAFE_INTEGER }) - 1;
+  expect(TRACE_STORED_EVENT_MAX_BYTES).toBe(largest);
+  expect(TRACE_STORED_EVENT_MAX_BYTES - TRACE_READ_MAX_BYTES).toBeLessThan(64);
 });

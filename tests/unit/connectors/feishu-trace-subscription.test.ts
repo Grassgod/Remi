@@ -6,8 +6,9 @@ import type { FeishuBotTaskSnapshot } from "@multiremi/contracts/types.js";
 import type { DaemonProtocolClient } from "@multiremi/worker/daemon-protocol-client.js";
 import { DaemonTraceSubscriptions } from "@multiremi/worker/trace-subscriptions.js";
 import { FeishuCotTimeline } from "@connectors/feishu/cot-timeline.js";
+import { reasoning, traceEvent } from "./feishu-native-harness.js";
 
-const event = (seq: number): TraceEvent => ({ seq, ts: "2026-09-28T00:00:00Z", type: "thinking", content: `event ${seq}` });
+const event = (seq: number): TraceEvent => traceEvent(seq, { type: "item.completed", item: reasoning(`rsn:${seq}`, `event ${seq}`) });
 
 function fixture(initial: TraceEvent[] = [], initiallyClosed = false) {
   let connected = true, subscribed = false, closed = initiallyClosed, snapshotReads = 0;
@@ -69,7 +70,7 @@ describe("Feishu trace subscription", () => {
     let released = false;
     let unsubscribed = false;
     const daemon = {
-      subscribeTrace: async (_task: string, _cursor: number, callback: (rows: TraceEvent[], closed: boolean) => void | Promise<void>) => {
+      subscribeTrace: async (_task: string, _cursor: number, callback: (rows: any[], closed: boolean) => void | Promise<void>) => {
         await callback([event(1), event(2)], false);
         released = true;
         return async () => { unsubscribed = true; };
@@ -88,7 +89,7 @@ describe("Feishu trace subscription", () => {
     let consumed = 0;
     let unsubscribed = false;
     const daemon = {
-      subscribeTrace: async (_task: string, cursor: number, callback: (rows: TraceEvent[], closed: boolean) => void | Promise<void>) => {
+      subscribeTrace: async (_task: string, cursor: number, callback: (rows: any[], closed: boolean) => void | Promise<void>) => {
         expect(cursor).toBe(0);
         for (let start = 0; start < 1500; start += 500) {
           await callback(Array.from({ length: 500 }, (_, offset) => event(start + offset + 1)), false);
@@ -150,18 +151,24 @@ describe("Feishu trace subscription", () => {
     } finally { await f.subscriptions.stop(); }
   });
 
-  it("passes an unknown type and every payload field unchanged through the connector and timeline", async () => {
-    const unknown: TraceEvent = { seq: 1, ts: "2026-09-28T01:02:03Z", type: "future.widget", tool: "opaque", tool_call_id: "future-1",
-      content: "literal content", input: { nested: [1, { two: true }] }, output: "raw output", status: "new status", meta: { arbitrary: "value" } };
-    const f = fixture([unknown], true);
+  it("passes an unknown type and every payload field unchanged through the connector; the timeline skips it", async () => {
+    const unknown = { seq: 1, ts: "2026-09-28T01:02:03Z", type: "future.widget", tool: "opaque", tool_call_id: "future-1",
+      content: "literal content", input: { nested: [1, { two: true }] }, output: "raw output", status: "new status",
+      meta: { arbitrary: "value" } } as unknown as TraceEvent;
+    const f = fixture([unknown, event(2)], true);
     try {
       const received = await collect(subscribeFeishuTask(f.daemon, "task", AbortSignal.timeout(500)));
       expect(received[0]).toEqual({ kind: "message", message: unknown });
-      if (received[0]?.kind !== "message") throw new Error("Expected the original trace event");
+      if (received[0]?.kind !== "message" || received[1]?.kind !== "message") throw new Error("Expected the original trace events");
       expect(received[0].message).toBe(unknown);
       const timeline = new FeishuCotTimeline("task");
       timeline.accept(received[0].message);
-      expect(timeline.drain(true)).toEqual({ samples: [[unknown.type, { ...unknown }]], throughSeq: 1 });
+      // Like the shared reducer, the reader skips a type it does not know but keeps its cursor.
+      expect(timeline.drain()).toEqual({ samples: [], throughSeq: 1 });
+      timeline.accept(received[1].message);
+      const { samples, throughSeq } = timeline.drain();
+      expect(throughSeq).toBe(2);
+      expect(samples.filter(([type]) => type === "REASONING_MESSAGE_CONTENT").map(([, content]) => content.delta)).toEqual(["event 2"]);
     } finally { await f.subscriptions.stop(); }
   });
 

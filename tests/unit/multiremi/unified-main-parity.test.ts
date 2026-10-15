@@ -165,7 +165,7 @@ pendingTurnBackendTests('MUL-508 main parity', fixture => {
       const app=createMultiremiApp({store:f.store,authToken:'parity-master',apiRole});
       const response=await app.request(`/api/turns/${f.turn.id}/trace`,{headers:{Authorization:'Bearer parity-master'}});
       expect(response.status).toBe(apiRole==='ui'?421:200);
-      if(apiRole!=='ui')expect(await response.json()).toMatchObject({turn_id:f.turn.id,attempt_id:f.task.id,events:[]});
+      if(apiRole!=='ui')expect(await response.json()).toMatchObject({turn_id:f.turn.id,attempt_id:f.task.id,view:'turn',turn:null,items:[]});
     }
   });
 

@@ -5,6 +5,7 @@ import { organizerTaskInspection, organizerTurnStats } from "@multiremi/api/help
 import { createMultiremiApp } from "@multiremi/api.js";
 import type { TraceReader } from "@multiremi/trace/trace-reader.js";
 import { createLocalStore as createStore, db, resetMultiremiTestEnv } from "./helpers.js";
+import { commandItem, fixtureTurn } from "./trace-budget-fixtures.js";
 
 afterEach(resetMultiremiTestEnv);
 
@@ -88,30 +89,45 @@ describe("organizer trace inspection", () => {
     expect(inspection.message_type_histogram).toEqual([]);
   });
 
-  it("uses a readTrace tail window for running tasks", async () => {
+  it("reads one view=turn page for running tasks and counts from its turn statistics", async () => {
     const { store, task } = fixture();
-    const cursors: number[] = [];
+    const calls: Array<[number, number | undefined]> = [];
+    const stats = { item_count: 12, tool_call_count: 9, process_item_count: 11,
+      type_histogram: [{ type: "command" as const, tool: "Bash", count: 9 }, { type: "agent_message" as const, tool: null, count: 3 }] };
     const readTrace = {
-      readTrace: async (_taskId: string, afterSeq = 0) => {
-        cursors.push(afterSeq);
+      readTurn: async (_taskId: string, itemCursor = 0, limit?: number) => {
+        calls.push([itemCursor, limit]);
         return {
-          events: afterSeq === Number.MAX_SAFE_INTEGER ? [] : [{ seq: 300, ts: "2026-09-28T00:00:00Z", type: "tool_use", tool: "Read" }],
-          next_after_seq: 300, head: 300, eof: true, closed: false,
+          view: "turn" as const, format: "v2" as const, head: 300, closed: false, next_item_cursor: 1,
+          turn: { ...fixtureTurn(task.id), stats },
+          // Only the first item of a long turn is on the page; the counts still cover the whole fold.
+          items: [{ ...commandItem("cmd_1", "ls"), started_at: "2026-09-28T00:00:01.000Z", completed_at: "2026-09-28T00:00:05.000Z", seq: 2 }],
           source: "daemon" as const, state: "ok" as const,
         };
       },
-    } as Pick<TraceReader, "readTrace">;
+    } as Pick<TraceReader, "readTurn">;
     const inspection = await organizerTaskInspection(store, { ...task, status: "running" }, { readTrace });
-    expect(cursors).toEqual([Number.MAX_SAFE_INTEGER, 100]);
-    expect(inspection).toMatchObject({ tool_call_count: 1, event_count: 1, last_message: { seq: 300 }, message_type_histogram: [{ type: "tool_use", tool: "Read", count: 1 }] });
+    expect(calls).toEqual([[0, 500]]);
+    expect(inspection).toMatchObject({
+      tool_call_count: 9, event_count: 300,
+      last_message: { seq: 300, created_at: "2026-09-28T00:00:05.000Z" },
+      message_type_histogram: [{ type: "command", tool: "Bash", count: 9 }, { type: "agent_message", tool: null, count: 3 }],
+    });
   });
 
-  it("does not surface legacy detail when hot reading is unreachable", async () => {
+  it("does not surface legacy detail when hot reading is unreachable or the trace is v1", async () => {
     const { store, task } = fixture();
-    const readTrace = {
-      readTrace: async () => ({ events: [], next_after_seq: 0, head: 0, eof: true, closed: false, source: "daemon" as const, state: "unreachable" as const }),
-    } as Pick<TraceReader, "readTrace">;
-    const inspection = await organizerTaskInspection(store, { ...task, status: "running" }, { readTrace });
-    expect(inspection).toMatchObject({ event_count: 0, last_message: null });
+    for (const page of [
+      { state: "unreachable" as const, format: "v2" as const, head: 0 },
+      // A v1 trace has no turn; its fragments are never counted.
+      { state: "ok" as const, format: "legacy" as const, head: 40 },
+    ]) {
+      const readTrace = {
+        readTurn: async () => ({ view: "turn" as const, turn: null, items: [], next_item_cursor: null, closed: false,
+          source: "daemon" as const, ...page }),
+      } as Pick<TraceReader, "readTurn">;
+      const inspection = await organizerTaskInspection(store, { ...task, status: "running" }, { readTrace });
+      expect(inspection).toMatchObject({ event_count: 0, tool_call_count: 0, last_message: null, message_type_histogram: [] });
+    }
   });
 });

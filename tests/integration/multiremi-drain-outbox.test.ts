@@ -17,6 +17,8 @@ import type { DaemonProtocolLayer } from "@multiremi/api/daemon-protocol/index.j
 import { ManualDaemonProtocolClock } from "@multiremi/api/daemon-protocol/clock.js";
 import { MultiremiStore } from "@multiremi/store.js";
 import { MultiremiTaskReportOutbox } from "@multiremi/worker/outbox.js";
+import { isTraceEvent } from "@multiremi/contracts/trace.js";
+import { applyTurnTraceEvents, EMPTY_TURN_TRACE } from "@shared/turn-trace.js";
 
 let database: IntegrationDatabase | null = null;
 let workDir: string | null = null;
@@ -511,18 +513,19 @@ describe("MUL-74 / MUL-197 drain + outbox end to end", () => {
       // Tool activity separates messages; replay preserves every segment in the trace below.
       expect(completed.result).toBe("after");
 
-      // Replayed messages arrive complete and in the original seq order.
-      const messages = daemon.traceStore().read(task.id).events;
-      expect(messages.map((message) => [message.seq, message.type, message.content ?? ""])).toEqual([
-        [1, "execution", ""],
-        [2, "text", "before during "],
-        [3, "tool_use", ""],
-        [4, "tool_result", ""],
-        [5, "text", "after"],
-        [6, "execution", ""],
+      // The trace is written locally through the outage, densely and in order.
+      const events = daemon.traceStore().read(task.id).events;
+      expect(events.map((event) => event.seq)).toEqual(Array.from({ length: events.length }, (_, i) => i + 1));
+      const state = applyTurnTraceEvents(EMPTY_TURN_TRACE, events.filter(isTraceEvent));
+      expect(state.items.map((item) => [item.id, item.type, item.status])).toEqual([
+        [`in:${task.id}`, "user_message", "completed"],
+        ["msg:1", "agent_message", "completed"],
+        ["syn_0", "tool", "stopped"],
+        ["msg:2", "agent_message", "completed"],
       ]);
-      expect(messages[0]?.meta).toEqual({ agentName: "Outage Bot", provider: "claude" });
-      expect(messages[5]?.meta?.model).toBeTruthy();
+      expect(state.items[1]).toMatchObject({ text: "before during " });
+      expect(state.items[3]).toMatchObject({ text: "after", phase: "final" });
+      expect(state.turn).toMatchObject({ agent_name: "Outage Bot", provider: "claude", status: "completed", final_item_id: "msg:2" });
     } finally {
       daemon.stop();
       proxy.stop(true);
@@ -894,7 +897,10 @@ describe("MUL-74 / MUL-197 drain + outbox end to end", () => {
       await until(() => store.getTask(task.id)?.status === "completed", 5_000, "historical terminal replay");
       await until(() => daemon.outboxStats()?.pending === 0, 5_000, "historical report acknowledgement");
       expect(completeAttempts).toBe(1);
-      expect(daemon.traceStore().read(task.id).events).toMatchObject([{ seq: 1, type: "text", content: "last buffered message" }]);
+      // The v1 queue's fragment message cannot enter a turn + items trace: it is
+      // dropped (with a warning), so this daemon never held a trace for the task.
+      expect(daemon.traceStore().head(task.id)).toBeNull();
+      expect(daemon.traceStore().read(task.id).events).toEqual([]);
       expect(store.getTask(task.id)).toMatchObject({
         status: "completed",
         result: "replayed completion",

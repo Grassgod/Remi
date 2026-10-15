@@ -234,42 +234,6 @@ export interface ActivityCreatedPayload {
   entry: TimelineEntry;
 }
 
-// Legacy task message shape retained for historical API payloads. Live task
-// transcripts use TraceEvent; its `type` remains open for new daemon kinds.
-export type KnownTaskMessageType =
-  | "text"
-  | "thinking"
-  | "tool_use"
-  | "tool_result"
-  | "usage"
-  | "plan"
-  | "steer"
-  | "error"
-  | "permission_request"
-  | "permission_response"
-  | "question_request"
-  | "question_response";
-
-export interface TaskMessagePayload {
-  task_id: string;
-  issue_id: string;
-  chat_session_id?: string;
-  seq: number;
-  type: KnownTaskMessageType | (string & {});
-  tool?: string;
-  content?: string;
-  input?: Record<string, unknown>;
-  output?: string;
-  /** ACP tool call id — pairs tool_use with its tool_result (Batch 2+). */
-  tool_call_id?: string;
-  /** ACP tool status: pending | in_progress | completed | failed (Batch 2+). */
-  status?: string;
-  /** Low-frequency display semantics: title/kind/locations/content_blocks/duration_ms/entries/usage (Batch 2+). */
-  meta?: Record<string, unknown>;
-  /** Server insert time; present on the wire already (GET as createdAt, WS as created_at). */
-  created_at?: string;
-}
-
 export interface TaskProgressPayload {
   task_id: string;
   chat_session_id?: string;

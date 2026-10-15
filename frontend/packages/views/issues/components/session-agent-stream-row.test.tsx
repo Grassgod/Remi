@@ -40,6 +40,7 @@ vi.mock("../../common/actor-avatar", () => ({
 }));
 
 import { SessionAgentStreamRow } from "./session-agent-stream-row";
+import { command, read, traceTurn, turnPage, unknown } from "../../test/trace-fixtures";
 
 const SESSION = "ses-1";
 
@@ -80,34 +81,27 @@ beforeEach(() => {
   HTMLElement.prototype.scrollTo = vi.fn();
   getAgent.mockResolvedValue({});
   getTaskPrompt.mockResolvedValue(null);
-  getTaskTrace.mockResolvedValue({ events: [], next_after_seq: 0, head: 0, eof: true, closed: false, source: "daemon", state: "ok" });
+  getTaskTrace.mockResolvedValue(turnPage(traceTurn(), []));
   listRuntimes.mockResolvedValue([]);
 });
 
 describe("session agent stream row", () => {
   it("loads trace history only after opening the execution dialog", async () => {
     listTasksByIssue.mockResolvedValue([task()]);
-    getTaskTrace.mockResolvedValue({
-      events: Array.from({ length: 61 }, (_, index) => ({
-        seq: index + 1, ts: "2026-08-08T00:00:00Z", type: "tool_use", tool: "Bash",
-      })),
-      next_after_seq: 61, head: 61, eof: true, closed: false, source: "daemon", state: "ok",
-    });
+    getTaskTrace.mockResolvedValue(turnPage(traceTurn(), Array.from({ length: 61 }, (_, index) =>
+      command(`cmd_${index}`, [unknown("bun test")])), { closed: false }));
     renderRow();
     const row = await screen.findByText("Agent a1 is working");
     expect(getTaskTrace).not.toHaveBeenCalled();
     fireEvent.click(row.closest("button")!);
 
-    await waitFor(() => expect(getTaskTrace).toHaveBeenCalledWith("tsk_abc123", 0, 200, undefined));
+    await waitFor(() => expect(getTaskTrace).toHaveBeenCalledWith("tsk_abc123", { itemCursor: 0, turnId: undefined }));
     expect(await screen.findByText("61 tool calls")).toBeInTheDocument();
   });
 
   it("announces the working agent with server progress without a trace observer", async () => {
     listTasksByIssue.mockResolvedValue([task({ progress_summary: "Running focused tests" })]);
-    getTaskTrace.mockResolvedValue({ events: [
-      { seq: 1, ts: "2026-08-08T00:00:00Z", type: "tool_use", tool: "Read", input: { file_path: "/a/b/c/d.ts" } },
-      { seq: 2, ts: "2026-08-08T00:00:01Z", type: "tool_use", tool: "Bash", input: { command: "bun test" } },
-    ], next_after_seq: 2, head: 2, eof: true, closed: false, source: "daemon", state: "ok" });
+    getTaskTrace.mockResolvedValue(turnPage(traceTurn(), [command("cmd_1", [read("/a/b/c/d.ts")]), command("cmd_2", [unknown("bun test")])], { closed: false }));
 
     renderRow();
 

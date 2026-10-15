@@ -10,10 +10,8 @@ import { DaemonProtocolRpcError } from "./daemon-protocol-client.js";
 import { DAEMON_FRAME_MAX_BYTES, DAEMON_UPLINK_WINDOW_FRAMES, DAEMON_UPLINK_WINDOW_BYTES } from "@multiremi/contracts/daemon-protocol.js";
 import { outboxRecordBytes } from "./report-frames.js";
 import { splitUsageReport } from "./usage-report-chunks.js";
-import {
-  coalesceTaskMessages,
-  DEFAULT_TASK_MESSAGE_BATCH_COUNT,
-} from "./task-message-batcher.js";
+/** Rows one delivery batch takes; legacy `messages` rows batch to the same message count. */
+export const DEFAULT_TASK_MESSAGE_BATCH_COUNT = 256;
 
 const log = createLogger("multiremi-outbox");
 
@@ -646,7 +644,9 @@ export class MultiremiTaskReportOutbox {
     return {
       record: {
         ...first,
-        payload: { ...first.payload, messages: coalesceTaskMessages(messages) },
+        // Only v1 queues hold these rows; the daemon drops them (PR 2), so they are
+        // batched for one delete, not coalesced.
+        payload: { ...first.payload, messages },
       },
       recordIds: records.map((record) => record.id),
       blocked: false,
