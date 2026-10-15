@@ -276,6 +276,24 @@ describe("native subagents: lifecycle", () => {
     expect(h.item(`sa:${A}`, "subagent").status).toBe("failed");
   });
 
+  it("a child's notice sits under it and leaves the root's text open", () => {
+    const h = harness("codex").round([
+      spawned(A),
+      chunk("Waiting for "),
+      stamped(A, { sessionUpdate: "notice", severity: "warning", title: "Under-development features enabled" }),
+      chunk("the helper."),
+      { sessionUpdate: "notice", severity: "warning", title: "Root warning" },
+      state(A, "completed"),
+    ]);
+    const notices = h.state.items.filter((item) => item.type === "notice");
+    expect(notices).toEqual([
+      expect.objectContaining({ parent_id: `sa:${A}`, title: "Under-development features enabled" }),
+      expect.objectContaining({ parent_id: null, title: "Root warning" }),
+    ]);
+    const root = h.state.items.filter((item) => item.type === "agent_message" && item.parent_id === null);
+    expect(root.map((item) => (item as { text: string }).text)).toEqual(["Waiting for the helper."]);
+  });
+
   it("ignores a child's model and usage frames", () => {
     const h = harness("claude").round([
       spawned(A),

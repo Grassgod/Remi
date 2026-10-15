@@ -1189,10 +1189,13 @@ export function createTraceTranslator(
   };
 
   const onNotice = (frame: VendorFrame): void => {
-    boundary(null);
+    // A child session's notice (codex-acp warns once per thread it starts) belongs to its agent (PR 5 §3.7).
+    const session = frameSession(frame);
+    const parentId = session ? agentOfSession(session)?.id ?? null : null;
+    boundary(parentId);
     const id = uniqueId(`ntc:${++noticeCounter}`);
     const at = now();
-    write("item.completed", { id, parent_id: null, status: "completed", started_at: at, completed_at: at, type: "notice",
+    write("item.completed", { id, parent_id: parentId, status: "completed", started_at: at, completed_at: at, type: "notice",
       ...noticeFields(frame) }, true);
   };
 
