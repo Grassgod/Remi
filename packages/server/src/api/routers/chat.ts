@@ -95,7 +95,7 @@ export function registerChatRoutes(app: Hono, deps: RouterDeps): void {
   // PR 6: every session response carries its running background tasks, one batched read per response.
   const sessionResponses = (sessions: MultiremiChatSession[]) => {
     const counts = store.countRunningBackgroundTasksBySession(sessions.map(session => session.id));
-    return sessions.map(session => chatSessionCompatibilityResponse(session, counts.get(session.id) ?? 0));
+    return sessions.map(session => chatSessionCompatibilityResponse(session, { runningBackgroundTasks: counts.get(session.id) ?? 0 }));
   };
   const sessionResponse = (session: MultiremiChatSession) => sessionResponses([session])[0]!;
 

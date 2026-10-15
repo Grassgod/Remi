@@ -41,7 +41,7 @@ test("chat lists batch access reads and preserve every native/compatibility fiel
       });
       expect(response.status).toBe(200);
       expect(await response.json()).toEqual(JSON.parse(JSON.stringify(native
-        ? { sessions: expected, total: expected.length } : expected.map(chatSessionCompatibilityResponse))));
+        ? { sessions: expected, total: expected.length } : expected.map((session) => chatSessionCompatibilityResponse(session)))));
       expect(probe.statements).toBeLessThanOrEqual(20);
       expect(probe.sql.some(sql => sql.includes("multiremi_skill_files"))).toBe(false);
       expect(probe.sql.filter(sql => sql.includes("FROM multiremi_agents"))).toHaveLength(1);

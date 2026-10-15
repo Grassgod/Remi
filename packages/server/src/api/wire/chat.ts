@@ -15,7 +15,8 @@ import { chatAttachmentCompatibilityResponse } from "./attachments.js";
  * session's running or paused background tasks from the registry, shown even
  * with no running turn; the caller reads it in one batch per response.
  */
-export function chatSessionCompatibilityResponse(session: MultiremiChatSession, runningBackgroundTasks = 0): {
+export function chatSessionCompatibilityResponse(session: MultiremiChatSession,
+  extras: { runningBackgroundTasks?: number } = {}): {
   id: string;
   workspace_id: string;
   creator_id: string;
@@ -49,7 +50,7 @@ export function chatSessionCompatibilityResponse(session: MultiremiChatSession, 
     last_message: session.lastMessage ? { content: session.lastMessage.content, role: session.lastMessage.role, created_at: session.lastMessage.createdAt } : null,
     created_at: session.createdAt,
     updated_at: session.updatedAt,
-    running_background_tasks: runningBackgroundTasks,
+    running_background_tasks: extras.runningBackgroundTasks ?? 0,
   };
 }
 
