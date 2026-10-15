@@ -66,5 +66,7 @@ describe("transcript dialog on a large trace", () => {
     expect(redactSpy).toHaveBeenCalledTimes(2);
     expect(summarySpy.mock.calls.length).toBeLessThanOrEqual(2 * 2);
     expect(document.querySelectorAll("[data-transcript-item]")).toHaveLength(1001);
-  });
+    // The assertions count work, not time; mounting 1000 rows in jsdom takes
+    // several seconds on CI runners.
+  }, 30000);
 });
