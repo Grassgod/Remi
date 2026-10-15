@@ -4,9 +4,10 @@ import { claudeUsagePatch, codexUsagePatch } from "@acp/usage-bridge-patches.js"
 import { responseToUsageUnits } from "@multiremi/worker/usage-units.js";
 import { TaskUsageLedger } from "@multiremi/worker/task-usage-ledger.js";
 import { createLocalStore, resetMultiremiTestEnv } from "../multiremi/helpers.js";
+import { CODEX_SESSION_BOUNDARY } from "../../fixtures/acp/codex-acp-session-boundary.js";
 
 afterEach(resetMultiremiTestEnv);
-const codexBoundary = "  async handleNotification(notification) {}\n  async createUpdateEvent(notification) { switch(notification.method) { case \"rawResponse/completed\": return null; } }\n  createUsageUpdate(params) {}\n  handleRateLimitsUpdated(params) {}\n  routeChild(childEvent, session) { if (session.current.supportsSubagents) session.current.dispatch(childEvent); }";
+const codexBoundary = "  async handleNotification(notification) {}\n  async createUpdateEvent(notification) { switch(notification.method) { case \"rawResponse/completed\": return null; } }\n  createUsageUpdate(params) {}\n  handleRateLimitsUpdated(params) {}\n  routeChild(childEvent, session) { if (session.current.supportsSubagents) session.current.dispatch(childEvent); }" + CODEX_SESSION_BOUNDARY;
 const vector = (n: number) => ({ inputTokens: 100 * n, cachedInputTokens: 0, cacheWriteInputTokens: 0, outputTokens: 10 * n, reasoningOutputTokens: 0, totalTokens: 110 * n });
 async function collect(providerType: "claude" | "codex", updates: any[], connection: string | null, runId: string) {
   const provider = new AcpProvider({ agentType: providerType });

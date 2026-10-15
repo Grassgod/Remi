@@ -14,6 +14,7 @@ import {
   ensureAcpBridges,
 } from "@acp/provision.js";
 import { runtimeBundlePrefix, runtimeBundleManifest, runtimePackageSatisfied } from "@acp/runtime-bundle.js";
+import { CODEX_SESSION_BOUNDARY } from "../../fixtures/acp/codex-acp-session-boundary.js";
 
 let dir: string | null = null;
 const savedHome = process.env.REMI_HOME;
@@ -59,7 +60,7 @@ function writeCodexDist(pkgDir: string, source = `  async handleNotification(not
   }
   handleRateLimitsUpdated(params) {}
   routeChild(childEvent, session) { if (session.current.supportsSubagents) session.current.dispatch(childEvent); }
-`): string {
+` + CODEX_SESSION_BOUNDARY): string {
   const dist = join(pkgDir, "dist", "index.js");
   mkdirSync(join(pkgDir, "dist"), { recursive: true });
   writeFileSync(dist, source);
@@ -162,6 +163,7 @@ test("codex usage patch is idempotent and carries response consumption separatel
   expect(once).toContain("remiTokenUsage");
   expect(once).toContain('notification.method === "rawResponse/completed"');
   expect(once).toContain('remiUsageMode: "request"');
+  expect(once).toContain("experimentalRawEvents: true");
   expect(patchCodexUsageBridge((message) => logs.push(message), pkgDir)).toBe(true);
   expect(readFileSync(dist, "utf8")).toBe(once);
   expect(once.match(/remiTokenUsage/g)).toHaveLength(1);

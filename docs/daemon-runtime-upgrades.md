@@ -15,7 +15,7 @@ bun run release:prepare --version <下一版本>
 
 Claude ACP 使用 @anthropic-ai/claude-agent-sdk 内的 CC 执行文件，Codex ACP 使用 @openai/codex；这条链路没有独立的 @openai/codex-sdk。通过 npm overrides 固定实际 SDK，包括桥接包的嵌套依赖。若最新 Claude SDK 携带的 CC 尚未跟上独立 CC 的 latest，真实版本验证会失败，阻止发布不一致的组合。
 
-候选校验包含 ACP 包版本、SDK 包版本、实际执行文件 --version、Codex usage 补丁、Claude wrapper 健康检查及 ACP initialize 协商。任何步骤失败都不改发版文件；此时应处理兼容性问题或等待上游版本对齐，再重新准备。准备命令不创建提交、tag 或 Release，也不重启机器上的 daemon，不创建 Task、不向模型发 prompt。
+候选校验包含 ACP 包版本、SDK 包版本、实际执行文件 --version、Codex usage 补丁与其依赖的 app-server 协议（见下方 Codex 升级检查项）、Claude wrapper 健康检查及 ACP initialize 协商。任何步骤失败都不改发版文件；此时应处理兼容性问题或等待上游版本对齐，再重新准备。准备命令不创建提交、tag 或 Release，也不重启机器上的 daemon，不创建 Task、不向模型发 prompt。
 
 依赖与版本号同批提交，完整 Release build check 通过后才打 tag。CI 对版本号变更检查对应依赖快照，并在 Linux/macOS 安装固定组合、验证初始化。tag 工作流在发布 CLI 前检查版本一致性、快照和同一 main 提交的完整 CI 成功记录。构建时不再解析 latest，所以检查后上游继续发新版本也不会改变本次发行内容。
 
@@ -62,6 +62,21 @@ CI 不在 runner 上代为同意 Google 条款，所以按 `antigravity` 块变�
   ```
 
   删掉临时 Home 里的 config.toml 后，同一命令输出 `false`，据此确认开关由 Remi 写入，而非 Codex 默认开启。本项在 codex-acp 1.13.1 + Codex 0.157.1 上实测通过（2026-09-27）。
+- 逐请求用量仍被采集（升级 Codex 或 codex-acp 都要确认）。补丁锚点能匹配只说明补丁已安装，不说明钩子会被调用：`codex-usage-v6` 在 codex-acp 2.1.1、2.2.2 上锚点全部匹配，但两版 bridge 的 `thread/start` 都没有声明 `experimentalRawEvents`，Codex 0.161.0、0.162.1 的 app-server 因而从不发送 `rawResponse/completed`。结果是 Codex 任务只留下无 token 的 `context_snapshot` 单位，报表全部计入 `unknown_task_count`。`codex-usage-v7` 依赖下面三点：
+  - `thread/start` 声明 `experimentalRawEvents: true` 后，该线程及其原生子线程才会收到 `rawResponse/completed`；
+  - `thread/resume` 与 `thread/fork` 没有该参数，这类线程的请求只能从原生 rollout 的 `token_usage_record` 读取（[codex-rollout-usage.ts](../packages/acp/src/codex-rollout-usage.ts)）；
+  - initialize 的 `optOutNotificationMethods` 仍可退订随开关出现的 `rawResponseItem/completed`。
+
+  `release:prepare` 与 `remi runtime prepare` 会用候选 Codex 执行文件生成 app-server schema（`app-server generate-json-schema --experimental`），上述字段或 `rawResponse/completed` 的 thread/turn/response 身份缺失时失败（`verifyCodexRequestUsageProtocol`）。这一步不调用模型，不能证明事件真的会发出，也不检查 rollout 格式。因此依赖准备之后，还要在固定 bundle 上运行真实检查（调用两次模型）：
+
+  ```bash
+  # CODEX_VERSIONS 的取法同上一项。
+  bun run tests/integration/verify-codex-bridge.ts --prompt \
+    --package-dir="${REMI_HOME:-$HOME/.remi}/acp/bundles/codex-$CODEX_VERSIONS/node_modules/@agentclientprotocol/codex-acp"
+  # 期望 status 为 passed，requestUsage.newThread.streamed > 0，requestUsage.resumedThread.rollout > 0
+  ```
+
+  新会话的流式请求必须在 rollout 中找到身份与计数相同的记录，否则检查器失败；恢复会话在新 bridge 进程中运行，`resumedThread.streamed` 为 0 是 app-server 的现状。`token_usage_record` 字段改名时，需要同时修改 [normalizeCodexRequestUsage](../packages/acp/src/codex-request-usage.ts) 与 rollout 读取。本项在 codex-acp 2.2.2 + Codex 0.162.1 上实测通过（2026-10-15）：新会话 1 条流式请求、1 条 rollout 记录，恢复会话 1 条 rollout 记录。
 - Default 模式下提问仍能走到 form elicitation：codex agent 调用同步 `request_user_input` 后，客户端应收到 `elicitation/create`（`mode: "form"`）而不是 "unavailable in Default mode" 错误。`packages/acp/src/client.ts` 声明 `elicitation: { form: {} }`；表单字段布局见 `packages/contracts/src/acp-elicitation.ts`。
 - 表单布局版本判定仍然成立：codex-acp 1.11 用 `<id>__other` + `_meta.codex.isOtherAnswer`，1.12 起改为 `<id>_note` + `_meta.codex.role = "user_note"`，并把问题正文放在 `title`、短标题放在 `description`。`buildUserInputRequest` / `convertUserInputResponse` 的行号注释需要一起更新。
 
@@ -99,6 +114,7 @@ daemon 由 systemd 托管时，重启交给 `systemctl --user restart --no-block
 历史 Issue 与 Chat 在 daemon 上的原生会话和 trace 作废，不迁移；服务端迁移同时把所有会话线置为新一代，
 重开历史主体时从分支新建工作区、从对话日志重建上下文。旧 daemon 在升级窗口内调用已删除的 RPC 得到 404，按既有逻辑跳过清理。
 此前用 systemd 覆盖文件设置 `MULTIREMI_GC_ENABLED=false` 的 daemon，在预演清单核对无误后删除该覆盖文件并重启，周期回收才会开启。
+清扫会把 v0.2.89 的 `.runtime/`（含 Codex 原生 rollout）一并移入 `legacy-<日期>/` 并按期删除；需要补录 `codex-usage-v6` 期间的 Codex 用量时，先在该 daemon 上导出，或在期限内从 `legacy-<日期>/` 导出，步骤见 [Codex 原生用量补录](usage-accounting.md#codex-原生用量补录)。
 实现及读页上限见 [daemon 协议 v2](daemon-protocol-v2.md)。
 
 ## 本地准备与验证

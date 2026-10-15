@@ -19,6 +19,7 @@ import { createAgentResponse, STEER_REASONS } from "@shared/contracts/provider-t
 import { TRACE_STEER_OUTCOMES } from "@shared/contracts/trace.js";
 import { readContextUsage, type ContextUsage } from "@shared/agent-execution.js";
 import { UsageCollector } from "./usage-collector.js";
+import { beginCodexRolloutUsage, codexHomeFor, collectCodexRolloutUsage, type CodexRolloutCursor } from "./codex-rollout-usage.js";
 import type { TaskUsageUnit } from "@shared/contracts/usage-accounting.js";
 import { AcpClient } from "./client.js";
 import { AcpRpcError, AcpSessionFailureError, airMetadata, readSessionFailure, redactProviderError, redactProviderErrorText, record, type AcpSessionFailure } from "./session-failure.js";
@@ -188,6 +189,8 @@ const CANCELLED_BY_CLIENT_TEXT = "The request was cancelled by the client.";
 const GATEWAY_SETTLE_MS = 2_000;
 /** After cutting the calls still open at prompt end, how long their (aborted) observations may take. */
 const GATEWAY_ABORT_SETTLE_MS = 500;
+/** Codex appends a turn's last rollout records just after the prompt resolves. */
+const CODEX_ROLLOUT_SETTLE_MS = 1_000;
 /** A native steer that has not answered by then falls back to interrupt + re-prompt (ADR 0020). */
 const STEER_TIMEOUT_MS = 30_000;
 /** How long a steer waits for running top-level tool calls before interrupt + re-prompt. */
@@ -237,6 +240,8 @@ interface PromptState {
   usage: PromptUsageState;
   completedToolCount: number;
   contextUsage?: ContextUsage;
+  /** Native rollout position for requests app-server cannot stream (resume/fork). */
+  codexRollout?: CodexRolloutCursor;
 }
 
 export function createPromptUsageState(): PromptUsageState {
@@ -315,6 +320,8 @@ interface PoolEntry {
    * resolved). The next `sendStream` replays them so their requests are billed.
    */
   idleUsage: SessionNotification[];
+  /** Codex rollout read position for this session; each settle advances it. */
+  codexRollout?: CodexRolloutCursor;
   /** The gateway-shim channel of this ACP process (access configs with `usage: "gateway-shim"`). */
   gateway?: GatewayState;
 }
@@ -995,6 +1002,15 @@ export class AcpProvider implements Provider {
     // bridge-started turn the daemon cancelled, or a follow-up after a resolve.
     for (const notification of (entry.idleUsage ?? []).splice(0)) onUpdate(notification);
 
+    const rolloutHome = this._adapter.agentType === "codex" ? codexHomeFor(entry.codexHome, { ...process.env, ...this._options.env }) : null;
+    if (rolloutHome) {
+      // The ACP session ID is the native thread ID. One cursor per session, so a
+      // turn the bridge ran between prompts is read now, as idle usage is billed.
+      if (entry.codexRollout?.threadId !== entry.acpSessionId || entry.codexRollout.sessionsDir !== join(rolloutHome, "sessions")) {
+        entry.codexRollout = beginCodexRolloutUsage(rolloutHome, entry.acpSessionId, promptState.promptStartTime);
+      }
+      promptState.codexRollout = entry.codexRollout;
+    }
     const promptStartMs = Date.now();
     promptToken = {};
     const settlePromptInFlight = () => {
@@ -1022,9 +1038,14 @@ export class AcpProvider implements Provider {
     const promptCompletion = entry.client
       .prompt(entry.acpSessionId, message, buildMediaContent(options?.media))
       .then(async (result: PromptResult) => {
+        // The turn is over for steering at once; usage settles before promptDone,
+        // so the stream cannot build its fallback response first.
         settlePromptInFlight();
         // The last requests' usage must land in this prompt's collector.
         await drainGateway();
+        if (entry.promptState === promptState) {
+          await settleCodexRolloutUsage(promptState, requestedModel(), requestedModelSource(), CODEX_ROLLOUT_SETTLE_MS);
+        }
         promptDone = true;
         const failure = readSessionFailure(result._meta, credentials);
         if (failure && (failure.severity === "error" || failureState.failure?.severity !== "error")) failureState.failure = failure;
@@ -1071,6 +1092,7 @@ export class AcpProvider implements Provider {
           // block task shutdown. Stop it before allowing session reuse.
           await entry.client.stop();
           await promptCompletion;
+          if (!this._lastResponse) await settleCodexRolloutUsage(promptState, requestedModel(), requestedModelSource(), 0);
           this._lastResponse ??= buildAgentResponse(entry, { stopReason: "cancelled" }, this._adapter.promptUsageSettleScope, turnFailure(),
             this._adapter.agentType, requestedModel(), requestedModelSource());
         }
@@ -1141,9 +1163,12 @@ export class AcpProvider implements Provider {
       endGatewayPrompt?.();
       // Streaming errors, process death, generator return and task aborts all
       // retain actual requests observed before the prompt stopped.
-      if (!this._lastResponse) this._lastResponse = buildAgentResponse(entry,
-        { stopReason: options?.signal?.aborted ? "cancelled" : "end_turn" }, this._adapter.promptUsageSettleScope, turnFailure(),
-        this._adapter.agentType, requestedModel(), requestedModelSource());
+      if (!this._lastResponse) {
+        await settleCodexRolloutUsage(promptState, requestedModel(), requestedModelSource(), 0);
+        this._lastResponse = buildAgentResponse(entry,
+          { stopReason: options?.signal?.aborted ? "cancelled" : "end_turn" }, this._adapter.promptUsageSettleScope, turnFailure(),
+          this._adapter.agentType, requestedModel(), requestedModelSource());
+      }
       this._deathListeners.delete(chatId);
       entry.client["_options"].onSessionUpdate = originalOnUpdate;
       if (gateway) gateway.listener = null;
@@ -2125,6 +2150,25 @@ export function resolvePromptUsage(
       + (entry.cacheWriteTokens ?? 0) + (entry.actualUnsplitTokens ?? 0);
   }
   return totals;
+}
+
+/**
+ * Add the native rollout's requests for this prompt. They share the bridge
+ * hook's identity (native thread + response ID), so a request also streamed
+ * by rawResponse/completed merges into the same unit instead of adding usage.
+ */
+export async function settleCodexRolloutUsage(promptState: { codexRollout?: CodexRolloutCursor; usage: PromptUsageState },
+  requestedModel: string | null | undefined, modelSource: TaskUsageUnit["modelSource"], waitMs: number): Promise<void> {
+  const cursor = promptState.codexRollout;
+  if (!cursor) return;
+  promptState.codexRollout = undefined;
+  try {
+    for (const request of await collectCodexRolloutUsage(cursor, { requestedModel: requestedModel ?? null, waitMs })) {
+      promptState.usage.collector.update(request.usage, requestedModel, modelSource);
+    }
+  } catch (error) {
+    console.warn(`[AcpProvider] Codex rollout usage unavailable: ${error instanceof Error ? error.message : String(error)}`);
+  }
 }
 
 export function accumulateUsage(state: PromptUsageState, update: SessionUpdate, requestedModel?: string | null, modelSource?: TaskUsageUnit["modelSource"], providerType?: string): void {

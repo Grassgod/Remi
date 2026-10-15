@@ -4,12 +4,13 @@ import { codexUsagePatch } from "@acp/usage-bridge-patches.js";
 import { AcpProvider } from "@acp/provider.js";
 import { unitActualTotal } from "@acp/usage-collector.js";
 import { responseToUsageUnits } from "@multiremi/worker/usage-units.js";
+import { CODEX_SESSION_BOUNDARY } from "../../fixtures/acp/codex-acp-session-boundary.js";
 
 const boundary = `  async handleNotification(notification) {}
   async createUpdateEvent(notification) { switch(notification.method) { case "rawResponse/completed": return null; } }
   createUsageUpdate(params) {}
   handleRateLimitsUpdated(params) {}
-  routeChild(childEvent, session) { if (session.current.supportsSubagents) session.current.dispatch(childEvent); }`;
+  routeChild(childEvent, session) { if (session.current.supportsSubagents) session.current.dispatch(childEvent); }` + CODEX_SESSION_BOUNDARY;
 
 function bridge() {
   const Handler = new Function(`return class { ${codexUsagePatch(boundary)!} }`)();

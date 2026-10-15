@@ -1,29 +1,60 @@
 import { normalizeCodexRequestUsage } from "./codex-request-usage.js";
 
 /** Patches only upstream values, never context occupancy or inferred prices. */
-export const CODEX_USAGE_PATCH_VERSION = "codex-usage-v6";
+export const CODEX_USAGE_PATCH_VERSION = "codex-usage-v7";
 export const CLAUDE_USAGE_PATCH_VERSION = "claude-usage-v4";
+
+// Every insertion since v7 is bracketed, so a later version can restore the
+// upstream anchors before patching an already patched bundle again.
+const PATCH_BEGIN = "/*remi-usage:begin*/";
+const PATCH_END = "/*remi-usage:end*/";
+const PATCH_REGION = /\/\*remi-usage:begin\*\/[\s\S]*?\/\*remi-usage:end\*\//g;
+const CODEX_THREAD_START_ANCHOR = "    const response = await this.codexClient.threadStart({";
+const CODEX_INITIALIZE_ANCHOR = "      capabilities: {\n        experimentalApi: true,";
+
+/** Restore the upstream anchors that codex-usage-v6 rewrote without brackets. */
+function stripCodexUsageV6(source: string, childDispatchAnchor: string): string {
+  return source
+    .replace(`if (childEvent.method === "rawResponse/completed") {
+          session.current.dispatch({ ...childEvent, _remiUsageRootSessionId: session.current.rootSessionId });
+        } else ${childDispatchAnchor}`, childDispatchAnchor)
+    .replace(/\n    \/\/ Usage from subscribed native children belongs to the active parent task\.[\s\S]*?\n      return;\n    }\n/, "")
+    .replace(/\n    if \(notification\.method === "rawResponse\/completed"\) \{\n      const p = notification\.params;[\s\S]*?remiMissingRequestUsage: missing \}\)\n      \} \};\n    \}\n/, "");
+}
 
 export function codexUsagePatch(source: string): string | null {
   if (source.includes(`const CODEX_USAGE_PATCH = "${CODEX_USAGE_PATCH_VERSION}";`)) return source;
   const notificationAnchor = "  async createUpdateEvent(notification) {";
   const handlerAnchor = "  async handleNotification(notification) {";
   const childDispatchAnchor = "if (session.current.supportsSubagents) session.current.dispatch(childEvent);";
+  source = stripCodexUsageV6(source.replace(PATCH_REGION, ""), childDispatchAnchor);
   // Require the pinned bridge's actual protocol branch; never install a patch
   // that silently falls back to the incomplete cumulative consumption meter.
-  if (!source.includes(notificationAnchor) || !source.includes(handlerAnchor)
-    || !source.includes('case "rawResponse/completed":') || !source.includes(childDispatchAnchor)) return null;
+  // The first handleNotification must belong to the createUpdateEvent class
+  // (the elicitation handler declares another one later in the bundle).
+  const handlerAt = source.indexOf(handlerAnchor), notificationAt = source.indexOf(notificationAnchor);
+  if (handlerAt < 0 || notificationAt < handlerAt || /= class\b|\nclass /.test(source.slice(handlerAt, notificationAt))
+    || !source.includes('case "rawResponse/completed":') || !source.includes(childDispatchAnchor)
+    || !source.includes(CODEX_THREAD_START_ANCHOR) || !source.includes(CODEX_INITIALIZE_ANCHOR)) return null;
   // Provision also upgrades already patched bundles. Remove the previous
   // patch's compaction/epoch hook rather than retaining an unused state machine.
   source = source.replace(/\n    \/\/ Upstream's two explicit successful compaction notifications are reset[\s\S]*?\n    }\n/, "\n");
   source = source.replaceAll('      remiMeterEpochId: "sessionId" in request ? null : "initial",\n', "");
+  // app-server sends rawResponse/completed only on threads whose thread/start
+  // opted into raw events; its native children inherit that. thread/resume and
+  // thread/fork cannot opt in, so Remi reads their native rollout records.
+  source = source.replace(CODEX_THREAD_START_ANCHOR, CODEX_THREAD_START_ANCHOR + `${PATCH_BEGIN}
+      experimentalRawEvents: true,${PATCH_END}`);
+  // The same opt-in streams every raw response item, which the bridge ignores.
+  source = source.replace(CODEX_INITIALIZE_ANCHOR, CODEX_INITIALIZE_ANCHOR + `${PATCH_BEGIN}
+        optOutNotificationMethods: ["rawResponseItem/completed"],${PATCH_END}`);
   // This callback is installed only for native child thread IDs discovered
   // from this root's spawn/activity events, and already verifies threadId.
   // Usage must still reach the parent when subagent transcript UI is disabled.
-  source = source.replace(childDispatchAnchor, `if (childEvent.method === "rawResponse/completed") {
+  source = source.replace(childDispatchAnchor, `${PATCH_BEGIN}if (childEvent.method === "rawResponse/completed") {
           session.current.dispatch({ ...childEvent, _remiUsageRootSessionId: session.current.rootSessionId });
-        } else if (session.current.supportsSubagents) session.current.dispatch(childEvent);`);
-  source = source.replace(handlerAnchor, handlerAnchor + `
+        } else ${PATCH_END}${childDispatchAnchor}`);
+  source = source.replace(handlerAnchor, handlerAnchor + `${PATCH_BEGIN}
     // Usage from subscribed native children belongs to the active parent task.
     // Keep the ACP envelope on the parent, but retain the native thread in the
     // request identity. Child rendering/lifecycle filters must not drop usage.
@@ -33,9 +64,8 @@ export function codexUsagePatch(source: string): string | null {
       const update = await this.createUpdateEvent(notification);
       if (update) await this.session.update(update);
       return;
-    }
-`);
-  source = source.replace(notificationAnchor, notificationAnchor + `
+    }${PATCH_END}`);
+  source = source.replace(notificationAnchor, notificationAnchor + `${PATCH_BEGIN}
     if (notification.method === "rawResponse/completed") {
       const p = notification.params;
       if (typeof p?.threadId !== "string" || !p.threadId || typeof p.responseId !== "string" || !p.responseId) return null;
@@ -55,8 +85,7 @@ export function codexUsagePatch(source: string): string | null {
         ...(usage ? { remiTokenUsage: { ...usage, requestedModel,
           modelSource: requestedModel ? "session_acknowledged" : "unknown" } } : { remiMissingRequestUsage: missing })
       } };
-    }
-`);
+    }${PATCH_END}`);
   const start = source.indexOf("  createUsageUpdate(params) {");
   const end = source.indexOf("\n  handleRateLimitsUpdated(params)", start);
   if (start < 0 || end < 0) return null;
