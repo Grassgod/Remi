@@ -36,7 +36,7 @@ summary: 从可靠采集到规范化事实、SQL 报表、价格版本和可恢�
 
 Claude 采集保留请求状态直到最终用量和终止事件得到确认，内容块对应的早期 assistant 不等于最终结算。相同请求后续的输出计数更新原单位，取消和失败保留已经观察到的部分用量。具体时序见 [Claude 接入](design/acp-claude-via-claude-agent-acp.md)。
 
-Codex 从 `rawResponse/completed` 采集实际逐请求消费，以真实 thread/session 与 response ID 使用 `identityKind=request`，包含上下文压缩请求。旧累计通知和 PromptResult 的最后请求不能与这些请求重复相加。实时采集和原生日志恢复共用计数校验，缓存分量从 input 中拆出，reasoning 不再加到 output；详见 [Codex 接入](design/acp-codex-via-codex-acp.md)。
+Codex 逐请求消费有两个来源。新会话从 app-server 的 `rawResponse/completed` 实时采集：app-server 只向 `thread/start` 声明了 `experimentalRawEvents` 的线程及其原生子线程发送该事件，由 usage 补丁声明。恢复和 fork 的线程无法声明（包括 daemon 重启后的续聊），provider 在 prompt 结算时读取根线程及子线程在本次 prompt 中追加到原生 rollout 的 `token_usage_record`。两个来源都以真实 thread 与 response ID 使用 `identityKind=request`，同一请求合并为一个单位，包含上下文压缩请求。旧累计通知和 PromptResult 的最后请求不能与这些请求重复相加。两个来源与原生日志恢复共用计数校验：缓存分量从 input 中拆出，reasoning 不再加到 output。详见 [Codex 接入](design/acp-codex-via-codex-acp.md)。
 
 历史累计证据仍可以具有 `identityKind=cumulative_meter`：真实 session、`providerObservationId` 和 `meterEvidence` 保留 epoch、before/after 及可用 last。相同 meter namespace/epoch 内相邻 `(before,after]` 区间可累计，重叠观察跨 run 只保留审计而不另加消费。不同形式的 compaction 时间戳与 item/turn 身份可能指向同一次重置，重叠时保守判为竞争。没有可靠 session、baseline 或 epoch 的证据不建立强身份。历史请求恢复必须证明与原累计观测的覆盖关系后才能替换，不能将两者相加。计量器 owner 用标量区间检索，证据 JSON 供审计，不用于正常报表逐行解析。
 

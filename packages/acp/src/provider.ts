@@ -17,6 +17,7 @@ import { createAgentResponse } from "@shared/contracts/provider-types.js";
 import { isCompactionChunk } from "@shared/contracts/compaction.js";
 import { readContextUsage, type ContextUsage } from "@shared/agent-execution.js";
 import { UsageCollector } from "./usage-collector.js";
+import { beginCodexRolloutUsage, codexHomeFor, collectCodexRolloutUsage, type CodexRolloutCursor } from "./codex-rollout-usage.js";
 import type { TaskUsageUnit } from "@shared/contracts/usage-accounting.js";
 import { AcpClient } from "./client.js";
 import { AcpSessionFailureError, airMetadata, readSessionFailure, redactProviderError, redactProviderErrorText, record, type AcpSessionFailure } from "./session-failure.js";
@@ -155,6 +156,8 @@ export class UnsupportedAcpEffortError extends Error {
 const IDLE_TIMEOUT_MS = 10 * 60 * 1000;
 const CLEANUP_INTERVAL_MS = 60 * 1000;
 const PROMPT_CANCEL_SETTLE_MS = 5_000;
+/** Codex appends a turn's last rollout records just after the prompt resolves. */
+const CODEX_ROLLOUT_SETTLE_MS = 1_000;
 const DEFAULT_PERMISSION_MODE_BY_AGENT: Record<string, string | null> = {
   claude: "bypassPermissions",
   // codex advertises read-only/agent/agent-full-access, so the literal id is
@@ -192,6 +195,8 @@ interface PromptState {
   usage: PromptUsageState;
   completedToolCount: number;
   contextUsage?: ContextUsage;
+  /** Native rollout position for requests app-server cannot stream (resume/fork). */
+  codexRollout?: CodexRolloutCursor;
 }
 
 export function createPromptUsageState(): PromptUsageState {
@@ -686,10 +691,17 @@ export class AcpProvider implements Provider {
       pushEvent(update);
     };
 
+    const rolloutHome = this._adapter.agentType === "codex" ? codexHomeFor(entry.codexHome, { ...process.env, ...this._options.env }) : null;
+    // The ACP session ID is the native thread ID.
+    if (rolloutHome) promptState.codexRollout = beginCodexRolloutUsage(rolloutHome, entry.acpSessionId, promptState.promptStartTime);
     const promptStartMs = Date.now();
     const promptCompletion = entry.client
       .prompt(entry.acpSessionId, message, buildMediaContent(options?.media))
-      .then((result: PromptResult) => {
+      .then(async (result: PromptResult) => {
+        // Before promptDone, so the stream cannot build its fallback response first.
+        if (entry.promptState === promptState) {
+          await settleCodexRolloutUsage(promptState, requestedModel(), requestedModelSource(), CODEX_ROLLOUT_SETTLE_MS);
+        }
         promptDone = true;
         const failure = readSessionFailure(result._meta, credentials);
         if (failure && (failure.severity === "error" || failureState.failure?.severity !== "error")) failureState.failure = failure;
@@ -733,6 +745,7 @@ export class AcpProvider implements Provider {
               // block task shutdown. Stop it before allowing session reuse.
               await entry.client.stop();
               await promptCompletion;
+              if (!this._lastResponse) await settleCodexRolloutUsage(promptState, requestedModel(), requestedModelSource(), 0);
               this._lastResponse ??= buildAgentResponse(entry, { stopReason: "cancelled" }, this._adapter.promptUsageSettleScope, turnFailure(),
                 this._adapter.agentType, requestedModel(), requestedModelSource());
             }
@@ -751,9 +764,12 @@ export class AcpProvider implements Provider {
     } finally {
       // Streaming errors, process death, generator return and task aborts all
       // retain actual requests observed before the prompt stopped.
-      if (!this._lastResponse) this._lastResponse = buildAgentResponse(entry,
-        { stopReason: options?.signal?.aborted ? "cancelled" : "end_turn" }, this._adapter.promptUsageSettleScope, turnFailure(),
-        this._adapter.agentType, requestedModel(), requestedModelSource());
+      if (!this._lastResponse) {
+        await settleCodexRolloutUsage(promptState, requestedModel(), requestedModelSource(), 0);
+        this._lastResponse = buildAgentResponse(entry,
+          { stopReason: options?.signal?.aborted ? "cancelled" : "end_turn" }, this._adapter.promptUsageSettleScope, turnFailure(),
+          this._adapter.agentType, requestedModel(), requestedModelSource());
+      }
       this._deathListeners.delete(chatId);
       entry.client["_options"].onSessionUpdate = originalOnUpdate;
       this._activeStreaming.delete(chatId);
@@ -1383,6 +1399,25 @@ export function resolvePromptUsage(
       + (entry.cacheWriteTokens ?? 0) + (entry.actualUnsplitTokens ?? 0);
   }
   return totals;
+}
+
+/**
+ * Add the native rollout's requests for this prompt. They share the bridge
+ * hook's identity (native thread + response ID), so a request also streamed
+ * by rawResponse/completed merges into the same unit instead of adding usage.
+ */
+export async function settleCodexRolloutUsage(promptState: { codexRollout?: CodexRolloutCursor; usage: PromptUsageState },
+  requestedModel: string | null | undefined, modelSource: TaskUsageUnit["modelSource"], waitMs: number): Promise<void> {
+  const cursor = promptState.codexRollout;
+  if (!cursor) return;
+  promptState.codexRollout = undefined;
+  try {
+    for (const request of await collectCodexRolloutUsage(cursor, { requestedModel: requestedModel ?? null, waitMs })) {
+      promptState.usage.collector.update(request.usage, requestedModel, modelSource);
+    }
+  } catch (error) {
+    console.warn(`[AcpProvider] Codex rollout usage unavailable: ${error instanceof Error ? error.message : String(error)}`);
+  }
 }
 
 export function accumulateUsage(state: PromptUsageState, update: SessionUpdate, requestedModel?: string | null, modelSource?: TaskUsageUnit["modelSource"], providerType?: string): void {

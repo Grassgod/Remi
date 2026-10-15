@@ -72,6 +72,7 @@ remi runtime model list <runtime> --json
 | 执行文件、健康检查与显示适配 | [providers.test.ts](../../tests/unit/acp/providers.test.ts) |
 | 桥接器版本与 provision | [provision.test.ts](../../tests/unit/acp/provision.test.ts) |
 | npm 发布包、配套 Codex、usage 补丁和真实 ACP 协商 | [verify-codex-bridge.ts](../../tests/integration/verify-codex-bridge.ts) |
+| 逐请求用量：补丁开关、rollout 读取、app-server 协议检查 | [usage-bridge-patches.test.ts](../../tests/unit/acp/usage-bridge-patches.test.ts)、[codex-rollout-usage.test.ts](../../tests/unit/acp/codex-rollout-usage.test.ts)、[codex-usage-protocol.test.ts](../../tests/unit/acp/codex-usage-protocol.test.ts) |
 | 模型/effort/权限协商与隔离 Home | [acp-session-negotiation.test.ts](../../tests/unit/acp/acp-session-negotiation.test.ts)、[session-home.test.ts](../../tests/unit/daemon/session-home.test.ts) |
 | 真实 API → daemon → ACP 任务 | [smoke-multiremi-acp.ts](../../tests/integration/smoke-multiremi-acp.ts) |
 | 自定义连接、密钥权限/加密与会话快照 | [runtime-codex-profile.test.ts](../../tests/unit/multiremi/runtime-codex-profile.test.ts)、[codex-profile.test.ts](../../tests/unit/daemon/codex-profile.test.ts) |
@@ -96,9 +97,11 @@ bun run tests/integration/verify-codex-bridge.ts --package-dir=<bundle>/node_mod
 bun run tests/integration/verify-codex-bridge.ts --package-dir=<bundle>/node_modules/@agentclientprotocol/codex-acp --usage-only
 ```
 
-检查器核对发布包身份及实际解析的 SDK/CLI 固定版本；bundle 可以通过已准备的 override 安装 SDK，npm manifest 的依赖范围不要求等于 override 版本。检查器应用 usage 补丁，并执行实际发布包的请求用量转换和子线程订阅转发；`--usage-only` 到此结束，不读取认证或启动真实会话。默认模式继续验证 ACP 初始化、会话创建、model/effort/权限协商和关闭，从当前 `CODEX_HOME`（默认 `~/.codex`）复制 `auth.json` 到临时 Home，真实会话需要有效登录；不复制本机配置。加 `--prompt` 会调用模型并校验回复及实际 usage 事件。不加该参数时不会发送 prompt，也不能视为真实模型调用通过。
+检查器核对发布包身份及实际解析的 SDK/CLI 固定版本；bundle 可以通过已准备的 override 安装 SDK，npm manifest 的依赖范围不要求等于 override 版本。检查器应用 usage 补丁，并执行实际发布包的请求用量转换和子线程订阅转发；`--usage-only` 到此结束，不读取认证或启动真实会话。默认模式继续验证 ACP 初始化、会话创建、model/effort/权限协商和关闭，从当前 `CODEX_HOME`（默认 `~/.codex`）复制 `auth.json` 到临时 Home，真实会话需要有效登录；不复制本机配置。加 `--prompt` 会调用两次模型。新会话必须收到 `remiTokenUsage`，且请求身份和计数与 rollout 记录一致；随后在新 bridge 进程中恢复同一会话，必须从 rollout 读到该次请求。不加该参数时不会发送 prompt，也不能视为真实模型调用通过。
 
-检查器核对发行快照中的配套 Codex 基线；`codex-usage-v6` 补丁读取 app-server 的 `rawResponse/completed`，以真实 thread/session 与 response ID 记录每次模型调用。该事件覆盖普通生成和上下文压缩，不需要从旧会话的累计计数猜测本次消费；恢复、fork 和第一条有效请求使用相同规则。turn ID 不充当请求 ID，相同 response 的重放不会另加一份消费。缺失或无效的请求计数保留未知证据，不从最后请求或上下文占用补数。
+检查器核对发行快照中的配套 Codex 基线。`codex-usage-v7` 补丁读取 app-server 的 `rawResponse/completed`，以真实 thread/session 与 response ID 记录每次模型调用。该事件覆盖普通生成和上下文压缩，不需要从旧会话的累计计数猜测本次消费。app-server 只向 `thread/start` 声明 `experimentalRawEvents` 的线程及其原生子线程发送该事件，所以补丁为 codex-acp 的新会话加上该参数。该开关会同时推送每个原始响应条目，bridge 并不使用，因此补丁在 initialize 时以 `optOutNotificationMethods` 退订 `rawResponseItem/completed`。补丁的插入段以 `/*remi-usage:begin*/…/*remi-usage:end*/` 包围，后续版本可以先还原上游锚点再重打，已打 v6 的 bundle 原地升级为与全新打补丁相同的内容。
+
+`thread/resume` 与 `thread/fork` 没有该参数，恢复和 fork 后的线程收不到该事件（Codex 0.161.0、0.162.1 实测）。[provider](../../packages/acp/src/provider.ts) 在发送 prompt 前记录显式 `CODEX_HOME` 中的 rollout 文件位置（daemon 为每个任务设置独立 Home；未显式设置时不扫描用户的 `~/.codex`）；结算时由 [codex-rollout-usage.ts](../../packages/acp/src/codex-rollout-usage.ts) 读取本次追加的 `token_usage_record` 与 `compacted.latest_token_usage_record`。子线程的记录在自己的 rollout 中，以根线程为 `session_id`，同一 `CODEX_HOME` 中其他会话的记录不计入。读取前最多等待 1 秒，直到根 rollout 的最后一行是本轮的 `task_complete` 或 `turn_aborted`；本次 prompt 没有改动根 rollout 时不等待。两个来源的请求身份相同，同一请求合并而不相加；rollout 只在结算时读取，所以恢复会话的用量不会逐请求实时上报。turn ID 不充当请求 ID，相同 response 的重放不会另加一份消费。缺失或无效的请求计数保留未知证据，不从最后请求或上下文占用补数。
 
 旧 `thread/tokenUsage/updated` 的 `used/size` 只保留为上下文诊断，不再与逐请求消费相加；Codex 的 PromptResult 最后请求用量也不作为额外消费。缓存和输出的换算由[共用请求计数校验](../../packages/acp/src/codex-request-usage.ts)处理：input 中的缓存分量单列，output 已包含 reasoning，不重复相加。模型实际 SKU 未由上游上报时保持 `model:null`，会话确认的请求模型单列 `requestedModel`。失败、取消和异常退出保留已观察到的用量，worker 在计量事件时写入 durable outbox，并在终态前以有界分块补齐快照。协议回归夹具使用 Node shebang，Windows 可在 WSL 中运行 `acp-session-negotiation.test.ts`；发布包检查器直接通过 Node 启动 bridge，可在原生 Windows 运行。
 
