@@ -286,6 +286,76 @@ describe("Bun Multiremi daemon native subagents", () => {
     expect(Date.now() - resolvedAt).toBeLessThan(5_000);
   }, 30_000);
 
+  const patchedSpawn = (id: string): FakeSubagentStep => ({ update: { sessionUpdate: "subagent_spawned", subagentSessionId: id,
+    name: `Agent ${id.slice(-1)}`, task: "Count", prompt: "Count", capabilities: {}, _meta: { remi: { backgrounded: true, subagentType: null } } } });
+
+  it("review fix 1: a placeholder result does not end the wait; the shared follow-up is the reply, billed once", async () => {
+    const { store, task, daemon } = await bed("placeholder");
+    const logPath = join(workDir!, "agent.jsonl");
+    const run = daemon(scriptedAcp({ prompts: [[
+      patchedSpawn("a0000000000000001"), patchedSpawn("a0000000000000002"),
+      ended("a0000000000000001"), ended("a0000000000000002"),
+      chunk("Started two background agents."),
+      { billing: { origin: "human" } },
+      { resolve: "end_turn" },
+      // CLI 2.1.274+: one model call answers both queued notifications; the first gets an empty placeholder result.
+      { delayMs: 100, update: { sessionUpdate: "usage_update", used: 0, size: 0, cost: { amount: 0.1, currency: "USD" },
+        _meta: { "_claude/origin": { kind: "task-notification" } } } },
+      { delayMs: 300, ...chunk("3 and 4") },
+      { billing: {} },
+      { billing: { origin: "task-notification" } },
+    ]] }, logPath, "claude"), { autonomousIdleMs: 5_000 });
+    await run.start();
+    expect(store.getTask(task.id)).toMatchObject({ status: "completed", result: "3 and 4" });
+    await waitFor(() => requestUnits(task.id) === 3, "the prompt's and the follow-up's requests billed");
+    await Bun.sleep(300);
+    expect(requestUnits(task.id)).toBe(3);
+  }, 30_000);
+
+  it("review fix 2: a card raised during the wait and answered after the cap keeps the round, and the turn completes after it", async () => {
+    const { store, task, baseUrl, daemon } = await bed("card-in-wait", { ask: true });
+    const logPath = join(workDir!, "agent.jsonl");
+    const run = daemon(scriptedAcp({ prompts: [[
+      patchedSpawn(CHILD), ended(CHILD),
+      chunk("Started a background agent."), { billing: { origin: "human" } }, { resolve: "end_turn" },
+      { delayMs: 100, ...chunk("Writing the report.") },
+      { permission: { toolCallId: "toolu_report", title: "Write report.md" } },
+      { update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Report written." }, messageId: "msg_after" } },
+      { billing: { origin: "task-notification" } },
+    ]] }, logPath, "claude", { providerOptions: { autonomousRoundCapMs: 300 } }), { autonomousIdleMs: 5_000 });
+    const done = run.start();
+    const pending = await waitFor(() => store.listTaskHumanRequests(task.id).find((request) => request.status === "pending"),
+      "the follow-up's permission request");
+    await Bun.sleep(1_000);
+    // Still waiting for the person, past the 300 ms budget.
+    expect(store.getTask(task.id)?.status).not.toBe("completed");
+    expect((await respond(store, baseUrl, pending.id, "allow")).status).toBe(200);
+    await done;
+    expect(store.getTask(task.id)).toMatchObject({ status: "completed", result: "Report written." });
+    expect(agentLog(logPath).find((entry) => entry.kind === "permission_answer")?.result)
+      .toEqual({ outcome: { outcome: "selected", optionId: "allow" } });
+  }, 30_000);
+
+  it("review fix 3: a wrap-up in effect bounds the wait by its grace deadline", async () => {
+    const { store, task, daemon } = await bed("wrap-up-in-wait");
+    const logPath = join(workDir!, "agent.jsonl");
+    const run = daemon(scriptedAcp({ prompts: [
+      [chunk("Working on it. "), { hold: "cancel" }],
+      [patchedSpawn(CHILD), ended(CHILD), chunk("I started a background agent."), { billing: { origin: "human" } },
+        { resolve: "end_turn" }, { delayMs: 60_000, ...chunk("too late") }],
+    ] }, logPath, "claude"), { autonomousIdleMs: 30_000, forceAnswerGraceMs: 1_500 });
+    const done = run.start();
+    await waitFor(() => agentLog(logPath).some((entry) => entry.method === "session/prompt"), "the first prompt");
+    store.createTaskSteerMessage({ taskId: task.id, kind: "force_answer", content: "" });
+    const steeredAt = Date.now();
+    await done;
+    expect(Date.now() - steeredAt).toBeLessThan(10_000);
+    expect(store.getTask(task.id)).toMatchObject({ status: "completed", result: "I started a background agent." });
+    const prompts = agentLog(logPath).filter((entry) => entry.method === "session/prompt");
+    expect(prompts).toHaveLength(2);
+    expect(prompts[1]!.params!.prompt[0].text).toContain("[Deliver now]");
+  }, 30_000);
+
   it("(2) with no follow-up the wait ends at idleMs and the turn completes with the original reply", async () => {
     const { store, task, daemon } = await bed("no-follow-up");
     const logPath = join(workDir!, "agent.jsonl");

@@ -4634,8 +4634,10 @@ export class MultiremiDaemon {
         // steer, a wrap-up or the cancel came first; the bridge already holds a
         // prompt while such a subagent still runs.
         let autonomousRounds = 0;
+        // A wrap-up in effect (a force_answer was injected) bounds the wait by its grace deadline.
+        const wrapUpOver = () => forceAnswerDeadline != null && Date.now() >= forceAnswerDeadline;
         while (this.options.autonomousRounds && provider.listenAutonomous && !turnError && !turnAbort.signal.aborted
-          && !signal.aborted && !forceAnswerExpired
+          && !signal.aborted && !forceAnswerExpired && !wrapUpOver()
           && !steerFeed.hasPending && trace.owesAutonomousRound && autonomousRounds < AUTONOMOUS_MAX_ROUNDS) {
           autonomousRounds++;
           const listen = new AbortController();
@@ -4647,7 +4649,7 @@ export class MultiremiDaemon {
           let listenFailed = false;
           try {
             for await (const event of provider.listenAutonomous({ chatId: config.chatId, signal: listen.signal,
-              idleMs: this.options.autonomousIdleMs })) {
+              idleMs: this.options.autonomousIdleMs, ...(forceAnswerDeadline != null ? { deadline: forceAnswerDeadline } : {}) })) {
               if (isAutonomousActivity(event)) roundActivity++;
               const usageUnits = (event as { _meta?: Record<string, unknown> })._meta?.remiUsageUnits;
               if (Array.isArray(usageUnits)) checkpointUsage(ledger.observe((usageUnits as TaskUsageUnit[]).map(unit => ({
@@ -4670,14 +4672,16 @@ export class MultiremiDaemon {
           checkpointUsage(ledger.observe(responseToUsageUnits(agent.provider, last, config.model, `turn:${turnIndex}:auto:${autonomousRounds}`)));
           if (listenFailed) break;
           if (!roundActivity) {
-            // R1: the owed notification was consumed inside the prompt after all (unless a steer or cancel stopped the wait).
-            if (!listen.signal.aborted) {
+            // R1: the owed notification was consumed inside the prompt after all (unless a steer, a cancel or a wrap-up stopped the wait).
+            if (!listen.signal.aborted && !wrapUpOver()) {
               log.info(`Task ${task.id}: autonomous_wait_empty after ${this.options.autonomousIdleMs}ms (round ${autonomousRounds})`);
             }
             break;
           }
         }
         if (signal.aborted) throw (turnError ?? new Error("Cancelled"));
+        // The grace ran out while waiting: deliver what there is, as a round's grace timer would.
+        if (autonomousRounds > 0 && wrapUpOver()) forceAnswerExpired = true;
         const steered = steerFeed.take().filter((m) => !recordedSteerIds.has(m.id));
         if (turnError && !turnAbort.signal.aborted) throw turnError;
         const lastItem = trace.lastItem;

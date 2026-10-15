@@ -409,6 +409,28 @@ describe("owesAutonomousRound (PR 5 §2.4)", () => {
     expect(legacy.translator.owesAutonomousRound).toBe(false);
   });
 
+  it("a placeholder result (no root work since the last result) settles nothing; the shared follow-up does", () => {
+    const h = harness("claude").round([
+      spawned(A), spawned(B), chunk("Started two."), state(A, "completed"), state(B, "completed"), marker("human"),
+    ]);
+    expect(h.translator.owesAutonomousRound).toBe(true);
+    // CLI 2.1.274+: one model call answers both queued notifications; the first gets an empty `num_turns: 0` result.
+    h.feed([marker("task-notification")]);
+    expect(h.translator.owesAutonomousRound).toBe(true);
+    h.round([chunk("3 and 4"), marker("task-notification")]);
+    expect(h.translator.owesAutonomousRound).toBe(false);
+    // Without native sessions too: the placeholder settles nothing, the shared follow-up answers both launches.
+    const launch = (id: string) => [
+      { sessionUpdate: "tool_call", toolCallId: id, title: "Task", kind: "think", status: "pending", _meta: { claudeCode: { toolName: "Agent" } } },
+      hook(id, { status: "async_launched", isAsync: true }),
+    ];
+    const legacy = harness("claude").round([...launch("toolu_1"), ...launch("toolu_2"), chunk("Started."), marker("human")]);
+    legacy.feed([marker("task-notification")]);
+    expect(legacy.translator.owesAutonomousRound).toBe(true);
+    legacy.round([chunk("both done"), marker("task-notification")]);
+    expect(legacy.translator.owesAutonomousRound).toBe(false);
+  });
+
   it("native: a background child still running is owed", () => {
     const h = harness("claude").round([spawned(A), chunk("Started."), marker("human")]);
     expect(h.translator.owesAutonomousRound).toBe(true);
