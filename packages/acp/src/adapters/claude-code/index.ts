@@ -53,6 +53,15 @@ export class ClaudeAdapter implements AgentAdapter {
   readonly autonomousRounds = {
     resultOrigins: ["task-notification", "peer", "coordinator", "observer", "observer-activity"],
   } as const;
+  /**
+   * claude-agent-acp 0.90 publishes backgrounded shells, workflows and MCP
+   * tasks for the AIR `asyncTasks` capability (dist/async-tasks.js) and stops
+   * one through `_session/async_task/stop` on the root session. A task that
+   * ends while no prompt runs injects `<task-notification>`, and Claude Code
+   * starts a cycle of its own (dist/acp-agent.js:6800-6821): it wakes the
+   * model. A stopped shell injects nothing (dist/async-tasks.js:289-291).
+   */
+  readonly asyncTasks = { wakesModel: true } as const;
 
   resolveToolName(update: ToolCallUpdate | ToolCallProgressUpdate): string {
     const claudeCode = this._claudeCodeMeta(update);

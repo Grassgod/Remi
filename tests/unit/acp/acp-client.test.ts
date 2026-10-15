@@ -457,3 +457,67 @@ rl.on("line", (line) => {
     });
   });
 });
+
+// PR 6 §3.1: the AIR `asyncTasks` capability, per adapter and behind the switch.
+describe("AcpClient asyncTasks capability", () => {
+  const echoAgent = (advertised: string[]) => fakeAgent(
+    `#!/usr/bin/env node
+const readline = require("node:readline");
+const rl = readline.createInterface({ input: process.stdin });
+const send = (obj) => process.stdout.write(JSON.stringify(obj) + "\\n");
+rl.on("line", (line) => {
+  const msg = JSON.parse(line);
+  if (msg.method === "initialize") {
+    send({ jsonrpc: "2.0", id: msg.id, result: { protocolVersion: 1,
+      _meta: { echo: msg.params, jetbrains: { air: { version: 1, capabilities: ${JSON.stringify(advertised)} } } } } });
+  } else if (msg.method === "_session/async_task/stop") {
+    send({ jsonrpc: "2.0", id: msg.id, result: { stopped: msg.params.asyncTaskId === "bash-1", echo: msg.params } });
+  }
+});
+`,
+    "js",
+  );
+
+  for (const [agentType, base] of [
+    ["claude", ["sessionFailure"]],
+    ["codex", ["recommendedValue", "sessionFailure"]],
+  ] as const) {
+    it(`${agentType}: lists asyncTasks only when asked, after the other AIR capabilities`, async () => {
+      for (const asyncTasks of [true, false]) {
+        const client = new AcpClient({ executable: echoAgent(["sessionFailure", "asyncTasks"]), agentType, asyncTasks });
+        await client.start();
+        const result = await client.initialize();
+        await client.stop();
+        const sent = (result._meta as any).echo.clientCapabilities._meta.jetbrains.air.capabilities;
+        expect(sent).toEqual(asyncTasks ? [...base, "asyncTasks"] : [...base]);
+      }
+    });
+  }
+
+  it("asyncTasksEnabled needs both the request and the agent's advertisement", async () => {
+    const cases: Array<[boolean, string[], boolean]> = [
+      [true, ["sessionFailure", "asyncTasks"], true],
+      [true, ["sessionFailure"], false],
+      [false, ["sessionFailure", "asyncTasks"], false],
+    ];
+    for (const [asked, advertised, enabled] of cases) {
+      const client = new AcpClient({ executable: echoAgent(advertised), agentType: "claude", asyncTasks: asked });
+      await client.start();
+      expect(client.asyncTasksEnabled).toBe(false);
+      await client.initialize();
+      expect(client.asyncTasksEnabled).toBe(enabled);
+      if (process.platform !== "win32") expect(client.processGroupId).toBe(client.processId);
+      await client.stop();
+      expect(client.processId).toBeNull();
+    }
+  });
+
+  it("stopAsyncTask sends _session/async_task/stop with the given session and reads the answer", async () => {
+    const client = new AcpClient({ executable: echoAgent(["asyncTasks"]), agentType: "claude", asyncTasks: true });
+    await client.start();
+    await client.initialize();
+    expect(await client.stopAsyncTask("sess_root", "bash-1")).toEqual({ stopped: true });
+    expect(await client.stopAsyncTask("sess_root", "bash-2")).toEqual({ stopped: false });
+    await client.stop();
+  });
+});

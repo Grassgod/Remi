@@ -498,6 +498,12 @@ export interface MultiremiDaemonOptions {
    * (Claude's late answer to a background subagent, PR 5 §2.5; default 60 s).
    */
   autonomousIdleMs?: number;
+  /**
+   * Background tasks on the ACP bridges that publish them (PR 6 §3.1, default
+   * on): the AIR `asyncTasks` capability and a task registry per session.
+   * `REMI_ACP_ASYNC_TASKS=0` turns it off; nothing then parks.
+   */
+  asyncTasks?: boolean;
   daemonPort?: number;
   workspacesRoot?: string;
   repoCacheRoot?: string;
@@ -618,6 +624,16 @@ function upsertRepoWarning(warnings: TaskRepoWarning[], warning: TaskRepoWarning
 export type MultiremiTaskProvider = Pick<Provider, "sendStream" | "getLastResponse" | "steer"> & {
   /** An autonomous round after the prompt resolved (PR 5 §2.3); absent when the provider captures none. */
   listenAutonomous?: Provider["listenAutonomous"];
+  // Background tasks (PR 6 §3.3); absent when the provider keeps no task registry.
+  listAsyncTasks?: Provider["listAsyncTasks"];
+  stopAsyncTask?: Provider["stopAsyncTask"];
+  settleAsyncTasks?: Provider["settleAsyncTasks"];
+  reuseCheck?: Provider["reuseCheck"];
+  adoptSession?: Provider["adoptSession"];
+  park?: Provider["park"];
+  processGroupId?: Provider["processGroupId"];
+  /** Whether a live process is pooled under `chatId` (PR 6 §2.4). */
+  sessionAlive?: (chatId: string) => boolean;
   /** The native agent of a child session, as the provider registered it (PR 5 §1.3). */
   subagentSession?: (sessionId: string) => { agentId: string; name: string | null } | null;
   readonly typedSessionFailures?: boolean;
@@ -1020,6 +1036,7 @@ export class MultiremiDaemon {
       forceAnswerGraceMs: options.forceAnswerGraceMs ?? numberEnv(process.env.MULTIREMI_FORCE_ANSWER_GRACE_MS, DEFAULT_FORCE_ANSWER_GRACE_MS),
       nativeSubagents: options.nativeSubagents ?? process.env.REMI_ACP_NATIVE_SUBAGENTS !== "0",
       autonomousRounds: options.autonomousRounds ?? process.env.REMI_ACP_AUTONOMOUS_ROUNDS !== "0",
+      asyncTasks: options.asyncTasks ?? process.env.REMI_ACP_ASYNC_TASKS !== "0",
       autonomousIdleMs: Math.max(1, options.autonomousIdleMs ?? DEFAULT_AUTONOMOUS_IDLE_MS),
       daemonPort: options.daemonPort ?? numberEnv(process.env.MULTIREMI_DAEMON_PORT, 6131),
       workspacesRoot,
@@ -4414,6 +4431,7 @@ export class MultiremiDaemon {
       // Honoured only by adapters that declare them (PR 5 §1.1, §2.3).
       nativeSubagentSessions: this.options.nativeSubagents,
       captureAutonomousRounds: this.options.autonomousRounds,
+      asyncTasks: this.options.asyncTasks,
     });
     if (!provider.sendStream) {
       throw new Error(`Provider ${agent.provider} does not support streaming`);
