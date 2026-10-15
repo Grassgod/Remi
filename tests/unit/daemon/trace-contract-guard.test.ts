@@ -4,9 +4,7 @@ import { join } from "node:path";
 import ts from "typescript";
 import {
   isKnownTraceEventType,
-  isLegacyTraceEventType,
   KNOWN_TRACE_EVENT_TYPES,
-  LEGACY_TRACE_EVENT_TYPES,
   TRACE_ITEM_TYPES,
 } from "@multiremi/contracts/trace.js";
 import {
@@ -167,14 +165,17 @@ describe("trace contract drift guards", () => {
   });
 
   it("produces no legacy fragment event any more", () => {
-    const legacy = new Set<string>(LEGACY_TRACE_EVENT_TYPES);
+    // The fragment types `multiremi.trace.v1` files hold; nothing may write them.
+    const legacy = new Set<string>([
+      "execution", "text", "thinking", "compaction", "usage", "plan", "tool_use", "tool_result",
+      "permission_request", "permission_response", "question_request", "question_response", "steer",
+    ]);
     const items = new Set<string>(TRACE_ITEM_TYPES);
     for (const [type, files] of inventory()) {
       // `text` is the ACP content-block type; `plan` / `compaction` are item types now.
       if (type === "text" || items.has(type)) continue;
       expect(legacy.has(type), `${files.join(", ")} still writes the fragment type "${type}"`).toBe(false);
     }
-    expect(isLegacyTraceEventType("tool_use")).toBe(true);
     expect(isKnownTraceEventType("tool_use")).toBe(false);
     expect(isKnownTraceEventType("item.future")).toBe(false);
   });

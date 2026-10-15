@@ -7,8 +7,9 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { MultiremiStore } from "../../packages/server/src/store/store.js";
 import { startMultiremiServer } from "../../packages/server/src/api/server.js";
-import type { DaemonTraceReader } from "../../packages/server/src/api/trace/daemon-trace-reader.js";
+import type { TraceEvent } from "@multiremi/contracts/trace";
 import { seedZeroJumpFixture } from "./zero-jump-fixture";
+import { fakeDaemonTraceReader, readCommand, sequence, traceTurn } from "./turn-trace-browser-fixture";
 import { launchBrowser, mktContext } from "../../frontend/scripts/perf/lib/harness";
 
 const root = resolve(import.meta.dir, "../..");
@@ -56,21 +57,13 @@ const proxyPort = port(19800);
 const origin = `http://127.0.0.1:${webPort}`;
 const authHeaders = { Authorization: `Bearer ${credential}`, "X-Workspace-Slug": fixture.workspaceSlug };
 let readerReachable = true;
-const traceEvents = [1, 2, 3].map(seq => ({ seq, ts: "2026-08-08T00:00:00Z", type: "tool_use",
-  tool: "Read", tool_call_id: `trace-${seq}`, input: { file_path: `/tmp/example-${seq}.ts` } }));
-const daemonTraceReader: DaemonTraceReader = {
-  async read(request) {
-    if (!readerReachable) return { ok: false as const, code: "daemon_unreachable" as const, last_seen_at: "2026-08-08T00:00:00Z" };
-    // TODO(PR 2 P3): these fixtures are fragment events, which only a v1 file holds; the turn view answers legacy.
-    if (request.view === "turn") {
-      return { ok: true, view: "turn", format: "legacy", turn: null, items: [], next_item_cursor: null, head: 3, closed: false };
-    }
-    const afterSeq = request.afterSeq ?? 0;
-    const events = traceEvents.filter(event => event.seq > afterSeq);
-    return { ok: true as const, view: "events", format: "legacy", events, next_after_seq: events.at(-1)?.seq ?? afterSeq,
-      head: 3, eof: true, closed: false };
-  },
-};
+// A running turn + items trace (PR 2): the turn and three completed reads.
+const TS = "2026-08-08T00:00:00.000Z";
+const traceEvents = new Map<string, TraceEvent[]>([[fixture.runningTaskId, sequence([
+  { type: "turn.started", turn: traceTurn(fixture.runningTaskId, TS) },
+  ...[1, 2, 3].map(index => ({ type: "item.completed" as const, item: readCommand(`trace-${index}`, `/tmp/example-${index}.ts`, TS) })),
+], TS)]]);
+const daemonTraceReader = fakeDaemonTraceReader(traceEvents, new Set(), { reachable: () => readerReachable });
 const all = startMultiremiServer({ store, apiRole: "all", daemonTraceReader,
   port: allPort, hostname: "127.0.0.1", authToken: null, backgroundJobs: false });
 const ui = startMultiremiServer({ store, apiRole: "ui", daemonTraceReader,
@@ -88,6 +81,7 @@ const proxy = Bun.serve({ hostname: "127.0.0.1", port: proxyPort, fetch(request)
 } });
 let web: ReturnType<typeof Bun.spawn> | undefined;
 let browser: Awaited<ReturnType<typeof launchBrowser>> | undefined;
+let failurePage: { screenshot(options: { path: string }): Promise<unknown> } | undefined;
 let logs = "";
 const states = ["ok", "unreachable", "lost", "not_found"] as const;
 const expectedText: Record<typeof states[number], string> = {
@@ -122,36 +116,51 @@ try {
   const context = await mktContext(browser, credential, [], origin);
   await context.addCookies([{ name: "multimira_auth", value: credential, url: origin, httpOnly: true, sameSite: "Strict" }]);
   const page = await context.newPage();
+  failurePage = page;
   const traceRequests: string[] = [];
   page.on("request", request => {
     if (new URL(request.url()).pathname === turnApiPath(store, fixture.runningTaskId, "/trace"))
       traceRequests.push(request.url());
   });
+  const showAgentRow = () => page.locator('[data-perf-anchor="agent-stream"] button').first().waitFor();
   await page.goto(`${origin}/${fixture.workspaceSlug}/issues/${fixture.runningIssueId}`, { waitUntil: "domcontentloaded" });
-  await page.locator('[data-perf-anchor="agent-stream"] button').first().waitFor();
+  await showAgentRow();
   check("trace endpoint stays idle before click", traceRequests.length === 0);
   for (const mode of ["all", "split"] as const) {
     routingMode = mode;
-    const routedTrace = await fetch(`http://127.0.0.1:${proxyPort}${turnApiPath(store, fixture.runningTaskId, "/trace")}?after_seq=0&limit=500`,
+    setState("ok");
+    const routedTrace = await fetch(`http://127.0.0.1:${proxyPort}${turnApiPath(store, fixture.runningTaskId, "/trace")}?item_cursor=0&limit=500`,
       { headers: authHeaders, signal: AbortSignal.timeout(5000) });
-    check(`${mode} routed trace API responds`, routedTrace.status === 200,
-      { status: routedTrace.status, runtimeRequests: runtimeTraceRequests });
+    const routedPage = routedTrace.ok ? await routedTrace.json() as { view?: string; format?: string; items?: unknown[] } : null;
+    check(`${mode} routed trace API responds with a turn page`, routedTrace.status === 200
+      && routedPage?.view === "turn" && routedPage.format === "v2" && routedPage.items?.length === 3,
+      { status: routedTrace.status, view: routedPage?.view, items: routedPage?.items?.length, runtimeRequests: runtimeTraceRequests });
     for (const state of states) {
       setState(state);
+      // A live trace that has been read stays current through the socket, so a
+      // reopened dialog does not read again; reload so each state is a first read.
+      await page.reload({ waitUntil: "domcontentloaded" });
+      await showAgentRow();
       const before = traceRequests.length;
       const beforeRuntime = runtimeTraceRequests;
-      await page.locator('[data-perf-anchor="agent-stream"] button').first().click();
+      // A DOM click, as on mobile below: the floating Chat window and the Issue log can sit over the row's hit box.
+      await page.locator('[data-perf-anchor="agent-stream"] button').first().evaluate(element => (element as HTMLElement).click());
       const dialog = page.getByRole("dialog");
       await dialog.getByText(expectedText[state], { exact: false }).waitFor();
+      // Only a reachable trace has items to show; the other states show none.
+      const itemRows = await dialog.getByText(/example-[123]\.ts/).count();
       check(`${mode} browser renders ${state}`, traceRequests.length > before
-        && (mode === "all" || runtimeTraceRequests > beforeRuntime),
-      { requests: traceRequests.length - before, runtimeRequests: runtimeTraceRequests - beforeRuntime });
+        && (mode === "all" || runtimeTraceRequests > beforeRuntime)
+        && (state === "ok" ? itemRows >= 3 : itemRows === 0),
+      { requests: traceRequests.length - before, runtimeRequests: runtimeTraceRequests - beforeRuntime, itemRows });
       await Bun.sleep(400);
       await page.screenshot({ path: join(out, `${mode}-${state}-desktop.png`) });
       await page.keyboard.press("Escape");
       await dialog.waitFor({ state: "hidden" });
       if (state === "unreachable" && mode === "all") {
         await page.setViewportSize({ width: 390, height: 844 });
+        await page.reload({ waitUntil: "domcontentloaded" });
+        await showAgentRow();
         await page.locator('[data-perf-anchor="agent-stream"] button').first().evaluate(element => (element as HTMLElement).click());
         const mobileDialog = page.getByRole("dialog");
         await mobileDialog.getByText(expectedText[state], { exact: false }).waitFor();
@@ -170,6 +179,7 @@ try {
   }
   await context.close();
 } catch (error) {
+  await failurePage?.screenshot({ path: join(out, "failure.png") }).catch(() => {});
   console.error(error instanceof Error ? error.message.replaceAll(credential, "[redacted]") : "Trace dialog probe failed");
   process.exitCode = 1;
 } finally {

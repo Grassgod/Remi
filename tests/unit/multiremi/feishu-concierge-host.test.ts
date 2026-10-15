@@ -21,7 +21,6 @@ import { FeishuDeliveryError } from "@shared/feishu-delivery-error.js";
 import { DECISION_RECIPIENT_SENTINEL } from "@shared/feishu-task-card.js";
 import { handleTaskInteractionEvent, interactionMarker } from "@connectors/feishu/task-interaction.js";
 import type { MultiremiFeishuBotAssignment } from "@multiremi/worker/client.js";
-// TODO(PR 2 P4): the concierge host replays legacy fragment events.
 
 const APP_SECRET = "wJ4tQ7xR2nB8vC5mZ1kL0pS6dF3gH9jA";
 

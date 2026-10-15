@@ -19,8 +19,6 @@
 import type {
   CommandAction,
   FileChange,
-  LegacyTraceEvent,
-  LegacyTraceEventInput,
   TraceEventBody,
   TraceItem,
 } from "@multiremi/contracts/trace.js";
@@ -189,42 +187,12 @@ export function parseStoredTraceJson<T>(stored: string | null): T | null {
   }
 }
 
-/**
- * The stored form of one legacy fragment event: the field caps above, with the
- * serialized structured fields turned back into values. This is what v1 trace
- * files hold and what the legacy reader fixtures build; no live writer produces
- * fragments since PR 2.
- */
-export function sanitizeLegacyTraceEvent(event: LegacyTraceEventInput, ts: string): Omit<LegacyTraceEvent, "seq"> {
-  const fields = sanitizeTraceEventFields({
-    type: typeof event.type === "string" ? event.type : "text",
-    tool: event.tool,
-    content: event.content,
-    input: event.input,
-    output: event.output,
-    tool_call_id: event.tool_call_id,
-    status: event.status,
-    meta: event.meta,
-  });
-  return {
-    ts,
-    type: fields.type,
-    tool: fields.tool,
-    content: fields.content,
-    input: parseStoredTraceJson<Record<string, unknown>>(fields.input),
-    output: fields.output,
-    tool_call_id: cleanTraceField(fields.tool_call_id),
-    status: fields.status,
-    meta: parseStoredTraceJson<Record<string, unknown>>(fields.meta),
-  };
-}
-
 // ── Item caps (turn + items traces, PR 2) ───────────────────────────────────
 //
 // Applied by the daemon translator when it builds an item and re-checked by the
 // store before a write, so the file, the frame and every reader see the same
-// bounded item. The byte caps above stay for the fragment events until P2
-// removes them.
+// bounded item. The byte caps above serve only the legacy task-message table
+// writer (`tasks-repo.ts`); no trace event is a fragment any more.
 
 /** `agent_message` / `user_message` text. */
 export const TRACE_ITEM_TEXT_MAX_BYTES = 256 * 1024;

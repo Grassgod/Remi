@@ -4,72 +4,13 @@
  * Hub (MUL-403) and every reader carry these exact shapes. Nothing may restate
  * them.
  *
- * Since PR 2 a trace is one turn attempt as "turn + items" ({@link TraceEvent},
- * below). The fragment events that came before survive as
- * {@link LegacyTraceEvent}: v1 trace files are read-only and still hold them,
- * and the readers that have not switched yet (frontend, Feishu, server read
- * path) are typed against them until their own phase rewrites them.
+ * Since PR 2 (ADR 0019) a trace is one turn attempt as "turn + items"
+ * ({@link TraceEvent}, below). v1 files written before it hold fragment events
+ * of an open shape; they are read-only and only ever surface as raw lines
+ * ({@link TraceEventLine}, `view=events`).
  */
-
-// ── Legacy fragment events (multiremi.trace.v1) ────────────────────────────
-
-/**
- * The fragment event types the daemon wrote before PR 2 (`multiremi.trace.v1`).
- * For enumeration of legacy rows only; nothing produces them any more. The type
- * stays an open string: an unlisted legacy row is passed through verbatim.
- */
-export const LEGACY_TRACE_EVENT_TYPES = [
-  "execution",
-  "text",
-  "thinking",
-  "compaction",
-  "usage",
-  "plan",
-  "tool_use",
-  "tool_result",
-  "permission_request",
-  "permission_response",
-  "question_request",
-  "question_response",
-  "steer",
-] as const;
-
-export type LegacyTraceEventType = (typeof LEGACY_TRACE_EVENT_TYPES)[number];
-
-const LEGACY_TRACE_EVENT_TYPE_SET: ReadonlySet<string> = new Set(LEGACY_TRACE_EVENT_TYPES);
-
-/** Whether this is one of the fragment types a v1 trace can hold. */
-export function isLegacyTraceEventType(value: unknown): value is LegacyTraceEventType {
-  return typeof value === "string" && LEGACY_TRACE_EVENT_TYPE_SET.has(value);
-}
-
-/**
- * One stored fragment event of a v1 trace (`multiremi.trace.v1`).
- *
- * Field-to-field mapping with the legacy `TaskMessageInput` row (`toolCallId`
- * -> `tool_call_id`). `seq` is dense per task and `ts` is an ISO 8601 string, as
- * for {@link TraceEvent}. Readers that still render fragments are typed against
- * this until PR 2 P3/P4 switch them; the last of those removes it.
- */
-export interface LegacyTraceEvent {
-  seq: number;
-  ts: string;
-  type: string;
-  tool?: string | null;
-  content?: string | null;
-  input?: Record<string, unknown> | null;
-  output?: string | null;
-  tool_call_id?: string | null;
-  status?: string | null;
-  meta?: Record<string, unknown> | null;
-}
-
-/** A legacy fragment as a historical writer handed it over: no `seq`, optional `ts`. */
-export type LegacyTraceEventInput = Omit<LegacyTraceEvent, "seq" | "ts"> & { ts?: string };
 
 // ── Turn + items trace (PR 2) ───────────────────────────────────────────────
-//
-// The types below replaced the fragment events above (now `LegacyTraceEvent`).
 //
 // A trace is one turn attempt: a `TraceTurn` plus the `TraceItem`s that happened
 // in it, each a complete record (Codex app-server v2 Turn / Item model). Events
@@ -369,7 +310,7 @@ export type TraceEventInput = TraceEventBody;
 
 /**
  * A stored line of either format, as the transport and the `view=events` read
- * carry it: v2 lines are {@link TraceEvent}s, v1 lines {@link LegacyTraceEvent}s.
+ * carry it: v2 lines are {@link TraceEvent}s, v1 lines are fragment events.
  * Payloads are opaque at this level; a reader that needs a typed event checks it
  * with {@link isTraceEvent} and skips what fails.
  */

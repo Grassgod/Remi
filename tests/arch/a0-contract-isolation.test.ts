@@ -116,10 +116,10 @@ const WIRING_OWNER = new Map<string, string>([
   ["@multiremi/api/trace/trace-sink", "MUL-435 C0: LiveHub extends A-0's TraceSink"],
   ["@multiremi/contracts/daemon-protocol", "B5 task.complete / task.fail frame handling consumes the A-0 trace block"],
   ["@multiremi/api/trace/daemon-trace-reader", "B5 trace reader uses the daemon trace interface"],
-  ["@shared/trace-sanitize", "A-6 wires it into the daemon write path; today only tests call it"],
+  ["@shared/trace-sanitize", "A-6 wired it into TraceStore.append; the PR 2 translator applies its item caps"],
   ["@shared/turn-trace", "PR 2 P2a: the daemon transport fold and completion fields"],
   ["@shared/command-parse", "PR 2 P2a: the daemon trace translator (via @acp/adapters/trace-vendor)"],
-  ["@shared/trace-step-copy", "PR 2 P4: Feishu native CoT rows; P3: Chat steps"],
+  ["@shared/trace-step-copy", "PR 2 P4: Feishu native CoT rows (the web's Chat steps import it as @multiremi/shared/trace-step-copy)"],
   ["@shared/trace-file-change", "PR 2 P2a: the daemon trace translator's file_change diffs (via trace-vendor)"],
 ]);
 

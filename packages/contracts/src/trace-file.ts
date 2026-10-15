@@ -5,9 +5,9 @@
  * A trace lives only on the daemon that ran the task; the server keeps a pointer
  * and reads through the daemon. `TraceRef` is what both the page read and the
  * agent projects route on, so the pointer states are part of the wire contract.
- * The event schemas themselves are `TraceEvent` (v2) and `LegacyTraceEvent` (v1)
- * in `./trace.js`; the file validator checks only the framing every line shares
- * (`seq`, `ts`, `type`) and never redefines their fields.
+ * The v2 event schema itself is `TraceEvent` in `./trace.js`; v1 files hold
+ * fragment events of an open shape. The file validator checks only the framing
+ * every line shares (`seq`, `ts`, `type`) and never redefines their fields.
  *
  * Backend-only: this module value-imports `./trace.js` (the v2 snapshot
  * validators), which the web bundle cannot resolve; the frontend reads it as

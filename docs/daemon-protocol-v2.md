@@ -683,6 +683,8 @@ upsert、保留第一次出现的位置；应用任一事件都把 `item.seq` �
 
 人工请求是 `permission` / `question` 条目：`message_id` 是 `turn.decision` 返回的 decision 消息 ID，
 答复后同一条目以 `item.completed` 带 `decision` / `answers`、`responded_by` 与 `reply_message_id`。
+展示方（如飞书）直接以条目的 `message_id` 为键：读取人工请求、发交互卡片与提交答复都按它访问
+`/api/daemon/messages/:id`，不再经 `traceHumanRequestId` 从片段事件里取 ID。
 
 计费不进 trace：`size == 0` 的 `usage_update` 是计费帧，翻译器丢弃，计费照旧经
 `_meta.remiUsageUnits` 进入用量账本；上下文占用是 `turn.updated {context_usage}`。
@@ -702,7 +704,7 @@ upsert、保留第一次出现的位置；应用任一事件都把 `item.seq` �
 
 文本触顶后不再追加 delta，`item.completed` 带 `truncated: true`。
 
-v1 文件里的片段事件（`text`、`tool_use` 等）类型为 `LegacyTraceEvent`，只在 `view=events` 原样读出。
+v1 文件里的片段事件（`text`、`tool_use` 等）不再有类型定义，只在 `view=events` 原样读出。
 
 ### 5.2 seq 连续分配、只追加
 
