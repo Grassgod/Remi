@@ -35,6 +35,15 @@ export class CodexAdapter implements AgentAdapter {
    * `turn/steer`, :43851-43890); the answer stays inside the prompt.
    */
   readonly steering = { method: "_session/steering", idleOptIn: false, waitForToolCalls: false } as const;
+  /**
+   * codex-acp 2.2.2 forwards child threads as ACP child sessions only for the
+   * AIR `nativeSubagentSessions` capability: its bundled ACP schema strips a
+   * top-level `subagents` (dist/index.js `clientSupportsSubagents`, 39967-39972).
+   * The root prompt waits up to 10 minutes for its children
+   * (`CodexSubagentEventRouter.DEFAULT_WAIT_TIMEOUT_MS`), so a child never
+   * outlives the prompt: no autonomous rounds.
+   */
+  readonly nativeSubagents = { airCapability: true } as const;
 
   resolveToolName(update: ToolCallUpdate | ToolCallProgressUpdate): string {
     // No `_meta` probe here: the only tool-call `_meta` keys codex-acp emits are

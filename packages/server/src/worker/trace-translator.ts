@@ -13,14 +13,20 @@
 import type { AgentAdapter } from "@acp/index.js";
 import {
   CLAUDE_SUBAGENT_TOOLS,
+  autonomousOrigin,
   classifyTool,
   endsWithAbortMarker,
   compactionFacts,
   contentText,
   diffChanges,
+  frameSession,
+  isNativeAgentHook,
+  launchMarker,
   mergeToolFacts,
   messageId as frameMessageId,
   messagePhase,
+  nativeAgentId,
+  nativeAgentPrompt,
   noticeFields,
   parentToolUseId,
   toolLabel,
@@ -47,6 +53,7 @@ import type {
   TracePlanItem,
   TraceReasoningItem,
   TraceSteerResult,
+  TraceSubagentItem,
   TraceTurn,
 } from "@multiremi/contracts/trace.js";
 import { readExecutionModel } from "@shared/agent-execution.js";
@@ -63,7 +70,7 @@ import {
   capTraceItem,
   utf8ByteLength,
 } from "@shared/trace-sanitize.js";
-import { selectFinalReply } from "@shared/turn-trace.js";
+import { selectFinalReply, subagentReply } from "@shared/turn-trace.js";
 
 /** A native steer error is a short diagnostic: label-sized, like a tool name. */
 function steerError(error: string | null): string | null {
@@ -89,6 +96,13 @@ export interface TraceTranslatorOptions {
    */
   standaloneText?: (text: string) => boolean;
   flushIntervalMs?: number;
+}
+
+/** The subagent a child session belongs to, for a request it raised (PR 5 §1.3). */
+export interface TraceSubagentRef {
+  item_id: string;
+  /** The subagent's name, else its title; empty when it has neither. */
+  name: string;
 }
 
 export interface TraceTranslatorStart {
@@ -167,6 +181,11 @@ export interface TraceTranslator {
   model(model: string): void;
   /** The final-reply rule (spec §2.4); call before each `completeTurn`. */
   settle(): TraceSettlement;
+  /**
+   * The native subagent whose child session (any generation) raised a
+   * permission or question; null for the root session or an unknown one.
+   */
+  subagentOfSession(sessionId: string | null | undefined): TraceSubagentRef | null;
   /** A `compaction_update` was seen in this attempt. */
   readonly sawCompaction: boolean;
   /** The last item an ACP update touched in the most recent prompt round. */
@@ -347,6 +366,21 @@ interface TextState {
   truncated: boolean;
 }
 
+/** A native subagent: its child sessions, across resumed generations, are one item (PR 5 §3.5). */
+interface NativeAgent {
+  id: string;
+  parentId: string | null;
+  startedMs: number;
+  item: TraceSubagentItem;
+  /** A hook marker (or the alias of its call) linked the agent to its Agent call. */
+  linked: boolean;
+  spawnOrder: number;
+  /** Frame order of the state update that ended it last; null while it runs. */
+  endedOrder: number | null;
+  /** The prompt round it ended in. */
+  endedRound: number;
+}
+
 interface ToolState {
   id: string;
   parentId: string | null;
@@ -441,7 +475,9 @@ export function createTraceTranslator(
   const suppressed = new Set<string>();
   const declined = new Set<string>();
   const compactions = new Map<string, { item: TraceCompactionItem; summary: string }>();
+  /** Latest revision per session failure (a child's keyed by its session), and the notice item it became. */
   const failures = new Map<string, number>();
+  const failureIds = new Map<string, string>();
   let synCounter = 0;
   let textCounter = 0;
   let noticeCounter = 0;
@@ -460,6 +496,18 @@ export function createTraceTranslator(
   /** `roundAborted()` was called and the round has not ended yet. */
   let aborting = false;
 
+  // Native child sessions (PR 5 §3): one `subagent` item per agent, keyed by
+  // its id without the generation suffix.
+  const natives = new Map<string, NativeAgent>();
+  const nativeById = new Map<string, NativeAgent>();
+  /** Every generation's session id -> its agent. */
+  const sessionAgent = new Map<string, NativeAgent>();
+  /** An Agent call (Claude `toolu_…`) -> the agent it launched, learned from stamped child frames or the hook. */
+  const alias = new Map<string, NativeAgent>();
+  /** Orphan hook markers waiting for the alias of their call (§3.3). */
+  const pendingHooks = new Map<string, boolean>();
+  let spawnCounter = 0;
+
   const uniqueId = (base: string): string => {
     if (!usedIds.has(base)) { usedIds.add(base); return base; }
     for (let k = 2; ; k++) {
@@ -472,6 +520,7 @@ export function createTraceTranslator(
     items.set(item.id, item);
     if (touchedByAcp) roundLast = item;
   };
+
 
   const write = (type: "item.started" | "item.updated" | "item.completed", item: TraceItem, touchedByAcp = false): void => {
     const capped = capTraceItem(item);
@@ -511,12 +560,174 @@ export function createTraceTranslator(
     for (const key of [...openText.keys()]) completeText(key);
   };
 
+  // ── Native subagents (PR 5 §3) ──────────────────────────────────────────
+
+  /** The agent of a child session, any generation; undefined for the root or an unknown session. */
+  const agentOfSession = (sessionId: string | null): NativeAgent | undefined =>
+    sessionId ? sessionAgent.get(sessionId) ?? natives.get(nativeAgentId(sessionId)) : undefined;
+
+  /**
+   * The parent item of a frame (§3.1): the agent of its child session, else
+   * the agent its stamped Agent call launched, else that call itself (Claude
+   * without native sessions), else null.
+   */
+  const frameParent = (frame: VendorFrame): string | null => {
+    const agent = agentOfSession(frameSession(frame));
+    const stamped = parentToolUseId(frame);
+    if (agent) {
+      // The first stamped frame of a child session names the Agent call that launched it.
+      if (stamped && !alias.has(stamped)) learnAlias(stamped, agent);
+      return agent.id;
+    }
+    if (stamped) return alias.get(stamped)?.id ?? stamped;
+    return null;
+  };
+
+  const learnAlias = (toolCallId: string, agent: NativeAgent): void => {
+    alias.set(toolCallId, agent);
+    const marker = pendingHooks.get(toolCallId);
+    if (marker === undefined) return;
+    pendingHooks.delete(toolCallId);
+    applyHook(agent, marker);
+  };
+
+  /** Re-emit an agent's item with `patch`, keeping its lifecycle event (started/updated vs completed). */
+  const rewriteAgent = (agent: NativeAgent, patch: Partial<TraceSubagentItem>): void => {
+    agent.item = { ...agent.item, ...patch };
+    write(agent.item.status === "in_progress" ? "item.updated" : "item.completed", agent.item, true);
+  };
+
+  /** The hook's launch marker sets `background` (§3.3); the agent is linked to its call from now on. */
+  const applyHook = (agent: NativeAgent, background: boolean): void => {
+    agent.linked = true;
+    if (agent.item.background !== background) rewriteAgent(agent, { background });
+  };
+
+  /**
+   * Absorb Claude's orphan PostToolUse hook update of a native Agent call
+   * (§3.3): no item; its marker goes to the agent of its call, found by alias,
+   * else the most recently spawned unlinked agent of the calling session, else
+   * it waits for a child frame to reveal the alias.
+   */
+  const absorbHook = (frame: VendorFrame, toolCallId: string): void => {
+    const marker = launchMarker(frame)!;
+    let agent = alias.get(toolCallId);
+    if (!agent) {
+      const callerId = (() => {
+        const caller = parentToolUseId(frame);
+        return caller ? alias.get(caller)?.id ?? null : null;
+      })();
+      for (const candidate of natives.values()) {
+        if (candidate.linked || candidate.parentId !== callerId) continue;
+        if (!agent || candidate.spawnOrder > agent.spawnOrder) agent = candidate;
+      }
+      if (!agent) {
+        pendingHooks.set(toolCallId, marker);
+        return;
+      }
+      alias.set(toolCallId, agent);
+    }
+    applyHook(agent, marker);
+  };
+
+  /**
+   * Fallback `background` inference (§3.3): a session that keeps working
+   * (message, thought or a new tool call) while a child it spawned runs did not
+   * wait for it, so that child runs in the background. Claude only.
+   */
+  const inferBackground = (frame: VendorFrame): void => {
+    if (agentType !== "claude" || !natives.size) return;
+    const kind = frame.sessionUpdate;
+    // The root's result marker while a child still runs: a foreground call would have ended first.
+    const result = kind === "usage_update" && frameSession(frame) === null && autonomousOrigin(frame) !== null;
+    if (!result) {
+      if (kind !== "agent_message_chunk" && kind !== "agent_thought_chunk" && kind !== "tool_call") return;
+      if (kind !== "tool_call" && !contentText(frame.content)) return;
+    }
+    const caller = agentOfSession(frameSession(frame))?.id ?? null;
+    for (const agent of natives.values()) {
+      if (agent.parentId === caller && agent.item.status === "in_progress" && agent.item.background == null) {
+        rewriteAgent(agent, { background: true });
+      }
+    }
+  };
+
+
+  const onSpawned = (frame: VendorFrame): void => {
+    const sessionId = typeof frame.subagentSessionId === "string" ? frame.subagentSessionId : "";
+    if (!sessionId) return;
+    const baseId = nativeAgentId(sessionId);
+    const known = natives.get(baseId);
+    if (known) {
+      reopenAgent(known, sessionId, frame);
+      return;
+    }
+    const parentId = agentOfSession(frameSession(frame))?.id ?? null;
+    boundary(parentId);
+    const id = uniqueId(`sa:${baseId}`);
+    const name = typeof frame.name === "string" && frame.name.trim() ? frame.name : null;
+    // `agent_type` and `model` are not on the AIR-form announcement (U2); `background` comes from the hook or inference.
+    const item: TraceSubagentItem = {
+      id, parent_id: parentId, status: "in_progress", started_at: now(), completed_at: null, type: "subagent",
+      tool: agentType === "codex" ? "spawnAgent" : "Agent", title: name, name, prompt: nativeAgentPrompt(frame),
+      output: null, duration_ms: null, thread_id: baseId,
+    };
+    const agent: NativeAgent = { id, parentId, startedMs: nowMs(), item, linked: false, spawnOrder: ++spawnCounter, endedOrder: null,
+      endedRound: -1 };
+    natives.set(baseId, agent);
+    nativeById.set(id, agent);
+    sessionAgent.set(sessionId, agent);
+    write("item.started", item, true);
+  };
+
+  /**
+   * A resumed agent (`<id>:generation:N`) is the same item (§3.5): it reopens,
+   * and the message that resumed it (Claude's SendMessage text) becomes its
+   * next instructions, a child `user_message`.
+   */
+  const reopenAgent = (agent: NativeAgent, sessionId: string, frame: VendorFrame): void => {
+    sessionAgent.set(sessionId, agent);
+    if (agent.item.status !== "in_progress") {
+      agent.endedOrder = null;
+      // Claude Code resumes a subagent in the background (CA/acp-agent.js "always resumes … in the background").
+      rewriteAgent(agent, { status: "in_progress", completed_at: null, duration_ms: null,
+        ...(agentType === "claude" ? { background: true } : {}) });
+    }
+    const prompt = typeof frame.prompt === "string" && frame.prompt.trim() ? frame.prompt : null;
+    if (!prompt) return;
+    boundary(agent.id);
+    const at = now();
+    const text = capItemText(prompt);
+    write("item.completed", {
+      id: uniqueId(`in:${sessionId}`), parent_id: agent.id, status: "completed", started_at: at, completed_at: at,
+      type: "user_message", origin: "input", text: text.value, ...(text.truncated ? { truncated: true as const } : {}),
+      message_ids: [], attachments: [], steer: null,
+    }, true);
+  };
+
+  /** A child's `subagent_state_update` (§3.4): its open text and tools close, then the item ends. */
+  const onSubagentState = (frame: VendorFrame): void => {
+    const sessionId = typeof frame.subagentSessionId === "string" ? frame.subagentSessionId : "";
+    const agent = agentOfSession(sessionId);
+    if (!agent || agent.item.status !== "in_progress") return;
+    const status: TraceItemStatus = frame.state === "completed" ? "completed" : frame.state === "failed" ? "failed" : "stopped";
+    boundary(agent.id);
+    for (const tool of tools.values()) {
+      if (tool.parentId === agent.id && !tool.closed) completeTool(tool, "cancelled");
+    }
+    const completedAt = now();
+    const ended = { ...agent.item, status, completed_at: completedAt };
+    const reply = subagentReply([...items.values()].map((item) => item.id === agent.id ? ended : item), agent.id);
+    rewriteAgent(agent, { status, completed_at: completedAt, duration_ms: Math.max(0, nowMs() - agent.startedMs),
+      output: reply?.text ?? null });
+  };
+
   const onChunk = (frame: VendorFrame, kind: "agent_message" | "reasoning"): void => {
     let text = contentText(frame.content);
     if (!text) return;
     const alone = kind === "agent_message" && standalone(text);
     if (kind === "agent_message") text = redact(text);
-    const parentId = parentToolUseId(frame);
+    const parentId = frameParent(frame);
     const id = frameMessageId(frame);
     const key = `${parentId ?? ""}\u0000${kind}`;
     let phase = kind === "agent_message" ? messagePhase(frame) : "unknown";
@@ -651,9 +862,20 @@ export function createTraceTranslator(
    */
   const inBackground = (state: ToolState): boolean => {
     const seen = new Set<string>();
-    for (let current: ToolState | undefined = state; current && !seen.has(current.id); current = current.parentId ? tools.get(current.parentId) : undefined) {
-      if (isBackgroundLaunch(current)) return true;
-      seen.add(current.id);
+    let id: string | null = state.id;
+    while (id !== null && !seen.has(id)) {
+      seen.add(id);
+      const tool = tools.get(id);
+      if (tool) {
+        if (isBackgroundLaunch(tool)) return true;
+        id = tool.parentId;
+        continue;
+      }
+      // A native child session's agent (PR 5 §3.3).
+      const agent = nativeById.get(id);
+      if (!agent) return false;
+      if (agent.item.background === true) return true;
+      id = agent.parentId;
     }
     return false;
   };
@@ -689,6 +911,11 @@ export function createTraceTranslator(
     const id = typeof frame.toolCallId === "string" && frame.toolCallId ? frame.toolCallId : `syn_${synCounter++}`;
     if (suppressed.has(id)) return;
     let state = tools.get(id);
+    if (!state && agentType === "claude" && natives.size && frameSession(frame) === null && isNativeAgentHook(frame)) {
+      // The bridge swallowed this Agent call; only its hook update leaked to the root.
+      absorbHook(frame, id);
+      return;
+    }
     if (!state) {
       const facts = mergeToolFacts(null, frame, agentType);
       const cls = classifyTool(agentType, facts);
@@ -696,7 +923,7 @@ export function createTraceTranslator(
         suppressed.add(id);
         return;
       }
-      const parentId = parentToolUseId(frame) ?? timeWindowParent(id, facts);
+      const parentId = frameParent(frame) ?? timeWindowParent(id, facts);
       boundary(parentId);
       usedIds.add(id);
       let resolved: string | null = null;
@@ -844,22 +1071,36 @@ export function createTraceTranslator(
       ...noticeFields(frame) }, true);
   };
 
+  /**
+   * An AIR session failure becomes a notice. A child session's failure is a
+   * notice under its agent (PR 5 §3.7) and never fails the root turn; the
+   * child's other session info (Codex thread status, titles) is ignored.
+   */
   const onSessionInfo = (frame: VendorFrame): void => {
     const failure = readSessionFailure(frame._meta);
     if (!failure) return;
-    const previous = failures.get(failure.id);
+    const session = frameSession(frame);
+    const parentId = session ? agentOfSession(session)?.id ?? null : null;
+    const key = session ? `${session}\u0000${failure.id}` : failure.id;
+    const previous = failures.get(key);
     if (previous !== undefined && previous >= failure.revision) return;
-    failures.set(failure.id, failure.revision);
-    const id = `fail:${failure.id}`;
-    if (previous === undefined) { boundary(null); usedIds.add(id); }
+    failures.set(key, failure.revision);
+    let id = failureIds.get(key);
+    if (id === undefined) {
+      boundary(parentId);
+      id = session ? uniqueId(`fail:${failure.id}`) : `fail:${failure.id}`;
+      usedIds.add(id);
+      failureIds.set(key, id);
+    }
     const existing = items.get(id);
     const at = now();
-    write("item.completed", { id, parent_id: null, status: "completed", started_at: existing?.started_at ?? at, completed_at: at,
+    write("item.completed", { id, parent_id: parentId, status: "completed", started_at: existing?.started_at ?? at, completed_at: at,
       type: "notice", ...sessionFailureNotice(failure) }, true);
   };
 
   const onUsage = (frame: VendorFrame): void => {
-    if (parentToolUseId(frame)) return;
+    // A subagent's context occupancy is its own (PR 5 §1.4).
+    if (parentToolUseId(frame) || frameSession(frame)) return;
     const used = frame.used;
     const size = frame.size;
     // `size == 0` frames are billing-only (usage-bridge-patches.ts); billing rides `_meta.remiUsageUnits`.
@@ -870,7 +1111,7 @@ export function createTraceTranslator(
   };
 
   const onModel = (frame: VendorFrame): void => {
-    if (parentToolUseId(frame)) return;
+    if (parentToolUseId(frame) || frameSession(frame)) return;
     const next = readExecutionModel(frame)?.model;
     if (next) setModel(next);
   };
@@ -913,6 +1154,7 @@ export function createTraceTranslator(
         }
         const frame = update as unknown as VendorFrame;
         if (!sawStampedParent && parentToolUseId(frame) !== null) sawStampedParent = true;
+        inferBackground(frame);
         switch (frame.sessionUpdate) {
           case "agent_message_chunk":
             onChunk(frame, "agent_message");
@@ -946,9 +1188,15 @@ export function createTraceTranslator(
           case "session_info_update":
             onSessionInfo(frame);
             break;
+          case "subagent_spawned":
+            onSpawned(frame);
+            break;
+          case "subagent_state_update":
+            onSubagentState(frame);
+            break;
           default:
             // user_message_chunk, available_commands_update, current_mode_update,
-            // subagent_*, async_task_*, state_update, terminal_* and unknown kinds.
+            // async_task_*, state_update, terminal_* and unknown kinds.
             break;
         }
       });
@@ -1072,6 +1320,12 @@ export function createTraceTranslator(
         return { itemId: selection.itemId, text: selection.text };
       });
     },
+
+    subagentOfSession(sessionId) {
+      const agent = agentOfSession(sessionId ?? null);
+      return agent ? { item_id: agent.id, name: agent.item.name?.trim() || agent.item.title?.trim() || "" } : null;
+    },
+
 
     get sawCompaction() {
       return sawCompaction;

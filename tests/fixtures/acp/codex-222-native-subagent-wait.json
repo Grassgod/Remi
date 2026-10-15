@@ -1,0 +1,927 @@
+[
+  {
+    "t": 0,
+    "remi": "prompt_sent",
+    "index": 0
+  },
+  {
+    "t": 22,
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_root",
+      "update": {
+        "sessionUpdate": "session_info_update",
+        "_meta": {
+          "codex": {
+            "threadStatus": {
+              "type": "active",
+              "activeFlags": []
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "t": 5465,
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_root",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "messageId": "msg_01",
+        "content": {
+          "type": "text",
+          "text": "I"
+        },
+        "_meta": {
+          "jetbrains": {
+            "air": {
+              "version": 1,
+              "phase": "commentary"
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "t": 5465,
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_root",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "messageId": "msg_01",
+        "content": {
+          "type": "text",
+          "text": "’ll"
+        },
+        "_meta": {
+          "jetbrains": {
+            "air": {
+              "version": 1,
+              "phase": "commentary"
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "t": 5465,
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_root",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "messageId": "msg_01",
+        "content": {
+          "type": "text",
+          "text": " ask"
+        },
+        "_meta": {
+          "jetbrains": {
+            "air": {
+              "version": 1,
+              "phase": "commentary"
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "t": 5788,
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_root",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "messageId": "msg_01",
+        "content": {
+          "type": "text",
+          "text": " one"
+        },
+        "_meta": {
+          "jetbrains": {
+            "air": {
+              "version": 1,
+              "phase": "commentary"
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "t": 5789,
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_root",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "messageId": "msg_01",
+        "content": {
+          "type": "text",
+          "text": " sub"
+        },
+        "_meta": {
+          "jetbrains": {
+            "air": {
+              "version": 1,
+              "phase": "commentary"
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "t": 5789,
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_root",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "messageId": "msg_01",
+        "content": {
+          "type": "text",
+          "text": "-agent"
+        },
+        "_meta": {
+          "jetbrains": {
+            "air": {
+              "version": 1,
+              "phase": "commentary"
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "t": 5789,
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_root",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "messageId": "msg_01",
+        "content": {
+          "type": "text",
+          "text": " to"
+        },
+        "_meta": {
+          "jetbrains": {
+            "air": {
+              "version": 1,
+              "phase": "commentary"
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "t": 5789,
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_root",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "messageId": "msg_01",
+        "content": {
+          "type": "text",
+          "text": " count"
+        },
+        "_meta": {
+          "jetbrains": {
+            "air": {
+              "version": 1,
+              "phase": "commentary"
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "t": 5789,
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_root",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "messageId": "msg_01",
+        "content": {
+          "type": "text",
+          "text": " the"
+        },
+        "_meta": {
+          "jetbrains": {
+            "air": {
+              "version": 1,
+              "phase": "commentary"
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "t": 5789,
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_root",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "messageId": "msg_01",
+        "content": {
+          "type": "text",
+          "text": " files"
+        },
+        "_meta": {
+          "jetbrains": {
+            "air": {
+              "version": 1,
+              "phase": "commentary"
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "t": 5790,
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_root",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "messageId": "msg_01",
+        "content": {
+          "type": "text",
+          "text": " and"
+        },
+        "_meta": {
+          "jetbrains": {
+            "air": {
+              "version": 1,
+              "phase": "commentary"
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "t": 5790,
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_root",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "messageId": "msg_01",
+        "content": {
+          "type": "text",
+          "text": " wait"
+        },
+        "_meta": {
+          "jetbrains": {
+            "air": {
+              "version": 1,
+              "phase": "commentary"
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "t": 5790,
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_root",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "messageId": "msg_01",
+        "content": {
+          "type": "text",
+          "text": " for"
+        },
+        "_meta": {
+          "jetbrains": {
+            "air": {
+              "version": 1,
+              "phase": "commentary"
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "t": 5790,
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_root",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "messageId": "msg_01",
+        "content": {
+          "type": "text",
+          "text": " its"
+        },
+        "_meta": {
+          "jetbrains": {
+            "air": {
+              "version": 1,
+              "phase": "commentary"
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "t": 5790,
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_root",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "messageId": "msg_01",
+        "content": {
+          "type": "text",
+          "text": " result"
+        },
+        "_meta": {
+          "jetbrains": {
+            "air": {
+              "version": 1,
+              "phase": "commentary"
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "t": 5790,
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_root",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "messageId": "msg_01",
+        "content": {
+          "type": "text",
+          "text": "."
+        },
+        "_meta": {
+          "jetbrains": {
+            "air": {
+              "version": 1,
+              "phase": "commentary"
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "t": 6879,
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_root",
+      "update": {
+        "sessionUpdate": "subagent_spawned",
+        "subagentSessionId": "00000000-0000-7000-8000-000000000001",
+        "name": "Count files",
+        "task": "Delegated task for Count files",
+        "capabilities": {}
+      }
+    }
+  },
+  {
+    "t": 6882,
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "00000000-0000-7000-8000-000000000001",
+      "update": {
+        "sessionUpdate": "session_info_update",
+        "_meta": {
+          "codex": {
+            "threadStatus": {
+              "type": "active",
+              "activeFlags": []
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "t": 6944,
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_root",
+      "update": {
+        "sessionUpdate": "usage_update",
+        "used": 0,
+        "size": 0,
+        "_meta": {
+          "remiUsagePatch": "codex-usage-v7",
+          "remiUsageMode": "request",
+          "remiTokenUsage": {
+            "id": "resp_01",
+            "providerSessionId": "sess_root",
+            "providerRequestId": "resp_01",
+            "turnId": "00000000-0000-7000-9000-000000000001",
+            "scope": "request_snapshot",
+            "source": "codex_response_usage",
+            "accuracy": "exact",
+            "model": null,
+            "inputTokens": 1954,
+            "cachedInputTokens": 12288,
+            "cacheWriteTokens": 0,
+            "outputTokens": 73,
+            "totalTokens": 14315,
+            "requestedModel": "gpt-6.1-sol[low]",
+            "modelSource": "session_acknowledged"
+          }
+        }
+      }
+    }
+  },
+  {
+    "t": 6947,
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_root",
+      "update": {
+        "sessionUpdate": "usage_update",
+        "used": 14315,
+        "size": 475000,
+        "_meta": {
+          "remiUsagePatch": "codex-usage-v7",
+          "remiUsageMode": "request"
+        }
+      }
+    }
+  },
+  {
+    "t": 8960,
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_root",
+      "update": {
+        "sessionUpdate": "tool_call",
+        "toolCallId": "call_01",
+        "kind": "other",
+        "title": "wait",
+        "status": "in_progress",
+        "rawInput": {
+          "prompt": null,
+          "senderThreadId": "sess_root",
+          "receiverThreadIds": [],
+          "agentsStates": {},
+          "model": null,
+          "reasoningEffort": null
+        }
+      }
+    }
+  },
+  {
+    "t": 9027,
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_root",
+      "update": {
+        "sessionUpdate": "usage_update",
+        "used": 0,
+        "size": 0,
+        "_meta": {
+          "remiUsagePatch": "codex-usage-v7",
+          "remiUsageMode": "request",
+          "remiTokenUsage": {
+            "id": "resp_02",
+            "providerSessionId": "sess_root",
+            "providerRequestId": "resp_02",
+            "turnId": "00000000-0000-7000-9000-000000000001",
+            "scope": "request_snapshot",
+            "source": "codex_response_usage",
+            "accuracy": "exact",
+            "model": null,
+            "inputTokens": 256,
+            "cachedInputTokens": 14080,
+            "cacheWriteTokens": 0,
+            "outputTokens": 21,
+            "totalTokens": 14357,
+            "requestedModel": "gpt-6.1-sol[low]",
+            "modelSource": "session_acknowledged"
+          }
+        }
+      }
+    }
+  },
+  {
+    "t": 11673,
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_root",
+      "update": {
+        "sessionUpdate": "usage_update",
+        "used": 0,
+        "size": 0,
+        "_meta": {
+          "remiUsagePatch": "codex-usage-v7",
+          "remiUsageMode": "request",
+          "remiTokenUsage": {
+            "id": "resp_03",
+            "providerSessionId": "00000000-0000-7000-8000-000000000001",
+            "providerRequestId": "resp_03",
+            "turnId": "00000000-0000-7000-9000-000000000002",
+            "scope": "request_snapshot",
+            "source": "codex_response_usage",
+            "accuracy": "exact",
+            "model": null,
+            "inputTokens": 2041,
+            "cachedInputTokens": 12032,
+            "cacheWriteTokens": 0,
+            "outputTokens": 35,
+            "totalTokens": 14108,
+            "requestedModel": null,
+            "modelSource": "unknown"
+          }
+        }
+      }
+    }
+  },
+  {
+    "t": 13233,
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "00000000-0000-7000-8000-000000000001",
+      "update": {
+        "sessionUpdate": "tool_call",
+        "toolCallId": "exec-01",
+        "name": "exec_command",
+        "kind": "read",
+        "title": "List files",
+        "status": "in_progress"
+      }
+    }
+  },
+  {
+    "t": 13233,
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "00000000-0000-7000-8000-000000000001",
+      "update": {
+        "sessionUpdate": "tool_call_update",
+        "toolCallId": "exec-01",
+        "status": "completed",
+        "rawOutput": "total 24\ndrwx------   5 remi  wheel    160 Oct 15 19:33 .\ndrwxrwxrwt  526 root       wheel  16832 Oct 15 19:34 ..\n-rw-r--r--   1 remi  wheel      6 Oct 15 19:33 a.txt\n-rw-r--r--   1 remi  wheel      6 Oct 15 19:33 b.txt\n-rw-r--r--   1 remi  wheel     31 Oct 15 19:33 notes.md\n"
+      }
+    }
+  },
+  {
+    "t": 13238,
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "00000000-0000-7000-8000-000000000001",
+      "update": {
+        "sessionUpdate": "usage_update",
+        "used": 14108,
+        "size": 475000,
+        "_meta": {
+          "remiUsagePatch": "codex-usage-v7",
+          "remiUsageMode": "request"
+        }
+      }
+    }
+  },
+  {
+    "t": 14915,
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "00000000-0000-7000-8000-000000000001",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "messageId": "msg_02",
+        "content": {
+          "type": "text",
+          "text": "3"
+        },
+        "_meta": {
+          "jetbrains": {
+            "air": {
+              "version": 1,
+              "phase": "final_answer"
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "t": 14917,
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_root",
+      "update": {
+        "sessionUpdate": "usage_update",
+        "used": 0,
+        "size": 0,
+        "_meta": {
+          "remiUsagePatch": "codex-usage-v7",
+          "remiUsageMode": "request",
+          "remiTokenUsage": {
+            "id": "resp_04",
+            "providerSessionId": "00000000-0000-7000-8000-000000000001",
+            "providerRequestId": "resp_04",
+            "turnId": "00000000-0000-7000-9000-000000000002",
+            "scope": "request_snapshot",
+            "source": "codex_response_usage",
+            "accuracy": "exact",
+            "model": null,
+            "inputTokens": 314,
+            "cachedInputTokens": 13952,
+            "cacheWriteTokens": 0,
+            "outputTokens": 5,
+            "totalTokens": 14271,
+            "requestedModel": null,
+            "modelSource": "unknown"
+          }
+        }
+      }
+    }
+  },
+  {
+    "t": 14919,
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "00000000-0000-7000-8000-000000000001",
+      "update": {
+        "sessionUpdate": "usage_update",
+        "used": 14271,
+        "size": 475000,
+        "_meta": {
+          "remiUsagePatch": "codex-usage-v7",
+          "remiUsageMode": "request"
+        }
+      }
+    }
+  },
+  {
+    "t": 14920,
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "00000000-0000-7000-8000-000000000001",
+      "update": {
+        "sessionUpdate": "session_info_update",
+        "_meta": {
+          "codex": {
+            "threadStatus": {
+              "type": "idle"
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "t": 14921,
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_root",
+      "update": {
+        "sessionUpdate": "subagent_state_update",
+        "subagentSessionId": "00000000-0000-7000-8000-000000000001",
+        "state": "completed"
+      }
+    }
+  },
+  {
+    "t": 14923,
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_root",
+      "update": {
+        "sessionUpdate": "tool_call_update",
+        "toolCallId": "call_01",
+        "status": "completed"
+      }
+    }
+  },
+  {
+    "t": 14924,
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_root",
+      "update": {
+        "sessionUpdate": "usage_update",
+        "used": 14357,
+        "size": 475000,
+        "_meta": {
+          "remiUsagePatch": "codex-usage-v7",
+          "remiUsageMode": "request"
+        }
+      }
+    }
+  },
+  {
+    "t": 16263,
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_root",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "messageId": "msg_03",
+        "content": {
+          "type": "text",
+          "text": "3"
+        },
+        "_meta": {
+          "jetbrains": {
+            "air": {
+              "version": 1,
+              "phase": "final_answer"
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "t": 16326,
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_root",
+      "update": {
+        "sessionUpdate": "usage_update",
+        "used": 0,
+        "size": 0,
+        "_meta": {
+          "remiUsagePatch": "codex-usage-v7",
+          "remiUsageMode": "request",
+          "remiTokenUsage": {
+            "id": "resp_05",
+            "providerSessionId": "sess_root",
+            "providerRequestId": "resp_05",
+            "turnId": "00000000-0000-7000-9000-000000000001",
+            "scope": "request_snapshot",
+            "source": "codex_response_usage",
+            "accuracy": "exact",
+            "model": null,
+            "inputTokens": 209,
+            "cachedInputTokens": 14208,
+            "cacheWriteTokens": 0,
+            "outputTokens": 5,
+            "totalTokens": 14422,
+            "requestedModel": "gpt-6.1-sol[low]",
+            "modelSource": "session_acknowledged"
+          }
+        }
+      }
+    }
+  },
+  {
+    "t": 16332,
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_root",
+      "update": {
+        "sessionUpdate": "usage_update",
+        "used": 14422,
+        "size": 475000,
+        "_meta": {
+          "remiUsagePatch": "codex-usage-v7",
+          "remiUsageMode": "request"
+        }
+      }
+    }
+  },
+  {
+    "t": 16333,
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_root",
+      "update": {
+        "sessionUpdate": "session_info_update",
+        "_meta": {
+          "codex": {
+            "threadStatus": {
+              "type": "idle"
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "t": 16334,
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_root",
+      "update": {
+        "sessionUpdate": "session_info_update",
+        "title": "Spawn exactly one sub-agent with your multi-agent spawn_agent tool and give it this tiny task: list the files in the current directory and report how many there are. Do not list the files yourself. Wait for the sub-agent to finish, then reply with just th…"
+      }
+    }
+  },
+  {
+    "t": 16334,
+    "jsonrpc": "2.0",
+    "id": 5,
+    "result": {
+      "stopReason": "end_turn",
+      "usage": {
+        "totalTokens": 71473,
+        "inputTokens": 4774,
+        "cachedReadTokens": 66560,
+        "cachedWriteTokens": 0,
+        "outputTokens": 139,
+        "thoughtTokens": 0
+      },
+      "_meta": {
+        "quota": {
+          "token_count": {
+            "totalTokens": 71473,
+            "inputTokens": 4774,
+            "cachedInputTokens": 66560,
+            "cacheWriteInputTokens": 0,
+            "outputTokens": 139,
+            "reasoningOutputTokens": 0
+          },
+          "model_usage": [
+            {
+              "model": "gpt-6.1-sol",
+              "token_count": {
+                "totalTokens": 71473,
+                "inputTokens": 4774,
+                "cachedInputTokens": 66560,
+                "cacheWriteInputTokens": 0,
+                "outputTokens": 139,
+                "reasoningOutputTokens": 0
+              }
+            }
+          ]
+        }
+      }
+    }
+  },
+  {
+    "t": 22147,
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_root",
+      "update": {
+        "sessionUpdate": "session_info_update",
+        "title": "Count files via sub-agent"
+      }
+    }
+  }
+]

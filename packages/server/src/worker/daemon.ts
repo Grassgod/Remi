@@ -34,7 +34,7 @@ import {
 } from "@acp/index.js";
 import type { ElicitationCreateParams, ElicitationResult, PermissionOutcome, RequestPermissionParams } from "@shared/contracts/acp-protocol.js";
 import { answersToElicitationContent, elicitationToQuestions, type ElicitationQuestion } from "@shared/contracts/acp-elicitation.js";
-import type { AgentResponse, Provider } from "@shared/contracts/provider-types.js";
+import type { AgentResponse, Provider, ProviderEvent } from "@shared/contracts/provider-types.js";
 import type { AgentTask } from "@daemon/contracts/types.js";
 import type { UnifiedMessage } from "@multiremi/contracts/unified-model.js";
 import {
@@ -474,6 +474,12 @@ export interface MultiremiDaemonOptions {
   steerPollIntervalMs?: number;
   /** How long a force-answer run may keep going before the daemon wraps it up with the output so far (default 3 min). */
   forceAnswerGraceMs?: number;
+  /**
+   * Native subagent child sessions on the ACP bridges that support them (PR 5,
+   * default on): each subagent's work arrives on its own session and becomes a
+   * nested trace. `REMI_ACP_NATIVE_SUBAGENTS=0` restores the root-only frames.
+   */
+  nativeSubagents?: boolean;
   daemonPort?: number;
   workspacesRoot?: string;
   repoCacheRoot?: string;
@@ -599,6 +605,7 @@ export type MultiremiTaskProvider = Pick<Provider, "sendStream" | "getLastRespon
   setPermissionHandler?: (handler: (params: RequestPermissionParams) => Promise<PermissionOutcome>) => void;
   setElicitationHandler?: (handler: (params: ElicitationCreateParams) => Promise<ElicitationResult>) => void;
 };
+
 
 export interface ElicitationContext {
   text: string;
@@ -971,6 +978,7 @@ export class MultiremiDaemon {
         ?? numberEnv(process.env.MULTIREMI_UNATTENDED_HUMAN_REQUEST_TIMEOUT_MS, 5 * 60 * 1000),
       steerPollIntervalMs: options.steerPollIntervalMs ?? numberEnv(process.env.MULTIREMI_STEER_POLL_INTERVAL_MS, DEFAULT_STEER_POLL_MS),
       forceAnswerGraceMs: options.forceAnswerGraceMs ?? numberEnv(process.env.MULTIREMI_FORCE_ANSWER_GRACE_MS, DEFAULT_FORCE_ANSWER_GRACE_MS),
+      nativeSubagents: options.nativeSubagents ?? process.env.REMI_ACP_NATIVE_SUBAGENTS !== "0",
       daemonPort: options.daemonPort ?? numberEnv(process.env.MULTIREMI_DAEMON_PORT, 6131),
       workspacesRoot,
       repoCacheRoot: options.repoCacheRoot ?? process.env.MULTIREMI_REPO_CACHE_ROOT ?? sharedReposRoot(workspacesRoot),
@@ -3953,6 +3961,8 @@ export class MultiremiDaemon {
         this.taskDownlinks.beginDecision(task.id);
         try {
           const toolTitle = params.toolCall?.title ?? "tool call";
+          // A child session's request names its subagent (PR 5 §1.3); the root's carries no field.
+          const subagent = this.recordTrace(task.id, () => trace.subagentOfSession(params.sessionId));
           // S2 creates the decision message and sets awaiting_human atomically.
           const questionId = `question_${randomUUID()}`, waitId = randomUUID();
           this.taskDownlinks.beginQuestionWait?.(task.id, questionId, waitId);
@@ -3963,7 +3973,7 @@ export class MultiremiDaemon {
             body_md: `Permission requested: ${toolTitle}`,
             options: params.options.map(option => ({ label: option.name, value: option.optionId, description: option.kind })),
             metadata: { kind: "permission", session_id: params.sessionId,
-              tool_call: params.toolCall ?? null, options: params.options },
+              tool_call: params.toolCall ?? null, options: params.options, ...(subagent ? { subagent } : {}) },
             timeout_ms: humanRequestTimeoutMs,
           });
           const decision = result.message as UnifiedMessage;
@@ -4014,6 +4024,7 @@ export class MultiremiDaemon {
           elicitationContextOffset = sliced.offset;
           context = sliced.context;
         }
+        const subagent = this.recordTrace(task.id, () => trace.subagentOfSession(params.sessionId));
         const questionId = `question_${randomUUID()}`, waitId = randomUUID();
         this.taskDownlinks.beginQuestionWait?.(task.id, questionId, waitId);
         const result = await this.taskDownlinks.rpc("turn.decision", {
@@ -4030,6 +4041,7 @@ export class MultiremiDaemon {
             message: params.message,
             questions,
             ...(context ? { context } : {}),
+            ...(subagent ? { subagent } : {}),
           },
           timeout_ms: humanRequestTimeoutMs,
         });
@@ -4341,6 +4353,8 @@ export class MultiremiDaemon {
       pluginFingerprint: config.pluginFingerprint,
       codexHome: config.codexHome,
       ...(antigravity ? { gatewayShim: antigravity.run, providerHome: providerHome!.home } : {}),
+      // Honoured only by adapters that declare them (PR 5 §1.1, §2.3).
+      nativeSubagentSessions: this.options.nativeSubagents,
     });
     if (!provider.sendStream) {
       throw new Error(`Provider ${agent.provider} does not support streaming`);
@@ -4535,8 +4549,8 @@ export class MultiremiDaemon {
           signal.removeEventListener("abort", onTaskAbort);
           if (graceTimer) clearTimeout(graceTimer);
         }
-        const last = provider.getLastResponse?.() as AgentResponse | null | undefined;
-        if (last?.model) this.recordTrace(task.id, () => trace.model(last.model!));
+        let last = provider.getLastResponse?.() as AgentResponse | null | undefined;
+        if (last?.model) this.recordTrace(task.id, () => trace.model(last!.model!));
         finalSessionId = last?.sessionId ?? finalSessionId;
         checkpointUsage(ledger.observe(responseToUsageUnits(agent.provider, last, config.model, `turn:${turnIndex}`)));
         // Resume by provider session id if the follow-up turn needs a fresh

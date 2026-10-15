@@ -11,6 +11,7 @@ import type {
   Provider,
   SendOptions,
   AgentResponse,
+  ListenAutonomousOptions,
   ProviderEvent,
   SteerOutcome,
   SteerResult,
@@ -26,7 +27,7 @@ import { AcpRpcError, AcpSessionFailureError, airMetadata, readSessionFailure, r
 import { resolveAcpProcessLaunch } from "./launch.js";
 import { createAdapter, type AgentAdapter } from "./adapters/index.js";
 import { resolveClaudeContextSelection, hasOneMillionContext } from "./adapters/claude-code/model-context.js";
-import { isWorkspaceTrustPrompt, permissionAsQuestion, serviceMessage, serviceMessageFailure, type PermissionQuestion } from "./adapters/trace-vendor.js";
+import { autonomousOrigin, isWorkspaceTrustPrompt, permissionAsQuestion, serviceMessage, serviceMessageFailure, type PermissionQuestion } from "./adapters/trace-vendor.js";
 import { accessConfigFor, type AcpAccessConfig } from "./access/index.js";
 import type { GatewayShimChannel, GatewayShimEvent, GatewayShimHost, GatewayShimListingFailure } from "./access/gateway-shim-types.js";
 import { GEMINI_USAGE_SOURCE, geminiObservationUsage } from "./gemini-request-usage.js";
@@ -112,6 +113,12 @@ export interface AcpProviderOptions {
   toolCallWaitMs?: number;
   /** How long a bridge `promptRequired` during our prompt is retried (default 10 s; tests shorten it). */
   steerRetryWindowMs?: number;
+  /**
+   * Ask the bridge for native child sessions (PR 5 §1.1), when the adapter
+   * declares them. Each subagent's frames then arrive on its own session and
+   * are passed on stamped with `_meta.remiSessionId`. Default off.
+   */
+  nativeSubagentSessions?: boolean;
 }
 
 /** ACP-local SendOptions extension kept out of the provider-neutral contract. */
@@ -203,6 +210,8 @@ const NO_ACTIVE_PROMPT: SteerResult = { outcome: "promptRequired", reason: STEER
 const STEER_QUIET_MS = 500;
 /** Usage frames kept between prompts for billing replay; the oldest are dropped first. */
 const MAX_IDLE_USAGE_FRAMES = 1_000;
+/** Unknown session ids logged per pool entry, at most. */
+const MAX_LOGGED_UNKNOWN_SESSIONS = 32;
 const DEFAULT_PERMISSION_MODE_BY_AGENT: Record<string, string | null> = {
   claude: "bypassPermissions",
   // codex advertises read-only/agent/agent-full-access, so the literal id is
@@ -315,15 +324,34 @@ interface PoolEntry {
   /** `steer()` calls in progress (held for the turn, a tool call or the retry window): the turn is not stalled. */
   steersInFlight?: number;
   /**
-   * `usage_update` frames that arrived while no prompt stream was listening (a
-   * bridge-started turn, a task-notification follow-up after the prompt
-   * resolved). The next `sendStream` replays them so their requests are billed.
+   * Frames that arrived while no stream was listening (a bridge-started turn,
+   * a task-notification follow-up after the prompt resolved). Only
+   * `usage_update` frames, unless the provider captures autonomous rounds
+   * (then every accepted frame, PR 5 §2.3). The next `listenAutonomous` or
+   * `sendStream` replays them, so their requests are billed.
    */
-  idleUsage: SessionNotification[];
+  idleFrames: SessionNotification[];
+  /** Serialized size of {@link idleFrames} while capturing. */
+  idleFrameBytes?: number;
+  /**
+   * Native child sessions announced on the root or on another child (PR 5
+   * §1.2), by session id. A child stays registered after its state update:
+   * late frames still route to it.
+   */
+  children?: Map<string, NativeChildSession>;
+  /** Unknown session ids already logged for this entry. */
+  unknownSessions?: Set<string>;
   /** Codex rollout read position for this session; each settle advances it. */
   codexRollout?: CodexRolloutCursor;
   /** The gateway-shim channel of this ACP process (access configs with `usage: "gateway-shim"`). */
   gateway?: GatewayState;
+}
+
+interface NativeChildSession {
+  /** The session that announced it: the root or another child. */
+  parentSessionId: string;
+  /** Its `subagent_state_update` arrived. */
+  terminal: boolean;
 }
 
 /** One ACP process's gateway-shim channel and what the provider learned from it. */
@@ -823,8 +851,16 @@ export class AcpProvider implements Provider {
     /** Tool calls still pending / in progress, with the frame order of their last update. */
     const openTools = new Map<string, number>();
     const onUpdate = (notification: SessionNotification) => {
-      if (notification.sessionId !== entry.acpSessionId) return;
+      const child = this._routeFrame(chatId, entry, notification);
+      if (child === undefined) return;
       entry.lastUpdateAt = Date.now();
+      if (child !== null) {
+        // A child's frame is its own (PR 5 §1.2): it never touches the root
+        // turn's model, failure, text, context or steering state.
+        lastActivity = Date.now();
+        pushEvent(this._childUpdate(entry, notification.update, child, requestedModel(), requestedModelSource(), credentials));
+        return;
+      }
       let update = notification.update;
       if (promptToken && entry.promptInFlight === promptToken && isTurnLevelUpdate(update)) {
         // The bridge registers the turn asynchronously (codex-acp `prompt()`
@@ -880,36 +916,19 @@ export class AcpProvider implements Provider {
         }
       }
       if (update.sessionUpdate === "session_info_update") {
-        const failure = readSessionFailure(update._meta, credentials);
+        const read = withRedactedSessionFailure(update, credentials);
+        const failure = read.failure;
         if (failure && (failure.severity === "error" || failureState.failure?.severity !== "error")) failureState.failure = failure;
-        if (failure) update = {
-          ...update, _meta: { ...update._meta, jetbrains: {
-            ...record(record(update._meta)?.jetbrains), air: { ...airMetadata(update._meta), sessionFailure: failure },
-          } },
-        };
+        update = read.update;
       }
-      if (update.sessionUpdate === "config_option_update" && update.configOptions) {
-        entry.configOptions = update.configOptions;
-      } else if (update.sessionUpdate === "config_option_update" && update.id === "model" && typeof update.value === "string") {
-        const value = update.value;
-        entry.configOptions = entry.configOptions?.map(option => option.type === "select" && (option.category === "model" || option.id === "model")
-          ? { ...option, currentValue: value } : option);
-        if (entry.models) entry.models = { ...entry.models, currentModelId: value };
-      }
+      this._applyConfigUpdate(entry, update);
       if (update.sessionUpdate === "usage_update") {
-        accumulateUsage(entry.promptState.usage, update, requestedModel(), requestedModelSource(), this._adapter.agentType);
-        const context = (update._meta?.claudeCode as { parentToolUseId?: string } | undefined)?.parentToolUseId
-          // A billing-only shim observation (size 0) says nothing about context.
-          || (SHIM_USAGE_UPDATES.has(update) && !(update.size > 0))
-          ? null : readContextUsage(update);
-        if (context) entry.promptState.contextUsage = context;
-        update = { ...update, _meta: { ...update._meta,
-          remiUsageUnits: entry.promptState.usage.collector.takeChangedUnits(this._adapter.agentType, requestedModel()),
-        } };
+        update = this._stampUsage(entry, update, requestedModel(), requestedModelSource(), true);
       }
-      if (update.sessionUpdate === "agent_message_chunk") {
+      if (update.sessionUpdate === "agent_message_chunk" && !stampedParent(update)) {
         // Remi advertises `session.compaction` and `session.notices`, so neither
-        // bridge reports compaction or notices as message text any more.
+        // bridge reports compaction or notices as message text any more. A
+        // subagent's prose (stamped with its Agent call) is never the reply.
         const text = extractChunkText((update as Record<string, any>).content);
         entry.promptState.text += text;
         if (text.trim() && failureState.compaction) {
@@ -1000,7 +1019,9 @@ export class AcpProvider implements Provider {
     entry.turnUpdates = 0;
     // Bill the requests of turns no stream was listening to (ADR 0020): a
     // bridge-started turn the daemon cancelled, or a follow-up after a resolve.
-    for (const notification of (entry.idleUsage ?? []).splice(0)) onUpdate(notification);
+    // While capturing autonomous rounds, the whole follow-up replays into this
+    // round (PR 5 §2.6: a steer that stopped the wait re-prompts here).
+    for (const notification of takeIdleFrames(entry)) onUpdate(notification);
 
     const rolloutHome = this._adapter.agentType === "codex" ? codexHomeFor(entry.codexHome, { ...process.env, ...this._options.env }) : null;
     if (rolloutHome) {
@@ -1181,6 +1202,96 @@ export class AcpProvider implements Provider {
     if (promptError) throw promptError;
   }
 
+
+  /**
+   * Whether `notification` belongs to `entry` (PR 5 §1.2): its root session or
+   * a registered child. Returns null for a root frame, the child's session id
+   * for a child frame, undefined to drop it (logged once per unknown id).
+   * A `subagent_spawned` on either registers the announced child and routes its
+   * permission and question requests to `chatId`; a `subagent_state_update`
+   * marks it ended but keeps it registered.
+   */
+  private _routeFrame(chatId: string, entry: PoolEntry, notification: SessionNotification): string | null | undefined {
+    const sessionId = notification.sessionId;
+    let child: string | null = null;
+    if (sessionId !== entry.acpSessionId) {
+      if (!entry.children?.has(sessionId)) {
+        entry.unknownSessions ??= new Set();
+        if (!entry.unknownSessions.has(sessionId) && entry.unknownSessions.size < MAX_LOGGED_UNKNOWN_SESSIONS) {
+          entry.unknownSessions.add(sessionId);
+          console.warn(`[AcpProvider] ${this._adapter.agentType}: dropping updates for unknown session ${sessionId}`);
+        }
+        return undefined;
+      }
+      child = sessionId;
+    }
+    const update = notification.update as unknown as Record<string, unknown> | undefined;
+    const announced = typeof update?.subagentSessionId === "string" ? update.subagentSessionId : "";
+    if (update?.sessionUpdate === "subagent_spawned" && announced && announced !== entry.acpSessionId) {
+      entry.children ??= new Map();
+      const known = entry.children.get(announced);
+      if (known) known.terminal = false;
+      else entry.children.set(announced, { parentSessionId: sessionId, terminal: false });
+      this._sessionToChatId.set(announced, chatId);
+    } else if (update?.sessionUpdate === "subagent_state_update" && announced) {
+      const known = entry.children?.get(announced);
+      if (known) known.terminal = true;
+    }
+    return child;
+  }
+
+  /**
+   * A child session's frame, stamped `_meta.remiSessionId`. Only its billing
+   * reaches the root prompt's collector (context occupancy is the child's own);
+   * failures and compaction errors are redacted but never fail the root turn.
+   */
+  private _childUpdate(entry: PoolEntry, update: SessionUpdate, sessionId: string, requestedModel: string | null | undefined,
+    modelSource: TaskUsageUnit["modelSource"], credentials: string[]): SessionUpdate {
+    let next = update;
+    if (next.sessionUpdate === "session_info_update") next = withRedactedSessionFailure(next, credentials).update;
+    if (next.sessionUpdate === "usage_update") next = this._stampUsage(entry, next, requestedModel, modelSource, false);
+    if (next.sessionUpdate === "compaction_update" || next.sessionUpdate === "tool_call_update") next = redactFailedFrame(next, credentials);
+    return { ...next, _meta: { ...metaOf(next), remiSessionId: sessionId } } as SessionUpdate;
+  }
+
+
+  /** A model or config change the agent reported for the root session. */
+  private _applyConfigUpdate(entry: PoolEntry, update: SessionUpdate): void {
+    if (update.sessionUpdate !== "config_option_update") return;
+    if (update.configOptions) {
+      entry.configOptions = update.configOptions;
+    } else if (update.id === "model" && typeof update.value === "string") {
+      const value = update.value;
+      entry.configOptions = entry.configOptions?.map(option => option.type === "select" && (option.category === "model" || option.id === "model")
+        ? { ...option, currentValue: value } : option);
+      if (entry.models) entry.models = { ...entry.models, currentModelId: value };
+    }
+  }
+
+  /**
+   * Fold a `usage_update` into the current prompt's collector and stamp the
+   * units it changed (`_meta.remiUsageUnits`). `context` false (a child
+   * session, PR 5 §1.4) keeps it out of the root's context occupancy.
+   */
+  private _stampUsage(entry: PoolEntry, update: Extract<SessionUpdate, { sessionUpdate: "usage_update" }>,
+    requestedModel: string | null | undefined, modelSource: TaskUsageUnit["modelSource"], context: boolean): SessionUpdate {
+    accumulateUsage(entry.promptState.usage, update, requestedModel, modelSource, this._adapter.agentType, { context });
+    const occupancy = !context || stampedParent(update)
+      // A billing-only shim observation (size 0) says nothing about context.
+      || (SHIM_USAGE_UPDATES.has(update) && !(update.size > 0))
+      ? null : readContextUsage(update);
+    if (occupancy) entry.promptState.contextUsage = occupancy;
+    return { ...update, _meta: { ...update._meta,
+      remiUsageUnits: entry.promptState.usage.collector.takeChangedUnits(this._adapter.agentType, requestedModel),
+    } };
+  }
+
+  /** Forget the entry's child sessions (wherever its root session is forgotten). */
+  private _forgetChildren(entry: PoolEntry): void {
+    for (const sessionId of entry.children?.keys() ?? []) this._sessionToChatId.delete(sessionId);
+    entry.children?.clear();
+  }
+
   /**
    * Native steering (ADR 0020): inject `text` into the prompt streaming for
    * `chatId`. Every failure is an outcome; the caller falls back to interrupt
@@ -1349,18 +1460,25 @@ export class AcpProvider implements Provider {
   }
 
   /**
-   * Updates that arrive while no prompt stream is listening. Records activity
-   * for the steer quiet-wait and keeps `usage_update` frames for the next
-   * stream, so a bridge-started or follow-up turn is still billed.
+   * Updates that arrive while no stream is listening. Records activity for
+   * the steer quiet-wait, registers announced child sessions, and keeps
+   * `usage_update` frames for the next stream, so a bridge-started or
+   * follow-up turn is still billed. While capturing autonomous rounds every
+   * accepted frame is kept (PR 5 §2.3), up to {@link MAX_AUTONOMOUS_FRAMES} or
+   * {@link MAX_AUTONOMOUS_BYTES}; the oldest non-usage frame goes first. A
+   * bridge that starts a turn of its own without that (Codex D3) keeps only
+   * the billing: its text is discarded.
    */
   private _handleIdleUpdate(client: AcpClient, notification: SessionNotification): void {
-    for (const entry of this._pool.values()) {
-      if (entry.client !== client || entry.acpSessionId !== notification.sessionId) continue;
+    for (const [chatId, entry] of this._pool) {
+      if (entry.client !== client) continue;
+      if (this._routeFrame(chatId, entry, notification) === undefined) return;
       entry.lastUpdateAt = Date.now();
+      entry.idleFrames ??= [];
       if (notification.update?.sessionUpdate !== "usage_update") return;
-      entry.idleUsage.push(notification);
-      if (entry.idleUsage.length > MAX_IDLE_USAGE_FRAMES) {
-        entry.idleUsage.splice(0, entry.idleUsage.length - MAX_IDLE_USAGE_FRAMES);
+      entry.idleFrames.push(notification);
+      if (entry.idleFrames.length > MAX_IDLE_USAGE_FRAMES) {
+        entry.idleFrames.splice(0, entry.idleFrames.length - MAX_IDLE_USAGE_FRAMES);
         console.warn(`[AcpProvider] ${this._adapter.agentType}: dropped the oldest usage frames received between prompts`);
       }
       return;
@@ -1470,8 +1588,9 @@ export class AcpProvider implements Provider {
 
     const existing = this._pool.get(chatId);
     // Unbilled frames survive a process replacement (e.g. the bridge stopped
-    // after a bridge-started turn would not go quiet).
-    let idleUsage: SessionNotification[] = [];
+    // after a bridge-started turn would not go quiet); a captured autonomous
+    // round does not (PR 5 §1.5): its children died with the process.
+    let idleFrames: SessionNotification[] = [];
     if (existing) {
       const stale =
         !existing.client.alive ||
@@ -1502,12 +1621,15 @@ export class AcpProvider implements Provider {
         );
       }
       if (stale) {
-        idleUsage = existing.idleUsage ?? [];
+        idleFrames = (existing.idleFrames ?? []).filter((frame) => frame.update?.sessionUpdate === "usage_update");
         await this._discardEntry(chatId, existing);
       } else {
         try {
           if (options?.sessionId && options.sessionId !== existing.acpSessionId) {
             this._sessionToChatId.delete(existing.acpSessionId);
+            // The registry holds live children only (PR 5 §1.5); a load replays none into it.
+            this._forgetChildren(existing);
+            dropCapturedRound(existing);
             const addDirs = absoluteAdditionalDirectories(options.addDirs, this._adapter.agentType);
             const officialAddDirs = !!existing.client.initializeResult?.agentCapabilities?.sessionCapabilities?.additionalDirectories;
             const meta = addDirs.length && !officialAddDirs
@@ -1576,6 +1698,7 @@ export class AcpProvider implements Provider {
       executable: launch.executable,
       args: launch.args,
       agentType: this._adapter.agentType,
+      nativeSubagents: this._options.nativeSubagentSessions ? this._adapter.nativeSubagents ?? null : null,
       cwd,
       privateTmpDirectory: this._options.privateTmpDirectory,
       privateTmpPlatform: this._options.privateTmpPlatform,
@@ -1633,7 +1756,8 @@ export class AcpProvider implements Provider {
         turnUpdates: 0,
         userInputs: 0,
         lateSteer: null,
-        idleUsage,
+        idleFrames,
+        children: new Map(),
       };
       this._adoptSessionState(entry, result);
       // Server 1.4.0 never fails `session/new` on a refused listing: it falls
@@ -1700,6 +1824,7 @@ export class AcpProvider implements Provider {
       if (entry.client !== client) continue;
       this._pool.delete(chatId);
       this._sessionToChatId.delete(entry.acpSessionId);
+      this._forgetChildren(entry);
       closeGateway(entry.gateway);
       console.error(`[AcpProvider] ${this._adapter.agentType} agent for ${chatId} died (${reason}); session evicted`);
       this._deathListeners.get(chatId)?.(reason);
@@ -1713,6 +1838,7 @@ export class AcpProvider implements Provider {
     await entry.client.stop();
     closeGateway(entry.gateway);
     this._sessionToChatId.delete(entry.acpSessionId);
+    this._forgetChildren(entry);
     this._pool.delete(chatId);
   }
 
@@ -1936,6 +2062,7 @@ export class AcpProvider implements Provider {
         } catch {}
         closeGateway(entry.gateway);
         this._sessionToChatId.delete(entry.acpSessionId);
+        this._forgetChildren(entry);
         this._permissionHandlers.delete(chatId);
         this._elicitationHandlers.delete(chatId);
         this._pool.delete(chatId);
@@ -1955,6 +2082,7 @@ export class AcpProvider implements Provider {
         await entry.client.stop();
         closeGateway(entry.gateway);
         this._sessionToChatId.delete(entry.acpSessionId);
+        this._forgetChildren(entry);
         this._permissionHandlers.delete(chatId);
         this._elicitationHandlers.delete(chatId);
         this._pool.delete(chatId);
@@ -1965,6 +2093,7 @@ export class AcpProvider implements Provider {
         await entry.client.stop();
         closeGateway(entry.gateway);
         this._sessionToChatId.delete(entry.acpSessionId);
+        this._forgetChildren(entry);
       }
       this._pool.clear();
       this._permissionHandlers.clear();
@@ -1997,6 +2126,59 @@ function isTurnLevelUpdate(update: SessionUpdate): boolean {
     default:
       return false;
   }
+}
+
+/** A child session's announcement or end (PR 5): turn activity of an autonomous round. */
+function isSubagentLifecycle(update: SessionUpdate): boolean {
+  return update.sessionUpdate === "subagent_spawned" || update.sessionUpdate === "subagent_state_update";
+}
+
+/** A frame claude-agent-acp stamped with the subagent call it belongs to (`_meta.claudeCode.parentToolUseId`). */
+function stampedParent(update: SessionUpdate): boolean {
+  return !!(metaOf(update)?.claudeCode as { parentToolUseId?: unknown } | undefined)?.parentToolUseId;
+}
+
+/** A frame's `_meta`; ACP lets every update carry one, though not every contract type spells it. */
+function metaOf(update: SessionUpdate): Record<string, unknown> | undefined {
+  return (update as { _meta?: Record<string, unknown> })._meta;
+}
+
+/** A `session_info_update` with its AIR session failure redacted, and that failure. */
+function withRedactedSessionFailure(update: SessionUpdate, credentials: readonly string[]): { update: SessionUpdate; failure: AcpSessionFailure | null } {
+  const meta = metaOf(update);
+  const failure = readSessionFailure(meta, credentials);
+  if (!failure) return { update, failure: null };
+  return { failure, update: {
+    ...update, _meta: { ...meta, jetbrains: {
+      ...record(record(meta)?.jetbrains), air: { ...airMetadata(meta), sessionFailure: failure },
+    } },
+  } as SessionUpdate };
+}
+
+/** A failed compaction (its `compaction_update`, or Claude's failed /compact tool call) with credentials redacted. */
+function redactFailedFrame(update: SessionUpdate, credentials: readonly string[]): SessionUpdate {
+  const frame = update as { sessionUpdate: string; status?: unknown; _meta?: unknown };
+  const failed = frame.status === "failed"
+    && (frame.sessionUpdate === "compaction_update" || record(record(frame._meta)?.contextCompaction) !== null);
+  if (!failed) return update;
+  return JSON.parse(JSON.stringify(update, (_key, value) =>
+    typeof value === "string" ? redactProviderErrorText(value, credentials) : value));
+}
+
+function frameBytes(notification: SessionNotification): number {
+  try { return Buffer.byteLength(JSON.stringify(notification)); } catch { return 0; }
+}
+
+/** The frames kept between prompts, oldest first, leaving the buffer empty. */
+function takeIdleFrames(entry: PoolEntry): SessionNotification[] {
+  entry.idleFrameBytes = 0;
+  return (entry.idleFrames ?? []).splice(0);
+}
+
+/** Drop a captured autonomous round, keeping only its billing (PR 5 §1.5: before a load or resume). */
+function dropCapturedRound(entry: PoolEntry): void {
+  entry.idleFrames = (entry.idleFrames ?? []).filter((frame) => frame.update?.sessionUpdate === "usage_update");
+  entry.idleFrameBytes = entry.idleFrames.reduce((sum, frame) => sum + frameBytes(frame), 0);
 }
 
 /** Keep the prompt's running top-level tool calls; subagent calls carry a parent. */
@@ -2171,11 +2353,19 @@ export async function settleCodexRolloutUsage(promptState: { codexRollout?: Code
   }
 }
 
-export function accumulateUsage(state: PromptUsageState, update: SessionUpdate, requestedModel?: string | null, modelSource?: TaskUsageUnit["modelSource"], providerType?: string): void {
+/**
+ * Fold one `usage_update` into a prompt's usage. `context: false` (a native
+ * child session's frame, PR 5 §1.4) keeps it out of the context occupancy:
+ * `totalTokens`, the context snapshot and the window size. Billing (request
+ * units, uncertain totals, cost) accumulates either way.
+ */
+export function accumulateUsage(state: PromptUsageState, update: SessionUpdate, requestedModel?: string | null, modelSource?: TaskUsageUnit["modelSource"], providerType?: string,
+  options: { context?: boolean } = {}): void {
+  const context = options.context !== false;
   const u = update as Record<string, any>;
   const used = nonNegativeFinite(u.used);
-  if (used != null) state.totalTokens = used;
-  if (!(u._meta?.claudeCode?.parentToolUseId)) state.collector.context(u.used, u.size);
+  if (context && used != null) state.totalTokens = used;
+  if (context && !(u._meta?.claudeCode?.parentToolUseId)) state.collector.context(u.used, u.size);
   const shimUsage = accessConfigFor(providerType)?.usage === "gateway-shim";
   if ((providerType === "codex" || shimUsage) && u._meta?.remiUsageMode === "request") state.collector.useRequestTelemetry();
 
@@ -2195,7 +2385,7 @@ export function accumulateUsage(state: PromptUsageState, update: SessionUpdate, 
   state.collector.uncertainTotal(u._meta?.remiUncertainUsage?.reportedTotalTokens);
 
   const size = nonNegativeFinite(u.size);
-  if (size != null && size > 0) state.contextWindowSize = size;
+  if (context && size != null && size > 0) state.contextWindowSize = size;
   const cost = nonNegativeFinite(u.cost?.amount);
   if (cost != null) {
     if (u.cost?.currency === "USD") state.costUsd = cost;

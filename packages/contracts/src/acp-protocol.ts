@@ -113,6 +113,11 @@ export interface SessionCapabilities {
   fork?: SessionCapabilityMarker;
   resume?: SessionCapabilityMarker;
   close?: SessionCapabilityMarker;
+  /**
+   * Native child sessions (PR 5). Both pinned bridges always advertise it
+   * (claude-agent-acp 0.90, codex-acp 2.2.2), whether or not the client asked.
+   */
+  subagents?: SessionCapabilityMarker;
 }
 
 export interface SessionCapabilityMarker {
