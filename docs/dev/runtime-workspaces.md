@@ -143,7 +143,7 @@ registry/<主体>.snapshot/wiki/          wiki 快照
 work/<主体>/                            共享工作区：<repo>/ worktree、wiki/、.multiremi/wiki-base/；Chat 的 cwd；MULTIREMI_WORKSPACE_ROOT
 env/<主体>/<对话>/<agent>/<范围>/<代>/    [executions/<执行身份>/]home/、work/（讨论会话）、.remi-runtime/
 env/<主体>/tmp/<tsk>-XXXXXX/            执行私有临时目录
-traces/<主体>/<tsk>.jsonl               trace（multiremi.trace.v1）
+traces/<主体>/<tsk>.jsonl               trace（multiremi.trace.v2；v1 文件只读）
 shared/repos/                           共享 bare 仓库，快照 ref 在此
 shared/code-views/                      只读代码视图
 .daemon/                                探测、删除隔离区、待上报队列、disk-usage.json（占用测量缓存）

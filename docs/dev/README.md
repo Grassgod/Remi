@@ -39,7 +39,8 @@ summary: 按任务定位当前实现、约束和验证命令。
 | 改 agent 派活、来回上限、委派回叫或 `wake_source` | [ADR 0014](../adr/0014-every-agent-dispatch-is-a-delegation.md)、[ADR 0005](../adr/0005-cross-issue-delegation-return.md) | 通用派活入口、来源会话、谱系计数降级、D4 去重和回程血缘 |
 | 改任务结果、门铃正文、未读输入或 Wiki 下载 | [ADR 0013](../adr/0013-deliverable-is-comment-wakeup-is-doorbell.md)、[daemon 协议](../daemon-protocol-v2.md) | 最后顶层消息、事务内结论评论、完整范围读取、Wiki 缓存与派单预算 |
 | 改消息头、轮/尝试存储、统一 lane 或启动迁移 | [ADR 0016](../adr/0016-unified-message-inbox-and-turn.md)、[切换手册](../deploy/unified-model-cutover.md) | 存储投影、三项启动预检、lane 迁移、消息状态机、只读对账与删表边界；传输和用户接口由消费者集成 |
-| 改会话日志表、轮次卡或 trace 归属 | [ADR 0006](../adr/0006-conversation-log-and-daemon-owned-traces.md)（决策 1–4） | 契约类型、被否决的替代方案和回到源码的位置；归档相关决策已被 ADR 0018 取代 |
+| 改会话日志表、轮次卡或 trace 归属 | [ADR 0006](../adr/0006-conversation-log-and-daemon-owned-traces.md)（决策 1–4） | 契约类型、被否决的替代方案和回到源码的位置；归档相关决策已被 ADR 0018 取代，trace 格式已被 ADR 0019 取代 |
+| 改执行 trace 的条目模型、读取视图、最终回复规则或轮卡 trace 摘要 | [ADR 0019](../adr/0019-turn-and-item-traces.md)、[daemon 协议 v2](../daemon-protocol-v2.md) §5–6 | 唯一 fold、`view=turn` / `view=events`、`settle()`、计费不进 trace、`context_usage` / `worked_ms` / `process_item_count` 与版本门槛 |
 | 改 daemon 磁盘布局、工作区回收与恢复、保留策略或存储报告 | [存储与保留](storage-retention.md)、[ADR 0018](../adr/0018-local-records-and-recyclable-workspaces.md) | 主体与四类数据、回收规则、快照与恢复、`settings.storage`、预演与立即回收、升级清扫 |
 | 改 daemon 与服务端之间的传输协议、派活方式或 trace 流 | [daemon 协议 v2](../daemon-protocol-v2.md)、[ADR 0012](../adr/0012-daemon-protocol-v2-single-socket-and-db-derived-downlink.md) | 进程级 socket、升级等待与 offer；pending/配置和任务输入走下行帧及 RPC，跨进程触发依赖实时扇出；outbox 与 trace 归 v2-A |
 | 改浏览器实时订阅、Live Hub 或前端本地副本 | [浏览器实时 v2](realtime-v2.md)、[ADR 0007](../adr/0007-live-hub-and-browser-replica.md) | 两条流的端点与归属、订阅鉴权、续传与退避、resync 广播；C1 已落核心、按角色锁与 health 字段 |
