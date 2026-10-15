@@ -1,3 +1,6 @@
+import { BACKGROUND_LANE_STATES, BACKGROUND_TASK_STATUSES, BACKGROUND_TASK_STOP_REASONS } from "@multiremi/contracts/unified-model.js";
+import { TRACE_BACKGROUND_TASK_STOP_OUTCOMES } from "@multiremi/contracts/trace.js";
+
 /** SQLite SQL, translated by the existing PG bridge. No backend-specific JSON indexing. */
 export const UNIFIED_MODEL_MIGRATION = "20261004_unified_message_turn_lane";
 export const UNIFIED_MESSAGE_COLUMNS = [
@@ -79,7 +82,7 @@ CREATE TABLE multiremi_turn_attempts (
   wait_reason TEXT, failure_reason TEXT, error TEXT, next_retry_at TEXT, branch_name TEXT,
   event_count BIGINT, tool_call_count BIGINT, type_histogram TEXT, model TEXT, trace_ref TEXT,
   context_usage TEXT, worked_ms BIGINT, process_item_count BIGINT,
-  running_subagents INTEGER, late_subagents TEXT,
+  running_subagents INTEGER, late_subagents TEXT, running_background_tasks INTEGER,
   offered_at TEXT, accepted_at TEXT, started_at TEXT, ended_at TEXT,
   created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
   UNIQUE(turn_id, attempt_no), FOREIGN KEY(turn_id) REFERENCES multiremi_turns(id)
@@ -107,4 +110,39 @@ CREATE TABLE IF NOT EXISTS multiremi_queued_messages (
 );
 CREATE INDEX IF NOT EXISTS idx_multiremi_queued_messages_lane
  ON multiremi_queued_messages(session_id, agent_id, execution_scope, status, seq, id);
+`;
+
+const sqlList = (values: readonly string[]) => values.map(value => `'${value}'`).join(",");
+
+/**
+ * PR 6 (keep-alive on demand): the session-level background-task registry and
+ * the attempt's in-attempt count. Additive on both chains.
+ *
+ * One row per task of a Chat lane's provider session, fed by the daemon's
+ * best-effort `lane.background_tasks` snapshots. `revision` is the snapshot
+ * that last wrote the row; an older one never overwrites it. The lane fields
+ * (`lane_state`, `parked_until`) repeat on every row of the lane. A person's
+ * stop request is `stop_requested_at` / `stop_requested_by` (a member id;
+ * NULL when Remi stopped it) and `stop_outcome` the daemon's answer.
+ */
+export const BACKGROUND_TASKS_MIGRATION = "20261018_background_tasks";
+export const BACKGROUND_TASKS_ATTEMPT_COLUMNS = ["running_background_tasks INTEGER"] as const;
+export const BACKGROUND_TASKS_SCHEMA = `
+CREATE TABLE IF NOT EXISTS multiremi_background_tasks (
+  id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, session_id TEXT NOT NULL, agent_id TEXT NOT NULL,
+  execution_scope TEXT NOT NULL DEFAULT '', runtime_id TEXT NOT NULL, provider_session_id TEXT NOT NULL,
+  task_id TEXT NOT NULL, task_type TEXT NOT NULL, name TEXT NOT NULL DEFAULT '', command TEXT,
+  origin_attempt_id TEXT NOT NULL, origin_turn_id TEXT, origin_item_id TEXT,
+  status TEXT NOT NULL CHECK(status IN (${sqlList(BACKGROUND_TASK_STATUSES)})),
+  stop_reason TEXT CHECK(stop_reason IS NULL OR stop_reason IN (${sqlList(BACKGROUND_TASK_STOP_REASONS)})),
+  can_stop INTEGER NOT NULL DEFAULT 1,
+  stop_requested_at TEXT, stop_requested_by TEXT,
+  stop_outcome TEXT CHECK(stop_outcome IS NULL OR stop_outcome IN (${sqlList(TRACE_BACKGROUND_TASK_STOP_OUTCOMES)})),
+  started_at TEXT NOT NULL, ended_at TEXT, duration_ms BIGINT, summary TEXT, output_tail TEXT, usage TEXT,
+  lane_state TEXT NOT NULL CHECK(lane_state IN (${sqlList(BACKGROUND_LANE_STATES)})), parked_until TEXT,
+  revision BIGINT NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+  UNIQUE(session_id, agent_id, execution_scope, provider_session_id, task_id)
+);
+CREATE INDEX IF NOT EXISTS idx_multiremi_background_tasks_runtime ON multiremi_background_tasks(runtime_id, status);
+CREATE INDEX IF NOT EXISTS idx_multiremi_background_tasks_session ON multiremi_background_tasks(session_id, status);
 `;

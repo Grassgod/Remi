@@ -30,6 +30,8 @@ import {
   ChatValidationError,
   type ChatOriginFilter,
 } from "@multiremi/store/repos/chat-repo.js";
+import { BackgroundTaskError } from "@multiremi/store/repos/background-tasks-repo.js";
+import { currentWorkspaceMember } from "../wire/context.js";
 
 export function registerChatRoutes(app: Hono, deps: RouterDeps): void {
   const { store } = deps;
@@ -90,6 +92,13 @@ export function registerChatRoutes(app: Hono, deps: RouterDeps): void {
     if (invalid) return invalid;
     return chatMutation(c, () => c.json({ session: store.updateChatSession(loaded.session.id, body) }));
   });
+  // PR 6: every session response carries its running background tasks, one batched read per response.
+  const sessionResponses = (sessions: MultiremiChatSession[]) => {
+    const counts = store.countRunningBackgroundTasksBySession(sessions.map(session => session.id));
+    return sessions.map(session => chatSessionCompatibilityResponse(session, counts.get(session.id) ?? 0));
+  };
+  const sessionResponse = (session: MultiremiChatSession) => sessionResponses([session])[0]!;
+
   app.get("/api/chat/sessions", (c) => {
     const workspaceId = requestedChatWorkspaceId(c, store);
     if (workspaceId instanceof Response) return workspaceId;
@@ -97,18 +106,18 @@ export function registerChatRoutes(app: Hono, deps: RouterDeps): void {
     if (denied) return denied;
     const origin = requestedOrigin(c);
     if (origin instanceof Response) return origin;
-    return c.json(listedSessions(c, workspaceId, origin).map(chatSessionCompatibilityResponse));
+    return c.json(sessionResponses(listedSessions(c, workspaceId, origin)));
   });
   app.post("/api/chat/sessions", async (c) => {
     const body = await readJson<CreateChatSessionInput>(c);
     const input = withChatSessionRequestContext(c, store, body);
     if (input instanceof Response) return input;
-    return chatMutation(c, () => c.json(chatSessionCompatibilityResponse(store.createChatSession(input)), 201));
+    return chatMutation(c, () => c.json(sessionResponse(store.createChatSession(input)), 201));
   });
   app.get("/api/chat/sessions/:sessionId", (c) => {
     const loaded = loadChatSessionForCurrentUser(c, store, c.req.param("sessionId"));
     if (loaded instanceof Response) return loaded;
-    return c.json(chatSessionCompatibilityResponse(loaded.session));
+    return c.json(sessionResponse(loaded.session));
   });
   app.patch("/api/chat/sessions/:sessionId", async (c) => {
     const loaded = loadChatSessionForCurrentUser(c, store, c.req.param("sessionId"));
@@ -116,7 +125,45 @@ export function registerChatRoutes(app: Hono, deps: RouterDeps): void {
     const body = await readJson<UpdateChatSessionInput>(c);
     const invalid = invalidChatUpdate(c, body);
     if (invalid) return invalid;
-    return chatMutation(c, () => c.json(chatSessionCompatibilityResponse(store.updateChatSession(loaded.session.id, body))));
+    return chatMutation(c, () => c.json(sessionResponse(store.updateChatSession(loaded.session.id, body))));
+  });
+  /**
+   * PR 6 §7: the session's background tasks, from the registry (no trace
+   * read): the running and paused rows, `unknown` ones, then the last 20 that
+   * ended. `{session_id, running, rows}`, the shape `chat:background_tasks`
+   * patches.
+   */
+  app.get("/api/chat/sessions/:sessionId/background-tasks", (c) => {
+    const loaded = loadChatSessionForCurrentUser(c, store, c.req.param("sessionId"));
+    if (loaded instanceof Response) return loaded;
+    return c.json(store.listSessionBackgroundTasks(loaded.session.id));
+  });
+  /**
+   * PR 6 §6.1: stop one running task (`{task_id}`: the row's `task_id` or
+   * `id`) or all of them (`{all: true}`). Only the Chat's creator. 202 with
+   * the request time and the rows it marked; 409 `task_not_running` when no
+   * matching task runs, 409 `runtime_offline` when its computer is offline.
+   * The daemon answers through its next snapshot.
+   */
+  app.post("/api/chat/sessions/:sessionId/background-tasks/stop", async (c) => {
+    const loaded = loadChatSessionForCurrentUser(c, store, c.req.param("sessionId"));
+    if (loaded instanceof Response) return loaded;
+    const body = await readJson<{ task_id?: unknown; all?: unknown }>(c);
+    const all = body.all === true;
+    const taskId = typeof body.task_id === "string" ? body.task_id.trim() : "";
+    if (all === Boolean(taskId) || taskId.length > 512 || (body.all !== undefined && typeof body.all !== "boolean")) {
+      return c.json({ error: "send either task_id or all: true", code: "invalid_request" }, 400);
+    }
+    try {
+      const result = store.requestBackgroundTaskStop(loaded.session.id, all ? { all: true } : { taskId },
+        currentWorkspaceMember(c, store, loaded.session.workspaceId)?.id ?? null);
+      return c.json(result, 202);
+    } catch (error) {
+      if (error instanceof BackgroundTaskError && (error.code === "task_not_running" || error.code === "runtime_offline")) {
+        return c.json({ error: error.message, code: error.code }, 409);
+      }
+      throw error;
+    }
   });
   app.delete("/api/chat/sessions/:sessionId", (c) => {
     const loaded = loadChatSessionForCurrentUser(c, store, c.req.param("sessionId"), { requireAgentAccess: false });

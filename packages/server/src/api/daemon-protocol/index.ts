@@ -105,6 +105,12 @@ export interface DaemonProtocolLayerOptions {
    * `api_minute_summary`; see `metrics.ts` for why it is not repeated here.
    */
   dbCounters?: () => { dbMs: number; dbQueries: number };
+  /**
+   * PR 6: the caps `welcome` echoes when a hello declares them; defaults to
+   * `DAEMON_SERVER_WELCOME_CAPS`. `[]` makes this server behave as an older
+   * one (daemons stop background tasks at the attempt's end).
+   */
+  welcomeCaps?: readonly DaemonProtocolCap[];
 }
 
 export class DaemonProtocolLayer {
@@ -121,9 +127,11 @@ export class DaemonProtocolLayer {
   private readonly replyListeners = new Set<(frame: DaemonParsedFrame, session: DaemonProtocolSession) => void>();
   private readonly closeListeners = new Set<(session: DaemonProtocolSession) => void>();
   private traceHeads: (session: DaemonProtocolSession) => Record<string, number> = () => ({});
+  private readonly welcomeCaps: readonly DaemonProtocolCap[] | undefined;
 
   constructor(options: DaemonProtocolLayerOptions) {
     this.store = options.store;
+    this.welcomeCaps = options.welcomeCaps;
     this.serverVersion = options.serverVersion ?? multiremiVersion;
     if (options.dbCounters) setDaemonProtocolDbCounters(options.dbCounters);
     this.metrics = options.metrics ? startWsFrameMetricsSummary(options.metrics) : null;
@@ -151,12 +159,20 @@ export class DaemonProtocolLayer {
       registry: this.registry,
       serverVersion: this.serverVersion,
       ownerAccessToken: identity.accessToken,
+      welcomeCaps: this.welcomeCaps,
       authorizeRuntime: (daemonId, runtimeId) => this.authorizeRuntime(identity, daemonId, runtimeId),
       onHello: hello => {
         for (const runtimeId of session.runtimeIds) {
           this.store.recordDaemonProtocol(runtimeId, hello.daemonId, DAEMON_PROTOCOL_VERSION, hello.cliVersion);
           const runtime = hello.runtimes.find(entry => entry.runtimeId === runtimeId);
           this.store.heartbeatRuntime(runtimeId, { claimPending: false, ...runtimeCapabilityOptions(runtime?.capabilities) });
+          // PR 6 §5.2: a running background task survives a reconnect only on a
+          // parked lane the hello lists, or on an attempt still active; the
+          // rest stopped with the daemon (`daemon_restart`). A daemon without
+          // `lane.background` lists no parked lanes. Before the hooks, so the
+          // downlink run they start already reads the settled rows.
+          this.store.reconcileParkedLanes(runtimeId, session.supportsLaneBackground ? runtime?.parkedLanes ?? [] : [],
+            runtime?.activeTaskIds ?? []);
         }
         for (const hooks of this.sessionHooks) hooks.hello?.(session, hello);
       },

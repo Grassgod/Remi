@@ -55,6 +55,7 @@ import type { DaemonSessionRegistry } from "./session-registry.js";
 import {
   checkHandshakeVersion,
   daemonRejectPayload,
+  negotiateWelcomeCaps,
   parseDaemonHello,
   type DaemonHandshakeRejection,
 } from "./handshake.js";
@@ -146,8 +147,12 @@ export interface DaemonSessionHello {
     activeTaskIds: string[];
     activeQuestionWaits?: import('@multiremi/contracts/daemon-protocol.js').DaemonQuestionWait[];
     capabilities?: DaemonRuntimeCapabilities;
+    /** PR 6: lanes the daemon keeps alive; absent from a daemon without `lane.background`. */
+    parkedLanes?: import('@multiremi/contracts/daemon-protocol.js').DaemonParkedLane[];
   }>;
   caps: DaemonProtocolCap[];
+  /** What `welcome.caps` answered: the hello caps this server supports. */
+  welcomeCaps: DaemonProtocolCap[];
 }
 
 export interface DaemonSessionHeartbeat {
@@ -186,6 +191,11 @@ export interface DaemonSessionOptions {
    * read back off the session, because this runs before the handshake completes.
    */
   authorizeRuntime(daemonId: string, runtimeId: string): Promise<DaemonSessionRuntimeAuthorization>;
+  /**
+   * The caps this server echoes when a hello declares them (PR 6 §5.3);
+   * defaults to `DAEMON_SERVER_WELCOME_CAPS`. `[]` behaves as an older server.
+   */
+  welcomeCaps?: readonly DaemonProtocolCap[];
   /** `hello` accepted. A-3 records the daemon's caps and active tasks from here. */
   onHello?(hello: DaemonSessionHello): void;
   /** Highest known trace head per task. A-6 fills it; A-1 answers `{}`. */
@@ -233,6 +243,12 @@ export class DaemonProtocolSession {
   /** Set once `hello` is accepted; empty before that. */
   daemonId = "";
   supportsWikiFetch = false;
+  /**
+   * PR 6: both sides hold `lane.background` (the hello declared it and the
+   * welcome echoed it). Only then does the daemon park, and only then does the
+   * server derive `lane.background_stop` / `_release` for this socket.
+   */
+  supportsLaneBackground = false;
 
   private readonly options: DaemonSessionOptions;
   private readonly registry: DaemonSessionRegistry;
@@ -725,6 +741,8 @@ export class DaemonProtocolSession {
 
     this.daemonId = parsed.hello.daemon_id;
     this.supportsWikiFetch = parsed.hello.caps.includes("wiki.fetch");
+    const welcomeCaps = negotiateWelcomeCaps(parsed.hello.caps, this.options.welcomeCaps);
+    this.supportsLaneBackground = welcomeCaps.includes("lane.background");
     this.advertisedRuntimeIdList = parsed.hello.runtimes.map((runtime) => runtime.runtime_id);
     this.runtimeIdList = serving;
     this.unavailableRuntimeIdList = unavailable;
@@ -762,8 +780,10 @@ export class DaemonProtocolSession {
         activeTaskIds: runtime.active_task_ids,
         activeQuestionWaits: runtime.active_question_waits,
         capabilities: runtime.capabilities,
+        ...(runtime.parked_lanes === undefined ? {} : { parkedLanes: runtime.parked_lanes }),
       })),
       caps: parsed.hello.caps,
+      welcomeCaps,
     });
 
     const welcome: DaemonWelcomePayload = {
@@ -780,7 +800,8 @@ export class DaemonProtocolSession {
       // A-6 fills this once the trace stream is wired. A-1 answers an empty map
       // rather than omitting the field, so the daemon has one shape to read.
       trace_heads: this.options.traceHeads?.() ?? {},
-      caps: [],
+      // PR 6: the hello caps this server supports; `[]` from an older server.
+      caps: welcomeCaps,
     };
     const welcomeSent = this.sendDirect({ t: "welcome", p: welcome });
     if (!welcomeSent) {

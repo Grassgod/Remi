@@ -1,10 +1,10 @@
 import { DaemonProtocolLayer } from "@multiremi/api/daemon-protocol/index.js";
 import { DaemonDownlinks } from "@multiremi/api/daemon-protocol/downlinks.js";
 import { runtimeInputSnapshot } from "@multiremi/api/daemon-protocol/runtime-input-snapshot.js";
-import { taskInputSnapshot } from "@multiremi/api/daemon-protocol/task-input-snapshot.js";
+import { backgroundTaskSnapshot, taskInputSnapshot } from "@multiremi/api/daemon-protocol/task-input-snapshot.js";
 import { registerTaskInputRpcs } from "@multiremi/api/daemon-protocol/task-input-rpcs.js";
 import type { DaemonProtocolIdentity } from "@multiremi/api/daemon-protocol/index.js";
-import { DAEMON_MIN_CLI_VERSION, type DaemonRuntimeCapabilities, type DaemonQuestionWait } from "@multiremi/contracts/daemon-protocol.js";
+import { DAEMON_MIN_CLI_VERSION, type DaemonParkedLane, type DaemonProtocolCap, type DaemonRuntimeCapabilities, type DaemonQuestionWait } from "@multiremi/contracts/daemon-protocol.js";
 import {
   FEISHU_CONCIERGE_CONFIG_CAPABILITY,
   FEISHU_CONCIERGE_PROTOCOL_VERSION,
@@ -34,12 +34,17 @@ function configuredRuntimeCapabilities(metadata: Record<string, unknown>): Daemo
 }
 
 export async function openRuntimeDownlinks(store: MultiremiStore, runtimeId: string,
-  options: { identity?: DaemonProtocolIdentity; activeTaskIds?: string[]; activeQuestionWaits?: DaemonQuestionWait[]; capabilities?: DaemonRuntimeCapabilities } = {}) {
+  options: { identity?: DaemonProtocolIdentity; activeTaskIds?: string[]; activeQuestionWaits?: DaemonQuestionWait[]; capabilities?: DaemonRuntimeCapabilities;
+    /** Hello caps; PR 6's background-task downlinks need `lane.background`. */
+    caps?: DaemonProtocolCap[];
+    /** PR 6: the lanes the hello reports parked (`runtimes[].parked_lanes`). */
+    parkedLanes?: DaemonParkedLane[] } = {}) {
   const runtime = store.getRuntimeLite(runtimeId);
   if (!runtime) throw new Error("Runtime not found");
   const layer = new DaemonProtocolLayer({ store });
   const downlinks = new DaemonDownlinks({ layer, snapshot: (rt, session, active) => [
     ...runtimeInputSnapshot(store, rt, session), ...taskInputSnapshot(store, rt, session.daemonId, active, id => downlinks.forgetTask(rt, id)),
+    ...backgroundTaskSnapshot(store, rt, session),
   ] });
   registerTaskInputRpcs(layer, store, rt => downlinks.kick(rt));
   const frames: Array<{ t: string; seq?: number; re?: string; p: Record<string, any> }> = [];
@@ -47,9 +52,10 @@ export async function openRuntimeDownlinks(store: MultiremiStore, runtimeId: str
   const session = layer.openSession({ send(text) { frames.push(JSON.parse(text)); return text.length; }, close(code) { closeCode = code; } },
     options.identity ?? { accessToken: null, masterToken: true });
   await session.handleMessage(JSON.stringify({ v: 2, t: "hello", p: { protocol: 2,
-    daemon_id: runtime.daemonId ?? "dmn_downlinks_unit", cli_version: DAEMON_MIN_CLI_VERSION, caps: [],
+    daemon_id: runtime.daemonId ?? "dmn_downlinks_unit", cli_version: DAEMON_MIN_CLI_VERSION, caps: options.caps ?? [],
     runtimes: [{ runtime_id: runtimeId, provider: runtime.provider, max_concurrency: 1,
-      active_task_ids: options.activeTaskIds ?? [], active_question_waits: options.activeQuestionWaits ?? [], capabilities: options.capabilities }] } }));
+      active_task_ids: options.activeTaskIds ?? [], active_question_waits: options.activeQuestionWaits ?? [], capabilities: options.capabilities,
+      ...(options.parkedLanes ? { parked_lanes: options.parkedLanes } : {}) }] } }));
   await layer.drain();
   let rpcId = 0;
   return { frames, layer, session, downlinks,

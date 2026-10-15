@@ -186,21 +186,26 @@ it("lists and inspects turns, wraps up, cancels and retries with trace tied to t
   const listed = await request(`/api/turns?issue=${issue.key}&agent=${agent.id}&status=pending&limit=1`);
   expect(listed.data.turns).toHaveLength(1);
   // PR 5: rows carry the current attempt's running-subagent count; none was reported yet.
-  expect(listed.data.turns[0]).toMatchObject({ id, running_subagents: null });
+  expect(listed.data.turns[0]).toMatchObject({ id, running_subagents: null, running_background_tasks: null });
   const detail = await request(`/api/turns/${id}?input=true&attempts=true`);
   expect(detail.data.input.messages[0].body_md).toBe("work"); expect(detail.data.attempts[0].id).toBe(oldAttempt);
-  expect(detail.data.attempts[0]).toMatchObject({ running_subagents: null, late_subagents: null });
+  expect(detail.data.attempts[0]).toMatchObject({ running_subagents: null, late_subagents: null, running_background_tasks: null });
   expect((await request(`/api/turns/${id}/wrap-up`, "POST", {})).status).toBe(409);
   db.run("UPDATE multiremi_turns SET status='running' WHERE id=?", [id]);
   db.run("UPDATE multiremi_turn_attempts SET status='running' WHERE id=?", [oldAttempt]);
   expect(store.recordRunningSubagents(oldAttempt!, 2)).toBe(true);
   expect((await request(`/api/turns?issue=${issue.key}&status=running`)).data.turns).toEqual([expect.objectContaining({ id, running_subagents: 2 })]);
   expect((await request(`/api/turns/${id}?attempts=true`)).data.attempts[0]).toMatchObject({ id: oldAttempt, running_subagents: 2 });
+  // PR 6: the attempt's background tasks from the same frame, under the same rule.
+  expect(store.recordTaskActivity(oldAttempt!, { runningSubagents: 2, runningBackgroundTasks: 1 })).toBe(true);
+  expect((await request(`/api/turns?issue=${issue.key}&status=running`)).data.turns)
+    .toEqual([expect.objectContaining({ id, running_subagents: 2, running_background_tasks: 1 })]);
+  expect((await request(`/api/turns/${id}?attempts=true`)).data.attempts[0]).toMatchObject({ id: oldAttempt, running_background_tasks: 1 });
   expect((await request(`/api/turns/${id}/wrap-up`, "POST", {})).data.turn.wrap_up_requested_at).toBeTruthy();
   expect(store.listMessages(session.id)).toHaveLength(1);
   expect((await request(`/api/turns/${id}/cancel`, "POST", {})).data.turn.status).toBe("cancelled");
   // The cancelled attempt's last count does not outlive it.
-  expect((await request(`/api/turns?issue=${issue.key}`)).data.turns).toEqual([expect.objectContaining({ id, running_subagents: null })]);
+  expect((await request(`/api/turns?issue=${issue.key}`)).data.turns).toEqual([expect.objectContaining({ id, running_subagents: null, running_background_tasks: null })]);
   store.setAgentRole(other.id, "supervisor");
   const supervisorIssue = createResponsibleTestIssue(store, { title: "Supervision", assigneeType: "agent", assigneeId: other.id });
   const supervisorTask = store.createTask({ agentId: other.id, issueId: supervisorIssue.id, prompt: "Supervise" });

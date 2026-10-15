@@ -1,6 +1,7 @@
 import type { MultiremiStore } from "@multiremi/store/store.js";
 import type { DaemonDownlinkEntity } from "./downlinks.js";
 import type { DaemonTurnBridge } from "./turn-bridge.js";
+import type { DaemonProtocolSession } from "./session.js";
 
 export function taskInputSnapshot(store: MultiremiStore, runtimeId: string, daemonId: string, activeTaskIds: ReadonlySet<string>,
   forget: (taskId: string) => void, turns: DaemonTurnBridge = store.getDaemonTurnBridge()): DaemonDownlinkEntity[] {
@@ -32,4 +33,29 @@ export function taskInputSnapshot(store: MultiremiStore, runtimeId: string, daem
     });
   }
   return entities;
+}
+
+/**
+ * PR 6 §5.3, §6.1: the background-task downlinks, derived from the registry
+ * on every run and only for a socket that negotiated `lane.background`. A
+ * stop is keyed by lane, task and request time (a new request is a new key);
+ * a release by lane, provider session and reason. Both are resent at `hello`,
+ * when the delivered set starts empty.
+ */
+export function backgroundTaskSnapshot(store: MultiremiStore, runtimeId: string,
+  session: Pick<DaemonProtocolSession, "supportsLaneBackground">): DaemonDownlinkEntity[] {
+  if (!session.supportsLaneBackground) return [];
+  const { stops, releases } = store.backgroundTaskDownlinks(runtimeId);
+  return [
+    ...releases.map((payload): DaemonDownlinkEntity => ({
+      key: `lane.background_release:${JSON.stringify([payload.session_id, payload.agent_id, payload.execution_scope,
+        payload.provider_session_id, payload.reason])}`,
+      type: "lane.background_release", payload: { ...payload },
+    })),
+    ...stops.map((payload): DaemonDownlinkEntity => ({
+      key: `lane.background_stop:${JSON.stringify([payload.session_id, payload.agent_id, payload.execution_scope,
+        payload.task_id, payload.requested_at])}`,
+      type: "lane.background_stop", payload: { ...payload },
+    })),
+  ];
 }

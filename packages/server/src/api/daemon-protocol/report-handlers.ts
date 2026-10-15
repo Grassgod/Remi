@@ -82,7 +82,7 @@ function completionFields(p: Record<string, unknown>, taskId: string): DaemonTas
 
 /** `late_subagents` holds at most this many entries (PR 5, `lateSubagents` in shared). */
 const MAX_LATE_SUBAGENTS = 5;
-/** The PostgreSQL INTEGER ceiling of `multiremi_turn_attempts.running_subagents`. */
+/** The PostgreSQL INTEGER ceiling of `multiremi_turn_attempts.running_subagents` and `running_background_tasks`. */
 const MAX_RUNNING_SUBAGENTS = 2_147_483_647;
 
 /**
@@ -298,9 +298,14 @@ export function registerDaemonReportHandlers(layer: DaemonProtocolLayer, store: 
             // Best effort (PR 5): no seq, no reply; a lost or rejected frame is
             // replaced by the daemon's next change or periodic refresh.
             const count = p.running_subagents;
-            if (!Number.isSafeInteger(count) || (count as number) < 0 || (count as number) > MAX_RUNNING_SUBAGENTS) reject();
+            const counted = (value: unknown) => Number.isSafeInteger(value) && (value as number) >= 0 && (value as number) <= MAX_RUNNING_SUBAGENTS;
+            if (!counted(count)) reject();
+            // PR 6: optional; an older daemon omits it, and a missing value is not a 0.
+            const background = p.running_background_tasks;
+            if (background !== undefined && !counted(background)) reject();
             if (p.runtime_id != null && p.runtime_id !== task.runtimeId) reject("authority_revoked");
-            store.recordRunningSubagents(taskId, count as number);
+            store.recordTaskActivity(taskId, { runningSubagents: count as number,
+              ...(background === undefined ? {} : { runningBackgroundTasks: background as number }) });
             break;
           }
           case "task.fail":

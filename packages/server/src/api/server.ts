@@ -152,7 +152,7 @@ import {
   type ApiRole,
   type ApiRoleConfiguration,
 } from "../config/api-role.js";
-import { DAEMON_PROTOCOL_MIN, DAEMON_WS_MAX_PAYLOAD_BYTES } from "@multiremi/contracts/daemon-protocol.js";
+import { DAEMON_PROTOCOL_MIN, DAEMON_WS_MAX_PAYLOAD_BYTES, type DaemonProtocolCap } from "@multiremi/contracts/daemon-protocol.js";
 import { multiremiVersion } from "@multiremi/version.js";
 import {
   DaemonProtocolLayer,
@@ -162,7 +162,8 @@ import { DaemonTaskOffers, prepareTaskOffer } from "./daemon-protocol/task-offer
 import type { DaemonTurnBridge } from "./daemon-protocol/turn-bridge.js";
 import { DaemonDownlinks } from "./daemon-protocol/downlinks.js";
 import { wakeDaemonWorkspaceEvent } from "./daemon-protocol/workspace-wakeups.js";
-import { taskInputSnapshot } from "./daemon-protocol/task-input-snapshot.js";
+import { backgroundTaskSnapshot, taskInputSnapshot } from "./daemon-protocol/task-input-snapshot.js";
+import { registerBackgroundTaskHandlers } from "./daemon-protocol/background-task-handlers.js";
 import { registerTaskInputRpcs } from "./daemon-protocol/task-input-rpcs.js";
 import { runtimeInputSnapshot } from "./daemon-protocol/runtime-input-snapshot.js";
 import { wsFrameMetricsFromHttp } from "./daemon-protocol/metrics.js";
@@ -318,6 +319,11 @@ export interface MultiremiApiOptions {
   daemonTurnBridge?: DaemonTurnBridge;
   /** Transport injection for protocol integration tests; no store subscriptions. */
   onDaemonProtocol?: (layer: DaemonProtocolLayer) => void;
+  /**
+   * PR 6: the caps `welcome` echoes (default `["lane.background"]`). `[]`
+   * starts a server that daemons treat as older, for mixed-version tests.
+   */
+  daemonWelcomeCaps?: readonly DaemonProtocolCap[];
   store?: MultiremiStore;
   scheduler?: MultiremiScheduler | null;
   /** Undefined reads the opt-in env config; null explicitly disables it. */
@@ -1147,6 +1153,7 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
     // the process DB totals there, so the two lines must not be added together.
     metrics: wsFrameMetricsFromHttp(requestMetricsOptions),
     dbCounters: () => readProcessDbCounters(),
+    welcomeCaps: options.daemonWelcomeCaps,
   });
   const daemonTurnBridge = options.daemonTurnBridge ?? store.getDaemonTurnBridge();
   const offerProjectKnowledge = options.projectKnowledge ?? createProjectKnowledgeServiceFromEnv(store);
@@ -1159,9 +1166,11 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
     snapshot: function* (rt, session, activeIds, mode) {
       yield* withRequestReadCache(() => taskInputSnapshot(store, rt, session.daemonId, activeIds,
         id => downlinks.forgetTask(rt, id), daemonTurnBridge));
+      yield* withRequestReadCache(() => backgroundTaskSnapshot(store, rt, session));
       yield* withRequestReadCache(() => runtimeInputSnapshot(store, rt, session, mode));
     } });
   registerTaskInputRpcs(daemonProtocol, store, rt => downlinks.kick(rt), daemonTurnBridge);
+  registerBackgroundTaskHandlers(daemonProtocol, store, rt => downlinks.kick(rt, "pending"));
   const browserWebSockets: BrowserWebSocketRegistry = new Map();
   const daemonTrace = registerDaemonTraceHandlers(daemonProtocol, store,
     effectiveApiRole !== "ui" && options.liveHub === undefined && options.hub === undefined
@@ -1202,6 +1211,11 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
       if (type === "task:usage" || type === "task:subagents") return;
       if (type === "task:queued") {
         offers.enqueued(task);
+        // PR 6: a new attempt can end a parked lane (a cold retry, another
+        // runtime); its runtime re-derives the lane's release.
+        if (task.chatSessionId) {
+          for (const rt of store.runtimesWithAliveBackgroundTasks(task.chatSessionId)) downlinks.kick(rt, "pending");
+        }
         return;
       }
       downlinks.taskChanged(task.runtimeId, task.id);

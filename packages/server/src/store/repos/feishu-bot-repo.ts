@@ -118,6 +118,7 @@ type DeferredOutboundOperation =
   | { kind: "round"; issue: MultiremiIssue; leaderTask: MultiremiTask }
   | { kind: "retarget"; fromTaskId: string; toTaskId: string }
   | { kind: "round_delivery"; task: MultiremiTask; body: string }
+  | { kind: "background_doorbell"; originAttemptId: string; originTurnId: string | null; taskId: string }
   | { kind: "attachments"; bindingId: string; chatId: string; threadId: string | null;
       replyToMessageId: string | null; deliveries: Array<{ id: string; body: string;
         attachment: { id: string; filename: string; contentType: string; sizeBytes: number } }> };
@@ -2801,6 +2802,49 @@ export class FeishuBotRepo {
     );
   }
 
+  /**
+   * PR 6 §2.5 / §9: a turn the doorbell created in a Feishu-bound Chat posts in
+   * the thread of the turn that started the task. Its card row copies the
+   * origin attempt's (or, after a retry moved it, the origin turn's) `cot`
+   * carrier: binding, chat, thread and reply target. It is proactive: no
+   * inbound delivery, no receipt and no @mention (an explicit `none` snapshot,
+   * so the claim derives none), and a fresh presentation. The doorbell message
+   * itself is a platform `status` and is never mirrored. Caller owns the
+   * transaction; idempotent per task.
+   */
+  prepareBackgroundDoorbellDeliveryWithinTransaction(originAttemptId: string, originTurnId: string | null, taskId: string): void {
+    const task = this.ctx.tasks().getTask(taskId);
+    if (!task) return;
+    if (!this.canWriteOutbound()) {
+      this.deferOutboundOperation(task.workspaceId, taskId, { kind: "background_doorbell", originAttemptId, originTurnId, taskId });
+      return;
+    }
+    const carrier = (this.ctx.db.query(`SELECT * FROM multiremi_feishu_bot_outbound_deliveries
+      WHERE task_id = ? AND (kind IS NULL OR kind = 'cot') AND unit_key = ''`).get(originAttemptId) as Row | null)
+      ?? (originTurnId ? this.ctx.db.query(`SELECT o.* FROM multiremi_feishu_bot_outbound_deliveries o
+        JOIN multiremi_turn_attempts a ON a.id = o.task_id
+        WHERE a.turn_id = ? AND (o.kind IS NULL OR o.kind = 'cot') AND o.unit_key = ''
+        ORDER BY a.attempt_no DESC LIMIT 1`).get(originTurnId) as Row | null : null);
+    if (!carrier || String(carrier.workspace_id) !== task.workspaceId) return;
+    const binding = this.ctx.db.query(`SELECT b.id FROM multiremi_feishu_bot_chat_bindings b
+      WHERE b.id = ? AND b.workspace_id = ? AND b.chat_session_id = ?`).get(carrier.binding_id, task.workspaceId, task.chatSessionId) as Row | null;
+    if (!binding) return;
+    if (this.ctx.db.query(`SELECT id FROM multiremi_feishu_bot_outbound_deliveries
+      WHERE task_id = ? AND (kind IS NULL OR kind = 'cot') AND unit_key = ''`).get(taskId)) return;
+    const now = nowIso();
+    this.ctx.db.run(
+      `INSERT INTO multiremi_feishu_bot_outbound_deliveries (
+         id, workspace_id, binding_id, task_id, chat_id, thread_id,
+         reply_to_message_id, body, status, available_at, created_at, updated_at,
+         mention_snapshot, interaction_open_id, kind
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, '', 'pending', ?, ?, ?, ?, ?, 'cot')
+       ON CONFLICT DO NOTHING`,
+      [createId("fbo"), task.workspaceId, String(carrier.binding_id), taskId, String(carrier.chat_id),
+        cleanOptionalString(carrier.thread_id), cleanOptionalString(carrier.reply_to_message_id), now, now, now,
+        toJson({ mode: "none", resolvedOpenId: null }), cleanOptionalString(carrier.interaction_open_id)],
+    );
+  }
+
   materializeTaskDeliveries(taskId: string): void {
     if (!this.canWriteOutbound()) return;
     if (!this.ctx.db.query(`SELECT id FROM multiremi_feishu_bot_outbound_deliveries
@@ -2904,6 +2948,8 @@ export class FeishuBotRepo {
             case 'round': this.prepareIssueRoundPushes({ issue: op.issue, leaderTask: op.leaderTask }); break;
             case 'retarget': this.ctx.db.transaction(() => this.retargetRoundPushTaskWithinTransaction(op.fromTaskId, op.toTaskId))(); break;
             case 'round_delivery': this.ctx.db.transaction(() => this.upsertRoundPushDeliveryWithinTransaction(op.task, op.body))(); break;
+            case 'background_doorbell': this.ctx.db.transaction(() =>
+              this.prepareBackgroundDoorbellDeliveryWithinTransaction(op.originAttemptId, op.originTurnId, op.taskId))(); break;
             case 'attachments': this.ctx.db.transaction(() => this.writeAttachmentDeliveriesWithinTransaction(workspaceId, op))(); break;
           }
         } finally { this.replayingOutboundOperation = false; }

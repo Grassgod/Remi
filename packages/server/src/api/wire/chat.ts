@@ -10,7 +10,12 @@ import type {
 } from "@multiremi/contracts/types.js";
 import { chatAttachmentCompatibilityResponse } from "./attachments.js";
 
-export function chatSessionCompatibilityResponse(session: MultiremiChatSession): {
+/**
+ * The `/api/chat/sessions` item. PR 6: `running_background_tasks` is the
+ * session's running or paused background tasks from the registry, shown even
+ * with no running turn; the caller reads it in one batch per response.
+ */
+export function chatSessionCompatibilityResponse(session: MultiremiChatSession, runningBackgroundTasks = 0): {
   id: string;
   workspace_id: string;
   creator_id: string;
@@ -26,6 +31,7 @@ export function chatSessionCompatibilityResponse(session: MultiremiChatSession):
   last_message: { content: string; role: string; created_at: string } | null;
   created_at: string;
   updated_at: string;
+  running_background_tasks: number;
 } {
   return {
     id: session.id,
@@ -43,6 +49,7 @@ export function chatSessionCompatibilityResponse(session: MultiremiChatSession):
     last_message: session.lastMessage ? { content: session.lastMessage.content, role: session.lastMessage.role, created_at: session.lastMessage.createdAt } : null,
     created_at: session.createdAt,
     updated_at: session.updatedAt,
+    running_background_tasks: runningBackgroundTasks,
   };
 }
 

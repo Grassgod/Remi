@@ -6,6 +6,7 @@ import { DaemonTaskOffers } from "@multiremi/api/daemon-protocol/task-offers.js"
 import { DAEMON_MIN_CLI_VERSION } from "@multiremi/contracts/daemon-protocol.js";
 import type { MultiremiStore } from "@multiremi/store.js";
 import { createLocalStore, resetMultiremiTestEnv } from "./helpers.js";
+import { PROVIDER_SESSION, backgroundWorld, laneTask, runAttempt, snapshotFor, type BackgroundWorld } from "./background-tasks-fixture.js";
 
 afterEach(resetMultiremiTestEnv);
 
@@ -149,5 +150,110 @@ describe("A-4 native pending delivery", () => {
       await connection.ack();
       expect(store.getBotMenuPublishRequest(rt, menu.id)?.status).toBe("running");
     } finally { await connection.close(); warn.mockRestore(); }
+  });
+});
+
+describe("PR 6 background-task downlinks", () => {
+  const parked = (world: BackgroundWorld, taskIds: string[]) => [{ session_id: world.chatId, agent_id: world.agentId,
+    execution_scope: "", provider_session_id: PROVIDER_SESSION, task_ids: taskIds }];
+  const connect = (store: MultiremiStore, world: BackgroundWorld, taskIds: string[], caps: Array<"lane.background" | "offer"> = ["lane.background"]) =>
+    openRuntimeDownlinks(store, world.runtimeId, { caps, parkedLanes: caps.includes("lane.background") ? parked(world, taskIds) : undefined });
+  const background = (frames: Array<{ t: string; p: Record<string, any> }>) =>
+    frames.filter(frame => frame.t === "lane.background_stop" || frame.t === "lane.background_release");
+
+  it("derives a person's stop until the daemon answers it, resends it at hello, and never to a socket without the cap", async () => {
+    const store = createLocalStore();
+    const world = backgroundWorld(store);
+    const member = store.createWorkspaceMember({ userId: store.getOrCreateUser({ externalId: "bg-stop", name: "Stopper" }).id,
+      name: "Stopper", role: "member" });
+    const old = await connect(store, world, [], ["offer"]);
+    try {
+      snapshotFor(world, 1, [laneTask(world), laneTask(world, { task_id: "bash-2" })]);
+      // A socket without the cap derives nothing; a null stopper (Remi) derives nothing either.
+      store.requestBackgroundTaskStop(world.chatId, { taskId: "bash-1" }, null);
+      await old.kick();
+      expect(background(old.frames)).toEqual([]);
+    } finally { await old.close(); }
+    snapshotFor(world, 2, [laneTask(world), laneTask(world, { task_id: "bash-2" })]);
+
+    const first = await connect(store, world, ["bash-1", "bash-2"]);
+    let stop!: ReturnType<MultiremiStore["requestBackgroundTaskStop"]>;
+    try {
+      expect(background(first.frames)).toEqual([]);
+      stop = store.requestBackgroundTaskStop(world.chatId, { all: true }, member.id);
+      await first.kick();
+      expect(background(first.frames).map(frame => frame.p)).toEqual(["bash-1", "bash-2"].map(task_id => ({
+        session_id: world.chatId, agent_id: world.agentId, execution_scope: "", task_id, requested_at: stop.requested_at })));
+      await first.ack(); await first.kick();
+      expect(background(first.frames)).toHaveLength(2);
+    } finally { await first.close(); }
+    // Unanswered: the next hello derives it again.
+    const again = await connect(store, world, ["bash-1", "bash-2"]);
+    try { expect(background(again.frames)).toHaveLength(2); } finally { await again.close(); }
+    // Answered: it is gone.
+    snapshotFor(world, 3, [laneTask(world, { status: "stopped", stop_reason: "user", ended_at: "2026-10-16T01:02:00.000Z",
+      stop_request: { requested_at: stop.requested_at, by: "user", outcome: "stopped" } }),
+    laneTask(world, { task_id: "bash-2", stop_request: { requested_at: stop.requested_at, by: "user", outcome: "failed" } })]);
+    const second = await connect(store, world, ["bash-2"]);
+    try {
+      expect(background(second.frames)).toEqual([]);
+      // 「停止失败，请重试」: a new request is a new entity.
+      const retry = store.requestBackgroundTaskStop(world.chatId, { taskId: "bash-2" }, member.id);
+      await second.kick();
+      expect(background(second.frames).map(frame => [frame.t, frame.p.task_id, frame.p.requested_at]))
+        .toEqual([["lane.background_stop", "bash-2", retry.requested_at]]);
+    } finally { await second.close(); }
+  });
+
+  it("derives a release for a parked lane whose Chat closed or whose lineage moved, and none while it serves", async () => {
+    const store = createLocalStore();
+    const releases = async (world: BackgroundWorld) => {
+      const connection = await connect(store, world, ["bash-1"]);
+      try { return background(connection.frames).filter(frame => frame.t === "lane.background_release").map(frame => frame.p); }
+      finally { await connection.close(); }
+    };
+    const healthy = backgroundWorld(store);
+    snapshotFor(healthy, 1, [laneTask(healthy)]);
+    expect(await releases(healthy)).toEqual([]);
+
+    const archived = backgroundWorld(store);
+    snapshotFor(archived, 1, [laneTask(archived)]);
+    store.updateChatSession(archived.chatId, { status: "archived" });
+    expect(await releases(archived)).toEqual([{ session_id: archived.chatId, agent_id: archived.agentId,
+      execution_scope: "", provider_session_id: PROVIDER_SESSION, reason: "session_closed" }]);
+
+    const deleted = backgroundWorld(store);
+    snapshotFor(deleted, 1, [laneTask(deleted)]);
+    store.deleteChatSession(deleted.chatId);
+    expect((await releases(deleted)).map(payload => payload.reason)).toEqual(["session_closed"]);
+
+    const retired = backgroundWorld(store);
+    snapshotFor(retired, 1, [laneTask(retired)]);
+    store.archiveAgent(retired.agentId);
+    expect((await releases(retired)).map(payload => payload.reason)).toEqual(["session_closed"]);
+
+    // The Chat's lineage now names another runtime (the agent moved there).
+    const moved = backgroundWorld(store);
+    snapshotFor(moved, 1, [laneTask(moved)]);
+    (store as unknown as { db: { run(sql: string, args: unknown[]): unknown } }).db.run(
+      "UPDATE multiremi_chat_sessions SET session_runtime_id = ? WHERE id = ?", [healthy.runtimeId, moved.chatId]);
+    expect((await releases(moved)).map(payload => payload.reason)).toEqual(["lane_reset"]);
+
+    // A cold retry: the lane's next attempt starts without the parked provider session.
+    const cold = backgroundWorld(store);
+    snapshotFor(cold, 1, [laneTask(cold)]);
+    const failed = runAttempt(store, cold.runtimeId, cold.chatId, "again");
+    store.failTask(failed.id, { error: "boom", failureReason: "agent_error", sessionId: PROVIDER_SESSION });
+    expect(await releases(cold)).toEqual([]);
+    store.retryTurn(store.getTurnForAttempt(failed.id)!.id, true);
+    expect((await releases(cold)).map(payload => payload.reason)).toEqual(["lane_reset"]);
+
+    // While the lane serves an attempt (`in_attempt`) nothing is derived: the offer path owns it.
+    const serving = backgroundWorld(store);
+    const running = runAttempt(store, serving.runtimeId, serving.chatId, "keep going");
+    snapshotFor(serving, 1, [laneTask(serving)], { state: "in_attempt", parked_until: null, attempt_id: running.id });
+    store.updateChatSession(serving.chatId, { status: "archived" });
+    const connection = await openRuntimeDownlinks(store, serving.runtimeId, { caps: ["lane.background"], activeTaskIds: [running.id] });
+    try { expect(background(connection.frames)).toEqual([]); } finally { await connection.close(); }
   });
 });
