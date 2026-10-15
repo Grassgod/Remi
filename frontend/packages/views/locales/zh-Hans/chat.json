@@ -355,6 +355,7 @@
     "not_found": "找不到这个子代理",
     "model": "模型 {{model}}",
     "from_subagent": "来自子代理 {{name}}",
+    "from_subagent_unnamed": "来自子代理",
     "unnamed": "子代理"
   },
   "steps": {

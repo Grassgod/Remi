@@ -365,6 +365,7 @@
     "not_found": "Subagent not found",
     "model": "Model {{model}}",
     "from_subagent": "From subagent {{name}}",
+    "from_subagent_unnamed": "From a subagent",
     "unnamed": "Subagent"
   },
   "steps": {

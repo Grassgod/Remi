@@ -10,7 +10,7 @@ summary: 原会话中的唯一问题、沿执行负责人链上交、到顶由�
 
 新问题只由 provider 的原生 AskUserQuestion 或权限请求进入；CLI 不提供另建业务 Q 的入口。`remi issue responsibility <issue>`读取执行负责人链，`remi message question`操作既有原 Q。普通 `message send --kind decision` 是会话消息选择，不进入上交链；Leader 咨询 Senior 仍用普通协作消息。
 
-[`QuestionView`](../../packages/contracts/src/question.ts)是 Web 与 CLI 的共享投影。`GET /api/issues/:id/questions` 返回待答和历史；`GET /api/messages/:id/question`读取一个原问题。答复、升级、Remi 总结、例外续接及显式关闭使用 `/api/messages/:id/question/{answer,escalate,present,continue,close}`；没有转交动作，旧的 transfer 接口返回410。所有写操作提交 `expected_route_revision`；已答问题只有人工阶段的处理者可以显式 `revise` 人工阶段给出的答案，且必须给原因和 `expected_answer_revision`；是否可修订看答案由谁给出（成员的答案只来自人工阶段），不看当前步骤，Agent 的答案保持原样；历史业务 decision 没有原生等待、答复后不再重新路由，仍按其当前步骤判断，处于人工阶段时成员可以推翻其中负责人 Agent 的答案。正常答复重放不当作改答。原 provider 上下文在 `original_context`；问题在根单之前就进入人工阶段的原因在 `route_reason`，格式为逗号拼接的 `<issueId>:<原因>`，均与 Remi 总结分开。关闭保存原因和完整历史，并取消尚存的原 provider 等待。
+[`QuestionView`](../../packages/contracts/src/question.ts)是 Web 与 CLI 的共享投影。`GET /api/issues/:id/questions` 返回待答和历史；`GET /api/messages/:id/question`读取一个原问题。答复、升级、Remi 总结、例外续接及显式关闭使用 `/api/messages/:id/question/{answer,escalate,present,continue,close}`；没有转交动作，旧的 transfer 接口返回410。所有写操作提交 `expected_route_revision`；已答问题只有人工阶段的处理者可以显式 `revise` 人工阶段给出的答案，且必须给原因和 `expected_answer_revision`；是否可修订看答案由谁给出（成员的答案只来自人工阶段），不看当前步骤，Agent 的答案保持原样；历史业务 decision 没有原生等待、答复后不再重新路由，仍按其当前步骤判断，处于人工阶段时成员可以推翻其中负责人 Agent 的答案。正常答复重放不当作改答。原 provider 上下文在 `original_context`；原生子代理的子会话发起的权限或提问在 `source_subagent`（`{item_id, name}`，取自 daemon 决策元数据 `subagent`，根会话和旧 daemon 为 null），Chat 的问题行与问题卡据此显示「来自子代理 X」；问题在根单之前就进入人工阶段的原因在 `route_reason`，格式为逗号拼接的 `<issueId>:<原因>`，均与 Remi 总结分开。关闭保存原因和完整历史，并取消尚存的原 provider 等待。
 
 ## 上交路由
 

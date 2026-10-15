@@ -12940,6 +12940,7 @@
             "original_questions": [],
             "original_message": "{\"tool\":\"Bash\",\"command\":\"ls\"}",
             "original_context": null,
+            "source_subagent": null,
             "options": null,
             "summary": null,
             "current_handler": null,
@@ -12997,6 +12998,7 @@
             "original_questions": [],
             "original_message": "{\"tool\":\"Bash\",\"command\":\"ls\"}",
             "original_context": null,
+            "source_subagent": null,
             "options": null,
             "summary": null,
             "current_handler": null,
@@ -14526,6 +14528,7 @@
           "original_questions": [],
           "original_message": "{\"tool\":\"Bash\",\"command\":\"ls\"}",
           "original_context": null,
+          "source_subagent": null,
           "options": null,
           "summary": null,
           "current_handler": null,
@@ -23761,6 +23764,7 @@
           "original_context": {
             "text": "Original provider context"
           },
+          "source_subagent": null,
           "options": [
             {
               "label": "A",
@@ -23863,6 +23867,7 @@
           "original_context": {
             "text": "Original provider context"
           },
+          "source_subagent": null,
           "options": [
             {
               "label": "A",
@@ -23974,6 +23979,7 @@
           "original_context": {
             "text": "Original provider context"
           },
+          "source_subagent": null,
           "options": [
             {
               "label": "A",
@@ -24147,6 +24153,7 @@
           "original_context": {
             "text": "Original provider context"
           },
+          "source_subagent": null,
           "options": [
             {
               "label": "A",
@@ -24356,6 +24363,7 @@
           "original_context": {
             "text": "Original provider context"
           },
+          "source_subagent": null,
           "options": [
             {
               "label": "A",
@@ -24570,6 +24578,7 @@
           "original_context": {
             "text": "Original provider context"
           },
+          "source_subagent": null,
           "options": [
             {
               "label": "A",
@@ -24674,6 +24683,7 @@
             "original_context": {
               "text": "Original provider context"
             },
+            "source_subagent": null,
             "options": [
               {
                 "label": "A",
@@ -24768,6 +24778,7 @@
             "original_context": {
               "text": "Original provider context"
             },
+            "source_subagent": null,
             "options": [
               {
                 "label": "A",
@@ -25122,6 +25133,7 @@
           ],
           "original_message": "Proceed after restart?",
           "original_context": null,
+          "source_subagent": null,
           "options": [
             {
               "label": "Proceed",
@@ -25273,6 +25285,7 @@
           ],
           "original_message": "Proceed after restart?",
           "original_context": null,
+          "source_subagent": null,
           "options": [
             {
               "label": "Proceed",
@@ -25432,6 +25445,7 @@
           ],
           "original_message": "Proceed after restart?",
           "original_context": null,
+          "source_subagent": null,
           "options": [
             {
               "label": "Proceed",
@@ -25601,6 +25615,7 @@
           ],
           "original_message": "Proceed after restart?",
           "original_context": null,
+          "source_subagent": null,
           "options": [
             {
               "label": "Proceed",
@@ -26018,6 +26033,7 @@
           ],
           "original_message": "Proceed after restart?",
           "original_context": null,
+          "source_subagent": null,
           "options": [
             {
               "label": "Proceed",

@@ -1,4 +1,4 @@
-import type { QuestionActor, QuestionAnswer, QuestionAnswerInput, QuestionHistoryEvent, QuestionMutationInput, QuestionStage, QuestionView, QuestionWaitStatus } from '@multiremi/contracts';
+import type { QuestionActor, QuestionAnswer, QuestionAnswerInput, QuestionHistoryEvent, QuestionMutationInput, QuestionStage, QuestionSubagent, QuestionView, QuestionWaitStatus } from '@multiremi/contracts';
 import { isHistoricalIssueQuestionRecord } from '@multiremi/contracts';
 import type { MultiremiWorkspaceMember } from '@multiremi/contracts/types.js';
 import type { SendMessageInput, UnifiedMessage } from '@multiremi/contracts/unified-model.js';
@@ -42,6 +42,13 @@ export class QuestionError extends Error {
   constructor(readonly status: 400 | 403 | 404 | 409, readonly code: string, message = code) { super(message); }
 }
 const same = (a: QuestionActor | null | undefined, b: QuestionActor | null | undefined) => !!a && !!b && a.type === b.type && a.id === b.id;
+/** The daemon's optional `subagent: {item_id, name}` (PR 5); anything malformed reads as the root session. */
+function questionSubagent(value: unknown): QuestionSubagent | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const { item_id: itemId, name } = value as Record<string, unknown>;
+  if (typeof itemId !== 'string' || !itemId.trim()) return null;
+  return { item_id: itemId, name: typeof name === 'string' ? name.trim().replace(/\s+/g, ' ') : '' };
+}
 /** A broken parent chain hands the Q to the human stage at the break. */
 const STRUCTURAL = new Set(['parent_missing', 'parent_cycle', 'workspace_mismatch', 'issue_missing']);
 
@@ -500,10 +507,11 @@ export class Questions {
     if (valid && actor && record.status === 'answered' && wait.status === 'detached' && message.sender_id && this.humanAuthority(record, actor)) allowed.push('continue');
     const bot = actor?.type === 'agent' ? this.ctx.feishuBot().getFeishuBotConfig(record.workspace_id) : null;
     if (valid && actor?.type === 'agent' && actor.id === bot?.agentId && record.status === 'pending' && step?.stage === 'human') allowed.push('present');
-    const humanRequest = message.metadata.human_request as { kind?: string; payload?: { questions?: unknown[]; context?: { text: string; truncated?: boolean } } } | undefined;
+    const humanRequest = message.metadata.human_request as { kind?: string; payload?: { questions?: unknown[]; context?: { text: string; truncated?: boolean }; subagent?: unknown } } | undefined;
     return { id: message.id, kind: humanRequest ? humanRequest.kind === 'permission' ? 'permission' : 'question' : 'decision', session_id: message.session_id, workspace_id: record.workspace_id, source_issue_id: record.source_issue_id,
       source_agent_id: message.sender_type === 'agent' ? message.sender_id : null, source_turn_id: message.task_id, source_attempt_id: record.source_attempt_id,
-      original_questions: Array.isArray(humanRequest?.payload?.questions) ? humanRequest.payload.questions : [], original_message: message.body_md, original_context: humanRequest?.payload?.context ?? null, options: message.options,
+      original_questions: Array.isArray(humanRequest?.payload?.questions) ? humanRequest.payload.questions : [], original_message: message.body_md, original_context: humanRequest?.payload?.context ?? null,
+      source_subagent: questionSubagent(humanRequest?.payload?.subagent), options: message.options,
       summary: record.summary, current_handler: step?.handler ?? null, stage: step?.stage ?? 'unavailable', route_revision: record.route_revision, route_reason: valid ? record.route_reason : 'source_workspace_changed', status: record.status,
       wait_status: wait.status, wait_reason: wait.reason ?? record.route_reason,
       recovery: { consumer_turn_id: wait.consumer_turn_id ?? null, consumer_attempt_id: wait.consumer_attempt_id ?? null,

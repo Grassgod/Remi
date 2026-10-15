@@ -8,6 +8,8 @@ export const QuestionViewSchema = z.object({
   source_agent_id: z.string().nullable(), source_turn_id: z.string().nullable(), source_attempt_id: z.string().nullable(),
   original_questions: z.array(z.unknown()), original_message: z.string(),
   original_context: z.object({ text: z.string(), truncated: z.boolean().optional() }).nullable().optional(),
+  /** The subagent whose child session asked (PR 5); null for the root session, absent from older servers. */
+  source_subagent: z.object({ item_id: z.string(), name: z.string() }).nullable().optional().catch(null),
   options: z.array(z.object({ label: z.string(), value: z.string() })).nullable(),
   summary: z.object({ body_md: z.string(), agent_id: z.string(), at: z.string() }).nullable(),
   current_handler: HandlerSchema.nullable(), stage: z.string(), route_revision: z.number().int().nonnegative(),

@@ -355,6 +355,7 @@
     "not_found": "サブエージェントが見つかりません",
     "model": "モデル {{model}}",
     "from_subagent": "サブエージェント {{name}} から",
+    "from_subagent_unnamed": "サブエージェントから",
     "unnamed": "サブエージェント"
   },
   "steps": {

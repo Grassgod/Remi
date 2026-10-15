@@ -358,6 +358,7 @@
     "not_found": "하위 에이전트를 찾을 수 없습니다",
     "model": "모델 {{model}}",
     "from_subagent": "하위 에이전트 {{name}}에서",
+    "from_subagent_unnamed": "하위 에이전트에서",
     "unnamed": "하위 에이전트"
   },
   "steps": {

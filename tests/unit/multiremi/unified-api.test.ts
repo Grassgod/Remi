@@ -153,6 +153,21 @@ it("routes decision option answers through the original message and rejects repl
   expect(entry).not.toHaveProperty("card_token_hash");
   expect(entry).not.toHaveProperty("card_token_recipient");
 });
+it("names the subagent whose child session raised a permission (PR 5) and none for the root", async () => {
+  const root = nativeQuestion();
+  expect((await request(`/api/messages/${root.question.id}/question`)).data.question.source_subagent).toBeNull();
+  const decide = (key: string, subagent: unknown) => store.getDaemonTurnBridge().rpc('turn.decision', { turn_id: root.turn.id, attempt_id: root.task.id,
+    wait_id: `native:${key}`, dedupe_key: `permission:${key}`, body_md: 'Permission requested: Write notes.txt',
+    options: [{ label: 'Allow', value: 'allow', description: 'allow_once' }],
+    metadata: { kind: 'permission', session_id: 'child-session', tool_call: { title: 'Write notes.txt' },
+      options: [{ optionId: 'allow', kind: 'allow_once', name: 'Allow' }], subagent } }, root.scope);
+  const child = decide('child', { item_id: 'sa:agent-1', name: '  Count\n files ' });
+  const read = await request(`/api/messages/${String(child.message_id)}/question`);
+  expect(read.status).toBe(200);
+  expect(read.data.question).toMatchObject({ kind: 'permission', source_subagent: { item_id: 'sa:agent-1', name: 'Count files' } });
+  expect(store.getMessage(String(child.message_id))?.metadata.human_request).toMatchObject({ payload: { subagent: { item_id: 'sa:agent-1' } } });
+  expect(store.getQuestion(String(decide('malformed', { name: 'No id' }).message_id))?.source_subagent).toBeNull();
+});
 it("answers an awaiting human request and restores the same turn", async () => {
   const { question, turn, task, scope } = nativeQuestion();
   expect(store.getTurn(turn.id)?.status).toBe("awaiting_human");
