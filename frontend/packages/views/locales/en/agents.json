@@ -486,6 +486,7 @@
     "nested_steps_one": "{{count}} step",
     "nested_steps_other": "{{count}} steps",
     "step_not_finished": "Not finished",
+    "steer_not_delivered": "Not delivered",
     "human_answer_label": "Answer:",
     "human_status": "status: {{value}}",
     "human_responded_by": "by: {{value}}"

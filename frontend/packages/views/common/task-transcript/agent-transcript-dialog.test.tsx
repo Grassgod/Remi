@@ -5,7 +5,7 @@ import type { TraceItem, TraceTurn } from "@multiremi/contracts/trace";
 import type { AgentTask } from "@multiremi/core/types/agent";
 import { renderWithI18n } from "../../test/i18n";
 import {
-  command, message, plan, read, reasoning, subagent, traceTurn, unknown,
+  command, message, plan, read, reasoning, subagent, traceTurn, unknown, userMessage,
 } from "../../test/trace-fixtures";
 import { AgentTranscriptDialog } from "./agent-transcript-dialog";
 import type { TurnTraceReadInfo } from "./use-task-trace";
@@ -193,6 +193,23 @@ describe("transcript item abandoned by a finished task", () => {
     renderTranscript(orphan, { task: { status: "running" }, isLive: true });
     expect(screen.queryByText("Not finished")).not.toBeInTheDocument();
     expect(row().querySelector(".animate-spin")).not.toBeNull();
+  });
+});
+
+describe("transcript steer delivery", () => {
+  const steer = (id: string, result: { via: "native" | "reprompt" | "none"; native_outcome: null | "injected"; error: null }) => ({
+    ...userMessage(id, `steer ${id}`), origin: "steer" as const, message_ids: [id],
+    steer: { steer_id: id, kind: "steer", injected: result.via !== "none", author_type: "user", author_id: null, result },
+  });
+
+  it("labels only a steer recorded without delivery", () => {
+    renderTranscript([
+      steer("st_native", { via: "native", native_outcome: "injected", error: null }),
+      steer("st_late", { via: "none", native_outcome: null, error: null }),
+    ]);
+    expect(screen.getAllByText("Not delivered")).toHaveLength(1);
+    const late = document.querySelector('[data-transcript-item="st_late"]')!;
+    expect(late.textContent).toContain("Not delivered");
   });
 });
 
