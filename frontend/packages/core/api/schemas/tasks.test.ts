@@ -55,4 +55,16 @@ describe("trace turn page schema", () => {
   it("rejects a malformed turn", () => {
     expect(TraceTurnPageSchema.safeParse({ turn: { ...turn, status: "done" }, items: [], state: "ok" }).success).toBe(false);
   });
+
+  // Contract additions after the readers were written: a capped command line,
+  // and histogram buckets of an item type a newer daemon added (spec §12).
+  it("accepts a capped command and drops histogram buckets of unknown item types", () => {
+    const stats = { item_count: 2, tool_call_count: 1, process_item_count: 1, type_histogram: [
+      { type: "command", tool: "Bash", count: 1 }, { type: "hologram", tool: null, count: 1 },
+    ] };
+    const page = TraceTurnPageSchema.parse({ view: "turn", format: "v2", turn: { ...turn, stats },
+      items: [{ ...item, status: "completed", command_truncated: true }], next_item_cursor: null, head: 3, closed: false, state: "ok" });
+    expect(page.items).toEqual([expect.objectContaining({ id: "cmd_1", command_truncated: true })]);
+    expect(page.turn?.stats.type_histogram).toEqual([{ type: "command", tool: "Bash", count: 1 }]);
+  });
 });
