@@ -52,6 +52,20 @@ Antigravity 的消费只取自 daemon 本地网关垫片观察到的每次模型
 
 历史恢复保留已有证据：不可变 autopilot schedule target 和 Chat 项目绑定可以恢复项目；未标记 cross-switch 的 attempt=1 task 优先采用已保存 trace owner，其次采用已有 started_at 的 task.runtime_id，标为 `trace_owner` 或 `task_record`，不是当前 Agent 配置。重试或跨 Runtime 痕迹无法区分请求归属时保留 unknown。维护计划可以传入更强的原始报告 scope 证据。缺证据才保存 null；Runtime 表展示 recorded owner、trace owner、未知或混合出处，不把 recorded owner 误称每个请求均已独立证明的执行者。
 
+## 子代理与自主轮
+
+原生子代理（[ADR 0021](adr/0021-subagent-sessions-and-autonomous-rounds.md)）的子会话帧带 `_meta.remiSessionId`。provider 对这些 `usage_update` 以 `context: false` 累加：请求单位、未拆分的总量和金额照常进入根会话 prompt 的采集器，`totalTokens`、上下文快照与窗口大小不变，也不读上下文占用；trace 翻译器同样不把子会话的用量和模型当作根会话的。所以子代理消费计入本轮，Chat 的上下文环和轮卡 `context_usage` 只反映根会话。
+
+- Codex 子线程的请求本来就从根会话到达：usage 补丁把子线程的 `rawResponse/completed` 转给根会话，rollout 读取也包括子线程，两者按真实 thread 与 response ID 合并。子会话上的 `usage_update` 只是该子代理自己的上下文。
+- Claude 子代理的请求用量照旧在根会话上、带 `parentToolUseId`，不进上下文快照。子代理的模型取自它第一次请求的 `remiTokenUsage.model`，只用于显示。
+
+Claude 的后台子代理在回复之前结束时，桥在 `session/prompt` 结束后自己再开一轮（task-notification 后续轮）。daemon 在同一 attempt 里等这一轮（自主轮），provider 把 prompt 结束后缓存的帧在监听开头重放，沿用上一个 prompt 的采集器：
+
+- 后续轮的请求带 `remiUsageUnits`，按请求 ID 是新单位，进入同一个 ledger；daemon 每轮结束后以 `turn:<n>:auto:<r>` 结算一次检查点，不新建 run。
+- 轮范围的 `sdk_estimate` 金额单位与人的那一轮同 ID，后续轮累计的 `total_cost_usd` 替换前一个值一次，不相加。
+- `REMI_ACP_AUTONOMOUS_ROUNDS=0` 时恢复 [ADR 0020](adr/0020-chat-follow-up-queue-and-native-steering.md) 的规则：prompt 之间只缓存 `usage_update`，在同一会话下一次 prompt 开头重放；attempt 的最后一个 prompt 之后到达的后续轮随 provider 关闭丢失，它的消费也不会记录。
+- Codex 没有自主轮，继续只缓存用量：桥自开的一轮被取消（ADR 0020 D3），它的用量计入下一个 prompt。
+
 ## 报表与两条时间轴
 
 [路由](../packages/server/src/api/routers/usage-accounting.ts)按 workspace 鉴权，并验证 Runtime/项目过滤器属于该工作区。参数为 `workspace_id`、`days`（默认 30，支持 `all`）、`since`、`until`、`project_id`、`runtime_id` 和 IANA `tz`。范围起点包含、终点不包含；天数按查看者时区的日历日，支持夏令时。

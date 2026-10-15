@@ -27,6 +27,8 @@ summary: 说明 daemon 进程配置、工作区 bot 的控制面分配、凭据�
 | `MULTIREMI_CLAIM_IDLE_MAX_MS` | 空闲 claim 的退避上限，默认 30000 ms；退避从 3000 ms 起翻倍到该值。 |
 | `MULTIREMI_PLUGIN_DESIRED_REFRESH_MS` | A-2 过渡期的 Plugin desired HTTP 兜底刷新间隔，默认 30000 ms；由 MUL-419 后续接入 RPC 与 revision 推送。 |
 | `MULTIREMI_AUTHORITY_PROBE_MAX_MS` | terminal authority 之后 register 探测的间隔上限，默认 900000 ms（15 分钟）。 |
+| `REMI_ACP_NATIVE_SUBAGENTS` | 默认开；设为 `0` 时不向 Claude/Codex 桥请求原生子代理会话，恢复只收根会话的帧（Codex 子代理的工作随之不可见）。见 [ADR 0021](../adr/0021-subagent-sessions-and-autonomous-rounds.md)。 |
+| `REMI_ACP_AUTONOMOUS_ROUNDS` | 默认开；设为 `0` 时不捕获、也不等待 Claude 在 prompt 结束后自开的后续轮（后台子代理的迟到回答），恢复此前的完成时机。与上一项独立。 |
 
 bot 的 Agent、承载 Runtime、App ID、App Secret 和 domain 从控制面配置获取，不在本机环境文件中指定。共享配置层仍支持一些 Feishu/OAuth 相关环境变量，但当前 bot 启动的身份由 assignment 覆盖；设置本地应用凭据不会创建或启用工作区 bot。
 
@@ -161,6 +163,8 @@ App Secret 在 API 侧通过 [AES-256-GCM](../../packages/server/src/feishu-bot/
 v2 Runtime 从 [配置快照](../../packages/server/src/api/daemon-protocol/runtime-input-snapshot.ts)接收 `feishu.outbound` 下行帧并确认领取带租约的投递。[daemon](../../packages/server/src/worker/daemon.ts)通过 concierge host 发送后，经 `feishu.outbound_result` 帧回报结果和 claim token；过期投递租约会被服务端拒绝。旧 HTTP 投递结果入口已停用，不能把心跳当成 v2 出站领取通道。
 
 [FeishuBotRepo.directiveForRuntime](../../packages/server/src/store/repos/feishu-bot-repo.ts)给未选中的 Runtime 下发 stopped；新 Runtime 等待其他 host 的 online/starting 状态消失或超过当前 90 秒新鲜度窗口后才得到配置。这是基于状态上报的交接门控，不能描述为具备独立到期停机保证的强租约。[Supervisor](../../packages/server/src/worker/feishu-concierge.ts)串行启动/停止、上报状态并退避重试；新 revision 会重新尝试。新版 daemon 使用 `concierge.status_report` RPC 确认控制面已落库，并在心跳确认时独立补报当前状态和重试失败启动；丢失一次 `online` 不应再需要重启进程。旧 daemon 的 `concierge.status` 尽力而为上报仍可接入；新 daemon 遇到旧 API 的 `unknown_frame` 会暂时使用旧帧并定时补报，升级顺序仍应为先 API 后 daemon，以缩短无确认窗口。
+
+两个开关都只读 daemon 进程环境，改后需重启 daemon。Claude 桥另需子代理补丁：`remi runtime prepare` 安装 bundle 时把 `claude-subagents-v1` 与 usage 补丁一起打进 `dist/acp-agent.js`，daemon 只接受同时带 `const CLAUDE_USAGE_PATCH = "claude-usage-v4";` 与 `const REMI_SUBAGENT_PATCH = "claude-subagents-v1";` 的 bundle，可用 `grep -c 'REMI_SUBAGENT_PATCH' "${REMI_HOME:-$HOME/.remi}"/acp/bundles/claude-<bridge>-<sdk>-<executable>/node_modules/@agentclientprotocol/claude-agent-acp/dist/acp-agent.js` 核对（三段版本取自 `runtime-versions.json` 的 `claude`）；关闭上面的开关不需要卸掉补丁。升级检查见[配套升级说明](../daemon-runtime-upgrades.md#claude-升级检查项)。
 
 单机工作目录另由[process-owner](../../packages/daemon/src/agent-runtime/workspace/process-owner.ts)的 supervisor lease 保护，以进程存活判断所有权。它与 bot 跨 Runtime 的状态交接是不同机制，不能因为一次心跳延迟就移除仍存活的本机 owner。
 
