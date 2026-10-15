@@ -167,7 +167,7 @@ JSON 文本帧，不用二进制：
 | 类别 | 帧 | 可靠性与重放 |
 |---|---|---|
 | `handshake` | `hello` / `welcome` / `reject` | 每连接一次 |
-| `best_effort` | `hb`、`runtime.ready`、`gc.storage_report`、`task.activity`、旧版 `concierge.status` | 不带 `seq`，不重放；`hb` 的服务端答复是 `res`（见 §4） |
+| `best_effort` | `hb`、`runtime.ready`、`gc.storage_report`、`task.activity`、`lane.background_tasks`、旧版 `concierge.status` | 不带 `seq`，不重放；`hb` 的服务端答复是 `res`（见 §4） |
 | `event` | 见下 §1.4 | 带 `seq`，未确认前重放 |
 | `rpc` | 见下 §1.5 | 按 `id`/`re` 配对，由调用方重试 |
 | `reply` | `res` | 答复某个 rpc |
@@ -201,7 +201,7 @@ head 续传与事件 seq 幂等，不来自外层 `seq`；下行 `trace.push` �
 `runtime.command`、`runtime.model_list`、`runtime.local_skills`、`runtime.directory_scan`、
 `runtime.local_skill_import`、`runtime.bot_menu`、`runtime.profile`、`feishu.outbound`、
 `feishu.directive`、`ssh_mesh.reconcile`、`platform.drain`、`plugin.desired_revision`、`workspace.settings`、
-`runtime.gc_run`、`trace.push`（订阅内保序，可暂停）。
+`runtime.gc_run`、`lane.background_stop`、`lane.background_release`、`trace.push`（订阅内保序，可暂停）。
 
 `task.offer` 不再携带 `id`/`prompt`，而是 `turn_id`、`attempt_id`、`input_from_seq`、
 `input_to_seq` 和区间 `(input_from_seq, input_to_seq]` 的 `input_messages`。
@@ -220,7 +220,7 @@ S2 同事务创建 decision 消息并将轮置为 `awaiting_human`，通过 `rep
 
 **daemon → server**：`concierge.status_report`、`turn.input`、`turn.decision`、`turn.decision.get`、`turn.decision.expire`、`turn.decision.consume`、`plugin.desired`、
 `trace.append`、`trace.head`、`trace.subscribe`、`trace.unsubscribe`、`trace.fetch`、`gc.check_issue`、
-`gc.check_chat_session`、`gc.check_task`、`gc.subject_reclaimed`。
+`gc.check_chat_session`、`gc.check_task`、`gc.subject_reclaimed`、`lane.background_wake`。
 
 另有一个上行 best-effort 事件帧 `gc.storage_report { runtime_id, report }`：daemon 每个周期回收轮次（含 `MULTIREMI_GC_DRY_RUN`
 下只出计划的轮次）后上报存储报告，不进 outbox、不要求应答，服务端按 daemon 只保存最近一份（`GET /api/workspaces/:id/storage/daemons`）。
@@ -238,6 +238,21 @@ S2 同事务创建 decision 消息并将轮置为 `awaiting_human`，通过 `rep
 值变化且任务属于 Chat 时（不论是否绑定项目）向 Chat 创建者推 `task:subagents`，载荷在任务字段外带
 `running_subagents`；该事件不唤醒 daemon 下行。`GET /api/turns` 的每行带当前尝试的 `running_subagents`，
 尝试不再活跃或从未上报时为 null；尝试列表同样投影。
+PR 6 起载荷可选带 `running_background_tasks`（该尝试运行中或暂停的后台任务数，任意深度）；旧 daemon 不带，缺失不等于 0。
+
+**后台任务（PR 6，契约已定，收发尚未接线）。** 帧与载荷类型在 `daemon-protocol.ts`，都受能力位
+`lane.background` 约束：daemon 在 `hello.caps` 声明，服务端支持时在 `welcome.caps` 回显；双方都有时
+daemon 才在尝试结束后保留仍有后台任务的 Chat 会话线进程，否则在尝试结束时停止这些任务。
+
+| 帧 | 方向与类别 | 载荷 | 说明 |
+|---|---|---|---|
+| `lane.background_tasks` | 上行 best-effort | `DaemonLaneBackgroundTasksPayload`：会话线、`provider_session_id`、`revision`、`state`（`in_attempt` / `parked` / `closed`）、`parked_until?` 与至多 32 个任务（≤256 KiB） | 由本地状态重算；变化后防抖 1 s 上报，有任务运行时每 30 s 重报，重连后重报，`closed` 隔 10 s 重报 3 次；服务端按会话线只取更高的 `revision` |
+| `lane.background_wake` | 上行 RPC | `DaemonLaneBackgroundWakePayload`：会话线与结束的任务 | 驻留的 Claude 任务完成或失败时请求服务端写入门铃消息；应答 `DaemonLaneBackgroundWakeReply`（`created` / `merged` / `delivered`），会话线已迁走或会话已关闭时答 `lane_moved` / `session_closed` |
+| `lane.background_stop` | 下行可靠事件 | `DaemonLaneBackgroundStopPayload`：会话线、`task_id`（`*` 为全部）、`requested_at` | 由登记表的停止请求推导，`hello` 时重推 |
+| `lane.background_release` | 下行可靠事件 | `DaemonLaneBackgroundReleasePayload`：会话线、`provider_session_id`、`reason`（`lane_reset` / `session_closed`） | 由登记表的存活行与会话线、Chat、Agent 状态推导 |
+
+`hello.runtimes[].parked_lanes?` 列出 daemon 保留进程的会话线及其任务，服务端据此把该 runtime 其他运行中的登记行
+标为已停止（`daemon_restart`）。协议版本不变。
 
 **server → daemon**：`trace.read`。
 
@@ -272,8 +287,8 @@ connector，下一次心跳重试当前状态。服务端在同一条连接里�
 
 ### 1.6 错误码与 close code
 
-错误码共 19 个，定义在 `DAEMON_PROTOCOL_ERROR_CODES`，分五组：握手 2 个、上报 5 个、
-offer 与派活 5 个、trace 与传输 6 个、服务端故障 1 个（`server_error`）。
+错误码共 23 个，定义在 `DAEMON_PROTOCOL_ERROR_CODES`，分六组：握手 2 个、上报 7 个、
+offer 与派活 5 个、trace 与传输 6 个、后台任务门铃 2 个（`lane_moved`、`session_closed`，PR 6）、服务端故障 1 个（`server_error`）。
 
 `DAEMON_RETRYABLE_ERROR_CODES` 有 `daemon_busy`、`daemon_timeout` 与 `server_error`；其余都是
 确定性结果，重发无益。
@@ -405,6 +420,7 @@ A-2 用它进入 `upgrade_wait`（§7.3）而不是单纯停止重连。另外�
 | `platform.drain` | 平台维护状态行 |
 | `plugin.desired_revision` | `desiredRevision` |
 | `runtime.gc_run` | `multiremi_runtime_gc_run_requests` 中 status=pending 的行 |
+| `lane.background_stop` / `lane.background_release` | 后台任务登记表的停止请求与存活行（PR 6，仅对声明 `lane.background` 的连接） |
 
 daemon 按实体 id 去重（`activeTaskIds`、`runtimeModelListRequests`、steer 的 `seen` 集合今天就有，
 补齐 update / command / skills 的同类集合即可）。服务端对每条下行可靠帧记发送时刻，15 s 未 ack
@@ -672,10 +688,13 @@ Concierge 出站依赖下行推送与重试定时器，不要求为投递缩短�
 C 的 Live Hub 元素都直接用它。谁要加字段，改这一个文件并同步这些使用方。
 模型与取舍见 [ADR 0019](adr/0019-turn-and-item-traces.md)。
 
-一份 trace 是一次轮尝试：一个 `TraceTurn` 加若干 `TraceItem`。条目有 13 种
+一份 trace 是一次轮尝试：一个 `TraceTurn` 加若干 `TraceItem`。条目有 14 种
 （`user_message`、`agent_message`、`reasoning`、`command`、`file_change`、`web_search`、`tool`、
-`subagent`、`plan`、`permission`、`question`、`compaction`、`notice`），每个都是完整记录，
-子 agent 的条目用 `parent_id` 指向它的 `subagent` 条目。事件只有七种：
+`subagent`、`plan`、`permission`、`question`、`compaction`、`notice`、`background_task`），每个都是完整记录，
+子 agent 的条目用 `parent_id` 指向它的 `subagent` 条目。`background_task`（PR 6）是桥接在启动它的调用之后
+继续在后台运行的工作，按 ADR 0019 以新类型加入：运行或暂停时 `in_progress`（暂停另置 `paused`），尝试结束时
+仍在运行则以 `completed` 加 `handed_off: true` 写入，之后的状态归会话的后台任务登记表；它不是工具条目也不是
+过程条目，Chat 折叠里由启动它的调用那一行显示。事件只有七种：
 
 | 事件 | 载荷 |
 |---|---|
@@ -711,6 +730,9 @@ upsert、保留第一次出现的位置；应用任一事件都把 `item.seq` �
 | `tool.input` | 16 KiB JSON（经 `sanitizeTraceJson`） |
 | `file_change` 的 `diff` | 每处 64 KiB，每条目 256 KiB |
 | `title` / `tool` | 512 B |
+| `background_task` 的 `name` / `task_type` / `last_tool_name` | 512 B |
+| `background_task` 的 `description` / `summary` | 16 KiB |
+| `background_task` 的 `output_tail` | 末尾 4 KiB，从行首开始，置 `output_tail_truncated` |
 | 单个事件（含外壳） | 1 MiB；超出时丢最大的字段并置 `*_truncated`，仍超出的事件不占 seq |
 
 文本触顶后不再追加 delta，`item.completed` 带 `truncated: true`。

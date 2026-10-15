@@ -71,6 +71,9 @@ export function getItemLabel(item: TraceItem): string {
       return "Compaction";
     case "notice":
       return "Notice";
+    case "background_task":
+      // PR 6 Phase C: minimal row until the background-task view lands.
+      return "Background task";
   }
 }
 
@@ -135,6 +138,9 @@ export function getItemSummary(item: TraceItem): string {
       return firstLine(item.summary);
     case "notice":
       return [item.title, firstLine(item.description)].filter(Boolean).join(" · ");
+    case "background_task":
+      // PR 6 Phase C
+      return firstLine(item.name) || firstLine(item.description);
   }
 }
 

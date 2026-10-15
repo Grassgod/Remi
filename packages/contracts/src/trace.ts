@@ -47,8 +47,9 @@ export interface TraceTurnStats {
   tool_call_count: number;
   /**
    * Top-level items that produce a Chat fold row: not user_message, permission,
-   * question, reasoning, the final agent_message, or an agent_message with no
-   * visible text (decision D-count).
+   * question, reasoning, background_task (its launch row is the call's), the
+   * final agent_message, or an agent_message with no visible text (decision
+   * D-count).
    */
   process_item_count: number;
   type_histogram: TraceHistogramBucket[];
@@ -306,6 +307,78 @@ export interface TraceNoticeItem extends TraceItemBase {
   error_kind: string | null;
 }
 
+/**
+ * Why a background task ended inside its attempt (PR 6 §4.1): `user` stopped
+ * it, the attempt ended without parking (`turn_end`), the turn was cancelled,
+ * or the process that ran it died (`lost`). A task still running when its
+ * attempt ends is handed off instead and has no reason here; its later end is
+ * the session registry's (`BackgroundTaskStopReason` in `unified-model.ts`).
+ */
+export const TRACE_BACKGROUND_TASK_STOP_REASONS = ["user", "turn_end", "cancelled", "lost"] as const;
+export type TraceBackgroundTaskStopReason = (typeof TRACE_BACKGROUND_TASK_STOP_REASONS)[number];
+
+/** Who asked a background task to stop: a person, or Remi itself (turn end, cap, release). */
+export const TRACE_BACKGROUND_TASK_STOPPERS = ["user", "remi"] as const;
+/** What the bridge answered a stop so far; `not_running` = it had already ended or was never announced. */
+export const TRACE_BACKGROUND_TASK_STOP_OUTCOMES = ["pending", "stopped", "not_running", "failed"] as const;
+
+export interface TraceBackgroundTaskStopRequest {
+  /** ISO 8601. */
+  requested_at: string;
+  by: (typeof TRACE_BACKGROUND_TASK_STOPPERS)[number];
+  outcome: (typeof TRACE_BACKGROUND_TASK_STOP_OUTCOMES)[number];
+}
+
+/** Claude's workflow usage (`async_task_progress.usage`). */
+export interface TraceBackgroundTaskUsage {
+  total_tokens: number;
+  tool_uses: number;
+  duration_ms: number;
+}
+
+/** `output_tail` and the lane snapshot's tail keep at most the last 4 KiB of a task's output. */
+export const TRACE_BACKGROUND_TASK_OUTPUT_TAIL_MAX_BYTES = 4 * 1024;
+
+/**
+ * Work a bridge runs in the background past the call that started it (PR 6
+ * §4.1, ACP AIR `async_task_*`): a backgrounded shell, a workflow, an MCP task
+ * ("monitor"). One item per task and attempt, id `bg:<task_id>`; `parent_id`
+ * is the subagent whose session started it.
+ *
+ * A new item type, so no existing status changes meaning (ADR 0019): a running
+ * or paused task is `in_progress` (`paused: true`); one still running when its
+ * attempt ends is written `completed` with `handed_off: true`, and its later
+ * state lives in the session's background-task registry. It is neither a tool
+ * item nor a process item: the row of the call that started it
+ * (`tool_item_id`) takes its copy from it instead.
+ */
+export interface TraceBackgroundTaskItem extends TraceItemBase {
+  type: "background_task";
+  /** The bridge's `asyncTaskId`. */
+  task_id: string;
+  /** `"shell"` | `"workflow"` | `"monitor"`, or another type a bridge passes through. */
+  task_type: string;
+  name: string;
+  description: string | null;
+  /** The item of the call that started it, when the bridge correlated one. */
+  tool_item_id: string | null;
+  can_stop: boolean;
+  summary: string | null;
+  last_tool_name?: string | null;
+  usage?: TraceBackgroundTaskUsage | null;
+  /** While `in_progress`: the bridge reported it paused. */
+  paused?: true;
+  /** The last lines of its output, at most {@link TRACE_BACKGROUND_TASK_OUTPUT_TAIL_MAX_BYTES}; read by the daemon (Claude). */
+  output_tail?: string | null;
+  /** The output is longer than `output_tail`. */
+  output_tail_truncated?: true;
+  stop_request?: TraceBackgroundTaskStopRequest | null;
+  stop_reason?: TraceBackgroundTaskStopReason | null;
+  /** Still running when this attempt ended; its state continues in the session's background tasks. */
+  handed_off?: true;
+  duration_ms: number | null;
+}
+
 export type TraceItem =
   | TraceUserMessageItem
   | TraceAgentMessageItem
@@ -319,7 +392,8 @@ export type TraceItem =
   | TracePermissionItem
   | TraceQuestionItem
   | TraceCompactionItem
-  | TraceNoticeItem;
+  | TraceNoticeItem
+  | TraceBackgroundTaskItem;
 
 export type TraceItemType = TraceItem["type"];
 export type TraceItemOf<T extends TraceItemType> = Extract<TraceItem, { type: T }>;
@@ -339,6 +413,7 @@ const TRACE_ITEM_TYPE_SET: Record<TraceItemType, true> = {
   question: true,
   compaction: true,
   notice: true,
+  background_task: true,
 };
 export const TRACE_ITEM_TYPES = Object.keys(TRACE_ITEM_TYPE_SET) as readonly TraceItemType[];
 
@@ -606,6 +681,25 @@ function isDecisionOption(value: unknown): boolean {
   return isRow(value) && typeof value.option_id === "string" && typeof value.name === "string" && typeof value.kind === "string";
 }
 
+function isNonNegativeNumber(value: unknown): boolean {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0;
+}
+
+export function isTraceBackgroundTaskUsage(value: unknown): value is TraceBackgroundTaskUsage {
+  return isRow(value) && isNonNegativeNumber(value.total_tokens) && isNonNegativeNumber(value.tool_uses)
+    && isNonNegativeNumber(value.duration_ms);
+}
+
+export function isTraceBackgroundTaskStopRequest(value: unknown): value is TraceBackgroundTaskStopRequest {
+  return isRow(value) && isTraceTimestamp(value.requested_at) && isOneOf(value.by, TRACE_BACKGROUND_TASK_STOPPERS)
+    && isOneOf(value.outcome, TRACE_BACKGROUND_TASK_STOP_OUTCOMES);
+}
+
+/** An optional field that, when present, is null or passes `check`. */
+function isOptionalNullable(value: unknown, check: (value: unknown) => boolean): boolean {
+  return value === undefined || value === null || check(value);
+}
+
 function isItemBase(value: Row): boolean {
   return isNonEmptyString(value.id) && isNullableString(value.parent_id) && isTraceItemStatus(value.status)
     && isTraceTimestamp(value.started_at) && (value.completed_at === null || isTraceTimestamp(value.completed_at))
@@ -672,6 +766,15 @@ export function isTraceItem(value: unknown): value is TraceItem {
     case "notice":
       return isOneOf(v.severity, ["info", "warning", "error"]) && typeof v.title === "string"
         && isNullableString(v.description) && isNullableString(v.category) && isNullableString(v.error_kind);
+    case "background_task":
+      return isNonEmptyString(v.task_id) && typeof v.task_type === "string" && typeof v.name === "string"
+        && isNullableString(v.description) && isNullableString(v.tool_item_id) && typeof v.can_stop === "boolean"
+        && isNullableString(v.summary) && isOptionalNullableString(v.last_tool_name)
+        && isOptionalNullable(v.usage, isTraceBackgroundTaskUsage)
+        && isOptionalTrue(v.paused) && isOptionalNullableString(v.output_tail) && isOptionalTrue(v.output_tail_truncated)
+        && isOptionalNullable(v.stop_request, isTraceBackgroundTaskStopRequest)
+        && isOptionalNullable(v.stop_reason, (reason) => isOneOf(reason, TRACE_BACKGROUND_TASK_STOP_REASONS))
+        && isOptionalTrue(v.handed_off) && isNullableNumber(v.duration_ms);
     default:
       return false;
   }

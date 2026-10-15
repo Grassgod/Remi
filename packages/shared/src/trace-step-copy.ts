@@ -17,10 +17,22 @@
  * resumes, closes or lists subagents ({@link agentControl}) reads as what it
  * did to which agent, and a Codex `wait` is hidden ({@link isHiddenStep}).
  *
+ * Background launches (PR 6 §4.3): the row of a call that started a
+ * background task reads as the task in its phase ({@link backgroundTaskResolver}).
+ *
  * Pure; the web bundles this module, so it has no relative imports.
  */
 
-import type { CommandAction, FileChange, TraceItem, TraceSubagentItem, TraceToolItem } from "@multiremi/contracts/trace";
+import type {
+  CommandAction,
+  FileChange,
+  TraceBackgroundTaskItem,
+  TraceItem,
+  TraceItemStatus,
+  TraceSubagentItem,
+  TraceToolItem,
+} from "@multiremi/contracts/trace";
+import type { BackgroundTaskStatus } from "@multiremi/contracts/unified-model";
 
 export type StepState = "active" | "done" | "stopped" | "declined";
 
@@ -98,6 +110,24 @@ export const STEP_COPY_ZH = {
   subagent_background: "后台运行中：{{title}}",
   subagent_done: "子代理已完成：{{title}}",
   subagent_stopped: "子代理已停止：{{title}}",
+  // Background tasks (PR 6 §4.3): the row of the call that started one reads
+  // as the task, in its phase. Shells use `{{command}}` (the call's label);
+  // workflows and other tasks use `{{name}}`.
+  background_command_active: "已启动后台命令 {{command}}",
+  background_command_handed_off: "{{command}} 仍在后台运行",
+  background_command_done: "后台命令已完成 {{command}}",
+  background_command_failed: "后台命令失败 {{command}}",
+  background_command_stopped: "后台命令已停止 {{command}}",
+  background_workflow_active: "已启动后台工作流 {{name}}",
+  background_workflow_handed_off: "{{name}} 仍在后台运行",
+  background_workflow_done: "后台工作流已完成 {{name}}",
+  background_workflow_failed: "后台工作流失败 {{name}}",
+  background_workflow_stopped: "后台工作流已停止 {{name}}",
+  background_task_active: "已启动后台任务 {{name}}",
+  background_task_handed_off: "{{name}} 仍在后台运行",
+  background_task_done: "后台任务已完成 {{name}}",
+  background_task_failed: "后台任务失败 {{name}}",
+  background_task_stopped: "后台任务已停止 {{name}}",
   reasoning_active: "正在思考",
   reasoning_done: "已思考",
   plan_active: "正在更新计划",
@@ -297,6 +327,102 @@ function agentLabel(target: string | null, resolveAgent?: AgentResolver): string
   return ID_LIKE_TARGET.test(target) ? null : target;
 }
 
+// ── Background launches (PR 6 §4.3) ─────────────────────────────────────────
+
+/** Where a background task stands, as its launch row reads it. */
+export type BackgroundTaskPhase = "active" | "handed_off" | "done" | "failed" | "stopped";
+
+/** The copy family of a task type: a shell reads as a command, a workflow as a workflow, anything else as a task. */
+export type BackgroundTaskKind = "command" | "workflow" | "task";
+
+export function backgroundTaskKind(taskType: string): BackgroundTaskKind {
+  return taskType === "shell" ? "command" : taskType === "workflow" ? "workflow" : "task";
+}
+
+/** A trace item's phase: `handed_off` once its attempt ended with it still running. */
+export function backgroundTaskItemPhase(item: Pick<TraceBackgroundTaskItem, "status" | "handed_off">): BackgroundTaskPhase {
+  const status: TraceItemStatus = item.status;
+  switch (status) {
+    case "in_progress": return "active";
+    // A handed-off item is written `completed` (ADR 0019 freezes the statuses).
+    case "completed": return item.handed_off === true ? "handed_off" : "done";
+    case "failed": return "failed";
+    case "stopped":
+    case "declined": return "stopped";
+  }
+}
+
+/**
+ * A registry row's phase. `attemptEnded`: the attempt whose steps are shown has
+ * ended, so a task that still runs (or was last seen running, `unknown`) reads
+ * as handed off.
+ */
+export function backgroundTaskStatusPhase(status: BackgroundTaskStatus, attemptEnded: boolean): BackgroundTaskPhase {
+  switch (status) {
+    case "running":
+    case "paused":
+    case "unknown": return attemptEnded ? "handed_off" : "active";
+    case "completed": return "done";
+    case "failed": return "failed";
+    case "stopped": return "stopped";
+  }
+}
+
+/** What a launch row needs to know about the task its call started. */
+export interface BackgroundTaskLaunch {
+  task_type: string;
+  name: string;
+  phase: BackgroundTaskPhase;
+}
+
+/** The task a call (by item id) started, or null. Build one with {@link backgroundTaskResolver}. */
+export type BackgroundTaskResolver = (toolItemId: string) => BackgroundTaskLaunch | null;
+
+/**
+ * Resolve launch rows against a trace's `background_task` items (any depth),
+ * by `tool_item_id`; the first task a call started wins. A surface with the
+ * session registry loaded resolves against that first and falls back to this.
+ */
+export function backgroundTaskResolver(items: readonly TraceItem[]): BackgroundTaskResolver {
+  const byCall = new Map<string, BackgroundTaskLaunch>();
+  for (const item of items) {
+    if (item.type !== "background_task" || !item.tool_item_id || byCall.has(item.tool_item_id)) continue;
+    byCall.set(item.tool_item_id, { task_type: item.task_type, name: item.name, phase: backgroundTaskItemPhase(item) });
+  }
+  return (toolItemId) => byCall.get(toolItemId) ?? null;
+}
+
+/** A handed-off task's part in its turn is done; a failed one reads "done" like a failed command. */
+const PHASE_STATE: Record<BackgroundTaskPhase, StepState> = {
+  active: "active",
+  handed_off: "done",
+  done: "done",
+  failed: "done",
+  stopped: "stopped",
+};
+
+/**
+ * Copy for a background task: `{{command}}` is the launching call's label
+ * (its title, else its command), else the task's name; `{{name}}` is the
+ * task's name, else that label.
+ */
+export function describeBackgroundTask(task: Omit<BackgroundTaskLaunch, "phase">, phase: BackgroundTaskPhase, label?: string | null): StepDescriptor {
+  const callLabel = nonBlank(label);
+  const name = nonBlank(task.name) ?? callLabel ?? "";
+  return {
+    key: `background_${backgroundTaskKind(task.task_type)}_${phase}`,
+    args: { command: callLabel ?? name, name },
+    state: PHASE_STATE[phase],
+  };
+}
+
+/** The label of a call that may have started a background task. */
+function launchLabel(item: TraceItem): string | null {
+  if (item.type === "command") return nonBlank(item.title) ?? nonBlank(item.command);
+  if (item.type === "tool") return nonBlank(item.title) ?? nonBlank(item.tool);
+  return null;
+}
+
 function controlStep(item: TraceToolItem, control: AgentControl, state: StepState, resolveAgent?: AgentResolver): StepDescriptor {
   // A refused control call did nothing to the agent: it reads as the refused tool.
   if (state === "declined") return { key: "tool_declined", args: { tool: item.title ?? item.tool }, state };
@@ -316,9 +442,20 @@ function controlStep(item: TraceToolItem, control: AgentControl, state: StepStat
  * uses it and a file change uses its first change. `resolveAgent`
  * ({@link subagentResolver}) names the agent of a control row; without it a
  * target reads as written, an id-like one as "子代理", and `TaskStop` stays a
- * plain tool row.
+ * plain tool row. `resolveBackgroundTask` ({@link backgroundTaskResolver})
+ * finds the background task a command or tool call started; its row then
+ * reads as that task (PR 6 §4.3), whatever `part` it is.
  */
-export function describeStep(item: TraceItem, part?: CommandAction | FileChange, resolveAgent?: AgentResolver): StepDescriptor {
+export function describeStep(
+  item: TraceItem,
+  part?: CommandAction | FileChange,
+  resolveAgent?: AgentResolver,
+  resolveBackgroundTask?: BackgroundTaskResolver,
+): StepDescriptor {
+  if ((item.type === "command" || item.type === "tool") && item.status !== "declined") {
+    const task = resolveBackgroundTask?.(item.id);
+    if (task) return describeBackgroundTask(task, task.phase, launchLabel(item));
+  }
   const state = stepState(item);
   const done = (base: string, args: Record<string, string>): StepDescriptor => ({ key: keyFor(base, state), args, state });
   // Reads, searches and listings have only active and done copy (Codex reuses done).
@@ -385,6 +522,9 @@ export function describeStep(item: TraceItem, part?: CommandAction | FileChange,
       return { key: "user_message", args: { text: item.text }, state };
     case "notice":
       return { key: "notice", args: { title: item.title, description: item.description ?? "" }, state };
+    case "background_task":
+      // Not a process item; surfaces that list every item (the transcript) still name it.
+      return describeBackgroundTask(item, backgroundTaskItemPhase(item));
   }
 }
 

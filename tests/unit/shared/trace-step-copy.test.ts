@@ -1,10 +1,23 @@
 import { describe, expect, it } from "bun:test";
-import type { TraceCommandItem, TraceFileChangeItem, TraceItem, TraceSubagentItem, TraceToolItem } from "@multiremi/contracts/trace";
+import type {
+  TraceBackgroundTaskItem,
+  TraceCommandItem,
+  TraceFileChangeItem,
+  TraceItem,
+  TraceSubagentItem,
+  TraceToolItem,
+} from "@multiremi/contracts/trace";
+import { BACKGROUND_TASK_STATUSES } from "@multiremi/contracts/unified-model";
 import { parseCommand } from "@shared/command-parse.js";
 import {
   STEP_COPY_ZH,
   STEP_SUMMARY_ORDER,
   agentControl,
+  backgroundTaskItemPhase,
+  backgroundTaskKind,
+  backgroundTaskResolver,
+  backgroundTaskStatusPhase,
+  describeBackgroundTask,
   describeStep,
   formatStepCopy,
   isHiddenStep,
@@ -12,6 +25,8 @@ import {
   subagentResolver,
   summarizeSteps,
   type AgentResolver,
+  type BackgroundTaskPhase,
+  type BackgroundTaskResolver,
 } from "@shared/trace-step-copy.js";
 
 const NOW = "2026-10-15T00:00:00.000Z";
@@ -39,9 +54,16 @@ function agent(id: string, facts: Partial<TraceSubagentItem> = {}): TraceSubagen
   return { ...base, id, status: "completed", type: "subagent", tool: "Agent", title: null, prompt: null, output: null, duration_ms: null, ...facts };
 }
 
+function task(id: string, facts: Partial<TraceBackgroundTaskItem> = {}): TraceBackgroundTaskItem {
+  return {
+    ...base, id: `bg:${id}`, status: "in_progress", completed_at: null, type: "background_task", task_id: id, task_type: "shell",
+    name: "npm run dev", description: "npm run dev", tool_item_id: null, can_stop: true, summary: null, duration_ms: null, ...facts,
+  };
+}
+
 /** Render with the zh table, the way Feishu and the CLI will. */
-function zh(item: TraceItem, part?: Parameters<typeof describeStep>[1], resolve?: AgentResolver): string {
-  const step = describeStep(item, part, resolve);
+function zh(item: TraceItem, part?: Parameters<typeof describeStep>[1], resolve?: AgentResolver, resolveTask?: BackgroundTaskResolver): string {
+  const step = describeStep(item, part, resolve, resolveTask);
   return formatStepCopy(step.key, step.args);
 }
 
@@ -369,5 +391,102 @@ describe("formatStepCopy", () => {
     expect(formatStepCopy("read_done", { file: "a.ts" }, { copy: en })).toBe("Read a.ts");
     expect(formatStepCopy("read_done")).toBe("已读取 ");
     expect(formatStepCopy("no_such_key")).toBe("no_such_key");
+  });
+});
+
+describe("background launch rows (PR 6 §4.3)", () => {
+  const launch = { ...shell("npm run dev"), id: "call_dev" };
+  const titled = { ...launch, title: "Start the dev server" };
+
+  it("reads the call that started a shell as the background command, in every phase", () => {
+    const at = (facts: Partial<TraceBackgroundTaskItem>) =>
+      zh(launch, undefined, undefined, backgroundTaskResolver([launch, task("t1", { tool_item_id: "call_dev", ...facts })]));
+    expect(at({})).toBe("已启动后台命令 npm run dev");
+    expect(at({ paused: true })).toBe("已启动后台命令 npm run dev");
+    expect(at({ status: "completed", handed_off: true, completed_at: NOW })).toBe("npm run dev 仍在后台运行");
+    expect(at({ status: "completed", completed_at: NOW })).toBe("后台命令已完成 npm run dev");
+    expect(at({ status: "failed", completed_at: NOW })).toBe("后台命令失败 npm run dev");
+    expect(at({ status: "stopped", completed_at: NOW, stop_reason: "user" })).toBe("后台命令已停止 npm run dev");
+  });
+
+  it("names a shell by the call's label: its title, else its command, else the task's name", () => {
+    const resolve = backgroundTaskResolver([task("t1", { tool_item_id: "call_dev", name: "npm run dev -- --port 3000" })]);
+    expect(zh(titled, undefined, undefined, resolve)).toBe("已启动后台命令 Start the dev server");
+    expect(zh(launch, undefined, undefined, resolve)).toBe("已启动后台命令 npm run dev");
+    expect(describeStep({ ...launch, command: null }, undefined, undefined, resolve).args.command).toBe("npm run dev -- --port 3000");
+    // The step is the task's whatever part of the command is asked for.
+    expect(zh(launch, launch.actions[0], undefined, resolve)).toBe("已启动后台命令 npm run dev");
+  });
+
+  it("uses the workflow and task families, named by the task", () => {
+    const tool = { ...call("Workflow", { name: "release" }), id: "call_flow" };
+    const flow = backgroundTaskResolver([task("w1", { task_type: "workflow", name: "release-check", tool_item_id: "call_flow" })]);
+    expect(zh(tool, undefined, undefined, flow)).toBe("已启动后台工作流 release-check");
+    const mcp = backgroundTaskResolver([task("m1", { task_type: "monitor", name: "watch deploy", tool_item_id: "call_flow",
+      status: "completed", handed_off: true })]);
+    expect(zh(tool, undefined, undefined, mcp)).toBe("watch deploy 仍在后台运行");
+    const raw = backgroundTaskResolver([task("x1", { task_type: "mcp_task", name: "", tool_item_id: "call_flow", status: "failed" })]);
+    // No task name: the call's label stands in.
+    expect(zh(tool, undefined, undefined, raw)).toBe("后台任务失败 Workflow");
+    expect([backgroundTaskKind("shell"), backgroundTaskKind("workflow"), backgroundTaskKind("monitor"), backgroundTaskKind("x")])
+      .toEqual(["command", "workflow", "task", "task"]);
+  });
+
+  it("leaves rows without a task, declined calls and other item types alone", () => {
+    const resolve = backgroundTaskResolver([task("t1", { tool_item_id: "call_dev" })]);
+    expect(zh(shell("npm test"), undefined, undefined, resolve)).toBe("已运行 npm test");
+    expect(zh({ ...launch, status: "declined" }, undefined, undefined, resolve)).toBe("已拒绝运行 npm run dev");
+    expect(zh(agent("call_dev", { title: "Explore" }), undefined, undefined, resolve)).toBe("子代理已完成：Explore");
+    // Without a resolver nothing changes.
+    expect(zh(launch)).toBe("已运行 npm run dev");
+  });
+
+  it("resolves by tool_item_id at any depth; the first task a call started wins", () => {
+    const resolve = backgroundTaskResolver([
+      task("t1", { tool_item_id: "call_dev", parent_id: "sa:1" }),
+      task("t2", { tool_item_id: "call_dev", status: "failed" }),
+      task("t3", { tool_item_id: null }),
+    ]);
+    expect(resolve("call_dev")).toEqual({ task_type: "shell", name: "npm run dev", phase: "active" });
+    expect(resolve("call_other")).toBeNull();
+  });
+
+  it("describes the task item itself for surfaces that list every item", () => {
+    expect(zh(task("t1"))).toBe("已启动后台命令 npm run dev");
+    expect(zh(task("t1", { status: "completed", handed_off: true }))).toBe("npm run dev 仍在后台运行");
+    expect(describeStep(task("t1", { status: "stopped" }))).toEqual({
+      key: "background_command_stopped", args: { command: "npm run dev", name: "npm run dev" }, state: "stopped",
+    });
+    // Not a step row: it never groups into a summary.
+    expect(stepCategory(task("t1"))).toBeNull();
+  });
+
+  it("maps trace items and registry rows to phases and display states", () => {
+    expect(backgroundTaskItemPhase({ status: "in_progress" })).toBe("active");
+    expect(backgroundTaskItemPhase({ status: "completed", handed_off: true })).toBe("handed_off");
+    expect(backgroundTaskItemPhase({ status: "completed" })).toBe("done");
+    expect(backgroundTaskItemPhase({ status: "declined" })).toBe("stopped");
+    const live: Record<string, [BackgroundTaskPhase, BackgroundTaskPhase]> = {};
+    for (const status of BACKGROUND_TASK_STATUSES) live[status] = [backgroundTaskStatusPhase(status, false), backgroundTaskStatusPhase(status, true)];
+    expect(live).toEqual({
+      running: ["active", "handed_off"], paused: ["active", "handed_off"], unknown: ["active", "handed_off"],
+      completed: ["done", "done"], failed: ["failed", "failed"], stopped: ["stopped", "stopped"],
+    });
+    const states = (["active", "handed_off", "done", "failed", "stopped"] as const)
+      .map((phase) => describeBackgroundTask({ task_type: "shell", name: "x" }, phase).state);
+    expect(states).toEqual(["active", "done", "done", "done", "stopped"]);
+  });
+
+  it("only returns keys of the zh table, each with the args its placeholders need", () => {
+    for (const task_type of ["shell", "workflow", "monitor", "other"]) {
+      for (const phase of ["active", "handed_off", "done", "failed", "stopped"] as const) {
+        const step = describeBackgroundTask({ task_type, name: "n" }, phase, "label");
+        expect(STEP_COPY_ZH).toHaveProperty(step.key);
+        const placeholders = [...STEP_COPY_ZH[step.key].matchAll(/\{\{(\w+)\}\}/g)].map((match) => match[1]!);
+        for (const name of placeholders) expect(step.args[name], `${step.key} needs ${name}`).toBeTruthy();
+      }
+    }
+    const keys = Object.keys(STEP_COPY_ZH).filter((key) => key.startsWith("background_"));
+    expect(keys).toHaveLength(15);
   });
 });

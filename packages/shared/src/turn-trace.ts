@@ -26,6 +26,8 @@ import type { DaemonTaskCompletionFields } from "@multiremi/contracts/daemon-pro
 import {
   TRACE_TOOL_ITEM_TYPES,
   type TraceAgentMessageItem,
+  type TraceBackgroundTaskItem,
+  type TraceBackgroundTaskStopReason,
   type TraceEventBody,
   type TraceHistogramBucket,
   type TraceItem,
@@ -374,17 +376,20 @@ function histogramTool(item: TraceItem): string | null {
 /**
  * Item types the Chat fold never renders as process rows: the user's own
  * message, the permission / question exchanges (Chat has its own dock and
- * question UI for those; decision Q1 of PR 2), and reasoning, which only feeds
- * the live label (decision D-count).
+ * question UI for those; decision Q1 of PR 2), reasoning, which only feeds
+ * the live label (decision D-count), and a background task, whose row is the
+ * call that started it (PR 6 §4.1).
  */
-const NON_PROCESS_TYPES: ReadonlySet<TraceItem["type"]> = new Set(["user_message", "permission", "question", "reasoning"]);
+const NON_PROCESS_TYPES: ReadonlySet<TraceItem["type"]> = new Set([
+  "user_message", "permission", "question", "reasoning", "background_task",
+]);
 
 /**
  * Whether a top-level item produces a row in the Chat fold (decision D-count):
  * anything but a final reply, a user message, a permission, a question,
- * reasoning, a hidden step (Codex `wait`, PR 5), or an agent message with no
- * visible text. The frontend's `buildTurnSteps(items).processCount` must equal
- * {@link processItemCount}.
+ * reasoning, a background task, a hidden step (Codex `wait`, PR 5), or an
+ * agent message with no visible text. The frontend's
+ * `buildTurnSteps(items).processCount` must equal {@link processItemCount}.
  */
 export function isProcessItem(item: TraceItem): boolean {
   if (item.parent_id !== null || NON_PROCESS_TYPES.has(item.type) || isHiddenStep(item)) return false;
@@ -507,6 +512,45 @@ export function lateSubagents(
   }));
 }
 
+// ── Background tasks (PR 6 §4.1) ────────────────────────────────────────────
+
+/** The trace item id of a bridge task: `bg:<asyncTaskId>`. */
+export function backgroundTaskItemId(taskId: string): string {
+  return `bg:${taskId}`;
+}
+
+export function isBackgroundTaskItem(item: TraceItem): item is TraceBackgroundTaskItem {
+  return item.type === "background_task";
+}
+
+/** Every background task item (any depth), in order. */
+export function backgroundTaskItems(items: readonly TraceItem[]): TraceBackgroundTaskItem[] {
+  return items.filter(isBackgroundTaskItem);
+}
+
+/** Background tasks still running or paused in this attempt (any depth): the `running_background_tasks` count. */
+export function runningBackgroundTasks(items: readonly TraceItem[]): TraceBackgroundTaskItem[] {
+  return items.filter((item): item is TraceBackgroundTaskItem => isBackgroundTaskItem(item) && item.status === "in_progress");
+}
+
+/**
+ * `item.completed` bodies that hand off every running background task when
+ * the attempt ends with its process parked: `completed` with `handed_off:
+ * true` (no new status, ADR 0019), no `paused` flag and no duration, since the
+ * task has not ended. Call before {@link closeOpenItems}, which would stop them.
+ */
+export function handOffBackgroundTasks(items: readonly TraceItem[], completedAt: string): TraceEventBody[] {
+  return runningBackgroundTasks(items).map((item): TraceEventBody => {
+    const { seq: _seq, paused: _paused, ...rest } = item;
+    return { type: "item.completed", item: { ...rest, status: "completed", completed_at: completedAt, handed_off: true, duration_ms: null } };
+  });
+}
+
+/** The stop reason {@link closeOpenItems} gives a background task left running, by the turn's outcome. */
+export function backgroundTaskCloseReason(turnStatus: TraceTurnStatus): TraceBackgroundTaskStopReason {
+  return turnStatus === "cancelled" ? "cancelled" : turnStatus === "failed" ? "lost" : "turn_end";
+}
+
 function elapsedMs(from: string | null, to: string | null): number | null {
   if (!from || !to) return null;
   const start = Date.parse(from);
@@ -532,6 +576,10 @@ export function turnWorkedMs(turn: Pick<TraceTurn, "started_at" | "final_started
  * the turn until it settles, so the turn's end is its end. It becomes
  * `completed`, with its duration, when the turn completed; a failed or
  * cancelled turn may have cut it short, so it becomes `stopped`.
+ *
+ * A background task (PR 6) still open here was neither handed off nor stopped
+ * by the daemon: it becomes `stopped`, keeping a reason it already has, else
+ * {@link backgroundTaskCloseReason}.
  */
 export function closeOpenItems(
   items: readonly TraceItem[],
@@ -548,6 +596,15 @@ export function closeOpenItems(
         ...rest, status: turnStatus === "completed" ? "completed" : "stopped", completed_at: completedAt,
         duration_ms: item.duration_ms ?? elapsedMs(item.started_at, completedAt),
       } as TraceItem });
+      continue;
+    }
+    if (item.type === "background_task") {
+      const { paused: _paused, ...task } = rest as Omit<TraceBackgroundTaskItem, "seq">;
+      out.push({ type: "item.completed", item: {
+        ...task, status: "stopped", completed_at: completedAt,
+        stop_reason: item.stop_reason ?? backgroundTaskCloseReason(turnStatus),
+        duration_ms: item.duration_ms ?? elapsedMs(item.started_at, completedAt),
+      } });
       continue;
     }
     const status: TraceItemStatus = isToolItem(item) ? "stopped"

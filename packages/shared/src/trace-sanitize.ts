@@ -16,11 +16,12 @@
  * store both need it and neither may depend on the other.
  */
 
-import type {
-  CommandAction,
-  FileChange,
-  TraceEventBody,
-  TraceItem,
+import {
+  TRACE_BACKGROUND_TASK_OUTPUT_TAIL_MAX_BYTES,
+  type CommandAction,
+  type FileChange,
+  type TraceEventBody,
+  type TraceItem,
 } from "@multiremi/contracts/trace.js";
 import { utf8ByteLength } from "./utf8.js";
 
@@ -213,6 +214,10 @@ export const TRACE_ITEM_LABEL_MAX_BYTES = 512;
 export const TRACE_ITEM_COMMAND_MAX_BYTES = 16 * 1024;
 /** A command's `cwd`. */
 export const TRACE_ITEM_CWD_MAX_BYTES = 4 * 1024;
+/** A background task's `description` and `summary` (PR 6). */
+export const TRACE_ITEM_SUMMARY_MAX_BYTES = 16 * 1024;
+/** A background task's `output_tail`: the last 4 KiB, from a line start (PR 6 §4.4). */
+export { TRACE_BACKGROUND_TASK_OUTPUT_TAIL_MAX_BYTES };
 /** One serialized event; over it, the largest fields are dropped. */
 export const TRACE_EVENT_MAX_BYTES = 1024 * 1024;
 
@@ -259,6 +264,34 @@ export function capOutput(
     value: `${utf8Head(bytes, headBytes)}\n${TRACE_TRUNCATION_MARKER}\n${utf8Tail(bytes, tailBytes)}`,
     truncated: true,
   };
+}
+
+/**
+ * The end of an output, at most `maxBytes`: the last bytes, moved forward to a
+ * character boundary and then past the first newline, so the tail starts at a
+ * line start (a single over-long line keeps its character-aligned end). The
+ * daemon's output reader and the item cap share it, so a tail it read is
+ * never cut again.
+ */
+export function outputTailFromBytes(
+  bytes: Uint8Array,
+  maxBytes: number = TRACE_BACKGROUND_TASK_OUTPUT_TAIL_MAX_BYTES,
+): CappedValue<string> {
+  if (bytes.length <= maxBytes) return { value: utf8Decoder.decode(bytes), truncated: false };
+  let start = bytes.length - maxBytes;
+  while (start < bytes.length && (bytes[start]! & 0xc0) === 0x80) start++;
+  const newline = bytes.indexOf(0x0a, start);
+  if (newline >= 0 && newline + 1 < bytes.length) start = newline + 1;
+  return { value: utf8Decoder.decode(bytes.subarray(start)), truncated: true };
+}
+
+/** {@link outputTailFromBytes} for text already decoded. */
+export function capOutputTail(
+  text: string | null,
+  maxBytes: number = TRACE_BACKGROUND_TASK_OUTPUT_TAIL_MAX_BYTES,
+): CappedValue<string | null> {
+  if (text === null || utf8ByteLength(text) <= maxBytes) return { value: text, truncated: false };
+  return outputTailFromBytes(utf8Encoder.encode(text), maxBytes);
 }
 
 /** `title` / `tool` labels: 512 bytes. */
@@ -427,6 +460,23 @@ export function capTraceItem<T extends TraceItem>(item: T): T {
     case "notice":
       label("title");
       break;
+    case "background_task": {
+      label("task_type");
+      label("name");
+      optionalLabel("last_tool_name");
+      for (const key of ["description", "summary"] as const) {
+        const value = next[key];
+        if (value === null) continue;
+        // By value: a capped text re-caps to itself, so a capped item keeps its identity.
+        const capped = capItemText(value, TRACE_ITEM_SUMMARY_MAX_BYTES).value;
+        if (capped !== value) { next[key] = capped; changed = true; }
+      }
+      if (typeof next.output_tail === "string") {
+        const capped = capOutputTail(next.output_tail);
+        if (capped.truncated) { next.output_tail = capped.value; next.output_tail_truncated = true; changed = true; }
+      }
+      break;
+    }
     default:
       break;
   }

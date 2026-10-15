@@ -63,6 +63,7 @@ function itemIcon(item: TraceItem): LucideIcon {
     case "question": return CircleHelp;
     case "compaction": return TextSelect;
     case "notice": return item.severity === "error" ? AlertCircle : FileText;
+    case "background_task": return SquareTerminal; // PR 6 Phase C
   }
 }
 
@@ -90,6 +91,8 @@ function hasDetail(item: TraceItem, childCount: number): boolean {
       return !!item.summary || !!item.error || item.pre_tokens != null;
     case "notice":
       return !!item.description || !!item.category || !!item.error_kind;
+    case "background_task":
+      return false; // PR 6 Phase C: no detail until the background-task view lands.
   }
 }
 
@@ -277,6 +280,8 @@ function ItemDetail({ item }: { item: TraceItem }) {
           {(item.category || item.error_kind) && <div>{[item.category, item.error_kind].filter(Boolean).join(" · ")}</div>}
         </div>
       );
+    case "background_task":
+      return null; // PR 6 Phase C
   }
 }
 

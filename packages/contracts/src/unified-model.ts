@@ -4,7 +4,13 @@ import type { MultiremiTaskPluginSnapshotEntry, TaskUsageEntry } from "./types.j
 import type { RuntimeCodexProfile } from "./codex-profile.js";
 import type { RuntimeClaudeProfile } from "./claude-profile.js";
 import type { TraceRef } from "./trace-file.js";
-import type { TraceContextUsage, TraceLateSubagent } from "./trace.js";
+import {
+  TRACE_BACKGROUND_TASK_STOP_REASONS,
+  type TraceBackgroundTaskStopRequest,
+  type TraceBackgroundTaskUsage,
+  type TraceContextUsage,
+  type TraceLateSubagent,
+} from "./trace.js";
 
 export const MESSAGE_KINDS = ["request", "reply", "report", "decision", "status", "final"] as const;
 export type MessageKind = typeof MESSAGE_KINDS[number];
@@ -116,6 +122,12 @@ export interface MultiremiTurn {
    * `task.activity` report (PR 5). Absent or null when never reported.
    */
   running_subagents?: number | null;
+  /**
+   * Background tasks the current attempt has running, from the same report
+   * (PR 6, `running_background_tasks`). Absent or null when never reported.
+   * Tasks parked after the attempt are the session registry's, not this.
+   */
+  running_background_tasks?: number | null;
 }
 
 export interface MultiremiTurnAttempt {
@@ -166,6 +178,8 @@ export interface MultiremiTurnAttempt {
    * active (accepted or running); null once it ended or when never reported.
    */
   running_subagents?: number | null;
+  /** PR 6: the attempt's running background tasks from `task.activity`, under the same rule as `running_subagents`. */
+  running_background_tasks?: number | null;
   /** PR 5 completion fact: top-level subagents that ended after the final reply started, at most 5; null when none did. */
   late_subagents?: TraceLateSubagent[] | null;
   offered_at: string | null;
@@ -197,6 +211,110 @@ export interface MultiremiSessionLane {
   last_attempt_id: string | null;
   created_at: string;
   updated_at: string;
+}
+
+// ── Background tasks (PR 6) ─────────────────────────────────────────────────
+//
+// A Chat lane's bridge process may outlive its attempt while background tasks
+// run (keep-alive on demand). The session's live view is the registry
+// (`multiremi_background_tasks`), fed by the daemon's best-effort
+// `lane.background_tasks` snapshots; a trace keeps only its own attempt's part
+// (`TraceBackgroundTaskItem`).
+
+/**
+ * A registry row's status. `paused` is a status here (the trace item flags it,
+ * because trace statuses are frozen by ADR 0019); `unknown` is the server's
+ * own, for a runtime that has been offline too long to know.
+ */
+export const BACKGROUND_TASK_STATUSES = ["running", "paused", "completed", "failed", "stopped", "unknown"] as const;
+export type BackgroundTaskStatus = (typeof BACKGROUND_TASK_STATUSES)[number];
+/** What a daemon may report; `unknown` is never reported. */
+export type BackgroundTaskReportedStatus = Exclude<BackgroundTaskStatus, "unknown">;
+/** Statuses with a process still behind them. */
+export const BACKGROUND_TASK_LIVE_STATUSES = ["running", "paused"] as const satisfies readonly BackgroundTaskStatus[];
+
+/**
+ * Why a task stopped: the trace's reasons (`user`, `turn_end`, `cancelled`,
+ * `lost`) plus the lane's own (PR 6 §2.7): the keep-alive cap, eviction or no
+ * room to park (`evicted`, `no_capacity`), a daemon restart, stop or drain,
+ * a reset or closed session, and a changed agent or runtime config.
+ */
+export const BACKGROUND_TASK_STOP_REASONS = [
+  ...TRACE_BACKGROUND_TASK_STOP_REASONS,
+  "keepalive_cap",
+  "evicted",
+  "no_capacity",
+  "daemon_restart",
+  "lane_reset",
+  "session_closed",
+  "config_changed",
+] as const;
+export type BackgroundTaskStopReason = (typeof BACKGROUND_TASK_STOP_REASONS)[number];
+
+/** Why the server tells a daemon to release a parked lane (`lane.background_release`). */
+export const BACKGROUND_LANE_RELEASE_REASONS = ["lane_reset", "session_closed"] as const satisfies readonly BackgroundTaskStopReason[];
+export type BackgroundLaneReleaseReason = (typeof BACKGROUND_LANE_RELEASE_REASONS)[number];
+
+/** Where a lane's process is: serving an attempt, parked between attempts, or gone. */
+export const BACKGROUND_LANE_STATES = ["in_attempt", "parked", "closed"] as const;
+export type BackgroundLaneState = (typeof BACKGROUND_LANE_STATES)[number];
+
+export type BackgroundTaskStopOutcome = TraceBackgroundTaskStopRequest["outcome"];
+
+/** One row of a session's background tasks (`GET /api/chat/sessions/:id/background-tasks`). */
+export interface MultiremiBackgroundTask {
+  id: string;
+  workspace_id: string;
+  session_id: string;
+  agent_id: string;
+  execution_scope: string;
+  runtime_id: string;
+  provider_session_id: string;
+  /** The bridge's `asyncTaskId`, unique within the lane's provider session. */
+  task_id: string;
+  task_type: string;
+  name: string;
+  command: string | null;
+  origin_attempt_id: string;
+  origin_turn_id: string | null;
+  /** The task's trace item in the origin attempt (`bg:<task_id>`). */
+  origin_item_id: string | null;
+  status: BackgroundTaskStatus;
+  stop_reason: BackgroundTaskStopReason | null;
+  can_stop: boolean;
+  stop_requested_at: string | null;
+  /** Member id of whoever asked; null when Remi itself stopped it. */
+  stop_requested_by: string | null;
+  /** The daemon's answer to the latest stop request; null before one is reported. */
+  stop_outcome: BackgroundTaskStopOutcome | null;
+  started_at: string;
+  ended_at: string | null;
+  duration_ms: number | null;
+  summary: string | null;
+  output_tail: string | null;
+  usage: TraceBackgroundTaskUsage | null;
+  lane_state: BackgroundLaneState;
+  /** When the parked process stops at the latest (the keep-alive cap); null unless parked. */
+  parked_until: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+/**
+ * `metadata.background_task` of the doorbell: the platform `status` message a
+ * parked Claude task's end writes to its agent, waking it (PR 6 §2.5). The
+ * attempt that attaches acknowledges it without prompting it; the web renders
+ * it as a compact line, not a bubble.
+ */
+export interface BackgroundTaskDoorbellMetadata {
+  task_id: string;
+  name: string;
+  task_type: string;
+  /** Only an end that wakes the model rings: a stop never does. */
+  status: Extract<BackgroundTaskStatus, "completed" | "failed">;
+  origin_attempt_id: string;
+  origin_turn_id: string | null;
+  provider_session_id: string;
 }
 
 export const autopilotSessionId = (autopilotId: string): string => `auto_${autopilotId}`;

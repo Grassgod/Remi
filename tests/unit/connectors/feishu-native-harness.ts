@@ -52,6 +52,9 @@ const DEFAULTS: { [T in TraceItemType]: ItemFields<T> } = {
     reply_message_id: null },
   compaction: { trigger: "automatic", summary: null, pre_tokens: null, post_tokens: null, error: null },
   notice: { severity: "info", title: "", description: null, category: null, error_kind: null },
+  // PR 6 Phase E1 presents it; the defaults only complete the fixture table.
+  background_task: { task_id: "task", task_type: "shell", name: "", description: null, tool_item_id: null, can_stop: true,
+    summary: null, duration_ms: null },
 };
 
 /** A completed top-level item of `type`; `patch` overrides any field. */

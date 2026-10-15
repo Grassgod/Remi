@@ -7,6 +7,13 @@ import {
   DAEMON_DOWNLINK_TRACE_FRAMES,
   DAEMON_FRAME_MAX_BYTES,
   DAEMON_HEARTBEAT_INTERVAL_MS,
+  DAEMON_LANE_BACKGROUND_CLOSED_REPEAT_MS,
+  DAEMON_LANE_BACKGROUND_CLOSED_REPEATS,
+  DAEMON_LANE_BACKGROUND_DEBOUNCE_MS,
+  DAEMON_LANE_BACKGROUND_MAX_BYTES,
+  DAEMON_LANE_BACKGROUND_MAX_TASKS,
+  DAEMON_LANE_BACKGROUND_REFRESH_MS,
+  DAEMON_LANE_BACKGROUND_STOP_ALL,
   DAEMON_MIN_CLI_VERSION,
   DAEMON_OFFER_COOLDOWN_MS,
   DAEMON_OFFER_TIMEOUT_MS,
@@ -227,6 +234,33 @@ describe("daemon protocol frame inventory", () => {
     expect(daemonFrameCategory("task.activity")).toBe("best_effort");
     expect(daemonFrameIsReliable("task.activity")).toBe(false);
     expect(daemonFrameUsesSeq("task.activity")).toBe(false);
+  });
+
+  it("carries background tasks on additive frames behind one cap (PR 6)", () => {
+    // The lane snapshot is recomputed from local state: best effort, never replayed.
+    expect(daemonFrameCategory("lane.background_tasks")).toBe("best_effort");
+    expect(daemonFrameIsReliable("lane.background_tasks")).toBe(false);
+    expect(daemonFrameUsesSeq("lane.background_tasks")).toBe(false);
+    // The doorbell needs an answer.
+    expect(DAEMON_UPLINK_RPC_FRAMES).toContain("lane.background_wake");
+    expect(daemonFrameCategory("lane.background_wake")).toBe("rpc");
+    // Stop and release are DB-derived downlinks, resent at hello.
+    for (const name of ["lane.background_stop", "lane.background_release"] as const) {
+      expect(DAEMON_DOWNLINK_EVENT_FRAMES).toContain(name);
+      expect(daemonFrameCategory(name)).toBe("event");
+      expect(daemonFrameUsesSeq(name)).toBe(true);
+    }
+    expect(DAEMON_PROTOCOL_CAPS).toContain("lane.background");
+    expect(DAEMON_PROTOCOL_ERROR_CODES).toContain("lane_moved");
+    expect(DAEMON_PROTOCOL_ERROR_CODES).toContain("session_closed");
+    // A rejected doorbell is a business answer: not retried as is, and no outbox partition depends on it.
+    expect(DAEMON_RETRYABLE_ERROR_CODES).not.toContain("lane_moved" as never);
+    expect(DAEMON_TERMINAL_ERROR_CODES).not.toContain("session_closed" as never);
+    expect(DAEMON_LANE_BACKGROUND_MAX_TASKS).toBe(32);
+    expect(DAEMON_LANE_BACKGROUND_MAX_BYTES).toBeLessThan(DAEMON_FRAME_MAX_BYTES);
+    expect(DAEMON_LANE_BACKGROUND_DEBOUNCE_MS).toBeLessThan(DAEMON_LANE_BACKGROUND_REFRESH_MS);
+    expect(DAEMON_LANE_BACKGROUND_CLOSED_REPEATS * DAEMON_LANE_BACKGROUND_CLOSED_REPEAT_MS).toBeLessThanOrEqual(DAEMON_LANE_BACKGROUND_REFRESH_MS);
+    expect(DAEMON_LANE_BACKGROUND_STOP_ALL).toBe("*");
   });
 
   it("keeps the upgrade channel free of task traffic", () => {

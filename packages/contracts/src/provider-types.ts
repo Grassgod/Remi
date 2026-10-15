@@ -3,8 +3,8 @@
  * Moved here so remi's src/providers/base.ts can re-export without circular deps.
  */
 
-import type { SessionUpdate, MediaAttachment } from "./acp-protocol.js";
-import type { TraceSteerOutcome } from "./trace.js";
+import type { AsyncTaskState, SessionUpdate, MediaAttachment } from "./acp-protocol.js";
+import type { TraceBackgroundTaskStopRequest, TraceSteerOutcome } from "./trace.js";
 
 export type ProviderEvent = SessionUpdate;
 
@@ -112,7 +112,104 @@ export interface Provider {
   listenAutonomous?(options: ListenAutonomousOptions): AsyncGenerator<ProviderEvent>;
   getLastResponse?(): AgentResponse | null;
   healthCheck(): Promise<boolean>;
+
+  // ── Background tasks (PR 6 §3.3). All absent when the provider has no
+  // async-task registry; the daemon then stops nothing and parks nothing.
+
+  /** The pooled session's background tasks, as its registry last saw them, in announcement order. */
+  listAsyncTasks?(options: { chatId?: string | null }): AsyncTaskSnapshot[];
+  /**
+   * Stop one task: `_session/async_task/stop` on the root session, with a
+   * timeout. An unknown task, or one not running, answers `{stopped: false}`
+   * without a wire call. Never throws.
+   */
+  stopAsyncTask?(taskId: string, options: { chatId?: string | null; timeoutMs?: number }): Promise<StopAsyncTaskResult>;
+  /**
+   * Replay the frames that arrived since the last prompt, wait `drainMs` for
+   * late announcements (Codex), optionally stop every running task, then
+   * yield frames until none runs or `timeoutMs` passes.
+   */
+  settleAsyncTasks?(options: SettleAsyncTasksOptions): AsyncGenerator<ProviderEvent>;
+  /**
+   * Whether the pooled session could serve `options` without being recreated:
+   * the staleness rule of session creation, with no side effects. A model or
+   * effort change alone never makes it stale.
+   */
+  reuseCheck?(chatId: string, options?: SendOptions): ReuseCheckResult;
+  /**
+   * Move the pooled session (its process, child sessions and death listener)
+   * from `fromChatId` to `toChatId`, for the next attempt of a parked lane.
+   * Starts a new prompt state; turn-scope cost estimates count from the parked
+   * prompt's last cumulative cost. False when nothing is pooled under `fromChatId`.
+   */
+  adoptSession?(fromChatId: string, toChatId: string): boolean;
+  /** Suspend (`on`) or resume the pool's idle cleanup for this session, and capture every frame while parked. */
+  park?(chatId: string, on: boolean): void;
+  /** The bridge's process group id, for the daemon's crash sweep; null when no process is pooled. */
+  processGroupId?(chatId: string): number | null;
 }
+
+/** One background task as a provider's registry holds it (PR 6 §3.2). */
+export interface AsyncTaskSnapshot {
+  /** The bridge's `asyncTaskId`. */
+  id: string;
+  /** The ACP session its frames arrive on: the root, or a native child's. */
+  sessionId: string;
+  state: AsyncTaskState;
+  canStop: boolean;
+  name: string;
+  taskType: string;
+  description: string | null;
+  toolCallId: string | null;
+  /** Kept out of the trace; the daemon reads the output tail from it (Claude). */
+  outputFilePath: string | null;
+  summary: string | null;
+  lastToolName: string | null;
+  usage: { totalTokens: number; toolUses: number; durationMs: number } | null;
+  /** Epoch ms when the provider saw the spawn, and when it saw a terminal state. */
+  startedAt: number;
+  endedAt: number | null;
+  /** The latest stop Remi sent, and its answer so far. */
+  stop: { requestedAt: number; by: TraceBackgroundTaskStopRequest["by"]; outcome: TraceBackgroundTaskStopRequest["outcome"] } | null;
+}
+
+/** Fires for every registry change of a pooled session's task (the parked-lane supervisor listens). */
+export type AsyncTaskChangeListener = (chatId: string, task: AsyncTaskSnapshot) => void;
+
+export interface StopAsyncTaskResult {
+  stopped: boolean;
+}
+
+export interface SettleAsyncTasksOptions {
+  chatId?: string | null;
+  /** Stop every running task (in parallel) before waiting. */
+  stopRunning: boolean;
+  /** Wait this long first for announcements a bridge sends after the prompt resolved (Codex). */
+  drainMs?: number;
+  /** End by this long after the call, whether or not tasks still run. */
+  timeoutMs: number;
+  signal?: AbortSignal;
+}
+
+/**
+ * Why a pooled session cannot be reused: nothing is pooled, its process died
+ * or lost its gateway, or a value fixed when the session or process was created
+ * changed (PR 6 §2.4; the `_ensureSession` staleness rule).
+ */
+export const PROVIDER_REUSE_REJECTIONS = [
+  "no_session",
+  "process_dead",
+  "gateway_unavailable",
+  "cwd",
+  "mcp_servers",
+  "plugins",
+  "context_declaration",
+  "startup_model",
+  "codex_home",
+] as const;
+export type ProviderReuseRejection = (typeof PROVIDER_REUSE_REJECTIONS)[number];
+
+export type ReuseCheckResult = { reuse: true } | { reuse: false; reason: ProviderReuseRejection };
 
 export interface ListenAutonomousOptions {
   chatId?: string | null;
