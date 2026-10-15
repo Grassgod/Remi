@@ -294,6 +294,8 @@ interface PoolEntry {
    * resolved). The next `sendStream` replays them so their requests are billed.
    */
   idleUsage: SessionNotification[];
+  /** Codex rollout read position for this session; each settle advances it. */
+  codexRollout?: CodexRolloutCursor;
 }
 
 type PermissionHandler = (params: RequestPermissionParams) => Promise<PermissionOutcome>;
@@ -782,8 +784,14 @@ export class AcpProvider implements Provider {
     for (const notification of (entry.idleUsage ?? []).splice(0)) onUpdate(notification);
 
     const rolloutHome = this._adapter.agentType === "codex" ? codexHomeFor(entry.codexHome, { ...process.env, ...this._options.env }) : null;
-    // The ACP session ID is the native thread ID.
-    if (rolloutHome) promptState.codexRollout = beginCodexRolloutUsage(rolloutHome, entry.acpSessionId, promptState.promptStartTime);
+    if (rolloutHome) {
+      // The ACP session ID is the native thread ID. One cursor per session, so a
+      // turn the bridge ran between prompts is read now, as idle usage is billed.
+      if (entry.codexRollout?.threadId !== entry.acpSessionId || entry.codexRollout.sessionsDir !== join(rolloutHome, "sessions")) {
+        entry.codexRollout = beginCodexRolloutUsage(rolloutHome, entry.acpSessionId, promptState.promptStartTime);
+      }
+      promptState.codexRollout = entry.codexRollout;
+    }
     const promptStartMs = Date.now();
     promptToken = {};
     const settlePromptInFlight = () => {

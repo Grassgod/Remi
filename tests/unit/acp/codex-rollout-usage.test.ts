@@ -97,6 +97,20 @@ describe("Codex native rollout request usage", () => {
     expect((await collectCodexRolloutUsage(cursor)).map(request => request.usage.providerRequestId)).toEqual(["resp_after_big"]);
   });
 
+  it("reads each record once across prompts, including a turn the bridge ran between them", async () => {
+    const codexHome = home(), now = Date.now(), root = uuid7(now, "aa00bb11cc22");
+    const file = rolloutPath(codexHome, root, now);
+    writeFileSync(file, line(now, "session_meta", { id: root }));
+    const cursor = beginCodexRolloutUsage(codexHome, root, now);
+    appendFileSync(file, record(now + 1, root, root, "resp_first", usage(10, 0, 1)) + turnEnd(now + 2));
+    expect((await collectCodexRolloutUsage(cursor)).map(request => request.usage.providerRequestId)).toEqual(["resp_first"]);
+    // A bridge-started turn (ADR 0020) the daemon cancelled, then the next prompt.
+    appendFileSync(file, record(now + 3, root, root, "resp_bridge_turn", usage(20, 0, 2)) + turnEnd(now + 4, "turn_aborted")
+      + record(now + 5, root, root, "resp_second", usage(30, 0, 3)) + turnEnd(now + 6));
+    expect((await collectCodexRolloutUsage(cursor)).map(request => request.usage.providerRequestId)).toEqual(["resp_bridge_turn", "resp_second"]);
+    expect(await collectCodexRolloutUsage(cursor)).toEqual([]);
+  });
+
   it("returns at once when the prompt left no root rollout to wait for", async () => {
     const codexHome = home(), now = Date.now(), root = uuid7(now, "eeeeee555555");
     const started = Date.now();
@@ -139,6 +153,29 @@ describe("Codex native rollout request usage", () => {
     expect(resolvePromptUsage(state.usage, undefined, "last-request").totalTokens).toBe(105 + 57);
     // Settling is one-shot per prompt.
     expect(state.codexRollout).toBeUndefined();
+  });
+
+  it("keeps one rollout position per pooled session across prompts", async () => {
+    const codexHome = home(), now = Date.now(), root = uuid7(now, "dd33ee44ff55");
+    const file = rolloutPath(codexHome, root, now);
+    writeFileSync(file, line(now, "session_meta", { id: root }));
+    const provider = new AcpProvider({ agentType: "codex" });
+    let next = "resp_one";
+    const client = { _options: { onSessionUpdate: (_event: any) => {} }, prompt: async () => {
+      appendFileSync(file, record(Date.now(), root, root, next, usage(40, 0, 4)) + turnEnd(Date.now()));
+      return { stopReason: "end_turn" };
+    } };
+    const entry = { client, acpSessionId: root, codexHome, lastUsed: 0 };
+    (provider as any)._ensureSession = async () => entry;
+    const requests = () => (provider.getLastResponse()!.metadata!.usageUnits as any[])
+      .filter(unit => unit.source === "provider_request").map(unit => unit.providerRequestId);
+    for await (const _event of provider.sendStream("first")) {}
+    expect(requests()).toEqual(["resp_one"]);
+    // Recorded while no prompt was listening, e.g. a bridge-started turn.
+    appendFileSync(file, record(Date.now(), root, root, "resp_between", usage(50, 0, 5)) + turnEnd(Date.now(), "turn_aborted"));
+    next = "resp_two";
+    for await (const _event of provider.sendStream("second")) {}
+    expect(requests().sort()).toEqual(["resp_between", "resp_two"]);
   });
 
   it("reports a resumed Codex prompt's rollout requests in the final usage units", async () => {
