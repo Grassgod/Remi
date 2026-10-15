@@ -188,6 +188,34 @@ describe("subagent panel", () => {
     expect(document.querySelector("[data-subagent-reply]")).toHaveTextContent("core 120 个文件");
   });
 
+  it("keeps loading while a multi-page trace has not reached the subagent yet", async () => {
+    const all = claudeDoneItems();
+    const late = all.find((item) => item.id === "sa:fail")!;
+    const firstPage = all.filter((item) => item.type !== "subagent" && item.parent_id === null);
+    let release!: () => void;
+    const second = new Promise<void>((resolve) => { release = resolve; });
+    getTaskTrace.mockImplementation(async (_id: string, { itemCursor }: { itemCursor: number }) => {
+      if (itemCursor === 0) return turnPage(traceTurn({ status: "completed" }), firstPage, { next_item_cursor: 5 });
+      await second;
+      return turnPage(traceTurn({ status: "completed" }), [late]);
+    });
+    renderLayout();
+    open({ path: ["sa:fail"], live: false });
+    // The first page landed without the subagent: still loading, not "not found".
+    await waitFor(() => expect(getTaskTrace).toHaveBeenCalledWith("att_1", { itemCursor: 5, turnId: "turn_1" }));
+    await waitFor(() => expect(client.getQueryData<{ state: { items: TraceItem[] } }>(["task-trace", "att_1"])?.state.items.length).toBeGreaterThan(0));
+    expect(screen.getByRole("status")).toHaveTextContent("正在加载…");
+    expect(screen.queryByText("找不到这个子代理")).toBeNull();
+    // The overview says the same instead of 「这一轮没有子代理」.
+    act(() => { useChatStore.getState().setSubagentPath([]); });
+    expect(screen.getByRole("status")).toHaveTextContent("正在加载…");
+    expect(screen.queryByText("这一轮没有子代理")).toBeNull();
+    act(() => { useChatStore.getState().setSubagentPath(["sa:fail"]); });
+    await act(async () => { release(); });
+    await waitFor(() => expect(document.querySelector('[data-subagent-detail="sa:fail"]')).not.toBeNull());
+    expect(screen.queryByRole("status")).toBeNull();
+  });
+
   it("reads a finished turn's trace only once it opens, and names a missing subagent", async () => {
     getTaskTrace.mockResolvedValue(turnPage(traceTurn({ status: "completed" }), claudeDoneItems()));
     renderLayout();
@@ -215,6 +243,10 @@ describe("subagent panel", () => {
     view.switchTo("chat_2");
     expect(useChatStore.getState().subagentPanel).toBeNull();
     expect(panel()).toBeNull();
+    // A pending reveal request from the old chat goes too.
+    act(() => { useChatStore.getState().revealSubagent("att_1", "sa:plan"); });
+    view.switchTo("chat_1");
+    expect(useChatStore.getState().subagentReveal).toBeNull();
   });
 
   it("pushes the conversation aside in a resizable split when the page has room", () => {

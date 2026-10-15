@@ -59,8 +59,13 @@ const LAYOUT_ID = "chat-subagent-panel";
 function useSubagentPanelTarget(sessionId: string | null, visible: boolean): SubagentPanelTarget | null {
   const panel = useChatStore((s) => s.subagentPanel);
   const close = useChatStore((s) => s.closeSubagentPanel);
+  const shownSession = useRef(sessionId);
   useEffect(() => {
-    if (panel && (!visible || panel.sessionId !== sessionId)) close();
+    // A chat switch also drops a reveal request (the page can switch chats
+    // through its URL without touching the store's active session).
+    const switched = shownSession.current !== sessionId;
+    shownSession.current = sessionId;
+    if (switched || (panel && (!visible || panel.sessionId !== sessionId))) close();
   }, [panel, sessionId, visible, close]);
   return visible && panel && panel.sessionId === sessionId ? panel : null;
 }
@@ -176,8 +181,11 @@ export function SubagentPanelView({ target, onClose, focusOnMount = true }: {
     ? read.state === "unreachable" ? ta(($) => $.transcript.trace_unreachable, { name: read.runtime_name ?? read.runtime_id ?? "" })
       : read.state === "lost" ? ta(($) => $.transcript.trace_lost) : ta(($) => $.transcript.trace_not_found)
     : null;
+  // While pages are still arriving, a subagent that is not there yet (it may
+  // be on a later page) and an empty list both mean "loading".
+  const missing = detail ? !isSubagent(current) : !items.some((item) => item.type === "subagent" && item.parent_id === null);
   let body: ReactNode;
-  if (trace.error && !items.length) {
+  if (trace.error && (!items.length || missing)) {
     body = (
       <div role="alert" className="flex items-center gap-1.5 p-4 text-sm text-destructive">
         <AlertCircle className="size-4" aria-hidden="true" />
@@ -187,7 +195,7 @@ export function SubagentPanelView({ target, onClose, focusOnMount = true }: {
         </button>
       </div>
     );
-  } else if (!trace.loaded && !items.length) {
+  } else if (!trace.loaded && (!items.length || missing)) {
     body = (
       <div role="status" className="flex items-center gap-1.5 p-4 text-sm text-muted-foreground">
         <LoaderCircle className="size-4 animate-spin" aria-hidden="true" />{t(($) => $.subagents.loading)}

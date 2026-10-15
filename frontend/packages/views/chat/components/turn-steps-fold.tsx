@@ -79,17 +79,20 @@ function BackgroundRunningSuffix({ count }: { count: number }) {
 
 /**
  * The live fold opens and scrolls to a subagent row when the running strip
- * asks for it (a chip click). Reads the store only once the turn has a trace.
+ * asks for it (a chip click). Only requests made after this fold mounted
+ * count: a request left in the store must not re-open the fold and pull the
+ * list away from the bottom each time the chat is shown again.
  */
 function useRevealRequests(attemptId: string, open: () => void) {
   const reveal = useChatStore((s) => s.subagentReveal);
+  const [mountNonce] = useState(() => useChatStore.getState().subagentReveal?.nonce ?? 0);
   useEffect(() => {
-    if (!reveal || reveal.attemptId !== attemptId) return;
+    if (!reveal || reveal.nonce <= mountNonce || reveal.attemptId !== attemptId) return;
     open();
     return scrollToSubagentRow(reveal.itemId);
     // `open` is a state setter wrapper; the request (its nonce) drives this.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [reveal, attemptId]);
+  }, [reveal, attemptId, mountNonce]);
 }
 
 function RevealListener({ attemptId, onReveal }: { attemptId: string; onReveal: () => void }) {

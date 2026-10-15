@@ -279,6 +279,25 @@ describe("subagent panel (PR 5 §6.8)", () => {
     expect(createChatStore({ storage }).getState().subagentPanel).toBeNull();
   });
 
+  it("drops the panel and the reveal request on close and on a chat switch, keeping nonces increasing", () => {
+    const store = createChatStore({ storage: memoryStorage() });
+    store.getState().setActiveSession("chat-1");
+    store.getState().openSubagentPanel(target);
+    store.getState().revealSubagent("att-1", "sa:1");
+    store.getState().closeSubagentPanel();
+    expect(store.getState().subagentPanel).toBeNull();
+    expect(store.getState().subagentReveal).toBeNull();
+    // A cleared request never lets the next one reuse an older nonce.
+    store.getState().revealSubagent("att-1", "sa:1");
+    expect(store.getState().subagentReveal?.nonce).toBe(2);
+    store.getState().openSubagentPanel(target);
+    store.getState().setActiveSession("chat-1");
+    expect(store.getState().subagentPanel).toEqual(target);
+    store.getState().setActiveSession("chat-2");
+    expect(store.getState().subagentPanel).toBeNull();
+    expect(store.getState().subagentReveal).toBeNull();
+  });
+
   it("bumps the reveal nonce per request and forgets the panel on a workspace switch", () => {
     const store = createChatStore({ storage: memoryStorage() });
     store.getState().revealSubagent("att-1", "sa:1");

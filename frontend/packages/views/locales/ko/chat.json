@@ -328,7 +328,7 @@
     "late_stopped": "{{name}} 백그라운드에서 중지됨",
     "view_result": "결과 보기",
     "view_details": "세부 정보 보기",
-    "late_more_other": "{{count}}개가 더 백그라운드에서 종료됨",
+    "late_more": "다른 하위 에이전트도 백그라운드에서 종료됨",
     "strip_running_other": "하위 에이전트 {{count}}개 실행 중",
     "strip_running_short_other": "{{count}}개 실행 중",
     "strip_background": "백그라운드",
