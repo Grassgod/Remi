@@ -64,6 +64,16 @@ checkpoint's `interactions` map uses it too; the item's own ID (`perm:…` /
 its events this presentation sees, and an item without `message_id` is not
 presented.
 
+A request raised inside a native subagent's child session is still a top-level
+item. When its decision metadata names the subagent (`subagent: {item_id,
+name}`, carried into the request payload), the shared card builder
+(`buildTaskInteractionCard` in
+[`feishu-task-card`](../packages/shared/src/feishu-task-card.ts)) opens the
+card and its receipt with 「子代理 {name} 请求：」, the name escaped like the
+card's other text. One builder serves the connector, topic, proactive and
+receipt cards, so every lane shows the prefix. An older daemon sends no such
+field; then, as with a malformed or unnamed one, the card is unchanged.
+
 | Stage | Transport | Visible content |
 | --- | --- | --- |
 | Process | `POST /open-apis/im/v1/message_cot`, then `PUT` on the same resource | Native process text, reasoning events exposed by the provider, tools and terminal state; no result footer or mentions |
@@ -161,6 +171,17 @@ is unchanged:
   plan in the workbench. Closing the turn re-completes the plan unchanged, which
   draws nothing.
   Native result `content` is itself a JSON string containing the typed text/list object.
+- A tool call that acts on a subagent is a control row in the shared copy, named
+  through `subagentResolver` over the trace's subagent items (by thread id,
+  then name, then item ID): 「已发送消息给 X」 for Claude `SendMessage` and
+  Codex `sendInput` / `sendMessage` / `followupTask`, 「已中断 X」,
+  「已恢复 X」, 「已关闭 X」 and 「已列出子代理」. An unresolved target reads as
+  written, or as 「子代理」 when it looks like an ID. Claude `TaskStop` is an
+  interrupt only when it stops one of the trace's subagents; stopping a
+  background shell stays an ordinary tool row. Control rows use the subagent's
+  `robot_outlined` icon, and the message they send stays in the workbench. A
+  Codex `wait` (`isHiddenStep`) writes no row. It still ends the answer search
+  like any tool item, as in the shared final-reply rule.
 - A `subagent` item is a named step from its start ("正在运行子代理：…") to its
   end ("子代理已完成：…", "子代理已停止：…", "子代理执行失败：…"). Claude's first
   Agent frame carries only the "Task" placeholder, so the row and step open on
@@ -170,7 +191,22 @@ is unchanged:
   an async launch in progress past the launch acknowledgment and completes it
   when the turn closes (ADR 0019 decision 10), so its completion is the child's
   real end; a subagent step still open when the presentation finishes is
-  labeled as unresolved, never fabricated as successful. A `compaction` item is a step from "正在压缩上下文" to its outcome
+  labeled as unresolved ("… · 本轮已结束，子代理结果见工作台", or "… · 本轮已中断"
+  when cancelled), never fabricated as successful. A subagent with no title,
+  prompt or tool name is labeled 「子代理」.
+  A native child session (PR 5) needs no other rule. The daemon writes one
+  `sa:<native id>` item titled by the agent's name, so its step opens at spawn.
+  A nested agent's `parent_id` is its parent's item, so it stays in the
+  workbench with every child item. The child's own state update completes the
+  item; a background one may end before the turn does. A resumed generation
+  reopens the same item and adds its new instructions as a child
+  `user_message`. The step already finished keeps its first end: a native step
+  is not reopened.
+  A Claude answer that arrives after a background subagent ends (the
+  autonomous round) joins the same turn. The held-answer rule then writes the
+  earlier reply ("I started a background agent…") as narration once the
+  follow-up arrives, and the follow-up is the one result card.
+  A `compaction` item is a step from "正在压缩上下文" to its outcome
   (one reported only once finished still opens it), and a `notice` item a step
   named by its title.
 - Questions and approvals keep the existing cards and callbacks. The same native
@@ -335,8 +371,11 @@ Agent execution, or client UI rendering; those remain for end-to-end/QA acceptan
 Unit tests cover native POST/PUT payloads and topic origin, direct answers,
 text/final isolation and the final-reply rule across steer rounds, rows built
 from item fixtures (actions, file changes, statuses), plan/subagent/compaction
-steps, context and timing from turn events, restart checkpoints, result UUIDs,
-approval callbacks keyed by `message_id`, multiple questions/custom answers,
+steps (native child sessions, nesting, resumed generations, agent-control rows
+and the hidden `wait`, the late background answer), context and timing from
+turn events, restart checkpoints, result UUIDs,
+approval callbacks keyed by `message_id`, the child-session request prefix,
+multiple questions/custom answers,
 identity checks, web completion, expiration, lease ownership, the final-only
 legacy delivery, protocol compatibility and bounded delivery retries.
 

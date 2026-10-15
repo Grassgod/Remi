@@ -1,11 +1,13 @@
 import { describe, expect, it } from "bun:test";
 import { FeishuCotTimeline } from "@connectors/feishu/cot-timeline.js";
-import { cotPlan, cotStepRows } from "@connectors/feishu/cot-tool-display.js";
+import { cotPlan, cotStepRows, cotSubagentTitle } from "@connectors/feishu/cot-tool-display.js";
+import { FeishuTaskPresentation } from "@connectors/feishu/task-presentation.js";
 import type { TaskStreamEvent } from "@connectors/base.js";
-import type { TraceEvent } from "@multiremi/contracts/trace.js";
+import type { TraceEvent, TraceItemOf } from "@multiremi/contracts/trace.js";
 import type { CotSample } from "@connectors/feishu/native-cot.js";
-import { agentMessage, command, completed, delta, input, item, plan, read, reasoning, running, started, streamedText, turnCompleted,
-  turnStarted, updated } from "./feishu-native-harness.js";
+import { subagentResolver } from "@shared/trace-step-copy.js";
+import { agentMessage, command, completed, delta, input, item, nativeHarness, plan, read, reasoning, running, started, streamedText,
+  terminal, turnCompleted, turnStarted, updated } from "./feishu-native-harness.js";
 
 const trace = (rows: TaskStreamEvent[]): TraceEvent[] => rows.map(row => (row as { message: TraceEvent }).message);
 function feed(timeline: FeishuCotTimeline, rows: TaskStreamEvent[]): void {
@@ -295,7 +297,7 @@ describe("semantic native CoT timeline", () => {
     expect(of(timeline.finish("completed"), "STEP_FINISHED")).toEqual([]);
   });
 
-  it.each([["completed", "核对文档 · 本轮已结束，子任务结果见工作台"], ["cancelled", "核对文档 · 本轮已中断"]] as const)(
+  it.each([["completed", "核对文档 · 本轮已结束，子代理结果见工作台"], ["cancelled", "核对文档 · 本轮已中断"]] as const)(
     "closes a subagent step still open when the run ends %s", (status, name) => {
       const timeline = new FeishuCotTimeline("task");
       const agent = item("subagent", "toolu_agent", { title: "核对文档", background: true });
@@ -520,5 +522,142 @@ describe("Claude subagent titles", () => {
     const viaEnd = new FeishuCotTimeline("task");
     feed(viaEnd, [started(1, placeholder), completed(2, placeholder)]);
     expect(viaEnd.drain().samples.map(([type]) => type)).toEqual(["TOOL_CALL_START", "TOOL_CALL_END", "STEP_STARTED", "STEP_FINISHED"]);
+  });
+});
+
+describe("native subagent sessions and agent-control rows (PR 5)", () => {
+  // Items as the translator writes a native child session (PR5-SPEC §3.2): `sa:<native id>`, titled by its name.
+  const native = (baseId: string, name: string, patch: Partial<TraceItemOf<"subagent">> = {}) => item("subagent", `sa:${baseId}`, {
+    tool: "Agent", title: name, name, prompt: `Task for ${name}`, output: null, duration_ms: null, background: null, thread_id: baseId, ...patch });
+  const tool = (id: string, name: string, toolInput: Record<string, unknown>) => item("tool", id, { tool: name, input: toolInput });
+  const titles = (samples: CotSample[]) => of(samples, "TOOL_CALL_START").map(content => content.title);
+  const steps = (samples: CotSample[], type: "STEP_STARTED" | "STEP_FINISHED") => of(samples, type).map(content => content.stepName);
+
+  it("opens a native subagent at spawn under its name, keeps nested agents in the workbench, and ends it at its own state", () => {
+    const timeline = new FeishuCotTimeline("task");
+    const reviewer = native("a1b2c3d4e5f6a7b8", "reviewer");
+    const linter = native("0f1e2d3c4b5a6978", "linter", { parent_id: reviewer.id });
+    feed(timeline, [turnStarted(1), completed(2, input("Review the change")), started(3, reviewer)]);
+    const opening = timeline.drain().samples;
+    expect(of(opening, "TOOL_CALL_START")).toEqual([{ toolCallId: expect.any(String), toolCallName: "Agent", title: "reviewer", icon: "robot_outlined" }]);
+    expect(steps(opening, "STEP_STARTED")).toEqual(["正在运行子代理：reviewer"]);
+    // A nested spawn (its parent is the reviewer's session) and every child item stay in the workbench.
+    feed(timeline, [started(4, linter), completed(5, command("toolu_lint", "bun lint", undefined, { parent_id: linter.id })),
+      completed(6, { ...linter, output: "clean" }), completed(7, agentMessage("msg:reply", "LGTM", "final", { parent_id: reviewer.id }))]);
+    expect(timeline.drain().samples).toEqual([]);
+    // The child's own state update ends the item (§3.4).
+    feed(timeline, [completed(8, { ...reviewer, output: "LGTM", duration_ms: 1200 })]);
+    expect(timeline.drain().samples).toEqual([["STEP_FINISHED", { stepId: of(opening, "STEP_STARTED")[0]!.stepId, stepName: "子代理已完成：reviewer" }]]);
+    expect(timeline.answer("")).toBe("");
+  });
+
+  it("keeps a resumed generation one step: the reopen and its new instructions add nothing, and the first finish stands", () => {
+    const timeline = new FeishuCotTimeline("task");
+    const reviewer = native("a1b2c3d4e5f6a7b8", "reviewer", { background: false });
+    const done = { ...reviewer, output: "LGTM", duration_ms: 1200 };
+    feed(timeline, [turnStarted(1), started(2, reviewer), completed(3, done)]);
+    const first = timeline.drain().samples;
+    expect(steps(first, "STEP_FINISHED")).toEqual(["子代理已完成：reviewer"]);
+    // `<id>:generation:2` reopens the same item (§3.5); its prompt is a child user_message.
+    feed(timeline, [updated(4, { ...done, duration_ms: null }),
+      completed(5, item("user_message", "in:sa:a1b2c3d4e5f6a7b8:2", { parent_id: reviewer.id, origin: "input", text: "Also check the docs" })),
+      completed(6, read("toolu_docs", "/docs/api.md", { parent_id: reviewer.id })),
+      completed(7, { ...done, output: "Docs too", duration_ms: 2400 })]);
+    expect(timeline.drain().samples).toEqual([]);
+    expect(of(timeline.finish("completed"), "STEP_FINISHED")).toEqual([]);
+    expect(timeline.state.items.filter(row => row.type === "subagent")).toHaveLength(1);
+  });
+
+  it("opens a Codex native child under its name although the bridge's synthetic task has no prompt", () => {
+    const timeline = new FeishuCotTimeline("task");
+    feed(timeline, [started(1, native("019a7f3e-1c2d-7b8a-9e0f-112233445566", "explorer", { tool: "spawnAgent", prompt: null }))]);
+    const samples = timeline.drain().samples;
+    expect(of(samples, "TOOL_CALL_START")[0]).toMatchObject({ toolCallName: "spawnAgent", title: "explorer" });
+    expect(steps(samples, "STEP_STARTED")).toEqual(["正在运行子代理：explorer"]);
+  });
+
+  it("names Claude control rows from the trace's subagents, and stops a subagent as an interrupt", () => {
+    const timeline = new FeishuCotTimeline("task");
+    const agentId = "a1b2c3d4e5f6a7b8";
+    feed(timeline, [turnStarted(1), started(2, native(agentId, "reviewer", { background: true }))]);
+    timeline.drain();
+    feed(timeline, [
+      completed(3, tool("toolu_send", "SendMessage", { to: "reviewer", message: "Also check the docs" })),
+      completed(4, tool("toolu_send_id", "SendMessage", { to: agentId, message: "Status?" })),
+      completed(5, tool("toolu_send_unknown", "SendMessage", { to: "9f8e7d6c5b4a3210", message: "Hello?" })),
+      completed(6, tool("toolu_send_named", "SendMessage", { to: "planner", message: "Plan it" })),
+      completed(7, tool("toolu_list", "ListAgents", {})),
+      completed(8, tool("toolu_stop", "TaskStop", { task_id: agentId })),
+      // TaskStop also stops background shells: those stay plain tool rows.
+      completed(9, tool("toolu_stop_shell", "TaskStop", { task_id: "bash_1" })),
+    ]);
+    const samples = timeline.drain().samples;
+    expect(titles(samples)).toEqual(["已发送消息给 reviewer", "已发送消息给 reviewer", "已发送消息给子代理", "已发送消息给 planner",
+      "已列出子代理", "已中断 reviewer", "已调用 TaskStop"]);
+    expect(of(samples, "TOOL_CALL_START").map(content => content.icon)).toEqual([...Array(6).fill("robot_outlined"), "default"]);
+    // Message bodies stay in the workbench, like other tool input.
+    expect(JSON.stringify(samples)).not.toContain("Also check the docs");
+    // Without the trace's subagents, the stop is an ordinary tool (the resolver is what makes it an interrupt).
+    const stop = tool("toolu_stop", "TaskStop", { task_id: agentId });
+    expect(cotStepRows(stop)[0]?.title).toBe("已调用 TaskStop");
+    expect(cotStepRows(stop, subagentResolver([native(agentId, "reviewer")]))[0]?.title).toBe("已中断 reviewer");
+  });
+
+  it("names Codex control rows by thread and writes no row for wait, which still ends the answer search", () => {
+    const timeline = new FeishuCotTimeline("task");
+    const thread = "019a7f3e-1c2d-7b8a-9e0f-112233445566";
+    const wait = tool("call_wait", "wait", { receiverThreadIds: [thread] });
+    feed(timeline, [turnStarted(1), started(2, native(thread, "explorer", { tool: "spawnAgent", prompt: null })),
+      completed(3, tool("call_send", "sendInput", { receiverThreadIds: [thread], prompt: "Look in src/" })),
+      completed(4, agentMessage("msg:waiting", "等子代理汇报。"))]);
+    expect(prose(timeline.drain().samples)).toBe("");
+    // The hidden wait is still a tool to the final-reply rule: the message before it becomes narration, not the answer.
+    feed(timeline, [started(5, wait), completed(6, wait)]);
+    const waited = timeline.drain().samples;
+    expect(waited.map(([type]) => type)).not.toContain("TOOL_CALL_START");
+    expect(prose(waited)).toBe("等子代理汇报。");
+    feed(timeline, [completed(7, tool("call_resume", "resumeAgent", { receiverThreadIds: [thread], prompt: "Continue" })),
+      completed(8, tool("call_interrupt", "interruptAgent", { receiverThreadIds: [thread] })),
+      completed(9, tool("call_close", "closeAgent", { receiverThreadIds: [thread] })),
+      completed(10, tool("call_list", "listAgents", {}))]);
+    expect(titles(timeline.drain().samples)).toEqual(["已恢复 explorer", "已中断 explorer", "已关闭 explorer", "已列出子代理"]);
+  });
+
+  it("falls back to 子代理 for a subagent with no title, prompt or tool name", () => {
+    expect(cotSubagentTitle(item("subagent", "sa:x", { tool: "", title: null, prompt: null }))).toBe("子代理");
+  });
+
+  it("answers a late background result once: the earlier reply is narration and the follow-up is the answer card (spec §2.7)", async () => {
+    // A fast background child ends after the root's first reply; the autonomous round adds the follow-up to the same turn.
+    const counter = native("a1b2c3d4e5f6a7b8", "count-files", { prompt: "Count the files in src/" });
+    const launched = agentMessage("msg:started", "I started a background agent to count the files. I'll reply once it reports back.");
+    const followUp = agentMessage("msg:follow-up", "There are 3 files in src/.");
+    const done = { ...counter, background: true, output: "3", duration_ms: 10_850 };
+    const rows = [
+      turnStarted(1), completed(2, input("How many files are in src/?")),
+      started(3, counter),
+      completed(4, command("toolu_ls", "ls src", undefined, { parent_id: counter.id })),
+      // The root keeps talking while its child runs, so the child is in the background (§3.3).
+      updated(5, { ...counter, background: true }),
+      completed(6, launched),
+      // The prompt resolves here; the autonomous round follows.
+      completed(7, agentMessage("msg:child", "3", "final", { parent_id: counter.id })),
+      completed(8, done),
+      completed(9, followUp),
+      completed(10, { ...followUp, phase: "final" }),
+      turnCompleted(11, [input("How many files are in src/?"), done, launched, { ...followUp, phase: "final" }]),
+    ];
+    const h = nativeHarness();
+    async function* stream() { yield* rows; yield terminal; }
+    await new FeishuTaskPresentation(h.client as any, "oc_group", { taskId: "tsk_test", displayName: "Remi" },
+      { appId: "cli_test", replyToMessageId: "om_root", idempotencyKey: "delivery", save: h.save }).consume(stream());
+    const cards = h.cards().map(card => JSON.stringify(card));
+    expect(cards).toHaveLength(1);
+    expect(cards[0]).toContain("There are 3 files in src/.");
+    expect(cards[0]).not.toContain("I started a background agent");
+    // The CoT reads in trace order: the launch, the earlier reply as narration, then the child's end.
+    const order = h.events().flatMap(e => e.event_type === "REASONING_MESSAGE_CONTENT" ? [JSON.parse(e.content).delta]
+      : e.event_type === "STEP_STARTED" || e.event_type === "STEP_FINISHED" ? [JSON.parse(e.content).stepName] : []);
+    expect(order).toEqual(["正在运行子代理：count-files", launched.text, "子代理已完成：count-files"]);
   });
 });
