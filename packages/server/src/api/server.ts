@@ -1198,8 +1198,8 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
       browserUser: browserUserWebSockets,
     },
     onDaemonTask: ({ type, task }) => {
-      // Consumption updates still reach browsers, but do not change daemon inputs.
-      if (type === "task:usage") return;
+      // Consumption and subagent-count updates still reach browsers, but do not change daemon inputs.
+      if (type === "task:usage" || type === "task:subagents") return;
       if (type === "task:queued") {
         offers.enqueued(task);
         return;

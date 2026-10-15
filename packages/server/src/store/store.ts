@@ -125,6 +125,7 @@ import type { GcRunMode, GcRunRequest, StorageReport } from "@multiremi/contract
 import { RuntimeWorkspacesRepo } from "@multiremi/store/repos/runtime-workspaces-repo.js";
 import { TaskTracesRepo } from "@multiremi/store/repos/task-traces-repo.js";
 import type { MultiremiTaskTrace } from "@multiremi/contracts/trace-file.js";
+import type { TraceLateSubagent } from "@multiremi/contracts/trace.js";
 import type { DaemonTaskCompletionFields } from "@multiremi/contracts/daemon-protocol.js";
 import {
   RuntimesRepo,
@@ -4284,12 +4285,13 @@ runMigrations(this.db);
   /**
    * MUL-432 segment 2 item 5: write the round-card fields of a daemon's
    * `turn.complete` / `task.fail` frame onto the attempt's outcome. Written:
-   * `trace.event_count`, `tool_call_count`, `type_histogram`, `model` and, since
-   * the turn + items traces (PR 2), `context_usage`, `worked_ms` and
-   * `process_item_count`. The frame's `final_reply_md` is not (ruling (z)): the
-   * chat card keeps the assistant message and the Issue card its
-   * `final_entry_id` from the terminal write path. `null` — a daemon that sent
-   * no fields, or malformed ones — writes nothing.
+   * `trace.event_count`, `tool_call_count`, `type_histogram`, `model`, since
+   * the turn + items traces (PR 2) `context_usage`, `worked_ms` and
+   * `process_item_count`, and since PR 5 `late_subagents`. The frame's
+   * `final_reply_md` is not (ruling (z)): the chat card keeps the assistant
+   * message and the Issue card its `final_entry_id` from the terminal write
+   * path. `null` — a daemon that sent no fields, or malformed ones — writes
+   * nothing.
    *
    * The terminal task transaction owns this write. An attempt that already
    * carries the values keeps its revision; a missing attempt is skipped.
@@ -4298,8 +4300,8 @@ runMigrations(this.db);
   recordTurnCardCompletionFieldsWithinTransaction(taskId: string, fields: DaemonTaskCompletionFields | null): boolean {
     if (!fields) return false;
     const attempt = this.db.query(
-      `SELECT event_count, tool_call_count, type_histogram, model, context_usage, worked_ms, process_item_count
-       FROM multiremi_turn_attempts WHERE id = ?`,
+      `SELECT event_count, tool_call_count, type_histogram, model, context_usage, worked_ms, process_item_count,
+       late_subagents FROM multiremi_turn_attempts WHERE id = ?`,
     ).get(taskId) as Record<string, unknown> | null;
     if (!attempt) return false;
     const typeHistogram = fields.trace.type_histogram.map(({ type, tool, count }) => ({ type, tool, count }));
@@ -4307,6 +4309,9 @@ runMigrations(this.db);
     const contextUsage = fields.context_usage ? { used: fields.context_usage.used, size: fields.context_usage.size } : null;
     const workedMs = fields.worked_ms ?? null;
     const processItemCount = fields.process_item_count ?? null;
+    const lateSubagents = fields.late_subagents?.length
+      ? fields.late_subagents.map(({ item_id, name, status, duration_ms }) => ({ item_id, name, status, duration_ms }))
+      : null;
     const count = (value: unknown): number | null => value == null ? null : Number(value);
     const stored = {
       eventCount: count(attempt.event_count),
@@ -4316,6 +4321,7 @@ runMigrations(this.db);
       contextUsage: parseJson<{ used: number; size: number } | null>(attempt.context_usage, null),
       workedMs: count(attempt.worked_ms),
       processItemCount: count(attempt.process_item_count),
+      lateSubagents: parseJson<TraceLateSubagent[] | null>(attempt.late_subagents, null),
     };
     const unchanged = stored.eventCount === fields.trace.event_count
       && stored.toolCallCount === fields.trace.tool_call_count
@@ -4324,7 +4330,9 @@ runMigrations(this.db);
         && (bucket.tool ?? null) === typeHistogram[index]!.tool && bucket.count === typeHistogram[index]!.count)
       && stored.model?.provider === model?.provider && stored.model?.model === model?.model
       && stored.contextUsage?.used === contextUsage?.used && stored.contextUsage?.size === contextUsage?.size
-      && stored.workedMs === workedMs && stored.processItemCount === processItemCount;
+      && stored.workedMs === workedMs && stored.processItemCount === processItemCount
+      // Both sides hold the same four keys in the same order, as this method writes them.
+      && JSON.stringify(stored.lateSubagents) === JSON.stringify(lateSubagents);
     if (unchanged) return false;
     this.conversationLog.recordAttemptOutcomeWithinTransaction(taskId, {
       eventCount: fields.trace.event_count,
@@ -4334,6 +4342,7 @@ runMigrations(this.db);
       contextUsage,
       workedMs,
       processItemCount,
+      lateSubagents,
     });
     return true;
   }
@@ -5847,6 +5856,15 @@ runMigrations(this.db);
 
   reportProgress(taskId: string, summary: string, step?: number | null, total?: number | null, options?: { allowTerminal?: boolean }): MultiremiTask {
     return this.tasks.reportProgress(taskId, summary, step, total, options);
+  }
+
+  /** PR 5: the `task.activity` count of an active attempt; see `TasksRepo.recordRunningSubagents`. */
+  recordRunningSubagents(taskId: string, count: number): boolean {
+    return this.tasks.recordRunningSubagents(taskId, count);
+  }
+
+  getRunningSubagents(taskId: string): number | null {
+    return this.tasks.getRunningSubagents(taskId);
   }
 
   pinTaskSession(taskId: string, sessionId?: string | null, workDir?: string | null): MultiremiTask {

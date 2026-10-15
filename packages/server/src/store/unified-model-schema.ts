@@ -79,6 +79,7 @@ CREATE TABLE multiremi_turn_attempts (
   wait_reason TEXT, failure_reason TEXT, error TEXT, next_retry_at TEXT, branch_name TEXT,
   event_count BIGINT, tool_call_count BIGINT, type_histogram TEXT, model TEXT, trace_ref TEXT,
   context_usage TEXT, worked_ms BIGINT, process_item_count BIGINT,
+  running_subagents INTEGER, late_subagents TEXT,
   offered_at TEXT, accepted_at TEXT, started_at TEXT, ended_at TEXT,
   created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
   UNIQUE(turn_id, attempt_no), FOREIGN KEY(turn_id) REFERENCES multiremi_turns(id)

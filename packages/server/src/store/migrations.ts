@@ -85,7 +85,7 @@ export function runMigrations(db: SqlDatabase, options: { dialect?: SqlDatabaseD
     if(tables.has('multiremi_issues'))addColumnIfMissing(db,'multiremi_issues','responsible_member_id TEXT');
     if(tables.has('multiremi_autopilots'))addColumnIfMissing(db,'multiremi_autopilots','responsible_member_id TEXT');
     if(tables.has('multiremi_issue_activity'))addColumnIfMissing(db,'multiremi_issue_activity','workspace_id TEXT');
-    if(tables.has('multiremi_schema_migrations') && db.query('SELECT id FROM multiremi_schema_migrations WHERE id=?').get(UNIFIED_MODEL_MIGRATION)){runUnifiedModelMigration(db,{reportDir:process.env.MULTIREMI_MIGRATION_REPORT_DIR});separateLaneProviderProgress(db);foldAgentReadState(db);createMemberInboxReadProjection(db);foldDecisionRecords(db);createDecisionReadProjections(db);migrateAttemptInput(db);widenAttemptCounters(db);ensureTurnListIndexes(db);ensureQuestionQueryIndexes(db);db.exec(UNIFIED_LANE_SWEEP_INDEX);ensureUsageAccountingSchema(db);migrateLocalRecords(db);addTurnAttemptTraceSummary(db);migrateChatFollowUpQueue(db);return;}
+    if(tables.has('multiremi_schema_migrations') && db.query('SELECT id FROM multiremi_schema_migrations WHERE id=?').get(UNIFIED_MODEL_MIGRATION)){runUnifiedModelMigration(db,{reportDir:process.env.MULTIREMI_MIGRATION_REPORT_DIR});separateLaneProviderProgress(db);foldAgentReadState(db);createMemberInboxReadProjection(db);foldDecisionRecords(db);createDecisionReadProjections(db);migrateAttemptInput(db);widenAttemptCounters(db);ensureTurnListIndexes(db);ensureQuestionQueryIndexes(db);db.exec(UNIFIED_LANE_SWEEP_INDEX);ensureUsageAccountingSchema(db);migrateLocalRecords(db);addTurnAttemptTraceSummary(db);migrateChatFollowUpQueue(db);addTurnAttemptSubagents(db);return;}
     // Inspect the existing snapshot before bootstrap migrations can touch it.
     const checks=unifiedModelPreflight(db);
     if(checks.some(c=>!c.ok)){
@@ -94,7 +94,7 @@ export function runMigrations(db: SqlDatabase, options: { dialect?: SqlDatabaseD
     }
     runMigrationsForDialect(db,resolveSqlDialect(db,options.dialect));
     runUnifiedModelMigration(db,{reportDir:process.env.MULTIREMI_MIGRATION_REPORT_DIR});
-    separateLaneProviderProgress(db);foldAgentReadState(db);createMemberInboxReadProjection(db);foldDecisionRecords(db);createDecisionReadProjections(db);migrateAttemptInput(db);widenAttemptCounters(db);ensureTurnListIndexes(db);ensureQuestionQueryIndexes(db);ensureUsageAccountingSchema(db);migrateLocalRecords(db);addTurnAttemptTraceSummary(db);migrateChatFollowUpQueue(db);
+    separateLaneProviderProgress(db);foldAgentReadState(db);createMemberInboxReadProjection(db);foldDecisionRecords(db);createDecisionReadProjections(db);migrateAttemptInput(db);widenAttemptCounters(db);ensureTurnListIndexes(db);ensureQuestionQueryIndexes(db);ensureUsageAccountingSchema(db);migrateLocalRecords(db);addTurnAttemptTraceSummary(db);migrateChatFollowUpQueue(db);addTurnAttemptSubagents(db);
   }));
   // SQLite schema rebuilds toggle foreign_keys outside their transactions.
   // Hold a separate SQLite writer lock across that entire sequence so another
@@ -6008,6 +6008,28 @@ function addTurnAttemptTraceSummary(db: SqlDatabase): void {
     addColumnIfMissing(db, "multiremi_turn_attempts", "context_usage TEXT");
     addColumnIfMissing(db, "multiremi_turn_attempts", "worked_ms BIGINT");
     addColumnIfMissing(db, "multiremi_turn_attempts", "process_item_count BIGINT");
+  });
+}
+
+/**
+ * PR 5: subagent facts on the attempt.
+ *
+ * - `running_subagents`: the count the daemon's best-effort `task.activity`
+ *   frame last reported while the attempt was active. `/api/turns` rows carry
+ *   it for the Chat sidebar badge.
+ * - `late_subagents`: JSON `TraceLateSubagent[]` from the completion report,
+ *   the top-level subagents that ended after the final reply started; the turn
+ *   card projects it for the finished turn's "finished in the background" rows.
+ *
+ * Both stay NULL on attempts that predate them and when nothing was reported.
+ * Runs on both chains: a fresh unified schema already has the columns, an
+ * upgraded one gains them here.
+ */
+const TURN_ATTEMPT_SUBAGENTS_MIGRATION = "20261017_turn_attempt_subagents";
+function addTurnAttemptSubagents(db: SqlDatabase): void {
+  runMigrationOnce(db, TURN_ATTEMPT_SUBAGENTS_MIGRATION, () => {
+    addColumnIfMissing(db, "multiremi_turn_attempts", "running_subagents INTEGER");
+    addColumnIfMissing(db, "multiremi_turn_attempts", "late_subagents TEXT");
   });
 }
 
