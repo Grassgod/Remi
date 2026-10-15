@@ -22,6 +22,19 @@ const CLAUDE_PERMISSION_MODE_FALLBACKS: Record<string, string[]> = {
 export class ClaudeAdapter implements AgentAdapter {
   readonly agentType = "claude";
   readonly promptUsageSettleScope = "turn" as const;
+  /**
+   * claude-agent-acp 0.90 `_session/steering` (dist/acp-agent.js:203, 9807;
+   * advertised at :1427). The opt-in makes an idle session answer
+   * `promptRequired` with no side effects instead of a detached `prompt()`
+   * (:2397-2420), so the daemon re-prompts through its own `session/prompt`.
+   * A steer during a foreground tool call moves the call to the background
+   * (:2369-2372; live: "Command was moved to the background … it was not
+   * interrupted"), and a backgrounded shell never holds the turn open
+   * (:3108-3123), so the call's result and the answer arrive as a follow-up
+   * after `session/prompt` resolved. Steering between tool calls keeps the
+   * answer inside the prompt.
+   */
+  readonly steering = { method: "_session/steering", idleOptIn: true, waitForToolCalls: true } as const;
 
   resolveToolName(update: ToolCallUpdate | ToolCallProgressUpdate): string {
     const claudeCode = this._claudeCodeMeta(update);

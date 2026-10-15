@@ -1009,6 +1009,29 @@ describe("AcpProvider with the Antigravity access config", () => {
     }
   });
 
+  it("answers a steer with unsupported and sends nothing, so the daemon cancels and re-prompts", async () => {
+    const agent = fakeAntigravityAgent();
+    const { provider } = antigravityProvider(agent);
+    try {
+      const abort = new AbortController();
+      let steer: unknown = null;
+      await expect((async () => {
+        for await (const event of provider.sendStream("hang", { chatId: "c1", signal: abort.signal })) {
+          if (event.sessionUpdate === "config_option_update" && steer === null) {
+            steer = "pending";
+            steer = await provider.steer("Use English", { chatId: "c1" });
+            abort.abort();
+          }
+        }
+      })()).rejects.toThrow("Cancelled");
+      expect(steer).toEqual({ outcome: "unsupported" });
+      expect(agent.requests("session/cancel")).toHaveLength(1);
+      expect(agent.requests("_session/steering")).toHaveLength(0);
+    } finally {
+      await provider.close();
+    }
+  });
+
   describe("stall watchdog", () => {
     const STALL_MS = 200;
 

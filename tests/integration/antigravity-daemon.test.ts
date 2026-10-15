@@ -305,6 +305,35 @@ describe("Antigravity through the daemon gateway shim", () => {
       "the stalled turn's usage");
   }, 60_000);
 
+  it("falls back to cancel + re-prompt for a steer, without leaking the server's cancel acknowledgement", async () => {
+    const gateway = fakeGateway();
+    const { root, local, store, agent, daemon, lines, runtime } = await setup({ gateway });
+    const directory = store.runtimeWorkspaces.create(runtime.id, { name: "User project", root_path: local });
+    const chat = store.createChatSession({ agentId: agent.id, runtime_workspace_id: directory.id });
+    if (privateTmpUnavailable(root)) return;
+    const task = store.sendChatMessage(chat.id, { body: "STEER_ME please" }).task;
+    await poll(() => lines().some((line) => line.kind === "waiting_for_steer"), "the running turn");
+    const steerId = store.createTaskSteerMessage({ taskId: task.id, kind: "steer", content: "STEER_FOLLOW_UP now" }).id;
+    await poll(() => ["completed", "failed"].includes(store.getTask(task.id)?.status ?? ""), "the steered turn");
+    expect(store.getTask(task.id)?.error).toBeNull();
+    expect(store.getTask(task.id)?.status).toBe("completed");
+    const requests = lines().filter((line) => line.kind === "request").map((line) => line.method);
+    // No native steering on the wire: cancel, then the steer as the next prompt on the same session.
+    expect(requests.filter((method) => method === "session/cancel")).toHaveLength(1);
+    expect(requests.some((method) => String(method).includes("steer"))).toBe(false);
+    const prompts = lines().filter((line) => line.kind === "request" && line.method === "session/prompt")
+      .map((line) => JSON.stringify(line.params.prompt));
+    expect(prompts).toHaveLength(2);
+    expect(prompts[1]).toContain("STEER_FOLLOW_UP now");
+    await poll(() => foldTraceLines(daemon.traceStore().read(task.id).events).turn?.status === "completed", "the sealed trace");
+    const items = foldTraceLines(daemon.traceStore().read(task.id).events).items;
+    expect(items.filter((item) => item.type === "agent_message").map((item) => item.type === "agent_message" && item.text))
+      .toEqual(["Working on it.", "Following the steer."]);
+    expect(JSON.stringify(items)).not.toContain("The request was cancelled by the client.");
+    expect(items.find((item) => item.type === "user_message" && item.origin === "steer")).toMatchObject({
+      steer: { steer_id: steerId, injected: true, result: { via: "reprompt", native_outcome: "unsupported" } } });
+  }, 60_000);
+
   it("fails an unconfigured gateway before the start ACK, without spawning the server", async () => {
     const { store, database, agent, lines } = await setup({ gateway: null });
     const task = store.createTask({ agentId: agent.id, prompt: "Inspect project", maxAttempts: 1 });

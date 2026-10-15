@@ -16,6 +16,7 @@ import { acquireDaemonOutbox, releaseDaemonOutbox, daemonReportTransport, daemon
 import { acquireDaemonTrace, releaseDaemonTrace, daemonTraceStore, type DaemonTraceTransport } from "./trace-transport.js";
 import type { DaemonTraceListener } from "./trace-subscriptions.js";
 import type { TraceStore } from "@multiremi/worker/trace-store.js";
+import type { TraceSteerResult } from "@multiremi/contracts/trace.js";
 import { createLogger } from "@shared/logger.js";
 import {
   AcpProvider,
@@ -78,6 +79,7 @@ import {
   DEFAULT_STEER_POLL_MS,
   TaskSteerFeed,
 } from "./steer.js";
+import { SteerPump, steerResultGroups } from "./steer-pump.js";
 import {
   MultiremiTaskReportOutbox,
   type MultiremiOutboxKind,
@@ -589,7 +591,7 @@ function upsertRepoWarning(warnings: TaskRepoWarning[], warning: TaskRepoWarning
   else warnings.push(warning);
 }
 
-export type MultiremiTaskProvider = Pick<Provider, "sendStream" | "getLastResponse"> & {
+export type MultiremiTaskProvider = Pick<Provider, "sendStream" | "getLastResponse" | "steer"> & {
   readonly typedSessionFailures?: boolean;
   close?: () => Promise<void> | void;
   discoverModelCapabilities?: () => Promise<AcpModelCapability[]>;
@@ -4355,14 +4357,19 @@ export class MultiremiDaemon {
     };
     let turnIndex = 0;
 
-    // Steer channel: the feed receives pushed user directives; each batch
-    // soft-interrupts the streaming turn (ACP session/cancel) and is injected
-    // as the next prompt on the same provider session, so the transcript and
-    // all completed work survive. `force_answer` additionally arms a grace
-    // deadline after which the run wraps up with the output produced so far.
+    // Steer channel: the feed receives pushed user directives. A provider that
+    // steers natively gets each batch injected into the streaming prompt
+    // (ADR 0020, `SteerPump`); otherwise, or when the native call does not
+    // inject, the batch soft-interrupts the turn (ACP session/cancel) and is
+    // injected as the next prompt on the same provider session, so the
+    // transcript and all completed work survive. `force_answer` additionally
+    // arms a grace deadline after which the run wraps up with the output so far.
     const steerFeed = new TaskSteerFeed(this.taskDownlinks, task.id);
     let forceAnswerDeadline: number | null = null;
     let forceAnswerExpired = false;
+    let pump: SteerPump | null = null;
+    // Arms the current round's grace timer; null between rounds.
+    let armRoundGrace: (() => void) | null = null;
 
     try {
       const session = new AgentSession(provider as any, config);
@@ -4393,23 +4400,32 @@ export class MultiremiDaemon {
       steerFeed.start();
       let prompt = promptArtifact.prompt;
 
-      // Every steer batch flows through here exactly once (injected into the
-      // next turn, or — after the force-answer grace elapsed — recorded and
-      // consumed without injection so completion can proceed).
+      // Every steer batch flows through here exactly once: injected into the
+      // running prompt (`native`), sent as the next prompt (`reprompt`), or —
+      // after the force-answer grace elapsed — recorded and consumed without
+      // injection (`none`) so completion can proceed.
       const recordedSteerIds = new Set<string>();
       let injectedSteerIds: string[] = [];
-      const recordSteerBatch = async (messages: MultiremiTaskSteerMessage[], injected: boolean): Promise<void> => {
+      const recordSteerBatch = async (messages: MultiremiTaskSteerMessage[], via: TraceSteerResult["via"]): Promise<void> => {
         const ids = messages.map((m) => m.id);
         // A range hint must reach the provider before its CLI read can satisfy
         // the server's input barrier. Acknowledging while building the prompt
         // would fail before the unread ordinary messages could ever be read.
-        if (injected) injectedSteerIds.push(...ids);
-        else await this.taskDownlinks.consumeTaskSteerMessages(task.id, ids);
+        if (via !== "none") injectedSteerIds.push(...ids);
+        else {
+          // No prompt follows a force-answer expiry: acknowledge the injected
+          // steers still pending with the late ones, or the lower-seq injected
+          // ids would fail the contiguous acknowledgement ("unconfirmed turn input gap").
+          await this.taskDownlinks.consumeTaskSteerMessages(task.id, [...injectedSteerIds, ...ids]);
+          injectedSteerIds = [];
+        }
         for (const message of messages) recordedSteerIds.add(message.id);
         // A reconnect replay of an already-handled id must not re-enqueue
         // them, or the stale duplicate would trip the next turn's interrupt.
         steerFeed.markHandled(messages.map((m) => m.id));
-        this.recordTrace(task.id, () => trace.steer(messages, injected));
+        for (const [result, group] of steerResultGroups(messages, via, (id) => pump?.takeFallback(id) ?? null)) {
+          this.recordTrace(task.id, () => trace.steer(group, result));
+        }
       };
       const injectSteerBatch = async (messages: MultiremiTaskSteerMessage[]): Promise<void> => {
         if (messages.some((m) => m.kind === "force_answer") && forceAnswerDeadline == null) {
@@ -4420,9 +4436,29 @@ export class MultiremiDaemon {
           (id) => this.client.downloadTaskAttachment(id, task.authToken ?? "", signal), signal,
         );
         prompt = buildSteerInjectionPrompt(preparedMessages);
-        await recordSteerBatch(messages, true);
+        await recordSteerBatch(messages, "reprompt");
         log.info(`Injected ${messages.length} steer message(s) into task ${task.id}`);
       };
+      if (provider.steer) {
+        const steer = provider.steer.bind(provider);
+        pump = new SteerPump({
+          feed: steerFeed,
+          steer: (text) => steer(text, { chatId: config.chatId }),
+          // Same framing as the re-prompt; attachments become text references.
+          prepare: async (messages) => buildSteerInjectionPrompt(await materializeTaskSteerAttachments(
+            messages, workDir, task.id,
+            (id) => this.client.downloadTaskAttachment(id, task.authToken ?? "", signal), signal,
+          )),
+          injected: (messages) => recordSteerBatch(messages, "native"),
+          // The native "[Deliver now]" is on its way into this prompt: start the grace now.
+          armForceAnswer: () => {
+            if (forceAnswerDeadline == null) forceAnswerDeadline = Date.now() + Math.max(0, this.options.forceAnswerGraceMs);
+            armRoundGrace?.();
+          },
+          forceAnswerExpired: () => forceAnswerExpired,
+          log: (message) => log.info(`Task ${task.id}: ${message}`),
+        });
+      }
       // The completion transaction remains the authoritative steer barrier.
       const fetchPendingSteer = async (): Promise<MultiremiTaskSteerMessage[]> => {
         return this.taskDownlinks.pendingTaskSteerMessages(task.id).filter((m) => !recordedSteerIds.has(m.id));
@@ -4439,13 +4475,20 @@ export class MultiremiDaemon {
         if (signal.aborted) turnAbort.abort();
         config.signal = turnAbort.signal;
         let graceTimer: ReturnType<typeof setTimeout> | null = null;
-        if (forceAnswerDeadline != null) {
+        const armGrace = () => {
+          if (graceTimer || forceAnswerDeadline == null) return;
           graceTimer = setTimeout(() => {
             forceAnswerExpired = true;
             turnAbort.abort();
           }, Math.max(0, forceAnswerDeadline - Date.now()));
-        }
-        steerFeed.setInterrupt(() => turnAbort.abort());
+        };
+        armGrace();
+        armRoundGrace = armGrace;
+        const roundPump = pump;
+        roundPump?.beginRound(() => turnAbort.abort());
+        // A native steer joins only a prompt that is already on the wire.
+        config.onPromptStarted = roundPump ? () => roundPump.promptStarted() : undefined;
+        steerFeed.setInterrupt(roundPump ? () => roundPump.interrupt() : () => turnAbort.abort());
         let turnError: unknown = null;
         try {
           resetElicitationContextOffset();
@@ -4471,6 +4514,8 @@ export class MultiremiDaemon {
           // A steer interrupt aborts the round: its still-open tools end `stopped`.
           this.recordTrace(task.id, () => trace.promptEnded({ aborted: turnAbort.signal.aborted }));
           steerFeed.setInterrupt(null);
+          roundPump?.endRound();
+          armRoundGrace = null;
           signal.removeEventListener("abort", onTaskAbort);
           if (graceTimer) clearTimeout(graceTimer);
         }
@@ -4482,6 +4527,9 @@ export class MultiremiDaemon {
         // ACP process (e.g. the previous one died between turns).
         if (finalSessionId) config.sessionId = finalSessionId;
         if (signal.aborted) throw (turnError ?? new Error("Cancelled"));
+        // A native call still in flight may yet inject its batch or hand it
+        // back for the re-prompt below; neither may be missed.
+        await roundPump?.idle();
         if (injectedSteerIds.length && !this.taskDownlinks.pendingTaskSteerMessages(task.id)
           .some(message => !recordedSteerIds.has(message.id))) {
           await this.taskDownlinks.consumeTaskSteerMessages(task.id, injectedSteerIds);
@@ -4502,7 +4550,7 @@ export class MultiremiDaemon {
           log.warn(`Task ${task.id} force-answer grace elapsed; delivering last reply`);
           // Steers that arrived too late to act on are still recorded/consumed
           // so the audit trail is complete and completion is not blocked.
-          if (steered.length) await recordSteerBatch(steered, false);
+          if (steered.length) await recordSteerBatch(steered, "none");
         } else {
           if (steered.length) {
             await injectSteerBatch(steered);
@@ -4566,7 +4614,7 @@ export class MultiremiDaemon {
           // Force-answer wrap-up (or an inconsistent conflict): record what's
           // there and complete once more; a second conflict fails the run
           // loudly rather than looping forever.
-          if (fresh.length) await recordSteerBatch(fresh, false);
+          if (fresh.length) await recordSteerBatch(fresh, "none");
           // Steers recorded without injection add no reply, so the pick stands;
           // settle() is still the one rule before every completion attempt.
           this.recordTrace(task.id, () => trace.settle());
@@ -4578,6 +4626,7 @@ export class MultiremiDaemon {
     } finally {
       checkpointUsage(ledger.finish());
       this.recordTrace(task.id, () => trace.flush());
+      pump?.stop();
       steerFeed.stop();
       await this.reportIssueWorkspaceAfterRun(task, workspaceDir, preparedWorkspace.repos).catch((err) => {
         log.warn(`Failed to report final workspace state for ${task.id}: ${err instanceof Error ? err.message : String(err)}`);

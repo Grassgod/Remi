@@ -620,8 +620,46 @@ export interface AgentAdapter {
   /** Build agent-specific _meta for session/new. */
   buildSessionMeta(options: AgentSessionOptions): NewSessionMeta | undefined;
 
+  /**
+   * Native steering (ADR 0020): the bridge's request method, and whether it
+   * accepts the `promptRequired` idle opt-in (`_meta.steering.idleBehavior`).
+   * Absent when the agent cannot steer. The switch point for ACP `session/inject`.
+   */
+  readonly steering?: AgentSteering;
+
   /** Default executable name for this agent type. */
   defaultExecutable(): string;
+}
+
+export interface AgentSteering {
+  /** JSON-RPC request method, e.g. `_session/steering`. */
+  method: string;
+  /**
+   * Send `_meta.steering.idleBehavior: "promptRequired"`, so an idle session
+   * answers `promptRequired` instead of starting a detached turn.
+   */
+  idleOptIn: boolean;
+  /**
+   * Hold the steer until no top-level tool call of the prompt is running. A
+   * bridge that moves a running call to the background to deliver a steer
+   * (claude-agent-acp 0.90) would otherwise end the prompt before the call's
+   * result and the reply to it arrive.
+   */
+  waitForToolCalls: boolean;
+}
+
+/** Params of the `_session/steering` request (both pinned bridges). */
+export interface SteerParams {
+  sessionId: string;
+  prompt: PromptContent[];
+  _meta?: { steering?: { idleBehavior?: "promptRequired" } } & Record<string, unknown>;
+}
+
+/** Result of the `_session/steering` request; unknown outcomes are treated as `failed`. */
+export interface SteerResponse {
+  outcome?: string;
+  reason?: string;
+  _meta?: Record<string, unknown>;
 }
 
 export interface AskUserQuestionData {

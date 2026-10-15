@@ -109,7 +109,7 @@ Project 资源列表变化或项目不可用时，已有工作副本保留。
 消息写入对话日志。正在运行的轮收到定向的 now 消息会插话；pending 轮合并后续消息，领取时读取连续输入范围。同一 lane 只有一个 pending 轮。
 运行中有两种后续发送方式，取舍见 [ADR 0020](adr/0020-chat-follow-up-queue-and-native-steering.md)：
 
-- **引导**：普通发送 `POST /api/sessions/:id/messages`，`wake_requested:"now"`，行为不变，送进正在运行的这一轮。未读消息可用 `PATCH`/`DELETE /api/messages/:id` 编辑或删除，已进入轮输入的返回 409；编辑和删除留下日志标记。
+- **引导**：普通发送 `POST /api/sessions/:id/messages`，`wake_requested:"now"`，行为不变，送进正在运行的这一轮。Claude 与 Codex 的 daemon 用桥的原生引导把它注入正在进行的 prompt，不打断正在运行的命令（Claude 等当前工具调用结束后再注入，最多 30 s）；桥不支持、出错、这一轮恰好结束，或有待回答的权限或提问卡片时，退回到中止当前 prompt 后在同一会话重新提示（[ADR 0020](adr/0020-chat-follow-up-queue-and-native-steering.md)“原生引导”）。未读消息可用 `PATCH`/`DELETE /api/messages/:id` 编辑或删除，已进入轮输入的返回 409；编辑和删除留下日志标记。
 - **排队**：`POST /api/sessions/:id/queue` 把消息存进服务端队列表，不写对话日志。lane 没有 pending、running 或 awaiting_human 轮且未暂停时立即放行；否则在当前轮 completed 的终态事务里按入队顺序放行。放行把每条转成普通成员 now request，第一条建 pending 轮，其余合并进同一轮，正文全部内联；它们排在本轮回复之后进入日志。
 
 排队的条目只有原发送人能改：`PATCH .../queue/:qid` 可带 `expected_revision`，`DELETE` 幂等，`POST .../queue/:qid/steer` 立即放行这一条（改为引导，重复调用返回同一条消息）。

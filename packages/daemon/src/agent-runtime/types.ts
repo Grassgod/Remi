@@ -31,6 +31,8 @@ export interface AgentSessionConfig {
   permissionMode: string | null;
   traceId?: string;
   signal?: AbortSignal;
+  /** Forwarded as `SendOptions.onPromptStarted` (native steering, ADR 0020). */
+  onPromptStarted?: () => void;
   recovery?: RecoveryConfig;
   /** Provider-native Agent Plugin roots prepared for this execution. */
   pluginPaths?: string[];

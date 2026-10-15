@@ -12,7 +12,11 @@
 //   chunk; one containing SUBAGENT_LAST also calls another model last;
 // - BACKGROUND_CMD backgrounds a command, says so and never ends the turn,
 //   ignoring session/cancel (server 1.4.0 while it waits on the command);
-//   FOREGROUND_CMD runs a 1.5 s foreground command before answering.
+//   FOREGROUND_CMD runs a 1.5 s foreground command before answering;
+// - STEER_ME streams a line and waits for session/cancel, which it
+//   acknowledges with server 1.4.0's "The request was cancelled by the
+//   client." text before answering `cancelled`; STEER_FOLLOW_UP answers at once.
+// It never advertises `_session/steering` (server 1.4.0 has none).
 //
 // Everything it sees is appended as JSON lines to $FAKE_AGY_CAPTURE.
 import { appendFileSync } from "node:fs";
@@ -82,9 +86,24 @@ async function shell(sid, toolCallId, command, extra = {}) {
   update(sid, { sessionUpdate: "tool_call_update", toolCallId, status: "in_progress", rawInput: { command_line: command, working_dir: process.cwd() } });
 }
 
+let waitingForCancel = null;
+
 async function prompt(id, params) {
   const sid = params.sessionId;
   const text = params.prompt.map((block) => block.text ?? "").join("");
+  if (text.includes("STEER_FOLLOW_UP")) {
+    await generate(current, text);
+    update(sid, { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Following the steer." } });
+    send({ id, result: { stopReason: "end_turn" } });
+    return;
+  }
+  if (text.includes("STEER_ME")) {
+    await generate(current, text);
+    update(sid, { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Working on it." } });
+    waitingForCancel = { id, sid };
+    record({ kind: "waiting_for_steer", id });
+    return;
+  }
   if (text.includes("BACKGROUND_CMD")) {
     await shell(sid, "call-bg-1", "npm run dev", { WaitMsBeforeAsync: 0 });
     await generate(current, text);
@@ -156,6 +175,12 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
     case "session/prompt":
       return void prompt(message.id, message.params);
     case "session/cancel":
+      if (waitingForCancel) {
+        const { id, sid } = waitingForCancel;
+        waitingForCancel = null;
+        update(sid, { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "The request was cancelled by the client." } });
+        send({ id, result: { stopReason: "cancelled" } });
+      }
       return;
     default:
       return send({ id: message.id, error: { code: -32601, message: `Method not found: ${message.method}` } });

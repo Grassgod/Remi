@@ -53,6 +53,12 @@ function workingDirectoryNote(cwd: unknown): string | null {
 export const ANTIGRAVITY_FOREGROUND_NOTE = "Run shell commands in the foreground and wait for them to finish; never leave a command "
   + "running in the background. If a command could run for a long time, say so instead of starting it in the background.";
 
+/**
+ * No `steering`: server 1.4.0 advertises none, and a second `session/prompt`
+ * while one runs fails ("Concurrent receive_steps() calls are not
+ * supported", live probe R6). A steer therefore always cancels and re-prompts
+ * (ADR 0020).
+ */
 export class AntigravityAdapter implements AgentAdapter {
   readonly agentType = "antigravity";
   /** The server returns no prompt usage; shim observations are per request. */
