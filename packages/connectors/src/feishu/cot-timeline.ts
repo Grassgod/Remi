@@ -3,18 +3,29 @@ import {
   isTraceEvent,
   TRACE_TOOL_ITEM_TYPES,
   type TraceAgentMessageItem,
+  type TraceBackgroundTaskItem,
   type TraceCompactionItem,
   type TraceEvent,
   type TraceItem,
   type TraceNoticeItem,
   type TracePlanItem,
   type TraceSubagentItem,
+  type TraceUserMessageItem,
 } from "@multiremi/contracts/trace.js";
 import { applyTurnTraceEvent, EMPTY_TURN_TRACE, finalItem, type TurnTraceState } from "@shared/turn-trace.js";
-import { isHiddenStep, subagentResolver, type AgentResolver } from "@shared/trace-step-copy.js";
+import {
+  backgroundTaskResolver,
+  isHiddenStep,
+  subagentResolver,
+  type AgentResolver,
+  type BackgroundTaskResolver,
+} from "@shared/trace-step-copy.js";
 import { cotTextEvents, type CotSample } from "./native-cot.js";
 import {
+  cotBackgroundTaskRunning,
+  cotBackgroundTaskStep,
   cotCompactionStep,
+  cotDoorbellStep,
   cotPlan,
   cotStepRows,
   cotSubagentReady,
@@ -36,7 +47,7 @@ const ROW_TYPES: ReadonlySet<TraceItem["type"]> = new Set(["command", "file_chan
 /** What a written row's result says when its item later ends another way. */
 const STATUS_NOTES: Partial<Record<TraceItem["status"], string>> = { failed: "执行失败", stopped: "已停止", declined: "已拒绝" };
 
-interface OpenStep { stepId: string; kind: "subagent" | "compaction"; item: TraceItem }
+interface OpenStep { stepId: string; kind: "subagent" | "compaction" | "background_task"; item: TraceItem }
 
 /**
  * A replayable, presentation-only projection of a turn + items trace, folded
@@ -62,6 +73,14 @@ interface OpenStep { stepId: string; kind: "subagent" | "compaction"; item: Trac
  *   released after it, or, if it is the turn's final item, when the turn ends.
  * - The plan is redrawn from every snapshot whose entries changed; subagents
  *   and compactions are native steps from their start to their end.
+ * - Background tasks (PR 6 §9): the call that started one is its launch row,
+ *   always in the launch copy (「已启动后台命令 …」), and the task is a step
+ *   from that row to its end: 「后台运行中：…」, then the shared copy of how
+ *   it ended (a stop with its reason), or 「… 仍在后台运行」 when the attempt
+ *   handed it off. A task seen while its call still runs opens its step after
+ *   the call's row, or at the next event of another item. A doorbell turn
+ *   (`user_message.background_tasks`) opens with 「后台任务 … 已完成」 per
+ *   task, and the replayed end of a task it announced adds no second step.
  * - Nested items (`parent_id`) stay in the workbench.
  */
 export class FeishuCotTimeline {
@@ -84,6 +103,10 @@ export class FeishuCotTimeline {
   private readonly finishedSteps = new Set<string>();
   private planFingerprint?: string;
   private readonly waiting = new Set<string>();
+  /** Background task items whose step waits for the row of the call that started them, by call. */
+  private readonly launching = new Map<string, Set<string>>();
+  /** Task ids a doorbell of this attempt already reported as ended. */
+  private readonly announced = new Set<string>();
 
   constructor(private readonly taskId: string, private readonly throughSeq = 0) {}
   private id(key: string): string { return createHash("sha256").update(`${this.taskId}:${key}`).digest("hex").slice(0, 32); }
@@ -113,6 +136,8 @@ export class FeishuCotTimeline {
     this.trace = applyTurnTraceEvent(this.trace, event);
     if (event.type !== "item.started" && event.type !== "item.updated" && event.type !== "item.completed") return;
     const item = event.item;
+    // A task waits for its call's row only while nothing else happens.
+    if (!this.launching.has(item.id) && !(item.type === "background_task" && this.waitsForLaunch(item.id))) this.openLaunched();
     if (item.parent_id !== null) {
       // Nested prose and tools belong in the workbench; a child does show that
       // its subagent is running, title or not.
@@ -135,6 +160,8 @@ export class FeishuCotTimeline {
     else if (item.type === "compaction") this.compaction(item, seen, done);
     else if (item.type === "plan") this.plan(item, event.seq);
     else if (item.type === "notice" && !seen) this.notice(item);
+    else if (item.type === "background_task") this.backgroundTask(item);
+    else if (item.type === "user_message" && !seen) this.doorbells(item);
   }
 
   private item(id: string): TraceItem | undefined {
@@ -143,6 +170,15 @@ export class FeishuCotTimeline {
 
   /** Names a control row's agent from the subagents seen so far; built only when a row asks. */
   private readonly resolveAgent: AgentResolver = target => subagentResolver(this.trace.items)(target);
+
+  /**
+   * The task a call started, for its row: always the launch, since a native
+   * title cannot change later; the task's own step tells how it ends.
+   */
+  private readonly resolveLaunch: BackgroundTaskResolver = toolItemId => {
+    const task = backgroundTaskResolver(this.trace.items)(toolItemId);
+    return task && { ...task, phase: "active" };
+  };
 
   private heldPhase(): TraceAgentMessageItem["phase"] | null {
     const held = this.held ? this.item(this.held) : undefined;
@@ -195,13 +231,13 @@ export class FeishuCotTimeline {
       // A later completion (a declined approval re-closes its tool) can only
       // add a result: an acknowledged native title cannot be rewritten.
       const note = STATUS_NOTES[item.status];
-      if (note && item.status !== written.status) {
+      if (note && item.status !== written.status && !this.resolveLaunch(item.id)) {
         written.status = item.status;
         this.emit([this.result(written.toolCallId, { type: "text", text: note }, `${item.id}:${item.status}`)]);
       }
       return;
     }
-    const rows = cotStepRows(item, this.resolveAgent);
+    const rows = cotStepRows(item, this.resolveAgent, this.resolveLaunch);
     const note = rows.at(-1)?.note;
     const samples: CotSample[] = [];
     let toolCallId = "";
@@ -215,6 +251,84 @@ export class FeishuCotTimeline {
     if (note) samples.push(this.result(toolCallId, { type: "text", text: note }, `${item.id}:${item.status}`));
     this.emit(samples);
     this.rows.set(item.id, { toolCallId, status: item.status });
+    // The tasks this call started open their steps right after its row.
+    const launched = this.launching.get(item.id);
+    this.launching.delete(item.id);
+    for (const taskId of launched ?? []) this.openBackgroundTask(taskId);
+  }
+
+  /**
+   * A top-level background task: a step from its first sight (or its call's
+   * row) to its end. A level-closed task the bridge corrects later keeps its
+   * first end, as a native step cannot be reopened.
+   */
+  private backgroundTask(item: TraceBackgroundTaskItem): void {
+    if (this.finishedSteps.has(item.id)) return;
+    if (!this.steps.has(item.id)) {
+      if (this.waitsForLaunch(item.id)) return;
+      const call = this.launchCall(item);
+      if (call && call.parent_id === null && call.status === "in_progress" && ROW_TYPES.has(call.type) && !isHiddenStep(call)
+        && !this.rows.has(call.id) && !this.announced.has(item.task_id)) {
+        const waiting = this.launching.get(call.id) ?? new Set<string>();
+        waiting.add(item.id);
+        this.launching.set(call.id, waiting);
+        return;
+      }
+      this.openBackgroundTask(item.id);
+      return;
+    }
+    if (item.status !== "in_progress") this.finishStep(item.id, cotBackgroundTaskStep(item, this.launchCall(item)));
+    else this.steps.set(item.id, { ...this.steps.get(item.id)!, item });
+  }
+
+  private waitsForLaunch(itemId: string): boolean {
+    for (const waiting of this.launching.values()) if (waiting.has(itemId)) return true;
+    return false;
+  }
+
+  /** Open every step still waiting for its call's row: something else happened first. */
+  private openLaunched(): void {
+    if (!this.launching.size) return;
+    const waiting = [...this.launching.values()].flatMap(ids => [...ids]);
+    this.launching.clear();
+    for (const itemId of waiting) this.openBackgroundTask(itemId);
+  }
+
+  private launchCall(item: TraceBackgroundTaskItem): TraceItem | undefined {
+    return item.tool_item_id ? this.item(item.tool_item_id) : undefined;
+  }
+
+  /** Open a task's step in its current state; one already ended finishes at once. */
+  private openBackgroundTask(itemId: string): void {
+    const item = this.item(itemId);
+    if (item?.type !== "background_task" || this.steps.has(itemId) || this.finishedSteps.has(itemId)) return;
+    // A doorbell rings only once its task ended, so any item of that task in
+    // this attempt (its end replayed from the parked process) is that news again.
+    if (this.announced.has(item.task_id)) {
+      this.finishedSteps.add(item.id);
+      return;
+    }
+    const stepId = this.id(`background:${item.id}`);
+    const call = this.launchCall(item);
+    this.emit([["STEP_STARTED", { stepId, stepName: cotBackgroundTaskRunning(item, call) }]]);
+    this.steps.set(item.id, { stepId, kind: "background_task", item });
+    if (item.status !== "in_progress") this.finishStep(item.id, cotBackgroundTaskStep(item, call));
+  }
+
+  /**
+   * A doorbell turn's input (or a doorbell steer) says first why the agent
+   * speaks (PR 6 §9), unless this attempt already showed that task's step.
+   */
+  private doorbells(item: TraceUserMessageItem): void {
+    for (const doorbell of item.background_tasks ?? []) {
+      const shown = this.trace.items.some(task => task.type === "background_task" && task.task_id === doorbell.task_id
+        && (this.steps.has(task.id) || this.finishedSteps.has(task.id)));
+      this.announced.add(doorbell.task_id);
+      if (shown) continue;
+      const stepId = this.id(`doorbell:${item.id}:${doorbell.task_id}`);
+      const stepName = cotDoorbellStep(doorbell);
+      this.emit([["STEP_STARTED", { stepId, stepName }], ["STEP_FINISHED", { stepId, stepName }]]);
+    }
   }
 
   private subagent(item: TraceSubagentItem, done: boolean): void {
@@ -308,9 +422,13 @@ export class FeishuCotTimeline {
     const pending = this.drain().samples;
     const final = finalItem(this.trace.items, this.trace.turn?.final_item_id);
     this.release(this.held !== final?.id);
+    this.openLaunched();
     // Finish display steps without claiming an unobserved background task succeeded.
     for (const [itemId, step] of [...this.steps]) {
       this.finishStep(itemId, step.kind === "compaction" ? cotCompactionStep({ ...(step.item as TraceCompactionItem), status: "stopped" })
+        // A task still open was last seen running: it carries on in the background (spec §9).
+        : step.kind === "background_task" ? cotBackgroundTaskStep(step.item as TraceBackgroundTaskItem,
+          this.launchCall(step.item as TraceBackgroundTaskItem), "handed_off")
         : `${cotSubagentTitle(step.item as TraceSubagentItem)} · ${status === "cancelled" ? "本轮已中断" : "本轮已结束，子代理结果见工作台"}`);
     }
     if (this.reasoning) this.queue.push(["REASONING_END", { messageId: this.id("reasoning") }]);

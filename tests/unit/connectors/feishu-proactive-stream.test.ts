@@ -116,6 +116,46 @@ describe("durable proactive Task deliveries", () => {
     expect(h.nativeEvents().filter((e: any) => e.event_type === "TOOL_CALL_START")).toHaveLength(1);
   });
 
+  it("posts a self-started doorbell turn in the origin thread: the doorbell step first, the reply as the answer card (PR 6 §9)", async () => {
+    const h = harness();
+    // The doorbell turn's trace (§2.5): its input is the platform message, then the
+    // attached cycle replays the parked task's end and answers.
+    const doorbell = item("user_message", "in:tsk_1", { origin: "input", message_ids: ["msg_doorbell"],
+      text: "后台任务已结束：npm test（已完成，用时 45 秒）\n120 passed",
+      background_tasks: [{ task_id: "bash_1", name: "npm test", task_type: "shell", status: "completed" }] });
+    const ended = item("background_task", "bg:bash_1", { task_id: "bash_1", task_type: "shell", name: "npm test", description: "npm test",
+      tool_item_id: "toolu_origin", can_stop: true, summary: "120 passed", duration_ms: 45_000 });
+    const reply = agentMessage("msg:answer", "All 120 tests passed.", "final");
+    async function* stream(): AsyncGenerator<TaskStreamEvent> {
+      yield turnStarted(1);
+      yield completed(2, doorbell);
+      yield completed(3, ended);
+      yield* streamedText(4, { ...reply, phase: "unknown" });
+      yield completed(7, reply);
+      yield turnCompleted(8, [doorbell, ended, reply]);
+      yield { kind: "snapshot", snapshot: { taskId: "tsk_1", status: "completed", result: reply.text,
+        sessionId: "provider_1", workDir: "/tmp/chat", error: null, usage: [] } };
+    }
+    // The server copies the origin attempt's thread into the proactive delivery; nobody is mentioned.
+    await h.channel.handleTaskStream("oc_group", "oc_group:thread:om_origin", stream(), meta,
+      { replyToMessageId: "om_origin", durable: { idempotencyKey: "delivery_doorbell" } });
+    expect(h.native[0]).toMatchObject({ method: "POST", data: { receive_id: "oc_group", origin_message_id: "om_origin", reply_in_thread: true } });
+    const process = h.nativeEvents().map((e: any) => [e.event_type, JSON.parse(e.content).stepName]);
+    expect(process.slice(0, 3)).toEqual([["RUN_STARTED", undefined], ["STEP_STARTED", "后台任务 npm test 已完成"],
+      ["STEP_FINISHED", "后台任务 npm test 已完成"]]);
+    // The replayed end is the doorbell's news: no second step; the platform message itself is never shown.
+    expect(process.filter(([type]) => type === "STEP_STARTED")).toHaveLength(1);
+    expect(JSON.stringify(h.native)).not.toContain("后台任务已结束");
+    expect(h.sends).toHaveLength(1);
+    expect(h.sends[0]).toMatchObject({ path: { message_id: "om_origin" }, data: { msg_type: "interactive", reply_in_thread: true } });
+    const final = h.sends[0].data.content;
+    expect(final).toContain("All 120 tests passed.");
+    expect(final).not.toContain("后台任务已结束");
+    expect(final).not.toContain("<at ");
+    // A background task is not a tool call: the footer counts none.
+    expect(final).not.toContain(" tools");
+  });
+
   it("finishes a delivery whose legacy streaming card was already sent with the result card only", async () => {
     // R10: a protocol-v4 delivery holds the streaming card's message ID but no
     // presentation checkpoint. No native process opens; the result follows and
