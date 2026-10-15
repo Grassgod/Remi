@@ -15,6 +15,8 @@ import {
 } from "@acp/provision.js";
 import { runtimeBundlePrefix, runtimeBundleManifest, runtimePackageSatisfied } from "@acp/runtime-bundle.js";
 import { CODEX_SESSION_BOUNDARY } from "../../fixtures/acp/codex-acp-session-boundary.js";
+import { CLAUDE_SUBAGENT_BOUNDARY } from "../../fixtures/acp/claude-acp-subagent-boundary.js";
+import { stripClaudeSubagentPatch } from "@acp/usage-bridge-patches.js";
 
 let dir: string | null = null;
 const savedHome = process.env.REMI_HOME;
@@ -43,7 +45,7 @@ function writeBridgePackage(home: string, pkg: string, version: string): string 
   writeFileSync(join(pkgDir, "package.json"), JSON.stringify({ name: pkg, version }));
   if (pkg.endsWith("claude-agent-acp")) {
     mkdirSync(join(pkgDir, "dist"), { recursive: true });
-    writeFileSync(join(pkgDir, "dist", "acp-agent.js"), "                if (session.emitRawSDKMessages && true) {}\n");
+    writeFileSync(join(pkgDir, "dist", "acp-agent.js"), "                if (session.emitRawSDKMessages && true) {}\n" + CLAUDE_SUBAGENT_BOUNDARY);
     patchClaudeUsageBridge(() => {}, pkgDir);
   }
   return pkgDir;
@@ -120,6 +122,19 @@ test("a current Claude ACP with the old bundled SDK still needs preparation", ()
   // A nested old SDK can shadow a correct top-level one.
   writeSdk(home, "claude", "0.3.220", join(bridge, "node_modules"));
   expect(runtimePackageSatisfied("claude", bridge)).toBe(false);
+});
+
+test("a Claude bridge with only the usage patch is stale until the subagent patch is in (PR 5)", () => {
+  const home = freshHome();
+  const bridge = writeBridgePackage(home, "@agentclientprotocol/claude-agent-acp", BRIDGE_PIN.claude);
+  writeSdk(home, "claude");
+  expect(bridgeSatisfied("claude")).toBe(true);
+  // As installed before the subagent patch existed.
+  const dist = join(bridge, "dist", "acp-agent.js");
+  writeFileSync(dist, stripClaudeSubagentPatch(readFileSync(dist, "utf8")));
+  expect(bridgeSatisfied("claude")).toBe(false);
+  expect(patchClaudeUsageBridge(() => {}, bridge)).toBe(true);
+  expect(bridgeSatisfied("claude")).toBe(true);
 });
 
 test("release bundle takes precedence over legacy/global bridges", () => {

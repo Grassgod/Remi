@@ -19,11 +19,14 @@ import {
   mcpServer,
   mergeToolFacts,
   messagePhase,
+  nativeAgentFacts,
   nativeAgentId,
+  nativeAgentItemId,
   nativeAgentPrompt,
   normalizeToolInput,
   parentToolUseId,
   permissionAsQuestion,
+  requestUsageOwner,
   serviceMessage,
   serviceMessageFailure,
   terminalChunk,
@@ -378,6 +381,21 @@ describe("native subagent reads (PR 5 §3)", () => {
       .toBe("task-notification");
     expect(autonomousOrigin({ sessionUpdate: "usage_update", _meta: { "_claude/origin": { kind: "human" } } })).toBe("human");
     expect(autonomousOrigin({ sessionUpdate: "usage_update", _meta: { "_claude/model": "claude-opus-5-5" } })).toBeNull();
+  });
+
+  it("reads the bridge patch's facts and the item id of any generation", () => {
+    expect(nativeAgentFacts({ _meta: { remi: { backgrounded: true, subagentType: "general-purpose" } } }))
+      .toEqual({ background: true, agentType: "general-purpose" });
+    expect(nativeAgentFacts({ _meta: { remi: { backgrounded: null, subagentType: null } } })).toEqual({ background: null, agentType: null });
+    expect(nativeAgentFacts({})).toEqual({ background: null, agentType: null });
+    expect(nativeAgentItemId("a0000000000000001:generation:3")).toBe("sa:a0000000000000001");
+  });
+
+  it("reads who made a billed request and its model", () => {
+    expect(requestUsageOwner({ _meta: { remiTokenUsage: { parentToolUseId: "toolu_01", providerSessionId: "s", model: "claude-opus-5-5" } } }))
+      .toEqual({ parentToolUseId: "toolu_01", providerSessionId: "s", model: "claude-opus-5-5" });
+    expect(requestUsageOwner({ _meta: { remiTokenUsage: { model: "<synthetic>" } } })).toEqual({ parentToolUseId: null, providerSessionId: null, model: null });
+    expect(requestUsageOwner({ _meta: {} })).toBeNull();
   });
 
   it("takes the prompt, else a real task, never Codex's stand-in", () => {
