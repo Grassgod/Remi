@@ -1,23 +1,32 @@
 import { describe, expect, it } from "bun:test";
 import { readFileSync } from "node:fs";
 import {
+  CODEX_COLLAB_TOOLS,
   antigravityToolName,
+  autonomousOrigin,
   classifyTool,
   codexActionFromTitle,
   commandTitle,
   compactionFacts,
   diffChanges,
   endsWithAbortMarker,
+  frameSession,
   isAsyncLaunch,
+  isNativeAgentHook,
   launchMarker,
   isMcp,
   isWorkspaceTrustPrompt,
   mcpServer,
   mergeToolFacts,
   messagePhase,
+  nativeAgentFacts,
+  nativeAgentId,
+  nativeAgentItemId,
+  nativeAgentPrompt,
   normalizeToolInput,
   parentToolUseId,
   permissionAsQuestion,
+  requestUsageOwner,
   serviceMessage,
   serviceMessageFailure,
   terminalChunk,
@@ -164,8 +173,9 @@ describe("classifyTool", () => {
     expect(classifyTool("codex", facts({ kind: "other", title: "spawnAgent",
       rawInput: { prompt: "count", senderThreadId: "root", receiverThreadIds: ["child-1"], model: "gpt-6.1-sol" } })))
       .toMatchObject({ prompt: "count", threadId: "child-1", model: "gpt-6.1-sol" });
+    // PR 5 §3.6: the other collaboration calls act on agents; they are tool rows.
     expect(classifyTool("codex", facts({ kind: "other", title: "wait",
-      rawInput: { prompt: null, senderThreadId: "root", receiverThreadIds: [], model: null } }))).toMatchObject({ threadId: null, model: null });
+      rawInput: { prompt: null, senderThreadId: "root", receiverThreadIds: [], model: null } }))).toEqual({ type: "tool", server: null });
   });
 
   it("takes a Claude command's label from AIR commandTitle", () => {
@@ -350,5 +360,80 @@ describe("Antigravity service messages", () => {
     expect(serviceMessageFailure(failure, "f2", 503)).toMatchObject({ category: "unknown", title: "Antigravity execution error" });
     expect(serviceMessageFailure(failure, "f2", 503)).not.toHaveProperty("errorKind");
     expect(serviceMessageFailure({ ...failure, source: "connection" }, "f3", null)).toMatchObject({ category: "connection" });
+  });
+});
+
+describe("native subagent reads (PR 5 §3)", () => {
+  it("reads the provider's child-session stamp; a root frame has none", () => {
+    expect(frameSession({ sessionUpdate: "tool_call", _meta: { remiSessionId: "a0000000000000001" } })).toBe("a0000000000000001");
+    expect(frameSession({ sessionUpdate: "tool_call", _meta: { claudeCode: { parentToolUseId: "toolu_01" } } })).toBeNull();
+    expect(frameSession({ sessionUpdate: "tool_call", _meta: { remiSessionId: "" } })).toBeNull();
+  });
+
+  it("strips the generation suffix of a resumed agent", () => {
+    expect(nativeAgentId("a0000000000000001:generation:2")).toBe("a0000000000000001");
+    expect(nativeAgentId("00000000-0000-7000-8000-000000000001:generation:12")).toBe("00000000-0000-7000-8000-000000000001");
+    expect(nativeAgentId("a0000000000000001")).toBe("a0000000000000001");
+  });
+
+  it("reads the result origin of a model cycle (claude-agent-acp 0.90 `_claude/origin`)", () => {
+    expect(autonomousOrigin({ sessionUpdate: "usage_update", _meta: { "_claude/origin": { kind: "task-notification", runId: "run_01" } } }))
+      .toBe("task-notification");
+    expect(autonomousOrigin({ sessionUpdate: "usage_update", _meta: { "_claude/origin": { kind: "human" } } })).toBe("human");
+    expect(autonomousOrigin({ sessionUpdate: "usage_update", _meta: { "_claude/model": "claude-opus-5-5" } })).toBeNull();
+  });
+
+  it("reads the bridge patch's facts and the item id of any generation", () => {
+    expect(nativeAgentFacts({ _meta: { remi: { backgrounded: true, subagentType: "general-purpose" } } }))
+      .toEqual({ background: true, agentType: "general-purpose" });
+    expect(nativeAgentFacts({ _meta: { remi: { backgrounded: null, subagentType: null } } })).toEqual({ background: null, agentType: null });
+    expect(nativeAgentFacts({})).toEqual({ background: null, agentType: null });
+    expect(nativeAgentItemId("a0000000000000001:generation:3")).toBe("sa:a0000000000000001");
+  });
+
+  it("reads who made a billed request and its model", () => {
+    expect(requestUsageOwner({ _meta: { remiTokenUsage: { parentToolUseId: "toolu_01", providerSessionId: "s", model: "claude-opus-5-5" } } }))
+      .toEqual({ parentToolUseId: "toolu_01", providerSessionId: "s", model: "claude-opus-5-5" });
+    expect(requestUsageOwner({ _meta: { remiTokenUsage: { model: "<synthetic>" } } })).toEqual({ parentToolUseId: null, providerSessionId: null, model: null });
+    expect(requestUsageOwner({ _meta: {} })).toBeNull();
+  });
+
+  it("takes the prompt, else a real task, never Codex's stand-in", () => {
+    expect(nativeAgentPrompt({ prompt: "List the files", task: "List the files" })).toBe("List the files");
+    expect(nativeAgentPrompt({ task: "Count files" })).toBe("Count files");
+    expect(nativeAgentPrompt({ task: "Delegated task for Count files" })).toBeNull();
+    expect(nativeAgentPrompt({ task: "Delegated task" })).toBeNull();
+    expect(nativeAgentPrompt({})).toBeNull();
+  });
+
+  it("recognises Claude's orphan Agent hook update (0.89 shape)", () => {
+    const hook = (toolResponse: unknown) => ({ sessionUpdate: "tool_call_update", toolCallId: "toolu_01",
+      _meta: { claudeCode: { toolName: "Agent", toolResponse } } });
+    expect(isNativeAgentHook(hook({ status: "async_launched", isAsync: true }))).toBe(true);
+    expect(isNativeAgentHook(hook({ status: "completed" }))).toBe(true);
+    // A progress beat carries no marker; another tool is not an Agent call; a tool_call is not the hook.
+    expect(isNativeAgentHook(hook({ elapsedTimeSeconds: 3 }))).toBe(false);
+    expect(isNativeAgentHook({ ...hook({ status: "completed" }), _meta: { claudeCode: { toolName: "Bash", toolResponse: { status: "completed" } } } }))
+      .toBe(false);
+    expect(isNativeAgentHook({ ...hook({ status: "completed" }), sessionUpdate: "tool_call" })).toBe(false);
+  });
+
+  it("classifies every Codex collaboration call but spawnAgent as a tool named by its title (§3.6)", () => {
+    expect([...CODEX_COLLAB_TOOLS].sort()).toEqual(["closeAgent", "followupTask", "interruptAgent", "listAgents", "resumeAgent",
+      "sendInput", "sendMessage", "spawnAgent", "wait"]);
+    for (const title of CODEX_COLLAB_TOOLS) {
+      const call = facts({ kind: "other", title, rawInput: { prompt: "go on", senderThreadId: "root", receiverThreadIds: ["child-1"] } });
+      const cls = classifyTool("codex", call);
+      if (title === "spawnAgent") {
+        expect(cls).toMatchObject({ type: "subagent", threadId: "child-1", prompt: "go on" });
+      } else {
+        expect(cls).toEqual({ type: "tool", server: null });
+        expect(toolLabel(call, cls, "unknown")).toBe(title);
+      }
+    }
+    // The AIR activity calls stay subagents (the fallback without native sessions).
+    expect(classifyTool("codex", facts({ kind: "other", title: "Interact with subagent count_files",
+      _meta: { jetbrains: { air: { version: 1, subagent: true } } }, rawInput: { agentThreadId: "t", agentPath: "/root/count_files" } })))
+      .toMatchObject({ type: "subagent", name: "count_files" });
   });
 });

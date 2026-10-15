@@ -38,9 +38,13 @@ import type {
   McpServerConfig,
   PromptContent,
   AgentSteering,
+  AgentNativeSubagents,
   SteerParams,
   SteerResponse,
 } from "@shared/contracts/acp-protocol.js";
+
+/** The AIR capability that turns on codex-acp's child sessions (and is accepted by claude-agent-acp). */
+export const AIR_NATIVE_SUBAGENT_SESSIONS = "nativeSubagentSessions";
 
 export interface AcpClientOptions {
   /** An isolated probe supervisor already owns the process group. */
@@ -51,6 +55,12 @@ export interface AcpClientOptions {
   args?: string[];
   /** Agent flavor ("claude" | "codex"); gates claude-only client capabilities. */
   agentType?: string;
+  /**
+   * Ask for native child sessions (PR 5): `subagents: {}`, plus the AIR
+   * `nativeSubagentSessions` capability when the adapter needs it (Codex).
+   * Absent: the client advertises neither, and subagent frames stay on the root.
+   */
+  nativeSubagents?: AgentNativeSubagents | null;
   /** Working directory for the agent process. */
   cwd?: string;
   /**
@@ -143,6 +153,21 @@ export class AcpClient {
     const capabilities = airMetadata(this._initializeResult?._meta)?.capabilities
       ?? airMetadata(this._initializeResult?.agentCapabilities?._meta)?.capabilities;
     return this._requestedSessionFailures && Array.isArray(capabilities) && capabilities.includes("sessionFailure");
+  }
+
+  /**
+   * Native child sessions are on: the client asked for them and the agent
+   * advertises `agentCapabilities.sessionCapabilities.subagents` or the AIR
+   * `nativeSubagentSessions` capability. Both pinned bridges advertise both,
+   * asked or not (live probe), so the request is what decides.
+   */
+  get nativeSubagentsEnabled(): boolean {
+    if (!this._options.nativeSubagents || !this._initializeResult) return false;
+    const marker = this._initializeResult.agentCapabilities?.sessionCapabilities?.subagents;
+    if (marker && typeof marker === "object" && !Array.isArray(marker)) return true;
+    const capabilities = airMetadata(this._initializeResult._meta)?.capabilities
+      ?? airMetadata(this._initializeResult.agentCapabilities?._meta)?.capabilities;
+    return Array.isArray(capabilities) && capabilities.includes(AIR_NATIVE_SUBAGENT_SESSIONS);
   }
 
   private _log(...args: unknown[]) {
@@ -527,6 +552,11 @@ export class AcpClient {
   // ── ACP protocol methods ───────────────────────────────────────
 
   async initialize(): Promise<InitializeResult> {
+    const native = this._options.nativeSubagents ?? null;
+    const air = (capabilities: string[]) => ({
+      version: 1,
+      capabilities: native?.airCapability ? [...capabilities, AIR_NATIVE_SUBAGENT_SESSIONS] : capabilities,
+    });
     const params: InitializeParams = {
       protocolVersion: 1,
       clientInfo: { name: "remi", version: "0.1.0" },
@@ -539,9 +569,13 @@ export class AcpClient {
         _meta: {
           terminal_output: true,
           ...(this._options.agentType === "codex"
-            ? { jetbrains: { air: { version: 1, capabilities: ["recommendedValue", "sessionFailure"] } } }
-            : { "subagent-transcript": true, jetbrains: { air: { version: 1, capabilities: ["sessionFailure"] } } }),
+            ? { jetbrains: { air: air(["recommendedValue", "sessionFailure"]) } }
+            : { "subagent-transcript": true, jetbrains: { air: air(["sessionFailure"]) } }),
         },
+        // Native child sessions (PR 5): each subagent's frames arrive on its own
+        // session, announced by `subagent_spawned` (claude-agent-acp 0.90
+        // dist/acp-subagents.js; codex-acp 2.2.2 also needs the AIR capability).
+        ...(native ? { subagents: {} } : {}),
         fs: { readTextFile: true, writeTextFile: true },
         // ACP session lifecycle reports (PR 2 decision R11). Both pinned bridges
         // need an object: with `compaction` they send `compaction_update` /

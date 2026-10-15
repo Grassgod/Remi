@@ -1,7 +1,9 @@
 /** Native CoT rows for turn + items traces. Titles use the shared Codex-style
  * step copy (`@shared/trace-step-copy`, zh), so Feishu reads like Chat; icons
  * keep aiden-bot's semantic categories. Tool outputs are deliberately not used
- * here: the Task transcript in the workbench owns logs. */
+ * here: the Task transcript in the workbench owns logs. A call that messages,
+ * interrupts, resumes, closes or lists subagents (`agentControl`) reads as what
+ * it did to which agent, named through the caller's resolver. */
 import type {
   CommandAction,
   FileChange,
@@ -13,7 +15,7 @@ import type {
   TraceToolItem,
   TraceWebSearchItem,
 } from "@multiremi/contracts/trace.js";
-import { describeStep, formatStepCopy } from "@shared/trace-step-copy.js";
+import { agentControl, describeStep, formatStepCopy, type AgentResolver } from "@shared/trace-step-copy.js";
 
 export interface CotListResult { type: "list"; items: Array<{ text: string; icon?: "task" }> }
 
@@ -80,7 +82,7 @@ function commandAction(item: TraceCommandItem, part: CommandAction | undefined):
   return part ?? (item.actions.length === 1 ? item.actions[0] : undefined);
 }
 
-function icon(item: CotToolItem, part: CommandAction | FileChange | undefined): string {
+function icon(item: CotToolItem, part: CommandAction | FileChange | undefined, resolveAgent?: AgentResolver): string {
   switch (item.type) {
     case "command": {
       const action = commandAction(item, part as CommandAction | undefined);
@@ -89,7 +91,8 @@ function icon(item: CotToolItem, part: CommandAction | FileChange | undefined): 
     }
     case "file_change": return "write";
     case "web_search": return "search";
-    case "tool": return toolIcon(item.tool);
+    // An agent-control row shares the subagent step's icon.
+    case "tool": return agentControl(item, resolveAgent) ? "robot_outlined" : toolIcon(item.tool);
   }
 }
 
@@ -137,9 +140,10 @@ function statusNote(item: CotToolItem, key: string): string | undefined {
  * Native rows for a finished tool item: one per command action, one per changed
  * file, else one. A command the model labelled (Claude's Bash description,
  * `command.title`) is one row under that label, as in Chat; its command stays
- * in the row's args.
+ * in the row's args. `resolveAgent` (`subagentResolver` over the trace) names
+ * the agent of a control row and makes a `TaskStop` on a subagent an interrupt.
  */
-export function cotStepRows(item: CotToolItem): CotStepRow[] {
+export function cotStepRows(item: CotToolItem, resolveAgent?: AgentResolver): CotStepRow[] {
   const titled = item.type === "command" && !!item.title?.trim();
   const parts: Array<CommandAction | FileChange | undefined> = titled ? [undefined]
     : item.type === "command" && item.actions.length > 1
@@ -148,11 +152,11 @@ export function cotStepRows(item: CotToolItem): CotStepRow[] {
       : [item.type === "command" ? item.actions[0] : item.type === "file_change" ? item.changes[0] : undefined];
   let key = "";
   const rows = parts.map((part, index): CotStepRow => {
-    const step = describeStep(item, part);
+    const step = describeStep(item, part, resolveAgent);
     key = step.key;
     const title = cotPreview(line(formatStepCopy(step.key, step.args))) || item.tool;
     const detail = args(item, part);
-    return { key: `${item.id}:${index}`, title, icon: icon(item, part), ...(detail ? { args: cotPreview(detail) } : {}) };
+    return { key: `${item.id}:${index}`, title, icon: icon(item, part, resolveAgent), ...(detail ? { args: cotPreview(detail) } : {}) };
   });
   const note = statusNote(item, key);
   if (note) rows[rows.length - 1]!.note = note;
@@ -173,7 +177,7 @@ export function cotSubagentReady(item: TraceSubagentItem): boolean {
 /** The subagent's own label: its real title, else the start of its prompt, else the tool. */
 export function cotSubagentTitle(item: TraceSubagentItem): string {
   const label = !placeholderTitle(item) ? item.title! : item.prompt?.trim() || item.title || item.tool || "";
-  return cotPreview(line(label), 600) || "子任务";
+  return cotPreview(line(label), 600) || "子代理";
 }
 
 /** Step name for a subagent: Codex copy while it runs and once it ends. */

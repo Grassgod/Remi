@@ -37,7 +37,7 @@
  */
 
 import type { GcRunMode, StorageReport, StorageSubjectRef, SubjectSnapshot } from "./storage.js";
-import type { TraceContextUsage, TraceEvent, TraceEventPage, TraceTurnPage } from "./trace.js";
+import type { TraceContextUsage, TraceEvent, TraceEventPage, TraceLateSubagent, TraceTurnPage } from "./trace.js";
 import type { MultiremiChatSessionStatus, MultiremiDaemonHeartbeatAck, MultiremiDaemonSshMeshStatus } from "./types.js";
 import type { UnifiedMessage, DecisionOption } from "./unified-model.js";
 
@@ -122,6 +122,7 @@ export const DAEMON_UPLINK_BEST_EFFORT_FRAMES = [
   "runtime.ready",
   "concierge.status",
   "gc.storage_report",
+  "task.activity",
 ] as const;
 
 /** Non-trace-stream daemon -> server RPC requests, paired with a `res` by `id`. */
@@ -438,6 +439,12 @@ export interface DaemonTaskCompletionFields {
   worked_ms: number | null;
   /** Top-level items the Chat fold renders: every item but the final reply, user messages, permissions and questions. */
   process_item_count: number | null;
+  /**
+   * Top-level subagents that ended after the final reply started, at most 5
+   * (PR 5); null when none did. Optional: older daemons omit it, and a
+   * receiver reads a missing or malformed value as null.
+   */
+  late_subagents?: TraceLateSubagent[] | null;
 }
 
 /** Turn input travels as messages; attempt ids remain trace/outbox keys. */
@@ -523,6 +530,19 @@ export interface DaemonGcSubjectReclaimedPayload {
 export interface DaemonGcStorageReportPayload {
   runtime_id: string;
   report: StorageReport;
+}
+
+/**
+ * `task.activity`, daemon -> server, best effort (PR 5): how many subagents a
+ * running attempt has open, recomputed from the daemon's trace fold. A lost
+ * frame is replaced by the next change or the periodic refresh, and a server
+ * that has no handler for it ignores it.
+ */
+export interface DaemonTaskActivityPayload {
+  task_id: string;
+  runtime_id?: string;
+  /** Running top-level subagents, else running nested ones; 0 when none runs. */
+  running_subagents: number;
 }
 
 /**

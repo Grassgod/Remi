@@ -245,6 +245,16 @@ export function decodeDecisionCardBody(raw: string): DecisionCardBody | null {
 }
 
 /**
+ * The subagent whose child session raised the request: the daemon's optional
+ * decision metadata `subagent: {item_id, name}` (PR 5 §1.3), carried in the
+ * request payload. Null when absent, malformed or unnamed.
+ */
+function requestingSubagent(request: MultiremiTaskHumanRequest): string | null {
+  const name = object(object(request.payload).subagent).name;
+  return typeof name === "string" && name.trim() ? name.trim().replace(/\s+/g, " ") : null;
+}
+
+/**
  * Build the interaction card body. `header` comes from the caller because the
  * session label is connector-owned; everything else is a pure JSON shape.
  */
@@ -254,6 +264,9 @@ export function buildTaskInteractionCard(
 ): Card {
   const marker = interactionMarker(request.taskId, request.id);
   const elements: Card[] = [];
+  // A child session's request names its subagent first; without one the card is unchanged.
+  const subagent = requestingSubagent(request);
+  if (subagent) elements.push({ tag: "markdown", content: `子代理 ${escapeCardText(subagent)} 请求：` });
   if (typeof request.payload.question_summary === 'string' && request.payload.question_summary.trim()) elements.push({ tag: 'markdown', content: `**Remi 总结**\n${escapeCardText(request.payload.question_summary)}` });
   const context = object(request.payload.context);
   if (typeof context.text === 'string' && context.text.trim()) elements.push({ tag: 'markdown', content: `**原提问上下文**\n${escapeCardText(context.text)}${context.truncated ? '\n（上下文已截断）' : ''}` });

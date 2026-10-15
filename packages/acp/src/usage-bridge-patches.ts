@@ -194,3 +194,70 @@ export function claudeUsagePatch(source: string): string | null {
 `;
   return source.replace(anchor, hook + anchor);
 }
+
+// ── Claude native subagent facts (PR 5, option A) ───────────────────────────
+
+/**
+ * claude-agent-acp 0.90's AIR-form `subagent_spawned` names no agent type and
+ * does not say whether the agent runs in the background; the SDK's
+ * `task_started` that precedes it does (`is_backgrounded`, `subagent_type`).
+ * This patch records both by task id and adds them to the announcement as
+ * `_meta.remi = { backgrounded, subagentType }` (null when unknown). A resumed
+ * generation (`<id>:generation:N`) is `backgrounded: true`: the SDK always
+ * registers a resumed subagent in the background. A later move to the
+ * background (`task_updated` `is_backgrounded`) has no announcement to carry it.
+ */
+export const CLAUDE_SUBAGENT_PATCH_VERSION = "claude-subagents-v1";
+
+/** The marker an installed bridge must carry (provision's satisfied check). */
+export const CLAUDE_SUBAGENT_PATCH_MARKER = `const REMI_SUBAGENT_PATCH = "${CLAUDE_SUBAGENT_PATCH_VERSION}";`;
+
+const SUBAGENT_PATCH_BEGIN = "/*remi-subagents:begin*/";
+const SUBAGENT_PATCH_END = "/*remi-subagents:end*/";
+const SUBAGENT_PATCH_REGION = /\/\*remi-subagents:begin\*\/[\s\S]*?\/\*remi-subagents:end\*\//g;
+/** dist/acp-agent.js, `case "task_started":` (0.90). */
+const CLAUDE_TASK_STARTED_ANCHOR = "                                await subagents.taskStarted({\n                                    taskId: message.task_id,";
+/** dist/acp-agent.js, the session's `NativeSubagentRuntime` and its publish callback (0.90). */
+const CLAUDE_SUBAGENT_PUBLISH_PREFIX = "new NativeSubagentRuntime(subagentForm(this.clientCapabilities), params.sessionId, session, "
+  + "async (notification) => this.client.sessionUpdate(asSdkSessionNotification(";
+const CLAUDE_SUBAGENT_PUBLISH_ANCHOR = `${CLAUDE_SUBAGENT_PUBLISH_PREFIX}notification))`;
+
+/**
+ * Patch `dist/acp-agent.js`; null when an anchor is missing (the install and
+ * `release:prepare` then fail, as for the usage patch). Every insertion is
+ * bracketed, so stripping the regions restores the upstream text and a later
+ * version can re-patch an already patched bundle. Idempotent.
+ */
+export function claudeSubagentPatch(source: string): string | null {
+  if (source.includes(CLAUDE_SUBAGENT_PATCH_MARKER)) return source;
+  source = source.replace(SUBAGENT_PATCH_REGION, "");
+  if (count(source, CLAUDE_TASK_STARTED_ANCHOR) !== 1 || count(source, CLAUDE_SUBAGENT_PUBLISH_ANCHOR) !== 1) return null;
+  source = source.replace(CLAUDE_TASK_STARTED_ANCHOR, () => `${SUBAGENT_PATCH_BEGIN}{ ${CLAUDE_SUBAGENT_PATCH_MARKER}
+                                    (session.remiSubagentFacts ??= new Map()).set(message.task_id, {
+                                        backgrounded: message.is_backgrounded, subagentType: message.subagent_type });
+                                }
+${SUBAGENT_PATCH_END}${CLAUDE_TASK_STARTED_ANCHOR}`);
+  return source.replace(CLAUDE_SUBAGENT_PUBLISH_ANCHOR, () => `${CLAUDE_SUBAGENT_PUBLISH_PREFIX}${SUBAGENT_PATCH_BEGIN}((notification) => {
+            const update = notification?.update;
+            if (update?.sessionUpdate !== "subagent_spawned" || typeof update.subagentSessionId !== "string") return notification;
+            const agentId = update.subagentSessionId.replace(/:generation:\\d+$/, "");
+            const facts = session.remiSubagentFacts?.get(agentId);
+            const remi = {
+                backgrounded: agentId !== update.subagentSessionId ? true
+                    : typeof facts?.backgrounded === "boolean" ? facts.backgrounded : null,
+                subagentType: typeof facts?.subagentType === "string" && facts.subagentType ? facts.subagentType : null,
+            };
+            return { ...notification, update: { ...update, _meta: { ...update._meta, remi } } };
+        })(${SUBAGENT_PATCH_END}notification${SUBAGENT_PATCH_BEGIN})${SUBAGENT_PATCH_END}))`);
+}
+
+/** Restore the upstream text of a bundle the subagent patch changed (tests, re-patching). */
+export function stripClaudeSubagentPatch(source: string): string {
+  return source.replace(SUBAGENT_PATCH_REGION, "");
+}
+
+function count(source: string, needle: string): number {
+  let n = 0;
+  for (let at = source.indexOf(needle); at >= 0; at = source.indexOf(needle, at + needle.length)) n++;
+  return n;
+}

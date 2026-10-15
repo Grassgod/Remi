@@ -12940,6 +12940,7 @@
             "original_questions": [],
             "original_message": "{\"tool\":\"Bash\",\"command\":\"ls\"}",
             "original_context": null,
+            "source_subagent": null,
             "options": null,
             "summary": null,
             "current_handler": null,
@@ -12997,6 +12998,7 @@
             "original_questions": [],
             "original_message": "{\"tool\":\"Bash\",\"command\":\"ls\"}",
             "original_context": null,
+            "source_subagent": null,
             "options": null,
             "summary": null,
             "current_handler": null,
@@ -14526,6 +14528,7 @@
           "original_questions": [],
           "original_message": "{\"tool\":\"Bash\",\"command\":\"ls\"}",
           "original_context": null,
+          "source_subagent": null,
           "options": null,
           "summary": null,
           "current_handler": null,
@@ -21522,7 +21525,8 @@
             "started_at": null,
             "ended_at": null,
             "ended_reason": null,
-            "legacy_prompt": null
+            "legacy_prompt": null,
+            "running_subagents": null
           },
           {
             "id": "tsk_8rcx9z88woyu",
@@ -21556,7 +21560,8 @@
             "started_at": null,
             "ended_at": null,
             "ended_reason": null,
-            "legacy_prompt": null
+            "legacy_prompt": null,
+            "running_subagents": null
           },
           {
             "id": "tsk_1ut6x0i244sp",
@@ -21590,7 +21595,8 @@
             "started_at": null,
             "ended_at": null,
             "ended_reason": null,
-            "legacy_prompt": null
+            "legacy_prompt": null,
+            "running_subagents": null
           },
           {
             "id": "tsk_lnktpkuv95wd",
@@ -21624,7 +21630,8 @@
             "started_at": null,
             "ended_at": null,
             "ended_reason": null,
-            "legacy_prompt": null
+            "legacy_prompt": null,
+            "running_subagents": null
           },
           {
             "id": "tsk_snapshot",
@@ -21658,7 +21665,8 @@
             "started_at": "<timestamp>",
             "ended_at": "<timestamp>",
             "ended_reason": null,
-            "legacy_prompt": null
+            "legacy_prompt": null,
+            "running_subagents": null
           }
         ],
         "next_cursor": null
@@ -23756,6 +23764,7 @@
           "original_context": {
             "text": "Original provider context"
           },
+          "source_subagent": null,
           "options": [
             {
               "label": "A",
@@ -23858,6 +23867,7 @@
           "original_context": {
             "text": "Original provider context"
           },
+          "source_subagent": null,
           "options": [
             {
               "label": "A",
@@ -23969,6 +23979,7 @@
           "original_context": {
             "text": "Original provider context"
           },
+          "source_subagent": null,
           "options": [
             {
               "label": "A",
@@ -24142,6 +24153,7 @@
           "original_context": {
             "text": "Original provider context"
           },
+          "source_subagent": null,
           "options": [
             {
               "label": "A",
@@ -24351,6 +24363,7 @@
           "original_context": {
             "text": "Original provider context"
           },
+          "source_subagent": null,
           "options": [
             {
               "label": "A",
@@ -24565,6 +24578,7 @@
           "original_context": {
             "text": "Original provider context"
           },
+          "source_subagent": null,
           "options": [
             {
               "label": "A",
@@ -24669,6 +24683,7 @@
             "original_context": {
               "text": "Original provider context"
             },
+            "source_subagent": null,
             "options": [
               {
                 "label": "A",
@@ -24763,6 +24778,7 @@
             "original_context": {
               "text": "Original provider context"
             },
+            "source_subagent": null,
             "options": [
               {
                 "label": "A",
@@ -25117,6 +25133,7 @@
           ],
           "original_message": "Proceed after restart?",
           "original_context": null,
+          "source_subagent": null,
           "options": [
             {
               "label": "Proceed",
@@ -25268,6 +25285,7 @@
           ],
           "original_message": "Proceed after restart?",
           "original_context": null,
+          "source_subagent": null,
           "options": [
             {
               "label": "Proceed",
@@ -25427,6 +25445,7 @@
           ],
           "original_message": "Proceed after restart?",
           "original_context": null,
+          "source_subagent": null,
           "options": [
             {
               "label": "Proceed",
@@ -25596,6 +25615,7 @@
           ],
           "original_message": "Proceed after restart?",
           "original_context": null,
+          "source_subagent": null,
           "options": [
             {
               "label": "Proceed",
@@ -25802,6 +25822,7 @@
               "context_usage": null,
               "worked_ms": null,
               "process_item_count": null,
+              "late_subagents": null,
               "assignee_agent_id": "agt_4it58rkbvy1m",
               "attempt": 1,
               "source_event_id": null,
@@ -26012,6 +26033,7 @@
           ],
           "original_message": "Proceed after restart?",
           "original_context": null,
+          "source_subagent": null,
           "options": [
             {
               "label": "Proceed",
@@ -29641,7 +29663,8 @@
             "started_at": null,
             "ended_at": null,
             "ended_reason": null,
-            "legacy_prompt": null
+            "legacy_prompt": null,
+            "running_subagents": null
           },
           {
             "id": "tsk_snapshot",
@@ -29675,7 +29698,8 @@
             "started_at": "<timestamp>",
             "ended_at": "<timestamp>",
             "ended_reason": null,
-            "legacy_prompt": null
+            "legacy_prompt": null,
+            "running_subagents": null
           }
         ],
         "next_cursor": null
@@ -29833,6 +29857,8 @@
             "context_usage": null,
             "worked_ms": null,
             "process_item_count": null,
+            "running_subagents": null,
+            "late_subagents": null,
             "offered_at": null,
             "accepted_at": "<timestamp>",
             "started_at": "<timestamp>",

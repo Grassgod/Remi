@@ -34,7 +34,7 @@ import {
 } from "@acp/index.js";
 import type { ElicitationCreateParams, ElicitationResult, PermissionOutcome, RequestPermissionParams } from "@shared/contracts/acp-protocol.js";
 import { answersToElicitationContent, elicitationToQuestions, type ElicitationQuestion } from "@shared/contracts/acp-elicitation.js";
-import type { AgentResponse, Provider } from "@shared/contracts/provider-types.js";
+import type { AgentResponse, Provider, ProviderEvent } from "@shared/contracts/provider-types.js";
 import type { AgentTask } from "@daemon/contracts/types.js";
 import type { UnifiedMessage } from "@multiremi/contracts/unified-model.js";
 import {
@@ -49,7 +49,9 @@ import {
   type UploadFeishuBotAttachmentInput,
 } from "./client.js";
 import { responseToUsageUnits } from "./usage-units.js";
-import { createTraceTranslator, type TraceTranslator } from "./trace-translator.js";
+import { createTraceTranslator, type TraceSubagentRef, type TraceTranslator } from "./trace-translator.js";
+import { nativeAgentItemId } from "@acp/adapters/trace-vendor.js";
+import { TaskActivityReporter } from "./task-activity.js";
 import { finalReplyBody } from "@shared/turn-trace.js";
 import { TaskUsageLedger } from "./task-usage-ledger.js";
 import { extractAntigravityDefaultModel, extractBaseUrl } from "@multiremi/relay/fragment.js";
@@ -434,6 +436,10 @@ const AUTHORITY_PROBE_DELAYS_MS = [30_000, 60_000, 120_000, 240_000, 480_000, 90
 const DEFAULT_AUTHORITY_PROBE_MAX_MS = 900_000;
 const DEFAULT_TASK_DRAIN_TIMEOUT_MS = 5 * 60 * 1_000;
 const DEFAULT_OUTBOX_STARTUP_FLUSH_TIMEOUT_MS = 30_000;
+/** An owed autonomous round may take this long to send its first frame (PR 5 §2.5, decision U1). */
+const DEFAULT_AUTONOMOUS_IDLE_MS = 60_000;
+/** Autonomous rounds one attempt waits for, at most. */
+const AUTONOMOUS_MAX_ROUNDS = 8;
 const IN_PROCESS_RUNTIME_MODEL_DISCOVERY_DISABLED =
   "Runtime model discovery is temporarily disabled in the daemon process; gateway models remain available";
 
@@ -474,6 +480,24 @@ export interface MultiremiDaemonOptions {
   steerPollIntervalMs?: number;
   /** How long a force-answer run may keep going before the daemon wraps it up with the output so far (default 3 min). */
   forceAnswerGraceMs?: number;
+  /**
+   * Native subagent child sessions on the ACP bridges that support them (PR 5,
+   * default on): each subagent's work arrives on its own session and becomes a
+   * nested trace. `REMI_ACP_NATIVE_SUBAGENTS=0` restores the root-only frames.
+   */
+  nativeSubagents?: boolean;
+  /**
+   * Late answers as autonomous rounds (PR 5 §2, default on): Claude's frames
+   * between prompts are captured and an owed round is waited for in the same
+   * attempt. `REMI_ACP_AUTONOMOUS_ROUNDS=0` turns both off, restoring the
+   * completion timing without it; independent of {@link nativeSubagents}.
+   */
+  autonomousRounds?: boolean;
+  /**
+   * How long the daemon waits for an owed autonomous round's first frame
+   * (Claude's late answer to a background subagent, PR 5 §2.5; default 60 s).
+   */
+  autonomousIdleMs?: number;
   daemonPort?: number;
   workspacesRoot?: string;
   repoCacheRoot?: string;
@@ -592,6 +616,10 @@ function upsertRepoWarning(warnings: TaskRepoWarning[], warning: TaskRepoWarning
 }
 
 export type MultiremiTaskProvider = Pick<Provider, "sendStream" | "getLastResponse" | "steer"> & {
+  /** An autonomous round after the prompt resolved (PR 5 §2.3); absent when the provider captures none. */
+  listenAutonomous?: Provider["listenAutonomous"];
+  /** The native agent of a child session, as the provider registered it (PR 5 §1.3). */
+  subagentSession?: (sessionId: string) => { agentId: string; name: string | null } | null;
   readonly typedSessionFailures?: boolean;
   close?: () => Promise<void> | void;
   discoverModelCapabilities?: () => Promise<AcpModelCapability[]>;
@@ -599,6 +627,23 @@ export type MultiremiTaskProvider = Pick<Provider, "sendStream" | "getLastRespon
   setPermissionHandler?: (handler: (params: RequestPermissionParams) => Promise<PermissionOutcome>) => void;
   setElicitationHandler?: (handler: (params: ElicitationCreateParams) => Promise<ElicitationResult>) => void;
 };
+
+/** A frame of model work in an autonomous round (PR 5 §2.5); title and status updates are not. */
+function isAutonomousActivity(event: ProviderEvent): boolean {
+  switch (event.sessionUpdate) {
+    case "agent_message_chunk":
+    case "agent_thought_chunk":
+    case "tool_call":
+    case "tool_call_update":
+    case "plan":
+    case "usage_update":
+    case "subagent_spawned":
+    case "subagent_state_update":
+      return true;
+    default:
+      return false;
+  }
+}
 
 export interface ElicitationContext {
   text: string;
@@ -740,6 +785,8 @@ export class MultiremiDaemon {
   private workspaceRelays = new Map<string, MultiremiRelayWire | undefined>();
   /** Antigravity's loopback gateway shim; created at the first Antigravity run or probe. */
   private antigravityShim: AntigravityGatewayShim | null = null;
+  /** Running attempts' `task.activity` reporters, resent on reconnect (PR 5 §3.8). */
+  private activityReporters = new Set<TaskActivityReporter>();
   private readonly ownsAntigravityShim: boolean;
   private runtimeCodexProfile: RuntimeCodexProfile | null = null;
   private runtimeClaudeProfile: RuntimeClaudeProfile | null = null;
@@ -971,6 +1018,9 @@ export class MultiremiDaemon {
         ?? numberEnv(process.env.MULTIREMI_UNATTENDED_HUMAN_REQUEST_TIMEOUT_MS, 5 * 60 * 1000),
       steerPollIntervalMs: options.steerPollIntervalMs ?? numberEnv(process.env.MULTIREMI_STEER_POLL_INTERVAL_MS, DEFAULT_STEER_POLL_MS),
       forceAnswerGraceMs: options.forceAnswerGraceMs ?? numberEnv(process.env.MULTIREMI_FORCE_ANSWER_GRACE_MS, DEFAULT_FORCE_ANSWER_GRACE_MS),
+      nativeSubagents: options.nativeSubagents ?? process.env.REMI_ACP_NATIVE_SUBAGENTS !== "0",
+      autonomousRounds: options.autonomousRounds ?? process.env.REMI_ACP_AUTONOMOUS_ROUNDS !== "0",
+      autonomousIdleMs: Math.max(1, options.autonomousIdleMs ?? DEFAULT_AUTONOMOUS_IDLE_MS),
       daemonPort: options.daemonPort ?? numberEnv(process.env.MULTIREMI_DAEMON_PORT, 6131),
       workspacesRoot,
       repoCacheRoot: options.repoCacheRoot ?? process.env.MULTIREMI_REPO_CACHE_ROOT ?? sharedReposRoot(workspacesRoot),
@@ -1180,6 +1230,7 @@ export class MultiremiDaemon {
       onStateChange: () => { this.taskDownlinks.connectionChanged(); this.wakeClaim(); },
       readyToConnect: () => this.supervisorReady(),
       onConnected: () => {
+        for (const reporter of this.activityReporters) reporter.resend();
         const runtime = this.protocolLane.runtime();
         if (runtime) this.protocolClient.send({ t: "runtime.ready",
           rt: runtime.runtime_id, p: { active_task_ids: runtime.active_task_ids, active_question_waits: runtime.active_question_waits ?? [] } });
@@ -3953,6 +4004,8 @@ export class MultiremiDaemon {
         this.taskDownlinks.beginDecision(task.id);
         try {
           const toolTitle = params.toolCall?.title ?? "tool call";
+          // A child session's request names its subagent (PR 5 §1.3); the root's carries no field.
+          const subagent = this.subagentRef(task.id, provider, trace, params.sessionId);
           // S2 creates the decision message and sets awaiting_human atomically.
           const questionId = `question_${randomUUID()}`, waitId = randomUUID();
           this.taskDownlinks.beginQuestionWait?.(task.id, questionId, waitId);
@@ -3963,7 +4016,7 @@ export class MultiremiDaemon {
             body_md: `Permission requested: ${toolTitle}`,
             options: params.options.map(option => ({ label: option.name, value: option.optionId, description: option.kind })),
             metadata: { kind: "permission", session_id: params.sessionId,
-              tool_call: params.toolCall ?? null, options: params.options },
+              tool_call: params.toolCall ?? null, options: params.options, ...(subagent ? { subagent } : {}) },
             timeout_ms: humanRequestTimeoutMs,
           });
           const decision = result.message as UnifiedMessage;
@@ -4014,6 +4067,7 @@ export class MultiremiDaemon {
           elicitationContextOffset = sliced.offset;
           context = sliced.context;
         }
+        const subagent = this.subagentRef(task.id, provider, trace, params.sessionId);
         const questionId = `question_${randomUUID()}`, waitId = randomUUID();
         this.taskDownlinks.beginQuestionWait?.(task.id, questionId, waitId);
         const result = await this.taskDownlinks.rpc("turn.decision", {
@@ -4030,6 +4084,7 @@ export class MultiremiDaemon {
             message: params.message,
             questions,
             ...(context ? { context } : {}),
+            ...(subagent ? { subagent } : {}),
           },
           timeout_ms: humanRequestTimeoutMs,
         });
@@ -4065,6 +4120,21 @@ export class MultiremiDaemon {
     return () => {
       elicitationContextOffset = 0;
     };
+  }
+
+  /**
+   * The subagent a permission or question came from (PR 5 §1.3), for
+   * `metadata.subagent`; null for the root session. The request can arrive
+   * before the stream's consumer gave the translator the child's
+   * `subagent_spawned`, so the provider's own registry answers then.
+   */
+  private subagentRef(taskId: string, provider: MultiremiTaskProvider, trace: TraceTranslator,
+    sessionId: string | null | undefined): TraceSubagentRef | null {
+    if (!sessionId) return null;
+    const traced = this.recordTrace(taskId, () => trace.subagentOfSession(sessionId));
+    if (traced) return traced;
+    const child = provider.subagentSession?.(sessionId);
+    return child ? { item_id: nativeAgentItemId(child.agentId), name: child.name ?? "" } : null;
   }
 
   /** Questions and permissions share the reply/expiry race through decision messages. */
@@ -4341,10 +4411,16 @@ export class MultiremiDaemon {
       pluginFingerprint: config.pluginFingerprint,
       codexHome: config.codexHome,
       ...(antigravity ? { gatewayShim: antigravity.run, providerHome: providerHome!.home } : {}),
+      // Honoured only by adapters that declare them (PR 5 §1.1, §2.3).
+      nativeSubagentSessions: this.options.nativeSubagents,
+      captureAutonomousRounds: this.options.autonomousRounds,
     });
     if (!provider.sendStream) {
       throw new Error(`Provider ${agent.provider} does not support streaming`);
     }
+    // The sidebar's running-subagent badge (PR 5 §3.8): top-level count, else nested.
+    const activity = new TaskActivityReporter((running) => this.client.reportTaskActivity(task.id, running, this.options.runtimeId));
+    this.activityReporters.add(activity);
     // One writer per attempt: ACP updates, permissions, questions and steers all
     // go through the translator, which flushes pending deltas before any other
     // fact, so the trace keeps their order (PR 2 §2).
@@ -4362,6 +4438,7 @@ export class MultiremiDaemon {
       redactText: (text) => provider.typedSessionFailures === false && classifyLegacyProviderFailure(text)
         ? redactProviderErrorText(text, failureCredentials) : text,
       standaloneText: (text) => provider.typedSessionFailures === false && classifyLegacyProviderFailure(text) !== null,
+      onSubagentCounts: (counts) => activity.update(counts.top || counts.nested),
     });
     const resetElicitationContextOffset = this.attachHumanInputHandlers(provider, task, signal, trace);
     let finalSessionId: string | null = task.sessionId;
@@ -4535,8 +4612,8 @@ export class MultiremiDaemon {
           signal.removeEventListener("abort", onTaskAbort);
           if (graceTimer) clearTimeout(graceTimer);
         }
-        const last = provider.getLastResponse?.() as AgentResponse | null | undefined;
-        if (last?.model) this.recordTrace(task.id, () => trace.model(last.model!));
+        let last = provider.getLastResponse?.() as AgentResponse | null | undefined;
+        if (last?.model) this.recordTrace(task.id, () => trace.model(last!.model!));
         finalSessionId = last?.sessionId ?? finalSessionId;
         checkpointUsage(ledger.observe(responseToUsageUnits(agent.provider, last, config.model, `turn:${turnIndex}`)));
         // Resume by provider session id if the follow-up turn needs a fresh
@@ -4551,6 +4628,60 @@ export class MultiremiDaemon {
           await this.taskDownlinks.consumeTaskSteerMessages(task.id, injectedSteerIds);
           injectedSteerIds = [];
         }
+        // Claude may still owe this attempt a late answer (PR 5 §2.5): a
+        // background subagent that ended before the prompt's result starts a
+        // model cycle of its own. Listen for it in the same attempt, unless a
+        // steer, a wrap-up or the cancel came first; the bridge already holds a
+        // prompt while such a subagent still runs.
+        let autonomousRounds = 0;
+        // A wrap-up in effect (a force_answer was injected) bounds the wait by its grace deadline.
+        const wrapUpOver = () => forceAnswerDeadline != null && Date.now() >= forceAnswerDeadline;
+        while (this.options.autonomousRounds && provider.listenAutonomous && !turnError && !turnAbort.signal.aborted
+          && !signal.aborted && !forceAnswerExpired && !wrapUpOver()
+          && !steerFeed.hasPending && trace.owesAutonomousRound && autonomousRounds < AUTONOMOUS_MAX_ROUNDS) {
+          autonomousRounds++;
+          const listen = new AbortController();
+          const stopListening = () => listen.abort();
+          signal.addEventListener("abort", stopListening, { once: true });
+          // A steer or a wrap-up ends the wait; no prompt runs, so the pump has no round.
+          steerFeed.setInterrupt(stopListening);
+          let roundActivity = 0;
+          let listenFailed = false;
+          try {
+            for await (const event of provider.listenAutonomous({ chatId: config.chatId, signal: listen.signal,
+              idleMs: this.options.autonomousIdleMs, ...(forceAnswerDeadline != null ? { deadline: forceAnswerDeadline } : {}) })) {
+              if (isAutonomousActivity(event)) roundActivity++;
+              const usageUnits = (event as { _meta?: Record<string, unknown> })._meta?.remiUsageUnits;
+              if (Array.isArray(usageUnits)) checkpointUsage(ledger.observe((usageUnits as TaskUsageUnit[]).map(unit => ({
+                ...unit, provider: agent.provider, requestedModel: unit.requestedModel ?? config.model ?? null,
+              }))));
+              trace.acp(event);
+            }
+          } catch (err) {
+            // A failed listen never fails the turn: it completes with what it has.
+            listenFailed = true;
+            log.warn(`Task ${task.id}: autonomous round failed: ${redactProviderErrorText(err instanceof Error ? err.message : String(err), failureCredentials)}`);
+          } finally {
+            this.recordTrace(task.id, () => trace.promptEnded({ aborted: false }));
+            steerFeed.setInterrupt(null);
+            signal.removeEventListener("abort", stopListening);
+          }
+          last = (provider.getLastResponse?.() as AgentResponse | null | undefined) ?? last;
+          if (last?.model) this.recordTrace(task.id, () => trace.model(last!.model!));
+          finalSessionId = last?.sessionId ?? finalSessionId;
+          checkpointUsage(ledger.observe(responseToUsageUnits(agent.provider, last, config.model, `turn:${turnIndex}:auto:${autonomousRounds}`)));
+          if (listenFailed) break;
+          if (!roundActivity) {
+            // R1: the owed notification was consumed inside the prompt after all (unless a steer, a cancel or a wrap-up stopped the wait).
+            if (!listen.signal.aborted && !wrapUpOver()) {
+              log.info(`Task ${task.id}: autonomous_wait_empty after ${this.options.autonomousIdleMs}ms (round ${autonomousRounds})`);
+            }
+            break;
+          }
+        }
+        if (signal.aborted) throw (turnError ?? new Error("Cancelled"));
+        // The grace ran out while waiting: deliver what there is, as a round's grace timer would.
+        if (autonomousRounds > 0 && wrapUpOver()) forceAnswerExpired = true;
         const steered = steerFeed.take().filter((m) => !recordedSteerIds.has(m.id));
         if (turnError && !turnAbort.signal.aborted) throw turnError;
         const lastItem = trace.lastItem;
@@ -4646,6 +4777,8 @@ export class MultiremiDaemon {
       antigravity?.run.close();
       checkpointUsage(ledger.finish());
       this.recordTrace(task.id, () => trace.flush());
+      activity.finish();
+      this.activityReporters.delete(activity);
       pump?.stop();
       steerFeed.stop();
       await this.reportIssueWorkspaceAfterRun(task, workspaceDir, preparedWorkspace.repos).catch((err) => {

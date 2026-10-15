@@ -1,5 +1,5 @@
 export { createChatStore, CHAT_MIN_W, CHAT_MIN_H, CHAT_DEFAULT_W, CHAT_DEFAULT_H, DRAFT_NEW_SESSION, DEFAULT_FOLLOW_UP_MODE } from "./store";
-export type { ChatStoreOptions, ChatState, ChatFollowUpMode, ChatQueueEdit, ChatQueueOutboxItem } from "./store";
+export type { ChatStoreOptions, ChatState, ChatFollowUpMode, ChatQueueEdit, ChatQueueOutboxItem, SubagentPanelTarget, SubagentRevealRequest } from "./store";
 export { useRecentContextStore, selectRecentContexts } from "./recent-context-store";
 export type { RecentContextEntry, RecentContextType } from "./recent-context-store";
 export { reconcileSettledPendingChatTask } from "./pending-task-reconciliation";

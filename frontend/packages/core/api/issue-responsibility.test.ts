@@ -20,6 +20,13 @@ describe("question API contracts", () => {
     expect(agent.current_handler).toEqual({ type: "agent", id: "owner" });
     expect(QuestionViewSchema.parse({ ...question, route_reason: undefined }).route_reason).toBeUndefined();
   });
+  it("reads the asking subagent, tolerating older servers and malformed values", () => {
+    const ref = { item_id: "sa:agent-1", name: "Count files" };
+    expect(QuestionViewSchema.parse({ ...question, source_subagent: ref }).source_subagent).toEqual(ref);
+    expect(QuestionViewSchema.parse({ ...question, source_subagent: null }).source_subagent).toBeNull();
+    expect(QuestionViewSchema.parse(question).source_subagent).toBeUndefined();
+    expect(QuestionViewSchema.parse({ ...question, source_subagent: { name: "No id" } }).source_subagent).toBeNull();
+  });
   it("preserves complete question history across overlapping pages and rejects repeated cursors", async () => {
     const page = (ids: string[], nextCursor: string | null) => new Response(JSON.stringify({ questions: ids.map(id => ({ ...question, id })), nextCursor }));
     const fetch = vi.fn().mockResolvedValueOnce(page(["recent"], "recent")).mockResolvedValueOnce(page(["recent", "older"], null));

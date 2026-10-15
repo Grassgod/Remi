@@ -254,7 +254,12 @@ export class InboxOperations {
     // Lists never transfer historical input bodies through the synchronous PG
     // bridge. Turn get --input remains the explicit full-input read.
     const fields = 'id,session_id,seq,agent_id,execution_scope,status,wake_source,wake_seq,trigger_message_id,input_from_seq,input_to_seq,waiting_on_message_id,reply_message_id,wrap_up_requested_at,current_attempt_id,delegation_id,delegated_by_agent_id,delegation_return_turn_id,delegated_from_issue_session_id,delegation_skip_reason,continued_from_turn_id,holds_workspace,priority,requesting_user_name,requesting_user_profile_description,issue_id,workspace_id,created_at,started_at,ended_at,ended_reason';
-    params.push(Math.min(input.limit??100,1000));return this.ctx.db.query(`SELECT ${fields},NULL AS legacy_prompt FROM multiremi_turns WHERE ${conditions.join(' AND ')} ORDER BY created_at DESC,id DESC LIMIT ?`).all(...params).map(row=>({...row,holds_workspace:!!row.holds_workspace} as MultiremiTurn));
+    // PR 5: the current attempt's running-subagent count (task.activity) for the
+    // Chat sidebar badge; only an active attempt reports one, so a final count
+    // the daemon never cleared cannot outlive the attempt.
+    const runningSubagents='(SELECT a.running_subagents FROM multiremi_turn_attempts a WHERE a.id=multiremi_turns.current_attempt_id AND a.status IN (\'accepted\',\'running\')) AS running_subagents';
+    params.push(Math.min(input.limit??100,1000));return this.ctx.db.query(`SELECT ${fields},NULL AS legacy_prompt,${runningSubagents} FROM multiremi_turns WHERE ${conditions.join(' AND ')} ORDER BY created_at DESC,id DESC LIMIT ?`).all(...params).map(row=>({...row,holds_workspace:!!row.holds_workspace,
+      running_subagents:row.running_subagents==null?null:Number(row.running_subagents)} as MultiremiTurn));
   }
   listTurnAttempts(id:string):MultiremiTurnAttempt[]{
     return this.ctx.db.query('SELECT * FROM multiremi_turn_attempts WHERE turn_id=? ORDER BY attempt_no').all(id).map(row=>({...row,
@@ -264,7 +269,10 @@ export class InboxOperations {
       claude_profile:row.claude_profile?JSON.parse(row.claude_profile):null,type_histogram:row.type_histogram?JSON.parse(row.type_histogram):null,
       model:row.model?JSON.parse(row.model):null,trace_ref:row.trace_ref?JSON.parse(row.trace_ref):null,
       context_usage:row.context_usage?JSON.parse(row.context_usage):null,worked_ms:row.worked_ms==null?null:Number(row.worked_ms),
-      process_item_count:row.process_item_count==null?null:Number(row.process_item_count)} as MultiremiTurnAttempt));
+      process_item_count:row.process_item_count==null?null:Number(row.process_item_count),
+      // PR 5: as on /api/turns rows, only an active attempt reports a running count.
+      running_subagents:row.running_subagents==null||!['accepted','running'].includes(row.status)?null:Number(row.running_subagents),
+      late_subagents:row.late_subagents?JSON.parse(row.late_subagents):null} as MultiremiTurnAttempt));
   }
   getTurnTrace(id:string){const turn=this.getTurn(id);if(!turn?.current_attempt_id)throw new Error('Turn not found');
     return {turn_id:id,attempt_id:turn.current_attempt_id,trace:this.ctx.taskTraces().getTaskTrace(turn.current_attempt_id)};}

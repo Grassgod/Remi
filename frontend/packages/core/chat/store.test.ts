@@ -256,3 +256,57 @@ describe("queue outbox", () => {
     expect(store.getState().queueOutbox).toEqual({});
   });
 });
+
+describe("subagent panel (PR 5 §6.8)", () => {
+  const target = { sessionId: "chat-1", attemptId: "att-1", turnId: "turn-1", live: true, path: ["sa:1"] };
+
+  it("opens, moves along the path and closes, persisting nothing", () => {
+    const storage = memoryStorage();
+    const setItem = vi.spyOn(storage, "setItem");
+    const store = createChatStore({ storage });
+    store.getState().openSubagentPanel(target);
+    expect(store.getState().subagentPanel).toEqual(target);
+    store.getState().setSubagentPath(["sa:1", "sa:2"]);
+    expect(store.getState().subagentPanel?.path).toEqual(["sa:1", "sa:2"]);
+    store.getState().setSubagentPath([]);
+    expect(store.getState().subagentPanel).toMatchObject({ attemptId: "att-1", path: [] });
+    store.getState().closeSubagentPanel();
+    expect(store.getState().subagentPanel).toBeNull();
+    // Moving a closed panel opens nothing.
+    store.getState().setSubagentPath(["sa:1"]);
+    expect(store.getState().subagentPanel).toBeNull();
+    expect(setItem).not.toHaveBeenCalled();
+    expect(createChatStore({ storage }).getState().subagentPanel).toBeNull();
+  });
+
+  it("drops the panel and the reveal request on close and on a chat switch, keeping nonces increasing", () => {
+    const store = createChatStore({ storage: memoryStorage() });
+    store.getState().setActiveSession("chat-1");
+    store.getState().openSubagentPanel(target);
+    store.getState().revealSubagent("att-1", "sa:1");
+    store.getState().closeSubagentPanel();
+    expect(store.getState().subagentPanel).toBeNull();
+    expect(store.getState().subagentReveal).toBeNull();
+    // A cleared request never lets the next one reuse an older nonce.
+    store.getState().revealSubagent("att-1", "sa:1");
+    expect(store.getState().subagentReveal?.nonce).toBe(2);
+    store.getState().openSubagentPanel(target);
+    store.getState().setActiveSession("chat-1");
+    expect(store.getState().subagentPanel).toEqual(target);
+    store.getState().setActiveSession("chat-2");
+    expect(store.getState().subagentPanel).toBeNull();
+    expect(store.getState().subagentReveal).toBeNull();
+  });
+
+  it("bumps the reveal nonce per request and forgets the panel on a workspace switch", () => {
+    const store = createChatStore({ storage: memoryStorage() });
+    store.getState().revealSubagent("att-1", "sa:1");
+    store.getState().revealSubagent("att-1", "sa:1");
+    expect(store.getState().subagentReveal).toEqual({ attemptId: "att-1", itemId: "sa:1", nonce: 2 });
+    store.getState().openSubagentPanel(target);
+    workspace.slug = "workspace-b";
+    workspace.rehydrate.forEach(callback => callback());
+    expect(store.getState().subagentPanel).toBeNull();
+    expect(store.getState().subagentReveal).toBeNull();
+  });
+});

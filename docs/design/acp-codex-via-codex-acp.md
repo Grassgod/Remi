@@ -29,6 +29,18 @@ RPC、typed 失败对象及其 cause、原生失败压缩工具和旧 bridge 的
 
 这类隔离针对配置、插件与原生会话记录，不意味着每个 Home 都拥有独立付费账号。原生 OAuth 可以连接基础 Home 的认证文件，Relay 凭据使用另一条注入路径；更改认证或切换 Relay 时需要同时检查目录与凭据状态。
 
+## 原生子代理
+
+daemon 默认请求原生子会话（[ADR 0021](../adr/0021-subagent-sessions-and-autonomous-rounds.md)）：[AcpClient](../../packages/acp/src/client.ts) 在 initialize 声明 `clientCapabilities.subagents: {}`，并因 [CodexAdapter](../../packages/acp/src/adapters/codex/index.ts) 的 `nativeSubagents.airCapability` 在 AIR 能力列表里追加 `nativeSubagentSessions`。codex-acp 2.2.2 只收到 `subagents: {}` 时不生效，它的 schema 还会去掉这个字段；AIR 能力才打开子会话。桥在 initialize 回报两者，`nativeSubagentsEnabled` 据此为真。`REMI_ACP_NATIVE_SUBAGENTS=0` 不声明两者，子代理的工作重新不可见。
+
+- **帧。** 桥在发起子代理的会话上发 `subagent_spawned`（`subagentSessionId`、名称和任务）与 `subagent_state_update`，子代理的消息、工具、最终回复和用量走子会话。provider 只接受已登记的子会话，给它们的帧加 `_meta.remiSessionId`，子会话帧不改根会话的模型、配置、失败状态、流式文本与上下文；桥为每个新线程发的配置警告（`notice`，如 "Under-development features enabled"）在子会话上，记在该子代理下，不进根会话的步骤。桥把子代理的启动与活动调用并入原生会话，`spawnAgent` 不再单独成行。桥读不到提示词时给出的占位任务（「Delegated task」「Delegated task for X」）在 trace 里记为没有提示词，面板不画任务气泡。
+- **协作工具。** `wait`、`sendInput`、`sendMessage`、`followupTask`、`resumeAgent`、`closeAgent`、`interruptAgent`、`listAgents` 仍是根会话的工具调用，成为普通工具条目，`tool` 为工具名；Chat 与飞书按 shared 的 `agentControl` 显示成控制动作行，`wait` 隐藏。根会话自己等子代理，最多 10 分钟；超过时子代理在轮结束时记为已停止。
+- **用量。** 子会话上的 `usage_update` 是子代理自己的上下文占用，以 `context: false` 累加，不改根会话的上下文环。子线程的计费由 `codex-usage-v7` 把 `rawResponse/completed` 转给根会话，或由 rollout 读取（子线程以根线程为 `session_id`），与此前相同，见[统一用量与价格](../usage-accounting.md#子代理与自主轮)。
+- **没有自主轮。** Codex adapter 不声明 `autonomousRounds`：prompt 之间桥自开的一轮仍按 ADR 0020 D3 取消，provider 只缓存它的用量。
+- **权限。** 子代理的 `session/request_permission` 与 `elicitation/create` 按子会话登记的 chat 路由，卡片标出「来自子代理 X」。
+
+回归见 [原生子会话](../../tests/unit/acp/native-subagents.test.ts)、[翻译器](../../tests/unit/daemon/trace-translator-native-subagents.test.ts) 与 2.2.2 的重录夹具 `tests/fixtures/acp/codex-222-*.json`。
+
 ## Runtime 自定义连接
 
 Runtime 详情的「Codex 连接」页支持一个自定义 Responses provider：Profile 名称、API 基础地址、模型 ID，以及直接填写 API Key 或引用 Runtime 本机 `REMI_CODEX_*` 环境变量。需先更新并重启 daemon，使注册元数据包含 `codex_profiles: 1`。未启用时沿用工作区 Relay / 原生登录路径；启用后优先于工作区 Relay。接口地址由 Runtime 连接，允许 HTTP(S) 的 loopback / LAN 地址；服务端不会对它做模型发现请求，也不放宽工作区 Relay 的 URL 校验。

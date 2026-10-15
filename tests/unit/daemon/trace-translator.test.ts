@@ -915,9 +915,8 @@ describe("trace translator: subagents and labels (spec §13)", () => {
     ]);
     expect(h.item("call_ad5f", "subagent")).toMatchObject({ status: "completed", name: "count_files",
       thread_id: "01a13da2-2fd7-72f2-a0a9-4ff3bbdb03f8" });
-    const wait = h.item("call_ae5b", "subagent");
-    expect(wait.thread_id).toBeUndefined();
-    expect(wait.background).toBeUndefined();
+    // PR 5 §3.6: `wait` acts on agents; it is a (hidden) tool row, not a subagent.
+    expect(h.item("call_ae5b", "tool")).toMatchObject({ tool: "wait", status: "completed" });
   });
 
   describe("a call the abort cut short (claude-agent-acp 0.90 closes it failed)", () => {

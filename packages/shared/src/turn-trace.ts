@@ -30,6 +30,8 @@ import {
   type TraceHistogramBucket,
   type TraceItem,
   type TraceItemStatus,
+  type TraceLateSubagent,
+  type TraceSubagentItem,
   type TraceTurn,
   type TraceTurnPage,
   type TraceTurnPatch,
@@ -38,6 +40,7 @@ import {
   type TraceTurnStatus,
   type TraceEvent,
 } from "@multiremi/contracts/trace";
+import { isHiddenStep } from "./trace-step-copy";
 import { utf8ByteLength } from "./utf8";
 
 /** Reader state of one turn trace. Treat as immutable; every update returns a new object. */
@@ -379,11 +382,12 @@ const NON_PROCESS_TYPES: ReadonlySet<TraceItem["type"]> = new Set(["user_message
 /**
  * Whether a top-level item produces a row in the Chat fold (decision D-count):
  * anything but a final reply, a user message, a permission, a question,
- * reasoning, or an agent message with no visible text. The frontend's
- * `buildTurnSteps(items).processCount` must equal {@link processItemCount}.
+ * reasoning, a hidden step (Codex `wait`, PR 5), or an agent message with no
+ * visible text. The frontend's `buildTurnSteps(items).processCount` must equal
+ * {@link processItemCount}.
  */
 export function isProcessItem(item: TraceItem): boolean {
-  if (item.parent_id !== null || NON_PROCESS_TYPES.has(item.type)) return false;
+  if (item.parent_id !== null || NON_PROCESS_TYPES.has(item.type) || isHiddenStep(item)) return false;
   return item.type !== "agent_message" || (item.phase !== "final" && item.text.trim().length > 0);
 }
 
@@ -416,6 +420,91 @@ export function turnTraceStats(items: readonly TraceItem[]): TraceTurnStats {
 
 export function processItemCount(items: readonly TraceItem[]): number {
   return turnTraceStats(items).process_item_count;
+}
+
+// ── Subagents (PR 5 §4.2) ───────────────────────────────────────────────────
+
+function isSubagent(item: TraceItem): item is TraceSubagentItem {
+  return item.type === "subagent";
+}
+
+/** Top-level subagent items, in order. */
+export function topLevelSubagents(items: readonly TraceItem[]): TraceSubagentItem[] {
+  return items.filter((item): item is TraceSubagentItem => isSubagent(item) && item.parent_id === null);
+}
+
+/** Running subagents: top-level ones, and nested ones (spawned by another subagent). */
+export function runningSubagentCounts(items: readonly TraceItem[]): { top: number; nested: number } {
+  let top = 0;
+  let nested = 0;
+  for (const item of items) {
+    if (!isSubagent(item) || item.status !== "in_progress") continue;
+    if (item.parent_id === null) top++;
+    else nested++;
+  }
+  return { top, nested };
+}
+
+/**
+ * The tools a subagent ran at its own level ("N 个工具"): its direct children
+ * that are tool items, without nested subagents and hidden steps.
+ */
+export function subagentToolCount(items: readonly TraceItem[], subagentId: string): number {
+  let count = 0;
+  for (const item of items) {
+    if (item.parent_id === subagentId && isToolItem(item) && !isSubagent(item) && !isHiddenStep(item)) count++;
+  }
+  return count;
+}
+
+/**
+ * A finished subagent's reply: its last direct `agent_message` with text that
+ * no direct tool item (hidden steps aside) or `user_message` follows. Null
+ * while it runs, and when it ended on a tool call or a new instruction.
+ */
+export function subagentReply(items: readonly TraceItem[], subagentId: string): TraceAgentMessageItem | null {
+  const agent = items.find((item) => item.id === subagentId);
+  if (!agent || agent.type !== "subagent" || agent.status === "in_progress") return null;
+  let reply: TraceAgentMessageItem | null = null;
+  for (const item of items) {
+    if (item.parent_id !== subagentId) continue;
+    if (item.type === "agent_message") {
+      if (item.text.trim()) reply = item;
+    } else if (item.type === "user_message" || (isToolItem(item) && !isHiddenStep(item))) {
+      reply = null;
+    }
+  }
+  return reply;
+}
+
+const LATE_SUBAGENT_STATUSES: ReadonlySet<TraceItemStatus> = new Set(["completed", "failed", "stopped"]);
+
+/**
+ * Top-level subagents that ended after the final reply started, in the order
+ * they ended, at most `limit`: the "finished in the background" rows and the
+ * completion fact `late_subagents`. Empty without a final reply.
+ */
+export function lateSubagents(
+  items: readonly TraceItem[],
+  finalStartedAt: string | null | undefined,
+  limit: number = 5,
+): TraceLateSubagent[] {
+  const finalStart = finalStartedAt ? Date.parse(finalStartedAt) : NaN;
+  if (!Number.isFinite(finalStart)) return [];
+  const late: Array<{ item: TraceSubagentItem; end: number }> = [];
+  for (const item of topLevelSubagents(items)) {
+    if (!LATE_SUBAGENT_STATUSES.has(item.status) || !item.completed_at) continue;
+    const end = Date.parse(item.completed_at);
+    if (Number.isFinite(end) && end > finalStart) late.push({ item, end });
+  }
+  // Stable: agents that ended at the same time keep their trace order.
+  late.sort((a, b) => a.end - b.end);
+  return late.slice(0, Math.max(0, limit)).map(({ item }) => ({
+    item_id: item.id,
+    name: item.name?.trim() || item.title?.trim() || "",
+    status: item.status as TraceLateSubagent["status"],
+    duration_ms: item.duration_ms ?? elapsedMs(item.started_at, item.completed_at),
+  }));
 }
 
 function elapsedMs(from: string | null, to: string | null): number | null {
@@ -540,6 +629,7 @@ export function turnCompletionFields(
   const turn = state.turn;
   const final = finalItem(state.items, turn?.final_item_id);
   const reply = final?.text.trim() ?? "";
+  const late = lateSubagents(state.items, turn?.final_started_at ?? final?.started_at);
   return {
     trace: {
       head: state.head,
@@ -553,6 +643,7 @@ export function turnCompletionFields(
     context_usage: turn?.context_usage ? { ...turn.context_usage } : null,
     worked_ms: turn?.final_started_at ? turnWorkedMs(turn) : null,
     process_item_count: stats.process_item_count,
+    late_subagents: late.length ? late : null,
   };
 }
 

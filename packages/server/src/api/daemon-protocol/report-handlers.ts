@@ -24,7 +24,7 @@ import type { DaemonProtocolSession } from "./session.js";
 import type { DaemonParsedFrame } from "./frames.js";
 import type { DaemonTurnBridge } from "./turn-bridge.js";
 import type { DaemonTurnCompletePayload } from "@multiremi/contracts/daemon-protocol.js";
-import { isTraceContextUsage, type TraceContextUsage } from "@multiremi/contracts/trace.js";
+import { isTraceContextUsage, isTraceLateSubagent, type TraceContextUsage, type TraceLateSubagent } from "@multiremi/contracts/trace.js";
 
 class ReportRejection extends Error {
   constructor(readonly code: string) { super(code); }
@@ -80,13 +80,38 @@ function completionFields(p: Record<string, unknown>, taskId: string): DaemonTas
   } as DaemonTaskCompletionFields;
 }
 
+/** `late_subagents` holds at most this many entries (PR 5, `lateSubagents` in shared). */
+const MAX_LATE_SUBAGENTS = 5;
+/** The PostgreSQL INTEGER ceiling of `multiremi_turn_attempts.running_subagents`. */
+const MAX_RUNNING_SUBAGENTS = 2_147_483_647;
+
+/**
+ * PR 5: the optional `late_subagents` completion fact. Older daemons omit it,
+ * which reads as null without a log line; an empty list is stored as null
+ * ("none did"). More than five entries, or any entry that fails the guard,
+ * makes the whole value null with a log line. Only the contract's keys are kept.
+ */
+function lateSubagentsField(p: Record<string, unknown>, taskId: string): TraceLateSubagent[] | null {
+  const value = p.late_subagents;
+  if (value === undefined || value === null) return null;
+  if (!Array.isArray(value) || value.length > MAX_LATE_SUBAGENTS || !value.every(isTraceLateSubagent)) {
+    log.error("Terminal report has a malformed round-card field", { taskId, field: "late_subagents" });
+    return null;
+  }
+  return value.length
+    ? value.map(({ item_id, name, status, duration_ms }) => ({ item_id, name, status, duration_ms }))
+    : null;
+}
+
 /**
  * The turn + items summary fields (PR 2): context usage, "worked for" and the
  * process item count. Each is validated on its own; a missing or malformed
  * value becomes null with a log line and never costs the rest of the card.
+ * PR 5's optional `late_subagents` follows `lateSubagentsField`: missing is
+ * silent.
  */
 function traceSummaryFields(p: Record<string, unknown>, taskId: string): Pick<DaemonTaskCompletionFields,
-  "context_usage" | "worked_ms" | "process_item_count"> {
+  "context_usage" | "worked_ms" | "process_item_count" | "late_subagents"> {
   const count = (value: unknown): boolean => Number.isSafeInteger(value) && (value as number) >= 0;
   const field = <T>(name: "context_usage" | "worked_ms" | "process_item_count", valid: (value: unknown) => boolean): T | null => {
     const value = p[name];
@@ -106,6 +131,7 @@ function traceSummaryFields(p: Record<string, unknown>, taskId: string): Pick<Da
     context_usage: usage ? { used: usage.used, size: usage.size } : null,
     worked_ms: field<number>("worked_ms", count),
     process_item_count: field<number>("process_item_count", count),
+    late_subagents: lateSubagentsField(p, taskId),
   };
 }
 
@@ -268,6 +294,15 @@ export function registerDaemonReportHandlers(layer: DaemonProtocolLayer, store: 
             break;
           }
 
+          case "task.activity": {
+            // Best effort (PR 5): no seq, no reply; a lost or rejected frame is
+            // replaced by the daemon's next change or periodic refresh.
+            const count = p.running_subagents;
+            if (!Number.isSafeInteger(count) || (count as number) < 0 || (count as number) > MAX_RUNNING_SUBAGENTS) reject();
+            if (p.runtime_id != null && p.runtime_id !== task.runtimeId) reject("authority_revoked");
+            store.recordRunningSubagents(taskId, count as number);
+            break;
+          }
           case "task.fail":
             store.failTaskFromDaemon(taskId, {
               error: string(p.error) || "Task failed", traceEventCount,
@@ -419,6 +454,8 @@ export function registerDaemonReportHandlers(layer: DaemonProtocolLayer, store: 
   layer.registerBestEffortHandler("concierge.status", handle);
   // A lost report is replaced by the next round's; it never needs a retry.
   layer.registerBestEffortHandler("gc.storage_report", handle);
+  // PR 5: the running-subagent count; the next change or refresh replaces a lost one.
+  layer.registerBestEffortHandler("task.activity", handle);
   // Keep the legacy best-effort frame for older daemons during a rolling upgrade.
   layer.registerRpcHandler("concierge.status_report", handle);
 }

@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import type { MultiremiTaskHumanRequest } from "@multiremi/contracts/types.js";
 import { buildTaskInteractionCard, handleTaskInteractionEvent, interactionMarker, parseQuestionAnswers } from "@connectors/feishu/task-interaction.js";
+import { buildTaskInteractionCard as buildSharedCard } from "@shared/feishu-task-card.js";
 import { registerTaskInteractionFixture as registerTaskInteraction, resetQuestionCardHostFixtures } from "./question-card-host-fixture.js";
 afterEach(resetQuestionCardHostFixtures);
 import { FeishuTaskPresentation } from "@connectors/feishu/task-presentation.js";
@@ -282,6 +283,53 @@ describe("standalone Task interactions", () => {
   it("escapes receipt text so a custom answer cannot inject a mention", () => {
     const r = answered(request(), { answers: { "Which features?": "<at id=all></at>", "Which environment?": "prod" } });
     expect(JSON.stringify(buildTaskInteractionCard(r, { receipt: true }))).not.toContain("<at ");
+  });
+});
+
+describe("a request raised by a native subagent's child session (PR 5 §1.3)", () => {
+  // The shared body every request card is built from (connector, topic and proactive cards alike),
+  // with a fixed header. Captured from the builder before the prefix existed.
+  const PENDING = '{"schema":"2.0","header":{},"config":{"update_multi":true,"enable_forward":false,"width_mode":"default",'
+    + '"summary":{"content":"Remi · 操作审批"}},"body":{"padding":"12px 16px","elements":[{"tag":"markdown","content":"**Bash**"},'
+    + '{"tag":"collapsible_panel","expanded":true,"header":{"title":{"tag":"plain_text","content":"操作详情"}},'
+    + '"elements":[{"tag":"markdown","content":"{\\n  \\"command\\": \\"echo approved\\"\\n}"}]},'
+    + '{"tag":"form","name":"form_fr_3f08c9395e8e24797eee0b9a","elements":[{"tag":"column_set","flex_mode":"none","columns":['
+    + '{"tag":"column","width":"weighted","weight":1,"elements":[{"tag":"button","name":"fr_3f08c9395e8e24797eee0b9a_o0",'
+    + '"form_action_type":"submit","value":{"t":"tok","message_id":"hr_test"},"type":"default","width":"fill",'
+    + '"text":{"tag":"plain_text","content":"允许一次"}}]},{"tag":"column","width":"weighted","weight":1,"elements":['
+    + '{"tag":"button","name":"fr_3f08c9395e8e24797eee0b9a_o1","form_action_type":"submit","value":{"t":"tok","message_id":"hr_test"},'
+    + '"type":"danger","width":"fill","text":{"tag":"plain_text","content":"拒绝"}}]}]}]},'
+    + '{"tag":"markdown","content":"<at id=ou_owner></at>"}]}}';
+  const withSubagent = (subagent: unknown): MultiremiTaskHumanRequest => {
+    const r = request("permission");
+    return { ...r, payload: { ...r.payload, subagent } };
+  };
+  const shared = (r: MultiremiTaskHumanRequest, options: Partial<Parameters<typeof buildSharedCard>[1]> = { recipientOpenId: "ou_owner", token: "tok" }) =>
+    buildSharedCard(r, { header: {}, ...options }) as { body: { elements: Array<Record<string, unknown>> } };
+  /** The card without its first body element. */
+  const rest = (card: { body: { elements: unknown[] } }) => JSON.stringify({ ...card, body: { ...card.body, elements: card.body.elements.slice(1) } });
+
+  it("leaves a card byte-identical when the decision names no subagent", () => {
+    expect(JSON.stringify(shared(request("permission")))).toBe(PENDING);
+    // Older daemons send no field; a malformed or unnamed one is ignored the same way.
+    for (const subagent of [undefined, null, "sa:x", [], {}, { item_id: "sa:x" }, { item_id: "sa:x", name: "  " }, { name: 7 }]) {
+      expect(JSON.stringify(shared(withSubagent(subagent)))).toBe(PENDING);
+    }
+  });
+
+  it("names the subagent first, escaped like the card's other text, on the card and on its receipt", () => {
+    const r = withSubagent({ item_id: "sa:agent-1", name: " code*review\nbot " });
+    const card = shared(r);
+    expect(card.body.elements[0]).toEqual({ tag: "markdown", content: "子代理 code&#42;review bot 请求：" });
+    expect(rest(card)).toBe(PENDING);
+    const receipt = shared(answered(r, { option_id: "allow" }), { receipt: true });
+    expect(receipt.body.elements[0]).toEqual({ tag: "markdown", content: "子代理 code&#42;review bot 请求：" });
+    expect(rest(receipt)).toBe(JSON.stringify(shared(answered(request("permission"), { option_id: "allow" }), { receipt: true })));
+    // The connector's card keeps its own header around the same body.
+    const question = { ...request("question"), payload: { questions, subagent: { item_id: "sa:agent-1", name: "planner" } } };
+    const connector = buildTaskInteractionCard(question, { agentName: "Remi", recipientOpenId: "ou_owner" }) as any;
+    expect(connector.body.elements[0]).toEqual({ tag: "markdown", content: "子代理 planner 请求：" });
+    expect(connector.body.elements[1].tag).toBe("form");
   });
 });
 

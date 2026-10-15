@@ -34,6 +34,10 @@ const FIXTURES: TraceItem[][] = [
     message("msg:c", "child", "unknown", { parent_id: "sub_1" }), message("msg:empty", ""), tool("t_1", "mcp__x__y"),
     plan([{ content: "a", status: "completed", priority: null }]), compaction("cmp:1"), notice("ntc:1", "slow")],
   [userMessage("in:3", "deploy"), command("cmd_2", [unknown("make deploy")], running), permission("perm:1", "Bash")],
+  // Codex collaboration (PR 5): `wait` is a hidden step, neither a row nor a process item.
+  [userMessage("in:4", "review"), subagent("sa:t1", "reviewer", { tool: "spawnAgent", thread_id: "t1" }),
+    tool("t_send", "sendInput", { input: { receiverThreadIds: ["t1"], prompt: "go" } }),
+    tool("t_wait", "wait", { input: { receiverThreadIds: ["t1"] } }), message("msg:f4", "Reviewed.", "final")],
 ];
 
 describe("split", () => {
@@ -61,6 +65,8 @@ describe("split", () => {
   // reasoning and empty messages included: neither draws a row.
   it("agrees with the shared processItemCount on every fixture", () => {
     for (const items of FIXTURES) expect(buildTurnSteps(items).processCount).toBe(processItemCount(items));
+    // The subagent and sendInput; the hidden wait counts on neither side.
+    expect(buildTurnSteps(FIXTURES[3]!).processCount).toBe(2);
   });
 
   it("treats child items as the subagent's own steps, never as finals", () => {
@@ -109,14 +115,31 @@ describe("rows", () => {
     expect(stepRows(command("cmd_n", [read("a.ts"), read("b.ts")], { title: " " }))).toHaveLength(2);
   });
 
-  it("names a running background subagent and keeps the label quiet under it (spec §13)", () => {
+  it("names a running background subagent without holding the label under it (spec §13, PR 5)", () => {
     const steps = buildTurnSteps([subagent("sub_bg", "Count files", { ...running, background: true })]);
     const [block] = steps.blocks;
     expect(block).toMatchObject({ kind: "breaker", descriptor: { key: "subagent_background", args: { title: "Count files" }, state: "active" } });
-    expect(steps.breakerRunning).toBe(true);
-    expect(liveLabel(steps).kind).toBe("quiet");
+    // A background subagent does not hold its caller: the caller keeps thinking.
+    expect(steps.breakerRunning).toBe(false);
+    expect(liveLabel(steps).kind).toBe("thinking");
+    // A foreground one does: its row shows the progress.
+    expect(liveLabel(buildTurnSteps([subagent("sub_fg", "Explore", { ...running, background: false })])).kind).toBe("quiet");
     expect(buildTurnSteps([subagent("sub_bg", "Count files", { background: true })]).blocks[0])
       .toMatchObject({ descriptor: { key: "subagent_done" } });
+  });
+
+  it("goes quiet when the caller only waits for background subagents after a finished message (PR 5 §6.1)", () => {
+    const waiting = buildTurnSteps([subagent("sub_bg", "Count files", { ...running, background: true }),
+      message("msg:1", "I started a background agent; I'll reply once it reports back.")]);
+    expect(waiting.waitingOnBackground).toBe(true);
+    expect(liveLabel(waiting).kind).toBe("quiet");
+    // Thinking again after the message, a streaming message, or other work still running: not quiet.
+    expect(liveLabel(buildTurnSteps([subagent("sub_bg", "C", { ...running, background: true }), message("msg:1", "Started."),
+      reasoning("rsn:1", "**Checking the logs**")])).kind).toBe("reasoning");
+    expect(buildTurnSteps([subagent("sub_bg", "C", { ...running, background: true }),
+      message("msg:1", "Writing", "commentary", running)]).waitingOnBackground).toBe(false);
+    expect(buildTurnSteps([subagent("sub_bg", "C", { ...running, background: true }), command("cmd_1", [unknown("make")], running),
+      message("msg:1", "Started.")]).waitingOnBackground).toBe(false);
   });
 
   it("folds a declined multi-action command into one refused run", () => {
@@ -280,5 +303,71 @@ describe("waiting on a person", () => {
     expect(isAwaitingHuman([permission("perm:1", "Bash")])).toBe(false);
     expect(isAwaitingHuman([waiting, command("cmd_2", [read("a.ts")])])).toBe(false);
     expect(isAwaitingHuman([])).toBe(false);
+  });
+});
+
+describe("agent-control rows (PR 5 §6.1)", () => {
+  const explore = subagent("sa:a1", "Explore", { name: "Explore", thread_id: "a1" });
+
+  it("derives a control row from the tool name and input and names the subagent", () => {
+    const steps = buildTurnSteps([explore, tool("t_msg", "SendMessage", { input: { to: "a1", message: "Also check the tests" } })]);
+    const row = steps.rows[0]!;
+    expect([row.icon, row.category, row.descriptor.key, row.descriptor.args.agent, row.control?.message])
+      .toEqual(["agent_message", "agent", "agent_message_done", "Explore", "Also check the tests"]);
+    // Interrupt, resume, close and list each get their own glyph.
+    const codex = subagent("sa:t1", "reviewer", { tool: "spawnAgent", name: "reviewer", thread_id: "t1" });
+    const rows = buildTurnSteps([codex, ...(["interruptAgent", "resumeAgent", "closeAgent", "listAgents"] as const)
+      .map((name) => tool(`t_${name}`, name, { input: { receiverThreadIds: ["t1"] } }))]).rows;
+    expect(rows.map((r) => [r.icon, r.descriptor.key, r.descriptor.args.agent ?? null])).toEqual([
+      ["agent_interrupt", "agent_interrupt_done", "reviewer"],
+      ["agent_resume", "agent_resume_done", "reviewer"],
+      ["agent_close", "agent_close_done", "reviewer"],
+      ["agent_list", "agent_list_done", null],
+    ]);
+  });
+
+  it("draws no row for Codex wait and counts it nowhere", () => {
+    const steps = buildTurnSteps([explore, tool("t_wait", "wait", { input: { receiverThreadIds: ["a1"] } }), command("cmd_1", [read("a.ts")])]);
+    expect(steps.rows.map((r) => r.key)).toEqual(["cmd_1:0"]);
+    expect(steps.blocks.map((block) => block.key)).toEqual(["item:sa:a1", "row:cmd_1:0"]);
+    expect(stepRows(tool("t_wait", "wait"))).toEqual([]);
+    // Running, it adds no live label either.
+    expect(liveLabel(buildTurnSteps([tool("t_wait", "wait", running)])).kind).toBe("thinking");
+  });
+
+  it("makes TaskStop an interrupt row only when it stops a subagent of the trace", () => {
+    expect(buildTurnSteps([explore, tool("t_stop", "TaskStop", { input: { task_id: "a1" } })]).rows[0]!)
+      .toMatchObject({ icon: "agent_interrupt", category: "agent", descriptor: { key: "agent_interrupt_done", args: { agent: "Explore" } } });
+    // A background shell stays a plain tool row.
+    const shell = buildTurnSteps([explore, tool("t_stop", "TaskStop", { input: { shell_id: "bash_3" } })]).rows[0]!;
+    expect([shell.icon, shell.category, shell.descriptor.key, "control" in shell]).toEqual(["tool", "tool", "tool_done", false]);
+  });
+
+  it("uses the generic copy for an unresolved id-like target and keeps a name as written", () => {
+    const [generic, named] = buildTurnSteps([
+      tool("t_1", "SendMessage", { input: { to: "0f8e1c2d-7a6b-4c3d", message: "hi" } }),
+      tool("t_2", "SendMessage", { input: { to: "researcher", message: "hi" } }),
+    ]).rows;
+    expect(generic!.descriptor).toMatchObject({ key: "agent_message_generic_done", args: {} });
+    expect(named!.descriptor).toMatchObject({ key: "agent_message_done", args: { agent: "researcher" } });
+  });
+
+  it("summarizes a control group as messaged subagents, else managed subagents", () => {
+    const messaged = buildTurnSteps([explore, tool("t_1", "SendMessage", { input: { to: "a1", message: "go" } }), tool("t_2", "ListAgents")]);
+    const group = messaged.blocks.find((block) => block.kind === "group")!;
+    expect(group.kind === "group" && groupSummary(group.rows, messaged.resolveAgent).map((f) => f.key)).toEqual(["summary_agent_first"]);
+    expect(group.kind === "group" && groupIcon(group.rows, messaged.resolveAgent)).toBe("agent_message");
+    const managed = buildTurnSteps([explore, tool("t_1", "TaskStop", { input: { task_id: "a1" } }), tool("t_2", "ListAgents"),
+      command("cmd_1", [read("a.ts")])]);
+    const rows = managed.blocks.find((block) => block.kind === "group");
+    expect(rows?.kind === "group" && groupSummary(rows.rows, managed.resolveAgent).map((f) => f.key))
+      .toEqual(["summary_explore_first", "summary_agent_control_rest"]);
+  });
+
+  it("leaves the panel's reply out of a subagent's steps and can take one generation's children", () => {
+    const items = [explore, command("cmd_c", [read("b.ts")], { parent_id: "sa:a1" }), message("msg:r", "Report", "commentary", { parent_id: "sa:a1" })];
+    expect(buildChildSteps(items, "sa:a1").blocks.map((block) => block.key)).toEqual(["row:cmd_c:0", "item:msg:r"]);
+    expect(buildChildSteps(items, "sa:a1", { excludeId: "msg:r" }).blocks.map((block) => block.key)).toEqual(["row:cmd_c:0"]);
+    expect(buildChildSteps(items, "sa:a1", { children: [items[2]!] }).blocks.map((block) => block.key)).toEqual(["item:msg:r"]);
   });
 });

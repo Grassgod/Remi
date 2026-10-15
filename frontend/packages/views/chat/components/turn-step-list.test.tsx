@@ -3,7 +3,7 @@ import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import type { TraceItem } from "@multiremi/contracts/trace";
 import { renderWithI18n } from "../../test/i18n";
 import {
-  change, command, fileChange, listFiles, message, notice, read, search, subagent, unknown, webSearch,
+  change, command, fileChange, listFiles, message, notice, read, search, subagent, tool, unknown, webSearch,
 } from "../../test/trace-fixtures";
 import { displayCommand } from "../../common/task-transcript/trace-item-detail";
 import { buildTurnSteps } from "../lib/turn-steps";
@@ -60,23 +60,38 @@ describe("steps", () => {
     expect(screen.getByText("差异内容过多，无法预览")).toBeInTheDocument();
   });
 
-  it("nests a subagent's own steps and its report in the subagent detail", () => {
+  it("draws a subagent as one line, name · task, with its own steps kept for the panel (PR 5 §6.2)", () => {
     renderSteps([
-      subagent("sub_1", "Explore", { prompt: "Find the loader", output: "Loader is in config.ts" }),
+      subagent("sub_1", "Explore", { name: "Explore", prompt: "## Find the **loader**\nthen report", output: "Loader is in config.ts" }),
       command("cmd_c", [read("config.ts")], { parent_id: "sub_1" }),
     ]);
-    const breaker = document.querySelector<HTMLElement>('[data-step-breaker="sub_1"]')!;
-    expect(trigger(breaker)).toHaveTextContent("子代理已完成：Explore");
+    const row = document.querySelector<HTMLButtonElement>('[data-subagent-row="sub_1"]')!;
+    expect(row).toHaveTextContent("Explore · Find the loader");
+    expect(row).toHaveAccessibleName("打开子代理 Explore");
+    // No inline expansion: the child steps and the report live in the panel.
     expect(screen.queryByText("已读取 config.ts")).toBeNull();
-    fireEvent.click(trigger(breaker));
-    expect(screen.getByText("Find the loader")).toBeInTheDocument();
-    expect(screen.getByText("已读取 config.ts")).toBeInTheDocument();
-    expect(screen.getByText("Loader is in config.ts")).toBeInTheDocument();
+    expect(screen.queryByText("Loader is in config.ts")).toBeNull();
+    // Outside a turn with an attempt (no trace source) the row opens nothing.
+    expect(row).toBeDisabled();
   });
 
-  it("shows a background subagent as running in the background (spec §13)", () => {
-    renderSteps([subagent("sub_bg", "Count files", { status: "in_progress", completed_at: null, background: true })]);
-    expect(document.querySelector('[data-step-breaker="sub_bg"]')).toHaveTextContent("后台运行中：Count files");
+  it("shows a background subagent as running in the background, without live activity (spec §13)", () => {
+    renderSteps([subagent("sub_bg", "Count files", { status: "in_progress", completed_at: null, background: true }),
+      command("cmd_c", [read("a.ts")], { parent_id: "sub_bg", status: "in_progress", completed_at: null })]);
+    const row = document.querySelector('[data-subagent-row="sub_bg"]')!;
+    expect(row.querySelector("[data-subagent-status-text]")).toHaveAttribute("data-subagent-status-text", "background");
+    expect(row).toHaveTextContent("后台运行中");
+    expect(row).not.toHaveTextContent("正在读取");
+  });
+
+  it("opens a message control row to the message it sent (PR 5 §6.2)", () => {
+    renderSteps([subagent("sa:a1", "Explore", { name: "Explore", thread_id: "a1" }),
+      tool("t_msg", "SendMessage", { input: { to: "a1", message: "Also check the **tests**" } })]);
+    expect(row("t_msg")).toHaveTextContent("已发送消息给 Explore");
+    fireEvent.click(trigger(row("t_msg")));
+    const detail = document.querySelector("[data-agent-message]")!;
+    expect(detail).toHaveTextContent("发给 Explore");
+    expect(detail).toHaveTextContent("Also check the **tests**");
   });
 
   it("marks an error notice", () => {

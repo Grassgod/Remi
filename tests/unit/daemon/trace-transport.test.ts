@@ -238,6 +238,8 @@ describe("daemon trace transport close and completion", () => {
         worked_ms: 4000,
         // call_1 and call_2; not the input, the permission (decision Q1) or the final reply.
         process_item_count: 2,
+        // No subagent ended after the final reply started (PR 5).
+        late_subagents: null,
       });
       // A rejected completion (steer pending) leaves the trace open and appendable.
       expect(trace.store.head("task")).toEqual({ head: 7, closed: false });

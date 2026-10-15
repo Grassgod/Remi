@@ -16,7 +16,7 @@
  */
 import type { MultiremiTaskStatus, TaskUsageEntry } from "./types.js";
 import type { TraceRef } from "./trace-file.js";
-import type { TraceContextUsage } from "./trace.js";
+import type { TraceContextUsage, TraceLateSubagent } from "./trace.js";
 import type { EnvelopeMetadata } from "./inbox.js";
 
 /** A row is either a display unit or a hidden lifecycle marker. */
@@ -175,6 +175,12 @@ export interface ConversationLogTurnMetadata extends ConversationLogEntryMetadat
   worked_ms?: number | null;
   /** Top-level process items; the finished-turn fold renders only when > 0. */
   process_item_count?: number | null;
+  /**
+   * Top-level subagents that ended after the final reply started (PR 5), at
+   * most 5; the finished turn's "finished in the background" rows. Absent or
+   * null when none did and on turns that predate it.
+   */
+  late_subagents?: TraceLateSubagent[] | null;
 }
 
 /**

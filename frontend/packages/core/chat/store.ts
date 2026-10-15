@@ -160,6 +160,35 @@ function readQueueOutbox(storage: StorageAdapter, key: string): Record<string, C
   return outbox;
 }
 
+/**
+ * What the subagent panel shows (PR 5): one attempt of one chat, its overview
+ * (`path` empty) or a subagent's detail. `path` holds the subagent item ids
+ * from a top-level subagent down to the open one; back drops the last id.
+ */
+export interface SubagentPanelTarget {
+  /** The chat the panel belongs to; another chat never shows it. */
+  sessionId: string | null;
+  /** The attempt whose trace holds the subagents. */
+  attemptId: string;
+  /** The turn of that attempt, when known; reads go through the turn route. */
+  turnId?: string;
+  /** Follow the trace socket (the running turn). */
+  live: boolean;
+  path: string[];
+}
+
+/** A request to show a top-level subagent's row in the live steps fold. */
+export interface SubagentRevealRequest {
+  attemptId: string;
+  itemId: string;
+  /**
+   * Increases with every request for the life of the store, also across
+   * clears: a fold acts only on requests newer than the one it saw when it
+   * mounted, and revealing the same row twice still fires.
+   */
+  nonce: number;
+}
+
 export const CHAT_MIN_W = 360;
 export const CHAT_MIN_H = 480;
 export const CHAT_DEFAULT_W = 380;
@@ -186,6 +215,10 @@ export interface ChatState {
   queueEdit: Record<string, ChatQueueEdit>;
   /** Enqueues not yet confirmed by the server, by session. */
   queueOutbox: Record<string, ChatQueueOutboxItem[]>;
+  /** The open subagent panel, or null. Not persisted. */
+  subagentPanel: SubagentPanelTarget | null;
+  /** The last reveal request for a subagent row. Not persisted. */
+  subagentReveal: SubagentRevealRequest | null;
   setOpen: (open: boolean) => void;
   toggle: () => void;
   setActiveSession: (id: string | null) => void;
@@ -232,6 +265,14 @@ export interface ChatState {
    * draft instead, so the edit being saved does not pick it up.
    */
   restoreToDraft: (sessionId: string, body: string, attachments: Record<string, string>) => void;
+  /** Opens (or retargets) the subagent panel. */
+  openSubagentPanel: (target: SubagentPanelTarget) => void;
+  /** Moves the open panel to another subagent, or to the overview with `[]`. */
+  setSubagentPath: (path: string[]) => void;
+  /** Closes the panel and drops any pending reveal request. */
+  closeSubagentPanel: () => void;
+  /** Asks the live steps fold to open and scroll to a top-level subagent's row. */
+  revealSubagent: (attemptId: string, itemId: string) => void;
 }
 
 export interface ChatStoreOptions {
@@ -251,6 +292,8 @@ export function createChatStore(options: ChatStoreOptions) {
   // still honouring an explicit "I closed it" choice on every reload.
   const storedOpen = storage.getItem(OPEN_KEY);
   const initialIsOpen = storedOpen === null ? true : storedOpen === "true";
+  /** Reveal nonces never repeat, even after a request is cleared. */
+  let revealNonce = 0;
 
   const store = create<ChatState>((set, get) => ({
     isOpen: initialIsOpen,
@@ -266,6 +309,8 @@ export function createChatStore(options: ChatStoreOptions) {
     followUpMode: readFollowUpMode(storage),
     queueEdit: readQueueEdits(storage, wsKey(QUEUE_EDIT_KEY)),
     queueOutbox: readQueueOutbox(storage, wsKey(QUEUE_OUTBOX_KEY)),
+    subagentPanel: null,
+    subagentReveal: null,
     setOpen: (open) => {
       logger.debug("setOpen", { from: get().isOpen, to: open });
       storage.setItem(OPEN_KEY, String(open));
@@ -284,7 +329,9 @@ export function createChatStore(options: ChatStoreOptions) {
       } else {
         storage.removeItem(wsKey(SESSION_STORAGE_KEY));
       }
-      set({ activeSessionId: id });
+      // The subagent panel and a reveal request belong to one chat.
+      const subagents = id !== get().activeSessionId ? { subagentPanel: null, subagentReveal: null } : {};
+      set({ activeSessionId: id, ...subagents });
     },
     setSelectedAgentId: (id) => {
       logger.info("setSelectedAgentId", { from: get().selectedAgentId, to: id });
@@ -445,6 +492,15 @@ export function createChatStore(options: ChatStoreOptions) {
       writeDraftAttachments(storage, wsKey(DRAFT_ATTACHMENTS_KEY), inputDraftAttachments);
       set({ inputDrafts, inputDraftAttachments });
     },
+    openSubagentPanel: (target) => set({ subagentPanel: { ...target, path: [...target.path] } }),
+    setSubagentPath: (path) => {
+      const panel = get().subagentPanel;
+      if (panel) set({ subagentPanel: { ...panel, path: [...path] } });
+    },
+    closeSubagentPanel: () => {
+      if (get().subagentPanel || get().subagentReveal) set({ subagentPanel: null, subagentReveal: null });
+    },
+    revealSubagent: (attemptId, itemId) => set({ subagentReveal: { attemptId, itemId, nonce: ++revealNonce } }),
     clearQueueState: (sessionId) => {
       const state = get();
       if (!(sessionId in state.queueEdit) && !(sessionId in state.queueOutbox)) return;
@@ -478,6 +534,9 @@ export function createChatStore(options: ChatStoreOptions) {
       localAttachmentDetails: {},
       queueEdit: readQueueEdits(storage, wsKey(QUEUE_EDIT_KEY)),
       queueOutbox: readQueueOutbox(storage, wsKey(QUEUE_OUTBOX_KEY)),
+      // Another workspace's chats never show this one's panel.
+      subagentPanel: null,
+      subagentReveal: null,
     });
   });
 

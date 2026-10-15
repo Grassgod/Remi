@@ -4,7 +4,7 @@ import type { MultiremiTaskPluginSnapshotEntry, TaskUsageEntry } from "./types.j
 import type { RuntimeCodexProfile } from "./codex-profile.js";
 import type { RuntimeClaudeProfile } from "./claude-profile.js";
 import type { TraceRef } from "./trace-file.js";
-import type { TraceContextUsage } from "./trace.js";
+import type { TraceContextUsage, TraceLateSubagent } from "./trace.js";
 
 export const MESSAGE_KINDS = ["request", "reply", "report", "decision", "status", "final"] as const;
 export type MessageKind = typeof MESSAGE_KINDS[number];
@@ -111,6 +111,11 @@ export interface MultiremiTurn {
   ended_reason: string | null;
   /** Historical input only; live input is the message seq range. */
   legacy_prompt: string | null;
+  /**
+   * Subagents the current attempt has running, from the daemon's best-effort
+   * `task.activity` report (PR 5). Absent or null when never reported.
+   */
+  running_subagents?: number | null;
 }
 
 export interface MultiremiTurnAttempt {
@@ -156,6 +161,13 @@ export interface MultiremiTurnAttempt {
   context_usage: TraceContextUsage | null;
   worked_ms: number | null;
   process_item_count: number | null;
+  /**
+   * PR 5: the attempt's running subagents from `task.activity` while it is
+   * active (accepted or running); null once it ended or when never reported.
+   */
+  running_subagents?: number | null;
+  /** PR 5 completion fact: top-level subagents that ended after the final reply started, at most 5; null when none did. */
+  late_subagents?: TraceLateSubagent[] | null;
   offered_at: string | null;
   accepted_at: string | null;
   started_at: string | null;

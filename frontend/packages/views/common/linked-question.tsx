@@ -13,7 +13,7 @@ import { AppLink } from "../navigation";
 import { useWorkspacePaths } from "@multiremi/core/paths";
 import { useT } from "../i18n";
 import { useTimeAgo } from "../i18n/use-time-ago";
-import { QuestionStatusTag, UnifiedQuestionCard, questionSection, questionTitle } from "./question-card";
+import { QuestionStatusTag, QuestionSubagentLabel, UnifiedQuestionCard, questionSection, questionTitle } from "./question-card";
 import { questionAnswerBody } from "./question-answer";
 import { questionLocation } from "./question-location";
 import { DecisionPanel, DecisionSection, DecisionListSkeleton } from "./decision-panel";
@@ -77,6 +77,7 @@ export function QuestionSummaryLine({ question, getActorName, onOpen }: { questi
   return <div data-question-summary={question.id} className={cn(LINE, question.status === "pending" && question.stage === "human" && answerable
     && "border-orange-300 bg-orange-50/40 dark:border-orange-400/40 dark:bg-orange-400/5")}>
     <QuestionStatusTag question={question} getActorName={getActorName} />
+    <QuestionSubagentLabel question={question} className="max-w-[35%] shrink-0" />
     <span className="min-w-0 flex-1 truncate" title={title}>{title}</span>
     {answer && <span className="min-w-0 max-w-[40%] truncate text-xs text-muted-foreground" title={answer}>{answer}</span>}
     <Button size="xs" variant={answerable ? "default" : "ghost"} aria-haspopup="dialog" className={cn(!answerable && "text-primary")} onClick={onOpen}>

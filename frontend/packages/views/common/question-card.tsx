@@ -80,6 +80,19 @@ export function QuestionStatusTag({ question, getActorName }: { question: Questi
     className={cn("max-w-[45%] shrink-0 truncate whitespace-nowrap rounded border px-1.5 text-[11px] font-medium leading-5", TAG_TONES[tone])}>{label}</span>;
 }
 
+/**
+ * 「来自子代理 X」 on a permission or question that a native subagent's child
+ * session raised (PR 5); nothing for the root session.
+ */
+export function QuestionSubagentLabel({ question, className }: { question: QuestionView; className?: string }) {
+  const { t } = useT("chat");
+  const name = question.source_subagent?.name.trim();
+  if (!question.source_subagent) return null;
+  const label = name ? t($ => $.subagents.from_subagent, { name }) : t($ => $.subagents.from_subagent_unnamed);
+  return <span data-question-subagent={question.source_subagent.item_id} title={label}
+    className={cn("min-w-0 truncate text-xs text-muted-foreground", className)}>{label}</span>;
+}
+
 /** Parses comma-joined `<issueId>:<failure>`; older free-form values explain nothing here. */
 function routeFailures(question: QuestionView): Array<{ issueId: string; failure: RouteFailure }> {
   if (question.stage !== "human" || !question.route_reason || question.route_reason === "source_workspace_changed") return [];
@@ -195,6 +208,7 @@ export function UnifiedQuestionCard({ question, getActorName = (_type, id) => id
     <div className="mb-2 flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
       <QuestionStatusTag question={question} getActorName={getActorName} />
       {question.source_agent_id && <span className="min-w-0 truncate">{t($ => $.responsibility.asked_by, { name: getActorName("agent", question.source_agent_id) || question.source_agent_id })}</span>}
+      <QuestionSubagentLabel question={question} />
     </div>
     <section>
       {request && question.original_questions.length > 0 ? <QuestionForm key={`${question.id}:${revise}`} taskId="" request={request} readOnly={!canAnswer || operation !== null} disabled={act.isPending} hideOptions={question.status !== "pending" && !revise}

@@ -3,8 +3,9 @@ import { createResponsibleTestIssue } from './helpers.js';
  * MUL-432 segment 2 item 5: the live `turn` card takes the round-card fields
  * of a daemon's `turn.complete` / `task.fail` frame through A's seam, wired in
  * the real server's terminal transaction. Only `trace.event_count`, `tool_call_count`,
- * `type_histogram`, `model` and the PR 2 trace summary (`context_usage`,
- * `worked_ms`, `process_item_count`) are written (ruling (z)); the frame's
+ * `type_histogram`, `model`, the PR 2 trace summary (`context_usage`,
+ * `worked_ms`, `process_item_count`) and PR 5's `late_subagents` are written
+ * (ruling (z)); the frame's
  * `final_reply_md` is not, so the chat card keeps its assistant message and the
  * Issue card its `final_entry_id`. The card is created with the turn and stays the same row at reply
  * completion. A daemon that sends no fields writes nothing and
@@ -44,6 +45,10 @@ const FIELDS: DaemonTaskCompletionFields = {
   context_usage: { used: 48_213, size: 200_000 },
   worked_ms: 73_400,
   process_item_count: 4,
+  late_subagents: [
+    { item_id: "sa:counter", name: "Counter", status: "completed", duration_ms: 9_100 },
+    { item_id: "sa:linter", name: "Linter", status: "failed", duration_ms: null },
+  ],
 };
 
 const CARD_FIELDS = {
@@ -55,6 +60,8 @@ const CARD_FIELDS = {
   context_usage: FIELDS.context_usage,
   worked_ms: FIELDS.worked_ms,
   process_item_count: FIELDS.process_item_count,
+  // The finished turn's "finished in the background" rows (PR 5), also without the trace.
+  late_subagents: FIELDS.late_subagents,
 };
 
 /**
@@ -374,12 +381,15 @@ for (const backend of backends) {
         try {
           const reply = await serverReport(world.store, world.runtimeId, "turn.complete", {
             ...turnCompletionPayload(world, task.id, "answer"), context_usage: { used: "lots", size: 1 }, worked_ms: -1,
+            late_subagents: [...FIELDS.late_subagents!, { item_id: "sa:x", name: "X", status: "running", duration_ms: 1 }],
           });
           expect(reply.ok).toBe(true);
         } finally { error.mockRestore(); }
-        expect(card(world, task.id).metadata).toMatchObject({ ...CARD_FIELDS, context_usage: null, worked_ms: null, status: "completed" });
+        expect(card(world, task.id).metadata).toMatchObject({ ...CARD_FIELDS, context_usage: null, worked_ms: null, late_subagents: null,
+          status: "completed" });
         const attempt = world.store.listTurnAttempts(world.store.getTurnForAttempt(task.id)!.id).find((row) => row.id === task.id)!;
-        expect(attempt).toMatchObject({ context_usage: null, worked_ms: null, process_item_count: FIELDS.process_item_count });
+        expect(attempt).toMatchObject({ context_usage: null, worked_ms: null, process_item_count: FIELDS.process_item_count,
+          late_subagents: null });
       });
     }, TIMEOUT);
 
@@ -393,13 +403,39 @@ for (const backend of backends) {
         expect(first.metadata).toMatchObject(CARD_FIELDS);
         expect(write(FIELDS)).toBe(false);
         expect(card(world, task.id).revision).toBe(first.revision);
-        for (const patch of [{ context_usage: { used: 1, size: 200_000 } }, { worked_ms: 1 }, { process_item_count: 0 }, { context_usage: null }]) {
+        for (const patch of [{ context_usage: { used: 1, size: 200_000 } }, { worked_ms: 1 }, { process_item_count: 0 },
+          { late_subagents: [{ ...FIELDS.late_subagents![0]!, duration_ms: 9_101 }] },
+          { late_subagents: [{ ...FIELDS.late_subagents![0]!, duration_ms: 9_101, status: "stopped" as const }] },
+          { late_subagents: [{ ...FIELDS.late_subagents![0]!, name: "Renamed" }] },
+          { late_subagents: null }, { context_usage: null, late_subagents: null }]) {
           expect(write({ ...FIELDS, ...patch }), JSON.stringify(patch)).toBe(true);
           expect(card(world, task.id).metadata).toMatchObject(patch);
           expect(write({ ...FIELDS, ...patch })).toBe(false);
         }
         const attempt = world.store.listTurnAttempts(world.store.getTurnForAttempt(task.id)!.id).find((row) => row.id === task.id)!;
-        expect(attempt).toMatchObject({ context_usage: null, worked_ms: FIELDS.worked_ms, process_item_count: FIELDS.process_item_count });
+        expect(attempt).toMatchObject({ context_usage: null, worked_ms: FIELDS.worked_ms, process_item_count: FIELDS.process_item_count,
+          late_subagents: null });
+        // An empty list is "none did": the same card as null.
+        expect(write({ ...FIELDS, context_usage: null, late_subagents: [] })).toBe(false);
+        expect(write({ ...FIELDS, context_usage: null, late_subagents: FIELDS.late_subagents })).toBe(true);
+        expect(card(world, task.id).metadata.late_subagents).toEqual(FIELDS.late_subagents);
+      });
+    }, TIMEOUT);
+
+    it("an older daemon without late_subagents lands null next to the rest of the card, without a warning", async () => {
+      await withWorld(backend, async (world) => {
+        const task = runIssueTask(world, "Pre-PR 5 daemon");
+        const { late_subagents: _omitted, ...older } = FIELDS;
+        const warn = spyOn(console, "warn").mockImplementation(() => {});
+        const error = spyOn(console, "error").mockImplementation(() => {});
+        try {
+          const reply = await serverReport(world.store, world.runtimeId, "turn.complete",
+            turnCompletionPayload(world, task.id, "answer", older as DaemonTaskCompletionFields));
+          expect(reply.ok).toBe(true);
+          const logged = [...warn.mock.calls, ...error.mock.calls].map((call) => JSON.stringify(call));
+          expect(logged.filter((line) => line.includes("round-card") || line.includes("turn summary"))).toEqual([]);
+        } finally { warn.mockRestore(); error.mockRestore(); }
+        expect(card(world, task.id).metadata).toMatchObject({ ...CARD_FIELDS, late_subagents: null, status: "completed" });
       });
     }, TIMEOUT);
 

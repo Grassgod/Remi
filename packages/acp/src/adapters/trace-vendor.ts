@@ -92,11 +92,92 @@ export function contentText(content: unknown): string {
 /**
  * The subagent tool call a frame belongs to: claude-agent-acp stamps
  * `_meta.claudeCode.parentToolUseId` on a subagent's chunks and tool calls
- * (CA/acp-agent.js:502-510, 8599, 8985). Codex stays flat because Remi does not
- * advertise subagent sessions (CX:39918-39924).
+ * (CA/acp-agent.js:502-510, 8599, 8985), with or without native child sessions.
+ * Codex never stamps it.
  */
 export function parentToolUseId(frame: VendorFrame): string | null {
   return str(record(meta(frame)?.claudeCode)?.parentToolUseId);
+}
+
+/**
+ * The native child session a frame came from (PR 5 §1.2): the provider stamps
+ * `_meta.remiSessionId` on every frame of a registered child session. Null for
+ * the root session, whose frames it leaves as the bridge sent them.
+ */
+export function frameSession(frame: VendorFrame): string | null {
+  return str(meta(frame)?.remiSessionId);
+}
+
+/** A child session id without the `:generation:N` suffix of a resumed agent (CA/native-subagents.js `nextChildSessionId`; CX `reopen`). */
+export function nativeAgentId(sessionId: string): string {
+  return sessionId.replace(/:generation:\d+$/, "");
+}
+
+/** The trace item of a native agent, from any of its child session ids (PR 5 §3.1). */
+export function nativeAgentItemId(sessionId: string): string {
+  return `sa:${nativeAgentId(sessionId)}`;
+}
+
+/**
+ * The origin of a model cycle's result: `_meta["_claude/origin"].kind` on the
+ * `usage_update` claude-agent-acp sends at every result (CA/acp-agent.js
+ * `turnOriginMeta`). `human` for a prompt's own turn; `task-notification`
+ * (and the other autonomous origins) for a cycle Claude Code started itself.
+ */
+export function autonomousOrigin(frame: VendorFrame): string | null {
+  return str(record(meta(frame)?.["_claude/origin"])?.kind);
+}
+
+/**
+ * Claude's PostToolUse hook update for an Agent/Task call (PR 5 §3.3): with
+ * native child sessions the bridge swallows the call itself but this update
+ * bypasses its router (CA/acp-agent.js, the "orphan"). It names the Agent tool
+ * and carries the hook's `toolResponse` marker, nothing else.
+ */
+export function isNativeAgentHook(frame: VendorFrame): boolean {
+  if (frame.sessionUpdate !== "tool_call_update") return false;
+  const name = toolName(frame);
+  return name !== null && CLAUDE_SUBAGENT_TOOLS.has(name) && launchMarker(frame) !== null;
+}
+
+/**
+ * Remi's claude-agent-acp patch facts on a `subagent_spawned`
+ * (`_meta.remi`, usage-bridge-patches.ts `claudeSubagentPatch`): whether the
+ * SDK registered the agent in the background, and its type. Null when absent.
+ */
+export function nativeAgentFacts(frame: VendorFrame): { background: boolean | null; agentType: string | null } {
+  const remi = record(meta(frame)?.remi);
+  return {
+    background: typeof remi?.backgrounded === "boolean" ? remi.backgrounded : null,
+    agentType: str(remi?.subagentType),
+  };
+}
+
+/**
+ * Who made the request a billing `usage_update` reports, and its model
+ * (`_meta.remiTokenUsage`, Remi's usage patches): Claude stamps a subagent's
+ * requests with the Agent call (`parentToolUseId`); Codex names the child
+ * thread (`providerSessionId`).
+ */
+export function requestUsageOwner(frame: VendorFrame): { parentToolUseId: string | null; providerSessionId: string | null; model: string | null } | null {
+  const usage = record(meta(frame)?.remiTokenUsage);
+  if (!usage) return null;
+  const model = str(usage.model);
+  return { parentToolUseId: str(usage.parentToolUseId), providerSessionId: str(usage.providerSessionId),
+    model: model && model !== "<synthetic>" ? model : null };
+}
+
+/**
+ * The prompt of a native child (PR 5 §3.2): `prompt`, else `task`, but not
+ * codex-acp's stand-in for a prompt it cannot read ("Delegated task", or
+ * "Delegated task for {name}", CX:30044, 30191): the v2 spawn message is
+ * encrypted in the rollout.
+ */
+export function nativeAgentPrompt(frame: VendorFrame): string | null {
+  const prompt = str(frame.prompt);
+  if (prompt) return prompt;
+  const task = str(frame.task);
+  return task && !/^Delegated task(?: for .*)?$/s.test(task.trim()) ? task : null;
 }
 
 // ── Tools ───────────────────────────────────────────────────────────────────
@@ -109,8 +190,20 @@ export function toolName(frame: VendorFrame): string | null {
 /** Tool names that spawn a Claude subagent; `Task` is the legacy name of `Agent`. */
 export const CLAUDE_SUBAGENT_TOOLS: ReadonlySet<string> = new Set(["Agent", "Task"]);
 
-/** Codex collaboration tools (CX:29815-29835, 30016-30061), all subagent steps. */
-const CODEX_COLLAB_TOOLS: ReadonlySet<string> = new Set(["spawnAgent", "sendInput", "resumeAgent", "wait", "closeAgent", "followupTask"]);
+/**
+ * Codex collaboration tools, titled with the protocol's `CollabAgentTool`
+ * (codex item.rs:1131-1141; CX:29815-29835 `CollabAgentReporter`).
+ */
+export const CODEX_COLLAB_TOOLS: ReadonlySet<string> = new Set(["spawnAgent", "sendInput", "resumeAgent", "wait", "closeAgent",
+  "sendMessage", "followupTask", "interruptAgent", "listAgents"]);
+
+/**
+ * The collaboration calls that act on agents rather than start one (PR 5
+ * §3.6): plain `tool` items whose `tool` is the title, so the shared
+ * agent-control rows (`agentControl`, `isHiddenStep`) read them. Only
+ * `spawnAgent` and the AIR activity calls stay `subagent` items.
+ */
+const CODEX_CONTROL_TOOLS: ReadonlySet<string> = new Set([...CODEX_COLLAB_TOOLS].filter((tool) => tool !== "spawnAgent"));
 
 /** The parsed `rawInput` of a frame: an object, a JSON object string, or nothing. */
 export function rawInputOf(frame: VendorFrame): Record<string, unknown> | null {
@@ -398,10 +491,13 @@ function codexClass(facts: ToolFacts): ToolClass {
   const input = facts.input;
   const title = facts.title;
   if (facts.mcp) return { type: "tool", server: mcpServer({ title }, facts.name, input) };
-  if (facts.airSubagent || (title !== null && CODEX_COLLAB_TOOLS.has(title))) {
+  // `wait`, `sendInput`, … act on agents: control rows, not subagents (PR 5 §3.6).
+  if (title !== null && CODEX_CONTROL_TOOLS.has(title) && !facts.airSubagent) return { type: "tool", server: null };
+  if (facts.airSubagent || title === "spawnAgent") {
     // Activity calls ("Start/Complete subagent X") carry `{agentThreadId,
-    // agentPath}`; collab calls (`spawnAgent`, `wait`, …) carry `{receiverThreadIds,
-    // model, prompt}` (CX:28180, 29803-29866).
+    // agentPath}`; `spawnAgent` carries `{receiverThreadIds, model, prompt}`
+    // (CX:28180, 29803-29866). With native child sessions both are absorbed
+    // by the child's own session (CX:30005-30061); this is the fallback.
     const receivers = Array.isArray(input?.receiverThreadIds) ? input.receiverThreadIds : [];
     const agentPath = str(input?.agentPath);
     return {
@@ -626,6 +722,8 @@ export function serviceMessageFailure(message: Extract<ServiceMessage, { type: "
  */
 export function toolLabel(facts: ToolFacts, cls: ToolClass, resolved: string | null): string {
   if (facts.name) return facts.name;
+  // A Codex collaboration call is named by its title (`wait`, `sendInput`, …).
+  if (cls.type === "tool" && facts.title !== null && CODEX_CONTROL_TOOLS.has(facts.title) && !facts.mcp) return facts.title;
   if (cls.type === "tool" && facts.mcp && facts.title) return facts.title;
   if (cls.type === "web_search") return cls.action === "fetch" ? "WebFetch" : "WebSearch";
   if (cls.type === "subagent") return facts.title ?? resolved ?? "Agent";

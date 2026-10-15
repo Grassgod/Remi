@@ -38,6 +38,13 @@ export interface QuestionHistoryEvent {
   source_message_id?: string;
   source_session_id?: string;
 }
+/** The native subagent whose child session raised a permission or question (PR 5). */
+export interface QuestionSubagent {
+  /** The subagent's trace item, `sa:<native id>`. */
+  item_id: string;
+  /** Its name; empty when the subagent had none. */
+  name: string;
+}
 /** Projection of one original decision message. Notifications never create a second Q. */
 export interface QuestionView {
   id: string;
@@ -51,6 +58,12 @@ export interface QuestionView {
   original_questions: unknown[];
   original_message: string;
   original_context: { text: string; truncated?: boolean } | null;
+  /**
+   * The subagent that asked, from the daemon's decision metadata `subagent`
+   * (copied into `human_request.payload`); null for the root session, other
+   * decisions and older daemons.
+   */
+  source_subagent: QuestionSubagent | null;
   options: DecisionOption[] | null;
   summary: { body_md: string; agent_id: string; at: string } | null;
   /** Null at the Issue `human` stage (any active member acts) and when `stage` is `unavailable`. */

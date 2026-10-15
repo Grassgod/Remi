@@ -153,6 +153,21 @@ it("routes decision option answers through the original message and rejects repl
   expect(entry).not.toHaveProperty("card_token_hash");
   expect(entry).not.toHaveProperty("card_token_recipient");
 });
+it("names the subagent whose child session raised a permission (PR 5) and none for the root", async () => {
+  const root = nativeQuestion();
+  expect((await request(`/api/messages/${root.question.id}/question`)).data.question.source_subagent).toBeNull();
+  const decide = (key: string, subagent: unknown) => store.getDaemonTurnBridge().rpc('turn.decision', { turn_id: root.turn.id, attempt_id: root.task.id,
+    wait_id: `native:${key}`, dedupe_key: `permission:${key}`, body_md: 'Permission requested: Write notes.txt',
+    options: [{ label: 'Allow', value: 'allow', description: 'allow_once' }],
+    metadata: { kind: 'permission', session_id: 'child-session', tool_call: { title: 'Write notes.txt' },
+      options: [{ optionId: 'allow', kind: 'allow_once', name: 'Allow' }], subagent } }, root.scope);
+  const child = decide('child', { item_id: 'sa:agent-1', name: '  Count\n files ' });
+  const read = await request(`/api/messages/${String(child.message_id)}/question`);
+  expect(read.status).toBe(200);
+  expect(read.data.question).toMatchObject({ kind: 'permission', source_subagent: { item_id: 'sa:agent-1', name: 'Count files' } });
+  expect(store.getMessage(String(child.message_id))?.metadata.human_request).toMatchObject({ payload: { subagent: { item_id: 'sa:agent-1' } } });
+  expect(store.getQuestion(String(decide('malformed', { name: 'No id' }).message_id))?.source_subagent).toBeNull();
+});
 it("answers an awaiting human request and restores the same turn", async () => {
   const { question, turn, task, scope } = nativeQuestion();
   expect(store.getTurn(turn.id)?.status).toBe("awaiting_human");
@@ -170,14 +185,22 @@ it("lists and inspects turns, wraps up, cancels and retries with trace tied to t
   const sent = await send("work"), id = sent.data.turn_id, oldAttempt = store.getTurn(id)!.current_attempt_id;
   const listed = await request(`/api/turns?issue=${issue.key}&agent=${agent.id}&status=pending&limit=1`);
   expect(listed.data.turns).toHaveLength(1);
+  // PR 5: rows carry the current attempt's running-subagent count; none was reported yet.
+  expect(listed.data.turns[0]).toMatchObject({ id, running_subagents: null });
   const detail = await request(`/api/turns/${id}?input=true&attempts=true`);
   expect(detail.data.input.messages[0].body_md).toBe("work"); expect(detail.data.attempts[0].id).toBe(oldAttempt);
+  expect(detail.data.attempts[0]).toMatchObject({ running_subagents: null, late_subagents: null });
   expect((await request(`/api/turns/${id}/wrap-up`, "POST", {})).status).toBe(409);
   db.run("UPDATE multiremi_turns SET status='running' WHERE id=?", [id]);
   db.run("UPDATE multiremi_turn_attempts SET status='running' WHERE id=?", [oldAttempt]);
+  expect(store.recordRunningSubagents(oldAttempt!, 2)).toBe(true);
+  expect((await request(`/api/turns?issue=${issue.key}&status=running`)).data.turns).toEqual([expect.objectContaining({ id, running_subagents: 2 })]);
+  expect((await request(`/api/turns/${id}?attempts=true`)).data.attempts[0]).toMatchObject({ id: oldAttempt, running_subagents: 2 });
   expect((await request(`/api/turns/${id}/wrap-up`, "POST", {})).data.turn.wrap_up_requested_at).toBeTruthy();
   expect(store.listMessages(session.id)).toHaveLength(1);
   expect((await request(`/api/turns/${id}/cancel`, "POST", {})).data.turn.status).toBe("cancelled");
+  // The cancelled attempt's last count does not outlive it.
+  expect((await request(`/api/turns?issue=${issue.key}`)).data.turns).toEqual([expect.objectContaining({ id, running_subagents: null })]);
   store.setAgentRole(other.id, "supervisor");
   const supervisorIssue = createResponsibleTestIssue(store, { title: "Supervision", assigneeType: "agent", assigneeId: other.id });
   const supervisorTask = store.createTask({ agentId: other.id, issueId: supervisorIssue.id, prompt: "Supervise" });
@@ -186,6 +209,8 @@ it("lists and inspects turns, wraps up, cancels and retries with trace tied to t
   const retried = await request(`/api/turns/${id}/retry`, "POST", { cold: true }, { Authorization: `Bearer ${supervisor.token}` });
   expect(retried.status, JSON.stringify(retried.data)).toBe(200); expect(retried.data.turn.id).toBe(id); expect(retried.data.turn.current_attempt_id).not.toBe(oldAttempt);
   expect(store.listTurns({ workspace_id: "local", issue_id: issue.id })).toHaveLength(1); expect(store.listTurnAttempts(id)).toHaveLength(2);
+  // The retry is a new attempt with no count of its own.
+  expect(store.listTurns({ workspace_id: "local", issue_id: issue.id })[0]).toMatchObject({ running_subagents: null });
   expect((await request(`/api/turns/${id}/trace`)).data.attempt_id).toBe(retried.data.turn.current_attempt_id);
   expect((await request(`/api/turns/${id}/trace?attempt_id=${oldAttempt}`)).data.attempt_id).toBe(oldAttempt);
   expect((await request(`/api/turns/${id}/trace?attempt_id=other`)).status).toBe(404);

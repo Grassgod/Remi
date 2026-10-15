@@ -25,6 +25,7 @@ summary: 按任务定位当前实现、约束和验证命令。
 | 改 Agent 并行调度与执行目录 | [并行执行](../parallel-agent-execution.md) | Agent/Session 执行隔离、共享代码和 daemon 协议升级 |
 | 修改登录、租户隔离或 token 权限 | [认证与权限](auth.md) | 身份来源、资源 guard 和生产启动约束 |
 | 修改 ACP 后端或 token-sync | [Codex 接入](../design/acp-codex-via-codex-acp.md)、[Claude Code 接入](../design/acp-claude-via-claude-agent-acp.md)、[认证插件与同步](../design/1passport-bytedance-sso.md) | 实际启动、认证、会话和凭据隔离边界 |
+| 改原生子代理、子会话路由、Claude 迟到回答（自主轮）或子代理呈现 | [ADR 0021](../adr/0021-subagent-sessions-and-autonomous-rounds.md)、[Chat 契约](../chat.md#子代理)、[前端](frontend.md) | 子会话登记与帧隔离、权限路由、`owesAutonomousRound` 与 60 s 等待、桥补丁 `claude-subagents-v1`、`late_subagents` / `running_subagents`、两个开关 |
 | 改 turn 失败检测、备用模型恢复或能力排队切换 | [ADR 0010](../adr/0010-turn-failure-from-bridge-typed-session-failure.md) | AIR 失败 metadata、失败分类、单次切换、5 分钟能力等待与提交后事件 |
 | 修改 Antigravity 执行 | [Antigravity Runtime](../antigravity.md) | 按机器安装与条款同意、接入配置（环境、网关垫片、用量）、能力边界 |
 | 修改 Agent 模板或 Skill | [Agent 配置规范](../agent-config-spec.md) | 提示词结构、字段和元信息检查 |

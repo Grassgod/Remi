@@ -65,6 +65,8 @@ export function notifyBrowserTaskEvent(
 ): void {
   const payload = taskRealtimePayload(task);
   if (type === "task:progress") payload.progress_summary = task.progressSummary;
+  // PR 5: read when delivered, so a peer process forwarding the event sends the stored count.
+  if (type === "task:subagents") payload.running_subagents = store.getRunningSubagents(task.id) ?? 0;
   const frame = JSON.stringify({
     type,
     payload,

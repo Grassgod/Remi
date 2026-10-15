@@ -44,6 +44,17 @@ Runtime 详情的「Claude Code 连接」支持一个 Anthropic Messages 兼容�
 - 任务 claim 时冻结配置、所选模型和凭据版本，并纳入执行指纹。Claude 自定义连接按执行指纹隔离 Home；连接和模型未变时延续原生会话，变更后从产品记录重新启动。运行中任务使用冻结连接和模型；自动重试在原 Runtime 仍兼容当前 Agent 时保留快照和 Runtime 归属，否则清除旧快照并重新调度。旧 daemon 不可领取带 Claude profile 的任务。
 - 可选的 Chat Completions 进度摘要不复用此连接密钥；需要单独配置 `MULTIREMI_PROGRESS_SUMMARY_OPENAI_BASE_URL` 与 `MULTIREMI_PROGRESS_SUMMARY_OPENAI_API_KEY`。正常任务消息不受影响。
 
+## 原生子代理与迟到回答
+
+daemon 默认在 initialize 声明 `clientCapabilities.subagents: {}`（Claude 不需要 AIR 能力），claude-agent-acp 0.90 因 Remi 是 AIR 客户端而使用 AIR 形式：在发起子代理的会话上发 `subagent_spawned` / `subagent_state_update`，子代理的帧走子会话，Agent 工具调用被桥吞掉；恢复的子代理以 `<id>:generation:N` 重新宣布，Remi 把它并入原来的条目。规则与取舍见 [ADR 0021](../adr/0021-subagent-sessions-and-autonomous-rounds.md)，`REMI_ACP_NATIVE_SUBAGENTS=0` 恢复只收根会话的帧。
+
+- **桥补丁 `claude-subagents-v1`。** AIR 形式的宣布不带子代理类型和是否在后台。补丁在 `dist/acp-agent.js` 的 `task_started` 处记下 SDK 的 `is_backgrounded` 与 `subagent_type`，给 `subagent_spawned` 加 `_meta.remi = { backgrounded, subagentType }`（未知为 null，恢复的一代为 `backgrounded: true`）。只有 `backgrounded: true` 是定论；`false` 可由推断升级（调用方在子代理运行时继续工作，说明它被移到了后台），反之不降级。子代理的模型取自它第一次请求的 `remiTokenUsage.model`。补丁与 `claude-usage-v4` 同时打、同时校验，锚点不匹配时安装与 `release:prepare` 失败，见[配套升级说明](../daemon-runtime-upgrades.md#claude-升级检查项)。
+- **迟到回答（自主轮）。** 后台子代理在根会话的结果之前结束时，桥不保留这一轮，`session/prompt` 照常返回，随后桥自己开一轮 task-notification 后续轮给出真正的回答。[ClaudeAdapter](../../packages/acp/src/adapters/claude-code/index.ts) 声明 `autonomousRounds.resultOrigins`（结果 `usage_update` 的 `_meta["_claude/origin"].kind`）；provider 缓存 prompt 之后的帧，daemon 判定欠一轮时调用 `listenAutonomous` 在同一 attempt 里等：第一帧最多 60 s，之后等到结果标记，最多 10 分钟。仍在运行的后台子代理不需要等，桥会保留这一轮直到它结束。`REMI_ACP_AUTONOMOUS_ROUNDS=0` 关闭捕获与等待。
+- **引导。** 等待期间到达的引导结束等待并重新提示；后续轮已经开始时，桥的 prompt 队列把新 prompt 并入它。prompt 运行中，前台子代理不算顶层工具调用，`waitForToolCalls` 不等它（ADR 0020）。
+- **用量。** Claude 子代理的请求用量照旧在根会话上、带 `parentToolUseId`；自主轮沿用上一个 prompt 的采集器，轮范围的 `sdk_estimate` 由后续轮累计的 `total_cost_usd` 替换一次，见[统一用量与价格](../usage-accounting.md#子代理与自主轮)。
+
+回归见 [原生子会话](../../tests/unit/acp/native-subagents.test.ts)、[自主轮](../../tests/unit/acp/autonomous-turn.test.ts)、[桥补丁](../../tests/unit/acp/usage-bridge-patches.test.ts) 与 0.90 的重录夹具 `tests/fixtures/acp/claude-090-native-subagent-*.json`。
+
 ## API 与 CLI
 
 `GET/PUT /api/runtimes/:id/claude-profile` 沿用 Runtime 可见性和 owner/admin 编辑权限，task token 对配置路径为 hard deny。凭据由 `GET /api/daemon/runtimes/:id/claude-profile-key?credential_id=...` 下发，只接受绑定机器身份的 daemon token，返回 `Cache-Control: no-store`；同机器其他 Runtime 的引用也不能读取。

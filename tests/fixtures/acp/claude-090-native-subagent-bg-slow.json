@@ -1,0 +1,895 @@
+[
+  {
+    "t": 0,
+    "remi": "prompt_sent",
+    "index": 0
+  },
+  {
+    "t": 7238,
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_root",
+      "update": {
+        "sessionUpdate": "usage_update",
+        "used": 0,
+        "size": 0,
+        "_meta": {
+          "remiUsagePatch": "claude-usage-v4",
+          "remiTokenUsage": {
+            "id": "msg_01",
+            "model": "claude-opus-5-5",
+            "scope": "request_snapshot",
+            "providerSessionId": "sess_root",
+            "providerRequestId": "msg_01",
+            "source": "claude_assistant_usage",
+            "accuracy": "partial",
+            "parentToolUseId": null,
+            "inputTokens": 2,
+            "outputTokens": 16,
+            "cachedInputTokens": 0,
+            "cacheWriteTokens": 26932,
+            "totalTokens": 26950
+          }
+        }
+      }
+    }
+  },
+  {
+    "t": 7239,
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_root",
+      "update": {
+        "sessionUpdate": "usage_update",
+        "used": 26950,
+        "size": 1000000,
+        "_meta": {
+          "_claude/model": "claude-opus-5-5"
+        }
+      }
+    }
+  },
+  {
+    "t": 7244,
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_root",
+      "update": {
+        "sessionUpdate": "usage_update",
+        "used": 0,
+        "size": 0,
+        "_meta": {
+          "remiUsagePatch": "claude-usage-v4",
+          "remiTokenUsage": {
+            "id": "msg_01",
+            "model": "claude-opus-5-5",
+            "scope": "request_snapshot",
+            "providerSessionId": "sess_root",
+            "providerRequestId": "msg_01",
+            "source": "claude_assistant_usage",
+            "accuracy": "partial",
+            "parentToolUseId": null,
+            "inputTokens": 2,
+            "outputTokens": 16,
+            "cachedInputTokens": 0,
+            "cacheWriteTokens": 26932,
+            "totalTokens": 26950
+          }
+        }
+      }
+    }
+  },
+  {
+    "t": 7248,
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_root",
+      "update": {
+        "sessionUpdate": "usage_update",
+        "used": 0,
+        "size": 0,
+        "_meta": {
+          "remiUsagePatch": "claude-usage-v4",
+          "remiTokenUsage": {
+            "id": "msg_01",
+            "model": "claude-opus-5-5",
+            "scope": "request_snapshot",
+            "providerSessionId": "sess_root",
+            "providerRequestId": "msg_01",
+            "source": "claude_assistant_usage",
+            "accuracy": "partial",
+            "parentToolUseId": null,
+            "inputTokens": 2,
+            "outputTokens": 171,
+            "cachedInputTokens": 0,
+            "cacheWriteTokens": 26932,
+            "totalTokens": 27105
+          }
+        }
+      }
+    }
+  },
+  {
+    "t": 7248,
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_root",
+      "update": {
+        "sessionUpdate": "usage_update",
+        "used": 27105,
+        "size": 1000000,
+        "_meta": {
+          "_claude/model": "claude-opus-5-5"
+        }
+      }
+    }
+  },
+  {
+    "t": 7249,
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_root",
+      "update": {
+        "sessionUpdate": "usage_update",
+        "used": 0,
+        "size": 0,
+        "_meta": {
+          "remiUsagePatch": "claude-usage-v4",
+          "remiTokenUsage": {
+            "id": "msg_01",
+            "model": "claude-opus-5-5",
+            "scope": "request_snapshot",
+            "providerSessionId": "sess_root",
+            "providerRequestId": "msg_01",
+            "source": "claude_assistant_usage",
+            "accuracy": "exact",
+            "parentToolUseId": null,
+            "inputTokens": 2,
+            "outputTokens": 171,
+            "cachedInputTokens": 0,
+            "cacheWriteTokens": 26932,
+            "totalTokens": 27105
+          }
+        }
+      }
+    }
+  },
+  {
+    "t": 7255,
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_root",
+      "update": {
+        "sessionUpdate": "subagent_spawned",
+        "subagentSessionId": "a0000000000000001",
+        "name": "Sleep then count files",
+        "task": "First run the shell command `sleep 20`. Then list the files in the current directory (/work) and report how many there are. Reply with the count and the list.",
+        "prompt": "First run the shell command `sleep 20`. Then list the files in the current directory (/work) and report how many there are. Reply with the count and the list.",
+        "capabilities": {}
+      }
+    }
+  },
+  {
+    "t": 9678,
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_root",
+      "update": {
+        "sessionUpdate": "usage_update",
+        "used": 0,
+        "size": 0,
+        "_meta": {
+          "remiUsagePatch": "claude-usage-v4",
+          "remiTokenUsage": {
+            "id": "msg_02",
+            "model": "claude-opus-5-5",
+            "scope": "request_snapshot",
+            "providerSessionId": "sess_root",
+            "providerRequestId": "msg_02",
+            "source": "claude_assistant_usage",
+            "accuracy": "partial",
+            "parentToolUseId": null,
+            "inputTokens": 2,
+            "outputTokens": 26,
+            "cachedInputTokens": 26932,
+            "cacheWriteTokens": 593,
+            "totalTokens": 27553
+          }
+        }
+      }
+    }
+  },
+  {
+    "t": 9678,
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_root",
+      "update": {
+        "sessionUpdate": "usage_update",
+        "used": 27553,
+        "size": 1000000,
+        "_meta": {
+          "_claude/model": "claude-opus-5-5"
+        }
+      }
+    }
+  },
+  {
+    "t": 9679,
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_root",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "I started"
+        },
+        "messageId": "msg_02"
+      }
+    }
+  },
+  {
+    "t": 9679,
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_root",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " the"
+        },
+        "messageId": "msg_02"
+      }
+    }
+  },
+  {
+    "t": 9679,
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_root",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " sub"
+        },
+        "messageId": "msg_02"
+      }
+    }
+  },
+  {
+    "t": 9679,
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_root",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "agent in the background. I"
+        },
+        "messageId": "msg_02"
+      }
+    }
+  },
+  {
+    "t": 9679,
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_root",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "'ll reply with the count when"
+        },
+        "messageId": "msg_02"
+      }
+    }
+  },
+  {
+    "t": 9679,
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_root",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " it finishes."
+        },
+        "messageId": "msg_02"
+      }
+    }
+  },
+  {
+    "t": 9680,
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_root",
+      "update": {
+        "sessionUpdate": "usage_update",
+        "used": 0,
+        "size": 0,
+        "_meta": {
+          "remiUsagePatch": "claude-usage-v4",
+          "remiTokenUsage": {
+            "id": "msg_02",
+            "model": "claude-opus-5-5",
+            "scope": "request_snapshot",
+            "providerSessionId": "sess_root",
+            "providerRequestId": "msg_02",
+            "source": "claude_assistant_usage",
+            "accuracy": "partial",
+            "parentToolUseId": null,
+            "inputTokens": 2,
+            "outputTokens": 26,
+            "cachedInputTokens": 26932,
+            "cacheWriteTokens": 593,
+            "totalTokens": 27553
+          }
+        }
+      }
+    }
+  },
+  {
+    "t": 9681,
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_root",
+      "update": {
+        "sessionUpdate": "usage_update",
+        "used": 0,
+        "size": 0,
+        "_meta": {
+          "remiUsagePatch": "claude-usage-v4",
+          "remiTokenUsage": {
+            "id": "msg_02",
+            "model": "claude-opus-5-5",
+            "scope": "request_snapshot",
+            "providerSessionId": "sess_root",
+            "providerRequestId": "msg_02",
+            "source": "claude_assistant_usage",
+            "accuracy": "partial",
+            "parentToolUseId": null,
+            "inputTokens": 2,
+            "outputTokens": 26,
+            "cachedInputTokens": 26932,
+            "cacheWriteTokens": 593,
+            "totalTokens": 27553
+          }
+        }
+      }
+    }
+  },
+  {
+    "t": 9681,
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_root",
+      "update": {
+        "sessionUpdate": "usage_update",
+        "used": 0,
+        "size": 0,
+        "_meta": {
+          "remiUsagePatch": "claude-usage-v4",
+          "remiTokenUsage": {
+            "id": "msg_02",
+            "model": "claude-opus-5-5",
+            "scope": "request_snapshot",
+            "providerSessionId": "sess_root",
+            "providerRequestId": "msg_02",
+            "source": "claude_assistant_usage",
+            "accuracy": "exact",
+            "parentToolUseId": null,
+            "inputTokens": 2,
+            "outputTokens": 26,
+            "cachedInputTokens": 26932,
+            "cacheWriteTokens": 593,
+            "totalTokens": 27553
+          }
+        }
+      }
+    }
+  },
+  {
+    "t": 9685,
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_root",
+      "update": {
+        "sessionUpdate": "usage_update",
+        "used": 0,
+        "size": 0,
+        "cost": {
+          "amount": 0.1469674,
+          "currency": "USD"
+        },
+        "_meta": {
+          "remiUsagePatch": "claude-usage-v4",
+          "remiCostUsage": {
+            "scope": "turn",
+            "source": "sdk_estimate"
+          }
+        }
+      }
+    }
+  },
+  {
+    "t": 9685,
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_root",
+      "update": {
+        "sessionUpdate": "usage_update",
+        "used": 27553,
+        "size": 1000000,
+        "cost": {
+          "amount": 0.1469674,
+          "currency": "USD"
+        },
+        "_meta": {
+          "_claude/origin": {
+            "kind": "human"
+          },
+          "_claude/model": "claude-opus-5-5"
+        }
+      }
+    }
+  },
+  {
+    "t": 10265,
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_root",
+      "update": {
+        "sessionUpdate": "usage_update",
+        "used": 0,
+        "size": 0,
+        "_meta": {
+          "remiUsagePatch": "claude-usage-v4",
+          "remiTokenUsage": {
+            "id": "msg_03",
+            "model": "claude-opus-5-5",
+            "scope": "request_snapshot",
+            "providerSessionId": "sess_root",
+            "providerRequestId": "msg_03",
+            "source": "claude_assistant_usage",
+            "accuracy": "partial",
+            "parentToolUseId": "toolu_01",
+            "inputTokens": 2,
+            "outputTokens": 16,
+            "cachedInputTokens": 11292,
+            "cacheWriteTokens": 2789,
+            "totalTokens": 14099
+          }
+        }
+      }
+    }
+  },
+  {
+    "t": 10266,
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "a0000000000000001",
+      "update": {
+        "_meta": {
+          "claudeCode": {
+            "toolName": "Bash",
+            "parentToolUseId": "toolu_01"
+          },
+          "jetbrains": {
+            "air": {
+              "version": 1,
+              "commandTitle": "Wait 20 seconds then list directory"
+            }
+          },
+          "terminal_info": {
+            "terminal_id": "toolu_02"
+          }
+        },
+        "toolCallId": "toolu_02",
+        "sessionUpdate": "tool_call",
+        "name": "Bash",
+        "rawInput": {
+          "command": "sleep 20; ls -A /work",
+          "description": "Wait 20 seconds then list directory"
+        },
+        "status": "pending",
+        "title": "sleep 20; ls -A /work",
+        "kind": "execute",
+        "content": [
+          {
+            "type": "terminal",
+            "terminalId": "toolu_02"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "t": 30400,
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "a0000000000000001",
+      "update": {
+        "_meta": {
+          "terminal_output": {
+            "terminal_id": "toolu_02",
+            "data": "a.txt\nb.txt\nnotes.md"
+          }
+        },
+        "toolCallId": "toolu_02",
+        "sessionUpdate": "tool_call_update"
+      }
+    }
+  },
+  {
+    "t": 30401,
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "a0000000000000001",
+      "update": {
+        "_meta": {
+          "terminal_exit": {
+            "terminal_id": "toolu_02",
+            "exit_code": 0,
+            "signal": null
+          }
+        },
+        "toolCallId": "toolu_02",
+        "sessionUpdate": "tool_call_update",
+        "status": "completed"
+      }
+    }
+  },
+  {
+    "t": 32317,
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_root",
+      "update": {
+        "sessionUpdate": "usage_update",
+        "used": 0,
+        "size": 0,
+        "_meta": {
+          "remiUsagePatch": "claude-usage-v4",
+          "remiTokenUsage": {
+            "id": "msg_04",
+            "model": "claude-opus-5-5",
+            "scope": "request_snapshot",
+            "providerSessionId": "sess_root",
+            "providerRequestId": "msg_04",
+            "source": "claude_assistant_usage",
+            "accuracy": "partial",
+            "parentToolUseId": "toolu_01",
+            "inputTokens": 2,
+            "outputTokens": 83,
+            "cachedInputTokens": 14081,
+            "cacheWriteTokens": 892,
+            "totalTokens": 15058
+          }
+        }
+      }
+    }
+  },
+  {
+    "t": 32317,
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "a0000000000000001",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "I ran `sleep 20`, then listed the directory. /work has 3 files, and the listing included hidden ones:\n\n- a.txt\n- b.txt\n- notes.md"
+        },
+        "_meta": {
+          "claudeCode": {
+            "parentToolUseId": "toolu_01"
+          }
+        },
+        "messageId": "msg_04"
+      }
+    }
+  },
+  {
+    "t": 32337,
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_root",
+      "update": {
+        "sessionUpdate": "subagent_state_update",
+        "subagentSessionId": "a0000000000000001",
+        "state": "completed"
+      }
+    }
+  },
+  {
+    "t": 34628,
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_root",
+      "update": {
+        "sessionUpdate": "usage_update",
+        "used": 0,
+        "size": 0,
+        "_meta": {
+          "remiUsagePatch": "claude-usage-v4",
+          "remiTokenUsage": {
+            "id": "msg_05",
+            "model": "claude-opus-5-5",
+            "scope": "request_snapshot",
+            "providerSessionId": "sess_root",
+            "providerRequestId": "msg_05",
+            "source": "claude_assistant_usage",
+            "accuracy": "partial",
+            "parentToolUseId": null,
+            "inputTokens": 4,
+            "outputTokens": 3,
+            "cachedInputTokens": 27525,
+            "cacheWriteTokens": 605,
+            "totalTokens": 28137
+          }
+        }
+      }
+    }
+  },
+  {
+    "t": 34629,
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_root",
+      "update": {
+        "sessionUpdate": "usage_update",
+        "used": 28137,
+        "size": 1000000,
+        "_meta": {
+          "_claude/model": "claude-opus-5-5"
+        }
+      }
+    }
+  },
+  {
+    "t": 34629,
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_root",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "3"
+        },
+        "messageId": "msg_05"
+      }
+    }
+  },
+  {
+    "t": 34630,
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_root",
+      "update": {
+        "sessionUpdate": "usage_update",
+        "used": 0,
+        "size": 0,
+        "_meta": {
+          "remiUsagePatch": "claude-usage-v4",
+          "remiTokenUsage": {
+            "id": "msg_05",
+            "model": "claude-opus-5-5",
+            "scope": "request_snapshot",
+            "providerSessionId": "sess_root",
+            "providerRequestId": "msg_05",
+            "source": "claude_assistant_usage",
+            "accuracy": "partial",
+            "parentToolUseId": null,
+            "inputTokens": 4,
+            "outputTokens": 3,
+            "cachedInputTokens": 27525,
+            "cacheWriteTokens": 605,
+            "totalTokens": 28137
+          }
+        }
+      }
+    }
+  },
+  {
+    "t": 34630,
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_root",
+      "update": {
+        "sessionUpdate": "usage_update",
+        "used": 0,
+        "size": 0,
+        "_meta": {
+          "remiUsagePatch": "claude-usage-v4",
+          "remiTokenUsage": {
+            "id": "msg_05",
+            "model": "claude-opus-5-5",
+            "scope": "request_snapshot",
+            "providerSessionId": "sess_root",
+            "providerRequestId": "msg_05",
+            "source": "claude_assistant_usage",
+            "accuracy": "partial",
+            "parentToolUseId": null,
+            "inputTokens": 4,
+            "outputTokens": 3,
+            "cachedInputTokens": 27525,
+            "cacheWriteTokens": 605,
+            "totalTokens": 28137
+          }
+        }
+      }
+    }
+  },
+  {
+    "t": 34631,
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_root",
+      "update": {
+        "sessionUpdate": "usage_update",
+        "used": 0,
+        "size": 0,
+        "_meta": {
+          "remiUsagePatch": "claude-usage-v4",
+          "remiTokenUsage": {
+            "id": "msg_05",
+            "model": "claude-opus-5-5",
+            "scope": "request_snapshot",
+            "providerSessionId": "sess_root",
+            "providerRequestId": "msg_05",
+            "source": "claude_assistant_usage",
+            "accuracy": "exact",
+            "parentToolUseId": null,
+            "inputTokens": 4,
+            "outputTokens": 3,
+            "cachedInputTokens": 27525,
+            "cacheWriteTokens": 605,
+            "totalTokens": 28137
+          }
+        }
+      }
+    }
+  },
+  {
+    "t": 34633,
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_root",
+      "update": {
+        "sessionUpdate": "usage_update",
+        "used": 0,
+        "size": 0,
+        "cost": {
+          "amount": 0.18306899999999998,
+          "currency": "USD"
+        },
+        "_meta": {
+          "remiUsagePatch": "claude-usage-v4",
+          "remiCostUsage": {
+            "scope": "turn",
+            "source": "sdk_estimate"
+          }
+        }
+      }
+    }
+  },
+  {
+    "t": 34633,
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_root",
+      "update": {
+        "sessionUpdate": "usage_update",
+        "used": 28137,
+        "size": 1000000,
+        "cost": {
+          "amount": 0.18306899999999998,
+          "currency": "USD"
+        },
+        "_meta": {
+          "_claude/origin": {
+            "kind": "task-notification",
+            "producer": "session-task",
+            "runId": "run_01"
+          },
+          "_claude/model": "claude-opus-5-5"
+        }
+      }
+    }
+  },
+  {
+    "t": 34633,
+    "jsonrpc": "2.0",
+    "id": 4,
+    "result": {
+      "stopReason": "end_turn",
+      "usage": {
+        "inputTokens": 4,
+        "outputTokens": 197,
+        "cachedReadTokens": 26932,
+        "cachedWriteTokens": 27525,
+        "totalTokens": 54658
+      },
+      "_meta": {
+        "quota": {
+          "token_count": {
+            "totalTokens": 54658,
+            "inputTokens": 4,
+            "cachedInputTokens": 26932,
+            "cachedWriteTokens": 27525,
+            "outputTokens": 197,
+            "reasoningOutputTokens": 0
+          },
+          "model_usage": [
+            {
+              "model": "claude-opus-5-5",
+              "token_count": {
+                "totalTokens": 54658,
+                "inputTokens": 4,
+                "cachedInputTokens": 26932,
+                "cachedWriteTokens": 27525,
+                "outputTokens": 197,
+                "reasoningOutputTokens": 0
+              }
+            }
+          ]
+        }
+      }
+    }
+  },
+  {
+    "t": 36966,
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_root",
+      "update": {
+        "sessionUpdate": "session_info_update",
+        "title": "Background subagent file count",
+        "updatedAt": "2026-10-15T11:34:46.294Z"
+      }
+    }
+  }
+]

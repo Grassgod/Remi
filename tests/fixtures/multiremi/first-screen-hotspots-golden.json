@@ -43,7 +43,8 @@
         "started_at": null,
         "ended_at": null,
         "ended_reason": null,
-        "legacy_prompt": null
+        "legacy_prompt": null,
+        "running_subagents": null
       },
       {
         "id": "<task:48>",
@@ -77,7 +78,8 @@
         "started_at": null,
         "ended_at": null,
         "ended_reason": null,
-        "legacy_prompt": null
+        "legacy_prompt": null,
+        "running_subagents": null
       },
       {
         "id": "<task:47>",
@@ -111,7 +113,8 @@
         "started_at": null,
         "ended_at": null,
         "ended_reason": null,
-        "legacy_prompt": null
+        "legacy_prompt": null,
+        "running_subagents": null
       },
       {
         "id": "<task:46>",
@@ -145,7 +148,8 @@
         "started_at": null,
         "ended_at": null,
         "ended_reason": null,
-        "legacy_prompt": null
+        "legacy_prompt": null,
+        "running_subagents": null
       },
       {
         "id": "<task:45>",
@@ -179,7 +183,8 @@
         "started_at": null,
         "ended_at": null,
         "ended_reason": null,
-        "legacy_prompt": null
+        "legacy_prompt": null,
+        "running_subagents": null
       },
       {
         "id": "<task:44>",
@@ -213,7 +218,8 @@
         "started_at": null,
         "ended_at": null,
         "ended_reason": null,
-        "legacy_prompt": null
+        "legacy_prompt": null,
+        "running_subagents": null
       },
       {
         "id": "<task:43>",
@@ -247,7 +253,8 @@
         "started_at": null,
         "ended_at": null,
         "ended_reason": null,
-        "legacy_prompt": null
+        "legacy_prompt": null,
+        "running_subagents": null
       },
       {
         "id": "<task:42>",
@@ -281,7 +288,8 @@
         "started_at": null,
         "ended_at": null,
         "ended_reason": null,
-        "legacy_prompt": null
+        "legacy_prompt": null,
+        "running_subagents": null
       },
       {
         "id": "<task:41>",
@@ -315,7 +323,8 @@
         "started_at": null,
         "ended_at": null,
         "ended_reason": null,
-        "legacy_prompt": null
+        "legacy_prompt": null,
+        "running_subagents": null
       },
       {
         "id": "<task:39>",
@@ -349,7 +358,8 @@
         "started_at": null,
         "ended_at": null,
         "ended_reason": null,
-        "legacy_prompt": null
+        "legacy_prompt": null,
+        "running_subagents": null
       },
       {
         "id": "<task:38>",
@@ -383,7 +393,8 @@
         "started_at": null,
         "ended_at": null,
         "ended_reason": null,
-        "legacy_prompt": null
+        "legacy_prompt": null,
+        "running_subagents": null
       },
       {
         "id": "<task:37>",
@@ -417,7 +428,8 @@
         "started_at": null,
         "ended_at": null,
         "ended_reason": null,
-        "legacy_prompt": null
+        "legacy_prompt": null,
+        "running_subagents": null
       },
       {
         "id": "<task:36>",
@@ -451,7 +463,8 @@
         "started_at": null,
         "ended_at": null,
         "ended_reason": null,
-        "legacy_prompt": null
+        "legacy_prompt": null,
+        "running_subagents": null
       },
       {
         "id": "<task:35>",
@@ -485,7 +498,8 @@
         "started_at": null,
         "ended_at": null,
         "ended_reason": null,
-        "legacy_prompt": null
+        "legacy_prompt": null,
+        "running_subagents": null
       },
       {
         "id": "<task:34>",
@@ -519,7 +533,8 @@
         "started_at": null,
         "ended_at": null,
         "ended_reason": null,
-        "legacy_prompt": null
+        "legacy_prompt": null,
+        "running_subagents": null
       },
       {
         "id": "<task:33>",
@@ -553,7 +568,8 @@
         "started_at": null,
         "ended_at": null,
         "ended_reason": null,
-        "legacy_prompt": null
+        "legacy_prompt": null,
+        "running_subagents": null
       },
       {
         "id": "<task:32>",
@@ -587,7 +603,8 @@
         "started_at": null,
         "ended_at": null,
         "ended_reason": null,
-        "legacy_prompt": null
+        "legacy_prompt": null,
+        "running_subagents": null
       },
       {
         "id": "<task:31>",
@@ -621,7 +638,8 @@
         "started_at": null,
         "ended_at": null,
         "ended_reason": null,
-        "legacy_prompt": null
+        "legacy_prompt": null,
+        "running_subagents": null
       },
       {
         "id": "<task:30>",
@@ -655,7 +673,8 @@
         "started_at": null,
         "ended_at": null,
         "ended_reason": null,
-        "legacy_prompt": null
+        "legacy_prompt": null,
+        "running_subagents": null
       },
       {
         "id": "<task:29>",
@@ -689,7 +708,8 @@
         "started_at": null,
         "ended_at": null,
         "ended_reason": null,
-        "legacy_prompt": null
+        "legacy_prompt": null,
+        "running_subagents": null
       },
       {
         "id": "<task:28>",
@@ -723,7 +743,8 @@
         "started_at": null,
         "ended_at": null,
         "ended_reason": null,
-        "legacy_prompt": null
+        "legacy_prompt": null,
+        "running_subagents": null
       },
       {
         "id": "<task:27>",
@@ -757,7 +778,8 @@
         "started_at": null,
         "ended_at": null,
         "ended_reason": null,
-        "legacy_prompt": null
+        "legacy_prompt": null,
+        "running_subagents": null
       },
       {
         "id": "<task:26>",
@@ -791,7 +813,8 @@
         "started_at": null,
         "ended_at": null,
         "ended_reason": null,
-        "legacy_prompt": null
+        "legacy_prompt": null,
+        "running_subagents": null
       },
       {
         "id": "<task:25>",
@@ -825,7 +848,8 @@
         "started_at": null,
         "ended_at": null,
         "ended_reason": null,
-        "legacy_prompt": null
+        "legacy_prompt": null,
+        "running_subagents": null
       },
       {
         "id": "<task:24>",
@@ -859,7 +883,8 @@
         "started_at": null,
         "ended_at": null,
         "ended_reason": null,
-        "legacy_prompt": null
+        "legacy_prompt": null,
+        "running_subagents": null
       },
       {
         "id": "<task:23>",
@@ -893,7 +918,8 @@
         "started_at": null,
         "ended_at": null,
         "ended_reason": null,
-        "legacy_prompt": null
+        "legacy_prompt": null,
+        "running_subagents": null
       },
       {
         "id": "<task:22>",
@@ -927,7 +953,8 @@
         "started_at": null,
         "ended_at": null,
         "ended_reason": null,
-        "legacy_prompt": null
+        "legacy_prompt": null,
+        "running_subagents": null
       },
       {
         "id": "<task:21>",
@@ -961,7 +988,8 @@
         "started_at": null,
         "ended_at": null,
         "ended_reason": null,
-        "legacy_prompt": null
+        "legacy_prompt": null,
+        "running_subagents": null
       },
       {
         "id": "<task:19>",
@@ -995,7 +1023,8 @@
         "started_at": null,
         "ended_at": null,
         "ended_reason": null,
-        "legacy_prompt": null
+        "legacy_prompt": null,
+        "running_subagents": null
       },
       {
         "id": "<task:18>",
@@ -1029,7 +1058,8 @@
         "started_at": null,
         "ended_at": null,
         "ended_reason": null,
-        "legacy_prompt": null
+        "legacy_prompt": null,
+        "running_subagents": null
       },
       {
         "id": "<task:17>",
@@ -1063,7 +1093,8 @@
         "started_at": null,
         "ended_at": null,
         "ended_reason": null,
-        "legacy_prompt": null
+        "legacy_prompt": null,
+        "running_subagents": null
       },
       {
         "id": "<task:16>",
@@ -1097,7 +1128,8 @@
         "started_at": null,
         "ended_at": null,
         "ended_reason": null,
-        "legacy_prompt": null
+        "legacy_prompt": null,
+        "running_subagents": null
       },
       {
         "id": "<task:15>",
@@ -1131,7 +1163,8 @@
         "started_at": null,
         "ended_at": null,
         "ended_reason": null,
-        "legacy_prompt": null
+        "legacy_prompt": null,
+        "running_subagents": null
       },
       {
         "id": "<task:14>",
@@ -1165,7 +1198,8 @@
         "started_at": null,
         "ended_at": null,
         "ended_reason": null,
-        "legacy_prompt": null
+        "legacy_prompt": null,
+        "running_subagents": null
       },
       {
         "id": "<task:13>",
@@ -1199,7 +1233,8 @@
         "started_at": null,
         "ended_at": null,
         "ended_reason": null,
-        "legacy_prompt": null
+        "legacy_prompt": null,
+        "running_subagents": null
       },
       {
         "id": "<task:12>",
@@ -1233,7 +1268,8 @@
         "started_at": null,
         "ended_at": null,
         "ended_reason": null,
-        "legacy_prompt": null
+        "legacy_prompt": null,
+        "running_subagents": null
       },
       {
         "id": "<task:11>",
@@ -1267,7 +1303,8 @@
         "started_at": null,
         "ended_at": null,
         "ended_reason": null,
-        "legacy_prompt": null
+        "legacy_prompt": null,
+        "running_subagents": null
       },
       {
         "id": "<task:10>",
@@ -1301,7 +1338,8 @@
         "started_at": null,
         "ended_at": null,
         "ended_reason": null,
-        "legacy_prompt": null
+        "legacy_prompt": null,
+        "running_subagents": null
       },
       {
         "id": "<task:9>",
@@ -1335,7 +1373,8 @@
         "started_at": null,
         "ended_at": null,
         "ended_reason": null,
-        "legacy_prompt": null
+        "legacy_prompt": null,
+        "running_subagents": null
       },
       {
         "id": "<task:8>",
@@ -1369,7 +1408,8 @@
         "started_at": null,
         "ended_at": null,
         "ended_reason": null,
-        "legacy_prompt": null
+        "legacy_prompt": null,
+        "running_subagents": null
       },
       {
         "id": "<task:7>",
@@ -1403,7 +1443,8 @@
         "started_at": null,
         "ended_at": null,
         "ended_reason": null,
-        "legacy_prompt": null
+        "legacy_prompt": null,
+        "running_subagents": null
       },
       {
         "id": "<task:6>",
@@ -1437,7 +1478,8 @@
         "started_at": null,
         "ended_at": null,
         "ended_reason": null,
-        "legacy_prompt": null
+        "legacy_prompt": null,
+        "running_subagents": null
       },
       {
         "id": "<task:5>",
@@ -1471,7 +1513,8 @@
         "started_at": null,
         "ended_at": null,
         "ended_reason": null,
-        "legacy_prompt": null
+        "legacy_prompt": null,
+        "running_subagents": null
       },
       {
         "id": "<task:4>",
@@ -1505,7 +1548,8 @@
         "started_at": null,
         "ended_at": null,
         "ended_reason": null,
-        "legacy_prompt": null
+        "legacy_prompt": null,
+        "running_subagents": null
       },
       {
         "id": "<task:3>",
@@ -1539,7 +1583,8 @@
         "started_at": null,
         "ended_at": null,
         "ended_reason": null,
-        "legacy_prompt": null
+        "legacy_prompt": null,
+        "running_subagents": null
       },
       {
         "id": "<task:2>",
@@ -1573,7 +1618,8 @@
         "started_at": null,
         "ended_at": null,
         "ended_reason": null,
-        "legacy_prompt": null
+        "legacy_prompt": null,
+        "running_subagents": null
       }
     ],
     "next_cursor": null

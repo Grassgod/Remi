@@ -45,6 +45,7 @@ summary: 当前性能相关实现、必须保留的语义，以及复用现有�
 心跳仍读取工作区插件绑定和活跃任务的版本需求，不能认为所有工作区读取已消除。
 Daemon 报告的 Runtime 身份校验使用 `getRuntimeLite`，不附带历史用量、模型和执行组。
 `task:usage` 继续向浏览器更新统计，但不唤醒 daemon 下行；账本逐单位写入成本仍需单独评估。
+`task.activity` 的子代理计数只在变化时写库，`task:subagents` 同样只推浏览器、不唤醒 daemon 下行。
 
 责任 resolver 只读取路由事实列，不水合 Issue 标签或 Agent Skills。活 AUQ 答复复用
 事务锁保护的 Q 投影，卡片更新意图由答案事务写入一次；原回复路径已派生来源 Issue

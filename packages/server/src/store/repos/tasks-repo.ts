@@ -4765,6 +4765,35 @@ ${placementAfter.sql}
     return task;
   }
 
+  /**
+   * PR 5: the running-subagent count of the daemon's best-effort `task.activity`
+   * frame. Only an active attempt (accepted or running; a turn awaiting a human
+   * keeps a running attempt) takes it: the pending list holds active turns only
+   * and a retry is a new attempt, so a terminal attempt's count is ignored. A
+   * never-reported attempt reads as 0, so the closing 0 of an attempt that ran
+   * no subagent writes nothing. When the value changed, a Chat task's creator
+   * hears `task:subagents`; unlike `task:progress` this holds for every Chat,
+   * with or without a project. Returns whether the value changed.
+   */
+  recordRunningSubagents(taskId: string, count: number): boolean {
+    const result = this.ctx.db.run(
+      `UPDATE multiremi_turn_attempts SET running_subagents = ?, updated_at = ?
+       WHERE id = ? AND status IN ('accepted', 'running') AND COALESCE(running_subagents, 0) <> ?`,
+      [count, nowIso(), taskId, count],
+    );
+    if (!result.changes) return false;
+    const task = this.getTask(taskId);
+    if (task?.chatSessionId) this.ctx.notifyTaskEvent("task:subagents", task);
+    return true;
+  }
+
+  /** The count `recordRunningSubagents` last stored for the attempt; null when never reported. */
+  getRunningSubagents(taskId: string): number | null {
+    const row = this.ctx.db.query("SELECT running_subagents FROM multiremi_turn_attempts WHERE id = ?").get(taskId) as
+      { running_subagents: unknown } | null;
+    return row?.running_subagents == null ? null : Number(row.running_subagents);
+  }
+
   pinTaskSession(taskId: string, sessionId?: string | null, workDir?: string | null): MultiremiTask {
     return this.ctx.db.transaction(() => {
       const identity = this.getTaskIdentity(taskId);

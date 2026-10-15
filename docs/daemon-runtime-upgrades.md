@@ -15,7 +15,7 @@ bun run release:prepare --version <下一版本>
 
 Claude ACP 使用 @anthropic-ai/claude-agent-sdk 内的 CC 执行文件，Codex ACP 使用 @openai/codex；这条链路没有独立的 @openai/codex-sdk。通过 npm overrides 固定实际 SDK，包括桥接包的嵌套依赖。若最新 Claude SDK 携带的 CC 尚未跟上独立 CC 的 latest，真实版本验证会失败，阻止发布不一致的组合。
 
-候选校验包含 ACP 包版本、SDK 包版本、实际执行文件 --version、Codex usage 补丁与其依赖的 app-server 协议（见下方 Codex 升级检查项）、Claude wrapper 健康检查及 ACP initialize 协商。任何步骤失败都不改发版文件；此时应处理兼容性问题或等待上游版本对齐，再重新准备。准备命令不创建提交、tag 或 Release，也不重启机器上的 daemon，不创建 Task、不向模型发 prompt。
+候选校验包含 ACP 包版本、SDK 包版本、实际执行文件 --version、Codex usage 补丁与其依赖的 app-server 协议（见下方 Codex 升级检查项）、Claude 的 usage 补丁与子代理补丁（见下方 Claude 升级检查项）、Claude wrapper 健康检查及 ACP initialize 协商。任何步骤失败都不改发版文件；此时应处理兼容性问题或等待上游版本对齐，再重新准备。准备命令不创建提交、tag 或 Release，也不重启机器上的 daemon，不创建 Task、不向模型发 prompt。
 
 依赖与版本号同批提交，完整 Release build check 通过后才打 tag。CI 对版本号变更检查对应依赖快照，并在 Linux/macOS 安装固定组合、验证初始化。tag 工作流在发布 CLI 前检查版本一致性、快照和同一 main 提交的完整 CI 成功记录。构建时不再解析 latest，所以检查后上游继续发新版本也不会改变本次发行内容。
 
@@ -44,6 +44,19 @@ bun run release:pin-antigravity --version <server 版本>
 - `remi runtime prepare --provider antigravity --accept-antigravity-terms` 的完整校验（含真实垫片前的契约检查）在 Linux x64 与 macOS 上通过，并跑一次[手动探测](antigravity.md#validation)。
 
 CI 不在 runner 上代为同意 Google 条款，所以按 `antigravity` 块变化触发的 Linux/macOS 校验作业没有加入（PR 4 后续：需要先确定由谁、以什么身份同意条款）；在此之前由维护者在两类机器上手动执行上面最后一项。
+
+## Claude 升级检查项
+
+Claude 桥 bundle 带两个补丁，都改 `dist/acp-agent.js`：`claude-usage-v4`（逐请求用量，见 [Claude 接入](design/acp-claude-via-claude-agent-acp.md#验证入口)）与 `claude-subagents-v1`（原生子代理的后台与类型事实，[ADR 0021](adr/0021-subagent-sessions-and-autonomous-rounds.md) 决策 6）。`release:prepare` 的候选校验（`scripts/verify-runtime-candidate.ts`）与 `remi runtime prepare` 都调用 `patchClaudeUsageBridge`：先打用量补丁再打子代理补丁，任一锚点不是恰好出现一次就失败，依赖准备不改发版文件。daemon 的 `bridgeSatisfied` 要求文件同时含 `const CLAUDE_USAGE_PATCH = "claude-usage-v4";` 与 `const REMI_SUBAGENT_PATCH = "claude-subagents-v1";`，缺任一标记的已安装 bundle 视为不满足并重新准备。子代理补丁的插入段由 `/*remi-subagents:begin*/…/*remi-subagents:end*/` 包围，可剥离后重打。
+
+锚点匹配只说明补丁装上了。每次升级 claude-agent-acp（`runtime-versions.json` 的 `claude.acp`）后，在固定 bundle 上用真实会话逐条确认：
+
+- 客户端声明 `subagents: {}` 时，`subagent_spawned` / `subagent_state_update` 仍是 AIR 形式，子代理的帧走子会话，宣布带 `_meta.remi`：前台子代理 `backgrounded: false`，后台启动为 `true`，恢复的一代（`<id>:generation:N`）为 `true`，`subagentType` 为 SDK 的类型。
+- 每个结果仍以带 `_meta["_claude/origin"]` 的 `usage_update` 结束；人的一轮为 `{kind:"human"}`，后台子代理的后续轮为 `{kind:"task-notification"}`，其余自主来源与 [ClaudeAdapter](../packages/acp/src/adapters/claude-code/index.ts) 的 `autonomousRounds.resultOrigins`（对照桥的 `AUTONOMOUS_RESULT_ORIGINS`）一致。
+- 后台子代理在根会话结果之前结束时，后续轮仍在 `session/prompt` 返回后开始，daemon 在同一轮里收到它的回答；子代理的权限请求仍以子会话 id 发出。
+- 重录 `tests/fixtures/acp/claude-090-native-subagent-*.json`（脱敏）并跑 `tests/unit/acp/native-subagents.test.ts`、`tests/unit/acp/autonomous-turn.test.ts`、`tests/unit/daemon/trace-translator-native-subagents.test.ts` 与 `tests/integration/multiremi-daemon-subagents.test.ts`。
+
+任何一项不成立时，可在 daemon 环境里设 `REMI_ACP_NATIVE_SUBAGENTS=0` 或 `REMI_ACP_AUTONOMOUS_ROUNDS=0` 恢复此前的行为（见 [daemon 环境](deploy/66-8-remi-environment.md)），再修补丁或 adapter 后发版。claude-agent-acp 0.90.0 上的实测（2026-10-16，经 Remi 安装路径打补丁的真实 bridge 与本分支的 daemon）：前台子代理 `backgrounded: false`、后台启动为 `true`，`subagentType` 为 `general-purpose`；后台子代理在根会话结果之前结束时，后续轮的回答作为自主轮在同一轮里收到，等待期间的引导结束等待并在同一轮里得到回答；子代理的写权限请求以子会话 id 发出，批准后子代理继续。恢复一代（`<id>:generation:N`）的标记未实测。
 
 ## Codex 升级检查项
 

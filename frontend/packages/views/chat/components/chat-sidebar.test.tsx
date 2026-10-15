@@ -259,6 +259,28 @@ describe("ChatSidebar sections", () => {
     expect(within(row("Unread chat")).getByRole("img", { name: "New reply" })).toBeInTheDocument();
   });
 
+  it("badges a running chat with its subagents from the pending list, and hides the badge without the field (PR 5 §6.7)", async () => {
+    const view = mount({
+      sessions: [chat("a", { title: "Busy chat" }), chat("b", { title: "Old server chat" }), chat("c", { title: "Idle subagents" })],
+      pending: { tasks: [
+        { task_id: "task-a", chat_session_id: "a", status: "running", running_subagents: 2 },
+        { task_id: "task-b", chat_session_id: "b", status: "running" },
+        { task_id: "task-c", chat_session_id: "c", status: "running", running_subagents: 0 },
+      ] },
+    });
+    const badge = row("Busy chat").querySelector("[data-sidebar-subagents]")!;
+    expect(badge).toHaveTextContent("2 subagents");
+    // The spinner stays beside it.
+    expect(within(row("Busy chat")).getByRole("img", { name: "Running" })).toBeInTheDocument();
+    expect(row("Old server chat").querySelector("[data-sidebar-subagents]")).toBeNull();
+    expect(row("Idle subagents").querySelector("[data-sidebar-subagents]")).toBeNull();
+    // A count of one is singular; a realtime patch updates it in place.
+    act(() => {
+      view.client.setQueryData(chatKeys.pendingTasks("ws-1"), { tasks: [{ task_id: "task-a", chat_session_id: "a", status: "running", running_subagents: 1 }] });
+    });
+    await waitFor(() => expect(row("Busy chat").querySelector("[data-sidebar-subagents]")).toHaveTextContent(/^1 subagent$/));
+  });
+
   it("names rows as buttons by title and status, and calls an untitled chat Untitled", () => {
     mount({
       sessions: [chat("a", { title: "Running chat" }), chat("b", { title: "  " })],

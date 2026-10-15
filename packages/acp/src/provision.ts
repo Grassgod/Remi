@@ -16,7 +16,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { installRuntimeBundle, runtimeBundlePrefix, runtimePackageSatisfied, verifyRuntimeExecutable } from "./runtime-bundle.js";
 import { releaseRuntimeVersions } from "./runtime-versions.js";
-import { claudeUsagePatch, codexUsagePatch, CLAUDE_USAGE_PATCH_VERSION, CODEX_USAGE_PATCH_VERSION } from "./usage-bridge-patches.js";
+import { claudeSubagentPatch, claudeUsagePatch, codexUsagePatch, CLAUDE_SUBAGENT_PATCH_MARKER, CLAUDE_SUBAGENT_PATCH_VERSION, CLAUDE_USAGE_PATCH_VERSION, CODEX_USAGE_PATCH_VERSION } from "./usage-bridge-patches.js";
 export { BRIDGE_PIN, RUNTIME_PIN } from "./runtime-versions.js";
 
 export type ProvisionProvider = "claude" | "codex";
@@ -107,8 +107,11 @@ function codexUsagePatchSatisfied(packageDir: string): boolean {
 function usagePatchSatisfied(provider: ProvisionProvider, packageDir: string): boolean {
   try {
     const file = provider === "codex" ? "index.js" : "acp-agent.js";
-    const marker = provider === "codex" ? CODEX_USAGE_PATCH_MARKER : `const CLAUDE_USAGE_PATCH = "${CLAUDE_USAGE_PATCH}";`;
-    return readFileSync(join(packageDir, "dist", file), "utf8").includes(marker);
+    // Claude also carries the native-subagent facts patch (PR 5): a bridge without it is stale.
+    const markers = provider === "codex" ? [CODEX_USAGE_PATCH_MARKER]
+      : [`const CLAUDE_USAGE_PATCH = "${CLAUDE_USAGE_PATCH}";`, CLAUDE_SUBAGENT_PATCH_MARKER];
+    const source = readFileSync(join(packageDir, "dist", file), "utf8");
+    return markers.every((marker) => source.includes(marker));
   } catch {
     return false;
   }
@@ -159,12 +162,14 @@ export function patchClaudeUsageBridge(
   const tempPath = `${distPath}.remi-patch-${process.pid}`;
   try {
     const source = readFileSync(distPath, "utf8");
-    const patched = claudeUsagePatch(source);
-    if (patched == null) throw new Error("Claude usage patch anchor missing");
+    const usage = claudeUsagePatch(source);
+    if (usage == null) throw new Error("Claude usage patch anchor missing");
+    const patched = claudeSubagentPatch(usage);
+    if (patched == null) throw new Error("Claude subagent patch anchor missing");
     if (source !== patched) {
       writeFileSync(tempPath, patched, { mode: statSync(distPath).mode });
       renameSync(tempPath, distPath);
-      log(`applied ${CLAUDE_USAGE_PATCH} to Claude ACP bridge`);
+      log(`applied ${CLAUDE_USAGE_PATCH} and ${CLAUDE_SUBAGENT_PATCH_VERSION} to Claude ACP bridge`);
     }
     return usagePatchSatisfied("claude", packageDir);
   } catch (error) {

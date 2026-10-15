@@ -171,6 +171,20 @@ describe("HumanRequestDock", () => {
     expect(drawer.getByRole("region", { name: "Awaiting answers" })).toBeInTheDocument();
   });
 
+  it("names the subagent whose child session asked, on the line and in the drawer", async () => {
+    const view = renderDock([PERMISSION_REQUEST], { hrq_perm: { source_subagent: { item_id: "sa:agent-1", name: "Count files" } } });
+    await waitFor(() => expect(line(view.container, "hrq_perm")).toHaveTextContent("From subagent Count files"));
+    const drawer = await openQuestion();
+    expect(drawer.getByText("From subagent Count files")).toHaveAttribute("data-question-subagent", "sa:agent-1");
+  });
+
+  it("labels an unnamed subagent generically and the root session not at all", async () => {
+    const view = renderDock([PERMISSION_REQUEST, QUESTION_REQUEST], { hrq_q: { source_subagent: { item_id: "sa:agent-2", name: " " } } });
+    await waitFor(() => expect(line(view.container, "hrq_q")).toHaveTextContent("From a subagent"));
+    await waitFor(() => expect(line(view.container, "hrq_perm")).toHaveTextContent("Bash: rm -rf ./dist"));
+    expect(line(view.container, "hrq_perm").querySelector("[data-question-subagent]")).toBeNull();
+  });
+
   it("responds to a permission request with the clicked option", async () => {
     renderDock([PERMISSION_REQUEST]);
     const drawer = await openQuestion();

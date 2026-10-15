@@ -1,0 +1,627 @@
+[
+  {
+    "t": 0,
+    "remi": "prompt_sent",
+    "index": 0
+  },
+  {
+    "t": 4573,
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_root",
+      "update": {
+        "sessionUpdate": "usage_update",
+        "used": 0,
+        "size": 0,
+        "_meta": {
+          "remiUsagePatch": "claude-usage-v4",
+          "remiTokenUsage": {
+            "id": "msg_01",
+            "model": "claude-opus-5-5",
+            "scope": "request_snapshot",
+            "providerSessionId": "sess_root",
+            "providerRequestId": "msg_01",
+            "source": "claude_assistant_usage",
+            "accuracy": "partial",
+            "parentToolUseId": null,
+            "inputTokens": 2,
+            "outputTokens": 16,
+            "cachedInputTokens": 0,
+            "cacheWriteTokens": 26750,
+            "totalTokens": 26768
+          }
+        }
+      }
+    }
+  },
+  {
+    "t": 4574,
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_root",
+      "update": {
+        "sessionUpdate": "usage_update",
+        "used": 26768,
+        "size": 1000000,
+        "_meta": {
+          "_claude/model": "claude-opus-5-5"
+        }
+      }
+    }
+  },
+  {
+    "t": 4579,
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_root",
+      "update": {
+        "sessionUpdate": "usage_update",
+        "used": 0,
+        "size": 0,
+        "_meta": {
+          "remiUsagePatch": "claude-usage-v4",
+          "remiTokenUsage": {
+            "id": "msg_01",
+            "model": "claude-opus-5-5",
+            "scope": "request_snapshot",
+            "providerSessionId": "sess_root",
+            "providerRequestId": "msg_01",
+            "source": "claude_assistant_usage",
+            "accuracy": "partial",
+            "parentToolUseId": null,
+            "inputTokens": 2,
+            "outputTokens": 16,
+            "cachedInputTokens": 0,
+            "cacheWriteTokens": 26750,
+            "totalTokens": 26768
+          }
+        }
+      }
+    }
+  },
+  {
+    "t": 4583,
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_root",
+      "update": {
+        "sessionUpdate": "usage_update",
+        "used": 0,
+        "size": 0,
+        "_meta": {
+          "remiUsagePatch": "claude-usage-v4",
+          "remiTokenUsage": {
+            "id": "msg_01",
+            "model": "claude-opus-5-5",
+            "scope": "request_snapshot",
+            "providerSessionId": "sess_root",
+            "providerRequestId": "msg_01",
+            "source": "claude_assistant_usage",
+            "accuracy": "partial",
+            "parentToolUseId": null,
+            "inputTokens": 2,
+            "outputTokens": 190,
+            "cachedInputTokens": 0,
+            "cacheWriteTokens": 26750,
+            "totalTokens": 26942
+          }
+        }
+      }
+    }
+  },
+  {
+    "t": 4584,
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_root",
+      "update": {
+        "sessionUpdate": "usage_update",
+        "used": 26942,
+        "size": 1000000,
+        "_meta": {
+          "_claude/model": "claude-opus-5-5"
+        }
+      }
+    }
+  },
+  {
+    "t": 4585,
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_root",
+      "update": {
+        "sessionUpdate": "usage_update",
+        "used": 0,
+        "size": 0,
+        "_meta": {
+          "remiUsagePatch": "claude-usage-v4",
+          "remiTokenUsage": {
+            "id": "msg_01",
+            "model": "claude-opus-5-5",
+            "scope": "request_snapshot",
+            "providerSessionId": "sess_root",
+            "providerRequestId": "msg_01",
+            "source": "claude_assistant_usage",
+            "accuracy": "exact",
+            "parentToolUseId": null,
+            "inputTokens": 2,
+            "outputTokens": 190,
+            "cachedInputTokens": 0,
+            "cacheWriteTokens": 26750,
+            "totalTokens": 26942
+          }
+        }
+      }
+    }
+  },
+  {
+    "t": 4590,
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_root",
+      "update": {
+        "sessionUpdate": "subagent_spawned",
+        "subagentSessionId": "a0000000000000001",
+        "name": "Write count.txt file",
+        "task": "Use the Write tool to create a file at /work/count.txt whose content is exactly the number 3. Report back when done.",
+        "prompt": "Use the Write tool to create a file at /work/count.txt whose content is exactly the number 3. Report back when done.",
+        "capabilities": {}
+      }
+    }
+  },
+  {
+    "t": 6754,
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_root",
+      "update": {
+        "sessionUpdate": "usage_update",
+        "used": 0,
+        "size": 0,
+        "_meta": {
+          "remiUsagePatch": "claude-usage-v4",
+          "remiTokenUsage": {
+            "id": "msg_02",
+            "model": "claude-opus-5-5",
+            "scope": "request_snapshot",
+            "providerSessionId": "sess_root",
+            "providerRequestId": "msg_02",
+            "source": "claude_assistant_usage",
+            "accuracy": "partial",
+            "parentToolUseId": "toolu_01",
+            "inputTokens": 2,
+            "outputTokens": 16,
+            "cachedInputTokens": 0,
+            "cacheWriteTokens": 17297,
+            "totalTokens": 17315
+          }
+        }
+      }
+    }
+  },
+  {
+    "t": 6754,
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "a0000000000000001",
+      "update": {
+        "_meta": {
+          "claudeCode": {
+            "toolName": "Write",
+            "parentToolUseId": "toolu_01"
+          }
+        },
+        "toolCallId": "toolu_02",
+        "sessionUpdate": "tool_call",
+        "name": "Write",
+        "rawInput": {
+          "file_path": "/work/count.txt"
+        },
+        "status": "pending",
+        "title": "Write count.txt",
+        "kind": "edit",
+        "content": [
+          {
+            "type": "diff",
+            "path": "/work/count.txt",
+            "oldText": null,
+            "newText": "3"
+          }
+        ],
+        "locations": [
+          {
+            "path": "/work/count.txt"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "t": 6766,
+    "jsonrpc": "2.0",
+    "id": 0,
+    "method": "session/request_permission",
+    "params": {
+      "toolCall": {
+        "toolCallId": "toolu_02",
+        "title": "Write count.txt",
+        "rawInput": {
+          "file_path": "/work/count.txt"
+        }
+      },
+      "_meta": {
+        "jetbrains": {
+          "air": {
+            "version": 1,
+            "permission": {
+              "version": 1,
+              "title": "Write count.txt"
+            }
+          }
+        }
+      },
+      "options": [
+        {
+          "optionId": "allow-once",
+          "name": "Yes",
+          "kind": "allow_once"
+        },
+        {
+          "optionId": "allow-with-updates",
+          "name": "Yes, allow all edits during this session",
+          "kind": "allow_always"
+        },
+        {
+          "optionId": "reject",
+          "name": "No",
+          "kind": "reject_once"
+        }
+      ],
+      "sessionId": "a0000000000000001"
+    }
+  },
+  {
+    "t": 6778,
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "a0000000000000001",
+      "update": {
+        "toolCallId": "toolu_02",
+        "sessionUpdate": "tool_call_update",
+        "status": "completed",
+        "rawOutput": "File created successfully at: /work/count.txt (file state is current in your context — no need to Read it back)"
+      }
+    }
+  },
+  {
+    "t": 8549,
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_root",
+      "update": {
+        "sessionUpdate": "usage_update",
+        "used": 0,
+        "size": 0,
+        "_meta": {
+          "remiUsagePatch": "claude-usage-v4",
+          "remiTokenUsage": {
+            "id": "msg_03",
+            "model": "claude-opus-5-5",
+            "scope": "request_snapshot",
+            "providerSessionId": "sess_root",
+            "providerRequestId": "msg_03",
+            "source": "claude_assistant_usage",
+            "accuracy": "partial",
+            "parentToolUseId": "toolu_01",
+            "inputTokens": 2,
+            "outputTokens": 55,
+            "cachedInputTokens": 17297,
+            "cacheWriteTokens": 746,
+            "totalTokens": 18100
+          }
+        }
+      }
+    }
+  },
+  {
+    "t": 8551,
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "a0000000000000001",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "I created /work/count.txt. Its content is exactly `3`, with no trailing newline."
+        },
+        "_meta": {
+          "claudeCode": {
+            "parentToolUseId": "toolu_01"
+          }
+        },
+        "messageId": "msg_03"
+      }
+    }
+  },
+  {
+    "t": 8570,
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_root",
+      "update": {
+        "sessionUpdate": "subagent_state_update",
+        "subagentSessionId": "a0000000000000001",
+        "state": "completed"
+      }
+    }
+  },
+  {
+    "t": 9738,
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_root",
+      "update": {
+        "sessionUpdate": "usage_update",
+        "used": 0,
+        "size": 0,
+        "_meta": {
+          "remiUsagePatch": "claude-usage-v4",
+          "remiTokenUsage": {
+            "id": "msg_04",
+            "model": "claude-opus-5-5",
+            "scope": "request_snapshot",
+            "providerSessionId": "sess_root",
+            "providerRequestId": "msg_04",
+            "source": "claude_assistant_usage",
+            "accuracy": "partial",
+            "parentToolUseId": null,
+            "inputTokens": 2,
+            "outputTokens": 3,
+            "cachedInputTokens": 26750,
+            "cacheWriteTokens": 509,
+            "totalTokens": 27264
+          }
+        }
+      }
+    }
+  },
+  {
+    "t": 9738,
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_root",
+      "update": {
+        "sessionUpdate": "usage_update",
+        "used": 27264,
+        "size": 1000000,
+        "_meta": {
+          "_claude/model": "claude-opus-5-5"
+        }
+      }
+    }
+  },
+  {
+    "t": 9738,
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_root",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "done"
+        },
+        "messageId": "msg_04"
+      }
+    }
+  },
+  {
+    "t": 9739,
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_root",
+      "update": {
+        "sessionUpdate": "usage_update",
+        "used": 0,
+        "size": 0,
+        "_meta": {
+          "remiUsagePatch": "claude-usage-v4",
+          "remiTokenUsage": {
+            "id": "msg_04",
+            "model": "claude-opus-5-5",
+            "scope": "request_snapshot",
+            "providerSessionId": "sess_root",
+            "providerRequestId": "msg_04",
+            "source": "claude_assistant_usage",
+            "accuracy": "partial",
+            "parentToolUseId": null,
+            "inputTokens": 2,
+            "outputTokens": 3,
+            "cachedInputTokens": 26750,
+            "cacheWriteTokens": 509,
+            "totalTokens": 27264
+          }
+        }
+      }
+    }
+  },
+  {
+    "t": 9740,
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_root",
+      "update": {
+        "sessionUpdate": "usage_update",
+        "used": 0,
+        "size": 0,
+        "_meta": {
+          "remiUsagePatch": "claude-usage-v4",
+          "remiTokenUsage": {
+            "id": "msg_04",
+            "model": "claude-opus-5-5",
+            "scope": "request_snapshot",
+            "providerSessionId": "sess_root",
+            "providerRequestId": "msg_04",
+            "source": "claude_assistant_usage",
+            "accuracy": "partial",
+            "parentToolUseId": null,
+            "inputTokens": 2,
+            "outputTokens": 3,
+            "cachedInputTokens": 26750,
+            "cacheWriteTokens": 509,
+            "totalTokens": 27264
+          }
+        }
+      }
+    }
+  },
+  {
+    "t": 9740,
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_root",
+      "update": {
+        "sessionUpdate": "usage_update",
+        "used": 0,
+        "size": 0,
+        "_meta": {
+          "remiUsagePatch": "claude-usage-v4",
+          "remiTokenUsage": {
+            "id": "msg_04",
+            "model": "claude-opus-5-5",
+            "scope": "request_snapshot",
+            "providerSessionId": "sess_root",
+            "providerRequestId": "msg_04",
+            "source": "claude_assistant_usage",
+            "accuracy": "exact",
+            "parentToolUseId": null,
+            "inputTokens": 2,
+            "outputTokens": 3,
+            "cachedInputTokens": 26750,
+            "cacheWriteTokens": 509,
+            "totalTokens": 27264
+          }
+        }
+      }
+    }
+  },
+  {
+    "t": 9746,
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_root",
+      "update": {
+        "sessionUpdate": "usage_update",
+        "used": 0,
+        "size": 0,
+        "cost": {
+          "amount": 0.24229140000000005,
+          "currency": "USD"
+        },
+        "_meta": {
+          "remiUsagePatch": "claude-usage-v4",
+          "remiCostUsage": {
+            "scope": "turn",
+            "source": "sdk_estimate"
+          }
+        }
+      }
+    }
+  },
+  {
+    "t": 9747,
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_root",
+      "update": {
+        "sessionUpdate": "usage_update",
+        "used": 27264,
+        "size": 1000000,
+        "cost": {
+          "amount": 0.24229140000000005,
+          "currency": "USD"
+        },
+        "_meta": {
+          "_claude/origin": {
+            "kind": "human"
+          },
+          "_claude/model": "claude-opus-5-5"
+        }
+      }
+    }
+  },
+  {
+    "t": 9747,
+    "jsonrpc": "2.0",
+    "id": 4,
+    "result": {
+      "stopReason": "end_turn",
+      "usage": {
+        "inputTokens": 4,
+        "outputTokens": 193,
+        "cachedReadTokens": 26750,
+        "cachedWriteTokens": 27259,
+        "totalTokens": 54206
+      },
+      "_meta": {
+        "quota": {
+          "token_count": {
+            "totalTokens": 54206,
+            "inputTokens": 4,
+            "cachedInputTokens": 26750,
+            "cachedWriteTokens": 27259,
+            "outputTokens": 193,
+            "reasoningOutputTokens": 0
+          },
+          "model_usage": [
+            {
+              "model": "claude-opus-5-5",
+              "token_count": {
+                "totalTokens": 89704,
+                "inputTokens": 8,
+                "cachedInputTokens": 44047,
+                "cachedWriteTokens": 45302,
+                "outputTokens": 347,
+                "reasoningOutputTokens": 0
+              }
+            }
+          ]
+        }
+      }
+    }
+  },
+  {
+    "t": 12319,
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_root",
+      "update": {
+        "sessionUpdate": "session_info_update",
+        "title": "Subagent writing count.txt",
+        "updatedAt": "2026-10-15T11:34:21.624Z"
+      }
+    }
+  }
+]

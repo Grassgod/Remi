@@ -61,6 +61,7 @@ const EXPECTED_EVENTS: readonly string[] = [
   "task:dispatch",
   "task:running",
   "task:progress",
+  "task:subagents",
   "task:waiting_local_directory",
   "task:awaiting_human",
   "task:cancelled",

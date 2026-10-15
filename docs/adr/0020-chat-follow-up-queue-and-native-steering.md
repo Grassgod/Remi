@@ -2,6 +2,7 @@
 
 - 状态：已接受（PR 3 编排决定，2026-10-15）。决策 1–6（跟进队列）与“原生引导”一节（PR 3 Phase B）均已实现。本 ADR 不代表已部署。
 - 修订：[ADR 0012（统一收件箱）](0012-unified-inbox-and-single-pending-turn.md) 决策 5。Chat lane 的 now 消息仍插话、合并或建轮；新增的“排队”不使用 `next_turn`，而是服务端队列表，在轮 completed 的终态事务里放行为 now 消息。`next_turn` 的含义不变。
+- 被 [ADR 0021](0021-subagent-sessions-and-autonomous-rounds.md) 修订：“原生引导”中“后台子代理”与“计费”两条所说的 task-notification 后续轮，在 Claude 上不再只留用量，而是作为自主轮在同一 attempt 里等待并采集（关闭开关 `REMI_ACP_AUTONOMOUS_ROUNDS=0` 时仍按本 ADR）。
 - 继承 [ADR 0016](0016-unified-message-inbox-and-turn.md)：唯一写入口、同 lane 单 pending 轮、lane 实际读游标与完成屏障不变。
 - 编号：main 上最后一份为 0018，PR 2 预留 0019，本 ADR 取 0020。
 

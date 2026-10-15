@@ -1,92 +1,34 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import {
   ChainOfThought,
   ChainOfThoughtContent,
   ChainOfThoughtHeader,
 } from "@multiremi/ui/components/ai-elements/chain-of-thought";
+import { lateSubagents } from "@multiremi/shared/turn-trace";
+import { useChatStore } from "@multiremi/core/chat";
+import { cn } from "@multiremi/ui/lib/utils";
 import { AlertCircle, LoaderCircle } from "lucide-react";
 import { formatElapsedMs } from "../../common/format";
 import { Markdown } from "../../common/markdown";
 import { useTurnTrace, type TurnTraceView } from "../../common/task-transcript/use-task-trace";
 import { useT } from "../../i18n";
+import { backgroundRunningCount } from "../lib/subagents";
 import {
   buildTurnSteps,
   liveBlockKey,
   liveFoldHeader,
   liveLabel,
   type FoldHeader,
-  type LiveLabel,
 } from "../lib/turn-steps";
+import { useStickyLabel, useTickingNow } from "./live-hooks";
+import { SUBAGENT_SPIN, SubagentTraceContext, type SubagentTraceSource } from "./subagent-context";
+import { SubagentCompletionRows } from "./subagent-completion-row";
+import { scrollToSubagentRow } from "./subagent-step-row";
 import { TurnStepList } from "./turn-step-list";
 
-/** A live label stays up at least this long before the next one replaces it (Codex). */
-export const MIN_LIVE_LABEL_MS = 1000;
-
-const isIdle = (label: LiveLabel) => label.kind === "reasoning" || label.kind === "thinking";
-
-/**
- * Hold each live label for at least `minMs` (Codex keeps an active key up for
- * 1000ms), so fast steps do not flash:
- * - an activity holds against the next activity, against thinking that
- *   follows it and against a breaker that starts streaming — while held, the
- *   finished row or group keeps showing it;
- * - a reasoning heading holds against the next heading.
- * Immediate: the same activity with fresher details (command text that
- * arrived late), thinking giving way to an activity or to a streaming
- * breaker, anything after `quiet`, and the end of the run (`null`), which
- * shows the completed summary at once.
- */
-export function useStickyLabel(label: LiveLabel | null, minMs = MIN_LIVE_LABEL_MS): LiveLabel | null {
-  const signature = label ? JSON.stringify(label) : "";
-  const [shown, setShown] = useState<{ signature: string; label: LiveLabel | null }>(() => ({ signature, label }));
-  const since = useRef<number | null>(null);
-  if (since.current === null) since.current = Date.now();
-  const latest = useRef(label);
-  latest.current = label;
-  useEffect(() => {
-    if (signature === shown.signature) return;
-    const next = latest.current;
-    const show = () => {
-      if (next?.id !== shown.label?.id) since.current = Date.now();
-      setShown({ signature, label: next });
-    };
-    const current = shown.label;
-    const immediate = next === null || current === null || current.kind === "quiet" || next.id === current.id
-      || (isIdle(current) && !isIdle(next));
-    if (immediate) {
-      show();
-      return;
-    }
-    const wait = since.current! + minMs - Date.now();
-    if (wait <= 0) {
-      show();
-      return;
-    }
-    const timer = setTimeout(show, wait);
-    return () => clearTimeout(timer);
-  }, [signature, shown, minMs]);
-  return shown.label;
-}
-
-/** `Date.now()`, ticking on the whole seconds after `anchor` while `active`. */
-export function useTickingNow(active: boolean, anchor: number | null): number {
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    if (!active) return;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const tick = () => {
-      const current = Date.now();
-      setNow(current);
-      const offset = anchor === null ? 0 : ((current - anchor) % 1000 + 1000) % 1000;
-      timer = setTimeout(tick, 1000 - offset);
-    };
-    tick();
-    return () => clearTimeout(timer);
-  }, [active, anchor]);
-  return now;
-}
+export { MIN_LIVE_LABEL_MS, useStickyLabel, useTickingNow } from "./live-hooks";
 
 const elapsed = (ms: number) => formatElapsedMs(ms, { rounding: "floor", hours: true });
 
@@ -103,9 +45,9 @@ export function useFoldHeaderText(): (header: FoldHeader) => string {
   };
 }
 
-function StepsFold({ kind, title, open, onOpenChange, disabled, children }: {
+export function StepsFold({ kind, title, open, onOpenChange, disabled, children }: {
   kind: "live" | "finished";
-  title: string;
+  title: ReactNode;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   disabled?: boolean;
@@ -121,16 +63,53 @@ function StepsFold({ kind, title, open, onOpenChange, disabled, children }: {
   );
 }
 
-const REPLY = "text-sm leading-relaxed prose prose-sm dark:prose-invert max-w-none";
+export const REPLY = "text-sm leading-relaxed prose prose-sm dark:prose-invert max-w-none";
+
+/** 「· ◐ N 个后台子代理运行中」 after the fold header while background subagents run (PR 5 §6.3). */
+function BackgroundRunningSuffix({ count }: { count: number }) {
+  const { t } = useT("chat");
+  return (
+    <span data-fold-background-running>
+      <span aria-hidden="true"> · </span>
+      <LoaderCircle className={cn("mr-1 -mt-0.5 inline size-3 align-middle text-violet-600 dark:text-violet-300", SUBAGENT_SPIN)} aria-hidden="true" />
+      {t(($) => $.turn_steps.background_running, { count })}
+    </span>
+  );
+}
+
+/**
+ * The live fold opens and scrolls to a subagent row when the running strip
+ * asks for it (a chip click). Only requests made after this fold mounted
+ * count: a request left in the store must not re-open the fold and pull the
+ * list away from the bottom each time the chat is shown again.
+ */
+function useRevealRequests(attemptId: string, open: () => void) {
+  const reveal = useChatStore((s) => s.subagentReveal);
+  const [mountNonce] = useState(() => useChatStore.getState().subagentReveal?.nonce ?? 0);
+  useEffect(() => {
+    if (!reveal || reveal.nonce <= mountNonce || reveal.attemptId !== attemptId) return;
+    open();
+    return scrollToSubagentRow(reveal.itemId);
+    // `open` is a state setter wrapper; the request (its nonce) drives this.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reveal, attemptId, mountNonce]);
+}
+
+function RevealListener({ attemptId, onReveal }: { attemptId: string; onReveal: () => void }) {
+  useRevealRequests(attemptId, onReveal);
+  return null;
+}
 
 /**
  * The turn that is still running, below the log: the steps fold and, once it
  * starts, the final reply. While the agent works the fold reads "Working" /
  * "Working for {t}" and stays open; when the first final item starts it
  * reads "Worked for {t}" and folds away, without waiting for the turn to end.
- * A legacy (v1) trace shows nothing.
+ * While background subagents run the header adds 「· N 个后台子代理运行中」
+ * (not forced open), and subagents that end after the reply started get a
+ * completion row under it. A legacy (v1) trace shows nothing.
  */
-export function LiveTurnSteps({ trace }: { trace: Pick<TurnTraceView, "turn" | "items"> }) {
+export function LiveTurnSteps({ trace, sessionId = null }: { trace: Pick<TurnTraceView, "turn" | "items">; sessionId?: string | null }) {
   const { turn, items } = trace;
   const steps = useMemo(() => buildTurnSteps(items), [items]);
   const finalStarted = steps.finals.length > 0;
@@ -140,20 +119,32 @@ export function LiveTurnSteps({ trace }: { trace: Pick<TurnTraceView, "turn" | "
   const label = useStickyLabel(running ? liveLabel(steps) : null);
   const [userOpen, setUserOpen] = useState<boolean | null>(null);
   const headerText = useFoldHeaderText();
-  if (!turn) return null;
+  const finalStartedAt = steps.finals[0]?.started_at ?? null;
+  const late = useMemo(() => lateSubagents(items, finalStartedAt, Number.MAX_SAFE_INTEGER), [items, finalStartedAt]);
+  const hasSubagents = useMemo(() => items.some((item) => item.type === "subagent"), [items]);
+  const source = useMemo<SubagentTraceSource | null>(() => turn
+    ? { sessionId, attemptId: turn.id, turnId: turn.turn_id ?? undefined, live: true } : null, [sessionId, turn?.id, turn?.turn_id]);
+  if (!turn || !source) return null;
   const open = userOpen ?? !finalStarted;
   const showFold = steps.processCount > 0 || !finalStarted;
+  const background = backgroundRunningCount(items, finalStarted);
+  const header = headerText(liveFoldHeader(turn, steps.finals, now));
   return (
-    <div data-chat-live-turn className="space-y-3">
-      {showFold && (
-        <StepsFold kind="live" title={headerText(liveFoldHeader(turn, steps.finals, now))} open={open} onOpenChange={setUserOpen}>
-          <TurnStepList steps={steps} items={items} live={running && label ? { label, blockKey: liveBlockKey(steps, label) } : undefined} />
-        </StepsFold>
-      )}
-      {steps.finals.map((final) => final.text.trim() ? (
-        <div key={final.id} data-chat-live-final className={REPLY}><Markdown>{final.text}</Markdown></div>
-      ) : null)}
-    </div>
+    <SubagentTraceContext.Provider value={source}>
+      <div data-chat-live-turn className="space-y-3">
+        {hasSubagents && <RevealListener attemptId={turn.id} onReveal={() => setUserOpen(true)} />}
+        {showFold && (
+          <StepsFold kind="live" open={open} onOpenChange={setUserOpen}
+            title={background > 0 ? <>{header}<BackgroundRunningSuffix count={background} /></> : header}>
+            <TurnStepList steps={steps} items={items} live={running && label ? { label, blockKey: liveBlockKey(steps, label) } : undefined} />
+          </StepsFold>
+        )}
+        {steps.finals.map((final) => final.text.trim() ? (
+          <div key={final.id} data-chat-live-final className={REPLY}><Markdown>{final.text}</Markdown></div>
+        ) : null)}
+        {late.length > 0 && <SubagentCompletionRows late={late} source={{ ...source, attemptId: turn.id }} />}
+      </div>
+    </SubagentTraceContext.Provider>
   );
 }
 
@@ -163,9 +154,11 @@ export function LiveTurnSteps({ trace }: { trace: Pick<TurnTraceView, "turn" | "
  * items. Collapsed by default, and the trace is read only once the reader
  * opens it (MUL-472: Chat never reads a finished turn's trace on its own).
  */
-export function FinishedTurnSteps({ attemptId, turnId, header, visible, open, onOpenChange, footer }: {
+export function FinishedTurnSteps({ attemptId, turnId, sessionId = null, header, visible, open, onOpenChange, footer }: {
   attemptId: string;
   turnId?: string;
+  /** The chat the turn belongs to: its subagent rows open the panel there. */
+  sessionId?: string | null;
   header: FoldHeader;
   visible: boolean;
   open: boolean;
@@ -178,8 +171,11 @@ export function FinishedTurnSteps({ attemptId, turnId, header, visible, open, on
   const headerText = useFoldHeaderText();
   const trace = useTurnTrace(attemptId, { enabled: visible && open, live: false, turnId });
   const steps = useMemo(() => buildTurnSteps(trace.items), [trace.items]);
+  const source = useMemo<SubagentTraceSource>(() => ({ sessionId, attemptId, turnId, live: false }), [sessionId, attemptId, turnId]);
   const read = trace.read;
-  const unavailable = read && read.state !== "ok"
+  // The cache can hold the live phase's first read, which may have landed before
+  // the daemon had a trace (`not_found`) while the stream supplied every item.
+  const unavailable = read && read.state !== "ok" && !trace.items.length
     ? read.state === "unreachable" ? ta(($) => $.transcript.trace_unreachable, { name: read.runtime_name ?? read.runtime_id ?? "" })
       : read.state === "lost" ? ta(($) => $.transcript.trace_lost) : ta(($) => $.transcript.trace_not_found)
     : null;
@@ -201,7 +197,9 @@ export function FinishedTurnSteps({ attemptId, turnId, header, visible, open, on
       ) : unavailable ? (
         <div className="text-sm text-muted-foreground">{unavailable}</div>
       ) : steps.blocks.length > 0 ? (
-        <TurnStepList steps={steps} items={trace.items} />
+        <SubagentTraceContext.Provider value={source}>
+          <TurnStepList steps={steps} items={trace.items} />
+        </SubagentTraceContext.Provider>
       ) : read?.format === "legacy" ? null : (
         <div className="text-sm text-muted-foreground">{t(($) => $.turn_steps.empty)}</div>
       )}

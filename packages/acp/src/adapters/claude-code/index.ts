@@ -35,6 +35,24 @@ export class ClaudeAdapter implements AgentAdapter {
    * answer inside the prompt.
    */
   readonly steering = { method: "_session/steering", idleOptIn: true, waitForToolCalls: true } as const;
+  /**
+   * claude-agent-acp 0.90 turns on native child sessions for `subagents: {}`
+   * (dist/acp-subagents.js `clientSupportsSubagents`) and picks the AIR form
+   * for an AIR client like Remi (`subagentForm`): `subagent_spawned` /
+   * `subagent_state_update` on the parent session, each child's frames on its
+   * own session. No AIR capability is needed.
+   */
+  readonly nativeSubagents = { airCapability: false } as const;
+  /**
+   * After a prompt resolves, Claude Code may run a model cycle of its own (a
+   * background subagent's task notification). Its result ends with a
+   * `usage_update` whose `_meta["_claude/origin"].kind` is one of the bridge's
+   * autonomous origins (dist/acp-agent.js `AUTONOMOUS_RESULT_ORIGINS`); the
+   * human turn's is `human`.
+   */
+  readonly autonomousRounds = {
+    resultOrigins: ["task-notification", "peer", "coordinator", "observer", "observer-activity"],
+  } as const;
 
   resolveToolName(update: ToolCallUpdate | ToolCallProgressUpdate): string {
     const claudeCode = this._claudeCodeMeta(update);
