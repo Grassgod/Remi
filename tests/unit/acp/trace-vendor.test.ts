@@ -7,7 +7,9 @@ import {
   commandTitle,
   compactionFacts,
   diffChanges,
+  endsWithAbortMarker,
   isAsyncLaunch,
+  launchMarker,
   isMcp,
   isWorkspaceTrustPrompt,
   mcpServer,
@@ -125,20 +127,34 @@ describe("classifyTool", () => {
       { _meta: { claudeCode: { toolName: "Agent" }, jetbrains: { air: { version: 1, subagent: true } } }, name: "Agent", title: "Task", kind: "think" },
       { rawInput: { description: "Count files in directory", prompt: "List the files", subagent_type: "general-purpose", run_in_background: true } },
     ];
+    // `run_in_background` is only a request: background is unknown until the hook says.
     expect(classifyTool("claude", facts(...frames))).toEqual({ type: "subagent", prompt: "List the files",
-      agentType: "general-purpose", name: "Count files in directory", background: true, model: null, threadId: null });
+      agentType: "general-purpose", name: "Count files in directory", background: null, model: null, threadId: null });
     // The SDK backgrounds by default: the hook markers alone make it background.
     const launched = facts(frames[0]!, { rawInput: { description: "d", prompt: "p" } },
       { _meta: { claudeCode: { toolResponse: { status: "async_launched", isAsync: true } } } });
     expect(launched.asyncLaunch).toBe(true);
     expect(classifyTool("claude", launched)).toMatchObject({ background: true, agentType: null });
+    // A foreground result's marker makes it foreground, whatever the input asked.
+    const foreground = facts(...frames, { _meta: { claudeCode: { toolResponse: { status: "completed" } } } });
+    expect(classifyTool("claude", foreground)).toMatchObject({ background: false });
+    expect(launchMarker({ _meta: { claudeCode: { toolResponse: { elapsedTimeSeconds: 3 } } } })).toBeNull();
     expect(isAsyncLaunch({ _meta: { claudeCode: { toolResponse: { isAsync: true } } } })).toBe(true);
     expect(isAsyncLaunch({ _meta: { claudeCode: { toolResponse: { status: "async_launched" } } } })).toBe(true);
     expect(isAsyncLaunch({ _meta: { claudeCode: { toolResponse: { status: "completed" } } } })).toBe(false);
-    // A progress beat names the type; an explicit model and a foreground run are kept.
+    // A progress beat names the type without deciding background; an explicit model is kept.
     const beat = facts(frames[0]!, { rawInput: { description: "d", prompt: "p", run_in_background: false, model: "haiku" } },
       { status: "in_progress", _meta: { claudeCode: { toolName: "Agent", toolResponse: { elapsedTimeSeconds: 3, subagentType: "Explore" } } } });
-    expect(classifyTool("claude", beat)).toMatchObject({ agentType: "Explore", background: false, model: "haiku" });
+    expect(classifyTool("claude", beat)).toMatchObject({ agentType: "Explore", background: null, model: "haiku" });
+    // Once an async launch is seen it stays background.
+    expect(facts(frames[0]!, { _meta: { claudeCode: { toolResponse: { isAsync: true } } } },
+      { _meta: { claudeCode: { toolResponse: { status: "completed" } } } }).asyncLaunch).toBe(true);
+  });
+
+  it("recognises Claude's abort marker at the end of a command's output", () => {
+    expect(endsWithAbortMarker("building…\n[Command was aborted before completion]\n")).toBe(true);
+    expect(endsWithAbortMarker("[Command was aborted before completion] then more")).toBe(false);
+    expect(endsWithAbortMarker(null)).toBe(false);
   });
 
   it("reads the Codex subagent thread from activity and collab calls", () => {

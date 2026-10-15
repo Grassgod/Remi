@@ -207,9 +207,11 @@ export interface TraceSubagentItem extends TraceItemBase {
   /** The agent's short name: Claude `description`, Codex agent path. */
   name?: string | null;
   /**
-   * Runs in the background: Claude `run_in_background`, or an async launch. A
-   * background subagent stays `in_progress` after its launch is acknowledged and
-   * completes when the turn closes (the bridge holds the turn until it settles).
+   * Runs in the background, as the bridge's hook reports it: true for an async
+   * launch (`toolResponse.isAsync` / `async_launched`), false for a foreground
+   * result, absent before the hook says. Never taken from the input's
+   * `run_in_background` request. A background subagent stays `in_progress` after
+   * its launch is acknowledged and ends when the turn closes.
    */
   background?: boolean | null;
   /** The model the subagent was asked to use, when the call names one. */

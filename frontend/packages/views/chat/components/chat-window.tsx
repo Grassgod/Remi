@@ -62,7 +62,7 @@ import {
 } from "@multiremi/core/chat";
 import { isQueueDeliveryUnconfirmed, queueErrorCode } from "@multiremi/core/chat/queue";
 import { ChatMessageList } from "./chat-message-list";
-import { contextRingSource } from "../lib/turn-card";
+import { contextRingSource, type HeldRingUsage } from "../lib/turn-card";
 import { ChatContextUsage } from "./chat-context-usage";
 import type { SessionLogEntry } from "@multiremi/core/replica";
 import { useTurnTrace } from "../../common/task-transcript/use-task-trace";
@@ -215,13 +215,23 @@ export function ChatWindow({
   // message list follows (a pending task whose reply already landed counts as
   // finished there too), else the newest finished turn card. It never reads a
   // finished turn's trace.
+  // The last live value, per session: kept between chat-done and the arrival
+  // of the turn's own card, so the ring does not flash the previous turn's.
+  const [heldRing, setHeldRing] = useState<(HeldRingUsage & { sessionId: string | null }) | null>(null);
+  const held = heldRing && heldRing.sessionId === displayedSessionId ? heldRing : null;
   const ringContext = useMemo(
-    () => contextRingSource(logSnapshot.entries as ReadonlyArray<SessionLogEntry & { task_id?: string | null; metadata?: Record<string, unknown> }>, pendingTaskId),
-    [logSnapshot.entries, pendingTaskId],
+    () => contextRingSource(logSnapshot.entries as ReadonlyArray<SessionLogEntry & { task_id?: string | null; metadata?: Record<string, unknown> }>, pendingTaskId, held),
+    [logSnapshot.entries, pendingTaskId, held],
   );
   const liveRingTrace = useTurnTrace(ringContext.liveTaskId, {
     enabled: chatVisible && !!ringContext.liveTaskId, live: true, turnId: pendingTask?.turn_id,
   });
+  const liveRingUsage = ringContext.liveTaskId ? liveRingTrace.turn?.context_usage ?? null : null;
+  useEffect(() => {
+    if (ringContext.liveTaskId && liveRingUsage) {
+      setHeldRing({ sessionId: displayedSessionId, taskId: ringContext.liveTaskId, usage: liveRingUsage });
+    }
+  }, [displayedSessionId, ringContext.liveTaskId, liveRingUsage]);
 
   // Archived sessions remain readable; restore them before sending. The list
   // holds only the user's own chats, so a chat opened by an automation run
@@ -919,8 +929,7 @@ export function ChatWindow({
         disabled={isSessionArchived}
         noAgent={noAgent}
         agentName={activeAgent?.name}
-        rightAdornment={<ChatContextUsage live={ringContext.liveTaskId ? liveRingTrace.turn?.context_usage ?? null : null}
-          last={ringContext.last} />}
+        rightAdornment={<ChatContextUsage live={liveRingUsage} last={ringContext.last} />}
         leftAdornment={
           <AgentDropdown
             agents={availableAgents}

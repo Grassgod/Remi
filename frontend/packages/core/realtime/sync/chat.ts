@@ -32,6 +32,15 @@ function settleChatPendingTask(qc: QueryClient, sessionId: string, taskId: strin
   });
 }
 
+/**
+ * Whether the cached `["task-trace", id]` value (`TurnTraceCache` in views) is
+ * a read trace the stream already sealed: nothing newer can arrive for it.
+ */
+function holdsClosedTrace(data: unknown): boolean {
+  const cache = data as { state?: { closed?: unknown }; read?: unknown } | null | undefined;
+  return !!cache && cache.state?.closed === true && !!cache.read;
+}
+
 export function applyChatDoneToCache(
   qc: QueryClient,
   payload: ChatDonePayload,
@@ -41,10 +50,13 @@ export function applyChatDoneToCache(
   // SessionLog owns the reply; advance only its matching queue head.
   settleChatPendingTask(qc, sessionId, taskId);
   qc.invalidateQueries({ queryKey: chatKeys.pendingTask(sessionId) });
-  // Mark the turn's trace stale without rereading it now: a live reader has
-  // the final frames already and a later reader rereads an unsealed snapshot
-  // when it mounts. Refetching here would page the whole trace again.
-  qc.invalidateQueries({ queryKey: ["task-trace", taskId], refetchType: "none" });
+  // A sealed trace is complete: opening the finished turn's fold reads it from
+  // the cache. Otherwise mark it stale without rereading it now: a live reader
+  // has the final frames already (its stream's close writes the cache, which
+  // clears the mark), and a later reader rereads an unsealed snapshot when it
+  // mounts. Refetching here would page the whole trace again.
+  const traceKey = ["task-trace", taskId];
+  if (!holdsClosedTrace(qc.getQueryData(traceKey))) qc.invalidateQueries({ queryKey: traceKey, refetchType: "none" });
 }
 
 /**
@@ -148,8 +160,7 @@ export function createChatHandlers({ qc }: SyncContext): SyncModule {
       // immediately follows with StartTask, so dispatched→running is sub-second.
       // We collapse that window by writing "running" directly — the pill jumps
       // from "Queued" straight to "Thinking", skipping a meaningless "Starting"
-      // frame. Stage decision in TaskStatusPill maps "running" + empty
-      // taskMessages → "Thinking · Ns".
+      // frame.
       "task:dispatch": (p) => {
         invalidateUnified();
         const payload = p as TaskDispatchPayload;

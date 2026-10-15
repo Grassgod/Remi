@@ -202,6 +202,29 @@ export function isAsyncLaunch(frame: VendorFrame): boolean {
   return response?.isAsync === true || response?.status === "async_launched";
 }
 
+/**
+ * What the hook update says about the launch: true for an async launch, false
+ * for any other hook marker (a foreground run reports `{status: "completed"}`),
+ * null for a frame without markers (a progress beat carries only timing).
+ */
+export function launchMarker(frame: VendorFrame): boolean | null {
+  if (isAsyncLaunch(frame)) return true;
+  const response = toolResponse(frame);
+  return response && (typeof response.status === "string" || typeof response.isAsync === "boolean") ? false : null;
+}
+
+/**
+ * The line claude-agent-acp appends to a shell command's output when Claude Code
+ * aborted it (CA/tool-calls/reporters/bash.js, `structuredBash.interrupted`).
+ * The AIR exit code of such a command is a synthesized 1 (CA/tool-calls/renderer.js).
+ */
+export const CLAUDE_ABORT_MARKER = "[Command was aborted before completion]";
+
+/** Whether a command's output ends with Claude's abort marker. */
+export function endsWithAbortMarker(output: string | null): boolean {
+  return !!output && output.trimEnd().endsWith(CLAUDE_ABORT_MARKER);
+}
+
 /** What one tool call becomes in the trace. */
 export type ToolClass =
   | {
@@ -246,8 +269,11 @@ export interface ToolFacts {
   airSubagent: boolean;
   /** Claude AIR `commandTitle`, from any frame. */
   commandTitle: string | null;
-  /** An Agent call's hook update reported an async (background) launch. */
-  asyncLaunch: boolean;
+  /**
+   * The Agent call's hook update: true for an async (background) launch, false
+   * for a foreground result, null before any hook marker.
+   */
+  asyncLaunch: boolean | null;
   /** Claude's subagent type from an Agent progress beat. */
   subagentType: string | null;
 }
@@ -278,7 +304,7 @@ export function mergeToolFacts(previous: ToolFacts | null, frame: VendorFrame, a
     mcpServer: str(record(meta(frame)?.mcp)?.server) ?? previous?.mcpServer ?? null,
     airSubagent: (previous?.airSubagent ?? false) || isAirSubagent(frame),
     commandTitle: commandTitle(frame) ?? previous?.commandTitle ?? null,
-    asyncLaunch: (previous?.asyncLaunch ?? false) || isAsyncLaunch(frame),
+    asyncLaunch: previous?.asyncLaunch === true ? true : launchMarker(frame) ?? previous?.asyncLaunch ?? null,
     subagentType: str(toolResponse(frame)?.subagentType) ?? previous?.subagentType ?? null,
   };
 }
@@ -351,13 +377,13 @@ function claudeClass(facts: ToolFacts): ToolClass {
       return { type: "web_search", action: "fetch", query: str(input?.prompt), url: str(input?.url) };
     case "Agent":
     case "Task": {
-      // An async launch (hook markers) is background whatever the input says:
-      // the SDK backgrounds subagents by default.
-      const requested = typeof input?.run_in_background === "boolean" ? input.run_in_background : null;
+      // Background only from the hook's markers, never from the input's
+      // `run_in_background`: the SDK backgrounds by default and may also run a
+      // requested background call in the foreground.
       return {
         type: "subagent", prompt: str(input?.prompt) ?? str(input?.description),
         agentType: str(input?.subagent_type) ?? facts.subagentType, name: str(input?.description),
-        background: facts.asyncLaunch ? true : requested, model: str(input?.model), threadId: null,
+        background: facts.asyncLaunch, model: str(input?.model), threadId: null,
       };
     }
     case "AskUserQuestion":
