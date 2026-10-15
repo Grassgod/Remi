@@ -546,6 +546,13 @@ export function createTraceTranslator(
    */
   let roundIndex = 0;
   let lastResultRound = -1;
+  /**
+   * Root work (text, a thought, a tool call) since the last counted result
+   * marker. A marker without any is a placeholder: Claude Code 2.1.274+ answers
+   * queued notifications with one model call and gives the others empty
+   * `num_turns: 0` results first, each still carrying the marker.
+   */
+  let rootWorkSinceMarker = false;
   const autonomousOrigins = new Set(adapter.autonomousRounds?.resultOrigins ?? []);
   const runningSubagents = new Map<string, boolean>();
   let subagentCounts = { top: 0, nested: 0 };
@@ -736,9 +743,18 @@ export function createTraceTranslator(
 
   /** An autonomous cycle's result marker on the root (§2.4). */
   const onAutonomousMarker = (frame: VendorFrame): void => {
-    if (!autonomousOrigins.size || frame.sessionUpdate !== "usage_update" || frameSession(frame)) return;
+    if (!autonomousOrigins.size || frameSession(frame) || parentToolUseId(frame)) return;
+    const kind = frame.sessionUpdate;
+    if (kind === "tool_call" || kind === "tool_call_update"
+      || ((kind === "agent_message_chunk" || kind === "agent_thought_chunk") && contentText(frame.content).trim())) {
+      rootWorkSinceMarker = true;
+      return;
+    }
+    if (kind !== "usage_update") return;
     const origin = autonomousOrigin(frame);
-    if (!origin) return;
+    // A placeholder result answers nothing yet: the shared follow-up's own result comes later.
+    if (!origin || !rootWorkSinceMarker) return;
+    rootWorkSinceMarker = false;
     lastResultRound = roundIndex;
     if (!autonomousOrigins.has(origin)) return;
     lastMarkerOrder = frameOrder;

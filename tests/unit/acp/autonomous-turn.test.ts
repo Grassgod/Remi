@@ -172,7 +172,7 @@ describe("AcpProvider.listenAutonomous", () => {
       const round = await collect(agent.provider.listenAutonomous({ chatId: "chat", idleMs: 5_000 }));
       expect(texts(round)).toEqual(["thinking…"]);
       expect(Date.now() - started).toBeLessThan(2_000);
-      expect(warn.mock.calls.some(([line]) => String(line).includes("without its result"))).toBe(true);
+      expect(warn.mock.calls.some(([line]) => String(line).includes("without a result"))).toBe(true);
     } finally {
       warn.mockRestore();
     }
@@ -245,5 +245,94 @@ describe("AcpProvider.listenAutonomous", () => {
     expect(texts(next)).toEqual(["Next."]);
     // The follow-up's two requests are still billed.
     expect(requestUnits(next)).toHaveLength(2);
+  });
+
+  // ── Review fixes: placeholders, waiting people, the attempt budget, a wrap-up ──
+
+  /** A placeholder result (CLI 2.1.274+, `num_turns: 0`): the marker and the cumulative cost, no request, no text. */
+  const placeholder: FakeSubagentStep = { update: { sessionUpdate: "usage_update", used: 0, size: 0,
+    cost: { amount: 0.1245, currency: "USD" }, _meta: { "_claude/origin": { kind: "task-notification" } } } };
+
+  it("a placeholder result does not end the round: the shared follow-up lands and is billed once", async () => {
+    const agent = fakeAgent("claude", { prompts: [[
+      chunk("Started two background agents."),
+      { billing: { cost: 0.1245, origin: "human" } },
+      { resolve: "end_turn" },
+      // Two queued notifications, one model call: a placeholder first, then the follow-up with its own result.
+      { delayMs: 100, ...placeholder },
+      { delayMs: 200, ...chunk("3 and 4") },
+      { billing: {} },
+      { billing: { cost: 0.1329, origin: "task-notification" } },
+    ]] });
+    await collect(agent.provider.sendStream("count", { chatId: "chat" }));
+    const round = await collect(agent.provider.listenAutonomous({ chatId: "chat", idleMs: 3_000 }));
+    expect(texts(round)).toEqual(["3 and 4"]);
+    expect((round.at(-1) as { _meta?: Record<string, unknown> })._meta?.["_claude/origin"]).toEqual({ kind: "task-notification" });
+    const units = agent.provider.getLastResponse()!.metadata!.usageUnits as TaskUsageUnit[];
+    const requests = units.filter((unit) => unit.source === "provider_request").map((unit) => unit.unitId);
+    expect(requests).toHaveLength(3);
+    expect(new Set(requests).size).toBe(3);
+    expect(units.filter((unit) => unit.unitId.startsWith("cost:"))).toEqual([expect.objectContaining({ costAmount: 0.1329 })]);
+  });
+
+  it("a card raised during the round holds it open past the budget, and the round goes on after the answer", async () => {
+    const agent = fakeAgent("claude", { prompts: [[
+      chunk("Started it."), { billing: { origin: "human" } }, { resolve: "end_turn" },
+      { delayMs: 50, ...chunk("Writing the report.") },
+      { permission: { toolCallId: "toolu_write", title: "Write report.md" } },
+      chunk(" Done."),
+      { billing: { origin: "task-notification" } },
+    ]] }, { autonomousRoundCapMs: 300 });
+    let answered = 0;
+    agent.provider.setPermissionHandler(async () => {
+      await Bun.sleep(900);
+      answered = Date.now();
+      return { outcome: "selected", optionId: "allow" };
+    });
+    await collect(agent.provider.sendStream("count", { chatId: "chat" }));
+    const started = Date.now();
+    const round = await collect(agent.provider.listenAutonomous({ chatId: "chat", idleMs: 2_000 }));
+    expect(answered - started).toBeGreaterThanOrEqual(850);
+    expect(texts(round)).toEqual(["Writing the report.", " Done."]);
+    expect((round.at(-1) as { _meta?: Record<string, unknown> })._meta?.["_claude/origin"]).toEqual({ kind: "task-notification" });
+  });
+
+  it("the budget is shared by every round of the session, from the first autonomous activity", async () => {
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const agent = fakeAgent("claude", { prompts: [[
+        chunk("Started."), { billing: { origin: "human" } }, { resolve: "end_turn" },
+        { delayMs: 50, ...chunk("first follow-up") },
+        { delayMs: 400, billing: { origin: "task-notification" } },
+        // A second cycle that never ends.
+        ...Array.from({ length: 30 }, (): FakeSubagentStep => ({ delayMs: 50, ...chunk(".") })),
+      ]] }, { autonomousRoundCapMs: 700 });
+      await collect(agent.provider.sendStream("count", { chatId: "chat" }));
+      const first = await collect(agent.provider.listenAutonomous({ chatId: "chat", idleMs: 2_000 }));
+      expect(texts(first)).toEqual(["first follow-up"]);
+      const started = Date.now();
+      await collect(agent.provider.listenAutonomous({ chatId: "chat", idleMs: 2_000 }));
+      // About 250 ms were left of the 700 ms budget, not a fresh 700 ms.
+      expect(Date.now() - started).toBeLessThan(550);
+      expect(warn.mock.calls.some(([line]) => String(line).includes("budget"))).toBe(true);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("a deadline (a wrap-up's grace) ends the round, unless a person is still being asked", async () => {
+    const flowing = Array.from({ length: 40 }, (): FakeSubagentStep => ({ delayMs: 50, ...chunk(".") }));
+    const agent = fakeAgent("claude", { prompts: [[chunk("Started."), { resolve: "end_turn" }, ...flowing]] });
+    await collect(agent.provider.sendStream("count", { chatId: "chat" }));
+    const started = Date.now();
+    await collect(agent.provider.listenAutonomous({ chatId: "chat", idleMs: 5_000, deadline: Date.now() + 300 }));
+    expect(Date.now() - started).toBeLessThan(800);
+
+    const asking = fakeAgent("claude", { prompts: [[chunk("Started."), { resolve: "end_turn" },
+      { delayMs: 50, permission: { toolCallId: "toolu_w" } }, chunk("after"), { billing: { origin: "task-notification" } }]] });
+    asking.provider.setPermissionHandler(async () => { await Bun.sleep(700); return { outcome: "selected", optionId: "allow" }; });
+    await collect(asking.provider.sendStream("count", { chatId: "chat" }));
+    const round = await collect(asking.provider.listenAutonomous({ chatId: "chat", idleMs: 5_000, deadline: Date.now() + 300 }));
+    expect(texts(round)).toEqual(["after"]);
   });
 });

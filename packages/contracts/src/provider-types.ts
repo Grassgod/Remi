@@ -119,6 +119,11 @@ export interface ListenAutonomousOptions {
   signal?: AbortSignal;
   /** End the listen after this long without a frame. */
   idleMs?: number;
+  /**
+   * End the listen by this time (epoch ms), e.g. a wrap-up's grace deadline. A
+   * permission or question still waiting for a person holds it open.
+   */
+  deadline?: number;
 }
 
 /** Custom tool that the agent can call, handled within Remi. */

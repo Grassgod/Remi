@@ -31,6 +31,8 @@ export type FakeSubagentStep = { delayMs?: number } & (
   | { resolve: string }
   /** The bridge process dies. */
   | { exit: number }
+  /** Wait until the client cancels the prompt (it then resolves `cancelled`). */
+  | { hold: "cancel" }
 );
 
 export interface FakeSubagentConfig {
@@ -79,7 +81,7 @@ function ask(method: string, params: Record<string, unknown>): Promise<unknown> 
   });
 }
 
-interface Running { id: number | string; resolved: boolean; cancelled: boolean }
+interface Running { id: number | string; resolved: boolean; cancelled: boolean; onCancel: Array<() => void> }
 let active: Running | null = null;
 let promptCount = 0;
 let resumed = false;
@@ -116,6 +118,7 @@ async function run(prompt: Running, steps: FakeSubagentStep[]): Promise<void> {
       log({ kind: "elicitation_answer", result });
     } else if ("resolve" in step) resolvePrompt(prompt, step.resolve);
     else if ("exit" in step) process.exit(step.exit);
+    else if ("hold" in step) await new Promise<void>((resolve) => prompt.onCancel.push(resolve));
   }
   resolvePrompt(prompt, "end_turn");
 }
@@ -161,7 +164,7 @@ createInterface({ input: process.stdin }).on("line", (line) => {
       }
       const scripts = resumed && config.resumedPrompts ? config.resumedPrompts : config.prompts;
       const steps = scripts[Math.min(promptCount++, scripts.length - 1)] ?? [];
-      const prompt: Running = { id: message.id!, resolved: false, cancelled: false };
+      const prompt: Running = { id: message.id!, resolved: false, cancelled: false, onCancel: [] };
       active = prompt;
       void run(prompt, steps);
       return;
@@ -171,6 +174,7 @@ createInterface({ input: process.stdin }).on("line", (line) => {
       if (prompt && !prompt.resolved) {
         prompt.cancelled = true;
         resolvePrompt(prompt, "cancelled");
+        for (const release of prompt.onCancel.splice(0)) release();
       }
       return;
     }

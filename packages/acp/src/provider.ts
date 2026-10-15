@@ -335,6 +335,9 @@ interface PoolEntry {
   turnUpdates: number;
   /** Permission and question requests of this session waiting for an answer. */
   userInputs: number;
+  /** Since when at least one is waiting, and how long people took in total before that (autonomous budget, PR 5). */
+  userInputSince?: number;
+  userInputWaitedMs?: number;
   /** A timed-out steer a bridge without the idle opt-in may still turn into a turn of its own. */
   lateSteer: Promise<SteerResponse> | null;
   /** `steer()` calls in progress (held for the turn, a tool call or the retry window): the turn is not stalled. */
@@ -357,6 +360,12 @@ interface PoolEntry {
   children?: Map<string, NativeChildSession>;
   /** Unknown session ids already logged for this entry. */
   unknownSessions?: Set<string>;
+  /**
+   * When this session's autonomous rounds run out of time (PR 5 §2.5): set at
+   * the first autonomous activity, shared by every later round, extended by the
+   * time a person took to answer a permission or question.
+   */
+  autonomousBudgetEndsAt?: number;
   /** Codex rollout read position for this session; each settle advances it. */
   codexRollout?: CodexRolloutCursor;
   /** The gateway-shim channel of this ACP process (access configs with `usage: "gateway-shim"`). */
@@ -1230,10 +1239,21 @@ export class AcpProvider implements Provider {
    * cumulative turn-cost estimate replaces the prompt's, R6), streamed text and
    * context. It ends at the first of:
    * - a root `usage_update` whose `_meta["_claude/origin"].kind` is one of the
-   *   adapter's result origins (the round's result);
+   *   adapter's result origins, once the round did root work (text, a thought,
+   *   a tool call). Claude Code 2.1.274+ answers queued notifications with one
+   *   model call and gives the others empty placeholder results first
+   *   (`num_turns: 0`, claude-agent-acp 0.90 dist/acp-agent.js "CLI 2.1.274+"),
+   *   which still carry the marker: those do not end the round;
    * - `idleMs` without a frame of turn activity, before the first one;
-   * - {@link AUTONOMOUS_HARD_CAP_MS} after the first one;
+   * - the session's autonomous budget: {@link AUTONOMOUS_HARD_CAP_MS} from the
+   *   first autonomous activity of any round of this pool entry (one attempt in
+   *   the daemon), shared by every later round;
+   * - `deadline` (a wrap-up's grace);
    * - `signal` abort or the agent process dying.
+   * While a permission or question waits for a person, the idle, budget and
+   * deadline limits do not end it (the daemon's human-request timeout bounds the
+   * wait): the time people take extends the budget and the deadline, and after
+   * an answer the budget leaves the round at least `min(cap, idleMs)` to go on.
    * Afterwards `getLastResponse()` covers the prompt and the round. Without a
    * pooled, idle session, or for an adapter without autonomous rounds, it
    * yields nothing. A failure is reported as frames, never thrown.
@@ -1253,13 +1273,23 @@ export class AcpProvider implements Provider {
     const idleMs = Math.max(1, options.idleMs ?? AUTONOMOUS_IDLE_MS);
     const capMs = Math.max(1, this._options.autonomousRoundCapMs ?? AUTONOMOUS_HARD_CAP_MS);
     const startedAt = Date.now();
-    let firstActivityAt = null as number | null;
+    let active = false;
+    /** Root work since the last result marker: a marker without it is a placeholder. */
+    let rootWork = false;
+    /** People's waiting time already added to the budget, and whether one was being asked at the last check. */
+    const waitedAtStart = waitedMs(entry, startedAt);
+    let waitedSeen = waitedAtStart;
+    let wasAsking = false;
     let ended = null as "result" | "death" | null;
     const queue: ProviderEvent[] = [];
     let wake: (() => void) | null = null;
     const push = (event: ProviderEvent) => {
       queue.push(event);
       wake?.();
+    };
+    const markActive = () => {
+      active = true;
+      entry.autonomousBudgetEndsAt ??= Date.now() + capMs;
     };
 
     this._activeStreaming.add(chatId);
@@ -1274,13 +1304,12 @@ export class AcpProvider implements Provider {
       const update = child !== null
         ? this._childUpdate(entry, notification.update, child, requestedModel(), requestedModelSource(), credentials)
         : this._rootIdleUpdate(entry, notification.update, requestedModel(), requestedModelSource(), credentials);
-      if (firstActivityAt === null && (child !== null || isTurnLevelUpdate(update) || isSubagentLifecycle(update))) {
-        firstActivityAt = Date.now();
-      }
+      if (child !== null || isTurnLevelUpdate(update) || isSubagentLifecycle(update)) markActive();
+      if (child === null && isRootWork(update)) rootWork = true;
       push(update);
       if (child === null && update.sessionUpdate === "usage_update") {
         const origin = autonomousOrigin(update as unknown as Record<string, unknown>);
-        if (origin && resultOrigins.has(origin)) {
+        if (origin && resultOrigins.has(origin) && rootWork) {
           ended ??= "result";
           wake?.();
         }
@@ -1288,7 +1317,7 @@ export class AcpProvider implements Provider {
     };
     const originalOnUpdate = entry.client["_options"].onSessionUpdate;
     entry.client["_options"].onSessionUpdate = onUpdate;
-    let stop: "result" | "death" | "idle" | "cap" | "abort" | null = null;
+    let stop: "result" | "death" | "idle" | "cap" | "deadline" | "abort" | null = null;
     try {
       for (const notification of takeIdleFrames(entry)) onUpdate(notification);
       while (true) {
@@ -1296,15 +1325,32 @@ export class AcpProvider implements Provider {
         if (ended) { stop = ended; break; }
         if (options.signal?.aborted) { stop = "abort"; break; }
         const now = Date.now();
-        const deadline = firstActivityAt === null ? startedAt + idleMs : firstActivityAt + capMs;
-        if (now >= deadline) { stop = firstActivityAt === null ? "idle" : "cap"; break; }
+        // A person being asked holds the round open; the time they take extends the budget, and
+        // after the answer the round gets at least a short grace to go on.
+        const asking = (entry.userInputs ?? 0) > 0;
+        if (asking) markActive();
+        const waited = waitedMs(entry, now);
+        if (entry.autonomousBudgetEndsAt !== undefined) entry.autonomousBudgetEndsAt += waited - waitedSeen;
+        waitedSeen = waited;
+        if (wasAsking && !asking && entry.autonomousBudgetEndsAt !== undefined) {
+          entry.autonomousBudgetEndsAt = Math.max(entry.autonomousBudgetEndsAt, now + Math.min(capMs, idleMs));
+        }
+        wasAsking = asking;
+        const limits: Array<[number, "idle" | "cap" | "deadline"]> = [active ? [entry.autonomousBudgetEndsAt!, "cap"] : [startedAt + idleMs, "idle"]];
+        // Nor does the time people took count against a wrap-up's deadline.
+        if (options.deadline !== undefined) limits.push([options.deadline + (waited - waitedAtStart), "deadline"]);
+        const [deadline, reason] = limits.reduce((first, next) => next[0] < first[0] ? next : first);
+        if (!asking && now >= deadline) { stop = reason; break; }
         let timer: ReturnType<typeof setTimeout> | null = null;
         const onAbort = () => wake?.();
         await new Promise<void>((resolve) => {
           wake = resolve;
-          timer = setTimeout(resolve, deadline - now);
+          // A card starting or ending wakes this too (`_whileUserInput`).
+          entry.steerWaiters?.add(resolve);
+          timer = setTimeout(resolve, asking ? 1_000 : Math.min(1_000, Math.max(0, deadline - now)));
           options.signal?.addEventListener("abort", onAbort, { once: true });
         });
+        entry.steerWaiters?.delete(wake!);
         wake = null;
         if (timer) clearTimeout(timer);
         options.signal?.removeEventListener("abort", onAbort);
@@ -1315,7 +1361,7 @@ export class AcpProvider implements Provider {
       this._activeStreaming.delete(chatId);
       entry.lastUsed = Date.now();
       if (stop === "cap") {
-        console.warn(`[AcpProvider] ${this._adapter.agentType}: an autonomous round ran ${Math.round(capMs / 1000)} s without its result; stopped listening`);
+        console.warn(`[AcpProvider] ${this._adapter.agentType}: autonomous rounds used their ${Math.round(capMs / 1000)} s budget without a result; stopped listening`);
       }
       this._lastResponse = buildAgentResponse(entry, { stopReason: "end_turn" }, this._adapter.promptUsageSettleScope, null,
         this._adapter.agentType, requestedModel(), requestedModelSource());
@@ -2218,12 +2264,19 @@ export class AcpProvider implements Provider {
   private async _whileUserInput<T>(chatId: string | undefined, handle: () => Promise<T>): Promise<T> {
     const entry = chatId ? this._pool.get(chatId) : undefined;
     if (!entry) return handle();
+    if (!entry.userInputs) entry.userInputSince = Date.now();
     entry.userInputs = (entry.userInputs ?? 0) + 1;
     wakeSteerWaiters(entry);
     try {
       return await handle();
     } finally {
       entry.userInputs--;
+      if (!entry.userInputs) {
+        entry.userInputWaitedMs = (entry.userInputWaitedMs ?? 0) + (Date.now() - (entry.userInputSince ?? Date.now()));
+        entry.userInputSince = undefined;
+        // An autonomous round holding for this answer may go on now.
+        wakeSteerWaiters(entry);
+      }
     }
   }
 
@@ -2314,6 +2367,19 @@ function isTurnLevelUpdate(update: SessionUpdate): boolean {
 /** A child session's announcement or end (PR 5): turn activity of an autonomous round. */
 function isSubagentLifecycle(update: SessionUpdate): boolean {
   return update.sessionUpdate === "subagent_spawned" || update.sessionUpdate === "subagent_state_update";
+}
+
+/** How long people took to answer this session's permissions and questions so far, up to `now`. */
+function waitedMs(entry: PoolEntry, now: number): number {
+  return (entry.userInputWaitedMs ?? 0) + (entry.userInputs && entry.userInputSince !== undefined ? now - entry.userInputSince : 0);
+}
+
+/** Root work of a model cycle: its own text or thought, or a tool call (an empty placeholder result has none). */
+function isRootWork(update: SessionUpdate): boolean {
+  if (stampedParent(update)) return false;
+  if (update.sessionUpdate === "tool_call" || update.sessionUpdate === "tool_call_update") return true;
+  return (update.sessionUpdate === "agent_message_chunk" || update.sessionUpdate === "agent_thought_chunk")
+    && extractChunkText((update as Record<string, any>).content).trim().length > 0;
 }
 
 /** A frame claude-agent-acp stamped with the subagent call it belongs to (`_meta.claudeCode.parentToolUseId`). */
