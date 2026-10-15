@@ -136,6 +136,23 @@ describe("ChatEndpoints contracts", () => {
       { task_id: "attempt_2", turn_id: "turn_1", status: "awaiting_human", chat_session_id: "chat_1" },
     ] });
   });
+  it("carries the running subagent count when the server reports it, and degrades a malformed one (PR 5 §6.7)", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => {
+      const params = new URL(url).searchParams;
+      return response({ turns: params.get("status") === "running" ? [
+        turnFixture({ running_subagents: 2 }),
+        turnFixture({ id: "turn_3", current_attempt_id: "attempt_3", session_id: "chat_3", running_subagents: null }),
+        turnFixture({ id: "turn_4", current_attempt_id: "attempt_4", session_id: "chat_4", running_subagents: -1 }),
+        turnFixture({ id: "turn_5", current_attempt_id: "attempt_5", session_id: "chat_5" }),
+      ] : [], next_cursor: null });
+    }));
+    const api = new ChatEndpoints(new HttpClient("https://api.example.test"));
+    const { tasks } = await api.listPendingChatTasks();
+    expect(tasks.map((task) => [task.chat_session_id, task.running_subagents])).toEqual([
+      ["chat_1", 2], ["chat_3", undefined], ["chat_4", undefined], ["chat_5", undefined],
+    ]);
+    expect("running_subagents" in tasks[3]!).toBe(false);
+  });
   it("marks the conversation read through the cursor command and rejects an invalid acknowledgement", async () => {
     await expect(endpointsWithResponse({ session_id: "chat_1", cursor_seq: 5 }).markChatSessionRead("chat_1")).resolves.toBeUndefined();
     expect(fetch).toHaveBeenCalledWith("https://api.example.test/api/inbox/read", expect.objectContaining({ body: JSON.stringify({ session_id: "chat_1" }) }));

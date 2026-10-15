@@ -41,6 +41,9 @@ import { extractCopyText } from "../lib/copy-text";
 import { finishedFoldHeader, isAwaitingHuman } from "../lib/turn-steps";
 import { isNonterminalTurn } from "../lib/turn-card";
 import { FinishedTurnSteps, LiveTurnSteps } from "./turn-steps-fold";
+import { SubagentCompletionRows } from "./subagent-completion-row";
+import { SubagentRunningStrip } from "./subagent-running-strip";
+import { isTraceLateSubagent, type TraceLateSubagent } from "@multiremi/contracts/trace";
 import { useT } from "../../i18n";
 import { clientIdOf, mergeOptimisticChatRows, type OptimisticChatRow } from "../lib/optimistic-log";
 
@@ -63,6 +66,19 @@ interface TurnCardRef {
   status: string | null;
   failureReason: string | null;
   steps: TurnStepsRef | null;
+  /** Subagents that ended after the reply started (PR 5), from the card; never from the trace. */
+  lateSubagents: TraceLateSubagent[] | null;
+}
+
+/**
+ * A card's `late_subagents` (PR 5 §6.4): well-formed entries only, null when
+ * absent (older cards and servers) or empty.
+ */
+function lateSubagentsOf(metadata: Record<string, unknown> | undefined): TraceLateSubagent[] | null {
+  const value = metadata?.late_subagents;
+  if (!Array.isArray(value)) return null;
+  const late = value.filter(isTraceLateSubagent);
+  return late.length ? late : null;
 }
 
 /**
@@ -116,6 +132,7 @@ function turnCardsByReply(entries: readonly SessionLogEntry[]): Map<string, Turn
       status: typeof metadata.status === "string" ? metadata.status : null,
       failureReason: typeof metadata.failure_reason === "string" ? metadata.failure_reason : null,
       steps: turnStepsRef(metadata, row.task_id),
+      lateSubagents: lateSubagentsOf(metadata),
     });
   }
   return cards;
@@ -253,12 +270,17 @@ export function ChatMessageList({
     localDataReady={optimisticRows.length > 0}
     transformEntries={transformEntries}
     entryKey={entryKey}
-    header={<div className="flex h-10 items-center justify-center text-xs text-muted-foreground max-md:h-12">
-      {hasOlderMessages ? <button type="button" data-chat-earlier disabled={!visible || isFetchingOlderMessages}
-        onClick={loadOlder} className="h-full hover:text-foreground">
-        {isFetchingOlderMessages ? t(($) => $.message_list.loading_older) : t(($) => $.message_list.expand_older)}
-      </button> : t(($) => $.message_list.earliest)}
-    </div>}
+    header={<>
+      {/* Sticky while a subagent of the running turn is in progress (PR 5 §6.5). */}
+      {showLiveTimeline && liveTraceId && <SubagentRunningStrip items={liveTrace.items}
+        source={{ sessionId, attemptId: liveTraceId, turnId: pendingTask?.turn_id, live: true }} />}
+      <div className="flex h-10 items-center justify-center text-xs text-muted-foreground max-md:h-12">
+        {hasOlderMessages ? <button type="button" data-chat-earlier disabled={!visible || isFetchingOlderMessages}
+          onClick={loadOlder} className="h-full hover:text-foreground">
+          {isFetchingOlderMessages ? t(($) => $.message_list.loading_older) : t(($) => $.message_list.expand_older)}
+        </button> : t(($) => $.message_list.earliest)}
+      </div>
+    </>}
     renderEntry={({ entry }) => {
       const row = entry as SessionLogEntry & {
         author_type?: string; sender_type?: string; task_id?: string | null; created_at?: string;
@@ -292,10 +314,19 @@ export function ChatMessageList({
       const stepsRef = card ? card.steps : row.kind === "turn" && !isPush ? turnStepsRef(row.metadata, row.task_id) : null;
       // A failed or cancelled turn's notice carries its own execution log.
       const endNotice = !!(card && endedBadly(card.status)) || !!(turnId && endedBadly(turnStatus));
-      const stepsFold = stepsRef ? <FinishedTurnSteps attemptId={stepsRef.attemptId} turnId={stepsRef.turnId}
+      const stepsFold = stepsRef ? <FinishedTurnSteps attemptId={stepsRef.attemptId} turnId={stepsRef.turnId} sessionId={sessionId}
         header={finishedFoldHeader(stepsRef)} visible={visible} open={openSteps.has(row.id)}
         onOpenChange={(open) => setStepsOpen(row.id, open)}
         footer={endNotice ? undefined : <ChatTraceButton taskId={stepsRef.attemptId} turnId={stepsRef.turnId} visible={visible} />} /> : null;
+      // Subagents that finished after the reply started: rows under the reply,
+      // read from the card (MUL-472: no trace until the reader opens one).
+      const lateRef = card ? (card.attemptId && card.lateSubagents ? { attemptId: card.attemptId, turnId: card.turnId, late: card.lateSubagents } : null)
+        : row.kind === "turn" && !isPush && row.task_id && turnId ? (() => {
+          const late = lateSubagentsOf(row.metadata);
+          return late ? { attemptId: row.task_id, turnId, late } : null;
+        })() : null;
+      const lateRows = lateRef && !endNotice ? <SubagentCompletionRows late={lateRef.late}
+        source={{ sessionId, attemptId: lateRef.attemptId, turnId: lateRef.turnId, live: false }} /> : null;
       return <div className="group/message">
         {questionId ? <LinkedQuestion id={questionId} getActorName={getActorName} /> : null}
         {card && endedBadly(card.status)
@@ -308,7 +339,7 @@ export function ChatMessageList({
               // The reply row is not loaded; a finished card has nothing of its own to show.
               ? null
               : <MessageBubble message={message} isPending={!!pendingTaskId && row.task_id === pendingTaskId}
-                isPush={isPush} visible={visible} trace={trace} steps={stepsFold} />}
+                isPush={isPush} visible={visible} trace={trace} steps={stepsFold} after={lateRows} />}
         {isUser && <NotWokenHint wakeApplied={row.wake_applied} wakeReason={row.wake_reason} />}
         {row.kind === "message" && !questionId && <QuestionReplyReference metadata={row.metadata} />}
         {isUser && local && <div className="flex justify-end"><SendStatus status={local.status}
@@ -316,7 +347,7 @@ export function ChatMessageList({
       </div>;
     }}
     footer={<div className="space-y-4 pb-4">
-      {showLiveTimeline && <LiveTurnSteps key={liveTraceId ?? "pending"} trace={liveTrace} />}
+      {showLiveTimeline && <LiveTurnSteps key={liveTraceId ?? "pending"} trace={liveTrace} sessionId={sessionId} />}
       {showLiveTimeline && liveTrace.error && <div role="alert" className="text-xs text-destructive">{traceT(($) => $.transcript.trace_failed)}</div>}
       {showStatusPill && pendingTask && <TaskStatusPill pendingTask={pendingTask}
         items={liveTrace.items} availability={availability} />}
@@ -342,10 +373,12 @@ function SendStatus({ status, onRetry }: { status: OptimisticChatRow["status"]; 
 
 type TraceRef = { taskId: string; turnId?: string } | null;
 
-function MessageBubble({ message, isPending, isPush, visible, trace = null, steps = null }: {
+function MessageBubble({ message, isPending, isPush, visible, trace = null, steps = null, after = null }: {
   message: ChatMessage; isPending: boolean; isPush: boolean; visible: boolean; trace?: TraceRef;
   /** The finished turn's steps fold, rendered above the reply. */
   steps?: React.ReactNode;
+  /** Rendered under the reply, above its footer: the late subagents' completion rows. */
+  after?: React.ReactNode;
 }) {
   if (message.role === "user") {
     const markdown = message.content;
@@ -370,7 +403,7 @@ function MessageBubble({ message, isPending, isPush, visible, trace = null, step
     );
   }
 
-  return <AssistantMessage message={message} isPending={isPending} isPush={isPush} visible={visible} trace={trace} steps={steps} />;
+  return <AssistantMessage message={message} isPending={isPending} isPush={isPush} visible={visible} trace={trace} steps={steps} after={after} />;
 }
 
 function AssistantMessage({
@@ -380,6 +413,7 @@ function AssistantMessage({
   visible,
   trace,
   steps,
+  after,
 }: {
   message: ChatMessage;
   isPending: boolean;
@@ -387,6 +421,7 @@ function AssistantMessage({
   visible: boolean;
   trace: TraceRef;
   steps: React.ReactNode;
+  after: React.ReactNode;
 }) {
   const traceRef: TraceRef = trace ?? (message.task_id && !isPush ? { taskId: message.task_id, turnId: message.turn_id } : null);
 
@@ -416,6 +451,7 @@ function AssistantMessage({
         content={message.content}
         dedupe="url"
       />
+      {after && <div className="pt-1.5">{after}</div>}
       <MessageFooter
         message={message}
         isPending={isPending}

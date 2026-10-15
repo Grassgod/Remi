@@ -264,6 +264,9 @@ const SPECIFIC_EVENTS = new Set([
   // Chat events are handled explicitly below; do not double-invalidate.
   "chat:done", "chat:session_read", "chat:session_deleted",
   "chat:session_updated", "chat:queue_updated",
+  // A running-subagent count only patches the Chat pending list (PR 5); it is
+  // no task lifecycle change, so the task lists stay as they are.
+  "task:subagents",
   // task:completed / task:failed deliberately NOT here. They go through
   // both the task-prefix invalidate (refreshes the agent-task-snapshot
   // cache) AND the chat-specific ws.on() handlers below. The two

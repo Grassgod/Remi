@@ -105,7 +105,8 @@ export class ChatEndpoints {
   }
   async listPendingChatTasks(): Promise<PendingChatTasksResponse> {
     return { tasks: (await this.activeTurns()).filter(turn => turn.session_id.startsWith("chat_"))
-      .map(turn => ({ task_id: turn.current_attempt_id ?? turn.id, turn_id: turn.id, status: turn.status === "pending" ? "queued" : turn.status, chat_session_id: turn.session_id })) };
+      .map(turn => ({ task_id: turn.current_attempt_id ?? turn.id, turn_id: turn.id, status: turn.status === "pending" ? "queued" : turn.status, chat_session_id: turn.session_id,
+        ...(typeof turn.running_subagents === "number" ? { running_subagents: turn.running_subagents } : {}) })) };
   }
 
   async markChatSessionRead(sessionId: string): Promise<void> {

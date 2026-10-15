@@ -2,7 +2,7 @@
 
 import { useCallback, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { CommandAction, FileChange, TraceItem } from "@multiremi/contracts/trace";
-import type { StepDescriptor } from "@multiremi/shared/trace-step-copy";
+import type { AgentResolver, StepDescriptor } from "@multiremi/shared/trace-step-copy";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@multiremi/ui/components/ui/collapsible";
 import { cn } from "@multiremi/ui/lib/utils";
 import {
@@ -11,10 +11,15 @@ import {
   ChevronRight,
   CircleAlert,
   CircleStop,
+  CircleX,
   Folder,
   Globe,
+  List,
   ListChecks,
+  Mail,
+  Pause,
   Pencil,
+  Play,
   Search,
   SquareTerminal,
   TextSelect,
@@ -24,8 +29,8 @@ import {
 import { Markdown } from "../../common/markdown";
 import { CommandDetail, DiffDetail, TRACE_DETAIL_MONO } from "../../common/task-transcript/trace-item-detail";
 import { useT } from "../../i18n";
+import { SubagentStepRow } from "./subagent-step-row";
 import {
-  buildChildSteps,
   groupIcon,
   groupSummary,
   joinSummary,
@@ -55,6 +60,11 @@ const ICONS: Record<StepIconKind, LucideIcon> = {
   compaction: TextSelect,
   plan: ListChecks,
   notice: CircleAlert,
+  agent_message: Mail,
+  agent_interrupt: Pause,
+  agent_resume: Play,
+  agent_close: CircleX,
+  agent_list: List,
 };
 
 /** Height + fade on Base UI's panel variable; reduced motion switches at once. */
@@ -74,8 +84,8 @@ export function useStepCopy() {
   return useMemo(() => {
     const step = (descriptor: StepDescriptor): string =>
       t(($) => $.steps[descriptor.key], descriptor.args);
-    const summary = (rows: readonly StepRow[]): string => joinSummary(
-      groupSummary(rows),
+    const summary = (rows: readonly StepRow[], resolveAgent?: AgentResolver): string => joinSummary(
+      groupSummary(rows, resolveAgent),
       (fragment) => t(($) => $.steps[fragment.key], { count: fragment.count }),
       t(($) => $.turn_steps.summary_separator),
       t(($) => $.steps.summary_empty),
@@ -109,7 +119,7 @@ export function TurnStepList({ steps, items, live }: TurnStepListProps) {
       {steps.blocks.map((block) => {
         const label = live && live.blockKey === block.key ? live.label : undefined;
         switch (block.kind) {
-          case "group": return <StepGroup key={block.key} rows={block.rows} active={block.active} label={label} />;
+          case "group": return <StepGroup key={block.key} rows={block.rows} active={block.active} label={label} resolveAgent={steps.resolveAgent} />;
           case "row": return <StepRowView key={block.key} row={block.row} label={label} />;
           default: return <BreakerView key={block.key} block={block} items={items} />;
         }
@@ -157,15 +167,15 @@ function FadeScroll({ children, className }: { children: ReactNode; className?: 
   );
 }
 
-function StepGroup({ rows, active, label }: { rows: StepRow[]; active: boolean; label?: LiveLabel }) {
+function StepGroup({ rows, active, label, resolveAgent }: { rows: StepRow[]; active: boolean; label?: LiveLabel; resolveAgent?: AgentResolver }) {
   const copy = useStepCopy();
   const [open, setOpen] = useState(false);
   // The live label holds the header while the turn runs; a group whose rows
   // are done reads its summary at once.
   const runningRow = active ? [...rows].reverse().find((r) => r.active) : undefined;
   const live = active || !!label;
-  const icon = label?.kind === "step" ? label.icon : runningRow?.icon ?? groupIcon(rows);
-  const text = label ? copy.live(label) : runningRow ? copy.step(runningRow.descriptor) : copy.summary(rows);
+  const icon = label?.kind === "step" ? label.icon : runningRow?.icon ?? groupIcon(rows, resolveAgent);
+  const text = label ? copy.live(label) : runningRow ? copy.step(runningRow.descriptor) : copy.summary(rows, resolveAgent);
   return (
     <Collapsible open={open} onOpenChange={setOpen} data-step-group={live ? "active" : "done"}>
       <CollapsibleTrigger className={ROW_TRIGGER}>
@@ -185,6 +195,8 @@ function StepGroup({ rows, active, label }: { rows: StepRow[]; active: boolean; 
 }
 
 function hasRowDetail(row: StepRow): boolean {
+  // An agent-control row opens to the message it sent, when it sent one.
+  if (row.control) return !!row.control.message;
   switch (row.item.type) {
     // A single-action read without command text (Codex) has nothing to show.
     case "command": return !!row.item.output || !!((row.part as CommandAction | undefined)?.command ?? row.item.command);
@@ -235,6 +247,7 @@ function titleOf(row: StepRow): string | undefined {
 
 function RowDetail({ row }: { row: StepRow }) {
   const item = row.item;
+  if (row.control) return <AgentMessageDetail row={row} />;
   switch (item.type) {
     case "command": {
       const part = row.part as CommandAction | undefined;
@@ -250,6 +263,20 @@ function RowDetail({ row }: { row: StepRow }) {
     case "tool":
       return <TextDetail head={item.input ? JSON.stringify(item.input, null, 2) : null} body={item.output} />;
   }
+}
+
+/** The message an agent-control row sent: 「发给 {{agent}}」 and its Markdown. */
+function AgentMessageDetail({ row }: { row: StepRow }) {
+  const { t } = useT("chat");
+  const agent = row.descriptor.args.agent;
+  return (
+    <div data-agent-message className="rounded-md border bg-muted/30 px-2.5 py-2 text-xs">
+      <div className="mb-1 text-muted-foreground">
+        {agent ? t(($) => $.turn_steps.message_to, { agent }) : t(($) => $.turn_steps.message_to_generic)}
+      </div>
+      <div className="max-h-48 overflow-auto text-sm text-foreground"><Markdown mode="minimal">{row.control?.message ?? ""}</Markdown></div>
+    </div>
+  );
 }
 
 function TextDetail({ head, body }: { head: string | null; body: string | null }) {
@@ -269,6 +296,8 @@ function TextDetail({ head, body }: { head: string | null; body: string | null }
 function BreakerView({ block, items }: { block: Extract<StepBlock, { kind: "breaker" }>; items: readonly TraceItem[] }) {
   const copy = useStepCopy();
   const item = block.item;
+  // A subagent is one line that opens the subagent panel (PR 5 §6.2).
+  if (item.type === "subagent") return <SubagentStepRow item={item} items={items} />;
   if (item.type === "agent_message") {
     return (
       <div data-step-message className="text-sm leading-[22.75px] text-foreground prose prose-sm dark:prose-invert max-w-none [&>*:first-child]:mt-0 [&>*:last-child]:mb-0">
@@ -278,7 +307,7 @@ function BreakerView({ block, items }: { block: Extract<StepBlock, { kind: "brea
   }
   const active = item.status === "in_progress";
   const text = copy.step(block.descriptor);
-  const detail = breakerDetail(item, items);
+  const detail = breakerDetail(item);
   return <BreakerRow icon={block.icon} text={text} active={active} danger={item.type === "notice" && item.severity === "error"}
     itemId={item.id} detail={detail} />;
 }
@@ -303,37 +332,8 @@ function BreakerRow({ icon, text, active, danger, itemId, detail }: {
   );
 }
 
-function SubagentDetail({ item, items }: { item: Extract<TraceItem, { type: "subagent" }>; items: readonly TraceItem[] }) {
-  const { t } = useT("chat");
-  const children = useMemo(() => buildChildSteps(items, item.id), [items, item.id]);
-  return (
-    <div className="space-y-2">
-      {item.prompt && (
-        <div className="rounded-md border bg-muted/30 px-2.5 py-2 text-xs">
-          <div className="mb-1 text-muted-foreground">{t(($) => $.turn_steps.subagent_prompt)}</div>
-          <div className="max-h-36 overflow-auto"><Markdown mode="minimal">{item.prompt}</Markdown></div>
-        </div>
-      )}
-      {children.blocks.length > 0 && (
-        <div className="border-l pl-3">
-          <TurnStepList steps={children} items={items} />
-        </div>
-      )}
-      {item.output && (
-        <div className="rounded-md border bg-muted/30 px-2.5 py-2 text-xs">
-          <div className="mb-1 text-muted-foreground">{t(($) => $.turn_steps.subagent_output)}</div>
-          <div className="max-h-60 overflow-auto"><Markdown mode="minimal">{item.output}</Markdown></div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function breakerDetail(item: TraceItem, items: readonly TraceItem[]): ReactNode {
+function breakerDetail(item: TraceItem): ReactNode {
   switch (item.type) {
-    case "subagent":
-      return item.prompt || item.output || items.some((child) => child.parent_id === item.id)
-        ? <SubagentDetail item={item} items={items} /> : null;
     case "plan":
       return item.entries.length ? (
         <ul className="space-y-1 text-sm">

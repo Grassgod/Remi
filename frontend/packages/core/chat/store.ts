@@ -160,6 +160,31 @@ function readQueueOutbox(storage: StorageAdapter, key: string): Record<string, C
   return outbox;
 }
 
+/**
+ * What the subagent panel shows (PR 5): one attempt of one chat, its overview
+ * (`path` empty) or a subagent's detail. `path` holds the subagent item ids
+ * from a top-level subagent down to the open one; back drops the last id.
+ */
+export interface SubagentPanelTarget {
+  /** The chat the panel belongs to; another chat never shows it. */
+  sessionId: string | null;
+  /** The attempt whose trace holds the subagents. */
+  attemptId: string;
+  /** The turn of that attempt, when known; reads go through the turn route. */
+  turnId?: string;
+  /** Follow the trace socket (the running turn). */
+  live: boolean;
+  path: string[];
+}
+
+/** A request to show a top-level subagent's row in the live steps fold. */
+export interface SubagentRevealRequest {
+  attemptId: string;
+  itemId: string;
+  /** Bumped per request, so revealing the same row twice still fires. */
+  nonce: number;
+}
+
 export const CHAT_MIN_W = 360;
 export const CHAT_MIN_H = 480;
 export const CHAT_DEFAULT_W = 380;
@@ -186,6 +211,10 @@ export interface ChatState {
   queueEdit: Record<string, ChatQueueEdit>;
   /** Enqueues not yet confirmed by the server, by session. */
   queueOutbox: Record<string, ChatQueueOutboxItem[]>;
+  /** The open subagent panel, or null. Not persisted. */
+  subagentPanel: SubagentPanelTarget | null;
+  /** The last reveal request for a subagent row. Not persisted. */
+  subagentReveal: SubagentRevealRequest | null;
   setOpen: (open: boolean) => void;
   toggle: () => void;
   setActiveSession: (id: string | null) => void;
@@ -232,6 +261,13 @@ export interface ChatState {
    * draft instead, so the edit being saved does not pick it up.
    */
   restoreToDraft: (sessionId: string, body: string, attachments: Record<string, string>) => void;
+  /** Opens (or retargets) the subagent panel. */
+  openSubagentPanel: (target: SubagentPanelTarget) => void;
+  /** Moves the open panel to another subagent, or to the overview with `[]`. */
+  setSubagentPath: (path: string[]) => void;
+  closeSubagentPanel: () => void;
+  /** Asks the live steps fold to open and scroll to a top-level subagent's row. */
+  revealSubagent: (attemptId: string, itemId: string) => void;
 }
 
 export interface ChatStoreOptions {
@@ -266,6 +302,8 @@ export function createChatStore(options: ChatStoreOptions) {
     followUpMode: readFollowUpMode(storage),
     queueEdit: readQueueEdits(storage, wsKey(QUEUE_EDIT_KEY)),
     queueOutbox: readQueueOutbox(storage, wsKey(QUEUE_OUTBOX_KEY)),
+    subagentPanel: null,
+    subagentReveal: null,
     setOpen: (open) => {
       logger.debug("setOpen", { from: get().isOpen, to: open });
       storage.setItem(OPEN_KEY, String(open));
@@ -445,6 +483,17 @@ export function createChatStore(options: ChatStoreOptions) {
       writeDraftAttachments(storage, wsKey(DRAFT_ATTACHMENTS_KEY), inputDraftAttachments);
       set({ inputDrafts, inputDraftAttachments });
     },
+    openSubagentPanel: (target) => set({ subagentPanel: { ...target, path: [...target.path] } }),
+    setSubagentPath: (path) => {
+      const panel = get().subagentPanel;
+      if (panel) set({ subagentPanel: { ...panel, path: [...path] } });
+    },
+    closeSubagentPanel: () => {
+      if (get().subagentPanel) set({ subagentPanel: null });
+    },
+    revealSubagent: (attemptId, itemId) => set({
+      subagentReveal: { attemptId, itemId, nonce: (get().subagentReveal?.nonce ?? 0) + 1 },
+    }),
     clearQueueState: (sessionId) => {
       const state = get();
       if (!(sessionId in state.queueEdit) && !(sessionId in state.queueOutbox)) return;
@@ -478,6 +527,9 @@ export function createChatStore(options: ChatStoreOptions) {
       localAttachmentDetails: {},
       queueEdit: readQueueEdits(storage, wsKey(QUEUE_EDIT_KEY)),
       queueOutbox: readQueueOutbox(storage, wsKey(QUEUE_OUTBOX_KEY)),
+      // Another workspace's chats never show this one's panel.
+      subagentPanel: null,
+      subagentReveal: null,
     });
   });
 

@@ -46,6 +46,12 @@ export interface PendingChatTaskItem {
   turn_id?: string;
   status: string;
   chat_session_id: string;
+  /**
+   * Subagents the turn's current attempt has running (PR 5), from the
+   * daemon's best-effort `task.activity` report through `/api/turns`. Absent
+   * when the server does not report it (older servers, never reported).
+   */
+  running_subagents?: number;
 }
 
 export interface PendingChatTasksResponse {

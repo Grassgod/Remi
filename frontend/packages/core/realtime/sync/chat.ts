@@ -17,7 +17,9 @@ import type {
   ChatPendingTask,
   TaskAwaitingHumanPayload,
   TaskProgressPayload,
+  TaskSubagentsPayload,
   ChatSession,
+  PendingChatTasksResponse,
 } from "../../types";
 import type { SyncContext, SyncModule } from "./types";
 
@@ -210,6 +212,23 @@ export function createChatHandlers({ qc }: SyncContext): SyncModule {
           old => old?.task_id === payload.task_id
             ? { ...old, progress_summary: payload.progress_summary } : old,
         );
+      },
+
+      // A Chat attempt's running-subagent count changed (PR 5): patch the
+      // pending-task list the sidebar badge reads, without a refetch. The
+      // count only changes the badge; nothing else depends on it.
+      "task:subagents": (p) => {
+        if (!p || typeof p !== "object") return;
+        const payload = p as TaskSubagentsPayload;
+        if (typeof payload.task_id !== "string" || !("running_subagents" in payload)) return;
+        const raw = payload.running_subagents;
+        const count = typeof raw === "number" && Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 0;
+        const wsId = getCurrentWsId();
+        if (!wsId) return;
+        qc.setQueryData<PendingChatTasksResponse>(chatKeys.pendingTasks(wsId), (old) => {
+          if (!old?.tasks.some((task) => task.task_id === payload.task_id && task.running_subagents !== count)) return old;
+          return { ...old, tasks: old.tasks.map((task) => task.task_id === payload.task_id ? { ...task, running_subagents: count } : task) };
+        });
       },
 
       // task:waiting_local_directory fires when the daemon dequeues a task but
