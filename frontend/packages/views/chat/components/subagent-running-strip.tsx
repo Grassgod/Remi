@@ -99,7 +99,8 @@ export function ChatRunningStrip({ sessionId, items = NO_ITEMS, source, doorbell
   const rows = useCachedBackgroundTasks(sessionId);
   const tasks = useMemo(() => runningBackgroundTasks(rows), [rows]);
   const subagents = running.top.length + running.nested.length;
-  const notices = <BackgroundEndedNotices sessionId={sessionId} rows={rows} doorbells={doorbells} />;
+  const notices = <BackgroundEndedNotices sessionId={sessionId} rows={rows} doorbells={doorbells}
+    attempt={source ? { attemptId: source.attemptId, turnId: source.turnId, live: source.live } : undefined} />;
   return (
     // One sticky block, so the strip and the notices never slide over each other.
     <div data-chat-running-strip className="sticky top-0 z-20 -mx-4 bg-background px-4 empty:hidden">
@@ -216,10 +217,12 @@ function RunningStrip({ items, source, top, nested, tasks, sessionId = source?.s
  * doorbell's own words for one that ended between turns with no reply (Codex),
  * for 10 minutes after it ended. Stops the person made are not repeated.
  */
-function BackgroundEndedNotices({ sessionId, rows, doorbells }: {
+function BackgroundEndedNotices({ sessionId, rows, doorbells, attempt }: {
   sessionId: string | null;
   rows: readonly BackgroundTask[];
   doorbells: ReadonlySet<string>;
+  /** The running turn, so the panel's switch can reach its subagents. */
+  attempt?: { attemptId: string; turnId?: string; live: boolean };
 }) {
   const { t } = useT("chat");
   const dismissedIds = useChatStore((s) => s.dismissedBackgroundNotices);
@@ -250,7 +253,7 @@ function BackgroundEndedNotices({ sessionId, rows, doorbells }: {
             className="flex min-h-8 items-center gap-1.5 rounded-lg border border-dashed px-2.5 text-xs text-muted-foreground">
             <BackgroundTaskIcon taskType={row.task_type} className="size-3.5" />
             <span className="min-w-0 flex-1 truncate" title={text}>{text}</span>
-            <button type="button" data-bg-ended-notice-open onClick={() => openTasks({ task_id: row.task_id, provider_session_id: row.provider_session_id })}
+            <button type="button" data-bg-ended-notice-open onClick={() => openTasks({ task_id: row.task_id, provider_session_id: row.provider_session_id }, attempt)}
               className="shrink-0 rounded px-1 font-medium text-foreground/80 hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring">
               {t(($) => $.bg_tasks.view_details)}
             </button>

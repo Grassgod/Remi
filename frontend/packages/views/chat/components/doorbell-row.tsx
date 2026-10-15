@@ -12,7 +12,12 @@ import { useOpenBackgroundTasks } from "./background-task-view";
 // centered line, not a bubble, so the self-started reply that follows reads
 // as the answer to it: 「后台任务 {{name}} 已完成 · 查看」.
 
-export function DoorbellRow({ doorbell, sessionId }: { doorbell: BackgroundTaskDoorbellMetadata; sessionId: string | null }) {
+export function DoorbellRow({ doorbell, sessionId, attempt }: {
+  doorbell: BackgroundTaskDoorbellMetadata;
+  sessionId: string | null;
+  /** The running turn, so the panel's switch can reach its subagents. */
+  attempt?: { attemptId: string; turnId?: string; live: boolean };
+}) {
   const { t } = useT("chat");
   const openTasks = useOpenBackgroundTasks(sessionId);
   const name = backgroundTaskName({ name: doorbell.name, command: null, task_id: doorbell.task_id });
@@ -26,7 +31,7 @@ export function DoorbellRow({ doorbell, sessionId }: { doorbell: BackgroundTaskD
         <span className="min-w-0 truncate" title={text}>{text}</span>
         <span aria-hidden="true">·</span>
         <button type="button" data-doorbell-open
-          onClick={() => openTasks({ task_id: doorbell.task_id, provider_session_id: doorbell.provider_session_id })}
+          onClick={() => openTasks({ task_id: doorbell.task_id, provider_session_id: doorbell.provider_session_id }, attempt)}
           className="shrink-0 rounded font-medium text-foreground/80 underline-offset-2 hover:text-foreground hover:underline focus-visible:outline-2 focus-visible:outline-ring">
           {t(($) => $.bg_tasks.view_details)}
         </button>

@@ -308,7 +308,8 @@ export function ChatMessageList({
       // The doorbell a parked task's end rang (PR 6 §8.1): a line before the
       // reply it started, never a bubble.
       const doorbell = rowDoorbell(row);
-      if (doorbell) return <DoorbellRow doorbell={doorbell} sessionId={sessionId} />;
+      if (doorbell) return <DoorbellRow doorbell={doorbell} sessionId={sessionId}
+        attempt={showLiveTimeline && liveTraceId ? { attemptId: liveTraceId, turnId: pendingTask?.turn_id, live: true } : undefined} />;
       const clientId = clientIdOf(entry);
       const local = optimisticRows.find((item) => item.clientId === clientId);
       const isPush = row.kind === "turn" && isNonterminalTurn(row.metadata);
