@@ -9,7 +9,8 @@ import type { OptimisticChatRow } from "../lib/optimistic-log";
 import { useTraceStreamSubscription } from "@multiremi/core/realtime";
 import { paths } from "@multiremi/core/paths";
 import type { TraceItem } from "@multiremi/contracts/trace";
-import { command, message as traceMessage, permission, read, traceTurn, turnPage, turnTraceCache } from "../../test/trace-fixtures";
+import { at, command, message as traceMessage, permission, read, subagent, traceTurn, turnPage, turnTraceCache } from "../../test/trace-fixtures";
+import { createChatStore, registerChatStore, useChatStore } from "@multiremi/core/chat";
 
 const { copiedText } = vi.hoisted(() => ({ copiedText: vi.fn().mockResolvedValue(true) }));
 vi.mock("@multiremi/ui/lib/clipboard", () => ({ copyText: copiedText }));
@@ -48,6 +49,14 @@ vi.mock("./task-status-pill", () => ({
 }));
 
 import { ChatMessageList } from "./chat-message-list";
+
+// Subagent rows open the panel through the chat store (PR 5).
+const storeValues = new Map<string, string>();
+registerChatStore(createChatStore({ storage: {
+  getItem: (key) => storeValues.get(key) ?? null,
+  setItem: (key, value) => { storeValues.set(key, value); },
+  removeItem: (key) => { storeValues.delete(key); },
+} }));
 
 describe("cached message observer visibility", () => {
   it("renders one original Q, retains its answer body and source link, and renders an explicit cross-session notification", async () => {
@@ -728,6 +737,41 @@ describe("finished turn steps fold (MUL-472)", () => {
     } finally { view.unmount(); client.clear(); }
   });
 
+  it("puts a finished turn's late subagents under its reply from the card, reading no trace until one opens (PR 5 §6.4)", () => {
+    const getTaskTrace = vi.fn();
+    const getTurn = vi.fn();
+    setApiInstance({ getTaskTrace, getTurn } as never);
+    useChatStore.getState().closeSubagentPanel();
+    const late = [
+      { item_id: "sa:explore", name: "Explore", status: "completed", duration_ms: 24_000 },
+      { item_id: "sa:plan", name: "Plan", status: "failed", duration_ms: null },
+      { item_id: "bad" },
+    ];
+    const { view, client } = renderRows([
+      { seq: 1, id: "turn_11", kind: "turn", task_id: "attempt_11", body_md: "",
+        metadata: { turn_id: "turn_11", status: "completed", final_entry_id: "msg_11", process_item_count: 2, worked_ms: 4000, late_subagents: late } },
+      { seq: 2, id: "msg_11", kind: "message", sender_type: "agent", message_kind: "reply", task_id: "turn_11", body_md: "Answer" },
+      { seq: 3, id: "turn_12", kind: "turn", task_id: "attempt_12", body_md: "Older",
+        metadata: { turn_id: "turn_12", status: "completed", final_reply_md: "Older", process_item_count: 1 } },
+    ]);
+    try {
+      const reply = view.container.querySelector<HTMLElement>('[data-perf-key="msg_11"]')!;
+      const rows = [...reply.querySelectorAll<HTMLButtonElement>("[data-subagent-late-row]")];
+      // Malformed entries are dropped; the rows sit under the reply text.
+      expect(rows.map((row) => [row.getAttribute("data-subagent-late-row"), row.getAttribute("data-late-status")]))
+        .toEqual([["sa:explore", "completed"], ["sa:plan", "failed"]]);
+      expect(screen.getByText("Answer").compareDocumentPosition(rows[0]!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      // An older card without the field shows none.
+      expect(view.container.querySelector('[data-perf-key="turn_12"] [data-subagent-late]')).toBeNull();
+      expect(getTaskTrace).not.toHaveBeenCalled();
+      expect(getTurn).not.toHaveBeenCalled();
+      fireEvent.click(rows[1]!);
+      expect(useChatStore.getState().subagentPanel).toEqual({ sessionId: "cs-1", attemptId: "attempt_11", turnId: "turn_11", live: false, path: ["sa:plan"] });
+      // The list itself still reads nothing; the panel reads on open.
+      expect(getTaskTrace).not.toHaveBeenCalled();
+    } finally { view.unmount(); client.clear(); }
+  });
+
   it("shows no fold for a turn that counted no process items", () => {
     setApiInstance({ getTaskTrace: vi.fn() } as never);
     const { view, client } = renderRows([
@@ -756,6 +800,26 @@ describe("live turn steps", () => {
       expect(view.container.querySelector("[data-chat-live-final]")).toHaveTextContent("Streaming answer");
       // The fold carries the run; the pill would only repeat it.
       expect(screen.queryByTestId("status-pill")).toBeNull();
+      // No subagent runs: no strip.
+      expect(view.container.querySelector("[data-subagent-strip]")).toBeNull();
+    } finally { view.unmount(); client.clear(); }
+  });
+
+  it("pins the running strip to the top of the list while a subagent of the live turn runs (PR 5 §6.5)", () => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
+    client.setQueryData(["task-trace", TASK_ID], turnTraceCache(turnPage(traceTurn({ id: TASK_ID }), [
+      subagent("sa:1", "Explore", { name: "Explore", background: true, status: "in_progress", completed_at: null, started_at: at(1) }),
+    ], { closed: false })));
+    const replica = new MemorySessionReplica({ "cs-1": { entries: [] } });
+    const view = render(<QueryClientProvider client={client}><ChatMessageList sessionId="cs-1" replica={replica} optimisticRows={[]}
+      pendingTask={pendingTask} availability={undefined} /></QueryClientProvider>);
+    try {
+      const strip = view.container.querySelector<HTMLElement>("[data-subagent-strip]")!;
+      expect(strip.className).toContain("sticky");
+      expect(strip.querySelector('[data-strip-chip="sa:1"]')).not.toBeNull();
+      // Its row in the live fold opens the panel on the live attempt.
+      fireEvent.click(view.container.querySelector<HTMLButtonElement>('[data-chat-live-turn] [data-subagent-row="sa:1"]')!);
+      expect(useChatStore.getState().subagentPanel).toMatchObject({ sessionId: "cs-1", attemptId: TASK_ID, live: true, path: ["sa:1"] });
     } finally { view.unmount(); client.clear(); }
   });
 });

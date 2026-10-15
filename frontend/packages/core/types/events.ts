@@ -44,6 +44,7 @@ export type WSEventType =
   | "task:running"
   | "task:waiting_local_directory"
   | "task:progress"
+  | "task:subagents"
   | "task:completed"
   | "task:failed"
   | "task:cancelled"
@@ -238,6 +239,17 @@ export interface TaskProgressPayload {
   task_id: string;
   chat_session_id?: string;
   progress_summary?: string | null;
+}
+
+/**
+ * The running-subagent count of a Chat attempt changed (PR 5). The server
+ * sends it only when the count changes; the payload is the task payload plus
+ * `running_subagents`.
+ */
+export interface TaskSubagentsPayload {
+  task_id: string;
+  chat_session_id?: string;
+  running_subagents?: number | null;
 }
 
 export interface TaskQueuedPayload {
@@ -474,6 +486,7 @@ export interface WSEventPayloadMap {
   "task:failed": TaskFailedPayload;
   "task:cancelled": TaskCancelledPayload;
   "task:progress": TaskProgressPayload;
+  "task:subagents": TaskSubagentsPayload;
   "inbox:new": InboxNewPayload;
   "inbox:read": InboxReadPayload;
   "inbox:archived": InboxArchivedPayload;

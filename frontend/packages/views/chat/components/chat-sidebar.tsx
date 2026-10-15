@@ -887,7 +887,8 @@ function SessionRow({
           menuOpen ? "hidden" : "group-hover/row:hidden group-focus-within/row:hidden",
         )}
       >
-        <RowStatus running={running && !needsAnswer} needsAnswer={needsAnswer} unread={unread} />
+        <RowStatus running={running && !needsAnswer} needsAnswer={needsAnswer} unread={unread}
+          subagents={pendingTask?.running_subagents ?? 0} />
       </span>
       <span
         className={cn(
@@ -960,7 +961,11 @@ function SessionRow({
   );
 }
 
-function RowStatus({ running, needsAnswer, unread }: { running: boolean; needsAnswer: boolean; unread: boolean }) {
+/**
+ * `subagents`: the running turn's subagents, from the server's pending-task
+ * list (PR 5 §6.7); 0 or absent (older servers) shows the spinner alone.
+ */
+function RowStatus({ running, needsAnswer, unread, subagents = 0 }: { running: boolean; needsAnswer: boolean; unread: boolean; subagents?: number }) {
   const { t } = useT("chat");
   if (needsAnswer)
     return (
@@ -968,14 +973,25 @@ function RowStatus({ running, needsAnswer, unread }: { running: boolean; needsAn
         {t(($) => $.sidebar.status.needs_answer)}
       </span>
     );
-  if (running)
-    return (
+  if (running) {
+    const spinner = (
       <LoaderCircle
         role="img"
         aria-label={t(($) => $.sidebar.status.running)}
-        className="size-4 animate-[spin_2s_steps(60,end)_infinite] text-foreground/60"
+        className="size-4 shrink-0 animate-[spin_2s_steps(60,end)_infinite] text-foreground/60"
       />
     );
+    if (subagents <= 0) return spinner;
+    return (
+      <span className="flex items-center gap-1.5">
+        <span data-sidebar-subagents={subagents}
+          className="whitespace-nowrap rounded-full bg-foreground/[0.06] px-1.5 text-[11px] leading-[18px] tabular-nums text-muted-foreground">
+          {t(($) => $.sidebar.status.subagents, { count: subagents })}
+        </span>
+        {spinner}
+      </span>
+    );
+  }
   if (unread)
     return (
       <span

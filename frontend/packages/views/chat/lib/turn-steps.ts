@@ -11,9 +11,14 @@ import type {
 } from "@multiremi/contracts/trace";
 import { isProcessItem } from "@multiremi/shared/turn-trace";
 import {
+  agentControl,
   describeStep,
+  isHiddenStep,
   stepCategory,
+  subagentResolver,
   summarizeSteps,
+  type AgentControl,
+  type AgentResolver,
   type StepCategory,
   type StepDescriptor,
   type StepSummaryFragment,
@@ -29,9 +34,13 @@ import {
  *   finished fold renders exactly when it has rows.
  * - Rows: a command gives one row per parsed action (`${id}:${i}`), or one row
  *   under its own label when the model wrote one (`command.title`); a file
- *   change one row per file, web searches and other tools one row each.
+ *   change one row per file, web searches and other tools one row each. A
+ *   tool call that messages, interrupts, resumes, closes or lists subagents is
+ *   an agent-control row (PR 5 §6.1, shared `agentControl`) whose target reads
+ *   as the subagent's name; a hidden step (Codex `wait`) gives no row.
  *   Reasoning gives no row; it only feeds the live label. Commentary, context
- *   compaction, subagents, the plan and notices are breaker blocks.
+ *   compaction, subagents (one-line rows that open the subagent panel), the
+ *   plan and notices are breaker blocks.
  * - Groups: two or more consecutive step rows share one collapsed summary row;
  *   a single row stands alone. Reasoning does not break a run, a breaker does.
  *
@@ -53,7 +62,12 @@ export type StepIconKind =
   | "subagent"
   | "compaction"
   | "plan"
-  | "notice";
+  | "notice"
+  | "agent_message"
+  | "agent_interrupt"
+  | "agent_resume"
+  | "agent_close"
+  | "agent_list";
 
 export interface StepRow {
   key: string;
@@ -65,6 +79,8 @@ export interface StepRow {
   icon: StepIconKind;
   /** The item is still in progress. */
   active: boolean;
+  /** What an agent-control row does to which subagent (PR 5); absent on other rows. */
+  control?: AgentControl;
 }
 
 export type BreakerItem = Exclude<TraceItem, StepItem>;
@@ -90,9 +106,18 @@ export interface TurnSteps {
   /**
    * The last item that draws something is a breaker still in progress (a
    * streaming message, a running subagent or compaction): it shows its own
-   * progress, so no "thinking" line goes under it.
+   * progress, so no "thinking" line goes under it. A background subagent does
+   * not count: it does not hold its caller.
    */
   breakerRunning: boolean;
+  /**
+   * Only background subagents are still in progress and the last thing the
+   * caller did was a finished message: it waits for them, and the fold header
+   * says so (「· N 个后台子代理运行中」) instead of a "thinking" line.
+   */
+  waitingOnBackground: boolean;
+  /** Names the subagent a control row targets; built from every item of the trace. */
+  resolveAgent: AgentResolver;
 }
 
 const STEP_TYPES: ReadonlySet<TraceItem["type"]> = new Set(["command", "file_change", "web_search", "tool"]);
@@ -114,9 +139,13 @@ function actionIcon(action: CommandAction | undefined): StepIconKind {
   }
 }
 
-function row(item: StepItem, key: string, part?: CommandAction | FileChange): StepRow {
-  const descriptor = describeStep(item, part);
-  const category = stepCategory(item, part) ?? "tool";
+function row(item: StepItem, key: string, part?: CommandAction | FileChange, resolveAgent?: AgentResolver): StepRow {
+  const descriptor = describeStep(item, part, resolveAgent);
+  const category = stepCategory(item, part, resolveAgent) ?? "tool";
+  const control = item.type === "tool" ? agentControl(item, resolveAgent) ?? undefined : undefined;
+  if (control && control.kind !== "wait") {
+    return { key, item, part, descriptor, category, icon: `agent_${control.kind}`, active: item.status === "in_progress", control };
+  }
   let icon: StepIconKind;
   switch (item.type) {
     case "command":
@@ -135,8 +164,12 @@ function row(item: StepItem, key: string, part?: CommandAction | FileChange): St
   return { key, item, part, descriptor, category, icon, active: item.status === "in_progress" };
 }
 
-/** The step rows one item contributes; empty for anything that is not a step. */
-export function stepRows(item: TraceItem): StepRow[] {
+/**
+ * The step rows one item contributes; empty for anything that is not a step
+ * and for a hidden step. `resolveAgent` ({@link subagentResolver}) names the
+ * subagent a control row targets.
+ */
+export function stepRows(item: TraceItem, resolveAgent?: AgentResolver): StepRow[] {
   switch (item.type) {
     case "command": {
       // A command the model labelled (Claude's Bash description) is one row
@@ -150,8 +183,9 @@ export function stepRows(item: TraceItem): StepRow[] {
       if (item.changes.length <= 1) return [row(item, `${item.id}:0`, item.changes[0])];
       return item.changes.map((change, index) => row(item, `${item.id}:${index}`, change));
     case "web_search":
-    case "tool":
       return [row(item, item.id)];
+    case "tool":
+      return isHiddenStep(item) ? [] : [row(item, item.id, undefined, resolveAgent)];
     default:
       return [];
   }
@@ -167,14 +201,16 @@ function breakerIcon(item: BreakerItem): StepIconKind | null {
   }
 }
 
-/** Items that draw nothing: reasoning (live label only) and empty messages. */
+/** Items that draw nothing: reasoning (live label only), empty messages and hidden steps. */
 function isSilent(item: TraceItem): boolean {
-  if (item.type === "reasoning") return true;
+  if (item.type === "reasoning" || isHiddenStep(item)) return true;
   return item.type === "agent_message" && !item.text.trim();
 }
 
+const isBackgroundSubagent = (item: TraceItem): boolean => item.type === "subagent" && item.background === true;
+
 /** Fold rows into blocks: runs of two or more step rows become a group. */
-export function groupSteps(entries: ReadonlyArray<StepRow | { breaker: BreakerItem }>): StepBlock[] {
+export function groupSteps(entries: ReadonlyArray<StepRow | { breaker: BreakerItem }>, resolveAgent?: AgentResolver): StepBlock[] {
   const blocks: StepBlock[] = [];
   let run: StepRow[] = [];
   const flush = () => {
@@ -186,7 +222,7 @@ export function groupSteps(entries: ReadonlyArray<StepRow | { breaker: BreakerIt
     if ("breaker" in entry) {
       flush();
       const item = entry.breaker;
-      blocks.push({ kind: "breaker", key: `item:${item.id}`, item, descriptor: describeStep(item), icon: breakerIcon(item) });
+      blocks.push({ kind: "breaker", key: `item:${item.id}`, item, descriptor: describeStep(item, undefined, resolveAgent), icon: breakerIcon(item) });
     } else {
       run.push(entry);
     }
@@ -195,27 +231,45 @@ export function groupSteps(entries: ReadonlyArray<StepRow | { breaker: BreakerIt
   return blocks;
 }
 
-function buildSteps(process: readonly TraceItem[], finals: TraceAgentMessageItem[]): TurnSteps {
+/** `all` is every item of the trace, at any depth: control rows name their target from it. */
+function buildSteps(process: readonly TraceItem[], finals: TraceAgentMessageItem[], all: readonly TraceItem[]): TurnSteps {
+  const resolveAgent = subagentResolver(all);
   const entries: Array<StepRow | { breaker: BreakerItem }> = [];
   const rows: StepRow[] = [];
   let lastReasoning: TraceReasoningItem | null = null;
   let processCount = 0;
   let breakerRunning = false;
+  // The last item the caller produced (reasoning included), and what is still running.
+  let tail: TraceItem | null = null;
+  let backgroundRunning = false;
+  let otherRunning = false;
   for (const item of process) {
-    if (item.type === "reasoning") lastReasoning = item;
+    if (item.type === "reasoning") {
+      lastReasoning = item;
+      tail = item;
+    }
     if (isSilent(item)) continue;
     processCount++;
+    tail = item;
+    if (item.status === "in_progress") {
+      if (isBackgroundSubagent(item)) backgroundRunning = true;
+      else otherRunning = true;
+    }
     if (isStepItem(item)) {
-      const itemRows = stepRows(item);
+      const itemRows = stepRows(item, resolveAgent);
       rows.push(...itemRows);
       entries.push(...itemRows);
       breakerRunning = false;
     } else {
       entries.push({ breaker: item as BreakerItem });
-      breakerRunning = item.status === "in_progress";
+      // A background subagent does not hold its caller: what the caller does
+      // next (thinking, reasoning) still shows.
+      breakerRunning = item.status === "in_progress" && !isBackgroundSubagent(item);
     }
   }
-  return { blocks: groupSteps(entries), rows, lastReasoning, finals, processCount, breakerRunning };
+  const waitingOnBackground = backgroundRunning && !otherRunning
+    && tail?.type === "agent_message" && tail.status !== "in_progress";
+  return { blocks: groupSteps(entries, resolveAgent), rows, lastReasoning, finals, processCount, breakerRunning, waitingOnBackground, resolveAgent };
 }
 
 /** The top-level fold of a turn: process blocks plus the final replies. */
@@ -227,21 +281,36 @@ export function buildTurnSteps(items: readonly TraceItem[]): TurnSteps {
     // Reasoning is read here whether or not the shared count includes it.
     else if (isProcessItem(item) || (item.type === "reasoning" && item.parent_id === null)) process.push(item);
   }
-  return buildSteps(process, finals);
+  return buildSteps(process, finals, items);
 }
 
 const NESTED_HIDDEN: ReadonlySet<TraceItem["type"]> = new Set(["user_message", "permission", "question"]);
 
-/** The steps a subagent ran, for its detail. Subagent text is never final. */
-export function buildChildSteps(items: readonly TraceItem[], parentId: string): TurnSteps {
-  return buildSteps(items.filter((item) => item.parent_id === parentId && !NESTED_HIDDEN.has(item.type)), []);
+export interface ChildStepsOptions {
+  /** Leave this item out: the reply the subagent panel shows below the fold. */
+  excludeId?: string | null;
+  /** The subagent's direct children to use, when only a part of them (one generation) is wanted. */
+  children?: readonly TraceItem[];
+}
+
+/**
+ * The steps a subagent ran, for its detail in the subagent panel. Subagent
+ * text is never final. Its instructions (`user_message`), permissions and
+ * questions draw no row.
+ */
+export function buildChildSteps(items: readonly TraceItem[], parentId: string, options: ChildStepsOptions = {}): TurnSteps {
+  const children = options.children ?? items.filter((item) => item.parent_id === parentId);
+  return buildSteps(children.filter((item) => !NESTED_HIDDEN.has(item.type) && item.id !== options.excludeId), [], items);
 }
 
 // ── Summaries and the live label ────────────────────────────────────────────
 
-/** Summary fragments of a finished group, in the fixed category order. */
-export function groupSummary(rows: readonly StepRow[]): StepSummaryFragment[] {
-  return summarizeSteps(rows.map((r) => ({ item: r.item, part: r.part })));
+/**
+ * Summary fragments of a finished group, in the fixed category order. Pass
+ * the steps' `resolveAgent` so control rows group as they were labelled.
+ */
+export function groupSummary(rows: readonly StepRow[], resolveAgent?: AgentResolver): StepSummaryFragment[] {
+  return summarizeSteps(rows.map((r) => ({ item: r.item, part: r.part })), resolveAgent);
 }
 
 /** Join fragments with the locale's separator (zh "，", ja "、", en/ko ", "). */
@@ -255,8 +324,8 @@ export function joinSummary(
 }
 
 /** Icon of a finished group: the first fragment's category. */
-export function groupIcon(rows: readonly StepRow[]): StepIconKind {
-  const first = groupSummary(rows)[0]?.category;
+export function groupIcon(rows: readonly StepRow[], resolveAgent?: AgentResolver): StepIconKind {
+  const first = groupSummary(rows, resolveAgent)[0]?.category;
   return rows.find((r) => r.category === first)?.icon ?? rows[0]?.icon ?? "tool";
 }
 
@@ -292,15 +361,16 @@ export type LiveLabel =
 /**
  * What a running turn is doing now: the last in-progress row's active copy;
  * else `quiet` while a breaker is still in progress (a streaming message, a
- * running subagent or compaction shows its own progress); else the last line
- * of the last reasoning item; else "Thinking".
+ * running subagent or compaction shows its own progress) or while the caller
+ * only waits for background subagents (the fold header says so); else the
+ * last line of the last reasoning item; else "Thinking".
  */
-export function liveLabel(steps: Pick<TurnSteps, "rows" | "lastReasoning" | "breakerRunning">): LiveLabel {
+export function liveLabel(steps: Pick<TurnSteps, "rows" | "lastReasoning" | "breakerRunning"> & Partial<Pick<TurnSteps, "waitingOnBackground">>): LiveLabel {
   for (let i = steps.rows.length - 1; i >= 0; i--) {
     const r = steps.rows[i]!;
     if (r.active) return { id: `step:${r.key}`, kind: "step", descriptor: r.descriptor, icon: r.icon };
   }
-  if (steps.breakerRunning) return { id: "quiet", kind: "quiet" };
+  if (steps.breakerRunning || steps.waitingOnBackground) return { id: "quiet", kind: "quiet" };
   const headline = steps.lastReasoning ? reasoningHeadline(steps.lastReasoning.text) : null;
   if (headline) return { id: `reasoning:${headline}`, kind: "reasoning", text: headline };
   return { id: "thinking", kind: "thinking" };

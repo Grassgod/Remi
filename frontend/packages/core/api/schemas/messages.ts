@@ -51,6 +51,9 @@ export const TurnSchema = z.object({
   input_from_seq: z.number().nullable(), input_to_seq: z.number().nullable(),
   created_at: z.string(), started_at: z.string().nullable(), ended_at: z.string().nullable(),
   ended_reason: z.string().nullable(),
+  // Running subagents of the current attempt (PR 5); display-only, so a
+  // malformed value degrades to unknown instead of failing the turn list.
+  running_subagents: z.number().int().nonnegative().nullable().optional().catch(null),
 }).loose();
 export const AttemptSchema = z.object({
   id: z.string(), turn_id: z.string(), attempt_no: z.number().int().positive(), status: z.string(),

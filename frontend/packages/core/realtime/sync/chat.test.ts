@@ -98,6 +98,31 @@ describe("chat queue realtime", () => {
     expect(qc.getQueryData<ChatPendingTask>(chatKeys.pendingTask("chat-1"))?.progress_summary).toBeNull();
   });
 
+  it("patches a running subagent count into the pending list without a refetch (PR 5 §6.7)", () => {
+    const list = { tasks: [
+      { task_id: "task-1", turn_id: "turn-1", chat_session_id: "chat-1", status: "running" },
+      { task_id: "task-9", turn_id: "turn-9", chat_session_id: "chat-9", status: "running", running_subagents: 1 },
+    ] };
+    qc.setQueryData(chatKeys.pendingTasks("ws-1"), list);
+    handlers["task:subagents"]?.({ chat_session_id: "chat-1", task_id: "task-1", running_subagents: 2 });
+    expect(qc.getQueryData(chatKeys.pendingTasks("ws-1"))).toEqual({ tasks: [
+      { ...list.tasks[0], running_subagents: 2 }, list.tasks[1],
+    ] });
+    expect(qc.getQueryState(chatKeys.pendingTasks("ws-1"))?.isInvalidated).toBe(false);
+    // The same count keeps the cached object; null reads as none running.
+    const before = qc.getQueryData(chatKeys.pendingTasks("ws-1"));
+    handlers["task:subagents"]?.({ chat_session_id: "chat-1", task_id: "task-1", running_subagents: 2 });
+    expect(qc.getQueryData(chatKeys.pendingTasks("ws-1"))).toBe(before);
+    handlers["task:subagents"]?.({ chat_session_id: "chat-9", task_id: "task-9", running_subagents: null });
+    expect(qc.getQueryData<{ tasks: Array<{ running_subagents?: number }> }>(chatKeys.pendingTasks("ws-1"))?.tasks[1]?.running_subagents).toBe(0);
+    // Malformed or unknown frames change nothing.
+    const settled = qc.getQueryData(chatKeys.pendingTasks("ws-1"));
+    for (const payload of [null, { task_id: 7, running_subagents: 1 }, { task_id: "task-1" }, { task_id: "task-404", running_subagents: 3 }]) {
+      handlers["task:subagents"]?.(payload);
+    }
+    expect(qc.getQueryData(chatKeys.pendingTasks("ws-1"))).toBe(settled);
+  });
+
   it("does not replace a running head or reset its status when a follow-up is queued", () => {
     handlers["task:queued"]?.({ chat_session_id: "chat-1", task_id: "task-2" });
     handlers["task:queued"]?.({ chat_session_id: "chat-1", task_id: "task-1" });

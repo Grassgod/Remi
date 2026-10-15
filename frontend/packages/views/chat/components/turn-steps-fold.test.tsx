@@ -3,6 +3,7 @@ import { act, fireEvent, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { useState, type ReactNode } from "react";
 import type { TraceItem, TraceTurn } from "@multiremi/contracts/trace";
+import { createChatStore, registerChatStore, useChatStore } from "@multiremi/core/chat";
 import { renderWithI18n } from "../../test/i18n";
 import {
   T0, at, command, compaction, message, read, reasoning, subagent, traceTurn, turnPage, unknown,
@@ -14,12 +15,20 @@ vi.mock("@multiremi/core/api", async (original) => ({ ...await original<typeof i
 vi.mock("@multiremi/core/realtime", () => ({ useTraceStreamSubscription: () => {} }));
 vi.mock("../../common/markdown", () => ({ Markdown: ({ children }: { children: string }) => <span>{children}</span> }));
 
+// Subagent rows and the completion row open the panel through the chat store.
+const storeValues = new Map<string, string>();
+registerChatStore(createChatStore({ storage: {
+  getItem: (key) => storeValues.get(key) ?? null,
+  setItem: (key, value) => { storeValues.set(key, value); },
+  removeItem: (key) => { storeValues.delete(key); },
+} }));
+
 const header = () => document.querySelector<HTMLButtonElement>("[data-chat-steps-header]")!;
 const isOpen = () => header().hasAttribute("data-panel-open");
 const running = { status: "in_progress" as const, completed_at: null };
 
 function renderLive(turn: TraceTurn, items: TraceItem[]) {
-  const ui = (nextTurn: TraceTurn, nextItems: TraceItem[]) => <LiveTurnSteps trace={{ turn: nextTurn, items: nextItems }} />;
+  const ui = (nextTurn: TraceTurn, nextItems: TraceItem[]) => <LiveTurnSteps trace={{ turn: nextTurn, items: nextItems }} sessionId="chat_1" />;
   const view = renderWithI18n(ui(turn, items), { locale: "zh-Hans" });
   return { ...view, update: (nextTurn: TraceTurn, nextItems: TraceItem[]) => view.rerender(ui(nextTurn, nextItems)) };
 }
@@ -167,6 +176,72 @@ describe("live label", () => {
     expect(label.className).toContain("animate-step-shimmer");
     expect(document.querySelector(".animate-spin")).toBeNull();
     expect(label.closest("[data-step-row]")!.querySelector("svg.lucide-square-terminal")).not.toBeNull();
+  });
+});
+
+describe("background subagents (PR 5 §6.3-6.4)", () => {
+  beforeEach(() => { vi.useFakeTimers(); vi.setSystemTime(new Date(at(30))); useChatStore.getState().closeSubagentPanel(); });
+  afterEach(() => { vi.useRealTimers(); });
+  const background = (id: string, name: string, overrides = {}) =>
+    subagent(id, name, { name, background: true, ...running, started_at: at(2), ...overrides });
+
+  it("adds 「· N 个后台子代理运行中」 to the header without forcing the fold open", () => {
+    const view = renderLive(traceTurn(), [background("sa:1", "Explore"), message("msg:1", "Started it.")]);
+    expect(header()).toHaveTextContent("已处理 30s · 1 个后台子代理运行中");
+    // The caller only waits: no thinking line under the steps.
+    expect(document.querySelector("[data-step-live-line]")).toBeNull();
+    // After the reply starts the fold folds away and the suffix stays.
+    view.update(traceTurn(), [background("sa:1", "Explore"), message("msg:f", "Answer", "final", { started_at: at(20) })]);
+    expect(isOpen()).toBe(false);
+    expect(header()).toHaveTextContent("用时 20s · 1 个后台子代理运行中");
+    // Any top-level subagent still running once the reply started counts.
+    view.update(traceTurn(), [background("sa:1", "Explore"), subagent("sa:2", "Plan", { ...running, background: false }),
+      message("msg:f", "Answer", "final", { started_at: at(20) })]);
+    expect(header()).toHaveTextContent("· 2 个后台子代理运行中");
+    view.update(traceTurn(), [background("sa:1", "Explore", { status: "completed", completed_at: at(25), duration_ms: 23_000 }),
+      message("msg:f", "Answer", "final", { started_at: at(20) })]);
+    expect(document.querySelector("[data-fold-background-running]")).toBeNull();
+  });
+
+  it("puts a completion row under the reply for a subagent that ended after it started, opening its detail", () => {
+    renderLive(traceTurn(), [
+      background("sa:1", "Explore", { status: "completed", completed_at: at(26), duration_ms: 24_000 }),
+      background("sa:2", "Plan", { status: "failed", completed_at: at(27) }),
+      subagent("sa:3", "Early", { name: "Early", completed_at: at(5) }),
+      message("msg:f", "Answer", "final", { started_at: at(20) }),
+    ]);
+    const rows = [...document.querySelectorAll<HTMLButtonElement>("[data-subagent-late-row]")];
+    expect(rows.map((row) => row.textContent)).toEqual([
+      "Explore 已在后台完成 · 24s · 查看结果",
+      "Plan 在后台失败 · 查看详情",
+    ]);
+    // Under the reply, never before it.
+    const reply = document.querySelector("[data-chat-live-final]")!;
+    expect(reply.compareDocumentPosition(rows[0]!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    fireEvent.click(rows[0]!);
+    expect(useChatStore.getState().subagentPanel).toEqual({ sessionId: "chat_1", attemptId: "att_1", turnId: "turn_1", live: true, path: ["sa:1"] });
+  });
+
+  it("folds more than three late subagents into one line that opens the overview", () => {
+    renderLive(traceTurn(), [
+      ...["A", "B", "C", "D", "E"].map((name, index) => background(`sa:${name}`, name, { status: "completed", completed_at: at(21 + index) })),
+      message("msg:f", "Answer", "final", { started_at: at(20) }),
+    ]);
+    expect(document.querySelectorAll("[data-subagent-late-row]")).toHaveLength(3);
+    const more = document.querySelector<HTMLButtonElement>("[data-subagent-late-more]")!;
+    expect(more).toHaveTextContent("另有 2 个子代理在后台结束");
+    fireEvent.click(more);
+    expect(useChatStore.getState().subagentPanel?.path).toEqual([]);
+  });
+
+  it("opens the fold and its row when the running strip reveals a subagent", () => {
+    const view = renderLive(traceTurn(), [background("sa:1", "Explore"), message("msg:f", "Answer", "final", { started_at: at(20) })]);
+    expect(isOpen()).toBe(false);
+    act(() => { useChatStore.getState().revealSubagent("att_other", "sa:1"); });
+    expect(isOpen()).toBe(false);
+    act(() => { useChatStore.getState().revealSubagent("att_1", "sa:1"); });
+    expect(isOpen()).toBe(true);
+    view.unmount();
   });
 });
 

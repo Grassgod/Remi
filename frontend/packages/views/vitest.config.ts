@@ -15,6 +15,7 @@ const pureTests = [
   "chat/lib/optimistic-log.test.ts",
   "chat/lib/copy-text.test.ts",
   "chat/lib/turn-steps.test.ts",
+  "chat/lib/subagents.test.ts",
   "common/task-transcript/redact.test.ts",
   "common/task-transcript/event-format.test.ts",
   "editor/utils/escape-markdown-label.test.ts",
