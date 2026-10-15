@@ -7,9 +7,25 @@ import { ApiContractError } from "../schema";
 afterEach(() => vi.unstubAllGlobals());
 describe("turn trace and issue projection", () => {
   it("keeps the chosen historical attempt when opening a turn trace", async () => {
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json({ events: [], next_after_seq: 0, head: 0, eof: true, closed: true, source: "daemon", state: "ok" })));
-    await new ApiClient("https://api.example.test").getTaskTrace("attempt_1", 10, 50, "turn_1");
-    expect(fetch).toHaveBeenCalledWith("https://api.example.test/api/turns/turn_1/trace?after_seq=10&limit=50&attempt_id=attempt_1", expect.anything());
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json({ view: "turn", format: "v2", turn: null, items: [], next_item_cursor: null, head: 0, closed: true, source: "daemon", state: "ok" })));
+    await new ApiClient("https://api.example.test").getTaskTrace("attempt_1", { itemCursor: 10, turnId: "turn_1" });
+    expect(fetch).toHaveBeenCalledWith("https://api.example.test/api/turns/turn_1/trace?view=turn&item_cursor=10&attempt_id=attempt_1", expect.anything());
+  });
+  it("reads a turn page and drops only the items that fail the contract", async () => {
+    const item = { id: "msg:1", parent_id: null, status: "completed", started_at: "2026-10-15T00:00:00.000Z", completed_at: null, type: "agent_message", text: "hi", phase: "final" };
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json({ view: "turn", format: "v2", turn: null,
+      items: [item, { ...item, id: "x", type: "future_item" }, { ...item, id: "" }], next_item_cursor: 3, head: 9, closed: false, state: "ok" })));
+    const page = await new ApiClient("https://api.example.test").getTaskTrace("attempt_1");
+    expect(page.items).toEqual([item]);
+    expect(page).toMatchObject({ next_item_cursor: 3, head: 9, closed: false, format: "v2" });
+    expect(fetch).toHaveBeenCalledWith("https://api.example.test/api/turns/attempt_1/trace?view=turn&item_cursor=0", expect.anything());
+  });
+  it("defaults the empty page of an unreachable read and rejects a body without a state", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValueOnce(Response.json({ state: "unreachable", source: "daemon", runtime_name: "mac" }))
+      .mockResolvedValueOnce(Response.json({ events: [], eof: true })));
+    const client = new ApiClient("https://api.example.test");
+    await expect(client.getTaskTrace("attempt_1")).resolves.toMatchObject({ state: "unreachable", turn: null, items: [], head: 0, next_item_cursor: null, runtime_name: "mac" });
+    await expect(client.getTaskTrace("attempt_1")).rejects.toBeInstanceOf(ApiContractError);
   });
   it("loads all issue turn pages without fetching details for every row", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValueOnce(Response.json({ turns: [turnFixture({ issue_id: "iss_1" })], next_cursor: "opaque+next" })).mockResolvedValueOnce(Response.json({ turns: [turnFixture({ id: "turn_2", current_attempt_id: "attempt_4" })], next_cursor: null })));

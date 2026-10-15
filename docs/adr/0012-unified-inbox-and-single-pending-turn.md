@@ -7,6 +7,8 @@
 
 被 ADR 0013 修订：消息、收件箱与轮的当前模型取代旧命令和任务入口；下文保留决策史实。
 
+决策 5 的 Chat 部分被 [ADR 0020](0020-chat-follow-up-queue-and-native-steering.md) 修订：成员的“排队”不使用 next_turn，而是日志外的跟进队列，轮完成时放行为 now 消息；next_turn 的含义不变。
+
 Three wake paths grew independently: delegation returns
 (`drainDelegationReturnsWithinWorkspaceLock`), child terminal notifications
 (MUL-400 E2), and comment mentions. Each has its own "find the queued task"

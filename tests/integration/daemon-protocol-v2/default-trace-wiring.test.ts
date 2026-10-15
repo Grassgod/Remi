@@ -4,7 +4,9 @@ import { startMultiremiServer } from "@multiremi/api/server.js";
 import type { DaemonProtocolLayer } from "@multiremi/api/daemon-protocol/index.js";
 import { daemonTraceService } from "@multiremi/api/daemon-protocol/trace-handlers.js";
 import { DAEMON_MIN_CLI_VERSION } from "@multiremi/contracts/daemon-protocol.js";
-import type { TraceEvent } from "@multiremi/contracts/trace.js";
+import type { TraceEventLine as TraceEvent } from "@multiremi/contracts/trace.js";
+import { pageTurnTrace } from "@shared/turn-trace.js";
+import { foldTraceLines } from "../../helpers/turn-trace.js";
 import { authenticateBrowserWebSocket } from "../../unit/multiremi/helpers.js";
 import { conversationLogPgAdminUrl, withConversationLogStore } from "../../unit/multiremi/fixtures/conversation-log-store.js";
 import { waitFor } from "./harness.js";
@@ -26,7 +28,9 @@ for (const backend of ["sqlite", "pg"] as const) {
           // No reader, sink or Hub injection: exercise production assembly.
           const server = startMultiremiServer({ store, apiRole: role, port: 0, hostname: "127.0.0.1",
             authToken: null, backgroundJobs: false, onDaemonProtocol: value => { layer = value; } });
-          const events: TraceEvent[] = [{ seq: 1, type: "text", ts: "2026-10-01T00:00:00Z", content: "Default trace event" }];
+          const events: TraceEvent[] = [{ seq: 1, ts: "2026-10-01T00:00:00Z", type: "item.completed", item: { id: "msg:1",
+            parent_id: null, type: "agent_message", status: "completed", phase: "unknown", text: "Default trace event",
+            started_at: "2026-10-01T00:00:00Z", completed_at: "2026-10-01T00:00:00Z" } }];
           let closed = false;
           const frames: Array<{ t: string; re?: string; p: any }> = [];
           const daemon = new WebSocket(`ws://127.0.0.1:${server.port}/api/daemon/ws?protocol=2`);
@@ -35,8 +39,12 @@ for (const backend of ["sqlite", "pg"] as const) {
             runtimes: [{ runtime_id: runtimeId, provider: "codex", max_concurrency: 1, active_task_ids: [task.id] }] } }));
           daemon.onmessage = message => {
             const frame = JSON.parse(String(message.data)); frames.push(frame);
+            // The daemon answers the view the server asks for: the fold (turn) or the raw lines (events).
             if (frame.t === "trace.read") daemon.send(JSON.stringify({ v: 2, t: "res", re: frame.id,
-              p: { ok: true, events, next_after_seq: events.at(-1)!.seq, head: events.at(-1)!.seq, eof: true, closed } }));
+              p: frame.p.view === "turn"
+                ? { ok: true, ...pageTurnTrace({ ...foldTraceLines(events), head: events.at(-1)!.seq, closed },
+                  { itemCursor: frame.p.item_cursor, limit: frame.p.limit, maxBytes: frame.p.max_bytes }) }
+                : { ok: true, view: "events", format: "v2", events, next_after_seq: events.at(-1)!.seq, head: events.at(-1)!.seq, eof: true, closed } }));
             if (frame.seq) daemon.send(JSON.stringify({ v: 2, t: "ack", ack: frame.seq }));
           };
           let browser: WebSocket | undefined;
@@ -57,9 +65,12 @@ for (const backend of ["sqlite", "pg"] as const) {
               p: { task_id: task.id, events, closed: false } }));
             await waitFor(() => frames.some(frame => frame.re === "append"), "trace append");
             expect(frames.find(frame => frame.re === "append")!.p).toEqual({ ok: true, hub_head: 1 });
-            const http = await fetch(`http://127.0.0.1:${server.port}/api/turns/${store.getTurnForAttempt(task.id)!.id}/trace`);
+            const tracePath = `http://127.0.0.1:${server.port}/api/turns/${store.getTurnForAttempt(task.id)!.id}/trace`;
+            const http = await fetch(tracePath);
             expect(http.status).toBe(200);
-            expect(await http.json()).toMatchObject({ events: [events[0]], head: 1, closed: false });
+            expect(await http.json()).toMatchObject({ view: "turn", items: [{ id: "msg:1", text: "Default trace event", seq: 1 }], head: 1, closed: false });
+            const raw = await fetch(`${tracePath}?view=events`);
+            expect(await raw.json()).toMatchObject({ view: "events", events: [events[0]], head: 1, closed: false });
             await waitFor(() => browserFrames.some(frame => frame.type === "stream.data"), "default browser trace event");
             expect(browserFrames.filter(frame => frame.type === "stream.data").flatMap(frame => frame.payload.frames))
               .toContainEqual(expect.objectContaining({ seq: 1, payload: events[0] }));

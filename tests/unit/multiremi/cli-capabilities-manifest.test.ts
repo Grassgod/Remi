@@ -200,10 +200,16 @@ describe("CLI capabilities manifest", () => {
   it("maps every user route or records a justified exemption and keeps compatibility aliases", () => {
     expect(cliCoverageReport(manifest)).toEqual({
       mapped: 627,
-      exempt: 152,
+      exempt: 158,
       missing: 0,
-      total: 779,
+      total: 785,
     });
+    // ADR 0020: the Chat follow-up queue is member-only composer state with no CLI.
+    for (const route of ["GET /api/sessions/:sessionId/queue", "POST /api/sessions/:sessionId/queue",
+      "PATCH /api/sessions/:sessionId/queue/:qid", "DELETE /api/sessions/:sessionId/queue/:qid",
+      "POST /api/sessions/:sessionId/queue/:qid/steer", "POST /api/sessions/:sessionId/queue/resume"]) {
+      expect(manifest.routes[route]).toMatchObject({ cli_exempt: true, category: "pure_ui" });
+    }
     for (const [route, command] of Object.entries({
       "POST /api/sessions/:sessionId/messages": "message.send",
       "GET /api/messages/:id": "message.get",

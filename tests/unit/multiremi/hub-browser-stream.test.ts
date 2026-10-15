@@ -7,6 +7,7 @@ import type { StreamAuthReader } from "@multiremi/api/hub/stream-auth.js";
 import type { MultiremiWebSocketClient } from "@multiremi/api/helpers/realtime-types.js";
 import { startMultiremiServer } from "@multiremi/api.js";
 import { authenticateBrowserWebSocket, createStore, nextWebSocketMessage, nextWebSocketMessages, resetMultiremiTestEnv } from "./helpers.js";
+import { deltaTraceEvent } from "../../helpers/turn-trace.js";
 
 const hubs: HubImpl[] = [];
 afterEach(() => { for (const hub of hubs.splice(0)) hub.shutdown(); resetMultiremiTestEnv(); });
@@ -31,7 +32,7 @@ function fixture(stream: "log" | "trace" = "log", options: Partial<HubOptions> =
   const subscribe = (fromSeq = 0) => handler.handleSubscribe(client, { type: "stream.subscribe", payload: { stream, id: "s", from_seq: fromSeq } });
   const row = (seq: number) => {
     if (stream === "log") hub.onEntry("s", { session_id: "s", seq, revision: 1, kind: "message", visibility: "shown" });
-    else hub.append("s", [{ seq, type: "text", ts: "", content: String(seq) }]);
+    else hub.append("s", [deltaTraceEvent(seq, String(seq))]);
   };
   return { hub, client, handler, frames, subscribe, row, setBuffered: (bytes: number) => { buffered = bytes; } };
 }
@@ -69,7 +70,7 @@ describe("MUL-436 regression 4B: real Hub browser sink", () => {
     const { hub, frames, subscribe, row } = fixture("trace", { now: () => now,
       limits: { ring: { globalMaxBytes: 100, evictAfterMs: 1 } } });
     row(1); hub.close("s"); now = 10;
-    hub.append("hot", [{ seq: 1, type: "text", ts: "", content: "x".repeat(200) }]);
+    hub.append("hot", [deltaTraceEvent(1, "x".repeat(200))]);
     expect(hub.head("s")).toBeNull();
     await subscribe(2); hub.flushNow();
     expect(frames.map(frame => frame.type)).toEqual(["stream.ack", "stream.closed"]);

@@ -7,6 +7,7 @@ import { CliError, CliRenderer, type CommandInvocation, type CommandSpec, type C
 import {
   commandOptions, clientFor, encodePath, integerOption, outputMode, positional,
   renderResource, stringOption, stringOptions, YES_OPTION, PAGE_OPTIONS, requireConfirmation,
+  TRACE_READ_OPTIONS, traceReadQuery, renderTraceRead,
 } from "./resource-common.js";
 import { detectCliContentTypeFromFilename } from "../multiremi/http.js";
 
@@ -20,7 +21,7 @@ const option = (name: string, type: CliOptionSpec["type"] = "string"): CliOption
 
 function spec(path: string[], mutation: CommandSpec["mutation"], positionals: CommandSpec["positionals"], options: CliOptionSpec[], run: CommandSpec["run"]): CommandSpec {
   return { id: path.join("."), path, description: descriptions[path.join(".")]!, capability: path.join("."),
-    auth: path.join(".") === "turn.retry" ? ["task"] : ["human", "task"], outputs: ["table", "json", "jsonl"], mutation, positionals, options: commandOptions(options, ...(mutation === "read" ? [PAGE_OPTIONS] : [])),
+    auth: ["human", "task"], outputs: ["table", "json", "jsonl"], mutation, positionals, options: commandOptions(options, ...(mutation === "read" ? [PAGE_OPTIONS] : [])),
     run: async (invocation) => { outputMode(invocation); await run(invocation); } };
 }
 const descriptions: Record<string, string> = {
@@ -29,7 +30,7 @@ const descriptions: Record<string, string> = {
   "message.resolve": "Resolve or reopen an ordinary message", "message.react": "Add or remove a message reaction",
   inbox: "Read messages addressed to you", "inbox.read": "Advance a conversation read cursor", "inbox.read-all": "Read all conversations",
   "turn.list": "List turns", "turn.get": "Get a turn and its input or attempts", "turn.cancel": "Cancel a turn",
-  "turn.wrap-up": "Ask a running turn to finish", "turn.retry": "Retry a turn (supervisor task credential required)", "turn.trace.read": "Read an attempt trace",
+  "turn.wrap-up": "Ask a running turn to finish", "turn.retry": "Retry a failed or cancelled turn (supervisor or related task credential; a person may retry their own Chat's turns)", "turn.trace.read": "Read an attempt trace",
 };
 
 export function unifiedCommandSpecs(): CommandSpec[] {
@@ -127,10 +128,10 @@ export function unifiedCommandSpecs(): CommandSpec[] {
       if (action !== "wrap-up") requireConfirmation(i);
       renderResource(i, await request(i, "POST", `${turnPath(i)}/${action}`, { reason: stringOption(i, "reason") ?? undefined, ...(action === "retry" ? { cold: i.options.cold === true } : {}) }));
     })),
-    spec(["turn", "trace", "read"], "read", [ref("turn")], [option("attempt"), option("after", "integer"), option("limit", "integer")], async (i) => {
+    spec(["turn", "trace", "read"], "read", [ref("turn")], [option("attempt"), ...TRACE_READ_OPTIONS], async (i) => {
       const client = await clientFor(i);
-      const result = await client.request({ method: "GET", path: `${turnPath(i)}/trace`, query: { attempt_id: stringOption(i, "attempt"), after_seq: integerOption(i, "after"), limit: integerOption(i, "limit") } });
-      new CliRenderer().render(result.data, { mode: outputMode(i) });
+      const result = await client.request({ method: "GET", path: `${turnPath(i)}/trace`, query: { attempt_id: stringOption(i, "attempt"), ...traceReadQuery(i) } });
+      renderTraceRead(i, result.data);
     }),
   ];
 }

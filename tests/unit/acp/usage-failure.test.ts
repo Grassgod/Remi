@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { AcpProvider } from "@acp/provider.js";
-import { responseToUsageUnits } from "@multiremi/worker/acp-event-mapper.js";
+import { responseToUsageUnits } from "@multiremi/worker/usage-units.js";
 
 const request = (id: string, model: string | null, input: number, output: number, total = input + output, accuracy = "exact") => ({
   sessionUpdate: "usage_update", used: 50000, size: 200000,

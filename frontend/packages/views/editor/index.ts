@@ -3,6 +3,7 @@ export {
   type ContentEditorProps,
   type ContentEditorRef,
 } from "./content-editor";
+export type { SubmitOptions } from "./extensions/submit-shortcut";
 export {
   TitleEditor,
   type TitleEditorProps,

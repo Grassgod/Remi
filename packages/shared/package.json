@@ -5,8 +5,13 @@
   "private": true,
   "exports": {
     "./agent-execution": "./src/agent-execution.ts",
-    "./trace-semantics": "./src/trace-semantics.ts",
+    "./turn-trace": "./src/turn-trace.ts",
+    "./command-parse": "./src/command-parse.ts",
+    "./trace-step-copy": "./src/trace-step-copy.ts",
+    "./trace-file-change": "./src/trace-file-change.ts",
     "./*": "./src/*"
   },
-  "dependencies": {}
+  "dependencies": {
+    "diff": "^8.0.4"
+  }
 }

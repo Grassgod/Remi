@@ -1,8 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { AgentTask } from "@multiremi/core/types/agent";
 import { renderWithI18n } from "../../test/i18n";
+import { command, event, message, read, traceTurn, turnPage, unknown } from "../../test/trace-fixtures";
 import { TaskTraceDialog } from "./task-trace-dialog";
 
 const { getTaskTrace, getTurnInput, handlers, subscriptionEnabled } = vi.hoisted(() => ({
@@ -30,11 +31,10 @@ const task = {
   completed_at: null, result: null, error: null, created_at: "2026-08-08T00:00:00Z",
 } as AgentTask;
 
-const event = (seq: number) => ({ seq, ts: "2026-08-08T00:00:00Z", type: "tool_use", tool: "Bash", tool_call_id: `call-${seq}` });
-const page = (overrides: Record<string, unknown> = {}) => ({
-  events: [], next_after_seq: 0, head: 0, eof: true, closed: false,
-  source: "daemon", state: "ok", ...overrides,
-});
+const turn = traceTurn({ id: task.id });
+const page = (items: Parameters<typeof turnPage>[1] = [], overrides: Parameters<typeof turnPage>[2] = {}) =>
+  turnPage(turn, items, { closed: false, ...overrides });
+const frame = (payload: unknown, seq: number) => ({ seq, kind: "trace", payload });
 
 function renderTrace(overrides: Partial<AgentTask> = {}) {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -54,191 +54,51 @@ beforeEach(() => {
 });
 
 describe("task trace dialog", () => {
-  it("shows the acknowledged main execution model instead of the progress summarizer model", async () => {
-    getTaskTrace.mockResolvedValue(page({ closed: true, head: 6, next_after_seq: 6, events: [
-      { seq: 1, ts: "", type: "execution", meta: { provider: "codex" } },
-      { seq: 2, ts: "", type: "execution", meta: { provider: "codex", model: "gpt-6.1-sol" } },
-      { seq: 3, ts: "", type: "usage", meta: { used: 121800, size: 258400 } },
-      { seq: 4, ts: "", type: "execution", meta: { model: "child-model", parent_tool_call_id: "child" } },
-      { seq: 5, ts: "", type: "execution", meta: { model: 42 } },
-      { seq: 6, ts: "", type: "execution", meta: { model: "default" } },
-    ] }));
-    renderTrace({ status: "completed", usage: [{ model: "gpt-5.6-luna", inputTokens: 2652, outputTokens: 293 }] });
-
+  it("shows the turn's model and context usage from the trace", async () => {
+    getTaskTrace.mockResolvedValue(page([], { turn: traceTurn({ id: task.id, model: "gpt-6.1-sol", status: "completed",
+      context_usage: { used: 120_000, size: 1_000_000 } }), closed: true }));
+    renderTrace({ status: "completed" });
     expect(await screen.findByText("gpt-6.1-sol")).toBeInTheDocument();
-    expect(screen.queryByText("gpt-5.6-luna")).toBeNull();
-    expect(screen.queryByText("child-model")).toBeNull();
-    expect(screen.getByText("2.7K→293")).toBeInTheDocument();
-    expect(screen.getByText("Context 121.8K / 258.4K")).toBeInTheDocument();
-    expect(screen.getByText("0 events")).toBeInTheDocument();
+    expect(screen.getByText("Context 120K / 1M")).toBeInTheDocument();
   });
 
-  it("does not infer the execution model from mixed billing usage when execution metadata is missing", async () => {
-    getTaskTrace.mockResolvedValue(page({ closed: true }));
-    renderTrace({ status: "completed", usage: [{ model: "gpt-5.6-luna", inputTokens: 7 }] });
-    await screen.findByText("Execution finished · 0 events");
-    expect(screen.queryByText("gpt-5.6-luna")).toBeNull();
-  });
-
-  it("keeps a newer live model switch when older history arrives later", async () => {
-    getTaskTrace.mockResolvedValueOnce(page({ events: [
-      { seq: 1, ts: "", type: "execution", meta: { model: "primary" } },
-    ], next_after_seq: 1, head: 150, eof: false })).mockResolvedValueOnce(page({ events: [
-      { seq: 2, ts: "", type: "execution", meta: { model: "older-primary" } },
-    ], next_after_seq: 2, head: 150 }));
-    renderTrace();
-    await screen.findByText("primary");
-    await act(async () => handlers.current?.onFrames?.([
-      { kind: "trace", payload: { seq: 150, ts: "", type: "execution", meta: { model: "backup" } } },
-      { kind: "trace", payload: { seq: 149, ts: "", type: "execution", meta: { model: "older-primary" } } },
-    ] as never));
-    expect(screen.getByText("backup")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Load more events" }));
-    await waitFor(() => expect(getTaskTrace).toHaveBeenCalledWith(task.id, 1, 200, "turn_1"));
-    expect(screen.getByText("backup")).toBeInTheDocument();
-    expect(screen.queryByText("older-primary")).toBeNull();
-  });
-
-  it("can reload history evicted by the byte budget even before 200 events", async () => {
-    const large = (seq: number) => ({ ...event(seq), type: "tool_result", status: "completed", output: "x".repeat(3 * 1024 * 1024), input: { command: `history-command-${seq}` } });
-    const model = { seq: 1, ts: "", type: "execution", meta: { model: "acknowledged-model" } };
-    getTaskTrace.mockResolvedValueOnce(page({ events: [model, large(2)], next_after_seq: 2, head: 4, eof: false }))
-      .mockResolvedValueOnce(page({ events: [large(3)], next_after_seq: 3, head: 4, eof: false }))
-      .mockResolvedValueOnce(page({ events: [large(4)], next_after_seq: 4, head: 4 }))
-      .mockResolvedValueOnce(page({ events: [model, large(2)], next_after_seq: 2, head: 4, eof: false }));
-    renderTrace({ status: "completed" });
-    await screen.findByText("$ history-command-2");
-    expect(screen.getByText("acknowledged-model")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Load more events" }));
-    await screen.findByText("$ history-command-3");
-    fireEvent.click(screen.getByRole("button", { name: "Load more events" }));
-    await screen.findByText("$ history-command-4");
-    expect(screen.queryByText("$ history-command-2")).toBeNull();
-    expect(screen.getByText("acknowledged-model")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Back to beginning" }));
-    expect(await screen.findByText("$ history-command-2")).toBeInTheDocument();
-    expect(screen.getByText("acknowledged-model")).toBeInTheDocument();
-  });
-  it("keeps unread history reachable when live suffixes arrive and allows restarting", async () => {
-    getTaskTrace.mockResolvedValueOnce(page({ events: [event(1)], next_after_seq: 1, head: 400, eof: false }))
-      .mockResolvedValueOnce(page({ events: [event(2)], next_after_seq: 201, head: 400, eof: false }))
-      .mockResolvedValueOnce(page({ events: [event(1)], next_after_seq: 1, head: 400, eof: false }));
-    renderTrace();
-    await screen.findByText("1 tool call");
-    await act(async () => handlers.current?.onFrames?.([{ seq: 400, kind: "trace", payload: event(400) }] as never));
-    fireEvent.click(screen.getByRole("button", { name: "Load more events" }));
-    await waitFor(() => expect(getTaskTrace).toHaveBeenCalledWith(task.id, 1, 200, "turn_1"));
-    fireEvent.click(await screen.findByRole("button", { name: "Back to beginning" }));
-    await waitFor(() => expect(getTaskTrace).toHaveBeenLastCalledWith(task.id, 0, 200, "turn_1"));
-    expect(screen.queryByText("Final answer")).toBeNull();
-  });
-
-  it("stops tool and status spinners when the trace closes before task status updates", async () => {
-    getTaskTrace.mockResolvedValue(page({ events: [{ ...event(1), status: "in_progress" }], head: 1, next_after_seq: 1 }));
-    renderTrace();
-    await screen.findByText("1 tool call");
-    await act(async () => handlers.current?.onClosed?.({ head_seq: 1 } as never));
-    expect(await screen.findByText("Execution finished · 1 events")).toBeInTheDocument();
-    expect(screen.getByRole("dialog").querySelector(".animate-spin")).toBeNull();
-    expect(subscriptionEnabled).toHaveBeenLastCalledWith(false);
-  });
-
-  it("excludes commentary and child replies from the final answer", async () => {
-    getTaskTrace.mockResolvedValue(page({ closed: true, head: 3, next_after_seq: 3, events: [
-      { seq: 1, ts: "", type: "text", content: "Checking files", meta: { phase: "commentary" } },
-      { seq: 2, ts: "", type: "text", content: "Finished fix", meta: { phase: "final_answer" } },
-      { seq: 3, ts: "", type: "text", content: "Child answer", meta: { parent_tool_call_id: "child", phase: "final_answer" } },
-    ] }));
-    renderTrace({ status: "completed" });
-    const answer = (await screen.findByText("Final answer")).parentElement!.parentElement!;
-    expect(within(answer).getByText("Finished fix")).toBeInTheDocument();
-    expect(within(answer).queryByText("Checking files")).toBeNull();
-    expect(within(answer).queryByText("Child answer")).toBeNull();
-  });
-  it("counts only display events and surfaces the complete final reply and latest context", async () => {
-    const prose = (seq: number, type: string, content: string, meta?: Record<string, unknown>) => ({
-      seq, type, content, meta, ts: "2026-10-04T00:00:00Z",
-    });
-    getTaskTrace.mockResolvedValue(page({
-      closed: true, head: 8, next_after_seq: 8,
-      events: [
-        event(1),
-        { ...event(2), type: "tool_result", tool_call_id: "call-1", output: "ok", status: "completed" },
-        prose(3, "text", "Fixed the bug "),
-        prose(4, "usage", "", { used: 210908, size: 1000000 }),
-        prose(5, "execution", "", { model: "model-x" }),
-        prose(6, "text", "and added tests."),
-        prose(7, "usage", "", { used: 82000, size: 1000000 }),
-        prose(8, "text", "Child reply.", { parent_tool_call_id: "child" }),
-      ],
-    }));
-    renderTrace({ status: "completed", usage: [{ totalTokens: 210908 }] });
-
-    expect(await screen.findByText("Context 82K / 1M")).toBeInTheDocument();
-    expect(screen.queryByText("210.9K ctx")).toBeNull();
-    expect(screen.getByText("4 events")).toBeInTheDocument();
-    expect(screen.getByText("Execution finished · 4 events")).toBeInTheDocument();
-    const answer = screen.getByText("Final answer").parentElement!.parentElement!;
-    expect(within(answer).getByText("Fixed the bug and added tests.")).toBeInTheDocument();
-    expect(within(answer).queryByText("Child reply.")).toBeNull();
-    expect(screen.queryByText(/usage|execution \(empty\)/i)).toBeNull();
-  });
-
-  it("merges fragments across pages and live usage frames without losing input/output usage", async () => {
-    const text = (seq: number, content: string) => ({ seq, ts: "2026-10-04T00:00:00Z", type: "text", content });
-    const usage = (seq: number, used: number) => ({ seq, ts: "2026-10-04T00:00:00Z", type: "usage", content: "", meta: { used } });
+  it("reads every item page, then follows live frames on the shared reducer", async () => {
     getTaskTrace
-      .mockResolvedValueOnce(page({ events: [text(1, "Hello "), usage(2, 100)], eof: false, next_after_seq: 2, head: 3 }))
-      .mockResolvedValueOnce(page({ events: [text(3, "world")], next_after_seq: 3, head: 3 }));
-    renderTrace({ usage: [{ inputTokens: 40, outputTokens: 9300 }] });
-    expect(await screen.findByText("Context 100")).toBeInTheDocument();
-    expect(screen.getByText("40→9.3K")).toBeInTheDocument();
-    expect(screen.getByText("1 events")).toBeInTheDocument();
-    expect(getTaskTrace).toHaveBeenCalledTimes(1);
-    expect(screen.queryByText("Final answer")).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "Load more events" }));
-    await waitFor(() => expect(getTaskTrace).toHaveBeenCalledWith(task.id, 2, 200, "turn_1"));
-    expect(screen.getAllByText("Hello world")).toHaveLength(2);
-
+      .mockResolvedValueOnce(page([command("cmd_1", [read("a.ts")]), command("cmd_2", [read("b.ts")])], { next_item_cursor: 2, head: 4 }))
+      .mockResolvedValueOnce(page([command("cmd_3", [unknown("make")])], { head: 5 }));
+    renderTrace();
+    expect(await screen.findByText("3 tool calls")).toBeInTheDocument();
+    expect(getTaskTrace.mock.calls).toEqual([[task.id, { itemCursor: 0, turnId: "turn_1" }], [task.id, { itemCursor: 2, turnId: "turn_1" }]]);
+    expect(subscriptionEnabled).toHaveBeenLastCalledWith(true);
     await act(async () => {
       handlers.current?.onFrames?.([
-        { seq: 4, kind: "trace", payload: usage(4, 200) },
-        { seq: 5, kind: "trace", payload: text(5, "!") },
+        frame(event({ type: "item.completed", item: command("cmd_3", [unknown("make")]) }, 5), 5), // already in the page
+        frame(event({ type: "item.started", item: command("cmd_4", [unknown("ls")], { status: "in_progress", completed_at: null }) }, 6), 6),
       ] as never);
     });
-    expect(screen.getByText("Context 200")).toBeInTheDocument();
-    expect(screen.queryByText("Context 100")).toBeNull();
-    expect(screen.getByText("1 events")).toBeInTheDocument();
-    expect(screen.getAllByText("Hello world!")).toHaveLength(2);
-    expect(screen.queryByText(/usage|\(empty\)/i)).toBeNull();
+    expect(await screen.findByText("4 tool calls")).toBeInTheDocument();
+    getTaskTrace.mockResolvedValueOnce(page([command("cmd_1", [read("a.ts")]), command("cmd_5", [read("c.ts")])], { head: 9 }));
+    await act(async () => { handlers.current?.onGap?.({ from: 7, to: 8 } as never); });
+    await waitFor(() => expect(getTaskTrace).toHaveBeenCalledTimes(3));
+    // A gap rereads the snapshot, which replaces the state.
+    expect(await screen.findByText("2 tool calls")).toBeInTheDocument();
   });
 
-  it("does not render a new context chip without usage and preserves the old token rollup", async () => {
-    getTaskTrace.mockResolvedValue(page({ events: [event(1)], next_after_seq: 1, head: 1 }));
-    renderTrace({ usage: [{ totalTokens: 60000 }] });
-    expect(await screen.findByText("1 tool call")).toBeInTheDocument();
-    expect(screen.queryByText(/^Context /)).toBeNull();
-    expect(screen.getByText("60K ctx")).toBeInTheDocument();
-  });
-
-  it("shows zero context with no fabricated rows or final answer when all events are metadata", async () => {
-    getTaskTrace.mockResolvedValue(page({
-      closed: true, next_after_seq: 2, head: 2,
-      events: [
-        { seq: 1, ts: "2026-10-04T00:00:00Z", type: "execution", content: "" },
-        { seq: 2, ts: "2026-10-04T00:00:00Z", type: "usage", content: "", meta: { used: 0, size: 1000000 } },
-      ],
-    }));
-    renderTrace({ status: "completed" });
-    expect(await screen.findByText("Context 0 / 1M")).toBeInTheDocument();
-    expect(screen.getByText("0 events")).toBeInTheDocument();
-    expect(screen.getByText("Execution finished · 0 events")).toBeInTheDocument();
-    expect(screen.queryByText("Final answer")).toBeNull();
-    expect(screen.queryByText(/\(empty\)/)).toBeNull();
+  it("surfaces the final item and stops tool spinners once the trace closes", async () => {
+    getTaskTrace.mockResolvedValue(page([
+      command("cmd_1", [unknown("bun test")], { status: "in_progress", completed_at: null }),
+      message("msg:f", "All green.", "final"),
+    ], { turn: traceTurn({ id: task.id, status: "completed" }), closed: true }));
+    renderTrace();
+    expect(await screen.findByText("Final answer")).toBeInTheDocument();
+    expect(screen.getAllByText("All green.").length).toBeGreaterThan(0);
+    expect(screen.getByText("Not finished")).toBeInTheDocument();
+    expect(subscriptionEnabled).toHaveBeenLastCalledWith(false);
+    expect(screen.getByText("Execution finished · 2 events")).toBeInTheDocument();
   });
 
   it("passes assignment fallback through to the Input Prompt view on 404", async () => {
-    getTaskTrace.mockResolvedValue(page({ state: "not_found", source: null }));
+    getTaskTrace.mockResolvedValue(page([], { state: "not_found", source: null, turn: null }));
     getTurnInput.mockRejectedValue(Object.assign(new Error("prompt not recorded"), { status: 404 }));
     renderWithI18n(<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
       <TaskTraceDialog task={{ ...task, status: "queued" }} agentName="Agent" onOpenChange={() => {}} initialView="prompt" promptFallback={<p>Assignment from the turn</p>} />
@@ -248,41 +108,18 @@ describe("task trace dialog", () => {
     expect(screen.queryByText(/older runtime/)).toBeNull();
   });
 
-  it("pages the trace and merges duplicate live frames and a gap by seq", async () => {
-    getTaskTrace
-      .mockResolvedValueOnce(page({ events: [event(1), event(2)], next_after_seq: 2, head: 3, eof: false }))
-      .mockResolvedValueOnce(page({ events: [event(3)], next_after_seq: 3, head: 3 }))
-      .mockResolvedValueOnce(page({ events: [event(5)], next_after_seq: 5, head: 5 }));
-    renderTrace();
-    await screen.findByText("2 tool calls");
-    expect(getTaskTrace).toHaveBeenCalledTimes(1);
-    fireEvent.click(screen.getByRole("button", { name: "Load more events" }));
-    await waitFor(() => expect(getTaskTrace).toHaveBeenCalledWith(task.id, 2, 200, "turn_1"));
-    expect(await screen.findByText("3 tool calls")).toBeInTheDocument();
-    await act(async () => {
-      handlers.current?.onFrames?.([
-        { seq: 3, kind: "trace", payload: event(3) },
-        { seq: 4, kind: "trace", payload: event(4) },
-      ] as never);
-    });
-    expect(screen.getByText("4 tool calls")).toBeInTheDocument();
-    await act(async () => { handlers.current?.onGap?.({ from: 5, to: 5 } as never); });
-    await waitFor(() => expect(getTaskTrace).toHaveBeenCalledWith(task.id, 3, 200, "turn_1"));
-    expect(await screen.findByText("5 tool calls")).toBeInTheDocument();
-  });
-
   it.each([
     ["lost", "Execution trace was lost"],
     ["not_found", "No execution trace is available"],
-  ])("shows the %s state", async (state, label) => {
-    getTaskTrace.mockResolvedValue(page({ state, source: null }));
+  ] as const)("shows the %s state", async (state, label) => {
+    getTaskTrace.mockResolvedValue(page([], { state, source: null, turn: null }));
     renderTrace();
     expect(await screen.findByText(label)).toBeInTheDocument();
   });
 
   it("shows an offline runtime and retries without removing the dialog", async () => {
-    getTaskTrace.mockResolvedValueOnce(page({ state: "unreachable", runtime_name: "Runtime A", retryable: true }))
-      .mockResolvedValueOnce(page({ state: "ok", events: [event(1)], next_after_seq: 1, head: 1 }));
+    getTaskTrace.mockResolvedValueOnce(page([], { state: "unreachable", runtime_name: "Runtime A", retryable: true, turn: null }))
+      .mockResolvedValueOnce(page([command("cmd_1", [read("a.ts")])]));
     renderTrace();
     expect(await screen.findByRole("alert")).toHaveTextContent("Runtime A is offline");
     expect(screen.queryByText("Waiting for events...")).toBeNull();
@@ -291,11 +128,10 @@ describe("task trace dialog", () => {
     expect(getTaskTrace).toHaveBeenCalledTimes(2);
   });
 
-  it("stops subscribing when a finished trace reports closed", async () => {
-    getTaskTrace.mockResolvedValue(page({ closed: true, events: [event(1)], next_after_seq: 1, head: 1 }));
+  it("does not subscribe to a trace that is already closed", async () => {
+    getTaskTrace.mockResolvedValue(page([command("cmd_1", [read("a.ts")])], { closed: true }));
     renderTrace();
     expect(await screen.findByText("Execution finished · 1 events")).toBeInTheDocument();
-    expect(subscriptionEnabled).toHaveBeenCalledWith(true);
     expect(subscriptionEnabled).toHaveBeenLastCalledWith(false);
   });
 });

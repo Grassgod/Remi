@@ -14,9 +14,8 @@ const pureTests = [
   "issues/utils/log-row-model.test.ts",
   "chat/lib/optimistic-log.test.ts",
   "chat/lib/copy-text.test.ts",
-  "chat/lib/chat-timeline.test.ts",
+  "chat/lib/turn-steps.test.ts",
   "common/task-transcript/redact.test.ts",
-  "common/task-transcript/build-timeline.test.ts",
   "common/task-transcript/event-format.test.ts",
   "editor/utils/escape-markdown-label.test.ts",
   "editor/utils/highlight-match.test.ts",
@@ -25,6 +24,7 @@ const pureTests = [
   "projects/components/project-issue-metrics.test.ts",
   "inbox/components/inbox-display.test.ts",
   "locales/parity.test.ts",
+  "locales/step-copy-parity.test.ts",
 ];
 
 export default defineConfig({

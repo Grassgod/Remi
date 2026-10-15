@@ -1,6 +1,7 @@
 import { queryOptions } from "@tanstack/react-query";
 import { api } from "../api";
 import type { ChatOriginFilter, ChatPendingTask, PendingChatTasksResponse } from "../types";
+import type { ChatQueue } from "../api/schemas/chat-queue";
 
 // NOTE on workspace scoping:
 // `wsId` is used only as part of queryKey for cache isolation per workspace.
@@ -27,6 +28,8 @@ export const chatKeys = {
   /** Aggregate of in-flight chat tasks for the current user — FAB reads this. */
   pendingTasks: (wsId: string) => [...chatKeys.all(wsId), "pending-tasks"] as const,
   humanRequests: (taskId: string) => ["task-human-requests", taskId] as const,
+  /** Follow-up queue of one Chat (ADR 0020): live rows and the lane pause. */
+  queue: (wsId: string, sessionId: string) => [...chatKeys.all(wsId), "queue", sessionId] as const,
 };
 
 /**
@@ -118,6 +121,39 @@ export function pendingChatTasksOptions(
     queryFn: () => api.listPendingChatTasks(),
     enabled: options.enabled ?? true,
     refetchInterval: pendingChatTasksRefetchInterval,
+    refetchIntervalInBackground: false,
+    staleTime: Infinity,
+  });
+}
+
+/**
+ * Follow-up queue fallback poll. `chat:queue_updated` and pending-task
+ * changes invalidate the key; the poll only reconciles a missed event while
+ * the queue holds rows or is paused, and never while the tab is hidden.
+ */
+export const CHAT_QUEUE_REFETCH_INTERVAL_MS = 10_000;
+export function chatQueueRefetchInterval(query: {
+  state: { data?: ChatQueue };
+}): number | false {
+  const data = query.state.data;
+  return data && (data.items.length > 0 || data.paused) ? CHAT_QUEUE_REFETCH_INTERVAL_MS : false;
+}
+
+/**
+ * The Chat follow-up queue. Mount it only inside a visible chat (MUL-472):
+ * `enabled` follows the window, and the cached rows stay readable while it
+ * is closed.
+ */
+export function chatQueueOptions(
+  wsId: string,
+  sessionId: string,
+  options: { enabled?: boolean } = {},
+) {
+  return queryOptions({
+    queryKey: chatKeys.queue(wsId, sessionId),
+    queryFn: () => api.getChatQueue(sessionId),
+    enabled: !!sessionId && (options.enabled ?? true),
+    refetchInterval: chatQueueRefetchInterval,
     refetchIntervalInBackground: false,
     staleTime: Infinity,
   });

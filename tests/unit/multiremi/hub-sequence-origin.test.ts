@@ -3,6 +3,7 @@ import { createHub, type HubImpl } from "@multiremi/api/hub/hub-core.js";
 import { createLocalHubTransport } from "@multiremi/api/hub/hub-transport.js";
 import type { HubFrame } from "@multiremi/contracts/live-hub.js";
 import type { TraceEvent } from "@multiremi/contracts/trace.js";
+import { deltaTraceEvent } from "../../helpers/turn-trace.js";
 
 const hubs: HubImpl[] = [];
 afterEach(() => { for (const hub of hubs.splice(0)) hub.shutdown(); });
@@ -45,7 +46,7 @@ describe("MUL-436 regression 4C: sequence spelling and origin", () => {
 
   it("clamps keyed trace zero to one without a false gap", () => {
     const hub = make();
-    hub.append("t", [1, 2, 3].map((seq) => ({ seq, ts: "", type: "text" })));
+    hub.append("t", [1, 2, 3].map((seq) => deltaTraceEvent(seq)));
     for (const from of [0, 1]) {
       const frames: HubFrame[] = [];
       const sub = hub.subscribe("trace:t", from, (_key, batch) => frames.push(...batch));
@@ -57,7 +58,7 @@ describe("MUL-436 regression 4C: sequence spelling and origin", () => {
 
   it("keeps A-0 exclusive and keyed inclusive on the same trace stream", () => {
     const hub = make();
-    hub.append("t", [1, 2, 3].map((seq) => ({ seq, ts: "", type: "text" })));
+    hub.append("t", [1, 2, 3].map((seq) => deltaTraceEvent(seq)));
     const events: TraceEvent[] = [], frames: HubFrame[] = [];
     hub.subscribe("t", 2, (_task, batch) => events.push(...batch));
     hub.subscribe("trace:t", 2, (_key, batch) => frames.push(...batch));

@@ -74,7 +74,10 @@ async function renderStopCard(body: unknown): Promise<string> {
     "oc_group:thread:omt_click",
     async (stream) => {
       for await (const event of stream as AsyncIterable<TaskStreamEvent>) {
-        if (event.kind === "message" && event.message.content) text.push(event.message.content);
+        // A command reply is one final agent message.
+        if (event.kind === "message" && event.message.type === "item.completed" && event.message.item.type === "agent_message") {
+          text.push(event.message.item.text);
+        }
       }
     },
   );

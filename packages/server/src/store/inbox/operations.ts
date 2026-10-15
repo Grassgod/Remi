@@ -13,6 +13,7 @@ import { notifyTurnChanged } from '../turn-execution-records.js';
 import { mintQuestionCardToken,hashQuestionCardToken,type QuestionCardCredential } from '../question-card-token.js';
 import { patchDecisionRecord } from './decision-records.js';
 import { lockLane } from './lane-machine.js';
+import { pauseQueueForMemberStopWithinTransaction } from './queued-messages.js';
 import { IssueDecisionError } from '../repos/issues-repo.js';
 import { Questions } from './questions.js';
 import { isHistoricalIssueQuestionRecord } from '@multiremi/contracts';
@@ -261,7 +262,9 @@ export class InboxOperations {
       usage:JSON.parse(row.usage??'[]'),plugin_snapshot:JSON.parse(row.plugin_snapshot??'[]'),fallback_switched:!!row.fallback_switched,
       projection_truncated:!!row.projection_truncated,codex_profile:row.codex_profile?JSON.parse(row.codex_profile):null,
       claude_profile:row.claude_profile?JSON.parse(row.claude_profile):null,type_histogram:row.type_histogram?JSON.parse(row.type_histogram):null,
-      model:row.model?JSON.parse(row.model):null,trace_ref:row.trace_ref?JSON.parse(row.trace_ref):null} as MultiremiTurnAttempt));
+      model:row.model?JSON.parse(row.model):null,trace_ref:row.trace_ref?JSON.parse(row.trace_ref):null,
+      context_usage:row.context_usage?JSON.parse(row.context_usage):null,worked_ms:row.worked_ms==null?null:Number(row.worked_ms),
+      process_item_count:row.process_item_count==null?null:Number(row.process_item_count)} as MultiremiTurnAttempt));
   }
   getTurnTrace(id:string){const turn=this.getTurn(id);if(!turn?.current_attempt_id)throw new Error('Turn not found');
     return {turn_id:id,attempt_id:turn.current_attempt_id,trace:this.ctx.taskTraces().getTaskTrace(turn.current_attempt_id)};}
@@ -270,10 +273,12 @@ export class InboxOperations {
     let after=from;
     for(;;){const page=this.listMessages(turn.session_id,{from:after,to,limit:1000});messages.push(...page);if(page.length<1000)break;after=page.at(-1)!.seq;}
     return {from_seq:from,to_seq:to,messages,legacy_prompt:turn.legacy_prompt};}
-  cancelTurn(id:string):MultiremiTurn {
-    return this.transaction(()=>{const turn=this.getTurn(id);if(!turn?.current_attempt_id)throw new Error('Turn not found');
+  /** `byMember`: a member's stop pauses the Chat follow-up queue (ADR 0020). */
+  cancelTurn(id:string,opts:{byMember?:boolean}={}):MultiremiTurn {
+    return this.transaction(events=>{const turn=this.getTurn(id);if(!turn?.current_attempt_id)throw new Error('Turn not found');
       if(['completed','failed','cancelled'].includes(turn.status))return turn;
       this.ctx.lockWorkspaceRuntimeLifecycle(turn.workspace_id);lockLane(this.ctx,turn.session_id,turn.agent_id,turn.execution_scope);
+      if(opts.byMember)pauseQueueForMemberStopWithinTransaction(this.ctx,turn,events);
       const to=turn.input_to_seq??turn.wake_seq;
       // Cancelling discards this turn's input; it must not ring itself again.
       this.ctx.db.run(`UPDATE multiremi_session_lanes SET cursor_seq=CASE WHEN cursor_seq<? THEN ? ELSE cursor_seq END,

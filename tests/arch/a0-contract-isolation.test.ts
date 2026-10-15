@@ -27,10 +27,15 @@ const A0_MODULES = [
   { specifier: "@multiremi/worker/trace-store", wired: true },
   { specifier: "@multiremi/api/trace/trace-sink", wired: true },
   { specifier: "@multiremi/api/trace/daemon-trace-reader", wired: true },
-  // A-0b additions: the shared sanitize point and the derived read-side values.
-  // A-6 wires sanitize into TraceStore and derive into terminal reports.
+  // A-0b addition: the shared sanitize point, wired into TraceStore by A-6.
   { specifier: "@shared/trace-sanitize", wired: true },
-  { specifier: "@shared/trace-derive", wired: true },
+  // PR 2: the turn + items libraries. P2a wires the fold (daemon transport and
+  // completion fields), the command parser and the file-change diff (the
+  // daemon translator); P4 wires the step copy (Feishu native CoT rows).
+  { specifier: "@shared/turn-trace", wired: true },
+  { specifier: "@shared/command-parse", wired: true },
+  { specifier: "@shared/trace-step-copy", wired: true },
+  { specifier: "@shared/trace-file-change", wired: true },
 ] as const;
 
 /** The one file allowed to import a not-yet-wired module: this guard's own subject list. */
@@ -99,7 +104,10 @@ const A0_SOURCES = new Set([
   join(REPO_ROOT, "packages/server/src/api/trace/trace-sink.ts"),
   join(REPO_ROOT, "packages/server/src/api/trace/daemon-trace-reader.ts"),
   join(REPO_ROOT, "packages/shared/src/trace-sanitize.ts"),
-  join(REPO_ROOT, "packages/shared/src/trace-derive.ts"),
+  join(REPO_ROOT, "packages/shared/src/turn-trace.ts"),
+  join(REPO_ROOT, "packages/shared/src/command-parse.ts"),
+  join(REPO_ROOT, "packages/shared/src/trace-step-copy.ts"),
+  join(REPO_ROOT, "packages/shared/src/trace-file-change.ts"),
 ]);
 
 /** Notes on who will consume each module once it is wired. */
@@ -108,8 +116,11 @@ const WIRING_OWNER = new Map<string, string>([
   ["@multiremi/api/trace/trace-sink", "MUL-435 C0: LiveHub extends A-0's TraceSink"],
   ["@multiremi/contracts/daemon-protocol", "B5 task.complete / task.fail frame handling consumes the A-0 trace block"],
   ["@multiremi/api/trace/daemon-trace-reader", "B5 trace reader uses the daemon trace interface"],
-  ["@shared/trace-sanitize", "A-6 wires it into the daemon write path; today only tests call it"],
-  ["@shared/trace-derive", "A-5/A-8 wire it into completion and the backfill"],
+  ["@shared/trace-sanitize", "A-6 wired it into TraceStore.append; the PR 2 translator applies its item caps"],
+  ["@shared/turn-trace", "PR 2 P2a: the daemon transport fold and completion fields"],
+  ["@shared/command-parse", "PR 2 P2a: the daemon trace translator (via @acp/adapters/trace-vendor)"],
+  ["@shared/trace-step-copy", "PR 2 P4: Feishu native CoT rows (the web's Chat steps import it as @multiremi/shared/trace-step-copy)"],
+  ["@shared/trace-file-change", "PR 2 P2a: the daemon trace translator's file_change diffs (via trace-vendor)"],
 ]);
 
 const IMPORT_RE = /(?:from|import)\s*\(?\s*["']([^"']+)["']/g;

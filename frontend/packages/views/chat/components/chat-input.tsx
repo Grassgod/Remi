@@ -1,25 +1,33 @@
 "use client";
 
-import type { ReactNode } from "react";
+import type { KeyboardEvent, ReactNode } from "react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { cn } from "@multiremi/ui/lib/utils";
 import {
   ContentEditor,
   type ContentEditorRef,
+  type SubmitOptions,
   useFileDropZone,
   FileDropOverlay,
 } from "../../editor";
 import { FileUploadButton } from "@multiremi/ui/components/common/file-upload-button";
-import { ArrowUp, Loader2, Square } from "lucide-react";
+import { ArrowUp, ListPlus, Loader2, Pencil, Square } from "lucide-react";
 import { Button } from "@multiremi/ui/components/ui/button";
-import { useChatStore, DRAFT_NEW_SESSION } from "@multiremi/core/chat";
+import {
+  useChatStore,
+  DRAFT_NEW_SESSION,
+  type ChatFollowUpMode,
+  type ChatQueueEdit,
+} from "@multiremi/core/chat";
 import { toSafeErrorDetails } from "@multiremi/core/api";
+import { QUEUE_MAX_LIVE_ITEMS, queueErrorCode } from "@multiremi/core/chat/queue";
 import { createLogger } from "@multiremi/core/logger";
 import {
   getCurrentWsId,
   enterKey,
   formatShortcut,
   modKey,
+  shiftKey,
 } from "@multiremi/core/platform";
 import type { UploadResult } from "@multiremi/core/hooks/use-file-upload";
 import type { Attachment } from "@multiremi/core/types";
@@ -28,8 +36,43 @@ import { useT } from "../../i18n";
 
 const logger = createLogger("chat.ui");
 
+/**
+ * How one message is delivered: `send` while idle; while a run is active the
+ * follow-up preference, which Mod-Shift-Enter inverts for this message.
+ */
+export type ChatSendMode = "send" | ChatFollowUpMode;
+
+const otherMode = (mode: ChatFollowUpMode): ChatFollowUpMode => mode === "steer" ? "queue" : "steer";
+
+/** Queue refusals with their own copy; anything else keeps the generic one. */
+function errorKind(error: unknown, fallback: "send" | "save"): "send" | "save" | "full" | "archived" {
+  const code = queueErrorCode(error);
+  return code === "queue_full" ? "full" : code === "chat_archived" ? "archived" : fallback;
+}
+
+export function chatSendMode(isRunning: boolean, preference: ChatFollowUpMode, invert: boolean): ChatSendMode {
+  if (!isRunning) return "send";
+  return invert ? otherMode(preference) : preference;
+}
+
 interface ChatInputProps {
-  onSend: (content: string, attachmentIds?: string[], localAttachments?: Attachment[]) => void | Promise<void>;
+  onSend: (
+    content: string,
+    attachmentIds?: string[],
+    localAttachments?: Attachment[],
+    mode?: ChatSendMode,
+  ) => void | Promise<void>;
+  /**
+   * Saves the queued message being edited in this session's composer. It
+   * settles the edit (restoring the stashed draft, or keeping the text when
+   * the row can no longer change) and throws only for a retryable failure.
+   */
+  onSaveQueueEdit?: (
+    sessionId: string,
+    edit: ChatQueueEdit,
+    content: string,
+    attachmentIds: string[],
+  ) => Promise<void>;
   /** Receives a File and returns the attachment row (with id + CDN link).
    *  The wrapper owner (ChatWindow) lazy-creates a chat_session if needed
    *  and forwards `chatSessionId` to the upload — chat-input only cares
@@ -39,7 +82,6 @@ interface ChatInputProps {
   onUploadFile?: (file: File) => Promise<UploadResult | null>;
   onStop?: () => void;
   isRunning?: boolean;
-  supportsQueue?: boolean;
   disabled?: boolean;
   /** True when the user has no agent available — disables the editor and
    *  surfaces a distinct placeholder. Kept separate from `disabled` so
@@ -49,20 +91,23 @@ interface ChatInputProps {
   agentName?: string;
   /** Rendered at the bottom-left of the input bar — typically the agent picker. */
   leftAdornment?: ReactNode;
+  /** Rendered before the action buttons at the bottom-right — the context ring. */
+  rightAdornment?: ReactNode;
   /** Chat @ suggestions: current/recent issue/project entries. */
   contextItems?: MentionItem[];
 }
 
 export function ChatInput({
   onSend,
+  onSaveQueueEdit,
   onUploadFile,
   onStop,
   isRunning,
-  supportsQueue,
   disabled,
   noAgent,
   agentName,
   leftAdornment,
+  rightAdornment,
   contextItems,
 }: ChatInputProps) {
   const { t } = useT("chat");
@@ -89,7 +134,13 @@ export function ChatInput({
   const [pendingUploads, setPendingUploads] = useState(0);
   const [isSending, setIsSending] = useState(false);
   const sendingRef = useRef(false);
-  const [sendError, setSendError] = useState(false);
+  /** `full` and `archived` are queue refusals with their own copy. */
+  const [sendError, setSendError] = useState<"send" | "save" | "full" | "archived" | null>(null);
+  const followUpMode = useChatStore((s) => s.followUpMode);
+  const queueEdit = useChatStore((s) =>
+    activeSessionId ? s.queueEdit[activeSessionId] : undefined,
+  );
+  const finishQueueEdit = useChatStore((s) => s.finishQueueEdit);
   const editorIdentity = useRef({ sessionId: activeSessionId, version: 0 });
   if (editorIdentity.current.sessionId !== activeSessionId) {
     const lazyCreation =
@@ -109,11 +160,41 @@ export function ChatInput({
     (s) => s.setInputDraftAttachment,
   );
   const setLocalAttachmentDetail = useChatStore((s) => s.setLocalAttachmentDetail);
+  // The draft the editor shows. A draft of the same key changed from outside
+  // the editor (a queued message loaded for editing, the stash put back) is
+  // written into the editor; the editor's own updates are not echoed back.
+  // A key change (switching chats, or the lazily created session of a first
+  // send) is not an outside edit.
+  const editorDraftRef = useRef({ key: draftKey, draft: inputDraft });
   useEffect(() => {
+    editorDraftRef.current = { key: draftKey, draft: inputDraft };
     setIsEmpty(!inputDraft.trim());
-    setSendError(false);
+    setSendError(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [editorKey]);
+  useEffect(() => {
+    const previous = editorDraftRef.current;
+    editorDraftRef.current = { key: draftKey, draft: inputDraft };
+    if (previous.key !== draftKey || previous.draft === inputDraft) return;
+    setIsEmpty(!inputDraft.trim());
+    const editor = editorRef.current;
+    if (!editor || editor.getMarkdown().trimEnd() === inputDraft.trimEnd()) return;
+    editor.setContent(inputDraft);
+  }, [draftKey, inputDraft]);
+
+  // Editing a queued message: the composer takes focus once the row loaded
+  // and the menu that started the edit has closed.
+  const editingItemId = queueEdit?.itemId;
+  useEffect(() => {
+    if (!editingItemId) return;
+    setSendError(null);
+    const timer = setTimeout(() => editorRef.current?.focus(), 0);
+    return () => clearTimeout(timer);
+  }, [editingItemId]);
+
+  const cancelQueueEdit = () => {
+    if (activeSessionId) finishQueueEdit(activeSessionId, "restore");
+  };
 
   const handleUpload = useCallback(
     async (file: File): Promise<UploadResult | null> => {
@@ -146,14 +227,13 @@ export function ChatInput({
     onDrop: (files) => files.forEach((f) => editorRef.current?.uploadFile(f)),
   });
 
-  const handleSend = async () => {
+  const handleSend = async (options?: SubmitOptions) => {
     const content = editorRef.current
       ?.getMarkdown()
       ?.replace(/(\n\s*)+$/, "")
       .trim();
     if (
       !content ||
-      (isRunning && !supportsQueue) ||
       disabled ||
       noAgent ||
       sendingRef.current
@@ -191,17 +271,39 @@ export function ChatInput({
     const keyAtSend = draftKey;
     const workspaceAtSend = getCurrentWsId();
     const editorAtSend = editorKey;
+    // Saving an edited queued message settles the draft through the store
+    // (the stash comes back); nothing is cleared here.
+    const edit = activeSessionId ? useChatStore.getState().queueEdit[activeSessionId] : undefined;
+    if (edit && activeSessionId) {
+      logger.info("input.save_queued", { contentLength: content.length, attachmentCount: activeIds.length });
+      sendingRef.current = true;
+      setIsSending(true);
+      setSendError(null);
+      try {
+        await onSaveQueueEdit?.(activeSessionId, edit, content, activeIds);
+      } catch (error) {
+        logger.error("input.save_queued.error", { error: toSafeErrorDetails(error) });
+        if (getCurrentWsId() === workspaceAtSend) setSendError(errorKind(error, "save"));
+      } finally {
+        sendingRef.current = false;
+        setIsSending(false);
+      }
+      return;
+    }
+    const mode = chatSendMode(!!isRunning, followUpMode, options?.invert ?? false);
     logger.info("input.send", {
       contentLength: content.length,
       draftKey: keyAtSend,
       attachmentCount: activeIds.length,
+      mode,
     });
     sendingRef.current = true;
     setIsSending(true);
-    setSendError(false);
+    setSendError(null);
     try {
       await onSend(content, activeIds.length > 0 ? activeIds : undefined,
-        activeIds.map(id => useChatStore.getState().localAttachmentDetails[id]).filter((item): item is Attachment => !!item));
+        activeIds.map(id => useChatStore.getState().localAttachmentDetails[id]).filter((item): item is Attachment => !!item),
+        mode);
       if (getCurrentWsId() !== workspaceAtSend) return;
       // A user may keep typing while the request is in flight. Only clear
       // the submitted content; retain subsequent edits and their attachments.
@@ -212,6 +314,7 @@ export function ChatInput({
         current === content
       ) {
         editorRef.current?.clearContent();
+        editorDraftRef.current = { key: editorDraftRef.current.key, draft: "" };
         clearInputDraft(keyAtSend);
         const currentSession = useChatStore.getState().activeSessionId;
         if (currentSession && currentSession !== keyAtSend)
@@ -231,7 +334,7 @@ export function ChatInput({
         editorAtSend
       )
         return;
-      setSendError(true);
+      setSendError(errorKind(error, "send"));
       const currentSession = useChatStore.getState().activeSessionId;
       if (currentSession)
         setInputDraft(
@@ -253,6 +356,26 @@ export function ChatInput({
         : t(($) => $.input.placeholder_default);
 
   const uploadEnabled = !!onUploadFile && !disabled && !noAgent;
+
+  const submitShortcut = formatShortcut(modKey, enterKey);
+  const invertShortcut = formatShortcut(modKey, shiftKey, enterKey);
+  const modeLabel = (mode: ChatFollowUpMode) =>
+    mode === "steer" ? t(($) => $.input.steer) : t(($) => $.input.queue);
+  const runningLabel = modeLabel(followUpMode);
+  const submitDisabled =
+    isEmpty || !!disabled || !!noAgent || pendingUploads > 0 || isSending;
+
+  // Esc leaves the queued-message edit. An open @ or / suggestion keeps the
+  // key: it marks its query with the `.suggestion` decoration. The key stops
+  // here, so the editor's Escape-to-blur does not also run and the composer
+  // keeps focus for the restored draft.
+  const handleKeyDownCapture = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (event.key !== "Escape" || !queueEdit || event.nativeEvent.isComposing) return;
+    if (event.currentTarget.querySelector(".suggestion")) return;
+    event.preventDefault();
+    event.stopPropagation();
+    cancelQueueEdit();
+  };
 
   return (
     <div
@@ -278,7 +401,26 @@ export function ChatInput({
           (noAgent || disabled) && "pointer-events-none opacity-60",
         )}
         aria-disabled={noAgent || disabled || undefined}
+        data-chat-composer=""
+        onKeyDownCapture={handleKeyDownCapture}
       >
+        {queueEdit && (
+          <div
+            data-chat-queue-edit=""
+            className="flex shrink-0 items-center gap-1.5 border-b px-3 py-1 text-xs text-muted-foreground"
+          >
+            <Pencil className="size-3 shrink-0" aria-hidden="true" />
+            <span className="min-w-0 truncate">{t(($) => $.input.editing_queued)}</span>
+            <span aria-hidden="true">·</span>
+            <button
+              type="button"
+              className="shrink-0 font-medium text-foreground hover:underline"
+              onClick={cancelQueueEdit}
+            >
+              {t(($) => $.input.cancel_edit)}
+            </button>
+          </div>
+        )}
         <div className="flex-1 min-h-0 overflow-y-auto px-3 py-2">
           <ContentEditor
             // The identity above distinguishes session switching from lazy creation.
@@ -288,9 +430,11 @@ export function ChatInput({
             placeholder={placeholder}
             onUpdate={(md) => {
               setIsEmpty(!md.trim());
+              editorDraftRef.current = { key: draftKey, draft: md };
               setInputDraft(draftKey, md);
             }}
-            onSubmit={handleSend}
+            onSubmit={(options) => void handleSend(options)}
+            invertibleSubmit
             onUploadFile={uploadEnabled ? handleUpload : undefined}
             debounceMs={100}
             mentionMode={contextItems ? "context" : "default"}
@@ -304,6 +448,7 @@ export function ChatInput({
             // default behavior for lists, quotes, and paragraph breaks.
             // Without this, Enter-as-send would steal the only key that
             // continues a bullet list, leaving users stuck after one item.
+            // Mod+Shift+Enter sends with the other follow-up mode.
           />
         </div>
         {leftAdornment && (
@@ -312,6 +457,7 @@ export function ChatInput({
           </div>
         )}
         <div className="absolute bottom-1 right-1.5 flex items-center gap-1">
+          {rightAdornment}
           {uploadEnabled && (
             <FileUploadButton
               size="sm"
@@ -328,23 +474,40 @@ export function ChatInput({
               <Square className="size-3.5 fill-current" />
             </Button>
           )}
-          {(!isRunning || supportsQueue) && (
+          {queueEdit ? (
+            <Button
+              size="sm"
+              onClick={() => void handleSend()}
+              disabled={submitDisabled}
+              title={`${t(($) => $.input.save)} · ${submitShortcut}`}
+            >
+              {isSending && <Loader2 className="size-3.5 animate-spin" />}
+              {t(($) => $.input.save)}
+            </Button>
+          ) : isRunning ? (
             <Button
               size="icon-sm"
               onClick={() => void handleSend()}
-              disabled={
-                isEmpty ||
-                !!disabled ||
-                !!noAgent ||
-                pendingUploads > 0 ||
-                isSending
-              }
-              aria-label={
-                isRunning
-                  ? t(($) => $.queue.add)
-                  : t(($) => $.input.send_tooltip)
-              }
-              title={`${isRunning ? t(($) => $.queue.add) : t(($) => $.input.send_tooltip)} · ${formatShortcut(modKey, enterKey)}`}
+              disabled={submitDisabled}
+              aria-label={runningLabel}
+              title={`${runningLabel} · ${submitShortcut}\n${modeLabel(otherMode(followUpMode))} · ${invertShortcut}`}
+              data-follow-up-mode={followUpMode}
+            >
+              {isSending ? (
+                <Loader2 className="size-4 animate-spin" />
+              ) : followUpMode === "queue" ? (
+                <ListPlus className="size-4" />
+              ) : (
+                <ArrowUp className="size-4" />
+              )}
+            </Button>
+          ) : (
+            <Button
+              size="icon-sm"
+              onClick={() => void handleSend()}
+              disabled={submitDisabled}
+              aria-label={t(($) => $.input.send_tooltip)}
+              title={`${t(($) => $.input.send_tooltip)} · ${submitShortcut}`}
             >
               {isSending ? (
                 <Loader2 className="size-4 animate-spin" />
@@ -361,7 +524,13 @@ export function ChatInput({
           role="alert"
           className="mx-auto mt-2 max-w-4xl text-xs text-destructive"
         >
-          {t(($) => $.input.send_failed)}
+          {sendError === "full"
+            ? t(($) => $.queue.full, { max: QUEUE_MAX_LIVE_ITEMS })
+            : sendError === "archived"
+              ? t(($) => $.queue.archived)
+              : sendError === "save"
+                ? t(($) => $.queue.failed)
+                : t(($) => $.input.send_failed)}
         </p>
       )}
     </div>

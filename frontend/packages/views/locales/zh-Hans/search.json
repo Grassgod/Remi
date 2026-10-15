@@ -1,6 +1,6 @@
 {
   "title": "搜索",
-  "description": "搜索页面、issue、项目和成员",
+  "description": "搜索页面、issue、项目、成员和聊天",
   "placeholder": "输入命令或关键词搜索...",
   "groups": {
     "pages": "页面",
@@ -8,6 +8,7 @@
     "members": "成员",
     "projects": "项目",
     "issues": "Issues",
+    "chats": "聊天",
     "recent": "最近"
   },
   "pages": {

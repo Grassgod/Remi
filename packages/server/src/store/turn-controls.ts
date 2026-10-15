@@ -13,3 +13,15 @@ export function isRelatedTurnController(store: MultiremiStore, agentId: string, 
   return store.listSquads(target.workspaceId).some(squad => squad.leaderId === agentId
     && store.listSquadMembers(squad.id).some(member => member.memberType === 'agent' && member.memberId === target.agentId));
 }
+
+/** A Chat creator's retry was refused; `status` is the HTTP answer. */
+export class ChatTurnRetryError extends Error {
+  constructor(
+    readonly code: string,
+    message: string,
+    readonly status: 403 | 404 | 409 = 409,
+  ) {
+    super(message);
+    this.name = "ChatTurnRetryError";
+  }
+}

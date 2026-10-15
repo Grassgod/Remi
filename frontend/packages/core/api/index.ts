@@ -36,8 +36,7 @@ export type {
   TaskSteerResponse,
   TaskTraceRead,
 } from "./schemas/tasks";
-export { TraceEventSchema } from "./schemas/tasks";
-export { mergeTraceWindow, TRACE_VIEW_WINDOW_SIZE, TRACE_LIVE_WINDOW_SIZE, TRACE_HISTORY_WINDOW_BYTES, TRACE_LIVE_WINDOW_BYTES } from "./trace-window";
+export { TraceEventSchema, TraceTurnPageSchema, parseTraceEvent, parseTraceFrames } from "./schemas/tasks";
 export { WSClient } from "./ws-client";
 
 import type { ApiClient as ApiClientType } from "./client";

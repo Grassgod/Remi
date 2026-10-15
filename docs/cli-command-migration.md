@@ -222,7 +222,13 @@ Issue and Comment keep their scoped attachment listing and management commands.
 
 `remi turn list --limit <n> --cursor <cursor>` lists authorized turns.
 `remi turn get <turn> --input --attempts` reads the input range and attempt history;
-`remi turn trace read <turn> --attempt <attempt>` reads a selected attempt's trace.
+`remi turn trace read <turn> --attempt <attempt>` reads a selected attempt's trace
+as the folded turn and items (`view=turn`, [ADR 0019](adr/0019-turn-and-item-traces.md));
+page it with `--cursor <next_item_cursor>` and `--limit <n>`. `--raw` reads the stored
+event lines instead (`view=events`, paged with `--after <next_after_seq>`), which is the
+only view of a pre-PR 2 (v1) trace. `--after` without `--raw`, or `--cursor` with it, is a
+usage error. `remi share trace read` takes the same options. JSON output prints the whole
+page; JSONL prints one item, or one raw line, per line.
 
 Chat Tasks can deliver files to their current conversation with
 `remi message send --attachment report.html --attachment chart.png`.

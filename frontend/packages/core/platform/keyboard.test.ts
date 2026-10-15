@@ -19,6 +19,8 @@ describe("keyboard platform helper", () => {
     expect(mod.enterKey).toBe("↵");
     expect(mod.formatShortcut(mod.modKey, "K")).toBe("⌘K");
     expect(mod.formatShortcut(mod.modKey, mod.enterKey)).toBe("⌘↵");
+    expect(mod.shiftKey).toBe("⇧");
+    expect(mod.formatShortcut(mod.modKey, mod.shiftKey, mod.enterKey)).toBe("⌘⇧↵");
   });
 
   it("renders Ctrl/Enter on Windows", async () => {
@@ -30,6 +32,8 @@ describe("keyboard platform helper", () => {
     expect(mod.enterKey).toBe("Enter");
     expect(mod.formatShortcut(mod.modKey, "K")).toBe("Ctrl+K");
     expect(mod.formatShortcut(mod.modKey, mod.enterKey)).toBe("Ctrl+Enter");
+    expect(mod.shiftKey).toBe("Shift");
+    expect(mod.formatShortcut(mod.modKey, mod.shiftKey, mod.enterKey)).toBe("Ctrl+Shift+Enter");
   });
 
   it("renders Ctrl/Enter on Linux", async () => {

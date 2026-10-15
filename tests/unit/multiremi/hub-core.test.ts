@@ -34,6 +34,7 @@ import { LocalHubTransport, createLocalHubTransport } from "@multiremi/api/hub/h
 import type { HubTransport } from "@multiremi/api/hub/hub-transport.js";
 import type { HubFrame, HubStreamKey } from "@multiremi/contracts/live-hub.js";
 import type { TraceEvent } from "@multiremi/contracts/trace.js";
+import { deltaTraceEvent } from "../../helpers/turn-trace.js";
 
 // ── Harness ────────────────────────────────────────────────────────────────────────────────────
 
@@ -143,7 +144,7 @@ function traceFrame(seq: number): HubFrame {
 }
 
 function traceEvent(seq: number): TraceEvent {
-  return { seq, ts: new Date(1_700_000_000_000 + seq).toISOString(), type: "text", content: `t-${seq}` };
+  return deltaTraceEvent(seq);
 }
 
 interface Bed {

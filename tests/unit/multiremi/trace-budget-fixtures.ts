@@ -1,80 +1,97 @@
-import { TRACE_EVENT_STATUSES, type TraceEvent, type TraceEventInput } from "@multiremi/contracts/trace.js";
-import { sanitizeStoredEvent } from "@multiremi/worker/trace-store.js";
-import {
-  TRACE_CONTENT_MAX_BYTES, TRACE_OUTPUT_MAX_BYTES, TRACE_TOOL_MAX_BYTES,
-  TRACE_INPUT_MAX_BYTES, TRACE_META_MAX_BYTES, TRACE_TRUNCATION_MARKER,
-} from "@shared/trace-sanitize.js";
+// Turn + items trace budgets for the server read-path fixtures (PR 2).
+//
+// The store caps every event body at TRACE_EVENT_MAX_BYTES (1 MiB) and then adds
+// `ts` and `seq`, so the largest stored line is a little over the server's 1 MiB
+// page budget. Each case below sits exactly at the ceiling: its stored line is the
+// "oversized first event" a page must still return alone, byte-for-byte.
+import type { TraceCommandItem, TraceEvent, TraceEventInput, TraceSubagentItem, TraceTurn } from "@multiremi/contracts/trace.js";
+import { TRACE_EVENT_MAX_BYTES } from "@shared/trace-sanitize.js";
 
 export const traceJsonBytes = (value: unknown): number => Buffer.byteLength(JSON.stringify(value), "utf8");
-const emptyStringBytes = traceJsonBytes("");
-const nullablePlaceholder = traceJsonBytes(null) > emptyStringBytes ? null : "";
-type NullableTraceField = Exclude<keyof TraceEvent, "seq" | "ts" | "type">;
-const nullableSkeleton = {
-  tool: nullablePlaceholder, content: nullablePlaceholder, output: nullablePlaceholder,
-  input: nullablePlaceholder, meta: nullablePlaceholder, tool_call_id: nullablePlaceholder,
-  status: nullablePlaceholder,
-} satisfies Record<NullableTraceField, null | string>;
-const maxStringBytes = (cap: number) => Math.max(traceJsonBytes(null), emptyStringBytes + 6 * cap
-  + traceJsonBytes(TRACE_TRUNCATION_MARKER) - emptyStringBytes);
-const fieldMaxBytes: Record<NullableTraceField, number> = {
-  tool: maxStringBytes(TRACE_TOOL_MAX_BYTES), content: maxStringBytes(TRACE_CONTENT_MAX_BYTES),
-  output: maxStringBytes(TRACE_OUTPUT_MAX_BYTES),
-  input: Math.max(traceJsonBytes(null), TRACE_INPUT_MAX_BYTES),
-  meta: Math.max(traceJsonBytes(null), TRACE_META_MAX_BYTES),
-  tool_call_id: traceJsonBytes(nullablePlaceholder),
-  status: Math.max(traceJsonBytes(null), ...TRACE_EVENT_STATUSES.map(traceJsonBytes)),
-};
 
-// Conditional bound: type/tool_call_id/ts string contents are empty, all other
-// sanitized fields are maximal. A does not cap those three strings; B4 accepts
-// arbitrarily long fractional seconds. Count their names/quotes, never contents.
-// Every nullable skeleton uses the larger JSON representation of null and "".
-// Replace each placeholder with its full capped representation: UTF-8 strings
-// can expand x6 and carry A's write marker; input/meta have serialized JSON caps.
-export const TRACE_SANITIZED_EVENT_MAX_BYTES = traceJsonBytes({
-  seq: Number.MAX_SAFE_INTEGER,
-  ts: "", type: "", ...nullableSkeleton,
-}) + (Object.keys(nullableSkeleton) as NullableTraceField[]).reduce((bytes, field) =>
-  bytes + fieldMaxBytes[field] - traceJsonBytes(nullableSkeleton[field]), 0);
+/** The store's clock in these fixtures; an ISO timestamp as `new Date().toISOString()` writes it. */
+export const TRACE_BUDGET_FIXTURE_TS = "2026-09-28T00:00:00.000Z";
 
-export function traceFiniteEventBytes(event: TraceEvent): number {
-  return traceJsonBytes(event) - [event.type, event.tool_call_id, event.ts].reduce<number>((bytes, value) =>
-    bytes + (typeof value === "string" ? traceJsonBytes(value) - emptyStringBytes : 0), 0);
+/**
+ * Upper bound of one stored line: a body at the ceiling plus the `ts` the store
+ * writes (24 characters) and the largest `seq`. The two keys are spliced into
+ * the body's object, so the bytes are the body's plus `{ts, seq}`'s minus one
+ * pair of braces plus one comma.
+ */
+export const TRACE_STORED_EVENT_MAX_BYTES = TRACE_EVENT_MAX_BYTES
+  + traceJsonBytes({ ts: TRACE_BUDGET_FIXTURE_TS, seq: Number.MAX_SAFE_INTEGER }) - 2 + 1;
+
+export function fixtureTurn(id: string, patch: Partial<TraceTurn> = {}): TraceTurn {
+  return {
+    id, turn_id: `turn_${id}`, agent_id: "agt_fixture", agent_name: "Fixture", provider: "codex",
+    requested_model: null, model: null, status: "running", error: null,
+    started_at: TRACE_BUDGET_FIXTURE_TS, completed_at: null, duration_ms: null, final_item_id: null,
+    final_started_at: null, context_usage: null,
+    stats: { item_count: 0, tool_call_count: 0, process_item_count: 0, type_histogram: [] },
+    ...patch,
+  };
 }
 
-export const TRACE_BUDGET_FIXTURE_TS = "2026-09-28T00:00:00Z";
-
-function escapedObject(maxBytes: number): Record<string, unknown> {
-  const payloadBytes = maxBytes - Buffer.byteLength(JSON.stringify({ value: "" }));
-  return { value: "\u0001".repeat(Math.floor(payloadBytes / 6)) + " ".repeat(payloadBytes % 6) };
+export function commandItem(id: string, command: string): TraceCommandItem {
+  return {
+    id, parent_id: null, type: "command", status: "completed",
+    started_at: TRACE_BUDGET_FIXTURE_TS, completed_at: TRACE_BUDGET_FIXTURE_TS,
+    tool: "Bash", source: "shell", command, cwd: null, actions: [], output: null, exit_code: 0, duration_ms: 1,
+  };
 }
 
-export function maximalNullableTraceInput(ts: string): Omit<TraceEvent, "seq"> {
-  return sanitizeStoredEvent({
-    type: "x", tool_call_id: null, status: "in_progress",
-    tool: "\u0001".repeat(TRACE_TOOL_MAX_BYTES + 1),
-    content: "\u0001".repeat(TRACE_CONTENT_MAX_BYTES + 1),
-    output: "\u0001".repeat(TRACE_OUTPUT_MAX_BYTES + 1),
-    input: escapedObject(TRACE_INPUT_MAX_BYTES), meta: escapedObject(TRACE_META_MAX_BYTES),
-  }, ts);
+/**
+ * A finished subagent whose `prompt` carries `text`. The prompt is not a capped
+ * field (a command line is, at 16 KiB), so the item reaches the store, the
+ * readers and the page budgets at its full size.
+ */
+export function bulkItem(id: string, text: string): TraceSubagentItem {
+  return {
+    id, parent_id: null, type: "subagent", status: "completed",
+    started_at: TRACE_BUDGET_FIXTURE_TS, completed_at: TRACE_BUDGET_FIXTURE_TS,
+    tool: "Agent", title: null, prompt: text, output: null, duration_ms: 1,
+  };
+}
+
+/** `item.completed` of a finished agent message. */
+export function messageEvent(id: string, text: string): TraceEventInput {
+  return {
+    type: "item.completed",
+    item: {
+      id, parent_id: null, type: "agent_message", status: "completed", phase: "unknown", text,
+      started_at: TRACE_BUDGET_FIXTURE_TS, completed_at: TRACE_BUDGET_FIXTURE_TS,
+    },
+  };
+}
+
+/** The `turn.started` a running trace begins with. */
+export function turnStartedEvent(id: string): TraceEventInput {
+  return { type: "turn.started", turn: fixtureTurn(id) };
+}
+
+const ascii = (bytes: number) => "a".repeat(bytes);
+// "\u0001" serializes as a six-byte escape; the remainder is plain spaces.
+const escaped = (bytes: number) => "\u0001".repeat(Math.floor(bytes / 6)) + " ".repeat(bytes % 6);
+
+/** An `item.completed` subagent whose body is exactly the ceiling, carried by its uncapped prompt. */
+function ceilingPrompt(id: string, pad: (bytes: number) => string): TraceEventInput {
+  const base = { type: "item.completed" as const, item: bulkItem(id, "") };
+  return { ...base, item: { ...base.item, prompt: pad(TRACE_EVENT_MAX_BYTES - traceJsonBytes(base)) } };
+}
+
+/** A body of a type this contract does not know: opaque to the store, the hub and `view=events`. */
+function ceilingFuture(): TraceEventInput {
+  const base = { type: "item.future", blob: "" };
+  return { ...base, blob: ascii(TRACE_EVENT_MAX_BYTES - traceJsonBytes(base)) } as unknown as TraceEventInput;
 }
 
 export const oversizedTraceCases: Array<{ name: string; input: TraceEventInput }> = [
-  { name: "QA tool_call_id", input: {
-    type: "tool_result", tool: "Bash", tool_call_id: "i".repeat(1024 * 1024 + 1000),
-    status: "completed", output: "",
-  } },
-  { name: "QA JSON-expanded content", input: { type: "text", content: "\u0001".repeat(180_000) } },
-  { name: "contract-limit event", input: {
-    type: "tool_result", tool_call_id: "call_contract", status: "in_progress",
-    tool: "\u0001".repeat(TRACE_TOOL_MAX_BYTES),
-    content: "\u0001".repeat(TRACE_CONTENT_MAX_BYTES),
-    output: "\u0001".repeat(TRACE_OUTPUT_MAX_BYTES),
-    input: escapedObject(TRACE_INPUT_MAX_BYTES), meta: escapedObject(TRACE_META_MAX_BYTES),
-  } },
-  { name: "nullable skeleton", input: maximalNullableTraceInput("9999-12-31T23:59:59.999999Z") },
-  ...[121, 4 * 1024].map((bytes) => ({
-    name: `${bytes}-byte ts`,
-    input: maximalNullableTraceInput(`2026-01-01T00:00:00.${"0".repeat(bytes - "2026-01-01T00:00:00.Z".length)}Z`),
-  })),
+  { name: "ceiling prompt", input: ceilingPrompt("agent_ceiling", ascii) },
+  { name: "JSON-expanded prompt", input: ceilingPrompt("agent_escaped", escaped) },
+  { name: "unknown future type", input: ceilingFuture() },
 ];
+
+/** The serialized size of a stored line, the number every case is measured by. */
+export function storedEventBytes(event: TraceEvent | Record<string, unknown>): number {
+  return traceJsonBytes(event);
+}

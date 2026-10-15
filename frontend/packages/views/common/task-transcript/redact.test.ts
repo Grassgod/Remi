@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { redactSecrets, redactString, redactValue } from "./redact";
+import { redactItem, redactSecrets, redactString, redactValue } from "./redact";
 
 describe("redactSecrets", () => {
   it("redacts AWS access key", () => {
@@ -127,5 +127,21 @@ describe("redactValue recursive key-aware masking", () => {
     const out = redactValue(a) as Record<string, unknown>;
     expect(out.x).toBe(1);
     expect(out.self).toBe("[REDACTED CYCLE]");
+  });
+});
+
+describe("redactItem", () => {
+  it("redacts free text and structured payloads but keeps identity fields", () => {
+    const item = redactItem({
+      id: "cmd_1", type: "command", status: "completed", author_id: "member_1",
+      command: "curl -H 'Authorization: Bearer abc.def.ghi' https://x", output: "token=ghp_" + "a".repeat(36),
+      cwd: "/Users/alice/repo", actions: [{ type: "unknown", command: "export API_KEY=sk-" + "b".repeat(24) }],
+      input: { api_key: "raw" },
+    });
+    expect(item).toMatchObject({ id: "cmd_1", type: "command", status: "completed", author_id: "member_1", cwd: "/Users/<user>/repo" });
+    expect(item.command).not.toContain("abc.def.ghi");
+    expect(item.output).not.toContain("ghp_");
+    expect(JSON.stringify(item.actions)).not.toContain("sk-");
+    expect(item.input).toEqual({ api_key: "[REDACTED CREDENTIAL]" });
   });
 });

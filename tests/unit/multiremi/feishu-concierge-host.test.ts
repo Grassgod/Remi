@@ -271,7 +271,6 @@ describe("control-plane Feishu concierge host", () => {
     test.channel.handle.streamProactiveTask = async (_chat, _session, _stream, _meta, options) => {
       sequence.push("card");
       expect(options.mentionOpenId).toBe("ou_saved");
-      await options.onStarted!("om_card");
       return { messageId: "om_card" };
     };
     const delivery = { id: "fbo_owner", claimToken: "lease", chatId: "oc_topic", threadId: "om_root",
@@ -282,13 +281,14 @@ describe("control-plane Feishu concierge host", () => {
       prepareMention: async id => { sequence.push("checkpoint"); expect(id).toBe("ou_candidate"); return "ou_saved"; },
       onStarted: async () => { sequence.push("started"); },
     });
-    expect(sequence).toEqual(["resolve", "checkpoint", "card", "started"]);
+    // The Task card's message ID is the result the lane returns, not a start callback.
+    expect(sequence).toEqual(["resolve", "checkpoint", "card"]);
     expect(test.channel.sent).toHaveLength(0);
     sequence.length = 0;
     await test.conciergeHost.sendOutbound!({ ...delivery, resumeMessageId: "om_card", mention: { mode: "group_owner", resolvedOpenId: "ou_saved" } }, {
       signal: new AbortController().signal, onStarted: async () => { sequence.push("started"); },
     });
-    expect(sequence).toEqual(["card", "started"]);
+    expect(sequence).toEqual(["card"]);
   });
 
   it("does not send a card when the recipient checkpoint loses its lease", async () => {
@@ -327,7 +327,9 @@ describe("control-plane Feishu concierge host", () => {
     Object.assign(fake.daemon, {
       subscribeTrace: async (_id: string, fromSeq: number, onEvents: Parameters<MultiremiDaemon["subscribeTrace"]>[2]) => {
         reads.push(fromSeq);
-        await onEvents([{ seq: 1, ts: "2026-09-28T00:00:00Z", type: "tool_use", tool: "Bash" }], true);
+        await onEvents([{ seq: 1, ts: "2026-09-28T00:00:00.000Z", type: "item.started", item: { id: "toolu_bash", parent_id: null,
+          status: "in_progress", started_at: "2026-09-28T00:00:00.000Z", completed_at: null, type: "command", tool: "Bash",
+          source: "shell", command: "git status", cwd: null, actions: [], output: null, exit_code: null, duration_ms: null } }], true);
         return async () => {};
       },
       getFeishuBotTaskSnapshot: async () => ({ taskId: "tsk_live", status: "completed", result: "done", usage: [] }),
@@ -337,8 +339,8 @@ describe("control-plane Feishu concierge host", () => {
     test.channel.handle.streamProactiveTask = async (chatId, _sessionKey, stream, meta, options) => {
       expect(chatId).toBe("oc_topic");
       expect(meta.taskId).toBe("tsk_live");
+      // A resume message ID without a checkpoint reaches the channel, which finishes it final-only.
       expect(options.durable).toEqual({ idempotencyKey: "fbo_live", messageId: "om_existing" });
-      await options.onStarted!("om_existing");
       for await (const event of stream) events.push(event);
       return { messageId: "om_existing" };
     };
@@ -348,10 +350,10 @@ describe("control-plane Feishu concierge host", () => {
       replyToMessageId: "om_root", body: "", bodyOrigin: "agent", taskId: "tsk_live", resumeMessageId: "om_existing",
       idempotencyKey: "fbo_live" }, { signal: new AbortController().signal, onStarted: async id => { checkpoints.push(id); } });
     expect(test.channel.sent).toHaveLength(0);
-    expect(checkpoints).toEqual(["om_existing"]);
+    expect(checkpoints).toEqual([]);
     expect(reads).toEqual([0]);
     expect(events).toEqual([
-      expect.objectContaining({ kind: "message", message: expect.objectContaining({ type: "tool_use" }) }),
+      expect.objectContaining({ kind: "message", message: expect.objectContaining({ type: "item.started" }) }),
       expect.objectContaining({ kind: "snapshot", snapshot: expect.objectContaining({ status: "completed" }) }),
     ]);
   });
@@ -363,7 +365,7 @@ describe("control-plane Feishu concierge host", () => {
     Object.assign(fake.daemon, {
       subscribeTrace: async (_id: string, fromSeq: number, onEvents: Parameters<MultiremiDaemon["subscribeTrace"]>[2]) => {
         cursors.push(fromSeq);
-        await onEvents([{ seq: fromSeq + 1, ts: "2026-09-28T00:00:00Z", type: "thinking", content: "resumed" }], true);
+        await onEvents([{ seq: fromSeq + 1, ts: "2026-09-28T00:00:00.000Z", type: "turn.updated", patch: { model: "claude-test" } }], true);
         return async () => {};
       },
       getFeishuBotTaskSnapshot: async () => ({ taskId: "tsk_resume", status: "completed", result: "done", usage: [] }),

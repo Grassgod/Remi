@@ -15,6 +15,9 @@ export const modKey: string = isMac ? "⌘" : "Ctrl";
 /** Enter / return key label — ↵ on Mac, "Enter" elsewhere. */
 export const enterKey: string = isMac ? "↵" : "Enter";
 
+/** Shift key label — ⇧ on Mac, "Shift" elsewhere. */
+export const shiftKey: string = isMac ? "⇧" : "Shift";
+
 /**
  * Join key labels for display. Mac compresses combos with no separator
  * ("⌘K", "⌘↵"); other platforms use "+" ("Ctrl+K", "Ctrl+Enter").

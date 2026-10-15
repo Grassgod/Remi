@@ -153,7 +153,6 @@ describe("ACP typed session failure", () => {
         if (order === "before") text();
         update({ sessionUpdate: "tool_call_update", toolCallId: "compact:2", status: "failed",
           _meta: { contextCompaction: { version: 1, error: "Model missing-model not supported" } } });
-        update({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Compacting..." } });
         update({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: "" } });
         update({ sessionUpdate: "agent_thought_chunk", content: { type: "text", text: "Thinking about recovery" } });
         if (order === "after") text();
@@ -164,6 +163,38 @@ describe("ACP typed session failure", () => {
     try {
       if (order === "before") {
         await expect(drain(provider)).rejects.toThrow("Model missing-model not supported");
+        expect(warn).not.toHaveBeenCalled();
+      } else {
+        await drain(provider);
+        expect(warn).toHaveBeenCalledTimes(1);
+        expect(provider.getLastResponse()?.metadata?.sessionFailure).toBeUndefined();
+      }
+    } finally { warn.mockRestore(); }
+  });
+
+  it.each(["before", "after"])("captures a failed compaction_update the same way (%s)", async (order) => {
+    // The ACP compaction lifecycle both pinned bridges send once Remi advertises
+    // `session.compaction` (claude-agent-acp 0.89 context-compaction.js finish();
+    // codex-acp 2.2.2 CodexSessionCompactions.finishTurn).
+    const provider = new AcpProvider({ agentType: "codex" });
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    const client = {
+      typedSessionFailures: true, _options: { onSessionUpdate: (_event: unknown) => {} },
+      prompt: async () => {
+        const update = (value: unknown) => client._options.onSessionUpdate({ sessionId: "s", update: value });
+        const text = () => update({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Work completed" } });
+        if (order === "before") text();
+        update({ sessionUpdate: "compaction_update", compactionId: "cmp_9", status: "in_progress" });
+        update({ sessionUpdate: "compaction_update", compactionId: "cmp_9", status: "failed",
+          error: "Codex ended the turn before compaction completed." });
+        if (order === "after") text();
+        return { stopReason: "end_turn" };
+      },
+    };
+    (provider as any)._ensureSession = async () => ({ client, acpSessionId: "s" });
+    try {
+      if (order === "before") {
+        await expect(drain(provider)).rejects.toThrow("Codex ended the turn before compaction completed.");
         expect(warn).not.toHaveBeenCalled();
       } else {
         await drain(provider);

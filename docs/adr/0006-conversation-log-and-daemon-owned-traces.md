@@ -6,6 +6,8 @@
 
 决策 5–9 被 [ADR 0018](0018-local-records-and-recyclable-workspaces.md) 取代（trace 归档、Session Archive v2、回填、下线前归档）；决策 1–4 不变。
 
+trace 格式被 [ADR 0019](0019-turn-and-item-traces.md) 取代：决策 5 的 `multiremi.trace.v1` 片段事件改为 `multiremi.trace.v2` 的「轮 + 条目」（ADR 0019 决策 1–3），决策 4 中轮卡 trace 数字的派生改由共享 fold 的完成字段给出（ADR 0019 决策 7）。trace 由 daemon 持有、服务端只存指针不变。
+
 Proposed (MUL-402, message architecture v2-B). Ships in the same release as
 MUL-401 (daemon protocol v2) and MUL-403 (Live Hub and web). The four legacy
 tables are dropped by a separately approved script after the release has run
@@ -120,17 +122,22 @@ not enforced on either backend. Postgres nested transactions use savepoints.
    daemon reports it in `output` (every `text` event concatenated,
    `Task completed.` when empty), the same text today's chat message and the
    auto-posted Issue reply carry; the historical backfill copies the assistant
-   message body verbatim. `deriveFinalReply` is the Feishu CoT timeline's answer
-   rule and is not a card field; the `final_reply_md` on `task.complete` /
-   `task.fail` is not written to any card. The four trace figures on historical
-   cards are recomputed from `task_messages` with the same `trace-derive`
-   functions the daemon uses. The figures arrive in the daemon's completion
-   report; the server never derives them from the trace. The terminal lifecycle
+   message body verbatim. The Feishu CoT timeline's answer rule was not a card
+   field; the `final_reply_md` on `task.complete` / `task.fail` is not written
+   to any card. The four trace figures on historical cards were recomputed from
+   `task_messages` with the fragment derivation the daemon used then (the
+   `trace-derive` module, deleted by PR 2). The figures arrive in the daemon's
+   completion report; the server never derives them from the trace. Since
+   [ADR 0019](0019-turn-and-item-traces.md) the daemon computes them, plus
+   `context_usage`, `worked_ms` and `process_item_count`, from the shared
+   `turn-trace` fold, and the tool count is the item rule of ADR 0019 decision 1. The terminal lifecycle
    events keep their own names and seq, as decision 2 requires.
 5. **Traces have one owner at a time.** While hot, the daemon appends a
    normalised JSONL file
    `<workspacesRoot>/.runtime/<session_id>/traces/<task_id>.jsonl`
-   (`multiremi.trace.v1`): a header line, one `TraceEvent` per line, and a
+   (`multiremi.trace.v1` when decided; [ADR 0019](0019-turn-and-item-traces.md)
+   replaced the event format with `multiremi.trace.v2`): a header line, one
+   `TraceEvent` per line, and a
    trailing end line. seq is contiguous per task and assigned by the daemon's
    trace store at the durable write; a repeated seq is corruption and the reader
    takes the first occurrence, and a half-written final line is discarded.
@@ -149,7 +156,9 @@ not enforced on either backend. Postgres nested transactions use savepoints.
    Organizer inspection reads terminal counts from `findTurnEntry(task_id)`;
    missing card statistics or unavailable live reads retain the legacy-table
    fallback until MUL-432 removes that table.
-   B5's page/share trace endpoints and CLI return the original `TraceEvent`.
+   B5's page/share trace endpoints and CLI return the original `TraceEvent`
+   (since [ADR 0019](0019-turn-and-item-traces.md) decision 3 this is the
+   `view=events` read and CLI `--raw`; the default view is the folded turn).
    Multi-event pages stay within the serialized events-array budget (default
    1MiB, including brackets and commas). If the first event alone exceeds that
    budget, it is returned alone, byte-for-byte, even over 1MiB. No field is

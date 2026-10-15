@@ -1,0 +1,926 @@
+[
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_claude_089",
+      "update": {
+        "sessionUpdate": "usage_update",
+        "used": 0,
+        "size": 0,
+        "_meta": {
+          "claudeCode": {
+            "usage": {
+              "inputTokens": 10
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_claude_089",
+      "update": {
+        "sessionUpdate": "agent_thought_chunk",
+        "content": {
+          "type": "text",
+          "text": "The user wants the failing test fixed. "
+        },
+        "messageId": "msg_01A"
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_claude_089",
+      "update": {
+        "sessionUpdate": "agent_thought_chunk",
+        "content": {
+          "type": "text",
+          "text": "Let me look at the suite first."
+        },
+        "messageId": "msg_01A"
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_claude_089",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "I'll run the tests "
+        },
+        "messageId": "msg_01A"
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_claude_089",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "to see what fails."
+        },
+        "messageId": "msg_01A"
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_claude_089",
+      "update": {
+        "_meta": {
+          "claudeCode": {
+            "toolName": "Bash"
+          },
+          "terminal_info": {
+            "terminal_id": "toolu_bash_1"
+          }
+        },
+        "toolCallId": "toolu_bash_1",
+        "sessionUpdate": "tool_call",
+        "name": "Bash",
+        "status": "pending",
+        "title": "Terminal",
+        "kind": "execute",
+        "content": [
+          {
+            "type": "terminal",
+            "terminalId": "toolu_bash_1"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_claude_089",
+      "update": {
+        "_meta": {
+          "claudeCode": {
+            "toolName": "Bash"
+          },
+          "jetbrains": {
+            "air": {
+              "version": 1,
+              "commandTitle": "Run the math tests"
+            }
+          }
+        },
+        "toolCallId": "toolu_bash_1",
+        "sessionUpdate": "tool_call_update",
+        "rawInput": {
+          "command": "bun test tests/unit/math.test.ts",
+          "description": "Run the math tests"
+        },
+        "title": "bun test tests/unit/math.test.ts"
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_claude_089",
+      "update": {
+        "_meta": {
+          "terminal_output": {
+            "terminal_id": "toolu_bash_1",
+            "data": "1 fail\nexpected 4, got 5"
+          }
+        },
+        "toolCallId": "toolu_bash_1",
+        "sessionUpdate": "tool_call_update"
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_claude_089",
+      "update": {
+        "_meta": {
+          "claudeCode": {
+            "toolName": "Bash"
+          },
+          "terminal_exit": {
+            "terminal_id": "toolu_bash_1",
+            "exit_code": 1,
+            "signal": null
+          }
+        },
+        "toolCallId": "toolu_bash_1",
+        "sessionUpdate": "tool_call_update",
+        "status": "failed"
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_claude_089",
+      "update": {
+        "_meta": {
+          "claudeCode": {
+            "toolName": "Read"
+          }
+        },
+        "toolCallId": "toolu_read_1",
+        "sessionUpdate": "tool_call",
+        "name": "Read",
+        "status": "pending",
+        "title": "Read File",
+        "kind": "read",
+        "content": [],
+        "locations": []
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_claude_089",
+      "update": {
+        "_meta": {
+          "claudeCode": {
+            "toolName": "Read"
+          }
+        },
+        "toolCallId": "toolu_read_1",
+        "sessionUpdate": "tool_call_update",
+        "rawInput": {
+          "file_path": "/work/repo/src/math.ts"
+        },
+        "title": "Read src/math.ts",
+        "locations": [
+          {
+            "path": "/work/repo/src/math.ts",
+            "line": 1
+          }
+        ]
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_claude_089",
+      "update": {
+        "_meta": {
+          "claudeCode": {
+            "toolName": "Read"
+          }
+        },
+        "toolCallId": "toolu_read_1",
+        "sessionUpdate": "tool_call_update",
+        "status": "completed"
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_claude_089",
+      "update": {
+        "_meta": {
+          "claudeCode": {
+            "toolName": "Grep"
+          }
+        },
+        "toolCallId": "toolu_grep_1",
+        "sessionUpdate": "tool_call",
+        "name": "Grep",
+        "status": "pending",
+        "title": "grep",
+        "kind": "search",
+        "content": []
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_claude_089",
+      "update": {
+        "_meta": {
+          "claudeCode": {
+            "toolName": "Grep"
+          }
+        },
+        "toolCallId": "toolu_grep_1",
+        "sessionUpdate": "tool_call_update",
+        "rawInput": {
+          "pattern": "add\\(",
+          "path": "/work/repo/src"
+        },
+        "title": "grep \"add\\(\" /work/repo/src"
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_claude_089",
+      "update": {
+        "_meta": {
+          "claudeCode": {
+            "toolName": "Grep"
+          }
+        },
+        "toolCallId": "toolu_grep_1",
+        "sessionUpdate": "tool_call_update",
+        "status": "completed"
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_claude_089",
+      "update": {
+        "_meta": {
+          "claudeCode": {
+            "toolName": "Glob"
+          }
+        },
+        "toolCallId": "toolu_glob_1",
+        "sessionUpdate": "tool_call",
+        "name": "Glob",
+        "status": "pending",
+        "title": "Find",
+        "kind": "search",
+        "content": [],
+        "locations": []
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_claude_089",
+      "update": {
+        "_meta": {
+          "claudeCode": {
+            "toolName": "Glob"
+          }
+        },
+        "toolCallId": "toolu_glob_1",
+        "sessionUpdate": "tool_call_update",
+        "rawInput": {
+          "pattern": "**/*.test.ts"
+        },
+        "title": "Find `**/*.test.ts`"
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_claude_089",
+      "update": {
+        "_meta": {
+          "claudeCode": {
+            "toolName": "Glob"
+          }
+        },
+        "toolCallId": "toolu_glob_1",
+        "sessionUpdate": "tool_call_update",
+        "status": "completed",
+        "content": [
+          {
+            "type": "content",
+            "content": {
+              "type": "text",
+              "text": "tests/unit/math.test.ts"
+            }
+          }
+        ]
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_claude_089",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "The off-by-one is in `add`. Fixing it."
+        },
+        "messageId": "msg_01B"
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_claude_089",
+      "update": {
+        "_meta": {
+          "claudeCode": {
+            "toolName": "Edit"
+          }
+        },
+        "toolCallId": "toolu_edit_1",
+        "sessionUpdate": "tool_call",
+        "name": "Edit",
+        "status": "pending",
+        "title": "Edit",
+        "kind": "edit",
+        "content": [],
+        "locations": []
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_claude_089",
+      "update": {
+        "_meta": {
+          "claudeCode": {
+            "toolName": "Edit"
+          }
+        },
+        "toolCallId": "toolu_edit_1",
+        "sessionUpdate": "tool_call_update",
+        "rawInput": {
+          "file_path": "/work/repo/src/math.ts"
+        },
+        "title": "Edit src/math.ts",
+        "content": [
+          {
+            "type": "diff",
+            "path": "/work/repo/src/math.ts",
+            "oldText": "a + b + 1",
+            "newText": "a + b"
+          }
+        ],
+        "locations": [
+          {
+            "path": "/work/repo/src/math.ts"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_claude_089",
+      "update": {
+        "_meta": {
+          "claudeCode": {
+            "toolName": "Edit"
+          }
+        },
+        "toolCallId": "toolu_edit_1",
+        "sessionUpdate": "tool_call_update",
+        "status": "completed",
+        "rawOutput": "The file src/math.ts has been updated."
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_claude_089",
+      "update": {
+        "_meta": {
+          "claudeCode": {
+            "toolName": "Edit"
+          }
+        },
+        "toolCallId": "toolu_edit_1",
+        "sessionUpdate": "tool_call_update",
+        "content": [
+          {
+            "type": "diff",
+            "path": "/work/repo/src/math.ts",
+            "oldText": "export const add = (a, b) => a + b + 1;",
+            "newText": "export const add = (a, b) => a + b;"
+          }
+        ],
+        "locations": [
+          {
+            "path": "/work/repo/src/math.ts",
+            "line": 1
+          }
+        ]
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_claude_089",
+      "update": {
+        "_meta": {
+          "claudeCode": {
+            "toolName": "Write"
+          }
+        },
+        "toolCallId": "toolu_write_1",
+        "sessionUpdate": "tool_call",
+        "name": "Write",
+        "status": "pending",
+        "title": "Preparing file…",
+        "kind": "edit",
+        "content": [],
+        "locations": []
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_claude_089",
+      "update": {
+        "_meta": {
+          "claudeCode": {
+            "toolName": "Write"
+          }
+        },
+        "toolCallId": "toolu_write_1",
+        "sessionUpdate": "tool_call_update",
+        "rawInput": {
+          "file_path": "/work/repo/notes/fix.md"
+        },
+        "title": "Write notes/fix.md",
+        "content": [
+          {
+            "type": "diff",
+            "path": "/work/repo/notes/fix.md",
+            "oldText": null,
+            "newText": "# Fix\n\nRemoved the +1.\n"
+          }
+        ],
+        "locations": [
+          {
+            "path": "/work/repo/notes/fix.md"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_claude_089",
+      "update": {
+        "_meta": {
+          "claudeCode": {
+            "toolName": "Write"
+          }
+        },
+        "toolCallId": "toolu_write_1",
+        "sessionUpdate": "tool_call_update",
+        "status": "completed",
+        "rawOutput": "File created successfully at: notes/fix.md"
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_claude_089",
+      "update": {
+        "_meta": {
+          "claudeCode": {
+            "toolName": "WebSearch"
+          }
+        },
+        "toolCallId": "toolu_websearch_1",
+        "sessionUpdate": "tool_call",
+        "name": "WebSearch",
+        "status": "pending",
+        "title": "Web search",
+        "kind": "fetch",
+        "content": []
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_claude_089",
+      "update": {
+        "_meta": {
+          "claudeCode": {
+            "toolName": "WebSearch"
+          }
+        },
+        "toolCallId": "toolu_websearch_1",
+        "sessionUpdate": "tool_call_update",
+        "rawInput": {
+          "query": "bun test expect toBe"
+        },
+        "title": "Search \"bun test expect toBe\""
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_claude_089",
+      "update": {
+        "_meta": {
+          "claudeCode": {
+            "toolName": "WebSearch"
+          }
+        },
+        "toolCallId": "toolu_websearch_1",
+        "sessionUpdate": "tool_call_update",
+        "status": "completed",
+        "content": [
+          {
+            "type": "content",
+            "content": {
+              "type": "text",
+              "text": "Web search results for query: bun test"
+            }
+          }
+        ]
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_claude_089",
+      "update": {
+        "_meta": {
+          "claudeCode": {
+            "toolName": "WebFetch"
+          }
+        },
+        "toolCallId": "toolu_webfetch_1",
+        "sessionUpdate": "tool_call",
+        "name": "WebFetch",
+        "status": "pending",
+        "title": "Fetch",
+        "kind": "fetch",
+        "content": []
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_claude_089",
+      "update": {
+        "_meta": {
+          "claudeCode": {
+            "toolName": "WebFetch"
+          }
+        },
+        "toolCallId": "toolu_webfetch_1",
+        "sessionUpdate": "tool_call_update",
+        "rawInput": {
+          "url": "https://bun.sh/docs/test",
+          "prompt": "How does toBe compare?"
+        },
+        "title": "Fetch https://bun.sh/docs/test",
+        "content": [
+          {
+            "type": "content",
+            "content": {
+              "type": "text",
+              "text": "How does toBe compare?"
+            }
+          }
+        ]
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_claude_089",
+      "update": {
+        "_meta": {
+          "claudeCode": {
+            "toolName": "WebFetch"
+          }
+        },
+        "toolCallId": "toolu_webfetch_1",
+        "sessionUpdate": "tool_call_update",
+        "status": "completed",
+        "content": [
+          {
+            "type": "content",
+            "content": {
+              "type": "text",
+              "text": "toBe uses Object.is"
+            }
+          }
+        ]
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_claude_089",
+      "update": {
+        "_meta": {
+          "claudeCode": {
+            "toolName": "mcp__github__search_issues"
+          },
+          "is_mcp_tool_call": true
+        },
+        "toolCallId": "toolu_mcp_1",
+        "sessionUpdate": "tool_call",
+        "name": "mcp__github__search_issues",
+        "status": "pending",
+        "title": "mcp__github__search_issues",
+        "kind": "other",
+        "content": []
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_claude_089",
+      "update": {
+        "_meta": {
+          "claudeCode": {
+            "toolName": "mcp__github__search_issues"
+          }
+        },
+        "toolCallId": "toolu_mcp_1",
+        "sessionUpdate": "tool_call_update",
+        "rawInput": {
+          "q": "add off by one"
+        }
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_claude_089",
+      "update": {
+        "_meta": {
+          "claudeCode": {
+            "toolName": "mcp__github__search_issues"
+          }
+        },
+        "toolCallId": "toolu_mcp_1",
+        "sessionUpdate": "tool_call_update",
+        "status": "completed",
+        "content": [
+          {
+            "type": "content",
+            "content": {
+              "type": "text",
+              "text": "[]"
+            }
+          }
+        ]
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_claude_089",
+      "update": {
+        "_meta": {
+          "claudeCode": {
+            "toolName": "Bash"
+          },
+          "terminal_info": {
+            "terminal_id": "toolu_bash_2"
+          }
+        },
+        "toolCallId": "toolu_bash_2",
+        "sessionUpdate": "tool_call",
+        "name": "Bash",
+        "status": "pending",
+        "title": "Terminal",
+        "kind": "execute",
+        "content": [
+          {
+            "type": "terminal",
+            "terminalId": "toolu_bash_2"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_claude_089",
+      "update": {
+        "_meta": {
+          "claudeCode": {
+            "toolName": "Bash"
+          },
+          "jetbrains": {
+            "air": {
+              "version": 1,
+              "commandTitle": "Re-run the math tests"
+            }
+          }
+        },
+        "toolCallId": "toolu_bash_2",
+        "sessionUpdate": "tool_call_update",
+        "rawInput": {
+          "command": "bun test tests/unit/math.test.ts",
+          "description": "Re-run the math tests"
+        },
+        "title": "bun test tests/unit/math.test.ts"
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_claude_089",
+      "update": {
+        "_meta": {
+          "terminal_output": {
+            "terminal_id": "toolu_bash_2",
+            "data": "1 pass"
+          }
+        },
+        "toolCallId": "toolu_bash_2",
+        "sessionUpdate": "tool_call_update"
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_claude_089",
+      "update": {
+        "_meta": {
+          "claudeCode": {
+            "toolName": "Bash"
+          },
+          "terminal_exit": {
+            "terminal_id": "toolu_bash_2",
+            "exit_code": 0,
+            "signal": null
+          }
+        },
+        "toolCallId": "toolu_bash_2",
+        "sessionUpdate": "tool_call_update",
+        "status": "completed"
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_claude_089",
+      "update": {
+        "sessionUpdate": "usage_update",
+        "used": 18200,
+        "size": 200000,
+        "_meta": {
+          "claudeCode": {
+            "usage": {
+              "inputTokens": 18200
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_claude_089",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "Fixed `add` in `src/math.ts`; "
+        },
+        "messageId": "msg_01C"
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_claude_089",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "the math tests pass now."
+        },
+        "messageId": "msg_01C"
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_claude_089",
+      "update": {
+        "sessionUpdate": "usage_update",
+        "used": 18950,
+        "size": 200000
+      }
+    }
+  }
+]

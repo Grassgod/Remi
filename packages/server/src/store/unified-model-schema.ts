@@ -78,9 +78,32 @@ CREATE TABLE multiremi_turn_attempts (
   usage TEXT NOT NULL DEFAULT '[]', progress_summary TEXT, progress_step INTEGER, progress_total INTEGER,
   wait_reason TEXT, failure_reason TEXT, error TEXT, next_retry_at TEXT, branch_name TEXT,
   event_count BIGINT, tool_call_count BIGINT, type_histogram TEXT, model TEXT, trace_ref TEXT,
+  context_usage TEXT, worked_ms BIGINT, process_item_count BIGINT,
   offered_at TEXT, accepted_at TEXT, started_at TEXT, ended_at TEXT,
   created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
   UNIQUE(turn_id, attempt_no), FOREIGN KEY(turn_id) REFERENCES multiremi_turns(id)
 );
 CREATE INDEX idx_multiremi_turn_attempts_runtime ON multiremi_turn_attempts(runtime_id, status);
+`;
+
+/** ADR 0020: the Chat follow-up queue stays outside the log until release. */
+export const CHAT_FOLLOW_UP_QUEUE_MIGRATION = "20261016_chat_follow_up_queue";
+/** Agent lane pause: reason is interrupted, send_failed or turn_ended. */
+export const CHAT_FOLLOW_UP_QUEUE_LANE_COLUMNS = ["queue_paused_at TEXT", "queue_pause_reason TEXT"] as const;
+export const CHAT_FOLLOW_UP_QUEUE_SCHEMA = `
+CREATE TABLE IF NOT EXISTS multiremi_queued_messages (
+  id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, session_id TEXT NOT NULL, agent_id TEXT NOT NULL,
+  execution_scope TEXT NOT NULL DEFAULT '', seq INTEGER NOT NULL,
+  sender_member_id TEXT NOT NULL, body_md TEXT NOT NULL DEFAULT '', attachment_ids TEXT NOT NULL DEFAULT '[]',
+  client_id TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'queued' CHECK(status IN ('queued','failed','released','deleted')),
+  error TEXT, released_message_id TEXT,
+  released_via TEXT CHECK(released_via IS NULL OR released_via IN ('steer','turn')),
+  released_at TEXT, revision INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+  UNIQUE(session_id, client_id),
+  UNIQUE(session_id, agent_id, execution_scope, seq)
+);
+CREATE INDEX IF NOT EXISTS idx_multiremi_queued_messages_lane
+ ON multiremi_queued_messages(session_id, agent_id, execution_scope, status, seq, id);
 `;

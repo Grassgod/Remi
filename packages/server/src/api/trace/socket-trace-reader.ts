@@ -2,11 +2,29 @@ import { randomUUID } from "node:crypto";
 import {
   DAEMON_TRACE_READ_DEFAULT_LIMIT, DAEMON_TRACE_READ_MAX_LIMIT, DAEMON_TRACE_READ_MAX_BYTES,
   DAEMON_TRACE_READ_TIMEOUT_MS, DAEMON_TRACE_READ_MAX_IN_FLIGHT, DAEMON_TRACE_READ_MAX_QUEUED,
+  type DaemonTraceReadPayload,
 } from "@multiremi/contracts/daemon-protocol.js";
 import type { DaemonProtocolLayer } from "../daemon-protocol/index.js";
 import type { DaemonProtocolSession } from "../daemon-protocol/session.js";
 import type { DaemonParsedFrame } from "../daemon-protocol/frames.js";
 import type { DaemonTraceReader, DaemonTraceReadRequest, DaemonTraceReadResult } from "@multiremi/api/trace/daemon-trace-reader.js";
+
+const isCount = (value: unknown): boolean => Number.isSafeInteger(value) && (value as number) >= 0;
+
+/**
+ * Whether a success reply has the shape of the view that was asked for. Page
+ * bodies (items, events) are checked by the readers that interpret them; here
+ * only the paging fields the server relies on.
+ */
+function isReplyFor(view: DaemonTraceReadRequest["view"], p: Record<string, unknown>): boolean {
+  if (p.view !== view || (p.format !== "v2" && p.format !== "legacy")) return false;
+  if (!isCount(p.head) || typeof p.closed !== "boolean") return false;
+  if (view === "turn") {
+    return Array.isArray(p.items) && (p.turn === null || (!!p.turn && typeof p.turn === "object" && !Array.isArray(p.turn)))
+      && (p.next_item_cursor === null || isCount(p.next_item_cursor));
+  }
+  return Array.isArray(p.events) && isCount(p.next_after_seq) && typeof p.eof === "boolean";
+}
 
 interface ReadJob {
   id: string;
@@ -68,11 +86,14 @@ export class SocketDaemonTraceReader implements DaemonTraceReader {
       const job = reads.queue.shift()!;
       reads.active.set(job.id, job);
       const r = job.request;
-      if (!session.request(job.id, { t: "trace.read", rt: r.runtimeId, p: {
-        task_id: r.taskId, after_seq: Math.max(0, Math.floor(r.afterSeq ?? 0)),
-        limit: Math.max(1, Math.min(Math.floor(r.limit ?? DAEMON_TRACE_READ_DEFAULT_LIMIT), DAEMON_TRACE_READ_MAX_LIMIT)),
-        max_bytes: Math.max(1, Math.min(Math.floor(r.maxBytes ?? DAEMON_TRACE_READ_MAX_BYTES), DAEMON_TRACE_READ_MAX_BYTES)),
-      } })) job.finish({ ok: false, code: "daemon_unreachable", runtime_id: r.runtimeId, last_seen_at: job.lastSeenAt });
+      const limit = Math.max(1, Math.min(Math.floor(r.limit ?? DAEMON_TRACE_READ_DEFAULT_LIMIT), DAEMON_TRACE_READ_MAX_LIMIT));
+      const maxBytes = Math.max(1, Math.min(Math.floor(r.maxBytes ?? DAEMON_TRACE_READ_MAX_BYTES), DAEMON_TRACE_READ_MAX_BYTES));
+      const payload: DaemonTraceReadPayload = r.view === "turn"
+        ? { task_id: r.taskId, view: "turn", item_cursor: Math.max(0, Math.floor(r.itemCursor ?? 0)), limit, max_bytes: maxBytes }
+        : { task_id: r.taskId, view: "events", after_seq: Math.max(0, Math.floor(r.afterSeq ?? 0)), limit, max_bytes: maxBytes };
+      if (!session.request(job.id, { t: "trace.read", rt: r.runtimeId, p: payload as unknown as Record<string, unknown> })) {
+        job.finish({ ok: false, code: "daemon_unreachable", runtime_id: r.runtimeId, last_seen_at: job.lastSeenAt });
+      }
     }
   }
 
@@ -80,7 +101,7 @@ export class SocketDaemonTraceReader implements DaemonTraceReader {
     const job = frame.re ? this.connections.get(session)?.active.get(frame.re) : null;
     if (!job) return;
     const p = frame.payload;
-    if (p.ok === true && Array.isArray(p.events) && Number.isSafeInteger(p.head) && typeof p.eof === "boolean" && typeof p.closed === "boolean") {
+    if (p.ok === true && isReplyFor(job.request.view, p)) {
       job.finish(p as unknown as DaemonTraceReadResult);
     } else if (p.ok === false && ["daemon_unreachable", "daemon_timeout", "daemon_busy", "trace_not_hot"].includes(String(p.code))) {
       job.finish({ ok: false, code: p.code as "trace_not_hot", runtime_id: job.request.runtimeId });

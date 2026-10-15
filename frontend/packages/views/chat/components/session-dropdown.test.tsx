@@ -229,7 +229,6 @@ describe("SessionDropdown management", () => {
     render(
       <I18nProvider locale="en" resources={TEST_RESOURCES}>
         <SessionDropdown
-          presentation="list"
           sessions={[makeSession()]}
           agents={[agent]}
           activeSessionId="session-1"
@@ -238,6 +237,8 @@ describe("SessionDropdown management", () => {
         />
       </I18nProvider>,
     );
+    // The trigger shows the active chat's title.
+    fireEvent.click(screen.getByRole("button", { name: /Ship the release/ }));
     fireEvent.click(
       screen.getByRole("button", { name: "Delete chat session" }),
     );
@@ -259,7 +260,6 @@ it("keeps a newer selection when deletion of another conversation completes", ()
   render(
     <I18nProvider locale="en" resources={TEST_RESOURCES}>
       <SessionDropdown
-        presentation="list"
         sessions={[makeSession()]}
         agents={[agent]}
         activeSessionId="session-1"
@@ -269,6 +269,7 @@ it("keeps a newer selection when deletion of another conversation completes", ()
       />
     </I18nProvider>,
   );
+  fireEvent.click(screen.getByRole("button", { name: /Ship the release/ }));
   fireEvent.click(screen.getByRole("button", { name: "Delete chat session" }));
   fireEvent.click(screen.getByRole("button", { name: "Delete" }));
   state.activeId = "session-2";

@@ -366,6 +366,18 @@ describe("AcpProvider session/new payload", () => {
     });
   });
 
+  it.each(["claude", "codex"] as const)("advertises the ACP compaction and notice reports to %s (decision R11)", async (agentType) => {
+    // Both pinned bridges require an object here: claude-agent-acp 0.89
+    // `clientSupportsCompactionUpdates` / `clientSupportsNotices`, codex-acp 2.2.2
+    // `clientSupportsCompaction` (`!= null`) / `clientSupportsNotices`.
+    const agent = fakeAgent(agentType === "claude" ? claudeProfile() : codexProfile());
+    const provider = new AcpProvider({ agentType, executable: agent.executable, cwd: tempCwd(), getMcpServers: () => [] });
+    await drain(provider.sendStream("hi", { chatId: "c1" }));
+    await provider.close();
+    const [initialize] = only(agent.requests(), "initialize");
+    expect(initialize.params.clientCapabilities.session).toEqual({ compaction: {}, notices: {} });
+  });
+
   it("falls back to _meta.additionalRoots when the agent does not advertise the param", async () => {
     const agent = fakeAgent(claudeProfile({ protocolVersion: 1, agentCapabilities: { loadSession: true } }));
     const extraDir = tempCwd();

@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { I18nProvider } from "@multiremi/core/i18n/react";
@@ -14,7 +14,10 @@ const backend = vi.hoisted(() => ({
   sessions: [] as ChatSession[],
   byId: {} as Record<string, ChatSession>,
   pending: {} as Record<string, unknown>,
+  logReady: true,
+  projectsHeld: false,
   create: vi.fn(), update: vi.fn(), send: vi.fn(), refresh: vi.fn(), markRead: vi.fn(),
+  enqueue: vi.fn(), updateQueued: vi.fn(), cancel: vi.fn(),
 }));
 const apiLogger = vi.hoisted(() => ({ error: vi.fn() }));
 vi.mock("@multiremi/core/api", async (importOriginal) => {
@@ -22,7 +25,7 @@ vi.mock("@multiremi/core/api", async (importOriginal) => {
   return { ...actual, api: {
     listAgents: async () => [{ id: "agent-a", name: "Alpha", archived_at: null, owner_id: "user-a" }],
     listMembers: async () => [{ user_id: "user-a", role: "owner" }],
-    listProjects: async () => ({ projects: [
+    listProjects: async () => backend.projectsHeld ? new Promise<never>(() => {}) : ({ projects: [
       { id: "project-a", title: "Remi", archived_at: null, icon: null },
       { id: "project-b", title: "Docs", archived_at: null, icon: null },
     ] }),
@@ -48,6 +51,9 @@ vi.mock("@multiremi/core/api", async (importOriginal) => {
     updateChatSession: backend.update,
     sendChatMessage: backend.send,
     markChatSessionRead: backend.markRead,
+    enqueueChatMessage: backend.enqueue,
+    updateQueuedChatMessage: backend.updateQueued,
+    cancelTaskById: backend.cancel,
   } };
 });
 vi.mock("@multiremi/core/logger", async (importOriginal) => {
@@ -62,16 +68,19 @@ vi.mock("@multiremi/core/logger", async (importOriginal) => {
 });
 vi.mock("@multiremi/core/hooks", () => ({ useWorkspaceId: () => "workspace-a" }));
 vi.mock("@multiremi/core/auth", () => ({ useAuthStore: (select: (s: unknown) => unknown) => select({ user: { id: "user-a" } }) }));
-vi.mock("@multiremi/core/platform", () => ({ getCurrentWsId: () => "workspace-a" }));
+vi.mock("@multiremi/core/platform", async (importOriginal) => ({
+  ...await importOriginal<typeof import("@multiremi/core/platform")>(),
+  getCurrentWsId: () => "workspace-a",
+}));
 vi.mock("@multiremi/core/agents", () => ({ useWorkspaceAgentAvailability: () => "available", useAgentPresenceDetail: () => "loading" }));
 vi.mock("@multiremi/core/hooks/use-file-upload", () => ({ useFileUpload: () => ({ uploadWithToast: vi.fn() }) }));
-vi.mock("@multiremi/core/realtime", () => ({ useChatScopeSubscription: () => {} }));
+vi.mock("@multiremi/core/realtime", () => ({ useChatScopeSubscription: () => {}, useTraceStreamSubscription: () => {} }));
 vi.mock("@multiremi/core/session-log/use-issue-log", () => ({ useIssueLog: (sessionId: string, _initial: unknown, _comment: unknown, _cached: unknown, enabled: boolean) => {
   // The 444 replica replaces listChatMessagesPage; observe its load gate here.
   if (enabled && sessionId) listChatMessagesPageCalls();
   return ({
   replica: { sessionId, refreshTailPreservingWindow: backend.refresh, getSnapshot: () => ({ entries: [] }) },
-  snapshot: { entries: [], head: null, ready: true }, error: false,
+  snapshot: { entries: [], head: null, ready: backend.logReady }, error: false,
   });
 } }));
 vi.mock("@multiremi/core/paths", () => ({ useWorkspacePaths: () => ({
@@ -90,15 +99,40 @@ vi.mock("./chat-message-list", () => ({ ChatMessageList: () => null, ChatMessage
 vi.mock("./human-request-dock", () => ({ HumanRequestDock: () => null }));
 vi.mock("./offline-banner", () => ({ OfflineBanner: () => null }));
 vi.mock("./no-agent-banner", () => ({ NoAgentBanner: () => null }));
-vi.mock("./chat-queue", () => ({ ChatQueue: () => null }));
+const queueFlush = vi.hoisted(() => vi.fn(async () => {}));
+vi.mock("./chat-queue", () => ({ ChatQueue: ({ controllerRef }: { controllerRef?: { current: unknown } }) => {
+  if (controllerRef) controllerRef.current = { flushDeletes: queueFlush };
+  return null;
+} }));
 vi.mock("./chat-empty-state", () => ({ EmptyState: () => null }));
 vi.mock("./agent-dropdown", () => ({ AgentDropdown: () => null }));
-vi.mock("./session-dropdown", () => ({ SessionDropdown: () => null }));
-vi.mock("./chat-input", () => ({ ChatInput: ({ onSend, disabled }: { onSend: (value: string) => Promise<void>; disabled: boolean }) => (
-  <button disabled={disabled} onClick={() => void onSend("Hello").catch(() => {})}>Send test message</button>
+vi.mock("./session-dropdown", () => ({ SessionDropdown: () => <div data-testid="session-dropdown" /> }));
+vi.mock("../../common/actor-avatar", () => ({
+  ActorAvatar: ({ actorId }: { actorId: string }) => <span data-testid={`avatar-${actorId}`} />,
+}));
+vi.mock("./chat-input", () => ({ ChatInput: ({ onSend, onSaveQueueEdit, onStop, disabled }: {
+  onSend: (value: string, ids?: string[], local?: unknown[], mode?: string) => Promise<void>;
+  onSaveQueueEdit: (sessionId: string, edit: unknown, content: string, ids: string[]) => Promise<void>;
+  onStop: () => void;
+  disabled: boolean;
+}) => (
+  <>
+    <button disabled={disabled} onClick={() => void onSend("Hello").catch(() => {})}>Send test message</button>
+    <button onClick={() => void onSend("Steer this", undefined, [], "steer").catch(() => {})}>Steer test message</button>
+    <button onClick={() => void onSend("Queue this", ["att-1"], [{ id: "att-1", filename: "a.png", content_type: "image/png", size_bytes: 4 }], "queue")
+      .then(() => sent("resolved"), () => sent("rejected"))}>Queue test message</button>
+    <button onClick={() => void onSaveQueueEdit("chat-a", queueEditFixture, "Edited", [])
+      .then(() => sent("saved"), () => sent("save rejected"))}>Save queued edit</button>
+    <button onClick={onStop}>Stop test run</button>
+  </>
 ) }));
+const sent = vi.hoisted(() => vi.fn());
+const queueEditFixture = vi.hoisted(() => ({ itemId: "qmsg_1", revision: 3, stash: { draft: "my draft", attachments: {} } }));
+const toast = vi.hoisted(() => Object.assign(vi.fn(), { error: vi.fn(), dismiss: vi.fn() }));
+vi.mock("sonner", () => ({ toast }));
 
 import { ApiError } from "@multiremi/core/api";
+import { setCurrentWorkspace } from "@multiremi/core/platform";
 import { ChatWindow } from "./chat-window";
 
 const listChatSessionsCalls = vi.hoisted(() => vi.fn());
@@ -166,6 +200,8 @@ beforeEach(() => {
   backend.sessions = [];
   backend.byId = {};
   backend.pending = {};
+  backend.logReady = true;
+  backend.projectsHeld = false;
   backend.create.mockReset().mockImplementation(async (data) => {
     const created = { ...session, project_id: null, ...data };
     backend.sessions = [created];
@@ -182,6 +218,12 @@ beforeEach(() => {
       ? { ...current, has_unread: false, unread_count: 0 } : current);
   });
   apiLogger.error.mockReset();
+  backend.enqueue.mockReset();
+  backend.updateQueued.mockReset();
+  backend.cancel.mockReset().mockResolvedValue(undefined);
+  sent.mockReset();
+  toast.mockReset();
+  queueFlush.mockClear();
 });
 
 describe("ChatWindow automatic read", () => {
@@ -310,7 +352,9 @@ describe("ChatWindow project settings", () => {
     expect(store.getState().draftProjectId).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Send test message" }));
     await waitFor(() => expect(backend.create).toHaveBeenCalledWith({ agent_id: "agent-a", title: "Hello", runtime_workspace_id: "rws-a" }));
-    expect(await screen.findByRole("button", { name: "Work location: Local workbench" })).toBeDisabled();
+    // The page names a fixed location in its header; no picker is left to change it.
+    expect(await screen.findByRole("group", { name: "Work location: Local workbench" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Work location:/ })).not.toBeInTheDocument();
   });
 
   it("replaces a local directory draft with a project without sending both bindings", async () => {
@@ -450,3 +494,181 @@ describe("minimised chat window preloads nothing (MUL-472 b)", () => {
     await waitFor(() => expect(listChatMessagesPageCalls).toHaveBeenCalled());
   });
 });
+
+describe("ChatWindow page shell", () => {
+  it("names the agent, title and bound location without the page banner or session controls", async () => {
+    backend.sessions = [{ ...session, title: "Release prep" }];
+    mount(true);
+    const header = await waitFor(() => {
+      const element = document.querySelector<HTMLElement>("[data-chat-page-header]");
+      expect(element).toHaveTextContent("Release prep");
+      return element!;
+    });
+    expect(header.querySelector('[data-testid="avatar-agent-a"]')).not.toBeNull();
+    await waitFor(() => expect(header).toHaveTextContent("Remi"));
+    expect(screen.queryByText("Private conversations with your agents")).toBeNull();
+    // New chat and history moved to the sidebar.
+    expect(screen.queryByTestId("session-dropdown")).toBeNull();
+    expect(header.querySelectorAll("button")).toHaveLength(1);
+  });
+
+  it("shows a placeholder, not 'unavailable', while the Project list loads", async () => {
+    backend.sessions = [{ ...session, title: "Release prep" }];
+    backend.projectsHeld = true;
+    mount(true);
+    const header = await waitFor(() => {
+      const element = document.querySelector<HTMLElement>("[data-chat-page-header]");
+      expect(element).toHaveTextContent("Release prep");
+      return element!;
+    });
+    expect(within(header).getByRole("group", { name: "Project: …" })).toBeInTheDocument();
+    expect(header).not.toHaveTextContent("Linked project unavailable");
+  });
+
+  it("calls the unsaved draft New chat and an existing untitled chat Untitled", async () => {
+    const view = mount();
+    await waitFor(() => expect(document.querySelector("[data-chat-page-header]")).toHaveTextContent("New chat"));
+    view.unmount();
+    backend.sessions = [{ ...session, title: "" }];
+    mount(true);
+    await waitFor(() => expect(document.querySelector("[data-chat-page-header] h1")).toHaveTextContent("Untitled"));
+  });
+
+  it("starts a chat bound to a sidebar group's Project", async () => {
+    backend.sessions = [session];
+    const { store } = mount(true);
+    fireEvent.click(await screen.findByRole("button", { name: "Start new chat in Remi" }));
+    expect(store.getState().activeSessionId).toBeNull();
+    expect(store.getState().draftProjectId).toBe("project-a");
+    expect(await screen.findByRole("button", { name: "Work location: Remi" })).toBeEnabled();
+    fireEvent.click(screen.getByRole("button", { name: "Send test message" }));
+    await waitFor(() => expect(backend.create).toHaveBeenCalledWith({ agent_id: "agent-a", title: "Hello", project_id: "project-a" }));
+  });
+
+  it("starts a chat bound to a sidebar group's local directory", async () => {
+    backend.sessions = [{ ...session, project_id: null, runtime_workspace_id: "rws-a" }];
+    const { store } = mount(true);
+    fireEvent.click(await screen.findByRole("button", { name: "Start new chat in Local workbench" }));
+    expect(store.getState().draftProjectId).toBeNull();
+    expect(await screen.findByRole("button", { name: "Work location: Local workbench" })).toBeEnabled();
+    fireEvent.click(screen.getByRole("button", { name: "Send test message" }));
+    await waitFor(() => expect(backend.create).toHaveBeenCalledWith({ agent_id: "agent-a", title: "Hello", runtime_workspace_id: "rws-a" }));
+  });
+
+  it("waits 400ms before showing the first-load spinner", async () => {
+    backend.sessions = [session];
+    backend.logReady = false;
+    mount(true);
+    await screen.findByRole("button", { name: "Send test message" });
+    expect(screen.queryByRole("status", { name: "Loading conversation…" })).toBeNull();
+    expect(await screen.findByRole("status", { name: "Loading conversation…" }, { timeout: 1500 })).toBeInTheDocument();
+  });
+});
+
+describe("ChatWindow follow-up delivery", () => {
+  // The queue mutations compare the workspace they started in with the current one.
+  beforeEach(() => setCurrentWorkspace("acme", "workspace-a"));
+  const agentsLoaded = (client: QueryClient) =>
+    waitFor(() => expect(client.getQueryData(["workspaces", "workspace-a", "agents"])).toBeDefined());
+  const queuedRow = { id: "qmsg_1", session_id: "chat-a", body_md: "Queue this", attachments: [], client_id: "x", status: "queued",
+    error: null, revision: 1, released_message_id: null, released_via: null, released_at: null, created_at: "t", updated_at: "t" };
+
+  it("steers through the message route, sent now", async () => {
+    backend.sessions = [session];
+    const { client } = mount(true);
+    await agentsLoaded(client);
+    fireEvent.click(await screen.findByRole("button", { name: "Steer test message" }));
+    await waitFor(() => expect(backend.send).toHaveBeenCalledWith("chat-a", "Steer this", undefined, expect.any(String)));
+    expect(backend.enqueue).not.toHaveBeenCalled();
+  });
+
+  it("queues with a client id and refreshes the log only when the row was released at once", async () => {
+    backend.sessions = [session];
+    backend.enqueue.mockResolvedValueOnce({ item: queuedRow, released: null });
+    const { store, client } = mount(true);
+    await agentsLoaded(client);
+    fireEvent.click(await screen.findByRole("button", { name: "Queue test message" }));
+    await waitFor(() => expect(sent).toHaveBeenCalledWith("resolved"));
+    expect(backend.enqueue).toHaveBeenCalledWith("chat-a", { body_md: "Queue this", attachment_ids: ["att-1"], client_id: expect.any(String) });
+    // Deletes still behind their undo go out first: an idle lane releases every queued row.
+    expect(queueFlush.mock.invocationCallOrder[0]).toBeLessThan(backend.enqueue.mock.invocationCallOrder[0]!);
+    expect(backend.send).not.toHaveBeenCalled();
+    expect(backend.refresh).not.toHaveBeenCalled();
+    expect(store.getState().queueOutbox).toEqual({});
+
+    backend.enqueue.mockImplementationOnce(async (_id: string, input: { client_id: string }) =>
+      ({ item: { ...queuedRow, client_id: input.client_id, status: "released" }, released: { message: { id: "msg_1" } } }));
+    fireEvent.click(screen.getByRole("button", { name: "Queue test message" }));
+    await waitFor(() => expect(backend.refresh).toHaveBeenCalledOnce());
+  });
+
+  it("hands an unconfirmed enqueue to the queue, but rejects a refused one so the draft stays", async () => {
+    backend.sessions = [session];
+    backend.enqueue.mockRejectedValueOnce(new TypeError("Failed to fetch"));
+    const { store, client } = mount(true);
+    await agentsLoaded(client);
+    fireEvent.click(await screen.findByRole("button", { name: "Queue test message" }));
+    await waitFor(() => expect(sent).toHaveBeenCalledWith("resolved"));
+    expect(store.getState().queueOutbox["chat-a"]).toEqual([expect.objectContaining({
+      body_md: "Queue this", attachment_ids: ["att-1"], state: "unconfirmed",
+      attachments: [{ id: "att-1", filename: "a.png", content_type: "image/png", size: 4 }],
+    })]);
+    backend.enqueue.mockRejectedValueOnce(new ApiError("full", 400, "Bad Request", { error: "full", code: "queue_full" }));
+    fireEvent.click(screen.getByRole("button", { name: "Queue test message" }));
+    await waitFor(() => expect(sent).toHaveBeenCalledWith("rejected"));
+  });
+
+  it("saves an edit with its revision and restores the stashed draft", async () => {
+    backend.sessions = [session];
+    backend.updateQueued.mockResolvedValue({ ...queuedRow, body_md: "Edited", revision: 4 });
+    const { store } = mount(true);
+    act(() => store.getState().setInputDraft("chat-a", "my draft"));
+    act(() => store.getState().startQueueEdit("chat-a", { itemId: "qmsg_1", revision: 3, body_md: "Queue this", attachments: {} }));
+    fireEvent.click(screen.getByRole("button", { name: "Save queued edit" }));
+    await waitFor(() => expect(sent).toHaveBeenCalledWith("saved"));
+    expect(backend.updateQueued).toHaveBeenCalledWith("chat-a", "qmsg_1", { body_md: "Edited", attachment_ids: [], expected_revision: 3 });
+    expect(store.getState().queueEdit).toEqual({});
+    expect(store.getState().inputDrafts["chat-a"]).toBe("my draft");
+  });
+
+  it("keeps the edited text when the row was already sent, and stays in edit mode on other failures", async () => {
+    backend.sessions = [session];
+    const { store } = mount(true);
+    act(() => store.getState().startQueueEdit("chat-a", { itemId: "qmsg_1", revision: 3, body_md: "Queue this", attachments: {} }));
+    backend.updateQueued.mockRejectedValueOnce(new Error("offline"));
+    fireEvent.click(screen.getByRole("button", { name: "Save queued edit" }));
+    await waitFor(() => expect(sent).toHaveBeenCalledWith("save rejected"));
+    expect(store.getState().queueEdit["chat-a"]).toBeDefined();
+    backend.updateQueued.mockRejectedValueOnce(new ApiError("sent", 409, "Conflict", { error: "sent", code: "queued_message_consumed" }));
+    // The stored draft lags the editor by its debounce; the submitted text wins.
+    act(() => store.getState().setInputDraft("chat-a", "Edit"));
+    fireEvent.click(screen.getByRole("button", { name: "Save queued edit" }));
+    await waitFor(() => expect(sent).toHaveBeenCalledWith("saved"));
+    expect(store.getState().queueEdit).toEqual({});
+    expect(store.getState().inputDrafts["chat-a"]).toBe("Edited");
+    expect(toast).toHaveBeenCalledWith("This message was already sent and can no longer be changed");
+  });
+
+  it("says a row deleted elsewhere was deleted, not sent", async () => {
+    backend.sessions = [session];
+    const { store } = mount(true);
+    act(() => store.getState().startQueueEdit("chat-a", { itemId: "qmsg_1", revision: 3, body_md: "Queue this", attachments: {} }));
+    backend.updateQueued.mockRejectedValueOnce(new ApiError("gone", 404, "Not Found", { error: "gone", code: "queued_message_not_found" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save queued edit" }));
+    await waitFor(() => expect(sent).toHaveBeenCalledWith("saved"));
+    expect(store.getState().queueEdit).toEqual({});
+    expect(toast).toHaveBeenCalledWith("This queued message was deleted. Your edit stays in the input.");
+  });
+
+  it("refreshes the queue after a stop, which pauses it", async () => {
+    backend.sessions = [session];
+    backend.pending = { task_id: "task-a", turn_id: "turn-a", status: "running", supports_queue: true };
+    const { client } = mount(true);
+    await waitFor(() => expect(client.getQueryData(chatKeys.pendingTask("chat-a"))).toMatchObject({ task_id: "task-a" }));
+    client.setQueryData(chatKeys.queue("workspace-a", "chat-a"), { items: [], paused: null });
+    fireEvent.click(screen.getByRole("button", { name: "Stop test run" }));
+    await waitFor(() => expect(backend.cancel).toHaveBeenCalledWith("turn-a"));
+    await waitFor(() => expect(client.getQueryState(chatKeys.queue("workspace-a", "chat-a"))?.isInvalidated).toBe(true));
+  });
+});
+

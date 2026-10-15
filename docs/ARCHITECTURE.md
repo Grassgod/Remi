@@ -43,10 +43,13 @@ store 的四路实时事件由 [realtime-fanout](../packages/server/src/api/real
 权限请求、会话延续、工作目录归属与重试都在这条链路中，不可只以模型输出判断完成。
 
 当前工作树已经使用服务端 `task.offer` / accept / reject，不再发 HTTP claim 或 dispatch-lease。
-过程消息经 `TaskMessageBatcher` 合并后，由 [TraceFileStore](../packages/server/src/worker/trace-file-store.ts)
-写入 `<workspacesRoot>/traces/<主体>/<task_id>.jsonl`；写入完成后才公布连续 seq。
+ACP 通知由 [trace 翻译器](../packages/server/src/worker/trace-translator.ts)转成「轮 + 条目」事件
+（[ADR 0019](adr/0019-turn-and-item-traces.md)），经 [TraceFileStore](../packages/server/src/worker/trace-file-store.ts)
+写入 `<workspacesRoot>/traces/<主体>/<task_id>.jsonl`（`multiremi.trace.v2`）；写入完成后才公布连续 seq，
+同批事件再应用到运行中尝试的内存 fold（[turn-trace.ts](../packages/shared/src/turn-trace.ts)，所有读者共用）。
 [TraceStreamer](../packages/server/src/worker/trace-streamer.ts)按游标将规范化事件推给 Live Hub，
-过程事件不再写消息表或 outbox；`trace.read` 反向 RPC 按持久化 Runtime 归属读取有界页。
+过程事件不再写消息表或 outbox；`trace.read` 反向 RPC 按持久化 Runtime 归属读取有界页：
+`view=turn` 是运行中的 fold 或关闭时写下的快照，`view=events` 是原始行。
 daemon 启动只登记 trace 文件路径，首次读取或追加时才建索引，常驻索引按 LRU 限量；已关闭历史仅按需读取，活跃 trace 按 Hub head 续传。服务端只保存指向 daemon 的指针，不再归档或回填 trace。
 **A-2 连接层已接线**：[客户端](../packages/server/src/worker/daemon-protocol-client.ts)每进程一条 socket，
 `hello` 汇总所有 provider lane，`hb` 每 15 秒一次，ack 独立调度。主循环不再发 HTTP 心跳；
@@ -57,8 +60,8 @@ daemon 启动只登记 trace 文件路径，首次读取或追加时才建索引
 HTTP 心跳 ack 只保留升级请求和 drain，不添加 v1 业务兼容层。规范见
 [daemon 协议 v2](daemon-protocol-v2.md)，取舍见 [ADR 0012](adr/0012-daemon-protocol-v2-single-socket-and-db-derived-downlink.md)。
 任务开始、usage、终态等可靠报告由 [report transport](../packages/server/src/worker/report-transport.ts)
-持久化到本地 outbox，经同一 socket 按任务顺序发送和重试。完成摘要随追加增量计算，
-恢复后的历史任务只在首次需要摘要时分页重建。执行记录（trace、原生会话历史）永久留在 daemon；
+持久化到本地 outbox，经同一 socket 按任务顺序发送和重试。完成摘要（含轮卡的 `context_usage`、
+`worked_ms`、`process_item_count`）由 fold 随追加维护，恢复后的历史任务只在首次需要摘要时分页重建。执行记录（trace、原生会话历史）永久留在 daemon；
 代码目录和运行环境只是缓存，主体（Issue 或 Chat）结束后由 `reclaim.ts`（`packages/daemon/src/agent-runtime/workspace/`）
 按保留期回收，删前对未保存的工作打快照，重开时恢复。布局、生命周期、策略和运维入口见[存储与保留](dev/storage-retention.md)，
 取舍见 [ADR 0018](adr/0018-local-records-and-recyclable-workspaces.md)。
@@ -103,7 +106,7 @@ PostgreSQL 的 `PgBridge.request` 用 `Atomics.wait` 等待 [pg-worker](../packa
 [启动迁移](../packages/server/src/store/unified-model-migration.ts)预检后一次切换；运行路径不再读写三张退役对话表。
 执行消费者使用 [只读投影](../packages/server/src/store/turn-execution-records.ts)，写入口更新规范表；轮卡由 [轮和当前尝试](../packages/server/src/store/turn-attempts.ts)投影，统计及最终回复不再镜像到日志 turn 行。
 重试、redispatch 与孤儿恢复只替换尝试，不写 Issue 状态。自动化账本引用轮，在 `auto_*` 对话保留 timer 输入与运行消息。
-[sendMessageWithinTransaction](../packages/server/src/store/inbox/send-message.ts)是唯一消息写入口，领域 producer 与执行投影均经它落库；[lane 状态机](../packages/server/src/store/inbox/lane-machine.ts)负责 pending 合并、运行中插话、补铃和兜底扫描。人的收件箱使用 member lane；提问与决定及其一次性令牌保存在消息。Issue 只由轮和未答 decision 推导，子单变化发送父单 status。Daemon 适配器与用户接口所需 Store facade 已提供，传输/CLI/页面由消费者集成；接口和事务边界见[统一收件箱 Store](dev/inbox-store.md)。
+[sendMessageWithinTransaction](../packages/server/src/store/inbox/send-message.ts)是唯一消息写入口，领域 producer 与执行投影均经它落库；[lane 状态机](../packages/server/src/store/inbox/lane-machine.ts)负责 pending 合并、运行中插话、补铃和兜底扫描。人的收件箱使用 member lane；提问与决定及其一次性令牌保存在消息。Issue 只由轮和未答 decision 推导，子单变化发送父单 status。Daemon 适配器与用户接口所需 Store facade 已提供，传输/CLI/页面由消费者集成；接口和事务边界见[统一收件箱 Store](dev/inbox-store.md)。Chat 跟进队列放行前存在 `multiremi_queued_messages`，放行时经同一写入口变成普通 now 消息（[ADR 0020](adr/0020-chat-follow-up-queue-and-native-steering.md)）。
 完整边界见 [ADR 0016](adr/0016-unified-message-inbox-and-turn.md)及[切换手册](deploy/unified-model-cutover.md)。
 
 该适配文件记录的动机是兼容已有同步 Store 调用；不能据此推断它仍适合当前并发负载。

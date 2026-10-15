@@ -1,4 +1,5 @@
-import { isRelatedTurnController } from './turn-controls.js';
+import { ChatTurnRetryError, isRelatedTurnController } from './turn-controls.js';
+import { lockLane } from './inbox/lane-machine.js';
 import { DaemonTurnBridge } from './inbox/daemon-turn-bridge.js';
 import { questionNotificationIdentity, questionNotificationFactsSql, canReadQuestionNotificationFacts } from './inbox/question-notification-visibility.js';
 import type { InboxAccess } from './inbox/inbox-visibility.js';
@@ -4282,12 +4283,13 @@ runMigrations(this.db);
 
   /**
    * MUL-432 segment 2 item 5: write the round-card fields of a daemon's
-   * `turn.complete` / `task.fail` frame onto the attempt's outcome. Only
-   * `trace.event_count`, `tool_call_count`, `type_histogram` and `model` are
-   * written. The frame's `final_reply_md` is not (ruling (z)): the chat card keeps
-   * the assistant message and the Issue card its `final_entry_id` from the terminal
-   * write path. `null` — a daemon that sent no fields, or malformed ones —
-   * writes nothing.
+   * `turn.complete` / `task.fail` frame onto the attempt's outcome. Written:
+   * `trace.event_count`, `tool_call_count`, `type_histogram`, `model` and, since
+   * the turn + items traces (PR 2), `context_usage`, `worked_ms` and
+   * `process_item_count`. The frame's `final_reply_md` is not (ruling (z)): the
+   * chat card keeps the assistant message and the Issue card its
+   * `final_entry_id` from the terminal write path. `null` — a daemon that sent
+   * no fields, or malformed ones — writes nothing.
    *
    * The terminal task transaction owns this write. An attempt that already
    * carries the values keeps its revision; a missing attempt is skipped.
@@ -4296,29 +4298,42 @@ runMigrations(this.db);
   recordTurnCardCompletionFieldsWithinTransaction(taskId: string, fields: DaemonTaskCompletionFields | null): boolean {
     if (!fields) return false;
     const attempt = this.db.query(
-      "SELECT event_count, tool_call_count, type_histogram, model FROM multiremi_turn_attempts WHERE id = ?",
+      `SELECT event_count, tool_call_count, type_histogram, model, context_usage, worked_ms, process_item_count
+       FROM multiremi_turn_attempts WHERE id = ?`,
     ).get(taskId) as Record<string, unknown> | null;
     if (!attempt) return false;
     const typeHistogram = fields.trace.type_histogram.map(({ type, tool, count }) => ({ type, tool, count }));
     const model = fields.model ? { provider: fields.model.provider, model: fields.model.model } : null;
+    const contextUsage = fields.context_usage ? { used: fields.context_usage.used, size: fields.context_usage.size } : null;
+    const workedMs = fields.worked_ms ?? null;
+    const processItemCount = fields.process_item_count ?? null;
+    const count = (value: unknown): number | null => value == null ? null : Number(value);
     const stored = {
-      eventCount: attempt.event_count == null ? null : Number(attempt.event_count),
-      toolCallCount: attempt.tool_call_count == null ? null : Number(attempt.tool_call_count),
+      eventCount: count(attempt.event_count),
+      toolCallCount: count(attempt.tool_call_count),
       typeHistogram: parseJson<Array<{ type: string; tool?: string | null; count: number }> | null>(attempt.type_histogram, null),
       model: parseJson<{ provider: string; model: string } | null>(attempt.model, null),
+      contextUsage: parseJson<{ used: number; size: number } | null>(attempt.context_usage, null),
+      workedMs: count(attempt.worked_ms),
+      processItemCount: count(attempt.process_item_count),
     };
     const unchanged = stored.eventCount === fields.trace.event_count
       && stored.toolCallCount === fields.trace.tool_call_count
       && stored.typeHistogram?.length === typeHistogram.length
       && stored.typeHistogram.every((bucket, index) => bucket.type === typeHistogram[index]!.type
         && (bucket.tool ?? null) === typeHistogram[index]!.tool && bucket.count === typeHistogram[index]!.count)
-      && stored.model?.provider === model?.provider && stored.model?.model === model?.model;
+      && stored.model?.provider === model?.provider && stored.model?.model === model?.model
+      && stored.contextUsage?.used === contextUsage?.used && stored.contextUsage?.size === contextUsage?.size
+      && stored.workedMs === workedMs && stored.processItemCount === processItemCount;
     if (unchanged) return false;
     this.conversationLog.recordAttemptOutcomeWithinTransaction(taskId, {
       eventCount: fields.trace.event_count,
       toolCallCount: fields.trace.tool_call_count,
       typeHistogram,
       model,
+      contextUsage,
+      workedMs,
+      processItemCount,
     });
     return true;
   }
@@ -5165,18 +5180,6 @@ runMigrations(this.db);
     return this.chat.listQueuedChatTasks(chatSessionId);
   }
 
-  updateQueuedChatTask(chatSessionId: string, taskId: string, content: string) {
-    return this.chat.updateQueuedChatTask(chatSessionId, taskId, content);
-  }
-
-  removeQueuedChatTasks(chatSessionId: string, taskId?: string): void {
-    this.chat.removeQueuedChatTasks(chatSessionId, taskId);
-  }
-
-  prioritizeQueuedChatTask(chatSessionId: string, taskId: string) {
-    return this.chat.prioritizeQueuedChatTask(chatSessionId, taskId);
-  }
-
   listPendingChatTasks(workspaceId?: string | null, options: { creatorId?: string | null } = {}): MultiremiTask[] {
     return this.chat.listPendingChatTasks(workspaceId, options);
   }
@@ -5296,6 +5299,12 @@ runMigrations(this.db);
   getTurnTrace(...args: Parameters<InboxRepo["operations"]["getTurnTrace"]>) { return this.inbox.operations.getTurnTrace(...args); }
   getTurnInput(...args: Parameters<InboxRepo["operations"]["getTurnInput"]>) { return this.inbox.operations.getTurnInput(...args); }
   cancelTurn(...args: Parameters<InboxRepo["operations"]["cancelTurn"]>) { return this.inbox.operations.cancelTurn(...args); }
+  listQueuedMessages(...args: Parameters<InboxRepo["queue"]["list"]>) { return this.inbox.queue.list(...args); }
+  enqueueQueuedMessage(...args: Parameters<InboxRepo["queue"]["enqueue"]>) { return this.inbox.queue.enqueue(...args); }
+  updateQueuedMessage(...args: Parameters<InboxRepo["queue"]["update"]>) { return this.inbox.queue.update(...args); }
+  deleteQueuedMessage(...args: Parameters<InboxRepo["queue"]["delete"]>) { return this.inbox.queue.delete(...args); }
+  steerQueuedMessage(...args: Parameters<InboxRepo["queue"]["steer"]>) { return this.inbox.queue.steer(...args); }
+  resumeQueuedMessages(...args: Parameters<InboxRepo["queue"]["resume"]>) { return this.inbox.queue.resume(...args); }
   wrapUpTurn(...args: Parameters<InboxRepo["operations"]["wrapUpTurn"]>) { return this.inbox.operations.wrapUpTurn(...args); }
   retryTurn(...args: Parameters<InboxRepo["operations"]["retryTurn"]>) { return this.inbox.operations.retryTurn(...args); }
   issueMessageCardToken(...args: Parameters<InboxRepo["operations"]["issueMessageCardToken"]>) { return this.inbox.operations.issueMessageCardToken(...args); }
@@ -5786,6 +5795,54 @@ runMigrations(this.db);
       this.ctx.emitCommitEvents(deferredEvents);
     });
     return result;
+  }
+
+  /**
+   * The person who created a Chat retries one of its failed or cancelled turns,
+   * warm or cold. It reuses the organizer's redispatch primitive (a new attempt
+   * on the same turn, previous attempt status kept, Chat runtime affinity
+   * re-resolved when cold) but needs no supervisor: the route has already
+   * applied the creator-only Chat access rules, and this re-checks the facts
+   * the retry depends on under the lane lock. Issue turns, including Chats that
+   * carry an Issue, never take this path.
+   */
+  retryChatTurnForCreator(input: { turnId: string; userId: string; cold: boolean }) {
+    const childStatusChanges: import("./repos/tasks-repo.js").ChildStatusChange[] = [];
+    const deferredEvents = createCommitEventQueue();
+    let redispatchResult: ReturnType<TasksRepo["redispatchTaskWithinTransaction"]> | null = null;
+    this.db.transaction(() => {
+      const turn = this.getTurn(input.turnId);
+      if (!turn?.current_attempt_id) throw new ChatTurnRetryError("turn_not_found", "turn not found", 404);
+      this.ctx.lockWorkspaceRuntimeLifecycle(turn.workspace_id);
+      lockLane(this.ctx, turn.session_id, turn.agent_id, turn.execution_scope);
+      const current = this.getTurn(input.turnId)!;
+      const target = current.current_attempt_id ? this.getTask(current.current_attempt_id) : null;
+      const chat = target?.chatSessionId ? this.getChatSession(target.chatSessionId) : null;
+      if (!target || !chat || current.issue_id || target.issueId || current.session_id !== chat.id) {
+        throw new ChatTurnRetryError("chat_turn_required", "only a Chat turn can be retried by its creator", 403);
+      }
+      if ((chat.creatorId ?? "local") !== input.userId) {
+        throw new ChatTurnRetryError("chat_creator_required", "only the Chat's creator can retry its turns", 403);
+      }
+      if (chat.status === "archived") {
+        throw new ChatTurnRetryError("chat_archived", "restore the chat before retrying a turn");
+      }
+      if (!["failed", "cancelled"].includes(current.status) || !["failed", "cancelled"].includes(target.status)) {
+        throw new ChatTurnRetryError("turn_not_retryable", "only a failed or cancelled turn can be retried");
+      }
+      // One active turn per Chat lane: a retry must not run beside a newer turn.
+      const active = this.db.query(`SELECT id FROM multiremi_turns WHERE session_id=? AND agent_id=? AND execution_scope=?
+        AND id<>? AND status NOT IN ('completed','failed','cancelled') LIMIT 1`)
+        .get(current.session_id, current.agent_id, current.execution_scope, current.id);
+      if (active) throw new ChatTurnRetryError("chat_turn_active", "another turn is still active in this chat");
+      redispatchResult = this.tasks.redispatchTaskWithinTransaction(target.id, childStatusChanges, deferredEvents, input.cold);
+    })();
+    afterCommit(this.db, () => {
+      this.tasks.runCollectedChildStatusChanges(childStatusChanges);
+      if (redispatchResult) this.tasks.notifyRedispatchedTask(redispatchResult);
+      this.ctx.emitCommitEvents(deferredEvents);
+    });
+    return this.getTurn(input.turnId)!;
   }
 
   reportProgress(taskId: string, summary: string, step?: number | null, total?: number | null, options?: { allowTerminal?: boolean }): MultiremiTask {

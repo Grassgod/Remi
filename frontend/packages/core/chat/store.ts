@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import type { Attachment, StorageAdapter } from "../types";
+import type { QueuedMessageAttachment } from "../api/schemas/chat-queue";
 import { getCurrentSlug, registerForWorkspaceRehydration } from "../platform/workspace-storage";
 import { createLogger } from "../logger";
 
@@ -25,6 +26,47 @@ const CHAT_EXPANDED_KEY = "multimira:chat:expanded";
  * every subsequent reload.
  */
 const OPEN_KEY = "multimira:chat:isOpen";
+/** How a message sent during a run is delivered; one global preference. */
+const FOLLOW_UP_MODE_KEY = "multimira:chat:followUpMode";
+/** Queued-message edits in progress, with the composer draft they replaced. */
+const QUEUE_EDIT_KEY = "multimira:chat:queueEdit";
+/** Enqueues the server has not confirmed, per workspace. */
+const QUEUE_OUTBOX_KEY = "multimira:chat:queueOutbox";
+
+/**
+ * While a run is active, `steer` (引导) sends into the running turn and
+ * `queue` (排队) holds the message until the turn completes (ADR 0020).
+ */
+export type ChatFollowUpMode = "steer" | "queue";
+export const DEFAULT_FOLLOW_UP_MODE: ChatFollowUpMode = "steer";
+
+function readFollowUpMode(storage: StorageAdapter): ChatFollowUpMode {
+  const stored = storage.getItem(FOLLOW_UP_MODE_KEY);
+  return stored === "queue" || stored === "steer" ? stored : DEFAULT_FOLLOW_UP_MODE;
+}
+
+/** A queued message loaded into the composer for editing. */
+export interface ChatQueueEdit {
+  itemId: string;
+  /** Revision the edit started from; the save sends it as `expected_revision`. */
+  revision: number;
+  /** The composer draft the edit replaced, restored when the edit ends. */
+  stash: { draft: string; attachments: Record<string, string> };
+}
+
+/**
+ * An enqueue the server has not answered yet. `unconfirmed` means it failed
+ * without an HTTP status: the row may or may not exist, so it is never retried
+ * automatically. Retrying with the same `client_id` is idempotent.
+ */
+export interface ChatQueueOutboxItem {
+  client_id: string;
+  body_md: string;
+  attachment_ids?: string[];
+  attachments: QueuedMessageAttachment[];
+  created_at: string;
+  state: "sending" | "unconfirmed";
+}
 
 function readDrafts(storage: StorageAdapter, key: string): Record<string, string> {
   const raw = storage.getItem(key);
@@ -73,34 +115,55 @@ function writeDraftAttachments(storage: StorageAdapter, key: string, drafts: Rec
   else storage.removeItem(key);
 }
 
+function readJsonRecord(storage: StorageAdapter, key: string): Record<string, unknown> {
+  const raw = storage.getItem(key);
+  if (!raw) return {};
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {};
+  } catch {
+    return {};
+  }
+}
+
+function writeJsonRecord(storage: StorageAdapter, key: string, value: Record<string, unknown>): void {
+  if (Object.keys(value).length) storage.setItem(key, JSON.stringify(value));
+  else storage.removeItem(key);
+}
+
+const isStringRecord = (value: unknown): value is Record<string, string> =>
+  !!value && typeof value === "object" && !Array.isArray(value)
+  && Object.values(value).every((entry) => typeof entry === "string");
+
+function readQueueEdits(storage: StorageAdapter, key: string): Record<string, ChatQueueEdit> {
+  const edits: Record<string, ChatQueueEdit> = {};
+  for (const [sessionId, value] of Object.entries(readJsonRecord(storage, key))) {
+    const edit = value as Partial<ChatQueueEdit> | null;
+    if (!edit || typeof edit.itemId !== "string" || typeof edit.revision !== "number"
+      || !edit.stash || typeof edit.stash.draft !== "string" || !isStringRecord(edit.stash.attachments)) continue;
+    edits[sessionId] = { itemId: edit.itemId, revision: edit.revision, stash: edit.stash };
+  }
+  return edits;
+}
+
+function readQueueOutbox(storage: StorageAdapter, key: string): Record<string, ChatQueueOutboxItem[]> {
+  const outbox: Record<string, ChatQueueOutboxItem[]> = {};
+  for (const [sessionId, value] of Object.entries(readJsonRecord(storage, key))) {
+    if (!Array.isArray(value)) continue;
+    const items = value.filter((item): item is ChatQueueOutboxItem =>
+      !!item && typeof item.client_id === "string" && typeof item.body_md === "string"
+      && typeof item.created_at === "string" && Array.isArray(item.attachments))
+      // A reload cannot know whether an in-flight enqueue arrived.
+      .map((item) => ({ ...item, state: "unconfirmed" as const }));
+    if (items.length) outbox[sessionId] = items;
+  }
+  return outbox;
+}
+
 export const CHAT_MIN_W = 360;
 export const CHAT_MIN_H = 480;
 export const CHAT_DEFAULT_W = 380;
 export const CHAT_DEFAULT_H = 600;
-
-/**
- * Kept as a public type because existing consumers (chat-message-list,
- * views/chat types) import it. Items themselves no longer live in the
- * store — they flow through the React Query cache keyed by task id.
- */
-export interface ChatTimelineItem {
-  seq: number;
-  type:
-    | "tool_use"
-    | "tool_result"
-    | "thinking"
-    | "text"
-    | "steer"
-    | "error"
-    | "permission_request"
-    | "permission_response"
-    | "question_request"
-    | "question_response";
-  tool?: string;
-  content?: string;
-  input?: Record<string, unknown>;
-  output?: string;
-}
 
 export interface ChatState {
   isOpen: boolean;
@@ -117,6 +180,12 @@ export interface ChatState {
   chatWidth: number;
   chatHeight: number;
   isExpanded: boolean;
+  /** Default delivery for a message sent while a run is active. */
+  followUpMode: ChatFollowUpMode;
+  /** Queued-message edit in progress, by session. */
+  queueEdit: Record<string, ChatQueueEdit>;
+  /** Enqueues not yet confirmed by the server, by session. */
+  queueOutbox: Record<string, ChatQueueOutboxItem[]>;
   setOpen: (open: boolean) => void;
   toggle: () => void;
   setActiveSession: (id: string | null) => void;
@@ -131,6 +200,38 @@ export interface ChatState {
   /** Persist raw size and auto-exit expanded mode. */
   setChatSize: (width: number, height: number) => void;
   setExpanded: (expanded: boolean) => void;
+  setFollowUpMode: (mode: ChatFollowUpMode) => void;
+  /**
+   * Loads a queued message into the session's composer draft. The draft it
+   * replaces is stashed; switching to another queued message keeps the
+   * original stash.
+   */
+  startQueueEdit: (sessionId: string, edit: {
+    itemId: string; revision: number; body_md: string; attachments: Record<string, string>;
+  }) => void;
+  /**
+   * `restore` puts the stashed draft back (save or cancel). `keep` leaves the
+   * edited text as an ordinary draft, followed by the stashed one, when the
+   * row can no longer be saved. `keptText` is the text the user submitted;
+   * without it the (debounced) stored draft is kept.
+   */
+  finishQueueEdit: (sessionId: string, outcome: "restore" | "keep", keptText?: string) => void;
+  /** Adds or replaces the outbox item with the same `client_id`. */
+  putQueueOutboxItem: (sessionId: string, item: ChatQueueOutboxItem) => void;
+  /**
+   * `workspaceSlug` names the workspace the enqueue started in; when the user
+   * has switched since, the item is removed from that workspace's stored
+   * outbox instead of the current one.
+   */
+  removeQueueOutboxItem: (sessionId: string, clientId: string, workspaceSlug?: string | null) => void;
+  /** Drops the queued-message edit and outbox of a deleted session. */
+  clearQueueState: (sessionId: string) => void;
+  /**
+   * Appends text the queue could not keep to the session's draft, with its
+   * attachment bindings. During a queued-message edit it joins the stashed
+   * draft instead, so the edit being saved does not pick it up.
+   */
+  restoreToDraft: (sessionId: string, body: string, attachments: Record<string, string>) => void;
 }
 
 export interface ChatStoreOptions {
@@ -162,6 +263,9 @@ export function createChatStore(options: ChatStoreOptions) {
     chatWidth: Number(storage.getItem(CHAT_WIDTH_KEY)) || CHAT_DEFAULT_W,
     chatHeight: Number(storage.getItem(CHAT_HEIGHT_KEY)) || CHAT_DEFAULT_H,
     isExpanded: storage.getItem(wsKey(CHAT_EXPANDED_KEY)) === "true",
+    followUpMode: readFollowUpMode(storage),
+    queueEdit: readQueueEdits(storage, wsKey(QUEUE_EDIT_KEY)),
+    queueOutbox: readQueueOutbox(storage, wsKey(QUEUE_OUTBOX_KEY)),
     setOpen: (open) => {
       logger.debug("setOpen", { from: get().isOpen, to: open });
       storage.setItem(OPEN_KEY, String(open));
@@ -250,6 +354,108 @@ export function createChatStore(options: ChatStoreOptions) {
       }
       set({ isExpanded: expanded });
     },
+    setFollowUpMode: (mode) => {
+      storage.setItem(FOLLOW_UP_MODE_KEY, mode);
+      set({ followUpMode: mode });
+    },
+    startQueueEdit: (sessionId, edit) => {
+      const state = get();
+      const stash = state.queueEdit[sessionId]?.stash ?? {
+        draft: state.inputDrafts[sessionId] ?? "",
+        attachments: state.inputDraftAttachments[sessionId] ?? {},
+      };
+      const queueEdit = { ...state.queueEdit, [sessionId]: { itemId: edit.itemId, revision: edit.revision, stash } };
+      const inputDrafts = { ...state.inputDrafts, [sessionId]: edit.body_md };
+      const inputDraftAttachments = { ...state.inputDraftAttachments };
+      if (Object.keys(edit.attachments).length) inputDraftAttachments[sessionId] = edit.attachments;
+      else delete inputDraftAttachments[sessionId];
+      logger.info("startQueueEdit", { sessionId, itemId: edit.itemId });
+      writeJsonRecord(storage, wsKey(QUEUE_EDIT_KEY), queueEdit);
+      writeDrafts(storage, wsKey(DRAFTS_KEY), inputDrafts);
+      writeDraftAttachments(storage, wsKey(DRAFT_ATTACHMENTS_KEY), inputDraftAttachments);
+      set({ queueEdit, inputDrafts, inputDraftAttachments });
+    },
+    finishQueueEdit: (sessionId, outcome, keptText) => {
+      const state = get();
+      const edit = state.queueEdit[sessionId];
+      if (!edit) return;
+      const queueEdit = { ...state.queueEdit };
+      delete queueEdit[sessionId];
+      const { draft, attachments } = edit.stash;
+      const current = keptText ?? state.inputDrafts[sessionId] ?? "";
+      const nextDraft = outcome === "restore" ? draft
+        : [current.trim(), draft.trim()].filter(Boolean).join("\n\n");
+      const nextAttachments = outcome === "restore" ? attachments
+        : { ...attachments, ...state.inputDraftAttachments[sessionId] };
+      const inputDrafts = { ...state.inputDrafts, [sessionId]: nextDraft };
+      const inputDraftAttachments = { ...state.inputDraftAttachments };
+      if (Object.keys(nextAttachments).length) inputDraftAttachments[sessionId] = nextAttachments;
+      else delete inputDraftAttachments[sessionId];
+      logger.info("finishQueueEdit", { sessionId, itemId: edit.itemId, outcome });
+      writeJsonRecord(storage, wsKey(QUEUE_EDIT_KEY), queueEdit);
+      writeDrafts(storage, wsKey(DRAFTS_KEY), inputDrafts);
+      writeDraftAttachments(storage, wsKey(DRAFT_ATTACHMENTS_KEY), inputDraftAttachments);
+      set({ queueEdit, inputDrafts, inputDraftAttachments });
+    },
+    putQueueOutboxItem: (sessionId, item) => {
+      const current = get().queueOutbox;
+      const items = [...(current[sessionId] ?? []).filter((entry) => entry.client_id !== item.client_id), item]
+        .sort((a, b) => a.created_at.localeCompare(b.created_at));
+      const queueOutbox = { ...current, [sessionId]: items };
+      writeJsonRecord(storage, wsKey(QUEUE_OUTBOX_KEY), queueOutbox);
+      set({ queueOutbox });
+    },
+    removeQueueOutboxItem: (sessionId, clientId, workspaceSlug) => {
+      if (workspaceSlug !== undefined && workspaceSlug !== getCurrentSlug()) {
+        const key = workspaceSlug ? `${QUEUE_OUTBOX_KEY}:${workspaceSlug}` : QUEUE_OUTBOX_KEY;
+        const stored = readQueueOutbox(storage, key);
+        const items = (stored[sessionId] ?? []).filter((entry) => entry.client_id !== clientId);
+        if (items.length === (stored[sessionId]?.length ?? 0)) return;
+        if (items.length) stored[sessionId] = items;
+        else delete stored[sessionId];
+        writeJsonRecord(storage, key, stored);
+        return;
+      }
+      const current = get().queueOutbox;
+      if (!current[sessionId]?.some((entry) => entry.client_id === clientId)) return;
+      const items = current[sessionId]!.filter((entry) => entry.client_id !== clientId);
+      const queueOutbox = { ...current };
+      if (items.length) queueOutbox[sessionId] = items;
+      else delete queueOutbox[sessionId];
+      writeJsonRecord(storage, wsKey(QUEUE_OUTBOX_KEY), queueOutbox);
+      set({ queueOutbox });
+    },
+    restoreToDraft: (sessionId, body, attachments) => {
+      const state = get();
+      const join = (draft: string) => [draft.trim(), body].filter(Boolean).join("\n\n");
+      const edit = state.queueEdit[sessionId];
+      if (edit) {
+        const queueEdit = { ...state.queueEdit, [sessionId]: { ...edit, stash: {
+          draft: join(edit.stash.draft), attachments: { ...edit.stash.attachments, ...attachments },
+        } } };
+        writeJsonRecord(storage, wsKey(QUEUE_EDIT_KEY), queueEdit);
+        set({ queueEdit });
+        return;
+      }
+      const inputDrafts = { ...state.inputDrafts, [sessionId]: join(state.inputDrafts[sessionId] ?? "") };
+      const merged = { ...state.inputDraftAttachments[sessionId], ...attachments };
+      const inputDraftAttachments = { ...state.inputDraftAttachments };
+      if (Object.keys(merged).length) inputDraftAttachments[sessionId] = merged;
+      writeDrafts(storage, wsKey(DRAFTS_KEY), inputDrafts);
+      writeDraftAttachments(storage, wsKey(DRAFT_ATTACHMENTS_KEY), inputDraftAttachments);
+      set({ inputDrafts, inputDraftAttachments });
+    },
+    clearQueueState: (sessionId) => {
+      const state = get();
+      if (!(sessionId in state.queueEdit) && !(sessionId in state.queueOutbox)) return;
+      const queueEdit = { ...state.queueEdit };
+      const queueOutbox = { ...state.queueOutbox };
+      delete queueEdit[sessionId];
+      delete queueOutbox[sessionId];
+      writeJsonRecord(storage, wsKey(QUEUE_EDIT_KEY), queueEdit);
+      writeJsonRecord(storage, wsKey(QUEUE_OUTBOX_KEY), queueOutbox);
+      set({ queueEdit, queueOutbox });
+    },
   }));
 
   registerForWorkspaceRehydration(() => {
@@ -270,6 +476,8 @@ export function createChatStore(options: ChatStoreOptions) {
       inputDrafts: nextDrafts,
       inputDraftAttachments: readDraftAttachments(storage, wsKey(DRAFT_ATTACHMENTS_KEY)),
       localAttachmentDetails: {},
+      queueEdit: readQueueEdits(storage, wsKey(QUEUE_EDIT_KEY)),
+      queueOutbox: readQueueOutbox(storage, wsKey(QUEUE_OUTBOX_KEY)),
     });
   });
 

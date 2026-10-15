@@ -113,7 +113,7 @@ describe("ChatEndpoints contracts", () => {
     const api = new ChatEndpoints(new HttpClient("https://api.example.test"));
     await expect(api.sendChatMessage("chat_1", "Follow up", undefined, "send-1")).resolves.toMatchObject({ message_id: "msg_1", task_id: "attempt_2", turn_id: "turn_1" });
     expect(fetchMock).toHaveBeenCalledWith("https://api.example.test/api/sessions/chat_1/messages", expect.objectContaining({
-      method: "POST", body: JSON.stringify({ body_md: "Follow up", message_kind: "request", to: { type: "agent", ref: "agent-1" }, dedupe_key: "send-1" }),
+      method: "POST", body: JSON.stringify({ body_md: "Follow up", message_kind: "request", to: { type: "agent", ref: "agent-1" }, wake_requested: "now", dedupe_key: "send-1" }),
     }));
   });
   it("reads the active turn through status-filtered pages, without a legacy queue", async () => {
@@ -125,6 +125,16 @@ describe("ChatEndpoints contracts", () => {
     await expect(api.getPendingChatTask("chat_1")).resolves.toMatchObject({ task_id: "attempt_2", turn_id: "turn_1", status: "running" });
     expect(fetch).toHaveBeenCalledTimes(3);
     expect(fetch).not.toHaveBeenCalledWith(expect.stringContaining("pending-task"), expect.anything());
+  });
+  it("lists in-flight chat turns with both the attempt and the turn the cancel command addresses", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => {
+      const params = new URL(url).searchParams;
+      return response({ turns: params.get("status") === "awaiting_human" ? [turnFixture({ status: "awaiting_human" })] : [], next_cursor: null });
+    }));
+    const api = new ChatEndpoints(new HttpClient("https://api.example.test"));
+    await expect(api.listPendingChatTasks()).resolves.toEqual({ tasks: [
+      { task_id: "attempt_2", turn_id: "turn_1", status: "awaiting_human", chat_session_id: "chat_1" },
+    ] });
   });
   it("marks the conversation read through the cursor command and rejects an invalid acknowledgement", async () => {
     await expect(endpointsWithResponse({ session_id: "chat_1", cursor_seq: 5 }).markChatSessionRead("chat_1")).resolves.toBeUndefined();

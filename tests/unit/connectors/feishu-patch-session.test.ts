@@ -51,39 +51,37 @@ describe("one patch-only Feishu card transport", () => {
     }
   });
 
-  for (const durable of [undefined, { idempotencyKey: "delivery_1" }]) {
-    it(`uses the same message JSON and patch path for ${durable ? "proactive" : "interactive"} replies`, async () => {
-      const h = harness();
-      await h.session.start("oc_group", "chat_id", { replyToMessageId: "om_root", displayName: "Topic Agent", durable });
-      expect(h.calls.map(c => c.operation)).toEqual(["reply"]);
-      const sent = h.calls[0]!.input;
-      expect(sent.data.msg_type).toBe("interactive");
-      expect(sent.path.message_id).toBe("om_root");
-      const initial = JSON.parse(sent.data.content);
-      expect(initial.schema).toBe("2.0");
-      expect(initial.config).not.toHaveProperty("streaming_mode");
-      expect(initial.config).not.toHaveProperty("streaming_config");
-      expect(initial).not.toHaveProperty("data.card_id");
+  it("sends one message JSON and patches it in place", async () => {
+    const h = harness();
+    await h.session.start("oc_group", "chat_id", { replyToMessageId: "om_root", displayName: "Topic Agent" });
+    expect(h.calls.map(c => c.operation)).toEqual(["reply"]);
+    const sent = h.calls[0]!.input;
+    expect(sent.data.msg_type).toBe("interactive");
+    expect(sent.path.message_id).toBe("om_root");
+    const initial = JSON.parse(sent.data.content);
+    expect(initial.schema).toBe("2.0");
+    expect(initial.config).not.toHaveProperty("streaming_mode");
+    expect(initial.config).not.toHaveProperty("streaming_config");
+    expect(initial).not.toHaveProperty("data.card_id");
 
-      await h.session.update("partial");
-      h.session.addStep("Read", "Read source");
-      h.session.updateStepDuration(1500);
-      await h.session.appendPermissionForm(buildToolApprovalForm("approval", "Read", "source", [
-        { optionId: "allow", name: "Allow", kind: "allow_once" },
-      ]));
-      expect(h.patches()).toHaveLength(1);
-      expect(JSON.stringify(h.patches()[0])).toContain("partial");
-      expect(JSON.stringify(h.patches()[0])).toContain("1.5s");
-      expect(JSON.stringify(h.patches()[0])).toContain("approval");
-      expect(JSON.stringify(h.patches()[0]!.header)).toContain("Topic Agent");
-      await h.session.removePermissionForm("approval");
-      expect(JSON.stringify(h.patches().at(-1))).not.toContain("perm_approval");
-      await h.session.close({ finalText: "Final answer", stats: "1 tool" });
-      expect(JSON.stringify(h.patches().at(-1))).toContain("Final answer");
-      expect(h.calls.filter(c => c.operation !== "patch")).toHaveLength(1);
-      expect(h.session.isActive()).toBe(false);
-    });
-  }
+    await h.session.update("partial");
+    h.session.addStep("Read", "Read source");
+    h.session.updateStepDuration(1500);
+    await h.session.appendPermissionForm(buildToolApprovalForm("approval", "Read", "source", [
+      { optionId: "allow", name: "Allow", kind: "allow_once" },
+    ]));
+    expect(h.patches()).toHaveLength(1);
+    expect(JSON.stringify(h.patches()[0])).toContain("partial");
+    expect(JSON.stringify(h.patches()[0])).toContain("1.5s");
+    expect(JSON.stringify(h.patches()[0])).toContain("approval");
+    expect(JSON.stringify(h.patches()[0]!.header)).toContain("Topic Agent");
+    await h.session.removePermissionForm("approval");
+    expect(JSON.stringify(h.patches().at(-1))).not.toContain("perm_approval");
+    await h.session.close({ finalText: "Final answer", stats: "1 tool" });
+    expect(JSON.stringify(h.patches().at(-1))).toContain("Final answer");
+    expect(h.calls.filter(c => c.operation !== "patch")).toHaveLength(1);
+    expect(h.session.isActive()).toBe(false);
+  });
 
   it("coalesces text, status and steps into one patch for an ordinary chat", async () => {
     const h = harness();

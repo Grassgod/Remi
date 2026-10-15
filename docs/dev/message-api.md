@@ -65,6 +65,33 @@ SSR 和本地副本继续使用只读展示协议：`GET /api/sessions/:sessionI
 
 按 [ADR 0016](../adr/0016-unified-message-inbox-and-turn.md)，lane 的 `cursor_seq/cursor_offset` 是实际读取高水位，`provider_cursor_seq` 是 provider 续接/完成位置。轮完成不推进实际读游标；冷 bootstrap 被接受后实际进度清零，完整 inline 输入与范围读取再推进它。范围读取绑定当前 attempt，拒绝或准备 bootstrap 不清零。人的 inbox 使用自己的 member lane，页面不要用 agent 游标推断用户阅读状态。
 
+## Queue
+
+Chat 跟进队列（[ADR 0020](../adr/0020-chat-follow-up-queue-and-native-steering.md)）。条目存在服务端队列表，放行前不进对话日志；放行时经 `sendMessageWithinTransaction` 写一条普通成员 request，`wake_requested:"now"`，`dedupe_key` 为 `queue:<id>`，`metadata` 带 `queued_message_id`、`queued_at`。`next_turn` 的含义不变：仍随下一轮读取、不单独补铃，队列不使用它。
+
+| HTTP | 输入 | 响应 | 错误 |
+|---|---|---|---|
+| `GET /api/sessions/:sessionId/queue` | 无 | `{items,paused}`；items 为 queued 与 failed 条目，按入队顺序；paused 为 `{reason,at}` 或 null | 400 `not_a_chat` |
+| `POST /api/sessions/:sessionId/queue` | `{body_md,attachment_ids?,client_id}` | `{item,released}`；lane 空闲且未暂停时 released 为 `{message,turn_id?}`，否则 null | 400 正文或附件无效、超过 10 个附件、`queue_full`（50 条）；403；409 `chat_archived` / `queued_message_deleted`（该 `client_id` 的条目已删除） |
+| `PATCH .../queue/:qid` | `{body_md,attachment_ids?,expected_revision?}` | `{item}`；failed 条目重置为 queued | 403；404；409 `queued_message_consumed` / `revision_conflict` |
+| `DELETE .../queue/:qid` | 无 | `{item}`，重复删除幂等 | 403；404；409 `queued_message_consumed` |
+| `POST .../queue/:qid/steer` | `{}` | `{item,message,turn_id?}`；已引导的重复调用返回同一条消息 | 403；404（含已删除）；409 `queued_message_consumed`（已被轮放行）/ `chat_archived` / `queued_message_send_failed`（附带 failed 的 item） |
+| `POST .../queue/resume` | `{}` | `{items,paused,released}`；released 为本次放行的 `{message,turn_id?}` 数组 | 403；409 `chat_archived` |
+
+item 为 `{id,session_id,body_md,attachments:[{id,filename,content_type,size}],client_id,status,error,revision,released_message_id,released_via,released_at,created_at,updated_at}`，status 为 queued/failed/released/deleted，released_via 为 `turn`（作为后续轮放行）或 `steer`。错误响应为 `{error,code}`。类型见 [queued-message.ts](../../packages/contracts/src/queued-message.ts)。
+
+鉴权：先走 Chat 的创建人、工作区成员与 Agent 访问规则，再要求当前身份是活跃成员；task token（包括本 Chat 的轮）一律 403 `queue_actor_required`，agent 不操作成员的队列。入队另查 Agent 访问；单条操作要求原发送人，否则 403 `not_queued_message_sender`。附件沿用发送的可访问与同工作区检查，还必须尚未绑定消息，且不在同一 Chat 的另一条未放行条目里。`client_id` 在 Chat 内唯一，重复入队返回原条目（已放行时带原 released）；原条目已删除时返回 409 `queued_message_deleted`，客户端需换新的 `client_id`。单条操作同样要求发送人仍是活跃成员。
+
+所有写入在同一事务内持有工作区生命周期锁和 lane 锁；每次变更、放行与暂停在提交后发射 `chat:queue_updated`（payload `{chat_session_id}`），回滚不发。成员通过 `POST /api/turns/:id/cancel` 停止轮会暂停队列（`interrupted`）；agent、supervisor 或相关控制者取消不算成员停止，由终态钩子暂停为 `turn_ended`，轮 failed 同样如此。
+
+| 暂停原因 | 解除 |
+|---|---|
+| `turn_ended` | 该 lane 任一轮 completed（包括失败轮重试成功、之后的直接发送完成）时自动解除并放行；或 resume |
+| `interrupted` | 只由 resume 解除，期间轮 completed 也不放行 |
+| `send_failed` | resume；或编辑、删除、引导失败条目后不再有 failed 条目时自动解除，lane 空闲时继续放行 |
+
+归档的 Chat 仍可编辑、删除条目以整理队列：`send_failed` 照常解除，但不放行，Chat 保持归档。放行本身从不重新打开归档的 Chat。CLI 不提供队列命令，manifest 按 pure_ui 豁免；CLI 与 agent 直接用 `remi message send --wake` 选择叫醒方式。
+
 ## Inbox
 
 | HTTP | 输入 | 响应 |
@@ -87,10 +114,10 @@ SSR 和本地副本继续使用只读展示协议：`GET /api/sessions/:sessionI
 | `GET /api/turns/:id` | `input=true`、`attempts=true`，默认均不展开 | `{turn,input?,attempts?}` |
 | `POST /api/turns/:id/cancel` | `{}` | `{turn}`；丢弃本轮已绑定输入并取消，已终态幂等 |
 | `POST /api/turns/:id/wrap-up` | `{}` | `{turn}`；仅 running/awaiting_human，设置 wrap_up_requested_at |
-| `POST /api/turns/:id/retry` | `{cold?:boolean,reason?:string}` | `{turn,organizer_action,comment_id}`；原 turn.id，新 current_attempt_id，cold 清续接缓存 |
+| `POST /api/turns/:id/retry` | `{cold?:boolean,reason?:string}` | 控制者：`{turn,organizer_action,comment_id}`；Chat 创建者：`{turn}`。原 turn.id，新 current_attempt_id，cold 清续接缓存 |
 | `GET /api/turns/:id/trace` | `attempt_id` 缺省 current_attempt_id；`after_seq`、`limit` 沿用 TraceReader 协议 | `{turn_id,attempt_id,...TraceReadResult}` |
 
-input 为 `{from_seq,to_seq,messages,legacy_prompt}`，读取完整绑定范围，不因超过 1000 条而截断。attempts 按 attempt_no 升序。status 为 pending/running/awaiting_human/completed/failed/cancelled。列表 limit 默认100、上限500；cursor 为 opaque 字符串。retry 接受带 organizer:supervisor scope 的当前 supervisor task 凭证，也接受同工作区组长或父单负责人对组员轮的控制；旁支会话不能重试，其他跨 agent 操作返回 403。retry 沿用 organizer 的 report_only/act 设置、巡查评论和审计，提交后发布事件；返回同一 turn、新 attempt，以及 organizer_action/comment_id。cold=false 保留 provider 缓存，cold=true 清缓存。cancel/wrap-up 同样允许这些相关控制者。retry 不新增轮、不改变 Issue；不可重试状态返回409。trace attempt 必须属于指定轮，原 TraceReadResult 的可用性、分页及断档字段保留；runtime/all 角色提供此入口，ui 角色继续返回 421。
+input 为 `{from_seq,to_seq,messages,legacy_prompt}`，读取完整绑定范围，不因超过 1000 条而截断。attempts 按 attempt_no 升序。status 为 pending/running/awaiting_human/completed/failed/cancelled。列表 limit 默认100、上限500；cursor 为 opaque 字符串。retry 接受带 organizer:supervisor scope 的当前 supervisor task 凭证，也接受同工作区组长或父单负责人对组员轮的控制；旁支会话不能重试，其他跨 agent 操作返回 403。Chat 另有成员路径：不带 task 凭证的人按私聊规则（创建者本人、工作区成员、可访问该 Agent）可以重试自己 Chat 中失败或取消的轮，warm/cold 都支持；它复用 organizer 的 redispatch，不写巡查评论和审计，Chat 已归档、轮不是失败或取消、同一 lane 还有活跃轮时返回 409。带 Issue 的轮（包括挂了 Issue 的 Chat）仍只接受上述控制者，PAT 和主令牌返回 403。retry 沿用 organizer 的 report_only/act 设置、巡查评论和审计，提交后发布事件；返回同一 turn、新 attempt，以及 organizer_action/comment_id。cold=false 保留 provider 缓存，cold=true 清缓存。cancel/wrap-up 同样允许这些相关控制者。retry 不新增轮、不改变 Issue；不可重试状态返回409。trace attempt 必须属于指定轮，原 TraceReadResult 的可用性、分页及断档字段保留；runtime/all 角色提供此入口，ui 角色继续返回 421。
 
 AgentTask 的 `id` 仍为 attempt ID；既有 `/api/agent-task-snapshot` 和 `/api/agents/:id/tasks`（含 native 对应端点）同批返回 `turn_id`。快照的精简列清单也包含该字段，直接来自 execution read projection 的 canonical turn 映射，不额外逐条查询。全局任务日志使用 `/api/turns/:turn_id/trace?attempt_id=:id`，历史 attempt 也保留所属 turn_id，不可把两类 ID 互换。旧 `/api/issues/:id/active-task` 已退役并返回 410；Issue 的轮列表使用 `GET /api/turns?issue_id=:id` 或 `remi turn list --issue <issue>`。
 
@@ -104,4 +131,4 @@ AgentTask 的 `id` 仍为 attempt ID；既有 `/api/agent-task-snapshot` 和 `/a
 
 飞书工作区隔离、恢复与一次答复回归见 [multiremi-issue-decision-card-workspace.test.ts](../../tests/unit/multiremi/multiremi-issue-decision-card-workspace.test.ts)。
 
-实现验证入口为 [unified-api.test.ts](../../tests/unit/multiremi/unified-api.test.ts)、[卡片 token 回归](../../tests/unit/multiremi/multiremi-question-card-token.test.ts) 和 [CLI 用例](../../tests/unit/remi/cli-unified.test.ts)。
+实现验证入口为 [unified-api.test.ts](../../tests/unit/multiremi/unified-api.test.ts)、[卡片 token 回归](../../tests/unit/multiremi/multiremi-question-card-token.test.ts)、[CLI 用例](../../tests/unit/remi/cli-unified.test.ts) 和 [队列接口用例](../../tests/unit/multiremi/multiremi-api-chat-queue.test.ts)。

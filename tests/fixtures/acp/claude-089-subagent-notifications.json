@@ -1,0 +1,270 @@
+[
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_claude_089",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "Delegating the search."
+        },
+        "messageId": "msg_02A"
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_claude_089",
+      "update": {
+        "_meta": {
+          "claudeCode": {
+            "toolName": "Agent"
+          },
+          "jetbrains": {
+            "air": {
+              "version": 1,
+              "subagent": true
+            }
+          }
+        },
+        "toolCallId": "toolu_agent_1",
+        "sessionUpdate": "tool_call",
+        "name": "Agent",
+        "status": "pending",
+        "title": "Task",
+        "kind": "think",
+        "content": []
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_claude_089",
+      "update": {
+        "_meta": {
+          "claudeCode": {
+            "toolName": "Agent"
+          },
+          "jetbrains": {
+            "air": {
+              "version": 1,
+              "subagent": true
+            }
+          }
+        },
+        "toolCallId": "toolu_agent_1",
+        "sessionUpdate": "tool_call_update",
+        "rawInput": {
+          "description": "Find add callers",
+          "prompt": "List every caller of add()",
+          "subagent_type": "Explore"
+        },
+        "title": "Find add callers",
+        "content": [
+          {
+            "type": "content",
+            "content": {
+              "type": "text",
+              "text": "List every caller of add()"
+            }
+          }
+        ]
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_claude_089",
+      "update": {
+        "sessionUpdate": "agent_thought_chunk",
+        "content": {
+          "type": "text",
+          "text": "Searching for callers."
+        },
+        "messageId": "msg_02S",
+        "_meta": {
+          "claudeCode": {
+            "parentToolUseId": "toolu_agent_1"
+          }
+        }
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_claude_089",
+      "update": {
+        "_meta": {
+          "claudeCode": {
+            "toolName": "Grep",
+            "parentToolUseId": "toolu_agent_1"
+          }
+        },
+        "toolCallId": "toolu_sub_grep",
+        "sessionUpdate": "tool_call",
+        "name": "Grep",
+        "status": "pending",
+        "title": "grep",
+        "kind": "search",
+        "content": []
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_claude_089",
+      "update": {
+        "_meta": {
+          "claudeCode": {
+            "toolName": "Grep",
+            "parentToolUseId": "toolu_agent_1"
+          }
+        },
+        "toolCallId": "toolu_sub_grep",
+        "sessionUpdate": "tool_call_update",
+        "rawInput": {
+          "pattern": "add\\("
+        },
+        "title": "grep \"add\\(\""
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_claude_089",
+      "update": {
+        "_meta": {
+          "claudeCode": {
+            "toolName": "Grep",
+            "parentToolUseId": "toolu_agent_1"
+          }
+        },
+        "toolCallId": "toolu_sub_grep",
+        "sessionUpdate": "tool_call_update",
+        "status": "completed",
+        "content": [
+          {
+            "type": "content",
+            "content": {
+              "type": "text",
+              "text": "src/index.ts"
+            }
+          }
+        ]
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_claude_089",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "One caller: src/index.ts."
+        },
+        "messageId": "msg_02S",
+        "_meta": {
+          "claudeCode": {
+            "parentToolUseId": "toolu_agent_1"
+          }
+        }
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_claude_089",
+      "update": {
+        "sessionUpdate": "tool_call_update",
+        "toolCallId": "toolu_agent_1",
+        "status": "in_progress",
+        "_meta": {
+          "claudeCode": {
+            "toolName": "Agent",
+            "toolResponse": {
+              "elapsedTimeSeconds": 3,
+              "subagentType": "Explore"
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_claude_089",
+      "update": {
+        "_meta": {
+          "claudeCode": {
+            "toolName": "Agent"
+          }
+        },
+        "toolCallId": "toolu_agent_1",
+        "sessionUpdate": "tool_call_update",
+        "status": "completed",
+        "content": [
+          {
+            "type": "content",
+            "content": {
+              "type": "text",
+              "text": "One caller: src/index.ts."
+            }
+          }
+        ]
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_claude_089",
+      "update": {
+        "sessionUpdate": "usage_update",
+        "used": 5000,
+        "size": 200000,
+        "_meta": {
+          "claudeCode": {
+            "parentToolUseId": "toolu_agent_1"
+          }
+        }
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_claude_089",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "Only `src/index.ts` calls `add`."
+        },
+        "messageId": "msg_02B"
+      }
+    }
+  }
+]

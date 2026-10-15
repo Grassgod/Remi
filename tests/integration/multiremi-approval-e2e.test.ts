@@ -14,6 +14,7 @@ import { TestMultiremiDaemon as MultiremiDaemon } from "../fixtures/daemon-proto
 import { MultiremiStore } from "@multiremi/store.js";
 import type { MultiremiTaskHumanRequest, MultiremiTaskStatus } from "@multiremi/contracts/types.js";
 import { DAEMON_MIN_CLI_VERSION } from "@multiremi/contracts/daemon-protocol.js";
+import { traceItems } from "../helpers/turn-trace.js";
 
 let db: SqlDatabase | null = null;
 let database: Awaited<ReturnType<typeof openHotspotDatabase>> | null = null;
@@ -293,10 +294,11 @@ describe("Multiremi approval routing e2e", () => {
       expect(settled.response).toEqual({ option_id: "opt-allow-once" });
       expect(settled.respondedBy).toBeTruthy();
 
-      // Transcript carries the request/response audit rows.
-      const types = h.daemon.traceStore().read(h.taskId).events.map((m) => m.type);
-      expect(types).toContain("permission_request");
-      expect(types).toContain("permission_response");
+      // The trace carries the request and its answer as one permission item.
+      const permissions = traceItems(h.daemon.traceStore().read(h.taskId).events).filter((item) => item.type === "permission");
+      expect(permissions).toHaveLength(1);
+      expect(permissions[0]).toMatchObject({ status: "completed", outcome: "selected",
+        decision: { option_id: "opt-allow-once" } });
     } finally {
       await stopHarness(h);
     }
@@ -333,9 +335,10 @@ describe("Multiremi approval routing e2e", () => {
       await h.run;
       expect(h.elicitationResults).toEqual([{ action: "accept", content: { question_0: "staging" } }]);
       expect(h.store.getTask(h.taskId)!.status).toBe("completed");
-      const types = h.daemon.traceStore().read(h.taskId).events.map((m) => m.type);
-      expect(types).toContain("question_request");
-      expect(types).toContain("question_response");
+      const items = traceItems(h.daemon.traceStore().read(h.taskId).events);
+      expect(items.filter((item) => item.type === "question")).toEqual([expect.objectContaining({
+        status: "completed", message: "Which environment should I deploy to?", answers: { [questions[0].question.question]: "staging" },
+      })]);
     } finally {
       await stopHarness(h);
     }

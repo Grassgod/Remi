@@ -9,6 +9,7 @@ import {
 import { createLocalHubTransport } from "@multiremi/api/hub/hub-transport.js";
 import type { ConversationLogPatch } from "@multiremi/api/hub/live-hub.js";
 import type { HubFrame, HubSeqRange } from "@multiremi/contracts/live-hub.js";
+import { deltaTraceEvent } from "../../helpers/turn-trace.js";
 
 const hubs: HubImpl[] = [];
 afterEach(() => {
@@ -256,9 +257,7 @@ describe("MUL-436 regression 5: ordinary flush boundaries", () => {
     const hub = make({ limits: { ring: { streamMaxFrames: 3 } } });
     const out = new RecordingSink();
     hub.subscribeWithSink("trace:t", 0, out);
-    hub.append("t", Array.from({ length: 10 }, (_, i) => ({
-      seq: i + 1, ts: "2026-09-28T00:00:00Z", type: "text", content: `${i + 1}`,
-    })));
+    hub.append("t", Array.from({ length: 10 }, (_, i) => deltaTraceEvent(i + 1, `${i + 1}`, "2026-09-28T00:00:00Z")));
     hub.flushNow();
     expect(out.order).toEqual(["gap:1,7", "data:8,9,10"]);
   });

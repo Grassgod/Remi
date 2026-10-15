@@ -1,0 +1,186 @@
+[
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_claude_089",
+      "update": {
+        "_meta": {
+          "claudeCode": {
+            "toolName": "AskUserQuestion"
+          }
+        },
+        "toolCallId": "toolu_ask_1",
+        "sessionUpdate": "tool_call",
+        "name": "AskUserQuestion",
+        "status": "pending",
+        "title": "Asking for your input",
+        "kind": "other",
+        "content": []
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_claude_089",
+      "update": {
+        "_meta": {
+          "claudeCode": {
+            "toolName": "AskUserQuestion"
+          }
+        },
+        "toolCallId": "toolu_ask_1",
+        "sessionUpdate": "tool_call_update",
+        "rawInput": {
+          "questions": [
+            {
+              "question": "Which file?",
+              "header": "File",
+              "options": [
+                {
+                  "label": "a.ts"
+                },
+                {
+                  "label": "b.ts"
+                }
+              ],
+              "multiSelect": false
+            }
+          ]
+        },
+        "content": [
+          {
+            "type": "content",
+            "content": {
+              "type": "text",
+              "text": "Which file?"
+            }
+          }
+        ]
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_claude_089",
+      "update": {
+        "_meta": {
+          "claudeCode": {
+            "toolName": "AskUserQuestion"
+          }
+        },
+        "toolCallId": "toolu_ask_1",
+        "sessionUpdate": "tool_call_update",
+        "status": "completed",
+        "content": [
+          {
+            "type": "content",
+            "content": {
+              "type": "text",
+              "text": "User answered: a.ts"
+            }
+          }
+        ]
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_claude_089",
+      "update": {
+        "_meta": {
+          "claudeCode": {
+            "toolName": "Bash"
+          },
+          "terminal_info": {
+            "terminal_id": "toolu_bash_3"
+          }
+        },
+        "toolCallId": "toolu_bash_3",
+        "sessionUpdate": "tool_call",
+        "name": "Bash",
+        "status": "pending",
+        "title": "Terminal",
+        "kind": "execute",
+        "content": [
+          {
+            "type": "terminal",
+            "terminalId": "toolu_bash_3"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_claude_089",
+      "update": {
+        "_meta": {
+          "claudeCode": {
+            "toolName": "Bash"
+          },
+          "jetbrains": {
+            "air": {
+              "version": 1,
+              "commandTitle": "Wait"
+            }
+          }
+        },
+        "toolCallId": "toolu_bash_3",
+        "sessionUpdate": "tool_call_update",
+        "rawInput": {
+          "command": "sleep 100",
+          "description": "Wait"
+        },
+        "title": "sleep 100"
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_claude_089",
+      "update": {
+        "_meta": {
+          "terminal_output": {
+            "terminal_id": "toolu_bash_3",
+            "data": "[Command was aborted before completion]"
+          }
+        },
+        "toolCallId": "toolu_bash_3",
+        "sessionUpdate": "tool_call_update"
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_claude_089",
+      "update": {
+        "_meta": {
+          "claudeCode": {
+            "toolName": "Bash"
+          },
+          "terminal_exit": {
+            "terminal_id": "toolu_bash_3",
+            "exit_code": 1,
+            "signal": null
+          }
+        },
+        "toolCallId": "toolu_bash_3",
+        "sessionUpdate": "tool_call_update",
+        "status": "failed"
+      }
+    }
+  }
+]

@@ -1,5 +1,6 @@
 import { createResponsibleTestIssue } from './helpers.js';
 import { InMemoryTraceStore } from "@multiremi/worker/trace-store.js";
+import { commandItem } from "./trace-budget-fixtures.js";
 import { InMemoryDaemonTraceReader } from "@multiremi/api/trace/daemon-trace-reader.js";
 import { turnApiPath } from "./unified-test-paths.js";
 import { afterEach, describe, expect, it } from "bun:test";
@@ -233,7 +234,7 @@ describe("Multiremi multi-user auth", () => {
     expect(store.claimTask(runtime.id)?.id).toBe(task.id);
     store.startTask(task.id);
     const traces = new InMemoryTraceStore();
-    traces.append(task.id,[{type:"tool_use",tool:"Bash",input:{command:"cat ~/.aws/credentials"}}]);
+    traces.append(task.id,[{type:"item.completed",item:commandItem("cmd_secret","cat ~/.aws/credentials")}]);
     const traceApp=createMultiremiApp({store,authToken:"root-secret",daemonTraceReader:new InMemoryDaemonTraceReader(()=>traces)});
 
     // B (member, not owner/admin) is denied; owner sees the messages.
@@ -241,7 +242,7 @@ describe("Multiremi multi-user auth", () => {
     expect(bResp.status).toBe(404);
     const ownerResp = await traceApp.request(turnApiPath(store, task.id, "/trace"), bearer(owner.token));
     expect(ownerResp.status).toBe(200);
-    expect((await ownerResp.json()).events).toHaveLength(1);
+    expect((await ownerResp.json()).items).toHaveLength(1);
   });
 
   it("FR4: a new user creates a workspace, becomes its owner, and can open it with their login token", async () => {
