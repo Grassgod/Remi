@@ -325,7 +325,7 @@
     "late_stopped": "{{name}} 已在后台停止",
     "view_result": "查看结果",
     "view_details": "查看详情",
-    "late_more_other": "另有 {{count}} 个子代理在后台结束",
+    "late_more": "另有更多子代理在后台结束",
     "strip_running_other": "{{count}} 个子代理运行中",
     "strip_running_short_other": "{{count}} 个运行中",
     "strip_background": "后台",

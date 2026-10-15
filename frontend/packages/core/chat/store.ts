@@ -181,7 +181,11 @@ export interface SubagentPanelTarget {
 export interface SubagentRevealRequest {
   attemptId: string;
   itemId: string;
-  /** Bumped per request, so revealing the same row twice still fires. */
+  /**
+   * Increases with every request for the life of the store, also across
+   * clears: a fold acts only on requests newer than the one it saw when it
+   * mounted, and revealing the same row twice still fires.
+   */
   nonce: number;
 }
 
@@ -265,6 +269,7 @@ export interface ChatState {
   openSubagentPanel: (target: SubagentPanelTarget) => void;
   /** Moves the open panel to another subagent, or to the overview with `[]`. */
   setSubagentPath: (path: string[]) => void;
+  /** Closes the panel and drops any pending reveal request. */
   closeSubagentPanel: () => void;
   /** Asks the live steps fold to open and scroll to a top-level subagent's row. */
   revealSubagent: (attemptId: string, itemId: string) => void;
@@ -287,6 +292,8 @@ export function createChatStore(options: ChatStoreOptions) {
   // still honouring an explicit "I closed it" choice on every reload.
   const storedOpen = storage.getItem(OPEN_KEY);
   const initialIsOpen = storedOpen === null ? true : storedOpen === "true";
+  /** Reveal nonces never repeat, even after a request is cleared. */
+  let revealNonce = 0;
 
   const store = create<ChatState>((set, get) => ({
     isOpen: initialIsOpen,
@@ -322,7 +329,9 @@ export function createChatStore(options: ChatStoreOptions) {
       } else {
         storage.removeItem(wsKey(SESSION_STORAGE_KEY));
       }
-      set({ activeSessionId: id });
+      // The subagent panel and a reveal request belong to one chat.
+      const subagents = id !== get().activeSessionId ? { subagentPanel: null, subagentReveal: null } : {};
+      set({ activeSessionId: id, ...subagents });
     },
     setSelectedAgentId: (id) => {
       logger.info("setSelectedAgentId", { from: get().selectedAgentId, to: id });
@@ -489,11 +498,9 @@ export function createChatStore(options: ChatStoreOptions) {
       if (panel) set({ subagentPanel: { ...panel, path: [...path] } });
     },
     closeSubagentPanel: () => {
-      if (get().subagentPanel) set({ subagentPanel: null });
+      if (get().subagentPanel || get().subagentReveal) set({ subagentPanel: null, subagentReveal: null });
     },
-    revealSubagent: (attemptId, itemId) => set({
-      subagentReveal: { attemptId, itemId, nonce: (get().subagentReveal?.nonce ?? 0) + 1 },
-    }),
+    revealSubagent: (attemptId, itemId) => set({ subagentReveal: { attemptId, itemId, nonce: ++revealNonce } }),
     clearQueueState: (sessionId) => {
       const state = get();
       if (!(sessionId in state.queueEdit) && !(sessionId in state.queueOutbox)) return;

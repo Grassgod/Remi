@@ -325,7 +325,7 @@
     "late_stopped": "{{name}} がバックグラウンドで停止しました",
     "view_result": "結果を見る",
     "view_details": "詳細を見る",
-    "late_more_other": "ほか {{count}} 件がバックグラウンドで終了しました",
+    "late_more": "ほかのサブエージェントもバックグラウンドで終了しました",
     "strip_running_other": "{{count}} 件のサブエージェントが実行中",
     "strip_running_short_other": "{{count}} 件実行中",
     "strip_background": "バックグラウンド",

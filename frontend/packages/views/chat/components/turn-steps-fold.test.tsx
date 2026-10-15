@@ -222,16 +222,23 @@ describe("background subagents (PR 5 §6.3-6.4)", () => {
     expect(useChatStore.getState().subagentPanel).toEqual({ sessionId: "chat_1", attemptId: "att_1", turnId: "turn_1", live: true, path: ["sa:1"] });
   });
 
-  it("folds more than three late subagents into one line that opens the overview", () => {
-    renderLive(traceTurn(), [
-      ...["A", "B", "C", "D", "E"].map((name, index) => background(`sa:${name}`, name, { status: "completed", completed_at: at(21 + index) })),
+  it("folds more than three late subagents into one uncounted line that opens the overview", () => {
+    const late = (count: number) => [
+      ...Array.from({ length: count }, (_, index) => background(`sa:${index}`, `Agent ${index}`, { status: "completed", completed_at: at(21 + index) })),
       message("msg:f", "Answer", "final", { started_at: at(20) }),
-    ]);
+    ];
+    const view = renderLive(traceTurn(), late(7));
     expect(document.querySelectorAll("[data-subagent-late-row]")).toHaveLength(3);
     const more = document.querySelector<HTMLButtonElement>("[data-subagent-late-more]")!;
-    expect(more).toHaveTextContent("另有 2 个子代理在后台结束");
+    // No count: a stored card keeps at most five, so a number would drift.
+    expect(more).toHaveTextContent(/^另有更多子代理在后台结束$/);
     fireEvent.click(more);
     expect(useChatStore.getState().subagentPanel?.path).toEqual([]);
+    view.update(traceTurn(), late(4));
+    expect(document.querySelector("[data-subagent-late-more]")).toHaveTextContent(/^另有更多子代理在后台结束$/);
+    view.update(traceTurn(), late(3));
+    expect(document.querySelectorAll("[data-subagent-late-row]")).toHaveLength(3);
+    expect(document.querySelector("[data-subagent-late-more]")).toBeNull();
   });
 
   it("opens the fold and its row when the running strip reveals a subagent", () => {
@@ -242,6 +249,36 @@ describe("background subagents (PR 5 §6.3-6.4)", () => {
     act(() => { useChatStore.getState().revealSubagent("att_1", "sa:1"); });
     expect(isOpen()).toBe(true);
     view.unmount();
+  });
+
+  it("does not replay an old reveal when the fold mounts again", () => {
+    const scrollIntoView = vi.fn();
+    Object.defineProperty(HTMLElement.prototype, "scrollIntoView", { configurable: true, value: scrollIntoView });
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue({ height: 20, width: 100 } as DOMRect);
+    try {
+      const items = [background("sa:1", "Explore"), message("msg:f", "Answer", "final", { started_at: at(20) })];
+      const first = renderLive(traceTurn(), items);
+      act(() => { useChatStore.getState().revealSubagent("att_1", "sa:1"); });
+      act(() => { vi.advanceTimersByTime(400); });
+      expect(isOpen()).toBe(true);
+      expect(scrollIntoView).toHaveBeenCalledTimes(1);
+      // Switching to another chat and back (or page ↔ floating) remounts the fold.
+      first.unmount();
+      expect(useChatStore.getState().subagentReveal).not.toBeNull();
+      const second = renderLive(traceTurn(), items);
+      act(() => { vi.advanceTimersByTime(1000); });
+      expect(isOpen()).toBe(false);
+      expect(scrollIntoView).toHaveBeenCalledTimes(1);
+      // A new request still works.
+      act(() => { useChatStore.getState().revealSubagent("att_1", "sa:1"); });
+      act(() => { vi.advanceTimersByTime(400); });
+      expect(isOpen()).toBe(true);
+      expect(scrollIntoView).toHaveBeenCalledTimes(2);
+      second.unmount();
+    } finally {
+      vi.restoreAllMocks();
+      delete (HTMLElement.prototype as { scrollIntoView?: unknown }).scrollIntoView;
+    }
   });
 });
 

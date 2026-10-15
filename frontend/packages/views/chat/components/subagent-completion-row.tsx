@@ -13,7 +13,11 @@ import { formatSubagentElapsed } from "./subagent-step-row";
 // subagent's detail in the panel. A live turn derives them from its trace; a
 // finished turn reads its card's `late_subagents` and no trace (MUL-472).
 
-/** Rows drawn one by one; the rest fold into 「另有 N 个…」, which opens the overview. */
+/**
+ * Rows drawn one by one; any more fold into one line without a number,
+ * 「另有更多子代理在后台结束」, which opens the overview. A stored card keeps at
+ * most five entries, so a count would disagree with the live turn's.
+ */
 export const LATE_ROWS_SHOWN = 3;
 
 const ROW = "group/late flex max-w-full min-w-0 items-center gap-1.5 text-left text-sm text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring";
@@ -30,7 +34,7 @@ export function SubagentCompletionRows({ late, source }: {
     sessionId: source.sessionId, attemptId: source.attemptId, turnId: source.turnId, live: source.live, path,
   });
   const shown = late.length > LATE_ROWS_SHOWN ? late.slice(0, LATE_ROWS_SHOWN) : late;
-  const more = late.length - shown.length;
+  const more = late.length > shown.length;
   return (
     <div data-subagent-late className="flex flex-col items-start gap-1.5">
       {shown.map((entry) => {
@@ -55,12 +59,12 @@ export function SubagentCompletionRows({ late, source }: {
           </button>
         );
       })}
-      {more > 0 && (
+      {more && (
         <button type="button" data-subagent-late-more onClick={() => openPath([])}
           className={cn(ROW, panel?.attemptId === source.attemptId && panel.path.length === 0 && "text-foreground")}>
           <Layers className="size-4 shrink-0" aria-hidden="true" />
           <span className="min-w-0 truncate underline-offset-2 group-hover/late:underline">
-            {t(($) => $.subagents.late_more, { count: more })}
+            {t(($) => $.subagents.late_more)}
           </span>
         </button>
       )}
