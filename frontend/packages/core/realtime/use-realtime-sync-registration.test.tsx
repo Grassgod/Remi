@@ -62,6 +62,7 @@ const EXPECTED_EVENTS: readonly string[] = [
   "task:running",
   "task:progress",
   "task:subagents",
+  "chat:background_tasks",
   "task:waiting_local_directory",
   "task:awaiting_human",
   "task:cancelled",

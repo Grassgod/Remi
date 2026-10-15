@@ -1,3 +1,5 @@
+import type { MultiremiBackgroundTask } from "@multiremi/contracts/unified-model";
+
 /** Which chats a list shows: the user's own, those opened by automation runs, or both. */
 export type ChatOriginFilter = "user" | "automation" | "all";
 
@@ -23,6 +25,13 @@ export interface ChatSession {
   origin: ChatOrigin | null;
   unread_count: number;
   last_message: { content: string; role: "user" | "assistant"; created_at: string } | null;
+  /**
+   * Background tasks still running in this chat (PR 6), from the session
+   * registry, whether or not a turn runs. List-only; absent when the server
+   * does not report it (older servers), which hides every background-task
+   * surface that would need it.
+   */
+  running_background_tasks?: number;
   created_at: string;
   updated_at: string;
 }
@@ -52,6 +61,12 @@ export interface PendingChatTaskItem {
    * when the server does not report it (older servers, never reported).
    */
   running_subagents?: number;
+  /**
+   * Background tasks the turn's current attempt has running (PR 6), from the
+   * same report. The session's own count (`ChatSession.running_background_tasks`)
+   * also covers tasks parked after their attempt.
+   */
+  running_background_tasks?: number;
 }
 
 export interface PendingChatTasksResponse {
@@ -141,3 +156,36 @@ export interface ChatPendingTask {
   /** Absent only in the short-lived optimistic cache seed. */
   supports_queue?: true;
 }
+
+/**
+ * One background task of a chat (PR 6 §5.1), as the session registry reports
+ * it: `GET /api/chat/sessions/:id/background-tasks` and the
+ * `chat:background_tasks` realtime event carry the same rows.
+ *
+ * Fields the contract row does not have yet are optional here, and each one
+ * only adds to the UI when the server sends it:
+ * - `origin_turn_seq`: the number of the turn that started it (「来自第 n 轮」);
+ * - `output_unreadable`: the daemon could not read its output (「无法读取输出」).
+ */
+export type ChatBackgroundTask = MultiremiBackgroundTask & {
+  origin_turn_seq?: number | null;
+  output_unreadable?: boolean;
+};
+
+/**
+ * A chat's background tasks: the running rows plus the last ended ones. The
+ * read endpoint and the realtime event share this shape; `running` is the
+ * count the session list reports as `running_background_tasks`.
+ */
+export interface ChatBackgroundTasksSnapshot {
+  session_id: string;
+  running: number;
+  rows: ChatBackgroundTask[];
+}
+
+/**
+ * What a stop asks for (`POST /api/chat/sessions/:id/background-tasks/stop`):
+ * one task, by the row's `task_id` (the bridge's task id), or every running
+ * task of the chat.
+ */
+export type ChatBackgroundStopTarget = { task_id: string } | { all: true };

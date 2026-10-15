@@ -76,6 +76,7 @@ export type WSEventType =
   | "chat:session_deleted"
   | "chat:session_updated"
   | "chat:queue_updated"
+  | "chat:background_tasks"
   | "project:created"
   | "project:updated"
   | "project:deleted"
@@ -250,6 +251,21 @@ export interface TaskSubagentsPayload {
   task_id: string;
   chat_session_id?: string;
   running_subagents?: number | null;
+  /** PR 6: the attempt's running background tasks, when the same report carries them. */
+  running_background_tasks?: number | null;
+}
+
+/**
+ * A chat's background tasks changed (PR 6 §7): the session registry's rows
+ * (the shape `GET /api/chat/sessions/:id/background-tasks` answers) and the
+ * running count the session list reports. Sent to the chat's creator.
+ */
+export interface ChatBackgroundTasksPayload {
+  session_id?: string;
+  /** Accepted as well: other chat events name the session this way. */
+  chat_session_id?: string;
+  running?: number | null;
+  rows?: unknown[];
 }
 
 export interface TaskQueuedPayload {
@@ -505,6 +521,7 @@ export interface WSEventPayloadMap {
   "chat:session_deleted": ChatSessionDeletedPayload;
   "chat:session_updated": unknown;
   "chat:queue_updated": { chat_session_id: string };
+  "chat:background_tasks": ChatBackgroundTasksPayload;
   "project:created": ProjectCreatedPayload;
   "project:updated": ProjectUpdatedPayload;
   "project:deleted": ProjectDeletedPayload;

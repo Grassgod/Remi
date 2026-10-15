@@ -3,6 +3,8 @@ import { MessagesEndpoints } from "./messages";
 import { InboxEndpoints } from "./inbox";
 import { TurnDetailSchema } from "../schemas/messages";
 import type {
+  ChatBackgroundStopTarget,
+  ChatBackgroundTasksSnapshot,
   CreateChatSessionInput,
   ChatOriginFilter,
   ChatPendingTask,
@@ -15,6 +17,7 @@ import type { HttpClient } from "../http";
 import { ApiContractError, parseStrictResponse } from "../schema";
 import {
   ChatSessionSchema, ChatSessionListSchema, ChatSessionUpdateResponseSchema, ChatNoContentSchema,
+  ChatBackgroundTasksSnapshotSchema,
 } from "../schemas/chat";
 
 export class ChatEndpoints {
@@ -106,7 +109,32 @@ export class ChatEndpoints {
   async listPendingChatTasks(): Promise<PendingChatTasksResponse> {
     return { tasks: (await this.activeTurns()).filter(turn => turn.session_id.startsWith("chat_"))
       .map(turn => ({ task_id: turn.current_attempt_id ?? turn.id, turn_id: turn.id, status: turn.status === "pending" ? "queued" : turn.status, chat_session_id: turn.session_id,
-        ...(typeof turn.running_subagents === "number" ? { running_subagents: turn.running_subagents } : {}) })) };
+        ...(typeof turn.running_subagents === "number" ? { running_subagents: turn.running_subagents } : {}),
+        ...(typeof turn.running_background_tasks === "number" ? { running_background_tasks: turn.running_background_tasks } : {}) })) };
+  }
+
+  /**
+   * A chat's background tasks (PR 6): the running rows plus the last ended
+   * ones, from the session registry. Never a trace (MUL-472).
+   */
+  async listChatBackgroundTasks(sessionId: string): Promise<ChatBackgroundTasksSnapshot> {
+    const path = `/api/chat/sessions/${encodeURIComponent(sessionId)}/background-tasks`;
+    const snapshot = parseStrictResponse<ChatBackgroundTasksSnapshot>(await this.http.fetch<unknown>(path),
+      ChatBackgroundTasksSnapshotSchema, { endpoint: "GET /api/chat/sessions/:id/background-tasks" });
+    if (snapshot.session_id !== sessionId) throw new ApiContractError("GET /api/chat/sessions/:id/background-tasks", "Server returned another session");
+    return snapshot;
+  }
+
+  /**
+   * Asks the chat's computer to stop one background task or all of them
+   * (PR 6 §6.1). Accepted with 202; the rows change when the daemon answers.
+   * A 409 says why not: `task_not_running` or `runtime_offline`.
+   */
+  async stopChatBackgroundTasks(sessionId: string, target: ChatBackgroundStopTarget): Promise<void> {
+    const path = `/api/chat/sessions/${encodeURIComponent(sessionId)}/background-tasks/stop`;
+    // Any 2xx accepts the stop; its body (often none with 202) carries nothing the client needs.
+    const res = await this.http.fetchRaw(path, { method: "POST", body: JSON.stringify(target), extraHeaders: { "Content-Type": "application/json" } });
+    await res.body?.cancel().catch(() => {});
   }
 
   async markChatSessionRead(sessionId: string): Promise<void> {

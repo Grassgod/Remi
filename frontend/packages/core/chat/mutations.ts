@@ -7,7 +7,14 @@ import { useWorkspaceId } from "../hooks";
 import { chatKeys } from "./queries";
 import { createLogger } from "../logger";
 import { getCurrentSlug, getCurrentWsId } from "../platform/workspace-storage";
-import type { ChatSession, CreateChatSessionInput, UpdateChatSessionInput } from "../types";
+import type {
+  ChatBackgroundStopTarget,
+  ChatBackgroundTasksSnapshot,
+  ChatSession,
+  CreateChatSessionInput,
+  UpdateChatSessionInput,
+} from "../types";
+import { backgroundStopErrorCode, markBackgroundStopRequested, restoreBackgroundStopMarks } from "./background-tasks";
 import { useChatStore } from "./index";
 import { removeChatSessionFromCache, updateChatSessionInCache } from "./session-cache";
 import { applyQueueItem, isQueueDeliveryUnconfirmed, queueErrorItem } from "./queue";
@@ -268,5 +275,38 @@ export function useResumeChatQueue() {
     },
     onError: (error, { sessionId }) => logger.error("resumeChatQueue.error", { sessionId, error: toSafeErrorDetails(error) }),
     onSettled: (_data, _error, { sessionId }, context) => refreshQueue(qc, context?.wsId ?? wsId, sessionId),
+  });
+}
+
+/**
+ * Stops one background task or every running one of a Chat (PR 6 §6). The
+ * rows read 「正在停止…」 at once; the registry's next snapshot says how it
+ * ended. A refusal (`409`) clears the mark and the caller shows why
+ * ({@link backgroundStopErrorCode}).
+ */
+export function useStopChatBackgroundTasks(sessionId: string | null) {
+  const qc = useQueryClient();
+  const wsId = useWorkspaceId();
+  return useMutation({
+    mutationKey: ["chat", "background-tasks", "stop", sessionId],
+    onMutate: (target: ChatBackgroundStopTarget) => {
+      if (!sessionId) return { wsId, previous: undefined };
+      const key = chatKeys.backgroundTasks(wsId, sessionId);
+      const previous = qc.getQueryData<ChatBackgroundTasksSnapshot>(key);
+      markBackgroundStopRequested(qc, wsId, sessionId, target, new Date().toISOString(), null);
+      return { wsId, previous };
+    },
+    mutationFn: (target: ChatBackgroundStopTarget) => {
+      if (!sessionId) throw new Error("No chat to stop background tasks in");
+      return api.stopChatBackgroundTasks(sessionId, target);
+    },
+    onError: (err, target, context) => {
+      logger.error("stopChatBackgroundTasks.error", { sessionId, target, err: toSafeErrorDetails(err) });
+      if (!sessionId || !context) return;
+      const key = chatKeys.backgroundTasks(context.wsId, sessionId);
+      restoreBackgroundStopMarks(qc, context.wsId, sessionId, context.previous);
+      // An ended task: the list is behind, read it again.
+      if (backgroundStopErrorCode(err) === "task_not_running") void qc.invalidateQueries({ queryKey: key });
+    },
   });
 }

@@ -310,3 +310,25 @@ describe("subagent panel (PR 5 §6.8)", () => {
     expect(store.getState().subagentReveal).toBeNull();
   });
 });
+
+describe("background tasks in the right panel (PR 6 §8.1)", () => {
+  it("opens the 后台任务 view without an attempt, switches views at their overviews and dismisses notices, persisting nothing", () => {
+    const storage = memoryStorage();
+    const store = createChatStore({ storage });
+    store.getState().openSubagentPanel({ sessionId: "chat-1", view: "tasks", attemptId: null, live: false, path: [], task: { task_id: "t1" } });
+    expect(store.getState().subagentPanel).toMatchObject({ view: "tasks", attemptId: null, task: { task_id: "t1" } });
+    store.getState().setPanelTask(null);
+    expect(store.getState().subagentPanel).toMatchObject({ view: "tasks", task: null });
+    store.getState().openSubagentPanel({ sessionId: "chat-1", attemptId: "att-1", live: true, path: ["sa:1"] });
+    store.getState().setPanelView("tasks");
+    // The attempt stays, so the switch can go back to its subagents.
+    expect(store.getState().subagentPanel).toMatchObject({ view: "tasks", attemptId: "att-1", path: [], task: null });
+    store.getState().setPanelTask({ task_id: "t2", provider_session_id: "ps" });
+    store.getState().setPanelView("subagents");
+    expect(store.getState().subagentPanel).toMatchObject({ view: "subagents", attemptId: "att-1", path: [], task: null });
+    store.getState().dismissBackgroundNotice("row-1");
+    store.getState().dismissBackgroundNotice("row-1");
+    expect(store.getState().dismissedBackgroundNotices).toEqual(["row-1"]);
+    expect(createChatStore({ storage }).getState().dismissedBackgroundNotices).toEqual([]);
+  });
+});
