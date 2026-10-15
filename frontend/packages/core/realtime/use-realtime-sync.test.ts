@@ -71,6 +71,22 @@ describe("applyChatDoneToCache", () => {
     unsubscribe();
   });
 
+  it("leaves a sealed trace fresh, so opening the finished turn's fold does not reread it", async () => {
+    const qc = createQueryClient();
+    const closed = { state: { closed: true, items: [], turn: null, head: 9 }, read: { state: "ok", format: "v2" }, pending: [] };
+    qc.setQueryData(["task-trace", taskId], closed);
+    applyChatDoneToCache(qc, donePayload());
+    expect(qc.getQueryState(["task-trace", taskId])?.isInvalidated).toBe(false);
+    // The fold's reader mounts afterwards; a sealed cache is fresh for it.
+    const read = vi.fn(async () => closed);
+    const observer = new QueryObserver(qc, { queryKey: ["task-trace", taskId], queryFn: read, staleTime: Infinity });
+    const unsubscribe = observer.subscribe(() => {});
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(read).not.toHaveBeenCalled();
+    expect(observer.getCurrentResult().data).toBe(closed);
+    unsubscribe();
+  });
+
   it("handles a replayed chat done event", () => {
     const qc = createQueryClient();
     qc.setQueryData<ChatPendingTask>(pendingKey, {

@@ -61,6 +61,20 @@ describe("contextRingSource", () => {
     expect(contextRingSource(rows, null)).toEqual({ liveTaskId: null, last: { used: 7, size: 10 } });
   });
 
+  it("keeps the last live value until the turn's own card lands", () => {
+    const previous = card("att_0", { status: "completed", context_usage: { used: 1, size: 10 } });
+    const held = { taskId: "att_1", usage: { used: 6, size: 10 } };
+    // Chat-done cleared the pending task; the card is missing or not terminal yet.
+    expect(contextRingSource([previous], null, held)).toEqual({ liveTaskId: null, last: { used: 6, size: 10 } });
+    expect(contextRingSource([previous, card("att_1", { status: "running" })], null, held).last).toEqual({ used: 6, size: 10 });
+    // While the turn runs, the live trace is the source.
+    expect(contextRingSource([previous], "att_1", held)).toEqual({ liveTaskId: "att_1", last: { used: 1, size: 10 } });
+    // Once its card lands, the card wins; so does any later card.
+    const landed = [previous, card("att_1", { status: "completed", context_usage: { used: 7, size: 10 } })];
+    expect(contextRingSource(landed, null, held).last).toEqual({ used: 7, size: 10 });
+    expect(contextRingSource([...landed, card("att_2", { status: "completed" })], null, held).last).toBeNull();
+  });
+
   it("skips nonterminal cards, reads null for an old card and ignores optimistic ids", () => {
     const rows = [
       card("att_0", { status: "completed", context_usage: { used: 1, size: 10 } }),
