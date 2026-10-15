@@ -5,7 +5,7 @@ import type { AgentAvailability } from "@multiremi/core/agents";
 import type { ChatPendingTask } from "@multiremi/core/types";
 import type { TraceItem } from "@multiremi/contracts/trace";
 import enChat from "../../locales/en/chat.json";
-import { message } from "../../test/trace-fixtures";
+import { message, permission, userMessage } from "../../test/trace-fixtures";
 import { TaskStatusPill } from "./task-status-pill";
 
 function pill(pendingTask: ChatPendingTask, items: TraceItem[] = [], availability: AgentAvailability = "online") {
@@ -70,6 +70,17 @@ describe("Chat preparation status", () => {
       expect(screen.queryByText("Old preparation status")).not.toBeInTheDocument();
       expect(screen.getByText(enChat.status_pill.stages[status])).toBeInTheDocument();
     }
+  });
+
+  it("keeps a static waiting label even though the trace already holds the turn's input", () => {
+    const input = userMessage("in:1", "deploy it");
+    const view = render(pill({ task_id: "task-1", status: "awaiting_human" }, [input]));
+    expect(screen.getByText(enChat.status_pill.stages.awaiting_human)).toBeInTheDocument();
+    expect(view.container.querySelector(".animate-chat-text-shimmer")).toBeNull();
+    // A permission the trace shows open reads the same before the server status catches up.
+    const open = { ...permission("perm:1", "Bash"), status: "in_progress" as const, completed_at: null, outcome: null };
+    view.rerender(pill({ task_id: "task-1", status: "running" }, [input, open]));
+    expect(screen.getByText(enChat.status_pill.stages.awaiting_human)).toBeInTheDocument();
   });
 
   it("calls a task parked on a question waiting for an answer, not for approval", () => {

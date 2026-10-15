@@ -92,6 +92,8 @@ interface AgentTranscriptDialogProps {
 /** Task states after which no step can still be running. */
 const TERMINAL_TASK_STATUS = new Set<string>(["completed", "failed", "cancelled"]);
 
+const NO_CHILDREN: readonly TraceItem[] = [];
+
 // ─── Main dialog ────────────────────────────────────────────────────────────
 
 export function AgentTranscriptDialog({
@@ -139,13 +141,35 @@ export function AgentTranscriptDialog({
     && promptQuery.error.status === 404,
   );
 
-  // Redact once for display and copy; ids, statuses and times stay intact.
+  // Redact for display and copy; ids, statuses and times stay intact.
+  // `redactItem` caches per item, and the reducer keeps the identity of an
+  // item that did not change, so a live frame redacts only what it touched.
   const items = useMemo(() => rawItems.map(redactItem), [rawItems]);
-  // Top level: items without a parent, or whose parent is not in the trace
-  // (fail open: they stay visible). A subagent row nests its own items.
-  const topItems = useMemo(() => {
-    const ids = new Set(items.map((item) => item.id));
-    return items.filter((item) => item.parent_id === null || !ids.has(item.parent_id));
+  // One pass builds the top level and the parent → children index. Top level:
+  // items without a parent, or whose parent is not in the trace (fail open).
+  const childrenIndex = useRef(new Map<string, readonly TraceItem[]>());
+  const { topItems, childrenOf } = useMemo(() => {
+    const ids = new Set<string>();
+    for (const item of items) ids.add(item.id);
+    const top: TraceItem[] = [];
+    const groups = new Map<string, TraceItem[]>();
+    for (const item of items) {
+      if (item.parent_id === null || !ids.has(item.parent_id)) top.push(item);
+      else {
+        const siblings = groups.get(item.parent_id);
+        if (siblings) siblings.push(item); else groups.set(item.parent_id, [item]);
+      }
+    }
+    // Keep a parent's array when its children did not change, so its
+    // memoized row does not re-render.
+    const previous = childrenIndex.current;
+    const next = new Map<string, readonly TraceItem[]>();
+    for (const [parentId, children] of groups) {
+      const before = previous.get(parentId);
+      next.set(parentId, before && before.length === children.length && before.every((child, i) => child === children[i]) ? before : children);
+    }
+    childrenIndex.current = next;
+    return { topItems: top, childrenOf: next };
   }, [items]);
 
   // Filter options: tool items by their tool ("tool:Bash"), the rest by type.
@@ -217,6 +241,17 @@ export function AgentTranscriptDialog({
     return () => clearInterval(interval);
   }, [isLive, task.started_at, task.dispatched_at]);
 
+  const childrenRef = useRef(childrenOf);
+  childrenRef.current = childrenOf;
+  const getChildren = useCallback((id: string) => childrenRef.current.get(id) ?? NO_CHILDREN, []);
+
+  // A subagent row registers for its own items too: they have no row while it
+  // is collapsed, and timeline navigation must still land on them.
+  const registerRow = useCallback((id: string, element: HTMLDivElement | null) => {
+    if (element) eventRefs.current.set(id, element);
+    else eventRefs.current.delete(id);
+  }, []);
+
   const handleSegmentClick = useCallback((id: string) => {
     setSelectedId(id);
     eventRefs.current.get(id)?.scrollIntoView({ behavior: "smooth", block: "center" });
@@ -257,7 +292,7 @@ export function AgentTranscriptDialog({
     const lines: string[] = [];
     const add = (item: TraceItem, depth: number) => {
       lines.push(`${"  ".repeat(depth)}[${getItemLabel(item)}] ${getItemSummary(item)}`);
-      for (const child of items) if (child.parent_id === item.id) add(child, depth + 1);
+      for (const child of childrenOf.get(item.id) ?? []) add(child, depth + 1);
     };
     for (const item of displayItems) add(item, 0);
     void copyText(lines.join("\n")).then((ok) => {
@@ -265,7 +300,7 @@ export function AgentTranscriptDialog({
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     });
-  }, [displayItems, items]);
+  }, [displayItems, childrenOf]);
 
   const handleCopyPrompt = useCallback(() => {
     const prompt = promptQuery.data?.prompt;
@@ -305,7 +340,8 @@ export function AgentTranscriptDialog({
 
   // The single tool-count rule: a finished turn's stats, else the same count
   // over the items read so far.
-  const toolCount = turn && turn.status !== "running" ? turn.stats.tool_call_count : turnTraceStats(items).tool_call_count;
+  const liveToolCount = useMemo(() => turnTraceStats(items).tool_call_count, [items]);
+  const toolCount = turn && turn.status !== "running" ? turn.stats.tool_call_count : liveToolCount;
   const contextUsage = turn?.context_usage ?? null;
 
   // Header token rollup (server-provided) + the agent's final reply, surfaced
@@ -751,20 +787,13 @@ export function AgentTranscriptDialog({
               {entries.map((item) => (
                 <TranscriptItemRow
                   key={item.id}
-                  ref={(el) => {
-                    // A subagent's items have no row of their own while it is
-                    // collapsed; register the subagent for them too, so
-                    // timeline navigation still lands on them.
-                    for (const id of [item.id, ...items.filter((child) => child.parent_id === item.id).map((child) => child.id)]) {
-                      if (el) eventRefs.current.set(id, el);
-                      else eventRefs.current.delete(id);
-                    }
-                  }}
                   item={item}
-                  items={items}
+                  childItems={childrenOf.get(item.id) ?? NO_CHILDREN}
+                  getChildren={getChildren}
                   selectedId={selectedId}
                   liveFollow={liveFollow}
                   taskTerminal={taskTerminal}
+                  registerRow={registerRow}
                 />
               ))}
             </div>

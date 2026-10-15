@@ -5,7 +5,7 @@ import { useState, type ReactNode } from "react";
 import type { TraceItem, TraceTurn } from "@multiremi/contracts/trace";
 import { renderWithI18n } from "../../test/i18n";
 import {
-  T0, at, command, message, read, reasoning, traceTurn, turnPage, unknown,
+  T0, at, command, compaction, message, read, reasoning, subagent, traceTurn, turnPage, unknown,
 } from "../../test/trace-fixtures";
 import { FinishedTurnSteps, LiveTurnSteps } from "./turn-steps-fold";
 
@@ -83,7 +83,7 @@ describe("live label", () => {
   afterEach(() => { vi.useRealTimers(); });
   const groupHeader = () => document.querySelector('[data-step-group] [data-slot="collapsible-trigger"]');
 
-  it("holds each activity at least 1000ms, then shows the completed summary at once", () => {
+  it("holds each activity at least 1000ms, also on its finished group, then shows the summary", () => {
     const a = command("cmd_a", [read("a.ts")], running);
     const view = renderLive(traceTurn(), [a]);
     expect(document.querySelector("[data-step-live]")).toHaveTextContent("正在读取 a.ts");
@@ -96,9 +96,56 @@ describe("live label", () => {
     expect(groupHeader()).toHaveTextContent("正在读取 a.ts");
     act(() => { vi.advanceTimersByTime(1); });
     expect(groupHeader()).toHaveTextContent("正在运行命令");
-    // Both done, nothing running: the summary and "thinking" appear immediately.
+    // Both done: B's label holds on the finished group, with no thinking line yet.
+    act(() => { vi.advanceTimersByTime(300); });
     view.update(traceTurn(), [{ ...a, status: "completed" }, { ...b, status: "completed", completed_at: at(1.5) }]);
+    expect(groupHeader()).toHaveTextContent("正在运行命令");
+    expect(document.querySelector("[data-step-live-line]")).toBeNull();
+    act(() => { vi.advanceTimersByTime(700); });
     expect(groupHeader()).toHaveTextContent("已读取文件，运行了命令");
+    expect(document.querySelector("[data-step-live-line]")).toHaveTextContent("正在思考");
+  });
+
+  it("does not flash thinking in the idle gap between two fast steps", () => {
+    const a = command("cmd_a", [read("a.ts")], running);
+    const view = renderLive(traceTurn(), [a]);
+    act(() => { vi.advanceTimersByTime(300); });
+    // A done, nothing running yet: A's row keeps its label instead of "thinking".
+    const aDone = { ...a, status: "completed" as const, completed_at: at(0.3) };
+    view.update(traceTurn(), [aDone]);
+    expect(document.querySelector('[data-step-row="cmd_a:0"] [data-step-live]')).toHaveTextContent("正在读取 a.ts");
+    expect(document.querySelector("[data-step-live-line]")).toBeNull();
+    act(() => { vi.advanceTimersByTime(300); });
+    // B starts inside A's second: still A's label, now on the group.
+    view.update(traceTurn(), [aDone, command("cmd_b", [unknown("bun test")], running)]);
+    expect(groupHeader()).toHaveTextContent("正在读取 a.ts");
+    expect(document.querySelector("[data-step-live-line]")).toBeNull();
+    act(() => { vi.advanceTimersByTime(400); });
+    expect(groupHeader()).toHaveTextContent("正在运行命令");
+  });
+
+  it("switches from thinking to an activity at once", () => {
+    const view = renderLive(traceTurn(), []);
+    expect(document.querySelector("[data-step-live-line]")).toHaveTextContent("正在思考");
+    act(() => { vi.advanceTimersByTime(100); });
+    view.update(traceTurn(), [command("cmd_a", [read("a.ts")], running)]);
+    expect(document.querySelector("[data-step-live-line]")).toBeNull();
+    expect(document.querySelector("[data-step-live]")).toHaveTextContent("正在读取 a.ts");
+  });
+
+  it("adds no thinking line under a breaker that is still in progress", () => {
+    const view = renderLive(traceTurn(), [command("cmd_a", [read("a.ts")])]);
+    act(() => { vi.advanceTimersByTime(1500); });
+    for (const breaker of [
+      message("msg:1", "Looking at the tests", "unknown", running),
+      subagent("sub_1", "Explore", running),
+      compaction("cmp:1", running),
+    ]) {
+      view.update(traceTurn(), [command("cmd_a", [read("a.ts")]), breaker]);
+      expect(document.querySelector("[data-step-live-line]")).toBeNull();
+      expect(screen.queryByText("正在思考")).toBeNull();
+    }
+    view.update(traceTurn(), [command("cmd_a", [read("a.ts")]), message("msg:1", "Looking at the tests")]);
     expect(document.querySelector("[data-step-live-line]")).toHaveTextContent("正在思考");
   });
 

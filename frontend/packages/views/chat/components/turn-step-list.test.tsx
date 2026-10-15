@@ -88,9 +88,14 @@ describe("command detail", () => {
     const detail = document.querySelector<HTMLElement>("[data-command-detail]")!;
     const commandButton = detail.querySelector<HTMLButtonElement>("button[aria-expanded]")!;
     expect(commandButton.textContent).toBe(script);
-    expect(commandButton.className).toContain("line-clamp-2");
+    const commandText = commandButton.querySelector<HTMLElement>("[data-command-text]")!;
+    const classes = () => commandText.className.split(/\s+/);
+    // `block` would override the clamp's display, so the two never coexist.
+    expect(classes()).toContain("line-clamp-2");
+    expect(classes()).not.toContain("block");
     fireEvent.click(commandButton);
-    expect(commandButton.className).not.toContain("line-clamp-2");
+    expect(classes()).toContain("block");
+    expect(classes()).not.toContain("line-clamp-2");
     const output = detail.querySelector<HTMLElement>("[data-command-output]")!;
     expect(output.className).toContain("max-h-36");
     expect(output.className).toContain("text-[13px]");
@@ -120,6 +125,14 @@ describe("command detail", () => {
     await waitFor(() => expect(copied).toHaveBeenCalledWith("ls -la"));
     fireEvent.click(screen.getByRole("button", { name: "复制输出" }));
     await waitFor(() => expect(copied).toHaveBeenCalledWith("total 0"));
+  });
+
+  it("does not expand a finished read that carries no command or output (Codex single-action read)", () => {
+    renderSteps([command("cmd_1", [{ type: "read", command: null, name: "a.ts", path: "src/a.ts" }], { command: null, output: null })]);
+    expect(trigger(row("cmd_1:0"))).toHaveAttribute("aria-disabled", "true");
+    fireEvent.click(trigger(row("cmd_1:0")));
+    expect(screen.queryByText("无输出")).toBeNull();
+    expect(row("cmd_1:0").querySelector(".lucide-chevron-right")).toBeNull();
   });
 
   it("strips a prompt and a shell wrapper from the displayed command", () => {

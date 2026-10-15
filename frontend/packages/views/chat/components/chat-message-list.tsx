@@ -38,7 +38,7 @@ import { useTurnTrace } from "../../common/task-transcript/use-task-trace";
 import { TaskTraceDialog } from "../../common/task-transcript/task-trace-dialog";
 import { formatElapsedMs } from "../../common/format";
 import { extractCopyText } from "../lib/copy-text";
-import { finishedFoldHeader } from "../lib/turn-steps";
+import { finishedFoldHeader, isAwaitingHuman } from "../lib/turn-steps";
 import { isNonterminalTurn } from "../lib/turn-card";
 import { FinishedTurnSteps, LiveTurnSteps } from "./turn-steps-fold";
 import { useT } from "../../i18n";
@@ -238,7 +238,13 @@ export function ChatMessageList({
   // An optimistic pending id has no trace yet; the real id replaces it on dispatch.
   const liveTraceId = pendingTaskId?.startsWith("optimistic-") ? null : pendingTaskId;
   const liveTrace = useTurnTrace(liveTraceId, { enabled: visible && showLiveTimeline, live: true, turnId: pendingTask?.turn_id });
-  const showStatusPill = !!pendingTaskId && !pendingAlreadyPersisted && !!pendingTask && !liveTrace.closed && !liveTrace.error;
+  // The pill says only what the steps fold cannot: the wait before the trace
+  // has a turn (queued, dispatched, offline, the directory lock, preparation),
+  // a read that failed or a legacy trace (no fold), and a wait on a person.
+  const foldShown = !!liveTrace.turn && liveTrace.read?.format !== "legacy";
+  const waitingOnHuman = pendingTask?.status === "awaiting_human" || isAwaitingHuman(liveTrace.items);
+  const showStatusPill = !!pendingTaskId && !pendingAlreadyPersisted && !!pendingTask && !liveTrace.closed
+    && (!foldShown || waitingOnHuman);
 
   return <SessionLogList sessionId={sessionId} replica={replica} perfScroll="session-log"
     contentClassName={CHAT_CONTENT_CLASS} scrollButton="arrow"
@@ -284,10 +290,12 @@ export function ChatMessageList({
       // A finished turn whose card counted process items folds its steps above
       // the reply (or the failure notice); older cards have no count and no fold.
       const stepsRef = card ? card.steps : row.kind === "turn" && !isPush ? turnStepsRef(row.metadata, row.task_id) : null;
+      // A failed or cancelled turn's notice carries its own execution log.
+      const endNotice = !!(card && endedBadly(card.status)) || !!(turnId && endedBadly(turnStatus));
       const stepsFold = stepsRef ? <FinishedTurnSteps attemptId={stepsRef.attemptId} turnId={stepsRef.turnId}
         header={finishedFoldHeader(stepsRef)} visible={visible} open={openSteps.has(row.id)}
         onOpenChange={(open) => setStepsOpen(row.id, open)}
-        footer={<ChatTraceButton taskId={stepsRef.attemptId} turnId={stepsRef.turnId} visible={visible} />} /> : null;
+        footer={endNotice ? undefined : <ChatTraceButton taskId={stepsRef.attemptId} turnId={stepsRef.turnId} visible={visible} />} /> : null;
       return <div className="group/message">
         {questionId ? <LinkedQuestion id={questionId} getActorName={getActorName} /> : null}
         {card && endedBadly(card.status)
@@ -308,7 +316,7 @@ export function ChatMessageList({
       </div>;
     }}
     footer={<div className="space-y-4 pb-4">
-      {showLiveTimeline && <LiveTurnSteps trace={liveTrace} />}
+      {showLiveTimeline && <LiveTurnSteps key={liveTraceId ?? "pending"} trace={liveTrace} />}
       {showLiveTimeline && liveTrace.error && <div role="alert" className="text-xs text-destructive">{traceT(($) => $.transcript.trace_failed)}</div>}
       {showStatusPill && pendingTask && <TaskStatusPill pendingTask={pendingTask}
         items={liveTrace.items} availability={availability} />}

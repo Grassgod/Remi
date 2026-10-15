@@ -89,10 +89,15 @@ function readInfo(page: TaskTraceRead): TurnTraceReadInfo {
   };
 }
 
-/** Read every page of an attempt's trace and fold it. Stops at the first page that is not `ok`. */
+/**
+ * Read every page of an attempt's trace and fold it. Stops at the first page
+ * that is not `ok`. `onPage` sees the fold after each page that has more after
+ * it, so a long trace can show while the rest loads.
+ */
 export async function readTurnTrace(
   attemptId: string,
   turnId: string | undefined,
+  onPage?: (state: TurnTraceState) => void,
 ): Promise<{ state: TurnTraceState; read: TurnTraceReadInfo }> {
   let state = EMPTY_TURN_TRACE;
   let cursor: number | null = 0;
@@ -105,6 +110,7 @@ export async function readTurnTrace(
     const next: number | null = page.next_item_cursor;
     if (next !== null && next <= cursor) throw new Error("Trace item cursor did not advance");
     cursor = next;
+    if (cursor !== null) onPage?.(state);
   }
   return { state, read: read! };
 }
@@ -128,7 +134,16 @@ export function useTurnTrace(attemptId: string | null | undefined, options: UseT
     },
     queryFn: async (): Promise<TurnTraceCache> => {
       if (!attemptId) return EMPTY_TURN_TRACE_CACHE;
-      const { state, read } = await readTurnTrace(attemptId, turnId);
+      const { state, read } = await readTurnTrace(attemptId, turnId, (partial) => {
+        // Show what has loaded so far; the read is not marked landed until the
+        // last page, and frames seen meanwhile stay queued for the final fold.
+        // A reread (after a gap) keeps showing the state it replaces instead.
+        qc.setQueryData<TurnTraceCache>(turnTraceKey(attemptId), (current) => {
+          const cache = isCache(current) ? current : EMPTY_TURN_TRACE_CACHE;
+          if (cache.read) return cache;
+          return { ...cache, state: cache.pending.length ? applyTurnTraceEvents(partial, cache.pending) : partial };
+        });
+      });
       // Frames that arrived while the pages were in flight go on top, in order;
       // the seq rules make the ones the pages already hold no-ops.
       const current = cacheOf(qc, attemptId);
@@ -172,7 +187,7 @@ export function useTurnTrace(attemptId: string | null | undefined, options: UseT
     onGap: () => { if (attemptId) void qc.invalidateQueries({ queryKey: turnTraceKey(attemptId) }); },
     onClosed: () => update((cache) => ({ ...cache, state: closeTurnTrace(cache.state) })),
     onError: () => { if (attemptId) setStreamError(attemptId); },
-  }, subscribed);
+  }, subscribed, { fromSeq: data?.read ? state.head + 1 : undefined });
 
   const refetch = query.refetch;
   const retry = useCallback(() => {

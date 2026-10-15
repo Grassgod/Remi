@@ -24,17 +24,19 @@ import { TurnStepList } from "./turn-step-list";
 /** A live label stays up at least this long before the next one replaces it (Codex). */
 export const MIN_LIVE_LABEL_MS = 1000;
 
-/** Activities and thinking take different slots (a row vs the trailing line). */
-const labelFamily = (label: LiveLabel) => (label.kind === "step" ? "step" : "idle");
+const isIdle = (label: LiveLabel) => label.kind === "reasoning" || label.kind === "thinking";
 
 /**
- * Hold each live label for at least `minMs` before the next one of the same
- * family replaces it: one activity after another, or one reasoning heading
- * after another (Codex keeps an active key up for 1000ms). The same activity
- * with fresher details (command text that arrived late) updates at once, and
- * so does a change of family — an activity that finished hands over to
- * "Thinking" immediately, as a finished group shows its summary at once —
- * and the end of the run (`null`).
+ * Hold each live label for at least `minMs` (Codex keeps an active key up for
+ * 1000ms), so fast steps do not flash:
+ * - an activity holds against the next activity, against thinking that
+ *   follows it and against a breaker that starts streaming — while held, the
+ *   finished row or group keeps showing it;
+ * - a reasoning heading holds against the next heading.
+ * Immediate: the same activity with fresher details (command text that
+ * arrived late), thinking giving way to an activity or to a streaming
+ * breaker, anything after `quiet`, and the end of the run (`null`), which
+ * shows the completed summary at once.
  */
 export function useStickyLabel(label: LiveLabel | null, minMs = MIN_LIVE_LABEL_MS): LiveLabel | null {
   const signature = label ? JSON.stringify(label) : "";
@@ -51,7 +53,9 @@ export function useStickyLabel(label: LiveLabel | null, minMs = MIN_LIVE_LABEL_M
       setShown({ signature, label: next });
     };
     const current = shown.label;
-    if (next === null || current === null || next.id === current.id || labelFamily(next) !== labelFamily(current)) {
+    const immediate = next === null || current === null || current.kind === "quiet" || next.id === current.id
+      || (isIdle(current) && !isIdle(next));
+    if (immediate) {
       show();
       return;
     }
@@ -143,7 +147,7 @@ export function LiveTurnSteps({ trace }: { trace: Pick<TurnTraceView, "turn" | "
     <div data-chat-live-turn className="space-y-3">
       {showFold && (
         <StepsFold kind="live" title={headerText(liveFoldHeader(turn, steps.finals, now))} open={open} onOpenChange={setUserOpen}>
-          <TurnStepList steps={steps} items={items} live={running && label ? { label, blockKey: liveBlockKey(steps) } : undefined} />
+          <TurnStepList steps={steps} items={items} live={running && label ? { label, blockKey: liveBlockKey(steps, label) } : undefined} />
         </StepsFold>
       )}
       {steps.finals.map((final) => final.text.trim() ? (

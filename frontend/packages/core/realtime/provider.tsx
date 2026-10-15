@@ -44,9 +44,15 @@ interface WSContextValue {
   ) => StreamSubscription | null;
   /**
    * Subscribe to `trace:<taskId>` on the lazily-created trace socket. The socket
-   * opens on the first subscription and closes with the last one.
+   * opens on the first subscription and closes with the last one. `fromSeq`
+   * starts after a snapshot the caller already holds instead of replaying
+   * the hub's whole ring.
    */
-  subscribeTrace: (taskId: string, handlers: StreamSubscriptionHandlers) => StreamSubscription | null;
+  subscribeTrace: (
+    taskId: string,
+    handlers: StreamSubscriptionHandlers,
+    options?: { fromSeq?: number },
+  ) => StreamSubscription | null;
 }
 
 const WSContext = createContext<WSContextValue | null>(null);
@@ -187,9 +193,9 @@ export function WSProvider({
   );
 
   const subscribeTrace = useCallback(
-    (taskId: string, handlers: StreamSubscriptionHandlers) => {
+    (taskId: string, handlers: StreamSubscriptionHandlers, options?: { fromSeq?: number }) => {
       if (!traceSocket) return null;
-      return traceSocket.subscribe(taskId, handlers);
+      return traceSocket.subscribe(taskId, handlers, options);
     },
     [traceSocket],
   );

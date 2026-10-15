@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
+import type { TraceItem } from "@multiremi/contracts/trace";
 import { formatStepCopy, type StepSummaryFragment } from "@multiremi/shared/trace-step-copy";
+import { processItemCount } from "@multiremi/shared/turn-trace";
 import en from "../../locales/en/chat.json";
 import ja from "../../locales/ja/chat.json";
 import ko from "../../locales/ko/chat.json";
@@ -12,6 +14,7 @@ import {
   buildChildSteps,
   buildTurnSteps,
   finishedFoldHeader,
+  isAwaitingHuman,
   groupIcon,
   groupSummary,
   joinSummary,
@@ -21,6 +24,17 @@ import {
   reasoningHeadline,
   stepRows,
 } from "./turn-steps";
+
+const running = { status: "in_progress" as const, completed_at: null };
+/** Turn shapes the fold sees: a Codex run, a Claude run with a subagent, a run waiting on a person. */
+const FIXTURES: TraceItem[][] = [
+  [userMessage("in:1", "fix it"), reasoning("rsn:1", "**Plan**"), command("cmd_1", [read("a.ts"), search("x", "src")]),
+    message("msg:1", "Looking."), fileChange("fc_1", [change("a.ts")]), webSearch("ws_1", "q"), message("msg:f", "Done.", "final")],
+  [userMessage("in:2", "explore"), subagent("sub_1", "Explore"), command("cmd_c", [read("b.ts")], { parent_id: "sub_1" }),
+    message("msg:c", "child", "unknown", { parent_id: "sub_1" }), message("msg:empty", ""), tool("t_1", "mcp__x__y"),
+    plan([{ content: "a", status: "completed", priority: null }]), compaction("cmp:1"), notice("ntc:1", "slow")],
+  [userMessage("in:3", "deploy"), command("cmd_2", [unknown("make deploy")], running), permission("perm:1", "Bash")],
+];
 
 describe("split", () => {
   it("keeps finals, the user message, permissions and questions out of the process", () => {
@@ -36,6 +50,26 @@ describe("split", () => {
     // msg:1 and cmd_1: the card's process_item_count rule (reasoning draws no row).
     expect(steps.processCount).toBe(2);
     expect(steps.blocks.map((block) => block.key)).toEqual(["item:msg:1", "row:cmd_1:0"]);
+  });
+
+  it("counts only process items that draw something: no reasoning, no empty messages", () => {
+    const steps = buildTurnSteps([message("msg:empty", "  "), reasoning("rsn:1", "x"), command("cmd_1", [read("a.ts")])]);
+    expect(steps.processCount).toBe(1);
+  });
+
+  it("agrees with the shared processItemCount on items without reasoning or empty messages", () => {
+    for (const items of FIXTURES.map((fixture) => fixture.filter((item) =>
+      item.type !== "reasoning" && !(item.type === "agent_message" && !item.text.trim())))) {
+      expect(buildTurnSteps(items).processCount).toBe(processItemCount(items));
+    }
+  });
+
+  // Enable at integration: spec §10 D-count makes the shared count exclude
+  // reasoning (and anything that draws no row); until that lands in
+  // `packages/shared`, `processItemCount` still counts reasoning and empty
+  // messages, so this fails only on the fixtures that hold them.
+  it.skip("agrees with the shared processItemCount on every fixture (pending shared D-count)", () => {
+    for (const items of FIXTURES) expect(buildTurnSteps(items).processCount).toBe(processItemCount(items));
   });
 
   it("treats child items as the subagent's own steps, never as finals", () => {
@@ -116,12 +150,16 @@ describe("groups", () => {
       .toEqual(["plan", "notice", "subagent"]);
   });
 
-  it("marks a group active while any row runs and points the live label at the last block", () => {
+  it("marks a group active while any row runs and puts the live label on the block holding its row", () => {
     const running = buildTurnSteps([command("cmd_1", [read("a.ts")]), command("cmd_2", [read("b.ts")], { status: "in_progress", completed_at: null })]);
     expect(running.blocks[0]).toMatchObject({ kind: "group", active: true });
-    expect(liveBlockKey(running)).toBe("group:cmd_1:0");
+    expect(liveBlockKey(running, liveLabel(running))).toBe("group:cmd_1:0");
     const idle = buildTurnSteps([command("cmd_1", [read("a.ts")]), message("msg:1", "hm")]);
-    expect(liveBlockKey(idle)).toBeNull();
+    expect(liveBlockKey(idle, liveLabel(idle))).toBeNull();
+    // A held label of a finished row still points at that row's block.
+    const held = { id: "step:cmd_1:0", kind: "step" as const, descriptor: idle.rows[0]!.descriptor, icon: "read" as const };
+    expect(liveBlockKey(idle, held)).toBe("row:cmd_1:0");
+    expect(liveBlockKey(idle, { ...held, id: "step:gone:0" })).toBeNull();
   });
 });
 
@@ -169,6 +207,18 @@ describe("live label", () => {
     expect(liveLabel(steps)).toMatchObject({ kind: "step", id: "step:cmd_2:0", descriptor: { key: "run_active" }, icon: "command" });
   });
 
+  it("is quiet while a breaker is still in progress, so no thinking line sits under it", () => {
+    expect(liveLabel(buildTurnSteps([reasoning("rsn:1", "Plan"), message("msg:1", "Writing", "unknown", { status: "in_progress", completed_at: null })])))
+      .toEqual({ id: "quiet", kind: "quiet" });
+    expect(liveLabel(buildTurnSteps([subagent("sub_1", "Explore", { status: "in_progress", completed_at: null })])).kind).toBe("quiet");
+    expect(liveLabel(buildTurnSteps([compaction("cmp:1", { status: "in_progress", completed_at: null })])).kind).toBe("quiet");
+    // A message that has not produced text yet draws nothing: thinking shows.
+    expect(liveLabel(buildTurnSteps([message("msg:1", "", "unknown", { status: "in_progress", completed_at: null })])).kind).toBe("thinking");
+    // A running row still wins over a running breaker after it.
+    expect(liveLabel(buildTurnSteps([command("cmd_1", [read("a.ts")], { status: "in_progress", completed_at: null }),
+      subagent("sub_1", "Explore", { status: "in_progress", completed_at: null })])).kind).toBe("step");
+  });
+
   it("falls back to the last reasoning line, then to thinking", () => {
     expect(liveLabel(buildTurnSteps([reasoning("rsn:1", "Old"), command("cmd_1", [read("a.ts")]),
       reasoning("rsn:2", "I should check the tests.\n\n**Running the `vitest` suite**")])))
@@ -201,7 +251,19 @@ describe("fold headers", () => {
   it("titles a finished card by worked_ms, falling back to elapsed_ms", () => {
     expect(finishedFoldHeader({ status: "completed", workedMs: 3000, elapsedMs: 9000 })).toEqual({ kind: "worked_for", ms: 3000 });
     expect(finishedFoldHeader({ status: "failed", workedMs: null, elapsedMs: 9000 })).toEqual({ kind: "worked_for", ms: 9000 });
-    expect(finishedFoldHeader({ status: "cancelled", workedMs: null, elapsedMs: 2000 })).toEqual({ kind: "stopped_after", ms: 2000 });
+    // A cancelled card's notice says so; the fold title stays neutral.
+    expect(finishedFoldHeader({ status: "cancelled", workedMs: null, elapsedMs: 2000 })).toEqual({ kind: "steps" });
     expect(finishedFoldHeader({ status: "completed", workedMs: null, elapsedMs: null })).toEqual({ kind: "steps" });
+  });
+});
+
+describe("waiting on a person", () => {
+  it("is true while the last top-level item is an open permission or question", () => {
+    const waiting = { ...permission("perm:1", "Bash"), status: "in_progress" as const, completed_at: null, outcome: null };
+    expect(isAwaitingHuman([command("cmd_1", [unknown("make")], running), waiting])).toBe(true);
+    expect(isAwaitingHuman([waiting, command("cmd_c", [read("a.ts")], { parent_id: "sub_1" })])).toBe(true);
+    expect(isAwaitingHuman([permission("perm:1", "Bash")])).toBe(false);
+    expect(isAwaitingHuman([waiting, command("cmd_2", [read("a.ts")])])).toBe(false);
+    expect(isAwaitingHuman([])).toBe(false);
   });
 });

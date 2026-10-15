@@ -81,8 +81,17 @@ export interface TurnSteps {
   lastReasoning: TraceReasoningItem | null;
   /** Top-level final replies (`phase: "final"`), in order. */
   finals: TraceAgentMessageItem[];
-  /** Process items that draw a row (reasoning excluded, as `process_item_count`). */
+  /**
+   * Process items that draw something: reasoning and empty messages excluded,
+   * as the card's `process_item_count` counts (spec §10 D-count).
+   */
   processCount: number;
+  /**
+   * The last item that draws something is a breaker still in progress (a
+   * streaming message, a running subagent or compaction): it shows its own
+   * progress, so no "thinking" line goes under it.
+   */
+  breakerRunning: boolean;
 }
 
 const STEP_TYPES: ReadonlySet<TraceItem["type"]> = new Set(["command", "file_change", "web_search", "tool"]);
@@ -184,19 +193,23 @@ function buildSteps(process: readonly TraceItem[], finals: TraceAgentMessageItem
   const entries: Array<StepRow | { breaker: BreakerItem }> = [];
   const rows: StepRow[] = [];
   let lastReasoning: TraceReasoningItem | null = null;
+  let processCount = 0;
+  let breakerRunning = false;
   for (const item of process) {
     if (item.type === "reasoning") lastReasoning = item;
     if (isSilent(item)) continue;
+    processCount++;
     if (isStepItem(item)) {
       const itemRows = stepRows(item);
       rows.push(...itemRows);
       entries.push(...itemRows);
+      breakerRunning = false;
     } else {
       entries.push({ breaker: item as BreakerItem });
+      breakerRunning = item.status === "in_progress";
     }
   }
-  const processCount = process.filter((item) => item.type !== "reasoning").length;
-  return { blocks: groupSteps(entries), rows, lastReasoning, finals, processCount };
+  return { blocks: groupSteps(entries), rows, lastReasoning, finals, processCount, breakerRunning };
 }
 
 /** The top-level fold of a turn: process blocks plus the final replies. */
@@ -266,28 +279,44 @@ export function reasoningHeadline(text: string): string | null {
 export type LiveLabel =
   | { id: string; kind: "step"; descriptor: StepDescriptor; icon: StepIconKind }
   | { id: string; kind: "reasoning"; text: string }
-  | { id: "thinking"; kind: "thinking" };
+  | { id: "thinking"; kind: "thinking" }
+  /** A breaker in progress shows its own progress: no label line at all. */
+  | { id: "quiet"; kind: "quiet" };
 
 /**
- * What a running turn is doing now: the last in-progress row's active copy,
- * else the last line of the last reasoning item, else "Thinking".
+ * What a running turn is doing now: the last in-progress row's active copy;
+ * else `quiet` while a breaker is still in progress (a streaming message, a
+ * running subagent or compaction shows its own progress); else the last line
+ * of the last reasoning item; else "Thinking".
  */
-export function liveLabel(steps: Pick<TurnSteps, "rows" | "lastReasoning">): LiveLabel {
+export function liveLabel(steps: Pick<TurnSteps, "rows" | "lastReasoning" | "breakerRunning">): LiveLabel {
   for (let i = steps.rows.length - 1; i >= 0; i--) {
     const r = steps.rows[i]!;
     if (r.active) return { id: `step:${r.key}`, kind: "step", descriptor: r.descriptor, icon: r.icon };
   }
+  if (steps.breakerRunning) return { id: "quiet", kind: "quiet" };
   const headline = steps.lastReasoning ? reasoningHeadline(steps.lastReasoning.text) : null;
   if (headline) return { id: `reasoning:${headline}`, kind: "reasoning", text: headline };
   return { id: "thinking", kind: "thinking" };
 }
 
-/** The block that shows the live label: the last block when it holds the running row. */
-export function liveBlockKey(steps: Pick<TurnSteps, "blocks">): string | null {
-  const last = steps.blocks.at(-1);
-  if (!last) return null;
-  if (last.kind === "group" && last.active) return last.key;
-  if (last.kind === "row" && last.row.active) return last.key;
+/** The row an activity label belongs to, or null for thinking. */
+export function labelRowKey(label: LiveLabel | null): string | null {
+  return label?.kind === "step" ? label.id.slice("step:".length) : null;
+}
+
+/**
+ * The block that shows the live label: the block holding the labelled row —
+ * also while a finished row's label is still held — or null for the trailing
+ * line (thinking, reasoning).
+ */
+export function liveBlockKey(steps: Pick<TurnSteps, "blocks">, label: LiveLabel | null): string | null {
+  const rowKey = labelRowKey(label);
+  if (!rowKey) return null;
+  for (const block of steps.blocks) {
+    if (block.kind === "group" && block.rows.some((r) => r.key === rowKey)) return block.key;
+    if (block.kind === "row" && block.row.key === rowKey) return block.key;
+  }
   return null;
 }
 
@@ -332,9 +361,25 @@ export function liveFoldHeader(
   return turn.status === "cancelled" ? { kind: "stopped_after", ms: duration } : { kind: "worked_for", ms: duration };
 }
 
-/** The finished card's title: "Worked for {worked_ms ?? elapsed_ms}", or "Stopped after" for a cancelled turn. */
+/**
+ * The finished card's title: "Worked for {worked_ms ?? elapsed_ms}". A
+ * cancelled turn reads the neutral "Steps": its notice already says it was
+ * cancelled.
+ */
 export function finishedFoldHeader(meta: { status: string | null; workedMs: number | null; elapsedMs: number | null }): FoldHeader {
-  if (meta.status === "cancelled") return meta.elapsedMs != null ? { kind: "stopped_after", ms: meta.elapsedMs } : { kind: "steps" };
+  if (meta.status === "cancelled") return { kind: "steps" };
   const ms = meta.workedMs ?? meta.elapsedMs;
   return ms != null ? { kind: "worked_for", ms } : { kind: "steps" };
+}
+
+// ── Waiting on a person ─────────────────────────────────────────────────────
+
+/** The last top-level item is a permission or question the agent is waiting on. */
+export function isAwaitingHuman(items: readonly TraceItem[]): boolean {
+  for (let i = items.length - 1; i >= 0; i--) {
+    const item = items[i]!;
+    if (item.parent_id !== null) continue;
+    return (item.type === "permission" || item.type === "question") && item.status === "in_progress";
+  }
+  return false;
 }

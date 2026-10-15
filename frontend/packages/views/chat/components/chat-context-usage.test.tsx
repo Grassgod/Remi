@@ -10,7 +10,7 @@ describe("ChatContextUsage", () => {
   it("draws the ring only, without a percentage, and prefers the live value", () => {
     renderWithI18n(<ChatContextUsage live={{ used: 50_000, size: 200_000 }} last={{ used: 190_000, size: 200_000 }} />);
     expect(ring()).toHaveAttribute("data-chat-context", "live");
-    expect(ring()).toHaveAccessibleName("Context window usage");
+    expect(ring()).toHaveAccessibleName("Context window usage: 50K / 200K used · 25%");
     expect(ring()!.textContent).toBe("");
     expect(ring()!.hasAttribute("data-danger")).toBe(false);
     const arc = ring()!.querySelector<SVGCircleElement>('[data-slot="context-ring-arc"]')!;

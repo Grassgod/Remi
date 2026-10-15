@@ -68,8 +68,11 @@ export function CommandDetail({ command, output, status, exitCode, truncated = f
       {text && (
         <button type="button" onClick={() => setFull((value) => !value)} aria-expanded={full}
           title={full ? undefined : t(($) => $.turn_steps.show_full_command)}
-          className={cn(MONO, "block w-full whitespace-pre-wrap break-all px-2 py-2 text-left text-foreground focus-visible:outline-2 focus-visible:outline-ring", !full && "line-clamp-2")}>
-          {text}
+          className={cn(MONO, "block w-full px-2 py-2 text-left text-foreground focus-visible:outline-2 focus-visible:outline-ring")}>
+          {/* The clamp sits on an inner box without padding, so a third line
+           * cannot show through the padding; `block` would override the
+           * clamp's `display: -webkit-box`, so only one of the two applies. */}
+          <span data-command-text className={cn("whitespace-pre-wrap break-all", full ? "block" : "line-clamp-2")}>{text}</span>
         </button>
       )}
       {output ? (

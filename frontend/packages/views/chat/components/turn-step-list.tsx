@@ -59,7 +59,7 @@ const ICONS: Record<StepIconKind, LucideIcon> = {
 
 /** Height + fade on Base UI's panel variable; reduced motion switches at once. */
 export const STEP_PANEL_MOTION = "h-(--collapsible-panel-height) overflow-hidden transition-[height,opacity] duration-300 ease-[cubic-bezier(.19,1,.22,1)] data-[ending-style]:h-0 data-[ending-style]:opacity-0 data-[starting-style]:h-0 data-[starting-style]:opacity-0 motion-reduce:transition-none";
-const ROW_TRIGGER = "group/step flex w-full min-w-0 items-center gap-1.5 text-left text-sm text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring disabled:hover:text-muted-foreground";
+const ROW_TRIGGER = "group/step flex w-full min-w-0 items-center gap-1.5 text-left text-sm text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring aria-disabled:cursor-default aria-disabled:hover:text-muted-foreground";
 const CHEVRON = "size-3.5 shrink-0 opacity-0 transition-[opacity,transform] duration-300 group-hover/step:opacity-100 group-focus-visible/step:opacity-100 group-data-[panel-open]/step:rotate-90 group-data-[panel-open]/step:opacity-100 motion-reduce:transition-none";
 const MONO = TRACE_DETAIL_MONO;
 
@@ -81,7 +81,7 @@ export function useStepCopy() {
       t(($) => $.steps.summary_empty),
     );
     const live = (label: LiveLabel): string => label.kind === "step" ? step(label.descriptor)
-      : label.kind === "reasoning" ? label.text : t(($) => $.steps.reasoning_active);
+      : label.kind === "reasoning" ? label.text : label.kind === "quiet" ? "" : t(($) => $.steps.reasoning_active);
     return { step, summary, live };
   }, [t]);
 }
@@ -101,16 +101,13 @@ export interface TurnStepListProps {
 
 export function TurnStepList({ steps, items, live }: TurnStepListProps) {
   const copy = useStepCopy();
-  const trailing = live && live.blockKey === null;
-  // A held activity label belongs to its own row: the last block shows it only
-  // while that block holds the row; otherwise the block reads its own state.
-  const labelRow = live?.label.kind === "step" ? live.label.id.slice("step:".length) : null;
-  const holdsLabel = (block: StepBlock) => block.kind === "group" ? block.rows.some((r) => r.key === labelRow)
-    : block.kind === "row" && block.row.key === labelRow;
+  // The label sits on the block that holds its row (even a finished row whose
+  // label is still held); thinking goes on a trailing line; `quiet` nowhere.
+  const trailing = live && live.blockKey === null && live.label.kind !== "quiet";
   return (
     <div data-turn-step-list className="flex flex-col gap-4">
       {steps.blocks.map((block) => {
-        const label = live && live.blockKey === block.key && holdsLabel(block) ? live.label : undefined;
+        const label = live && live.blockKey === block.key ? live.label : undefined;
         switch (block.kind) {
           case "group": return <StepGroup key={block.key} rows={block.rows} active={block.active} label={label} />;
           case "row": return <StepRowView key={block.key} row={block.row} label={label} />;
@@ -166,14 +163,14 @@ function StepGroup({ rows, active, label }: { rows: StepRow[]; active: boolean; 
   // The live label holds the header while the turn runs; a group whose rows
   // are done reads its summary at once.
   const runningRow = active ? [...rows].reverse().find((r) => r.active) : undefined;
-  const liveIcon = label?.kind === "step" ? label.icon : runningRow?.icon;
-  const icon = active ? liveIcon ?? groupIcon(rows) : groupIcon(rows);
+  const live = active || !!label;
+  const icon = label?.kind === "step" ? label.icon : runningRow?.icon ?? groupIcon(rows);
   const text = label ? copy.live(label) : runningRow ? copy.step(runningRow.descriptor) : copy.summary(rows);
   return (
-    <Collapsible open={open} onOpenChange={setOpen} data-step-group={active ? "active" : "done"}>
+    <Collapsible open={open} onOpenChange={setOpen} data-step-group={live ? "active" : "done"}>
       <CollapsibleTrigger className={ROW_TRIGGER}>
         <StepIcon kind={icon} />
-        {active ? <LiveText>{text}</LiveText> : <span className="min-w-0 truncate">{text}</span>}
+        {live ? <LiveText>{text}</LiveText> : <span className="min-w-0 truncate">{text}</span>}
         <ChevronRight className={CHEVRON} aria-hidden="true" />
       </CollapsibleTrigger>
       <CollapsibleContent className={STEP_PANEL_MOTION}>
@@ -189,7 +186,8 @@ function StepGroup({ rows, active, label }: { rows: StepRow[]; active: boolean; 
 
 function hasRowDetail(row: StepRow): boolean {
   switch (row.item.type) {
-    case "command": return row.item.status !== "in_progress" || !!row.item.output || !!(row.part as CommandAction | undefined)?.command || !!row.item.command;
+    // A single-action read without command text (Codex) has nothing to show.
+    case "command": return !!row.item.output || !!((row.part as CommandAction | undefined)?.command ?? row.item.command);
     case "file_change": return !!row.part || row.item.changes.length > 0;
     case "web_search": return !!row.item.output || !!row.item.url;
     case "tool": return !!row.item.output || !!row.item.input;
@@ -206,7 +204,7 @@ function StepRowView({ row, label, grouped = false }: { row: StepRow; label?: Li
     <Collapsible open={open} onOpenChange={setOpen} data-step-row={row.key} data-step-state={row.descriptor.state}>
       <CollapsibleTrigger disabled={!detail} className={ROW_TRIGGER}>
         <StepIcon kind={label?.kind === "step" ? label.icon : row.icon} />
-        {row.active ? <LiveText>{text}</LiveText> : <span className="min-w-0 truncate" title={titleOf(row)}>{text}</span>}
+        {row.active || label ? <LiveText>{text}</LiveText> : <span className="min-w-0 truncate" title={titleOf(row)}>{text}</span>}
         {fileChange && (fileChange.added > 0 || fileChange.removed > 0) && (
           <span className="flex shrink-0 gap-1 text-xs tabular-nums">
             {fileChange.added > 0 && <span className="text-emerald-600 dark:text-emerald-400">+{fileChange.added}</span>}
@@ -291,7 +289,7 @@ function BreakerRow({ icon, text, active, danger, itemId, detail }: {
   const [open, setOpen] = useState(false);
   return (
     <Collapsible open={open} onOpenChange={setOpen} data-step-breaker={itemId}>
-      <CollapsibleTrigger disabled={!detail} className={cn(ROW_TRIGGER, danger && "text-destructive hover:text-destructive")}>
+      <CollapsibleTrigger disabled={!detail} className={cn(ROW_TRIGGER, danger && "text-destructive hover:text-destructive aria-disabled:hover:text-destructive")}>
         {icon && <StepIcon kind={icon} />}
         {active ? <LiveText>{text}</LiveText> : <span className="min-w-0 truncate">{text}</span>}
         {detail && <ChevronRight className={CHEVRON} aria-hidden="true" />}

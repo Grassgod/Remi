@@ -7,6 +7,7 @@ import type { AgentAvailability } from "@multiremi/core/agents";
 import type { ChatPendingTask } from "@multiremi/core/types";
 import type { TraceItem } from "@multiremi/contracts/trace";
 import { formatElapsedSecs } from "../../common/format";
+import { isAwaitingHuman } from "../lib/turn-steps";
 import { useT } from "../../i18n";
 
 interface Props {
@@ -154,10 +155,13 @@ export function TaskStatusPill({
     return () => clearInterval(timer);
   }, []);
 
-  // Effective status — defense-in-depth derive on top of the cache. Once the
-  // trace holds any item the daemon has by definition started running; we
-  // trust that observation over a stale cache.
-  const status = items.length > 0 ? "running" : pendingTask.status;
+  // Effective status — defense-in-depth derive on top of the cache. A wait on
+  // a person comes first: the server's `awaiting_human`, or a permission or
+  // question the trace shows open (the turn's own input item must not flip it
+  // to running). Otherwise, once the trace holds any item the daemon has by
+  // definition started running; we trust that over a stale cache.
+  const status = pendingTask.status === "awaiting_human" || isAwaitingHuman(items) ? "awaiting_human"
+    : items.length > 0 ? "running" : pendingTask.status;
   const elapsedSecs = Math.max(0, Math.floor((now - anchor) / 1000));
   const queuedWaitReason = status === "queued" && typeof pendingTask.wait_reason === "string"
     ? pendingTask.wait_reason.trim() : "";

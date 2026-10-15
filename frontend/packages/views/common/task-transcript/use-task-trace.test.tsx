@@ -5,10 +5,12 @@ import type { StreamSubscriptionHandlers } from "@multiremi/core/api/ws-client";
 import { command, event, message, read, traceTurn, turnPage } from "../../test/trace-fixtures";
 import { turnTraceKey, useTurnTrace } from "./use-task-trace";
 
-const { getTaskTrace, consumer } = vi.hoisted(() => ({ getTaskTrace: vi.fn(), consumer: { callbacks: {} as StreamSubscriptionHandlers, enabled: false } }));
+const { getTaskTrace, consumer } = vi.hoisted(() => ({ getTaskTrace: vi.fn(),
+  consumer: { callbacks: {} as StreamSubscriptionHandlers, enabled: false, options: undefined as { fromSeq?: number } | undefined } }));
 vi.mock("@multiremi/core/api", async original => ({ ...await original<typeof import("@multiremi/core/api")>(), api: { getTaskTrace } }));
-vi.mock("@multiremi/core/realtime", () => ({ useTraceStreamSubscription: (_id: string, callbacks: StreamSubscriptionHandlers, enabled: boolean) => {
-  consumer.callbacks = callbacks; consumer.enabled = enabled;
+vi.mock("@multiremi/core/realtime", () => ({ useTraceStreamSubscription: (_id: string, callbacks: StreamSubscriptionHandlers, enabled: boolean,
+  options?: { fromSeq?: number }) => {
+  consumer.callbacks = callbacks; consumer.enabled = enabled; consumer.options = options;
 } }));
 beforeEach(() => { getTaskTrace.mockReset(); consumer.enabled = false; });
 
@@ -125,4 +127,32 @@ it("rereads an unsealed snapshot when a non-live reader mounts, but trusts a sea
   expect(second.result.current.closed).toBe(true);
   expect(getTaskTrace).toHaveBeenCalledTimes(1);
   second.unmount(); client.clear();
+});
+
+it("shows each page as it arrives and marks the read landed after the last", async () => {
+  const turn = traceTurn();
+  let releaseSecond!: (value: unknown) => void;
+  getTaskTrace
+    .mockResolvedValueOnce(turnPage(turn, [command("cmd_1", [read("a.ts")])], { next_item_cursor: 1, head: 5 }))
+    .mockReturnValueOnce(new Promise((resolve) => { releaseSecond = resolve; }));
+  const { wrapper, client } = setup();
+  const view = renderHook(() => useTurnTrace("att_1"), { wrapper });
+  await waitFor(() => expect(view.result.current.items.map((item) => item.id)).toEqual(["cmd_1"]));
+  expect(view.result.current.loaded).toBe(false);
+  await act(async () => releaseSecond(turnPage(turn, [message("msg:1", "Looking")], { head: 6 })));
+  await waitFor(() => expect(view.result.current.loaded).toBe(true));
+  expect(view.result.current.items.map((item) => item.id)).toEqual(["cmd_1", "msg:1"]);
+  view.unmount(); client.clear();
+});
+
+it("resubscribes after the loaded head instead of replaying the hub ring", async () => {
+  getTaskTrace.mockResolvedValue(turnPage(traceTurn(), [command("cmd_1", [read("a.ts")])], { head: 12, closed: false }));
+  const { wrapper, client } = setup();
+  const view = renderHook(({ enabled }) => useTurnTrace("att_1", { enabled, live: true }), { wrapper, initialProps: { enabled: true } });
+  expect(consumer.options).toEqual({ fromSeq: undefined });
+  await waitFor(() => expect(view.result.current.loaded).toBe(true));
+  view.rerender({ enabled: false });
+  view.rerender({ enabled: true });
+  expect(consumer.options).toEqual({ fromSeq: 13 });
+  view.unmount(); client.clear();
 });

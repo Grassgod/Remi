@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useRef, useState } from "react";
 import type { TraceItem, TraceItemOf } from "@multiremi/contracts/trace";
 import {
   AlertCircle,
@@ -35,13 +35,18 @@ import { CommandDetail, DiffDetail, TRACE_DETAIL_MONO } from "./trace-item-detai
 
 interface TranscriptItemRowProps {
   item: TraceItem;
-  /** Every item of the trace: a subagent row nests the ones it owns. */
-  items: readonly TraceItem[];
+  /** The items this one owns (a subagent's steps), from the dialog's index. */
+  childItems: readonly TraceItem[];
+  /** Children of any item, for nested subagents; a stable function so memoized rows stay put. */
+  getChildren: (id: string) => readonly TraceItem[];
   selectedId: string | null;
   liveFollow: boolean;
   /** The task itself has finished, so an item still marked running never will. */
   taskTerminal: boolean;
+  /** Registers this row's element for its own id and its children's (timeline navigation). */
+  registerRow?: (id: string, element: HTMLDivElement | null) => void;
 }
+
 
 function itemIcon(item: TraceItem): LucideIcon {
   switch (item.type) {
@@ -88,19 +93,28 @@ function hasDetail(item: TraceItem, childCount: number): boolean {
   }
 }
 
-/** One item of the execution dialog: status, type badge, summary, timing; expands to its full record. */
-export const TranscriptItemRow = ({
-  ref,
+/**
+ * One item of the execution dialog: status, type badge, summary, timing;
+ * expands to its full record. Memoized: a live frame re-renders only the rows
+ * whose item (or children) it changed.
+ */
+export const TranscriptItemRow = memo(function TranscriptItemRow({
   item,
-  items,
+  childItems: children,
+  getChildren,
   selectedId,
   liveFollow,
   taskTerminal,
-}: TranscriptItemRowProps & { ref?: React.Ref<HTMLDivElement> }) => {
+  registerRow,
+}: TranscriptItemRowProps) {
   const { t } = useT("agents");
   const [expanded, setExpanded] = useState(false);
   const autoExpanded = useRef(false);
-  const children = items.filter((child) => child.parent_id === item.id);
+  const ref = useCallback((element: HTMLDivElement | null) => {
+    if (!registerRow) return;
+    registerRow(item.id, element);
+    for (const child of children) registerRow(child.id, element);
+  }, [registerRow, item.id, children]);
   const running = item.status === "in_progress";
   // An item the finished task never closed: not running, just unfinished.
   const abandoned = running && taskTerminal;
@@ -169,8 +183,8 @@ export const TranscriptItemRow = ({
               {children.length > 0 && (
                 <div className="divide-y border-l-2 border-border pl-2">
                   {children.map((child) => (
-                    <TranscriptItemRow key={child.id} item={child} items={items} selectedId={selectedId}
-                      liveFollow={liveFollow} taskTerminal={taskTerminal} />
+                    <TranscriptItemRow key={child.id} item={child} childItems={getChildren(child.id)}
+                      getChildren={getChildren} selectedId={selectedId} liveFollow={liveFollow} taskTerminal={taskTerminal} />
                   ))}
                 </div>
               )}
@@ -186,7 +200,7 @@ export const TranscriptItemRow = ({
       </Collapsible>
     </div>
   );
-};
+});
 
 const PRE = cn(TRACE_DETAIL_MONO, "max-h-60 overflow-auto rounded border bg-muted/40 p-3 text-[11px] text-muted-foreground whitespace-pre-wrap break-all");
 

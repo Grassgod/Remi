@@ -89,9 +89,14 @@ const REDACTED_ITEM_STRINGS = [
  * A trace item ready for display or copy: every free-text field through
  * {@link redactString}, structured payloads (tool input, questions, answers,
  * parsed command actions, diffs) through {@link redactValue}. Ids, statuses and
- * timestamps are left alone so rows keep their identity.
+ * timestamps are left alone so rows keep their identity. The result is cached
+ * per item object.
  */
+const REDACTED_ITEMS = new WeakMap<object, object>();
+
 export function redactItem<T extends object>(item: T): T {
+  const cached = REDACTED_ITEMS.get(item);
+  if (cached) return cached as T;
   const out: Record<string, unknown> = { ...(item as Record<string, unknown>) };
   for (const key of REDACTED_ITEM_STRINGS) {
     const value = out[key];
@@ -100,5 +105,8 @@ export function redactItem<T extends object>(item: T): T {
   for (const key of ["input", "questions", "answers", "actions", "changes", "entries"]) {
     if (out[key] !== null && typeof out[key] === "object") out[key] = redactValue(out[key]);
   }
+  // Items are immutable (the reducer replaces what changes), so the result is
+  // reusable for as long as the item lives.
+  REDACTED_ITEMS.set(item, out);
   return out as unknown as T;
 }

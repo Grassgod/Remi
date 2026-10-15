@@ -41,7 +41,10 @@ export function applyChatDoneToCache(
   // SessionLog owns the reply; advance only its matching queue head.
   settleChatPendingTask(qc, sessionId, taskId);
   qc.invalidateQueries({ queryKey: chatKeys.pendingTask(sessionId) });
-  qc.invalidateQueries({ queryKey: ["task-trace", taskId] });
+  // Mark the turn's trace stale without rereading it now: a live reader has
+  // the final frames already and a later reader rereads an unsealed snapshot
+  // when it mounts. Refetching here would page the whole trace again.
+  qc.invalidateQueries({ queryKey: ["task-trace", taskId], refetchType: "none" });
 }
 
 /**

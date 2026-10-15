@@ -8,7 +8,8 @@ import { setApiInstance } from "@multiremi/core/api";
 import type { OptimisticChatRow } from "../lib/optimistic-log";
 import { useTraceStreamSubscription } from "@multiremi/core/realtime";
 import { paths } from "@multiremi/core/paths";
-import { command, message as traceMessage, read, traceTurn, turnPage, turnTraceCache } from "../../test/trace-fixtures";
+import type { TraceItem } from "@multiremi/contracts/trace";
+import { command, message as traceMessage, permission, read, traceTurn, turnPage, turnTraceCache } from "../../test/trace-fixtures";
 
 const { copiedText } = vi.hoisted(() => ({ copiedText: vi.fn().mockResolvedValue(true) }));
 vi.mock("@multiremi/ui/lib/clipboard", () => ({ copyText: copiedText }));
@@ -212,11 +213,12 @@ function renderList(
   messages: ChatMessage[],
   pending: ChatPendingTask | null,
   includeHead = false,
+  traceCache: unknown = liveTraceCache,
 ) {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false, staleTime: Infinity } },
   });
-  client.setQueryData(["task-trace", TASK_ID], liveTraceCache);
+  if (traceCache) client.setQueryData(["task-trace", TASK_ID], traceCache);
   const entries = messages.map((message, index) => ({
     session_id: "cs-1", seq: index + 1, id: message.id, revision: 1,
     kind: message.role === "user" ? "message" : "turn",
@@ -384,18 +386,53 @@ describe("ChatMessageList measurement contract", () => {
 });
 
 describe("ChatMessageList with mid-run agent attachments", () => {
-  it.each(["closed", "error"])("stops the stale pending-task spinner when the trace reports %s", async state => {
-    const view = renderList([], pendingTask);
+  it("shows the status pill only until the trace has a turn, then the steps fold speaks for the run", async () => {
+    const noTurn = turnTraceCache(turnPage(null, [], { closed: false }));
+    const view = renderList([], pendingTask, false, noTurn);
     expect(screen.getByTestId("status-pill")).toBeInTheDocument();
+    expect(view.container.querySelector("[data-chat-live-turn]")).toBeNull();
     const callbacks = vi.mocked(useTraceStreamSubscription).mock.calls.at(-1)![1];
     await act(async () => {
-      if (state === "closed") callbacks.onClosed?.({ stream: "trace", id: TASK_ID, head_seq: 1 });
-      else callbacks.onError?.({ stream: "trace", id: TASK_ID, code: "forbidden" });
+      callbacks.onFrames?.([{ seq: 1, kind: "trace", payload: { seq: 1, ts: traceTurn().started_at, type: "turn.started", turn: traceTurn({ id: TASK_ID }) } }]);
     });
     await waitFor(() => expect(screen.queryByTestId("status-pill")).toBeNull());
-    if (state === "error") expect(screen.getByRole("alert", { hidden: true })).toBeInTheDocument();
+    expect(view.container.querySelector('[data-chat-steps="live"]')).not.toBeNull();
     view.unmount();
   });
+
+  it("hides the pill once the trace closes and keeps it for a legacy trace", async () => {
+    const view = renderList([], pendingTask, false, turnTraceCache(turnPage(null, [], { closed: false })));
+    const callbacks = vi.mocked(useTraceStreamSubscription).mock.calls.at(-1)![1];
+    await act(async () => { callbacks.onClosed?.({ stream: "trace", id: TASK_ID, head_seq: 1 }); });
+    await waitFor(() => expect(screen.queryByTestId("status-pill")).toBeNull());
+    view.unmount();
+    const legacy = renderList([], pendingTask, false, turnTraceCache(turnPage(null, [], { format: "legacy", closed: false })));
+    expect(screen.getByTestId("status-pill")).toBeInTheDocument();
+    expect(legacy.container.querySelector("[data-chat-live-turn]")).toBeNull();
+    legacy.unmount();
+  });
+
+  it("keeps the pill when the live read fails", async () => {
+    setApiInstance({ getTaskTrace: vi.fn().mockRejectedValue(new Error("offline")) } as never);
+    const view = renderList([], pendingTask, false, null);
+    await waitFor(() => expect(screen.getByRole("alert", { hidden: true })).toBeInTheDocument());
+    expect(screen.getByTestId("status-pill")).toBeInTheDocument();
+    view.unmount();
+  });
+
+  it.each([
+    ["the server says the task waits for an answer", "awaiting_human", false],
+    ["the trace shows an open permission", "running", true],
+  ] as const)("shows the waiting pill beside the fold while %s", (_case, status, openPermission) => {
+    const waiting: TraceItem[] = openPermission
+      ? [{ ...permission("perm:1", "Bash"), status: "in_progress", completed_at: null, outcome: null }] : [];
+    const cache = turnTraceCache(turnPage(traceTurn({ id: TASK_ID }), [command("cmd_1", [read("a.ts")]), ...waiting], { closed: false }));
+    const view = renderList([], { ...pendingTask, status }, false, cache);
+    expect(view.container.querySelector('[data-chat-steps="live"]')).not.toBeNull();
+    expect(screen.getByTestId("status-pill")).toBeInTheDocument();
+    view.unmount();
+  });
+
   it("keeps and copies the complete persisted reply, then reads execution only on click", async () => {
     copiedText.mockClear();
     const getTaskTrace = vi.fn().mockResolvedValue(turnPage(traceTurn({ id: TASK_ID, status: "completed" }), []));
@@ -425,11 +462,11 @@ describe("ChatMessageList with mid-run agent attachments", () => {
     expect(view.container.querySelector("[data-chat-trace]")).toBeInTheDocument();
     view.unmount();
   });
-  it("keeps the running task's status visible after an attachment push lands", () => {
-    renderList([attachmentPush("msg-1", "Here is the report.")], pendingTask);
+  it("keeps the running task's live steps visible after an attachment push lands", () => {
+    const view = renderList([attachmentPush("msg-1", "Here is the report.")], pendingTask);
 
-    // The push is not the reply: the live timeline and the pill must survive.
-    expect(screen.getByTestId("status-pill")).toBeInTheDocument();
+    // The push is not the reply: the live turn must survive.
+    expect(view.container.querySelector("[data-chat-live-turn]")).not.toBeNull();
     expect(screen.getAllByText(TIMELINE_TEXT)).toHaveLength(1);
   });
 
@@ -717,7 +754,8 @@ describe("live turn steps", () => {
     try {
       expect(view.container.querySelector('[data-chat-steps="live"]')).not.toBeNull();
       expect(view.container.querySelector("[data-chat-live-final]")).toHaveTextContent("Streaming answer");
-      expect(screen.getByTestId("status-pill")).toBeInTheDocument();
+      // The fold carries the run; the pill would only repeat it.
+      expect(screen.queryByTestId("status-pill")).toBeNull();
     } finally { view.unmount(); client.clear(); }
   });
 });

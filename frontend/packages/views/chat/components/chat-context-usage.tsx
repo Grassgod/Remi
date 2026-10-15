@@ -21,11 +21,13 @@ export function ChatContextUsage({ live, last }: { live: TraceContextUsage | nul
   const usage = live ?? last;
   if (!usage || !(usage.size > 0)) return null;
   const value = { usedTokens: usage.used, maxTokens: usage.size };
+  const usageText = t(($) => $.input.context_usage, contextUsageParts(value));
   return (
     <Context {...value}>
-      <ContextTrigger aria-label={t(($) => $.input.context_label)} data-chat-context={live ? "live" : "last"} />
+      {/* The ring has no text; its name carries the value the card shows on hover. */}
+      <ContextTrigger aria-label={`${t(($) => $.input.context_label)}: ${usageText}`} data-chat-context={live ? "live" : "last"} />
       <ContextContent>
-        <span className="tabular-nums">{t(($) => $.input.context_usage, contextUsageParts(value))}</span>
+        <span className="tabular-nums">{usageText}</span>
       </ContextContent>
     </Context>
   );
