@@ -111,6 +111,11 @@ export interface MultiremiTurn {
   ended_reason: string | null;
   /** Historical input only; live input is the message seq range. */
   legacy_prompt: string | null;
+  /**
+   * Subagents the current attempt has running, from the daemon's best-effort
+   * `task.activity` report (PR 5). Absent or null when never reported.
+   */
+  running_subagents?: number | null;
 }
 
 export interface MultiremiTurnAttempt {

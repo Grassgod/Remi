@@ -101,8 +101,24 @@ export interface Provider {
    * provider cannot steer; callers then interrupt and re-prompt.
    */
   steer?(text: string, options: { chatId?: string | null }): Promise<SteerResult>;
+  /**
+   * Stream the frames of a turn the bridge started on its own after the last
+   * prompt resolved (an autonomous round, PR 5), replaying what arrived in
+   * between first. Ends at the round's result marker, after `idleMs` without a
+   * frame, on `signal` abort or when the agent process dies; afterwards
+   * `getLastResponse` covers the round. Absent when the provider never captures
+   * such rounds.
+   */
+  listenAutonomous?(options: ListenAutonomousOptions): AsyncGenerator<ProviderEvent>;
   getLastResponse?(): AgentResponse | null;
   healthCheck(): Promise<boolean>;
+}
+
+export interface ListenAutonomousOptions {
+  chatId?: string | null;
+  signal?: AbortSignal;
+  /** End the listen after this long without a frame. */
+  idleMs?: number;
 }
 
 /** Custom tool that the agent can call, handled within Remi. */

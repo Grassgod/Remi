@@ -222,6 +222,13 @@ describe("daemon protocol frame inventory", () => {
     expect(ALL_FRAME_NAMES).not.toContain("runtime.archive_sessions_result" as never);
   });
 
+  it("sends the running-subagent count best effort, without a seq (PR 5)", () => {
+    expect(DAEMON_UPLINK_BEST_EFFORT_FRAMES).toContain("task.activity");
+    expect(daemonFrameCategory("task.activity")).toBe("best_effort");
+    expect(daemonFrameIsReliable("task.activity")).toBe(false);
+    expect(daemonFrameUsesSeq("task.activity")).toBe(false);
+  });
+
   it("keeps the upgrade channel free of task traffic", () => {
     // The HTTP heartbeat stays alive only to carry an update instruction, so no
     // offer or report frame may be reachable through it.

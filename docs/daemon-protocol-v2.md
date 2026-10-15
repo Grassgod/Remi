@@ -167,7 +167,7 @@ JSON 文本帧，不用二进制：
 | 类别 | 帧 | 可靠性与重放 |
 |---|---|---|
 | `handshake` | `hello` / `welcome` / `reject` | 每连接一次 |
-| `best_effort` | `hb`、`runtime.ready`、`gc.storage_report`、旧版 `concierge.status` | 不带 `seq`，不重放；`hb` 的服务端答复是 `res`（见 §4） |
+| `best_effort` | `hb`、`runtime.ready`、`gc.storage_report`、`task.activity`、旧版 `concierge.status` | 不带 `seq`，不重放；`hb` 的服务端答复是 `res`（见 §4） |
 | `event` | 见下 §1.4 | 带 `seq`，未确认前重放 |
 | `rpc` | 见下 §1.5 | 按 `id`/`re` 配对，由调用方重试 |
 | `reply` | `res` | 答复某个 rpc |
@@ -227,6 +227,10 @@ S2 同事务创建 decision 消息并将轮置为 `awaiting_human`，通过 `rep
 运维请求的预演只经 `runtime.gc_run_result` 回报，不发此帧。两条路径的报告都限制大小（计划 2000 项、错误 100 条、单条 1000 字符）以装进 1 MiB 帧。
 报告里的占用字节 `bytes` 与测量时间 `bytes_measured_at` 来自 daemon 后台异步测量的缓存（每小时至多一次，或在 `runtime.gc_run` 时重测），
 始终是最近一次已完成的测量，完成过一次之后不再为空。
+
+上行 best-effort 帧 `task.activity { task_id, runtime_id?, running_subagents }` 报告一个运行中尝试当前打开的子代理数
+（顶层子代理数，没有时取嵌套子代理数），由 daemon 的 trace 折叠重算；丢一帧由下一次变化或定时刷新补上。
+载荷类型是 `DaemonTaskActivityPayload`；没有注册处理器的服务端按 best-effort 规则忽略它。
 
 **server → daemon**：`trace.read`。
 

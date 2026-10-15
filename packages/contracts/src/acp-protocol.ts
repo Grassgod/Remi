@@ -76,6 +76,12 @@ export interface ClientCapabilities {
    */
   session?: { compaction?: Record<string, unknown>; notices?: Record<string, unknown>; _meta?: Record<string, unknown> };
   elicitation?: { form?: Record<string, unknown>; url?: Record<string, unknown> };
+  /**
+   * Native child sessions (PR 5): the bridge announces each subagent with
+   * `subagent_spawned` and sends its frames on the child's own session. Codex
+   * also needs the AIR `nativeSubagentSessions` capability.
+   */
+  subagents?: Record<string, unknown>;
   _meta?: Record<string, unknown>;
 }
 
@@ -286,7 +292,33 @@ export type SessionUpdate =
   | AvailableCommandsUpdate
   | CompactionUpdate
   | CompactionSummaryChunkUpdate
-  | NoticeUpdate;
+  | NoticeUpdate
+  | SubagentSpawnedUpdate
+  | SubagentStateUpdate;
+
+/**
+ * A native child session started (PR 5; sent once the client advertises
+ * `subagents`). It arrives on the session that spawned the child: the root, or
+ * the parent child for a nested one. A resumed agent is announced again as
+ * `<id>:generation:N` (Claude), with the resuming message as `prompt`.
+ */
+export interface SubagentSpawnedUpdate {
+  sessionUpdate: "subagent_spawned";
+  subagentSessionId: string;
+  name?: string;
+  task?: string;
+  prompt?: string;
+  capabilities?: Record<string, unknown>;
+  _meta?: Record<string, unknown>;
+}
+
+/** A native child session ended (PR 5); later frames may still route to it. */
+export interface SubagentStateUpdate {
+  sessionUpdate: "subagent_state_update";
+  subagentSessionId: string;
+  state: "completed" | "failed" | "cancelled" | "disconnected";
+  _meta?: Record<string, unknown>;
+}
 
 /**
  * ACP context compaction lifecycle (sdk 1.8.0 schema; sent once the client
@@ -625,8 +657,33 @@ export interface AgentAdapter {
    */
   readonly steering?: AgentSteering;
 
+  /**
+   * Native child sessions (PR 5): the bridge can send each subagent's frames on
+   * its own session once the client advertises `subagents`. Absent when it
+   * cannot; the client then never advertises them for this agent.
+   */
+  readonly nativeSubagents?: AgentNativeSubagents;
+
+  /**
+   * Autonomous rounds (PR 5): after a prompt resolves, the bridge may start a
+   * turn of its own (a background subagent's notification) whose result ends
+   * with a `usage_update` carrying `_meta["_claude/origin"]`. Absent when the
+   * bridge never does.
+   */
+  readonly autonomousRounds?: AgentAutonomousRounds;
+
   /** Default executable name for this agent type. */
   defaultExecutable(): string;
+}
+
+export interface AgentNativeSubagents {
+  /** Also append `"nativeSubagentSessions"` to the AIR capability list (Codex). */
+  airCapability: boolean;
+}
+
+export interface AgentAutonomousRounds {
+  /** `_meta["_claude/origin"].kind` values that mark the end of an autonomous round's result. */
+  resultOrigins: readonly string[];
 }
 
 export interface AgentSteering {

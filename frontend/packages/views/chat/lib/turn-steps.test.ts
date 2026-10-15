@@ -34,6 +34,10 @@ const FIXTURES: TraceItem[][] = [
     message("msg:c", "child", "unknown", { parent_id: "sub_1" }), message("msg:empty", ""), tool("t_1", "mcp__x__y"),
     plan([{ content: "a", status: "completed", priority: null }]), compaction("cmp:1"), notice("ntc:1", "slow")],
   [userMessage("in:3", "deploy"), command("cmd_2", [unknown("make deploy")], running), permission("perm:1", "Bash")],
+  // Codex collaboration (PR 5): `wait` is a hidden step, neither a row nor a process item.
+  [userMessage("in:4", "review"), subagent("sa:t1", "reviewer", { tool: "spawnAgent", thread_id: "t1" }),
+    tool("t_send", "sendInput", { input: { receiverThreadIds: ["t1"], prompt: "go" } }),
+    tool("t_wait", "wait", { input: { receiverThreadIds: ["t1"] } }), message("msg:f4", "Reviewed.", "final")],
 ];
 
 describe("split", () => {
@@ -61,6 +65,8 @@ describe("split", () => {
   // reasoning and empty messages included: neither draws a row.
   it("agrees with the shared processItemCount on every fixture", () => {
     for (const items of FIXTURES) expect(buildTurnSteps(items).processCount).toBe(processItemCount(items));
+    // The subagent and sendInput; the hidden wait counts on neither side.
+    expect(buildTurnSteps(FIXTURES[3]!).processCount).toBe(2);
   });
 
   it("treats child items as the subagent's own steps, never as finals", () => {

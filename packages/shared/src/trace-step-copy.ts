@@ -9,14 +9,18 @@
  * must equal it (parity test in P3); other locales use the same keys.
  *
  * Group summaries (`summarizeSteps`) are fragments in a fixed category order
- * (file changes → exploration → commands → web → other) with no numbers; the
- * count only selects the plural form. Join them with
+ * (file changes → exploration → commands → web → other → subagents) with no
+ * numbers; the count only selects the plural form. Join them with
  * `Intl.ListFormat(locale, { type: "unit" })`.
+ *
+ * Agent-control rows (PR 5 §4.1): a tool call that messages, interrupts,
+ * resumes, closes or lists subagents ({@link agentControl}) reads as what it
+ * did to which agent, and a Codex `wait` is hidden ({@link isHiddenStep}).
  *
  * Pure; the web bundles this module, so it has no relative imports.
  */
 
-import type { CommandAction, FileChange, TraceItem } from "@multiremi/contracts/trace";
+import type { CommandAction, FileChange, TraceItem, TraceSubagentItem, TraceToolItem } from "@multiremi/contracts/trace";
 
 export type StepState = "active" | "done" | "stopped" | "declined";
 
@@ -68,6 +72,27 @@ export const STEP_COPY_ZH = {
   tool_done: "已调用 {{tool}}",
   tool_stopped: "已停止调用 {{tool}}",
   tool_declined: "已拒绝调用 {{tool}}",
+  // Agent-control rows (PR 5 §4.1). `{{agent}}` is the subagent's name, or the
+  // target as the call names it; `_generic` stands in for an id-like target
+  // that names no subagent of the trace.
+  agent_message_active: "正在发送消息给 {{agent}}",
+  agent_message_done: "已发送消息给 {{agent}}",
+  agent_message_generic_active: "正在发送消息给子代理",
+  agent_message_generic_done: "已发送消息给子代理",
+  agent_interrupt_active: "正在中断 {{agent}}",
+  agent_interrupt_done: "已中断 {{agent}}",
+  agent_interrupt_generic_active: "正在中断子代理",
+  agent_interrupt_generic_done: "已中断子代理",
+  agent_resume_active: "正在恢复 {{agent}}",
+  agent_resume_done: "已恢复 {{agent}}",
+  agent_resume_generic_active: "正在恢复子代理",
+  agent_resume_generic_done: "已恢复子代理",
+  agent_close_active: "正在关闭 {{agent}}",
+  agent_close_done: "已关闭 {{agent}}",
+  agent_close_generic_active: "正在关闭子代理",
+  agent_close_generic_done: "已关闭子代理",
+  agent_list_active: "正在列出子代理",
+  agent_list_done: "已列出子代理",
   // Breaker and non-step items.
   subagent_active: "正在运行子代理：{{title}}",
   subagent_background: "后台运行中：{{title}}",
@@ -102,6 +127,11 @@ export const STEP_COPY_ZH = {
   summary_web_rest_other: "已搜索网页",
   summary_tool_first_other: "调用了工具",
   summary_tool_rest_other: "调用了工具",
+  // A group with a message row says so; any other agent-control group "managed" them.
+  summary_agent_first_other: "给子代理发了消息",
+  summary_agent_rest_other: "给子代理发了消息",
+  summary_agent_control_first_other: "管理了子代理",
+  summary_agent_control_rest_other: "管理了子代理",
   summary_empty: "已完成",
 } as const satisfies Record<string, string>;
 
@@ -149,12 +179,146 @@ function isFileChange(value: CommandAction | FileChange | undefined): value is F
   return !!value && "kind" in value && "path" in value && !("type" in value);
 }
 
+// ── Agent-control rows (PR 5 §4.1) ──────────────────────────────────────────
+
+export type AgentControlKind = "message" | "interrupt" | "resume" | "close" | "list" | "wait";
+
+export interface AgentControl {
+  kind: AgentControlKind;
+  /** The agent the call names, as it names it (a name, an agent id or a thread id); null for list and wait. */
+  target: string | null;
+  /** The text a message or resume call sends, when it sends one. */
+  message: string | null;
+}
+
+/** The subagent item a control row's target names, or null. Build one with {@link subagentResolver}. */
+export type AgentResolver = (target: string) => TraceSubagentItem | null;
+
+/** A target that is an id rather than a name: shown as "子代理" when no subagent matches it. */
+const ID_LIKE_TARGET = /^[0-9a-f-]{12,}$/i;
+
+/** A non-blank string, trimmed. */
+function nonBlank(value: unknown): string | null {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+/** A non-blank string as sent (message bodies are Markdown). */
+function body(value: unknown): string | null {
+  return typeof value === "string" && value.trim() ? value : null;
+}
+
+/** Codex collaboration calls name their agent as `receiverThreadIds[0]`. */
+function receiver(input: Record<string, unknown>): string | null {
+  return Array.isArray(input.receiverThreadIds) ? nonBlank(input.receiverThreadIds[0]) : null;
+}
+
+/**
+ * What a tool call does to a subagent, or null when it is an ordinary tool:
+ *
+ * - Claude: `SendMessage` (message `to`), `ListAgents`, and `TaskStop` only when
+ *   `resolveAgent` finds the task it stops among the trace's subagents (it also
+ *   stops background shells, which stay plain tool rows).
+ * - Codex: `sendInput` / `sendMessage` / `followupTask` (message),
+ *   `interruptAgent`, `resumeAgent`, `closeAgent`, `listAgents` and `wait`, all
+ *   naming `receiverThreadIds[0]`.
+ *
+ * Only `tool` items qualify; a subagent item is never a control row.
+ */
+export function agentControl(item: TraceItem, resolveAgent?: AgentResolver): AgentControl | null {
+  if (item.type !== "tool") return null;
+  const input: Record<string, unknown> = item.input ?? {};
+  switch (item.tool) {
+    case "SendMessage":
+      return { kind: "message", target: nonBlank(input.to), message: body(input.message) };
+    case "TaskStop": {
+      const target = nonBlank(input.task_id) ?? nonBlank(input.shell_id);
+      return target && resolveAgent?.(target) ? { kind: "interrupt", target, message: null } : null;
+    }
+    case "ListAgents":
+    case "listAgents":
+      return { kind: "list", target: null, message: null };
+    case "sendInput":
+    case "sendMessage":
+    case "followupTask":
+      return { kind: "message", target: receiver(input), message: body(input.prompt) };
+    case "interruptAgent":
+      return { kind: "interrupt", target: receiver(input), message: null };
+    case "resumeAgent":
+      return { kind: "resume", target: receiver(input), message: body(input.prompt) };
+    case "closeAgent":
+      return { kind: "close", target: receiver(input), message: null };
+    case "wait":
+      return { kind: "wait", target: null, message: null };
+    default:
+      return null;
+  }
+}
+
+/**
+ * A step no surface draws: Codex's `wait` on its children. The Chat fold, the
+ * subagent panel and Feishu skip it and it is not a process item; the transcript
+ * dialog still lists every item.
+ */
+export function isHiddenStep(item: TraceItem): boolean {
+  return agentControl(item)?.kind === "wait";
+}
+
+/**
+ * Resolve control-row targets against a trace's subagent items (any depth): by
+ * `thread_id`, then `name` (the latest agent with it), then item `id`.
+ */
+export function subagentResolver(items: readonly TraceItem[]): AgentResolver {
+  const byThread = new Map<string, TraceSubagentItem>();
+  const byName = new Map<string, TraceSubagentItem>();
+  const byId = new Map<string, TraceSubagentItem>();
+  for (const item of items) {
+    if (item.type !== "subagent") continue;
+    const thread = nonBlank(item.thread_id);
+    if (thread && !byThread.has(thread)) byThread.set(thread, item);
+    const name = nonBlank(item.name);
+    if (name) byName.set(name, item);
+    byId.set(item.id, item);
+  }
+  return (target) => {
+    const key = target.trim();
+    return byThread.get(key) ?? byName.get(key) ?? byId.get(key) ?? null;
+  };
+}
+
+/**
+ * The `{{agent}}` of a control row: the resolved subagent's name (else its
+ * title), else the target as written, or null for an id-like or missing target
+ * (the `_generic` copy).
+ */
+function agentLabel(target: string | null, resolveAgent?: AgentResolver): string | null {
+  if (!target) return null;
+  const agent = resolveAgent?.(target);
+  if (agent) return nonBlank(agent.name) ?? nonBlank(agent.title);
+  return ID_LIKE_TARGET.test(target) ? null : target;
+}
+
+function controlStep(item: TraceToolItem, control: AgentControl, state: StepState, resolveAgent?: AgentResolver): StepDescriptor {
+  // A refused control call did nothing to the agent: it reads as the refused tool.
+  if (state === "declined") return { key: "tool_declined", args: { tool: item.title ?? item.tool }, state };
+  // Only active and done copy; a stopped call keeps the done copy (Codex reuses done).
+  const phase = state === "active" ? "active" : "done";
+  if (control.kind === "list") return { key: `agent_list_${phase}`, args: {}, state };
+  const kind = control.kind as Exclude<AgentControlKind, "list" | "wait">;
+  const agent = agentLabel(control.target, resolveAgent);
+  return agent
+    ? { key: `agent_${kind}_${phase}`, args: { agent }, state }
+    : { key: `agent_${kind}_generic_${phase}`, args: {}, state };
+}
+
 /**
  * Copy for one step row. Pass the parsed action for a command row and the
  * change for a file-change row; without one, a command with a single action
- * uses it and a file change uses its first change.
+ * uses it and a file change uses its first change. `resolveAgent`
+ * ({@link subagentResolver}) names the agent of a control row; without it a
+ * target reads as written, an id-like one as "子代理", and `TaskStop` stays a
+ * plain tool row.
  */
-export function describeStep(item: TraceItem, part?: CommandAction | FileChange): StepDescriptor {
+export function describeStep(item: TraceItem, part?: CommandAction | FileChange, resolveAgent?: AgentResolver): StepDescriptor {
   const state = stepState(item);
   const done = (base: string, args: Record<string, string>): StepDescriptor => ({ key: keyFor(base, state), args, state });
   // Reads, searches and listings have only active and done copy (Codex reuses done).
@@ -188,8 +352,12 @@ export function describeStep(item: TraceItem, part?: CommandAction | FileChange)
       const detail = item.query ?? item.url;
       return detail ? twoState("web_search_detail", { detail }) : twoState("web_search", {});
     }
-    case "tool":
+    case "tool": {
+      const control = agentControl(item, resolveAgent);
+      // A hidden `wait` keeps the plain tool copy for the surfaces that list every item.
+      if (control && control.kind !== "wait") return controlStep(item, control, state, resolveAgent);
       return done("tool", { tool: item.title ?? item.tool });
+    }
     case "subagent": {
       const title = item.title ?? item.tool;
       // Launched in the background: running until the turn closes (spec §13).
@@ -222,26 +390,39 @@ export function describeStep(item: TraceItem, part?: CommandAction | FileChange)
 
 // ── Group summary ───────────────────────────────────────────────────────────
 
-export type StepCategory = "edit" | "explore" | "command" | "web" | "tool";
+export type StepCategory = "edit" | "explore" | "command" | "web" | "tool" | "agent";
 
 /** Fixed fragment order, independent of when the steps ran. */
-export const STEP_SUMMARY_ORDER: readonly StepCategory[] = ["edit", "explore", "command", "web", "tool"];
+export const STEP_SUMMARY_ORDER: readonly StepCategory[] = ["edit", "explore", "command", "web", "tool", "agent"];
 
 export interface StepRow {
   item: TraceItem;
   part?: CommandAction | FileChange;
 }
 
+type SummaryPosition = "first" | "rest";
+
 export interface StepSummaryFragment {
   category: StepCategory;
-  /** Look up `${key}_one` / `${key}_other` with `count` (i18next `t(key, { count })`). */
-  key: `summary_${StepCategory}_${"first" | "rest"}`;
+  /**
+   * Look up `${key}_one` / `${key}_other` with `count` (i18next `t(key, { count })`).
+   * The agent fragment is `summary_agent_*` when a row of the group sent a
+   * message, else `summary_agent_control_*`.
+   */
+  key: `summary_${StepCategory}_${SummaryPosition}` | `summary_agent_control_${SummaryPosition}`;
   /** Only selects the plural form; never shown. Files count once per path. */
   count: number;
 }
 
-/** The summary category of a step row, or null for rows that never group. */
-export function stepCategory(item: TraceItem, part?: CommandAction | FileChange): StepCategory | null {
+/**
+ * The summary category of a step row, or null for rows that never group
+ * (including hidden steps). Pass the same `resolveAgent` as to `describeStep`.
+ */
+export function stepCategory(item: TraceItem, part?: CommandAction | FileChange, resolveAgent?: AgentResolver): StepCategory | null {
+  if (item.type === "tool") {
+    const control = agentControl(item, resolveAgent);
+    if (control) return control.kind === "wait" ? null : "agent";
+  }
   switch (item.type) {
     case "command": {
       const action = part && !isFileChange(part) ? part : item.actions.length === 1 ? item.actions[0] : undefined;
@@ -255,12 +436,14 @@ export function stepCategory(item: TraceItem, part?: CommandAction | FileChange)
 }
 
 /** Fragments for a group of step rows; empty when nothing groups (show `summary_empty`). */
-export function summarizeSteps(rows: readonly StepRow[]): StepSummaryFragment[] {
+export function summarizeSteps(rows: readonly StepRow[], resolveAgent?: AgentResolver): StepSummaryFragment[] {
   const counts = new Map<StepCategory, number>();
   const editedPaths = new Set<string>();
+  let messaged = false;
   for (const { item, part } of rows) {
-    const category = stepCategory(item, part);
+    const category = stepCategory(item, part, resolveAgent);
     if (!category) continue;
+    if (category === "agent" && agentControl(item, resolveAgent)?.kind === "message") messaged = true;
     if (category === "edit") {
       const paths = isFileChange(part) ? [part.path] : item.type === "file_change" ? item.changes.map((change) => change.path) : [];
       for (const path of paths.length ? paths : [item.id]) editedPaths.add(path);
@@ -273,7 +456,9 @@ export function summarizeSteps(rows: readonly StepRow[]): StepSummaryFragment[] 
   for (const category of STEP_SUMMARY_ORDER) {
     const count = counts.get(category);
     if (!count) continue;
-    fragments.push({ category, key: `summary_${category}_${fragments.length === 0 ? "first" : "rest"}`, count });
+    const position: SummaryPosition = fragments.length === 0 ? "first" : "rest";
+    const key = category === "agent" && !messaged ? `summary_agent_control_${position}` as const : `summary_${category}_${position}` as const;
+    fragments.push({ category, key, count });
   }
   return fragments;
 }

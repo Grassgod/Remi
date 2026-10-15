@@ -237,13 +237,26 @@ export interface TraceSubagentItem extends TraceItemBase {
    * Runs in the background, as the bridge's hook reports it: true for an async
    * launch (`toolResponse.isAsync` / `async_launched`), false for a foreground
    * result, absent before the hook says. Never taken from the input's
-   * `run_in_background` request. A background subagent stays `in_progress` after
-   * its launch is acknowledged and ends when the turn closes.
+   * `run_in_background` request.
+   *
+   * For a native child session (PR 5), also inferred true when the session that
+   * spawned it keeps working (a message, thought or tool call) while it runs
+   * with `background` still unknown: a foreground call blocks its caller.
+   *
+   * A background subagent stays `in_progress` after its launch is acknowledged.
+   * It ends at its own state update when the bridge sends one (native child
+   * sessions), else when the turn closes. Codex leaves it null.
    */
   background?: boolean | null;
   /** The model the subagent was asked to use, when the call names one. */
   model?: string | null;
-  /** The child thread: Codex `agentThreadId` / `receiverThreadIds[0]`. */
+  /**
+   * The native agent or thread id, for both bridges: a native child session's
+   * id without its `:generation:N` suffix (Claude agent id, Codex thread id), or
+   * Codex `agentThreadId` / `receiverThreadIds[0]` without native sessions.
+   * Agent-control rows (`SendMessage`, `sendInput`, …) resolve their target
+   * against it first.
+   */
   thread_id?: string | null;
 }
 
@@ -328,6 +341,22 @@ const TRACE_ITEM_TYPE_SET: Record<TraceItemType, true> = {
   notice: true,
 };
 export const TRACE_ITEM_TYPES = Object.keys(TRACE_ITEM_TYPE_SET) as readonly TraceItemType[];
+
+export const TRACE_LATE_SUBAGENT_STATUSES = ["completed", "failed", "stopped"] as const;
+
+/**
+ * A top-level subagent that ended after the turn's final reply started (PR 5):
+ * a completion and card fact (`late_subagents`), so a finished turn can show
+ * its "finished in the background" rows without reading the trace.
+ */
+export interface TraceLateSubagent {
+  /** The subagent item's id in the attempt's trace. */
+  item_id: string;
+  /** Its `name`, else its `title`; empty when it has neither. */
+  name: string;
+  status: (typeof TRACE_LATE_SUBAGENT_STATUSES)[number];
+  duration_ms: number | null;
+}
 
 /** The item types that count as a tool call. The single tool-count rule (any depth). */
 export const TRACE_TOOL_ITEM_TYPES = ["command", "file_change", "web_search", "tool", "subagent"] as const;
@@ -646,6 +675,14 @@ export function isTraceItem(value: unknown): value is TraceItem {
     default:
       return false;
   }
+}
+
+/** A well-formed `late_subagents` entry; extra keys are accepted, like every guard here. */
+export function isTraceLateSubagent(value: unknown): value is TraceLateSubagent {
+  return isRow(value) && isNonEmptyString(value.item_id) && typeof value.name === "string"
+    && isOneOf(value.status, TRACE_LATE_SUBAGENT_STATUSES)
+    && (value.duration_ms === null || (typeof value.duration_ms === "number" && Number.isFinite(value.duration_ms)
+      && value.duration_ms >= 0));
 }
 
 /** A producer-side body: a known `type` with a well-formed payload. */
