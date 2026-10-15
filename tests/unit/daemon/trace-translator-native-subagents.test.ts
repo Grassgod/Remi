@@ -495,14 +495,12 @@ describe("native subagents: Remi's Claude bridge patch facts (`_meta.remi`)", ()
     _meta: { remiTokenUsage: { id: "msg_child", providerSessionId: "native", providerRequestId: "msg_child", model, parentToolUseId: parent,
       inputTokens: 1, outputTokens: 1, cachedInputTokens: 0, cacheWriteTokens: 0, totalTokens: 2 } } });
 
-  it("the SDK's verdict is authoritative over inference and the hook; the type fills agent_type", () => {
+  it("the SDK's `true` is never downgraded; the type fills agent_type", () => {
     const h = harness("claude").feed([
-      patchedSpawn(A, false, "Explore"),
-      chunk("root keeps talking"),
-      hook("toolu_01", { status: "async_launched", isAsync: true }),
       patchedSpawn(B, true),
+      // A 0.89-style foreground hook cannot downgrade it.
+      hook("toolu_B", { status: "completed" }),
     ]);
-    expect(h.item(`sa:${A}`, "subagent")).toMatchObject({ background: false, agent_type: "Explore" });
     expect(h.item(`sa:${B}`, "subagent")).toMatchObject({ background: true, agent_type: "general-purpose" });
     // An unknown verdict leaves inference in charge.
     const unknown = harness("claude").feed([patchedSpawn(A, null, null), chunk("root keeps talking")]);
@@ -518,6 +516,26 @@ describe("native subagents: Remi's Claude bridge patch facts (`_meta.remi`)", ()
     expect(race(patchedSpawn(A, true)).translator.owesAutonomousRound).toBe(true);
     // Unpatched 0.90: nothing tells it from a foreground child (live 0.89 race recording).
     expect(race(spawned(A)).translator.owesAutonomousRound).toBe(false);
+  });
+
+  it("a patch `false` is upgraded when the root keeps working while the child runs (moved to the background later)", () => {
+    // The bridge moved the foreground call to the background (task_updated, e.g. to take a steer): no announcement says so.
+    const h = harness("claude").feed([patchedSpawn(A, false, "Explore"), ...childBash(A, "toolu_c")]);
+    expect(h.item(`sa:${A}`, "subagent")).toMatchObject({ background: false, agent_type: "Explore" });
+    h.feed([chunk("root keeps talking")]);
+    expect(h.item(`sa:${A}`, "subagent").background).toBe(true);
+    h.round([state(A, "completed"), marker("human")]);
+    expect(h.translator.owesAutonomousRound).toBe(true);
+    // Reaching the root's result while it runs upgrades it too.
+    const byResult = harness("claude").round([patchedSpawn(A, false), marker("human")]);
+    expect(byResult.item(`sa:${A}`, "subagent").background).toBe(true);
+  });
+
+  it("a foreground child (`false`) with no root output while it runs stays false, and never waits", () => {
+    const h = harness("claude").round([patchedSpawn(A, false), ...childBash(A, "toolu_c"), stamped(A, chunk("child reply")),
+      state(A, "completed"), chunk("done"), marker("human")]);
+    expect(h.item(`sa:${A}`, "subagent").background).toBe(false);
+    expect(h.translator.owesAutonomousRound).toBe(false);
   });
 
   it("a foreground child (`false`) never waits", () => {

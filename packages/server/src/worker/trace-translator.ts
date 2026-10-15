@@ -388,7 +388,13 @@ interface NativeAgent {
   item: TraceSubagentItem;
   /** A hook marker (or the alias of its call) linked the agent to its Agent call. */
   linked: boolean;
-  /** `background` came from the bridge patch's `_meta.remi` (the SDK's own registration): no inference overrides it. */
+  /**
+   * The bridge patch's `_meta.remi` said `backgrounded: true` (the SDK's own
+   * registration): nothing downgrades it. A patch `false` stays open to the
+   * upgrade by inference: a foreground child blocks its caller, so a caller
+   * that keeps working while it runs had it moved to the background
+   * (`task_updated`, e.g. to take a steer), which no announcement reports.
+   */
   authoritative: boolean;
   spawnOrder: number;
   /** Frame order of the state update that ended it last; null while it runs. */
@@ -721,7 +727,8 @@ export function createTraceTranslator(
     }
     const caller = agentOfSession(frameSession(frame))?.id ?? null;
     for (const agent of natives.values()) {
-      if (agent.parentId === caller && agent.item.status === "in_progress" && agent.item.background == null && !agent.authoritative) {
+      // Only ever upgraded: unknown (or the patch's `false`) to true.
+      if (agent.parentId === caller && agent.item.status === "in_progress" && agent.item.background !== true && !agent.authoritative) {
         rewriteAgent(agent, { background: true });
       }
     }
@@ -763,7 +770,7 @@ export function createTraceTranslator(
       output: null, duration_ms: null, thread_id: baseId,
       ...(facts.agentType ? { agent_type: facts.agentType } : {}), ...(facts.background !== null ? { background: facts.background } : {}),
     };
-    const agent: NativeAgent = { id, parentId, startedMs: nowMs(), item, linked: false, authoritative: facts.background !== null,
+    const agent: NativeAgent = { id, parentId, startedMs: nowMs(), item, linked: false, authoritative: facts.background === true,
       spawnOrder: ++spawnCounter, endedOrder: null, endedRound: -1 };
     natives.set(baseId, agent);
     nativeById.set(id, agent);
@@ -779,7 +786,7 @@ export function createTraceTranslator(
   const reopenAgent = (agent: NativeAgent, sessionId: string, frame: VendorFrame): void => {
     sessionAgent.set(sessionId, agent);
     const facts = nativeAgentFacts(frame);
-    if (facts.background !== null) agent.authoritative = true;
+    if (facts.background === true) agent.authoritative = true;
     if (agent.item.status !== "in_progress") {
       agent.endedOrder = null;
       // Claude Code resumes a subagent in the background (CA/acp-agent.js "always resumes … in the background").
