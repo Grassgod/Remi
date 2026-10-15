@@ -212,14 +212,23 @@ describe("trace translator: final reply (settle)", () => {
     expect(finalItem(h.state.items)?.id).toBe("msg:m3");
   });
 
-  it("rule 2 leaves no final when the turn ended on a tool", () => {
+  it("D-final: a turn that ended on a tool still takes its last message as the final", () => {
     const h = harness("claude").start().feed([
       chunk("Running it.", { messageId: "m1" }),
       { sessionUpdate: "tool_call", toolCallId: "t1", name: "Bash", status: "pending", title: "ls", kind: "execute",
         _meta: { claudeCode: { toolName: "Bash" } } },
     ]);
     h.translator.promptEnded();
-    expect(h.translator.settle()).toEqual({ itemId: null, text: null });
+    expect(h.translator.settle()).toEqual({ itemId: "msg:m1", text: "Running it." });
+    expect(h.item("msg:m1", "agent_message").phase).toBe("final");
+
+    // A steer round with a new reply moves the fallback pick like a rule-2 pick.
+    h.translator.steer([{ id: "st_1", taskId: "tsk_attempt", kind: "steer", content: "go on", authorType: "user",
+      authorId: "mem_1", createdAt: new Date(T0).toISOString(), consumedAt: null }], true);
+    h.feed([chunk("Done.", { messageId: "m2" })]);
+    h.translator.promptEnded();
+    expect(h.translator.settle()).toEqual({ itemId: "msg:m2", text: "Done." });
+    expect(h.item("msg:m1", "agent_message").phase).toBe("unknown");
   });
 
   it("rule 1: the last bridge-labelled final wins and earlier finals become commentary", () => {

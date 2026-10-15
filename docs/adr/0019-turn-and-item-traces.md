@@ -1,6 +1,6 @@
 # ADR 0019：执行 trace 改为「轮 + 条目」
 
-- 状态：已接受（PR 2；编排决策 2026-10-15，风险项 R1–R16 与 P1 后续问题 Q1–Q6 已裁定）。
+- 状态：已接受（PR 2；编排决策 2026-10-15，风险项 R1–R16、P1 后续问题 Q1–Q6 与 P2a 复审决定 D-final、D-count 已裁定）。
 - 取代 [ADR 0006](0006-conversation-log-and-daemon-owned-traces.md) 中 trace 格式的部分：决策 5 的 `multiremi.trace.v1` 片段事件与「字段和 `TaskMessageInput` 一一对应」，以及决策 4 末尾「轮卡上的 trace 数字由 `trace-derive` 函数派生」。trace 的归属（daemon 持有文件，服务端只存指针）不变；决策 5–9 的其余内容已由 [ADR 0018](0018-local-records-and-recyclable-workspaces.md) 取代。
 - 继承 [ADR 0013](0013-deliverable-is-comment-wakeup-is-doorbell.md)：任务回复仍是最后一条顶层 assistant 消息，现在由本 ADR 决策 4 的规则选出。
 - 不改 [daemon 协议 v2](../daemon-protocol-v2.md) 的帧、序号与续传机制，也不改 `DAEMON_PROTOCOL_VERSION`。
@@ -30,7 +30,9 @@ PR 2 之前，daemon 把 ACP 通知映射成 13 种片段事件（`text`、`thin
 - `item.delta` 只追加到 `in_progress` 的条目；
 - 工具数只有一条规则：任意深度的 `command`、`file_change`、`web_search`、`tool`、`subagent`。
 
-单个事件序列化后不超过 1 MiB（含事件外壳）；超出时按条目类型丢掉最大的字段并置 `*_truncated`，仍放不下的事件不占 seq。字段上限见 [`trace-sanitize.ts`](../../packages/shared/src/trace-sanitize.ts)。
+单个事件序列化后不超过 1 MiB（含事件外壳）；超出时按条目类型丢掉最大的字段并置 `*_truncated`，仍放不下的事件不占 seq，存储记一条警告。命令的 `command`、`cwd` 与 `actions[].command` 也有上限，截断时置 `command_truncated`，所以超长 heredoc 不会让整个命令条目被丢弃。字段上限见 [`trace-sanitize.ts`](../../packages/shared/src/trace-sanitize.ts)。
+
+校验器向前兼容：`isTraceTurn` 遇到未知条目类型的直方图桶时丢掉这些桶，不拒绝整轮，所以旧读者能读新 daemon 的统计。
 
 ### 2. 文件格式 `multiremi.trace.v2`
 
@@ -52,7 +54,10 @@ PR 2 之前，daemon 把 ACP 通知映射成 13 种片段事件（`text`、`thin
 daemon 在每次报告完成前调用 `settle()`：
 
 1. 有桥接标为 `phase: "final"` 的顶层 `agent_message` 时，取最后一条，更早的改标 `commentary`；
-2. 否则（Claude 不标阶段）取最后一条之后没有顶层工具条目的顶层 `agent_message`，标为 `final`；之前推断出的另一条改回 `unknown`。
+2. 否则（Claude 不标阶段）取最后一条非空、阶段为 `unknown`、之后没有顶层工具条目或 `question` 条目的顶层 `agent_message`，标为 `final`。Claude 的 AskUserQuestion 没有工具条目，所以 `question` 与工具一样阻断；桥接标为 `commentary` 的消息也阻断，且永远不是最终回复；
+3. 规则 2 找不到时（轮在最后一段文字之后以工具或问题结束），仍取最后一条非空、阶段为 `unknown` 的顶层 `agent_message` 标为 `final`（D-final）。这与旧的 `LastAssistantMessage` 一致，避免这类轮退化成 `Task completed.`。
+
+之前由规则 2 或 3 推断出的另一条改回 `unknown`。
 
 回复正文是最终条目的文本；一条 `agent_message` 都没有时用 provider 的最后响应；仍为空时用 `Task completed.`。`final_reply_md` 与回复正文相同。子 agent 的文本永远不是最终回复。
 
@@ -68,7 +73,7 @@ daemon 在 ACP `clientCapabilities` 声明 `session.compaction` 与 `session.not
 
 `turn.complete` / `task.fail` 的完成字段增加 `context_usage`、`worked_ms`（`final_started_at - started_at`）、`process_item_count`（R3）。服务端逐项校验，畸形或缺失的值记日志后写 null，从不阻塞终态。迁移 `20261015_turn_attempt_trace_summary` 给 `multiremi_turn_attempts` 加 `context_usage`（JSON 文本）、`worked_ms`、`process_item_count` 三列，两条迁移链都调用，统一 schema 也带这三列。轮卡元数据和尝试列表投影这三项。
 
-Chat 页面据此显示已结束轮：`process_item_count > 0` 才显示折叠，标题用 `worked_ms`，空闲时上下文环读最近一张终态卡的 `context_usage`；展开折叠才读 trace。`process_item_count` 恰好统计 Chat 折叠渲染的条目：除最终回复、`user_message`、`permission`、`question` 外的顶层条目（Q1）。PR 2 之前的轮这三项为 null，不显示折叠和标签。
+Chat 页面据此显示已结束轮：`process_item_count > 0` 才显示折叠，标题用 `worked_ms`，空闲时上下文环读最近一张终态卡的 `context_usage`；展开折叠才读 trace。`process_item_count` 恰好统计在 Chat 折叠中产生一行的条目：除最终回复、`user_message`、`permission`、`question`、`reasoning` 和没有可见文字的 `agent_message` 外的顶层条目（Q1、D-count）。前端以 `buildTurnSteps(items).processCount === processItemCount(items)` 守住两边一致。PR 2 之前的轮这三项为 null，不显示折叠和标签。
 
 ### 8. 不兼容旧格式
 

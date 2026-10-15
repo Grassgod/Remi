@@ -984,7 +984,7 @@ describe("Bun Multiremi daemon smoke", () => {
       expect(state.items[2]).toMatchObject({ tool: "Read", input: { path: "README.md" } });
       expect(state.items[3]).toMatchObject({ text: "Smoke completed", phase: "final" });
       expect(state.turn).toMatchObject({ id: task.id, status: "completed", agent_name: "Claude Smoke", provider: "claude",
-        model: "claude-smoke", final_item_id: "msg:2", context_usage: null, stats: { tool_call_count: 1, process_item_count: 2 } });
+        model: "claude-smoke", final_item_id: "msg:2", context_usage: null, stats: { tool_call_count: 1, process_item_count: 1 } });
       const transcript = await daemonTraceService(smokeLayer).reader.read({ runtimeId: expectedRuntimeId, taskId: task.id, view: "events" });
       expect(transcript.ok).toBe(true);
       if (!transcript.ok) throw new Error(transcript.code);

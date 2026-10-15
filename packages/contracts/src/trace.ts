@@ -104,7 +104,11 @@ export interface TraceTurnStats {
   item_count: number;
   /** command|file_change|web_search|tool|subagent items, any depth. The single tool-count rule. */
   tool_call_count: number;
-  /** Top-level items other than user_message and the final agent_message. */
+  /**
+   * Top-level items that produce a Chat fold row: not user_message, permission,
+   * question, reasoning, the final agent_message, or an agent_message with no
+   * visible text (decision D-count).
+   */
   process_item_count: number;
   type_histogram: TraceHistogramBucket[];
 }
@@ -484,16 +488,31 @@ export function isTraceContextUsage(value: unknown): value is TraceContextUsage 
     && typeof value.size === "number" && Number.isFinite(value.size) && value.size >= 0;
 }
 
-function isHistogramBucket(value: unknown): boolean {
-  return isRow(value) && isTraceItemType(value.type) && isNullableString(value.tool) && isCount(value.count);
+/** A well-formed bucket; its `type` may be an item type this build does not know. */
+function isHistogramBucketShape(value: unknown): value is Row {
+  return isRow(value) && isNonEmptyString(value.type) && isNullableString(value.tool) && isCount(value.count);
 }
 
+/**
+ * Stats with well-formed counts and buckets. Forward compatible (spec §12): a
+ * bucket whose item type a newer producer added is dropped from
+ * `type_histogram` in place, so the turn still validates.
+ */
 export function isTraceTurnStats(value: unknown): value is TraceTurnStats {
-  return isRow(value) && isCount(value.item_count) && isCount(value.tool_call_count)
-    && isCount(value.process_item_count)
-    && Array.isArray(value.type_histogram) && value.type_histogram.every(isHistogramBucket);
+  if (!isRow(value) || !isCount(value.item_count) || !isCount(value.tool_call_count)
+    || !isCount(value.process_item_count)
+    || !Array.isArray(value.type_histogram) || !value.type_histogram.every(isHistogramBucketShape)) return false;
+  const histogram = value.type_histogram as Row[];
+  if (!histogram.every((bucket) => isTraceItemType(bucket.type))) {
+    value.type_histogram = histogram.filter((bucket) => isTraceItemType(bucket.type));
+  }
+  return true;
 }
 
+/**
+ * A well-formed turn. Histogram buckets of unknown item types are dropped in
+ * place rather than rejecting the turn ({@link isTraceTurnStats}).
+ */
 export function isTraceTurn(value: unknown): value is TraceTurn {
   if (!isRow(value)) return false;
   const error = value.error;

@@ -295,9 +295,9 @@ describe("stats and helpers", () => {
     const stats = turnTraceStats(items);
     expect(stats.item_count).toBe(9);
     expect(stats.tool_call_count).toBe(4); // call_1, task_1, call_nested, call_2
-    // msg:a, call_1, task_1, rsn:1, call_2 — not the input, not the final, not nested items.
-    expect(stats.process_item_count).toBe(5);
-    expect(processItemCount(items)).toBe(5);
+    // msg:a, call_1, task_1, call_2: not the input, the reasoning, the final, or nested items (D-count).
+    expect(stats.process_item_count).toBe(4);
+    expect(processItemCount(items)).toBe(4);
     expect(stats.type_histogram).toEqual([
       { type: "user_message", tool: null, count: 1 },
       { type: "agent_message", tool: null, count: 3 },
@@ -321,10 +321,25 @@ describe("stats and helpers", () => {
     };
     const stats = turnTraceStats([...items, permission, question]);
     expect(stats.item_count).toBe(11);
-    expect(stats.process_item_count).toBe(5);
+    expect(stats.process_item_count).toBe(4);
     expect(isProcessItem(permission)).toBe(false);
     expect(isProcessItem(question)).toBe(false);
     expect(isProcessItem(items[1]!)).toBe(true);
+  });
+
+  it("counts only items that draw a fold row: no reasoning, no empty messages (decision D-count)", () => {
+    const reasoning = items.find((item) => item.type === "reasoning")!;
+    const empty = message("msg:empty", "");
+    const blank = message("msg:blank", " \n\t ");
+    const commentary = message("msg:c", "Checking.", { phase: "commentary" });
+    const emptyFinal = message("msg:f", "", { phase: "final" });
+    expect(isProcessItem(reasoning)).toBe(false);
+    expect(isProcessItem(empty)).toBe(false);
+    expect(isProcessItem(blank)).toBe(false);
+    expect(isProcessItem(emptyFinal)).toBe(false);
+    expect(isProcessItem(commentary)).toBe(true);
+    expect(isProcessItem(message("msg:sub2", "nested", { parent_id: "task_1" }))).toBe(false);
+    expect(processItemCount([input, reasoning, empty, blank, commentary, command("call_9"), emptyFinal])).toBe(2);
   });
 
   it("finds top-level items and the final item", () => {
@@ -341,7 +356,7 @@ describe("stats and helpers", () => {
     expect(completed).toMatchObject({
       status: "completed", error: null, completed_at: at(10), duration_ms: 10_000,
       final_item_id: "msg:b", final_started_at: at(6),
-      stats: { tool_call_count: 4, process_item_count: 5 },
+      stats: { tool_call_count: 4, process_item_count: 4 },
     });
     expect(isTraceTurn(completed)).toBe(true);
     expect(turnWorkedMs(completed)).toBe(6000);
@@ -353,7 +368,7 @@ describe("stats and helpers", () => {
       model: { provider: "claude", model: "claude-opus-5-5" },
       context_usage: { used: 5, size: 10 },
       worked_ms: 6000,
-      process_item_count: 5,
+      process_item_count: 4,
     });
     expect(fields.trace.type_histogram).toEqual(turnTraceStats(items).type_histogram);
   });
@@ -422,15 +437,52 @@ describe("final reply rule", () => {
     expect(selection.reemit).toEqual([{ ...message("msg:2", "Here is the answer."), phase: "final" }]);
   });
 
-  it("rule 2 finds nothing when a tool started after the last message", () => {
-    const items: TraceItem[] = [message("msg:1", "Running it now."), command("call_1")];
+  it("D-final: when a tool follows the last message, the last unknown message is final anyway", () => {
+    const items: TraceItem[] = [
+      message("msg:1", "Let me check."),
+      command("call_1"),
+      message("msg:2", "Running it now."),
+      message("msg:3", " "),
+      command("call_2"),
+    ];
+    const selection = selectFinalReply(items);
+    expect(selection).toMatchObject({ itemId: "msg:2", text: "Running it now.", rule: "fallback" });
+    expect(selection.reemit).toEqual([{ ...message("msg:2", "Running it now."), phase: "final" }]);
+    // The old LastAssistantMessage reply, not "Task completed.".
+    expect(finalReplyBody(selection, items, "provider text")).toBe("Running it now.");
+  });
+
+  it("finds nothing without a non-empty unknown message", () => {
+    const items: TraceItem[] = [message("msg:1", ""), command("call_1"), message("msg:2", "Next I will…", { phase: "commentary" })];
     expect(selectFinalReply(items)).toEqual({ itemId: null, text: null, rule: null, reemit: [] });
     expect(finalReplyBody(selectFinalReply(items), items, "provider text")).toBe("Task completed.");
   });
 
   it("never promotes a bridge-labelled commentary message", () => {
     const items: TraceItem[] = [message("msg:1", "answer?"), message("msg:2", "Next I will…", { phase: "commentary" })];
-    expect(selectFinalReply(items).itemId).toBeNull();
+    // The commentary blocks rule 2; the fallback still takes the unknown message, never msg:2.
+    expect(selectFinalReply(items)).toMatchObject({ itemId: "msg:1", rule: "fallback" });
+    expect(selectFinalReply([message("msg:2", "Next I will…", { phase: "commentary" })]).itemId).toBeNull();
+  });
+
+  it("rule 2 treats a top-level question as a blocker, like a tool (spec §11)", () => {
+    const question: TraceItem = {
+      id: "q:d1", parent_id: null, status: "completed", started_at: at(3), completed_at: at(4), type: "question",
+      tool_item_id: null, message: "Which?", message_id: "d1", questions: [], answers: { a: "x" }, responded_by: null,
+      reply_message_id: null,
+    };
+    const plan: TraceItem = { id: "plan", parent_id: null, status: "in_progress", started_at: at(3), completed_at: null,
+      type: "plan", entries: [] };
+    // Claude's AskUserQuestion has no tool item: the question alone blocks rule 2.
+    expect(selectFinalReply([message("msg:1", "Which one?"), question])).toMatchObject({ itemId: "msg:1", rule: "fallback" });
+    // Items that are not blockers leave rule 2 in charge.
+    expect(selectFinalReply([message("msg:1", "Done."), plan])).toMatchObject({ itemId: "msg:1", rule: "inferred" });
+    // A reply after the answered question is rule 2's pick.
+    expect(selectFinalReply([message("msg:1", "Which one?"), question, message("msg:2", "Done with x.")]))
+      .toMatchObject({ itemId: "msg:2", rule: "inferred" });
+    // A nested question does not block.
+    expect(selectFinalReply([message("msg:1", "Done."), { ...question, parent_id: "task_1" }]))
+      .toMatchObject({ itemId: "msg:1", rule: "inferred" });
   });
 
   it("moves the inferred final across steer rounds and demotes the previous pick", () => {
@@ -450,11 +502,15 @@ describe("final reply rule", () => {
     // Re-settling with nothing new keeps the previous pick, with nothing to re-emit.
     expect(selectFinalReply(promoted, "msg:1")).toEqual({ itemId: "msg:1", text: "First reply.", rule: "inferred", reemit: [] });
 
-    // A round that ends on a tool leaves no final and demotes the previous pick.
-    const round3 = [...promoted, command("call_2")];
-    const third = selectFinalReply(round3, "msg:1");
-    expect(third.itemId).toBeNull();
-    expect(third.reemit.map((item) => [item.id, item.phase])).toEqual([["msg:1", "unknown"]]);
+    // A round that ends on a tool with no new text keeps the previous pick (D-final).
+    const round3 = [...promoted, steer, command("call_2")];
+    expect(selectFinalReply(round3, "msg:1")).toEqual({ itemId: "msg:1", text: "First reply.", rule: "fallback", reemit: [] });
+
+    // With new text before the tool, the fallback moves to it and demotes the previous pick.
+    const round4 = [...promoted, steer, message("msg:3", "Working on X."), command("call_3")];
+    const fourth = selectFinalReply(round4, "msg:1");
+    expect(fourth).toMatchObject({ itemId: "msg:3", rule: "fallback" });
+    expect(fourth.reemit.map((item) => [item.id, item.phase])).toEqual([["msg:3", "final"], ["msg:1", "unknown"]]);
   });
 
   it("a bridge final after an inferred pick takes over and demotes it", () => {
@@ -491,5 +547,32 @@ describe("contract validators on reducer output", () => {
     expect(isTraceEvent({ seq: 1, ts: at(1), type: "turn.updated", patch: { status: "completed" } })).toBe(false);
     expect(isTraceEvent({ seq: 1, ts: at(1), type: "item.started", item: { ...message("m", "x"), phase: "final_answer" } })).toBe(false);
     expect(isTraceEvent({ seq: 1, ts: at(1), type: "item.future" })).toBe(false);
+  });
+
+  it("drops histogram buckets of unknown item types instead of rejecting the turn (spec §12)", () => {
+    const histogram = [
+      { type: "command", tool: "Bash", count: 2 },
+      { type: "hologram", tool: null, count: 1 },
+      { type: "agent_message", tool: null, count: 3 },
+    ];
+    const newer = turn({ stats: { item_count: 6, tool_call_count: 2, process_item_count: 3, type_histogram: histogram } as never });
+    expect(isTraceTurn(newer)).toBe(true);
+    expect(newer.stats.type_histogram).toEqual([
+      { type: "command", tool: "Bash", count: 2 },
+      { type: "agent_message", tool: null, count: 3 },
+    ]);
+    // The rest of the turn, and a snapshot or event that carries it, still validates.
+    expect(isTraceEvent({ seq: 1, ts: at(1), type: "turn.started",
+      turn: turn({ stats: { item_count: 1, tool_call_count: 0, process_item_count: 0,
+        type_histogram: [{ type: "hologram", tool: null, count: 1 }] } as never }) })).toBe(true);
+    // A known histogram is left as it is.
+    const known = turn();
+    const before = known.stats.type_histogram;
+    expect(isTraceTurn(known)).toBe(true);
+    expect(known.stats.type_histogram).toBe(before);
+    // Malformed buckets still reject the turn.
+    for (const bad of [{ type: "", tool: null, count: 1 }, { type: "command", tool: 3, count: 1 }, { type: "hologram", tool: null, count: -1 }]) {
+      expect(isTraceTurn(turn({ stats: { item_count: 0, tool_call_count: 0, process_item_count: 0, type_histogram: [bad] } as never }))).toBe(false);
+    }
   });
 });

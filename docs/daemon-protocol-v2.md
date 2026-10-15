@@ -34,8 +34,9 @@ trace 事件的唯一定义在 [`packages/contracts/src/trace.ts`](../packages/c
 ### MUL-498：评论交付、门铃唤醒与按需输入
 
 daemon 的任务回复只取一条顶层 `agent_message` 条目，由 `settle()` 按
-[ADR 0019](adr/0019-turn-and-item-traces.md) 决策 4 选出：桥接标为 final 的最后一条，
-否则其后没有顶层工具条目的最后一条。子 agent 的条目不参与结果，完整执行过程仍保留在 trace。
+[ADR 0019](adr/0019-turn-and-item-traces.md) 决策 4 选出：桥接标为 final 的最后一条；
+否则其后没有顶层工具条目或 `question` 条目的最后一条 `unknown` 消息；仍找不到时（轮以工具或问题结束）
+取最后一条 `unknown` 消息（D-final）。子 agent 的条目不参与结果，完整执行过程仍保留在 trace。
 
 委派终态信封保留三种英文首行和独立 `Status:` 行，后面只写结论评论 id、
 `remi comment list <issue> --thread <comment>` 与最多 500 字的摘要。自动回复沿用
@@ -810,14 +811,15 @@ final_reply_md: string | null;                      // 最终条目的文本
 model: { provider: string; model: string } | null;  // turn 的 provider 与最后上报的 model
 context_usage: { used: number; size: number } | null;
 worked_ms: number | null;                           // final_started_at − started_at
-process_item_count: number | null;                  // Chat 折叠渲染的顶层条目数
+process_item_count: number | null;                  // 在 Chat 折叠中产生一行的顶层条目数
 ```
 
 - `type_histogram` 按 `(条目类型, tool)` 分桶，`tool` 只在带工具名的条目上非空。
 - 报告先于 `close()` 发送（steer 待处理时 `turn.complete` 可能被拒，轮还要继续写），
   所以完成字段描述的是即将写下的 close：其中的未结束条目与 `turn.completed` 已计入 `head` / `event_count`。
-- `process_item_count` 统计除最终回复、`user_message`、`permission`、`question` 外的顶层条目，
-  正是 Chat 折叠渲染的条目（ADR 0019 Q1）。
+- `process_item_count` 统计除最终回复、`user_message`、`permission`、`question`、`reasoning`
+  和没有可见文字的 `agent_message` 外的顶层条目，正是在 Chat 折叠中产生一行的条目（ADR 0019 Q1、D-count）。
+- 读者校验 `turn.stats` 时丢掉未知条目类型的直方图桶，不拒绝整轮（向前兼容）。
 - 统一完成入口以 `reply.body_md` 为最终正文（与 `final_reply_md` 相同），trace 摘要不覆盖消息；卡片仅保留回复引用。
 - 服务端校验：`trace`、`final_reply_md`、`model` 缺失或畸形时整张卡留空；`context_usage`、`worked_ms`、
   `process_item_count` 各自独立校验，畸形或缺失只把该项写成 null。两种情况都打日志、终态照常生效，

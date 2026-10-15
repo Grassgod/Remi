@@ -986,7 +986,7 @@ export function createTraceTranslator(
         endAllText();
         const selection = selectFinalReply([...items.values()], previousInferred);
         for (const item of selection.reemit) write("item.completed", item);
-        previousInferred = selection.rule === "inferred" ? selection.itemId : null;
+        previousInferred = selection.rule === "inferred" || selection.rule === "fallback" ? selection.itemId : null;
         return { itemId: selection.itemId, text: selection.text };
       });
     },

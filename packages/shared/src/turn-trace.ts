@@ -370,14 +370,21 @@ function histogramTool(item: TraceItem): string | null {
 
 /**
  * Item types the Chat fold never renders as process rows: the user's own
- * message, and the permission / question exchanges (Chat has its own dock and
- * question UI for those). Decision Q1 of PR 2.
+ * message, the permission / question exchanges (Chat has its own dock and
+ * question UI for those; decision Q1 of PR 2), and reasoning, which only feeds
+ * the live label (decision D-count).
  */
-const NON_PROCESS_TYPES: ReadonlySet<TraceItem["type"]> = new Set(["user_message", "permission", "question"]);
+const NON_PROCESS_TYPES: ReadonlySet<TraceItem["type"]> = new Set(["user_message", "permission", "question", "reasoning"]);
 
-/** Whether a top-level item is a process step: anything but a final reply, a user message, a permission or a question. */
+/**
+ * Whether a top-level item produces a row in the Chat fold (decision D-count):
+ * anything but a final reply, a user message, a permission, a question,
+ * reasoning, or an agent message with no visible text. The frontend's
+ * `buildTurnSteps(items).processCount` must equal {@link processItemCount}.
+ */
 export function isProcessItem(item: TraceItem): boolean {
-  return item.parent_id === null && !NON_PROCESS_TYPES.has(item.type) && !isFinalMessage(item);
+  if (item.parent_id !== null || NON_PROCESS_TYPES.has(item.type)) return false;
+  return item.type !== "agent_message" || (item.phase !== "final" && item.text.trim().length > 0);
 }
 
 /**
@@ -543,8 +550,11 @@ export interface FinalReplySelection {
   itemId: string | null;
   /** Its text, untrimmed; null without a final item. */
   text: string | null;
-  /** Rule 1 (`phase`: a bridge-labelled final) or rule 2 (`inferred`, Claude). */
-  rule: "phase" | "inferred" | null;
+  /**
+   * Rule 1 (`phase`: a bridge-labelled final), rule 2 (`inferred`, Claude) or
+   * its fallback (`fallback`, decision D-final).
+   */
+  rule: "phase" | "inferred" | "fallback" | null;
   /**
    * Messages whose phase changes, already updated and without `seq`: the
    * translator re-emits each as `item.completed`, in this order.
@@ -552,22 +562,33 @@ export interface FinalReplySelection {
   reemit: TraceAgentMessageItem[];
 }
 
+/** Top-level items after which an `unknown` message is not the answer (rule 2). */
+function blocksInferredFinal(item: TraceItem): boolean {
+  // Claude's AskUserQuestion raises a question with no tool item (spec §11).
+  return isToolItem(item) || item.type === "question";
+}
+
 /**
  * Choose the final reply among the top-level agent messages.
  *
  * 1. If any has `phase: "final"` from the bridge, the last one is final and the
  *    earlier ones become `commentary`.
- * 2. Otherwise take the last non-empty one with no top-level tool item after it
- *    and mark it `final`. Only `unknown`-phase messages qualify, and a
- *    `commentary` message after one blocks it like a tool does: a message the
- *    bridge labelled commentary is never the answer (as in today's
+ * 2. Otherwise take the last non-empty one with no top-level tool or question
+ *    item after it and mark it `final`. Only `unknown`-phase messages qualify,
+ *    and a `commentary` message after one blocks it like a tool does: a message
+ *    the bridge labelled commentary is never the answer (as in today's
  *    `TraceFinalReplyAccumulator`). Claude labels nothing, so all of its
- *    messages are `unknown`.
+ *    messages are `unknown`. A question blocks because Claude's
+ *    AskUserQuestion has no tool item.
+ * 3. If rule 2 finds nothing (the turn ended on a tool or question after its
+ *    last text), the last non-empty `unknown` message is final anyway
+ *    (decision D-final): the old `LastAssistantMessage` behaviour, so such a
+ *    turn does not regress to "Task completed.".
  *
- * `previousInferred` is the item an earlier call promoted by rule 2 (steer
- * re-prompts call this once per round). Its `final` phase is ours, not the
- * bridge's, so rule 1 ignores it, and it is demoted to `unknown` when this call
- * picks another item or none.
+ * `previousInferred` is the item an earlier call promoted by rule 2 or 3
+ * (steer re-prompts call this once per round). Its `final` phase is ours, not
+ * the bridge's, so rule 1 ignores it, and it is demoted to `unknown` when this
+ * call picks another item or none.
  */
 export function selectFinalReply(items: readonly TraceItem[], previousInferred: string | null = null): FinalReplySelection {
   const top = topLevelItems(items);
@@ -577,6 +598,9 @@ export function selectFinalReply(items: readonly TraceItem[], previousInferred: 
     const { seq: _seq, ...rest } = item;
     reemit.push({ ...rest, phase });
   };
+  // The previous pick is `unknown` underneath its promoted phase.
+  const candidate = (item: TraceAgentMessageItem) =>
+    (item.phase === "unknown" || item.id === previousInferred) && item.text.trim().length > 0;
 
   let chosen: TraceAgentMessageItem | null = null;
   let rule: FinalReplySelection["rule"] = null;
@@ -589,16 +613,20 @@ export function selectFinalReply(items: readonly TraceItem[], previousInferred: 
     for (let i = top.length - 1; i >= 0; i--) {
       const item = top[i]!;
       if (item.type === "agent_message") {
-        // The previous pick is `unknown` underneath its promoted phase.
-        const unlabelled = item.phase === "unknown" || item.id === previousInferred;
-        if (unlabelled && item.text.trim()) {
+        if (candidate(item)) {
           chosen = item;
           rule = "inferred";
           break;
         }
         if (item.phase === "commentary") break;
-      } else if (isToolItem(item)) {
+      } else if (blocksInferredFinal(item)) {
         break;
+      }
+    }
+    for (let i = messages.length - 1; !chosen && i >= 0; i--) {
+      if (candidate(messages[i]!)) {
+        chosen = messages[i]!;
+        rule = "fallback";
       }
     }
     if (chosen && chosen.phase !== "final") withPhase(chosen, "final");
