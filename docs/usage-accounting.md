@@ -125,7 +125,7 @@ bun run scripts/reconcile-task-usage.ts --apply-plan=<review-plan.json> --execut
 bun run scripts/reconcile-task-usage.ts --verify-plan=<review-plan.json>
 ```
 
-不带 execute 的 legacy migration 只读计数；raw 恢复先生成只读计划，再按审核过的计划执行。恢复只读取 `multiremi_task_messages` 保留的历史 usage 观测（服务端 Session Archive 已下线，不再读取任何归档，见 [ADR 0018](adr/0018-local-records-and-recyclable-workspaces.md)），按全部竞争任务的时间边界归属，`--task-id` 仅筛选输出。非终态任务不会被修复；已有规范化执行记录的终态任务不进入历史恢复计划。计划摘要列出前后已知消费及无法恢复的原因。计划生成器不再产出 `modernRepairs`（它依赖已下线的原生日志读取）；apply 与 verify 仍接受带有该字段的已审核计划。
+不带 execute 的 legacy migration 只读计数；raw 恢复先生成只读计划，再按审核过的计划执行。恢复只读取 `multiremi_task_messages` 保留的历史 usage 观测（服务端 Session Archive 已下线，不再读取任何归档，见 [ADR 0018](adr/0018-local-records-and-recyclable-workspaces.md)），按全部竞争任务的时间边界归属，`--task-id` 仅筛选输出。非终态任务不会被修复；已有规范化执行记录的终态任务不进入历史恢复计划。计划摘要列出前后已知消费及无法恢复的原因。计划生成器默认不产出 `modernRepairs`；只有传入 `--native-evidence` 时，才按下文的 Codex 原生用量补录生成。apply 与 verify 接受带有该字段的已审核计划。
 
 现代记录修复由 [modern-usage-repair.ts](../scripts/modern-usage-repair.ts)执行，通过 `multiremi_turn_execution_records` 读取轮及尝试，原 task ID 对应尝试 ID。每个待修复尝试必须处于终态、只有一个已完整上报的执行 run，且尝试、原始请求与原生日志的 provider session 身份一致。Claude 仅使用有明确结束原因的最终请求记录更新同一请求；全部相关请求身份匹配、更新增量恰好解释唯一结算差额时，才将对应 `acp_prompt_unattributed_remainder` 退休。原有进度摘要、上下文和其他调用保留；涉及费用覆盖时同时更新原关联，不把修正后的数字再加一份。
 
@@ -140,6 +140,37 @@ Codex 原生日志的 `token_usage_record` 按 thread/session 与 response ID �
 CLI 的 apply/verify 入口与修复库的 apply 入口先只读校验统一轮、尝试、执行投影及必要字段，再进行用量 schema 或审计表 DDL。缺少执行投影或未完成统一模型迁移时，返回列明缺项与迁移步骤的拒绝，不创建维护表或改账；先在隔离恢复库用当前服务完成启动迁移，再重新生成并审核计划。新库和已完成真实旧库迁移的统一模型均可使用这条恢复流程。
 
 只有旧聚合而缺少整个执行覆盖证明的 legacy 任务，仍不能用部分原生日志替换其已知消费：请求证据单独保留供审核，不与旧聚合相加。只有旧消费未知时才补入请求 subtotal，coverage 仍为 partial；不能据此宣称全部历史已恢复。旧累计证据的 replay 和无重置证据下降不改变差分基线，total-only 的上下文估计不成为消费。恢复按 task 保存原事实、旧 usage 校验哈希和修订水位；后续计划须保留已有请求身份、已知计数及费用关联，空或较窄扫描不能撤销事实。不可恢复项保留明确原因。旧 `backfill-codex-task-usage.ts` 不再执行 sum-used 写入。计划和日志可能包含敏感证据，应放在维护输出目录，避免在公共日志输出正文或凭据。
+
+### Codex 原生用量补录
+
+v0.2.89 的 daemon 使用 `codex-usage-v6`，它的逐请求钩子从未触发（见 [Codex 接入](design/acp-codex-via-codex-acp.md)）。这期间每个 Codex prompt 只记了一个无 token 的 `context_snapshot` 单位，报表把这些尝试计入 `unknown_task_count`。每次请求的事实仍保存在 Codex 原生 rollout 的 `token_usage_record` 中，补录分两步读取，都不写生产库：
+
+```bash
+# 1. 每台 daemon 主机，只读，只写 --out
+bun run scripts/export-codex-native-usage.ts --workspaces-root=<daemon 工作区根目录> --since=2026-10-08T00:00:00Z --out=<host>.json
+# 2. 维护环境，连接隔离恢复库；所有主机的导出放进同一份计划
+bun run scripts/reconcile-task-usage.ts --native-evidence=<a.json>,<b.json> --out=<review-plan.json>
+```
+
+**导出范围。** [导出脚本](../scripts/export-codex-native-usage.ts)读取工作区根目录下各 provider home 的 `sessions/` 与 `archived_sessions/`，覆盖三种目录：
+- v0.2.89 布局的 `.runtime/`；
+- ADR 0018 布局的 `env/`；
+- 升级清扫产生的 `legacy-<日期>/`。
+
+它不进入 `work/` 等工作树，也不跟随符号链接。输出只有计数、thread/response ID、时间与模型，不含会话内容。`--scan=<目录>` 读取任意目录中的 rollout，适用于单独的 `CODEX_HOME` 或解压后的旧 Session archive。
+
+**证据还在哪里。** v0.2.89 的 GC 只在服务端有就绪 Session archive 后，才删除超过保留期的 `.runtime/<主体>`。因此已回收主体的 rollout 只留在 API 主机 `REMI_SESSION_ARCHIVE_ROOT` 下的归档 ZIP 中：用 `unzip` 解压后以 `--scan` 导出。部署 ADR 0018 后 compose 不再挂载该目录，但不会删除它，补录完成前保留。daemon 升级到 ADR 0018 布局后首次启动，会把 `.runtime/` 移入 `legacy-<日期>/`，`MULTIREMI_LEGACY_KEEP_DAYS`（默认 7 天）后删除，所以应在升级前或这个期限内导出。
+
+**生成计划。** [补录计划](../scripts/native-usage-backfill.ts)通过 apply 使用的同一读取器，在 REPEATABLE READ、READ ONLY 快照中生成，保证审核时的状态哈希可以复现。
+- 请求先按 rollout 的 `session_id`（根线程，即尝试记录的 `session_id`）找候选尝试，再分给唯一一个执行窗口 `[started_at, 结束时间)` 包含它的尝试。
+- 原生子 agent 的请求以自己的 thread 作为请求身份，和实时采集一致。
+- 落在任何窗口之外或重叠窗口中的请求、已在任意 run 或身份冲突审计中出现的请求，以及两份导出计数不一致的请求，都不补录，只计入摘要。
+
+**补录对象与结果。** 补录对象是终态 Codex 尝试中，唯一完整 live run 没有任何 agent 消费（只有上下文）的那些。
+- 补录保留原上下文和其他单位；新请求单位沿用该 run 唯一的连接，并用 `descendantSessionIds` 记录审核过的子线程。
+- 计划摘要的 `nativeBackfill.outcomes` 按尝试列出 `repaired`、`no_native_request_evidence`（rollout 已不存在，保持未知）、`live_request_usage_present`、`no_single_complete_live_run`、`nonterminal_task` 与 `repair_not_proven`。
+- 补录后的尝试不再属于补录对象，之后的计划不会再给它加请求，所以所有主机与归档的导出要一次合并审核。
+- apply、verify 与重复执行的规则同上方现代记录修复。
 
 ## 验证和性能边界
 

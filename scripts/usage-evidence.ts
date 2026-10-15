@@ -11,7 +11,11 @@ export interface CompletedNativeTurn {
   completionEvidenceRef: string; totalsEvidenceRef: string;
   inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number; totalTokens: number;
 }
-export interface NativeSourceScope { unitId: string; providerSessionId: string; turnId: string | null; kind: "request" | "meter"; startedAt?: string; }
+export interface NativeSourceScope {
+  unitId: string; providerSessionId: string; turnId: string | null; kind: "request" | "meter"; startedAt?: string;
+  /** Codex `session_id`: the root thread a native subagent's request belongs to. */
+  rootSessionId?: string;
+}
 export interface UsageEvidenceResult { units: TaskUsageUnit[]; rejected: number; replayed: number; stableRequestIdentity?: boolean; completedTurns?: CompletedNativeTurn[]; sourceScopes?: NativeSourceScope[]; sourceUnits?: TaskUsageUnit[]; }
 const record = (v: unknown): Row | null => v !== null && typeof v === "object" && !Array.isArray(v) ? v as Row : null;
 const digest = (v: unknown) => createHash("sha256").update(JSON.stringify(v)).digest("hex").slice(0, 32);
@@ -183,7 +187,9 @@ export function parseNativeUsageEvidence(provider: "claude" | "codex", body: str
       units.set(unitId, next);
       continue;
     }
-    if (row.type === "session_meta" && typeof row.payload?.id === "string") {
+    // A forked or subagent rollout repeats its origin's session_meta as copied
+    // history; the file and its own records still belong to its first thread.
+    if (row.type === "session_meta" && typeof row.payload?.id === "string" && !(sessionId && row.payload.id === parentSessionId)) {
       const changed = sessionId !== row.payload.id;
       if (sessionId && sessionId !== row.payload.id) { epoch++; previous = null; seenCumulative.clear(); requestedModel = null; compactionAt = null; activeTurnId = null; }
       sessionId = row.payload.id;
@@ -220,6 +226,8 @@ export function parseNativeUsageEvidence(provider: "claude" | "codex", body: str
       const responseId = nativeRecord.response_id;
       const normalized = typeof threadId === "string" && typeof responseId === "string"
         ? normalizeCodexRequestUsage({ threadId, responseId, turnId: nativeRecord.turn_id, usage: nativeRecord.usage, format: "native" }) : null;
+      // Copied origin records are already counted from the origin's own rollout.
+      if (sessionId && threadId !== sessionId && threadId === parentSessionId) { replayed++; continue; }
       if (!normalized || !occurredAt || (sessionId && threadId !== sessionId)) { rejected++; continue; }
       const unitId = requestUnitId(responseId, threadId);
       if (conflictingRequests.has(unitId)) { rejected++; continue; }
@@ -238,7 +246,8 @@ export function parseNativeUsageEvidence(provider: "claude" | "codex", body: str
         continue;
       }
       units.set(unitId, unit);
-      requestScopes.push({ unitId, providerSessionId: threadId, turnId: typeof nativeRecord.turn_id === "string" ? nativeRecord.turn_id : null, kind: "request" });
+      requestScopes.push({ unitId, providerSessionId: threadId, turnId: typeof nativeRecord.turn_id === "string" ? nativeRecord.turn_id : null, kind: "request",
+        rootSessionId: typeof nativeRecord.session_id === "string" && nativeRecord.session_id ? nativeRecord.session_id : threadId });
       if (row.type === "token_usage_record" && sessionId === threadId && typeof nativeRecord.turn_id === "string") activeTurnId = nativeRecord.turn_id;
       if (row.type === "token_usage_record" && typeof nativeRecord.turn_id === "string") {
         const key = JSON.stringify([threadId, nativeRecord.turn_id]);
