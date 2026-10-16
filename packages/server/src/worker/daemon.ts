@@ -3451,11 +3451,11 @@ export class MultiremiDaemon {
     });
     this.activeTaskIds.add(task.id);
     const finishTracking = executionTrackerFor(this.options.workspacesRoot).begin(subject.id, task.id);
-    // PR 6 §2.4: an offer for a parked lane claims its process before preparing; one process per lane.
+    // PR 6 §2.4: an attempt of an eligible lane claims the lane's parked process before preparing (in the try below).
     const backgroundLane = this.backgroundLaneOf(task);
     const background: BackgroundAttempt | null = backgroundLane ? {
       lane: backgroundLane,
-      claimed: this.parkedLanes.claim(laneKeyOf(backgroundLane), task.id),
+      claimed: null,
       own: new DaemonLaneResources((directory) => cleanupTaskPrivateTempDirectory(directory, () => this.assertWorkspaceRootOwner())),
       record: null,
     } : null;
@@ -3527,6 +3527,11 @@ export class MultiremiDaemon {
     };
 
     try {
+      if (background) {
+        // One process per lane: an attempt still finishing on it (a stopped one, say) parks or closes first,
+        // then this attempt claims what parked, or starts fresh.
+        background.claimed = await this.parkedLanes.acquire(laneKeyOf(background.lane), task.id, abort.signal);
+      }
       this.assertWorkspaceRootOwner();
       if (task.issueId && !task.chatSessionId && !task.runtimeWorkspaceId && task.holdsWorkspace !== false && task.issue?.key) {
         const adopted = await this.topicWorkspaces.preparePendingMigrationForIssue(
@@ -4736,7 +4741,9 @@ export class MultiremiDaemon {
       } else {
         log.info(`Task ${task.id} releases its lane's parked process: ${verdict.cause ?? "adopt failed"}`,
           { event: "background_lane_release", reason: verdict.reason ?? "config_changed", cause: verdict.cause ?? null });
-        await this.parkedLanes.release(claimed, verdict.reason ?? "config_changed", { keepResources: true });
+        const { keptResources: kept } = await this.parkedLanes.release(claimed, verdict.reason ?? "config_changed", { keepResources: true });
+        // An earlier close (the daemon's stop, say) disposed them: this attempt's temp dir and lock are gone.
+        if (!kept) throw new Error("[lane_closed] the lane's process closed while this attempt prepared; retry the turn");
         keptResources = claimed.resources;
       }
     }
@@ -5308,6 +5315,9 @@ export class MultiremiDaemon {
           if (stale.length) await this.taskDownlinks.consumeTaskSteerMessages(task.id, stale.map((m) => m.id));
           const fresh = pendingNow.filter((m) => !recordedSteerIds.has(m.id));
           if (!forceAnswerExpired && fresh.length) {
+            // The attempt runs on: its background tasks are its own again until its next end decides (§2.2).
+            if (laneRecord) this.parkedLanes.cancelHandOff(laneRecord);
+            backgroundDecision = null;
             await injectSteerBatch(fresh);
             continue;
           }
@@ -5326,7 +5336,7 @@ export class MultiremiDaemon {
     } finally {
       // PR 6 §6.3: a cancelled or failed attempt whose process lives still hands its tasks off or stops them
       // (its trace closes after this); a cancel ends the turn, not the background work.
-      if (backgroundDecisionOf() === null && !trace.items.some((item) => item.type === "background_task" && item.handed_off)) {
+      if (backgroundDecisionOf() === null) {
         await endBackgroundTasksOnce?.({ drain: false, reason: signal.aborted ? "cancelled" : "turn_end" }).catch((error: unknown) =>
           log.warn(`Task ${task.id}: ending background tasks failed: ${error instanceof Error ? error.message : String(error)}`));
       }

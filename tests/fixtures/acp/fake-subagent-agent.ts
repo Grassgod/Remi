@@ -79,6 +79,8 @@ export interface FakeSubagentConfig {
   afterSession?: FakeSubagentStep[];
   /** Env variables the `started` line records (`env`), as the process got them; null when unset. */
   logEnv?: string[];
+  /** A cancelled prompt resolves `cancelled` this long after `session/cancel` (a slow bridge). */
+  cancelDelayMs?: number;
 }
 
 const config = JSON.parse(process.env.FAKE_SUBAGENT_CONFIG ?? "{}") as FakeSubagentConfig;
@@ -259,8 +261,12 @@ createInterface({ input: process.stdin }).on("line", (line) => {
       const prompt = active;
       if (prompt && !prompt.resolved) {
         prompt.cancelled = true;
-        resolvePrompt(prompt, "cancelled");
-        for (const release of prompt.onCancel.splice(0)) release();
+        const finish = () => {
+          resolvePrompt(prompt, "cancelled");
+          for (const release of prompt.onCancel.splice(0)) release();
+        };
+        if (config.cancelDelayMs) setTimeout(finish, config.cancelDelayMs);
+        else finish();
       }
       return;
     }

@@ -138,6 +138,14 @@ describe("AcpProvider background-task registry", () => {
     await waitFor(() => agent.provider.listAsyncTasks({ chatId: "chat" })[0]!.state === "stopped", "the bridge's stopped state");
     expect(agent.provider.listAsyncTasks({ chatId: "chat" })[0]!.stop).toMatchObject({ by: "user", outcome: "stopped" });
   });
+
+  it("stamps a stop with the request's own time when it carries one (a person's stop, answered by it)", async () => {
+    const agent = fakeAgent("claude", { prompts: [[task({ id: "bash-1", event: "spawned" }), { resolve: "end_turn" }]] });
+    await collect(agent.provider.sendStream("go", { chatId: "chat" }));
+    const requestedAt = "2001-02-03T04:05:06Z";
+    await agent.provider.stopAsyncTask("bash-1", { chatId: "chat", by: "user", requestedAt });
+    expect(agent.provider.listAsyncTasks({ chatId: "chat" })[0]!.stop).toMatchObject({ requestedAt: Date.parse(requestedAt), by: "user" });
+  });
 });
 
 describe("AcpProvider.settleAsyncTasks", () => {

@@ -128,6 +128,8 @@ export interface Provider {
     timeoutMs?: number;
     /** Who asked (the registry's `stop_request.by`); default `remi`. */
     by?: TraceBackgroundTaskStopRequest["by"];
+    /** When the request was made (ISO), the snapshot's `stop.requestedAt`; default now. */
+    requestedAt?: string;
   }): Promise<StopAsyncTaskResult>;
   /**
    * Replay the frames that arrived since the last prompt, wait `drainMs` for

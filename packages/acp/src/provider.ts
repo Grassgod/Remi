@@ -1462,12 +1462,14 @@ export class AcpProvider implements Provider {
    * registry does not hold, or one that is not running, answers `{stopped:
    * false}` without a wire call; a stop already in flight is joined. Never throws.
    */
-  async stopAsyncTask(taskId: string, options: { chatId?: string | null; timeoutMs?: number; by?: "user" | "remi" } = {}): Promise<StopAsyncTaskResult> {
+  async stopAsyncTask(taskId: string, options: { chatId?: string | null; timeoutMs?: number; by?: "user" | "remi"; requestedAt?: string } = {}): Promise<StopAsyncTaskResult> {
     const entry = this._pool.get(options.chatId ?? "__default__");
     const task = entry?.asyncTasks?.get(taskId);
     if (!entry || !task || !task.canStop || !isLiveAsyncTaskState(task.state) || !entry.client.alive) return { stopped: false };
     if (task.stopping) return task.stopping;
-    task.stop = { requestedAt: Date.now(), by: options.by ?? "remi", outcome: "pending" };
+    // The request's own time (a person's stop is answered by it), not this host's clock.
+    const requestedAt = options.requestedAt !== undefined ? Date.parse(options.requestedAt) : NaN;
+    task.stop = { requestedAt: Number.isFinite(requestedAt) ? requestedAt : Date.now(), by: options.by ?? "remi", outcome: "pending" };
     this._notifyAsyncTask(this._chatIdOf(entry) ?? options.chatId ?? "__default__", task);
     const timeoutMs = Math.max(1, options.timeoutMs ?? ASYNC_TASK_STOP_TIMEOUT_MS);
     const stopping = (async (): Promise<StopAsyncTaskResult> => {

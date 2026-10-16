@@ -62,14 +62,21 @@ export const PARKED_IDLE_CLOSE_MS = 60_000;
 export const PARKED_REQUEST_HOLD_MS = 60_000;
 /** How long Remi's own stops of a lane's tasks may take before its process closes anyway. */
 export const LANE_STOP_TIMEOUT_MS = 3_000;
-/** Doorbell RPC retries on a transport error (the socket may be reconnecting). */
-const DOORBELL_ATTEMPTS = 5;
+/**
+ * How long an attempt waits for the lane's previous attempt to park or close
+ * before it gives up (§2.4: one process per lane). A cancelled attempt
+ * normally finishes in seconds.
+ */
+export const LANE_SETTLE_TIMEOUT_MS = 120_000;
+/** Doorbell RPC retry backoff on a transport error (doubling up to the max); a doorbell is never dropped for it. */
 const DOORBELL_RETRY_MS = 2_000;
+const DOORBELL_RETRY_MAX_MS = 30_000;
 
 /** What a lane's process needs from its provider (a subset of `MultiremiTaskProvider`). */
 export interface ParkableProvider {
   listAsyncTasks?(options: { chatId?: string | null }): AsyncTaskSnapshot[];
-  stopAsyncTask?(taskId: string, options: { chatId?: string | null; timeoutMs?: number; by?: TraceBackgroundTaskStopRequest["by"] }): Promise<{ stopped: boolean }>;
+  stopAsyncTask?(taskId: string, options: { chatId?: string | null; timeoutMs?: number; by?: TraceBackgroundTaskStopRequest["by"];
+    requestedAt?: string }): Promise<{ stopped: boolean }>;
   park?(chatId: string, on: boolean): void;
   adoptSession?(fromChatId: string, toChatId: string): boolean;
   processGroupId?(chatId: string): number | null;
@@ -110,11 +117,13 @@ interface LaneTask {
   originAttemptId: string;
   /** Remi's own reason when it stopped the task (the lane's, §2.7). */
   stopReason: BackgroundTaskStopReason | null;
+  /** The latest stop request this registry sent, as its requester stamped it (the server matches it exactly). */
+  stopRequest: { requestedAt: string; by: TraceBackgroundTaskStopRequest["by"] } | null;
   outputTail: string | null;
   /** The output file is there but cannot be read (`output_unreadable`). */
   outputUnreadable: boolean;
-  /** The doorbell for this task's end went out (one per task). */
-  rang: boolean;
+  /** The doorbell for this task's end: owed (`pending`) until the wake RPC took it, one per task. */
+  doorbell: "none" | "pending" | "delivered";
   /** Live when the current attempt handed its tasks to the lane (it will park). */
   handedOff: boolean;
 }
@@ -158,6 +167,13 @@ interface RecordInternals {
   reported: boolean;
   pgid: { pgid: number; startTime: string } | null;
   closing: Promise<void> | null;
+  /** The close in progress (or done) leaves the resources to its caller. */
+  closeKeepsResources: boolean;
+  /** The revision its `closed` snapshot carries, reserved when a newer record replaced it. */
+  closedRevision: number | null;
+  /** A doorbell delivery loop runs; `doorbellWake` cuts its current wait short. */
+  ringing: boolean;
+  doorbellWake: (() => void) | null;
 }
 
 export interface ParkedLanesOptions {
@@ -172,6 +188,8 @@ export interface ParkedLanesOptions {
   refreshMs?: number;
   closedRepeats?: number;
   closedRepeatMs?: number;
+  doorbellRetryMs?: number;
+  doorbellRetryMaxMs?: number;
   /** `parked-bridges.json`; null keeps no crash-sweep record. */
   stateFile: string | null;
   runtimeId(): string | null;
@@ -236,6 +254,10 @@ export class ParkedLanes {
   private readonly records = new Map<string, LaneRecord>();
   private readonly internals = new WeakMap<LaneRecord, RecordInternals>();
   private readonly byChatId = new Map<string, LaneRecord>();
+  /** Attempts waiting for a lane's current attempt to park or close (§2.4). */
+  private readonly laneWaiters = new Map<string, Set<() => void>>();
+  /** A closed record still repeating its `closed` snapshot, per lane: a new record of the lane stops it. */
+  private readonly closedRepeating = new Map<string, LaneRecord>();
   private revision = 0;
   private readonly now: () => number;
   private readonly tailer: AsyncTaskOutputTailer;
@@ -268,8 +290,9 @@ export class ParkedLanes {
       }
     }
     this.options.log.warn("Background lane process died", { event: "background_lane_lost", lane: record.lane, reason });
-    // An attempt sees the death itself and ends; a parked or claimed lane closes now.
-    if (record.state !== "in_attempt") void this.close(record, "lost", { skipStops: true });
+    // An attempt sees the death itself and ends; a parked lane closes now. A claimed lane is its claiming
+    // attempt's to release: it sees the dead process and keeps the resources (§2.8).
+    if (record.state === "parked") void this.close(record, "lost", { skipStops: true });
   };
 
   // ── Lifecycle ──────────────────────────────────────────────────
@@ -279,8 +302,20 @@ export class ParkedLanes {
     const key = laneKeyOf(input.lane);
     const existing = this.records.get(key);
     if (existing && existing.state !== "closed" && existing.poolChatId !== input.poolChatId) {
-      // §2.4's invariant: one process per lane. The caller released or adopted the old one first.
-      this.options.log.warn("A lane already has a live process", { event: "parked_lane_conflict", lane: input.lane });
+      // §2.4's invariant: one process per lane. `acquire` waits for the old one, so this is a defect;
+      // never leave it untracked: stop its tasks and close it.
+      this.options.log.warn("A lane already has a live process; closing it", { event: "parked_lane_conflict", lane: input.lane });
+      // Its `closed` snapshot ranks below everything the new record reports.
+      const existingInternal = this.internals.get(existing);
+      if (existingInternal) existingInternal.closedRevision ??= ++this.revision;
+      void this.close(existing, "lane_reset");
+    }
+    // A previous process's `closed` repeats must not land after this process's snapshots (§5.2).
+    const repeating = this.closedRepeating.get(key);
+    if (repeating) {
+      const repeatingInternal = this.internals.get(repeating);
+      if (repeatingInternal) this.clearTimer(repeatingInternal, "closedTimer");
+      this.closedRepeating.delete(key);
     }
     const record: LaneRecord = {
       key, lane: input.lane, provider: input.provider, poolChatId: input.poolChatId, providerSessionId: input.providerSessionId,
@@ -300,9 +335,10 @@ export class ParkedLanes {
     return record && record.state !== "closed" ? record : null;
   }
 
-  /** A parked lane whose offer may skip the capacity check (D5). */
+  /** A parked lane whose offer may skip the capacity check (D5); one that is closing is not. */
   isParked(key: string): boolean {
-    return this.records.get(key)?.state === "parked";
+    const record = this.records.get(key);
+    return record?.state === "parked" && !this.internals.get(record)?.closing;
   }
 
   /** The parked lane `match` picks (the one holding a folder lock a turn waits for, §2.8); null when none. */
@@ -334,7 +370,13 @@ export class ParkedLanes {
    * are the lane's now. One that ends before the lane is parked still rings.
    */
   handOff(record: LaneRecord): void {
-    for (const task of record.tasks.values()) if (isLive(task.snapshot.state)) task.handedOff = true;
+    // Only what runs now: a task that ended before (in an earlier round of the attempt) was answered there.
+    for (const task of record.tasks.values()) task.handedOff = isLive(task.snapshot.state);
+  }
+
+  /** The attempt runs on after handing off (a steer came in): its next end decides again. */
+  cancelHandOff(record: LaneRecord): void {
+    for (const task of record.tasks.values()) task.handedOff = false;
   }
 
   /** Remi stops these tasks at the attempt's end for `reason` (§2.2): the registry reports it. */
@@ -430,16 +472,51 @@ export class ParkedLanes {
     (internal.keepAliveTimer as { unref?: () => void }).unref?.();
     this.watchOutputs(record);
     // §2.5: a handed-off task that ended while the attempt was still finishing rings now; its cycle stayed captured.
+    let owed = false;
     for (const task of record.tasks.values()) {
-      if (task.handedOff && !task.rang && !isLive(task.snapshot.state)
+      if (task.handedOff && task.doorbell === "none" && !isLive(task.snapshot.state)
         && ringsBackgroundDoorbell({ wakesModel: record.wakesModel }, task.snapshot.state)) {
-        task.rang = true;
-        void this.ringDoorbell(record, task);
+        task.doorbell = "pending";
+        owed = true;
       }
     }
+    if (owed) void this.deliverDoorbells(record);
     this.scheduleIdleClose(record);
     this.scheduleSnapshot(record, true);
+    this.notifyLane(record.key);
     return { parked: true };
+  }
+
+  /**
+   * The next attempt of this lane, before it prepares anything (§2.4): wait
+   * until no other attempt uses the lane (an attempt still finishing, a
+   * stopped one included, parks or closes first), then claim the parked
+   * process, or null when none is left. Throws when `signal` aborts, or
+   * after {@link LANE_SETTLE_TIMEOUT_MS}.
+   */
+  async acquire(key: string, attemptId: string, signal?: AbortSignal, timeoutMs = LANE_SETTLE_TIMEOUT_MS): Promise<LaneRecord | null> {
+    const deadline = this.now() + timeoutMs;
+    for (;;) {
+      signal?.throwIfAborted();
+      const record = this.records.get(key);
+      if (!record) return null;
+      const closing = this.internals.get(record)?.closing;
+      if (closing) {
+        // Its process exits and its resources go before this attempt prepares anything of its own (§2.8).
+        await closing.catch(() => {});
+        if (this.records.get(key) === record) this.records.delete(key);
+        continue;
+      }
+      if (record.state === "closed") return null;
+      if (record.state === "parked") return this.claim(key, attemptId);
+      if (record.attemptId === attemptId) return null;
+      if (this.now() >= deadline) {
+        throw new Error("[lane_busy] the lane's previous attempt is still finishing; this attempt does not start a second process");
+      }
+      this.options.log.info("Waiting for the lane's previous attempt to park or close", { event: "background_lane_wait",
+        lane: record.lane, attemptId: record.attemptId });
+      await this.waitForLane(key, Math.max(0, deadline - this.now()), signal);
+    }
   }
 
   /**
@@ -451,6 +528,8 @@ export class ParkedLanes {
     const record = this.records.get(key);
     if (!record || record.state !== "parked") return null;
     const internal = this.internals.get(record)!;
+    // A lane whose close (cap, eviction, release) is stopping its tasks is going: never hand it out.
+    if (internal.closing) return null;
     this.clearTimer(internal, "keepAliveTimer");
     this.clearTimer(internal, "idleTimer");
     record.state = "claimed";
@@ -465,11 +544,17 @@ export class ParkedLanes {
     const internal = this.internals.get(record)!;
     record.state = "parked";
     record.attemptId = null;
+    if (!record.provider.sessionAlive?.(record.poolChatId)) {
+      // Its process died while claimed: nothing is left to park.
+      void this.close(record, "lost", { skipStops: true });
+      return;
+    }
     const remaining = Math.max(0, (record.parkedUntil ?? this.now()) - this.now());
     internal.keepAliveTimer = setTimeout(() => void this.close(record, "keepalive_cap"), remaining);
     (internal.keepAliveTimer as { unref?: () => void }).unref?.();
     this.scheduleIdleClose(record);
     this.wakeAttachWaiters(record);
+    this.notifyLane(record.key);
   }
 
   /**
@@ -507,8 +592,12 @@ export class ParkedLanes {
     record.parkedUntil = null;
     record.lastActivityAt = this.now();
     if (record.doorbell === "sent") record.doorbell = "attached";
-    // The adopting attempt sees its tasks' ends itself until it hands them off again.
-    for (const task of record.tasks.values()) task.handedOff = false;
+    // The adopting attempt sees its tasks' ends itself until it hands them off again; a doorbell
+    // still owed (the socket was down) is answered by this attempt.
+    for (const task of record.tasks.values()) {
+      task.handedOff = false;
+      if (task.doorbell === "pending") task.doorbell = "delivered";
+    }
     const internal = this.internals.get(record)!;
     internal.pgid = null;
     this.writeStateFile();
@@ -520,10 +609,12 @@ export class ParkedLanes {
    * Stop the lane's tasks with `reason`, close its process and wait for it to
    * exit (§2.4 release, §2.7). With `keepResources` the caller takes the
    * resources over (a release before spawning in the same lane); otherwise
-   * they are disposed. Idempotent.
+   * they are disposed. Idempotent. `keptResources` is false when an earlier
+   * close disposed them: the caller must not use them.
    */
-  async release(record: LaneRecord, reason: BackgroundTaskStopReason, options: { keepResources?: boolean } = {}): Promise<void> {
+  async release(record: LaneRecord, reason: BackgroundTaskStopReason, options: { keepResources?: boolean } = {}): Promise<{ keptResources: boolean }> {
     await this.close(record, reason, options);
+    return { keptResources: this.internals.get(record)?.closeKeepsResources === true };
   }
 
   /** The attempt using the lane ended without parking: its process closes, nothing else (its tasks were stopped). */
@@ -537,10 +628,11 @@ export class ParkedLanes {
       .map((record) => this.close(record, reason)));
   }
 
-  /** The connection came back: report every live lane again. */
+  /** The connection came back: report every live lane again, and ring the doorbells it could not. */
   resendAll(): void {
     for (const record of this.records.values()) {
       if (record.state !== "closed" && record.tasks.size) this.scheduleSnapshot(record, true);
+      if ([...record.tasks.values()].some((task) => task.doorbell === "pending")) void this.deliverDoorbells(record);
     }
   }
 
@@ -553,7 +645,7 @@ export class ParkedLanes {
     const ids = payload.task_id === DAEMON_LANE_BACKGROUND_STOP_ALL
       ? [...record.tasks.values()].filter((task) => isLive(task.snapshot.state)).map((task) => task.snapshot.id)
       : [payload.task_id];
-    await Promise.allSettled(ids.map((taskId) => this.stopTask(record, taskId, "user", "user")));
+    await Promise.allSettled(ids.map((taskId) => this.stopTask(record, taskId, "user", "user", undefined, payload.requested_at)));
     record.lastActivityAt = this.now();
   }
 
@@ -608,7 +700,8 @@ export class ParkedLanes {
 
   private freshInternals(): RecordInternals {
     return { hooks: null, permission: null, elicitation: null, attachWaiters: new Set(), keepAliveTimer: null, idleTimer: null,
-      debounceTimer: null, refreshTimer: null, closedRepeats: 0, closedTimer: null, reported: false, pgid: null, closing: null };
+      debounceTimer: null, refreshTimer: null, closedRepeats: 0, closedTimer: null, reported: false, pgid: null, closing: null,
+      closeKeepsResources: false, closedRevision: null, ringing: false, doorbellWake: null };
   }
 
   /** The provider's handlers route through the record: an attempt's, or a hold while parked (R7). */
@@ -643,6 +736,29 @@ export class ParkedLanes {
     return cancelled;
   }
 
+  /** Resolves when the lane's record changes hands (parks, unclaims, closes), after `timeoutMs`, or on abort. */
+  private waitForLane(key: string, timeoutMs: number, signal?: AbortSignal): Promise<void> {
+    return new Promise<void>((resolve) => {
+      let waiters = this.laneWaiters.get(key);
+      if (!waiters) this.laneWaiters.set(key, waiters = new Set());
+      const done = () => {
+        clearTimeout(timer);
+        signal?.removeEventListener("abort", done);
+        waiters!.delete(done);
+        if (!waiters!.size && this.laneWaiters.get(key) === waiters) this.laneWaiters.delete(key);
+        resolve();
+      };
+      const timer = setTimeout(done, timeoutMs);
+      (timer as { unref?: () => void }).unref?.();
+      signal?.addEventListener("abort", done, { once: true });
+      waiters.add(done);
+    });
+  }
+
+  private notifyLane(key: string): void {
+    for (const wake of [...this.laneWaiters.get(key) ?? []]) wake();
+  }
+
   private wakeAttachWaiters(record: LaneRecord): void {
     const internal = this.internals.get(record);
     if (!internal) return;
@@ -654,7 +770,7 @@ export class ParkedLanes {
   private evictionCandidate(except: LaneRecord): LaneRecord | null {
     let victim: LaneRecord | null = null;
     for (const record of this.records.values()) {
-      if (record === except || record.state !== "parked" || record.doorbell !== "none") continue;
+      if (record === except || record.state !== "parked" || record.doorbell !== "none" || this.internals.get(record)?.closing) continue;
       if (!victim || record.lastActivityAt < victim.lastActivityAt) victim = record;
     }
     return victim;
@@ -664,15 +780,17 @@ export class ParkedLanes {
     const previous = record.tasks.get(snapshot.id);
     const task: LaneTask = previous ?? {
       snapshot, originAttemptId: record.attemptId ?? record.lastAttemptId,
-      stopReason: null, outputTail: null, outputUnreadable: false, rang: false, handedOff: false,
+      stopReason: null, stopRequest: null, outputTail: null, outputUnreadable: false, doorbell: "none", handedOff: false,
     };
     const wasLive = previous ? isLive(previous.snapshot.state) : false;
+    // Read before the snapshot is replaced: `previous` is the same record.
+    const previousStopOutcome = previous?.snapshot.stop?.outcome;
     task.snapshot = snapshot;
     if (!previous) record.tasks.set(snapshot.id, task);
     if (snapshot.state === "stopped" && !task.stopReason && snapshot.stop?.by === "user") task.stopReason = "user";
     record.lastActivityAt = this.now();
     const internal = this.internals.get(record);
-    if (internal?.hooks && snapshot.stop && previous?.snapshot.stop?.outcome !== snapshot.stop.outcome && snapshot.stop.outcome !== "pending") {
+    if (internal?.hooks && snapshot.stop && previousStopOutcome !== snapshot.stop.outcome && snapshot.stop.outcome !== "pending") {
       internal.hooks.stopResult(snapshot.id, snapshot.stop.outcome);
     }
     if (!report) return;
@@ -680,10 +798,10 @@ export class ParkedLanes {
     const ended = wasLive && !isLive(snapshot.state);
     if (ended) this.tailer.finish(`${record.key}\u0000${snapshot.id}`);
     // §2.5: a parked Claude task that ended on its own rings; a stop never does.
-    if (ended && (record.state === "parked" || record.state === "claimed") && !task.rang
+    if (ended && (record.state === "parked" || record.state === "claimed") && task.doorbell === "none"
       && ringsBackgroundDoorbell({ wakesModel: record.wakesModel }, snapshot.state)) {
-      task.rang = true;
-      void this.ringDoorbell(record, task);
+      task.doorbell = "pending";
+      void this.deliverDoorbells(record);
     }
     this.scheduleIdleClose(record);
     this.scheduleSnapshot(record, false);
@@ -691,59 +809,107 @@ export class ParkedLanes {
 
   /** Remi's or a person's stop of one task: the request, the trace, the snapshot. */
   private async stopTask(record: LaneRecord, taskId: string, by: TraceBackgroundTaskStopRequest["by"],
-    reason: BackgroundTaskStopReason, timeoutMs?: number): Promise<void> {
+    reason: BackgroundTaskStopReason, timeoutMs?: number, requestedAt?: string): Promise<void> {
     const task = record.tasks.get(taskId);
+    // A person's request keeps the server's `requested_at` (its answer is matched on it); Remi's are stamped here.
+    const stamped = requestedAt && Number.isFinite(Date.parse(requestedAt)) ? requestedAt : new Date(this.now()).toISOString();
+    if (task) task.stopRequest = { requestedAt: stamped, by };
     if (task && isLive(task.snapshot.state) && !task.stopReason) task.stopReason = reason;
     const internal = this.internals.get(record);
-    if (task && isLive(task.snapshot.state)) internal?.hooks?.stopRequested(taskId, { by, requested_at: new Date(this.now()).toISOString() });
-    const result = await record.provider.stopAsyncTask?.(taskId, { chatId: record.poolChatId, by, timeoutMs }).catch(() => ({ stopped: false }));
+    if (task && isLive(task.snapshot.state)) internal?.hooks?.stopRequested(taskId, { by, requested_at: stamped });
+    const result = await record.provider.stopAsyncTask?.(taskId, { chatId: record.poolChatId, by, timeoutMs, requestedAt: stamped })
+      .catch(() => ({ stopped: false }));
     if (!result?.stopped && task && !isLive(task.snapshot.state)) {
       // An ended or unknown task answers `not_running` (§6.1).
-      task.snapshot = { ...task.snapshot, stop: { requestedAt: this.now(), by, outcome: "not_running" } };
+      task.snapshot = { ...task.snapshot, stop: { requestedAt: Date.parse(stamped), by, outcome: "not_running" } };
     }
     this.scheduleSnapshot(record, false);
   }
 
-  private async ringDoorbell(record: LaneRecord, task: LaneTask): Promise<void> {
-    if (!record.providerSessionId || !this.options.sharesCap()) return;
-    record.doorbell = "sent";
-    this.clearTimer(this.internals.get(record)!, "idleTimer");
+  /**
+   * Deliver the lane's owed doorbells, one task at a time (§2.5): retried with
+   * backoff while the RPC fails, and held while the socket is down (the
+   * reconnect's `resendAll` resumes it). Owed doorbells keep the lane from
+   * its idle close and eviction; only the keep-alive cap (or another close)
+   * bounds them. An attempt that adopts the process meanwhile sees the ends
+   * itself. One delivery loop per lane.
+   */
+  private async deliverDoorbells(record: LaneRecord): Promise<void> {
+    const internal = this.internals.get(record);
+    if (!internal) return;
+    if (internal.ringing) {
+      internal.doorbellWake?.();
+      return;
+    }
+    internal.ringing = true;
+    const base = this.options.doorbellRetryMs ?? DOORBELL_RETRY_MS;
+    const max = Math.max(base, this.options.doorbellRetryMaxMs ?? DOORBELL_RETRY_MAX_MS);
+    let delay = base;
+    let warned = false;
+    try {
+      for (;;) {
+        if (internal.closing || (record.state !== "parked" && record.state !== "claimed")) return;
+        const task = [...record.tasks.values()].find((candidate) => candidate.doorbell === "pending");
+        if (!task) return;
+        // Owed: no idle close or eviction until it is delivered.
+        record.doorbell = "sent";
+        this.clearTimer(internal, "idleTimer");
+        if (!record.providerSessionId || !this.options.sharesCap()) {
+          await this.doorbellPause(internal, max);
+          continue;
+        }
+        try {
+          const reply = await this.options.wake(this.doorbellPayload(record, task));
+          task.doorbell = "delivered";
+          delay = base;
+          this.options.log.info("Background doorbell rang", { event: "background_doorbell", lane: record.lane,
+            outcome: reply.outcome, turnId: reply.turn_id });
+        } catch (error) {
+          const code = (error as { code?: unknown })?.code;
+          if (code === "lane_moved" || code === "session_closed") {
+            task.doorbell = "delivered";
+            // §2.5 step 4: nobody will attach; end the cycle and let the lane go.
+            this.options.log.warn("The doorbell was rejected; the cycle stays unattached", { event: "background_cycle_unattached",
+              lane: record.lane, code });
+            if (record.state === "parked") {
+              await record.provider.cancelIdle?.(record.poolChatId).catch(() => {});
+              await this.close(record, "session_closed");
+            } else {
+              record.releaseAfterAttempt = "session_closed";
+            }
+            return;
+          }
+          if (!warned) {
+            warned = true;
+            this.options.log.warn("The doorbell is not delivered yet; retrying", { event: "background_doorbell_retry", lane: record.lane });
+          }
+          await this.doorbellPause(internal, delay);
+          delay = Math.min(delay * 2, max);
+        }
+      }
+    } finally {
+      internal.ringing = false;
+      internal.doorbellWake = null;
+    }
+  }
+
+  /** Wait `ms`, or until the connection comes back (`resendAll`). */
+  private doorbellPause(internal: RecordInternals, ms: number): Promise<void> {
+    return new Promise<void>((resolve) => {
+      const timer = setTimeout(() => { internal.doorbellWake = null; resolve(); }, ms);
+      (timer as { unref?: () => void }).unref?.();
+      internal.doorbellWake = () => { clearTimeout(timer); internal.doorbellWake = null; resolve(); };
+    });
+  }
+
+  private doorbellPayload(record: LaneRecord, task: LaneTask): DaemonLaneBackgroundWakePayload {
     const snapshot = task.snapshot;
-    const payload: DaemonLaneBackgroundWakePayload = {
-      ...record.lane, provider_session_id: record.providerSessionId,
+    return {
+      ...record.lane, provider_session_id: record.providerSessionId!,
       task: { task_id: snapshot.id, name: snapshot.name, task_type: snapshot.taskType, status: snapshot.state as "completed" | "failed",
         origin_attempt_id: task.originAttemptId, summary: snapshot.summary,
         duration_ms: snapshot.endedAt !== null ? Math.max(0, snapshot.endedAt - snapshot.startedAt) : null },
     };
-    for (let attempt = 1; attempt <= DOORBELL_ATTEMPTS; attempt++) {
-      try {
-        const reply = await this.options.wake(payload);
-        this.options.log.info("Background doorbell rang", { event: "background_doorbell", lane: record.lane,
-          outcome: reply.outcome, turnId: reply.turn_id });
-        return;
-      } catch (error) {
-        const code = (error as { code?: unknown })?.code;
-        if (code === "lane_moved" || code === "session_closed") {
-          // §2.5 step 4: nobody will attach; end the cycle and let the lane go.
-          this.options.log.warn("The doorbell was rejected; the cycle stays unattached", { event: "background_cycle_unattached",
-            lane: record.lane, code });
-          if (record.state === "parked") {
-            await record.provider.cancelIdle?.(record.poolChatId).catch(() => {});
-            await this.close(record, "session_closed");
-          } else {
-            record.releaseAfterAttempt = "session_closed";
-          }
-          return;
-        }
-        if (attempt === DOORBELL_ATTEMPTS || record.state === "closed" || record.state === "in_attempt") break;
-        await new Promise((resolve) => setTimeout(resolve, DOORBELL_RETRY_MS));
-      }
-    }
-    this.options.log.warn("The doorbell could not be delivered", { event: "background_doorbell_failed", lane: record.lane });
-    if (record.doorbell === "sent" && record.state === "parked") {
-      record.doorbell = "none";
-      this.scheduleIdleClose(record);
-    }
   }
 
   /** Nothing runs and no doorbell is out: close as `done` after `idleCloseMs` (§2.3). */
@@ -778,6 +944,7 @@ export class ParkedLanes {
     const internal = this.internals.get(record);
     if (!internal) return;
     if (internal.closing) return internal.closing;
+    internal.closeKeepsResources = options.keepResources === true;
     internal.closing = (async () => {
       this.clearTimer(internal, "keepAliveTimer");
       this.clearTimer(internal, "idleTimer");
@@ -805,6 +972,7 @@ export class ParkedLanes {
       if (this.records.get(record.key) === record) this.records.delete(record.key);
       internal.pgid = null;
       this.writeStateFile();
+      this.notifyLane(record.key);
       if (!options.keepResources) {
         await record.resources.dispose().catch((error) => {
           this.options.log.warn(`Releasing a lane's resources failed: ${error instanceof Error ? error.message : String(error)}`);
@@ -860,24 +1028,40 @@ export class ParkedLanes {
     }
   }
 
-  /** A `closed` snapshot, repeated (the registry is best effort). */
+  /**
+   * A `closed` snapshot, repeated (the registry is best effort). Every repeat
+   * carries the first one's revision: a later process of the lane reports
+   * higher revisions, so an old repeat never ends its tasks.
+   */
   private sendClosed(record: LaneRecord): void {
     const internal = this.internals.get(record)!;
     this.clearTimer(internal, "debounceTimer");
     if (internal.refreshTimer) clearInterval(internal.refreshTimer);
     internal.refreshTimer = null;
     internal.closedRepeats = 0;
+    const revision = internal.closedRevision ?? ++this.revision;
     const repeat = () => {
-      this.emit(record, "closed");
+      internal.closedTimer = null;
+      this.emit(record, "closed", revision);
       internal.closedRepeats++;
-      if (internal.closedRepeats >= (this.options.closedRepeats ?? DAEMON_LANE_BACKGROUND_CLOSED_REPEATS)) return;
+      if (internal.closedRepeats >= (this.options.closedRepeats ?? DAEMON_LANE_BACKGROUND_CLOSED_REPEATS)) {
+        if (this.closedRepeating.get(record.key) === record) this.closedRepeating.delete(record.key);
+        return;
+      }
       internal.closedTimer = setTimeout(repeat, this.options.closedRepeatMs ?? DAEMON_LANE_BACKGROUND_CLOSED_REPEAT_MS);
       (internal.closedTimer as { unref?: () => void }).unref?.();
     };
+    // Only while no newer record of the lane exists (a replaced record closes after its successor began).
+    const current = this.records.get(record.key);
+    if (current && current !== record) {
+      this.emit(record, "closed", revision);
+      return;
+    }
+    this.closedRepeating.set(record.key, record);
     repeat();
   }
 
-  private emit(record: LaneRecord, state: BackgroundLaneState): void {
+  private emit(record: LaneRecord, state: BackgroundLaneState, fixedRevision?: number): void {
     const runtimeId = this.options.runtimeId();
     const internal = this.internals.get(record);
     if (!runtimeId || !record.providerSessionId || !this.options.sharesCap() || !internal) return;
@@ -888,7 +1072,7 @@ export class ParkedLanes {
       .slice(0, DAEMON_LANE_BACKGROUND_MAX_TASKS)
       .map((task) => this.wireTask(task));
     let payload: DaemonLaneBackgroundTasksPayload = {
-      ...record.lane, runtime_id: runtimeId, provider_session_id: record.providerSessionId, revision: ++this.revision, state,
+      ...record.lane, runtime_id: runtimeId, provider_session_id: record.providerSessionId, revision: fixedRevision ?? ++this.revision, state,
       attempt_id: state === "in_attempt" ? record.attemptId : null,
       parked_until: state === "parked" ? iso(record.parkedUntil) : null, tasks,
     };
@@ -904,6 +1088,13 @@ export class ParkedLanes {
     }
   }
 
+  /** The stop's `requested_at` exactly as its requester wrote it, when this registry sent that stop. */
+  private stopRequestedAt(task: LaneTask, stop: NonNullable<AsyncTaskSnapshot["stop"]>): string {
+    const sent = task.stopRequest;
+    return sent && sent.by === stop.by && Date.parse(sent.requestedAt) === stop.requestedAt
+      ? sent.requestedAt : new Date(stop.requestedAt).toISOString();
+  }
+
   private wireTask(task: LaneTask): DaemonLaneBackgroundTask {
     const snapshot = task.snapshot;
     const status = snapshot.state as BackgroundTaskReportedStatus;
@@ -911,7 +1102,7 @@ export class ParkedLanes {
     return {
       task_id: snapshot.id, task_type: snapshot.taskType, name: snapshot.name, command,
       origin_attempt_id: task.originAttemptId, origin_item_id: backgroundTaskItemId(snapshot.id), status, can_stop: snapshot.canStop,
-      stop_request: snapshot.stop ? { requested_at: new Date(snapshot.stop.requestedAt).toISOString(), by: snapshot.stop.by,
+      stop_request: snapshot.stop ? { requested_at: this.stopRequestedAt(task, snapshot.stop), by: snapshot.stop.by,
         outcome: snapshot.stop.outcome } : null,
       stop_reason: status === "stopped" ? task.stopReason ?? (snapshot.stop?.by === "user" ? "user" : null) : null,
       started_at: new Date(snapshot.startedAt).toISOString(), ended_at: iso(snapshot.endedAt),

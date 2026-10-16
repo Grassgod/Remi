@@ -35,16 +35,28 @@ class StubProvider implements ParkableProvider {
   stops: Array<[string, string | undefined]> = [];
   cancels = 0;
   alive = true;
+  /** A slow stop: the bridge answers this long after the request. */
+  stopDelayMs = 0;
+  /** A stop the bridge fails (or that times out): the task runs on. */
+  stopFails = false;
   chatId: string;
   permission: ((params: any) => Promise<any>) | null = null;
   onChange: ((chatId: string, task: AsyncTaskSnapshot) => void) | null = null;
   constructor(chatId: string) { this.chatId = chatId; }
   listAsyncTasks() { return [...this.tasks.values()]; }
-  async stopAsyncTask(taskId: string, options: { by?: "user" | "remi" }) {
+  async stopAsyncTask(taskId: string, options: { by?: "user" | "remi"; requestedAt?: string }) {
     const task = this.tasks.get(taskId);
     this.stops.push([taskId, options.by]);
+    // As AcpProvider: the stop carries the request's time.
+    const requestedAt = options.requestedAt ? Date.parse(options.requestedAt) : Date.now();
+    if (this.stopDelayMs) await Bun.sleep(this.stopDelayMs);
     if (!task || (task.state !== "running" && task.state !== "paused")) return { stopped: false };
-    this.change({ ...task, state: "stopped", endedAt: Date.now(), stop: { requestedAt: Date.now(), by: options.by ?? "remi", outcome: "stopped" } });
+    if (this.stopFails) {
+      this.change({ ...task, stop: { requestedAt, by: options.by ?? "remi", outcome: "pending" } });
+      this.change({ ...this.tasks.get(taskId)!, stop: { requestedAt, by: options.by ?? "remi", outcome: "failed" } });
+      return { stopped: false };
+    }
+    this.change({ ...task, state: "stopped", endedAt: Date.now(), stop: { requestedAt, by: options.by ?? "remi", outcome: "stopped" } });
     return { stopped: true };
   }
   park(chatId: string, on: boolean) { this.parked.set(chatId, on); }
@@ -219,6 +231,106 @@ describe("ParkedLanes: limits, timers and releases (§2.7)", () => {
     expect(record.tasks.get("bash-2")!.originAttemptId).toBe("tsk_2");
   });
 
+  it("acquire waits for the lane's previous attempt to park (then claims it) or close (then none); never two processes", async () => {
+    const r = registry();
+    const first = r.begin("chat_a", "tsk_1");
+    first.provider.change(snapshot("srv"));
+    const key = laneKeyOf(first.record.lane);
+    // The stopped attempt still finishes: the next one waits instead of starting a second process.
+    let acquired: LaneRecord | null | undefined;
+    const waiting = r.lanes.acquire(key, "tsk_2").then((record) => { acquired = record; });
+    await Bun.sleep(30);
+    expect(acquired).toBeUndefined();
+    await r.lanes.park(first.record);
+    await waiting;
+    expect(acquired).toBe(first.record);
+    expect(first.record.state).toBe("claimed");
+    // An attempt that ends without parking closes the process: the next one starts fresh.
+    const second = r.begin("chat_b", "tsk_3");
+    let none: LaneRecord | null | undefined;
+    const fresh = r.lanes.acquire(laneKeyOf(second.record.lane), "tsk_4").then((record) => { none = record; });
+    await Bun.sleep(30);
+    expect(none).toBeUndefined();
+    await r.lanes.endAttempt(second.record, null);
+    await fresh;
+    expect(none).toBeNull();
+    // Bounded, and cancellable.
+    const third = r.begin("chat_c", "tsk_5");
+    await expect(r.lanes.acquire(laneKeyOf(third.record.lane), "tsk_6", undefined, 40)).rejects.toThrow("lane_busy");
+    const abort = new AbortController();
+    const aborted = r.lanes.acquire(laneKeyOf(third.record.lane), "tsk_6", abort.signal);
+    abort.abort();
+    await expect(aborted).rejects.toThrow();
+    expect(await r.lanes.acquire("nothing", "tsk_7")).toBeNull();
+  });
+
+  it("a lane whose close is stopping its tasks is never claimed; acquire waits for the close, then starts fresh", async () => {
+    const r = registry();
+    const { record, provider } = r.begin("chat_a", "tsk_1");
+    provider.change(snapshot("srv"));
+    await r.lanes.park(record);
+    const key = laneKeyOf(record.lane);
+    provider.stopDelayMs = 150;
+    // The server's release (a cold retry) starts the close; its stop is slow.
+    const releasing = r.lanes.handleRelease({ ...record.lane, provider_session_id: "prov_chat_a", reason: "lane_reset" });
+    await Bun.sleep(20);
+    expect(record.state).toBe("parked");
+    expect(r.lanes.claim(key, "tsk_2")).toBeNull();
+    expect(r.lanes.isParked(key)).toBe(false);
+    // The retry's attempt waits for the process to exit and its resources to go, then makes its own.
+    const acquired = await r.lanes.acquire(key, "tsk_2");
+    expect(acquired).toBeNull();
+    expect(provider.closed).toBe(1);
+    expect(r.disposals()).toBe(1);
+    await releasing;
+  });
+
+  it("release(keepResources) reports resources an earlier close disposed; a death while claimed leaves them to the claimant", async () => {
+    const r = registry();
+    const one = r.begin("chat_a", "tsk_1");
+    one.provider.change(snapshot("srv"));
+    await r.lanes.park(one.record);
+    r.lanes.claim(laneKeyOf(one.record.lane), "tsk_2");
+    one.provider.stopDelayMs = 100;
+    const stopping = r.lanes.closeAll("daemon_restart");
+    expect(await r.lanes.release(one.record, "lane_reset", { keepResources: true })).toEqual({ keptResources: false });
+    await stopping;
+    expect(r.disposals()).toBe(1);
+
+    const two = r.begin("chat_b", "tsk_3");
+    two.provider.change(snapshot("srv"));
+    await r.lanes.park(two.record);
+    r.lanes.claim(laneKeyOf(two.record.lane), "tsk_4");
+    two.provider.alive = false;
+    r.lanes.onSessionLost("tsk_3", "exit code 1", [snapshot("srv")]);
+    await Bun.sleep(20);
+    expect(two.provider.closed).toBe(0);
+    expect(await r.lanes.release(two.record, "lost", { keepResources: true })).toEqual({ keptResources: true });
+    expect(r.disposals()).toBe(1);
+    // A claimant that gives up on a dead process does not park it again.
+    const three = r.begin("chat_c", "tsk_5");
+    three.provider.change(snapshot("srv"));
+    await r.lanes.park(three.record);
+    r.lanes.claim(laneKeyOf(three.record.lane), "tsk_6");
+    three.provider.alive = false;
+    r.lanes.onSessionLost("tsk_5", "exit code 1", [snapshot("srv")]);
+    r.lanes.unclaim(three.record);
+    await waitFor(() => three.provider.closed === 1, "the dead lane closing");
+    expect(r.lanes.isParked(laneKeyOf(three.record.lane))).toBe(false);
+  });
+
+  it("begin never leaves a live process it replaces untracked: it stops its tasks and closes it", async () => {
+    const r = registry();
+    const old = r.begin("chat_a", "tsk_1");
+    old.provider.change(snapshot("srv"));
+    const replacement = r.begin("chat_a", "tsk_2");
+    await waitFor(() => old.provider.closed === 1, "the replaced process closing");
+    expect(old.provider.stops).toEqual([["srv", "remi"]]);
+    expect(r.logs.some((line) => line.includes("parked_lane_conflict"))).toBe(true);
+    expect(r.lanes.get(laneKeyOf(old.record.lane))).toBe(replacement.record);
+    expect(replacement.provider.closed).toBe(0);
+  });
+
   it("a release before spawning stops the tasks with its reason, closes, and keeps the resources for the caller", async () => {
     const r = registry();
     const { record, provider } = r.begin("chat_a", "tsk_1");
@@ -258,6 +370,33 @@ describe("ParkedLanes: limits, timers and releases (§2.7)", () => {
     await r.lanes.handleStop({ ...record.lane, task_id: "*", requested_at: new Date().toISOString() });
     expect(provider.stops).toEqual([["a", "user"], ["b", "user"]]);
     await waitFor(() => r.snapshots.at(-1)!.tasks.filter((task) => task.stop_reason === "user").length === 2, "the user stops reported");
+  });
+
+  it("a person's failed stop settles under the server's requested_at, whatever this host's clock; the trace gets the outcome", async () => {
+    const r = registry();
+    const { record, provider } = r.begin("chat_a", "tsk_1");
+    const requested: Array<[string, string]> = [];
+    const results: Array<[string, string]> = [];
+    r.lanes.attach(record, {
+      stopRequested: (taskId, request) => requested.push([taskId, request.requested_at]),
+      stopResult: (taskId, outcome) => results.push([taskId, outcome]),
+      output: () => {},
+    });
+    provider.change(snapshot("srv"));
+    provider.stopFails = true;
+    // The server's clock, in its own spelling (no milliseconds), far from this host's.
+    const requestedAt = "2001-02-03T04:05:06Z";
+    await r.lanes.handleStop({ ...record.lane, task_id: "srv", requested_at: requestedAt });
+    expect(requested).toEqual([["srv", requestedAt]]);
+    expect(results).toEqual([["srv", "failed"]]);
+    await waitFor(() => r.snapshots.at(-1)?.tasks[0]?.stop_request?.outcome === "failed", "the failed outcome reported");
+    expect(r.snapshots.at(-1)!.tasks[0]!.stop_request).toEqual({ requested_at: requestedAt, by: "user", outcome: "failed" });
+    // A stop Remi sends itself is stamped here.
+    provider.stopFails = false;
+    await r.lanes.release(record, "lane_reset");
+    const last = r.snapshots.at(-1)!.tasks[0]!.stop_request!;
+    expect(last).toMatchObject({ by: "remi", outcome: "stopped" });
+    expect(Math.abs(Date.parse(last.requested_at) - Date.now())).toBeLessThan(5_000);
   });
 
   it("the daemon's stop closes parked lanes with daemon_restart", async () => {
@@ -337,6 +476,87 @@ describe("ParkedLanes: the doorbell (§2.5)", () => {
     await r.lanes.park(record);
     await Bun.sleep(30);
     expect(r.wakes).toHaveLength(1);
+  });
+
+  it("a task handed off, then answered in a later round of the same attempt, does not ring at park", async () => {
+    const r = registry();
+    const { record, provider } = r.begin("chat_a", "tsk_1");
+    provider.change(snapshot("t"));
+    provider.change(snapshot("u"));
+    // The first end hands both off; a steer then makes the attempt run another prompt, in which `t` ends.
+    r.lanes.handOff(record);
+    r.lanes.cancelHandOff(record);
+    provider.change(snapshot("t", "completed"));
+    // The second end hands off only what runs.
+    r.lanes.handOff(record);
+    await r.lanes.park(record);
+    await Bun.sleep(30);
+    expect(r.wakes).toEqual([]);
+    // Without the cancel, a second hand-off still forgets a task that ended meanwhile.
+    const other = r.begin("chat_b", "tsk_2");
+    other.provider.change(snapshot("v"));
+    other.provider.change(snapshot("w"));
+    r.lanes.handOff(other.record);
+    other.provider.change(snapshot("v", "completed"));
+    r.lanes.handOff(other.record);
+    await r.lanes.park(other.record);
+    await Bun.sleep(30);
+    expect(r.wakes).toEqual([]);
+  });
+
+  it("a doorbell owed while the socket is down is kept (no idle close) and rung on reconnect", async () => {
+    const r = registry({ idleCloseMs: 30 });
+    const { record, provider } = r.begin("chat_a", "tsk_1");
+    provider.change(snapshot("a"));
+    await r.lanes.park(record);
+    r.setShares(false);
+    provider.change(snapshot("a", "completed", { summary: "done" }));
+    await Bun.sleep(100);
+    expect(r.wakes).toEqual([]);
+    expect(provider.closed).toBe(0);
+    expect(record.doorbell).toBe("sent");
+    r.setShares(true);
+    r.lanes.resendAll();
+    await waitFor(() => r.wakes.length === 1, "the doorbell on reconnect");
+    expect(r.wakes[0]!.task).toMatchObject({ task_id: "a", status: "completed" });
+    await Bun.sleep(60);
+    expect(r.wakes).toHaveLength(1);
+    expect(provider.closed).toBe(0);
+  });
+
+  it("retries a failing doorbell with backoff past five tries until it is delivered", async () => {
+    let calls = 0;
+    const delivered: string[] = [];
+    const r = registry({ idleCloseMs: 30, doorbellRetryMs: 5, doorbellRetryMaxMs: 20,
+      wake: async (payload) => {
+        calls++;
+        if (calls <= 7) throw new Error("daemon RPC failed: daemon_unreachable");
+        delivered.push(payload.task.task_id);
+        return { ok: true, outcome: "created", turn_id: "turn_2", attempt_id: null } as DaemonLaneBackgroundWakeReply;
+      } });
+    const { record, provider } = r.begin("chat_a", "tsk_1");
+    provider.change(snapshot("a"));
+    await r.lanes.park(record);
+    provider.change(snapshot("a", "failed"));
+    await waitFor(() => delivered.length === 1, "the doorbell delivered");
+    expect(calls).toBe(8);
+    expect(provider.closed).toBe(0);
+    expect(r.logs.filter((line) => line.includes("background_doorbell_retry"))).toHaveLength(1);
+  });
+
+  it("an attempt that adopts the process while a doorbell is owed answers it: nothing rings later", async () => {
+    const r = registry();
+    const { record, provider } = r.begin("chat_a", "tsk_1");
+    provider.change(snapshot("a"));
+    await r.lanes.park(record);
+    r.setShares(false);
+    provider.change(snapshot("a", "completed"));
+    const claimed = r.lanes.claim(laneKeyOf(record.lane), "tsk_2")!;
+    expect(r.lanes.adopt(claimed, "tsk_2", "tsk_2")).toBe(true);
+    r.setShares(true);
+    r.lanes.resendAll();
+    await Bun.sleep(40);
+    expect(r.wakes).toEqual([]);
   });
 
   it("a rejected doorbell cancels the cycle and closes the lane (session_closed)", async () => {
@@ -429,6 +649,52 @@ describe("isBackgroundDoorbellMessage (§2.5)", () => {
     expect(isBackgroundDoorbellMessage({ execution_scope: "" }, byText(false))).toBe(false);
     expect(isBackgroundDoorbellMessage(undefined, byText(true))).toBe(true);
     expect(isBackgroundDoorbellMessage(null, byText(false))).toBe(false);
+  });
+});
+
+describe("ParkedLanes: the hello's parked_lanes (§5.2)", () => {
+  it("lists every lane whose process lives, parked or in an attempt (an adopted one included), never a closed one", async () => {
+    const r = registry();
+    const { record, provider } = r.begin("chat_a", "tsk_1");
+    provider.change(snapshot("srv"));
+    await r.lanes.park(record);
+    const lane = { ...record.lane, provider_session_id: "prov_chat_a", task_ids: ["srv"] };
+    expect(r.lanes.helloLanes()).toEqual([lane]);
+    // Adopted, before its first in_attempt snapshot reached the server: still listed, so a reconnect keeps its rows.
+    r.lanes.claim(laneKeyOf(record.lane), "tsk_2");
+    r.lanes.adopt(record, "tsk_2", "tsk_2");
+    expect(r.lanes.helloLanes()).toEqual([lane]);
+    await r.lanes.endAttempt(record, null);
+    expect(r.lanes.helloLanes()).toEqual([]);
+  });
+});
+
+describe("ParkedLanes: closed snapshots of an old process (§5.2)", () => {
+  it("repeat `closed` with the first revision, and stop repeating when the lane gets a new process", async () => {
+    const r = registry({ closedRepeats: 3, closedRepeatMs: 30 });
+    const old = r.begin("chat_a", "tsk_1");
+    old.provider.change(snapshot("srv"));
+    await r.lanes.park(old.record);
+    await r.lanes.release(old.record, "lane_reset");
+    const closed = () => r.snapshots.filter((payload) => payload.state === "closed");
+    expect(closed()).toHaveLength(1);
+    // The next process of the same provider session starts a task before the old repeats are done.
+    const next = r.begin("chat_a", "tsk_2");
+    next.provider.change(snapshot("dev"));
+    await waitFor(() => r.snapshots.some((payload) => payload.state === "in_attempt" && payload.tasks.some((task) => task.task_id === "dev")),
+      "the new process's snapshot");
+    await Bun.sleep(120);
+    expect(closed()).toHaveLength(1);
+    const first = closed()[0]!.revision;
+    expect(Math.min(...r.snapshots.filter((payload) => payload.state !== "closed" && payload.attempt_id === "tsk_2")
+      .map((payload) => payload.revision))).toBeGreaterThan(first);
+    // Left alone, every repeat carries the first revision.
+    const lone = r.begin("chat_b", "tsk_3");
+    lone.provider.change(snapshot("x"));
+    await r.lanes.park(lone.record);
+    await r.lanes.release(lone.record, "lane_reset");
+    await waitFor(() => closed().filter((payload) => payload.session_id === "chat_b").length === 3, "three repeats");
+    expect(new Set(closed().filter((payload) => payload.session_id === "chat_b").map((payload) => payload.revision)).size).toBe(1);
   });
 });
 
