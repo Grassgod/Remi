@@ -652,6 +652,23 @@ describe("isBackgroundDoorbellMessage (§2.5)", () => {
   });
 });
 
+describe("ParkedLanes: the hello's parked_lanes (§5.2)", () => {
+  it("lists every lane whose process lives, parked or in an attempt (an adopted one included), never a closed one", async () => {
+    const r = registry();
+    const { record, provider } = r.begin("chat_a", "tsk_1");
+    provider.change(snapshot("srv"));
+    await r.lanes.park(record);
+    const lane = { ...record.lane, provider_session_id: "prov_chat_a", task_ids: ["srv"] };
+    expect(r.lanes.helloLanes()).toEqual([lane]);
+    // Adopted, before its first in_attempt snapshot reached the server: still listed, so a reconnect keeps its rows.
+    r.lanes.claim(laneKeyOf(record.lane), "tsk_2");
+    r.lanes.adopt(record, "tsk_2", "tsk_2");
+    expect(r.lanes.helloLanes()).toEqual([lane]);
+    await r.lanes.endAttempt(record, null);
+    expect(r.lanes.helloLanes()).toEqual([]);
+  });
+});
+
 describe("ParkedLanes: closed snapshots of an old process (§5.2)", () => {
   it("repeat `closed` with the first revision, and stop repeating when the lane gets a new process", async () => {
     const r = registry({ closedRepeats: 3, closedRepeatMs: 30 });
