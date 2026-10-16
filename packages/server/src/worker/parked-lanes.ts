@@ -347,7 +347,13 @@ export class ParkedLanes {
    * are the lane's now. One that ends before the lane is parked still rings.
    */
   handOff(record: LaneRecord): void {
-    for (const task of record.tasks.values()) if (isLive(task.snapshot.state)) task.handedOff = true;
+    // Only what runs now: a task that ended before (in an earlier round of the attempt) was answered there.
+    for (const task of record.tasks.values()) task.handedOff = isLive(task.snapshot.state);
+  }
+
+  /** The attempt runs on after handing off (a steer came in): its next end decides again. */
+  cancelHandOff(record: LaneRecord): void {
+    for (const task of record.tasks.values()) task.handedOff = false;
   }
 
   /** Remi stops these tasks at the attempt's end for `reason` (§2.2): the registry reports it. */

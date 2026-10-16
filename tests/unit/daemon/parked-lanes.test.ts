@@ -442,6 +442,32 @@ describe("ParkedLanes: the doorbell (§2.5)", () => {
     expect(r.wakes).toHaveLength(1);
   });
 
+  it("a task handed off, then answered in a later round of the same attempt, does not ring at park", async () => {
+    const r = registry();
+    const { record, provider } = r.begin("chat_a", "tsk_1");
+    provider.change(snapshot("t"));
+    provider.change(snapshot("u"));
+    // The first end hands both off; a steer then makes the attempt run another prompt, in which `t` ends.
+    r.lanes.handOff(record);
+    r.lanes.cancelHandOff(record);
+    provider.change(snapshot("t", "completed"));
+    // The second end hands off only what runs.
+    r.lanes.handOff(record);
+    await r.lanes.park(record);
+    await Bun.sleep(30);
+    expect(r.wakes).toEqual([]);
+    // Without the cancel, a second hand-off still forgets a task that ended meanwhile.
+    const other = r.begin("chat_b", "tsk_2");
+    other.provider.change(snapshot("v"));
+    other.provider.change(snapshot("w"));
+    r.lanes.handOff(other.record);
+    other.provider.change(snapshot("v", "completed"));
+    r.lanes.handOff(other.record);
+    await r.lanes.park(other.record);
+    await Bun.sleep(30);
+    expect(r.wakes).toEqual([]);
+  });
+
   it("a doorbell owed while the socket is down is kept (no idle close) and rung on reconnect", async () => {
     const r = registry({ idleCloseMs: 30 });
     const { record, provider } = r.begin("chat_a", "tsk_1");

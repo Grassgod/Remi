@@ -5306,6 +5306,9 @@ export class MultiremiDaemon {
           if (stale.length) await this.taskDownlinks.consumeTaskSteerMessages(task.id, stale.map((m) => m.id));
           const fresh = pendingNow.filter((m) => !recordedSteerIds.has(m.id));
           if (!forceAnswerExpired && fresh.length) {
+            // The attempt runs on: its background tasks are its own again until its next end decides (§2.2).
+            if (laneRecord) this.parkedLanes.cancelHandOff(laneRecord);
+            backgroundDecision = null;
             await injectSteerBatch(fresh);
             continue;
           }
@@ -5324,7 +5327,7 @@ export class MultiremiDaemon {
     } finally {
       // PR 6 §6.3: a cancelled or failed attempt whose process lives still hands its tasks off or stops them
       // (its trace closes after this); a cancel ends the turn, not the background work.
-      if (backgroundDecisionOf() === null && !trace.items.some((item) => item.type === "background_task" && item.handed_off)) {
+      if (backgroundDecisionOf() === null) {
         await endBackgroundTasksOnce?.({ drain: false, reason: signal.aborted ? "cancelled" : "turn_end" }).catch((error: unknown) =>
           log.warn(`Task ${task.id}: ending background tasks failed: ${error instanceof Error ? error.message : String(error)}`));
       }
