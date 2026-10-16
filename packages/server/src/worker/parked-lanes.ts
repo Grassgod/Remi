@@ -62,6 +62,12 @@ export const PARKED_IDLE_CLOSE_MS = 60_000;
 export const PARKED_REQUEST_HOLD_MS = 60_000;
 /** How long Remi's own stops of a lane's tasks may take before its process closes anyway. */
 export const LANE_STOP_TIMEOUT_MS = 3_000;
+/**
+ * How long an attempt waits for the lane's previous attempt to park or close
+ * before it gives up (§2.4: one process per lane). A cancelled attempt
+ * normally finishes in seconds.
+ */
+export const LANE_SETTLE_TIMEOUT_MS = 120_000;
 /** Doorbell RPC retries on a transport error (the socket may be reconnecting). */
 const DOORBELL_ATTEMPTS = 5;
 const DOORBELL_RETRY_MS = 2_000;
@@ -236,6 +242,8 @@ export class ParkedLanes {
   private readonly records = new Map<string, LaneRecord>();
   private readonly internals = new WeakMap<LaneRecord, RecordInternals>();
   private readonly byChatId = new Map<string, LaneRecord>();
+  /** Attempts waiting for a lane's current attempt to park or close (§2.4). */
+  private readonly laneWaiters = new Map<string, Set<() => void>>();
   private revision = 0;
   private readonly now: () => number;
   private readonly tailer: AsyncTaskOutputTailer;
@@ -279,8 +287,10 @@ export class ParkedLanes {
     const key = laneKeyOf(input.lane);
     const existing = this.records.get(key);
     if (existing && existing.state !== "closed" && existing.poolChatId !== input.poolChatId) {
-      // §2.4's invariant: one process per lane. The caller released or adopted the old one first.
-      this.options.log.warn("A lane already has a live process", { event: "parked_lane_conflict", lane: input.lane });
+      // §2.4's invariant: one process per lane. `acquire` waits for the old one, so this is a defect;
+      // never leave it untracked: stop its tasks and close it.
+      this.options.log.warn("A lane already has a live process; closing it", { event: "parked_lane_conflict", lane: input.lane });
+      void this.close(existing, "lane_reset");
     }
     const record: LaneRecord = {
       key, lane: input.lane, provider: input.provider, poolChatId: input.poolChatId, providerSessionId: input.providerSessionId,
@@ -433,7 +443,32 @@ export class ParkedLanes {
     }
     this.scheduleIdleClose(record);
     this.scheduleSnapshot(record, true);
+    this.notifyLane(record.key);
     return { parked: true };
+  }
+
+  /**
+   * The next attempt of this lane, before it prepares anything (§2.4): wait
+   * until no other attempt uses the lane (an attempt still finishing, a
+   * stopped one included, parks or closes first), then claim the parked
+   * process, or null when none is left. Throws when `signal` aborts, or
+   * after {@link LANE_SETTLE_TIMEOUT_MS}.
+   */
+  async acquire(key: string, attemptId: string, signal?: AbortSignal, timeoutMs = LANE_SETTLE_TIMEOUT_MS): Promise<LaneRecord | null> {
+    const deadline = this.now() + timeoutMs;
+    for (;;) {
+      signal?.throwIfAborted();
+      const record = this.records.get(key);
+      if (!record || record.state === "closed") return null;
+      if (record.state === "parked") return this.claim(key, attemptId);
+      if (record.attemptId === attemptId) return null;
+      if (this.now() >= deadline) {
+        throw new Error("[lane_busy] the lane's previous attempt is still finishing; this attempt does not start a second process");
+      }
+      this.options.log.info("Waiting for the lane's previous attempt to park or close", { event: "background_lane_wait",
+        lane: record.lane, attemptId: record.attemptId });
+      await this.waitForLane(key, Math.max(0, deadline - this.now()), signal);
+    }
   }
 
   /**
@@ -464,6 +499,7 @@ export class ParkedLanes {
     (internal.keepAliveTimer as { unref?: () => void }).unref?.();
     this.scheduleIdleClose(record);
     this.wakeAttachWaiters(record);
+    this.notifyLane(record.key);
   }
 
   /**
@@ -637,6 +673,29 @@ export class ParkedLanes {
     return cancelled;
   }
 
+  /** Resolves when the lane's record changes hands (parks, unclaims, closes), after `timeoutMs`, or on abort. */
+  private waitForLane(key: string, timeoutMs: number, signal?: AbortSignal): Promise<void> {
+    return new Promise<void>((resolve) => {
+      let waiters = this.laneWaiters.get(key);
+      if (!waiters) this.laneWaiters.set(key, waiters = new Set());
+      const done = () => {
+        clearTimeout(timer);
+        signal?.removeEventListener("abort", done);
+        waiters!.delete(done);
+        if (!waiters!.size && this.laneWaiters.get(key) === waiters) this.laneWaiters.delete(key);
+        resolve();
+      };
+      const timer = setTimeout(done, timeoutMs);
+      (timer as { unref?: () => void }).unref?.();
+      signal?.addEventListener("abort", done, { once: true });
+      waiters.add(done);
+    });
+  }
+
+  private notifyLane(key: string): void {
+    for (const wake of [...this.laneWaiters.get(key) ?? []]) wake();
+  }
+
   private wakeAttachWaiters(record: LaneRecord): void {
     const internal = this.internals.get(record);
     if (!internal) return;
@@ -799,6 +858,7 @@ export class ParkedLanes {
       if (this.records.get(record.key) === record) this.records.delete(record.key);
       internal.pgid = null;
       this.writeStateFile();
+      this.notifyLane(record.key);
       if (!options.keepResources) {
         await record.resources.dispose().catch((error) => {
           this.options.log.warn(`Releasing a lane's resources failed: ${error instanceof Error ? error.message : String(error)}`);

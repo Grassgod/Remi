@@ -3454,11 +3454,11 @@ export class MultiremiDaemon {
     });
     this.activeTaskIds.add(task.id);
     const finishTracking = executionTrackerFor(this.options.workspacesRoot).begin(subject.id, task.id);
-    // PR 6 §2.4: an offer for a parked lane claims its process before preparing; one process per lane.
+    // PR 6 §2.4: an attempt of an eligible lane claims the lane's parked process before preparing (in the try below).
     const backgroundLane = this.backgroundLaneOf(task);
     const background: BackgroundAttempt | null = backgroundLane ? {
       lane: backgroundLane,
-      claimed: this.parkedLanes.claim(laneKeyOf(backgroundLane), task.id),
+      claimed: null,
       own: new DaemonLaneResources((directory) => cleanupTaskPrivateTempDirectory(directory, () => this.assertWorkspaceRootOwner())),
       record: null,
     } : null;
@@ -3530,6 +3530,11 @@ export class MultiremiDaemon {
     };
 
     try {
+      if (background) {
+        // One process per lane: an attempt still finishing on it (a stopped one, say) parks or closes first,
+        // then this attempt claims what parked, or starts fresh.
+        background.claimed = await this.parkedLanes.acquire(laneKeyOf(background.lane), task.id, abort.signal);
+      }
       this.assertWorkspaceRootOwner();
       if (task.issueId && !task.chatSessionId && !task.runtimeWorkspaceId && task.holdsWorkspace !== false && task.issue?.key) {
         const adopted = await this.topicWorkspaces.preparePendingMigrationForIssue(

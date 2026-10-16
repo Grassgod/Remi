@@ -332,6 +332,35 @@ describe("Bun Multiremi daemon background tasks (PR 6)", () => {
     expect(log.some((entry) => entry.kind === "exited")).toBe(false);
   }, 60_000);
 
+  it("(16) a stop with a message sent: the next turn waits for the stopped attempt to park, then adopts its process", async () => {
+    const { store, agent, daemon } = await bed("stop-queued");
+    const logPath = join(workDir!, "agent.jsonl");
+    // The bridge answers the cancel slowly, so the next turn is offered while the stopped attempt still finishes.
+    daemon(scriptedAcp({ cancelDelayMs: 1_500, prompts: [[chunk("Hello.")]], resumedPrompts: [
+      [...bash("bash-1", "toolu_srv", "npm run dev"), chunk("Dev server up. "), { hold: "cancel" }],
+      [chunk("It still runs.")],
+    ] }, logPath, "claude"));
+    const chat = store.createChatSession({ agentId: agent.id });
+    // A first turn pins the provider session, so the turns after it resume it.
+    const opening = store.sendChatMessage(chat.id, { body: "Hi" }).task;
+    await waitFor(() => finished(store, opening.id), "the opening turn");
+    const first = store.sendChatMessage(chat.id, { body: "Start the dev server" }).task;
+    await waitFor(() => agentLog(logPath).filter((entry) => entry.method === "session/prompt").length === 2, "the dev server turn's prompt");
+    await waitFor(() => store.getTask(first.id)?.status === "running", "the dev server turn running");
+    await Bun.sleep(300);
+    // Sent while the turn runs, then the turn is stopped: the server offers the message's turn at once.
+    store.sendMessage({ session_id: chat.id, sender: { type: "member", id: "mem_local_local" }, to: { type: "agent", ref: agent.id },
+      message_kind: "request", wake_requested: "now", body_md: "Is it up?" });
+    store.cancelTask(first.id);
+    const second = await waitFor(() => chatTasks(store, chat.id).find((candidate) => ![opening.id, first.id].includes(candidate.id)
+      && finished(store, candidate.id)), "the next turn");
+    expect(store.getTask(second.id)).toMatchObject({ status: "completed", result: "It still runs." });
+    // One process per provider session at a time: the parked one was adopted, never a second beside it.
+    expectNoOverlap(logPath);
+    expect(processes(logPath).size).toBe(2);
+    expect(agentLog(logPath).filter((entry) => entry.method === "initialize")).toHaveLength(2);
+  }, 60_000);
+
   it("(5) the keep-alive cap stops the tasks and closes the process", async () => {
     const { store, agent, daemon, d } = await bed("cap");
     const logPath = join(workDir!, "agent.jsonl");

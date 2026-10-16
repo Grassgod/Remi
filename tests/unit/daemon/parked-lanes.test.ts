@@ -219,6 +219,51 @@ describe("ParkedLanes: limits, timers and releases (§2.7)", () => {
     expect(record.tasks.get("bash-2")!.originAttemptId).toBe("tsk_2");
   });
 
+  it("acquire waits for the lane's previous attempt to park (then claims it) or close (then none); never two processes", async () => {
+    const r = registry();
+    const first = r.begin("chat_a", "tsk_1");
+    first.provider.change(snapshot("srv"));
+    const key = laneKeyOf(first.record.lane);
+    // The stopped attempt still finishes: the next one waits instead of starting a second process.
+    let acquired: LaneRecord | null | undefined;
+    const waiting = r.lanes.acquire(key, "tsk_2").then((record) => { acquired = record; });
+    await Bun.sleep(30);
+    expect(acquired).toBeUndefined();
+    await r.lanes.park(first.record);
+    await waiting;
+    expect(acquired).toBe(first.record);
+    expect(first.record.state).toBe("claimed");
+    // An attempt that ends without parking closes the process: the next one starts fresh.
+    const second = r.begin("chat_b", "tsk_3");
+    let none: LaneRecord | null | undefined;
+    const fresh = r.lanes.acquire(laneKeyOf(second.record.lane), "tsk_4").then((record) => { none = record; });
+    await Bun.sleep(30);
+    expect(none).toBeUndefined();
+    await r.lanes.endAttempt(second.record, null);
+    await fresh;
+    expect(none).toBeNull();
+    // Bounded, and cancellable.
+    const third = r.begin("chat_c", "tsk_5");
+    await expect(r.lanes.acquire(laneKeyOf(third.record.lane), "tsk_6", undefined, 40)).rejects.toThrow("lane_busy");
+    const abort = new AbortController();
+    const aborted = r.lanes.acquire(laneKeyOf(third.record.lane), "tsk_6", abort.signal);
+    abort.abort();
+    await expect(aborted).rejects.toThrow();
+    expect(await r.lanes.acquire("nothing", "tsk_7")).toBeNull();
+  });
+
+  it("begin never leaves a live process it replaces untracked: it stops its tasks and closes it", async () => {
+    const r = registry();
+    const old = r.begin("chat_a", "tsk_1");
+    old.provider.change(snapshot("srv"));
+    const replacement = r.begin("chat_a", "tsk_2");
+    await waitFor(() => old.provider.closed === 1, "the replaced process closing");
+    expect(old.provider.stops).toEqual([["srv", "remi"]]);
+    expect(r.logs.some((line) => line.includes("parked_lane_conflict"))).toBe(true);
+    expect(r.lanes.get(laneKeyOf(old.record.lane))).toBe(replacement.record);
+    expect(replacement.provider.closed).toBe(0);
+  });
+
   it("a release before spawning stops the tasks with its reason, closes, and keeps the resources for the caller", async () => {
     const r = registry();
     const { record, provider } = r.begin("chat_a", "tsk_1");
