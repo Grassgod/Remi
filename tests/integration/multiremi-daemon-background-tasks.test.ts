@@ -758,6 +758,23 @@ describe("Bun Multiremi daemon background tasks (PR 6)", () => {
     expect(agentLog(logA).some((entry) => entry.kind === "exited")).toBe(true);
   }, 60_000);
 
+  it("(20) a planned daemon stop reports the parked lane closed, its tasks stopped with daemon_restart", async () => {
+    const { store, agent, daemon, d } = await bed("planned-stop");
+    const logPath = join(workDir!, "agent.jsonl");
+    const run = daemon(scriptedAcp({ prompts: [[...bash("bash-1", "toolu_srv", "python3 -m http.server"), chunk("Started."), { resolve: "end_turn" }]] },
+      logPath, "claude"));
+    const chat = store.createChatSession({ agentId: agent.id });
+    const first = store.sendChatMessage(chat.id, { body: "Start a server" }).task;
+    await waitFor(() => finished(store, first.id), "the turn");
+    await waitFor(() => d.snapshots.some((snapshot) => snapshot.state === "parked"), "parked");
+    activeDaemons.splice(activeDaemons.indexOf(run), 1);
+    await run.stopAndDrainTestWork();
+    expect(agentLog(logPath).some((entry) => entry.kind === "exited")).toBe(true);
+    // The closed snapshot leaves before the socket does, so the registry does not wait for the next hello.
+    const closed = d.snapshots.find((snapshot) => snapshot.state === "closed");
+    expect(closed?.tasks[0]).toMatchObject({ task_id: "bash-1", status: "stopped", stop_reason: "daemon_restart" });
+  }, 60_000);
+
   it("(14) a rejected doorbell (session_closed) cancels the cycle and closes the lane", async () => {
     const { store, agent, daemon, d } = await bed("rejected", { phaseD: { reject: "session_closed" } });
     const logPath = join(workDir!, "agent.jsonl");

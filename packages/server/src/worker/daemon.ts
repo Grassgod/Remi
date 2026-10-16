@@ -953,6 +953,8 @@ export class MultiremiDaemon {
   private activityReporters = new Set<TaskActivityReporter>();
   /** Chat lanes whose process lives across attempts while background tasks run (PR 6 §2.3). */
   private readonly parkedLanes: ParkedLanes;
+  /** The parked lanes' close when the daemon stops (PR 6 §2.7); null while running. */
+  private parkedLanesClosing: Promise<void> | null = null;
   private readonly ownsAntigravityShim: boolean;
   private runtimeCodexProfile: RuntimeCodexProfile | null = null;
   private runtimeClaudeProfile: RuntimeClaudeProfile | null = null;
@@ -1688,6 +1690,7 @@ export class MultiremiDaemon {
     // PR 6 R2: bridges a crashed run left parked die before anything is claimed.
     this.parkedLanes?.sweepCrashedBridges();
     this.parkedLanes?.disable(null);
+    this.parkedLanesClosing = null;
     const outbox = this.ensureOutbox();
     this.startRepoCheckoutServer();
     try {
@@ -1771,7 +1774,7 @@ export class MultiremiDaemon {
       }
       throw error;
     } finally {
-      this.protocolClient?.stopLane(this.protocolLane);
+      await this.leaveProtocolLane();
       this.ready = false;
       this.onReadyChange(false);
       // Stop scheduling new sweeps before draining tasks. An existing sweep
@@ -2960,6 +2963,20 @@ export class MultiremiDaemon {
     }
   }
 
+  /**
+   * Leave the protocol socket (the last lane to leave closes it). PR 6 §2.7: parked lanes stop
+   * their tasks and report `closed` first, while the socket is still up, so the registry does not
+   * wait for the next hello; what an attempt still holds closes in start()'s finally.
+   */
+  private leaveProtocolLane(): Promise<void> | void {
+    if (!this.parkedLanesClosing && !this.parkedLanes?.parkedCount) {
+      this.protocolClient?.stopLane(this.protocolLane);
+      return;
+    }
+    this.parkedLanesClosing ??= this.parkedLanes.closeAll("daemon_restart", { parkedOnly: true }).catch(() => {});
+    return this.parkedLanesClosing.then(() => this.protocolClient?.stopLane(this.protocolLane));
+  }
+
   stop(): void {
     if (this.pluginLocalRetryTimer !== null) clearTimeout(this.pluginLocalRetryTimer);
     this.pluginLocalRetryTimer = null;
@@ -2975,7 +2992,7 @@ export class MultiremiDaemon {
     this.terminalAuthorityCleanupRetryWake?.();
     this.authorityProbeWake?.();
     this.waitWake?.();
-    this.protocolClient?.stopLane(this.protocolLane);
+    void this.leaveProtocolLane();
     this.agentPluginReconcileAbort?.abort(this.pollAbort.signal.reason);
     this.cancelRuntimeModelRefresh();
     // Release any handleTask waiting on report delivery; undelivered rows are

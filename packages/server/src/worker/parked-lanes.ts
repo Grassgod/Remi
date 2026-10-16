@@ -623,8 +623,9 @@ export class ParkedLanes {
   }
 
   /** Close every lane: daemon stop, update or drain (§2.7 `daemon_restart`). */
-  async closeAll(reason: BackgroundTaskStopReason): Promise<void> {
-    await Promise.allSettled([...this.records.values()].filter((record) => record.state === "parked" || record.state === "claimed")
+  async closeAll(reason: BackgroundTaskStopReason, options: { parkedOnly?: boolean } = {}): Promise<void> {
+    await Promise.allSettled([...this.records.values()]
+      .filter((record) => record.state === "parked" || (!options.parkedOnly && record.state === "claimed"))
       .map((record) => this.close(record, reason)));
   }
 
