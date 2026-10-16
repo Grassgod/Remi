@@ -157,6 +157,8 @@ describe("daemon consumption reports over the real server protocol", () => {
       cancel: async () => { interrupt?.(); },
       prompt: async () => {
         turn++;
+        // Real ACP notifications arrive after prompt() returns its pending promise.
+        await Promise.resolve();
         const notify = (update: any) => client._options.onSessionUpdate({ sessionId: "native-session", update });
         const usage = (id: string, model: string, input: number, output: number) => ({
           sessionUpdate: "usage_update", used: 70000, size: 200000,
@@ -194,6 +196,9 @@ describe("daemon consumption reports over the real server protocol", () => {
       providerFactory: () => {
         const provider = new AcpProvider({ agentType: "claude" });
         (provider as any)._ensureSession = async () => ({ client, acpSessionId: "native-session" });
+        // This stub models cancel/re-prompt; it has no native process to join.
+        // Exercise the unsupported-steer fallback rather than an absent pool entry.
+        provider.steer = async () => ({ outcome: "unsupported" });
         return provider;
       },
     });

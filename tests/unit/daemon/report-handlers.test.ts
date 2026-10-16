@@ -328,7 +328,7 @@ describe("v2 reports", () => {
           else expect([...error.mock.calls, ...warn.mock.calls]).toEqual([]);
         }
       } finally { error.mockRestore(); warn.mockRestore(); }
-    });
+    }, 15_000); // Every malformed-field case constructs and migrates an isolated Store.
 
     it(`keeps frame-level rejections side-effect free for ${type}`, async () => {
       const { store, task, runtime } = fixture();

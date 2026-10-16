@@ -50,7 +50,10 @@ function setup(f: PendingTurnTestFixture, sameOwner = false, busyOwner = false, 
   };
   const refresh = (issueId: string) => {
     const ctx = new StoreContext(db, () => store), events = createCommitEventQueue();
-    db.transaction(() => refreshIssueQuestionsAfterResponsibilityChangeWithinTransaction(ctx, issueId, events))();
+    db.transaction(() => {
+      ctx.lockWorkspaceRuntimeLifecycle('local');
+      refreshIssueQuestionsAfterResponsibilityChangeWithinTransaction(ctx, issueId, events);
+    })();
     return store.getQuestion(q.id)!;
   };
   const member = (name: string) => {
@@ -70,7 +73,10 @@ pendingTurnBackendTests('one question through the responsibility chain', fixture
     // The Leaders' notification rounds end after escalating; only the worker still waits, now on a human.
     h.db.run("UPDATE multiremi_turns SET status='completed' WHERE agent_id IN (?,?) AND status='running'", [h.leader.id, h.parentLeader.id]);
     const ctx = new StoreContext(h.db, () => h.store), events = createCommitEventQueue();
-    h.db.transaction(() => deriveIssueStatusWithinTransaction(ctx, h.issue.id, events))();
+    h.db.transaction(() => {
+      ctx.lockWorkspaceRuntimeLifecycle('local');
+      deriveIssueStatusWithinTransaction(ctx, h.issue.id, events);
+    })();
     expect(h.store.getIssue(h.issue.id)?.status).toBe('in_review');
     h.store.answerQuestion(h.q.id, { expected_route_revision: human.route_revision, response: { answer: 'A' } }, { type: 'member', id: 'mem_local_local' });
     expect(h.store.getTurn(h.turn.id)?.status).toBe('running');

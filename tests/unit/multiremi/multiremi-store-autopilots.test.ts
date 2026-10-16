@@ -136,6 +136,7 @@ describe("Multiremi store — autopilots, schedules, and webhooks", () => {
 
   it("records completed and failed run outcomes for member creators and agent owners", () => {
     const store = createStore();
+    store.ensureLocalWorkspace();
     const creator = store.createWorkspaceMember({ id: "mem_run_creator", name: "Run Creator" });
     const owner = store.createWorkspaceMember({ id: "mem_run_owner", name: "Agent Owner" });
     const runtime = store.registerRuntime({
@@ -244,6 +245,7 @@ describe("Multiremi store — autopilots, schedules, and webhooks", () => {
 
   it("includes autopilot run ids in daemon task payloads", async () => {
     const store = createStore();
+    store.ensureLocalWorkspace();
     const agent = store.createAgent({ name: "Autopilot Claude", provider: "claude" });
     const runtime = store.registerRuntime({ name: "autopilot-runtime", provider: "claude" });
     const autopilot = createResponsibleTestAutopilot(store, {
@@ -369,6 +371,7 @@ describe("Multiremi store — autopilots, schedules, and webhooks", () => {
 
   it("requires event ids to identify a trigger while allowing eventless trigger executions", () => {
     const store = createStore();
+    store.ensureLocalWorkspace();
     const agent = store.createAgent({ name: "Trigger invariant worker", provider: "codex" });
     const autopilot = createResponsibleTestAutopilot(store, {
       title: "Trigger invariant",
@@ -557,6 +560,7 @@ describe("Multiremi store — autopilots, schedules, and webhooks", () => {
 
   it("records Go-style autopilot analytics events and metrics", () => {
     const store = createStore();
+    store.ensureLocalWorkspace();
     const runtime = store.registerRuntime({ id: "rt_autopilot_analytics", name: "Autopilot analytics", provider: "codex" });
     const agent = store.createAgent({ name: "Analytics Codex", provider: "codex", runtimeId: runtime.id });
     const autopilot = createResponsibleTestAutopilot(store, {

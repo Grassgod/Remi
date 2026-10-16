@@ -23,9 +23,10 @@
  * Every request it receives and every answer to its own requests is logged to
  * `FAKE_SUBAGENT_LOG`, with the process id; the process logs `started` at boot
  * and `exited` on SIGTERM, so a test can count processes and prove two never
- * ran at once. Configured by `FAKE_SUBAGENT_CONFIG` (JSON).
+ * ran at once. Configured by `FAKE_SUBAGENT_CONFIG` (JSON) or `FAKE_SUBAGENT_CONFIG_FILE`.
+ * Large scripts use a file to stay below OS environment-variable size limits.
  */
-import { appendFileSync } from "node:fs";
+import { appendFileSync, readFileSync } from "node:fs";
 import { createInterface } from "node:readline";
 
 export type FakeSubagentStep = { delayMs?: number } & (
@@ -83,7 +84,9 @@ export interface FakeSubagentConfig {
   cancelDelayMs?: number;
 }
 
-const config = JSON.parse(process.env.FAKE_SUBAGENT_CONFIG ?? "{}") as FakeSubagentConfig;
+const config = JSON.parse(process.env.FAKE_SUBAGENT_CONFIG_FILE
+  ? readFileSync(process.env.FAKE_SUBAGENT_CONFIG_FILE, "utf8")
+  : process.env.FAKE_SUBAGENT_CONFIG ?? "{}") as FakeSubagentConfig;
 const logPath = process.env.FAKE_SUBAGENT_LOG;
 const ROOT = config.sessionId ?? "sess_root";
 const log = (entry: Record<string, unknown>) => {

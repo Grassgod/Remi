@@ -5,6 +5,9 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 
 const REPO_ROOT = resolve(import.meta.dir, "../..");
+// Bounds three concurrent complete suites, including the expanded native-steer cases.
+// Individual tests retain their own delivery/latency assertions.
+const CHILD_BUDGET_MS = 180_000;
 
 // Include directories, even empty ones: a leftover lock directory is a write.
 function homeSnapshot(home: string): Record<string, string> {
@@ -74,10 +77,10 @@ it("leaves the entire startup home untouched after daemon tests", async () => {
     const timeout = setTimeout(() => {
       budgetExpired = true;
       for (const child of children) if (child.exitCode === null) child.kill();
-    }, 90_000);
+    }, CHILD_BUDGET_MS);
     try {
       const runChild = async (file: string) => {
-        if (budgetExpired) throw new Error("Daemon children exceeded the shared 90s budget");
+        if (budgetExpired) throw new Error("Daemon children exceeded the shared home-isolation budget");
         const startedAt = performance.now();
         const child = Bun.spawn([process.execPath, "test", file], {
           cwd: REPO_ROOT, env: childEnv(home, join(root, "cache")),
@@ -91,7 +94,7 @@ it("leaves the entire startup home untouched after daemon tests", async () => {
         return { file, exitCode, stdout, stderr };
       };
       const results = await Promise.all(files.map(runChild));
-      if (budgetExpired) throw new Error("Daemon children exceeded the shared 90s budget");
+      if (budgetExpired) throw new Error("Daemon children exceeded the shared home-isolation budget");
       const failures = results.filter(result => result.exitCode !== 0);
       if (failures.length) throw new Error(failures.map(result =>
         `${result.file} exited ${result.exitCode}\n${result.stdout}\n${result.stderr}`).join("\n"));
@@ -104,7 +107,7 @@ it("leaves the entire startup home untouched after daemon tests", async () => {
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
-}, 120_000);
+}, CHILD_BUDGET_MS + 30_000);
 
 it("the whole-home snapshot detects added, changed and deleted files", async () => {
   const root = mkdtempSync(join(tmpdir(), "home-snapshot-canary-"));
