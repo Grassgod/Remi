@@ -46,12 +46,16 @@ export function useCachedBackgroundTasks(sessionId: string | null | undefined): 
 /**
  * A Chat's background tasks from the session registry, read while `enabled`:
  * the visible chat whose session list counts a running task, or the panel
- * showing them. `expectRunning` is that count: when it disagrees with the
- * cached rows, the rows are read again once.
+ * showing them.
+ *
+ * `expectRunning` is that count. While the chat is `visible`, a cached list
+ * that disagrees with it is read once more, even when the count dropped to 0
+ * and stopped the reading: otherwise a task that ended unseen would stay in
+ * the strip as running (PR 6 review #7). Once per disagreement.
  */
 export function useChatBackgroundTasks(
   sessionId: string | null | undefined,
-  options: { enabled?: boolean; expectRunning?: number | null } = {},
+  options: { enabled?: boolean; visible?: boolean; expectRunning?: number | null } = {},
 ): ChatBackgroundTasksView {
   const wsId = useCurrentWsId();
   const qc = useQueryClient();
@@ -60,11 +64,12 @@ export function useChatBackgroundTasks(
   const data = query.data;
   const expect = options.expectRunning;
   const cachedRunning = data?.running;
+  const visible = options.visible ?? enabled;
   useEffect(() => {
-    if (!enabled || cachedRunning === undefined || expect == null || expect === cachedRunning || !wsId || !sessionId) return;
-    // Once per disagreement: the rows' own count moves only with a new read or event.
-    void qc.invalidateQueries({ queryKey: chatKeys.backgroundTasks(wsId, sessionId), exact: true });
-  }, [enabled, expect, cachedRunning, wsId, sessionId, qc]);
+    if (!visible || cachedRunning === undefined || expect == null || expect === cachedRunning || !wsId || !sessionId) return;
+    // A disabled query is not refetched by invalidation: fetch it directly, past its staleTime.
+    void qc.fetchQuery({ ...chatBackgroundTasksOptions(wsId, sessionId), staleTime: 0 }).catch(() => {});
+  }, [visible, expect, cachedRunning, wsId, sessionId, qc]);
   const refetch = query.refetch;
   return useMemo(() => ({
     rows: data?.rows ?? EMPTY,

@@ -267,6 +267,28 @@ describe("chat:background_tasks (PR 6 §7)", () => {
     expect(qc.getQueryData<ChatSession[]>(chatKeys.sessions("ws-1"))?.[0]?.running_background_tasks).toBe(0);
   });
 
+  it("reads again after a read in flight instead of letting its older rows win (PR 6 review #7)", async () => {
+    let answer!: (value: unknown) => void;
+    let reads = 0;
+    const observer = new QueryObserver(qc, { queryKey: key, queryFn: () => {
+      reads += 1;
+      return reads === 1 ? new Promise((resolve) => { answer = resolve; }) : Promise.resolve({ session_id: "chat-1", running: 0, rows: [row("a", { status: "completed" })] });
+    } });
+    const unsubscribe = observer.subscribe(() => {});
+    try {
+      await vi.waitFor(() => expect(qc.getQueryState(key)?.fetchStatus).toBe("fetching"));
+      // The task ends while the first read is in flight; two events, one reread.
+      handlers["chat:background_tasks"]?.({ session_id: "chat-1", running: 0, rows: [row("a", { status: "completed" })] });
+      handlers["chat:background_tasks"]?.({ session_id: "chat-1", running: 0, rows: [row("a", { status: "completed" })] });
+      // The first read answers with what it saw before the change.
+      answer({ session_id: "chat-1", running: 1, rows: [row("a")] });
+      await vi.waitFor(() => expect(reads).toBe(2));
+      await vi.waitFor(() => expect(qc.getQueryData<{ rows: Array<{ status: string }> }>(key)?.rows[0]?.status).toBe("completed"));
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(reads).toBe(2);
+    } finally { unsubscribe(); }
+  });
+
   it("rereads a loaded list when the event carries no rows, and ignores a payload with no session", async () => {
     const observer = new QueryObserver(qc, { queryKey: key, queryFn: async () => ({ session_id: "chat-1", running: 1, rows: [row("z")] }) });
     const unsubscribe = observer.subscribe(() => {});

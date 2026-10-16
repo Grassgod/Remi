@@ -71,12 +71,42 @@ export function applyBackgroundTasksEvent(qc: QueryClient, wsId: string, payload
     const merged = cached ? mergeBackgroundTaskRows(cached, parsed.data) : null;
     running ??= merged ? merged.running : parsed.data.running;
     if (merged) qc.setQueryData<ChatBackgroundTasksSnapshot>(key, { ...merged, running });
+    // A read in flight may have been answered before this change: read again after it.
+    if (qc.getQueryState(key)?.fetchStatus === "fetching") rereadAfterFetch(qc, key);
   } else {
     // No rows to merge: a reader on screen rereads them.
-    void qc.invalidateQueries({ queryKey: key });
+    rereadAfterFetch(qc, key);
   }
   if (running !== null) patchSessionBackgroundCount(qc, wsId, sessionId, running);
   return true;
+}
+
+const pendingRereads = new WeakMap<QueryClient, Set<string>>();
+
+/**
+ * Invalidates a background-task list now, or, while a read of it is in flight,
+ * once that read settles: its answer may predate the change, and React Query
+ * would neither cancel a first read nor keep an invalidation across it.
+ * One reread per list however many events land meanwhile.
+ */
+export function rereadAfterFetch(qc: QueryClient, key: readonly unknown[]): void {
+  const cache = qc.getQueryCache();
+  const query = cache.find({ queryKey: key, exact: true });
+  if (!query || query.state.fetchStatus !== "fetching") {
+    void qc.invalidateQueries({ queryKey: key, exact: true });
+    return;
+  }
+  const waiting = pendingRereads.get(qc) ?? new Set<string>();
+  pendingRereads.set(qc, waiting);
+  if (waiting.has(query.queryHash)) return;
+  waiting.add(query.queryHash);
+  const unsubscribe = cache.subscribe((event) => {
+    if (event.query.queryHash !== query.queryHash) return;
+    if (event.type !== "removed" && event.query.state.fetchStatus !== "idle") return;
+    unsubscribe();
+    waiting.delete(query.queryHash);
+    if (event.type !== "removed") void qc.invalidateQueries({ queryKey: key, exact: true });
+  });
 }
 
 /**

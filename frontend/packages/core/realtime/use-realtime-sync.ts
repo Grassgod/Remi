@@ -62,6 +62,16 @@ function invalidateWorkspaceScopedQueries(qc: QueryClient, includeChat = true): 
     qc.invalidateQueries({ queryKey: agentActivityKeys.all(wsId) });
     qc.invalidateQueries({ queryKey: agentRunCountsKeys.all(wsId) });
     if (includeChat) qc.invalidateQueries({ queryKey: chatKeys.all(wsId) });
+    else {
+      // Server state that no stream resumes: the session lists and details
+      // (unread, `running_background_tasks`), the pending roll-up (running
+      // counts) and the background-task registry (PR 6). The log, the queue
+      // and the optimistic pending task stay, as above.
+      qc.invalidateQueries({ queryKey: chatKeys.sessions(wsId) });
+      qc.invalidateQueries({ queryKey: chatKeys.sessionDetails(wsId) });
+      qc.invalidateQueries({ queryKey: chatKeys.pendingTasks(wsId) });
+      qc.invalidateQueries({ queryKey: chatKeys.backgroundTasksAll(wsId) });
+    }
     qc.invalidateQueries({ queryKey: labelKeys.all(wsId) });
     qc.invalidateQueries({ queryKey: agentPluginKeys.all(wsId) });
     qc.invalidateQueries({ queryKey: issueKeys.workspacesAll() });
@@ -148,6 +158,7 @@ export function useRealtimeSync(
       try {
         // The log stream resumes from its cursor; invalidating every Chat cache
         // here would discard the optimistic row before its client_id is matched.
+        // Only the Chat caches no stream resumes are refreshed.
         invalidateWorkspaceScopedQueries(qc, false);
       } catch (e) {
         logger.error("reconnect refetch failed", e);
