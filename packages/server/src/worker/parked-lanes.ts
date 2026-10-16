@@ -164,6 +164,8 @@ interface RecordInternals {
   reported: boolean;
   pgid: { pgid: number; startTime: string } | null;
   closing: Promise<void> | null;
+  /** The close in progress (or done) leaves the resources to its caller. */
+  closeKeepsResources: boolean;
 }
 
 export interface ParkedLanesOptions {
@@ -276,8 +278,9 @@ export class ParkedLanes {
       }
     }
     this.options.log.warn("Background lane process died", { event: "background_lane_lost", lane: record.lane, reason });
-    // An attempt sees the death itself and ends; a parked or claimed lane closes now.
-    if (record.state !== "in_attempt") void this.close(record, "lost", { skipStops: true });
+    // An attempt sees the death itself and ends; a parked lane closes now. A claimed lane is its claiming
+    // attempt's to release: it sees the dead process and keeps the resources (§2.8).
+    if (record.state === "parked") void this.close(record, "lost", { skipStops: true });
   };
 
   // ── Lifecycle ──────────────────────────────────────────────────
@@ -310,9 +313,10 @@ export class ParkedLanes {
     return record && record.state !== "closed" ? record : null;
   }
 
-  /** A parked lane whose offer may skip the capacity check (D5). */
+  /** A parked lane whose offer may skip the capacity check (D5); one that is closing is not. */
   isParked(key: string): boolean {
-    return this.records.get(key)?.state === "parked";
+    const record = this.records.get(key);
+    return record?.state === "parked" && !this.internals.get(record)?.closing;
   }
 
   get parkedCount(): number {
@@ -459,7 +463,15 @@ export class ParkedLanes {
     for (;;) {
       signal?.throwIfAborted();
       const record = this.records.get(key);
-      if (!record || record.state === "closed") return null;
+      if (!record) return null;
+      const closing = this.internals.get(record)?.closing;
+      if (closing) {
+        // Its process exits and its resources go before this attempt prepares anything of its own (§2.8).
+        await closing.catch(() => {});
+        if (this.records.get(key) === record) this.records.delete(key);
+        continue;
+      }
+      if (record.state === "closed") return null;
       if (record.state === "parked") return this.claim(key, attemptId);
       if (record.attemptId === attemptId) return null;
       if (this.now() >= deadline) {
@@ -480,6 +492,8 @@ export class ParkedLanes {
     const record = this.records.get(key);
     if (!record || record.state !== "parked") return null;
     const internal = this.internals.get(record)!;
+    // A lane whose close (cap, eviction, release) is stopping its tasks is going: never hand it out.
+    if (internal.closing) return null;
     this.clearTimer(internal, "keepAliveTimer");
     this.clearTimer(internal, "idleTimer");
     record.state = "claimed";
@@ -494,6 +508,11 @@ export class ParkedLanes {
     const internal = this.internals.get(record)!;
     record.state = "parked";
     record.attemptId = null;
+    if (!record.provider.sessionAlive?.(record.poolChatId)) {
+      // Its process died while claimed: nothing is left to park.
+      void this.close(record, "lost", { skipStops: true });
+      return;
+    }
     const remaining = Math.max(0, (record.parkedUntil ?? this.now()) - this.now());
     internal.keepAliveTimer = setTimeout(() => void this.close(record, "keepalive_cap"), remaining);
     (internal.keepAliveTimer as { unref?: () => void }).unref?.();
@@ -550,10 +569,12 @@ export class ParkedLanes {
    * Stop the lane's tasks with `reason`, close its process and wait for it to
    * exit (§2.4 release, §2.7). With `keepResources` the caller takes the
    * resources over (a release before spawning in the same lane); otherwise
-   * they are disposed. Idempotent.
+   * they are disposed. Idempotent. `keptResources` is false when an earlier
+   * close disposed them: the caller must not use them.
    */
-  async release(record: LaneRecord, reason: BackgroundTaskStopReason, options: { keepResources?: boolean } = {}): Promise<void> {
+  async release(record: LaneRecord, reason: BackgroundTaskStopReason, options: { keepResources?: boolean } = {}): Promise<{ keptResources: boolean }> {
     await this.close(record, reason, options);
+    return { keptResources: this.internals.get(record)?.closeKeepsResources === true };
   }
 
   /** The attempt using the lane ended without parking: its process closes, nothing else (its tasks were stopped). */
@@ -638,7 +659,8 @@ export class ParkedLanes {
 
   private freshInternals(): RecordInternals {
     return { hooks: null, permission: null, elicitation: null, attachWaiters: new Set(), keepAliveTimer: null, idleTimer: null,
-      debounceTimer: null, refreshTimer: null, closedRepeats: 0, closedTimer: null, reported: false, pgid: null, closing: null };
+      debounceTimer: null, refreshTimer: null, closedRepeats: 0, closedTimer: null, reported: false, pgid: null, closing: null,
+      closeKeepsResources: false };
   }
 
   /** The provider's handlers route through the record: an attempt's, or a hold while parked (R7). */
@@ -707,7 +729,7 @@ export class ParkedLanes {
   private evictionCandidate(except: LaneRecord): LaneRecord | null {
     let victim: LaneRecord | null = null;
     for (const record of this.records.values()) {
-      if (record === except || record.state !== "parked" || record.doorbell !== "none") continue;
+      if (record === except || record.state !== "parked" || record.doorbell !== "none" || this.internals.get(record)?.closing) continue;
       if (!victim || record.lastActivityAt < victim.lastActivityAt) victim = record;
     }
     return victim;
@@ -831,6 +853,7 @@ export class ParkedLanes {
     const internal = this.internals.get(record);
     if (!internal) return;
     if (internal.closing) return internal.closing;
+    internal.closeKeepsResources = options.keepResources === true;
     internal.closing = (async () => {
       this.clearTimer(internal, "keepAliveTimer");
       this.clearTimer(internal, "idleTimer");

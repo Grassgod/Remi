@@ -35,6 +35,8 @@ class StubProvider implements ParkableProvider {
   stops: Array<[string, string | undefined]> = [];
   cancels = 0;
   alive = true;
+  /** A slow stop: the bridge answers this long after the request. */
+  stopDelayMs = 0;
   chatId: string;
   permission: ((params: any) => Promise<any>) | null = null;
   onChange: ((chatId: string, task: AsyncTaskSnapshot) => void) | null = null;
@@ -43,6 +45,7 @@ class StubProvider implements ParkableProvider {
   async stopAsyncTask(taskId: string, options: { by?: "user" | "remi" }) {
     const task = this.tasks.get(taskId);
     this.stops.push([taskId, options.by]);
+    if (this.stopDelayMs) await Bun.sleep(this.stopDelayMs);
     if (!task || (task.state !== "running" && task.state !== "paused")) return { stopped: false };
     this.change({ ...task, state: "stopped", endedAt: Date.now(), stop: { requestedAt: Date.now(), by: options.by ?? "remi", outcome: "stopped" } });
     return { stopped: true };
@@ -250,6 +253,61 @@ describe("ParkedLanes: limits, timers and releases (§2.7)", () => {
     abort.abort();
     await expect(aborted).rejects.toThrow();
     expect(await r.lanes.acquire("nothing", "tsk_7")).toBeNull();
+  });
+
+  it("a lane whose close is stopping its tasks is never claimed; acquire waits for the close, then starts fresh", async () => {
+    const r = registry();
+    const { record, provider } = r.begin("chat_a", "tsk_1");
+    provider.change(snapshot("srv"));
+    await r.lanes.park(record);
+    const key = laneKeyOf(record.lane);
+    provider.stopDelayMs = 150;
+    // The server's release (a cold retry) starts the close; its stop is slow.
+    const releasing = r.lanes.handleRelease({ ...record.lane, provider_session_id: "prov_chat_a", reason: "lane_reset" });
+    await Bun.sleep(20);
+    expect(record.state).toBe("parked");
+    expect(r.lanes.claim(key, "tsk_2")).toBeNull();
+    expect(r.lanes.isParked(key)).toBe(false);
+    // The retry's attempt waits for the process to exit and its resources to go, then makes its own.
+    const acquired = await r.lanes.acquire(key, "tsk_2");
+    expect(acquired).toBeNull();
+    expect(provider.closed).toBe(1);
+    expect(r.disposals()).toBe(1);
+    await releasing;
+  });
+
+  it("release(keepResources) reports resources an earlier close disposed; a death while claimed leaves them to the claimant", async () => {
+    const r = registry();
+    const one = r.begin("chat_a", "tsk_1");
+    one.provider.change(snapshot("srv"));
+    await r.lanes.park(one.record);
+    r.lanes.claim(laneKeyOf(one.record.lane), "tsk_2");
+    one.provider.stopDelayMs = 100;
+    const stopping = r.lanes.closeAll("daemon_restart");
+    expect(await r.lanes.release(one.record, "lane_reset", { keepResources: true })).toEqual({ keptResources: false });
+    await stopping;
+    expect(r.disposals()).toBe(1);
+
+    const two = r.begin("chat_b", "tsk_3");
+    two.provider.change(snapshot("srv"));
+    await r.lanes.park(two.record);
+    r.lanes.claim(laneKeyOf(two.record.lane), "tsk_4");
+    two.provider.alive = false;
+    r.lanes.onSessionLost("tsk_3", "exit code 1", [snapshot("srv")]);
+    await Bun.sleep(20);
+    expect(two.provider.closed).toBe(0);
+    expect(await r.lanes.release(two.record, "lost", { keepResources: true })).toEqual({ keptResources: true });
+    expect(r.disposals()).toBe(1);
+    // A claimant that gives up on a dead process does not park it again.
+    const three = r.begin("chat_c", "tsk_5");
+    three.provider.change(snapshot("srv"));
+    await r.lanes.park(three.record);
+    r.lanes.claim(laneKeyOf(three.record.lane), "tsk_6");
+    three.provider.alive = false;
+    r.lanes.onSessionLost("tsk_5", "exit code 1", [snapshot("srv")]);
+    r.lanes.unclaim(three.record);
+    await waitFor(() => three.provider.closed === 1, "the dead lane closing");
+    expect(r.lanes.isParked(laneKeyOf(three.record.lane))).toBe(false);
   });
 
   it("begin never leaves a live process it replaces untracked: it stops its tasks and closes it", async () => {

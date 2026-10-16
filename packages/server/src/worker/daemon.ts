@@ -4732,7 +4732,9 @@ export class MultiremiDaemon {
       } else {
         log.info(`Task ${task.id} releases its lane's parked process: ${verdict.cause ?? "adopt failed"}`,
           { event: "background_lane_release", reason: verdict.reason ?? "config_changed", cause: verdict.cause ?? null });
-        await this.parkedLanes.release(claimed, verdict.reason ?? "config_changed", { keepResources: true });
+        const { keptResources: kept } = await this.parkedLanes.release(claimed, verdict.reason ?? "config_changed", { keepResources: true });
+        // An earlier close (the daemon's stop, say) disposed them: this attempt's temp dir and lock are gone.
+        if (!kept) throw new Error("[lane_closed] the lane's process closed while this attempt prepared; retry the turn");
         keptResources = claimed.resources;
       }
     }
