@@ -68,9 +68,9 @@ export const LANE_STOP_TIMEOUT_MS = 3_000;
  * normally finishes in seconds.
  */
 export const LANE_SETTLE_TIMEOUT_MS = 120_000;
-/** Doorbell RPC retries on a transport error (the socket may be reconnecting). */
-const DOORBELL_ATTEMPTS = 5;
+/** Doorbell RPC retry backoff on a transport error (doubling up to the max); a doorbell is never dropped for it. */
 const DOORBELL_RETRY_MS = 2_000;
+const DOORBELL_RETRY_MAX_MS = 30_000;
 
 /** What a lane's process needs from its provider (a subset of `MultiremiTaskProvider`). */
 export interface ParkableProvider {
@@ -119,8 +119,8 @@ interface LaneTask {
   outputTail: string | null;
   /** The output file is there but cannot be read (`output_unreadable`). */
   outputUnreadable: boolean;
-  /** The doorbell for this task's end went out (one per task). */
-  rang: boolean;
+  /** The doorbell for this task's end: owed (`pending`) until the wake RPC took it, one per task. */
+  doorbell: "none" | "pending" | "delivered";
   /** Live when the current attempt handed its tasks to the lane (it will park). */
   handedOff: boolean;
 }
@@ -166,6 +166,9 @@ interface RecordInternals {
   closing: Promise<void> | null;
   /** The close in progress (or done) leaves the resources to its caller. */
   closeKeepsResources: boolean;
+  /** A doorbell delivery loop runs; `doorbellWake` cuts its current wait short. */
+  ringing: boolean;
+  doorbellWake: (() => void) | null;
 }
 
 export interface ParkedLanesOptions {
@@ -180,6 +183,8 @@ export interface ParkedLanesOptions {
   refreshMs?: number;
   closedRepeats?: number;
   closedRepeatMs?: number;
+  doorbellRetryMs?: number;
+  doorbellRetryMaxMs?: number;
   /** `parked-bridges.json`; null keeps no crash-sweep record. */
   stateFile: string | null;
   runtimeId(): string | null;
@@ -438,13 +443,15 @@ export class ParkedLanes {
     (internal.keepAliveTimer as { unref?: () => void }).unref?.();
     this.watchOutputs(record);
     // §2.5: a handed-off task that ended while the attempt was still finishing rings now; its cycle stayed captured.
+    let owed = false;
     for (const task of record.tasks.values()) {
-      if (task.handedOff && !task.rang && !isLive(task.snapshot.state)
+      if (task.handedOff && task.doorbell === "none" && !isLive(task.snapshot.state)
         && ringsBackgroundDoorbell({ wakesModel: record.wakesModel }, task.snapshot.state)) {
-        task.rang = true;
-        void this.ringDoorbell(record, task);
+        task.doorbell = "pending";
+        owed = true;
       }
     }
+    if (owed) void this.deliverDoorbells(record);
     this.scheduleIdleClose(record);
     this.scheduleSnapshot(record, true);
     this.notifyLane(record.key);
@@ -556,8 +563,12 @@ export class ParkedLanes {
     record.parkedUntil = null;
     record.lastActivityAt = this.now();
     if (record.doorbell === "sent") record.doorbell = "attached";
-    // The adopting attempt sees its tasks' ends itself until it hands them off again.
-    for (const task of record.tasks.values()) task.handedOff = false;
+    // The adopting attempt sees its tasks' ends itself until it hands them off again; a doorbell
+    // still owed (the socket was down) is answered by this attempt.
+    for (const task of record.tasks.values()) {
+      task.handedOff = false;
+      if (task.doorbell === "pending") task.doorbell = "delivered";
+    }
     const internal = this.internals.get(record)!;
     internal.pgid = null;
     this.writeStateFile();
@@ -588,10 +599,11 @@ export class ParkedLanes {
       .map((record) => this.close(record, reason)));
   }
 
-  /** The connection came back: report every live lane again. */
+  /** The connection came back: report every live lane again, and ring the doorbells it could not. */
   resendAll(): void {
     for (const record of this.records.values()) {
       if (record.state !== "closed" && record.tasks.size) this.scheduleSnapshot(record, true);
+      if ([...record.tasks.values()].some((task) => task.doorbell === "pending")) void this.deliverDoorbells(record);
     }
   }
 
@@ -660,7 +672,7 @@ export class ParkedLanes {
   private freshInternals(): RecordInternals {
     return { hooks: null, permission: null, elicitation: null, attachWaiters: new Set(), keepAliveTimer: null, idleTimer: null,
       debounceTimer: null, refreshTimer: null, closedRepeats: 0, closedTimer: null, reported: false, pgid: null, closing: null,
-      closeKeepsResources: false };
+      closeKeepsResources: false, ringing: false, doorbellWake: null };
   }
 
   /** The provider's handlers route through the record: an attempt's, or a hold while parked (R7). */
@@ -739,7 +751,7 @@ export class ParkedLanes {
     const previous = record.tasks.get(snapshot.id);
     const task: LaneTask = previous ?? {
       snapshot, originAttemptId: record.attemptId ?? record.lastAttemptId,
-      stopReason: null, outputTail: null, outputUnreadable: false, rang: false, handedOff: false,
+      stopReason: null, outputTail: null, outputUnreadable: false, doorbell: "none", handedOff: false,
     };
     const wasLive = previous ? isLive(previous.snapshot.state) : false;
     task.snapshot = snapshot;
@@ -755,10 +767,10 @@ export class ParkedLanes {
     const ended = wasLive && !isLive(snapshot.state);
     if (ended) this.tailer.finish(`${record.key}\u0000${snapshot.id}`);
     // §2.5: a parked Claude task that ended on its own rings; a stop never does.
-    if (ended && (record.state === "parked" || record.state === "claimed") && !task.rang
+    if (ended && (record.state === "parked" || record.state === "claimed") && task.doorbell === "none"
       && ringsBackgroundDoorbell({ wakesModel: record.wakesModel }, snapshot.state)) {
-      task.rang = true;
-      void this.ringDoorbell(record, task);
+      task.doorbell = "pending";
+      void this.deliverDoorbells(record);
     }
     this.scheduleIdleClose(record);
     this.scheduleSnapshot(record, false);
@@ -779,46 +791,90 @@ export class ParkedLanes {
     this.scheduleSnapshot(record, false);
   }
 
-  private async ringDoorbell(record: LaneRecord, task: LaneTask): Promise<void> {
-    if (!record.providerSessionId || !this.options.sharesCap()) return;
-    record.doorbell = "sent";
-    this.clearTimer(this.internals.get(record)!, "idleTimer");
+  /**
+   * Deliver the lane's owed doorbells, one task at a time (§2.5): retried with
+   * backoff while the RPC fails, and held while the socket is down (the
+   * reconnect's `resendAll` resumes it). Owed doorbells keep the lane from
+   * its idle close and eviction; only the keep-alive cap (or another close)
+   * bounds them. An attempt that adopts the process meanwhile sees the ends
+   * itself. One delivery loop per lane.
+   */
+  private async deliverDoorbells(record: LaneRecord): Promise<void> {
+    const internal = this.internals.get(record);
+    if (!internal) return;
+    if (internal.ringing) {
+      internal.doorbellWake?.();
+      return;
+    }
+    internal.ringing = true;
+    const base = this.options.doorbellRetryMs ?? DOORBELL_RETRY_MS;
+    const max = Math.max(base, this.options.doorbellRetryMaxMs ?? DOORBELL_RETRY_MAX_MS);
+    let delay = base;
+    let warned = false;
+    try {
+      for (;;) {
+        if (internal.closing || (record.state !== "parked" && record.state !== "claimed")) return;
+        const task = [...record.tasks.values()].find((candidate) => candidate.doorbell === "pending");
+        if (!task) return;
+        // Owed: no idle close or eviction until it is delivered.
+        record.doorbell = "sent";
+        this.clearTimer(internal, "idleTimer");
+        if (!record.providerSessionId || !this.options.sharesCap()) {
+          await this.doorbellPause(internal, max);
+          continue;
+        }
+        try {
+          const reply = await this.options.wake(this.doorbellPayload(record, task));
+          task.doorbell = "delivered";
+          delay = base;
+          this.options.log.info("Background doorbell rang", { event: "background_doorbell", lane: record.lane,
+            outcome: reply.outcome, turnId: reply.turn_id });
+        } catch (error) {
+          const code = (error as { code?: unknown })?.code;
+          if (code === "lane_moved" || code === "session_closed") {
+            task.doorbell = "delivered";
+            // §2.5 step 4: nobody will attach; end the cycle and let the lane go.
+            this.options.log.warn("The doorbell was rejected; the cycle stays unattached", { event: "background_cycle_unattached",
+              lane: record.lane, code });
+            if (record.state === "parked") {
+              await record.provider.cancelIdle?.(record.poolChatId).catch(() => {});
+              await this.close(record, "session_closed");
+            } else {
+              record.releaseAfterAttempt = "session_closed";
+            }
+            return;
+          }
+          if (!warned) {
+            warned = true;
+            this.options.log.warn("The doorbell is not delivered yet; retrying", { event: "background_doorbell_retry", lane: record.lane });
+          }
+          await this.doorbellPause(internal, delay);
+          delay = Math.min(delay * 2, max);
+        }
+      }
+    } finally {
+      internal.ringing = false;
+      internal.doorbellWake = null;
+    }
+  }
+
+  /** Wait `ms`, or until the connection comes back (`resendAll`). */
+  private doorbellPause(internal: RecordInternals, ms: number): Promise<void> {
+    return new Promise<void>((resolve) => {
+      const timer = setTimeout(() => { internal.doorbellWake = null; resolve(); }, ms);
+      (timer as { unref?: () => void }).unref?.();
+      internal.doorbellWake = () => { clearTimeout(timer); internal.doorbellWake = null; resolve(); };
+    });
+  }
+
+  private doorbellPayload(record: LaneRecord, task: LaneTask): DaemonLaneBackgroundWakePayload {
     const snapshot = task.snapshot;
-    const payload: DaemonLaneBackgroundWakePayload = {
-      ...record.lane, provider_session_id: record.providerSessionId,
+    return {
+      ...record.lane, provider_session_id: record.providerSessionId!,
       task: { task_id: snapshot.id, name: snapshot.name, task_type: snapshot.taskType, status: snapshot.state as "completed" | "failed",
         origin_attempt_id: task.originAttemptId, summary: snapshot.summary,
         duration_ms: snapshot.endedAt !== null ? Math.max(0, snapshot.endedAt - snapshot.startedAt) : null },
     };
-    for (let attempt = 1; attempt <= DOORBELL_ATTEMPTS; attempt++) {
-      try {
-        const reply = await this.options.wake(payload);
-        this.options.log.info("Background doorbell rang", { event: "background_doorbell", lane: record.lane,
-          outcome: reply.outcome, turnId: reply.turn_id });
-        return;
-      } catch (error) {
-        const code = (error as { code?: unknown })?.code;
-        if (code === "lane_moved" || code === "session_closed") {
-          // §2.5 step 4: nobody will attach; end the cycle and let the lane go.
-          this.options.log.warn("The doorbell was rejected; the cycle stays unattached", { event: "background_cycle_unattached",
-            lane: record.lane, code });
-          if (record.state === "parked") {
-            await record.provider.cancelIdle?.(record.poolChatId).catch(() => {});
-            await this.close(record, "session_closed");
-          } else {
-            record.releaseAfterAttempt = "session_closed";
-          }
-          return;
-        }
-        if (attempt === DOORBELL_ATTEMPTS || record.state === "closed" || record.state === "in_attempt") break;
-        await new Promise((resolve) => setTimeout(resolve, DOORBELL_RETRY_MS));
-      }
-    }
-    this.options.log.warn("The doorbell could not be delivered", { event: "background_doorbell_failed", lane: record.lane });
-    if (record.doorbell === "sent" && record.state === "parked") {
-      record.doorbell = "none";
-      this.scheduleIdleClose(record);
-    }
   }
 
   /** Nothing runs and no doorbell is out: close as `done` after `idleCloseMs` (§2.3). */

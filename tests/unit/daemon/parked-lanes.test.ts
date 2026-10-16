@@ -442,6 +442,61 @@ describe("ParkedLanes: the doorbell (§2.5)", () => {
     expect(r.wakes).toHaveLength(1);
   });
 
+  it("a doorbell owed while the socket is down is kept (no idle close) and rung on reconnect", async () => {
+    const r = registry({ idleCloseMs: 30 });
+    const { record, provider } = r.begin("chat_a", "tsk_1");
+    provider.change(snapshot("a"));
+    await r.lanes.park(record);
+    r.setShares(false);
+    provider.change(snapshot("a", "completed", { summary: "done" }));
+    await Bun.sleep(100);
+    expect(r.wakes).toEqual([]);
+    expect(provider.closed).toBe(0);
+    expect(record.doorbell).toBe("sent");
+    r.setShares(true);
+    r.lanes.resendAll();
+    await waitFor(() => r.wakes.length === 1, "the doorbell on reconnect");
+    expect(r.wakes[0]!.task).toMatchObject({ task_id: "a", status: "completed" });
+    await Bun.sleep(60);
+    expect(r.wakes).toHaveLength(1);
+    expect(provider.closed).toBe(0);
+  });
+
+  it("retries a failing doorbell with backoff past five tries until it is delivered", async () => {
+    let calls = 0;
+    const delivered: string[] = [];
+    const r = registry({ idleCloseMs: 30, doorbellRetryMs: 5, doorbellRetryMaxMs: 20,
+      wake: async (payload) => {
+        calls++;
+        if (calls <= 7) throw new Error("daemon RPC failed: daemon_unreachable");
+        delivered.push(payload.task.task_id);
+        return { ok: true, outcome: "created", turn_id: "turn_2", attempt_id: null } as DaemonLaneBackgroundWakeReply;
+      } });
+    const { record, provider } = r.begin("chat_a", "tsk_1");
+    provider.change(snapshot("a"));
+    await r.lanes.park(record);
+    provider.change(snapshot("a", "failed"));
+    await waitFor(() => delivered.length === 1, "the doorbell delivered");
+    expect(calls).toBe(8);
+    expect(provider.closed).toBe(0);
+    expect(r.logs.filter((line) => line.includes("background_doorbell_retry"))).toHaveLength(1);
+  });
+
+  it("an attempt that adopts the process while a doorbell is owed answers it: nothing rings later", async () => {
+    const r = registry();
+    const { record, provider } = r.begin("chat_a", "tsk_1");
+    provider.change(snapshot("a"));
+    await r.lanes.park(record);
+    r.setShares(false);
+    provider.change(snapshot("a", "completed"));
+    const claimed = r.lanes.claim(laneKeyOf(record.lane), "tsk_2")!;
+    expect(r.lanes.adopt(claimed, "tsk_2", "tsk_2")).toBe(true);
+    r.setShares(true);
+    r.lanes.resendAll();
+    await Bun.sleep(40);
+    expect(r.wakes).toEqual([]);
+  });
+
   it("a rejected doorbell cancels the cycle and closes the lane (session_closed)", async () => {
     const r = registry({ wake: async () => { throw Object.assign(new Error("rejected"), { code: "session_closed" }); } });
     const { record, provider } = r.begin("chat_a", "tsk_1");
