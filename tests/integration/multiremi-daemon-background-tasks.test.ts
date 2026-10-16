@@ -694,7 +694,7 @@ describe("Bun Multiremi daemon background tasks (PR 6)", () => {
     await waitFor(() => readTaskContextFile(env[TASK_CONTEXT_FILE_ENV]!)?.token === null, "the context cleared again");
   }, 60_000);
 
-  it("(17) a Chat on a local folder: its next turn adopts the parked process under the folder lock the process holds", async () => {
+  it("(18) a Chat on a local folder: its next turn adopts the parked process under the folder lock the process holds", async () => {
     const { store, agent, daemon, d } = await bed("local-folder");
     const folder = join(workDir!, "user-folder");
     mkdirSync(folder);
@@ -720,7 +720,7 @@ describe("Bun Multiremi daemon background tasks (PR 6)", () => {
     expect(d.snapshots.some((snapshot) => snapshot.tasks.some((row) => row.stop_reason === "config_changed"))).toBe(false);
   }, 60_000);
 
-  it("(18) two Chats on one local folder: the other's turn waits, named after the parked chat's background tasks", async () => {
+  it("(19) two Chats on one local folder: the other's turn waits, named after the parked chat's background tasks", async () => {
     const { store, agent, daemon } = await bed("shared-folder");
     const folder = join(workDir!, "shared-folder");
     mkdirSync(folder);
