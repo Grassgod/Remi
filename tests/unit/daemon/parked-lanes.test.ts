@@ -13,6 +13,7 @@ import type { AsyncTaskSnapshot } from "@shared/contracts/provider-types.js";
 import type { DaemonLaneBackgroundTasksPayload, DaemonLaneBackgroundWakePayload, DaemonLaneBackgroundWakeReply } from "@multiremi/contracts/daemon-protocol.js";
 import {
   ParkedLanes,
+  isBackgroundDoorbellMessage,
   laneKeyOf,
   processStartTime,
   resolveMaxParkedLanes,
@@ -382,6 +383,23 @@ describe("ParkedLanes: snapshots (§5.2)", () => {
     expect(task("linked")).toMatchObject({ output_tail: null, output_unreadable: true });
     expect("output_unreadable" in task("readable")!).toBe(false);
     expect("output_unreadable" in task("missing")!).toBe(false);
+  });
+});
+
+describe("isBackgroundDoorbellMessage (§2.5)", () => {
+  const doorbell = { background_task: { task_id: "bash-1", name: "sleep", task_type: "shell", status: "completed",
+    origin_attempt_id: "tsk_1", origin_turn_id: null, provider_session_id: "prov_1" } };
+  it("trusts the message's metadata whenever it has `background_task`, and reads the text only when it has not", () => {
+    const byText = (value: boolean) => () => value;
+    expect(isBackgroundDoorbellMessage(doorbell, byText(false))).toBe(true);
+    // Present but malformed: no doorbell, whatever the text says.
+    expect(isBackgroundDoorbellMessage({ background_task: { task_id: "bash-1" } }, byText(true))).toBe(false);
+    expect(isBackgroundDoorbellMessage({ background_task: null }, byText(true))).toBe(false);
+    // A projection without it (today's, metadata `{ execution_scope }`, or none): the text fallback decides.
+    expect(isBackgroundDoorbellMessage({ execution_scope: "" }, byText(true))).toBe(true);
+    expect(isBackgroundDoorbellMessage({ execution_scope: "" }, byText(false))).toBe(false);
+    expect(isBackgroundDoorbellMessage(undefined, byText(true))).toBe(true);
+    expect(isBackgroundDoorbellMessage(null, byText(false))).toBe(false);
   });
 });
 

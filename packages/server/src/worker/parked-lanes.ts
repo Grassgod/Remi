@@ -50,7 +50,7 @@ import {
   type DaemonLaneRef,
   type DaemonParkedLane,
 } from "@multiremi/contracts/daemon-protocol.js";
-import { ringsBackgroundDoorbell } from "@shared/background-tasks.js";
+import { readBackgroundDoorbell, ringsBackgroundDoorbell } from "@shared/background-tasks.js";
 import { backgroundTaskItemId } from "@shared/turn-trace.js";
 import { AsyncTaskOutputTailer, OUTPUT_TAIL_ATTEMPT_MS, OUTPUT_TAIL_PARKED_MS, type OutputTail } from "./async-task-output.js";
 
@@ -202,6 +202,19 @@ export interface AdoptVerdict {
   /** Why not, as a stop reason for its tasks (§2.7) and the cause for the log. */
   reason?: BackgroundTaskStopReason;
   cause?: LaneReleaseCause;
+}
+
+/**
+ * Whether a message is a background-task doorbell (§2.5). Its
+ * `metadata.background_task` decides whenever the key is there (a malformed
+ * one is no doorbell); only a message without it, as an offer projection that
+ * drops message metadata gives, falls back to `byText`.
+ */
+export function isBackgroundDoorbellMessage(metadata: unknown, byText: () => boolean): boolean {
+  if (metadata && typeof metadata === "object" && !Array.isArray(metadata) && "background_task" in metadata) {
+    return readBackgroundDoorbell(metadata) !== null;
+  }
+  return byText();
 }
 
 export function laneKeyOf(lane: DaemonLaneRef): string {

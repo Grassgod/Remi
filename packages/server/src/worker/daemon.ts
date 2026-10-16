@@ -58,12 +58,12 @@ import {
   BACKGROUND_DOORBELL_PREFIX,
   BACKGROUND_KEEPALIVE_ENV,
   parksBackgroundTasks,
-  readBackgroundDoorbell,
   resolveBackgroundKeepAliveMs,
 } from "@shared/background-tasks.js";
 import {
   LANE_STOP_TIMEOUT_MS,
   ParkedLanes,
+  isBackgroundDoorbellMessage,
   killProcessGroup,
   laneKeyOf,
   processStartTime,
@@ -4836,10 +4836,10 @@ export class MultiremiDaemon {
     // own task notification), so it is recorded and acknowledged, never prompted.
     let onDoorbellSteer: ((message: MultiremiTaskSteerMessage) => void) | null = null;
     const earlyDoorbellSteers: MultiremiTaskSteerMessage[] = [];
-    // Its `metadata.background_task`; a projection that drops message metadata still shows a platform
-    // message with the doorbell's text on a lane whose process outlived its attempts.
-    const isDoorbellSteer = (message: MultiremiTaskSteerMessage) => readBackgroundDoorbell((message as DaemonSteerMessage).metadata) !== null
-      || (laneRecord !== null && message.authorType === "system" && message.kind === "steer"
+    // Its `metadata.background_task`, when there; a projection that drops message metadata still shows a
+    // platform message with the doorbell's text on a lane whose process outlived its attempts.
+    const isDoorbellSteer = (message: MultiremiTaskSteerMessage) => isBackgroundDoorbellMessage((message as DaemonSteerMessage).metadata,
+      () => laneRecord !== null && message.authorType === "system" && message.kind === "steer"
         && message.content.includes(BACKGROUND_DOORBELL_PREFIX));
     const divertDoorbell = (message: MultiremiTaskSteerMessage) => {
       if (onDoorbellSteer) onDoorbellSteer(message);
@@ -5033,11 +5033,11 @@ export class MultiremiDaemon {
       // task ended replays first; other input merged into the turn is prompted after it; a cycle
       // that never came leaves the doorbell itself to be prompted, so the turn always gets a reply.
       const inputMessages = Array.isArray(turnInput.input_messages) ? turnInput.input_messages : [];
-      // The doorbell is its `metadata.background_task`. An offer projection that drops message metadata
-      // still shows a platform status message with the doorbell's text while this lane's doorbell is out.
+      // The doorbell is its `metadata.background_task`, when there. An offer projection that drops message
+      // metadata still shows a platform status message with the doorbell's text while this lane's doorbell is out.
       const attachedDoorbell = adopted && laneRecord?.doorbell === "attached";
-      const isDoorbellInput = (message: UnifiedMessage) => readBackgroundDoorbell(message.metadata) !== null
-        || (attachedDoorbell && message.sender_type === "platform" && message.message_kind === "status"
+      const isDoorbellInput = (message: UnifiedMessage) => isBackgroundDoorbellMessage(message.metadata,
+        () => attachedDoorbell && message.sender_type === "platform" && message.message_kind === "status"
           && message.body_md.includes(BACKGROUND_DOORBELL_PREFIX));
       const doorbellInput = inputMessages.filter(isDoorbellInput);
       let skipFirstPrompt = false;
