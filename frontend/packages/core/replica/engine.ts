@@ -52,7 +52,7 @@ export class ReplicaEngine {
    * Tracked explicitly because a database-level clear has to reach sessions
    * nobody currently subscribes to: a tab that opened a session, navigated away
    * and closed the socket still has rows on disk, and leaving them behind is
-   * exactly the state the `log_version` and user-mismatch triggers exist to
+   * exactly the state the user-mismatch and schema-upgrade triggers exist to
    * prevent.
    */
   private readonly knownSessions = new Set<string>();
@@ -106,7 +106,7 @@ export class ReplicaEngine {
     return { fromSeq: subscribeFromWindow(subscribeFromSeq(state), input.windowHead), state, cleared };
   }
 
-  /** Drop one session's rows (a `log_version` change, step 2). */
+  /** Drop one session's rows and its ack state. */
 
   resetSession(sessionId: string): void {
     this.storage.clearSession(sessionId);
@@ -119,21 +119,12 @@ export class ReplicaEngine {
    * Step 2. Apply `stream.ack`.
    *
    * Returns the range the caller must read through the read route before the
-   * frames can replay — `gap` for an ordinary fall-behind, or the range below
-   * `first_seq` after a `log_version` reset. Null means the stream can start
-   * sending immediately.
+   * frames can replay: the ack's `gap`, when the stream can no longer serve the
+   * requested start. Null means the stream can start sending immediately.
    */
   ack(sessionId: string, ack: HubStreamAckPayload): HubSeqRange | null {
-    return this.acknowledge(sessionId, ack).range;
-  }
-
-  acknowledge(sessionId: string, ack: HubStreamAckPayload): { range: HubSeqRange | null; reset: boolean } {
     const current = this.storage.readState(sessionId);
     const decision = decideAck(ack, current);
-
-    if (decision.reset) {
-      this.storage.clearSession(sessionId);
-    }
 
     // The server's head is kept here, *not* written into the replica's head: the
     // replica's head is what it has actually written, and conflating the two is
@@ -142,18 +133,13 @@ export class ReplicaEngine {
       headSeq: ack.head_seq,
       logVersion: decision.state.logVersion,
     });
-    // A reset drops the rows, so the stored head has to go with them; otherwise
-    // the replica would claim to hold seqs it just deleted. And the server's head
-    // never becomes the local head: the replica only claims what it has written.
-    this.storage.writeState(
-      sessionId,
-      decision.reset ? { ...decision.state, head: null } : { ...decision.state, head: current.head },
-      this.now(),
-    );
+    // The server's head never becomes the local head: the replica only claims
+    // what it has written.
+    this.storage.writeState(sessionId, { ...decision.state, head: current.head }, this.now());
     this.knownSessions.add(sessionId);
     this.invalidate(sessionId);
 
-    return { range: decision.backfill, reset: decision.reset };
+    return decision.backfill;
   }
 
   /**

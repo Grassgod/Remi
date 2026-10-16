@@ -54,7 +54,7 @@ export interface BrowserReplicaOptions {
   /** The page's socket subscription (C3). The token lives in the page. */
   subscribe: (sessionId: string, fromSeq: number) => void;
   unsubscribe: (sessionId: string) => void;
-  /** Reads a range through the read route; used for gaps, resets and deep links. */
+  /** Reads a range through the read route; used for gaps and deep links. */
   readRange: (sessionId: string, range: HubSeqRange) => Promise<SessionLogEntry[]>;
   env?: BrowserReplicaEnv;
   /** Logged once when the replica runs without OPFS. */
@@ -321,11 +321,14 @@ class ReplicaFacade implements BrowserReplica {
   }
 
   async loadWindow(sessionId: string, range: HubSeqRange): Promise<void> {
-    if (this.leader) {
-      await this.leader.leader.loadWindow(sessionId, range);
-      return;
+    if (!this.leader) {
+      await this.follower.request(sessionId, range);
+      // A page opens its replica before the Web Lock is granted. Taking the
+      // lock settles the follower's requests unanswered, and nobody else stored
+      // the window, so a tab that leads by now stores it itself.
+      if (!this.leader) return;
     }
-    await this.follower.request(sessionId, range);
+    await this.leader.leader.loadWindow(sessionId, range);
   }
 
   frames(sessionId: string, frames: readonly HubFrame[]): void {
@@ -569,9 +572,9 @@ function handleInline(
       ];
     }
     case "ack": {
-      const result = engine.acknowledge(request.sessionId, request.ack);
+      const range = engine.ack(request.sessionId, request.ack);
       const view = engine.snapshot(request.sessionId);
-      return [{ type: "backfill", sessionId: request.sessionId, ...result,
+      return [{ type: "backfill", sessionId: request.sessionId, range,
         head: view.head, fresh: view.fresh, ready: view.ready, entries: [...view.entries] }];
     }
     case "frames": {

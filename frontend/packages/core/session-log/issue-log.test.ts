@@ -298,3 +298,67 @@ describe("Issue log presentation over C7", () => {
     expect(delivered).toEqual([[10], [11]]);
   });
 });
+
+describe("C7 keeps the windows this page read", () => {
+  const ticks = async () => { for (let n = 0; n < 32; n++) await Promise.resolve(); };
+  const seqs = (replica: IssueLogReplica) => replica.getSnapshot("s").entries.map(entry => entry.seq);
+  const ack = (logVersion: number, head = 2) => ({ stream: "log" as const, id: "s", first_seq: 1, head_seq: head, log_version: logVersion, gap: null });
+
+  it("stores a window opened before the Web Lock is granted, so the stream ack keeps its rows", async () => {
+    // A Chat's SSR bootstrap carries no separate head row to wait on.
+    const replica = new IssueLogReplica("s", { sessionId: "s", head: null,
+      window: { ...windowOf([row(1), row(2)]), head_seq: 2, has_more_before: false } });
+    let grant!: () => void;
+    const locks = { request: (_name: string, _options: unknown, run: () => Promise<void>) =>
+      new Promise<void>(() => { grant = () => void run(); }) };
+    const subscribe = vi.fn();
+    const connecting = replica.connect({ userId: "u", workspaceId: "w", subscribe, unsubscribe: vi.fn(), env: {
+      hasOpfs: true, locks: locks as never, broadcastChannel: class { onmessage = null; postMessage() {} close() {} } as never,
+    } });
+    await ticks();
+    grant();
+    const cleanup = await connecting;
+    try {
+      expect(subscribe).toHaveBeenCalledWith("s", 3);
+      replica.ack("s", ack(4));
+      await ticks();
+      expect(seqs(replica)).toEqual([1, 2]);
+      expect(mocks.read).not.toHaveBeenCalled();
+    } finally { cleanup(); }
+  });
+
+  it("keeps the rows when a resumed stream acks a new log_version", async () => {
+    const replica = new IssueLogReplica("s", { sessionId: "s", head: row(0, "head"),
+      window: { ...windowOf([row(1), row(2)]), head_seq: 2, has_more_before: false } });
+    const cleanup = await replica.connect({ userId: "u", workspaceId: "w", subscribe: vi.fn(), unsubscribe: vi.fn(), env: { hasOpfs: false } });
+    try {
+      replica.ack("s", ack(4));
+      // Writes since the last ack bumped the version (ADR 0007's freshness token).
+      replica.ack("s", ack(9));
+      await ticks();
+      expect(seqs(replica)).toEqual([0, 1, 2]);
+    } finally { cleanup(); }
+  });
+
+  it("stores an older page read after the log moved on", async () => {
+    const replica = new IssueLogReplica("s", { sessionId: "s", head: row(0, "head"),
+      window: { ...windowOf([row(3), row(4)]), head_seq: 4 } });
+    const cleanup = await replica.connect({ userId: "u", workspaceId: "w", subscribe: vi.fn(), unsubscribe: vi.fn(), env: { hasOpfs: false } });
+    try {
+      mocks.read.mockResolvedValue({ ...windowOf([row(1), row(2)]), head_seq: 6, log_version: 7, has_more_before: false });
+      await replica.earlier();
+      replica.ack("s", ack(7, 4));
+      await ticks();
+      expect(seqs(replica)).toEqual([0, 1, 2, 3, 4]);
+    } finally { cleanup(); }
+  });
+
+  it("reads another tab's session through the read route, never from this session's windows", async () => {
+    const replica = new IssueLogReplica("s", { sessionId: "s", head: null,
+      window: { ...windowOf([row(1), row(2)]), head_seq: 2 } });
+    const other = SessionLogEntrySchema.parse({ ...row(1), session_id: "other", id: "o1" });
+    mocks.read.mockResolvedValue({ ...windowOf([other]), head_seq: 1 });
+    await expect(replica["readRange"]("other", { from: 1, to: 1 })).resolves.toEqual([other]);
+    expect(mocks.read).toHaveBeenCalledExactlyOnceWith("other", { anchor: 0, after: 100 });
+  });
+});

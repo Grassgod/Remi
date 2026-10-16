@@ -69,19 +69,36 @@ describe("read window subscription and hydration", () => {
     expect(reads.get).not.toHaveBeenCalled();
   });
 
-  it.each(["id", "seq", "revision", "reset"])("does not reuse a stale or mismatched %s", async kind => {
+  it("hydrates a new row from a read at a newer log_version, since every write bumps it", async () => {
+    const replica = seed(windowOf([row(10)]));
+    const reply = row(11, { author_type: "agent", body_md: "reply" });
+    reads.get.mockResolvedValue(windowOf([reply], { log_version: 7 }));
+    const delivered = vi.spyOn(replica, "frames").mockImplementation(() => {});
+    await replica.hydratedFrames("s", [frame(11)]);
+    expect(reads.get).toHaveBeenCalledExactlyOnceWith("s", { anchor: 10, after: 1 });
+    expect(delivered.mock.calls[0]?.[1][0]?.payload).toEqual(reply);
+  });
+
+  it.each(["id", "seq", "revision"])("does not reuse a stale or mismatched %s", async kind => {
     const replica = seed(windowOf([row(10)]));
     const seq = kind === "seq" ? 12 : 10;
     const id = kind === "id" ? "different-id" : "r10";
     const revision = kind === "revision" ? 2 : 1;
-    const version = kind === "reset" ? 5 : 4;
-    if (kind === "reset") replica.ack("s", { stream: "log", id: "s", first_seq: 0, head_seq: 10, log_version: 5, gap: null });
     const current = row(seq, { id, revision });
-    reads.get.mockResolvedValue(windowOf([current], { log_version: version }));
+    reads.get.mockResolvedValue(windowOf([current]));
     const delivered = vi.spyOn(replica, "frames").mockImplementation(() => {});
     await replica.hydratedFrames("s", [frame(seq, { id, revision })]);
     expect(reads.get).toHaveBeenCalledExactlyOnceWith("s", { anchor: seq - 1, after: 1 });
     expect(delivered.mock.calls[0]?.[1][0]?.payload).toEqual(current);
+  });
+
+  it("keeps reusing window rows after an ack with a new log_version", async () => {
+    const replica = seed(windowOf([row(10)]));
+    replica.ack("s", { stream: "log", id: "s", first_seq: 0, head_seq: 10, log_version: 9, gap: null });
+    const delivered = vi.spyOn(replica, "frames").mockImplementation(() => {});
+    await replica.hydratedFrames("s", [frame(10)]);
+    expect(reads.get).not.toHaveBeenCalled();
+    expect(delivered.mock.calls[0]?.[1][0]?.payload).toEqual(row(10));
   });
 
   it("rejects another session without reading or forwarding its rows", async () => {
@@ -106,16 +123,20 @@ describe("read window subscription and hydration", () => {
     expect(delivered.mock.calls[0]?.[1][0]?.payload).toEqual(row(10));
   });
 
-  it.each(["disconnect", "reset"])("discards an in-flight hydration result after %s", async action => {
+  it.each(["disconnect", "ack", "refresh"])("delivers an in-flight hydration result unless a disconnect intervened (%s)", async action => {
     const replica = seed(windowOf([row(10)]));
     let resolve!: (window: SessionLogWindow) => void;
-    reads.get.mockReturnValue(new Promise<SessionLogWindow>(done => { resolve = done; }));
+    reads.get.mockReturnValueOnce(new Promise<SessionLogWindow>(done => { resolve = done; }));
     const delivered = vi.spyOn(replica, "frames").mockImplementation(() => {});
     const pending = replica.hydratedFrames("s", [frame(11)]);
     await vi.waitFor(() => expect(reads.get).toHaveBeenCalled());
     if (action === "disconnect") replica.disconnect();
-    else replica.ack("s", { stream: "log", id: "s", first_seq: 0, head_seq: 11, log_version: 5, gap: null });
-    resolve(windowOf([row(11)])); await pending;
-    expect(delivered).not.toHaveBeenCalled();
+    // Neither a resumed stream nor a newer window read (every write bumps
+    // `log_version`) makes the rows already read invalid.
+    else if (action === "ack") replica.ack("s", { stream: "log", id: "s", first_seq: 0, head_seq: 11, log_version: 5, gap: null });
+    else replica.accept(windowOf([row(10), row(11)], { log_version: 6 }));
+    resolve(windowOf([row(11)], { log_version: 5 })); await pending;
+    if (action === "disconnect") expect(delivered).not.toHaveBeenCalled();
+    else expect(delivered.mock.calls[0]?.[1][0]?.payload).toEqual(row(11));
   });
 });

@@ -24,6 +24,18 @@ function leaderHarness() {
 }
 
 describe("page and subscription lifetimes", () => {
+  test("a follower's window that starts at the head row is read and stored", async () => {
+    const h = leaderHarness(); h.leader.open("session");
+    h.leader.handleWorkerMessage(h.opened(h.requests.at(-1)!));
+    const query = h.leader.queryWindow("session", 0, 2);
+    for (let n = 0; n < 8; n++) await Promise.resolve();
+    const write = h.requests.find(request => request.type === "writeWindow");
+    expect(write).toMatchObject({ range: { from: 0, to: 2 } });
+    h.leader.handleWorkerMessage({ ...write!, type: "appended", sessionId: "session", entries: [],
+      range: { from: 0, to: 2 }, head: 2, fresh: false, missing: null });
+    await query;
+  });
+
   test("Worker responses need the current request token", () => {
     const h = leaderHarness(); h.leader.open("session");
     const request = h.requests.at(-1)!;

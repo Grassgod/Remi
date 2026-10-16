@@ -51,7 +51,7 @@ export interface ReplicaLeaderOptions {
   tabId: string;
   /** The page's replica socket. Owns the token, so it cannot live in the Worker. */
   subscription: ReplicaSubscription;
-  /** Reads one range through the read route, for gaps and resets. */
+  /** Reads one range through the read route, for gaps and windows. */
   readRange: (sessionId: string, range: HubSeqRange) => Promise<SessionLogEntry[]>;
   /** The Worker, however the caller created it. */
   worker: {
@@ -157,7 +157,7 @@ export class ReplicaLeader {
     this.post({ type: "frames", sessionId, frames });
   }
 
-  /** A `stream.ack`, forwarded so the Worker decides reset vs gap. */
+  /** A `stream.ack`, forwarded so the Worker records it and names any gap. */
   ack(sessionId: string, ack: HubStreamAckPayload): void {
     if (!this.openCounts.has(sessionId)) return;
     this.options.view.updateFreshness(sessionId, false);
@@ -172,7 +172,9 @@ export class ReplicaLeader {
 
   async queryWindow(sessionId: string, from: number, to: number): Promise<ReturnType<ReplicaLeader["window"]>> {
     const cached = this.window(sessionId, from, to);
-    if (from > 0 && to < Number.MAX_SAFE_INTEGER && to >= from && cached.entries.length !== to - from + 1) {
+    // An explicit range is a follower's window, which it shows only as far as
+    // the replica holds it. A chat window starts at the seq 0 head row.
+    if (to < Number.MAX_SAFE_INTEGER && to >= from && cached.entries.length !== to - from + 1) {
       await this.loadWindow(sessionId, { from, to });
     }
     return this.window(sessionId, from, to);
@@ -283,9 +285,8 @@ export class ReplicaLeader {
         });
         this.options.broadcast({ type: "replica:appended", sessionId: message.sessionId,
           range: { from: 0, to: 0 }, head: message.head, fresh: message.fresh });
-        if (message.reset) this.resubscribe(message.sessionId);
-        // Step 2: a gap (or a reset) is read through the read route, written into
-        // the replica, and only then can the stream continue without a hole.
+        // Step 2: a gap is read through the read route, written into the
+        // replica, and only then can the stream continue without a hole.
         if (message.range) await this.backfill(message.sessionId, message.range);
         return;
       }
