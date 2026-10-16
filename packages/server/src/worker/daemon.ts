@@ -52,6 +52,7 @@ import { responseToUsageUnits } from "./usage-units.js";
 import { createTraceTranslator, type TraceSubagentRef, type TraceTranslator } from "./trace-translator.js";
 import { nativeAgentItemId } from "@acp/adapters/trace-vendor.js";
 import { TaskActivityReporter } from "./task-activity.js";
+import { LaneTaskContextFile, type LaneTaskContext } from "./lane-task-context.js";
 import { finalReplyBody } from "@shared/turn-trace.js";
 import {
   BACKGROUND_DOORBELL_PREFIX,
@@ -649,8 +650,41 @@ class DaemonLaneResources implements LaneResources {
   pluginRuntime: PreparedAgentPluginRuntime | undefined;
   hold: (() => void) | null = null;
   private disposed: Promise<void> | null = null;
+  /** Made at first use; null when it could not be. */
+  private contextFile: LaneTaskContextFile | null | undefined;
 
   constructor(private readonly cleanupTmp: (directory: TaskPrivateTempDirectory) => Promise<void>) {}
+
+  /**
+   * The lane's task context file (PR 6 §2.4), in its private temp directory:
+   * every process of the lane reads the current attempt's token there, since
+   * the token in its spawn env is revoked when that attempt completes. Null
+   * before the directory exists, or when the file could not be made (readers
+   * then fall back to the env, as an Issue lane does).
+   */
+  taskContextFile(): LaneTaskContextFile | null {
+    if (this.contextFile !== undefined) return this.contextFile;
+    if (!this.privateTmp) return null;
+    try {
+      this.contextFile = LaneTaskContextFile.create(this.privateTmp.path);
+    } catch (error) {
+      log.warn(`Could not create a lane's task context file: ${error instanceof Error ? error.message : String(error)}`);
+      this.contextFile = null;
+    }
+    return this.contextFile;
+  }
+
+  /** Name the attempt running on the lane's process; `token: null` once none does. */
+  writeTaskContext(context: LaneTaskContext): void {
+    const file = this.taskContextFile();
+    if (!file) return;
+    try {
+      file.write(context);
+    } catch (error) {
+      log.warn(`Could not write a lane's task context file: ${error instanceof Error ? error.message : String(error)}`);
+      try { file.discard(); } catch { /* readers then see the last version */ }
+    }
+  }
 
   get privateTmpPath(): string | null {
     return this.privateTmp ? this.privateTmp.aliasPath ?? this.privateTmp.path : null;
@@ -4620,6 +4654,11 @@ export class MultiremiDaemon {
 
     // Assemble config via AgentRuntime
     const runtime = new AgentRuntime();
+    // The resources this attempt's process uses: the claimed lane's (adopted or relaunched on them), else its own.
+    const claimedLaneResources = background?.claimed?.resources;
+    const laneResources = !background ? null
+      : claimedLaneResources ? (claimedLaneResources instanceof DaemonLaneResources ? claimedLaneResources : null)
+        : background.own;
     const ctx: EphemeralContext = {
       kind: "ephemeral",
       task,
@@ -4635,6 +4674,8 @@ export class MultiremiDaemon {
       pluginRuntime,
       providerHome: providerHome ?? undefined,
       providerEnv,
+      // PR 6 §2.4: the lane's process may outlive this attempt and its token; it reads the current one here.
+      ...(laneResources?.taskContextFile() ? { taskContextFile: laneResources.taskContextFile()!.visiblePath } : {}),
     };
     const config = runtime.assemble(ctx);
     const failureCredentials = [...Object.entries(config.env ?? {})
@@ -4725,6 +4766,12 @@ export class MultiremiDaemon {
       }
     }
     if (background) background.record = laneRecord;
+    // Before the process sees this attempt's prompt (an adopted one may already be running tools):
+    // the same token, turn and attempt a process spawned for this attempt has in its env.
+    if (laneRecord?.resources instanceof DaemonLaneResources) laneRecord.resources.writeTaskContext({
+      token: config.env?.MULTIREMI_TOKEN || null, turnId: config.env?.MULTIREMI_TURN_ID || null,
+      attemptId: config.env?.MULTIREMI_ATTEMPT_ID || task.id,
+    });
     const provider: MultiremiTaskProvider = chosen;
     if (!provider.sendStream) {
       throw new Error(`Provider ${agent.provider} does not support streaming`);
@@ -5290,6 +5337,10 @@ export class MultiremiDaemon {
         // PR 6 §2.2: park the process while its tasks run, else close it (and release what it held).
         this.parkedLanes.attach(laneRecord, null);
         this.parkedLanes.setProviderSession(laneRecord, finalSessionId);
+        // The attempt's token is revoked with it: until the next attempt, the process has no credential (§2.4).
+        if (laneRecord.resources instanceof DaemonLaneResources) {
+          laneRecord.resources.writeTaskContext({ token: null, turnId: null, attemptId: null });
+        }
         const outcome = backgroundDecisionOf() === "park" ? await this.parkedLanes.park(laneRecord) : null;
         if (outcome?.parked) log.info(`Task ${task.id} parked its lane's process`, { event: "background_lane_parked" });
         else await this.parkedLanes.endAttempt(laneRecord, outcome && !outcome.parked ? outcome.reason : null);

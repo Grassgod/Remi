@@ -8,6 +8,7 @@ import { readFileSync } from "node:fs";
 import { basename } from "node:path";
 import { loadMultiremiConfig } from "@multiremi/config.js";
 import { remiCliUserAgent } from "../core/user-agent.js";
+import { taskCredential } from "../core/task-context.js";
 import { type CliOptions, stringOpt, stringListOption } from "./options.js";
 
 export interface CliAttachmentFile {
@@ -92,7 +93,7 @@ export function multiremiApiConnection(options: CliOptions): MultiremiApiConnect
       ?? config.server_url
       ?? `http://127.0.0.1:6120`
     ).replace(/\/+$/, ""),
-    token: stringOpt(options.token, process.env.MULTIREMI_TOKEN) ?? config.token ?? null,
+    token: stringOpt(options.token) ?? stringOpt(taskCredential()) ?? config.token ?? null,
     workspaceId: stringOpt(options.workspace ?? options["workspace-id"], process.env.MULTIREMI_WORKSPACE_ID) ?? config.workspace_id ?? null,
   };
 }

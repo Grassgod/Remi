@@ -87,6 +87,8 @@ export interface EphemeralContext {
   providerHome?: IssueSessionProviderHome;
   /** In-memory endpoint/auth overlay for an isolated provider home. */
   providerEnv?: Record<string, string>;
+  /** PR 6: the lane's task context file, as the agent sees it (`MULTIREMI_TASK_CONTEXT_FILE`). */
+  taskContextFile?: string;
 }
 
 export interface EphemeralDaemonOptions {

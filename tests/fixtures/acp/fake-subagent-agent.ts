@@ -77,6 +77,8 @@ export interface FakeSubagentConfig {
   steering?: boolean;
   /** Steps run once `session/new` or `session/resume` answered, outside any prompt. */
   afterSession?: FakeSubagentStep[];
+  /** Env variables the `started` line records (`env`), as the process got them; null when unset. */
+  logEnv?: string[];
 }
 
 const config = JSON.parse(process.env.FAKE_SUBAGENT_CONFIG ?? "{}") as FakeSubagentConfig;
@@ -85,7 +87,7 @@ const ROOT = config.sessionId ?? "sess_root";
 const log = (entry: Record<string, unknown>) => {
   if (logPath) appendFileSync(logPath, JSON.stringify({ ...entry, pid: process.pid, at: Date.now() }) + "\n");
 };
-log({ kind: "started" });
+log({ kind: "started", ...(config.logEnv ? { env: Object.fromEntries(config.logEnv.map((key) => [key, process.env[key] ?? null])) } : {}) });
 process.on("SIGTERM", () => process.exit(0));
 // However it ends (SIGTERM, stdin closed, a scripted exit): SIGKILL alone leaves no line.
 process.on("exit", (code) => log({ kind: "exited", code }));

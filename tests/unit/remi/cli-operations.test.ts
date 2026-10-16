@@ -4,6 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CommandRegistry, CliError, sanitizeCliDetails, isPublicUsageStatistic, type CommandSpec } from "../../../apps/remi/cli/core/index.js";
 import { operationsCommandSpecs } from "../../../apps/remi/cli/commands/operations.js";
+import { taskCredential } from "../../../apps/remi/cli/core/task-context.js";
+import { TASK_CONTEXT_FILE_ENV, TASK_CONTEXT_PARKED_MESSAGE } from "@shared/task-context-file.js";
 
 const realFetch = globalThis.fetch;
 const realLog = console.log;
@@ -633,6 +635,50 @@ describe("operations CLI contracts", () => {
     }
   });
 
+  it("inside a lane whose process outlived its attempt, reads the turn and credential from the task context file (PR 6)", async () => {
+    useCliEnv();
+    const spec = specById("automation.quiet");
+    const saved = { turn: process.env.MULTIREMI_TURN_ID, file: process.env[TASK_CONTEXT_FILE_ENV] };
+    const directory = mkdtempSync(join(tmpdir(), "claude-pr6b-cli-context-"));
+    tempDirectories.push(directory);
+    const contextFile = join(directory, "context.json");
+    const requests: Array<{ path: string; authorization: string | null }> = [];
+    globalThis.fetch = (async (input, init) => {
+      const request = input instanceof Request ? input : new Request(input, init);
+      requests.push({ path: new URL(request.url).pathname, authorization: request.headers.get("authorization") });
+      if (new URL(request.url).pathname === "/api/cli/capabilities") {
+        return Response.json({ identity: "task", commands: [{ id: spec.id, allowed: true }] });
+      }
+      return Response.json({ ok: true });
+    }) as typeof fetch;
+    try {
+      // The spawn env names the attempt that started the process; the file names the current one.
+      process.env.MULTIREMI_TOKEN = "spawn-attempt-token";
+      process.env.MULTIREMI_TURN_ID = "turn_spawn";
+      process.env[TASK_CONTEXT_FILE_ENV] = contextFile;
+      writeFileSync(contextFile, JSON.stringify({ token: "current-attempt-token", turn_id: "turn_now", attempt_id: "att_now", written_at: "" }));
+      await capture(() => registryFor([spec]).execute(["automation", "quiet", "--json"]));
+      expect(requests.at(-1)).toEqual({ path: "/api/turns/turn_now/automation/quiet", authorization: "Bearer current-attempt-token" });
+      expect(requests.every((request) => request.authorization === "Bearer current-attempt-token")).toBe(true);
+
+      // Parked: no attempt runs on the process, so there is no credential at all.
+      writeFileSync(contextFile, JSON.stringify({ token: null, turn_id: null, attempt_id: null, written_at: "" }));
+      const sent = requests.length;
+      await expect(registryFor([spec]).execute(["automation", "quiet", "--turn", "turn_flag"]))
+        .rejects.toMatchObject({ code: "auth_required", message: TASK_CONTEXT_PARKED_MESSAGE });
+      expect(taskCredentialOrError()).toBe(TASK_CONTEXT_PARKED_MESSAGE);
+      expect(requests).toHaveLength(sent);
+
+      // No readable file: the env, exactly as before.
+      rmSync(contextFile);
+      await capture(() => registryFor([spec]).execute(["automation", "quiet", "--json"]));
+      expect(requests.at(-1)).toEqual({ path: "/api/turns/turn_spawn/automation/quiet", authorization: "Bearer spawn-attempt-token" });
+    } finally {
+      restoreEnv("MULTIREMI_TURN_ID", saved.turn);
+      restoreEnv(TASK_CONTEXT_FILE_ENV, saved.file);
+    }
+  });
+
   it("reviews the daemon retirement snapshot and sends the exact confirmed snapshot", async () => {
     useCliEnv();
     const spec = specById("daemon.retire");
@@ -810,6 +856,14 @@ function useCliEnv(): void {
   process.env.MULTIREMI_SERVER_URL = "https://cli.example.test";
   process.env.MULTIREMI_WORKSPACE_ID = "ws_1";
   process.env.MULTIREMI_TOKEN = "test-token";
+}
+
+function taskCredentialOrError(): string | undefined {
+  try {
+    return taskCredential();
+  } catch (error) {
+    return error instanceof CliError ? error.message : String(error);
+  }
 }
 
 function restoreEnv(name: string, value: string | undefined): void {

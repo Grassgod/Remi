@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { basename } from "node:path";
+import { resolveTaskContext, TASK_CONTEXT_PARKED_MESSAGE } from "@shared/task-context-file.js";
 
 export const MULTIREMI_GIT_CREDENTIAL_ENDPOINT = "/api/daemon/scm/git-credentials";
 export const DEFAULT_GIT_CREDENTIAL_TIMEOUT_MS = 10_000;
@@ -150,7 +151,10 @@ export async function runGitCredentialHelper(
   timer.unref?.();
   try {
     const headers: Record<string, string> = { "Content-Type": "application/json" };
-    const token = String(env.MULTIREMI_TOKEN ?? "").trim();
+    // A process that outlived its attempt reads the current attempt's token from the task context file (PR 6).
+    const context = resolveTaskContext(env);
+    if (context.parked) throw new Error(TASK_CONTEXT_PARKED_MESSAGE);
+    const token = context.token ?? "";
     if (token) headers.Authorization = `Bearer ${token}`;
     const response = await (options.fetchImpl ?? fetch)(`${serverUrl}${MULTIREMI_GIT_CREDENTIAL_ENDPOINT}`, {
       method: "POST",

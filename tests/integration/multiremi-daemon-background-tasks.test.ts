@@ -10,9 +10,9 @@
 import { disabledSshMeshRuntime } from "../helpers/ssh-mesh-isolation.js";
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { openIntegrationDatabase, type IntegrationDatabase } from "../helpers/integration-database.js";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { startMultiremiServer, TestMultiremiDaemon as MultiremiDaemon } from "../fixtures/daemon-protocol.js";
 import type { MultiremiDaemonProviderFactory } from "@multiremi/daemon.js";
 import { MultiremiStore } from "@multiremi/store.js";
@@ -24,6 +24,9 @@ import { backgroundDoorbellBody, backgroundDoorbellDedupeKey } from "@shared/bac
 import { traceItems } from "../helpers/turn-trace.js";
 import { createResponsibleTestIssue } from "../unit/multiremi/helpers.js";
 import type { FakeAsyncTaskStep, FakeSubagentConfig, FakeSubagentStep } from "../fixtures/acp/fake-subagent-agent.js";
+import { readTaskContextFile, TASK_CONTEXT_FILE_ENV, TASK_CONTEXT_PARKED_MESSAGE } from "@shared/task-context-file.js";
+import { taskCredential, taskTurnId } from "../../apps/remi/cli/core/task-context.js";
+import { runGitCredentialHelper } from "@daemon/agent-runtime/repo/credential-broker.js";
 
 let database: IntegrationDatabase | null = null;
 let workDir: string | null = null;
@@ -60,7 +63,8 @@ const bash = (id: string, toolCallId: string, command: string): FakeSubagentStep
     _meta: { claudeCode: { toolName: "Bash" }, jetbrains: { air: { asyncTasks: { backgrounded: true } } } } } },
 ];
 
-interface LogEntry { kind: string; method?: string; params?: Record<string, any>; pid: number; at: number; id?: string; stopped?: boolean }
+interface LogEntry { kind: string; method?: string; params?: Record<string, any>; pid: number; at: number; id?: string; stopped?: boolean;
+  env?: Record<string, string | null> }
 const agentLog = (path: string): LogEntry[] => existsSync(path)
   ? readFileSync(path, "utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line) as LogEntry) : [];
 const processes = (path: string) => new Set(agentLog(path).filter((entry) => entry.kind === "started").map((entry) => entry.pid));
@@ -228,6 +232,33 @@ const chatTasks = (store: MultiremiStore, chatId: string) =>
     WHERE t.session_id = ? ORDER BY t.seq, a.attempt_no`).all(chatId) as Array<{ id: string }>).map((row) => store.getTask(row.id)!);
 const requestUnits = (taskId: string) => Number((database!.db.query(
   "SELECT COUNT(*) AS n FROM multiremi_usage_units WHERE task_id=? AND source='provider_request'").get(taskId) as { n: number }).n);
+
+/** What the `remi` CLI and the git broker read from a task's env. */
+const CONTEXT_ENV = ["MULTIREMI_TOKEN", "MULTIREMI_TURN_ID", "MULTIREMI_ATTEMPT_ID", "MULTIREMI_SERVER_URL", "MULTIREMI_WORKSPACE_ID"];
+const GIT_INPUT = "protocol=https\nhost=git.example.test\npath=team/repo.git\n\n";
+
+/**
+ * The host path of a lane's task context file. On Linux the agent reads it under its private `/tmp`
+ * mount, which this harness does not make, so the file is found in the daemon's storage instead.
+ */
+function hostContextPath(visible: string): string {
+  if (existsSync(visible)) return visible;
+  const name = basename(dirname(visible));
+  const root = join(workDir!, "workspaces");
+  const found = (readdirSync(root, { recursive: true }) as string[]).find((entry) => basename(entry) === name);
+  if (!found) throw new Error(`No task context directory ${name} in the daemon's storage`);
+  return join(root, found, basename(visible));
+}
+
+/** A git credential endpoint that records the bearer it was called with and has no credential (404). */
+function gitBroker() {
+  const authorizations: string[] = [];
+  const fetch = (async (_input: unknown, init?: RequestInit) => {
+    authorizations.push(new Headers(init?.headers).get("authorization") ?? "");
+    return new Response("{}", { status: 404 });
+  }) as unknown as typeof globalThis.fetch;
+  return { authorizations, fetch };
+}
 
 /** Claude: a background command that outlives the turn, then its task-notification cycle (claude-agent-acp 0.90). */
 const OUTLIVES: FakeSubagentStep[] = [
@@ -481,17 +512,71 @@ describe("Bun Multiremi daemon background tasks (PR 6)", () => {
   it("(D9) an Issue lane never parks: its task stops at the attempt's end", async () => {
     const { store, agent, daemon, d } = await bed("issue-lane");
     const logPath = join(workDir!, "agent.jsonl");
-    const run = daemon(scriptedAcp({ prompts: [[...bash("bash-1", "toolu_srv", "python3 -m http.server"), chunk("Started."), { resolve: "end_turn" }]] },
+    const run = daemon(scriptedAcp({ logEnv: [TASK_CONTEXT_FILE_ENV, ...CONTEXT_ENV],
+      prompts: [[...bash("bash-1", "toolu_srv", "python3 -m http.server"), chunk("Started."), { resolve: "end_turn" }]] },
       logPath, "claude"));
     const issue = createResponsibleTestIssue(store, { title: "Issue lane", assigneeType: "agent", assigneeId: agent.id,
       responsibleMemberId: "mem_local_local" });
     const attempt = store.createSessionTask(store.getOrCreateDefaultIssueSession(issue.id).id, { agentId: agent.id, prompt: "Start a server" });
     await waitFor(() => finished(store, attempt.id), "the Issue turn");
+    // As before PR 6: the attempt's own token in the env, no context file.
+    const spawned = agentLog(logPath).find((entry) => entry.kind === "started")!.env!;
+    expect(spawned[TASK_CONTEXT_FILE_ENV]).toBeNull();
+    expect(spawned.MULTIREMI_ATTEMPT_ID).toBe(attempt.id);
+    expect(typeof spawned.MULTIREMI_TOKEN).toBe("string");
     await waitFor(() => agentLog(logPath).some((entry) => entry.kind === "exited"), "the process closing");
     expect(agentLog(logPath).filter((entry) => entry.kind === "async_task_stop")).toEqual([expect.objectContaining({ id: "bash-1", stopped: true })]);
     expect(traceItems(run.traceStore().read(attempt.id).events).find((item) => item.id === "bg:bash-1"))
       .toMatchObject({ status: "stopped", stop_reason: "turn_end" });
     expect(d.snapshots).toEqual([]);
+  }, 60_000);
+
+  it("(15) the lane's process reads the current attempt's token from its context file, and has none while parked", async () => {
+    const { store, agent, daemon } = await bed("context");
+    const logPath = join(workDir!, "agent.jsonl");
+    daemon(scriptedAcp({ logEnv: [TASK_CONTEXT_FILE_ENV, ...CONTEXT_ENV], prompts: [
+      [...bash("bash-1", "toolu_srv", "python3 -m http.server"), chunk("Server started."), { resolve: "end_turn" }],
+      // Long enough to read the file while the adopting attempt runs.
+      [{ delayMs: 2_500, ...chunk("It still runs.") }],
+    ] }, logPath, "claude"));
+    const chat = store.createChatSession({ agentId: agent.id });
+    const first = store.sendChatMessage(chat.id, { body: "Start a server" }).task;
+    await waitFor(() => finished(store, first.id), "the first turn");
+    const spawned = agentLog(logPath).find((entry) => entry.kind === "started")!.env!;
+    // (Explicit checks: bun's toMatchObject leaves asymmetric matchers in the received object.)
+    expect(spawned.MULTIREMI_ATTEMPT_ID).toBe(first.id);
+    expect(typeof spawned.MULTIREMI_TOKEN).toBe("string");
+    // The process's own env, with the file where this harness (no private /tmp mount) finds it.
+    const env = { ...spawned, [TASK_CONTEXT_FILE_ENV]: hostContextPath(spawned[TASK_CONTEXT_FILE_ENV]!) } as Record<string, string>;
+    expect(statSync(env[TASK_CONTEXT_FILE_ENV]!).mode & 0o777).toBe(0o600);
+    expect(statSync(dirname(env[TASK_CONTEXT_FILE_ENV]!)).mode & 0o777).toBe(0o700);
+
+    // Parked: the spawn token is revoked, and the file says there is none.
+    await waitFor(() => readTaskContextFile(env[TASK_CONTEXT_FILE_ENV]!)?.token === null, "the parked context");
+    expect(await store.verifyAccessToken(spawned.MULTIREMI_TOKEN!)).toBeNull();
+    expect(() => taskCredential(env)).toThrow(expect.objectContaining({ code: "auth_required", message: TASK_CONTEXT_PARKED_MESSAGE }));
+    const broker = gitBroker();
+    await expect(runGitCredentialHelper("get", { env, input: GIT_INPUT, fetchImpl: broker.fetch, cwd: workDir! })).rejects.toThrow(TASK_CONTEXT_PARKED_MESSAGE);
+    expect(broker.authorizations).toEqual([]);
+
+    // The next attempt adopts the process; its CLI and git broker read the new token, not the spawn one.
+    const second = store.sendChatMessage(chat.id, { body: "Is it up?" }).task;
+    const current = await waitFor(() => {
+      const file = readTaskContextFile(env[TASK_CONTEXT_FILE_ENV]!);
+      return file?.attempt_id === second.id ? file : null;
+    }, "the adopting attempt's context");
+    expect(current.token).not.toBe(spawned.MULTIREMI_TOKEN);
+    expect(await store.verifyAccessToken(current.token!)).not.toBeNull();
+    expect(taskCredential(env)).toBe(current.token!);
+    expect(taskTurnId(env)).toBe(current.turn_id);
+    expect(current.turn_id).toBe(store.getTask(second.id)!.turn_id ?? null);
+    expect(await runGitCredentialHelper("get", { env, input: GIT_INPUT, fetchImpl: broker.fetch, cwd: workDir! })).toBe("");
+    expect(broker.authorizations).toEqual([`Bearer ${current.token}`]);
+    await waitFor(() => finished(store, second.id), "the second turn");
+    expect(store.getTask(second.id)).toMatchObject({ status: "completed", result: "It still runs." });
+    expect(processes(logPath).size).toBe(1);
+    // Parked again (the server still runs): no credential until the next attempt.
+    await waitFor(() => readTaskContextFile(env[TASK_CONTEXT_FILE_ENV]!)?.token === null, "the context cleared again");
   }, 60_000);
 
   it("(14) a rejected doorbell (session_closed) cancels the cycle and closes the lane", async () => {

@@ -1,4 +1,8 @@
 import { describe, expect, it } from "bun:test";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { TASK_CONTEXT_FILE_ENV, TASK_CONTEXT_PARKED_MESSAGE } from "@shared/task-context-file.js";
 import {
   appendGitCredentialBrokerEnv,
   defaultRemiGitCredentialHelperCommand,
@@ -110,6 +114,36 @@ describe("Multiremi Git credential broker", () => {
     expect(output).toContain("username=x-access-token\n");
     expect(output).toContain("password=git-access-token\n");
     expect(output).toContain("password_expiry_utc=");
+  });
+
+  it("uses the task context file's token over the spawn env's, and has none while the lane is parked (PR 6)", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "claude-pr6b-broker-"));
+    try {
+      const contextFile = join(directory, "context.json");
+      const env = {
+        MULTIREMI_SERVER_URL: "https://multiremi.example", MULTIREMI_WORKSPACE_ID: "wsp_1",
+        MULTIREMI_TOKEN: "spawn-attempt-token", [TASK_CONTEXT_FILE_ENV]: contextFile,
+        MULTIREMI_GIT_REPOSITORY_URL: "https://github.com/owner/repo.git",
+      };
+      const authorizations: string[] = [];
+      const fetchImpl = (async (_url: unknown, init?: RequestInit) => {
+        authorizations.push(new Headers(init?.headers).get("authorization") ?? "");
+        return Response.json({ error: "no binding" }, { status: 404 });
+      }) as unknown as typeof fetch;
+      const input = "protocol=https\nhost=github.com\npath=owner/repo.git\n\n";
+      writeFileSync(contextFile, JSON.stringify({ token: "current-attempt-token", turn_id: "turn_2", attempt_id: "att_2", written_at: "" }));
+      await runGitCredentialHelper("get", { input, env, fetchImpl });
+      expect(authorizations).toEqual(["Bearer current-attempt-token"]);
+      writeFileSync(contextFile, JSON.stringify({ token: null, turn_id: null, attempt_id: null, written_at: "" }));
+      await expect(runGitCredentialHelper("get", { input, env, fetchImpl })).rejects.toThrow(TASK_CONTEXT_PARKED_MESSAGE);
+      expect(authorizations).toHaveLength(1);
+      // An unreadable file leaves the env's token, as for a process with no context file.
+      rmSync(contextFile);
+      await runGitCredentialHelper("get", { input, env, fetchImpl });
+      expect(authorizations.at(-1)).toBe("Bearer spawn-attempt-token");
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
   });
 
   it("rejects credentials returned for a different repository", async () => {
