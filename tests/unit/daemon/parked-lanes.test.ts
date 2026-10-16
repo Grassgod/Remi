@@ -310,6 +310,35 @@ describe("ParkedLanes: the doorbell (§2.5)", () => {
     expect(r.wakes).toHaveLength(1);
   });
 
+  it("rings at park for a handed-off task that ended while its attempt was still finishing; not for one the attempt saw end", async () => {
+    const r = registry({ idleCloseMs: 30 });
+    const { record, provider } = r.begin("chat_a", "tsk_1");
+    provider.change(snapshot("seen"));
+    provider.change(snapshot("late"));
+    provider.change(snapshot("seen", "completed"));
+    // The attempt decides to park with `late` running, then `late` ends before the lane is parked.
+    r.lanes.handOff(record);
+    provider.change(snapshot("late", "completed", { summary: "done" }));
+    expect(r.wakes).toEqual([]);
+    expect(await r.lanes.park(record)).toEqual({ parked: true });
+    await waitFor(() => r.wakes.length === 1, "the doorbell");
+    expect(r.wakes[0]!.task).toMatchObject({ task_id: "late", status: "completed", summary: "done" });
+    expect(record.doorbell).toBe("sent");
+    // The doorbell is out: the lane waits for its turn instead of closing as done.
+    await Bun.sleep(80);
+    expect(provider.closed).toBe(0);
+
+    // The adopting attempt sees its own tasks end; only a new hand-off makes a later end ring at park.
+    const claimed = r.lanes.claim(laneKeyOf(record.lane), "tsk_2")!;
+    expect(r.lanes.adopt(claimed, "tsk_2", "tsk_2")).toBe(true);
+    provider.change(snapshot("next"));
+    provider.change(snapshot("other"));
+    provider.change(snapshot("next", "completed"));
+    await r.lanes.park(record);
+    await Bun.sleep(30);
+    expect(r.wakes).toHaveLength(1);
+  });
+
   it("a rejected doorbell cancels the cycle and closes the lane (session_closed)", async () => {
     const r = registry({ wake: async () => { throw Object.assign(new Error("rejected"), { code: "session_closed" }); } });
     const { record, provider } = r.begin("chat_a", "tsk_1");

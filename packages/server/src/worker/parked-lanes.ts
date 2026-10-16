@@ -115,6 +115,8 @@ interface LaneTask {
   outputUnreadable: boolean;
   /** The doorbell for this task's end went out (one per task). */
   rang: boolean;
+  /** Live when the current attempt handed its tasks to the lane (it will park). */
+  handedOff: boolean;
 }
 
 export interface LaneRecord {
@@ -321,6 +323,14 @@ export class ParkedLanes {
     this.disabledReason = reason;
   }
 
+  /**
+   * The attempt ends with tasks running and will park the lane (§2.2): they
+   * are the lane's now. One that ends before the lane is parked still rings.
+   */
+  handOff(record: LaneRecord): void {
+    for (const task of record.tasks.values()) if (isLive(task.snapshot.state)) task.handedOff = true;
+  }
+
   /** Remi stops these tasks at the attempt's end for `reason` (§2.2): the registry reports it. */
   noteStopReason(record: LaneRecord, taskIds: readonly string[], reason: BackgroundTaskStopReason): void {
     for (const id of taskIds) {
@@ -413,6 +423,14 @@ export class ParkedLanes {
     }, Math.max(0, record.parkedUntil - now));
     (internal.keepAliveTimer as { unref?: () => void }).unref?.();
     this.watchOutputs(record);
+    // §2.5: a handed-off task that ended while the attempt was still finishing rings now; its cycle stayed captured.
+    for (const task of record.tasks.values()) {
+      if (task.handedOff && !task.rang && !isLive(task.snapshot.state)
+        && ringsBackgroundDoorbell({ wakesModel: record.wakesModel }, task.snapshot.state)) {
+        task.rang = true;
+        void this.ringDoorbell(record, task);
+      }
+    }
     this.scheduleIdleClose(record);
     this.scheduleSnapshot(record, true);
     return { parked: true };
@@ -483,6 +501,8 @@ export class ParkedLanes {
     record.parkedUntil = null;
     record.lastActivityAt = this.now();
     if (record.doorbell === "sent") record.doorbell = "attached";
+    // The adopting attempt sees its tasks' ends itself until it hands them off again.
+    for (const task of record.tasks.values()) task.handedOff = false;
     const internal = this.internals.get(record)!;
     internal.pgid = null;
     this.writeStateFile();
@@ -638,7 +658,7 @@ export class ParkedLanes {
     const previous = record.tasks.get(snapshot.id);
     const task: LaneTask = previous ?? {
       snapshot, originAttemptId: record.attemptId ?? record.lastAttemptId,
-      stopReason: null, outputTail: null, outputUnreadable: false, rang: false,
+      stopReason: null, outputTail: null, outputUnreadable: false, rang: false, handedOff: false,
     };
     const wasLive = previous ? isLive(previous.snapshot.state) : false;
     task.snapshot = snapshot;

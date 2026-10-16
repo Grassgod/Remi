@@ -5008,6 +5008,7 @@ export class MultiremiDaemon {
         }
         const verdict = laneRecord ? this.parkedLanes.canPark(laneRecord) : { park: false as const, reason: null };
         if (verdict.park) {
+          this.parkedLanes.handOff(laneRecord!);
           this.recordTrace(task.id, () => trace.backgroundTasksHandedOff());
           backgroundDecision = "park";
           return;
