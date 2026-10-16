@@ -4,13 +4,14 @@ import type { MultiremiTaskPluginSnapshotEntry, TaskUsageEntry } from "./types.j
 import type { RuntimeCodexProfile } from "./codex-profile.js";
 import type { RuntimeClaudeProfile } from "./claude-profile.js";
 import type { TraceRef } from "./trace-file.js";
+// A value import without `.js`: the web bundles this module, and webpack cannot resolve `./trace.js` to the TS source.
 import {
   TRACE_BACKGROUND_TASK_STOP_REASONS,
   type TraceBackgroundTaskStopRequest,
   type TraceBackgroundTaskUsage,
   type TraceContextUsage,
   type TraceLateSubagent,
-} from "./trace.js";
+} from "./trace";
 
 export const MESSAGE_KINDS = ["request", "reply", "report", "decision", "status", "final"] as const;
 export type MessageKind = typeof MESSAGE_KINDS[number];
