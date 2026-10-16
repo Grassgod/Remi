@@ -616,6 +616,35 @@ describe("isBackgroundDoorbellMessage (§2.5)", () => {
   });
 });
 
+describe("ParkedLanes: closed snapshots of an old process (§5.2)", () => {
+  it("repeat `closed` with the first revision, and stop repeating when the lane gets a new process", async () => {
+    const r = registry({ closedRepeats: 3, closedRepeatMs: 30 });
+    const old = r.begin("chat_a", "tsk_1");
+    old.provider.change(snapshot("srv"));
+    await r.lanes.park(old.record);
+    await r.lanes.release(old.record, "lane_reset");
+    const closed = () => r.snapshots.filter((payload) => payload.state === "closed");
+    expect(closed()).toHaveLength(1);
+    // The next process of the same provider session starts a task before the old repeats are done.
+    const next = r.begin("chat_a", "tsk_2");
+    next.provider.change(snapshot("dev"));
+    await waitFor(() => r.snapshots.some((payload) => payload.state === "in_attempt" && payload.tasks.some((task) => task.task_id === "dev")),
+      "the new process's snapshot");
+    await Bun.sleep(120);
+    expect(closed()).toHaveLength(1);
+    const first = closed()[0]!.revision;
+    expect(Math.min(...r.snapshots.filter((payload) => payload.state !== "closed" && payload.attempt_id === "tsk_2")
+      .map((payload) => payload.revision))).toBeGreaterThan(first);
+    // Left alone, every repeat carries the first revision.
+    const lone = r.begin("chat_b", "tsk_3");
+    lone.provider.change(snapshot("x"));
+    await r.lanes.park(lone.record);
+    await r.lanes.release(lone.record, "lane_reset");
+    await waitFor(() => closed().filter((payload) => payload.session_id === "chat_b").length === 3, "three repeats");
+    expect(new Set(closed().filter((payload) => payload.session_id === "chat_b").map((payload) => payload.revision)).size).toBe(1);
+  });
+});
+
 describe("ParkedLanes: crash sweep (R2)", () => {
   it("records parked process groups, and a restart kills those whose start time still matches", async () => {
     const dir = mkdtempSync(join(tmpdir(), "claude-pr6b-parked-"));

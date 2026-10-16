@@ -166,6 +166,8 @@ interface RecordInternals {
   closing: Promise<void> | null;
   /** The close in progress (or done) leaves the resources to its caller. */
   closeKeepsResources: boolean;
+  /** The revision its `closed` snapshot carries, reserved when a newer record replaced it. */
+  closedRevision: number | null;
   /** A doorbell delivery loop runs; `doorbellWake` cuts its current wait short. */
   ringing: boolean;
   doorbellWake: (() => void) | null;
@@ -251,6 +253,8 @@ export class ParkedLanes {
   private readonly byChatId = new Map<string, LaneRecord>();
   /** Attempts waiting for a lane's current attempt to park or close (§2.4). */
   private readonly laneWaiters = new Map<string, Set<() => void>>();
+  /** A closed record still repeating its `closed` snapshot, per lane: a new record of the lane stops it. */
+  private readonly closedRepeating = new Map<string, LaneRecord>();
   private revision = 0;
   private readonly now: () => number;
   private readonly tailer: AsyncTaskOutputTailer;
@@ -298,7 +302,17 @@ export class ParkedLanes {
       // §2.4's invariant: one process per lane. `acquire` waits for the old one, so this is a defect;
       // never leave it untracked: stop its tasks and close it.
       this.options.log.warn("A lane already has a live process; closing it", { event: "parked_lane_conflict", lane: input.lane });
+      // Its `closed` snapshot ranks below everything the new record reports.
+      const existingInternal = this.internals.get(existing);
+      if (existingInternal) existingInternal.closedRevision ??= ++this.revision;
       void this.close(existing, "lane_reset");
+    }
+    // A previous process's `closed` repeats must not land after this process's snapshots (§5.2).
+    const repeating = this.closedRepeating.get(key);
+    if (repeating) {
+      const repeatingInternal = this.internals.get(repeating);
+      if (repeatingInternal) this.clearTimer(repeatingInternal, "closedTimer");
+      this.closedRepeating.delete(key);
     }
     const record: LaneRecord = {
       key, lane: input.lane, provider: input.provider, poolChatId: input.poolChatId, providerSessionId: input.providerSessionId,
@@ -678,7 +692,7 @@ export class ParkedLanes {
   private freshInternals(): RecordInternals {
     return { hooks: null, permission: null, elicitation: null, attachWaiters: new Set(), keepAliveTimer: null, idleTimer: null,
       debounceTimer: null, refreshTimer: null, closedRepeats: 0, closedTimer: null, reported: false, pgid: null, closing: null,
-      closeKeepsResources: false, ringing: false, doorbellWake: null };
+      closeKeepsResources: false, closedRevision: null, ringing: false, doorbellWake: null };
   }
 
   /** The provider's handlers route through the record: an attempt's, or a hold while parked (R7). */
@@ -999,24 +1013,40 @@ export class ParkedLanes {
     }
   }
 
-  /** A `closed` snapshot, repeated (the registry is best effort). */
+  /**
+   * A `closed` snapshot, repeated (the registry is best effort). Every repeat
+   * carries the first one's revision: a later process of the lane reports
+   * higher revisions, so an old repeat never ends its tasks.
+   */
   private sendClosed(record: LaneRecord): void {
     const internal = this.internals.get(record)!;
     this.clearTimer(internal, "debounceTimer");
     if (internal.refreshTimer) clearInterval(internal.refreshTimer);
     internal.refreshTimer = null;
     internal.closedRepeats = 0;
+    const revision = internal.closedRevision ?? ++this.revision;
     const repeat = () => {
-      this.emit(record, "closed");
+      internal.closedTimer = null;
+      this.emit(record, "closed", revision);
       internal.closedRepeats++;
-      if (internal.closedRepeats >= (this.options.closedRepeats ?? DAEMON_LANE_BACKGROUND_CLOSED_REPEATS)) return;
+      if (internal.closedRepeats >= (this.options.closedRepeats ?? DAEMON_LANE_BACKGROUND_CLOSED_REPEATS)) {
+        if (this.closedRepeating.get(record.key) === record) this.closedRepeating.delete(record.key);
+        return;
+      }
       internal.closedTimer = setTimeout(repeat, this.options.closedRepeatMs ?? DAEMON_LANE_BACKGROUND_CLOSED_REPEAT_MS);
       (internal.closedTimer as { unref?: () => void }).unref?.();
     };
+    // Only while no newer record of the lane exists (a replaced record closes after its successor began).
+    const current = this.records.get(record.key);
+    if (current && current !== record) {
+      this.emit(record, "closed", revision);
+      return;
+    }
+    this.closedRepeating.set(record.key, record);
     repeat();
   }
 
-  private emit(record: LaneRecord, state: BackgroundLaneState): void {
+  private emit(record: LaneRecord, state: BackgroundLaneState, fixedRevision?: number): void {
     const runtimeId = this.options.runtimeId();
     const internal = this.internals.get(record);
     if (!runtimeId || !record.providerSessionId || !this.options.sharesCap() || !internal) return;
@@ -1027,7 +1057,7 @@ export class ParkedLanes {
       .slice(0, DAEMON_LANE_BACKGROUND_MAX_TASKS)
       .map((task) => this.wireTask(task));
     let payload: DaemonLaneBackgroundTasksPayload = {
-      ...record.lane, runtime_id: runtimeId, provider_session_id: record.providerSessionId, revision: ++this.revision, state,
+      ...record.lane, runtime_id: runtimeId, provider_session_id: record.providerSessionId, revision: fixedRevision ?? ++this.revision, state,
       attempt_id: state === "in_attempt" ? record.attemptId : null,
       parked_until: state === "parked" ? iso(record.parkedUntil) : null, tasks,
     };
