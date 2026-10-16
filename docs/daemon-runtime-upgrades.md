@@ -105,6 +105,16 @@ daemon 由 systemd 托管时，重启交给 `systemctl --user restart --no-block
 
 原有 daemon 启动健康检查继续执行；安装校验不等同于登录授权、真实模型调用或重启后服务注册成功的端到端验收。旧发布包不含 runtime-bundle.json，安装脚本仍兼容旧版本安装；旧 daemon 需要升级到包含本改动的版本才会使用新依赖。
 
+## 后台任务与驻留进程
+
+Chat 会话线的桥进程可以在还有后台任务时驻留（[ADR 0022](adr/0022-background-tasks-keep-alive-on-demand.md)）。驻留进程不计为活跃任务，不阻挡 `tryPauseClaimsForUpdate`，所以升级不必等它们结束：
+
+- **停止、重启与 CLI 更新。** daemon 退出前（计划停止、CLI 更新后的重启）不再驻留新的会话线，停止所有驻留会话线的任务（每条至多 3 s），发 `closed` 快照后关闭进程；登记表里这些任务记为「电脑上的 Remi 已重启」（`daemon_restart`）。
+- **平台排空。** 排空期间不驻留新的会话线，已驻留的同样以 `daemon_restart` 停止；排空解除后恢复驻留。
+- **崩溃或 `kill -9`。** 桥在自己的进程组里，可能留在机器上。daemon 状态目录的 `parked-bridges-<provider>-<身份>.json` 记着每个驻留进程组和它的启动时间，下次启动、领取任务之前杀掉启动时间仍然吻合的进程组；随后 `hello` 的 `parked_lanes` 为空，服务端把这台 runtime 未结束的登记行写成 `daemon_restart`。
+- **`acp` 与 `agent` 范围的更新。** 它们重装桥或更新 Agent CLI 但不重启 daemon，也不动驻留进程：驻留进程继续用启动时的桥与 CLI，直到它关闭，或下一轮因启动指纹变化把它释放（`config_changed`）后用新版本启动。需要立即切换时，先在 Chat 里「全部停止」，或重启 daemon。
+- **混合版本。** 新 daemon 只在服务端的 `welcome.caps` 回显 `lane.background` 时驻留；连到旧服务端时，后台任务在 attempt 结束时停止，与驻留关闭（`REMI_MAX_PARKED_LANES=0`）相同。开关见 [daemon 环境](deploy/66-8-remi-environment.md)。
+
 ## Trace 持久化升级边界
 
 本版本 daemon 将规范化过程记录写入 `<workspacesRoot>/traces/<主体>/<task_id>.jsonl`。

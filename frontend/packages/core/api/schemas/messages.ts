@@ -54,6 +54,10 @@ export const TurnSchema = z.object({
   // Running subagents of the current attempt (PR 5); display-only, so a
   // malformed value degrades to unknown instead of failing the turn list.
   running_subagents: z.number().int().nonnegative().nullable().optional().catch(null),
+  // PR 6: the current attempt's running background tasks, under the same rule.
+  running_background_tasks: z.number().int().nonnegative().nullable().optional().catch(null),
+  // PR 6 §2.8: the current attempt waits for its local folder (the turn reads running); display-only.
+  local_directory_wait_reason: z.string().nullable().optional().catch(null),
 }).loose();
 export const AttemptSchema = z.object({
   id: z.string(), turn_id: z.string(), attempt_no: z.number().int().positive(), status: z.string(),

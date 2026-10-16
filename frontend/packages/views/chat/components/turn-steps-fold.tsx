@@ -15,6 +15,7 @@ import { Markdown } from "../../common/markdown";
 import { useTurnTrace, type TurnTraceView } from "../../common/task-transcript/use-task-trace";
 import { useT } from "../../i18n";
 import { backgroundRunningCount } from "../lib/subagents";
+import { backgroundLaunchResolver } from "../lib/background-tasks";
 import {
   buildTurnSteps,
   liveBlockKey,
@@ -27,6 +28,7 @@ import { SUBAGENT_SPIN, SubagentTraceContext, type SubagentTraceSource } from ".
 import { SubagentCompletionRows } from "./subagent-completion-row";
 import { scrollToSubagentRow } from "./subagent-step-row";
 import { TurnStepList } from "./turn-step-list";
+import { useCachedBackgroundTasks } from "./use-background-tasks";
 
 export { MIN_LIVE_LABEL_MS, useStickyLabel, useTickingNow } from "./live-hooks";
 
@@ -111,7 +113,12 @@ function RevealListener({ attemptId, onReveal }: { attemptId: string; onReveal: 
  */
 export function LiveTurnSteps({ trace, sessionId = null }: { trace: Pick<TurnTraceView, "turn" | "items">; sessionId?: string | null }) {
   const { turn, items } = trace;
-  const steps = useMemo(() => buildTurnSteps(items), [items]);
+  // Launch rows read their task's phase from the session registry when it is loaded (PR 6).
+  const tasks = useCachedBackgroundTasks(sessionId);
+  const attemptEnded = !!turn && turn.status !== "running";
+  const resolveBackgroundTask = useMemo(() => backgroundLaunchResolver(items, tasks, turn?.id, attemptEnded),
+    [items, tasks, turn?.id, attemptEnded]);
+  const steps = useMemo(() => buildTurnSteps(items, { resolveBackgroundTask }), [items, resolveBackgroundTask]);
   const finalStarted = steps.finals.length > 0;
   const running = !!turn && turn.status === "running" && !finalStarted;
   const start = turn ? Date.parse(turn.started_at) : NaN;
@@ -170,7 +177,10 @@ export function FinishedTurnSteps({ attemptId, turnId, sessionId = null, header,
   const { t: ta } = useT("agents");
   const headerText = useFoldHeaderText();
   const trace = useTurnTrace(attemptId, { enabled: visible && open, live: false, turnId });
-  const steps = useMemo(() => buildTurnSteps(trace.items), [trace.items]);
+  // A finished attempt's launch rows: a task that still runs reads 「… 仍在后台运行」 (PR 6).
+  const tasks = useCachedBackgroundTasks(sessionId);
+  const resolveBackgroundTask = useMemo(() => backgroundLaunchResolver(trace.items, tasks, attemptId, true), [trace.items, tasks, attemptId]);
+  const steps = useMemo(() => buildTurnSteps(trace.items, { resolveBackgroundTask }), [trace.items, resolveBackgroundTask]);
   const source = useMemo<SubagentTraceSource>(() => ({ sessionId, attemptId, turnId, live: false }), [sessionId, attemptId, turnId]);
   const read = trace.read;
   // The cache can hold the live phase's first read, which may have landed before

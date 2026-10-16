@@ -1187,6 +1187,18 @@ describe("Multiremi API — daemon endpoints", () => {
     expect(waitQueued.status).toBe(400);
     expect(await waitQueued.json()).toEqual({ error: "mark task waiting_local_directory: no rows in result set" });
 
+    // PR 6 §2.8: a waiting task takes a new reason when its folder's holder parks.
+    const waitingTask = store.claimTask(runtime.id)!;
+    expect(waitingTask.id).toBe(queuedTask.id);
+    const markWaiting = (reason: string) => app.request(`/api/daemon/tasks/${waitingTask.id}/wait-local-directory`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ reason }),
+    });
+    expect((await markWaiting("local_directory /tmp/shared (held by task tsk_abcd)")).status).toBe(200);
+    const rewaited = await markWaiting("local_directory /tmp/shared (held by background tasks of chat chat_other)");
+    expect(rewaited.status).toBe(200);
+    expect(await rewaited.json()).toMatchObject({ status: "waiting_local_directory",
+      wait_reason: "local_directory /tmp/shared (held by background tasks of chat chat_other)" });
+
     const invalidComplete = await reportFrame(store, "task.complete", { task_id: queuedTask.id,  }, { headers: { "Content-Type": "application/json" }, authToken: "", rawPayload: "{" });
     expect(invalidComplete).toEqual({ closed: 4002 });
     expect(invalidComplete).toEqual({ closed: 4002 });

@@ -92,6 +92,7 @@ import { createSafeId } from "@multiremi/core/utils";
 import { useFloatingPanelLayout } from "../../layout/floating-panel-layout";
 import { ChatQueue, type ChatQueueController } from "./chat-queue";
 import { SubagentPanelLayout } from "./subagent-panel";
+import { useChatBackgroundTasks } from "./use-background-tasks";
 
 const uiLogger = createLogger("chat.ui");
 const apiLogger = createLogger("chat.api");
@@ -258,6 +259,19 @@ export function ChatWindow({
   });
   const currentSession = listedSession ?? fetchedSession ?? null;
   const isSessionArchived = currentSession?.status === "archived";
+
+  // Background tasks (PR 6): the session list says how many run, with or
+  // without a turn; only then does the visible chat read the registry rows
+  // the strip, the panel and the launch rows share (MUL-472). An older
+  // server sends no count, and nothing is read.
+  const sessionBackgroundTasks = currentSession?.id === displayedSessionId ? currentSession?.running_background_tasks ?? null : null;
+  const backgroundTasks = useChatBackgroundTasks(displayedSessionId, {
+    enabled: chatVisible && (sessionBackgroundTasks ?? 0) > 0,
+    // A count that drops to 0 under a list still showing a running task reads it once more.
+    visible: chatVisible,
+    expectRunning: sessionBackgroundTasks,
+  });
+  const backgroundTasksRunning = Math.max(sessionBackgroundTasks ?? 0, backgroundTasks.running);
 
   // New chats keep the picker: it is the only chance to choose where the
   // chat runs. An existing chat with neither binding has no location to
@@ -640,6 +654,21 @@ export function ChatWindow({
     [activeAgent, setSelectedAgentId, setActiveSession],
   );
 
+  // PR 6 §2.8: a turn waiting for a local folder that another chat's parked
+  // background tasks hold links to that chat's 后台任务 view (「全部停止」 there).
+  const openSubagentPanel = useChatStore((s) => s.openSubagentPanel);
+  const resolveChat = useCallback((sessionId: string) => {
+    const session = sessions.find((candidate) => candidate.id === sessionId);
+    if (!session) return null;
+    return {
+      title: session.title?.trim() || t(($) => $.session_history.untitled),
+      open: () => {
+        handleSelectSession(session);
+        openSubagentPanel({ sessionId: session.id, view: "tasks", attemptId: null, live: false, path: [], task: null });
+      },
+    };
+  }, [sessions, t, handleSelectSession, openSubagentPanel]);
+
   const handleMinimize = useCallback(() => {
     uiLogger.info("minimize (close)", {
       activeSessionId,
@@ -866,6 +895,7 @@ export function ChatWindow({
             void replica.earlier().finally(() => setIsFetchingOlderMessages(false));
           }}
           onRetrySend={retrySend}
+          resolveChat={resolveChat}
         />
       ) : (
         <EmptyState
@@ -938,6 +968,8 @@ export function ChatWindow({
         onSaveQueueEdit={handleSaveQueueEdit}
         onUploadFile={handleUploadFile}
         onStop={handleStop}
+        // The turn's own stop leaves background tasks running (PR 6 §6.3); its label says so.
+        stopLabel={backgroundTasksRunning > 0 ? t(($) => $.bg_tasks.stop_turn_hint) : undefined}
         isRunning={!!pendingTaskId}
         disabled={isSessionArchived}
         noAgent={noAgent}

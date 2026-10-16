@@ -103,6 +103,15 @@ export function resolveTaskPluginSnapshot(task: AgentTask): AgentPluginSnapshot[
  * This function never fetches from Git/Marketplace/Artifact Store: a cache miss
  * is surfaced so scheduling can wait for Runtime reconciliation.
  */
+/**
+ * The fingerprint `materializeTaskPlugins` gives a task's Plugin set, without
+ * materializing it (PR 6 §2.8: a parked process keeps the plugins it loaded
+ * only while the set is the same).
+ */
+export function taskPluginFingerprint(task: AgentTask): string {
+  return fingerprintSnapshots(normalizeProvider(task.agent?.provider), resolveTaskPluginSnapshot(task));
+}
+
 export async function materializeTaskPlugins(
   task: AgentTask,
   workDir: string,

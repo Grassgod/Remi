@@ -945,6 +945,8 @@ export interface FeishuBotSurface {
   }): MultiremiTask[];
   retargetFeishuRoundPushTaskWithinTransaction(fromTaskId: string, toTaskId: string): void;
   completeFeishuRoundPushTaskWithinTransaction(task: MultiremiTask, body: string): void;
+  /** PR 6: the proactive Feishu card of a turn the background doorbell created. */
+  prepareFeishuBackgroundDoorbellDeliveryWithinTransaction(originAttemptId: string, originTurnId: string | null, taskId: string): void;
   materializeFeishuTaskDeliveries(taskId: string): void;
   claimFeishuBotOutbound(
     workspaceId: string,

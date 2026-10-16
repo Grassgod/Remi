@@ -37,9 +37,25 @@
  */
 
 import type { GcRunMode, StorageReport, StorageSubjectRef, SubjectSnapshot } from "./storage.js";
-import type { TraceContextUsage, TraceEvent, TraceEventPage, TraceLateSubagent, TraceTurnPage } from "./trace.js";
+import type {
+  TraceBackgroundTaskStopRequest,
+  TraceBackgroundTaskUsage,
+  TraceContextUsage,
+  TraceEvent,
+  TraceEventPage,
+  TraceLateSubagent,
+  TraceTurnPage,
+} from "./trace.js";
 import type { MultiremiChatSessionStatus, MultiremiDaemonHeartbeatAck, MultiremiDaemonSshMeshStatus } from "./types.js";
-import type { UnifiedMessage, DecisionOption } from "./unified-model.js";
+import type {
+  BackgroundLaneReleaseReason,
+  BackgroundLaneState,
+  BackgroundTaskDoorbellMetadata,
+  BackgroundTaskReportedStatus,
+  BackgroundTaskStopReason,
+  DecisionOption,
+  UnifiedMessage,
+} from "./unified-model.js";
 
 export const DAEMON_PROTOCOL_VERSION = 2;
 
@@ -123,6 +139,7 @@ export const DAEMON_UPLINK_BEST_EFFORT_FRAMES = [
   "concierge.status",
   "gc.storage_report",
   "task.activity",
+  "lane.background_tasks",
 ] as const;
 
 /** Non-trace-stream daemon -> server RPC requests, paired with a `res` by `id`. */
@@ -142,6 +159,7 @@ export const DAEMON_UPLINK_RPC_FRAMES = [
   "gc.check_chat_session",
   "gc.check_task",
   "gc.subject_reclaimed",
+  "lane.background_wake",
 ] as const;
 
 /**
@@ -170,6 +188,8 @@ export const DAEMON_DOWNLINK_EVENT_FRAMES = [
   "plugin.desired_revision",
   "workspace.settings",
   "runtime.gc_run",
+  "lane.background_stop",
+  "lane.background_release",
 ] as const;
 
 /** server -> daemon RPC requests, paired with a `res` by `id`. */
@@ -330,9 +350,29 @@ export interface DaemonHelloRuntime {
   active_question_waits?: DaemonQuestionWait[];
   /** Missing fields explicitly mean unsupported, including after a restart. */
   capabilities?: DaemonRuntimeCapabilities;
+  /**
+   * Lanes whose bridge process this daemon keeps alive between attempts (PR 6
+   * §5.2), sent with the `lane.background` cap. The server marks this
+   * runtime's other running registry rows `stopped` (`daemon_restart`) unless
+   * an active task still owns them. Absent from daemons without the cap.
+   */
+  parked_lanes?: DaemonParkedLane[];
 }
 
 export interface DaemonQuestionWait { message_id: string; attempt_id: string; wait_id: string }
+
+/** A Chat lane: one agent's line of work in one session and execution scope. */
+export interface DaemonLaneRef {
+  session_id: string;
+  agent_id: string;
+  execution_scope: string;
+}
+
+export interface DaemonParkedLane extends DaemonLaneRef {
+  provider_session_id: string;
+  /** Tasks the parked process still runs. */
+  task_ids: string[];
+}
 
 /** `hello`, daemon -> server, once per connection, before anything else. */
 export interface DaemonHelloPayload {
@@ -543,6 +583,117 @@ export interface DaemonTaskActivityPayload {
   runtime_id?: string;
   /** Running top-level subagents, else running nested ones; 0 when none runs. */
   running_subagents: number;
+  /**
+   * Background tasks the attempt has running or paused, at any depth (PR 6).
+   * Optional: older daemons omit it, and a missing value is not a 0.
+   */
+  running_background_tasks?: number;
+}
+
+// ── Background tasks (PR 6 §5.2). All gated by the `lane.background` cap ─────
+
+/** One task of a lane snapshot, as the daemon's provider registry holds it. */
+export interface DaemonLaneBackgroundTask {
+  task_id: string;
+  task_type: string;
+  name: string;
+  /** The command a shell runs, when it is not already the name. */
+  command?: string | null;
+  origin_attempt_id: string;
+  /** The task's trace item in the origin attempt (`bg:<task_id>`), when it has one. */
+  origin_item_id: string | null;
+  status: BackgroundTaskReportedStatus;
+  can_stop: boolean;
+  stop_request?: TraceBackgroundTaskStopRequest | null;
+  stop_reason?: BackgroundTaskStopReason | null;
+  /** ISO 8601. */
+  started_at: string;
+  ended_at?: string | null;
+  duration_ms?: number | null;
+  summary?: string | null;
+  /** At most `TRACE_BACKGROUND_TASK_OUTPUT_TAIL_MAX_BYTES`. */
+  output_tail?: string | null;
+  /**
+   * The task's output file exists but the daemon cannot read it (permissions,
+   * a link, not a regular file); absent otherwise, a missing file included.
+   */
+  output_unreadable?: boolean;
+  usage?: TraceBackgroundTaskUsage | null;
+}
+
+/**
+ * `lane.background_tasks`, daemon -> server, best effort: the whole task list
+ * of one lane, recomputed from local state. Sent debounced on change, repeated
+ * while any task runs, sent again on reconnect; a `closed` snapshot is
+ * repeated (see the `DAEMON_LANE_BACKGROUND_*` timings). The server keeps the
+ * highest `revision` per lane and ignores older ones; a `closed` snapshot ends
+ * any row it still holds running as `lost`. At most
+ * {@link DAEMON_LANE_BACKGROUND_MAX_TASKS} tasks and
+ * {@link DAEMON_LANE_BACKGROUND_MAX_BYTES} per frame.
+ */
+export interface DaemonLaneBackgroundTasksPayload extends DaemonLaneRef {
+  runtime_id: string;
+  provider_session_id: string;
+  /** Per-daemon monotonic counter. */
+  revision: number;
+  state: BackgroundLaneState;
+  /** The attempt the process serves while `in_attempt`. */
+  attempt_id?: string | null;
+  /** ISO 8601: the keep-alive cap, while `parked`. */
+  parked_until?: string | null;
+  tasks: DaemonLaneBackgroundTask[];
+}
+
+/**
+ * `lane.background_wake`, daemon -> server RPC: a parked Claude task ended
+ * (`completed` / `failed`), and Claude will start a turn of its own. The
+ * server writes the doorbell (a platform `status` message to the agent, wake
+ * `now`, deduplicated per task) and lets the lane machine create, merge or
+ * steer a turn (PR 6 §2.5).
+ */
+export interface DaemonLaneBackgroundWakePayload extends DaemonLaneRef {
+  provider_session_id: string;
+  task: Omit<BackgroundTaskDoorbellMetadata, "provider_session_id" | "origin_turn_id"> & {
+    summary?: string | null;
+    duration_ms?: number | null;
+  };
+}
+
+/** The `lane.background_wake` success reply; a repeated call answers the first call's outcome. */
+export interface DaemonLaneBackgroundWakeReply {
+  ok: true;
+  /** A new pending turn, merged into the pending one, or delivered as a steer to the running one. */
+  outcome: "created" | "merged" | "delivered";
+  turn_id: string;
+  /** The attempt the doorbell reached; null while the turn has none yet. */
+  attempt_id: string | null;
+}
+
+/** Rejections of `lane.background_wake`: the lane moved or its session closed. The daemon cancels the cycle and releases. */
+export type DaemonLaneBackgroundWakeErrorCode = Extract<DaemonProtocolErrorCode, "lane_moved" | "session_closed">;
+
+/** `task_id` of a `lane.background_stop` that stops every task of the lane. */
+export const DAEMON_LANE_BACKGROUND_STOP_ALL = "*";
+
+/**
+ * `lane.background_stop`, server -> daemon reliable event, derived from the
+ * registry's stop requests and resent at `hello`; keyed by
+ * `lane:task:requested_at`.
+ */
+export interface DaemonLaneBackgroundStopPayload extends DaemonLaneRef {
+  /** One task, or {@link DAEMON_LANE_BACKGROUND_STOP_ALL}. */
+  task_id: string;
+  requested_at: string;
+}
+
+/**
+ * `lane.background_release`, server -> daemon reliable event, derived from the
+ * registry's live rows and the lane, Chat and agent state: stop the lane's
+ * tasks and close its bridge.
+ */
+export interface DaemonLaneBackgroundReleasePayload extends DaemonLaneRef {
+  provider_session_id: string;
+  reason: BackgroundLaneReleaseReason;
 }
 
 /**
@@ -750,6 +901,9 @@ export const DAEMON_PROTOCOL_ERROR_CODES = [
   "daemon_timeout",
   "daemon_busy",
   "trace_not_hot",
+  // lane.background_wake (PR 6)
+  "lane_moved",
+  "session_closed",
   // transport
   "ack_timeout",
   "protocol_violation",
@@ -875,6 +1029,13 @@ export const DAEMON_PROTOCOL_CAPS = [
   "trace.subscribe",
   /** daemon fetches Wiki bodies through existing HTTP read endpoints after offer. */
   "wiki.fetch",
+  /**
+   * PR 6: daemon keeps a Chat lane's process alive while background tasks run
+   * and speaks the `lane.background_*` frames. A server that supports them
+   * echoes the bit in `welcome.caps`; the daemon parks only when both sides
+   * hold it, and otherwise stops tasks at the attempt's end.
+   */
+  "lane.background",
 ] as const;
 
 export type DaemonProtocolCap = (typeof DAEMON_PROTOCOL_CAPS)[number];
@@ -933,6 +1094,16 @@ export const DAEMON_TRACE_READ_TIMEOUT_MS = 10_000;
 /** Concurrent `trace.read` requests per connection, and the queue behind them. */
 export const DAEMON_TRACE_READ_MAX_IN_FLIGHT = 4;
 export const DAEMON_TRACE_READ_MAX_QUEUED = 32;
+
+/** `lane.background_tasks` bounds: tasks per snapshot and serialized payload bytes. */
+export const DAEMON_LANE_BACKGROUND_MAX_TASKS = 32;
+export const DAEMON_LANE_BACKGROUND_MAX_BYTES = 256 * 1024;
+/** A change is reported after this quiet period; a lane with a running task is re-reported at the refresh cadence. */
+export const DAEMON_LANE_BACKGROUND_DEBOUNCE_MS = 1_000;
+export const DAEMON_LANE_BACKGROUND_REFRESH_MS = 30_000;
+/** A `closed` snapshot is sent this many times, this far apart. */
+export const DAEMON_LANE_BACKGROUND_CLOSED_REPEATS = 3;
+export const DAEMON_LANE_BACKGROUND_CLOSED_REPEAT_MS = 10_000;
 
 // ── Version comparison ──────────────────────────────────────────────────────
 

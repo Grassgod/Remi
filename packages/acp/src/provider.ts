@@ -11,10 +11,16 @@ import type {
   Provider,
   SendOptions,
   AgentResponse,
+  AsyncTaskChangeListener,
+  AsyncTaskSnapshot,
   ListenAutonomousOptions,
   ProviderEvent,
+  ProviderReuseRejection,
+  ReuseCheckResult,
+  SettleAsyncTasksOptions,
   SteerOutcome,
   SteerResult,
+  StopAsyncTaskResult,
 } from "@shared/contracts/provider-types.js";
 import { createAgentResponse, STEER_REASONS } from "@shared/contracts/provider-types.js";
 import { TRACE_STEER_OUTCOMES } from "@shared/contracts/trace.js";
@@ -49,6 +55,7 @@ import type {
   NewSessionResult,
   PromptUsageSettleScope,
   SteerResponse,
+  AsyncTaskState,
 } from "@shared/contracts/acp-protocol.js";
 
 export interface AcpProviderOptions {
@@ -128,6 +135,20 @@ export interface AcpProviderOptions {
   captureAutonomousRounds?: boolean;
   /** Once an autonomous round's frames flow, how long it may run without its result (default 10 min; tests shorten it). */
   autonomousRoundCapMs?: number;
+  /**
+   * Ask the bridge for background tasks (PR 6 §3.1), when the adapter declares
+   * `asyncTasks`: the AIR capability, a registry per pooled session, stop and
+   * settle. Default off (`packages/remi` leaves it off; the daemon passes
+   * `REMI_ACP_ASYNC_TASKS !== "0"`).
+   */
+  asyncTasks?: boolean;
+  /** A pooled session's background task changed (the parked-lane supervisor, PR 6 §3.2). */
+  onAsyncTaskChange?: AsyncTaskChangeListener;
+  /**
+   * A pooled session's process died without being closed (PR 6 §2.7 "lost"):
+   * its tasks, as the registry last saw them, are gone with it.
+   */
+  onSessionLost?: (chatId: string, reason: string, tasks: AsyncTaskSnapshot[]) => void;
 }
 
 /** ACP-local SendOptions extension kept out of the provider-neutral contract. */
@@ -228,6 +249,10 @@ const AUTONOMOUS_IDLE_MS = 60_000;
 const AUTONOMOUS_HARD_CAP_MS = 10 * 60 * 1000;
 /** Unknown session ids logged per pool entry, at most. */
 const MAX_LOGGED_UNKNOWN_SESSIONS = 32;
+/** How long `_session/async_task/stop` may take (PR 6 §3.3). */
+const ASYNC_TASK_STOP_TIMEOUT_MS = 10_000;
+/** Background tasks kept per pooled session; the oldest ended ones go first. */
+const MAX_ASYNC_TASKS = 256;
 const DEFAULT_PERMISSION_MODE_BY_AGENT: Record<string, string | null> = {
   claude: "bypassPermissions",
   // codex advertises read-only/agent/agent-full-access, so the literal id is
@@ -256,6 +281,14 @@ export interface PromptUsageState {
   costUsd: number | null;
   model: string | null;
   contextWindowSize: number | null;
+  /**
+   * PR 6 §2.4: an adopted session's Claude turn-cost estimate is cumulative for
+   * the process, so it counts from here (the parked prompt's last cumulative
+   * `total_cost_usd`). Null: no baseline.
+   */
+  costBaselineUsd?: number | null;
+  /** The last cumulative cost the agent reported, before any baseline. */
+  lastCumulativeCostUsd?: number | null;
 }
 
 interface PromptState {
@@ -269,21 +302,22 @@ interface PromptState {
   codexRollout?: CodexRolloutCursor;
 }
 
-export function createPromptUsageState(): PromptUsageState {
+export function createPromptUsageState(costBaselineUsd: number | null = null): PromptUsageState {
   return {
     collector: new UsageCollector(),
     totalTokens: 0,
     costUsd: null,
     model: null,
     contextWindowSize: null,
+    ...(costBaselineUsd !== null ? { costBaselineUsd } : {}),
   };
 }
 
-function createPromptState(): PromptState {
+function createPromptState(costBaselineUsd: number | null = null): PromptState {
   return {
     promptStartTime: Date.now(),
     text: "",
-    usage: createPromptUsageState(),
+    usage: createPromptUsageState(costBaselineUsd),
     completedToolCount: 0,
   };
 }
@@ -370,6 +404,39 @@ interface PoolEntry {
   codexRollout?: CodexRolloutCursor;
   /** The gateway-shim channel of this ACP process (access configs with `usage: "gateway-shim"`). */
   gateway?: GatewayState;
+  /**
+   * Background tasks of this session and its native children (PR 6 §3.2), by
+   * the bridge's `asyncTaskId`, in announcement order. Only with `asyncTasks`.
+   */
+  asyncTasks?: Map<string, AsyncTaskRecord>;
+  /** Parked between attempts (PR 6 §2.2): no idle cleanup, every frame captured. */
+  parked?: boolean;
+  /** The cost baseline every prompt state of this (adopted) session starts from (PR 6 §2.4). */
+  costBaselineUsd?: number | null;
+  /** The last cumulative cost the agent reported for this process. */
+  lastCumulativeCostUsd?: number | null;
+}
+
+/** What a session or its process fixes at creation (see `_sessionKey`). */
+interface SessionKey {
+  cwd: string;
+  mcpServers: McpServerConfig[];
+  mcpServersKey: string;
+  model: string | null;
+  pluginPaths: string[];
+  pluginPathsKey: string;
+  pluginFingerprint: string;
+  codexHome: string | null;
+  startupModel: string | null;
+  customModelOption: string | null;
+}
+
+/** A registry entry: the snapshot, plus what the end-state rules need. */
+interface AsyncTaskRecord extends AsyncTaskSnapshot {
+  /** A level-closed `stopped` was corrected to `completed` or `failed` once (claude-agent-acp dist/async-tasks.js:520-529). */
+  corrected?: boolean;
+  /** The stop request in flight, so a second stop joins it. */
+  stopping?: Promise<StopAsyncTaskResult>;
 }
 
 interface NativeChildSession {
@@ -818,7 +885,7 @@ export class AcpProvider implements Provider {
 
     this._activeStreaming.add(chatId);
     entry.lastUsed = Date.now();
-    entry.promptState = createPromptState();
+    entry.promptState = createPromptState(entry.costBaselineUsd ?? null);
     const promptState = entry.promptState;
     const requestedModel = () => currentConfigValue(entry.configOptions, MODEL_OPTION_CATEGORY)
       ?? entry.models?.currentModelId ?? options?.model ?? this._options.model;
@@ -1298,12 +1365,9 @@ export class AcpProvider implements Provider {
       wake?.();
     });
     const onUpdate = (notification: SessionNotification) => {
-      const child = this._routeFrame(chatId, entry, notification);
-      if (child === undefined) return;
-      entry.lastUpdateAt = Date.now();
-      const update = child !== null
-        ? this._childUpdate(entry, notification.update, child, requestedModel(), requestedModelSource(), credentials)
-        : this._rootIdleUpdate(entry, notification.update, requestedModel(), requestedModelSource(), credentials);
+      const routed = this._idleStreamUpdate(chatId, entry, notification, credentials, requestedModel(), requestedModelSource());
+      if (!routed) return;
+      const { child, update } = routed;
       if (child !== null || isTurnLevelUpdate(update) || isSubagentLifecycle(update)) markActive();
       if (child === null && isRootWork(update)) rootWork = true;
       push(update);
@@ -1368,6 +1432,249 @@ export class AcpProvider implements Provider {
     }
   }
 
+  /**
+   * One frame read outside a prompt (a listen or a settle): routed to its
+   * session, then transformed as `_childUpdate` or `_rootIdleUpdate` does.
+   * Undefined when the frame is not this entry's.
+   */
+  private _idleStreamUpdate(chatId: string, entry: PoolEntry, notification: SessionNotification, credentials: string[],
+    requestedModel: string | null | undefined, modelSource: TaskUsageUnit["modelSource"]): { child: string | null; update: SessionUpdate } | undefined {
+    const child = this._routeFrame(chatId, entry, notification);
+    if (child === undefined) return undefined;
+    entry.lastUpdateAt = Date.now();
+    const update = child !== null
+      ? this._childUpdate(entry, notification.update, child, requestedModel, modelSource, credentials)
+      : this._rootIdleUpdate(entry, notification.update, requestedModel, modelSource, credentials);
+    return { child, update };
+  }
+
+  // ── Background tasks (PR 6 §3.3) ───────────────────────────────
+
+  /** The pooled session's background tasks, in announcement order; empty without a registry. */
+  listAsyncTasks(options: { chatId?: string | null } = {}): AsyncTaskSnapshot[] {
+    const entry = this._pool.get(options.chatId ?? "__default__");
+    return [...entry?.asyncTasks?.values() ?? []].map(asyncTaskSnapshot);
+  }
+
+  /**
+   * Stop one background task: `_session/async_task/stop` on the root session,
+   * whichever session announced it, bounded by `timeoutMs` (10 s). A task the
+   * registry does not hold, or one that is not running, answers `{stopped:
+   * false}` without a wire call; a stop already in flight is joined. Never throws.
+   */
+  async stopAsyncTask(taskId: string, options: { chatId?: string | null; timeoutMs?: number; by?: "user" | "remi"; requestedAt?: string } = {}): Promise<StopAsyncTaskResult> {
+    const entry = this._pool.get(options.chatId ?? "__default__");
+    const task = entry?.asyncTasks?.get(taskId);
+    if (!entry || !task || !task.canStop || !isLiveAsyncTaskState(task.state) || !entry.client.alive) return { stopped: false };
+    if (task.stopping) return task.stopping;
+    // The request's own time (a person's stop is answered by it), not this host's clock.
+    const requestedAt = options.requestedAt !== undefined ? Date.parse(options.requestedAt) : NaN;
+    task.stop = { requestedAt: Number.isFinite(requestedAt) ? requestedAt : Date.now(), by: options.by ?? "remi", outcome: "pending" };
+    this._notifyAsyncTask(this._chatIdOf(entry) ?? options.chatId ?? "__default__", task);
+    const timeoutMs = Math.max(1, options.timeoutMs ?? ASYNC_TASK_STOP_TIMEOUT_MS);
+    const stopping = (async (): Promise<StopAsyncTaskResult> => {
+      let timer: ReturnType<typeof setTimeout> | null = null;
+      let outcome: NonNullable<AsyncTaskSnapshot["stop"]>["outcome"];
+      try {
+        const result = await Promise.race([
+          entry.client.stopAsyncTask(entry.acpSessionId, taskId),
+          new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error("async task stop timed out")), timeoutMs); }),
+        ]);
+        outcome = result.stopped ? "stopped" : "not_running";
+      } catch (error) {
+        console.warn(`[AcpProvider] ${this._adapter.agentType}: stopping background task ${taskId} failed: `
+          + redactProviderErrorText(error instanceof Error ? error.message : String(error), this._credentials()));
+        outcome = "failed";
+      } finally {
+        if (timer) clearTimeout(timer);
+        task.stopping = undefined;
+      }
+      // The bridge's own `stopped` state update may already have settled it.
+      if (task.stop?.outcome === "pending" || outcome === "failed") task.stop = { ...task.stop!, outcome };
+      const chatId = this._chatIdOf(entry);
+      if (chatId) this._notifyAsyncTask(chatId, task);
+      return { stopped: outcome === "stopped" };
+    })();
+    task.stopping = stopping;
+    return stopping;
+  }
+
+  /**
+   * End-of-attempt settle (PR 6 §2.2, §3.3): replay the frames that arrived
+   * since the last prompt, wait `drainMs` for announcements a bridge sends
+   * after the prompt resolved (Codex), optionally stop every running task (in
+   * parallel), then yield frames until none runs or `timeoutMs` (from the call)
+   * passes. Frames are transformed as in an autonomous round, so their usage
+   * lands in the last prompt's collector. Yields nothing without a pooled,
+   * idle session.
+   */
+  async *settleAsyncTasks(options: SettleAsyncTasksOptions): AsyncGenerator<ProviderEvent> {
+    const chatId = options.chatId ?? "__default__";
+    const entry = this._pool.get(chatId);
+    if (!entry || entry.promptInFlight || this._activeStreaming.has(chatId)) return;
+    const credentials = this._credentials();
+    const requestedModel = () => currentConfigValue(entry.configOptions, MODEL_OPTION_CATEGORY)
+      ?? entry.models?.currentModelId ?? this._options.model;
+    const requestedModelSource = (): TaskUsageUnit["modelSource"] => currentConfigValue(entry.configOptions, MODEL_OPTION_CATEGORY)
+      || entry.models?.currentModelId ? "session_acknowledged" : requestedModel() ? "configured" : "unknown";
+    const startedAt = Date.now();
+    const deadline = startedAt + Math.max(0, options.timeoutMs);
+    const drainUntil = Math.min(deadline, startedAt + Math.max(0, options.drainMs ?? 0));
+    const queue: ProviderEvent[] = [];
+    let wake: (() => void) | null = null;
+    let died = false;
+    const onUpdate = (notification: SessionNotification) => {
+      const routed = this._idleStreamUpdate(chatId, entry, notification, credentials, requestedModel(), requestedModelSource());
+      if (!routed) return;
+      queue.push(routed.update);
+      wake?.();
+    };
+    this._activeStreaming.add(chatId);
+    this._deathListeners.set(chatId, () => { died = true; wake?.(); });
+    const originalOnUpdate = entry.client["_options"].onSessionUpdate;
+    entry.client["_options"].onSessionUpdate = onUpdate;
+    const pendingStops: Array<Promise<unknown>> = [];
+    let stopsSent = false;
+    // A stop the bridge answered settles its task even before its `stopped` frame arrives.
+    const running = () => [...entry.asyncTasks?.values() ?? []].some((task) => isLiveAsyncTaskState(task.state)
+      && !(task.stop && (task.stop.outcome === "stopped" || task.stop.outcome === "not_running")));
+    try {
+      for (const notification of takeIdleFrames(entry)) onUpdate(notification);
+      while (true) {
+        while (queue.length) yield queue.shift()!;
+        if (died || options.signal?.aborted) break;
+        const now = Date.now();
+        if (now >= drainUntil) {
+          if (options.stopRunning && !stopsSent) {
+            stopsSent = true;
+            for (const task of entry.asyncTasks?.values() ?? []) {
+              if (isLiveAsyncTaskState(task.state) && task.canStop) {
+                pendingStops.push(this.stopAsyncTask(task.id, { chatId, by: "remi", timeoutMs: Math.max(1, deadline - now) }));
+              }
+            }
+            continue;
+          }
+          if (!running() || now >= deadline) break;
+        }
+        let timer: ReturnType<typeof setTimeout> | null = null;
+        const onAbort = () => wake?.();
+        await new Promise<void>((resolve) => {
+          wake = resolve;
+          const until = now < drainUntil ? drainUntil : deadline;
+          timer = setTimeout(resolve, Math.max(0, Math.min(100, until - now)));
+          options.signal?.addEventListener("abort", onAbort, { once: true });
+        });
+        wake = null;
+        if (timer) clearTimeout(timer);
+        options.signal?.removeEventListener("abort", onAbort);
+      }
+      while (queue.length) yield queue.shift()!;
+    } finally {
+      if (entry.client["_options"].onSessionUpdate === onUpdate) entry.client["_options"].onSessionUpdate = originalOnUpdate;
+      this._deathListeners.delete(chatId);
+      this._activeStreaming.delete(chatId);
+      entry.lastUsed = Date.now();
+      // Stops still in flight finish on their own and report through the registry.
+      void Promise.allSettled(pendingStops);
+      this._lastResponse = buildAgentResponse(entry, { stopReason: "end_turn" }, this._adapter.promptUsageSettleScope, null,
+        this._adapter.agentType, requestedModel(), requestedModelSource());
+    }
+  }
+
+  /**
+   * Whether the session pooled under `chatId` could serve `options` without
+   * being recreated: `_ensureSession`'s staleness rule, with no side effects
+   * (PR 6 §2.4). A model or effort change alone never makes it stale; those
+   * are applied to the live session.
+   */
+  reuseCheck(chatId: string, options?: SendOptions): ReuseCheckResult {
+    const entry = this._pool.get(chatId);
+    if (!entry) return { reuse: false, reason: "no_session" };
+    let key: SessionKey;
+    try {
+      key = this._sessionKey(options);
+    } catch {
+      // A plugin set `_ensureSession` would refuse is never this session's.
+      return { reuse: false, reason: "plugins" };
+    }
+    const reason = this._staleReason(entry, key);
+    return reason ? { reuse: false, reason } : { reuse: true };
+  }
+
+  /**
+   * Re-key the session pooled under `fromChatId` to `toChatId` for the next
+   * attempt of a parked lane (PR 6 §2.4): its process, its native children,
+   * its handlers and its background tasks move with it. A new prompt state
+   * starts, and Claude's cumulative turn-cost estimate counts from the parked
+   * prompt's last cumulative cost. False when nothing idle is pooled under
+   * `fromChatId`, or `toChatId` is taken.
+   */
+  adoptSession(fromChatId: string, toChatId: string): boolean {
+    const entry = this._pool.get(fromChatId);
+    if (!entry || !entry.client.alive || entry.promptInFlight || this._activeStreaming.has(fromChatId)) return false;
+    if (fromChatId !== toChatId) {
+      if (this._pool.has(toChatId)) return false;
+      this._pool.delete(fromChatId);
+      this._pool.set(toChatId, entry);
+      for (const [sessionId, owner] of this._sessionToChatId) {
+        if (owner === fromChatId) this._sessionToChatId.set(sessionId, toChatId);
+      }
+      for (const handlers of [this._permissionHandlers, this._elicitationHandlers] as Array<Map<string, unknown>>) {
+        const handler = handlers.get(fromChatId);
+        if (handler !== undefined) {
+          handlers.delete(fromChatId);
+          handlers.set(toChatId, handler);
+        }
+      }
+      const death = this._deathListeners.get(fromChatId);
+      if (death) {
+        this._deathListeners.delete(fromChatId);
+        this._deathListeners.set(toChatId, death);
+      }
+    }
+    entry.costBaselineUsd = entry.lastCumulativeCostUsd ?? entry.costBaselineUsd ?? null;
+    entry.promptState = createPromptState(entry.costBaselineUsd);
+    // The autonomous budget and the time people took belong to one attempt (PR 5 §2.5).
+    entry.autonomousBudgetEndsAt = undefined;
+    entry.userInputWaitedMs = 0;
+    entry.lastUsed = Date.now();
+    return true;
+  }
+
+  /**
+   * Park (`on`) or unpark the session pooled under `chatId` (PR 6 §2.2): while
+   * parked the idle cleanup leaves it alone and every frame is captured for
+   * the next attempt. Unparking keeps what was captured.
+   */
+  park(chatId: string, on: boolean): void {
+    const entry = this._pool.get(chatId);
+    if (!entry) return;
+    entry.parked = on;
+    entry.lastUsed = Date.now();
+  }
+
+  /** The bridge's own process group, for the daemon's crash sweep; null when none is pooled. */
+  processGroupId(chatId: string): number | null {
+    const entry = this._pool.get(chatId);
+    return entry?.client.alive ? entry.client.processGroupId : null;
+  }
+
+  /**
+   * End a model cycle the bridge started on its own while nobody reads it
+   * (PR 6 §2.5: a doorbell the server rejected): `session/cancel` on the root
+   * session. Nothing while a prompt is on the wire.
+   */
+  async cancelIdle(chatId: string): Promise<void> {
+    const entry = this._pool.get(chatId);
+    if (!entry || entry.promptInFlight || !entry.client.alive) return;
+    await entry.client.cancel(entry.acpSessionId).catch(() => {});
+  }
+
+  /** Whether a live process is pooled under `chatId`. */
+  sessionAlive(chatId: string): boolean {
+    return this._pool.get(chatId)?.client.alive === true;
+  }
+
   /** The adapter declares autonomous rounds and the caller asked to capture them. */
   private get _capturesAutonomousRounds(): boolean {
     return this._options.captureAutonomousRounds === true && !!this._adapter.autonomousRounds;
@@ -1412,7 +1719,91 @@ export class AcpProvider implements Provider {
       const known = entry.children?.get(announced);
       if (known) known.terminal = true;
     }
+    if (entry.asyncTasks && typeof update?.sessionUpdate === "string" && update.sessionUpdate.startsWith("async_task_")) {
+      this._trackAsyncTask(chatId, entry, sessionId, update);
+    }
     return child;
+  }
+
+  /** Whether this provider keeps background-task registries (the option and the adapter, PR 6 §3.1). */
+  private get _asyncTasksRequested(): boolean {
+    return this._options.asyncTasks === true && !!this._adapter.asyncTasks;
+  }
+
+  /**
+   * Fold one accepted `async_task_*` frame into the session's registry (PR 6
+   * §3.2), whether a prompt, a listen, a settle or nobody is reading it. The
+   * same frame may be folded twice (once while idle, once when replayed): every
+   * rule is idempotent, and only a real change is reported.
+   */
+  private _trackAsyncTask(chatId: string, entry: PoolEntry, sessionId: string, update: Record<string, unknown>): void {
+    const id = typeof update.asyncTaskId === "string" ? update.asyncTaskId.trim() : "";
+    if (!id) return;
+    const tasks = entry.asyncTasks!;
+    let task = tasks.get(id);
+    const before = task ? JSON.stringify(asyncTaskSnapshot(task)) : null;
+    const text = (key: string): string | undefined => typeof update[key] === "string" ? update[key] as string : undefined;
+    if (!task) {
+      task = { id, sessionId, state: "running", canStop: true, name: "", taskType: "shell", description: null, toolCallId: null,
+        outputFilePath: null, summary: null, lastToolName: null, usage: null, startedAt: Date.now(), endedAt: null, stop: null };
+      tasks.set(id, task);
+      pruneAsyncTasks(tasks);
+    }
+    const kind = update.sessionUpdate;
+    if (kind === "async_task_spawned") {
+      task.sessionId = sessionId;
+      if (text("name") !== undefined) task.name = text("name")!;
+      if (text("taskType") !== undefined) task.taskType = text("taskType")!;
+      if (text("description") !== undefined) task.description = text("description")!;
+      if (typeof update.canStop === "boolean") task.canStop = update.canStop;
+    } else if (kind === "async_task_progress") {
+      if (text("description") !== undefined) task.description = text("description")!;
+      if (text("summary") !== undefined) task.summary = text("summary")!;
+      if (text("lastToolName") !== undefined) task.lastToolName = text("lastToolName")!;
+      const usage = record(update.usage);
+      const totalTokens = nonNegativeFinite(usage?.totalTokens);
+      const toolUses = nonNegativeFinite(usage?.toolUses);
+      const durationMs = nonNegativeFinite(usage?.durationMs);
+      if (totalTokens !== null && toolUses !== null && durationMs !== null) task.usage = { totalTokens, toolUses, durationMs };
+    } else if (kind === "async_task_state_update") {
+      const state = update.state as AsyncTaskState;
+      if (state === "running" || state === "paused") {
+        if (!isEndedAsyncTaskState(task.state)) task.state = state;
+      } else if (state === "completed" || state === "failed" || state === "stopped") {
+        if (!isEndedAsyncTaskState(task.state)) {
+          task.state = state;
+          task.endedAt = Date.now();
+        } else if (task.state === "stopped" && state !== "stopped" && !task.corrected) {
+          // A lost end edge closed it `stopped` from the level signal; the real end corrects it once.
+          task.state = state;
+          task.corrected = true;
+        }
+        if (state === "stopped" && task.stop?.outcome === "pending") task.stop = { ...task.stop, outcome: "stopped" };
+      }
+      if (text("summary") !== undefined) task.summary = text("summary")!;
+    }
+    if (text("outputFilePath") !== undefined) task.outputFilePath = text("outputFilePath")!;
+    if (text("toolCallId") !== undefined) task.toolCallId = text("toolCallId")!;
+    if (before !== JSON.stringify(asyncTaskSnapshot(task))) this._notifyAsyncTask(chatId, task);
+  }
+
+  private _notifyAsyncTask(chatId: string, task: AsyncTaskRecord): void {
+    try {
+      this._options.onAsyncTaskChange?.(chatId, asyncTaskSnapshot(task));
+    } catch (error) {
+      console.warn(`[AcpProvider] onAsyncTaskChange failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  /** The pool key an entry is filed under now (it moves when a parked session is adopted). */
+  private _chatIdOf(entry: PoolEntry): string | null {
+    for (const [chatId, candidate] of this._pool) if (candidate === entry) return chatId;
+    return null;
+  }
+
+  /** Forget the entry's background tasks (wherever its root session is forgotten). */
+  private _forgetAsyncTasks(entry: PoolEntry): void {
+    entry.asyncTasks?.clear();
   }
 
   /**
@@ -1471,6 +1862,7 @@ export class AcpProvider implements Provider {
   private _stampUsage(entry: PoolEntry, update: Extract<SessionUpdate, { sessionUpdate: "usage_update" }>,
     requestedModel: string | null | undefined, modelSource: TaskUsageUnit["modelSource"], context: boolean): SessionUpdate {
     accumulateUsage(entry.promptState.usage, update, requestedModel, modelSource, this._adapter.agentType, { context });
+    if (entry.promptState.usage.lastCumulativeCostUsd != null) entry.lastCumulativeCostUsd = entry.promptState.usage.lastCumulativeCostUsd;
     const occupancy = !context || stampedParent(update)
       // A billing-only shim observation (size 0) says nothing about context.
       || (SHIM_USAGE_UPDATES.has(update) && !(update.size > 0))
@@ -1499,10 +1891,11 @@ export class AcpProvider implements Provider {
     return null;
   }
 
-  /** Forget the entry's child sessions (wherever its root session is forgotten). */
+  /** Forget the entry's child sessions and background tasks (wherever its root session is forgotten). */
   private _forgetChildren(entry: PoolEntry): void {
     for (const sessionId of entry.children?.keys() ?? []) this._sessionToChatId.delete(sessionId);
     entry.children?.clear();
+    this._forgetAsyncTasks(entry);
   }
 
   /**
@@ -1688,19 +2081,33 @@ export class AcpProvider implements Provider {
       if (this._routeFrame(chatId, entry, notification) === undefined) return;
       entry.lastUpdateAt = Date.now();
       entry.idleFrames ??= [];
-      if (this._capturesAutonomousRounds) {
+      // A parked session captures everything (PR 6 §2.2): its next attempt replays the cycle.
+      if (this._capturesAutonomousRounds || entry.parked) {
         entry.idleFrames.push(notification);
         entry.idleFrameBytes = (entry.idleFrameBytes ?? 0) + frameBytes(notification);
         let dropped = 0;
         while (entry.idleFrames.length > MAX_AUTONOMOUS_FRAMES
           || (entry.idleFrameBytes > MAX_AUTONOMOUS_BYTES && entry.idleFrames.length > 1)) {
-          const index = entry.idleFrames.findIndex((frame) => frame.update?.sessionUpdate !== "usage_update");
+          // Billing and task lifecycle frames go last; the registry already holds the latter.
+          let index = entry.idleFrames.findIndex((frame) => !keptIdleFrame(frame) && frame.update?.sessionUpdate !== "usage_update");
+          if (index < 0) index = entry.idleFrames.findIndex((frame) => frame.update?.sessionUpdate !== "usage_update");
           const [removed] = entry.idleFrames.splice(index >= 0 ? index : 0, 1);
           entry.idleFrameBytes -= frameBytes(removed!);
           dropped++;
         }
         if (dropped) {
           console.warn(`[AcpProvider] ${this._adapter.agentType}: dropped ${dropped} frame(s) received between prompts (buffer full)`);
+        }
+        return;
+      }
+      // PR 6 §3.2: a background task's lifecycle (and the call's "backgrounded"
+      // marker) reaches the trace even when nothing captures: Codex announces a
+      // terminal left running only after the prompt resolved (§1.2).
+      if (entry.asyncTasks && keptIdleFrame(notification)) {
+        entry.idleFrames.push(notification);
+        if (entry.idleFrames.length > MAX_IDLE_USAGE_FRAMES) {
+          entry.idleFrames.splice(0, entry.idleFrames.length - MAX_IDLE_USAGE_FRAMES);
+          console.warn(`[AcpProvider] ${this._adapter.agentType}: dropped the oldest frames received between prompts`);
         }
         return;
       }
@@ -1779,30 +2186,55 @@ export class AcpProvider implements Provider {
 
   // ── Session pool management ────────────────────────────────────
 
-  private async _ensureSession(chatId: string, options?: SendOptions): Promise<PoolEntry> {
+  /**
+   * The values a session or its process fixes at creation, for `options`: a
+   * pooled session whose values differ cannot serve them (the staleness rule
+   * shared by `_ensureSession` and {@link reuseCheck}).
+   */
+  private _sessionKey(options?: SendOptions): SessionKey {
     const pluginOptions = options as SendOptions & AcpAgentPluginSendOptions | undefined;
-    const permissionMode = resolveAcpPermissionMode(this._adapter.agentType, options?.permissionMode);
     const cwd = options?.cwd ?? this._options.cwd ?? homedir();
     const mcpServers = this._options.getMcpServers?.() ?? [];
-    const mcpServersKey = JSON.stringify(mcpServers);
     const model = options?.model ?? this._options.model ?? null;
-    const startupModel = this._adapter.agentType === "claude" ? model : null;
-    const customModelOption = this._adapter.agentType === "claude"
-      ? resolveClaudeContextSelection(model, this._options.claudeOneMillionModels).customModelOption
-      : null;
-    const effort = options?.effort ?? null;
     const pluginPaths = absolutePluginPaths(pluginOptions?.pluginPaths ?? this._options.pluginPaths);
     const pluginPathsKey = JSON.stringify(pluginPaths);
-    const pluginFingerprint = cleanFingerprint(
-      pluginOptions?.pluginFingerprint ?? this._options.pluginFingerprint,
-      pluginPathsKey,
-    );
     const codexHome = this._adapter.agentType === "codex"
       ? absoluteCodexHome(pluginOptions?.codexHome ?? this._options.codexHome)
       : null;
     if (this._adapter.agentType === "codex" && pluginPaths.length && !codexHome) {
       throw new Error("Codex Agent Plugins require an isolated CODEX_HOME");
     }
+    return {
+      cwd, mcpServers, mcpServersKey: JSON.stringify(mcpServers), model, pluginPaths, pluginPathsKey,
+      pluginFingerprint: cleanFingerprint(pluginOptions?.pluginFingerprint ?? this._options.pluginFingerprint, pluginPathsKey),
+      codexHome,
+      startupModel: this._adapter.agentType === "claude" ? model : null,
+      customModelOption: this._adapter.agentType === "claude"
+        ? resolveClaudeContextSelection(model, this._options.claudeOneMillionModels).customModelOption
+        : null,
+    };
+  }
+
+  /** Why `existing` cannot serve `key`; null when it can. */
+  private _staleReason(existing: PoolEntry, key: SessionKey): ProviderReuseRejection | null {
+    if (!existing.client.alive) return "process_dead";
+    // The shim breaker opened for this process's token; a new process gets a new one.
+    if (existing.gateway?.fatal) return "gateway_unavailable";
+    if (existing.cwd !== key.cwd) return "cwd";
+    if (existing.mcpServersKey !== key.mcpServersKey) return "mcp_servers";
+    if (existing.pluginPathsKey !== key.pluginPathsKey || existing.pluginFingerprint !== key.pluginFingerprint) return "plugins";
+    if (existing.codexHome !== key.codexHome) return "codex_home";
+    if (existing.customModelOption !== key.customModelOption) return "context_declaration";
+    if (existing.startupModel !== key.startupModel) return "startup_model";
+    return null;
+  }
+
+  private async _ensureSession(chatId: string, options?: SendOptions): Promise<PoolEntry> {
+    const permissionMode = resolveAcpPermissionMode(this._adapter.agentType, options?.permissionMode);
+    const key = this._sessionKey(options);
+    const { cwd, mcpServers, mcpServersKey, model, startupModel, customModelOption, pluginPaths, pluginPathsKey,
+      pluginFingerprint, codexHome } = key;
+    const effort = options?.effort ?? null;
 
     const sessionMeta = this._adapter.buildSessionMeta({
       model,
@@ -1821,17 +2253,7 @@ export class AcpProvider implements Provider {
     // round does not (PR 5 §1.5): its children died with the process.
     let idleFrames: SessionNotification[] = [];
     if (existing) {
-      const stale =
-        !existing.client.alive ||
-        // The shim breaker opened for this process's token; a new process gets a new one.
-        !!existing.gateway?.fatal ||
-        existing.cwd !== cwd ||
-        existing.mcpServersKey !== mcpServersKey ||
-        existing.pluginPathsKey !== pluginPathsKey ||
-        existing.pluginFingerprint !== pluginFingerprint ||
-        existing.codexHome !== codexHome ||
-        existing.customModelOption !== customModelOption ||
-        existing.startupModel !== startupModel;
+      const stale = this._staleReason(existing, key) !== null;
       if (stale && existing.client.alive) {
         const reason = existing.gateway?.fatal ? `gateway unavailable (${existing.gateway.fatal.reason})` : existing.cwd !== cwd
           ? `cwd ${existing.cwd} -> ${cwd}`
@@ -1856,7 +2278,8 @@ export class AcpProvider implements Provider {
         try {
           if (options?.sessionId && options.sessionId !== existing.acpSessionId) {
             this._sessionToChatId.delete(existing.acpSessionId);
-            // The registry holds live children only (PR 5 §1.5); a load replays none into it.
+            // The registry holds live children only (PR 5 §1.5); a load replays none into it,
+            // and the loaded session's background tasks are not this process's (PR 6 §3.2).
             this._forgetChildren(existing);
             dropCapturedRound(existing);
             const addDirs = absoluteAdditionalDirectories(options.addDirs, this._adapter.agentType);
@@ -1928,6 +2351,7 @@ export class AcpProvider implements Provider {
       args: launch.args,
       agentType: this._adapter.agentType,
       nativeSubagents: this._options.nativeSubagentSessions ? this._adapter.nativeSubagents ?? null : null,
+      asyncTasks: this._asyncTasksRequested,
       cwd,
       privateTmpDirectory: this._options.privateTmpDirectory,
       privateTmpPlatform: this._options.privateTmpPlatform,
@@ -1987,6 +2411,7 @@ export class AcpProvider implements Provider {
         lateSteer: null,
         idleFrames,
         children: new Map(),
+        ...(this._asyncTasksRequested && client.asyncTasksEnabled ? { asyncTasks: new Map<string, AsyncTaskRecord>() } : {}),
       };
       this._adoptSessionState(entry, result);
       // Server 1.4.0 never fails `session/new` on a refused listing: it falls
@@ -2051,6 +2476,13 @@ export class AcpProvider implements Provider {
   private _handleClientDeath(client: AcpClient, reason: string): void {
     for (const [chatId, entry] of this._pool) {
       if (entry.client !== client) continue;
+      if (entry.asyncTasks && this._options.onSessionLost) {
+        try {
+          this._options.onSessionLost(chatId, reason, [...entry.asyncTasks.values()].map(asyncTaskSnapshot));
+        } catch (error) {
+          console.warn(`[AcpProvider] onSessionLost failed: ${error instanceof Error ? error.message : String(error)}`);
+        }
+      }
       this._pool.delete(chatId);
       this._sessionToChatId.delete(entry.acpSessionId);
       this._forgetChildren(entry);
@@ -2290,7 +2722,8 @@ export class AcpProvider implements Provider {
   private async _cleanupIdle(): Promise<void> {
     const now = Date.now();
     for (const [chatId, entry] of this._pool) {
-      if (this._activeStreaming.has(chatId)) continue;
+      // A parked session (PR 6 §2.2) stays until its lane releases it; the keep-alive cap bounds it.
+      if (this._activeStreaming.has(chatId) || entry.parked) continue;
       if (now - entry.lastUsed > IDLE_TIMEOUT_MS) {
         try {
           await entry.client.closeSession(entry.acpSessionId);
@@ -2412,6 +2845,47 @@ function redactFailedFrame(update: SessionUpdate, credentials: readonly string[]
   if (!failed) return update;
   return JSON.parse(JSON.stringify(update, (_key, value) =>
     typeof value === "string" ? redactProviderErrorText(value, credentials) : value));
+}
+
+/** The registry's public view of a task (a copy). */
+function asyncTaskSnapshot(task: AsyncTaskRecord): AsyncTaskSnapshot {
+  return {
+    id: task.id, sessionId: task.sessionId, state: task.state, canStop: task.canStop, name: task.name, taskType: task.taskType,
+    description: task.description, toolCallId: task.toolCallId, outputFilePath: task.outputFilePath, summary: task.summary,
+    lastToolName: task.lastToolName, usage: task.usage ? { ...task.usage } : null, startedAt: task.startedAt, endedAt: task.endedAt,
+    stop: task.stop ? { ...task.stop } : null,
+  };
+}
+
+function isLiveAsyncTaskState(state: AsyncTaskState): boolean {
+  return state === "running" || state === "paused";
+}
+
+function isEndedAsyncTaskState(state: AsyncTaskState): boolean {
+  return state === "completed" || state === "failed" || state === "stopped";
+}
+
+/** Bound a registry: the oldest ended tasks go first; running ones are never dropped. */
+function pruneAsyncTasks(tasks: Map<string, AsyncTaskRecord>): void {
+  if (tasks.size <= MAX_ASYNC_TASKS) return;
+  for (const [id, task] of tasks) {
+    if (tasks.size <= MAX_ASYNC_TASKS) return;
+    if (isEndedAsyncTaskState(task.state)) tasks.delete(id);
+  }
+}
+
+/**
+ * A frame kept between prompts even when nothing captures (PR 6 §3.2): a
+ * background task's lifecycle, and a call's "backgrounded" marker
+ * (`_meta.jetbrains.air.asyncTasks.backgrounded`).
+ */
+function keptIdleFrame(notification: SessionNotification): boolean {
+  const update = notification.update as unknown as Record<string, unknown> | undefined;
+  const kind = update?.sessionUpdate;
+  if (typeof kind === "string" && kind.startsWith("async_task_")) return true;
+  if (kind !== "tool_call_update" && kind !== "tool_call") return false;
+  const air = record(record(record(update?._meta)?.jetbrains)?.air);
+  return record(air?.asyncTasks)?.backgrounded === true;
 }
 
 function frameBytes(notification: SessionNotification): number {
@@ -2635,11 +3109,19 @@ export function accumulateUsage(state: PromptUsageState, update: SessionUpdate, 
 
   const size = nonNegativeFinite(u.size);
   if (context && size != null && size > 0) state.contextWindowSize = size;
-  const cost = nonNegativeFinite(u.cost?.amount);
-  if (cost != null) {
-    if (u.cost?.currency === "USD") state.costUsd = cost;
+  const reported = nonNegativeFinite(u.cost?.amount);
+  if (reported != null) {
     const monetary = u._meta?.remiCostUsage;
     const established = monetary && ["request", "turn", "task"].includes(monetary.scope);
+    // Claude's turn-scope estimate is the process's cumulative cost: an adopted
+    // session counts from its baseline, so no attempt bills another's (PR 6 §2.4).
+    const cumulative = providerType === "claude" && (!established || monetary.scope === "turn");
+    const baseline = cumulative && u.cost?.currency === "USD" ? state.costBaselineUsd ?? null : null;
+    const cost = baseline !== null ? Math.max(0, reported - baseline) : reported;
+    if (u.cost?.currency === "USD") {
+      state.costUsd = cost;
+      state.lastCumulativeCostUsd = reported;
+    }
     const source = established && monetary.source === "provider_reported" ? "provider_reported"
       : established && monetary.source === "sdk_estimate" || providerType === "claude" ? "sdk_estimate" : "unknown";
     state.collector.cost(cost, u.cost?.currency, established ? monetary.scope : providerType === "claude" ? "turn" : "task", source,

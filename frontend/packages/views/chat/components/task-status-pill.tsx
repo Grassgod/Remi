@@ -6,6 +6,7 @@ import { UnicodeSpinner } from "@multiremi/ui/components/common/unicode-spinner"
 import type { AgentAvailability } from "@multiremi/core/agents";
 import type { ChatPendingTask } from "@multiremi/core/types";
 import type { TraceItem } from "@multiremi/contracts/trace";
+import { readBackgroundFolderHolder } from "@multiremi/shared/background-tasks";
 import { formatElapsedSecs } from "../../common/format";
 import { isAwaitingHuman } from "../lib/turn-steps";
 import { useT } from "../../i18n";
@@ -17,6 +18,13 @@ interface Props {
   items: readonly TraceItem[];
   /** Resolved presence; pass `undefined` to suppress availability hints. */
   availability: AgentAvailability | undefined;
+  /**
+   * Another chat of this reader, from the session list: the one whose
+   * background tasks hold the local folder this turn waits for (PR 6 §2.8).
+   * Null when it is not in the list (another member's chat); then the pill
+   * names no chat.
+   */
+  resolveChat?: (sessionId: string) => { title: string; open: () => void } | null;
 }
 
 interface Stage {
@@ -132,8 +140,10 @@ export function TaskStatusPill({
   pendingTask,
   items,
   availability,
+  resolveChat,
 }: Props) {
   const resolveStage = useResolveStage();
+  const { t } = useT("chat");
   // Anchor: locked on first render. Once set we never reassign — otherwise
   // the timer would visibly snap backwards when an optimistic-seeded
   // `Date.now()` anchor is later replaced by a server-side created_at that
@@ -165,10 +175,15 @@ export function TaskStatusPill({
   const elapsedSecs = Math.max(0, Math.floor((now - anchor) / 1000));
   const queuedWaitReason = status === "queued" && typeof pendingTask.wait_reason === "string"
     ? pendingTask.wait_reason.trim() : "";
+  // A shared local folder kept by another chat's parked background tasks
+  // (PR 6 §2.8): say so, and open that chat, where 「全部停止」 frees it.
+  const folderHolder = status === "waiting_local_directory" ? readBackgroundFolderHolder(pendingTask.wait_reason) : null;
+  const holderChat = folderHolder ? resolveChat?.(folderHolder.session_id) ?? null : null;
   // A task-specific explanation takes priority over coarse agent availability.
-  const stage = queuedWaitReason
-    ? { ...resolveStage(status, items, undefined), static: true }
-    : resolveStage(status, items, availability);
+  const stage = folderHolder ? { label: t(($) => $.bg_tasks.folder_held), static: true }
+    : queuedWaitReason
+      ? { ...resolveStage(status, items, undefined), static: true }
+      : resolveStage(status, items, availability);
   const preparationSummary = items.length === 0 && !stage.static
     && (status === "running" || status === "dispatched")
     && typeof pendingTask.progress_summary === "string"
@@ -190,6 +205,14 @@ export function TaskStatusPill({
       </span>
       {queuedWaitReason && (
         <span className="basis-full min-w-0 break-words">{queuedWaitReason}</span>
+      )}
+      {holderChat && (
+        <span className="basis-full min-w-0">
+          <button type="button" onClick={holderChat.open}
+            className="break-words text-left underline underline-offset-2 hover:text-foreground">
+            {t(($) => $.bg_tasks.folder_held_open, { title: holderChat.title })}
+          </button>
+        </span>
       )}
     </div>
   );

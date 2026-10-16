@@ -3,6 +3,9 @@ import { MessagesEndpoints } from "./messages";
 import { InboxEndpoints } from "./inbox";
 import { TurnDetailSchema } from "../schemas/messages";
 import type {
+  ChatBackgroundStopTarget,
+  ChatBackgroundTask,
+  ChatBackgroundTasksSnapshot,
   CreateChatSessionInput,
   ChatOriginFilter,
   ChatPendingTask,
@@ -15,6 +18,7 @@ import type { HttpClient } from "../http";
 import { ApiContractError, parseStrictResponse } from "../schema";
 import {
   ChatSessionSchema, ChatSessionListSchema, ChatSessionUpdateResponseSchema, ChatNoContentSchema,
+  ChatBackgroundTasksSnapshotSchema, parseChatBackgroundTasks,
 } from "../schemas/chat";
 
 export class ChatEndpoints {
@@ -99,14 +103,45 @@ export class ChatEndpoints {
   }
   async getPendingChatTask(sessionId: string): Promise<ChatPendingTask> {
     const turn = (await this.activeTurns(sessionId))[0];
+    // A running turn whose attempt waits for its local folder says so, and why (PR 6 §2.8).
+    const folderWait = turn?.status === "running" && typeof turn.local_directory_wait_reason === "string"
+      ? { status: "waiting_local_directory", wait_reason: turn.local_directory_wait_reason || null } : null;
     return turn ? { task_id: turn.current_attempt_id ?? turn.id, turn_id: turn.id,
-      status: turn.status === "pending" ? "queued" : turn.status, created_at: turn.created_at, supports_queue: true }
+      status: turn.status === "pending" ? "queued" : turn.status, created_at: turn.created_at, supports_queue: true, ...folderWait }
       : { supports_queue: true };
   }
   async listPendingChatTasks(): Promise<PendingChatTasksResponse> {
     return { tasks: (await this.activeTurns()).filter(turn => turn.session_id.startsWith("chat_"))
       .map(turn => ({ task_id: turn.current_attempt_id ?? turn.id, turn_id: turn.id, status: turn.status === "pending" ? "queued" : turn.status, chat_session_id: turn.session_id,
-        ...(typeof turn.running_subagents === "number" ? { running_subagents: turn.running_subagents } : {}) })) };
+        ...(typeof turn.running_subagents === "number" ? { running_subagents: turn.running_subagents } : {}),
+        ...(typeof turn.running_background_tasks === "number" ? { running_background_tasks: turn.running_background_tasks } : {}) })) };
+  }
+
+  /**
+   * A chat's background tasks (PR 6): the running rows plus the last ended
+   * ones, from the session registry. Never a trace (MUL-472).
+   */
+  async listChatBackgroundTasks(sessionId: string): Promise<ChatBackgroundTasksSnapshot> {
+    const path = `/api/chat/sessions/${encodeURIComponent(sessionId)}/background-tasks`;
+    const snapshot = parseStrictResponse<ChatBackgroundTasksSnapshot>(await this.http.fetch<unknown>(path),
+      ChatBackgroundTasksSnapshotSchema, { endpoint: "GET /api/chat/sessions/:id/background-tasks" });
+    if (snapshot.session_id !== sessionId) throw new ApiContractError("GET /api/chat/sessions/:id/background-tasks", "Server returned another session");
+    return snapshot;
+  }
+
+  /**
+   * Asks the chat's computer to stop one background task or all of them
+   * (PR 6 §6.1). Accepted with 202 `{requested_at, rows}`: the rows it marked
+   * as stopping (well-formed ones; none when the answer has no body). They
+   * end when the daemon answers. A 409 says why not: `task_not_running` or
+   * `runtime_offline`.
+   */
+  async stopChatBackgroundTasks(sessionId: string, target: ChatBackgroundStopTarget): Promise<ChatBackgroundTask[]> {
+    const path = `/api/chat/sessions/${encodeURIComponent(sessionId)}/background-tasks/stop`;
+    const res = await this.http.fetchRaw(path, { method: "POST", body: JSON.stringify(target), extraHeaders: { "Content-Type": "application/json" } });
+    // Any 2xx accepts the stop; the marked rows are a bonus, not a contract.
+    const body = await res.json().catch(() => null) as { rows?: unknown } | null;
+    return parseChatBackgroundTasks(body?.rows).filter((row) => row.session_id === sessionId);
   }
 
   async markChatSessionRead(sessionId: string): Promise<void> {

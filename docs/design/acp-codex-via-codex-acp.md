@@ -41,6 +41,18 @@ daemon 默认请求原生子会话（[ADR 0021](../adr/0021-subagent-sessions-an
 
 回归见 [原生子会话](../../tests/unit/acp/native-subagents.test.ts)、[翻译器](../../tests/unit/daemon/trace-translator-native-subagents.test.ts) 与 2.2.2 的重录夹具 `tests/fixtures/acp/codex-222-*.json`。
 
+## 后台任务
+
+daemon 默认在 AIR 能力列表里加 `asyncTasks`（`REMI_ACP_ASYNC_TASKS=0` 不加），codex-acp 2.2.2 回报它后 `asyncTasksEnabled` 为真。规则与取舍见 [ADR 0022](../adr/0022-background-tasks-keep-alive-on-demand.md)。
+
+- **发布什么。** 只有后台终端：unified-exec 里带 `processId`、仍出现在 `thread/backgroundTerminals/list` 里的 `commandExecution`。桥先发带 `asyncTasks.backgrounded: true` 的 `tool_call_update`，再发 `async_task_spawned`（类型 `shell`，名称取命令标题或命令，`canStop`，`toolCallId`；子线程的 id 是 `<threadId>:<itemId>`），结束时发 `async_task_state_update`（`completed` / `failed` 来自 `item/completed`，`stopped` 来自停止或列表里不再有它），不带摘要。没有进度帧，也没有输出文件。
+- **晚宣布。** 宣布终端的列表同步在 `turn/completed` 与 `item/started` 时运行且不被等待，所以最后一步留下的终端在 prompt 结束**之后**才宣布。attempt 结束时 daemon 因此先排空最多 2 s（`settleAsyncTasks`），再决定是否驻留。空闲时 provider 也保留 `async_task_*` 帧，不再随 Codex 的空闲规则丢掉。
+- **停止。** 与 Claude 相同的方法与参数，按根会话处理，调用 `thread/backgroundTerminals/terminate`。
+- **不会自己醒来（U2）。** 两轮之间终端在 app-server 持有线程时一直保留；没有发现 Codex 自开一轮。adapter 声明 `asyncTasks: { wakesModel: false }`：会话线照样驻留，让下一轮复用同一个进程、继续读取或轮询它启动的服务器，但从不响门铃。驻留时终端结束若被桥报告，登记表随之更新；否则一直显示运行中，直到下一轮的列表同步或保活上限。prompt 之间桥自开的一轮仍按 ADR 0020 D3 取消。
+- **关闭。** `session/close` 清空任务登记表但不发布结束，所以 daemon 在关闭驻留进程前显式停止仍在运行的终端；进程崩溃时桥把每个任务报为 `failed`，provider 重启时报为 `stopped`。
+
+回归见 [provider 登记表与驻留](../../tests/unit/acp/async-tasks.test.ts) 与 [daemon 集成](../../tests/integration/multiremi-daemon-background-tasks.test.ts) 的 Codex 用例。
+
 ## Runtime 自定义连接
 
 Runtime 详情的「Codex 连接」页支持一个自定义 Responses provider：Profile 名称、API 基础地址、模型 ID，以及直接填写 API Key 或引用 Runtime 本机 `REMI_CODEX_*` 环境变量。需先更新并重启 daemon，使注册元数据包含 `codex_profiles: 1`。未启用时沿用工作区 Relay / 原生登录路径；启用后优先于工作区 Relay。接口地址由 Runtime 连接，允许 HTTP(S) 的 loopback / LAN 地址；服务端不会对它做模型发现请求，也不放宽工作区 Relay 的 URL 校验。

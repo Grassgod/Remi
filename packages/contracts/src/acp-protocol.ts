@@ -301,7 +301,76 @@ export type SessionUpdate =
   | CompactionSummaryChunkUpdate
   | NoticeUpdate
   | SubagentSpawnedUpdate
-  | SubagentStateUpdate;
+  | SubagentStateUpdate
+  | AsyncTaskSpawnedUpdate
+  | AsyncTaskProgressUpdate
+  | AsyncTaskStateUpdate;
+
+/**
+ * Background work past the call that started it (PR 6, AIR `asyncTasks`; sent
+ * only once the client lists `"asyncTasks"` in `_meta.jetbrains.air`). Both
+ * pinned bridges send it: claude-agent-acp 0.90 for backgrounded shells,
+ * workflows and MCP tasks (dist/async-tasks.js), codex-acp 2.2.2 for
+ * background terminals. A task started inside a native subagent arrives on
+ * that child's session; its stop still addresses the root session.
+ */
+export type AsyncTaskState = "running" | "paused" | "completed" | "failed" | "stopped";
+
+/** A task was announced (dist/acp-subagents.d.ts `AsyncTaskSpawnedUpdate`). */
+export interface AsyncTaskSpawnedUpdate {
+  sessionUpdate: "async_task_spawned";
+  asyncTaskId: string;
+  /** Claude: the workflow name, else the description (a shell's is its command); Codex: the command title, else the command. */
+  name: string;
+  /** `"shell"` | `"workflow"` | `"monitor"`; other raw types pass through. */
+  taskType: string;
+  description: string;
+  showInTranscript: boolean;
+  canStop: boolean;
+  /** Claude: absolute path ending in `tasks/<asyncTaskId>.output`. */
+  outputFilePath?: string;
+  /** The call that started it; a Claude spawn waits for it unless the task ends or the prompt resolves first. */
+  toolCallId?: string;
+  _meta?: Record<string, unknown> | null;
+}
+
+/** Changed fields only (Claude; Codex sends none). */
+export interface AsyncTaskProgressUpdate {
+  sessionUpdate: "async_task_progress";
+  asyncTaskId: string;
+  description?: string;
+  summary?: string;
+  lastToolName?: string;
+  usage?: { totalTokens: number; toolUses: number; durationMs: number };
+  outputFilePath?: string;
+  toolCallId?: string;
+  _meta?: Record<string, unknown> | null;
+}
+
+/**
+ * A state change. Claude may close a task whose end edge was lost as `stopped`
+ * and later correct it once to `completed` or `failed`.
+ */
+export interface AsyncTaskStateUpdate {
+  sessionUpdate: "async_task_state_update";
+  asyncTaskId: string;
+  state: AsyncTaskState;
+  summary?: string;
+  outputFilePath?: string;
+  toolCallId?: string;
+  _meta?: Record<string, unknown> | null;
+}
+
+/** Params of `_session/async_task/stop` (both pinned bridges); `sessionId` is the root session. */
+export interface AsyncTaskStopParams {
+  sessionId: string;
+  asyncTaskId: string;
+}
+
+/** `{stopped: false}` when the task was never announced, has ended, or is already stopping. */
+export interface AsyncTaskStopResult {
+  stopped: boolean;
+}
 
 /**
  * A native child session started (PR 5; sent once the client advertises
@@ -419,6 +488,12 @@ export interface ToolCallMeta {
   terminal_info?: { terminal_id: string };
   terminal_output?: { terminal_id: string; data: string };
   terminal_exit?: { terminal_id: string; exit_code: number; signal: string | null };
+  /**
+   * AIR extensions (`_meta.jetbrains.air`). PR 6: a call whose work went to
+   * the background carries `asyncTasks: { backgrounded: true }` on its result
+   * update (claude-agent-acp dist/tool-calls/background.js, codex-acp).
+   */
+  jetbrains?: { air?: { asyncTasks?: { backgrounded?: boolean }; [key: string]: unknown }; [key: string]: unknown };
 }
 
 // ── Permission requests ─────────────────────────────────────────
@@ -679,8 +754,25 @@ export interface AgentAdapter {
    */
   readonly autonomousRounds?: AgentAutonomousRounds;
 
+  /**
+   * Background tasks (PR 6): the bridge publishes `async_task_*` once the
+   * client lists `"asyncTasks"` in its AIR capabilities, and stops one through
+   * `_session/async_task/stop`. Absent when it cannot; the client then never
+   * declares the capability for this agent and nothing parks.
+   */
+  readonly asyncTasks?: AgentAsyncTasks;
+
   /** Default executable name for this agent type. */
   defaultExecutable(): string;
+}
+
+export interface AgentAsyncTasks {
+  /**
+   * A task that ends while no prompt runs makes the model start a turn of its
+   * own (Claude's task-notification cycle), so a parked lane rings the
+   * doorbell. Codex: false; its tasks wait for the next turn.
+   */
+  wakesModel: boolean;
 }
 
 export interface AgentNativeSubagents {

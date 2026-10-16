@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
-import { readdirSync, readFileSync, statSync } from "node:fs";
-import { join, relative } from "node:path";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { dirname, join, relative, resolve } from "node:path";
 import ts from "typescript";
 
 const REPO_ROOT = join(import.meta.dir, "../..");
@@ -90,5 +90,65 @@ describe("frontend imports of the @multiremi/contracts root", () => {
       `export { type IssueActivityEntry } from "@multiremi/contracts";`,
       `import { issueActivityLayer } from "@multiremi/contracts/issue-activity";`,
     ].join("\n"))).toEqual([]);
+  });
+});
+
+/** Module specifiers a file imports or re-exports as runtime values (type-only forms erased). */
+function valueSpecifiers(src: string, fileName = "file.ts"): string[] {
+  const file = ts.createSourceFile(fileName, src, ts.ScriptTarget.Latest, true);
+  const out: string[] = [];
+  for (const node of file.statements) {
+    if (ts.isImportDeclaration(node) && ts.isStringLiteral(node.moduleSpecifier)) {
+      const clause = node.importClause;
+      const typeOnly = !!clause && (clause.isTypeOnly || (!clause.name && !!clause.namedBindings
+        && ts.isNamedImports(clause.namedBindings) && clause.namedBindings.elements.length > 0
+        && clause.namedBindings.elements.every((element) => element.isTypeOnly)));
+      if (!typeOnly) out.push(node.moduleSpecifier.text);
+    } else if (ts.isExportDeclaration(node) && node.moduleSpecifier && ts.isStringLiteral(node.moduleSpecifier)) {
+      const clause = node.exportClause;
+      const typeOnly = node.isTypeOnly || (!!clause && ts.isNamedExports(clause) && clause.elements.length > 0
+        && clause.elements.every((element) => element.isTypeOnly));
+      if (!typeOnly) out.push(node.moduleSpecifier.text);
+    }
+  }
+  return out;
+}
+
+const SOURCE_PACKAGES: Record<string, string> = {
+  "@multiremi/contracts": join(REPO_ROOT, "packages/contracts/src"),
+  "@multiremi/shared": join(REPO_ROOT, "packages/shared/src"),
+};
+
+describe("contracts and shared modules the web bundles", () => {
+  it("value-import their siblings without .js, which webpack cannot resolve to the TS source", () => {
+    const queue: string[] = [];
+    const seen = new Set<string>();
+    const visit = (path: string) => { if (existsSync(path) && !seen.has(path)) { seen.add(path); queue.push(path); } };
+    for (const root of FRONTEND_ROOTS) {
+      for (const file of listTsFiles(root)) {
+        for (const specifier of valueSpecifiers(readFileSync(file, "utf8"), file)) {
+          for (const [name, dir] of Object.entries(SOURCE_PACKAGES)) {
+            if (specifier.startsWith(`${name}/`)) visit(join(dir, `${specifier.slice(name.length + 1).replace(/\.ts$/, "")}.ts`));
+          }
+        }
+      }
+    }
+    const offenders: string[] = [];
+    while (queue.length) {
+      const file = queue.shift()!;
+      for (const specifier of valueSpecifiers(readFileSync(file, "utf8"), file)) {
+        if (!specifier.startsWith(".")) continue;
+        if (specifier.endsWith(".js")) offenders.push(`${relative(REPO_ROOT, file)} -> ${specifier}`);
+        visit(resolve(dirname(file), `${specifier.replace(/\.js$/, "")}.ts`));
+      }
+    }
+    expect(seen.size).toBeGreaterThan(5);
+    expect(offenders, "drop the .js from a value import in a module the web bundles (type imports may keep it)").toEqual([]);
+  });
+
+  it("reads value specifiers and skips type-only forms", () => {
+    expect(valueSpecifiers(`import { A, type B } from "./a.js";\nexport { C } from "./c.js";\nexport * from "./d.js";`))
+      .toEqual(["./a.js", "./c.js", "./d.js"]);
+    expect(valueSpecifiers(`import type { A } from "./a.js";\nimport { type B } from "./b.js";\nexport type { C } from "./c.js";`)).toEqual([]);
   });
 });

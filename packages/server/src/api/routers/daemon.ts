@@ -802,7 +802,8 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
     if (identityDenied) return identityDenied;
     const existing = store.getTask(taskId);
     if (!existing) return c.json({ error: "task not found" }, 404);
-    if (existing.status !== "dispatched") {
+    // A waiting task's reason may change: what holds its folder parked (PR 6 §2.8).
+    if (existing.status !== "dispatched" && existing.status !== "waiting_local_directory") {
       return c.json({ error: "mark task waiting_local_directory: no rows in result set" }, 400);
     }
     let task: MultiremiTask;

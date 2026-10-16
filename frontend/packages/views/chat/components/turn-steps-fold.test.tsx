@@ -8,6 +8,9 @@ import { renderWithI18n } from "../../test/i18n";
 import {
   T0, at, command, compaction, message, read, reasoning, subagent, traceTurn, turnPage, turnTraceCache, unknown,
 } from "../../test/trace-fixtures";
+import { chatKeys } from "@multiremi/core/chat/queries";
+import { setCurrentWorkspace } from "@multiremi/core/platform";
+import { BG_SESSION, bgItem, bgSnapshot, bgTask } from "../lib/__fixtures__/background-tasks";
 import { FinishedTurnSteps, LiveTurnSteps } from "./turn-steps-fold";
 
 const { getTaskTrace } = vi.hoisted(() => ({ getTaskTrace: vi.fn() }));
@@ -322,5 +325,55 @@ describe("finished fold (MUL-472)", () => {
     renderWithI18n(<Query><Fold initialOpen /></Query>, { locale: "zh-Hans" });
     fireEvent.click(await screen.findByRole("button", { name: "重试" }));
     expect(await screen.findByText("已读取 a.ts")).toBeInTheDocument();
+  });
+});
+
+describe("background launch rows (PR 6 §8.1 Steps)", () => {
+  let client: QueryClient;
+  const Query = ({ children }: { children: ReactNode }) => <QueryClientProvider client={client}>{children}</QueryClientProvider>;
+  const launch = command("cmd:dev", [unknown("npm run dev")], { title: "启动开发服务器" });
+  const handedOff = bgItem("dev", "cmd:dev", { status: "completed", completed_at: at(9), handed_off: true });
+  beforeEach(() => {
+    client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    getTaskTrace.mockReset();
+    setCurrentWorkspace("demo", "ws-1");
+  });
+
+  function Fold() {
+    const [open, setOpen] = useState(true);
+    return <FinishedTurnSteps attemptId="att_1" turnId="turn_1" sessionId={BG_SESSION} header={{ kind: "worked_for", ms: 9_000 }} visible open={open} onOpenChange={setOpen} />;
+  }
+
+  it("reads the finished turn's launch row from the registry when it is loaded, else neutrally from its trace item", async () => {
+    client.setQueryData(["task-trace", "att_1"], turnTraceCache(turnPage(traceTurn({ status: "completed" }), [launch, handedOff])));
+    renderWithI18n(<Query><Fold /></Query>, { locale: "zh-Hans" });
+    // Nothing loaded: the trace item only knows the task was handed off, never that it still runs (review #6).
+    expect(screen.getByText("启动开发服务器 已转到后台运行")).toBeInTheDocument();
+    expect(screen.queryByText(/仍在后台运行/)).toBeNull();
+    // The registry confirms it runs.
+    act(() => { client.setQueryData(chatKeys.backgroundTasks("ws-1", BG_SESSION), bgSnapshot([bgTask("dev")])); });
+    await waitFor(() => expect(screen.getByText("启动开发服务器 仍在后台运行")).toBeInTheDocument());
+    // It was stopped at the keep-alive cap later.
+    act(() => { client.setQueryData(chatKeys.backgroundTasks("ws-1", BG_SESSION), bgSnapshot([bgTask("dev", { status: "stopped", stop_reason: "keepalive_cap" })])); });
+    await waitFor(() => expect(screen.getByText("后台命令已停止 启动开发服务器")).toBeInTheDocument());
+    expect(document.querySelector('[data-step-row="cmd:dev:0"]')).toHaveAttribute("data-step-state", "stopped");
+    // The task item itself draws no row; nothing was read for it.
+    expect(document.querySelectorAll("[data-step-row], [data-step-breaker]")).toHaveLength(1);
+    expect(getTaskTrace).not.toHaveBeenCalled();
+  });
+
+  it("says a hand-off moved to the background the next day, when the chat counts no running task", () => {
+    // A chat whose count is 0 never reads its registry; a day-old row aged out anyway.
+    client.setQueryData(["task-trace", "att_1"], turnTraceCache(turnPage(traceTurn({ status: "completed" }), [launch, handedOff])));
+    client.setQueryData(chatKeys.backgroundTasks("ws-1", BG_SESSION), bgSnapshot([bgTask("other", { status: "completed", ended_at: at(30) })]));
+    renderWithI18n(<Query><Fold /></Query>, { locale: "en" });
+    expect(screen.getByText("启动开发服务器 moved to the background")).toBeInTheDocument();
+    expect(screen.queryByText(/still running/)).toBeNull();
+    expect(getTaskTrace).not.toHaveBeenCalled();
+  });
+
+  it("reads a running launch row as started while its attempt runs", () => {
+    renderWithI18n(<Query><LiveTurnSteps trace={{ turn: traceTurn(), items: [launch, bgItem("dev", "cmd:dev")] }} sessionId={BG_SESSION} /></Query>, { locale: "zh-Hans" });
+    expect(screen.getByText("已启动后台命令 启动开发服务器")).toBeInTheDocument();
   });
 });

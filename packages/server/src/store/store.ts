@@ -124,6 +124,19 @@ import {
 import type { GcRunMode, GcRunRequest, StorageReport } from "@multiremi/contracts/storage.js";
 import { RuntimeWorkspacesRepo } from "@multiremi/store/repos/runtime-workspaces-repo.js";
 import { TaskTracesRepo } from "@multiremi/store/repos/task-traces-repo.js";
+import {
+  BackgroundTasksRepo,
+  type BackgroundTaskDownlinks,
+  type BackgroundTaskStopResult,
+  type BackgroundTaskStopTarget,
+  type SessionBackgroundTasks,
+} from "@multiremi/store/repos/background-tasks-repo.js";
+import type {
+  DaemonLaneBackgroundTasksPayload,
+  DaemonLaneBackgroundWakePayload,
+  DaemonLaneBackgroundWakeReply,
+  DaemonParkedLane,
+} from "@multiremi/contracts/daemon-protocol.js";
 import type { MultiremiTaskTrace } from "@multiremi/contracts/trace-file.js";
 import type { TraceLateSubagent } from "@multiremi/contracts/trace.js";
 import type { DaemonTaskCompletionFields } from "@multiremi/contracts/daemon-protocol.js";
@@ -552,6 +565,7 @@ export class MultiremiStore {
   private sshMesh: SshMeshRepo;
   private autopilots: AutopilotsRepo;
   private tasks: TasksRepo;
+  private backgroundTasks: BackgroundTasksRepo;
 
   constructor(db?: SqlDatabase, options: {
     /** Pointer reads can be routed to a read-only pool in the split topology. */
@@ -623,10 +637,12 @@ export class MultiremiStore {
     this.sshMesh = new SshMeshRepo(this.ctx);
     this.autopilots = new AutopilotsRepo(this.ctx);
     this.tasks = new TasksRepo(this.ctx);
+    this.backgroundTasks = new BackgroundTasksRepo(this.ctx);
     this.taskCapabilityMonitor = new TaskCapabilityMonitor([
       now => this.tasks.refreshQueuedCapabilityWaitReasons(now),
       now => this.tasks.sweepIdleIssueLanes(now),
       now => this.archiveIdleChats(now),
+      now => this.backgroundTasks.sweep(now),
     ]);
     this.migrate();
   }
@@ -2136,6 +2152,10 @@ runMigrations(this.db);
 
   completeFeishuRoundPushTaskWithinTransaction(task: MultiremiTask, body: string): void {
     this.feishuBot.upsertRoundPushDeliveryWithinTransaction(task, body);
+  }
+
+  prepareFeishuBackgroundDoorbellDeliveryWithinTransaction(originAttemptId: string, originTurnId: string | null, taskId: string): void {
+    this.feishuBot.prepareBackgroundDoorbellDeliveryWithinTransaction(originAttemptId, originTurnId, taskId);
   }
 
   materializeFeishuTaskDeliveries(taskId: string): void {
@@ -5865,6 +5885,54 @@ runMigrations(this.db);
 
   getRunningSubagents(taskId: string): number | null {
     return this.tasks.getRunningSubagents(taskId);
+  }
+
+  /** PR 6: the whole `task.activity` frame (subagents and background tasks); see `TasksRepo.recordTaskActivity`. */
+  recordTaskActivity(taskId: string, activity: { runningSubagents: number; runningBackgroundTasks?: number }): boolean {
+    return this.tasks.recordTaskActivity(taskId, activity);
+  }
+
+  getRunningBackgroundTasks(taskId: string): number | null {
+    return this.tasks.getRunningBackgroundTasks(taskId);
+  }
+
+  // ── Background tasks (PR 6): see BackgroundTasksRepo ──────────────────────
+
+  upsertLaneBackgroundSnapshot(runtimeId: string, workspaceId: string, payload: DaemonLaneBackgroundTasksPayload): number {
+    return this.backgroundTasks.upsertLaneSnapshot(runtimeId, workspaceId, payload);
+  }
+
+  reconcileParkedLanes(runtimeId: string, parkedLanes: readonly DaemonParkedLane[], activeTaskIds: readonly string[]): number {
+    return this.backgroundTasks.reconcileParkedLanes(runtimeId, parkedLanes, activeTaskIds);
+  }
+
+  /** The sweep: rows of a deleted runtime end `lost`, runtimes silent for 10 minutes turn running rows `unknown`, retention. */
+  sweepBackgroundTasks(now?: number): { unknown: number; lost: number; deleted: number } {
+    return this.backgroundTasks.sweep(now);
+  }
+
+  requestBackgroundTaskStop(sessionId: string, target: BackgroundTaskStopTarget, memberId: string | null): BackgroundTaskStopResult {
+    return this.backgroundTasks.requestStop(sessionId, target, memberId);
+  }
+
+  laneBackgroundWake(runtimeId: string, workspaceId: string, payload: DaemonLaneBackgroundWakePayload): DaemonLaneBackgroundWakeReply {
+    return this.backgroundTasks.laneBackgroundWake(runtimeId, workspaceId, payload);
+  }
+
+  listSessionBackgroundTasks(sessionId: string): SessionBackgroundTasks {
+    return this.backgroundTasks.listSessionBackgroundTasks(sessionId);
+  }
+
+  countRunningBackgroundTasksBySession(sessionIds: readonly string[]): Map<string, number> {
+    return this.backgroundTasks.countRunningBySession(sessionIds);
+  }
+
+  runtimesWithAliveBackgroundTasks(sessionId: string): string[] {
+    return this.backgroundTasks.runtimesWithAliveTasks(sessionId);
+  }
+
+  backgroundTaskDownlinks(runtimeId: string): BackgroundTaskDownlinks {
+    return this.backgroundTasks.downlinkEntities(runtimeId);
   }
 
   pinTaskSession(taskId: string, sessionId?: string | null, workDir?: string | null): MultiremiTask {

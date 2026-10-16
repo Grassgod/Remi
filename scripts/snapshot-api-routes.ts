@@ -1893,6 +1893,8 @@ flow("chat", async (rec, refs) => {
   await rec.json("POST", `/api/chat/sessions/${compatId}/messages`, { body: "compat message" });
   await rec.json("POST", `/api/chat/sessions/${compatId}/read`, {});
   await rec.json("PATCH", `/api/chat/sessions/${compatId}`, { title: "Compat chat renamed" });
+  // PR 6: nothing runs in the background here, so the stop is refused.
+  await rec.json("POST", `/api/chat/sessions/${compatId}/background-tasks/stop`, { all: true });
   await rec.call("DELETE", `/api/chat/sessions/${compatId}`);
 
   const native = await rec.json("POST", "/api/multiremi/chats", { agentId: refs.agentId, title: "Native chat" });

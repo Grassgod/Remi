@@ -14,6 +14,7 @@ import type { AgentAdapter } from "@acp/index.js";
 import {
   CLAUDE_SUBAGENT_TOOLS,
   autonomousOrigin,
+  backgroundedMarker,
   classifyTool,
   endsWithAbortMarker,
   compactionFacts,
@@ -48,6 +49,10 @@ import type { UnifiedMessage } from "@multiremi/contracts/unified-model.js";
 import type {
   CommandAction,
   TraceAgentMessageItem,
+  TraceBackgroundTaskItem,
+  TraceBackgroundTaskStopReason,
+  TraceBackgroundTaskStopRequest,
+  TraceUserMessageDoorbell,
   TraceCompactionItem,
   TraceContextUsage,
   TraceEventInput,
@@ -73,11 +78,31 @@ import {
   capTraceItem,
   utf8ByteLength,
 } from "@shared/trace-sanitize.js";
-import { selectFinalReply, subagentReply } from "@shared/turn-trace.js";
+import {
+  backgroundTaskItemId,
+  handOffBackgroundTasks,
+  runningBackgroundTasks,
+  selectFinalReply,
+  subagentReply,
+} from "@shared/turn-trace.js";
+import { readBackgroundDoorbell } from "@shared/background-tasks.js";
 
 /** A native steer error is a short diagnostic: label-sized, like a tool name. */
 function steerError(error: string | null): string | null {
   return error === null ? null : capLabel(error);
+}
+
+/** The notice both bridges send when a stop Remi asked for succeeded (claude-agent-acp dist/async-tasks.js:281-304). */
+const STOP_NOTICE_TITLE = "Task stopped by user";
+/** How long after a stop request its notice is still absorbed. */
+const STOP_NOTICE_WINDOW_MS = 60_000;
+
+/** The doorbells among a turn's messages (PR 6 §2.5), as `user_message.background_tasks` lists them. */
+function doorbellsOf(messages: ReadonlyArray<{ metadata?: unknown }>): TraceUserMessageDoorbell[] {
+  return messages.flatMap((message) => {
+    const doorbell = readBackgroundDoorbell(message.metadata);
+    return doorbell ? [{ task_id: doorbell.task_id, name: doorbell.name, task_type: doorbell.task_type, status: doorbell.status }] : [];
+  });
 }
 
 /** Coalescing constants, kept from the retired `TaskMessageBatcher`. */
@@ -104,6 +129,37 @@ export interface TraceTranslatorOptions {
    * top-level and nested. Called with the new counts on every change only.
    */
   onSubagentCounts?: (counts: { top: number; nested: number }) => void;
+  /**
+   * The attempt's activity changed (PR 6 §4.2): running subagents, top-level
+   * and nested, and running or paused background tasks at any depth. Called
+   * with the new counts on every change only.
+   */
+  onActivity?: (counts: TraceActivityCounts) => void;
+  /**
+   * What the provider's registry knows of a task this attempt first sees by a
+   * later frame (one started in an earlier attempt of a parked lane, PR 6
+   * §2.4), so its item can carry a name. Null when unknown.
+   */
+  backgroundTaskInfo?: (taskId: string) => TraceBackgroundTaskInfo | null;
+}
+
+export interface TraceActivityCounts {
+  subagentsTop: number;
+  subagentsNested: number;
+  backgroundTasks: number;
+}
+
+/** A provider registry entry, as the translator needs it for an item it never saw announced. */
+export interface TraceBackgroundTaskInfo {
+  name: string;
+  taskType: string;
+  description: string | null;
+  toolCallId: string | null;
+  canStop: boolean;
+  /** Epoch ms. */
+  startedAt: number;
+  /** The session it runs on (a native child's, or the root's). */
+  sessionId: string | null;
 }
 
 /** The subagent a child session belongs to, for a request it raised (PR 5 §1.3). */
@@ -196,10 +252,33 @@ export interface TraceTranslator {
   subagentOfSession(sessionId: string | null | undefined): TraceSubagentRef | null;
   /**
    * The bridge still owes this attempt an autonomous round (PR 5 §2.4): a
-   * background subagent's notification that the prompt did not consume. False
+   * background subagent's notification that the prompt did not consume, or a
+   * background task that ended (completed or failed, never stopped) after the
+   * last cycle began and before any root tool result (PR 6 §4.2). False
    * unless the adapter declares autonomous rounds.
    */
   readonly owesAutonomousRound: boolean;
+  // ── Background tasks (PR 6 §4.2)
+  /** Remi asked the bridge to stop a task (`by` a person, or Remi itself). */
+  backgroundTaskStopRequested(taskId: string, request: Pick<TraceBackgroundTaskStopRequest, "by" | "requested_at">): void;
+  /** The bridge's answer to that stop. */
+  backgroundTaskStopResult(taskId: string, outcome: TraceBackgroundTaskStopRequest["outcome"]): void;
+  /**
+   * Remi is stopping every running task for `reason` (the attempt ends without
+   * parking): a `stopped` state that follows carries it; one still running
+   * when the trace closes gets it too.
+   */
+  backgroundTasksEnding(reason: TraceBackgroundTaskStopReason): void;
+  /**
+   * The attempt ends with its process parked: every running task becomes
+   * `completed` with `handed_off: true`. A later frame of the same attempt
+   * reopens it.
+   */
+  backgroundTasksHandedOff(): void;
+  /** The last lines of a task's output (Claude's output file, read by the daemon). */
+  backgroundTaskOutput(taskId: string, tail: string | null, truncated: boolean): void;
+  /** Background task items still running or paused in this attempt (any depth). */
+  readonly runningBackgroundTasks: readonly TraceBackgroundTaskItem[];
   /** A `compaction_update` was seen in this attempt. */
   readonly sawCompaction: boolean;
   /** The last item an ACP update touched in the most recent prompt round. */
@@ -557,6 +636,28 @@ export function createTraceTranslator(
   const runningSubagents = new Map<string, boolean>();
   let subagentCounts = { top: 0, nested: 0 };
 
+  // Background tasks (PR 6 §4.2): one `background_task` item per task, `bg:<id>`.
+  interface BackgroundTask {
+    item: TraceBackgroundTaskItem;
+    startedMs: number;
+    /** Frame order of its `completed` or `failed` end in this attempt; null otherwise (a stop never owes a round). */
+    endedOrder: number | null;
+    /** A level-closed `stopped` was corrected once. */
+    corrected: boolean;
+  }
+  const bgTasks = new Map<string, BackgroundTask>();
+  /** Calls whose work went to the background (the bridges' marker). */
+  const backgroundedCalls = new Set<string>();
+  /** When Remi asked for each stop whose "Task stopped by user" notice is still due (epoch ms, oldest first). */
+  const pendingStopNotices: number[] = [];
+  /** Why Remi is stopping every task (the attempt ends without parking). */
+  let endingReason: TraceBackgroundTaskStopReason | null = null;
+  /** Frame order of the current cycle's first root work, and the cycle start of the last counted result marker (any origin). */
+  let cycleStartOrder = 0;
+  let lastCoveredCycleStart = 0;
+  const runningTasks = new Set<string>();
+  const wakesModel = adapter.asyncTasks?.wakesModel === true;
+
   const uniqueId = (base: string): string => {
     if (!usedIds.has(base)) { usedIds.add(base); return base; }
     for (let k = 2; ; k++) {
@@ -569,6 +670,15 @@ export function createTraceTranslator(
     items.set(item.id, item);
     if (touchedByAcp) roundLast = item;
     if (item.type === "subagent") countSubagent(item);
+    if (item.type === "background_task") countBackgroundTask(item);
+  };
+
+  const reportActivity = (): void => {
+    try {
+      opts.onActivity?.({ subagentsTop: subagentCounts.top, subagentsNested: subagentCounts.nested, backgroundTasks: runningTasks.size });
+    } catch {
+      // A failing listener never breaks the trace.
+    }
   };
 
   /** Keep the running-subagent counts incremental and report a change (§3.8). */
@@ -583,6 +693,16 @@ export function createTraceTranslator(
     } catch {
       // A failing listener never breaks the trace.
     }
+    reportActivity();
+  };
+
+  /** The running background-task count (`runningBackgroundTasks(items).length`, PR 6 §4.2), incremental. */
+  const countBackgroundTask = (item: TraceBackgroundTaskItem): void => {
+    const running = item.status === "in_progress";
+    if (runningTasks.has(item.id) === running) return;
+    if (running) runningTasks.add(item.id);
+    else runningTasks.delete(item.id);
+    reportActivity();
   };
 
   const write = (type: "item.started" | "item.updated" | "item.completed", item: TraceItem, touchedByAcp = false): void => {
@@ -747,6 +867,8 @@ export function createTraceTranslator(
     const kind = frame.sessionUpdate;
     if (kind === "tool_call" || kind === "tool_call_update"
       || ((kind === "agent_message_chunk" || kind === "agent_thought_chunk") && contentText(frame.content).trim())) {
+      // The first root work after a result: a model cycle began here (PR 6 §4.2).
+      if (!rootWorkSinceMarker) cycleStartOrder = frameOrder;
       rootWorkSinceMarker = true;
       return;
     }
@@ -756,6 +878,8 @@ export function createTraceTranslator(
     if (!origin || !rootWorkSinceMarker) return;
     rootWorkSinceMarker = false;
     lastResultRound = roundIndex;
+    // A cycle that began after a task ended carried that task's notification.
+    lastCoveredCycleStart = cycleStartOrder;
     if (!autonomousOrigins.has(origin)) return;
     lastMarkerOrder = frameOrder;
     if (backgroundLaunches.size) markersSinceLaunch++;
@@ -988,7 +1112,8 @@ export function createTraceTranslator(
       seen.add(id);
       const tool = tools.get(id);
       if (tool) {
-        if (isBackgroundLaunch(tool)) return true;
+        // PR 6: a call the bridge marked backgrounded keeps running beside the root.
+        if (isBackgroundLaunch(tool) || backgroundedCalls.has(tool.id)) return true;
         id = tool.parentId;
         continue;
       }
@@ -1034,6 +1159,11 @@ export function createTraceTranslator(
     const id = typeof frame.toolCallId === "string" && frame.toolCallId ? frame.toolCallId : `syn_${synCounter++}`;
     if (suppressed.has(id)) return;
     let state = tools.get(id);
+    if (backgroundedMarker(frame)) {
+      backgroundedCalls.add(id);
+      // codex-acp's bare marker update (no status, title or kind) only flags the call.
+      if (!state && frame.status === undefined && frame.title === undefined && frame.kind === undefined) return;
+    }
     if (!state && agentType === "claude" && natives.size && frameSession(frame) === null && isNativeAgentHook(frame)) {
       // The bridge swallowed this Agent call; only its hook update leaked to the root.
       absorbHook(frame, id);
@@ -1123,6 +1253,118 @@ export function createTraceTranslator(
     }
   };
 
+  // ── Background tasks (PR 6 §4.2) ────────────────────────────────────────
+
+  const text = (value: unknown): string | null => typeof value === "string" ? value : null;
+
+  /** Re-emit a task's item with `patch` (a key set to undefined is removed), keeping its lifecycle event. */
+  const writeTask = (task: BackgroundTask, patch: Partial<TraceBackgroundTaskItem>): void => {
+    const next = { ...task.item, ...patch } as Record<string, unknown>;
+    for (const [key, value] of Object.entries(next)) if (value === undefined) delete next[key];
+    const item = next as unknown as TraceBackgroundTaskItem;
+    if (JSON.stringify(item) === JSON.stringify(task.item)) return;
+    task.item = item;
+    write(item.status === "in_progress" ? "item.updated" : "item.completed", item);
+  };
+
+  /**
+   * A task's item, at its announcement or, for a task this attempt first sees
+   * by a later frame (one an earlier attempt of a parked lane started), from
+   * the provider's registry. Its parent is the agent of the session it runs on.
+   */
+  const startTask = (taskId: string, frame: VendorFrame | null): BackgroundTask => {
+    const info = frame?.sessionUpdate === "async_task_spawned" ? null : opts.backgroundTaskInfo?.(taskId) ?? null;
+    const session = (frame ? frameSession(frame) : null) ?? info?.sessionId ?? null;
+    const id = backgroundTaskItemId(taskId);
+    usedIds.add(id);
+    const item: TraceBackgroundTaskItem = {
+      id, parent_id: agentOfSession(session)?.id ?? null, status: "in_progress",
+      started_at: info ? new Date(info.startedAt).toISOString() : now(), completed_at: null, type: "background_task",
+      task_id: taskId, task_type: text(frame?.taskType) ?? info?.taskType ?? "shell", name: text(frame?.name) ?? info?.name ?? "",
+      description: text(frame?.description) ?? info?.description ?? null,
+      tool_item_id: text(frame?.toolCallId) ?? info?.toolCallId ?? null,
+      can_stop: typeof frame?.canStop === "boolean" ? frame.canStop : info?.canStop ?? true,
+      summary: null, duration_ms: null,
+    };
+    const task: BackgroundTask = { item, startedMs: info?.startedAt ?? nowMs(), endedOrder: null, corrected: false };
+    bgTasks.set(taskId, task);
+    write("item.started", item);
+    return task;
+  };
+
+  /** Still running in this attempt, or handed off and now reported again (a later round of the same attempt). */
+  const taskOpen = (task: BackgroundTask): boolean => task.item.status === "in_progress" || task.item.handed_off === true;
+  const reopened = (task: BackgroundTask): Partial<TraceBackgroundTaskItem> => task.item.handed_off
+    ? { status: "in_progress", completed_at: null, handed_off: undefined } : {};
+
+  const onTaskSpawned = (frame: VendorFrame): void => {
+    const taskId = text(frame.asyncTaskId);
+    if (!taskId) return;
+    const task = bgTasks.get(taskId);
+    if (!task) {
+      startTask(taskId, frame);
+      return;
+    }
+    // A re-announcement (Claude republishes a task's metadata) refreshes what it carries.
+    writeTask(task, {
+      ...(text(frame.name) !== null ? { name: text(frame.name)! } : {}),
+      ...(text(frame.taskType) !== null ? { task_type: text(frame.taskType)! } : {}),
+      ...(text(frame.description) !== null ? { description: text(frame.description) } : {}),
+      ...(text(frame.toolCallId) !== null ? { tool_item_id: text(frame.toolCallId) } : {}),
+      ...(typeof frame.canStop === "boolean" ? { can_stop: frame.canStop } : {}),
+    });
+  };
+
+  const onTaskProgress = (frame: VendorFrame): void => {
+    const taskId = text(frame.asyncTaskId);
+    if (!taskId) return;
+    const task = bgTasks.get(taskId) ?? startTask(taskId, frame);
+    if (!taskOpen(task)) return;
+    const usage = record(frame.usage);
+    const counts = usage && [usage.totalTokens, usage.toolUses, usage.durationMs].every((value) =>
+      typeof value === "number" && Number.isFinite(value) && value >= 0)
+      ? { total_tokens: usage.totalTokens as number, tool_uses: usage.toolUses as number, duration_ms: usage.durationMs as number } : null;
+    writeTask(task, {
+      ...reopened(task),
+      ...(text(frame.description) !== null ? { description: text(frame.description) } : {}),
+      ...(text(frame.summary) !== null ? { summary: text(frame.summary) } : {}),
+      ...(text(frame.lastToolName) !== null ? { last_tool_name: text(frame.lastToolName) } : {}),
+      ...(text(frame.toolCallId) !== null ? { tool_item_id: text(frame.toolCallId) } : {}),
+      ...(counts ? { usage: counts } : {}),
+    });
+  };
+
+  const onTaskState = (frame: VendorFrame): void => {
+    const taskId = text(frame.asyncTaskId);
+    if (!taskId) return;
+    const task = bgTasks.get(taskId) ?? startTask(taskId, frame);
+    const state = frame.state;
+    const summary = text(frame.summary);
+    if (state === "running" || state === "paused") {
+      if (!taskOpen(task)) return;
+      writeTask(task, { ...reopened(task), paused: state === "paused" ? true : undefined,
+        ...(summary !== null ? { summary } : {}) });
+      return;
+    }
+    if (state !== "completed" && state !== "failed" && state !== "stopped") return;
+    if (!taskOpen(task)) {
+      // A lost end edge was closed `stopped`; the real end corrects it once (claude-agent-acp dist/async-tasks.js:520-529).
+      if (task.item.status !== "stopped" || state === "stopped" || task.corrected) return;
+      task.corrected = true;
+    }
+    const request = task.item.stop_request ?? null;
+    const stopReason: TraceBackgroundTaskStopReason | undefined = state !== "stopped" ? undefined
+      : request?.by === "user" ? "user" : endingReason ?? task.item.stop_reason ?? undefined;
+    task.endedOrder = state === "stopped" ? null : frameOrder;
+    writeTask(task, {
+      status: state, completed_at: now(), handed_off: undefined, paused: undefined,
+      duration_ms: Math.max(0, nowMs() - task.startedMs),
+      ...(summary !== null ? { summary } : {}),
+      stop_reason: stopReason,
+      ...(request && request.outcome === "pending" && state === "stopped" ? { stop_request: { ...request, outcome: "stopped" } } : {}),
+    });
+  };
+
   // ── Other updates ───────────────────────────────────────────────────────
 
   const patchTurn = (patch: { model?: string; context_usage?: TraceContextUsage }): void => {
@@ -1189,6 +1431,15 @@ export function createTraceTranslator(
   };
 
   const onNotice = (frame: VendorFrame): void => {
+    // The bridge acknowledges a stop Remi asked for with this notice (PR 6 §4.2): the task item says it already.
+    if (frame.title === STOP_NOTICE_TITLE && pendingStopNotices.length) {
+      const cutoff = nowMs() - STOP_NOTICE_WINDOW_MS;
+      while (pendingStopNotices.length && pendingStopNotices[0]! < cutoff) pendingStopNotices.shift();
+      if (pendingStopNotices.length) {
+        pendingStopNotices.shift();
+        return;
+      }
+    }
     // A child session's notice (codex-acp warns once per thread it starts) belongs to its agent (PR 5 §3.7).
     const session = frameSession(frame);
     const parentId = session ? agentOfSession(session)?.id ?? null : null;
@@ -1265,10 +1516,13 @@ export function createTraceTranslator(
         const id = uniqueId(`in:${input.attemptId}`);
         const text = capItemText(input.input.length
           ? input.input.map((message) => message.body_md).join("\n\n") : input.fallbackText ?? "");
+        // PR 6 §2.5: the doorbells among the input say why the agent speaks on its own (Feishu).
+        const doorbells = doorbellsOf(input.input);
         write("item.completed", {
           id, parent_id: null, status: "completed", started_at: at, completed_at: at, type: "user_message", origin: "input",
           text: text.value, ...(text.truncated ? { truncated: true as const } : {}),
-          message_ids: input.input.map((message) => message.id), attachments: input.attachments ?? [], steer: null,
+          message_ids: input.input.map((message) => message.id), attachments: input.attachments ?? [],
+          ...(doorbells.length ? { background_tasks: doorbells } : {}), steer: null,
         });
       });
     },
@@ -1325,9 +1579,19 @@ export function createTraceTranslator(
           case "subagent_state_update":
             onSubagentState(frame);
             break;
+          // PR 6 §4.2: no boundary, so a streaming message is never split by a task's frame.
+          case "async_task_spawned":
+            onTaskSpawned(frame);
+            break;
+          case "async_task_progress":
+            onTaskProgress(frame);
+            break;
+          case "async_task_state_update":
+            onTaskState(frame);
+            break;
           default:
             // user_message_chunk, available_commands_update, current_mode_update,
-            // async_task_*, state_update, terminal_* and unknown kinds.
+            // state_update, terminal_* and unknown kinds.
             break;
         }
       });
@@ -1427,10 +1691,12 @@ export function createTraceTranslator(
           const id = uniqueId(`steer:${message.id}`);
           const at = now();
           const text = capItemText(message.content ?? "");
+          const doorbells = doorbellsOf([message as { metadata?: unknown }]);
           write("item.completed", {
             id, parent_id: null, status: "completed", started_at: at, completed_at: at, type: "user_message", origin: "steer",
             text: text.value, ...(text.truncated ? { truncated: true as const } : {}),
             message_ids: [message.id], attachments: attachmentRefs(message.attachments),
+            ...(doorbells.length ? { background_tasks: doorbells } : {}),
             steer: { steer_id: message.id, kind: message.kind, injected: result.via !== "none",
               author_type: message.authorType ?? null, author_id: message.authorId ?? null,
               result: { via: result.via, native_outcome: result.native_outcome, error: steerError(result.error) } },
@@ -1467,8 +1733,73 @@ export function createTraceTranslator(
         if (agent.endedOrder !== null && agent.endedOrder > lastMarkerOrder && !(lastToolResultOrder > agent.endedOrder)
           && !(lastResultRound > agent.endedRound)) return true;
       }
+      // PR 6 §4.2: a task that ended after the current cycle began, and before any root tool result.
+      if (wakesModel) {
+        for (const task of bgTasks.values()) {
+          const ended = task.endedOrder;
+          if (ended !== null && !(lastToolResultOrder > ended) && !(lastCoveredCycleStart > ended)) return true;
+        }
+      }
       const latestLaunch = Math.max(-1, ...backgroundLaunches.values());
       return backgroundLaunches.size > markersSinceLaunch && !(lastResultRound > latestLaunch);
+    },
+
+    backgroundTaskStopRequested(taskId, request) {
+      emitter.run(() => {
+        const task = bgTasks.get(taskId);
+        if (!task || !taskOpen(task)) return;
+        pendingStopNotices.push(nowMs());
+        writeTask(task, { stop_request: { requested_at: request.requested_at, by: request.by, outcome: "pending" } });
+      });
+    },
+
+    backgroundTaskStopResult(taskId, outcome) {
+      emitter.run(() => {
+        const task = bgTasks.get(taskId);
+        const request = task?.item.stop_request;
+        if (!task || !request) return;
+        // No notice follows a stop the bridge refused or never answered.
+        if (outcome === "not_running" || outcome === "failed") pendingStopNotices.shift();
+        if (request.outcome === "pending" || outcome === "failed") writeTask(task, { stop_request: { ...request, outcome } });
+      });
+    },
+
+    backgroundTasksEnding(reason) {
+      endingReason = reason;
+      emitter.run(() => {
+        for (const task of bgTasks.values()) {
+          if (taskOpen(task) && !task.item.stop_reason) writeTask(task, { stop_reason: reason });
+        }
+      });
+    },
+
+    backgroundTasksHandedOff() {
+      emitter.run(() => {
+        // The calls that started running tasks returned their launch; the task carries on.
+        const launches = new Set([...bgTasks.values()].filter((task) => task.item.status === "in_progress")
+          .map((task) => task.item.tool_item_id).filter((id): id is string => id !== null));
+        for (const tool of tools.values()) {
+          if (!tool.closed && (launches.has(tool.id) || backgroundedCalls.has(tool.id))) completeTool(tool, "completed", false);
+        }
+        for (const body of handOffBackgroundTasks([...items.values()], now())) {
+          const item = (body as { item: TraceBackgroundTaskItem }).item;
+          const task = bgTasks.get(item.task_id);
+          if (task) task.item = item;
+          write("item.completed", item);
+        }
+      });
+    },
+
+    backgroundTaskOutput(taskId, tail, truncated) {
+      emitter.run(() => {
+        const task = bgTasks.get(taskId);
+        if (!task) return;
+        writeTask(task, { output_tail: tail, output_tail_truncated: truncated ? true : undefined });
+      });
+    },
+
+    get runningBackgroundTasks() {
+      return runningBackgroundTasks([...items.values()]);
     },
 
     get sawCompaction() {

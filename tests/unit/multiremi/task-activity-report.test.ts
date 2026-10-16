@@ -170,6 +170,43 @@ for (const backend of backends) {
       });
     }, TIMEOUT);
 
+    it("PR 6: stores running_background_tasks beside the subagent count, optional and validated", async () => {
+      await withWorld(backend, async (world) => {
+        const { chat, task } = runChatTask(world);
+        const events: MultiremiTask[] = [];
+        const unsubscribe = world.store.onTaskEvent((event) => { if (event.type === "task:subagents") events.push(event.task); });
+        try {
+          // An older daemon omits it: the stored value stays unreported, not 0.
+          expect(await report(world, task.id, 1)).toEqual([]);
+          expect(world.store.getRunningBackgroundTasks(task.id)).toBeNull();
+          expect(listedTurn(world.store, task.id)).toMatchObject({ running_subagents: 1, running_background_tasks: null });
+          // A change of either count writes and tells the creator once.
+          for (const [subagents, background] of [[1, 2], [1, 2], [0, 2], [0, 0]] as const) {
+            expect(await activity(world.store, { task_id: task.id, running_subagents: subagents, running_background_tasks: background },
+              { runtimeId: world.runtimeId })).toEqual([]);
+          }
+          expect(events).toHaveLength(4);
+          expect(world.store.getRunningBackgroundTasks(task.id)).toBe(0);
+          await activity(world.store, { task_id: task.id, running_subagents: 0, running_background_tasks: 3 }, { runtimeId: world.runtimeId });
+          expect(listedTurn(world.store, task.id)).toMatchObject({ running_subagents: 0, running_background_tasks: 3 });
+          expect(currentAttempt(world.store, task.id)).toMatchObject({ running_background_tasks: 3 });
+          const frames: string[] = [];
+          notifyBrowserTaskEvent(new Map(), new Map([[chat.creatorId!, new Set([{ data: { kind: "browser", workspaceId: "local" },
+            sendText: (frame: string) => frames.push(frame) } as any])]]), world.store, "task:subagents", events.at(-1)!);
+          expect(JSON.parse(frames[0]!).payload).toMatchObject({ running_subagents: 0, running_background_tasks: 3 });
+          for (const bad of [-1, 1.5, "2", null, 2 ** 31]) {
+            expect(await outcome(world, { task_id: task.id, running_subagents: 0, running_background_tasks: bad }))
+              .toEqual({ ok: false, code: "invalid_report", retryable: false });
+          }
+          expect(world.store.getRunningBackgroundTasks(task.id)).toBe(3);
+          // Only an active attempt reports one.
+          world.store.cancelTask(task.id);
+          expect(listedTurn(world.store, task.id).running_background_tasks).toBeNull();
+          expect(currentAttempt(world.store, task.id).running_background_tasks).toBeNull();
+        } finally { unsubscribe(); }
+      });
+    }, TIMEOUT);
+
     it("stores an Issue attempt's count without a browser event", async () => {
       await withWorld(backend, async (world) => {
         const task = runIssueTask(world);

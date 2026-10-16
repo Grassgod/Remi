@@ -48,6 +48,7 @@ ACP 通知由 [trace 翻译器](../packages/server/src/worker/trace-translator.t
 写入 `<workspacesRoot>/traces/<主体>/<task_id>.jsonl`（`multiremi.trace.v2`）；写入完成后才公布连续 seq，
 同批事件再应用到运行中尝试的内存 fold（[turn-trace.ts](../packages/shared/src/turn-trace.ts)，所有读者共用）。
 Claude 与 Codex 的子代理走桥的原生子会话：provider 按会话登记表接收子会话帧并加 `_meta.remiSessionId`、不让它们改根会话状态，翻译器把每个子代理合成一个嵌套的 `subagent` 条目；Claude 在 prompt 结束后自开的后续轮（后台子代理的迟到回答）由 daemon 作为自主轮在同一 attempt 里等待，运行中的子代理数经 best-effort `task.activity` 上报（[ADR 0021](adr/0021-subagent-sessions-and-autonomous-rounds.md)）。
+后台任务（[ADR 0022](adr/0022-background-tasks-keep-alive-on-demand.md)）：Chat 会话线在 attempt 结束时仍有后台任务运行，就由 [ParkedLanes](../packages/server/src/worker/parked-lanes.ts) 驻留桥进程（不占并发槽位，上限、保活时长、崩溃清扫与快照 `lane.background_tasks` 都在这里），下一个 offer 接手同一进程；驻留的 Claude 任务结束时 daemon 以 RPC `lane.background_wake` 请服务端写一条平台门铃消息，交给普通的会话线状态机建轮。服务端把快照写进会话级登记表（[background-tasks-repo](../packages/server/src/store/repos/background-tasks-repo.ts)），停止与释放是由它推导的下行，受能力位 `lane.background` 约束。
 [TraceStreamer](../packages/server/src/worker/trace-streamer.ts)按游标将规范化事件推给 Live Hub，
 过程事件不再写消息表或 outbox；`trace.read` 反向 RPC 按持久化 Runtime 归属读取有界页：
 `view=turn` 是运行中的 fold 或关闭时写下的快照，`view=events` 是原始行。

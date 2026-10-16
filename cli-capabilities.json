@@ -10828,6 +10828,11 @@
     "GET /api/chat/sessions/:sessionId": {
       "command": "chat.get"
     },
+    "GET /api/chat/sessions/:sessionId/background-tasks": {
+      "cli_exempt": true,
+      "category": "pure_ui",
+      "reason": "Chat background-task panel (creator-only Web view of the session registry, PR 6); the agent and its daemon own the tasks, and the CLI has no parked-process view."
+    },
     "GET /api/chat/sessions/:sessionId/pending-task": {
       "cli_exempt": true,
       "category": "retired_route",
@@ -12058,6 +12063,11 @@
     },
     "POST /api/chat/sessions": {
       "command": "chat.create"
+    },
+    "POST /api/chat/sessions/:sessionId/background-tasks/stop": {
+      "cli_exempt": true,
+      "category": "pure_ui",
+      "reason": "Chat background-task panel (creator-only Web view of the session registry, PR 6); the agent and its daemon own the tasks, and the CLI has no parked-process view."
     },
     "POST /api/chat/sessions/:sessionId/messages": {
       "cli_exempt": true,

@@ -7,7 +7,18 @@ import { useWorkspaceId } from "../hooks";
 import { chatKeys } from "./queries";
 import { createLogger } from "../logger";
 import { getCurrentSlug, getCurrentWsId } from "../platform/workspace-storage";
-import type { ChatSession, CreateChatSessionInput, UpdateChatSessionInput } from "../types";
+import type {
+  ChatBackgroundStopTarget,
+  ChatBackgroundTasksSnapshot,
+  ChatSession,
+  CreateChatSessionInput,
+  UpdateChatSessionInput,
+} from "../types";
+import {
+  markBackgroundStopRequested,
+  mergeBackgroundTaskRows,
+  restoreBackgroundStopMarks,
+} from "./background-tasks";
 import { useChatStore } from "./index";
 import { removeChatSessionFromCache, updateChatSessionInCache } from "./session-cache";
 import { applyQueueItem, isQueueDeliveryUnconfirmed, queueErrorItem } from "./queue";
@@ -268,5 +279,48 @@ export function useResumeChatQueue() {
     },
     onError: (error, { sessionId }) => logger.error("resumeChatQueue.error", { sessionId, error: toSafeErrorDetails(error) }),
     onSettled: (_data, _error, { sessionId }, context) => refreshQueue(qc, context?.wsId ?? wsId, sessionId),
+  });
+}
+
+/**
+ * Stops one background task or every running one of a Chat (PR 6 §6). The
+ * rows read 「正在停止…」 at once; the registry's next snapshot says how it
+ * ended. A refusal (`409`) clears the mark and the caller shows why
+ * ({@link backgroundStopErrorCode}).
+ */
+export function useStopChatBackgroundTasks(sessionId: string | null) {
+  const qc = useQueryClient();
+  const wsId = useWorkspaceId();
+  return useMutation({
+    mutationKey: ["chat", "background-tasks", "stop", sessionId],
+    onMutate: async (target: ChatBackgroundStopTarget) => {
+      if (!sessionId) return { wsId, previous: undefined };
+      const key = chatKeys.backgroundTasks(wsId, sessionId);
+      // A read in flight must not land over the mark; it is read again on settle.
+      await qc.cancelQueries({ queryKey: key, exact: true });
+      const previous = qc.getQueryData<ChatBackgroundTasksSnapshot>(key);
+      markBackgroundStopRequested(qc, wsId, sessionId, target, new Date().toISOString(), null);
+      return { wsId, previous };
+    },
+    mutationFn: (target: ChatBackgroundStopTarget) => {
+      if (!sessionId) throw new Error("No chat to stop background tasks in");
+      return api.stopChatBackgroundTasks(sessionId, target);
+    },
+    // The rows the server marked carry its own request time; merge them now.
+    onSuccess: (rows, _target, context) => {
+      if (!sessionId || !context || !rows?.length) return;
+      qc.setQueryData<ChatBackgroundTasksSnapshot>(chatKeys.backgroundTasks(context.wsId, sessionId),
+        (old) => old ? mergeBackgroundTaskRows(old, { session_id: sessionId, rows }) : old);
+    },
+    onError: (err, target, context) => {
+      logger.error("stopChatBackgroundTasks.error", { sessionId, target, err: toSafeErrorDetails(err) });
+      if (!sessionId || !context) return;
+      restoreBackgroundStopMarks(qc, context.wsId, sessionId, context.previous);
+    },
+    // The list is read again: a read the mutation cancelled, or one that is
+    // behind (`task_not_running`: the task had ended).
+    onSettled: (_rows, _err, _target, context) => {
+      if (sessionId && context) void qc.invalidateQueries({ queryKey: chatKeys.backgroundTasks(context.wsId, sessionId), exact: true });
+    },
   });
 }

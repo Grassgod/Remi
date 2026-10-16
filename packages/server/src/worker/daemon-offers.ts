@@ -31,7 +31,8 @@ export type OfferRejection = "capacity" | "claims_paused" | "draining" | "binary
 
 export function registerDaemonOfferHandler(client: DaemonProtocolClient, options: {
   runtimeId(): string | null;
-  rejection(): OfferRejection | null;
+  /** Why this offer is refused, or null; it sees the task (PR 6 §2.5: a parked lane's offer skips `capacity`). */
+  rejection(task: DaemonTurnTask): OfferRejection | null;
   run(task: DaemonTurnTask): void;
 }): void {
   client.registerFrameHandler("task.offer", (frame: DaemonParsedFrame) => {
@@ -48,7 +49,7 @@ export function registerDaemonOfferHandler(client: DaemonProtocolClient, options
       client.send({ t: "res", re: String(frame.seq), p: { ok: true } });
       return;
     }
-    const code = options.rejection();
+    const code = options.rejection(task);
     if (code) {
       client.dedupe.release(key, task.id);
       client.send({ t: "res", re: String(frame.seq), p: { ok: false, code } });

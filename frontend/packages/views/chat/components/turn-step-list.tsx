@@ -2,10 +2,11 @@
 
 import { useCallback, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { CommandAction, FileChange, TraceItem } from "@multiremi/contracts/trace";
-import type { AgentResolver, StepDescriptor } from "@multiremi/shared/trace-step-copy";
+import type { AgentResolver } from "@multiremi/shared/trace-step-copy";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@multiremi/ui/components/ui/collapsible";
 import { cn } from "@multiremi/ui/lib/utils";
 import {
+  Activity,
   BookOpen,
   Bot,
   ChevronRight,
@@ -23,6 +24,7 @@ import {
   Search,
   SquareTerminal,
   TextSelect,
+  Workflow,
   Wrench,
   type LucideIcon,
 } from "lucide-react";
@@ -33,6 +35,8 @@ import { SubagentStepRow } from "./subagent-step-row";
 import {
   groupIcon,
   groupSummary,
+  isMovedStepKey,
+  type WebStepDescriptor,
   joinSummary,
   type LiveLabel,
   type StepBlock,
@@ -65,6 +69,8 @@ const ICONS: Record<StepIconKind, LucideIcon> = {
   agent_resume: Play,
   agent_close: CircleX,
   agent_list: List,
+  workflow: Workflow,
+  background: Activity,
 };
 
 /** Height + fade on Base UI's panel variable; reduced motion switches at once. */
@@ -82,8 +88,10 @@ export function StepIcon({ kind, className }: { kind: StepIconKind; className?: 
 export function useStepCopy() {
   const { t } = useT("chat");
   return useMemo(() => {
-    const step = (descriptor: StepDescriptor): string =>
-      t(($) => $.steps[descriptor.key], descriptor.args);
+    const step = (descriptor: WebStepDescriptor): string => {
+      const key = descriptor.key;
+      return isMovedStepKey(key) ? t(($) => $.turn_steps[key], descriptor.args) : t(($) => $.steps[key], descriptor.args);
+    };
     const summary = (rows: readonly StepRow[], resolveAgent?: AgentResolver): string => joinSummary(
       groupSummary(rows, resolveAgent),
       (fragment) => t(($) => $.steps[fragment.key], { count: fragment.count }),

@@ -66,7 +66,11 @@ export function notifyBrowserTaskEvent(
   const payload = taskRealtimePayload(task);
   if (type === "task:progress") payload.progress_summary = task.progressSummary;
   // PR 5: read when delivered, so a peer process forwarding the event sends the stored count.
-  if (type === "task:subagents") payload.running_subagents = store.getRunningSubagents(task.id) ?? 0;
+  if (type === "task:subagents") {
+    payload.running_subagents = store.getRunningSubagents(task.id) ?? 0;
+    // PR 6: the attempt's running background tasks from the same frame; null while never reported.
+    payload.running_background_tasks = store.getRunningBackgroundTasks(task.id);
+  }
   const frame = JSON.stringify({
     type,
     payload,
@@ -274,7 +278,9 @@ export function isChatRealtimeEvent(type: string): boolean {
     || type === "chat:session_read"
     || type === "chat:session_deleted"
     || type === "chat:session_updated"
-    || type === "chat:queue_updated";
+    || type === "chat:queue_updated"
+    // PR 6: the session's background-task registry changed.
+    || type === "chat:background_tasks";
 }
 
 export function chatEventSessionId(event: {

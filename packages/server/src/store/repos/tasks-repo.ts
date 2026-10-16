@@ -88,6 +88,7 @@ import {
 import { normalizeWorkspaceRepositories, workspaceDefaultBranchResolver } from "@multiremi/api/helpers/repositories.js";
 import { autopilotRunTriggerSummary } from "@multiremi/api/wire/autopilots.js";
 import { createLogger } from "@shared/logger.js";
+import { backgroundFolderHolderForDisplay } from "@shared/background-tasks.js";
 import type {
   CreateIssueCommentInput,
   CreateOrganizerActionInput,
@@ -4475,18 +4476,26 @@ ${placementAfter.sql}
     return task;
   }
 
+  /**
+   * The attempt waits for its local folder. A waiting one only takes a new
+   * reason (what holds the folder changed, PR 6 §2.8); the same reason again
+   * writes and announces nothing.
+   */
   markTaskWaitingLocalDirectory(taskId: string, reason?: string | null): MultiremiTask {
     const cleanReason = cleanOptionalString(reason);
+    const existing = this.getTask(taskId);
+    if (existing?.status === "waiting_local_directory" && (existing.waitReason ?? null) === cleanReason) return existing;
     const now = nowIso();
     const result = runTurnExecutionMutation(this.ctx.db, `UPDATE multiremi_turn_execution_records
        SET status = 'waiting_local_directory',
            wait_reason = ?,
            progress_summary = ?,
            updated_at = ?
-       WHERE id = ? AND status = 'dispatched'`,
+       WHERE id = ? AND status IN ('dispatched', 'waiting_local_directory')`,
       [
         cleanReason,
-        cleanReason ? `Waiting for local directory: ${cleanReason}` : "Waiting for local directory",
+        // The summary is read by people (Issue rows, activity): it never names another member's chat (PR 6 §2.8).
+        cleanReason ? `Waiting for local directory: ${backgroundFolderHolderForDisplay(cleanReason)}` : "Waiting for local directory",
         now,
         taskId,
       ],
@@ -4776,15 +4785,42 @@ ${placementAfter.sql}
    * with or without a project. Returns whether the value changed.
    */
   recordRunningSubagents(taskId: string, count: number): boolean {
-    const result = this.ctx.db.run(
-      `UPDATE multiremi_turn_attempts SET running_subagents = ?, updated_at = ?
-       WHERE id = ? AND status IN ('accepted', 'running') AND COALESCE(running_subagents, 0) <> ?`,
-      [count, nowIso(), taskId, count],
-    );
+    return this.recordTaskActivity(taskId, { runningSubagents: count });
+  }
+
+  /**
+   * The whole `task.activity` frame: PR 5's running-subagent count and, from
+   * PR 6 daemons, `running_background_tasks` (the attempt's running or paused
+   * background tasks). Same rules for both: only an active attempt takes them,
+   * a never-reported value reads as 0, and only a change writes and tells the
+   * Chat's creator `task:subagents`. An omitted background count (an older
+   * daemon) leaves the stored one alone. Returns whether a value changed.
+   */
+  recordTaskActivity(taskId: string, activity: { runningSubagents: number; runningBackgroundTasks?: number }): boolean {
+    const background = activity.runningBackgroundTasks;
+    const result = background === undefined
+      ? this.ctx.db.run(
+        `UPDATE multiremi_turn_attempts SET running_subagents = ?, updated_at = ?
+         WHERE id = ? AND status IN ('accepted', 'running') AND COALESCE(running_subagents, 0) <> ?`,
+        [activity.runningSubagents, nowIso(), taskId, activity.runningSubagents],
+      )
+      : this.ctx.db.run(
+        `UPDATE multiremi_turn_attempts SET running_subagents = ?, running_background_tasks = ?, updated_at = ?
+         WHERE id = ? AND status IN ('accepted', 'running')
+           AND (COALESCE(running_subagents, 0) <> ? OR COALESCE(running_background_tasks, 0) <> ?)`,
+        [activity.runningSubagents, background, nowIso(), taskId, activity.runningSubagents, background],
+      );
     if (!result.changes) return false;
     const task = this.getTask(taskId);
     if (task?.chatSessionId) this.ctx.notifyTaskEvent("task:subagents", task);
     return true;
+  }
+
+  /** PR 6: the count `recordTaskActivity` last stored for the attempt's background tasks; null when never reported. */
+  getRunningBackgroundTasks(taskId: string): number | null {
+    const row = this.ctx.db.query("SELECT running_background_tasks FROM multiremi_turn_attempts WHERE id = ?").get(taskId) as
+      { running_background_tasks: unknown } | null;
+    return row?.running_background_tasks == null ? null : Number(row.running_background_tasks);
   }
 
   /** The count `recordRunningSubagents` last stored for the attempt; null when never reported. */

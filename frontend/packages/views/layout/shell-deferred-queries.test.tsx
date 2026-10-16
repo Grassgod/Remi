@@ -19,6 +19,7 @@ import type { ApiClient } from "@multiremi/core/api/client";
 import type { SessionLogRow } from "@multiremi/core/api/schemas/session-log";
 import { createAuthStore, registerAuthStore } from "@multiremi/core/auth";
 import { createChatStore, registerChatStore, useChatStore, useRecentContextStore } from "@multiremi/core/chat";
+import { setCurrentWorkspace } from "@multiremi/core/platform";
 import { chatKeys } from "@multiremi/core/chat/queries";
 import { workspaceKeys } from "@multiremi/core/workspace/queries";
 import { agentTaskSnapshotKeys } from "@multiremi/core/agents/queries";
@@ -65,6 +66,7 @@ const subscribeStream = vi.hoisted(() => vi.fn(() => ({ unsubscribe: vi.fn() }))
 const wsTransport = vi.hoisted(() => ({ subscribeStream, onReconnect: () => () => {} }));
 const getPendingChatTask = vi.hoisted(() => vi.fn(async () => ({ task_id: "tsk_guard_live", status: "running" })));
 const getChatQueue = vi.hoisted(() => vi.fn(async () => ({ items: [], paused: null })).mockName("getChatQueue"));
+const listChatBackgroundTasks = vi.hoisted(() => vi.fn(async (sessionId: string) => ({ session_id: sessionId, running: 0, rows: [] })).mockName("listChatBackgroundTasks"));
 const listWorkspaces = vi.hoisted(() => vi.fn(async () => [{ id: "ws-1", name: "Acme", slug: "acme" }]));
 
 const navigation = vi.hoisted(() => ({ pathname: "/acme/issues" }));
@@ -151,6 +153,7 @@ beforeEach(() => {
     listPins, listInboxPage, getLatestCliVersion, listIssues, listChatSessions,
     listPendingChatTasks, listWorkspaces, getTaskTrace, listMessages, listDecisionMessages,
     listChatMessagesPage, getSessionLog, subscribeStream, getPendingChatTask, getIssue, getProject, getChatQueue,
+    listChatBackgroundTasks,
   ]) spy.mockClear();
   getSessionLog.mockImplementation(async (sessionId: string, params: { anchor?: number }) => {
     const entries = sessionId === "cs_guard_cached" && params.anchor !== 0
@@ -180,6 +183,7 @@ beforeEach(() => {
     getSessionLog,
     getPendingChatTask,
     getChatQueue,
+    listChatBackgroundTasks,
     listWorkspaces,
     listMembers: async () => [],
     listProjects: async () => ({ projects: [] }),
@@ -455,6 +459,51 @@ describe("complete shell observer guard (MUL-472 R1)", () => {
     } finally {
       listChatSessions.mockImplementation(async () => []);
       view.unmount(); unsubscribe(); client.clear();
+    }
+  });
+
+  it("reads a chat's background tasks only while it is visible and its session counts a running one (PR 6, never a trace)", async () => {
+    setCurrentWorkspace("acme", "ws-1");
+    const client = newClient();
+    const busy = "cs_bg_busy";
+    const idle = "cs_bg_idle";
+    client.setQueryData(chatKeys.sessions("ws-1"), [
+      { id: busy, agent_id: "agt_bg", status: "active", title: "Dev server", running_background_tasks: 2,
+        created_at: "2026-10-16T00:00:00Z", updated_at: "2026-10-16T00:00:02Z" },
+      { id: idle, agent_id: "agt_bg", status: "active", title: "Quiet", running_background_tasks: 0,
+        created_at: "2026-10-16T00:00:00Z", updated_at: "2026-10-16T00:00:01Z" },
+    ]);
+    // No turn runs in either chat: only the parked tasks are live.
+    getPendingChatTask.mockImplementation(async () => ({ supports_queue: true }) as never);
+    // The registry agrees with the session list's count, so one read is enough.
+    listChatBackgroundTasks.mockImplementation(async (sessionId: string) => ({ session_id: sessionId, running: 2, rows: [] }));
+    client.setQueryData(chatKeys.pendingTask(busy), { supports_queue: true });
+    client.setQueryData(chatKeys.pendingTask(idle), { supports_queue: true });
+    act(() => { useChatStore.getState().setActiveSession(idle); });
+    const view = render(<Shell />, { wrapper: wrapper(client) });
+    try {
+      await act(async () => {});
+      // Hidden: nothing, whatever the count says.
+      act(() => { useChatStore.getState().setActiveSession(busy); });
+      await act(async () => {});
+      expect(listChatBackgroundTasks).not.toHaveBeenCalled();
+      // Visible with no running task: still nothing.
+      act(() => { useChatStore.getState().setActiveSession(idle); useChatStore.getState().setOpen(true); });
+      await act(async () => {});
+      expect(listChatBackgroundTasks).not.toHaveBeenCalled();
+      // Visible with running tasks: one read of the registry, and no trace for it.
+      act(() => { useChatStore.getState().setActiveSession(busy); });
+      await waitFor(() => expect(listChatBackgroundTasks).toHaveBeenCalledTimes(1));
+      expect(listChatBackgroundTasks).toHaveBeenCalledWith(busy);
+      expect(getTaskTrace).not.toHaveBeenCalled();
+      act(() => { useChatStore.getState().setOpen(false); });
+      await act(async () => { await client.invalidateQueries({ queryKey: chatKeys.backgroundTasks("ws-1", busy) }); });
+      expect(listChatBackgroundTasks).toHaveBeenCalledTimes(1);
+    } finally {
+      view.unmount(); client.clear();
+      setCurrentWorkspace(null, null);
+      getPendingChatTask.mockImplementation(async () => ({ task_id: "tsk_guard_live", status: "running" }));
+      listChatBackgroundTasks.mockImplementation(async (sessionId: string) => ({ session_id: sessionId, running: 0, rows: [] }));
     }
   });
 

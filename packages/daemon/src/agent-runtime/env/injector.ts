@@ -11,6 +11,7 @@
 import type { AgentTask } from "@daemon/contracts/types.js";
 import type { IssueSessionProviderHome } from "../workspace/session-home.js";
 import { appendGitCredentialBrokerEnv } from "../repo/credential-broker.js";
+import { TASK_CONTEXT_FILE_ENV } from "@shared/task-context-file.js";
 import { hasReadOnlyCodeSnapshot, isSideConversation, SIDE_CONVERSATION_INSTRUCTIONS } from "../prompts/side-conversation.js";
 
 export interface BuildTaskEnvOptions {
@@ -27,6 +28,12 @@ export interface BuildTaskEnvOptions {
   providerHome?: IssueSessionProviderHome;
   /** Daemon-resolved provider endpoint/auth; never persisted in the workspace. */
   providerEnv?: Record<string, string>;
+  /**
+   * PR 6 §2.4: the lane's task context file, as the agent sees it. A Chat lane
+   * whose process may outlive this attempt gets `MULTIREMI_TASK_CONTEXT_FILE`,
+   * so its `remi` CLI and git broker read the current attempt's token there.
+   */
+  taskContextFile?: string;
 }
 
 /**
@@ -70,6 +77,7 @@ export function buildTaskEnv(task: AgentTask, opts: BuildTaskEnvOptions): Record
         // Antigravity: the provider's environment builder owns GEMINI_HOME.
         : {}),
     ...(taskAuthToken ? { MULTIREMI_TOKEN: taskAuthToken } : {}),
+    ...(opts.taskContextFile ? { [TASK_CONTEXT_FILE_ENV]: opts.taskContextFile } : {}),
   };
   const brokerEnv = hasReadOnlyCodeSnapshot(task) ? readOnlyGitEnv(env) : appendGitCredentialBrokerEnv(env, {
     serverUrl: opts.serverUrl,
@@ -83,6 +91,8 @@ export function buildTaskEnv(task: AgentTask, opts: BuildTaskEnvOptions): Record
   // Keep an explicit tombstone so an inherited daemon token cannot reappear.
   if (!taskAuthToken) brokerEnv.MULTIREMI_TOKEN = "";
   delete brokerEnv.MULTIREMI_TASK_ID;
+  // Only the daemon names a context file; one from the workspace or agent env would redirect the credential.
+  if (!opts.taskContextFile) delete brokerEnv[TASK_CONTEXT_FILE_ENV];
   if (agent?.provider === "codex" && isSideConversation(task)) {
     preserveSideCodexInstructions(brokerEnv);
   }

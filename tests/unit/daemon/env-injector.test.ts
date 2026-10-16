@@ -66,6 +66,21 @@ describe("buildTaskEnv", () => {
     expect(env.MULTIREMI_TOKEN).toBe("");
   });
 
+  it("names the lane's task context file only when the daemon gives one (PR 6)", () => {
+    const planted = {
+      workspaceEnv: { MULTIREMI_TASK_CONTEXT_FILE: "/tmp/workspace-planted.json" },
+      agent: { customEnv: { MULTIREMI_TASK_CONTEXT_FILE: "/tmp/agent-planted.json" } } as unknown as AgentTask["agent"],
+      authToken: "task-token",
+    };
+    const lane = buildTaskEnv(taskWith(planted), { ...OPTS, taskContextFile: "/tmp/.remi-task-0123/context.json" });
+    expect(lane.MULTIREMI_TASK_CONTEXT_FILE).toBe("/tmp/.remi-task-0123/context.json");
+    expect(lane.MULTIREMI_TOKEN).toBe("task-token");
+    // An Issue lane (no file): exactly as before, and a planted path cannot redirect the credential.
+    const issue = buildTaskEnv(taskWith(planted), OPTS);
+    expect("MULTIREMI_TASK_CONTEXT_FILE" in issue).toBe(false);
+    expect(issue.MULTIREMI_TOKEN).toBe("task-token");
+  });
+
   it("never lets workspace or agent env override the Multiremi coordinates", () => {
     const clash = {
       MULTIREMI_DAEMON_PORT: "9999",

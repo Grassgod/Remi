@@ -17,6 +17,7 @@ export const envBlock: CapabilityBlock = {
         workDir: ctx.workspaceDir,
         providerHome: ctx.providerHome,
         providerEnv: ctx.providerEnv,
+        taskContextFile: ctx.taskContextFile,
       }),
     };
   },

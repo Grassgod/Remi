@@ -38,6 +38,7 @@ import {
   stringOption,
   stringOptions,
 } from "./resource-common.js";
+import { taskTurnId } from "../core/task-context.js";
 import { PASSWORD_INPUT_OPTIONS, passwordAuthBody, passwordLoginCommandSpec, withValidatedPasswordInput } from "./password-auth.js";
 
 const HUMAN: readonly CliIdentity[] = ["human"];
@@ -531,7 +532,7 @@ function automationSpecs(): CommandSpec[] {
 }
 
 function quietTurnId(invocation: CommandInvocation): string {
-  const turn = stringOption(invocation, "turn") ?? process.env.MULTIREMI_TURN_ID?.trim();
+  const turn = stringOption(invocation, "turn") ?? taskTurnId() ?? undefined;
   if (!turn) throw new CliError("usage", "automation quiet needs MULTIREMI_TURN_ID (set inside a task run) or --turn <turn>");
   return turn;
 }

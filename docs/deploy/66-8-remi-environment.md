@@ -29,6 +29,9 @@ summary: 说明 daemon 进程配置、工作区 bot 的控制面分配、凭据�
 | `MULTIREMI_AUTHORITY_PROBE_MAX_MS` | terminal authority 之后 register 探测的间隔上限，默认 900000 ms（15 分钟）。 |
 | `REMI_ACP_NATIVE_SUBAGENTS` | 默认开；设为 `0` 时不向 Claude/Codex 桥请求原生子代理会话，恢复只收根会话的帧（Codex 子代理的工作随之不可见）。见 [ADR 0021](../adr/0021-subagent-sessions-and-autonomous-rounds.md)。 |
 | `REMI_ACP_AUTONOMOUS_ROUNDS` | 默认开；设为 `0` 时不捕获、也不等待 Claude 在 prompt 结束后自开的后续轮（后台子代理的迟到回答），恢复此前的完成时机。与上一项独立。 |
+| `REMI_ACP_ASYNC_TASKS` | 默认开；设为 `0` 时不向 Claude/Codex 桥声明 AIR `asyncTasks`，后台任务不再上报、也不保留进程，轮次结束时后台命令随进程结束。 |
+| `REMI_MAX_PARKED_LANES` | 一台机器同时为后台任务保留进程的 Chat 会话数，默认 4，满时淘汰最久没有活动的会话；`0` 关闭保留，后台任务在轮次结束时停止。 |
+| `REMI_BACKGROUND_KEEPALIVE_MS` | 保留进程的时长上限，从会话最近一轮结束算起，默认 7200000（2 小时）；低于 1000 的值不生效。 |
 
 bot 的 Agent、承载 Runtime、App ID、App Secret 和 domain 从控制面配置获取，不在本机环境文件中指定。共享配置层仍支持一些 Feishu/OAuth 相关环境变量，但当前 bot 启动的身份由 assignment 覆盖；设置本地应用凭据不会创建或启用工作区 bot。
 

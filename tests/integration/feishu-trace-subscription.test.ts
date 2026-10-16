@@ -8,7 +8,7 @@ import type { TraceEvent, TraceEventInput } from "@multiremi/contracts/trace.js"
 import type { DaemonTraceTransport } from "@multiremi/worker/trace-transport.js";
 import { daemonTraceService } from "@multiremi/api/daemon-protocol/trace-handlers.js";
 import { DaemonProtocolHarness, waitFor } from "./daemon-protocol-v2/harness.js";
-import { input, nativeHarness, read, reasoning, running, turn } from "../unit/connectors/feishu-native-harness.js";
+import { TS, agentMessage, command, input, item, nativeHarness, read, reasoning, running, turn } from "../unit/connectors/feishu-native-harness.js";
 
 it("presents continuous CoT through a real local daemon/API disconnect, replaying from 0 past its checkpoint", async () => {
   const activeTaskIds: string[] = [];
@@ -145,6 +145,81 @@ it("presents continuous CoT through a real local daemon/API disconnect, replayin
     controller.abort();
     await rendering?.catch(() => {});
     globalThis.fetch = realFetch;
+    await h.dispose();
+  }
+}, 20_000);
+
+it("carries a doorbell turn and its background task through a real local daemon/API trace to the origin thread (PR 6 §9)", async () => {
+  const h = await DaemonProtocolHarness.create({ onReady: daemon => { (daemon as any).claimsPaused = true; } });
+  const sender = nativeHarness();
+  const controller = new AbortController();
+  try {
+    await h.startDaemon();
+    await waitFor(() => h.ledger.some(entry => entry.type === "runtime.ready"), "initial server runtime readiness");
+    const runtimeId = (h.daemon as any).options.runtimeId as string;
+    const agent = h.store.createAgent({ name: "PR 6 E1 local fixture", provider: "claude" });
+    const task = h.store.createTask({ agentId: agent.id, prompt: "后台任务已结束：npm test（已完成，用时 45 秒）" });
+    expect(h.store.claimTask(runtimeId)?.id).toBe(task.id);
+    readOfferedTurnInput(h.store, task.id);
+    h.store.startTask(task.id);
+    const transport = (h.daemon as any).ensureTrace() as DaemonTraceTransport;
+    // The doorbell turn (§2.5): the platform message is its input; the attached cycle
+    // replays the parked task's end, starts a new background task and answers.
+    const doorbell = { ...input("后台任务已结束：npm test（已完成，用时 45 秒）", task.id),
+      background_tasks: [{ task_id: "bash_1", name: "npm test", task_type: "shell", status: "completed" as const }] };
+    const ended = item("background_task", "bg:bash_1", { task_id: "bash_1", task_type: "shell", name: "npm test", description: "npm test",
+      tool_item_id: "toolu_origin", can_stop: true, summary: "120 passed", duration_ms: 45_000 });
+    const lint = command("toolu_lint", "npm run lint", undefined, { title: "Lint in background" });
+    const linting = item("background_task", "bg:bash_2", { task_id: "bash_2", task_type: "shell", name: "npm run lint",
+      description: "npm run lint", tool_item_id: lint.id, can_stop: true, summary: null, duration_ms: null });
+    const reply = agentMessage("msg:answer", "All 120 tests passed; lint is running.", "final");
+    const append = (events: TraceEventInput[]) => transport.append(task.id, runtimeId, events);
+    append([
+      { type: "turn.started", turn: turn({ id: task.id, agent_id: agent.id }) },
+      { type: "item.completed", item: doorbell },
+      { type: "item.completed", item: ended },
+      { type: "item.started", item: running(lint) },
+      { type: "item.started", item: running(linting) },
+      { type: "item.completed", item: { ...lint, output: "Command running in background with ID: bash_2" } },
+      { type: "item.completed", item: reply },
+      // The park path hands the running task off before the turn closes.
+      { type: "item.completed", item: { ...linting, status: "completed", completed_at: TS, handed_off: true } },
+    ]);
+    const received: TraceEvent[] = [];
+    async function* stream() {
+      for await (const row of subscribeFeishuTask(h.daemon, task.id, controller.signal)) {
+        if (row.kind === "message") received.push(row.message);
+        yield row;
+      }
+    }
+    // The proactive `cot` delivery copied from the origin attempt names the origin thread.
+    const rendering = new FeishuTaskPresentation(sender.client as any, "oc_local_fixture", { taskId: task.id, signal: controller.signal },
+      { lane: "cot", appId: "cli_local_fixture", replyToMessageId: "om_origin", idempotencyKey: "pr6-e1-doorbell", save: sender.save })
+      .consume(stream());
+    void rendering.catch(() => {});
+    await waitFor(() => received.length === 8, "doorbell trace through the subscription", 5_000);
+    // The new field and item type survive the daemon transport, the API sink and the subscription.
+    expect(received.find(event => event.type === "item.completed" && event.item.id === doorbell.id)).toMatchObject({ item: { background_tasks: doorbell.background_tasks } });
+    await h.client.event({ t: "turn.complete", seq: 999_601, rt: runtimeId, p: turnCompletion(h.store, task.id, reply.text, { ...transport.completion(task.id) }) });
+    transport.close(task.id, "completed");
+    expect(await rendering).toEqual({ messageId: "om_cot" });
+    expect(sender.calls[0]).toMatchObject({ operation: "POST", input: { data: { receive_id: "oc_local_fixture", origin_message_id: "om_origin", reply_in_thread: true } } });
+    const order = sender.events().flatMap(event => {
+      const content = JSON.parse(event.content);
+      return event.event_type === "TOOL_CALL_START" ? [`row:${content.title}`]
+        : event.event_type === "STEP_STARTED" || event.event_type === "STEP_FINISHED" ? [`${event.event_type === "STEP_STARTED" ? "start" : "end"}:${content.stepName}`]
+        : [];
+    });
+    expect(order).toEqual([
+      "start:后台任务 npm test 已完成", "end:后台任务 npm test 已完成",
+      "row:已启动后台命令 Lint in background", "start:后台运行中：Lint in background", "end:Lint in background 仍在后台运行",
+    ]);
+    expect(JSON.stringify(sender.events())).not.toContain("后台任务已结束");
+    expect(sender.events().at(-1)).toMatchObject({ event_type: "RUN_FINISHED" });
+    expect(sender.checkpoint).toMatchObject({ cot: { status: "finished" } });
+    expect(h.errors).toEqual([]);
+  } finally {
+    controller.abort();
     await h.dispose();
   }
 }, 20_000);

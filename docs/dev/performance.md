@@ -46,6 +46,9 @@ summary: 当前性能相关实现、必须保留的语义，以及复用现有�
 Daemon 报告的 Runtime 身份校验使用 `getRuntimeLite`，不附带历史用量、模型和执行组。
 `task:usage` 继续向浏览器更新统计，但不唤醒 daemon 下行；账本逐单位写入成本仍需单独评估。
 `task.activity` 的子代理计数只在变化时写库，`task:subagents` 同样只推浏览器、不唤醒 daemon 下行。
+PR 6 的后台任务计数随同一帧、按同一规则写库。后台任务快照（`lane.background_tasks`）内容不变时只更新 revision、不推事件；
+`chat:background_tasks` 只推 Chat 创建者、不唤醒 daemon 下行或 offer，引起它的快照或停止请求只重算相关 runtime 的下行。
+登记表的下行推导每次运行一条按 `(runtime_id, status)` 走索引的查询，只对驻留会话线逐条再查 Chat、Agent 与最新尝试。
 
 责任 resolver 只读取路由事实列，不水合 Issue 标签或 Agent Skills。活 AUQ 答复复用
 事务锁保护的 Q 投影，卡片更新意图由答案事务写入一次；原回复路径已派生来源 Issue

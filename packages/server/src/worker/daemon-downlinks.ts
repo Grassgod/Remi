@@ -7,6 +7,11 @@ import type { UnifiedMessage } from "@multiremi/contracts/unified-model.js";
 import { TRIGGER_MESSAGE_INLINE_CHARS, unreadRangeHint } from "@multiremi/contracts/session-input.js";
 
 type Terminal = Extract<MultiremiTaskStatus, "completed" | "failed" | "cancelled">;
+
+/** A pushed turn message as a steer, with the message's metadata (PR 6: a doorbell's `background_task`). */
+export interface DaemonSteerMessage extends MultiremiTaskSteerMessage {
+  metadata?: Record<string, unknown>;
+}
 const MAX_SETTLED_REQUESTS = 1024;
 
 /** Per-runtime push inbox. The executing task owns cancellation and steer consumption. */
@@ -45,10 +50,13 @@ export class DaemonTaskDownlinks implements TaskSteerSource {
         while (this.decisionReplies.size > MAX_SETTLED_REQUESTS) this.decisionReplies.delete(this.decisionReplies.keys().next().value!);
       }
       this.inputSeqs.set(`${attemptId}:${message.id}`, message.seq);
-      this.queueInput(attemptId, { id: message.id, taskId: attemptId, kind: "steer", content: message.body_md,
+      const steer: DaemonSteerMessage = { id: message.id, taskId: attemptId, kind: "steer", content: message.body_md,
         authorType: message.sender_type === "member" ? "user" : message.sender_type === "agent" ? "agent" : "system",
         authorId: message.sender_id, createdAt: message.created_at, consumedAt: null,
-        attachments: Array.isArray(frame.payload.attachments) ? frame.payload.attachments : [] },
+        attachments: Array.isArray(frame.payload.attachments) ? frame.payload.attachments : [],
+        // PR 6 §2.5: a doorbell keeps its metadata, so the run delivers it without prompting it.
+        ...(message.metadata && typeof message.metadata === "object" ? { metadata: message.metadata as Record<string, unknown> } : {}) };
+      this.queueInput(attemptId, steer,
       !(message.reply_to_id && (this.decisionCreates.has(attemptId) || this.decisionAttempts.get(message.reply_to_id) === attemptId)));
     });
     client.registerFrameHandler("turn.wrap_up", frame => {

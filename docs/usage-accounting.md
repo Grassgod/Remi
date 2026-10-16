@@ -66,6 +66,16 @@ Claude 的后台子代理在回复之前结束时，桥在 `session/prompt` 结�
 - `REMI_ACP_AUTONOMOUS_ROUNDS=0` 时恢复 [ADR 0020](adr/0020-chat-follow-up-queue-and-native-steering.md) 的规则：prompt 之间只缓存 `usage_update`，在同一会话下一次 prompt 开头重放；attempt 的最后一个 prompt 之后到达的后续轮随 provider 关闭丢失，它的消费也不会记录。
 - Codex 没有自主轮，继续只缓存用量：桥自开的一轮被取消（ADR 0020 D3），它的用量计入下一个 prompt。
 
+## 后台任务与自开的轮
+
+Chat 会话线的桥进程在还有后台任务时驻留到下一个 attempt（[ADR 0022](adr/0022-background-tasks-keep-alive-on-demand.md)）。驻留的 Claude 任务结束后，桥在没有 prompt 时自开一轮（task-notification 周期），daemon 以门铃让服务端建一轮，offer 接手驻留进程。计费规则：
+
+- **计在接手的 attempt。** 驻留期间 provider 捕获全部帧，用量帧带 `remiUsageUnits`，缓冲溢出时最后丢；接手的 attempt 在 attach 时重放这些帧，请求单位按请求 ID 进入它自己的 ledger 和 run。人在驻留时发的消息同样接手进程，此后到达的周期计在那一轮。门铃自开的轮和普通的轮一样有自己的 run，不新建计费口径。
+- **金额基线。** 接手的 provider 开始新的 prompt 状态和新的 `promptId`，每请求单位对新 ledger 都是新的。Claude 轮范围的 `sdk_estimate` 是进程累计的 `total_cost_usd`，所以接手时以驻留 prompt 最后的累计值为基线，新 attempt 只记差值（不为负）；`provider_reported` 与请求范围的金额不受基线影响，请求单位仍是权威（[ADR 0021](adr/0021-subagent-sessions-and-autonomous-rounds.md) 决策 7）。
+- **没有被接手的周期。** 门铃被拒（会话已关闭、会话线已迁走）时 daemon 取消这一轮，释放会话线；进程在 offer 到达之前死掉时也一样，这段周期的用量没有 attempt 可以记，丢失。
+- **Codex。** Codex 驻留但不自开一轮，没有门铃；下一个 attempt 接手进程，它的请求照常计入该 attempt。
+- **任务帧里的用量。** `async_task_progress` 的 `usage`（tokens、工具调用数、用时）只写进 trace 条目、登记表和面板，不作为计费单位进 ledger；后台命令自身不经过 provider 计费。
+
 ## 报表与两条时间轴
 
 [路由](../packages/server/src/api/routers/usage-accounting.ts)按 workspace 鉴权，并验证 Runtime/项目过滤器属于该工作区。参数为 `workspace_id`、`days`（默认 30，支持 `all`）、`since`、`until`、`project_id`、`runtime_id` 和 IANA `tz`。范围起点包含、终点不包含；天数按查看者时区的日历日，支持夏令时。

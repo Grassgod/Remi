@@ -12,8 +12,18 @@
  * 2.2.2 with `nativeSubagentSessions`): see the live captures
  * `claude-090-native-subagent-*.json` and `codex-222-native-subagent-*.json`.
  *
+ * Background tasks (PR 6): `asyncTask` steps announce, update and end AIR
+ * `async_task_*` tasks on any session, the way both pinned bridges do once the
+ * client lists `asyncTasks`; `_session/async_task/stop` (root session) stops a
+ * running one with the bridge's notice and `stopped` state. A task's scripted
+ * end is skipped when it already ended, and so is its `then` (Claude's
+ * task-notification cycle, or nothing for Codex). Tasks belong to the process,
+ * so a script's post-resolve steps keep running between prompts.
+ *
  * Every request it receives and every answer to its own requests is logged to
- * `FAKE_SUBAGENT_LOG`. Configured by `FAKE_SUBAGENT_CONFIG` (JSON).
+ * `FAKE_SUBAGENT_LOG`, with the process id; the process logs `started` at boot
+ * and `exited` on SIGTERM, so a test can count processes and prove two never
+ * ran at once. Configured by `FAKE_SUBAGENT_CONFIG` (JSON).
  */
 import { appendFileSync } from "node:fs";
 import { createInterface } from "node:readline";
@@ -33,7 +43,27 @@ export type FakeSubagentStep = { delayMs?: number } & (
   | { exit: number }
   /** Wait until the client cancels the prompt (it then resolves `cancelled`). */
   | { hold: "cancel" }
+  /**
+   * A background task's frame (PR 6). `spawned` announces it (`async_task_spawned`),
+   * `progress` updates it, `running`/`paused` and the ends send `async_task_state_update`.
+   * An end of a task that already ended is skipped, with its `then` steps.
+   */
+  | { asyncTask: FakeAsyncTaskStep }
 );
+
+export interface FakeAsyncTaskStep {
+  id: string;
+  session?: string;
+  event: "spawned" | "progress" | "running" | "paused" | "completed" | "failed" | "stopped";
+  name?: string;
+  taskType?: string;
+  toolCallId?: string;
+  outputFilePath?: string;
+  summary?: string;
+  usage?: { totalTokens: number; toolUses: number; durationMs: number };
+  /** Steps that follow only if this end was sent (Claude's own task-notification cycle). */
+  then?: FakeSubagentStep[];
+}
 
 export interface FakeSubagentConfig {
   /** `claude`: steering-free Claude shape; `codex`: also advertises the AIR capability list Codex sends. */
@@ -45,14 +75,24 @@ export interface FakeSubagentConfig {
   resumedPrompts?: FakeSubagentStep[][];
   /** Advertise native steering; a steer is always answered `promptRequired` (nothing runs it). */
   steering?: boolean;
+  /** Steps run once `session/new` or `session/resume` answered, outside any prompt. */
+  afterSession?: FakeSubagentStep[];
+  /** Env variables the `started` line records (`env`), as the process got them; null when unset. */
+  logEnv?: string[];
+  /** A cancelled prompt resolves `cancelled` this long after `session/cancel` (a slow bridge). */
+  cancelDelayMs?: number;
 }
 
 const config = JSON.parse(process.env.FAKE_SUBAGENT_CONFIG ?? "{}") as FakeSubagentConfig;
 const logPath = process.env.FAKE_SUBAGENT_LOG;
 const ROOT = config.sessionId ?? "sess_root";
 const log = (entry: Record<string, unknown>) => {
-  if (logPath) appendFileSync(logPath, JSON.stringify({ ...entry, at: Date.now() }) + "\n");
+  if (logPath) appendFileSync(logPath, JSON.stringify({ ...entry, pid: process.pid, at: Date.now() }) + "\n");
 };
+log({ kind: "started", ...(config.logEnv ? { env: Object.fromEntries(config.logEnv.map((key) => [key, process.env[key] ?? null])) } : {}) });
+process.on("SIGTERM", () => process.exit(0));
+// However it ends (SIGTERM, stdin closed, a scripted exit): SIGKILL alone leaves no line.
+process.on("exit", (code) => log({ kind: "exited", code }));
 const send = (message: Record<string, unknown>) => process.stdout.write(JSON.stringify({ jsonrpc: "2.0", ...message }) + "\n");
 const update = (sessionId: string, value: Record<string, unknown>) =>
   send({ method: "session/update", params: { sessionId, update: value } });
@@ -82,6 +122,41 @@ function ask(method: string, params: Record<string, unknown>): Promise<unknown> 
 }
 
 interface Running { id: number | string; resolved: boolean; cancelled: boolean; onCancel: Array<() => void> }
+
+/** Background tasks of this process, by id: whether each still runs (PR 6). */
+const asyncTasks = new Map<string, { session: string; running: boolean }>();
+
+/** Send one task frame; false when it is the end of a task that already ended. */
+function asyncTaskFrame(step: FakeAsyncTaskStep): boolean {
+  const session = step.session ?? asyncTasks.get(step.id)?.session ?? ROOT;
+  const fields = {
+    ...(step.toolCallId ? { toolCallId: step.toolCallId } : {}),
+    ...(step.outputFilePath ? { outputFilePath: step.outputFilePath } : {}),
+  };
+  if (step.event === "spawned") {
+    asyncTasks.set(step.id, { session, running: true });
+    update(session, { sessionUpdate: "async_task_spawned", asyncTaskId: step.id, name: step.name ?? step.id,
+      taskType: step.taskType ?? "shell", description: step.name ?? step.id, showInTranscript: false, canStop: true, ...fields });
+    return true;
+  }
+  if (step.event === "progress") {
+    update(session, { sessionUpdate: "async_task_progress", asyncTaskId: step.id,
+      ...(step.summary ? { summary: step.summary } : {}), ...(step.usage ? { usage: step.usage } : {}), ...fields });
+    return true;
+  }
+  const task = asyncTasks.get(step.id);
+  const ends = step.event === "completed" || step.event === "failed" || step.event === "stopped";
+  if (ends) {
+    if (task && !task.running) {
+      log({ kind: "async_task_end_skipped", id: step.id });
+      return false;
+    }
+    if (task) task.running = false;
+  }
+  update(session, { sessionUpdate: "async_task_state_update", asyncTaskId: step.id, state: step.event,
+    ...(step.summary ? { summary: step.summary } : {}), ...fields });
+  return true;
+}
 let active: Running | null = null;
 let promptCount = 0;
 let resumed = false;
@@ -95,9 +170,10 @@ function resolvePrompt(prompt: Running, stopReason: string): void {
   send({ id: prompt.id, result: { stopReason } });
 }
 
-async function run(prompt: Running, steps: FakeSubagentStep[]): Promise<void> {
+async function run(prompt: Running, steps: FakeSubagentStep[], resolveAtEnd = true): Promise<void> {
   for (const step of steps) {
     if (step.delayMs) await sleep(step.delayMs);
+    // Only a prompt cancelled while it ran is marked; steps after its result keep running.
     if (prompt.cancelled) return;
     if ("update" in step) update(step.session ?? ROOT, step.update);
     else if ("billing" in step) billing(step.billing);
@@ -119,15 +195,25 @@ async function run(prompt: Running, steps: FakeSubagentStep[]): Promise<void> {
     } else if ("resolve" in step) resolvePrompt(prompt, step.resolve);
     else if ("exit" in step) process.exit(step.exit);
     else if ("hold" in step) await new Promise<void>((resolve) => prompt.onCancel.push(resolve));
+    else if ("asyncTask" in step) {
+      if (asyncTaskFrame(step.asyncTask) && step.asyncTask.then?.length) await run(prompt, step.asyncTask.then, false);
+    }
   }
-  resolvePrompt(prompt, "end_turn");
+  if (resolveAtEnd) resolvePrompt(prompt, "end_turn");
 }
 
+// Both pinned bridges list `asyncTasks` for any AIR client (PR 6 §1).
 const advertisement = {
   jetbrains: { air: { version: 1, capabilities: config.advertise === "codex"
-    ? ["sessionFailure", "nativeSubagentSessions", "recommendedValue"] : ["sessionFailure"] } },
+    ? ["sessionFailure", "nativeSubagentSessions", "recommendedValue", "asyncTasks"] : ["sessionFailure", "asyncTasks"] } },
   ...(config.steering ? { steering: { supported: true } } : {}),
 };
+
+function afterSession(): void {
+  if (!config.afterSession?.length) return;
+  const idle: Running = { id: "after-session", resolved: true, cancelled: false, onCancel: [] };
+  void run(idle, config.afterSession, false);
+}
 
 createInterface({ input: process.stdin }).on("line", (line) => {
   if (!line.trim()) return;
@@ -148,11 +234,13 @@ createInterface({ input: process.stdin }).on("line", (line) => {
       return ok({ protocolVersion: 1, agentCapabilities: { loadSession: true, sessionCapabilities: { subagents: {} } },
         _meta: advertisement });
     case "session/new":
-      return ok({ sessionId: ROOT });
+      ok({ sessionId: ROOT });
+      return afterSession();
     case "session/resume":
     case "session/load":
       resumed = true;
-      return ok({ sessionId: message.params?.sessionId ?? ROOT });
+      ok({ sessionId: message.params?.sessionId ?? ROOT });
+      return afterSession();
     case "session/set_mode":
     case "session/set_config_option":
     case "session/close":
@@ -173,13 +261,30 @@ createInterface({ input: process.stdin }).on("line", (line) => {
       const prompt = active;
       if (prompt && !prompt.resolved) {
         prompt.cancelled = true;
-        resolvePrompt(prompt, "cancelled");
-        for (const release of prompt.onCancel.splice(0)) release();
+        const finish = () => {
+          resolvePrompt(prompt, "cancelled");
+          for (const release of prompt.onCancel.splice(0)) release();
+        };
+        if (config.cancelDelayMs) setTimeout(finish, config.cancelDelayMs);
+        else finish();
       }
       return;
     }
     case "_session/steering":
       return ok({ outcome: "promptRequired", reason: "noRunningTurn" });
+    case "_session/async_task/stop": {
+      // Both bridges address the root session, even for a child's task (PR 6 §1).
+      const id = String(message.params?.asyncTaskId ?? "");
+      const task = asyncTasks.get(id);
+      const stopped = message.params?.sessionId === ROOT && !!task?.running;
+      log({ kind: "async_task_stop", id, stopped });
+      if (!stopped) return ok({ stopped: false });
+      task!.running = false;
+      ok({ stopped: true });
+      update(ROOT, { sessionUpdate: "notice", severity: "info", title: "Task stopped by user" });
+      update(task!.session, { sessionUpdate: "async_task_state_update", asyncTaskId: id, state: "stopped" });
+      return;
+    }
     default:
       if (message.id != null) send({ id: message.id, error: { code: -32601, message: `Method not found: ${message.method}` } });
   }

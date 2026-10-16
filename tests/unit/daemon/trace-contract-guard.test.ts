@@ -156,7 +156,14 @@ describe("trace contract drift guards", () => {
 
   it("builds every item type in the translator, and nothing outside the contract", () => {
     const translator = literalTypes(join(REPO_ROOT, "packages/server/src/worker/trace-translator.ts"));
-    for (const type of TRACE_ITEM_TYPES) expect(translator, `the translator never builds "${type}"`).toContain(type);
+    const notYetBuilt = new Set<string>();
+    for (const type of TRACE_ITEM_TYPES) {
+      if (notYetBuilt.has(type)) {
+        expect(translator, `"${type}" is built now: remove it from notYetBuilt`).not.toContain(type);
+        continue;
+      }
+      expect(translator, `the translator never builds "${type}"`).toContain(type);
+    }
     for (const [type, files] of inventory()) {
       if (type.includes(".")) continue;
       const known = (TRACE_ITEM_TYPES as readonly string[]).includes(type) || OTHER_TYPE_SPACES[type] !== undefined;
