@@ -186,3 +186,19 @@ export function readBackgroundFolderHolder(reason: unknown): { session_id: strin
   const match = BACKGROUND_FOLDER_HOLDER_PATTERN.exec(reason.trim());
   return match ? { session_id: match[1]! } : null;
 }
+
+/** What people read instead of the note: no chat id, since the chat may be another member's. */
+export const BACKGROUND_FOLDER_HOLDER_DISPLAY = "held by another chat's background tasks";
+
+/**
+ * The reason as a person reads it (a progress summary, an Issue row): the
+ * holder note loses its chat id. Only the Chat that waits reads the id back,
+ * and links to that chat only when it is in the reader's own session list.
+ */
+export function backgroundFolderHolderForDisplay(reason: string): string {
+  const trimmed = reason.trim();
+  const match = BACKGROUND_FOLDER_HOLDER_PATTERN.exec(trimmed);
+  if (!match) return reason;
+  const head = trimmed.slice(0, match.index);
+  return match[0].startsWith("(") ? `${head}(${BACKGROUND_FOLDER_HOLDER_DISPLAY})` : `${head}${BACKGROUND_FOLDER_HOLDER_DISPLAY}`;
+}

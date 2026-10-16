@@ -88,6 +88,7 @@ import {
 import { normalizeWorkspaceRepositories, workspaceDefaultBranchResolver } from "@multiremi/api/helpers/repositories.js";
 import { autopilotRunTriggerSummary } from "@multiremi/api/wire/autopilots.js";
 import { createLogger } from "@shared/logger.js";
+import { backgroundFolderHolderForDisplay } from "@shared/background-tasks.js";
 import type {
   CreateIssueCommentInput,
   CreateOrganizerActionInput,
@@ -4493,7 +4494,8 @@ ${placementAfter.sql}
        WHERE id = ? AND status IN ('dispatched', 'waiting_local_directory')`,
       [
         cleanReason,
-        cleanReason ? `Waiting for local directory: ${cleanReason}` : "Waiting for local directory",
+        // The summary is read by people (Issue rows, activity): it never names another member's chat (PR 6 §2.8).
+        cleanReason ? `Waiting for local directory: ${backgroundFolderHolderForDisplay(cleanReason)}` : "Waiting for local directory",
         now,
         taskId,
       ],

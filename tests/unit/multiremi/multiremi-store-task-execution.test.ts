@@ -347,7 +347,9 @@ describe("Multiremi store — task message ingress, completion, and capacity", (
     const events: string[] = [];
     const unsubscribe = store.onTaskEvent((event) => { events.push(event.type); });
     const held = "/tmp/worktree (held by background tasks of chat chat_other)";
-    expect(store.markTaskWaitingLocalDirectory(first.id, held)).toMatchObject({ status: "waiting_local_directory", waitReason: held });
+    expect(store.markTaskWaitingLocalDirectory(first.id, held)).toMatchObject({ status: "waiting_local_directory", waitReason: held,
+      // People read the summary: it names no chat, which may be another member's.
+      progressSummary: "Waiting for local directory: /tmp/worktree (held by another chat's background tasks)" });
     const updatedAt = store.getTask(first.id)!.updatedAt;
     expect(store.markTaskWaitingLocalDirectory(first.id, held).updatedAt).toBe(updatedAt);
     expect(events.filter((event) => event === "task:waiting_local_directory")).toHaveLength(1);

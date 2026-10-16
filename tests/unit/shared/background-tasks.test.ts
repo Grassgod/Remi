@@ -14,6 +14,7 @@ import {
   BACKGROUND_STOP_ALL_CONFIRM_MIN,
   backgroundDoorbellBody,
   backgroundDoorbellDedupeKey,
+  backgroundFolderHolderForDisplay,
   backgroundFolderHolderNote,
   backgroundParkedUntil,
   confirmsBackgroundStop,
@@ -150,6 +151,18 @@ describe("shared local folders (§2.8)", () => {
     expect(readBackgroundFolderHolder(`local_directory /tmp/held by background tasks of chat x (${note})`))
       .toEqual({ session_id: "chat_ab12cd34" });
     expect(readBackgroundFolderHolder("local_directory /tmp/(held by background tasks of chat x) (held by task tsk_abcd)")).toBeNull();
+  });
+
+  it("shows people the holder without its chat id", () => {
+    const note = backgroundFolderHolderNote("chat_ab12cd34");
+    expect(backgroundFolderHolderForDisplay(`local_directory /Users/me/repo (${note})`))
+      .toBe("local_directory /Users/me/repo (held by another chat's background tasks)");
+    expect(backgroundFolderHolderForDisplay(`Runtime workspace is busy (${note})`))
+      .toBe("Runtime workspace is busy (held by another chat's background tasks)");
+    expect(backgroundFolderHolderForDisplay(note)).toBe("held by another chat's background tasks");
+    for (const reason of ["local_directory /Users/me/repo (held by task tsk_abcd)", "Runtime workspace is busy (process 4242)"]) {
+      expect(backgroundFolderHolderForDisplay(reason)).toBe(reason);
+    }
   });
 
   it("reads nothing from any other reason", () => {

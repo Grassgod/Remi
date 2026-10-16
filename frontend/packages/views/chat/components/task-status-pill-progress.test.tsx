@@ -111,10 +111,13 @@ describe("Chat preparation status", () => {
     fireEvent.click(screen.getByRole("button", { name: "Open the background tasks of “Dev server”" }));
     expect(open).toHaveBeenCalledTimes(1);
     expect(resolveChat).toHaveBeenCalledWith("chat_other");
-    // Another member's chat is not in the list: the copy stays, with no link.
-    view.rerender(pill(pending, [], "online", () => null));
-    expect(screen.getByText(enChat.bg_tasks.folder_held)).toBeInTheDocument();
-    expect(screen.queryByRole("button")).not.toBeInTheDocument();
+    // Another member's chat is not in the list: the copy alone, with no chat id and no link.
+    for (const resolve of [() => null, undefined]) {
+      view.rerender(pill(pending, [], "online", resolve));
+      expect(screen.getByText(enChat.bg_tasks.folder_held)).toBeInTheDocument();
+      expect(screen.queryByRole("button")).not.toBeInTheDocument();
+      expect(view.container.textContent).not.toMatch(/chat_other|Users\/me/);
+    }
     // A folder held by a running turn keeps the plain label.
     view.rerender(pill({ ...pending, wait_reason: "local_directory /Users/me/repo (held by task tsk_abcd)" }, [], "online", resolveChat));
     expect(screen.getByText(enChat.status_pill.stages.waiting_local_directory)).toBeInTheDocument();
