@@ -154,9 +154,36 @@ export class DaemonProtocolClient {
   private nextProbeAt: number | null = null;
   private upgradeAbort: AbortController | null = null;
   private advertised: Array<{ lane: DaemonProtocolLane; runtimeId: string }> = [];
+  /** Caps lanes added to the hello on top of the construction-time list (PR 6 `lane.background`). */
+  private readonly extraCaps = new Set<DaemonProtocolCap>();
+  /** The current connection's `welcome.caps`; empty while disconnected. */
+  private welcomeCaps = new Set<DaemonProtocolCap>();
+  /** The caps the current connection's hello listed. */
+  private connectionCaps = new Set<DaemonProtocolCap>();
 
   constructor(private readonly options: DaemonProtocolClientOptions) {
     this.clock = options.clock ?? systemClock;
+  }
+
+  /**
+   * Advertise `caps` in every later `hello` (a provider lane's own features,
+   * PR 6 §5.3). The connection open now keeps its hello; the next one carries them.
+   */
+  advertiseCaps(caps: readonly DaemonProtocolCap[]): void {
+    for (const cap of caps) this.extraCaps.add(cap);
+  }
+
+  /**
+   * Whether both sides hold `cap` on the current connection: this client's
+   * hello listed it and the server echoed it in `welcome.caps`. False while
+   * disconnected; an old server answers `caps: []`.
+   */
+  sharesCap(cap: DaemonProtocolCap): boolean {
+    return this.state === "connected" && this.welcomeCaps.has(cap) && this.connectionCaps.has(cap);
+  }
+
+  private helloCaps(): DaemonProtocolCap[] {
+    return [...new Set([...(this.options.caps ?? []), ...this.extraCaps])];
   }
 
   addLane(lane: DaemonProtocolLane): void { this.lanes.add(lane); }
@@ -302,8 +329,9 @@ export class DaemonProtocolClient {
       cli_version: this.options.cliVersion,
       launched_by: this.options.launchedBy ?? null,
       runtimes,
-      caps: this.options.caps ?? [],
+      caps: this.helloCaps(),
     };
+    this.connectionCaps = new Set(hello.caps);
     const url = daemonProtocolUrl(this.options.serverUrl);
     const headers: Record<string, string> = this.options.token ? { Authorization: `Bearer ${this.options.token}` } : {};
     const generation = ++this.generation;
@@ -384,6 +412,7 @@ export class DaemonProtocolClient {
       this.attempts = 0;
       if (this.handshakeTimer !== null) this.cancel(this.handshakeTimer);
       this.handshakeTimer = null;
+      this.welcomeCaps = new Set(Array.isArray(frame.payload.caps) ? frame.payload.caps as DaemonProtocolCap[] : []);
       this.transition("connected");
       this.options.onWelcome?.(frame.payload as unknown as DaemonWelcomePayload);
       for (const { lane } of this.advertised) lane.onConnected?.();
@@ -513,6 +542,7 @@ export class DaemonProtocolClient {
 
   private disconnectSocket(): void {
     ++this.generation;
+    this.welcomeCaps = new Set();
     for (const timer of this.timers) this.clock.clearTimeout(timer);
     this.timers.clear();
     this.ackTimer = this.hbTimer = this.handshakeTimer = null;

@@ -108,6 +108,17 @@ export function frameSession(frame: VendorFrame): string | null {
   return str(meta(frame)?.remiSessionId);
 }
 
+/**
+ * The call's work went to the background (PR 6 §1): claude-agent-acp 0.90 puts
+ * `_meta.jetbrains.air.asyncTasks.backgrounded: true` on the Bash result
+ * (dist/tool-calls/background.js:22-36); codex-acp 2.2.2 on a bare update
+ * just before it announces the terminal (dist/index.js:42156-42168).
+ */
+export function backgroundedMarker(frame: VendorFrame): boolean {
+  const air = record(record(meta(frame)?.jetbrains)?.air);
+  return record(air?.asyncTasks)?.backgrounded === true;
+}
+
 /** A child session id without the `:generation:N` suffix of a resumed agent (CA/native-subagents.js `nextChildSessionId`; CX `reopen`). */
 export function nativeAgentId(sessionId: string): string {
   return sessionId.replace(/:generation:\d+$/, "");

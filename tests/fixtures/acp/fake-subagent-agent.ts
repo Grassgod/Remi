@@ -86,10 +86,9 @@ const log = (entry: Record<string, unknown>) => {
   if (logPath) appendFileSync(logPath, JSON.stringify({ ...entry, pid: process.pid, at: Date.now() }) + "\n");
 };
 log({ kind: "started" });
-process.on("SIGTERM", () => {
-  log({ kind: "exited", signal: "SIGTERM" });
-  process.exit(0);
-});
+process.on("SIGTERM", () => process.exit(0));
+// However it ends (SIGTERM, stdin closed, a scripted exit): SIGKILL alone leaves no line.
+process.on("exit", (code) => log({ kind: "exited", code }));
 const send = (message: Record<string, unknown>) => process.stdout.write(JSON.stringify({ jsonrpc: "2.0", ...message }) + "\n");
 const update = (sessionId: string, value: Record<string, unknown>) =>
   send({ method: "session/update", params: { sessionId, update: value } });

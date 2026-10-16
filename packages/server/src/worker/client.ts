@@ -1,5 +1,5 @@
 import { DaemonProtocolRpcError } from "./daemon-protocol-client.js";
-import type { DaemonGcSubjectReclaimedPayload, DaemonTaskActivityPayload } from "@multiremi/contracts/daemon-protocol.js";
+import type { DaemonGcSubjectReclaimedPayload, DaemonLaneBackgroundTasksPayload, DaemonTaskActivityPayload } from "@multiremi/contracts/daemon-protocol.js";
 import type { StorageReport } from "@multiremi/contracts/storage.js";
 import type { TaskUsageSnapshot } from "@multiremi/contracts/usage-accounting.js";
 import { parseRuntimeCodexProfile, type RuntimeCodexProfile } from "@multiremi/contracts/codex-profile";
@@ -1227,11 +1227,18 @@ export class MultiremiDaemonClient {
    * change, the periodic refresh or the reconnect resend replaces a lost one;
    * a server without a handler ignores the frame.
    */
-  reportTaskActivity(taskId: string, runningSubagents: number, runtimeId?: string | null): void {
+  reportTaskActivity(taskId: string, runningSubagents: number, runtimeId?: string | null, runningBackgroundTasks?: number | null): void {
     const payload: DaemonTaskActivityPayload = {
       task_id: taskId, ...(runtimeId ? { runtime_id: runtimeId } : {}), running_subagents: runningSubagents,
+      // PR 6: only an attempt that tracks background tasks reports them; a missing value is not a 0.
+      ...(typeof runningBackgroundTasks === "number" ? { running_background_tasks: runningBackgroundTasks } : {}),
     };
     this.reportTransport?.bestEffort("task.activity", { ...payload });
+  }
+
+  /** `lane.background_tasks` (PR 6 §5.2): a lane's whole task list, best effort; dropped while disconnected. */
+  reportLaneBackgroundTasks(payload: DaemonLaneBackgroundTasksPayload): void {
+    this.reportTransport?.bestEffort("lane.background_tasks", { ...payload });
   }
 
   private async get<T>(path: string, signal?: AbortSignal): Promise<T> {

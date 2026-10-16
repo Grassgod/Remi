@@ -9,7 +9,8 @@ import { MultiremiDaemon, type MultiremiDaemonOptions } from "@multiremi/daemon.
 import type { AcpProviderOptions } from "@acp/provider.js";
 import type { MultiremiTaskWithAgent } from "@multiremi/contracts/types.js";
 
-const SWITCHES = ["REMI_ACP_NATIVE_SUBAGENTS", "REMI_ACP_AUTONOMOUS_ROUNDS"] as const;
+const SWITCHES = ["REMI_ACP_NATIVE_SUBAGENTS", "REMI_ACP_AUTONOMOUS_ROUNDS", "REMI_ACP_ASYNC_TASKS", "REMI_MAX_PARKED_LANES",
+  "REMI_BACKGROUND_KEEPALIVE_MS"] as const;
 const roots: string[] = [];
 
 afterEach(() => {
@@ -32,7 +33,8 @@ function daemon(extra: Partial<MultiremiDaemonOptions> = {}) {
   });
   const state = value as any;
   return {
-    options: state.options as { nativeSubagents: boolean; autonomousRounds: boolean },
+    options: state.options as { nativeSubagents: boolean; autonomousRounds: boolean; asyncTasks: boolean;
+      maxParkedLanes: number; backgroundKeepAliveMs: number },
     /** The options the task's provider was created with. */
     async providerOptions(): Promise<AcpProviderOptions> {
       state.assertWorkspaceRootOwner = () => {};
@@ -77,5 +79,25 @@ describe("PR 5 switches", () => {
     expect(daemon({ autonomousRounds: true }).options).toMatchObject({ nativeSubagents: true, autonomousRounds: true });
     expect(daemon({ nativeSubagents: false, autonomousRounds: false }).options)
       .toMatchObject({ nativeSubagents: false, autonomousRounds: false });
+  });
+});
+
+describe("PR 6 switches", () => {
+  it("background tasks default on with 4 parked lanes and a 2-hour cap, and reach the task provider", async () => {
+    const value = daemon();
+    expect(value.options).toMatchObject({ asyncTasks: true, maxParkedLanes: 4, backgroundKeepAliveMs: 2 * 60 * 60 * 1000 });
+    const options = await value.providerOptions();
+    expect(options.asyncTasks).toBe(true);
+    expect(typeof options.onAsyncTaskChange).toBe("function");
+    expect(typeof options.onSessionLost).toBe("function");
+  });
+
+  it("REMI_ACP_ASYNC_TASKS=0, REMI_MAX_PARKED_LANES and REMI_BACKGROUND_KEEPALIVE_MS", async () => {
+    process.env.REMI_ACP_ASYNC_TASKS = "0";
+    process.env.REMI_MAX_PARKED_LANES = "0";
+    process.env.REMI_BACKGROUND_KEEPALIVE_MS = "60000";
+    const value = daemon();
+    expect(value.options).toMatchObject({ asyncTasks: false, maxParkedLanes: 0, backgroundKeepAliveMs: 60_000 });
+    expect((await value.providerOptions()).asyncTasks).toBe(false);
   });
 });

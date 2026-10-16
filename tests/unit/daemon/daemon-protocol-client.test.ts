@@ -427,3 +427,34 @@ describe("daemon protocol v2 client", () => {
     expect(b.client.dedupe.claim("task.offer", "task-1")).toBe(true);
   });
 });
+
+// PR 6 §5.3: a lane advertises `lane.background`; it is shared only when the welcome echoes it.
+describe("daemon protocol v2 client: negotiated caps", () => {
+  const welcome = (socket: Socket, caps: string[]) => {
+    socket.emit("open");
+    socket.frame({ t: "welcome", p: { protocol: 2, min_cli_version: DAEMON_MIN_CLI_VERSION, session_id: "session-unit",
+      hb_interval_ms: 15_000, caps } });
+  };
+
+  it("adds a lane's caps to the next hello and shares one only while the server echoes it", () => {
+    const b = bed({ caps: ["offer"] });
+    b.client.advertiseCaps(["lane.background"]);
+    // The connection being opened keeps the hello it was built with.
+    welcome(b.sockets[0]!, ["lane.background"]);
+    expect(b.sockets[0]!.sent.find(frame => frame.t === "hello")!.p.caps).toEqual(["offer"]);
+    expect(b.client.sharesCap("lane.background")).toBe(false);
+    b.client.runtimesChanged();
+    welcome(b.sockets[1]!, ["lane.background"]);
+    expect(b.sockets[1]!.sent.find(frame => frame.t === "hello")!.p.caps).toEqual(["offer", "lane.background"]);
+    expect(b.client.sharesCap("lane.background")).toBe(true);
+    // An old server answers `caps: []`; a lost connection shares nothing.
+    b.client.runtimesChanged();
+    welcome(b.sockets[2]!, []);
+    expect(b.client.sharesCap("lane.background")).toBe(false);
+    b.client.runtimesChanged();
+    welcome(b.sockets[3]!, ["lane.background"]);
+    expect(b.client.sharesCap("lane.background")).toBe(true);
+    b.sockets[3]!.emit("close", { code: 1006 });
+    expect(b.client.sharesCap("lane.background")).toBe(false);
+  });
+});

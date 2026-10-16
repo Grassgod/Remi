@@ -156,8 +156,7 @@ describe("trace contract drift guards", () => {
 
   it("builds every item type in the translator, and nothing outside the contract", () => {
     const translator = literalTypes(join(REPO_ROOT, "packages/server/src/worker/trace-translator.ts"));
-    // PR 6 Phase B2: the translator starts building `background_task`; drop it from this set then.
-    const notYetBuilt = new Set<string>(["background_task"]);
+    const notYetBuilt = new Set<string>();
     for (const type of TRACE_ITEM_TYPES) {
       if (notYetBuilt.has(type)) {
         expect(translator, `"${type}" is built now: remove it from notYetBuilt`).not.toContain(type);

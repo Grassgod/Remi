@@ -108,6 +108,9 @@ export function formatBackgroundDuration(ms: number): string {
   return minutes % 60 ? `${hours} 小时 ${minutes % 60} 分` : `${hours} 小时`;
 }
 
+/** How every doorbell body starts (see {@link backgroundDoorbellBody}). */
+export const BACKGROUND_DOORBELL_PREFIX = "后台任务已结束：";
+
 /**
  * The doorbell's `body_md`: 「后台任务已结束：{name}（已完成，用时 {duration}）」 and the
  * summary on the next line. It is also what the attaching attempt prompts
@@ -123,7 +126,7 @@ export function backgroundDoorbellBody(task: {
   const duration = typeof task.duration_ms === "number" && Number.isFinite(task.duration_ms)
     ? `，用时 ${formatBackgroundDuration(task.duration_ms)}` : "";
   const summary = task.summary?.trim();
-  return `后台任务已结束：${task.name.trim() || "后台任务"}（${outcome}${duration}）${summary ? `\n${summary}` : ""}`;
+  return `${BACKGROUND_DOORBELL_PREFIX}${task.name.trim() || "后台任务"}（${outcome}${duration}）${summary ? `\n${summary}` : ""}`;
 }
 
 /**

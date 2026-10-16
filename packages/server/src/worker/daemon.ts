@@ -53,6 +53,24 @@ import { createTraceTranslator, type TraceSubagentRef, type TraceTranslator } fr
 import { nativeAgentItemId } from "@acp/adapters/trace-vendor.js";
 import { TaskActivityReporter } from "./task-activity.js";
 import { finalReplyBody } from "@shared/turn-trace.js";
+import {
+  BACKGROUND_DOORBELL_PREFIX,
+  BACKGROUND_KEEPALIVE_ENV,
+  parksBackgroundTasks,
+  readBackgroundDoorbell,
+  resolveBackgroundKeepAliveMs,
+} from "@shared/background-tasks.js";
+import {
+  LANE_STOP_TIMEOUT_MS,
+  ParkedLanes,
+  killProcessGroup,
+  laneKeyOf,
+  processStartTime,
+  resolveMaxParkedLanes,
+  type LaneRecord,
+  type LaneResources,
+  type ParkedLanesOptions,
+} from "./parked-lanes.js";
 import { TaskUsageLedger } from "./task-usage-ledger.js";
 import { extractAntigravityDefaultModel, extractBaseUrl } from "@multiremi/relay/fragment.js";
 import type { TaskUsageSnapshot, TaskUsageUnit } from "@multiremi/contracts/usage-accounting.js";
@@ -63,9 +81,17 @@ import {
   type DaemonProtocolLane,
 } from "./daemon-protocol-client.js";
 import { registerDaemonOfferHandler } from "./daemon-offers.js";
-import { DaemonTaskDownlinks } from "./daemon-downlinks.js";
+import { DaemonTaskDownlinks, type DaemonSteerMessage } from "./daemon-downlinks.js";
 import { registerDaemonRuntimeDownlinks } from "./daemon-runtime-downlinks.js";
-import { DAEMON_HEARTBEAT_INTERVAL_MS, type DaemonRuntimeCapabilities, type DaemonTurnInput } from "@multiremi/contracts/daemon-protocol.js";
+import {
+  DAEMON_HEARTBEAT_INTERVAL_MS,
+  type DaemonLaneBackgroundReleasePayload,
+  type DaemonLaneBackgroundStopPayload,
+  type DaemonLaneBackgroundWakeReply,
+  type DaemonLaneRef,
+  type DaemonRuntimeCapabilities,
+  type DaemonTurnInput,
+} from "@multiremi/contracts/daemon-protocol.js";
 import { FeishuConciergeSupervisor, type FeishuConciergeHost } from "./feishu-concierge.js";
 import { deliverFeishuOutbound } from "./feishu-outbound.js";
 import { redactFeishuBotError } from "@multiremi/feishu-bot/diagnostics.js";
@@ -80,6 +106,7 @@ import {
   DEFAULT_FORCE_ANSWER_GRACE_MS,
   DEFAULT_STEER_POLL_MS,
   TaskSteerFeed,
+  type TaskSteerSource,
 } from "./steer.js";
 import { SteerPump, steerResultGroups } from "./steer-pump.js";
 import {
@@ -164,6 +191,7 @@ import {
   materializeTaskPlugins,
   prepareCodexPluginReadinessRuntime,
   resolveTaskPluginSnapshot,
+  taskPluginFingerprint,
 } from "@daemon/agent-runtime/agent-plugins/materialize.js";
 import {
   installCodexPluginHome,
@@ -504,6 +532,18 @@ export interface MultiremiDaemonOptions {
    * `REMI_ACP_ASYNC_TASKS=0` turns it off; nothing then parks.
    */
   asyncTasks?: boolean;
+  /**
+   * Chat lanes whose process may stay parked with background tasks running
+   * (PR 6 D11, `REMI_MAX_PARKED_LANES`, default 4); 0 turns parking off.
+   */
+  maxParkedLanes?: number;
+  /** The keep-alive cap of a parked lane (U1; `REMI_BACKGROUND_KEEPALIVE_MS`, default 2 h). */
+  backgroundKeepAliveMs?: number;
+  /** How long an attempt's end waits for a bridge's late task announcements (Codex, PR 6 §2.2; default 2 s). */
+  backgroundDrainMs?: number;
+  /** Test hooks of the parked-lane registry (idle close, request hold, stop and snapshot timings). */
+  parkedLaneOptions?: Partial<Pick<ParkedLanesOptions, "idleCloseMs" | "requestHoldMs" | "stopTimeoutMs" | "debounceMs"
+    | "refreshMs" | "closedRepeats" | "closedRepeatMs" | "processStartTime" | "killProcessGroup">>;
   daemonPort?: number;
   workspacesRoot?: string;
   repoCacheRoot?: string;
@@ -596,6 +636,76 @@ interface RunSummary {
   completed: boolean;
 }
 
+/**
+ * What a Chat lane's process holds besides itself (PR 6 §2.8): its private
+ * temp dir, the work directory (and its lock), the materialized plugins, and
+ * the execution-tracker hold that keeps reclaim off the subject and that temp
+ * dir. Whoever ends the process disposes them, once: the attempt, or the
+ * parked-lane registry when the process outlived it.
+ */
+class DaemonLaneResources implements LaneResources {
+  privateTmp: TaskPrivateTempDirectory | null = null;
+  resolvedWorkDir: ResolvedTaskWorkDir | null = null;
+  pluginRuntime: PreparedAgentPluginRuntime | undefined;
+  hold: (() => void) | null = null;
+  private disposed: Promise<void> | null = null;
+
+  constructor(private readonly cleanupTmp: (directory: TaskPrivateTempDirectory) => Promise<void>) {}
+
+  get privateTmpPath(): string | null {
+    return this.privateTmp ? this.privateTmp.aliasPath ?? this.privateTmp.path : null;
+  }
+
+  get pluginFingerprint(): string | null {
+    return this.pluginRuntime?.pluginFingerprint ?? null;
+  }
+
+  dispose(): Promise<void> {
+    this.disposed ??= (async () => {
+      try {
+        if (this.privateTmp) await this.cleanupTmp(this.privateTmp);
+      } catch (error) {
+        log.warn(`Failed to clean a lane's private temp: ${error instanceof Error ? error.message : String(error)}`);
+      } finally {
+        try { this.resolvedWorkDir?.release?.(); } catch { /* released already */ }
+        this.hold?.();
+      }
+    })();
+    return this.disposed;
+  }
+}
+
+/** One attempt of an eligible Chat lane (PR 6 §2.4): the parked lane it claimed and the process it ran on. */
+interface BackgroundAttempt {
+  lane: DaemonLaneRef;
+  /** The parked lane this attempt claimed at its start, until it adopts or releases it. */
+  claimed: LaneRecord | null;
+  /** What this attempt made itself; a lane record owns it once it parks or begins with it. */
+  own: DaemonLaneResources;
+  /** The record of the process the attempt ran on (begun or adopted). */
+  record: LaneRecord | null;
+}
+
+/** Env an attempt sets for itself; the rest of a process's launch must match for the next attempt to adopt it (PR 6 §2.4). */
+const ATTEMPT_ENV_KEYS = new Set(["MULTIREMI_TOKEN", "MULTIREMI_TURN_ID", "MULTIREMI_ATTEMPT_ID"]);
+
+/**
+ * What a bridge process fixes at launch and the provider's own staleness rule
+ * cannot see (PR 6 §2.4): executable, args, MCP servers, routing and profile
+ * env, allowed tools and system prompt. A different value releases the
+ * parked process (`config_changed`); cwd, plugins, CODEX_HOME and the startup
+ * model are `reuseCheck`'s.
+ */
+function backgroundLaunchFingerprint(input: {
+  agentType: string; executable?: string | null; args?: string[]; env?: Record<string, string>; mcpServers?: unknown;
+  allowedTools?: string[]; systemPrompt?: string | null; claudeSettings?: unknown; claudeOneMillionModels?: readonly string[];
+}): string {
+  const env = Object.entries(input.env ?? {}).filter(([key]) => !ATTEMPT_ENV_KEYS.has(key)).sort(([a], [b]) => a.localeCompare(b));
+  return createHash("sha256").update(JSON.stringify([input.agentType, input.executable ?? null, input.args ?? [], env,
+    input.mcpServers ?? [], input.allowedTools ?? null, input.systemPrompt ?? null, input.claudeSettings ?? null,
+    [...input.claudeOneMillionModels ?? []]])).digest("hex");
+}
+
 interface PreparedIssueWorkspace {
   wikiMaterialized?: boolean;
   snapshots?: TaskRepoSnapshot[];
@@ -634,6 +744,8 @@ export type MultiremiTaskProvider = Pick<Provider, "sendStream" | "getLastRespon
   processGroupId?: Provider["processGroupId"];
   /** Whether a live process is pooled under `chatId` (PR 6 §2.4). */
   sessionAlive?: (chatId: string) => boolean;
+  /** `session/cancel` for a cycle nobody reads (PR 6 §2.5). */
+  cancelIdle?: (chatId: string) => Promise<void>;
   /** The native agent of a child session, as the provider registered it (PR 5 §1.3). */
   subagentSession?: (sessionId: string) => { agentId: string; name: string | null } | null;
   readonly typedSessionFailures?: boolean;
@@ -770,7 +882,7 @@ export class MultiremiRuntimeReregisterGate {
 
 export class MultiremiDaemon {
   private client: MultiremiDaemonClient;
-  private options: Required<Omit<MultiremiDaemonOptions, "token" | "runtimeId" | "daemonId" | "workspaceId" | "providerFactory" | "updateRunner" | "localSkillRoots" | "launchedBy" | "onRestartRequested" | "taskTimeoutMs" | "daemonPort" | "workspacesRoot" | "repoCacheRoot" | "gcEnabled" | "gcIntervalMs" | "gcDryRun" | "legacyKeepDays" | "pluginCacheRoot" | "agentPluginProviderPreflight" | "sshMeshManager" | "terminalAuthorityCleanupRetryDelaysMs" | "issueWorkspaceLifecycleLocker" | "workspaceRootFence" | "runSnapshotGcPass" | "supervisorReady" | "onReadyChange" | "cliUpdateCoordinator" | "outboxPath" | "outboxBackoffMs" | "outboxMaxBytes" | "claimIdleMaxMs" | "pluginDesiredRefreshMs" | "protocolClient" | "protocolClientOptions" | "authorityProbeDelaysMs" | "antigravityGatewayShim">> & {
+  private options: Required<Omit<MultiremiDaemonOptions, "token" | "runtimeId" | "daemonId" | "workspaceId" | "providerFactory" | "updateRunner" | "localSkillRoots" | "launchedBy" | "onRestartRequested" | "taskTimeoutMs" | "daemonPort" | "workspacesRoot" | "repoCacheRoot" | "gcEnabled" | "gcIntervalMs" | "gcDryRun" | "legacyKeepDays" | "pluginCacheRoot" | "agentPluginProviderPreflight" | "sshMeshManager" | "terminalAuthorityCleanupRetryDelaysMs" | "issueWorkspaceLifecycleLocker" | "workspaceRootFence" | "runSnapshotGcPass" | "supervisorReady" | "onReadyChange" | "cliUpdateCoordinator" | "outboxPath" | "outboxBackoffMs" | "outboxMaxBytes" | "claimIdleMaxMs" | "pluginDesiredRefreshMs" | "protocolClient" | "protocolClientOptions" | "authorityProbeDelaysMs" | "antigravityGatewayShim" | "parkedLaneOptions">> & {
     token: string | null;
     runtimeId: string | null;
     daemonId: string | null;
@@ -803,6 +915,8 @@ export class MultiremiDaemon {
   private antigravityShim: AntigravityGatewayShim | null = null;
   /** Running attempts' `task.activity` reporters, resent on reconnect (PR 5 §3.8). */
   private activityReporters = new Set<TaskActivityReporter>();
+  /** Chat lanes whose process lives across attempts while background tasks run (PR 6 §2.3). */
+  private readonly parkedLanes: ParkedLanes;
   private readonly ownsAntigravityShim: boolean;
   private runtimeCodexProfile: RuntimeCodexProfile | null = null;
   private runtimeClaudeProfile: RuntimeClaudeProfile | null = null;
@@ -1037,6 +1151,9 @@ export class MultiremiDaemon {
       nativeSubagents: options.nativeSubagents ?? process.env.REMI_ACP_NATIVE_SUBAGENTS !== "0",
       autonomousRounds: options.autonomousRounds ?? process.env.REMI_ACP_AUTONOMOUS_ROUNDS !== "0",
       asyncTasks: options.asyncTasks ?? process.env.REMI_ACP_ASYNC_TASKS !== "0",
+      maxParkedLanes: Math.max(0, Math.floor(options.maxParkedLanes ?? resolveMaxParkedLanes(process.env.REMI_MAX_PARKED_LANES))),
+      backgroundKeepAliveMs: options.backgroundKeepAliveMs ?? resolveBackgroundKeepAliveMs(process.env[BACKGROUND_KEEPALIVE_ENV]),
+      backgroundDrainMs: Math.max(0, options.backgroundDrainMs ?? 2_000),
       autonomousIdleMs: Math.max(1, options.autonomousIdleMs ?? DEFAULT_AUTONOMOUS_IDLE_MS),
       daemonPort: options.daemonPort ?? numberEnv(process.env.MULTIREMI_DAEMON_PORT, 6131),
       workspacesRoot,
@@ -1197,6 +1314,37 @@ export class MultiremiDaemon {
       ...options.protocolClientOptions,
     });
     this.taskDownlinks = new DaemonTaskDownlinks(this.protocolClient, () => this.options.runtimeId ?? undefined);
+    // PR 6 §5.3: this lane keeps Chat processes alive for background tasks; it parks only when the server echoes the cap.
+    if (this.options.asyncTasks) this.protocolClient.advertiseCaps(["lane.background"]);
+    this.parkedLanes = new ParkedLanes({
+      maxParkedLanes: this.options.maxParkedLanes,
+      keepAliveMs: this.options.backgroundKeepAliveMs,
+      stateFile: options.outboxPath === ":memory:" ? null
+        : join(dirname(this.legacyOutboxPath), `parked-bridges-${this.options.provider}-${outboxIdentity}.json`),
+      runtimeId: () => this.options.runtimeId,
+      sharesCap: () => this.options.asyncTasks && this.protocolClient.sharesCap("lane.background"),
+      sendSnapshot: (payload) => this.client.reportLaneBackgroundTasks(payload),
+      wake: async (payload) => await this.taskDownlinks.rpc("lane.background_wake", payload as unknown as Record<string, unknown>,
+        30_000) as unknown as DaemonLaneBackgroundWakeReply,
+      log,
+      processStartTime,
+      killProcessGroup,
+      ...options.parkedLaneOptions,
+    });
+    this.protocolClient.registerFrameHandler("lane.background_stop", (frame) => {
+      if (!frame.rt || frame.rt !== this.options.runtimeId) return;
+      const payload = frame.payload as unknown as DaemonLaneBackgroundStopPayload;
+      if (typeof payload?.session_id !== "string" || typeof payload.task_id !== "string") return;
+      const key = `${laneKeyOf(payload)}\u0000${payload.task_id}\u0000${payload.requested_at}`;
+      if (!this.protocolClient.dedupe.claim("lane.background_stop", key)) return;
+      return this.parkedLanes.handleStop(payload);
+    });
+    this.protocolClient.registerFrameHandler("lane.background_release", (frame) => {
+      if (!frame.rt || frame.rt !== this.options.runtimeId) return;
+      const payload = frame.payload as unknown as DaemonLaneBackgroundReleasePayload;
+      if (typeof payload?.session_id !== "string" || typeof payload.provider_session_id !== "string") return;
+      return this.parkedLanes.handleRelease(payload);
+    });
     this.drainRuntimeDownlinks = registerDaemonRuntimeDownlinks(this.protocolClient, () => this.options.runtimeId,
       (rt, input) => this.handleHeartbeatAck(rt, input), (rt, revision) => this.reconcileRuntimeAgentPlugins(rt, revision));
     this.protocolLane = {
@@ -1207,6 +1355,8 @@ export class MultiremiDaemon {
         active_task_ids: [...new Set([...this.activeTaskIds, ...(this.outbox?.taskIdsWithPendingTerminal(this.options.runtimeId) ?? [])])],
         active_question_waits: this.taskDownlinks.activeQuestionWaits(),
         capabilities: this.runtimeCapabilities(),
+        // PR 6 §5.2: the lanes whose process lives, so the server settles the others' rows.
+        ...(this.options.asyncTasks ? { parked_lanes: this.parkedLanes.helloLanes() } : {}),
       } : null,
       heartbeat: () => ({
         active_task_count: this.activeTaskCount,
@@ -1248,6 +1398,7 @@ export class MultiremiDaemon {
       readyToConnect: () => this.supervisorReady(),
       onConnected: () => {
         for (const reporter of this.activityReporters) reporter.resend();
+        this.parkedLanes?.resendAll();
         const runtime = this.protocolLane.runtime();
         if (runtime) this.protocolClient.send({ t: "runtime.ready",
           rt: runtime.runtime_id, p: { active_task_ids: runtime.active_task_ids, active_question_waits: runtime.active_question_waits ?? [] } });
@@ -1259,11 +1410,14 @@ export class MultiremiDaemon {
     this.protocolClient.addLane(this.protocolLane);
     registerDaemonOfferHandler(this.protocolClient, {
       runtimeId: () => this.options.runtimeId,
-      rejection: () => {
+      rejection: (task) => {
         if (this.options.once && this.onceTaskAccepted) return "draining";
         if (this.serverDrainActive) return "draining";
         if (this.stopped || !this.ready || !this.supervisorReady() || this.claimsPaused || this.runtimeGoneInflight.size) return "claims_paused";
-        if (this.activeTaskCount >= this.options.maxConcurrency || (this.options.once && this.onceTaskAccepted)) return "capacity";
+        // PR 6 D5: an offer for a parked lane takes no new slot's worth of work; its process already runs.
+        const lane = this.backgroundLaneOf(task as MultiremiTaskWithAgent);
+        const parked = lane !== null && this.parkedLanes.isParked(laneKeyOf(lane));
+        if ((!parked && this.activeTaskCount >= this.options.maxConcurrency) || (this.options.once && this.onceTaskAccepted)) return "capacity";
         return null;
       },
       run: task => {
@@ -1495,6 +1649,9 @@ export class MultiremiDaemon {
     this.assertWorkspaceRootOwner();
     await this.sweepLegacyLayout();
     if (this.stopped) return;
+    // PR 6 R2: bridges a crashed run left parked die before anything is claimed.
+    this.parkedLanes?.sweepCrashedBridges();
+    this.parkedLanes?.disable(null);
     const outbox = this.ensureOutbox();
     this.startRepoCheckoutServer();
     try {
@@ -1592,7 +1749,10 @@ export class MultiremiDaemon {
       // tasks drain before waiting for the GC lease they may currently hold.
       // Task finalization can register a detached progress-summary call while
       // the main execution is draining. Keep its accepted usage run alive.
+      this.parkedLanes?.disable("stopping");
       while (this.inflight.size) await Promise.allSettled([...this.inflight]);
+      // PR 6 §2.7: a planned stop or update ends every parked lane's tasks, saying why.
+      await this.parkedLanes?.closeAll("daemon_restart");
       for (const run of this.feishuOutboundRuns.values()) run.abort.abort();
       await Promise.allSettled([...this.feishuOutboundRuns.values()].map(run => run.done));
       await this.drainGcInFlight();
@@ -1805,6 +1965,13 @@ export class MultiremiDaemon {
         );
       }
       if (this.serverDrainActive && !draining) this.wakeClaim();
+      // PR 6 §2.7: a platform drain parks nothing new and ends the parked lanes.
+      if (draining && !this.serverDrainActive) {
+        this.parkedLanes?.disable("draining");
+        void this.parkedLanes?.closeAll("daemon_restart");
+      } else if (!draining && this.serverDrainActive && !this.stopped) {
+        this.parkedLanes?.disable(null);
+      }
       this.serverDrainActive = draining;
       // Track the highest generation seen so the next heartbeat acknowledges
       // it. Acknowledging in normal mode too keeps the ack current when a new
@@ -2764,6 +2931,8 @@ export class MultiremiDaemon {
     this.onceOfferTimer = null;
     this.stopped = true;
     this.pollAbort.abort();
+    // No lane parks from now on; start()'s finally closes the parked ones.
+    this.parkedLanes?.disable("stopping");
     // stop() is synchronous and may be called while start() is sleeping. Clear
     // the timer immediately; start()'s finally block waits for any current run.
     this.stopGcLoop();
@@ -3212,6 +3381,25 @@ export class MultiremiDaemon {
     this.onRestartRequested?.();
   }
 
+  /**
+   * The background lane of a task (PR 6 D9): a Chat lane (a Chat session, no
+   * Issue) of an agent whose bridge publishes background tasks, with the
+   * switch on. Only these may park; null for every other task.
+   */
+  private backgroundLaneOf(task: MultiremiTaskWithAgent): DaemonLaneRef | null {
+    if (!this.options.asyncTasks || !task.chatSessionId || task.issueId || !task.agent?.id) return null;
+    const provider = task.agent.provider;
+    if (provider !== "claude" && provider !== "codex") return null;
+    if (!parksBackgroundTasks(createAdapter(provider).asyncTasks)) return null;
+    return { session_id: task.chatSessionId, agent_id: task.agent.id, execution_scope: task.execution_scope ?? "" };
+  }
+
+  /** The expected work directory of a Runtime workspace task, when it is one (its claimed lane may hold the lock). */
+  private runtimeWorkspaceDir(task: MultiremiTaskWithAgent): string | null {
+    const workspace = task.runtimeWorkspaceId ? task.runtimeWorkspace : null;
+    return workspace ? resolve(workspace.rootPath, workspace.cwd) : null;
+  }
+
   private async handleTask(task: MultiremiTaskWithAgent): Promise<void> {
     // Historical claims may still carry their parent's directory binding.
     // Non-workspace Sessions execute in their own daemon-owned directory.
@@ -3232,6 +3420,23 @@ export class MultiremiDaemon {
     });
     this.activeTaskIds.add(task.id);
     const finishTracking = executionTrackerFor(this.options.workspacesRoot).begin(subject.id, task.id);
+    // PR 6 §2.4: an offer for a parked lane claims its process before preparing; one process per lane.
+    const backgroundLane = this.backgroundLaneOf(task);
+    const background: BackgroundAttempt | null = backgroundLane ? {
+      lane: backgroundLane,
+      claimed: this.parkedLanes.claim(laneKeyOf(backgroundLane), task.id),
+      own: new DaemonLaneResources((directory) => cleanupTaskPrivateTempDirectory(directory, () => this.assertWorkspaceRootOwner())),
+      record: null,
+    } : null;
+    const claimedResources = () => background?.claimed?.resources as DaemonLaneResources | undefined;
+    /** Release the claimed lane before this attempt makes what the lane cannot share (§2.4). */
+    const releaseClaimed = async (reason: "config_changed" | "lane_reset") => {
+      const claimed = background?.claimed;
+      if (!claimed) return;
+      background!.claimed = null;
+      log.info(`Releasing parked lane before task ${task.id}: ${reason}`, { event: "background_lane_release", reason });
+      await this.parkedLanes.release(claimed, reason);
+    };
     this.activeTaskCount++;
     log.info(`Claimed task ${task.id}`);
     const abort = new AbortController();
@@ -3305,7 +3510,15 @@ export class MultiremiDaemon {
       releaseIssueWorkspaceLifecycle = await this.issueWorkspaceLifecycleLocks.acquireShared(subject.id);
       abort.signal.throwIfAborted();
       this.assertWorkspaceRootOwner();
-      resolvedWorkDir = await this.resolveTaskWorkDir(task, abort.signal);
+      const claimedDir = claimedResources()?.resolvedWorkDir ?? null;
+      if (claimedDir?.release && claimedDir.workDir === this.runtimeWorkspaceDir(task)) {
+        // The parked process holds this Runtime workspace's lock; the lane's next attempt runs under it.
+        resolvedWorkDir = claimedDir;
+      } else {
+        if (claimedDir?.release) await releaseClaimed("config_changed");
+        resolvedWorkDir = await this.resolveTaskWorkDir(task, abort.signal);
+        if (background) background.own.resolvedWorkDir = resolvedWorkDir;
+      }
       if (resolvedWorkDir.resetSession) {
         const projection = (task as AgentTask).sessionProjection ?? (task as AgentTask).session_projection;
         if (projection?.mode === "delta") {
@@ -3387,7 +3600,14 @@ export class MultiremiDaemon {
           );
         }
       }
-      if (resolveTaskPluginSnapshot(task).length) {
+      const pluginSnapshot = resolveTaskPluginSnapshot(task);
+      // A parked process keeps the plugins it loaded only while the set is the same (§2.8).
+      if (background?.claimed && (pluginSnapshot.length ? taskPluginFingerprint(task) : null) !== background.claimed.resources.pluginFingerprint) {
+        await releaseClaimed("config_changed");
+      }
+      if (pluginSnapshot.length && background?.claimed) {
+        pluginRuntime = claimedResources()!.pluginRuntime;
+      } else if (pluginSnapshot.length) {
         this.assertWorkspaceRootOwner();
         const lane = laneForTask(task);
         if (!lane) throw new Error(`Task ${task.id} has no agent to run Plugins for`);
@@ -3399,6 +3619,7 @@ export class MultiremiDaemon {
           providerHome,
           providerInstallEnv,
         );
+        if (background) background.own.pluginRuntime = pluginRuntime;
       }
       let codexCatalogError: string | undefined;
       if (providerHome) {
@@ -3428,7 +3649,14 @@ export class MultiremiDaemon {
         }
       }
       if (!providerHome) throw new Error(`Task ${task.id} has no isolated provider home`);
-      taskPrivateTmp = await prepareTaskPrivateTempDirectory(this.options.workspacesRoot, subject, task.id);
+      // The parked process's `TMPDIR` (or `/tmp` mount) is fixed: its next attempt shares the dir (§2.8).
+      taskPrivateTmp = claimedResources()?.privateTmp
+        ?? await prepareTaskPrivateTempDirectory(this.options.workspacesRoot, subject, task.id);
+      if (background && !background.claimed) {
+        background.own.privateTmp = taskPrivateTmp;
+        // This attempt's hold protects the temp dir named after it, for as long as its process lives.
+        background.own.hold = finishTracking;
+      }
       // Bind the run to the authenticated runtime before any provider can
       // consume tokens. A durable but unacknowledged start is not permission
       // to execute while the task may have been reassigned.
@@ -3471,6 +3699,7 @@ export class MultiremiDaemon {
         startSignal,
         () => { providerEntered = true; },
         antigravity,
+        background,
       );
       if (!summary.completed) {
         const failureReason = summary.failureReason
@@ -3537,15 +3766,22 @@ export class MultiremiDaemon {
       // Revokes the run's shim tokens; runAgent already closed them unless setup failed first.
       antigravity?.run.close();
       if (usageLedger) checkpointUsage(usageLedger.finish());
-      await cleanupTaskPrivateTempDirectory(
-        taskPrivateTmp,
-        () => this.assertWorkspaceRootOwner(),
-      ).catch((error) => {
-        log.warn(`Failed to clean task private temp for ${task.id}: ${error instanceof Error ? error.message : String(error)}`);
-      });
-      resolvedWorkDir?.release?.();
+      if (background) {
+        // PR 6 §2.8: a lane's process owns what it runs with; this attempt releases only what is still its own.
+        if (background.claimed?.state === "claimed") this.parkedLanes.unclaim(background.claimed);
+        if (background.record?.resources !== background.own) await background.own.dispose();
+        if (background.own.hold !== finishTracking) finishTracking();
+      } else {
+        await cleanupTaskPrivateTempDirectory(
+          taskPrivateTmp,
+          () => this.assertWorkspaceRootOwner(),
+        ).catch((error) => {
+          log.warn(`Failed to clean task private temp for ${task.id}: ${error instanceof Error ? error.message : String(error)}`);
+        });
+        resolvedWorkDir?.release?.();
+        finishTracking();
+      }
       releaseIssueWorkspaceLifecycle?.();
-      finishTracking();
       this.activeTaskAborts.delete(abort);
       this.activeTaskIds.delete(task.id);
       if (!activeExecutionReleased) {
@@ -4003,13 +4239,16 @@ export class MultiremiDaemon {
     task: MultiremiTaskWithAgent,
     signal: AbortSignal,
     trace: TraceTranslator,
+    /** Where the handlers go instead of the provider (PR 6: a lane's record routes a request raised while parked). */
+    sink?: Pick<MultiremiTaskProvider, "setPermissionHandler" | "setElicitationHandler">,
   ): () => void {
+    const target = sink ?? provider;
     let elicitationContextOffset = 0;
     const humanRequestTimeoutMs = task.autopilotRunId
       ? this.options.unattendedHumanRequestTimeoutMs
       : this.options.humanRequestTimeoutMs;
     if (this.options.approvalMode !== "ask") {
-      provider.setPermissionHandler?.((params) => {
+      target.setPermissionHandler?.((params) => {
         const allow = params.options.find((o) => o.kind === "allow_always")
           ?? params.options.find((o) => o.kind === "allow_once");
         return Promise.resolve<PermissionOutcome>(
@@ -4017,7 +4256,7 @@ export class MultiremiDaemon {
         );
       });
     } else {
-      provider.setPermissionHandler?.(async (params) => {
+      target.setPermissionHandler?.(async (params) => {
         this.taskDownlinks.beginDecision(task.id);
         try {
           const toolTitle = params.toolCall?.title ?? "tool call";
@@ -4067,7 +4306,7 @@ export class MultiremiDaemon {
 
     // AskUserQuestion is a collaboration primitive, not a tool permission.
     // Always surface it, including when destructive-tool approvals are automatic.
-    provider.setElicitationHandler?.(async (params) => {
+    target.setElicitationHandler?.(async (params) => {
       this.taskDownlinks.beginDecision(task.id);
       try {
         const questions = elicitationToQuestions(params);
@@ -4310,6 +4549,7 @@ export class MultiremiDaemon {
     startupSignal: AbortSignal = signal,
     onProviderEntry?: () => void,
     antigravity: AntigravityRunGateway | null = null,
+    background: BackgroundAttempt | null = null,
   ): Promise<RunSummary> {
     this.assertWorkspaceRootOwner();
     const agent = task.agent;
@@ -4412,32 +4652,88 @@ export class MultiremiDaemon {
     // Preparation above can yield after the start ACK. Shutdown must still
     // prevent entering a provider, without aborting an already-running turn.
     startupSignal.throwIfAborted();
-    const provider = this.providerFactory({
-      agentType: config.agentType,
-      executable: config.executable,
-      args: config.customArgs,
-      model: task.claudeProfile?.model ?? config.model,
-      claudeOneMillionModels,
-      ...(task.claudeProfile ? { claudeSettings: { model: task.claudeProfile.model, env: runtimeClaudeProfileRouting(task.claudeProfile) } } : {}),
-      allowedTools: config.allowedTools,
-      cwd: config.cwd,
-      privateTmpDirectory,
-      env: config.env,
-      getMcpServers: () => config.mcpServers,
-      pluginPaths: config.pluginPaths,
-      pluginFingerprint: config.pluginFingerprint,
-      codexHome: config.codexHome,
-      ...(antigravity ? { gatewayShim: antigravity.run, providerHome: providerHome!.home } : {}),
-      // Honoured only by adapters that declare them (PR 5 §1.1, §2.3).
-      nativeSubagentSessions: this.options.nativeSubagents,
-      captureAutonomousRounds: this.options.autonomousRounds,
-      asyncTasks: this.options.asyncTasks,
-    });
+    const claudeSettings = task.claudeProfile
+      ? { model: task.claudeProfile.model, env: runtimeClaudeProfileRouting(task.claudeProfile) } : undefined;
+    const adapter = createAdapter(config.agentType);
+    const wakesModel = adapter.asyncTasks?.wakesModel === true;
+    const launchFingerprint = background ? backgroundLaunchFingerprint({
+      agentType: config.agentType, executable: config.executable, args: config.customArgs, env: config.env,
+      mcpServers: config.mcpServers, allowedTools: config.allowedTools, systemPrompt: config.systemPrompt ?? null,
+      claudeSettings, claudeOneMillionModels,
+    }) : "";
+    // PR 6 §2.4: the lane's parked process is adopted when nothing it fixed at launch changed; else it
+    // is released, and has exited, before another process starts on the same provider session.
+    let chosen: MultiremiTaskProvider | null = null;
+    let laneRecord: LaneRecord | null = null;
+    let adopted = false;
+    let keptResources: LaneResources | null = null;
+    const claimed = background?.claimed ?? null;
+    if (background && claimed) {
+      background.claimed = null;
+      const verdict = this.parkedLanes.adoptVerdict(claimed, {
+        providerSessionId: task.sessionId ?? null, launchFingerprint,
+        reuse: claimed.provider.sessionAlive?.(claimed.poolChatId) === false ? { reuse: false, reason: "process_dead" }
+          : (claimed.provider as MultiremiTaskProvider).reuseCheck?.(claimed.poolChatId, {
+            chatId: claimed.poolChatId, sessionId: task.sessionId, cwd: config.cwd, model: config.model, effort: config.effort,
+            pluginPaths: config.pluginPaths, pluginFingerprint: config.pluginFingerprint, codexHome: config.codexHome,
+          } as Parameters<NonNullable<MultiremiTaskProvider["reuseCheck"]>>[1]) ?? null,
+      });
+      if (verdict.adopt && this.parkedLanes.adopt(claimed, task.id, config.chatId ?? task.id)) {
+        chosen = claimed.provider as MultiremiTaskProvider;
+        laneRecord = claimed;
+        adopted = true;
+        log.info(`Task ${task.id} adopted its lane's parked process`, { event: "background_lane_adopted", doorbell: claimed.doorbell });
+      } else {
+        log.info(`Task ${task.id} releases its lane's parked process: ${verdict.cause ?? "adopt failed"}`,
+          { event: "background_lane_release", reason: verdict.reason ?? "config_changed", cause: verdict.cause ?? null });
+        await this.parkedLanes.release(claimed, verdict.reason ?? "config_changed", { keepResources: true });
+        keptResources = claimed.resources;
+      }
+    }
+    if (!chosen) {
+      const created = this.providerFactory({
+        agentType: config.agentType,
+        executable: config.executable,
+        args: config.customArgs,
+        model: task.claudeProfile?.model ?? config.model,
+        claudeOneMillionModels,
+        ...(claudeSettings ? { claudeSettings } : {}),
+        allowedTools: config.allowedTools,
+        cwd: config.cwd,
+        privateTmpDirectory,
+        env: config.env,
+        getMcpServers: () => config.mcpServers,
+        pluginPaths: config.pluginPaths,
+        pluginFingerprint: config.pluginFingerprint,
+        codexHome: config.codexHome,
+        ...(antigravity ? { gatewayShim: antigravity.run, providerHome: providerHome!.home } : {}),
+        // Honoured only by adapters that declare them (PR 5 §1.1, §2.3).
+        nativeSubagentSessions: this.options.nativeSubagents,
+        captureAutonomousRounds: this.options.autonomousRounds,
+        asyncTasks: this.options.asyncTasks,
+        // PR 6 §3.2: the lane registry follows every task of the process.
+        onAsyncTaskChange: this.parkedLanes?.onAsyncTaskChange,
+        onSessionLost: this.parkedLanes?.onSessionLost,
+      });
+      chosen = created;
+      if (background) {
+        laneRecord = this.parkedLanes.begin({
+          lane: background.lane, provider: created, poolChatId: config.chatId ?? task.id, attemptId: task.id,
+          providerSessionId: task.sessionId ?? null, wakesModel, launchFingerprint,
+          resources: keptResources ?? background.own,
+        });
+      }
+    }
+    if (background) background.record = laneRecord;
+    const provider: MultiremiTaskProvider = chosen;
     if (!provider.sendStream) {
       throw new Error(`Provider ${agent.provider} does not support streaming`);
     }
-    // The sidebar's running-subagent badge (PR 5 §3.8): top-level count, else nested.
-    const activity = new TaskActivityReporter((running) => this.client.reportTaskActivity(task.id, running, this.options.runtimeId));
+    /** Background tasks this attempt tracks (the provider keeps a registry). */
+    const tracksTasks = this.options.asyncTasks && typeof provider.listAsyncTasks === "function"
+      && typeof provider.settleAsyncTasks === "function" && !!adapter.asyncTasks;
+    // The sidebar's running-subagent badge (PR 5 §3.8): top-level count, else nested; and (PR 6) running background tasks.
+    const activity = new TaskActivityReporter((running, tasks) => this.client.reportTaskActivity(task.id, running, this.options.runtimeId, tasks));
     this.activityReporters.add(activity);
     // One writer per attempt: ACP updates, permissions, questions and steers all
     // go through the translator, which flushes pending deltas before any other
@@ -4456,9 +4752,23 @@ export class MultiremiDaemon {
       redactText: (text) => provider.typedSessionFailures === false && classifyLegacyProviderFailure(text)
         ? redactProviderErrorText(text, failureCredentials) : text,
       standaloneText: (text) => provider.typedSessionFailures === false && classifyLegacyProviderFailure(text) !== null,
-      onSubagentCounts: (counts) => activity.update(counts.top || counts.nested),
+      onActivity: (counts) => activity.update(counts.subagentsTop || counts.subagentsNested, tracksTasks ? counts.backgroundTasks : undefined),
+      // A task an earlier attempt of the lane started is named from the provider's registry (§2.4).
+      backgroundTaskInfo: (taskId) => {
+        const known = provider.listAsyncTasks?.({ chatId: config.chatId })?.find((candidate) => candidate.id === taskId);
+        return known ? { name: known.name, taskType: known.taskType, description: known.description, toolCallId: known.toolCallId,
+          canStop: known.canStop, startedAt: known.startedAt, sessionId: known.sessionId } : null;
+      },
     });
-    const resetElicitationContextOffset = this.attachHumanInputHandlers(provider, task, signal, trace);
+    if (laneRecord) {
+      this.parkedLanes.attach(laneRecord, {
+        stopRequested: (taskId, request) => this.recordTrace(task.id, () => trace.backgroundTaskStopRequested(taskId, request)),
+        stopResult: (taskId, outcome) => this.recordTrace(task.id, () => trace.backgroundTaskStopResult(taskId, outcome)),
+        output: (taskId, tail, truncated) => this.recordTrace(task.id, () => trace.backgroundTaskOutput(taskId, tail, truncated)),
+      });
+    }
+    const resetElicitationContextOffset = this.attachHumanInputHandlers(provider, task, signal, trace,
+      laneRecord ? this.parkedLanes.handlerSink(laneRecord) : undefined);
     let finalSessionId: string | null = task.sessionId;
     const ledger = usageLedger ?? new TaskUsageLedger(connectionId, usageRunId);
     const checkpointUsage = (snapshot: TaskUsageSnapshot | null) => {
@@ -4475,12 +4785,38 @@ export class MultiremiDaemon {
     // injected as the next prompt on the same provider session, so the
     // transcript and all completed work survive. `force_answer` additionally
     // arms a grace deadline after which the run wraps up with the output so far.
-    const steerFeed = new TaskSteerFeed(this.taskDownlinks, task.id);
+    // PR 6 §2.6: a doorbell steered into this attempt reaches the model through the bridge itself (Claude's
+    // own task notification), so it is recorded and acknowledged, never prompted.
+    let onDoorbellSteer: ((message: MultiremiTaskSteerMessage) => void) | null = null;
+    const earlyDoorbellSteers: MultiremiTaskSteerMessage[] = [];
+    // Its `metadata.background_task`; a projection that drops message metadata still shows a platform
+    // message with the doorbell's text on a lane whose process outlived its attempts.
+    const isDoorbellSteer = (message: MultiremiTaskSteerMessage) => readBackgroundDoorbell((message as DaemonSteerMessage).metadata) !== null
+      || (laneRecord !== null && message.authorType === "system" && message.kind === "steer"
+        && message.content.includes(BACKGROUND_DOORBELL_PREFIX));
+    const divertDoorbell = (message: MultiremiTaskSteerMessage) => {
+      if (onDoorbellSteer) onDoorbellSteer(message);
+      else earlyDoorbellSteers.push(message);
+    };
+    const steerSource: TaskSteerSource = {
+      pendingTaskSteerMessages: (id) => this.taskDownlinks.pendingTaskSteerMessages(id).filter((message) => {
+        if (!isDoorbellSteer(message)) return true;
+        divertDoorbell(message);
+        return false;
+      }),
+      subscribeTaskSteerMessages: (id, listener) => this.taskDownlinks.subscribeTaskSteerMessages(id,
+        (message) => isDoorbellSteer(message) ? divertDoorbell(message) : listener(message)),
+    };
+    const steerFeed = new TaskSteerFeed(steerSource, task.id);
     let forceAnswerDeadline: number | null = null;
     let forceAnswerExpired = false;
     let pump: SteerPump | null = null;
     // Arms the current round's grace timer; null between rounds.
     let armRoundGrace: (() => void) | null = null;
+    // PR 6 §2.2: what the attempt's end did with its background tasks (set inside the run loop).
+    let backgroundDecision: "park" | "stopped" | null = null;
+    const backgroundDecisionOf = () => backgroundDecision;
+    let endBackgroundTasksOnce: ((options: { drain: boolean; reason: "turn_end" | "cancelled" }) => Promise<void>) | null = null;
 
     try {
       const session = new AgentSession(provider as any, config);
@@ -4491,7 +4827,7 @@ export class MultiremiDaemon {
         input: Array.isArray(turnInput.input_messages) ? turnInput.input_messages : [],
         fallbackText: task.prompt ?? null, attachments: traceAttachments(task.chatMessageAttachments),
       });
-      const promptArtifact = buildTaskPromptArtifact(task, {
+      const promptOptions = {
         wikiMaterialized,
         repoCheckouts: preparedWorkspace.checkouts,
         repoSnapshots: preparedWorkspace.snapshots,
@@ -4501,7 +4837,8 @@ export class MultiremiDaemon {
         sessionHistoryPaths: task.issueId
           ? listIssueConversationRoots(this.options.workspacesRoot, task.issueId)
           : undefined,
-      });
+      };
+      const promptArtifact = buildTaskPromptArtifact(task, promptOptions);
       this.enqueueTaskReport(task.id, "prompt", {
         mode: promptArtifact.mode,
         prompt: promptArtifact.prompt,
@@ -4538,6 +4875,12 @@ export class MultiremiDaemon {
           this.recordTrace(task.id, () => trace.steer(group, result));
         }
       };
+      onDoorbellSteer = (message) => {
+        if (recordedSteerIds.has(message.id)) return;
+        void recordSteerBatch([message], "native").catch((error) =>
+          log.warn(`Task ${task.id}: recording a doorbell steer failed: ${error instanceof Error ? error.message : String(error)}`));
+      };
+      for (const message of earlyDoorbellSteers.splice(0)) onDoorbellSteer(message);
       const injectSteerBatch = async (messages: MultiremiTaskSteerMessage[]): Promise<void> => {
         if (messages.some((m) => m.kind === "force_answer") && forceAnswerDeadline == null) {
           forceAnswerDeadline = Date.now() + Math.max(0, this.options.forceAnswerGraceMs);
@@ -4572,8 +4915,134 @@ export class MultiremiDaemon {
       }
       // The completion transaction remains the authoritative steer barrier.
       const fetchPendingSteer = async (): Promise<MultiremiTaskSteerMessage[]> => {
-        return this.taskDownlinks.pendingTaskSteerMessages(task.id).filter((m) => !recordedSteerIds.has(m.id));
+        return steerSource.pendingTaskSteerMessages(task.id).filter((m) => !recordedSteerIds.has(m.id));
       };
+
+      /** A Claude task the registry saw end (completed or failed) that the trace still shows running: its cycle is owed (§4.2). */
+      const taskEndUnseen = (): boolean => tracksTasks && wakesModel && !!provider.listAsyncTasks?.({ chatId: config.chatId })
+        .some((known) => (known.state === "completed" || known.state === "failed")
+          && trace.runningBackgroundTasks.some((item) => item.task_id === known.id));
+
+      // PR 6 §2.2: the attempt's background tasks at its end. They are handed off to a parked
+      // process when the lane may park, else stopped (Issue lanes, no cap, no room).
+      const consumeBackgroundFrames = async (events: AsyncGenerator<ProviderEvent>): Promise<void> => {
+        for await (const event of events) {
+          const usageUnits = (event as { _meta?: Record<string, unknown> })._meta?.remiUsageUnits;
+          if (Array.isArray(usageUnits)) checkpointUsage(ledger.observe((usageUnits as TaskUsageUnit[]).map(unit => ({
+            ...unit, provider: agent.provider, requestedModel: unit.requestedModel ?? config.model ?? null,
+          }))));
+          trace.acp(event);
+        }
+        this.recordTrace(task.id, () => trace.promptEnded({ aborted: false }));
+      };
+      const endBackgroundTasks = async (options: { drain: boolean; reason: "turn_end" | "cancelled" }): Promise<void> => {
+        if (!tracksTasks || !provider.settleAsyncTasks || !provider.listAsyncTasks) return;
+        const chatId = config.chatId;
+        if (options.drain && !wakesModel) {
+          // Codex announces a terminal left running after the prompt resolved (§1.2); it starts no cycle,
+          // so replaying what arrived since is safe.
+          await consumeBackgroundFrames(provider.settleAsyncTasks({ chatId, stopRunning: false,
+            drainMs: this.options.backgroundDrainMs, timeoutMs: this.options.backgroundDrainMs }));
+        } else if (wakesModel) {
+          // Claude's frames since the last stream may open a cycle the next attempt replays: they stay
+          // captured, and the trace takes the tasks' ends from the provider's registry instead.
+          for (const known of provider.listAsyncTasks({ chatId })) {
+            const open = trace.runningBackgroundTasks.some((item) => item.task_id === known.id);
+            if (open && known.state !== "running" && known.state !== "paused") {
+              trace.acp({ sessionUpdate: "async_task_state_update", asyncTaskId: known.id, state: known.state,
+                ...(known.summary ? { summary: known.summary } : {}) } as unknown as ProviderEvent);
+            }
+          }
+        }
+        const live = provider.listAsyncTasks({ chatId }).filter((candidate) => candidate.state === "running" || candidate.state === "paused");
+        if (!live.length) {
+          backgroundDecision = null;
+          return;
+        }
+        const verdict = laneRecord ? this.parkedLanes.canPark(laneRecord) : { park: false as const, reason: null };
+        if (verdict.park) {
+          this.recordTrace(task.id, () => trace.backgroundTasksHandedOff());
+          backgroundDecision = "park";
+          return;
+        }
+        if (laneRecord) this.parkedLanes.noteStopReason(laneRecord, live.map((candidate) => candidate.id),
+          verdict.reason ?? options.reason);
+        this.recordTrace(task.id, () => trace.backgroundTasksEnding(options.reason));
+        const requestedAt = new Date().toISOString();
+        for (const candidate of live) {
+          this.recordTrace(task.id, () => trace.backgroundTaskStopRequested(candidate.id, { by: "remi", requested_at: requestedAt }));
+        }
+        await consumeBackgroundFrames(provider.settleAsyncTasks({ chatId, stopRunning: true, timeoutMs: LANE_STOP_TIMEOUT_MS }));
+        for (const candidate of provider.listAsyncTasks({ chatId })) {
+          if (candidate.stop && live.some((running) => running.id === candidate.id)) {
+            this.recordTrace(task.id, () => trace.backgroundTaskStopResult(candidate.id, candidate.stop!.outcome));
+          }
+        }
+        backgroundDecision = "stopped";
+      };
+      endBackgroundTasksOnce = endBackgroundTasks;
+
+      // PR 6 §2.5: a doorbell turn attaches to the parked process. The cycle Claude started when its
+      // task ended replays first; other input merged into the turn is prompted after it; a cycle
+      // that never came leaves the doorbell itself to be prompted, so the turn always gets a reply.
+      const inputMessages = Array.isArray(turnInput.input_messages) ? turnInput.input_messages : [];
+      // The doorbell is its `metadata.background_task`. An offer projection that drops message metadata
+      // still shows a platform status message with the doorbell's text while this lane's doorbell is out.
+      const attachedDoorbell = adopted && laneRecord?.doorbell === "attached";
+      const isDoorbellInput = (message: UnifiedMessage) => readBackgroundDoorbell(message.metadata) !== null
+        || (attachedDoorbell && message.sender_type === "platform" && message.message_kind === "status"
+          && message.body_md.includes(BACKGROUND_DOORBELL_PREFIX));
+      const doorbellInput = inputMessages.filter(isDoorbellInput);
+      let skipFirstPrompt = false;
+      let providerEnteredEarly = false;
+      if (adopted && doorbellInput.length && wakesModel && provider.listenAutonomous) {
+        startupSignal.throwIfAborted();
+        onProviderEntry?.();
+        providerEnteredEarly = true;
+        const listen = new AbortController();
+        const stopListening = () => listen.abort();
+        signal.addEventListener("abort", stopListening, { once: true });
+        steerFeed.setInterrupt(stopListening);
+        let cycleFrames = 0;
+        try {
+          for await (const event of provider.listenAutonomous({ chatId: config.chatId, signal: listen.signal,
+            idleMs: this.options.autonomousIdleMs })) {
+            if (isAutonomousActivity(event)) cycleFrames++;
+            const usageUnits = (event as { _meta?: Record<string, unknown> })._meta?.remiUsageUnits;
+            if (Array.isArray(usageUnits)) checkpointUsage(ledger.observe((usageUnits as TaskUsageUnit[]).map(unit => ({
+              ...unit, provider: agent.provider, requestedModel: unit.requestedModel ?? config.model ?? null,
+            }))));
+            trace.acp(event);
+          }
+        } catch (err) {
+          log.warn(`Task ${task.id}: the attached cycle failed: ${redactProviderErrorText(err instanceof Error ? err.message : String(err), failureCredentials)}`);
+        } finally {
+          this.recordTrace(task.id, () => trace.promptEnded({ aborted: false }));
+          steerFeed.setInterrupt(null);
+          signal.removeEventListener("abort", stopListening);
+        }
+        const attachedResponse = provider.getLastResponse?.() as AgentResponse | null | undefined;
+        if (attachedResponse?.model) this.recordTrace(task.id, () => trace.model(attachedResponse.model!));
+        checkpointUsage(ledger.observe(responseToUsageUnits(agent.provider, attachedResponse, config.model, "attach")));
+        // Other input merged into the doorbell turn: what woke the agent besides the doorbell (§2.6).
+        const others = inputMessages.filter((message) => !isDoorbellInput(message) && message.to_agent_id === agent.id
+          && message.wake_applied === "now");
+        if (!cycleFrames) {
+          log.info(`Task ${task.id}: background_cycle_missing; prompting the doorbell`, { event: "background_cycle_missing" });
+        } else if (others.length) {
+          // The doorbell was answered by the cycle: it is neither the request nor a triggering message now.
+          const doorbellIds = new Set(doorbellInput.map((message) => message.id));
+          const projected = (task as AgentTask).sessionProjection ?? (task as AgentTask).session_projection;
+          const projection = projected?.jsonl ? { ...projected, jsonl: projected.jsonl.split("\n").filter((line) => {
+            try { return !doorbellIds.has(JSON.parse(line).id); } catch { return true; }
+          }).join("\n") } : projected;
+          prompt = buildTaskPromptArtifact({ ...task, input_messages: others,
+            ...(projection ? { sessionProjection: projection, session_projection: projection } : {}) } as MultiremiTaskWithAgent,
+          promptOptions).prompt;
+        } else {
+          skipFirstPrompt = true;
+        }
+      }
 
       while (true) {
         turnIndex++;
@@ -4601,13 +5070,15 @@ export class MultiremiDaemon {
         config.onPromptStarted = roundPump ? () => roundPump.promptStarted() : undefined;
         steerFeed.setInterrupt(roundPump ? () => roundPump.interrupt() : () => turnAbort.abort());
         let turnError: unknown = null;
+        // The attached cycle already answered a doorbell turn with no other input (§2.5).
+        const skipRound = turnIndex === 1 && skipFirstPrompt;
         try {
           resetElicitationContextOffset();
-          if (turnIndex === 1) {
+          if (turnIndex === 1 && !providerEnteredEarly) {
             startupSignal.throwIfAborted();
             onProviderEntry?.();
           }
-          for await (const event of session.run(prompt)) {
+          if (!skipRound) for await (const event of session.run(prompt)) {
             // Billing stays on `_meta.remiUsageUnits` to the ledger; the trace
             // keeps only context occupancy (billing-only frames are dropped).
             const usageUnits = (event as { _meta?: Record<string, unknown> })._meta?.remiUsageUnits;
@@ -4623,7 +5094,7 @@ export class MultiremiDaemon {
           turnError = err;
         } finally {
           // A steer interrupt aborts the round: its still-open tools end `stopped`.
-          this.recordTrace(task.id, () => trace.promptEnded({ aborted: turnAbort.signal.aborted }));
+          if (!skipRound) this.recordTrace(task.id, () => trace.promptEnded({ aborted: turnAbort.signal.aborted }));
           steerFeed.setInterrupt(null);
           roundPump?.endRound();
           armRoundGrace = null;
@@ -4633,6 +5104,7 @@ export class MultiremiDaemon {
         let last = provider.getLastResponse?.() as AgentResponse | null | undefined;
         if (last?.model) this.recordTrace(task.id, () => trace.model(last!.model!));
         finalSessionId = last?.sessionId ?? finalSessionId;
+        if (laneRecord) this.parkedLanes.setProviderSession(laneRecord, finalSessionId);
         checkpointUsage(ledger.observe(responseToUsageUnits(agent.provider, last, config.model, `turn:${turnIndex}`)));
         // Resume by provider session id if the follow-up turn needs a fresh
         // ACP process (e.g. the previous one died between turns).
@@ -4656,7 +5128,7 @@ export class MultiremiDaemon {
         const wrapUpOver = () => forceAnswerDeadline != null && Date.now() >= forceAnswerDeadline;
         while (this.options.autonomousRounds && provider.listenAutonomous && !turnError && !turnAbort.signal.aborted
           && !signal.aborted && !forceAnswerExpired && !wrapUpOver()
-          && !steerFeed.hasPending && trace.owesAutonomousRound && autonomousRounds < AUTONOMOUS_MAX_ROUNDS) {
+          && !steerFeed.hasPending && (trace.owesAutonomousRound || taskEndUnseen()) && autonomousRounds < AUTONOMOUS_MAX_ROUNDS) {
           autonomousRounds++;
           const listen = new AbortController();
           const stopListening = () => listen.abort();
@@ -4732,6 +5204,10 @@ export class MultiremiDaemon {
           }
         }
 
+        // PR 6 §2.2: hand the running background tasks off (the process parks) or stop them,
+        // before the final reply is picked and the trace closes.
+        await endBackgroundTasks({ drain: true, reason: "turn_end" });
+
         // Finalize while the provider session is still open, so a steer that
         // races completion (completeTask steer barrier → 409 steer_pending)
         // can still be injected as another turn instead of failing the run.
@@ -4769,6 +5245,8 @@ export class MultiremiDaemon {
           // failed (e.g. transient network) — retry it so the barrier lifts,
           // instead of letting an ignorable consume error become a terminal
           // completion conflict.
+          // A doorbell among them is the bridge's to deliver (§2.6): recorded now, never prompted.
+          for (const message of pendingNow) if (isDoorbellSteer(message)) divertDoorbell(message);
           const stale = pendingNow.filter((m) => recordedSteerIds.has(m.id));
           if (stale.length) await this.taskDownlinks.consumeTaskSteerMessages(task.id, stale.map((m) => m.id));
           const fresh = pendingNow.filter((m) => !recordedSteerIds.has(m.id));
@@ -4789,6 +5267,12 @@ export class MultiremiDaemon {
         return { output: candidate, sessionId: finalSessionId, workDir, usageSnapshot: ledger.snapshot, completed: true };
       }
     } finally {
+      // PR 6 §6.3: a cancelled or failed attempt whose process lives still hands its tasks off or stops them
+      // (its trace closes after this); a cancel ends the turn, not the background work.
+      if (backgroundDecisionOf() === null && !trace.items.some((item) => item.type === "background_task" && item.handed_off)) {
+        await endBackgroundTasksOnce?.({ drain: false, reason: signal.aborted ? "cancelled" : "turn_end" }).catch((error: unknown) =>
+          log.warn(`Task ${task.id}: ending background tasks failed: ${error instanceof Error ? error.message : String(error)}`));
+      }
       // Every prompt has settled (and drained its model calls): revoke the run's
       // shim tokens before the ledger closes, so no later call can use the real
       // key unmetered (a backgrounded command, the steering drain, close()).
@@ -4802,7 +5286,16 @@ export class MultiremiDaemon {
       await this.reportIssueWorkspaceAfterRun(task, workspaceDir, preparedWorkspace.repos).catch((err) => {
         log.warn(`Failed to report final workspace state for ${task.id}: ${err instanceof Error ? err.message : String(err)}`);
       });
-      await provider.close?.();
+      if (laneRecord) {
+        // PR 6 §2.2: park the process while its tasks run, else close it (and release what it held).
+        this.parkedLanes.attach(laneRecord, null);
+        this.parkedLanes.setProviderSession(laneRecord, finalSessionId);
+        const outcome = backgroundDecisionOf() === "park" ? await this.parkedLanes.park(laneRecord) : null;
+        if (outcome?.parked) log.info(`Task ${task.id} parked its lane's process`, { event: "background_lane_parked" });
+        else await this.parkedLanes.endAttempt(laneRecord, outcome && !outcome.parked ? outcome.reason : null);
+      } else {
+        await provider.close?.();
+      }
     }
   }
 

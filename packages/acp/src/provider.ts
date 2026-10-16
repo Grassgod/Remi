@@ -1657,6 +1657,17 @@ export class AcpProvider implements Provider {
     return entry?.client.alive ? entry.client.processGroupId : null;
   }
 
+  /**
+   * End a model cycle the bridge started on its own while nobody reads it
+   * (PR 6 §2.5: a doorbell the server rejected): `session/cancel` on the root
+   * session. Nothing while a prompt is on the wire.
+   */
+  async cancelIdle(chatId: string): Promise<void> {
+    const entry = this._pool.get(chatId);
+    if (!entry || entry.promptInFlight || !entry.client.alive) return;
+    await entry.client.cancel(entry.acpSessionId).catch(() => {});
+  }
+
   /** Whether a live process is pooled under `chatId`. */
   sessionAlive(chatId: string): boolean {
     return this._pool.get(chatId)?.client.alive === true;
