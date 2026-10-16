@@ -125,6 +125,40 @@ for (const backend of backends) {
       } finally { await opened.close(); }
     }, TIMEOUT);
 
+    it("hands the doorbell's background_task, and no other metadata, to the offer input and to a steer", async () => {
+      const opened = await backend.open();
+      try {
+        const { store } = opened;
+        const world = backgroundWorld(store);
+        const created = wake(world);
+        const doorbell = { task_id: "bash-1", name: "npm test", task_type: "shell", status: "completed" as const,
+          origin_attempt_id: world.attemptId, origin_turn_id: world.turnId, provider_session_id: PROVIDER_SESSION };
+        const key = (taskId: string) => backgroundDoorbellDedupeKey({ agent_id: world.agentId, execution_scope: "" }, taskId);
+        // A person's message merged into the doorbell turn, even one that claims a doorbell, carries only its scope.
+        const member = store.findWorkspaceMemberForUser("local", "local")!;
+        store.sendMessage({ session_id: world.chatId, sender: { type: "member", id: member.id },
+          to: { type: "agent", ref: world.agentId }, message_kind: "request", wake_requested: "now",
+          body_md: "and the logs?", metadata: { background_task: doorbell } });
+        const bridge = store.getDaemonTurnBridge();
+        const offer = bridge.offerInput(store.getTaskWithAgent(created.attempt_id!)!);
+        const ring = offer.input_messages.find((message) => message.dedupe_key === key("bash-1"))!;
+        expect(ring.metadata).toEqual({ execution_scope: "", background_task: doorbell });
+        expect(readBackgroundDoorbell(ring.metadata)).toEqual(doorbell);
+        const person = offer.input_messages.find((message) => message.sender_type === "member")!;
+        expect(person.metadata).toEqual({ execution_scope: "" });
+
+        // The attempt runs; the next end reaches it as a steer with its own doorbell.
+        expect(store.claimTask(world.runtimeId)?.id).toBe(created.attempt_id!);
+        store.startTask(created.attempt_id!);
+        expect(wake(world, { task_id: "bash-2", status: "failed" }).outcome).toBe("delivered");
+        const snapshot = bridge.snapshot({ runtimeId: world.runtimeId, daemonId: world.daemonId, workspaceId: "local" },
+          new Set([created.attempt_id!]));
+        const steer = snapshot.messages.map((entry) => entry.message).find((message) => message.dedupe_key === key("bash-2"))!;
+        expect(steer.metadata).toEqual({ execution_scope: "",
+          background_task: { ...doorbell, task_id: "bash-2", status: "failed" } });
+      } finally { await opened.close(); }
+    }, TIMEOUT);
+
     it("refuses a closed session and a moved lane, writing nothing", async () => {
       const opened = await backend.open();
       try {
