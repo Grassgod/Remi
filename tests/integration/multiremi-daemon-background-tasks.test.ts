@@ -167,15 +167,21 @@ function phaseD(store: MultiremiStore, options: { cap?: boolean; reject?: "sessi
 
 /** The real AcpProvider over the scripted agent, with everything the daemon may call on it. */
 function scriptedAcp(config: FakeSubagentConfig, logPath: string, agentType: "claude" | "codex",
-  extra: Partial<AcpProviderOptions> = {}): MultiremiDaemonProviderFactory {
+  extra: Partial<AcpProviderOptions> = {},
+  /** Called on each `listAsyncTasks` with the number of prompts whose stream has ended so far. */
+  onList?: (promptsEnded: number) => void): MultiremiDaemonProviderFactory {
   return (options) => {
+    let promptsEnded = 0;
     const acp = new AcpProvider({
       ...options, agentType, executable: process.execPath, args: [FAKE_AGENT], privateTmpDirectory: undefined,
       env: { ...options.env, FAKE_SUBAGENT_CONFIG: JSON.stringify({ advertise: agentType, ...config }), FAKE_SUBAGENT_LOG: logPath },
       ...extra,
     });
     return {
-      sendStream: (message, sendOptions) => acp.sendStream(message, sendOptions) as AsyncGenerator<ProviderEvent>,
+      sendStream: async function* (message, sendOptions) {
+        yield* acp.sendStream(message, sendOptions) as AsyncGenerator<ProviderEvent>;
+        promptsEnded++;
+      },
       listenAutonomous: (listenOptions) => acp.listenAutonomous(listenOptions),
       steer: (text, steerOptions) => acp.steer(text, steerOptions),
       subagentSession: (sessionId) => acp.subagentSession(sessionId),
@@ -184,7 +190,10 @@ function scriptedAcp(config: FakeSubagentConfig, logPath: string, agentType: "cl
       get typedSessionFailures() { return acp.typedSessionFailures; },
       setPermissionHandler: (handler) => acp.setPermissionHandler(handler),
       setElicitationHandler: (handler) => acp.setElicitationHandler(handler),
-      listAsyncTasks: (listOptions) => acp.listAsyncTasks(listOptions),
+      listAsyncTasks: (listOptions) => {
+        onList?.(promptsEnded);
+        return acp.listAsyncTasks(listOptions);
+      },
       stopAsyncTask: (taskId, stopOptions) => acp.stopAsyncTask(taskId, stopOptions),
       settleAsyncTasks: (settleOptions) => acp.settleAsyncTasks(settleOptions),
       reuseCheck: (chatId, sendOptions) => acp.reuseCheck(chatId, sendOptions),
@@ -359,6 +368,79 @@ describe("Bun Multiremi daemon background tasks (PR 6)", () => {
     expectNoOverlap(logPath);
     expect(processes(logPath).size).toBe(2);
     expect(agentLog(logPath).filter((entry) => entry.method === "initialize")).toHaveLength(2);
+  }, 60_000);
+
+  /**
+   * (17) The attempt hands T and U off at its end, then the completion barrier finds a message sent in the
+   * meantime (a pending-steer conflict): the attempt runs on, T ends in that round and is answered there.
+   */
+  const handOffThenSteer = async (name: string, secondRound: FakeSubagentStep[]) => {
+    const { store, agent, daemon, d } = await bed(name);
+    const logPath = join(workDir!, "agent.jsonl");
+    const chat = store.createChatSession({ agentId: agent.id });
+    let sent = false;
+    const run = daemon(scriptedAcp({ prompts: [
+      [...bash("t", "toolu_t", "npm test"), ...bash("u", "toolu_u", "npm run dev"), chunk("Both started."), { resolve: "end_turn" }],
+      secondRound,
+    ] }, logPath, "claude", {}, (promptsEnded) => {
+      // The first end's hand-off reads the registry first: the message lands after the round's last steer check.
+      if (promptsEnded !== 1 || sent) return;
+      sent = true;
+      store.sendMessage({ session_id: chat.id, sender: { type: "member", id: "mem_local_local" }, to: { type: "agent", ref: agent.id },
+        message_kind: "request", wake_requested: "now", body_md: "How did the tests do?" });
+    }));
+    // The registry calls the run makes, in order.
+    const lanes = (run as unknown as { parkedLanes: { handOff(record: unknown): void; cancelHandOff(record: unknown): void } }).parkedLanes;
+    const calls: string[] = [];
+    for (const method of ["handOff", "cancelHandOff"] as const) {
+      const original = lanes[method].bind(lanes);
+      lanes[method] = (record: unknown) => { calls.push(method); original(record); };
+    }
+    const attempt = store.sendChatMessage(chat.id, { body: "Run the tests and start the dev server" }).task;
+    return { store, run, d, logPath, attempt, calls, sent: () => sent };
+  };
+
+  it("(17) a hand-off undone by a pending steer: the task that ends in the next round never rings", async () => {
+    const { store, run, d, logPath, attempt, calls, sent } = await handOffThenSteer("handoff-steer", [
+      { delayMs: 50, ...task({ id: "t", event: "completed", summary: "12 passed" }) },
+      chunk("The tests passed."), { resolve: "end_turn" },
+    ]);
+    await waitFor(() => finished(store, attempt.id), "the turn");
+    expect(sent()).toBe(true);
+    expect(store.getTask(attempt.id)).toMatchObject({ status: "completed", result: "The tests passed." });
+    // Two prompts on one process: the message was prompted in the same attempt after the hand-off was undone.
+    expect(agentLog(logPath).filter((entry) => entry.method === "session/prompt")).toHaveLength(2);
+    await waitFor(() => d.snapshots.some((snapshot) => snapshot.state === "parked"), "parked");
+    const parked = d.snapshots.findLast((snapshot) => snapshot.state === "parked")!;
+    expect(parked.tasks.find((candidate) => candidate.task_id === "u")).toMatchObject({ status: "running" });
+    expect(parked.tasks.find((candidate) => candidate.task_id === "t")).toMatchObject({ status: "completed" });
+    // T was answered in the attempt: no doorbell, now or later.
+    await Bun.sleep(1_000);
+    expect(d.wakes).toEqual([]);
+    // The steer undid the first hand-off; the second end handed off U alone.
+    expect(calls).toEqual(["handOff", "cancelHandOff", "handOff"]);
+    const items = traceItems(run.traceStore().read(attempt.id).events);
+    expect(items.find((item) => item.id === "bg:t")).toMatchObject({ status: "completed" });
+    expect((items.find((item) => item.id === "bg:t") as { handed_off?: boolean } | undefined)?.handed_off).toBeFalsy();
+    expect(items.find((item) => item.id === "bg:u")).toMatchObject({ handed_off: true });
+  }, 60_000);
+
+  it("(17b) the undone hand-off resets the decision: a stop of the next round hands off again, and the ended task never rings", async () => {
+    const { store, d, logPath, attempt, calls } = await handOffThenSteer("handoff-steer-stop", [
+      { delayMs: 50, ...task({ id: "t", event: "completed", summary: "12 passed" }) },
+      chunk("The tests passed; "), { hold: "cancel" },
+    ]);
+    await waitFor(() => agentLog(logPath).filter((entry) => entry.method === "session/prompt").length === 2, "the second round");
+    await waitFor(() => d.snapshots.some((snapshot) => snapshot.tasks.some((candidate) => candidate.task_id === "t"
+      && candidate.status === "completed")), "T's end reported");
+    store.cancelTask(attempt.id);
+    await waitFor(() => d.snapshots.some((snapshot) => snapshot.state === "parked"), "parked after the stop");
+    // The stopped round's end decided again (a stale `park` would have skipped this second hand-off).
+    expect(calls).toEqual(["handOff", "cancelHandOff", "handOff"]);
+    expect(d.snapshots.findLast((snapshot) => snapshot.state === "parked")!.tasks
+      .find((candidate) => candidate.task_id === "u")).toMatchObject({ status: "running" });
+    await Bun.sleep(1_000);
+    expect(d.wakes).toEqual([]);
   }, 60_000);
 
   it("(5) the keep-alive cap stops the tasks and closes the process", async () => {
