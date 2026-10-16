@@ -1,6 +1,6 @@
 import { queryOptions } from "@tanstack/react-query";
 import { api } from "../api";
-import type { ChatOriginFilter, ChatPendingTask, PendingChatTasksResponse } from "../types";
+import type { ChatBackgroundTasksSnapshot, ChatOriginFilter, ChatPendingTask, PendingChatTasksResponse } from "../types";
 import type { ChatQueue } from "../api/schemas/chat-queue";
 
 // NOTE on workspace scoping:
@@ -30,6 +30,8 @@ export const chatKeys = {
   humanRequests: (taskId: string) => ["task-human-requests", taskId] as const,
   /** Follow-up queue of one Chat (ADR 0020): live rows and the lane pause. */
   queue: (wsId: string, sessionId: string) => [...chatKeys.all(wsId), "queue", sessionId] as const,
+  /** One Chat's background tasks (PR 6): the session registry, never a trace. */
+  backgroundTasks: (wsId: string, sessionId: string) => [...chatKeys.all(wsId), "background-tasks", sessionId] as const,
 };
 
 /**
@@ -154,6 +156,39 @@ export function chatQueueOptions(
     queryFn: () => api.getChatQueue(sessionId),
     enabled: !!sessionId && (options.enabled ?? true),
     refetchInterval: chatQueueRefetchInterval,
+    refetchIntervalInBackground: false,
+    staleTime: Infinity,
+  });
+}
+
+/**
+ * Background-task fallback poll (PR 6). `chat:background_tasks` keeps the
+ * rows current; the daemon refreshes a running lane every 30 s, so this only
+ * reconciles a missed event while a task runs, and never while the tab is
+ * hidden.
+ */
+export const CHAT_BACKGROUND_TASKS_REFETCH_INTERVAL_MS = 30_000;
+export function chatBackgroundTasksRefetchInterval(query: {
+  state: { data?: ChatBackgroundTasksSnapshot };
+}): number | false {
+  return (query.state.data?.running ?? 0) > 0 ? CHAT_BACKGROUND_TASKS_REFETCH_INTERVAL_MS : false;
+}
+
+/**
+ * One Chat's background tasks (PR 6 §8). Read only while the chat is on
+ * screen and the session list says a task runs, or while the panel shows
+ * them (MUL-472); other readers pass `enabled: false` and see the cache.
+ */
+export function chatBackgroundTasksOptions(
+  wsId: string,
+  sessionId: string,
+  options: { enabled?: boolean } = {},
+) {
+  return queryOptions({
+    queryKey: chatKeys.backgroundTasks(wsId, sessionId),
+    queryFn: () => api.listChatBackgroundTasks(sessionId),
+    enabled: !!sessionId && (options.enabled ?? true),
+    refetchInterval: chatBackgroundTasksRefetchInterval,
     refetchIntervalInBackground: false,
     staleTime: Infinity,
   });

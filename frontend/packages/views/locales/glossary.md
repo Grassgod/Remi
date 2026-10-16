@@ -14,6 +14,6 @@ Chat 运行中的两种后续发送方式沿用 Codex 的中文用词：**引导
 
 **子代理**（subagent）是 Agent 在一轮里派生、替它完成一部分工作的代理，包括 Claude 的 Agent / Task 和 Codex 的子线程；**智能体**只指用户自己的 Agent，两者不混用。en 用 subagent，ja 用「サブエージェント」，ko 用「하위 에이전트」。执行步骤里的子代理文案在 `chat.steps`（`subagent_*`、`agent_*`、`summary_agent_*`），与 `@multiremi/shared` 的 `STEP_COPY_ZH` 同源；子代理行、完成行、运行条和子代理面板的文案在 `chat.subagents`，折叠标题后缀与控制动作详情在 `chat.turn_steps`（`background_running`、`message_to*`），侧栏计数在 `chat.sidebar.status.subagents`。
 
-**后台任务**（background task）是 Agent 的一次调用交给后台继续跑的工作：后台命令（Claude 的后台 Bash、Codex 的后台终端）、后台工作流和其他后台任务，可以在这一轮结束后继续运行；它不是子代理。en 用 background task / background command / background workflow，ja 用「バックグラウンドタスク」「バックグラウンドコマンド」「バックグラウンドワークフロー」，ko 用「백그라운드 작업」「백그라운드 명령」「백그라운드 워크플로」。执行步骤里启动它的那一行的文案在 `chat.steps`（`background_*`），与 `STEP_COPY_ZH` 同源。
+**后台任务**（background task）是 Agent 的一次调用交给后台继续跑的工作：后台命令（Claude 的后台 Bash、Codex 的后台终端）、后台工作流和其他后台任务，可以在这一轮结束后继续运行；它不是子代理。en 用 background task / background command / background workflow，ja 用「バックグラウンドタスク」「バックグラウンドコマンド」「バックグラウンドワークフロー」，ko 用「백그라운드 작업」「백그라운드 명령」「백그라운드 워크플로」。执行步骤里启动它的那一行的文案在 `chat.steps`（`background_*`），与 `STEP_COPY_ZH` 同源；右侧面板的后台任务视图、运行条、结束提示、门铃行和停止的文案在 `chat.bg_tasks`，面板切换里的子代理计数在 `chat.subagents.view`，侧栏计数在 `chat.sidebar.status.bg_tasks`，归档与删除确认里的后台任务说明在 `chat.sidebar.archive_dialog` / `delete_dialog`。门铃是平台在后台任务结束时发给智能体的消息，Chat 里显示为一行「后台任务 X 已完成」。
 
 新增文案时同步维护各语言的键和插值占位符，验证入口为 [parity.test.ts](parity.test.ts)。开发规则见[前端 AGENTS.md](../../../AGENTS.md)，运行命令见[前端验证入口](../../../../docs/dev/frontend.md#验证入口)。

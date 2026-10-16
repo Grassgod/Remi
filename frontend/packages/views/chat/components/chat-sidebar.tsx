@@ -252,6 +252,8 @@ export function ChatSidebar({
   const [renaming, setRenaming] = useState<ChatSession | null>(null);
   const [renameValue, setRenameValue] = useState("");
   const [confirmArchive, setConfirmArchive] = useState<ChatSession | null>(null);
+  // Whether the chat being archived had a reply running (PR 6: background tasks alone also ask).
+  const [confirmArchiveRunning, setConfirmArchiveRunning] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState<ChatSession | null>(null);
 
   const titleOf = (session: ChatSession) => session.title?.trim() || t(($) => $.session_history.untitled);
@@ -289,8 +291,16 @@ export function ChatSidebar({
   const actions: RowActions = {
     select: onSelectSession,
     // Archiving stops a run and the run cannot be brought back, so a running
-    // chat asks first; an idle one archives at once and offers Undo.
-    archive: (session, running) => (running ? setConfirmArchive(session) : doArchive(session, true)),
+    // chat asks first; an idle one archives at once and offers Undo. Its
+    // background tasks stop too (PR 6 §2.7), so they ask the same way.
+    archive: (session, running) => {
+      if (!running && sessionBackgroundTasks(session, pendingBySession.get(session.id)) === 0) {
+        doArchive(session, true);
+        return;
+      }
+      setConfirmArchiveRunning(running);
+      setConfirmArchive(session);
+    },
     restore: (session) => {
       updateSession.mutateAsync({ sessionId: session.id, status: "active" }).catch(fail);
     },
@@ -533,7 +543,15 @@ export function ChatSidebar({
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>{t(($) => $.sidebar.archive_dialog.title)}</AlertDialogTitle>
-            <AlertDialogDescription>{t(($) => $.sidebar.archive_dialog.description)}</AlertDialogDescription>
+            <AlertDialogDescription>
+              {(() => {
+                const count = confirmArchive ? sessionBackgroundTasks(confirmArchive, pendingBySession.get(confirmArchive.id)) : 0;
+                if (!count) return t(($) => $.sidebar.archive_dialog.description);
+                return confirmArchiveRunning
+                  ? t(($) => $.sidebar.archive_dialog.description_running_bg_tasks, { count })
+                  : t(($) => $.sidebar.archive_dialog.description_bg_tasks, { count });
+              })()}
+            </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel autoFocus>{t(($) => $.sidebar.archive_dialog.cancel)}</AlertDialogCancel>
@@ -560,7 +578,13 @@ export function ChatSidebar({
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>{t(($) => $.sidebar.delete_dialog.title)}</AlertDialogTitle>
-            <AlertDialogDescription>{t(($) => $.sidebar.delete_dialog.description)}</AlertDialogDescription>
+            <AlertDialogDescription>
+              {t(($) => $.sidebar.delete_dialog.description)}
+              {(() => {
+                const count = confirmDelete ? sessionBackgroundTasks(confirmDelete, pendingBySession.get(confirmDelete.id)) : 0;
+                return count > 0 ? ` ${t(($) => $.sidebar.delete_dialog.bg_tasks, { count })}` : null;
+              })()}
+            </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel autoFocus disabled={deleteSession.isPending}>
@@ -847,9 +871,11 @@ function SessionRow({
   // An existing chat without a title is "Untitled"; "New chat" names the unsaved draft.
   const title = session.title?.trim() || t(($) => $.session_history.untitled);
   const more = t(($) => $.sidebar.more_actions);
+  const backgroundTasks = sessionBackgroundTasks(session, pendingTask);
   const status = needsAnswer ? t(($) => $.sidebar.status.needs_answer)
     : running ? t(($) => $.sidebar.status.running)
-      : unread ? t(($) => $.sidebar.status.unread) : null;
+      : unread ? t(($) => $.sidebar.status.unread)
+        : backgroundTasks > 0 ? t(($) => $.sidebar.status.bg_tasks, { count: backgroundTasks }) : null;
   const archiveLabel = archived ? t(($) => $.sidebar.menu.restore) : t(($) => $.sidebar.menu.archive);
 
   return (
@@ -888,7 +914,7 @@ function SessionRow({
         )}
       >
         <RowStatus running={running && !needsAnswer} needsAnswer={needsAnswer} unread={unread}
-          subagents={pendingTask?.running_subagents ?? 0} />
+          subagents={pendingTask?.running_subagents ?? 0} backgroundTasks={backgroundTasks} />
       </span>
       <span
         className={cn(
@@ -962,11 +988,31 @@ function SessionRow({
 }
 
 /**
+ * A chat's running background tasks (PR 6 §8.1): the session list's count,
+ * which covers tasks parked after their turn, or the running turn's own when
+ * that is higher. 0 when the server reports neither (older servers).
+ */
+function sessionBackgroundTasks(session: ChatSession, pendingTask: PendingChatTaskItem | undefined): number {
+  return Math.max(session.running_background_tasks ?? 0, pendingTask?.running_background_tasks ?? 0);
+}
+
+/**
  * `subagents`: the running turn's subagents, from the server's pending-task
  * list (PR 5 §6.7); 0 or absent (older servers) shows the spinner alone.
+ * `backgroundTasks` (PR 6): 「N 个后台任务」 shows with or without a running
+ * turn; beside the spinner while a turn runs (subagents win), else beside a
+ * small dot (the unread dot when there is a new reply).
  */
-function RowStatus({ running, needsAnswer, unread, subagents = 0 }: { running: boolean; needsAnswer: boolean; unread: boolean; subagents?: number }) {
+function RowStatus({ running, needsAnswer, unread, subagents = 0, backgroundTasks = 0 }: {
+  running: boolean; needsAnswer: boolean; unread: boolean; subagents?: number; backgroundTasks?: number;
+}) {
   const { t } = useT("chat");
+  const tasksBadge = backgroundTasks > 0 ? (
+    <span data-sidebar-bg-tasks={backgroundTasks}
+      className="whitespace-nowrap rounded-full bg-foreground/[0.06] px-1.5 text-[11px] leading-[18px] tabular-nums text-muted-foreground">
+      {t(($) => $.sidebar.status.bg_tasks, { count: backgroundTasks })}
+    </span>
+  ) : null;
   if (needsAnswer)
     return (
       <span className="max-w-[150px] truncate rounded-full bg-orange-50 px-2 text-xs leading-5 text-orange-700 dark:bg-orange-400/10 dark:text-orange-300">
@@ -981,14 +1027,26 @@ function RowStatus({ running, needsAnswer, unread, subagents = 0 }: { running: b
         className="size-4 shrink-0 animate-[spin_2s_steps(60,end)_infinite] text-foreground/60"
       />
     );
-    if (subagents <= 0) return spinner;
+    if (subagents <= 0 && !tasksBadge) return spinner;
     return (
       <span className="flex items-center gap-1.5">
-        <span data-sidebar-subagents={subagents}
-          className="whitespace-nowrap rounded-full bg-foreground/[0.06] px-1.5 text-[11px] leading-[18px] tabular-nums text-muted-foreground">
-          {t(($) => $.sidebar.status.subagents, { count: subagents })}
-        </span>
+        {subagents > 0 ? (
+          <span data-sidebar-subagents={subagents}
+            className="whitespace-nowrap rounded-full bg-foreground/[0.06] px-1.5 text-[11px] leading-[18px] tabular-nums text-muted-foreground">
+            {t(($) => $.sidebar.status.subagents, { count: subagents })}
+          </span>
+        ) : tasksBadge}
         {spinner}
+      </span>
+    );
+  }
+  if (tasksBadge) {
+    return (
+      <span className="flex items-center gap-1.5">
+        {tasksBadge}
+        {unread
+          ? <span role="img" aria-label={t(($) => $.sidebar.status.unread)} className="size-2 shrink-0 rounded-full bg-brand" />
+          : <span data-sidebar-bg-dot aria-hidden="true" className="size-1.5 shrink-0 rounded-full bg-foreground/35" />}
       </span>
     );
   }

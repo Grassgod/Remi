@@ -153,6 +153,55 @@ describe("ChatEndpoints contracts", () => {
     ]);
     expect("running_subagents" in tasks[3]!).toBe(false);
   });
+  it("reads the session list's background-task count, degrading a malformed one (PR 6)", async () => {
+    const list = await endpointsWithResponse([{ ...session, running_background_tasks: 2 }, { ...session, id: "chat-2", running_background_tasks: "x" }, { ...session, id: "chat-3" }])
+      .listChatSessions();
+    expect(list.map((item) => item.running_background_tasks)).toEqual([2, undefined, undefined]);
+  });
+  it("carries the attempt's background-task count into the pending list when the turn reports it (PR 6)", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => response({ turns: new URL(url).searchParams.get("status") === "running"
+      ? [turnFixture({ running_background_tasks: 1 }), turnFixture({ id: "turn_2", current_attempt_id: "attempt_2", session_id: "chat_2", running_background_tasks: -3 })]
+      : [], next_cursor: null })));
+    const { tasks } = await new ChatEndpoints(new HttpClient("https://api.example.test")).listPendingChatTasks();
+    expect(tasks.map((task) => task.running_background_tasks)).toEqual([1, undefined]);
+  });
+  it("reads a chat's background tasks from the session registry, dropping a malformed row and degrading unknown values (PR 6)", async () => {
+    const row = { id: "row-1", session_id: "chat-1", task_id: "t1", task_type: "shell", name: "npm run dev", command: "npm run dev",
+      origin_attempt_id: "attempt_1", status: "running", can_stop: true, started_at: "2026-10-16T00:00:00Z", lane_state: "parked",
+      parked_until: "2026-10-16T02:00:00Z", stop_reason: "a_new_reason", origin_turn_seq: 4 };
+    const snapshot = await endpointsWithResponse({ session_id: "chat-1", rows: [row, { ...row, id: "row-2", status: "teleported", lane_state: "orbit" }, { id: "row-3" }] })
+      .listChatBackgroundTasks("chat-1");
+    expect(fetch).toHaveBeenCalledWith("https://api.example.test/api/chat/sessions/chat-1/background-tasks", expect.anything());
+    expect(snapshot.rows.map((r) => [r.id, r.status, r.lane_state, r.stop_reason])).toEqual([
+      ["row-1", "running", "parked", null], ["row-2", "unknown", "closed", null],
+    ]);
+    expect(snapshot.rows[0]).toMatchObject({ origin_turn_seq: 4, stop_outcome: null, output_tail: null, usage: null });
+    // `running` is the server's, else the running rows.
+    expect(snapshot.running).toBe(1);
+    await expect(endpointsWithResponse({ session_id: "chat-9", rows: [] }).listChatBackgroundTasks("chat-1")).rejects.toBeInstanceOf(ApiContractError);
+    await expect(endpointsWithResponse({ tasks: [] }).listChatBackgroundTasks("chat-1")).rejects.toBeInstanceOf(ApiContractError);
+  });
+  it("asks to stop one background task or all of them (PR 6 §6.1)", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(null, { status: 202 })));
+    const api = new ChatEndpoints(new HttpClient("https://api.example.test"));
+    await expect(api.stopChatBackgroundTasks("chat-1", { task_id: "t1" })).resolves.toEqual([]);
+    expect(fetch).toHaveBeenCalledWith("https://api.example.test/api/chat/sessions/chat-1/background-tasks/stop", expect.objectContaining({
+      method: "POST", body: JSON.stringify({ task_id: "t1" }),
+    }));
+    await api.stopChatBackgroundTasks("chat-1", { all: true });
+    expect(fetch).toHaveBeenLastCalledWith(expect.any(String), expect.objectContaining({ body: JSON.stringify({ all: true }) }));
+    // The rows the server marked come back, well-formed ones of this chat only.
+    const marked = { id: "row-1", session_id: "chat-1", task_id: "t1", started_at: "2026-10-16T00:00:00Z", status: "running",
+      stop_requested_at: "2026-10-16T00:01:00Z", stop_requested_by: "member-1", stop_outcome: "pending" };
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ requested_at: "2026-10-16T00:01:00Z",
+      rows: [marked, { ...marked, id: "row-x", session_id: "chat-2" }, { id: "bad" }] }), { status: 202 })));
+    await expect(new ChatEndpoints(new HttpClient("https://api.example.test")).stopChatBackgroundTasks("chat-1", { task_id: "t1" }))
+      .resolves.toMatchObject([{ id: "row-1", stop_requested_by: "member-1", stop_outcome: "pending" }]);
+    // A refusal keeps its code for the caller.
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ error: "offline", code: "runtime_offline" }), { status: 409 })));
+    await expect(new ChatEndpoints(new HttpClient("https://api.example.test")).stopChatBackgroundTasks("chat-1", { all: true }))
+      .rejects.toMatchObject({ status: 409, body: { code: "runtime_offline" } });
+  });
   it("marks the conversation read through the cursor command and rejects an invalid acknowledgement", async () => {
     await expect(endpointsWithResponse({ session_id: "chat_1", cursor_seq: 5 }).markChatSessionRead("chat_1")).resolves.toBeUndefined();
     expect(fetch).toHaveBeenCalledWith("https://api.example.test/api/inbox/read", expect.objectContaining({ body: JSON.stringify({ session_id: "chat_1" }) }));

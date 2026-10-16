@@ -4,6 +4,7 @@ import { getCurrentWsId } from "../../platform/workspace-storage";
 import { chatKeys } from "../../chat/queries";
 import { issueKeys } from "../../issues/queries";
 import { removeChatSessionFromCache, updateChatSessionInCache } from "../../chat/session-cache";
+import { applyBackgroundTasksEvent } from "../../chat/background-tasks";
 import { useChatStore } from "../../chat";
 import type {
   TaskQueuedPayload,
@@ -221,14 +222,28 @@ export function createChatHandlers({ qc }: SyncContext): SyncModule {
         if (!p || typeof p !== "object") return;
         const payload = p as TaskSubagentsPayload;
         if (typeof payload.task_id !== "string" || !("running_subagents" in payload)) return;
-        const raw = payload.running_subagents;
-        const count = typeof raw === "number" && Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 0;
+        const countOf = (raw: unknown) => typeof raw === "number" && Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 0;
+        const count = countOf(payload.running_subagents);
+        // PR 6: the same report may carry the attempt's background tasks.
+        const tasks = "running_background_tasks" in payload ? countOf(payload.running_background_tasks) : undefined;
         const wsId = getCurrentWsId();
         if (!wsId) return;
+        const changed = (task: PendingChatTasksResponse["tasks"][number]) => task.task_id === payload.task_id
+          && (task.running_subagents !== count || (tasks !== undefined && task.running_background_tasks !== tasks));
         qc.setQueryData<PendingChatTasksResponse>(chatKeys.pendingTasks(wsId), (old) => {
-          if (!old?.tasks.some((task) => task.task_id === payload.task_id && task.running_subagents !== count)) return old;
-          return { ...old, tasks: old.tasks.map((task) => task.task_id === payload.task_id ? { ...task, running_subagents: count } : task) };
+          if (!old?.tasks.some(changed)) return old;
+          return { ...old, tasks: old.tasks.map((task) => task.task_id === payload.task_id
+            ? { ...task, running_subagents: count, ...(tasks !== undefined ? { running_background_tasks: tasks } : {}) } : task) };
         });
+      },
+
+      // A Chat's background tasks changed (PR 6 §7): merge the registry rows
+      // into a list a reader has loaded and move the sidebar's count. Nothing
+      // is read for a chat no one shows (MUL-472).
+      "chat:background_tasks": (p) => {
+        const wsId = getCurrentWsId();
+        if (!wsId) return;
+        if (!applyBackgroundTasksEvent(qc, wsId, p)) chatWsLogger.warn("chat:background_tasks: unreadable payload");
       },
 
       // task:waiting_local_directory fires when the daemon dequeues a task but

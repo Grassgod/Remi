@@ -72,8 +72,7 @@ export function getItemLabel(item: TraceItem): string {
     case "notice":
       return "Notice";
     case "background_task":
-      // PR 6 Phase C: minimal row until the background-task view lands.
-      return "Background task";
+      return item.task_type === "shell" ? "Background command" : item.task_type === "workflow" ? "Background workflow" : "Background task";
   }
 }
 
@@ -138,9 +137,12 @@ export function getItemSummary(item: TraceItem): string {
       return firstLine(item.summary);
     case "notice":
       return [item.title, firstLine(item.description)].filter(Boolean).join(" · ");
-    case "background_task":
-      // PR 6 Phase C
-      return firstLine(item.name) || firstLine(item.description);
+    case "background_task": {
+      // A task still running when its attempt ended continues in the chat's background tasks.
+      const name = firstLine(item.name) || firstLine(item.description);
+      return item.handed_off ? [name, "handed off"].filter(Boolean).join(" · ")
+        : item.stop_reason ? [name, `stopped: ${item.stop_reason}`].join(" · ") : name;
+    }
   }
 }
 

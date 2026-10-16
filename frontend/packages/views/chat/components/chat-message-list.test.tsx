@@ -11,6 +11,9 @@ import { paths } from "@multiremi/core/paths";
 import type { TraceItem } from "@multiremi/contracts/trace";
 import { at, command, message as traceMessage, permission, read, subagent, traceTurn, turnPage, turnTraceCache } from "../../test/trace-fixtures";
 import { createChatStore, registerChatStore, useChatStore } from "@multiremi/core/chat";
+import { chatKeys } from "@multiremi/core/chat/queries";
+import { setCurrentWorkspace } from "@multiremi/core/platform";
+import { bgSnapshot, bgTask } from "../lib/__fixtures__/background-tasks";
 
 const { copiedText } = vi.hoisted(() => ({ copiedText: vi.fn().mockResolvedValue(true) }));
 vi.mock("@multiremi/ui/lib/clipboard", () => ({ copyText: copiedText }));
@@ -546,6 +549,40 @@ describe("Chat rows without the envelope header or attempts list", () => {
     return { view, client };
   };
 
+  it("renders a doorbell as one line before the reply it started, and the strip with no running turn (PR 6 §8.1)", async () => {
+    const getTaskTrace = vi.fn();
+    const listChatBackgroundTasks = vi.fn();
+    setApiInstance({ getTurn: vi.fn(), getTaskTrace, listChatBackgroundTasks } as never);
+    setCurrentWorkspace("demo", "ws-1");
+    const doorbell = { background_task: { task_id: "t1", name: "npm test", task_type: "shell", status: "completed",
+      origin_attempt_id: "att_0", origin_turn_id: "turn_0", provider_session_id: "ps_1" } };
+    const { view, client } = render2([
+      { seq: 1, id: "bell", kind: "message", sender_type: "platform", sender_id: null, message_kind: "status", to_type: "agent", to_ref: "agent-1",
+        wake_applied: "now", wake_reason: "platform", body_md: "后台任务已结束：npm test（已完成，用时 45 秒）", metadata: doorbell },
+      { seq: 2, id: "turn_1", kind: "turn", task_id: "att_1", body_md: "",
+        metadata: { turn_id: "turn_1", status: "completed", final_entry_id: "reply", final_reply_md: "Tests pass." } },
+      { seq: 3, id: "reply", kind: "message", sender_type: "agent", message_kind: "reply", task_id: "turn_1", body_md: "Tests pass." },
+      // A person's message with the same metadata is still their bubble.
+      { seq: 4, id: "fake", kind: "message", sender_type: "member", sender_id: "user", message_kind: "request", to_type: "agent", to_ref: "agent-1",
+        wake_applied: "now", wake_reason: "human_sender", body_md: "Not a doorbell", metadata: doorbell },
+    ]);
+    try {
+      const bell = view.container.querySelector('[data-perf-key="bell"] [data-doorbell="t1"]');
+      expect(bell).not.toBeNull();
+      // Not a bubble: the platform body is not shown.
+      expect(view.container).not.toHaveTextContent("后台任务已结束");
+      expect(view.container).toHaveTextContent("Tests pass.");
+      expect(view.container.querySelector('[data-perf-key="fake"] [data-doorbell]')).toBeNull();
+      expect(view.container).toHaveTextContent("Not a doorbell");
+      // The registry's running task shows the strip though no turn runs; nothing was read for it.
+      expect(view.container.querySelector("[data-subagent-strip]")).toBeNull();
+      act(() => { client.setQueryData(chatKeys.backgroundTasks("ws-1", "cs-1"), bgSnapshot([bgTask("dev", { session_id: "cs-1" })], "cs-1")); });
+      await waitFor(() => expect(view.container.querySelector('[data-subagent-strip] [data-strip-task-chip="bgrow_dev"]')).not.toBeNull());
+      expect(listChatBackgroundTasks).not.toHaveBeenCalled();
+      expect(getTaskTrace).not.toHaveBeenCalled();
+    } finally { view.unmount(); client.clear(); }
+  });
+
   it("drops the envelope header and keeps one hint only for a message that did not wake the agent", () => {
     setApiInstance({ getTurn: vi.fn() } as never);
     const { view, client } = render2([
@@ -815,7 +852,8 @@ describe("live turn steps", () => {
       pendingTask={pendingTask} availability={undefined} /></QueryClientProvider>);
     try {
       const strip = view.container.querySelector<HTMLElement>("[data-subagent-strip]")!;
-      expect(strip.className).toContain("sticky");
+      // The strip shares one sticky block with the background-task notices (PR 6).
+      expect(strip.closest<HTMLElement>("[data-chat-running-strip]")!.className).toContain("sticky");
       expect(strip.querySelector('[data-strip-chip="sa:1"]')).not.toBeNull();
       // Its row in the live fold opens the panel on the live attempt.
       fireEvent.click(view.container.querySelector<HTMLButtonElement>('[data-chat-live-turn] [data-subagent-row="sa:1"]')!);

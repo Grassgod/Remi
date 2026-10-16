@@ -281,6 +281,40 @@ describe("ChatSidebar sections", () => {
     await waitFor(() => expect(row("Busy chat").querySelector("[data-sidebar-subagents]")).toHaveTextContent(/^1 subagent$/));
   });
 
+  it("badges background tasks from the session list with no running turn, beside a dot; subagents win while a turn runs (PR 6 §8.1)", async () => {
+    const view = mount({
+      sessions: [
+        chat("idle", { title: "Idle tasks", running_background_tasks: 2 }),
+        chat("unread", { title: "Unread tasks", running_background_tasks: 1, has_unread: true }),
+        chat("busy", { title: "Busy tasks", running_background_tasks: 1 }),
+        chat("mixed", { title: "Mixed", running_background_tasks: 3 }),
+        chat("old", { title: "Old server" }),
+      ],
+      pending: { tasks: [
+        { task_id: "task-busy", chat_session_id: "busy", status: "running" },
+        { task_id: "task-mixed", chat_session_id: "mixed", status: "running", running_subagents: 2 },
+      ] },
+    });
+    const idle = row("Idle tasks");
+    expect(idle.querySelector("[data-sidebar-bg-tasks]")).toHaveTextContent(/^2 background tasks$/);
+    // No turn runs: a small dot instead of the spinner, and the row says it.
+    expect(idle.querySelector("[data-sidebar-bg-dot]")).not.toBeNull();
+    expect(within(idle).queryByRole("img", { name: "Running" })).toBeNull();
+    expect(idle).toHaveAccessibleName("Idle tasks, 2 background tasks");
+    // A new reply keeps its own dot.
+    expect(within(row("Unread tasks")).getByRole("img", { name: "New reply" })).toBeInTheDocument();
+    expect(row("Unread tasks").querySelector("[data-sidebar-bg-tasks]")).toHaveTextContent(/^1 background task$/);
+    // A running turn keeps its spinner beside the tasks; its subagents win the badge.
+    expect(within(row("Busy tasks")).getByRole("img", { name: "Running" })).toBeInTheDocument();
+    expect(row("Busy tasks").querySelector("[data-sidebar-bg-tasks]")).toHaveTextContent("1 background task");
+    expect(row("Mixed").querySelector("[data-sidebar-subagents]")).toHaveTextContent("2 subagents");
+    expect(row("Mixed").querySelector("[data-sidebar-bg-tasks]")).toBeNull();
+    expect(row("Old server").querySelector("[data-sidebar-bg-tasks]")).toBeNull();
+    // The realtime event patches the list in place.
+    view.rerenderWith([chat("idle", { title: "Idle tasks", running_background_tasks: 0 })]);
+    await waitFor(() => expect(row("Idle tasks").querySelector("[data-sidebar-bg-tasks]")).toBeNull());
+  });
+
   it("names rows as buttons by title and status, and calls an untitled chat Untitled", () => {
     mount({
       sessions: [chat("a", { title: "Running chat" }), chat("b", { title: "  " })],
@@ -333,6 +367,21 @@ describe("ChatSidebar row actions", () => {
     // The stopped run cannot come back, so the confirmation is the last word.
     await waitFor(() => expect(state.toast).toHaveBeenCalledWith("Archived “Running chat”"));
     expect(state.toast.mock.calls[0]).toHaveLength(1);
+  });
+
+  it("asks before archiving a chat whose background tasks would stop, and says so (PR 6 §2.7)", async () => {
+    mount({ sessions: [chat("a", { title: "Server chat", running_background_tasks: 2 }), chat("b", { title: "Both", running_background_tasks: 1 })],
+      pending: { tasks: [{ task_id: "task-b", turn_id: "turn-b", chat_session_id: "b", status: "running" }] } });
+    fireEvent.click(within(row("Server chat")).getByRole("button", { name: "Archive" }));
+    expect(await screen.findByText("2 background tasks will be stopped. You can restore the chat from Archived.")).toBeInTheDocument();
+    expect(state.update).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    fireEvent.click(within(row("Both")).getByRole("button", { name: "Archive" }));
+    expect(await screen.findByText("The reply in progress and 1 background task will be stopped. You can restore the chat from Archived.")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    openMenu("Server chat");
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Delete…" }));
+    expect(await screen.findByText(/Its 2 background tasks will stop too\.$/)).toBeInTheDocument();
   });
 
   it("archives an idle chat at once and offers Undo", async () => {

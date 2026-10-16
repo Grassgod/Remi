@@ -6,6 +6,7 @@ import type { AgentResolver, StepDescriptor } from "@multiremi/shared/trace-step
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@multiremi/ui/components/ui/collapsible";
 import { cn } from "@multiremi/ui/lib/utils";
 import {
+  Activity,
   BookOpen,
   Bot,
   ChevronRight,
@@ -23,6 +24,7 @@ import {
   Search,
   SquareTerminal,
   TextSelect,
+  Workflow,
   Wrench,
   type LucideIcon,
 } from "lucide-react";
@@ -65,6 +67,8 @@ const ICONS: Record<StepIconKind, LucideIcon> = {
   agent_resume: Play,
   agent_close: CircleX,
   agent_list: List,
+  workflow: Workflow,
+  background: Activity,
 };
 
 /** Height + fade on Base UI's panel variable; reduced motion switches at once. */

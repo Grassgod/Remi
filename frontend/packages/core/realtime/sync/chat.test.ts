@@ -123,6 +123,14 @@ describe("chat queue realtime", () => {
     expect(qc.getQueryData(chatKeys.pendingTasks("ws-1"))).toBe(settled);
   });
 
+  it("patches the attempt's background-task count from the same report when it carries one (PR 6)", () => {
+    qc.setQueryData(chatKeys.pendingTasks("ws-1"), { tasks: [{ task_id: "task-1", chat_session_id: "chat-1", status: "running", running_subagents: 1 }] });
+    handlers["task:subagents"]?.({ chat_session_id: "chat-1", task_id: "task-1", running_subagents: 1, running_background_tasks: 2 });
+    expect(qc.getQueryData(chatKeys.pendingTasks("ws-1"))).toEqual({ tasks: [
+      { task_id: "task-1", chat_session_id: "chat-1", status: "running", running_subagents: 1, running_background_tasks: 2 },
+    ] });
+  });
+
   it("does not replace a running head or reset its status when a follow-up is queued", () => {
     handlers["task:queued"]?.({ chat_session_id: "chat-1", task_id: "task-2" });
     handlers["task:queued"]?.({ chat_session_id: "chat-1", task_id: "task-1" });
@@ -220,5 +228,57 @@ describe("chat queue realtime", () => {
     expect(store.clearInputDraft).toHaveBeenCalledWith("chat-1");
     expect(store.clearQueueState).toHaveBeenCalledWith("chat-1");
     expect(store.setActiveSession).toHaveBeenCalledWith(null);
+  });
+});
+
+describe("chat:background_tasks (PR 6 §7)", () => {
+  const row = (id: string, overrides: Record<string, unknown> = {}) => ({
+    id: `row-${id}`, session_id: "chat-1", task_id: id, task_type: "shell", name: id, command: id,
+    origin_attempt_id: "task-1", status: "running", can_stop: true, started_at: "2026-10-16T00:00:00Z",
+    lane_state: "parked", updated_at: "2026-10-16T00:00:01Z", ...overrides,
+  });
+  const key = chatKeys.backgroundTasks("ws-1", "chat-1");
+
+  it("moves the session's count everywhere and reads nothing for a chat no one shows", () => {
+    handlers["chat:background_tasks"]?.({ session_id: "chat-1", running: 2, rows: [row("a"), row("b")] });
+    expect(qc.getQueryData<ChatSession[]>(chatKeys.sessions("ws-1"))?.[0]?.running_background_tasks).toBe(2);
+    expect(qc.getQueryData<ChatSession[]>(chatKeys.sessionList("ws-1", "active"))?.[0]?.running_background_tasks).toBe(2);
+    expect(qc.getQueryData<ChatSession>(chatKeys.session("ws-1", "chat-1"))?.running_background_tasks).toBe(2);
+    // Another workspace's list is left alone, and no list is created.
+    expect(qc.getQueryData<ChatSession[]>(chatKeys.sessions("ws-2"))?.[0]?.running_background_tasks).toBeUndefined();
+    expect(qc.getQueryData(key)).toBeUndefined();
+  });
+
+  it("merges rows into a loaded list by id, keeping rows the event does not name and newer cached rows", () => {
+    qc.setQueryData(key, { session_id: "chat-1", running: 2, rows: [
+      row("a"), row("old", { status: "completed", ended_at: "2026-10-15T00:00:00Z" }),
+      row("b", { status: "stopped", stop_reason: "user", updated_at: "2026-10-16T00:00:09Z" }),
+    ] });
+    handlers["chat:background_tasks"]?.({ chat_session_id: "chat-1", rows: [
+      row("a", { status: "completed", ended_at: "2026-10-16T00:00:05Z", updated_at: "2026-10-16T00:00:05Z" }),
+      row("b", { updated_at: "2026-10-16T00:00:02Z" }),
+      row("c", { status: "mystery" }),
+      { id: "broken" },
+    ] });
+    const data = qc.getQueryData<{ running: number; rows: Array<{ task_id: string; status: string }> }>(key)!;
+    expect(data.rows.map((r) => [r.task_id, r.status])).toEqual([["a", "completed"], ["old", "completed"], ["b", "stopped"], ["c", "unknown"]]);
+    expect(data.running).toBe(0);
+    // Without `running`, the merged rows' count goes to the session list.
+    expect(qc.getQueryData<ChatSession[]>(chatKeys.sessions("ws-1"))?.[0]?.running_background_tasks).toBe(0);
+  });
+
+  it("rereads a loaded list when the event carries no rows, and ignores a payload with no session", async () => {
+    const observer = new QueryObserver(qc, { queryKey: key, queryFn: async () => ({ session_id: "chat-1", running: 1, rows: [row("z")] }) });
+    const unsubscribe = observer.subscribe(() => {});
+    try {
+      await vi.waitFor(() => expect(qc.getQueryData(key)).toBeTruthy());
+      qc.setQueryData(key, { session_id: "chat-1", running: 0, rows: [] });
+      handlers["chat:background_tasks"]?.({ session_id: "chat-1", running: 1 });
+      await vi.waitFor(() => expect(qc.getQueryData<{ rows: unknown[] }>(key)?.rows).toHaveLength(1));
+      const before = qc.getQueryData(chatKeys.sessions("ws-1"));
+      handlers["chat:background_tasks"]?.({ running: 3 });
+      handlers["chat:background_tasks"]?.(null);
+      expect(qc.getQueryData(chatKeys.sessions("ws-1"))).toBe(before);
+    } finally { unsubscribe(); }
   });
 });
