@@ -39,12 +39,23 @@ import type {
   PromptContent,
   AgentSteering,
   AgentNativeSubagents,
+  AsyncTaskStopParams,
+  AsyncTaskStopResult,
   SteerParams,
   SteerResponse,
 } from "@shared/contracts/acp-protocol.js";
 
 /** The AIR capability that turns on codex-acp's child sessions (and is accepted by claude-agent-acp). */
 export const AIR_NATIVE_SUBAGENT_SESSIONS = "nativeSubagentSessions";
+/**
+ * The AIR capability that makes both pinned bridges publish background work as
+ * `async_task_*` updates and serve `_session/async_task/stop` (PR 6 §1;
+ * claude-agent-acp 0.90 dist/air-extension.js `AIR_ASYNC_TASKS_CAPABILITY`,
+ * codex-acp 2.2.2 dist/index.js `AIR_ASYNC_TASKS_KEY`).
+ */
+export const AIR_ASYNC_TASKS = "asyncTasks";
+/** Stops one background task without cancelling the prompt (both pinned bridges). */
+export const ASYNC_TASK_STOP_METHOD = "_session/async_task/stop";
 
 export interface AcpClientOptions {
   /** An isolated probe supervisor already owns the process group. */
@@ -61,6 +72,12 @@ export interface AcpClientOptions {
    * Absent: the client advertises neither, and subagent frames stay on the root.
    */
   nativeSubagents?: AgentNativeSubagents | null;
+  /**
+   * Ask for background tasks (PR 6 §3.1): append the AIR `asyncTasks`
+   * capability, so the bridge publishes `async_task_*` updates and Claude its
+   * "backgrounded" marker. Absent: neither bridge sends them.
+   */
+  asyncTasks?: boolean;
   /** Working directory for the agent process. */
   cwd?: string;
   /**
@@ -168,6 +185,34 @@ export class AcpClient {
     const capabilities = airMetadata(this._initializeResult._meta)?.capabilities
       ?? airMetadata(this._initializeResult.agentCapabilities?._meta)?.capabilities;
     return Array.isArray(capabilities) && capabilities.includes(AIR_NATIVE_SUBAGENT_SESSIONS);
+  }
+
+  /**
+   * Background tasks are on (PR 6): the client asked for them and the agent
+   * lists the AIR `asyncTasks` capability. Both pinned bridges list it for
+   * any AIR client (claude-agent-acp 0.90 dist/acp-agent.js:1421).
+   */
+  get asyncTasksEnabled(): boolean {
+    if (!this._options.asyncTasks || !this._initializeResult) return false;
+    const capabilities = airMetadata(this._initializeResult._meta)?.capabilities
+      ?? airMetadata(this._initializeResult.agentCapabilities?._meta)?.capabilities;
+    return Array.isArray(capabilities) && capabilities.includes(AIR_ASYNC_TASKS);
+  }
+
+  /** The agent process id while it runs; null otherwise. */
+  get processId(): number | null {
+    const pid = this._process?.pid;
+    return this._process && !this._process.killed && typeof pid === "number" && pid > 0 ? pid : null;
+  }
+
+  /**
+   * The agent's own POSIX process group (the process is its leader when
+   * spawned detached), for the daemon's crash sweep; null when it shares the
+   * caller's group, on Windows, or when nothing runs.
+   */
+  get processGroupId(): number | null {
+    if (process.platform === "win32" || this._options.inheritProcessGroup) return null;
+    return this.processId;
   }
 
   private _log(...args: unknown[]) {
@@ -555,7 +600,12 @@ export class AcpClient {
     const native = this._options.nativeSubagents ?? null;
     const air = (capabilities: string[]) => ({
       version: 1,
-      capabilities: native?.airCapability ? [...capabilities, AIR_NATIVE_SUBAGENT_SESSIONS] : capabilities,
+      capabilities: [
+        ...capabilities,
+        ...(native?.airCapability ? [AIR_NATIVE_SUBAGENT_SESSIONS] : []),
+        // PR 6 §3.1: both bridges gate `async_task_*` and the Bash marker on it.
+        ...(this._options.asyncTasks ? [AIR_ASYNC_TASKS] : []),
+      ],
     });
     const params: InitializeParams = {
       protocolVersion: 1,
@@ -704,6 +754,17 @@ export class AcpClient {
     const result = await this._request<NewSessionResult>("session/load", params);
     this._serverSessionId = result.sessionId ?? sessionId;
     return { ...result, sessionId: result.sessionId ?? sessionId };
+  }
+
+  /**
+   * `_session/async_task/stop` (PR 6 §1): `sessionId` is the root session, even
+   * for a task started inside a native child. `{stopped: false}` when the task
+   * was never announced, has ended, or is already stopping.
+   */
+  async stopAsyncTask(sessionId: string, asyncTaskId: string): Promise<AsyncTaskStopResult> {
+    const params: AsyncTaskStopParams = { sessionId, asyncTaskId };
+    const result = await this._request<AsyncTaskStopResult | null>(ASYNC_TASK_STOP_METHOD, params);
+    return { stopped: result?.stopped === true };
   }
 
   async closeSession(sessionId: string): Promise<void> {

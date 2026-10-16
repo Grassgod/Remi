@@ -1,4 +1,5 @@
 import { loadMultiremiConfig } from "@multiremi/config.js";
+import { taskCredential } from "../core/task-context.js";
 import {
   CliApiClient,
   CliError,
@@ -49,7 +50,7 @@ export async function runContextCommand(invocation: CommandInvocation): Promise<
     serverUrl,
     token: shareCredential
       ? null
-      : explicitCredential ?? process.env.MULTIREMI_TOKEN?.trim() ?? config.token ?? null,
+      : explicitCredential ?? taskCredential() ?? config.token ?? null,
     shareToken: shareCredential,
     workspaceId,
     timeoutMs: integerOption(invocation, "timeout") ?? 30_000,

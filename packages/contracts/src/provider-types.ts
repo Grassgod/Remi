@@ -123,7 +123,12 @@ export interface Provider {
    * timeout. An unknown task, or one not running, answers `{stopped: false}`
    * without a wire call. Never throws.
    */
-  stopAsyncTask?(taskId: string, options: { chatId?: string | null; timeoutMs?: number }): Promise<StopAsyncTaskResult>;
+  stopAsyncTask?(taskId: string, options: {
+    chatId?: string | null;
+    timeoutMs?: number;
+    /** Who asked (the registry's `stop_request.by`); default `remi`. */
+    by?: TraceBackgroundTaskStopRequest["by"];
+  }): Promise<StopAsyncTaskResult>;
   /**
    * Replay the frames that arrived since the last prompt, wait `drainMs` for
    * late announcements (Codex), optionally stop every running task, then

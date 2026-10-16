@@ -44,6 +44,14 @@ export class CodexAdapter implements AgentAdapter {
    * outlives the prompt: no autonomous rounds.
    */
   readonly nativeSubagents = { airCapability: true } as const;
+  /**
+   * codex-acp 2.2.2 publishes unified-exec background terminals for the AIR
+   * `asyncTasks` capability (dist/index.js:42156-42234) and stops one through
+   * `_session/async_task/stop` (:42580-42592). A terminal that ends between
+   * turns starts no turn of its own (no self-start found, PR 6 §1.2): the next
+   * turn reads it.
+   */
+  readonly asyncTasks = { wakesModel: false } as const;
 
   resolveToolName(update: ToolCallUpdate | ToolCallProgressUpdate): string {
     // No `_meta` probe here: the only tool-call `_meta` keys codex-acp emits are

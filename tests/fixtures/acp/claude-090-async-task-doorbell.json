@@ -1,0 +1,518 @@
+[
+ {
+  "t": 0,
+  "remi": "prompt_sent",
+  "index": 0
+ },
+ {
+  "t": 1,
+  "jsonrpc": "2.0",
+  "method": "session/update",
+  "params": {
+   "sessionId": "sess_root",
+   "update": {
+    "sessionUpdate": "tool_call",
+    "toolCallId": "toolu_01BGmhCY7R5bGXSMMa5WhBkB",
+    "kind": "execute",
+    "status": "pending",
+    "title": "Terminal",
+    "_meta": {
+     "terminal_info": {
+      "terminal_id": "toolu_01BGmhCY7R5bGXSMMa5WhBkB"
+     },
+     "claudeCode": {
+      "toolName": "Bash"
+     }
+    }
+   }
+  }
+ },
+ {
+  "t": 2,
+  "jsonrpc": "2.0",
+  "method": "session/update",
+  "params": {
+   "sessionId": "sess_root",
+   "update": {
+    "sessionUpdate": "tool_call_update",
+    "toolCallId": "toolu_01BGmhCY7R5bGXSMMa5WhBkB",
+    "title": "remi message list chat_redacted --from 0 --to 2"
+   }
+  }
+ },
+ {
+  "t": 3,
+  "jsonrpc": "2.0",
+  "method": "session/update",
+  "params": {
+   "sessionId": "sess_root",
+   "update": {
+    "sessionUpdate": "tool_call_update",
+    "toolCallId": "toolu_01BGmhCY7R5bGXSMMa5WhBkB",
+    "rawInput": {
+     "command": "remi message list <session> --from 0 --to 1"
+    },
+    "_meta": {
+     "jetbrains": {
+      "air": {
+       "version": 1,
+       "commandTitle": "Read unread chat messages"
+      }
+     }
+    }
+   }
+  }
+ },
+ {
+  "t": 4,
+  "jsonrpc": "2.0",
+  "method": "session/update",
+  "params": {
+   "sessionId": "sess_root",
+   "update": {
+    "sessionUpdate": "tool_call",
+    "toolCallId": "toolu_01BxebSrKQzmNMgetis8Vscx",
+    "kind": "execute",
+    "status": "pending",
+    "title": "Terminal",
+    "_meta": {
+     "terminal_info": {
+      "terminal_id": "toolu_01BxebSrKQzmNMgetis8Vscx"
+     },
+     "claudeCode": {
+      "toolName": "Bash"
+     }
+    }
+   }
+  }
+ },
+ {
+  "t": 5,
+  "jsonrpc": "2.0",
+  "method": "session/update",
+  "params": {
+   "sessionId": "sess_root",
+   "update": {
+    "sessionUpdate": "tool_call_update",
+    "toolCallId": "toolu_01BxebSrKQzmNMgetis8Vscx",
+    "title": "sleep 20; echo done"
+   }
+  }
+ },
+ {
+  "t": 6,
+  "jsonrpc": "2.0",
+  "method": "session/update",
+  "params": {
+   "sessionId": "sess_root",
+   "update": {
+    "sessionUpdate": "tool_call_update",
+    "toolCallId": "toolu_01BxebSrKQzmNMgetis8Vscx",
+    "_meta": {
+     "jetbrains": {
+      "air": {
+       "version": 1,
+       "commandTitle": "Sleep 20 seconds then print done"
+      }
+     }
+    }
+   }
+  }
+ },
+ {
+  "t": 7,
+  "jsonrpc": "2.0",
+  "method": "session/update",
+  "params": {
+   "sessionId": "sess_root",
+   "update": {
+    "sessionUpdate": "tool_call_update",
+    "toolCallId": "toolu_01BxebSrKQzmNMgetis8Vscx",
+    "rawInput": {
+     "command": "sleep 20; echo done",
+     "description": "Sleep 20 seconds then print done",
+     "run_in_background": true
+    }
+   }
+  }
+ },
+ {
+  "t": 8,
+  "jsonrpc": "2.0",
+  "method": "session/update",
+  "params": {
+   "sessionId": "sess_root",
+   "update": {
+    "sessionUpdate": "tool_call_update",
+    "toolCallId": "toolu_01BGmhCY7R5bGXSMMa5WhBkB",
+    "_meta": {
+     "terminal_output": {
+      "terminal_id": "toolu_01BGmhCY7R5bGXSMMa5WhBkB",
+      "data": "Exit code 127\n(eval):1: command not found: remi"
+     }
+    }
+   }
+  }
+ },
+ {
+  "t": 9,
+  "jsonrpc": "2.0",
+  "method": "session/update",
+  "params": {
+   "sessionId": "sess_root",
+   "update": {
+    "sessionUpdate": "tool_call_update",
+    "toolCallId": "toolu_01BGmhCY7R5bGXSMMa5WhBkB",
+    "status": "failed",
+    "_meta": {
+     "terminal_exit": {
+      "terminal_id": "toolu_01BGmhCY7R5bGXSMMa5WhBkB",
+      "exit_code": 1,
+      "signal": null
+     }
+    }
+   }
+  }
+ },
+ {
+  "t": 10,
+  "jsonrpc": "2.0",
+  "method": "session/update",
+  "params": {
+   "sessionId": "sess_root",
+   "update": {
+    "sessionUpdate": "async_task_spawned",
+    "asyncTaskId": "b5ehyigcs",
+    "name": "Sleep 20 seconds then print done",
+    "taskType": "shell",
+    "description": "Sleep 20 seconds then print done",
+    "showInTranscript": false,
+    "canStop": true,
+    "toolCallId": "toolu_01BxebSrKQzmNMgetis8Vscx"
+   }
+  }
+ },
+ {
+  "t": 11,
+  "jsonrpc": "2.0",
+  "method": "session/update",
+  "params": {
+   "sessionId": "sess_root",
+   "update": {
+    "sessionUpdate": "async_task_progress",
+    "asyncTaskId": "b5ehyigcs",
+    "outputFilePath": "/redacted/tasks/b5ehyigcs.output"
+   }
+  }
+ },
+ {
+  "t": 12,
+  "jsonrpc": "2.0",
+  "method": "session/update",
+  "params": {
+   "sessionId": "sess_root",
+   "update": {
+    "sessionUpdate": "tool_call_update",
+    "toolCallId": "toolu_01BxebSrKQzmNMgetis8Vscx",
+    "_meta": {
+     "terminal_output": {
+      "terminal_id": "toolu_01BxebSrKQzmNMgetis8Vscx",
+      "data": "Command running in background with ID: b5ehyigcs. Output is being written to: /redacted/tasks/b5ehyigcs.output. You will be notified when it completes. To check interim output, use Read on that file path."
+     },
+     "jetbrains": {
+      "air": {
+       "asyncTasks": {
+        "backgrounded": true
+       }
+      }
+     }
+    }
+   }
+  }
+ },
+ {
+  "t": 13,
+  "jsonrpc": "2.0",
+  "method": "session/update",
+  "params": {
+   "sessionId": "sess_root",
+   "update": {
+    "sessionUpdate": "tool_call_update",
+    "toolCallId": "toolu_01BxebSrKQzmNMgetis8Vscx",
+    "status": "completed",
+    "_meta": {
+     "terminal_exit": {
+      "terminal_id": "toolu_01BxebSrKQzmNMgetis8Vscx",
+      "exit_code": 0,
+      "signal": null
+     }
+    }
+   }
+  }
+ },
+ {
+  "t": 14,
+  "jsonrpc": "2.0",
+  "method": "session/update",
+  "params": {
+   "sessionId": "sess_root",
+   "update": {
+    "sessionUpdate": "agent_message_chunk",
+    "content": {
+     "type": "text",
+     "text": "started"
+    }
+   }
+  }
+ },
+ {
+  "t": 15,
+  "jsonrpc": "2.0",
+  "method": "session/update",
+  "params": {
+   "sessionId": "sess_root",
+   "update": {
+    "sessionUpdate": "usage_update",
+    "used": 32502,
+    "size": 1000000,
+    "_meta": {
+     "_claude/origin": {
+      "kind": "human"
+     }
+    }
+   }
+  }
+ },
+ {
+  "t": 16,
+  "remi": "parked",
+  "note": "the prompt resolved and the lane parked; what follows arrived while parked and replays into the doorbell attempt"
+ },
+ {
+  "t": 17,
+  "jsonrpc": "2.0",
+  "method": "session/update",
+  "params": {
+   "sessionId": "sess_root",
+   "update": {
+    "sessionUpdate": "async_task_state_update",
+    "asyncTaskId": "b5ehyigcs",
+    "state": "completed"
+   }
+  }
+ },
+ {
+  "t": 18,
+  "jsonrpc": "2.0",
+  "method": "session/update",
+  "params": {
+   "sessionId": "sess_root",
+   "update": {
+    "sessionUpdate": "agent_message_chunk",
+    "content": {
+     "type": "text",
+     "text": "The background command ("
+    }
+   }
+  }
+ },
+ {
+  "t": 19,
+  "jsonrpc": "2.0",
+  "method": "session/update",
+  "params": {
+   "sessionId": "sess_root",
+   "update": {
+    "sessionUpdate": "agent_message_chunk",
+    "content": {
+     "type": "text",
+     "text": "`sleep 20; ech"
+    }
+   }
+  }
+ },
+ {
+  "t": 20,
+  "jsonrpc": "2.0",
+  "method": "session/update",
+  "params": {
+   "sessionId": "sess_root",
+   "update": {
+    "sessionUpdate": "agent_message_chunk",
+    "content": {
+     "type": "text",
+     "text": "o done`) finished with ex"
+    }
+   }
+  }
+ },
+ {
+  "t": 21,
+  "jsonrpc": "2.0",
+  "method": "session/update",
+  "params": {
+   "sessionId": "sess_root",
+   "update": {
+    "sessionUpdate": "agent_message_chunk",
+    "content": {
+     "type": "text",
+     "text": "it code 0. As"
+    }
+   }
+  }
+ },
+ {
+  "t": 22,
+  "jsonrpc": "2.0",
+  "method": "session/update",
+  "params": {
+   "sessionId": "sess_root",
+   "update": {
+    "sessionUpdate": "agent_message_chunk",
+    "content": {
+     "type": "text",
+     "text": " you"
+    }
+   }
+  }
+ },
+ {
+  "t": 23,
+  "jsonrpc": "2.0",
+  "method": "session/update",
+  "params": {
+   "sessionId": "sess_root",
+   "update": {
+    "sessionUpdate": "agent_message_chunk",
+    "content": {
+     "type": "text",
+     "text": " asked, I didn't check"
+    }
+   }
+  }
+ },
+ {
+  "t": 24,
+  "jsonrpc": "2.0",
+  "method": "session/update",
+  "params": {
+   "sessionId": "sess_root",
+   "update": {
+    "sessionUpdate": "agent_message_chunk",
+    "content": {
+     "type": "text",
+     "text": " on it while it "
+    }
+   }
+  }
+ },
+ {
+  "t": 25,
+  "jsonrpc": "2.0",
+  "method": "session/update",
+  "params": {
+   "sessionId": "sess_root",
+   "update": {
+    "sessionUpdate": "agent_message_chunk",
+    "content": {
+     "type": "text",
+     "text": "ran.\n\nI couldn't"
+    }
+   }
+  }
+ },
+ {
+  "t": 26,
+  "jsonrpc": "2.0",
+  "method": "session/update",
+  "params": {
+   "sessionId": "sess_root",
+   "update": {
+    "sessionUpdate": "agent_message_chunk",
+    "content": {
+     "type": "text",
+     "text": " read the chat history first, because"
+    }
+   }
+  }
+ },
+ {
+  "t": 27,
+  "jsonrpc": "2.0",
+  "method": "session/update",
+  "params": {
+   "sessionId": "sess_root",
+   "update": {
+    "sessionUpdate": "agent_message_chunk",
+    "content": {
+     "type": "text",
+     "text": " `remi` isn't install"
+    }
+   }
+  }
+ },
+ {
+  "t": 28,
+  "jsonrpc": "2.0",
+  "method": "session/update",
+  "params": {
+   "sessionId": "sess_root",
+   "update": {
+    "sessionUpdate": "agent_message_chunk",
+    "content": {
+     "type": "text",
+     "text": "ed in this environ"
+    }
+   }
+  }
+ },
+ {
+  "t": 29,
+  "jsonrpc": "2.0",
+  "method": "session/update",
+  "params": {
+   "sessionId": "sess_root",
+   "update": {
+    "sessionUpdate": "agent_message_chunk",
+    "content": {
+     "type": "text",
+     "text": "ment "
+    }
+   }
+  }
+ },
+ {
+  "t": 30,
+  "jsonrpc": "2.0",
+  "method": "session/update",
+  "params": {
+   "sessionId": "sess_root",
+   "update": {
+    "sessionUpdate": "agent_message_chunk",
+    "content": {
+     "type": "text",
+     "text": "(\"command not found\")."
+    }
+   }
+  }
+ },
+ {
+  "t": 31,
+  "jsonrpc": "2.0",
+  "method": "session/update",
+  "params": {
+   "sessionId": "sess_root",
+   "update": {
+    "sessionUpdate": "usage_update",
+    "used": 33010,
+    "size": 1000000,
+    "_meta": {
+     "_claude/origin": {
+      "kind": "task-notification",
+      "producer": "session-task"
+     }
+    }
+   }
+  }
+ }
+]

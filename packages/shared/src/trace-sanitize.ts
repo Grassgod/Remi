@@ -406,7 +406,20 @@ export function capTraceItem<T extends TraceItem>(item: T): T {
     if (capped !== target[key]) { target[key] = capped; changed = true; }
   };
   switch (next.type) {
-    case "user_message":
+    case "user_message": {
+      text(TRACE_ITEM_TEXT_MAX_BYTES);
+      // PR 6 §2.5: a doorbell's name and type are labels, capped as the `background_task` item's are.
+      const doorbells = next.background_tasks;
+      if (Array.isArray(doorbells)) {
+        const capped = doorbells.map((doorbell) => {
+          const name = capLabel(doorbell.name);
+          const taskType = capLabel(doorbell.task_type);
+          return name === doorbell.name && taskType === doorbell.task_type ? doorbell : { ...doorbell, name, task_type: taskType };
+        });
+        if (capped.some((doorbell, index) => doorbell !== doorbells[index])) { next.background_tasks = capped; changed = true; }
+      }
+      break;
+    }
     case "agent_message":
       text(TRACE_ITEM_TEXT_MAX_BYTES);
       break;

@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { loadMultiremiConfig } from "@multiremi/config.js";
+import { taskCredential } from "../core/task-context.js";
 import {
   CliApiClient,
   CliError,
@@ -63,7 +64,7 @@ export async function clientFor(
     token: shareCredential
       ? null
       : stringOption(invocation, "token")
-        ?? process.env.MULTIREMI_TOKEN?.trim()
+        ?? taskCredential()
         ?? config.token
         ?? null,
     shareToken: shareCredential,

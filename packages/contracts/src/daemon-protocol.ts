@@ -613,7 +613,10 @@ export interface DaemonLaneBackgroundTask {
   summary?: string | null;
   /** At most `TRACE_BACKGROUND_TASK_OUTPUT_TAIL_MAX_BYTES`. */
   output_tail?: string | null;
-  /** The daemon could not read the task's output file (「无法读取输出」, spec R9); absent when it could or never tried. */
+  /**
+   * The task's output file exists but the daemon cannot read it (permissions,
+   * a link, not a regular file); absent otherwise, a missing file included.
+   */
   output_unreadable?: boolean;
   usage?: TraceBackgroundTaskUsage | null;
 }
