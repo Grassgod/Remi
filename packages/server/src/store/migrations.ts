@@ -6,7 +6,7 @@ import { migrateAttemptInput } from './inbox/attempt-input.js';
 import { createMemberInboxReadProjection } from './inbox/member-records.js';
 import { createAutopilotRunReadProjection } from './autopilot-run-records.js';
 import { runUnifiedModelMigration, unifiedModelPreflight, UnifiedModelPreflightError, collectUnifiedBeforeReport, writeUnifiedModelReport } from "./unified-model-migration.js";
-import { CHAT_FOLLOW_UP_QUEUE_LANE_COLUMNS, CHAT_FOLLOW_UP_QUEUE_MIGRATION, CHAT_FOLLOW_UP_QUEUE_SCHEMA, UNIFIED_LANE_SWEEP_INDEX, UNIFIED_MODEL_MIGRATION } from "./unified-model-schema.js";
+import { BACKGROUND_TASKS_ATTEMPT_COLUMNS, BACKGROUND_TASKS_MIGRATION, BACKGROUND_TASKS_SCHEMA, CHAT_FOLLOW_UP_QUEUE_LANE_COLUMNS, CHAT_FOLLOW_UP_QUEUE_MIGRATION, CHAT_FOLLOW_UP_QUEUE_SCHEMA, UNIFIED_LANE_SWEEP_INDEX, UNIFIED_MODEL_MIGRATION } from "./unified-model-schema.js";
 import { prepareMigrationReportDirectory, resolveMigrationReportDirectory } from "./migration-report-directory.js";
 import { foldDecisionRecords } from './inbox/decision-migration.js';
 import { createDecisionReadProjections } from "./inbox/decision-records.js";
@@ -85,7 +85,7 @@ export function runMigrations(db: SqlDatabase, options: { dialect?: SqlDatabaseD
     if(tables.has('multiremi_issues'))addColumnIfMissing(db,'multiremi_issues','responsible_member_id TEXT');
     if(tables.has('multiremi_autopilots'))addColumnIfMissing(db,'multiremi_autopilots','responsible_member_id TEXT');
     if(tables.has('multiremi_issue_activity'))addColumnIfMissing(db,'multiremi_issue_activity','workspace_id TEXT');
-    if(tables.has('multiremi_schema_migrations') && db.query('SELECT id FROM multiremi_schema_migrations WHERE id=?').get(UNIFIED_MODEL_MIGRATION)){runUnifiedModelMigration(db,{reportDir:process.env.MULTIREMI_MIGRATION_REPORT_DIR});separateLaneProviderProgress(db);foldAgentReadState(db);createMemberInboxReadProjection(db);foldDecisionRecords(db);createDecisionReadProjections(db);migrateAttemptInput(db);widenAttemptCounters(db);ensureTurnListIndexes(db);ensureQuestionQueryIndexes(db);db.exec(UNIFIED_LANE_SWEEP_INDEX);ensureUsageAccountingSchema(db);migrateLocalRecords(db);addTurnAttemptTraceSummary(db);migrateChatFollowUpQueue(db);addTurnAttemptSubagents(db);return;}
+    if(tables.has('multiremi_schema_migrations') && db.query('SELECT id FROM multiremi_schema_migrations WHERE id=?').get(UNIFIED_MODEL_MIGRATION)){runUnifiedModelMigration(db,{reportDir:process.env.MULTIREMI_MIGRATION_REPORT_DIR});separateLaneProviderProgress(db);foldAgentReadState(db);createMemberInboxReadProjection(db);foldDecisionRecords(db);createDecisionReadProjections(db);migrateAttemptInput(db);widenAttemptCounters(db);ensureTurnListIndexes(db);ensureQuestionQueryIndexes(db);db.exec(UNIFIED_LANE_SWEEP_INDEX);ensureUsageAccountingSchema(db);migrateLocalRecords(db);addTurnAttemptTraceSummary(db);migrateChatFollowUpQueue(db);addTurnAttemptSubagents(db);addBackgroundTasks(db);return;}
     // Inspect the existing snapshot before bootstrap migrations can touch it.
     const checks=unifiedModelPreflight(db);
     if(checks.some(c=>!c.ok)){
@@ -94,7 +94,7 @@ export function runMigrations(db: SqlDatabase, options: { dialect?: SqlDatabaseD
     }
     runMigrationsForDialect(db,resolveSqlDialect(db,options.dialect));
     runUnifiedModelMigration(db,{reportDir:process.env.MULTIREMI_MIGRATION_REPORT_DIR});
-    separateLaneProviderProgress(db);foldAgentReadState(db);createMemberInboxReadProjection(db);foldDecisionRecords(db);createDecisionReadProjections(db);migrateAttemptInput(db);widenAttemptCounters(db);ensureTurnListIndexes(db);ensureQuestionQueryIndexes(db);ensureUsageAccountingSchema(db);migrateLocalRecords(db);addTurnAttemptTraceSummary(db);migrateChatFollowUpQueue(db);addTurnAttemptSubagents(db);
+    separateLaneProviderProgress(db);foldAgentReadState(db);createMemberInboxReadProjection(db);foldDecisionRecords(db);createDecisionReadProjections(db);migrateAttemptInput(db);widenAttemptCounters(db);ensureTurnListIndexes(db);ensureQuestionQueryIndexes(db);ensureUsageAccountingSchema(db);migrateLocalRecords(db);addTurnAttemptTraceSummary(db);migrateChatFollowUpQueue(db);addTurnAttemptSubagents(db);addBackgroundTasks(db);
   }));
   // SQLite schema rebuilds toggle foreign_keys outside their transactions.
   // Hold a separate SQLite writer lock across that entire sequence so another
@@ -6030,6 +6030,19 @@ function addTurnAttemptSubagents(db: SqlDatabase): void {
   runMigrationOnce(db, TURN_ATTEMPT_SUBAGENTS_MIGRATION, () => {
     addColumnIfMissing(db, "multiremi_turn_attempts", "running_subagents INTEGER");
     addColumnIfMissing(db, "multiremi_turn_attempts", "late_subagents TEXT");
+  });
+}
+
+/**
+ * PR 6: the background-task registry (`multiremi_background_tasks`) and the
+ * attempt's `running_background_tasks` count from `task.activity`. Runs on
+ * both chains: a fresh unified schema already has the column (the table is
+ * created here either way), an upgraded one gains both once.
+ */
+function addBackgroundTasks(db: SqlDatabase): void {
+  runMigrationOnce(db, BACKGROUND_TASKS_MIGRATION, () => {
+    for (const column of BACKGROUND_TASKS_ATTEMPT_COLUMNS) addColumnIfMissing(db, "multiremi_turn_attempts", column);
+    db.exec(BACKGROUND_TASKS_SCHEMA);
   });
 }
 

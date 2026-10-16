@@ -1,22 +1,22 @@
 {
   "meta": {
     "harness": "scripts/snapshot-api-routes.ts",
-    "routeCount": 785,
+    "routeCount": 787,
     "routeCountByPrefix": {
       "native": 212,
-      "compat": 557,
+      "compat": 559,
       "root": 16
     },
-    "getRoutes": 340,
-    "getRoutesWithBody": 336,
+    "getRoutes": 341,
+    "getRoutesWithBody": 337,
     "statusOnlyRoutes": [
       "GET /api/daemon/ws",
       "GET /api/realtime/ws",
       "GET /api/trace/ws",
       "GET /ws"
     ],
-    "mutationRoutes": 445,
-    "mutationRoutesCovered": 295,
+    "mutationRoutes": 446,
+    "mutationRoutesCovered": 296,
     "flows": [
       "agents-compat",
       "agents-native",
@@ -168,6 +168,7 @@
     "GET /api/chat/pending-tasks",
     "GET /api/chat/sessions",
     "GET /api/chat/sessions/:sessionId",
+    "GET /api/chat/sessions/:sessionId/background-tasks",
     "GET /api/chat/sessions/:sessionId/pending-task",
     "GET /api/cli/capabilities",
     "GET /api/cli/context",
@@ -539,6 +540,7 @@
     "POST /api/autopilots/:id/triggers/:triggerId/rotate-webhook-token",
     "POST /api/chat/attachments/send",
     "POST /api/chat/sessions",
+    "POST /api/chat/sessions/:sessionId/background-tasks/stop",
     "POST /api/chat/sessions/:sessionId/messages",
     "POST /api/chat/sessions/:sessionId/queue/:taskId/prioritize",
     "POST /api/chat/sessions/:sessionId/read",
@@ -938,6 +940,7 @@
     "GET /api/chat/pending-tasks",
     "GET /api/chat/sessions",
     "GET /api/chat/sessions/:sessionId",
+    "GET /api/chat/sessions/:sessionId/background-tasks",
     "GET /api/chat/sessions/:sessionId/pending-task",
     "GET /api/cli/capabilities",
     "GET /api/cli/context",
@@ -1293,6 +1296,7 @@
     "POST /api/autopilots/:id/triggers",
     "POST /api/autopilots/:id/triggers/:triggerId/rotate-webhook-token",
     "POST /api/chat/sessions",
+    "POST /api/chat/sessions/:sessionId/background-tasks/stop",
     "POST /api/chat/sessions/:sessionId/messages",
     "POST /api/chat/sessions/:sessionId/read",
     "POST /api/cli-token",
@@ -3223,7 +3227,8 @@
         "unread_count": 0,
         "last_message": null,
         "created_at": "<timestamp>",
-        "updated_at": "<timestamp>"
+        "updated_at": "<timestamp>",
+        "running_background_tasks": 0
       }
     },
     {
@@ -3266,18 +3271,29 @@
         "unread_count": 0,
         "last_message": null,
         "created_at": "<timestamp>",
-        "updated_at": "<timestamp>"
+        "updated_at": "<timestamp>",
+        "running_background_tasks": 0
       }
     },
     {
-      "key": "chat#004 DELETE /api/chat/sessions/:sessionId",
+      "key": "chat#004 POST /api/chat/sessions/:sessionId/background-tasks/stop",
+      "route": "POST /api/chat/sessions/:sessionId/background-tasks/stop",
+      "path": "/api/chat/sessions/chat_q5010won31uy/background-tasks/stop",
+      "status": 409,
+      "body": {
+        "error": "no running background task matches",
+        "code": "task_not_running"
+      }
+    },
+    {
+      "key": "chat#005 DELETE /api/chat/sessions/:sessionId",
       "route": "DELETE /api/chat/sessions/:sessionId",
       "path": "/api/chat/sessions/chat_q5010won31uy",
       "status": 204,
       "body": ""
     },
     {
-      "key": "chat#005 POST /api/multiremi/chats",
+      "key": "chat#006 POST /api/multiremi/chats",
       "route": "POST /api/multiremi/chats",
       "path": "/api/multiremi/chats",
       "status": 201,
@@ -3309,7 +3325,7 @@
       }
     },
     {
-      "key": "chat#006 POST /api/multiremi/chats/:id/messages",
+      "key": "chat#007 POST /api/multiremi/chats/:id/messages",
       "route": "POST /api/multiremi/chats/:id/messages",
       "path": "/api/multiremi/chats/cht_snapshot/messages",
       "status": 410,
@@ -3319,7 +3335,7 @@
       }
     },
     {
-      "key": "chat#007 PATCH /api/multiremi/chats/:id",
+      "key": "chat#008 PATCH /api/multiremi/chats/:id",
       "route": "PATCH /api/multiremi/chats/:id",
       "path": "/api/multiremi/chats/cht_snapshot",
       "status": 200,
@@ -6335,7 +6351,8 @@
           "unread_count": 0,
           "last_message": null,
           "created_at": "<timestamp>",
-          "updated_at": "<timestamp>"
+          "updated_at": "<timestamp>",
+          "running_background_tasks": 0
         }
       ]
     },
@@ -6359,7 +6376,19 @@
         "unread_count": 0,
         "last_message": null,
         "created_at": "<timestamp>",
-        "updated_at": "<timestamp>"
+        "updated_at": "<timestamp>",
+        "running_background_tasks": 0
+      }
+    },
+    {
+      "key": "get-sweep GET /api/chat/sessions/:sessionId/background-tasks",
+      "route": "GET /api/chat/sessions/:sessionId/background-tasks",
+      "path": "/api/chat/sessions/cht_snapshot/background-tasks",
+      "status": 200,
+      "body": {
+        "session_id": "cht_snapshot",
+        "running": 0,
+        "rows": []
       }
     },
     {
@@ -21526,7 +21555,8 @@
             "ended_at": null,
             "ended_reason": null,
             "legacy_prompt": null,
-            "running_subagents": null
+            "running_subagents": null,
+            "running_background_tasks": null
           },
           {
             "id": "tsk_8rcx9z88woyu",
@@ -21561,7 +21591,8 @@
             "ended_at": null,
             "ended_reason": null,
             "legacy_prompt": null,
-            "running_subagents": null
+            "running_subagents": null,
+            "running_background_tasks": null
           },
           {
             "id": "tsk_1ut6x0i244sp",
@@ -21596,7 +21627,8 @@
             "ended_at": null,
             "ended_reason": null,
             "legacy_prompt": null,
-            "running_subagents": null
+            "running_subagents": null,
+            "running_background_tasks": null
           },
           {
             "id": "tsk_lnktpkuv95wd",
@@ -21631,7 +21663,8 @@
             "ended_at": null,
             "ended_reason": null,
             "legacy_prompt": null,
-            "running_subagents": null
+            "running_subagents": null,
+            "running_background_tasks": null
           },
           {
             "id": "tsk_snapshot",
@@ -21666,7 +21699,8 @@
             "ended_at": "<timestamp>",
             "ended_reason": null,
             "legacy_prompt": null,
-            "running_subagents": null
+            "running_subagents": null,
+            "running_background_tasks": null
           }
         ],
         "next_cursor": null
@@ -29664,7 +29698,8 @@
             "ended_at": null,
             "ended_reason": null,
             "legacy_prompt": null,
-            "running_subagents": null
+            "running_subagents": null,
+            "running_background_tasks": null
           },
           {
             "id": "tsk_snapshot",
@@ -29699,7 +29734,8 @@
             "ended_at": "<timestamp>",
             "ended_reason": null,
             "legacy_prompt": null,
-            "running_subagents": null
+            "running_subagents": null,
+            "running_background_tasks": null
           }
         ],
         "next_cursor": null
@@ -29859,6 +29895,7 @@
             "process_item_count": null,
             "running_subagents": null,
             "late_subagents": null,
+            "running_background_tasks": null,
             "offered_at": null,
             "accepted_at": "<timestamp>",
             "started_at": "<timestamp>",

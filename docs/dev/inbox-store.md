@@ -111,3 +111,7 @@ summary: 消息唯一入口、lane 状态机、Issue 推导及 Daemon 和用户�
 ## 验证入口
 
 跟进队列由 `inbox-chat-follow-up-queue`（Store 状态机）、`multiremi-api-chat-queue`（HTTP）和 `inbox-chat-terminal-rering`（与终态补铃的组合）覆盖。相关文件还包括 QA 复现沉淀的 `inbox-qa-regressions`、`inbox-fallback-regressions`、`inbox-attempt-input-regressions`、`inbox-read-progress-regressions`，以及 `inbox-wake-policy`、`inbox-lane-machine`、`inbox-issue-status`、`inbox-operations`、`inbox-daemon-turn-bridge`、`inbox-concurrency-pg`、`inbox-dispatch-entrypoints`、`multiremi-question-card-token`、`turn-card-completion-fields`、`unified-model-migration`。PG 并发用例必须配置本地隔离的 MULTIREMI_TEST_POSTGRES_URL，使用两个独立服务进程；没有配置则未执行，不能以 SQLite 通过代替。`multiremi-daemon-steer` 和 `multiremi-drain-outbox` 的真实 server/daemon 夹具默认用 SQLite；配置该变量后，每个用例通过 `openIntegrationDatabase` 创建并清理独立 PG 数据库，拒绝非本地地址。生产切换与物理删表仍按[切换手册](../deploy/unified-model-cutover.md)操作。
+
+### 后台任务门铃
+
+[background-tasks-repo](../../packages/server/src/store/repos/background-tasks-repo.ts) 的 `laneBackgroundWake` 是 PR 6 驻留会话线的门铃：daemon 上报驻留的 Claude 任务完成或失败后，在一个事务里先取工作区生命周期锁，再取 Chat 行锁与 `lockLane`（与 `sendMessageWithinTransaction` 的取锁顺序一致），校验会话线谱系后以平台身份写一条 `status`、`wake_requested:"now"` 的消息给该 Agent（`dedupe_key:"bg:<agent>:<scope>:<task>"`、`metadata.background_task`），由 `ensurePendingTurn` 建轮、并入 pending 轮或作为插话送达运行中的轮。结果（`created`/`merged`/`delivered`）写回门铃的 `metadata.background_wake`，重复调用命中去重键后原样返回。跟进队列与「每条会话线一个 pending 轮」不变：门铃是普通 now 消息，队列在轮完成后照常放行。登记表的其他读写、下行推导与对账见 [daemon 协议](../daemon-protocol-v2.md)的「后台任务」。

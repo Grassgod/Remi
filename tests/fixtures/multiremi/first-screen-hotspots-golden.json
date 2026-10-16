@@ -44,6 +44,7 @@
         "ended_at": null,
         "ended_reason": null,
         "legacy_prompt": null,
+        "running_background_tasks": null,
         "running_subagents": null
       },
       {
@@ -79,6 +80,7 @@
         "ended_at": null,
         "ended_reason": null,
         "legacy_prompt": null,
+        "running_background_tasks": null,
         "running_subagents": null
       },
       {
@@ -114,6 +116,7 @@
         "ended_at": null,
         "ended_reason": null,
         "legacy_prompt": null,
+        "running_background_tasks": null,
         "running_subagents": null
       },
       {
@@ -149,6 +152,7 @@
         "ended_at": null,
         "ended_reason": null,
         "legacy_prompt": null,
+        "running_background_tasks": null,
         "running_subagents": null
       },
       {
@@ -184,6 +188,7 @@
         "ended_at": null,
         "ended_reason": null,
         "legacy_prompt": null,
+        "running_background_tasks": null,
         "running_subagents": null
       },
       {
@@ -219,6 +224,7 @@
         "ended_at": null,
         "ended_reason": null,
         "legacy_prompt": null,
+        "running_background_tasks": null,
         "running_subagents": null
       },
       {
@@ -254,6 +260,7 @@
         "ended_at": null,
         "ended_reason": null,
         "legacy_prompt": null,
+        "running_background_tasks": null,
         "running_subagents": null
       },
       {
@@ -289,6 +296,7 @@
         "ended_at": null,
         "ended_reason": null,
         "legacy_prompt": null,
+        "running_background_tasks": null,
         "running_subagents": null
       },
       {
@@ -324,6 +332,7 @@
         "ended_at": null,
         "ended_reason": null,
         "legacy_prompt": null,
+        "running_background_tasks": null,
         "running_subagents": null
       },
       {
@@ -359,6 +368,7 @@
         "ended_at": null,
         "ended_reason": null,
         "legacy_prompt": null,
+        "running_background_tasks": null,
         "running_subagents": null
       },
       {
@@ -394,6 +404,7 @@
         "ended_at": null,
         "ended_reason": null,
         "legacy_prompt": null,
+        "running_background_tasks": null,
         "running_subagents": null
       },
       {
@@ -429,6 +440,7 @@
         "ended_at": null,
         "ended_reason": null,
         "legacy_prompt": null,
+        "running_background_tasks": null,
         "running_subagents": null
       },
       {
@@ -464,6 +476,7 @@
         "ended_at": null,
         "ended_reason": null,
         "legacy_prompt": null,
+        "running_background_tasks": null,
         "running_subagents": null
       },
       {
@@ -499,6 +512,7 @@
         "ended_at": null,
         "ended_reason": null,
         "legacy_prompt": null,
+        "running_background_tasks": null,
         "running_subagents": null
       },
       {
@@ -534,6 +548,7 @@
         "ended_at": null,
         "ended_reason": null,
         "legacy_prompt": null,
+        "running_background_tasks": null,
         "running_subagents": null
       },
       {
@@ -569,6 +584,7 @@
         "ended_at": null,
         "ended_reason": null,
         "legacy_prompt": null,
+        "running_background_tasks": null,
         "running_subagents": null
       },
       {
@@ -604,6 +620,7 @@
         "ended_at": null,
         "ended_reason": null,
         "legacy_prompt": null,
+        "running_background_tasks": null,
         "running_subagents": null
       },
       {
@@ -639,6 +656,7 @@
         "ended_at": null,
         "ended_reason": null,
         "legacy_prompt": null,
+        "running_background_tasks": null,
         "running_subagents": null
       },
       {
@@ -674,6 +692,7 @@
         "ended_at": null,
         "ended_reason": null,
         "legacy_prompt": null,
+        "running_background_tasks": null,
         "running_subagents": null
       },
       {
@@ -709,6 +728,7 @@
         "ended_at": null,
         "ended_reason": null,
         "legacy_prompt": null,
+        "running_background_tasks": null,
         "running_subagents": null
       },
       {
@@ -744,6 +764,7 @@
         "ended_at": null,
         "ended_reason": null,
         "legacy_prompt": null,
+        "running_background_tasks": null,
         "running_subagents": null
       },
       {
@@ -779,6 +800,7 @@
         "ended_at": null,
         "ended_reason": null,
         "legacy_prompt": null,
+        "running_background_tasks": null,
         "running_subagents": null
       },
       {
@@ -814,6 +836,7 @@
         "ended_at": null,
         "ended_reason": null,
         "legacy_prompt": null,
+        "running_background_tasks": null,
         "running_subagents": null
       },
       {
@@ -849,6 +872,7 @@
         "ended_at": null,
         "ended_reason": null,
         "legacy_prompt": null,
+        "running_background_tasks": null,
         "running_subagents": null
       },
       {
@@ -884,6 +908,7 @@
         "ended_at": null,
         "ended_reason": null,
         "legacy_prompt": null,
+        "running_background_tasks": null,
         "running_subagents": null
       },
       {
@@ -919,6 +944,7 @@
         "ended_at": null,
         "ended_reason": null,
         "legacy_prompt": null,
+        "running_background_tasks": null,
         "running_subagents": null
       },
       {
@@ -954,6 +980,7 @@
         "ended_at": null,
         "ended_reason": null,
         "legacy_prompt": null,
+        "running_background_tasks": null,
         "running_subagents": null
       },
       {
@@ -989,6 +1016,7 @@
         "ended_at": null,
         "ended_reason": null,
         "legacy_prompt": null,
+        "running_background_tasks": null,
         "running_subagents": null
       },
       {
@@ -1024,6 +1052,7 @@
         "ended_at": null,
         "ended_reason": null,
         "legacy_prompt": null,
+        "running_background_tasks": null,
         "running_subagents": null
       },
       {
@@ -1059,6 +1088,7 @@
         "ended_at": null,
         "ended_reason": null,
         "legacy_prompt": null,
+        "running_background_tasks": null,
         "running_subagents": null
       },
       {
@@ -1094,6 +1124,7 @@
         "ended_at": null,
         "ended_reason": null,
         "legacy_prompt": null,
+        "running_background_tasks": null,
         "running_subagents": null
       },
       {
@@ -1129,6 +1160,7 @@
         "ended_at": null,
         "ended_reason": null,
         "legacy_prompt": null,
+        "running_background_tasks": null,
         "running_subagents": null
       },
       {
@@ -1164,6 +1196,7 @@
         "ended_at": null,
         "ended_reason": null,
         "legacy_prompt": null,
+        "running_background_tasks": null,
         "running_subagents": null
       },
       {
@@ -1199,6 +1232,7 @@
         "ended_at": null,
         "ended_reason": null,
         "legacy_prompt": null,
+        "running_background_tasks": null,
         "running_subagents": null
       },
       {
@@ -1234,6 +1268,7 @@
         "ended_at": null,
         "ended_reason": null,
         "legacy_prompt": null,
+        "running_background_tasks": null,
         "running_subagents": null
       },
       {
@@ -1269,6 +1304,7 @@
         "ended_at": null,
         "ended_reason": null,
         "legacy_prompt": null,
+        "running_background_tasks": null,
         "running_subagents": null
       },
       {
@@ -1304,6 +1340,7 @@
         "ended_at": null,
         "ended_reason": null,
         "legacy_prompt": null,
+        "running_background_tasks": null,
         "running_subagents": null
       },
       {
@@ -1339,6 +1376,7 @@
         "ended_at": null,
         "ended_reason": null,
         "legacy_prompt": null,
+        "running_background_tasks": null,
         "running_subagents": null
       },
       {
@@ -1374,6 +1412,7 @@
         "ended_at": null,
         "ended_reason": null,
         "legacy_prompt": null,
+        "running_background_tasks": null,
         "running_subagents": null
       },
       {
@@ -1409,6 +1448,7 @@
         "ended_at": null,
         "ended_reason": null,
         "legacy_prompt": null,
+        "running_background_tasks": null,
         "running_subagents": null
       },
       {
@@ -1444,6 +1484,7 @@
         "ended_at": null,
         "ended_reason": null,
         "legacy_prompt": null,
+        "running_background_tasks": null,
         "running_subagents": null
       },
       {
@@ -1479,6 +1520,7 @@
         "ended_at": null,
         "ended_reason": null,
         "legacy_prompt": null,
+        "running_background_tasks": null,
         "running_subagents": null
       },
       {
@@ -1514,6 +1556,7 @@
         "ended_at": null,
         "ended_reason": null,
         "legacy_prompt": null,
+        "running_background_tasks": null,
         "running_subagents": null
       },
       {
@@ -1549,6 +1592,7 @@
         "ended_at": null,
         "ended_reason": null,
         "legacy_prompt": null,
+        "running_background_tasks": null,
         "running_subagents": null
       },
       {
@@ -1584,6 +1628,7 @@
         "ended_at": null,
         "ended_reason": null,
         "legacy_prompt": null,
+        "running_background_tasks": null,
         "running_subagents": null
       },
       {
@@ -1619,6 +1664,7 @@
         "ended_at": null,
         "ended_reason": null,
         "legacy_prompt": null,
+        "running_background_tasks": null,
         "running_subagents": null
       }
     ],

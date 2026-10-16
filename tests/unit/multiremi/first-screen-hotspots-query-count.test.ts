@@ -252,7 +252,9 @@ describe("MUL-473 first-screen hotspot query counts", () => {
     const baseline = await getJson(harness, "/api/turns?status=pending&limit=500");
     // Each fixture Agent carries a 64 KB Skill file. A hydrated Agent load would
     // pull all 20 across the bridge; the lite projection keeps it to the row.
-    expect(baseline.bytes).toBeLessThan(40_000);
+    // PR 5 and PR 6 each added one nullable count per turn row (~30 bytes);
+    // one hydrated Agent alone would add 64 KB.
+    expect(baseline.bytes).toBeLessThan(42_000);
     expect([...harness.probe.bySql.keys()].filter((statement) =>
       /multiremi_chat_messages/i.test(statement))).toEqual([]);
     const skillSql = [...harness.probe.bySql.keys()].filter((statement) =>

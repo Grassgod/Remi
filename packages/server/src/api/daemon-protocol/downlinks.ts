@@ -138,7 +138,8 @@ export class DaemonDownlinks {
           }
           current.sent.set(result.seq, { key: entity.key, claimed: entity.claimed });
           inflight.add(entity.key);
-          if (entity.type === "turn.message" || entity.type === "task.cancelled" || entity.type === "turn.wrap_up") {
+          if (entity.type === "turn.message" || entity.type === "task.cancelled" || entity.type === "turn.wrap_up"
+            || entity.type === "lane.background_stop" || entity.type === "lane.background_release") {
             // Flush task input before lazily scanning independent maintenance/card
             // queues. A bot host can share this API process with the executor.
             await new Promise<void>(resolve => setImmediate(resolve));

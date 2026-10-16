@@ -239,10 +239,15 @@ S2 同事务创建 decision 消息并将轮置为 `awaiting_human`，通过 `rep
 `running_subagents`；该事件不唤醒 daemon 下行。`GET /api/turns` 的每行带当前尝试的 `running_subagents`，
 尝试不再活跃或从未上报时为 null；尝试列表同样投影。
 PR 6 起载荷可选带 `running_background_tasks`（该尝试运行中或暂停的后台任务数，任意深度）；旧 daemon 不带，缺失不等于 0。
+服务端按 `running_subagents` 的同一规则校验并写入 `multiremi_turn_attempts.running_background_tasks`
+（迁移 `20261018_background_tasks`）：缺失时保留已存的值，两个计数任一变化都推一次 `task:subagents`，
+载荷另带 `running_background_tasks`（从未上报为 null）；`GET /api/turns` 的行与尝试列表同样投影，尝试不再活跃时为 null。
 
-**后台任务（PR 6，契约已定，收发尚未接线）。** 帧与载荷类型在 `daemon-protocol.ts`，都受能力位
+**后台任务（PR 6）。** 帧与载荷类型在 `daemon-protocol.ts`，都受能力位
 `lane.background` 约束：daemon 在 `hello.caps` 声明，服务端支持时在 `welcome.caps` 回显；双方都有时
 daemon 才在尝试结束后保留仍有后台任务的 Chat 会话线进程，否则在尝试结束时停止这些任务。
+`welcome.caps` 是 hello 声明的能力与服务端支持集（`DAEMON_SERVER_WELCOME_CAPS`，今天只有 `lane.background`）的交集，
+旧服务端恒答 `[]`；`startMultiremiServer` 的 `daemonWelcomeCaps: []` 可让新服务端表现为旧服务端（混合版本测试）。
 
 | 帧 | 方向与类别 | 载荷 | 说明 |
 |---|---|---|---|
@@ -253,6 +258,57 @@ daemon 才在尝试结束后保留仍有后台任务的 Chat 会话线进程，�
 
 `hello.runtimes[].parked_lanes?` 列出 daemon 保留进程的会话线及其任务，服务端据此把该 runtime 其他运行中的登记行
 标为已停止（`daemon_restart`）。协议版本不变。
+
+服务端实现（[`background-task-handlers.ts`](../packages/server/src/api/daemon-protocol/background-task-handlers.ts)、
+[`background-tasks-repo.ts`](../packages/server/src/store/repos/background-tasks-repo.ts)）：
+
+- **登记表** `multiremi_background_tasks`（迁移 `20261018_background_tasks`，两条迁移链都建）：每个会话线的每个
+  `provider_session_id` 下每个任务一行，唯一键 `(session_id, agent_id, execution_scope, provider_session_id, task_id)`，
+  另记 runtime、来源尝试与轮、状态（`running` / `paused` / `completed` / `failed` / `stopped` / `unknown`）、
+  停止原因、停止请求（`stop_requested_at`、`stop_requested_by` 为成员 id，Remi 自己停的为 null，`stop_outcome` 为
+  daemon 的答复）、输出末尾与 `output_unreadable`（daemon 读不到输出文件时为真，界面显示「无法读取输出」）、用量、
+  会话线状态与 `parked_until`、`revision`。按 `(runtime_id, status)`、
+  `(session_id, status)` 建索引。已结束的行保留 7 天，每个会话至多 50 行。
+- **`lane.background_tasks`**：按报告授权（runtime 属于本连接、凭据、工作区、退役），并限定到会话线所在的 runtime：
+  每个新任务的 `origin_attempt_id` 必须是这条会话线在本 runtime 上跑过的尝试，`attempt_id` 同理；另一 runtime
+  写下的行不被改动。形状不对（状态、时间戳、超过 32 个任务或 256 KiB、重复任务 id）整帧拒绝不写；名称、命令、
+  摘要、输出末尾按 trace 条目的上限截断。每行记下写它的快照 `revision`，更旧的快照不覆盖；只有 revision 变化的
+  快照只更新 revision，不发事件。`closed` 快照把仍在运行的行（列出与否）写成 `stopped` / `lost`。行有可见变化时
+  重算该 runtime 的下行。没有协商能力位的连接发来的此帧被忽略，与旧服务端相同。
+- **`hello` 对账**：对本连接服务的每个 runtime，登记表里尚未知结束的行（`running` / `paused` / `unknown`）若属于
+  hello `active_task_ids` 中某尝试所在的会话线，或其会话线与任务列在 `parked_lanes` 中，则保留（`unknown` 恢复为
+  `running`）；其余写成 `stopped` / `daemon_restart`，revision 归零，以便重启后的 daemon 重新从小 revision 计数、复用任务 id。
+  未声明能力位的 daemon 视为没有保留的会话线。
+- **离线清扫**：维护清扫（每 60 s，随后台任务开关）把 runtime 超过 10 分钟没有心跳的运行中行写成 `unknown`，
+  下一次 `hello` 对账收口；同一清扫删掉结束超过 7 天的行。
+- **`lane.background_wake`**：在一个事务里依次取工作区生命周期锁、Chat 行锁与会话线锁（与写消息的顺序一致）。
+  同一任务的重复调用命中去重键 `bg:{agent_id}:{execution_scope}:{task_id}`，原样答第一次的结果（存于门铃消息
+  `metadata.background_wake`）。否则校验会话线：Chat 已删除或归档、Agent 已删除或归档答 `session_closed`；Chat 的
+  会话谱系（`session_id`、`session_runtime_id`）指向别的 provider 会话或 runtime，或会话线最新尝试跑在别的 runtime、
+  持有别的 provider 会话、是冷替换（无会话且未带触发，与轮输入的判断相同），答 `lane_moved`；来源尝试不属于这条
+  会话线与 runtime 答 `authority_revoked`。随后以平台身份写门铃：`message_kind: "status"`、`wake_requested: "now"`、
+  正文 `backgroundDoorbellBody`、`metadata.background_task`（`BackgroundTaskDoorbellMetadata`，含来源轮），交给常规
+  会话线状态机：无活跃轮为 `created`（新 pending 轮以门铃为 `trigger_message_id`），并入未派发的 pending 轮为
+  `merged`，送达已派发或运行中的轮为 `delivered`（引导，经 `daemon:task_input` 唤醒下行）。每个变成 `created`
+  的轮，如果来源尝试在飞书有 `cot` 卡片，则在同一事务里为新尝试复制一张主动卡片：沿用 binding、chat、thread 与
+  `reply_to_message_id`，显式不 @ 人（`mention_snapshot` 为 `none`），没有入站投递与回执；门铃消息本身是平台
+  `status`，从不外发到飞书。未协商能力位的连接调用此 RPC 答 `invalid_report`。
+- **下行推导**：每次下行运行都从登记表重算，只对协商了能力位的连接：`lane.background_stop` 是成员提出且 daemon
+  尚未答复（`stop_outcome` 为空或 `pending`）的停止，键为会话线、任务与请求时刻，新的请求是新实体；
+  `lane.background_release` 针对驻留（`parked`）会话线中尚未知结束的行，原因 `session_closed` / `lane_reset`
+  的判定与门铃的会话线校验相同（只认正面证据：尚无谱系的会话线与配置变化留给 daemon 在下一次 offer 时判定，后者报
+  `config_changed`）。一个 Chat 任务入队（冷重试、换 runtime）时重算持有其会话行的 runtime 的下行。
+- **实时事件** `chat:background_tasks`：登记表的可见变化在提交后推给 Chat 创建者，载荷
+  `{chat_session_id, session_id, running, rows}`，`rows` 是本次变化的整行（按 `id` 合并），`running` 是该会话运行中与
+  暂停的行数（发送时读）；与 `task:subagents` 一样不唤醒 daemon 下行或 offer。
+- **浏览器 API**：`GET /api/chat/sessions/:id/background-tasks` 返回同形的 `{session_id, running, rows}`（存活与 `unknown`
+  的行，加最近 20 条已结束的）；`POST /api/chat/sessions/:id/background-tasks/stop` 带 `{task_id}`（行的 `task_id` 或
+  `id`）或 `{all: true}`，只有 Chat 创建者可用，成功 202 `{requested_at, rows}`，没有匹配的运行中任务 409
+  `task_not_running`，所在电脑离线 409 `runtime_offline`；`/api/chat/sessions` 的每项带 `running_background_tasks`。
+
+trace 里 `user_message` 可选带 `background_tasks?: {task_id, name, task_type, status: "completed" | "failed"}[]`
+（`TraceUserMessageDoorbell`，PR 6 E1）：轮输入中的门铃，取自消息的 `metadata.background_task`（去掉来源 id），
+由 daemon 的翻译器填写；旧 trace 没有此字段。
 
 **server → daemon**：`trace.read`。
 

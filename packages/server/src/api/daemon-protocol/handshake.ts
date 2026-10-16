@@ -25,6 +25,8 @@ import {
   meetsDaemonMinCliVersion,
   type DaemonHelloPayload,
   type DaemonHelloRuntime,
+  type DaemonParkedLane,
+  type DaemonProtocolCap,
   type DaemonRejectPayload,
   type DaemonRuntimeCapabilities,
 } from "@multiremi/contracts/daemon-protocol.js";
@@ -78,6 +80,7 @@ export function parseDaemonHello(payload: Record<string, unknown>): DaemonHelloP
         return !!value && typeof value === 'object' && typeof value.message_id === 'string' && typeof value.attempt_id === 'string' && typeof value.wait_id === 'string' && value.wait_id.length >= 16;
       }) : [],
       capabilities: readPayload(runtime.capabilities) as DaemonRuntimeCapabilities,
+      ...(runtime.parked_lanes === undefined ? {} : { parked_lanes: parseParkedLanes(runtime.parked_lanes) }),
     });
   }
   if (runtimes.length === 0) return { ok: false, reason: "malformed_hello" };
@@ -97,6 +100,49 @@ export function parseDaemonHello(payload: Record<string, unknown>): DaemonHelloP
         : [],
     },
   };
+}
+
+/** Lanes a hello lists per runtime: well above the daemon's parked cap, so a hostile list stays small. */
+const MAX_PARKED_LANES = 64;
+const MAX_PARKED_LANE_TASKS = 256;
+
+/**
+ * PR 6: `parked_lanes` of a hello runtime. Forgiving like `caps`: an entry
+ * missing a lane field is dropped, and so is a task id that is not a string.
+ * An absent list (an older daemon) stays absent.
+ */
+export function parseParkedLanes(value: unknown): DaemonParkedLane[] {
+  if (!Array.isArray(value)) return [];
+  const lanes: DaemonParkedLane[] = [];
+  for (const entry of value.slice(0, MAX_PARKED_LANES)) {
+    const lane = readPayload(entry);
+    const sessionId = readString(lane.session_id);
+    const agentId = readString(lane.agent_id);
+    const providerSessionId = readString(lane.provider_session_id);
+    if (!sessionId || !agentId || !providerSessionId || typeof lane.execution_scope !== "string") continue;
+    lanes.push({
+      session_id: sessionId, agent_id: agentId, execution_scope: lane.execution_scope, provider_session_id: providerSessionId,
+      task_ids: Array.isArray(lane.task_ids)
+        ? lane.task_ids.filter((id): id is string => typeof id === "string" && id.length > 0).slice(0, MAX_PARKED_LANE_TASKS)
+        : [],
+    });
+  }
+  return lanes;
+}
+
+/**
+ * The caps this server negotiates in `welcome` (PR 6 §5.3). Only bits whose
+ * meaning depends on both sides are echoed: today `lane.background`, so a
+ * daemon parks only against a server that handles the `lane.background_*`
+ * frames. An older server answers `[]`.
+ */
+export const DAEMON_SERVER_WELCOME_CAPS: readonly DaemonProtocolCap[] = ["lane.background"];
+
+/** `welcome.caps`: what the hello declared and this server supports, in the hello's order. */
+export function negotiateWelcomeCaps(helloCaps: readonly string[],
+  supported: readonly DaemonProtocolCap[] = DAEMON_SERVER_WELCOME_CAPS): DaemonProtocolCap[] {
+  const offered = new Set(supported);
+  return [...new Set(helloCaps)].filter((cap): cap is DaemonProtocolCap => offered.has(cap as DaemonProtocolCap));
 }
 
 /**

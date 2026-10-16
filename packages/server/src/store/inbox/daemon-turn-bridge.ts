@@ -13,6 +13,7 @@ import { Questions, QuestionError } from './questions.js';
 import { nowIso } from '@multiremi/ids.js';
 import { taskSessionInput } from '../task-session-input.js';
 import { TRIGGER_MESSAGE_INLINE_CHARS, expandHint } from '@multiremi/contracts/session-input.js';
+import { readBackgroundDoorbell } from '@shared/background-tasks.js';
 
 // Structurally identical to S3's transport interface, without coupling the store to API routers.
 export interface DaemonTurnScope {runtimeId:string;daemonId:string;workspaceId:string;userId?:string|null}
@@ -77,7 +78,11 @@ export class DaemonTurnBridge {
       let body=triggers.has(message.seq)?message.body_md:'';
       const omitted=Math.max(0,body.length-TRIGGER_MESSAGE_INLINE_CHARS);
       if(omitted)body=body.slice(0,TRIGGER_MESSAGE_INLINE_CHARS)+'\n'+expandHint(omitted,`remi message list ${turn.session_id} --from ${message.seq-1} --to ${message.seq}`);
-      return {...message,body_md:(index===0?range+'\n'+(message.seq<=from?`原始输入：remi message list ${turn.session_id} --from ${Number(turn.input_from_seq??0)} --to ${from}\n`:''):'')+body,body_html:null,metadata:{execution_scope:turn.execution_scope},
+      // PR 6: a platform doorbell keeps its `background_task` (and only that), so the attaching
+      // attempt can acknowledge it without prompting it. Any other metadata stays out of the frame.
+      const doorbell=message.sender_type==='platform'&&message.message_kind==='status'?readBackgroundDoorbell(message.metadata):null;
+      return {...message,body_md:(index===0?range+'\n'+(message.seq<=from?`原始输入：remi message list ${turn.session_id} --from ${Number(turn.input_from_seq??0)} --to ${from}\n`:''):'')+body,body_html:null,
+        metadata:{execution_scope:turn.execution_scope,...(doorbell?{background_task:doorbell}:{})},
         options:null,card_token_hash:null,card_token_recipient:null,card_token_consumed_at:null};
     });
   }
