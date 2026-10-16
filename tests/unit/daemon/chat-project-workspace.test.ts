@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentTask } from "@daemon/contracts/types.js";
-import { LocalPathLocker, resolveTaskWorkDir } from "@daemon/agent-runtime/workspace/ephemeral.js";
+import { LocalPathLocker, lockedFolderOf, resolveTaskWorkDir } from "@daemon/agent-runtime/workspace/ephemeral.js";
 import { upsertSubjectRecord } from "@daemon/agent-runtime/workspace/registry.js";
 
 const roots: string[] = [];
@@ -148,6 +148,28 @@ describe("Project-bound Chat workspaces", () => {
     expect(resolved.resetSession).toBeUndefined();
     expect(resolved.release).toBeFunction();
     resolved.release?.();
+  });
+
+  it("names the folder lock a Chat would take, so a parked lane's next attempt can run under it (PR 6)", async () => {
+    const { root, task, options } = fixture();
+    const userPath = join(root, "user-directory");
+    const aliasPath = join(root, "user-directory-alias");
+    mkdirSync(userPath);
+    symlinkSync(userPath, aliasPath);
+    expect(lockedFolderOf(task, options.daemonIds)).toBeNull();
+    task.projectResources = [{ id: "directory", resourceType: "local_directory", label: null,
+      resourceRef: { local_path: aliasPath, daemon_id: "daemon_owner" } }];
+    const resolved = await resolveTaskWorkDir(task, options);
+    try {
+      expect(resolved.lockPath).toBe(realpathSync(userPath));
+      expect(lockedFolderOf(task, options.daemonIds)).toBe(resolved.lockPath!);
+      expect(lockedFolderOf({ ...task, workDir: aliasPath }, options.daemonIds)).toBe(resolved.lockPath!);
+      // A Chat that ran elsewhere stays there; another daemon's folder is not this one's.
+      expect(lockedFolderOf({ ...task, workDir: join(root, "work", task.chatSessionId!) }, options.daemonIds)).toBeNull();
+      expect(lockedFolderOf(task, ["another-daemon"])).toBeNull();
+    } finally {
+      resolved.release?.();
+    }
   });
 
   it("does not adopt a user directory just because it lies below the daemon root", async () => {

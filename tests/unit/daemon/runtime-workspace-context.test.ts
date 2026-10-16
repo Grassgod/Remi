@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpath
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentTask } from "@daemon/contracts/types.js";
-import { LocalPathLocker, resolveTaskWorkDir } from "@daemon/agent-runtime/workspace/ephemeral.js";
+import { LocalPathLocker, lockedFolderOf, resolveTaskWorkDir } from "@daemon/agent-runtime/workspace/ephemeral.js";
 import { resolveTaskProviderHome, prepareIssueSessionProviderHome, seedIssueSessionAntigravityHome } from "@daemon/agent-runtime/workspace/session-home.js";
 import { symlinkSync } from "node:fs";
 import { prepareRuntimeWorkspaceContext } from "@daemon/agent-runtime/workspace/runtime-context.js";
@@ -64,6 +64,9 @@ describe("Runtime workspace local execution", () => {
     expect(resolved.workDir).toBe(cwd);
     expect(resolved.ensureDir).toBe(false);
     expect(resolved.localDirectory).toBe(true);
+    // PR 6: the lock a parked lane's process keeps, as the lane's next attempt computes it.
+    expect(resolved.lockPath).toBe(realpathSync(cwd));
+    expect(lockedFolderOf(task, options.daemonIds)).toBe(resolved.lockPath!);
     resolved.release?.();
     const reused = await resolveTaskWorkDir({ ...task, id: "second" }, options);
     try {

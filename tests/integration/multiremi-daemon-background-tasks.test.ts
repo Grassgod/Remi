@@ -579,6 +579,32 @@ describe("Bun Multiremi daemon background tasks (PR 6)", () => {
     await waitFor(() => readTaskContextFile(env[TASK_CONTEXT_FILE_ENV]!)?.token === null, "the context cleared again");
   }, 60_000);
 
+  it("(16) a Chat on a local folder: its next turn adopts the parked process under the folder lock the process holds", async () => {
+    const { store, agent, daemon, d } = await bed("local-folder");
+    const folder = join(workDir!, "user-folder");
+    mkdirSync(folder);
+    const project = store.createProject({ title: "Local folder project",
+      resources: [{ resourceType: "local_directory", resourceRef: { localPath: folder, daemonId: "daemon-local-folder" } }] });
+    const logPath = join(workDir!, "agent.jsonl");
+    daemon(scriptedAcp({ prompts: [
+      [...bash("bash-1", "toolu_srv", "python3 -m http.server"), chunk("Server started."), { resolve: "end_turn" }],
+      [chunk("It still runs.")],
+    ] }, logPath, "claude"));
+    const chat = store.createChatSession({ agentId: agent.id, projectId: project.id });
+    const first = store.sendChatMessage(chat.id, { body: "Start a server" }).task;
+    await waitFor(() => finished(store, first.id), "the first turn");
+    expect(store.getTask(first.id)?.workDir).toBe(folder);
+    await waitFor(() => d.snapshots.some((snapshot) => snapshot.state === "parked"), "parked");
+    const second = store.sendChatMessage(chat.id, { body: "Is it up?" }).task;
+    await waitFor(() => finished(store, second.id), "the second turn");
+    expect(store.getTask(second.id)).toMatchObject({ status: "completed", result: "It still runs.", workDir: folder });
+    // Adopted: one process, the task still runs, nothing was stopped as a config change.
+    expect(processes(logPath).size).toBe(1);
+    expect(agentLog(logPath).filter((entry) => entry.method === "initialize")).toHaveLength(1);
+    expect(agentLog(logPath).filter((entry) => entry.kind === "async_task_stop")).toEqual([]);
+    expect(d.snapshots.some((snapshot) => snapshot.tasks.some((row) => row.stop_reason === "config_changed"))).toBe(false);
+  }, 60_000);
+
   it("(14) a rejected doorbell (session_closed) cancels the cycle and closes the lane", async () => {
     const { store, agent, daemon, d } = await bed("rejected", { phaseD: { reject: "session_closed" } });
     const logPath = join(workDir!, "agent.jsonl");

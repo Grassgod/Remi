@@ -30,6 +30,8 @@ export interface ResolvedTaskWorkDir {
   // that must already exist; daemon-owned Task/session paths are created.
   ensureDir: boolean;
   release?: () => void;
+  /** The real path whose lock `release` gives back: a Runtime workspace or a local folder. */
+  lockPath?: string;
   /** The inherited provider must not resume after its directory was rejected. */
   resetSession?: true;
 }
@@ -185,7 +187,7 @@ export async function resolveTaskWorkDir(
               ?? multiremiSharedLockPath(join(homedir(), ".multiremi", "runtime-workspace-leases")),
           });
           return {
-            workDir, runtimeWorkspaceRoot: rootReal, localDirectory: true, ensureDir: false,
+            workDir, runtimeWorkspaceRoot: rootReal, localDirectory: true, ensureDir: false, lockPath: workReal,
             release: () => { try { lease.release(); } finally { releaseLocal(); } },
           };
         } catch (error) {
@@ -241,7 +243,33 @@ export async function resolveTaskWorkDir(
     localDirectory: true,
     ensureDir: false,
     release,
+    lockPath: assignment.realPath,
   };
+}
+
+/**
+ * The real path whose lock {@link resolveTaskWorkDir} would take for this
+ * task, or null when it takes none (a daemon-owned directory). A Chat lane's
+ * parked process holds its folder's lock (PR 6 §2.8), so the lane's next
+ * attempt compares this with the lock the process holds and runs under it,
+ * instead of waiting on itself. Never throws: a path it cannot resolve gives
+ * null, and the full resolution then reports the error.
+ */
+export function lockedFolderOf(task: AgentTask, daemonIds: string[]): string | null {
+  try {
+    if (task.runtimeWorkspaceId) {
+      const workspace = task.runtimeWorkspace;
+      return workspace ? realpathSync(resolve(normalizeLocalDirectoryPath(workspace.rootPath), workspace.cwd)) : null;
+    }
+    const assignment = task.issueId ? null : findLocalDirectoryAssignment(task, daemonIds);
+    if (!assignment) return null;
+    // As above: a Chat that ran elsewhere never moves into the assigned folder.
+    if (task.chatSessionId && task.workDir && (resolve(task.workDir) !== assignment.absPath
+      || resolveLocalRealPath(task.workDir) !== assignment.realPath)) return null;
+    return assignment.realPath;
+  } catch {
+    return null;
+  }
 }
 
 /** Resolve existing ancestors too, so a not-yet-created child cannot escape via a symlink. */

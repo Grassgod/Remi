@@ -211,6 +211,7 @@ import { AgentPluginError } from "@daemon/agent-runtime/agent-plugins/types.js";
 import {
   LocalDirectoryError,
   LocalPathLocker,
+  lockedFolderOf,
   resolveTaskWorkDir,
   type ResolvedTaskWorkDir,
 } from "@daemon/agent-runtime/workspace/ephemeral.js";
@@ -3429,11 +3430,6 @@ export class MultiremiDaemon {
   }
 
   /** The expected work directory of a Runtime workspace task, when it is one (its claimed lane may hold the lock). */
-  private runtimeWorkspaceDir(task: MultiremiTaskWithAgent): string | null {
-    const workspace = task.runtimeWorkspaceId ? task.runtimeWorkspace : null;
-    return workspace ? resolve(workspace.rootPath, workspace.cwd) : null;
-  }
-
   private async handleTask(task: MultiremiTaskWithAgent): Promise<void> {
     // Historical claims may still carry their parent's directory binding.
     // Non-workspace Sessions execute in their own daemon-owned directory.
@@ -3545,8 +3541,8 @@ export class MultiremiDaemon {
       abort.signal.throwIfAborted();
       this.assertWorkspaceRootOwner();
       const claimedDir = claimedResources()?.resolvedWorkDir ?? null;
-      if (claimedDir?.release && claimedDir.workDir === this.runtimeWorkspaceDir(task)) {
-        // The parked process holds this Runtime workspace's lock; the lane's next attempt runs under it.
+      if (claimedDir?.release && claimedDir.lockPath && claimedDir.lockPath === lockedFolderOf(task, this.localDirectoryDaemonIds(task))) {
+        // The parked process holds this folder's lock (a Runtime workspace or a local folder); the lane's next attempt runs under it.
         resolvedWorkDir = claimedDir;
       } else {
         if (claimedDir?.release) await releaseClaimed("config_changed");
