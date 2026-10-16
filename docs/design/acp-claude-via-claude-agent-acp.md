@@ -55,6 +55,19 @@ daemon 默认在 initialize 声明 `clientCapabilities.subagents: {}`（Claude �
 
 回归见 [原生子会话](../../tests/unit/acp/native-subagents.test.ts)、[自主轮](../../tests/unit/acp/autonomous-turn.test.ts)、[桥补丁](../../tests/unit/acp/usage-bridge-patches.test.ts) 与 0.90 的重录夹具 `tests/fixtures/acp/claude-090-native-subagent-*.json`。
 
+## 后台任务
+
+daemon 默认在 initialize 的 AIR 能力列表里加 `asyncTasks`（`REMI_ACP_ASYNC_TASKS=0` 不加），claude-agent-acp 0.90 对 AIR 客户端回报它，[AcpClient](../../packages/acp/src/client.ts) 的 `asyncTasksEnabled` 据此为真。规则与取舍见 [ADR 0022](../adr/0022-background-tasks-keep-alive-on-demand.md)。
+
+- **发布什么。** 后台 Bash（`run_in_background`，或运行中被移到后台的前台 Bash，也从 Bash 结果的 `backgroundTaskId` 恢复）为 `shell`，工作流为 `workflow`（名称取 `workflow_name`），MCP 后台任务为 `monitor`，其他原始类型原样透传。Monitor 工具只把输出流给模型，桥不发布；子代理走原生子会话（ADR 0021）。子代理里启动的任务在该子代理的会话上宣布。
+- **帧。** `async_task_spawned`（`asyncTaskId`、名称、类型、描述、`canStop`、可选的 `outputFilePath` 与 `toolCallId`；等调用 id，至迟在任务结束或 prompt 结果时放出）、`async_task_progress`（只带变化的字段，可有 `summary`、`lastToolName` 与 `usage`）、`async_task_state_update`（`running` / `paused` / `completed` / `failed` / `stopped`）。漏掉的结束边由电平信号以 `stopped` 补上，之后可被更正一次为完成或失败。Bash 的结果 `tool_call_update` 带 `_meta.jetbrains.air.asyncTasks = { backgrounded: true }`，翻译器据此把这次调用当作已在后台（引导中止不会关掉它）。
+- **停止。** `_session/async_task/stop { sessionId, asyncTaskId }` 用**根**会话 id（子代理里的任务也是），答 `{stopped}`；任务从未宣布、已结束或正在停止时答 `false`。成功时桥发一条「Task stopped by user」notice，翻译器把它并进停止结果、不另成条目。停止的 shell 不向模型注入任何东西，所以停止从不响门铃。
+- **会自己醒来。** 没有 prompt 时任务结束，SDK 注入 `<task-notification>`，Claude Code 自开一轮，结果的 `_meta["_claude/origin"].kind` 为 `task-notification`；ACP v1 客户端收不到这一轮开始或空闲的信号。所以 adapter 声明 `asyncTasks: { wakesModel: true }`：驻留时 provider 捕获全部帧，daemon 发门铃，接手的 attempt 用 `listenAutonomous` 重放并等它的结果标记。`session/cancel` 不碰后台任务。
+- **输出末尾。** 输出只在文件里（`…/tasks/<id>.output`），桥不发文本。daemon 的 [AsyncTaskOutputTailer](../../packages/server/src/worker/async-task-output.ts) 只读路径以 `/tasks/<asyncTaskId>.output` 结尾的普通文件，attempt 中每 5 s、驻留时每 10 s 检查一次，变长时读末尾 4 KiB（从行首开始），每台 daemon 至多同时跟 8 个任务。Linux 私有 `/tmp` 下的路径映射到会话线的私有临时目录；文件存在却读不了时登记表记 `output_unreadable`，界面显示「无法读取输出」。
+- **关闭。** `session/close` 走 `teardownSession` → `query.close()`，结束子进程；流结束时桥发布终态。回放历史时仍在运行的任务没有卡片，进程已经没了。驻留进程关闭前 daemon 先显式停止仍在运行的任务。
+
+回归见 [provider 登记表与驻留](../../tests/unit/acp/async-tasks.test.ts)、[翻译器](../../tests/unit/daemon/trace-translator-background-tasks.test.ts) 与 [daemon 集成](../../tests/integration/multiremi-daemon-background-tasks.test.ts)。
+
 ## API 与 CLI
 
 `GET/PUT /api/runtimes/:id/claude-profile` 沿用 Runtime 可见性和 owner/admin 编辑权限，task token 对配置路径为 hard deny。凭据由 `GET /api/daemon/runtimes/:id/claude-profile-key?credential_id=...` 下发，只接受绑定机器身份的 daemon token，返回 `Cache-Control: no-store`；同机器其他 Runtime 的引用也不能读取。
