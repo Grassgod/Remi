@@ -5906,8 +5906,8 @@ runMigrations(this.db);
     return this.backgroundTasks.reconcileParkedLanes(runtimeId, parkedLanes, activeTaskIds);
   }
 
-  /** The offline sweep (runtimes silent for 10 minutes turn their running rows `unknown`) and the retention. */
-  sweepBackgroundTasks(now?: number): { unknown: number; deleted: number } {
+  /** The sweep: rows of a deleted runtime end `lost`, runtimes silent for 10 minutes turn running rows `unknown`, retention. */
+  sweepBackgroundTasks(now?: number): { unknown: number; lost: number; deleted: number } {
     return this.backgroundTasks.sweep(now);
   }
 

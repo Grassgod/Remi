@@ -330,10 +330,10 @@ for (const backend of backends) {
         const now = Date.now();
         opened.db.run("UPDATE multiremi_runtimes SET last_heartbeat_at = ? WHERE id = ?",
           [new Date(now - 11 * 60_000).toISOString(), world.runtimeId]);
-        expect(opened.store.sweepBackgroundTasks(now)).toEqual({ unknown: 1, deleted: 0 });
+        expect(opened.store.sweepBackgroundTasks(now)).toEqual({ unknown: 1, lost: 0, deleted: 0 });
         expect(rows(opened.store, world.chatId)[0]).toMatchObject({ status: "unknown" });
         expect(opened.store.listSessionBackgroundTasks(world.chatId).running).toBe(0);
-        expect(opened.store.sweepBackgroundTasks(now)).toEqual({ unknown: 0, deleted: 0 });
+        expect(opened.store.sweepBackgroundTasks(now)).toEqual({ unknown: 0, lost: 0, deleted: 0 });
 
         // 55 ended tasks: the newest 50 stay.
         const ended = Array.from({ length: 55 }, (_, index) => laneTask(world, { task_id: `done-${String(index).padStart(2, "0")}`,
@@ -351,6 +351,39 @@ for (const backend of backends) {
         opened.db.run("UPDATE multiremi_background_tasks SET ended_at = ? WHERE task_id = 'done-54'",
           [new Date(now - 8 * 24 * 60 * 60_000).toISOString()]);
         expect(opened.store.sweepBackgroundTasks(now).deleted).toBe(1);
+      } finally { await opened.close(); }
+    }, TIMEOUT);
+
+    it("ends a deleted runtime's rows as lost, on delete and in the sweep, even when they were unknown", async () => {
+      const opened = await backend.open();
+      try {
+        const { store, db } = opened;
+        // The Runtime delete: the runtime must be free of agents and work, and not its daemon's last.
+        const deleted = backgroundWorld(store);
+        snapshotFor(deleted, 1, [laneTask(deleted), laneTask(deleted, { task_id: "bash-2" })]);
+        store.requestBackgroundTaskStop(deleted.chatId, { taskId: "bash-2" }, "member-1");
+        db.run("UPDATE multiremi_background_tasks SET status = 'unknown' WHERE task_id = 'bash-1'");
+        store.registerRuntime({ daemonId: deleted.daemonId, name: "Sibling", provider: "codex", workspaceId: "local" });
+        db.run("UPDATE multiremi_agents SET runtime_id = NULL WHERE id = ?", [deleted.agentId]);
+        const listen = events(store);
+        expect(store.deleteRuntime(deleted.runtimeId)).toBe(true);
+        await Bun.sleep(0);
+        listen.off();
+        for (const row of rows(store, deleted.chatId)) {
+          expect(row).toMatchObject({ status: "stopped", stop_reason: "lost", lane_state: "closed", parked_until: null });
+          expect(row.ended_at).not.toBeNull();
+        }
+        expect(rows(store, deleted.chatId).find((row) => row.task_id === "bash-2")?.stop_outcome).toBe("not_running");
+        expect(listen.of("chat:background_tasks").at(-1)?.payload).toMatchObject({ session_id: deleted.chatId, running: 0 });
+
+        // A runtime row removed some other way: the sweep ends what it left, unknown or live.
+        const vanished = backgroundWorld(store);
+        snapshotFor(vanished, 1, [laneTask(vanished), laneTask(vanished, { task_id: "bash-2" })]);
+        db.run("UPDATE multiremi_background_tasks SET status = 'unknown' WHERE session_id = ? AND task_id = 'bash-2'", [vanished.chatId]);
+        db.run("DELETE FROM multiremi_runtimes WHERE id = ?", [vanished.runtimeId]);
+        expect(store.sweepBackgroundTasks()).toEqual({ unknown: 0, lost: 2, deleted: 0 });
+        expect(rows(store, vanished.chatId).map((row) => [row.status, row.stop_reason])).toEqual([["stopped", "lost"], ["stopped", "lost"]]);
+        expect(store.sweepBackgroundTasks()).toEqual({ unknown: 0, lost: 0, deleted: 0 });
       } finally { await opened.close(); }
     }, TIMEOUT);
 

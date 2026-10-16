@@ -282,7 +282,8 @@ daemon 才在尝试结束后保留仍有后台任务的 Chat 会话线进程，�
   `daemon_restart`，revision 归零，以便重启后的 daemon 重新从小 revision 计数、复用任务 id。未声明能力位的 daemon
   视为没有保留的会话线。
 - **离线清扫**：维护清扫（每 60 s，随后台任务开关）把 runtime 超过 10 分钟没有心跳的运行中行写成 `unknown`，
-  下一次 `hello` 对账收口；同一清扫删掉结束超过 7 天的行。
+  下一次 `hello` 对账收口；runtime 已不存在的尚未结束的行（含 `unknown`）直接写成 `stopped` / `lost`；同一清扫删掉结束
+  超过 7 天的行。删除 Runtime 与 daemon 退役在各自事务里就把该 runtime 的这些行写成 `stopped` / `lost`。
 - **`lane.background_wake`**：在一个事务里依次取工作区生命周期锁、Chat 行锁与会话线锁（与写消息的顺序一致）。
   同一任务的重复调用命中去重键 `bg:{agent_id}:{execution_scope}:{task_id}`，原样答第一次的结果（存于门铃消息
   `metadata.background_wake`）。否则校验会话线：Chat 已删除或归档、Agent 已删除或归档答 `session_closed`；Chat 的

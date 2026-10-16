@@ -47,6 +47,7 @@ import type { CancelTaskResult, ChildStatusChangeCollector } from "@multiremi/st
 import { activeRequestReadCache, cacheKey, writeThroughRequestReadCache } from "@multiremi/store/request-read-cache.js";
 import { canonicalizeDaemonRoutingWithinTransaction } from "@multiremi/store/daemon-routing.js";
 import { RuntimeRequestQueue, type RuntimeRequestSpec } from "@multiremi/store/repos/runtime-request-queue.js";
+import { BackgroundTasksRepo } from "@multiremi/store/repos/background-tasks-repo.js";
 import { runtimeDaemonAliases } from "@multiremi/store/runtime-affinity.js";
 import {
   redactRuntimeCommandArgs,
@@ -798,6 +799,8 @@ export class RuntimesRepo {
     // FK enforcement disabled. Keep every runtime reference explicit here so
     // all delete paths have identical behavior.
     this.ctx.taskTraces().markTaskTracesLostForRuntimes([id]);
+    // PR 6: its background tasks died with it; no hello will ever settle them.
+    new BackgroundTasksRepo(this.ctx).endRuntimeTasksWithinTransaction([id]);
     if (options.abandonIssueWorkspaces) {
       this.ctx.db.run(
         `UPDATE multiremi_issue_workspaces

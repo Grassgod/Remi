@@ -350,20 +350,28 @@ export class BackgroundTasksRepo {
   }
 
   /**
-   * The maintenance sweep: running rows of a runtime without a heartbeat for
-   * {@link BACKGROUND_TASK_OFFLINE_UNKNOWN_MS} become `unknown` (a later
-   * `hello` settles them), and ended rows past the retention are deleted.
+   * The maintenance sweep. A row whose runtime no longer exists ends as
+   * `stopped` / `lost`: no `hello` can settle it. Running rows of a runtime
+   * without a heartbeat for {@link BACKGROUND_TASK_OFFLINE_UNKNOWN_MS} become
+   * `unknown` (a later `hello` settles them). Ended rows past the retention
+   * are deleted.
    */
-  sweep(now: number = Date.now()): { unknown: number; deleted: number } {
+  sweep(now: number = Date.now()): { unknown: number; lost: number; deleted: number } {
     const changed: Row[] = [];
+    let lost = 0;
     let deleted = 0;
     this.ctx.db.transaction(() => {
+      const at = new Date(now).toISOString();
+      const orphans = this.ctx.db.query(`SELECT b.* FROM multiremi_background_tasks b
+        LEFT JOIN multiremi_runtimes r ON r.id = b.runtime_id
+        WHERE b.status IN ('running','paused','unknown') AND r.id IS NULL`).all() as Row[];
+      for (const row of orphans) changed.push(this.endLost(row, at));
+      lost = orphans.length;
       const cutoff = new Date(now - BACKGROUND_TASK_OFFLINE_UNKNOWN_MS).toISOString();
       const rows = this.ctx.db.query(`SELECT b.* FROM multiremi_background_tasks b
-        LEFT JOIN multiremi_runtimes r ON r.id = b.runtime_id
-        WHERE b.status IN ('running','paused') AND (r.id IS NULL OR r.last_heartbeat_at IS NULL OR r.last_heartbeat_at < ?)`)
+        JOIN multiremi_runtimes r ON r.id = b.runtime_id
+        WHERE b.status IN ('running','paused') AND (r.last_heartbeat_at IS NULL OR r.last_heartbeat_at < ?)`)
         .all(cutoff) as Row[];
-      const at = new Date(now).toISOString();
       for (const row of rows) {
         this.writeRow(String(row.id), { ...this.currentValues(row), status: "unknown" }, Number(row.revision), at);
         changed.push(this.readRow(String(row.id)));
@@ -372,7 +380,32 @@ export class BackgroundTasksRepo {
         AND COALESCE(ended_at, updated_at) < ?`, [new Date(now - BACKGROUND_TASK_ENDED_RETENTION_MS).toISOString()]).changes;
     })();
     this.publish(changed);
-    return { unknown: changed.length, deleted };
+    return { unknown: changed.length - lost, lost, deleted };
+  }
+
+  /**
+   * A runtime is being deleted (the Runtime delete or daemon retirement, in
+   * the caller's transaction): every row of it the server does not know to
+   * have ended died with its daemon, so it ends as `stopped` / `lost` now
+   * rather than waiting in `unknown` for a `hello` that will never come.
+   */
+  endRuntimeTasksWithinTransaction(runtimeIds: readonly string[]): number {
+    if (!runtimeIds.length) return 0;
+    const rows = this.ctx.db.query(`SELECT * FROM multiremi_background_tasks
+      WHERE runtime_id IN (${runtimeIds.map(() => "?").join(",")}) AND ${ALIVE_SQL}`).all(...runtimeIds) as Row[];
+    const at = nowIso();
+    const changed = rows.map((row) => this.endLost(row, at));
+    this.publish(changed);
+    return changed.length;
+  }
+
+  /** End a row the server knows is gone: `stopped` / `lost`, its lane closed. */
+  private endLost(row: Row, at: string): Row {
+    const current = toBackgroundTask(row);
+    this.writeRow(current.id, { ...this.currentValues(row), status: "stopped", stop_reason: current.stop_reason ?? "lost",
+      ended_at: at, duration_ms: elapsedMs(current.started_at, at), lane_state: "closed", parked_until: null,
+      stop_outcome: settledStopOutcome(current.stop_outcome) }, Number(row.revision), at);
+    return this.readRow(current.id);
   }
 
   // ── Stop (spec §6) ────────────────────────────────────────────────────────

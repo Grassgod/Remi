@@ -5,6 +5,7 @@ import { parseJson, toJson } from "@multiremi/store/helpers.js";
 import type { StoreContext } from "@multiremi/store/context.js";
 import { RUNTIME_AUXILIARY_TABLES } from "@multiremi/store/runtime-lifecycle-tables.js";
 import { isRuntimeEffectivelyOnline } from "@multiremi/store/repos/runtimes-repo.js";
+import { BackgroundTasksRepo } from "@multiremi/store/repos/background-tasks-repo.js";
 
 type Row = Record<string, unknown>;
 
@@ -693,6 +694,8 @@ export class DaemonRetirementRepo {
           ).changes;
         }
         this.ctx.taskTraces().markTaskTracesLostForRuntimes(runtimeIds);
+        // PR 6: the retired daemon's background tasks are gone with it.
+        new BackgroundTasksRepo(this.ctx).endRuntimeTasksWithinTransaction(runtimeIds);
         this.ctx.db.run(
           `UPDATE multiremi_issue_workspaces
            SET runtime_id = NULL, updated_at = ?
