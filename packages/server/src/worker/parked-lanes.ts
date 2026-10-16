@@ -75,7 +75,8 @@ const DOORBELL_RETRY_MAX_MS = 30_000;
 /** What a lane's process needs from its provider (a subset of `MultiremiTaskProvider`). */
 export interface ParkableProvider {
   listAsyncTasks?(options: { chatId?: string | null }): AsyncTaskSnapshot[];
-  stopAsyncTask?(taskId: string, options: { chatId?: string | null; timeoutMs?: number; by?: TraceBackgroundTaskStopRequest["by"] }): Promise<{ stopped: boolean }>;
+  stopAsyncTask?(taskId: string, options: { chatId?: string | null; timeoutMs?: number; by?: TraceBackgroundTaskStopRequest["by"];
+    requestedAt?: string }): Promise<{ stopped: boolean }>;
   park?(chatId: string, on: boolean): void;
   adoptSession?(fromChatId: string, toChatId: string): boolean;
   processGroupId?(chatId: string): number | null;
@@ -116,6 +117,8 @@ interface LaneTask {
   originAttemptId: string;
   /** Remi's own reason when it stopped the task (the lane's, §2.7). */
   stopReason: BackgroundTaskStopReason | null;
+  /** The latest stop request this registry sent, as its requester stamped it (the server matches it exactly). */
+  stopRequest: { requestedAt: string; by: TraceBackgroundTaskStopRequest["by"] } | null;
   outputTail: string | null;
   /** The output file is there but cannot be read (`output_unreadable`). */
   outputUnreadable: boolean;
@@ -636,7 +639,7 @@ export class ParkedLanes {
     const ids = payload.task_id === DAEMON_LANE_BACKGROUND_STOP_ALL
       ? [...record.tasks.values()].filter((task) => isLive(task.snapshot.state)).map((task) => task.snapshot.id)
       : [payload.task_id];
-    await Promise.allSettled(ids.map((taskId) => this.stopTask(record, taskId, "user", "user")));
+    await Promise.allSettled(ids.map((taskId) => this.stopTask(record, taskId, "user", "user", undefined, payload.requested_at)));
     record.lastActivityAt = this.now();
   }
 
@@ -771,15 +774,17 @@ export class ParkedLanes {
     const previous = record.tasks.get(snapshot.id);
     const task: LaneTask = previous ?? {
       snapshot, originAttemptId: record.attemptId ?? record.lastAttemptId,
-      stopReason: null, outputTail: null, outputUnreadable: false, doorbell: "none", handedOff: false,
+      stopReason: null, stopRequest: null, outputTail: null, outputUnreadable: false, doorbell: "none", handedOff: false,
     };
     const wasLive = previous ? isLive(previous.snapshot.state) : false;
+    // Read before the snapshot is replaced: `previous` is the same record.
+    const previousStopOutcome = previous?.snapshot.stop?.outcome;
     task.snapshot = snapshot;
     if (!previous) record.tasks.set(snapshot.id, task);
     if (snapshot.state === "stopped" && !task.stopReason && snapshot.stop?.by === "user") task.stopReason = "user";
     record.lastActivityAt = this.now();
     const internal = this.internals.get(record);
-    if (internal?.hooks && snapshot.stop && previous?.snapshot.stop?.outcome !== snapshot.stop.outcome && snapshot.stop.outcome !== "pending") {
+    if (internal?.hooks && snapshot.stop && previousStopOutcome !== snapshot.stop.outcome && snapshot.stop.outcome !== "pending") {
       internal.hooks.stopResult(snapshot.id, snapshot.stop.outcome);
     }
     if (!report) return;
@@ -798,15 +803,19 @@ export class ParkedLanes {
 
   /** Remi's or a person's stop of one task: the request, the trace, the snapshot. */
   private async stopTask(record: LaneRecord, taskId: string, by: TraceBackgroundTaskStopRequest["by"],
-    reason: BackgroundTaskStopReason, timeoutMs?: number): Promise<void> {
+    reason: BackgroundTaskStopReason, timeoutMs?: number, requestedAt?: string): Promise<void> {
     const task = record.tasks.get(taskId);
+    // A person's request keeps the server's `requested_at` (its answer is matched on it); Remi's are stamped here.
+    const stamped = requestedAt && Number.isFinite(Date.parse(requestedAt)) ? requestedAt : new Date(this.now()).toISOString();
+    if (task) task.stopRequest = { requestedAt: stamped, by };
     if (task && isLive(task.snapshot.state) && !task.stopReason) task.stopReason = reason;
     const internal = this.internals.get(record);
-    if (task && isLive(task.snapshot.state)) internal?.hooks?.stopRequested(taskId, { by, requested_at: new Date(this.now()).toISOString() });
-    const result = await record.provider.stopAsyncTask?.(taskId, { chatId: record.poolChatId, by, timeoutMs }).catch(() => ({ stopped: false }));
+    if (task && isLive(task.snapshot.state)) internal?.hooks?.stopRequested(taskId, { by, requested_at: stamped });
+    const result = await record.provider.stopAsyncTask?.(taskId, { chatId: record.poolChatId, by, timeoutMs, requestedAt: stamped })
+      .catch(() => ({ stopped: false }));
     if (!result?.stopped && task && !isLive(task.snapshot.state)) {
       // An ended or unknown task answers `not_running` (§6.1).
-      task.snapshot = { ...task.snapshot, stop: { requestedAt: this.now(), by, outcome: "not_running" } };
+      task.snapshot = { ...task.snapshot, stop: { requestedAt: Date.parse(stamped), by, outcome: "not_running" } };
     }
     this.scheduleSnapshot(record, false);
   }
@@ -1073,6 +1082,13 @@ export class ParkedLanes {
     }
   }
 
+  /** The stop's `requested_at` exactly as its requester wrote it, when this registry sent that stop. */
+  private stopRequestedAt(task: LaneTask, stop: NonNullable<AsyncTaskSnapshot["stop"]>): string {
+    const sent = task.stopRequest;
+    return sent && sent.by === stop.by && Date.parse(sent.requestedAt) === stop.requestedAt
+      ? sent.requestedAt : new Date(stop.requestedAt).toISOString();
+  }
+
   private wireTask(task: LaneTask): DaemonLaneBackgroundTask {
     const snapshot = task.snapshot;
     const status = snapshot.state as BackgroundTaskReportedStatus;
@@ -1080,7 +1096,7 @@ export class ParkedLanes {
     return {
       task_id: snapshot.id, task_type: snapshot.taskType, name: snapshot.name, command,
       origin_attempt_id: task.originAttemptId, origin_item_id: backgroundTaskItemId(snapshot.id), status, can_stop: snapshot.canStop,
-      stop_request: snapshot.stop ? { requested_at: new Date(snapshot.stop.requestedAt).toISOString(), by: snapshot.stop.by,
+      stop_request: snapshot.stop ? { requested_at: this.stopRequestedAt(task, snapshot.stop), by: snapshot.stop.by,
         outcome: snapshot.stop.outcome } : null,
       stop_reason: status === "stopped" ? task.stopReason ?? (snapshot.stop?.by === "user" ? "user" : null) : null,
       started_at: new Date(snapshot.startedAt).toISOString(), ended_at: iso(snapshot.endedAt),

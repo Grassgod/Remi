@@ -37,17 +37,26 @@ class StubProvider implements ParkableProvider {
   alive = true;
   /** A slow stop: the bridge answers this long after the request. */
   stopDelayMs = 0;
+  /** A stop the bridge fails (or that times out): the task runs on. */
+  stopFails = false;
   chatId: string;
   permission: ((params: any) => Promise<any>) | null = null;
   onChange: ((chatId: string, task: AsyncTaskSnapshot) => void) | null = null;
   constructor(chatId: string) { this.chatId = chatId; }
   listAsyncTasks() { return [...this.tasks.values()]; }
-  async stopAsyncTask(taskId: string, options: { by?: "user" | "remi" }) {
+  async stopAsyncTask(taskId: string, options: { by?: "user" | "remi"; requestedAt?: string }) {
     const task = this.tasks.get(taskId);
     this.stops.push([taskId, options.by]);
+    // As AcpProvider: the stop carries the request's time.
+    const requestedAt = options.requestedAt ? Date.parse(options.requestedAt) : Date.now();
     if (this.stopDelayMs) await Bun.sleep(this.stopDelayMs);
     if (!task || (task.state !== "running" && task.state !== "paused")) return { stopped: false };
-    this.change({ ...task, state: "stopped", endedAt: Date.now(), stop: { requestedAt: Date.now(), by: options.by ?? "remi", outcome: "stopped" } });
+    if (this.stopFails) {
+      this.change({ ...task, stop: { requestedAt, by: options.by ?? "remi", outcome: "pending" } });
+      this.change({ ...this.tasks.get(taskId)!, stop: { requestedAt, by: options.by ?? "remi", outcome: "failed" } });
+      return { stopped: false };
+    }
+    this.change({ ...task, state: "stopped", endedAt: Date.now(), stop: { requestedAt, by: options.by ?? "remi", outcome: "stopped" } });
     return { stopped: true };
   }
   park(chatId: string, on: boolean) { this.parked.set(chatId, on); }
@@ -361,6 +370,33 @@ describe("ParkedLanes: limits, timers and releases (§2.7)", () => {
     await r.lanes.handleStop({ ...record.lane, task_id: "*", requested_at: new Date().toISOString() });
     expect(provider.stops).toEqual([["a", "user"], ["b", "user"]]);
     await waitFor(() => r.snapshots.at(-1)!.tasks.filter((task) => task.stop_reason === "user").length === 2, "the user stops reported");
+  });
+
+  it("a person's failed stop settles under the server's requested_at, whatever this host's clock; the trace gets the outcome", async () => {
+    const r = registry();
+    const { record, provider } = r.begin("chat_a", "tsk_1");
+    const requested: Array<[string, string]> = [];
+    const results: Array<[string, string]> = [];
+    r.lanes.attach(record, {
+      stopRequested: (taskId, request) => requested.push([taskId, request.requested_at]),
+      stopResult: (taskId, outcome) => results.push([taskId, outcome]),
+      output: () => {},
+    });
+    provider.change(snapshot("srv"));
+    provider.stopFails = true;
+    // The server's clock, in its own spelling (no milliseconds), far from this host's.
+    const requestedAt = "2001-02-03T04:05:06Z";
+    await r.lanes.handleStop({ ...record.lane, task_id: "srv", requested_at: requestedAt });
+    expect(requested).toEqual([["srv", requestedAt]]);
+    expect(results).toEqual([["srv", "failed"]]);
+    await waitFor(() => r.snapshots.at(-1)?.tasks[0]?.stop_request?.outcome === "failed", "the failed outcome reported");
+    expect(r.snapshots.at(-1)!.tasks[0]!.stop_request).toEqual({ requested_at: requestedAt, by: "user", outcome: "failed" });
+    // A stop Remi sends itself is stamped here.
+    provider.stopFails = false;
+    await r.lanes.release(record, "lane_reset");
+    const last = r.snapshots.at(-1)!.tasks[0]!.stop_request!;
+    expect(last).toMatchObject({ by: "remi", outcome: "stopped" });
+    expect(Math.abs(Date.parse(last.requested_at) - Date.now())).toBeLessThan(5_000);
   });
 
   it("the daemon's stop closes parked lanes with daemon_restart", async () => {
