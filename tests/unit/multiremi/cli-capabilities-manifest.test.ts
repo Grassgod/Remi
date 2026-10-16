@@ -200,10 +200,15 @@ describe("CLI capabilities manifest", () => {
   it("maps every user route or records a justified exemption and keeps compatibility aliases", () => {
     expect(cliCoverageReport(manifest)).toEqual({
       mapped: 627,
-      exempt: 158,
+      exempt: 160,
       missing: 0,
-      total: 785,
+      total: 787,
     });
+    // PR 6: the session background-task panel and its stop are creator-only Web state with no CLI.
+    for (const route of ["GET /api/chat/sessions/:sessionId/background-tasks",
+      "POST /api/chat/sessions/:sessionId/background-tasks/stop"]) {
+      expect(manifest.routes[route]).toMatchObject({ cli_exempt: true, category: "pure_ui" });
+    }
     // ADR 0020: the Chat follow-up queue is member-only composer state with no CLI.
     for (const route of ["GET /api/sessions/:sessionId/queue", "POST /api/sessions/:sessionId/queue",
       "PATCH /api/sessions/:sessionId/queue/:qid", "DELETE /api/sessions/:sessionId/queue/:qid",
