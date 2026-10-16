@@ -191,7 +191,7 @@ describe("后台任务 view (PR 6 §8.2)", () => {
     // The registry reports it stopped by the user.
     seedTasks([{ ...RUNNING, status: "stopped", stop_reason: "user", ended_at: at(615), stop_requested_at: at(600), stop_requested_by: "mem_1" },
       bgTask("other", { name: "tail -f log", started_at: at(10) })]);
-    expect(panel().querySelector('[data-bg-section="done"]')).toHaveTextContent("已由你停止");
+    expect(panel().querySelector('[data-bg-section="done"]')).toHaveTextContent("由你停止");
   });
 
   it("says why a stop was refused and offers it again", async () => {
@@ -309,6 +309,22 @@ describe("running strip with background tasks (PR 6 §8.1)", () => {
     // Ten minutes after the end it goes by itself.
     act(() => { vi.advanceTimersByTime(10 * 60_000); });
     expect(document.querySelectorAll("[data-bg-ended-notice]")).toHaveLength(0);
+  });
+
+  it("says each of Remi's stops once: the notice names the stop, the reason only why", () => {
+    const reasons = ["daemon_restart", "lane_reset", "session_closed", "config_changed", "evicted", "lost"] as const;
+    seedTasks(reasons.map((reason, index) => bgTask(reason, { name: "pytest", status: "stopped", stop_reason: reason, ended_at: at(590 - index) })));
+    renderStrip();
+    const texts = [...document.querySelectorAll<HTMLElement>("[data-bg-ended-notice] span[title]")].map((span) => span.textContent);
+    expect(texts).toEqual([
+      "pytest 已停止：电脑上的 Remi 已重启",
+      "pytest 已停止：会话已重置",
+      "pytest 已停止：会话已关闭",
+      "pytest 已停止：智能体配置已更改",
+      "pytest 已停止：这台电脑同时保留的后台进程已满",
+      "pytest 已停止：进程意外中断",
+    ]);
+    for (const text of texts) expect(text!.match(/停止/g)).toHaveLength(1);
   });
 });
 
