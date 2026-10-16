@@ -314,7 +314,10 @@
     "contents_deleted": "内容已删除",
     "background_running_other": "{{count}} 个后台子代理运行中",
     "message_to": "发给 {{agent}}",
-    "message_to_generic": "发给子代理"
+    "message_to_generic": "发给子代理",
+    "background_command_moved": "{{command}} 已转到后台运行",
+    "background_workflow_moved": "{{name}} 已转到后台运行",
+    "background_task_moved": "{{name}} 已转到后台运行"
   },
   "subagents": {
     "row_running": "运行中 {{elapsed}}",

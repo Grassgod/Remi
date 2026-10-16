@@ -314,7 +314,10 @@
     "contents_deleted": "内容は削除されました",
     "background_running_other": "バックグラウンドのサブエージェント {{count}} 件が実行中",
     "message_to": "宛先 {{agent}}",
-    "message_to_generic": "宛先：サブエージェント"
+    "message_to_generic": "宛先：サブエージェント",
+    "background_command_moved": "{{command}} をバックグラウンドに移しました",
+    "background_workflow_moved": "{{name}} をバックグラウンドに移しました",
+    "background_task_moved": "{{name}} をバックグラウンドに移しました"
   },
   "subagents": {
     "row_running": "実行中 {{elapsed}}",

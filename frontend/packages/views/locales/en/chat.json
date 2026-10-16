@@ -324,7 +324,10 @@
     "background_running_one": "{{count}} background subagent running",
     "background_running_other": "{{count}} background subagents running",
     "message_to": "To {{agent}}",
-    "message_to_generic": "To a subagent"
+    "message_to_generic": "To a subagent",
+    "background_command_moved": "{{command}} moved to the background",
+    "background_workflow_moved": "{{name}} moved to the background",
+    "background_task_moved": "{{name}} moved to the background"
   },
   "subagents": {
     "row_running": "Running {{elapsed}}",

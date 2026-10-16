@@ -317,7 +317,10 @@
     "contents_deleted": "내용이 삭제됨",
     "background_running_other": "백그라운드 하위 에이전트 {{count}}개 실행 중",
     "message_to": "받는 대상 {{agent}}",
-    "message_to_generic": "받는 대상: 하위 에이전트"
+    "message_to_generic": "받는 대상: 하위 에이전트",
+    "background_command_moved": "{{command}} 백그라운드로 옮겨짐",
+    "background_workflow_moved": "{{name}} 백그라운드로 옮겨짐",
+    "background_task_moved": "{{name}} 백그라운드로 옮겨짐"
   },
   "subagents": {
     "row_running": "실행 중 {{elapsed}}",
