@@ -10,6 +10,9 @@ import { DaemonProtocolHarness, waitFor } from "../../integration/daemon-protoco
 
 afterEach(resetMultiremiTestEnv);
 const root = resolve(import.meta.dir, "../../..");
+// Activity/thought updates precede the read; only message chunks are replies.
+const messageFrames = (frames: any[]) => frames.filter(frame => frame.method === "session/update"
+  && frame.params.update.sessionUpdate === "agent_message_chunk");
 async function until(check: () => boolean) {
   const deadline = Date.now() + 10_000;
   while (!check()) { if (Date.now() > deadline) throw new Error("PPE fixture condition timed out"); await Bun.sleep(10); }
@@ -65,7 +68,7 @@ for (const kind of ["chat", "issue"] as const) test(`PPE ${kind} marker uses a r
   const f = await world(kind);
   try {
     expect(await f.prompt()).toMatchObject({ result: { stopReason: "end_turn" } });
-    const text = f.frames.find(frame => frame.method === "session/update").params.update.content.text;
+    const text = messageFrames(f.frames)[0].params.update.content.text;
     const evidence = JSON.parse(text.replace("PPE_PROBE_EVIDENCE ", ""));
     expect(evidence).toMatchObject({ turn_id: f.sent.turn_id, attempt_id: f.task.id });
     expect(evidence.reads[0]).toMatchObject({ conversation_id: f.session.id, runtime_id: "rt_ppe_fixture", provider: "codex",
@@ -83,6 +86,9 @@ test("PPE pauses before reading and resumes to consume a real injected marker", 
   try {
     const done = f.prompt();
     await until(() => f.diagnostics.some(e => e.event === "paused" && e.stage === "before-read"));
+    expect(f.frames.some(frame => frame.method === "session/update"
+      && frame.params.update.sessionUpdate === "agent_thought_chunk")).toBe(true);
+    expect(messageFrames(f.frames)).toHaveLength(0);
     expect(f.store.getSessionAgentReadProgress(f.session.id, f.task.agentId).seq).toBe(0);
     expect(await f.rpc("ppe/resume", { sessionId: f.providerSession, stage: "wrong" })).toMatchObject({ result: { resumed: false } });
     expect(await f.rpc("ppe/resume", { sessionId: f.providerSession, stage: "before-read" })).toMatchObject({ result: { resumed: true } });
@@ -103,7 +109,7 @@ test("PPE cancellation stops a paused read without a successful reply", async ()
     const done = f.prompt(); await until(() => f.diagnostics.some(e => e.event === "paused"));
     f.notify("session/cancel", { sessionId: f.providerSession });
     expect(await done).toMatchObject({ result: { stopReason: "cancelled" } });
-    expect(f.frames.filter(e => e.method === "session/update")).toHaveLength(0);
+    expect(messageFrames(f.frames)).toHaveLength(0);
     expect(f.store.getSessionAgentReadProgress(f.session.id, f.task.agentId).seq).toBe(0);
   } finally { await f.close(); }
 }, 20_000);
@@ -113,7 +119,7 @@ test("PPE refuses a successful range response without an actual persisted read r
   const read = spyOn(f.store, "recordSessionAgentRangeRead").mockReturnValue({ seq: 0, offset: 0 });
   try {
     expect(await f.prompt()).toMatchObject({ error: { message: "ppe_read_not_confirmed" } });
-    expect(f.frames.filter(e => e.method === "session/update")).toHaveLength(0);
+    expect(messageFrames(f.frames)).toHaveLength(0);
     expect(f.diagnostics.filter(e => e.event === "actual_read")).toHaveLength(0);
   } finally { read.mockRestore(); await f.close(); }
 }, 20_000);
@@ -124,7 +130,7 @@ test("PPE untagged smoke prompts keep their response and can reuse a provider se
     expect(await f.prompt("ordinary smoke")).toMatchObject({ result: { stopReason: "end_turn" } });
     expect(await f.rpc("session/resume", { sessionId: f.providerSession })).toMatchObject({ result: { sessionId: f.providerSession } });
     expect(await f.prompt("ordinary followup")).toMatchObject({ result: { stopReason: "end_turn" } });
-    expect(f.frames.filter(e => e.method === "session/update").map(e => e.params.update.content.text))
+    expect(messageFrames(f.frames).map(e => e.params.update.content.text))
       .toEqual(["PPE daemon ACP smoke test completed.", "PPE daemon ACP smoke test completed."]);
     expect(readdirSync(f.dir)).toHaveLength(0);
   } finally { await f.close(); }
@@ -137,7 +143,7 @@ test("PPE ASK waits for a real elicitation answer and records the original busin
     const done = f.prompt("PR404/RESP/ASK");
     await until(() => f.frames.some(frame => frame.method === "elicitation/create"));
     const request = f.frames.find(frame => frame.method === "elicitation/create");
-    expect(f.frames.filter(frame => frame.method === "session/update")).toHaveLength(0);
+    expect(messageFrames(f.frames)).toHaveLength(0);
     const created = f.bridge.rpc("turn.decision", { turn_id: f.sent.turn_id, attempt_id: f.task.id,
       wait_id: request.id, dedupe_key: "ppe-ask-native", body_md: request.params.message, options: [],
       metadata: { kind: "question", questions: [{ question: "PPE decision", fieldKey: "answer", options: [{ label: "Continue" }, { label: "Stop" }] }] } },
@@ -208,7 +214,7 @@ test("PPE retired SUBMIT marker takes the ordinary smoke path and submits nothin
   const f = await world("issue");
   try {
     expect(await f.prompt("PR404/RESP/SUBMIT")).toMatchObject({ result: { stopReason: "end_turn" } });
-    expect(f.frames.filter(e => e.method === "session/update").map(e => e.params.update.content.text))
+    expect(messageFrames(f.frames).map(e => e.params.update.content.text))
       .toEqual(["PPE daemon ACP smoke test completed."]);
     expect(f.diagnostics.filter(event => String(event.event ?? "").startsWith("responsibility_"))).toHaveLength(0);
     expect(readdirSync(f.dir)).toHaveLength(0);
@@ -223,7 +229,7 @@ test("PPE cancellation releases an unanswered provider RPC without a successful 
     await until(() => f.frames.some(frame => frame.method === "elicitation/create"));
     f.notify("session/cancel", { sessionId: f.providerSession });
     expect(await done).toMatchObject({ result: { stopReason: "cancelled" } });
-    expect(f.frames.filter(frame => frame.method === "session/update")).toHaveLength(0);
+    expect(messageFrames(f.frames)).toHaveLength(0);
   } finally { await f.close(); }
 }, 20_000);
 
