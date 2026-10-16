@@ -24,14 +24,18 @@ export const chatKeys = {
       ? [...chatKeys.sessions(wsId), status, origin] as const
       : status === "all" ? chatKeys.sessions(wsId) : [...chatKeys.sessions(wsId), status] as const,
   session: (wsId: string, id: string) => [...chatKeys.all(wsId), "session", id] as const,
+  /** Prefix of every session detail. */
+  sessionDetails: (wsId: string) => [...chatKeys.all(wsId), "session"] as const,
   pendingTask: (sessionId: string) => ["chat", "pending-task", sessionId] as const,
   /** Aggregate of in-flight chat tasks for the current user — FAB reads this. */
   pendingTasks: (wsId: string) => [...chatKeys.all(wsId), "pending-tasks"] as const,
   humanRequests: (taskId: string) => ["task-human-requests", taskId] as const,
   /** Follow-up queue of one Chat (ADR 0020): live rows and the lane pause. */
   queue: (wsId: string, sessionId: string) => [...chatKeys.all(wsId), "queue", sessionId] as const,
+  /** Prefix of every Chat's background tasks. */
+  backgroundTasksAll: (wsId: string) => [...chatKeys.all(wsId), "background-tasks"] as const,
   /** One Chat's background tasks (PR 6): the session registry, never a trace. */
-  backgroundTasks: (wsId: string, sessionId: string) => [...chatKeys.all(wsId), "background-tasks", sessionId] as const,
+  backgroundTasks: (wsId: string, sessionId: string) => [...chatKeys.backgroundTasksAll(wsId), sessionId] as const,
 };
 
 /**

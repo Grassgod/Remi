@@ -88,6 +88,29 @@ describe("useRealtimeSync — ws instance change", () => {
     const keys = invalidateSpy.mock.calls.map((call: [{ queryKey?: unknown }, ...unknown[]]) => call[0].queryKey);
     expect(keys).toContainEqual(["issues", "ws-1"]);
     expect(keys).not.toContainEqual(["chat", "ws-1"]);
+    // What no stream resumes is refreshed: session lists and details, the
+    // pending roll-up, the background-task registry (PR 6 review #7).
+    expect(keys).toEqual(expect.arrayContaining([
+      ["chat", "ws-1", "sessions"], ["chat", "ws-1", "session"], ["chat", "ws-1", "pending-tasks"], ["chat", "ws-1", "background-tasks"],
+    ]));
+    expect(keys).not.toContainEqual(["chat", "ws-1", "queue"]);
+  });
+
+  it("refreshes a cached background-task list and the session count on resync, keeping the queue", async () => {
+    const ws = createMockWs();
+    let resync: (() => void) | undefined;
+    (ws.onResync as unknown as ReturnType<typeof vi.fn>).mockImplementation((cb: () => void) => {
+      resync = cb;
+      return () => { resync = undefined; };
+    });
+    qc.setQueryData(["chat", "ws-1", "background-tasks", "chat_1"], { session_id: "chat_1", running: 1, rows: [] });
+    qc.setQueryData(["chat", "ws-1", "sessions"], []);
+    qc.setQueryData(["chat", "ws-1", "queue", "chat_1"], { items: [], paused: null });
+    renderHook(() => useRealtimeSync(ws, stores), { wrapper: createWrapper(qc) });
+    resync?.();
+    expect(qc.getQueryState(["chat", "ws-1", "background-tasks", "chat_1"])?.isInvalidated).toBe(true);
+    expect(qc.getQueryState(["chat", "ws-1", "sessions"])?.isInvalidated).toBe(true);
+    expect(qc.getQueryState(["chat", "ws-1", "queue", "chat_1"])?.isInvalidated).toBe(false);
   });
 
   it("skips invalidation on first non-null ws instance", () => {

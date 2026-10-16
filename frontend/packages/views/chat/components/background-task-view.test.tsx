@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, renderHook, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { TraceItem } from "@multiremi/contracts/trace";
 import { ApiError } from "@multiremi/core/api";
@@ -13,6 +13,7 @@ import { BG_SESSION, bgSnapshot, bgTask } from "../lib/__fixtures__/background-t
 import { DoorbellRow } from "./doorbell-row";
 import { SubagentPanelLayout } from "./subagent-panel";
 import { ChatRunningStrip } from "./subagent-running-strip";
+import { useChatBackgroundTasks } from "./use-background-tasks";
 
 const { api, mobile } = vi.hoisted(() => ({
   api: { getTaskTrace: vi.fn(), listChatBackgroundTasks: vi.fn(), stopChatBackgroundTasks: vi.fn(), getTask: vi.fn() },
@@ -343,5 +344,35 @@ describe("doorbell row (PR 6 §8.1)", () => {
   it("says a failure", () => {
     renderWithI18n(<QueryClientProvider client={client}><DoorbellRow doorbell={{ ...doorbell, status: "failed" }} sessionId={BG_SESSION} /></QueryClientProvider>, { locale: "en" });
     expect(document.querySelector('[data-doorbell="dev"]')).toHaveTextContent("Background task npm test failed·View");
+  });
+});
+
+describe("reading the registry for a visible chat (PR 6 review #7)", () => {
+  function renderReader(props: { count: number | null; visible: boolean }) {
+    return renderHook(({ count, visible }) => useChatBackgroundTasks(BG_SESSION, { enabled: visible && (count ?? 0) > 0, visible, expectRunning: count }),
+      { initialProps: props, wrapper: ({ children }) => <QueryClientProvider client={client}>{children}</QueryClientProvider> });
+  }
+
+  it("reads once more when the count drops to 0 under a list still showing a running task, instead of only stopping", async () => {
+    api.listChatBackgroundTasks.mockResolvedValue(bgSnapshot([RUNNING]));
+    const view = renderReader({ count: 1, visible: true });
+    await waitFor(() => expect(view.result.current.running).toBe(1));
+    expect(api.listChatBackgroundTasks).toHaveBeenCalledTimes(1);
+    // The cap stopped it; the event was missed and the session list says 0.
+    api.listChatBackgroundTasks.mockResolvedValue(bgSnapshot([{ ...RUNNING, status: "stopped", stop_reason: "keepalive_cap", ended_at: at(599) }]));
+    view.rerender({ count: 0, visible: true });
+    await waitFor(() => expect(view.result.current.running).toBe(0));
+    expect(api.listChatBackgroundTasks).toHaveBeenCalledTimes(2);
+    expect(view.result.current.rows[0]!.status).toBe("stopped");
+    // Agreeing now: no further read.
+    await act(async () => { vi.advanceTimersByTime(1000); });
+    expect(api.listChatBackgroundTasks).toHaveBeenCalledTimes(2);
+  });
+
+  it("reads nothing for a hidden chat, whatever the count says (MUL-472)", async () => {
+    seedTasks([RUNNING]);
+    renderReader({ count: 0, visible: false });
+    await act(async () => { vi.advanceTimersByTime(1000); });
+    expect(api.listChatBackgroundTasks).not.toHaveBeenCalled();
   });
 });

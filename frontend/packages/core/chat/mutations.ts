@@ -15,7 +15,6 @@ import type {
   UpdateChatSessionInput,
 } from "../types";
 import {
-  backgroundStopErrorCode,
   markBackgroundStopRequested,
   mergeBackgroundTaskRows,
   restoreBackgroundStopMarks,
@@ -294,9 +293,11 @@ export function useStopChatBackgroundTasks(sessionId: string | null) {
   const wsId = useWorkspaceId();
   return useMutation({
     mutationKey: ["chat", "background-tasks", "stop", sessionId],
-    onMutate: (target: ChatBackgroundStopTarget) => {
+    onMutate: async (target: ChatBackgroundStopTarget) => {
       if (!sessionId) return { wsId, previous: undefined };
       const key = chatKeys.backgroundTasks(wsId, sessionId);
+      // A read in flight must not land over the mark; it is read again on settle.
+      await qc.cancelQueries({ queryKey: key, exact: true });
       const previous = qc.getQueryData<ChatBackgroundTasksSnapshot>(key);
       markBackgroundStopRequested(qc, wsId, sessionId, target, new Date().toISOString(), null);
       return { wsId, previous };
@@ -314,10 +315,12 @@ export function useStopChatBackgroundTasks(sessionId: string | null) {
     onError: (err, target, context) => {
       logger.error("stopChatBackgroundTasks.error", { sessionId, target, err: toSafeErrorDetails(err) });
       if (!sessionId || !context) return;
-      const key = chatKeys.backgroundTasks(context.wsId, sessionId);
       restoreBackgroundStopMarks(qc, context.wsId, sessionId, context.previous);
-      // An ended task: the list is behind, read it again.
-      if (backgroundStopErrorCode(err) === "task_not_running") void qc.invalidateQueries({ queryKey: key });
+    },
+    // The list is read again: a read the mutation cancelled, or one that is
+    // behind (`task_not_running`: the task had ended).
+    onSettled: (_rows, _err, _target, context) => {
+      if (sessionId && context) void qc.invalidateQueries({ queryKey: chatKeys.backgroundTasks(context.wsId, sessionId), exact: true });
     },
   });
 }

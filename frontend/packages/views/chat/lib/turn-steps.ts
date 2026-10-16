@@ -24,6 +24,7 @@ import {
   type StepDescriptor,
   type StepSummaryFragment,
 } from "@multiremi/shared/trace-step-copy";
+import { isMovedLaunch } from "./background-tasks";
 
 /**
  * The Chat steps fold over a turn + items trace (PR 2 spec §4.1, PLAN §2).
@@ -76,12 +77,15 @@ export type StepIconKind =
   | "workflow"
   | "background";
 
+/** A step's copy: the shared table's keys, plus the web's own launch-row keys ({@link MOVED_STEP_KEYS}). */
+export type WebStepDescriptor = Omit<StepDescriptor, "key"> & { key: StepDescriptor["key"] | MovedStepKey };
+
 export interface StepRow {
   key: string;
   item: StepItem;
   /** The parsed action of a command row, or the file of a file-change row. */
   part?: CommandAction | FileChange;
-  descriptor: StepDescriptor;
+  descriptor: WebStepDescriptor;
   category: StepCategory;
   icon: StepIconKind;
   /** The item is still in progress. */
@@ -154,8 +158,28 @@ function actionIcon(action: CommandAction | undefined): StepIconKind {
   }
 }
 
+const MOVED_FROM = "_handed_off";
+const MOVED_SUFFIX = "_moved";
+
+/**
+ * The web's own launch-row keys (PR 6): a task handed to the background that
+ * nothing confirms still runs. They live in `chat.turn_steps`, not in the
+ * shared step table: Feishu writes 「… 仍在后台运行」 at the turn's end, when
+ * it is true; the web reads the row later.
+ */
+export const MOVED_STEP_KEYS = {
+  background_command_moved: "background_command_moved",
+  background_workflow_moved: "background_workflow_moved",
+  background_task_moved: "background_task_moved",
+} as const;
+export type MovedStepKey = keyof typeof MOVED_STEP_KEYS;
+
+export function isMovedStepKey(key: string): key is MovedStepKey {
+  return key in MOVED_STEP_KEYS;
+}
+
 /** A launch row's glyph: a shell keeps the terminal (or the stop) glyph, a workflow and other tasks get their own. */
-function launchIcon(item: StepItem, descriptor: StepDescriptor): StepIconKind {
+function launchIcon(item: StepItem, descriptor: WebStepDescriptor): StepIconKind {
   if (descriptor.key.startsWith("background_workflow_")) return "workflow";
   if (descriptor.key.startsWith("background_task_")) return "background";
   return descriptor.state === "stopped" || item.status === "stopped" ? "stopped" : "command";
@@ -163,9 +187,14 @@ function launchIcon(item: StepItem, descriptor: StepDescriptor): StepIconKind {
 
 function row(item: StepItem, key: string, part?: CommandAction | FileChange, resolveAgent?: AgentResolver,
   resolveBackgroundTask?: BackgroundTaskResolver): StepRow {
-  const descriptor = describeStep(item, part, resolveAgent, resolveBackgroundTask);
+  let descriptor: WebStepDescriptor = describeStep(item, part, resolveAgent, resolveBackgroundTask);
   const category = stepCategory(item, part, resolveAgent) ?? "tool";
   if (descriptor.key.startsWith("background_")) {
+    // A hand-off nothing confirms reads as moved to the background (web-only copy).
+    if (descriptor.key.endsWith(MOVED_FROM) && isMovedLaunch(resolveBackgroundTask?.(item.id))) {
+      const moved = `${descriptor.key.slice(0, -MOVED_FROM.length)}${MOVED_SUFFIX}`;
+      if (isMovedStepKey(moved)) descriptor = { ...descriptor, key: moved };
+    }
     return { key, item, part, descriptor, category, icon: launchIcon(item, descriptor), active: item.status === "in_progress" };
   }
   const control = item.type === "tool" ? agentControl(item, resolveAgent) ?? undefined : undefined;
@@ -397,7 +426,7 @@ export function reasoningHeadline(text: string): string | null {
 }
 
 export type LiveLabel =
-  | { id: string; kind: "step"; descriptor: StepDescriptor; icon: StepIconKind }
+  | { id: string; kind: "step"; descriptor: WebStepDescriptor; icon: StepIconKind }
   | { id: string; kind: "reasoning"; text: string }
   | { id: "thinking"; kind: "thinking" }
   /** A breaker in progress shows its own progress: no label line at all. */

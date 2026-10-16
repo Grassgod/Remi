@@ -255,6 +255,8 @@ export function ChatWindow({
   const sessionBackgroundTasks = currentSession?.id === displayedSessionId ? currentSession?.running_background_tasks ?? null : null;
   const backgroundTasks = useChatBackgroundTasks(displayedSessionId, {
     enabled: chatVisible && (sessionBackgroundTasks ?? 0) > 0,
+    // A count that drops to 0 under a list still showing a running task reads it once more.
+    visible: chatVisible,
     expectRunning: sessionBackgroundTasks,
   });
   const backgroundTasksRunning = Math.max(sessionBackgroundTasks ?? 0, backgroundTasks.running);

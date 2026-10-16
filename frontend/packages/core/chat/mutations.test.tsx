@@ -9,7 +9,7 @@ import { ApiError } from "../api/http";
 import type { ChatQueue, QueuedChatMessage } from "../api/schemas/chat-queue";
 import {
   useDeleteChatSession, useDeleteQueuedChatMessage, useEnqueueChatMessage, useMarkChatSessionRead,
-  useResumeChatQueue, useSteerQueuedChatMessage, useUpdateChatSession, useUpdateQueuedChatMessage,
+  useResumeChatQueue, useSteerQueuedChatMessage, useStopChatBackgroundTasks, useUpdateChatSession, useUpdateQueuedChatMessage,
 } from "./mutations";
 
 const mock = vi.hoisted(() => ({
@@ -18,6 +18,7 @@ const mock = vi.hoisted(() => ({
   enqueueChatMessage: vi.fn(), updateQueuedChatMessage: vi.fn(), deleteQueuedChatMessage: vi.fn(),
   steerQueuedChatMessage: vi.fn(), resumeChatQueue: vi.fn(),
   putQueueOutboxItem: vi.fn(), removeQueueOutboxItem: vi.fn(),
+  stopChatBackgroundTasks: vi.fn(), listChatBackgroundTasks: vi.fn(),
 }));
 vi.mock("../api", () => ({ api: mock }));
 vi.mock("../hooks", () => ({ useWorkspaceId: () => mock.wsId }));
@@ -279,5 +280,42 @@ describe("chat follow-up queue mutations", () => {
     await act(async () => { await result.current.mutateAsync({ sessionId: "chat-1" }); });
     expect(qc.getQueryData<ChatQueue>(chatKeys.queue("ws-1", "chat-1"))).toEqual({ items: [], paused: null });
     expect(invalidate).toHaveBeenCalledWith({ queryKey: chatKeys.pendingTask("chat-1") });
+  });
+});
+
+describe("background-task stop (PR 6 review #7)", () => {
+  const row = (overrides: Record<string, unknown> = {}) => ({
+    id: "row-1", session_id: "chat-1", task_id: "t1", task_type: "shell", name: "npm run dev", command: "npm run dev",
+    origin_attempt_id: "att-1", status: "running", can_stop: true, stop_requested_at: null, stop_requested_by: null,
+    stop_outcome: null, started_at: "2026-10-16T00:00:00Z", lane_state: "parked", updated_at: "2026-10-16T00:00:01Z", ...overrides,
+  });
+  const key = chatKeys.backgroundTasks("ws-1", "chat-1");
+
+  it("cancels a read in flight so it cannot land over the stopping mark, and reads again once settled", async () => {
+    qc.setQueryData(key, { session_id: "chat-1", running: 1, rows: [row()] });
+    let answerRead!: (value: unknown) => void;
+    mock.listChatBackgroundTasks.mockImplementationOnce(() => new Promise((resolve) => { answerRead = resolve; }))
+      .mockResolvedValue({ session_id: "chat-1", running: 1, rows: [row({ stop_requested_at: "2026-10-16T00:02:00Z", stop_outcome: "pending" })] });
+    const read = qc.fetchQuery({ queryKey: key, queryFn: () => mock.listChatBackgroundTasks("chat-1"), staleTime: 0 }).catch(() => null);
+    expect(qc.getQueryState(key)?.fetchStatus).toBe("fetching");
+    mock.stopChatBackgroundTasks.mockResolvedValue([]);
+    const { result } = renderHook(() => useStopChatBackgroundTasks("chat-1"), { wrapper });
+    await act(async () => { await result.current.mutateAsync({ task_id: "t1" }); });
+    // The stale read (no mark) answers late; it was cancelled and does not land.
+    answerRead({ session_id: "chat-1", running: 1, rows: [row()] });
+    await read;
+    expect(mock.stopChatBackgroundTasks).toHaveBeenCalledWith("chat-1", { task_id: "t1" });
+    const rows = () => qc.getQueryData<{ rows: Array<{ stop_requested_at: string | null }> }>(key)!.rows;
+    expect(rows()[0]!.stop_requested_at).not.toBeNull();
+    expect(qc.getQueryState(key)?.isInvalidated).toBe(true);
+  });
+
+  it("restores the mark on a refusal and still reads the list again", async () => {
+    qc.setQueryData(key, { session_id: "chat-1", running: 1, rows: [row()] });
+    mock.stopChatBackgroundTasks.mockRejectedValue(new ApiError("ended", 409, "Conflict", { code: "task_not_running" }));
+    const { result } = renderHook(() => useStopChatBackgroundTasks("chat-1"), { wrapper });
+    await act(async () => { await result.current.mutateAsync({ all: true }).catch(() => {}); });
+    expect(qc.getQueryData<{ rows: Array<{ stop_requested_at: string | null }> }>(key)!.rows[0]!.stop_requested_at).toBeNull();
+    expect(qc.getQueryState(key)?.isInvalidated).toBe(true);
   });
 });

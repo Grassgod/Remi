@@ -24,7 +24,7 @@ import {
   splitBackgroundTasks,
   stoppableBackgroundTasks,
 } from "./background-tasks";
-import { buildChildSteps, buildTurnSteps } from "./turn-steps";
+import { buildChildSteps, buildTurnSteps, isMovedStepKey } from "./turn-steps";
 
 const NOW = Date.parse(at(600));
 
@@ -150,6 +150,29 @@ describe("launch rows (PR 6 §8.1 Steps)", () => {
     expect(buildTurnSteps(items, { resolveBackgroundTask: other }).rows[0]!.descriptor.key).toBe("background_command_active");
   });
 
+  it("says 「仍在后台运行」 only when the registry confirms it; an unconfirmed hand-off reads as moved (review #6)", () => {
+    const all = [launch, bgItem("t1", "cmd:1", { status: "completed", completed_at: at(9), handed_off: true })];
+    const key = (rows: Parameters<typeof backgroundLaunchResolver>[1]) =>
+      buildTurnSteps(all, { resolveBackgroundTask: backgroundLaunchResolver(all, rows, "att_1", true) }).rows[0]!.descriptor;
+    // Registry not loaded, or the chat counts none running (nothing read).
+    expect(key(null)).toMatchObject({ key: "background_command_moved", state: "done", args: { command: "Start the dev server" } });
+    expect(key([])).toMatchObject({ key: "background_command_moved" });
+    // Loaded, but this task's row is gone (aged out of the last 20 ended), or belongs to another attempt.
+    expect(key([bgTask("other-task")])).toMatchObject({ key: "background_command_moved" });
+    expect(key([bgTask("t1", { origin_attempt_id: "att_9" })])).toMatchObject({ key: "background_command_moved" });
+    // Its computer went offline: last seen running is not a confirmation.
+    expect(key([bgTask("t1", { status: "unknown" })])).toMatchObject({ key: "background_command_moved" });
+    // Confirmed running, or ended since.
+    expect(key([bgTask("t1")])).toMatchObject({ key: "background_command_handed_off" });
+    expect(key([bgTask("t1", { status: "paused" })])).toMatchObject({ key: "background_command_handed_off" });
+    expect(key([bgTask("t1", { status: "completed" })])).toMatchObject({ key: "background_command_done" });
+    // A workflow moves the same way, with its own glyph.
+    const flow = [launch, bgItem("w1", "cmd:1", { task_type: "workflow", name: "release-check", status: "completed", completed_at: at(9), handed_off: true })];
+    const row = buildTurnSteps(flow, { resolveBackgroundTask: backgroundLaunchResolver(flow, null, "att_1", true) }).rows[0]!;
+    expect([row.descriptor.key, row.icon]).toEqual(["background_workflow_moved", "workflow"]);
+    expect(isMovedStepKey(row.descriptor.key)).toBe(true);
+  });
+
   it("gives a workflow its own glyph, keeps a multi-action command to one row, and adds no row for the task item", () => {
     const flow = command("cmd:2", [unknown("a"), unknown("b")]);
     const all = [flow, bgItem("w1", "cmd:2", { task_type: "workflow", name: "release-check" })];
@@ -172,6 +195,7 @@ describe("launch rows (PR 6 §8.1 Steps)", () => {
     const all = [child, bgItem("c1", "cmd:c", { parent_id: "sa:1", status: "completed", handed_off: true })];
     const steps = buildChildSteps(all, "sa:1", { resolveBackgroundTask: backgroundLaunchResolver(all, null, "att_1", true) });
     expect(steps.blocks.map((block) => block.kind)).toEqual(["row"]);
-    expect(steps.rows[0]!.descriptor.key).toBe("background_command_handed_off");
+    // Handed off, and nothing loaded confirms it still runs.
+    expect(steps.rows[0]!.descriptor.key).toBe("background_command_moved");
   });
 });

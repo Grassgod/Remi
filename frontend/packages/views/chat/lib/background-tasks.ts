@@ -5,6 +5,7 @@ import { BACKGROUND_KEEPALIVE_MS, readBackgroundDoorbell } from "@multiremi/shar
 import {
   backgroundTaskResolver,
   backgroundTaskStatusPhase,
+  type BackgroundTaskLaunch,
   type BackgroundTaskResolver,
 } from "@multiremi/shared/trace-step-copy";
 
@@ -311,11 +312,30 @@ export function findBackgroundTask(
 // ── Launch rows (§8.1 Steps) ────────────────────────────────────────────────
 
 /**
+ * A launch as the web reads it. `moved`: the trace says the task was handed
+ * to the background when its attempt ended, but nothing confirms it still
+ * runs, so the row says it moved to the background (「… 已转到后台运行」),
+ * never that it is still running.
+ */
+export type WebBackgroundTaskLaunch = BackgroundTaskLaunch & { moved?: true };
+
+/** Whether a launch only knows its task was handed off (see {@link WebBackgroundTaskLaunch}). */
+export function isMovedLaunch(launch: BackgroundTaskLaunch | null | undefined): boolean {
+  return !!launch && (launch as WebBackgroundTaskLaunch).moved === true;
+}
+
+/**
  * The launch rows of one attempt's steps: a call that started a background
- * task reads as that task. The session registry decides its phase when it is
- * loaded (`backgroundTaskStatusPhase`: a task that still runs after its
- * attempt ended reads 「… 仍在后台运行」); otherwise the trace's own item does.
- * Undefined when the trace started no task.
+ * task reads as that task (PR 6 §8.1).
+ *
+ * Only the session registry can say a task still runs: its row's status
+ * decides the phase (`backgroundTaskStatusPhase`; running after the attempt
+ * ended reads 「… 仍在后台运行」). Without a row for the task (the registry not
+ * loaded, the chat counts none running, or the row aged out of the last 20
+ * ended) or with an `unknown` one, a trace item frozen as `handed_off` reads
+ * as moved to the background: the trace was written when the attempt ended
+ * and the task may have ended since. No trace or registry is read for this
+ * (MUL-472). Undefined when the trace started no task.
  */
 export function backgroundLaunchResolver(
   items: readonly TraceItem[],
@@ -330,17 +350,20 @@ export function backgroundLaunchResolver(
   }
   if (!byCall.size) return undefined;
   const fallback = backgroundTaskResolver(items);
+  const unconfirmed = (launch: BackgroundTaskLaunch | null): WebBackgroundTaskLaunch | null =>
+    launch?.phase === "handed_off" ? { ...launch, moved: true } : launch;
   const registry = new Map<string, BackgroundTask>();
   if (attemptId) for (const row of rows ?? []) if (row.origin_attempt_id === attemptId) registry.set(row.task_id, row);
-  if (!registry.size) return fallback;
   return (toolItemId) => {
     const traced = byCall.get(toolItemId);
     const row = traced ? registry.get(traced.task_id) : undefined;
-    if (!traced || !row) return fallback(toolItemId);
-    return {
+    if (!traced || !row) return unconfirmed(fallback(toolItemId));
+    const launch = {
       task_type: row.task_type || traced.task_type,
       name: row.name.trim() ? row.name : traced.name,
       phase: backgroundTaskStatusPhase(row.status, attemptEnded),
     };
+    // `unknown`: last seen running while its computer was online; not a confirmation.
+    return row.status === "unknown" ? unconfirmed(launch) : launch;
   };
 }
