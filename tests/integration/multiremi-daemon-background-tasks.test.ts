@@ -436,7 +436,9 @@ describe("Bun Multiremi daemon background tasks (PR 6)", () => {
       task({ id: "thr:call_srv", event: "spawned", name: "python3 -m http.server", toolCallId: "call_srv" }),
       { delayMs: 1_500, ...task({ id: "thr:call_srv", event: "completed" }) }],
       [chunk("Its log says it served 3 requests.")],
-    ] }, logPath, "codex"), { backgroundDrainMs: 1_000 });
+    // The done lane's idle close outlasts the next offer, however slow the machine (it is 60 s in production).
+    ] }, logPath, "codex"), { backgroundDrainMs: 1_000,
+      parkedLaneOptions: { debounceMs: 20, closedRepeats: 1, idleCloseMs: 10_000, stopTimeoutMs: 2_000 } });
     const chat = store.createChatSession({ agentId: agent.id });
     const first = store.sendChatMessage(chat.id, { body: "Start a server" }).task;
     await waitFor(() => finished(store, first.id), "the first turn");
