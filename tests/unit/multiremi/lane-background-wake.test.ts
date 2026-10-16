@@ -188,6 +188,18 @@ for (const backend of backends) {
         store.retryTurn(store.getTurnForAttempt(failed.id)!.id, true);
         expect(() => wake(cold)).toThrow(expect.objectContaining({ code: "lane_moved" }));
 
+        // A Chat with no provider session yet (its first turn was cancelled before it completed):
+        // the doorbell's turn would start a fresh session that cannot attach, so the lane moved.
+        const unpinned = backgroundWorld(store);
+        const chat = store.createChatSession({ agentId: unpinned.agentId, workspaceId: "local", creatorId: "local" });
+        const cancelled = runAttempt(store, unpinned.runtimeId, chat.id, "start the server");
+        store.pinTaskSession(cancelled.id, PROVIDER_SESSION, "/tmp/claude-pr6d-unpinned");
+        store.cancelTask(cancelled.id);
+        expect(store.getChatSession(chat.id)?.sessionId).toBeNull();
+        expect(() => store.laneBackgroundWake(unpinned.runtimeId, "local", { ...wakePayload(unpinned,
+          { origin_attempt_id: cancelled.id }), session_id: chat.id })).toThrow(expect.objectContaining({ code: "lane_moved" }));
+        expect(doorbells(store, chat.id)).toEqual([]);
+
         // Another runtime cannot ring this lane.
         const intruder = backgroundWorld(store);
         const other = backgroundWorld(store);

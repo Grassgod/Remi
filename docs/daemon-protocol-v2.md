@@ -287,7 +287,7 @@ daemon 才在尝试结束后保留仍有后台任务的 Chat 会话线进程，�
 - **`lane.background_wake`**：在一个事务里依次取工作区生命周期锁、Chat 行锁与会话线锁（与写消息的顺序一致）。
   同一任务的重复调用命中去重键 `bg:{agent_id}:{execution_scope}:{task_id}`，原样答第一次的结果（存于门铃消息
   `metadata.background_wake`）。否则校验会话线：Chat 已删除或归档、Agent 已删除或归档答 `session_closed`；Chat 的
-  会话谱系（`session_id`、`session_runtime_id`）指向别的 provider 会话或 runtime，或会话线最新尝试跑在别的 runtime、
+  会话谱系（`session_id`、`session_runtime_id`）为空或指向别的 provider 会话或 runtime，或会话线最新尝试跑在别的 runtime、
   持有别的 provider 会话、是冷替换（无会话且未带触发，与轮输入的判断相同），答 `lane_moved`；来源尝试不属于这条
   会话线与 runtime 答 `authority_revoked`。随后以平台身份写门铃：`message_kind: "status"`、`wake_requested: "now"`、
   正文 `backgroundDoorbellBody`、`metadata.background_task`（`BackgroundTaskDoorbellMetadata`，含来源轮），交给常规
@@ -299,8 +299,8 @@ daemon 才在尝试结束后保留仍有后台任务的 Chat 会话线进程，�
 - **下行推导**：每次下行运行都从登记表重算，只对协商了能力位的连接：`lane.background_stop` 是成员提出且 daemon
   尚未答复（`stop_outcome` 为空或 `pending`）的停止，键为会话线、任务与请求时刻，新的请求是新实体；
   `lane.background_release` 针对驻留（`parked`）会话线中尚未知结束的行，原因 `session_closed` / `lane_reset`
-  的判定与门铃的会话线校验相同（只认正面证据：尚无谱系的会话线与配置变化留给 daemon 在下一次 offer 时判定，后者报
-  `config_changed`）。一个 Chat 任务入队（冷重试、换 runtime）时重算持有其会话行的 runtime 的下行。
+  的判定与门铃的会话线校验相同，只是只认正面证据：尚无谱系的会话线（门铃对它答 `lane_moved`）与配置变化留给 daemon
+  在下一次 offer 时判定，后者报 `config_changed`。一个 Chat 任务入队（冷重试、换 runtime）时重算持有其会话行的 runtime 的下行。
 - **实时事件** `chat:background_tasks`：登记表的可见变化在提交后推给 Chat 创建者，载荷
   `{chat_session_id, session_id, running, rows}`，`rows` 是本次变化的整行（按 `id` 合并），`running` 是该会话运行中与
   暂停的行数（发送时读）；与 `task:subagents` 一样不唤醒 daemon 下行或 offer。

@@ -520,14 +520,14 @@ export class BackgroundTasksRepo {
    * `now`, deduplicated per task) and let the lane machine create, merge or
    * steer a turn. A created turn whose origin attempt had a Feishu card posts
    * proactively in the origin thread. A repeated call answers the first
-   * outcome, stored on the doorbell. Refusals: `session_closed`, `lane_moved`,
-   * `authority_revoked`.
+   * outcome, stored on the doorbell. Refusals: `session_closed`, `lane_moved`
+   * (also when the Chat has no provider session at all), `authority_revoked`.
    */
   laneBackgroundWake(runtimeId: string, workspaceId: string, payload: DaemonLaneBackgroundWakePayload): DaemonLaneBackgroundWakeReply {
     const events = createCommitEventQueue();
     const reply = this.ctx.db.transaction((): DaemonLaneBackgroundWakeReply => {
       this.ctx.lockWorkspaceRuntimeLifecycle(workspaceId);
-      const chat = this.ctx.db.query("SELECT workspace_id FROM multiremi_chat_sessions WHERE id = ?").get(payload.session_id) as Row | null;
+      const chat = this.ctx.db.query("SELECT workspace_id, session_id FROM multiremi_chat_sessions WHERE id = ?").get(payload.session_id) as Row | null;
       if (!chat) throw new BackgroundTaskError("session_closed", "the Chat no longer exists");
       if (String(chat.workspace_id) !== workspaceId) throw new BackgroundTaskError("authority_revoked", "the Chat belongs to another workspace");
       this.ctx.db.run("UPDATE multiremi_chat_sessions SET updated_at = updated_at WHERE id = ?", [payload.session_id]);
@@ -539,6 +539,9 @@ export class BackgroundTasksRepo {
       const reason = this.laneReleaseReason(payload, runtimeId, payload.provider_session_id);
       if (reason === "session_closed") throw new BackgroundTaskError("session_closed", "the Chat or its agent is closed");
       if (reason) throw new BackgroundTaskError("lane_moved", "the lane no longer runs this provider session here");
+      // No lineage (the lane's first turn was cancelled, or a stale session cleared it): the turn
+      // the doorbell would create starts a fresh session, so it can never attach to this process.
+      if (!chat.session_id) throw new BackgroundTaskError("lane_moved", "the Chat resumes no provider session");
       const origin = this.laneAttempt(payload.task.origin_attempt_id, payload, runtimeId, workspaceId);
       if (!origin) throw new BackgroundTaskError("authority_revoked", "origin attempt is not this lane's on this runtime");
       const active = this.ctx.db.query(`SELECT id, status, current_attempt_id FROM multiremi_turns WHERE ${LANE_SQL}
