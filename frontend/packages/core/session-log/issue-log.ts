@@ -297,7 +297,9 @@ export class IssueLogReplica extends ReplicaView {
         const last = seqs[end - 1]!;
         const window = await api.getSessionLog(sessionId, { anchor: first - 1, after: last - first + 1 });
         if (this.disconnected || generation !== this.generation) return;
-        if (this.logVersion !== null && window.log_version !== this.logVersion) throw new Error("Log version changed during hydration");
+        // Every log write bumps `log_version`, the one that produced these
+        // frames included, so this read is normally newer than the window.
+        // Row revisions decide staleness; a reset arrives through the ack.
         this.logVersion ??= window.log_version;
         for (const frame of missing.filter(frame => frame.seq >= first && frame.seq <= last)) {
           const payload = frame.payload as Record<string, unknown>;

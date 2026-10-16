@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { act, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, expect, it, vi } from "vitest";
@@ -7,13 +7,19 @@ import type { StreamSubscriptionHandlers } from "@multiremi/core/api/ws-client";
 import { I18nProvider } from "@multiremi/core/i18n/react";
 import { ReplicaEnvProvider } from "@multiremi/core/platform/replica-env";
 import { createChatStore, registerChatStore } from "@multiremi/core/chat";
-import { SessionLogEntrySchema, type IssueLogBootstrap } from "@multiremi/core/api/schemas/session-log";
+import {
+  SessionLogEntrySchema, type IssueLogBootstrap, type LogWindowParams, type SessionLogRow, type SessionLogWindow,
+} from "@multiremi/core/api/schemas/session-log";
 import type { ChatSession } from "@multiremi/core/types";
 import enChat from "../../locales/en/chat.json";
 import enIssues from "../../locales/en/issues.json";
 import enMessages from "../../locales/en/messages.json";
 
-const backend = vi.hoisted(() => ({ read: vi.fn(), listMessages: vi.fn(), getChatQueue: vi.fn() }));
+const backend = vi.hoisted(() => ({
+  read: vi.fn(), listMessages: vi.fn(), getChatQueue: vi.fn(),
+  createChatSession: vi.fn(), getChatSession: vi.fn(), sendChatMessage: vi.fn(),
+}));
+const composer = vi.hoisted(() => ({ props: null as null | { agentName?: string; onSend: (content: string) => Promise<void> } }));
 const socket = vi.hoisted(() => ({ subscribeStream: vi.fn(), onReconnect: vi.fn(() => () => {}) }));
 vi.mock("@multiremi/core/api", async importOriginal => ({
   ...await importOriginal<typeof import("@multiremi/core/api")>(),
@@ -24,6 +30,8 @@ vi.mock("@multiremi/core/api", async importOriginal => ({
     listProjects: async () => ({ projects: [] }),
     listChatSessions: async () => [session],
     getPendingChatTask: async () => ({}),
+    createChatSession: backend.createChatSession, getChatSession: backend.getChatSession,
+    sendChatMessage: backend.sendChatMessage,
   },
 }));
 vi.mock("@multiremi/core/hooks", () => ({ useWorkspaceId: () => "workspace-a" }));
@@ -52,7 +60,13 @@ vi.mock("./agent-dropdown", () => ({ AgentDropdown: () => null }));
 vi.mock("./session-dropdown", () => ({ SessionDropdown: () => null }));
 vi.mock("./chat-sidebar", () => ({ ChatSidebar: () => null }));
 vi.mock("../../common/actor-avatar", () => ({ ActorAvatar: () => null }));
-vi.mock("./chat-input", () => ({ ChatInput: () => null }));
+vi.mock("./chat-input", () => ({
+  ChatInput: (props: NonNullable<typeof composer.props>) => { composer.props = props; return null; },
+}));
+vi.mock("../../runtimes/components/runtime-workspace-picker", () => ({ WorkLocationPicker: () => null }));
+vi.mock("../../common/task-transcript/use-task-trace", () => ({
+  useTurnTrace: () => ({ turn: null, items: [], closed: false, loaded: false, error: false, retry: () => {}, read: null, head: 0 }),
+}));
 vi.mock("../../common/markdown", () => ({ Markdown: ({ children }: { children: string }) => <span>{children}</span> }));
 vi.mock("../../issues/components/comment-card", () => ({ AttachmentList: () => null }));
 
@@ -120,5 +134,103 @@ it("N2 removes a deleted unread body through ChatWindow's real log chain before 
     await act(async () => { onFrames!([{ seq: 2, kind: "entry", payload: deleted }]); });
     expect(main).not.toHaveTextContent(deleted.body_md);
     expect(main).toHaveTextContent(kept.body_md);
+  } finally { view.unmount(); client.clear(); }
+});
+
+/** One chat's read route. As on the server, every log write bumps `log_version`. */
+function chatLog() {
+  const rows: SessionLogRow[] = [];
+  let version = 0;
+  return {
+    write(row: SessionLogRow) { rows.push(row); version += 1; },
+    /** A write that changes no shown row, such as a turn status patch. */
+    touch() { version += 1; },
+    read(params: LogWindowParams): SessionLogWindow {
+      const head = rows.at(-1)?.seq ?? 0;
+      const anchor = params.anchor ?? head;
+      const shown = rows.filter(row => row.visibility === "shown");
+      const before = params.before ? shown.filter(row => row.seq <= anchor).slice(-params.before) : [];
+      const after = params.after ? shown.filter(row => row.seq > anchor).slice(0, params.after) : [];
+      return { entries: [...before, ...after], head_seq: head, log_version: version, has_more_before: false, has_more_after: false };
+    },
+  };
+}
+
+it("shows a new chat's first message as sent and its reply without a reload", async () => {
+  const chatId = "chat-new";
+  const created: ChatSession = { ...session, id: chatId, title: "Hello from a new chat" };
+  const row = (seq: number, fields: Record<string, unknown>) => SessionLogEntrySchema.parse({
+    session_id: chatId, seq, id: `row-${seq}`, revision: 1, body_html: null, render_version: null,
+    metadata: { attachments: [], reactions: [] }, ...fields,
+  });
+  const log = chatLog();
+  let routeLog: IssueLogBootstrap | undefined;
+  backend.createChatSession.mockImplementation(async () => {
+    log.write(row(0, { kind: "head", body_md: created.title }));
+    return created;
+  });
+  backend.getChatSession.mockResolvedValue(created);
+  backend.sendChatMessage.mockImplementation(async (_id: string, body: string, _attachments: unknown, clientId: string) => {
+    // The page navigates to `?session=` before the send lands, so the route's
+    // bootstrap read still holds an empty chat.
+    routeLog = { sessionId: chatId, head: null, window: log.read({ before: 30 }) };
+    log.write(row(1, { kind: "message", sender_type: "member", sender_id: "member-a", to_type: "agent",
+      to_agent_id: "agent-a", message_kind: "request", body_md: body, dedupe_key: clientId }));
+    log.write(row(2, { kind: "turn", visibility: "hidden", body_md: "" }));
+    return { message_id: "row-1", task_id: "attempt-1", turn_id: "turn-1", created_at: "2026-10-16", supports_queue: true, queued: false };
+  });
+  backend.read.mockImplementation(async (_id: string, params: LogWindowParams) => log.read(params));
+  backend.listMessages.mockResolvedValue({ messages: [], next_cursor: null });
+  backend.getChatQueue.mockResolvedValue({ items: [], paused: null });
+  // The Hub replays from the subscription's `from_seq`; message rows travel as
+  // bare entries the replica hydrates through the read route.
+  const streams = new Map<string, { handlers: StreamSubscriptionHandlers; fromSeq: number }>();
+  socket.subscribeStream.mockImplementation((_stream, id: string, handlers: StreamSubscriptionHandlers, options?: { fromSeq?: number }) => {
+    streams.set(id, { handlers, fromSeq: options?.fromSeq ?? 1 });
+    return { unsubscribe: vi.fn() };
+  });
+  const publish = (frames: HubFrame[]) => {
+    const stream = streams.get(chatId)!;
+    const replay = frames.filter(frame => frame.seq >= stream.fromSeq);
+    if (replay.length) stream.handlers.onFrames?.(replay);
+  };
+  const entry = (seq: number, kind: string): HubFrame => ({ seq, kind: "entry", payload: { session_id: chatId, seq, id: `row-${seq}`, kind, revision: 1 } });
+  let showRoute!: (route: { sessionId?: string; log?: IssueLogBootstrap }) => void;
+  function ChatRoute() {
+    const [route, setRoute] = useState<{ sessionId?: string; log?: IssueLogBootstrap }>({});
+    showRoute = setRoute;
+    return <ChatWindow presentation="page" initialSessionId={route.sessionId} initialLog={route.log} />;
+  }
+  const store = createChatStore({ storage: { getItem: () => null, setItem: () => {}, removeItem: () => {} } });
+  registerChatStore(store);
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+  const view = render(<QueryClientProvider client={client}>
+    <I18nProvider locale="en" resources={{ en: { chat: enChat, issues: enIssues, messages: enMessages } }}>
+      <ReplicaEnvProvider env={memoryEnv}><ChatRoute /></ReplicaEnvProvider>
+    </I18nProvider>
+  </QueryClientProvider>);
+  try {
+    await waitFor(() => expect(composer.props?.agentName).toBe("Alpha"));
+    await act(async () => { await composer.props!.onSend("Hello from a new chat"); });
+    await waitFor(() => expect(streams.has(chatId)).toBe(true));
+    // The route answers the navigation with its bootstrap after the chat is
+    // already showing; the live log must not restart from that older read.
+    await act(async () => { showRoute({ sessionId: chatId, log: routeLog }); });
+    await act(async () => {
+      streams.get(chatId)!.handlers.onAck?.({ stream: "log", id: chatId, first_seq: 0, head_seq: 2, log_version: null, gap: null });
+      publish([entry(1, "message"), { seq: 2, kind: "entry", payload: { session_id: chatId, seq: 2, revision: 1, visibility: "hidden" } }]);
+    });
+    const main = () => view.container.querySelector<HTMLElement>('[data-perf-scroll="session-log"]');
+    await waitFor(() => expect(main()).toHaveTextContent("Hello from a new chat"));
+    await waitFor(() => expect(main()).toHaveTextContent("Sent"));
+    expect(main()).not.toHaveTextContent("Sending…");
+
+    // The turn's own writes move `log_version` past every window the page has read.
+    log.touch();
+    log.write(row(3, { kind: "message", sender_type: "agent", sender_id: "agent-a", to_type: "member",
+      message_kind: "reply", body_md: "Reply from Alpha" }));
+    await act(async () => { publish([entry(3, "message")]); });
+    await waitFor(() => expect(main()).toHaveTextContent("Reply from Alpha"));
+    expect(socket.subscribeStream.mock.calls.filter(([, id]) => id === chatId)).toHaveLength(1);
   } finally { view.unmount(); client.clear(); }
 });

@@ -156,9 +156,21 @@ export function ChatWindow({
     isError: sessionsError,
     refetch: refetchSessions,
   } = useQuery(chatSessionsOptions(wsId, "all", { enabled: chatVisible }));
+  // The route reads a log bootstrap for every `?session=` URL, and a send
+  // replaces that URL (the first one navigates to the chat it created). Only
+  // the bootstrap present when a chat is first shown seeds its log: a later
+  // one is a new object holding an older read, and the log would rebuild its
+  // replica from it in the middle of the send.
+  const logSeedFor = (sessionId: string | null) =>
+    ({ sessionId, log: initialLog?.sessionId === sessionId ? initialLog : undefined });
+  const [storedLogSeed, setLogSeed] = useState(() => logSeedFor(displayedSessionId));
+  let logSeed = storedLogSeed;
+  if (logSeed.sessionId !== displayedSessionId) {
+    logSeed = logSeedFor(displayedSessionId);
+    setLogSeed(logSeed);
+  }
   const { replica, snapshot: logSnapshot, error: messagesError } = useIssueLog(
-    displayedSessionId ?? "", initialLog?.sessionId === displayedSessionId ? initialLog : undefined,
-    undefined, true, chatVisible,
+    displayedSessionId ?? "", logSeed.log, undefined, true, chatVisible,
   );
   const replicaRef = useRef(replica);
   replicaRef.current = replica;
@@ -846,7 +858,7 @@ export function ChatWindow({
           optimisticRows={displayedOptimistic}
           pendingTask={pendingTask}
           availability={availability}
-          initialPositioned={initialLog?.sessionId === displayedSessionId}
+          initialPositioned={!!logSeed.log}
           hasOlderMessages={!!replica.window?.has_more_before}
           isFetchingOlderMessages={isFetchingOlderMessages}
           onLoadOlderMessages={() => {

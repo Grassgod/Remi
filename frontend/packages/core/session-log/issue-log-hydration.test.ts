@@ -69,6 +69,16 @@ describe("read window subscription and hydration", () => {
     expect(reads.get).not.toHaveBeenCalled();
   });
 
+  it("hydrates a new row from a read at a newer log_version, since every write bumps it", async () => {
+    const replica = seed(windowOf([row(10)]));
+    const reply = row(11, { author_type: "agent", body_md: "reply" });
+    reads.get.mockResolvedValue(windowOf([reply], { log_version: 7 }));
+    const delivered = vi.spyOn(replica, "frames").mockImplementation(() => {});
+    await replica.hydratedFrames("s", [frame(11)]);
+    expect(reads.get).toHaveBeenCalledExactlyOnceWith("s", { anchor: 10, after: 1 });
+    expect(delivered.mock.calls[0]?.[1][0]?.payload).toEqual(reply);
+  });
+
   it.each(["id", "seq", "revision", "reset"])("does not reuse a stale or mismatched %s", async kind => {
     const replica = seed(windowOf([row(10)]));
     const seq = kind === "seq" ? 12 : 10;
