@@ -204,7 +204,9 @@ async function bed(name: string, options: { provider?: "claude" | "codex"; phase
   store.ensureLocalWorkspace();
   const agent = store.createAgent({ name: `${name} agent`, provider });
   const token = (await store.createAccessToken({ name: `${name} daemon`, type: "daemon", workspaceId: "local", daemonId: `daemon-${name}` })).token;
-  const server = startMultiremiServer({ store, scheduler: null, hostname: "127.0.0.1", port: 0 });
+  // `cap: false` is a server without `lane.background`: since phase D the real server echoes the cap itself.
+  const server = startMultiremiServer({ store, scheduler: null, hostname: "127.0.0.1", port: 0,
+    ...(options.phaseD?.cap === false ? { daemonWelcomeCaps: [] } : {}) });
   activeServers.add(server);
   const d = phaseD(store, options.phaseD);
   const daemon = (providerFactory: MultiremiDaemonProviderFactory, extra: Partial<ConstructorParameters<typeof MultiremiDaemon>[0]> = {}) => {
