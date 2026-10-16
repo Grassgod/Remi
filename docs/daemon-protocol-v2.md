@@ -266,7 +266,8 @@ daemon 才在尝试结束后保留仍有后台任务的 Chat 会话线进程，�
   `provider_session_id` 下每个任务一行，唯一键 `(session_id, agent_id, execution_scope, provider_session_id, task_id)`，
   另记 runtime、来源尝试与轮、状态（`running` / `paused` / `completed` / `failed` / `stopped` / `unknown`）、
   停止原因、停止请求（`stop_requested_at`、`stop_requested_by` 为成员 id，Remi 自己停的为 null，`stop_outcome` 为
-  daemon 的答复）、输出末尾、用量、会话线状态与 `parked_until`、`revision`。按 `(runtime_id, status)`、
+  daemon 的答复）、输出末尾与 `output_unreadable`（daemon 读不到输出文件时为真，界面显示「无法读取输出」）、用量、
+  会话线状态与 `parked_until`、`revision`。按 `(runtime_id, status)`、
   `(session_id, status)` 建索引。已结束的行保留 7 天，每个会话至多 50 行。
 - **`lane.background_tasks`**：按报告授权（runtime 属于本连接、凭据、工作区、退役），并限定到会话线所在的 runtime：
   每个新任务的 `origin_attempt_id` 必须是这条会话线在本 runtime 上跑过的尝试，`attempt_id` 同理；另一 runtime

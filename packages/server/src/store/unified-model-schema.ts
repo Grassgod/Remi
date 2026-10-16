@@ -138,7 +138,8 @@ CREATE TABLE IF NOT EXISTS multiremi_background_tasks (
   can_stop INTEGER NOT NULL DEFAULT 1,
   stop_requested_at TEXT, stop_requested_by TEXT,
   stop_outcome TEXT CHECK(stop_outcome IS NULL OR stop_outcome IN (${sqlList(TRACE_BACKGROUND_TASK_STOP_OUTCOMES)})),
-  started_at TEXT NOT NULL, ended_at TEXT, duration_ms BIGINT, summary TEXT, output_tail TEXT, usage TEXT,
+  started_at TEXT NOT NULL, ended_at TEXT, duration_ms BIGINT, summary TEXT, output_tail TEXT,
+  output_unreadable INTEGER NOT NULL DEFAULT 0, usage TEXT,
   lane_state TEXT NOT NULL CHECK(lane_state IN (${sqlList(BACKGROUND_LANE_STATES)})), parked_until TEXT,
   revision BIGINT NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
   UNIQUE(session_id, agent_id, execution_scope, provider_session_id, task_id)

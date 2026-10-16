@@ -154,6 +154,7 @@ export function toBackgroundTask(row: Row): MultiremiBackgroundTask {
     duration_ms: row.duration_ms == null ? null : Number(row.duration_ms),
     summary: text(row.summary),
     output_tail: text(row.output_tail),
+    output_unreadable: Number(row.output_unreadable) === 1,
     usage: parseJson<TraceBackgroundTaskUsage | null>(row.usage, null),
     lane_state: String(row.lane_state) as BackgroundLaneState,
     parked_until: text(row.parked_until),
@@ -168,16 +169,17 @@ type RowValues = {
   status: BackgroundTaskStatus; stop_reason: BackgroundTaskStopReason | null; can_stop: number;
   stop_requested_at: string | null; stop_requested_by: string | null; stop_outcome: BackgroundTaskStopOutcome | null;
   started_at: string; ended_at: string | null; duration_ms: number | null; summary: string | null;
-  output_tail: string | null; usage: string | null; lane_state: BackgroundLaneState; parked_until: string | null;
+  output_tail: string | null; output_unreadable: number; usage: string | null; lane_state: BackgroundLaneState;
+  parked_until: string | null;
 };
 const VALUE_COLUMNS: (keyof RowValues)[] = ["task_type", "name", "command", "origin_item_id", "status", "stop_reason",
   "can_stop", "stop_requested_at", "stop_requested_by", "stop_outcome", "started_at", "ended_at", "duration_ms",
-  "summary", "output_tail", "usage", "lane_state", "parked_until"];
+  "summary", "output_tail", "output_unreadable", "usage", "lane_state", "parked_until"];
 
 function storedValue(row: Row, column: keyof RowValues): unknown {
   const value = row[column];
   if (value == null) return null;
-  return column === "can_stop" || column === "duration_ms" ? Number(value) : String(value);
+  return column === "can_stop" || column === "duration_ms" || column === "output_unreadable" ? Number(value) : String(value);
 }
 
 function sameValues(row: Row, values: RowValues): boolean {
@@ -604,7 +606,8 @@ export class BackgroundTasksRepo {
       status, stop_reason: stopReason, can_stop: task.can_stop ? 1 : 0,
       stop_requested_at: stopRequestedAt, stop_requested_by: stopRequestedBy, stop_outcome: stopOutcome,
       started_at: task.started_at, ended_at: endedAt, duration_ms: durationMs, summary: task.summary ?? null,
-      output_tail: task.output_tail ?? null, usage: task.usage ? toJson(task.usage) : null,
+      output_tail: task.output_tail ?? null, output_unreadable: task.output_unreadable === true ? 1 : 0,
+      usage: task.usage ? toJson(task.usage) : null,
       lane_state: lane.state, parked_until: isLive(status) ? lane.parkedUntil : null,
     };
   }

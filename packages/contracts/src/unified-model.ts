@@ -292,6 +292,8 @@ export interface MultiremiBackgroundTask {
   duration_ms: number | null;
   summary: string | null;
   output_tail: string | null;
+  /** The daemon could not read the task's output (「无法读取输出」); this server always sends it. */
+  output_unreadable?: boolean;
   usage: TraceBackgroundTaskUsage | null;
   lane_state: BackgroundLaneState;
   /** When the parked process stops at the latest (the keep-alive cap); null unless parked. */

@@ -94,6 +94,7 @@ function laneTask(value: unknown): DaemonLaneBackgroundTask {
   if (stopRequest !== null && !isTraceBackgroundTaskStopRequest(stopRequest)) malformed();
   const usage = task.usage ?? null;
   if (usage !== null && !isTraceBackgroundTaskUsage(usage)) malformed();
+  if (task.output_unreadable !== undefined && typeof task.output_unreadable !== "boolean") malformed();
   const command = nullableText(task.command);
   const summary = nullableText(task.summary);
   return {
@@ -112,6 +113,7 @@ function laneTask(value: unknown): DaemonLaneBackgroundTask {
     duration_ms: nullableCount(task.duration_ms),
     summary: truncateUtf8(summary, TRACE_ITEM_SUMMARY_MAX_BYTES),
     output_tail: capOutputTail(nullableText(task.output_tail)).value,
+    ...(task.output_unreadable === true ? { output_unreadable: true } : {}),
     usage: usage === null ? null : { total_tokens: usage.total_tokens, tool_uses: usage.tool_uses, duration_ms: usage.duration_ms },
   };
 }

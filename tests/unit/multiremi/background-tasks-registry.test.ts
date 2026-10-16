@@ -108,7 +108,8 @@ for (const backend of backends) {
           provider_session_id: PROVIDER_SESSION, origin_attempt_id: world.attemptId, origin_turn_id: world.turnId,
           origin_item_id: "bg:bash-1", parked_until: "2026-10-16T03:00:00.000Z", can_stop: true, output_tail: "ready on :3000\n",
           stop_requested_at: null, stop_outcome: null, ended_at: null });
-        expect(paused).toMatchObject({ task_id: "wf-1", status: "paused", usage: { total_tokens: 10, tool_uses: 1, duration_ms: 900 } });
+        expect(paused).toMatchObject({ task_id: "wf-1", status: "paused", usage: { total_tokens: 10, tool_uses: 1, duration_ms: 900 },
+          output_unreadable: false });
         expect(opened.store.listSessionBackgroundTasks(world.chatId).running).toBe(2);
         // Same content, newer revision: no visible change, no event.
         const before = listen.of("chat:background_tasks").length;
@@ -119,8 +120,15 @@ for (const backend of backends) {
         expect(rows(opened.store, world.chatId).find((row) => row.task_id === "bash-1")?.status).toBe("running");
         await Bun.sleep(0);
         expect(listen.of("chat:background_tasks").length).toBe(before);
+        // The daemon could not read a task's output: the row says so, and the event carries it.
+        expect(snapshotFor(world, 7, [laneTask(world, { output_tail: null, output_unreadable: true }), laneTask(world, { task_id: "wf-1",
+          task_type: "workflow", name: "review", command: null, status: "paused", usage: { total_tokens: 10, tool_uses: 1, duration_ms: 900 } })]))
+          .toBe(1);
+        expect(rows(opened.store, world.chatId).find((row) => row.task_id === "bash-1")).toMatchObject({ output_tail: null, output_unreadable: true });
+        await Bun.sleep(0);
+        expect(listen.of("chat:background_tasks").at(-1)!.payload.rows[0]).toMatchObject({ task_id: "bash-1", output_unreadable: true });
         // A newer one does; an end carries its time and duration.
-        expect(snapshotFor(world, 7, [laneTask(world, { status: "completed", summary: "exit 0",
+        expect(snapshotFor(world, 8, [laneTask(world, { status: "completed", summary: "exit 0",
           ended_at: "2026-10-16T01:05:00.000Z", duration_ms: 300_000 })])).toBe(1);
         expect(rows(opened.store, world.chatId).find((row) => row.task_id === "bash-1")).toMatchObject({
           status: "completed", summary: "exit 0", ended_at: "2026-10-16T01:05:00.000Z", duration_ms: 300_000, parked_until: null });
@@ -227,6 +235,8 @@ for (const backend of backends) {
           expect(await capable.call("lane.background_tasks", laneSnapshot(world, 3,
             Array.from({ length: 33 }, (_, index) => laneTask(world, { task_id: `t-${index}` }))) as never))
             .toMatchObject({ ok: false, code: "invalid_report" });
+          expect(await capable.call("lane.background_tasks", laneSnapshot(world, 3,
+            [laneTask(world, { output_unreadable: "yes" as never })]) as never)).toMatchObject({ ok: false, code: "invalid_report" });
           expect(await capable.call("lane.background_tasks", laneSnapshot(world, 4,
             [laneTask(world, { status: "completed", ended_at: "2026-10-16T01:03:00.000Z" })]) as never)).toEqual({ ok: true });
           expect(rows(opened.store, world.chatId)[0]!.status).toBe("completed");
@@ -368,7 +378,7 @@ for (const backend of backends) {
         expect(read.body.rows.map((row: any) => row.task_id).sort()).toEqual(["bash-1", "bash-2", "bash-3"]);
         expect(Object.keys(read.body.rows[0]).sort()).toEqual(["agent_id", "can_stop", "command", "created_at", "duration_ms",
           "ended_at", "execution_scope", "id", "lane_state", "name", "origin_attempt_id", "origin_item_id", "origin_turn_id",
-          "output_tail", "parked_until", "provider_session_id", "runtime_id", "session_id", "started_at", "status", "stop_outcome",
+          "output_tail", "output_unreadable", "parked_until", "provider_session_id", "runtime_id", "session_id", "started_at", "status", "stop_outcome",
           "stop_reason", "stop_requested_at", "stop_requested_by", "summary", "task_id", "task_type", "updated_at", "usage",
           "workspace_id"]);
         // Another member cannot read it.
