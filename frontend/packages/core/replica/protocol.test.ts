@@ -80,7 +80,6 @@ describe("step 1: open a session", () => {
 describe("step 2: ack", () => {
   test("a new session records the version and reports no backfill", () => {
     const decision = decideAck(ack(), emptyReplicaState());
-    expect(decision.reset).toBe(false);
     expect(decision.backfill).toBeNull();
     expect(decision.state).toMatchObject({ logVersion: 7, synced: true });
   });
@@ -88,21 +87,21 @@ describe("step 2: ack", () => {
   test("a gap is reported as the range to read", () => {
     const state: ReplicaState = { ranges: [], head: 10, logVersion: 7, synced: true };
     const decision = decideAck(ack({ first_seq: 40, gap: { from: 11, to: 39 } }), state);
-    expect(decision.reset).toBe(false);
     expect(decision.backfill).toEqual({ from: 11, to: 39 });
   });
 
-  test("a log_version change resets the session and backfills below first_seq", () => {
+  // Every log write bumps `log_version` (ADR 0007's freshness token), so a new
+  // version on resume is the normal case, not a rewritten log.
+  test("a log_version change resumes with the held rows and records the new version", () => {
     const state: ReplicaState = { ranges: [{ from: 1, to: 10 }], head: 10, logVersion: 7, synced: true };
-    const decision = decideAck(ack({ first_seq: 40, head_seq: 90, log_version: 8 }), state);
-    expect(decision.reset).toBe(true);
-    expect(decision.backfill).toEqual({ from: 1, to: 39 });
-    expect(decision.state).toMatchObject({ ranges: [], head: null, logVersion: 8, synced: true });
+    const decision = decideAck(ack({ first_seq: 1, head_seq: 12, log_version: 9 }), state);
+    expect(decision.backfill).toBeNull();
+    expect(decision.state).toEqual({ ranges: [{ from: 1, to: 10 }], head: 10, logVersion: 9, synced: true });
   });
 
-  test("a null log_version never counts as a change", () => {
-    const state: ReplicaState = { ranges: [], head: 3, logVersion: 7, synced: true };
-    expect(decideAck(ack({ log_version: null }), state).reset).toBe(false);
+  test("a null log_version records an unknown version without touching the rows", () => {
+    const state: ReplicaState = { ranges: [{ from: 1, to: 3 }], head: 3, logVersion: 7, synced: true };
+    expect(decideAck(ack({ log_version: null }), state).state).toEqual({ ...state, logVersion: null });
   });
 });
 

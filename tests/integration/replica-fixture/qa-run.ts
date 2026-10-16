@@ -537,10 +537,13 @@ async function runScope(
       await waitFor(async () => (await states()).every(state => !state?.fresh));
       const all=await states();
       check("QA ack: version/head change revokes view freshness",all.every(s=>!s?.fresh),`heads ${all.map(s=>s?.head).join(",")}, fresh ${all.map(s=>s?.fresh).join(",")}`);
+      // Every log write bumps `log_version` (ADR 0007's freshness token), so the
+      // ack resumes the held rows instead of restarting from seq 1.
       const restarted = await waitFor(async () =>
         server.hub.subscribes.slice(subsBefore).some(sub => sub.fromSeq === 1)
         || server.hub.logReads.slice(readsBefore).some(read => read.from === 1 && read.to >= oldHead), 1000).catch(() => false);
-      check("QA ack: reset triggers new cursor or range read",restarted !== false,`new cursors ${JSON.stringify(server.hub.subscribes.slice(subsBefore))}, reads ${JSON.stringify(server.hub.logReads.slice(readsBefore))}`);
+      check("QA ack: a new version resumes without a new cursor or range read",restarted === false,`new cursors ${JSON.stringify(server.hub.subscribes.slice(subsBefore))}, reads ${JSON.stringify(server.hub.logReads.slice(readsBefore))}`);
+      check("QA ack: a new version keeps the held rows",all.every(s=>(s?.head??0)>=oldHead),`heads ${all.map(s=>s?.head).join(",")}, old head ${oldHead}`);
       server.pauseReplay(false);
       server.broadcast(server.hub.rows.map(frameFor));
       await waitFor(async () => (await states()).every(state => state?.head === server.hub.head && state.fresh));

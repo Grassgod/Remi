@@ -43,11 +43,6 @@ export function addRange(ranges: readonly SeqRange[], from: number, to: number):
   return normalizeRanges([...ranges, { from, to }]);
 }
 
-/** Drop all coverage below `from` (used when `log_version` changed and rows are re-read). */
-export function dropRangesBelow(ranges: readonly SeqRange[], from: number): SeqRange[] {
-  return normalizeRanges(ranges.filter((range) => range.to >= from));
-}
-
 /** Whether `seq` is inside any held range. */
 export function coversSeq(ranges: readonly SeqRange[], seq: number): boolean {
   return ranges.some((range) => seq >= range.from && seq <= range.to);

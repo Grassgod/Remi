@@ -125,13 +125,16 @@ describe("QA independent leader lifecycle", () => {
     leader.handleWorkerMessage({...requests.at(-1),type:"opened",sessionId:sid,fromSeq:43,head:42,fresh:false,cleared:null,entries:[row(42)]});
     expect(subscriptions).toEqual([[sid,43]]);
   });
-  test("version flip with no replay still revokes and restarts from reset head", async () => {
+  test("a version flip on resume keeps the rows and the cursor (every write bumps log_version)", async () => {
     const {replica,subs,reads}=await shared();replica.ack(sid,ack(3));replica.frames(sid,[frame(1),frame(2),frame(3)]);
     replica.resubscribe(sid);expect(subs.at(-1)).toBe(4);
-    replica.ack(sid,ack(3,2)); await ticks();
+    replica.ack(sid,ack(4,2)); await ticks();
     const snap=replica.port.getSnapshot(sid);
     expect(snap.fresh).toBe(false);
-    expect(subs.at(-1)===1 || reads.some(r=>r.from===1&&r.to===3)).toBe(true);replica.dispose();
+    expect(snap.entries.map(e=>e.seq)).toEqual([1,2,3]);
+    expect(subs.at(-1)).toBe(4);expect(reads).toEqual([]);
+    replica.frames(sid,[frame(4)]); await ticks();
+    expect(replica.port.getSnapshot(sid)).toMatchObject({head:4,fresh:true});replica.dispose();
   });
 });
 

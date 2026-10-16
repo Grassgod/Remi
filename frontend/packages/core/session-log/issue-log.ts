@@ -26,7 +26,6 @@ export class IssueLogReplica extends ReplicaView {
   private syncBrowser: (() => void) | null = null;
   private windowRead: Promise<void> | null = null;
   private generation = 0;
-  private logVersion: number | null = null;
 
   constructor(readonly sessionId: string, initial?: IssueLogBootstrap, private readonly preferCached = false,
     private readonly withActivity = false) {
@@ -39,11 +38,6 @@ export class IssueLogReplica extends ReplicaView {
   }
 
   accept(window: SessionLogWindow, head: SessionLogRow | null = this.headRow): void {
-    if (this.logVersion !== null && this.logVersion !== window.log_version) {
-      this.generation += 1;
-      this.knownWindows = [];
-    }
-    this.logVersion = window.log_version;
     this.window = window;
     this.headRow = head;
     this.from = window.entries.find(e => e.seq > 0)?.seq ?? 0;
@@ -282,7 +276,7 @@ export class IssueLogReplica extends ReplicaView {
         if (payload.kind !== "message" && payload.kind !== "turn") continue;
         if (payload.session_id !== undefined && payload.session_id !== sessionId) throw new Error("Log payload belongs to another session");
         if (payload.seq !== undefined && payload.seq !== frame.seq) throw new Error("Log payload has an inconsistent sequence");
-        const candidates = [...(this.window?.log_version === this.logVersion ? [this.window.entries] : []), ...this.knownWindows.toReversed().map(w => w.entries)];
+        const candidates = [...(this.window ? [this.window.entries] : []), ...this.knownWindows.toReversed().map(w => w.entries)];
         const candidate = candidates.map(rows => rows.find(row => row.seq === frame.seq)).find(Boolean);
         if (candidate && candidate.id === payload.id && candidate.session_id === sessionId && candidate.kind === payload.kind
           && candidate.revision >= Number(payload.revision ?? 0)) entries.set(frame.seq, candidate);
@@ -299,8 +293,7 @@ export class IssueLogReplica extends ReplicaView {
         if (this.disconnected || generation !== this.generation) return;
         // Every log write bumps `log_version`, the one that produced these
         // frames included, so this read is normally newer than the window.
-        // Row revisions decide staleness; a reset arrives through the ack.
-        this.logVersion ??= window.log_version;
+        // Row revisions decide staleness.
         for (const frame of missing.filter(frame => frame.seq >= first && frame.seq <= last)) {
           const payload = frame.payload as Record<string, unknown>;
           const row = window.entries.find(row => row.session_id === sessionId && row.seq === frame.seq && row.id === payload.id);
@@ -327,15 +320,8 @@ export class IssueLogReplica extends ReplicaView {
     this.frameQueue = job.catch(() => {});
     return job;
   }
-  ack(...args: Parameters<BrowserReplica["ack"]>): void {
-    const [sessionId, ack] = args;
-    if (sessionId === this.sessionId && this.logVersion !== null && typeof ack.log_version === "number" && ack.log_version !== this.logVersion) {
-      this.generation += 1;
-      this.knownWindows = [];
-      this.logVersion = ack.log_version;
-    }
-    this.browser?.ack(...args);
-  }
+  /** An ack resumes the stream; its `log_version` is a freshness token, not a reset. */
+  ack(...args: Parameters<BrowserReplica["ack"]>): void { this.browser?.ack(...args); }
   disconnect(): void { this.generation += 1; this.disconnected = true; this.browser?.dispose(); this.browser = null; this.syncBrowser = null; }
 
   override readRowHeight(sessionId: string, seq: number, key: string): number | null {
@@ -349,7 +335,7 @@ export class IssueLogReplica extends ReplicaView {
   private async persist(window: SessionLogWindow): Promise<void> {
     const browser = this.browser;
     const generation = this.generation;
-    if (!browser || !window.entries.length || window.log_version !== this.logVersion) return;
+    if (!browser || !window.entries.length) return;
     // Head and body import separately; publish C7's authoritative membership
     // after both writes so a partial import cannot erase the HTTP/SSR seed.
     this.importingWindows++;
@@ -367,7 +353,10 @@ export class IssueLogReplica extends ReplicaView {
   }
 
   private async readRange(sessionId: string, range: HubSeqRange): Promise<SessionLogEntry[]> {
-    const seed = this.knownWindows.findLast(w => w.range.from <= range.from && w.range.to >= range.to);
+    // As the leader this also reads for other tabs' sessions; the windows held
+    // here are this session's.
+    const seed = sessionId === this.sessionId
+      ? this.knownWindows.findLast(w => w.range.from <= range.from && w.range.to >= range.to) : undefined;
     if (seed) return seed.entries.filter(e => e.seq >= range.from && e.seq <= range.to);
     const rows: SessionLogRow[] = [];
     let cursor = range.from - 1;

@@ -74,7 +74,7 @@ test.each(["shared", "no-opfs", "no-locks"])("%s fills every hole from one spars
   expect(replica.port.getSnapshot("session")).toMatchObject({ head: 5, fresh: true });
 });
 
-test.each([[2, 1], [1, 2]])("an ack head=%s version=%s publishes stale status and restarts a changed version", async (head, version) => {
+test.each([[2, 1], [1, 2]])("an ack head=%s version=%s resumes with the held rows", async (head, version) => {
   const subscriptions: number[] = [];
   const replica = await openBrowserReplica({
     userId: "user", workspaceId: "ws", tabId: "tab", subscribe: (_id, from) => subscriptions.push(from),
@@ -90,8 +90,10 @@ test.each([[2, 1], [1, 2]])("an ack head=%s version=%s publishes stale status an
   replica.frames("session", [{ seq: 1, kind: "entry", payload: { session_id: "session", seq: 1, revision: 1, body_md: "one" } }]);
   expect(replica.port.getSnapshot("session").fresh).toBe(true);
   replica.ack("session", { ...ack, head_seq: head, log_version: version });
-  expect(replica.port.getSnapshot("session").fresh).toBe(false);
-  if (version === 2) expect(subscriptions).toEqual([1, 1]);
+  // A head ahead of the replica is stale until its frames land. A new version
+  // alone is the next write's freshness token, not a reset (ADR 0007).
+  expect(replica.port.getSnapshot("session")).toMatchObject({ fresh: head === 1, entries: [{ seq: 1 }] });
+  expect(subscriptions).toEqual([1]);
 });
 
 test("dispose lets the Web Lock callback finish and prevents a queued disposed page from starting", async () => {

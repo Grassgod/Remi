@@ -121,14 +121,25 @@ describe.each(["memory", "sqlite"] as const)("%s revision watermarks", kind => {
     } finally { storage.close(); }
   });
 
-  test.each(["version", "session", "user", "workspace", "logout", "schema"])("%s reset clears the corresponding watermarks", async reset => {
+  test("a new log_version on resume keeps the watermarks, so a replayed body stays deleted", async () => {
+    const storage = await storageFor(kind);
+    try {
+      const engine = new ReplicaEngine(storage);
+      open(engine); engine.ack(sid, ack()); engine.frames(sid, [entry(), remove("tombstone")]);
+      engine.ack(sid, ack(2));
+      expect(storage.readRevisionWatermarks(sid).size).toBe(1);
+      engine.frames(sid, [entry()]);
+      expect(engine.readWindow(sid, 1, 1)).toEqual([]);
+    } finally { storage.close(); }
+  });
+
+  test.each(["session", "user", "workspace", "logout", "schema"])("%s reset clears the corresponding watermarks", async reset => {
     const storage = await storageFor(kind);
     try {
       const engine = new ReplicaEngine(storage);
       open(engine); engine.ack(sid, ack()); engine.frames(sid, [entry(), remove("tombstone")]);
       engine.frames("other-session", [{ seq: 1, kind: "entry", payload: row(10, "other-session") }]);
-      if (reset === "version") engine.ack(sid, ack(2));
-      else if (reset === "session") engine.resetSession(sid);
+      if (reset === "session") engine.resetSession(sid);
       else if (reset === "user") open(engine, "new-user");
       else if (reset === "workspace") open(engine, "u", "new-workspace");
       else if (reset === "logout") engine.clear("logout");
@@ -137,7 +148,7 @@ describe.each(["memory", "sqlite"] as const)("%s revision watermarks", kind => {
         expect(open(engine).cleared).toEqual({ reason: "schema_upgrade" });
       }
       expect(storage.readRevisionWatermarks(sid).size).toBe(0);
-      expect(storage.readRevisionWatermarks("other-session").size).toBe(reset === "version" || reset === "session" ? 1 : 0);
+      expect(storage.readRevisionWatermarks("other-session").size).toBe(reset === "session" ? 1 : 0);
       engine.frames(sid, [entry()]);
       expect(engine.readWindow(sid, 1, 1)).toEqual([row()]);
     } finally { storage.close(); }

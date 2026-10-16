@@ -4,9 +4,9 @@
  * Six steps, in the plan's order:
  *
  * 1. open a session — read `heads` for `have`, subscribe from `have + 1`;
- * 2. apply `stream.ack` — a changed `log_version` drops the session, a `gap`
- *    (or a hole discovered while applying frames) is backfilled through the read
- *    route until `first_seq`, then frames replay;
+ * 2. apply `stream.ack` — it resumes the session: a `gap` (or a hole
+ *    discovered while applying frames) is backfilled through the read route,
+ *    then frames replay. `log_version` is only the freshness token;
  * 3. an `entry` frame inserts and extends coverage, a `patch` frame updates in
  *    place and writes a new `revision`;
  * 4. every write updates `heads`;
@@ -16,7 +16,7 @@
  *
  * This module is the decision half of the protocol: it is pure, so the cases
  * that actually break a replica (a patch above the head, a replayed frame, a
- * hole the frames themselves leave behind, a `log_version` flip) are testable
+ * hole the frames themselves leave behind, a resumed ack) are testable
  * without a Worker, OPFS or a socket. The Worker owns only storage.
  */
 
@@ -344,8 +344,6 @@ function applyPatch(entry: SessionLogEntry, payload: unknown): SessionLogEntry {
 
 /** What the replica does with a `stream.ack` (protocol step 2). */
 export interface AckDecision {
-  /** `log_version` moved: every row for the session is suspect and must be dropped. */
-  reset: boolean;
   /** Range to read through the read route before replaying frames. */
   backfill: HubSeqRange | null;
   state: ReplicaState;
@@ -354,31 +352,17 @@ export interface AckDecision {
 /**
  * Decide what an ack means for the local state (protocol step 2).
  *
- * `reset` and `backfill` are separate because they cost different things: a
- * `log_version` change invalidates every stored row (the render pipeline or the
- * session was rewritten) and restarts from the ack's `first_seq`, while a `gap`
- * means the rows already held are still valid and only the named range is
- * missing. Collapsing them into one "refetch" would either drop good rows or
- * keep stale ones.
+ * An ack is resumption (ADR 0007): the rows already held stay valid, and only
+ * the `gap` it names is missing. A different `log_version` is not a reset. The
+ * server bumps it on every log write, appends and in-place edits alike, so it
+ * changes whenever anything was written since the last ack; edits reach the
+ * held rows as higher revisions. Dropping the session on a version change
+ * would empty the replica on every reconnect after a write.
  */
 export function decideAck(ack: HubStreamAckPayload, current: ReplicaState): AckDecision {
-  const logVersion = ack.log_version ?? null;
-  const changed =
-    current.synced && current.logVersion !== null && logVersion !== null && current.logVersion !== logVersion;
-
-  if (changed) {
-    const firstSeq = Number.isFinite(ack.first_seq) ? ack.first_seq : 1;
-    return {
-      reset: true,
-      backfill: firstSeq > 1 ? { from: 1, to: firstSeq - 1 } : null,
-      state: { ...emptyReplicaState(), logVersion, synced: true },
-    };
-  }
-
   return {
-    reset: false,
     backfill: ack.gap ?? null,
-    state: { ...current, logVersion, synced: true },
+    state: { ...current, logVersion: ack.log_version ?? null, synced: true },
   };
 }
 
